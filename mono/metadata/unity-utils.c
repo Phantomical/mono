@@ -1,3 +1,4 @@
+#include "unity-utils.h"
 #include <config.h>
 
 
@@ -31,6 +32,7 @@
 #include <mono/metadata/threadpool.h>
 #include <mono/metadata/tokentype.h>
 #include <mono/utils/mono-string.h>
+#include "mono/metadata/custom-attrs-internals.h"
 
 #if HAVE_BOEHM_GC
 #include <mono/utils/gc_wrapper.h>
@@ -2049,3 +2051,57 @@ ves_icall_Unity_Android_Network_Interface_Up_State (MonoString *ifName, MonoBool
 }
 #endif
 
+MonoAttrArgsInfo* mono_unity_get_attr_args_info(MonoCustomAttrInfo *cainfo, int index)
+{
+	g_assert(index < cainfo->num_attrs);
+
+	MonoCustomAttrEntry *centry = &cainfo->attrs [index];
+	if (centry->ctor == NULL)
+		return NULL;
+
+	//MonoClass *klass = centry->ctor->klass;
+	//if (strcmp (m_class_get_name (klass), "CategoryAttribute") || mono_method_signature_internal (centry->ctor)->param_count != 1)
+	//	continue;
+
+	MonoAttrArgsInfo *attr_args_info = g_malloc(sizeof(MonoAttrArgsInfo));
+	MonoMethodSignature *sig = mono_method_signature_internal(centry->ctor);
+	attr_args_info->num_type_args = sig->param_count;
+
+	ERROR_DECL (error);
+	mono_reflection_create_custom_attr_data_args_noalloc (
+		cainfo->image, centry->ctor, centry->data, centry->data_size,
+		&attr_args_info->typed_args, &attr_args_info->named_args, &attr_args_info->num_named_args, &attr_args_info->arginfo, error);
+	if (!is_ok (error))
+	{
+		mono_error_cleanup (error);
+		g_free(attr_args_info);
+		return NULL;
+	}
+
+	mono_error_cleanup (error);
+
+	return attr_args_info;
+
+	//g_free (typed_args);
+	//g_free (named_args);
+	//g_free (arginfo);
+}
+
+void mono_unity_get_attr_args_info_free(MonoAttrArgsInfo *ainfo)
+{
+	g_free(ainfo->typed_args);
+	g_free(ainfo->named_args);
+	g_free(ainfo->arginfo);
+	g_free(ainfo);
+}
+
+gint32 mono_unity_get_attr_args_info_type_arg_count(MonoAttrArgsInfo *ainfo)
+{
+	return ainfo->num_type_args;
+}
+
+MonoClass* mono_unity_get_attr_type_arg_as_class(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return mono_class_from_mono_type((MonoType*)ainfo->typed_args[index]);
+}

@@ -276,4 +276,17 @@ mono_unity_set_android_network_up_state_func(android_network_up_state func);
 MonoBoolean
 ves_icall_Unity_Android_Network_Interface_Up_State (MonoString *ifName, MonoBoolean* is_up);
 
+typedef struct {
+	gpointer *typed_args;
+	gpointer *named_args;
+	CattrNamedArg *arginfo;
+	int num_type_args;
+	int num_named_args;
+} MonoAttrArgsInfo;
+
+MONO_API MonoAttrArgsInfo* mono_unity_get_attr_args_info(MonoCustomAttrInfo *cainfo, int index);
+MONO_API void mono_unity_get_attr_args_info_free(MonoAttrArgsInfo *ainfo);
+MONO_API gint32 mono_unity_get_attr_args_info_type_arg_count(MonoAttrArgsInfo *ainfo);
+MONO_API MonoClass* mono_unity_get_attr_type_arg_as_class(MonoAttrArgsInfo *ainfo, int index);
+
 #endif
