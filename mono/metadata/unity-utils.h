@@ -96,7 +96,7 @@ MonoClass* mono_unity_class_get_generic_definition(MonoClass* klass);
 MonoClass* mono_unity_class_inflate_generic_class(MonoClass *gklass, MonoGenericContext *context);
 gboolean mono_unity_class_has_parent_unsafe(MonoClass *klass, MonoClass *parent);
 MonoAssembly* mono_unity_class_get_assembly(MonoClass *klass);
-gboolean mono_unity_class_is_array(MonoClass *klass);
+MONO_API gboolean mono_unity_class_is_array(MonoClass *klass);
 MonoClass* mono_unity_class_get_element_class(MonoClass *klass);
 gboolean mono_unity_class_is_delegate(MonoClass *klass);
 int mono_unity_class_get_instance_size(MonoClass *klass);
