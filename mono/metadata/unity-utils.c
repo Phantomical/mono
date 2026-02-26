@@ -2105,3 +2105,58 @@ MonoClass* mono_unity_get_attr_type_arg_as_class(MonoAttrArgsInfo *ainfo, int in
 	g_assert(index < ainfo->num_type_args);
 	return mono_class_from_mono_type((MonoType*)ainfo->typed_args[index]);
 }
+
+int mono_unity_get_attr_type_arg_as_int(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return *(int*)(ainfo->typed_args[index]);
+}
+
+uint64_t mono_unity_get_attr_type_arg_as_uint64(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return *(uint64_t*)(ainfo->typed_args[index]);
+}
+
+const char* mono_unity_class_get_assembly_name_cstring(MonoClass *klass)
+{
+	MonoAssembly *ta = m_class_get_image (klass)->assembly;
+	return (const char*)mono_stringify_assembly_name (&ta->aname);
+}
+
+gboolean mono_unity_type_is_blittable_primitive(MonoType *type)
+{
+	return (type->type >= MONO_TYPE_BOOLEAN && type->type <= MONO_TYPE_R8) ||
+		type-> type == MONO_TYPE_I || type->type == MONO_TYPE_U || type->type == MONO_TYPE_PTR;
+}
+
+gboolean mono_unity_type_is_unmanaged(MonoType *type)
+{
+	if (mono_unity_type_is_blittable_primitive(type))
+		return TRUE;
+	
+	MonoClass* klass = mono_class_from_mono_type(type);
+
+	// if it's not a valuetype, we're done
+	if (!mono_class_is_valuetype(klass))
+		return FALSE;
+
+	// if it's a blittable valuetype, we're done
+	if (mono_class_is_blittable(klass))
+		return TRUE;
+
+	// It's a non-blittable valuetype.  We have to look at its fields,
+	// because we want to allow bools, chars, and other unmanaged fields
+	// that are not "CLR Blittable"
+	gpointer iter = NULL;
+	MonoClassField *field;
+	while ((field = mono_class_get_fields(klass, &iter)))
+	{
+		if ((mono_field_get_flags(field) & FIELD_ATTRIBUTE_STATIC) != 0)
+			continue;
+		if (!mono_unity_type_is_unmanaged(mono_field_get_type(field)))
+			return FALSE;		
+	}
+
+	return TRUE;
+}
