@@ -1569,7 +1569,7 @@ mono_class_enum_basetype_internal (MonoClass *klass);
 gboolean
 mono_method_is_constructor (MonoMethod *method);
 
-gboolean
+MONO_API gboolean
 mono_class_has_default_constructor (MonoClass *klass, gboolean public_only);
 
 gboolean
