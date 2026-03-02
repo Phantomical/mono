@@ -92,7 +92,7 @@ gboolean mono_unity_object_check_box_cast(MonoObject *obj, MonoClass *klass);
 
 //class 
 const char* mono_unity_class_get_image_name(MonoClass* klass);
-MonoClass* mono_unity_class_get_generic_definition(MonoClass* klass);
+MONO_API MonoClass* mono_unity_class_get_generic_definition(MonoClass* klass);
 MonoClass* mono_unity_class_inflate_generic_class(MonoClass *gklass, MonoGenericContext *context);
 gboolean mono_unity_class_has_parent_unsafe(MonoClass *klass, MonoClass *parent);
 MonoAssembly* mono_unity_class_get_assembly(MonoClass *klass);
