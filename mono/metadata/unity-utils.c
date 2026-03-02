@@ -2118,6 +2118,12 @@ uint64_t mono_unity_get_attr_type_arg_as_uint64(MonoAttrArgsInfo *ainfo, int ind
 	return *(uint64_t*)(ainfo->typed_args[index]);
 }
 
+void* mono_unity_get_attr_type_arg(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return ainfo->typed_args[index];
+}
+
 const char* mono_unity_class_get_assembly_name_cstring(MonoClass *klass)
 {
 	MonoAssembly *ta = m_class_get_image (klass)->assembly;
