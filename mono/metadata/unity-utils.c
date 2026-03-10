@@ -825,6 +825,11 @@ MonoGenericContext mono_unity_generic_class_get_context(MonoGenericClass *klass)
 	return klass->context;
 }
 
+void mono_unity_generic_class_get_context_by_ptr(MonoGenericClass *klass, MonoGenericContext *context)
+{
+	*context = klass->context;
+}
+
 MonoClass* mono_unity_generic_class_get_container_class(MonoGenericClass *klass)
 {
 	return klass->container_class;

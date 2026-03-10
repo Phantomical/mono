@@ -152,7 +152,8 @@ MonoClass* mono_unity_type_get_element_class(MonoType *type); //only safe to cal
 guint64 mono_unity_type_get_hash(MonoType *type, gboolean inflate);
 
 //generic class
-MONO_API MonoGenericContext mono_unity_generic_class_get_context(MonoGenericClass *klass);
+MonoGenericContext mono_unity_generic_class_get_context(MonoGenericClass *klass);
+MONO_API void mono_unity_generic_class_get_context_by_ptr(MonoGenericClass *klass, MonoGenericContext *context);
 MonoClass* mono_unity_generic_class_get_container_class(MonoGenericClass *klass);
 
 //method signature
