@@ -121,10 +121,14 @@ namespace Mono.Net.Security
 				min = TlsProtocolCode.Tls11;
 			else if ((EnabledProtocols & SslProtocols.Tls12) != 0)
 				min = TlsProtocolCode.Tls12;
+			else if ((EnabledProtocols & SslProtocols.Tls13) != 0)
+				min = TlsProtocolCode.Tls13;
 			else
 				min = null;
 
-			if ((EnabledProtocols & SslProtocols.Tls12) != 0)
+			if ((EnabledProtocols & SslProtocols.Tls13) != 0)
+				max = TlsProtocolCode.Tls13;
+			else if ((EnabledProtocols & SslProtocols.Tls12) != 0)
 				max = TlsProtocolCode.Tls12;
 			else if ((EnabledProtocols & SslProtocols.Tls11) != 0)
 				max = TlsProtocolCode.Tls11;

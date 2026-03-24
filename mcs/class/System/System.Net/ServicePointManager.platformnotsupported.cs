@@ -85,7 +85,7 @@ namespace System.Net
 		public static SecurityProtocolType SecurityProtocol {
 			get;
 			set;
-		} = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+		} = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
 
 		public static RemoteCertificateValidationCallback ServerCertificateValidationCallback {
 			get;

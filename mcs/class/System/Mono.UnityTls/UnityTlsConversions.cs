@@ -15,26 +15,34 @@ namespace Mono.Unity
 {
 	internal static class UnityTlsConversions
 	{
+		// Note that for these conversion routines, we pretty much always end up just returning TLS
+		// 1.2 as the minimum and 1.3 as the maximum, as that's the range supported by UnityTLS. We
+		// do so even if the specified protocols are outside this range. This is not ideal since it
+		// might go against user wishes (if say they specify TLS 1.1 only), but it's better than
+		// failing since there might be old configurations out there that just specify old protocols
+		// out of habit and we don't want to break them. Plus, worst case we just connect with a
+		// protocol more secure than the user asked for which would be weird to complain about.
+
 		public static UnityTls.unitytls_protocol GetMinProtocol (SslProtocols protocols)
 		{
-			if (protocols.HasFlag (SslProtocols.Tls))
-				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_0;
-			if (protocols.HasFlag (SslProtocols.Tls11))
-				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_1;
 			if (protocols.HasFlag (SslProtocols.Tls12))
 				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_2;
-			return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_0;	// Use mbed tls min default
+			if (protocols.HasFlag (SslProtocols.Tls13))
+				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_3;
+
+			// Default to TLS 1.2 as that's the minimum we support in UnityTLS.
+			return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_2;
 		}
 
 		public static UnityTls.unitytls_protocol GetMaxProtocol (SslProtocols protocols)
 		{
+			if (protocols.HasFlag (SslProtocols.Tls13))
+				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_3;
 			if (protocols.HasFlag (SslProtocols.Tls12))
 				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_2;
-			if (protocols.HasFlag (SslProtocols.Tls11))
-				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_1;
-			if (protocols.HasFlag (SslProtocols.Tls))
-				return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_0;
-			return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_2;	// Use mbed tls max default
+
+			// Default to TLS 1.3 as that's the maximum we support in UnityTLS.
+			return UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_3;
 		}
 
 		public static TlsProtocols ConvertProtocolVersion(UnityTls.unitytls_protocol protocol)
@@ -47,6 +55,8 @@ namespace Mono.Unity
 				return TlsProtocols.Tls11;
 			case UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_2:
 				return TlsProtocols.Tls12;
+			case UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_TLS_1_3:
+				return TlsProtocols.Tls13;
 			case UnityTls.unitytls_protocol.UNITYTLS_PROTOCOL_INVALID:
 				return TlsProtocols.Zero;
 			}

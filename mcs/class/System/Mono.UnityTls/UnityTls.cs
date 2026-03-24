@@ -158,6 +158,7 @@ namespace Mono.Unity
             UNITYTLS_PROTOCOL_TLS_1_0,
             UNITYTLS_PROTOCOL_TLS_1_1,
             UNITYTLS_PROTOCOL_TLS_1_2,
+            UNITYTLS_PROTOCOL_TLS_1_3,
 
             UNITYTLS_PROTOCOL_INVALID,
         }

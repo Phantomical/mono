@@ -387,6 +387,11 @@ namespace System.Net.Security {
                 {
                     proto |= SslProtocols.Tls12;
                 }
+                if ((proto & SslProtocols.Tls13) != 0)
+                {
+                    proto |= SslProtocols.Tls13;
+                }
+
                 return proto;
             }
         }
