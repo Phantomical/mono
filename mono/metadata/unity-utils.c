@@ -1,6 +1,5 @@
-#include "unity-utils.h"
 #include <config.h>
-
+#include "unity-utils.h"
 
 #include <mono/utils/mono-publib.h>
 
@@ -2056,6 +2055,8 @@ ves_icall_Unity_Android_Network_Interface_Up_State (MonoString *ifName, MonoBool
 }
 #endif
 
+// Allocates a MonoAttrArgsInfo plus its typed_args/named_args/arginfo arrays.
+// Caller must release the whole thing with mono_unity_get_attr_args_info_free.
 MonoAttrArgsInfo* mono_unity_get_attr_args_info(MonoCustomAttrInfo *cainfo, int index)
 {
 	g_assert(index < cainfo->num_attrs);
@@ -2063,10 +2064,6 @@ MonoAttrArgsInfo* mono_unity_get_attr_args_info(MonoCustomAttrInfo *cainfo, int 
 	MonoCustomAttrEntry *centry = &cainfo->attrs [index];
 	if (centry->ctor == NULL)
 		return NULL;
-
-	//MonoClass *klass = centry->ctor->klass;
-	//if (strcmp (m_class_get_name (klass), "CategoryAttribute") || mono_method_signature_internal (centry->ctor)->param_count != 1)
-	//	continue;
 
 	MonoAttrArgsInfo *attr_args_info = g_malloc(sizeof(MonoAttrArgsInfo));
 	MonoMethodSignature *sig = mono_method_signature_internal(centry->ctor);
@@ -2105,6 +2102,8 @@ gint32 mono_unity_get_attr_args_info_type_arg_count(MonoAttrArgsInfo *ainfo)
 	return ainfo->num_type_args;
 }
 
+// The mono_unity_get_attr_type_arg* accessors return interior pointers into ainfo;
+// they are only valid until mono_unity_get_attr_args_info_free(ainfo) is called.
 MonoClass* mono_unity_get_attr_type_arg_as_class(MonoAttrArgsInfo *ainfo, int index)
 {
 	g_assert(index < ainfo->num_type_args);
@@ -2129,6 +2128,8 @@ void* mono_unity_get_attr_type_arg(MonoAttrArgsInfo *ainfo, int index)
 	return ainfo->typed_args[index];
 }
 
+// Caller owns the returned string and must release it with g_free
+// (or mono_unity_g_free from Unity-side code).
 const char* mono_unity_class_get_assembly_name_cstring(MonoClass *klass)
 {
 	MonoAssembly *ta = m_class_get_image (klass)->assembly;
@@ -2163,7 +2164,7 @@ gboolean mono_unity_type_is_unmanaged(MonoType *type)
 	MonoClassField *field;
 	while ((field = mono_class_get_fields(klass, &iter)))
 	{
-		if ((mono_field_get_flags(field) & FIELD_ATTRIBUTE_STATIC) != 0)
+		if ((mono_field_get_flags(field) & (FIELD_ATTRIBUTE_STATIC | FIELD_ATTRIBUTE_HAS_FIELD_RVA)) != 0)
 			continue;
 		if (!mono_unity_type_is_unmanaged(mono_field_get_type(field)))
 			return FALSE;		
