@@ -33,7 +33,7 @@ namespace Mono.Unity
 		public override bool SupportsMonoExtensions => true;
 		public override bool SupportsConnectionInfo => true;
 		internal override bool SupportsCleanShutdown => true;
-		public override SslProtocols SupportedProtocols => SslProtocols.Tls12 | SslProtocols.Tls11 | SslProtocols.Tls;
+		public override SslProtocols SupportedProtocols => SslProtocols.Tls12 | SslProtocols.Tls13;
 
 		internal override MNS.MobileAuthenticatedStream CreateSslStream (
 			SslStream sslStream, Stream innerStream, bool leaveInnerStreamOpen,

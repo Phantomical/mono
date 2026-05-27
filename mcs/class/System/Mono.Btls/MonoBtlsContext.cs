@@ -341,6 +341,8 @@ namespace Mono.Btls
 				return TlsProtocols.Tls11;
 			case TlsProtocolCode.Tls12:
 				return TlsProtocols.Tls12;
+			case TlsProtocolCode.Tls13:
+				return TlsProtocols.Tls13;
 			default:
 				throw new NotSupportedException ();
 			}

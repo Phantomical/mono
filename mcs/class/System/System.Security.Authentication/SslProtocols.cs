@@ -34,15 +34,17 @@ namespace System.Security.Authentication {
 	[Flags]
 	public enum SslProtocols {
 		None,
+		[MonoTODO ("unsupported")]
 		Ssl2 = 12,
+		[MonoTODO ("unsupported")]
 		Ssl3 = 48,
+		[MonoTODO ("unsupported")]
 		Tls = 192,
 		[MonoTODO ("unsupported")]
 		Tls11 = 768,
-		[MonoTODO ("unsupported")]
 		Tls12 = 3072,
 		Tls13 = 12288,
-		Default = Ssl3 | Tls
+		Default = Tls12 | Tls13
 	}
 }
 
