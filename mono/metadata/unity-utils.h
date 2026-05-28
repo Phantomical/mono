@@ -92,18 +92,18 @@ gboolean mono_unity_object_check_box_cast(MonoObject *obj, MonoClass *klass);
 
 //class 
 const char* mono_unity_class_get_image_name(MonoClass* klass);
-MonoClass* mono_unity_class_get_generic_definition(MonoClass* klass);
+MONO_API MonoClass* mono_unity_class_get_generic_definition(MonoClass* klass);
 MonoClass* mono_unity_class_inflate_generic_class(MonoClass *gklass, MonoGenericContext *context);
 gboolean mono_unity_class_has_parent_unsafe(MonoClass *klass, MonoClass *parent);
 MonoAssembly* mono_unity_class_get_assembly(MonoClass *klass);
-gboolean mono_unity_class_is_array(MonoClass *klass);
+MONO_API gboolean mono_unity_class_is_array(MonoClass *klass);
 MonoClass* mono_unity_class_get_element_class(MonoClass *klass);
 gboolean mono_unity_class_is_delegate(MonoClass *klass);
 int mono_unity_class_get_instance_size(MonoClass *klass);
 MonoClass* mono_unity_class_get_castclass(MonoClass *klass);
 guint32 mono_unity_class_get_native_size(MonoClass* klass);
 MonoBoolean mono_unity_class_is_string(MonoClass* klass);
-MonoBoolean mono_unity_class_is_class_type(MonoClass* klass);
+MONO_API MonoBoolean mono_unity_class_is_class_type(MonoClass* klass);
 MONO_API gboolean mono_unity_class_is_inited(MonoClass* klass);
 MONO_API gboolean mono_class_is_generic(MonoClass *klass);
 MONO_API gboolean mono_class_is_blittable(MonoClass *klass);
@@ -144,8 +144,8 @@ MonoClass* mono_unity_array_get_class(MonoArray *arr);
 mono_array_size_t mono_unity_array_get_max_length(MonoArray *arr);
 
 //type
-gboolean mono_unity_type_is_generic_instance(MonoType *type);
-MonoGenericClass* mono_unity_type_get_generic_class(MonoType *type);
+MONO_API gboolean mono_unity_type_is_generic_instance(MonoType *type);
+MONO_API MonoGenericClass* mono_unity_type_get_generic_class(MonoType *type);
 gboolean mono_unity_type_is_enum_type(MonoType *type);
 gboolean mono_unity_type_is_boolean(MonoType *type);
 MonoClass* mono_unity_type_get_element_class(MonoType *type); //only safe to call when the type has a defined klass data element
@@ -153,6 +153,7 @@ guint64 mono_unity_type_get_hash(MonoType *type, gboolean inflate);
 
 //generic class
 MonoGenericContext mono_unity_generic_class_get_context(MonoGenericClass *klass);
+MONO_API void mono_unity_generic_class_get_context_by_ptr(MonoGenericClass *klass, MonoGenericContext *context);
 MonoClass* mono_unity_generic_class_get_container_class(MonoGenericClass *klass);
 
 //method signature
@@ -161,8 +162,8 @@ int mono_unity_signature_num_parameters(MonoMethodSignature *sig);
 gboolean mono_unity_signature_param_is_byref(MonoMethodSignature *sig, int index);
 
 //generic inst
-guint mono_unity_generic_inst_get_type_argc(MonoGenericInst *inst);
-MonoType* mono_unity_generic_inst_get_type_argument(MonoGenericInst *inst, int index);
+MONO_API guint mono_unity_generic_inst_get_type_argc(MonoGenericInst *inst);
+MONO_API MonoType* mono_unity_generic_inst_get_type_argument(MonoGenericInst *inst, int index);
 
 //exception
 MonoString* mono_unity_exception_get_message(MonoException *exc);
@@ -275,5 +276,23 @@ mono_unity_set_android_network_up_state_func(android_network_up_state func);
 
 MonoBoolean
 ves_icall_Unity_Android_Network_Interface_Up_State (MonoString *ifName, MonoBoolean* is_up);
+
+typedef struct {
+	gpointer *typed_args;
+	gpointer *named_args;
+	CattrNamedArg *arginfo;
+	int num_type_args;
+	int num_named_args;
+} MonoAttrArgsInfo;
+
+MONO_API MonoAttrArgsInfo* mono_unity_get_attr_args_info(MonoCustomAttrInfo *cainfo, int index);
+MONO_API void mono_unity_get_attr_args_info_free(MonoAttrArgsInfo *ainfo);
+MONO_API gint32 mono_unity_get_attr_args_info_type_arg_count(MonoAttrArgsInfo *ainfo);
+MONO_API MonoClass* mono_unity_get_attr_type_arg_as_class(MonoAttrArgsInfo *ainfo, int index);
+MONO_API int mono_unity_get_attr_type_arg_as_int(MonoAttrArgsInfo *ainfo, int index);
+MONO_API void* mono_unity_get_attr_type_arg(MonoAttrArgsInfo *ainfo, int index);
+MONO_API uint64_t mono_unity_get_attr_type_arg_as_uint64(MonoAttrArgsInfo *ainfo, int index);
+MONO_API const char* mono_unity_class_get_assembly_name_cstring(MonoClass *klass);
+MONO_API gboolean mono_unity_type_is_unmanaged(MonoType *type);
 
 #endif

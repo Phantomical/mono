@@ -1,6 +1,5 @@
 #include <config.h>
 
-
 #include <mono/utils/mono-publib.h>
 
 /* allow Unity to use deprecated functions for now */
@@ -31,6 +30,7 @@
 #include <mono/metadata/threadpool.h>
 #include <mono/metadata/tokentype.h>
 #include <mono/utils/mono-string.h>
+#include "mono/metadata/custom-attrs-internals.h"
 
 #if HAVE_BOEHM_GC
 #include <mono/utils/gc_wrapper.h>
@@ -821,6 +821,11 @@ MonoClass* mono_unity_type_get_element_class(MonoType *type)
 MonoGenericContext mono_unity_generic_class_get_context(MonoGenericClass *klass)
 {
 	return klass->context;
+}
+
+void mono_unity_generic_class_get_context_by_ptr(MonoGenericClass *klass, MonoGenericContext *context)
+{
+	*context = klass->context;
 }
 
 MonoClass* mono_unity_generic_class_get_container_class(MonoGenericClass *klass)
@@ -2049,3 +2054,120 @@ ves_icall_Unity_Android_Network_Interface_Up_State (MonoString *ifName, MonoBool
 }
 #endif
 
+// Allocates a MonoAttrArgsInfo plus its typed_args/named_args/arginfo arrays.
+// Caller must release the whole thing with mono_unity_get_attr_args_info_free.
+MonoAttrArgsInfo* mono_unity_get_attr_args_info(MonoCustomAttrInfo *cainfo, int index)
+{
+	g_assert(index < cainfo->num_attrs);
+
+	MonoCustomAttrEntry *centry = &cainfo->attrs [index];
+	if (centry->ctor == NULL)
+		return NULL;
+
+	MonoAttrArgsInfo *attr_args_info = g_malloc(sizeof(MonoAttrArgsInfo));
+	MonoMethodSignature *sig = mono_method_signature_internal(centry->ctor);
+	attr_args_info->num_type_args = sig->param_count;
+
+	ERROR_DECL (error);
+	mono_reflection_create_custom_attr_data_args_noalloc (
+		cainfo->image, centry->ctor, centry->data, centry->data_size,
+		&attr_args_info->typed_args, &attr_args_info->named_args, &attr_args_info->num_named_args, &attr_args_info->arginfo, error);
+	if (!is_ok (error))
+	{
+		mono_error_cleanup (error);
+		g_free(attr_args_info);
+		return NULL;
+	}
+
+	mono_error_cleanup (error);
+
+	return attr_args_info;
+
+	//g_free (typed_args);
+	//g_free (named_args);
+	//g_free (arginfo);
+}
+
+void mono_unity_get_attr_args_info_free(MonoAttrArgsInfo *ainfo)
+{
+	g_free(ainfo->typed_args);
+	g_free(ainfo->named_args);
+	g_free(ainfo->arginfo);
+	g_free(ainfo);
+}
+
+gint32 mono_unity_get_attr_args_info_type_arg_count(MonoAttrArgsInfo *ainfo)
+{
+	return ainfo->num_type_args;
+}
+
+// The mono_unity_get_attr_type_arg* accessors return interior pointers into ainfo;
+// they are only valid until mono_unity_get_attr_args_info_free(ainfo) is called.
+MonoClass* mono_unity_get_attr_type_arg_as_class(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return mono_class_from_mono_type((MonoType*)ainfo->typed_args[index]);
+}
+
+int mono_unity_get_attr_type_arg_as_int(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return *(int*)(ainfo->typed_args[index]);
+}
+
+uint64_t mono_unity_get_attr_type_arg_as_uint64(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return *(uint64_t*)(ainfo->typed_args[index]);
+}
+
+void* mono_unity_get_attr_type_arg(MonoAttrArgsInfo *ainfo, int index)
+{
+	g_assert(index < ainfo->num_type_args);
+	return ainfo->typed_args[index];
+}
+
+// Caller owns the returned string and must release it with g_free
+// (or mono_unity_g_free from Unity-side code).
+const char* mono_unity_class_get_assembly_name_cstring(MonoClass *klass)
+{
+	MonoAssembly *ta = m_class_get_image (klass)->assembly;
+	return (const char*)mono_stringify_assembly_name (&ta->aname);
+}
+
+gboolean mono_unity_type_is_blittable_primitive(MonoType *type)
+{
+	return (type->type >= MONO_TYPE_BOOLEAN && type->type <= MONO_TYPE_R8) ||
+		type-> type == MONO_TYPE_I || type->type == MONO_TYPE_U || type->type == MONO_TYPE_PTR;
+}
+
+gboolean mono_unity_type_is_unmanaged(MonoType *type)
+{
+	if (mono_unity_type_is_blittable_primitive(type))
+		return TRUE;
+	
+	MonoClass* klass = mono_class_from_mono_type(type);
+
+	// if it's not a valuetype, we're done
+	if (!mono_class_is_valuetype(klass))
+		return FALSE;
+
+	// if it's a blittable valuetype, we're done
+	if (mono_class_is_blittable(klass))
+		return TRUE;
+
+	// It's a non-blittable valuetype.  We have to look at its fields,
+	// because we want to allow bools, chars, and other unmanaged fields
+	// that are not "CLR Blittable"
+	gpointer iter = NULL;
+	MonoClassField *field;
+	while ((field = mono_class_get_fields(klass, &iter)))
+	{
+		if ((mono_field_get_flags(field) & (FIELD_ATTRIBUTE_STATIC | FIELD_ATTRIBUTE_HAS_FIELD_RVA)) != 0)
+			continue;
+		if (!mono_unity_type_is_unmanaged(mono_field_get_type(field)))
+			return FALSE;		
+	}
+
+	return TRUE;
+}
