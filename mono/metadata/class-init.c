@@ -27,6 +27,9 @@
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-memory-model.h>
 #include <mono/utils/unlocked.h>
+#if defined HOST_ARM64 
+#include <stdatomic.h>
+#endif
 #ifdef MONO_CLASS_DEF_PRIVATE
 /* Class initialization gets to see the fields of MonoClass */
 #define REALLY_INCLUDE_CLASS_DEF 1
@@ -3771,8 +3774,22 @@ mono_class_setup_interfaces (MonoClass *klass, MonoError *error)
 
 	error_init (error);
 
+#if defined HOST_ARM64 && !defined(_MSC_VER)
+#ifndef DISABLE_REMOTING
+	int byte_offset_from_min_align = 3;
+	int bit_offset = 0;
+#else
+	int byte_offset_from_min_align = 2;
+	int bit_offset = 6;
+#endif
+	const atomic_uint_least8_t* addr_of_containing_byte = &((const atomic_uint_least8_t*)&klass->min_align)[byte_offset_from_min_align];
+	gint8 containing_byte = atomic_load_explicit(addr_of_containing_byte, memory_order_acquire);
+	if ((containing_byte >> bit_offset) & 1 /* klass->interfaces_inited */)
+		return;
+#else
 	if (klass->interfaces_inited)
 		return;
+#endif
 
 	if (klass->rank == 1 && m_class_get_byval_arg (klass)->type != MONO_TYPE_ARRAY) {
 		MonoType *args [1];
