@@ -20,7 +20,7 @@ my $clean = 0;
 my $targetArch = "";
 my $debug = 0;
 my $gc = "bdwgc";
-my @vsVersions = (2019, 2022, 2017);
+my @vsVersions = (2019, 2022, 2017, 18); # Starting with VS 2026 ("VS 18"), installation folder follows version number rathan than year.
 my @vsEditions = ("Professional", "Enterprise", "Community");
 my @vsBaseFolder = ("ProgramFiles(x86)", "ProgramFiles");
 
