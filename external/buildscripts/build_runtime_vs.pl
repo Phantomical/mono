@@ -64,7 +64,7 @@ sub CompileVCProj
 	my $arch = $targetArch;
 
 	my $target = $clean ? "/t:Clean,Build" :"/t:Build";
-	my $properties = "/p:Configuration=$config;Platform=$arch;MONO_TARGET_GC=$gc;MONO_USE_STATIC_C_RUNTIME=true";
+	my $properties = "/p:Configuration=$config;Platform=$arch;MONO_TARGET_GC=$gc;MONO_USE_STATIC_C_RUNTIME=false";
 
 	print (">>> $msbuild $properties $target $sln\n\n");
 	system($msbuild, $properties, $target, $sln) eq 0
