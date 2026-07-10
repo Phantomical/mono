@@ -27,7 +27,6 @@
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-memory-model.h>
 #include <mono/utils/unlocked.h>
-#define ASSERT_IT_WORKS 1
 #if defined HOST_ARM64 && !defined(_MSC_VER)
 #include <stdatomic.h>
 #endif
