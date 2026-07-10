@@ -27,9 +27,12 @@
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-memory-model.h>
 #include <mono/utils/unlocked.h>
-#define ASSERT_IT_WORKS 1
-#if defined HOST_ARM64 && !defined(_MSC_VER)
+#if defined HOST_ARM64
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
 #include <stdatomic.h>
+#endif
 #endif
 #ifdef MONO_CLASS_DEF_PRIVATE
 /* Class initialization gets to see the fields of MonoClass */
@@ -3775,7 +3778,12 @@ mono_class_setup_interfaces (MonoClass *klass, MonoError *error)
 
 	error_init (error);
 
-#if defined HOST_ARM64 && !defined(_MSC_VER)
+#if defined HOST_ARM64
+#if defined(_MSC_VER)
+#define ATOMIC_U8_PTR unsigned __int8 volatile*
+#else
+#define ATOMIC_U8_PTR const atomic_uint_least8_t*
+#endif
 #ifndef DISABLE_REMOTING
 	int byte_offset_from_min_align = 3;
 	int bit_offset = 0;
@@ -3783,18 +3791,17 @@ mono_class_setup_interfaces (MonoClass *klass, MonoError *error)
 	int byte_offset_from_min_align = 2;
 	int bit_offset = 6;
 #endif
-	const atomic_uint_least8_t* addr_of_containing_byte = &((const atomic_uint_least8_t*)&klass->min_align)[byte_offset_from_min_align];
-	gint8 containing_byte = atomic_load_explicit(addr_of_containing_byte, memory_order_acquire);
-	int is_inited = (containing_byte >> bit_offset) & 1; /* klass->interfaces_inited */
-#if defined ASSERT_IT_WORKS
-	MonoClass tester = { .interfaces_inited = TRUE };
-	gint8 test_byte = atomic_load_explicit(&((const atomic_uint_least8_t*)&tester.min_align)[byte_offset_from_min_align], memory_order_acquire);
-	int test_bit = (test_byte >> bit_offset) & 1;
-	g_assert(test_bit == tester.interfaces_inited);
-	g_assert(is_inited == klass->interfaces_inited);
+	ATOMIC_U8_PTR addr_of_containing_byte = &((ATOMIC_U8_PTR) &klass->min_align)[byte_offset_from_min_align];
+	gint8 containing_byte =
+#if defined(_MSC_VER)
+		__ldar8(addr_of_containing_byte);
+#else
+		atomic_load_explicit(addr_of_containing_byte, memory_order_acquire);
 #endif
+	int is_inited = (containing_byte >> bit_offset) & 1; /* klass->interfaces_inited */
 	if (is_inited)
 		return;
+#undef ATOMIC_U8_PTR
 #else
 	if (klass->interfaces_inited)
 		return;
