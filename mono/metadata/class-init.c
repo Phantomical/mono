@@ -27,6 +27,7 @@
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-memory-model.h>
 #include <mono/utils/unlocked.h>
+#define ASSERT_IT_WORKS 1
 #if defined HOST_ARM64 && !defined(_MSC_VER)
 #include <stdatomic.h>
 #endif
@@ -3786,6 +3787,10 @@ mono_class_setup_interfaces (MonoClass *klass, MonoError *error)
 	gint8 containing_byte = atomic_load_explicit(addr_of_containing_byte, memory_order_acquire);
 	int is_inited = (containing_byte >> bit_offset) & 1; /* klass->interfaces_inited */
 #if defined ASSERT_IT_WORKS
+	MonoClass tester = { .interfaces_inited = TRUE };
+	gint8 test_byte = atomic_load_explicit(&((const atomic_uint_least8_t*)&tester.min_align)[byte_offset_from_min_align], memory_order_acquire);
+	int test_bit = (test_byte >> bit_offset) & 1;
+	g_assert(test_bit == tester.interfaces_inited);
 	g_assert(is_inited == klass->interfaces_inited);
 #endif
 	if (is_inited)
