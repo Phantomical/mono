@@ -28,7 +28,7 @@
 #include <mono/utils/mono-memory-model.h>
 #include <mono/utils/unlocked.h>
 #if defined HOST_ARM64
-#if defined(_MSC_VER)
+#if defined _MSC_VER
 #include <intrin.h>
 #else
 #include <stdatomic.h>
@@ -3778,12 +3778,38 @@ mono_class_setup_interfaces (MonoClass *klass, MonoError *error)
 
 	error_init (error);
 
+	// ======================================= NOTE! =======================================
+	// This is a hacky fix for a bug that is technically present many places in the codebase.
+	// 
+	// The issue is:
+	//   Below we normally check if `klass->interfaces_inited` (bitfield flag) is set.
+	//   If that's the case, we assume the interfaces for this class have been initialized
+	//   and `klass->interface_count` and `klass->interfaces` are set and valid.
+	//   
+	//   If it's not set, we prepare the values and then enter the mono_loader_lock, 
+	//   set the values, memory fence and then set the `klass->interfaces_inited` flag.
+	//   
+	//   On strong memory ordering architectures (like x86) this is enough to guarantee that 
+	//   if a thread observes `klass->interfaces_inited` to be set, then the interface data
+	//   is present and valid.
+	//
+	//   But on weak memory ordering architectures (like ARM64) this is not guaranteed, and 
+	//   we need at minimum a load-acquire to ensure the correct observed ordering here.
+	// 
+	//   This is technically an issue everywhere that uses this pattern, but has only been
+	//   consistently observed here.
+	//
+	//  The fix:
+	//    An additional issue is that because `klass->interfaces_inited` is a bitfield, we
+	//    can't get a pointer to it (required for load-acquires). So instead we have to do 
+	//    the following ugly hack:
 #if defined HOST_ARM64
-#if defined(_MSC_VER)
+#if defined _MSC_VER 
 #define ATOMIC_U8_PTR unsigned __int8 volatile*
 #else
 #define ATOMIC_U8_PTR const atomic_uint_least8_t*
 #endif
+	// NOTE: The layout defined in `class-private-definition.h` is affected by DISABLE_REMOTING
 #ifndef DISABLE_REMOTING
 	int byte_offset_from_min_align = 3;
 	int bit_offset = 0;
@@ -3791,13 +3817,17 @@ mono_class_setup_interfaces (MonoClass *klass, MonoError *error)
 	int byte_offset_from_min_align = 2;
 	int bit_offset = 6;
 #endif
+	// We get the address of the closest addressable field in the class, which is `min_align`
+	// From there we can count how many bytes away the byte containing our bit is:
 	ATOMIC_U8_PTR addr_of_containing_byte = &((ATOMIC_U8_PTR) &klass->min_align)[byte_offset_from_min_align];
-	gint8 containing_byte =
-#if defined(_MSC_VER)
+	// Load it using a load-acquire:
+	guint8 containing_byte =
+#if defined _MSC_VER
 		__ldar8(addr_of_containing_byte);
 #else
 		atomic_load_explicit(addr_of_containing_byte, memory_order_acquire);
 #endif
+	// Then extract the specific bit from that byte:
 	int is_inited = (containing_byte >> bit_offset) & 1; /* klass->interfaces_inited */
 	if (is_inited)
 		return;
