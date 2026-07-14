@@ -17,12 +17,6 @@ case $osarch in
 			unzip 3.8.1_28985563_1365df71ca0a504c6949b1cf2e257caa6b0cacbac4b2b15f49ce75da6699bc87.zip bsdtar
 		fi
 
-		if [ ! -e unity-unpacker ]
-		then
-			wget -q https://public-stevedore.unity3d.com/r/public/unity-unpacker-linux-x64/3.8.1_28985563_715449296d1e57e2625bb882eee684e27f46553a6782ddf4a3ec9a42e4210e58.zip
-			unzip 3.8.1_28985563_715449296d1e57e2625bb882eee684e27f46553a6782ddf4a3ec9a42e4210e58.zip unity-unpacker
-		fi
-
 		PATH=`pwd`:$PATH
 		popd
 		;;

@@ -66,10 +66,10 @@ my $cmd = "bsdtar --options zstd:compression-level=22 -cavf ../builds.tar.zst *"
 system($cmd) eq 0 or die("Command failed: \"$cmd\"");
 system("mv -f ../builds.tar.zst .") eq 0 or die("Failed to move builds.tar.zst into place");
 
-my $md5 = `md5sum builds.tar.zst | cut -d' ' -f1`;
+chomp(my $md5 = `md5sum builds.tar.zst | cut -d' ' -f1`);
 open(FH, '>', "builds.tar.zst.list") or die $!;
-print FH "md5:$md5\n";
+print FH "v2:md5:$md5\n";
 close(FH);
 
-$cmd = "unity-unpacker l -slt builds.tar.zst >> builds.tar.zst.list";
+$cmd = "bsdtar -tf builds.tar.zst | grep -v '/\$' | LC_ALL=C sort >> builds.tar.zst.list";
 system($cmd) eq 0 or die("Command failed: \"$cmd\"");
