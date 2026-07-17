@@ -3810,13 +3810,40 @@ mono_class_setup_interfaces (MonoClass *klass, MonoError *error)
 #define ATOMIC_U8_PTR const atomic_uint_least8_t*
 #endif
 	// NOTE: The layout defined in `class-private-definition.h` is affected by DISABLE_REMOTING
+#if defined _MSC_VER
+#ifndef DISABLE_REMOTING
+	int byte_offset_from_min_align = 6;
+	int bit_offset = 0;
+#else
+	int byte_offset_from_min_align = 5;
+	int bit_offset = 6;
+#endif	
+#else
 #ifndef DISABLE_REMOTING
 	int byte_offset_from_min_align = 3;
 	int bit_offset = 0;
 #else
 	int byte_offset_from_min_align = 2;
 	int bit_offset = 6;
+#endif	
 #endif
+	// ====================== CORRECTNESS CHECK ====================== 
+	// Enable this define to verify:
+#if defined ARM64_RACE_CONDITION_CORRECTNESS_ASSERT
+	MonoClass tester = { .interfaces_inited = TRUE };
+	ATOMIC_U8_PTR test_addr = &((ATOMIC_U8_PTR) &tester.min_align)[byte_offset_from_min_align];
+	gint8 test_byte = 
+#if defined _MSC_VER
+		__ldar8(test_addr);
+#else
+		atomic_load_explicit(test_addr, memory_order_acquire);
+#endif
+	int test_bit = (test_byte >> bit_offset) & 1;
+	g_assert(test_bit == tester.interfaces_inited);
+#endif
+	// =============================================================== 
+
+
 	// We get the address of the closest addressable field in the class, which is `min_align`
 	// From there we can count how many bytes away the byte containing our bit is:
 	ATOMIC_U8_PTR addr_of_containing_byte = &((ATOMIC_U8_PTR) &klass->min_align)[byte_offset_from_min_align];
