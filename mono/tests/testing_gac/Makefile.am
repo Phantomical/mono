@@ -170,7 +170,10 @@ test-app-both: $(APP_BOTH_EXE) prereqs
 
 # MONO_GAC_PREFIX tests
 
-test-signed-v1-app-gac: $(APP_SIGNED_V1_EXE) gacinstall prereqs
+# N.B. only depend on prereqs, not on gacinstall directly - prereqs already runs
+# gacinstall, and listing both means a parallel make can run two gacutil
+# processes that race to create the gac directories.
+test-signed-v1-app-gac: $(APP_SIGNED_V1_EXE) prereqs
 	$(TOOLS_RUNTIME) $(TEST_RUNNER) $(TEST_RUNNER_ARGS) --testsuite-name "testing_gac_$@" --mono-gac-prefix $(GACDIR) $(APP_SIGNED_V1_EXE)
 
 .PHONY: gacinstall
