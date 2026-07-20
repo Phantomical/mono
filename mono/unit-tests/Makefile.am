@@ -15,13 +15,35 @@ MCS_NO_LIB = $(MCS_NO_UNSAFE) -unsafe
 
 MCS = $(MCS_NO_LIB)
 
+# The test executables statically pull in libmini, which contains C++/LLVM
+# objects. Link them with the C++ compiler driver (like mono/mini does) so the
+# C++ runtime (e.g. __gxx_personality_v0) is available.
+CXXLD=$(MONO_CXXLD)
+CCLD=$(MONO_CXXLD)
+
+# Wire in the internal-LLVM link flags/libs the same way mono/mini does.
+# Without this, LLVM_LIBS/LLVM_LDFLAGS are empty here and libmini's LLVM
+# references (llvm::*, __jit_debug_*) go unresolved at link time.
+if ENABLE_LLVM
+include $(mono_build_root)/llvm/llvm_config.mk
+LLVM_LDFLAGS=$(LLVM_LDFLAGS_INTERNAL) $(LLVM_LDFLAGS_EXTERNAL)
+LLVM_LIBS=$(LLVM_LIBS_INTERNAL) $(LLVM_LIBS_EXTERNAL)
+
+$(mono_build_root)/llvm/llvm_config.mk:
+	$(MAKE) -C $(top_builddir)/llvm $(mono_build_root)/llvm/llvm_config.mk
+endif
+
 LLVMMONOF=$(LLVM_LIBS) $(LLVM_LDFLAGS)
 
 glib_libs = $(top_builddir)/mono/eglib/libeglib.la
 
 test_cflags = $(AM_CFLAGS) $(SGEN_DEFINES)
+# NB: $(LLVMMONOF) is intentionally NOT here — the LLVM archives must appear
+# on the link line *after* libmini (which references them), so they are added
+# at the end of each program's LDADD below. Listing them here (before libmini)
+# makes the linker discard them and the LLVM symbols go unresolved.
 test_ldadd = libtestlib.la \
-	$(LIBGC_LIBS) $(glib_libs) $(LLVMMONOF)
+	$(LIBGC_LIBS) $(glib_libs)
 
 if HOST_DARWIN
 test_ldflags = -framework CoreFoundation -framework Foundation
@@ -91,29 +113,29 @@ test_mono_handle_LDFLAGS = $(test_ldflags)
 
 test_mono_callspec_SOURCES = main.c
 test_mono_callspec_CFLAGS = $(AM_CFLAGS) -DMAIN=test_mono_callspec_main
-test_mono_callspec_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) libtestlib_la-test-mono-callspec.lo
+test_mono_callspec_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-mono-callspec.lo
 test_mono_callspec_LDFLAGS = $(test_ldflags)
 test_mono_callspec_DEPENDENCIES = callspec.exe
 
 test_mono_string_SOURCES = main.c
 test_mono_string_CFLAGS = $(test_cflags) -DMAIN=test_mono_string_main
-test_mono_string_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) libtestlib_la-test-mono-string.lo
+test_mono_string_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-mono-string.lo
 test_mono_string_LDFLAGS = $(test_ldflags)
 
 test_mono_embed_SOURCES = main.c
 test_mono_embed_CFLAGS = $(test_cflags) -DMAIN=test_mono_embed_main
-test_mono_embed_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) libtestlib_la-test-mono-embed.lo
+test_mono_embed_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-mono-embed.lo
 test_mono_embed_LDFLAGS = $(test_ldflags)
 test_mono_embed_DEPENDENCIES = test-embed.exe
 
 test_path_SOURCES = test-path.c
 test_path_CFLAGS = $(test-cflags)
-test_path_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs)
+test_path_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF)
 test_path_LDFLAGS = $(test_ldflags)
 
 test_embed_invoke_SOURCES = main.c
 test_embed_invoke_CFLAGS = $(test_cflags) -DMAIN=test_mono_embed_invoke_main
-test_embed_invoke_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) libtestlib_la-test-embed-invoke.lo
+test_embed_invoke_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-embed-invoke.lo
 test_embed_invoke_LDFLAGS = $(test_ldflags)
 test_embed_invoke_DEPENDENCIES = test-embed-invoke-cs.exe
 
