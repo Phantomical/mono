@@ -1,0 +1,4 @@
+# Build artifacts from the LLVM 18 JIT spike / backend build.
+# Only sources (.cpp/.hpp/.h, build.sh, Makefile) should be tracked.
+/engine_spike
+*.o
