@@ -5,6 +5,7 @@
 /*.la
 /*.lo
 /*.trs
+/*.log
 /test-memfuncs
 /test-mono-linked-list-set
 /test-sgen-qsort
@@ -13,3 +14,5 @@
 /test-mono-callspec
 /test-mono-string
 /test-path
+/test-mono-embed
+/test-embed-invoke
