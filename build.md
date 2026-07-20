@@ -178,6 +178,98 @@ ls tmp/bin        # mono, mcs, csc, xbuild, monodis, gacutil, ...
 > Unity itself does not consume a `make install` prefix — it packages the profile
 > directories and `builds/` artifacts directly.
 
+## Optional: build with the LLVM backend
+
+Mono can use LLVM as its code-generation engine instead of the built-in JIT
+backend. Enabling it adds one `configure` flag; the catch is that Mono's LLVM
+backend needs an LLVM built with **Mono's own patches** — you cannot just point it
+at your distro's `llvm`. There are two ways to supply that LLVM:
+
+- **Internal (recommended, self-contained):** `--enable-llvm` *without* `--with-llvm`.
+  Mono builds the bundled fork in `external/llvm-project` (LLVM **6.0.1-mono**) via
+  CMake into `llvm/usr/`, then links against it. No network access needed — the
+  fork is a git submodule.
+- **External:** `--with-llvm=<prefix>` pointing at a prebuilt Mono-LLVM whose
+  `<prefix>/bin/llvm-config` exists. Use this only if you already have a compatible
+  Mono-patched LLVM; stock upstream LLVM will not work.
+
+### Extra prerequisites
+
+The internal LLVM build needs CMake and (strongly preferred) Ninja:
+
+```bash
+sudo apt-get install -y cmake ninja-build
+```
+
+### Configure + build
+
+Re-run `configure` with the same flags as [§ 3](#3-configure) plus `--enable-llvm`.
+Reconfiguring changes `config.h` (defines `ENABLE_LLVM`), so remove the stale
+`config.status` first:
+
+```bash
+cd /home/swlynch/projects/mono
+export CFLAGS="-fPIC -Os" CXXFLAGS="-fPIC -Os"
+rm -f config.status eglib/config.status libgc/config.status
+
+./autogen.sh \
+  --with-glib=embedded --disable-nls --with-mcs-docs=no --prefix="$PWD/tmp" \
+  --enable-no-threads-discovery=yes --enable-ignore-dynamic-loading=yes \
+  --enable-dont-register-main-static-data=yes --enable-thread-local-alloc=no \
+  --enable-unity-define=yes --with-unityjit=yes --with-unityaot=yes \
+  --with-monotouch=no \
+  --enable-llvm
+
+make -j"$(nproc)"
+```
+
+The config summary should now report:
+
+```
+LLVM Back End: yes (built in-tree: yes, assertions: no, msvc only: no)
+```
+
+`make` builds the bundled LLVM into `llvm/usr/` **first** (this is the long pole —
+a full LLVM compile), then rebuilds `mono/mini` linked against it. With Ninja + 16
+cores expect a substantial extra chunk of wall-clock beyond the plain build.
+
+> **gcc-13 note:** LLVM 6.0.1 is from 2018 and can hit missing-include / C++
+> errors when compiled by very new toolchains (gcc-13 / glibc-2.39). If the
+> `llvm/build` step fails to compile, rebuild just the LLVM sub-tree with clang,
+> which is more tolerant, then resume the top build:
+> ```bash
+> make -C llvm clean-llvm
+> CC=clang CXX=clang++ make -C llvm     # builds only external/llvm-project -> llvm/usr
+> make -j"$(nproc)"                      # finishes linking mono against it
+> ```
+
+### Verify the backend is present and engages
+
+```bash
+# 1. The runtime advertises LLVM (the number is the LLVM API version):
+./mono/mini/mono-sgen --version | grep LLVM
+#   LLVM:          yes(610)
+
+# 2. And it actually generates code via LLVM when asked. Compile a tiny program,
+#    then force the LLVM backend and dump the IR it emits:
+cat > /tmp/Hv.cs <<'EOF'
+using System; using System.Linq;
+class Hello { static void Main(){ Console.WriteLine(Enumerable.Range(1,5).Select(x=>x*x).Sum()); } }
+EOF
+mcs -out:/tmp/Hv.exe /tmp/Hv.cs
+
+export MONO_PATH="$PWD/mcs/class/lib/net_4_x-linux"
+./mono/mini/mono-sgen --llvm /tmp/Hv.exe                 # runs -> 55
+MONO_VERBOSE_METHOD=Main ./mono/mini/mono-sgen --llvm /tmp/Hv.exe 2>&1 | grep -i llvm
+#   converting llvm method void Hello:Main ()
+#   *** Unoptimized LLVM IR for Hello:Main () ***   ...
+```
+
+Seeing the emitted *"LLVM IR for Hello:Main"* confirms the LLVM backend — not the
+built-in JIT — compiled the method. `--nollvm` forces the built-in backend if you
+want to compare. (The `llvm/usr/bin/llvm-config --version` also prints `6.0.1-mono`,
+confirming the Mono-patched fork was the one built.)
+
 ## Rebuilding after changes
 
 - **Runtime (C) change:** `make -j"$(nproc)"` (incremental).
@@ -200,6 +292,12 @@ ls tmp/bin        # mono, mcs, csc, xbuild, monodis, gacutil, ...
   `git submodule update --init --recursive`.
 - **`No usable version of libssl was found`** — this only affects the older
   `build_classlibs_wsl.pl` path (see `Unity-build.md`), not these instructions.
+- **LLVM (`llvm/build`) fails to compile** with modern gcc → rebuild the LLVM
+  sub-tree with clang: `make -C llvm clean-llvm && CC=clang CXX=clang++ make -C llvm`,
+  then `make`. See [§ build with the LLVM backend](#optional-build-with-the-llvm-backend).
+- **`--enable-llvm` but summary says `LLVM Back End: no`** → you left a stale
+  `config.status`; remove `config.status eglib/config.status libgc/config.status`
+  and rerun `./autogen.sh ... --enable-llvm`.
 
 ---
 
