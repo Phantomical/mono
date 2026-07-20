@@ -78,8 +78,6 @@ export CXXFLAGS="-fPIC -Os"
   --with-mcs-docs=no \
   --prefix="$PWD/tmp" \
   --enable-no-threads-discovery=yes \
-  --enable-ignore-dynamic-loading=yes \
-  --enable-dont-register-main-static-data=yes \
   --enable-thread-local-alloc=no \
   --enable-unity-define=yes \
   --with-unityjit=yes \
@@ -93,6 +91,14 @@ What the flags mean:
 - `--prefix="$PWD/tmp"` — install into an **in-repo** `tmp/` dir, never system-wide.
 - `--with-unityjit=yes --with-unityaot=yes` — build the Unity JIT/AOT class-lib profiles.
 - `--enable-unity-define=yes` and the `--enable-*` toggles — Unity's runtime tweaks.
+
+> **Note:** Unity's stock build also passes `--enable-ignore-dynamic-loading=yes`
+> and `--enable-dont-register-main-static-data=yes`. Those tell the bundled Boehm
+> GC (`external/bdwgc`) not to scan the main program's static-data segment or
+> dynamically-loaded libraries for roots — correct for Mono (which manages its own
+> roots / defaults to SGen), but it makes bdwgc's own self-tests `gctest` and
+> `staticrootstest` fail under `make check`. They are omitted here so `make check`
+> is clean. Re-add them to match Unity's exact configuration.
 
 A successful configure ends with a summary and `Now type 'make' to compile`. It
 reports `C# Compiler: roslyn`, `GC: sgen ... and Included Boehm GC`, and
@@ -214,8 +220,7 @@ rm -f config.status eglib/config.status libgc/config.status
 
 ./autogen.sh \
   --with-glib=embedded --disable-nls --with-mcs-docs=no --prefix="$PWD/tmp" \
-  --enable-no-threads-discovery=yes --enable-ignore-dynamic-loading=yes \
-  --enable-dont-register-main-static-data=yes --enable-thread-local-alloc=no \
+  --enable-no-threads-discovery=yes --enable-thread-local-alloc=no \
   --enable-unity-define=yes --with-unityjit=yes --with-unityaot=yes \
   --with-monotouch=no \
   --enable-llvm
