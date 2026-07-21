@@ -7037,10 +7037,12 @@ __BEAR_EOF__
   "output": {
     "content": {
       "include_only_existing_source": true,
-      "paths_to_exclude": [
+      dnl @<:@ and @:>@ are autoconf quadrigraphs for [ and ]; written
+      dnl literally they would be eaten by m4's quoting and produce invalid JSON.
+      "paths_to_exclude": @<:@
         "`pwd`/mono/btls/build-shared/CMakeFiles",
         "`pwd`/mono/btls/build-static/CMakeFiles"
-      ]
+      @:>@
     },
     "format": {
       "command_as_array": true,
