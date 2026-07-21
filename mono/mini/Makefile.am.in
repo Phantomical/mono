@@ -445,6 +445,7 @@ llvm_sources = \
 	llvm/translator-cpp.hpp \
 	llvm/translator-cpp.cpp \
 	llvm/ehframe.cpp \
+	llvm/tiered.cpp \
 	llvm/translator.cpp
 endif
 

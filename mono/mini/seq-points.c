@@ -238,16 +238,29 @@ mono_save_seq_point_info (MonoCompile *cfg, MonoJitInfo *jinfo)
 
 	// FIXME: dynamic methods
 	if (!cfg->compile_aot) {
+		MonoSeqPointInfo *live_info;
+
 		mono_domain_lock (domain);
 		// FIXME: The lookup can fail if the method is JITted recursively though a type cctor
-		if (!g_hash_table_lookup (domain_jit_info (domain)->seq_points, cfg->method_to_register))
+		live_info = (MonoSeqPointInfo *)g_hash_table_lookup (domain_jit_info (domain)->seq_points, cfg->method_to_register);
+		if (!live_info) {
 			g_hash_table_insert (domain_jit_info (domain)->seq_points, cfg->method_to_register, cfg->seq_point_info);
-		else
+			live_info = cfg->seq_point_info;
+		} else {
+			/*
+			 * The method already has seq point info registered - this happens on
+			 * every second publication of a method, i.e. when a tier-0 body is
+			 * recompiled and promoted to tier 1. We must publish the info that is
+			 * actually live in the hash: storing cfg->seq_point_info here after
+			 * freeing it would leave jinfo pointing at freed memory.
+			 */
 			mono_seq_point_info_free (cfg->seq_point_info);
+			cfg->seq_point_info = NULL;
+		}
 		mono_domain_unlock (domain);
 
 		g_assert (jinfo);
-		jinfo->seq_points = cfg->seq_point_info;
+		jinfo->seq_points = live_info;
 	}
 
 	g_ptr_array_free (cfg->seq_points, TRUE);

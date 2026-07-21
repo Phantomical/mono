@@ -4678,6 +4678,23 @@ mini_init (const char *filename, const char *runtime_version)
 
 	MONO_VES_INIT_END ();
 
+#ifdef ENABLE_LLVM
+	/*
+	 * Declared in mono/mini/llvm/backend.h; declared locally because that header
+	 * also redeclares mono_llvm_compile_method, which conflicts with the legacy
+	 * llvm-jit.h still included here.
+	 */
+	void mono_llvm_tiered_set_ready (void);
+
+	/*
+	 * The runtime is now fully constructed, so tier-1 promotion is safe. Before
+	 * this point the domain is still being built (create_domain_objects compiles
+	 * methods), and running LLVM codegen there touches domain state that does not
+	 * exist yet.
+	 */
+	mono_llvm_tiered_set_ready ();
+#endif
+
 	return domain;
 }
 

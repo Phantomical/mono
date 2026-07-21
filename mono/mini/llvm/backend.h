@@ -109,6 +109,23 @@ void      mono_llvm_jit_register_symbol (const char *name, void *addr);
  */
 int       mono_llvm_engine_run_selftest (void);
 
+/*
+ * Tiered compilation (tiered.cpp). Tier 0 is the classic JIT; a method is
+ * queued for tier 1 on a successful tier-0 compile and promoted once the
+ * compile nesting unwinds to zero, so LLVM codegen never runs on a deep
+ * JIT nest. All of these are no-ops unless MONO_TIERED is set.
+ *
+ * mini.c brackets mini_method_compile with _compile_begin/_compile_end, calls
+ * _enqueue after publishing a tier-0 body, and implements mini_tiered_promote
+ * (declared in mini.h) which the drain calls back into.
+ */
+gboolean  mono_llvm_tiered_enabled (void);
+void      mono_llvm_tiered_set_ready (void);
+void      mono_llvm_tiered_compile_begin (void);
+void      mono_llvm_tiered_compile_end (void);
+void      mono_llvm_tiered_enqueue (MonoMethod *method, guint32 opt);
+gboolean  mono_llvm_tiered_in_promotion (void);
+
 G_END_DECLS
 
 #endif /* __MONO_MINI_LLVM_BACKEND_H__ */

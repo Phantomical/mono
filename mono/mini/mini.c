@@ -80,6 +80,17 @@
 #include "lldb.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
+
+#ifdef ENABLE_LLVM
+#include "llvm/backend.h"
+#else
+/* Tiering lives in the LLVM backend; without it every hook is a no-op. */
+#define mono_llvm_tiered_enabled() FALSE
+#define mono_llvm_tiered_in_promotion() FALSE
+#define mono_llvm_tiered_compile_begin() do { } while (0)
+#define mono_llvm_tiered_compile_end() do { } while (0)
+#define mono_llvm_tiered_enqueue(m,o) do { (void)(m); (void)(o); } while (0)
+#endif
 #include "mixed_callstack_plugin.h"
 
 MonoCallSpec *mono_jit_trace_calls;
@@ -3165,7 +3176,15 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	}
 
 #ifdef ENABLE_LLVM
-	try_llvm = mono_use_llvm || llvm;
+	/*
+	 * Under tiering, tier 0 is always the classic JIT and only the tier-1
+	 * promotion compile goes through LLVM - otherwise every first call would
+	 * pay LLVM codegen and there would be no tier 0 at all.
+	 */
+	if (mono_llvm_tiered_enabled ())
+		try_llvm = mono_llvm_tiered_in_promotion ();
+	else
+		try_llvm = mono_use_llvm || llvm;
 #endif
 
 #ifndef MONO_ARCH_FLOAT32_SUPPORTED
@@ -4082,8 +4101,84 @@ mono_update_jit_stats (MonoCompile *cfg)
  *
  *   Main entry point for the JIT.
  */
+static gpointer
+mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error);
+
+/*
+ * mini_tiered_promote:
+ *
+ *   Recompile METHOD through LLVM and publish the result as its terminal body.
+ * Runs from the tier-1 drain, which only fires when the JIT compile nesting has
+ * unwound to zero, so LLVM codegen never stacks on a deep cctor-driven nest.
+ *
+ * Returns FALSE when the backend declined the method (an EH-clause, gshared or
+ * save_lmf gate) or the compile failed; the caller then latches tier 0 as
+ * terminal so we never retry.
+ */
+gboolean
+mini_tiered_promote (MonoMethod *method, guint32 opt)
+{
+	MonoDomain *domain = mono_domain_get ();
+	MonoCompile *cfg;
+	MonoJitInfo *jinfo;
+
+	cfg = mini_method_compile (method, opt, domain, JIT_FLAG_RUN_CCTORS, 0, -1);
+	if (!cfg)
+		return FALSE;
+
+	/*
+	 * cfg->compile_llvm is cleared when the backend declines and mini falls back
+	 * to the classic JIT via restart_compile. A classic body here would be an
+	 * identical second copy of tier 0, so treat it as a decline.
+	 */
+	if (cfg->exception_type != MONO_EXCEPTION_NONE || !cfg->compile_llvm || !cfg->jit_info) {
+		mono_destroy_compile (cfg);
+		return FALSE;
+	}
+
+	jinfo = cfg->jit_info;
+
+	/*
+	 * mini_method_compile already added the tier-1 jinfo to the jit info table,
+	 * so an IP inside the new code resolves before anything can reach it.
+	 * Publish it to lookups last, by swapping the jit_code_hash entry under its
+	 * lock - that hash is fully lock-protected, so remove-then-insert is safe.
+	 * After the swap mini_lookup_method returns the tier-1 code_start and every
+	 * downstream consumer (call sites, vtable slots, IMT, delegates) picks it up
+	 * with no indirection.
+	 */
+	mono_memory_barrier ();
+
+	mono_domain_jit_code_hash_lock (domain);
+	mono_internal_hash_table_remove (&domain->jit_code_hash, method);
+	mono_internal_hash_table_insert (&domain->jit_code_hash, jinfo->d.method, jinfo);
+	mono_domain_jit_code_hash_unlock (domain);
+
+	mono_destroy_compile (cfg);
+
+	return TRUE;
+}
+
+/*
+ * Bracket every compile so tiering knows the JIT nesting depth. Tier-1
+ * promotion runs only when this unwinds to zero, keeping LLVM codegen off the
+ * deep nest that class initializers create. Both calls are no-ops unless
+ * MONO_TIERED is set.
+ */
 gpointer
 mono_jit_compile_method_inner (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error)
+{
+	gpointer code;
+
+	mono_llvm_tiered_compile_begin ();
+	code = mono_jit_compile_method_inner_1 (method, target_domain, opt, error);
+	mono_llvm_tiered_compile_end ();
+
+	return code;
+}
+
+static gpointer
+mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error)
 {
 	MonoCompile *cfg;
 	gpointer code = NULL;
@@ -4186,6 +4281,15 @@ mono_jit_compile_method_inner (MonoMethod *method, MonoDomain *target_domain, in
 		mono_domain_jit_code_hash_lock (target_domain);
 		mono_internal_hash_table_insert (&target_domain->jit_code_hash, cfg->jit_info->d.method, cfg->jit_info);
 		mono_domain_jit_code_hash_unlock (target_domain);
+
+		/*
+		 * A tier-0 body was just published - queue it for tier 1. The promotion
+		 * itself runs when the compile nesting unwinds (see
+		 * mono_llvm_tiered_compile_end), never here, because we may be many
+		 * frames deep in a cctor-driven compile nest.
+		 */
+		if (!cfg->compile_llvm)
+			mono_llvm_tiered_enqueue (method, opt);
 
 		code = cfg->native_code;
 

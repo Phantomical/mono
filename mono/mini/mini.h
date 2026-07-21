@@ -2149,6 +2149,14 @@ void      mono_global_regalloc              (MonoCompile *cfg);
 void      mono_create_jump_table            (MonoCompile *cfg, MonoInst *label, MonoBasicBlock **bbs, int num_blocks);
 MonoCompile *mini_method_compile            (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFlags flags, int parts, int aot_method_index);
 void      mono_destroy_compile              (MonoCompile *cfg);
+
+/*
+ * Recompile an already tier-0-compiled method through LLVM and publish the
+ * result as its terminal body. Returns FALSE if the backend declined the method
+ * or the compile failed, in which case tier 0 stays terminal. Called from the
+ * tier-1 drain in mono/mini/llvm/tiered.cpp.
+ */
+gboolean  mini_tiered_promote               (MonoMethod *method, guint32 opt);
 void      mono_empty_compile              (MonoCompile *cfg);
 MonoJitICallInfo *mono_find_jit_opcode_emulation (int opcode);
 void	  mono_print_ins_index (int i, MonoInst *ins);
