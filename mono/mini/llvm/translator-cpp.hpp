@@ -11,6 +11,28 @@
 #ifndef __MONO_MINI_LLVM_CPP_H__
 #define __MONO_MINI_LLVM_CPP_H__
 
+/*
+ * LLVM 6 -> 18 migration notes for callers (step 3b-2a).
+ *
+ * Opaque pointers: a pointer value no longer carries its pointee type, so any
+ * wrapper that builds a load must be told the loaded type explicitly. This is
+ * LLVM's own convention (cf. LLVMBuildLoad2/GEP2/Call2) -- not a mono-specific
+ * one. The wrappers below that gained a leading LLVMTypeRef parameter are:
+ *
+ *   mono_llvm_build_load        (builder, Ty, PointerVal, ...)
+ *   mono_llvm_build_atomic_load (builder, Ty, PointerVal, ...)
+ *   mono_llvm_build_aligned_load(builder, Ty, PointerVal, ...)
+ *
+ * The type parameter is placed directly after the builder, matching
+ * LLVMBuildLoad2 (b, Ty, Ptr, Name). Stores are unchanged -- the stored value
+ * still carries its own type. mono_llvm_build_alloca already took a type.
+ *
+ * Attribute indices are unchanged: mono_llvm_add_instr_attr still takes an
+ * LLVM AttributeList index (0 = return, 1..n = params, ~0 = function), because
+ * it is implemented with CallBase::addAttributeAtIndex, which preserves the
+ * historical numbering. Callers must NOT be renumbered to 0-based.
+ */
+
 #include <glib.h>
 
 #include "llvm-c/Core.h"
@@ -55,7 +77,15 @@ typedef enum {
 	LLVM_ATTR_STRUCT_RET,
 	LLVM_ATTR_NO_ALIAS,
 	LLVM_ATTR_BY_VAL,
-	LLVM_ATTR_UW_TABLE
+	LLVM_ATTR_UW_TABLE,
+	/*
+	 * Replaces the forked CallingConv::Mono. Stock LLVM already pins the
+	 * 'nest' parameter to R10 on SysV (X86CallingConv.td), and mono's
+	 * MONO_ARCH_RGCTX_REG / MONO_ARCH_IMT_REG on amd64 are both AMD64_R10,
+	 * so tagging the rgctx/imt argument 'nest' under the default C calling
+	 * convention reproduces the fork's ABI with unmodified LLVM.
+	 */
+	LLVM_ATTR_NEST
 } AttrKind;
 
 void
@@ -72,16 +102,16 @@ mono_llvm_build_alloca (LLVMBuilderRef builder, LLVMTypeRef Ty,
 						LLVMValueRef ArraySize,
 						int alignment, const char *Name);
 
-LLVMValueRef 
-mono_llvm_build_load (LLVMBuilderRef builder, LLVMValueRef PointerVal,
+LLVMValueRef
+mono_llvm_build_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueRef PointerVal,
 					  const char *Name, gboolean is_volatile);
 
-LLVMValueRef 
-mono_llvm_build_atomic_load (LLVMBuilderRef builder, LLVMValueRef PointerVal,
+LLVMValueRef
+mono_llvm_build_atomic_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueRef PointerVal,
 							 const char *Name, gboolean is_volatile, int alignment, BarrierKind barrier);
 
 LLVMValueRef
-mono_llvm_build_aligned_load (LLVMBuilderRef builder, LLVMValueRef PointerVal,
+mono_llvm_build_aligned_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueRef PointerVal,
 							  const char *Name, gboolean is_volatile, int alignment);
 
 LLVMValueRef 
@@ -161,8 +191,21 @@ mono_llvm_add_func_attr_nv (LLVMValueRef func, const char *attr_name, const char
 void
 mono_llvm_add_param_attr (LLVMValueRef param, AttrKind kind);
 
+/*
+ * LLVM_ATTR_BY_VAL and LLVM_ATTR_STRUCT_RET -- and only those two -- carry the
+ * pointee type since LLVM 12, and MUST be applied through these _with_type
+ * entry points; the untyped variants above assert on them. (LLVM_ATTR_UW_TABLE
+ * is also a valued attribute since LLVM 15, but its value is supplied
+ * internally, so it goes through the plain entry points.)
+ */
+void
+mono_llvm_add_param_attr_with_type (LLVMValueRef param, AttrKind kind, LLVMTypeRef type);
+
 void
 mono_llvm_add_instr_attr (LLVMValueRef val, int index, AttrKind kind);
+
+void
+mono_llvm_add_instr_attr_with_type (LLVMValueRef val, int index, AttrKind kind, LLVMTypeRef type);
 
 #if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
 G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,

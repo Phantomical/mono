@@ -36,10 +36,28 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/DIBuilder.h>
-#include <llvm/IR/CallSite.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/MDBuilder.h>
+#include <llvm/TargetParser/Host.h>
 
-#include "mini-llvm-cpp.h"
+/*
+ * Target-specific intrinsic enumerators live in their own generated headers;
+ * llvm/IR/Intrinsics.h deliberately does not pull them in. Without these, names
+ * like Intrinsic::x86_sse2_psll_d fail to resolve with "is not a member of
+ * llvm::Intrinsic" -- which looks identical to the intrinsic having been
+ * removed, but is not. Include the header for each target we emit for.
+ */
+#if defined(TARGET_X86) || defined(TARGET_AMD64)
+#include <llvm/IR/IntrinsicsX86.h>
+#endif
+#if defined(TARGET_ARM64)
+#include <llvm/IR/IntrinsicsAArch64.h>
+#endif
+#if defined(TARGET_WASM)
+#include <llvm/IR/IntrinsicsWebAssembly.h>
+#endif
+
+#include "translator-cpp.hpp"
 
 using namespace llvm;
 
@@ -79,25 +97,37 @@ mono_llvm_build_alloca (LLVMBuilderRef builder, LLVMTypeRef Ty,
 						LLVMValueRef ArraySize,
 						int alignment, const char *Name)
 {
-	return wrap (unwrap (builder)->Insert (new AllocaInst (unwrap (Ty), 0, unwrap (ArraySize), alignment), Name));
+	auto *b = unwrap (builder);
+	Type *type = unwrap (Ty);
+	/*
+	 * LLVM 6's AllocaInst took an 'unsigned Align' in which 0 meant "use the
+	 * ABI default". Align(0) asserts in modern LLVM, and callers do pass 0
+	 * (e.g. the 'this' alloca), so map 0 onto the preferred alignment.
+	 */
+	const DataLayout &dl = b->GetInsertBlock ()->getModule ()->getDataLayout ();
+	Align align = alignment ? Align (alignment) : dl.getPrefTypeAlign (type);
+
+	return wrap (b->Insert (new AllocaInst (type, 0, unwrap (ArraySize), align), Name));
 }
 
-LLVMValueRef 
-mono_llvm_build_load (LLVMBuilderRef builder, LLVMValueRef PointerVal,
+LLVMValueRef
+mono_llvm_build_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueRef PointerVal,
 					  const char *Name, gboolean is_volatile)
 {
-	LoadInst *ins = unwrap(builder)->CreateLoad(unwrap(PointerVal), is_volatile, Name);
+	LoadInst *ins = unwrap(builder)->CreateLoad(unwrap (Ty), unwrap(PointerVal), is_volatile, Name);
 
 	return wrap(ins);
 }
 
 LLVMValueRef
-mono_llvm_build_atomic_load (LLVMBuilderRef builder, LLVMValueRef PointerVal,
+mono_llvm_build_atomic_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueRef PointerVal,
 							 const char *Name, gboolean is_volatile, int alignment, BarrierKind barrier)
 {
-	LoadInst *ins = unwrap(builder)->CreateLoad(unwrap(PointerVal), is_volatile, Name);
+	LoadInst *ins = unwrap(builder)->CreateLoad(unwrap (Ty), unwrap(PointerVal), is_volatile, Name);
 
-	ins->setAlignment (alignment);
+	/* 0 meant "ABI default" in LLVM 6; the builder already applied it. */
+	if (alignment)
+		ins->setAlignment (Align (alignment));
 	switch (barrier) {
 	case LLVM_BARRIER_NONE:
 		break;
@@ -115,14 +145,16 @@ mono_llvm_build_atomic_load (LLVMBuilderRef builder, LLVMValueRef PointerVal,
 	return wrap(ins);
 }
 
-LLVMValueRef 
-mono_llvm_build_aligned_load (LLVMBuilderRef builder, LLVMValueRef PointerVal,
+LLVMValueRef
+mono_llvm_build_aligned_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueRef PointerVal,
 							  const char *Name, gboolean is_volatile, int alignment)
 {
 	LoadInst *ins;
 
-	ins = unwrap(builder)->CreateLoad(unwrap(PointerVal), is_volatile, Name);
-	ins->setAlignment (alignment);
+	ins = unwrap(builder)->CreateLoad(unwrap (Ty), unwrap(PointerVal), is_volatile, Name);
+	/* 0 meant "ABI default" in LLVM 6; the builder already applied it. */
+	if (alignment)
+		ins->setAlignment (Align (alignment));
 
 	return wrap(ins);
 }
@@ -157,7 +189,9 @@ mono_llvm_build_aligned_store (LLVMBuilderRef builder, LLVMValueRef Val, LLVMVal
 	StoreInst *ins;
 
 	ins = unwrap(builder)->CreateStore(unwrap(Val), unwrap(PointerVal), is_volatile);
-	ins->setAlignment (alignment);
+	/* 0 meant "ABI default" in LLVM 6; the builder already applied it. */
+	if (alignment)
+		ins->setAlignment (Align (alignment));
 
 	return wrap (ins);
 }
@@ -167,7 +201,16 @@ mono_llvm_build_cmpxchg (LLVMBuilderRef builder, LLVMValueRef ptr, LLVMValueRef 
 {
 	AtomicCmpXchgInst *ins;
 
-	ins = unwrap(builder)->CreateAtomicCmpXchg (unwrap(ptr), unwrap (cmp), unwrap (val), SequentiallyConsistent, SequentiallyConsistent);
+	/*
+	 * LLVM 13+ requires an explicit alignment on atomic cmpxchg/rmw. The
+	 * compared value's store size is the natural alignment here, matching
+	 * what the untyped LLVM 6 form inferred.
+	 */
+	auto *b = unwrap (builder);
+	Value *cmp_val = unwrap (cmp);
+	Align align (b->GetInsertBlock ()->getModule ()->getDataLayout ().getTypeStoreSize (cmp_val->getType ()));
+
+	ins = b->CreateAtomicCmpXchg (unwrap(ptr), cmp_val, unwrap (val), align, SequentiallyConsistent, SequentiallyConsistent);
 	return wrap (ins);
 }
 
@@ -195,7 +238,11 @@ mono_llvm_build_atomic_rmw (LLVMBuilderRef builder, AtomicRMWOp op, LLVMValueRef
 		break;
 	}
 
-	ins = unwrap (builder)->CreateAtomicRMW (aop, unwrap (ptr), unwrap (val), SequentiallyConsistent);
+	auto *b = unwrap (builder);
+	Value *rmw_val = unwrap (val);
+	Align align (b->GetInsertBlock ()->getModule ()->getDataLayout ().getTypeStoreSize (rmw_val->getType ()));
+
+	ins = b->CreateAtomicRMW (aop, unwrap (ptr), rmw_val, align, SequentiallyConsistent);
 	return wrap (ins);
 }
 
@@ -279,7 +326,7 @@ mono_llvm_replace_uses_of (LLVMValueRef var, LLVMValueRef v)
 LLVMValueRef
 mono_llvm_create_constant_data_array (const uint8_t *data, int len)
 {
-	return wrap(ConstantDataArray::get (*unwrap(LLVMGetGlobalContext ()), makeArrayRef(data, len)));
+	return wrap(ConstantDataArray::get (*unwrap(LLVMGetGlobalContext ()), ArrayRef<uint8_t> (data, len)));
 }
 
 void
@@ -288,30 +335,19 @@ mono_llvm_set_is_constant (LLVMValueRef global_var)
 	unwrap<GlobalVariable>(global_var)->setConstant (true);
 }
 
-// Note that in future versions of LLVM, CallInst and InvokeInst
-// share a CallBase parent class that would make the below methods
-// look much better
+// CallInst and InvokeInst share the CallBase parent class since LLVM 8, so the
+// call/invoke branching the LLVM 6 code needed here collapses to one path.
 
 void
 mono_llvm_set_call_nonnull_arg (LLVMValueRef wrapped_calli, int argNo)
 {
-	Instruction *calli = unwrap<Instruction> (wrapped_calli);
-
-	if (isa<CallInst> (calli))
-		dyn_cast<CallInst>(calli)->addParamAttr (argNo, Attribute::NonNull);
-	else
-		dyn_cast<InvokeInst>(calli)->addParamAttr (argNo, Attribute::NonNull);
+	unwrap<CallBase> (wrapped_calli)->addParamAttr (argNo, Attribute::NonNull);
 }
 
 void
 mono_llvm_set_call_nonnull_ret (LLVMValueRef wrapped_calli)
 {
-	Instruction *calli = unwrap<Instruction> (wrapped_calli);
-
-	if (isa<CallInst> (calli))
-		dyn_cast<CallInst>(calli)->addAttribute (AttributeList::ReturnIndex, Attribute::NonNull);
-	else
-		dyn_cast<InvokeInst>(calli)->addAttribute (AttributeList::ReturnIndex, Attribute::NonNull);
+	unwrap<CallBase> (wrapped_calli)->addRetAttr (Attribute::NonNull);
 }
 
 void
@@ -360,7 +396,11 @@ mono_llvm_is_nonnull (LLVMValueRef wrapped)
 		} else if (Instruction *inst = dyn_cast<Instruction> (val)) {
 			// If not a load or a function argument, the only case for us to
 			// consider is that it's a bitcast. If so, recurse on what was casted.
-			if (inst->getOpcode () == LLVMBitCast) {
+			/*
+			 * Instruction::BitCast, not the llvm-c LLVMBitCast enum -- the
+			 * two numbering schemes differ (LLVMBitCast is fptoui here).
+			 */
+			if (inst->getOpcode () == Instruction::BitCast) {
 				val = inst->getOperand (0);
 				continue;
 			}
@@ -391,26 +431,15 @@ mono_llvm_calls_using (LLVMValueRef wrapped_local)
 LLVMValueRef *
 mono_llvm_call_args (LLVMValueRef wrapped_calli)
 {
-	Value *calli = unwrap(wrapped_calli);
-	CallInst *call = dyn_cast <CallInst> (calli);
-	InvokeInst *invoke = dyn_cast <InvokeInst> (calli);
-	g_assert (call || invoke);
+	CallBase *call = dyn_cast<CallBase> (unwrap (wrapped_calli));
+	g_assert (call);
 
-	unsigned int numOperands;
+	unsigned int numOperands = call->arg_size ();
 
-	if (call)
-		numOperands = call->getNumArgOperands ();
-	else
-		numOperands = invoke->getNumArgOperands ();
+	LLVMValueRef *ret = (LLVMValueRef *) g_malloc (sizeof (LLVMValueRef) * numOperands);
 
-	LLVMValueRef *ret = g_malloc (sizeof (LLVMValueRef) * numOperands);
-
-	for (unsigned int i = 0; i < numOperands; i++) {
-		if (call)
-			ret [i] = wrap (call->getArgOperand (i));
-		else
-			ret [i] = wrap (invoke->getArgOperand (i));
-	}
+	for (unsigned int i = 0; i < numOperands; i++)
+		ret [i] = wrap (call->getArgOperand (i));
 
 	return ret;
 }
@@ -424,23 +453,15 @@ mono_llvm_set_call_notailcall (LLVMValueRef func)
 void
 mono_llvm_set_call_noalias_ret (LLVMValueRef wrapped_calli)
 {
-	Instruction *calli = unwrap<Instruction> (wrapped_calli);
-
-	if (isa<CallInst> (calli))
-		dyn_cast<CallInst>(calli)->addAttribute (AttributeList::ReturnIndex, Attribute::NoAlias);
-	else
-		dyn_cast<InvokeInst>(calli)->addAttribute (AttributeList::ReturnIndex, Attribute::NoAlias);
+	unwrap<CallBase> (wrapped_calli)->addRetAttr (Attribute::NoAlias);
 }
 
 void
 mono_llvm_set_alignment_ret (LLVMValueRef call, int alignment)
 {
-	Instruction *ins = unwrap<Instruction> (call);
+	CallBase *ins = unwrap<CallBase> (call);
 	auto &ctx = ins->getContext ();
-	if (isa<CallInst> (ins))
-		dyn_cast<CallInst>(ins)->addAttribute (AttributeList::ReturnIndex, Attribute::getWithAlignment(ctx, alignment));
-	else
-		dyn_cast<InvokeInst>(ins)->addAttribute (AttributeList::ReturnIndex, Attribute::getWithAlignment(ctx, alignment));
+	ins->addRetAttr (Attribute::getWithAlignment (ctx, Align (alignment)));
 }
 
 static Attribute::AttrKind
@@ -465,38 +486,109 @@ convert_attr (AttrKind kind)
 		return Attribute::ByVal;
 	case LLVM_ATTR_UW_TABLE:
 		return Attribute::UWTable;
+	case LLVM_ATTR_NEST:
+		/* Replaces the forked CallingConv::Mono; nest -> R10 on SysV. */
+		return Attribute::Nest;
 	default:
 		assert (0);
 		return Attribute::NoUnwind;
 	}
 }
 
+/*
+ * Since LLVM 12 'byval'/'sret' carry the pointee type. Under opaque pointers
+ * that type cannot be recovered from the pointer operand, so callers must
+ * supply it via the _with_type entry points below; attr_needs_type() names
+ * exactly those two kinds.
+ *
+ * 'uwtable' also became a valued attribute (LLVM 15), but its value is not
+ * caller-supplied: bare pre-15 'uwtable' is equivalent to uwtable(async),
+ * which is what mono needs for precise unwinding, so make_attr() supplies it
+ * internally and callers keep using the plain entry points.
+ */
+static bool
+attr_needs_type (AttrKind kind)
+{
+	return kind == LLVM_ATTR_BY_VAL || kind == LLVM_ATTR_STRUCT_RET;
+}
+
+/*
+ * Attributes LLVM only accepts on parameters (Attributes.td marks them
+ * [ParamAttr]). Applying one as a function attribute produces invalid IR.
+ */
+static bool
+attr_is_param_only (AttrKind kind)
+{
+	return kind == LLVM_ATTR_NEST || attr_needs_type (kind);
+}
+
+static Attribute
+make_attr (LLVMContext &ctx, AttrKind kind, Type *type)
+{
+	switch (kind) {
+	case LLVM_ATTR_BY_VAL:
+		g_assert (type);
+		return Attribute::getWithByValType (ctx, type);
+	case LLVM_ATTR_STRUCT_RET:
+		g_assert (type);
+		return Attribute::getWithStructRetType (ctx, type);
+	case LLVM_ATTR_UW_TABLE:
+		return Attribute::getWithUWTableKind (ctx, UWTableKind::Async);
+	default:
+		return Attribute::get (ctx, convert_attr (kind));
+	}
+}
+
 void
 mono_llvm_add_func_attr (LLVMValueRef func, AttrKind kind)
 {
-	unwrap<Function> (func)->addAttribute (AttributeList::FunctionIndex, convert_attr (kind));
+	Function *f = unwrap<Function> (func);
+	g_assert (!attr_is_param_only (kind));
+	f->addFnAttr (make_attr (f->getContext (), kind, nullptr));
 }
 
 void
 mono_llvm_add_func_attr_nv (LLVMValueRef func, const char *attr_name, const char *attr_value)
 {
-	AttrBuilder NewAttrs;
+	Function *f = unwrap<Function> (func);
+	AttrBuilder NewAttrs (f->getContext ());
 	NewAttrs.addAttribute (attr_name, attr_value);
-	unwrap<Function> (func)->addAttributes (AttributeList::FunctionIndex, NewAttrs);
+	f->addFnAttrs (NewAttrs);
 }
 
 void
 mono_llvm_add_param_attr (LLVMValueRef param, AttrKind kind)
 {
-	Function *func = unwrap<Argument> (param)->getParent ();
-	int n = unwrap<Argument> (param)->getArgNo ();
-	func->addParamAttr (n, convert_attr (kind));
+	g_assert (!attr_needs_type (kind));
+	mono_llvm_add_param_attr_with_type (param, kind, NULL);
 }
 
 void
+mono_llvm_add_param_attr_with_type (LLVMValueRef param, AttrKind kind, LLVMTypeRef type)
+{
+	Argument *arg = unwrap<Argument> (param);
+	Function *func = arg->getParent ();
+	func->addParamAttr (arg->getArgNo (), make_attr (func->getContext (), kind, type ? unwrap (type) : nullptr));
+}
+
+/*
+ * INDEX is an LLVM AttributeList index: 0 = return value, 1..n = parameters,
+ * ~0u = function. addAttributeAtIndex preserves that historical numbering, so
+ * existing callers using '1 + pindex' stay correct -- do NOT renumber them to
+ * the 0-based addParamAttr convention.
+ */
+void
 mono_llvm_add_instr_attr (LLVMValueRef val, int index, AttrKind kind)
 {
-	CallSite (unwrap<Instruction> (val)).addAttribute (index, convert_attr (kind));
+	g_assert (!attr_needs_type (kind));
+	mono_llvm_add_instr_attr_with_type (val, index, kind, NULL);
+}
+
+void
+mono_llvm_add_instr_attr_with_type (LLVMValueRef val, int index, AttrKind kind, LLVMTypeRef type)
+{
+	CallBase *call = unwrap<CallBase> (val);
+	call->addAttributeAtIndex (index, make_attr (call->getContext (), kind, type ? unwrap (type) : nullptr));
 }
 
 void*
@@ -632,10 +724,14 @@ mono_llvm_check_cpu_features (const CpuFeatureAliasFlag *features, int length)
 static Intrinsic::ID
 get_intrins_id (IntrinsicId id)
 {
-	Intrinsic::ID intrins_id = Intrinsic::ID::not_intrinsic;
+	/*
+	 * Intrinsic::ID is a plain 'typedef unsigned' in modern LLVM, not an
+	 * enum class, so the enumerators live directly in namespace Intrinsic.
+	 */
+	Intrinsic::ID intrins_id = Intrinsic::not_intrinsic;
 	switch (id) {
-#define INTRINS(id, llvm_id) case INTRINS_ ## id: intrins_id = Intrinsic::ID::llvm_id; break;
-#define INTRINS_OVR(id, llvm_id) case INTRINS_ ## id: intrins_id = Intrinsic::ID::llvm_id; break;
+#define INTRINS(id, llvm_id) case INTRINS_ ## id: intrins_id = Intrinsic::llvm_id; break;
+#define INTRINS_OVR(id, llvm_id) case INTRINS_ ## id: intrins_id = Intrinsic::llvm_id; break;
 #include "llvm-intrinsics.h"
 	default:
 		break;
@@ -668,7 +764,7 @@ mono_llvm_register_intrinsic (LLVMModuleRef module, IntrinsicId id)
 		return NULL;
 
 	auto intrins_id = get_intrins_id (id);
-	if (intrins_id != Intrinsic::ID::not_intrinsic) {
+	if (intrins_id != Intrinsic::not_intrinsic) {
 		Function *f = Intrinsic::getDeclaration (unwrap (module), intrins_id);
 		if (!f) {
 			outs () << id << "\n";
