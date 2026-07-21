@@ -332,7 +332,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
 		char name [128];
 
-		if (!(bb->region != -1 && (bb->flags & BB_EXCEPTION_HANDLER)))
+		if (!(bb->region != (guint)-1 && (bb->flags & BB_EXCEPTION_HANDLER)))
 			continue;
 
 		if (bb->in_scount == 0) {

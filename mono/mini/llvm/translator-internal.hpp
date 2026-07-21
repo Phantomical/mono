@@ -113,9 +113,11 @@ typedef struct {
 	char **bb_names;
 	int bb_names_len;
 	/*
-	 * Accumulated by mark_as_used (); only the TARGET_OSX objc-selector code in
-	 * process_bb () still adds to it. Nothing consumes it now that the AOT
-	 * llvm.used emission is gone, but the field must stay for that writer.
+	 * Accumulated by mark_as_used (). The only remaining writer is the
+	 * OP_OBJC_GET_SELECTOR case in process_bb (): that opcode is only ever
+	 * generated on Darwin, but the case itself is compiled unconditionally --
+	 * it is not inside #ifdef TARGET_OSX -- so the field is needed on every
+	 * target. Nothing consumes it now that the AOT llvm.used emission is gone.
 	 */
 	GPtrArray *used;
 	LLVMTypeRef ptr_type;

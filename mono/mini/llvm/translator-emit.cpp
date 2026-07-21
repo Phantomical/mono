@@ -550,65 +550,6 @@ LLVMFunctionType2 (LLVMTypeRef ReturnType,
 }
 
 /*
- * LLVMFunctionType3:
- *
- *   Create an LLVM function type from the arguments.
- */
-static G_GNUC_UNUSED LLVMTypeRef
-LLVMFunctionType3 (LLVMTypeRef ReturnType,
-				   LLVMTypeRef ParamType1,
-				   LLVMTypeRef ParamType2,
-				   LLVMTypeRef ParamType3,
-				   int IsVarArg)
-{
-	LLVMTypeRef param_types [3];
-
-	param_types [0] = ParamType1;
-	param_types [1] = ParamType2;
-	param_types [2] = ParamType3;
-
-	return LLVMFunctionType (ReturnType, param_types, 3, IsVarArg);
-}
-
-static G_GNUC_UNUSED LLVMTypeRef
-LLVMFunctionType4 (LLVMTypeRef ReturnType,
-				   LLVMTypeRef ParamType1,
-				   LLVMTypeRef ParamType2,
-				   LLVMTypeRef ParamType3,
-				   LLVMTypeRef ParamType4,
-				   int IsVarArg)
-{
-	LLVMTypeRef param_types [4];
-
-	param_types [0] = ParamType1;
-	param_types [1] = ParamType2;
-	param_types [2] = ParamType3;
-	param_types [3] = ParamType4;
-
-	return LLVMFunctionType (ReturnType, param_types, 4, IsVarArg);
-}
-
-static G_GNUC_UNUSED LLVMTypeRef
-LLVMFunctionType5 (LLVMTypeRef ReturnType,
-				   LLVMTypeRef ParamType1,
-				   LLVMTypeRef ParamType2,
-				   LLVMTypeRef ParamType3,
-				   LLVMTypeRef ParamType4,
-				   LLVMTypeRef ParamType5,
-				   int IsVarArg)
-{
-	LLVMTypeRef param_types [5];
-
-	param_types [0] = ParamType1;
-	param_types [1] = ParamType2;
-	param_types [2] = ParamType3;
-	param_types [3] = ParamType4;
-	param_types [4] = ParamType5;
-
-	return LLVMFunctionType (ReturnType, param_types, 5, IsVarArg);
-}
-
-/*
  * create_builder:
  *
  *   Create an LLVM builder and remember it so it can be freed later.
@@ -747,10 +688,6 @@ get_aotconst (EmitContext *ctx, MonoJumpInfoType type, gconstpointer data, LLVMT
 
 	cfg = ctx->cfg;
 
-	MonoJumpInfo tmp_ji;
-	tmp_ji.type = type;
-	tmp_ji.data.target = data;
-
 	load = get_aotconst_module (ctx->module, ctx->builder, type, data, llvm_type, &got_offset, &ji);
 
 	ji->next = cfg->patch_info;
@@ -797,7 +734,7 @@ get_handler_clause (MonoCompile *cfg, MonoBasicBlock *bb)
 	int i;
 
 	/* Directly */
-	if (bb->region != -1 && MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))
+	if (bb->region != (guint)-1 && MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))
 		return (bb->region >> 8) - 1;
 
 	/* Indirectly */

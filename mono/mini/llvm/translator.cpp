@@ -359,7 +359,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 			builder = create_builder (ctx);
 			LLVMPositionBuilderAtEnd (builder, phi_bb);
 
-			for (i = 0; i < ctx->phi_values->len; ++i) {
+			for (i = 0; i < (int)ctx->phi_values->len; ++i) {
 				LLVMValueRef v = (LLVMValueRef)g_ptr_array_index (ctx->phi_values, i);
 				if (LLVMGetInstructionParent (v) == NULL)
 					LLVMInsertIntoBuilder (builder, v);
@@ -383,7 +383,9 @@ emit_method_inner (EmitContext *ctx)
 	LLVMTypeRef method_type;
 	LLVMValueRef method = NULL;
 	LLVMValueRef *values = ctx->values;
-	int i, max_block_num, bb_index;
+	int i, max_block_num;
+	/* Indexes cfg->bblocks (guint num_bblocks) and bblock_list (guint len) */
+	guint bb_index;
 	LLVMCallInfo *linfo;
 	LLVMModuleRef lmodule = ctx->lmodule;
 	BBInfo *bblocks;
@@ -427,7 +429,7 @@ emit_method_inner (EmitContext *ctx)
 
 			method = emit_icall_cold_wrapper (ctx->module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll, FALSE);
 			ctx->lmethod = method;
-			ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, cfg->method_index);
+			ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, (int)cfg->method_index);
 
 			ctx->method_name = g_strdup (LLVMGetValueName (method));
 			ctx->cfg->asm_symbol = g_strdup (ctx->method_name);
@@ -483,6 +485,8 @@ emit_method_inner (EmitContext *ctx)
 		case WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG:
 			/* Arguments are not used after the call */
 			requires_safepoint = FALSE;
+			break;
+		default:
 			break;
 		}
 	}
@@ -689,7 +693,7 @@ emit_method_inner (EmitContext *ctx)
 	 */
 	for (bb_index = 0; bb_index < cfg->num_bblocks; ++bb_index) {
 		bb = cfg->bblocks [bb_index];
-		if (!(bb->region != -1 && !MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))) {
+		if (!(bb->region != (guint)-1 && !MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))) {
 			g_ptr_array_add (bblock_list, bb);
 			bblocks [bb->block_num].added = TRUE;
 		}
@@ -713,7 +717,7 @@ emit_method_inner (EmitContext *ctx)
 		int clause_index;
 		char name [128];
 
-		if (ctx->cfg->interp_entry_only || !(bb->region != -1 && (bb->flags & BB_EXCEPTION_HANDLER)))
+		if (ctx->cfg->interp_entry_only || !(bb->region != (guint)-1 && (bb->flags & BB_EXCEPTION_HANDLER)))
 			continue;
 
 		clause_index = MONO_REGION_CLAUSE_INDEX (bb->region);
@@ -829,7 +833,7 @@ emit_method_inner (EmitContext *ctx)
 		}
 	}
 
-	ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, cfg->method_index);
+	ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, (int)cfg->method_index);
 
 	if (mini_get_debug_options ()->llvm_disable_inlining)
 		mono_llvm_add_func_attr (method, LLVM_ATTR_NO_INLINE);
@@ -884,10 +888,8 @@ mono_llvm_emit_call (MonoCompile *cfg, MonoCallInst *call)
 {
 	MonoInst *in;
 	MonoMethodSignature *sig;
-	int i, n, stack_size;
+	int i, n;
 	LLVMArgInfo *ainfo;
-
-	stack_size = 0;
 
 	sig = call->signature;
 	n = sig->param_count + sig->hasthis;
@@ -1282,7 +1284,6 @@ init_jit_module (MonoDomain *domain)
 {
 	MonoJitDomainInfo *dinfo;
 	MonoLLVMModule *module;
-	char *name;
 
 	dinfo = domain_jit_info (domain);
 	if (dinfo->llvm_module)
@@ -1297,7 +1298,6 @@ init_jit_module (MonoDomain *domain)
 
 	module = g_new0 (MonoLLVMModule, 1);
 
-	name = g_strdup_printf ("mono-%s", domain->friendly_name);
 	module->context = LLVMGetGlobalContext ();
 	module->intrins_by_id = g_new0 (LLVMValueRef, INTRINS_NUM);
 

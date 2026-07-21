@@ -541,7 +541,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				emit_volatile_store (ctx, ins->next->dreg);
 			} else if (MONO_IS_COND_EXC (ins->next)) {
 				gboolean force_explicit_branch = FALSE;
-				if (bb->region != -1) {
+				if (bb->region != (guint)-1) {
 					/* Don't tag null check branches in exception-handling
 					 * regions with `make.implicit`.
 					 */
@@ -4263,7 +4263,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 */
 		case OP_IMPLICIT_EXCEPTION:
 			/* This marks a place where an implicit exception can happen */
-			if (bb->region != -1)
+			if (bb->region != (guint)-1)
 				set_failure (ctx, "implicit-exception");
 			break;
 		case OP_THROW:

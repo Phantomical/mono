@@ -280,6 +280,8 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 		case MONO_TYPE_U2:
 		case MONO_TYPE_U4:
 			return LLVMPointerType (type_to_llvm_type (ctx, ptr_type), 0);
+		default:
+			break;
 		}
 		
 		return ObjRefType ();
