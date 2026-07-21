@@ -1223,17 +1223,6 @@ emit_gsharedvt_ldaddr (EmitContext *ctx, int vreg)
 	return LLVMBuildAdd (builder, convert (ctx, locals_var, IntPtrType ()), convert (ctx, offset_var, IntPtrType ()), "");
 }
 
-/*
- * Put the global into the 'llvm.used' array to prevent it from being optimized away.
- */
-void
-mark_as_used (MonoLLVMModule *module, LLVMValueRef global)
-{
-	if (!module->used)
-		module->used = g_ptr_array_sized_new (16);
-	g_ptr_array_add (module->used, global);
-}
-
 /* Emit a wrapper around the parameterless JIT icall ICALL_ID with a cold calling convention */
 LLVMValueRef
 emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id, gboolean aot)

@@ -112,14 +112,6 @@ typedef struct {
 	GHashTable *aotconst_vars;
 	char **bb_names;
 	int bb_names_len;
-	/*
-	 * Accumulated by mark_as_used (). The only remaining writer is the
-	 * OP_OBJC_GET_SELECTOR case in process_bb (): that opcode is only ever
-	 * generated on Darwin, but the case itself is compiled unconditionally --
-	 * it is not inside #ifdef TARGET_OSX -- so the field is needed on every
-	 * target. Nothing consumes it now that the AOT llvm.used emission is gone.
-	 */
-	GPtrArray *used;
 	LLVMTypeRef ptr_type;
 	MonoEERef *mono_ee;
 	LLVMExecutionEngineRef ee;
@@ -398,8 +390,6 @@ Address*
 build_named_alloca_address (EmitContext *ctx, MonoType *t, const char *name);
 LLVMValueRef
 emit_gsharedvt_ldaddr (EmitContext *ctx, int vreg);
-void
-mark_as_used (MonoLLVMModule *module, LLVMValueRef global);
 LLVMValueRef
 emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id, gboolean aot);
 void
