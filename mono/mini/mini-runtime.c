@@ -4253,6 +4253,21 @@ mini_free_jit_domain_info (MonoDomain *domain)
 	}
 	mono_internal_hash_table_destroy (&info->interp_code_hash);
 #ifdef ENABLE_LLVM
+	{
+		/*
+		 * Declared in mono/mini/llvm/backend.h; declared locally because that
+		 * header also redeclares mono_llvm_compile_method, which conflicts with
+		 * the legacy llvm-jit.h still included here (same reason as
+		 * mono_llvm_tiered_set_ready () in mini_init ()).
+		 *
+		 * The tier-1 queue holds (MonoMethod, MonoDomain) pairs for methods that
+		 * have not been promoted yet. Nothing else drops them, so without this
+		 * a drain after the unload would compile and publish into a dead domain.
+		 */
+		void mono_llvm_tiered_domain_unload (MonoDomain *domain);
+
+		mono_llvm_tiered_domain_unload (domain);
+	}
 	mono_llvm_free_domain_info (domain);
 #endif
 

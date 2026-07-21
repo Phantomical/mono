@@ -129,6 +129,15 @@ void      mono_llvm_tiered_promote_begin (void);
 void      mono_llvm_tiered_promote_end (void);
 gboolean  mono_llvm_tiered_promotion_suspend (void);
 void      mono_llvm_tiered_promotion_restore (gboolean old);
+/*
+ * Drop every queued and recorded method belonging to DOMAIN. Called from
+ * mini_free_jit_domain_info (), the JIT's free_domain_hook, which runs partway
+ * through mono_domain_free (): the domain's assemblies have already been closed,
+ * so a MonoMethod from a dynamic assembly it owned is gone, while
+ * domain->jit_code_hash and the MonoDomain itself are freed shortly afterwards.
+ * Purging here means no later drain can still be holding any of them.
+ */
+void      mono_llvm_tiered_domain_unload (MonoDomain *domain);
 
 G_END_DECLS
 

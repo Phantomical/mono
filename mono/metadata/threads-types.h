@@ -303,6 +303,12 @@ mono_thread_internal_abort (MonoInternalThread *thread, gboolean appdomain_unloa
 void mono_thread_internal_suspend_for_shutdown (MonoInternalThread *thread);
 void mono_thread_internal_terminate_for_shutdown (MonoInternalThread* thread);
 
+/*
+ * MONO_EXTERN_C because mono/mini/llvm/tiered.cpp calls this from C++, and this
+ * header cannot be wrapped in a blanket linkage guard - it declares templates.
+ * The macro expands to nothing in a C build.
+ */
+MONO_EXTERN_C
 gboolean mono_thread_internal_has_appdomain_ref (MonoInternalThread *thread, MonoDomain *domain);
 
 void mono_thread_internal_reset_abort (MonoInternalThread *thread);
