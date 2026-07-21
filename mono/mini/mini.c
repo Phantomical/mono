@@ -3208,6 +3208,13 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	cfg->self_init = (flags & JIT_FLAG_SELF_INIT) != 0;
 	cfg->code_exec_only = (flags & JIT_FLAG_CODE_EXEC_ONLY) != 0;
 	cfg->backend = current_backend;
+	/*
+	 * -1 means "not set". g_new0 would otherwise leave this 0, which is a valid
+	 * register number, so the g_assert (cfg->llvm_this_reg != -1) guarding the
+	 * generic-jit-info setup below would pass vacuously and register the method
+	 * with the wrong register. Its only producer is the LLVM backend.
+	 */
+	cfg->llvm_this_reg = -1;
 	cfg->mem_manager = m_method_get_mem_manager (domain, cfg->method);
 
 	if (cfg->method->wrapper_type == MONO_WRAPPER_ALLOC) {

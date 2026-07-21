@@ -31,12 +31,15 @@
 #include "engine.hpp"
 
 #include <atomic>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
@@ -53,6 +56,8 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Type.h>
+#include <llvm/Object/ELFObjectFile.h>
+#include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
@@ -65,13 +70,95 @@ using namespace llvm::orc;
 namespace mono {
 
 /*
- * .eh_frame of the module currently being materialized, on the compiling
- * thread. RuntimeDyld calls MemoryManager::registerEHFrames() during the
- * synchronous lookup inside compile() (0 compile threads), so a thread_local is
- * a correct and simple channel from the per-object memory manager back to
- * compile(). Reset by compile() before each materialization.
+ * Facts about one emitted object that are only visible at materialization time.
+ *
+ * WHY THE ELF SYMBOL SIZE for code_size, and not the two obvious alternatives:
+ *
+ *   - NOT the .eh_frame FDE pc_range. That is a whole SECTION, so an FDE would
+ *     still have to be parsed and matched to the right function; worse, LLVM
+ *     emits no FDE at all for a nounwind leaf, which lands right back on zero.
+ *   - NOT the RTDyld code-section allocation size. A module can hold more than
+ *     one function (mono's modules carry the GC safepoint poll alongside the
+ *     method), so the section over-reports the entry function's extent.
+ *
+ * st_size is exactly the function's byte length: for ELF targets LLVM's
+ * AsmPrinter emits `.size <fn>, .-<fn>` around every function body, so the
+ * symbol table is authoritative and per-function.
  */
-static thread_local EhFrameInfo t_current_eh_frame;
+struct ObjectInfo {
+	/* Function symbol name -> machine-code size. */
+	std::map<std::string, uint64_t> func_sizes;
+	EhFrameInfo eh_frame;
+};
+
+/*
+ * Collected object facts, keyed by the name of the JITDylib the module was
+ * added to (compile() gives every module its own, uniquely named).
+ *
+ * DELIBERATELY NOT a thread_local. The NotifyLoaded hook runs on whichever
+ * thread materializes the module, which stops being the calling thread the
+ * moment the JIT is configured with compile threads (what tiering wants). A
+ * thread-local channel would then leave the caller reading an empty value - a
+ * zero code_size - so the keyed map is what makes this survive that change.
+ */
+static std::mutex g_object_info_mutex;
+static std::map<std::string, ObjectInfo> g_object_info;
+
+/*
+ * Harvest the per-function sizes and the .eh_frame location out of the freshly
+ * emitted object. Called from the object layer's NotifyLoaded hook.
+ *
+ * NOTE: sizes are keyed by the RAW ELF symbol name, while compile() looks the
+ * entry up through ORC, which applies the DataLayout's global prefix. Those
+ * coincide on ELF x86-64 (the prefix is empty) but would diverge on a platform
+ * that uses one (Mach-O's leading '_'), silently yielding code_size 0. Mangle
+ * the key here if this engine is ever ported to such a target.
+ */
+static void
+capture_object_info (orc::MaterializationResponsibility &r, const object::ObjectFile &obj,
+                     const RuntimeDyld::LoadedObjectInfo &loaded)
+{
+	ObjectInfo info;
+
+	if (isa<object::ELFObjectFileBase> (&obj)) {
+		for (const object::SymbolRef &sym : obj.symbols ()) {
+			Expected<object::SymbolRef::Type> type = sym.getType ();
+			if (!type) {
+				consumeError (type.takeError ());
+				continue;
+			}
+			if (*type != object::SymbolRef::ST_Function)
+				continue;
+
+			Expected<StringRef> name = sym.getName ();
+			if (!name) {
+				consumeError (name.takeError ());
+				continue;
+			}
+
+			uint64_t size = object::ELFSymbolRef (sym).getSize ();
+			if (size)
+				info.func_sizes[name->str ()] = size;
+		}
+	}
+
+	/* Locate the loaded .eh_frame for the EH port. */
+	for (const object::SectionRef &sec : obj.sections ()) {
+		Expected<StringRef> name = sec.getName ();
+		if (!name) {
+			consumeError (name.takeError ());
+			continue;
+		}
+		if (*name != ".eh_frame")
+			continue;
+		info.eh_frame.addr = (uint8_t *) (uintptr_t) loaded.getSectionLoadAddress (sec);
+		info.eh_frame.size = sec.getSize ();
+		break;
+	}
+
+	std::lock_guard<std::mutex> lock (g_object_info_mutex);
+	g_object_info[r.getTargetJITDylib ().getName ()] = std::move (info);
+}
 
 /*
  * Custom RTDyld memory manager. Subclasses SectionMemoryManager (which does
@@ -91,13 +178,15 @@ class MonoJitMemoryManager : public SectionMemoryManager {
 public:
 	void registerEHFrames (uint8_t *Addr, uint64_t LoadAddr, size_t Size) override
 	{
-		/* Capture for step 3b's mono-side unwinder wiring. */
-		t_current_eh_frame.addr = Addr;
-		t_current_eh_frame.size = Size;
 		/*
-		 * Still register with the host (libgcc/libunwind) __register_frame so
-		 * JITted code can unwind during this milestone. Step 3b replaces this
-		 * base call with mono-native registration of the captured section.
+		 * Register with the host (libgcc/libunwind) __register_frame so JITted
+		 * code can unwind during this milestone. The EH port replaces this base
+		 * call with mono-native registration.
+		 *
+		 * The section is NOT captured here: the memory manager is constructed
+		 * per object by a factory that receives no context, so it cannot tell
+		 * which module it belongs to. capture_object_info() takes it from the
+		 * object file instead, where the owning JITDylib is known.
 		 */
 		SectionMemoryManager::registerEHFrames (Addr, LoadAddr, Size);
 	}
@@ -154,8 +243,41 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es, const Triple &) -> Expected<std::unique_ptr<ObjectLayer>> {
-			return std::make_unique<RTDyldObjectLinkingLayer> (
+			auto layer = std::make_unique<RTDyldObjectLinkingLayer> (
 				es, [] () { return std::make_unique<MonoJitMemoryManager> (); });
+			/*
+			 * The emitted object is the only place the per-function machine-code
+			 * size is available (ELF st_size). mono needs it for cfg->code_len,
+			 * which sizes the method's MonoJitInfo - a zero-length jit-info makes
+			 * mini_jit_info_table_find() unable to find the method at all.
+			 */
+			layer->setNotifyLoaded (
+				[] (orc::MaterializationResponsibility &r, const object::ObjectFile &obj,
+				    const RuntimeDyld::LoadedObjectInfo &loaded) {
+					capture_object_info (r, obj, loaded);
+				});
+			/*
+			 * mono's translator creates externally-linked but UNNAMED globals
+			 * (get_jit_callee() is called with an empty name for icall and
+			 * MONO_PATCH_INFO_ABS callees). Those have no name in the IR, so
+			 * they are absent from the symbol table ORC derives its
+			 * materialization responsibility from - the backend only invents a
+			 * name (__unnamed_N) when it emits the object. Relocations against
+			 * them then fail with "Failed to materialize symbols: __unnamed_1".
+			 *
+			 * Auto-claiming makes the layer take responsibility for symbols that
+			 * appear in the emitted object but were not declared in the IR, which
+			 * is exactly this case. (The legacy MCJIT engine never hit it because
+			 * it resolved globals by GlobalValue* via getPointerToGlobal(); ORCv2
+			 * resolves only by name.)
+			 *
+			 * This is safe ONLY because compile() gives every module its own
+			 * JITDylib: the invented __unnamed_N names are assigned in emission
+			 * order, so they are identical across modules and would collide the
+			 * moment anything consolidates modules into one dylib.
+			 */
+			layer->setAutoClaimResponsibilityForObjectSymbols (true);
+			return layer;
 		});
 
 	jit_ = cantFail (builder.create ());
@@ -169,6 +291,107 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 * as the README requires for the real backend.
 	 */
 	helpers_jd_ = &jit_->getExecutionSession ().createBareJITDylib ("mono.helpers");
+
+	register_c_runtime_symbols ();
+}
+
+/*
+ * Register the C-runtime routines that LLVM's own code generation can synthesize
+ * calls to. These are NOT mono icalls: the translator never emits them by name.
+ * They appear because the backend lowers IR intrinsics into libc calls - notably
+ * llvm.memcpy/memmove/memset, which SelectionDAG turns into calls to memcpy(),
+ * memmove() and memset() whenever the size is not a small constant.
+ *
+ * The legacy engine got these for free, because RTDyld's default memory manager
+ * falls back to searching the host process for any unresolved symbol. This engine
+ * deliberately has no process-symbol generator (see helpers_jd_ above), so
+ * anything the JIT needs must be registered - which means this list is required,
+ * and also that a missing entry fails loudly ("Symbols not found") instead of
+ * silently binding to whatever the process happens to export.
+ *
+ * Which routines the backend picks is decided by TargetLibraryInfo built from
+ * the TARGET MACHINE's triple (the host, via detectHost ()), not from the
+ * module's triple - so these fire in the JIT regardless of what the module says.
+ *
+ * Deliberately absent, having been checked: sqrt/fabs/copysign and the bit
+ * intrinsics (ctpop/ctlz/cttz/bswap) always expand inline on x86-64; the i128
+ * helpers (__udivti3 and friends) are unreachable because mono emits no i128;
+ * and _Unwind_Resume is held off by the EH-clause exclusion.
+ *
+ * One trap worth knowing: bcmp is NOT in this list only because the JIT module
+ * sets no target triple. InstCombine rewrites memcmp(..) == 0 into bcmp as soon
+ * as a GNU triple is present, so setting one without adding bcmp here turns
+ * into a mystery abort.
+ */
+void
+MonoLLVMJIT::register_c_runtime_symbols ()
+{
+	using d1 = double (*) (double);
+	using d2 = double (*) (double, double);
+	using d3 = double (*) (double, double, double);
+	using f1 = float (*) (float);
+	using f2 = float (*) (float, float);
+	using f3 = float (*) (float, float, float);
+
+	static const struct { const char *name; void *addr; } c_runtime[] = {
+		/* Lowered from llvm.memcpy / llvm.memmove / llvm.memset. */
+		{ "memcpy",   (void *) (uintptr_t) &::memcpy },
+		{ "memmove",  (void *) (uintptr_t) &::memmove },
+		{ "memset",   (void *) (uintptr_t) &::memset },
+		{ "memcmp",   (void *) (uintptr_t) &::memcmp },
+
+		/*
+		 * Math libcalls. Confirmed by compiling every intrinsic mono emits and
+		 * checking the emitted calls on every x86-64 variant (baseline, v2, v3,
+		 * host): these have NO inline expansion and always become calls.
+		 * frem lowers to fmod; the rest come straight from the llvm.* intrinsics.
+		 */
+		{ "sin",      (void *) (uintptr_t) (d1) &::sin },
+		{ "sinf",     (void *) (uintptr_t) (f1) &::sinf },
+		{ "cos",      (void *) (uintptr_t) (d1) &::cos },
+		{ "cosf",     (void *) (uintptr_t) (f1) &::cosf },
+		{ "exp",      (void *) (uintptr_t) (d1) &::exp },
+		{ "expf",     (void *) (uintptr_t) (f1) &::expf },
+		{ "exp2",     (void *) (uintptr_t) (d1) &::exp2 },
+		{ "exp2f",    (void *) (uintptr_t) (f1) &::exp2f },
+		{ "log",      (void *) (uintptr_t) (d1) &::log },
+		{ "logf",     (void *) (uintptr_t) (f1) &::logf },
+		{ "log2",     (void *) (uintptr_t) (d1) &::log2 },
+		{ "log2f",    (void *) (uintptr_t) (f1) &::log2f },
+		{ "log10",    (void *) (uintptr_t) (d1) &::log10 },
+		{ "log10f",   (void *) (uintptr_t) (f1) &::log10f },
+		{ "pow",      (void *) (uintptr_t) (d2) &::pow },
+		{ "powf",     (void *) (uintptr_t) (f2) &::powf },
+		{ "fmod",     (void *) (uintptr_t) (d2) &::fmod },
+		{ "fmodf",    (void *) (uintptr_t) (f2) &::fmodf },
+
+		/*
+		 * The DAG combiner merges a sin and a cos of the same value into ONE
+		 * sincos call - common in trig/rotation code and impossible to predict
+		 * from the intrinsics mono emits.
+		 */
+		{ "sincos",   (void *) (uintptr_t) &::sincos },
+		{ "sincosf",  (void *) (uintptr_t) &::sincosf },
+
+		/*
+		 * These normally expand inline, but only when the host supports the
+		 * instruction: floor/ceil/trunc need SSE4.1 (roundsd) and fma needs
+		 * +fma. On a feature-masked VM, container or emulator they fall back to
+		 * libcalls, so registering them is cheap insurance against a crash that
+		 * would only reproduce on some machines.
+		 */
+		{ "floor",    (void *) (uintptr_t) (d1) &::floor },
+		{ "floorf",   (void *) (uintptr_t) (f1) &::floorf },
+		{ "ceil",     (void *) (uintptr_t) (d1) &::ceil },
+		{ "ceilf",    (void *) (uintptr_t) (f1) &::ceilf },
+		{ "trunc",    (void *) (uintptr_t) (d1) &::trunc },
+		{ "truncf",   (void *) (uintptr_t) (f1) &::truncf },
+		{ "fma",      (void *) (uintptr_t) (d3) &::fma },
+		{ "fmaf",     (void *) (uintptr_t) (f3) &::fmaf },
+	};
+
+	for (const auto &sym : c_runtime)
+		register_symbol (sym.name, sym.addr);
 }
 
 MonoLLVMJIT::~MonoLLVMJIT () = default;
@@ -186,11 +409,6 @@ MonoLLVMJIT::context ()
 	return *tsctx_.getContext ();
 }
 
-const EhFrameInfo &
-MonoLLVMJIT::last_eh_frame () const
-{
-	return t_current_eh_frame;
-}
 
 void
 MonoLLVMJIT::register_symbol (StringRef name, void *addr)
@@ -228,12 +446,11 @@ MonoLLVMJIT::optimize (Function *func)
 	fpm.run (*func, fam);
 }
 
-uint64_t
+CompileResult
 MonoLLVMJIT::compile (Function *entry,
                       ArrayRef<GlobalVariable *> callee_vars,
                       uint64_t *callee_addrs,
-                      StringRef eh_symbol,
-                      uint64_t *eh_out)
+                      StringRef eh_symbol)
 {
 	/* Snapshot the names we need to resolve. */
 	std::string entry_name = entry->getName ().str ();
@@ -272,10 +489,9 @@ MonoLLVMJIT::compile (Function *entry,
 	 * gets only helpers_jd_ (explicit runtime helpers) - not the LLJIT main
 	 * dylib and its process-symbol generator.
 	 */
-	JITDylib &jd = cantFail (es.createJITDylib ("mono.jit." + std::to_string (module_counter_++)));
+	std::string jd_name = "mono.jit." + std::to_string (module_counter_++);
+	JITDylib &jd = cantFail (es.createJITDylib (jd_name));
 	jd.addToLinkOrder (*helpers_jd_);
-
-	t_current_eh_frame = EhFrameInfo{};
 
 	cantFail (jit_->addIRModule (jd, ThreadSafeModule (std::move (clone), tsctx_)));
 
@@ -285,7 +501,27 @@ MonoLLVMJIT::compile (Function *entry,
 	 * - propagate the llvm::Error out so the translator can fall back to tier-0
 	 * - rather than aborting the process.
 	 */
-	uint64_t body = cantFail (jit_->lookup (jd, entry_name)).getValue ();
+	CompileResult result;
+	result.entry = cantFail (jit_->lookup (jd, entry_name)).getValue ();
+
+	/*
+	 * Materialization has run by now, so NotifyLoaded has deposited this
+	 * module's object facts under its dylib name. Drain them: pick out the entry
+	 * function's own size (the module may also carry the GC safepoint poll,
+	 * whose size we do not want) and the .eh_frame for the EH port.
+	 */
+	{
+		std::lock_guard<std::mutex> lock (g_object_info_mutex);
+		auto entry_it = g_object_info.find (jd_name);
+		if (entry_it != g_object_info.end ()) {
+			const ObjectInfo &info = entry_it->second;
+			auto size_it = info.func_sizes.find (entry_name);
+			if (size_it != info.func_sizes.end ())
+				result.code_size = size_it->second;
+			result.eh_frame = info.eh_frame;
+			g_object_info.erase (entry_it);
+		}
+	}
 
 	for (size_t i = 0; i < var_names.size (); ++i)
 		callee_addrs[i] = cantFail (jit_->lookup (jd, var_names[i])).getValue ();
@@ -294,22 +530,21 @@ MonoLLVMJIT::compile (Function *entry,
 	 * The "mono_eh_frame" global only exists when the module was produced by
 	 * the FORKED LLVM, whose MonoEHFrame emission synthesized it. Against
 	 * unmodified LLVM 18 there is no such global: stock LLVM emits a standard
-	 * DWARF .eh_frame section instead (captured separately by the memory
-	 * manager, see last_eh_frame()), and consuming that is not ported yet -
-	 * which is why methods with EH clauses currently bail to the classic JIT.
+	 * DWARF .eh_frame section instead (reported in result.eh_frame), and
+	 * consuming that is not ported yet - which is why methods with EH clauses
+	 * currently bail to the classic JIT.
 	 *
 	 * So a missing eh symbol is the normal case today, not an error: report
 	 * "no mono-format EH info" rather than aborting the process.
 	 */
-	if (!eh_name.empty () && eh_out) {
-		*eh_out = 0;
+	if (!eh_name.empty ()) {
 		if (auto sym = jit_->lookup (jd, eh_name))
-			*eh_out = sym->getValue ();
+			result.mono_eh_frame = sym->getValue ();
 		else
 			consumeError (sym.takeError ());
 	}
 
-	return body;
+	return result;
 }
 
 } // namespace mono
@@ -374,8 +609,11 @@ selftest_arithmetic (MonoLLVMJIT *jit)
 
 	/* compile() clones the module; our unique_ptr keeps owning the original and
 	 * frees it on scope exit - no release(), no leak, no double free. */
-	uint64_t addr = jit->compile (fn, {}, nullptr, "", nullptr);
+	mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+	uint64_t addr = res.entry;
 	SELFTEST_CHECK (addr != 0);
+	/* The size channel must report a real body, not silently zero. */
+	SELFTEST_CHECK (res.code_size > 0);
 	auto compiled = reinterpret_cast<int64_t (*) (int64_t, int64_t)> (addr);
 	SELFTEST_CHECK (compiled (20, 22) == 42);
 	SELFTEST_CHECK (compiled (-5, 5) == 0);
@@ -411,8 +649,10 @@ selftest_registered_helper (MonoLLVMJIT *jit)
 	jit->optimize (fn); /* also exercise the optimizer */
 
 	/* compile() clones; keep owning the original (freed on scope exit). */
-	uint64_t addr = jit->compile (fn, {}, nullptr, "", nullptr);
+	mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+	uint64_t addr = res.entry;
 	SELFTEST_CHECK (addr != 0);
+	SELFTEST_CHECK (res.code_size > 0);
 	auto compiled = reinterpret_cast<int64_t (*) (int64_t)> (addr);
 	/* selftest_helper_impl(x) = x*3+7, then +1. Only reachable via registration. */
 	SELFTEST_CHECK (compiled (10) == 38); /* (10*3+7)+1 */
@@ -499,7 +739,7 @@ mono_llvm_optimize_method (LLVMValueRef method)
 gpointer
 mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method,
                           int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs,
-                          gpointer *eh_frame)
+                          gpointer *eh_frame, guint32 *code_size_out)
 {
 	(void) mono_ee;
 	(void) cfg;
@@ -513,16 +753,17 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 		vars.push_back (llvm::unwrap<llvm::GlobalVariable> (callee_vars[i]));
 
 	std::vector<uint64_t> addrs (nvars);
-	uint64_t eh_addr = 0;
 
-	uint64_t body = jit->compile (entry, vars, addrs.data (), "mono_eh_frame", &eh_addr);
+	mono::CompileResult res = jit->compile (entry, vars, addrs.data (), "mono_eh_frame");
 
 	for (int i = 0; i < nvars; ++i)
 		callee_addrs[i] = (gpointer) (gsize) addrs[i];
 	if (eh_frame)
-		*eh_frame = (gpointer) (gsize) eh_addr;
+		*eh_frame = (gpointer) (gsize) res.mono_eh_frame;
+	if (code_size_out)
+		*code_size_out = (guint32) res.code_size;
 
-	return (gpointer) (gsize) body;
+	return (gpointer) (gsize) res.entry;
 }
 
 void

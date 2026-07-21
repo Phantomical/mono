@@ -9420,6 +9420,40 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 		return;
 	}
 
+	/*
+	 * Generic-shared methods are deferred to the classic JIT for now.
+	 *
+	 * mini.c's generic-jit-info setup does, for every gshared method compiled by
+	 * LLVM:
+	 *
+	 *	g_assert (cfg->llvm_this_reg != -1);
+	 *	gi->this_reg = cfg->llvm_this_reg;
+	 *
+	 * and the ONLY producer of cfg->llvm_this_reg is decode_llvm_eh_info(),
+	 * reading it out of the forked LLVM's mono-format LSDA header. Stock LLVM
+	 * emits no such header, so the field is never set.
+	 *
+	 * mini.c now initializes it to -1, so the miscompile that would otherwise
+	 * follow (registering the method with this_reg = 0, a valid-looking but
+	 * wrong register) is already ruled out - the assert fires instead. This gate
+	 * therefore chooses between aborting on every generic-shared method and
+	 * quietly falling back to the classic JIT, and the fallback is the useful
+	 * behaviour while the slot has no source.
+	 *
+	 * Note gsharedvt is already excluded (mini.c sets disable_llvm for it), but
+	 * plain gshared is not, so this gate is load-bearing rather than theoretical.
+	 *
+	 * Recovering the slot properly needs llvm.experimental.stackmap (design 3.1).
+	 * That is worth doing: design 6 (S6) singles out this exclusion as the one to
+	 * resist, since it removes List<T>/Dictionary<K,V>/LINQ-over-reference-types
+	 * - a large share of real hot paths - from the LLVM tier.
+	 */
+	if (cfg->gshared) {
+		cfg->exception_message = g_strdup ("gshared (needs the llvm_this_reg slot, 3c)");
+		cfg->disable_llvm = TRUE;
+		return;
+	}
+
 	if (cfg->llvm_only)
 		return;
 
@@ -12039,7 +12073,8 @@ llvm_jit_finalize_method (EmitContext *ctx)
 		callee_vars [i ++] = var;
 
 	mono_codeman_enable_write ();
-	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame);
+	guint32 llvm_code_size = 0;
+	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size);
 	mono_llvm_remove_gc_safepoint_poll (ctx->lmodule);
 	mono_codeman_disable_write ();
 	if (cfg->verbose_level > 1) {
@@ -12065,6 +12100,40 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 */
 	if (eh_frame)
 		decode_llvm_eh_info (ctx, eh_frame);
+
+	/*
+	 * decode_llvm_eh_info() is not only about EH: under the forked LLVM it also
+	 * produced three non-EH outputs. With it skipped, they have to come from
+	 * somewhere else, or be accounted for:
+	 *
+	 * 1. cfg->code_len - RESTORED HERE. It sizes the method's MonoJitInfo, and a
+	 *    zero-length jit-info makes mini_jit_info_table_find() unable to find the
+	 *    method at all (g_assert (ji) in mini-runtime.c). The size comes from the
+	 *    emitted object's ELF symbol table, returned by mono_llvm_compile_method().
+	 *
+	 * 2. cfg->encoded_unwind_ops - STILL MISSING. mini.c then falls back to
+	 *    cfg->unwind_ops, which is empty for an LLVM-compiled method, so the
+	 *    jinfo gets an effectively empty unwind descriptor. This does NOT fail
+	 *    safe: a frame needs unwind info even with no EH clauses of its own,
+	 *    because GC stack scanning walks through it and exceptions thrown by
+	 *    callees propagate through it.
+	 *
+	 *    THE NEXT STEP MUST RESTORE THIS by transcoding the stock DWARF
+	 *    .eh_frame into mono's unwind ops (design 3.1): decode into a
+	 *    GSList<MonoUnwindOp> and re-encode via mono_unwind_ops_encode_full().
+	 *    mono_unwind_decode_fde() (unwind.c:1024) is already a complete standard
+	 *    CIE+FDE parser and currently has zero callers. The engine already
+	 *    locates the section and reports it in mono::CompileResult::eh_frame.
+	 *
+	 * 3. cfg->llvm_this_reg - not needed while generic-shared methods are gated
+	 *    out of the LLVM path in mono_llvm_check_method_supported ().
+	 */
+	cfg->code_len = llvm_code_size;
+	/*
+	 * Fail loudly rather than silently building a zero-byte jit-info again: an
+	 * emitted method always has a non-empty body.
+	 */
+	g_assert (cfg->code_len > 0);
 
 	mono_domain_lock (domain);
 	domain_info = domain_jit_info (domain);
