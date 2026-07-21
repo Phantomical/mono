@@ -35,5 +35,20 @@ Legacy files being superseded:
 - `depatch.md` — running notes on removing the fork's dependence: `nest` attribute in place of
   `CallingConv::Mono`, consuming stock `.eh_frame`/`.gcc_except_table`.
 
+## Verified LLVM 18 build facts (from the step-1 spike, since removed)
+- System LLVM **18.1.3** at `/usr/lib/llvm-18`; use `llvm-config-18`. Dev headers present under
+  `/usr/lib/llvm-18/include` (full ORCv2 stack).
+- `--shared-mode` is `shared`: a single `libLLVM-18.so`, so `--libs orcjit native` → just `-lLLVM-18`.
+  `--system-libs` is empty.
+- Compile flags that link + JIT cleanly (ORCv2 `LLJIT`, process symbol resolution working):
+  `-std=c++17 -fno-exceptions -funwind-tables -fno-rtti` + `llvm-config-18 --cxxflags` include dir.
+  **`-fno-rtti` is required** and NOT emitted by `--cxxflags`: `libLLVM-18` is itself built `-fno-rtti`,
+  so subclassing polymorphic LLVM classes (memory managers, `ObjectLinkingLayer::Plugin`) RTTI-on is a
+  silent ABI break.
+- LLJIT defaults to `RTDyldObjectLinkingLayer` on ELF/amd64 → our custom-allocator/`.eh_frame` hook is
+  RTDyld's `MemoryManager` + `registerEHFrames()` (not JITLink's `JITLinkMemoryManager`/plugin).
+- `-rdynamic` + `DynamicLibrarySearchGenerator` resolves host symbols for a spike; the real backend
+  should register runtime helpers explicitly (`absoluteSymbols`/custom generator) instead.
+
 ## Port milestone 1
 `mono --llvm hello.exe` executes against unmodified LLVM 18. Tiering (W6/W7) comes after.

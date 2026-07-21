@@ -86,7 +86,9 @@ AM_CFLAGS = \
 	$(JEMALLOC_CFLAGS)	\
 	$(PLATFORM_CFLAGS) $(ARCH_CFLAGS) $(SHARED_CFLAGS)
 
-AM_CXXFLAGS = -I$(top_srcdir) $(LLVM_CXXFLAGS) $(GLIB_CFLAGS)
+# -I$(srcdir) lets the mono/mini/llvm/ subdir sources (compiled with
+# subdir-objects) resolve mono/mini headers via #include "mini.h".
+AM_CXXFLAGS = -I$(top_srcdir) -I$(srcdir) $(LLVM_CXXFLAGS) $(GLIB_CFLAGS)
 
 if HOST_WIN32
 export HOST_CC
@@ -425,10 +427,14 @@ posix_sources = \
 	mini-posix.c
 
 if ENABLE_LLVM
+# The legacy LLVM 6 backend sources (mini-llvm.c, mini-llvm-cpp.cpp,
+# llvm-jit.cpp) do not compile against unmodified system LLVM 18. They stay
+# in-tree but are excluded from the build; the new mono/mini/llvm/ backend
+# provides a stub behind an extern "C" boundary (backend.h) until the step-3
+# translator port replaces it.
 llvm_sources = \
-	mini-llvm.c		\
-	mini-llvm-cpp.cpp \
-	llvm-jit.cpp
+	llvm/backend.h \
+	llvm/stub.cpp
 endif
 
 interp_sources =	\

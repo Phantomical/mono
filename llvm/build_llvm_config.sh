@@ -44,7 +44,13 @@ if [[ $llvm_host_win32 = 1 ]]; then
 fi
 
 if [[ $use_llvm_config = 1 ]]; then
-	llvm_api_version=`$llvm_config --mono-api-version` || "0"
+	# mono's patched LLVM fork exposes `--mono-api-version`; unmodified upstream
+	# llvm-config does not. When it is missing (or not a number) derive the mono
+	# API version from the LLVM major version instead: 18.x -> 1800, 19.x -> 1900.
+	llvm_api_version=`$llvm_config --mono-api-version 2>/dev/null`
+	if ! [[ "$llvm_api_version" =~ ^[0-9]+$ ]]; then
+		llvm_api_version=$(( `$llvm_config --version | cut -d. -f1` * 100 ))
+	fi
 	with_llvm=`$llvm_config --prefix`
 	llvm_config_cflags=`$llvm_config --cflags`
 	llvm_system=`$llvm_config --system-libs`
@@ -149,7 +155,13 @@ if [[ $llvm_host_win32 = 1 ]]; then
 	host_cxxflag_additions="-std=gnu++11"
 	host_cflag_additions="-DNDEBUG"
 else
-	host_cxxflag_additions="-std=c++11"
+	# LLVM 14+ headers require C++17. Older mono forks (e.g. patched LLVM 6,
+	# api_version 610) still build against C++11.
+	if [[ $llvm_api_version -ge 1400 ]]; then
+		host_cxxflag_additions="-std=c++17"
+	else
+		host_cxxflag_additions="-std=c++11"
+	fi
 	host_cflag_additions=""
 fi
 
