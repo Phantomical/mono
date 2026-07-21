@@ -7,6 +7,10 @@
 
 #include <mono/utils/mono-publib.h>
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
+
 typedef struct _MonoCodeManager MonoCodeManager;
 
 #define MONO_CODE_MANAGER_CALLBACKS \
@@ -43,6 +47,8 @@ void            mono_code_manager_foreach  (MonoCodeManager *cman, MonoCodeManag
 
 void mono_codeman_enable_write (void);
 void mono_codeman_disable_write (void);
+
+G_END_DECLS
 
 #endif /* __MONO_CODEMAN_H__ */
 

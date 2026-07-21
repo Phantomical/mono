@@ -290,8 +290,24 @@ MonoLLVMJIT::compile (Function *entry,
 	for (size_t i = 0; i < var_names.size (); ++i)
 		callee_addrs[i] = cantFail (jit_->lookup (jd, var_names[i])).getValue ();
 
-	if (!eh_name.empty () && eh_out)
-		*eh_out = cantFail (jit_->lookup (jd, eh_name)).getValue ();
+	/*
+	 * The "mono_eh_frame" global only exists when the module was produced by
+	 * the FORKED LLVM, whose MonoEHFrame emission synthesized it. Against
+	 * unmodified LLVM 18 there is no such global: stock LLVM emits a standard
+	 * DWARF .eh_frame section instead (captured separately by the memory
+	 * manager, see last_eh_frame()), and consuming that is not ported yet -
+	 * which is why methods with EH clauses currently bail to the classic JIT.
+	 *
+	 * So a missing eh symbol is the normal case today, not an error: report
+	 * "no mono-format EH info" rather than aborting the process.
+	 */
+	if (!eh_name.empty () && eh_out) {
+		*eh_out = 0;
+		if (auto sym = jit_->lookup (jd, eh_name))
+			*eh_out = sym->getValue ();
+		else
+			consumeError (sym.takeError ());
+	}
 
 	return body;
 }

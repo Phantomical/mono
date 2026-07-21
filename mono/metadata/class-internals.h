@@ -17,6 +17,9 @@
 #include "mono/utils/mono-error-internals.h"
 #include "mono/utils/mono-memory-model.h"
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 #define MONO_CLASS_IS_ARRAY(c) (m_class_get_rank (c))
 
 #define MONO_CLASS_HAS_STATIC_METADATA(klass) (m_class_get_type_token (klass) && !m_class_get_image (klass)->dynamic && !mono_class_is_ginst (klass))
@@ -1178,6 +1181,8 @@ void
 mono_register_jit_icall_info (MonoJitICallInfo *info, gconstpointer func, const char *name,
 			      MonoMethodSignature *sig, gboolean no_wrapper, const char *c_symbol);
 
+/* A template cannot have C linkage, so step outside the guard for it. */
+G_END_DECLS
 #ifdef __cplusplus
 template <typename T>
 inline void
@@ -1186,6 +1191,7 @@ mono_register_jit_icall_info (MonoJitICallInfo *info, T func, const char *name, 
 	mono_register_jit_icall_info (info, (gconstpointer)func, name, sig, no_wrapper, c_symbol);
 }
 #endif // __cplusplus
+G_BEGIN_DECLS
 
 #define mono_register_jit_icall(func, sig, no_wrapper) (mono_register_jit_icall_info (&mono_get_jit_icall_info ()->func, func, #func, (sig), (no_wrapper), NULL))
 
@@ -1669,5 +1675,7 @@ m_method_alloc0 (MonoDomain *domain, MonoMethod *method, guint size)
 
 /*Now that everything has been defined, let's include the inline functions */
 #include <mono/metadata/class-inlines.h>
+
+G_END_DECLS
 
 #endif /* __MONO_METADATA_CLASS_INTERNALS_H__ */

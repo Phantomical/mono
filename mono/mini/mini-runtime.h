@@ -15,6 +15,9 @@
 #include "mini.h"
 #include "ee.h"
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 /* Per-domain information maintained by the JIT */
 typedef struct
 {
@@ -616,7 +619,14 @@ gboolean MONO_SIG_HANDLER_SIGNATURE (mono_chain_signal);
 
 #elif defined(_MSC_VER)
 
+/*
+ * <intrin.h> is a C++ header on MSVC (it declares overloads), so it must not be
+ * pulled in inside the G_BEGIN_DECLS block above - wrapping it in extern "C"
+ * breaks the Windows build. Step outside the guard for it.
+ */
+G_END_DECLS
 #include <intrin.h>
+G_BEGIN_DECLS
 #pragma intrinsic(_ReturnAddress)
 
 #define MONO_RETURN_ADDRESS() _ReturnAddress()
@@ -645,6 +655,8 @@ void mini_register_sigterm_handler (void);
 	if ((int)type != -1) \
 		MONO_PROFILER_RAISE (jit_code_buffer, ((buf), (size), (MonoProfilerCodeBufferType)(type), (arg))); \
 	} while (0)
+
+G_END_DECLS
 
 #endif /* __MONO_MINI_RUNTIME_H__ */
 

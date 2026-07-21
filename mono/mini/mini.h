@@ -64,6 +64,15 @@ typedef struct SeqPointInfo SeqPointInfo;
 #include "mono/metadata/icall-signatures.h"
 
 /*
+ * Everything below declares C functions. mini.h is included from C++ too
+ * (mono/mini/llvm/), where without this guard the declarations would take C++
+ * linkage and calls would emit mangled references that do not resolve against
+ * mono's C definitions. G_BEGIN_DECLS expands to nothing when compiling C, so
+ * this is a no-op for every existing C consumer.
+ */
+G_BEGIN_DECLS
+
+/*
  * The mini code should not have any compile time dependencies on the GC being used, so the same object file from mini/
  * can be linked into both mono and mono-sgen.
  */
@@ -2183,6 +2192,8 @@ void      mono_replace_ins                  (MonoCompile *cfg, MonoBasicBlock *b
 
 void      mini_register_opcode_emulation (int opcode, MonoJitICallInfo *jit_icall_info, const char *name, MonoMethodSignature *sig, gpointer func, const char *symbol, gboolean no_throw);
 
+/* A template cannot have C linkage, so step outside the guard for it. */
+G_END_DECLS
 #ifdef __cplusplus
 template <typename T>
 inline void
@@ -2191,6 +2202,7 @@ mini_register_opcode_emulation (int opcode, MonoJitICallInfo *jit_icall_info, co
 	mini_register_opcode_emulation (opcode, jit_icall_info, name, sig, (gpointer)func, symbol, no_throw);
 }
 #endif // __cplusplus
+G_BEGIN_DECLS
 
 void              mono_trampolines_init (void);
 void              mono_trampolines_cleanup (void);
@@ -3033,5 +3045,7 @@ mono_arch_load_function (MonoJitICallId jit_icall_id);
 
 MonoGenericContext
 mono_get_generic_context_from_stack_frame (MonoJitInfo *ji, gpointer generic_info);
+
+G_END_DECLS
 
 #endif /* __MONO_MINI_H__ */

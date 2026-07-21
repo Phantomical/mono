@@ -429,16 +429,22 @@ posix_sources = \
 if ENABLE_LLVM
 # The legacy LLVM 6 backend sources (mini-llvm.c, mini-llvm-cpp.cpp,
 # llvm-jit.cpp) do not compile against unmodified system LLVM 18. They stay
-# in-tree but are excluded from the build; the new mono/mini/llvm/ backend
-# replaces them incrementally. Landed so far:
+# in-tree but are excluded from the build; the mono/mini/llvm/ backend
+# replaces them:
 #   - engine.cpp/.hpp: the ORCv2 in-process JIT (LLVM 18) + self-test.
-#   - stub.cpp: the still-stubbed translator entry points (step 3b ports these).
+#   - translator.cpp: the IL -> LLVM IR translator (forward-ported from
+#     mini-llvm.c to unmodified LLVM 18).
+#   - translator-cpp.cpp/.hpp: the C++ shim over the LLVM C++ API that the
+#     translator builds on (forward-ported from mini-llvm-cpp.cpp).
 #   - backend.h: the extern "C" boundary the rest of mono links against.
+# stub.cpp is gone: translator.cpp defines exactly the same 14 entry points.
 llvm_sources = \
 	llvm/backend.h \
 	llvm/engine.hpp \
 	llvm/engine.cpp \
-	llvm/stub.cpp
+	llvm/translator-cpp.hpp \
+	llvm/translator-cpp.cpp \
+	llvm/translator.cpp
 endif
 
 interp_sources =	\

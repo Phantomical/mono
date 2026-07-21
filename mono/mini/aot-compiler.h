@@ -7,6 +7,9 @@
 
 #include "mini.h"
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 int mono_compile_assembly (MonoAssembly *ass, guint32 opts, const char *aot_options, gpointer **aot_state);
 int mono_compile_deferred_assemblies (guint32 opts, const char *aot_options, gpointer **aot_state);
 void* mono_aot_readonly_field_override (MonoClassField *field);
@@ -25,5 +28,7 @@ int      mono_aot_get_method_index          (MonoMethod *method);
 MonoJumpInfo* mono_aot_patch_info_dup       (MonoJumpInfo* ji);
 gboolean mono_aot_can_specialize (MonoMethod *method);
 gboolean mono_aot_can_enter_interp (MonoMethod *method);
+
+G_END_DECLS
 
 #endif

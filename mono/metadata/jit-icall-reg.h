@@ -32,6 +32,9 @@
 
 // No include guard needed.
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 // Changes within MONO_JIT_ICALLS require revising MONO_AOT_FILE_VERSION.
 #define MONO_JIT_ICALLS \
 	\
@@ -387,6 +390,14 @@ mono_find_jit_icall_info (MonoJitICallId id)
 }
 
 #if __cplusplus
+/*
+ * An overload cannot have C linkage. A G_END_DECLS/G_BEGIN_DECLS bracket is not
+ * enough here: this header has no include guard and is pulled in from inside
+ * another header's already-open G_BEGIN_DECLS (class-internals.h), so the
+ * nesting depth is not known locally and one G_END_DECLS would not reach depth
+ * zero. extern "C++" overrides any enclosing extern "C" regardless of depth.
+ */
+extern "C++" {
 // MonoJumpInfo.jit_icall_id is gsize instead of MonoJitICallId in order
 // to fully overlap pointers, and not match union reads with writes.
 inline MonoJitICallInfo*
@@ -394,4 +405,7 @@ mono_find_jit_icall_info (gsize id)
 {
 	return mono_find_jit_icall_info ((MonoJitICallId)id);
 }
+} // extern "C++"
 #endif
+
+G_END_DECLS

@@ -13,6 +13,10 @@
 
 #include "mini.h"
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
+
 /* This is the same as host_mgreg_t, except on 32 bit bit platforms with callee saved fp regs */
 #ifndef mono_unwind_reg_t
 #define mono_unwind_reg_t host_mgreg_t
@@ -237,5 +241,7 @@ mono_unwind_decode_llvm_mono_fde (guint8 *fde, int fde_len, guint8 *cie, guint8 
 GSList* mono_unwind_get_cie_program (void);
 
 void mono_print_unwind_info (guint8 *unwind_info, int unwind_info_len);
+
+G_END_DECLS
 
 #endif

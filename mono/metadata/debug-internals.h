@@ -6,6 +6,10 @@
 #include <mono/metadata/mono-debug.h>
 #include <mono/utils/mono-compiler.h>
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
+
 struct _MonoDebugMethodInfo {
 	MonoMethod *method;
 	MonoDebugHandle *handle;
@@ -108,5 +112,7 @@ mono_debug_image_has_debug_info (MonoImage *image);
 
 char*
 mono_debug_image_get_sourcelink (MonoImage *image);
+
+G_END_DECLS
 
 #endif /* __DEBUG_INTERNALS_H__ */

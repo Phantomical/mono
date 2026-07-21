@@ -10,6 +10,9 @@
 #include <mono/metadata/metadata.h>
 #include <mono/metadata/class-internals.h>
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 gboolean
 mono_class_init_internal (MonoClass *klass);
 
@@ -87,5 +90,7 @@ mono_class_setup_runtime_info (MonoClass *klass, MonoDomain *domain, MonoVTable 
 
 MonoClass *
 mono_class_create_array_fill_type (void);
+
+G_END_DECLS
 
 #endif

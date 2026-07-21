@@ -10573,6 +10573,10 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 
 	/* Register overloaded intrinsics */
 	switch (id) {
+	case INTRINS_PREFETCH:
+		/* llvm.prefetch.p0 in LLVM 18: overloaded on the pointer type. */
+		intrins = add_intrins1 (module, id, LLVMPointerType (LLVMInt8Type (), 0));
+		break;
 	case INTRINS_MEMSET:
 		intrins = add_intrins2 (module, id, LLVMPointerType (LLVMInt8Type (), 0), LLVMInt32Type ());
 		break;
@@ -12048,7 +12052,19 @@ llvm_jit_finalize_method (EmitContext *ctx)
 		g_print ("***\n\n");
 	}
 
-	decode_llvm_eh_info (ctx, eh_frame);
+	/*
+	 * eh_frame is the address of the "mono_eh_frame" global, which only the
+	 * FORKED LLVM emitted (via its MonoEHFrame support). Unmodified LLVM 18
+	 * emits a standard DWARF .eh_frame section instead, and consuming that is
+	 * not ported yet - which is exactly why methods carrying EH clauses are
+	 * gated out to the classic JIT in mono_llvm_check_method_supported().
+	 *
+	 * So under stock LLVM this is NULL for every method that reaches here, and
+	 * those methods have no EH clauses to describe. Decode only if the forked
+	 * global was actually present.
+	 */
+	if (eh_frame)
+		decode_llvm_eh_info (ctx, eh_frame);
 
 	mono_domain_lock (domain);
 	domain_info = domain_jit_info (domain);

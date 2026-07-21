@@ -59,7 +59,13 @@ INTRINS_OVR(CTLZ_I32, ctlz)
 INTRINS_OVR(CTLZ_I64, ctlz)
 INTRINS_OVR(CTTZ_I32, cttz)
 INTRINS_OVR(CTTZ_I64, cttz)
-INTRINS(PREFETCH, prefetch)
+/*
+ * llvm.prefetch gained address-space overloading after LLVM 6 (it is
+ * llvm.prefetch.p0 in LLVM 18), so it must be registered with its pointer
+ * type. Declaring it INTRINS here would call Intrinsic::getDeclaration with an
+ * empty type list, which crashes inside Intrinsic::getType.
+ */
+INTRINS_OVR(PREFETCH, prefetch)
 INTRINS(BZHI_I32, x86_bmi_bzhi_32)
 INTRINS(BZHI_I64, x86_bmi_bzhi_64)
 INTRINS(BEXTR_I32, x86_bmi_bextr_32)

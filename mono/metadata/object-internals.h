@@ -26,6 +26,9 @@
 #include "mono/utils/mono-coop-mutex.h"
 #include <mono/metadata/icalls.h>
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 /* Use this as MONO_CHECK_ARG (arg,expr,) in functions returning void */
 #define MONO_CHECK_ARG(arg, expr, retval) do {				\
 	if (G_UNLIKELY (!(expr)))					\
@@ -2447,5 +2450,7 @@ mono_runtime_get_managed_cmd_line (void);
 
 char *
 mono_runtime_get_cmd_line (int argc, char **argv);
+
+G_END_DECLS
 
 #endif /* __MONO_OBJECT_INTERNALS_H__ */

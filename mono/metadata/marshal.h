@@ -22,6 +22,9 @@
 #include <mono/utils/mono-error.h>
 #include <mono/metadata/icalls.h>
 
+/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 typedef gunichar2 *mono_bstr;
 typedef const gunichar2 *mono_bstr_const;
 
@@ -727,5 +730,7 @@ MonoMethod*
 mono_mb_create_and_cache_full (GHashTable *cache, gpointer key,
 							   MonoMethodBuilder *mb, MonoMethodSignature *sig,
 							   int max_stack, WrapperInfo *info, gboolean *out_found);
+
+G_END_DECLS
 
 #endif /* __MONO_MARSHAL_H__ */
