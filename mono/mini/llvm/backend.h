@@ -69,7 +69,7 @@ void      mono_llvm_optimize_method (LLVMValueRef method);
  * stock DWARF .eh_frame SECTION emitted for this module - not a per-function
  * FDE, so the caller must locate the FDE whose initial_location matches the
  * method (a module can hold more than one function). It is transcoded into
- * cfg->encoded_unwind_ops; see llvm/ehframe.hpp.
+ * cfg->encoded_unwind_ops; see llvm/ehframe.cpp.
  */
 gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out);
 
