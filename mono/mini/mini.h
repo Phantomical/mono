@@ -1248,6 +1248,13 @@ typedef enum {
 	JIT_FLAG_SELF_INIT = (1 << 11),
 	/* Assume code memory is exec only */
 	JIT_FLAG_CODE_EXEC_ONLY = (1 << 12),
+	/*
+	 * If the LLVM backend declines the method, fail the compile instead of
+	 * restarting it as a classic one. Used by tier-1 promotion, where the
+	 * method already has a classic tier-0 body, so a fallback compile would
+	 * only produce a second copy of it that is immediately discarded.
+	 */
+	JIT_FLAG_NO_LLVM_FALLBACK = (1 << 13),
 } JitFlags;
 
 /* Bit-fields in the MonoBasicBlock.region */

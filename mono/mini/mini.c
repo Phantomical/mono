@@ -3113,6 +3113,12 @@ is_simd_supported (MonoCompile *cfg)
  *
  * Returns: a MonoCompile* pointer. Caller must check the exception_type
  * field in the returned struct to see if compilation succeded.
+ *
+ * Returns NULL if JIT_FLAG_NO_LLVM_FALLBACK is set and the LLVM backend
+ * declined the method: there is no classic fallback compile to describe, so
+ * there is no MonoCompile to hand back. That is the only way this returns NULL
+ * in a build with the JIT enabled - every other caller can dereference the
+ * result unconditionally.
  */
 MonoCompile*
 mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFlags flags, int parts, int aot_method_index)
@@ -3371,6 +3377,13 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 					g_free (cfg->exception_message);
 					cfg->disable_aot = TRUE;
 					return cfg;
+				}
+				if (flags & JIT_FLAG_NO_LLVM_FALLBACK) {
+					/* The caller has no use for a classic body - see the flag's comment. */
+					if (MONO_METHOD_COMPILE_END_ENABLED ())
+						MONO_PROBE_METHOD_COMPILE_END (method, FALSE);
+					mono_destroy_compile (cfg);
+					return NULL;
 				}
 				mono_destroy_compile (cfg);
 				try_llvm = FALSE;
@@ -3915,6 +3928,13 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 				cfg->disable_aot = TRUE;
 				return cfg;
 			}
+			if (flags & JIT_FLAG_NO_LLVM_FALLBACK) {
+				/* The caller has no use for a classic body - see the flag's comment. */
+				if (MONO_METHOD_COMPILE_END_ENABLED ())
+					MONO_PROBE_METHOD_COMPILE_END (method, FALSE);
+				mono_destroy_compile (cfg);
+				return NULL;
+			}
 			mono_destroy_compile (cfg);
 			try_llvm = FALSE;
 			goto restart_compile;
@@ -4150,16 +4170,26 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 		tiered_llvm_inited = TRUE;
 	}
 
+	/*
+	 * JIT_FLAG_NO_LLVM_FALLBACK: when the backend declines, mini_method_compile
+	 * returns NULL instead of restarting as a classic compile. Without it the
+	 * fallback runs a full second classic compile and publishes its MonoJitInfo,
+	 * which we then discard right below - the method already has an identical
+	 * tier-0 body, so that jinfo and its code are pure retention.
+	 */
 	mono_llvm_tiered_promote_begin ();
-	cfg = mini_method_compile (method, opt, domain, JIT_FLAG_RUN_CCTORS, 0, -1);
+	cfg = mini_method_compile (method, opt, domain, (JitFlags)(JIT_FLAG_RUN_CCTORS | JIT_FLAG_NO_LLVM_FALLBACK), 0, -1);
 	mono_llvm_tiered_promote_end ();
 	if (!cfg)
 		return FALSE;
 
 	/*
-	 * cfg->compile_llvm is cleared when the backend declines and mini falls back
-	 * to the classic JIT via restart_compile. A classic body here would be an
-	 * identical second copy of tier 0, so treat it as a decline.
+	 * !cfg->jit_info is the live half of this check: a generic-sharing failure
+	 * returns a cfg with no jit_info, and that must not be published.
+	 * exception_type likewise still fires. !cfg->compile_llvm is now dead -
+	 * compile_llvm is copied from try_llvm, and under JIT_FLAG_NO_LLVM_FALLBACK
+	 * both places that clear try_llvm return NULL instead of restarting - but it
+	 * is kept as a cheap guard against a future third decline path.
 	 */
 	if (cfg->exception_type != MONO_EXCEPTION_NONE || !cfg->compile_llvm || !cfg->jit_info) {
 		mono_destroy_compile (cfg);
