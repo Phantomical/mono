@@ -69,11 +69,22 @@
  *    The translator bails out of half-built state constantly; this is the most
  *    transferable thing here.
  *
- * 3. Name the outcomes when there are more than two, and give the switch a
- *    default: that asserts. FdeResult exists because "this FDE is for another
- *    function" is routine during the scan and must not read as a failure. The
- *    default: is not redundant - mono/mini compiles with -Wno-switch
- *    -Wno-switch-enum, so the compiler will NOT report a new enumerator.
+ * 3. Name the outcomes when there are more than two, and let the COMPILER
+ *    enforce that every one is handled. FdeResult exists because "this FDE is
+ *    for another function" is routine during the scan and must not read as a
+ *    failure.
+ *
+ *    An earlier draft of this said the opposite: give the switch a "default:
+ *    that asserts", because mono/mini compiled with -Wno-switch -Wno-switch-enum
+ *    and would not report a new enumerator. That is no longer true. mono/mini's
+ *    AM_CXXFLAGS ends in -Wswitch, which overrides the -Wno-switch configure
+ *    puts in CPPFLAGS, so every C++ file under llvm/ is compiled with -Wswitch
+ *    in effect (the measured compile line for this file ends "-Wno-switch
+ *    -Wno-switch-enum -Wswitch", and the last one wins). A
+ *    switch over an enum with no default: label now warns about an unhandled
+ *    enumerator at compile time - and a default: label SUPPRESSES that warning,
+ *    which is why the one over FdeResult no longer has one. See the note at the
+ *    switch itself for what is left in its place and why.
  *
  * 4. State threaded through several functions becomes an object.
  *    CfiInterpreter replaced a seven-parameter function; the translator threads
@@ -1076,11 +1087,37 @@ CieInfo::parse (const std::uint8_t *start, const std::uint8_t *end)
 			return std::nullopt;
 	}
 
-	cie.code_align = static_cast<int> (r.uleb ());
-	cie.data_align = static_cast<int> (r.sleb ());
-	cie.return_reg = (version == 1) ? r.u8 () : static_cast<int> (r.uleb ());
+	/*
+	 * Decoded at their wire width and range-checked BEFORE they are narrowed to
+	 * the int fields below.
+	 *
+	 * Every check that polices these three - code_align > 0, data_align ==
+	 * mono_unwind_get_dwarf_data_align (), return_reg ==
+	 * mono_unwind_get_dwarf_pc_reg () - runs in transcode_fde() on the already
+	 * narrowed int. A static_cast<int> here would therefore let any 64-bit
+	 * operand whose low 32 bits happen to ALIAS an acceptable value walk past
+	 * all three: sleb 0xffffffff8 (2^32 - 8) and sleb -(2^32 + 8) both narrow
+	 * to -8 and were accepted as "mono's data alignment"; uleb 2^32 + 1 narrowed
+	 * to code_align 1; uleb 2^32 + 16 narrowed to return column 16. The operands
+	 * come off the wire, so that is a header-field check defeated by a cast.
+	 *
+	 * Out of range is a decline rather than a clamp: a CIE that cannot mean what
+	 * it says is not a CIE we should be transcoding, and every legitimate value
+	 * here is tiny (1, -8, 16 on amd64).
+	 */
+	std::uint64_t code_align = r.uleb ();
+	std::int64_t data_align = r.sleb ();
+	std::uint64_t return_reg = (version == 1) ? r.u8 () : r.uleb ();
 	if (!r.ok ())
 		return std::nullopt;
+	if (code_align > static_cast<std::uint64_t> (G_MAXINT32) ||
+	    data_align > G_MAXINT32 || data_align < G_MININT32 ||
+	    return_reg > static_cast<std::uint64_t> (G_MAXINT32))
+		return std::nullopt;
+
+	cie.code_align = static_cast<int> (code_align);
+	cie.data_align = static_cast<int> (data_align);
+	cie.return_reg = static_cast<int> (return_reg);
 
 	if (aug_str_len > 0 && aug_str [0] == 'z') {
 		std::uint64_t aug_len = r.uleb ();
@@ -1319,6 +1356,21 @@ mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_size,
 		                               reinterpret_cast<const std::uint8_t*> (code_start),
 		                               code_len, ops);
 
+		/*
+		 * No default: label, deliberately. Every arm below returns or continues,
+		 * so an unhandled enumerator would fall out of the switch and re-enter
+		 * the scan loop at id_pos + 4, silently misparsing the section. What
+		 * stops that is now -Wswitch (see convention 3 in the file header):
+		 * without a default: label the compiler names the missing enumerator at
+		 * the point it is added. Adding a default: back would suppress exactly
+		 * that diagnostic.
+		 *
+		 * The g_assert_not_reached () after the switch is what a default: arm
+		 * used to be, minus the suppression: -Wswitch is a warning, not an
+		 * error, and mono's build is far too noisy for one warning to be certain
+		 * of being read, so the runtime trap stays. It is unreachable today and
+		 * shows as such under gcov.
+		 */
 		switch (res) {
 		case FdeResult::Transcoded:
 			*out_ops = ops.release ();
@@ -1332,20 +1384,8 @@ mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_size,
 			continue;
 		case FdeResult::Decline:
 			return FALSE;
-		default:
-			/*
-			 * Not reachable, and not redundant: mono/mini builds this file with
-			 * -Wno-switch -Wno-switch-enum, so a new FdeResult enumerator gets no
-			 * warning here and would otherwise fall out of the switch and re-enter
-			 * the scan loop at id_pos + 4.
-			 *
-			 * A runtime assert is the weaker half of the deal. If -Wno-switch were
-			 * dropped for llvm/, the better shape would be no default: at all, so
-			 * the compiler refuses to build an unhandled enumerator instead of
-			 * trapping on one.
-			 */
-			g_assert_not_reached ();
 		}
+		g_assert_not_reached ();
 	}
 
 	/*
