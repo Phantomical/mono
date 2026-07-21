@@ -258,6 +258,20 @@ tiered_record_in_domain (gpointer key, gpointer value, gpointer user_data)
 void
 mono_llvm_tiered_domain_unload (MonoDomain *domain)
 {
+	/*
+	 * Reclaim the JIT memory FIRST, and unconditionally - before the tiering
+	 * gate below, because the engine also compiles under a plain --llvm run
+	 * where tiering is off, and those bodies are just as dead once the domain
+	 * is being freed. mono_llvm_jit_release_domain () is a no-op if the engine
+	 * was never built, which is the common case.
+	 *
+	 * Ordering against the purge below does not matter - one frees machine code,
+	 * the other frees promotion bookkeeping, and they share nothing - but doing
+	 * it first keeps the "release what the domain owns" step adjacent to the
+	 * hook's own contract.
+	 */
+	mono_llvm_jit_release_domain (domain);
+
 	if (!mono_llvm_tiered_enabled ())
 		return;
 

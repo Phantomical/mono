@@ -103,6 +103,44 @@ gboolean  mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_s
 void      mono_llvm_jit_register_symbol (const char *name, void *addr);
 
 /*
+ * Reclaim every JIT'd body compiled for DOMAIN: drop its symbols from the
+ * ExecutionSession, deregister its .eh_frame with the host unwinder and UNMAP
+ * its code and data. Returns the number of per-method JITDylibs removed.
+ *
+ * WHY THIS IS SAFE, AND WHY ONLY HERE. It is called from
+ * mini_free_jit_domain_info (), mono_domain_free ()'s free_domain_hook. A few
+ * dozen lines later that same function reaches
+ * mono_mem_manager_free_singleton (), which calls
+ * mono_code_manager_destroy (domain->memory_manager->code_mp) and thereby
+ * unmaps every byte of CLASSIC JIT code the domain ever produced. So the
+ * runtime already asserts, at this exact point and with no safepoint machinery,
+ * that no thread can be executing this domain's code, that no reachable
+ * MonoJitInfo, trampoline, vtable slot or delegate still targets it, and that
+ * address reuse of those pages is acceptable. Reclaiming the tier-1 bodies
+ * alongside the tier-0 bodies they replaced adds no new assumption: it is the
+ * same domain, the same quiescence argument (mono_domain_try_unload () aborts
+ * and waits, with an infinite timeout, for every thread holding an appdomain
+ * ref) and the same set of consumers.
+ *
+ * Two things do NOT follow from that and are handled explicitly:
+ *   - .eh_frame FDEs are registered in libgcc's PROCESS-GLOBAL registry, not in
+ *     anything domain-scoped, so they must be deregistered before the pages go.
+ *     ExecutionSession::removeJITDylibs () drives that ordering, and
+ *     ~MonoJitMemoryManager asserts it held.
+ *   - mono_dont_free_domains (the debugger's "keep domains alive" mode) makes
+ *     mono_domain_free () return before the hook, so this is never reached and
+ *     nothing is unmapped - matching the runtime's own choice to invalidate
+ *     rather than free in that mode.
+ *
+ * Reclaiming per METHOD rather than per domain is NOT offered, and that is a
+ * deliberate omission: outside a domain unload the runtime never establishes
+ * that a compiled body is dead. mini_tiered_promote () orphans the tier-0 body
+ * rather than freeing it, precisely because a published body can still be the
+ * target of a patched call site or a live stack frame with nothing tracking it.
+ */
+guint32   mono_llvm_jit_release_domain (MonoDomain *domain);
+
+/*
  * Tiered compilation (tiered.cpp). Tier 0 is the classic JIT; a method is
  * queued for tier 1 on a successful tier-0 compile and promoted once the
  * compile nesting unwinds to zero, so LLVM codegen never runs on a deep

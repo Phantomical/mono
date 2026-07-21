@@ -18,8 +18,11 @@
 #define __MONO_MINI_LLVM_ENGINE_HPP__
 
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/StringRef.h>
@@ -90,6 +93,13 @@ public:
 	static MonoLLVMJIT *get_singleton ();
 
 	/*
+	 * The singleton if it has already been built, else nullptr. Reclamation
+	 * paths use this so that a domain unload in a process that never JITted
+	 * anything does not construct an LLJIT just to find it has nothing to free.
+	 */
+	static MonoLLVMJIT *get_singleton_if_created ();
+
+	/*
 	 * The LLVMContext all JIT modules must be built in. mono's translator
 	 * (step 3b) should create its jit module here rather than in the global
 	 * context, so a future background-compile thread stays race-free.
@@ -121,11 +131,31 @@ public:
 	 *                  (Resolved by name in the clone, so pass the originals.)
 	 *   eh_symbol    - if non-empty, looked up and reported in the result's
 	 *                  mono_eh_frame field (the mono-format global, per the donor).
+	 *   owner        - opaque lifetime key for the code this compile produces;
+	 *                  mono passes the MonoCompile's MonoDomain *. Everything
+	 *                  compiled under one key is torn down together by
+	 *                  release_owner (). nullptr means "never reclaim", which is
+	 *                  what the unit tests want and what a caller with no domain
+	 *                  to name gets.
 	 */
 	CompileResult compile (llvm::Function *entry,
 	                       llvm::ArrayRef<llvm::GlobalVariable *> callee_vars,
 	                       uint64_t *callee_addrs,
-	                       llvm::StringRef eh_symbol);
+	                       llvm::StringRef eh_symbol,
+	                       void *owner = nullptr);
+
+	/*
+	 * Tear down every JITDylib compiled under OWNER: unregister its symbols,
+	 * deregister its .eh_frame with the host unwinder and unmap its code and
+	 * data. Returns the number of dylibs removed.
+	 *
+	 * THE CALLER MUST HAVE ESTABLISHED THAT THE CODE IS DEAD. This unmaps
+	 * executable pages; a surviving pointer into them is a use-after-free. See
+	 * the lifetime argument on mono_llvm_jit_release_domain () below.
+	 *
+	 * A key that was never compiled for (including nullptr) is a no-op.
+	 */
+	uint64_t release_owner (void *owner);
 
 	~MonoLLVMJIT ();
 
@@ -152,6 +182,18 @@ private:
 	 */
 	llvm::orc::JITDylib *helpers_jd_ = nullptr;
 	uint64_t module_counter_ = 0;
+
+	/*
+	 * owner key -> the dylibs compiled under it, for release_owner ().
+	 *
+	 * Keyed by an opaque pointer rather than typed as MonoDomain * so that this
+	 * header stays free of mono types (see the file comment). The map entry is
+	 * erased by release_owner (), which mono calls from the domain's own free
+	 * path, so a MonoDomain * key never outlives the domain and cannot be
+	 * aliased by a later domain reusing the address.
+	 */
+	std::mutex owners_mutex_;
+	std::map<void *, std::vector<llvm::orc::JITDylib *>> owners_;
 };
 
 /* ---- relocation audit ----------------------------------------------------

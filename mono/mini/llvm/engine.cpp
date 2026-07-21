@@ -64,6 +64,7 @@
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -345,6 +346,29 @@ capture_object_info (orc::MaterializationResponsibility &r, const object::Object
  */
 class MonoJitMemoryManager : public SectionMemoryManager {
 public:
+	/*
+	 * ORDERING INVARIANT, always on. Reclaiming a dylib must deregister its
+	 * .eh_frame with the host unwinder BEFORE the memory holding those FDEs is
+	 * unmapped, and the unmapping is exactly what this destructor does (via
+	 * ~SectionMemoryManager). __register_frame's registry is process-global, so
+	 * an FDE left registered over freed - and later reused - memory is reachable
+	 * from any unwind anywhere in the process, not just from mono's.
+	 *
+	 * The order is RTDyldObjectLinkingLayer::handleRemoveResources's to get
+	 * right (deregisterEHFrames then destroy the memory manager); this asserts
+	 * it held rather than trusting a library-internal sequencing across LLVM
+	 * upgrades. The check is O(1) on two bools set on this object's own code
+	 * path - no counters, no globals - and fires a fatal error rather than
+	 * unmapping live FDEs, because a stale process-global FDE is not something
+	 * to let slide.
+	 */
+	~MonoJitMemoryManager () override
+	{
+		if (registered_eh_ && !deregistered_eh_)
+			llvm::report_fatal_error (
+				".eh_frame unmapped before deregisterEHFrames - JIT reclamation ordering broke");
+	}
+
 	void registerEHFrames (uint8_t *Addr, uint64_t LoadAddr, size_t Size) override
 	{
 		/*
@@ -357,13 +381,20 @@ public:
 		 * which module it belongs to. capture_object_info() takes it from the
 		 * object file instead, where the owning JITDylib is known.
 		 */
+		registered_eh_ = true;
 		SectionMemoryManager::registerEHFrames (Addr, LoadAddr, Size);
 	}
 
 	void deregisterEHFrames () override
 	{
+		deregistered_eh_ = true;
 		SectionMemoryManager::deregisterEHFrames ();
 	}
+
+private:
+	/* For the teardown-ordering invariant in the destructor above. */
+	bool registered_eh_ = false;
+	bool deregistered_eh_ = false;
 };
 
 /* ---- singleton bootstrap -------------------------------------------------- */
@@ -655,11 +686,87 @@ MonoLLVMJIT::register_c_runtime_symbols ()
 
 MonoLLVMJIT::~MonoLLVMJIT () = default;
 
+/*
+ * Set once the singleton exists. Read by get_singleton_if_created (), which
+ * must not itself trigger construction - a domain unload in a process that
+ * never JITted anything would otherwise build a whole LLJIT (target machine,
+ * helper dylib, ~40 absoluteSymbols) only to discover it has nothing to free.
+ */
+static std::atomic<MonoLLVMJIT *> g_singleton {nullptr};
+
 MonoLLVMJIT *
 MonoLLVMJIT::get_singleton ()
 {
-	static MonoLLVMJIT *instance = new MonoLLVMJIT ();
+	static MonoLLVMJIT *instance = [] () {
+		auto *jit = new MonoLLVMJIT ();
+		g_singleton.store (jit, std::memory_order_release);
+		return jit;
+	} ();
 	return instance;
+}
+
+MonoLLVMJIT *
+MonoLLVMJIT::get_singleton_if_created ()
+{
+	return g_singleton.load (std::memory_order_acquire);
+}
+
+/*
+ * Tear down everything compiled under OWNER. Declared in engine.hpp, where the
+ * caller's obligation to prove the code dead is spelled out.
+ *
+ * ExecutionSession::removeJITDylibs () is the right mechanism rather than
+ * JITDylib::clear () or a ResourceTracker: clear() drops the symbol table but
+ * leaves the JITDylib object itself in the session forever, and a
+ * ResourceTracker is a sub-dylib granularity we do not need because compile ()
+ * already gives every module a dylib of its own. removeJITDylibs () does both
+ * halves - it removes the dylib from the session AND runs every registered
+ * ResourceManager's handleRemoveResources, which for RTDyldObjectLinkingLayer
+ * means deregisterEHFrames () followed by destroying the object's
+ * SectionMemoryManager, i.e. unmapping its code and data. That deregister-
+ * before-unmap ordering is asserted in ~MonoJitMemoryManager.
+ */
+uint64_t
+MonoLLVMJIT::release_owner (void *owner)
+{
+	std::vector<JITDylibSP> jds;
+
+	if (!owner)
+		return 0;
+
+	{
+		std::lock_guard<std::mutex> lock (owners_mutex_);
+		auto it = owners_.find (owner);
+		if (it == owners_.end ())
+			return 0;
+		jds.reserve (it->second.size ());
+		for (JITDylib *jd : it->second)
+			jds.push_back (jd);
+		/*
+		 * Erase the map entry under the same lock that published it. The key is
+		 * a MonoDomain * whose storage is freed moments after mono calls us, so
+		 * leaving it behind would let a later domain allocated at the same
+		 * address inherit this one's dylib list - the dangling-key/address-reuse
+		 * hazard that task #29 hit with MonoMethod * keys, except that here it
+		 * would hand a live domain a list of already-unmapped dylibs.
+		 */
+		owners_.erase (it);
+	}
+
+	if (jds.empty ())
+		return 0;
+
+	uint64_t n = jds.size ();
+	/*
+	 * cantFail is correct here rather than lax: removeJITDylibs only fails if a
+	 * removed dylib is still in another dylib's link order, and the only link
+	 * edge this engine ever creates points the other way (ours -> helpers). A
+	 * failure would mean that invariant had been broken, which is not something
+	 * to swallow while unmapping executable pages.
+	 */
+	cantFail (jit_->getExecutionSession ().removeJITDylibs (std::move (jds)));
+
+	return n;
 }
 
 LLVMContext &
@@ -709,7 +816,8 @@ CompileResult
 MonoLLVMJIT::compile (Function *entry,
                       ArrayRef<GlobalVariable *> callee_vars,
                       uint64_t *callee_addrs,
-                      StringRef eh_symbol)
+                      StringRef eh_symbol,
+                      void *owner)
 {
 	/* Snapshot the names we need to resolve. */
 	std::string entry_name = entry->getName ().str ();
@@ -743,14 +851,47 @@ MonoLLVMJIT::compile (Function *entry,
 	 */
 	auto &es = jit_->getExecutionSession ();
 	/*
-	 * createJITDylib (not bare) so the platform sets up the dylib for IR
-	 * materialization; a bare dylib segfaults on addIRModule. Its link order
-	 * gets only helpers_jd_ (explicit runtime helpers) - not the LLJIT main
-	 * dylib and its process-symbol generator.
+	 * createBareJITDylib, NOT createJITDylib.
+	 *
+	 * The difference is Platform::setupJITDylib (), which LLJIT's generic
+	 * LLVM-IR platform implements by adding a whole platform-runtime IR MODULE -
+	 * the __lljit.run_atexits/cxa_atexit machinery - to every dylib it sets up.
+	 * That module is never materialized here (nothing ever looks those symbols
+	 * up, and this engine never calls LLJIT::initialize), but it is retained for
+	 * the life of the dylib. Measured on `--regression generics.exe`, 866
+	 * promoted methods: createJITDylib retains 18.6 MB of heap, 22.0 KB per
+	 * method, against 132 KB of machine code for the whole run.
+	 * createBareJITDylib retains 76 KB across all 866 - 90 bytes each - and cuts
+	 * process RSS from 133.0 MB to 112.6 MB with the same 2054/2054 test result.
+	 *
+	 * What the platform setup would otherwise give us is the atexit/initializer
+	 * support and a __dso_handle definition. mono's JIT modules use none of it:
+	 * they have no global constructors and no cxa_atexit calls, and this engine
+	 * has no initialize()/deinitialize() call anywhere. (An earlier comment here
+	 * claimed a bare dylib "segfaults on addIRModule". That is not true of LLVM
+	 * 18.1.3 - the whole regression suite passes on bare dylibs.)
+	 *
+	 * A fresh dylib PER MODULE is still what we want, and is now nearly free. It
+	 * isolates per-method symbols that would otherwise collide across methods
+	 * (the auto-claimed __unnamed_N names, and the "mono_eh_frame" global), gives
+	 * the donor's per-module "findSymbolIn" lookup semantics, and - the point of
+	 * this change - makes the dylib the unit of reclamation. Its link order gets
+	 * only helpers_jd_ (explicit runtime helpers), not the LLJIT main dylib and
+	 * its process-symbol generator.
 	 */
 	std::string jd_name = "mono.jit." + std::to_string (module_counter_++);
-	JITDylib &jd = cantFail (es.createJITDylib (jd_name));
+	JITDylib &jd = es.createBareJITDylib (jd_name);
 	jd.addToLinkOrder (*helpers_jd_);
+
+	/*
+	 * Record the dylib against its owner BEFORE anything is materialized into
+	 * it, so that a release_owner () for this key can never miss a dylib that
+	 * already holds mapped code.
+	 */
+	if (owner) {
+		std::lock_guard<std::mutex> lock (owners_mutex_);
+		owners_[owner].push_back (&jd);
+	}
 
 	cantFail (jit_->addIRModule (jd, ThreadSafeModule (std::move (clone), tsctx_)));
 
@@ -877,7 +1018,6 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
                           gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out)
 {
 	(void) mono_ee;
-	(void) cfg;
 
 	auto *jit = mono::MonoLLVMJIT::get_singleton ();
 	auto *entry = llvm::unwrap<llvm::Function> (method);
@@ -889,7 +1029,15 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 
 	std::vector<uint64_t> addrs (nvars);
 
-	mono::CompileResult res = jit->compile (entry, vars, addrs.data (), "mono_eh_frame");
+	/*
+	 * cfg->domain is the lifetime key: it is the domain this method's code is
+	 * published into (mini_tiered_promote () swaps the body into
+	 * domain->jit_code_hash under that same domain), and mono_domain_free ()
+	 * destroys that domain's own code manager a few dozen lines after it calls
+	 * us back through mono_llvm_jit_release_domain ().
+	 */
+	mono::CompileResult res = jit->compile (entry, vars, addrs.data (), "mono_eh_frame",
+	                                        cfg ? cfg->domain : NULL);
 
 	for (int i = 0; i < nvars; ++i)
 		callee_addrs[i] = (gpointer) (gsize) addrs[i];
@@ -903,6 +1051,21 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 		*dwarf_eh_frame_size_out = (guint32) res.eh_frame.size;
 
 	return (gpointer) (gsize) res.entry;
+}
+
+guint32
+mono_llvm_jit_release_domain (MonoDomain *domain)
+{
+	/*
+	 * Nothing was ever JITted, so there is nothing to reclaim and no reason to
+	 * build an engine to discover that.
+	 */
+	mono::MonoLLVMJIT *jit = mono::MonoLLVMJIT::get_singleton_if_created ();
+
+	if (!jit || !domain)
+		return 0;
+
+	return (guint32) jit->release_owner (domain);
 }
 
 void
