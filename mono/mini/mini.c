@@ -4134,6 +4134,72 @@ static gpointer
 mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error);
 
 /*
+ * tiered_lookup_live_jinfo:
+ *
+ *   The MonoJitInfo METHOD is currently running out of in DOMAIN, or NULL.
+ *
+ * The plain jit_code_hash lookup misses generic-sharable methods, whose tier-0
+ * entry is keyed by the shared method rather than by METHOD - and those are a
+ * large share of the promotions that decline, since gshared is one of the
+ * backend's decline gates. Falling back the same way mini-runtime.c's
+ * lookup_method () does recovers them; measured, it takes the number of
+ * promotions with no findable live body from 24 to 0 on basic.exe and from 131
+ * to 0 on generics.exe.
+ */
+static MonoJitInfo *
+tiered_lookup_live_jinfo (MonoMethod *method, MonoDomain *domain)
+{
+	ERROR_DECL (error);
+	MonoJitInfo *ji;
+	MonoMethod *shared;
+
+	ji = mini_lookup_method (domain, method, NULL);
+	if (ji)
+		return ji;
+
+	if (!mono_method_is_generic_sharable (method, FALSE))
+		return NULL;
+
+	/*
+	 * Best-effort: this only decides which profiler event closes the begin, so a
+	 * failure here must not disturb the promotion. Swallow it and report
+	 * jit_failed.
+	 */
+	shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, error);
+	if (!is_ok (error)) {
+		mono_error_cleanup (error);
+		return NULL;
+	}
+
+	return mini_lookup_method (domain, method, shared);
+}
+
+/*
+ * tiered_promote_declined:
+ *
+ *   Close the jit_begin of a promotion that produced no published code. See the
+ * comment on TIER0_JINFO in mini_tiered_promote ().
+ *
+ * UNTESTED BRANCH: the jit_failed arm has never executed. TIER0_JINFO was
+ * non-NULL on every one of the >12,000 declined promotions measured across
+ * eight workloads (including a threaded + appdomain + throwing-cctor stress),
+ * i.e. a promotion has never yet been attempted for a method with no findable
+ * live body. It is kept because the caller cannot prove that invariant - the
+ * queue entry is only a (method, domain) pair, and nothing pins the tier-0 body
+ * between enqueue and drain - and because an unmatched begin is the defect this
+ * whole path exists to prevent. Treat it as unexercised if it ever starts
+ * firing.
+ */
+static void
+tiered_promote_declined (MonoMethod *method, MonoJitInfo *tier0_jinfo)
+{
+	if (tier0_jinfo)
+		MONO_PROFILER_RAISE (jit_done, (method, tier0_jinfo));
+	else
+		MONO_PROFILER_RAISE (jit_failed, (method));
+}
+
+/*
  * mini_tiered_promote:
  *
  *   Recompile METHOD through LLVM and publish the result as its terminal body.
@@ -4143,12 +4209,32 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
  * Returns FALSE when the backend declined the method (an EH-clause, gshared or
  * save_lmf gate) or the compile failed; the caller then latches tier 0 as
  * terminal so we never retry.
+ *
+ * PROFILER EVENTS. mini_method_compile () raises jit_begin, but jit_done and
+ * jit_failed are raised by mono_jit_compile_method_inner_1 (), which a promotion
+ * bypasses - so without the raises below every promotion leaves an unmatched
+ * begin, and profilers that pair the two leak an entry per promoted method.
+ * This function therefore owns the end event on all four of its exits.
+ *
+ * The begin is deliberately left where it is, at the real start of the compile,
+ * rather than being suppressed and re-raised adjacent to the end. Tier-1 LLVM
+ * compilation is where a tiered runtime spends nearly all of its compile budget
+ * - measured at ~95% of total JIT time on the mini regression workloads, with
+ * single promotions of 39ms against an entire tier-0 budget of 80ms - so an
+ * adjacent pair would report the runtime's most expensive compiles as costing
+ * zero, and invert the picture by leaving all attributed JIT time on the cheap
+ * tier-0 compiles. A begin at the true start also nests correctly around the
+ * compiles that this one's cctors trigger.
+ *
+ * Note the raises are arbitrary-code call sites inside the tiered_draining
+ * window; see task #26 on that window generally.
  */
 gboolean
 mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 {
 	MonoCompile *cfg;
 	MonoJitInfo *jinfo;
+	MonoJitInfo *tier0_jinfo;
 
 	/*
 	 * mini_init () only initializes LLVM when mono_use_llvm is set, i.e. when
@@ -4177,11 +4263,44 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 	 * which we then discard right below - the method already has an identical
 	 * tier-0 body, so that jinfo and its code are pure retention.
 	 */
+
+	/*
+	 * The body that is live right now, captured before the compile because it is
+	 * what a declined promotion leaves the method running. Every decline path
+	 * closes the jit_begin with jit_done (method, tier0_jinfo): the compilation
+	 * did end, and the method's code really does live at that address. Raising
+	 * jit_failed there instead would balance the books but lie - a declined
+	 * method is not a method that failed to JIT, it keeps a working tier-0 body,
+	 * and 19% of promotion attempts decline (149 of 783 on basic.exe), so a
+	 * profiler would report hundreds of bogus JIT failures under MONO_TIERED.
+	 *
+	 * Re-reporting a jinfo the profiler has already seen is safe rather than
+	 * merely tolerable: mono/profiler/log.c dedupes by MonoMethod in
+	 * register_method_local (), mono/profiler/aot.c dedupes when it writes, and
+	 * mono_de_add_pending_breakpoints () skips any breakpoint that already has a
+	 * BreakpointInstance for this exact ji, so the debugger agent is idempotent
+	 * here. vtune re-registers the unchanged range under a fresh method id, which
+	 * is redundant but not wrong - and, load-bearing, not inconsistent: both
+	 * JIT_FLAG_NO_LLVM_FALLBACK returns are upstream of mono_codegen (), hence
+	 * upstream of the mono_debug_close_method () inside it, so a declined
+	 * promotion leaves the tier-0 debug info in place and the re-reported range
+	 * still resolves to tier-0 line numbers. Were a decline ever moved after
+	 * codegen, this would start pairing tier-1 line numbers with tier-0
+	 * addresses.
+	 *
+	 * NULL only if the method has no findable entry in this domain's
+	 * jit_code_hash; that closes with jit_failed. Never observed - see
+	 * tiered_promote_declined ().
+	 */
+	tier0_jinfo = tiered_lookup_live_jinfo (method, domain);
+
 	mono_llvm_tiered_promote_begin ();
 	cfg = mini_method_compile (method, opt, domain, (JitFlags)(JIT_FLAG_RUN_CCTORS | JIT_FLAG_NO_LLVM_FALLBACK), 0, -1);
 	mono_llvm_tiered_promote_end ();
-	if (!cfg)
+	if (!cfg) {
+		tiered_promote_declined (method, tier0_jinfo);
 		return FALSE;
+	}
 
 	/*
 	 * !cfg->jit_info is the live half of this check: a generic-sharing failure
@@ -4193,6 +4312,7 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 	 */
 	if (cfg->exception_type != MONO_EXCEPTION_NONE || !cfg->compile_llvm || !cfg->jit_info) {
 		mono_destroy_compile (cfg);
+		tiered_promote_declined (method, tier0_jinfo);
 		return FALSE;
 	}
 
@@ -4221,12 +4341,56 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 	if (!mono_internal_hash_table_remove (&domain->jit_code_hash, method)) {
 		mono_domain_jit_code_hash_unlock (domain);
 		mono_destroy_compile (cfg);
+		/*
+		 * Closed like any other decline, not with jit_failed. The remove fails
+		 * precisely when the entry is keyed by the shared method rather than by
+		 * METHOD - which is the case tiered_lookup_live_jinfo ()'s fallback exists
+		 * to find, so there usually IS a live body here and reporting a JIT
+		 * failure for it would be the same lie the other exits refuse to tell.
+		 * jit_failed only when no body is findable at all.
+		 *
+		 * Unreachable today: gshared is declined at the !cfg exit long before
+		 * here, so this path is measured at 0 across every workload. It sits on
+		 * the path of task #15 (teaching the backend to accept gshared), which is
+		 * exactly when it starts firing with a non-NULL tier0_jinfo.
+		 *
+		 * Raised outside the hash lock - profiler callbacks run arbitrary code.
+		 */
+		tiered_promote_declined (method, tier0_jinfo);
 		return FALSE;
 	}
 	mono_internal_hash_table_insert (&domain->jit_code_hash, jinfo->d.method, jinfo);
 	mono_domain_jit_code_hash_unlock (domain);
 
 	mono_destroy_compile (cfg);
+
+	/*
+	 * Closes the jit_begin raised at the top of the promotion's
+	 * mini_method_compile (). Raised after the hash swap and the destroy, and
+	 * outside the hash lock, so a profiler that reacts to this by looking the
+	 * method up sees the tier-1 body, matching the ordering in
+	 * mono_jit_compile_method_inner_1 ().
+	 *
+	 * jit_done cannot express "recompiled at a higher tier" - its signature is
+	 * (method, jinfo) - so this is necessarily reported as a second compilation
+	 * of the method, which is what actually happened. What each consumer takes
+	 * from it differs, and only some learn the new code range: log.c dedupes by
+	 * MonoMethod, so it drops this event and its mlpd keeps the tier-0
+	 * code_start/code_size (635 of 868 methods have two distinct code starts
+	 * under tiering, so this is real data loss for log.c - though not a
+	 * regression, since before this event existed at all there was nothing to
+	 * drop). vtune does learn it: it allocates a fresh method id per callback and
+	 * mono_debug_add_method () has already replaced the tier-0 debug info.
+	 * mono_de_add_pending_breakpoints () also acts, inserting into the tier-1
+	 * body - without this event the debugger agent would leave breakpoints in the
+	 * dead tier-0 code.
+	 *
+	 * Unlike mono_jit_compile_method_inner_1 () no extra jit_done is raised for an
+	 * icall-wrapper alias or a shared prof_method: those aliases were reported at
+	 * tier 0, and a second one here would be an end with no begin - the very
+	 * imbalance this is fixing.
+	 */
+	MONO_PROFILER_RAISE (jit_done, (method, jinfo));
 
 	return TRUE;
 }
