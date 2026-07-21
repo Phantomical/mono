@@ -154,3 +154,10 @@ artifacts
 /builds/
 /tmp/
 external/buildscripts/build.gen.*
+
+# clangd compilation database (configure --enable-compile-commands)
+/compile_commands.json
+/bear-citnames.json
+/bearcc
+/bearcxx
+/.bear-events/

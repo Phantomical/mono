@@ -11,7 +11,38 @@ all: $(update_submodules)
 update_submodules:
 	@cd $(srcdir) && scripts/update_submodules.sh
 
-.PHONY: update_submodules
+.PHONY: update_submodules compile-commands
+
+if ENABLE_COMPILE_COMMANDS
+# Merge the per-compile event files dropped by the bearcc/bearcxx wrappers into
+# compile_commands.json.  Hooked to all-local rather than to `all:` so it runs
+# after all-recursive has descended into SUBDIRS -- prerequisites of `all:` are
+# unordered and would race the build under -j.
+#
+# citnames re-filters the entire database on every --append, so stale entries
+# for deleted sources are dropped as a side effect.  Consumed event files are
+# removed so the directory does not grow without bound.
+all-local: compile-commands
+
+compile-commands:
+	@events=`find $(BEAR_EVENTS_DIR) -name 'e-*.json' 2>/dev/null`; \
+	if test -z "$$events"; then \
+		echo "  GEN      compile_commands.json (no new events, up to date)"; \
+		exit 0; \
+	fi; \
+	echo "  GEN      compile_commands.json"; \
+	merged=$(BEAR_EVENTS_DIR)/merged.$$$$.json; \
+	cat $$events > $$merged || exit 1; \
+	append=; test -f $(top_builddir)/compile_commands.json && append=--append; \
+	if $(BEAR) citnames --input $$merged \
+			--output $(top_builddir)/compile_commands.json \
+			--config $(top_builddir)/bear-citnames.json $$append; then \
+		rm -f $$events $$merged; \
+	else \
+		rm -f $$merged; \
+		echo "  WARNING  bear citnames failed; compile_commands.json unchanged" >&2; \
+	fi
+endif
 
 EXTRA_DIST= \
 	README.md 		\
