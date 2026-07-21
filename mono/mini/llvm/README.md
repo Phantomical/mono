@@ -28,8 +28,12 @@ Legacy files being superseded:
   Keep that boundary surface minimal.
 
 ## Planned layout (fills in as the port lands)
-- `translator.cpp` — the ported IL→IR translator (donor: dotnet/runtime `mini-llvm.c`, which is
-  opaque-pointer-clean and `LLVM_API_VERSION >= 1400`), with AOT/llvmonly/non-amd64 removed.
+- `translator*.cpp` — the ported IL→IR translator (donor: dotnet/runtime `mini-llvm.c`, which is
+  opaque-pointer-clean and `LLVM_API_VERSION >= 1400`), with AOT/llvmonly/non-amd64 removed. It
+  arrived as one 9,496-line file and is now six translation units — `translator.cpp` (entry points,
+  `emit_method_inner`, JIT module), `-types`, `-emit`, `-call`, `-bb` (`process_bb` alone),
+  `-intrinsics` — sharing `translator-internal.hpp`, which documents the split. `-bb` is still
+  ~4,400 lines because `process_bb` is; carving *that* up is a code change, not a move.
 - `engine.cpp` (+ `engine.hpp`) — ORCv2 in-process JIT + `MonoJitMemoryManager`. `compile()`
   is **non-destructive**: it JITs a private clone of the caller's module and leaves the
   original intact (mono keeps using it after the call, e.g. `remove_gc_safepoint_poll`), and
