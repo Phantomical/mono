@@ -9398,6 +9398,72 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 }
 
 /*
+ * MONO_LLVM_METHOD: development/diagnostic filter restricting the LLVM path.
+ *
+ * When set, ONLY methods matching one of the ';'-separated descriptors are
+ * allowed onto the LLVM path; every other method falls back to the classic
+ * JIT. This is the inverse of the other gates in
+ * mono_llvm_check_method_supported(): those name what LLVM cannot do, this
+ * names the only thing it may attempt.
+ *
+ * It exists because running LLVM as the primary JIT compiles a method's
+ * callees on the same stack (nesting depth reached 70 on a hello-world),
+ * which exhausts the stack before anything executes. Restricting LLVM to a
+ * handful of methods keeps the nesting shallow, so an LLVM-compiled method
+ * can actually be run and its result checked. Tiered compilation removes the
+ * underlying recursion - tier 1 compiles methods whose callees are already
+ * tier-0 compiled - at which point this remains useful for bisecting a
+ * miscompile down to a single method.
+ *
+ * Descriptor syntax matches MONO_VERBOSE_METHOD: either a full
+ * 'Namespace.Class:Method' description, or a bare method name.
+ *
+ *   MONO_LLVM_METHOD='LlvmExec:Compute' mono --llvm test.exe
+ */
+static char **llvm_method_filter_names;
+static gboolean llvm_method_filter_inited;
+
+static gboolean
+llvm_method_filter_excludes (MonoMethod *method)
+{
+	int i;
+
+	/*
+	 * Lazy init, unsynchronized, exactly as MONO_VERBOSE_METHOD does it in
+	 * mini.c. Compilation is single-threaded today; a race would at worst
+	 * parse the variable twice and leak one strv.
+	 */
+	if (!llvm_method_filter_inited) {
+		char *env = g_getenv ("MONO_LLVM_METHOD");
+		if (env != NULL)
+			llvm_method_filter_names = g_strsplit (env, ";", -1);
+		llvm_method_filter_inited = TRUE;
+	}
+
+	if (!llvm_method_filter_names)
+		return FALSE;
+
+	for (i = 0; llvm_method_filter_names [i] != NULL; i++) {
+		const char *name = llvm_method_filter_names [i];
+
+		if ((strchr (name, '.') > name) || strchr (name, ':')) {
+			MonoMethodDesc *desc = mono_method_desc_new (name, TRUE);
+			if (desc) {
+				gboolean match = mono_method_desc_full_match (desc, method);
+				mono_method_desc_free (desc);
+				if (match)
+					return FALSE;
+			}
+		} else {
+			if (strcmp (method->name, name) == 0)
+				return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+/*
  * mono_llvm_check_method_supported:
  *
  *   Do some quick checks to decide whenever cfg->method can be compiled by LLVM, to avoid
@@ -9407,6 +9473,13 @@ void
 mono_llvm_check_method_supported (MonoCompile *cfg)
 {
 	int i, j;
+
+	/* Diagnostic filter (MONO_LLVM_METHOD); a no-op unless the variable is set. */
+	if (llvm_method_filter_excludes (cfg->method)) {
+		cfg->exception_message = g_strdup ("not selected by MONO_LLVM_METHOD");
+		cfg->disable_llvm = TRUE;
+		return;
+	}
 
 	/*
 	 * 3b EH gate: methods with exception-handling clauses are deferred to the
