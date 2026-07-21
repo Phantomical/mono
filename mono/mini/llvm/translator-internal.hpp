@@ -235,15 +235,22 @@ typedef struct {
 #endif
 
 #if MONO_LLVM_TRACE_FAILURE
-#define TRACE_FAILURE(ctx, msg) do {						\
-		char *trace_failure_name = mono_method_full_name ((ctx)->cfg->method, TRUE); \
+#define TRACE_FAILURE_CFG(cfg, msg) do {					\
+		char *trace_failure_name = mono_method_full_name ((cfg)->method, TRUE); \
 		printf ("[mono-llvm] disabling llvm for %s: %s\n", trace_failure_name, (msg)); \
 		fflush (stdout);						\
 		g_free (trace_failure_name);					\
 	} while (0)
 #else
-#define TRACE_FAILURE(ctx, msg) do { (void)(ctx); (void)(msg); } while (0)
+#define TRACE_FAILURE_CFG(cfg, msg) do { (void)(cfg); (void)(msg); } while (0)
 #endif
+
+/*
+ * set_failure() traces off the EmitContext; the pre-flight gate in
+ * mono_llvm_check_method_supported() only has a MonoCompile. Both funnel into
+ * TRACE_FAILURE_CFG so a trace log reads identically for either decline path.
+ */
+#define TRACE_FAILURE(ctx, msg) TRACE_FAILURE_CFG ((ctx)->cfg, msg)
 
 #ifdef TARGET_X86
 #define IS_TARGET_X86 1

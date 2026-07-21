@@ -156,6 +156,7 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 
 	/* Diagnostic filter (MONO_LLVM_METHOD); a no-op unless the variable is set. */
 	if (llvm_method_filter_excludes (cfg->method)) {
+		TRACE_FAILURE_CFG (cfg, "not selected by MONO_LLVM_METHOD");
 		cfg->exception_message = g_strdup ("not selected by MONO_LLVM_METHOD");
 		cfg->disable_llvm = TRUE;
 		return;
@@ -168,6 +169,7 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 	 * would mis-handle unwind. Remove this gate once EH consumption lands.
 	 */
 	if (cfg->header->num_clauses) {
+		TRACE_FAILURE_CFG (cfg, "EH clauses (deferred to classic JIT, 3b)");
 		cfg->exception_message = g_strdup ("EH clauses (deferred to classic JIT, 3b)");
 		cfg->disable_llvm = TRUE;
 		return;
@@ -202,12 +204,14 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 	 * - a large share of real hot paths - from the LLVM tier.
 	 */
 	if (cfg->gshared) {
+		TRACE_FAILURE_CFG (cfg, "gshared (needs the llvm_this_reg slot, 3c)");
 		cfg->exception_message = g_strdup ("gshared (needs the llvm_this_reg slot, 3c)");
 		cfg->disable_llvm = TRUE;
 		return;
 	}
 
 	if (cfg->method->save_lmf) {
+		TRACE_FAILURE_CFG (cfg, "lmf");
 		cfg->exception_message = g_strdup ("lmf");
 		cfg->disable_llvm = TRUE;
 	}
@@ -228,6 +232,7 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 			// FIXME: Nested try clauses fail in some cases too, i.e. #37273
 			if (i != j && clause1->try_offset >= clause2->try_offset && clause1->handler_offset <= clause2->handler_offset) {
 				//(clause1->flags == MONO_EXCEPTION_CLAUSE_FINALLY || clause2->flags == MONO_EXCEPTION_CLAUSE_FINALLY)) {
+				TRACE_FAILURE_CFG (cfg, "nested clauses");
 				cfg->exception_message = g_strdup ("nested clauses");
 				cfg->disable_llvm = TRUE;
 				break;
@@ -239,6 +244,7 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 
 	/* FIXME: */
 	if (cfg->method->dynamic) {
+		TRACE_FAILURE_CFG (cfg, "dynamic.");
 		cfg->exception_message = g_strdup ("dynamic.");
 		cfg->disable_llvm = TRUE;
 	}
