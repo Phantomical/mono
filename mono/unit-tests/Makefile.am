@@ -83,7 +83,10 @@ libtestlib_la_SOURCES = \
 	test-mono-callspec.c \
 	test-mono-string.c \
 	test-mono-embed.c \
-	test-embed-invoke.c 
+	test-embed-invoke.c
+if ENABLE_LLVM
+libtestlib_la_SOURCES += test-llvm-engine.c
+endif
 libtestlib_la_LIBADD = ../metadata/libmonoruntimesgen.la ../sgen/libmonosgen.la ../utils/libmonoutils.la
 
 test_sgen_qsort_SOURCES = main.c
@@ -139,6 +142,16 @@ test_embed_invoke_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) l
 test_embed_invoke_LDFLAGS = $(test_ldflags)
 test_embed_invoke_DEPENDENCIES = test-embed-invoke-cs.exe
 
+# The LLVM engine self-test. Statically pulls in libmini (which contains
+# engine.cpp) and links the internal LLVM archives via $(LLVMMONOF), same as the
+# other mini-linked tests above.
+if ENABLE_LLVM
+test_llvm_engine_SOURCES = main.c
+test_llvm_engine_CFLAGS = $(test_cflags) -DMAIN=test_llvm_engine_main
+test_llvm_engine_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-engine.lo
+test_llvm_engine_LDFLAGS = $(test_ldflags)
+endif
+
 
 check_PROGRAMS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-conc-hashtable test-mono-handle	\
 		 test-path \
@@ -147,6 +160,11 @@ check_PROGRAMS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-co
 TESTS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-conc-hashtable test-mono-handle \
 	test-path \
 	test-mono-callspec test-mono-string test-mono-embed test-embed-invoke
+
+if ENABLE_LLVM
+check_PROGRAMS += test-llvm-engine
+TESTS += test-llvm-engine
+endif
 
 AM_TESTS_ENVIRONMENT = export MONO_PATH=$(mcs_topdir)/class/lib/build;
 

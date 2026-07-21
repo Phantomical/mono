@@ -49,14 +49,10 @@ mono_llvm_free_domain_info (MonoDomain *domain)
 	/* Called on every domain teardown, even without --llvm: must be a no-op. */
 }
 
-void
-mono_llvm_set_unhandled_exception_handler (void)
-{
-	/*
-	 * Registered as a JIT icall at startup whenever ENABLE_LLVM is defined;
-	 * never actually invoked unless LLVM-compiled code runs.
-	 */
-}
+/*
+ * mono_llvm_set_unhandled_exception_handler now lives in engine.cpp (it is part
+ * of the engine surface); defining it here too would be a duplicate symbol.
+ */
 
 MonoCPUFeatures
 mono_llvm_get_cpu_features (void)

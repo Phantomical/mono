@@ -430,10 +430,14 @@ if ENABLE_LLVM
 # The legacy LLVM 6 backend sources (mini-llvm.c, mini-llvm-cpp.cpp,
 # llvm-jit.cpp) do not compile against unmodified system LLVM 18. They stay
 # in-tree but are excluded from the build; the new mono/mini/llvm/ backend
-# provides a stub behind an extern "C" boundary (backend.h) until the step-3
-# translator port replaces it.
+# replaces them incrementally. Landed so far:
+#   - engine.cpp/.hpp: the ORCv2 in-process JIT (LLVM 18) + self-test.
+#   - stub.cpp: the still-stubbed translator entry points (step 3b ports these).
+#   - backend.h: the extern "C" boundary the rest of mono links against.
 llvm_sources = \
 	llvm/backend.h \
+	llvm/engine.hpp \
+	llvm/engine.cpp \
 	llvm/stub.cpp
 endif
 

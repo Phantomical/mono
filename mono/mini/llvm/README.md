@@ -30,7 +30,10 @@ Legacy files being superseded:
 ## Planned layout (fills in as the port lands)
 - `translator.cpp` — the ported IL→IR translator (donor: dotnet/runtime `mini-llvm.c`, which is
   opaque-pointer-clean and `LLVM_API_VERSION >= 1400`), with AOT/llvmonly/non-amd64 removed.
-- `engine.cpp` (+ `engine.hpp`) — ORCv2 in-process JIT + `MonoJitMemoryManager`.
+- `engine.cpp` (+ `engine.hpp`) — ORCv2 in-process JIT + `MonoJitMemoryManager`. `compile()`
+  is **non-destructive**: it JITs a private clone of the caller's module and leaves the
+  original intact (mono keeps using it after the call, e.g. `remove_gc_safepoint_poll`), and
+  `mono_llvm_create_ee` returns `NULL` (there is no per-EE handle; the engine is a singleton).
 - `backend.h` — the single `extern "C"` entry-point header mono's C code includes.
 - `depatch.md` — running notes on removing the fork's dependence: `nest` attribute in place of
   `CallingConv::Mono`, consuming stock `.eh_frame`/`.gcc_except_table`.

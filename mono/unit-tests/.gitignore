@@ -16,3 +16,4 @@
 /test-path
 /test-mono-embed
 /test-embed-invoke
+/test-llvm-engine
