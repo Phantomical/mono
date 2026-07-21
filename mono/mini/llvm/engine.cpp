@@ -9,13 +9,15 @@
  * entry points at the bottom of this file - so step 3b's translator links
  * against it unchanged).
  *
- * Three parts:
+ * Two parts:
  *   1. The pure-LLVM engine core (class mono::MonoLLVMJIT + MonoJitMemoryManager).
- *   2. mono_llvm_engine_run_selftest(): an extern "C" self-test that builds
- *      hand-crafted modules, JITs them through the real compile() path and
- *      checks the results. Driven by mono/unit-tests/test-llvm-engine.c.
- *   3. The extern "C" mono boundary: thin adapters that unwrap the llvm-c
+ *   2. The extern "C" mono boundary: thin adapters that unwrap the llvm-c
  *      handles the translator passes and forward to the core.
+ *
+ * The engine's tests are NOT here. They used to be - three selftests behind a
+ * single extern "C" entry point, compiled into libmono in every build - and are
+ * now mono/unit-tests/test-llvm-engine.cpp, which drives the engine through
+ * engine.hpp and reports each check independently.
  */
 
 /*
@@ -98,33 +100,10 @@ struct ObjectInfo {
 
 /* ---- relocation audit ----------------------------------------------------
  *
- * The engine allocates JIT sections with a stock llvm::SectionMemoryManager,
- * which offers no low-address guarantee: in practice every section lands above
- * 4 GB, and code, rodata and eh_frame come from SEPARATE mmap'd blocks whose
- * distance from one another is likewise unbounded. That is only sound if the
- * emitted object references everything with 64-bit-wide relocations.
- *
- * It is not merely a style question, because RuntimeDyld does not fail cleanly
- * on a 32-bit overflow - RuntimeDyldELF::resolveX86_64Relocation guards the
- * narrow cases with a bare assert(), and the shipped LLVM 18.1.3 is built with
- * assertions OFF. An out-of-range value is therefore truncated silently and
- * the JIT jumps or loads through a bogus address.
- *
- * So instead of asking the target machine what code model it thinks it has
- * (which only ever reads back whatever we set - see host_target_machine_builder
- * below), the engine audits the relocations LLVM actually emitted. That is the
- * property that matters, and it is observable no matter how the code model got
- * chosen.
+ * See engine.hpp for what this guards and why the emitted relocations, rather
+ * than the target machine's reported code model, are the observable that is
+ * checked.
  */
-
-/* Tally over every object this process has JITted. */
-struct RelocAudit {
-	uint64_t total = 0;
-	/* Relocations that narrow a 64-bit address into a <= 32-bit field. */
-	uint64_t truncating = 0;
-	/* "<section>/<reloc type>" of the first offender, for diagnostics. */
-	std::string first_offender;
-};
 
 /*
  * Does this x86-64 relocation force a full 64-bit address through a field
@@ -186,16 +165,16 @@ x86_64_reloc_truncates_address (uint64_t type)
 }
 
 /*
- * Classify every relocation in `obj`.
+ * Classify every relocation in `obj`. Declared in engine.hpp.
  *
  * Returns an all-zero audit for anything that is not x86-64 ELF - not because
  * other targets are safe, but because the unsafe relocation set is per-ABI and
  * only x86-64 has been analysed. A port must extend
  * x86_64_reloc_truncates_address() (and the code-model choice below) before
- * this says anything about it. An all-zero audit is a "did not look", and the
- * self-test treats it as such rather than as a pass.
+ * this says anything about it. An all-zero audit is a "did not look", and
+ * test-llvm-engine.cpp treats it as such rather than as a pass.
  */
-static RelocAudit
+RelocAudit
 audit_relocations (const object::ObjectFile &obj)
 {
 	RelocAudit audit;
@@ -227,7 +206,7 @@ audit_relocations (const object::ObjectFile &obj)
 }
 
 /*
- * Running total across every JIT-emitted object, so the self-test can assert
+ * Running total across every JIT-emitted object, so the unit test can assert
  * on real compiled output rather than on a reconstruction. Accumulated from
  * the NotifyLoaded hook, which is why it is a lock-guarded global and not
  * thread-local (same reasoning as g_object_info below).
@@ -252,7 +231,7 @@ accumulate_reloc_audit (const object::ObjectFile &obj)
 	 * audit exists to catch, and on a release-mode LLVM nothing else would
 	 * report it. Warn rather than abort: the engine is a compiler backend and
 	 * killing the process on a diagnostic is worse than a wrong-looking JIT
-	 * that the self-test will fail on.
+	 * that the unit test will fail on.
 	 *
 	 * Worth knowing that this is a warning BEFORE the fact, not a post-mortem:
 	 * jitLinkForORC runs loadObject -> OnLoaded (which is what calls us) ->
@@ -266,7 +245,8 @@ accumulate_reloc_audit (const object::ObjectFile &obj)
 		         g_jit_reloc_audit.first_offender.c_str ());
 }
 
-static RelocAudit
+/* Declared in engine.hpp. */
+RelocAudit
 jit_reloc_audit ()
 {
 	std::lock_guard<std::mutex> lock (g_reloc_audit_mutex);
@@ -435,7 +415,8 @@ ensure_native_target ()
  * verbatim, so reading the model back off the target machine after pinning it
  * only proves that setCodeModel() works. The invariant is instead checked
  * where it is real - on the relocations of the emitted object, by
- * accumulate_reloc_audit() and selftest_reloc_widths().
+ * accumulate_reloc_audit() here and by the reloc-widths case in
+ * mono/unit-tests/test-llvm-engine.cpp.
  *
  * WHY THE GATE. This function is arch-agnostic (detectHost()) and engine.cpp
  * is built under a plain `if ENABLE_LLVM` with no arch condition, so it runs
@@ -477,7 +458,7 @@ ensure_native_target ()
  * analysing their relocation sets and, if needed, constraining allocation -
  * NOT pinning Large, which two of the three reject outright.
  */
-static JITTargetMachineBuilder
+JITTargetMachineBuilder
 host_target_machine_builder ()
 {
 	/*
@@ -826,318 +807,6 @@ MonoLLVMJIT::compile (Function *entry,
 }
 
 } // namespace mono
-
-/* ---- self-test ------------------------------------------------------------
- * Exercises the engine core end to end: builds hand-crafted modules, JITs them
- * through the real compile() path, calls the results, and checks the values.
- * Exposed as an extern "C" entry (mono_llvm_engine_run_selftest) so mono's C
- * unit-test harness (mono/unit-tests/test-llvm-engine.c) can drive it without
- * touching the LLVM C++ API. Returns 0 on success, non-zero on failure.
- */
-
-extern "C" int mono_llvm_engine_run_selftest (void);
-
-using namespace llvm;
-using mono::MonoLLVMJIT;
-
-namespace {
-
-/*
- * The runtime helper the second self-test registers. It has internal linkage
- * (static), so it is NOT a process symbol, and it is registered under a
- * deliberately un-mangled name that does not exist anywhere in the process.
- * Consequently: if the engine ever resolved externals via a process-symbol
- * search instead of our explicit register_symbol(), this name would fail to
- * resolve and the lookup inside compile() would abort. A passing call therefore
- * proves the JITed code reached exactly the pointer we registered - never a
- * process symbol.
- */
-static int64_t
-selftest_helper_impl (int64_t x)
-{
-	return x * 3 + 7;
-}
-
-static const char SELFTEST_HELPER_NAME[] = "mono$selftest$helper$absent_from_process";
-
-#define SELFTEST_CHECK(cond)                                                    \
-	do {                                                                    \
-		if (!(cond)) {                                                  \
-			fprintf (stderr, "mono llvm engine selftest FAILED: %s "\
-			         "(at %s:%d)\n", #cond, __FILE__, __LINE__);   \
-			return 1;                                              \
-		}                                                              \
-	} while (0)
-
-/* int64 add_i64(int64 a, int64 b) { return a + b; } */
-static int
-selftest_arithmetic (MonoLLVMJIT *jit)
-{
-	LLVMContext &ctx = jit->context ();
-	auto module = std::make_unique<Module> ("selftest.arith", ctx);
-	Type *i64 = Type::getInt64Ty (ctx);
-	FunctionType *fty = FunctionType::get (i64, {i64, i64}, false);
-	Function *fn = Function::Create (fty, Function::ExternalLinkage, "add_i64", module.get ());
-	BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
-	IRBuilder<> b (bb);
-	auto arg = fn->arg_begin ();
-	Value *a = &*arg++;
-	Value *c = &*arg;
-	b.CreateRet (b.CreateAdd (a, c));
-
-	/* compile() clones the module; our unique_ptr keeps owning the original and
-	 * frees it on scope exit - no release(), no leak, no double free. */
-	mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
-	uint64_t addr = res.entry;
-	SELFTEST_CHECK (addr != 0);
-	/* The size channel must report a real body, not silently zero. */
-	SELFTEST_CHECK (res.code_size > 0);
-	auto compiled = reinterpret_cast<int64_t (*) (int64_t, int64_t)> (addr);
-	SELFTEST_CHECK (compiled (20, 22) == 42);
-	SELFTEST_CHECK (compiled (-5, 5) == 0);
-	return 0;
-}
-
-/*
- * use_helper(x) = <registered helper>(x) + 1.
- * The IR's external callee is named SELFTEST_HELPER_NAME (absent from the
- * process) and registered to point at selftest_helper_impl (internal linkage).
- * Only our register_symbol() can satisfy that name, so correct results prove the
- * call resolved to the registered pointer, not to any process symbol.
- */
-static int
-selftest_registered_helper (MonoLLVMJIT *jit)
-{
-	jit->register_symbol (SELFTEST_HELPER_NAME, (void *) &selftest_helper_impl);
-
-	LLVMContext &ctx = jit->context ();
-	auto module = std::make_unique<Module> ("selftest.helper", ctx);
-	Type *i64 = Type::getInt64Ty (ctx);
-	FunctionType *helper_ty = FunctionType::get (i64, {i64}, false);
-	Function *helper = Function::Create (helper_ty, Function::ExternalLinkage,
-	                                     SELFTEST_HELPER_NAME, module.get ());
-	FunctionType *fty = FunctionType::get (i64, {i64}, false);
-	Function *fn = Function::Create (fty, Function::ExternalLinkage, "use_helper", module.get ());
-	BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
-	IRBuilder<> b (bb);
-	Value *x = &*fn->arg_begin ();
-	Value *called = b.CreateCall (helper, {x});
-	b.CreateRet (b.CreateAdd (called, ConstantInt::get (i64, 1)));
-
-	jit->optimize (fn); /* also exercise the optimizer */
-
-	/* compile() clones; keep owning the original (freed on scope exit). */
-	mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
-	uint64_t addr = res.entry;
-	SELFTEST_CHECK (addr != 0);
-	SELFTEST_CHECK (res.code_size > 0);
-	auto compiled = reinterpret_cast<int64_t (*) (int64_t)> (addr);
-	/* selftest_helper_impl(x) = x*3+7, then +1. Only reachable via registration. */
-	SELFTEST_CHECK (compiled (10) == 38); /* (10*3+7)+1 */
-	SELFTEST_CHECK (compiled (0) == 8);   /* (0*3+7)+1  */
-	return 0;
-}
-
-/*
- * The probe module the controls below emit. It deliberately forces every way
- * codegen has of materialising an address, because each is affected by the code
- * model differently and a probe that exercises only one gives the negative
- * control a single point of failure:
- *
- *   - an external DATA address       (load of an external global)
- *   - an external CODE address       (call to an external function)
- *   - an internal RODATA address     (a wide switch, so the backend builds a
- *                                     jump table and must address its base -
- *                                     the case that yields R_X86_64_32S under
- *                                     the small model)
- *   - a constant-pool address        (an FP constant with no immediate form)
- *
- * With all four, forcing the small model flags 3 relocations here rather than
- * the 1 a load+call probe produced. Real mono methods flag ~620 apiece, so this
- * is still the weakest link in the check; it is cheap insurance, not parity.
- */
-static void
-selftest_build_reloc_probe (Module &m)
-{
-	LLVMContext &ctx = m.getContext ();
-	Type *i64 = Type::getInt64Ty (ctx);
-	Type *dbl = Type::getDoubleTy (ctx);
-
-	auto *gv = new GlobalVariable (m, i64, false, GlobalValue::ExternalLinkage,
-	                               nullptr, "selftest_reloc_probe_data");
-	FunctionType *fty = FunctionType::get (i64, {i64}, false);
-	Function *callee = Function::Create (fty, Function::ExternalLinkage,
-	                                     "selftest_reloc_probe_callee", &m);
-	Function *fn = Function::Create (fty, Function::ExternalLinkage,
-	                                 "selftest_reloc_probe", &m);
-
-	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
-	BasicBlock *dflt = BasicBlock::Create (ctx, "default", fn);
-	IRBuilder<> b (entry);
-	Value *arg = &*fn->arg_begin ();
-	Value *loaded = b.CreateLoad (i64, gv);
-
-	/* Constant pool: 3.14159... has no immediate encoding. */
-	Value *fp = b.CreateFAdd (b.CreateSIToFP (arg, dbl),
-	                          ConstantFP::get (dbl, 3.14159265358979));
-	Value *fpi = b.CreateFPToSI (fp, i64);
-
-	/*
-	 * 40 dense cases is comfortably past the backend's jump-table threshold, so
-	 * this becomes a table lookup rather than a compare chain.
-	 */
-	const unsigned num_cases = 40;
-	SwitchInst *sw = b.CreateSwitch (arg, dflt, num_cases);
-	for (unsigned i = 0; i < num_cases; ++i) {
-		BasicBlock *bb = BasicBlock::Create (ctx, "case" + std::to_string (i), fn);
-		IRBuilder<> cb (bb);
-		cb.CreateRet (cb.CreateAdd (loaded, ConstantInt::get (i64, i * 7919)));
-		sw->addCase (ConstantInt::get (cast<IntegerType> (i64), i), bb);
-	}
-
-	IRBuilder<> db (dflt);
-	db.CreateRet (db.CreateCall (callee, {db.CreateAdd (loaded, fpi)}));
-}
-
-/*
- * Emit the probe module through a target machine that is identical to the
- * engine's except for the code model, and report what the auditor makes of the
- * result.
- */
-static Expected<mono::RelocAudit>
-selftest_audit_code_model (CodeModel::Model cm)
-{
-	auto jtmb = mono::host_target_machine_builder ();
-	jtmb.setCodeModel (cm);
-	auto tm = jtmb.createTargetMachine ();
-	if (!tm)
-		return tm.takeError ();
-
-	LLVMContext ctx;
-	Module m ("selftest.reloc", ctx);
-	m.setDataLayout ((*tm)->createDataLayout ());
-	selftest_build_reloc_probe (m);
-
-	SmallVector<char, 0> buf;
-	raw_svector_ostream os (buf);
-	legacy::PassManager pm;
-	if ((*tm)->addPassesToEmitFile (pm, os, nullptr, CodeGenFileType::ObjectFile))
-		return createStringError (inconvertibleErrorCode (),
-		                          "target cannot emit an object file");
-	pm.run (m);
-
-	auto obj = object::ObjectFile::createObjectFile (
-		MemoryBufferRef (StringRef (buf.data (), buf.size ()), "selftest.o"));
-	if (!obj)
-		return obj.takeError ();
-	return mono::audit_relocations (**obj);
-}
-
-/*
- * Guards the invariant the stock SectionMemoryManager depends on: nothing this
- * engine emits may squeeze a 64-bit address into a 32-bit field.
- *
- * WHY NOT JUST READ BACK THE CODE MODEL. Because that check is vacuous.
- * X86TargetMachine::getEffectiveCodeModel returns a requested model verbatim,
- * so once host_target_machine_builder() pins Large, asking the target machine
- * what model it has can only ever answer "Large" - deleting the pin does not
- * change the answer, because on x86-64 the JIT default is Large as well. The
- * relocations of the emitted object are the observable that actually moves.
- *
- * Three parts, in order:
- *
- *   1. NEGATIVE CONTROL. Emit the probe with the code model forced to Small and
- *      require the auditor to flag something. Without this the check could pass
- *      by being blind, which is precisely how its predecessor passed.
- *
- *      WHY THE CHECK IS WIDER THAN R_X86_64_32/32S. Most of what small-model
- *      codegen emits here is NOT an absolute 32-bit relocation: measured over a
- *      603-module corpus of real mono methods forced to Small, the counts were
- *      REX_GOTPCRELX 3199, PC32 617 (603 in .eh_frame, 14 in .text), PLT32 10,
- *      R_X86_64_64 18 - and only 3 R_X86_64_32S. A 32/32S-only check would
- *      therefore have caught 3 modules out of 603 and missed the per-function
- *      .eh_frame PC32 entirely. Hence PC32 is in the set.
- *
- *      Data and code go through the GOT/PLT here despite the JIT's relocation
- *      model being STATIC, not PIC: mono's globals and callees are external and
- *      not dso_local, and ELF lowering routes those indirectly regardless of
- *      relocation model. See the exclusion note on those relocations above.
- *   2. POSITIVE CONTROL. The same probe under Large must come back clean, and
- *      with a non-zero relocation count so a silent "found nothing to look at"
- *      cannot masquerade as a pass.
- *   3. THE JIT'S OWN OUTPUT. The audit accumulated from every object this
- *      process JITted, via the NotifyLoaded hook. Scope this honestly: inside
- *      the unit-test binary the only such objects are the two tiny modules the
- *      selftests above built, so this part mostly proves the accumulator is
- *      wired up and reaches the real compile path. The coverage that matters
- *      comes from the same audit running always-on in the real runtime, where
- *      accumulate_reloc_audit() warns on stderr at the first offender - and it
- *      does so from OnLoaded, i.e. before RTDyld's resolveRelocations performs
- *      the truncating write, so that warning precedes the corruption rather
- *      than reporting it afterwards.
- *
- * SKIPPED off x86-64 ELF: the unsafe relocation set is per-ABI and only
- * x86-64's has been analysed (see x86_64_reloc_truncates_address). Reporting a
- * pass there would be claiming coverage that does not exist.
- */
-static int
-selftest_reloc_widths (void)
-{
-	Triple host (sys::getProcessTriple ());
-	if (host.getArch () != Triple::x86_64 || !host.isOSBinFormatELF ()) {
-		fprintf (stderr, "mono llvm engine selftest: relocation-width check "
-		         "SKIPPED, host %s is not x86-64 ELF\n", host.str ().c_str ());
-		return 0;
-	}
-
-	auto small = selftest_audit_code_model (CodeModel::Small);
-	if (!small) {
-		fprintf (stderr, "mono llvm engine selftest FAILED: small-model probe: %s\n",
-		         toString (small.takeError ()).c_str ());
-		return 1;
-	}
-	SELFTEST_CHECK (small->truncating > 0);
-
-	auto large = selftest_audit_code_model (CodeModel::Large);
-	if (!large) {
-		fprintf (stderr, "mono llvm engine selftest FAILED: large-model probe: %s\n",
-		         toString (large.takeError ()).c_str ());
-		return 1;
-	}
-	SELFTEST_CHECK (large->total > 0);
-	SELFTEST_CHECK (large->truncating == 0);
-
-	mono::RelocAudit jitted = mono::jit_reloc_audit ();
-	SELFTEST_CHECK (jitted.total > 0);
-	if (jitted.truncating != 0) {
-		fprintf (stderr, "mono llvm engine selftest FAILED: %llu of %llu "
-		         "relocations in JITted objects truncate a 64-bit address "
-		         "(first: %s)\n",
-		         (unsigned long long) jitted.truncating,
-		         (unsigned long long) jitted.total,
-		         jitted.first_offender.c_str ());
-		return 1;
-	}
-	return 0;
-}
-
-#undef SELFTEST_CHECK
-
-} // namespace
-
-extern "C" int
-mono_llvm_engine_run_selftest (void)
-{
-	MonoLLVMJIT *jit = MonoLLVMJIT::get_singleton ();
-	int rc = selftest_arithmetic (jit);
-	if (rc)
-		return rc;
-	rc = selftest_registered_helper (jit);
-	if (rc)
-		return rc;
-	/* Last: it inspects the relocations of everything compiled above. */
-	return selftest_reloc_widths ();
-}
 
 /* ==========================================================================
  * extern "C" mono boundary. Thin adapters over mono::MonoLLVMJIT; the method-

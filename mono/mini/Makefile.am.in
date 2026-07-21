@@ -431,7 +431,8 @@ if ENABLE_LLVM
 # llvm-jit.cpp) do not compile against unmodified system LLVM 18. They stay
 # in-tree but are excluded from the build; the mono/mini/llvm/ backend
 # replaces them:
-#   - engine.cpp/.hpp: the ORCv2 in-process JIT (LLVM 18) + self-test.
+#   - engine.cpp/.hpp: the ORCv2 in-process JIT (LLVM 18). Its tests are in
+#     mono/unit-tests/test-llvm-engine.cpp and are NOT built into libmono.
 #   - translator.cpp: the IL -> LLVM IR translator (forward-ported from
 #     mini-llvm.c to unmodified LLVM 18).
 #   - translator-cpp.cpp/.hpp: the C++ shim over the LLVM C++ API that the

@@ -27,8 +27,12 @@
 
 /*
  * Declared here rather than by including llvm/backend.h: that header resolves
- * "mini.h" relative to its own directory, which does not work from here. Same
- * approach as test-llvm-engine.c.
+ * "mini.h" relative to its own directory, which does not work from here.
+ *
+ * (test-llvm-engine.cpp does NOT do this - it is a C++ TU and includes
+ * mono/mini/llvm/engine.hpp directly. This file stays C because the transcoder
+ * it exercises is reachable through the plain extern "C" boundary and needs no
+ * LLVM headers at all.)
  */
 gboolean mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_size,
 					   gpointer code_start, guint32 code_len,

@@ -103,13 +103,6 @@ gboolean  mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_s
 void      mono_llvm_jit_register_symbol (const char *name, void *addr);
 
 /*
- * Engine self-test. Builds hand-crafted LLVM modules, JITs them through the real
- * engine path, calls the results and checks them. Returns 0 on success, non-zero
- * on failure. Driven by mono/unit-tests/test-llvm-engine.c.
- */
-int       mono_llvm_engine_run_selftest (void);
-
-/*
  * Tiered compilation (tiered.cpp). Tier 0 is the classic JIT; a method is
  * queued for tier 1 on a successful tier-0 compile and promoted once the
  * compile nesting unwinds to zero, so LLVM codegen never runs on a deep

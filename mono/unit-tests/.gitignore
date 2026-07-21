@@ -17,4 +17,5 @@
 /test-mono-embed
 /test-embed-invoke
 /test-llvm-engine
+/test-llvm-reloc-widths
 /test-llvm-ehframe

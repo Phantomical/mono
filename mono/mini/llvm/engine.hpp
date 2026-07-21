@@ -2,9 +2,10 @@
  * \file
  * engine.hpp - C++-only interface for the ORCv2 in-process JIT engine.
  *
- * This header is consumed ONLY within mono/mini/llvm/ (by engine.cpp and the
- * engine unit test). It exposes LLVM C++ types, so it must never be included by
- * mono's C sources - those go through the extern "C" boundary in backend.h.
+ * This header is consumed ONLY by engine.cpp and by mono/unit-tests/
+ * test-llvm-engine.cpp. It exposes LLVM C++ types, so it must never be included
+ * by mono's C sources - those go through the extern "C" boundary in backend.h,
+ * which is deliberately kept small and must NOT grow to serve tests.
  *
  * The engine is the LLVM-18 replacement for the *execution-engine* half of the
  * legacy mono/mini/llvm-jit.cpp (MCJIT/RuntimeDyld). It is built on LLJIT/ORCv2
@@ -18,9 +19,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 
@@ -28,6 +31,9 @@ namespace llvm {
 class Function;
 class GlobalVariable;
 class LLVMContext;
+namespace object {
+class ObjectFile;
+} // namespace object
 } // namespace llvm
 
 namespace mono {
@@ -147,6 +153,65 @@ private:
 	llvm::orc::JITDylib *helpers_jd_ = nullptr;
 	uint64_t module_counter_ = 0;
 };
+
+/* ---- relocation audit ----------------------------------------------------
+ *
+ * The engine allocates JIT sections with a stock llvm::SectionMemoryManager,
+ * which offers no low-address guarantee: in practice every section lands above
+ * 4 GB, and code, rodata and eh_frame come from SEPARATE mmap'd blocks whose
+ * distance from one another is likewise unbounded. That is only sound if the
+ * emitted object references everything with 64-bit-wide relocations.
+ *
+ * It is not merely a style question, because RuntimeDyld does not fail cleanly
+ * on a 32-bit overflow - RuntimeDyldELF::resolveX86_64Relocation guards the
+ * narrow cases with a bare assert(), and the shipped LLVM 18.1.3 is built with
+ * assertions OFF. An out-of-range value is therefore truncated silently and
+ * the JIT jumps or loads through a bogus address.
+ *
+ * So instead of asking the target machine what code model it thinks it has
+ * (which only ever reads back whatever we set), the engine audits the
+ * relocations LLVM actually emitted. That is the property that matters, and it
+ * is observable no matter how the code model got chosen. Which relocations
+ * count as unsafe, and the false-negative gap in that set, are documented on
+ * x86_64_reloc_truncates_address() in engine.cpp.
+ *
+ * These three entry points are part of the intra-directory interface only
+ * because mono/unit-tests/test-llvm-engine.cpp drives them; nothing outside
+ * mono/mini/llvm/ and that test may use them.
+ */
+
+/* Tally over a set of objects. */
+struct RelocAudit {
+	uint64_t total = 0;
+	/* Relocations that narrow a 64-bit address into a <= 32-bit field. */
+	uint64_t truncating = 0;
+	/* "<section>/<reloc type>" of the first offender, for diagnostics. */
+	std::string first_offender;
+};
+
+/*
+ * Classify every relocation in `obj`.
+ *
+ * Returns an all-zero audit for anything that is not x86-64 ELF - not because
+ * other targets are safe, but because the unsafe relocation set is per-ABI and
+ * only x86-64 has been analysed. An all-zero audit is a "did not look", and
+ * callers must treat it as such rather than as a pass.
+ */
+RelocAudit audit_relocations (const llvm::object::ObjectFile &obj);
+
+/*
+ * The running total across every object this process has JITted, accumulated
+ * from the object layer's NotifyLoaded hook.
+ */
+RelocAudit jit_reloc_audit ();
+
+/*
+ * The target machine configuration the engine itself JITs with (host CPU and
+ * features, O3, and the pinned code model on x86-64). Exposed so the test can
+ * emit a probe object through an otherwise-identical target machine with only
+ * the code model varied.
+ */
+llvm::orc::JITTargetMachineBuilder host_target_machine_builder ();
 
 } // namespace mono
 

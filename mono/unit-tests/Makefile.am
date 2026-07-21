@@ -26,6 +26,10 @@ CCLD=$(MONO_CXXLD)
 # references (llvm::*, __jit_debug_*) go unresolved at link time.
 if ENABLE_LLVM
 include $(mono_build_root)/llvm/llvm_config.mk
+# test-llvm-engine.cpp includes mono/mini/llvm/engine.hpp, which exposes LLVM
+# C++ types, so it needs the same include path/-std as mono/mini uses for
+# mono/mini/llvm/*.cpp.
+LLVM_CXXFLAGS=$(LLVM_CXXFLAGS_INTERNAL) $(LLVM_CXXFLAGS_EXTERNAL)
 LLVM_LDFLAGS=$(LLVM_LDFLAGS_INTERNAL) $(LLVM_LDFLAGS_EXTERNAL)
 LLVM_LIBS=$(LLVM_LIBS_INTERNAL) $(LLVM_LIBS_EXTERNAL)
 
@@ -85,8 +89,16 @@ libtestlib_la_SOURCES = \
 	test-mono-embed.c \
 	test-embed-invoke.c
 if ENABLE_LLVM
-libtestlib_la_SOURCES += test-llvm-engine.c
+# test-llvm-engine.cpp is the one C++ source in this otherwise-C library: it
+# includes mono/mini/llvm/engine.hpp and drives the engine through its C++
+# interface, so the engine's tests live here instead of shipping inside libmono.
+# automake handles the mixed library on its own. libtestlib_la_CXXFLAGS applies
+# to it alone (it is the only .cpp here) and supplies the -std=c++17 and include
+# path LLVM 18 headers need - the same LLVM_CXXFLAGS mono/mini uses to build
+# mono/mini/llvm/*.cpp.
+libtestlib_la_SOURCES += test-llvm-engine.cpp
 libtestlib_la_SOURCES += test-llvm-ehframe.c
+libtestlib_la_CXXFLAGS = $(LLVM_CXXFLAGS)
 endif
 libtestlib_la_LIBADD = ../metadata/libmonoruntimesgen.la ../sgen/libmonosgen.la ../utils/libmonoutils.la
 
@@ -143,18 +155,31 @@ test_embed_invoke_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) l
 test_embed_invoke_LDFLAGS = $(test_ldflags)
 test_embed_invoke_DEPENDENCIES = test-embed-invoke-cs.exe
 
-# The LLVM engine self-test. Statically pulls in libmini (which contains
-# engine.cpp) and links the internal LLVM archives via $(LLVMMONOF), same as the
-# other mini-linked tests above.
+# The LLVM engine tests. Statically pull in libmini (which contains engine.cpp)
+# and link the internal LLVM archives via $(LLVMMONOF), same as the other
+# mini-linked tests above.
 if ENABLE_LLVM
 test_llvm_engine_SOURCES = main.c
 test_llvm_engine_CFLAGS = $(test_cflags) -DMAIN=test_llvm_engine_main
 test_llvm_engine_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-engine.lo
+test_llvm_engine_LDFLAGS = $(test_ldflags)
+
+# The relocation-width check gets its OWN program, built from the same object
+# via main.c's -DMAIN shim. It is the one check that can legitimately not run
+# (its relocation classifier covers x86-64 ELF only), and automake resolves one
+# result per TESTS program: only a program of its own can exit 77 and be counted
+# under "# SKIP:". Aggregated into test-llvm-engine it reported "# SKIP: 0" and
+# a green board while testing nothing. See the entry-point comment in
+# test-llvm-engine.cpp.
+test_llvm_reloc_widths_SOURCES = main.c
+test_llvm_reloc_widths_CFLAGS = $(test_cflags) -DMAIN=test_llvm_reloc_widths_main
+test_llvm_reloc_widths_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-engine.lo
+test_llvm_reloc_widths_LDFLAGS = $(test_ldflags)
 
 test_llvm_ehframe_SOURCES = main.c
 test_llvm_ehframe_CFLAGS = $(test_cflags) -DMAIN=test_llvm_ehframe_main
 test_llvm_ehframe_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-ehframe.lo
-test_llvm_engine_LDFLAGS = $(test_ldflags)
+test_llvm_ehframe_LDFLAGS = $(test_ldflags)
 endif
 
 
@@ -167,8 +192,8 @@ TESTS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-conc-hashta
 	test-mono-callspec test-mono-string test-mono-embed test-embed-invoke
 
 if ENABLE_LLVM
-check_PROGRAMS += test-llvm-engine test-llvm-ehframe
-TESTS += test-llvm-engine test-llvm-ehframe
+check_PROGRAMS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe
+TESTS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe
 endif
 
 AM_TESTS_ENVIRONMENT = export MONO_PATH=$(mcs_topdir)/class/lib/build;
