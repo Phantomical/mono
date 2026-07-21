@@ -17,7 +17,7 @@
 void
 set_failure (EmitContext *ctx, const char *message)
 {
-	TRACE_FAILURE (reason);
+	TRACE_FAILURE (ctx, message);
 	ctx->cfg->exception_message = g_strdup (message);
 	ctx->cfg->disable_llvm = TRUE;
 }

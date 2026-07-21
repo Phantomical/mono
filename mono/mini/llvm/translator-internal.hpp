@@ -231,10 +231,24 @@ typedef struct {
 
 #define LLVM_INS_INFO(opcode) (&mini_llvm_ins_info [((opcode) - OP_START - 1) * 4])
 
-#if 0
-#define TRACE_FAILURE(msg) do { printf ("%s\n", msg); } while (0)
+/*
+ * Set to 1 to log every method the translator bails out on, together with the
+ * reason recorded in cfg->exception_message. Can also be defined on the command
+ * line: make CXXFLAGS='... -DMONO_LLVM_TRACE_FAILURE=1'.
+ */
+#ifndef MONO_LLVM_TRACE_FAILURE
+#define MONO_LLVM_TRACE_FAILURE 0
+#endif
+
+#if MONO_LLVM_TRACE_FAILURE
+#define TRACE_FAILURE(ctx, msg) do {						\
+		char *trace_failure_name = mono_method_full_name ((ctx)->cfg->method, TRUE); \
+		printf ("[mono-llvm] disabling llvm for %s: %s\n", trace_failure_name, (msg)); \
+		fflush (stdout);						\
+		g_free (trace_failure_name);					\
+	} while (0)
 #else
-#define TRACE_FAILURE(msg)
+#define TRACE_FAILURE(ctx, msg) do { (void)(ctx); (void)(msg); } while (0)
 #endif
 
 #ifdef TARGET_X86
