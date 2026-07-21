@@ -86,6 +86,7 @@ libtestlib_la_SOURCES = \
 	test-embed-invoke.c
 if ENABLE_LLVM
 libtestlib_la_SOURCES += test-llvm-engine.c
+libtestlib_la_SOURCES += test-llvm-ehframe.c
 endif
 libtestlib_la_LIBADD = ../metadata/libmonoruntimesgen.la ../sgen/libmonosgen.la ../utils/libmonoutils.la
 
@@ -149,6 +150,10 @@ if ENABLE_LLVM
 test_llvm_engine_SOURCES = main.c
 test_llvm_engine_CFLAGS = $(test_cflags) -DMAIN=test_llvm_engine_main
 test_llvm_engine_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-engine.lo
+
+test_llvm_ehframe_SOURCES = main.c
+test_llvm_ehframe_CFLAGS = $(test_cflags) -DMAIN=test_llvm_ehframe_main
+test_llvm_ehframe_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-ehframe.lo
 test_llvm_engine_LDFLAGS = $(test_ldflags)
 endif
 
@@ -162,8 +167,8 @@ TESTS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-conc-hashta
 	test-mono-callspec test-mono-string test-mono-embed test-embed-invoke
 
 if ENABLE_LLVM
-check_PROGRAMS += test-llvm-engine
-TESTS += test-llvm-engine
+check_PROGRAMS += test-llvm-engine test-llvm-ehframe
+TESTS += test-llvm-engine test-llvm-ehframe
 endif
 
 AM_TESTS_ENVIRONMENT = export MONO_PATH=$(mcs_topdir)/class/lib/build;

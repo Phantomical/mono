@@ -64,8 +64,36 @@ void      mono_llvm_optimize_method (LLVMValueRef method);
  * deliberately: the size is discovered by the object layer on whichever thread
  * materializes the module, which stops being the calling thread as soon as the
  * JIT is given compile threads.
+ *
+ * dwarf_eh_frame_out / dwarf_eh_frame_size_out (both may be NULL) receive the
+ * stock DWARF .eh_frame SECTION emitted for this module - not a per-function
+ * FDE, so the caller must locate the FDE whose initial_location matches the
+ * method (a module can hold more than one function). It is transcoded into
+ * cfg->encoded_unwind_ops; see llvm/ehframe.hpp.
  */
-gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out);
+gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out);
+
+/*
+ * Transcode the stock DWARF .eh_frame LLVM emits into mono's unwind ops.
+ *
+ * Finds the FDE describing [code_start, code_start + code_len) inside the
+ * .eh_frame section at EH_FRAME and translates its CFI program, together with
+ * the initial rules from its CIE, into a GSList of MonoUnwindOp*. The result is
+ * ordered by code offset and contains only opcodes mono_unwind_ops_encode_full()
+ * can encode and mono_unwind_frame() can execute. See llvm/ehframe.cpp for why
+ * this transcodes rather than copying the CFI bytes.
+ *
+ * Returns TRUE and stores the list in *out_ops. Returns FALSE if the section is
+ * malformed, no FDE matches, or the CFI uses something that cannot be
+ * represented - in which case the caller must decline the method rather than
+ * publish a frame with no unwind information.
+ *
+ * Exposed on this boundary (rather than kept internal to the module) so the
+ * mono/unit-tests transcoder test can drive it with synthetic CIE/FDE buffers:
+ * the restore, remember_state, restore_state and undefined paths cannot be
+ * reached from managed code on x86-64.
+ */
+gboolean  mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_size, gpointer code_start, guint32 code_len, GSList **out_ops);
 
 /*
  * Explicit runtime-helper registration (ORCv2 absoluteSymbols), replacing the

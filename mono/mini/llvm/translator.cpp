@@ -12147,7 +12147,9 @@ llvm_jit_finalize_method (EmitContext *ctx)
 
 	mono_codeman_enable_write ();
 	guint32 llvm_code_size = 0;
-	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size);
+	gpointer dwarf_eh_frame = NULL;
+	guint32 dwarf_eh_frame_size = 0;
+	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size);
 	mono_llvm_remove_gc_safepoint_poll (ctx->lmodule);
 	mono_codeman_disable_write ();
 	if (cfg->verbose_level > 1) {
@@ -12184,19 +12186,13 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 *    method at all (g_assert (ji) in mini-runtime.c). The size comes from the
 	 *    emitted object's ELF symbol table, returned by mono_llvm_compile_method().
 	 *
-	 * 2. cfg->encoded_unwind_ops - STILL MISSING. mini.c then falls back to
-	 *    cfg->unwind_ops, which is empty for an LLVM-compiled method, so the
-	 *    jinfo gets an effectively empty unwind descriptor. This does NOT fail
-	 *    safe: a frame needs unwind info even with no EH clauses of its own,
-	 *    because GC stack scanning walks through it and exceptions thrown by
-	 *    callees propagate through it.
-	 *
-	 *    THE NEXT STEP MUST RESTORE THIS by transcoding the stock DWARF
-	 *    .eh_frame into mono's unwind ops (design 3.1): decode into a
-	 *    GSList<MonoUnwindOp> and re-encode via mono_unwind_ops_encode_full().
-	 *    mono_unwind_decode_fde() (unwind.c:1024) is already a complete standard
-	 *    CIE+FDE parser and currently has zero callers. The engine already
-	 *    locates the section and reports it in mono::CompileResult::eh_frame.
+	 * 2. cfg->encoded_unwind_ops - RESTORED HERE, by transcoding the stock DWARF
+	 *    .eh_frame LLVM emits (see llvm/ehframe.cpp). Without it mini.c falls
+	 *    back to cfg->unwind_ops, which is empty for an LLVM-compiled method, so
+	 *    the jinfo would get an effectively empty unwind descriptor - and that
+	 *    does NOT fail safe: a frame needs unwind info even with no EH clauses
+	 *    of its own, because GC stack scanning walks through it and exceptions
+	 *    thrown by callees propagate through it.
 	 *
 	 * 3. cfg->llvm_this_reg - not needed while generic-shared methods are gated
 	 *    out of the LLVM path in mono_llvm_check_method_supported ().
@@ -12207,6 +12203,30 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * emitted method always has a non-empty body.
 	 */
 	g_assert (cfg->code_len > 0);
+
+	{
+		GSList *unwind_ops = NULL;
+
+		if (!mono_llvm_eh_frame_to_unwind_ops ((guint8*)dwarf_eh_frame, dwarf_eh_frame_size,
+						       cfg->native_code, cfg->code_len, &unwind_ops)) {
+			/*
+			 * No usable FDE, or CFI we cannot represent. Publishing the method
+			 * with no unwind information is the one outcome we must avoid, so
+			 * bail out and let the classic JIT compile it instead.
+			 */
+			set_failure (ctx, "no usable DWARF unwind info");
+			return;
+		}
+
+		cfg->encoded_unwind_ops = mono_unwind_ops_encode_full (unwind_ops, &cfg->encoded_unwind_ops_len, FALSE);
+		mono_free_unwind_info (unwind_ops);
+
+		if (cfg->verbose_level > 1) {
+			g_print ("UNWIND INFO FOR %s:\n", mono_method_full_name (cfg->method, TRUE));
+			mono_print_unwind_info (cfg->encoded_unwind_ops, cfg->encoded_unwind_ops_len);
+			g_print ("\n");
+		}
+	}
 
 	mono_domain_lock (domain);
 	domain_info = domain_jit_info (domain);

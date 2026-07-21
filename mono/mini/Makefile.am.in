@@ -444,6 +444,7 @@ llvm_sources = \
 	llvm/engine.cpp \
 	llvm/translator-cpp.hpp \
 	llvm/translator-cpp.cpp \
+	llvm/ehframe.cpp \
 	llvm/translator.cpp
 endif
 

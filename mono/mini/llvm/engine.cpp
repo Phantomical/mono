@@ -739,7 +739,8 @@ mono_llvm_optimize_method (LLVMValueRef method)
 gpointer
 mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method,
                           int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs,
-                          gpointer *eh_frame, guint32 *code_size_out)
+                          gpointer *eh_frame, guint32 *code_size_out,
+                          gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out)
 {
 	(void) mono_ee;
 	(void) cfg;
@@ -762,6 +763,10 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 		*eh_frame = (gpointer) (gsize) res.mono_eh_frame;
 	if (code_size_out)
 		*code_size_out = (guint32) res.code_size;
+	if (dwarf_eh_frame_out)
+		*dwarf_eh_frame_out = (gpointer) res.eh_frame.addr;
+	if (dwarf_eh_frame_size_out)
+		*dwarf_eh_frame_size_out = (guint32) res.eh_frame.size;
 
 	return (gpointer) (gsize) res.entry;
 }
