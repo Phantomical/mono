@@ -4515,8 +4515,15 @@ mini_init (const char *filename, const char *runtime_version)
 #endif
 
 #ifdef ENABLE_LLVM
+	/*
+	 * Go through mini_llvm_init (), not mono_llvm_init () directly: the latter
+	 * unconditionally reallocates intrins_id_to_intrins, so a second call
+	 * discards every intrinsic registered by the first and leaks the table.
+	 * Tiering initializes LLVM lazily on its first promotion, so with --llvm and
+	 * MONO_TIERED together this would otherwise be initialized twice.
+	 */
 	if (mono_use_llvm)
-		mono_llvm_init (!mono_compile_aot);
+		mini_llvm_init ();
 #endif
 
 	mono_trampolines_init ();

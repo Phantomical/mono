@@ -87,9 +87,13 @@
 /* Tiering lives in the LLVM backend; without it every hook is a no-op. */
 #define mono_llvm_tiered_enabled() FALSE
 #define mono_llvm_tiered_in_promotion() FALSE
+#define mono_llvm_tiered_promote_begin() do { } while (0)
+#define mono_llvm_tiered_promote_end() do { } while (0)
+#define mono_llvm_tiered_promotion_suspend() FALSE
+#define mono_llvm_tiered_promotion_restore(o) do { (void)(o); } while (0)
 #define mono_llvm_tiered_compile_begin() do { } while (0)
 #define mono_llvm_tiered_compile_end() do { } while (0)
-#define mono_llvm_tiered_enqueue(m,o) do { (void)(m); (void)(o); } while (0)
+#define mono_llvm_tiered_enqueue(m,d,o) do { (void)(m); (void)(d); (void)(o); } while (0)
 #endif
 #include "mixed_callstack_plugin.h"
 
@@ -3180,8 +3184,13 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	 * Under tiering, tier 0 is always the classic JIT and only the tier-1
 	 * promotion compile goes through LLVM - otherwise every first call would
 	 * pay LLVM codegen and there would be no tier 0 at all.
+	 *
+	 * AOT is excluded: there is no tiering when compiling ahead of time, and
+	 * `llvm' here is the AOT compiler's JIT_FLAG_LLVM. Without the compile_aot
+	 * guard an inherited MONO_TIERED in the environment would make
+	 * `mono --aot=llvm' silently emit no LLVM methods at all.
 	 */
-	if (mono_llvm_tiered_enabled ())
+	if (!compile_aot && mono_llvm_tiered_enabled ())
 		try_llvm = mono_llvm_tiered_in_promotion ();
 	else
 		try_llvm = mono_use_llvm || llvm;
@@ -4116,13 +4125,34 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
  * terminal so we never retry.
  */
 gboolean
-mini_tiered_promote (MonoMethod *method, guint32 opt)
+mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 {
-	MonoDomain *domain = mono_domain_get ();
 	MonoCompile *cfg;
 	MonoJitInfo *jinfo;
 
+	/*
+	 * mini_init () only initializes LLVM when mono_use_llvm is set, i.e. when
+	 * --llvm made LLVM the primary JIT. Under tiering it is not, so nothing has
+	 * initialized the backend yet: the SSE vector types would still be NULL when
+	 * add_intrinsics () registers the overloaded intrinsics that use them, and
+	 * intrins_id_to_intrins would still be NULL.
+	 *
+	 * mini_llvm_init () is idempotent but takes the loader lock, so gate it on a
+	 * one-shot rather than paying that on every promotion. Racing threads at
+	 * worst call it twice, which is harmless - it is itself guarded. Its result
+	 * is deliberately not checked: under ENABLE_LLVM llvm_init_inner () returns
+	 * TRUE unconditionally, so there is no failure to propagate.
+	 */
+	static gboolean tiered_llvm_inited;
+
+	if (!tiered_llvm_inited) {
+		mini_llvm_init ();
+		tiered_llvm_inited = TRUE;
+	}
+
+	mono_llvm_tiered_promote_begin ();
 	cfg = mini_method_compile (method, opt, domain, JIT_FLAG_RUN_CCTORS, 0, -1);
+	mono_llvm_tiered_promote_end ();
 	if (!cfg)
 		return FALSE;
 
@@ -4145,12 +4175,24 @@ mini_tiered_promote (MonoMethod *method, guint32 opt)
 	 * lock - that hash is fully lock-protected, so remove-then-insert is safe.
 	 * After the swap mini_lookup_method returns the tier-1 code_start and every
 	 * downstream consumer (call sites, vtable slots, IMT, delegates) picks it up
-	 * with no indirection.
+	 * with no indirection. The barrier is belt-and-braces: readers synchronize
+	 * through the same lock taken below, which already provides the ordering.
 	 */
 	mono_memory_barrier ();
 
 	mono_domain_jit_code_hash_lock (domain);
-	mono_internal_hash_table_remove (&domain->jit_code_hash, method);
+	/*
+	 * The tier-0 entry must be in THIS domain's hash - tier 0 published into the
+	 * domain carried on the queue entry, which is not necessarily
+	 * mono_domain_get () (MONO_OPT_SHARED publishes icall wrappers into the root
+	 * domain). If the remove fails we are looking at the wrong hash and the
+	 * insert below would trip its own no-duplicate assert.
+	 */
+	if (!mono_internal_hash_table_remove (&domain->jit_code_hash, method)) {
+		mono_domain_jit_code_hash_unlock (domain);
+		mono_destroy_compile (cfg);
+		return FALSE;
+	}
 	mono_internal_hash_table_insert (&domain->jit_code_hash, jinfo->d.method, jinfo);
 	mono_domain_jit_code_hash_unlock (domain);
 
@@ -4169,10 +4211,21 @@ gpointer
 mono_jit_compile_method_inner (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error)
 {
 	gpointer code;
+	gboolean saved_promotion;
+
+	/*
+	 * Promotion runs cctors, which compile unrelated methods through here. Those
+	 * must get a classic tier-0 body, not LLVM on a nested stack - which is
+	 * exactly what the depth gate exists to prevent. The drain's own re-entrancy
+	 * guard is separate and deliberately untouched.
+	 */
+	saved_promotion = mono_llvm_tiered_promotion_suspend ();
 
 	mono_llvm_tiered_compile_begin ();
 	code = mono_jit_compile_method_inner_1 (method, target_domain, opt, error);
 	mono_llvm_tiered_compile_end ();
+
+	mono_llvm_tiered_promotion_restore (saved_promotion);
 
 	return code;
 }
@@ -4289,7 +4342,7 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 		 * frames deep in a cctor-driven compile nest.
 		 */
 		if (!cfg->compile_llvm)
-			mono_llvm_tiered_enqueue (method, opt);
+			mono_llvm_tiered_enqueue (method, target_domain, opt);
 
 		code = cfg->native_code;
 

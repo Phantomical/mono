@@ -123,8 +123,12 @@ gboolean  mono_llvm_tiered_enabled (void);
 void      mono_llvm_tiered_set_ready (void);
 void      mono_llvm_tiered_compile_begin (void);
 void      mono_llvm_tiered_compile_end (void);
-void      mono_llvm_tiered_enqueue (MonoMethod *method, guint32 opt);
+void      mono_llvm_tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt);
 gboolean  mono_llvm_tiered_in_promotion (void);
+void      mono_llvm_tiered_promote_begin (void);
+void      mono_llvm_tiered_promote_end (void);
+gboolean  mono_llvm_tiered_promotion_suspend (void);
+void      mono_llvm_tiered_promotion_restore (gboolean old);
 
 G_END_DECLS
 

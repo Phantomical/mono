@@ -32,6 +32,7 @@
 
 #include "mini.h"
 #include "mini-runtime.h"
+#include <mono/utils/mono-lazy-init.h>
 #include "backend.h"
 
 enum TierState {
@@ -50,13 +51,13 @@ enum TierState {
  */
 typedef struct {
 	MonoMethod *method;
+	MonoDomain *domain;
 	guint32 opt;
 } TieredEntry;
 
 static mono_mutex_t tiered_mutex;
 static GHashTable *tiered_state;	/* MonoMethod* -> TierState */
 static GQueue *tiered_queue;		/* pending TieredEntry* */
-static gboolean tiered_inited;
 
 /*
  * Promotion is unsafe until mini_init () has finished: the domain is still
@@ -76,37 +77,41 @@ static __thread int tiered_compile_depth;
 /* Guards against a drain re-entering itself through the compile it triggers. */
 static __thread gboolean tiered_draining;
 
+/*
+ * TRUE only for the duration of the one mini_method_compile () that is
+ * promoting a method. It must NOT cover the whole drain: promotion runs cctors,
+ * which compile other, unrelated methods, and those must still get a classic
+ * tier-0 body. mono_jit_compile_method_inner () - the entry every nested compile
+ * goes through - saves and clears this around itself, so a nested compile sees
+ * FALSE while the promotion compile, which calls mini_method_compile directly,
+ * keeps it.
+ */
+static __thread gboolean tiered_promote_active;
+
+static mono_lazy_init_t tiered_lazy_init = MONO_LAZY_INIT_STATUS_NOT_INITIALIZED;
+static gboolean tiered_enabled;
+
 static void
-tiered_init_locked (void)
+tiered_do_init (void)
 {
-	if (tiered_inited)
+	tiered_enabled = g_getenv ("MONO_TIERED") != NULL;
+	if (!tiered_enabled)
 		return;
 	mono_os_mutex_init_recursive (&tiered_mutex);
 	tiered_state = g_hash_table_new (g_direct_hash, g_direct_equal);
 	tiered_queue = g_queue_new ();
-	tiered_inited = TRUE;
 }
 
+/*
+ * Runs exactly once across all threads. Doing this with a plain unsynchronized
+ * static would let a racing thread re-init the mutex while another holds it and
+ * install a second state table and queue.
+ */
 gboolean
 mono_llvm_tiered_enabled (void)
 {
-	static gboolean inited, enabled;
-
-	/*
-	 * Unsynchronized lazy init, as mono does for its other env-var switches.
-	 * A race at worst reads the variable twice and reaches the same answer.
-	 */
-	if (!inited) {
-		enabled = g_getenv ("MONO_TIERED") != NULL;
-		if (enabled) {
-			mono_os_mutex_init_recursive (&tiered_mutex);
-			tiered_state = g_hash_table_new (g_direct_hash, g_direct_equal);
-			tiered_queue = g_queue_new ();
-			tiered_inited = TRUE;
-		}
-		inited = TRUE;
-	}
-	return enabled;
+	mono_lazy_initialize (&tiered_lazy_init, tiered_do_init);
+	return tiered_enabled;
 }
 
 void
@@ -130,17 +135,17 @@ mono_llvm_tiered_compile_begin (void)
  * Ignored if the method is already promoted or latched terminal.
  */
 void
-mono_llvm_tiered_enqueue (MonoMethod *method, guint32 opt)
+mono_llvm_tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt)
 {
 	if (!mono_llvm_tiered_enabled () || !method)
 		return;
 
 	mono_os_mutex_lock (&tiered_mutex);
-	tiered_init_locked ();
 	if (!g_hash_table_lookup_extended (tiered_state, method, NULL, NULL)) {
 		TieredEntry *entry = g_new0 (TieredEntry, 1);
 
 		entry->method = method;
+		entry->domain = domain;
 		entry->opt = opt;
 		g_hash_table_insert (tiered_state, method, GINT_TO_POINTER (TIER_STATE_TIER0));
 		g_queue_push_tail (tiered_queue, entry);
@@ -193,7 +198,7 @@ mono_llvm_tiered_compile_end (void)
 		 * method (a gate) or the compile failed. Either way tier 0 is the
 		 * terminal body and we must not try again.
 		 */
-		if (mini_tiered_promote (entry->method, entry->opt))
+		if (mini_tiered_promote (entry->method, entry->domain, entry->opt))
 			tiered_set_state (entry->method, TIER_STATE_PROMOTED);
 		else
 			tiered_set_state (entry->method, TIER_STATE_TIER0_TERMINAL);
@@ -212,5 +217,36 @@ mono_llvm_tiered_compile_end (void)
 gboolean
 mono_llvm_tiered_in_promotion (void)
 {
-	return tiered_draining;
+	return tiered_promote_active;
+}
+
+void
+mono_llvm_tiered_promote_begin (void)
+{
+	tiered_promote_active = TRUE;
+}
+
+void
+mono_llvm_tiered_promote_end (void)
+{
+	tiered_promote_active = FALSE;
+}
+
+/*
+ * Clear the promotion flag for a nested compile and return the previous value,
+ * so LLVM codegen cannot leak onto a nested stack via a cctor-driven compile.
+ */
+gboolean
+mono_llvm_tiered_promotion_suspend (void)
+{
+	gboolean old = tiered_promote_active;
+
+	tiered_promote_active = FALSE;
+	return old;
+}
+
+void
+mono_llvm_tiered_promotion_restore (gboolean old)
+{
+	tiered_promote_active = old;
 }

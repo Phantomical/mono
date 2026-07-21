@@ -2156,7 +2156,7 @@ void      mono_destroy_compile              (MonoCompile *cfg);
  * or the compile failed, in which case tier 0 stays terminal. Called from the
  * tier-1 drain in mono/mini/llvm/tiered.cpp.
  */
-gboolean  mini_tiered_promote               (MonoMethod *method, guint32 opt);
+gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *domain, guint32 opt);
 void      mono_empty_compile              (MonoCompile *cfg);
 MonoJitICallInfo *mono_find_jit_opcode_emulation (int opcode);
 void	  mono_print_ins_index (int i, MonoInst *ins);
