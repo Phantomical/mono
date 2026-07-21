@@ -13940,6 +13940,22 @@ mono_compile_assembly (MonoAssembly *ass, guint32 opts, const char *aot_options,
 		acfg->aot_opts.llvm = mini_llvm_init ();
 
 	if (mono_use_llvm || acfg->aot_opts.llvm) {
+		/*
+		 * The mono/mini/llvm/ backend targets unmodified LLVM and implements only
+		 * the JIT, so refuse here rather than failing further in.
+		 *
+		 * The blocker is not the 'opt' invocation below: -place-safepoints and
+		 * -spp-all-backedges are upstream passes, present in stock LLVM, and that
+		 * command line fails only because LLVM dropped legacy pass-manager flag
+		 * parsing in favour of -passes=. The real dependency is mono_eh_frame,
+		 * which decode_llvm_mono_eh_frame () in aot-runtime.c asserts on for every
+		 * LLVM-compiled AOT method: only the forked LLVM's MonoEHFrame emitter ever
+		 * produced it. Supporting AOT here means deriving that from the standard
+		 * .eh_frame, as mono/mini/llvm/ehframe.cpp does for the JIT.
+		 */
+		aot_printerrf (acfg, "LLVM AOT compilation is not supported by this build.\n");
+		return 1;
+
 		acfg->llvm = TRUE;
 		acfg->aot_opts.asm_writer = TRUE;
 		acfg->flags = (MonoAotFileFlags)(acfg->flags | MONO_AOT_FILE_FLAG_WITH_LLVM);
