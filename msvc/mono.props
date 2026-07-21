@@ -48,7 +48,10 @@
     <SHIM_GLOBALIZATION Condition="'$(MONO_ENABLE_NETCORE)'=='true'">$(top_srcdir)/../libraries/Native/Unix/System.Globalization.Native</SHIM_GLOBALIZATION>
     <SHIM_GLOBALIZATION_COMMON Condition="'$(MONO_ENABLE_NETCORE)'=='true'">$(top_srcdir)/../libraries/Native/Unix/Common</SHIM_GLOBALIZATION_COMMON>
     <SHIM_GLOBALIZATION_INCLUDE_DIR Condition="'$(MONO_ENABLE_NETCORE)'=='true'">$(SHIM_GLOBALIZATION_COMMON);$(SHIM_GLOBALIZATION)</SHIM_GLOBALIZATION_INCLUDE_DIR>
-    <MONO_LLVM_DEFAULT_INCLUDE_DIR>$(MONO_DIR)/external/llvm-project/llvm/include</MONO_LLVM_DEFAULT_INCLUDE_DIR>
+    <!-- Mono no longer vendors an LLVM source tree, so there is no in-tree default
+         here. Derived from MONO_INTERNAL_LLVM_SOURCE_DIR when that is set; stays
+         empty otherwise rather than resolving to a path that does not exist. -->
+    <MONO_LLVM_DEFAULT_INCLUDE_DIR Condition="'$(MONO_INTERNAL_LLVM_SOURCE_DIR)' != ''">$(MONO_INTERNAL_LLVM_SOURCE_DIR)/llvm/include</MONO_LLVM_DEFAULT_INCLUDE_DIR>
   </PropertyGroup>
   <PropertyGroup Label="Static-C-Runtime" Condition="'$(MONO_USE_STATIC_C_RUNTIME)'=='true'">
     <MONO_C_RUNTIME Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</MONO_C_RUNTIME>

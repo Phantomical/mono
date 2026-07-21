@@ -111,8 +111,11 @@
     </PropertyGroup>
 
     <PropertyGroup>
+        <!-- There is no in-tree LLVM source any more (the external\llvm-project
+             submodule was removed), so MONO_INTERNAL_LLVM_SOURCE_DIR is the only
+             source of an internal LLVM build. _SetupMonoLLVMBuildProperties errors
+             out if an internal build is selected without it. -->
         <_LLVMSourceDir Condition="'$(_LLVMSourceDir)' == ''">$(MONO_INTERNAL_LLVM_SOURCE_DIR)</_LLVMSourceDir>
-        <_LLVMSourceDir Condition="'$(_LLVMSourceDir)' == ''">$(_MonoSourceDir)\external\llvm-project</_LLVMSourceDir>
         <_LLVMBuildDir Condition="'$(_LLVMBuildDir)' == ''">$([System.IO.Path]::GetFullPath('$(MONO_BUILD_DIR_PREFIX)$(Platform)\obj\external\llvm-build\$(Configuration)'))</_LLVMBuildDir>
         <_LLVMInstallDir Condition="'$(_LLVMInstallDir)' == ''">$(_LLVMBuildDir)\install</_LLVMInstallDir>
         <_MonoLLVMConfig>$(_LLVMInstallDir)\bin\llvm-config.exe</_MonoLLVMConfig>
@@ -173,6 +176,9 @@
     </Target>
 
     <Target Name="_SetupMonoLLVMBuildProperties" Condition="$(MONO_ENABLE_LLVM) == 'true'">
+
+        <Error Text="An internal LLVM build was selected but no LLVM source tree is available. Mono no longer vendors external\llvm-project; set MONO_INTERNAL_LLVM_SOURCE_DIR to an LLVM source tree, or set MONO_EXTERNAL_LLVM_CONFIG to use a prebuilt LLVM."
+               Condition="'$(_MonoEnableInternalLLVM)' == 'true' and '$(_LLVMSourceDir)' == ''" />
 
         <_CheckConfigurationProperty ConfFile="$(MONO_DIR)/cygconfig.h" ConfRegEx=".*#define.*INTERNAL_LLVM_ASSERTS.*1" Condition="'$(MONO_ENABLE_LLVM_ASSERTS)' != 'true'">
             <Output TaskParameter="ConfPropertyFoundMatch" PropertyName="MONO_ENABLE_LLVM_ASSERTS" />

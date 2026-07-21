@@ -187,31 +187,28 @@ ls tmp/bin        # mono, mcs, csc, xbuild, monodis, gacutil, ...
 ## Optional: build with the LLVM backend
 
 Mono can use LLVM as its code-generation engine instead of the built-in JIT
-backend. Enabling it adds one `configure` flag; the catch is that Mono's LLVM
-backend needs an LLVM built with **Mono's own patches** — you cannot just point it
-at your distro's `llvm`. There are two ways to supply that LLVM:
+backend. Enabling it adds one `configure` flag.
 
-- **Internal (recommended, self-contained):** `--enable-llvm` *without* `--with-llvm`.
-  Mono builds the bundled fork in `external/llvm-project` (LLVM **6.0.1-mono**) via
-  CMake into `llvm/usr/`, then links against it. No network access needed — the
-  fork is a git submodule.
-- **External:** `--with-llvm=<prefix>` pointing at a prebuilt Mono-LLVM whose
-  `<prefix>/bin/llvm-config` exists. Use this only if you already have a compatible
-  Mono-patched LLVM; stock upstream LLVM will not work.
+Mono no longer vendors an LLVM source tree — the `external/llvm-project`
+submodule (a Mono-patched LLVM 6.0.1 fork) has been removed. The LLVM backend
+now builds against an **externally supplied, unmodified upstream LLVM (14 or
+newer)**, so you must pass `--with-llvm=<prefix>`; `--enable-llvm` on its own is
+a configure error.
 
 ### Extra prerequisites
 
-The internal LLVM build needs CMake and (strongly preferred) Ninja:
+Install an upstream LLVM development package, e.g. on Debian/Ubuntu:
 
 ```bash
-sudo apt-get install -y cmake ninja-build
+sudo apt-get install -y llvm-18-dev
+# provides /usr/lib/llvm-18/bin/llvm-config
 ```
 
 ### Configure + build
 
-Re-run `configure` with the same flags as [§ 3](#3-configure) plus `--enable-llvm`.
-Reconfiguring changes `config.h` (defines `ENABLE_LLVM`), so remove the stale
-`config.status` first:
+Re-run `configure` with the same flags as [§ 3](#3-configure) plus
+`--with-llvm=<prefix>`. Reconfiguring changes `config.h` (defines `ENABLE_LLVM`),
+so remove the stale `config.status` first:
 
 ```bash
 cd /home/swlynch/projects/mono
@@ -223,7 +220,7 @@ rm -f config.status eglib/config.status libgc/config.status
   --enable-no-threads-discovery=yes --enable-thread-local-alloc=no \
   --enable-unity-define=yes --with-unityjit=yes --with-unityaot=yes \
   --with-monotouch=no \
-  --enable-llvm
+  --with-llvm=/usr/lib/llvm-18
 
 make -j"$(nproc)"
 ```
@@ -231,22 +228,13 @@ make -j"$(nproc)"
 The config summary should now report:
 
 ```
-LLVM Back End: yes (built in-tree: yes, assertions: no, msvc only: no)
+LLVM Back End: yes (built in-tree: no, assertions: no, msvc only: no)
 ```
 
-`make` builds the bundled LLVM into `llvm/usr/` **first** (this is the long pole —
-a full LLVM compile), then rebuilds `mono/mini` linked against it. With Ninja + 16
-cores expect a substantial extra chunk of wall-clock beyond the plain build.
-
-> **gcc-13 note:** LLVM 6.0.1 is from 2018 and can hit missing-include / C++
-> errors when compiled by very new toolchains (gcc-13 / glibc-2.39). If the
-> `llvm/build` step fails to compile, rebuild just the LLVM sub-tree with clang,
-> which is more tolerant, then resume the top build:
-> ```bash
-> make -C llvm clean-llvm
-> CC=clang CXX=clang++ make -C llvm     # builds only external/llvm-project -> llvm/usr
-> make -j"$(nproc)"                      # finishes linking mono against it
-> ```
+`make` runs `llvm/build_llvm_config.sh` against `<prefix>/bin/llvm-config` to
+produce `llvm/llvm_config.mk`, which `mono/mini` includes for its LLVM
+CFLAGS/LDFLAGS/libs. There is no LLVM compile step — LLVM itself is already
+built.
 
 ### Verify the backend is present and engages
 
@@ -272,8 +260,8 @@ MONO_VERBOSE_METHOD=Main ./mono/mini/mono-sgen --llvm /tmp/Hv.exe 2>&1 | grep -i
 
 Seeing the emitted *"LLVM IR for Hello:Main"* confirms the LLVM backend — not the
 built-in JIT — compiled the method. `--nollvm` forces the built-in backend if you
-want to compare. (The `llvm/usr/bin/llvm-config --version` also prints `6.0.1-mono`,
-confirming the Mono-patched fork was the one built.)
+want to compare. (`<prefix>/bin/llvm-config --version` prints the upstream LLVM
+version that was linked in.)
 
 ## Rebuilding after changes
 
@@ -297,12 +285,13 @@ confirming the Mono-patched fork was the one built.)
   `git submodule update --init --recursive`.
 - **`No usable version of libssl was found`** — this only affects the older
   `build_classlibs_wsl.pl` path (see `Unity-build.md`), not these instructions.
-- **LLVM (`llvm/build`) fails to compile** with modern gcc → rebuild the LLVM
-  sub-tree with clang: `make -C llvm clean-llvm && CC=clang CXX=clang++ make -C llvm`,
-  then `make`. See [§ build with the LLVM backend](#optional-build-with-the-llvm-backend).
-- **`--enable-llvm` but summary says `LLVM Back End: no`** → you left a stale
+- **`--enable-llvm requires --with-llvm=<llvm prefix>`** → there is no in-tree
+  LLVM any more; install an upstream LLVM 14+ and pass its prefix, e.g.
+  `--with-llvm=/usr/lib/llvm-18`. See
+  [§ build with the LLVM backend](#optional-build-with-the-llvm-backend).
+- **`--with-llvm` but summary says `LLVM Back End: no`** → you left a stale
   `config.status`; remove `config.status eglib/config.status libgc/config.status`
-  and rerun `./autogen.sh ... --enable-llvm`.
+  and rerun `./autogen.sh ... --with-llvm=<prefix>`.
 
 ---
 

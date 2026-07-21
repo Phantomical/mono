@@ -10,9 +10,11 @@ the port. Design + scope: `.claude/plans/mono-llvm-handoff/` (esp. `06-scope-and
   thread + full concurrency deferred).
 
 ## Relationship to the legacy backend (`mono/mini/*.c`, staying put)
-The legacy backend links **patched LLVM 6** (`external/llvm-project`, `LLVM_API_VERSION=610`) and still
-builds/runs today. We do not edit those files yet; we grow the replacement here and switch the build
-over once it stands on its own.
+The legacy backend linked **patched LLVM 6** (`LLVM_API_VERSION=610`) from the vendored
+`external/llvm-project` submodule. That submodule has been removed and the legacy sources are
+excluded from the build (see `mono/mini/Makefile.am.in`); LLVM is now supplied externally with
+`configure --with-llvm=<prefix>` (unmodified upstream 14+). We do not edit those files; we grow the
+replacement here.
 
 Legacy files being superseded:
 - `mini-llvm.c` / `mini-llvm.h` — the IL→LLVM-IR translator.

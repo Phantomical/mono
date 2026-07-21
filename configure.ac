@@ -1819,10 +1819,9 @@ if test x$USE_NLS = xprofile_default; then
 fi
 
 AC_ARG_ENABLE(static-gcc-libs, [  --enable-static-gcc-libs      Statically link GCC support libs (for MinGW32)])
-if test "x$enable_static_gcc_libs" = "xyes"; then
-	# llvm/build.mk doesn't use automake, so make a regular make variable for it.
-	AC_SUBST(STATIC_GCC_LIBS,1)
-fi
+dnl The STATIC_GCC_LIBS make variable was only consumed by the in-tree LLVM
+dnl build (llvm/build.mk, removed with external/llvm-project). The
+dnl ENABLE_STATIC_GCC_LIBS conditional is kept for any future consumer.
 AM_CONDITIONAL(ENABLE_STATIC_GCC_LIBS, test "x$enable_static_gcc_libs" = "xyes")
 
 AC_ARG_ENABLE(minimal, [  --enable-minimal=LIST      drop support for LIST subsystems.
@@ -4393,7 +4392,14 @@ if test "x$enable_llvm" = "xyes"; then
 			AC_MSG_ERROR([LLVM executable $EXTERNAL_LLVM_CONFIG not found.])
 		fi
 	else
-		internal_llvm=yes
+		dnl Mono no longer vendors an LLVM source tree (external/llvm-project
+		dnl was removed). The LLVM back end requires an externally supplied,
+		dnl unmodified upstream LLVM (14 or newer). This also rejects the
+		dnl --with-runtime-preset=bitcode / bitcodeinterp presets, which used to
+		dnl imply an internal LLVM 6 build (enable_llvm_default=yes with no
+		dnl --with-llvm): those presets depend on the removed LLVM 6 fork and are
+		dnl no longer supported.
+		AC_MSG_ERROR([the LLVM back end now requires --with-llvm=<llvm prefix> pointing at an installed upstream LLVM 14+ (e.g. --with-llvm=/usr/lib/llvm-18). Mono no longer builds an in-tree LLVM, so plain --enable-llvm and the bitcode / bitcodeinterp runtime presets (which implied the removed internal LLVM 6) are no longer supported without it.])
 	fi
 
 	LLVM_CODEGEN_LIBS="x86codegen"
