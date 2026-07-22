@@ -237,6 +237,14 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		 *     that share EXACTLY the same range are legitimate and accepted.
 		 *   - A try with N protected calls yields N DISJOINT ranges (one per call)
 		 *     sharing one handler.
+		 * NOTE on live coverage: sibling catches have EQUAL try_offset, which the
+		 * translator's nested-clause gate (translator.cpp) declines upstream before
+		 * `.mono_lsda` is ever built. So on the live compile path today only
+		 * SINGLE-catch methods reach here (one clause_index, possibly across several
+		 * disjoint invoke ranges); the equal-range / multiple-clause_index branch
+		 * below is exercised by the unit tests until a later slice refines that gate
+		 * to admit true (non-nested) sibling catches. The branch is correct for that
+		 * case and stays.
 		 * Only a PARTIAL overlap or STRICT nesting ([0x10,0x40) containing
 		 * [0x20,0x30)) is illegal here - it implies genuine nesting (unsupported)
 		 * or a producer bug, making is_address_protected's first-match ambiguous.

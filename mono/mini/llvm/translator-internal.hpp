@@ -203,6 +203,13 @@ typedef struct {
 	/* For every clause, the clauses it is nested in */
 	GSList **nested_in;
 	LLVMValueRef ex_var;
+	/*
+	 * The function's landingpad personality (an i32-returning `mono_personality`
+	 * stub). Created lazily by get_mono_personality() the first time a handler is
+	 * emitted and pinned onto lmethod via LLVMSetPersonalityFn, so a method with
+	 * several catch clauses defines it (and sets the personality fn) exactly once.
+	 */
+	LLVMValueRef personality;
 	GPtrArray *phi_values;
 	GPtrArray *bblock_list;
 	char *method_name;

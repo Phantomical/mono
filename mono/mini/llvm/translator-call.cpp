@@ -925,6 +925,42 @@ create_const_vector_2_i32 (int v0, int v1)
 	return LLVMConstVector (mask, 2);
 }
 
+/*
+ * get_mono_personality:
+ *
+ *   Return the current function's landingpad personality, creating it the first
+ * time and pinning it onto ctx->lmethod via LLVMSetPersonalityFn.
+ *
+ * The LLVM verifier rejects a `landingpad` whose enclosing function carries no
+ * personality, and the no-asserts backend segfaults on it (doc 09 R1). The C
+ * API's LLVMBuildLandingPad PersFn operand is ignored on LLVM 18, so the
+ * personality has to be set on the FUNCTION with LLVMSetPersonalityFn. A method
+ * with several catch clauses calls emit_handler_start once per handler, so the
+ * `mono_personality` stub is defined - and the personality fn set - exactly once
+ * per method (cached on the context) instead of being duplicated per handler.
+ */
+static LLVMValueRef
+get_mono_personality (EmitContext *ctx)
+{
+	if (ctx->personality)
+		return ctx->personality;
+
+	/* Can't cache across methods as each method is in its own llvm module */
+	LLVMTypeRef personality_type = LLVMFunctionType (LLVMInt32Type (), NULL, 0, TRUE);
+	LLVMValueRef personality = LLVMAddFunction (ctx->lmodule, "mono_personality", personality_type);
+	mono_llvm_add_func_attr (personality, LLVM_ATTR_NO_UNWIND);
+	LLVMBasicBlockRef entry_bb = LLVMAppendBasicBlock (personality, "ENTRY");
+	LLVMBuilderRef builder2 = LLVMCreateBuilder ();
+	LLVMPositionBuilderAtEnd (builder2, entry_bb);
+	LLVMBuildRet (builder2, LLVMConstInt (LLVMInt32Type (), 0, FALSE));
+	LLVMDisposeBuilder (builder2);
+
+	LLVMSetPersonalityFn (ctx->lmethod, personality);
+
+	ctx->personality = personality;
+	return personality;
+}
+
 void
 emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder)
 {
@@ -945,17 +981,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 
 	// <resultval> = landingpad <somety> personality <type> <pers_fn> <clause>+
 
-	{
-		/* Can't cache this as each method is in its own llvm module */
-		LLVMTypeRef personality_type = LLVMFunctionType (LLVMInt32Type (), NULL, 0, TRUE);
-		personality = LLVMAddFunction (ctx->lmodule, "mono_personality", personality_type);
-		mono_llvm_add_func_attr (personality, LLVM_ATTR_NO_UNWIND);
-		LLVMBasicBlockRef entry_bb = LLVMAppendBasicBlock (personality, "ENTRY");
-		LLVMBuilderRef builder2 = LLVMCreateBuilder ();
-		LLVMPositionBuilderAtEnd (builder2, entry_bb);
-		LLVMBuildRet (builder2, LLVMConstInt (LLVMInt32Type (), 0, FALSE));
-		LLVMDisposeBuilder (builder2);
-	}
+	personality = get_mono_personality (ctx);
 
 	i8ptr = LLVMPointerType (LLVMInt8Type (), 0);
 

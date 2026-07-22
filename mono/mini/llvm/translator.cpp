@@ -9,6 +9,10 @@
 
 #include "translator-internal.hpp"
 
+#include <vector>
+
+#include "mono_lsda.hpp"
+
 #ifndef DISABLE_JIT
 /*
  * Instruction metadata
@@ -163,16 +167,20 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 	}
 
 	/*
-	 * 3b EH gate: methods with exception-handling clauses are deferred to the
-	 * classic JIT for now. The stock .eh_frame / .gcc_except_table consumption
-	 * (design 3.1) is not yet ported, so LLVM-compiling a clause-bearing method
-	 * would mis-handle unwind. Remove this gate once EH consumption lands.
+	 * 3b EH gate: the custom-emit `.mono_lsda` path (plan 12) consumes a method's
+	 * catch geometry, so catch-only methods now go through LLVM. finally/fault/
+	 * filter clauses still defer to the classic JIT - their resume/indicator
+	 * machinery is not built yet (plan 12 9) - so decline unless EVERY clause is a
+	 * plain catch (MONO_EXCEPTION_CLAUSE_NONE). The nested-clause decline below,
+	 * and the save_lmf/dynamic declines, still apply on top of this.
 	 */
-	if (cfg->header->num_clauses) {
-		TRACE_FAILURE_CFG (cfg, "EH clauses (deferred to classic JIT, 3b)");
-		cfg->exception_message = g_strdup ("EH clauses (deferred to classic JIT, 3b)");
-		cfg->disable_llvm = TRUE;
-		return;
+	for (i = 0; i < cfg->header->num_clauses; ++i) {
+		if (cfg->header->clauses [i].flags != MONO_EXCEPTION_CLAUSE_NONE) {
+			TRACE_FAILURE_CFG (cfg, "non-catch EH clause (deferred to classic JIT, 3b)");
+			cfg->exception_message = g_strdup ("non-catch EH clause (deferred to classic JIT, 3b)");
+			cfg->disable_llvm = TRUE;
+			return;
+		}
 	}
 
 	/*
@@ -508,8 +516,12 @@ emit_method_inner (EmitContext *ctx)
 	header = cfg->header;
 	for (i = 0; i < header->num_clauses; ++i) {
 		clause = &header->clauses [i];
-		if (clause->flags != MONO_EXCEPTION_CLAUSE_FINALLY && clause->flags != MONO_EXCEPTION_CLAUSE_FAULT && clause->flags != MONO_EXCEPTION_CLAUSE_NONE) {
-			set_failure (ctx, "non-finally/catch/fault clause.");
+		/*
+		 * Custom-emit EH is catch-only (plan 12): a stray finally/fault/filter
+		 * that slipped Gate A declines here rather than being mis-emitted.
+		 */
+		if (clause->flags != MONO_EXCEPTION_CLAUSE_NONE) {
+			set_failure (ctx, "non-catch clause (custom-emit EH is catch-only).");
 			return;
 		}
 	}
@@ -1178,95 +1190,6 @@ mono_llvm_init (gboolean enable_jit)
 
 /* LLVM JIT support */
 
-/*
- * decode_llvm_eh_info:
- *
- *   Decode the EH table emitted by llvm in jit mode, and store
- * the result into cfg.
- */
-static void
-decode_llvm_eh_info (EmitContext *ctx, gpointer eh_frame)
-{
-	MonoCompile *cfg = ctx->cfg;
-	guint8 *cie, *fde;
-	int fde_len;
-	MonoLLVMFDEInfo info;
-	MonoJitExceptionInfo *ei;
-	guint8 *p = (guint8*)eh_frame;
-	int version, fde_count, fde_offset;
-	guint32 ei_len, i, nested_len;
-	gpointer *type_info;
-	gint32 *table;
-	guint8 *unw_info;
-
-	/*
-	 * Decode the one element EH table emitted by the MonoException class
-	 * in llvm.
-	 */
-
-	/* Similar to decode_llvm_mono_eh_frame () in aot-runtime.c */
-
-	version = *p;
-	g_assert (version == 3);
-	p ++;
-	p ++;
-	p = (guint8 *)ALIGN_PTR_TO (p, 4);
-
-	fde_count = *(guint32*)p;
-	p += 4;
-	table = (gint32*)p;
-
-	g_assert (fde_count <= 2);
-
-	/* The first entry is the real method */
-	g_assert (table [0] == 1);
-	fde_offset = table [1];
-	table += fde_count * 2;
-	/* Extra entry */
-	cfg->code_len = table [0];
-	fde_len = table [1] - fde_offset;
-	table += 2;
-
-	fde = (guint8*)eh_frame + fde_offset;
-	cie = (guint8*)table;
-
-	/* Compute lengths */
-	mono_unwind_decode_llvm_mono_fde (fde, fde_len, cie, cfg->native_code, &info, NULL, NULL, NULL);
-
-	ei = (MonoJitExceptionInfo *)g_malloc0 (info.ex_info_len * sizeof (MonoJitExceptionInfo));
-	type_info = (gpointer *)g_malloc0 (info.ex_info_len * sizeof (gpointer));
-	unw_info = (guint8*)g_malloc0 (info.unw_info_len);
-
-	mono_unwind_decode_llvm_mono_fde (fde, fde_len, cie, cfg->native_code, &info, ei, type_info, unw_info);
-
-	cfg->encoded_unwind_ops = unw_info;
-	cfg->encoded_unwind_ops_len = info.unw_info_len;
-	if (cfg->verbose_level > 1)
-		mono_print_unwind_info (cfg->encoded_unwind_ops, cfg->encoded_unwind_ops_len);
-	if (info.this_reg != -1) {
-		cfg->llvm_this_reg = info.this_reg;
-		cfg->llvm_this_offset = info.this_offset;
-	}
-
-	ei_len = info.ex_info_len;
-
-	// Nested clauses are currently disabled
-	nested_len = 0;
-
-	cfg->llvm_ex_info = (MonoJitExceptionInfo*)mono_mempool_alloc0 (cfg->mempool, (ei_len + nested_len) * sizeof (MonoJitExceptionInfo));
-	cfg->llvm_ex_info_len = ei_len + nested_len;
-	memcpy (cfg->llvm_ex_info, ei, ei_len * sizeof (MonoJitExceptionInfo));
-	/* Fill the rest of the information from the type info */
-	for (i = 0; i < ei_len; ++i) {
-		gint32 clause_index = *(gint32*)type_info [i];
-		MonoExceptionClause *clause = &cfg->header->clauses [clause_index];
-
-		cfg->llvm_ex_info [i].flags = clause->flags;
-		cfg->llvm_ex_info [i].data.catch_class = clause->data.catch_class;
-		cfg->llvm_ex_info [i].clause_index = clause_index;
-	}
-}
-
 static void
 init_jit_module (MonoDomain *domain)
 {
@@ -1446,22 +1369,25 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	guint32 dwarf_eh_frame_size = 0;
 	gpointer stackmaps = NULL;
 	guint32 stackmaps_size = 0;
-	/* M2.3 will consume the captured `.gcc_except_table` (Itanium LSDA) to build
-	 * cfg->llvm_ex_info; for now it is captured but left unused (the EH gate still
-	 * declines every clause-bearing method, so this is {NULL,0} here today). */
+	/* The Itanium `.gcc_except_table` LLVM still emits is captured but deliberately
+	 * ignored: the custom-emit path builds cfg->llvm_ex_info from `.mono_lsda`
+	 * instead (plan 12). Kept plumbed for a future debug cross-check. */
 	gpointer gcc_except_table = NULL;
 	guint32 gcc_except_table_size = 0;
-	/* C3 captures the `.mono_lsda` section (mono's own target-neutral clause table);
-	 * C4/C6 will parse it into cfg->llvm_ex_info. For now it is captured but left
-	 * unused - the EH gate still declines every clause-bearing method, so this is
-	 * {NULL,0} for every method that reaches here today. */
+	/* C3 captures the `.mono_lsda` section (mono's own target-neutral clause
+	 * table); the reader below (C6) parses/publishes it into cfg->llvm_ex_info for
+	 * every admitted clause-bearing method. */
 	gpointer mono_lsda = NULL;
 	guint32 mono_lsda_size = 0;
 	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size);
+	/* The redundant Itanium `.gcc_except_table` LLVM still emits is ignored - the
+	 * custom-emit path reads the `.mono_lsda` instead (plan 12). */
 	(void) gcc_except_table;
 	(void) gcc_except_table_size;
-	(void) mono_lsda;
-	(void) mono_lsda_size;
+	/* Stock LLVM 18 emits a standard DWARF `.eh_frame` (consumed below by the
+	 * unwind-ops transcoder), not a mono clause global, so eh_frame is always NULL
+	 * and not read here. */
+	(void) eh_frame;
 	mono_llvm_remove_gc_safepoint_poll (ctx->lmodule);
 	mono_codeman_disable_write ();
 	if (cfg->verbose_level > 1) {
@@ -1471,23 +1397,8 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	}
 
 	/*
-	 * eh_frame is the address of the "mono_eh_frame" global, which only the
-	 * FORKED LLVM emitted (via its MonoEHFrame support). Unmodified LLVM 18
-	 * emits a standard DWARF .eh_frame section instead, and consuming that is
-	 * not ported yet - which is exactly why methods carrying EH clauses are
-	 * gated out to the classic JIT in mono_llvm_check_method_supported().
-	 *
-	 * So under stock LLVM this is NULL for every method that reaches here, and
-	 * those methods have no EH clauses to describe. Decode only if the forked
-	 * global was actually present.
-	 */
-	if (eh_frame)
-		decode_llvm_eh_info (ctx, eh_frame);
-
-	/*
-	 * decode_llvm_eh_info() is not only about EH: under the forked LLVM it also
-	 * produced three non-EH outputs. With it skipped, they have to come from
-	 * somewhere else, or be accounted for:
+	 * Three non-EH outputs the method's MonoJitInfo needs are recovered here,
+	 * each from the stock object LLVM 18 emits:
 	 *
 	 * 1. cfg->code_len - RESTORED HERE. It sizes the method's MonoJitInfo, and a
 	 *    zero-length jit-info makes mini_jit_info_table_find() unable to find the
@@ -1502,8 +1413,10 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 *    of its own, because GC stack scanning walks through it and exceptions
 	 *    thrown by callees propagate through it.
 	 *
-	 * 3. cfg->llvm_this_reg - not needed while generic-shared methods are gated
-	 *    out of the LLVM path in mono_llvm_check_method_supported ().
+	 * 3. cfg->llvm_this_reg - recovered below from `.llvm_stackmaps` for gshared.
+	 *
+	 * The EH clause array itself (cfg->llvm_ex_info) is built below from the
+	 * custom-emit `.mono_lsda` section.
 	 */
 	cfg->code_len = llvm_code_size;
 	/*
@@ -1533,6 +1446,33 @@ llvm_jit_finalize_method (EmitContext *ctx)
 			g_print ("UNWIND INFO FOR %s:\n", mono_method_full_name (cfg->method, TRUE));
 			mono_print_unwind_info (cfg->encoded_unwind_ops, cfg->encoded_unwind_ops_len);
 			g_print ("\n");
+		}
+	}
+
+	/*
+	 * EH clauses: build cfg->llvm_ex_info from the custom-emit `.mono_lsda` the
+	 * MonoLSDAStreamer wrote into this method's object (plan 12). The mono clause
+	 * geometry is parsed, validated against cfg->header->clauses[] and the loaded
+	 * code extent, then joined into the MonoJitExceptionInfo[] mini.c copies
+	 * verbatim into jinfo->clauses (from_llvm = 1).
+	 *
+	 * On ANY uncertainty - an absent/empty `.mono_lsda` for a clause-bearing
+	 * method (every protected call optimised to a nounwind `call`), bad magic or
+	 * truncation, an offset past the code, a join key out of range, a non-catch
+	 * clause slipping the gate - decline to the classic JIT (CAP-EH-0). The
+	 * dispatcher cannot detect a wrong clause array (doc 11 11.4), so a
+	 * plausible-but-wrong table must never be published.
+	 */
+	if (cfg->header->num_clauses > 0) {
+		std::vector<mono::MonoLsdaEntry> entries;
+
+		if (!mono::parse_mono_lsda ((const guint8*)mono_lsda, mono_lsda_size, entries)) {
+			set_failure (ctx, "could not parse .mono_lsda clause table");
+			return;
+		}
+		if (!mono::publish_mono_lsda (cfg, entries, cfg->native_code, cfg->code_len)) {
+			set_failure (ctx, "could not publish .mono_lsda clause table");
+			return;
 		}
 	}
 

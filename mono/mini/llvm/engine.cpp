@@ -1103,6 +1103,19 @@ MonoLLVMJIT::MonoLLVMJIT ()
 			 * moment anything consolidates modules into one dylib.
 			 */
 			layer->setAutoClaimResponsibilityForObjectSymbols (true);
+			/*
+			 * Map EVERY section, not just those RTDyld deems required for
+			 * execution. The custom-emit `.mono_lsda` clause table (plan 12) is
+			 * SHF_ALLOC but has NO incoming relocations or symbols, so with the
+			 * default (ProcessAllSections=false) RTDyld skips allocating it and
+			 * getSectionLoadAddress() returns 0 - the section is present in the
+			 * object yet unmapped, so the load-time reader sees a null pointer and
+			 * every clause-bearing method declines. (Contrast `.gcc_except_table`,
+			 * which loads only because the `.eh_frame` FDE references it.) Forcing
+			 * all sections gives `.mono_lsda` a live load address; it costs only a
+			 * few extra bytes of mapped, non-executable metadata per module.
+			 */
+			layer->setProcessAllSections (true);
 			return layer;
 		});
 
