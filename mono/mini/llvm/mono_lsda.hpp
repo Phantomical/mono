@@ -9,13 +9,15 @@
  *
  *   Header (8 bytes):
  *     u32 magic   = 0x4d4c5344 ('MLSD', little-endian)
- *     u16 version = 1
+ *     u16 version = 2
  *     u16 count                      number of entries (one per invoke range)
- *   Entry[count] (16 bytes each, little-endian, all offsets code-relative):
+ *   Entry[count] (20 bytes each, little-endian, all offsets code-relative):
  *     u32 try_start_off              try covers [code+try_start_off, +try_len)
  *     u32 try_len
  *     u32 handler_off                native handler entry = code + handler_off
  *     u32 clause_index               IL clause index (the join key)
+ *     u32 kind                       MonoExceptionEnum: 0=NONE(catch), 2=FINALLY,
+ *                                    4=FAULT (self-describing; F1 admits only catch)
  *
  * This header exposes the SOURCE-AGNOSTIC load-time core (plan 12 3): it turns
  * that byte section into MonoLsdaEntry tuples (parse_mono_lsda), validates them
@@ -69,14 +71,21 @@ struct MonoLsdaEntry {
 	std::uint32_t try_len = 0;
 	std::uint32_t handler_off = 0;
 	std::uint32_t clause_index = 0;
+	/*
+	 * The clause's IL flags (a MonoExceptionEnum: NONE=0/catch, FINALLY=2,
+	 * FAULT=4), smuggled through the gather pass and carried in v2 so the section
+	 * is self-describing. build_ex_info cross-checks it against the joined clause
+	 * table (CAP-EH-0) rather than trusting the join blindly.
+	 */
+	std::uint32_t kind = 0;
 };
 
 /*
  * Parse a `.mono_lsda` section body [sec, sec+size) into header-checked entries.
  * Returns false (declining) on a null pointer, a truncated/oversized header, bad
- * magic, version != 1, or - the belt-and-suspenders against the one-record-per-
+ * magic, version != 2, or - the belt-and-suspenders against the one-record-per-
  * module invariant ever breaking - a section whose length is not EXACTLY
- * 8 + count*16 (a concatenation of two method records is longer than one
+ * 8 + count*20 (a concatenation of two method records is longer than one
  * record's exact size and declines here rather than misattributing). Every read
  * is bounds-checked before the dereference; malformed input never faults.
  */
@@ -93,6 +102,8 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
  *   - try_start_off >= code_len, try_start_off+try_len > code_len (64-bit sum,
  *     no wrap), or handler_off >= code_len;
  *   - clause_index >= num_clauses (the join key out of range);
+ *   - the entry's kind disagrees with the joined clause's flags (the v2 self-
+ *     describing cross-check - the section must not contradict the IL table);
  *   - the joined clause's flags != MONO_EXCEPTION_CLAUSE_NONE (a finally/fault/
  *     filter that slipped the gate - catch-only milestone);
  *   - two entries whose invoke ranges OVERLAP (see mono_lsda.cpp for why this is

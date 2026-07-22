@@ -681,19 +681,42 @@ public:
 					clause.handler = handler;
 
 					/*
-					 * mono's clause-index smuggling: TypeIds are 1-based indices
-					 * into getTypeInfos(); the referenced type_info_N global's i32
-					 * initializer is the IL clause index. Recover it in-process -
-					 * no ttype-table deref, no relocation dependency.
+					 * mono's clause smuggling: TypeIds are 1-based indices into
+					 * getTypeInfos(); the referenced type_info_N global's
+					 * initializer carries the IL clause index AND the clause's
+					 * flags (kind). Recover both in-process - no ttype-table deref,
+					 * no relocation dependency.
+					 *
+					 * v2 form: a 2-word {i32 clause_index, i32 kind} struct
+					 * (emit_handler_start, translator-call.cpp). A bare i32
+					 * ConstantInt is the legacy 1-word form (clause_index only,
+					 * kind stays NONE=0) and is still accepted. An all-zero struct
+					 * lowers to ConstantAggregateZero, so the two words are read
+					 * with Constant::getAggregateElement (not dyn_cast<ConstantStruct>,
+					 * which a zero aggregate is not).
 					 */
 					if ((size_t) type_id <= type_infos.size ()) {
 						const GlobalValue *gv = type_infos[type_id - 1];
 						if (const auto *var = dyn_cast_or_null<GlobalVariable> (gv)) {
 							if (var->hasInitializer ()) {
-								if (const auto *ci = dyn_cast<ConstantInt> (
-								        var->getInitializer ())) {
+								const Constant *init = var->getInitializer ();
+								if (const auto *ci = dyn_cast<ConstantInt> (init)) {
 									clause.clause_index = (int) ci->getSExtValue ();
+									clause.kind = 0;
 									clause.clause_resolved = true;
+								} else if (auto *st =
+								               dyn_cast<StructType> (init->getType ())) {
+									if (st->getNumElements () == 2) {
+										const auto *ci0 = dyn_cast_or_null<ConstantInt> (
+										        init->getAggregateElement ((unsigned) 0));
+										const auto *ci1 = dyn_cast_or_null<ConstantInt> (
+										        init->getAggregateElement ((unsigned) 1));
+										if (ci0 && ci1) {
+											clause.clause_index = (int) ci0->getSExtValue ();
+											clause.kind = (int) ci1->getZExtValue ();
+											clause.clause_resolved = true;
+										}
+									}
 								}
 							}
 						}
@@ -815,9 +838,9 @@ public:
 					MCSymbolRefExpr::create (func_begin, ctx), ctx);
 			};
 
-			/* Header: magic 'MLSD', version 1, count (one entry per invoke range). */
+			/* Header: magic 'MLSD', version 2, count (one entry per invoke range). */
 			emitIntValue (0x4d4c5344u, 4);
-			emitIntValue (1, 2);
+			emitIntValue (2, 2);
 			emitIntValue (fn.clauses.size (), 2);
 
 			for (const MonoEHClause &c : fn.clauses) {
@@ -832,6 +855,8 @@ public:
 				emitValue (off_from_begin (c.handler), 4);
 				/* clause_index: the IL clause index, an absolute scalar. */
 				emitIntValue ((uint32_t) c.clause_index, 4);
+				/* kind: the clause's IL flags (self-describing v2; 0 for catch). */
+				emitIntValue ((uint32_t) c.kind, 4);
 			}
 		}
 

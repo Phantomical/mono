@@ -7,13 +7,15 @@
  *
  *   Header (8 bytes, little-endian):
  *     u32 magic   = 0x4d4c5344 ('MLSD')
- *     u16 version = 1
+ *     u16 version = 2
  *     u16 count                      one entry PER INVOKE RANGE (plan 12 2)
- *   Entry[count] (16 bytes each, little-endian):
+ *   Entry[count] (20 bytes each, little-endian):
  *     u32 try_start_off              try covers [code+try_start_off, +try_len)
  *     u32 try_len
  *     u32 handler_off                native handler entry = code + handler_off
  *     u32 clause_index               IL clause index (the join key)
+ *     u32 kind                       clause flags (MonoExceptionEnum: 0=catch,
+ *                                    2=FINALLY, 4=FAULT); self-describing v2
  *
  * This TU is pure C++ with no LLVM dependency: it consumes the emitted BYTES,
  * not any LLVM type. It is not wired onto the live compile path yet - slice C6
@@ -46,9 +48,9 @@ namespace {
 
 /* Header constants (little-endian on the wire; the section is target-neutral). */
 constexpr std::uint32_t MONO_LSDA_MAGIC = 0x4d4c5344u; /* 'MLSD' */
-constexpr std::uint16_t MONO_LSDA_VERSION = 1;
+constexpr std::uint16_t MONO_LSDA_VERSION = 2;
 constexpr std::size_t   MONO_LSDA_HEADER_SIZE = 8;
-constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 16;
+constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 20;
 
 /*
  * A bounds-checked, little-endian cursor over [start, end). Same contract as
@@ -138,17 +140,17 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 	if (magic != MONO_LSDA_MAGIC)
 		return false; /* bad magic - a format/version mismatch, loudly */
 	if (version != MONO_LSDA_VERSION)
-		return false; /* unknown version - decline rather than misread */
+		return false; /* unknown version (incl. v1) - decline rather than misread */
 
 	/*
 	 * EXACT-SIZE validation (plan 12 3 / C4). The section MUST be exactly one
 	 * header plus its declared entries - not merely long enough. C3 guarantees
 	 * one method record per module (one-method-per-module invariant, enforced
 	 * with report_fatal_error in the streamer), so a section that is LONGER than
-	 * 8 + count*16 means that invariant broke and a second record was
+	 * 8 + count*20 means that invariant broke and a second record was
 	 * concatenated. Reading only the first record would misattribute one
 	 * method's clause geometry to another (a CAP-EH-0 silent mis-catch), so a
-	 * size mismatch declines here. count is a u16 so count*16 cannot overflow.
+	 * size mismatch declines here. count is a u16 so count*20 cannot overflow.
 	 */
 	if (size != MONO_LSDA_HEADER_SIZE +
 	            static_cast<std::size_t> (count) * MONO_LSDA_ENTRY_SIZE)
@@ -162,6 +164,7 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 		e.try_len = r.u32 ();
 		e.handler_off = r.u32 ();
 		e.clause_index = r.u32 ();
+		e.kind = r.u32 ();
 		if (!r.ok ())
 			return false; /* unreachable given exact-size, but bounds-honest */
 		out.push_back (e);
@@ -240,9 +243,23 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		const MonoExceptionClause &cl = clauses[e.clause_index];
 
 		/*
+		 * v2 self-describing cross-check (CAP-EH-0, belt-and-suspenders). The
+		 * section carries the clause's kind (smuggled through the gather pass);
+		 * it MUST agree with the flags the IL clause table joins in. A mismatch
+		 * means the section and the IL header disagree about this clause - a
+		 * producer bug or a corrupt section - so decline rather than publish a
+		 * table built on a contradiction. (For a catch method both are NONE.)
+		 */
+		if (e.kind != static_cast<std::uint32_t> (cl.flags))
+			return false;
+
+		/*
 		 * Catch-only milestone: a finally/fault/filter clause that slipped the
 		 * emission gate would need resume/indicator machinery this slice does not
-		 * build (plan 12 9). Decline rather than mis-dispatch.
+		 * build (plan 12 9). Decline rather than mis-dispatch. A non-NONE kind
+		 * reaching here is not expected in F1 (the translator gate still declines
+		 * every non-catch clause); this is the same decline, now also reached via
+		 * the joined flags after the cross-check above has confirmed kind == flags.
 		 */
 		if (cl.flags != MONO_EXCEPTION_CLAUSE_NONE)
 			return false;

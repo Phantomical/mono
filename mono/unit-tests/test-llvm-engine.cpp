@@ -1008,11 +1008,21 @@ build_eh_two_catch_module (Module &m)
 	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
 	                                     EH_MAY_THROW_NAME, &m);
 
-	/* Two clause-index-smuggling globals: IL clause indices 7 and 3. */
-	auto *ti0 = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
-	                                ConstantInt::get (i32, 7), "type_info_0");
-	auto *ti1 = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
-	                                ConstantInt::get (i32, 3), "type_info_1");
+	/*
+	 * Two clause smuggling globals: the 2-word {i32 clause_index, i32 kind} form
+	 * the translator emits (emit_handler_start). IL clause indices 7 and 3, both
+	 * catch (kind == 0). Mirrors mono's real v2 emission so the struct gather path
+	 * is exercised.
+	 */
+	StructType *ti_ty = StructType::get (i32, i32);
+	auto *ti0 = new GlobalVariable (m, ti_ty, false, GlobalValue::ExternalLinkage,
+	                                ConstantStruct::get (ti_ty, ConstantInt::get (i32, 7),
+	                                                     ConstantInt::get (i32, 0)),
+	                                "type_info_0");
+	auto *ti1 = new GlobalVariable (m, ti_ty, false, GlobalValue::ExternalLinkage,
+	                                ConstantStruct::get (ti_ty, ConstantInt::get (i32, 3),
+	                                                     ConstantInt::get (i32, 0)),
+	                                "type_info_1");
 
 	FunctionType *fty = FunctionType::get (i32, false);
 	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_two_catch", &m);
@@ -1093,8 +1103,12 @@ build_eh_multi_call_module (Module &m)
 	                                  "mono$selftest$eh$gap", &m);
 	gap->addFnAttr (Attribute::NoUnwind);
 
-	auto *ti0 = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
-	                                ConstantInt::get (i32, 5), "type_info_0");
+	/* 2-word {clause_index, kind} smuggling global: IL clause 5, catch (kind 0). */
+	StructType *ti_ty = StructType::get (i32, i32);
+	auto *ti0 = new GlobalVariable (m, ti_ty, false, GlobalValue::ExternalLinkage,
+	                                ConstantStruct::get (ti_ty, ConstantInt::get (i32, 5),
+	                                                     ConstantInt::get (i32, 0)),
+	                                "type_info_0");
 
 	FunctionType *fty = FunctionType::get (i32, false);
 	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_multi_call", &m);
@@ -1198,9 +1212,9 @@ build_eh_filter_module (Module &m)
  * Build, in `m`, an EH function whose single catch clause references a
  * type_info_0 that is a bare EXTERNAL DECLARATION - `new GlobalVariable (m,
  * i32, false, ExternalLinkage, nullptr, "type_info_0")` - rather than a
- * ConstantInt-initialized definition. Every other EH probe in this file gives
- * type_info_0 an initializer so the gather can smuggle the IL clause index
- * through it (var->hasInitializer () true, then dyn_cast<ConstantInt> on the
+ * initialized definition. Every other EH probe in this file gives type_info_0 an
+ * initializer so the gather can smuggle the IL clause index (and kind) through it
+ * (var->hasInitializer () true, then a ConstantInt / 2-word struct read on the
  * initializer); here hasInitializer () is false, so there is no clause index
  * to recover at all. This is a DIFFERENT decline cause from
  * build_eh_filter_module's negative TypeId: the TypeId here is a normal
@@ -1640,12 +1654,14 @@ test_eh_gather (MonoLLVMJIT *jit)
 	CHECK (!fn.declined);
 	CHECK (fn.clauses.size () == 2);
 
-	/* Every gathered clause resolved and carries the three .text symbols C3 needs. */
+	/* Every gathered clause resolved and carries the three .text symbols C3 needs;
+	 * both are catch, so the smuggled kind is NONE (0). */
 	for (const mono::MonoEHClause &cl : fn.clauses) {
 		CHECK (cl.clause_resolved);
 		CHECK (cl.try_begin != nullptr);
 		CHECK (cl.try_end != nullptr);
 		CHECK (cl.handler != nullptr);
+		CHECK (cl.kind == 0);
 	}
 
 	/* The smuggled clause indices are {3, 7} (order is landing-pad order; assert
@@ -1790,6 +1806,80 @@ test_eh_gather_multi_call (MonoLLVMJIT *jit)
 	return TEST_PASS;
 }
 
+/*
+ * v2 kind smuggling: the gather must read the SECOND word of the type_info_N
+ * {i32 clause_index, i32 kind} struct, not assume 0. Build a single catch landing
+ * pad whose smuggling global carries clause_index 6 and a NON-ZERO kind (2, the
+ * FINALLY sentinel - used here only to prove the channel carries a nonzero value
+ * end to end; F1's real translator only ever emits catch/kind 0). The gather must
+ * resolve clause_index 6 AND kind 2, and not decline (a positive catch TypeId).
+ */
+static TestResult
+test_eh_gather_kind_smuggling (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	LLVMContext c1;
+	Module m ("selftest.eh.gather.kind", c1);
+	Type *i32 = Type::getInt32Ty (c1);
+	PointerType *ptr = PointerType::getUnqual (c1);
+
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (c1), false);
+	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                     EH_MAY_THROW_NAME, &m);
+
+	StructType *ti_ty = StructType::get (i32, i32);
+	auto *ti0 = new GlobalVariable (m, ti_ty, false, GlobalValue::ExternalLinkage,
+	                                ConstantStruct::get (ti_ty, ConstantInt::get (i32, 6),
+	                                                     ConstantInt::get (i32, 2)),
+	                                "type_info_0");
+
+	FunctionType *fty = FunctionType::get (i32, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_kind", &m);
+
+	FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+	Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+	                                   "mono_personality", &m);
+	pers->addFnAttr (Attribute::NoUnwind);
+	BasicBlock *pbb = BasicBlock::Create (c1, "ENTRY", pers);
+	IRBuilder<> pb (pbb);
+	pb.CreateRet (ConstantInt::get (i32, 0));
+	fn->setPersonalityFn (pers);
+
+	BasicBlock *entry = BasicBlock::Create (c1, "entry", fn);
+	BasicBlock *cont = BasicBlock::Create (c1, "cont", fn);
+	BasicBlock *lpad = BasicBlock::Create (c1, "lpad", fn);
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont, lpad, {});
+	IRBuilder<> cb (cont);
+	cb.CreateRet (ConstantInt::get (i32, 0));
+
+	StructType *lp_ty = StructType::get (ptr, i32);
+	IRBuilder<> lb (lpad);
+	LandingPadInst *lp = lb.CreateLandingPad (lp_ty, 1);
+	lp->addClause (ti0); /* catch -> type_info_0 {clause 6, kind 2} */
+	lb.CreateRet (lb.CreateExtractValue (lp, 1));
+
+	auto sc = mono::gather_eh_sidechannel (m);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (sc->functions.size () == 1);
+	const mono::MonoEHFunctionClauses &fnc = sc->functions[0];
+	CHECK (!fnc.declined);
+	CHECK (!fnc.has_filter);
+	CHECK (fnc.clauses.size () == 1);
+	CHECK (fnc.clauses[0].clause_resolved);
+	CHECK (fnc.clauses[0].clause_index == 6);
+	CHECK (fnc.clauses[0].kind == 2); /* the second struct word, actually read */
+
+	printf ("     kind-smuggling: clause_index=%d kind=%d (2-word struct read)\n",
+	        fnc.clauses[0].clause_index, fnc.clauses[0].kind);
+	return TEST_PASS;
+}
+
 /* --------------------------------------------- .mono_lsda emit (C3) */
 
 /* Little-endian scalar reads out of a captured section's bytes. */
@@ -1806,15 +1896,15 @@ rd_le16 (const uint8_t *p)
 	return (uint16_t) ((uint16_t) p[0] | ((uint16_t) p[1] << 8));
 }
 
-/* One decoded .mono_lsda entry (plan 12 2): four code-relative u32 fields. */
+/* One decoded .mono_lsda v2 entry: five code-relative u32 fields (incl. kind). */
 struct LsdaEntry {
-	uint32_t try_start_off, try_len, handler_off, clause_index;
+	uint32_t try_start_off, try_len, handler_off, clause_index, kind;
 };
 
 /*
- * Header-checked decode of a .mono_lsda section: magic 'MLSD', version 1, and a
- * body whose length is exactly 8 + count*16. Mirrors what the C4 load-side parser
- * will do; false on any mismatch/truncation.
+ * Header-checked decode of a .mono_lsda section: magic 'MLSD', version 2, and a
+ * body whose length is exactly 8 + count*20 (the v2 self-describing kind column).
+ * Mirrors what the C4 load-side parser does; false on any mismatch/truncation.
  */
 static bool
 parse_mono_lsda (const std::vector<uint8_t> &b, std::vector<LsdaEntry> &out)
@@ -1823,14 +1913,15 @@ parse_mono_lsda (const std::vector<uint8_t> &b, std::vector<LsdaEntry> &out)
 		return false;
 	if (rd_le32 (b.data ()) != 0x4d4c5344u) /* 'MLSD' */
 		return false;
-	if (rd_le16 (b.data () + 4) != 1)
+	if (rd_le16 (b.data () + 4) != 2)
 		return false;
 	uint16_t count = rd_le16 (b.data () + 6);
-	if (b.size () != (size_t) 8 + (size_t) count * 16)
+	if (b.size () != (size_t) 8 + (size_t) count * 20)
 		return false;
 	for (uint16_t i = 0; i < count; i++) {
-		const uint8_t *e = b.data () + 8 + (size_t) i * 16;
-		out.push_back ({ rd_le32 (e), rd_le32 (e + 4), rd_le32 (e + 8), rd_le32 (e + 12) });
+		const uint8_t *e = b.data () + 8 + (size_t) i * 20;
+		out.push_back ({ rd_le32 (e), rd_le32 (e + 4), rd_le32 (e + 8),
+		                 rd_le32 (e + 12), rd_le32 (e + 16) });
 	}
 	return true;
 }
@@ -1904,7 +1995,7 @@ hex_dump (const std::vector<uint8_t> &b)
  * MonoIRCompiler pipeline (compile_object_with_mono_compiler - the exact object
  * emission the runtime path uses) and assert the emitted bytes:
  *
- *   - header: magic 'MLSD', version 1, count 2 (two invoke ranges -> two entries);
+ *   - header: magic 'MLSD', version 2, count 2 (two invoke ranges -> two entries);
  *   - clause indices exactly {3, 7} (the smuggled IL indices), as a set;
  *   - every offset self-consistent: try range within the entry function and
  *     handler_off inside it, try_len > 0 (offsets are code-relative, so their
@@ -1946,6 +2037,11 @@ test_eh_mono_lsda_two_catch (MonoLLVMJIT *jit)
 	std::sort (ci.begin (), ci.end ());
 	CHECK (ci[0] == 3);
 	CHECK (ci[1] == 7);
+
+	/* v2 kind column: both entries are catch, so kind == 0 (round-tripped from
+	 * the struct globals through the gather and the streamer). */
+	CHECK (es[0].kind == 0);
+	CHECK (es[1].kind == 0);
 
 	/* Every offset lands inside the entry function's own machine code. */
 	auto fsz = object_func_size (**obj, "eh_two_catch");
@@ -2032,6 +2128,10 @@ test_eh_mono_lsda_multi_call (MonoLLVMJIT *jit)
 	CHECK (es[0].clause_index == 5);
 	CHECK (es[1].clause_index == 5);
 	CHECK (es[0].handler_off == es[1].handler_off);
+
+	/* v2 kind column: catch clause, kind == 0 on both invoke-range entries. */
+	CHECK (es[0].kind == 0);
+	CHECK (es[1].kind == 0);
 
 	/* ...but DIFFERENT try_start_off (disjoint ranges - the whole point). */
 	CHECK (es[0].try_start_off != es[1].try_start_off);
@@ -2297,6 +2397,7 @@ test_llvm_engine_main (void)
 	report ("gcc-except-table", test_gcc_except_table (jit));
 	report ("eh-gather", test_eh_gather (jit));
 	report ("eh-gather-multi-call", test_eh_gather_multi_call (jit));
+	report ("eh-gather-kind-smuggling", test_eh_gather_kind_smuggling (jit));
 	report ("eh-gather-external-typeinfo-declines",
 	        test_eh_gather_external_typeinfo_declines (jit));
 	report ("eh-gather-cleanup-declines", test_eh_gather_cleanup_declines (jit));

@@ -1013,16 +1013,24 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 
 		/*
 		 * Carry one landingpad clause per catch that shares this try region, in
-		 * ascending IL clause_index order. Each is a type_info_N global whose i32
-		 * initializer smuggles the IL clause_index; the gather pass reads them
-		 * (one .mono_lsda entry per catch over the shared invoke range) and the
-		 * runtime picks the handler by isinst in that order, so declaration order
-		 * (inner/more-derived catch first) is preserved. A single catch adds just
-		 * its own clause; sibling catches add the whole group.
+		 * ascending IL clause_index order. Each is a type_info_N global whose
+		 * 2-word {i32 clause_index, i32 kind} initializer smuggles the IL
+		 * clause_index AND the clause's flags (kind); the gather pass reads both
+		 * (one .mono_lsda entry per catch over the shared invoke range, carrying a
+		 * self-describing kind column) and the runtime picks the handler by isinst
+		 * in that order, so declaration order (inner/more-derived catch first) is
+		 * preserved. A single catch adds just its own clause; sibling catches add
+		 * the whole group. Every clause admitted here is catch (flags == NONE == 0
+		 * in F1), but the real flag is wired through - not hardcoded - so F2 can
+		 * carry FINALLY/FAULT unchanged.
 		 */
 		for (i = 0; i < cfg->header->num_clauses; ++i) {
 			MonoExceptionClause *c = &cfg->header->clauses [i];
 			LLVMValueRef type_info;
+			LLVMTypeRef i32_ty = llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
+			LLVMTypeRef ti_members [2] = { i32_ty, i32_ty };
+			LLVMTypeRef ti_type = LLVMStructType (ti_members, 2, FALSE);
+			LLVMValueRef ti_init [2];
 
 			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
 				continue;
@@ -1032,8 +1040,11 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 			sprintf (ti_name, "type_info_%d", ti_generator);
 			ti_generator ++;
 
-			type_info = LLVMAddGlobal (lmodule, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), ti_name);
-			LLVMSetInitializer (type_info, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)));
+			ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false));
+			ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), c->flags, false));
+
+			type_info = LLVMAddGlobal (lmodule, ti_type, ti_name);
+			LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
 			LLVMAddClause (landing_pad, type_info);
 		}
 

@@ -142,12 +142,21 @@ struct MonoEHClause {
 	const llvm::MCSymbol *try_end = nullptr;
 	/* The handler entry: LandingPadInfo LandingPadLabel. */
 	const llvm::MCSymbol *handler = nullptr;
-	/* The IL clause index, smuggled through the type_info_N i32 initializer. */
+	/* The IL clause index, smuggled through the type_info_N initializer. */
 	int clause_index = -1;
 	/*
+	 * The clause's IL flags (a MonoExceptionEnum: NONE=0/catch, FINALLY=2,
+	 * FAULT=4), smuggled alongside clause_index through the type_info_N global's
+	 * 2-word {i32 clause_index, i32 kind} initializer. MonoLSDAStreamer writes it
+	 * into the v2 section's kind column so the section is self-describing. For a
+	 * catch clause (all F1 admits) it is 0; the legacy 1-word i32 initializer
+	 * (clause_index only) leaves it 0 too.
+	 */
+	int kind = 0;
+	/*
 	 * False if the clause_index could not be safely recovered (the type_info was
-	 * not a GlobalVariable carrying a ConstantInt initializer): downstream must
-	 * decline (CAP-EH-0), never guess.
+	 * not a GlobalVariable carrying a ConstantInt / 2-word struct initializer):
+	 * downstream must decline (CAP-EH-0), never guess.
 	 */
 	bool clause_resolved = false;
 };

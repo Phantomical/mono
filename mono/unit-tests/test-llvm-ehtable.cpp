@@ -815,6 +815,7 @@ make_lsda (std::uint32_t magic, std::uint16_t version, std::uint16_t count,
 		put_u32 (b, e.try_len);
 		put_u32 (b, e.handler_off);
 		put_u32 (b, e.clause_index);
+		put_u32 (b, e.kind);
 	}
 	return b;
 }
@@ -854,30 +855,36 @@ parse_guarded (const std::uint8_t *data, std::size_t len, std::vector<MonoLsdaEn
 /* ------------------------------------------------------------ parse cases */
 
 /*
- * The exact bytes MonoLSDAStreamer emits, taken from plan 12 1.2's verified
- * probe2.o golden dump:
- *   44534c4d 01000200   magic 'MLSD', version 1, count 2
- *   01000000 05000000 11000000 07000000   {try=1, len=5, handler=0x11, clause=7}
- *   06000000 05000000 0f000000 03000000   {try=6, len=5, handler=0x0f, clause=3}
- * 40 bytes = 8 + 2*16. Decoded by hand from the format above.
+ * The exact bytes MonoLSDAStreamer emits for the v2 format (self-describing kind
+ * column). Same catch geometry as plan 12 1.2's probe2.o dump, now version 2 with
+ * a trailing per-entry kind == 0 (catch):
+ *   44534c4d 02000200   magic 'MLSD', version 2, count 2
+ *   01000000 05000000 11000000 07000000 00000000  {try=1, len=5, h=0x11, clause=7, kind=0}
+ *   06000000 05000000 0f000000 03000000 00000000  {try=6, len=5, h=0x0f, clause=3, kind=0}
+ * 48 bytes = 8 + 2*20. Decoded by hand from the format above.
  */
 static const std::uint8_t GOLDEN_MLSD [] = {
-	0x44, 0x53, 0x4c, 0x4d, 0x01, 0x00, 0x02, 0x00,
+	0x44, 0x53, 0x4c, 0x4d, 0x02, 0x00, 0x02, 0x00,
 	0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
 	0x11, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
 	0x06, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
 	0x0f, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
 };
 
 static void
 check_entry (const char *what, int i, const MonoLsdaEntry &got, const MonoLsdaEntry &exp)
 {
 	if (got.try_start_off != exp.try_start_off || got.try_len != exp.try_len ||
-	    got.handler_off != exp.handler_off || got.clause_index != exp.clause_index) {
-		printf ("FAIL %s: entry %d: got {ts=%u tl=%u h=%u ci=%u}, "
-		        "want {ts=%u tl=%u h=%u ci=%u}\n", what, i,
+	    got.handler_off != exp.handler_off || got.clause_index != exp.clause_index ||
+	    got.kind != exp.kind) {
+		printf ("FAIL %s: entry %d: got {ts=%u tl=%u h=%u ci=%u k=%u}, "
+		        "want {ts=%u tl=%u h=%u ci=%u k=%u}\n", what, i,
 		        got.try_start_off, got.try_len, got.handler_off, got.clause_index,
-		        exp.try_start_off, exp.try_len, exp.handler_off, exp.clause_index);
+		        got.kind,
+		        exp.try_start_off, exp.try_len, exp.handler_off, exp.clause_index,
+		        exp.kind);
 		failures ++;
 	}
 }
@@ -923,7 +930,7 @@ expect_parse_decline (const char *what, const std::uint8_t *data, std::size_t le
 /*
  * parse_mono_lsda's final "unreachable given exact-size, but bounds-honest"
  * !r.ok() check (mono_lsda.cpp 164-165) is not exercised as a standalone case:
- * the exact-size check just above it already guarantees size == 8 + count*16,
+ * the exact-size check just above it already guarantees size == 8 + count*20,
  * so every u32() read in the entry loop always has its 4 bytes available and
  * that branch cannot be reached through the section's byte layout alone (it
  * would need an injectable Reader to force ok()==false mid-loop despite a
@@ -934,25 +941,25 @@ expect_parse_decline (const char *what, const std::uint8_t *data, std::size_t le
 static void
 cases_mono_lsda_parse (void)
 {
-	/* The C3 golden vector decodes to its two hand-derived entries. */
+	/* The C3 golden vector decodes to its two hand-derived entries (kind 0). */
 	static const MonoLsdaEntry golden_exp [] = {
-		{ 1, 5, 0x11, 7 },
-		{ 6, 5, 0x0f, 3 },
+		{ 1, 5, 0x11, 7, 0 },
+		{ 6, 5, 0x0f, 3, 0 },
 	};
 	expect_parse ("mlsd-golden-two-entry", GOLDEN_MLSD, sizeof (GOLDEN_MLSD),
 	              golden_exp, 2);
 
 	/* A header-only section (count 0) is well-formed and decodes to nothing. */
 	{
-		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 0, {});
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 0, {});
 		expect_parse ("mlsd-count-zero-header-only", b.data (), b.size (), nullptr, 0);
 	}
 
-	/* One-entry section: exactly 8 + 16 bytes. */
+	/* One-entry section: exactly 8 + 20 bytes. Non-zero kind round-trips verbatim. */
 	{
-		std::vector<MonoLsdaEntry> ents = { { 0x20, 0x08, 0x30, 0 } };
-		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 1, ents);
-		static const MonoLsdaEntry one_exp [] = { { 0x20, 0x08, 0x30, 0 } };
+		std::vector<MonoLsdaEntry> ents = { { 0x20, 0x08, 0x30, 0, 2 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 1, ents);
+		static const MonoLsdaEntry one_exp [] = { { 0x20, 0x08, 0x30, 0, 2 } };
 		expect_parse ("mlsd-one-entry", b.data (), b.size (), one_exp, 1);
 	}
 
@@ -960,31 +967,47 @@ cases_mono_lsda_parse (void)
 
 	/* Bad magic. */
 	{
-		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
-		std::vector<std::uint8_t> b = make_lsda (0xdeadbeefu, 1, 1, ents);
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7, 0 } };
+		std::vector<std::uint8_t> b = make_lsda (0xdeadbeefu, 2, 1, ents);
 		expect_parse_decline ("mlsd-bad-magic", b.data (), b.size ());
 	}
 
-	/* Unknown version (2). */
+	/*
+	 * A v1 buffer now DECLINES against this v2-only loader (CAP-EH-0). It is a
+	 * genuine 16-byte-stride v1 record (magic ok, version 1, one 16-byte entry):
+	 * the loader recognises only version 2, so the older format is refused rather
+	 * than misread at the wrong stride.
+	 */
 	{
-		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
-		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 1, ents);
-		expect_parse_decline ("mlsd-version-2", b.data (), b.size ());
+		std::vector<std::uint8_t> b;
+		put_u32 (b, 0x4d4c5344u); /* magic 'MLSD' */
+		put_u16 (b, 1);           /* version 1 */
+		put_u16 (b, 1);           /* count 1 */
+		put_u32 (b, 1); put_u32 (b, 5); put_u32 (b, 0x11); put_u32 (b, 7); /* one v1 16B entry */
+		expect_parse_decline ("mlsd-v1-declines", b.data (), b.size ());
+	}
+
+	/* Any other unrecognised version (3) declines too. */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7, 0 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 3, 1, ents);
+		expect_parse_decline ("mlsd-version-3-declines", b.data (), b.size ());
 	}
 
 	/* Truncated header (7 bytes: count field cut short). */
 	{
-		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 0, {});
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 0, {});
 		b.pop_back ();
 		expect_parse_decline ("mlsd-truncated-header", b.data (), b.size ());
 	}
 
 	/* Truncated entry: header says 2 entries but only one entry's worth of
-	 * payload is present (8 + 16 bytes). Exact-size mismatch declines. */
+	 * payload is present (8 + 20 bytes). Exact-size mismatch (28 != 8+2*20)
+	 * declines. */
 	{
-		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
-		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 1, ents);
-		/* rewrite count to 2 while carrying one entry -> size 24 != 8+2*16 */
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7, 0 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 2, ents);
+		/* count field is 2 but only one 20-byte entry follows -> size 28 != 48 */
 		expect_parse_decline ("mlsd-truncated-entry", b.data (), b.size ());
 	}
 
@@ -996,20 +1019,20 @@ cases_mono_lsda_parse (void)
 	 * record would misattribute clause geometry, so parse declines.
 	 */
 	{
-		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
-		std::vector<std::uint8_t> rec = make_lsda (0x4d4c5344u, 1, 1, ents);
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7, 0 } };
+		std::vector<std::uint8_t> rec = make_lsda (0x4d4c5344u, 2, 1, ents);
 		std::vector<std::uint8_t> two = rec;
-		two.insert (two.end (), rec.begin (), rec.end ()); /* 24 + 24 = 48 bytes */
+		two.insert (two.end (), rec.begin (), rec.end ()); /* 28 + 28 = 56 bytes */
 		expect_parse_decline ("mlsd-two-record-oversize-declines", two.data (), two.size ());
 	}
 
 	/*
 	 * Trailing-byte oversize: exactly one valid record plus a single junk byte.
-	 * 25 != 24 -> decline (a section MUST be exactly its declared extent).
+	 * 29 != 28 -> decline (a section MUST be exactly its declared extent).
 	 */
 	{
-		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
-		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 1, ents);
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7, 0 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 1, ents);
 		b.push_back (0xaa);
 		expect_parse_decline ("mlsd-one-trailing-byte-oversize-declines", b.data (), b.size ());
 	}
@@ -1257,6 +1280,33 @@ cases_mono_lsda_build (void)
 		bad[0].flags = MONO_EXCEPTION_CLAUSE_FAULT;
 		expect_build_decline ("build-fault-clause-flags-declines",
 			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
+	}
+
+	/*
+	 * v2 KIND/JOIN CROSS-CHECK (CAP-EH-0). The section is self-describing: an
+	 * entry carries the clause's kind. A catch clause (flags NONE) whose entry
+	 * claims kind FINALLY(2) contradicts the IL table and must decline via the
+	 * cross-check - before the catch-only gate, which would also fire. This is the
+	 * belt-and-suspenders that a mis-smuggled or corrupt section cannot slip a
+	 * table built on a contradiction past.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		expect_build_decline ("build-kind-join-mismatch-declines", ents, clauses, 2);
+	}
+
+	/*
+	 * The reverse contradiction: a FINALLY clause whose entry kind (2) AGREES with
+	 * the join, so the cross-check passes - but the catch-only gate then declines
+	 * (F1 admits no non-catch clause). Proves the two checks are distinct: a
+	 * matching kind does not by itself admit a non-catch clause.
+	 */
+	{
+		MonoExceptionClause fin [1];
+		memset (fin, 0, sizeof (fin));
+		fin[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		expect_build_decline ("build-finally-kind-matches-but-gate-declines", ents, fin, 1);
 	}
 
 	/* count == 0 while num_clauses > 0 (every protected call optimised away). */
