@@ -75,6 +75,11 @@
 #include <unordered_map>
 #include "llvm/ADT/DenseMap.h"
 
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Type.h>
+#include <llvm/IR/Function.h>
+
 #include "translator-cpp.hpp"
 #include "backend.h"
 #include "aot-compiler.h"
@@ -217,6 +222,14 @@ typedef struct {
 	char *method_name;
 	llvm::DenseMap<MonoMethod*, LLVMValueRef> jit_callees;
 	LLVMValueRef long_bb_break_var;
+
+	/*
+	 * The module's LLVMContext as a C++ reference. The module uses the single
+	 * process-global context (module->context is LLVMGetGlobalContext ()), so
+	 * this is the one place later C++ call sites reach for a context in scope --
+	 * Type::getInt32Ty (C), ConstantInt::get (...), and so on.
+	 */
+	llvm::LLVMContext &llvm_ctx () const { return *llvm::unwrap (module->context); }
 } EmitContext;
 
 typedef struct {
