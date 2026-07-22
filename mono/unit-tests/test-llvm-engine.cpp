@@ -621,39 +621,28 @@ test_gcc_except_table (MonoLLVMJIT *jit)
 	auto compiled = reinterpret_cast<int64_t (*) (void)> (res.entry);
 	CHECK (compiled () == 1);
 
-	/* ---- M1-decode smoke check on the captured bytes ---- */
+	/* ---- M1-decode assertion on the captured bytes ---- */
 	{
+		/*
+		 * Under the engine's effective (Large) code model, real LLVM-18 emits the
+		 * TType table as DW_EH_PE_absptr (0x00): 8-byte ABSOLUTE ttype entries
+		 * relocated with R_X86_64_64 (which is why R5 finds no truncating reloc) -
+		 * not the DW_EH_PE_udata4 (0x03, 4-byte) form clang -mcmodel=small produces.
+		 * Slice M2.1b extended M1 (lsda.cpp) to accept absptr, so the real captured
+		 * table now DECODES. Assert that here: the decoder must accept it and report
+		 * ttype_encoding == 0x00 (M2.3 reads that to size the 8-byte entries when it
+		 * dereferences the loaded ttype table).
+		 */
 		mono::ParsedLsda parsed;
 		bool decoded = mono::decode_gcc_except_table (
 			res.gcc_except_table.addr, (std::size_t) res.gcc_except_table.size, parsed);
-		if (decoded) {
-			printf ("     M1 decode: OK (ttype_enc=0x%02x cs_enc=0x%02x "
-			        "call_sites=%zu has_ttype=%d)\n",
-			        parsed.ttype_encoding, parsed.call_site_encoding,
-			        parsed.call_sites.size (), (int) parsed.has_ttype_table);
-		} else {
-			/*
-			 * A decline here is an M2-relevant finding, not a plumbing failure.
-			 * The LSDA byte at offset 0 is the LPStart encoding and the byte at
-			 * offset 1 is the TType encoding - both at fixed offsets. Under the
-			 * engine's effective (Large) code model, real LLVM-18 emits the TType
-			 * table as DW_EH_PE_absptr (0x00): 8-byte ABSOLUTE ttype entries,
-			 * relocated with R_X86_64_64 (which is why R5 finds no truncating
-			 * reloc). M1 (lsda.cpp) only accepts DW_EH_PE_udata4 (0x03) - the
-			 * 4-byte form clang -mcmodel=small produces - so it declines absptr.
-			 * M2.3 must extend the decoder (and the §4a ttype dereference) to read
-			 * the 8-byte absptr entries the JIT actually emits. Report loudly; do
-			 * not fail the M2.1 plumbing test on it.
-			 */
-			const uint8_t *raw = (const uint8_t *) res.gcc_except_table.addr;
-			printf ("     M1 decode: DECLINED - real LLVM-18 .gcc_except_table did "
-			        "NOT decode through M1. lpstart_enc=0x%02x ttype_enc=0x%02x "
-			        "(size=%llu). M1 supports TType=udata4(0x03); the JIT emitted "
-			        "TType=absptr(0x00), an 8-byte absolute entry. M2.3 must handle "
-			        "absptr.\n",
-			        raw[0], raw[1],
-			        (unsigned long long) res.gcc_except_table.size);
-		}
+		printf ("     M1 decode: %s (ttype_enc=0x%02x cs_enc=0x%02x "
+		        "call_sites=%zu has_ttype=%d)\n",
+		        decoded ? "OK" : "DECLINED",
+		        parsed.ttype_encoding, parsed.call_site_encoding,
+		        parsed.call_sites.size (), (int) parsed.has_ttype_table);
+		CHECK (decoded);
+		CHECK (parsed.ttype_encoding == 0x00);
 	}
 
 	/* ---- R5: relocation audit over the EH object under the engine model ---- */

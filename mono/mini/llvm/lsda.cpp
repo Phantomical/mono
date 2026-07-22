@@ -10,7 +10,7 @@
  *
  *   header:
  *     u8    LPStart encoding           (LLVM emits DW_EH_PE_omit)
- *     u8    TType encoding             (LLVM emits DW_EH_PE_udata4, or omit)
+ *     u8    TType encoding             (LLVM emits DW_EH_PE_absptr or udata4, or omit)
  *     uleb  TType base offset          (present only when TType != omit)
  *     u8    call-site encoding         (LLVM emits DW_EH_PE_uleb128)
  *     uleb  call-site table length
@@ -31,14 +31,22 @@
  * loaded. The table is validated far enough that every surfaced index refers to
  * a slot that physically exists between the action table and ttbase.
  *
- * WHY ONLY THREE ENCODINGS. The set supported is exactly what LLVM 18 emits for
- * a JIT-compiled function in mono's configuration (static relocation model,
- * small code model): LPStart omit, TType udata4 (absolute), call-site uleb128 -
- * confirmed empirically (clang-18 -fno-pic -fno-pie -mcmodel=small -static;
- * see test-llvm-ehtable.cpp for the exact bytes). Every OTHER encoding declines
- * rather than guesses (CAP-EH-0): notably TType indirect/pcrel (0x9b), which is
- * what a PIC build emits and would make the ttype entry the address OF a pointer
- * rather than resolvable as a direct index base.
+ * WHICH ENCODINGS ARE SUPPORTED. Exactly what LLVM 18 emits for a JIT-compiled
+ * function in mono's configuration, in both the effective code models seen:
+ * LPStart omit, call-site uleb128, and a TType table that is ABSOLUTE in one of
+ * two widths -
+ *   - DW_EH_PE_absptr (0x00): 8-byte absolute entries, relocated R_X86_64_64.
+ *     This is what the real JIT emits under the engine's effective Large code
+ *     model (M2.1 finding, doc 09 4).
+ *   - DW_EH_PE_udata4 (0x03): 4-byte absolute entries, relocated R_X86_64_32.
+ *     What clang-18 -fno-pic -fno-pie -mcmodel=small -static emits (see
+ *     test-llvm-ehtable.cpp for the exact bytes); a small-model AOT object.
+ * Both are absolute, so a resolved slot holds the type_info address directly.
+ * The only difference the decoder cares about is the entry width (8 vs 4), which
+ * scales ttype_entry_count. Every OTHER encoding declines rather than guesses
+ * (CAP-EH-0): notably TType indirect/pcrel (0x9b), which is what a PIC build
+ * emits and would make the ttype entry the address OF a pointer rather than
+ * resolvable as a direct absolute base.
  *
  * BOUNDS. Every read goes through Reader, the bounds-checked cursor lifted from
  * ehframe.cpp: buffer pointers are private, every accessor reserves its bytes
@@ -71,6 +79,7 @@ namespace {
  * matter here; the application bits (pcrel/indirect/...) reach us only to be
  * declined.
  */
+constexpr std::uint8_t PE_absptr  = 0x00;
 constexpr std::uint8_t PE_omit    = 0xff;
 constexpr std::uint8_t PE_uleb128 = 0x01;
 constexpr std::uint8_t PE_udata4  = 0x03;
@@ -204,12 +213,21 @@ private:
 	bool ok_ = false;
 };
 
-/* Byte width of a ttype table entry for the (already validated) TType encoding. */
+/*
+ * Byte width of a ttype table entry for the (already validated) TType encoding.
+ * absptr entries are pointer-sized 8-byte absolutes (the JIT case, Large model);
+ * udata4 entries are 4-byte absolutes (the small-model AOT case). Any other
+ * encoding is unsupported and returns 0 so the caller declines. See the file
+ * header for why only these two absolute forms are accepted.
+ */
 std::size_t
 ttype_entry_size (std::uint8_t encoding)
 {
-	/* Only udata4 is supported; see the file header. */
-	return (encoding == PE_udata4) ? 4 : 0;
+	switch (encoding) {
+	case PE_absptr: return 8;
+	case PE_udata4: return 4;
+	default:        return 0;
+	}
 }
 
 /*
@@ -302,7 +320,10 @@ decode_gcc_except_table (const std::uint8_t *lsda, std::size_t size, ParsedLsda 
 		return false;
 	out.lpstart_encoding = lp_enc;
 
-	/* TType encoding: udata4 (a real ttype table) or omit (no catch clauses). */
+	/*
+	 * TType encoding: absptr (8-byte) or udata4 (4-byte) - both ABSOLUTE, a real
+	 * ttype table - or omit (no catch clauses). Every other encoding declines.
+	 */
 	std::uint8_t tt_enc = r.u8 ();
 	if (!r.ok ())
 		return false;
@@ -312,7 +333,7 @@ decode_gcc_except_table (const std::uint8_t *lsda, std::size_t size, ParsedLsda 
 	if (tt_enc == PE_omit) {
 		out.has_ttype_table = false;
 	} else {
-		if (tt_enc != PE_udata4)
+		if (tt_enc != PE_absptr && tt_enc != PE_udata4)
 			return false; /* CAP-EH-0: indirect/pcrel/etc. decline */
 		out.has_ttype_table = true;
 
@@ -357,7 +378,17 @@ decode_gcc_except_table (const std::uint8_t *lsda, std::size_t size, ParsedLsda 
 	 * table and ttbase. The exact count is not recoverable (the action/ttype
 	 * boundary is implicit), but no valid ttype entry can lie before the action
 	 * table, so this bounds every index safely. Entries grow backward from
-	 * ttbase, so index i occupies [ttbase - i*size, ttbase - (i-1)*size).
+	 * ttbase, so index i (1-based) occupies [ttbase - i*esize, ttbase -
+	 * (i-1)*esize). esize is encoding-derived (8 for absptr, 4 for udata4).
+	 *
+	 * The count is floor((ttbase - action_table) / esize) with the SAME esize, so
+	 * count*esize <= (ttbase - action_table); an index validated <= count in
+	 * resolve_action_chain therefore has ttbase - i*esize >= ttbase - count*esize
+	 * >= action_table, i.e. its whole slot lies inside [action_table, ttbase),
+	 * inside the buffer - for esize=8 exactly as for esize=4. (ttbase - action_table
+	 * is a same-buffer pointer difference <= size, so neither the division nor a
+	 * later i*esize can overflow.) The entries themselves are never dereferenced
+	 * here; M2.3 reads them from the loaded object using ttype_encoding.
 	 */
 	if (out.has_ttype_table) {
 		std::size_t esize = ttype_entry_size (tt_enc);

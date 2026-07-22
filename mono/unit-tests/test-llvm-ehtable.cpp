@@ -190,6 +190,52 @@ static const std::uint8_t VECTOR_DOC [] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
+/*
+ * VECTOR_CLANG18_LARGE is the real-JIT absptr known-good vector. It is the same
+ * two-catch C++ try/catch as VECTOR_CLANG18, but compiled under the LARGE code
+ * model - the model the engine's JIT effectively uses (09-eh-m2-plan.md 4, the
+ * M2.1 finding). Under Large, LLVM 18 encodes the TType table as DW_EH_PE_absptr
+ * (0x00): 8-byte ABSOLUTE entries relocated R_X86_64_64 (llvm-readelf -r shows two
+ * R_X86_64_64 to _ZTI1A/_ZTI1B at offsets 0x38/0x40), not the DW_EH_PE_udata4
+ * (0x03, 4-byte) that -mcmodel=small produces. It was produced by, and is
+ * reproducible with:
+ *
+ *   cat > ex.cpp <<'EOF'
+ *   struct A {}; struct B {};
+ *   void may_throw(); void h_a(); void h_b();
+ *   void f() {
+ *     try { may_throw(); }
+ *     catch (A&) { h_a(); }
+ *     catch (B&) { h_b(); }
+ *   }
+ *   EOF
+ *   /usr/lib/llvm-18/bin/clang++ -O1 -fexceptions \
+ *       -fno-pic -fno-pie -mcmodel=large -static -c ex.cpp -o ex.o
+ *   /usr/lib/llvm-18/bin/llvm-objcopy -O binary \
+ *       --only-section=.gcc_except_table ex.o sec.bin   # the 72 bytes below
+ *   /usr/lib/llvm-18/bin/llvm-readelf -r ex.o           # R_X86_64_64 ttype relocs
+ *
+ * 72 bytes; ttbase (offset 0x48) is the buffer end. 8 call sites; call site 1's
+ * action chain is TypeInfo 2 -> TypeInfo 1, call site 7's is TypeInfo 3; the rest
+ * are cleanup-only (no landing pad / action 0). The two 8-byte ttype entries
+ * (offsets 0x38, 0x40) plus the zero pad between the action records and them are
+ * R_X86_64_64 relocations, zero in the object and never read by the decoder. The
+ * expected shape below is hand-derived from the Itanium format and the try/catch
+ * source, independently of the decoder (cross-checked against the M2.1 engine
+ * capture, which uses the same absptr 0x00 encoding).
+ */
+static const std::uint8_t VECTOR_CLANG18_LARGE [] = {
+	0xff, 0x00, 0x45, 0x01, 0x22, 0x01, 0x0c, 0x0f,
+	0x03, 0x0d, 0x19, 0x00, 0x00, 0x26, 0x0c, 0x72,
+	0x00, 0x32, 0x16, 0x00, 0x00, 0x48, 0x0c, 0x61,
+	0x00, 0x54, 0x10, 0x00, 0x00, 0x64, 0x1d, 0x90,
+	0x01, 0x05, 0x81, 0x01, 0x1e, 0x00, 0x00, 0x01,
+	0x00, 0x02, 0x7d, 0x03, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
 /* Expected shape of one call site. actn < 0 in a slot is never expected. */
 struct ExpCS {
 	std::uint32_t start, length, landing_pad;
@@ -306,6 +352,27 @@ cases_known_good (void)
 	};
 	expect_decode ("doc-2.2-known-good", VECTOR_DOC, sizeof (VECTOR_DOC),
 	               0xff, 0x03, 0x01, true, 0x20, 3, doc_exp, 3);
+
+	/*
+	 * VECTOR_CLANG18_LARGE: the real-JIT absptr table (TType 0x00, 8-byte
+	 * entries). Same call-site geometry as the source's try/catch shape as the
+	 * small-model vector would give, but ttbase is 0x48 and ttype_entry_count is
+	 * (0x48-0x27)/8 = 4 (the 8-byte divisor). cs0's chain is TypeInfo 2 ->
+	 * TypeInfo 1, cs6's is TypeInfo 3; the rest cleanup-only. All hand-derived.
+	 */
+	static const ExpCS clang_large_exp [] = {
+		{   1, 12,  15, 2, { 2, 1, 0, 0 } }, /* cs0: TypeInfo 2 -> TypeInfo 1 */
+		{  13, 25,   0, 0, { 0, 0, 0, 0 } }, /* cs1: cleanup */
+		{  38, 12, 114, 0, { 0, 0, 0, 0 } }, /* cs2 */
+		{  50, 22,   0, 0, { 0, 0, 0, 0 } }, /* cs3 */
+		{  72, 12,  97, 0, { 0, 0, 0, 0 } }, /* cs4 */
+		{  84, 16,   0, 0, { 0, 0, 0, 0 } }, /* cs5 */
+		{ 100, 29, 144, 1, { 3, 0, 0, 0 } }, /* cs6: TypeInfo 3 */
+		{ 129, 30,   0, 0, { 0, 0, 0, 0 } }, /* cs7 */
+	};
+	expect_decode ("clang18-large-absptr-known-good", VECTOR_CLANG18_LARGE,
+	               sizeof (VECTOR_CLANG18_LARGE),
+	               0xff, 0x00, 0x01, true, 0x48, 4, clang_large_exp, 8);
 }
 
 /*
@@ -431,8 +498,8 @@ cases_negative (void)
 	{
 		std::uint8_t b [sizeof (VECTOR_CLANG18)];
 		memcpy (b, VECTOR_CLANG18, sizeof b);
-		b [1] = 0x00; /* TType absptr: unsupported */
-		expect_decline ("ttype-encoding-absptr-declines", b, sizeof b);
+		b [1] = 0x02; /* TType udata2: an absolute but unsupported width - declines */
+		expect_decline ("ttype-encoding-udata2-declines", b, sizeof b);
 	}
 	{
 		std::uint8_t b [sizeof (VECTOR_CLANG18)];

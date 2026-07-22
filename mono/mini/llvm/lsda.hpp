@@ -98,10 +98,13 @@ struct ParsedLsda {
  * checked before the dereference.
  *
  * The encodings supported are exactly the ones stock LLVM 18 emits for a
- * JIT-compiled function in mono's target configuration (static relocation model,
- * small code model): LPStart = DW_EH_PE_omit, TType = DW_EH_PE_udata4 (or omit),
- * call-site = DW_EH_PE_uleb128. Every other encoding hard-declines rather than
- * guessing (CAP-EH-0: never produce a plausible-but-wrong table).
+ * JIT-compiled function in mono's target configuration: LPStart = DW_EH_PE_omit,
+ * call-site = DW_EH_PE_uleb128, and an ABSOLUTE TType table in either width -
+ * DW_EH_PE_absptr (0x00, 8-byte, the JIT's Large-model output) or DW_EH_PE_udata4
+ * (0x03, 4-byte, a small-model AOT object) - or omit (no catch clauses). The
+ * recorded ttype_encoding tells M2.3 the entry width (8 vs 4) when it dereferences
+ * the loaded table. Every other encoding hard-declines rather than guessing
+ * (CAP-EH-0: never produce a plausible-but-wrong table).
  */
 bool decode_gcc_except_table (const std::uint8_t *lsda, std::size_t size, ParsedLsda &out);
 
