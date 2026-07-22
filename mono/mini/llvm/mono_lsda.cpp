@@ -378,11 +378,21 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	 * into that sort, so nothing can hoist an enclosing entry ahead of its base.
 	 *
 	 * For a single base range, its enclosing entries are appended in ASCENDING
-	 * clause_index order (the j loop runs low->high). By ECMA-335 a more-deeply-
-	 * nested clause precedes its enclosers in the clause table, so ascending
-	 * clause_index == innermost-enclosing first (doc 21 4.1). At the depth the gate
-	 * admits this is moot (<= 1 encloser per clause), but the order is correct for
-	 * deeper nests too.
+	 * clause_index order (the j loop runs low->high). By ECMA-335 12.4.2.5 a
+	 * more-deeply-nested try clause precedes its enclosers in the clause table, so
+	 * SMALLER clause_index == more inner, and ascending clause_index ==
+	 * innermost-enclosing first (doc 21 4.1). This ORDER is load-bearing at depth
+	 * >= 3, where a base has MULTIPLE enclosers: pass-2 resumes at the running
+	 * clause's ARRAY slot + 1, so the enclosers must sit innermost-first for the
+	 * intervening finallys to run inner-to-outer and enclosing catches to be
+	 * reached in precedence order. For a depth-3 try/finally C(0) in B(1) in A(2),
+	 * the published array is [C@0, B@1, A@2] and pass-2 runs finallys C, B, A -
+	 * BYTE-for-slot identical to the classic JIT, which emits jinfo->clauses in the
+	 * same inner-first IL clause order (verified live, EH N6). The legacy
+	 * mini-llvm.c:3821 prepend built nested_in DESCENDING (A, B), which for AOT
+	 * fed the load-time synthesis the opposite order and would have run C, A, B -
+	 * that path only ever ran depth-2 nests live, where a single encloser makes the
+	 * order moot; ascending is the correct order and resolves doc 21 4.1's open Q.
 	 *
 	 * DE-DUP BY (base range, enclosing clause_index). A SIBLING catch group -
 	 * try { } catch(A) catch(B) - publishes SEVERAL base entries over the SAME

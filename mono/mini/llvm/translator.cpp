@@ -237,48 +237,46 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 		return;
 
 	/*
-	 * Nesting gate (depth-2, EH N3). The `.mono_lsda` synthesis (build_ex_info,
-	 * EH N1) plus the landing-pad selector routing (emit_handler_start, EH N2)
-	 * represent a clause whose try region is strictly contained in an enclosing
-	 * clause's try: for each faulting PC the runtime still delivers to the
-	 * INNERMOST landing pad, whose selector switch re-dispatches RDX == the
-	 * enclosing clause_index to that enclosing handler's body (doc 21 5/6). The
-	 * synthesised enclosing entries reuse the inner landing pad and copy the inner
-	 * base entry's exact range, so the published native ranges stay
-	 * equal-or-disjoint (doc 21 2.2). Admit containment up to DEPTH 2 - every
-	 * clause has at most ONE encloser - which turns on the whole common surface:
-	 * C# try/catch/finally, try/finally in try/catch, one level of nested
-	 * try/catch or try/finally.
+	 * Nesting gate (arbitrary depth, EH N6). The `.mono_lsda` synthesis
+	 * (build_ex_info, EH N1) plus the landing-pad selector routing
+	 * (emit_handler_start, EH N2) represent a clause whose try region is strictly
+	 * contained in an enclosing clause's try: for each faulting PC the runtime
+	 * still delivers to the INNERMOST landing pad, whose selector switch
+	 * re-dispatches RDX == the enclosing clause_index to that enclosing handler's
+	 * body (doc 21 5/6). The synthesised enclosing entries reuse the inner landing
+	 * pad and copy the inner base entry's exact range, so the published native
+	 * ranges stay equal-or-disjoint (doc 21 2.2). All try-containment of
+	 * NONE/FINALLY/FAULT clauses is admitted to ANY depth: a clause with several
+	 * enclosers (a 3-or-more-deep nest) gets one synthesised enclosing entry per
+	 * encloser, appended in ascending clause_index (= innermost-encloser first,
+	 * doc 21 4.1) so pass-2 runs the intervening finallys innermost-first and
+	 * reaches enclosing catches in precedence order - matching the classic JIT's
+	 * inner-first clause array. The N1 synthesis + N2 emission carry no depth cap
+	 * (the selector switch adds one value-keyed case per encloser regardless of
+	 * count), so nothing here limits depth either.
 	 *
-	 * Two shapes still DECLINE to the classic JIT (CAP-EH-0, doc 21 7 / 8.1):
-	 *   - DEPTH > 2 (a clause with >= 2 enclosers, a 3-deep nest): the relative
-	 *     order of the multiple enclosing entries becomes load-bearing (doc 21
-	 *     4.1, still an open question) and no nested array of that depth has been
-	 *     validated live.
-	 *   - CROSSING / partial overlap: try regions overlap but the pair is neither
-	 *     siblings nor cleanly contained (neither encloses the other) - malformed
-	 *     IL the synthesis cannot faithfully encode.
+	 * The only residual decline (CAP-EH-0, doc 21 7 / 8.1) is defensive: a pair
+	 * that overlaps but is neither siblings nor cleanly contained (neither
+	 * encloses the other) - a CROSSING / partial overlap the synthesis cannot
+	 * faithfully encode (malformed IL). Gate-A(FILTER)/save_lmf/dynamic declines
+	 * still apply on top of this.
 	 *
 	 * True SIBLING catches - try { } catch(A) catch(B) - share the IDENTICAL
 	 * protected region (same try_offset AND try_len) and are NOT nesting: they are
 	 * emitted as one landing pad carrying a clause per sibling, routed by the
-	 * selector (doc 11 3/6). clause_encloses is false for siblings, so they add
-	 * nothing to the encloser count and pass the crossing test - admitted, as
-	 * before. The containment test uses clause_encloses, byte-for-byte the
-	 * predicate the N1 synthesis and N2 emission use, so the gate admits exactly
-	 * the pairs those two stages can represent.
+	 * selector (doc 11 3/6). clause_encloses is false for siblings, so they pass
+	 * the crossing test - admitted, as before. The crossing test uses
+	 * clause_encloses, byte-for-byte the predicate the N1 synthesis and N2
+	 * emission use, so the gate admits exactly the pairs those two stages can
+	 * represent.
 	 */
 	for (i = 0; i < cfg->header->num_clauses; ++i) {
 		MonoExceptionClause *clause1 = &cfg->header->clauses [i];
-		int enclosers = 0;
 
 		for (j = 0; j < cfg->header->num_clauses; ++j) {
 			if (i == j)
 				continue;
 			MonoExceptionClause *clause2 = &cfg->header->clauses [j];
-
-			if (clause_encloses (clause1, clause2))
-				enclosers++;
 
 			bool siblings = clause1->try_offset == clause2->try_offset &&
 			                    clause1->try_len == clause2->try_len;
@@ -296,13 +294,6 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 		}
 		if (cfg->disable_llvm)
 			break;
-
-		if (enclosers > 1) {
-			TRACE_FAILURE_CFG (cfg, "nested clauses depth>2");
-			cfg->exception_message = g_strdup ("nested clauses depth>2");
-			cfg->disable_llvm = TRUE;
-			break;
-		}
 	}
 	if (cfg->disable_llvm)
 		return;

@@ -855,22 +855,27 @@ class Tests
 	}
 
 	/*
-	 * NEGATIVE (doc 21 8.1): a DEPTH-3 nest still DECLINES to the classic JIT. The
-	 * innermost catch clause has TWO enclosers (the middle and outer finallys), so the
-	 * gate's `enclosers > 1` branch fires and the method never reaches the LLVM tier.
-	 * Not named _t1 - the accompanying driven run names it in MONO_LLVM_METHOD yet must
-	 * emit NO LLVM method (declined by the gate, not the allowlist). The behaviour is
-	 * asserted correct regardless of tier.
+	 * DEPTH-3 (doc 21 8.1 / EH N6): a nest where the innermost CATCH(C7ExA) clause has
+	 * TWO enclosers - the middle and outer finallys. Until N6 this DECLINED (the gate's
+	 * depth-2 `enclosers > 1` cap); N6 removes the cap so it now compiles through the
+	 * LLVM tier, and this is its live guard. The inner catch owns the landing pad; its
+	 * base entry synthesises TWO enclosing finally entries (middle then outer, ascending
+	 * clause_index = innermost-encloser first), so an uncaught throw runs the middle
+	 * finally THEN the outer finally inner-to-outer, byte-for-slot identical to the
+	 * classic inner-first clause array. Named _t1; forced tier-1 via
+	 * MONO_LLVM_METHOD='n3_depth3_nested_t1', asserted tier-1 == classic.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
-	static int n3_depth3_nested (int mode, int[] log) {
+	static int n3_depth3_nested_t1 (int mode, int[] log) {
 		int r = 0;
 		try {						/* outer FINALLY */
 			try {					/* middle FINALLY */
 				try {				/* inner CATCH (C7ExA) - two enclosers */
 					log [++log [0]] = 1;
 					if (mode == 1)
-						throw new C7ExA ();
+						C7Throw (1);		/* C7ExA -> inner catch */
+					if (mode == 2)
+						C7Throw (2);		/* C7ExB -> uncaught, both finallys as cleanup */
 					r = 10;
 				} catch (C7ExA) {
 					log [++log [0]] = 2;
@@ -885,19 +890,29 @@ class Tests
 		return r;
 	}
 
-	public static int test_0_n3_depth3_declines () {
+	public static int test_0_n3_depth3_nested () {
 		int[] log = new int [8];
-		for (int i = 0; i < 8; i++) { log [0] = 0; n3_depth3_nested (0, log); log [0] = 0; n3_depth3_nested (1, log); }
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n3_depth3_nested_t1 (0, log);
+			log [0] = 0; n3_depth3_nested_t1 (1, log);
+			log [0] = 0; try { n3_depth3_nested_t1 (2, log); } catch (C7ExB) { }
+		}
 		/* normal path: try body, both finallys inner-to-outer -> r=10, order 1,3,4 */
 		log [0] = 0;
-		int rn = n3_depth3_nested (0, log);
+		int rn = n3_depth3_nested_t1 (0, log);
 		if (!(rn == 10 && log [0] == 3 && log [1] == 1 && log [2] == 3 && log [3] == 4))
 			return 1;
 		/* caught: inner catch, then both finallys on the leave -> r=20, order 1,2,3,4 */
 		log [0] = 0;
-		int re = n3_depth3_nested (1, log);
+		int re = n3_depth3_nested_t1 (1, log);
 		if (!(re == 20 && log [0] == 4 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 4))
 			return 2;
+		/* uncaught: inner catch skipped, middle THEN outer finally as cleanup, propagate -> order 1,3,4 */
+		log [0] = 0;
+		bool prop = false;
+		try { n3_depth3_nested_t1 (2, log); } catch (C7ExB) { prop = true; }
+		if (!(prop && log [0] == 3 && log [1] == 1 && log [2] == 3 && log [3] == 4))
+			return 3;
 		return 0;
 	}
 
@@ -1554,6 +1569,258 @@ class Tests
 		int r = n5_s4_caller_t0 (log);
 		/* tier-1 finally runs exactly once (1,4) then the tier-0 next frame catches (5) */
 		return (r == 9 && log [0] == 3 && log [1] == 1 && log [2] == 4 && log [3] == 5) ? 0 : 1;
+	}
+
+	/*
+	 * ---------------------------------------------------------------- EH N6 (doc 21 §8.1/§4.1)
+	 * N6 removes the depth-2 nesting cap: any NONE/FINALLY/FAULT try-nesting of ARBITRARY
+	 * depth now compiles through the LLVM tier. That exercises, for the first time live, a
+	 * clause with MULTIPLE enclosers - and with it the enclosing-entry ORDER that doc 21 §4.1
+	 * left open. build_ex_info appends a base's enclosing entries in ASCENDING clause_index;
+	 * ECMA-335 §12.4.2.5 numbers a more-deeply-nested try clause BEFORE its enclosers, so
+	 * ascending clause_index == innermost-encloser first. Because pass-2 resumes at the running
+	 * clause's ARRAY slot + 1, that order makes intervening finallys run inner-to-outer and
+	 * enclosing catches be reached in precedence order - byte-for-slot identical to the classic
+	 * JIT, whose jinfo->clauses is the same inner-first IL clause array. (The legacy
+	 * mini-llvm.c:3821 prepend built the DESCENDING order, which would run a depth-3 finally
+	 * chain C, A, B - only ever safe live at depth-2, where the single encloser makes order
+	 * moot.) These tests pin the order at depth 3 and 4 against the classic oracle.
+	 *
+	 * Each helper is _t1; a driven run forces it onto tier-1:
+	 *   MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 \
+	 *   MONO_LLVM_METHOD='n3_depth3_nested_t1;n6_finally3_t1;n6_catch3_t1;\
+	 *     n6_catch_finally_mix_t1;n6_finally4_t1' ./mono --llvm -v exceptions.exe
+	 * In the regression suite the warm-up loops are inert at the default promotion threshold,
+	 * so these stay pure correctness tests with the classic JIT as the differential oracle. The
+	 * assertions (finally order across >= 2 enclosers, catch selection/precedence across two
+	 * boundaries, exception identity, each finally exactly once) must hold identically on both
+	 * tiers. C7ExA/C7ExB/C7ExC(:C7ExB)/C7ExD map via C7Throw 1->A 2->B 3->C 4->D.
+	 */
+
+	/*
+	 * DEPTH-3 try/finally x3 (doc 21 §4.1, the sharpest ordering test). An uncaught throw in
+	 * the innermost try must run the three finallys INNERMOST-FIRST: inner (2), middle (3),
+	 * outer (4). The inner try owns the sole landing pad; its base entry synthesises TWO
+	 * enclosing finally entries (middle @ clause1, outer @ clause2) appended ascending, so
+	 * pass-2 runs 2,3,4 - the descending-order bug would run 2,4,3. mode 0 = no throw (finallys
+	 * on the normal leave), 1 = uncaught throw (finallys as cleanup, then propagate).
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n6_finally3_t1 (int mode, int[] log) {
+		try {						/* outer FINALLY (clause2) */
+			try {					/* middle FINALLY (clause1) */
+				try {				/* inner FINALLY (clause0) */
+					log [++log [0]] = 1;
+					if (mode == 1)
+						C7Throw (1);		/* throw C7ExA via a call (invoke edge), uncaught */
+				} finally {
+					log [++log [0]] = 2;	/* inner */
+				}
+			} finally {
+				log [++log [0]] = 3;		/* middle */
+			}
+		} finally {
+			log [++log [0]] = 4;			/* outer */
+		}
+	}
+
+	public static int test_0_n6_finally3 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n6_finally3_t1 (0, log);
+			log [0] = 0; try { n6_finally3_t1 (1, log); } catch (C7ExA) { }
+		}
+		/* normal leave: inner, middle, outer -> order 1,2,3,4 */
+		log [0] = 0;
+		n6_finally3_t1 (0, log);
+		if (!(log [0] == 4 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 4))
+			return 1;
+		/* uncaught: three finallys inner-to-outer as cleanup, then propagate -> order 1,2,3,4 */
+		log [0] = 0;
+		bool prop = false;
+		try { n6_finally3_t1 (1, log); } catch (C7ExA) { prop = true; }
+		if (!(prop && log [0] == 4 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 4))
+			return 2;
+		return 0;
+	}
+
+	/*
+	 * DEPTH-3 try/catch precedence across TWO nesting boundaries: inner CATCH(C7ExC, derived)
+	 * in middle CATCH(C7ExB, base of C7ExC) in outer CATCH(C7ExA, unrelated). The inner catch
+	 * has two enclosers (middle, outer). A throw is routed to the innermost catch whose type
+	 * matches, scanning inner -> middle -> outer in array order: C7ExC hits the inner, C7ExB
+	 * (base) skips the derived inner and hits the middle, C7ExA skips both and hits the outer,
+	 * C7ExD matches none and propagates. mode 1=C7ExC 2=C7ExB 3=C7ExA 4=C7ExD.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n6_catch3_t1 (int mode, int[] log) {
+		int r = 0;
+		try {						/* outer CATCH (C7ExA) */
+			try {					/* middle CATCH (C7ExB) */
+				try {				/* inner CATCH (C7ExC : C7ExB) */
+					log [++log [0]] = 1;
+					if (mode == 1)
+						C7Throw (3);		/* C7ExC -> inner */
+					if (mode == 2)
+						C7Throw (2);		/* C7ExB -> middle */
+					if (mode == 3)
+						C7Throw (1);		/* C7ExA -> outer */
+					if (mode == 4)
+						C7Throw (4);		/* C7ExD -> propagate */
+					r = 10;
+				} catch (C7ExC) {
+					log [++log [0]] = 2;
+					r = 20;
+				}
+			} catch (C7ExB) {
+				log [++log [0]] = 3;
+				r = 30;
+			}
+		} catch (C7ExA) {
+			log [++log [0]] = 4;
+			r = 40;
+		}
+		return r;
+	}
+
+	public static int test_0_n6_catch3 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n6_catch3_t1 (0, log);
+			log [0] = 0; n6_catch3_t1 (1, log);
+			log [0] = 0; n6_catch3_t1 (2, log);
+			log [0] = 0; n6_catch3_t1 (3, log);
+			log [0] = 0; try { n6_catch3_t1 (4, log); } catch (C7ExD) { }
+		}
+		/* no throw -> r=10, order 1 */
+		log [0] = 0;
+		if (!(n6_catch3_t1 (0, log) == 10 && log [0] == 1 && log [1] == 1))
+			return 1;
+		/* C7ExC -> inner catch (most derived) -> r=20, order 1,2 */
+		log [0] = 0;
+		if (!(n6_catch3_t1 (1, log) == 20 && log [0] == 2 && log [1] == 1 && log [2] == 2))
+			return 2;
+		/* C7ExB -> inner isinst fails, middle base catch across one boundary -> r=30, order 1,3 */
+		log [0] = 0;
+		if (!(n6_catch3_t1 (2, log) == 30 && log [0] == 2 && log [1] == 1 && log [2] == 3))
+			return 3;
+		/* C7ExA -> inner+middle fail, outer catch across two boundaries -> r=40, order 1,4 */
+		log [0] = 0;
+		if (!(n6_catch3_t1 (3, log) == 40 && log [0] == 2 && log [1] == 1 && log [2] == 4))
+			return 4;
+		/* C7ExD -> none match, propagates -> order 1 */
+		log [0] = 0;
+		bool prop = false;
+		try { n6_catch3_t1 (4, log); } catch (C7ExD) { prop = true; }
+		if (!(prop && log [0] == 1 && log [1] == 1))
+			return 5;
+		return 0;
+	}
+
+	/*
+	 * DEPTH-3 catch/finally MIX: inner CATCH(C7ExB) in middle FINALLY in outer CATCH(C7ExA).
+	 * The inner catch owns the landing pad; its enclosers are the middle finally (clause1) and
+	 * the outer catch (clause2), appended ascending. The load-bearing case is an uncaught-by-
+	 * inner throw (C7ExA): pass-2 must run the intervening middle FINALLY (slot 1) BEFORE it
+	 * enters the outer CATCH (slot 2). The descending-order bug would enter the outer catch
+	 * without first running the middle finally. mode 1=C7ExB (inner catch) 2=C7ExA (middle
+	 * finally then outer catch).
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n6_catch_finally_mix_t1 (int mode, int[] log) {
+		int r = 0;
+		try {						/* outer CATCH (C7ExA) */
+			try {					/* middle FINALLY */
+				try {				/* inner CATCH (C7ExB) */
+					log [++log [0]] = 1;
+					if (mode == 1)
+						C7Throw (2);		/* C7ExB -> inner catch */
+					if (mode == 2)
+						C7Throw (1);		/* C7ExA -> middle finally then outer catch */
+					r = 10;
+				} catch (C7ExB) {
+					log [++log [0]] = 2;
+					r = 20;
+				}
+			} finally {
+				log [++log [0]] = 3;		/* middle finally */
+			}
+		} catch (C7ExA e) {
+			log [++log [0]] = (e is C7ExA) ? 4 : 99;	/* identity check on the routed object */
+			r = 40;
+		}
+		return r;
+	}
+
+	public static int test_0_n6_catch_finally_mix () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n6_catch_finally_mix_t1 (0, log);
+			log [0] = 0; n6_catch_finally_mix_t1 (1, log);
+			log [0] = 0; n6_catch_finally_mix_t1 (2, log);
+		}
+		/* no throw: inner body, middle finally on leave -> r=10, order 1,3 */
+		log [0] = 0;
+		if (!(n6_catch_finally_mix_t1 (0, log) == 10 && log [0] == 2 && log [1] == 1 && log [2] == 3))
+			return 1;
+		/* C7ExB: inner catch, then middle finally on the leave out -> r=20, order 1,2,3 */
+		log [0] = 0;
+		if (!(n6_catch_finally_mix_t1 (1, log) == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 2;
+		/* C7ExA: inner skipped, middle finally FIRST, then outer catch (right obj) -> r=40, order 1,3,4 */
+		log [0] = 0;
+		if (!(n6_catch_finally_mix_t1 (2, log) == 40 && log [0] == 3 && log [1] == 1 && log [2] == 3 && log [3] == 4))
+			return 3;
+		return 0;
+	}
+
+	/*
+	 * DEPTH-4 try/finally x4 - stresses the ordering across THREE enclosers of one base. An
+	 * uncaught throw runs the four finallys innermost-first: 2,3,4,5. The inner base entry
+	 * synthesises three enclosing finally entries (clause1,2,3) ascending, so pass-2 walks them
+	 * inner-to-outer. mode 0 = no throw, 1 = uncaught throw.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n6_finally4_t1 (int mode, int[] log) {
+		try {						/* clause3 (outer) */
+			try {					/* clause2 */
+				try {				/* clause1 */
+					try {			/* clause0 (inner) */
+						log [++log [0]] = 1;
+						if (mode == 1)
+							C7Throw (1);	/* C7ExA, uncaught */
+					} finally {
+						log [++log [0]] = 2;
+					}
+				} finally {
+					log [++log [0]] = 3;
+				}
+			} finally {
+				log [++log [0]] = 4;
+			}
+		} finally {
+			log [++log [0]] = 5;
+		}
+	}
+
+	public static int test_0_n6_finally4 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n6_finally4_t1 (0, log);
+			log [0] = 0; try { n6_finally4_t1 (1, log); } catch (C7ExA) { }
+		}
+		/* normal leave: 1,2,3,4,5 */
+		log [0] = 0;
+		n6_finally4_t1 (0, log);
+		if (!(log [0] == 5 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 4 && log [5] == 5))
+			return 1;
+		/* uncaught: four finallys inner-to-outer, then propagate -> 1,2,3,4,5 */
+		log [0] = 0;
+		bool prop = false;
+		try { n6_finally4_t1 (1, log); } catch (C7ExA) { prop = true; }
+		if (!(prop && log [0] == 5 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 4 && log [5] == 5))
+			return 2;
+		return 0;
 	}
 
 	public static int test_0_byte_cast () {

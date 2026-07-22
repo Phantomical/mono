@@ -1961,6 +1961,147 @@ cases_mono_lsda_nesting (void)
 			printf ("ok   nest-sibling-group-multirange-one-per-range (6 ei: finally synthesised once per distinct range)\n");
 		}
 	}
+
+	/*
+	 * (11) DEPTH-3 try/finally x3 - the enclosing-entry ORDER at depth >= 3 (doc 21 4.1,
+	 * EH N6). clause0 (inner finally) is nested in clause1 (middle finally) is nested in
+	 * clause2 (outer finally): nested_in[0] = {1, 2}. The single inner base entry
+	 * synthesises TWO enclosing finally entries. They MUST be appended in ASCENDING
+	 * clause_index (1 then 2) = innermost-encloser first: pass-2 resumes at the running
+	 * clause's ARRAY slot + 1, so the array order [inner@0, middle@1, outer@2] is what
+	 * makes the runtime run the finallys inner-to-outer (C, B, A). This is the exact
+	 * property a DESCENDING order (legacy mini-llvm.c:3821 prepend, which would give
+	 * [inner@0, outer@2, middle@1]) would get wrong. Assert the clause_index sequence is
+	 * 0,1,2 and every entry shares the inner base's range + landing pad.
+	 */
+	{
+		MonoExceptionClause cl [3];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* inner */
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x04;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* middle */
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x18; cl[1].handler_offset = 0x28; cl[1].handler_len = 0x04;
+		cl[2].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer */
+		cl[2].try_offset = 0x10; cl[2].try_len = 0x20; cl[2].handler_offset = 0x30; cl[2].handler_len = 0x04;
+
+		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-depth3-finally-ascending-order";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 3, base, code_len, out);
+		bool good = ok && out.size () == 3 &&
+			/* slot 0: base inner finally */
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[0].clause_index == 0 &&
+			out[0].try_start == (gpointer) (base + R_START) &&
+			out[0].try_end == (gpointer) (base + R_START + R_LEN) &&
+			out[0].handler_start == (gpointer) MINI_ADDR_TO_FTNPTR (base + H_OFF) &&
+			/* slots 1,2: enclosing finallys, ASCENDING clause_index (middle before outer) */
+			out[1].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[1].clause_index == 1 &&
+			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 2 &&
+			/* every synthesised encloser shares the inner base's range + landing pad */
+			out[1].try_start == out[0].try_start && out[1].try_end == out[0].try_end &&
+			out[1].handler_start == out[0].handler_start &&
+			out[2].try_start == out[0].try_start && out[2].try_end == out[0].try_end &&
+			out[2].handler_start == out[0].handler_start;
+		if (!good) {
+			printf ("FAIL nest-depth3-finally-ascending-order: ok=%d size=%zu "
+			        "(expected 3 ei, clause_index 0,1,2 innermost-first)\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-depth3-finally-ascending-order (3 ei: inner@0, middle@1, outer@2)\n");
+		}
+	}
+
+	/*
+	 * (12) DEPTH-4 try/finally x4 - the same ordering over THREE enclosers of one base.
+	 * nested_in[0] = {1, 2, 3}. Assert FOUR ei with clause_index 0,1,2,3 (ascending =
+	 * innermost-encloser first) all over the inner base's range/landing pad.
+	 */
+	{
+		MonoExceptionClause cl [4];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x04;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x18; cl[1].handler_offset = 0x28; cl[1].handler_len = 0x04;
+		cl[2].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		cl[2].try_offset = 0x10; cl[2].try_len = 0x20; cl[2].handler_offset = 0x30; cl[2].handler_len = 0x04;
+		cl[3].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		cl[3].try_offset = 0x10; cl[3].try_len = 0x28; cl[3].handler_offset = 0x38; cl[3].handler_len = 0x04;
+
+		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-depth4-finally-ascending-order";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 4, base, code_len, out);
+		bool good = ok && out.size () == 4 &&
+			out[0].clause_index == 0 && out[1].clause_index == 1 &&
+			out[2].clause_index == 2 && out[3].clause_index == 3 &&
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
+			out[3].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
+			out[1].try_start == out[0].try_start && out[1].handler_start == out[0].handler_start &&
+			out[3].try_start == out[0].try_start && out[3].handler_start == out[0].handler_start;
+		if (!good) {
+			printf ("FAIL nest-depth4-finally-ascending-order: ok=%d size=%zu "
+			        "(expected 4 ei, clause_index 0,1,2,3)\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-depth4-finally-ascending-order (4 ei: 0,1,2,3 innermost-first)\n");
+		}
+	}
+
+	/*
+	 * (13) DEPTH-3 DE-DUP - a sibling catch group enclosed by TWO finallys. clause0/clause1
+	 * are inner sibling catches (identical try range), enclosed by clause2 (middle finally)
+	 * and clause3 (outer finally): nested_in[0] = nested_in[1] = {2, 3}. The gather hands
+	 * TWO sibling base entries over the SAME range/landing pad. Each would re-synthesise the
+	 * SAME two enclosing finallys; the (range, enclosing clause_index) de-dup collapses them
+	 * so EACH encloser appears exactly ONCE. Expect FOUR ei: two sibling base catches
+	 * (slots 0,1) then the two enclosing finallys ONCE each in ascending order (slots 2,3) -
+	 * NOT six (un-deduped) - proving the dedup and the depth>=3 order compose.
+	 */
+	{
+		MonoExceptionClause cl [4];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;    /* inner catch A */
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x04;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_NONE;    /* inner catch B (sibling of A) */
+		cl[1].data.catch_class = CC1;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x10; cl[1].handler_offset = 0x24; cl[1].handler_len = 0x04;
+		cl[2].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* middle finally */
+		cl[2].try_offset = 0x10; cl[2].try_len = 0x18; cl[2].handler_offset = 0x28; cl[2].handler_len = 0x04;
+		cl[3].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer finally */
+		cl[3].try_offset = 0x10; cl[3].try_len = 0x20; cl[3].handler_offset = 0x30; cl[3].handler_len = 0x04;
+
+		/* Two sibling base entries: SAME range, SAME (shared) landing pad 0x40. */
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x10, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE },
+			{ 0x10, 0x10, 0x40, 1, MONO_EXCEPTION_CLAUSE_NONE },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-depth3-sibling-dedup-ascending";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 4, base, code_len, out);
+		bool good = ok && out.size () == 4 &&
+			/* slots 0,1: the two sibling base catches over the shared range/pad */
+			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE && out[0].clause_index == 0 &&
+			out[1].flags == MONO_EXCEPTION_CLAUSE_NONE && out[1].clause_index == 1 &&
+			out[0].try_start == out[1].try_start && out[0].handler_start == out[1].handler_start &&
+			/* slots 2,3: the two enclosing finallys, ONCE each, ascending clause_index */
+			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 2 &&
+			out[3].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[3].clause_index == 3 &&
+			out[2].try_start == out[0].try_start && out[2].handler_start == out[0].handler_start &&
+			out[3].try_start == out[0].try_start && out[3].handler_start == out[0].handler_start;
+		if (!good) {
+			printf ("FAIL nest-depth3-sibling-dedup-ascending: ok=%d size=%zu "
+			        "(expected 4: 2 sibling catches + 2 enclosers once each; 6 == un-deduped)\n",
+			        ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-depth3-sibling-dedup-ascending (4 ei: 2 siblings, 2 enclosers deduped ascending)\n");
+		}
+	}
 }
 
 /* ------------------------------------------------------------ publish cases */
