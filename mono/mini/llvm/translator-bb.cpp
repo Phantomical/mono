@@ -216,7 +216,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 * The long_bb_break_var is initialized to 0 in the prolog, so this branch will always go to 'cbb'
 			 * but llvm doesn't know that, so the branch is not going to be eliminated.
 			 */
-			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (load), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (load), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 
 			llvm::wrap (builder->CreateCondBr (llvm::unwrap (cmp), llvm::unwrap (cbb), llvm::unwrap (dummy_bb)));
 
@@ -375,17 +375,17 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					 */
 					g_assert (MONO_CLASS_IS_SIMD (ctx->cfg, mono_class_from_mono_type_internal (sig->ret)));
 					/* Convert to 2xi64 first */
-					val = llvm::wrap (builder->CreateBitCast (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::unwrap (IntPtrType ()), 2))), ""));
+					val = llvm::wrap (builder->CreateBitCast (llvm::unwrap (values [ins->sreg1]), llvm::FixedVectorType::get (llvm::unwrap (IntPtrType ()), 2), ""));
 
 					for (i = 0; i < 2; ++i) {
 						if (linfo->ret.pair_storage [i] == LLVMArgInIReg) {
-							retval = llvm::wrap (builder->CreateInsertValue (llvm::unwrap (retval), llvm::unwrap (llvm::wrap (builder->CreateExtractElement (llvm::unwrap (val), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false))), ""))), {(unsigned) i}, ""));
+							retval = llvm::wrap (builder->CreateInsertValue (llvm::unwrap (retval), builder->CreateExtractElement (llvm::unwrap (val), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false), ""), {(unsigned) i}, ""));
 						} else {
 							g_assert (linfo->ret.pair_storage [i] == LLVMArgNone);
 						}
 					}
 				} else {
-					addr = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
+					addr = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 					for (i = 0; i < 2; ++i) {
 						if (linfo->ret.pair_storage [i] == LLVMArgInIReg) {
 							LLVMValueRef indexes [2], part_addr;
@@ -394,7 +394,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 							indexes [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false));
 							part_addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (ret_type), llvm::unwrap (addr), gep_index_list (indexes, 2), ""));
 
-							retval = llvm::wrap (builder->CreateInsertValue (llvm::unwrap (retval), llvm::unwrap (llvm::wrap (builder->CreateLoad (llvm::unwrap (LLVMStructGetTypeAtIndex (ret_type, i)), llvm::unwrap (part_addr), ""))), {(unsigned) i}, ""));
+							retval = llvm::wrap (builder->CreateInsertValue (llvm::unwrap (retval), builder->CreateLoad (llvm::unwrap (LLVMStructGetTypeAtIndex (ret_type, i)), llvm::unwrap (part_addr), ""), {(unsigned) i}, ""));
 						} else {
 							g_assert (linfo->ret.pair_storage [i] == LLVMArgNone);
 						}
@@ -410,7 +410,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					retval = llvm::wrap (builder->CreateBitCast (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (ret_type), "setret_cvt_simd"));
 				else {
 					g_assert (addresses [ins->sreg1]);
-					retval = llvm::wrap (builder->CreateLoad (llvm::unwrap (ret_type), llvm::unwrap (llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""))), ""));
+					retval = llvm::wrap (builder->CreateLoad (llvm::unwrap (ret_type), builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""), ""));
 				}
 				llvm::wrap (builder->CreateRet (llvm::unwrap (retval)));
 				break;
@@ -473,7 +473,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					if (cfg->vret_addr)
 						llvm::wrap (builder->CreateRetVoid ());
 					else
-						llvm::wrap (builder->CreateRet (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (type_to_llvm_type (ctx, sig->ret)))))));
+						llvm::wrap (builder->CreateRet (llvm::Constant::getNullValue (llvm::unwrap (type_to_llvm_type (ctx, sig->ret)))));
 				} else {
 					llvm::wrap (builder->CreateRet (llvm::unwrap (convert (ctx, lhs, type_to_llvm_type (ctx, sig->ret)))));
 				}
@@ -554,10 +554,10 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					else if (nonnull && llvm_pred == LLVMIntNE)
 						cmp = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), TRUE, false));
 					else
-						cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (llvm_pred), llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))))), ""));
+						cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (llvm_pred), llvm::unwrap (lhs), llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))), ""));
 
 				} else {
-					cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (llvm_pred), llvm::unwrap (convert (ctx, lhs, IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_imm, false))), ""));
+					cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (llvm_pred), llvm::unwrap (convert (ctx, lhs, IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_imm, false), ""));
 				}
 			} else if (ins->opcode == OP_LCOMPARE_IMM) {
 				cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (cond_to_llvm_cond [rel]), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
@@ -591,7 +591,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			} else if (MONO_IS_SETCC (ins->next)) {
 				sprintf (dname_buf, "t%d", ins->next->dreg);
 				dname = dname_buf;
-				values [ins->next->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->next->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 
 				/* Add stores for volatile variables */
 				emit_volatile_store (ctx, ins->next->dreg);
@@ -629,7 +629,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			rel = mono_opcode_to_cond (ins->opcode);
 
 			cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (fpcond_to_llvm_cond [rel]), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		}
 		case OP_RCEQ:
@@ -644,7 +644,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			rel = mono_opcode_to_cond (ins->opcode);
 
 			cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (fpcond_to_llvm_cond [rel]), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		}
 		case OP_PHI:
@@ -679,19 +679,19 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_MOVE_F_TO_I4: {
-			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (llvm::wrap (builder->CreateFPTrunc (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), ""))), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (builder->CreateFPTrunc (llvm::unwrap (lhs), llvm::Type::getFloatTy (ctx->llvm_ctx ()), ""), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			break;
 		}
 		case OP_MOVE_I4_TO_F: {
-			values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (llvm::wrap (builder->CreateBitCast (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), ""))), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPExt (builder->CreateBitCast (llvm::unwrap (lhs), llvm::Type::getFloatTy (ctx->llvm_ctx ()), ""), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), ""));
 			break;
 		}
 		case OP_MOVE_F_TO_I8: {
-			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (lhs), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), ""));
 			break;
 		}
 		case OP_MOVE_I8_TO_F: {
-			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (lhs), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), ""));
 			break;
 		}
 		case OP_IADD:
@@ -955,12 +955,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_INEG:
-			values [ins->dreg] = llvm::wrap (builder->CreateSub (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateSub (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), dname));
 			break;
 		case OP_LNEG:
 			if (LLVMTypeOf (lhs) != llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())))
 				lhs = convert (ctx, lhs, llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::wrap (builder->CreateSub (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 0, false))), llvm::unwrap (lhs), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateSub (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 0, false), llvm::unwrap (lhs), dname));
 			break;
 		case OP_FNEG:
 			lhs = convert (ctx, lhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
@@ -972,25 +972,25 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		case OP_INOT: {
 			guint32 v = 0xffffffff;
-			values [ins->dreg] = llvm::wrap (builder->CreateXor (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), v, false))), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateXor (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), v, false), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), dname));
 			break;
 		}
 		case OP_LNOT: {
 			if (LLVMTypeOf (lhs) != llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())))
 				lhs = convert (ctx, lhs, llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())));
 			guint64 v = 0xffffffffffffffffLL;
-			values [ins->dreg] = llvm::wrap (builder->CreateXor (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), v, false))), llvm::unwrap (lhs), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateXor (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), v, false), llvm::unwrap (lhs), dname));
 			break;
 		}
 #if defined(TARGET_X86) || defined(TARGET_AMD64)
 		case OP_X86_LEA: {
 			LLVMValueRef v1, v2;
 
-			rhs = llvm::wrap (builder->CreateSExt (llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), ""));
+			rhs = llvm::wrap (builder->CreateSExt (llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), ""));
 
-			v1 = llvm::wrap (builder->CreateMul (llvm::unwrap (convert (ctx, rhs, IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ((unsigned long long)1 << ins->backend.shift_amount), false))), ""));
+			v1 = llvm::wrap (builder->CreateMul (llvm::unwrap (convert (ctx, rhs, IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ((unsigned long long)1 << ins->backend.shift_amount), false), ""));
 			v2 = llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, lhs, IntPtrType ())), llvm::unwrap (v1), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateAdd (llvm::unwrap (v2), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_imm, false))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateAdd (llvm::unwrap (v2), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_imm, false), dname));
 			break;
 		}
 		case OP_X86_BSF32:
@@ -1035,95 +1035,95 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			/* Have to do two casts since our vregs have type int */
 			v = llvm::wrap (builder->CreateTrunc (llvm::unwrap (lhs), llvm::unwrap (op_to_llvm_type (ins->opcode)), ""));
 			if (sign)
-				values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (v), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			else
-				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (v), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		}
 		case OP_ICONV_TO_I8:
-			values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (lhs), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_ICONV_TO_U8:
-			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (lhs), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_FCONV_TO_I4:
 		case OP_RCONV_TO_I4:
-			values [ins->dreg] = llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_FCONV_TO_I1:
 		case OP_RCONV_TO_I1:
-			values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), dname))), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateSExt (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::Type::getInt8Ty (ctx->llvm_ctx ()), dname), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			break;
 		case OP_FCONV_TO_U1:
 		case OP_RCONV_TO_U1:
-			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (llvm::wrap (builder->CreateTrunc (llvm::unwrap (llvm::wrap (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::unwrap (IntPtrType ()), dname))), llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), ""))), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateZExt (builder->CreateTrunc (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::unwrap (IntPtrType ()), dname), llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ""), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			break;
 		case OP_FCONV_TO_I2:
 		case OP_RCONV_TO_I2:
-			values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt16Ty (ctx->llvm_ctx ()))), dname))), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateSExt (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::Type::getInt16Ty (ctx->llvm_ctx ()), dname), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			break;
 		case OP_FCONV_TO_U2:
 		case OP_RCONV_TO_U2:
-			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (llvm::wrap (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt16Ty (ctx->llvm_ctx ()))), dname))), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateZExt (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::Type::getInt16Ty (ctx->llvm_ctx ()), dname), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			break;
 		case OP_FCONV_TO_U4:
 		case OP_RCONV_TO_U4:
-			values [ins->dreg] = llvm::wrap (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_FCONV_TO_U8:
 		case OP_RCONV_TO_U8:
-			values [ins->dreg] = llvm::wrap (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPToUI (llvm::unwrap (lhs), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_FCONV_TO_I8:
 		case OP_RCONV_TO_I8:
-			values [ins->dreg] = llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_FCONV_TO_I:
 			values [ins->dreg] = llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::unwrap (IntPtrType ()), dname));
 			break;
 		case OP_ICONV_TO_R8:
 		case OP_LCONV_TO_R8:
-			values [ins->dreg] = llvm::wrap (builder->CreateSIToFP (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateSIToFP (llvm::unwrap (lhs), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_ICONV_TO_R_UN:
 		case OP_LCONV_TO_R_UN:
-			values [ins->dreg] = llvm::wrap (builder->CreateUIToFP (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateUIToFP (llvm::unwrap (lhs), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), dname));
 			break;
 #if TARGET_SIZEOF_VOID_P == 4
 		case OP_LCONV_TO_U:
 #endif
 		case OP_LCONV_TO_I4:
-			values [ins->dreg] = llvm::wrap (builder->CreateTrunc (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateTrunc (llvm::unwrap (lhs), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_ICONV_TO_R4:
 		case OP_LCONV_TO_R4:
-			v = llvm::wrap (builder->CreateSIToFP (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), ""));
+			v = llvm::wrap (builder->CreateSIToFP (llvm::unwrap (lhs), llvm::Type::getFloatTy (ctx->llvm_ctx ()), ""));
 			if (cfg->r4fp)
 				values [ins->dreg] = v;
 			else
-				values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (v), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_FCONV_TO_R4:
-			v = llvm::wrap (builder->CreateFPTrunc (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), ""));
+			v = llvm::wrap (builder->CreateFPTrunc (llvm::unwrap (lhs), llvm::Type::getFloatTy (ctx->llvm_ctx ()), ""));
 			if (cfg->r4fp)
 				values [ins->dreg] = v;
 			else
-				values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (v), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_RCONV_TO_R8:
-			values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (lhs), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_RCONV_TO_R4:
 			values [ins->dreg] = lhs;
 			break;
 		case OP_SEXT_I4:
-			values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_ZEXT_I4:
-			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_TRUNC_I4:
-			values [ins->dreg] = llvm::wrap (builder->CreateTrunc (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateTrunc (llvm::unwrap (lhs), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		case OP_LOCALLOC_IMM: {
 			LLVMValueRef v;
@@ -1142,7 +1142,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_LOCALLOC: {
 			LLVMValueRef v, size;
 				
-			size = llvm::wrap (builder->CreateAnd (llvm::unwrap (llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), MONO_ARCH_FRAME_ALIGNMENT - 1, false))), ""))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ~ (MONO_ARCH_FRAME_ALIGNMENT - 1), false))), ""));
+			size = llvm::wrap (builder->CreateAnd (builder->CreateAdd (llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), MONO_ARCH_FRAME_ALIGNMENT - 1, false), ""), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ~ (MONO_ARCH_FRAME_ALIGNMENT - 1), false), ""));
 
 			v = mono_llvm_build_alloca (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())), size, MONO_ARCH_FRAME_ALIGNMENT, "");
 
@@ -1191,14 +1191,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				if (ins->inst_offset == 0) {
 					LLVMValueRef gep_base, gep_offset;
 					if (mono_llvm_can_be_gep (base, &gep_base, &gep_offset)) {
-						addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (convert (ctx, gep_base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&gep_offset, 1), ""));
+						addr = llvm::wrap (builder->CreateGEP (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), llvm::unwrap (convert (ctx, gep_base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&gep_offset, 1), ""));
 					} else {
 						addr = base;
 					}
 				} else if (ins->inst_offset % size != 0) {
 					/* Unaligned load */
 					index = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_offset, false));
-					addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
+					addr = llvm::wrap (builder->CreateGEP (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
 				} else {
 					index = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_offset / size, false));
 					addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (t), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
@@ -1221,11 +1221,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 
 			if (sext)
-				values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (values [ins->dreg]), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			else if (zext)
-				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (values [ins->dreg]), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			else if (!cfg->r4fp && ins->opcode == OP_LOADR4_MEMBASE)
-				values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (values [ins->dreg]), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), dname));
 			break;
 		}
 
@@ -1254,11 +1254,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			base = values [ins->inst_destbasereg];
 			LLVMValueRef gep_base, gep_offset;
 			if (ins->inst_offset == 0 && mono_llvm_can_be_gep (base, &gep_base, &gep_offset)) {
-				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (convert (ctx, gep_base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&gep_offset, 1), ""));
+				addr = llvm::wrap (builder->CreateGEP (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), llvm::unwrap (convert (ctx, gep_base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&gep_offset, 1), ""));
 			} else if (ins->inst_offset % size != 0) {
 				/* Unaligned store */
 				index = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_offset, false));
-				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
+				addr = llvm::wrap (builder->CreateGEP (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
 			} else {
 				index = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_offset / size, false));
 				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (t), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
@@ -1294,11 +1294,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			base = values [ins->inst_destbasereg];
 			LLVMValueRef gep_base, gep_offset;
 			if (ins->inst_offset == 0 && mono_llvm_can_be_gep (base, &gep_base, &gep_offset)) {
-				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (convert (ctx, gep_base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&gep_offset, 1), ""));
+				addr = llvm::wrap (builder->CreateGEP (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), llvm::unwrap (convert (ctx, gep_base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&gep_offset, 1), ""));
 			} else if (ins->inst_offset % size != 0) {
 				/* Unaligned store */
 				index = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_offset, false));
-				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
+				addr = llvm::wrap (builder->CreateGEP (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
 			} else {
 				index = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_offset / size, false));
 				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (t), llvm::unwrap (convert (ctx, base, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), gep_index_list (&index, 1), ""));
@@ -1786,9 +1786,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			ARM64_ATOMIC_FENCE_FIX;
 
 			if (sext)
-				values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateSExt (llvm::unwrap (values [ins->dreg]), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			else if (zext)
-				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (values [ins->dreg]), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 			break;
 		}
 		case OP_ATOMIC_STORE_I1:
@@ -1844,14 +1844,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef ptrtype = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 256));
 #endif
 			// FIXME: XEN
-			values [ins->dreg] = llvm::wrap (builder->CreateLoad (llvm::unwrap (IntPtrType ()), llvm::unwrap (llvm::wrap (builder->CreateIntToPtr (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, true))), llvm::unwrap (ptrtype), ""))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateLoad (llvm::unwrap (IntPtrType ()), builder->CreateIntToPtr (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, true), llvm::unwrap (ptrtype), ""), ""));
 #elif defined(TARGET_AMD64) && defined(TARGET_OSX)
 			/* See mono_amd64_emit_tls_get () */
 			int offset = mono_amd64_get_tls_gs_offset () + (ins->inst_offset * 8);
 
 			// 256 == GS segment register
 			LLVMTypeRef ptrtype = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 256));
-			values [ins->dreg] = llvm::wrap (builder->CreateLoad (llvm::unwrap (IntPtrType ()), llvm::unwrap (llvm::wrap (builder->CreateIntToPtr (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), offset, true))), llvm::unwrap (ptrtype), ""))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateLoad (llvm::unwrap (IntPtrType ()), builder->CreateIntToPtr (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), offset, true), llvm::unwrap (ptrtype), ""), ""));
 #else
 			set_failure (ctx, "opcode tls-get");
 			break;
@@ -1886,7 +1886,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 *   mono_threads_state_poll ();
 			 */
 			val = mono_llvm_build_load (llvm::wrap (builder), IntPtrType (), convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "", TRUE);
-			cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (val), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (val))))), ""));
+			cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (val), llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (val))), ""));
 			poll_bb = gen_bb (ctx, "POLL_BB");
 			cont_bb = gen_bb (ctx, "CONT_BB");
 
@@ -1959,7 +1959,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			if (!addresses [ins->dreg])
 				addresses [ins->dreg] = build_named_alloca_address (ctx, m_class_get_byval_arg (klass), "vzero");
-			LLVMValueRef ptr = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
+			LLVMValueRef ptr = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 			emit_memset (ctx, builder, ptr, const_int32 (mono_class_value_size (klass, NULL)), 0);
 			break;
 		}
@@ -1996,27 +1996,27 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				if (!addresses [ins->sreg1]) {
 					/* SIMD */
 					g_assert (values [ins->sreg1]);
-					dst = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_destbasereg], IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false))), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
+					dst = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_destbasereg], IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 					llvm::wrap (builder->CreateStore (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (dst)));
 					done = true;
 				} else {
-					src = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
-					dst = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_destbasereg], IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false))), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
+					src = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+					dst = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_destbasereg], IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 				}
 				break;
 			case OP_LOADV_MEMBASE:
 				if (!addresses [ins->dreg])
 					addresses [ins->dreg] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
-				src = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_basereg], IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false))), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-				dst = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
+				src = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_basereg], IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
+				dst = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 				break;
 			case OP_VMOVE:
 				if (!addresses [ins->sreg1])
 					addresses [ins->sreg1] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
 				if (!addresses [ins->dreg])
 					addresses [ins->dreg] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
-				src = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
-				dst = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
+				src = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+				dst = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 				break;
 			default:
 				g_assert_not_reached ();
@@ -2118,7 +2118,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				var = ref_var;
 			}
 
-			values [ins->dreg] = llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), llvm::unwrap (var), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateLoad (llvm::PointerType::get (ctx->llvm_ctx (), 0), llvm::unwrap (var), ""));
 			break;
 		}
 
@@ -2146,8 +2146,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			v = convert (ctx, values [ins->sreg1], llvm::wrap (llvm::cast<llvm::VectorType> (llvm::unwrap (t))->getElementType ()));
 
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (t)))), llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::UndefValue::get (llvm::unwrap (t)))), llvm::unwrap (const_vector (mask, LLVMGetVectorSize (t))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::Constant::getNullValue (llvm::unwrap (t)), llvm::unwrap (v), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (values [ins->dreg]), llvm::UndefValue::get (llvm::unwrap (t)), llvm::unwrap (const_vector (mask, LLVMGetVectorSize (t))), ""));
 			break;
 		}
 		case OP_XZERO: {
@@ -2158,14 +2158,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef t = type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass));
 			LLVMValueRef src;
 
-			src = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_basereg], IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false))), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
+			src = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_basereg], IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			values [ins->dreg] = mono_llvm_build_aligned_load (llvm::wrap (builder), t, src, "", FALSE, 1);
 			break;
 		}
 		case OP_STOREX_MEMBASE: {
 			LLVMValueRef dest;
 
-			dest = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_destbasereg], IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false))), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
+			dest = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, values [ins->inst_destbasereg], IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			mono_llvm_build_aligned_store (llvm::wrap (builder), values [ins->sreg1], dest, FALSE, 1);
 			break;
 		}
@@ -2262,7 +2262,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				break;
 			case OP_ANDNPS:
 			case OP_ANDNPD:
-				v = llvm::wrap (builder->CreateAnd (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (builder->CreateNot (llvm::unwrap (lhs), ""))), ""));
+				v = llvm::wrap (builder->CreateAnd (llvm::unwrap (rhs), builder->CreateNot (llvm::unwrap (lhs), ""), ""));
 				break;
 			}
 			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (v), llvm::unwrap (rt), ""));
@@ -2332,7 +2332,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			/* Have to increase the vector element size to prevent overflows */
 			/* res = trunc ((zext (lhs) + zext (rhs) + 1) >> 1) */
-			val = llvm::wrap (builder->CreateAdd (llvm::unwrap (llvm::wrap (builder->CreateZExt (llvm::unwrap (lhs), llvm::unwrap (ext_type), ""))), llvm::unwrap (llvm::wrap (builder->CreateZExt (llvm::unwrap (rhs), llvm::unwrap (ext_type), ""))), ""));
+			val = llvm::wrap (builder->CreateAdd (builder->CreateZExt (llvm::unwrap (lhs), llvm::unwrap (ext_type), ""), builder->CreateZExt (llvm::unwrap (rhs), llvm::unwrap (ext_type), ""), ""));
 			val = llvm::wrap (builder->CreateAdd (llvm::unwrap (val), llvm::unwrap (ones_vec), ""));
 			val = llvm::wrap (builder->CreateLShr (llvm::unwrap (val), llvm::unwrap (ones_vec), ""));
 			values [ins->dreg] = llvm::wrap (builder->CreateTrunc (llvm::unwrap (val), llvm::unwrap (LLVMTypeOf (lhs)), ""));
@@ -2400,29 +2400,29 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 
 			lhs = llvm::wrap (builder->CreateBitCast (llvm::unwrap (lhs), llvm::unwrap (t), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false), ""));
 			if (zext)
-				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
+				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (values [ins->dreg]), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			break;
 		}
 
 		case OP_INSERT_I1:
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false), dname));
 			break;
 		case OP_INSERT_I2:
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt16Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt16Ty (ctx->llvm_ctx ())))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false), dname));
 			break;
 		case OP_INSERT_I4:
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false), dname));
 			break;
 		case OP_INSERT_I8:
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false), dname));
 			break;
 		case OP_INSERT_R4:
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false), dname));
 			break;
 		case OP_INSERT_R8:
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (values [ins->sreg1]), llvm::unwrap (convert (ctx, values [ins->sreg2], llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false), dname));
 			break;
 		case OP_XINSERT_I2: {
 			LLVMBasicBlockRef bbs [64];
@@ -2449,11 +2449,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				bbs [i] = gen_bb (ctx, "XINSERT_CASE_BB");
 			cbb = gen_bb (ctx, "XINSERT_COND_BB");
 
-			switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (llvm::wrap (builder->CreateAnd (llvm::unwrap (index), llvm::unwrap (const_int32 (0xf)), ""))), llvm::unwrap (bbs [0]), 0));
+			switch_ins = llvm::wrap (builder->CreateSwitch (builder->CreateAnd (llvm::unwrap (index), llvm::unwrap (const_int32 (0xf)), ""), llvm::unwrap (bbs [0]), 0));
 			for (i = 0; i < nelems; ++i) {
 				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), bbs [i]);
 				builder->SetInsertPoint (llvm::unwrap (bbs [i]));
-				phi_values [i] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (vector), llvm::unwrap (convert (ctx, value, llvm::wrap (llvm::cast<llvm::VectorType> (llvm::unwrap (LLVMTypeOf (vector)))->getElementType ()))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false))), ""));
+				phi_values [i] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (vector), llvm::unwrap (convert (ctx, value, llvm::wrap (llvm::cast<llvm::VectorType> (llvm::unwrap (LLVMTypeOf (vector)))->getElementType ()))), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false), ""));
 				llvm::wrap (builder->CreateBr (llvm::unwrap (cbb)));
 			}
 
@@ -2475,13 +2475,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			indexes [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false));
 			indexes [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false));
 			LLVMValueRef mask = const_vector (indexes, 2);
-			LLVMValueRef shuffle = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))))), llvm::unwrap (mask), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateSIToFP (llvm::unwrap (shuffle), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), 2))), dname));
+			LLVMValueRef shuffle = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))), llvm::unwrap (mask), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateSIToFP (llvm::unwrap (shuffle), llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), 2), dname));
 			break;
 		}
 		case OP_SSE2_CVTSS2SD: {
 			LLVMValueRef rhs_elem = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::unwrap (const_int32 (0)), ""));
-			LLVMValueRef fpext = llvm::wrap (builder->CreateFPExt (llvm::unwrap (rhs_elem), llvm::unwrap (llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), dname));
+			LLVMValueRef fpext = llvm::wrap (builder->CreateFPExt (llvm::unwrap (rhs_elem), llvm::Type::getDoubleTy (ctx->llvm_ctx ()), dname));
 			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (lhs), llvm::unwrap (fpext), llvm::unwrap (const_int32 (0)), ""));
 			break;
 		}
@@ -2491,12 +2491,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			indexes [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false));
 			indexes [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false));
 			LLVMValueRef mask = const_vector (indexes, 2);
-			LLVMValueRef shuffle = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))))), llvm::unwrap (mask), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (shuffle), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), 2))), dname));
+			LLVMValueRef shuffle = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))), llvm::unwrap (mask), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPExt (llvm::unwrap (shuffle), llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), 2), dname));
 			break;
 		}
 		case OP_CVTTPS2DQ:
-			values [ins->dreg] = llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4))), dname));
+			values [ins->dreg] = llvm::wrap (builder->CreateFPToSI (llvm::unwrap (lhs), llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4), dname));
 			break;
 
 		case OP_CVTPD2DQ:
@@ -2550,9 +2550,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			LLVMValueRef cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (op), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			if (ins->opcode == OP_COMPPD)
-				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (llvm::wrap (builder->CreateSExt (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 2))), ""))), llvm::unwrap (LLVMTypeOf (lhs)), ""));
+				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (builder->CreateSExt (llvm::unwrap (cmp), llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 2), ""), llvm::unwrap (LLVMTypeOf (lhs)), ""));
 			else
-				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (llvm::wrap (builder->CreateSExt (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4))), ""))), llvm::unwrap (LLVMTypeOf (lhs)), ""));
+				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (builder->CreateSExt (llvm::unwrap (cmp), llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4), ""), llvm::unwrap (LLVMTypeOf (lhs)), ""));
 			break;
 		}
 		case OP_ICONV_TO_X:
@@ -2746,10 +2746,10 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef t = simd_op_to_llvm_type (ins->opcode);
 			LLVMValueRef v, val;
 
-			v = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			v = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			val = llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (t)));
-			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
-			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false))), dname));
+			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
+			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false), dname));
 
 			values [ins->dreg] = val;
 			break;
@@ -2761,17 +2761,17 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			
 
 			if (ins->opcode == OP_DUPPS_LOW) {
-				v1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
-				v2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 2, false))), ""));
+				v1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
+				v2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 2, false), ""));
 			} else {
-				v1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false))), ""));
-				v2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 3, false))), ""));
+				v1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false), ""));
+				v2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 3, false), ""));
 			}
 			val = llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (t)));
-			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v1), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
-			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v1), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false))), ""));
-			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v2), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 2, false))), ""));
-			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v2), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 3, false))), ""));
+			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v1), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
+			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v1), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false), ""));
+			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v2), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 2, false), ""));
+			val = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (val), llvm::unwrap (v2), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 3, false), ""));
 			
 			values [ins->dreg] = val;
 			break;
@@ -2790,12 +2790,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 
 		case OP_FCONV_TO_R8_X: {
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (sse_r8_t)))), llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::Constant::getNullValue (llvm::unwrap (sse_r8_t)), llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			break;
 		}
 
 		case OP_FCONV_TO_R4_X: {
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (sse_r4_t)))), llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::Constant::getNullValue (llvm::unwrap (sse_r4_t)), llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			break;
 		}
 
@@ -2822,7 +2822,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			else if (ins->inst_c1 == MONO_TYPE_R8)
 				values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (rhs), llvm::unwrap (lhs), llvm::unwrap (create_const_vector_2_i32 (0, 3)), ""));
 			else if (ins->inst_c1 == MONO_TYPE_I8 || ins->inst_c1 == MONO_TYPE_U8)
-				values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 0, false))), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false))), ""));
+				values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 0, false), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false), ""));
 			else
 				g_assert_not_reached (); // will be needed for other types later
 			break;
@@ -2884,19 +2884,19 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 		case OP_SSE_LOADU: {
 			LLVMValueRef dst_ptr = convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-			LLVMValueRef dst_vec = llvm::wrap (builder->CreateBitCast (llvm::unwrap (dst_ptr), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
+			LLVMValueRef dst_vec = llvm::wrap (builder->CreateBitCast (llvm::unwrap (dst_ptr), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 			values [ins->dreg] = mono_llvm_build_aligned_load (llvm::wrap (builder), type_to_sse_type (ins->inst_c1), dst_vec, "", FALSE, ins->inst_c0); // inst_c0 is alignment
 			break;
 		}
 		case OP_SSE_MOVSS: {
 			LLVMValueRef addr = convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			LLVMValueRef val = mono_llvm_build_load (llvm::wrap (builder), llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())), addr, "", FALSE);
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (type_to_sse_type (ins->inst_c1))))), llvm::unwrap (val), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::Constant::getNullValue (llvm::unwrap (type_to_sse_type (ins->inst_c1))), llvm::unwrap (val), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			break;
 		}
 		case OP_SSE_MOVSS_STORE: {
 			LLVMValueRef addr = convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-			LLVMValueRef val = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			LLVMValueRef val = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			mono_llvm_build_store (llvm::wrap (builder), val, addr, FALSE, LLVM_BARRIER_NONE);
 			break;
 		}
@@ -2932,7 +2932,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			index1 = high ? 2: 0;
 			index2 = high ? 3 : 1;
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (llvm::wrap (builder->CreateInsertElement (llvm::unwrap (lhs), llvm::unwrap (val1), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index1, false))), ""))), llvm::unwrap (val2), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index2, false))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (builder->CreateInsertElement (llvm::unwrap (lhs), llvm::unwrap (val1), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index1, false), ""), llvm::unwrap (val2), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index2, false), ""));
 			break;
 		}
 
@@ -2954,8 +2954,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef addr2 = convert (ctx, llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, addr, IntPtrType ())), llvm::unwrap (convert (ctx, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4, false)), IntPtrType ())), "")), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			int index1 = ins->opcode == OP_SSE_MOVLPS_STORE ? 0 : 2;
 			int index2 = ins->opcode == OP_SSE_MOVLPS_STORE ? 1 : 3;
-			LLVMValueRef val1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index1, false))), ""));
-			LLVMValueRef val2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index2, false))), ""));
+			LLVMValueRef val1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index1, false), ""));
+			LLVMValueRef val2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), index2, false), ""));
 			mono_llvm_build_store (llvm::wrap (builder), val1, addr1, FALSE, LLVM_BARRIER_NONE);
 			mono_llvm_build_store (llvm::wrap (builder), val2, addr2, FALSE, LLVM_BARRIER_NONE);
 			break;
@@ -2977,7 +2977,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 
 		case OP_SSE_STORES: {
-			LLVMValueRef first_elem = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			LLVMValueRef first_elem = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			LLVMValueRef dst = convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			mono_llvm_build_aligned_store (llvm::wrap (builder), first_elem, dst, FALSE, 1);
 			break;
@@ -3087,8 +3087,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE2_SUBSD:
 		case OP_SSE2_DIVSD:
 		case OP_SSE2_MULSD: {
-			LLVMValueRef v1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
-			LLVMValueRef v2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			LLVMValueRef v1 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (lhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
+			LLVMValueRef v2 = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (rhs), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 
 			LLVMValueRef v = nullptr;
 			switch (ins->opcode) {
@@ -3111,7 +3111,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			default:
 				g_assert_not_reached ();
 			}
-			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (lhs), llvm::unwrap (v), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (lhs), llvm::unwrap (v), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			break;
 		}
 
@@ -3335,8 +3335,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef call = call_intrins (ctx, id, args, "");
 			if (ret_bool) {
 				// if return type is bool (it's still i32) we need to normalize it to 1/0
-				LLVMValueRef cmp_zero = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntNE), llvm::unwrap (call), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
-				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp_zero), llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), ""));
+				LLVMValueRef cmp_zero = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntNE), llvm::unwrap (call), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
+				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp_zero), llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ""));
 			} else {
 				values [ins->dreg] = call;
 			}
@@ -3525,7 +3525,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					for (int j = 0; j < nelems - i; ++j)
 						mask_values [j + i] = j;
 				}
-				phi_values [i] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (value), llvm::unwrap (llvm::wrap (llvm::UndefValue::get (llvm::unwrap (t)))), llvm::unwrap (create_const_vector_i32 (mask_values, nelems)), ""));
+				phi_values [i] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (value), llvm::UndefValue::get (llvm::unwrap (t)), llvm::unwrap (create_const_vector_i32 (mask_values, nelems)), ""));
 				llvm::wrap (builder->CreateBr (llvm::unwrap (cbb)));
 			}
 			/* Default case */
@@ -3564,7 +3564,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 
 			LLVMTypeRef t = LLVMTypeOf (value);
-			LLVMValueRef index_vect = llvm::wrap (builder->CreateInsertElement (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (t)))), llvm::unwrap (convert (ctx, index, llvm::wrap (llvm::cast<llvm::VectorType> (llvm::unwrap (t))->getElementType ()))), llvm::unwrap (const_int32 (0)), ""));
+			LLVMValueRef index_vect = llvm::wrap (builder->CreateInsertElement (llvm::Constant::getNullValue (llvm::unwrap (t)), llvm::unwrap (convert (ctx, index, llvm::wrap (llvm::cast<llvm::VectorType> (llvm::unwrap (t))->getElementType ()))), llvm::unwrap (const_int32 (0)), ""));
 			LLVMValueRef args [] = { value, index_vect };
 			values [ins->dreg] = call_intrins (ctx, id, args, "");
 			break;
@@ -3666,24 +3666,24 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 		case OP_SSE3_MOVDDUP: {
 			int mask [] = { 0, 0 };
-			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::UndefValue::get (llvm::unwrap (LLVMTypeOf (lhs))))), llvm::unwrap (create_const_vector_i32 (mask, 2)), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::UndefValue::get (llvm::unwrap (LLVMTypeOf (lhs))), llvm::unwrap (create_const_vector_i32 (mask, 2)), ""));
 			break;
 		}
 		case OP_SSE3_MOVDDUP_MEM: {
 			int mask [] = { 0, 0 };
 			LLVMTypeRef t = type_to_sse_type (ins->inst_c1);
 			LLVMValueRef value = mono_llvm_build_load (llvm::wrap (builder), t, convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "", FALSE);
-			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (value), llvm::unwrap (llvm::wrap (llvm::UndefValue::get (llvm::unwrap (LLVMTypeOf (value))))), llvm::unwrap (create_const_vector_i32 (mask, 2)), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (value), llvm::UndefValue::get (llvm::unwrap (LLVMTypeOf (value))), llvm::unwrap (create_const_vector_i32 (mask, 2)), ""));
 			break;
 		}
 		case OP_SSE3_MOVSHDUP: {
 			int mask [] = { 1, 1, 3, 3 };
-			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))))), llvm::unwrap (create_const_vector_i32 (mask, 4)), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))), llvm::unwrap (create_const_vector_i32 (mask, 4)), ""));
 			break;
 		}
 		case OP_SSE3_MOVSLDUP: {
 			int mask [] = { 0, 0, 2, 2 };
-			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))))), llvm::unwrap (create_const_vector_i32 (mask, 4)), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (lhs), llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))), llvm::unwrap (create_const_vector_i32 (mask, 4)), ""));
 			break;
 		}
 
@@ -3698,8 +3698,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			// %cmp = icmp sgt <16 x i8> %arg, zeroinitializer
 			// %abs = select <16 x i1> %cmp, <16 x i8> %arg, <16 x i8> %sub
 			LLVMTypeRef typ = type_to_sse_type (ins->inst_c1);
-			LLVMValueRef sub = llvm::wrap (builder->CreateSub (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (typ)))), llvm::unwrap (lhs), ""));
-			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntSGT), llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (typ)))), ""));
+			LLVMValueRef sub = llvm::wrap (builder->CreateSub (llvm::Constant::getNullValue (llvm::unwrap (typ)), llvm::unwrap (lhs), ""));
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntSGT), llvm::unwrap (lhs), llvm::Constant::getNullValue (llvm::unwrap (typ)), ""));
 			LLVMValueRef abs = llvm::wrap (builder->CreateSelect (llvm::unwrap (cmp), llvm::unwrap (lhs), llvm::unwrap (sub), ""));
 			values [ins->dreg] = convert (ctx, abs, typ);
 			break;
@@ -3822,7 +3822,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			LLVMValueRef value;
 			if (LLVMGetTypeKind (LLVMTypeOf (lhs)) != LLVMVectorTypeKind) {
-				LLVMValueRef bitcasted = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
+				LLVMValueRef bitcasted = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (lhs), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 				value = mono_llvm_build_aligned_load (llvm::wrap (builder), vec_type, bitcasted, "", FALSE, 1);
 			} else {
 				value = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (lhs), llvm::unwrap (vec_type), ""));
@@ -3843,7 +3843,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				dst_type = sse_i8_t;
 			}
 
-			LLVMValueRef shuffled = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (value), llvm::unwrap (llvm::wrap (llvm::UndefValue::get (llvm::unwrap (vec_type)))), llvm::unwrap (mask_vec), ""));
+			LLVMValueRef shuffled = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (value), llvm::UndefValue::get (llvm::unwrap (vec_type)), llvm::unwrap (mask_vec), ""));
 
 			if (is_signed)
 				values [ins->dreg] = llvm::wrap (ctx->builder->CreateSExt (llvm::unwrap (shuffled), llvm::unwrap (dst_type), ""));
@@ -3854,7 +3854,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 		case OP_SSE41_LOADANT: {
 			LLVMValueRef dst_ptr = convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-			LLVMValueRef dst_vec = llvm::wrap (builder->CreateBitCast (llvm::unwrap (dst_ptr), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
+			LLVMValueRef dst_vec = llvm::wrap (builder->CreateBitCast (llvm::unwrap (dst_ptr), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 			LLVMValueRef load = mono_llvm_build_aligned_load (llvm::wrap (builder), type_to_sse_type (ins->inst_c1), dst_vec, "", FALSE, 16);
 			set_nontemporal_flag (load);
 			values [ins->dreg] = load;
@@ -3930,9 +3930,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			int nelems = LLVMGetVectorSize (LLVMTypeOf (cmp));
 			g_assert (LLVMTypeOf (lhs) == LLVMTypeOf (rhs));
 			if (ins->inst_c1 == MONO_TYPE_R8)
-				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (llvm::wrap (builder->CreateSExt (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), nelems))), ""))), llvm::unwrap (LLVMTypeOf (lhs)), ""));
+				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (builder->CreateSExt (llvm::unwrap (cmp), llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), nelems), ""), llvm::unwrap (LLVMTypeOf (lhs)), ""));
 			else
-				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (llvm::wrap (builder->CreateSExt (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), nelems))), ""))), llvm::unwrap (LLVMTypeOf (lhs)), ""));
+				values [ins->dreg] = llvm::wrap (builder->CreateBitCast (builder->CreateSExt (llvm::unwrap (cmp), llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), nelems), ""), llvm::unwrap (LLVMTypeOf (lhs)), ""));
 			break;
 		}
 		case OP_XCOMPARE: {
@@ -3973,7 +3973,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				}
 				/* res = !wasm.anytrue (val) */
 				values [ins->dreg] = call_intrins (ctx, intrins, &val, "");
-				values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""))), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), dname));
+				values [ins->dreg] = llvm::wrap (builder->CreateZExt (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (values [ins->dreg]), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname));
 				break;
 			}
 #endif
@@ -4004,15 +4004,15 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					mask [i] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), half + i, false));
 				for (int i = half; i < nelems; ++i)
 					mask [i] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false));
-				shuffle = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::UndefValue::get (llvm::unwrap (t)))), llvm::unwrap (const_vector (mask, LLVMGetVectorSize (t))), ""));
+				shuffle = llvm::wrap (builder->CreateShuffleVector (llvm::unwrap (cmp), llvm::UndefValue::get (llvm::unwrap (t)), llvm::unwrap (const_vector (mask, LLVMGetVectorSize (t))), ""));
 				cmp = llvm::wrap (builder->CreateAnd (llvm::unwrap (cmp), llvm::unwrap (shuffle), ""));
 				half = half / 2;
 			}
 			// Extract [0]
-			LLVMValueRef first_elem = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (cmp), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
+			LLVMValueRef first_elem = llvm::wrap (builder->CreateExtractElement (llvm::unwrap (cmp), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""));
 			// convert to 0/1
-			LLVMValueRef cmp_zero = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntNE), llvm::unwrap (first_elem), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (elemt), 0, false))), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp_zero), llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), ""));
+			LLVMValueRef cmp_zero = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntNE), llvm::unwrap (first_elem), llvm::ConstantInt::get (llvm::unwrap (elemt), 0, false), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateZExt (llvm::unwrap (cmp_zero), llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ""));
 			break;
 		}
 		case OP_XBINOP: {
@@ -4131,8 +4131,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_MULX_HL64: {
 			bool is_64 = ins->opcode == OP_MULX_H64 || ins->opcode == OP_MULX_HL64;
 			bool only_high = ins->opcode == OP_MULX_H32 || ins->opcode == OP_MULX_H64;
-			LLVMValueRef lx = llvm::wrap (ctx->builder->CreateZExt (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt128Ty (ctx->llvm_ctx ()))), ""));
-			LLVMValueRef rx = llvm::wrap (ctx->builder->CreateZExt (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt128Ty (ctx->llvm_ctx ()))), ""));
+			LLVMValueRef lx = llvm::wrap (ctx->builder->CreateZExt (llvm::unwrap (lhs), llvm::Type::getInt128Ty (ctx->llvm_ctx ()), ""));
+			LLVMValueRef rx = llvm::wrap (ctx->builder->CreateZExt (llvm::unwrap (rhs), llvm::Type::getInt128Ty (ctx->llvm_ctx ()), ""));
 			LLVMValueRef mulx = llvm::wrap (ctx->builder->CreateMul (llvm::unwrap (lx), llvm::unwrap (rx), ""));
 			if (!only_high) {
 				LLVMValueRef lowx = llvm::wrap (ctx->builder->CreateTrunc (llvm::unwrap (mulx), llvm::unwrap (is_64 ? llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())) : llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
@@ -4206,7 +4206,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 			LLVMValueRef arg1 = rhs;
 			if (zext_last)
-				arg1 = llvm::wrap (ctx->builder->CreateZExt (llvm::unwrap (arg1), llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), ""));
+				arg1 = llvm::wrap (ctx->builder->CreateZExt (llvm::unwrap (arg1), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			LLVMValueRef args [] = { lhs, arg1 };
 			values [ins->dreg] = call_intrins (ctx, id, args, "");
 			break;
@@ -4267,15 +4267,15 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_ARM64_UMULH: {
 			LLVMValueRef op1, op2;
 			if (ins->opcode == OP_ARM64_SMULH) {
-				op1 = llvm::wrap (builder->CreateSExt (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt128Ty (ctx->llvm_ctx ()))), ""));
-				op2 = llvm::wrap (builder->CreateSExt (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt128Ty (ctx->llvm_ctx ()))), ""));
+				op1 = llvm::wrap (builder->CreateSExt (llvm::unwrap (lhs), llvm::Type::getInt128Ty (ctx->llvm_ctx ()), ""));
+				op2 = llvm::wrap (builder->CreateSExt (llvm::unwrap (rhs), llvm::Type::getInt128Ty (ctx->llvm_ctx ()), ""));
 			} else {
-				op1 = llvm::wrap (builder->CreateZExt (llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt128Ty (ctx->llvm_ctx ()))), ""));
-				op2 = llvm::wrap (builder->CreateZExt (llvm::unwrap (rhs), llvm::unwrap (llvm::wrap (llvm::Type::getInt128Ty (ctx->llvm_ctx ()))), ""));
+				op1 = llvm::wrap (builder->CreateZExt (llvm::unwrap (lhs), llvm::Type::getInt128Ty (ctx->llvm_ctx ()), ""));
+				op2 = llvm::wrap (builder->CreateZExt (llvm::unwrap (rhs), llvm::Type::getInt128Ty (ctx->llvm_ctx ()), ""));
 			}
 			LLVMValueRef mul = llvm::wrap (builder->CreateMul (llvm::unwrap (op1), llvm::unwrap (op2), ""));
-			LLVMValueRef hi64 = llvm::wrap (builder->CreateLShr (llvm::unwrap (mul), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt128Ty (ctx->llvm_ctx ()), 64, false))), ""));
-			values [ins->dreg] = llvm::wrap (builder->CreateTrunc (llvm::unwrap (hi64), llvm::unwrap (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ()))), ""));
+			LLVMValueRef hi64 = llvm::wrap (builder->CreateLShr (llvm::unwrap (mul), llvm::ConstantInt::get (llvm::Type::getInt128Ty (ctx->llvm_ctx ()), 64, false), ""));
+			values [ins->dreg] = llvm::wrap (builder->CreateTrunc (llvm::unwrap (hi64), llvm::Type::getInt64Ty (ctx->llvm_ctx ()), ""));
 			break;
 		}
 #endif
@@ -4314,7 +4314,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 */
 			lhs = info->finally_ind;
 			g_assert (lhs);
-			llvm::wrap (builder->CreateStore (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), g_slist_length (bb_list) + 1, false))), llvm::unwrap (lhs)));
+			llvm::wrap (builder->CreateStore (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), g_slist_length (bb_list) + 1, false), llvm::unwrap (lhs)));
 				
 			/* Branch to the finally clause */
 			llvm::wrap (builder->CreateBr (llvm::unwrap (info->call_handler_target_bb)));
@@ -4355,10 +4355,10 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				resume_bb = gen_bb (ctx, "ENDFINALLY_RESUME_BB");
 
 				/* Load the finally variable */
-				val = llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), llvm::unwrap (lhs), ""));
+				val = llvm::wrap (builder->CreateLoad (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), llvm::unwrap (lhs), ""));
 
 				/* Reset the variable */
-				llvm::wrap (builder->CreateStore (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), llvm::unwrap (lhs)));
+				llvm::wrap (builder->CreateStore (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), llvm::unwrap (lhs)));
 
 				/* Branch to either resume_bb, or to the bblocks in bb_list */
 				switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (val), llvm::unwrap (resume_bb), g_slist_length (bb_list)));
