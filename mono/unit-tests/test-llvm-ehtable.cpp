@@ -1513,6 +1513,344 @@ cases_mono_lsda_build (void)
 	}
 }
 
+/* ------------------------------------------------------ nesting synthesis cases */
+
+/*
+ * EH N1 (doc 21 4): build_ex_info's nesting synthesis. For each base entry whose
+ * innermost clause is `c`, one extra ei is APPENDED per enclosing clause `j`
+ * (clause c strictly try-contained in clause j), copying the base's EXACT range
+ * and handler_start and overriding only j's flags/catch_class/clause_index. These
+ * cases feed a SYNTHETIC nested IL clause table (try_offset/try_len/handler_offset
+ * set so the containment predicate fires) plus a base `.mono_lsda`-derived tuple,
+ * and assert the synthesised ei array: count, per-entry range/handler/flags/
+ * clause_index, base-before-synthesised slot order, and equal-or-disjoint still
+ * holding. This is the offline exercise of a synthesis the live gate still
+ * declines (N1 is runtime-inert), the same OFFLINE byte-driven style as above.
+ *
+ * The IL clause geometry mirrors doc 21 6.1 / 6.2: an inner clause with try
+ * [0x10,0x20) / handler at 0x20, and an outer clause whose try [0x10,0x25) spans
+ * {inner try + inner handler} with its own handler at 0x25. These are IL offsets
+ * (only their ordering matters to clause_encloses); the NATIVE range/handler come
+ * from the base entry independently.
+ */
+static void
+cases_mono_lsda_nesting (void)
+{
+	const std::uint32_t code_len = 0x100;
+	std::vector<std::uint8_t> code (code_len, 0);
+	const std::uint8_t *base = code.data ();
+
+	/* The base entry's native geometry, shared by every nested case below. */
+	const std::uint32_t R_START = 0x10, R_LEN = 0x20, H_OFF = 0x40;
+
+	/*
+	 * (1) C# try/catch/finally (doc 21 6.1): inner CATCH(E) nested in outer
+	 * FINALLY. IL clause0 = inner catch (try [0x10,0x20), handler 0x20); clause1 =
+	 * outer finally (try [0x10,0x25) covering the inner try+catch, handler 0x25).
+	 * The gather hands a single base entry over the inner catch (clause0). Expect
+	 * TWO ei: the base inner-catch (slot 0) AND the synthesised outer-finally (slot
+	 * 1) over the SAME native range with the SAME handler_start, carrying the
+	 * finally's flags/clause_index - base-before-synthesised.
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;    /* inner catch */
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer finally */
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_NONE } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-try-catch-finally";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			/* slot 0: the base inner catch */
+			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE &&
+			out[0].clause_index == 0 &&
+			out[0].data.catch_class == CC0 &&
+			out[0].try_start == (gpointer) (base + R_START) &&
+			out[0].try_end == (gpointer) (base + R_START + R_LEN) &&
+			out[0].handler_start == (gpointer) MINI_ADDR_TO_FTNPTR (base + H_OFF) &&
+			/* slot 1: the SYNTHESISED outer finally, SAME range + SAME handler */
+			out[1].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
+			out[1].clause_index == 1 &&
+			out[1].try_start == out[0].try_start &&
+			out[1].try_end == out[0].try_end &&
+			out[1].handler_start == out[0].handler_start &&
+			out[1].data.handler_end == 0 &&
+			out[1].exvar_offset == 0;
+		if (!good) {
+			printf ("FAIL nest-try-catch-finally: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-try-catch-finally (base catch @0, synth finally @1, same range/handler)\n");
+		}
+	}
+
+	/*
+	 * (2) The mirror - try/finally inside try/catch (doc 21 6.2, the sharpest
+	 * case): inner FINALLY nested in outer CATCH(E). IL clause0 = inner finally
+	 * (try [0x10,0x20), handler 0x20); clause1 = outer catch (try [0x10,0x25),
+	 * handler 0x25). The base entry is over the inner finally (clause0). Expect the
+	 * base inner-finally (slot 0) AND the synthesised outer-catch (slot 1) - carrying
+	 * the catch's flags NONE + catch_class + clause_index - over the same range/handler.
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* inner finally */
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_NONE;    /* outer catch */
+		cl[1].data.catch_class = CC1;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-try-finally-in-try-catch";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
+			out[0].clause_index == 0 &&
+			out[0].try_start == (gpointer) (base + R_START) &&
+			out[0].try_end == (gpointer) (base + R_START + R_LEN) &&
+			out[0].handler_start == (gpointer) MINI_ADDR_TO_FTNPTR (base + H_OFF) &&
+			out[1].flags == MONO_EXCEPTION_CLAUSE_NONE &&
+			out[1].clause_index == 1 &&
+			out[1].data.catch_class == CC1 &&
+			out[1].try_start == out[0].try_start &&
+			out[1].try_end == out[0].try_end &&
+			out[1].handler_start == out[0].handler_start;
+		if (!good) {
+			printf ("FAIL nest-try-finally-in-try-catch: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-try-finally-in-try-catch (base finally @0, synth catch @1)\n");
+		}
+	}
+
+	/*
+	 * (3) Synthesis is a NO-OP when the base names the OUTERMOST clause. Same
+	 * nested clause table as (1), but the base entry is over the outer finally
+	 * (clause1), which has no enclosing clause (nested_in[1] is empty). Output is
+	 * the single base entry, unchanged - proving no spurious synthesis and no
+	 * regression to the landed finally publish.
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 1, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-outermost-base-noop";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
+		bool good = ok && out.size () == 1 &&
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
+			out[0].clause_index == 1;
+		if (!good) {
+			printf ("FAIL nest-outermost-base-noop: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-outermost-base-noop (1 ei, no synthesis)\n");
+		}
+	}
+
+	/*
+	 * (4) DEPTH-1 (non-nested) input is unchanged: two disjoint clauses that do NOT
+	 * nest (clause0 try [0x10,0x20)/handler 0x20; clause1 try [0x40,0x50)/handler
+	 * 0x50 - a later, disjoint try) yield exactly their two base entries, no
+	 * synthesis. Proves the synthesis no-ops for the common non-nested method the
+	 * landed catch/finally path already handles.
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[1].data.catch_class = CC1;
+		cl[1].try_offset = 0x40; cl[1].try_len = 0x10; cl[1].handler_offset = 0x50; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x08, 0x30, 0, MONO_EXCEPTION_CLAUSE_NONE },
+			{ 0x60, 0x08, 0x70, 1, MONO_EXCEPTION_CLAUSE_NONE },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-depth1-unchanged";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			out[0].clause_index == 0 && out[1].clause_index == 1;
+		if (!good) {
+			printf ("FAIL nest-depth1-unchanged: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-depth1-unchanged (2 ei, no synthesis)\n");
+		}
+	}
+
+	/*
+	 * (5) Multi-call under nesting: the inner catch's try has TWO protected calls,
+	 * so the gather hands TWO disjoint base entries over clause0, each nested in the
+	 * outer finally (clause1). Expect FOUR ei: two base entries (slots 0,1) then two
+	 * synthesised finally entries (slots 2,3), each synth copying its OWN base's
+	 * range - so the base block precedes the synth block (base-before-synthesised
+	 * across multiple calls) and equal-or-disjoint still holds (each synth equals
+	 * its base; the two base ranges are disjoint).
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* call 1 */
+			{ 0x28, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* call 2, disjoint */
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-multicall-base-before-synth";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
+		bool good = ok && out.size () == 4 &&
+			/* the two base inner-catch entries occupy the lower slots */
+			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE && out[0].clause_index == 0 &&
+			out[1].flags == MONO_EXCEPTION_CLAUSE_NONE && out[1].clause_index == 0 &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[1].try_start == (gpointer) (base + 0x28) &&
+			/* the two synthesised finally entries occupy the higher slots */
+			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 1 &&
+			out[3].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[3].clause_index == 1 &&
+			/* each synth copies its OWN base's range + handler */
+			out[2].try_start == out[0].try_start && out[2].try_end == out[0].try_end &&
+			out[2].handler_start == out[0].handler_start &&
+			out[3].try_start == out[1].try_start && out[3].try_end == out[1].try_end &&
+			out[3].handler_start == out[1].handler_start;
+		if (!good) {
+			printf ("FAIL nest-multicall-base-before-synth: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-multicall-base-before-synth (4 ei: 2 base then 2 synth)\n");
+		}
+	}
+
+	/*
+	 * (6) SIBLINGS are NOT synthesised. try { } catch(A) catch(B) share the
+	 * identical protected region (equal try_offset AND try_len) and differ only in
+	 * handler - the sibling exemption in clause_encloses must keep nested_in empty
+	 * so no spurious co-sibling duplicate is appended. Feed both sibling base
+	 * entries over the shared range; expect exactly TWO ei (the siblings), no third
+	 * synthesised entry. This is the property that keeps N1 runtime-inert for the
+	 * sibling-catch methods the gate admits today.
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x30; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[1].data.catch_class = CC1;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x10; cl[1].handler_offset = 0x40; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x10, 0x60, 0, MONO_EXCEPTION_CLAUSE_NONE },
+			{ 0x10, 0x10, 0x90, 1, MONO_EXCEPTION_CLAUSE_NONE },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-siblings-not-synthesised";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			out[0].clause_index == 0 && out[1].clause_index == 1;
+		if (!good) {
+			printf ("FAIL nest-siblings-not-synthesised: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-siblings-not-synthesised (2 ei, no co-sibling duplicate)\n");
+		}
+	}
+
+	/*
+	 * (7) An enclosing clause of an UNREPRESENTABLE kind declines (CAP-EH-0, doc 21
+	 * 7 item 3). clause0 = inner catch nested in clause1 = a FILTER (the kind the
+	 * gate forbids). The base inner-catch entry is well-formed, but synthesising its
+	 * enclosing FILTER entry is impossible, so the whole array declines rather than
+	 * publish a partial one.
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_FILTER;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_NONE } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-enclosing-filter-declines";
+		cases_run ++;
+		if (mono::build_ex_info (ents, cl, 2, base, code_len, out)) {
+			printf ("FAIL nest-enclosing-filter-declines: accepted an unrepresentable enclosing kind\n");
+			failures ++;
+		} else {
+			printf ("ok   nest-enclosing-filter-declines (declined)\n");
+		}
+	}
+
+	/*
+	 * (8) A genuinely CROSSING clause table (neither containment nor siblings) is
+	 * not folded into nested_in: clause0 try [0x10,0x30) and clause1 try [0x20,0x40)
+	 * partially overlap in IL but neither encloses the other, so clause_encloses is
+	 * false both ways and no synthesis happens. The base entries are disjoint native
+	 * ranges, so the array is ACCEPTED as two plain base entries - the crossing is an
+	 * IL-shape concern the translator gate declines, not something the synthesis
+	 * invents coverage for. (The native-range crossing decline is covered by
+	 * build-overlapping-ranges / build-strict-nesting above.)
+	 */
+	{
+		MonoExceptionClause cl [2];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x20; cl[0].handler_offset = 0x50; cl[0].handler_len = 0x05;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[1].data.catch_class = CC1;
+		cl[1].try_offset = 0x20; cl[1].try_len = 0x20; cl[1].handler_offset = 0x60; cl[1].handler_len = 0x05;
+
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x08, 0x50, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* disjoint native ranges */
+			{ 0x80, 0x08, 0x60, 1, MONO_EXCEPTION_CLAUSE_NONE },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-crossing-no-synthesis";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			out[0].clause_index == 0 && out[1].clause_index == 1;
+		if (!good) {
+			printf ("FAIL nest-crossing-no-synthesis: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-crossing-no-synthesis (2 ei, no synthesis for crossing clauses)\n");
+		}
+	}
+}
+
 /* ------------------------------------------------------------ publish cases */
 
 /*
@@ -1671,6 +2009,7 @@ test_llvm_ehtable_main (void)
 	cases_negative ();
 	cases_mono_lsda_parse ();
 	cases_mono_lsda_build ();
+	cases_mono_lsda_nesting ();
 	cases_mono_lsda_publish ();
 
 	printf ("%d cases run, %d failed\n", cases_run, failures);

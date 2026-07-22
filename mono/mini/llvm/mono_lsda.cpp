@@ -118,6 +118,35 @@ ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
 	return a_start < b_end && b_start < a_end;
 }
 
+/*
+ * Does IL clause J strictly ENCLOSE clause C - i.e. is C nested in J's try?
+ * (doc 21 4, EH N1). This is byte-for-byte the translator nesting gate's
+ * containment predicate (translator.cpp) plus its sibling exemption:
+ *
+ *   c.try_offset >= j.try_offset && c.handler_offset <= j.handler_offset
+ *
+ * with SIBLINGS (identical protected region: same try_offset AND same try_len)
+ * excluded. Siblings - try { } catch(A) catch(B) - are NOT nesting; they share
+ * one landing pad and are already published as several same-range base entries
+ * by the gather, so folding them into nested_in would synthesise a spurious
+ * duplicate of the co-sibling over the same range. Excluding them keeps the
+ * synthesis a no-op for every shape the gate admits today (catch/finally, no
+ * true nesting), which is why N1 is runtime-inert: the gate still declines every
+ * strictly-nested method, so no live method has a non-empty nested_in here.
+ *
+ * The predicate keys on handler_offset (not try_len), so it correctly EXCLUDES a
+ * clause sitting in another clause's HANDLER body (disjoint try ranges) - those
+ * are admitted today and must not be treated as nested.
+ */
+bool
+clause_encloses (const MonoExceptionClause &c, const MonoExceptionClause &j)
+{
+	bool siblings = c.try_offset == j.try_offset && c.try_len == j.try_len;
+	return !siblings &&
+	       c.try_offset >= j.try_offset &&
+	       c.handler_offset <= j.handler_offset;
+}
+
 } // anonymous namespace
 
 bool
@@ -216,6 +245,34 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 
 	out.reserve (ordered.size ());
 
+	/*
+	 * Per published entry, its [start, end) native invoke range in offsets, so the
+	 * equal-or-disjoint invariant (below) can be validated over the FINAL array -
+	 * base entries AND the entries the nesting synthesis appends. For base entries
+	 * the range is the entry's own; for a synthesised enclosing entry it is a copy
+	 * of its base's range (doc 21 2.2), so the array stays equal-or-disjoint.
+	 */
+	struct RangeOff { std::uint64_t start; std::uint64_t end; };
+	std::vector<RangeOff> ranges;
+	ranges.reserve (ordered.size ());
+
+	/*
+	 * Per base entry, what the synthesis stage needs to append its enclosing
+	 * entries: the innermost clause it names, its exact native range, and its
+	 * handler_start - the INNER landing pad, which every synthesised enclosing
+	 * entry reuses verbatim (doc 21 1.2 / 4: aot-runtime.c's memcpy keeps the base
+	 * handler_start, overriding only flags/catch_class/clause_index).
+	 */
+	struct BaseEntry {
+		std::uint32_t clause_index;
+		std::uint32_t try_start_off;
+		std::uint32_t try_len;
+		gpointer handler_start;
+	};
+	std::vector<BaseEntry> bases;
+	bases.reserve (ordered.size ());
+
+	/* --- base entries: validate + join, exactly as the landed catch/finally path --- */
 	for (std::size_t i = 0; i < ordered.size (); ++i) {
 		const MonoLsdaEntry &e = ordered[i];
 
@@ -267,45 +324,6 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 			return false;
 
 		/*
-		 * Ordering / nesting sanity. The plan asks for an "innermost-first"
-		 * ordering check to stay honest for the nested slice. For this non-nested
-		 * catch-only milestone the correct, false-decline-free invariant is
-		 * EQUAL-OR-DISJOINT invoke ranges:
-		 *   - SIBLING catches - try { } catch(A) catch(B) - are ONE landing pad
-		 *     carrying one TypeId per catch over the shared invoke range, so C2/C3
-		 *     emit several entries with IDENTICAL try_start_off/try_len and
-		 *     DIFFERENT clause_index. mono consumes this natively (doc 11 dispatch):
-		 *     is_address_protected matches the shared PC range for every entry,
-		 *     then mono_object_isinst_checked on each catch_class picks the type,
-		 *     with RDX = ei->clause_index as the landing-pad selector. So entries
-		 *     that share EXACTLY the same range are legitimate and accepted.
-		 *   - A try with N protected calls yields N DISJOINT ranges (one per call)
-		 *     sharing one handler.
-		 * The translator gate admits equal-range sibling catches, so such methods
-		 * reach here on the live compile path (several entries sharing one range,
-		 * distinct clause_index), alongside single-catch methods (one clause_index,
-		 * possibly across several disjoint invoke ranges). The equal-range branch
-		 * handles both.
-		 * Only a PARTIAL overlap or STRICT nesting ([0x10,0x40) containing
-		 * [0x20,0x30)) is illegal here - it implies genuine nesting (unsupported)
-		 * or a producer bug, making is_address_protected's first-match ambiguous.
-		 * Such ranges are never exactly equal, so they still decline; the
-		 * missed-nesting attack stays covered. O(count^2) over the handful of
-		 * invoke ranges a method has. The nested slice later replaces this with
-		 * the innermost-first ordering it needs.
-		 */
-		std::uint64_t a_start = e.try_start_off;
-		std::uint64_t a_end = static_cast<std::uint64_t> (e.try_start_off) + e.try_len;
-		for (std::size_t j = 0; j < i; ++j) {
-			std::uint64_t b_start = ordered[j].try_start_off;
-			std::uint64_t b_end =
-				static_cast<std::uint64_t> (ordered[j].try_start_off) + ordered[j].try_len;
-			if (ranges_overlap (a_start, a_end, b_start, b_end) &&
-			    !(a_start == b_start && a_end == b_end)) /* sibling catches share one range */
-				return false;
-		}
-
-		/*
 		 * Build the published ei (CAP-EH-1). flags is joined from the IL header -
 		 * the section never carries it. handler_start is FTNPTR-encoded at publish
 		 * (never in the section). The try_offset/try_len/handler_offset/handler_len
@@ -332,6 +350,116 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		ei.handler_start = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
 
 		out.push_back (ei);
+		ranges.push_back ({ static_cast<std::uint64_t> (e.try_start_off),
+		                    static_cast<std::uint64_t> (e.try_start_off) + e.try_len });
+		bases.push_back ({ e.clause_index, e.try_start_off, e.try_len, ei.handler_start });
+	}
+
+	/*
+	 * NESTING SYNTHESIS (doc 21 4, EH N1). For each base entry whose innermost
+	 * clause is `c`, append one extra MonoJitExceptionInfo per ENCLOSING clause
+	 * `j` (clause c strictly try-contained in clause j). Each synthesised entry
+	 * copies the base's EXACT native range and EXACT handler_start (the inner
+	 * landing pad) and overrides only j's flags / catch_class / clause_index -
+	 * the reference oracle is aot-runtime.c's decode_llvm_mono_eh_frame:3247-3267
+	 * (memcpy the base entry, then override the three join fields).
+	 *
+	 * ORDERING (load-bearing, doc 21 1.1 / 4 step 4). All synthesised entries are
+	 * APPENDED after every base entry, so every base (inner) entry occupies a
+	 * LOWER array slot than its enclosing (outer) entries. Because a synthesised
+	 * entry copies its base's range, for any faulting PC the runtime's flat
+	 * first-match walk sees, at that PC's range, the base entry first and its
+	 * enclosing entries after - so an intervening finally runs before an enclosing
+	 * catch is entered, and pass-2 resume (which continues at the running clause's
+	 * ARRAY slot + 1) reaches the enclosers in innermost-first order. The base
+	 * block was already stable_sort-ed above; the synthesised block is NEVER fed
+	 * into that sort, so nothing can hoist an enclosing entry ahead of its base.
+	 *
+	 * For a single base, its enclosing entries are appended in ASCENDING
+	 * clause_index order (the j loop runs low->high). By ECMA-335 a more-deeply-
+	 * nested clause precedes its enclosers in the clause table, so ascending
+	 * clause_index == innermost-enclosing first (doc 21 4.1). At the depth the gate
+	 * admits this is moot (<= 1 encloser per clause), but the order is correct for
+	 * deeper nests too.
+	 *
+	 * RUNTIME-INERT (doc 21 8.2, EH N1). The translator nesting gate still declines
+	 * every strictly-nested method, so on the live compile path nested_in is empty
+	 * for every clause a base entry can name (siblings are excluded by
+	 * clause_encloses) and this loop appends nothing - the published array is
+	 * byte-identical to the landed catch/finally path. The synthesis is exercised
+	 * only by the offline unit tests, which feed a synthetic nested clause table.
+	 */
+	if (num_clauses > 0) {
+		std::size_t base_count = bases.size ();
+		for (std::size_t bi = 0; bi < base_count; ++bi) {
+			const BaseEntry &b = bases[bi];
+			const MonoExceptionClause &cc = clauses[b.clause_index];
+
+			for (int j = 0; j < num_clauses; ++j) {
+				if (static_cast<std::uint32_t> (j) == b.clause_index)
+					continue;
+				const MonoExceptionClause &cj = clauses[j];
+				if (!clause_encloses (cc, cj))
+					continue;
+
+				/*
+				 * CAP-EH-0 (doc 21 7 item 3): an enclosing clause whose kind is
+				 * not one of NONE / FINALLY / FAULT (e.g. a FILTER that slipped a
+				 * relaxed gate) cannot be encoded by this path. Decline the whole
+				 * array rather than publish a partial one.
+				 */
+				if (cj.flags != MONO_EXCEPTION_CLAUSE_NONE &&
+				    cj.flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
+				    cj.flags != MONO_EXCEPTION_CLAUSE_FAULT)
+					return false;
+
+				MonoJitExceptionInfo ei;
+				memset (&ei, 0, sizeof (ei));
+				ei.flags = cj.flags;
+				if (cj.flags == MONO_EXCEPTION_CLAUSE_NONE)
+					ei.data.catch_class = cj.data.catch_class;
+				ei.clause_index = j;
+				ei.try_start = (gpointer) (native_code + b.try_start_off);
+				ei.try_end = (gpointer) (native_code + b.try_start_off + b.try_len);
+				ei.handler_start = b.handler_start; /* the INNER landing pad, verbatim */
+
+				out.push_back (ei);
+				ranges.push_back ({ static_cast<std::uint64_t> (b.try_start_off),
+				                    static_cast<std::uint64_t> (b.try_start_off) + b.try_len });
+			}
+		}
+	}
+
+	/*
+	 * EQUAL-OR-DISJOINT invariant over the FINAL published array (doc 21 2.2 / 4
+	 * step 5). Kept as the CAP-EH-0 backstop it was for the non-nested milestone,
+	 * now validated over base + synthesised entries:
+	 *   - SIBLING catches - try { } catch(A) catch(B) - are ONE landing pad
+	 *     carrying one TypeId per catch over the shared invoke range, so C2/C3
+	 *     emit several entries with IDENTICAL try_start_off/try_len and DIFFERENT
+	 *     clause_index. mono consumes this natively: is_address_protected matches
+	 *     the shared PC range for every entry, then mono_object_isinst_checked on
+	 *     each catch_class picks the type, RDX = ei->clause_index as the selector.
+	 *     Exactly-equal ranges are legitimate and accepted.
+	 *   - A try with N protected calls yields N DISJOINT ranges (one per call).
+	 *   - A synthesised enclosing entry copies its base's EXACT range, so it is
+	 *     always EQUAL to that base (and equal-or-disjoint to everything else the
+	 *     base was). Nesting is thus encoded purely by same-range entries + array
+	 *     order, never by a nested native extent - the invariant is PRESERVED.
+	 * Only a PARTIAL overlap or STRICT nesting ([0x10,0x40) containing [0x20,0x30))
+	 * is illegal - it implies a genuine crossing (malformed IL / a producer bug),
+	 * making is_address_protected's first-match ambiguous. Such ranges are never
+	 * exactly equal, so they still decline; the missed-nesting attack stays
+	 * covered. O(n^2) over the handful of ranges a method has.
+	 */
+	for (std::size_t i = 0; i < ranges.size (); ++i) {
+		for (std::size_t j = 0; j < i; ++j) {
+			if (ranges_overlap (ranges[i].start, ranges[i].end,
+			                    ranges[j].start, ranges[j].end) &&
+			    !(ranges[i].start == ranges[j].start &&
+			      ranges[i].end == ranges[j].end)) /* equal ranges (siblings / enclosers) ok */
+				return false;
+		}
 	}
 
 	return true;

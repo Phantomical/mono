@@ -104,11 +104,22 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
  *   - clause_index >= num_clauses (the join key out of range);
  *   - the entry's kind disagrees with the joined clause's flags (the v2 self-
  *     describing cross-check - the section must not contradict the IL table);
- *   - the joined clause's flags != MONO_EXCEPTION_CLAUSE_NONE (a finally/fault/
- *     filter that slipped the gate - catch-only milestone);
- *   - two entries whose invoke ranges OVERLAP (see mono_lsda.cpp for why this is
- *     the ordering invariant validated for the non-nested milestone).
- * On success, out.size() == entries.size().
+ *   - the joined clause's flags is not NONE / FINALLY / FAULT (a filter that
+ *     slipped the gate, or an enclosing clause of an unrepresentable kind);
+ *   - two entries whose invoke ranges PARTIALLY overlap or strictly nest (see
+ *     mono_lsda.cpp for why equal-or-disjoint is the ordering invariant).
+ *
+ * NESTING SYNTHESIS (EH N1, doc 21 4). For each base entry whose innermost clause
+ * is `c`, build_ex_info APPENDS one extra MonoJitExceptionInfo per ENCLOSING
+ * clause `j` (clause c strictly try-contained in clause j, computed from
+ * clauses[].try_offset/handler_offset). The synthesised entry copies the base's
+ * EXACT native range and handler_start (the inner landing pad) and overrides only
+ * j's flags/catch_class/clause_index, so out.size() >= entries.size(): base
+ * entries occupy the lower slots [0, base_count), enclosing entries the higher
+ * ones (the ordering the runtime's flat first-match resume relies on). The
+ * translator nesting gate still declines every nested method, so on the live
+ * path nested_in is empty and out.size() == entries.size() - the synthesis is
+ * exercised only by the offline unit tests.
  */
 bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const MonoExceptionClause *clauses, int num_clauses,
