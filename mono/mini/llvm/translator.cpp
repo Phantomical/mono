@@ -209,19 +209,31 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 		return;
 
 	/*
-	 * Nested clauses where one of the clauses is a finally clause is
-	 * not supported, because LLVM can't figure out the control flow,
-	 * probably because we resume exception handling by calling our
-	 * own function instead of using the 'resume' llvm instruction.
+	 * Decline genuine clause NESTING, which the `.mono_lsda` chain cannot
+	 * represent: one clause's protected region lies strictly inside another's
+	 * try (or handler), so a single faulting PC is covered by two try ranges of
+	 * different extent and `is_address_protected`'s first-match is ambiguous.
+	 *
+	 * True SIBLING catches - try { } catch(A) catch(B) - are NOT nesting: the
+	 * clauses share the IDENTICAL protected region (same try_offset AND same
+	 * try_len) and differ only in handler. emit_handler_start emits them as one
+	 * landing pad carrying a clause per sibling, routed by the selector; the
+	 * gather pass records one entry per clause over the shared range, and the
+	 * runtime picks the handler by isinst then jumps via RDX = clause_index (doc
+	 * 11 3/6). That is faithfully representable, so admit it: exempt any pair
+	 * whose try regions are exactly equal. Every other overlap - equal
+	 * try_offset but different try_len, or a strictly-contained try - is real
+	 * nesting and still declines.
 	 */
 	for (i = 0; i < cfg->header->num_clauses; ++i) {
 		for (j = 0; j < cfg->header->num_clauses; ++j) {
 			MonoExceptionClause *clause1 = &cfg->header->clauses [i];
 			MonoExceptionClause *clause2 = &cfg->header->clauses [j];
 
-			// FIXME: Nested try clauses fail in some cases too, i.e. #37273
-			if (i != j && clause1->try_offset >= clause2->try_offset && clause1->handler_offset <= clause2->handler_offset) {
-				//(clause1->flags == MONO_EXCEPTION_CLAUSE_FINALLY || clause2->flags == MONO_EXCEPTION_CLAUSE_FINALLY)) {
+			gboolean siblings = clause1->try_offset == clause2->try_offset &&
+			                    clause1->try_len == clause2->try_len;
+
+			if (i != j && !siblings && clause1->try_offset >= clause2->try_offset && clause1->handler_offset <= clause2->handler_offset) {
 				TRACE_FAILURE_CFG (cfg, "nested clauses");
 				cfg->exception_message = g_strdup ("nested clauses");
 				cfg->disable_llvm = TRUE;

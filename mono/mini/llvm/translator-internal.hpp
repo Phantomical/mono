@@ -200,8 +200,6 @@ typedef struct {
 	int this_arg_pindex, rgctx_arg_pindex;
 	LLVMValueRef imt_rgctx_loc;
 	GHashTable *llvm_types;
-	/* For every clause, the clauses it is nested in */
-	GSList **nested_in;
 	LLVMValueRef ex_var;
 	/*
 	 * The function's landingpad personality (an i32-returning `mono_personality`

@@ -14,6 +14,46 @@
 
 #ifndef DISABLE_JIT
 
+/*
+ * A catch handler is reachable through the LLVM tier when its clause - or a
+ * sibling catch over the IDENTICAL try region - is the invoke target that owns
+ * the group's single landing pad (emit_handler_start). A secondary sibling has
+ * no invoke of its own but is entered through that landing pad's selector
+ * switch, so it is reachable too. A handler with no invoke and no invoke-target
+ * sibling is genuinely unreachable from a call-site table and declines.
+ */
+static gboolean
+handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
+{
+	MonoCompile *cfg = ctx->cfg;
+	int clause_index, j;
+	MonoExceptionClause *self;
+
+	if (ctx->bblocks [bb->block_num].invoke_target)
+		return TRUE;
+
+	clause_index = (mono_get_block_region_notry (cfg, bb->region) >> 8) - 1;
+	if (clause_index < 0 || clause_index >= cfg->header->num_clauses)
+		return FALSE;
+	self = &cfg->header->clauses [clause_index];
+
+	for (j = 0; j < cfg->header->num_clauses; ++j) {
+		MonoExceptionClause *other = &cfg->header->clauses [j];
+		MonoBasicBlock *other_bb;
+
+		if (j == clause_index || other->flags != MONO_EXCEPTION_CLAUSE_NONE)
+			continue;
+		if (other->try_offset != self->try_offset || other->try_len != self->try_len)
+			continue;
+
+		other_bb = (MonoBasicBlock*)g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (j));
+		if (other_bb && ctx->bblocks [other_bb->block_num].invoke_target)
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 void
 process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 {
@@ -48,7 +88,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	}
 
 	if (bb->flags & BB_EXCEPTION_HANDLER) {
-		if (!bblocks [bb->block_num].invoke_target) {
+		if (!handler_is_reachable (ctx, bb)) {
 			set_failure (ctx, "handler without invokes");
 			return;
 		}

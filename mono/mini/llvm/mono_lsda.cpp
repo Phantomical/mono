@@ -32,6 +32,7 @@
 
 #include "config.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -186,10 +187,34 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	if (num_clauses > 0 && entries.empty ())
 		return false;
 
-	out.reserve (entries.size ());
+	/*
+	 * Order the entries so that, within one try range, ascending IL clause_index
+	 * comes first. Sibling catches - try { } catch(A) catch(B) - share one try
+	 * range and one landing pad, and the runtime takes the FIRST isinst match in
+	 * array order (mini-exceptions.c is_address_protected + the catch loop), so
+	 * the earlier-declared catch (smaller clause_index) MUST precede the later
+	 * one - otherwise `catch(Derived) catch(Base)` would let the Base clause
+	 * swallow a Derived throw. The gather pass records one entry per landing-pad
+	 * TypeId, and LLVM hands those back in reverse of the emitted clause order, so
+	 * the section order is NOT authoritative; clause_index is. Sort on
+	 * (try_start_off, try_len, clause_index) - disjoint ranges never share a PC so
+	 * their relative order is immaterial, and the sort keeps identical ranges
+	 * grouped and clause-ordered. A stable sort keeps duplicate tuples put.
+	 */
+	std::vector<MonoLsdaEntry> ordered (entries);
+	std::stable_sort (ordered.begin (), ordered.end (),
+	                  [] (const MonoLsdaEntry &a, const MonoLsdaEntry &b) {
+		if (a.try_start_off != b.try_start_off)
+			return a.try_start_off < b.try_start_off;
+		if (a.try_len != b.try_len)
+			return a.try_len < b.try_len;
+		return a.clause_index < b.clause_index;
+	});
 
-	for (std::size_t i = 0; i < entries.size (); ++i) {
-		const MonoLsdaEntry &e = entries[i];
+	out.reserve (ordered.size ());
+
+	for (std::size_t i = 0; i < ordered.size (); ++i) {
+		const MonoLsdaEntry &e = ordered[i];
 
 		/*
 		 * Offsets in range. 64-bit intermediates so try_start_off + try_len
@@ -228,23 +253,20 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		 * catch-only milestone the correct, false-decline-free invariant is
 		 * EQUAL-OR-DISJOINT invoke ranges:
 		 *   - SIBLING catches - try { } catch(A) catch(B) - are ONE landing pad
-		 *     with several TypeIds over ONE invoke range, so C2/C3 emit several
-		 *     entries with IDENTICAL try_start_off/try_len and DIFFERENT
-		 *     clause_index. mono consumes this natively (doc 11 dispatch):
+		 *     carrying one TypeId per catch over the shared invoke range, so C2/C3
+		 *     emit several entries with IDENTICAL try_start_off/try_len and
+		 *     DIFFERENT clause_index. mono consumes this natively (doc 11 dispatch):
 		 *     is_address_protected matches the shared PC range for every entry,
 		 *     then mono_object_isinst_checked on each catch_class picks the type,
 		 *     with RDX = ei->clause_index as the landing-pad selector. So entries
 		 *     that share EXACTLY the same range are legitimate and accepted.
 		 *   - A try with N protected calls yields N DISJOINT ranges (one per call)
 		 *     sharing one handler.
-		 * NOTE on live coverage: sibling catches have EQUAL try_offset, which the
-		 * translator's nested-clause gate (translator.cpp) declines upstream before
-		 * `.mono_lsda` is ever built. So on the live compile path today only
-		 * SINGLE-catch methods reach here (one clause_index, possibly across several
-		 * disjoint invoke ranges); the equal-range / multiple-clause_index branch
-		 * below is exercised by the unit tests until a later slice refines that gate
-		 * to admit true (non-nested) sibling catches. The branch is correct for that
-		 * case and stays.
+		 * The translator gate admits equal-range sibling catches, so such methods
+		 * reach here on the live compile path (several entries sharing one range,
+		 * distinct clause_index), alongside single-catch methods (one clause_index,
+		 * possibly across several disjoint invoke ranges). The equal-range branch
+		 * handles both.
 		 * Only a PARTIAL overlap or STRICT nesting ([0x10,0x40) containing
 		 * [0x20,0x30)) is illegal here - it implies genuine nesting (unsupported)
 		 * or a producer bug, making is_address_protected's first-match ambiguous.
@@ -256,9 +278,9 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		std::uint64_t a_start = e.try_start_off;
 		std::uint64_t a_end = static_cast<std::uint64_t> (e.try_start_off) + e.try_len;
 		for (std::size_t j = 0; j < i; ++j) {
-			std::uint64_t b_start = entries[j].try_start_off;
+			std::uint64_t b_start = ordered[j].try_start_off;
 			std::uint64_t b_end =
-				static_cast<std::uint64_t> (entries[j].try_start_off) + entries[j].try_len;
+				static_cast<std::uint64_t> (ordered[j].try_start_off) + ordered[j].try_len;
 			if (ranges_overlap (a_start, a_end, b_start, b_end) &&
 			    !(a_start == b_start && a_end == b_end)) /* sibling catches share one range */
 				return false;

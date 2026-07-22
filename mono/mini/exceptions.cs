@@ -3029,6 +3029,109 @@ class Tests
 
 		return 0;
 	}
+
+	class C7ExA : Exception { }
+	class C7ExB : Exception { }
+	class C7ExC : C7ExB { }
+	class C7ExD : Exception { }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void C7Throw (int which) {
+		if (which == 1) throw new C7ExA ();
+		if (which == 2) throw new C7ExB ();
+		if (which == 3) throw new C7ExC ();
+		if (which == 4) throw new C7ExD ();
+	}
+
+	static int C7SibAB (int which) {
+		try {
+			C7Throw (which);
+			return 0;
+		} catch (C7ExA) {
+			return 11;
+		} catch (C7ExB) {
+			return 22;
+		}
+	}
+
+	/* Sibling catches select the handler by type; a subclass hits the base sibling. */
+	public static int test_0_sibling_catch_by_type () {
+		if (C7SibAB (1) != 11) return 1;   /* C7ExA -> first sibling  */
+		if (C7SibAB (2) != 22) return 2;   /* C7ExB -> second sibling */
+		if (C7SibAB (3) != 22) return 3;   /* C7ExC : C7ExB -> second */
+		if (C7SibAB (0) != 0)  return 4;   /* no throw                */
+		return 0;
+	}
+
+	static int C7SibDerivedFirst (int which) {
+		try {
+			C7Throw (which);
+			return 0;
+		} catch (C7ExC) {
+			return 77;
+		} catch (C7ExB) {
+			return 88;
+		}
+	}
+
+	/* catch(Derived) catch(Base): the FIRST type-matching clause must win. */
+	public static int test_0_sibling_ordering_derived_first () {
+		if (C7SibDerivedFirst (3) != 77) return 1;   /* C7ExC -> C7ExC clause (first) */
+		if (C7SibDerivedFirst (2) != 88) return 2;   /* C7ExB -> C7ExB clause (second) */
+		return 0;
+	}
+
+	static int C7Sib3 (int which) {
+		try {
+			C7Throw (which);
+			return 0;
+		} catch (C7ExA) {
+			return 1;
+		} catch (C7ExB) {
+			return 2;
+		} catch (C7ExD) {
+			return 3;
+		}
+	}
+
+	public static int test_0_sibling_three_way () {
+		if (C7Sib3 (1) != 1) return 1;
+		if (C7Sib3 (2) != 2) return 2;
+		if (C7Sib3 (4) != 3) return 3;
+		if (C7Sib3 (0) != 0) return 4;
+		return 0;
+	}
+
+	/* A throw matching neither sibling propagates to the caller's catch. */
+	public static int test_0_sibling_propagate () {
+		try {
+			C7SibAB (4);   /* C7ExD matches neither -> propagates */
+		} catch (C7ExD) {
+			return 0;
+		}
+		return 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void C7RethrowInner (int which) {
+		try {
+			C7Throw (which);
+		} catch (C7ExA) {
+			return;
+		} catch (C7ExB) {
+			throw;   /* rethrow the current exception to the caller */
+		}
+	}
+
+	/* rethrow from inside a sibling catch re-propagates to an outer frame. */
+	public static int test_0_sibling_rethrow () {
+		try {
+			C7RethrowInner (2);   /* throws C7ExB, inner catch rethrows */
+		} catch (C7ExB) {
+			return 0;
+		}
+		return 1;
+	}
 }
 
 #if !__MOBILE__

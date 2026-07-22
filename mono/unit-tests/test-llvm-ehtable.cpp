@@ -1062,6 +1062,42 @@ cases_mono_lsda_build (void)
 	}
 
 	/*
+	 * SIBLING ORDER is authoritative on clause_index, NOT on section order. The
+	 * gather pass records one entry per landing-pad TypeId, and LLVM hands those
+	 * back in REVERSE of the emitted clause order, so a sibling group arrives with
+	 * DESCENDING clause_index. build_ex_info must reorder each shared range to
+	 * ASCENDING clause_index (declaration order) so the runtime's first-isinst-
+	 * match picks the earlier-declared catch - otherwise `catch(Derived)
+	 * catch(Base)` lets Base swallow a Derived throw. Feed the reversed order and
+	 * assert the published array is ascending within the range.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x20, 0x90, 1 }, /* catch B first in the section (clause 1) */
+			{ 0x10, 0x20, 0x60, 0 }, /* catch A second (clause 0) */
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-sibling-reversed-order";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[1].try_start == (gpointer) (base + 0x10) &&
+			out[0].clause_index == 0 && out[1].clause_index == 1 &&
+			out[0].data.catch_class == CC0 && out[1].data.catch_class == CC1 &&
+			out[0].handler_start == (gpointer) (base + 0x60) &&
+			out[1].handler_start == (gpointer) (base + 0x90);
+		if (!good) {
+			printf ("FAIL build-sibling-reversed-order: ok=%d size=%zu clauses %d/%d\n",
+			        ok, out.size (), out.size () > 0 ? out[0].clause_index : -1,
+			        out.size () > 1 ? out[1].clause_index : -1);
+			failures ++;
+		} else {
+			printf ("ok   build-sibling-reversed-order (reordered to ascending clause_index)\n");
+		}
+	}
+
+	/*
 	 * SIBLING + MULTI-CALL composed: two identical-range sibling pairs at two
 	 * DIFFERENT disjoint ranges -> 4 entries -> ACCEPT. Pins that equal-and-
 	 * disjoint compose (each range hosts a sibling pair; the two ranges are

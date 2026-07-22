@@ -120,7 +120,7 @@ emit_this_slot_stackmap (EmitContext *ctx, LLVMBuilderRef builder, LLVMValueRef 
 void
 emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 {
-	int i, j, pindex;
+	int i, pindex;
 	MonoCompile *cfg = ctx->cfg;
 	MonoMethodSignature *sig = ctx->sig;
 	LLVMCallInfo *linfo = ctx->linfo;
@@ -382,18 +382,6 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			 */
 			if (cfg->gshared)
 				emit_this_slot_stackmap (ctx, builder, rgctx_alloc);
-		}
-	}
-
-	/* Compute nesting between clauses */
-	ctx->nested_in = (GSList**)mono_mempool_alloc0 (cfg->mempool, sizeof (GSList*) * cfg->header->num_clauses);
-	for (i = 0; i < cfg->header->num_clauses; ++i) {
-		for (j = 0; j < cfg->header->num_clauses; ++j) {
-			MonoExceptionClause *clause1 = &cfg->header->clauses [i];
-			MonoExceptionClause *clause2 = &cfg->header->clauses [j];
-
-			if (i != j && clause1->try_offset >= clause2->try_offset && clause1->handler_offset <= clause2->handler_offset)
-				ctx->nested_in [i] = g_slist_prepend_mempool (cfg->mempool, ctx->nested_in [i], GINT_TO_POINTER (j));
 		}
 	}
 
@@ -968,73 +956,108 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 	BBInfo *bblocks = ctx->bblocks;
 	LLVMTypeRef i8ptr;
 	LLVMValueRef personality;
-	LLVMValueRef landing_pad;
 	LLVMBasicBlockRef target_bb;
 	MonoInst *exvar;
 	static int ti_generator;
 	char ti_name [128];
-	LLVMValueRef type_info;
 	int clause_index;
-	GSList *l;
 
 	// <resultval> = landingpad <somety> personality <type> <pers_fn> <clause>+
 
-	personality = get_mono_personality (ctx);
-
-	i8ptr = LLVMPointerType (LLVMInt8Type (), 0);
-
 	clause_index = (mono_get_block_region_notry (cfg, bb->region) >> 8) - 1;
 
-	/*
-	 * Create the type info
-	 */
-	sprintf (ti_name, "type_info_%d", ti_generator);
-	ti_generator ++;
-
-	type_info = LLVMAddGlobal (lmodule, LLVMInt32Type (), ti_name);
-	LLVMSetInitializer (type_info, LLVMConstInt (LLVMInt32Type (), clause_index, FALSE));
-
-	{
-		LLVMTypeRef members [2], ret_type;
-
-		members [0] = i8ptr;
-		members [1] = LLVMInt32Type ();
-		ret_type = LLVMStructType (members, 2, FALSE);
-
-		landing_pad = LLVMBuildLandingPad (builder, ret_type, personality, 1, "");
-		LLVMAddClause (landing_pad, type_info);
-
-		/* Store the exception into the exvar */
-		if (ctx->ex_var)
-			LLVMBuildStore (builder, convert (ctx, LLVMBuildExtractValue (builder, landing_pad, 0, "ex_obj"), ObjRefType ()), ctx->ex_var);
-	}
-
-	/*
-	 * LLVM throw sites are associated with a one landing pad, and LLVM generated
-	 * code expects control to be transferred to this landing pad even in the
-	 * presence of nested clauses. The landing pad needs to branch to the landing
-	 * pads belonging to nested clauses based on the selector value returned by
-	 * the landing pad instruction, which is passed to the landing pad in a
-	 * register by the EH code.
-	 */
 	target_bb = bblocks [bb->block_num].call_handler_target_bb;
 	g_assert (target_bb);
 
 	/*
-	 * Branch to the correct landing pad
+	 * A handler is entered through the ONE landing pad of its sibling group -
+	 * the invoke target - which the runtime jumps to with the matched clause's
+	 * index in the selector register (RDX, doc 11 6.4). Sibling catches over the
+	 * IDENTICAL try region - try { } catch(A) catch(B) - share that one landing
+	 * pad; only its clause is the invoke target, the others are reached through
+	 * its selector switch and carry no landing pad of their own.
 	 */
-	LLVMValueRef ex_selector = LLVMBuildExtractValue (builder, landing_pad, 1, "ex_selector");
-	LLVMValueRef switch_ins = LLVMBuildSwitch (builder, ex_selector, target_bb, 0);
+	if (bblocks [bb->block_num].invoke_target) {
+		MonoExceptionClause *this_clause = &cfg->header->clauses [clause_index];
+		LLVMValueRef landing_pad;
+		LLVMValueRef switch_ins;
+		int i;
 
-	for (l = ctx->nested_in [clause_index]; l; l = l->next) {
-		int nesting_clause_index = GPOINTER_TO_INT (l->data);
-		MonoBasicBlock *handler_bb;
+		personality = get_mono_personality (ctx);
+		i8ptr = LLVMPointerType (LLVMInt8Type (), 0);
 
-		handler_bb = (MonoBasicBlock*)g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (nesting_clause_index));
-		g_assert (handler_bb);
+		{
+			LLVMTypeRef members [2], ret_type;
 
-		g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
-		LLVMAddCase (switch_ins, LLVMConstInt (LLVMInt32Type (), nesting_clause_index, FALSE), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+			members [0] = i8ptr;
+			members [1] = LLVMInt32Type ();
+			ret_type = LLVMStructType (members, 2, FALSE);
+
+			landing_pad = LLVMBuildLandingPad (builder, ret_type, personality, cfg->header->num_clauses, "");
+		}
+
+		/*
+		 * Carry one landingpad clause per catch that shares this try region, in
+		 * ascending IL clause_index order. Each is a type_info_N global whose i32
+		 * initializer smuggles the IL clause_index; the gather pass reads them
+		 * (one .mono_lsda entry per catch over the shared invoke range) and the
+		 * runtime picks the handler by isinst in that order, so declaration order
+		 * (inner/more-derived catch first) is preserved. A single catch adds just
+		 * its own clause; sibling catches add the whole group.
+		 */
+		for (i = 0; i < cfg->header->num_clauses; ++i) {
+			MonoExceptionClause *c = &cfg->header->clauses [i];
+			LLVMValueRef type_info;
+
+			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
+				continue;
+			if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
+				continue;
+
+			sprintf (ti_name, "type_info_%d", ti_generator);
+			ti_generator ++;
+
+			type_info = LLVMAddGlobal (lmodule, LLVMInt32Type (), ti_name);
+			LLVMSetInitializer (type_info, LLVMConstInt (LLVMInt32Type (), i, FALSE));
+			LLVMAddClause (landing_pad, type_info);
+		}
+
+		/* Store the exception into the exvar */
+		if (ctx->ex_var)
+			LLVMBuildStore (builder, convert (ctx, LLVMBuildExtractValue (builder, landing_pad, 0, "ex_obj"), ObjRefType ()), ctx->ex_var);
+
+		/*
+		 * The selector register holds the matched clause's index; branch to the
+		 * sibling handler that owns it (this clause's own body is the default).
+		 */
+		LLVMValueRef ex_selector = LLVMBuildExtractValue (builder, landing_pad, 1, "ex_selector");
+		switch_ins = LLVMBuildSwitch (builder, ex_selector, target_bb, 0);
+
+		for (i = 0; i < cfg->header->num_clauses; ++i) {
+			MonoExceptionClause *c = &cfg->header->clauses [i];
+			MonoBasicBlock *handler_bb;
+
+			if (i == clause_index)
+				continue;
+			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
+				continue;
+			if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
+				continue;
+
+			handler_bb = (MonoBasicBlock*)g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (i));
+			g_assert (handler_bb);
+			g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+			LLVMAddCase (switch_ins, LLVMConstInt (LLVMInt32Type (), i, FALSE), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+		}
+	} else {
+		/*
+		 * A secondary sibling has no landing pad of its own - it is reached only
+		 * through the group's invoke-target landing pad selector switch, which
+		 * branches straight to this clause's call_handler_target_bb. Its own EH
+		 * entry block is never an unwind destination, so terminate it as
+		 * unreachable to keep the IR well-formed.
+		 */
+		LLVMBuildUnreachable (builder);
 	}
 
 	/* Start a new bblock which CALL_HANDLER can branch to */
