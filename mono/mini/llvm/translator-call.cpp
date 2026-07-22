@@ -243,7 +243,7 @@ emit_entry_bb (EmitContext *ctx, llvm::IRBuilder<> *builder)
 				/* The upper bits of the registers might not be valid */
 				LLVMValueRef val = LLVMBuildExtractValue (llvm::wrap (builder), arg, 0, "");
 				LLVMValueRef dest = convert (ctx, ctx->addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-				LLVMBuildStore (llvm::wrap (ctx->builder), LLVMBuildTrunc (llvm::wrap (builder), val, llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), size * 8)), ""), dest);
+				LLVMBuildStore (llvm::wrap (ctx->builder), llvm::wrap (builder->CreateTrunc (llvm::unwrap (val), llvm::unwrap (llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), size * 8))), "")), dest);
 			} else {
 				LLVMBuildStore (llvm::wrap (ctx->builder), arg, convert (ctx, ctx->addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))));
 			}
@@ -525,7 +525,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_
 					}
 
 					tramp_var = LLVMAddGlobal (ctx->lmodule, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), name);
-					LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))));
+					LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)))), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))))));
 					LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 					ctx->jit_callees [call->method] = tramp_var;
 				}
@@ -637,7 +637,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_
 			if (cinfo->ret.storage == LLVMArgVtypeByRef)
 				args [cinfo->vret_arg_pindex] = addresses [call->inst.dreg]->value;
 			else
-				args [cinfo->vret_arg_pindex] = LLVMBuildPtrToInt (llvm::wrap (builder), addresses [call->inst.dreg]->value, IntPtrType (), "");
+				args [cinfo->vret_arg_pindex] = llvm::wrap (builder->CreatePtrToInt (llvm::unwrap (addresses [call->inst.dreg]->value), llvm::unwrap (IntPtrType ()), ""));
 		}
 		break;
 	}
@@ -819,7 +819,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_
 			addresses [call->inst.dreg] = build_alloca_address (ctx, sig->ret);
 		LLVMBuildStore (llvm::wrap (builder), lcall, convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE));
 		if (MONO_CLASS_IS_SIMD (ctx->cfg, mono_class_from_mono_type_internal (sig->ret)))
-			values [ins->dreg] = LLVMBuildBitCast(llvm::wrap (builder), lcall, type_to_llvm_type (ctx, sig->ret), "callret_cvt_simd");
+			values [ins->dreg] = llvm::wrap (builder->CreateBitCast (llvm::unwrap (lcall), llvm::unwrap (type_to_llvm_type (ctx, sig->ret)), "callret_cvt_simd"));
 		break;
 	case LLVMArgVtypeRetAddr:
 	case LLVMArgVtypeByRef:
