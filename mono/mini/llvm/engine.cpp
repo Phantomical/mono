@@ -412,82 +412,13 @@ ensure_native_target ()
 }
 
 /*
- * WHY THE LARGE CODE MODEL IS PINNED, AND WHY ONLY ON x86-64.
- *
- * The legacy LLVM 6 shim (mini-llvm-cpp.cpp, no longer built) says mono
- * "requires" JIT code to be allocated with MAP_32BIT. That requirement was
- * about the SMALL code model: small-model x86-64 codegen reaches its targets
- * through 32-bit-wide relocations, which cannot span an arbitrary distance.
- * RuntimeDyld only assert()s on such an overflow and the shipped LLVM has
- * assertions off, so the failure would be a silent truncation.
- *
- * This engine does not need MAP_32BIT, and the reason is the code model, not
- * luck about where mmap lands. Measured over ~13,700 loaded sections across
- * the mini regression suite (basic/generics/exceptions/objects/iltests/
- * arrays/basic-math, plus a MONO_TIERED=1 run):
- *
- *   - relocation histogram: 28,775 R_X86_64_64 (.ltext/.rodata) and
- *     4,701 R_X86_64_PC64 (.eh_frame). Nothing narrower.
- *   - every section landed ABOVE 4 GB (0x7f10_a5cb_f000 .. 0x7fd5_1e09_c000);
- *     not one below. Low-address allocation is emphatically NOT what makes
- *     this work - the code model is.
- *   - the section names are .ltext / .ldata, the large-model prefixes, which
- *     is the model's own signature in the object file.
- *
- * That is what lets this engine use a stock SectionMemoryManager.
- *
- * WHAT THE PIN DOES AND DOES NOT BUY. On x86-64 it is a no-op today: LLVM's
- * X86 backend already picks Large for a 64-bit JIT with no model requested
- * (getEffectiveX86CodeModel: `if (JIT) return Is64Bit ? Large : Small`), and
- * JITTargetMachineBuilder::createTargetMachine passes JIT=true. Confirmed on
- * LLVM 18.1.3 - with and without this call the emitted object is identical.
- * Its only value is to remove the dependency on that internal default. Note
- * that it cannot be *self-checked*: X86TargetMachine returns a requested model
- * verbatim, so reading the model back off the target machine after pinning it
- * only proves that setCodeModel() works. The invariant is instead checked
- * where it is real - on the relocations of the emitted object, by
- * accumulate_reloc_audit() here and by the reloc-widths case in
+ * No code model is pinned; the engine uses LLVM's default. On x86-64 that
+ * default is Large for a 64-bit JIT (getEffectiveX86CodeModel: JIT && Is64Bit
+ * -> Large), which keeps every reference 64-bit-wide so a stock
+ * SectionMemoryManager can place sections anywhere above 4 GB. That invariant
+ * is not assumed - it is checked on the emitted relocations by
+ * audit_relocations() here and the reloc-widths case in
  * mono/unit-tests/test-llvm-engine.cpp.
- *
- * WHY THE GATE. This function is arch-agnostic (detectHost()) and engine.cpp
- * is built under a plain `if ENABLE_LLVM` with no arch condition, so it runs
- * on every host mono has a port for. Measured against this same libLLVM-18.1.3
- * by emitting one probe module per triple twice, with and without the pin, and
- * diffing the object bytes and the relocation histogram. JIT default code
- * model, then the observed effect of pinning Large:
- *
- *   x86_64   Large  -> objects byte-identical; pin is a no-op
- *   aarch64  Large  -> objects byte-identical; pin is a no-op
- *   armv7    Small  -> objects byte-identical; the pin is accepted and then
- *                      ignored by the ARM backend
- *   s390x    Medium -> objects byte-identical for the probe. The effective
- *                      model does become Large, but no codegen difference was
- *                      observed; the codegen effect is NOT characterised.
- *   i686     Small  -> objects DIFFER: the external call goes from R_386_PLT32
- *                      to an absolute R_386_32. "Large" is meaningless in a
- *                      32-bit address space anyway.
- *   ppc64le  Small  -> objects DIFFER: .TOC. addressing changes
- *                      REL16_HA/REL16_LO/TOC16_DS -> REL64/TOC16_HA/TOC16_LO_DS
- *   riscv32/64 Small -> pinning Large ABORTS the process during codegen:
- *                      "LLVM ERROR: Unsupported code model for lowering".
- *                      Note createTargetMachine() ACCEPTS it silently; the
- *                      abort lands on the first method compiled.
- *
- * So outside x86-64 the pin ranges from pointless to fatal, and nowhere does
- * it buy anything: the two arches that would want Large already default to it.
- * Restricting the pin to x86-64 is therefore the whole of its correct scope -
- * it is exactly the target whose relocation behaviour has been analysed (see
- * x86_64_reloc_truncates_address) and whose small-model failure mode motivated
- * it. aarch64 is deliberately left on its (already Large) default rather than
- * pinned, so that a port which needs a different model there is not silently
- * overridden by an x86-derived assumption.
- *
- * OPEN, NOT SOLVED, FOR OTHER 64-BIT PORTS: on ppc64le/riscv64/s390x the JIT
- * default is not Large, so the "sections may live anywhere above 4 GB"
- * assumption is unproven there. The relocation audit is x86-64-only and will
- * report "did not look" on those hosts. Porting the engine to them means
- * analysing their relocation sets and, if needed, constraining allocation -
- * NOT pinning Large, which two of the three reject outright.
  */
 JITTargetMachineBuilder
 host_target_machine_builder ()
@@ -504,8 +435,6 @@ host_target_machine_builder ()
 
 	auto jtmb = cantFail (JITTargetMachineBuilder::detectHost ());
 	jtmb.setCodeGenOptLevel (CodeGenOptLevel::Aggressive);
-	if (jtmb.getTargetTriple ().getArch () == Triple::x86_64)
-		jtmb.setCodeModel (CodeModel::Large);
 	jtmb.setCPU (std::string (sys::getHostCPUName ()));
 
 	StringMap<bool> features;

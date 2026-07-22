@@ -313,10 +313,9 @@ audit_code_model (CodeModel::Model cm)
  *
  * WHY NOT JUST READ BACK THE CODE MODEL. Because that check is vacuous.
  * X86TargetMachine::getEffectiveCodeModel returns a requested model verbatim,
- * so once host_target_machine_builder() pins Large, asking the target machine
- * what model it has can only ever answer "Large" - deleting the pin does not
- * change the answer, because on x86-64 the JIT default is Large as well. The
- * relocations of the emitted object are the observable that actually moves.
+ * and on x86-64 the JIT default is Large anyway, so asking the target machine
+ * what model it has can only ever answer "Large" whether or not anything set
+ * it. The relocations of the emitted object are the observable that moves.
  *
  * Three parts, in order:
  *

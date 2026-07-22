@@ -211,7 +211,8 @@ private:
  * the JIT jumps or loads through a bogus address.
  *
  * So instead of asking the target machine what code model it thinks it has
- * (which only ever reads back whatever we set), the engine audits the
+ * (which only reads the model back, never whether the emitted code respects
+ * it), the engine audits the
  * relocations LLVM actually emitted. That is the property that matters, and it
  * is observable no matter how the code model got chosen. Which relocations
  * count as unsafe, and the false-negative gap in that set, are documented on
@@ -249,9 +250,9 @@ RelocAudit jit_reloc_audit ();
 
 /*
  * The target machine configuration the engine itself JITs with (host CPU and
- * features, O3, and the pinned code model on x86-64). Exposed so the test can
- * emit a probe object through an otherwise-identical target machine with only
- * the code model varied.
+ * features, O3, and LLVM's default code model - Large on x86-64 for a JIT).
+ * Exposed so the test can emit a probe object through an otherwise-identical
+ * target machine with only the code model varied.
  */
 llvm::orc::JITTargetMachineBuilder host_target_machine_builder ();
 
