@@ -365,6 +365,214 @@ class Tests
 		return 0;
 	}
 
+	/*
+	 * EH F5 functional coverage: CROSS-TIER finally-resume. The from_llvm finally
+	 * resume protocol (a tier-1/LLVM finally suspends via jit_tls->resume_state and
+	 * re-enters mono_handle_exception_internal(resume=TRUE), then the walk continues
+	 * into the NEXT frame) runs for the first time in genuinely MIXED tier-0/tier-1
+	 * stacks (doc 16 5, the [UNVERIFIED] resume-tail-into-a-classic-next-frame item in
+	 * 8). Every finally-bearing helper holds a single, non-nested finally clause (so the
+	 * F2 nesting gate still admits it), is [NoInlining] so its frame really exists, and
+	 * records the finally-run order in log (log [0] = count, log [1..] = the sequence of
+	 * finally tags in the order they ran).
+	 *
+	 * These tests assert CORRECTNESS on every configuration (classic, and
+	 * MONO_TIERED=1 --llvm at any threshold): the exact finally order AND the frame that
+	 * catches. The per-frame TIER is forced deterministically OUT OF BAND with
+	 * MONO_LLVM_METHOD (an allowlist: only the named methods reach the LLVM tier, every
+	 * other stays tier-0 classic) + MONO_TIERED=1 + a low MONO_TIERED_CALL_THRESHOLD; the
+	 * "_t1" helpers are the ones named there, the "_t0" helpers are left classic. Each
+	 * test warms its intended-tier-1 helpers past a low threshold first so the MEASURED
+	 * run executes the promoted tier-1 body (the warm-up is inert at the default
+	 * threshold 1000, so these stay pure correctness tests in the regression suite).
+	 */
+
+	/* Scenario 1: throw inside a tier-1 (LLVM) try/finally; the finally suspends via
+	   resume_state and the walk resumes into a tier-0 (classic) caller that catches.
+	   Force: MONO_LLVM_METHOD='f5_s1_finally_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f5_s1_finally_t1 (bool doThrow, int[] log) {
+		try {
+			if (doThrow)
+				throw new Exception ("f5_s1");
+		} finally {
+			log [++log [0]] = 1;
+		}
+	}
+
+	public static int test_0_f5_cross_tier_s1 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; f5_s1_finally_t1 (false, log); }
+		log [0] = 0;
+		try {
+			f5_s1_finally_t1 (true, log);
+		} catch (Exception) {
+			return (log [0] == 1 && log [1] == 1) ? 0 : 1;
+		}
+		return 2;
+	}
+
+	/* Scenario 2 (mirror): throw inside a tier-0 (classic) try/finally; the classic
+	   finally RETURNS synchronously and the resume-driven walk continues into a tier-1
+	   (LLVM) caller that catches. Force: MONO_LLVM_METHOD='f5_s2_catcher_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f5_s2_finally_t0 (bool doThrow, int[] log) {
+		try {
+			if (doThrow)
+				throw new Exception ("f5_s2");
+		} finally {
+			log [++log [0]] = 1;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s2_catcher_t1 (bool doThrow, int[] log) {
+		try {
+			f5_s2_finally_t0 (doThrow, log);
+		} catch (Exception) {
+			return 7;
+		}
+		return 0;
+	}
+
+	public static int test_0_f5_cross_tier_s2 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; f5_s2_catcher_t1 (false, log); }
+		log [0] = 0;
+		int r = f5_s2_catcher_t1 (true, log);
+		return (r == 7 && log [0] == 1 && log [1] == 1) ? 0 : 1;
+	}
+
+	/* Scenario 3: a throw crossing SEVERAL mixed-tier finally frames. The chain is
+	   test(classic catch) -> fin1_t1(LLVM) -> fin2_t0(classic) -> fin3_t1(LLVM, throws),
+	   so the pass-2 walk alternates resume / classic-return / resume before the catch.
+	   All three finallys must run innermost-first (tags 3, 2, 1) and the catch must fire
+	   in the outermost frame. Force: MONO_LLVM_METHOD='f5_s3_fin1_t1;f5_s3_fin3_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f5_s3_fin3_t1 (bool doThrow, int[] log) {
+		try {
+			if (doThrow)
+				throw new Exception ("f5_s3");
+		} finally {
+			log [++log [0]] = 3;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f5_s3_fin2_t0 (bool doThrow, int[] log) {
+		try {
+			f5_s3_fin3_t1 (doThrow, log);
+		} finally {
+			log [++log [0]] = 2;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f5_s3_fin1_t1 (bool doThrow, int[] log) {
+		try {
+			f5_s3_fin2_t0 (doThrow, log);
+		} finally {
+			log [++log [0]] = 1;
+		}
+	}
+
+	public static int test_0_f5_cross_tier_s3 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; f5_s3_fin1_t1 (false, log); }
+		log [0] = 0;
+		try {
+			f5_s3_fin1_t1 (true, log);
+		} catch (Exception) {
+			return (log [0] == 3 && log [1] == 3 && log [2] == 2 && log [3] == 1) ? 0 : 1;
+		}
+		return 2;
+	}
+
+	/* Scenario 4: `leave` normal-exit across a tier boundary, both directions. A tier-1
+	   finally whose continuation returns into a tier-0 caller, and a tier-0 finally
+	   returning into a tier-1 caller - the non-exceptional finally path must be
+	   tier-agnostic too. Force: MONO_LLVM_METHOD='f5_s4_finally_t1;f5_s4_caller_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s4_finally_t1 (int[] log) {
+		try {
+			return 42;
+		} finally {
+			log [++log [0]] = 4;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s4_caller_t0 (int[] log) {
+		return f5_s4_finally_t1 (log) + 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s4_finally_t0 (int[] log) {
+		try {
+			return 50;
+		} finally {
+			log [++log [0]] = 5;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s4_caller_t1 (int[] log) {
+		return f5_s4_finally_t0 (log) + 1;
+	}
+
+	public static int test_0_f5_cross_tier_s4 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; f5_s4_caller_t0 (log); f5_s4_caller_t1 (log); }
+		log [0] = 0;
+		int a = f5_s4_caller_t0 (log);		/* tier-0 caller, tier-1 finally */
+		int b = f5_s4_caller_t1 (log);		/* tier-1 caller, tier-0 finally */
+		return (a == 43 && b == 51 && log [0] == 2 && log [1] == 4 && log [2] == 5) ? 0 : 1;
+	}
+
+	/* Scenario 5: value-returning method + finally across a tier boundary, both
+	   directions - confirm the return value survives the mixed walk. Force:
+	   MONO_LLVM_METHOD='f5_s5_value_t1;f5_s5_caller_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s5_value_t1 (int x, int[] log) {
+		int v;
+		try {
+			v = x * 3 + 1;
+		} finally {
+			log [++log [0]] = 6;
+		}
+		return v;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s5_value_t0 (int x, int[] log) {
+		int v;
+		try {
+			v = x * 5 + 2;
+		} finally {
+			log [++log [0]] = 7;
+		}
+		return v;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s5_caller_t0 (int x, int[] log) {
+		return f5_s5_value_t1 (x, log);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f5_s5_caller_t1 (int x, int[] log) {
+		return f5_s5_value_t0 (x, log);
+	}
+
+	public static int test_0_f5_cross_tier_s5 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; f5_s5_caller_t0 (2, log); f5_s5_caller_t1 (2, log); }
+		log [0] = 0;
+		int a = f5_s5_caller_t0 (10, log);	/* tier-0 caller -> tier-1 value method: 10*3+1 */
+		int b = f5_s5_caller_t1 (10, log);	/* tier-1 caller -> tier-0 value method: 10*5+2 */
+		return (a == 31 && b == 52 && log [0] == 2 && log [1] == 6 && log [2] == 7) ? 0 : 1;
+	}
+
 	public static int test_0_byte_cast () {
 		int a;
 		long l;
