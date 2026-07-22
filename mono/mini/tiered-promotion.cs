@@ -1,5 +1,28 @@
 using System;
+using System.Reflection;
 using System.Runtime.CompilerServices;
+
+namespace MonoTests.Tiering {
+	//
+	// Promotion-policy probe, backed by JIT-only internal calls registered in
+	// mini-runtime.c. Lets the test assert the POLICY (a cold method stays tier
+	// 0; a hot one is promoted), which semantic-only checks cannot catch.
+	//
+	static class Probe {
+		// MONO_TIERED_CALL_THRESHOLD, or 0 when deferred promotion is off
+		// (MONO_TIERED unset, or threshold 0 = eager). Policy assertions are only
+		// meaningful when this is > 0.
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		public static extern uint Threshold ();
+
+		// Recorded tier state of the method whose MonoMethod* is METHOD (obtained
+		// from RuntimeMethodHandle.Value): 1 = promoted to tier 1, 0 = queued at
+		// tier 0, 2 = tier-0 terminal (declined), -1 = no record, i.e. never
+		// enqueued - the method never crossed the threshold and stayed cold.
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		public static extern int MethodState (IntPtr method);
+	}
+}
 
 //
 // Functional test for deferred tier-1 promotion (MONO_TIERED_CALL_THRESHOLD).
@@ -57,5 +80,57 @@ public class TieredPromotion {
 		r += Cold (20, 2);
 		r += Cold (30, 3);
 		return r == (10 * 3 - 1) + (20 * 3 - 2) + (30 * 3 - 3) ? 0 : 1;
+	}
+
+	// -- Promotion-policy assertion (review NIT-3) --------------------------
+	//
+	// The tests above only prove semantics are preserved across promotion; they
+	// pass even if the threshold were silently ignored. This one asserts the
+	// POLICY itself: a hot method IS promoted and a below-threshold method is
+	// NOT. It reads tier state through the MonoTests.Tiering.Probe internal
+	// calls.
+	//
+	// Only meaningful when deferred promotion is active (threshold > 0). Under
+	// the classic JIT (tiering off) or eager mode (threshold 0) the probe
+	// reports "off" and there is no deferred policy to check, so the test
+	// degrades to a no-op and still passes on every path and threshold.
+
+	const int STATE_PROMOTED = 1;
+	const int POLICY_COLD_CALLS = 3;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int PolicyHot (int x) { return x + 1; }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int PolicyCold (int x) { return x - 1; }
+
+	static IntPtr HandleOf (string name) {
+		MethodInfo mi = typeof (TieredPromotion).GetMethod (
+			name, BindingFlags.NonPublic | BindingFlags.Static);
+		return mi.MethodHandle.Value;
+	}
+
+	public static int test_0_promotion_policy () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		if (threshold == 0)
+			return 0;			// off / eager: no deferred policy to assert.
+
+		// Drive PolicyHot far past any tested threshold; it must promote.
+		long acc = 0;
+		for (int i = 0; i < 5000; i++)
+			acc += PolicyHot (i & 63);
+		if (MonoTests.Tiering.Probe.MethodState (HandleOf ("PolicyHot")) != STATE_PROMOTED)
+			return 1;			// a hot method was NOT promoted - policy regressed.
+
+		// Enter PolicyCold only a handful of times. When the threshold is above
+		// that count it can never cross, so it must NOT be promoted.
+		int r = 0;
+		for (int i = 0; i < POLICY_COLD_CALLS; i++)
+			r += PolicyCold (i);
+		if (threshold > POLICY_COLD_CALLS &&
+		    MonoTests.Tiering.Probe.MethodState (HandleOf ("PolicyCold")) == STATE_PROMOTED)
+			return 2;			// a cold method was promoted - threshold ignored.
+
+		return (acc >= 0 && r != 0x7fffffff) ? 0 : 3;
 	}
 }

@@ -34,6 +34,7 @@
 #include "mini-runtime.h"
 #include <mono/metadata/appdomain.h>
 #include <mono/utils/mono-lazy-init.h>
+#include <mono/utils/atomic.h>
 #include "backend.h"
 
 enum TierState {
@@ -136,6 +137,27 @@ typedef struct {
 	guint32 opt;
 	MonoMethod *method;
 	MonoDomain *domain;
+	/*
+	 * Lock-free "this method is done" latch. Read with an atomic load and set
+	 * with an atomic store, never under tiered_mutex. It is set to 1 only once
+	 * the method has reached a TERMINAL tier state - promoted, or declined to
+	 * tier-1-terminal - by mini_tiered_count_reached () after a drain that
+	 * actually settled it. A set bit lets every later crossing on a still-live,
+	 * un-redirected tier-0 call site return immediately, eliding the
+	 * mutex-locked enqueue (refused) and drain attempt those repeats would
+	 * otherwise pay on every call for the rest of the process. It does NOT elide
+	 * the baked prologue increment+cmp+call - only a sled (future W4/C4 work)
+	 * can remove that - just the dominant mutex+drain cost behind it.
+	 *
+	 * Crucially the bit is NOT set on mere enqueue. A crossing whose drain was
+	 * deferred (depth != 0, or a failed current-domain / appdomain-ref / ready
+	 * gate) leaves the method enqueued in TIER_STATE_TIER0 with this bit clear,
+	 * so its next crossing still takes the full path and RETRIES the drain -
+	 * exactly the deferral-retry the synchronous design depends on (§5.1).
+	 * Latching on enqueue would fast-path a deferred method out of every future
+	 * crossing and could lose its promotion entirely.
+	 */
+	gint32 settled;
 } MiniTieredCounter;
 
 static void
@@ -273,6 +295,58 @@ tiered_set_state (MonoMethod *method, MonoDomain *domain, TierState state)
 	if (rec && rec->domain == domain)
 		rec->state = state;
 	mono_os_mutex_unlock (&tiered_mutex);
+}
+
+/*
+ * TRUE once METHOD has reached a terminal tier state in DOMAIN - promoted, or
+ * declined to tier-0-terminal. This is the only state in which
+ * mini_tiered_count_reached () may latch the counter's lock-free settled bit:
+ * the transient TIER_STATE_TIER0 that a still-queued (possibly deferred) method
+ * sits in must NOT latch, or a deferred method's retry path would be cut off. A
+ * missing record means the method was never enqueued here (or its domain was
+ * purged); that is not settled.
+ */
+static gboolean
+tiered_state_is_settled (MonoMethod *method, MonoDomain *domain)
+{
+	TieredRecord *rec;
+	gboolean settled = FALSE;
+
+	mono_os_mutex_lock (&tiered_mutex);
+	rec = (TieredRecord *) g_hash_table_lookup (tiered_state, method);
+	if (rec && rec->domain == domain)
+		settled = rec->state != TIER_STATE_TIER0;
+	mono_os_mutex_unlock (&tiered_mutex);
+
+	return settled;
+}
+
+/*
+ * Promotion-policy introspection for the functional test (tiered-promotion.cs,
+ * through the MonoTests.Tiering.Probe internal calls). Returns METHOD's recorded
+ * tier state as a TierState value (0 queued/tier-0, 1 promoted, 2 tier-0
+ * terminal), or -1 when the feature is off or METHOD has no record - the latter
+ * being the "never enqueued, stayed cold at tier 0" outcome the test asserts for
+ * a below-threshold method. Matches any domain: the test runs in the root domain
+ * and there is one record per (non-generic) method, so it need not thread a
+ * domain pointer through managed code.
+ */
+int
+mono_llvm_tiered_method_state (MonoMethod *method)
+{
+	TieredRecord *rec;
+	int state = -1;
+
+	if (!mono_llvm_tiered_enabled () || !method)
+		return -1;
+
+	mono_os_mutex_lock (&tiered_mutex);
+	rec = (TieredRecord *) g_hash_table_lookup (tiered_state, method);
+	if (rec)
+		state = (int) rec->state;
+	mono_os_mutex_unlock (&tiered_mutex);
+
+	return state;
 }
 
 /*
@@ -591,6 +665,26 @@ mini_tiered_count_reached (gpointer counter)
 	if (!mono_llvm_tiered_enabled () || !ctr)
 		return;
 
+	/*
+	 * Lock-free fast path (review NIT-2). A method's tier-0 call sites are not
+	 * redirected when it promotes (there is no sled - §1.3), so they keep
+	 * entering the orphaned tier-0 prologue with count >= threshold and calling
+	 * here on every invocation for the rest of the process. Once the method has
+	 * TERMINALLY settled, all that work is pure waste: enqueue is refused and the
+	 * drain finds nothing for it. The settled bit, published by the atomic store
+	 * below only after a real terminal settlement, turns each such repeat into a
+	 * single lock-free load and an immediate return.
+	 *
+	 * It must be read BEFORE the enqueue/drain and it must never be set on mere
+	 * enqueue: a crossing whose drain was deferred (depth != 0 or a failed gate)
+	 * leaves this bit clear on purpose, so the method keeps retrying the drain on
+	 * later crossings until one settles it (see MiniTieredCounter.settled and
+	 * §5.1). A torn read is not acceptable even though the prologue's own
+	 * increment is deliberately racy, hence the atomic load.
+	 */
+	if (mono_atomic_load_i32 ((volatile gint32 *) &ctr->settled))
+		return;
+
 	mono_llvm_tiered_enqueue (ctr->method, ctr->domain, ctr->opt);
 
 	/*
@@ -607,6 +701,18 @@ mini_tiered_count_reached (gpointer counter)
 	 * thread.
 	 */
 	tiered_try_drain ();
+
+	/*
+	 * Latch the fast path only now, and only if the method actually reached a
+	 * terminal state (this drain settled it, or an earlier one already had).
+	 * Reading the state here - on the crossing thread, which holds the counter -
+	 * keeps the drain itself free of any counter association: a crossing whose
+	 * drain was deferred still sees TIER_STATE_TIER0, does NOT latch, and retries
+	 * on its next call. So the bit publishes exactly at terminal settlement and
+	 * never a crossing sooner, which is what preserves the deferral-retry path.
+	 */
+	if (tiered_state_is_settled (ctr->method, ctr->domain))
+		mono_atomic_store_i32 ((volatile gint32 *) &ctr->settled, 1);
 }
 
 /*

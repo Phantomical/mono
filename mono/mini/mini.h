@@ -2184,6 +2184,14 @@ gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *dom
 guint32   mono_llvm_tiered_call_threshold   (void);
 gpointer  mini_tiered_alloc_counter         (MonoDomain *domain, MonoMethod *method, guint32 opt);
 void      mini_tiered_count_reached         (gpointer counter);
+/*
+ * Promotion-policy introspection for the tiered-promotion.cs functional test
+ * (surfaced to managed code through the MonoTests.Tiering.Probe internal calls
+ * registered in mini-runtime.c). Returns METHOD's recorded tier state - 0
+ * queued/tier-0, 1 promoted, 2 tier-0 terminal - or -1 when tiering is off or
+ * METHOD was never enqueued (stayed cold at tier 0).
+ */
+int       mono_llvm_tiered_method_state     (MonoMethod *method);
 void      mono_empty_compile              (MonoCompile *cfg);
 MonoJitICallInfo *mono_find_jit_opcode_emulation (int opcode);
 void	  mono_print_ins_index (int i, MonoInst *ins);

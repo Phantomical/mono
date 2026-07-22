@@ -955,6 +955,19 @@ rcheck-nunit: mono $(regtests)
 rcheck: mono $(regtests)
 	$(MINI_RUNTIME) --regression $(regtests)
 
+# Deferred tier-1 promotion policy test. Kept out of $(regtests) on purpose: its
+# policy probes are JIT-only internal calls (absent from the AOT icall table that
+# the aot/fullaot/llvmonly suites share $(regtests) through), and its policy
+# assertions are only meaningful under MONO_TIERED with the LLVM backend. So it
+# runs from this dedicated JIT target, exercising the promotion path and the
+# settled-fast-path across a below-threshold, an at-threshold and a
+# heavy-promotion setting:
+#   make -C mono/mini tieredcheck
+tieredcheck: mono tiered-promotion.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
+
 richeck: mono $(regtests)
 	$(INTERP_RUNTIME) --regression $(regtests)
 

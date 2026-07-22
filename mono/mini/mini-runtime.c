@@ -4740,11 +4740,36 @@ mini_init (const char *filename, const char *runtime_version)
 	return domain;
 }
 
+/*
+ * Promotion-policy introspection for tiered-promotion.cs. Registered as the
+ * MonoTests.Tiering.Probe internal calls so the functional test can assert the
+ * POLICY - a cold method stays tier 0, a hot method is actually promoted - not
+ * just semantic preservation across promotion. Both are read-only and cheap.
+ * These are JIT-only (runtime-registered) internal calls; they are not in the
+ * AOT icall table, which is why the test is run from a dedicated tiered target
+ * rather than the AOT-shared regression set.
+ */
+static guint32
+ves_icall_tiered_probe_threshold (void)
+{
+	return mono_llvm_tiered_call_threshold ();
+}
+
+static gint32
+ves_icall_tiered_probe_method_state (gpointer method)
+{
+	return (gint32) mono_llvm_tiered_method_state ((MonoMethod *) method);
+}
+
 static void
 register_icalls (void)
 {
 	mono_add_internal_call_internal ("System.Diagnostics.StackFrame::get_frame_info",
 				ves_icall_get_frame_info);
+	mono_add_internal_call_internal ("MonoTests.Tiering.Probe::Threshold",
+				ves_icall_tiered_probe_threshold);
+	mono_add_internal_call_internal ("MonoTests.Tiering.Probe::MethodState",
+				ves_icall_tiered_probe_method_state);
 	mono_add_internal_call_internal ("System.Diagnostics.StackTrace::get_trace",
 				ves_icall_get_trace);
 	mono_add_internal_call_internal ("Mono.Runtime::mono_runtime_install_handlers",
