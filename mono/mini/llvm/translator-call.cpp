@@ -963,6 +963,32 @@ get_mono_personality (EmitContext *ctx)
 	return personality;
 }
 
+/*
+ * clause_encloses:
+ *
+ *   Does IL clause J strictly ENCLOSE clause C - i.e. is C's try region nested in
+ * J's? This is the emission-side mirror of the identically-named predicate in
+ * mono_lsda.cpp (EH N1) and of the translator nesting gate's containment test:
+ *
+ *   c.try_offset >= j.try_offset && c.handler_offset <= j.handler_offset
+ *
+ * with SIBLINGS (identical try_offset AND try_len - try { } catch(A) catch(B))
+ * excluded, since siblings share one landing pad and are routed by the same-range
+ * loops, not by nesting. Keeping this byte-for-byte in step with the build side is
+ * load-bearing: the switch cases emitted here (case per enclosing clause) must line
+ * up 1:1 with the enclosing .mono_lsda entries build_ex_info synthesises for the
+ * same clause, or a live nested method (once N3 lifts the gate) would dispatch the
+ * wrong handler.
+ */
+static inline bool
+clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
+{
+	bool siblings = c->try_offset == j->try_offset && c->try_len == j->try_len;
+	return !siblings &&
+	       c->try_offset >= j->try_offset &&
+	       c->handler_offset <= j->handler_offset;
+}
+
 void
 emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 {
@@ -1043,7 +1069,82 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 			LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
 			LLVMAddClause (landing_pad, type_info);
 
-			llvm::wrap (builder->CreateBr (llvm::unwrap (target_bb)));
+			/*
+			 * doc 21 5.2 (EH N2) - the finally/fault pad grows a selector switch when
+			 * it participates in nesting. DORMANT: the nesting gate declines every
+			 * strictly-nested method, so for every admitted shape this clause neither
+			 * nests in nor encloses another - is_nested and is_enclosing stay false -
+			 * and the straight CreateBr below is emitted BYTE-IDENTICAL to the landed
+			 * standalone finally/fault (F1-F6). The switch is added ONLY for the gated-
+			 * out nested-or-enclosing case, which is what keeps N2 runtime-inert.
+			 */
+			bool is_nested = false;
+			bool is_enclosing = false;
+			for (i = 0; i < cfg->header->num_clauses; ++i) {
+				if (clause_encloses (this_clause, &cfg->header->clauses [i]))
+					is_nested = true;
+				if (clause_encloses (&cfg->header->clauses [i], this_clause))
+					is_enclosing = true;
+			}
+
+			if (!is_nested && !is_enclosing) {
+				llvm::wrap (builder->CreateBr (llvm::unwrap (target_bb)));
+			} else {
+				/*
+				 * A nested finally/fault can be the INNERMOST landing pad a call
+				 * unwinds to, so the runtime may deliver here with RDX == an ENCLOSING
+				 * clause's index (not this finally's). Route with a selector switch:
+				 * default -> this finally's own body; case RDX==j -> encloser j's body.
+				 *
+				 * Exception-object store (Probe A, safe form). When the encloser j is a
+				 * CATCH its body reads ex_var, but - unlike the catch pad - the finally
+				 * pad never stored it. On the finally's OWN (default) path the runtime
+				 * did NOT set RAX (mini-exceptions.c sets the exc reg only for
+				 * NONE/FILTER), so an extractvalue 0 there would read a garbage RAX. We
+				 * therefore emit the store ONLY on the catch-routing edge, in a per-case
+				 * trampoline block, and NEVER at pad entry - so no garbage RAX can ever
+				 * be written into the (possibly GC-scanned) exvar slot on the finally's
+				 * own path. Enclosing finally/fault edges take no store and branch
+				 * straight to the encloser's body.
+				 */
+				LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
+				switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0));
+
+				for (i = 0; i < cfg->header->num_clauses; ++i) {
+					MonoExceptionClause *enc = &cfg->header->clauses [i];
+					MonoBasicBlock *handler_bb;
+					LLVMBasicBlockRef case_target;
+
+					if (!clause_encloses (this_clause, enc))
+						continue;
+
+					auto clause_it = ctx->clause_to_handler.find (i);
+					handler_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
+					g_assert (handler_bb);
+					g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+					case_target = ctx->bblocks [handler_bb->block_num].call_handler_target_bb;
+
+					if (enc->flags == MONO_EXCEPTION_CLAUSE_NONE && ctx->ex_var) {
+						/*
+						 * Enclosing catch: store the exception object on THIS edge only.
+						 * builder == ctx->builder (both at the pad block), and convert ()
+						 * inserts via ctx->builder, so reposition it into the trampoline,
+						 * emit the store, then restore it to the pad block for the rest
+						 * of the switch build-out.
+						 */
+						LLVMBasicBlockRef store_bb = LLVMAppendBasicBlock (ctx->lmethod, "finally_to_catch");
+						llvm::BasicBlock *saved_ip = builder->GetInsertBlock ();
+						builder->SetInsertPoint (llvm::unwrap (store_bb));
+						LLVMValueRef ex_obj = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {0}, "ex_obj"));
+						llvm::wrap (builder->CreateStore (llvm::unwrap (convert (ctx, ex_obj, ObjRefType ())), llvm::unwrap (ctx->ex_var)));
+						llvm::wrap (builder->CreateBr (llvm::unwrap (case_target)));
+						builder->SetInsertPoint (saved_ip);
+						case_target = store_bb;
+					}
+
+					LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), case_target);
+				}
+			}
 		} else {
 			/*
 			 * Carry one landingpad clause per catch that shares this try region, in
@@ -1100,6 +1201,38 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 				if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
 					continue;
 				if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
+					continue;
+
+				auto clause_it = ctx->clause_to_handler.find (i);
+				handler_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
+				g_assert (handler_bb);
+				g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+			}
+
+			/*
+			 * doc 21 5.1 (EH N2) - enclosing-clause selector cases. DORMANT: the
+			 * nesting gate declines every method with a strictly-nested clause, so
+			 * clause_encloses () is false for every clause pair in an admitted method
+			 * and this loop adds NO case - the catch pad stays exactly as landed (C7).
+			 *
+			 * When N3 lifts the gate, the runtime always delivers a fault in a
+			 * doubly-protected call to the INNERMOST landing pad (this one), carrying
+			 * the MATCHED clause's index in the selector (RDX). For each clause j that
+			 * ENCLOSES this catch, add a case routing RDX==j to j's handler body, so
+			 * control is re-dispatched to the right enclosing handler. Enclosing
+			 * handlers may be catch/finally/fault alike - clause_to_handler and
+			 * call_handler_target_bb are populated for every clause (translator.cpp) -
+			 * so any encloser is a valid target. The exception-object store above
+			 * already ran at pad entry and is correct for an enclosing catch too (it
+			 * reads the same ex_var). Enclosers have a different try range than this
+			 * clause, so they are never same-range siblings and never collide with the
+			 * sibling cases above. This is mini-llvm.c:4832-4840 re-homed.
+			 */
+			for (i = 0; i < cfg->header->num_clauses; ++i) {
+				MonoBasicBlock *handler_bb;
+
+				if (!clause_encloses (this_clause, &cfg->header->clauses [i]))
 					continue;
 
 				auto clause_it = ctx->clause_to_handler.find (i);
