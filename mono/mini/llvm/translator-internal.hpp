@@ -71,6 +71,7 @@
 #include "llvm-c/BitWriter.h"
 #include "llvm-c/Analysis.h"
 
+#include <memory>
 #include <vector>
 #include <unordered_map>
 #include "llvm/ADT/DenseMap.h"
@@ -187,16 +188,16 @@ typedef struct {
 	LLVMModuleRef lmodule;
 	BBInfo *bblocks;
 	int sindex, default_index, ex_index;
-	LLVMBuilderRef builder;
+	llvm::IRBuilder<> *builder;
 	LLVMValueRef *values;
 	Address **addresses;
 	MonoType **vreg_cli_types;
 	LLVMCallInfo *linfo;
 	MonoMethodSignature *sig;
-	std::vector<LLVMBuilderRef> builders;
+	std::vector<std::unique_ptr<llvm::IRBuilder<>>> builders;
 	std::unordered_map<int, MonoBasicBlock*> region_to_handler;
 	std::unordered_map<int, MonoBasicBlock*> clause_to_handler;
-	LLVMBuilderRef alloca_builder;
+	llvm::IRBuilder<> *alloca_builder;
 	LLVMValueRef last_alloca;
 	LLVMValueRef rgctx_arg;
 	LLVMValueRef this_arg;
@@ -392,7 +393,7 @@ convert_full (EmitContext *ctx, LLVMValueRef v, LLVMTypeRef dtype, gboolean is_u
 LLVMValueRef
 convert (EmitContext *ctx, LLVMValueRef v, LLVMTypeRef dtype);
 void
-emit_memset (EmitContext *ctx, LLVMBuilderRef builder, LLVMValueRef v, LLVMValueRef size, int alignment);
+emit_memset (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValueRef v, LLVMValueRef size, int alignment);
 LLVMValueRef
 emit_volatile_load (EmitContext *ctx, int vreg);
 void
@@ -404,7 +405,7 @@ sig_to_llvm_sig (EmitContext *ctx, MonoMethodSignature *sig);
 G_GNUC_UNUSED LLVMTypeRef
 LLVMFunctionType0 (LLVMTypeRef ReturnType,
 				   int IsVarArg);
-LLVMBuilderRef
+llvm::IRBuilder<> *
 create_builder (EmitContext *ctx);
 LLVMValueRef
 get_aotconst (EmitContext *ctx, MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type);
@@ -417,19 +418,19 @@ set_nontemporal_flag (LLVMValueRef v);
 void
 set_invariant_load_flag (LLVMValueRef v);
 LLVMValueRef
-emit_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, LLVMTypeRef sig, LLVMValueRef callee, LLVMValueRef *args, int pindex);
+emit_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, LLVMTypeRef sig, LLVMValueRef callee, LLVMValueRef *args, int pindex);
 LLVMValueRef
-emit_load (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, int size, LLVMTypeRef type, LLVMValueRef addr, LLVMValueRef base, const char *name, gboolean is_faulting, gboolean is_volatile, BarrierKind barrier);
+emit_load (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, int size, LLVMTypeRef type, LLVMValueRef addr, LLVMValueRef base, const char *name, gboolean is_faulting, gboolean is_volatile, BarrierKind barrier);
 void
-emit_store_general (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, int size, LLVMValueRef value, LLVMValueRef addr, LLVMValueRef base, gboolean is_faulting, gboolean is_volatile, BarrierKind barrier);
+emit_store_general (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, int size, LLVMValueRef value, LLVMValueRef addr, LLVMValueRef base, gboolean is_faulting, gboolean is_volatile, BarrierKind barrier);
 void
-emit_store (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, int size, LLVMValueRef value, LLVMValueRef addr, LLVMValueRef base, gboolean is_faulting, gboolean is_volatile);
+emit_store (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, int size, LLVMValueRef value, LLVMValueRef addr, LLVMValueRef base, gboolean is_faulting, gboolean is_volatile);
 void
 emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *exc_type, LLVMValueRef cmp, gboolean force_explicit);
 void
-emit_args_to_vtype (EmitContext *ctx, LLVMBuilderRef builder, MonoType *t, LLVMValueRef address, LLVMArgInfo *ainfo, LLVMValueRef *args);
+emit_args_to_vtype (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, LLVMValueRef address, LLVMArgInfo *ainfo, LLVMValueRef *args);
 void
-emit_vtype_to_args (EmitContext *ctx, LLVMBuilderRef builder, MonoType *t, LLVMValueRef address, LLVMArgInfo *ainfo, LLVMValueRef *args, guint32 *nargs);
+emit_vtype_to_args (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, LLVMValueRef address, LLVMArgInfo *ainfo, LLVMValueRef *args, guint32 *nargs);
 LLVMValueRef
 build_alloca_llvm_type_name (EmitContext *ctx, LLVMTypeRef t, int align, const char *name);
 LLVMValueRef
@@ -451,11 +452,11 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 
 /* Defined in translator-call.cpp. */
 void
-emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, MonoInst *ins, LLVMValueRef lhs, LLVMValueRef rhs);
+emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb, MonoInst *ins, LLVMValueRef lhs, LLVMValueRef rhs);
 void
-emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder);
+emit_entry_bb (EmitContext *ctx, llvm::IRBuilder<> *builder);
 void
-process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, MonoInst *ins);
+process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, MonoInst *ins);
 void
 emit_throw (EmitContext *ctx, MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
 LLVMValueRef
@@ -467,7 +468,7 @@ create_const_vector_4_i32 (int v0, int v1, int v2, int v3);
 LLVMValueRef
 create_const_vector_2_i32 (int v0, int v1);
 void
-emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder);
+emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *builder);
 LLVMValueRef
 get_double_const (MonoCompile *cfg, double val);
 LLVMValueRef

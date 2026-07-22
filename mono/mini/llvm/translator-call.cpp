@@ -30,7 +30,7 @@ const_vector (const LLVMValueRef *vals, unsigned count)
 }
 
 void
-emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, MonoInst *ins, LLVMValueRef lhs, LLVMValueRef rhs)
+emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb, MonoInst *ins, LLVMValueRef lhs, LLVMValueRef rhs)
 {
 	bool need_div_check = ctx->cfg->backend->need_div_check;
 
@@ -62,7 +62,7 @@ emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, Mo
 		bool is_signed = (ins->opcode == OP_IDIV || ins->opcode == OP_LDIV || ins->opcode == OP_IREM || ins->opcode == OP_LREM ||
 							  ins->opcode == OP_IDIV_IMM || ins->opcode == OP_LDIV_IMM || ins->opcode == OP_IREM_IMM || ins->opcode == OP_LREM_IMM);
 
-		cmp = LLVMBuildICmp (builder, LLVMIntEQ, rhs, llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (rhs)), 0, false)), "");
+		cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, rhs, llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (rhs)), 0, false)), "");
 		emit_cond_system_exception (ctx, bb, "DivideByZeroException", cmp, FALSE);
 		if (!ctx_ok (ctx))
 			break;
@@ -71,10 +71,10 @@ emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, Mo
 		/* b == -1 && a == 0x80000000 */
 		if (is_signed) {
 			LLVMValueRef c = (LLVMTypeOf (lhs) == llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))) ? llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (lhs)), 0x80000000, false)) : llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (lhs)), 0x8000000000000000LL, false));
-			LLVMValueRef cond1 = LLVMBuildICmp (builder, LLVMIntEQ, rhs, llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (rhs)), -1, false)), "");
-			LLVMValueRef cond2 = LLVMBuildICmp (builder, LLVMIntEQ, lhs, c, "");
+			LLVMValueRef cond1 = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, rhs, llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (rhs)), -1, false)), "");
+			LLVMValueRef cond2 = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, lhs, c, "");
 
-			cmp = LLVMBuildICmp (builder, LLVMIntEQ, LLVMBuildAnd (builder, cond1, cond2, ""), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false)), "");
+			cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, LLVMBuildAnd (llvm::wrap (builder), cond1, cond2, ""), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false)), "");
 			emit_cond_system_exception (ctx, bb, "OverflowException", cmp, FALSE);
 			if (!ctx_ok (ctx))
 				break;
@@ -110,7 +110,7 @@ constexpr int MONO_LLVM_THIS_SLOT_STACKMAP_ID = 0;
  * gets its own, so declaring by name is race-free), variadic void(i64,i32,...).
  */
 static void
-emit_this_slot_stackmap (EmitContext *ctx, LLVMBuilderRef builder, LLVMValueRef slot)
+emit_this_slot_stackmap (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValueRef slot)
 {
 	LLVMTypeRef params [] = { llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())) };
 	LLVMTypeRef sm_type = LLVMFunctionType (llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ())), params, 2, TRUE);
@@ -124,7 +124,7 @@ emit_this_slot_stackmap (EmitContext *ctx, LLVMBuilderRef builder, LLVMValueRef 
 		llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)),
 		slot,
 	};
-	LLVMBuildCall2 (builder, sm_type, sm, args, 3, "");
+	LLVMBuildCall2 (llvm::wrap (builder), sm_type, sm, args, 3, "");
 }
 
 /*
@@ -133,7 +133,7 @@ emit_this_slot_stackmap (EmitContext *ctx, LLVMBuilderRef builder, LLVMValueRef 
  *   Emit code to load/convert arguments.
  */
 void
-emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
+emit_entry_bb (EmitContext *ctx, llvm::IRBuilder<> *builder)
 {
 	int i, pindex;
 	MonoCompile *cfg = ctx->cfg;
@@ -142,7 +142,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 	MonoBasicBlock *bb;
 	char **names;
 
-	LLVMBuilderRef old_builder = ctx->builder;
+	llvm::IRBuilder<> *old_builder = ctx->builder;
 	ctx->builder = builder;
 
 	ctx->alloca_builder = create_builder (ctx);
@@ -241,11 +241,11 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			if (size == 0) {
 			} else if (size < TARGET_SIZEOF_VOID_P) {
 				/* The upper bits of the registers might not be valid */
-				LLVMValueRef val = LLVMBuildExtractValue (builder, arg, 0, "");
+				LLVMValueRef val = LLVMBuildExtractValue (llvm::wrap (builder), arg, 0, "");
 				LLVMValueRef dest = convert (ctx, ctx->addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-				LLVMBuildStore (ctx->builder, LLVMBuildTrunc (builder, val, llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), size * 8)), ""), dest);
+				LLVMBuildStore (llvm::wrap (ctx->builder), LLVMBuildTrunc (llvm::wrap (builder), val, llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), size * 8)), ""), dest);
 			} else {
-				LLVMBuildStore (ctx->builder, arg, convert (ctx, ctx->addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))));
+				LLVMBuildStore (llvm::wrap (ctx->builder), arg, convert (ctx, ctx->addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))));
 			}
 			break;
 		}
@@ -261,7 +261,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			else
 				name = g_strdup_printf ("arg_%d", i);
 
-			ctx->values [reg] = LLVMBuildLoad2 (builder, type_to_llvm_type (ctx, ainfo->type), convert (ctx, arg, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), name);
+			ctx->values [reg] = LLVMBuildLoad2 (llvm::wrap (builder), type_to_llvm_type (ctx, ainfo->type), convert (ctx, arg, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), name);
 			break;
 		}
 		case LLVMArgGsharedvtFixedVtype: {
@@ -275,7 +275,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			/* Non-gsharedvt vtype argument passed by ref, the rest of the IR treats it as a vtype */
 			g_assert (ctx->addresses [reg]);
 			LLVMSetValueName (ctx->addresses [reg]->value, name);
-			LLVMBuildStore (builder, LLVMBuildLoad2 (builder, type_to_llvm_type (ctx, ainfo->type), convert (ctx, arg, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""), ctx->addresses [reg]->value);
+			LLVMBuildStore (llvm::wrap (builder), LLVMBuildLoad2 (llvm::wrap (builder), type_to_llvm_type (ctx, ainfo->type), convert (ctx, arg, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""), ctx->addresses [reg]->value);
 			break;
 		}
 		case LLVMArgGsharedvtVariable:
@@ -308,7 +308,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 		{
 			if (MONO_CLASS_IS_SIMD (ctx->cfg, mono_class_from_mono_type_internal (ainfo->type)))
 				/* Treat these as normal values */
-				ctx->values [reg] = LLVMBuildLoad2 (builder, ctx->addresses [reg]->type, ctx->addresses [reg]->value, "simd_vtype");
+				ctx->values [reg] = LLVMBuildLoad2 (llvm::wrap (builder), ctx->addresses [reg]->type, ctx->addresses [reg]->value, "simd_vtype");
 			break;
 		}
 		default:
@@ -341,9 +341,9 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 		 * with the "mono.this" custom metadata to tell llvm that it needs to save its
 		 * location into the LSDA.
 		 */
-		this_alloc = mono_llvm_build_alloca (builder, ThisType (), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false)), 0, "");
+		this_alloc = mono_llvm_build_alloca (llvm::wrap (builder), ThisType (), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false)), 0, "");
 		/* This volatile store will keep the alloca alive */
-		mono_llvm_build_store (builder, ctx->values [cfg->args [0]->dreg], this_alloc, TRUE, LLVM_BARRIER_NONE);
+		mono_llvm_build_store (llvm::wrap (builder), ctx->values [cfg->args [0]->dreg], this_alloc, TRUE, LLVM_BARRIER_NONE);
 
 		set_metadata_flag (this_alloc, "mono.this");
 
@@ -370,9 +370,9 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			 * value above; the body keeps using the register.
 			 */
 			if (cfg->gshared) {
-				LLVMValueRef rgctx_slot = mono_llvm_build_alloca (builder, IntPtrType (), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false)), 0, "");
+				LLVMValueRef rgctx_slot = mono_llvm_build_alloca (llvm::wrap (builder), IntPtrType (), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false)), 0, "");
 				/* Volatile store keeps the slot alive. */
-				mono_llvm_build_store (builder, convert (ctx, ctx->rgctx_arg, IntPtrType ()), rgctx_slot, TRUE, LLVM_BARRIER_NONE);
+				mono_llvm_build_store (llvm::wrap (builder), convert (ctx, ctx->rgctx_arg, IntPtrType ()), rgctx_slot, TRUE, LLVM_BARRIER_NONE);
 				set_metadata_flag (rgctx_slot, "mono.this");
 				emit_this_slot_stackmap (ctx, builder, rgctx_slot);
 			}
@@ -385,7 +385,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			g_assert (ctx->addresses [cfg->rgctx_var->dreg]);
 			rgctx_alloc = ctx->addresses [cfg->rgctx_var->dreg]->value;
 			/* This volatile store will keep the alloca alive */
-			store = mono_llvm_build_store (builder, convert (ctx, ctx->rgctx_arg, IntPtrType ()), rgctx_alloc, TRUE, LLVM_BARRIER_NONE);
+			store = mono_llvm_build_store (llvm::wrap (builder), convert (ctx, ctx->rgctx_arg, IntPtrType ()), rgctx_alloc, TRUE, LLVM_BARRIER_NONE);
 
 			set_metadata_flag (rgctx_alloc, "mono.this");
 
@@ -414,14 +414,14 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			LLVMValueRef val;
 
 			sprintf (name, "finally_ind_bb%d", bb->block_num);
-			val = LLVMBuildAlloca (builder, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), name);
-			LLVMBuildStore (builder, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), val);
+			val = LLVMBuildAlloca (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), name);
+			LLVMBuildStore (llvm::wrap (builder), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), val);
 
 			ctx->bblocks [bb->block_num].finally_ind = val;
 		} else {
 			/* Create a variable to hold the exception var */
 			if (!ctx->ex_var)
-				ctx->ex_var = LLVMBuildAlloca (builder, ObjRefType (), "exvar");
+				ctx->ex_var = LLVMBuildAlloca (llvm::wrap (builder), ObjRefType (), "exvar");
 		}
 	}
 	ctx->builder = old_builder;
@@ -441,7 +441,7 @@ is_supported_callconv (EmitContext *ctx, MonoCallInst *call)
 }
 
 void
-process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, MonoInst *ins)
+process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, MonoInst *ins)
 {
 	MonoCompile *cfg = ctx->cfg;
 	LLVMValueRef *values = ctx->values;
@@ -457,7 +457,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 	LLVMTypeRef llvm_sig;
 	gpointer target;
 	bool is_virtual, calli;
-	LLVMBuilderRef builder = *builder_ref;
+	llvm::IRBuilder<> *builder = *builder_ref;
 
 	/* If both imt and rgctx arg are required, only pass the imt arg, the rgctx trampoline will pass the rgctx */
 	if (call->imt_arg_reg)
@@ -529,7 +529,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 					LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 					ctx->jit_callees [call->method] = tramp_var;
 				}
-				callee = LLVMBuildLoad2 (builder, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), tramp_var, "");
+				callee = LLVMBuildLoad2 (llvm::wrap (builder), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), tramp_var, "");
 			}
 		}
 
@@ -571,7 +571,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 		g_assert (ins->inst_offset % size == 0);
 		index = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_offset / size, false));
 
-		callee = convert (ctx, LLVMBuildLoad2 (builder, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), LLVMBuildGEP2 (builder, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), convert (ctx, values [ins->inst_basereg], llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), &index, 1, ""), ""), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
+		callee = convert (ctx, LLVMBuildLoad2 (llvm::wrap (builder), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), LLVMBuildGEP2 (llvm::wrap (builder), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), convert (ctx, values [ins->inst_basereg], llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), &index, 1, ""), ""), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 	} else if (calli) {
 		callee = convert (ctx, values [ins->sreg1], llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 	} else {
@@ -599,8 +599,8 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 #ifdef TARGET_ARM
 		if (!ctx->imt_rgctx_loc)
 			ctx->imt_rgctx_loc = build_alloca_llvm_type (ctx, ctx->module->ptr_type, TARGET_SIZEOF_VOID_P);
-		LLVMBuildStore (builder, convert (ctx, ctx->values [call->rgctx_arg_reg], ctx->module->ptr_type), ctx->imt_rgctx_loc);
-		args [cinfo->rgctx_arg_pindex] = mono_llvm_build_load (builder, ctx->module->ptr_type, ctx->imt_rgctx_loc, "", TRUE);
+		LLVMBuildStore (llvm::wrap (builder), convert (ctx, ctx->values [call->rgctx_arg_reg], ctx->module->ptr_type), ctx->imt_rgctx_loc);
+		args [cinfo->rgctx_arg_pindex] = mono_llvm_build_load (llvm::wrap (builder), ctx->module->ptr_type, ctx->imt_rgctx_loc, "", TRUE);
 #else
 		args [cinfo->rgctx_arg_pindex] = convert (ctx, values [call->rgctx_arg_reg], ctx->module->ptr_type);
 #endif
@@ -611,8 +611,8 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 #ifdef TARGET_ARM
 		if (!ctx->imt_rgctx_loc)
 			ctx->imt_rgctx_loc = build_alloca_llvm_type (ctx, ctx->module->ptr_type, TARGET_SIZEOF_VOID_P);
-		LLVMBuildStore (builder, convert (ctx, ctx->values [call->imt_arg_reg], ctx->module->ptr_type), ctx->imt_rgctx_loc);
-		args [cinfo->imt_arg_pindex] = mono_llvm_build_load (builder, ctx->module->ptr_type, ctx->imt_rgctx_loc, "", TRUE);
+		LLVMBuildStore (llvm::wrap (builder), convert (ctx, ctx->values [call->imt_arg_reg], ctx->module->ptr_type), ctx->imt_rgctx_loc);
+		args [cinfo->imt_arg_pindex] = mono_llvm_build_load (llvm::wrap (builder), ctx->module->ptr_type, ctx->imt_rgctx_loc, "", TRUE);
 #else
 		args [cinfo->imt_arg_pindex] = convert (ctx, values [call->imt_arg_reg], ctx->module->ptr_type);
 #endif
@@ -637,7 +637,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 			if (cinfo->ret.storage == LLVMArgVtypeByRef)
 				args [cinfo->vret_arg_pindex] = addresses [call->inst.dreg]->value;
 			else
-				args [cinfo->vret_arg_pindex] = LLVMBuildPtrToInt (builder, addresses [call->inst.dreg]->value, IntPtrType (), "");
+				args [cinfo->vret_arg_pindex] = LLVMBuildPtrToInt (llvm::wrap (builder), addresses [call->inst.dreg]->value, IntPtrType (), "");
 		}
 		break;
 	}
@@ -693,9 +693,9 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 		case LLVMArgAsIArgs:
 			g_assert (addresses [reg]);
 			if (ainfo->esize == 8)
-				args [pindex] = LLVMBuildLoad2 (ctx->builder, LLVMArrayType (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())), ainfo->nslots), convert (ctx, addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "");
+				args [pindex] = LLVMBuildLoad2 (llvm::wrap (ctx->builder), LLVMArrayType (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())), ainfo->nslots), convert (ctx, addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "");
 			else
-				args [pindex] = LLVMBuildLoad2 (ctx->builder, LLVMArrayType (IntPtrType (), ainfo->nslots), convert (ctx, addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "");
+				args [pindex] = LLVMBuildLoad2 (llvm::wrap (ctx->builder), LLVMArrayType (IntPtrType (), ainfo->nslots), convert (ctx, addresses [reg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "");
 			break;
 		case LLVMArgVtypeAsScalar:
 			g_assert_not_reached ();
@@ -797,43 +797,43 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 		if (!addresses [ins->dreg])
 			addresses [ins->dreg] = build_alloca_address (ctx, sig->ret);
 
-		regs [0] = LLVMBuildExtractValue (builder, lcall, 0, "");
+		regs [0] = LLVMBuildExtractValue (llvm::wrap (builder), lcall, 0, "");
 		if (cinfo->ret.pair_storage [1] != LLVMArgNone)
-			regs [1] = LLVMBuildExtractValue (builder, lcall, 1, "");
+			regs [1] = LLVMBuildExtractValue (llvm::wrap (builder), lcall, 1, "");
 		emit_args_to_vtype (ctx, builder, sig->ret, addresses [ins->dreg]->value, &cinfo->ret, regs);
 		break;
 	}
 	case LLVMArgVtypeByVal:
 		if (!addresses [call->inst.dreg])
 			addresses [call->inst.dreg] = build_alloca_address (ctx, sig->ret);
-		LLVMBuildStore (builder, lcall, addresses [call->inst.dreg]->value);
+		LLVMBuildStore (llvm::wrap (builder), lcall, addresses [call->inst.dreg]->value);
 		break;
 	case LLVMArgAsIArgs:
 	case LLVMArgFpStruct:
 		if (!addresses [call->inst.dreg])
 			addresses [call->inst.dreg] = build_alloca_address (ctx, sig->ret);
-		LLVMBuildStore (builder, lcall, convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE));
+		LLVMBuildStore (llvm::wrap (builder), lcall, convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE));
 		break;
 	case LLVMArgVtypeAsScalar:
 		if (!addresses [call->inst.dreg])
 			addresses [call->inst.dreg] = build_alloca_address (ctx, sig->ret);
-		LLVMBuildStore (builder, lcall, convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE));
+		LLVMBuildStore (llvm::wrap (builder), lcall, convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE));
 		if (MONO_CLASS_IS_SIMD (ctx->cfg, mono_class_from_mono_type_internal (sig->ret)))
-			values [ins->dreg] = LLVMBuildBitCast(builder, lcall, type_to_llvm_type (ctx, sig->ret), "callret_cvt_simd");
+			values [ins->dreg] = LLVMBuildBitCast(llvm::wrap (builder), lcall, type_to_llvm_type (ctx, sig->ret), "callret_cvt_simd");
 		break;
 	case LLVMArgVtypeRetAddr:
 	case LLVMArgVtypeByRef:
 		if (MONO_CLASS_IS_SIMD (ctx->cfg, mono_class_from_mono_type_internal (sig->ret))) {
 			/* Some opcodes like STOREX_MEMBASE access these by value */
 			g_assert (addresses [call->inst.dreg]);
-			values [ins->dreg] = LLVMBuildLoad2 (builder, type_to_llvm_type (ctx, sig->ret), convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE), "");
+			values [ins->dreg] = LLVMBuildLoad2 (llvm::wrap (builder), type_to_llvm_type (ctx, sig->ret), convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE), "");
 		}
 		break;
 	case LLVMArgGsharedvtVariable:
 		break;
 	case LLVMArgGsharedvtFixed:
 	case LLVMArgGsharedvtFixedVtype:
-		values [ins->dreg] = LLVMBuildLoad2 (builder, type_to_llvm_type (ctx, sig->ret), convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE), "");
+		values [ins->dreg] = LLVMBuildLoad2 (llvm::wrap (builder), type_to_llvm_type (ctx, sig->ret), convert_full (ctx, addresses [call->inst.dreg]->value, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), FALSE), "");
 		break;
 	default:
 		if (sig->ret->type != MONO_TYPE_VOID)
@@ -952,10 +952,10 @@ get_mono_personality (EmitContext *ctx)
 	LLVMValueRef personality = LLVMAddFunction (ctx->lmodule, "mono_personality", personality_type);
 	mono_llvm_add_func_attr (personality, LLVM_ATTR_NO_UNWIND);
 	LLVMBasicBlockRef entry_bb = LLVMAppendBasicBlock (personality, "ENTRY");
-	LLVMBuilderRef builder2 = LLVMCreateBuilder ();
-	LLVMPositionBuilderAtEnd (builder2, entry_bb);
-	LLVMBuildRet (builder2, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)));
-	LLVMDisposeBuilder (builder2);
+	llvm::IRBuilder<> builder2_storage (llvm_global_ctx ());
+	llvm::IRBuilder<> *builder2 = &builder2_storage;
+	builder2->SetInsertPoint (llvm::unwrap (entry_bb));
+	LLVMBuildRet (llvm::wrap (builder2), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)));
 
 	LLVMSetPersonalityFn (ctx->lmethod, personality);
 
@@ -964,7 +964,7 @@ get_mono_personality (EmitContext *ctx)
 }
 
 void
-emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder)
+emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 {
 	MonoCompile *cfg = ctx->cfg;
 	LLVMValueRef *values = ctx->values;
@@ -1009,7 +1009,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 			members [1] = llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
 			ret_type = LLVMStructType (members, 2, FALSE);
 
-			landing_pad = LLVMBuildLandingPad (builder, ret_type, personality, cfg->header->num_clauses, "");
+			landing_pad = LLVMBuildLandingPad (llvm::wrap (builder), ret_type, personality, cfg->header->num_clauses, "");
 		}
 
 		/*
@@ -1040,14 +1040,14 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 
 		/* Store the exception into the exvar */
 		if (ctx->ex_var)
-			LLVMBuildStore (builder, convert (ctx, LLVMBuildExtractValue (builder, landing_pad, 0, "ex_obj"), ObjRefType ()), ctx->ex_var);
+			LLVMBuildStore (llvm::wrap (builder), convert (ctx, LLVMBuildExtractValue (llvm::wrap (builder), landing_pad, 0, "ex_obj"), ObjRefType ()), ctx->ex_var);
 
 		/*
 		 * The selector register holds the matched clause's index; branch to the
 		 * sibling handler that owns it (this clause's own body is the default).
 		 */
-		LLVMValueRef ex_selector = LLVMBuildExtractValue (builder, landing_pad, 1, "ex_selector");
-		switch_ins = LLVMBuildSwitch (builder, ex_selector, target_bb, 0);
+		LLVMValueRef ex_selector = LLVMBuildExtractValue (llvm::wrap (builder), landing_pad, 1, "ex_selector");
+		switch_ins = LLVMBuildSwitch (llvm::wrap (builder), ex_selector, target_bb, 0);
 
 		for (i = 0; i < cfg->header->num_clauses; ++i) {
 			MonoExceptionClause *c = &cfg->header->clauses [i];
@@ -1074,12 +1074,12 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 		 * entry block is never an unwind destination, so terminate it as
 		 * unreachable to keep the IR well-formed.
 		 */
-		LLVMBuildUnreachable (builder);
+		LLVMBuildUnreachable (llvm::wrap (builder));
 	}
 
 	/* Start a new bblock which CALL_HANDLER can branch to */
 	ctx->builder = builder = create_builder (ctx);
-	LLVMPositionBuilderAtEnd (ctx->builder, target_bb);
+	ctx->builder->SetInsertPoint (llvm::unwrap (target_bb));
 
 	ctx->bblocks [bb->block_num].end_bblock = target_bb;
 
@@ -1092,7 +1092,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 		g_assert (!values [exvar->dreg]);
 
 		g_assert (ctx->ex_var);
-		values [exvar->dreg] = LLVMBuildLoad2 (builder, ObjRefType (), ctx->ex_var, "");
+		values [exvar->dreg] = LLVMBuildLoad2 (llvm::wrap (builder), ObjRefType (), ctx->ex_var, "");
 		emit_volatile_store (ctx, exvar->dreg);
 	}
 
@@ -1139,7 +1139,7 @@ call_intrins (EmitContext *ctx, int id, LLVMValueRef *args, const char *name)
 			args [i] = convert (ctx, args [i], t2);
 	}
 
-	return LLVMBuildCall2 (ctx->builder, LLVMGlobalGetValueType (intrins), intrins, args, nargs, name);
+	return LLVMBuildCall2 (llvm::wrap (ctx->builder), LLVMGlobalGetValueType (intrins), intrins, args, nargs, name);
 }
 
 

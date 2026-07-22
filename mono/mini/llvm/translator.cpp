@@ -285,9 +285,6 @@ free_ctx (EmitContext *ctx)
 
 	g_free (ctx->method_name);
 
-	for (LLVMBuilderRef builder : ctx->builders)
-		LLVMDisposeBuilder (builder);
-
 	delete ctx;
 }
 
@@ -350,15 +347,15 @@ mono_llvm_emit_method (MonoCompile *cfg)
 		if (ctx->lmethod) {
 			/* Need to add unused phi nodes as they can be referenced by other values */
 			LLVMBasicBlockRef phi_bb = LLVMAppendBasicBlock (ctx->lmethod, "PHI_BB");
-			LLVMBuilderRef builder;
+			llvm::IRBuilder<> *builder;
 
 			builder = create_builder (ctx);
-			LLVMPositionBuilderAtEnd (builder, phi_bb);
+			builder->SetInsertPoint (llvm::unwrap (phi_bb));
 
 			for (i = 0; i < static_cast<int>(ctx->phi_values.size ()); ++i) {
 				LLVMValueRef v = ctx->phi_values [i];
 				if (LLVMGetInstructionParent (v) == nullptr)
-					LLVMInsertIntoBuilder (builder, v);
+					LLVMInsertIntoBuilder (llvm::wrap (builder), v);
 			}
 
 			LLVMDeleteFunction (ctx->lmethod);
@@ -389,7 +386,7 @@ emit_method_inner (EmitContext *ctx)
 	MonoMethodHeader *header;
 	MonoExceptionClause *clause;
 	char **names;
-	LLVMBuilderRef entry_builder = nullptr;
+	llvm::IRBuilder<> *entry_builder = nullptr;
 	LLVMBasicBlockRef entry_bb = nullptr;
 
 	if (cfg->gsharedvt) {
@@ -625,7 +622,7 @@ emit_method_inner (EmitContext *ctx)
 	 */
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
 		MonoInst *ins;
-		LLVMBuilderRef builder;
+		llvm::IRBuilder<> *builder;
 		char *dname;
 		char dname_buf[128];
 
@@ -656,7 +653,7 @@ emit_method_inner (EmitContext *ctx)
 				 */
 				sprintf (dname_buf, "t%d", ins->dreg);
 				dname = dname_buf;
-				values [ins->dreg] = LLVMBuildPhi (builder, phi_type, dname);
+				values [ins->dreg] = LLVMBuildPhi (llvm::wrap (builder), phi_type, dname);
 
 				if (ins->opcode == OP_VPHI)
 					ctx->addresses [ins->dreg] = create_address (ctx, values [ins->dreg], phi_etype);
@@ -710,7 +707,7 @@ emit_method_inner (EmitContext *ctx)
 	// Emit entry point
 	entry_builder = create_builder (ctx);
 	entry_bb = get_bb (ctx, cfg->bb_entry);
-	LLVMPositionBuilderAtEnd (entry_builder, entry_bb);
+	entry_builder->SetInsertPoint (llvm::unwrap (entry_bb));
 	emit_entry_bb (ctx, entry_builder);
 
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
