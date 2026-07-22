@@ -647,7 +647,7 @@ emit_method_inner (EmitContext *ctx)
 					/* Treat valuetype PHI nodes as operating on the address itself */
 					g_assert (ins->klass);
 					phi_etype = type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass));
-					phi_type = LLVMPointerType (phi_etype, 0);
+					phi_type = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
 				}
 
 				/* 
@@ -827,7 +827,7 @@ emit_method_inner (EmitContext *ctx)
 			GSList *bb_list_iter;
 			i = 0;
 			for (bb_list_iter = bb_list; bb_list_iter; bb_list_iter = g_slist_next (bb_list_iter)) {
-				LLVMAddCase (switch_ins, LLVMConstInt (LLVMInt32Type (), i + 1, FALSE), static_cast<LLVMBasicBlockRef>(bb_list_iter->data));
+				LLVMAddCase (switch_ins, LLVMConstInt (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), i + 1, FALSE), static_cast<LLVMBasicBlockRef>(bb_list_iter->data));
 				i ++;
 			}
 		}
@@ -850,7 +850,7 @@ after_codegen:
 		LLVMValueRef md_node;
 
 		md_args [0] = LLVMMDString (ctx->method_name, strlen (ctx->method_name));
-		md_args [1] = LLVMConstInt (LLVMInt32Type (), 1, FALSE);
+		md_args [1] = LLVMConstInt (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), 1, FALSE);
 		md_node = LLVMMDNode (md_args, 2);
 		LLVMAddNamedMetadataOperand (lmodule, "mono.function_indexes", md_node);
 	}

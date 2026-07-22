@@ -25,13 +25,13 @@ set_failure (EmitContext *ctx, const char *message)
 LLVMValueRef
 const_int32 (int v)
 {
-	return LLVMConstInt (LLVMInt32Type (), v, FALSE);
+	return LLVMConstInt (llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())), v, FALSE);
 }
 
 LLVMValueRef
 const_int64 (int64_t v)
 {
-	return LLVMConstInt (LLVMInt64Type (), v, FALSE);
+	return LLVMConstInt (llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())), v, FALSE);
 }
 
 /*
@@ -42,19 +42,19 @@ const_int64 (int64_t v)
 LLVMTypeRef
 IntPtrType (void)
 {
-	return TARGET_SIZEOF_VOID_P == 8 ? LLVMInt64Type () : LLVMInt32Type ();
+	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())) : llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 }
 
 LLVMTypeRef
 ObjRefType (void)
 {
-	return TARGET_SIZEOF_VOID_P == 8 ? LLVMPointerType (LLVMInt64Type (), 0) : LLVMPointerType (LLVMInt32Type (), 0);
+	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)) : llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0));
 }
 
 LLVMTypeRef
 ThisType (void)
 {
-	return TARGET_SIZEOF_VOID_P == 8 ? LLVMPointerType (LLVMInt64Type (), 0) : LLVMPointerType (LLVMInt32Type (), 0);
+	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)) : llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0));
 }
 
 /*
@@ -86,52 +86,52 @@ simd_class_to_llvm_type (EmitContext *ctx, MonoClass *klass)
 {
 	const char *klass_name = m_class_get_name (klass);
 	if (!strcmp (klass_name, "Vector2d")) {
-		return LLVMVectorType (LLVMDoubleType (), 2);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), 2));
 	} else if (!strcmp (klass_name, "Vector2l")) {
-		return LLVMVectorType (LLVMInt64Type (), 2);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 2));
 	} else if (!strcmp (klass_name, "Vector2ul")) {
-		return LLVMVectorType (LLVMInt64Type (), 2);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 2));
 	} else if (!strcmp (klass_name, "Vector4i")) {
-		return LLVMVectorType (LLVMInt32Type (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector4ui")) {
-		return LLVMVectorType (LLVMInt32Type (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector4f")) {
-		return LLVMVectorType (LLVMFloatType (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector8s")) {
-		return LLVMVectorType (LLVMInt16Type (), 8);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (ctx->llvm_ctx ()), 8));
 	} else if (!strcmp (klass_name, "Vector8us")) {
-		return LLVMVectorType (LLVMInt16Type (), 8);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (ctx->llvm_ctx ()), 8));
 	} else if (!strcmp (klass_name, "Vector16sb")) {
-		return LLVMVectorType (LLVMInt8Type (), 16);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), 16));
 	} else if (!strcmp (klass_name, "Vector16b")) {
-		return LLVMVectorType (LLVMInt8Type (), 16);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), 16));
 	} else if (!strcmp (klass_name, "Vector2")) {
 		/* System.Numerics */
-		return LLVMVectorType (LLVMFloatType (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector3")) {
-		return LLVMVectorType (LLVMFloatType (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector4")) {
-		return LLVMVectorType (LLVMFloatType (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector`1") || !strcmp (klass_name, "Vector128`1") || !strcmp (klass_name, "Vector256`1")) {
 		MonoType *etype = mono_class_get_generic_class (klass)->context.class_inst->type_argv [0];
 		int size = mono_class_value_size (klass, NULL);
 		switch (etype->type) {
 		case MONO_TYPE_I1:
 		case MONO_TYPE_U1:
-			return LLVMVectorType (LLVMInt8Type (), size);
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), size));
 		case MONO_TYPE_I2:
 		case MONO_TYPE_U2:
-			return LLVMVectorType (LLVMInt16Type (), size / 2);
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (ctx->llvm_ctx ()), size / 2));
 		case MONO_TYPE_I4:
 		case MONO_TYPE_U4:
-			return LLVMVectorType (LLVMInt32Type (), size / 4);
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), size / 4));
 		case MONO_TYPE_I8:
 		case MONO_TYPE_U8:
-			return LLVMVectorType (LLVMInt64Type (), size / 8);
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), size / 8));
 		case MONO_TYPE_R4:
-			return LLVMVectorType (LLVMFloatType (), size / 4);
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), size / 4));
 		case MONO_TYPE_R8:
-			return LLVMVectorType (LLVMDoubleType (), size / 8);
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), size / 8));
 		default:
 			g_assert_not_reached ();
 			return nullptr;
@@ -150,20 +150,20 @@ type_to_sse_type (int type)
 	switch (type) {
 	case MONO_TYPE_I1:
 	case MONO_TYPE_U1:
-		return LLVMVectorType (LLVMInt8Type (), 16);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (llvm_global_ctx ()), 16));
 	case MONO_TYPE_U2:
 	case MONO_TYPE_I2:
-		return LLVMVectorType (LLVMInt16Type (), 8);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (llvm_global_ctx ()), 8));
 	case MONO_TYPE_U4:
 	case MONO_TYPE_I4:
-		return LLVMVectorType (LLVMInt32Type (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), 4));
 	case MONO_TYPE_U8:
 	case MONO_TYPE_I8:
-		return LLVMVectorType (LLVMInt64Type (), 2);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), 2));
 	case MONO_TYPE_R8:
-		return LLVMVectorType (LLVMDoubleType (), 2);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (llvm_global_ctx ()), 2));
 	case MONO_TYPE_R4:
-		return LLVMVectorType (LLVMFloatType (), 4);
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (llvm_global_ctx ()), 4));
 	default:
 		g_assert_not_reached ();
 		return nullptr;
@@ -192,13 +192,13 @@ create_llvm_type_for_type (MonoLLVMModule *module, MonoClass *klass)
 		size = nfields;
 		eltypes = g_new (LLVMTypeRef, size);
 		for (i = 0; i < size; ++i)
-			eltypes [i] = esize == 4 ? LLVMFloatType () : LLVMDoubleType ();
+			eltypes [i] = esize == 4 ? llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ())) : llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
 	} else {
 		size = get_vtype_size (t);
 
 		eltypes = g_new (LLVMTypeRef, size);
 		for (i = 0; i < size; ++i)
-			eltypes [i] = LLVMInt8Type ();
+			eltypes [i] = llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
 	}
 
 	name = mono_type_full_name (m_class_get_byval_arg (klass));
@@ -216,20 +216,20 @@ primitive_type_to_llvm_type (MonoTypeEnum type)
 	switch (type) {
 	case MONO_TYPE_I1:
 	case MONO_TYPE_U1:
-		return LLVMInt8Type ();
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
 	case MONO_TYPE_I2:
 	case MONO_TYPE_U2:
-		return LLVMInt16Type ();
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
 	case MONO_TYPE_I4:
 	case MONO_TYPE_U4:
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case MONO_TYPE_I8:
 	case MONO_TYPE_U8:
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	case MONO_TYPE_R4:
-		return LLVMFloatType ();
+		return llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ()));
 	case MONO_TYPE_R8:
-		return LLVMDoubleType ();
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
 	case MONO_TYPE_I:
 	case MONO_TYPE_U:
 		return IntPtrType ();
@@ -263,7 +263,7 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 
 	switch (t->type) {
 	case MONO_TYPE_VOID:
-		return LLVMVoidType ();
+		return llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ()));
 	case MONO_TYPE_OBJECT:
 		return ObjRefType ();
 	case MONO_TYPE_PTR:
@@ -279,7 +279,7 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 		case MONO_TYPE_U1:
 		case MONO_TYPE_U2:
 		case MONO_TYPE_U4:
-			return LLVMPointerType (type_to_llvm_type (ctx, ptr_type), 0);
+			return llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
 		default:
 			break;
 		}
@@ -367,12 +367,12 @@ type_to_llvm_arg_type (EmitContext *ctx, MonoType *t)
 	 * arguments in one stack slot.
 	 */
 #ifndef TARGET_ARM64
-	if (ptype == LLVMInt8Type () || ptype == LLVMInt16Type ()) {
+	if (ptype == llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())) || ptype == llvm::wrap (llvm::Type::getInt16Ty (ctx->llvm_ctx ()))) {
 		/* 
 		 * LLVM generates code which only sets the lower bits, while JITted
 		 * code expects all the bits to be set.
 		 */
-		ptype = LLVMInt32Type ();
+		ptype = llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
 	}
 #endif
 
@@ -390,12 +390,12 @@ llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type)
 {
 	if (type == nullptr)
 		return nullptr;
-	if (type == LLVMInt8Type ())
-		return LLVMInt32Type ();
-	else if (type == LLVMInt16Type ())
-		return LLVMInt32Type ();
-	else if (!cfg->r4fp && type == LLVMFloatType ())
-		return LLVMDoubleType ();
+	if (type == llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ())))
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+	else if (type == llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ())))
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+	else if (!cfg->r4fp && type == llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ())))
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
 	else
 		return type;
 }
@@ -411,11 +411,11 @@ regtype_to_llvm_type (char c)
 {
 	switch (c) {
 	case 'i':
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case 'l':
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	case 'f':
-		return LLVMDoubleType ();
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
 	default:
 		return nullptr;
 	}
@@ -432,67 +432,67 @@ op_to_llvm_type (int opcode)
 	switch (opcode) {
 	case OP_ICONV_TO_I1:
 	case OP_LCONV_TO_I1:
-		return LLVMInt8Type ();
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
 	case OP_ICONV_TO_U1:
 	case OP_LCONV_TO_U1:
-		return LLVMInt8Type ();
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
 	case OP_ICONV_TO_I2:
 	case OP_LCONV_TO_I2:
-		return LLVMInt16Type ();
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
 	case OP_ICONV_TO_U2:
 	case OP_LCONV_TO_U2:
-		return LLVMInt16Type ();
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
 	case OP_ICONV_TO_I4:
 	case OP_LCONV_TO_I4:
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case OP_ICONV_TO_U4:
 	case OP_LCONV_TO_U4:
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case OP_ICONV_TO_I8:
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	case OP_ICONV_TO_R4:
-		return LLVMFloatType ();
+		return llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ()));
 	case OP_ICONV_TO_R8:
-		return LLVMDoubleType ();
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
 	case OP_ICONV_TO_U8:
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	case OP_FCONV_TO_I4:
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case OP_FCONV_TO_I8:
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	case OP_FCONV_TO_I1:
 	case OP_FCONV_TO_U1:
 	case OP_RCONV_TO_I1:
 	case OP_RCONV_TO_U1:
-		return LLVMInt8Type ();
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
 	case OP_FCONV_TO_I2:
 	case OP_FCONV_TO_U2:
 	case OP_RCONV_TO_I2:
 	case OP_RCONV_TO_U2:
-		return LLVMInt16Type ();
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
 	case OP_FCONV_TO_U4:
 	case OP_RCONV_TO_U4:
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case OP_FCONV_TO_U8:
 	case OP_RCONV_TO_U8:
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	case OP_FCONV_TO_I:
 	case OP_FCONV_TO_U:
-		return TARGET_SIZEOF_VOID_P == 8 ? LLVMInt64Type () : LLVMInt32Type ();
+		return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())) : llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case OP_IADD_OVF:
 	case OP_IADD_OVF_UN:
 	case OP_ISUB_OVF:
 	case OP_ISUB_OVF_UN:
 	case OP_IMUL_OVF:
 	case OP_IMUL_OVF_UN:
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case OP_LADD_OVF:
 	case OP_LADD_OVF_UN:
 	case OP_LSUB_OVF:
 	case OP_LSUB_OVF_UN:
 	case OP_LMUL_OVF:
 	case OP_LMUL_OVF_UN:
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	default:
 		printf ("%s\n", mono_inst_name (opcode));
 		g_assert_not_reached ();
@@ -523,14 +523,14 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_STORE_I1:
 		*size = 1;
 		*sext = TRUE;
-		return LLVMInt8Type ();
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
 	case OP_LOADU1_MEMBASE:
 	case OP_LOADU1_MEM:
 	case OP_ATOMIC_LOAD_U1:
 	case OP_ATOMIC_STORE_U1:
 		*size = 1;
 		*zext = TRUE;
-		return LLVMInt8Type ();
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
 	case OP_LOADI2_MEMBASE:
 	case OP_STOREI2_MEMBASE_REG:
 	case OP_STOREI2_MEMBASE_IMM:
@@ -538,14 +538,14 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_STORE_I2:
 		*size = 2;
 		*sext = TRUE;
-		return LLVMInt16Type ();
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
 	case OP_LOADU2_MEMBASE:
 	case OP_LOADU2_MEM:
 	case OP_ATOMIC_LOAD_U2:
 	case OP_ATOMIC_STORE_U2:
 		*size = 2;
 		*zext = TRUE;
-		return LLVMInt16Type ();
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
 	case OP_LOADI4_MEMBASE:
 	case OP_LOADU4_MEMBASE:
 	case OP_LOADI4_MEM:
@@ -557,7 +557,7 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_LOAD_U4:
 	case OP_ATOMIC_STORE_U4:
 		*size = 4;
-		return LLVMInt32Type ();
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
 	case OP_LOADI8_MEMBASE:
 	case OP_LOADI8_MEM:
 	case OP_STOREI8_MEMBASE_REG:
@@ -567,19 +567,19 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_LOAD_U8:
 	case OP_ATOMIC_STORE_U8:
 		*size = 8;
-		return LLVMInt64Type ();
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
 	case OP_LOADR4_MEMBASE:
 	case OP_STORER4_MEMBASE_REG:
 	case OP_ATOMIC_LOAD_R4:
 	case OP_ATOMIC_STORE_R4:
 		*size = 4;
-		return LLVMFloatType ();
+		return llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ()));
 	case OP_LOADR8_MEMBASE:
 	case OP_STORER8_MEMBASE_REG:
 	case OP_ATOMIC_LOAD_R8:
 	case OP_ATOMIC_STORE_R8:
 		*size = 8;
-		return LLVMDoubleType ();
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
 	case OP_LOAD_MEMBASE:
 	case OP_LOAD_MEM:
 	case OP_STORE_MEMBASE_REG:

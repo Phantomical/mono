@@ -232,6 +232,18 @@ typedef struct {
 	llvm::LLVMContext &llvm_ctx () const { return *llvm::unwrap (module->context); }
 } EmitContext;
 
+/*
+ * The single process-global LLVMContext as a C++ reference, for the type
+ * helpers that build LLVM types without an EmitContext in scope (the intrinsic
+ * table and the type-mapping functions). The module always uses
+ * LLVMGetGlobalContext (), so this is the same context as EmitContext::llvm_ctx ().
+ */
+static inline llvm::LLVMContext &
+llvm_global_ctx ()
+{
+	return *llvm::unwrap (LLVMGetGlobalContext ());
+}
+
 typedef struct {
 	MonoBasicBlock *bb;
 	MonoInst *phi;

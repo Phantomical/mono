@@ -56,16 +56,16 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 	switch (id) {
 	case INTRINS_PREFETCH:
 		/* llvm.prefetch.p0 in LLVM 18: overloaded on the pointer type. */
-		intrins = add_intrins1 (module, id, LLVMPointerType (LLVMInt8Type (), 0));
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)));
 		break;
 	case INTRINS_MEMSET:
-		intrins = add_intrins2 (module, id, LLVMPointerType (LLVMInt8Type (), 0), LLVMInt32Type ());
+		intrins = add_intrins2 (module, id, llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)), llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_MEMCPY:
-		intrins = add_intrins3 (module, id, LLVMPointerType (LLVMInt8Type (), 0), LLVMPointerType (LLVMInt8Type (), 0), LLVMInt32Type ());
+		intrins = add_intrins3 (module, id, llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)), llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)), llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_MEMMOVE:
-		intrins = add_intrins3 (module, id, LLVMPointerType (LLVMInt8Type (), 0), LLVMPointerType (LLVMInt8Type (), 0), LLVMInt64Type ());
+		intrins = add_intrins3 (module, id, llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)), llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)), llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_SADD_OVF_I32:
 	case INTRINS_UADD_OVF_I32:
@@ -73,7 +73,7 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 	case INTRINS_USUB_OVF_I32:
 	case INTRINS_SMUL_OVF_I32:
 	case INTRINS_UMUL_OVF_I32:
-		intrins = add_intrins1 (module, id, LLVMInt32Type ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_SADD_OVF_I64:
 	case INTRINS_UADD_OVF_I64:
@@ -81,7 +81,7 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 	case INTRINS_USUB_OVF_I64:
 	case INTRINS_SMUL_OVF_I64:
 	case INTRINS_UMUL_OVF_I64:
-		intrins = add_intrins1 (module, id, LLVMInt64Type ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_FMA:
 	case INTRINS_EXP:
@@ -97,7 +97,7 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 	case INTRINS_FABS:
 	case INTRINS_COPYSIGN:
 	case INTRINS_POW:
-		intrins = add_intrins1 (module, id, LLVMDoubleType ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ())));
 		break;
 	case INTRINS_FMAF:
 	case INTRINS_EXPF:
@@ -112,13 +112,13 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 	case INTRINS_ABSF:
 	case INTRINS_COPYSIGNF:
 	case INTRINS_POWF:
-		intrins = add_intrins1 (module, id, LLVMFloatType ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ())));
 		break;
 	case INTRINS_EXPECT_I8:
-		intrins = add_intrins1 (module, id, LLVMInt8Type ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_EXPECT_I1:
-		intrins = add_intrins1 (module, id, LLVMInt1Type ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt1Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_CTPOP_I32:
 	case INTRINS_CTLZ_I32:
@@ -127,7 +127,7 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 	case INTRINS_BZHI_I32:
 	case INTRINS_PEXT_I32:
 	case INTRINS_PDEP_I32:
-		intrins = add_intrins1 (module, id, LLVMInt32Type ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())));
 		break;
 	case INTRINS_CTPOP_I64:
 	case INTRINS_BEXTR_I64:
@@ -136,7 +136,7 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 	case INTRINS_PDEP_I64:
 	case INTRINS_CTLZ_I64:
 	case INTRINS_CTTZ_I64:
-		intrins = add_intrins1 (module, id, LLVMInt64Type ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())));
 		break;
 #if defined(TARGET_AMD64) || defined(TARGET_X86)
 	case INTRINS_SSE_SADD_SATI8:
@@ -159,10 +159,10 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 		intrins = add_intrins1 (module, id, sse_r8_t);
 		break;
 	case INTRINS_SSE_SQRT_SS:
-		intrins = add_intrins1 (module, id, LLVMFloatType ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ())));
 		break;
 	case INTRINS_SSE_SQRT_SD:
-		intrins = add_intrins1 (module, id, LLVMDoubleType ());
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ())));
 		break;
 #endif /* LLVM_API_VERSION >= 700 */
 #endif /* AMD64 || X86 */
@@ -182,10 +182,10 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 #endif
 #ifdef TARGET_ARM64	
 	case INTRINS_BITREVERSE_I32:	
-		intrins = add_intrins1 (module, id, LLVMInt32Type ());	
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())));	
 		break;	
 	case INTRINS_BITREVERSE_I64:	
-		intrins = add_intrins1 (module, id, LLVMInt64Type ());	
+		intrins = add_intrins1 (module, id, llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())));	
 		break;	
 	case INTRINS_AARCH64_ADV_SIMD_ABS_FLOAT:
 		intrins = add_intrins1 (module, id, sse_r4_t);
@@ -256,14 +256,14 @@ add_intrinsics (LLVMModuleRef module)
 		add_intrinsic (module, static_cast<IntrinsicId>(i));
 
 	/* EH intrinsics */
-	add_func (module, "mono_personality", LLVMVoidType (), NULL, 0);
-	add_func (module, "llvm_resume_unwind_trampoline", LLVMVoidType (), NULL, 0);
+	add_func (module, "mono_personality", llvm::wrap (llvm::Type::getVoidTy (llvm_global_ctx ())), NULL, 0);
+	add_func (module, "llvm_resume_unwind_trampoline", llvm::wrap (llvm::Type::getVoidTy (llvm_global_ctx ())), NULL, 0);
 }
 
 void
 add_types (MonoLLVMModule *module)
 {
-	module->ptr_type = LLVMPointerType (TARGET_SIZEOF_VOID_P == 8 ? LLVMInt64Type () : LLVMInt32Type (), 0);
+	module->ptr_type = llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0));
 }
 
 
