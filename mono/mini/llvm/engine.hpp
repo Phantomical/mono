@@ -97,6 +97,17 @@ struct CompileResult {
 	 * mono::decode_gcc_except_table to recover the method's exception clauses.
 	 */
 	EhFrameInfo gcc_except_table;
+	/*
+	 * The `.mono_lsda` section of this module ({nullptr,0} unless MonoLSDAStreamer
+	 * wrote one - i.e. an EH-bearing method whose catch clauses the C2 gather pass
+	 * resolved). This is mono's own target-neutral clause table (magic 'MLSD',
+	 * code-relative offsets; plan 12 2), captured through the same
+	 * capture_named_section hook as eh_frame. C4/C6 parse it into the method's
+	 * MonoJitExceptionInfo[]; C3 captures it but leaves it unused (the EH gate
+	 * still declines every clause-bearing method, so this is {nullptr,0} for every
+	 * method that currently reaches the runtime path).
+	 */
+	EhFrameInfo mono_lsda;
 	/* Address of the mono-format "mono_eh_frame" global, or 0 if absent. */
 	uint64_t mono_eh_frame = 0;
 };

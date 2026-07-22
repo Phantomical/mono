@@ -69,11 +69,16 @@
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Type.h>
 #include <llvm/MC/MCAsmBackend.h>
+#include <llvm/MC/MCAssembler.h>
 #include <llvm/MC/MCCodeEmitter.h>
 #include <llvm/MC/MCContext.h>
+#include <llvm/MC/MCELFStreamer.h>
+#include <llvm/MC/MCExpr.h>
 #include <llvm/MC/MCObjectWriter.h>
+#include <llvm/MC/MCSectionELF.h>
 #include <llvm/MC/MCStreamer.h>
 #include <llvm/MC/MCSubtargetInfo.h>
+#include <llvm/MC/MCSymbol.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
@@ -129,6 +134,17 @@ struct ObjectInfo {
 	 * {addr,size} shape as eh_frame, captured by the same section-name loop.
 	 */
 	EhFrameInfo gcc_except_table;
+	/*
+	 * The loaded `.mono_lsda` section, or {nullptr,0} if the module emitted none.
+	 * This is the target-neutral, SHF_ALLOC clause table MonoLSDAStreamer writes
+	 * from the C2 gather side channel (magic 'MLSD', code-relative offsets; plan
+	 * 12 2). Present only for an EH-bearing method with resolved catch clauses;
+	 * C4/C6 parse it into the method's MonoJitExceptionInfo[]. Same {addr,size}
+	 * shape as eh_frame, captured by the same section-name loop. Because both the
+	 * try/handler labels and the func_begin anchor sit in .text, the object writer
+	 * folds every offset to a constant - the section carries NO relocations.
+	 */
+	EhFrameInfo mono_lsda;
 };
 
 /* ---- relocation audit ----------------------------------------------------
@@ -401,6 +417,7 @@ capture_object_info (orc::MaterializationResponsibility &r, const object::Object
 	info.eh_frame = capture_named_section (".eh_frame");
 	info.stackmaps = capture_named_section (".llvm_stackmaps");
 	info.gcc_except_table = capture_named_section (".gcc_except_table");
+	info.mono_lsda = capture_named_section (".mono_lsda");
 
 	std::lock_guard<std::mutex> lock (g_object_info_mutex);
 	g_object_info[r.getTargetJITDylib ().getName ()] = std::move (info);
@@ -672,6 +689,134 @@ private:
 	MonoEHSideChannel &sc_;
 };
 
+/* ---- .mono_lsda emitter (C3) ---------------------------------------------
+ *
+ * MonoLSDAStreamer is the object streamer MonoIRCompiler installs in place of
+ * the stock createMCObjectStreamer one. It is a plain MCELFStreamer in every
+ * respect but one: at finishImpl(), just before the base class writes the
+ * object, it emits a target-neutral `.mono_lsda` section (plan 12 2) built from
+ * the clauses the C2 MonoEHGatherPass gathered into the shared side channel.
+ *
+ * The base MCELFStreamer is byte-for-byte the object streamer the C1 pipeline
+ * used (createMCObjectStreamer routes ELF through createELFStreamer, which is
+ * `new MCELFStreamer + setRelaxAll`; x86-64 registers no object target streamer
+ * that changes the bytes - verified). So for a NON-EH module the side channel is
+ * empty, no `.mono_lsda` is emitted, and the output stays byte-identical to
+ * SimpleCompiler's (the compiler-equivalence invariant).
+ *
+ * func_begin anchoring (resolves plan 12 9's [UNVERIFIED] flag): each side-
+ * channel function carries its MF name, and every offset is a difference against
+ * Ctx.getOrCreateSymbol(that name) - the SAME MCSymbol the AsmPrinter emits at
+ * the function's entry (on ELF the mangled name equals the IR name). This keys
+ * the anchor to the specific entry function by name, NOT to "the first emitted
+ * label" (probe2's heuristic), which is what makes it correct for mono's multi-
+ * symbol modules (the method plus its GC safepoint poll): a second function's
+ * label never captures the wrong base. Because that anchor and the try/handler
+ * labels all live in .text, the writer folds each difference to a constant and
+ * the section carries zero relocations.
+ *
+ * A declined function (CAP-EH-0: a missing label, an unresolvable clause index,
+ * a filter/cleanup TypeId - anything the gather flagged) gets NO record, so the
+ * load side sees no `.mono_lsda` for it and declines cleanly to the classic JIT.
+ */
+class MonoLSDAStreamer : public MCELFStreamer {
+public:
+	MonoLSDAStreamer (MCContext &ctx, std::unique_ptr<MCAsmBackend> tab,
+	                  std::unique_ptr<MCObjectWriter> ow,
+	                  std::unique_ptr<MCCodeEmitter> emitter, MonoEHSideChannel &sc)
+		: MCELFStreamer (ctx, std::move (tab), std::move (ow), std::move (emitter)),
+		  sc_ (sc)
+	{
+	}
+
+	void finishImpl () override
+	{
+		MCContext &ctx = getContext ();
+		bool section_open = false;
+		unsigned records_emitted = 0;
+
+		for (const MonoEHFunctionClauses &fn : sc_.functions) {
+			/*
+			 * Declined (CAP-EH-0) or clause-less functions get no record: the
+			 * load side must then decline, never publish a partial table.
+			 */
+			if (fn.declined || fn.clauses.empty ())
+				continue;
+
+			/*
+			 * ONE-METHOD-PER-MODULE INVARIANT, enforced loudly. The `.mono_lsda`
+			 * section carries NO function identity: records are concatenated from
+			 * offset 0, and the load side (C4) reads the section from the start and
+			 * attributes it to the ONE method being finalized. That is sound only
+			 * because a JIT module holds exactly one EH-bearing function - mono
+			 * compiles one method per LLVM module, and the sibling globals it also
+			 * emits (gc.safepoint_poll, mono_personality) have no landing pads so
+			 * the gather never records them. If a future slice ever puts a SECOND
+			 * EH function in a module, a silent concatenation would let C4
+			 * misattribute function-1's clause geometry to the method (a CAP-EH-0
+			 * silent mis-catch). Convert that architectural regression into an
+			 * immediate abort here instead - the same posture as the #16 memory-
+			 * manager reclaim-ordering invariant (report_fatal_error, not a guess).
+			 */
+			if (++records_emitted > 1)
+				report_fatal_error (
+					"mono: multiple EH functions in one JIT module - "
+					".mono_lsda attribution is ambiguous");
+
+			/*
+			 * The code-relative anchor: the entry function's own symbol, by name.
+			 * This is the exact MCSymbol the AsmPrinter emitted at function entry
+			 * (ELF mangling is identity here), so the differences below fold to
+			 * .text-internal constants.
+			 */
+			MCSymbol *func_begin = ctx.getOrCreateSymbol (fn.function);
+
+			/*
+			 * Create/switch into `.mono_lsda` lazily - only once, and only if at
+			 * least one function actually contributes a record. A module with an
+			 * empty (or wholly declined) side channel emits no section at all, so
+			 * a non-EH object is byte-identical to the C1 output.
+			 */
+			if (!section_open) {
+				MCSectionELF *s = ctx.getELFSection (".mono_lsda", ELF::SHT_PROGBITS,
+				                                     ELF::SHF_ALLOC);
+				switchSection (s);
+				section_open = true;
+			}
+
+			auto off_from_begin = [&] (const MCSymbol *sym) -> const MCExpr * {
+				return MCBinaryExpr::createSub (
+					MCSymbolRefExpr::create (sym, ctx),
+					MCSymbolRefExpr::create (func_begin, ctx), ctx);
+			};
+
+			/* Header: magic 'MLSD', version 1, count (one entry per invoke range). */
+			emitIntValue (0x4d4c5344u, 4);
+			emitIntValue (1, 2);
+			emitIntValue (fn.clauses.size (), 2);
+
+			for (const MonoEHClause &c : fn.clauses) {
+				/* try_start_off: begin - func_begin. */
+				emitValue (off_from_begin (c.try_begin), 4);
+				/* try_len: end - begin. */
+				emitValue (MCBinaryExpr::createSub (
+					           MCSymbolRefExpr::create (c.try_end, ctx),
+					           MCSymbolRefExpr::create (c.try_begin, ctx), ctx),
+				           4);
+				/* handler_off: handler - func_begin. */
+				emitValue (off_from_begin (c.handler), 4);
+				/* clause_index: the IL clause index, an absolute scalar. */
+				emitIntValue ((uint32_t) c.clause_index, 4);
+			}
+		}
+
+		MCELFStreamer::finishImpl ();
+	}
+
+private:
+	MonoEHSideChannel &sc_;
+};
+
 } // anonymous namespace
 
 /* ---- custom IR compiler --------------------------------------------------
@@ -808,17 +953,26 @@ private:
 			                                inconvertibleErrorCode ());
 
 		/*
-		 * The standard object streamer via the target registry - the C1 no-op
-		 * where C3 substitutes a .mono_lsda-emitting MCELFStreamer subclass. The
-		 * two MCOptions flags and DWARFMustBeAtTheEnd=true are exactly the values
-		 * addPassesToEmitMC passes.
+		 * C3: MonoLSDAStreamer in place of the stock createMCObjectStreamer. It is
+		 * a plain MCELFStreamer that additionally writes `.mono_lsda` from
+		 * eh_side_channel at finishImpl(); driven by the very side channel the
+		 * MonoEHGatherPass above populated.
+		 *
+		 * This construction reproduces exactly what createMCObjectStreamer does for
+		 * ELF: it routes through createELFStreamer, which is `new MCELFStreamer`
+		 * followed by setRelaxAll(MCRelaxAll). The IncrementalLinkerCompatible and
+		 * DWARFMustBeAtTheEnd flags are consumed only by the COFF/MachO arms of
+		 * createMCObjectStreamer, never the ELF one, so they do not apply here; and
+		 * x86-64 registers no object target streamer that alters the bytes (all
+		 * verified against createMCObjectStreamer for a non-EH module). So a non-EH
+		 * module stays byte-identical to SimpleCompiler's output.
 		 */
 		std::unique_ptr<MCObjectWriter> ow = mab->createObjectWriter (out);
-		std::unique_ptr<MCStreamer> streamer (ltm.getTarget ().createMCObjectStreamer (
-			ltm.getTargetTriple (), *ctx, std::move (mab), std::move (ow), std::move (mce),
-			sti, ltm.Options.MCOptions.MCRelaxAll,
-			ltm.Options.MCOptions.MCIncrementalLinkerCompatible,
-			/*DWARFMustBeAtTheEnd=*/ true));
+		auto lsda_streamer = std::make_unique<MonoLSDAStreamer> (
+			*ctx, std::move (mab), std::move (ow), std::move (mce), eh_side_channel);
+		if (ltm.Options.MCOptions.MCRelaxAll)
+			lsda_streamer->getAssembler ().setRelaxAll (true);
+		std::unique_ptr<MCStreamer> streamer (std::move (lsda_streamer));
 
 		FunctionPass *printer = ltm.getTarget ().createAsmPrinter (ltm, std::move (streamer));
 		if (!printer)
@@ -1303,6 +1457,7 @@ MonoLLVMJIT::compile (Function *entry,
 			result.eh_frame = info.eh_frame;
 			result.stackmaps = info.stackmaps;
 			result.gcc_except_table = info.gcc_except_table;
+			result.mono_lsda = info.mono_lsda;
 			g_object_info.erase (entry_it);
 		}
 	}
@@ -1401,7 +1556,8 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
                           gpointer *eh_frame, guint32 *code_size_out,
                           gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out,
                           gpointer *stackmaps_out, guint32 *stackmaps_size_out,
-                          gpointer *gcc_except_table_out, guint32 *gcc_except_table_size_out)
+                          gpointer *gcc_except_table_out, guint32 *gcc_except_table_size_out,
+                          gpointer *mono_lsda_out, guint32 *mono_lsda_size_out)
 {
 	(void) mono_ee;
 
@@ -1443,6 +1599,10 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 		*gcc_except_table_out = (gpointer) res.gcc_except_table.addr;
 	if (gcc_except_table_size_out)
 		*gcc_except_table_size_out = (guint32) res.gcc_except_table.size;
+	if (mono_lsda_out)
+		*mono_lsda_out = (gpointer) res.mono_lsda.addr;
+	if (mono_lsda_size_out)
+		*mono_lsda_size_out = (guint32) res.mono_lsda.size;
 
 	return (gpointer) (gsize) res.entry;
 }

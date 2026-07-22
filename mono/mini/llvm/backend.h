@@ -83,8 +83,16 @@ void      mono_llvm_optimize_method (LLVMValueRef method);
  * via mono::decode_gcc_except_table into the method's MonoJitExceptionInfo[]. The
  * gate still declines every EH method today, so this is {NULL,0} for every method
  * that currently reaches here.
+ *
+ * mono_lsda_out / mono_lsda_size_out (both may be NULL) receive the loaded
+ * `.mono_lsda` SECTION - mono's own target-neutral clause table (magic 'MLSD',
+ * code-relative offsets), written by MonoLSDAStreamer from the EH-gather side
+ * channel, non-empty only for an EH-bearing method whose catch clauses resolved.
+ * C4/C6 parse it into the method's MonoJitExceptionInfo[]; the gate still declines
+ * every EH method today, so this too is {NULL,0} for every method that currently
+ * reaches here.
  */
-gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out, gpointer *stackmaps_out, guint32 *stackmaps_size_out, gpointer *gcc_except_table_out, guint32 *gcc_except_table_size_out);
+gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out, gpointer *stackmaps_out, guint32 *stackmaps_size_out, gpointer *gcc_except_table_out, guint32 *gcc_except_table_size_out, gpointer *mono_lsda_out, guint32 *mono_lsda_size_out);
 
 /*
  * Transcode the stock DWARF .eh_frame LLVM emits into mono's unwind ops.

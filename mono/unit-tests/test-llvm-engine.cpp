@@ -70,6 +70,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
@@ -637,6 +638,68 @@ build_eh_multi_call_module (Module &m)
 }
 
 /*
+ * Build, in `m`, an EH function whose ONLY landing pad carries a FILTER clause
+ * (an exception-specification) rather than a catch - a shape outside the catch-
+ * only milestone. LLVM assigns a filter a NEGATIVE TypeId, which the C2 gather
+ * recognises (has_filter / declined) and which C3 must therefore emit NOTHING
+ * for. Returns `i32 eh_filter(void)`.
+ *
+ * The gather marking this function `declined` is the point: a declined function
+ * produces no .mono_lsda record, so the section must be absent/zero-size. This
+ * pins the "declined => no bytes" fail-safe (CAP-EH-0) that no other test covers.
+ */
+static Function *
+build_eh_filter_module (Module &m)
+{
+	LLVMContext &ctx = m.getContext ();
+	Type *i32 = Type::getInt32Ty (ctx);
+	PointerType *ptr = PointerType::getUnqual (ctx);
+
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (ctx), false);
+	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                     EH_MAY_THROW_NAME, &m);
+
+	auto *ti0 = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
+	                                ConstantInt::get (i32, 9), "type_info_0");
+
+	FunctionType *fty = FunctionType::get (i32, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_filter", &m);
+
+	FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+	Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+	                                   "mono_personality", &m);
+	pers->addFnAttr (Attribute::NoUnwind);
+	BasicBlock *pbb = BasicBlock::Create (ctx, "ENTRY", pers);
+	IRBuilder<> pb (pbb);
+	pb.CreateRet (ConstantInt::get (i32, 0));
+	fn->setPersonalityFn (pers);
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *cont = BasicBlock::Create (ctx, "cont", fn);
+	BasicBlock *lpad = BasicBlock::Create (ctx, "lpad", fn);
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont, lpad, {});
+
+	IRBuilder<> cb (cont);
+	cb.CreateRet (ConstantInt::get (i32, 0));
+
+	StructType *lp_ty = StructType::get (ptr, i32);
+	IRBuilder<> lb (lpad);
+	LandingPadInst *lp = lb.CreateLandingPad (lp_ty, 1);
+	/*
+	 * A filter clause is an ARRAY constant (not a bare type_info): [1 x ptr]
+	 * naming the one permitted type. LLVM lowers it to a negative TypeId, which
+	 * the gather flags as has_filter/declined.
+	 */
+	ArrayType *filter_ty = ArrayType::get (ptr, 1);
+	lp->addClause (ConstantArray::get (filter_ty, { ti0 }));
+	lb.CreateRet (lb.CreateExtractValue (lp, 1));
+
+	return fn;
+}
+
+/*
  * Emit `m` through a target machine IDENTICAL to the engine's (host CPU, O3,
  * LLVM's default JIT code model - Large on x86-64), the same path
  * MonoLLVMJIT::compile drives, and return the object bytes. Used to (a) inspect
@@ -1119,6 +1182,344 @@ test_eh_gather_multi_call (MonoLLVMJIT *jit)
 	return TEST_PASS;
 }
 
+/* --------------------------------------------- .mono_lsda emit (C3) */
+
+/* Little-endian scalar reads out of a captured section's bytes. */
+static uint32_t
+rd_le32 (const uint8_t *p)
+{
+	return (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16)
+	       | ((uint32_t) p[3] << 24);
+}
+
+static uint16_t
+rd_le16 (const uint8_t *p)
+{
+	return (uint16_t) ((uint16_t) p[0] | ((uint16_t) p[1] << 8));
+}
+
+/* One decoded .mono_lsda entry (plan 12 2): four code-relative u32 fields. */
+struct LsdaEntry {
+	uint32_t try_start_off, try_len, handler_off, clause_index;
+};
+
+/*
+ * Header-checked decode of a .mono_lsda section: magic 'MLSD', version 1, and a
+ * body whose length is exactly 8 + count*16. Mirrors what the C4 load-side parser
+ * will do; false on any mismatch/truncation.
+ */
+static bool
+parse_mono_lsda (const std::vector<uint8_t> &b, std::vector<LsdaEntry> &out)
+{
+	if (b.size () < 8)
+		return false;
+	if (rd_le32 (b.data ()) != 0x4d4c5344u) /* 'MLSD' */
+		return false;
+	if (rd_le16 (b.data () + 4) != 1)
+		return false;
+	uint16_t count = rd_le16 (b.data () + 6);
+	if (b.size () != (size_t) 8 + (size_t) count * 16)
+		return false;
+	for (uint16_t i = 0; i < count; i++) {
+		const uint8_t *e = b.data () + 8 + (size_t) i * 16;
+		out.push_back ({ rd_le32 (e), rd_le32 (e + 4), rd_le32 (e + 8), rd_le32 (e + 12) });
+	}
+	return true;
+}
+
+/* st_size of a named function symbol in an emitted object, 0 if absent. */
+static Expected<uint64_t>
+object_func_size (MemoryBuffer &buf, StringRef want)
+{
+	auto obj = object::ObjectFile::createObjectFile (buf.getMemBufferRef ());
+	if (!obj)
+		return obj.takeError ();
+	for (const object::SymbolRef &sym : (*obj)->symbols ()) {
+		Expected<StringRef> name = sym.getName ();
+		if (!name) {
+			consumeError (name.takeError ());
+			continue;
+		}
+		if (*name != want)
+			continue;
+		return object::ELFSymbolRef (sym).getSize ();
+	}
+	return (uint64_t) 0;
+}
+
+/* Number of relocations that apply TO the named section (i.e. from .rela.<name>). */
+static Expected<size_t>
+object_section_reloc_count (MemoryBuffer &buf, StringRef want)
+{
+	auto obj = object::ObjectFile::createObjectFile (buf.getMemBufferRef ());
+	if (!obj)
+		return obj.takeError ();
+	for (const object::SectionRef &sec : (*obj)->sections ()) {
+		Expected<StringRef> name = sec.getName ();
+		if (!name) {
+			consumeError (name.takeError ());
+			continue;
+		}
+		if (*name != want)
+			continue;
+		size_t n = 0;
+		for (const object::RelocationRef &r : sec.relocations ()) {
+			(void) r;
+			n++;
+		}
+		return n;
+	}
+	return (size_t) 0;
+}
+
+/* Hex dump of a captured section, for the report. */
+static std::string
+hex_dump (const std::vector<uint8_t> &b)
+{
+	std::string s;
+	char buf[4];
+	for (size_t i = 0; i < b.size (); i++) {
+		snprintf (buf, sizeof buf, "%02x", b[i]);
+		s += buf;
+		if ((i & 15) == 15)
+			s += '\n';
+		else if ((i & 3) == 3)
+			s += ' ';
+	}
+	return s;
+}
+
+/*
+ * C3 acceptance check: MonoLSDAStreamer, installed in MonoIRCompiler's pipeline
+ * in place of the stock object streamer, writes a .mono_lsda section built from
+ * the C2 gather side channel. Drive the two-sibling-catch module through the FULL
+ * MonoIRCompiler pipeline (compile_object_with_mono_compiler - the exact object
+ * emission the runtime path uses) and assert the emitted bytes:
+ *
+ *   - header: magic 'MLSD', version 1, count 2 (two invoke ranges -> two entries);
+ *   - clause indices exactly {3, 7} (the smuggled IL indices), as a set;
+ *   - every offset self-consistent: try range within the entry function and
+ *     handler_off inside it, try_len > 0 (offsets are code-relative, so their
+ *     exact values are host-codegen-dependent and NOT hardcoded);
+ *   - ZERO relocations on .mono_lsda (both labels fold to .text constants - the
+ *     target-neutral, load-reloc-free property this format is built for);
+ *   - and a cross-check that the count and clause-index set MATCH what the C2
+ *     gather pass reports for the same module: the streamer emits what the pass
+ *     gathered, nothing else.
+ */
+static TestResult
+test_eh_mono_lsda_two_catch (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	LLVMContext c1;
+	Module m1 ("selftest.eh.lsda.twocatch", c1);
+	build_eh_two_catch_module (m1);
+
+	auto obj = mono::compile_object_with_mono_compiler (m1);
+	if (!obj) {
+		printf ("     emit failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+
+	auto bytes = object_section_bytes (**obj, ".mono_lsda");
+	if (!bytes) {
+		printf ("     section read failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (!bytes->empty ());
+
+	std::vector<LsdaEntry> es;
+	CHECK (parse_mono_lsda (*bytes, es));
+	CHECK (es.size () == 2);
+
+	/* Clause indices are {3, 7} (landing-pad order is not load-bearing). */
+	std::vector<uint32_t> ci = { es[0].clause_index, es[1].clause_index };
+	std::sort (ci.begin (), ci.end ());
+	CHECK (ci[0] == 3);
+	CHECK (ci[1] == 7);
+
+	/* Every offset lands inside the entry function's own machine code. */
+	auto fsz = object_func_size (**obj, "eh_two_catch");
+	if (!fsz) {
+		printf ("     func size read failed: %s\n", toString (fsz.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (*fsz > 0);
+	for (const LsdaEntry &e : es) {
+		CHECK (e.try_len > 0);
+		CHECK (e.try_start_off < *fsz);
+		CHECK ((uint64_t) e.try_start_off + e.try_len <= *fsz);
+		CHECK (e.handler_off < *fsz);
+	}
+
+	/* ZERO relocations - the acceptance signal (plan 12 1.2 / 2). */
+	auto rc = object_section_reloc_count (**obj, ".mono_lsda");
+	if (!rc) {
+		printf ("     reloc count failed: %s\n", toString (rc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (*rc == 0);
+
+	/* Cross-check count + clause set against the C2 gather for the same module. */
+	LLVMContext c2;
+	Module m2 ("selftest.eh.lsda.twocatch.xcheck", c2);
+	build_eh_two_catch_module (m2);
+	auto sc = mono::gather_eh_sidechannel (m2);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (sc->functions.size () == 1);
+	CHECK (sc->functions[0].clauses.size () == es.size ());
+	std::vector<int> gci;
+	for (const mono::MonoEHClause &cl : sc->functions[0].clauses)
+		gci.push_back (cl.clause_index);
+	std::sort (gci.begin (), gci.end ());
+	CHECK (gci.size () == 2 && gci[0] == 3 && gci[1] == 7);
+
+	printf ("     two-catch: %zu-byte .mono_lsda, %zu entries, clauses {%u,%u}, "
+	        "func=%llu bytes, 0 relocs\n     bytes: %s\n",
+	        bytes->size (), es.size (), ci[0], ci[1],
+	        (unsigned long long) *fsz, hex_dump (*bytes).c_str ());
+	return TEST_PASS;
+}
+
+/*
+ * C3 regression, the C2-fix invariant now visible in the emitted bytes: a single
+ * try protecting TWO calls that share one catch landing pad emits TWO .mono_lsda
+ * entries - SAME clause_index (5) and SAME handler_off, but DIFFERENT
+ * try_start_off (disjoint invoke ranges). A one-range gather (the silent
+ * mis-catch bug) would emit count 1 here; the byte assertion catches it.
+ */
+static TestResult
+test_eh_mono_lsda_multi_call (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	LLVMContext c1;
+	Module m1 ("selftest.eh.lsda.multicall", c1);
+	build_eh_multi_call_module (m1);
+
+	auto obj = mono::compile_object_with_mono_compiler (m1);
+	if (!obj) {
+		printf ("     emit failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+
+	auto bytes = object_section_bytes (**obj, ".mono_lsda");
+	if (!bytes) {
+		printf ("     section read failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (!bytes->empty ());
+
+	std::vector<LsdaEntry> es;
+	CHECK (parse_mono_lsda (*bytes, es));
+
+	/* TWO entries for ONE landing pad's two invoke ranges. */
+	CHECK (es.size () == 2);
+
+	/* Same clause_index (5) and same handler_off... */
+	CHECK (es[0].clause_index == 5);
+	CHECK (es[1].clause_index == 5);
+	CHECK (es[0].handler_off == es[1].handler_off);
+
+	/* ...but DIFFERENT try_start_off (disjoint ranges - the whole point). */
+	CHECK (es[0].try_start_off != es[1].try_start_off);
+
+	/* Both ranges land inside the entry function. */
+	auto fsz = object_func_size (**obj, "eh_multi_call");
+	if (!fsz) {
+		printf ("     func size read failed: %s\n", toString (fsz.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (*fsz > 0);
+	for (const LsdaEntry &e : es) {
+		CHECK (e.try_len > 0);
+		CHECK (e.try_start_off < *fsz);
+		CHECK ((uint64_t) e.try_start_off + e.try_len <= *fsz);
+		CHECK (e.handler_off < *fsz);
+	}
+
+	/* ZERO relocations. */
+	auto rc = object_section_reloc_count (**obj, ".mono_lsda");
+	if (!rc) {
+		printf ("     reloc count failed: %s\n", toString (rc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (*rc == 0);
+
+	/* Cross-check against the C2 gather. */
+	LLVMContext c2;
+	Module m2 ("selftest.eh.lsda.multicall.xcheck", c2);
+	build_eh_multi_call_module (m2);
+	auto sc = mono::gather_eh_sidechannel (m2);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (sc->functions.size () == 1);
+	CHECK (sc->functions[0].clauses.size () == es.size ());
+
+	printf ("     multi-call: %zu-byte .mono_lsda, 2 entries clause 5, handler_off "
+	        "0x%x shared, try_start_off 0x%x vs 0x%x, 0 relocs\n     bytes: %s\n",
+	        bytes->size (), es[0].handler_off, es[0].try_start_off, es[1].try_start_off,
+	        hex_dump (*bytes).c_str ());
+	return TEST_PASS;
+}
+
+/*
+ * C3 fail-safe: a module whose ONLY EH function is DECLINED (here a filter
+ * landing pad - a negative TypeId the C2 gather marks has_filter/declined)
+ * produces NO .mono_lsda section at all. This is the "declined => no bytes"
+ * contract (CAP-EH-0): the streamer must emit nothing for a declined function so
+ * the load side (C4) sees an absent section and declines the method to the
+ * classic JIT, never a partial/misattributed clause table.
+ *
+ * First confirm the gather actually declines this shape (so the test is
+ * exercising the declined path, not an incidentally clause-less one), then
+ * confirm the emitted object carries a zero-size / absent .mono_lsda.
+ */
+static TestResult
+test_eh_mono_lsda_declined_emits_nothing (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	/* The gather must mark this function declined (via the filter TypeId). */
+	LLVMContext c1;
+	Module m1 ("selftest.eh.lsda.declined.gather", c1);
+	build_eh_filter_module (m1);
+	auto sc = mono::gather_eh_sidechannel (m1);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (sc->functions.size () == 1);
+	CHECK (sc->functions[0].declined);
+	CHECK (sc->functions[0].has_filter);
+
+	/* The emitted object must therefore carry NO .mono_lsda bytes. */
+	LLVMContext c2;
+	Module m2 ("selftest.eh.lsda.declined", c2);
+	build_eh_filter_module (m2);
+	auto obj = mono::compile_object_with_mono_compiler (m2);
+	if (!obj) {
+		printf ("     emit failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	auto bytes = object_section_bytes (**obj, ".mono_lsda");
+	if (!bytes) {
+		printf ("     section read failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (bytes->empty ()); /* absent section reads back as zero bytes */
+
+	printf ("     declined (filter) EH function: gather declined=1, .mono_lsda "
+	        "absent (%zu bytes) - fail-safe holds\n", bytes->size ());
+	return TEST_PASS;
+}
+
 /* ------------------------------------------------------------ driver */
 
 /*
@@ -1161,6 +1562,10 @@ test_llvm_engine_main (void)
 	report ("gcc-except-table", test_gcc_except_table (jit));
 	report ("eh-gather", test_eh_gather (jit));
 	report ("eh-gather-multi-call", test_eh_gather_multi_call (jit));
+	report ("eh-mono-lsda-two-catch", test_eh_mono_lsda_two_catch (jit));
+	report ("eh-mono-lsda-multi-call", test_eh_mono_lsda_multi_call (jit));
+	report ("eh-mono-lsda-declined-emits-nothing",
+	        test_eh_mono_lsda_declined_emits_nothing (jit));
 
 	printf ("%d passed, %d skipped, %d failed\n", passes, skips, failures);
 	return failures ? 1 : 0;

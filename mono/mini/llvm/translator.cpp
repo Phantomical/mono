@@ -1451,9 +1451,17 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * declines every clause-bearing method, so this is {NULL,0} here today). */
 	gpointer gcc_except_table = NULL;
 	guint32 gcc_except_table_size = 0;
-	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size);
+	/* C3 captures the `.mono_lsda` section (mono's own target-neutral clause table);
+	 * C4/C6 will parse it into cfg->llvm_ex_info. For now it is captured but left
+	 * unused - the EH gate still declines every clause-bearing method, so this is
+	 * {NULL,0} for every method that reaches here today. */
+	gpointer mono_lsda = NULL;
+	guint32 mono_lsda_size = 0;
+	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size);
 	(void) gcc_except_table;
 	(void) gcc_except_table_size;
+	(void) mono_lsda;
+	(void) mono_lsda_size;
 	mono_llvm_remove_gc_safepoint_poll (ctx->lmodule);
 	mono_codeman_disable_write ();
 	if (cfg->verbose_level > 1) {
