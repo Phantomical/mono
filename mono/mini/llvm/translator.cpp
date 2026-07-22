@@ -809,7 +809,7 @@ emit_method_inner (EmitContext *ctx)
 				continue;
 
 			if (LLVMCountIncoming (phi_ins) == 0) {
-				mono_llvm_replace_uses_of (phi_ins, LLVMConstNull (LLVMTypeOf (phi_ins)));
+				mono_llvm_replace_uses_of (phi_ins, llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (phi_ins)))));
 				LLVMInstructionEraseFromParent (phi_ins);
 				values [phi->dreg] = nullptr;
 			}
@@ -827,7 +827,7 @@ emit_method_inner (EmitContext *ctx)
 			GSList *bb_list_iter;
 			i = 0;
 			for (bb_list_iter = bb_list; bb_list_iter; bb_list_iter = g_slist_next (bb_list_iter)) {
-				LLVMAddCase (switch_ins, LLVMConstInt (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), i + 1, FALSE), static_cast<LLVMBasicBlockRef>(bb_list_iter->data));
+				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i + 1, false)), static_cast<LLVMBasicBlockRef>(bb_list_iter->data));
 				i ++;
 			}
 		}
@@ -850,7 +850,7 @@ after_codegen:
 		LLVMValueRef md_node;
 
 		md_args [0] = LLVMMDString (ctx->method_name, strlen (ctx->method_name));
-		md_args [1] = LLVMConstInt (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), 1, FALSE);
+		md_args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false));
 		md_node = LLVMMDNode (md_args, 2);
 		LLVMAddNamedMetadataOperand (lmodule, "mono.function_indexes", md_node);
 	}

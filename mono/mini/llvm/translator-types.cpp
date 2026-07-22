@@ -25,13 +25,13 @@ set_failure (EmitContext *ctx, const char *message)
 LLVMValueRef
 const_int32 (int v)
 {
-	return LLVMConstInt (llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())), v, FALSE);
+	return llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v, false));
 }
 
 LLVMValueRef
 const_int64 (int64_t v)
 {
-	return LLVMConstInt (llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())), v, FALSE);
+	return llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), v, false));
 }
 
 /*
