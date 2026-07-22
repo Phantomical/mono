@@ -75,6 +75,7 @@
 #include <vector>
 #include <unordered_map>
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Constants.h>
@@ -243,6 +244,22 @@ static inline llvm::LLVMContext &
 llvm_global_ctx ()
 {
 	return *llvm::unwrap (LLVMGetGlobalContext ());
+}
+
+/*
+ * Marshal a C array of LLVMValueRef GEP indices into the ArrayRef<Value *> that
+ * IRBuilder::CreateGEP expects. This reproduces exactly what LLVMBuildGEP2 did
+ * internally -- ArrayRef<Value *>(unwrap(Indices), NumIndices) feeding the
+ * non-inbounds CreateGEP -- so the emitted getelementptr is unchanged.
+ */
+static inline llvm::SmallVector<llvm::Value *, 4>
+gep_index_list (LLVMValueRef *idx, unsigned n)
+{
+	llvm::SmallVector<llvm::Value *, 4> v;
+	v.reserve (n);
+	for (unsigned i = 0; i < n; ++i)
+		v.push_back (llvm::unwrap (idx [i]));
+	return v;
 }
 
 typedef struct {

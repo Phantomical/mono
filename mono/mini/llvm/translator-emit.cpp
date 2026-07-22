@@ -233,7 +233,7 @@ emit_volatile_store (EmitContext *ctx, int vreg)
 
 	if (var && var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT)) {
 		g_assert (ctx->addresses [vreg]);
-		LLVMBuildStore (llvm::wrap (ctx->builder), convert (ctx, ctx->values [vreg], type_to_llvm_type (ctx, var->inst_vtype)), ctx->addresses [vreg]->value);
+		llvm::wrap (ctx->builder->CreateStore (llvm::unwrap (convert (ctx, ctx->values [vreg], type_to_llvm_type (ctx, var->inst_vtype))), llvm::unwrap (ctx->addresses [vreg]->value)));
 	}
 }
 
@@ -666,7 +666,7 @@ get_aotconst_module (MonoLLVMModule *module, llvm::IRBuilder<> *builder, MonoJum
 		const_var = v;
 	}
 
-	load = LLVMBuildLoad2 (llvm::wrap (builder), llvm_type, const_var, "");
+	load = llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm_type), llvm::unwrap (const_var), ""));
 
 	if (mono_aot_is_shared_got_offset (got_offset))
 		set_invariant_load_flag (load);
@@ -722,7 +722,7 @@ get_jit_callee (EmitContext *ctx, const char *name, LLVMTypeRef llvm_sig, MonoJu
 	LLVMValueRef tramp_var = LLVMAddGlobal (ctx->lmodule, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), name);
 	LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)))), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))))));
 	LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
-	LLVMValueRef callee = LLVMBuildLoad2 (llvm::wrap (ctx->builder), llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), tramp_var, "");
+	LLVMValueRef callee = llvm::wrap (ctx->builder->CreateLoad (llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), llvm::unwrap (tramp_var), ""));
 	return callee;
 }
 
@@ -1030,13 +1030,13 @@ emit_args_to_vtype (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, L
 			part_type = llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), part_size * 8));
 			if (MONO_CLASS_IS_SIMD (ctx->cfg, klass)) {
 				index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j * TARGET_SIZEOF_VOID_P, false));
-				addr = LLVMBuildGEP2 (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())), address, index, 1, "");
+				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (address), gep_index_list (index, 1), ""));
 			} else {
 				daddr = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (address), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
 				index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j, false));
-				addr = LLVMBuildGEP2 (llvm::wrap (builder), IntPtrType (), daddr, index, 1, "");
+				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (IntPtrType ()), llvm::unwrap (daddr), gep_index_list (index, 1), ""));
 			}
-			LLVMBuildStore (llvm::wrap (builder), convert (ctx, args [j], part_type), llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "")));
+			llvm::wrap (builder->CreateStore (llvm::unwrap (convert (ctx, args [j], part_type)), llvm::unwrap (llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "")))));
 			break;
 		}
 		case LLVMArgInFPReg: {
@@ -1049,8 +1049,8 @@ emit_args_to_vtype (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, L
 
 			index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j, false));
 			daddr = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (address), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
-			addr = LLVMBuildGEP2 (llvm::wrap (builder), arg_type, daddr, index, 1, "");
-			LLVMBuildStore (llvm::wrap (builder), args [j], addr);
+			addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (arg_type), llvm::unwrap (daddr), gep_index_list (index, 1), ""));
+			llvm::wrap (builder->CreateStore (llvm::unwrap (args [j]), llvm::unwrap (addr)));
 			break;
 		}
 		case LLVMArgNone:
@@ -1097,13 +1097,13 @@ emit_vtype_to_args (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, L
 		case LLVMArgInIReg:
 			if (MONO_CLASS_IS_SIMD (ctx->cfg, mono_class_from_mono_type_internal (t))) {
 				index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j * TARGET_SIZEOF_VOID_P, false));
-				addr = LLVMBuildGEP2 (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())), address, index, 1, "");
+				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ()))), llvm::unwrap (address), gep_index_list (index, 1), ""));
 			} else {
 				daddr = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (address), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
 				index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j, false));
-				addr = LLVMBuildGEP2 (llvm::wrap (builder), IntPtrType (), daddr, index, 1, "");
+				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (IntPtrType ()), llvm::unwrap (daddr), gep_index_list (index, 1), ""));
 			}
-			args [pindex ++] = convert (ctx, LLVMBuildLoad2 (llvm::wrap (builder), llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), partsize * 8)), llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "")), ""), IntPtrType ());
+			args [pindex ++] = convert (ctx, llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), partsize * 8))), llvm::unwrap (llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""))), "")), IntPtrType ());
 			break;
 		case LLVMArgInFPReg:
 			if (ainfo->esize == 8)
@@ -1112,8 +1112,8 @@ emit_vtype_to_args (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, L
 				arg_type = llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()));
 			daddr = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (address), llvm::unwrap (llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), ""));
 			index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j, false));
-			addr = LLVMBuildGEP2 (llvm::wrap (builder), arg_type, daddr, index, 1, "");
-			args [pindex ++] = LLVMBuildLoad2 (llvm::wrap (builder), arg_type, addr, "");
+			addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (arg_type), llvm::unwrap (daddr), gep_index_list (index, 1), ""));
+			args [pindex ++] = llvm::wrap (builder->CreateLoad (llvm::unwrap (arg_type), llvm::unwrap (addr), ""));
 			break;
 		case LLVMArgNone:
 			break;
@@ -1218,7 +1218,7 @@ emit_gsharedvt_ldaddr (EmitContext *ctx, int vreg)
 	ptr = llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, info_var, IntPtrType ())), llvm::unwrap (convert (ctx, offset, IntPtrType ())), ""));
 
 	name = g_strdup_printf ("gsharedvt_local_%d_offset", vreg);
-	offset_var = LLVMBuildLoad2 (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), convert (ctx, ptr, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), name);
+	offset_var = llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))), llvm::unwrap (convert (ctx, ptr, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)))), name));
 
 	return llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, locals_var, IntPtrType ())), llvm::unwrap (convert (ctx, offset_var, IntPtrType ())), ""));
 }
@@ -1254,7 +1254,7 @@ emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitI
 		LLVMValueRef tramp_var = LLVMAddGlobal (lmodule, llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)), name);
 		LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)))), llvm::unwrap (llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0))))));
 		LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
-		callee = LLVMBuildLoad2 (llvm::wrap (builder), llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)), tramp_var, "");
+		callee = llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0))), llvm::unwrap (tramp_var), ""));
 	}
 	LLVMBuildCall2 (llvm::wrap (builder), sig, callee, NULL, 0, "");
 
@@ -1304,7 +1304,7 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 		LLVMValueRef poll_val_int = llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), reinterpret_cast<guint64>(&mono_polling_required), false));
 		poll_val_ptr = llvm::wrap (builder->CreateIntToPtr (llvm::unwrap (poll_val_int), llvm::unwrap (ptr_type), ""));
 	}
-	LLVMValueRef poll_val_ptr_load = LLVMBuildLoad2 (llvm::wrap (builder), IntPtrType (), poll_val_ptr, ""); // probably needs to be volatile
+	LLVMValueRef poll_val_ptr_load = llvm::wrap (builder->CreateLoad (llvm::unwrap (IntPtrType ()), llvm::unwrap (poll_val_ptr), "")); // probably needs to be volatile
 	LLVMValueRef poll_val = llvm::wrap (builder->CreatePtrToInt (llvm::unwrap (poll_val_ptr_load), llvm::unwrap (IntPtrType ()), ""));
 	LLVMValueRef poll_val_zero = llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (poll_val))));
 	LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (poll_val), llvm::unwrap (poll_val_zero), ""));
@@ -1328,7 +1328,7 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 		LLVMValueRef target_val = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), reinterpret_cast<guint64>(target), false));
 		LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::unwrap (target_val)), llvm::unwrap (poll_sig_ptr))));
 		LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
-		LLVMValueRef callee = LLVMBuildLoad2 (llvm::wrap (builder), poll_sig_ptr, tramp_var, "");
+		LLVMValueRef callee = llvm::wrap (builder->CreateLoad (llvm::unwrap (poll_sig_ptr), llvm::unwrap (tramp_var), ""));
 		call = LLVMBuildCall2 (llvm::wrap (builder), poll_sig, callee, NULL, 0, "");
 	}
 	set_call_cold_cconv (call);
