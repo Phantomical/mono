@@ -168,6 +168,203 @@ class Tests
 		return (r0 == 100 && r1 == 200 && r2 == 300 && log [0] == 3) ? 0 : 1;
 	}
 
+	/*
+	 * EH F3 functional coverage: LEAVE-to-multiple-targets breadth + nested-leave
+	 * continuations over the SAME standalone-finally indicator/switch machinery F2
+	 * activated. Every helper holds a single, non-nested finally clause (so the F2
+	 * nesting gate still admits it and each compiles through the LLVM tier), is
+	 * [NoInlining] so the clause structure survives, and records the finally-run
+	 * count in log [0]; each driver resets the log per call and asserts the finally
+	 * ran EXACTLY once per exit AND that the exact per-path continuation ran. These
+	 * exercise the OP_CALL_HANDLER distinct-indicator / OP_ENDFINALLY switch scheme
+	 * on harder leave shapes than F2's three targets (doc 16 3.4).
+	 */
+
+	/*
+	 * Shape 1: MANY distinct leave targets (six) from one try/finally. The if/goto
+	 * ladder inside the try leaves to six different continuations L0..L5, each of
+	 * which is its own bblock -> six distinct OP_CALL_HANDLER indicator values and
+	 * six OP_ENDFINALLY switch cases, all over the single finally.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int llvm_f3_multi_leave (int sel, int[] log) {
+		int r;
+		try {
+			switch (sel) {
+			case 0: goto L0;
+			case 1: goto L1;
+			case 2: goto L2;
+			case 3: goto L3;
+			case 4: goto L4;
+			default: goto L5;
+			}
+		} finally {
+			log [0] = log [0] + 1;
+		}
+	L0: r = 10; goto End;
+	L1: r = 21; goto End;
+	L2: r = 32; goto End;
+	L3: r = 43; goto End;
+	L4: r = 54; goto End;
+	L5: r = 65; goto End;
+	End: return r;
+	}
+
+	public static int test_0_llvm_finally_multi_leave_many () {
+		int[] expect = { 10, 21, 32, 43, 54, 65 };
+		int[] log = new int [1];
+		for (int sel = 0; sel < 6; sel++) {
+			log [0] = 0;
+			int r = llvm_f3_multi_leave (sel, log);
+			if (r != expect [sel])
+				return 1 + sel;			/* wrong continuation for sel */
+			if (log [0] != 1)
+				return 10 + sel;		/* finally skipped or double-run */
+		}
+		return 0;
+	}
+
+	/*
+	 * Shape 2: leave that RETURNS A VALUE. Each continuation computes a distinct
+	 * value from a local established before the leave, proving the indicator switch
+	 * routes to the right VALUE-PRODUCING continuation, not merely the right block.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int llvm_f3_value_leave (int sel, int[] log) {
+		int basev = sel * 100;
+		try {
+			if (sel == 0) goto A;
+			if (sel == 1) goto B;
+			goto C;
+		} finally {
+			log [0] = log [0] + 1;
+		}
+	A: return basev + 1;
+	B: return basev + 2;
+	C: return basev + 3;
+	}
+
+	public static int test_0_llvm_finally_value_leave () {
+		int[] log = new int [1];
+		int[] expect = { 1, 102, 203 };
+		for (int sel = 0; sel < 3; sel++) {
+			log [0] = 0;
+			int r = llvm_f3_value_leave (sel, log);
+			if (r != expect [sel])
+				return 1 + sel;
+			if (log [0] != 1)
+				return 10 + sel;
+		}
+		return 0;
+	}
+
+	/*
+	 * Shape 3: leave OUT OF NESTED NON-FINALLY SCOPES. The goto Done crosses a
+	 * for-loop and two nested ordinary blocks on its way out of the try; the
+	 * fall-through path also leaves the try. Both exits route through the single
+	 * finally to the same continuation.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int llvm_f3_nested_scopes (int n, int[] log) {
+		int acc = 0;
+		try {
+			for (int i = 0; i < n; i++) {
+				acc += i;
+				if (acc > 5) {
+					{
+						{
+							goto Done;	/* leave crossing loop + nested blocks */
+						}
+					}
+				}
+			}
+			acc += 1000;			/* fall-through path also leaves the try */
+		} finally {
+			log [0] = log [0] + 1;
+		}
+	Done: return acc;
+	}
+
+	public static int test_0_llvm_finally_nested_scopes () {
+		int[] log = new int [1];
+		/* n=5: 0+1+2+3 = 6 > 5 at i=3 -> goto Done, acc == 6 */
+		log [0] = 0;
+		int r0 = llvm_f3_nested_scopes (5, log);
+		if (r0 != 6 || log [0] != 1)
+			return 1;
+		/* n=2: acc never exceeds 5, fall through -> acc == 0+1+1000 == 1001 */
+		log [0] = 0;
+		int r1 = llvm_f3_nested_scopes (2, log);
+		if (r1 != 1001 || log [0] != 1)
+			return 2;
+		return 0;
+	}
+
+	/*
+	 * Shape 4: NESTED-LEAVE continuations. The leave routes to A, B or C; each
+	 * continuation chains into the next (A->B->C), so the finally's switch feeds a
+	 * chain of continuations rather than independent returns, all through the one
+	 * finally.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int llvm_f3_chained (int sel, int[] log) {
+		int acc = 0;
+		try {
+			if (sel == 0) goto A;
+			if (sel == 1) goto B;
+			goto C;
+		} finally {
+			log [0] = log [0] + 1;
+		}
+	A: acc += 1;   goto B;
+	B: acc += 10;  goto C;
+	C: acc += 100; return acc;
+	}
+
+	public static int test_0_llvm_finally_chained_leave () {
+		int[] log = new int [1];
+		int[] expect = { 111, 110, 100 };
+		for (int sel = 0; sel < 3; sel++) {
+			log [0] = 0;
+			int r = llvm_f3_chained (sel, log);
+			if (r != expect [sel])
+				return 1 + sel;
+			if (log [0] != 1)
+				return 10 + sel;
+		}
+		return 0;
+	}
+
+	/*
+	 * Shape 5: normal FALL-THROUGH and explicit LEAVE both exercised in one method;
+	 * the finally must run exactly once on either exit.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int llvm_f3_fallthrough_vs_leave (int early, int[] log) {
+		int x = 0;
+		try {
+			if (early != 0)
+				return 7;		/* explicit early leave out of the try */
+			x = 2;				/* fall-through path */
+		} finally {
+			log [0] = log [0] + 1;
+		}
+		return 8 + x;			/* natural fall-through continuation */
+	}
+
+	public static int test_0_llvm_finally_fallthrough_and_leave () {
+		int[] log = new int [1];
+		log [0] = 0;
+		int r0 = llvm_f3_fallthrough_vs_leave (1, log);	/* early leave */
+		if (r0 != 7 || log [0] != 1)
+			return 1;
+		log [0] = 0;
+		int r1 = llvm_f3_fallthrough_vs_leave (0, log);	/* fall through */
+		if (r1 != 10 || log [0] != 1)
+			return 2;
+		return 0;
+	}
+
 	public static int test_0_byte_cast () {
 		int a;
 		long l;
