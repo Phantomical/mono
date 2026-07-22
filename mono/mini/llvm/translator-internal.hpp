@@ -313,9 +313,9 @@ MonoTypeEnum
 inst_c1_type (const MonoInst *ins);
 LLVMTypeRef
 type_to_llvm_type (EmitContext *ctx, MonoType *t);
-gboolean
+bool
 primitive_type_is_unsigned (MonoTypeEnum t);
-gboolean
+bool
 type_is_unsigned (EmitContext *ctx, MonoType *t);
 LLVMTypeRef
 type_to_llvm_arg_type (EmitContext *ctx, MonoType *t);

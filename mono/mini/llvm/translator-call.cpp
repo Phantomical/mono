@@ -17,11 +17,11 @@
 void
 emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, MonoInst *ins, LLVMValueRef lhs, LLVMValueRef rhs)
 {
-	gboolean need_div_check = ctx->cfg->backend->need_div_check;
+	bool need_div_check = ctx->cfg->backend->need_div_check;
 
 	if (bb->region)
 		/* LLVM doesn't know that these can throw an exception since they are not called through an intrinsic */
-		need_div_check = TRUE;
+		need_div_check = true;
 
 	if (!need_div_check)
 		return;
@@ -44,7 +44,7 @@ emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, Mo
 	case OP_IREM_UN_IMM:
 	case OP_LREM_UN_IMM: {
 		LLVMValueRef cmp;
-		gboolean is_signed = (ins->opcode == OP_IDIV || ins->opcode == OP_LDIV || ins->opcode == OP_IREM || ins->opcode == OP_LREM ||
+		bool is_signed = (ins->opcode == OP_IDIV || ins->opcode == OP_LDIV || ins->opcode == OP_IREM || ins->opcode == OP_LREM ||
 							  ins->opcode == OP_IDIV_IMM || ins->opcode == OP_LDIV_IMM || ins->opcode == OP_IREM_IMM || ins->opcode == OP_LREM_IMM);
 
 		cmp = LLVMBuildICmp (builder, LLVMIntEQ, rhs, LLVMConstInt (LLVMTypeOf (rhs), 0, FALSE), "");
@@ -412,15 +412,15 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 	ctx->builder = old_builder;
 }
 
-static inline gboolean
+static inline bool
 is_supported_callconv (EmitContext *ctx, MonoCallInst *call)
 {
 #if defined(TARGET_WIN32) && defined(TARGET_AMD64)
-	gboolean result = (call->signature->call_convention == MONO_CALL_DEFAULT) ||
+	bool result = (call->signature->call_convention == MONO_CALL_DEFAULT) ||
 			  (call->signature->call_convention == MONO_CALL_C) ||
 			  (call->signature->call_convention == MONO_CALL_STDCALL);
 #else
-	gboolean result = (call->signature->call_convention == MONO_CALL_DEFAULT);
+	bool result = (call->signature->call_convention == MONO_CALL_DEFAULT);
 #endif
 	return result;
 }
@@ -433,15 +433,15 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 	Address **addresses = ctx->addresses;
 	MonoCallInst *call = (MonoCallInst*)ins;
 	MonoMethodSignature *sig = call->signature;
-	LLVMValueRef callee = NULL, lcall;
+	LLVMValueRef callee = nullptr, lcall;
 	LLVMValueRef *args;
 	LLVMCallInfo *cinfo;
 	GSList *l;
 	int i, len, nargs;
-	gboolean vretaddr;
+	bool vretaddr;
 	LLVMTypeRef llvm_sig;
 	gpointer target;
-	gboolean is_virtual, calli;
+	bool is_virtual, calli;
 	LLVMBuilderRef builder = *builder_ref;
 
 	/* If both imt and rgctx arg are required, only pass the imt arg, the rgctx trampoline will pass the rgctx */
@@ -479,7 +479,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 
 	if (ins->flags & MONO_INST_HAS_METHOD) {
 		if (is_virtual) {
-			callee = NULL;
+			callee = nullptr;
 		} else {
 			if (cfg->method == call->method) {
 				callee = ctx->lmethod;

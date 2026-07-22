@@ -22,7 +22,7 @@
  * switch, so it is reachable too. A handler with no invoke and no invoke-target
  * sibling is genuinely unreachable from a call-site table and declines.
  */
-static gboolean
+static bool
 handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
 {
 	MonoCompile *cfg = ctx->cfg;
@@ -30,11 +30,11 @@ handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
 	MonoExceptionClause *self;
 
 	if (ctx->bblocks [bb->block_num].invoke_target)
-		return TRUE;
+		return true;
 
 	clause_index = (mono_get_block_region_notry (cfg, bb->region) >> 8) - 1;
 	if (clause_index < 0 || clause_index >= cfg->header->num_clauses)
-		return FALSE;
+		return false;
 	self = &cfg->header->clauses [clause_index];
 
 	for (j = 0; j < cfg->header->num_clauses; ++j) {
@@ -48,10 +48,10 @@ handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
 
 		other_bb = (MonoBasicBlock*)g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (j));
 		if (other_bb && ctx->bblocks [other_bb->block_num].invoke_target)
-			return TRUE;
+			return true;
 	}
 
-	return FALSE;
+	return false;
 }
 
 void
@@ -67,7 +67,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	MonoInst *ins;
 	LLVMBasicBlockRef cbb;
 	LLVMBuilderRef builder, starting_builder;
-	gboolean has_terminator;
+	bool has_terminator;
 	LLVMValueRef v;
 	LLVMValueRef lhs, rhs, arg3;
 	int nins = 0;
@@ -108,14 +108,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 
 		int i;
-		gboolean empty = TRUE;
+		bool empty = true;
 
 		/* Check that all input bblocks really branch to us */
 		for (i = 0; i < bb->in_count; ++i) {
 			if (bb->in_bb [i]->last_ins && bb->in_bb [i]->last_ins->opcode == OP_NOT_REACHED)
 				ins->inst_phi_args [i + 1] = -1;
 			else
-				empty = FALSE;
+				empty = false;
 		}
 
 		if (empty) {
@@ -172,11 +172,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			emit_volatile_store (ctx, ins->dreg);
 	}
 
-	has_terminator = FALSE;
+	has_terminator = false;
 	starting_builder = builder;
 	for (ins = bb->code; ins; ins = ins->next) {
 		const char *spec = LLVM_INS_INFO (ins->opcode);
-		char *dname = NULL;
+		char *dname = nullptr;
 		char dname_buf [128];
 
 		nins ++;
@@ -239,7 +239,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				lhs = values [ins->sreg1];
 			}
 		} else {
-			lhs = NULL;
+			lhs = nullptr;
 		}
 
 		if (spec [MONO_INST_SRC2] != ' ' && spec [MONO_INST_SRC2] != 'v') {
@@ -254,7 +254,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				rhs = values [ins->sreg2];
 			}
 		} else {
-			rhs = NULL;
+			rhs = nullptr;
 		}
 
 		if (spec [MONO_INST_SRC3] != ' ' && spec [MONO_INST_SRC3] != 'v') {
@@ -269,11 +269,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				arg3 = values [ins->sreg3];
 			}
 		} else {
-			arg3 = NULL;
+			arg3 = nullptr;
 		}
 
 		//mono_print_ins (ins);
-		gboolean skip_volatile_store = FALSE;
+		bool skip_volatile_store = false;
 		switch (ins->opcode) {
 		case OP_NOP:
 		case OP_NOT_NULL:
@@ -308,7 +308,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_BR: {
 			LLVMBasicBlockRef target_bb = get_bb (ctx, ins->inst_target_bb);
 			LLVMBuildBr (builder, target_bb);
-			has_terminator = TRUE;
+			has_terminator = true;
 			break;
 		}
 		case OP_SWITCH: {
@@ -337,7 +337,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMPositionBuilderAtEnd (new_builder, new_bb);
 			LLVMBuildUnreachable (new_builder);
 
-			has_terminator = TRUE;
+			has_terminator = true;
 			g_assert (!ins->next);
 				
 			break;
@@ -461,7 +461,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				} else {
 					LLVMBuildRet (builder, convert (ctx, lhs, type_to_llvm_type (ctx, sig->ret)));
 				}
-				has_terminator = TRUE;
+				has_terminator = true;
 				break;
 			}
 			default:
@@ -479,14 +479,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_COMPARE_IMM: {
 			CompRelation rel;
 			LLVMValueRef cmp, args [16];
-			gboolean likely = (ins->flags & MONO_INST_LIKELY) != 0;
-			gboolean unlikely = FALSE;
+			bool likely = (ins->flags & MONO_INST_LIKELY) != 0;
+			bool unlikely = false;
 
 			if (MONO_IS_COND_BRANCH_OP (ins->next)) {
 				if (ins->next->inst_false_bb->out_of_line)
-					likely = TRUE;
+					likely = true;
 				else if (ins->next->inst_true_bb->out_of_line)
-					unlikely = TRUE;
+					unlikely = true;
 			}
 
 			if (ins->next->opcode == OP_NOP)
@@ -531,7 +531,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				LLVMIntPredicate llvm_pred = cond_to_llvm_cond [rel];
 				if (LLVMGetTypeKind (LLVMTypeOf (lhs)) == LLVMPointerTypeKind && ins->inst_imm == 0) {
 					// We are emitting a NULL check for a pointer
-					gboolean nonnull = mono_llvm_is_nonnull (lhs);
+					bool nonnull = mono_llvm_is_nonnull (lhs);
 
 					if (nonnull && llvm_pred == LLVMIntEQ)
 						cmp = LLVMConstInt (LLVMInt1Type (), FALSE, FALSE);
@@ -571,7 +571,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				} else {
 					LLVMBuildCondBr (builder, cmp, get_bb (ctx, ins->next->inst_true_bb), get_bb (ctx, ins->next->inst_false_bb));
 				}
-				has_terminator = TRUE;
+				has_terminator = true;
 			} else if (MONO_IS_SETCC (ins->next)) {
 				sprintf (dname_buf, "t%d", ins->next->dreg);
 				dname = dname_buf;
@@ -580,12 +580,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				/* Add stores for volatile variables */
 				emit_volatile_store (ctx, ins->next->dreg);
 			} else if (MONO_IS_COND_EXC (ins->next)) {
-				gboolean force_explicit_branch = FALSE;
+				bool force_explicit_branch = false;
 				if (bb->region != (guint)-1) {
 					/* Don't tag null check branches in exception-handling
 					 * regions with `make.implicit`.
 					 */
-					force_explicit_branch = TRUE;
+					force_explicit_branch = true;
 				}
 				emit_cond_system_exception (ctx, bb, (const char*)ins->next->inst_p1, cmp, force_explicit_branch);
 				if (!ctx_ok (ctx))
@@ -636,7 +636,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_VPHI:
 		case OP_XPHI: {
 			// Handled above
-			skip_volatile_store = TRUE;
+			skip_volatile_store = true;
 			break;
 		}
 		case OP_MOVE:
@@ -1012,7 +1012,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_LCONV_TO_U1:
 		case OP_LCONV_TO_U2:
 		case OP_LCONV_TO_U4: {
-			gboolean sign;
+			bool sign;
 
 			sign = (ins->opcode == OP_ICONV_TO_I1) || (ins->opcode == OP_ICONV_TO_I2) || (ins->opcode == OP_ICONV_TO_I4) || (ins->opcode == OP_LCONV_TO_I1) || (ins->opcode == OP_LCONV_TO_I2);
 
@@ -1156,9 +1156,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef base, index, addr;
 			LLVMTypeRef t;
 			gboolean sext = FALSE, zext = FALSE;
-			gboolean is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
-			gboolean is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
-			gboolean is_unaligned = (ins->flags & MONO_INST_UNALIGNED) != 0;
+			bool is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
+			bool is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
+			bool is_unaligned = (ins->flags & MONO_INST_UNALIGNED) != 0;
 
 			t = load_store_to_llvm_type (ins->opcode, &size, &sext, &zext);
 
@@ -1224,9 +1224,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef index, addr, base;
 			LLVMTypeRef t;
 			gboolean sext = FALSE, zext = FALSE;
-			gboolean is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
-			gboolean is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
-			gboolean is_unaligned = (ins->flags & MONO_INST_UNALIGNED) != 0;
+			bool is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
+			bool is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
+			bool is_unaligned = (ins->flags & MONO_INST_UNALIGNED) != 0;
 
 			if (!values [ins->inst_destbasereg]) {
 				set_failure (ctx, "inst_destbasereg");
@@ -1249,7 +1249,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 			if (is_volatile && LLVMGetInstructionOpcode (base) == LLVMAlloca && !(ins->flags & MONO_INST_VOLATILE))
 				/* Storing to an alloca cannot fail */
-				is_volatile = FALSE;
+				is_volatile = false;
 			LLVMValueRef srcval = convert (ctx, values [ins->sreg1], t);
 			LLVMValueRef ptrdst = convert (ctx, addr, LLVMPointerType (t, 0));
 
@@ -1269,9 +1269,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef index, addr, base;
 			LLVMTypeRef t;
 			gboolean sext = FALSE, zext = FALSE;
-			gboolean is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
-			gboolean is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
-			gboolean is_unaligned = (ins->flags & MONO_INST_UNALIGNED) != 0;
+			bool is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
+			bool is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
+			bool is_unaligned = (ins->flags & MONO_INST_UNALIGNED) != 0;
 
 			t = load_store_to_llvm_type (ins->opcode, &size, &sext, &zext);
 
@@ -1358,7 +1358,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_NOT_REACHED:
 			LLVMBuildUnreachable (builder);
-			has_terminator = TRUE;
+			has_terminator = true;
 			g_assert (bb->block_num < cfg->max_block_num);
 			ctx->unreachable [bb->block_num] = TRUE;
 			/* Might have instructions after this */
@@ -1746,8 +1746,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			int size;
 			gboolean sext, zext;
 			LLVMTypeRef t;
-			gboolean is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
-			gboolean is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
+			bool is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
+			bool is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
 			BarrierKind barrier = (BarrierKind) ins->backend.memory_barrier_kind;
 			LLVMValueRef index, addr;
 
@@ -1788,8 +1788,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			int size;
 			gboolean sext, zext;
 			LLVMTypeRef t;
-			gboolean is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
-			gboolean is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
+			bool is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
+			bool is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
 			BarrierKind barrier = (BarrierKind) ins->backend.memory_barrier_kind;
 			LLVMValueRef index, addr, value, base;
 
@@ -1954,8 +1954,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_LOADV_MEMBASE:
 		case OP_VMOVE: {
 			MonoClass *klass = ins->klass;
-			LLVMValueRef src = NULL, dst, args [5];
-			gboolean done = FALSE;
+			LLVMValueRef src = nullptr, dst, args [5];
+			bool done = false;
 
 			if (!klass) {
 				// FIXME:
@@ -1982,7 +1982,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					g_assert (values [ins->sreg1]);
 					dst = convert (ctx, LLVMBuildAdd (builder, convert (ctx, values [ins->inst_destbasereg], IntPtrType ()), LLVMConstInt (IntPtrType (), ins->inst_offset, FALSE), ""), LLVMPointerType (type_to_llvm_type (ctx, m_class_get_byval_arg (klass)), 0));
 					LLVMBuildStore (builder, values [ins->sreg1], dst);
-					done = TRUE;
+					done = true;
 				} else {
 					src = LLVMBuildBitCast (builder, addresses [ins->sreg1]->value, LLVMPointerType (LLVMInt8Type (), 0), "");
 					dst = convert (ctx, LLVMBuildAdd (builder, convert (ctx, values [ins->inst_destbasereg], IntPtrType ()), LLVMConstInt (IntPtrType (), ins->inst_offset, FALSE), ""), LLVMPointerType (LLVMInt8Type (), 0));
@@ -2207,7 +2207,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_ORPD:
 		case OP_XORPD: {
 			LLVMTypeRef t, rt;
-			LLVMValueRef v = NULL;
+			LLVMValueRef v = nullptr;
 
 			switch (ins->opcode) {
 			case OP_ANDPS:
@@ -2362,7 +2362,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_EXTRACT_I1:
 		case OP_EXTRACT_U1: {
 			LLVMTypeRef t;
-			gboolean zext = FALSE;
+			bool zext = false;
 
 			t = simd_op_to_llvm_type (ins->opcode);
 
@@ -2377,7 +2377,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case OP_EXTRACT_U2:
 			case OP_EXTRACTX_U2:
 			case OP_EXTRACT_U1:
-				zext = TRUE;
+				zext = true;
 				break;
 			default:
 				t = LLVMInt32Type ();
@@ -2585,7 +2585,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_PSHUFLEW_LOW:
 		case OP_PSHUFLEW_HIGH: {
 			int mask [16];
-			LLVMValueRef v1 = NULL, v2 = NULL, mask_values [16];
+			LLVMValueRef v1 = nullptr, v2 = nullptr, mask_values [16];
 			int i, mask_size = 0;
 			int imask = ins->inst_c0;
 	
@@ -2669,26 +2669,26 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			int mask [16];
 			LLVMValueRef mask_values [16];
 			int i, mask_size = 0;
-			gboolean low = FALSE;
+			bool low = false;
 
 			switch (ins->opcode) {
 			case OP_UNPACK_LOWB:
 				mask_size = 16;
-				low = TRUE;
+				low = true;
 				break;
 			case OP_UNPACK_LOWW:
 				mask_size = 8;
-				low = TRUE;
+				low = true;
 				break;
 			case OP_UNPACK_LOWD:
 			case OP_UNPACK_LOWPS:
 				mask_size = 4;
-				low = TRUE;
+				low = true;
 				break;
 			case OP_UNPACK_LOWQ:
 			case OP_UNPACK_LOWPD:
 				mask_size = 2;
-				low = TRUE;
+				low = true;
 				break;
 			case OP_UNPACK_HIGHB:
 				mask_size = 16;
@@ -2904,7 +2904,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE2_MOVD:
 		case OP_SSE2_MOVQ:
 		case OP_SSE2_MOVUPD: {
-			LLVMTypeRef rty = NULL;
+			LLVMTypeRef rty = nullptr;
 			switch (ins->opcode) {
 			case OP_SSE2_MOVD: rty = sse_i4_t; break;
 			case OP_SSE2_MOVQ: rty = sse_i8_t; break;
@@ -2922,7 +2922,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE_MOVHPS_LOAD: {
 			LLVMTypeRef t = LLVMFloatType ();
 			int size = 4;
-			gboolean high = ins->opcode == OP_SSE_MOVHPS_LOAD;
+			bool high = ins->opcode == OP_SSE_MOVHPS_LOAD;
 			/* Load two floats from rhs and store them in the low/high part of lhs */
 			LLVMValueRef addr = rhs;
 			LLVMValueRef addr1 = convert (ctx, addr, LLVMPointerType (t, 0));
@@ -3092,7 +3092,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef v1 = LLVMBuildExtractElement (builder, lhs, LLVMConstInt (LLVMInt32Type (), 0, FALSE), "");
 			LLVMValueRef v2 = LLVMBuildExtractElement (builder, rhs, LLVMConstInt (LLVMInt32Type (), 0, FALSE), "");
 
-			LLVMValueRef v = NULL;
+			LLVMValueRef v = nullptr;
 			switch (ins->opcode) {
 			case OP_SSE_ADDSS:
 			case OP_SSE2_ADDSD:
@@ -3241,7 +3241,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef result = call_intrins (ctx, simd_ins_to_intrins (ins->opcode), &rhs, dname);
 			const int maskf32[] = { 0, 5, 6, 7 };
 			const int maskf64[] = { 0, 1 };
-			const int *mask = NULL;
+			const int *mask = nullptr;
 			int mask_len = 0;
 			switch (ins->opcode) {
 			case OP_SSE_SQRTSS: mask = maskf32; mask_len = 4; break;
@@ -3319,13 +3319,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_XOP_I4_X_X: {
-			gboolean to_i8_t = FALSE;
-			gboolean ret_bool = FALSE;
+			bool to_i8_t = false;
+			bool ret_bool = false;
 			IntrinsicId id = (IntrinsicId)0;
 			switch (ins->inst_c0) {
-			case SIMD_OP_SSE_TESTC:  id = INTRINS_SSE_TESTC;  to_i8_t = TRUE; ret_bool = TRUE; break;
-			case SIMD_OP_SSE_TESTZ:  id = INTRINS_SSE_TESTZ;  to_i8_t = TRUE; ret_bool = TRUE; break;
-			case SIMD_OP_SSE_TESTNZ: id = INTRINS_SSE_TESTNZ; to_i8_t = TRUE; ret_bool = TRUE; break;
+			case SIMD_OP_SSE_TESTC:  id = INTRINS_SSE_TESTC;  to_i8_t = true; ret_bool = true; break;
+			case SIMD_OP_SSE_TESTZ:  id = INTRINS_SSE_TESTZ;  to_i8_t = true; ret_bool = true; break;
+			case SIMD_OP_SSE_TESTNZ: id = INTRINS_SSE_TESTNZ; to_i8_t = true; ret_bool = true; break;
 			default: g_assert_not_reached (); break;
 			}
 			LLVMValueRef args [] = { lhs, rhs };
@@ -3432,18 +3432,18 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE2_SUBS: {
 			IntrinsicId id = (IntrinsicId)0;
 			int type = 0;
-			gboolean is_add = TRUE;
+			bool is_add = true;
 			switch (ins->opcode) {
 			case OP_PADDB_SAT: type = MONO_TYPE_I1; break;
 			case OP_PADDW_SAT: type = MONO_TYPE_I2; break;
-			case OP_PSUBB_SAT: type = MONO_TYPE_I1; is_add = FALSE; break;
-			case OP_PSUBW_SAT: type = MONO_TYPE_I2; is_add = FALSE; break;
+			case OP_PSUBB_SAT: type = MONO_TYPE_I1; is_add = false; break;
+			case OP_PSUBW_SAT: type = MONO_TYPE_I2; is_add = false; break;
 			case OP_PADDB_SAT_UN: type = MONO_TYPE_U1; break;
 			case OP_PADDW_SAT_UN: type = MONO_TYPE_U2; break;
-			case OP_PSUBB_SAT_UN: type = MONO_TYPE_U1; is_add = FALSE; break;
-			case OP_PSUBW_SAT_UN: type = MONO_TYPE_U2; is_add = FALSE; break;
+			case OP_PSUBB_SAT_UN: type = MONO_TYPE_U1; is_add = false; break;
+			case OP_PSUBW_SAT_UN: type = MONO_TYPE_U2; is_add = false; break;
 			case OP_SSE2_ADDS: type = ins->inst_c1; break;
-			case OP_SSE2_SUBS: type = ins->inst_c1; is_add = FALSE; break;
+			case OP_SSE2_SUBS: type = ins->inst_c1; is_add = false; break;
 			default: g_assert_not_reached ();
 			}
 			if (is_add) {
@@ -3498,7 +3498,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef t = sse_i1_t;
 			int nelems = 16;
 			int i;
-			gboolean shift_right = (ins->opcode == OP_SSE2_PSRLDQ);
+			bool shift_right = (ins->opcode == OP_SSE2_PSRLDQ);
 
 			value = convert (ctx, value, t);
 
@@ -3793,7 +3793,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			int mask_values [8];
 			for (int i = 0; i < nelem; i++) {
 				// n-bit in inst_c0 (control byte) is set to 1
-				gboolean bit_set = ((ins->inst_c0 & ( 1 << i )) >> i);
+				bool bit_set = ((ins->inst_c0 & ( 1 << i )) >> i);
 				mask_values [i] = i + (bit_set ? 1 : 0) * nelem;
 			}
 			
@@ -3819,7 +3819,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 
 		case OP_SSE_CVTII: {
-			gboolean is_signed = (ins->inst_c1 == MONO_TYPE_I1) || 
+			bool is_signed = (ins->inst_c1 == MONO_TYPE_I1) || 
 				(ins->inst_c1 == MONO_TYPE_I2) || (ins->inst_c1 == MONO_TYPE_I4);
 
 			LLVMTypeRef vec_type;
@@ -4060,7 +4060,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 #if defined(TARGET_X86) || defined(TARGET_AMD64)
 				LLVMValueRef args [] = { lhs, rhs };
 
-				gboolean is_r4 = ins->inst_c1 == MONO_TYPE_R4;
+				bool is_r4 = ins->inst_c1 == MONO_TYPE_R4;
 				if (ins->inst_c0 == OP_FMAX)
 					values [ins->dreg] = call_intrins (ctx, is_r4 ? INTRINS_SSE_MAXPS : INTRINS_SSE_MAXPD, args, dname);
 				else
@@ -4071,13 +4071,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				break;
 			}
 			case OP_IMAX: {
-				gboolean is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
+				bool is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
 				LLVMValueRef cmp = LLVMBuildICmp (builder, is_unsigned ? LLVMIntUGT : LLVMIntSGT, lhs, rhs, "");
 				values [ins->dreg] = LLVMBuildSelect (builder, cmp, lhs, rhs, "");
 				break;
 			}
 			case OP_IMIN: {
-				gboolean is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
+				bool is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
 				LLVMValueRef cmp = LLVMBuildICmp (builder, is_unsigned ? LLVMIntULT : LLVMIntSLT, lhs, rhs, "");
 				values [ins->dreg] = LLVMBuildSelect (builder, cmp, lhs, rhs, "");
 			}
@@ -4093,7 +4093,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_XEXTRACT_R8:
 		case OP_XEXTRACT_R4: {
 			LLVMTypeRef rhst = LLVMTypeOf (rhs);
-			LLVMValueRef mask = NULL;
+			LLVMValueRef mask = nullptr;
 			switch (ins->opcode) {
 			case OP_XEXTRACT_I32: case OP_XEXTRACT_R4:
 				mask = LLVMConstInt (rhst, 0x3, FALSE); break;
@@ -4140,8 +4140,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_MULX_H64:
 		case OP_MULX_HL32:
 		case OP_MULX_HL64: {
-			gboolean is_64 = ins->opcode == OP_MULX_H64 || ins->opcode == OP_MULX_HL64;
-			gboolean only_high = ins->opcode == OP_MULX_H32 || ins->opcode == OP_MULX_H64;
+			bool is_64 = ins->opcode == OP_MULX_H64 || ins->opcode == OP_MULX_HL64;
+			bool only_high = ins->opcode == OP_MULX_H32 || ins->opcode == OP_MULX_H64;
 			LLVMValueRef lx = LLVMBuildZExt (ctx->builder, lhs, LLVMInt128Type (), "");
 			LLVMValueRef rx = LLVMBuildZExt (ctx->builder, rhs, LLVMInt128Type (), "");
 			LLVMValueRef mulx = LLVMBuildMul (ctx->builder, lx, rx, "");
@@ -4201,15 +4201,15 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_XOP_I4_I4_I4:
 		case OP_XOP_I4_I4_I8: {
 			IntrinsicId id = (IntrinsicId)0;
-			gboolean zext_last = FALSE;
+			bool zext_last = false;
 			switch (ins->inst_c0) {
-			case SIMD_OP_ARM64_CRC32B: id = INTRINS_AARCH64_CRC32B; zext_last = TRUE; break;
-			case SIMD_OP_ARM64_CRC32H: id = INTRINS_AARCH64_CRC32H; zext_last = TRUE; break;
-			case SIMD_OP_ARM64_CRC32W: id = INTRINS_AARCH64_CRC32W; zext_last = TRUE; break;
+			case SIMD_OP_ARM64_CRC32B: id = INTRINS_AARCH64_CRC32B; zext_last = true; break;
+			case SIMD_OP_ARM64_CRC32H: id = INTRINS_AARCH64_CRC32H; zext_last = true; break;
+			case SIMD_OP_ARM64_CRC32W: id = INTRINS_AARCH64_CRC32W; zext_last = true; break;
 			case SIMD_OP_ARM64_CRC32X: id = INTRINS_AARCH64_CRC32X; break;
-			case SIMD_OP_ARM64_CRC32CB: id = INTRINS_AARCH64_CRC32CB; zext_last = TRUE; break;
-			case SIMD_OP_ARM64_CRC32CH: id = INTRINS_AARCH64_CRC32CH; zext_last = TRUE; break;
-			case SIMD_OP_ARM64_CRC32CW: id = INTRINS_AARCH64_CRC32CW; zext_last = TRUE; break;
+			case SIMD_OP_ARM64_CRC32CB: id = INTRINS_AARCH64_CRC32CB; zext_last = true; break;
+			case SIMD_OP_ARM64_CRC32CH: id = INTRINS_AARCH64_CRC32CH; zext_last = true; break;
+			case SIMD_OP_ARM64_CRC32CW: id = INTRINS_AARCH64_CRC32CW; zext_last = true; break;
 			case SIMD_OP_ARM64_CRC32CX: id = INTRINS_AARCH64_CRC32CX; break;
 			case SIMD_OP_ARM64_SHA1SU1: id = INTRINS_AARCH64_SHA1SU1; break;
 			case SIMD_OP_ARM64_SHA256SU0: id = INTRINS_AARCH64_SHA256SU0; break;
@@ -4305,7 +4305,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		case OP_THROW:
 		case OP_RETHROW: {
-			gboolean rethrow = (ins->opcode == OP_RETHROW);
+			bool rethrow = (ins->opcode == OP_RETHROW);
 			emit_throw (ctx, bb, rethrow, lhs);
 			builder = ctx->builder;
 			break;
@@ -4349,7 +4349,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef val, switch_ins, callee;
 			GSList *bb_list;
 			BBInfo *info;
-			gboolean is_fault = MONO_REGION_FLAGS (bb->region) == MONO_EXCEPTION_CLAUSE_FAULT;
+			bool is_fault = MONO_REGION_FLAGS (bb->region) == MONO_EXCEPTION_CLAUSE_FAULT;
 
 			/*
 			 * Fault clauses are like finally clauses, but they are only called if an exception is thrown.
@@ -4390,7 +4390,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				LLVMBuildUnreachable (builder);
 			}
 
-			has_terminator = TRUE;
+			has_terminator = true;
 			break;
 		}
 		case OP_IL_SEQ_POINT:

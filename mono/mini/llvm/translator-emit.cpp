@@ -27,7 +27,7 @@ get_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	char bb_name_buf [128];
 	char *bb_name;
 
-	if (ctx->bblocks [bb->block_num].bblock == NULL) {
+	if (ctx->bblocks [bb->block_num].bblock == nullptr) {
 		if (bb->flags & BB_EXCEPTION_HANDLER) {
 			int clause_index = (mono_get_block_region_notry (ctx->cfg, bb->region) >> 8) - 1;
 			sprintf (bb_name_buf, "EH_CLAUSE%d_BB%d", clause_index, bb->block_num);
@@ -113,15 +113,15 @@ convert_full (EmitContext *ctx, LLVMValueRef v, LLVMTypeRef dtype, gboolean is_u
 	LLVMTypeRef stype = LLVMTypeOf (v);
 
 	if (stype != dtype) {
-		gboolean ext = FALSE;
+		bool ext = false;
 
 		/* Extend */
 		if (dtype == LLVMInt64Type () && (stype == LLVMInt32Type () || stype == LLVMInt16Type () || stype == LLVMInt8Type ()))
-			ext = TRUE;
+			ext = true;
 		else if (dtype == LLVMInt32Type () && (stype == LLVMInt16Type () || stype == LLVMInt8Type ()))
-			ext = TRUE;
+			ext = true;
 		else if (dtype == LLVMInt16Type () && (stype == LLVMInt8Type ()))
-			ext = TRUE;
+			ext = true;
 
 		if (ext)
 			return is_unsigned ? LLVMBuildZExt (ctx->builder, v, dtype, "") : LLVMBuildSExt (ctx->builder, v, dtype, "");
@@ -160,7 +160,7 @@ convert_full (EmitContext *ctx, LLVMValueRef v, LLVMTypeRef dtype, gboolean is_u
 		mono_llvm_dump_type (dtype);
 		printf ("\n");
 		g_assert_not_reached ();
-		return NULL;
+		return nullptr;
 	} else {
 		return v;
 	}
@@ -241,14 +241,14 @@ static LLVMTypeRef
 sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
 {
 	LLVMTypeRef ret_type;
-	LLVMTypeRef *param_types = NULL;
+	LLVMTypeRef *param_types = nullptr;
 	LLVMTypeRef res;
 	int i, pindex;
 	MonoType *rtype;
 
 	ret_type = type_to_llvm_type (ctx, sig->ret);
 	if (!ctx_ok (ctx))
-		return NULL;
+		return nullptr;
 	rtype = mini_get_underlying_type (sig->ret);
 
 	param_types = g_new0 (LLVMTypeRef, (sig->param_count * 8) + 3);
@@ -261,7 +261,7 @@ sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
 
 	if (!ctx_ok (ctx)) {
 		g_free (param_types);
-		return NULL;
+		return nullptr;
 	}
 
 	res = LLVMFunctionType (ret_type, param_types, pindex, FALSE);
@@ -280,10 +280,10 @@ LLVMTypeRef
 sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *cinfo)
 {
 	LLVMTypeRef ret_type;
-	LLVMTypeRef *param_types = NULL;
+	LLVMTypeRef *param_types = nullptr;
 	LLVMTypeRef res;
 	int i, j, pindex, vret_arg_pindex = 0;
-	gboolean vretaddr = FALSE;
+	bool vretaddr = false;
 	MonoType *rtype;
 
 	if (!cinfo)
@@ -291,7 +291,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 
 	ret_type = type_to_llvm_type (ctx, sig->ret);
 	if (!ctx_ok (ctx))
-		return NULL;
+		return nullptr;
 	rtype = mini_get_underlying_type (sig->ret);
 
 	switch (cinfo->ret.storage) {
@@ -351,7 +351,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 	case LLVMArgGsharedvtFixed:
 	case LLVMArgGsharedvtFixedVtype:
 	case LLVMArgGsharedvtVariable:
-		vretaddr = TRUE;
+		vretaddr = true;
 		ret_type = LLVMVoidType ();
 		break;
 	default:
@@ -370,7 +370,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 		param_types [pindex] = type_to_llvm_arg_type (ctx, sig->ret);
 		if (!ctx_ok (ctx)) {
 			g_free (param_types);
-			return NULL;
+			return nullptr;
 		}
 		param_types [pindex] = LLVMPointerType (param_types [pindex], 0);
 		pindex ++;
@@ -485,7 +485,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 	}
 	if (!ctx_ok (ctx)) {
 		g_free (param_types);
-		return NULL;
+		return nullptr;
 	}
 	if (vretaddr && vret_arg_pindex == pindex)
 		param_types [pindex ++] = IntPtrType ();
@@ -811,7 +811,7 @@ LLVMValueRef
 emit_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, LLVMTypeRef sig, LLVMValueRef callee, LLVMValueRef *args, int pindex)
 {
 	MonoCompile *cfg = ctx->cfg;
-	LLVMValueRef lcall = NULL;
+	LLVMValueRef lcall = nullptr;
 	LLVMBuilderRef builder = *builder_ref;
 	{
 		int clause_index = get_handler_clause (cfg, bb);
@@ -901,17 +901,17 @@ emit_store (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref, i
 void
 emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *exc_type, LLVMValueRef cmp, gboolean force_explicit)
 {
-	LLVMBasicBlockRef ex_bb, ex2_bb = NULL, noex_bb;
+	LLVMBasicBlockRef ex_bb, ex2_bb = nullptr, noex_bb;
 	LLVMBuilderRef builder;
 	MonoClass *exc_class;
 	LLVMValueRef args [2];
 	LLVMValueRef callee;
-	gboolean no_pc = FALSE;
+	bool no_pc = false;
 	static MonoClass *exc_classes [MONO_EXC_INTRINS_NUM];
 
 	if (IS_TARGET_AMD64)
 		/* Some platforms don't require the pc argument */
-		no_pc = TRUE;
+		no_pc = true;
 
 	int exc_id = mini_exception_id_by_name (exc_type);
 	if (!exc_classes [exc_id])
@@ -1268,7 +1268,7 @@ emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitI
 void
 emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompile *cfg)
 {
-	gboolean is_aot = cfg == NULL || cfg->compile_aot;
+	bool is_aot = cfg == nullptr || cfg->compile_aot;
 	LLVMValueRef func = mono_llvm_get_or_insert_gc_safepoint_poll (lmodule);
 	mono_llvm_add_func_attr (func, LLVM_ATTR_NO_UNWIND);
 	if (is_aot) {

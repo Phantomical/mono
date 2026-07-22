@@ -134,12 +134,12 @@ simd_class_to_llvm_type (EmitContext *ctx, MonoClass *klass)
 			return LLVMVectorType (LLVMDoubleType (), size / 8);
 		default:
 			g_assert_not_reached ();
-			return NULL;
+			return nullptr;
 		}
 	} else {
 		printf ("%s\n", klass_name);
 		NOT_IMPLEMENTED;
-		return NULL;
+		return nullptr;
 	}
 }
 
@@ -166,7 +166,7 @@ type_to_sse_type (int type)
 		return LLVMVectorType (LLVMFloatType (), 4);
 	default:
 		g_assert_not_reached ();
-		return NULL;
+		return nullptr;
 	}
 }
 
@@ -234,7 +234,7 @@ primitive_type_to_llvm_type (MonoTypeEnum type)
 	case MONO_TYPE_U:
 		return IntPtrType ();
 	default:
-		return NULL;
+		return nullptr;
 	}
 }
 
@@ -258,7 +258,7 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 	t = mini_get_underlying_type (t);
 
 	LLVMTypeRef prim_llvm_type = primitive_type_to_llvm_type (t->type);
-	if (prim_llvm_type != NULL)
+	if (prim_llvm_type != nullptr)
 		return prim_llvm_type;
 
 	switch (t->type) {
@@ -319,11 +319,11 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 		printf ("X: %d\n", t->type);
 		ctx->cfg->exception_message = g_strdup_printf ("type %s", mono_type_full_name (t));
 		ctx->cfg->disable_llvm = TRUE;
-		return NULL;
+		return nullptr;
 	}
 }
 
-gboolean
+bool
 primitive_type_is_unsigned (MonoTypeEnum t)
 {
 	switch (t) {
@@ -332,9 +332,9 @@ primitive_type_is_unsigned (MonoTypeEnum t)
 	case MONO_TYPE_CHAR:
 	case MONO_TYPE_U4:
 	case MONO_TYPE_U8:
-		return TRUE;
+		return true;
 	default:
-		return FALSE;
+		return false;
 	}
 }
 
@@ -343,12 +343,12 @@ primitive_type_is_unsigned (MonoTypeEnum t)
  *
  *   Return whenever T is an unsigned int type.
  */
-gboolean
+bool
 type_is_unsigned (EmitContext *ctx, MonoType *t)
 {
 	t = mini_get_underlying_type (t);
 	if (t->byref)
-		return FALSE;
+		return false;
 	return primitive_type_is_unsigned (t->type);
 }
 
@@ -388,8 +388,8 @@ type_to_llvm_arg_type (EmitContext *ctx, MonoType *t)
 G_GNUC_UNUSED LLVMTypeRef
 llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type)
 {
-	if (type == NULL)
-		return NULL;
+	if (type == nullptr)
+		return nullptr;
 	if (type == LLVMInt8Type ())
 		return LLVMInt32Type ();
 	else if (type == LLVMInt16Type ())
@@ -417,7 +417,7 @@ regtype_to_llvm_type (char c)
 	case 'f':
 		return LLVMDoubleType ();
 	default:
-		return NULL;
+		return nullptr;
 	}
 }
 
@@ -496,7 +496,7 @@ op_to_llvm_type (int opcode)
 	default:
 		printf ("%s\n", mono_inst_name (opcode));
 		g_assert_not_reached ();
-		return NULL;
+		return nullptr;
 	}
 }		
 
@@ -588,7 +588,7 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 		return IntPtrType ();
 	default:
 		g_assert_not_reached ();
-		return NULL;
+		return nullptr;
 	}
 }
 
@@ -771,10 +771,10 @@ simd_op_to_llvm_type (int opcode)
 		return sse_r8_t;
 	default:
 		g_assert_not_reached ();
-		return NULL;
+		return nullptr;
 	}
 #else
-	return NULL;
+	return nullptr;
 #endif
 }
 

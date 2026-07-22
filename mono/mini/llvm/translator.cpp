@@ -105,9 +105,9 @@ void set_invariant_load_flag (LLVMValueRef v);
  *   MONO_LLVM_METHOD='LlvmExec:Compute' mono --llvm test.exe
  */
 static char **llvm_method_filter_names;
-static gboolean llvm_method_filter_inited;
+static bool llvm_method_filter_inited;
 
-static gboolean
+static bool
 llvm_method_filter_excludes (MonoMethod *method)
 {
 	int i;
@@ -119,32 +119,32 @@ llvm_method_filter_excludes (MonoMethod *method)
 	 */
 	if (!llvm_method_filter_inited) {
 		char *env = g_getenv ("MONO_LLVM_METHOD");
-		if (env != NULL)
+		if (env != nullptr)
 			llvm_method_filter_names = g_strsplit (env, ";", -1);
-		llvm_method_filter_inited = TRUE;
+		llvm_method_filter_inited = true;
 	}
 
 	if (!llvm_method_filter_names)
-		return FALSE;
+		return false;
 
-	for (i = 0; llvm_method_filter_names [i] != NULL; i++) {
+	for (i = 0; llvm_method_filter_names [i] != nullptr; i++) {
 		const char *name = llvm_method_filter_names [i];
 
 		if ((strchr (name, '.') > name) || strchr (name, ':')) {
 			MonoMethodDesc *desc = mono_method_desc_new (name, TRUE);
 			if (desc) {
-				gboolean match = mono_method_desc_full_match (desc, method);
+				bool match = mono_method_desc_full_match (desc, method);
 				mono_method_desc_free (desc);
 				if (match)
-					return FALSE;
+					return false;
 			}
 		} else {
 			if (strcmp (method->name, name) == 0)
-				return FALSE;
+				return false;
 		}
 	}
 
-	return TRUE;
+	return true;
 }
 
 /*
@@ -230,7 +230,7 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 			MonoExceptionClause *clause1 = &cfg->header->clauses [i];
 			MonoExceptionClause *clause2 = &cfg->header->clauses [j];
 
-			gboolean siblings = clause1->try_offset == clause2->try_offset &&
+			bool siblings = clause1->try_offset == clause2->try_offset &&
 			                    clause1->try_len == clause2->try_len;
 
 			if (i != j && !siblings && clause1->try_offset >= clause2->try_offset && clause1->handler_offset <= clause2->handler_offset) {
@@ -369,7 +369,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 
 			for (i = 0; i < (int)ctx->phi_values->len; ++i) {
 				LLVMValueRef v = (LLVMValueRef)g_ptr_array_index (ctx->phi_values, i);
-				if (LLVMGetInstructionParent (v) == NULL)
+				if (LLVMGetInstructionParent (v) == nullptr)
 					LLVMInsertIntoBuilder (builder, v);
 			}
 
@@ -389,7 +389,7 @@ emit_method_inner (EmitContext *ctx)
 	MonoMethodSignature *sig;
 	MonoBasicBlock *bb;
 	LLVMTypeRef method_type;
-	LLVMValueRef method = NULL;
+	LLVMValueRef method = nullptr;
 	LLVMValueRef *values = ctx->values;
 	int i, max_block_num;
 	/* Indexes cfg->bblocks (guint num_bblocks) and bblock_list (guint len) */
@@ -401,8 +401,8 @@ emit_method_inner (EmitContext *ctx)
 	MonoMethodHeader *header;
 	MonoExceptionClause *clause;
 	char **names;
-	LLVMBuilderRef entry_builder = NULL;
-	LLVMBasicBlockRef entry_bb = NULL;
+	LLVMBuilderRef entry_builder = nullptr;
+	LLVMBasicBlockRef entry_bb = nullptr;
 
 	if (cfg->gsharedvt) {
 		set_failure (ctx, "gsharedvt");
@@ -474,12 +474,12 @@ emit_method_inner (EmitContext *ctx)
 	 *  (1) a call (so it's a leaf method)
 	 *  (2) and no loops
 	 * we can skip the GC safepoint on method entry. */
-	gboolean requires_safepoint;
+	bool requires_safepoint;
 	requires_safepoint = cfg->has_calls;
 	if (!requires_safepoint) {
 		for (bb = cfg->bb_entry->next_bb; bb; bb = bb->next_bb) {
 			if (bb->loop_body_start || (bb->flags & BB_EXCEPTION_HANDLER)) {
-				requires_safepoint = TRUE;
+				requires_safepoint = true;
 			}
 		}
 	}
@@ -492,7 +492,7 @@ emit_method_inner (EmitContext *ctx)
 		case WRAPPER_SUBTYPE_GSHAREDVT_IN_SIG:
 		case WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG:
 			/* Arguments are not used after the call */
-			requires_safepoint = FALSE;
+			requires_safepoint = false;
 			break;
 		default:
 			break;
@@ -650,7 +650,7 @@ emit_method_inner (EmitContext *ctx)
 			case OP_VPHI:
 			case OP_XPHI: {
 				LLVMTypeRef phi_type = llvm_type_to_stack_type (cfg, type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass)));
-				LLVMTypeRef phi_etype = NULL;
+				LLVMTypeRef phi_etype = nullptr;
 
 				if (!ctx_ok (ctx))
 					return;
@@ -823,7 +823,7 @@ emit_method_inner (EmitContext *ctx)
 			if (LLVMCountIncoming (phi_ins) == 0) {
 				mono_llvm_replace_uses_of (phi_ins, LLVMConstNull (LLVMTypeOf (phi_ins)));
 				LLVMInstructionEraseFromParent (phi_ins);
-				values [phi->dreg] = NULL;
+				values [phi->dreg] = nullptr;
 			}
 		}
 	}
@@ -1276,14 +1276,14 @@ read_le32 (const guint8 *p)
  *
  * Stackmap format is version 3 (LLVM's StackMapParser layout), little-endian.
  */
-static gboolean
+static bool
 recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 {
 	/* StackMap location kinds (llvm/CodeGen/StackMaps.h). */
 	enum { LOC_REGISTER = 1, LOC_DIRECT = 2, LOC_INDIRECT = 3, LOC_CONSTANT = 4, LOC_CONST_INDEX = 5 };
 
 	if (!stackmaps || size < 16)
-		return FALSE;
+		return false;
 
 	/*
 	 * A gshared reference-type instance default-interface-method with
@@ -1296,33 +1296,33 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 	 */
 	if (!cfg->rgctx_var && mini_method_is_default_method (cfg->method)) {
 		TRACE_FAILURE_CFG (cfg, "gshared default-interface-method this-slot would be misread as mrgctx");
-		return FALSE;
+		return false;
 	}
 
 	guint8 version = stackmaps [0];
 	if (version != 3)
-		return FALSE;
+		return false;
 
 	guint32 num_functions = read_le32 (stackmaps + 4);
 	guint32 num_constants = read_le32 (stackmaps + 8);
 	guint32 num_records = read_le32 (stackmaps + 12);
 	if (num_records == 0)
-		return FALSE;
+		return false;
 
 	/* Header (16) + StkSizeRecord[num_functions] (24 each) + Constants (8 each). */
 	guint64 rec_off = (guint64)16 + (guint64)num_functions * 24 + (guint64)num_constants * 8;
 	/* First record: u64 id, u32 instr_offset, u16 pad, u16 num_locations, then locations. */
 	if (rec_off + 16 > size)
-		return FALSE;
+		return false;
 	guint8 *rec = stackmaps + rec_off;
 
 	guint16 num_locations = read_le16 (rec + 14);
 	if (num_locations == 0)
-		return FALSE;
+		return false;
 
 	/* Location[0]: u8 kind, u8 reserved, u16 size, u16 dwarf_reg, u16 reserved, i32 offset. */
 	if (rec_off + 16 + 12 > size)
-		return FALSE;
+		return false;
 	guint8 *loc = rec + 16;
 	guint8 kind = loc [0];
 	guint16 dwarf_reg = read_le16 (loc + 4);
@@ -1330,7 +1330,7 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 
 	if (kind != LOC_DIRECT) {
 		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap not Direct");
-		return FALSE;
+		return false;
 	}
 
 	/*
@@ -1341,12 +1341,12 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 	 */
 	if (!mono_dwarf_reg_is_valid (dwarf_reg)) {
 		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap dwarf reg out of range");
-		return FALSE;
+		return false;
 	}
 
 	cfg->llvm_this_reg = mono_dwarf_reg_to_hw_reg (dwarf_reg);
 	cfg->llvm_this_offset = offset;
-	return TRUE;
+	return true;
 }
 
 static void
@@ -1377,19 +1377,19 @@ llvm_jit_finalize_method (EmitContext *ctx)
 
 	mono_codeman_enable_write ();
 	guint32 llvm_code_size = 0;
-	gpointer dwarf_eh_frame = NULL;
+	gpointer dwarf_eh_frame = nullptr;
 	guint32 dwarf_eh_frame_size = 0;
-	gpointer stackmaps = NULL;
+	gpointer stackmaps = nullptr;
 	guint32 stackmaps_size = 0;
 	/* The Itanium `.gcc_except_table` LLVM still emits is captured but deliberately
 	 * ignored: the custom-emit path builds cfg->llvm_ex_info from `.mono_lsda`
 	 * instead (plan 12). Kept plumbed for a future debug cross-check. */
-	gpointer gcc_except_table = NULL;
+	gpointer gcc_except_table = nullptr;
 	guint32 gcc_except_table_size = 0;
 	/* C3 captures the `.mono_lsda` section (mono's own target-neutral clause
 	 * table); the reader below (C6) parses/publishes it into cfg->llvm_ex_info for
 	 * every admitted clause-bearing method. */
-	gpointer mono_lsda = NULL;
+	gpointer mono_lsda = nullptr;
 	guint32 mono_lsda_size = 0;
 	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size);
 	/* The redundant Itanium `.gcc_except_table` LLVM still emits is ignored - the
@@ -1438,7 +1438,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	g_assert (cfg->code_len > 0);
 
 	{
-		GSList *unwind_ops = NULL;
+		GSList *unwind_ops = nullptr;
 
 		if (!mono_llvm_eh_frame_to_unwind_ops ((guint8*)dwarf_eh_frame, dwarf_eh_frame_size,
 						       cfg->native_code, cfg->code_len, &unwind_ops)) {
