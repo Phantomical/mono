@@ -105,6 +105,14 @@ struct ObjectInfo {
 	 * eh_frame, captured by the same section-name loop.
 	 */
 	EhFrameInfo stackmaps;
+	/*
+	 * The loaded `.gcc_except_table` (Itanium LSDA) section, or {nullptr,0} if the
+	 * module emitted none. Present only for a method LLVM gave a personalityFn and
+	 * an invoke/landingpad; the EH port (M2) decodes it via
+	 * mono::decode_gcc_except_table into the method's MonoJitExceptionInfo[]. Same
+	 * {addr,size} shape as eh_frame, captured by the same section-name loop.
+	 */
+	EhFrameInfo gcc_except_table;
 };
 
 /* ---- relocation audit ----------------------------------------------------
@@ -376,6 +384,7 @@ capture_object_info (orc::MaterializationResponsibility &r, const object::Object
 
 	info.eh_frame = capture_named_section (".eh_frame");
 	info.stackmaps = capture_named_section (".llvm_stackmaps");
+	info.gcc_except_table = capture_named_section (".gcc_except_table");
 
 	std::lock_guard<std::mutex> lock (g_object_info_mutex);
 	g_object_info[r.getTargetJITDylib ().getName ()] = std::move (info);
@@ -900,6 +909,7 @@ MonoLLVMJIT::compile (Function *entry,
 				result.code_size = size_it->second;
 			result.eh_frame = info.eh_frame;
 			result.stackmaps = info.stackmaps;
+			result.gcc_except_table = info.gcc_except_table;
 			g_object_info.erase (entry_it);
 		}
 	}
@@ -997,7 +1007,8 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
                           int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs,
                           gpointer *eh_frame, guint32 *code_size_out,
                           gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out,
-                          gpointer *stackmaps_out, guint32 *stackmaps_size_out)
+                          gpointer *stackmaps_out, guint32 *stackmaps_size_out,
+                          gpointer *gcc_except_table_out, guint32 *gcc_except_table_size_out)
 {
 	(void) mono_ee;
 
@@ -1035,6 +1046,10 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 		*stackmaps_out = (gpointer) res.stackmaps.addr;
 	if (stackmaps_size_out)
 		*stackmaps_size_out = (guint32) res.stackmaps.size;
+	if (gcc_except_table_out)
+		*gcc_except_table_out = (gpointer) res.gcc_except_table.addr;
+	if (gcc_except_table_size_out)
+		*gcc_except_table_size_out = (guint32) res.gcc_except_table.size;
 
 	return (gpointer) (gsize) res.entry;
 }

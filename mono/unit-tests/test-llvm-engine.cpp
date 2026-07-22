@@ -63,9 +63,11 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
@@ -74,6 +76,7 @@
 #include <llvm/TargetParser/Triple.h>
 
 #include "mini/llvm/engine.hpp"
+#include "mini/llvm/lsda.hpp"
 
 using namespace llvm;
 using mono::MonoLLVMJIT;
@@ -397,6 +400,298 @@ test_reloc_widths (MonoLLVMJIT *jit)
 	return TEST_PASS;
 }
 
+/* ------------------------------------------------ .gcc_except_table (EH) */
+
+/*
+ * The external callee an EH probe invokes. Declared external and NOT nounwind so
+ * neither the optimizer nor ISel may delete the invoke that wraps it - which is
+ * what keeps the landingpad, and therefore the .gcc_except_table, alive. At
+ * runtime it simply returns; the probe never actually throws, so the landingpad
+ * block is emitted (for the table) but never entered.
+ */
+static void
+eh_may_throw_impl (void)
+{
+}
+
+static const char EH_MAY_THROW_NAME[] = "mono$selftest$eh$may_throw";
+
+/*
+ * Build, in `m`, a minimal function with exception handling that MIRRORS the
+ * shape emit_handler_start() produces in the translator (translator-call.cpp):
+ *
+ *   - a call wrapped in an `invoke` with a `landingpad { ptr, i32 }`;
+ *   - one `catch` clause referencing a `type_info_0` global (an i32 global whose
+ *     value is the IL clause index - the "clause-index smuggling" trick);
+ *   - if `with_personality`, the function carries `mono_personality` (an
+ *     `i32 (...)` nounwind function returning 0, exactly as
+ *     translator-call.cpp:948-958 defines it) via setPersonalityFn.
+ *
+ * Returns the entry function. `i64 eh_probe(void)` returns 1 on the normal path
+ * (may_throw returned) and 2 on the landing pad (never reached at runtime).
+ */
+static Function *
+build_eh_module (Module &m, bool with_personality)
+{
+	LLVMContext &ctx = m.getContext ();
+	Type *i32 = Type::getInt32Ty (ctx);
+	Type *i64 = Type::getInt64Ty (ctx);
+	PointerType *ptr = PointerType::getUnqual (ctx);
+
+	/* External, possibly-unwinding callee the invoke wraps. */
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (ctx), false);
+	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                     EH_MAY_THROW_NAME, &m);
+
+	/*
+	 * type_info_0: the clause-index-smuggling global. The translator emits this
+	 * with LLVMAddGlobal (external linkage) initialised to the IL clause index;
+	 * mirror that. Clause index 0 here.
+	 */
+	auto *type_info = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
+	                                      ConstantInt::get (i32, 0), "type_info_0");
+
+	FunctionType *fty = FunctionType::get (i64, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_probe", &m);
+
+	if (with_personality) {
+		/* Mirror translator-call.cpp:948-958: i32 (...) nounwind, returns 0. */
+		FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+		Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+		                                   "mono_personality", &m);
+		pers->addFnAttr (Attribute::NoUnwind);
+		BasicBlock *pbb = BasicBlock::Create (ctx, "ENTRY", pers);
+		IRBuilder<> pb (pbb);
+		pb.CreateRet (ConstantInt::get (i32, 0));
+		fn->setPersonalityFn (pers);
+	}
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *cont = BasicBlock::Create (ctx, "cont", fn);
+	BasicBlock *lpad = BasicBlock::Create (ctx, "lpad", fn);
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont, lpad, {});
+
+	IRBuilder<> cb (cont);
+	cb.CreateRet (ConstantInt::get (i64, 1));
+
+	IRBuilder<> lb (lpad);
+	StructType *lp_ty = StructType::get (ptr, i32);
+	LandingPadInst *lp = lb.CreateLandingPad (lp_ty, 1);
+	lp->addClause (type_info); /* one catch clause -> the type_info global */
+	lb.CreateRet (ConstantInt::get (i64, 2));
+
+	return fn;
+}
+
+/*
+ * Emit `m` through a target machine IDENTICAL to the engine's (host CPU, O3,
+ * LLVM's default JIT code model - Large on x86-64), the same path
+ * MonoLLVMJIT::compile drives, and return the object bytes. Used to (a) inspect
+ * for a `.gcc_except_table` section and (b) run the relocation audit over the
+ * EH-bearing object under the engine's effective code model (R5).
+ */
+static Expected<std::unique_ptr<MemoryBuffer>>
+emit_object_engine_model (Module &m)
+{
+	auto jtmb = mono::host_target_machine_builder ();
+	auto tm = jtmb.createTargetMachine ();
+	if (!tm)
+		return tm.takeError ();
+	m.setDataLayout ((*tm)->createDataLayout ());
+
+	auto buf = std::make_shared<SmallVector<char, 0>> ();
+	{
+		raw_svector_ostream os (*buf);
+		legacy::PassManager pm;
+		if ((*tm)->addPassesToEmitFile (pm, os, nullptr, CodeGenFileType::ObjectFile))
+			return createStringError (inconvertibleErrorCode (),
+			                          "target cannot emit an object file");
+		pm.run (m);
+	}
+	return MemoryBuffer::getMemBufferCopy (StringRef (buf->data (), buf->size ()), "eh.o");
+}
+
+/* True iff the emitted object carries a non-empty `.gcc_except_table` section. */
+static Expected<bool>
+object_has_gcc_except_table (MemoryBuffer &buf)
+{
+	auto obj = object::ObjectFile::createObjectFile (buf.getMemBufferRef ());
+	if (!obj)
+		return obj.takeError ();
+	for (const object::SectionRef &sec : (*obj)->sections ()) {
+		Expected<StringRef> name = sec.getName ();
+		if (!name) {
+			consumeError (name.takeError ());
+			continue;
+		}
+		if (*name == ".gcc_except_table")
+			return sec.getSize () > 0;
+	}
+	return false;
+}
+
+/*
+ * Plumbing test for M2.1, and the R1 / R5 / M1-decode diagnostics the plan
+ * (09-eh-m2-plan.md 8) asks to resolve as a by-product.
+ *
+ * R1: does LLVM 18 emit `.gcc_except_table` only when the function carries a
+ *     personalityFn? Emit the same EH module both ways and compare.
+ * Plumbing: with a personality, drive the module through the REAL engine and
+ *     assert MonoLLVMJIT::compile captures a non-empty .gcc_except_table into
+ *     CompileResult (the M2.1 out-param path).
+ * M1-decode: feed the captured bytes to mono::decode_gcc_except_table - a smoke
+ *     check that real LLVM-18 output flows through the M1 decoder.
+ * R5: run the relocation audit over the EH object under the engine's effective
+ *     (Large) code model and report any truncating relocation (gates M2.4).
+ */
+static TestResult
+test_gcc_except_table (MonoLLVMJIT *jit)
+{
+	Triple host (sys::getProcessTriple ());
+	bool x86_64_elf = host.getArch () == Triple::x86_64 && host.isOSBinFormatELF ();
+
+	/* ---- R1: is a personalityFn required for the table / for codegen? ----
+	 *
+	 * The no-personality module cannot be codegen'd to probe for a table: an
+	 * invoke/landingpad without a personality is INVALID IR - the verifier rejects
+	 * it, and in this no-asserts LLVM build the SelectionDAG backend segfaults in
+	 * lowerEndEH() dereferencing the (null) personality. So R1 is answered by the
+	 * authority the plan cites (07 8/R1): the IR verifier. Without a personalityFn
+	 * the module is BROKEN; with one it verifies and LLVM emits .gcc_except_table.
+	 */
+	bool broken_without_pers = false, broken_with_pers = false, table_with_pers = false;
+	{
+		LLVMContext c1;
+		Module m_no ("selftest.eh.nopers", c1);
+		build_eh_module (m_no, /*with_personality*/ false);
+		broken_without_pers = verifyModule (m_no); /* true == broken */
+
+		LLVMContext c2;
+		Module m_yes ("selftest.eh.pers", c2);
+		build_eh_module (m_yes, /*with_personality*/ true);
+		broken_with_pers = verifyModule (m_yes);
+
+		auto obj_yes = emit_object_engine_model (m_yes);
+		if (!obj_yes) {
+			printf ("     R1 (with personality) emit failed: %s\n",
+			        toString (obj_yes.takeError ()).c_str ());
+			return TEST_FAIL;
+		}
+		auto has_yes = object_has_gcc_except_table (**obj_yes);
+		if (!has_yes) {
+			printf ("     R1 (with personality) inspect failed: %s\n",
+			        toString (has_yes.takeError ()).c_str ());
+			return TEST_FAIL;
+		}
+		table_with_pers = *has_yes;
+
+		printf ("     R1: invoke/landingpad WITHOUT personalityFn -> module %s; "
+		        "WITH personalityFn -> module %s and .gcc_except_table emitted=%s\n",
+		        broken_without_pers ? "REJECTED by verifier" : "accepted (!)",
+		        broken_with_pers ? "REJECTED (!)" : "verifies",
+		        table_with_pers ? "YES" : "no");
+
+		/*
+		 * Lock the observed R1 answer in: a personalityFn is REQUIRED (the module
+		 * is invalid without it), and with it LLVM emits the table. This is what
+		 * makes M2.2's LLVMSetPersonalityFn wiring load-bearing.
+		 */
+		CHECK (broken_without_pers);
+		CHECK (!broken_with_pers);
+		CHECK (table_with_pers);
+	}
+
+	/* ---- Plumbing: capture through the REAL engine (the M2.1 path) ---- */
+	jit->register_symbol (EH_MAY_THROW_NAME, (void *) &eh_may_throw_impl);
+
+	LLVMContext &ectx = jit->context ();
+	auto emod = std::make_unique<Module> ("selftest.eh.engine", ectx);
+	Function *efn = build_eh_module (*emod, /*with_personality*/ true);
+
+	mono::CompileResult res = jit->compile (efn, {}, nullptr, "");
+	CHECK (res.entry != 0);
+	CHECK (res.code_size > 0);
+	/* The whole point of M2.1: the section address+size reach the caller. */
+	CHECK (res.gcc_except_table.addr != nullptr);
+	CHECK (res.gcc_except_table.size > 0);
+
+	/* The normal path runs (may_throw returns); landing pad is never entered. */
+	auto compiled = reinterpret_cast<int64_t (*) (void)> (res.entry);
+	CHECK (compiled () == 1);
+
+	/* ---- M1-decode smoke check on the captured bytes ---- */
+	{
+		mono::ParsedLsda parsed;
+		bool decoded = mono::decode_gcc_except_table (
+			res.gcc_except_table.addr, (std::size_t) res.gcc_except_table.size, parsed);
+		if (decoded) {
+			printf ("     M1 decode: OK (ttype_enc=0x%02x cs_enc=0x%02x "
+			        "call_sites=%zu has_ttype=%d)\n",
+			        parsed.ttype_encoding, parsed.call_site_encoding,
+			        parsed.call_sites.size (), (int) parsed.has_ttype_table);
+		} else {
+			/*
+			 * A decline here is an M2-relevant finding, not a plumbing failure.
+			 * The LSDA byte at offset 0 is the LPStart encoding and the byte at
+			 * offset 1 is the TType encoding - both at fixed offsets. Under the
+			 * engine's effective (Large) code model, real LLVM-18 emits the TType
+			 * table as DW_EH_PE_absptr (0x00): 8-byte ABSOLUTE ttype entries,
+			 * relocated with R_X86_64_64 (which is why R5 finds no truncating
+			 * reloc). M1 (lsda.cpp) only accepts DW_EH_PE_udata4 (0x03) - the
+			 * 4-byte form clang -mcmodel=small produces - so it declines absptr.
+			 * M2.3 must extend the decoder (and the §4a ttype dereference) to read
+			 * the 8-byte absptr entries the JIT actually emits. Report loudly; do
+			 * not fail the M2.1 plumbing test on it.
+			 */
+			const uint8_t *raw = (const uint8_t *) res.gcc_except_table.addr;
+			printf ("     M1 decode: DECLINED - real LLVM-18 .gcc_except_table did "
+			        "NOT decode through M1. lpstart_enc=0x%02x ttype_enc=0x%02x "
+			        "(size=%llu). M1 supports TType=udata4(0x03); the JIT emitted "
+			        "TType=absptr(0x00), an 8-byte absolute entry. M2.3 must handle "
+			        "absptr.\n",
+			        raw[0], raw[1],
+			        (unsigned long long) res.gcc_except_table.size);
+		}
+	}
+
+	/* ---- R5: relocation audit over the EH object under the engine model ---- */
+	if (!x86_64_elf) {
+		printf ("     R5: host %s is not x86-64 ELF; reloc classifier not run\n",
+		        host.str ().c_str ());
+	} else {
+		LLVMContext rc;
+		Module rmod ("selftest.eh.reloc", rc);
+		build_eh_module (rmod, /*with_personality*/ true);
+		auto robj = emit_object_engine_model (rmod);
+		if (!robj) {
+			printf ("     R5 emit failed: %s\n", toString (robj.takeError ()).c_str ());
+			return TEST_FAIL;
+		}
+		auto obj = object::ObjectFile::createObjectFile ((*robj)->getMemBufferRef ());
+		if (!obj) {
+			printf ("     R5 parse failed: %s\n", toString (obj.takeError ()).c_str ());
+			return TEST_FAIL;
+		}
+		mono::RelocAudit audit = mono::audit_relocations (**obj);
+		if (audit.truncating == 0) {
+			printf ("     R5: EH object under the engine code model produces NO "
+			        "truncating relocation (%llu total). type_info/LSDA relocs are "
+			        "64-bit-safe.\n", (unsigned long long) audit.total);
+		} else {
+			printf ("     R5: *** BLOCKING for M2.4 *** EH object produces %llu of "
+			        "%llu TRUNCATING relocations (first: %s). type_info/LSDA reads "
+			        "may corrupt under the effective code model.\n",
+			        (unsigned long long) audit.truncating,
+			        (unsigned long long) audit.total,
+			        audit.first_offender.c_str ());
+		}
+	}
+
+	return TEST_PASS;
+}
+
 /* ------------------------------------------------------------ driver */
 
 /*
@@ -435,6 +730,7 @@ test_llvm_engine_main (void)
 
 	report ("arithmetic", test_arithmetic (jit));
 	report ("registered-helper", test_registered_helper (jit));
+	report ("gcc-except-table", test_gcc_except_table (jit));
 
 	printf ("%d passed, %d skipped, %d failed\n", passes, skips, failures);
 	return failures ? 1 : 0;

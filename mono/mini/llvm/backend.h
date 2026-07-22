@@ -76,8 +76,15 @@ void      mono_llvm_optimize_method (LLVMValueRef method);
  * plants a llvm.experimental.stackmap recording the home slot of this/mrgctx).
  * Task #15 parses it into cfg->llvm_this_reg/offset so a stack walk can rebuild
  * the frame's generic context.
+ *
+ * gcc_except_table_out / gcc_except_table_size_out (both may be NULL) receive the
+ * loaded `.gcc_except_table` (Itanium LSDA) SECTION, non-empty only for a method
+ * LLVM gave a personalityFn and an invoke/landingpad. The EH port (M2) decodes it
+ * via mono::decode_gcc_except_table into the method's MonoJitExceptionInfo[]. The
+ * gate still declines every EH method today, so this is {NULL,0} for every method
+ * that currently reaches here.
  */
-gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out, gpointer *stackmaps_out, guint32 *stackmaps_size_out);
+gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out, gpointer *stackmaps_out, guint32 *stackmaps_size_out, gpointer *gcc_except_table_out, guint32 *gcc_except_table_size_out);
 
 /*
  * Transcode the stock DWARF .eh_frame LLVM emits into mono's unwind ops.

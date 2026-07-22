@@ -87,6 +87,13 @@ struct CompileResult {
 	 * generic context.
 	 */
 	EhFrameInfo stackmaps;
+	/*
+	 * The `.gcc_except_table` (Itanium LSDA) section of this module ({nullptr,0}
+	 * unless the translator gave the function a personalityFn and emitted an
+	 * invoke/landingpad, i.e. an EH method). The EH port (M2) feeds it to
+	 * mono::decode_gcc_except_table to recover the method's exception clauses.
+	 */
+	EhFrameInfo gcc_except_table;
 	/* Address of the mono-format "mono_eh_frame" global, or 0 if absent. */
 	uint64_t mono_eh_frame = 0;
 };
