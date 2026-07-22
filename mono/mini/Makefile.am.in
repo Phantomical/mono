@@ -459,6 +459,8 @@ llvm_sources = \
 	llvm/ehframe.cpp \
 	llvm/lsda.hpp \
 	llvm/lsda.cpp \
+	llvm/mono_lsda.hpp \
+	llvm/mono_lsda.cpp \
 	llvm/tiered.cpp \
 	llvm/translator-internal.hpp \
 	llvm/translator.cpp \

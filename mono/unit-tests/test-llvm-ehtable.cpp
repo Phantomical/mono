@@ -80,9 +80,11 @@
 #ifdef ENABLE_LLVM
 
 #include "mini/llvm/lsda.hpp"
+#include "mini/llvm/mono_lsda.hpp"
 
 using mono::ParsedLsda;
 using mono::LsdaCallSite;
+using mono::MonoLsdaEntry;
 
 /* ------------------------------------------------------------ reporting */
 
@@ -608,6 +610,529 @@ cases_negative (void)
 	}
 }
 
+/* ============================================================================
+ * mono_lsda.cpp - the load-time .mono_lsda publish/validate core (plan 12 C4).
+ *
+ * parse_mono_lsda() decodes the target-neutral `.mono_lsda` section
+ * MonoLSDAStreamer (engine.cpp, C3) emits; build_ex_info() validates those
+ * tuples against the IL clause table and joins them into a MonoJitExceptionInfo[]
+ * (the pure core of publish_mono_lsda, factored out so it needs no MonoCompile).
+ * Everything here drives them with byte buffers and synthetic clause tables, the
+ * same OFFLINE style as the LSDA-decoder cases above. Expectations are
+ * hand-derived from the format, not echoed from the implementation.
+ * ==========================================================================*/
+
+/* Little-endian append helpers for assembling .mono_lsda byte vectors. */
+static void
+put_u16 (std::vector<std::uint8_t> &b, std::uint16_t v)
+{
+	b.push_back ((std::uint8_t) (v & 0xff));
+	b.push_back ((std::uint8_t) ((v >> 8) & 0xff));
+}
+
+static void
+put_u32 (std::vector<std::uint8_t> &b, std::uint32_t v)
+{
+	b.push_back ((std::uint8_t) (v & 0xff));
+	b.push_back ((std::uint8_t) ((v >> 8) & 0xff));
+	b.push_back ((std::uint8_t) ((v >> 16) & 0xff));
+	b.push_back ((std::uint8_t) ((v >> 24) & 0xff));
+}
+
+/*
+ * Assemble a .mono_lsda section: header (magic, version, count) then the given
+ * entries. MAGIC/VERSION/COUNT are parameters so negative cases can corrupt them
+ * independently of the entry payload.
+ */
+static std::vector<std::uint8_t>
+make_lsda (std::uint32_t magic, std::uint16_t version, std::uint16_t count,
+           const std::vector<MonoLsdaEntry> &entries)
+{
+	std::vector<std::uint8_t> b;
+	put_u32 (b, magic);
+	put_u16 (b, version);
+	put_u16 (b, count);
+	for (const MonoLsdaEntry &e : entries) {
+		put_u32 (b, e.try_start_off);
+		put_u32 (b, e.try_len);
+		put_u32 (b, e.handler_off);
+		put_u32 (b, e.clause_index);
+	}
+	return b;
+}
+
+/*
+ * Parse LEN bytes of DATA with the final byte flush against a PROT_NONE guard
+ * page (the same discipline as decode_guarded): any over-read faults loudly
+ * instead of returning a plausible-but-wrong decode.
+ */
+static bool
+parse_guarded (const std::uint8_t *data, std::size_t len, std::vector<MonoLsdaEntry> &out)
+{
+#if defined (HAVE_SYS_MMAN_H) && !defined (HOST_WIN32)
+	long pagel = sysconf (_SC_PAGESIZE);
+	std::size_t page = pagel > 0 ? (std::size_t) pagel : 4096;
+
+	if (len <= page) {
+		std::uint8_t *base = (std::uint8_t*) mmap (nullptr, 2 * page,
+			PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (base != MAP_FAILED) {
+			if (mprotect (base + page, page, PROT_NONE) == 0) {
+				std::uint8_t *buf = base + page - len; /* last byte at page-1 */
+				if (len)
+					memcpy (buf, data, len);
+				bool r = mono::parse_mono_lsda (buf, len, out);
+				munmap (base, 2 * page);
+				return r;
+			}
+			munmap (base, 2 * page);
+		}
+	}
+#endif
+	std::vector<std::uint8_t> buf (data, data + len);
+	return mono::parse_mono_lsda (buf.empty () ? nullptr : buf.data (), len, out);
+}
+
+/* ------------------------------------------------------------ parse cases */
+
+/*
+ * The exact bytes MonoLSDAStreamer emits, taken from plan 12 1.2's verified
+ * probe2.o golden dump:
+ *   44534c4d 01000200   magic 'MLSD', version 1, count 2
+ *   01000000 05000000 11000000 07000000   {try=1, len=5, handler=0x11, clause=7}
+ *   06000000 05000000 0f000000 03000000   {try=6, len=5, handler=0x0f, clause=3}
+ * 40 bytes = 8 + 2*16. Decoded by hand from the format above.
+ */
+static const std::uint8_t GOLDEN_MLSD [] = {
+	0x44, 0x53, 0x4c, 0x4d, 0x01, 0x00, 0x02, 0x00,
+	0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+	0x11, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+	0x06, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+	0x0f, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+};
+
+static void
+check_entry (const char *what, int i, const MonoLsdaEntry &got, const MonoLsdaEntry &exp)
+{
+	if (got.try_start_off != exp.try_start_off || got.try_len != exp.try_len ||
+	    got.handler_off != exp.handler_off || got.clause_index != exp.clause_index) {
+		printf ("FAIL %s: entry %d: got {ts=%u tl=%u h=%u ci=%u}, "
+		        "want {ts=%u tl=%u h=%u ci=%u}\n", what, i,
+		        got.try_start_off, got.try_len, got.handler_off, got.clause_index,
+		        exp.try_start_off, exp.try_len, exp.handler_off, exp.clause_index);
+		failures ++;
+	}
+}
+
+static void
+expect_parse (const char *what, const std::uint8_t *data, std::size_t len,
+              const MonoLsdaEntry *exp, int nexp)
+{
+	std::vector<MonoLsdaEntry> out;
+	current_case = what;
+	cases_run ++;
+	if (!parse_guarded (data, len, out)) {
+		printf ("FAIL %s: declined a valid section\n", what);
+		failures ++;
+		return;
+	}
+	if ((int) out.size () != nexp) {
+		printf ("FAIL %s: entry count: got %d, want %d\n", what, (int) out.size (), nexp);
+		failures ++;
+		return;
+	}
+	int before = failures;
+	for (int i = 0; i < nexp; ++i)
+		check_entry (what, i, out[i], exp[i]);
+	if (failures == before)
+		printf ("ok   %s (%d entries)\n", what, nexp);
+}
+
+static void
+expect_parse_decline (const char *what, const std::uint8_t *data, std::size_t len)
+{
+	std::vector<MonoLsdaEntry> out;
+	current_case = what;
+	cases_run ++;
+	if (parse_guarded (data, len, out)) {
+		printf ("FAIL %s: accepted a section that should decline\n", what);
+		failures ++;
+	} else {
+		printf ("ok   %s (declined)\n", what);
+	}
+}
+
+static void
+cases_mono_lsda_parse (void)
+{
+	/* The C3 golden vector decodes to its two hand-derived entries. */
+	static const MonoLsdaEntry golden_exp [] = {
+		{ 1, 5, 0x11, 7 },
+		{ 6, 5, 0x0f, 3 },
+	};
+	expect_parse ("mlsd-golden-two-entry", GOLDEN_MLSD, sizeof (GOLDEN_MLSD),
+	              golden_exp, 2);
+
+	/* A header-only section (count 0) is well-formed and decodes to nothing. */
+	{
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 0, {});
+		expect_parse ("mlsd-count-zero-header-only", b.data (), b.size (), nullptr, 0);
+	}
+
+	/* One-entry section: exactly 8 + 16 bytes. */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 0x20, 0x08, 0x30, 0 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 1, ents);
+		static const MonoLsdaEntry one_exp [] = { { 0x20, 0x08, 0x30, 0 } };
+		expect_parse ("mlsd-one-entry", b.data (), b.size (), one_exp, 1);
+	}
+
+	/* --- negatives --- */
+
+	/* Bad magic. */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
+		std::vector<std::uint8_t> b = make_lsda (0xdeadbeefu, 1, 1, ents);
+		expect_parse_decline ("mlsd-bad-magic", b.data (), b.size ());
+	}
+
+	/* Unknown version (2). */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 1, ents);
+		expect_parse_decline ("mlsd-version-2", b.data (), b.size ());
+	}
+
+	/* Truncated header (7 bytes: count field cut short). */
+	{
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 0, {});
+		b.pop_back ();
+		expect_parse_decline ("mlsd-truncated-header", b.data (), b.size ());
+	}
+
+	/* Truncated entry: header says 2 entries but only one entry's worth of
+	 * payload is present (8 + 16 bytes). Exact-size mismatch declines. */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 2, 1, ents);
+		/* rewrite count to 2 while carrying one entry -> size 24 != 8+2*16 */
+		expect_parse_decline ("mlsd-truncated-entry", b.data (), b.size ());
+	}
+
+	/*
+	 * THE EXACT-SIZE / TWO-RECORD DECLINE (plan 12 3, C4's belt-and-suspenders).
+	 * Two full method records concatenated: the first header declares count 1
+	 * (expected size 24) but the buffer is 48 bytes. A longer-than-exact section
+	 * means the one-method-per-module invariant broke; reading only the first
+	 * record would misattribute clause geometry, so parse declines.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
+		std::vector<std::uint8_t> rec = make_lsda (0x4d4c5344u, 1, 1, ents);
+		std::vector<std::uint8_t> two = rec;
+		two.insert (two.end (), rec.begin (), rec.end ()); /* 24 + 24 = 48 bytes */
+		expect_parse_decline ("mlsd-two-record-oversize-declines", two.data (), two.size ());
+	}
+
+	/*
+	 * Trailing-byte oversize: exactly one valid record plus a single junk byte.
+	 * 25 != 24 -> decline (a section MUST be exactly its declared extent).
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 1, 5, 0x11, 7 } };
+		std::vector<std::uint8_t> b = make_lsda (0x4d4c5344u, 1, 1, ents);
+		b.push_back (0xaa);
+		expect_parse_decline ("mlsd-one-trailing-byte-oversize-declines", b.data (), b.size ());
+	}
+
+	/* Null pointer and zero length both decline without touching memory. */
+	{
+		std::vector<MonoLsdaEntry> out;
+		current_case = "mlsd-null-and-empty";
+		cases_run ++;
+		if (mono::parse_mono_lsda (nullptr, 0, out)) {
+			printf ("FAIL mlsd-null-and-empty: accepted null\n");
+			failures ++;
+		} else {
+			const std::uint8_t nothing [1] = { 0 };
+			if (parse_guarded (nothing, 0, out)) {
+				printf ("FAIL mlsd-null-and-empty: accepted zero-length\n");
+				failures ++;
+			} else {
+				printf ("ok   mlsd-null-and-empty (declined)\n");
+			}
+		}
+	}
+
+	/*
+	 * Truncation sweep: every proper prefix of the C3 golden vector must decline
+	 * and must not read past its guarded end (a forgotten bounds check faults
+	 * here, not in a later heisenbug).
+	 */
+	{
+		bool ok = true;
+		for (std::size_t len = 0; len < sizeof (GOLDEN_MLSD); ++len) {
+			std::vector<MonoLsdaEntry> out;
+			current_case = "mlsd-truncation-sweep";
+			if (parse_guarded (GOLDEN_MLSD, len, out)) {
+				printf ("FAIL mlsd-truncation-sweep: prefix len %zu accepted\n", len);
+				failures ++;
+				ok = false;
+				break;
+			}
+		}
+		cases_run ++;
+		if (ok)
+			printf ("ok   mlsd-truncation-sweep (%zu prefixes declined)\n",
+			        sizeof (GOLDEN_MLSD) - 1);
+	}
+}
+
+/* ------------------------------------------------------------ build cases */
+
+/* Sentinel catch_class pointers (never dereferenced; build_ex_info only copies). */
+static MonoClass * const CC0 = (MonoClass *) (std::uintptr_t) 0xC0FFEE00u;
+static MonoClass * const CC1 = (MonoClass *) (std::uintptr_t) 0xC0FFEE11u;
+
+/*
+ * Assert build_ex_info accepts ENTRIES against a synthetic clause table and
+ * produces the hand-derived MonoJitExceptionInfo[]. NATIVE_CODE is a real
+ * CODE_LEN-byte buffer so try_start/try_end/handler_start are valid pointers to
+ * check against BASE + offset.
+ */
+static void
+cases_mono_lsda_build (void)
+{
+	const std::uint32_t code_len = 0x100;
+	std::vector<std::uint8_t> code (code_len, 0);
+	const std::uint8_t *base = code.data ();
+
+	/* Two catch clauses (both CLAUSE_NONE) with distinct catch_class sentinels. */
+	MonoExceptionClause clauses [2];
+	memset (clauses, 0, sizeof (clauses));
+	clauses[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+	clauses[0].data.catch_class = CC0;
+	clauses[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+	clauses[1].data.catch_class = CC1;
+
+	/* --- valid: two disjoint entries joining onto the two clauses --- */
+	{
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x20, 0x40, 0 }, /* [0x10,0x30) -> handler 0x40, clause 0 */
+			{ 0x50, 0x10, 0x80, 1 }, /* [0x50,0x60) -> handler 0x80, clause 1 */
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-valid-two-clause";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out);
+		if (!ok || out.size () != 2) {
+			printf ("FAIL build-valid-two-clause: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			const MonoJitExceptionInfo &e0 = out[0];
+			const MonoJitExceptionInfo &e1 = out[1];
+			bool good =
+				e0.flags == MONO_EXCEPTION_CLAUSE_NONE &&
+				e0.clause_index == 0 &&
+				e0.try_start == (gpointer) (base + 0x10) &&
+				e0.try_end == (gpointer) (base + 0x30) &&
+				e0.handler_start == (gpointer) (base + 0x40) &&
+				e0.data.catch_class == CC0 &&
+				e0.exvar_offset == 0 &&
+				e0.try_offset == 0 && e0.try_len == 0 &&
+				e0.handler_offset == 0 && e0.handler_len == 0 &&
+				e1.flags == MONO_EXCEPTION_CLAUSE_NONE &&
+				e1.clause_index == 1 &&
+				e1.try_start == (gpointer) (base + 0x50) &&
+				e1.try_end == (gpointer) (base + 0x60) &&
+				e1.handler_start == (gpointer) (base + 0x80) &&
+				e1.data.catch_class == CC1;
+			if (!good) {
+				printf ("FAIL build-valid-two-clause: field mismatch\n");
+				failures ++;
+			} else {
+				printf ("ok   build-valid-two-clause (2 ei)\n");
+			}
+		}
+	}
+
+	/*
+	 * Multi-call shape: two disjoint entries sharing ONE clause/handler (a try
+	 * with two protected calls). Both must publish, same clause_index/handler,
+	 * different try_start - mono's is_address_protected takes the first PC match.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x08, 0x40, 0 },
+			{ 0x30, 0x08, 0x40, 0 },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-multi-call-shared-clause";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			out[0].clause_index == 0 && out[1].clause_index == 0 &&
+			out[0].handler_start == out[1].handler_start &&
+			out[0].try_start != out[1].try_start &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[1].try_start == (gpointer) (base + 0x30);
+		if (!good) {
+			printf ("FAIL build-multi-call-shared-clause: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-multi-call-shared-clause (2 ei, clause 0)\n");
+		}
+	}
+
+	/* Helper for the decline cases. */
+	auto expect_build_decline = [&] (const char *what,
+	                                 const std::vector<MonoLsdaEntry> &ents,
+	                                 const MonoExceptionClause *cls, int nclauses) {
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = what;
+		cases_run ++;
+		if (mono::build_ex_info (ents, cls, nclauses, base, code_len, out)) {
+			printf ("FAIL %s: accepted entries that should decline\n", what);
+			failures ++;
+		} else {
+			printf ("ok   %s (declined)\n", what);
+		}
+	};
+
+	/* try_start_off == code_len (past the code). */
+	expect_build_decline ("build-try-start-past-code",
+		{ { code_len, 0x00, 0x40, 0 } }, clauses, 2);
+
+	/* try_start_off + try_len past code_len (the 64-bit sum check). */
+	expect_build_decline ("build-try-end-past-code",
+		{ { code_len - 0x10, 0x20, 0x40, 0 } }, clauses, 2);
+
+	/* handler_off == code_len (past the code). */
+	expect_build_decline ("build-handler-past-code",
+		{ { 0x10, 0x08, code_len, 0 } }, clauses, 2);
+
+	/* clause_index >= num_clauses. */
+	expect_build_decline ("build-clause-index-out-of-range",
+		{ { 0x10, 0x08, 0x40, 5 } }, clauses, 2);
+
+	/* A clause whose flags != CLAUSE_NONE (finally slipped the gate). */
+	{
+		MonoExceptionClause bad [1];
+		memset (bad, 0, sizeof (bad));
+		bad[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		expect_build_decline ("build-non-none-clause-flags",
+			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
+	}
+
+	/* count == 0 while num_clauses > 0 (every protected call optimised away). */
+	expect_build_decline ("build-empty-while-clauses", {}, clauses, 2);
+
+	/*
+	 * SIBLING CATCHES: try { } catch(A) catch(B) is one landing pad with two
+	 * TypeIds over ONE invoke range, so C2/C3 emit two entries with the SAME
+	 * range and DIFFERENT clause_index. Both must publish (equal-or-disjoint
+	 * invariant) - mono matches the shared PC range for both, then picks the type
+	 * by catch_class with RDX = clause_index. Assert ACCEPT, both ei sharing the
+	 * range, distinct clause_index/catch_class, correct handler_start.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x20, 0x60, 0 }, /* catch A: [0x10,0x30) -> handler 0x60, clause 0 */
+			{ 0x10, 0x20, 0x90, 1 }, /* catch B: SAME range     -> handler 0x90, clause 1 */
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-sibling-same-range";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out);
+		bool good = ok && out.size () == 2 &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[0].try_end == (gpointer) (base + 0x30) &&
+			out[1].try_start == (gpointer) (base + 0x10) &&
+			out[1].try_end == (gpointer) (base + 0x30) &&
+			out[0].clause_index == 0 && out[1].clause_index == 1 &&
+			out[0].data.catch_class == CC0 && out[1].data.catch_class == CC1 &&
+			out[0].handler_start == (gpointer) (base + 0x60) &&
+			out[1].handler_start == (gpointer) (base + 0x90);
+		if (!good) {
+			printf ("FAIL build-sibling-same-range: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-sibling-same-range (2 ei, shared range, clauses 0/1)\n");
+		}
+	}
+
+	/*
+	 * SIBLING + MULTI-CALL composed: two identical-range sibling pairs at two
+	 * DIFFERENT disjoint ranges -> 4 entries -> ACCEPT. Pins that equal-and-
+	 * disjoint compose (each range hosts a sibling pair; the two ranges are
+	 * disjoint). Four clauses, all CLAUSE_NONE.
+	 */
+	{
+		MonoExceptionClause c4 [4];
+		memset (c4, 0, sizeof (c4));
+		for (int k = 0; k < 4; ++k) {
+			c4[k].flags = MONO_EXCEPTION_CLAUSE_NONE;
+			c4[k].data.catch_class = (MonoClass *) (std::uintptr_t) (0xB00B0000u + (unsigned) k);
+		}
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x10, 0x60, 0 }, /* range R1, clause 0 */
+			{ 0x10, 0x10, 0x70, 1 }, /* range R1 (sibling), clause 1 */
+			{ 0x40, 0x10, 0x80, 2 }, /* range R2 (disjoint), clause 2 */
+			{ 0x40, 0x10, 0x90, 3 }, /* range R2 (sibling), clause 3 */
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-sibling-plus-multicall";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, c4, 4, base, code_len, out);
+		bool good = ok && out.size () == 4 &&
+			out[0].try_start == out[1].try_start && /* R1 pair shares range */
+			out[2].try_start == out[3].try_start && /* R2 pair shares range */
+			out[0].try_start != out[2].try_start && /* R1 and R2 disjoint */
+			out[0].clause_index == 0 && out[3].clause_index == 3;
+		if (!good) {
+			printf ("FAIL build-sibling-plus-multicall: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-sibling-plus-multicall (4 ei, two sibling pairs)\n");
+		}
+	}
+
+	/*
+	 * Overlapping invoke ranges (the nesting/ordering sanity): [0x10,0x40) and
+	 * [0x30,0x60) PARTIALLY overlap (not equal) -> decline (ambiguous first-match,
+	 * unsupported nesting). Equal-or-disjoint exempts only EXACTLY equal ranges.
+	 */
+	expect_build_decline ("build-overlapping-ranges",
+		{ { 0x10, 0x30, 0x40, 0 }, { 0x30, 0x30, 0x80, 1 } }, clauses, 2);
+
+	/*
+	 * STRICT nesting: [0x10,0x40) fully contains [0x20,0x30). Not equal, so it
+	 * still declines - the missed-nesting attack stays covered.
+	 */
+	expect_build_decline ("build-strict-nesting",
+		{ { 0x10, 0x30, 0x40, 0 }, { 0x20, 0x10, 0x80, 1 } }, clauses, 2);
+
+	/*
+	 * Touching-but-disjoint ranges [0x10,0x20) and [0x20,0x30) must be ACCEPTED
+	 * (half-open ranges that share an endpoint do not overlap).
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x10, 0x40, 0 },
+			{ 0x20, 0x10, 0x80, 1 },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-touching-disjoint-ok";
+		cases_run ++;
+		if (mono::build_ex_info (ents, clauses, 2, base, code_len, out) && out.size () == 2)
+			printf ("ok   build-touching-disjoint-ok (2 ei)\n");
+		else {
+			printf ("FAIL build-touching-disjoint-ok: declined disjoint ranges\n");
+			failures ++;
+		}
+	}
+}
+
 /* ------------------------------------------------------------ entry point */
 
 #ifdef __cplusplus
@@ -628,6 +1153,8 @@ test_llvm_ehtable_main (void)
 	cases_siblings ();
 	cases_ttype_omit ();
 	cases_negative ();
+	cases_mono_lsda_parse ();
+	cases_mono_lsda_build ();
 
 	printf ("%d cases run, %d failed\n", cases_run, failures);
 	return failures ? 1 : 0;
