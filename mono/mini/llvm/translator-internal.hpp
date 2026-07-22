@@ -167,7 +167,7 @@ typedef struct {
  * A typed pointer value.
  *
  * Under opaque pointers an LLVMValueRef does not carry its pointee type, but
- * LLVMBuildLoad2/GEP2 need it. Pairing the two here means the element type is
+ * IRBuilder::CreateLoad/CreateGEP need it. Pairing the two here means the element type is
  * recorded where the pointer is created and can never be re-derived (and so
  * silently mis-derived) at the point of use.
  */
@@ -248,9 +248,7 @@ llvm_global_ctx ()
 
 /*
  * Marshal a C array of LLVMValueRef GEP indices into the ArrayRef<Value *> that
- * IRBuilder::CreateGEP expects. This reproduces exactly what LLVMBuildGEP2 did
- * internally -- ArrayRef<Value *>(unwrap(Indices), NumIndices) feeding the
- * non-inbounds CreateGEP -- so the emitted getelementptr is unchanged.
+ * IRBuilder::CreateGEP expects.
  */
 static inline llvm::SmallVector<llvm::Value *, 4>
 gep_index_list (LLVMValueRef *idx, unsigned n)

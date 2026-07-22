@@ -934,9 +934,9 @@ create_const_vector_2_i32 (int v0, int v1)
  * time and pinning it onto ctx->lmethod via LLVMSetPersonalityFn.
  *
  * The LLVM verifier rejects a `landingpad` whose enclosing function carries no
- * personality, and the no-asserts backend segfaults on it (doc 09 R1). The C
- * API's LLVMBuildLandingPad PersFn operand is ignored on LLVM 18, so the
- * personality has to be set on the FUNCTION with LLVMSetPersonalityFn. A method
+ * personality, and the no-asserts backend segfaults on it (doc 09 R1). A
+ * `landingpad` does not carry its own personality, so it has to be set on the
+ * FUNCTION with LLVMSetPersonalityFn. A method
  * with several catch clauses calls emit_handler_start once per handler, so the
  * `mono_personality` stub is defined - and the personality fn set - exactly once
  * per method (cached on the context) instead of being duplicated per handler.
