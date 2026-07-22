@@ -98,6 +98,9 @@ if ENABLE_LLVM
 # mono/mini/llvm/*.cpp.
 libtestlib_la_SOURCES += test-llvm-engine.cpp
 libtestlib_la_SOURCES += test-llvm-ehframe.c
+# test-llvm-ehtable.cpp is C++ (like test-llvm-engine.cpp): it includes
+# mono/mini/llvm/lsda.hpp and drives the LSDA decoder through its C++ interface.
+libtestlib_la_SOURCES += test-llvm-ehtable.cpp
 libtestlib_la_CXXFLAGS = $(LLVM_CXXFLAGS)
 endif
 libtestlib_la_LIBADD = ../metadata/libmonoruntimesgen.la ../sgen/libmonosgen.la ../utils/libmonoutils.la
@@ -180,6 +183,11 @@ test_llvm_ehframe_SOURCES = main.c
 test_llvm_ehframe_CFLAGS = $(test_cflags) -DMAIN=test_llvm_ehframe_main
 test_llvm_ehframe_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-ehframe.lo
 test_llvm_ehframe_LDFLAGS = $(test_ldflags)
+
+test_llvm_ehtable_SOURCES = main.c
+test_llvm_ehtable_CFLAGS = $(test_cflags) -DMAIN=test_llvm_ehtable_main
+test_llvm_ehtable_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-ehtable.lo
+test_llvm_ehtable_LDFLAGS = $(test_ldflags)
 endif
 
 
@@ -192,8 +200,8 @@ TESTS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-conc-hashta
 	test-mono-callspec test-mono-string test-mono-embed test-embed-invoke
 
 if ENABLE_LLVM
-check_PROGRAMS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe
-TESTS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe
+check_PROGRAMS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable
+TESTS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable
 endif
 
 AM_TESTS_ENVIRONMENT = export MONO_PATH=$(mcs_topdir)/class/lib/build;
