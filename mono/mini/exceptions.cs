@@ -1349,6 +1349,213 @@ class Tests
 		return 0;
 	}
 
+	/*
+	 * ---------------------------------------------------------------- EH N5 (doc 21 §8.2)
+	 * Cross-tier composition of DEPTH-2 nested EH. F5 proved the from_llvm finally-resume
+	 * protocol across mixed tier-0/tier-1 stacks for SINGLE-level finally clauses; N1-N4
+	 * turned the LLVM tier's nesting gate on for one level of clause containment and pinned
+	 * the depth-2 surface (incl. the sibling-catch-in-finally double-run fix). N5 is their
+	 * intersection: a throw that unwinds through frames each carrying a depth-2 NESTED EH
+	 * structure, where the frames alternate tiers, must run every intervening finally
+	 * inner-to-outer in the right order across each tier boundary, enter the right catch in
+	 * the right frame, and preserve exception identity - regardless of whether a given
+	 * nested frame is tier-1 (from_llvm resume) or tier-0 (classic call_filter).
+	 *
+	 * The per-frame TIER is forced deterministically OUT OF BAND (exactly the F5/N4
+	 * mechanism): MONO_LLVM_METHOD is an ALLOWLIST - only the named methods reach the LLVM
+	 * tier, every other stays tier-0 classic - and under MONO_TIERED=1 with a low
+	 * MONO_TIERED_CALL_THRESHOLD a filtered-out method's promotion returns NULL (compiled
+	 * NO_LLVM_FALLBACK) so it stays tier-0. Helpers ending "_t1" are the ones named there
+	 * (forced tier-1); helpers ending "_t0" are left classic. Each test warms its intended
+	 * tier-1 helpers past a low threshold first so the MEASURED run executes the promoted
+	 * tier-1 body; the warm-up is inert at the default promotion threshold, so these stay
+	 * pure correctness tests in the regression suite with the classic JIT as the oracle.
+	 * Driven tier-1 proof:
+	 *   MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 \
+	 *   MONO_LLVM_METHOD='n5_s1_nested_t1;n5_s2_caller_t1;n5_s3_f1_t1;n5_s3_f3_t1;\
+	 *     n5_s4_sibling_t1' ./mono --llvm -v exceptions.exe
+	 * Each nesting helper is depth-2 (every inner clause has exactly one encloser), [NoInlining]
+	 * so its frame really exists, and records finally/catch order in log (log[0]=count,
+	 * log[1..]=the run sequence). C7ExA/C7ExB/C7ExC(:C7ExB)/C7ExD are defined below.
+	 */
+
+	/* Scenario 1: a tier-1 nested frame (inner FINALLY inside outer FINALLY) whose uncaught
+	   throw runs BOTH finallys via resume (inner-then-outer) and propagates to a tier-0
+	   classic caller that catches. Force: MONO_LLVM_METHOD='n5_s1_nested_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n5_s1_nested_t1 (int[] log) {
+		try {						/* outer FINALLY (tier-1) */
+			try {					/* inner FINALLY (tier-1) */
+				C7Throw (1);			/* throw C7ExA via a call (invoke edge) */
+			} finally {
+				log [++log [0]] = 2;		/* inner finally */
+			}
+		} finally {
+			log [++log [0]] = 3;			/* outer finally */
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n5_s1_caller_t0 (int[] log) {
+		try {
+			n5_s1_nested_t1 (log);
+		} catch (C7ExA) {
+			return 7;
+		}
+		return 0;
+	}
+
+	public static int test_0_n5_cross_tier_s1 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; try { n5_s1_nested_t1 (log); } catch (C7ExA) { } }
+		log [0] = 0;
+		int r = n5_s1_caller_t0 (log);
+		/* tier-1 inner then outer finally via resume, caught in the tier-0 frame */
+		return (r == 7 && log [0] == 2 && log [1] == 2 && log [2] == 3) ? 0 : 1;
+	}
+
+	/* Scenario 2 (mirror): a tier-0 nested frame (inner FINALLY inside outer FINALLY) whose
+	   classic finallys return synchronously into a resume-driven tier-1 caller that is
+	   ITSELF depth-2 nested (inner CATCH inside outer FINALLY). The tier-0 finallys run
+	   2,3; the tier-1 inner catch takes it (4); the tier-1 outer finally runs on the leave
+	   (5). Force: MONO_LLVM_METHOD='n5_s2_caller_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n5_s2_nested_t0 (int[] log) {
+		try {						/* outer FINALLY (tier-0) */
+			try {					/* inner FINALLY (tier-0) */
+				C7Throw (1);			/* throw C7ExA via a call (invoke edge) */
+			} finally {
+				log [++log [0]] = 2;
+			}
+		} finally {
+			log [++log [0]] = 3;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n5_s2_caller_t1 (int[] log) {
+		int r = 0;
+		try {						/* outer FINALLY (tier-1) */
+			try {					/* inner CATCH (tier-1) */
+				n5_s2_nested_t0 (log);
+			} catch (C7ExA) {
+				log [++log [0]] = 4;
+				r = 7;
+			}
+		} finally {
+			log [++log [0]] = 5;
+		}
+		return r;
+	}
+
+	public static int test_0_n5_cross_tier_s2 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; n5_s2_caller_t1 (log); }
+		log [0] = 0;
+		int r = n5_s2_caller_t1 (log);
+		return (r == 7 && log [0] == 4 && log [1] == 2 && log [2] == 3 && log [3] == 4 && log [4] == 5) ? 0 : 1;
+	}
+
+	/* Scenario 3: a throw crossing SEVERAL mixed-tier NESTED frames. The chain is
+	   test(classic catch) -> f1_t1(LLVM, nested finally) -> f2_t0(classic, nested finally)
+	   -> f3_t1(LLVM, nested finally, throws). Each frame holds an inner FINALLY inside an
+	   outer FINALLY, so the pass-2 walk alternates resume / classic-return / resume and
+	   must run all SIX finallys innermost-first (6,5,4,3,2,1) before the outermost tier-0
+	   catch. Force: MONO_LLVM_METHOD='n5_s3_f1_t1;n5_s3_f3_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n5_s3_f3_t1 (int[] log) {
+		try {						/* f3 outer FINALLY (tier-1) */
+			try {					/* f3 inner FINALLY (tier-1) */
+				C7Throw (1);			/* throw C7ExA via a call (invoke edge) */
+			} finally {
+				log [++log [0]] = 6;
+			}
+		} finally {
+			log [++log [0]] = 5;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n5_s3_f2_t0 (int[] log) {
+		try {						/* f2 outer FINALLY (tier-0) */
+			try {					/* f2 inner FINALLY (tier-0) */
+				n5_s3_f3_t1 (log);
+			} finally {
+				log [++log [0]] = 4;
+			}
+		} finally {
+			log [++log [0]] = 3;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n5_s3_f1_t1 (int[] log) {
+		try {						/* f1 outer FINALLY (tier-1) */
+			try {					/* f1 inner FINALLY (tier-1) */
+				n5_s3_f2_t0 (log);
+			} finally {
+				log [++log [0]] = 2;
+			}
+		} finally {
+			log [++log [0]] = 1;
+		}
+	}
+
+	public static int test_0_n5_cross_tier_s3 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; try { n5_s3_f1_t1 (log); } catch (C7ExA) { } }
+		log [0] = 0;
+		try {
+			n5_s3_f1_t1 (log);
+		} catch (C7ExA) {
+			return (log [0] == 6 && log [1] == 6 && log [2] == 5 && log [3] == 4 &&
+				log [4] == 3 && log [5] == 2 && log [6] == 1) ? 0 : 1;
+		}
+		return 2;
+	}
+
+	/* Scenario 4: a nested SIBLING-catch-in-finally frame (the shape the double-run fix
+	   addressed) in a MIXED stack. A tier-1 frame has two sibling catches (C7ExA/C7ExB)
+	   over one inner region enclosed by an outer FINALLY; a C7ExD matches NEITHER sibling
+	   and propagates past both, so the tier-1 outer finally must run EXACTLY ONCE (seq
+	   1,4 - the pre-fix bug ran it twice: 1,4,4) as unwinding continues into a tier-0 next
+	   frame that catches C7ExD. Force: MONO_LLVM_METHOD='n5_s4_sibling_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n5_s4_sibling_t1 (int[] log) {
+		try {						/* outer FINALLY (tier-1) */
+			try {					/* inner: two sibling catches, one region */
+				log [++log [0]] = 1;
+				C7Throw (4);			/* C7ExD: matches NEITHER sibling */
+			} catch (C7ExA) {
+				log [++log [0]] = 2;
+			} catch (C7ExB) {
+				log [++log [0]] = 3;
+			}
+		} finally {
+			log [++log [0]] = 4;			/* must run EXACTLY once */
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n5_s4_caller_t0 (int[] log) {
+		try {
+			n5_s4_sibling_t1 (log);
+		} catch (C7ExD) {
+			log [++log [0]] = 5;
+			return 9;
+		}
+		return 0;
+	}
+
+	public static int test_0_n5_cross_tier_s4 () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; try { n5_s4_sibling_t1 (log); } catch (C7ExD) { } }
+		log [0] = 0;
+		int r = n5_s4_caller_t0 (log);
+		/* tier-1 finally runs exactly once (1,4) then the tier-0 next frame catches (5) */
+		return (r == 9 && log [0] == 3 && log [1] == 1 && log [2] == 4 && log [3] == 5) ? 0 : 1;
+	}
+
 	public static int test_0_byte_cast () {
 		int a;
 		long l;
