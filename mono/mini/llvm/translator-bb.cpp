@@ -46,7 +46,7 @@ handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
 		if (other->try_offset != self->try_offset || other->try_len != self->try_len)
 			continue;
 
-		other_bb = (MonoBasicBlock*)g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (j));
+		other_bb = static_cast<MonoBasicBlock*>(g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (j)));
 		if (other_bb && ctx->bblocks [other_bb->block_num].invoke_target)
 			return true;
 	}
@@ -149,7 +149,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			/* Remember for later */
 			for (j = 0; j < count; ++j) {
-				PhiNode *node = (PhiNode*)mono_mempool_alloc0 (ctx->mempool, sizeof (PhiNode));
+				PhiNode *node = static_cast<PhiNode*>(mono_mempool_alloc0 (ctx->mempool, sizeof (PhiNode)));
 				node->bb = bb;
 				node->phi = ins;
 				node->in_bb = bb->in_bb [i];
@@ -287,14 +287,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 #if TARGET_SIZEOF_VOID_P == 4
 			values [ins->dreg] = LLVMConstInt (LLVMInt64Type (), GET_LONG_IMM (ins), FALSE);
 #else
-			values [ins->dreg] = LLVMConstInt (LLVMInt64Type (), (gint64)ins->inst_c0, FALSE);
+			values [ins->dreg] = LLVMConstInt (LLVMInt64Type (), static_cast<gint64>(ins->inst_c0), FALSE);
 #endif
 			break;
 		case OP_R8CONST:
-			values [ins->dreg] = get_double_const (cfg, *(double*)ins->inst_p0);
+			values [ins->dreg] = get_double_const (cfg, *static_cast<double*>(ins->inst_p0));
 			break;
 		case OP_R4CONST:
-			values [ins->dreg] = get_float_const (cfg, *(float*)ins->inst_p0);
+			values [ins->dreg] = get_float_const (cfg, *static_cast<float*>(ins->inst_p0));
 			break;
 		case OP_DUMMY_ICONST:
 			values [ins->dreg] = LLVMConstInt (LLVMInt32Type (), 0, FALSE);
@@ -581,13 +581,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				emit_volatile_store (ctx, ins->next->dreg);
 			} else if (MONO_IS_COND_EXC (ins->next)) {
 				bool force_explicit_branch = false;
-				if (bb->region != (guint)-1) {
+				if (bb->region != static_cast<guint>(-1)) {
 					/* Don't tag null check branches in exception-handling
 					 * regions with `make.implicit`.
 					 */
 					force_explicit_branch = true;
 				}
-				emit_cond_system_exception (ctx, bb, (const char*)ins->next->inst_p1, cmp, force_explicit_branch);
+				emit_cond_system_exception (ctx, bb, static_cast<const char*>(ins->next->inst_p1), cmp, force_explicit_branch);
 				if (!ctx_ok (ctx))
 					break;
 				builder = ctx->builder;
@@ -1163,7 +1163,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			t = load_store_to_llvm_type (ins->opcode, &size, &sext, &zext);
 
 			if (sext || zext)
-				dname = (char*)"";
+				dname = const_cast<char*>("");
 
 			if ((ins->opcode == OP_LOADI8_MEM) || (ins->opcode == OP_LOAD_MEM) || (ins->opcode == OP_LOADI4_MEM) || (ins->opcode == OP_LOADU4_MEM) || (ins->opcode == OP_LOADU1_MEM) || (ins->opcode == OP_LOADU2_MEM)) {
 				addr = LLVMConstInt (IntPtrType (), ins->inst_imm, FALSE);
@@ -1323,7 +1323,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_AOTCONST: {
-			MonoJumpInfoType ji_type = (MonoJumpInfoType)ins->inst_c1;
+			MonoJumpInfoType ji_type = static_cast<MonoJumpInfoType>(ins->inst_c1);
 			gpointer ji_data = ins->inst_p0;
 
 			if (ji_type == MONO_PATCH_INFO_ICALL_ADDR) {
@@ -1730,7 +1730,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_MEMORY_BARRIER: {
-			mono_llvm_build_fence (builder, (BarrierKind) ins->backend.memory_barrier_kind);
+			mono_llvm_build_fence (builder, static_cast<BarrierKind>(ins->backend.memory_barrier_kind));
 			break;
 		}
 		case OP_ATOMIC_LOAD_I1:
@@ -1748,13 +1748,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef t;
 			bool is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
 			bool is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
-			BarrierKind barrier = (BarrierKind) ins->backend.memory_barrier_kind;
+			BarrierKind barrier = static_cast<BarrierKind>(ins->backend.memory_barrier_kind);
 			LLVMValueRef index, addr;
 
 			t = load_store_to_llvm_type (ins->opcode, &size, &sext, &zext);
 
 			if (sext || zext)
-				dname = (char *)"";
+				dname = const_cast<char *>("");
 
 			if (ins->inst_offset != 0) {
 				index = LLVMConstInt (LLVMInt32Type (), ins->inst_offset / size, FALSE);
@@ -1790,7 +1790,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef t;
 			bool is_faulting = (ins->flags & MONO_INST_FAULT) != 0;
 			bool is_volatile = (ins->flags & MONO_INST_VOLATILE) != 0;
-			BarrierKind barrier = (BarrierKind) ins->backend.memory_barrier_kind;
+			BarrierKind barrier = static_cast<BarrierKind>(ins->backend.memory_barrier_kind);
 			LLVMValueRef index, addr, value, base;
 
 			if (!values [ins->inst_destbasereg]) {
@@ -2024,7 +2024,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_LLVM_OUTARG_VT: {
-			LLVMArgInfo *ainfo = (LLVMArgInfo*)ins->inst_p0;
+			LLVMArgInfo *ainfo = static_cast<LLVMArgInfo*>(ins->inst_p0);
 			MonoType *t = mini_get_underlying_type (ins->inst_vtype);
 
 			if (ainfo->storage == LLVMArgGsharedvtVariable) {
@@ -2064,7 +2064,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_OBJC_GET_SELECTOR: {
-			const char *name = (const char*)ins->inst_p0;
+			const char *name = static_cast<const char*>(ins->inst_p0);
 			LLVMValueRef var;
 
 			if (!ctx->module->objc_selector_to_var) {
@@ -2072,19 +2072,19 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 				LLVMValueRef info_var = LLVMAddGlobal (ctx->lmodule, LLVMArrayType (LLVMInt8Type (), 8), "@OBJC_IMAGE_INFO");
 				int32_t objc_imageinfo [] = { 0, 16 };
-				LLVMSetInitializer (info_var, mono_llvm_create_constant_data_array ((uint8_t *) &objc_imageinfo, 8));
+				LLVMSetInitializer (info_var, mono_llvm_create_constant_data_array (reinterpret_cast<uint8_t *>(&objc_imageinfo), 8));
 				LLVMSetLinkage (info_var, LLVMPrivateLinkage);
 				LLVMSetExternallyInitialized (info_var, TRUE);
 				LLVMSetSection (info_var, "__DATA, __objc_imageinfo,regular,no_dead_strip");
 				LLVMSetAlignment (info_var, sizeof (target_mgreg_t));
 			}
 
-			var = (LLVMValueRef)g_hash_table_lookup (ctx->module->objc_selector_to_var, name);
+			var = static_cast<LLVMValueRef>(g_hash_table_lookup (ctx->module->objc_selector_to_var, name));
 			if (!var) {
 				LLVMValueRef indexes [16];
 
 				LLVMValueRef name_var = LLVMAddGlobal (ctx->lmodule, LLVMArrayType (LLVMInt8Type (), strlen (name) + 1), "@OBJC_METH_VAR_NAME_");
-				LLVMSetInitializer (name_var, mono_llvm_create_constant_data_array ((const uint8_t*)name, strlen (name) + 1));
+				LLVMSetInitializer (name_var, mono_llvm_create_constant_data_array (reinterpret_cast<const uint8_t*>(name), strlen (name) + 1));
 				LLVMSetLinkage (name_var, LLVMPrivateLinkage);
 				LLVMSetSection (name_var, "__TEXT,__objc_methname,cstring_literals");
 
@@ -3148,7 +3148,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_SSE_COMISS: {
 			LLVMValueRef args [] = { lhs, rhs };
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case CMP_EQ: id = INTRINS_SSE_COMIEQ_SS; break;
 			case CMP_GT: id = INTRINS_SSE_COMIGT_SS; break;
@@ -3163,7 +3163,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_SSE_UCOMISS: {
 			LLVMValueRef args [] = { lhs, rhs };
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case CMP_EQ: id = INTRINS_SSE_UCOMIEQ_SS; break;
 			case CMP_GT: id = INTRINS_SSE_UCOMIGT_SS; break;
@@ -3178,7 +3178,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_SSE2_COMISD: {
 			LLVMValueRef args [] = { lhs, rhs };
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case CMP_EQ: id = INTRINS_SSE_COMIEQ_SD; break;
 			case CMP_GT: id = INTRINS_SSE_COMIGT_SD; break;
@@ -3193,7 +3193,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_SSE2_UCOMISD: {
 			LLVMValueRef args [] = { lhs, rhs };
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case CMP_EQ: id = INTRINS_SSE_UCOMIEQ_SD; break;
 			case CMP_GT: id = INTRINS_SSE_UCOMIGT_SD; break;
@@ -3261,7 +3261,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_SSE_RCPSS:
 		case OP_SSE_RSQRTSS: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->opcode) {
 			case OP_SSE_RCPSS: id = INTRINS_SSE_RCP_SS; break;
 			case OP_SSE_RSQRTSS: id = INTRINS_SSE_RSQRT_SS; break;
@@ -3274,7 +3274,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_XOP: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_SSE_LFENCE: id = INTRINS_SSE_LFENCE; break;
 			case SIMD_OP_SSE_SFENCE: id = INTRINS_SSE_SFENCE; break;
@@ -3286,7 +3286,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_XOP_X_I:
 		case OP_XOP_X_X: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_SSE_SQRTPS: id = INTRINS_SSE_SQRT_PS; break;
 			case SIMD_OP_SSE_RCPPS: id = INTRINS_SSE_RCP_PS; break;
@@ -3303,7 +3303,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_XOP_I4_X:
 		case OP_XOP_I8_X: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_SSE_CVTSS2SI: id = INTRINS_SSE_CVTSS2SI; break;
 			case SIMD_OP_SSE_CVTTSS2SI: id = INTRINS_SSE_CVTTSS2SI; break;
@@ -3321,7 +3321,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_XOP_I4_X_X: {
 			bool to_i8_t = false;
 			bool ret_bool = false;
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_SSE_TESTC:  id = INTRINS_SSE_TESTC;  to_i8_t = true; ret_bool = true; break;
 			case SIMD_OP_SSE_TESTZ:  id = INTRINS_SSE_TESTZ;  to_i8_t = true; ret_bool = true; break;
@@ -3348,7 +3348,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_XOP_X_X_I4:
 		case OP_XOP_X_X_I8: {
 			LLVMValueRef args [] = { lhs, rhs };
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_SSE_CVTSD2SS: id = INTRINS_SSE_CVTSD2SS; break; 
 			case SIMD_OP_SSE_MAXPS: id = INTRINS_SSE_MAXPS; break;
@@ -3430,7 +3430,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_PSUBW_SAT_UN:
 		case OP_SSE2_ADDS:
 		case OP_SSE2_SUBS: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			int type = 0;
 			bool is_add = true;
 			switch (ins->opcode) {
@@ -3902,7 +3902,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE42_CRC64: {
 			LLVMValueRef args [2];
 			args [0] = lhs;
-			args [1] = convert (ctx, rhs, primitive_type_to_llvm_type ((MonoTypeEnum)ins->inst_c0));
+			args [1] = convert (ctx, rhs, primitive_type_to_llvm_type (static_cast<MonoTypeEnum>(ins->inst_c0)));
 			IntrinsicId id;
 			switch (ins->inst_c0) {
 			case MONO_TYPE_U1: id = INTRINS_SSE_CRC32_32_8; break;
@@ -3965,7 +3965,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				val = LLVMIsNull (lhs) ? rhs : lhs;
 				nelems = LLVMGetVectorSize (LLVMTypeOf (lhs));
 
-				IntrinsicId intrins = (IntrinsicId)0;
+				IntrinsicId intrins = static_cast<IntrinsicId>(0);
 				switch (nelems) {
 				case 16:
 					intrins = INTRINS_WASM_ANYTRUE_V16;
@@ -4188,7 +4188,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 #if defined(ENABLE_NETCORE) && defined(TARGET_ARM64)
 		case OP_XOP_I4_I4:
 		case OP_XOP_I8_I8: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_ARM64_RBIT32: id = INTRINS_BITREVERSE_I32; break;
 			case SIMD_OP_ARM64_RBIT64: id = INTRINS_BITREVERSE_I64; break;
@@ -4200,7 +4200,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_XOP_X_X_X:
 		case OP_XOP_I4_I4_I4:
 		case OP_XOP_I4_I4_I8: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			bool zext_last = false;
 			switch (ins->inst_c0) {
 			case SIMD_OP_ARM64_CRC32B: id = INTRINS_AARCH64_CRC32B; zext_last = true; break;
@@ -4223,7 +4223,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_XOP_X_X_X_X: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_ARM64_SHA1SU0: id = INTRINS_AARCH64_SHA1SU0; break;
 			case SIMD_OP_ARM64_SHA256H: id = INTRINS_AARCH64_SHA256H; break;
@@ -4236,7 +4236,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_XOP_X_X: {
-			IntrinsicId id = (IntrinsicId)0;
+			IntrinsicId id = static_cast<IntrinsicId>(0);
 			switch (ins->inst_c0) {
 			case SIMD_OP_LLVM_FABS: id = INTRINS_AARCH64_ADV_SIMD_ABS_FLOAT; break;
 			case SIMD_OP_LLVM_DABS: id = INTRINS_AARCH64_ADV_SIMD_ABS_DOUBLE; break;
@@ -4300,7 +4300,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 */
 		case OP_IMPLICIT_EXCEPTION:
 			/* This marks a place where an implicit exception can happen */
-			if (bb->region != (guint)-1)
+			if (bb->region != static_cast<guint>(-1))
 				set_failure (ctx, "implicit-exception");
 			break;
 		case OP_THROW:
@@ -4355,7 +4355,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 * Fault clauses are like finally clauses, but they are only called if an exception is thrown.
 			 */
 			if (!is_fault) {
-				handler_bb = (MonoBasicBlock*)g_hash_table_lookup (ctx->region_to_handler, GUINT_TO_POINTER (mono_get_block_region_notry (cfg, bb->region)));
+				handler_bb = static_cast<MonoBasicBlock*>(g_hash_table_lookup (ctx->region_to_handler, GUINT_TO_POINTER (mono_get_block_region_notry (cfg, bb->region))));
 				g_assert (handler_bb);
 				info = &bblocks [handler_bb->block_num];
 				lhs = info->finally_ind;

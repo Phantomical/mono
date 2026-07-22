@@ -241,7 +241,7 @@ primitive_type_to_llvm_type (MonoTypeEnum type)
 MonoTypeEnum
 inst_c1_type (const MonoInst *ins)
 {
-	return (MonoTypeEnum)ins->inst_c1;
+	return static_cast<MonoTypeEnum>(ins->inst_c1);
 }
 
 /*
@@ -307,7 +307,7 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 		if (m_class_is_enumtype (klass))
 			return type_to_llvm_type (ctx, mono_class_enum_basetype_internal (klass));
 
-		ltype = (LLVMTypeRef)g_hash_table_lookup (ctx->module->llvm_types, klass);
+		ltype = static_cast<LLVMTypeRef>(g_hash_table_lookup (ctx->module->llvm_types, klass));
 		if (!ltype) {
 			ltype = create_llvm_type_for_type (ctx->module, klass);
 			g_hash_table_insert (ctx->module->llvm_types, klass, ltype);
@@ -627,7 +627,7 @@ ovf_op_to_intrins (int opcode)
 		return INTRINS_UMUL_OVF_I64;
 	default:
 		g_assert_not_reached ();
-		return (IntrinsicId)0;
+		return static_cast<IntrinsicId>(0);
 	}
 }
 
@@ -721,7 +721,7 @@ simd_ins_to_intrins (int opcode)
 #endif
 	default:
 		g_assert_not_reached ();
-		return (IntrinsicId)0;
+		return static_cast<IntrinsicId>(0);
 	}
 }
 

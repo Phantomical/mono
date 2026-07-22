@@ -46,7 +46,7 @@ static void
 add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 {
 	/* Register simple intrinsics */
-	LLVMValueRef intrins = mono_llvm_register_intrinsic (module, (IntrinsicId)id);
+	LLVMValueRef intrins = mono_llvm_register_intrinsic (module, static_cast<IntrinsicId>(id));
 	if (intrins) {
 		g_hash_table_insert (intrins_id_to_intrins, GINT_TO_POINTER (id), intrins);
 		return;
@@ -219,7 +219,7 @@ get_intrins_from_module (LLVMModuleRef lmodule, int id)
 {
 	LLVMValueRef res;
 
-	res = (LLVMValueRef)g_hash_table_lookup (intrins_id_to_intrins, GINT_TO_POINTER (id));
+	res = static_cast<LLVMValueRef>(g_hash_table_lookup (intrins_id_to_intrins, GINT_TO_POINTER (id)));
 	g_assert (res);
 	return res;
 }
@@ -253,7 +253,7 @@ add_intrinsics (LLVMModuleRef module)
 	 * type doesn't seem to do any locking.
 	 */
 	for (i = 0; i < INTRINS_NUM; ++i)
-		add_intrinsic (module, (IntrinsicId)i);
+		add_intrinsic (module, static_cast<IntrinsicId>(i));
 
 	/* EH intrinsics */
 	add_func (module, "mono_personality", LLVMVoidType (), NULL, 0);

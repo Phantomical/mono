@@ -293,7 +293,7 @@ free_ctx (EmitContext *ctx)
 	g_ptr_array_free (ctx->bblock_list, TRUE);
 
 	for (l = ctx->builders; l; l = l->next) {
-		LLVMBuilderRef builder = (LLVMBuilderRef)l->data;
+		LLVMBuilderRef builder = static_cast<LLVMBuilderRef>(l->data);
 		LLVMDisposeBuilder (builder);
 	}
 
@@ -348,7 +348,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	ctx->clause_to_handler = g_hash_table_new (NULL, NULL);
 	ctx->jit_callees = g_hash_table_new (NULL, NULL);
 	init_jit_module (cfg->domain);
-	ctx->module = (MonoLLVMModule*)domain_jit_info (cfg->domain)->llvm_module;
+	ctx->module = static_cast<MonoLLVMModule*>(domain_jit_info (cfg->domain)->llvm_module);
 	method_name = mono_method_full_name (cfg->method, TRUE);
 	ctx->method_name = method_name;
 
@@ -367,8 +367,8 @@ mono_llvm_emit_method (MonoCompile *cfg)
 			builder = create_builder (ctx);
 			LLVMPositionBuilderAtEnd (builder, phi_bb);
 
-			for (i = 0; i < (int)ctx->phi_values->len; ++i) {
-				LLVMValueRef v = (LLVMValueRef)g_ptr_array_index (ctx->phi_values, i);
+			for (i = 0; i < static_cast<int>(ctx->phi_values->len); ++i) {
+				LLVMValueRef v = static_cast<LLVMValueRef>(g_ptr_array_index (ctx->phi_values, i));
 				if (LLVMGetInstructionParent (v) == nullptr)
 					LLVMInsertIntoBuilder (builder, v);
 			}
@@ -437,7 +437,7 @@ emit_method_inner (EmitContext *ctx)
 
 			method = emit_icall_cold_wrapper (ctx->module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll, FALSE);
 			ctx->lmethod = method;
-			ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, (int)cfg->method_index);
+			ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, static_cast<int>(cfg->method_index));
 
 			ctx->method_name = g_strdup (LLVMGetValueName (method));
 			ctx->cfg->asm_symbol = g_strdup (ctx->method_name);
@@ -573,7 +573,7 @@ emit_method_inner (EmitContext *ctx)
 		LLVMSetValueName (LLVMGetParam (method, linfo->dummy_arg_pindex), "dummy_arg");
 
 	names = g_new (char *, sig->param_count);
-	mono_method_get_param_names (cfg->method, (const char **) names);
+	mono_method_get_param_names (cfg->method, const_cast<const char **>(names));
 
 	/* Set parameter names/attributes */
 	for (i = 0; i < sig->param_count; ++i) {
@@ -625,7 +625,7 @@ emit_method_inner (EmitContext *ctx)
 		if (bb->last_ins && MONO_IS_COND_BRANCH_OP (bb->last_ins) &&
 			bb->next_bb != bb->last_ins->inst_false_bb) {
 			
-			MonoInst *inst = (MonoInst*)mono_mempool_alloc0 (cfg->mempool, sizeof (MonoInst));
+			MonoInst *inst = static_cast<MonoInst*>(mono_mempool_alloc0 (cfg->mempool, sizeof (MonoInst)));
 			inst->opcode = OP_BR;
 			inst->inst_target_bb = bb->last_ins->inst_false_bb;
 			mono_bblock_add_inst (bb, inst);
@@ -691,7 +691,7 @@ emit_method_inner (EmitContext *ctx)
 				break;
 				}
 			case OP_LDADDR:
-				((MonoInst*)ins->inst_p0)->flags |= MONO_INST_INDIRECT;
+				(static_cast<MonoInst*>(ins->inst_p0))->flags |= MONO_INST_INDIRECT;
 				break;
 			default:
 				break;
@@ -705,7 +705,7 @@ emit_method_inner (EmitContext *ctx)
 	 */
 	for (bb_index = 0; bb_index < cfg->num_bblocks; ++bb_index) {
 		bb = cfg->bblocks [bb_index];
-		if (!(bb->region != (guint)-1 && !MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))) {
+		if (!(bb->region != static_cast<guint>(-1) && !MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))) {
 			g_ptr_array_add (bblock_list, bb);
 			bblocks [bb->block_num].added = TRUE;
 		}
@@ -729,7 +729,7 @@ emit_method_inner (EmitContext *ctx)
 		int clause_index;
 		char name [128];
 
-		if (ctx->cfg->interp_entry_only || !(bb->region != (guint)-1 && (bb->flags & BB_EXCEPTION_HANDLER)))
+		if (ctx->cfg->interp_entry_only || !(bb->region != static_cast<guint>(-1) && (bb->flags & BB_EXCEPTION_HANDLER)))
 			continue;
 
 		clause_index = MONO_REGION_CLAUSE_INDEX (bb->region);
@@ -746,7 +746,7 @@ emit_method_inner (EmitContext *ctx)
 	}
 
 	for (bb_index = 0; bb_index < bblock_list->len; ++bb_index) {
-		bb = (MonoBasicBlock*)g_ptr_array_index (bblock_list, bb_index);
+		bb = static_cast<MonoBasicBlock*>(g_ptr_array_index (bblock_list, bb_index));
 
 		// Prune unreachable mono BBs.
 		if (!(bb == cfg->bb_entry || bb->in_count > 0))
@@ -765,7 +765,7 @@ emit_method_inner (EmitContext *ctx)
 		ins_list = bblocks [bb->block_num].phi_nodes;
 
 		for (l = ins_list; l; l = l->next) {
-			PhiNode *node = (PhiNode*)l->data;
+			PhiNode *node = static_cast<PhiNode*>(l->data);
 			MonoInst *phi = node->phi;
 			int sreg1 = node->sreg;
 			LLVMBasicBlockRef in_bb;
@@ -812,7 +812,7 @@ emit_method_inner (EmitContext *ctx)
 		ins_list = bblocks [bb->block_num].phi_nodes;
 
 		for (l = ins_list; l; l = l->next) {
-			PhiNode *node = (PhiNode*)l->data;
+			PhiNode *node = static_cast<PhiNode*>(l->data);
 			MonoInst *phi = node->phi;
 			LLVMValueRef phi_ins = values [phi->dreg];
 
@@ -833,19 +833,19 @@ emit_method_inner (EmitContext *ctx)
 		BBInfo *info = &bblocks [bb->block_num];
 		GSList *l;
 		for (l = info->endfinally_switch_ins_list; l; l = l->next) {
-			LLVMValueRef switch_ins = (LLVMValueRef)l->data;
+			LLVMValueRef switch_ins = static_cast<LLVMValueRef>(l->data);
 			GSList *bb_list = info->call_handler_return_bbs;
 
 			GSList *bb_list_iter;
 			i = 0;
 			for (bb_list_iter = bb_list; bb_list_iter; bb_list_iter = g_slist_next (bb_list_iter)) {
-				LLVMAddCase (switch_ins, LLVMConstInt (LLVMInt32Type (), i + 1, FALSE), (LLVMBasicBlockRef)bb_list_iter->data);
+				LLVMAddCase (switch_ins, LLVMConstInt (LLVMInt32Type (), i + 1, FALSE), static_cast<LLVMBasicBlockRef>(bb_list_iter->data));
 				i ++;
 			}
 		}
 	}
 
-	ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, (int)cfg->method_index);
+	ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, static_cast<int>(cfg->method_index));
 
 	if (mini_get_debug_options ()->llvm_disable_inlining)
 		mono_llvm_add_func_attr (method, LLVM_ATTR_NO_INLINE);
@@ -1008,7 +1008,7 @@ void
 mono_llvm_free_domain_info (MonoDomain *domain)
 {
 	MonoJitDomainInfo *info = domain_jit_info (domain);
-	MonoLLVMModule *module = (MonoLLVMModule*)info->llvm_module;
+	MonoLLVMModule *module = static_cast<MonoLLVMModule*>(info->llvm_module);
 	int i;
 
 	if (!module)
@@ -1224,7 +1224,7 @@ init_jit_module (MonoDomain *domain)
 	module->context = LLVMGetGlobalContext ();
 	module->intrins_by_id = g_new0 (LLVMValueRef, INTRINS_NUM);
 
-	module->mono_ee = (MonoEERef*)mono_llvm_create_ee (&module->ee);
+	module->mono_ee = static_cast<MonoEERef*>(mono_llvm_create_ee (&module->ee));
 
 	// This contains just the intrinsics
 	module->lmodule = LLVMModuleCreateWithName ("jit-global-module");
@@ -1244,13 +1244,13 @@ init_jit_module (MonoDomain *domain)
 static inline guint16
 read_le16 (const guint8 *p)
 {
-	return (guint16)(p [0] | (p [1] << 8));
+	return static_cast<guint16>(p [0] | (p [1] << 8));
 }
 
 static inline guint32
 read_le32 (const guint8 *p)
 {
-	return (guint32)p [0] | ((guint32)p [1] << 8) | ((guint32)p [2] << 16) | ((guint32)p [3] << 24);
+	return static_cast<guint32>(p [0]) | (static_cast<guint32>(p [1]) << 8) | (static_cast<guint32>(p [2]) << 16) | (static_cast<guint32>(p [3]) << 24);
 }
 
 /*
@@ -1310,7 +1310,7 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 		return false;
 
 	/* Header (16) + StkSizeRecord[num_functions] (24 each) + Constants (8 each). */
-	guint64 rec_off = (guint64)16 + (guint64)num_functions * 24 + (guint64)num_constants * 8;
+	guint64 rec_off = static_cast<guint64>(16) + static_cast<guint64>(num_functions) * 24 + static_cast<guint64>(num_constants) * 8;
 	/* First record: u64 id, u32 instr_offset, u16 pad, u16 num_locations, then locations. */
 	if (rec_off + 16 > size)
 		return false;
@@ -1326,7 +1326,7 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 	guint8 *loc = rec + 16;
 	guint8 kind = loc [0];
 	guint16 dwarf_reg = read_le16 (loc + 4);
-	gint32 offset = (gint32)read_le32 (loc + 8);
+	gint32 offset = static_cast<gint32>(read_le32 (loc + 8));
 
 	if (kind != LOC_DIRECT) {
 		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap not Direct");
@@ -1372,7 +1372,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 */
 	g_hash_table_iter_init (&iter, ctx->jit_callees);
 	i = 0;
-	while (g_hash_table_iter_next (&iter, NULL, (void**)&var))
+	while (g_hash_table_iter_next (&iter, NULL, reinterpret_cast<void**>(&var)))
 		callee_vars [i ++] = var;
 
 	mono_codeman_enable_write ();
@@ -1391,7 +1391,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * every admitted clause-bearing method. */
 	gpointer mono_lsda = nullptr;
 	guint32 mono_lsda_size = 0;
-	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size);
+	cfg->native_code = static_cast<guint8*>(mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size));
 	/* The redundant Itanium `.gcc_except_table` LLVM still emits is ignored - the
 	 * custom-emit path reads the `.mono_lsda` instead (plan 12). */
 	(void) gcc_except_table;
@@ -1440,7 +1440,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	{
 		GSList *unwind_ops = nullptr;
 
-		if (!mono_llvm_eh_frame_to_unwind_ops ((guint8*)dwarf_eh_frame, dwarf_eh_frame_size,
+		if (!mono_llvm_eh_frame_to_unwind_ops (static_cast<guint8*>(dwarf_eh_frame), dwarf_eh_frame_size,
 						       cfg->native_code, cfg->code_len, &unwind_ops)) {
 			/*
 			 * No usable FDE, or CFI we cannot represent. Publishing the method
@@ -1478,7 +1478,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	if (cfg->header->num_clauses > 0) {
 		std::vector<mono::MonoLsdaEntry> entries;
 
-		if (!mono::parse_mono_lsda ((const guint8*)mono_lsda, mono_lsda_size, entries)) {
+		if (!mono::parse_mono_lsda (static_cast<const guint8*>(mono_lsda), mono_lsda_size, entries)) {
 			set_failure (ctx, "could not parse .mono_lsda clause table");
 			return;
 		}
@@ -1496,7 +1496,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * publish a wrong this-slot (CAP-EH-0).
 	 */
 	if (cfg->gshared) {
-		if (!recover_gshared_this_slot (cfg, (guint8*)stackmaps, stackmaps_size)) {
+		if (!recover_gshared_this_slot (cfg, static_cast<guint8*>(stackmaps), stackmaps_size)) {
 			set_failure (ctx, "gshared this-slot not recoverable from stackmap");
 			return;
 		}
@@ -1508,8 +1508,8 @@ llvm_jit_finalize_method (EmitContext *ctx)
 		domain_info->llvm_jit_callees = g_hash_table_new (NULL, NULL);
 	g_hash_table_iter_init (&iter, ctx->jit_callees);
 	i = 0;
-	while (g_hash_table_iter_next (&iter, (void**)&callee, (void**)&var)) {
-		GSList *addrs = (GSList*)g_hash_table_lookup (domain_info->llvm_jit_callees, callee);
+	while (g_hash_table_iter_next (&iter, reinterpret_cast<void**>(&callee), reinterpret_cast<void**>(&var))) {
+		GSList *addrs = static_cast<GSList*>(g_hash_table_lookup (domain_info->llvm_jit_callees, callee));
 		addrs = g_slist_prepend (addrs, callee_addrs [i]);
 		g_hash_table_insert (domain_info->llvm_jit_callees, callee, addrs);
 		i ++;
@@ -1563,7 +1563,7 @@ MonoCPUFeatures mono_llvm_get_cpu_features (void)
 #endif
 	};
 	if (!cpu_features)
-		cpu_features = MONO_CPU_INITED | (MonoCPUFeatures)mono_llvm_check_cpu_features (flags_map, G_N_ELEMENTS (flags_map));
+		cpu_features = MONO_CPU_INITED | static_cast<MonoCPUFeatures>(mono_llvm_check_cpu_features (flags_map, G_N_ELEMENTS (flags_map)));
 
 	return cpu_features;
 }

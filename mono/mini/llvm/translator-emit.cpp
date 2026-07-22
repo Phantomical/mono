@@ -574,10 +574,10 @@ get_aotconst_name (MonoJumpInfoType type, gconstpointer data, int got_offset)
 
 	switch (type) {
 	case MONO_PATCH_INFO_JIT_ICALL_ID:
-		name = g_strdup_printf ("jit_icall_%s", mono_find_jit_icall_info ((MonoJitICallId)(gsize)data)->name);
+		name = g_strdup_printf ("jit_icall_%s", mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)))->name);
 		break;
 	case MONO_PATCH_INFO_JIT_ICALL_ADDR_NOCALL:
-		name = g_strdup_printf ("jit_icall_addr_nocall_%s", mono_find_jit_icall_info ((MonoJitICallId)(gsize)data)->name);
+		name = g_strdup_printf ("jit_icall_addr_nocall_%s", mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)))->name);
 		break;
 	case MONO_PATCH_INFO_RGCTX_SLOT_INDEX: {
 		MonoJumpInfoRgctxEntry *entry = (MonoJumpInfoRgctxEntry*)data;
@@ -611,7 +611,7 @@ compute_aot_got_offset (MonoLLVMModule *module, MonoJumpInfo *ji, LLVMTypeRef ll
 {
 	guint32 got_offset = mono_aot_get_got_offset (ji);
 
-	LLVMTypeRef lookup_type = (LLVMTypeRef) g_hash_table_lookup (module->got_idx_to_type, GINT_TO_POINTER (got_offset));
+	LLVMTypeRef lookup_type = static_cast<LLVMTypeRef>(g_hash_table_lookup (module->got_idx_to_type, GINT_TO_POINTER (got_offset)));
 
 	if (!lookup_type) {
 		lookup_type = llvm_type;
@@ -648,7 +648,7 @@ get_aotconst_module (MonoLLVMModule *module, LLVMBuilderRef builder, MonoJumpInf
 	if (out_got_offset)
 		*out_got_offset = got_offset;
 
-	LLVMValueRef const_var = (LLVMValueRef)g_hash_table_lookup (module->aotconst_vars, GINT_TO_POINTER (got_offset));
+	LLVMValueRef const_var = static_cast<LLVMValueRef>(g_hash_table_lookup (module->aotconst_vars, GINT_TO_POINTER (got_offset)));
 	if (!const_var) {
 		LLVMTypeRef type = llvm_type;
 		// FIXME:
@@ -713,14 +713,14 @@ get_jit_callee (EmitContext *ctx, const char *name, LLVMTypeRef llvm_sig, MonoJu
 
 	// This won't be patched so compile the wrapper immediately
 	if (type == MONO_PATCH_INFO_JIT_ICALL_ID) {
-		MonoJitICallInfo * const info = mono_find_jit_icall_info ((MonoJitICallId)(gsize)data);
-		target = (gpointer)mono_icall_get_wrapper_full (info, TRUE);
+		MonoJitICallInfo * const info = mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)));
+		target = const_cast<gpointer>(mono_icall_get_wrapper_full (info, TRUE));
 	} else {
 		target = resolve_patch (ctx->cfg, type, data);
 	}
 
 	LLVMValueRef tramp_var = LLVMAddGlobal (ctx->lmodule, LLVMPointerType (llvm_sig, 0), name);
-	LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (LLVMConstInt (LLVMInt64Type (), (guint64)(size_t)target, FALSE), LLVMPointerType (llvm_sig, 0)));
+	LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (LLVMConstInt (LLVMInt64Type (), static_cast<guint64>(reinterpret_cast<size_t>(target)), FALSE), LLVMPointerType (llvm_sig, 0)));
 	LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 	LLVMValueRef callee = LLVMBuildLoad2 (ctx->builder, LLVMPointerType (llvm_sig, 0), tramp_var, "");
 	return callee;
@@ -1176,7 +1176,7 @@ build_named_alloca (EmitContext *ctx, MonoType *t, char const *name)
 Address*
 create_address (EmitContext *ctx, LLVMValueRef value, LLVMTypeRef type)
 {
-	Address *res = (Address *)mono_mempool_alloc0 (ctx->mempool, sizeof (Address));
+	Address *res = static_cast<Address *>(mono_mempool_alloc0 (ctx->mempool, sizeof (Address)));
 	res->value = value;
 	res->type = type;
 	return res;
@@ -1249,10 +1249,10 @@ emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitI
 		callee = get_aotconst_module (module, builder, MONO_PATCH_INFO_JIT_ICALL_ID, GUINT_TO_POINTER (icall_id), LLVMPointerType (sig, 0), NULL, NULL);
 	} else {
 		MonoJitICallInfo * const info = mono_find_jit_icall_info (icall_id);
-		gpointer target = (gpointer)mono_icall_get_wrapper_full (info, TRUE);
+		gpointer target = const_cast<gpointer>(mono_icall_get_wrapper_full (info, TRUE));
 
 		LLVMValueRef tramp_var = LLVMAddGlobal (lmodule, LLVMPointerType (sig, 0), name);
-		LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (LLVMConstInt (LLVMInt64Type (), (guint64)(size_t)target, FALSE), LLVMPointerType (sig, 0)));
+		LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (LLVMConstInt (LLVMInt64Type (), static_cast<guint64>(reinterpret_cast<size_t>(target)), FALSE), LLVMPointerType (sig, 0)));
 		LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 		callee = LLVMBuildLoad2 (builder, LLVMPointerType (sig, 0), tramp_var, "");
 	}
@@ -1301,7 +1301,7 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 	if (is_aot) {
 		poll_val_ptr = get_aotconst_module (module, builder, MONO_PATCH_INFO_GC_SAFE_POINT_FLAG, NULL, ptr_type, NULL, NULL);
 	} else {
-		LLVMValueRef poll_val_int = LLVMConstInt (IntPtrType (), (guint64) &mono_polling_required, FALSE);
+		LLVMValueRef poll_val_int = LLVMConstInt (IntPtrType (), reinterpret_cast<guint64>(&mono_polling_required), FALSE);
 		poll_val_ptr = LLVMBuildIntToPtr (builder, poll_val_int, ptr_type, "");
 	}
 	LLVMValueRef poll_val_ptr_load = LLVMBuildLoad2 (builder, IntPtrType (), poll_val_ptr, ""); // probably needs to be volatile
@@ -1325,7 +1325,7 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 		LLVMTypeRef poll_sig_ptr = LLVMPointerType (poll_sig, 0);
 		gpointer target = resolve_patch (cfg, MONO_PATCH_INFO_ABS, module->gc_poll_cold_wrapper_compiled);
 		LLVMValueRef tramp_var = LLVMAddGlobal (lmodule, poll_sig_ptr, "mono_threads_state_poll");
-		LLVMValueRef target_val = LLVMConstInt (LLVMInt64Type (), (guint64) target, FALSE);
+		LLVMValueRef target_val = LLVMConstInt (LLVMInt64Type (), reinterpret_cast<guint64>(target), FALSE);
 		LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (target_val, poll_sig_ptr));
 		LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 		LLVMValueRef callee = LLVMBuildLoad2 (builder, poll_sig_ptr, tramp_var, "");

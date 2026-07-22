@@ -169,7 +169,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 	}
 
 	names = g_new (char *, sig->param_count);
-	mono_method_get_param_names (cfg->method, (const char **) names);
+	mono_method_get_param_names (cfg->method, const_cast<const char **>(names));
 
 	for (i = 0; i < sig->param_count; ++i) {
 		LLVMArgInfo *ainfo = &linfo->args [i + sig->hasthis];
@@ -392,7 +392,7 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
 		char name [128];
 
-		if (!(bb->region != (guint)-1 && (bb->flags & BB_EXCEPTION_HANDLER)))
+		if (!(bb->region != static_cast<guint>(-1) && (bb->flags & BB_EXCEPTION_HANDLER)))
 			continue;
 
 		if (bb->in_scount == 0) {
@@ -431,7 +431,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 	MonoCompile *cfg = ctx->cfg;
 	LLVMValueRef *values = ctx->values;
 	Address **addresses = ctx->addresses;
-	MonoCallInst *call = (MonoCallInst*)ins;
+	MonoCallInst *call = reinterpret_cast<MonoCallInst*>(ins);
 	MonoMethodSignature *sig = call->signature;
 	LLVMValueRef callee = nullptr, lcall;
 	LLVMValueRef *args;
@@ -497,7 +497,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 				 * MonoJitDomainInfo.llvm_jit_callees and updated when the method it refers to is
 				 * compiled.
 				 */
-				LLVMValueRef tramp_var = (LLVMValueRef)g_hash_table_lookup (ctx->jit_callees, call->method);
+				LLVMValueRef tramp_var = static_cast<LLVMValueRef>(g_hash_table_lookup (ctx->jit_callees, call->method));
 				if (!tramp_var) {
 					target =
 						mono_create_jit_trampoline (mono_domain_get (),
@@ -509,7 +509,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 					}
 
 					tramp_var = LLVMAddGlobal (ctx->lmodule, LLVMPointerType (llvm_sig, 0), name);
-					LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (LLVMConstInt (LLVMInt64Type (), (guint64)(size_t)target, FALSE), LLVMPointerType (llvm_sig, 0)));
+					LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (LLVMConstInt (LLVMInt64Type (), static_cast<guint64>(reinterpret_cast<size_t>(target)), FALSE), LLVMPointerType (llvm_sig, 0)));
 					LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 					g_hash_table_insert (ctx->jit_callees, call->method, tramp_var);
 				}
@@ -531,7 +531,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 		} else {
 			{
 				if (cfg->abs_patches) {
-					MonoJumpInfo *abs_ji = (MonoJumpInfo*)g_hash_table_lookup (cfg->abs_patches, call->fptr);
+					MonoJumpInfo *abs_ji = static_cast<MonoJumpInfo*>(g_hash_table_lookup (cfg->abs_patches, call->fptr));
 					if (abs_ji) {
 						ERROR_DECL (error);
 
@@ -633,7 +633,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 	/* Opaque pointers: the callee pointer does not carry its function type;
 	 * use the signature we already built for this call site (donor pattern). */
 	LLVMTypeRef callee_type = llvm_sig;
-	LLVMTypeRef *param_types = (LLVMTypeRef*)g_alloca (sizeof (LLVMTypeRef) * LLVMCountParamTypes (callee_type));
+	LLVMTypeRef *param_types = static_cast<LLVMTypeRef*>(g_alloca (sizeof (LLVMTypeRef) * LLVMCountParamTypes (callee_type)));
 	LLVMGetParamTypes (callee_type, param_types);
 
 	for (i = 0; i < sig->param_count + sig->hasthis; ++i) {
@@ -643,7 +643,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 
 		pindex = ainfo->pindex;
 
-		regpair = (guint32)(gssize)(l->data);
+		regpair = static_cast<guint32>(reinterpret_cast<gssize>(l->data));
 		reg = regpair & 0xffffff;
 		args [pindex] = values [reg];
 		switch (ainfo->storage) {
@@ -1044,7 +1044,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 			if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
 				continue;
 
-			handler_bb = (MonoBasicBlock*)g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (i));
+			handler_bb = static_cast<MonoBasicBlock*>(g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (i)));
 			g_assert (handler_bb);
 			g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
 			LLVMAddCase (switch_ins, LLVMConstInt (LLVMInt32Type (), i, FALSE), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
@@ -1089,7 +1089,7 @@ get_double_const (MonoCompile *cfg, double val)
 {
 #ifdef TARGET_WASM
 	if (mono_isnan (val))
-		*(gint64 *)&val = 0x7FF8000000000000ll;
+		*reinterpret_cast<gint64 *>(&val) = 0x7FF8000000000000ll;
 #endif
 	return LLVMConstReal (LLVMDoubleType (), val);
 }
@@ -1099,7 +1099,7 @@ get_float_const (MonoCompile *cfg, float val)
 {
 #ifdef TARGET_WASM
 	if (mono_isnan (val))
-		*(int *)&val = 0x7FC00000;
+		*reinterpret_cast<int *>(&val) = 0x7FC00000;
 #endif
 	if (cfg->r4fp)
 		return LLVMConstReal (LLVMFloatType (), val);
