@@ -155,7 +155,7 @@ typedef struct {
 /*
  * A typed pointer value.
  *
- * Under opaque pointers an LLVMValueRef no longer carries its pointee type, but
+ * Under opaque pointers an LLVMValueRef does not carry its pointee type, but
  * LLVMBuildLoad2/GEP2 need it. Pairing the two here means the element type is
  * recorded where the pointer is created and can never be re-derived (and so
  * silently mis-derived) at the point of use.
@@ -279,9 +279,9 @@ typedef struct {
  * it the definition in translator.cpp is a namespace-scope const array, which
  * in C++ is internal by default - so before the split it could not collide
  * with anything. mono/mini/mini-llvm.c:222 defines the same name at file scope
- * in a C file, i.e. externally. That file is excluded from _SOURCES (legacy
- * LLVM 6 backend), so there is no collision today; if it is ever built again,
- * this is where the duplicate symbol will come from.
+ * in a C file, i.e. externally. That file is excluded from _SOURCES, so there
+ * is no collision today; if it is ever built again, this is where the duplicate
+ * symbol will come from.
  */
 extern const char mini_llvm_ins_info [];
 extern LLVMIntPredicate cond_to_llvm_cond [];

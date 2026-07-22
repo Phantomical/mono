@@ -85,12 +85,11 @@ emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, Mo
  * can read the slot's home register+offset out of the `.llvm_stackmaps` section
  * and publish it as cfg->llvm_this_reg/llvm_this_offset (mini.c:2573-2577).
  *
- * The forked LLVM smuggled that location through its custom LSDA (the "mono.this"
- * metadata flag on the alloca); stock LLVM 18 ignores that flag, so gshared
- * methods otherwise reach mini.c's g_assert(cfg->llvm_this_reg != -1) with the
- * field unset. A stackmap over the alloca is the stock-LLVM replacement (design
- * 3.1 / S6): it records the slot's address as a frame reg+offset that is stable
- * for the whole method, exactly what a stack walk needs.
+ * Stock LLVM has no built-in way to publish that location, so gshared methods
+ * would otherwise reach mini.c's g_assert(cfg->llvm_this_reg != -1) with the
+ * field unset. A stackmap over the alloca supplies it (design 3.1 / S6): it
+ * records the slot's address as a frame reg+offset that is stable for the whole
+ * method, exactly what a stack walk needs.
  *
  * The intrinsic is declared on demand in the method's own module (every method
  * gets its own, so declaring by name is race-free), variadic void(i64,i32,...).
@@ -643,7 +642,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 	 * Sometimes the same method is called with two different signatures (i.e. with and without 'this'), so
 	 * use the real callee for argument type conversion.
 	 */
-	/* Opaque pointers: the callee pointer no longer carries its function type;
+	/* Opaque pointers: the callee pointer does not carry its function type;
 	 * use the signature we already built for this call site (donor pattern). */
 	LLVMTypeRef callee_type = llvm_sig;
 	LLVMTypeRef *param_types = (LLVMTypeRef*)g_alloca (sizeof (LLVMTypeRef) * LLVMCountParamTypes (callee_type));
@@ -761,8 +760,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 	 * The two can't be used together, so only one of them is passed.
 	 * They travel in the 'nest' parameter (tagged LLVM_ATTR_NEST below) under
 	 * the default C calling convention: stock LLVM pins 'nest' to R10 on SysV,
-	 * which is mono's MONO_ARCH_RGCTX_REG / MONO_ARCH_IMT_REG on amd64. This
-	 * replaces the forked CallingConv::Mono, which does not exist in stock LLVM.
+	 * which is mono's MONO_ARCH_RGCTX_REG / MONO_ARCH_IMT_REG on amd64.
 	 */
 	g_assert (!(call->rgctx_arg_reg && call->imt_arg_reg));
 

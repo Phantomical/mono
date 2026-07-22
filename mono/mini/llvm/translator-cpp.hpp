@@ -12,25 +12,25 @@
 #define __MONO_MINI_LLVM_CPP_H__
 
 /*
- * LLVM 6 -> 18 migration notes for callers (step 3b-2a).
+ * Caller conventions for the wrapper surface.
  *
- * Opaque pointers: a pointer value no longer carries its pointee type, so any
+ * Opaque pointers: a pointer value does not carry its pointee type, so any
  * wrapper that builds a load must be told the loaded type explicitly. This is
  * LLVM's own convention (cf. LLVMBuildLoad2/GEP2/Call2) -- not a mono-specific
- * one. The wrappers below that gained a leading LLVMTypeRef parameter are:
+ * one. The wrappers below that take a leading LLVMTypeRef parameter are:
  *
  *   mono_llvm_build_load        (builder, Ty, PointerVal, ...)
  *   mono_llvm_build_atomic_load (builder, Ty, PointerVal, ...)
  *   mono_llvm_build_aligned_load(builder, Ty, PointerVal, ...)
  *
  * The type parameter is placed directly after the builder, matching
- * LLVMBuildLoad2 (b, Ty, Ptr, Name). Stores are unchanged -- the stored value
- * still carries its own type. mono_llvm_build_alloca already took a type.
+ * LLVMBuildLoad2 (b, Ty, Ptr, Name). Stores take no type parameter -- the
+ * stored value still carries its own type. mono_llvm_build_alloca takes a type.
  *
- * Attribute indices are unchanged: mono_llvm_add_instr_attr still takes an
- * LLVM AttributeList index (0 = return, 1..n = params, ~0 = function), because
- * it is implemented with CallBase::addAttributeAtIndex, which preserves the
- * historical numbering. Callers must NOT be renumbered to 0-based.
+ * mono_llvm_add_instr_attr takes an LLVM AttributeList index (0 = return,
+ * 1..n = params, ~0 = function), because it is implemented with
+ * CallBase::addAttributeAtIndex, which preserves that numbering. Callers must
+ * NOT be renumbered to 0-based.
  */
 
 #include <glib.h>
@@ -79,11 +79,10 @@ typedef enum {
 	LLVM_ATTR_BY_VAL,
 	LLVM_ATTR_UW_TABLE,
 	/*
-	 * Replaces the forked CallingConv::Mono. Stock LLVM already pins the
-	 * 'nest' parameter to R10 on SysV (X86CallingConv.td), and mono's
-	 * MONO_ARCH_RGCTX_REG / MONO_ARCH_IMT_REG on amd64 are both AMD64_R10,
-	 * so tagging the rgctx/imt argument 'nest' under the default C calling
-	 * convention reproduces the fork's ABI with unmodified LLVM.
+	 * Stock LLVM pins the 'nest' parameter to R10 on SysV (X86CallingConv.td),
+	 * and mono's MONO_ARCH_RGCTX_REG / MONO_ARCH_IMT_REG on amd64 are both
+	 * AMD64_R10, so tagging the rgctx/imt argument 'nest' under the default C
+	 * calling convention passes it in the register mono expects.
 	 */
 	LLVM_ATTR_NEST
 } AttrKind;

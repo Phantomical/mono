@@ -100,9 +100,8 @@ mono_llvm_build_alloca (LLVMBuilderRef builder, LLVMTypeRef Ty,
 	auto *b = unwrap (builder);
 	Type *type = unwrap (Ty);
 	/*
-	 * LLVM 6's AllocaInst took an 'unsigned Align' in which 0 meant "use the
-	 * ABI default". Align(0) asserts in modern LLVM, and callers do pass 0
-	 * (e.g. the 'this' alloca), so map 0 onto the preferred alignment.
+	 * Align(0) asserts in modern LLVM, and callers do pass 0 (e.g. the 'this'
+	 * alloca) to mean "ABI default", so map 0 onto the preferred alignment.
 	 */
 	const DataLayout &dl = b->GetInsertBlock ()->getModule ()->getDataLayout ();
 	Align align = alignment ? Align (alignment) : dl.getPrefTypeAlign (type);
@@ -125,7 +124,7 @@ mono_llvm_build_atomic_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueRe
 {
 	LoadInst *ins = unwrap(builder)->CreateLoad(unwrap (Ty), unwrap(PointerVal), is_volatile, Name);
 
-	/* 0 meant "ABI default" in LLVM 6; the builder already applied it. */
+	/* alignment 0 means "ABI default", which the builder already applied. */
 	if (alignment)
 		ins->setAlignment (Align (alignment));
 	switch (barrier) {
@@ -152,7 +151,7 @@ mono_llvm_build_aligned_load (LLVMBuilderRef builder, LLVMTypeRef Ty, LLVMValueR
 	LoadInst *ins;
 
 	ins = unwrap(builder)->CreateLoad(unwrap (Ty), unwrap(PointerVal), is_volatile, Name);
-	/* 0 meant "ABI default" in LLVM 6; the builder already applied it. */
+	/* alignment 0 means "ABI default", which the builder already applied. */
 	if (alignment)
 		ins->setAlignment (Align (alignment));
 
@@ -189,7 +188,7 @@ mono_llvm_build_aligned_store (LLVMBuilderRef builder, LLVMValueRef Val, LLVMVal
 	StoreInst *ins;
 
 	ins = unwrap(builder)->CreateStore(unwrap(Val), unwrap(PointerVal), is_volatile);
-	/* 0 meant "ABI default" in LLVM 6; the builder already applied it. */
+	/* alignment 0 means "ABI default", which the builder already applied. */
 	if (alignment)
 		ins->setAlignment (Align (alignment));
 
@@ -203,8 +202,7 @@ mono_llvm_build_cmpxchg (LLVMBuilderRef builder, LLVMValueRef ptr, LLVMValueRef 
 
 	/*
 	 * LLVM 13+ requires an explicit alignment on atomic cmpxchg/rmw. The
-	 * compared value's store size is the natural alignment here, matching
-	 * what the untyped LLVM 6 form inferred.
+	 * compared value's store size is the natural alignment here.
 	 */
 	auto *b = unwrap (builder);
 	Value *cmp_val = unwrap (cmp);
@@ -335,8 +333,8 @@ mono_llvm_set_is_constant (LLVMValueRef global_var)
 	unwrap<GlobalVariable>(global_var)->setConstant (true);
 }
 
-// CallInst and InvokeInst share the CallBase parent class since LLVM 8, so the
-// call/invoke branching the LLVM 6 code needed here collapses to one path.
+// CallInst and InvokeInst share the CallBase parent class, so one path handles
+// both call and invoke here.
 
 void
 mono_llvm_set_call_nonnull_arg (LLVMValueRef wrapped_calli, int argNo)
@@ -487,7 +485,7 @@ convert_attr (AttrKind kind)
 	case LLVM_ATTR_UW_TABLE:
 		return Attribute::UWTable;
 	case LLVM_ATTR_NEST:
-		/* Replaces the forked CallingConv::Mono; nest -> R10 on SysV. */
+		/* 'nest' pins the rgctx/imt argument to R10 on SysV. */
 		return Attribute::Nest;
 	default:
 		assert (0);
@@ -573,7 +571,7 @@ mono_llvm_add_param_attr_with_type (LLVMValueRef param, AttrKind kind, LLVMTypeR
 
 /*
  * INDEX is an LLVM AttributeList index: 0 = return value, 1..n = parameters,
- * ~0u = function. addAttributeAtIndex preserves that historical numbering, so
+ * ~0u = function. addAttributeAtIndex preserves that index numbering, so
  * existing callers using '1 + pindex' stay correct -- do NOT renumber them to
  * the 0-based addParamAttr convention.
  */

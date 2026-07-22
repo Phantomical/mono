@@ -187,9 +187,9 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 	 * Generic-shared methods ARE supported (design 3.1 / S6, #15). mini.c's
 	 * generic-jit-info setup requires cfg->llvm_this_reg to be set for every
 	 * gshared LLVM method (mini.c:2574, g_assert (cfg->llvm_this_reg != -1)) so a
-	 * stack walk can reconstruct the frame's generic context. The forked LLVM
-	 * produced that this-slot in its mono-format LSDA; stock LLVM 18 has no such
-	 * concept. We reproduce it with llvm.experimental.stackmap: the translator
+	 * stack walk can reconstruct the frame's generic context. Stock LLVM has no
+	 * built-in this-slot concept, so we supply it with
+	 * llvm.experimental.stackmap: the translator
 	 * plants a stackmap over the home slot of this (reference-type instance
 	 * methods) or the mrgctx arg (static/valuetype/generic-method methods), and
 	 * llvm_jit_finalize_method parses the `.llvm_stackmaps` section back into
@@ -455,7 +455,7 @@ emit_method_inner (EmitContext *ctx)
 	/*
 	 * No calling-convention override: the rgctx/imt argument is tagged
 	 * LLVM_ATTR_NEST instead, which stock LLVM pins to R10 on SysV. See the
-	 * note in process_call (). The forked CallingConv::Mono is gone.
+	 * note in process_call ().
 	 */
 
 	/* if the method doesn't contain
@@ -1020,10 +1020,10 @@ mono_llvm_free_domain_info (MonoDomain *domain)
 
 /*
  * AOT support has been removed from this backend. --aot=llvm cannot work
- * against unmodified LLVM 18 (the pipeline requires mono's forked
- * -place-safepoints / -spp-all-backedges passes), so the AOT code paths were
- * dead. These entry points remain only because aot-compiler.c references them
- * unconditionally; they must never be reached.
+ * against unmodified LLVM 18 (its pipeline needs out-of-tree mono passes --
+ * -place-safepoints / -spp-all-backedges -- that stock LLVM lacks), so the AOT
+ * code paths were dead. These entry points remain only because aot-compiler.c
+ * references them unconditionally; they must never be reached.
  */
 
 void
