@@ -77,7 +77,7 @@ emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, Mo
  * one llvm.experimental.stackmap per gshared method, so the value is arbitrary;
  * the parser (translator.cpp) reads the first record's first location regardless.
  */
-#define MONO_LLVM_THIS_SLOT_STACKMAP_ID 0
+constexpr int MONO_LLVM_THIS_SLOT_STACKMAP_ID = 0;
 
 /*
  * Record the location of SLOT (an alloca holding this/mrgctx) with a

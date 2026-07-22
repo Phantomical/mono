@@ -222,13 +222,15 @@ typedef struct {
 	int sreg;
 } PhiNode;
 
+static inline auto
+get_long_imm (MonoInst *ins)
+{
 #if TARGET_SIZEOF_VOID_P == 4
-#define GET_LONG_IMM(ins) ((ins)->inst_l)
+	return ins->inst_l;
 #else
-#define GET_LONG_IMM(ins) ((ins)->inst_imm)
+	return ins->inst_imm;
 #endif
-
-#define LLVM_INS_INFO(opcode) (&mini_llvm_ins_info [((opcode) - OP_START - 1) * 4])
+}
 
 /*
  * Set to 1 to log every method the translator bails out on, together with the
@@ -258,18 +260,22 @@ typedef struct {
 #define TRACE_FAILURE(ctx, msg) TRACE_FAILURE_CFG ((ctx)->cfg, msg)
 
 #ifdef TARGET_X86
-#define IS_TARGET_X86 1
+inline constexpr bool IS_TARGET_X86 = true;
 #else
-#define IS_TARGET_X86 0
+inline constexpr bool IS_TARGET_X86 = false;
 #endif
 
 #ifdef TARGET_AMD64
-#define IS_TARGET_AMD64 1
+inline constexpr bool IS_TARGET_AMD64 = true;
 #else
-#define IS_TARGET_AMD64 0
+inline constexpr bool IS_TARGET_AMD64 = false;
 #endif
 
-#define ctx_ok(ctx) (!(ctx)->cfg->disable_llvm)
+static inline bool
+ctx_ok (EmitContext *ctx)
+{
+	return !ctx->cfg->disable_llvm;
+}
 
 /* Defined in translator.cpp. */
 /*
@@ -282,6 +288,13 @@ typedef struct {
  * symbol will come from.
  */
 extern const char mini_llvm_ins_info [];
+
+static inline const char *
+llvm_ins_info (int opcode)
+{
+	return &mini_llvm_ins_info [(opcode - OP_START - 1) * 4];
+}
+
 extern LLVMIntPredicate cond_to_llvm_cond [];
 extern LLVMRealPredicate fpcond_to_llvm_cond [];
 extern MonoLLVMModule aot_module;

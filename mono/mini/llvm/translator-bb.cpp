@@ -161,7 +161,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	// Add volatile stores for PHI nodes
 	// These need to be emitted after the PHI nodes
 	for (ins = bb->code; ins; ins = ins->next) {
-		const char *spec = LLVM_INS_INFO (ins->opcode);
+		const char *spec = llvm_ins_info (ins->opcode);
 
 		if (ins->opcode == OP_NOP)
 			continue;
@@ -175,7 +175,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	has_terminator = false;
 	starting_builder = builder;
 	for (ins = bb->code; ins; ins = ins->next) {
-		const char *spec = LLVM_INS_INFO (ins->opcode);
+		const char *spec = llvm_ins_info (ins->opcode);
 		char *dname = nullptr;
 		char dname_buf [128];
 
@@ -285,7 +285,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		case OP_I8CONST:
 #if TARGET_SIZEOF_VOID_P == 4
-			values [ins->dreg] = LLVMConstInt (LLVMInt64Type (), GET_LONG_IMM (ins), FALSE);
+			values [ins->dreg] = LLVMConstInt (LLVMInt64Type (), get_long_imm (ins), FALSE);
 #else
 			values [ins->dreg] = LLVMConstInt (LLVMInt64Type (), static_cast<gint64>(ins->inst_c0), FALSE);
 #endif
@@ -504,7 +504,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 			if (ins->opcode == OP_LCOMPARE_IMM) {
 				lhs = convert (ctx, lhs, LLVMInt64Type ());
-				rhs = LLVMConstInt (LLVMInt64Type (), GET_LONG_IMM (ins), FALSE);
+				rhs = LLVMConstInt (LLVMInt64Type (), get_long_imm (ins), FALSE);
 			}
 			if (ins->opcode == OP_LCOMPARE) {
 				lhs = convert (ctx, lhs, LLVMInt64Type ());
@@ -845,7 +845,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef imm;
 
 			if (spec [MONO_INST_SRC1] == 'l') {
-				imm = LLVMConstInt (LLVMInt64Type (), GET_LONG_IMM (ins), FALSE);
+				imm = LLVMConstInt (LLVMInt64Type (), get_long_imm (ins), FALSE);
 			} else {
 				imm = LLVMConstInt (LLVMInt32Type (), ins->inst_imm, FALSE);
 			}

@@ -909,7 +909,7 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 	bool no_pc = false;
 	static MonoClass *exc_classes [MONO_EXC_INTRINS_NUM];
 
-	if (IS_TARGET_AMD64)
+	if constexpr (IS_TARGET_AMD64)
 		/* Some platforms don't require the pc argument */
 		no_pc = true;
 
