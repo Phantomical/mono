@@ -70,8 +70,14 @@ void      mono_llvm_optimize_method (LLVMValueRef method);
  * FDE, so the caller must locate the FDE whose initial_location matches the
  * method (a module can hold more than one function). It is transcoded into
  * cfg->encoded_unwind_ops; see llvm/ehframe.cpp.
+ *
+ * stackmaps_out / stackmaps_size_out (both may be NULL) receive the loaded
+ * `.llvm_stackmaps` SECTION, non-empty only for gshared methods (the translator
+ * plants a llvm.experimental.stackmap recording the home slot of this/mrgctx).
+ * Task #15 parses it into cfg->llvm_this_reg/offset so a stack walk can rebuild
+ * the frame's generic context.
  */
-gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out);
+gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out, gpointer *stackmaps_out, guint32 *stackmaps_size_out);
 
 /*
  * Transcode the stock DWARF .eh_frame LLVM emits into mono's unwind ops.

@@ -73,6 +73,47 @@ emit_div_check (EmitContext *ctx, LLVMBuilderRef builder, MonoBasicBlock *bb, Mo
 }
 
 /*
+ * Stackmap patchpoint id for the gshared this/rgctx home slot. There is exactly
+ * one llvm.experimental.stackmap per gshared method, so the value is arbitrary;
+ * the parser (translator.cpp) reads the first record's first location regardless.
+ */
+#define MONO_LLVM_THIS_SLOT_STACKMAP_ID 0
+
+/*
+ * Record the location of SLOT (an alloca holding this/mrgctx) with a
+ * llvm.experimental.stackmap intrinsic, so that after code emission the backend
+ * can read the slot's home register+offset out of the `.llvm_stackmaps` section
+ * and publish it as cfg->llvm_this_reg/llvm_this_offset (mini.c:2573-2577).
+ *
+ * The forked LLVM smuggled that location through its custom LSDA (the "mono.this"
+ * metadata flag on the alloca); stock LLVM 18 ignores that flag, so gshared
+ * methods otherwise reach mini.c's g_assert(cfg->llvm_this_reg != -1) with the
+ * field unset. A stackmap over the alloca is the stock-LLVM replacement (design
+ * 3.1 / S6): it records the slot's address as a frame reg+offset that is stable
+ * for the whole method, exactly what a stack walk needs.
+ *
+ * The intrinsic is declared on demand in the method's own module (every method
+ * gets its own, so declaring by name is race-free), variadic void(i64,i32,...).
+ */
+static void
+emit_this_slot_stackmap (EmitContext *ctx, LLVMBuilderRef builder, LLVMValueRef slot)
+{
+	LLVMTypeRef params [] = { LLVMInt64Type (), LLVMInt32Type () };
+	LLVMTypeRef sm_type = LLVMFunctionType (LLVMVoidType (), params, 2, TRUE);
+	LLVMValueRef sm = LLVMGetNamedFunction (ctx->lmodule, "llvm.experimental.stackmap");
+
+	if (!sm)
+		sm = LLVMAddFunction (ctx->lmodule, "llvm.experimental.stackmap", sm_type);
+
+	LLVMValueRef args [] = {
+		LLVMConstInt (LLVMInt64Type (), MONO_LLVM_THIS_SLOT_STACKMAP_ID, FALSE),
+		LLVMConstInt (LLVMInt32Type (), 0, FALSE),
+		slot,
+	};
+	LLVMBuildCall2 (builder, sm_type, sm, args, 3, "");
+}
+
+/*
  * emit_entry_bb:
  *
  *   Emit code to load/convert arguments.
@@ -291,6 +332,12 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 		mono_llvm_build_store (builder, ctx->values [cfg->args [0]->dreg], this_alloc, TRUE, LLVM_BARRIER_NONE);
 
 		set_metadata_flag (this_alloc, "mono.this");
+
+		/*
+		 * Stock LLVM 18 ignores "mono.this"; record the slot's home location via a
+		 * stackmap so the backend can recover cfg->llvm_this_reg/offset (#15, S6.1).
+		 */
+		emit_this_slot_stackmap (ctx, builder, this_alloc);
 	}
 
 	if (cfg->rgctx_var) {
@@ -298,6 +345,23 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			/* FIXME: This could be volatile even in llvmonly mode if used inside a clause etc. */
 			g_assert (!ctx->addresses [cfg->rgctx_var->dreg]);
 			ctx->values [cfg->rgctx_var->dreg] = ctx->rgctx_arg;
+
+			/*
+			 * MRGCTX gshared (#15, S6.2): the rgctx normally stays in the nest
+			 * register (caller-saved, clobbered by the time a stack walk runs), so
+			 * there is no method-wide-stable home for it. Force a dedicated spill
+			 * slot holding the rgctx and record it with a stackmap, exactly as the
+			 * this-derived case does, so llvm_jit_finalize_method can recover
+			 * cfg->llvm_this_reg/offset. The spill is additional to the register
+			 * value above; the body keeps using the register.
+			 */
+			if (cfg->gshared) {
+				LLVMValueRef rgctx_slot = mono_llvm_build_alloca (builder, IntPtrType (), LLVMConstInt (LLVMInt32Type (), 1, FALSE), 0, "");
+				/* Volatile store keeps the slot alive. */
+				mono_llvm_build_store (builder, convert (ctx, ctx->rgctx_arg, IntPtrType ()), rgctx_slot, TRUE, LLVM_BARRIER_NONE);
+				set_metadata_flag (rgctx_slot, "mono.this");
+				emit_this_slot_stackmap (ctx, builder, rgctx_slot);
+			}
 		} else {
 			LLVMValueRef rgctx_alloc, store;
 
@@ -310,6 +374,15 @@ emit_entry_bb (EmitContext *ctx, LLVMBuilderRef builder)
 			store = mono_llvm_build_store (builder, convert (ctx, ctx->rgctx_arg, IntPtrType ()), rgctx_alloc, TRUE, LLVM_BARRIER_NONE);
 
 			set_metadata_flag (rgctx_alloc, "mono.this");
+
+			/*
+			 * MRGCTX gshared (#15, S6.2): rgctx_alloc already holds the rgctx via
+			 * the volatile store above; record its home slot so the backend can
+			 * recover cfg->llvm_this_reg/offset for stack-walk generic-context
+			 * reconstruction.
+			 */
+			if (cfg->gshared)
+				emit_this_slot_stackmap (ctx, builder, rgctx_alloc);
 		}
 	}
 

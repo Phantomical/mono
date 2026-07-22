@@ -176,39 +176,21 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 	}
 
 	/*
-	 * Generic-shared methods are deferred to the classic JIT for now.
+	 * Generic-shared methods ARE supported (design 3.1 / S6, #15). mini.c's
+	 * generic-jit-info setup requires cfg->llvm_this_reg to be set for every
+	 * gshared LLVM method (mini.c:2574, g_assert (cfg->llvm_this_reg != -1)) so a
+	 * stack walk can reconstruct the frame's generic context. The forked LLVM
+	 * produced that this-slot in its mono-format LSDA; stock LLVM 18 has no such
+	 * concept. We reproduce it with llvm.experimental.stackmap: the translator
+	 * plants a stackmap over the home slot of this (reference-type instance
+	 * methods) or the mrgctx arg (static/valuetype/generic-method methods), and
+	 * llvm_jit_finalize_method parses the `.llvm_stackmaps` section back into
+	 * cfg->llvm_this_reg/offset. If that recovery fails for any reason, the method
+	 * declines to the classic JIT there (CAP-EH-0), so no gate is needed here.
 	 *
-	 * mini.c's generic-jit-info setup does, for every gshared method compiled by
-	 * LLVM:
-	 *
-	 *	g_assert (cfg->llvm_this_reg != -1);
-	 *	gi->this_reg = cfg->llvm_this_reg;
-	 *
-	 * and the ONLY producer of cfg->llvm_this_reg is decode_llvm_eh_info(),
-	 * reading it out of the forked LLVM's mono-format LSDA header. Stock LLVM
-	 * emits no such header, so the field is never set.
-	 *
-	 * mini.c now initializes it to -1, so the miscompile that would otherwise
-	 * follow (registering the method with this_reg = 0, a valid-looking but
-	 * wrong register) is already ruled out - the assert fires instead. This gate
-	 * therefore chooses between aborting on every generic-shared method and
-	 * quietly falling back to the classic JIT, and the fallback is the useful
-	 * behaviour while the slot has no source.
-	 *
-	 * Note gsharedvt is already excluded (mini.c sets disable_llvm for it), but
-	 * plain gshared is not, so this gate is load-bearing rather than theoretical.
-	 *
-	 * Recovering the slot properly needs llvm.experimental.stackmap (design 3.1).
-	 * That is worth doing: design 6 (S6) singles out this exclusion as the one to
-	 * resist, since it removes List<T>/Dictionary<K,V>/LINQ-over-reference-types
-	 * - a large share of real hot paths - from the LLVM tier.
+	 * gsharedvt is still excluded (mini.c sets disable_llvm for it earlier); this
+	 * covers plain gshared only.
 	 */
-	if (cfg->gshared) {
-		TRACE_FAILURE_CFG (cfg, "gshared (needs the llvm_this_reg slot, 3c)");
-		cfg->exception_message = g_strdup ("gshared (needs the llvm_this_reg slot, 3c)");
-		cfg->disable_llvm = TRUE;
-		return;
-	}
 
 	if (cfg->method->save_lmf) {
 		TRACE_FAILURE_CFG (cfg, "lmf");
@@ -1323,6 +1305,90 @@ init_jit_module (MonoDomain *domain)
 	mono_loader_unlock ();
 }
 
+/* Unaligned little-endian reads for the stackmap parser below. */
+static inline guint16
+read_le16 (const guint8 *p)
+{
+	return (guint16)(p [0] | (p [1] << 8));
+}
+
+static inline guint32
+read_le32 (const guint8 *p)
+{
+	return (guint32)p [0] | ((guint32)p [1] << 8) | ((guint32)p [2] << 16) | ((guint32)p [3] << 24);
+}
+
+/*
+ * recover_gshared_this_slot:
+ *
+ *   Parse the `.llvm_stackmaps` section LLVM emitted for a gshared method and
+ * publish the home location of the this/mrgctx slot into cfg->llvm_this_reg /
+ * cfg->llvm_this_offset, the fields mini.c's generic-jit-info setup reads
+ * (mini.c:2573-2577) so that a stack walk over a live frame of this method can
+ * reconstruct its generic context (mini-exceptions.c:831-835).
+ *
+ * The translator planted exactly one llvm.experimental.stackmap over the alloca
+ * that holds this/mrgctx (emit_this_slot_stackmap, translator-call.cpp), so the
+ * first record's first location is that slot. LLVM lowers an alloca operand to a
+ * Direct location {DwarfReg, Offset} whose value is the slot's ADDRESS =
+ * reg+offset; the consumer dereferences it, reading the stored this/mrgctx.
+ * this_in_reg is forced to 0 by the LLVM branch in mini.c, matching Direct.
+ *
+ * Returns FALSE (declining the method to the classic JIT, per CAP-EH-0: a
+ * plausible-but-wrong this-slot is worse than a fallback) if the section is
+ * absent, malformed, or the location is anything other than Direct - in which
+ * case *(reg+offset) would not equal this and stack walks would read garbage.
+ *
+ * Stackmap format is version 3 (LLVM's StackMapParser layout), little-endian.
+ */
+static gboolean
+recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
+{
+	/* StackMap location kinds (llvm/CodeGen/StackMaps.h). */
+	enum { LOC_REGISTER = 1, LOC_DIRECT = 2, LOC_INDIRECT = 3, LOC_CONSTANT = 4, LOC_CONST_INDEX = 5 };
+
+	if (!stackmaps || size < 16)
+		return FALSE;
+
+	guint8 version = stackmaps [0];
+	if (version != 3)
+		return FALSE;
+
+	guint32 num_functions = read_le32 (stackmaps + 4);
+	guint32 num_constants = read_le32 (stackmaps + 8);
+	guint32 num_records = read_le32 (stackmaps + 12);
+	if (num_records == 0)
+		return FALSE;
+
+	/* Header (16) + StkSizeRecord[num_functions] (24 each) + Constants (8 each). */
+	guint64 rec_off = (guint64)16 + (guint64)num_functions * 24 + (guint64)num_constants * 8;
+	/* First record: u64 id, u32 instr_offset, u16 pad, u16 num_locations, then locations. */
+	if (rec_off + 16 > size)
+		return FALSE;
+	guint8 *rec = stackmaps + rec_off;
+
+	guint16 num_locations = read_le16 (rec + 14);
+	if (num_locations == 0)
+		return FALSE;
+
+	/* Location[0]: u8 kind, u8 reserved, u16 size, u16 dwarf_reg, u16 reserved, i32 offset. */
+	if (rec_off + 16 + 12 > size)
+		return FALSE;
+	guint8 *loc = rec + 16;
+	guint8 kind = loc [0];
+	guint16 dwarf_reg = read_le16 (loc + 4);
+	gint32 offset = (gint32)read_le32 (loc + 8);
+
+	if (kind != LOC_DIRECT) {
+		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap not Direct");
+		return FALSE;
+	}
+
+	cfg->llvm_this_reg = mono_dwarf_reg_to_hw_reg (dwarf_reg);
+	cfg->llvm_this_offset = offset;
+	return TRUE;
+}
+
 static void
 llvm_jit_finalize_method (EmitContext *ctx)
 {
@@ -1353,7 +1419,9 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	guint32 llvm_code_size = 0;
 	gpointer dwarf_eh_frame = NULL;
 	guint32 dwarf_eh_frame_size = 0;
-	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size);
+	gpointer stackmaps = NULL;
+	guint32 stackmaps_size = 0;
+	cfg->native_code = (guint8*)mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size);
 	mono_llvm_remove_gc_safepoint_poll (ctx->lmodule);
 	mono_codeman_disable_write ();
 	if (cfg->verbose_level > 1) {
@@ -1425,6 +1493,20 @@ llvm_jit_finalize_method (EmitContext *ctx)
 			g_print ("UNWIND INFO FOR %s:\n", mono_method_full_name (cfg->method, TRUE));
 			mono_print_unwind_info (cfg->encoded_unwind_ops, cfg->encoded_unwind_ops_len);
 			g_print ("\n");
+		}
+	}
+
+	/*
+	 * gshared: recover cfg->llvm_this_reg/offset from the `.llvm_stackmaps` section
+	 * (the translator planted a stackmap over the this/mrgctx home slot). mini.c's
+	 * generic-jit-info setup asserts this is set for every gshared LLVM method
+	 * (mini.c:2574). If recovery fails, decline to the classic JIT rather than
+	 * publish a wrong this-slot (CAP-EH-0).
+	 */
+	if (cfg->gshared) {
+		if (!recover_gshared_this_slot (cfg, (guint8*)stackmaps, stackmaps_size)) {
+			set_failure (ctx, "gshared this-slot not recoverable from stackmap");
+			return;
 		}
 	}
 

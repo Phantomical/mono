@@ -79,6 +79,14 @@ struct CompileResult {
 	uint64_t code_size = 0;
 	/* Stock DWARF .eh_frame of this module (for the EH port). */
 	EhFrameInfo eh_frame;
+	/*
+	 * The `.llvm_stackmaps` section of this module ({nullptr,0} unless the
+	 * translator planted a llvm.experimental.stackmap, which it does only for
+	 * gshared methods). Task #15 parses it to recover cfg->llvm_this_reg/offset -
+	 * the home slot of this/mrgctx a stack walk needs to rebuild the frame's
+	 * generic context.
+	 */
+	EhFrameInfo stackmaps;
 	/* Address of the mono-format "mono_eh_frame" global, or 0 if absent. */
 	uint64_t mono_eh_frame = 0;
 };

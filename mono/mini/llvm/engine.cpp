@@ -97,6 +97,14 @@ struct ObjectInfo {
 	/* Function symbol name -> machine-code size. */
 	std::map<std::string, uint64_t> func_sizes;
 	EhFrameInfo eh_frame;
+	/*
+	 * The loaded `.llvm_stackmaps` section, or {nullptr,0} if the module emitted
+	 * none. Present only for gshared methods, where the translator plants a
+	 * llvm.experimental.stackmap recording the home slot of this/mrgctx; task #15
+	 * parses it back into cfg->llvm_this_reg/offset. Same {addr,size} shape as
+	 * eh_frame, captured by the same section-name loop.
+	 */
+	EhFrameInfo stackmaps;
 };
 
 /* ---- relocation audit ----------------------------------------------------
@@ -312,19 +320,30 @@ capture_object_info (orc::MaterializationResponsibility &r, const object::Object
 		}
 	}
 
-	/* Locate the loaded .eh_frame for the EH port. */
-	for (const object::SectionRef &sec : obj.sections ()) {
-		Expected<StringRef> name = sec.getName ();
-		if (!name) {
-			consumeError (name.takeError ());
-			continue;
+	/*
+	 * Locate a loaded section by name and return where it landed, {nullptr,0} if
+	 * absent. Used for .eh_frame (EH port) and .llvm_stackmaps (gshared this-slot,
+	 * #15); the EH port's .gcc_except_table can reuse it too.
+	 */
+	auto capture_named_section = [&obj, &loaded] (StringRef want) -> EhFrameInfo {
+		EhFrameInfo r;
+		for (const object::SectionRef &sec : obj.sections ()) {
+			Expected<StringRef> name = sec.getName ();
+			if (!name) {
+				consumeError (name.takeError ());
+				continue;
+			}
+			if (*name != want)
+				continue;
+			r.addr = (uint8_t *) (uintptr_t) loaded.getSectionLoadAddress (sec);
+			r.size = sec.getSize ();
+			break;
 		}
-		if (*name != ".eh_frame")
-			continue;
-		info.eh_frame.addr = (uint8_t *) (uintptr_t) loaded.getSectionLoadAddress (sec);
-		info.eh_frame.size = sec.getSize ();
-		break;
-	}
+		return r;
+	};
+
+	info.eh_frame = capture_named_section (".eh_frame");
+	info.stackmaps = capture_named_section (".llvm_stackmaps");
 
 	std::lock_guard<std::mutex> lock (g_object_info_mutex);
 	g_object_info[r.getTargetJITDylib ().getName ()] = std::move (info);
@@ -848,6 +867,7 @@ MonoLLVMJIT::compile (Function *entry,
 			if (size_it != info.func_sizes.end ())
 				result.code_size = size_it->second;
 			result.eh_frame = info.eh_frame;
+			result.stackmaps = info.stackmaps;
 			g_object_info.erase (entry_it);
 		}
 	}
@@ -944,7 +964,8 @@ gpointer
 mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method,
                           int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs,
                           gpointer *eh_frame, guint32 *code_size_out,
-                          gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out)
+                          gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out,
+                          gpointer *stackmaps_out, guint32 *stackmaps_size_out)
 {
 	(void) mono_ee;
 
@@ -978,6 +999,10 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 		*dwarf_eh_frame_out = (gpointer) res.eh_frame.addr;
 	if (dwarf_eh_frame_size_out)
 		*dwarf_eh_frame_size_out = (guint32) res.eh_frame.size;
+	if (stackmaps_out)
+		*stackmaps_out = (gpointer) res.stackmaps.addr;
+	if (stackmaps_size_out)
+		*stackmaps_size_out = (guint32) res.stackmaps.size;
 
 	return (gpointer) (gsize) res.entry;
 }
