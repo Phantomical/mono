@@ -71,6 +71,10 @@
 #include "llvm-c/BitWriter.h"
 #include "llvm-c/Analysis.h"
 
+#include <vector>
+#include <unordered_map>
+#include "llvm/ADT/DenseMap.h"
+
 #include "translator-cpp.hpp"
 #include "backend.h"
 #include "aot-compiler.h"
@@ -184,9 +188,9 @@ typedef struct {
 	MonoType **vreg_cli_types;
 	LLVMCallInfo *linfo;
 	MonoMethodSignature *sig;
-	GSList *builders;
-	GHashTable *region_to_handler;
-	GHashTable *clause_to_handler;
+	std::vector<LLVMBuilderRef> builders;
+	std::unordered_map<int, MonoBasicBlock*> region_to_handler;
+	std::unordered_map<int, MonoBasicBlock*> clause_to_handler;
 	LLVMBuilderRef alloca_builder;
 	LLVMValueRef last_alloca;
 	LLVMValueRef rgctx_arg;
@@ -208,10 +212,10 @@ typedef struct {
 	 * several catch clauses defines it (and sets the personality fn) exactly once.
 	 */
 	LLVMValueRef personality;
-	GPtrArray *phi_values;
-	GPtrArray *bblock_list;
+	std::vector<LLVMValueRef> phi_values;
+	std::vector<MonoBasicBlock*> bblock_list;
 	char *method_name;
-	GHashTable *jit_callees;
+	llvm::DenseMap<MonoMethod*, LLVMValueRef> jit_callees;
 	LLVMValueRef long_bb_break_var;
 } EmitContext;
 

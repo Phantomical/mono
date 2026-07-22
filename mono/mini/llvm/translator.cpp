@@ -274,8 +274,6 @@ emit_method_inner (EmitContext *ctx);
 static void
 free_ctx (EmitContext *ctx)
 {
-	GSList *l;
-
 	g_free (ctx->values);
 	g_free (ctx->addresses);
 	g_free (ctx->vreg_types);
@@ -283,21 +281,14 @@ free_ctx (EmitContext *ctx)
 	g_free (ctx->vreg_cli_types);
 	g_free (ctx->is_dead);
 	g_free (ctx->unreachable);
-	g_ptr_array_free (ctx->phi_values, TRUE);
 	g_free (ctx->bblocks);
-	g_hash_table_destroy (ctx->region_to_handler);
-	g_hash_table_destroy (ctx->clause_to_handler);
-	g_hash_table_destroy (ctx->jit_callees);
 
 	g_free (ctx->method_name);
-	g_ptr_array_free (ctx->bblock_list, TRUE);
 
-	for (l = ctx->builders; l; l = l->next) {
-		LLVMBuilderRef builder = static_cast<LLVMBuilderRef>(l->data);
+	for (LLVMBuilderRef builder : ctx->builders)
 		LLVMDisposeBuilder (builder);
-	}
 
-	g_free (ctx);
+	delete ctx;
 }
 
 /*
@@ -318,7 +309,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	/* The code below might acquire the loader lock, so use it for global locking */
 	mono_loader_lock ();
 
-	ctx = g_new0 (EmitContext, 1);
+	ctx = new EmitContext ();
 	ctx->cfg = cfg;
 	ctx->mempool = cfg->mempool;
 
@@ -334,19 +325,16 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	ctx->vreg_types = g_new0 (LLVMTypeRef, cfg->next_vreg);
 	ctx->is_vphi = g_new0 (gboolean, cfg->next_vreg);
 	ctx->vreg_cli_types = g_new0 (MonoType*, cfg->next_vreg);
-	ctx->phi_values = g_ptr_array_sized_new (256);
-	/* 
+	ctx->phi_values.reserve (256);
+	/*
 	 * This signals whenever the vreg was defined by a phi node with no input vars
 	 * (i.e. all its input bblocks end with NOT_REACHABLE).
 	 */
 	ctx->is_dead = g_new0 (gboolean, cfg->next_vreg);
 	/* Whenever the bblock is unreachable */
 	ctx->unreachable = g_new0 (gboolean, cfg->max_block_num);
-	ctx->bblock_list = g_ptr_array_sized_new (256);
+	ctx->bblock_list.reserve (256);
 
-	ctx->region_to_handler = g_hash_table_new (NULL, NULL);
-	ctx->clause_to_handler = g_hash_table_new (NULL, NULL);
-	ctx->jit_callees = g_hash_table_new (NULL, NULL);
 	init_jit_module (cfg->domain);
 	ctx->module = static_cast<MonoLLVMModule*>(domain_jit_info (cfg->domain)->llvm_module);
 	method_name = mono_method_full_name (cfg->method, TRUE);
@@ -367,8 +355,8 @@ mono_llvm_emit_method (MonoCompile *cfg)
 			builder = create_builder (ctx);
 			LLVMPositionBuilderAtEnd (builder, phi_bb);
 
-			for (i = 0; i < static_cast<int>(ctx->phi_values->len); ++i) {
-				LLVMValueRef v = static_cast<LLVMValueRef>(g_ptr_array_index (ctx->phi_values, i));
+			for (i = 0; i < static_cast<int>(ctx->phi_values.size ()); ++i) {
+				LLVMValueRef v = ctx->phi_values [i];
 				if (LLVMGetInstructionParent (v) == nullptr)
 					LLVMInsertIntoBuilder (builder, v);
 			}
@@ -397,7 +385,7 @@ emit_method_inner (EmitContext *ctx)
 	LLVMCallInfo *linfo;
 	LLVMModuleRef lmodule = ctx->lmodule;
 	BBInfo *bblocks;
-	GPtrArray *bblock_list = ctx->bblock_list;
+	std::vector<MonoBasicBlock*> &bblock_list = ctx->bblock_list;
 	MonoMethodHeader *header;
 	MonoExceptionClause *clause;
 	char **names;
@@ -673,7 +661,7 @@ emit_method_inner (EmitContext *ctx)
 				if (ins->opcode == OP_VPHI)
 					ctx->addresses [ins->dreg] = create_address (ctx, values [ins->dreg], phi_etype);
 
-				g_ptr_array_add (ctx->phi_values, values [ins->dreg]);
+				ctx->phi_values.push_back (values [ins->dreg]);
 
 				/* 
 				 * Set the expected type of the incoming arguments since these have
@@ -706,14 +694,14 @@ emit_method_inner (EmitContext *ctx)
 	for (bb_index = 0; bb_index < cfg->num_bblocks; ++bb_index) {
 		bb = cfg->bblocks [bb_index];
 		if (!(bb->region != static_cast<guint>(-1) && !MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))) {
-			g_ptr_array_add (bblock_list, bb);
+			bblock_list.push_back (bb);
 			bblocks [bb->block_num].added = TRUE;
 		}
 	}
 
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
 		if (!bblocks [bb->block_num].added)
-			g_ptr_array_add (bblock_list, bb);
+			bblock_list.push_back (bb);
 	}
 
 	/*
@@ -733,8 +721,8 @@ emit_method_inner (EmitContext *ctx)
 			continue;
 
 		clause_index = MONO_REGION_CLAUSE_INDEX (bb->region);
-		g_hash_table_insert (ctx->region_to_handler, GUINT_TO_POINTER (mono_get_block_region_notry (cfg, bb->region)), bb);
-		g_hash_table_insert (ctx->clause_to_handler, GINT_TO_POINTER (clause_index), bb);
+		ctx->region_to_handler [mono_get_block_region_notry (cfg, bb->region)] = bb;
+		ctx->clause_to_handler [clause_index] = bb;
 
 		/*
 		 * Create a new bblock which CALL_HANDLER/landing pads can branch to, because branching to the
@@ -745,8 +733,8 @@ emit_method_inner (EmitContext *ctx)
 		ctx->bblocks [bb->block_num].call_handler_target_bb = LLVMAppendBasicBlock (ctx->lmethod, name);
 	}
 
-	for (bb_index = 0; bb_index < bblock_list->len; ++bb_index) {
-		bb = static_cast<MonoBasicBlock*>(g_ptr_array_index (bblock_list, bb_index));
+	for (bb_index = 0; bb_index < bblock_list.size (); ++bb_index) {
+		bb = bblock_list [bb_index];
 
 		// Prune unreachable mono BBs.
 		if (!(bb == cfg->bb_entry || bb->in_count > 0))
@@ -1355,12 +1343,9 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	MonoCompile *cfg = ctx->cfg;
 	MonoDomain *domain = mono_domain_get ();
 	MonoJitDomainInfo *domain_info;
-	int nvars = g_hash_table_size (ctx->jit_callees);
-	LLVMValueRef *callee_vars = g_new0 (LLVMValueRef, nvars); 
+	int nvars = ctx->jit_callees.size ();
+	LLVMValueRef *callee_vars = g_new0 (LLVMValueRef, nvars);
 	gpointer *callee_addrs = g_new0 (gpointer, nvars);
-	GHashTableIter iter;
-	LLVMValueRef var;
-	MonoMethod *callee;
 	gpointer eh_frame;
 	int i;
 
@@ -1370,10 +1355,9 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * code so it can update them after their corresponding method was
 	 * compiled.
 	 */
-	g_hash_table_iter_init (&iter, ctx->jit_callees);
 	i = 0;
-	while (g_hash_table_iter_next (&iter, NULL, reinterpret_cast<void**>(&var)))
-		callee_vars [i ++] = var;
+	for (const auto &kv : ctx->jit_callees)
+		callee_vars [i ++] = kv.second;
 
 	mono_codeman_enable_write ();
 	guint32 llvm_code_size = 0;
@@ -1506,9 +1490,9 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	domain_info = domain_jit_info (domain);
 	if (!domain_info->llvm_jit_callees)
 		domain_info->llvm_jit_callees = g_hash_table_new (NULL, NULL);
-	g_hash_table_iter_init (&iter, ctx->jit_callees);
 	i = 0;
-	while (g_hash_table_iter_next (&iter, reinterpret_cast<void**>(&callee), reinterpret_cast<void**>(&var))) {
+	for (const auto &kv : ctx->jit_callees) {
+		MonoMethod *callee = kv.first;
 		GSList *addrs = static_cast<GSList*>(g_hash_table_lookup (domain_info->llvm_jit_callees, callee));
 		addrs = g_slist_prepend (addrs, callee_addrs [i]);
 		g_hash_table_insert (domain_info->llvm_jit_callees, callee, addrs);

@@ -46,7 +46,8 @@ handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
 		if (other->try_offset != self->try_offset || other->try_len != self->try_len)
 			continue;
 
-		other_bb = static_cast<MonoBasicBlock*>(g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (j)));
+		auto clause_it = ctx->clause_to_handler.find (j);
+		other_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
 		if (other_bb && ctx->bblocks [other_bb->block_num].invoke_target)
 			return true;
 	}
@@ -4355,7 +4356,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 * Fault clauses are like finally clauses, but they are only called if an exception is thrown.
 			 */
 			if (!is_fault) {
-				handler_bb = static_cast<MonoBasicBlock*>(g_hash_table_lookup (ctx->region_to_handler, GUINT_TO_POINTER (mono_get_block_region_notry (cfg, bb->region))));
+				auto region_it = ctx->region_to_handler.find (mono_get_block_region_notry (cfg, bb->region));
+				handler_bb = region_it != ctx->region_to_handler.end () ? region_it->second : nullptr;
 				g_assert (handler_bb);
 				info = &bblocks [handler_bb->block_num];
 				lhs = info->finally_ind;

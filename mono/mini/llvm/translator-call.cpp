@@ -497,7 +497,8 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 				 * MonoJitDomainInfo.llvm_jit_callees and updated when the method it refers to is
 				 * compiled.
 				 */
-				LLVMValueRef tramp_var = static_cast<LLVMValueRef>(g_hash_table_lookup (ctx->jit_callees, call->method));
+				auto jit_callee_it = ctx->jit_callees.find (call->method);
+				LLVMValueRef tramp_var = jit_callee_it != ctx->jit_callees.end () ? jit_callee_it->second : nullptr;
 				if (!tramp_var) {
 					target =
 						mono_create_jit_trampoline (mono_domain_get (),
@@ -511,7 +512,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef *builder_ref,
 					tramp_var = LLVMAddGlobal (ctx->lmodule, LLVMPointerType (llvm_sig, 0), name);
 					LLVMSetInitializer (tramp_var, LLVMConstIntToPtr (LLVMConstInt (LLVMInt64Type (), static_cast<guint64>(reinterpret_cast<size_t>(target)), FALSE), LLVMPointerType (llvm_sig, 0)));
 					LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
-					g_hash_table_insert (ctx->jit_callees, call->method, tramp_var);
+					ctx->jit_callees [call->method] = tramp_var;
 				}
 				callee = LLVMBuildLoad2 (builder, LLVMPointerType (llvm_sig, 0), tramp_var, "");
 			}
@@ -1044,7 +1045,8 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, LLVMBuilderRef builder
 			if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
 				continue;
 
-			handler_bb = static_cast<MonoBasicBlock*>(g_hash_table_lookup (ctx->clause_to_handler, GINT_TO_POINTER (i)));
+			auto clause_it = ctx->clause_to_handler.find (i);
+			handler_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
 			g_assert (handler_bb);
 			g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
 			LLVMAddCase (switch_ins, LLVMConstInt (LLVMInt32Type (), i, FALSE), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
