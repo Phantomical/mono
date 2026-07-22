@@ -115,44 +115,32 @@ struct ObjectInfo {
  */
 
 /*
- * Does this x86-64 relocation force a full 64-bit address through a field
- * narrower than 64 bits, with no indirection to absorb the range?
+ * Does this x86-64 relocation drive an address - or a displacement to one -
+ * through a field narrower than 64 bits, with no indirection wide enough to
+ * absorb the range? In this engine every JIT section is mmap'd by a stock
+ * SectionMemoryManager with no low-address guarantee, and code, rodata,
+ * eh_frame and data land in separate slabs an unbounded distance apart. So any
+ * 32-bit (or narrower) absolute address, and any 32-bit displacement between
+ * two independently-mapped sections, can overflow its field - and
+ * RuntimeDyldELF resolves those forms behind a bare assert(isInt<32>()) that is
+ * compiled out in the shipped LLVM, so the overflow is written silently. One
+ * concrete case: the small model encodes each FDE pc-begin as a PC32 from the
+ * .eh_frame slab to the code slab (the large model emits PC64 there).
  *
- * INCLUDED, and why each one is genuinely unsafe here:
- *   - R_X86_64_32 / R_X86_64_32S: absolute 32-bit. Cannot name a section above
- *     4 GB at all. Small-model codegen emits 32S for, among other things, a
- *     jump-table base address.
- *   - R_X86_64_PC32: 32-bit displacement resolved directly by RuntimeDyld
- *     against the real load address, guarded only by assert(isInt<32>()). The
- *     small model emits one per function in .eh_frame, which encodes its FDE
- *     pc-begin as DW_EH_PE_pcrel|sdata4 - a displacement from the .eh_frame
- *     allocation to the code allocation. The large model emits PC64 there.
- *   - the 16/8-bit forms, for completeness; codegen never emits them here.
+ * The only non-obvious members are the GOT/PLT/TLS-GD forms below. RuntimeDyld
+ * does interpose - a stub for PLT32, a GOT entry for GOTPCREL* and the GD/IE
+ * TLS forms - but it allocates that GOT through allocateDataSection() into the
+ * RWData slab group, a different mmap group from the CodeMem the referring code
+ * lives in, and rewrites the reference into a PC32 against it. That code->GOT
+ * displacement is 32-bit and cross-group, so it hits the same assert; the
+ * indirection does not help. By contrast GOT32/GOTOFF64 are offsets within the
+ * GOT, SIZE32/SIZE64 are symbol sizes, and DTPOFF32/TPOFF32 are TLS-block /
+ * thread-pointer offsets - none is a mapped address, so none truncates.
  *
- * EXCLUDED - and note carefully that this is a PRAGMATIC exclusion, not a
- * safety argument:
- *   - R_X86_64_PLT32 and R_X86_64_GOTPCREL/GOTPCRELX/REX_GOTPCRELX are left
- *     out because the large model never emits them (measured: zero across a
- *     603-module corpus of real mono methods), so including them would buy no
- *     coverage while risking noise. They are NOT safe in principle. RTDyld
- *     does interpose - a stub for PLT32, a GOT entry for GOTPCREL* - but the
- *     GOT is not local to the code: RuntimeDyldELF rewrites GOTPCREL* into a
- *     PC32 against the GOT section, which it allocates through
- *     allocateDataSection(IsReadOnly=false). In SectionMemoryManager that is
- *     the RWDataMem group, a different set of mmap slabs from the CodeMem
- *     group the referring code lives in (see the three MemoryGroup members of
- *     SectionMemoryManager). So a code->GOT reference is a 32-bit displacement
- *     across two independent allocations and hits exactly the same bare
- *     assert(isInt<32>()) as everything above. The PLT32 stub's own GOT load
- *     has the same shape.
- *
- *     CONSEQUENCE, stated plainly: this auditor has a false-negative gap. If
- *     some future codegen change made the large model emit GOTPCREL*, the
- *     audit would stay silent on a genuinely unsafe relocation. It is tolerable
- *     today only because a code-model regression also flips every function's
- *     .eh_frame to PC32 (603 of 603 modules in the corpus), which the audit
- *     does catch - i.e. the gap is masked by a louder signal, not closed.
- *   - R_X86_64_GOT32: a 32-bit offset within the GOT, not an address.
+ * The switch is exhaustive over the defined R_X86_64_* set (llvm's
+ * ELFRelocs/x86_64.def) so that widening coverage is always a visible edit;
+ * default catches only types no psABI defines and, like a target this analysis
+ * has not covered, is reported as not-truncating rather than guessed unsafe.
  *
  * Non-x86-64 targets are not classified at all; see audit_relocations().
  */
@@ -160,14 +148,58 @@ static bool
 x86_64_reloc_truncates_address (uint64_t type)
 {
 	switch (type) {
+	/* Narrow absolute or PC-relative addresses/displacements. */
+	case ELF::R_X86_64_8:
+	case ELF::R_X86_64_PC8:
+	case ELF::R_X86_64_16:
+	case ELF::R_X86_64_PC16:
 	case ELF::R_X86_64_32:
 	case ELF::R_X86_64_32S:
 	case ELF::R_X86_64_PC32:
-	case ELF::R_X86_64_16:
-	case ELF::R_X86_64_PC16:
-	case ELF::R_X86_64_8:
-	case ELF::R_X86_64_PC8:
+	/* 32-bit displacements to a stub or GOT/TLS entry in another mmap slab. */
+	case ELF::R_X86_64_PLT32:
+	case ELF::R_X86_64_GOTPCREL:
+	case ELF::R_X86_64_GOTPCRELX:
+	case ELF::R_X86_64_REX_GOTPCRELX:
+	case ELF::R_X86_64_GOTPC32:
+	case ELF::R_X86_64_TLSGD:
+	case ELF::R_X86_64_TLSLD:
+	case ELF::R_X86_64_GOTTPOFF:
+	case ELF::R_X86_64_GOTPC32_TLSDESC:
 		return true;
+
+	/* Full 64-bit addresses or displacements - resolved at full width. */
+	case ELF::R_X86_64_64:
+	case ELF::R_X86_64_PC64:
+	case ELF::R_X86_64_GOT64:
+	case ELF::R_X86_64_GOTPCREL64:
+	case ELF::R_X86_64_GOTPC64:
+	case ELF::R_X86_64_GOTPLT64:
+	case ELF::R_X86_64_GOTOFF64:
+	case ELF::R_X86_64_PLTOFF64:
+	/* 64-bit TLS module id / offsets, filled at full width. */
+	case ELF::R_X86_64_DTPMOD64:
+	case ELF::R_X86_64_DTPOFF64:
+	case ELF::R_X86_64_TPOFF64:
+	case ELF::R_X86_64_TLSDESC:
+	/* Offsets and sizes, not addresses. */
+	case ELF::R_X86_64_GOT32:
+	case ELF::R_X86_64_DTPOFF32:
+	case ELF::R_X86_64_TPOFF32:
+	case ELF::R_X86_64_SIZE32:
+	case ELF::R_X86_64_SIZE64:
+	/* Full-width dynamic-linker relocs, or no field written at all. */
+	case ELF::R_X86_64_RELATIVE:
+	case ELF::R_X86_64_IRELATIVE:
+	case ELF::R_X86_64_GLOB_DAT:
+	case ELF::R_X86_64_JUMP_SLOT:
+	case ELF::R_X86_64_COPY:
+	case ELF::R_X86_64_TLSDESC_CALL:
+	case ELF::R_X86_64_NONE:
+		return false;
+
+	/* No psABI-defined x86-64 type reaches here; treat an unknown type as
+	 * unclassified (not truncating), matching audit_relocations()'s contract. */
 	default:
 		return false;
 	}

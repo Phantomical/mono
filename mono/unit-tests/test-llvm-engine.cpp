@@ -334,7 +334,9 @@ audit_code_model (CodeModel::Model cm)
  *      Data and code go through the GOT/PLT here despite the JIT's relocation
  *      model being STATIC, not PIC: mono's globals and callees are external and
  *      not dso_local, and ELF lowering routes those indirectly regardless of
- *      relocation model. See the exclusion note in engine.cpp.
+ *      relocation model - which is why the GOT/PLT forms (REX_GOTPCRELX, PLT32)
+ *      dominate the small-model counts above and are classified truncating; see
+ *      x86_64_reloc_truncates_address in engine.cpp.
  *   2. POSITIVE CONTROL. The same probe under Large must come back clean, and
  *      with a non-zero relocation count so a silent "found nothing to look at"
  *      cannot masquerade as a pass.

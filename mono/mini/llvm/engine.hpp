@@ -223,8 +223,8 @@ private:
  * it), the engine audits the
  * relocations LLVM actually emitted. That is the property that matters, and it
  * is observable no matter how the code model got chosen. Which relocations
- * count as unsafe, and the false-negative gap in that set, are documented on
- * x86_64_reloc_truncates_address() in engine.cpp.
+ * count as unsafe - an exhaustive classification over the x86-64 psABI set - is
+ * documented on x86_64_reloc_truncates_address() in engine.cpp.
  *
  * These three entry points are part of the intra-directory interface only
  * because mono/unit-tests/test-llvm-engine.cpp drives them; nothing outside
