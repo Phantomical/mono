@@ -298,7 +298,6 @@ mono_llvm_emit_method (MonoCompile *cfg)
 {
 	EmitContext *ctx;
 	char *method_name;
-	int i;
 
 	if (cfg->skip)
 		return;
@@ -352,8 +351,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 			builder = create_builder (ctx);
 			builder->SetInsertPoint (llvm::unwrap (phi_bb));
 
-			for (i = 0; i < static_cast<int>(ctx->phi_values.size ()); ++i) {
-				LLVMValueRef v = ctx->phi_values [i];
+			for (LLVMValueRef v : ctx->phi_values) {
 				if (LLVMGetInstructionParent (v) == nullptr)
 					LLVMInsertIntoBuilder (llvm::wrap (builder), v);
 			}
@@ -377,7 +375,7 @@ emit_method_inner (EmitContext *ctx)
 	LLVMValueRef method = nullptr;
 	LLVMValueRef *values = ctx->values;
 	int i, max_block_num;
-	/* Indexes cfg->bblocks (guint num_bblocks) and bblock_list (guint len) */
+	/* Indexes cfg->bblocks (guint num_bblocks) */
 	guint bb_index;
 	LLVMCallInfo *linfo;
 	LLVMModuleRef lmodule = ctx->lmodule;
@@ -730,9 +728,7 @@ emit_method_inner (EmitContext *ctx)
 		ctx->bblocks [bb->block_num].call_handler_target_bb = LLVMAppendBasicBlock (ctx->lmethod, name);
 	}
 
-	for (bb_index = 0; bb_index < bblock_list.size (); ++bb_index) {
-		bb = bblock_list [bb_index];
-
+	for (MonoBasicBlock *bb : bblock_list) {
 		// Prune unreachable mono BBs.
 		if (!(bb == cfg->bb_entry || bb->in_count > 0))
 			continue;
