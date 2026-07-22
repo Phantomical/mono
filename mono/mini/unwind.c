@@ -202,6 +202,20 @@ mono_dwarf_reg_to_hw_reg (int reg)
 	return map_dwarf_reg_to_hw_reg [reg];
 }
 
+/*
+ * mono_dwarf_reg_is_valid:
+ *
+ *   Return whether REG is a legal index into the dwarf->hw register map, i.e. a
+ * value mono_dwarf_reg_to_hw_reg () can be called with without indexing
+ * map_dwarf_reg_to_hw_reg [NUM_DWARF_REGS] out of bounds. NUM_DWARF_REGS is a
+ * file-local macro, so callers outside unwind.c bounds-check through this.
+ */
+gboolean
+mono_dwarf_reg_is_valid (int reg)
+{
+	return reg >= 0 && reg < NUM_DWARF_REGS;
+}
+
 static G_GNUC_UNUSED void
 encode_uleb128 (guint32 value, guint8 *buf, guint8 **endbuf)
 {

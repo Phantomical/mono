@@ -1350,6 +1350,20 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 	if (!stackmaps || size < 16)
 		return FALSE;
 
+	/*
+	 * A gshared reference-type instance default-interface-method with
+	 * context_used == 0 has rgctx_var == NULL, so the translator stackmapped the
+	 * `this` slot (translator-call.cpp:321). But the stack-walk consumer routes by
+	 * method kind and treats a default method as carrying an mrgctx, not `this`
+	 * (get_generic_info_from_stack_frame, mini-exceptions.c:839). The recovered
+	 * `this` value would then be misread as an mrgctx, so decline to the classic
+	 * JIT instead of publishing it (CAP-EH-0).
+	 */
+	if (!cfg->rgctx_var && mini_method_is_default_method (cfg->method)) {
+		TRACE_FAILURE_CFG (cfg, "gshared default-interface-method this-slot would be misread as mrgctx");
+		return FALSE;
+	}
+
 	guint8 version = stackmaps [0];
 	if (version != 3)
 		return FALSE;
@@ -1381,6 +1395,17 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 
 	if (kind != LOC_DIRECT) {
 		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap not Direct");
+		return FALSE;
+	}
+
+	/*
+	 * mono_dwarf_reg_to_hw_reg () indexes map_dwarf_reg_to_hw_reg [NUM_DWARF_REGS]
+	 * with no bounds check. dwarf_reg is only ever RBP/RSP for Direct locations, so
+	 * this never fires in practice, but guard it like every other read above rather
+	 * than index out of bounds on a malformed stackmap.
+	 */
+	if (!mono_dwarf_reg_is_valid (dwarf_reg)) {
+		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap dwarf reg out of range");
 		return FALSE;
 	}
 

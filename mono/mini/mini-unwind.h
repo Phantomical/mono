@@ -197,6 +197,9 @@ mono_hw_reg_to_dwarf_reg (int reg);
 int
 mono_dwarf_reg_to_hw_reg (int reg);
 
+gboolean
+mono_dwarf_reg_is_valid (int reg);
+
 int
 mono_unwind_get_dwarf_data_align (void);
 
