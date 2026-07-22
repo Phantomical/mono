@@ -681,6 +681,66 @@ test_gcc_except_table (MonoLLVMJIT *jit)
 	return TEST_PASS;
 }
 
+/* ------------------------------------------ compiler equivalence (C1) */
+
+/*
+ * C1 acceptance check: the engine's MonoIRCompiler (engine.cpp) must be an
+ * observably-inert drop-in for LLJIT's default object-emission compiler. It
+ * hand-inlines LLVMTargetMachine::addPassesToEmitMC so the EH port can later
+ * splice a MachineFunctionPass and a custom MCStreamer into that pipeline; C1
+ * adds neither, so its output must be BYTE-IDENTICAL to the stock
+ * TMOwningSimpleCompiler's for the same module and the same target-machine
+ * options.
+ *
+ * The comparison drives both compilers through engine.hpp's two hooks, which
+ * build their TargetMachines from the SAME host JITTargetMachineBuilder the
+ * engine JITs with - so code model (Large), host CPU/features and O3 match. The
+ * module is the reloc probe: a rich NON-EH function (external data + call, a
+ * jump table, a constant pool) so the check exercises real codegen rather than a
+ * trivial add. It is built twice in separate LLVMContexts because the legacy
+ * codegen pipeline runs destructively over the IR - each compiler gets a
+ * pristine copy.
+ */
+static TestResult
+test_compiler_equivalence (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	LLVMContext c1;
+	Module m1 ("selftest.equiv", c1);
+	build_reloc_probe (m1);
+	auto mono_obj = mono::compile_object_with_mono_compiler (m1);
+	if (!mono_obj) {
+		printf ("     MonoIRCompiler emit failed: %s\n",
+		        toString (mono_obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+
+	LLVMContext c2;
+	Module m2 ("selftest.equiv", c2);
+	build_reloc_probe (m2);
+	auto simple_obj = mono::compile_object_with_simple_compiler (m2);
+	if (!simple_obj) {
+		printf ("     SimpleCompiler emit failed: %s\n",
+		        toString (simple_obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+
+	StringRef a = (*mono_obj)->getBuffer ();
+	StringRef b = (*simple_obj)->getBuffer ();
+
+	if (a == b) {
+		printf ("     MonoIRCompiler output is byte-identical to the stock "
+		        "SimpleCompiler (%zu bytes)\n", (size_t) a.size ());
+		return TEST_PASS;
+	}
+
+	printf ("     MonoIRCompiler output DIFFERS from SimpleCompiler "
+	        "(mono=%zu bytes, simple=%zu bytes)\n",
+	        (size_t) a.size (), (size_t) b.size ());
+	return TEST_FAIL;
+}
+
 /* ------------------------------------------------------------ driver */
 
 /*
@@ -719,6 +779,7 @@ test_llvm_engine_main (void)
 
 	report ("arithmetic", test_arithmetic (jit));
 	report ("registered-helper", test_registered_helper (jit));
+	report ("compiler-equivalence", test_compiler_equivalence (jit));
 	report ("gcc-except-table", test_gcc_except_table (jit));
 
 	printf ("%d passed, %d skipped, %d failed\n", passes, skips, failures);

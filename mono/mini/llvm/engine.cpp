@@ -45,7 +45,12 @@
 
 #include <llvm/ADT/StringMap.h>
 #include <llvm/BinaryFormat/ELF.h>
+#include <llvm/CodeGen/AsmPrinter.h>
+#include <llvm/CodeGen/MachineModuleInfo.h>
+#include <llvm/CodeGen/TargetPassConfig.h>
+#include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
+#include <llvm/ExecutionEngine/Orc/IRCompileLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/Mangling.h>
 #include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
@@ -60,12 +65,20 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Type.h>
+#include <llvm/MC/MCAsmBackend.h>
+#include <llvm/MC/MCCodeEmitter.h>
+#include <llvm/MC/MCContext.h>
+#include <llvm/MC/MCObjectWriter.h>
+#include <llvm/MC/MCStreamer.h>
+#include <llvm/MC/MCSubtargetInfo.h>
+#include <llvm/MC/TargetRegistry.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/SmallVectorMemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
@@ -508,6 +521,168 @@ host_target_machine_builder ()
 	return jtmb;
 }
 
+/* ---- custom IR compiler --------------------------------------------------
+ *
+ * MonoIRCompiler replaces LLJIT's default IR compiler. With this engine's zero
+ * compile threads, LLJIT::createCompileFunction would otherwise build a
+ * TMOwningSimpleCompiler (a SimpleCompiler owning one TargetMachine), whose
+ * operator() is nothing but TM.addPassesToEmitMC + PM.run.
+ *
+ * The reason to own the object-emission pipeline is the EH port: C2 schedules a
+ * MachineFunctionPass after addMachinePasses() and C3 swaps createMCObjectStreamer
+ * for a custom MCStreamer that writes a .mono_lsda section. THIS SLICE (C1)
+ * introduces neither - it hand-inlines LLVMTargetMachine::addPassesToEmitMC with
+ * the STANDARD registry object streamer and no extra pass, so the emitted object
+ * is byte-identical to SimpleCompiler's. That equivalence is asserted by the
+ * compiler-equivalence check in test-llvm-engine.cpp.
+ *
+ * THREADING: like ConcurrentIRCompiler (CompileUtils.h), a fresh TargetMachine is
+ * built from the JITTargetMachineBuilder on every operator() call, so the compiler
+ * carries no mutable cross-call state and is safe under compile threads. The engine
+ * is synchronous today (0 compile threads; engine.hpp), so per-call construction is
+ * not required now - but it means turning on compile threads later needs no change
+ * here, strictly better than TMOwningSimpleCompiler sharing one mutable TM.
+ */
+class MonoIRCompiler : public IRCompileLayer::IRCompiler {
+public:
+	explicit MonoIRCompiler (JITTargetMachineBuilder jtmb)
+		: IRCompiler (irManglingOptionsFromTargetOptions (jtmb.getOptions ())),
+		  jtmb_ (std::move (jtmb))
+	{
+	}
+
+	Expected<std::unique_ptr<MemoryBuffer>> operator() (Module &m) override
+	{
+		Expected<std::unique_ptr<TargetMachine>> tm = jtmb_.createTargetMachine ();
+		if (!tm)
+			return tm.takeError ();
+		/*
+		 * JITTargetMachineBuilder::createTargetMachine always yields an
+		 * LLVMTargetMachine (that is the only TargetMachine subclass the target
+		 * registry constructs), whose createPassConfig / addPassesToEmitMC surface
+		 * this pipeline replicates.
+		 */
+		auto *ltm = static_cast<LLVMTargetMachine *> (tm->get ());
+
+		SmallVector<char, 0> obj_buffer;
+		{
+			raw_svector_ostream obj_stream (obj_buffer);
+			if (Error err = emit_object (*ltm, m, obj_stream))
+				return std::move (err);
+		}
+
+		/*
+		 * Same SmallVectorMemoryBuffer wrapping SimpleCompiler::operator() uses,
+		 * including the "-jitted-objectbuffer" name suffix. The buffer name is not
+		 * part of the object bytes, so it does not affect byte-equivalence.
+		 */
+		return std::make_unique<SmallVectorMemoryBuffer> (
+			std::move (obj_buffer),
+			m.getModuleIdentifier () + "-jitted-objectbuffer",
+			/*RequiresNullTerminator=*/ false);
+	}
+
+private:
+	/*
+	 * A faithful hand-inline of LLVMTargetMachine::addPassesToEmitMC followed by
+	 * PM.run - the exact recipe SimpleCompiler drives, kept open so C2/C3 can (a)
+	 * pm.add a MachineFunctionPass right after addMachinePasses() and (b) replace
+	 * createMCObjectStreamer with a custom MCStreamer subclass. Any drift from the
+	 * stock method between LLVM versions is a silent codegen difference (plan 12 8,
+	 * "highest-tax item"); the equivalence test is what guards against it.
+	 */
+	static Error emit_object (LLVMTargetMachine &ltm, Module &m, raw_pwrite_stream &out)
+	{
+		legacy::PassManager pm;
+
+		/*
+		 * addPassesToGenerateCode: the TargetPassConfig and MMI (added in that
+		 * order, PassConfig first), then instruction selection and the machine
+		 * passes. SimpleCompiler leaves DisableVerify at addPassesToEmitMC's
+		 * default (true), so match that.
+		 */
+		auto *mmiwp = new MachineModuleInfoWrapperPass (&ltm);
+		TargetPassConfig *tpc = ltm.createPassConfig (pm);
+		tpc->setDisableVerify (true);
+		pm.add (tpc);
+		pm.add (mmiwp);
+		if (tpc->addISelPasses ())
+			return make_error<StringError> (
+				"target does not support instruction selection",
+				inconvertibleErrorCode ());
+		tpc->addMachinePasses ();
+		tpc->setInitialized ();
+
+		/*
+		 * The AsmPrinter must emit into the MCContext the MMI created, not a fresh
+		 * one - that is the external-context contract addPassesToEmitMC relies on
+		 * (and the seam C3 uses to feed the custom streamer the same context).
+		 */
+		MCContext *ctx = &mmiwp->getMMI ().getContext ();
+
+		const MCSubtargetInfo &sti = *ltm.getMCSubtargetInfo ();
+		const MCRegisterInfo &mri = *ltm.getMCRegisterInfo ();
+		std::unique_ptr<MCCodeEmitter> mce (
+			ltm.getTarget ().createMCCodeEmitter (*ltm.getMCInstrInfo (), *ctx));
+		std::unique_ptr<MCAsmBackend> mab (
+			ltm.getTarget ().createMCAsmBackend (sti, mri, ltm.Options.MCOptions));
+		if (!mce || !mab)
+			return make_error<StringError> ("target does not support MC emission",
+			                                inconvertibleErrorCode ());
+
+		/*
+		 * The standard object streamer via the target registry - the C1 no-op
+		 * where C3 substitutes a .mono_lsda-emitting MCELFStreamer subclass. The
+		 * two MCOptions flags and DWARFMustBeAtTheEnd=true are exactly the values
+		 * addPassesToEmitMC passes.
+		 */
+		std::unique_ptr<MCObjectWriter> ow = mab->createObjectWriter (out);
+		std::unique_ptr<MCStreamer> streamer (ltm.getTarget ().createMCObjectStreamer (
+			ltm.getTargetTriple (), *ctx, std::move (mab), std::move (ow), std::move (mce),
+			sti, ltm.Options.MCOptions.MCRelaxAll,
+			ltm.Options.MCOptions.MCIncrementalLinkerCompatible,
+			/*DWARFMustBeAtTheEnd=*/ true));
+
+		FunctionPass *printer = ltm.getTarget ().createAsmPrinter (ltm, std::move (streamer));
+		if (!printer)
+			return make_error<StringError> ("target does not support an AsmPrinter",
+			                                inconvertibleErrorCode ());
+		pm.add (printer);
+
+		pm.run (m);
+		return Error::success ();
+	}
+
+	JITTargetMachineBuilder jtmb_;
+};
+
+/*
+ * Test hooks for the C1 compiler-equivalence check (test-llvm-engine.cpp),
+ * declared in engine.hpp. Compile `m` to an object two ways - through
+ * MonoIRCompiler and through LLVM's stock TMOwningSimpleCompiler - from the SAME
+ * host JITTargetMachineBuilder, so the test can assert the two objects are
+ * byte-identical: the proof that swapping in MonoIRCompiler is observably inert.
+ * Not part of the engine's runtime surface.
+ */
+Expected<std::unique_ptr<MemoryBuffer>>
+compile_object_with_mono_compiler (Module &m)
+{
+	MonoIRCompiler compiler (host_target_machine_builder ());
+	return compiler (m);
+}
+
+Expected<std::unique_ptr<MemoryBuffer>>
+compile_object_with_simple_compiler (Module &m)
+{
+	Expected<std::unique_ptr<TargetMachine>> tm =
+		host_target_machine_builder ().createTargetMachine ();
+	if (!tm)
+		return tm.takeError ();
+	/* TMOwningSimpleCompiler is exactly what LLJIT builds by default at 0 threads. */
+	TMOwningSimpleCompiler compiler (std::move (*tm));
+	return compiler (m);
+}
+
 MonoLLVMJIT::MonoLLVMJIT ()
 	: tsctx_ (std::make_unique<LLVMContext> ())
 {
@@ -515,6 +690,19 @@ MonoLLVMJIT::MonoLLVMJIT ()
 
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());
+	/*
+	 * Replace LLJIT's default IR compiler (TMOwningSimpleCompiler at 0 compile
+	 * threads) with MonoIRCompiler. Functionally identical output today (C1); the
+	 * EH port hooks a MachineFunctionPass and a custom MCStreamer into its
+	 * pipeline (C2/C3). LLJIT hands the creator the very JITTargetMachineBuilder
+	 * set just above, so the target-machine options (code model Large, host
+	 * CPU/features, O3) are preserved exactly - no re-derivation.
+	 */
+	builder.setCompileFunctionCreator (
+		[] (JITTargetMachineBuilder JTMB)
+			-> Expected<std::unique_ptr<IRCompileLayer::IRCompiler>> {
+			return std::make_unique<MonoIRCompiler> (std::move (JTMB));
+		});
 	/*
 	 * Force the RTDyld object-linking layer with our custom memory manager.
 	 * LLJIT would default to RTDyldObjectLinkingLayer on ELF/amd64 anyway, but
