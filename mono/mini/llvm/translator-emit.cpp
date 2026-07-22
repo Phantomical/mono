@@ -1307,7 +1307,7 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 	LLVMValueRef poll_val_ptr_load = LLVMBuildLoad2 (llvm::wrap (builder), IntPtrType (), poll_val_ptr, ""); // probably needs to be volatile
 	LLVMValueRef poll_val = LLVMBuildPtrToInt (llvm::wrap (builder), poll_val_ptr_load, IntPtrType (), "");
 	LLVMValueRef poll_val_zero = llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (poll_val))));
-	LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, poll_val, poll_val_zero, "");
+	LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (poll_val), llvm::unwrap (poll_val_zero), ""));
 	mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, exit_bb, poll_bb, 1000 /* weight for exit_bb */, 1 /* weight for poll_bb */);
 
 	/* poll: */

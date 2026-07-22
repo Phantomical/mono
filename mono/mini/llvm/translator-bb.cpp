@@ -216,7 +216,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 * The long_bb_break_var is initialized to 0 in the prolog, so this branch will always go to 'cbb'
 			 * but llvm doesn't know that, so the branch is not going to be eliminated.
 			 */
-			LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, load, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (load), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
 
 			LLVMBuildCondBr (llvm::wrap (builder), cmp, cbb, dummy_bb);
 
@@ -540,9 +540,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			/* We use COMPARE+SETcc/Bcc, llvm uses SETcc+br cond */
 			if (ins->opcode == OP_FCOMPARE) {
-				cmp = LLVMBuildFCmp (llvm::wrap (builder), fpcond_to_llvm_cond [rel], convert (ctx, lhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), convert (ctx, rhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), "");
+				cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (fpcond_to_llvm_cond [rel]), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), ""));
 			} else if (ins->opcode == OP_RCOMPARE) {
-				cmp = LLVMBuildFCmp (llvm::wrap (builder), fpcond_to_llvm_cond [rel], convert (ctx, lhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), convert (ctx, rhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), "");
+				cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (fpcond_to_llvm_cond [rel]), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), ""));
 			} else if (ins->opcode == OP_COMPARE_IMM) {
 				LLVMIntPredicate llvm_pred = cond_to_llvm_cond [rel];
 				if (LLVMGetTypeKind (LLVMTypeOf (lhs)) == LLVMPointerTypeKind && ins->inst_imm == 0) {
@@ -554,21 +554,21 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					else if (nonnull && llvm_pred == LLVMIntNE)
 						cmp = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), TRUE, false));
 					else
-						cmp = LLVMBuildICmp (llvm::wrap (builder), llvm_pred, lhs, llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs)))), "");
+						cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (llvm_pred), llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (lhs))))), ""));
 
 				} else {
-					cmp = LLVMBuildICmp (llvm::wrap (builder), llvm_pred, convert (ctx, lhs, IntPtrType ()), llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_imm, false)), "");
+					cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (llvm_pred), llvm::unwrap (convert (ctx, lhs, IntPtrType ())), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_imm, false))), ""));
 				}
 			} else if (ins->opcode == OP_LCOMPARE_IMM) {
-				cmp = LLVMBuildICmp (llvm::wrap (builder), cond_to_llvm_cond [rel], lhs, rhs, "");
+				cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (cond_to_llvm_cond [rel]), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			}
 			else if (ins->opcode == OP_COMPARE) {
 				if (LLVMGetTypeKind (LLVMTypeOf (lhs)) == LLVMPointerTypeKind && LLVMTypeOf (lhs) == LLVMTypeOf (rhs))
-					cmp = LLVMBuildICmp (llvm::wrap (builder), cond_to_llvm_cond [rel], lhs, rhs, "");
+					cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (cond_to_llvm_cond [rel]), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				else
-					cmp = LLVMBuildICmp (llvm::wrap (builder), cond_to_llvm_cond [rel], convert (ctx, lhs, IntPtrType ()), convert (ctx, rhs, IntPtrType ()), "");
+					cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (cond_to_llvm_cond [rel]), llvm::unwrap (convert (ctx, lhs, IntPtrType ())), llvm::unwrap (convert (ctx, rhs, IntPtrType ())), ""));
 			} else
-				cmp = LLVMBuildICmp (llvm::wrap (builder), cond_to_llvm_cond [rel], lhs, rhs, "");
+				cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (cond_to_llvm_cond [rel]), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 
 			if (likely || unlikely) {
 				args [0] = cmp;
@@ -628,7 +628,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			rel = mono_opcode_to_cond (ins->opcode);
 
-			cmp = LLVMBuildFCmp (llvm::wrap (builder), fpcond_to_llvm_cond [rel], convert (ctx, lhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), convert (ctx, rhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()))), "");
+			cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (fpcond_to_llvm_cond [rel]), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())))), ""));
 			values [ins->dreg] = LLVMBuildZExt (llvm::wrap (builder), cmp, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), dname);
 			break;
 		}
@@ -643,7 +643,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			rel = mono_opcode_to_cond (ins->opcode);
 
-			cmp = LLVMBuildFCmp (llvm::wrap (builder), fpcond_to_llvm_cond [rel], convert (ctx, lhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), convert (ctx, rhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()))), "");
+			cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (fpcond_to_llvm_cond [rel]), llvm::unwrap (convert (ctx, lhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), llvm::unwrap (convert (ctx, rhs, llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))), ""));
 			values [ins->dreg] = LLVMBuildZExt (llvm::wrap (builder), cmp, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), dname);
 			break;
 		}
@@ -1631,27 +1631,27 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			switch (ins->opcode) {
 			case OP_IMIN:
 			case OP_LMIN:
-				v = LLVMBuildICmp (llvm::wrap (builder), LLVMIntSLE, lhs, rhs, "");
+				v = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntSLE), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				break;
 			case OP_IMAX:
 			case OP_LMAX:
-				v = LLVMBuildICmp (llvm::wrap (builder), LLVMIntSGE, lhs, rhs, "");
+				v = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntSGE), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				break;
 			case OP_IMIN_UN:
 			case OP_LMIN_UN:
-				v = LLVMBuildICmp (llvm::wrap (builder), LLVMIntULE, lhs, rhs, "");
+				v = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntULE), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				break;
 			case OP_IMAX_UN:
 			case OP_LMAX_UN:
-				v = LLVMBuildICmp (llvm::wrap (builder), LLVMIntUGE, lhs, rhs, "");
+				v = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntUGE), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				break;
 			case OP_FMAX:
 			case OP_RMAX:
-				v = LLVMBuildFCmp (llvm::wrap (builder), LLVMRealUGE, lhs, rhs, "");
+				v = llvm::wrap (builder->CreateFCmp (to_llvm_pred (LLVMRealUGE), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				break;
 			case OP_FMIN:
 			case OP_RMIN:
-				v = LLVMBuildFCmp (llvm::wrap (builder), LLVMRealULE, lhs, rhs, "");
+				v = llvm::wrap (builder->CreateFCmp (to_llvm_pred (LLVMRealULE), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				break;
 			default:
 				g_assert_not_reached ();
@@ -1886,7 +1886,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 *   mono_threads_state_poll ();
 			 */
 			val = mono_llvm_build_load (llvm::wrap (builder), IntPtrType (), convert (ctx, lhs, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), "", TRUE);
-			cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, val, llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (val)))), "");
+			cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (val), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (val))))), ""));
 			poll_bb = gen_bb (ctx, "POLL_BB");
 			cont_bb = gen_bb (ctx, "CONT_BB");
 
@@ -2271,24 +2271,24 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_PMIND_UN:
 		case OP_PMINW_UN:
 		case OP_PMINB_UN: {
-			LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntULT, lhs, rhs, "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntULT), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			values [ins->dreg] = LLVMBuildSelect (llvm::wrap (builder), cmp, lhs, rhs, "");
 			break;
 		}
 		case OP_PMAXD_UN:
 		case OP_PMAXW_UN:
 		case OP_PMAXB_UN: {
-			LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntUGT, lhs, rhs, "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntUGT), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			values [ins->dreg] = LLVMBuildSelect (llvm::wrap (builder), cmp, lhs, rhs, "");
 			break;
 		}
 		case OP_PMINW: {
-			LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntSLT, lhs, rhs, "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntSLT), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			values [ins->dreg] = LLVMBuildSelect (llvm::wrap (builder), cmp, lhs, rhs, "");
 			break;
 		}
 		case OP_PMAXW: {
-			LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntSGT, lhs, rhs, "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntSGT), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			values [ins->dreg] = LLVMBuildSelect (llvm::wrap (builder), cmp, lhs, rhs, "");
 			break;
 		}
@@ -2353,14 +2353,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				cmpOp = LLVMIntEQ;
 
 			if (LLVMTypeOf (lhs) == LLVMTypeOf (rhs)) {
-				pcmp = LLVMBuildICmp (llvm::wrap (builder), cmpOp, lhs, rhs, "");
+				pcmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (cmpOp), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				retType = LLVMTypeOf (lhs);
 			} else {
 				LLVMTypeRef flatType = llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), 16));
 				LLVMValueRef flatRHS = convert (ctx, rhs, flatType);
 				LLVMValueRef flatLHS = convert (ctx, lhs, flatType);
 
-				pcmp = LLVMBuildICmp (llvm::wrap (builder), cmpOp, flatLHS, flatRHS, "");
+				pcmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (cmpOp), llvm::unwrap (flatLHS), llvm::unwrap (flatRHS), ""));
 				retType = flatType;
 			}
 
@@ -2548,7 +2548,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				g_assert_not_reached ();
 			}
 
-			LLVMValueRef cmp = LLVMBuildFCmp (llvm::wrap (builder), op, lhs, rhs, "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (op), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			if (ins->opcode == OP_COMPPD)
 				values [ins->dreg] = LLVMBuildBitCast (llvm::wrap (builder), LLVMBuildSExt (llvm::wrap (builder), cmp, llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 2)), ""), LLVMTypeOf (lhs), "");
 			else
@@ -3351,7 +3351,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef call = call_intrins (ctx, id, args, "");
 			if (ret_bool) {
 				// if return type is bool (it's still i32) we need to normalize it to 1/0
-				LLVMValueRef cmp_zero = LLVMBuildICmp (llvm::wrap (builder), LLVMIntNE, call, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), "");
+				LLVMValueRef cmp_zero = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntNE), llvm::unwrap (call), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), ""));
 				values [ins->dreg] = LLVMBuildZExt (llvm::wrap (builder), cmp_zero, llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())), "");
 			} else {
 				values [ins->dreg] = call;
@@ -3717,7 +3717,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			// %abs = select <16 x i1> %cmp, <16 x i8> %arg, <16 x i8> %sub
 			LLVMTypeRef typ = type_to_sse_type (ins->inst_c1);
 			LLVMValueRef sub = llvm::wrap (builder->CreateSub (llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (typ)))), llvm::unwrap (lhs), ""));
-			LLVMValueRef cmp = LLVMBuildICmp(llvm::wrap (builder), LLVMIntSGT, lhs, llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (typ))), "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntSGT), llvm::unwrap (lhs), llvm::unwrap (llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (typ)))), ""));
 			LLVMValueRef abs = LLVMBuildSelect (llvm::wrap (builder), cmp, lhs, sub, "");
 			values [ins->dreg] = convert (ctx, abs, typ);
 			break;
@@ -3951,7 +3951,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_XCOMPARE_FP: {
 			LLVMRealPredicate pred = fpcond_to_llvm_cond [ins->inst_c0];
-			LLVMValueRef cmp = LLVMBuildFCmp (llvm::wrap (builder), pred, lhs, rhs, "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (pred), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			int nelems = LLVMGetVectorSize (LLVMTypeOf (cmp));
 			g_assert (LLVMTypeOf (lhs) == LLVMTypeOf (rhs));
 			if (ins->inst_c1 == MONO_TYPE_R8)
@@ -3962,7 +3962,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_XCOMPARE: {
 			LLVMIntPredicate pred = cond_to_llvm_cond [ins->inst_c0];
-			LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), pred, lhs, rhs, "");
+			LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (pred), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			g_assert (LLVMTypeOf (lhs) == LLVMTypeOf (rhs));
 			values [ins->dreg] = LLVMBuildSExt (llvm::wrap (builder), cmp, LLVMTypeOf (lhs), "");
 			break;
@@ -3998,7 +3998,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				}
 				/* res = !wasm.anytrue (val) */
 				values [ins->dreg] = call_intrins (ctx, intrins, &val, "");
-				values [ins->dreg] = LLVMBuildZExt (llvm::wrap (builder), LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, values [ins->dreg], llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), ""), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), dname);
+				values [ins->dreg] = LLVMBuildZExt (llvm::wrap (builder), llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (values [ins->dreg]), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false))), "")), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), dname);
 				break;
 			}
 #endif
@@ -4006,9 +4006,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			//%c = icmp sgt <16 x i8> %a0, %a1
 			if (srcelemt == llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())) || srcelemt == llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ())))
-				cmp = LLVMBuildFCmp (llvm::wrap (builder), LLVMRealOEQ, lhs, rhs, "");
+				cmp = llvm::wrap (builder->CreateFCmp (to_llvm_pred (LLVMRealOEQ), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			else
-				cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, lhs, rhs, "");
+				cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 			nelems = LLVMGetVectorSize (LLVMTypeOf (cmp));
 
 			LLVMTypeRef elemt;
@@ -4036,7 +4036,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			// Extract [0]
 			LLVMValueRef first_elem = LLVMBuildExtractElement (llvm::wrap (builder), cmp, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), "");
 			// convert to 0/1
-			LLVMValueRef cmp_zero = LLVMBuildICmp (llvm::wrap (builder), LLVMIntNE, first_elem, llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (elemt), 0, false)), "");
+			LLVMValueRef cmp_zero = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntNE), llvm::unwrap (first_elem), llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (elemt), 0, false))), ""));
 			values [ins->dreg] = LLVMBuildZExt (llvm::wrap (builder), cmp_zero, llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())), "");
 			break;
 		}
@@ -4086,13 +4086,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 			case OP_IMAX: {
 				bool is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
-				LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), is_unsigned ? LLVMIntUGT : LLVMIntSGT, lhs, rhs, "");
+				LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (is_unsigned ? LLVMIntUGT : LLVMIntSGT), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				values [ins->dreg] = LLVMBuildSelect (llvm::wrap (builder), cmp, lhs, rhs, "");
 				break;
 			}
 			case OP_IMIN: {
 				bool is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
-				LLVMValueRef cmp = LLVMBuildICmp (llvm::wrap (builder), is_unsigned ? LLVMIntULT : LLVMIntSLT, lhs, rhs, "");
+				LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (is_unsigned ? LLVMIntULT : LLVMIntSLT), llvm::unwrap (lhs), llvm::unwrap (rhs), ""));
 				values [ins->dreg] = LLVMBuildSelect (llvm::wrap (builder), cmp, lhs, rhs, "");
 			}
 			break;

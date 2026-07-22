@@ -327,6 +327,31 @@ llvm_ins_info (int opcode)
 
 extern LLVMIntPredicate cond_to_llvm_cond [];
 extern LLVMRealPredicate fpcond_to_llvm_cond [];
+
+/*
+ * Bridge the llvm-c predicate enums to llvm::CmpInst::Predicate for
+ * IRBuilder::CreateICmp/CreateFCmp. The predicates in the translator are still
+ * stored/passed as the C enums (LLVMIntPredicate/LLVMRealPredicate) - retyping
+ * that storage is a later slice - so we cast here at the call boundary. The
+ * llvm-c API guarantees the C enumerators share the C++ enum's integer values
+ * (LLVMBuildICmp/LLVMBuildFCmp themselves rely on a plain cast), which the
+ * static_asserts pin.
+ */
+static inline llvm::CmpInst::Predicate
+to_llvm_pred (LLVMIntPredicate p)
+{
+	static_assert ((int) LLVMIntEQ  == (int) llvm::CmpInst::ICMP_EQ, "int-pred ABI");
+	static_assert ((int) LLVMIntSLE == (int) llvm::CmpInst::ICMP_SLE, "int-pred ABI");
+	return static_cast<llvm::CmpInst::Predicate> (p);
+}
+static inline llvm::CmpInst::Predicate
+to_llvm_pred (LLVMRealPredicate p)
+{
+	static_assert ((int) LLVMRealOEQ == (int) llvm::CmpInst::FCMP_OEQ, "real-pred ABI");
+	static_assert ((int) LLVMRealPredicateTrue == (int) llvm::CmpInst::FCMP_TRUE, "real-pred ABI");
+	return static_cast<llvm::CmpInst::Predicate> (p);
+}
+
 extern MonoLLVMModule aot_module;
 extern GHashTable *intrins_id_to_intrins;
 extern LLVMTypeRef sse_i1_t, sse_i2_t, sse_i4_t, sse_i8_t, sse_r4_t, sse_r8_t;
