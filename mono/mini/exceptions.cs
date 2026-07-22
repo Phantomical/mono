@@ -573,6 +573,196 @@ class Tests
 		return (a == 31 && b == 52 && log [0] == 2 && log [1] == 6 && log [2] == 7) ? 0 : 1;
 	}
 
+	/*
+	 * EH F6 functional coverage: nested-exception / finally edge hardening (the last
+	 * finally/fault slice). These pin the documented edges of finally-on-LLVM (doc 16
+	 * 7 F6; doc 11 9.3 single-slot resume_state; 8.3 free_stack). Every finally-bearing
+	 * helper below holds a single, non-nested finally clause (so the F2 nesting gate
+	 * still admits it and each compiles through the LLVM tier), is [NoInlining] so the
+	 * clause structure survives, and records its run order in a log array. The tests
+	 * are pure correctness tests in the regression suite (the warm-up loops are inert at
+	 * the default promotion threshold); the tier-1 proof is a separate driven run under
+	 * MONO_LLVM_METHOD (see .claude/scratch/eh-f6/progress.md).
+	 *
+	 * HEADLINE (doc 11 9.3 / doc 16 8 [UNVERIFIED]): a throw from INSIDE a from_llvm
+	 * (tier-1) finally, before it reaches its resume trampoline. This abandons the outer
+	 * unwind's single-slot jit_tls->resume_state. Per ECMA-335 12.4.2.5 that is CORRECT:
+	 * an exception raised in a finally REPLACES the one being propagated; the original is
+	 * lost. These tests assert exactly that - the finally's exception propagates and is
+	 * caught at the right frame, the original is not resurrected, no intervening finally
+	 * is skipped, and there is no crash or mis-unwind from the reused resume_state slot.
+	 */
+
+	/* Shape 1: try throws A, finally throws B; B replaces A. Assert the catcher sees B
+	   (the finally's exception), the try was entered, and the finally body ran. Force:
+	   MONO_LLVM_METHOD='f6_throw_in_finally_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f6_throw_in_finally_t1 (int[] log) {
+		try {
+			log [++log [0]] = 1;			/* try entered */
+			throw new Exception ("A");
+		} finally {
+			log [++log [0]] = 2;			/* finally body ran */
+			throw new Exception ("B");		/* replaces A */
+		}
+	}
+
+	public static int test_0_f6_throw_in_finally () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; try { f6_throw_in_finally_t1 (log); } catch { } }
+		log [0] = 0;
+		string caught = null;
+		try {
+			f6_throw_in_finally_t1 (log);
+		} catch (Exception e) {
+			caught = e.Message;
+		}
+		/* B must reach the catcher; the original A is discarded; both bodies ran in order. */
+		return (caught == "B" && log [0] == 2 && log [1] == 1 && log [2] == 2) ? 0 : 1;
+	}
+
+	/* Shape 2: the throwing finally is one frame down; an INTERVENING tier-1 finally
+	   between it and the catcher must still run for the REPLACEMENT exception B - proving
+	   the new exception's fresh unwind runs intervening finallys even though the outer
+	   A-unwind (and its saved resume_state) was abandoned. Force:
+	   MONO_LLVM_METHOD='f6_inner_throws_t1;f6_intervening_finally_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f6_inner_throws_t1 (int[] log) {
+		try {
+			throw new Exception ("A");
+		} finally {
+			log [++log [0]] = 10;			/* inner finally ran */
+			throw new Exception ("B");		/* replaces A */
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f6_intervening_finally_t1 (int[] log) {
+		try {
+			f6_inner_throws_t1 (log);
+		} finally {
+			log [++log [0]] = 20;			/* must run for B on the way out */
+		}
+	}
+
+	public static int test_0_f6_throw_in_finally_intervening () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; try { f6_intervening_finally_t1 (log); } catch { } }
+		log [0] = 0;
+		string caught = null;
+		try {
+			f6_intervening_finally_t1 (log);
+		} catch (Exception e) {
+			caught = e.Message;
+		}
+		/* order: inner finally (10) throws B, intervening finally (20) runs for B, catch sees B. */
+		return (caught == "B" && log [0] == 2 && log [1] == 10 && log [2] == 20) ? 0 : 1;
+	}
+
+	/* Shape 3: TYPE discrimination. try throws an ArgumentException; the finally throws
+	   an InvalidOperationException that replaces it; the outer catch matches ONLY
+	   InvalidOperationException. If the single-slot resume_state ever leaked the original
+	   ArgumentException, an IOE-only catch would NOT match it and the exception would
+	   escape - so a pass proves the REPLACEMENT exception's own type drives the match.
+	   Force: MONO_LLVM_METHOD='f6_typed_throw_in_finally_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f6_typed_throw_in_finally_t1 (int[] log) {
+		try {
+			log [++log [0]] = 1;
+			throw new ArgumentException ("orig");
+		} finally {
+			log [++log [0]] = 2;
+			throw new InvalidOperationException ("repl");
+		}
+	}
+
+	public static int test_0_f6_typed_throw_in_finally () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; try { f6_typed_throw_in_finally_t1 (log); } catch { } }
+		log [0] = 0;
+		int where = 0;
+		try {
+			f6_typed_throw_in_finally_t1 (log);
+		} catch (InvalidOperationException) {
+			where = 1;			/* the replacement's type: correct */
+		} catch (ArgumentException) {
+			where = 2;			/* the original leaked: WRONG */
+		}
+		return (where == 1 && log [0] == 2 && log [1] == 1 && log [2] == 2) ? 0 : 1;
+	}
+
+	/* Shape 4: an EMPTY tier-1 finally on the EXCEPTIONAL path. The exception must still
+	   propagate THROUGH the empty finally to an outer catch - proving the resume-trampoline
+	   tail is emitted and taken even when the finally body is trivial (no observable side
+	   effect to hide a dropped unwind). Force: MONO_LLVM_METHOD='f6_empty_finally_t1'. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void f6_empty_finally_t1 (int[] log) {
+		try {
+			log [++log [0]] = 1;
+			throw new Exception ("thru");
+		} finally {
+			/* deliberately empty: the finally must still be traversed on unwind */
+		}
+	}
+
+	public static int test_0_f6_empty_finally_exceptional () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; try { f6_empty_finally_t1 (log); } catch { } }
+		log [0] = 0;
+		string caught = null;
+		try {
+			f6_empty_finally_t1 (log);
+		} catch (Exception e) {
+			caught = e.Message;
+		}
+		return (caught == "thru" && log [0] == 1 && log [1] == 1) ? 0 : 1;
+	}
+
+	/*
+	 * MUST-DECLINE (doc 16 7 F6 / 4.2): a C# try/catch/finally compiles to an inner
+	 * try/catch nested inside an outer try/finally. The inner try region is strictly
+	 * contained in the outer's, so the nesting gate (translator.cpp) declines the whole
+	 * method to the classic JIT - it must NEVER publish a wrong .mono_lsda/clause array.
+	 * This test asserts the method runs CORRECTLY on both the normal and the inner-catch
+	 * exceptional paths; the accompanying driven run proves it actually declines (it is
+	 * named in MONO_LLVM_METHOD yet emits NO LLVM method - stays tier-0 classic). Do not
+	 * name a _t1 suffix here: the point is that it CANNOT reach the LLVM tier.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int f6_try_catch_finally_nested (int mode, int[] log) {
+		int r = 0;
+		try {
+			try {
+				log [++log [0]] = 1;
+				if (mode == 1)
+					throw new Exception ("inner");
+				r = 10;
+			} catch (Exception) {
+				log [++log [0]] = 2;
+				r = 20;
+			}
+		} finally {
+			log [++log [0]] = 3;
+		}
+		return r;
+	}
+
+	public static int test_0_f6_try_catch_finally_declined () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; f6_try_catch_finally_nested (0, log); f6_try_catch_finally_nested (1, log); }
+		/* normal path: try body runs, no throw, finally runs -> r=10, order 1,3 */
+		log [0] = 0;
+		int rn = f6_try_catch_finally_nested (0, log);
+		if (!(rn == 10 && log [0] == 2 && log [1] == 1 && log [2] == 3))
+			return 1;
+		/* exceptional path: inner catch handles, then finally runs -> r=20, order 1,2,3 */
+		log [0] = 0;
+		int re = f6_try_catch_finally_nested (1, log);
+		if (!(re == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 2;
+		return 0;
+	}
+
 	public static int test_0_byte_cast () {
 		int a;
 		long l;
