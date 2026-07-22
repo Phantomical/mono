@@ -653,7 +653,7 @@ emit_method_inner (EmitContext *ctx)
 				 */
 				sprintf (dname_buf, "t%d", ins->dreg);
 				dname = dname_buf;
-				values [ins->dreg] = LLVMBuildPhi (llvm::wrap (builder), phi_type, dname);
+				values [ins->dreg] = llvm::wrap (builder->CreatePHI (llvm::unwrap (phi_type), 0, dname));
 
 				if (ins->opcode == OP_VPHI)
 					ctx->addresses [ins->dreg] = create_address (ctx, values [ins->dreg], phi_etype);

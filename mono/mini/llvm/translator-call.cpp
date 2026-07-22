@@ -124,7 +124,7 @@ emit_this_slot_stackmap (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValue
 		llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)),
 		slot,
 	};
-	LLVMBuildCall2 (llvm::wrap (builder), sm_type, sm, args, 3, "");
+	llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (sm_type)), llvm::unwrap (sm), gep_index_list (args, 3), ""));
 }
 
 /*
@@ -955,7 +955,7 @@ get_mono_personality (EmitContext *ctx)
 	llvm::IRBuilder<> builder2_storage (llvm_global_ctx ());
 	llvm::IRBuilder<> *builder2 = &builder2_storage;
 	builder2->SetInsertPoint (llvm::unwrap (entry_bb));
-	LLVMBuildRet (llvm::wrap (builder2), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)));
+	llvm::wrap (builder2->CreateRet (llvm::unwrap (llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)))));
 
 	LLVMSetPersonalityFn (ctx->lmethod, personality);
 
@@ -971,7 +971,6 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 	LLVMModuleRef lmodule = ctx->lmodule;
 	BBInfo *bblocks = ctx->bblocks;
 	LLVMTypeRef i8ptr;
-	LLVMValueRef personality;
 	LLVMBasicBlockRef target_bb;
 	MonoInst *exvar;
 	static int ti_generator;
@@ -999,7 +998,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 		LLVMValueRef switch_ins;
 		int i;
 
-		personality = get_mono_personality (ctx);
+		get_mono_personality (ctx);
 		i8ptr = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
 
 		{
@@ -1009,7 +1008,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 			members [1] = llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
 			ret_type = LLVMStructType (members, 2, FALSE);
 
-			landing_pad = LLVMBuildLandingPad (llvm::wrap (builder), ret_type, personality, cfg->header->num_clauses, "");
+			landing_pad = llvm::wrap (builder->CreateLandingPad (llvm::unwrap (ret_type), cfg->header->num_clauses, ""));
 		}
 
 		/*
@@ -1047,7 +1046,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 		 * sibling handler that owns it (this clause's own body is the default).
 		 */
 		LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
-		switch_ins = LLVMBuildSwitch (llvm::wrap (builder), ex_selector, target_bb, 0);
+		switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0));
 
 		for (i = 0; i < cfg->header->num_clauses; ++i) {
 			MonoExceptionClause *c = &cfg->header->clauses [i];
@@ -1074,7 +1073,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 		 * entry block is never an unwind destination, so terminate it as
 		 * unreachable to keep the IR well-formed.
 		 */
-		LLVMBuildUnreachable (llvm::wrap (builder));
+		llvm::wrap (builder->CreateUnreachable ());
 	}
 
 	/* Start a new bblock which CALL_HANDLER can branch to */
@@ -1139,7 +1138,7 @@ call_intrins (EmitContext *ctx, int id, LLVMValueRef *args, const char *name)
 			args [i] = convert (ctx, args [i], t2);
 	}
 
-	return LLVMBuildCall2 (llvm::wrap (ctx->builder), LLVMGlobalGetValueType (intrins), intrins, args, nargs, name);
+	return llvm::wrap (ctx->builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (intrins))), llvm::unwrap (intrins), gep_index_list (args, nargs), name));
 }
 
 

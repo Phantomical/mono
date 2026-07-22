@@ -185,7 +185,7 @@ emit_memset (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValueRef v, LLVMV
 	args [aindex ++] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), alignment, false));
 #endif
 	args [aindex ++] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 0, false));
-	LLVMBuildCall2 (llvm::wrap (builder), LLVMGlobalGetValueType (get_intrins (ctx, INTRINS_MEMSET)), get_intrins (ctx, INTRINS_MEMSET), args, aindex, "");
+	llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (get_intrins (ctx, INTRINS_MEMSET)))), llvm::unwrap (get_intrins (ctx, INTRINS_MEMSET)), gep_index_list (args, aindex), ""));
 }
 
 /*
@@ -839,7 +839,7 @@ emit_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref
 			noex_bb = gen_bb (ctx, "NOEX_BB");
 
 			/* Use an invoke */
-			lcall = LLVMBuildInvoke2 (llvm::wrap (builder), sig, callee, args, pindex, noex_bb, ex_bb, "");
+			lcall = llvm::wrap (builder->CreateInvoke (llvm::cast<llvm::FunctionType> (llvm::unwrap (sig)), llvm::unwrap (callee), llvm::unwrap (noex_bb), llvm::unwrap (ex_bb), gep_index_list (args, pindex), ""));
 
 			builder = ctx->builder = create_builder (ctx);
 			ctx->builder->SetInsertPoint (llvm::unwrap (noex_bb));
@@ -849,7 +849,7 @@ emit_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref
 	}
 	
 	if (!lcall) {
-		lcall = LLVMBuildCall2 (llvm::wrap (builder), sig, callee, args, pindex, "");
+		lcall = llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (sig)), llvm::unwrap (callee), gep_index_list (args, pindex), ""));
 		ctx->builder = builder;
 	}
 
@@ -921,7 +921,7 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 	ex_bb = gen_bb (ctx, "EX_BB");
 	noex_bb = gen_bb (ctx, "NOEX_BB");
 
-	LLVMValueRef branch = LLVMBuildCondBr (llvm::wrap (ctx->builder), cmp, ex_bb, noex_bb);
+	LLVMValueRef branch = llvm::wrap (ctx->builder->CreateCondBr (llvm::unwrap (cmp), llvm::unwrap (ex_bb), llvm::unwrap (noex_bb)));
 	if (exc_id == MONO_EXC_NULL_REF && !ctx->cfg->disable_llvm_implicit_null_checks && !force_explicit) {
 		mono_llvm_set_implicit_branch (llvm::wrap (ctx->builder), branch);
 	}
@@ -959,7 +959,7 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 			 * added by get_jit_callee ().
 			 */
 			ex2_bb = gen_bb (ctx, "EX2_BB");
-			LLVMBuildBr (llvm::wrap (builder), ex2_bb);
+			llvm::wrap (builder->CreateBr (llvm::unwrap (ex2_bb)));
 			ex_bb = ex2_bb;
 
 			ctx->builder = builder = create_builder (ctx);
@@ -980,7 +980,7 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 		emit_call (ctx, bb, &builder, sig, callee, args, 2);
 	}
 
-	LLVMBuildUnreachable (llvm::wrap (builder));
+	llvm::wrap (builder->CreateUnreachable ());
 
 	ctx->builder = builder = create_builder (ctx);
 	ctx->builder->SetInsertPoint (llvm::unwrap (noex_bb));
@@ -1256,9 +1256,9 @@ emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitI
 		LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 		callee = llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0))), llvm::unwrap (tramp_var), ""));
 	}
-	LLVMBuildCall2 (llvm::wrap (builder), sig, callee, NULL, 0, "");
+	llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (sig)), llvm::unwrap (callee), gep_index_list (NULL, 0), ""));
 
-	LLVMBuildRetVoid (llvm::wrap (builder));
+	llvm::wrap (builder->CreateRetVoid ());
 
 	LLVMVerifyFunction(func, LLVMAbortProcessAction);
 	delete builder;
@@ -1316,7 +1316,7 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 	if (is_aot) {
 		LLVMValueRef icall_wrapper = emit_icall_cold_wrapper (module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll, TRUE);
 		module->gc_poll_cold_wrapper = icall_wrapper;
-		call = LLVMBuildCall2 (llvm::wrap (builder), LLVMGlobalGetValueType (icall_wrapper), icall_wrapper, NULL, 0, "");
+		call = llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (icall_wrapper))), llvm::unwrap (icall_wrapper), gep_index_list (NULL, 0), ""));
 	} else {
 		// in JIT mode we have to emit @gc.safepoint_poll function for each method (module)
 		// this function calls gc_poll_cold_wrapper_compiled via a global variable.
@@ -1329,14 +1329,14 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 		LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::unwrap (target_val)), llvm::unwrap (poll_sig_ptr))));
 		LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
 		LLVMValueRef callee = llvm::wrap (builder->CreateLoad (llvm::unwrap (poll_sig_ptr), llvm::unwrap (tramp_var), ""));
-		call = LLVMBuildCall2 (llvm::wrap (builder), poll_sig, callee, NULL, 0, "");
+		call = llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (poll_sig)), llvm::unwrap (callee), gep_index_list (NULL, 0), ""));
 	}
 	set_call_cold_cconv (call);
-	LLVMBuildBr (llvm::wrap (builder), exit_bb);
+	llvm::wrap (builder->CreateBr (llvm::unwrap (exit_bb)));
 
 	/* exit: */
 	builder->SetInsertPoint (llvm::unwrap (exit_bb));
-	LLVMBuildRetVoid (llvm::wrap (builder));
+	llvm::wrap (builder->CreateRetVoid ());
 	delete builder;
 }
 
