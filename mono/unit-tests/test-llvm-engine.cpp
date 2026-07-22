@@ -216,6 +216,99 @@ test_registered_helper (MonoLLVMJIT *jit)
 	return TEST_PASS;
 }
 
+/* -------------------------------------------------------- owner lifetime */
+
+/* i64 <fn_name>(void) { return retval; }, compiled under `owner`. */
+static mono::CompileResult
+compile_trivial_under_owner (MonoLLVMJIT *jit, const char *fn_name, int64_t retval, void *owner)
+{
+	LLVMContext &ctx = jit->context ();
+	auto module = std::make_unique<Module> (std::string ("selftest.owner.") + fn_name, ctx);
+	Type *i64 = Type::getInt64Ty (ctx);
+	FunctionType *fty = FunctionType::get (i64, {}, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, fn_name, module.get ());
+	BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
+	IRBuilder<> b (bb);
+	b.CreateRet (ConstantInt::get (i64, retval));
+	return jit->compile (fn, {}, nullptr, "", owner);
+}
+
+/*
+ * MonoLLVMJIT::release_owner drives the map in engine.hpp's owners_: one
+ * opaque owner key -> the JITDylibs compiled under it, erased (not merely
+ * decremented) as soon as it is released. Five properties, none of which the
+ * existing checks touch (they all pass owner=nullptr, i.e. "never reclaim"):
+ *
+ *   (a) one dylib under a fresh owner -> release reports exactly 1;
+ *   (b) releasing that SAME (now-erased) key again reports 0, not a second 1 -
+ *       the map entry must be erased, not left present with an empty vector,
+ *       and there must be no double-counting of an already-torn-down dylib;
+ *   (c) two compiles under the SAME owner key before any release -> one
+ *       release reports 2 (both dylibs torn down together, as engine.hpp's
+ *       "everything compiled under one key is torn down together" promises);
+ *   (d) both a nullptr owner and a fresh, never-passed-to-compile() owner
+ *       report 0 without crashing (nullptr is the documented no-op; a key
+ *       that was simply never used must be an equally quiet no-op, not a
+ *       lookup into never-initialised state);
+ *   (e) releasing owners A/B/C must not disturb a still-live owner D: D's
+ *       compiled code must still resolve and execute correctly after A/B/C
+ *       are torn down, proving release_owner () removes only ITS OWN key's
+ *       dylibs and nothing from a sibling entry in the map.
+ */
+static TestResult
+test_release_owner (MonoLLVMJIT *jit)
+{
+	/* Five distinct local objects give five distinct, guaranteed-unique
+	 * addresses to use as opaque owner keys - exactly mono's usage, which
+	 * keys by a MonoDomain *. */
+	int tag_a = 0, tag_b = 0, tag_c = 0, tag_d = 0, tag_unused = 0;
+	void *owner_a = &tag_a;
+	void *owner_b = &tag_b;
+	void *owner_c = &tag_c;
+	void *owner_d = &tag_d;
+	void *owner_fresh = &tag_unused; /* never passed to compile() */
+
+	/* (a) one dylib under owner_a. */
+	mono::CompileResult res_a = compile_trivial_under_owner (jit, "owner_a_fn", 111, owner_a);
+	CHECK (res_a.entry != 0);
+	CHECK (jit->release_owner (owner_a) == 1);
+
+	/* (b) the same key again: erased, not double-counted. */
+	CHECK (jit->release_owner (owner_a) == 0);
+
+	/* (c) two dylibs under the SAME owner_b -> one release reports 2. */
+	mono::CompileResult res_b1 = compile_trivial_under_owner (jit, "owner_b_fn1", 222, owner_b);
+	mono::CompileResult res_b2 = compile_trivial_under_owner (jit, "owner_b_fn2", 333, owner_b);
+	CHECK (res_b1.entry != 0);
+	CHECK (res_b2.entry != 0);
+	CHECK (jit->release_owner (owner_b) == 2);
+
+	/* (d) nullptr and a never-used key are quiet no-ops. */
+	CHECK (jit->release_owner (nullptr) == 0);
+	CHECK (jit->release_owner (owner_fresh) == 0);
+
+	/* (e) isolation: compile under owner_c and owner_d, release owner_c (and
+	 * the already-erased owner_a/owner_b again for good measure), then prove
+	 * owner_d's code is untouched - both that release_owner (owner_d) still
+	 * correctly reports 1 dylib, and that the code itself still runs. */
+	mono::CompileResult res_c = compile_trivial_under_owner (jit, "owner_c_fn", 444, owner_c);
+	CHECK (res_c.entry != 0);
+
+	mono::CompileResult res_d = compile_trivial_under_owner (jit, "owner_d_fn", 555, owner_d);
+	CHECK (res_d.entry != 0);
+
+	CHECK (jit->release_owner (owner_c) == 1);
+	CHECK (jit->release_owner (owner_a) == 0); /* still erased */
+	CHECK (jit->release_owner (owner_b) == 0); /* still erased */
+
+	/* owner_d's dylib must be completely unaffected by the three releases above. */
+	auto compiled_d = reinterpret_cast<int64_t (*) (void)> (res_d.entry);
+	CHECK (compiled_d () == 555);
+	CHECK (jit->release_owner (owner_d) == 1);
+
+	return TEST_PASS;
+}
+
 /* ---------------------------------------------------------- reloc widths */
 
 /*
@@ -400,6 +493,408 @@ test_reloc_widths (MonoLLVMJIT *jit)
 		        jitted.first_offender.c_str ());
 		return TEST_FAIL;
 	}
+	return TEST_PASS;
+}
+
+/*
+ * Emit the reloc probe module (see build_reloc_probe () above) through the
+ * given code model and return the raw object bytes, rather than the audit
+ * audit_code_model () computes. Used by the checks below, which need to
+ * byte-patch the object before (re-)auditing it.
+ */
+static Expected<SmallVector<char, 0>>
+emit_reloc_probe_bytes (CodeModel::Model cm)
+{
+	auto jtmb = mono::host_target_machine_builder ();
+	jtmb.setCodeModel (cm);
+	auto tm = jtmb.createTargetMachine ();
+	if (!tm)
+		return tm.takeError ();
+
+	LLVMContext ctx;
+	Module m ("selftest.reloc.raw", ctx);
+	m.setDataLayout ((*tm)->createDataLayout ());
+	build_reloc_probe (m);
+
+	SmallVector<char, 0> buf;
+	raw_svector_ostream os (buf);
+	legacy::PassManager pm;
+	if ((*tm)->addPassesToEmitFile (pm, os, nullptr, CodeGenFileType::ObjectFile))
+		return createStringError (inconvertibleErrorCode (),
+		                          "target cannot emit an object file");
+	pm.run (m);
+	return buf;
+}
+
+/*
+ * audit_relocations () gates entirely on ELFObjectFileBase::getEMachine (): the
+ * relocation TYPE NUMBERS it classifies are only meaningful relative to the ISA
+ * that defines them (a REX_GOTPCRELX type code is an x86-64 psABI value; on
+ * another machine the same numeric code means something else, or nothing), so
+ * the switch in x86_64_reloc_truncates_address () must never run against an
+ * object claiming a different machine. Prove the gate is checked - not merely
+ * documented - by byte-patching ONLY the emitted object's e_machine field, from
+ * EM_X86_64 to an unrelated ISA, and showing the exact same relocation bytes
+ * that test_reloc_widths already relies on being flagged truncating now audit
+ * as entirely clean.
+ *
+ * e_machine sits at file offset 18: the 16-byte e_ident, then e_type (a u16),
+ * then e_machine (a u16), both little-endian on this target. EM_AARCH64 is
+ * chosen as the unrelated ISA because it shares ELFCLASS64/ELFDATA2LSB with
+ * x86-64 (byte 4 = ELFCLASS64, byte 5 = ELFDATA2LSB), so
+ * object::ObjectFile::createObjectFile () - which dispatches purely on those
+ * two e_ident bytes, never on e_machine - still parses the patched bytes as an
+ * ELF64LE object and every section/relocation stays readable; only
+ * getEMachine () changes.
+ */
+static TestResult
+test_audit_relocations_gates_on_e_machine (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	Triple host (sys::getProcessTriple ());
+	if (host.getArch () != Triple::x86_64 || !host.isOSBinFormatELF ()) {
+		printf ("     host %s is not x86-64 ELF; the e_machine gate is only "
+		        "meaningful there\n", host.str ().c_str ());
+		return TEST_SKIP;
+	}
+
+	auto bytes = emit_reloc_probe_bytes (CodeModel::Small);
+	if (!bytes) {
+		printf ("     probe emit failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	SmallVector<char, 0> buf = std::move (*bytes);
+
+	auto obj_before = object::ObjectFile::createObjectFile (
+		MemoryBufferRef (StringRef (buf.data (), buf.size ()), "unpatched.o"));
+	if (!obj_before) {
+		printf ("     unpatched parse failed: %s\n",
+		        toString (obj_before.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	/* Negative control: unpatched, this is exactly the probe test_reloc_widths
+	 * already relies on containing truncating relocations under Small. */
+	mono::RelocAudit before = mono::audit_relocations (**obj_before);
+	CHECK (before.truncating > 0);
+
+	CHECK (buf.size () > 20);
+	uint16_t e_machine_before = (uint16_t) (uint8_t) buf[18]
+	                          | (uint16_t) ((uint16_t) (uint8_t) buf[19] << 8);
+	CHECK (e_machine_before == ELF::EM_X86_64);
+	buf[18] = (char) (ELF::EM_AARCH64 & 0xff);
+	buf[19] = (char) ((ELF::EM_AARCH64 >> 8) & 0xff);
+
+	auto obj_after = object::ObjectFile::createObjectFile (
+		MemoryBufferRef (StringRef (buf.data (), buf.size ()), "patched.o"));
+	if (!obj_after) {
+		printf ("     patched parse failed: %s\n",
+		        toString (obj_after.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	const auto *elf_after = dyn_cast<object::ELFObjectFileBase> (&**obj_after);
+	CHECK (elf_after != nullptr);
+	CHECK (elf_after->getEMachine () == ELF::EM_AARCH64);
+
+	mono::RelocAudit after = mono::audit_relocations (**obj_after);
+	printf ("     same bytes, e_machine EM_X86_64(%u)->EM_AARCH64(%u): before "
+	        "total=%llu truncating=%llu; after total=%llu truncating=%llu\n",
+	        (unsigned) ELF::EM_X86_64, (unsigned) ELF::EM_AARCH64,
+	        (unsigned long long) before.total, (unsigned long long) before.truncating,
+	        (unsigned long long) after.total, (unsigned long long) after.truncating);
+
+	/* All-zero: an unrecognised machine is "did not look", never an echo of
+	 * the (unchanged, still objectively truncating) relocation bytes. */
+	CHECK (after.total == 0);
+	CHECK (after.truncating == 0);
+	CHECK (after.first_offender.empty ());
+
+	return TEST_PASS;
+}
+
+/* Little-endian scalar reads directly out of a raw ELF byte buffer. */
+static uint32_t
+raw_rd_le32 (const char *p)
+{
+	return (uint32_t) (uint8_t) p[0] | ((uint32_t) (uint8_t) p[1] << 8)
+	       | ((uint32_t) (uint8_t) p[2] << 16) | ((uint32_t) (uint8_t) p[3] << 24);
+}
+
+static uint64_t
+raw_rd_le64 (const char *p)
+{
+	return (uint64_t) raw_rd_le32 (p) | ((uint64_t) raw_rd_le32 (p + 4) << 32);
+}
+
+static uint16_t
+raw_rd_le16 (const char *p)
+{
+	return (uint16_t) (uint8_t) p[0] | ((uint16_t) (uint8_t) p[1] << 8);
+}
+
+/*
+ * Every raw Elf64_Rela entry in `buf` (24 bytes: r_offset u64, r_info u64,
+ * r_addend s64, little-endian), located by walking the ELF64 header/section
+ * table directly - NOT through llvm::object, since the checks below need the
+ * entry's absolute file offset to byte-patch it, and that offset is exactly
+ * what the psABI's own header/section-header layout gives for free. This
+ * mirrors the direct-header-offset technique test_audit_relocations_gates_on_
+ * e_machine already uses for e_ident, just walking further into the file.
+ */
+struct RawRela {
+	size_t file_offset; /* absolute byte offset of this entry's r_info field */
+	uint64_t r_offset;
+	uint32_t type;
+};
+
+static std::vector<RawRela>
+raw_elf64_rela_entries (const SmallVectorImpl<char> &buf)
+{
+	std::vector<RawRela> out;
+	const char *p = buf.data ();
+	size_t n = buf.size ();
+	if (n < 0x40)
+		return out;
+
+	uint64_t e_shoff = raw_rd_le64 (p + 0x28);
+	uint16_t e_shentsize = raw_rd_le16 (p + 0x3a);
+	uint16_t e_shnum = raw_rd_le16 (p + 0x3c);
+
+	for (uint16_t i = 0; i < e_shnum; i++) {
+		size_t shdr_off = (size_t) e_shoff + (size_t) i * e_shentsize;
+		if (shdr_off + 0x40 > n)
+			break;
+		const char *shdr = p + shdr_off;
+		uint32_t sh_type = raw_rd_le32 (shdr + 4);
+		uint64_t sh_offset = raw_rd_le64 (shdr + 0x18);
+		uint64_t sh_size = raw_rd_le64 (shdr + 0x20);
+		if (sh_type != 4 /* SHT_RELA - NOT 9, which is SHT_REL */)
+			continue;
+		for (uint64_t off = 0; off + 24 <= sh_size; off += 24) {
+			size_t entry_off = (size_t) sh_offset + (size_t) off;
+			if (entry_off + 24 > n)
+				break;
+			const char *e = p + entry_off;
+			uint64_t r_offset = raw_rd_le64 (e);
+			uint64_t r_info = raw_rd_le64 (e + 8);
+			out.push_back ({ entry_off + 8, r_offset, (uint32_t) r_info });
+		}
+	}
+	return out;
+}
+
+/*
+ * Independently reasoned from the x86-64 psABI relocation-type ranges - NOT
+ * calling, copying the switch of, or in any way deferring to
+ * x86_64_reloc_truncates_address () in engine.cpp - so this file can pick a
+ * relocation entry it is CERTAIN the audit currently flags truncating, before
+ * mutating that entry's raw type byte out from under it. Every member here
+ * carries either a narrow absolute/PC-relative address or a 32-bit
+ * displacement into a separately-mapped GOT/PLT/TLS slab, matching the ABI's
+ * own field-width documentation for these codes.
+ */
+static bool
+psabi_x86_64_type_is_a_truncatable_address_form (uint32_t type)
+{
+	switch (type) {
+	case ELF::R_X86_64_8:
+	case ELF::R_X86_64_PC8:
+	case ELF::R_X86_64_16:
+	case ELF::R_X86_64_PC16:
+	case ELF::R_X86_64_32:
+	case ELF::R_X86_64_32S:
+	case ELF::R_X86_64_PC32:
+	case ELF::R_X86_64_PLT32:
+	case ELF::R_X86_64_GOTPCREL:
+	case ELF::R_X86_64_GOTPCRELX:
+	case ELF::R_X86_64_REX_GOTPCRELX:
+	case ELF::R_X86_64_GOTPC32:
+	case ELF::R_X86_64_TLSGD:
+	case ELF::R_X86_64_TLSLD:
+	case ELF::R_X86_64_GOTTPOFF:
+	case ELF::R_X86_64_GOTPC32_TLSDESC:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+ * x86_64_reloc_truncates_address ()'s default case declines to guess: an
+ * out-of-range relocation type (0xEE, which no x86-64 psABI revision has ever
+ * defined - the highest assigned code as of this writing is in the 40s) must
+ * be counted in `total` (the audit looked at it) but NOT in `truncating` (it
+ * was not positively identified as unsafe). Prove this by finding one
+ * relocation entry the audit currently flags truncating - independently, via
+ * the local psABI-derived helper above, never via engine.cpp - and byte-
+ * patching ONLY its low 32 bits of r_info (the type field) to 0xEE, leaving
+ * r_offset, the symbol index (the high 32 bits of r_info) and r_addend
+ * untouched. The mutated object must audit with the SAME total relocation
+ * count and EXACTLY ONE FEWER truncating one.
+ */
+static TestResult
+test_reloc_unclassified_type_not_truncating (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	Triple host (sys::getProcessTriple ());
+	if (host.getArch () != Triple::x86_64 || !host.isOSBinFormatELF ()) {
+		printf ("     host %s is not x86-64 ELF; the relocation classifier "
+		        "covers only x86-64\n", host.str ().c_str ());
+		return TEST_SKIP;
+	}
+
+	auto bytes = emit_reloc_probe_bytes (CodeModel::Small);
+	if (!bytes) {
+		printf ("     probe emit failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	SmallVector<char, 0> buf = std::move (*bytes);
+
+	std::vector<RawRela> entries = raw_elf64_rela_entries (buf);
+	CHECK (!entries.empty ());
+
+	const RawRela *target = nullptr;
+	for (const RawRela &e : entries) {
+		if (psabi_x86_64_type_is_a_truncatable_address_form (e.type)) {
+			target = &e;
+			break;
+		}
+	}
+	/* The Small-model probe is known (test_reloc_widths) to contain truncating
+	 * relocations; the psABI-derived set above must find at least one of them. */
+	CHECK (target != nullptr);
+	uint32_t original_type = target->type;
+	size_t patch_off = target->file_offset;
+
+	auto obj_before = object::ObjectFile::createObjectFile (
+		MemoryBufferRef (StringRef (buf.data (), buf.size ()), "before.o"));
+	if (!obj_before) {
+		printf ("     before-parse failed: %s\n", toString (obj_before.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	mono::RelocAudit before = mono::audit_relocations (**obj_before);
+	CHECK (before.total == entries.size ());
+	CHECK (before.truncating > 0);
+
+	/* Patch only the low 4 bytes of r_info (the type field); r_offset, the
+	 * symbol index and r_addend are untouched. */
+	CHECK (patch_off + 4 <= buf.size ());
+	buf[patch_off + 0] = (char) 0xEE;
+	buf[patch_off + 1] = 0;
+	buf[patch_off + 2] = 0;
+	buf[patch_off + 3] = 0;
+
+	auto obj_after = object::ObjectFile::createObjectFile (
+		MemoryBufferRef (StringRef (buf.data (), buf.size ()), "after.o"));
+	if (!obj_after) {
+		printf ("     after-parse failed: %s\n", toString (obj_after.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	mono::RelocAudit after = mono::audit_relocations (**obj_after);
+
+	printf ("     patched one relocation's type from %u to 0xEE: before "
+	        "total=%llu truncating=%llu; after total=%llu truncating=%llu\n",
+	        original_type, (unsigned long long) before.total,
+	        (unsigned long long) before.truncating, (unsigned long long) after.total,
+	        (unsigned long long) after.truncating);
+
+	/* Still counted (the entry itself was not removed)... */
+	CHECK (after.total == before.total);
+	/* ...but no longer classified truncating: exactly one fewer. */
+	CHECK (after.truncating == before.truncating - 1);
+
+	return TEST_PASS;
+}
+
+/*
+ * audit_relocations ()'s first_offender de-dups (only the FIRST truncating hit
+ * is recorded) and reports "<section>/<type>". Cross-check both properties
+ * against an INDEPENDENT scan of the same object, done here with the generic
+ * object::SectionRef/RelocationRef iteration (the same public iteration order
+ * audit_relocations () itself uses - obj.sections () then sec.relocations ()
+ * in order - but with the truncating/non-truncating call made by this file's
+ * own psabi_x86_64_type_is_a_truncatable_address_form (), not by calling into
+ * engine.cpp) to find which section/type combination comes first, and confirm
+ * it is exactly what first_offender reports.
+ */
+static TestResult
+test_reloc_first_offender_matches_first_scan (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	Triple host (sys::getProcessTriple ());
+	if (host.getArch () != Triple::x86_64 || !host.isOSBinFormatELF ()) {
+		printf ("     host %s is not x86-64 ELF; the relocation classifier "
+		        "covers only x86-64\n", host.str ().c_str ());
+		return TEST_SKIP;
+	}
+
+	auto bytes = emit_reloc_probe_bytes (CodeModel::Small);
+	if (!bytes) {
+		printf ("     probe emit failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	SmallVector<char, 0> buf = std::move (*bytes);
+
+	auto obj = object::ObjectFile::createObjectFile (
+		MemoryBufferRef (StringRef (buf.data (), buf.size ()), "probe.o"));
+	if (!obj) {
+		printf ("     parse failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+
+	mono::RelocAudit audit = mono::audit_relocations (**obj);
+	CHECK (audit.truncating > 0);
+	CHECK (!audit.first_offender.empty ());
+	/* Shape: "<section>/<type>" - a real section name, never the "?" fallback,
+	 * for a normal, well-formed object with a readable section-name table. */
+	CHECK (audit.first_offender.find ('/') != std::string::npos);
+	CHECK (audit.first_offender[0] != '?');
+
+	/* Independent first-hit scan, same iteration order, own classifier. */
+	std::string expect_section;
+	uint32_t expect_type = 0;
+	bool found = false;
+	for (const object::SectionRef &sec : (*obj)->sections ()) {
+		for (const object::RelocationRef &rel : sec.relocations ()) {
+			if (!psabi_x86_64_type_is_a_truncatable_address_form (
+			        (uint32_t) rel.getType ()))
+				continue;
+			Expected<StringRef> name = sec.getName ();
+			CHECK ((bool) name);
+			expect_section = name->str ();
+			expect_type = (uint32_t) rel.getType ();
+			found = true;
+			break;
+		}
+		if (found)
+			break;
+	}
+	CHECK (found);
+
+	std::string expect = expect_section + "/";
+	/* Recover the LLVM type-name string the same way engine.cpp does - via
+	 * RelocationRef::getTypeName () - so the comparison is against the exact
+	 * string audit_relocations () builds, not a re-derived guess at spelling. */
+	for (const object::SectionRef &sec : (*obj)->sections ()) {
+		Expected<StringRef> name = sec.getName ();
+		if (!name || *name != expect_section)
+			continue;
+		for (const object::RelocationRef &rel : sec.relocations ()) {
+			if ((uint32_t) rel.getType () != expect_type)
+				continue;
+			SmallString<32> tn;
+			rel.getTypeName (tn);
+			expect += tn.c_str ();
+			goto built_expect;
+		}
+	}
+built_expect:
+	printf ("     first_offender=\"%s\" expect=\"%s\"\n",
+	        audit.first_offender.c_str (), expect.c_str ());
+	CHECK (audit.first_offender == expect);
+
 	return TEST_PASS;
 }
 
@@ -694,6 +1189,119 @@ build_eh_filter_module (Module &m)
 	 */
 	ArrayType *filter_ty = ArrayType::get (ptr, 1);
 	lp->addClause (ConstantArray::get (filter_ty, { ti0 }));
+	lb.CreateRet (lb.CreateExtractValue (lp, 1));
+
+	return fn;
+}
+
+/*
+ * Build, in `m`, an EH function whose single catch clause references a
+ * type_info_0 that is a bare EXTERNAL DECLARATION - `new GlobalVariable (m,
+ * i32, false, ExternalLinkage, nullptr, "type_info_0")` - rather than a
+ * ConstantInt-initialized definition. Every other EH probe in this file gives
+ * type_info_0 an initializer so the gather can smuggle the IL clause index
+ * through it (var->hasInitializer () true, then dyn_cast<ConstantInt> on the
+ * initializer); here hasInitializer () is false, so there is no clause index
+ * to recover at all. This is a DIFFERENT decline cause from
+ * build_eh_filter_module's negative TypeId: the TypeId here is a normal
+ * POSITIVE catch (TypeId 1), so has_filter must stay false, while
+ * clause_resolved must still come back false and the function still decline
+ * (CAP-EH-0: never guess a clause index). Returns `i32 eh_external_typeinfo(void)`.
+ */
+static Function *
+build_eh_external_typeinfo_module (Module &m)
+{
+	LLVMContext &ctx = m.getContext ();
+	Type *i32 = Type::getInt32Ty (ctx);
+	PointerType *ptr = PointerType::getUnqual (ctx);
+
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (ctx), false);
+	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                     EH_MAY_THROW_NAME, &m);
+
+	/* type_info_0: external declaration, NO initializer. */
+	auto *type_info = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
+	                                      /*Initializer*/ nullptr, "type_info_0");
+
+	FunctionType *fty = FunctionType::get (i32, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage,
+	                                 "eh_external_typeinfo", &m);
+
+	FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+	Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+	                                   "mono_personality", &m);
+	pers->addFnAttr (Attribute::NoUnwind);
+	BasicBlock *pbb = BasicBlock::Create (ctx, "ENTRY", pers);
+	IRBuilder<> pb (pbb);
+	pb.CreateRet (ConstantInt::get (i32, 0));
+	fn->setPersonalityFn (pers);
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *cont = BasicBlock::Create (ctx, "cont", fn);
+	BasicBlock *lpad = BasicBlock::Create (ctx, "lpad", fn);
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont, lpad, {});
+
+	IRBuilder<> cb (cont);
+	cb.CreateRet (ConstantInt::get (i32, 0));
+
+	StructType *lp_ty = StructType::get (ptr, i32);
+	IRBuilder<> lb (lpad);
+	LandingPadInst *lp = lb.CreateLandingPad (lp_ty, 1);
+	lp->addClause (type_info); /* an ordinary catch clause -> a POSITIVE TypeId */
+	lb.CreateRet (lb.CreateExtractValue (lp, 1));
+
+	return fn;
+}
+
+/*
+ * Build, in `m`, an EH function whose only landing pad is a pure CLEANUP: the
+ * LandingPadInst carries lp->setCleanup (true) and NO catch/filter clauses at
+ * all (IR-legal: the verifier only requires "at least one clause or [...] a
+ * cleanup"). This is the TypeId-0 code path in MonoEHGatherPass -
+ * distinct from build_eh_filter_module's NEGATIVE TypeId (a filter) - and,
+ * like the filter, is a shape outside the catch-only milestone that C2 must
+ * decline rather than silently treat as "no clauses to worry about". Returns
+ * `i32 eh_cleanup(void)`.
+ */
+static Function *
+build_eh_cleanup_module (Module &m)
+{
+	LLVMContext &ctx = m.getContext ();
+	Type *i32 = Type::getInt32Ty (ctx);
+	PointerType *ptr = PointerType::getUnqual (ctx);
+
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (ctx), false);
+	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                     EH_MAY_THROW_NAME, &m);
+
+	FunctionType *fty = FunctionType::get (i32, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_cleanup", &m);
+
+	FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+	Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+	                                   "mono_personality", &m);
+	pers->addFnAttr (Attribute::NoUnwind);
+	BasicBlock *pbb = BasicBlock::Create (ctx, "ENTRY", pers);
+	IRBuilder<> pb (pbb);
+	pb.CreateRet (ConstantInt::get (i32, 0));
+	fn->setPersonalityFn (pers);
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *cont = BasicBlock::Create (ctx, "cont", fn);
+	BasicBlock *lpad = BasicBlock::Create (ctx, "lpad", fn);
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont, lpad, {});
+
+	IRBuilder<> cb (cont);
+	cb.CreateRet (ConstantInt::get (i32, 0));
+
+	StructType *lp_ty = StructType::get (ptr, i32);
+	IRBuilder<> lb (lpad);
+	LandingPadInst *lp = lb.CreateLandingPad (lp_ty, 1);
+	lp->setCleanup (true); /* cleanup only - no addClause () at all */
 	lb.CreateRet (lb.CreateExtractValue (lp, 1));
 
 	return fn;
@@ -1520,6 +2128,132 @@ test_eh_mono_lsda_declined_emits_nothing (MonoLLVMJIT *jit)
 	return TEST_PASS;
 }
 
+/*
+ * C2 fail-safe, distinct decline cause: a type_info_0 that is an external
+ * DECLARATION (no initializer) rather than a ConstantInt-initialized global.
+ * The clause is an ordinary POSITIVE-TypeId catch - unlike build_eh_filter_
+ * module's negative-TypeId filter - so has_filter must stay false, while the
+ * missing initializer means the clause index cannot be recovered at all:
+ * clause_resolved must be false, clause_index must be left at its declared
+ * default (-1, see MonoEHClause in engine.hpp), and the function must decline
+ * (CAP-EH-0) exactly like the filter case, so no .mono_lsda record is ever
+ * built from a guessed clause index.
+ */
+static TestResult
+test_eh_gather_external_typeinfo_declines (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	LLVMContext c1;
+	Module m1 ("selftest.eh.externaltypeinfo.gather", c1);
+	build_eh_external_typeinfo_module (m1);
+
+	auto sc = mono::gather_eh_sidechannel (m1);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (sc->functions.size () == 1);
+	const mono::MonoEHFunctionClauses &fn = sc->functions[0];
+	CHECK (fn.function == "eh_external_typeinfo");
+	CHECK (fn.declined);    /* an unresolvable clause_index must decline */
+	CHECK (!fn.has_filter); /* a positive (catch) TypeId, NOT a filter - the
+	                          * decline here has a different cause than
+	                          * build_eh_filter_module's */
+	CHECK (fn.clauses.size () == 1);
+	CHECK (!fn.clauses[0].clause_resolved);
+	CHECK (fn.clauses[0].clause_index == -1); /* left at its declared default */
+
+	/* The emitted object must therefore carry NO .mono_lsda bytes - the same
+	 * fail-safe shape as the filter/declined test, for a different cause. */
+	LLVMContext c2;
+	Module m2 ("selftest.eh.externaltypeinfo.emit", c2);
+	build_eh_external_typeinfo_module (m2);
+	auto obj = mono::compile_object_with_mono_compiler (m2);
+	if (!obj) {
+		printf ("     emit failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	auto bytes = object_section_bytes (**obj, ".mono_lsda");
+	if (!bytes) {
+		printf ("     section read failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (bytes->empty ());
+
+	printf ("     external (uninitialized) type_info_0: declined=1 has_filter=0 "
+	        "clause_resolved=0 clause_index=%d, .mono_lsda absent (%zu bytes)\n",
+	        fn.clauses[0].clause_index, bytes->size ());
+	return TEST_PASS;
+}
+
+/*
+ * C2 fail-safe, cleanup TypeId path: a landing pad with lp->setCleanup (true)
+ * and NO clauses at all - LLVM's "implicit cleanup" encoding (see
+ * MachineFunction::addLandingPad in LLVM's CodeGen: a cleanup flag with a
+ * non-empty clause list gets an explicit TypeId 0 pushed onto LandingPadInfo::
+ * TypeIds ahead of the real clauses; a cleanup flag with NO clauses pushes
+ * nothing at all, leaving TypeIds completely empty). Either way this is out of
+ * the catch-only milestone and must not be silently treated as "no clauses to
+ * gather, therefore nothing to decline": build_eh_filter_module's negative-
+ * TypeId filter DOES decline via the type_id<0 branch, so this check pins that
+ * a cleanup landing pad takes the SAME fail-safe path via a route that never
+ * enters that branch at all (its TypeIds list has zero entries, so the
+ * per-TypeId loop body never executes for this landing pad).
+ */
+static TestResult
+test_eh_gather_cleanup_declines (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	LLVMContext c1;
+	Module m1 ("selftest.eh.cleanup.gather", c1);
+	build_eh_cleanup_module (m1);
+
+	auto sc = mono::gather_eh_sidechannel (m1);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (sc->functions.size () == 1);
+	const mono::MonoEHFunctionClauses &fn = sc->functions[0];
+	CHECK (fn.function == "eh_cleanup");
+	CHECK (!fn.has_filter); /* cleanup, not a filter - has_filter must stay false */
+
+	/*
+	 * A pure-cleanup landing pad (isCleanup () with zero clauses) leaves
+	 * LandingPadInfo::TypeIds completely empty, so MonoEHGatherPass's per-TypeId
+	 * loop never runs for it. The gather instead reads the cleanup bit straight
+	 * off the IR LandingPadInst, so a cleanup is declined exactly like a filter -
+	 * the `declined` side channel is correct on its own, not merely rescued by
+	 * MonoLSDAStreamer's downstream empty-clauses guard.
+	 */
+	CHECK (fn.declined);
+
+	/* Whichever way the gather side channel came back, the emitted object
+	 * must still carry NO .mono_lsda bytes - MonoLSDAStreamer's own
+	 * "declined || clauses.empty ()" guard is the second, independent
+	 * fail-safe line and must hold regardless. */
+	LLVMContext c2;
+	Module m2 ("selftest.eh.cleanup.emit", c2);
+	build_eh_cleanup_module (m2);
+	auto obj = mono::compile_object_with_mono_compiler (m2);
+	if (!obj) {
+		printf ("     emit failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	auto bytes = object_section_bytes (**obj, ".mono_lsda");
+	if (!bytes) {
+		printf ("     section read failed: %s\n", toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (bytes->empty ());
+
+	printf ("     cleanup-only landing pad: .mono_lsda absent (%zu bytes) - "
+	        "fail-safe holds end-to-end\n", bytes->size ());
+	return TEST_PASS;
+}
+
 /* ------------------------------------------------------------ driver */
 
 /*
@@ -1558,10 +2292,14 @@ test_llvm_engine_main (void)
 
 	report ("arithmetic", test_arithmetic (jit));
 	report ("registered-helper", test_registered_helper (jit));
+	report ("release-owner", test_release_owner (jit));
 	report ("compiler-equivalence", test_compiler_equivalence (jit));
 	report ("gcc-except-table", test_gcc_except_table (jit));
 	report ("eh-gather", test_eh_gather (jit));
 	report ("eh-gather-multi-call", test_eh_gather_multi_call (jit));
+	report ("eh-gather-external-typeinfo-declines",
+	        test_eh_gather_external_typeinfo_declines (jit));
+	report ("eh-gather-cleanup-declines", test_eh_gather_cleanup_declines (jit));
 	report ("eh-mono-lsda-two-catch", test_eh_mono_lsda_two_catch (jit));
 	report ("eh-mono-lsda-multi-call", test_eh_mono_lsda_multi_call (jit));
 	report ("eh-mono-lsda-declined-emits-nothing",
@@ -1580,7 +2318,6 @@ int
 test_llvm_reloc_widths_main (void)
 {
 	MonoLLVMJIT *jit = MonoLLVMJIT::get_singleton ();
-	TestResult r;
 
 	passes = failures = skips = 0;
 
@@ -1598,14 +2335,36 @@ test_llvm_reloc_widths_main (void)
 		return 1;
 	}
 
-	r = test_reloc_widths (jit);
-	report ("reloc-widths", r);
+	/*
+	 * All four checks here share the EXACT SAME skip boundary as reloc-widths
+	 * (x86-64 ELF only, checked first thing inside each): grouping them in this
+	 * program does not reintroduce the aggregation problem the comment above
+	 * describes, because that problem was mixing a skippable check with
+	 * unconditionally-runnable ones. These are homogeneous - either all four
+	 * run, or all four skip together - so one program-level SKIP still means
+	 * what it says.
+	 */
+	TestResult r_widths = test_reloc_widths (jit);
+	report ("reloc-widths", r_widths);
+	TestResult r_emachine = test_audit_relocations_gates_on_e_machine (jit);
+	report ("audit-relocations-gates-on-e-machine", r_emachine);
+	TestResult r_unclassified = test_reloc_unclassified_type_not_truncating (jit);
+	report ("reloc-unclassified-type-not-truncating", r_unclassified);
+	TestResult r_first_offender = test_reloc_first_offender_matches_first_scan (jit);
+	report ("reloc-first-offender-matches-first-scan", r_first_offender);
+
 	printf ("%d passed, %d skipped, %d failed\n", passes, skips, failures);
 
+	bool any_failed = r_widths == TEST_FAIL || r_emachine == TEST_FAIL
+	                || r_unclassified == TEST_FAIL || r_first_offender == TEST_FAIL;
+	bool any_ran = r_widths != TEST_SKIP || r_emachine != TEST_SKIP
+	            || r_unclassified != TEST_SKIP || r_first_offender != TEST_SKIP;
+	if (any_failed)
+		return 1;
 	/* 77 is automake's SKIP exit status; see the note above. */
-	if (r == TEST_SKIP)
+	if (!any_ran)
 		return 77;
-	return r == TEST_FAIL ? 1 : 0;
+	return 0;
 }
 
 #endif /* ENABLE_LLVM */

@@ -64,6 +64,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
@@ -598,6 +599,30 @@ public:
 			const MCSymbol *handler = lp.LandingPadLabel;
 			if (!handler)
 				fn.declined = true;
+
+			/*
+			 * A cleanup (finally/fault) landing pad is out of the catch-only
+			 * milestone and must decline, exactly like a filter. But the
+			 * per-TypeId loop below - the only other place fn.declined is set -
+			 * never sees a cleanup marker for a PURE-cleanup pad: LLVM pushes the
+			 * implicit cleanup TypeId 0 onto LandingPadInfo::TypeIds only when the
+			 * pad ALSO has clauses (MachineFunction::addLandingPad: `isCleanup ()
+			 * && getNumClauses () != 0`), so a setCleanup(true) pad with zero
+			 * clauses leaves TypeIds empty and the loop runs zero iterations,
+			 * returning {declined:false, clauses:[]}. Read the cleanup bit
+			 * straight off the IR LandingPadInst the pad was lowered from - the
+			 * exact instruction addLandingPad inspects - so the decline is set
+			 * for both the pure-cleanup and the catch+cleanup shapes, and the
+			 * `declined` side channel is correct on its own rather than relying on
+			 * MonoLSDAStreamer's downstream empty-clauses guard.
+			 */
+			if (const BasicBlock *bb =
+			        lp.LandingPadBlock ? lp.LandingPadBlock->getBasicBlock () : nullptr) {
+				if (const auto *lpi =
+				        dyn_cast_or_null<LandingPadInst> (bb->getFirstNonPHI ()))
+					if (lpi->isCleanup ())
+						fn.declined = true;
+			}
 
 			/*
 			 * BeginLabels/EndLabels carry ONE (begin,end) pair PER INVOKE that
