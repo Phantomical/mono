@@ -95,11 +95,12 @@ class Tests
 	 * EH F2 functional coverage: STANDALONE try/finally through the LLVM tier.
 	 *
 	 * The finally-bearing helpers are deliberately kept in their own [NoInlining]
-	 * methods so each holds a single, non-nested finally clause - the shape the F2
-	 * gate admits (a nested try/catch inside a try/finally would be declined). The
-	 * exception that runs the finally on the exceptional path propagates OUT of the
-	 * standalone-finally method into a SEPARATE standalone try/catch here, so both
-	 * methods stay non-nested and both compile through LLVM.
+	 * methods so each holds a single, non-nested finally clause - the minimal shape
+	 * the F2 slice first exercised. The exception that runs the finally on the
+	 * exceptional path propagates OUT of the standalone-finally method into a
+	 * SEPARATE standalone try/catch here, keeping both methods a single clause each.
+	 * (Depth-2 nesting is itself admitted since EH N3; these stay flat only to keep
+	 * the F2 coverage focused.)
 	 */
 
 	static int llvm_f2_finally_ex_log;
@@ -719,25 +720,39 @@ class Tests
 	}
 
 	/*
-	 * MUST-DECLINE (doc 16 7 F6 / 4.2): a C# try/catch/finally compiles to an inner
-	 * try/catch nested inside an outer try/finally. The inner try region is strictly
-	 * contained in the outer's, so the nesting gate (translator.cpp) declines the whole
-	 * method to the classic JIT - it must NEVER publish a wrong .mono_lsda/clause array.
-	 * This test asserts the method runs CORRECTLY on both the normal and the inner-catch
-	 * exceptional paths; the accompanying driven run proves it actually declines (it is
-	 * named in MONO_LLVM_METHOD yet emits NO LLVM method - stays tier-0 classic). Do not
-	 * name a _t1 suffix here: the point is that it CANNOT reach the LLVM tier.
+	 * ---------------------------------------------------------------- EH N3 (doc 21)
+	 * The nesting gate (translator.cpp) now ADMITS depth-2 clause containment through
+	 * the LLVM tier: the .mono_lsda synthesis (build_ex_info, EH N1) appends one
+	 * enclosing entry per base entry, and the innermost landing pad's selector switch
+	 * (emit_handler_start, EH N2) re-dispatches RDX == the enclosing clause_index to
+	 * that handler's body. These tests exercise the two sharpest depth-2 shapes end to
+	 * end (doc 21 6.1 and 6.2). Each nesting helper carries a _t1 suffix so a driven
+	 * run under MONO_LLVM_METHOD forces it onto the tier-1 LLVM path (these previously
+	 * DECLINED); in the regression suite the warm-up loops are inert at the default
+	 * promotion threshold, so each is a pure correctness test with the classic JIT as
+	 * the differential oracle. C7ExA / C7ExB (defined below) are two unrelated custom
+	 * exception types: C7ExA is the caught type, C7ExB the uncaught one.
+	 *
+	 * §6.1 - C# try/catch/finally: an inner CATCH nested in an outer FINALLY. mode 0 =
+	 * no throw (finally on the normal `leave`); 1 = throw the caught type (inner catch
+	 * runs, then finally on the `leave` out of the catch); 2 = throw an UNcaught type
+	 * (inner catch skipped, the outer finally runs as unwinding cleanup, exception
+	 * propagates to the caller). The finally is NOT intervening on the caught path -
+	 * the catch body sits inside the finally's try, so unwinding to it never crosses
+	 * the finally boundary.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
-	static int f6_try_catch_finally_nested (int mode, int[] log) {
+	static int n3_try_catch_finally_t1 (int mode, int[] log) {
 		int r = 0;
-		try {
-			try {
+		try {						/* outer FINALLY */
+			try {					/* inner CATCH (C7ExA) */
 				log [++log [0]] = 1;
 				if (mode == 1)
-					throw new Exception ("inner");
+					throw new C7ExA ();
+				if (mode == 2)
+					throw new C7ExB ();
 				r = 10;
-			} catch (Exception) {
+			} catch (C7ExA) {
 				log [++log [0]] = 2;
 				r = 20;
 			}
@@ -747,18 +762,141 @@ class Tests
 		return r;
 	}
 
-	public static int test_0_f6_try_catch_finally_declined () {
+	public static int test_0_n3_try_catch_finally () {
 		int[] log = new int [8];
-		for (int i = 0; i < 8; i++) { log [0] = 0; f6_try_catch_finally_nested (0, log); f6_try_catch_finally_nested (1, log); }
-		/* normal path: try body runs, no throw, finally runs -> r=10, order 1,3 */
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n3_try_catch_finally_t1 (0, log);
+			log [0] = 0; n3_try_catch_finally_t1 (1, log);
+			log [0] = 0; try { n3_try_catch_finally_t1 (2, log); } catch (C7ExB) { }
+		}
+		/* normal path: try body runs, finally on leave -> r=10, order 1,3 */
 		log [0] = 0;
-		int rn = f6_try_catch_finally_nested (0, log);
+		int rn = n3_try_catch_finally_t1 (0, log);
 		if (!(rn == 10 && log [0] == 2 && log [1] == 1 && log [2] == 3))
 			return 1;
-		/* exceptional path: inner catch handles, then finally runs -> r=20, order 1,2,3 */
+		/* caught: inner catch handles, finally on the leave out of the catch -> r=20, order 1,2,3 */
 		log [0] = 0;
-		int re = f6_try_catch_finally_nested (1, log);
-		if (!(re == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+		int rc = n3_try_catch_finally_t1 (1, log);
+		if (!(rc == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 2;
+		/* uncaught: inner catch skipped, finally runs as cleanup, exception propagates -> order 1,3 */
+		log [0] = 0;
+		bool propagated = false;
+		try {
+			n3_try_catch_finally_t1 (2, log);
+		} catch (C7ExB) {
+			propagated = true;
+		}
+		if (!(propagated && log [0] == 2 && log [1] == 1 && log [2] == 3))
+			return 3;
+		return 0;
+	}
+
+	/*
+	 * §6.2 - C# try/finally inside try/catch: an inner FINALLY nested in an outer
+	 * CATCH (the sharpest case). The inner finally OWNS the landing pad the fault
+	 * unwinds to, so that finally pad must (N2 §5.2) carry a selector switch routing
+	 * RDX == the outer catch's clause_index to the catch body, AND store the exception
+	 * object for the catch route. mode 0 = no throw (finally on the normal `leave`);
+	 * 1 = throw the caught type (the intervening inner finally runs FIRST, THEN the
+	 * outer catch handles it, seeing the right exception object); 2 = throw an uncaught
+	 * type (inner finally runs as cleanup, exception propagates).
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n3_finally_in_catch_t1 (int mode, int[] log) {
+		int r = 0;
+		try {						/* outer CATCH (C7ExA) */
+			try {					/* inner FINALLY */
+				log [++log [0]] = 1;
+				if (mode == 1)
+					throw new C7ExA ();
+				if (mode == 2)
+					throw new C7ExB ();
+				r = 10;
+			} finally {
+				log [++log [0]] = 2;
+			}
+		} catch (C7ExA e) {
+			/* record whether the routed exception object is the right one */
+			log [++log [0]] = (e is C7ExA) ? 3 : 99;
+			r = 20;
+		}
+		return r;
+	}
+
+	public static int test_0_n3_finally_in_catch () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n3_finally_in_catch_t1 (0, log);
+			log [0] = 0; n3_finally_in_catch_t1 (1, log);
+			log [0] = 0; try { n3_finally_in_catch_t1 (2, log); } catch (C7ExB) { }
+		}
+		/* normal path: try body, finally on leave -> r=10, order 1,2 */
+		log [0] = 0;
+		int rn = n3_finally_in_catch_t1 (0, log);
+		if (!(rn == 10 && log [0] == 2 && log [1] == 1 && log [2] == 2))
+			return 1;
+		/* caught: inner finally FIRST, THEN outer catch (sees the exc) -> r=20, order 1,2,3 */
+		log [0] = 0;
+		int rc = n3_finally_in_catch_t1 (1, log);
+		if (!(rc == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 2;
+		/* uncaught: inner finally as cleanup, exception propagates -> order 1,2 */
+		log [0] = 0;
+		bool propagated = false;
+		try {
+			n3_finally_in_catch_t1 (2, log);
+		} catch (C7ExB) {
+			propagated = true;
+		}
+		if (!(propagated && log [0] == 2 && log [1] == 1 && log [2] == 2))
+			return 3;
+		return 0;
+	}
+
+	/*
+	 * NEGATIVE (doc 21 8.1): a DEPTH-3 nest still DECLINES to the classic JIT. The
+	 * innermost catch clause has TWO enclosers (the middle and outer finallys), so the
+	 * gate's `enclosers > 1` branch fires and the method never reaches the LLVM tier.
+	 * Not named _t1 - the accompanying driven run names it in MONO_LLVM_METHOD yet must
+	 * emit NO LLVM method (declined by the gate, not the allowlist). The behaviour is
+	 * asserted correct regardless of tier.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n3_depth3_nested (int mode, int[] log) {
+		int r = 0;
+		try {						/* outer FINALLY */
+			try {					/* middle FINALLY */
+				try {				/* inner CATCH (C7ExA) - two enclosers */
+					log [++log [0]] = 1;
+					if (mode == 1)
+						throw new C7ExA ();
+					r = 10;
+				} catch (C7ExA) {
+					log [++log [0]] = 2;
+					r = 20;
+				}
+			} finally {
+				log [++log [0]] = 3;
+			}
+		} finally {
+			log [++log [0]] = 4;
+		}
+		return r;
+	}
+
+	public static int test_0_n3_depth3_declines () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) { log [0] = 0; n3_depth3_nested (0, log); log [0] = 0; n3_depth3_nested (1, log); }
+		/* normal path: try body, both finallys inner-to-outer -> r=10, order 1,3,4 */
+		log [0] = 0;
+		int rn = n3_depth3_nested (0, log);
+		if (!(rn == 10 && log [0] == 3 && log [1] == 1 && log [2] == 3 && log [3] == 4))
+			return 1;
+		/* caught: inner catch, then both finallys on the leave -> r=20, order 1,2,3,4 */
+		log [0] = 0;
+		int re = n3_depth3_nested (1, log);
+		if (!(re == 20 && log [0] == 4 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 4))
 			return 2;
 		return 0;
 	}

@@ -148,6 +148,26 @@ llvm_method_filter_excludes (MonoMethod *method)
 }
 
 /*
+ * clause_encloses:
+ *
+ *   Does IL clause J strictly ENCLOSE clause C - i.e. is C's try region nested in
+ * J's? This is byte-for-byte the containment predicate the .mono_lsda synthesis
+ * (mono_lsda.cpp, EH N1) and the landing-pad emission (translator-call.cpp, EH N2)
+ * use, with SIBLINGS (identical try_offset AND try_len - try { } catch(A) catch(B))
+ * excluded. Keeping the nesting gate's admit set in lock-step with those two stages
+ * is load-bearing: the gate must admit exactly the pairs the synthesis + switch can
+ * represent, or a live nested method would consume an array that mis-dispatches.
+ */
+static inline bool
+clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
+{
+	bool siblings = c->try_offset == j->try_offset && c->try_len == j->try_len;
+	return !siblings &&
+	       c->try_offset >= j->try_offset &&
+	       c->handler_offset <= j->handler_offset;
+}
+
+/*
  * mono_llvm_check_method_supported:
  *
  *   Do some quick checks to decide whenever cfg->method can be compiled by LLVM, to avoid
@@ -217,36 +237,71 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 		return;
 
 	/*
-	 * Decline genuine clause NESTING, which the `.mono_lsda` chain cannot
-	 * represent: one clause's protected region lies strictly inside another's
-	 * try (or handler), so a single faulting PC is covered by two try ranges of
-	 * different extent and `is_address_protected`'s first-match is ambiguous.
+	 * Nesting gate (depth-2, EH N3). The `.mono_lsda` synthesis (build_ex_info,
+	 * EH N1) plus the landing-pad selector routing (emit_handler_start, EH N2)
+	 * represent a clause whose try region is strictly contained in an enclosing
+	 * clause's try: for each faulting PC the runtime still delivers to the
+	 * INNERMOST landing pad, whose selector switch re-dispatches RDX == the
+	 * enclosing clause_index to that enclosing handler's body (doc 21 5/6). The
+	 * synthesised enclosing entries reuse the inner landing pad and copy the inner
+	 * base entry's exact range, so the published native ranges stay
+	 * equal-or-disjoint (doc 21 2.2). Admit containment up to DEPTH 2 - every
+	 * clause has at most ONE encloser - which turns on the whole common surface:
+	 * C# try/catch/finally, try/finally in try/catch, one level of nested
+	 * try/catch or try/finally.
 	 *
-	 * True SIBLING catches - try { } catch(A) catch(B) - are NOT nesting: the
-	 * clauses share the IDENTICAL protected region (same try_offset AND same
-	 * try_len) and differ only in handler. emit_handler_start emits them as one
-	 * landing pad carrying a clause per sibling, routed by the selector; the
-	 * gather pass records one entry per clause over the shared range, and the
-	 * runtime picks the handler by isinst then jumps via RDX = clause_index (doc
-	 * 11 3/6). That is faithfully representable, so admit it: exempt any pair
-	 * whose try regions are exactly equal. Every other overlap - equal
-	 * try_offset but different try_len, or a strictly-contained try - is real
-	 * nesting and still declines.
+	 * Two shapes still DECLINE to the classic JIT (CAP-EH-0, doc 21 7 / 8.1):
+	 *   - DEPTH > 2 (a clause with >= 2 enclosers, a 3-deep nest): the relative
+	 *     order of the multiple enclosing entries becomes load-bearing (doc 21
+	 *     4.1, still an open question) and no nested array of that depth has been
+	 *     validated live.
+	 *   - CROSSING / partial overlap: try regions overlap but the pair is neither
+	 *     siblings nor cleanly contained (neither encloses the other) - malformed
+	 *     IL the synthesis cannot faithfully encode.
+	 *
+	 * True SIBLING catches - try { } catch(A) catch(B) - share the IDENTICAL
+	 * protected region (same try_offset AND try_len) and are NOT nesting: they are
+	 * emitted as one landing pad carrying a clause per sibling, routed by the
+	 * selector (doc 11 3/6). clause_encloses is false for siblings, so they add
+	 * nothing to the encloser count and pass the crossing test - admitted, as
+	 * before. The containment test uses clause_encloses, byte-for-byte the
+	 * predicate the N1 synthesis and N2 emission use, so the gate admits exactly
+	 * the pairs those two stages can represent.
 	 */
 	for (i = 0; i < cfg->header->num_clauses; ++i) {
+		MonoExceptionClause *clause1 = &cfg->header->clauses [i];
+		int enclosers = 0;
+
 		for (j = 0; j < cfg->header->num_clauses; ++j) {
-			MonoExceptionClause *clause1 = &cfg->header->clauses [i];
+			if (i == j)
+				continue;
 			MonoExceptionClause *clause2 = &cfg->header->clauses [j];
+
+			if (clause_encloses (clause1, clause2))
+				enclosers++;
 
 			bool siblings = clause1->try_offset == clause2->try_offset &&
 			                    clause1->try_len == clause2->try_len;
+			bool contained = clause_encloses (clause1, clause2) ||
+			                     clause_encloses (clause2, clause1);
+			bool overlap = clause1->try_offset < clause2->try_offset + clause2->try_len &&
+			                   clause2->try_offset < clause1->try_offset + clause1->try_len;
 
-			if (i != j && !siblings && clause1->try_offset >= clause2->try_offset && clause1->handler_offset <= clause2->handler_offset) {
-				TRACE_FAILURE_CFG (cfg, "nested clauses");
-				cfg->exception_message = g_strdup ("nested clauses");
+			if (overlap && !siblings && !contained) {
+				TRACE_FAILURE_CFG (cfg, "crossing EH clauses");
+				cfg->exception_message = g_strdup ("crossing EH clauses");
 				cfg->disable_llvm = TRUE;
 				break;
 			}
+		}
+		if (cfg->disable_llvm)
+			break;
+
+		if (enclosers > 1) {
+			TRACE_FAILURE_CFG (cfg, "nested clauses depth>2");
+			cfg->exception_message = g_strdup ("nested clauses depth>2");
+			cfg->disable_llvm = TRUE;
+			break;
 		}
 	}
 	if (cfg->disable_llvm)
