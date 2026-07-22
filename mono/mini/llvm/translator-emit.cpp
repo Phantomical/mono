@@ -1215,12 +1215,12 @@ emit_gsharedvt_ldaddr (EmitContext *ctx, int vreg)
 	int idx = cfg->gsharedvt_vreg_to_idx [vreg] - 1;
 
 	offset = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), MONO_STRUCT_OFFSET (MonoGSharedVtMethodRuntimeInfo, entries) + (idx * TARGET_SIZEOF_VOID_P), false));
-	ptr = LLVMBuildAdd (llvm::wrap (builder), convert (ctx, info_var, IntPtrType ()), convert (ctx, offset, IntPtrType ()), "");
+	ptr = llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, info_var, IntPtrType ())), llvm::unwrap (convert (ctx, offset, IntPtrType ())), ""));
 
 	name = g_strdup_printf ("gsharedvt_local_%d_offset", vreg);
 	offset_var = LLVMBuildLoad2 (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), convert (ctx, ptr, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))), name);
 
-	return LLVMBuildAdd (llvm::wrap (builder), convert (ctx, locals_var, IntPtrType ()), convert (ctx, offset_var, IntPtrType ()), "");
+	return llvm::wrap (builder->CreateAdd (llvm::unwrap (convert (ctx, locals_var, IntPtrType ())), llvm::unwrap (convert (ctx, offset_var, IntPtrType ())), ""));
 }
 
 /* Emit a wrapper around the parameterless JIT icall ICALL_ID with a cold calling convention */

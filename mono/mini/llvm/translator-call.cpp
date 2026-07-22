@@ -74,7 +74,7 @@ emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb
 			LLVMValueRef cond1 = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, rhs, llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (rhs)), -1, false)), "");
 			LLVMValueRef cond2 = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, lhs, c, "");
 
-			cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, LLVMBuildAnd (llvm::wrap (builder), cond1, cond2, ""), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false)), "");
+			cmp = LLVMBuildICmp (llvm::wrap (builder), LLVMIntEQ, llvm::wrap (builder->CreateAnd (llvm::unwrap (cond1), llvm::unwrap (cond2), "")), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false)), "");
 			emit_cond_system_exception (ctx, bb, "OverflowException", cmp, FALSE);
 			if (!ctx_ok (ctx))
 				break;
