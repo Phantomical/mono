@@ -113,6 +113,31 @@ static __thread gboolean tiered_promote_active;
 static mono_lazy_init_t tiered_lazy_init = MONO_LAZY_INIT_STATUS_NOT_INITIALIZED;
 static gboolean tiered_enabled;
 
+/*
+ * MONO_TIERED_CALL_THRESHOLD: how many times a tier-0 body is entered before it
+ * is enqueued for tier 1. Default 1000; 0 means enqueue eagerly on first publish
+ * (the pre-threshold behaviour), which is also the feature's off switch. Read
+ * once in tiered_do_init () and thereafter a constant the prologue emitter bakes
+ * in. Meaningless - and left 0 - unless MONO_TIERED is set.
+ */
+static guint32 tiered_call_threshold;
+
+/*
+ * The per-method, per-domain tier-0 call counter block. COUNT is at offset 0
+ * because the prologue bakes the block's address and increments/compares its
+ * first word directly; OPT/METHOD/DOMAIN let the crossing helper enqueue with
+ * exactly the arguments the eager path used. Allocated from the domain mem
+ * manager so it is freed with the tier-0 code at domain unload; a re-JIT for a
+ * new domain gets a fresh, zeroed counter, which is correct (promotion is
+ * per-domain).
+ */
+typedef struct {
+	guint32 count;
+	guint32 opt;
+	MonoMethod *method;
+	MonoDomain *domain;
+} MiniTieredCounter;
+
 static void
 tiered_do_init (void)
 {
@@ -122,6 +147,57 @@ tiered_do_init (void)
 	mono_os_mutex_init_recursive (&tiered_mutex);
 	tiered_state = g_hash_table_new (g_direct_hash, g_direct_equal);
 	tiered_queue = g_queue_new ();
+
+	tiered_call_threshold = 1000;
+	{
+		char *e = g_getenv ("MONO_TIERED_CALL_THRESHOLD");
+		if (e) {
+			char *end = NULL;
+			guint64 v = g_ascii_strtoull (e, &end, 10);
+			/* Keep the default on an empty or malformed value. */
+			if (end && end != e && *end == '\0' && v <= G_MAXUINT32)
+				tiered_call_threshold = (guint32) v;
+			g_free (e);
+		}
+	}
+}
+
+/*
+ * The call-count threshold, or 0 when the feature is off (MONO_TIERED unset, or
+ * MONO_TIERED_CALL_THRESHOLD=0). At 0 the prologue emits no counter and the eager
+ * enqueue at the tier-0 publish site is unchanged, so behaviour is byte-identical
+ * to the pre-threshold runtime.
+ */
+guint32
+mono_llvm_tiered_call_threshold (void)
+{
+	if (!mono_llvm_tiered_enabled ())
+		return 0;
+	return tiered_call_threshold;
+}
+
+/*
+ * Allocate the tier-0 call counter for METHOD in DOMAIN, recording the OPT its
+ * tier-0 compile used so a later crossing can enqueue tier 1 with the same opts.
+ * Returns NULL (no counter emitted) when the feature is off. The dynamic-method
+ * exclusion is applied by the caller (the prologue emitter), which already has
+ * the predicate to hand.
+ */
+gpointer
+mini_tiered_alloc_counter (MonoDomain *domain, MonoMethod *method, guint32 opt)
+{
+	MiniTieredCounter *ctr;
+
+	if (!mono_llvm_tiered_enabled () || tiered_call_threshold == 0)
+		return NULL;
+	if (!domain || !method)
+		return NULL;
+
+	ctr = (MiniTieredCounter *) mono_domain_alloc0 (domain, sizeof (MiniTieredCounter));
+	ctr->opt = opt;
+	ctr->method = method;
+	ctr->domain = domain;
+	return ctr;
 }
 
 /*
@@ -354,20 +430,25 @@ tiered_dequeue_for_domain (MonoDomain *domain)
 }
 
 /*
- * Called when mini_method_compile unwinds. When the nesting returns to zero we
- * are on a shallow stack, so it is safe to run tier-1 compilation for whatever
- * accumulated during the nest.
+ * Drain the queue for this thread's current domain, promoting each entry.
+ *
+ * Factored out so it can be driven from two producers: a compile that unwound to
+ * nesting zero (mono_llvm_tiered_compile_end), and a tier-0 body whose call count
+ * just crossed the threshold during ordinary execution (mini_tiered_count_reached).
+ * Both reach a drain on a shallow stack; the gates below are identical for both.
+ *
+ * The depth gate is the shared safety property: tier-1 LLVM codegen must run only
+ * at nesting zero, never on the deep stack that class initializers create. A
+ * compile_end has just decremented to its final depth; a count-reached crossing
+ * that fires deep inside a cctor-driven compile nest simply sees depth != 0 here,
+ * leaves the method enqueued, and lets the outer compile_end drain it later.
  */
-void
-mono_llvm_tiered_compile_end (void)
+static void
+tiered_try_drain (void)
 {
 	MonoInternalThread *thread;
 	MonoDomain *domain;
 
-	if (!mono_llvm_tiered_enabled ())
-		return;
-
-	tiered_compile_depth --;
 	if (tiered_compile_depth != 0)
 		return;
 	if (!tiered_ready)
@@ -471,6 +552,61 @@ mono_llvm_tiered_compile_end (void)
 	}
 
 	tiered_draining = FALSE;
+}
+
+/*
+ * Called when mini_method_compile unwinds. When the nesting returns to zero we
+ * are on a shallow stack, so it is safe to run tier-1 compilation for whatever
+ * accumulated during the nest.
+ */
+void
+mono_llvm_tiered_compile_end (void)
+{
+	if (!mono_llvm_tiered_enabled ())
+		return;
+
+	tiered_compile_depth --;
+	tiered_try_drain ();
+}
+
+/*
+ * The tier-0 prologue's cold path calls this once a method's call counter reaches
+ * MONO_TIERED_CALL_THRESHOLD (see mono_arch_emit_prolog). COUNTER is the block
+ * mini_tiered_alloc_counter () handed the emitter; it carries the method, its
+ * domain and the opt its tier-0 compile used, so the enqueue matches the eager
+ * path exactly. The enqueue is idempotent (the tiered_state guard), so the branch
+ * firing on every subsequent call is harmless.
+ *
+ * With the threshold on, this REPLACES the eager enqueue at the tier-0 publish
+ * site: a method is admitted to tier 1 only after it has been entered
+ * threshold-many times, not on its first call.
+ */
+void
+mini_tiered_count_reached (gpointer counter)
+{
+	MiniTieredCounter *ctr = (MiniTieredCounter *) counter;
+
+	/* Reached from generated tier-0 code, so the feature is on by construction;
+	 * the guard is defensive. */
+	if (!mono_llvm_tiered_enabled () || !ctr)
+		return;
+
+	mono_llvm_tiered_enqueue (ctr->method, ctr->domain, ctr->opt);
+
+	/*
+	 * Drive the drain from here too: a hot steady-state method crosses the
+	 * threshold during ordinary execution, when no compile is in flight whose
+	 * mono_llvm_tiered_compile_end would drain the queue. tiered_try_drain ()
+	 * applies the same depth==0 / ready / current-domain / appdomain-ref /
+	 * not-dying gates, so a crossing deep in a cctor-driven compile nest just
+	 * leaves the method enqueued for the next qualifying drain.
+	 *
+	 * W4: when the drain moves to a background compile thread this inline call
+	 * becomes a signal to that thread instead - the counter path must only ever
+	 * produce queue entries, never run LLVM codegen (or cctors) on the crossing
+	 * thread.
+	 */
+	tiered_try_drain ();
 }
 
 /*

@@ -4534,8 +4534,14 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 		 * itself runs when the compile nesting unwinds (see
 		 * mono_llvm_tiered_compile_end), never here, because we may be many
 		 * frames deep in a cctor-driven compile nest.
+		 *
+		 * Only eager (first-call) enqueue when the call-count threshold is off
+		 * (MONO_TIERED_CALL_THRESHOLD=0, the default-off value). With a non-zero
+		 * threshold the tier-0 prologue's counter enqueues instead, once the
+		 * method has been entered threshold-many times. At threshold 0 this stays
+		 * byte-identical to the pre-threshold behaviour.
 		 */
-		if (!cfg->compile_llvm)
+		if (!cfg->compile_llvm && mono_llvm_tiered_call_threshold () == 0)
 			mono_llvm_tiered_enqueue (method, target_domain, opt);
 
 		code = cfg->native_code;

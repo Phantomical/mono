@@ -7446,15 +7446,49 @@ mono_arch_patch_code_new (MonoCompile *cfg, MonoDomain *domain, guint8 *code, Mo
 
 #ifndef DISABLE_JIT
 
+/*
+ * TRUE when this tier-0 body should carry a call-count counter in its prologue.
+ * Only for JIT'd, non-dynamic bodies with the threshold turned on
+ * (MONO_TIERED_CALL_THRESHOLD != 0). AOT is excluded because the counter address
+ * is a baked absolute immediate with no meaning ahead of time, and dynamic
+ * methods are excluded because the LLVM backend declines them, so they can never
+ * be promoted (a counter would be pure overhead). mono_arch_emit_prolog runs only
+ * for classic (tier-0) codegen - the LLVM backend emits its own prologue - so no
+ * compile_llvm check is needed here.
+ */
+static gboolean
+amd64_tiered_counter_enabled (MonoCompile *cfg)
+{
+	/*
+	 * Gate on orig_method, the top-level method the eager enqueue at the tier-0
+	 * publish site uses and the one mini_tiered_promote knows how to recompile.
+	 * cfg->method may be the shared body (mini_get_shared_method_full) whose open
+	 * signature the LLVM re-compile cannot handle; promoting orig_method instead
+	 * lets the backend decline gshared cleanly, exactly as the eager path does.
+	 */
+	return !cfg->compile_aot && cfg->orig_method && !cfg->orig_method->dynamic && mono_llvm_tiered_call_threshold () != 0;
+}
+
 static int
 get_max_epilog_size (MonoCompile *cfg)
 {
 	int max_epilog_size = 16;
-	
+
 	if (cfg->method->save_lmf)
 		max_epilog_size += 256;
 
 	max_epilog_size += (AMD64_NREG * 2);
+
+	/*
+	 * The prologue call counter is emitted into the entry bb but is not a
+	 * MonoInst, so ins_get_size () does not see it. get_max_epilog_size () is the
+	 * per-bb slack the branch-shortening pass adds to the entry and exit bbs, so
+	 * account for the counter's worst-case bytes here. Comfortably covers:
+	 * mov r11,imm64 (10) + add [r11],1 (4) + cmp [r11],imm32 (8) + jb (2) +
+	 * mov arg0,imm64 (10) + mov r11,imm64 (10) + call r11 (3).
+	 */
+	if (amd64_tiered_counter_enabled (cfg))
+		max_epilog_size += 64;
 
 	return max_epilog_size;
 }
@@ -7884,6 +7918,18 @@ MONO_RESTORE_WARNING
 		args_clobbered = TRUE;
 
 	/*
+	 * The call counter's cold path (emitted at the end of this prologue) makes a
+	 * C call, which clobbers every SysV caller-saved register (rax, rcx, rdx, rsi,
+	 * rdi, r8-r11), so the "arguments still in their original registers" peephole
+	 * below must not extend any arg register's live range past the prologue.
+	 * Forcing args_clobbered means every argument is read from its spill slot, so
+	 * all of those volatiles are dead at prologue end and the cold call needs to
+	 * preserve none of them.
+	 */
+	if (amd64_tiered_counter_enabled (cfg))
+		args_clobbered = TRUE;
+
+	/*
 	 * Optimize the common case of the first bblock making a call with the same
 	 * arguments as the method. This works because the arguments are still in their
 	 * original argument registers.
@@ -7986,6 +8032,40 @@ MONO_RESTORE_WARNING
 
 			amd64_mov_reg_imm (code, AMD64_R11, (guint64)&bp_trampoline);
 			amd64_mov_membase_reg (code, ins->inst_basereg, ins->inst_offset, AMD64_R11, 8);
+		}
+	}
+
+	/*
+	 * Tier-0 call counter. Increment a per-method, per-domain word on every entry
+	 * and, once it reaches MONO_TIERED_CALL_THRESHOLD, make a cold call to
+	 * mini_tiered_count_reached to enqueue the method for tier 1. The increment is
+	 * deliberately non-atomic: a lost update can only undercount, never overshoot,
+	 * so it merely delays a promotion slightly, and a >= compare cannot be skipped
+	 * by a race (see tiered.cpp). Emitted last so the frame is fully set up and all
+	 * arguments have been spilled; the cold call is an ordinary C call and clobbers
+	 * every caller-saved register, all of which are dead at prologue end (see the
+	 * args_clobbered note above), so nothing needs saving around it. Nothing when
+	 * the feature is off, so a threshold-0 / non-tiered build's prologue is unchanged.
+	 */
+	if (amd64_tiered_counter_enabled (cfg)) {
+		gpointer counter = mini_tiered_alloc_counter (cfg->domain, cfg->orig_method, cfg->opt);
+		if (counter) {
+			guint32 threshold = mono_llvm_tiered_call_threshold ();
+			guint8 *skip;
+
+			/* r11 = &counter->count */
+			amd64_mov_reg_imm (code, AMD64_R11, counter);
+			/* ++*(guint32 *)r11 */
+			amd64_alu_membase_imm_size (code, X86_ADD, AMD64_R11, 0, 1, 4);
+			/* if (*(guint32 *)r11 < threshold) goto skip; (unsigned) */
+			amd64_alu_membase_imm_size (code, X86_CMP, AMD64_R11, 0, threshold, 4);
+			skip = code;
+			amd64_branch8 (code, X86_CC_B, 0, FALSE);
+			/* crossed: mini_tiered_count_reached (counter) */
+			amd64_mov_reg_imm (code, AMD64_ARG_REG1, counter);
+			amd64_mov_reg_imm (code, AMD64_R11, (gpointer) mini_tiered_count_reached);
+			amd64_call_reg (code, AMD64_R11);
+			amd64_patch (skip, code);
 		}
 	}
 

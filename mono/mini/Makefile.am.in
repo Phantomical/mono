@@ -622,6 +622,7 @@ test_sources = 			\
 	unaligned.cs	\
 	MemoryIntrinsics.il	\
 	mixed.cs	\
+	tiered-promotion.cs	\
 	ratests.cs
 
 regtests_UNIVERSAL = \

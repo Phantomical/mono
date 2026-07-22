@@ -2164,6 +2164,26 @@ void      mono_destroy_compile              (MonoCompile *cfg);
  * tier-1 drain in mono/mini/llvm/tiered.cpp.
  */
 gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *domain, guint32 opt);
+
+/*
+ * Deferred tier-1 promotion behind a call-count threshold (mono/mini/llvm/tiered.cpp).
+ *
+ * mono_llvm_tiered_call_threshold () returns MONO_TIERED_CALL_THRESHOLD (default
+ * 1000; 0 = eager promotion = the pre-threshold behaviour, and the feature's off
+ * switch). It is 0 whenever MONO_TIERED is unset, so the eager enqueue path stays
+ * byte-identical to before when the feature is off.
+ *
+ * When the threshold is non-zero the tier-0 prologue (mono_arch_emit_prolog) owns
+ * a per-method, per-domain counter word obtained from mini_tiered_alloc_counter (),
+ * increments it non-atomically on every entry, compares it >= threshold, and on a
+ * crossing makes a cold call to mini_tiered_count_reached () with the counter block.
+ * The helper enqueues the method once and runs the synchronous drain. The COUNTER
+ * argument is the opaque block returned by mini_tiered_alloc_counter (); its first
+ * word is the count the prologue increments.
+ */
+guint32   mono_llvm_tiered_call_threshold   (void);
+gpointer  mini_tiered_alloc_counter         (MonoDomain *domain, MonoMethod *method, guint32 opt);
+void      mini_tiered_count_reached         (gpointer counter);
 void      mono_empty_compile              (MonoCompile *cfg);
 MonoJitICallInfo *mono_find_jit_opcode_emulation (int opcode);
 void	  mono_print_ins_index (int i, MonoInst *ins);
