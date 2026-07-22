@@ -1849,6 +1849,118 @@ cases_mono_lsda_nesting (void)
 			printf ("ok   nest-crossing-no-synthesis (2 ei, no synthesis for crossing clauses)\n");
 		}
 	}
+
+	/*
+	 * (9) SIBLING GROUP ENCLOSED BY A FINALLY - the enclosing entry is synthesised
+	 * EXACTLY ONCE, not once per sibling (the fix for the tier-1 double-run finally).
+	 * try { try {throw} catch(A) catch(B) } finally {}: clause0 = inner catch A,
+	 * clause1 = inner catch B (sibling of 0 - identical try_offset AND try_len),
+	 * clause2 = outer finally spanning both inner handlers. The gather publishes TWO
+	 * base entries over the SAME native range sharing the ONE inner landing pad. Each
+	 * sibling base would, un-de-duplicated, re-synthesise the SAME enclosing finally
+	 * over that range, giving TWO identical finally ei; pass-2's first-match-and-
+	 * continue then runs the finally twice when an exception propagates past both
+	 * siblings (ECMA-335 §12.4.2 violation). De-dup by (range, enclosing clause_index)
+	 * collapses them to ONE. Expect exactly THREE ei: the two sibling base catches
+	 * (slots 0,1) then the SINGLE synthesised finally (slot 2) - NOT four.
+	 */
+	{
+		MonoExceptionClause cl [3];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;    /* inner catch A */
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x04;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_NONE;    /* inner catch B (sibling of A) */
+		cl[1].data.catch_class = CC1;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x10; cl[1].handler_offset = 0x24; cl[1].handler_len = 0x04;
+		cl[2].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer finally over both handlers */
+		cl[2].try_offset = 0x10; cl[2].try_len = 0x18; cl[2].handler_offset = 0x28; cl[2].handler_len = 0x04;
+
+		/* Two sibling base entries: SAME range, SAME (shared) landing pad 0x40. */
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x10, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE },
+			{ 0x10, 0x10, 0x40, 1, MONO_EXCEPTION_CLAUSE_NONE },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-sibling-group-in-finally-once";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 3, base, code_len, out);
+		bool good = ok && out.size () == 3 &&
+			/* slots 0,1: the two sibling base catches, shared range + landing pad */
+			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE && out[0].clause_index == 0 &&
+			out[1].flags == MONO_EXCEPTION_CLAUSE_NONE && out[1].clause_index == 1 &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[0].try_end == (gpointer) (base + 0x20) &&
+			out[1].try_start == out[0].try_start && out[1].try_end == out[0].try_end &&
+			out[0].handler_start == out[1].handler_start &&
+			/* slot 2: the ONE synthesised finally over the shared range/landing pad */
+			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 2 &&
+			out[2].try_start == out[0].try_start && out[2].try_end == out[0].try_end &&
+			out[2].handler_start == out[0].handler_start;
+		if (!good) {
+			printf ("FAIL nest-sibling-group-in-finally-once: ok=%d size=%zu (expected 3, "
+			        "size 4 == the double-synthesised finally bug)\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-sibling-group-in-finally-once (3 ei: 2 sibling catches, finally synthesised once)\n");
+		}
+	}
+
+	/*
+	 * (10) SIBLING GROUP with the inner try spanning TWO DISTINCT invoke ranges,
+	 * enclosed by an outer finally: the de-dup collapses siblings WITHIN a range but
+	 * keeps one enclosing entry PER DISTINCT range (it must not over-dedup across
+	 * invoke ranges). Same clause table as (9); the gather hands FOUR base entries -
+	 * two sibling pairs, one pair at range R1 [0x10,0x18), one at R2 [0x28,0x30),
+	 * each pair sharing its own landing pad. Expect SIX ei: the four sibling base
+	 * catches (slots 0..3) then TWO synthesised finallys (slots 4,5) - one per
+	 * distinct range, each over its own range/landing pad - NOT one (over-deduped)
+	 * and NOT four (un-deduped).
+	 */
+	{
+		MonoExceptionClause cl [3];
+		memset (cl, 0, sizeof (cl));
+		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[0].data.catch_class = CC0;
+		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x04;
+		cl[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+		cl[1].data.catch_class = CC1;
+		cl[1].try_offset = 0x10; cl[1].try_len = 0x10; cl[1].handler_offset = 0x24; cl[1].handler_len = 0x04;
+		cl[2].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		cl[2].try_offset = 0x10; cl[2].try_len = 0x18; cl[2].handler_offset = 0x28; cl[2].handler_len = 0x04;
+
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* R1 sibling A */
+			{ 0x10, 0x08, 0x40, 1, MONO_EXCEPTION_CLAUSE_NONE }, /* R1 sibling B (shared pad) */
+			{ 0x28, 0x08, 0x50, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* R2 sibling A */
+			{ 0x28, 0x08, 0x50, 1, MONO_EXCEPTION_CLAUSE_NONE }, /* R2 sibling B (shared pad) */
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "nest-sibling-group-multirange-one-per-range";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, cl, 3, base, code_len, out);
+		bool good = ok && out.size () == 6 &&
+			/* the four sibling base catches occupy the lower slots */
+			out[0].clause_index == 0 && out[1].clause_index == 1 &&
+			out[2].clause_index == 0 && out[3].clause_index == 1 &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[2].try_start == (gpointer) (base + 0x28) &&
+			/* exactly one synthesised finally PER distinct range */
+			out[4].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[4].clause_index == 2 &&
+			out[5].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[5].clause_index == 2 &&
+			out[4].try_start == out[0].try_start && out[4].try_end == out[0].try_end &&
+			out[4].handler_start == out[0].handler_start &&
+			out[5].try_start == out[2].try_start && out[5].try_end == out[2].try_end &&
+			out[5].handler_start == out[2].handler_start &&
+			out[4].try_start != out[5].try_start;
+		if (!good) {
+			printf ("FAIL nest-sibling-group-multirange-one-per-range: ok=%d size=%zu "
+			        "(expected 6: 4 base + one finally per distinct range)\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   nest-sibling-group-multirange-one-per-range (6 ei: finally synthesised once per distinct range)\n");
+		}
+	}
 }
 
 /* ------------------------------------------------------------ publish cases */

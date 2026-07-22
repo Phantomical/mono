@@ -913,18 +913,22 @@ class Tests
 	 * finally-in-catch breadth, and an inner try with several invoke ranges under an
 	 * outer finally.
 	 *
-	 * (A sixth shape - a SIBLING catch group enclosed by an outer finally - is
-	 * deliberately NOT here: it uncovered a real tier-1 miscompile in the N1
-	 * enclosing-entry synthesis, where the outer finally runs ONCE PER SIBLING when an
-	 * exception propagates past every sibling. That divergence is escalated for a
-	 * source fix; the repro lives in .claude/scratch/eh-n4/. This shape returns as a
-	 * permanent test once the fix lands.)
+	 * A sixth shape - a SIBLING catch group enclosed by an outer finally - once
+	 * uncovered a real tier-1 miscompile in the N1 enclosing-entry synthesis, where
+	 * the outer finally ran ONCE PER SIBLING when an exception propagated past every
+	 * sibling (the same-range sibling base entries each re-synthesised the same
+	 * enclosing finally ei). That is now FIXED - build_ex_info de-duplicates
+	 * synthesised enclosing entries by (base range, enclosing clause) - and the shape
+	 * is a permanent guard here: test_0_n4_sibling_catch_in_finally (two siblings) plus
+	 * a three-sibling variant, each asserting the finally runs exactly once regardless
+	 * of sibling count (seq 1,4 / 1,5 on the propagate path, not 1,4,4 / 1,5,5,5).
 	 *
 	 * Each nesting helper carries a _t1 suffix; a driven run under
 	 *   MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 \
 	 *   MONO_LLVM_METHOD='n4_nested_catch_t1;n4_nested_finally_t1;\
 	 *     n4_base_catch_in_finally_t1;n4_finally_in_catch_multi_t1;\
-	 *     n4_multi_invoke_t1' ./mono --llvm -v exceptions.exe
+	 *     n4_multi_invoke_t1;n4_sibling_catch_in_finally_t1;\
+	 *     n4_sibling3_catch_in_finally_t1' ./mono --llvm -v exceptions.exe
 	 * forces each onto the tier-1 LLVM path (verbose "LLVM Method ... emitted"). In the
 	 * regression suite the warm-up loops are inert at the default promotion threshold,
 	 * so each is a pure correctness test with the classic JIT as the differential
@@ -1202,6 +1206,145 @@ class Tests
 		bool prop = false;
 		try { n4_multi_invoke_t1 (4, log); } catch (C7ExA) { prop = true; }
 		if (!(prop && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 6))
+			return 5;
+		return 0;
+	}
+
+	/*
+	 * A SIBLING catch group (two catches over one protected region) enclosed by an
+	 * outer FINALLY. This uncovered a tier-1 miscompile in the N1 enclosing-entry
+	 * synthesis: the outer finally ran ONCE PER SIBLING when an exception propagated
+	 * past every sibling (an ECMA-335 §12.4.2 violation - a double-run finally can
+	 * dispose/unlock twice), because each same-range sibling base entry independently
+	 * re-synthesised the SAME enclosing finally ei, leaving two identical finally
+	 * entries over one range that pass-2's first-match-and-continue scan both ran. The
+	 * fix de-duplicates synthesised enclosing entries by (base range, enclosing
+	 * clause), so the finally is synthesised once regardless of sibling count. mode 4
+	 * (C7ExD) matches NEITHER sibling and propagates past both -> the finally must run
+	 * EXACTLY ONCE (seq 1,4 - the bug gave 1,4,4). Modes 1/2/3 exercise the caught
+	 * paths (each catch then the finally on the leave), 0 the no-throw leave. Force
+	 * tier-1: MONO_LLVM_METHOD='n4_sibling_catch_in_finally_t1'.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n4_sibling_catch_in_finally_t1 (int which, int[] log) {
+		int r = 0;
+		try {						/* outer FINALLY */
+			try {					/* inner: two sibling catches, one protected region */
+				log [++log [0]] = 1;
+				C7Throw (which);
+				r = 10;
+			} catch (C7ExA) {
+				log [++log [0]] = 2;
+				r = 20;
+			} catch (C7ExB) {
+				log [++log [0]] = 3;
+				r = 30;
+			}
+		} finally {
+			log [++log [0]] = 4;
+		}
+		return r;
+	}
+
+	public static int test_0_n4_sibling_catch_in_finally () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n4_sibling_catch_in_finally_t1 (0, log);
+			log [0] = 0; n4_sibling_catch_in_finally_t1 (1, log);
+			log [0] = 0; n4_sibling_catch_in_finally_t1 (2, log);
+			log [0] = 0; n4_sibling_catch_in_finally_t1 (3, log);
+			log [0] = 0; try { n4_sibling_catch_in_finally_t1 (4, log); } catch (C7ExD) { }
+		}
+		/* no throw: finally on the leave -> r=10, seq 1,4 */
+		log [0] = 0;
+		if (!(n4_sibling_catch_in_finally_t1 (0, log) == 10 && log [0] == 2 && log [1] == 1 && log [2] == 4))
+			return 1;
+		/* C7ExA -> first sibling, then finally -> r=20, seq 1,2,4 */
+		log [0] = 0;
+		if (!(n4_sibling_catch_in_finally_t1 (1, log) == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 4))
+			return 2;
+		/* C7ExB -> second sibling, then finally -> r=30, seq 1,3,4 */
+		log [0] = 0;
+		if (!(n4_sibling_catch_in_finally_t1 (2, log) == 30 && log [0] == 3 && log [1] == 1 && log [2] == 3 && log [3] == 4))
+			return 3;
+		/* C7ExC : C7ExB -> second sibling (base match), then finally -> r=30, seq 1,3,4 */
+		log [0] = 0;
+		if (!(n4_sibling_catch_in_finally_t1 (3, log) == 30 && log [0] == 3 && log [1] == 1 && log [2] == 3 && log [3] == 4))
+			return 4;
+		/* C7ExD matches NEITHER sibling: propagates past both, the outer finally runs
+		 * EXACTLY ONCE as cleanup (the bug ran it twice -> seq 1,4,4). seq 1,4. */
+		log [0] = 0;
+		bool prop = false;
+		try { n4_sibling_catch_in_finally_t1 (4, log); } catch (C7ExD) { prop = true; }
+		if (!(prop && log [0] == 2 && log [1] == 1 && log [2] == 4))
+			return 5;
+		return 0;
+	}
+
+	/*
+	 * THREE-sibling variant of the above, pinning "the finally runs exactly ONCE
+	 * regardless of sibling count": a three-catch sibling group enclosed by an outer
+	 * finally. Before the (range, enclosing clause) de-dup the finally would have been
+	 * synthesised three times, running THREE times on the propagate path (seq 1,5,5,5).
+	 * mode 5 (C7ExE) matches none of catch(A)/catch(B)/catch(D) and propagates past all
+	 * three -> the finally must run EXACTLY ONCE (seq 1,5). Force tier-1:
+	 * MONO_LLVM_METHOD='n4_sibling3_catch_in_finally_t1'.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n4_sibling3_catch_in_finally_t1 (int which, int[] log) {
+		int r = 0;
+		try {						/* outer FINALLY */
+			try {					/* inner: THREE sibling catches, one protected region */
+				log [++log [0]] = 1;
+				C7Throw (which);
+				r = 10;
+			} catch (C7ExA) {
+				log [++log [0]] = 2;
+				r = 20;
+			} catch (C7ExB) {
+				log [++log [0]] = 3;
+				r = 30;
+			} catch (C7ExD) {
+				log [++log [0]] = 4;
+				r = 40;
+			}
+		} finally {
+			log [++log [0]] = 5;
+		}
+		return r;
+	}
+
+	public static int test_0_n4_sibling3_catch_in_finally () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n4_sibling3_catch_in_finally_t1 (0, log);
+			log [0] = 0; n4_sibling3_catch_in_finally_t1 (1, log);
+			log [0] = 0; n4_sibling3_catch_in_finally_t1 (2, log);
+			log [0] = 0; n4_sibling3_catch_in_finally_t1 (4, log);
+			log [0] = 0; try { n4_sibling3_catch_in_finally_t1 (5, log); } catch (C7ExE) { }
+		}
+		/* no throw: finally on the leave -> r=10, seq 1,5 */
+		log [0] = 0;
+		if (!(n4_sibling3_catch_in_finally_t1 (0, log) == 10 && log [0] == 2 && log [1] == 1 && log [2] == 5))
+			return 1;
+		/* C7ExA -> first sibling, then finally -> r=20, seq 1,2,5 */
+		log [0] = 0;
+		if (!(n4_sibling3_catch_in_finally_t1 (1, log) == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 5))
+			return 2;
+		/* C7ExB -> second sibling, then finally -> r=30, seq 1,3,5 */
+		log [0] = 0;
+		if (!(n4_sibling3_catch_in_finally_t1 (2, log) == 30 && log [0] == 3 && log [1] == 1 && log [2] == 3 && log [3] == 5))
+			return 3;
+		/* C7ExD -> third sibling, then finally -> r=40, seq 1,4,5 */
+		log [0] = 0;
+		if (!(n4_sibling3_catch_in_finally_t1 (4, log) == 40 && log [0] == 3 && log [1] == 1 && log [2] == 4 && log [3] == 5))
+			return 4;
+		/* C7ExE matches NONE of the three siblings: propagates, the outer finally runs
+		 * EXACTLY ONCE (the bug ran it 3x -> seq 1,5,5,5). seq 1,5. */
+		log [0] = 0;
+		bool prop = false;
+		try { n4_sibling3_catch_in_finally_t1 (5, log); } catch (C7ExE) { prop = true; }
+		if (!(prop && log [0] == 2 && log [1] == 1 && log [2] == 5))
 			return 5;
 		return 0;
 	}
@@ -4149,6 +4292,7 @@ class Tests
 	class C7ExB : Exception { }
 	class C7ExC : C7ExB { }
 	class C7ExD : Exception { }
+	class C7ExE : Exception { }
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static void C7Throw (int which) {
@@ -4156,6 +4300,7 @@ class Tests
 		if (which == 2) throw new C7ExB ();
 		if (which == 3) throw new C7ExC ();
 		if (which == 4) throw new C7ExD ();
+		if (which == 5) throw new C7ExE ();
 	}
 
 	static int C7SibAB (int which) {

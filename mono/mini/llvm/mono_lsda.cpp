@@ -356,13 +356,15 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	}
 
 	/*
-	 * NESTING SYNTHESIS (doc 21 4, EH N1). For each base entry whose innermost
-	 * clause is `c`, append one extra MonoJitExceptionInfo per ENCLOSING clause
-	 * `j` (clause c strictly try-contained in clause j). Each synthesised entry
-	 * copies the base's EXACT native range and EXACT handler_start (the inner
-	 * landing pad) and overrides only j's flags / catch_class / clause_index -
-	 * the reference oracle is aot-runtime.c's decode_llvm_mono_eh_frame:3247-3267
-	 * (memcpy the base entry, then override the three join fields).
+	 * NESTING SYNTHESIS (doc 21 4, EH N1). For each DISTINCT base range whose
+	 * innermost clause is `c`, append one extra MonoJitExceptionInfo per ENCLOSING
+	 * clause `j` (clause c strictly try-contained in clause j) - at most once per
+	 * (range, j) pair, so a sibling group over one range does not multiply its
+	 * enclosers (see DE-DUP below). Each synthesised entry copies the base's EXACT
+	 * native range and EXACT handler_start (the inner landing pad) and overrides
+	 * only j's flags / catch_class / clause_index - the reference oracle is
+	 * aot-runtime.c's decode_llvm_mono_eh_frame:3247-3267 (memcpy the base entry,
+	 * then override the three join fields).
 	 *
 	 * ORDERING (load-bearing, doc 21 1.1 / 4 step 4). All synthesised entries are
 	 * APPENDED after every base entry, so every base (inner) entry occupies a
@@ -375,12 +377,29 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	 * block was already stable_sort-ed above; the synthesised block is NEVER fed
 	 * into that sort, so nothing can hoist an enclosing entry ahead of its base.
 	 *
-	 * For a single base, its enclosing entries are appended in ASCENDING
+	 * For a single base range, its enclosing entries are appended in ASCENDING
 	 * clause_index order (the j loop runs low->high). By ECMA-335 a more-deeply-
 	 * nested clause precedes its enclosers in the clause table, so ascending
 	 * clause_index == innermost-enclosing first (doc 21 4.1). At the depth the gate
 	 * admits this is moot (<= 1 encloser per clause), but the order is correct for
 	 * deeper nests too.
+	 *
+	 * DE-DUP BY (base range, enclosing clause_index). A SIBLING catch group -
+	 * try { } catch(A) catch(B) - publishes SEVERAL base entries over the SAME
+	 * invoke range (one per sibling clause), all sharing the one inner landing pad
+	 * the gather emits. Driving synthesis off every base entry would then make each
+	 * sibling base independently re-synthesise the SAME enclosing clause `j` over
+	 * that one range, appending {range R, clause j, handler H} once per sibling.
+	 * For a CATCH encloser that is only latent (a matching catch stops pass-2's
+	 * walk), but for a FINALLY/FAULT encloser - which pass-2 does NOT stop on - the
+	 * duplicates make its handler run once per sibling when an exception propagates
+	 * past every sibling (an ECMA-335 §12.4.2 violation). All sibling bases over R
+	 * carry the identical landing pad, so {R, j, H} is the same whichever sibling it
+	 * came from: appending clause `j` AT MOST ONCE PER DISTINCT (try_start_off,
+	 * try_len) base range collapses the duplicates losslessly. This is keyed on the
+	 * range, NOT globally - a multi-invoke inner try enclosed by a finally has
+	 * several DISTINCT base ranges and MUST keep one enclosing entry per range, so
+	 * distinct ranges are never folded together.
 	 *
 	 * RUNTIME-INERT (doc 21 8.2, EH N1). The translator nesting gate still declines
 	 * every strictly-nested method, so on the live compile path nested_in is empty
@@ -390,6 +409,16 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	 * only by the offline unit tests, which feed a synthetic nested clause table.
 	 */
 	if (num_clauses > 0) {
+		/*
+		 * The (range, enclosing clause_index) pairs already appended, so a second
+		 * base entry sharing a range does not re-synthesise an encloser its
+		 * co-sibling already produced. Keyed on the native range - NOT the base's
+		 * clause_index - so distinct invoke ranges each keep their own enclosing
+		 * entry.
+		 */
+		struct Synth { std::uint32_t try_start_off; std::uint32_t try_len; int j; };
+		std::vector<Synth> synthesised;
+
 		std::size_t base_count = bases.size ();
 		for (std::size_t bi = 0; bi < base_count; ++bi) {
 			const BaseEntry &b = bases[bi];
@@ -406,12 +435,31 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 				 * CAP-EH-0 (doc 21 7 item 3): an enclosing clause whose kind is
 				 * not one of NONE / FINALLY / FAULT (e.g. a FILTER that slipped a
 				 * relaxed gate) cannot be encoded by this path. Decline the whole
-				 * array rather than publish a partial one.
+				 * array rather than publish a partial one. Checked BEFORE the dedup
+				 * skip so an unrepresentable encloser declines even when a co-sibling
+				 * would have folded it away.
 				 */
 				if (cj.flags != MONO_EXCEPTION_CLAUSE_NONE &&
 				    cj.flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
 				    cj.flags != MONO_EXCEPTION_CLAUSE_FAULT)
 					return false;
+
+				/*
+				 * Already synthesised for this exact base range by an earlier
+				 * (co-sibling) base? Then it is byte-identical - skip it. Distinct
+				 * ranges never match here, so they still each get their own entry.
+				 */
+				bool dup = false;
+				for (const Synth &s : synthesised) {
+					if (s.try_start_off == b.try_start_off &&
+					    s.try_len == b.try_len && s.j == j) {
+						dup = true;
+						break;
+					}
+				}
+				if (dup)
+					continue;
+				synthesised.push_back ({ b.try_start_off, b.try_len, j });
 
 				MonoJitExceptionInfo ei;
 				memset (&ei, 0, sizeof (ei));

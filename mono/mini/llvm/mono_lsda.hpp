@@ -109,14 +109,17 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
  *   - two entries whose invoke ranges PARTIALLY overlap or strictly nest (see
  *     mono_lsda.cpp for why equal-or-disjoint is the ordering invariant).
  *
- * NESTING SYNTHESIS (EH N1, doc 21 4). For each base entry whose innermost clause
- * is `c`, build_ex_info APPENDS one extra MonoJitExceptionInfo per ENCLOSING
- * clause `j` (clause c strictly try-contained in clause j, computed from
- * clauses[].try_offset/handler_offset). The synthesised entry copies the base's
- * EXACT native range and handler_start (the inner landing pad) and overrides only
- * j's flags/catch_class/clause_index, so out.size() >= entries.size(): base
- * entries occupy the lower slots [0, base_count), enclosing entries the higher
- * ones (the ordering the runtime's flat first-match resume relies on). The
+ * NESTING SYNTHESIS (EH N1, doc 21 4). For each DISTINCT base range whose
+ * innermost clause is `c`, build_ex_info APPENDS one extra MonoJitExceptionInfo
+ * per ENCLOSING clause `j` (clause c strictly try-contained in clause j, computed
+ * from clauses[].try_offset/handler_offset), de-duplicated so a SIBLING catch
+ * group over one shared range - several base entries with one landing pad - yields
+ * that encloser only ONCE, not once per sibling. The synthesised entry copies the
+ * base's EXACT native range and handler_start (the inner landing pad) and
+ * overrides only j's flags/catch_class/clause_index, so out.size() >=
+ * entries.size(): base entries occupy the lower slots [0, base_count), enclosing
+ * entries the higher ones (the ordering the runtime's flat first-match resume
+ * relies on). The
  * translator nesting gate still declines every nested method, so on the live
  * path nested_in is empty and out.size() == entries.size() - the synthesis is
  * exercised only by the offline unit tests.
