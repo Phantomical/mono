@@ -254,14 +254,16 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 			return false;
 
 		/*
-		 * Catch-only milestone: a finally/fault/filter clause that slipped the
-		 * emission gate would need resume/indicator machinery this slice does not
-		 * build (plan 12 9). Decline rather than mis-dispatch. A non-NONE kind
-		 * reaching here is not expected in F1 (the translator gate still declines
-		 * every non-catch clause); this is the same decline, now also reached via
-		 * the joined flags after the cross-check above has confirmed kind == flags.
+		 * EH F2 admits catch (NONE), standalone FINALLY and standalone FAULT. A
+		 * FILTER clause still needs resume/indicator machinery this path does not
+		 * build, and the translator gate already declines it upstream, so decline
+		 * here too rather than mis-dispatch (belt-and-suspenders; the cross-check
+		 * above has already confirmed kind == flags). Anything that is not one of
+		 * NONE / FINALLY / FAULT is likewise refused.
 		 */
-		if (cl.flags != MONO_EXCEPTION_CLAUSE_NONE)
+		if (cl.flags != MONO_EXCEPTION_CLAUSE_NONE &&
+		    cl.flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
+		    cl.flags != MONO_EXCEPTION_CLAUSE_FAULT)
 			return false;
 
 		/*
@@ -304,17 +306,26 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		}
 
 		/*
-		 * Build the published ei (plan 12 3 / CAP-EH-1). flags and catch_class
-		 * are joined from the IL header - the section never carries them.
-		 * handler_start is FTNPTR-encoded at publish (never in the section). The
-		 * try_offset/try_len/handler_offset/handler_len and exvar_offset fields
-		 * stay 0 (memset): only the llvmonly match path reads them, and catch
+		 * Build the published ei (CAP-EH-1). flags is joined from the IL header -
+		 * the section never carries it. handler_start is FTNPTR-encoded at publish
+		 * (never in the section). The try_offset/try_len/handler_offset/handler_len
+		 * fields stay 0 (memset): only the llvmonly match path reads them, and catch
 		 * delivery is via RAX for from_llvm (doc 11 6.4).
+		 *
+		 * The `data` union and `exvar_offset` are kind-dependent:
+		 *   - CATCH (NONE): data.catch_class is joined from the IL header.
+		 *   - FINALLY: the abort-guard fields data.handler_end and exvar_offset are
+		 *     the F2 quiet-gap intermediate - both left 0 (memset). The runtime's
+		 *     find_last_handler_block never matches on handler_end == 0, so it never
+		 *     writes *(bp + exvar_offset); publishing both 0 keeps the §1.3 invariant
+		 *     (both real or both 0). F4 supplies both via the stackmap sideband.
+		 *   - FAULT: the runtime reads neither field, so 0 is simply correct.
 		 */
 		MonoJitExceptionInfo ei;
 		memset (&ei, 0, sizeof (ei));
 		ei.flags = cl.flags;
-		ei.data.catch_class = cl.data.catch_class;
+		if (cl.flags == MONO_EXCEPTION_CLAUSE_NONE)
+			ei.data.catch_class = cl.data.catch_class;
 		ei.clause_index = static_cast<int> (e.clause_index);
 		ei.try_start = (gpointer) (native_code + e.try_start_off);
 		ei.try_end = (gpointer) (native_code + e.try_start_off + e.try_len);

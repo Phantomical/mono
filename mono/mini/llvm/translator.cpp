@@ -167,17 +167,25 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 	}
 
 	/*
-	 * 3b EH gate: the custom-emit `.mono_lsda` path (plan 12) consumes a method's
-	 * catch geometry, so catch-only methods now go through LLVM. finally/fault/
-	 * filter clauses still defer to the classic JIT - their resume/indicator
-	 * machinery is not built yet (plan 12 9) - so decline unless EVERY clause is a
-	 * plain catch (MONO_EXCEPTION_CLAUSE_NONE). The nested-clause decline below,
-	 * and the save_lmf/dynamic declines, still apply on top of this.
+	 * 3b EH gate: the custom-emit `.mono_lsda` path consumes a method's catch AND
+	 * finally/fault geometry (doc 16, EH F2), so catch-only, standalone try/finally
+	 * and standalone try/fault methods now go through LLVM. This is an ALLOWLIST:
+	 * admit only NONE / FINALLY / FAULT and decline every other flags value to the
+	 * classic JIT. FILTER (1) still defers - its resume/indicator machinery is not
+	 * built yet - and a malformed flags value (the metadata loader reads the ECMA
+	 * flags field raw, so bit0-set junk like 3/5/7 is possible) is declined here
+	 * rather than reaching emit_handler_start and yielding an invalid zero-clause
+	 * landing pad. The nested-clause decline below keeps this to the STANDALONE
+	 * (non-nested) try/finally + try/fault shape; the save_lmf/dynamic declines
+	 * still apply on top of this.
 	 */
 	for (i = 0; i < cfg->header->num_clauses; ++i) {
-		if (cfg->header->clauses [i].flags != MONO_EXCEPTION_CLAUSE_NONE) {
-			TRACE_FAILURE_CFG (cfg, "non-catch EH clause (deferred to classic JIT, 3b)");
-			cfg->exception_message = g_strdup ("non-catch EH clause (deferred to classic JIT, 3b)");
+		guint32 clause_flags = cfg->header->clauses [i].flags;
+		if (clause_flags != MONO_EXCEPTION_CLAUSE_NONE &&
+		    clause_flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
+		    clause_flags != MONO_EXCEPTION_CLAUSE_FAULT) {
+			TRACE_FAILURE_CFG (cfg, "filter EH clause (deferred to classic JIT, 3b)");
+			cfg->exception_message = g_strdup ("filter EH clause (deferred to classic JIT, 3b)");
 			cfg->disable_llvm = TRUE;
 			return;
 		}
@@ -512,11 +520,16 @@ emit_method_inner (EmitContext *ctx)
 	for (i = 0; i < header->num_clauses; ++i) {
 		clause = &header->clauses [i];
 		/*
-		 * Custom-emit EH is catch-only (plan 12): a stray finally/fault/filter
-		 * that slipped Gate A declines here rather than being mis-emitted.
+		 * Emission-time mirror of Gate A (doc 16, EH F2): custom-emit EH now covers
+		 * catch (NONE), standalone FINALLY and standalone FAULT. This is an
+		 * ALLOWLIST: anything not in {NONE, FINALLY, FAULT} that slipped Gate A -
+		 * a FILTER, or a malformed bit0-set flags value - declines here rather than
+		 * being mis-emitted as a zero-clause catch landing pad (invalid IR).
 		 */
-		if (clause->flags != MONO_EXCEPTION_CLAUSE_NONE) {
-			set_failure (ctx, "non-catch clause (custom-emit EH is catch-only).");
+		if (clause->flags != MONO_EXCEPTION_CLAUSE_NONE &&
+		    clause->flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
+		    clause->flags != MONO_EXCEPTION_CLAUSE_FAULT) {
+			set_failure (ctx, "filter clause (custom-emit EH does not support filters).");
 			return;
 		}
 	}

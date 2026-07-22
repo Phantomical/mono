@@ -2954,6 +2954,64 @@ END:
 	ret
   }
 
+  /*
+   * EH F2 functional coverage: a STANDALONE try/fault through the LLVM tier.
+   * C# cannot express a fault handler, so this is hand-written IL. The thrower
+   * holds a single, non-nested fault clause (the shape F2 admits); the fault
+   * runs on the exceptional path and re-raises to the SEPARATE standalone
+   * try/catch in the test method - both methods stay non-nested, so both
+   * compile through LLVM (unlike test_2_fault, whose fault is nested inside a
+   * try/catch and is therefore declined to the classic JIT).
+   */
+  .field public static int32 llvm_f2_fault_log
+
+  .method public static void llvm_f2_fault_thrower () cil managed noinlining
+  {
+	.maxstack 8
+	.try
+	{
+	  newobj instance void class [mscorlib]System.Exception::.ctor()
+	  throw
+	  leave.s DONE
+	}  // end .try
+	fault
+	{
+	  ldsfld int32 Tests::llvm_f2_fault_log
+	  ldc.i4.s 10
+	  add
+	  stsfld int32 Tests::llvm_f2_fault_log
+	  endfinally
+	}  // end handler
+  DONE:
+	ret
+  }
+
+  .method public static int32 test_0_llvm_standalone_fault () cil managed
+  {
+	.maxstack 8
+	ldc.i4.0
+	stsfld int32 Tests::llvm_f2_fault_log
+	.try
+	{
+	  call void Tests::llvm_f2_fault_thrower()
+	  leave.s CHECK
+	}  // end .try
+	catch [mscorlib]System.Object
+	{
+	  pop
+	  leave.s CHECK
+	}  // end handler
+  CHECK:
+	ldsfld int32 Tests::llvm_f2_fault_log
+	ldc.i4.s 10
+	beq.s OK
+	ldc.i4.1
+	ret
+  OK:
+	ldc.i4.0
+	ret
+  }
+
   .method public static int32 test_2_fault () cil managed
   {
 	.maxstack 16

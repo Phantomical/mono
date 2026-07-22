@@ -1255,31 +1255,71 @@ cases_mono_lsda_build (void)
 	expect_build_decline ("build-no-clauses-with-entry-declines",
 		{ { 0x10, 0x08, 0x40, 0 } }, nullptr, 0);
 
-	/* A clause whose flags != CLAUSE_NONE (finally slipped the gate). */
+	/*
+	 * A FINALLY clause whose entry carries the DEFAULT kind 0 (NONE) contradicts
+	 * the join (flags == FINALLY) - the v2 cross-check declines before F2's admit
+	 * arm is even reached. Proves the cross-check still guards a mis-smuggled kind.
+	 */
 	{
 		MonoExceptionClause bad [1];
 		memset (bad, 0, sizeof (bad));
 		bad[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
-		expect_build_decline ("build-non-none-clause-flags",
+		expect_build_decline ("build-finally-kind-join-mismatch-declines",
 			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
 	}
 
-	/* Same non-none-flags gate, for a filter clause. */
+	/* Same cross-check mismatch, for a filter clause carrying the default kind 0. */
 	{
 		MonoExceptionClause bad [1];
 		memset (bad, 0, sizeof (bad));
 		bad[0].flags = MONO_EXCEPTION_CLAUSE_FILTER;
-		expect_build_decline ("build-filter-clause-flags-declines",
+		expect_build_decline ("build-filter-kind-join-mismatch-declines",
 			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
 	}
 
-	/* Same non-none-flags gate, for a fault clause. */
+	/*
+	 * FILTER stays declined even when its entry kind AGREES with the join (so the
+	 * cross-check passes): F2 admits only NONE / FINALLY / FAULT, and a filter's
+	 * resume/indicator machinery is not built. This exercises the F2 kind gate
+	 * itself, not the cross-check.
+	 */
 	{
-		MonoExceptionClause bad [1];
-		memset (bad, 0, sizeof (bad));
-		bad[0].flags = MONO_EXCEPTION_CLAUSE_FAULT;
-		expect_build_decline ("build-fault-clause-flags-declines",
-			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
+		MonoExceptionClause filt [1];
+		memset (filt, 0, sizeof (filt));
+		filt[0].flags = MONO_EXCEPTION_CLAUSE_FILTER;
+		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_FILTER } };
+		expect_build_decline ("build-filter-kind-matches-still-declines", ents, filt, 1);
+	}
+
+	/*
+	 * FAULT is ADMITTED by F2 (fully correct - the runtime reads neither
+	 * handler_end nor exvar_offset for a fault clause). Entry kind FAULT agrees
+	 * with the join; assert the published ei carries flags FAULT, the joined
+	 * geometry, and data.handler_end / exvar_offset both 0.
+	 */
+	{
+		MonoExceptionClause flt [1];
+		memset (flt, 0, sizeof (flt));
+		flt[0].flags = MONO_EXCEPTION_CLAUSE_FAULT;
+		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_FAULT } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-fault-admits";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, flt, 1, base, code_len, out);
+		bool good = ok && out.size () == 1 &&
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FAULT &&
+			out[0].clause_index == 0 &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[0].try_end == (gpointer) (base + 0x18) &&
+			out[0].handler_start == (gpointer) (base + 0x40) &&
+			out[0].data.handler_end == 0 &&
+			out[0].exvar_offset == 0;
+		if (!good) {
+			printf ("FAIL build-fault-admits: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-fault-admits (1 ei, handler_end/exvar 0)\n");
+		}
 	}
 
 	/*
@@ -1296,17 +1336,36 @@ cases_mono_lsda_build (void)
 	}
 
 	/*
-	 * The reverse contradiction: a FINALLY clause whose entry kind (2) AGREES with
-	 * the join, so the cross-check passes - but the catch-only gate then declines
-	 * (F1 admits no non-catch clause). Proves the two checks are distinct: a
-	 * matching kind does not by itself admit a non-catch clause.
+	 * FINALLY is ADMITTED by F2 once its entry kind (2) AGREES with the join. This
+	 * is the "safe quiet-gap intermediate": the abort-guard fields
+	 * data.handler_end and exvar_offset are published as 0 together (the §1.3
+	 * invariant - both real or both 0; F2 uses both 0, F4 supplies both via the
+	 * stackmap sideband). Assert flags FINALLY, joined geometry, and both guard
+	 * fields 0.
 	 */
 	{
 		MonoExceptionClause fin [1];
 		memset (fin, 0, sizeof (fin));
 		fin[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
 		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
-		expect_build_decline ("build-finally-kind-matches-but-gate-declines", ents, fin, 1);
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-finally-admits-guard-fields-zero";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, fin, 1, base, code_len, out);
+		bool good = ok && out.size () == 1 &&
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
+			out[0].clause_index == 0 &&
+			out[0].try_start == (gpointer) (base + 0x10) &&
+			out[0].try_end == (gpointer) (base + 0x18) &&
+			out[0].handler_start == (gpointer) (base + 0x40) &&
+			out[0].data.handler_end == 0 &&
+			out[0].exvar_offset == 0;
+		if (!good) {
+			printf ("FAIL build-finally-admits-guard-fields-zero: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-finally-admits-guard-fields-zero (1 ei, handler_end/exvar 0)\n");
+		}
 	}
 
 	/* count == 0 while num_clauses > 0 (every protected call optimised away). */

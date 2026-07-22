@@ -1011,70 +1011,103 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 			landing_pad = llvm::wrap (builder->CreateLandingPad (llvm::unwrap (ret_type), cfg->header->num_clauses, ""));
 		}
 
-		/*
-		 * Carry one landingpad clause per catch that shares this try region, in
-		 * ascending IL clause_index order. Each is a type_info_N global whose
-		 * 2-word {i32 clause_index, i32 kind} initializer smuggles the IL
-		 * clause_index AND the clause's flags (kind); the gather pass reads both
-		 * (one .mono_lsda entry per catch over the shared invoke range, carrying a
-		 * self-describing kind column) and the runtime picks the handler by isinst
-		 * in that order, so declaration order (inner/more-derived catch first) is
-		 * preserved. A single catch adds just its own clause; sibling catches add
-		 * the whole group. Every clause admitted here is catch (flags == NONE == 0
-		 * in F1), but the real flag is wired through - not hardcoded - so F2 can
-		 * carry FINALLY/FAULT unchanged.
-		 */
-		for (i = 0; i < cfg->header->num_clauses; ++i) {
-			MonoExceptionClause *c = &cfg->header->clauses [i];
-			LLVMValueRef type_info;
+		if (this_clause->flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+		    this_clause->flags == MONO_EXCEPTION_CLAUSE_FAULT) {
+			/*
+			 * A finally/fault handler IS the invoke target of its (standalone,
+			 * non-nested) try region, but - unlike a catch - it receives no
+			 * exception object and has no siblings: a try/catch nested inside a
+			 * try/finally is declined by the nesting gate, so this handler owns its
+			 * landing pad alone. Give the pad just its OWN smuggled type_info clause
+			 * - the same 2-word {i32 clause_index, i32 kind} global catch uses, with
+			 * kind = this clause's flags (FINALLY == 2 / FAULT == 4) - so the gather
+			 * pass records one self-describing .mono_lsda entry for it. Then branch
+			 * straight to call_handler_target_bb, which the OP_START_HANDLER /
+			 * OP_ENDFINALLY machinery drives on both the exceptional-unwind and the
+			 * leave normal-exit paths. No catch-style exception-object store, and no
+			 * sibling selector switch.
+			 */
 			LLVMTypeRef i32_ty = llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
 			LLVMTypeRef ti_members [2] = { i32_ty, i32_ty };
 			LLVMTypeRef ti_type = LLVMStructType (ti_members, 2, FALSE);
 			LLVMValueRef ti_init [2];
-
-			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
-				continue;
-			if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
-				continue;
+			LLVMValueRef type_info;
 
 			sprintf (ti_name, "type_info_%d", ti_generator);
 			ti_generator ++;
 
-			ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false));
-			ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), c->flags, false));
+			ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), clause_index, false));
+			ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), this_clause->flags, false));
 
 			type_info = LLVMAddGlobal (lmodule, ti_type, ti_name);
 			LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
 			LLVMAddClause (landing_pad, type_info);
-		}
 
-		/* Store the exception into the exvar */
-		if (ctx->ex_var)
-			llvm::wrap (builder->CreateStore (llvm::unwrap (convert (ctx, llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {0}, "ex_obj")), ObjRefType ())), llvm::unwrap (ctx->ex_var)));
+			llvm::wrap (builder->CreateBr (llvm::unwrap (target_bb)));
+		} else {
+			/*
+			 * Carry one landingpad clause per catch that shares this try region, in
+			 * ascending IL clause_index order. Each is a type_info_N global whose
+			 * 2-word {i32 clause_index, i32 kind} initializer smuggles the IL
+			 * clause_index AND the clause's flags (kind); the gather pass reads both
+			 * (one .mono_lsda entry per catch over the shared invoke range, carrying a
+			 * self-describing kind column) and the runtime picks the handler by isinst
+			 * in that order, so declaration order (inner/more-derived catch first) is
+			 * preserved. A single catch adds just its own clause; sibling catches add
+			 * the whole group. Every clause admitted here is catch (flags == NONE == 0).
+			 */
+			for (i = 0; i < cfg->header->num_clauses; ++i) {
+				MonoExceptionClause *c = &cfg->header->clauses [i];
+				LLVMValueRef type_info;
+				LLVMTypeRef i32_ty = llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
+				LLVMTypeRef ti_members [2] = { i32_ty, i32_ty };
+				LLVMTypeRef ti_type = LLVMStructType (ti_members, 2, FALSE);
+				LLVMValueRef ti_init [2];
 
-		/*
-		 * The selector register holds the matched clause's index; branch to the
-		 * sibling handler that owns it (this clause's own body is the default).
-		 */
-		LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
-		switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0));
+				if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
+					continue;
+				if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
+					continue;
 
-		for (i = 0; i < cfg->header->num_clauses; ++i) {
-			MonoExceptionClause *c = &cfg->header->clauses [i];
-			MonoBasicBlock *handler_bb;
+				sprintf (ti_name, "type_info_%d", ti_generator);
+				ti_generator ++;
 
-			if (i == clause_index)
-				continue;
-			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
-				continue;
-			if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
-				continue;
+				ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false));
+				ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), c->flags, false));
 
-			auto clause_it = ctx->clause_to_handler.find (i);
-			handler_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
-			g_assert (handler_bb);
-			g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
-			LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+				type_info = LLVMAddGlobal (lmodule, ti_type, ti_name);
+				LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
+				LLVMAddClause (landing_pad, type_info);
+			}
+
+			/* Store the exception into the exvar */
+			if (ctx->ex_var)
+				llvm::wrap (builder->CreateStore (llvm::unwrap (convert (ctx, llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {0}, "ex_obj")), ObjRefType ())), llvm::unwrap (ctx->ex_var)));
+
+			/*
+			 * The selector register holds the matched clause's index; branch to the
+			 * sibling handler that owns it (this clause's own body is the default).
+			 */
+			LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
+			switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0));
+
+			for (i = 0; i < cfg->header->num_clauses; ++i) {
+				MonoExceptionClause *c = &cfg->header->clauses [i];
+				MonoBasicBlock *handler_bb;
+
+				if (i == clause_index)
+					continue;
+				if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
+					continue;
+				if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
+					continue;
+
+				auto clause_it = ctx->clause_to_handler.find (i);
+				handler_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
+				g_assert (handler_bb);
+				g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+			}
 		}
 	} else {
 		/*

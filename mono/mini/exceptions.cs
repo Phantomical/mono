@@ -89,7 +89,84 @@ class Tests
 			}
 		}
 		return a;
-	}		
+	}
+
+	/*
+	 * EH F2 functional coverage: STANDALONE try/finally through the LLVM tier.
+	 *
+	 * The finally-bearing helpers are deliberately kept in their own [NoInlining]
+	 * methods so each holds a single, non-nested finally clause - the shape the F2
+	 * gate admits (a nested try/catch inside a try/finally would be declined). The
+	 * exception that runs the finally on the exceptional path propagates OUT of the
+	 * standalone-finally method into a SEPARATE standalone try/catch here, so both
+	 * methods stay non-nested and both compile through LLVM.
+	 */
+
+	static int llvm_f2_finally_ex_log;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void llvm_f2_finally_thrower () {
+		try {
+			llvm_f2_finally_ex_log = 1;
+			throw new Exception ("f2");
+		} finally {
+			llvm_f2_finally_ex_log = llvm_f2_finally_ex_log + 10;
+		}
+	}
+
+	/* finally runs on EXCEPTIONAL unwind, then the exception resumes to an outer catch. */
+	public static int test_0_llvm_finally_exceptional () {
+		llvm_f2_finally_ex_log = 0;
+		try {
+			llvm_f2_finally_thrower ();
+		} catch (Exception) {
+			/* the finally must have run (1 + 10) before the throw reached here */
+			return llvm_f2_finally_ex_log == 11 ? 0 : 1;
+		}
+		return 2;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int llvm_f2_finally_leave (int[] log) {
+		try {
+			log [0] = 1;
+			return 5;		/* leave out of the try: runs the finally, then returns */
+		} finally {
+			log [1] = 1;
+		}
+	}
+
+	/* finally runs on NORMAL exit via leave. */
+	public static int test_0_llvm_finally_normal_leave () {
+		int[] log = new int [2];
+		int r = llvm_f2_finally_leave (log);
+		return (r == 5 && log [0] == 1 && log [1] == 1) ? 0 : 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int llvm_f2_finally_multi (int sel, int[] log) {
+		try {
+			if (sel == 0)
+				goto L0;
+			if (sel == 1)
+				goto L1;
+			goto L2;
+		} finally {
+			log [0] = log [0] + 1;
+		}
+	L0: return 100;
+	L1: return 200;
+	L2: return 300;
+	}
+
+	/* leave to MULTIPLE distinct targets: each runs the finally then resumes to the right continuation. */
+	public static int test_0_llvm_finally_multi_target () {
+		int[] log = new int [1];
+		int r0 = llvm_f2_finally_multi (0, log);
+		int r1 = llvm_f2_finally_multi (1, log);
+		int r2 = llvm_f2_finally_multi (2, log);
+		return (r0 == 100 && r1 == 200 && r2 == 300 && log [0] == 3) ? 0 : 1;
+	}
 
 	public static int test_0_byte_cast () {
 		int a;
