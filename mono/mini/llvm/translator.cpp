@@ -1359,6 +1359,18 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	for (const auto &kv : ctx->jit_callees)
 		callee_vars [i ++] = kv.second;
 
+	/*
+	 * Run the -O2 module pipeline over the method's IR in place, before codegen.
+	 * mono_llvm_compile_method () below clones this module and generates code
+	 * from the clone, so it must see the optimized IR; optimizing in place also
+	 * makes the "Optimized LLVM IR" dump further down truthful. The callee
+	 * globals gathered just above (and the entry function itself) are all
+	 * external-linkage, so the pipeline's GlobalOpt/GlobalDCE neither deletes,
+	 * renames, nor constant-folds them - the by-name symbol resolution the
+	 * compile path performs afterwards still finds every one.
+	 */
+	mono_llvm_optimize_method (ctx->lmethod);
+
 	mono_codeman_enable_write ();
 	guint32 llvm_code_size = 0;
 	gpointer dwarf_eh_frame = nullptr;

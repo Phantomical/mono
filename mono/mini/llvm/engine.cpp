@@ -1367,10 +1367,29 @@ MonoLLVMJIT::register_symbol (StringRef name, void *addr)
 void
 MonoLLVMJIT::optimize (Function *func)
 {
+	/*
+	 * `func` only identifies the module to optimize; we run the full per-module
+	 * -O2 pipeline over the whole module in place, so the caller's subsequent
+	 * codegen (which clones this module) and the "Optimized LLVM IR" dump both
+	 * see the optimized IR.
+	 */
 	Module *module = func->getParent ();
 	module->setDataLayout (jit_->getDataLayout ());
 
-	PassBuilder pb;
+	/*
+	 * Give the PassBuilder a TargetMachine. Without one, TargetTransformInfo is
+	 * a no-op and the cost-model-driven parts of -O2 (loop vectorize/unroll, the
+	 * inliner's cost model, and a raft of InstCombine/codegen-prepare decisions)
+	 * are silently disabled - which would gut the point of running -O2 at all.
+	 * This is the SAME builder the codegen path JITs with: host_target_machine_
+	 * builder () is what LLJIT is constructed from (see MonoLLVMJIT's ctor) and
+	 * what MonoIRCompiler re-derives its TargetMachine from per compile, so the
+	 * optimizer and the code generator agree on the host target exactly.
+	 */
+	std::unique_ptr<TargetMachine> tm =
+		cantFail (host_target_machine_builder ().createTargetMachine ());
+
+	PassBuilder pb (tm.get ());
 	LoopAnalysisManager lam;
 	FunctionAnalysisManager fam;
 	CGSCCAnalysisManager cgam;
@@ -1381,9 +1400,9 @@ MonoLLVMJIT::optimize (Function *func)
 	pb.registerLoopAnalyses (lam);
 	pb.crossRegisterProxies (lam, fam, cgam, mam);
 
-	FunctionPassManager fpm = pb.buildFunctionSimplificationPipeline (
-		OptimizationLevel::O2, ThinOrFullLTOPhase::None);
-	fpm.run (*func, fam);
+	ModulePassManager mpm =
+		pb.buildPerModuleDefaultPipeline (OptimizationLevel::O2);
+	mpm.run (*module, mam);
 }
 
 CompileResult
