@@ -32,6 +32,7 @@
 
 #include "engine.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -46,6 +47,8 @@
 #include <llvm/ADT/StringMap.h>
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>
+#include <llvm/CodeGen/MachineFunction.h>
+#include <llvm/CodeGen/MachineFunctionPass.h>
 #include <llvm/CodeGen/MachineModuleInfo.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
@@ -521,6 +524,156 @@ host_target_machine_builder ()
 	return jtmb;
 }
 
+/* ---- EH clause gather pass (C2) ------------------------------------------
+ *
+ * MonoEHGatherPass runs after addMachinePasses() and before the AsmPrinter (so
+ * it sees the final landing-pad set). For each landing pad it records the invoke
+ * range, the handler label and the IL clause_index - recovered in-process from
+ * the type_info_N global's i32 initializer (mono's clause-index smuggling) - into
+ * a per-compile side channel. It EMITS NOTHING and never modifies the
+ * MachineFunction (runOnMachineFunction returns false, and it preserves all
+ * analyses), so scheduling it leaves the emitted object byte-identical for a
+ * non-EH module. C3 turns the side channel into a .mono_lsda section.
+ *
+ * Robustness (CAP-EH-0): it must not assert or crash on any module. A landing
+ * pad missing a begin/end/lpad label, a type_info that is not a GlobalVariable
+ * with a ConstantInt initializer, or a negative (filter) / zero (cleanup) TypeId
+ * is recorded as unexpected (declined / has_filter) so a later slice can decline
+ * the method - it is never a fatal error here.
+ *
+ * A static char ID is all the legacy PassManager needs - no INITIALIZE_PASS
+ * (plan 12 1.3).
+ */
+namespace {
+
+char g_mono_eh_gather_pass_id = 0;
+
+class MonoEHGatherPass : public MachineFunctionPass {
+public:
+	explicit MonoEHGatherPass (MonoEHSideChannel &sc)
+		: MachineFunctionPass (g_mono_eh_gather_pass_id), sc_ (sc)
+	{
+	}
+
+	StringRef getPassName () const override { return "Mono EH clause gather"; }
+
+	/* Read-only: never disturb anything the AsmPrinter will emit. */
+	void getAnalysisUsage (AnalysisUsage &au) const override
+	{
+		au.setPreservesAll ();
+		MachineFunctionPass::getAnalysisUsage (au);
+	}
+
+	bool runOnMachineFunction (MachineFunction &mf) override
+	{
+		const std::vector<LandingPadInfo> &pads = mf.getLandingPads ();
+
+		/* Inert on a non-EH function: no landing pads -> nothing recorded. */
+		if (pads.empty ())
+			return false;
+
+		const std::vector<const GlobalValue *> &type_infos = mf.getTypeInfos ();
+
+		MonoEHFunctionClauses fn;
+		fn.function = mf.getName ().str ();
+
+		for (const LandingPadInfo &lp : pads) {
+			const MCSymbol *handler = lp.LandingPadLabel;
+			if (!handler)
+				fn.declined = true;
+
+			/*
+			 * BeginLabels/EndLabels carry ONE (begin,end) pair PER INVOKE that
+			 * unwinds to this landing pad (SmallVector<MCSymbol*,1>): mono's
+			 * emit_call (translator-emit.cpp) issues one LLVMBuildInvoke2 per
+			 * protected call in the try - including the implicit null/bounds/div
+			 * checks that lower to throw-call invokes - all converging on the
+			 * clause's single handler landing pad. So a try with N protected calls
+			 * yields ONE landing pad with N invoke ranges. We MUST emit one clause
+			 * per invoke range: keeping only the first would publish a
+			 * [try_start,try_end) covering only the first call, so a throw from the
+			 * 2nd+ call is not is_address_protected and the handler silently never
+			 * runs. mono's model supports this directly - is_address_protected
+			 * scans all clauses and takes the first PC match, so multiple ei with
+			 * the same clause_index/handler over disjoint ranges is expected.
+			 * .mono_lsda is therefore "one entry per invoke range"; C3/C4 honor it.
+			 *
+			 * The two vectors are paired by index (an LLVM invariant). If they ever
+			 * disagree in length, decline rather than mispair; likewise a landing
+			 * pad with no invoke range at all is malformed.
+			 */
+			if (lp.BeginLabels.size () != lp.EndLabels.size ())
+				fn.declined = true;
+			size_t nranges = std::min (lp.BeginLabels.size (), lp.EndLabels.size ());
+			if (nranges == 0)
+				fn.declined = true;
+
+			for (size_t i = 0; i < nranges; ++i) {
+				/*
+				 * The invoke range and handler entry are the same MCSymbol*s the
+				 * AsmPrinter emits into .text; C3 turns them into
+				 * func_begin-relative offsets. A missing label is malformed -
+				 * record the decline, do not crash.
+				 */
+				const MCSymbol *begin = lp.BeginLabels[i];
+				const MCSymbol *end = lp.EndLabels[i];
+				if (!begin || !end)
+					fn.declined = true;
+
+				for (int type_id : lp.TypeIds) {
+					if (type_id <= 0) {
+						/*
+						 * type_id < 0 is a filter (exception-specification), == 0
+						 * a cleanup action - neither is a catch clause, and both
+						 * are out of the catch-only milestone. Flag and skip.
+						 */
+						if (type_id < 0)
+							fn.has_filter = true;
+						fn.declined = true;
+						continue;
+					}
+
+					MonoEHClause clause;
+					clause.try_begin = begin;
+					clause.try_end = end;
+					clause.handler = handler;
+
+					/*
+					 * mono's clause-index smuggling: TypeIds are 1-based indices
+					 * into getTypeInfos(); the referenced type_info_N global's i32
+					 * initializer is the IL clause index. Recover it in-process -
+					 * no ttype-table deref, no relocation dependency.
+					 */
+					if ((size_t) type_id <= type_infos.size ()) {
+						const GlobalValue *gv = type_infos[type_id - 1];
+						if (const auto *var = dyn_cast_or_null<GlobalVariable> (gv)) {
+							if (var->hasInitializer ()) {
+								if (const auto *ci = dyn_cast<ConstantInt> (
+								        var->getInitializer ())) {
+									clause.clause_index = (int) ci->getSExtValue ();
+									clause.clause_resolved = true;
+								}
+							}
+						}
+					}
+					if (!clause.clause_resolved)
+						fn.declined = true;
+
+					fn.clauses.push_back (clause);
+				}
+			}
+		}
+
+		sc_.functions.push_back (std::move (fn));
+		return false;
+	}
+
+private:
+	MonoEHSideChannel &sc_;
+};
+
+} // anonymous namespace
+
 /* ---- custom IR compiler --------------------------------------------------
  *
  * MonoIRCompiler replaces LLJIT's default IR compiler. With this engine's zero
@@ -530,11 +683,12 @@ host_target_machine_builder ()
  *
  * The reason to own the object-emission pipeline is the EH port: C2 schedules a
  * MachineFunctionPass after addMachinePasses() and C3 swaps createMCObjectStreamer
- * for a custom MCStreamer that writes a .mono_lsda section. THIS SLICE (C1)
- * introduces neither - it hand-inlines LLVMTargetMachine::addPassesToEmitMC with
- * the STANDARD registry object streamer and no extra pass, so the emitted object
- * is byte-identical to SimpleCompiler's. That equivalence is asserted by the
- * compiler-equivalence check in test-llvm-engine.cpp.
+ * for a custom MCStreamer that writes a .mono_lsda section. C2 (current) adds the
+ * read-only MonoEHGatherPass after addMachinePasses(); it emits nothing and does
+ * not modify the MachineFunction, so a non-EH module (no landing pads) still
+ * produces an object byte-identical to SimpleCompiler's. C3 will supply the custom
+ * streamer. That equivalence is asserted by the compiler-equivalence check in
+ * test-llvm-engine.cpp.
  *
  * THREADING: like ConcurrentIRCompiler (CompileUtils.h), a fresh TargetMachine is
  * built from the JITTargetMachineBuilder on every operator() call, so the compiler
@@ -564,10 +718,18 @@ public:
 		 */
 		auto *ltm = static_cast<LLVMTargetMachine *> (tm->get ());
 
+		/*
+		 * The EH-gather side channel is a stack local of this one operator() call
+		 * (plan 12 1.4): one module, one thread, no cross-call state. C2 populates
+		 * it and stops there; C3 consumes it in a custom streamer. Today nothing
+		 * reads it after emission - a non-EH module leaves it empty.
+		 */
+		MonoEHSideChannel eh_side_channel;
+
 		SmallVector<char, 0> obj_buffer;
 		{
 			raw_svector_ostream obj_stream (obj_buffer);
-			if (Error err = emit_object (*ltm, m, obj_stream))
+			if (Error err = emit_object (*ltm, m, obj_stream, eh_side_channel))
 				return std::move (err);
 		}
 
@@ -583,6 +745,9 @@ public:
 	}
 
 private:
+	/* The C2 test hook drives emit_object directly to read back the side channel. */
+	friend Expected<MonoEHSideChannel> gather_eh_sidechannel (Module &m);
+
 	/*
 	 * A faithful hand-inline of LLVMTargetMachine::addPassesToEmitMC followed by
 	 * PM.run - the exact recipe SimpleCompiler drives, kept open so C2/C3 can (a)
@@ -591,7 +756,8 @@ private:
 	 * stock method between LLVM versions is a silent codegen difference (plan 12 8,
 	 * "highest-tax item"); the equivalence test is what guards against it.
 	 */
-	static Error emit_object (LLVMTargetMachine &ltm, Module &m, raw_pwrite_stream &out)
+	static Error emit_object (LLVMTargetMachine &ltm, Module &m, raw_pwrite_stream &out,
+	                          MonoEHSideChannel &eh_side_channel)
 	{
 		legacy::PassManager pm;
 
@@ -611,6 +777,17 @@ private:
 				"target does not support instruction selection",
 				inconvertibleErrorCode ());
 		tpc->addMachinePasses ();
+
+		/*
+		 * C2: the EH-gather pass runs after the machine passes and before the
+		 * AsmPrinter, so it sees the final landing-pad set. It reads only and
+		 * emits nothing (it populates eh_side_channel), so for a non-EH function
+		 * (no landing pads) it is inert and the emitted object stays byte-identical
+		 * to SimpleCompiler's - asserted by compiler-equivalence in
+		 * test-llvm-engine.cpp.
+		 */
+		pm.add (new MonoEHGatherPass (eh_side_channel));
+
 		tpc->setInitialized ();
 
 		/*
@@ -681,6 +858,34 @@ compile_object_with_simple_compiler (Module &m)
 	/* TMOwningSimpleCompiler is exactly what LLJIT builds by default at 0 threads. */
 	TMOwningSimpleCompiler compiler (std::move (*tm));
 	return compiler (m);
+}
+
+/*
+ * C2 test hook (declared in engine.hpp). Run the MonoIRCompiler object-emission
+ * pipeline - MonoEHGatherPass and all - over `m` from the same host
+ * JITTargetMachineBuilder the engine JITs with, and hand back the populated side
+ * channel. The object bytes are emitted (the pass only runs as part of a real
+ * codegen pipeline) and then discarded. This is the exact pass the runtime path
+ * runs, so the gathered clauses the test asserts on are what the runtime gathers.
+ */
+Expected<MonoEHSideChannel>
+gather_eh_sidechannel (Module &m)
+{
+	Expected<std::unique_ptr<TargetMachine>> tm =
+		host_target_machine_builder ().createTargetMachine ();
+	if (!tm)
+		return tm.takeError ();
+	auto *ltm = static_cast<LLVMTargetMachine *> (tm->get ());
+	m.setDataLayout (ltm->createDataLayout ());
+
+	MonoEHSideChannel sc;
+	SmallVector<char, 0> obj_buffer;
+	{
+		raw_svector_ostream obj_stream (obj_buffer);
+		if (Error err = MonoIRCompiler::emit_object (*ltm, m, obj_stream, sc))
+			return std::move (err);
+	}
+	return sc;
 }
 
 MonoLLVMJIT::MonoLLVMJIT ()

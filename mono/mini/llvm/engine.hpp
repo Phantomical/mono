@@ -34,6 +34,7 @@ namespace llvm {
 class Function;
 class GlobalVariable;
 class LLVMContext;
+class MCSymbol;
 class MemoryBuffer;
 class Module;
 namespace object {
@@ -98,6 +99,77 @@ struct CompileResult {
 	EhFrameInfo gcc_except_table;
 	/* Address of the mono-format "mono_eh_frame" global, or 0 if absent. */
 	uint64_t mono_eh_frame = 0;
+};
+
+/* ---- EH gather side channel (C2) -----------------------------------------
+ *
+ * MonoEHGatherPass (a MachineFunctionPass in engine.cpp, scheduled right after
+ * addMachinePasses() in MonoIRCompiler's object-emission pipeline) reads the
+ * target-neutral MF.getLandingPads() and recovers, per landing pad, mono's IL
+ * clause_index from the type_info_N global's i32 initializer - all in-process,
+ * before any relocation. It EMITS NOTHING: it only populates this side channel,
+ * a stack-local of one MonoIRCompiler::operator() call threaded into the pass
+ * (plan 12 1.4). C3 turns the gathered tuples into the .mono_lsda section
+ * (plan 12 2); C2 is inert (a non-EH module has no landing pads -> an empty side
+ * channel -> byte-identical output).
+ *
+ * The MCSymbol* fields are the very symbols the AsmPrinter emits into .text;
+ * they are kept as symbols here (C3 turns them into func_begin-relative label
+ * differences). They are not resolvable in this offline stage and tests must not
+ * dereference them - the clause_index and the tuple counts are what C2 asserts.
+ */
+
+/*
+ * One (invoke range, catch clause) tuple, as the gather pass sees it. A landing
+ * pad carries ONE (begin,end) pair per invoke that unwinds to it, so a try with
+ * N protected calls produces N clauses that share a handler and clause_index but
+ * cover disjoint invoke ranges. .mono_lsda is thus one entry per invoke range.
+ */
+struct MonoEHClause {
+	/* This invoke's try range: a paired LandingPadInfo BeginLabels[i]/EndLabels[i]. */
+	const llvm::MCSymbol *try_begin = nullptr;
+	const llvm::MCSymbol *try_end = nullptr;
+	/* The handler entry: LandingPadInfo LandingPadLabel. */
+	const llvm::MCSymbol *handler = nullptr;
+	/* The IL clause index, smuggled through the type_info_N i32 initializer. */
+	int clause_index = -1;
+	/*
+	 * False if the clause_index could not be safely recovered (the type_info was
+	 * not a GlobalVariable carrying a ConstantInt initializer): downstream must
+	 * decline (CAP-EH-0), never guess.
+	 */
+	bool clause_resolved = false;
+};
+
+/* Everything the gather pass found for one EH-bearing MachineFunction. */
+struct MonoEHFunctionClauses {
+	/*
+	 * The function's name (MF.getName()). C3 keys the emitted section to the
+	 * function symbol - "one record per method in the method's own object"
+	 * (plan 12 2). The JIT is one function per module, but this is structured so
+	 * C3 can emit for the right function.
+	 */
+	std::string function;
+	std::vector<MonoEHClause> clauses;
+	/*
+	 * A negative TypeId (an exception-specification filter) was seen: out of the
+	 * catch-only milestone. Recorded so a later slice can decline; never a crash.
+	 */
+	bool has_filter = false;
+	/*
+	 * Something unexpected was seen (a missing begin/end/lpad label, an
+	 * unresolvable type_info, or a filter/cleanup TypeId): downstream must
+	 * decline this method to the classic JIT (CAP-EH-0).
+	 */
+	bool declined = false;
+};
+
+/*
+ * The per-compile side channel: one entry per EH-bearing function. A non-EH
+ * module (no landing pads) leaves this empty, so the gather pass is inert.
+ */
+struct MonoEHSideChannel {
+	std::vector<MonoEHFunctionClauses> functions;
 };
 
 /*
@@ -290,6 +362,17 @@ compile_object_with_mono_compiler (llvm::Module &m);
 
 llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
 compile_object_with_simple_compiler (llvm::Module &m);
+
+/* ---- C2 EH-gather hook ---------------------------------------------------
+ *
+ * Compile `m` through MonoIRCompiler's exact object-emission pipeline - the one
+ * with the MonoEHGatherPass scheduled after addMachinePasses() - and return the
+ * populated side channel; the object bytes are discarded. This is the same pass
+ * the runtime path runs, so what the test sees is what the runtime gathers.
+ * Exists ONLY for test-llvm-engine.cpp's C2 assertions; nothing in the engine's
+ * runtime path calls it.
+ */
+llvm::Expected<MonoEHSideChannel> gather_eh_sidechannel (llvm::Module &m);
 
 } // namespace mono
 

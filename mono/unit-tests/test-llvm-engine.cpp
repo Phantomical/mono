@@ -53,9 +53,11 @@
 #undef PIC
 #endif
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -486,6 +488,155 @@ build_eh_module (Module &m, bool with_personality)
 }
 
 /*
+ * Build, in `m`, an EH function with TWO sibling catches - the exact shape mono
+ * emits (emit_handler_start, translator-call.cpp:928-1037) and the probe's
+ * eh.ll: each catch region is its OWN landing pad carrying a SINGLE catch clause
+ * pointing at its OWN type_info_N global. Two invokes of the same possibly-
+ * unwinding callee, each unwinding to its own landing pad; the two type_info
+ * globals smuggle IL clause indices 7 and 3 (the values probe2 verified the
+ * gather recovers). Returns `i32 eh_two_catch(void)`.
+ *
+ * This is one-landing-pad-per-clause, NOT one landing pad with multiple TypeIds -
+ * confirmed to match mono's real emission (each emit_handler_start call builds a
+ * fresh landingpad with exactly one LLVMAddClause). The gather nonetheless loops
+ * over every positive TypeId, so it would also handle a multi-clause pad.
+ */
+static Function *
+build_eh_two_catch_module (Module &m)
+{
+	LLVMContext &ctx = m.getContext ();
+	Type *i32 = Type::getInt32Ty (ctx);
+	PointerType *ptr = PointerType::getUnqual (ctx);
+
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (ctx), false);
+	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                     EH_MAY_THROW_NAME, &m);
+
+	/* Two clause-index-smuggling globals: IL clause indices 7 and 3. */
+	auto *ti0 = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
+	                                ConstantInt::get (i32, 7), "type_info_0");
+	auto *ti1 = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
+	                                ConstantInt::get (i32, 3), "type_info_1");
+
+	FunctionType *fty = FunctionType::get (i32, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_two_catch", &m);
+
+	/* Mirror translator-call.cpp:948-958: i32 (...) nounwind, returns 0. */
+	FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+	Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+	                                   "mono_personality", &m);
+	pers->addFnAttr (Attribute::NoUnwind);
+	BasicBlock *pbb = BasicBlock::Create (ctx, "ENTRY", pers);
+	IRBuilder<> pb (pbb);
+	pb.CreateRet (ConstantInt::get (i32, 0));
+	fn->setPersonalityFn (pers);
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *cont1 = BasicBlock::Create (ctx, "cont1", fn);
+	BasicBlock *cont2 = BasicBlock::Create (ctx, "cont2", fn);
+	BasicBlock *lpad0 = BasicBlock::Create (ctx, "lpad0", fn);
+	BasicBlock *lpad1 = BasicBlock::Create (ctx, "lpad1", fn);
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont1, lpad0, {});
+
+	IRBuilder<> b1 (cont1);
+	b1.CreateInvoke (callee, cont2, lpad1, {});
+
+	IRBuilder<> b2 (cont2);
+	b2.CreateRet (ConstantInt::get (i32, 0));
+
+	StructType *lp_ty = StructType::get (ptr, i32);
+
+	IRBuilder<> l0 (lpad0);
+	LandingPadInst *lp0 = l0.CreateLandingPad (lp_ty, 1);
+	lp0->addClause (ti0); /* catch -> type_info_0 (clause 7) */
+	l0.CreateRet (l0.CreateExtractValue (lp0, 1));
+
+	IRBuilder<> l1 (lpad1);
+	LandingPadInst *lp1 = l1.CreateLandingPad (lp_ty, 1);
+	lp1->addClause (ti1); /* catch -> type_info_1 (clause 3) */
+	l1.CreateRet (l1.CreateExtractValue (lp1, 1));
+
+	return fn;
+}
+
+/*
+ * Build, in `m`, a single try protecting TWO calls that both unwind to ONE
+ * shared catch landing pad - mono's real "try { a(); b(); } catch" shape, where
+ * emit_call issues one invoke per protected call all converging on the clause's
+ * single handler block. The one LandingPadInfo therefore carries TWO (begin,end)
+ * invoke ranges against ONE handler and ONE type_info_0 (IL clause index 5).
+ *
+ * This is the shape the C2 review's probe_multi.cpp attacks: a gather that keeps
+ * only the first range would publish a [try_start,try_end) covering only the
+ * first call, so a throw from the second call would escape the handler. The
+ * gather must produce TWO clause entries (one per invoke range). Returns
+ * `i32 eh_multi_call(void)`.
+ *
+ * A plain (non-protected) nounwind call is placed BETWEEN the two invokes so
+ * their PC ranges are NOT adjacent - otherwise LLVM's EHStreamer coalesces two
+ * back-to-back same-landing-pad ranges into a single .gcc_except_table call-site,
+ * and the "2 catch call-sites == 2 gathered clauses" cross-check could not
+ * distinguish a correct 2-range gather from a bug that dropped one. The gap
+ * forces two distinct call-sites, so a dropped range would fail the cross-check.
+ */
+static Function *
+build_eh_multi_call_module (Module &m)
+{
+	LLVMContext &ctx = m.getContext ();
+	Type *i32 = Type::getInt32Ty (ctx);
+	PointerType *ptr = PointerType::getUnqual (ctx);
+
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (ctx), false);
+	Function *callee = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                     EH_MAY_THROW_NAME, &m);
+
+	/* A nounwind gap call so the two invoke ranges are non-adjacent (see above). */
+	Function *gap = Function::Create (callee_ty, Function::ExternalLinkage,
+	                                  "mono$selftest$eh$gap", &m);
+	gap->addFnAttr (Attribute::NoUnwind);
+
+	auto *ti0 = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
+	                                ConstantInt::get (i32, 5), "type_info_0");
+
+	FunctionType *fty = FunctionType::get (i32, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "eh_multi_call", &m);
+
+	FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+	Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+	                                   "mono_personality", &m);
+	pers->addFnAttr (Attribute::NoUnwind);
+	BasicBlock *pbb = BasicBlock::Create (ctx, "ENTRY", pers);
+	IRBuilder<> pb (pbb);
+	pb.CreateRet (ConstantInt::get (i32, 0));
+	fn->setPersonalityFn (pers);
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *cont1 = BasicBlock::Create (ctx, "cont1", fn);
+	BasicBlock *cont2 = BasicBlock::Create (ctx, "cont2", fn);
+	BasicBlock *lpad = BasicBlock::Create (ctx, "lpad", fn); /* ONE shared landing pad */
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont1, lpad, {}); /* call #1 -> lpad */
+
+	IRBuilder<> b1 (cont1);
+	b1.CreateCall (gap, {}); /* unprotected gap: separates the two invoke ranges */
+	b1.CreateInvoke (callee, cont2, lpad, {}); /* call #2 -> SAME lpad */
+
+	IRBuilder<> b2 (cont2);
+	b2.CreateRet (ConstantInt::get (i32, 0));
+
+	StructType *lp_ty = StructType::get (ptr, i32);
+	IRBuilder<> l (lpad);
+	LandingPadInst *lp = l.CreateLandingPad (lp_ty, 1);
+	lp->addClause (ti0); /* one catch clause -> type_info_0 (clause 5) */
+	l.CreateRet (l.CreateExtractValue (lp, 1));
+
+	return fn;
+}
+
+/*
  * Emit `m` through a target machine IDENTICAL to the engine's (host CPU, O3,
  * LLVM's default JIT code model - Large on x86-64), the same path
  * MonoLLVMJIT::compile drives, and return the object bytes. Used to (a) inspect
@@ -511,6 +662,29 @@ emit_object_engine_model (Module &m)
 		pm.run (m);
 	}
 	return MemoryBuffer::getMemBufferCopy (StringRef (buf->data (), buf->size ()), "eh.o");
+}
+
+/* Raw bytes of the named section of an emitted object, or empty if absent. */
+static Expected<std::vector<uint8_t>>
+object_section_bytes (MemoryBuffer &buf, StringRef want)
+{
+	auto obj = object::ObjectFile::createObjectFile (buf.getMemBufferRef ());
+	if (!obj)
+		return obj.takeError ();
+	for (const object::SectionRef &sec : (*obj)->sections ()) {
+		Expected<StringRef> name = sec.getName ();
+		if (!name) {
+			consumeError (name.takeError ());
+			continue;
+		}
+		if (*name != want)
+			continue;
+		Expected<StringRef> contents = sec.getContents ();
+		if (!contents)
+			return contents.takeError ();
+		return std::vector<uint8_t> (contents->bytes_begin (), contents->bytes_end ());
+	}
+	return std::vector<uint8_t> ();
 }
 
 /* True iff the emitted object carries a non-empty `.gcc_except_table` section. */
@@ -741,6 +915,210 @@ test_compiler_equivalence (MonoLLVMJIT *jit)
 	return TEST_FAIL;
 }
 
+/* ------------------------------------------- EH clause gather (C2) */
+
+/*
+ * C2 acceptance check: MonoEHGatherPass, scheduled after addMachinePasses() in
+ * MonoIRCompiler's pipeline, gathers the per-landing-pad {try range, handler,
+ * clause_index} into the side channel and EMITS NOTHING.
+ *
+ * The module is the two-sibling-catch shape mono actually emits (each catch is
+ * its own landing pad with a single type_info_N global): two landing pads
+ * smuggling IL clause indices 7 and 3. gather_eh_sidechannel drives the very
+ * pass the runtime path runs and hands the side channel back, so:
+ *
+ *   1. one EH-bearing function, two (landing pad, clause) tuples, every clause
+ *      resolved and carrying valid begin/end/handler symbols;
+ *   2. the recovered clause indices are exactly {3, 7} - the smuggled values,
+ *      matching probe2's independently-verified gather;
+ *   3. no filter, no decline.
+ *
+ * TWO-SOURCE CROSS-CHECK. The same module still gets LLVM's redundant
+ * .gcc_except_table. It is decoded OFFLINE with the committed M1 decoder
+ * (mono::decode_gcc_except_table) and the STRUCTURAL geometry is asserted to
+ * agree: the number of call sites that reach a landing pad via a catch action
+ * equals the number of (landing pad, clause) tuples the pass gathered. The
+ * .gcc_except_table's ttype->clause_index mapping needs the RELOCATED ttype
+ * table (the entries are R_X86_64_64 relocations, zero in an offline object), so
+ * that half is not resolvable here; the clause INDICES are cross-checked directly
+ * from the gathered type_info globals instead (which is exactly where the runtime
+ * reader will get them). This independent agreement is the proof the gather reads
+ * the right landing pads.
+ */
+static TestResult
+test_eh_gather (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	/* ---- gather through the MonoIRCompiler pipeline ---- */
+	LLVMContext c1;
+	Module m1 ("selftest.eh.gather", c1);
+	build_eh_two_catch_module (m1);
+
+	auto sc = mono::gather_eh_sidechannel (m1);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+
+	/* Exactly one EH-bearing function (mono_personality has no landing pads). */
+	CHECK (sc->functions.size () == 1);
+	const mono::MonoEHFunctionClauses &fn = sc->functions[0];
+	CHECK (fn.function == "eh_two_catch");
+	CHECK (!fn.has_filter);
+	CHECK (!fn.declined);
+	CHECK (fn.clauses.size () == 2);
+
+	/* Every gathered clause resolved and carries the three .text symbols C3 needs. */
+	for (const mono::MonoEHClause &cl : fn.clauses) {
+		CHECK (cl.clause_resolved);
+		CHECK (cl.try_begin != nullptr);
+		CHECK (cl.try_end != nullptr);
+		CHECK (cl.handler != nullptr);
+	}
+
+	/* The smuggled clause indices are {3, 7} (order is landing-pad order; assert
+	 * as a set so a codegen reorder cannot make this flaky). */
+	std::vector<int> got = { fn.clauses[0].clause_index, fn.clauses[1].clause_index };
+	std::sort (got.begin (), got.end ());
+	CHECK (got[0] == 3);
+	CHECK (got[1] == 7);
+
+	/* ---- two-source cross-check against the redundant .gcc_except_table ---- */
+	LLVMContext c2;
+	Module m2 ("selftest.eh.gather.xcheck", c2);
+	build_eh_two_catch_module (m2);
+
+	auto obj = emit_object_engine_model (m2);
+	if (!obj) {
+		printf ("     cross-check emit failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	auto bytes = object_section_bytes (**obj, ".gcc_except_table");
+	if (!bytes) {
+		printf ("     cross-check section read failed: %s\n",
+		        toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (!bytes->empty ());
+
+	mono::ParsedLsda parsed;
+	bool decoded = mono::decode_gcc_except_table (bytes->data (), bytes->size (), parsed);
+	CHECK (decoded);
+
+	/*
+	 * Structural geometry: count call sites that reach a landing pad with a catch
+	 * action. That must equal the number of (landing pad, clause) tuples gathered.
+	 */
+	std::size_t catch_sites = 0;
+	for (const mono::LsdaCallSite &cs : parsed.call_sites) {
+		bool has_catch = false;
+		for (std::int32_t ti : cs.ttype_indices)
+			if (ti > 0)
+				has_catch = true;
+		if (cs.landing_pad != 0 && has_catch)
+			catch_sites ++;
+	}
+	printf ("     cross-check: gather=%zu clause(s); .gcc_except_table=%zu catch "
+	        "call-site(s) of %zu call site(s) [geometry agreement; clause indices "
+	        "checked from gathered globals, not the offline ttype table]\n",
+	        fn.clauses.size (), catch_sites, parsed.call_sites.size ());
+	CHECK (catch_sites == fn.clauses.size ());
+
+	return TEST_PASS;
+}
+
+/*
+ * C2 regression for the review's blocking bug: a landing pad carries one
+ * (begin,end) pair PER INVOKE that unwinds to it, so a single try protecting TWO
+ * calls that share one catch landing pad must gather TWO clause entries (one per
+ * invoke range) - same handler, same clause_index, DIFFERENT ranges. A gather
+ * that kept only the first range would drop the second call's PC range and let a
+ * throw from it escape the handler at C6.
+ *
+ * The .gcc_except_table geometry cross-check is applied to THIS shape precisely
+ * because a dropped range would break it: the table has two catch call-sites, so
+ * a one-range gather would report 1 clause against 2 call-sites and fail here.
+ */
+static TestResult
+test_eh_gather_multi_call (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	LLVMContext c1;
+	Module m1 ("selftest.eh.multicall", c1);
+	build_eh_multi_call_module (m1);
+
+	auto sc = mono::gather_eh_sidechannel (m1);
+	if (!sc) {
+		printf ("     gather failed: %s\n", toString (sc.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+
+	CHECK (sc->functions.size () == 1);
+	const mono::MonoEHFunctionClauses &fn = sc->functions[0];
+	CHECK (fn.function == "eh_multi_call");
+	CHECK (!fn.has_filter);
+	CHECK (!fn.declined);
+
+	/* ONE landing pad, TWO invoke ranges -> TWO gathered clauses. */
+	CHECK (fn.clauses.size () == 2);
+
+	const mono::MonoEHClause &c0 = fn.clauses[0];
+	const mono::MonoEHClause &c1v = fn.clauses[1];
+
+	/* Both resolved to the SAME clause index (5) and the SAME handler symbol... */
+	CHECK (c0.clause_resolved && c1v.clause_resolved);
+	CHECK (c0.clause_index == 5);
+	CHECK (c1v.clause_index == 5);
+	CHECK (c0.handler != nullptr);
+	CHECK (c0.handler == c1v.handler);
+
+	/* ...but DIFFERENT (begin,end) invoke ranges - the whole point of the fix. */
+	CHECK (c0.try_begin != nullptr && c0.try_end != nullptr);
+	CHECK (c1v.try_begin != nullptr && c1v.try_end != nullptr);
+	CHECK (c0.try_begin != c1v.try_begin);
+	CHECK (c0.try_end != c1v.try_end);
+
+	/* ---- cross-check: .gcc_except_table catch call-sites must equal 2 ---- */
+	LLVMContext c2;
+	Module m2 ("selftest.eh.multicall.xcheck", c2);
+	build_eh_multi_call_module (m2);
+
+	auto obj = emit_object_engine_model (m2);
+	if (!obj) {
+		printf ("     cross-check emit failed: %s\n", toString (obj.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	auto bytes = object_section_bytes (**obj, ".gcc_except_table");
+	if (!bytes) {
+		printf ("     cross-check section read failed: %s\n",
+		        toString (bytes.takeError ()).c_str ());
+		return TEST_FAIL;
+	}
+	CHECK (!bytes->empty ());
+
+	mono::ParsedLsda parsed;
+	bool decoded = mono::decode_gcc_except_table (bytes->data (), bytes->size (), parsed);
+	CHECK (decoded);
+
+	std::size_t catch_sites = 0;
+	for (const mono::LsdaCallSite &cs : parsed.call_sites) {
+		bool has_catch = false;
+		for (std::int32_t ti : cs.ttype_indices)
+			if (ti > 0)
+				has_catch = true;
+		if (cs.landing_pad != 0 && has_catch)
+			catch_sites ++;
+	}
+	printf ("     multi-call: gather=%zu range(s) on one pad; .gcc_except_table=%zu "
+	        "catch call-site(s) of %zu [a dropped range would fail this]\n",
+	        fn.clauses.size (), catch_sites, parsed.call_sites.size ());
+	CHECK (catch_sites == fn.clauses.size ());
+
+	return TEST_PASS;
+}
+
 /* ------------------------------------------------------------ driver */
 
 /*
@@ -781,6 +1159,8 @@ test_llvm_engine_main (void)
 	report ("registered-helper", test_registered_helper (jit));
 	report ("compiler-equivalence", test_compiler_equivalence (jit));
 	report ("gcc-except-table", test_gcc_except_table (jit));
+	report ("eh-gather", test_eh_gather (jit));
+	report ("eh-gather-multi-call", test_eh_gather_multi_call (jit));
 
 	printf ("%d passed, %d skipped, %d failed\n", passes, skips, failures);
 	return failures ? 1 : 0;
