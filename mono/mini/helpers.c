@@ -8,7 +8,10 @@
 #include <config.h>
 
 #include "mini.h"
+#include "mini-runtime.h"
 #include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
 #include <mono/metadata/opcodes.h>
 
 #ifndef HOST_WIN32
@@ -107,6 +110,295 @@ mono_blockset_print (MonoCompile *cfg, MonoBitSet *set, const char *name, guint 
 #endif
 }
 
+#ifndef DISABLE_LOGGING
+
+/* Ascending compare of two offsets stored as GINT_TO_POINTER, for g_list_sort. */
+static gint
+cmp_offset_ptr (gconstpointer a, gconstpointer b)
+{
+	return GPOINTER_TO_INT (a) - GPOINTER_TO_INT (b);
+}
+
+/*
+ * disasm_line_offset:
+ *
+ *   If LINE is an objdump instruction line ("   NN:\t<bytes>\t<insn>"), return
+ * the leading hex offset NN. Otherwise (headers, symbol lines, source-line
+ * annotations) return -1.
+ */
+static int
+disasm_line_offset (const char *line)
+{
+	const char *p = line;
+	char *end = NULL;
+	long off;
+
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (!g_ascii_isxdigit (*p))
+		return -1;
+	off = strtol (p, &end, 16);
+	/* An instruction line is "<hex>:\t..."; the colon+tab is the tell. */
+	if (end == p || end [0] != ':' || end [1] != '\t')
+		return -1;
+	return (int) off;
+}
+
+/*
+ * disasm_branch_target:
+ *
+ *   If LINE carries a branch/call operand that objdump resolved to a symbol,
+ * of the form "<addr> <sym+0xoff>" (or "<addr> <sym>"), set *TARGET to the
+ * numeric ADDR (a full 64-bit value — external targets are huge because the
+ * code buffer was relocated to 0) and [*repl_start,*repl_end) to the span of
+ * "<addr> <sym...>" so the caller may rewrite it, and return TRUE. Returns
+ * FALSE if the line has no such operand.
+ */
+static gboolean
+disasm_branch_target (const char *line, int *repl_start, int *repl_end, guint64 *target)
+{
+	const char *lt = strrchr (line, '<');
+	const char *gt;
+	const char *addr_end;
+	const char *addr_start;
+	gchar *e = NULL;
+
+	if (!lt)
+		return FALSE;
+	gt = strchr (lt, '>');
+	if (!gt)
+		return FALSE;
+	/* A '#' before the symbol means this is a RIP-relative data reference
+	 * comment ("# 0xNN <sym>"), not a branch/call target — leave it alone. */
+	if (memchr (line, '#', lt - line))
+		return FALSE;
+
+	/* Back up over the single space before '<' to the address token. */
+	addr_end = lt;
+	while (addr_end > line && addr_end [-1] == ' ')
+		addr_end--;
+	addr_start = addr_end;
+	while (addr_start > line && g_ascii_isxdigit (addr_start [-1]))
+		addr_start--;
+	if (addr_start == addr_end)
+		return FALSE;
+	/* The address must be a standalone whitespace-delimited token. */
+	if (addr_start > line && addr_start [-1] != ' ' && addr_start [-1] != '\t')
+		return FALSE;
+
+	*target = g_ascii_strtoull (addr_start, &e, 16);
+	if (e != addr_end)
+		return FALSE;
+
+	*repl_start = (int) (addr_start - line);
+	*repl_end = (int) (gt + 1 - line);
+	return TRUE;
+}
+
+/*
+ * annotate_disassembly:
+ *
+ *   Read objdump's captured output from FP and re-emit it to stdout with
+ * mono's own annotations layered on:
+ *   - synthesized "L<n>:" labels at every local branch target (tier-agnostic:
+ *     derived purely by scanning the disassembly), with branch operands
+ *     rewritten to reference them;
+ *   - for the classic tier-0 JIT, authoritative "; <type> <name>" comments on
+ *     outgoing calls, correlated by native offset against cfg->patch_info;
+ *   - for the LLVM tier-1 backend, a trailing patch-target legend (its calls
+ *     route through GOT slots so per-site offsets are unavailable — see the
+ *     tier-1 note below).
+ * Nothing is ever fabricated: unresolved sites are left as objdump rendered
+ * them. cfg may be NULL (trampoline disassembly) — only the label pass runs.
+ */
+static void
+annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
+{
+	GPtrArray *lines = g_ptr_array_new ();
+	GHashTable *instr_offsets = g_hash_table_new (NULL, NULL);      /* set of real insn offsets */
+	GHashTable *bb_at = g_hash_table_new (NULL, NULL);              /* insn offset -> block_num+1 (tier-0) */
+	GHashTable *off2label = g_hash_table_new (NULL, NULL);          /* target offset -> label index+1 */
+	GHashTable *off2name = g_hash_table_new (NULL, NULL);           /* call-site offset -> name (tier-0) */
+	GHashTable *targets = g_hash_table_new (NULL, NULL);            /* set of local target offsets */
+	GList *target_list = NULL;
+	char buf [4096];
+	guint i;
+	int pending_bb = -1;
+	int label_next = 0;
+	gboolean is_llvm = cfg && cfg->compile_llvm;
+
+	/* Tier-0: build the authoritative call-site name map from patch_info.
+	 * ji->ip.i is the native offset of the call/branch instruction. Skip
+	 * MONO_PATCH_INFO_BB: those are the local branches the label pass handles. */
+	if (cfg && !is_llvm) {
+		MonoJumpInfo *ji;
+		for (ji = cfg->patch_info; ji; ji = ji->next) {
+			if (ji->type == MONO_PATCH_INFO_BB)
+				continue;
+			if (ji->ip.i < 0 || ji->ip.i >= size)
+				continue;
+			if (g_hash_table_lookup (off2name, GINT_TO_POINTER (ji->ip.i)))
+				continue;
+			g_hash_table_insert (off2name, GINT_TO_POINTER (ji->ip.i), mono_ji_to_string (ji));
+		}
+	}
+
+	/* Pass 1: read all lines, record instruction offsets, <BB> markers, and
+	 * the set of in-range local branch targets. */
+	while (fgets (buf, sizeof (buf), fp)) {
+		char *line = g_strdup (buf);
+		size_t len = strlen (line);
+		int off, rs, re;
+		guint64 tgt;
+
+		if (len && line [len - 1] == '\n')
+			line [len - 1] = '\0';
+		g_ptr_array_add (lines, line);
+
+		/* objdump -l stabs marker for a block start: "<BB>:N" */
+		if (g_str_has_prefix (line, "<BB>:")) {
+			pending_bb = atoi (line + 5);
+			continue;
+		}
+
+		off = disasm_line_offset (line);
+		if (off < 0)
+			continue;
+		g_hash_table_insert (instr_offsets, GINT_TO_POINTER (off), GINT_TO_POINTER (1));
+		if (pending_bb >= 0) {
+			g_hash_table_insert (bb_at, GINT_TO_POINTER (off), GINT_TO_POINTER (pending_bb + 1));
+			/* A basic-block start is a label anchor even with no incoming
+			 * intra-method branch (tier-0 only; tier-1 has no bb offsets). */
+			g_hash_table_insert (targets, GINT_TO_POINTER (off), GINT_TO_POINTER (1));
+			pending_bb = -1;
+		}
+		if (disasm_branch_target (line, &rs, &re, &tgt) && tgt < (guint64) size)
+			g_hash_table_insert (targets, GINT_TO_POINTER ((int) tgt), GINT_TO_POINTER (1));
+	}
+
+	/* Assign labels L0,L1,... to every label anchor (local branch target or
+	 * basic-block start) that lands on a real instruction, in ascending offset
+	 * order. */
+	{
+		GHashTableIter it;
+		gpointer k;
+		g_hash_table_iter_init (&it, targets);
+		while (g_hash_table_iter_next (&it, &k, NULL)) {
+			if (g_hash_table_lookup (instr_offsets, k))
+				target_list = g_list_prepend (target_list, k);
+		}
+		target_list = g_list_sort (target_list, cmp_offset_ptr);
+	}
+	for (GList *l = target_list; l; l = l->next)
+		g_hash_table_insert (off2label, l->data, GINT_TO_POINTER (++label_next));
+
+	/* Pass 2: re-emit with labels, rewritten operands, and call names. */
+	for (i = 0; i < lines->len; ++i) {
+		char *line = (char *) g_ptr_array_index (lines, i);
+		char *name;
+		int off, rs, re;
+		guint64 tgt;
+		gboolean has_target;
+
+		/* Drop the raw <BB>:N marker; its block number is folded into the label. */
+		if (g_str_has_prefix (line, "<BB>:"))
+			continue;
+
+		off = disasm_line_offset (line);
+		if (off < 0) {
+			printf ("%s\n", line);
+			continue;
+		}
+
+		/* Emit a label line if this offset is a label anchor. */
+		{
+			gpointer lp = g_hash_table_lookup (off2label, GINT_TO_POINTER (off));
+			if (lp) {
+				gpointer bp = g_hash_table_lookup (bb_at, GINT_TO_POINTER (off));
+				if (bp)
+					printf ("L%d:\t\t\t\t; BB%d\n", GPOINTER_TO_INT (lp) - 1, GPOINTER_TO_INT (bp) - 1);
+				else
+					printf ("L%d:\n", GPOINTER_TO_INT (lp) - 1);
+			}
+		}
+
+		name = (char *) g_hash_table_lookup (off2name, GINT_TO_POINTER (off));
+		has_target = disasm_branch_target (line, &rs, &re, &tgt);
+
+		if (has_target && tgt < (guint64) size) {
+			gpointer lp = g_hash_table_lookup (off2label, GINT_TO_POINTER ((int) tgt));
+			if (lp) {
+				/* Local branch: operand -> L<n>, keep the raw offset as a comment. */
+				printf ("%.*sL%d\t\t; 0x%x\n", rs, line, GPOINTER_TO_INT (lp) - 1, (int) tgt);
+				continue;
+			}
+			/* target in range but not a known label: leave as-is */
+			printf ("%s\n", line);
+			continue;
+		}
+		if (has_target) {
+			/* External call/branch. objdump's "<fn+0xhuge>" is bogus (code was
+			 * relocated to 0); replace it with the authoritative name if we have
+			 * one, else leave objdump's text untouched. */
+			if (name)
+				printf ("%.*s<target>\t; %s\n", rs, line, name);
+			else
+				printf ("%s\n", line);
+			continue;
+		}
+
+		/* No symbolized operand. Tier-0 indirect call sites may still carry a
+		 * name in patch_info (e.g. "call *%rax"): append it. */
+		if (name)
+			printf ("%s\t; %s\n", line, name);
+		else
+			printf ("%s\n", line);
+	}
+
+	/* Tier-1 legend: the LLVM backend routes outgoing calls through GOT slots
+	 * (movabs $slot,%rax; call *(%rax)); the patch site's native offset is not
+	 * recorded on the ji, so per-call inline correlation is unavailable. Print
+	 * the authoritative target list once as a legend; the reader matches it via
+	 * the movabs GOT-slot immediate.
+	 *
+	 * NOTE: at this dump site cfg->patch_info carries the GOT targets only for
+	 * the AOT compile path; in the tiered JIT the LLVM patches are resolved and
+	 * consumed before we get here, so the list is typically empty. Inline
+	 * per-call names (the GOT-base spike, design 19 §6) are deferred/unverified
+	 * and intentionally NOT attempted here — never fabricate a name. */
+	if (is_llvm) {
+		MonoJumpInfo *ji;
+		int idx = 0;
+		printf ("; tier-1 (LLVM): outgoing calls route through GOT slots (movabs $slot,%%reg; call *(%%reg))\n");
+		for (ji = cfg->patch_info; ji; ji = ji->next) {
+			char *s = mono_ji_to_string (ji);
+			printf (";   got target [%d] %s\n", idx++, s);
+			g_free (s);
+		}
+		if (idx == 0)
+			printf (";   (call-target names unavailable: cfg->patch_info empty in JIT mode; inline GOT-slot resolution deferred — design 19 §6)\n");
+	}
+
+	{
+		GHashTableIter it;
+		gpointer v;
+		g_hash_table_iter_init (&it, off2name);
+		while (g_hash_table_iter_next (&it, NULL, &v))
+			g_free (v);
+	}
+	g_hash_table_destroy (off2name);
+	g_hash_table_destroy (off2label);
+	g_hash_table_destroy (targets);
+	g_hash_table_destroy (bb_at);
+	g_hash_table_destroy (instr_offsets);
+	g_list_free (target_list);
+	for (i = 0; i < lines->len; ++i)
+		g_free (g_ptr_array_index (lines, i));
+	g_ptr_array_free (lines, TRUE);
+}
+
+#endif /* DISABLE_LOGGING */
+
 /**
  * \param cfg compilation context
  * \param code a pointer to the code
@@ -193,15 +485,15 @@ mono_disassemble_code (MonoCompile *cfg, guint8 *code, int size, char *id)
 #if defined(sparc) && !defined(__GNUC__)
 #define DIS_CMD "dis"
 #elif defined(TARGET_X86)
-#define DIS_CMD "objdump -l -d"
+#define DIS_CMD "objdump -l -d --disassemble-zeroes"
 #elif defined(TARGET_AMD64)
   #if defined(HOST_WIN32)
-  #define DIS_CMD "x86_64-w64-mingw32-objdump.exe -M x86-64 -d"
+  #define DIS_CMD "x86_64-w64-mingw32-objdump.exe -M x86-64 -d --disassemble-zeroes"
   #else
-  #define DIS_CMD "objdump -l -d"
+  #define DIS_CMD "objdump -l -d --disassemble-zeroes"
   #endif
 #else
-#define DIS_CMD "objdump -d"
+#define DIS_CMD "objdump -d --disassemble-zeroes"
 #endif
 #endif
 
@@ -273,7 +565,21 @@ mono_disassemble_code (MonoCompile *cfg, guint8 *code, int size, char *id)
 #endif
 
 	cmd = g_strdup_printf (ARCH_PREFIX DIS_CMD " %s %s", objdump_args, o_file);
-	unused = system (cmd);
+	/*
+	 * Capture objdump's output so we can layer mono's own annotations onto it
+	 * (basic-block labels + authoritative call-target names). If popen is
+	 * unavailable or fails, fall back to streaming it straight to stdout, which
+	 * is the historical behaviour.
+	 */
+	{
+		FILE *dis = popen (cmd, "r");
+		if (dis) {
+			annotate_disassembly (dis, cfg, size);
+			pclose (dis);
+		} else {
+			unused = system (cmd);
+		}
+	}
 	g_free (cmd);
 	g_free (objdump_args);
 #else

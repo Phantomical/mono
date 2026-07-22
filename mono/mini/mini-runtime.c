@@ -1088,42 +1088,56 @@ mono_ji_type_to_string (MonoJumpInfoType type)
 	return patch_info_str [type];
 }
 
-void
-mono_print_ji (const MonoJumpInfo *ji)
+/*
+ * mono_ji_to_string:
+ *
+ *   Return a newly allocated human-readable description of the patch target JI,
+ * e.g. "JIT_ICALL mono_amd64_throw_corlib_exception", "method int Foo:Bar (int)",
+ * "class Ns.Cls". The caller frees the result with g_free. This is the single
+ * source of truth for target names shared by mono_print_ji and the native
+ * disassembly annotation (mono_disassemble_code).
+ */
+char*
+mono_ji_to_string (const MonoJumpInfo *ji)
 {
 	const char *type = patch_info_str [ji->type];
 	switch (ji->type) {
 	case MONO_PATCH_INFO_RGCTX_FETCH:
 	case MONO_PATCH_INFO_RGCTX_SLOT_INDEX: {
 		MonoJumpInfoRgctxEntry *entry = ji->data.rgctx_entry;
-
-		printf ("[%s ", type);
-		mono_print_ji (entry->data);
-		printf (" -> %s]", mono_rgctx_info_type_to_str (entry->info_type));
-		break;
+		char *inner = mono_ji_to_string (entry->data);
+		char *res = g_strdup_printf ("%s [%s] -> %s", type, inner, mono_rgctx_info_type_to_str (entry->info_type));
+		g_free (inner);
+		return res;
 	}
 	case MONO_PATCH_INFO_METHOD:
 	case MONO_PATCH_INFO_METHODCONST:
 	case MONO_PATCH_INFO_METHOD_FTNDESC: {
 		char *s = mono_method_get_full_name (ji->data.method);
-		printf ("[%s %s]", type, s);
+		char *res = g_strdup_printf ("%s %s", type, s);
 		g_free (s);
-		break;
+		return res;
 	}
 	case MONO_PATCH_INFO_JIT_ICALL_ID:
-		printf ("[JIT_ICALL %s]", mono_find_jit_icall_info (ji->data.jit_icall_id)->name);
-		break;
+		return g_strdup_printf ("JIT_ICALL %s", mono_find_jit_icall_info (ji->data.jit_icall_id)->name);
 	case MONO_PATCH_INFO_CLASS:
 	case MONO_PATCH_INFO_VTABLE: {
 		char *name = mono_class_full_name (ji->data.klass);
-		printf ("[%s %s]", type, name);
+		char *res = g_strdup_printf ("%s %s", type, name);
 		g_free (name);
-		break;
+		return res;
 	}
 	default:
-		printf ("[%s]", type);
-		break;
+		return g_strdup (type);
 	}
+}
+
+void
+mono_print_ji (const MonoJumpInfo *ji)
+{
+	char *s = mono_ji_to_string (ji);
+	printf ("[%s]", s);
+	g_free (s);
 }
 
 #else
@@ -1132,6 +1146,12 @@ const char*
 mono_ji_type_to_string (MonoJumpInfoType type)
 {
 	return "";
+}
+
+char*
+mono_ji_to_string (const MonoJumpInfo *ji)
+{
+	return g_strdup ("");
 }
 
 void

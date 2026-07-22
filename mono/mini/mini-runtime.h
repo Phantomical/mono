@@ -518,6 +518,7 @@ guint32   mono_get_optimizations_for_method (MonoMethod *method, guint32 default
 char*     mono_opt_descr                   (guint32 flags);
 void      mono_set_verbose_level           (guint32 level);
 const char*mono_ji_type_to_string           (MonoJumpInfoType type);
+char*     mono_ji_to_string                 (const MonoJumpInfo *ji);
 void      mono_print_ji                     (const MonoJumpInfo *ji);
 MONO_API void      mono_print_method_from_ip         (void *ip);
 MONO_API char     *mono_pmip                         (void *ip);
