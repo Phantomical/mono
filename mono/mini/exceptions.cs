@@ -901,6 +901,311 @@ class Tests
 		return 0;
 	}
 
+	/*
+	 * ---------------------------------------------------------------- EH N4 (doc 21)
+	 * Depth-2 nested-clause BREADTH, promoted to permanent regression tests. N1/N2/N3
+	 * turned the LLVM tier's nesting gate on for one level of clause containment; N3
+	 * pinned the two sharpest shapes (doc 21 6.1 try/catch/finally, 6.2 finally-in-
+	 * catch). These lock in the rest of the depth-2 surface the N3 adversarial review
+	 * ran throwaway and found tier-1-identical-to-classic: nested try/catch with
+	 * base/derived precedence across the boundary (6.3), nested try/finally cleanup
+	 * order (6.4), a base-type catch enclosed by a finally, value-returning
+	 * finally-in-catch breadth, and an inner try with several invoke ranges under an
+	 * outer finally.
+	 *
+	 * (A sixth shape - a SIBLING catch group enclosed by an outer finally - is
+	 * deliberately NOT here: it uncovered a real tier-1 miscompile in the N1
+	 * enclosing-entry synthesis, where the outer finally runs ONCE PER SIBLING when an
+	 * exception propagates past every sibling. That divergence is escalated for a
+	 * source fix; the repro lives in .claude/scratch/eh-n4/. This shape returns as a
+	 * permanent test once the fix lands.)
+	 *
+	 * Each nesting helper carries a _t1 suffix; a driven run under
+	 *   MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 \
+	 *   MONO_LLVM_METHOD='n4_nested_catch_t1;n4_nested_finally_t1;\
+	 *     n4_base_catch_in_finally_t1;n4_finally_in_catch_multi_t1;\
+	 *     n4_multi_invoke_t1' ./mono --llvm -v exceptions.exe
+	 * forces each onto the tier-1 LLVM path (verbose "LLVM Method ... emitted"). In the
+	 * regression suite the warm-up loops are inert at the default promotion threshold,
+	 * so each is a pure correctness test with the classic JIT as the differential
+	 * oracle - the assertions (which clause runs, in what order, caught vs propagated,
+	 * exception identity, finally side-effects) must hold identically on both tiers.
+	 * C7ExA / C7ExB / C7ExC (: C7ExB) / C7ExD (defined below) are the exception types;
+	 * C7Throw maps 1->A 2->B 3->C 4->D 0->none. Every shape is depth-2 (each inner
+	 * clause has exactly ONE encloser), so the depth-2 gate admits it.
+	 */
+
+	/*
+	 * §6.3 - nested try/catch: inner CATCH(C7ExC, derived) in an outer CATCH(C7ExB,
+	 * base). Base/derived precedence crosses the nesting boundary: the derived type
+	 * hits the inner catch; the base type skips the inner (isinst fails) and the outer
+	 * base catch takes it; an unrelated type propagates. mode 0 no throw, 1 C7ExC,
+	 * 2 C7ExB, 3 C7ExA.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n4_nested_catch_t1 (int mode, int[] log) {
+		int r = 0;
+		try {						/* outer CATCH (C7ExB, base) */
+			try {					/* inner CATCH (C7ExC : C7ExB, derived) */
+				log [++log [0]] = 1;
+				if (mode == 1)
+					throw new C7ExC ();
+				if (mode == 2)
+					throw new C7ExB ();
+				if (mode == 3)
+					throw new C7ExA ();
+				r = 10;
+			} catch (C7ExC) {
+				log [++log [0]] = 2;
+				r = 20;
+			}
+		} catch (C7ExB) {
+			log [++log [0]] = 3;
+			r = 30;
+		}
+		return r;
+	}
+
+	public static int test_0_n4_nested_catch () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n4_nested_catch_t1 (0, log);
+			log [0] = 0; n4_nested_catch_t1 (1, log);
+			log [0] = 0; n4_nested_catch_t1 (2, log);
+			log [0] = 0; try { n4_nested_catch_t1 (3, log); } catch (C7ExA) { }
+		}
+		/* no throw: inner try body, no handler -> r=10, order 1 */
+		log [0] = 0;
+		if (!(n4_nested_catch_t1 (0, log) == 10 && log [0] == 1 && log [1] == 1))
+			return 1;
+		/* derived: inner catch wins across the boundary -> r=20, order 1,2 */
+		log [0] = 0;
+		if (!(n4_nested_catch_t1 (1, log) == 20 && log [0] == 2 && log [1] == 1 && log [2] == 2))
+			return 2;
+		/* base: inner isinst fails, outer base catch takes it -> r=30, order 1,3 */
+		log [0] = 0;
+		if (!(n4_nested_catch_t1 (2, log) == 30 && log [0] == 2 && log [1] == 1 && log [2] == 3))
+			return 3;
+		/* unrelated: neither catch matches, propagates -> order 1 */
+		log [0] = 0;
+		bool prop = false;
+		try { n4_nested_catch_t1 (3, log); } catch (C7ExA) { prop = true; }
+		if (!(prop && log [0] == 1 && log [1] == 1))
+			return 4;
+		return 0;
+	}
+
+	/*
+	 * §6.4 - nested try/finally (both FINALLY). An uncaught throw runs the inner
+	 * finally THEN the outer finally (inner-to-outer cleanup by array order) and then
+	 * propagates; the normal-leave path runs them in the same order. mode 0 no throw,
+	 * 1 throw (uncaught, propagates).
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void n4_nested_finally_t1 (int mode, int[] log) {
+		try {						/* outer FINALLY */
+			try {					/* inner FINALLY */
+				log [++log [0]] = 1;
+				if (mode == 1)
+					throw new C7ExA ();
+			} finally {
+				log [++log [0]] = 2;		/* inner finally */
+			}
+		} finally {
+			log [++log [0]] = 3;		/* outer finally */
+		}
+	}
+
+	public static int test_0_n4_nested_finally () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n4_nested_finally_t1 (0, log);
+			log [0] = 0; try { n4_nested_finally_t1 (1, log); } catch (C7ExA) { }
+		}
+		/* normal leave: inner finally then outer finally -> order 1,2,3 */
+		log [0] = 0;
+		n4_nested_finally_t1 (0, log);
+		if (!(log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 1;
+		/* uncaught: both finallys inner-to-outer as cleanup, then propagates -> order 1,2,3 */
+		log [0] = 0;
+		bool prop = false;
+		try { n4_nested_finally_t1 (1, log); } catch (C7ExA) { prop = true; }
+		if (!(prop && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 2;
+		return 0;
+	}
+
+	/*
+	 * A base-type inner CATCH enclosed by an outer FINALLY: try { try {throw Derived}
+	 * catch (Base) {} } finally {}. The base catch matches the derived throw; the
+	 * finally runs on every path. mode 0 no throw, 1 throw C7ExC (derived, caught by
+	 * the C7ExB base catch), 2 throw C7ExA (unrelated, propagates after the finally).
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n4_base_catch_in_finally_t1 (int mode, int[] log) {
+		int r = 0;
+		try {						/* outer FINALLY */
+			try {					/* inner CATCH (C7ExB, base) */
+				log [++log [0]] = 1;
+				if (mode == 1)
+					throw new C7ExC ();		/* derived -> base catch matches */
+				if (mode == 2)
+					throw new C7ExA ();		/* unrelated -> propagate */
+				r = 10;
+			} catch (C7ExB) {
+				log [++log [0]] = 2;
+				r = 20;
+			}
+		} finally {
+			log [++log [0]] = 3;
+		}
+		return r;
+	}
+
+	public static int test_0_n4_base_catch_in_finally () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n4_base_catch_in_finally_t1 (0, log);
+			log [0] = 0; n4_base_catch_in_finally_t1 (1, log);
+			log [0] = 0; try { n4_base_catch_in_finally_t1 (2, log); } catch (C7ExA) { }
+		}
+		/* no throw: catch skipped, finally on leave -> r=10, order 1,3 */
+		log [0] = 0;
+		if (!(n4_base_catch_in_finally_t1 (0, log) == 10 && log [0] == 2 && log [1] == 1 && log [2] == 3))
+			return 1;
+		/* derived caught by base: catch, then finally on the leave -> r=20, order 1,2,3 */
+		log [0] = 0;
+		if (!(n4_base_catch_in_finally_t1 (1, log) == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 2;
+		/* unrelated: catch skipped, finally as cleanup, propagates -> order 1,3 */
+		log [0] = 0;
+		bool prop = false;
+		try { n4_base_catch_in_finally_t1 (2, log); } catch (C7ExA) { prop = true; }
+		if (!(prop && log [0] == 2 && log [1] == 1 && log [2] == 3))
+			return 3;
+		return 0;
+	}
+
+	/*
+	 * §6.2 breadth - value-returning try/finally inside try/catch with base/derived
+	 * matching. The inner FINALLY owns the landing pad the fault unwinds to; the outer
+	 * base CATCH(C7ExB) routes through it. mode 0 no throw; 1 throw C7ExC (derived,
+	 * matched by the base catch, so the inner finally runs FIRST then the catch sees
+	 * the right object); 2 throw C7ExA (unrelated, inner finally as cleanup then
+	 * propagate). The method returns a value on every path.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n4_finally_in_catch_multi_t1 (int mode, int[] log) {
+		int r = 0;
+		try {						/* outer CATCH (C7ExB, base) */
+			try {					/* inner FINALLY */
+				log [++log [0]] = 1;
+				if (mode == 1)
+					throw new C7ExC ();		/* derived -> matched by base catch */
+				if (mode == 2)
+					throw new C7ExA ();		/* unrelated -> cleanup + propagate */
+				r = 10;
+			} finally {
+				log [++log [0]] = 2;
+			}
+		} catch (C7ExB e) {
+			/* record whether the routed exception object is the derived one */
+			log [++log [0]] = (e is C7ExC) ? 3 : 99;
+			r = 20;
+		}
+		return r;
+	}
+
+	public static int test_0_n4_finally_in_catch_multi () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n4_finally_in_catch_multi_t1 (0, log);
+			log [0] = 0; n4_finally_in_catch_multi_t1 (1, log);
+			log [0] = 0; try { n4_finally_in_catch_multi_t1 (2, log); } catch (C7ExA) { }
+		}
+		/* no throw: finally on leave -> r=10, order 1,2 */
+		log [0] = 0;
+		if (!(n4_finally_in_catch_multi_t1 (0, log) == 10 && log [0] == 2 && log [1] == 1 && log [2] == 2))
+			return 1;
+		/* derived caught by base: inner finally FIRST, then outer catch (right obj) -> r=20, order 1,2,3 */
+		log [0] = 0;
+		if (!(n4_finally_in_catch_multi_t1 (1, log) == 20 && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 3))
+			return 2;
+		/* unrelated: inner finally as cleanup, propagates -> order 1,2 */
+		log [0] = 0;
+		bool prop = false;
+		try { n4_finally_in_catch_multi_t1 (2, log); } catch (C7ExA) { prop = true; }
+		if (!(prop && log [0] == 2 && log [1] == 1 && log [2] == 2))
+			return 3;
+		return 0;
+	}
+
+	/*
+	 * An inner try with MULTIPLE invoke ranges under an outer FINALLY: three separate
+	 * calls in the inner protected region, each a distinct invoke range, each routed
+	 * to the inner CATCH(C7ExB) when it faults. slot 1/2/3 = the i-th call throws
+	 * C7ExB (caught by the inner catch, proving every range is covered); slot 4 = the
+	 * middle call throws C7ExA (unrelated, propagates through the outer finally);
+	 * slot 0 = no throw.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int n4_multi_invoke_t1 (int slot, int[] log) {
+		int r = 0;
+		try {						/* outer FINALLY */
+			try {					/* inner CATCH (C7ExB) */
+				log [++log [0]] = 1;
+				C7Throw (slot == 1 ? 2 : 0);			/* call 1 */
+				log [++log [0]] = 2;
+				C7Throw (slot == 2 ? 2 : (slot == 4 ? 1 : 0));	/* call 2: slot4 -> C7ExA (uncaught) */
+				log [++log [0]] = 3;
+				C7Throw (slot == 3 ? 2 : 0);			/* call 3 */
+				log [++log [0]] = 4;
+				r = 10;
+			} catch (C7ExB) {
+				log [++log [0]] = 5;
+				r = 20;
+			}
+		} finally {
+			log [++log [0]] = 6;
+		}
+		return r;
+	}
+
+	public static int test_0_n4_multi_invoke () {
+		int[] log = new int [8];
+		for (int i = 0; i < 8; i++) {
+			log [0] = 0; n4_multi_invoke_t1 (0, log);
+			log [0] = 0; n4_multi_invoke_t1 (1, log);
+			log [0] = 0; n4_multi_invoke_t1 (2, log);
+			log [0] = 0; n4_multi_invoke_t1 (3, log);
+			log [0] = 0; try { n4_multi_invoke_t1 (4, log); } catch (C7ExA) { }
+		}
+		/* no throw: all three calls inert, finally on leave -> r=10, order 1,2,3,4,6 */
+		log [0] = 0;
+		if (!(n4_multi_invoke_t1 (0, log) == 10 && log [0] == 5 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 4 && log [5] == 6))
+			return 1;
+		/* call 1 faults -> inner catch, finally -> r=20, order 1,5,6 */
+		log [0] = 0;
+		if (!(n4_multi_invoke_t1 (1, log) == 20 && log [0] == 3 && log [1] == 1 && log [2] == 5 && log [3] == 6))
+			return 2;
+		/* call 2 faults -> inner catch, finally -> r=20, order 1,2,5,6 */
+		log [0] = 0;
+		if (!(n4_multi_invoke_t1 (2, log) == 20 && log [0] == 4 && log [1] == 1 && log [2] == 2 && log [3] == 5 && log [4] == 6))
+			return 3;
+		/* call 3 faults -> inner catch, finally -> r=20, order 1,2,3,5,6 */
+		log [0] = 0;
+		if (!(n4_multi_invoke_t1 (3, log) == 20 && log [0] == 5 && log [1] == 1 && log [2] == 2 && log [3] == 3 && log [4] == 5 && log [5] == 6))
+			return 4;
+		/* middle call throws unrelated: inner catch skipped, finally cleanup, propagates -> order 1,2,6 */
+		log [0] = 0;
+		bool prop = false;
+		try { n4_multi_invoke_t1 (4, log); } catch (C7ExA) { prop = true; }
+		if (!(prop && log [0] == 3 && log [1] == 1 && log [2] == 2 && log [3] == 6))
+			return 5;
+		return 0;
+	}
+
 	public static int test_0_byte_cast () {
 		int a;
 		long l;
