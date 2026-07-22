@@ -1231,6 +1231,28 @@ cases_def_cfa (void)
 		i_u8 (&p, DW_CFA_def_cfa_sf); i_uleb (&p, 200); i_sleb (&p, -2);
 		decline_case ("def-cfa-sf-register-out-of-range-declines", &p, 16);
 	}
+	/*
+	 * scale_by_data_align()'s own range check is on the WIRE operand, not the
+	 * scaled result: |off| = 300,000,000 is well inside the 2^31 window, so it
+	 * passes there, but the scaled byte offset off * -8 = 2,400,000,000
+	 * exceeds G_MAXINT32 and is refused by the CFA _sf forms' caller-side
+	 * window instead. These pin that second check for each opcode that reaches
+	 * it, distinct from the "scale itself refuses" cases above.
+	 */
+	{
+		Insn p;
+
+		p.n = 0;
+		i_u8 (&p, DW_CFA_def_cfa_offset_sf); i_sleb (&p, -300000000);
+		decline_case ("def-cfa-offset-sf-scaled-past-int32-declines", &p, 16);
+	}
+	{
+		Insn p;
+
+		p.n = 0;
+		i_u8 (&p, DW_CFA_def_cfa_sf); i_uleb (&p, 6); i_sleb (&p, -300000000);
+		decline_case ("def-cfa-sf-scaled-past-int32-declines", &p, 16);
+	}
 	/* Opcodes that carry no rule are skipped, not refused. */
 	{
 		Insn p;
@@ -2355,6 +2377,21 @@ cases_section_framing (void)
 		expect_decline ("fde-cie-header-truncated-declines", &e, 16);
 	}
 
+	/*
+	 * A CIE with no contents at all: the declared length covers only the id
+	 * field, so there is not even a version byte to read - one entry shorter
+	 * than the "truncated after version" case below, which does have one.
+	 */
+	{
+		memset (&e, 0, sizeof (e));
+		b_u32 (&e, 4);           /* length: id only */
+		b_u32 (&e, 0);           /* CIE id */
+		e.cie_off = 0;
+		e.cie_has_z = FALSE;
+		e.fde_ptr_enc = PE_pcrel | PE_sdata4;
+		build_fde (&e, 16, p.b, p.n);
+		expect_decline ("cie-empty-contents-declines", &e, 16);
+	}
 	/* A CIE truncated immediately after its version byte: the augmentation
 	 * string has no terminator inside the entry. */
 	{
@@ -2399,6 +2436,50 @@ cases_section_framing (void)
 		e.fde_ptr_enc = PE_pcrel | PE_sdata4;
 		build_fde (&e, 16, p.b, p.n);
 		expect_decline ("cie-truncated-before-augmentation-data-declines", &e, 16);
+	}
+	/*
+	 * A CIE truncated right after the return column: unlike the case above,
+	 * not even the augmentation-length uleb itself - which every 'z'
+	 * augmentation carries - is present.
+	 */
+	{
+		memset (&e, 0, sizeof (e));
+		b_u32 (&e, 11);          /* length: id + version + "zR\0" + aligns + column */
+		b_u32 (&e, 0);
+		b_u8 (&e, 1);
+		b_u8 (&e, 'z'); b_u8 (&e, 'R'); b_u8 (&e, 0);
+		b_uleb (&e, 1);                  /* code_align */
+		b_sleb (&e, DATA_ALIGN);         /* data_align */
+		b_u8 (&e, (guint8) PC_REG);      /* return column, and nothing after it */
+		e.cie_off = 0;
+		e.cie_has_z = TRUE;
+		e.fde_ptr_enc = PE_pcrel | PE_sdata4;
+		build_fde (&e, 16, p.b, p.n);
+		expect_decline ("cie-truncated-before-augmentation-length-declines", &e, 16);
+	}
+	/*
+	 * A "zP" CIE whose augmentation length is present and valid but exactly
+	 * zero: the aug-length read itself succeeds, then the 'P' letter's own
+	 * personality-encoding byte read fails because there is nothing left,
+	 * distinct from the generic post-switch check the 'R' cases above exercise
+	 * (case 'P' checks the reader itself, inline, right after reading the
+	 * encoding byte).
+	 */
+	{
+		memset (&e, 0, sizeof (e));
+		b_u32 (&e, 12);          /* id + version + "zP\0" + aligns + column + auglen(0) */
+		b_u32 (&e, 0);
+		b_u8 (&e, 1);
+		b_u8 (&e, 'z'); b_u8 (&e, 'P'); b_u8 (&e, 0);
+		b_uleb (&e, 1);                  /* code_align */
+		b_sleb (&e, DATA_ALIGN);         /* data_align */
+		b_u8 (&e, (guint8) PC_REG);      /* return column */
+		b_uleb (&e, 0);                  /* augmentation length: zero */
+		e.cie_off = 0;
+		e.cie_has_z = TRUE;
+		e.fde_ptr_enc = PE_pcrel | PE_sdata4;
+		build_fde (&e, 16, p.b, p.n);
+		expect_decline ("cie-personality-encoding-truncated-declines", &e, 16);
 	}
 	/* An FDE whose absolute (8-byte) initial_location is cut in half. */
 	{
@@ -2466,6 +2547,28 @@ cases_section_framing (void)
 			b_u8 (&e, DW_CFA_nop);
 		memcpy (e.buf + len_off, &(guint32){ e.len - start }, 4);
 		expect_decline ("fde-augmentation-length-past-entry-end-declines", &e, 16);
+	}
+	/*
+	 * An FDE whose declared contents end immediately after address_range: the
+	 * standard CIE has a 'z' augmentation, so its FDEs always carry an
+	 * augmentation-length byte, and here there is none at all - not even one
+	 * that overruns, as above.
+	 */
+	{
+		int len_off, start;
+
+		memset (&e, 0, sizeof (e));
+		std_cie (&e);
+		len_off = e.len;
+		b_u32 (&e, 0);                              /* length, patched below */
+		start = e.len;
+		b_u32 (&e, (guint32)(e.len - e.cie_off));    /* cie pointer */
+		e.pcbegin_off = e.len;
+		b_u32 (&e, 0x100);                           /* initial_location, pcrel */
+		e.code_start = e.buf + e.pcbegin_off + 0x100;
+		b_u32 (&e, 16);                              /* address_range, nothing after it */
+		memcpy (e.buf + len_off, &(guint32){ e.len - start }, 4);
+		expect_decline ("fde-truncated-before-augmentation-length-declines", &e, 16);
 	}
 }
 

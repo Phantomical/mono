@@ -590,6 +590,164 @@ cases_negative (void)
 		expect_decline ("filter-action-declines", b, sizeof b);
 	}
 
+	/*
+	 * ttbase landing before the action table (lsda.cpp action_end < action_table).
+	 * tt_off = 0 puts ttbase immediately after the tt_off uleb itself - i.e. at
+	 * the cs_enc byte, well before cs_end (the action table start) once even one
+	 * 4-byte call-site record is present. action_end (= ttbase here) < action_table
+	 * (= cs_end) must trigger.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0x00, 0x00,       /* lp omit; tt absptr; tt_off = 0 -> ttbase = cs_enc byte */
+			0x01, 0x04,             /* cs enc uleb; cs len = 4 */
+			0x00, 0x00, 0x00, 0x00, /* one call site: start=0 len=0 lp=0 action=0 */
+		};
+		expect_decline ("ttype-base-before-action-table-declines", b, sizeof b);
+	}
+
+	/*
+	 * Overlong ULEB128 clamp (Reader::uleb). cs_len is encoded with 10
+	 * continuation bytes (payload 0) followed by an 11th byte whose low 7 bits
+	 * are nonzero: by the 11th byte shift has reached 70 (>= 64), so that byte's
+	 * nonzero low bits must hit the "shift >= 64 but more data bits" decline
+	 * (the "else if (b & 0x7f)" branch) rather than being silently OR'd in.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0xff, 0x01,       /* lp omit; tt omit; cs enc uleb */
+			0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, /* 10 continuation bytes */
+			0x01,                   /* 11th byte: shift==70, nonzero low7 -> decline */
+		};
+		expect_decline ("overlong-uleb-declines", b, sizeof b);
+	}
+
+	/*
+	 * Same overlong cs_len ULEB128, but the 11th byte keeps the continuation bit
+	 * set with a zero payload: no immediate "else if" trip, but the shift the
+	 * loop then advances to (77) exceeds the clamp's 70 limit, so this must
+	 * decline via the separate "shift > 70" guard.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0xff, 0x01,
+			0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+			0x80,                   /* 11th byte: still continuation -> shift 77 > 70 */
+		};
+		expect_decline ("overlong-uleb-shift-clamp-declines", b, sizeof b);
+	}
+
+	/*
+	 * Overlong SLEB128 clamp (Reader::sleb), in an action record's ttype field.
+	 * One catch call site (action=1) whose action record's first field (ttype)
+	 * is the same shape of overlong encoding as above: 10 zero-payload
+	 * continuation bytes then an 11th byte with nonzero low 7 bits -> the
+	 * "(b & 0x7f) != 0 && (b & 0x7f) != 0x7f" decline at shift==70.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0xff, 0x01, 0x04, /* lp omit; tt omit; cs enc uleb; cs len = 4 */
+			0x00, 0x04, 0x00, 0x01, /* one call site: start=0 len=4 lp=0 action=1 */
+			0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, /* ttype: 10 cont. bytes */
+			0x01,                   /* 11th byte: shift==70, nonzero low7 -> decline */
+		};
+		expect_decline ("overlong-sleb-action-declines", b, sizeof b);
+	}
+
+	/*
+	 * Same overlong action-record ttype SLEB128, but the 11th byte is again a
+	 * zero-payload continuation byte, so the failure must instead come from the
+	 * sleb clamp's own "shift > 70" guard.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0xff, 0x01, 0x04,
+			0x00, 0x04, 0x00, 0x01,
+			0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+			0x80,                   /* 11th byte: still continuation -> shift 77 > 70 */
+		};
+		expect_decline ("overlong-sleb-action-shift-clamp-declines", b, sizeof b);
+	}
+
+	/*
+	 * resolve_action_chain: next_disp targets exactly one past the action
+	 * table's last valid offset (disp_field - at + disp == span). One catch call
+	 * site (action=1) whose lone action record is {ttype=0 (cleanup), disp=1}:
+	 * the disp field sits at action-table offset 1, so target = 1 + 1 = 2, and
+	 * the action table (built to be exactly 2 bytes, i.e. span == 2) ends
+	 * exactly there - one past its last valid offset (1). The >= span bound
+	 * must reject it even though it is only one step out of range.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0xff, 0x01, 0x04, /* lp omit; tt omit; cs enc uleb; cs len = 4 */
+			0x00, 0x04, 0x01, 0x01, /* one call site: start=0 len=4 lp=1 action=1 */
+			0x00, 0x01,             /* action rec @0: ttype=0 (cleanup), disp sleb = 1 */
+		};
+		expect_decline ("action-chain-disp-past-table-declines", b, sizeof b);
+	}
+
+	/*
+	 * resolve_action_chain: the action record is truncated after its ttype
+	 * field, leaving zero bytes for next_disp. tt_off is crafted so ttbase sits
+	 * exactly ONE byte past the action table start (span == 1): reading the
+	 * ttype sleb (a single 0x00 byte) succeeds and consumes that one byte, but
+	 * the subsequent next_disp read then has nothing left and must fail.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0x00, 0x07,       /* lp omit; tt absptr; tt_off = 7 -> ttbase = action_table+1 */
+			0x01, 0x04,             /* cs enc uleb; cs len = 4 */
+			0x00, 0x04, 0x00, 0x01, /* one call site: start=0 len=4 lp=0 action=1 */
+			0x00,                   /* the lone action-table byte: ttype=0; no room for disp */
+		};
+		expect_decline ("action-record-truncated-declines", b, sizeof b);
+	}
+
+	/*
+	 * decode_gcc_except_table: a call-site field that does not fit in guint32.
+	 * "start" is ULEB128-encoded as 2^32 (0x1_0000_0000: five bytes,
+	 * 0x80 0x80 0x80 0x80 0x10), one past UINT32_MAX; everything else in the
+	 * record is minimal/valid.
+	 */
+	{
+		std::uint8_t b [] = {
+			0xff, 0xff, 0x01, 0x08, /* lp omit; tt omit; cs enc uleb; cs len = 8 */
+			0x80, 0x80, 0x80, 0x80, 0x10, /* start = 2^32 (5-byte uleb) */
+			0x00, 0x00, 0x00,             /* length=0 lp=0 action=0 */
+		};
+		expect_decline ("call-site-start-exceeds-uint32-declines", b, sizeof b);
+	}
+
+	/* Same, but it is "landing_pad" (the third disjunct) that exceeds UINT32_MAX. */
+	{
+		std::uint8_t b [] = {
+			0xff, 0xff, 0x01, 0x08,
+			0x00, 0x00,                   /* start=0 length=0 */
+			0x80, 0x80, 0x80, 0x80, 0x10, /* landing_pad = 2^32 (5-byte uleb) */
+			0x00,                          /* action=0 */
+		};
+		expect_decline ("call-site-landing-pad-exceeds-uint32-declines", b, sizeof b);
+	}
+
+	/*
+	 * Truncation exactly at the cs_enc read: the buffer ends right after the
+	 * (omitted) TType field, before the call-site encoding byte is present.
+	 */
+	{
+		std::uint8_t b [] = { 0xff, 0xff }; /* lp omit; tt omit; nothing more */
+		expect_decline ("cs-encoding-truncated-declines", b, sizeof b);
+	}
+
+	/*
+	 * Truncation exactly at the cs_len read: cs_enc is present and valid (uleb),
+	 * but the buffer ends before cs_len's uleb byte.
+	 */
+	{
+		std::uint8_t b [] = { 0xff, 0xff, 0x01 }; /* lp omit; tt omit; cs enc uleb; no cs_len */
+		expect_decline ("cs-length-truncated-declines", b, sizeof b);
+	}
+
 	/* Empty buffer and a null pointer must both decline without touching memory. */
 	{
 		ParsedLsda out;
@@ -761,6 +919,17 @@ expect_parse_decline (const char *what, const std::uint8_t *data, std::size_t le
 		printf ("ok   %s (declined)\n", what);
 	}
 }
+
+/*
+ * parse_mono_lsda's final "unreachable given exact-size, but bounds-honest"
+ * !r.ok() check (mono_lsda.cpp 164-165) is not exercised as a standalone case:
+ * the exact-size check just above it already guarantees size == 8 + count*16,
+ * so every u32() read in the entry loop always has its 4 bytes available and
+ * that branch cannot be reached through the section's byte layout alone (it
+ * would need an injectable Reader to force ok()==false mid-loop despite a
+ * passing exact-size check). That is overkill for this format; the check
+ * stays as defensive bounds-honesty, acknowledged here rather than tested.
+ */
 
 static void
 cases_mono_lsda_parse (void)
@@ -1007,6 +1176,26 @@ cases_mono_lsda_build (void)
 	expect_build_decline ("build-try-end-past-code",
 		{ { code_len - 0x10, 0x20, 0x40, 0 } }, clauses, 2);
 
+	/*
+	 * The 64-bit-sum guard, adversarially: try_start_off + try_len is chosen so
+	 * a 32-bit-wrapped sum would wrongly stay in range (0xFFFFFFF0 + 0x20 wraps
+	 * mod 2^32 to 0x10, comfortably under code_len), but the true 64-bit sum
+	 * (0x100000010) correctly exceeds code_len (set to 0xFFFFFFFF for this one
+	 * call only). This must still decline.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 0xFFFFFFF0u, 0x20u, 0x40u, 0 } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-try-range-32bit-overflow";
+		cases_run ++;
+		if (mono::build_ex_info (ents, clauses, 2, base, 0xFFFFFFFFu, out)) {
+			printf ("FAIL build-try-range-32bit-overflow: accepted entries that should decline\n");
+			failures ++;
+		} else {
+			printf ("ok   build-try-range-32bit-overflow (declined)\n");
+		}
+	}
+
 	/* handler_off == code_len (past the code). */
 	expect_build_decline ("build-handler-past-code",
 		{ { 0x10, 0x08, code_len, 0 } }, clauses, 2);
@@ -1015,12 +1204,58 @@ cases_mono_lsda_build (void)
 	expect_build_decline ("build-clause-index-out-of-range",
 		{ { 0x10, 0x08, 0x40, 5 } }, clauses, 2);
 
+	/*
+	 * The vacuous no-EH-method path: no clause table and no entries is a
+	 * trivial accept (the num_clauses>0-with-no-entries fail-safe does not
+	 * apply when there IS no clause table), producing an empty published array.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents;
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-no-clauses-no-entries-accept";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, nullptr, 0, base, code_len, out);
+		if (!ok || !out.empty ()) {
+			printf ("FAIL build-no-clauses-no-entries-accept: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-no-clauses-no-entries-accept (0 ei)\n");
+		}
+	}
+
+	/*
+	 * A clauseless method (num_clauses == 0, clauses == nullptr) can never
+	 * publish an entry, however well-formed that entry otherwise is - the
+	 * clause_index guard treats num_clauses <= 0 as "no clause table" and
+	 * declines every entry without ever dereferencing the null clauses pointer.
+	 */
+	expect_build_decline ("build-no-clauses-with-entry-declines",
+		{ { 0x10, 0x08, 0x40, 0 } }, nullptr, 0);
+
 	/* A clause whose flags != CLAUSE_NONE (finally slipped the gate). */
 	{
 		MonoExceptionClause bad [1];
 		memset (bad, 0, sizeof (bad));
 		bad[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
 		expect_build_decline ("build-non-none-clause-flags",
+			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
+	}
+
+	/* Same non-none-flags gate, for a filter clause. */
+	{
+		MonoExceptionClause bad [1];
+		memset (bad, 0, sizeof (bad));
+		bad[0].flags = MONO_EXCEPTION_CLAUSE_FILTER;
+		expect_build_decline ("build-filter-clause-flags-declines",
+			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
+	}
+
+	/* Same non-none-flags gate, for a fault clause. */
+	{
+		MonoExceptionClause bad [1];
+		memset (bad, 0, sizeof (bad));
+		bad[0].flags = MONO_EXCEPTION_CLAUSE_FAULT;
+		expect_build_decline ("build-fault-clause-flags-declines",
 			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
 	}
 
@@ -1169,6 +1404,142 @@ cases_mono_lsda_build (void)
 	}
 }
 
+/* ------------------------------------------------------------ publish cases */
+
+/*
+ * publish_mono_lsda is the thin MonoCompile-aware wrapper over build_ex_info:
+ * it joins cfg->header->clauses[] into the entries, and on success allocates
+ * cfg->llvm_ex_info[] from cfg->mempool and sets cfg->llvm_ex_info_len; on
+ * decline it must leave cfg entirely untouched (CAP-EH-0: the caller falls
+ * back to the classic JIT without a half-written cfg). These cases drive it
+ * with a real MonoMethodHeader/MonoCompile pair instead of calling
+ * build_ex_info directly, pinning that wiring.
+ */
+static void
+cases_mono_lsda_publish (void)
+{
+	const std::uint32_t code_len = 0x100;
+	std::vector<std::uint8_t> code (code_len, 0);
+	const std::uint8_t *base = code.data ();
+
+	MonoExceptionClause clauses [2];
+	memset (clauses, 0, sizeof (clauses));
+	clauses[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+	clauses[0].data.catch_class = CC0;
+	clauses[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+	clauses[1].data.catch_class = CC1;
+
+	MonoMethodHeader header;
+	memset (&header, 0, sizeof (header));
+	header.num_clauses = 2;
+	header.clauses = clauses;
+
+	MonoMemPool *pool = mono_mempool_new ();
+
+	/*
+	 * (1) Happy path: two valid disjoint entries against a real cfg/header pair
+	 * publish exactly what build_ex_info would produce for the same inputs
+	 * (cross-checked against cases_mono_lsda_build's equivalent vectors).
+	 */
+	{
+		MonoCompile cfg;
+		memset (&cfg, 0, sizeof (cfg));
+		cfg.mempool = pool;
+		cfg.header = &header;
+
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x20, 0x40, 0 }, /* [0x10,0x30) -> handler 0x40, clause 0 */
+			{ 0x50, 0x10, 0x80, 1 }, /* [0x50,0x60) -> handler 0x80, clause 1 */
+		};
+		current_case = "publish-valid-two-clause";
+		cases_run ++;
+		bool ok = mono::publish_mono_lsda (&cfg, ents, base, code_len);
+		bool good = ok && cfg.llvm_ex_info_len == 2 && cfg.llvm_ex_info != nullptr;
+		if (good) {
+			const MonoJitExceptionInfo &e0 = cfg.llvm_ex_info [0];
+			const MonoJitExceptionInfo &e1 = cfg.llvm_ex_info [1];
+			good =
+				e0.clause_index == 0 &&
+				e0.try_start == (gpointer) (base + 0x10) &&
+				e0.try_end == (gpointer) (base + 0x30) &&
+				e0.handler_start == (gpointer) (base + 0x40) &&
+				e0.data.catch_class == CC0 &&
+				e1.clause_index == 1 &&
+				e1.try_start == (gpointer) (base + 0x50) &&
+				e1.try_end == (gpointer) (base + 0x60) &&
+				e1.handler_start == (gpointer) (base + 0x80) &&
+				e1.data.catch_class == CC1;
+		}
+		if (!good) {
+			printf ("FAIL publish-valid-two-clause: ok=%d len=%u ptr=%p\n",
+			        ok, cfg.llvm_ex_info_len, (void*) cfg.llvm_ex_info);
+			failures ++;
+		} else {
+			printf ("ok   publish-valid-two-clause (cfg.llvm_ex_info_len=2)\n");
+		}
+	}
+
+	/*
+	 * (2) Decline path: an entry whose clause_index (5) is out of range for the
+	 * 2-entry clause table, which build_ex_info must reject. cfg's
+	 * llvm_ex_info/llvm_ex_info_len are pre-set to sentinel values before the
+	 * call; publish_mono_lsda must return false AND leave cfg completely
+	 * untouched (no partial write of either field).
+	 */
+	{
+		MonoCompile cfg;
+		memset (&cfg, 0, sizeof (cfg));
+		cfg.mempool = pool;
+		cfg.header = &header;
+		cfg.llvm_ex_info = (MonoJitExceptionInfo *) (std::uintptr_t) 0xdeadbeefu;
+		cfg.llvm_ex_info_len = 99;
+
+		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 5 } };
+		current_case = "publish-decline-leaves-cfg-untouched";
+		cases_run ++;
+		bool ok = mono::publish_mono_lsda (&cfg, ents, base, code_len);
+		bool good = !ok &&
+			cfg.llvm_ex_info == (MonoJitExceptionInfo *) (std::uintptr_t) 0xdeadbeefu &&
+			cfg.llvm_ex_info_len == 99;
+		if (!good) {
+			printf ("FAIL publish-decline-leaves-cfg-untouched: ok=%d ptr=%p len=%u\n",
+			        ok, (void*) cfg.llvm_ex_info, cfg.llvm_ex_info_len);
+			failures ++;
+		} else {
+			printf ("ok   publish-decline-leaves-cfg-untouched (declined, cfg unchanged)\n");
+		}
+	}
+
+	/*
+	 * (3) cfg->header == nullptr (no IL clause table at all) with no entries:
+	 * num_clauses collapses to 0 and clauses to nullptr (the ternary at the top
+	 * of publish_mono_lsda), which is the vacuous accept case - and since the
+	 * built array is empty, the n==0 branch must skip the mempool allocation
+	 * entirely, leaving llvm_ex_info null.
+	 */
+	{
+		MonoCompile cfg;
+		memset (&cfg, 0, sizeof (cfg));
+		cfg.mempool = pool;
+		cfg.header = nullptr;
+
+		std::vector<MonoLsdaEntry> ents;
+		current_case = "publish-no-header-empty-entries";
+		cases_run ++;
+		bool ok = mono::publish_mono_lsda (&cfg, ents, base, code_len);
+		bool good = ok && cfg.llvm_ex_info == nullptr && cfg.llvm_ex_info_len == 0;
+		if (!good) {
+			printf ("FAIL publish-no-header-empty-entries: ok=%d ptr=%p len=%u\n",
+			        ok, (void*) cfg.llvm_ex_info, cfg.llvm_ex_info_len);
+			failures ++;
+		} else {
+			printf ("ok   publish-no-header-empty-entries (llvm_ex_info_len=0)\n");
+		}
+	}
+
+	mono_mempool_destroy (pool);
+}
+
 /* ------------------------------------------------------------ entry point */
 
 #ifdef __cplusplus
@@ -1191,6 +1562,7 @@ test_llvm_ehtable_main (void)
 	cases_negative ();
 	cases_mono_lsda_parse ();
 	cases_mono_lsda_build ();
+	cases_mono_lsda_publish ();
 
 	printf ("%d cases run, %d failed\n", cases_run, failures);
 	return failures ? 1 : 0;

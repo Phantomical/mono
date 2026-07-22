@@ -71,6 +71,33 @@ if !DISABLE_DEBUGGER_AGENT
 mini_libs += $(monodir)/mono/mini/libmono-dbg.la
 endif
 
+# mini_libs/sgen_libs above name .la files built by OTHER top-level
+# directories (mono/mini, mono/metadata, mono/sgen, mono/utils). Recursive
+# make only tracks dependencies within the current directory's own Makefile:
+# listing a foreign .la in _LDADD makes automake treat it as a *prerequisite*
+# (so the link rule reruns if its mtime changes), but nothing here ever tells
+# make to go check whether that .la itself needs rebuilding first. In
+# practice that means `make -C mono/unit-tests check` can silently link
+# against a stale libmini.la after e.g. mono/mini/llvm/lsda.cpp changes,
+# unless someone has separately run `make` under mono/mini since - the same
+# hazard the llvm_config.mk rule below works around for the LLVM back end.
+# Force the recursion unconditionally on every build; the sub-make in each
+# target directory still does its own up-to-date check, so this costs a
+# no-op sub-make invocation when nothing changed.
+.PHONY: unit-tests-force-foreign-libs
+$(monodir)/mono/mini/libmini.la: unit-tests-force-foreign-libs
+	$(MAKE) -C $(monodir)/mono/mini libmini.la
+$(monodir)/mono/mini/libmono-ee-interp.la: unit-tests-force-foreign-libs
+	$(MAKE) -C $(monodir)/mono/mini libmono-ee-interp.la
+$(monodir)/mono/mini/libmono-dbg.la: unit-tests-force-foreign-libs
+	$(MAKE) -C $(monodir)/mono/mini libmono-dbg.la
+$(monodir)/mono/metadata/libmonoruntimesgen.la: unit-tests-force-foreign-libs
+	$(MAKE) -C $(monodir)/mono/metadata libmonoruntimesgen.la
+$(monodir)/mono/sgen/libmonosgen.la: unit-tests-force-foreign-libs
+	$(MAKE) -C $(monodir)/mono/sgen libmonosgen.la
+$(monodir)/mono/utils/libmonoutils.la: unit-tests-force-foreign-libs
+	$(MAKE) -C $(monodir)/mono/utils libmonoutils.la
+
 CFLAGS = $(filter-out @CXX_REMOVE_CFLAGS@, @CFLAGS@)
 
 if !CROSS_COMPILE
