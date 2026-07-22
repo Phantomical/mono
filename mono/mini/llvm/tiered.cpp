@@ -37,6 +37,14 @@
 #include <mono/utils/atomic.h>
 #include "backend.h"
 
+/*
+ * Declared here rather than via <mono/metadata/gc-internals.h>: that header is
+ * not wrapped for C++ linkage, so including it from this C++ TU would mangle the
+ * C symbols it declares. This is the only symbol we need from it. (Same
+ * local-declaration pattern mini-runtime.c uses for mono_llvm_tiered_domain_unload.)
+ */
+extern "C" gboolean mono_gc_is_finalizer_internal_thread (MonoInternalThread *thread);
+
 enum TierState {
 	/* queued or compiling; tier 0 is the current body */
 	TIER_STATE_TIER0 = 0,
@@ -585,6 +593,32 @@ tiered_try_drain (void)
 	 */
 	thread = mono_thread_internal_current ();
 	if (!thread || !mono_thread_internal_has_appdomain_ref (thread, domain))
+		return;
+
+	/*
+	 * NEVER run a tier-1 promotion on the finalizer thread.
+	 *
+	 * A promotion is a full mini_method_compile with JIT_FLAG_RUN_CCTORS
+	 * (mini_tiered_promote): it runs LLVM codegen AND executes class
+	 * initializers. The finalizer thread must do neither - it is a background
+	 * runtime thread that may be made to enter an arbitrary object's (possibly
+	 * doomed) domain with no ref of its own, and running cctors / LLVM codegen
+	 * there is exactly what the "no cctors on the compilation thread" invariant
+	 * forbids. The appdomain-ref gate above does NOT exclude it: a finalizer
+	 * that finalizes a live root-domain object legitimately holds a root-domain
+	 * ref, so without this check the finalizer thread LLVM-compiles finalizer
+	 * bodies - and, when that compilation overlaps process teardown, faults in
+	 * LLVM Value::setName (the ~40% SIGSEGV the F4 abort-guard's changed timing
+	 * exposed).
+	 *
+	 * The entries are left queued, not dropped (like every other gate here):
+	 * the queue is global and per-domain, so the next drain on a NON-finalizer
+	 * thread in this domain - the main thread, which drains on every compile_end
+	 * and threshold crossing - promotes them normally, on a thread that may run
+	 * cctors. A method only ever reached from the finalizer simply stays at its
+	 * correct, working tier-0 body, which is the intended outcome.
+	 */
+	if (mono_gc_is_finalizer_internal_thread (thread))
 		return;
 
 	/*
