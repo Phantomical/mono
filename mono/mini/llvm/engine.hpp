@@ -40,6 +40,9 @@ class Module;
 namespace object {
 class ObjectFile;
 } // namespace object
+namespace jitlink {
+class LinkGraph;
+} // namespace jitlink
 } // namespace llvm
 
 namespace mono {
@@ -327,7 +330,7 @@ private:
  * count as unsafe - an exhaustive classification over the x86-64 psABI set - is
  * documented on x86_64_reloc_truncates_address() in engine.cpp.
  *
- * These three entry points are part of the intra-directory interface only
+ * These four entry points are part of the intra-directory interface only
  * because mono/unit-tests/test-llvm-engine.cpp drives them; nothing outside
  * mono/mini/llvm/ and that test may use them.
  */
@@ -356,6 +359,17 @@ RelocAudit audit_relocations (const llvm::object::ObjectFile &obj);
  * from the object layer's NotifyLoaded hook.
  */
 RelocAudit jit_reloc_audit ();
+
+/*
+ * Runs accumulate_reloc_audit_from_graph()'s classification (engine.cpp) over
+ * a caller-built LinkGraph and returns the per-graph tally WITHOUT touching
+ * the process-global jit_reloc_audit() accumulator. Test-only: it exists so
+ * mono/unit-tests/test-llvm-engine.cpp can exercise the graph-boundary
+ * predicate directly against a hand-built LinkGraph (same-graph cross-section,
+ * external, absolute, ...) instead of only observing it indirectly through a
+ * real compile, the way test_reloc_widths does.
+ */
+RelocAudit audit_relocations_graph (llvm::jitlink::LinkGraph &g);
 
 /* ---- eh-frame registry (test-only) ---------------------------------------
  *

@@ -59,6 +59,8 @@
 #include <string>
 #include <vector>
 
+#include <llvm/ExecutionEngine/JITLink/JITLink.h>
+#include <llvm/ExecutionEngine/JITLink/x86_64.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -898,6 +900,146 @@ built_expect:
 	return TEST_PASS;
 }
 
+/*
+ * Closes JL1 review finding #1: mono::audit_relocations_graph() (engine.hpp) -
+ * the test-only accessor to accumulate_reloc_audit_from_graph()'s
+ * classification (engine.cpp) - is exercised directly against hand-built
+ * jitlink::LinkGraphs, one per shape, rather than only indirectly through a
+ * real compile (test_reloc_widths's third part, which proves the accumulator
+ * is wired up but cannot target a specific cross-boundary shape - only
+ * observe whatever a real method happens to produce).
+ *
+ * Content bytes are irrelevant here - the classifier reads only edge Kind and
+ * target metadata (defined/external/absolute), never block content - so every
+ * block below is a zero-filled dummy buffer.
+ *
+ * The five shapes are exactly the design's re-spec of the graph-boundary
+ * predicate (host_target_machine_builder()'s doc comment in engine.cpp):
+ *   1. same-graph, cross-SECTION, narrow kind: NOT truncating. This is the
+ *      shape the predicate fix changes the answer for - the dropped clause
+ *      (target in a different section than the referring block) used to flag
+ *      this.
+ *   2. same-graph, SAME-section, narrow kind: not truncating either way - a
+ *      regression guard that the pre-existing intra-section carve-out
+ *      survives the fix.
+ *   3. external target, narrow kind: truncating - unchanged by the fix, and
+ *      the shape a real bug (a pass emitting a raw narrow edge straight to an
+ *      external Symbol, bypassing PLTTableManager) would look like.
+ *   4. external target, Pointer64: never truncating - x86_64_edge_kind_truncates()
+ *      classifies Pointer64 as full-width regardless of target, so this is a
+ *      negative control on the KIND check, independent of the boundary check.
+ *   5. absolute target, narrow kind: truncating - unchanged by the fix; the
+ *      shape doc 26 P5's Medium+PIC _GLOBAL_OFFSET_TABLE_-resolves-to-0
+ *      failure would have looked like structurally.
+ */
+static TestResult
+test_graph_audit_cross_boundary (MonoLLVMJIT *jit)
+{
+	(void) jit;
+
+	using namespace llvm::jitlink;
+	Triple tt ("x86_64-unknown-linux-gnu");
+	static const char dummy[16] = {};
+
+	auto make_block = [&] (LinkGraph &g, Section &sec, orc::ExecutorAddr addr) -> Block & {
+		return g.createContentBlock (sec, ArrayRef<char> (dummy, sizeof (dummy)),
+		                             addr, 1, 0);
+	};
+
+	/* Case 1: same-graph, cross-section, narrow (Delta32) -> not truncating. */
+	{
+		LinkGraph g ("case1", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
+		auto &data = g.createSection (".data", orc::MemProt::Read | orc::MemProt::Write);
+		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
+		Block &dst = make_block (g, data, orc::ExecutorAddr (0x2000));
+		Symbol &target = g.addDefinedSymbol (dst, 0, "data_target", 8,
+		                                     Linkage::Strong, Scope::Default, false, true);
+		src.addEdge (x86_64::Delta32, 0, target, 0);
+
+		mono::RelocAudit audit = mono::audit_relocations_graph (g);
+		CHECK (audit.total == 1);
+		CHECK (audit.truncating == 0);
+	}
+
+	/* Case 2: same-graph, same-section, narrow (Delta32) -> not truncating. */
+	{
+		LinkGraph g ("case2", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
+		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
+		Block &dst = make_block (g, text, orc::ExecutorAddr (0x1100));
+		Symbol &target = g.addDefinedSymbol (dst, 0, "text_target", 8,
+		                                     Linkage::Strong, Scope::Default, true, true);
+		src.addEdge (x86_64::Delta32, 0, target, 0);
+
+		mono::RelocAudit audit = mono::audit_relocations_graph (g);
+		CHECK (audit.total == 1);
+		CHECK (audit.truncating == 0);
+	}
+
+	/* Case 3: external target, narrow (BranchPCRel32) -> truncating. */
+	{
+		LinkGraph g ("case3", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
+		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
+		Symbol &target = g.addExternalSymbol ("ext_narrow", 0, false);
+		src.addEdge (x86_64::BranchPCRel32, 0, target, 0);
+
+		mono::RelocAudit audit = mono::audit_relocations_graph (g);
+		CHECK (audit.total == 1);
+		CHECK (audit.truncating == 1);
+		CHECK (!audit.first_offender.empty ());
+	}
+
+	/* Case 4: external target, Pointer64 -> never truncating. */
+	{
+		LinkGraph g ("case4", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
+		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
+		Symbol &target = g.addExternalSymbol ("ext_wide", 0, false);
+		src.addEdge (x86_64::Pointer64, 0, target, 0);
+
+		mono::RelocAudit audit = mono::audit_relocations_graph (g);
+		CHECK (audit.total == 1);
+		CHECK (audit.truncating == 0);
+	}
+
+	/* Case 5: absolute target, narrow (BranchPCRel32) -> truncating. */
+	{
+		LinkGraph g ("case5", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
+		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
+		Symbol &target = g.addAbsoluteSymbol ("abs_narrow", orc::ExecutorAddr (0x600000000000),
+		                                      0, Linkage::Strong, Scope::Default, true);
+		src.addEdge (x86_64::BranchPCRel32, 0, target, 0);
+
+		mono::RelocAudit audit = mono::audit_relocations_graph (g);
+		CHECK (audit.total == 1);
+		CHECK (audit.truncating == 1);
+	}
+
+	/*
+	 * Non-x86-64 graph: left entirely unclassified (all-zero), matching
+	 * audit_relocations ()'s contract - an all-zero audit is "did not look",
+	 * not "looked and found nothing".
+	 */
+	{
+		Triple arm_tt ("aarch64-unknown-linux-gnu");
+		LinkGraph g ("case_non_x86_64", arm_tt, 8, llvm::endianness::little,
+		            x86_64::getEdgeKindName);
+		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
+		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
+		Symbol &target = g.addExternalSymbol ("ext_on_other_arch", 0, false);
+		src.addEdge (x86_64::BranchPCRel32, 0, target, 0);
+
+		mono::RelocAudit audit = mono::audit_relocations_graph (g);
+		CHECK (audit.total == 0);
+		CHECK (audit.truncating == 0);
+	}
+
+	return TEST_PASS;
+}
+
 /* ------------------------------------------------ .gcc_except_table (EH) */
 
 /*
@@ -1483,14 +1625,30 @@ test_gcc_except_table (MonoLLVMJIT *jit)
 	/* ---- M1-decode assertion on the captured bytes ---- */
 	{
 		/*
-		 * Under the engine's effective (Large) code model, real LLVM-18 emits the
-		 * TType table as DW_EH_PE_absptr (0x00): 8-byte ABSOLUTE ttype entries
-		 * relocated with R_X86_64_64 (which is why R5 finds no truncating reloc) -
-		 * not the DW_EH_PE_udata4 (0x03, 4-byte) form clang -mcmodel=small produces.
-		 * Slice M2.1b extended M1 (lsda.cpp) to accept absptr, so the real captured
-		 * table now DECODES. Assert that here: the decoder must accept it and report
-		 * ttype_encoding == 0x00 (M2.3 reads that to size the 8-byte entries when it
-		 * dereferences the loaded ttype table).
+		 * Real LLVM-18 x86-64 chooses the .gcc_except_table TType encoding purely
+		 * from isPositionIndependent() (TargetLoweringObjectFileImpl.cpp), independent
+		 * of code model. Before J5 the engine ran JIT-default Static+Large, which
+		 * emitted DW_EH_PE_absptr (0x00): 8-byte ABSOLUTE ttype entries relocated
+		 * with R_X86_64_64 (why R5 found no truncating reloc) - the one absolute
+		 * form mono::decode_gcc_except_table (lsda.cpp) accepts alongside
+		 * DW_EH_PE_udata4. J5 (Small+PIC) makes isPositionIndependent() true, which
+		 * switches this to DW_EH_PE_indirect|pcrel|sdata4 (0x9b): each ttype entry
+		 * becomes a signed pcrel offset to a GOT slot holding the real pointer,
+		 * rather than the pointer itself. lsda.cpp's decoder EXPLICITLY, and by
+		 * design (CAP-EH-0, doc comment in lsda.cpp/lsda.hpp - and regression-locked
+		 * by test-llvm-ehtable.cpp's ttype-encoding-indirect-declines case) declines
+		 * that form rather than guess at the extra indirection: "never produce a
+		 * plausible-but-wrong table" is exactly as true when the table is the new
+		 * common case as when it was the theoretical one. So under J5 the M1
+		 * decoder DECLINES the real captured table - correctly, safely, and as
+		 * designed, not as a regression. This is the concrete, load-bearing
+		 * instance of a fact worth flagging for whoever picks up M2: the
+		 * .gcc_except_table-based EH port cannot proceed against the Small+PIC
+		 * engine's own output until lsda.cpp is extended to actually resolve
+		 * (not just tolerate) the indirect|pcrel encoding - decode_gcc_except_table
+		 * never dereferences ttype entries today (M2's job), so simply widening the
+		 * accepted-encodings set would not be enough on its own to make that
+		 * dereference correct.
 		 */
 		mono::ParsedLsda parsed;
 		bool decoded = mono::decode_gcc_except_table (
@@ -1500,11 +1658,22 @@ test_gcc_except_table (MonoLLVMJIT *jit)
 		        decoded ? "OK" : "DECLINED",
 		        parsed.ttype_encoding, parsed.call_site_encoding,
 		        parsed.call_sites.size (), (int) parsed.has_ttype_table);
-		CHECK (decoded);
-		CHECK (parsed.ttype_encoding == 0x00);
+		CHECK (!decoded);
+		CHECK (parsed.ttype_encoding == 0x9b);
 	}
 
-	/* ---- R5: relocation audit over the EH object under the engine model ---- */
+	/*
+	 * ---- R5: relocation audit over the EH object under the engine model ----
+	 * Informational only (no CHECK): audit_relocations() reads raw pre-JITLink
+	 * ELF relocations, so post-J5 it will legitimately print the "BLOCKING"
+	 * branch (Small+PIC's REX_GOTPCRELX/PLT32 forms are classified truncating
+	 * at the ELF level) even though those same references are GOT/PLT-stub
+	 * mediated and safe once JITLink resolves them - see
+	 * accumulate_reloc_audit_from_graph() in engine.cpp, the authority on
+	 * post-link safety, which test_reloc_widths's `jitted` part reads. The two
+	 * audits are not required to agree post-J5; this print is simply no longer
+	 * "clean" the way it was pre-J5, and that is expected.
+	 */
 	if (!x86_64_elf) {
 		printf ("     R5: host %s is not x86-64 ELF; reloc classifier not run\n",
 		        host.str ().c_str ());
@@ -1691,7 +1860,25 @@ test_eh_gather (MonoLLVMJIT *jit)
 
 	mono::ParsedLsda parsed;
 	bool decoded = mono::decode_gcc_except_table (bytes->data (), bytes->size (), parsed);
-	CHECK (decoded);
+	/*
+	 * NOT a CHECK (decoded): under the J5 (Small+PIC) engine, decode_gcc_except_table
+	 * (lsda.cpp) correctly and by design DECLINES a real captured table - see
+	 * test_gcc_except_table's M1-decode block for the full explanation
+	 * (isPositionIndependent() switches TType encoding to DW_EH_PE_indirect|
+	 * pcrel|sdata4 (0x9b), a form CAP-EH-0 declines rather than guess at). This
+	 * two-source cross-check is bonus verification on top of the gather-pass
+	 * assertions already checked above (which are what actually exercise the
+	 * bug this test targets); it simply cannot run once M1 declines the table,
+	 * the same way test_reloc_widths's checks SKIP rather than fail on a host
+	 * they cannot cover.
+	 */
+	if (!decoded) {
+		printf ("     cross-check: .gcc_except_table declined (ttype_enc=0x%02x) - "
+		        "expected under Small+PIC (CAP-EH-0); skipping the geometry "
+		        "cross-check, gather-pass assertions above already passed\n",
+		        parsed.ttype_encoding);
+		return TEST_PASS;
+	}
 
 	/*
 	 * Structural geometry: count call sites that reach a landing pad with a catch
@@ -1787,7 +1974,17 @@ test_eh_gather_multi_call (MonoLLVMJIT *jit)
 
 	mono::ParsedLsda parsed;
 	bool decoded = mono::decode_gcc_except_table (bytes->data (), bytes->size (), parsed);
-	CHECK (decoded);
+	/* See test_eh_gather's identical branch: expected decline under J5's
+	 * Small+PIC TType encoding (CAP-EH-0), not a regression. The C2 assertions
+	 * above (two distinct clause entries, same handler/index, different
+	 * ranges) already exercised the bug this test targets. */
+	if (!decoded) {
+		printf ("     cross-check: .gcc_except_table declined (ttype_enc=0x%02x) - "
+		        "expected under Small+PIC (CAP-EH-0); skipping the geometry "
+		        "cross-check, gather-pass assertions above already passed\n",
+		        parsed.ttype_encoding);
+		return TEST_PASS;
+	}
 
 	std::size_t catch_sites = 0;
 	for (const mono::LsdaCallSite &cs : parsed.call_sites) {
@@ -2612,12 +2809,24 @@ test_llvm_reloc_widths_main (void)
 	TestResult r_first_offender = test_reloc_first_offender_matches_first_scan (jit);
 	report ("reloc-first-offender-matches-first-scan", r_first_offender);
 
+	/*
+	 * NOT gated on the host-arch skip boundary above: it builds its own
+	 * x86-64-triple LinkGraphs by hand and never touches the host's own
+	 * codegen, so it runs the same everywhere this TU builds at all (the same
+	 * reason engine.cpp itself links the x86-64 JITLink backend
+	 * unconditionally, not only on x86-64 hosts).
+	 */
+	TestResult r_graph_audit = test_graph_audit_cross_boundary (jit);
+	report ("graph-audit-cross-boundary", r_graph_audit);
+
 	printf ("%d passed, %d skipped, %d failed\n", passes, skips, failures);
 
 	bool any_failed = r_widths == TEST_FAIL || r_emachine == TEST_FAIL
-	                || r_unclassified == TEST_FAIL || r_first_offender == TEST_FAIL;
+	                || r_unclassified == TEST_FAIL || r_first_offender == TEST_FAIL
+	                || r_graph_audit == TEST_FAIL;
 	bool any_ran = r_widths != TEST_SKIP || r_emachine != TEST_SKIP
-	            || r_unclassified != TEST_SKIP || r_first_offender != TEST_SKIP;
+	            || r_unclassified != TEST_SKIP || r_first_offender != TEST_SKIP
+	            || r_graph_audit != TEST_SKIP;
 	if (any_failed)
 		return 1;
 	/* 77 is automake's SKIP exit status; see the note above. */

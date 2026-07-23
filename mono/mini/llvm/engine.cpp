@@ -260,6 +260,20 @@ x86_64_reloc_truncates_address (uint64_t type)
  * x86_64_reloc_truncates_address() (and the code-model choice below) before
  * this says anything about it. An all-zero audit is a "did not look", and
  * test-llvm-engine.cpp treats it as such rather than as a pass.
+ *
+ * This reads raw ELF Rela entries straight out of addPassesToEmitFile()'s
+ * output, BEFORE JITLink ever sees the object - it has no visibility into the
+ * GOT/PLT synthesis JITLink's table managers perform (see
+ * accumulate_reloc_audit_from_graph() below), so its "truncating" label
+ * describes ELF *codegen* shape only, not post-link safety.
+ * accumulate_reloc_audit_from_graph() is the authority on the latter once
+ * JITLink has run; the two are not required to agree, and under Small+PIC
+ * they will not - a PLT32/REX_GOTPCRELX relocation this function correctly
+ * calls truncating is routinely resolved safely through an in-graph stub or
+ * GOT slot by the time JITLink is done with it. That is expected, not a bug:
+ * this function's callers (test_reloc_widths's small/large probes) use it to
+ * prove the ELF codegen shape differs between code models, independent of
+ * what JITLink later does with the result.
  */
 RelocAudit
 audit_relocations (const object::ObjectFile &obj)
@@ -330,6 +344,15 @@ static RelocAudit g_jit_reloc_audit;
  * a belt-and-braces diagnostic on top of a linker that already cannot corrupt an
  * address silently. It is kept because it names the offending edge before the
  * link would fail, and because it is the observable the reloc-widths test reads.
+ *
+ * Under Small+PIC (see host_target_machine_builder()) this returns true for
+ * the overwhelming majority of edges JITLink resolves - GOT loads, PLT stubs,
+ * the .eh_frame PC32 FDE pc-begin field - because that is what Small+PIC
+ * codegen and linking legitimately look like. That is now the expected,
+ * common case, not itself a hazard signal: this function only answers "is the
+ * field narrow", never "is the reference safe". See
+ * accumulate_reloc_audit_from_graph() below for the boundary test that turns
+ * the answer into the actual hazard signal.
  */
 static bool
 x86_64_edge_kind_truncates (jitlink::Edge::Kind kind)
@@ -375,20 +398,68 @@ x86_64_edge_kind_truncates (jitlink::Edge::Kind kind)
 }
 
 /*
- * The always-on runtime audit, run as a JITLink PreFixup pass over every object
- * this engine links. Replaces the RTDyld NotifyLoaded path: instead of
- * re-reading raw ELF relocations, it scans the LinkGraph's resolved edges (which
- * sees what JITLink actually settled on - GOT/PLT already synthesized) and
- * accumulates into the same process-global tally the reloc-widths test reads.
- * A non-x86-64 graph is left unclassified (see audit_relocations()'s contract).
+ * The classification shared by the always-on runtime audit
+ * (accumulate_reloc_audit_from_graph() below) and the test-only
+ * audit_relocations_graph() (engine.hpp): scans every relocation edge in `g`
+ * and tallies into `one`. A non-x86-64 graph is left unclassified (see
+ * audit_relocations()'s contract) - `one` comes back all-zero.
+ *
+ * A narrow field is only a truncation hazard when its target is genuinely
+ * external or absolute - i.e. NOT resolved within this LinkGraph. Under
+ * Small+PIC (see host_target_machine_builder()) that is the only case left
+ * once JITLink's PLTTableManager/GOTTableManager have run: both are
+ * default-added PostPrunePasses (ELF_x86_64.cpp's buildTables_ELF_x86_64,
+ * pushed by link_ELF_x86_64 before it calls Ctx->modifyPassConfig(), i.e.
+ * unconditionally ahead of anything this engine's own modifyPassConfig()
+ * adds), and both reroute every edge whose target is not defined in this
+ * graph onto an in-graph stub or GOT slot (llvm/include/llvm/ExecutionEngine/
+ * JITLink/x86_64.h, PLTTableManager::visitEdge / GOTTableManager::visitEdge)
+ * well before either PostAllocationPasses or PreFixupPasses run. The GOT
+ * slot's own outgoing edge to the real (possibly far) target is
+ * unconditionally Pointer64 - full width, never flagged truncating - so the
+ * only things a narrow edge can still point at, post-table-managers, are
+ * either that safe indirection or a target this pass never sees at all.
+ *
+ * THIS IS WHY THE CALLER REGISTERS THIS AS A PostAllocationPasses ENTRY, NOT
+ * A PreFixupPasses ONE (see MonoObjectLinkingPlugin::modifyPassConfig()) -
+ * i.e. BEFORE x86_64::optimizeGOTAndStubAccesses, not after. That pass (also
+ * PreFixupPasses, added by the same default target config) RELAXES a
+ * BranchPCRel32ToPtrJumpStubBypassable edge straight back to a bare
+ * BranchPCRel32 pointing at the ORIGINAL (still external/absolute) target
+ * whenever it computes the real, now-resolved displacement as in-range - a
+ * pure optimization, verified safe at the moment it fires, per the design.
+ * But once that relaxation has happened, the edge is STRUCTURALLY IDENTICAL
+ * (same Kind, same target) to a hypothetical raw narrow edge that was never
+ * routed through a table manager at all - this classification cannot tell
+ * the two apart from Kind + target alone. Running BEFORE relaxation avoids
+ * that ambiguity entirely: at PostAllocationPasses time every genuinely
+ * external/absolute reference is STILL in its table-manager-converted,
+ * always-safe stub/GOT form (defined target), so the boundary check never
+ * has anything to second-guess. (Confirmed empirically: an earlier version of
+ * this pass ran PreFixup/post-relaxation and fired a real, reproducible false
+ * positive on the actual corpus - not the unit tests - on `call memmove`,
+ * whenever libc happened to land within 2 GB of the JIT's own mmap region
+ * under stock ASLR, which relaxation legitimately (and safely) exploits.)
+ *
+ * A same-graph target in a DIFFERENT SECTION from the referring block (e.g.
+ * .text -> $__STUBS, $__STUBS -> $__GOT, .text -> a co-located data global -
+ * exactly get_jit_callee()'s tramp-var load pattern - or .eh_frame -> .text)
+ * is therefore NOT a hazard and is not counted: one LinkGraph is one compiled
+ * method, and JITLink allocates every section of one graph from a single
+ * allocate() call, so any same-graph reference is provably in-window
+ * regardless of section. (Probed directly: a synthetic module exercising
+ * exactly these same-graph cross-section shapes, run to completion including
+ * a genuinely ~34 TB-away external call, gave total=18,
+ * old-section-boundary-truncating=10, new-graph-boundary-truncating=0 - all
+ * 10 of the old predicate's hits were same-graph cross-section edges, and all
+ * 18 were, in fact, safe. See .claude/scratch/jitlink-j5/ for the probe.)
  */
 static void
-accumulate_reloc_audit_from_graph (jitlink::LinkGraph &g)
+classify_reloc_audit_from_graph (jitlink::LinkGraph &g, RelocAudit &one)
 {
 	if (g.getTargetTriple ().getArch () != Triple::x86_64)
 		return;
 
-	RelocAudit one;
 	for (auto *block : g.blocks ()) {
 		for (const jitlink::Edge &edge : block->edges ()) {
 			if (!edge.isRelocation ())
@@ -396,18 +467,8 @@ accumulate_reloc_audit_from_graph (jitlink::LinkGraph &g)
 			one.total++;
 			if (!x86_64_edge_kind_truncates (edge.getKind ()))
 				continue;
-			/*
-			 * A narrow field is only a truncation hazard when it must span a
-			 * placement boundary: an external or absolute target, or a defined
-			 * target in a different section than the referring block. An
-			 * intra-section narrow delta (e.g. .eh_frame's FDE->CIE NegDelta32)
-			 * is always in range and is not counted - matching the ELF audit,
-			 * which never saw same-section references as relocations at all.
-			 */
 			const jitlink::Symbol &target = edge.getTarget ();
-			bool cross_boundary =
-				!target.isDefined () || target.isAbsolute () ||
-				&target.getBlock ().getSection () != &block->getSection ();
+			bool cross_boundary = !target.isDefined () || target.isAbsolute ();
 			if (!cross_boundary)
 				continue;
 			one.truncating++;
@@ -416,6 +477,25 @@ accumulate_reloc_audit_from_graph (jitlink::LinkGraph &g)
 				                     + "/" + g.getEdgeKindName (edge.getKind ());
 		}
 	}
+}
+
+/*
+ * The always-on runtime audit, run as a JITLink PostAllocation pass (see
+ * MonoObjectLinkingPlugin::modifyPassConfig() - deliberately NOT PreFixup;
+ * classify_reloc_audit_from_graph()'s doc comment above explains why) over
+ * every object this engine links. Replaces the RTDyld NotifyLoaded path:
+ * instead of re-reading raw ELF relocations, it scans the LinkGraph's
+ * table-manager-synthesized edges (GOT/PLT already built, just not yet
+ * relaxed or fixed up) and accumulates into the same process-global tally the
+ * reloc-widths test reads. The classification itself lives in
+ * classify_reloc_audit_from_graph() above, shared with the test-only
+ * audit_relocations_graph() (engine.hpp).
+ */
+static void
+accumulate_reloc_audit_from_graph (jitlink::LinkGraph &g)
+{
+	RelocAudit one;
+	classify_reloc_audit_from_graph (g, one);
 
 	std::lock_guard<std::mutex> lock (g_reloc_audit_mutex);
 	bool first = g_jit_reloc_audit.truncating == 0 && one.truncating != 0;
@@ -444,6 +524,23 @@ jit_reloc_audit ()
 {
 	std::lock_guard<std::mutex> lock (g_reloc_audit_mutex);
 	return g_jit_reloc_audit;
+}
+
+/*
+ * Declared in engine.hpp. Test-only: runs the same classification
+ * accumulate_reloc_audit_from_graph() uses on a caller-built LinkGraph and
+ * returns the tally without touching g_jit_reloc_audit, so a unit test can
+ * hand-build a LinkGraph exercising a specific cross-boundary shape (same-
+ * graph cross-section, external, absolute, ...) and check the classifier's
+ * answer directly instead of only observing it indirectly through a real
+ * compile.
+ */
+RelocAudit
+audit_relocations_graph (jitlink::LinkGraph &g)
+{
+	RelocAudit one;
+	classify_reloc_audit_from_graph (g, one);
+	return one;
 }
 
 /*
@@ -542,8 +639,11 @@ keep_section_live (jitlink::LinkGraph &g, StringRef name, StringRef anchor_name,
  * Passes, in phase order:
  *   PrePrune       - keep .mono_lsda and .llvm_stackmaps live (the dead-strip fix)
  *   PostAllocation - capture their ranges + the entry's code size (Symbol::getSize
- *                    == ELF st_size, doc 26 P2), and assert the keep-live held
- *   PreFixup       - the always-on reloc-width audit over resolved edges
+ *                    == ELF st_size, doc 26 P2), and assert the keep-live held;
+ *                    ALSO the always-on reloc-width audit over table-manager-
+ *                    synthesized (not yet relaxed) edges - see
+ *                    classify_reloc_audit_from_graph()'s doc comment in
+ *                    engine.cpp for why this runs here and not PreFixup
  *   PostFixup      - capture the .eh_frame range (self-survives prune via its
  *                    keep-alive edge; bytes are final post-fixup, which is where
  *                    the translator later transcodes them into mono unwind ops)
@@ -627,7 +727,19 @@ public:
 				return Error::success ();
 			});
 
-		config.PreFixupPasses.push_back ([] (jitlink::LinkGraph &g) -> Error {
+		/*
+		 * Registered on PostAllocationPasses, NOT PreFixupPasses - deliberately
+		 * BEFORE x86_64::optimizeGOTAndStubAccesses (a PreFixupPasses entry the
+		 * default target config always adds ahead of this plugin's own
+		 * PreFixupPasses additions; see accumulate_reloc_audit_from_graph()'s doc
+		 * comment for why running after it, which an earlier version of this
+		 * pass did, is observably wrong). PostAllocationPasses still runs strictly
+		 * after buildTables_ELF_x86_64 (a PostPrunePasses entry, i.e. before
+		 * allocation), so every genuinely external/absolute reference has
+		 * already been rerouted through an in-graph stub/GOT slot by the time
+		 * this sees it - exactly the property the classification relies on.
+		 */
+		config.PostAllocationPasses.push_back ([] (jitlink::LinkGraph &g) -> Error {
 			accumulate_reloc_audit_from_graph (g);
 			return Error::success ();
 		});
@@ -851,13 +963,38 @@ ensure_native_target ()
 }
 
 /*
- * No code model is pinned; the engine uses LLVM's default. On x86-64 that
- * default is Large for a 64-bit JIT (getEffectiveX86CodeModel: JIT && Is64Bit
- * -> Large), which keeps every reference 64-bit-wide so a stock
- * SectionMemoryManager can place sections anywhere above 4 GB. That invariant
- * is not assumed - it is checked on the emitted relocations by
- * audit_relocations() here and the reloc-widths case in
- * mono/unit-tests/test-llvm-engine.cpp.
+ * The code model is pinned to Small, with Reloc::PIC_, rather than left at
+ * LLVM's JIT default (getEffectiveX86CodeModel: JIT && Is64Bit -> Large).
+ * Large keeps every reference 64-bit-wide so sections can land anywhere
+ * above 4 GB with no distance limit - correct, but bigger than it needs to
+ * be: a 10-byte movabs-plus-load in place of a 7-byte RIP-relative lea/mov,
+ * repeated for every code->code, code->data and code->GOT reference in every
+ * JITted method.
+ *
+ * This is correct over this engine's plain, unbounded
+ * jitlink::InProcessMemoryManager (no bounded reservation, no co-location of
+ * JITDylibs - see setObjectLinkingLayerCreator() below) because Small+PIC
+ * never emits a bare narrow relocation straight to a target that might be
+ * far away. Every reference JITLink's stock x86-64 ELF pipeline cannot prove
+ * is in range is intercepted, before this engine's own reloc-audit pass runs
+ * (deliberately scheduled at PostAllocation, before relaxation - see
+ * classify_reloc_audit_from_graph()), by the default-added
+ * PLTTableManager/GOTTableManager and rerouted through an in-graph stub or GOT
+ * slot whose own outgoing edge is a full 64-bit Pointer64 - correct at any
+ * distance by construction. optimizeGOTAndStubAccesses then relaxes that
+ * indirection back to a direct, narrower form only when the true target
+ * turns out to already be in range - a pure size optimization layered on a
+ * mechanism that does not depend on it for correctness. (Probe-confirmed on
+ * a module with a target deliberately
+ * placed ~34 TB away, executed correctly through the unrelaxed stub+GOT path;
+ * see .claude/scratch/jitlink-j5/ and accumulate_reloc_audit_from_graph()
+ * below, which is where that invariant is checked on every real compile.)
+ *
+ * A bounded reservation (MapperJITLinkMemoryManager + a tuned granularity) so
+ * more references land in-range and get relaxed - and co-locating different
+ * methods' JITDylibs so cross-method calls could too - are both pure
+ * size/perf follow-ups, not correctness requirements of this change; they are
+ * deferred.
  */
 JITTargetMachineBuilder
 host_target_machine_builder ()
@@ -875,6 +1012,8 @@ host_target_machine_builder ()
 	auto jtmb = cantFail (JITTargetMachineBuilder::detectHost ());
 	jtmb.setCodeGenOptLevel (CodeGenOptLevel::Aggressive);
 	jtmb.setCPU (std::string (sys::getHostCPUName ()));
+	jtmb.setCodeModel (CodeModel::Small);
+	jtmb.setRelocationModel (Reloc::PIC_);
 
 	StringMap<bool> features;
 	if (sys::getHostCPUFeatures (features)) {
