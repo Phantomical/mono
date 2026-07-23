@@ -405,9 +405,9 @@ mono_llvm_emit_method (MonoCompile *cfg)
 			builder = create_builder (ctx);
 			builder->SetInsertPoint (llvm::unwrap (phi_bb));
 
-			for (LLVMValueRef v : ctx->phi_values) {
-				if (LLVMGetInstructionParent (v) == nullptr)
-					LLVMInsertIntoBuilder (llvm::wrap (builder), v);
+			for (llvm::Value *v : ctx->phi_values) {
+				if (LLVMGetInstructionParent (llvm::wrap (v)) == nullptr)
+					LLVMInsertIntoBuilder (llvm::wrap (builder), llvm::wrap (v));
 			}
 
 			LLVMDeleteFunction (ctx->lmethod);
@@ -584,15 +584,15 @@ emit_method_inner (EmitContext *ctx)
 		mono_llvm_add_func_attr (method, LLVM_ATTR_NO_INLINE);
 
 	if (linfo->rgctx_arg) {
-		ctx->rgctx_arg = LLVMGetParam (method, linfo->rgctx_arg_pindex);
+		ctx->rgctx_arg = llvm::unwrap (LLVMGetParam (method, linfo->rgctx_arg_pindex));
 		ctx->rgctx_arg_pindex = linfo->rgctx_arg_pindex;
 		/*
 		 * We mark the rgctx parameter with the inreg attribute, which is mapped to
 		 * MONO_ARCH_RGCTX_REG in the Mono calling convention in llvm, i.e.
 		 * CC_X86_64_Mono in X86CallingConv.td.
 		 */
-		mono_llvm_add_param_attr (ctx->rgctx_arg, LLVM_ATTR_NEST);
-		LLVMSetValueName (ctx->rgctx_arg, "rgctx");
+		mono_llvm_add_param_attr (llvm::wrap (ctx->rgctx_arg), LLVM_ATTR_NEST);
+		LLVMSetValueName (llvm::wrap (ctx->rgctx_arg), "rgctx");
 	} else {
 		ctx->rgctx_arg_pindex = -1;
 	}
@@ -607,8 +607,8 @@ emit_method_inner (EmitContext *ctx)
 
 	if (sig->hasthis) {
 		ctx->this_arg_pindex = linfo->this_arg_pindex;
-		ctx->this_arg = LLVMGetParam (method, linfo->this_arg_pindex);
-		values [cfg->args [0]->dreg] = llvm::unwrap (ctx->this_arg);
+		ctx->this_arg = llvm::unwrap (LLVMGetParam (method, linfo->this_arg_pindex));
+		values [cfg->args [0]->dreg] = ctx->this_arg;
 		LLVMSetValueName (llvm::wrap (values [cfg->args [0]->dreg]), "this");
 	}
 	if (linfo->dummy_arg)
@@ -715,7 +715,7 @@ emit_method_inner (EmitContext *ctx)
 				if (ins->opcode == OP_VPHI)
 					ctx->addresses [ins->dreg] = create_address (ctx, llvm::wrap (values [ins->dreg]), phi_etype);
 
-				ctx->phi_values.push_back (llvm::wrap (values [ins->dreg]));
+				ctx->phi_values.push_back (values [ins->dreg]);
 
 				/* 
 				 * Set the expected type of the incoming arguments since these have
@@ -1410,7 +1410,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 */
 	i = 0;
 	for (const auto &kv : ctx->jit_callees)
-		callee_vars [i ++] = kv.second;
+		callee_vars [i ++] = llvm::wrap (kv.second);
 
 	/*
 	 * Run the -O2 module pipeline over the method's IR in place, before codegen.

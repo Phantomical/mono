@@ -146,7 +146,7 @@ typedef struct {
  */
 typedef struct {
 	LLVMBasicBlockRef bblock, end_bblock;
-	LLVMValueRef finally_ind;
+	llvm::Value *finally_ind;
 	gboolean added, invoke_target;
 	/* 
 	 * If this bblock is the start of a finally clause, this is a list of bblocks it
@@ -199,9 +199,9 @@ typedef struct {
 	std::unordered_map<int, MonoBasicBlock*> region_to_handler;
 	std::unordered_map<int, MonoBasicBlock*> clause_to_handler;
 	llvm::IRBuilder<> *alloca_builder;
-	LLVMValueRef last_alloca;
-	LLVMValueRef rgctx_arg;
-	LLVMValueRef this_arg;
+	llvm::Value *last_alloca;
+	llvm::Value *rgctx_arg;
+	llvm::Value *this_arg;
 	llvm::Type **vreg_types;
 	gboolean *is_vphi;
 	LLVMTypeRef method_type;
@@ -209,9 +209,9 @@ typedef struct {
 	gboolean *unreachable;
 	gboolean has_safepoints;
 	int this_arg_pindex, rgctx_arg_pindex;
-	LLVMValueRef imt_rgctx_loc;
+	llvm::Value *imt_rgctx_loc;
 	GHashTable *llvm_types;
-	LLVMValueRef ex_var;
+	llvm::Value *ex_var;
 	/*
 	 * The function's landingpad personality (an i32-returning `mono_personality`
 	 * stub). Created lazily by get_mono_personality() the first time a handler is
@@ -219,11 +219,11 @@ typedef struct {
 	 * several catch clauses defines it (and sets the personality fn) exactly once.
 	 */
 	LLVMValueRef personality;
-	std::vector<LLVMValueRef> phi_values;
+	std::vector<llvm::Value*> phi_values;
 	std::vector<MonoBasicBlock*> bblock_list;
 	char *method_name;
-	llvm::DenseMap<MonoMethod*, LLVMValueRef> jit_callees;
-	LLVMValueRef long_bb_break_var;
+	llvm::DenseMap<MonoMethod*, llvm::Value*> jit_callees;
+	llvm::Value *long_bb_break_var;
 
 	/*
 	 * The module's LLVMContext as a C++ reference. The module uses the single

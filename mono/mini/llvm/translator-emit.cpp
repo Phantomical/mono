@@ -1133,10 +1133,11 @@ build_alloca_llvm_type_name (EmitContext *ctx, LLVMTypeRef t, int align, const c
 	 * Have to place all alloca's at the end of the entry bb, since otherwise they would
 	 * get executed every time control reaches them.
 	 */
-	LLVMPositionBuilder (llvm::wrap (ctx->alloca_builder), get_bb (ctx, ctx->cfg->bb_entry), ctx->last_alloca);
+	LLVMPositionBuilder (llvm::wrap (ctx->alloca_builder), get_bb (ctx, ctx->cfg->bb_entry), llvm::wrap (ctx->last_alloca));
 
-	ctx->last_alloca = mono_llvm_build_alloca (llvm::wrap (ctx->alloca_builder), t, NULL, align, name);
-	return ctx->last_alloca;
+	LLVMValueRef alloca = mono_llvm_build_alloca (llvm::wrap (ctx->alloca_builder), t, NULL, align, name);
+	ctx->last_alloca = llvm::unwrap (alloca);
+	return alloca;
 }
 
 #ifdef TARGET_ARM

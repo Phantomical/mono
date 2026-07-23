@@ -204,14 +204,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 * from localloc-ed memory.
 			 */
 			if (!ctx->long_bb_break_var) {
-				ctx->long_bb_break_var = build_alloca_llvm_type_name (ctx, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), 0, "long_bb_break");
-				mono_llvm_build_store (llvm::wrap (ctx->alloca_builder), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), ctx->long_bb_break_var, TRUE, LLVM_BARRIER_NONE);
+				ctx->long_bb_break_var = llvm::unwrap (build_alloca_llvm_type_name (ctx, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), 0, "long_bb_break"));
+				mono_llvm_build_store (llvm::wrap (ctx->alloca_builder), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), llvm::wrap (ctx->long_bb_break_var), TRUE, LLVM_BARRIER_NONE);
 			}
 
 			cbb = gen_bb (ctx, "CONT_LONG_BB");
 			LLVMBasicBlockRef dummy_bb = gen_bb (ctx, "CONT_LONG_BB_DUMMY");
 
-			LLVMValueRef load = mono_llvm_build_load (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), ctx->long_bb_break_var, "", TRUE);
+			LLVMValueRef load = mono_llvm_build_load (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), llvm::wrap (ctx->long_bb_break_var), "", TRUE);
 			/*
 			 * The long_bb_break_var is initialized to 0 in the prolog, so this branch will always go to 'cbb'
 			 * but llvm doesn't know that, so the branch is not going to be eliminated.
@@ -223,7 +223,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			/* Emit a dummy false bblock which does nothing but contains a volatile store so it cannot be eliminated */
 			ctx->builder = builder = create_builder (ctx);
 			builder->SetInsertPoint (llvm::unwrap (dummy_bb));
-			mono_llvm_build_store (llvm::wrap (builder), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false)), ctx->long_bb_break_var, TRUE, LLVM_BARRIER_NONE);
+			mono_llvm_build_store (llvm::wrap (builder), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false)), llvm::wrap (ctx->long_bb_break_var), TRUE, LLVM_BARRIER_NONE);
 			llvm::wrap (builder->CreateBr (llvm::unwrap (cbb)));
 
 			ctx->builder = builder = create_builder (ctx);
@@ -4312,9 +4312,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			/* 
 			 * Set the indicator variable for the finally clause.
 			 */
-			lhs = llvm::unwrap (info->finally_ind);
+			lhs = info->finally_ind;
 			g_assert (lhs);
-			llvm::wrap (builder->CreateStore (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), g_slist_length (bb_list) + 1, false), lhs));
+			builder->CreateStore (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), g_slist_length (bb_list) + 1, false), lhs);
 				
 			/* Branch to the finally clause */
 			llvm::wrap (builder->CreateBr (llvm::unwrap (info->call_handler_target_bb)));
@@ -4347,7 +4347,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				handler_bb = region_it != ctx->region_to_handler.end () ? region_it->second : nullptr;
 				g_assert (handler_bb);
 				info = &bblocks [handler_bb->block_num];
-				lhs = llvm::unwrap (info->finally_ind);
+				lhs = info->finally_ind;
 				g_assert (lhs);
 
 				bb_list = info->call_handler_return_bbs;
@@ -4422,7 +4422,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	}
 
 	if (bb == cfg->bb_entry)
-		ctx->last_alloca = LLVMGetLastInstruction (get_bb (ctx, cfg->bb_entry));
+		ctx->last_alloca = llvm::unwrap (LLVMGetLastInstruction (get_bb (ctx, cfg->bb_entry)));
 }
 
 
