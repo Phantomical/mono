@@ -238,6 +238,10 @@ typedef struct {
 
 	/* Decline this method: record the reason and hand it back to the classic JIT. */
 	void set_failure (const char *message);
+
+	/* Emit code to convert the LLVM value V to DTYPE (widening/truncating/bitcasting). */
+	llvm::Value *convert_full (llvm::Value *v, llvm::Type *dtype, gboolean is_unsigned);
+	llvm::Value *convert (llvm::Value *v, llvm::Type *dtype);
 } EmitContext;
 
 /*
@@ -426,10 +430,6 @@ LLVMBasicBlockRef
 get_end_bb (EmitContext *ctx, MonoBasicBlock *bb);
 LLVMBasicBlockRef
 gen_bb (EmitContext *ctx, const char *prefix);
-llvm::Value *
-convert_full (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype, gboolean is_unsigned);
-llvm::Value *
-convert (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype);
 void
 emit_memset (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValueRef v, LLVMValueRef size, int alignment);
 LLVMValueRef

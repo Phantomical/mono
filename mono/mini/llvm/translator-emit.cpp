@@ -108,7 +108,7 @@ resolve_patch (MonoCompile *cfg, MonoJumpInfoType type, gconstpointer target)
  *   Emit code to convert the LLVM value V to DTYPE.
  */
 llvm::Value *
-convert_full (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype, gboolean is_unsigned)
+EmitContext::convert_full (llvm::Value *v, llvm::Type *dtype, gboolean is_unsigned)
 {
 	llvm::Type *stype = v->getType ();
 
@@ -116,45 +116,45 @@ convert_full (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype, gboolean is_u
 		bool ext = false;
 
 		/* Extend */
-		if (dtype == llvm::Type::getInt64Ty (ctx->llvm_ctx ()) && (stype == llvm::Type::getInt32Ty (ctx->llvm_ctx ()) || stype == llvm::Type::getInt16Ty (ctx->llvm_ctx ()) || stype == llvm::Type::getInt8Ty (ctx->llvm_ctx ())))
+		if (dtype == llvm::Type::getInt64Ty (llvm_ctx ()) && (stype == llvm::Type::getInt32Ty (llvm_ctx ()) || stype == llvm::Type::getInt16Ty (llvm_ctx ()) || stype == llvm::Type::getInt8Ty (llvm_ctx ())))
 			ext = true;
-		else if (dtype == llvm::Type::getInt32Ty (ctx->llvm_ctx ()) && (stype == llvm::Type::getInt16Ty (ctx->llvm_ctx ()) || stype == llvm::Type::getInt8Ty (ctx->llvm_ctx ())))
+		else if (dtype == llvm::Type::getInt32Ty (llvm_ctx ()) && (stype == llvm::Type::getInt16Ty (llvm_ctx ()) || stype == llvm::Type::getInt8Ty (llvm_ctx ())))
 			ext = true;
-		else if (dtype == llvm::Type::getInt16Ty (ctx->llvm_ctx ()) && (stype == llvm::Type::getInt8Ty (ctx->llvm_ctx ())))
+		else if (dtype == llvm::Type::getInt16Ty (llvm_ctx ()) && (stype == llvm::Type::getInt8Ty (llvm_ctx ())))
 			ext = true;
 
 		if (ext)
-			return is_unsigned ? ctx->builder->CreateZExt (v, dtype, "") : ctx->builder->CreateSExt (v, dtype, "");
+			return is_unsigned ? builder->CreateZExt (v, dtype, "") : builder->CreateSExt (v, dtype, "");
 
-		if (dtype == llvm::Type::getDoubleTy (ctx->llvm_ctx ()) && stype == llvm::Type::getFloatTy (ctx->llvm_ctx ()))
-			return ctx->builder->CreateFPExt (v, dtype, "");
+		if (dtype == llvm::Type::getDoubleTy (llvm_ctx ()) && stype == llvm::Type::getFloatTy (llvm_ctx ()))
+			return builder->CreateFPExt (v, dtype, "");
 
 		/* Trunc */
-		if (stype == llvm::Type::getInt64Ty (ctx->llvm_ctx ()) && (dtype == llvm::Type::getInt32Ty (ctx->llvm_ctx ()) || dtype == llvm::Type::getInt16Ty (ctx->llvm_ctx ()) || dtype == llvm::Type::getInt8Ty (ctx->llvm_ctx ())))
-			return ctx->builder->CreateTrunc (v, dtype, "");
-		if (stype == llvm::Type::getInt32Ty (ctx->llvm_ctx ()) && (dtype == llvm::Type::getInt16Ty (ctx->llvm_ctx ()) || dtype == llvm::Type::getInt8Ty (ctx->llvm_ctx ())))
-			return ctx->builder->CreateTrunc (v, dtype, "");
-		if (stype == llvm::Type::getInt16Ty (ctx->llvm_ctx ()) && dtype == llvm::Type::getInt8Ty (ctx->llvm_ctx ()))
-			return ctx->builder->CreateTrunc (v, dtype, "");
-		if (stype == llvm::Type::getDoubleTy (ctx->llvm_ctx ()) && dtype == llvm::Type::getFloatTy (ctx->llvm_ctx ()))
-			return ctx->builder->CreateFPTrunc (v, dtype, "");
+		if (stype == llvm::Type::getInt64Ty (llvm_ctx ()) && (dtype == llvm::Type::getInt32Ty (llvm_ctx ()) || dtype == llvm::Type::getInt16Ty (llvm_ctx ()) || dtype == llvm::Type::getInt8Ty (llvm_ctx ())))
+			return builder->CreateTrunc (v, dtype, "");
+		if (stype == llvm::Type::getInt32Ty (llvm_ctx ()) && (dtype == llvm::Type::getInt16Ty (llvm_ctx ()) || dtype == llvm::Type::getInt8Ty (llvm_ctx ())))
+			return builder->CreateTrunc (v, dtype, "");
+		if (stype == llvm::Type::getInt16Ty (llvm_ctx ()) && dtype == llvm::Type::getInt8Ty (llvm_ctx ()))
+			return builder->CreateTrunc (v, dtype, "");
+		if (stype == llvm::Type::getDoubleTy (llvm_ctx ()) && dtype == llvm::Type::getFloatTy (llvm_ctx ()))
+			return builder->CreateFPTrunc (v, dtype, "");
 
 		if (stype->isPointerTy () && dtype->isPointerTy ())
-			return ctx->builder->CreateBitCast (v, dtype, "");
+			return builder->CreateBitCast (v, dtype, "");
 		if (dtype->isPointerTy ())
-			return ctx->builder->CreateIntToPtr (v, dtype, "");
+			return builder->CreateIntToPtr (v, dtype, "");
 		if (stype->isPointerTy ())
-			return ctx->builder->CreatePtrToInt (v, dtype, "");
+			return builder->CreatePtrToInt (v, dtype, "");
 
 		if (mono_arch_is_soft_float ()) {
-			if (stype == llvm::Type::getInt32Ty (ctx->llvm_ctx ()) && dtype == llvm::Type::getFloatTy (ctx->llvm_ctx ()))
-				return ctx->builder->CreateBitCast (v, dtype, "");
-			if (stype == llvm::Type::getInt32Ty (ctx->llvm_ctx ()) && dtype == llvm::Type::getDoubleTy (ctx->llvm_ctx ()))
-				return ctx->builder->CreateBitCast (ctx->builder->CreateZExt (v, llvm::Type::getInt64Ty (ctx->llvm_ctx ()), ""), dtype, "");
+			if (stype == llvm::Type::getInt32Ty (llvm_ctx ()) && dtype == llvm::Type::getFloatTy (llvm_ctx ()))
+				return builder->CreateBitCast (v, dtype, "");
+			if (stype == llvm::Type::getInt32Ty (llvm_ctx ()) && dtype == llvm::Type::getDoubleTy (llvm_ctx ()))
+				return builder->CreateBitCast (builder->CreateZExt (v, llvm::Type::getInt64Ty (llvm_ctx ()), ""), dtype, "");
 		}
 
 		if (stype->getTypeID () == llvm::Type::FixedVectorTyID && dtype->getTypeID () == llvm::Type::FixedVectorTyID)
-			return ctx->builder->CreateBitCast (v, dtype, "");
+			return builder->CreateBitCast (v, dtype, "");
 
 		mono_llvm_dump_value (llvm::wrap (v));
 		mono_llvm_dump_type (llvm::wrap (dtype));
@@ -167,9 +167,9 @@ convert_full (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype, gboolean is_u
 }
 
 llvm::Value *
-convert (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype)
+EmitContext::convert (llvm::Value *v, llvm::Type *dtype)
 {
-	return convert_full (ctx, v, dtype, FALSE);
+	return convert_full (v, dtype, FALSE);
 }
 
 void
@@ -233,7 +233,7 @@ emit_volatile_store (EmitContext *ctx, int vreg)
 
 	if (var && var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT)) {
 		g_assert (ctx->addresses [vreg]);
-		llvm::wrap (ctx->builder->CreateStore (convert (ctx, ctx->values [vreg], llvm::unwrap (type_to_llvm_type (ctx, var->inst_vtype))), ctx->addresses [vreg]->value));
+		llvm::wrap (ctx->builder->CreateStore (ctx->convert (ctx->values [vreg], llvm::unwrap (type_to_llvm_type (ctx, var->inst_vtype))), ctx->addresses [vreg]->value));
 	}
 }
 
@@ -1036,7 +1036,7 @@ emit_args_to_vtype (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, L
 				index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j, false));
 				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (IntPtrType ()), llvm::unwrap (daddr), gep_index_list (index, 1), ""));
 			}
-			llvm::wrap (builder->CreateStore (convert (ctx, llvm::unwrap (args [j]), llvm::unwrap (part_type)), ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::PointerType::get (ctx->llvm_ctx (), 0), "")));
+			llvm::wrap (builder->CreateStore (ctx->convert (llvm::unwrap (args [j]), llvm::unwrap (part_type)), ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::PointerType::get (ctx->llvm_ctx (), 0), "")));
 			break;
 		}
 		case LLVMArgInFPReg: {
@@ -1103,7 +1103,7 @@ emit_vtype_to_args (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, L
 				index [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), j, false));
 				addr = llvm::wrap (builder->CreateGEP (llvm::unwrap (IntPtrType ()), llvm::unwrap (daddr), gep_index_list (index, 1), ""));
 			}
-			args [pindex ++] = llvm::wrap (convert (ctx, builder->CreateLoad (llvm::Type::getIntNTy (ctx->llvm_ctx (), partsize * 8), ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""), ""), llvm::unwrap (IntPtrType ())));
+			args [pindex ++] = llvm::wrap (ctx->convert (builder->CreateLoad (llvm::Type::getIntNTy (ctx->llvm_ctx (), partsize * 8), ctx->builder->CreateBitCast (llvm::unwrap (addr), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""), ""), llvm::unwrap (IntPtrType ())));
 			break;
 		case LLVMArgInFPReg:
 			if (ainfo->esize == 8)
@@ -1216,12 +1216,12 @@ emit_gsharedvt_ldaddr (EmitContext *ctx, int vreg)
 	int idx = cfg->gsharedvt_vreg_to_idx [vreg] - 1;
 
 	offset = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), MONO_STRUCT_OFFSET (MonoGSharedVtMethodRuntimeInfo, entries) + (idx * TARGET_SIZEOF_VOID_P), false));
-	ptr = llvm::wrap (builder->CreateAdd (convert (ctx, llvm::unwrap (info_var), llvm::unwrap (IntPtrType ())), convert (ctx, llvm::unwrap (offset), llvm::unwrap (IntPtrType ())), ""));
+	ptr = llvm::wrap (builder->CreateAdd (ctx->convert (llvm::unwrap (info_var), llvm::unwrap (IntPtrType ())), ctx->convert (llvm::unwrap (offset), llvm::unwrap (IntPtrType ())), ""));
 
 	name = g_strdup_printf ("gsharedvt_local_%d_offset", vreg);
-	offset_var = llvm::wrap (builder->CreateLoad (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), convert (ctx, llvm::unwrap (ptr), llvm::PointerType::get (ctx->llvm_ctx (), 0)), name));
+	offset_var = llvm::wrap (builder->CreateLoad (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ctx->convert (llvm::unwrap (ptr), llvm::PointerType::get (ctx->llvm_ctx (), 0)), name));
 
-	return llvm::wrap (builder->CreateAdd (convert (ctx, llvm::unwrap (locals_var), llvm::unwrap (IntPtrType ())), convert (ctx, llvm::unwrap (offset_var), llvm::unwrap (IntPtrType ())), ""));
+	return llvm::wrap (builder->CreateAdd (ctx->convert (llvm::unwrap (locals_var), llvm::unwrap (IntPtrType ())), ctx->convert (llvm::unwrap (offset_var), llvm::unwrap (IntPtrType ())), ""));
 }
 
 /* Emit a wrapper around the parameterless JIT icall ICALL_ID with a cold calling convention */
