@@ -1127,6 +1127,10 @@ docu: mini.sgm
 # We need these because automake can't process normal make conditionals
 check_local_targets = $(if $(EMIT_NUNIT), rcheck-nunit, rcheck)
 
+if ENABLE_LLVM
+check_local_targets += tieredcheck
+endif
+
 check-local: $(check_local_targets)
 
 clean-local:
