@@ -286,9 +286,25 @@ typedef struct {
 	void emit_entry_bb (llvm::IRBuilder<> *builder);
 	void emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
 	void emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder);
+	bool is_supported_callconv (MonoCallInst *call);
+	void process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, MonoInst *ins);
+	LLVMValueRef call_intrins (int id, LLVMValueRef *args, const char *name);
+	LLVMValueRef get_mono_personality ();
+
+	/* Intrinsic declaration cache (defined in translator-intrinsics.cpp). */
+	LLVMValueRef get_intrins (int id);
+
+	/* AOT-const / jit-callee / named-alloca helpers (defined in translator-emit.cpp). */
+	LLVMValueRef get_aotconst (MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type);
+	LLVMValueRef get_jit_callee (const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data);
+	Address *build_named_alloca_address (MonoType *t, const char *name);
+
+	/* Per-instruction translator support (defined in translator-bb.cpp). */
+	bool handler_is_reachable (MonoBasicBlock *bb);
 
 	/* Whole-method emission (defined in translator.cpp). */
 	void emit_method_inner ();
+	void llvm_jit_finalize_method ();
 } EmitContext;
 
 /*
@@ -466,26 +482,18 @@ set_call_cold_cconv (LLVMValueRef func);
 G_GNUC_UNUSED LLVMTypeRef
 LLVMFunctionType0 (LLVMTypeRef ReturnType,
 				   int IsVarArg);
-LLVMValueRef
-get_aotconst (EmitContext *ctx, MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type);
-LLVMValueRef
-get_jit_callee (EmitContext *ctx, const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data);
 void
 set_metadata_flag (LLVMValueRef v, const char *flag_name);
 void
 set_nontemporal_flag (LLVMValueRef v);
 void
 set_invariant_load_flag (LLVMValueRef v);
-Address*
-build_named_alloca_address (EmitContext *ctx, MonoType *t, const char *name);
 LLVMValueRef
 emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id, gboolean aot);
 void
 emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompile *cfg);
 
 /* Defined in translator-call.cpp. */
-void
-process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, MonoInst *ins);
 LLVMValueRef
 create_const_vector (LLVMTypeRef t, const int *vals, int count);
 LLVMValueRef
@@ -498,16 +506,12 @@ LLVMValueRef
 get_double_const (MonoCompile *cfg, double val);
 LLVMValueRef
 get_float_const (MonoCompile *cfg, float val);
-LLVMValueRef
-call_intrins (EmitContext *ctx, int id, LLVMValueRef *args, const char *name);
 
 /* Defined in translator-bb.cpp. */
 void
 process_bb (EmitContext *ctx, MonoBasicBlock *bb);
 
 /* Defined in translator-intrinsics.cpp. */
-LLVMValueRef
-get_intrins (EmitContext *ctx, int id);
 void
 add_intrinsics (LLVMModuleRef module);
 void

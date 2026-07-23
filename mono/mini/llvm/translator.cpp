@@ -76,8 +76,6 @@ LLVMTypeRef sse_i1_t, sse_i2_t, sse_i4_t, sse_i8_t, sse_r4_t, sse_r8_t;
 
 static void init_jit_module (MonoDomain *domain);
 
-LLVMValueRef get_intrins (EmitContext *ctx, int id);
-static void llvm_jit_finalize_method (EmitContext *ctx);
 void set_invariant_load_flag (LLVMValueRef v);
 
 /*
@@ -904,7 +902,7 @@ after_codegen:
 	}
 
 	//LLVMVerifyFunction (method, 0);
-	llvm_jit_finalize_method (this);
+	this->llvm_jit_finalize_method ();
 
 	if (this->module->method_to_lmethod)
 		g_hash_table_insert (this->module->method_to_lmethod, cfg->method, this->lmethod);
@@ -1385,13 +1383,13 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 	return true;
 }
 
-static void
-llvm_jit_finalize_method (EmitContext *ctx)
+void
+EmitContext::llvm_jit_finalize_method ()
 {
-	MonoCompile *cfg = ctx->cfg;
+	MonoCompile *cfg = this->cfg;
 	MonoDomain *domain = mono_domain_get ();
 	MonoJitDomainInfo *domain_info;
-	int nvars = ctx->jit_callees.size ();
+	int nvars = this->jit_callees.size ();
 	LLVMValueRef *callee_vars = g_new0 (LLVMValueRef, nvars);
 	gpointer *callee_addrs = g_new0 (gpointer, nvars);
 	gpointer eh_frame;
@@ -1404,7 +1402,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * compiled.
 	 */
 	i = 0;
-	for (const auto &kv : ctx->jit_callees)
+	for (const auto &kv : this->jit_callees)
 		callee_vars [i ++] = llvm::wrap (kv.second);
 
 	/*
@@ -1417,7 +1415,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * renames, nor constant-folds them - the by-name symbol resolution the
 	 * compile path performs afterwards still finds every one.
 	 */
-	mono_llvm_optimize_method (ctx->lmethod);
+	mono_llvm_optimize_method (this->lmethod);
 
 	mono_codeman_enable_write ();
 	guint32 llvm_code_size = 0;
@@ -1435,7 +1433,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * every admitted clause-bearing method. */
 	gpointer mono_lsda = nullptr;
 	guint32 mono_lsda_size = 0;
-	cfg->native_code = static_cast<guint8*>(mono_llvm_compile_method (ctx->module->mono_ee, cfg, ctx->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size));
+	cfg->native_code = static_cast<guint8*>(mono_llvm_compile_method (this->module->mono_ee, cfg, this->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size));
 	/* The redundant Itanium `.gcc_except_table` LLVM still emits is ignored - the
 	 * custom-emit path reads the `.mono_lsda` instead (plan 12). */
 	(void) gcc_except_table;
@@ -1444,11 +1442,11 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 * unwind-ops transcoder), not a mono clause global, so eh_frame is always NULL
 	 * and not read here. */
 	(void) eh_frame;
-	mono_llvm_remove_gc_safepoint_poll (ctx->lmodule);
+	mono_llvm_remove_gc_safepoint_poll (this->lmodule);
 	mono_codeman_disable_write ();
 	if (cfg->verbose_level > 1) {
 		g_print ("\n*** Optimized LLVM IR for %s ***\n", mono_method_full_name (cfg->method, TRUE));
-		mono_llvm_dump_module (ctx->lmodule);
+		mono_llvm_dump_module (this->lmodule);
 		g_print ("***\n\n");
 	}
 
@@ -1491,7 +1489,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 			 * with no unwind information is the one outcome we must avoid, so
 			 * bail out and let the classic JIT compile it instead.
 			 */
-			ctx->set_failure ("no usable DWARF unwind info");
+			this->set_failure ("no usable DWARF unwind info");
 			return;
 		}
 
@@ -1523,11 +1521,11 @@ llvm_jit_finalize_method (EmitContext *ctx)
 		std::vector<mono::MonoLsdaEntry> entries;
 
 		if (!mono::parse_mono_lsda (static_cast<const guint8*>(mono_lsda), mono_lsda_size, entries)) {
-			ctx->set_failure ("could not parse .mono_lsda clause table");
+			this->set_failure ("could not parse .mono_lsda clause table");
 			return;
 		}
 		if (!mono::publish_mono_lsda (cfg, entries, cfg->native_code, cfg->code_len)) {
-			ctx->set_failure ("could not publish .mono_lsda clause table");
+			this->set_failure ("could not publish .mono_lsda clause table");
 			return;
 		}
 	}
@@ -1541,7 +1539,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 */
 	if (cfg->gshared) {
 		if (!recover_gshared_this_slot (cfg, static_cast<guint8*>(stackmaps), stackmaps_size)) {
-			ctx->set_failure ("gshared this-slot not recoverable from stackmap");
+			this->set_failure ("gshared this-slot not recoverable from stackmap");
 			return;
 		}
 	}
@@ -1551,7 +1549,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	if (!domain_info->llvm_jit_callees)
 		domain_info->llvm_jit_callees = g_hash_table_new (NULL, NULL);
 	i = 0;
-	for (const auto &kv : ctx->jit_callees) {
+	for (const auto &kv : this->jit_callees) {
 		MonoMethod *callee = kv.first;
 		GSList *addrs = static_cast<GSList*>(g_hash_table_lookup (domain_info->llvm_jit_callees, callee));
 		addrs = g_slist_prepend (addrs, callee_addrs [i]);
@@ -1569,8 +1567,8 @@ init_jit_module (MonoDomain *domain)
 	g_assert_not_reached ();
 }
 
-static void
-llvm_jit_finalize_method (EmitContext *ctx)
+void
+EmitContext::llvm_jit_finalize_method ()
 {
 	g_assert_not_reached ();
 }

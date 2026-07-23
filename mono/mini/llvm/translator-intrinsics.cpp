@@ -225,9 +225,9 @@ get_intrins_from_module (LLVMModuleRef lmodule, int id)
 }
 
 LLVMValueRef
-get_intrins (EmitContext *ctx, int id)
+EmitContext::get_intrins (int id)
 {
-	MonoLLVMModule *module = ctx->module;
+	MonoLLVMModule *module = this->module;
 	LLVMValueRef res;
 
 	/*
@@ -236,7 +236,7 @@ get_intrins (EmitContext *ctx, int id)
 	 */
 	res = module->intrins_by_id [id];
 	if (!res) {
-		res = get_intrins_from_module (ctx->lmodule, id);
+		res = get_intrins_from_module (this->lmodule, id);
 		module->intrins_by_id [id] = res;
 	}
 	return res;

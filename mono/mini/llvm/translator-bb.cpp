@@ -37,14 +37,14 @@ const_vector (const LLVMValueRef *vals, unsigned count)
  * switch, so it is reachable too. A handler with no invoke and no invoke-target
  * sibling is genuinely unreachable from a call-site table and declines.
  */
-static bool
-handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
+bool
+EmitContext::handler_is_reachable (MonoBasicBlock *bb)
 {
-	MonoCompile *cfg = ctx->cfg;
+	MonoCompile *cfg = this->cfg;
 	int clause_index, j;
 	MonoExceptionClause *self;
 
-	if (ctx->bblocks [bb->block_num].invoke_target)
+	if (this->bblocks [bb->block_num].invoke_target)
 		return true;
 
 	clause_index = (mono_get_block_region_notry (cfg, bb->region) >> 8) - 1;
@@ -61,9 +61,9 @@ handler_is_reachable (EmitContext *ctx, MonoBasicBlock *bb)
 		if (other->try_offset != self->try_offset || other->try_len != self->try_len)
 			continue;
 
-		auto clause_it = ctx->clause_to_handler.find (j);
-		other_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
-		if (other_bb && ctx->bblocks [other_bb->block_num].invoke_target)
+		auto clause_it = this->clause_to_handler.find (j);
+		other_bb = clause_it != this->clause_to_handler.end () ? clause_it->second : nullptr;
+		if (other_bb && this->bblocks [other_bb->block_num].invoke_target)
 			return true;
 	}
 
@@ -104,7 +104,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	}
 
 	if (bb->flags & BB_EXCEPTION_HANDLER) {
-		if (!handler_is_reachable (ctx, bb)) {
+		if (!ctx->handler_is_reachable (bb)) {
 			ctx->set_failure ("handler without invokes");
 			return;
 		}
@@ -575,7 +575,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			if (likely || unlikely) {
 				args [0] = llvm::wrap (cmp);
 				args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), likely ? 1 : 0, false));
-				cmp = llvm::unwrap (call_intrins (ctx, INTRINS_EXPECT_I1, args, ""));
+				cmp = llvm::unwrap (ctx->call_intrins (INTRINS_EXPECT_I1, args, ""));
 			}
 
 			if (MONO_IS_COND_BRANCH_OP (ins->next)) {
@@ -1002,7 +1002,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, true)),
 			};
 			int op = ins->opcode == OP_X86_BSF32 ? INTRINS_CTTZ_I32 : INTRINS_CTTZ_I64;
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, op, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (op, args, dname));
 			break;
 		}
 		case OP_X86_BSR32:
@@ -1013,7 +1013,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			};
 			int op = ins->opcode == OP_X86_BSR32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64;
 			LLVMValueRef width = ins->opcode == OP_X86_BSR32 ? const_int32 (31) : const_int64 (63);
-			LLVMValueRef tz = call_intrins (ctx, op, args, "");
+			LLVMValueRef tz = ctx->call_intrins (op, args, "");
 			values [ins->dreg] = builder->CreateXor (llvm::unwrap (tz), llvm::unwrap (width), dname);
 			break;
 		}
@@ -1337,7 +1337,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_FCALL_REG:
 		case OP_RCALL_REG:
 		case OP_VCALL_REG: {
-			process_call (ctx, bb, &builder, ins);
+			ctx->process_call (bb, &builder, ins);
 			break;
 		}
 		case OP_AOTCONST: {
@@ -1357,7 +1357,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				}
 			}
 
-			values [ins->dreg] = llvm::unwrap (get_aotconst (ctx, ji_type, ji_data, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))));
+			values [ins->dreg] = llvm::unwrap (ctx->get_aotconst (ji_type, ji_data, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))));
 			break;
 		}
 		case OP_MEMMOVE: {
@@ -1371,7 +1371,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 #endif
 			args [argn++] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 0, false));  // is_volatile
 
-			call_intrins (ctx, INTRINS_MEMMOVE, args, "");
+			ctx->call_intrins (INTRINS_MEMMOVE, args, "");
 			break;
 		}
 		case OP_NOT_REACHED:
@@ -1410,133 +1410,133 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SIN, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SIN, args, dname));
 			break;
 		}
 		case OP_SINF: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SINF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SINF, args, dname));
 			break;
 		}
 		case OP_EXP: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_EXP, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_EXP, args, dname));
 			break;
 		}
 		case OP_EXPF: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_EXPF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_EXPF, args, dname));
 			break;
 		}
 		case OP_LOG2: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_LOG2, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_LOG2, args, dname));
 			break;
 		}
 		case OP_LOG2F: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_LOG2F, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_LOG2F, args, dname));
 			break;
 		}
 		case OP_LOG10: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_LOG10, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_LOG10, args, dname));
 			break;
 		}
 		case OP_LOG10F: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_LOG10F, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_LOG10F, args, dname));
 			break;
 		}
 		case OP_LOG: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_LOG, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_LOG, args, dname));
 			break;
 		}
 		case OP_TRUNC: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_TRUNC, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_TRUNC, args, dname));
 			break;
 		}
 		case OP_TRUNCF: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_TRUNCF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_TRUNCF, args, dname));
 			break;
 		}
 		case OP_COS: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_COS, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_COS, args, dname));
 			break;
 		}
 		case OP_COSF: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_COSF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_COSF, args, dname));
 			break;
 		}
 		case OP_SQRT: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SQRT, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SQRT, args, dname));
 			break;
 		}
 		case OP_SQRTF: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SQRTF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SQRTF, args, dname));
 			break;
 		}
 		case OP_FLOOR: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_FLOOR, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_FLOOR, args, dname));
 			break;
 		}
 		case OP_FLOORF: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_FLOORF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_FLOORF, args, dname));
 			break;
 		}
 		case OP_CEIL: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_CEIL, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_CEIL, args, dname));
 			break;
 		}
 		case OP_CEILF: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_CEILF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_CEILF, args, dname));
 			break;
 		}
 		case OP_FMA: {
@@ -1546,7 +1546,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [1] = llvm::wrap (ctx->convert (values [ins->sreg2], llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
 			args [2] = llvm::wrap (ctx->convert (values [ins->sreg3], llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
 			
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_FMA, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_FMA, args, dname));
 			break;
 		}
 		case OP_FMAF: {
@@ -1556,14 +1556,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [1] = llvm::wrap (ctx->convert (values [ins->sreg2], llvm::Type::getFloatTy (ctx->llvm_ctx ())));
 			args [2] = llvm::wrap (ctx->convert (values [ins->sreg3], llvm::Type::getFloatTy (ctx->llvm_ctx ())));
 			
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_FMAF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_FMAF, args, dname));
 			break;
 		}
 		case OP_ABS: {
 			LLVMValueRef args [1];
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_FABS, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_FABS, args, dname));
 			break;
 		}
 		case OP_ABSF: {
@@ -1571,11 +1571,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 #ifdef TARGET_AMD64
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_ABSF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_ABSF, args, dname));
 #else
 			/* llvm.fabs not supported on all platforms */
 			args [0] = ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ()));
-			values [ins->dreg] = call_intrins (ctx, INTRINS_FABS, args, dname);
+			values [ins->dreg] = ctx->call_intrins (INTRINS_FABS, args, dname);
 			values [ins->dreg] = ctx->convert (values [ins->dreg], llvm::Type::getFloatTy (ctx->llvm_ctx ()));
 #endif
 			break;
@@ -1585,7 +1585,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
 			args [1] = llvm::wrap (ctx->convert (rhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_POWF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_POWF, args, dname));
 			break;
 		}
 		case OP_FPOW: {
@@ -1593,7 +1593,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
 			args [1] = llvm::wrap (ctx->convert (rhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_POW, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_POW, args, dname));
 			break;
 		}
 		case OP_FCOPYSIGN: {
@@ -1601,7 +1601,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
 			args [1] = llvm::wrap (ctx->convert (rhs, llvm::Type::getDoubleTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_COPYSIGN, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_COPYSIGN, args, dname));
 			break;
 		}
 		case OP_RCOPYSIGN: {
@@ -1609,7 +1609,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
 			args [1] = llvm::wrap (ctx->convert (rhs, llvm::Type::getFloatTy (ctx->llvm_ctx ())));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_COPYSIGNF, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_COPYSIGNF, args, dname));
 			break;
 		}
 
@@ -1830,7 +1830,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_RELAXED_NOP: {
 #if defined(TARGET_AMD64) || defined(TARGET_X86)
-			call_intrins (ctx, INTRINS_SSE_PAUSE, NULL, "");
+			ctx->call_intrins (INTRINS_SSE_PAUSE, NULL, "");
 			break;
 #else
 			break;
@@ -1895,14 +1895,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			args [0] = cmp;
 			args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false));
-			cmp = call_intrins (ctx, INTRINS_EXPECT_I1, args, "");
+			cmp = ctx->call_intrins (INTRINS_EXPECT_I1, args, "");
 
 			mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, cont_bb, poll_bb, 1000, 1);
 
 			ctx->builder = builder = ctx->create_builder ();
 			builder->SetInsertPoint (llvm::unwrap (poll_bb));
 
-			callee = get_jit_callee (ctx, icall_name, sig, MONO_PATCH_INFO_ABS, ctx->module->gc_poll_cold_wrapper_compiled);
+			callee = ctx->get_jit_callee (icall_name, sig, MONO_PATCH_INFO_ABS, ctx->module->gc_poll_cold_wrapper_compiled);
 			call = llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (sig)), llvm::unwrap (callee), gep_index_list (NULL, 0), ""));
 			set_call_cold_cconv (call);
 			llvm::wrap (builder->CreateBr (llvm::unwrap (cont_bb)));
@@ -1935,7 +1935,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::unwrap (op_to_llvm_type (ins->opcode))));
 			args [1] = llvm::wrap (ctx->convert (rhs, llvm::unwrap (op_to_llvm_type (ins->opcode))));
 			intrins = ovf_op_to_intrins (ins->opcode);
-			val = llvm::unwrap (call_intrins (ctx, intrins, args, ""));
+			val = llvm::unwrap (ctx->call_intrins (intrins, args, ""));
 			values [ins->dreg] = builder->CreateExtractValue (val, {0}, dname);
 			ovf = llvm::wrap (builder->CreateExtractValue (val, {1}, ""));
 			ctx->emit_cond_system_exception (bb, "OverflowException", ovf, FALSE);
@@ -1962,7 +1962,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 
 			if (!addresses [ins->dreg])
-				addresses [ins->dreg] = build_named_alloca_address (ctx, m_class_get_byval_arg (klass), "vzero");
+				addresses [ins->dreg] = ctx->build_named_alloca_address (m_class_get_byval_arg (klass), "vzero");
 			LLVMValueRef ptr = llvm::wrap (builder->CreateBitCast (addresses [ins->dreg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 			ctx->emit_memset (builder, ptr, const_int32 (mono_class_value_size (klass, NULL)), 0);
 			break;
@@ -2041,7 +2041,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [aindex ++] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false));
 #endif
 			args [aindex ++] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 0, false));
-			call_intrins (ctx, INTRINS_MEMCPY, args, "");
+			ctx->call_intrins (INTRINS_MEMCPY, args, "");
 			break;
 		}
 		case OP_LLVM_OUTARG_VT: {
@@ -2318,7 +2318,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [0] = llvm::wrap (lhs);
 			args [1] = llvm::wrap (rhs);
 
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, simd_ins_to_intrins (ins->opcode), args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (simd_ins_to_intrins (ins->opcode), args, ""));
 			break;
 		}
 		case OP_PAVGB_UN:
@@ -2518,7 +2518,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			v = llvm::wrap (ctx->convert (values [ins->sreg1], llvm::unwrap (simd_op_to_llvm_type (ins->opcode))));
 
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, simd_ins_to_intrins (ins->opcode), &v, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (simd_ins_to_intrins (ins->opcode), &v, dname));
 			break;
 		}
 		case OP_COMPPS:
@@ -2579,7 +2579,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [0] = llvm::wrap (lhs);
 			args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_imm, false));
 
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, simd_ins_to_intrins (ins->opcode), args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (simd_ins_to_intrins (ins->opcode), args, dname));
 			break;
 		}
 
@@ -2596,7 +2596,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [0] = llvm::wrap (lhs);
 			args [1] = llvm::wrap (values [ins->sreg2]);
 
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, simd_ins_to_intrins (ins->opcode), args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (simd_ins_to_intrins (ins->opcode), args, dname));
 			break;
 		}
 
@@ -2792,7 +2792,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			/* 0xf1 == multiply all 4 elements, add them together, and store the result to the lowest element */
 			args [2] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), 0xf1, false));
 
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, simd_ins_to_intrins (ins->opcode), args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (simd_ins_to_intrins (ins->opcode), args, dname));
 			break;
 		}
 
@@ -2811,13 +2811,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [1];
 			if (ins->inst_c1 == MONO_TYPE_R4) {
 				args [0] = llvm::wrap (lhs);
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_MOVMSK_PS, args, dname));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_MOVMSK_PS, args, dname));
 			} else if (ins->inst_c1 == MONO_TYPE_R8) {
 				args [0] = llvm::wrap (lhs);
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_MOVMSK_PD, args, dname));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_MOVMSK_PD, args, dname));
 			} else {
 				args [0] = llvm::wrap (ctx->convert (lhs, llvm::unwrap (sse_i1_t)));
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_PMOVMSKB, args, dname));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_PMOVMSKB, args, dname));
 			}
 			break;
 		}
@@ -2998,25 +2998,25 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE_PREFETCHT0: {
 			LLVMValueRef addr = llvm::wrap (ctx->convert (lhs, llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			LLVMValueRef args [] = { addr, const_int32 (0), const_int32 (3), const_int32 (1) };
-			call_intrins (ctx, INTRINS_PREFETCH, args, "");
+			ctx->call_intrins (INTRINS_PREFETCH, args, "");
 			break;
 		}
 		case OP_SSE_PREFETCHT1: {
 			LLVMValueRef addr = llvm::wrap (ctx->convert (lhs, llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			LLVMValueRef args [] = { addr, const_int32 (0), const_int32 (2), const_int32 (1) };
-			call_intrins (ctx, INTRINS_PREFETCH, args, "");
+			ctx->call_intrins (INTRINS_PREFETCH, args, "");
 			break;
 		}
 		case OP_SSE_PREFETCHT2: {
 			LLVMValueRef addr = llvm::wrap (ctx->convert (lhs, llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			LLVMValueRef args [] = { addr, const_int32 (0), const_int32 (1), const_int32 (1) };
-			call_intrins (ctx, INTRINS_PREFETCH, args, "");
+			ctx->call_intrins (INTRINS_PREFETCH, args, "");
 			break;
 		}
 		case OP_SSE_PREFETCHNTA: {
 			LLVMValueRef addr = llvm::wrap (ctx->convert (lhs, llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 			LLVMValueRef args [] = { addr, const_int32 (0), const_int32 (0), const_int32 (1) };
-			call_intrins (ctx, INTRINS_PREFETCH, args, "");
+			ctx->call_intrins (INTRINS_PREFETCH, args, "");
 			break;
 		}
 
@@ -3140,10 +3140,10 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (rhs), cmp };
 			switch (ins->opcode) {
 			case OP_SSE_CMPSS:
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_CMPSS, args, ""));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_CMPSS, args, ""));
 				break;
 			case OP_SSE2_CMPSD:
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_CMPSD, args, ""));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_CMPSD, args, ""));
 				break;
 			default:
 				g_assert_not_reached ();
@@ -3163,7 +3163,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case CMP_NE: id = INTRINS_SSE_COMINEQ_SS; break;
 			default: g_assert_not_reached (); break;
 			}
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			break;
 		}
 		case OP_SSE_UCOMISS: {
@@ -3178,7 +3178,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case CMP_NE: id = INTRINS_SSE_UCOMINEQ_SS; break;
 			default: g_assert_not_reached (); break;
 			}
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			break;
 		}
 		case OP_SSE2_COMISD: {
@@ -3193,7 +3193,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case CMP_NE: id = INTRINS_SSE_COMINEQ_SD; break;
 			default: g_assert_not_reached (); break;
 			}
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			break;
 		}
 		case OP_SSE2_UCOMISD: {
@@ -3208,7 +3208,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case CMP_NE: id = INTRINS_SSE_UCOMINEQ_SD; break;
 			default: g_assert_not_reached (); break;
 			}
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			break;
 		}
 		case OP_SSE_CVTSI2SS:
@@ -3229,7 +3229,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE2_PMULUDQ: {
 #if LLVM_API_VERSION < 700
 			LLVMValueRef args [] = { lhs, rhs };
-			values [ins->dreg] = call_intrins (ctx, INTRINS_SSE_PMULUDQ, args, dname);
+			values [ins->dreg] = ctx->call_intrins (INTRINS_SSE_PMULUDQ, args, dname);
 #else
 			LLVMValueRef i32_max = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), UINT32_MAX, false));
 			LLVMValueRef maskvals [] = { i32_max, i32_max };
@@ -3243,7 +3243,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE_SQRTSS:
 		case OP_SSE2_SQRTSD: {
 #if LLVM_API_VERSION < 700
-			LLVMValueRef result = call_intrins (ctx, simd_ins_to_intrins (ins->opcode), reinterpret_cast<LLVMValueRef*> (&rhs), dname);
+			LLVMValueRef result = ctx->call_intrins (simd_ins_to_intrins (ins->opcode), reinterpret_cast<LLVMValueRef*> (&rhs), dname);
 			const int maskf32[] = { 0, 5, 6, 7 };
 			const int maskf64[] = { 0, 1 };
 			const int *mask = nullptr;
@@ -3259,7 +3259,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			llvm::Value *upper = values [ins->sreg1];
 			llvm::Value *lower = values [ins->sreg2];
 			LLVMValueRef scalar = llvm::wrap (builder->CreateExtractElement (lower, llvm::unwrap (const_int32 (0)), ""));
-			LLVMValueRef result = call_intrins (ctx, simd_ins_to_intrins (ins->opcode), &scalar, dname);
+			LLVMValueRef result = ctx->call_intrins (simd_ins_to_intrins (ins->opcode), &scalar, dname);
 			values [ins->dreg] = builder->CreateInsertElement (upper, llvm::unwrap (result), llvm::unwrap (const_int32 (0)), "");
 #endif
 			break;
@@ -3272,7 +3272,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case OP_SSE_RSQRTSS: id = INTRINS_SSE_RSQRT_SS; break;
 			default: g_assert_not_reached (); break;
 			};
-			LLVMValueRef result = call_intrins (ctx, id, reinterpret_cast<LLVMValueRef*> (&rhs), dname);
+			LLVMValueRef result = ctx->call_intrins (id, reinterpret_cast<LLVMValueRef*> (&rhs), dname);
 			const int mask[] = { 0, 5, 6, 7 };
 			LLVMValueRef shufmask = create_const_vector_i32 (mask, 4);
 			values [ins->dreg] = builder->CreateShuffleVector (llvm::unwrap (result), lhs, llvm::unwrap (shufmask), "");
@@ -3286,7 +3286,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case SIMD_OP_SSE_MFENCE: id = INTRINS_SSE_MFENCE; break;
 			default: g_assert_not_reached (); break;
 			}
-			call_intrins (ctx, id, NULL, "");
+			ctx->call_intrins (id, NULL, "");
 			break;
 		}
 		case OP_XOP_X_I:
@@ -3303,7 +3303,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			default: g_assert_not_reached (); break;
 			}
 			LLVMValueRef arg0 = llvm::wrap (lhs);
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, &arg0, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, &arg0, ""));
 			break;
 		}
 		case OP_XOP_I4_X:
@@ -3320,7 +3320,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case SIMD_OP_SSE_CVTTSD2SI64: id = INTRINS_SSE_CVTTSD2SI64; break;
 			default: g_assert_not_reached (); break;
 			}
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, reinterpret_cast<LLVMValueRef*> (&lhs), ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, reinterpret_cast<LLVMValueRef*> (&lhs), ""));
 			break;
 		}
 		case OP_XOP_I4_X_X: {
@@ -3339,7 +3339,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				args [1] = llvm::wrap (ctx->convert (llvm::unwrap (args [1]), llvm::unwrap (sse_i8_t)));
 			}
 			
-			llvm::Value *call = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			llvm::Value *call = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			if (ret_bool) {
 				// if return type is bool (it's still i32) we need to normalize it to 1/0
 				llvm::Value *cmp_zero = builder->CreateICmp (to_llvm_pred (LLVMIntNE), call, llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), "");
@@ -3411,7 +3411,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			default: g_assert_not_reached (); break;
 			}
 
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			break;
 		}
 
@@ -3421,7 +3421,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef src = llvm::wrap (ctx->convert (lhs, llvm::unwrap (sse_i1_t)));
 			LLVMValueRef mask = llvm::wrap (ctx->convert (rhs, llvm::unwrap (sse_i1_t)));
 			LLVMValueRef args[] = { src, mask, dstaddr };
-			call_intrins (ctx, INTRINS_SSE_MASKMOVDQU, args, "");
+			ctx->call_intrins (INTRINS_SSE_MASKMOVDQU, args, "");
 			break;
 		}
 
@@ -3470,7 +3470,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 			LLVMTypeRef vecty = type_to_sse_type (type);
 			LLVMValueRef args [] = { llvm::wrap (ctx->convert (lhs, llvm::unwrap (vecty))), llvm::wrap (ctx->convert (rhs, llvm::unwrap (vecty))) };
-			LLVMValueRef result = call_intrins (ctx, id, args, dname);
+			LLVMValueRef result = ctx->call_intrins (id, args, dname);
 			values [ins->dreg] = ctx->convert (llvm::unwrap (result), llvm::unwrap (vecty));
 			break;
 		}
@@ -3480,7 +3480,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [0] = llvm::wrap (ctx->convert (lhs, llvm::unwrap (sse_i2_t)));
 			args [1] = llvm::wrap (ctx->convert (rhs, llvm::unwrap (sse_i2_t)));
 			values [ins->dreg] = ctx->convert (
-				llvm::unwrap (call_intrins (ctx, INTRINS_SSE_PACKUSWB, args, dname)),
+				llvm::unwrap (ctx->call_intrins (INTRINS_SSE_PACKUSWB, args, dname)),
 				llvm::unwrap (type_to_sse_type (ins->inst_c1)));
 			break;
 		}
@@ -3488,7 +3488,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE2_SRLI: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (rhs) };
 			values [ins->dreg] = ctx->convert (
-				llvm::unwrap (call_intrins (ctx, INTRINS_SSE_PSRLI_W, args, dname)),
+				llvm::unwrap (ctx->call_intrins (INTRINS_SSE_PSRLI_W, args, dname)),
 				llvm::unwrap (type_to_sse_type (ins->inst_c1)));
 			break;
 		}
@@ -3574,7 +3574,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef t = LLVMTypeOf (value);
 			LLVMValueRef index_vect = llvm::wrap (builder->CreateInsertElement (llvm::Constant::getNullValue (llvm::unwrap (t)), ctx->convert (index, llvm::cast<llvm::VectorType> (llvm::unwrap (t))->getElementType ()), llvm::unwrap (const_int32 (0)), ""));
 			LLVMValueRef args [] = { value, index_vect };
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			break;
 		}
 
@@ -3698,7 +3698,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 		case OP_SSSE3_SHUFFLE: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (rhs) };
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_PSHUFB, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_PSHUFB, args, dname));
 			break;
 		}
 
@@ -3737,7 +3737,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_SSE41_ROUNDP: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false)) };
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, ins->inst_c1 == MONO_TYPE_R4 ? INTRINS_SSE_ROUNDPS : INTRINS_SSE_ROUNDPD, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (ins->inst_c1 == MONO_TYPE_R4 ? INTRINS_SSE_ROUNDPS : INTRINS_SSE_ROUNDPD, args, dname));
 			break;
 		}
 		case OP_SSE41_ROUNDS: {
@@ -3745,19 +3745,19 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [0] = llvm::wrap (lhs);
 			args [1] = llvm::wrap (rhs);
 			args [2] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_c0, false));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, ins->inst_c1 == MONO_TYPE_R4 ? INTRINS_SSE_ROUNDSS : INTRINS_SSE_ROUNDSD, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (ins->inst_c1 == MONO_TYPE_R4 ? INTRINS_SSE_ROUNDSS : INTRINS_SSE_ROUNDSD, args, dname));
 			break;
 		}
 
 		case OP_SSE41_DPPS_IMM: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (rhs), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ins->inst_c0, false)) };
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_DPPS, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_DPPS, args, dname));
 			break;
 		}
 
 		case OP_SSE41_DPPD_IMM: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (rhs), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ins->inst_c0, false)) };
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_DPPD, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_DPPD, args, dname));
 			break;
 		}
 
@@ -3766,7 +3766,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			args [0] = llvm::wrap (ctx->builder->CreateBitCast (lhs, llvm::unwrap (sse_i1_t), ""));
 			args [1] = llvm::wrap (ctx->builder->CreateBitCast (rhs, llvm::unwrap (sse_i1_t), ""));
 			args [2] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ins->inst_c0, false));
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_MPSADBW, args, dname));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_MPSADBW, args, dname));
 			break;
 		}
 
@@ -3777,7 +3777,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				args [0] = llvm::wrap (values [ins->sreg1]);
 				args [1] = llvm::wrap (values [ins->sreg2]);
 				args [2] = llvm::wrap (ctx->convert (values [ins->sreg3], llvm::Type::getInt8Ty (ctx->llvm_ctx ())));
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_INSERTPS, args, dname));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_INSERTPS, args, dname));
 			} else {
 				// other overloads are implemented with `insertelement`
 				values [ins->dreg] = builder->CreateInsertElement (values [ins->sreg1], ctx->convert (values [ins->sreg2], llvm::unwrap (primitive_type_to_llvm_type (inst_c1_type (ins)))), ctx->convert (values [ins->sreg3], llvm::Type::getInt8Ty (ctx->llvm_ctx ())), dname);
@@ -3804,15 +3804,15 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE41_BLENDV: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (rhs), llvm::wrap (values [ins->sreg3]) };
 			if (ins->inst_c1 == MONO_TYPE_R4) {
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_BLENDVPS, args, dname));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_BLENDVPS, args, dname));
 			} else if (ins->inst_c1 == MONO_TYPE_R8) {
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_BLENDVPD, args, dname));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_BLENDVPD, args, dname));
 			} else {
 				// for other non-fp type just convert to <16 x i8> and pass to @llvm.x86.sse41.pblendvb
 				args [0] = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (args [0]), llvm::unwrap (sse_i1_t), ""));
 				args [1] = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (args [1]), llvm::unwrap (sse_i1_t), ""));
 				args [2] = llvm::wrap (ctx->builder->CreateBitCast (llvm::unwrap (args [2]), llvm::unwrap (sse_i1_t), ""));
-				values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_SSE_PBLENDVB, args, dname));
+				values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_SSE_PBLENDVB, args, dname));
 			}
 			break;
 		}
@@ -3873,7 +3873,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE41_MUL: {
 #if LLVM_API_VERSION < 700
 			LLVMValueRef args [] = { lhs, rhs };
-			values [ins->dreg] = call_intrins (ctx, INTRINS_SSE_PMULDQ, args, dname);
+			values [ins->dreg] = ctx->call_intrins (INTRINS_SSE_PMULDQ, args, dname);
 #else
 			const int shift_vals [] = { 32, 32 };
 			const LLVMValueRef args [] = {
@@ -3909,19 +3909,19 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case MONO_TYPE_U8: id = INTRINS_SSE_CRC32_64_64; break;
 			default: g_assert_not_reached (); break;
 			}
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, id, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (id, args, ""));
 			break;
 		}
 
 		case OP_PCLMULQDQ_IMM: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (rhs), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ins->inst_c0, false)) };
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_PCLMULQDQ, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_PCLMULQDQ, args, ""));
 			break;
 		}
 
 		case OP_AES_KEYGEN_IMM: {
 			LLVMValueRef args [] = { llvm::wrap (lhs), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), ins->inst_c0, false)) };
-			values [ins->dreg] = llvm::unwrap (call_intrins (ctx, INTRINS_AESNI_AESKEYGENASSIST, args, ""));
+			values [ins->dreg] = llvm::unwrap (ctx->call_intrins (INTRINS_AESNI_AESKEYGENASSIST, args, ""));
 			break;
 		}
 #endif
@@ -3982,7 +3982,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					g_assert_not_reached ();
 				}
 				/* res = !wasm.anytrue (val) */
-				values [ins->dreg] = call_intrins (ctx, intrins, &val, "");
+				values [ins->dreg] = ctx->call_intrins (intrins, &val, "");
 				values [ins->dreg] = builder->CreateZExt (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), values [ins->dreg], llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), ""), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname);
 				break;
 			}
@@ -4061,9 +4061,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 				bool is_r4 = ins->inst_c1 == MONO_TYPE_R4;
 				if (ins->inst_c0 == OP_FMAX)
-					values [ins->dreg] = call_intrins (ctx, is_r4 ? INTRINS_SSE_MAXPS : INTRINS_SSE_MAXPD, args, dname);
+					values [ins->dreg] = ctx->call_intrins (is_r4 ? INTRINS_SSE_MAXPS : INTRINS_SSE_MAXPD, args, dname);
 				else
-					values [ins->dreg] = call_intrins (ctx, is_r4 ? INTRINS_SSE_MINPS : INTRINS_SSE_MINPD, args, dname);
+					values [ins->dreg] = ctx->call_intrins (is_r4 ? INTRINS_SSE_MINPS : INTRINS_SSE_MINPD, args, dname);
 #else
 				NOT_IMPLEMENTED;
 #endif
@@ -4106,17 +4106,17 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_POPCNT32:
-			values [ins->dreg] = call_intrins (ctx, INTRINS_CTPOP_I32, reinterpret_cast<LLVMValueRef*> (&lhs), "");
+			values [ins->dreg] = ctx->call_intrins (INTRINS_CTPOP_I32, reinterpret_cast<LLVMValueRef*> (&lhs), "");
 			break;
 		case OP_POPCNT64:
-			values [ins->dreg] = call_intrins (ctx, INTRINS_CTPOP_I64, reinterpret_cast<LLVMValueRef*> (&lhs), "");
+			values [ins->dreg] = ctx->call_intrins (INTRINS_CTPOP_I64, reinterpret_cast<LLVMValueRef*> (&lhs), "");
 			break;
 		case OP_CTTZ32:
 		case OP_CTTZ64: {
 			LLVMValueRef args [2];
 			args [0] = lhs;
 			args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 0, false));
-			values [ins->dreg] = call_intrins (ctx, ins->opcode == OP_CTTZ32 ? INTRINS_CTTZ_I32 : INTRINS_CTTZ_I64, args, "");
+			values [ins->dreg] = ctx->call_intrins (ins->opcode == OP_CTTZ32 ? INTRINS_CTTZ_I32 : INTRINS_CTTZ_I64, args, "");
 			break;
 		}
 		case OP_BEXTR32:
@@ -4124,7 +4124,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [2];
 			args [0] = lhs;
 			args [1] = ctx->convert (rhs, llvm::unwrap (ins->opcode == OP_BEXTR32 ? llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())) : llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())))); // cast ushort to u32/u64
-			values [ins->dreg] = call_intrins (ctx, ins->opcode == OP_BEXTR32 ? INTRINS_BEXTR_I32 : INTRINS_BEXTR_I64, args, "");
+			values [ins->dreg] = ctx->call_intrins (ins->opcode == OP_BEXTR32 ? INTRINS_BEXTR_I32 : INTRINS_BEXTR_I64, args, "");
 			break;
 		}
 		case OP_BZHI32:
@@ -4132,7 +4132,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [2];
 			args [0] = lhs;
 			args [1] = rhs;
-			values [ins->dreg] = call_intrins (ctx, ins->opcode == OP_BZHI32 ? INTRINS_BZHI_I32 : INTRINS_BZHI_I64, args, "");
+			values [ins->dreg] = ctx->call_intrins (ins->opcode == OP_BZHI32 ? INTRINS_BZHI_I32 : INTRINS_BZHI_I64, args, "");
 			break;
 		}
 		case OP_MULX_H32:
@@ -4158,7 +4158,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [2];
 			args [0] = lhs;
 			args [1] = rhs;
-			values [ins->dreg] = call_intrins (ctx, ins->opcode == OP_PEXT32 ? INTRINS_PEXT_I32 : INTRINS_PEXT_I64, args, "");
+			values [ins->dreg] = ctx->call_intrins (ins->opcode == OP_PEXT32 ? INTRINS_PEXT_I32 : INTRINS_PEXT_I64, args, "");
 			break;
 		}
 		case OP_PDEP32:
@@ -4166,7 +4166,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [2];
 			args [0] = lhs;
 			args [1] = rhs;
-			values [ins->dreg] = call_intrins (ctx, ins->opcode == OP_PDEP32 ? INTRINS_PDEP_I32 : INTRINS_PDEP_I64, args, "");
+			values [ins->dreg] = ctx->call_intrins (ins->opcode == OP_PDEP32 ? INTRINS_PDEP_I32 : INTRINS_PDEP_I64, args, "");
 			break;
 		}
 #endif /* ENABLE_NETCORE */
@@ -4179,7 +4179,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [2];
 			args [0] = lhs;
 			args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false));
-			values [ins->dreg] = builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (get_intrins (ctx, ins->opcode == OP_LZCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)))), llvm::unwrap (get_intrins (ctx, ins->opcode == OP_LZCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)), gep_index_list (args, 2), "");
+			values [ins->dreg] = builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (ctx->get_intrins (ins->opcode == OP_LZCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)))), llvm::unwrap (ctx->get_intrins (ins->opcode == OP_LZCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)), gep_index_list (args, 2), "");
 			break;
 		}
 #endif
@@ -4193,7 +4193,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case SIMD_OP_ARM64_RBIT64: id = INTRINS_BITREVERSE_I64; break;
 			default: g_assert_not_reached (); break;
 			}
-			values [ins->dreg] = call_intrins (ctx, id, reinterpret_cast<LLVMValueRef*> (&lhs), "");
+			values [ins->dreg] = ctx->call_intrins (id, reinterpret_cast<LLVMValueRef*> (&lhs), "");
 			break;
 		}
 		case OP_XOP_X_X_X:
@@ -4218,7 +4218,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			if (zext_last)
 				arg1 = llvm::wrap (ctx->builder->CreateZExt (llvm::unwrap (arg1), llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ""));
 			LLVMValueRef args [] = { lhs, arg1 };
-			values [ins->dreg] = call_intrins (ctx, id, args, "");
+			values [ins->dreg] = ctx->call_intrins (id, args, "");
 			break;
 		}
 		case OP_XOP_X_X_X_X: {
@@ -4231,7 +4231,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			default: g_assert_not_reached (); break;
 			}
 			LLVMValueRef args [] = { lhs, rhs, arg3 };
-			values [ins->dreg] = call_intrins (ctx, id, args, "");
+			values [ins->dreg] = ctx->call_intrins (id, args, "");
 			break;
 		}
 		case OP_XOP_X_X: {
@@ -4247,7 +4247,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 
 			LLVMValueRef arg0 = lhs;
-			values [ins->dreg] = call_intrins (ctx, id, &arg0, "");
+			values [ins->dreg] = ctx->call_intrins (id, &arg0, "");
 			break;
 		}
 		case OP_LSCNT32:
@@ -4270,7 +4270,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef args [2];
 			args [0] = add;
 			args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 0, false));
-			values [ins->dreg] = builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (get_intrins (ctx, ins->opcode == OP_LSCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)))), llvm::unwrap (get_intrins (ctx, ins->opcode == OP_LSCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)), gep_index_list (args, 2), "");
+			values [ins->dreg] = builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (ctx->get_intrins (ins->opcode == OP_LSCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)))), llvm::unwrap (ctx->get_intrins (ins->opcode == OP_LSCNT32 ? INTRINS_CTLZ_I32 : INTRINS_CTLZ_I64)), gep_index_list (args, 2), "");
 			break;
 		}
 		case OP_ARM64_SMULH:
@@ -4386,7 +4386,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			{
 				LLVMTypeRef icall_sig = LLVMFunctionType (llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ())), NULL, 0, FALSE);
-				callee = get_jit_callee (ctx, "llvm_resume_unwind_trampoline", icall_sig, MONO_PATCH_INFO_JIT_ICALL_ID, GUINT_TO_POINTER (MONO_JIT_ICALL_mono_llvm_resume_unwind_trampoline));
+				callee = ctx->get_jit_callee ("llvm_resume_unwind_trampoline", icall_sig, MONO_PATCH_INFO_JIT_ICALL_ID, GUINT_TO_POINTER (MONO_JIT_ICALL_mono_llvm_resume_unwind_trampoline));
 				llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (icall_sig)), llvm::unwrap (callee), gep_index_list (NULL, 0), ""));
 				llvm::wrap (builder->CreateUnreachable ());
 			}

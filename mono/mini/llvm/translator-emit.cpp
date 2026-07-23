@@ -185,7 +185,7 @@ EmitContext::emit_memset (llvm::IRBuilder<> *builder, LLVMValueRef v, LLVMValueR
 	args [aindex ++] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), alignment, false));
 #endif
 	args [aindex ++] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (this->llvm_ctx ()), 0, false));
-	llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (get_intrins (this, INTRINS_MEMSET)))), llvm::unwrap (get_intrins (this, INTRINS_MEMSET)), gep_index_list (args, aindex), ""));
+	llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (this->get_intrins (INTRINS_MEMSET)))), llvm::unwrap (this->get_intrins (INTRINS_MEMSET)), gep_index_list (args, aindex), ""));
 }
 
 /*
@@ -679,35 +679,35 @@ get_aotconst_module (MonoLLVMModule *module, llvm::IRBuilder<> *builder, MonoJum
 }
 
 LLVMValueRef
-get_aotconst (EmitContext *ctx, MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type)
+EmitContext::get_aotconst (MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type)
 {
 	MonoCompile *cfg;
 	guint32 got_offset;
 	MonoJumpInfo *ji;
 	LLVMValueRef load;
 
-	cfg = ctx->cfg;
+	cfg = this->cfg;
 
-	load = get_aotconst_module (ctx->module, ctx->builder, type, data, llvm_type, &got_offset, &ji);
+	load = get_aotconst_module (this->module, this->builder, type, data, llvm_type, &got_offset, &ji);
 
 	ji->next = cfg->patch_info;
 	cfg->patch_info = ji;
 
-	/* 
+	/*
 	 * If the got slot is shared, it means its initialized when the aot image is loaded, so we don't need to
 	 * explicitly initialize it.
 	 */
 	if (!mono_aot_is_shared_got_offset (got_offset)) {
 		//mono_print_ji (ji);
 		//printf ("\n");
-		ctx->cfg->got_access_count ++;
+		this->cfg->got_access_count ++;
 	}
 
 	return load;
 }
 
 LLVMValueRef
-get_jit_callee (EmitContext *ctx, const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data)
+EmitContext::get_jit_callee (const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data)
 {
 	gpointer target;
 
@@ -716,13 +716,13 @@ get_jit_callee (EmitContext *ctx, const char *name, LLVMTypeRef llvm_sig, MonoJu
 		MonoJitICallInfo * const info = mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)));
 		target = const_cast<gpointer>(mono_icall_get_wrapper_full (info, TRUE));
 	} else {
-		target = resolve_patch (ctx->cfg, type, data);
+		target = resolve_patch (this->cfg, type, data);
 	}
 
-	LLVMValueRef tramp_var = LLVMAddGlobal (ctx->lmodule, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0)), name);
-	LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)), llvm::PointerType::get (ctx->llvm_ctx (), 0))));
+	LLVMValueRef tramp_var = LLVMAddGlobal (this->lmodule, llvm::wrap (llvm::PointerType::get (this->llvm_ctx (), 0)), name);
+	LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::ConstantInt::get (llvm::Type::getInt64Ty (this->llvm_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)), llvm::PointerType::get (this->llvm_ctx (), 0))));
 	LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
-	LLVMValueRef callee = llvm::wrap (ctx->builder->CreateLoad (llvm::PointerType::get (ctx->llvm_ctx (), 0), llvm::unwrap (tramp_var), ""));
+	LLVMValueRef callee = llvm::wrap (this->builder->CreateLoad (llvm::PointerType::get (this->llvm_ctx (), 0), llvm::unwrap (tramp_var), ""));
 	return callee;
 }
 
@@ -952,7 +952,7 @@ EmitContext::emit_cond_system_exception (MonoBasicBlock *bb, const char *exc_typ
 			 * - On x86, LLVM generated code doesn't push the arguments
 			 * - The trampoline takes the throw address as an arguments, not a pc offset.
 			 */
-			callee = get_jit_callee (this, "llvm_throw_corlib_exception_trampoline", sig, MONO_PATCH_INFO_JIT_ICALL_ID, GUINT_TO_POINTER (icall_id));
+			callee = this->get_jit_callee ("llvm_throw_corlib_exception_trampoline", sig, MONO_PATCH_INFO_JIT_ICALL_ID, GUINT_TO_POINTER (icall_id));
 
 			/*
 			 * Make sure that ex_bb starts with the invoke, so the block address points to it, and not to the load 
@@ -1190,9 +1190,9 @@ EmitContext::build_alloca_address (MonoType *t)
 }
 
 Address*
-build_named_alloca_address (EmitContext *ctx, MonoType *t, const char *name)
+EmitContext::build_named_alloca_address (MonoType *t, const char *name)
 {
-	return ctx->create_address (ctx->build_named_alloca (t, name), ctx->type_to_llvm_type (t));
+	return create_address (build_named_alloca (t, name), type_to_llvm_type (t));
 }
 
 LLVMValueRef
