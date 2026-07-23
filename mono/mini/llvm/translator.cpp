@@ -175,6 +175,23 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 {
 	int i, j;
 
+	/*
+	 * GC-safepoint gate (#20; design doc 23 §5.1). The tier-1 pipeline sets
+	 * GC=coreclr and emits the gc.safepoint_poll body but never runs LLVM's
+	 * place-safepoints pass, so no poll calls are ever inserted. With no
+	 * place-safepoints pass, tier-1 code is unsafe under cooperative/hybrid
+	 * suspend: a poll-free loop would never observe a stop-the-world request and
+	 * hang the collector. Decline to the classic JIT whenever safepoints are
+	 * enabled. Inert under full-preemptive suspend (the predicate is false), so
+	 * the current build's admission path is unchanged.
+	 */
+	if (mono_threads_are_safepoints_enabled ()) {
+		TRACE_FAILURE_CFG (cfg, "GC safepoints enabled: tier-1 has no place-safepoints pass (#20)");
+		cfg->exception_message = g_strdup ("GC safepoints enabled (no place-safepoints pass)");
+		cfg->disable_llvm = TRUE;
+		return;
+	}
+
 	/* Diagnostic filter (MONO_LLVM_METHOD); a no-op unless the variable is set. */
 	if (llvm_method_filter_excludes (cfg->method)) {
 		TRACE_FAILURE_CFG (cfg, "not selected by MONO_LLVM_METHOD");
