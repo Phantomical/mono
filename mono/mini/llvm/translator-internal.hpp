@@ -297,6 +297,7 @@ typedef struct {
 	/* AOT-const / jit-callee / named-alloca helpers (defined in translator-emit.cpp). */
 	LLVMValueRef get_aotconst (MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type);
 	LLVMValueRef get_jit_callee (const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data);
+	LLVMValueRef get_direct_callee (const char *name, LLVMTypeRef llvm_sig, gpointer target);
 	Address *build_named_alloca_address (MonoType *t, const char *name);
 
 	/* Per-instruction translator support (defined in translator-bb.cpp). */
@@ -506,6 +507,14 @@ LLVMValueRef
 get_double_const (MonoCompile *cfg, double val);
 LLVMValueRef
 get_float_const (MonoCompile *cfg, float val);
+/*
+ * A stable, linker-safe symbol name for METHOD, suitable for naming a direct
+ * `call @name` edge to it. The same method always gets the same name back
+ * (cached for the life of the process) and two distinct methods never
+ * collide; see the definition for how that is arranged.
+ */
+const char *
+mono_llvm_method_symbol (MonoMethod *method);
 
 /* Defined in translator-bb.cpp. */
 void

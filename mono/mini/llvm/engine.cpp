@@ -1598,9 +1598,11 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 *     that rescues the symbol-less .mono_lsda / .llvm_stackmaps sections from
 	 *     jitlink::prune() - the JITLink equivalent of the old
 	 *     setProcessAllSections(true).
-	 * The code model stays Large (host_target_machine_builder), so cross-section
-	 * references remain 64-bit and need no in-window placement (that is a later
-	 * slice); the reloc audit checks that invariant on the resolved edges.
+	 * The code model is Small+PIC (host_target_machine_builder, J5), so a
+	 * reference JITLink cannot prove is in range is not emitted as a bare narrow
+	 * relocation - it is rerouted through a PLT stub or GOT slot with a full
+	 * 64-bit outgoing edge, correct at any distance; the reloc audit checks that
+	 * invariant on the resolved edges.
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es, const Triple &) -> Expected<std::unique_ptr<ObjectLayer>> {
@@ -1856,6 +1858,30 @@ MonoLLVMJIT::context ()
 void
 MonoLLVMJIT::register_symbol (StringRef name, void *addr)
 {
+	std::lock_guard<std::mutex> lock (named_symbols_mutex_);
+
+	auto it = named_symbols_.find (name.str ());
+	if (it != named_symbols_.end ()) {
+		/*
+		 * Every caller here names a target that is stable for the life of the
+		 * process UNDER NORMAL OPERATION - but mono/mini's own regression
+		 * harness (mini_regression_step (), driver.c) deliberately wipes the
+		 * classic JIT's jit_trampoline_hash / jit_code_hash between opt-level
+		 * passes to force a clean recompile, which makes
+		 * mono_create_jit_trampoline ()/mono_icall_get_wrapper_full () hand
+		 * back a FRESH address for a method or icall whose name we already
+		 * registered. That new address is just as correct as the old one -
+		 * every trampoline this engine ever names forwards to the same
+		 * target for as long as the domain lives, and an orphaned one is
+		 * never unmapped - so once a name is on file we keep the first
+		 * address rather than treat the mismatch as the real bug it would be
+		 * anywhere else (a genuine collision between two distinct targets,
+		 * which mono_llvm_method_symbol ()'s own disambiguation already rules
+		 * out).
+		 */
+		return;
+	}
+
 	auto &es = jit_->getExecutionSession ();
 	MangleAndInterner mangle (es, jit_->getDataLayout ());
 
@@ -1865,6 +1891,7 @@ MonoLLVMJIT::register_symbol (StringRef name, void *addr)
 		JITSymbolFlags::Exported | JITSymbolFlags::Absolute);
 
 	cantFail (helpers_jd_->define (absoluteSymbols (std::move (symbols))));
+	named_symbols_.emplace (name.str (), addr);
 }
 
 void

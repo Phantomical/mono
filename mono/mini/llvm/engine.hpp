@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <llvm/ADT/ArrayRef.h>
@@ -212,9 +213,18 @@ public:
 	llvm::LLVMContext &context ();
 
 	/*
-	 * Register a runtime helper (icall target, libc shim, ...) by name.
-	 * Uses ORCv2 absoluteSymbols - the explicit-registration path the README
-	 * mandates in place of the spike's -rdynamic/process-symbol search.
+	 * Register a runtime helper (icall target, libc shim, cross-method call
+	 * target, ...) by name. Uses ORCv2 absoluteSymbols - the explicit-
+	 * registration path the README mandates in place of the spike's
+	 * -rdynamic/process-symbol search.
+	 *
+	 * Idempotent: every caller here names a target that is stable for the life
+	 * of the process (an icall wrapper, a pinvoke target, a method's specific
+	 * trampoline, ...), and the same name is expected to be registered from
+	 * many call sites across many compiles, so a repeat registration under a
+	 * name already on file is a no-op. If it names a DIFFERENT address than
+	 * before, the first address wins (see the definition for why that is
+	 * still correct rather than a bug being papered over).
 	 */
 	void register_symbol (llvm::StringRef name, void *addr);
 
@@ -287,6 +297,18 @@ private:
 	 */
 	llvm::orc::JITDylib *helpers_jd_ = nullptr;
 	uint64_t module_counter_ = 0;
+
+	/*
+	 * Every name ever handed to register_symbol (), so a repeat registration
+	 * can be recognized as such rather than tripping ORC's "symbol already
+	 * defined" failure. Guards helpers_jd_ against being asked to define the
+	 * same name twice - which is expected once cross-method calls and icall/
+	 * ABS call targets start naming their absolute symbols through this path,
+	 * since many call sites across many compiles end up naming the same
+	 * callee.
+	 */
+	std::mutex named_symbols_mutex_;
+	std::unordered_map<std::string, void *> named_symbols_;
 
 	/*
 	 * owner key -> the dylibs compiled under it, for release_owner ().

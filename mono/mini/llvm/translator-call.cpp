@@ -12,6 +12,11 @@
 
 #include "translator-internal.hpp"
 
+#include <cctype>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+
 #ifndef DISABLE_JIT
 
 /*
@@ -27,6 +32,73 @@ const_vector (const LLVMValueRef *vals, unsigned count)
 	for (unsigned i = 0; i < count; ++i)
 		elts.push_back (llvm::cast<llvm::Constant> (llvm::unwrap (vals [i])));
 	return llvm::wrap (llvm::ConstantVector::get (elts));
+}
+
+/*
+ * mono_llvm_method_symbol:
+ *
+ *   Return a stable, linker-safe symbol name for METHOD, for naming a direct
+ * `call @name` edge to its stable trampoline entry (see process_call () below).
+ * The same method always gets the same name back - cached for the life of the
+ * process, since the name has to stay valid for as long as any JITted caller
+ * might still reference it - and two distinct methods never collide.
+ *
+ *   Adapted from aot-compiler.c's get_debug_sym (): same mangling, but backed
+ * by a live, mutex-guarded, process-wide cache instead of a single AOT image's
+ * GHashTable, since the JIT compiles methods one at a time for as long as the
+ * process runs rather than once per image.
+ */
+const char *
+mono_llvm_method_symbol (MonoMethod *method)
+{
+	static std::mutex mutex;
+	static std::unordered_map<MonoMethod *, std::string> *names;
+	static std::unordered_map<std::string, MonoMethod *> *taken;
+
+	std::lock_guard<std::mutex> lock (mutex);
+
+	if (!names) {
+		names = new std::unordered_map<MonoMethod *, std::string> ();
+		taken = new std::unordered_map<std::string, MonoMethod *> ();
+	}
+
+	auto found = names->find (method);
+	if (found != names->end ())
+		return found->second.c_str ();
+
+	char *full_name = mono_method_full_name (method, TRUE);
+	size_t len = strlen (full_name);
+
+	std::string mangled = "mono_method_";
+	mangled.reserve (mangled.size () + len);
+	for (size_t i = 0; i < len; ++i) {
+		char c = full_name [i];
+
+		if (i == 0 && c >= '0' && c <= '9')
+			mangled += '_';
+		else if (isalnum ((unsigned char) c))
+			mangled += c;
+		else if (c == ' ' && i + 2 < len && full_name [i + 1] == '(' && full_name [i + 2] == ')')
+			i += 2;
+		else if (c == ',' && i + 1 < len && full_name [i + 1] == ' ')
+			mangled += '_', i++;
+		else if (c == '(' || c == ')' || c == '>')
+			/* drop */;
+		else
+			mangled += '_';
+	}
+	g_free (full_name);
+
+	/* Disambiguate the rare case where two distinct methods mangle the same
+	 * (e.g. two generic instantiations whose type-argument names happen to
+	 * stringify identically). */
+	std::string name = mangled;
+	for (int suffix = 0; taken->count (name) != 0; ++suffix)
+		name = mangled + "_" + std::to_string (suffix);
+
+	auto ins = names->emplace (method, std::move (name));
+	(*taken) [ins.first->second] = method;
+	return ins.first->second.c_str ();
 }
 
 void
@@ -500,36 +572,26 @@ EmitContext::process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, 
 				callee = this->lmethod;
 			} else {
 				ERROR_DECL (error);
-				static int tramp_index;
-				char *name;
-
-				name = g_strdup_printf ("[tramp_%d] %s", tramp_index, mono_method_full_name (call->method, TRUE));
-				tramp_index ++;
 
 				/*
-				 * Use our trampoline infrastructure for lazy compilation instead of llvm's.
-				 * Make all calls through a global. The address of the global will be saved in
-				 * MonoJitDomainInfo.llvm_jit_callees and updated when the method it refers to is
-				 * compiled.
+				 * Call the callee's stable specific-trampoline entry directly, by
+				 * name, instead of loading it out of a module-local global baked
+				 * with its address. The trampoline forwards to whatever is
+				 * currently compiled for the method - lazily compiling it on the
+				 * first call - and its address never changes for the method's
+				 * life, so an ordinary `call @symbol` always reaches the right
+				 * place. Redirecting a caller once the callee is promoted to tier 1
+				 * is the entry sled's job (at the callee's own entry), not this
+				 * call site's - there is nothing here left to repoint.
 				 */
-				auto jit_callee_it = this->jit_callees.find (call->method);
-				llvm::Value *tramp_var = jit_callee_it != this->jit_callees.end () ? jit_callee_it->second : nullptr;
-				if (!tramp_var) {
-					target =
-						mono_create_jit_trampoline (mono_domain_get (),
-													call->method, error);
-					if (!is_ok (error)) {
-						this->set_failure (mono_error_get_message (error));
-						mono_error_cleanup (error);
-						return;
-					}
-
-					tramp_var = llvm::unwrap (LLVMAddGlobal (this->lmodule, llvm::wrap (llvm::PointerType::get (this->llvm_ctx (), 0)), name));
-					LLVMSetInitializer (llvm::wrap (tramp_var), llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::ConstantInt::get (llvm::Type::getInt64Ty (this->llvm_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)), llvm::PointerType::get (this->llvm_ctx (), 0))));
-					LLVMSetLinkage (llvm::wrap (tramp_var), LLVMExternalLinkage);
-					this->jit_callees [call->method] = tramp_var;
+				target = mono_create_jit_trampoline (mono_domain_get (), call->method, error);
+				if (!is_ok (error)) {
+					this->set_failure (mono_error_get_message (error));
+					mono_error_cleanup (error);
+					return;
 				}
-				callee = llvm::wrap (builder->CreateLoad (llvm::PointerType::get (this->llvm_ctx (), 0), tramp_var, ""));
+
+				callee = this->get_direct_callee (mono_llvm_method_symbol (call->method), llvm_sig, target);
 			}
 		}
 

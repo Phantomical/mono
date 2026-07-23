@@ -12,6 +12,8 @@
 
 #include "translator-internal.hpp"
 
+#include <string>
+
 #ifndef DISABLE_JIT
 
 static void set_nonnull_load_flag (LLVMValueRef v);
@@ -706,24 +708,127 @@ EmitContext::get_aotconst (MonoJumpInfoType type, gconstpointer data, LLVMTypeRe
 	return load;
 }
 
+/*
+ * get_direct_callee:
+ *
+ *   Return a callee for emit_call () that resolves, via a real ORCv2 external
+ * symbol, to TARGET - a process-lifetime-stable address (an icall wrapper, a
+ * pinvoke target, a method's specific trampoline, ...). Registering TARGET
+ * under NAME is idempotent (see MonoLLVMJIT::register_symbol ()), so this can
+ * be called every time a call site needs the same callee without worrying
+ * about re-registration; declaring the external function in this method's
+ * module is likewise safe to repeat (LLVMGetNamedFunction finds the existing
+ * declaration).
+ *
+ *   This is what turns the callee into an ordinary `call @name` instruction
+ * instead of a load through a module-local global baked with TARGET's raw
+ * address: JITLink resolves @name through the registration above via a real
+ * relocation, which is what makes the edge eligible for the Small+PIC
+ * optimizeGOTAndStubAccesses relaxation a baked-in constant never was.
+ */
+LLVMValueRef
+EmitContext::get_direct_callee (const char *name, LLVMTypeRef llvm_sig, gpointer target)
+{
+	mono_llvm_jit_register_symbol (name, target);
+
+	LLVMValueRef fn = LLVMGetNamedFunction (this->lmodule, name);
+	if (!fn)
+		fn = LLVMAddFunction (this->lmodule, name, llvm_sig);
+	return fn;
+}
+
+/*
+ * get_jit_callee:
+ *
+ *   Return a callee for one of the non-method call shapes the translator
+ * needs: a jit icall, or an ABS-typed patch reached through cfg->abs_patches
+ * (RGCTX fetch trampolines, pinvoke/internal-call lookups, jit icall raw
+ * addresses, and the one true MONO_PATCH_INFO_ABS user - the GC-poll cold
+ * wrapper). Every one of these targets is resolved once here and is stable
+ * for the rest of the process, so - like get_direct_callee () above - this
+ * names it and hands back a direct call rather than a load through a baked-in
+ * global.
+ *
+ *   The symbol name is derived from the target's own stable identity (an
+ * icall's C name, an rgctx slot index, ...) rather than from NAME, which
+ * only ever existed to make the old baked-in global's IR dump readable; it
+ * is used only for the one case (MONO_PATCH_INFO_ABS) that carries no other
+ * structured identity.
+ */
 LLVMValueRef
 EmitContext::get_jit_callee (const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data)
 {
 	gpointer target;
+	std::string sym_name;
 
-	// This won't be patched so compile the wrapper immediately
-	if (type == MONO_PATCH_INFO_JIT_ICALL_ID) {
+	switch (type) {
+	case MONO_PATCH_INFO_JIT_ICALL_ID: {
+		// This won't be patched so compile the wrapper immediately
 		MonoJitICallInfo * const info = mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)));
 		target = const_cast<gpointer>(mono_icall_get_wrapper_full (info, TRUE));
-	} else {
+		sym_name = info->name;
+		break;
+	}
+	case MONO_PATCH_INFO_RGCTX_FETCH: {
+		/*
+		 * The lazy-fetch trampoline has the rgctx slot it fetches baked into
+		 * it, and mono_create_rgctx_lazy_fetch_trampoline () keeps one
+		 * trampoline per slot in a process-global table - the same address for
+		 * every caller that ever fetches this slot. The slot has to be resolved
+		 * exactly once and used for both the trampoline and the symbol that
+		 * names it: mini_get_rgctx_entry_slot () is not a pure lookup for every
+		 * info type - MONO_RGCTX_INFO_CAST_CACHE allocates a fresh slot on each
+		 * call - so a second resolution (e.g. going through resolve_patch ())
+		 * would hand back a different slot, leaving the name and the trampoline
+		 * it resolves to pointing at different slots.
+		 */
+		auto *entry = reinterpret_cast<MonoJumpInfoRgctxEntry *> (const_cast<gpointer> (data));
+		int slot = mini_get_rgctx_entry_slot (entry);
+		target = mono_create_rgctx_lazy_fetch_trampoline (slot);
+		sym_name = "mono_rgctx_fetch_trampoline_" + std::to_string (slot);
+		break;
+	}
+	case MONO_PATCH_INFO_ICALL_ADDR_CALL: {
+		/*
+		 * A pinvoke or internal-call lookup (mono_lookup_pinvoke_call_internal /
+		 * mono_lookup_internal_call), keyed by the MonoMethod whose [DllImport]
+		 * or icall attribute names the target. The native library that holds it
+		 * stays loaded and mapped for the rest of the process once resolved, so
+		 * the address is stable from here on.
+		 */
+		auto *method = reinterpret_cast<MonoMethod *> (const_cast<gpointer> (data));
 		target = resolve_patch (this->cfg, type, data);
+		sym_name = std::string ("icall_addr_") + mono_llvm_method_symbol (method);
+		break;
+	}
+	case MONO_PATCH_INFO_JIT_ICALL_ADDR: {
+		/* The icall's raw C function pointer - as fixed as the C function itself. */
+		MonoJitICallInfo * const info = mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)));
+		target = resolve_patch (this->cfg, type, data);
+		sym_name = std::string ("jit_icall_addr_") + info->name;
+		break;
+	}
+	default:
+		/*
+		 * MONO_PATCH_INFO_ABS is the only other type that reaches here today
+		 * (the GC-poll cold wrapper, translator-bb.cpp), and it carries no
+		 * structured identity beyond the address itself, so fall back to the
+		 * caller-supplied name - already a real, stable icall name
+		 * ("mono_threads_state_poll") in that one case.
+		 *
+		 * MONO_PATCH_INFO_SPECIFIC_TRAMPOLINE_LAZY_FETCH_ADDR can appear in
+		 * cfg->abs_patches too, but only when method-to-ir.c's calli lowering
+		 * takes its OP_AOTCONST arm, which requires cfg->compile_aot - out of
+		 * scope for this JIT-only backend, so it never actually reaches here.
+		 * resolve_patch () below has no case for it and will assert if that
+		 * ever changes, rather than silently mis-resolving it.
+		 */
+		target = resolve_patch (this->cfg, type, data);
+		sym_name = (name && *name) ? name : "mono_abs_target";
+		break;
 	}
 
-	LLVMValueRef tramp_var = LLVMAddGlobal (this->lmodule, llvm::wrap (llvm::PointerType::get (this->llvm_ctx (), 0)), name);
-	LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::ConstantInt::get (llvm::Type::getInt64Ty (this->llvm_ctx ()), static_cast<guint64>(reinterpret_cast<size_t>(target)), false)), llvm::PointerType::get (this->llvm_ctx (), 0))));
-	LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
-	LLVMValueRef callee = llvm::wrap (this->builder->CreateLoad (llvm::PointerType::get (this->llvm_ctx (), 0), llvm::unwrap (tramp_var), ""));
-	return callee;
+	return this->get_direct_callee (sym_name.c_str (), llvm_sig, target);
 }
 
 static int
