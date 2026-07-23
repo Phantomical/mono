@@ -2354,6 +2354,162 @@ test_eh_gather_cleanup_declines (MonoLLVMJIT *jit)
 	return TEST_PASS;
 }
 
+/* --------------------------------------------- reclamation integration (J4) */
+
+/*
+ * Build, in `m`, an EH-bearing function that is SELF-CONTAINED: unlike
+ * build_eh_module() above, the invoked callee is DEFINED (internal linkage,
+ * empty body) rather than an external declaration, and the landing pad's
+ * type_info global carries its own initializer. So compiling this through the
+ * real MonoLLVMJIT::compile() needs no prior register_symbol() call and no
+ * ordering dependency on any other test - it links standalone. Otherwise it
+ * mirrors build_eh_module(with_personality=true): a personality-bearing
+ * invoke/landingpad, which is what makes LLVM actually emit a `.eh_frame` FDE
+ * (verified live by build_eh_module's own R1/gcc-except-table checks - a
+ * personality + invoke/landingpad is exactly the shape that earns one).
+ * Returns `i64 <fn_name>(void)`, which returns 1 on the normal path (the
+ * landing pad is never entered at runtime).
+ */
+static Function *
+build_reclaim_eh_module (Module &m, const char *fn_name)
+{
+	LLVMContext &ctx = m.getContext ();
+	Type *i32 = Type::getInt32Ty (ctx);
+	Type *i64 = Type::getInt64Ty (ctx);
+	PointerType *ptr = PointerType::getUnqual (ctx);
+
+	/* Internally-defined, not external: no runtime-helper registration
+	 * dependency, unlike build_eh_module's EH_MAY_THROW_NAME. */
+	FunctionType *callee_ty = FunctionType::get (Type::getVoidTy (ctx), false);
+	Function *callee = Function::Create (callee_ty, Function::InternalLinkage,
+	                                     std::string (fn_name) + "_callee", &m);
+	BasicBlock *cbb = BasicBlock::Create (ctx, "entry", callee);
+	IRBuilder<> cib (cbb);
+	cib.CreateRetVoid ();
+
+	/* The clause-index-smuggling global, self-initialized (no external
+	 * definition needed at link time). */
+	auto *type_info = new GlobalVariable (m, i32, false, GlobalValue::ExternalLinkage,
+	                                      ConstantInt::get (i32, 0),
+	                                      std::string (fn_name) + "_type_info_0");
+
+	FunctionType *fty = FunctionType::get (i64, false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, fn_name, &m);
+
+	/* Mirror translator-call.cpp:948-958: i32 (...) nounwind, returns 0. */
+	FunctionType *pers_ty = FunctionType::get (i32, /*isVarArg*/ true);
+	Function *pers = Function::Create (pers_ty, Function::ExternalLinkage,
+	                                   std::string (fn_name) + "_personality", &m);
+	pers->addFnAttr (Attribute::NoUnwind);
+	BasicBlock *pbb = BasicBlock::Create (ctx, "ENTRY", pers);
+	IRBuilder<> pb (pbb);
+	pb.CreateRet (ConstantInt::get (i32, 0));
+	fn->setPersonalityFn (pers);
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *cont = BasicBlock::Create (ctx, "cont", fn);
+	BasicBlock *lpad = BasicBlock::Create (ctx, "lpad", fn);
+
+	IRBuilder<> b (entry);
+	b.CreateInvoke (callee, cont, lpad, {});
+
+	IRBuilder<> cb (cont);
+	cb.CreateRet (ConstantInt::get (i64, 1));
+
+	IRBuilder<> lb (lpad);
+	StructType *lp_ty = StructType::get (ptr, i32);
+	LandingPadInst *lp = lb.CreateLandingPad (lp_ty, 1);
+	lp->addClause (type_info);
+	lb.CreateRet (lb.CreateExtractValue (lp, 1));
+
+	return fn;
+}
+
+/* Compile build_reclaim_eh_module(fn_name) through the real engine, under `owner`. */
+static mono::CompileResult
+compile_reclaim_eh_module_under_owner (MonoLLVMJIT *jit, const char *fn_name, void *owner)
+{
+	LLVMContext &ctx = jit->context ();
+	auto module = std::make_unique<Module> (std::string ("selftest.reclaim.") + fn_name, ctx);
+	Function *fn = build_reclaim_eh_module (*module, fn_name);
+	return jit->compile (fn, {}, nullptr, "", owner);
+}
+
+/*
+ * The J4 integration test doc 26 Q5 asks for: prove the FDE ordering/lifecycle
+ * invariant that JL1's dropped ~MonoJitMemoryManager assert used to guard, now
+ * that there is no per-object destructor to assert from (see release_owner ()'s
+ * comment in engine.cpp).
+ *
+ * Drives the exact path #16 (1e1427f7ab4) uses for reclamation -
+ * MonoLLVMJIT::release_owner () -> ExecutionSession::removeJITDylibs () ->
+ * EHFrameRegistrationPlugin::notifyRemovingResources () -> the mono-owned
+ * MonoEHFrameRegistrar - and reads back mono::eh_frame_registry_stats () (the
+ * accessor engine.hpp exposes for exactly this test) before compiling, right
+ * after compiling, and right after release_owner ():
+ *
+ *   - compiling must register EXACTLY ONE new, NON-EMPTY range (the whole
+ *     point: if this were ever a nounwind leaf emitting no .eh_frame at all,
+ *     everything below would pass vacuously - CompileResult.eh_frame.addr/size
+ *     are asserted non-null/non-zero to rule that out);
+ *   - release_owner () must report exactly one dylib removed;
+ *   - that release must deregister EXACTLY the range that was registered (the
+ *     accounting delta), and it must no longer appear in the live set - i.e.
+ *     no stale FDE survives its own reclamation.
+ */
+static TestResult
+test_reclamation_deregisters_eh_frame (MonoLLVMJIT *jit)
+{
+	static int owner_tag;
+	void *owner = &owner_tag;
+
+	mono::EhFrameRegistryStats before = mono::eh_frame_registry_stats ();
+
+	mono::CompileResult res =
+		compile_reclaim_eh_module_under_owner (jit, "reclaim_probe", owner);
+	CHECK (res.entry != 0);
+	CHECK (res.code_size > 0);
+
+	/* The load-bearing check: a REAL, non-zero .eh_frame range was captured -
+	 * so the assertions below are exercising a live invariant, not a vacuous
+	 * one. */
+	CHECK (res.eh_frame.addr != nullptr);
+	CHECK (res.eh_frame.size > 0);
+
+	/* Normal path runs (the landing pad is never entered at runtime). */
+	auto compiled = reinterpret_cast<int64_t (*) (void)> (res.entry);
+	CHECK (compiled () == 1);
+
+	auto is_our_range = [&] (const mono::EhFrameInfo &e) {
+		return e.addr == res.eh_frame.addr && e.size == res.eh_frame.size;
+	};
+
+	mono::EhFrameRegistryStats after_compile = mono::eh_frame_registry_stats ();
+	CHECK (after_compile.registered == before.registered + 1);
+	CHECK (after_compile.deregistered == before.deregistered);
+	CHECK (std::any_of (after_compile.live.begin (), after_compile.live.end (),
+	                    is_our_range));
+
+	/* Reclaim through the SAME path a domain unload uses (engine.hpp's
+	 * release_owner (), which mono_llvm_jit_release_domain () calls). */
+	CHECK (jit->release_owner (owner) == 1);
+
+	mono::EhFrameRegistryStats after_release = mono::eh_frame_registry_stats ();
+	CHECK (after_release.registered == after_compile.registered);
+	CHECK (after_release.deregistered == after_compile.deregistered + 1);
+	CHECK (!std::any_of (after_release.live.begin (), after_release.live.end (),
+	                     is_our_range));
+
+	printf ("     .eh_frame [%p, %p) registered then deregistered across "
+	        "release_owner () (registered=%llu deregistered=%llu live=%zu)\n",
+	        (void *) res.eh_frame.addr, (void *) (res.eh_frame.addr + res.eh_frame.size),
+	        (unsigned long long) after_release.registered,
+	        (unsigned long long) after_release.deregistered,
+	        after_release.live.size ());
+
+	return TEST_PASS;
+}
+
 /* ------------------------------------------------------------ driver */
 
 /*
@@ -2405,6 +2561,8 @@ test_llvm_engine_main (void)
 	report ("eh-mono-lsda-multi-call", test_eh_mono_lsda_multi_call (jit));
 	report ("eh-mono-lsda-declined-emits-nothing",
 	        test_eh_mono_lsda_declined_emits_nothing (jit));
+	report ("reclamation-deregisters-eh-frame",
+	        test_reclamation_deregisters_eh_frame (jit));
 
 	printf ("%d passed, %d skipped, %d failed\n", passes, skips, failures);
 	return failures ? 1 : 0;

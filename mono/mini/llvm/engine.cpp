@@ -666,6 +666,156 @@ private:
 	};
 };
 
+/* ---- mono-owned eh-frame registrar (doc 26 J3) ---------------------------
+ *
+ * EHFrameRegistrationPlugin (llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h) needs
+ * an llvm::jitlink::EHFrameRegistrar to actually register/deregister each
+ * object's .eh_frame. JL1 wired the stock InProcessEHFrameRegistrar there
+ * directly; MonoEHFrameRegistrar below replaces it so this engine can observe
+ * every register/deregister without changing what happens to the host unwinder.
+ *
+ * OPTION-I DECISION (keep host registration): MonoEHFrameRegistrar FORWARDS both
+ * calls to an InProcessEHFrameRegistrar it owns, so libgcc's __register_frame
+ * still runs exactly as it did before this slice - a native crash-dump unwinder
+ * walking this process keeps FDE coverage for JIT frames. Dropping that
+ * registration (tier-0 parity: the classic JIT never calls __register_frame at
+ * all) is a noted follow-up, not done here - this slice is required to be
+ * behavior-preserving for managed code.
+ *
+ * What is new is the RECORDING: every register/deregister is tallied into
+ * g_eh_frame_registry (mutex-guarded, keyed like g_object_info above), which
+ * eh_frame_registry_stats () (engine.hpp) exposes to mono/unit-tests. This
+ * substitutes for the deregister-before-unmap assert JL1 dropped from
+ * ~MonoJitMemoryManager: that assert could fire from a per-object destructor
+ * the old RTDyld-era memory manager had one of; JITLink's InProcessMemoryManager
+ * is a single object the whole ObjectLinkingLayer shares, so there is no
+ * per-object destructor left to assert from (see release_owner () below). A
+ * deregister for a range this registry does not have live is exactly the
+ * violation that assert used to catch, so it is treated the same way - an
+ * immediate report_fatal_error, not a silent drift.
+ */
+
+static std::mutex g_eh_frame_registry_mutex;
+static uint64_t g_eh_frame_registered_count = 0;
+static uint64_t g_eh_frame_deregistered_count = 0;
+/* Currently-registered ranges, keyed by their starting address. */
+static std::map<uint64_t, uint64_t> g_eh_frame_live;
+
+static void
+record_eh_frame_registered (orc::ExecutorAddrRange r)
+{
+	std::lock_guard<std::mutex> lock (g_eh_frame_registry_mutex);
+	g_eh_frame_registered_count++;
+	g_eh_frame_live[r.Start.getValue ()] = r.size ();
+}
+
+static void
+record_eh_frame_deregistered (orc::ExecutorAddrRange r)
+{
+	std::lock_guard<std::mutex> lock (g_eh_frame_registry_mutex);
+	g_eh_frame_deregistered_count++;
+
+	uint64_t start = r.Start.getValue ();
+	uint64_t size = r.size ();
+	auto it = g_eh_frame_live.find (start);
+	/*
+	 * Recording is now unconditional on both sides (registerEHFrames records
+	 * before forwarding to the host, deregisterEHFrames records before
+	 * forwarding too - see MonoEHFrameRegistrar below), the same way
+	 * EHFrameRegistrationPlugin itself pushes into EHFrameRanges[K]
+	 * unconditionally in notifyEmitted before calling registerEHFrames. So a
+	 * deregister for a range this registry does not have live is NOT the host
+	 * registration call failing (that can no longer desync the two sides) - it
+	 * means our own register/deregister bookkeeping has genuinely come apart,
+	 * the exact ordering violation the dropped ~MonoJitMemoryManager assert
+	 * used to catch. Convert that into an immediate abort, the same posture as
+	 * the one-method-per-module and keep-live invariants elsewhere in this
+	 * file.
+	 */
+	if (it == g_eh_frame_live.end ())
+		report_fatal_error (
+			Twine ("mono: .eh_frame deregistered for a range that was not "
+				   "registered/live - eh-frame registrar accounting "
+				   "regressed (addr=0x")
+			+ Twine::utohexstr (start) + Twine (", size=") + Twine (size)
+			+ Twine (")"));
+	/*
+	 * Right start address, wrong size: the accounting bug the size field
+	 * exists to catch. A start-only match would let a mismatched deregister
+	 * silently erase the wrong bookkeeping entry, so verify size too before
+	 * erasing.
+	 */
+	if (it->second != size)
+		report_fatal_error (
+			Twine ("mono: .eh_frame deregistered with mismatched size - "
+				   "eh-frame registrar accounting regressed (addr=0x")
+			+ Twine::utohexstr (start) + Twine (", registered_size=")
+			+ Twine (it->second) + Twine (", deregistered_size=")
+			+ Twine (size) + Twine (")"));
+	g_eh_frame_live.erase (it);
+}
+
+/* Declared in engine.hpp. */
+EhFrameRegistryStats
+eh_frame_registry_stats ()
+{
+	std::lock_guard<std::mutex> lock (g_eh_frame_registry_mutex);
+	EhFrameRegistryStats stats;
+	stats.registered = g_eh_frame_registered_count;
+	stats.deregistered = g_eh_frame_deregistered_count;
+	stats.live.reserve (g_eh_frame_live.size ());
+	for (const auto &kv : g_eh_frame_live) {
+		EhFrameInfo info;
+		info.addr = reinterpret_cast<uint8_t *> (kv.first);
+		info.size = kv.second;
+		stats.live.push_back (info);
+	}
+	return stats;
+}
+
+/*
+ * The EHFrameRegistrar EHFrameRegistrationPlugin drives. See the file-comment
+ * block above for the option-i rationale (host registration kept) and what the
+ * recording substitutes for.
+ */
+class MonoEHFrameRegistrar : public jitlink::EHFrameRegistrar {
+public:
+	Error registerEHFrames (orc::ExecutorAddrRange eh_frame_section) override
+	{
+		/*
+		 * Record FIRST, unconditionally, before forwarding to the host - mirrors
+		 * EHFrameRegistrationPlugin::notifyEmitted, which pushes into its own
+		 * EHFrameRanges[K] unconditionally and only THEN calls
+		 * Registrar->registerEHFrames (range). If our recording were gated on
+		 * the host call succeeding, a host-registration failure (possible on a
+		 * non-libgcc target; not on this build) would leave the plugin holding a
+		 * range it will unconditionally replay to deregisterEHFrames on teardown
+		 * while our own bookkeeping never recorded it - hitting the not-live
+		 * report_fatal_error below for a plugin-side non-bug. Recording
+		 * unconditionally keeps our bookkeeping symmetric with the plugin's, so
+		 * that abort is reserved for a genuine accounting bug. The host call's
+		 * Error is still forwarded/propagated to the caller either way.
+		 */
+		record_eh_frame_registered (eh_frame_section);
+		return host_.registerEHFrames (eh_frame_section);
+	}
+
+	Error deregisterEHFrames (orc::ExecutorAddrRange eh_frame_section) override
+	{
+		/* Unconditional for the same reason as registerEHFrames above. */
+		record_eh_frame_deregistered (eh_frame_section);
+		return host_.deregisterEHFrames (eh_frame_section);
+	}
+
+private:
+	/*
+	 * Owned by value, not by pointer: InProcessEHFrameRegistrar (LLVM 18.1.3,
+	 * EHFrameSupport.h) is stateless and default-constructible with no
+	 * arguments - the same construction JL1 used directly.
+	 */
+	jitlink::InProcessEHFrameRegistrar host_;
+};
+
 /* ---- singleton bootstrap -------------------------------------------------- */
 
 static std::once_flag g_targets_once;
@@ -1315,7 +1465,12 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 *   - EHFrameRegistrationPlugin registers each object's .eh_frame with the host
 	 *     unwinder (__register_frame) - the eh-frame hook the old memory manager
 	 *     carried - and deregisters it before reclamation (the ordering the old
-	 *     destructor asserted; see release_owner ()).
+	 *     destructor asserted; see release_owner ()). It is driven by
+	 *     MonoEHFrameRegistrar (doc 26 J3, above), which forwards both calls to a
+	 *     stock InProcessEHFrameRegistrar (host registration is unchanged) and
+	 *     additionally records every register/deregister for
+	 *     eh_frame_registry_stats ()'s benefit - the substitute for the dropped
+	 *     ~MonoJitMemoryManager assert.
 	 *   - MonoObjectLinkingPlugin ports every metadata capture (code size, .eh_frame
 	 *     / .llvm_stackmaps / .mono_lsda ranges, reloc audit) plus the keep-live
 	 *     that rescues the symbol-less .mono_lsda / .llvm_stackmaps sections from
@@ -1353,7 +1508,7 @@ MonoLLVMJIT::MonoLLVMJIT ()
 			 */
 			layer->setAutoClaimResponsibilityForObjectSymbols (true);
 			layer->addPlugin (std::make_unique<EHFrameRegistrationPlugin> (
-				es, std::make_unique<jitlink::InProcessEHFrameRegistrar> ()));
+				es, std::make_unique<MonoEHFrameRegistrar> ()));
 			layer->addPlugin (std::make_unique<MonoObjectLinkingPlugin> ());
 			return layer;
 		});
@@ -1520,9 +1675,11 @@ MonoLLVMJIT::get_singleton_if_created ()
  * memory manager deallocates), but it can no longer be asserted from a per-object
  * destructor: the memory is freed by the ONE shared InProcessMemoryManager the
  * layer owns, not by a per-object manager, so there is no local point at which to
- * check "my deregister ran before my unmap" (doc 26 Q5). A reclamation
- * integration test (compile -> run -> release_owner -> assert no stale FDE) is
- * the substitute, landed as a later slice (J4).
+ * check "my deregister ran before my unmap" (doc 26 Q5). The substitute is a
+ * reclamation integration test (compile -> run -> release_owner -> assert the
+ * .eh_frame range was deregistered and is no longer live) driving
+ * eh_frame_registry_stats () - see MonoEHFrameRegistrar above and
+ * test-reclamation-deregisters-eh-frame in test-llvm-engine.cpp (doc 26 J4).
  */
 uint64_t
 MonoLLVMJIT::release_owner (void *owner)
