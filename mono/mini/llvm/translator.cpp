@@ -402,7 +402,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 			LLVMBasicBlockRef phi_bb = LLVMAppendBasicBlock (ctx->lmethod, "PHI_BB");
 			llvm::IRBuilder<> *builder;
 
-			builder = create_builder (ctx);
+			builder = ctx->create_builder ();
 			builder->SetInsertPoint (llvm::unwrap (phi_bb));
 
 			for (llvm::Value *v : ctx->phi_values) {
@@ -683,7 +683,7 @@ emit_method_inner (EmitContext *ctx)
 		char *dname;
 		char dname_buf[128];
 
-		builder = create_builder (ctx);
+		builder = ctx->create_builder ();
 
 		for (ins = bb->code; ins; ins = ins->next) {
 			switch (ins->opcode) {
@@ -713,7 +713,7 @@ emit_method_inner (EmitContext *ctx)
 				values [ins->dreg] = builder->CreatePHI (llvm::unwrap (phi_type), 0, dname);
 
 				if (ins->opcode == OP_VPHI)
-					ctx->addresses [ins->dreg] = create_address (ctx, llvm::wrap (values [ins->dreg]), phi_etype);
+					ctx->addresses [ins->dreg] = ctx->create_address (llvm::wrap (values [ins->dreg]), phi_etype);
 
 				ctx->phi_values.push_back (values [ins->dreg]);
 
@@ -762,8 +762,8 @@ emit_method_inner (EmitContext *ctx)
 	 * Second pass: generate code.
 	 */
 	// Emit entry point
-	entry_builder = create_builder (ctx);
-	entry_bb = get_bb (ctx, cfg->bb_entry);
+	entry_builder = ctx->create_builder ();
+	entry_bb = ctx->get_bb (cfg->bb_entry);
 	entry_builder->SetInsertPoint (llvm::unwrap (entry_bb));
 	emit_entry_bb (ctx, entry_builder);
 
@@ -813,7 +813,7 @@ emit_method_inner (EmitContext *ctx)
 			if (sreg1 == -1)
 				continue;
 
-			in_bb = get_end_bb (ctx, node->in_bb);
+			in_bb = ctx->get_end_bb (node->in_bb);
 
 			if (ctx->unreachable [node->in_bb->block_num])
 				continue;

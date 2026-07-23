@@ -88,9 +88,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	llvm::Value *lhs, *rhs, *arg3;
 	int nins = 0;
 
-	cbb = get_end_bb (ctx, bb);
+	cbb = ctx->get_end_bb (bb);
 
-	builder = create_builder (ctx);
+	builder = ctx->create_builder ();
 	ctx->builder = builder;
 	builder->SetInsertPoint (llvm::unwrap (cbb));
 
@@ -204,12 +204,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 * from localloc-ed memory.
 			 */
 			if (!ctx->long_bb_break_var) {
-				ctx->long_bb_break_var = llvm::unwrap (build_alloca_llvm_type_name (ctx, llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), 0, "long_bb_break"));
+				ctx->long_bb_break_var = llvm::unwrap (ctx->build_alloca_llvm_type_name (llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), 0, "long_bb_break"));
 				mono_llvm_build_store (llvm::wrap (ctx->alloca_builder), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)), llvm::wrap (ctx->long_bb_break_var), TRUE, LLVM_BARRIER_NONE);
 			}
 
-			cbb = gen_bb (ctx, "CONT_LONG_BB");
-			LLVMBasicBlockRef dummy_bb = gen_bb (ctx, "CONT_LONG_BB_DUMMY");
+			cbb = ctx->gen_bb ("CONT_LONG_BB");
+			LLVMBasicBlockRef dummy_bb = ctx->gen_bb ("CONT_LONG_BB_DUMMY");
 
 			LLVMValueRef load = mono_llvm_build_load (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())), llvm::wrap (ctx->long_bb_break_var), "", TRUE);
 			/*
@@ -221,12 +221,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			llvm::wrap (builder->CreateCondBr (cmp, llvm::unwrap (cbb), llvm::unwrap (dummy_bb)));
 
 			/* Emit a dummy false bblock which does nothing but contains a volatile store so it cannot be eliminated */
-			ctx->builder = builder = create_builder (ctx);
+			ctx->builder = builder = ctx->create_builder ();
 			builder->SetInsertPoint (llvm::unwrap (dummy_bb));
 			mono_llvm_build_store (llvm::wrap (builder), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false)), llvm::wrap (ctx->long_bb_break_var), TRUE, LLVM_BARRIER_NONE);
 			llvm::wrap (builder->CreateBr (llvm::unwrap (cbb)));
 
-			ctx->builder = builder = create_builder (ctx);
+			ctx->builder = builder = ctx->create_builder ();
 			builder->SetInsertPoint (llvm::unwrap (cbb));
 			ctx->bblocks [bb->block_num].end_bblock = cbb;
 			nins = 0;
@@ -322,7 +322,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			values [ins->dreg] = llvm::ConstantFP::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), 0.0f);
 			break;
 		case OP_BR: {
-			LLVMBasicBlockRef target_bb = get_bb (ctx, ins->inst_target_bb);
+			LLVMBasicBlockRef target_bb = ctx->get_bb (ins->inst_target_bb);
 			llvm::wrap (builder->CreateBr (llvm::unwrap (target_bb)));
 			has_terminator = true;
 			break;
@@ -346,10 +346,10 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			for (i = 0; i < GPOINTER_TO_UINT (ins->klass); ++i) {
 				MonoBasicBlock *target_bb = ins->inst_many_bb [i];
 
-				v->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (get_bb (ctx, target_bb)));
+				v->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (ctx->get_bb (target_bb)));
 			}
 
-			new_builder = create_builder (ctx);
+			new_builder = ctx->create_builder ();
 			new_builder->SetInsertPoint (llvm::unwrap (new_bb));
 			llvm::wrap (new_builder->CreateUnreachable ());
 
@@ -585,9 +585,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					 * two PHI entries for this bblock, while we only generate one.
 					 * So convert this to an unconditional bblock. (bxc #171).
 					 */
-					llvm::wrap (builder->CreateBr (llvm::unwrap (get_bb (ctx, ins->next->inst_true_bb))));
+					llvm::wrap (builder->CreateBr (llvm::unwrap (ctx->get_bb (ins->next->inst_true_bb))));
 				} else {
-					llvm::wrap (builder->CreateCondBr (cmp, llvm::unwrap (get_bb (ctx, ins->next->inst_true_bb)), llvm::unwrap (get_bb (ctx, ins->next->inst_false_bb))));
+					llvm::wrap (builder->CreateCondBr (cmp, llvm::unwrap (ctx->get_bb (ins->next->inst_true_bb)), llvm::unwrap (ctx->get_bb (ins->next->inst_false_bb))));
 				}
 				has_terminator = true;
 			} else if (MONO_IS_SETCC (ins->next)) {
@@ -1890,8 +1890,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 */
 			val = llvm::unwrap (mono_llvm_build_load (llvm::wrap (builder), IntPtrType (), llvm::wrap (ctx->convert (lhs, llvm::PointerType::get (ctx->llvm_ctx (), 0))), "", TRUE));
 			cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), val, llvm::Constant::getNullValue (val->getType ()), ""));
-			poll_bb = gen_bb (ctx, "POLL_BB");
-			cont_bb = gen_bb (ctx, "CONT_BB");
+			poll_bb = ctx->gen_bb ("POLL_BB");
+			cont_bb = ctx->gen_bb ("CONT_BB");
 
 			args [0] = cmp;
 			args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false));
@@ -1899,7 +1899,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, cont_bb, poll_bb, 1000, 1);
 
-			ctx->builder = builder = create_builder (ctx);
+			ctx->builder = builder = ctx->create_builder ();
 			builder->SetInsertPoint (llvm::unwrap (poll_bb));
 
 			callee = get_jit_callee (ctx, icall_name, sig, MONO_PATCH_INFO_ABS, ctx->module->gc_poll_cold_wrapper_compiled);
@@ -1907,7 +1907,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			set_call_cold_cconv (call);
 			llvm::wrap (builder->CreateBr (llvm::unwrap (cont_bb)));
 
-			ctx->builder = builder = create_builder (ctx);
+			ctx->builder = builder = ctx->create_builder ();
 			builder->SetInsertPoint (llvm::unwrap (cont_bb));
 			ctx->bblocks [bb->block_num].end_bblock = cont_bb;
 			break;
@@ -2011,15 +2011,15 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				break;
 			case OP_LOADV_MEMBASE:
 				if (!addresses [ins->dreg])
-					addresses [ins->dreg] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
+					addresses [ins->dreg] = ctx->build_alloca_address (m_class_get_byval_arg (klass));
 				src = ctx->convert (builder->CreateAdd (ctx->convert (values [ins->inst_basereg], llvm::unwrap (IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), ""), llvm::PointerType::get (ctx->llvm_ctx (), 0));
 				dst = builder->CreateBitCast (addresses [ins->dreg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), "");
 				break;
 			case OP_VMOVE:
 				if (!addresses [ins->sreg1])
-					addresses [ins->sreg1] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
+					addresses [ins->sreg1] = ctx->build_alloca_address (m_class_get_byval_arg (klass));
 				if (!addresses [ins->dreg])
-					addresses [ins->dreg] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
+					addresses [ins->dreg] = ctx->build_alloca_address (m_class_get_byval_arg (klass));
 				src = builder->CreateBitCast (addresses [ins->sreg1]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), "");
 				dst = builder->CreateBitCast (addresses [ins->dreg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), "");
 				break;
@@ -2052,14 +2052,14 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					MonoInst *var = get_vreg_to_inst (cfg, ins->sreg1);
 
 					if (var && var->opcode == OP_GSHAREDVT_LOCAL) {
-						addresses [ins->dreg] = create_address (ctx, llvm::wrap (ctx->convert (llvm::unwrap (emit_gsharedvt_ldaddr (ctx, var->dreg)), llvm::PointerType::get (ctx->llvm_ctx (), 0))), IntPtrType ());
+						addresses [ins->dreg] = ctx->create_address (llvm::wrap (ctx->convert (llvm::unwrap (emit_gsharedvt_ldaddr (ctx, var->dreg)), llvm::PointerType::get (ctx->llvm_ctx (), 0))), IntPtrType ());
 					} else {
 						g_assert (addresses [ins->sreg1]);
 						addresses [ins->dreg] = addresses [ins->sreg1];
 					}
 			} else if (ainfo->storage == LLVMArgGsharedvtFixed) {
 				if (!addresses [ins->sreg1]) {
-					addresses [ins->sreg1] = build_alloca_address (ctx, t);
+					addresses [ins->sreg1] = ctx->build_alloca_address (t);
 					g_assert (values [ins->sreg1]);
 				}
 				/* Use the recorded element type, not a re-derivation (donor build_alloca_address form) */
@@ -2069,13 +2069,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				LLVMTypeRef etype = ctx->type_to_llvm_type (t);
 
 				if (!addresses [ins->sreg1]) {
-					addresses [ins->sreg1] = build_alloca_address (ctx, t);
+					addresses [ins->sreg1] = ctx->build_alloca_address (t);
 					g_assert (values [ins->sreg1]);
 					llvm::wrap (builder->CreateStore (ctx->convert (values [ins->sreg1], llvm::unwrap (etype)), addresses [ins->sreg1]->value));
 					addresses [ins->dreg] = addresses [ins->sreg1];
 				} else if (ainfo->storage == LLVMArgVtypeAddr || values [ins->sreg1] == addresses [ins->sreg1]->value) {
 					/* LLVMArgVtypeByRef/LLVMArgVtypeAddr, have to make a copy */
-					addresses [ins->dreg] = build_alloca_address (ctx, t);
+					addresses [ins->dreg] = ctx->build_alloca_address (t);
 					llvm::Value *v = builder->CreateLoad (llvm::unwrap (etype), addresses [ins->sreg1]->value, "");
 					llvm::wrap (builder->CreateStore (ctx->convert (v, llvm::unwrap (etype)), addresses [ins->dreg]->value));
 				} else {
@@ -2451,8 +2451,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			 */
 			g_assert (nelems <= 64);
 			for (i = 0; i < nelems; ++i)
-				bbs [i] = gen_bb (ctx, "XINSERT_CASE_BB");
-			cbb = gen_bb (ctx, "XINSERT_COND_BB");
+				bbs [i] = ctx->gen_bb ("XINSERT_CASE_BB");
+			cbb = ctx->gen_bb ("XINSERT_COND_BB");
 
 			switch_ins = builder->CreateSwitch (builder->CreateAnd (index, llvm::unwrap (const_int32 (0xf)), ""), llvm::unwrap (bbs [0]), 0);
 			for (i = 0; i < nelems; ++i) {
@@ -3510,9 +3510,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			// No corresponding LLVM intrinsics
 			// FIXME: Optimize const count
 			for (i = 0; i < nelems; ++i)
-				bbs [i] = gen_bb (ctx, "PSLLDQ_CASE_BB");
-			bbs [nelems] = gen_bb (ctx, "PSLLDQ_DEF_BB");
-			cbb = gen_bb (ctx, "PSLLDQ_COND_BB");
+				bbs [i] = ctx->gen_bb ("PSLLDQ_CASE_BB");
+			bbs [nelems] = ctx->gen_bb ("PSLLDQ_DEF_BB");
+			cbb = ctx->gen_bb ("PSLLDQ_COND_BB");
 
 			switch_ins = builder->CreateSwitch (index, llvm::unwrap (bbs [nelems]), 0);
 			for (i = 0; i < nelems; ++i) {
@@ -3604,8 +3604,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 
 			for (int i = 0; i < ncases; ++i)
-				bbs [i] = gen_bb (ctx, "PSHUFHW_CASE_BB");
-			cbb = gen_bb (ctx, "PSHUFHW_COND_BB");
+				bbs [i] = ctx->gen_bb ("PSHUFHW_CASE_BB");
+			cbb = ctx->gen_bb ("PSHUFHW_COND_BB");
 			/* No default case */
 			switch_ins = builder->CreateSwitch (mask, llvm::unwrap (bbs [0]), 0);
 			for (int i = 0; i < ncases; ++i) {
@@ -4329,10 +4329,10 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			/* Branch to the finally clause */
 			llvm::wrap (builder->CreateBr (llvm::unwrap (info->call_handler_target_bb)));
 
-			noex_bb = gen_bb (ctx, "CALL_HANDLER_CONT_BB");
+			noex_bb = ctx->gen_bb ("CALL_HANDLER_CONT_BB");
 			info->call_handler_return_bbs = g_slist_append_mempool (cfg->mempool, info->call_handler_return_bbs, noex_bb);
 
-			builder = ctx->builder = create_builder (ctx);
+			builder = ctx->builder = ctx->create_builder ();
 			ctx->builder->SetInsertPoint (llvm::unwrap (noex_bb));
 
 			bblocks [bb->block_num].end_bblock = noex_bb;
@@ -4364,7 +4364,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 				bb_list = info->call_handler_return_bbs;
 
-				resume_bb = gen_bb (ctx, "ENDFINALLY_RESUME_BB");
+				resume_bb = ctx->gen_bb ("ENDFINALLY_RESUME_BB");
 
 				/* Load the finally variable */
 				val = builder->CreateLoad (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), lhs, "");
@@ -4380,7 +4380,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				 */
 				info->endfinally_switch_ins_list = g_slist_append_mempool (cfg->mempool, info->endfinally_switch_ins_list, switch_ins);
 
-				builder = ctx->builder = create_builder (ctx);
+				builder = ctx->builder = ctx->create_builder ();
 				ctx->builder->SetInsertPoint (llvm::unwrap (resume_bb));
 			}
 
@@ -4426,7 +4426,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		return;
 
 	if (!has_terminator && bb->next_bb && (bb == cfg->bb_entry || bb->in_count > 0)) {
-		llvm::wrap (builder->CreateBr (llvm::unwrap (get_bb (ctx, bb->next_bb))));
+		llvm::wrap (builder->CreateBr (llvm::unwrap (ctx->get_bb (bb->next_bb))));
 	}
 
 	if (bb == cfg->bb_exit && sig->ret->type == MONO_TYPE_VOID) {
@@ -4434,7 +4434,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	}
 
 	if (bb == cfg->bb_entry)
-		ctx->last_alloca = llvm::unwrap (LLVMGetLastInstruction (get_bb (ctx, cfg->bb_entry)));
+		ctx->last_alloca = llvm::unwrap (LLVMGetLastInstruction (ctx->get_bb (cfg->bb_entry)));
 }
 
 

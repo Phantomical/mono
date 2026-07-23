@@ -22,39 +22,39 @@ static void set_nonnull_load_flag (LLVMValueRef v);
  *   Return the LLVM basic block corresponding to BB.
  */
 LLVMBasicBlockRef
-get_bb (EmitContext *ctx, MonoBasicBlock *bb)
+EmitContext::get_bb (MonoBasicBlock *bb)
 {
 	char bb_name_buf [128];
 	char *bb_name;
 
-	if (ctx->bblocks [bb->block_num].bblock == nullptr) {
+	if (bblocks [bb->block_num].bblock == nullptr) {
 		if (bb->flags & BB_EXCEPTION_HANDLER) {
-			int clause_index = (mono_get_block_region_notry (ctx->cfg, bb->region) >> 8) - 1;
+			int clause_index = (mono_get_block_region_notry (cfg, bb->region) >> 8) - 1;
 			sprintf (bb_name_buf, "EH_CLAUSE%d_BB%d", clause_index, bb->block_num);
 			bb_name = bb_name_buf;
 		} else if (bb->block_num < 256) {
-			if (!ctx->module->bb_names) {
-				ctx->module->bb_names_len = 256;
-				ctx->module->bb_names = g_new0 (char*, ctx->module->bb_names_len);
+			if (!module->bb_names) {
+				module->bb_names_len = 256;
+				module->bb_names = g_new0 (char*, module->bb_names_len);
 			}
-			if (!ctx->module->bb_names [bb->block_num]) {
+			if (!module->bb_names [bb->block_num]) {
 				char *n;
 
 				n = g_strdup_printf ("BB%d", bb->block_num);
 				mono_memory_barrier ();
-				ctx->module->bb_names [bb->block_num] = n;
+				module->bb_names [bb->block_num] = n;
 			}
-			bb_name = ctx->module->bb_names [bb->block_num];
+			bb_name = module->bb_names [bb->block_num];
 		} else {
 			sprintf (bb_name_buf, "BB%d", bb->block_num);
 			bb_name = bb_name_buf;
 		}
 
-		ctx->bblocks [bb->block_num].bblock = LLVMAppendBasicBlock (ctx->lmethod, bb_name);
-		ctx->bblocks [bb->block_num].end_bblock = ctx->bblocks [bb->block_num].bblock;
+		bblocks [bb->block_num].bblock = LLVMAppendBasicBlock (lmethod, bb_name);
+		bblocks [bb->block_num].end_bblock = bblocks [bb->block_num].bblock;
 	}
 
-	return ctx->bblocks [bb->block_num].bblock;
+	return bblocks [bb->block_num].bblock;
 }
 
 /* 
@@ -65,19 +65,19 @@ get_bb (EmitContext *ctx, MonoBasicBlock *bb)
  * multiple LLVM bblocks for a mono bblock to handle throwing exceptions.
  */
 LLVMBasicBlockRef
-get_end_bb (EmitContext *ctx, MonoBasicBlock *bb)
+EmitContext::get_end_bb (MonoBasicBlock *bb)
 {
-	get_bb (ctx, bb);
-	return ctx->bblocks [bb->block_num].end_bblock;
+	get_bb (bb);
+	return bblocks [bb->block_num].end_bblock;
 }
 
 LLVMBasicBlockRef
-gen_bb (EmitContext *ctx, const char *prefix)
+EmitContext::gen_bb (const char *prefix)
 {
 	char bb_name [128];
 
-	sprintf (bb_name, "%s%d", prefix, ++ ctx->ex_index);
-	return LLVMAppendBasicBlock (ctx->lmethod, bb_name);
+	sprintf (bb_name, "%s%d", prefix, ++ ex_index);
+	return LLVMAppendBasicBlock (lmethod, bb_name);
 }
 
 /*
@@ -555,13 +555,13 @@ LLVMFunctionType2 (LLVMTypeRef ReturnType,
  *   Create an LLVM builder and remember it so it can be freed later.
  */
 llvm::IRBuilder<> *
-create_builder (EmitContext *ctx)
+EmitContext::create_builder ()
 {
 	auto *b = new llvm::IRBuilder<> (llvm_global_ctx ());
 	if (mono_use_fast_math)
 		mono_llvm_set_fast_math (llvm::wrap (b));
 
-	ctx->builders.emplace_back (b);
+	builders.emplace_back (b);
 
 	return b;
 }
@@ -834,14 +834,14 @@ emit_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref
 
 			ctx->bblocks [tblock->block_num].invoke_target = TRUE;
 
-			ex_bb = get_bb (ctx, tblock);
+			ex_bb = ctx->get_bb (tblock);
 
-			noex_bb = gen_bb (ctx, "NOEX_BB");
+			noex_bb = ctx->gen_bb ("NOEX_BB");
 
 			/* Use an invoke */
 			lcall = llvm::wrap (builder->CreateInvoke (llvm::cast<llvm::FunctionType> (llvm::unwrap (sig)), llvm::unwrap (callee), llvm::unwrap (noex_bb), llvm::unwrap (ex_bb), gep_index_list (args, pindex), ""));
 
-			builder = ctx->builder = create_builder (ctx);
+			builder = ctx->builder = ctx->create_builder ();
 			ctx->builder->SetInsertPoint (llvm::unwrap (noex_bb));
 
 			ctx->bblocks [bb->block_num].end_bblock = noex_bb;
@@ -918,8 +918,8 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 		exc_classes [exc_id] = mono_class_load_from_name (mono_get_corlib (), "System", exc_type);
 	exc_class = exc_classes [exc_id];
 	
-	ex_bb = gen_bb (ctx, "EX_BB");
-	noex_bb = gen_bb (ctx, "NOEX_BB");
+	ex_bb = ctx->gen_bb ("EX_BB");
+	noex_bb = ctx->gen_bb ("NOEX_BB");
 
 	LLVMValueRef branch = llvm::wrap (ctx->builder->CreateCondBr (llvm::unwrap (cmp), llvm::unwrap (ex_bb), llvm::unwrap (noex_bb)));
 	if (exc_id == MONO_EXC_NULL_REF && !ctx->cfg->disable_llvm_implicit_null_checks && !force_explicit) {
@@ -927,7 +927,7 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 	}
 
 	/* Emit exception throwing code */
-	ctx->builder = builder = create_builder (ctx);
+	ctx->builder = builder = ctx->create_builder ();
 	builder->SetInsertPoint (llvm::unwrap (ex_bb));
 
 	callee = ctx->module->throw_corlib_exception;
@@ -958,11 +958,11 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 			 * Make sure that ex_bb starts with the invoke, so the block address points to it, and not to the load 
 			 * added by get_jit_callee ().
 			 */
-			ex2_bb = gen_bb (ctx, "EX2_BB");
+			ex2_bb = ctx->gen_bb ("EX2_BB");
 			llvm::wrap (builder->CreateBr (llvm::unwrap (ex2_bb)));
 			ex_bb = ex2_bb;
 
-			ctx->builder = builder = create_builder (ctx);
+			ctx->builder = builder = ctx->create_builder ();
 			ctx->builder->SetInsertPoint (llvm::unwrap (ex2_bb));
 		}
 	}
@@ -982,7 +982,7 @@ emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *ex
 
 	llvm::wrap (builder->CreateUnreachable ());
 
-	ctx->builder = builder = create_builder (ctx);
+	ctx->builder = builder = ctx->create_builder ();
 	ctx->builder->SetInsertPoint (llvm::unwrap (noex_bb));
 
 	ctx->bblocks [bb->block_num].end_bblock = noex_bb;
@@ -1127,38 +1127,38 @@ emit_vtype_to_args (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, L
 }
 
 LLVMValueRef
-build_alloca_llvm_type_name (EmitContext *ctx, LLVMTypeRef t, int align, const char *name)
+EmitContext::build_alloca_llvm_type_name (LLVMTypeRef t, int align, const char *name)
 {
 	/*
 	 * Have to place all alloca's at the end of the entry bb, since otherwise they would
 	 * get executed every time control reaches them.
 	 */
-	LLVMPositionBuilder (llvm::wrap (ctx->alloca_builder), get_bb (ctx, ctx->cfg->bb_entry), llvm::wrap (ctx->last_alloca));
+	LLVMPositionBuilder (llvm::wrap (alloca_builder), get_bb (cfg->bb_entry), llvm::wrap (last_alloca));
 
-	LLVMValueRef alloca = mono_llvm_build_alloca (llvm::wrap (ctx->alloca_builder), t, NULL, align, name);
-	ctx->last_alloca = llvm::unwrap (alloca);
+	LLVMValueRef alloca = mono_llvm_build_alloca (llvm::wrap (alloca_builder), t, NULL, align, name);
+	last_alloca = llvm::unwrap (alloca);
 	return alloca;
 }
 
 #ifdef TARGET_ARM
 /* Only used by the imt/rgctx stack-slot workaround in process_call () */
 LLVMValueRef
-build_alloca_llvm_type (EmitContext *ctx, LLVMTypeRef t, int align)
+EmitContext::build_alloca_llvm_type (LLVMTypeRef t, int align)
 {
-	return build_alloca_llvm_type_name (ctx, t, align, "");
+	return build_alloca_llvm_type_name (t, align, "");
 }
 #endif
 
 
 LLVMValueRef
-build_named_alloca (EmitContext *ctx, MonoType *t, char const *name)
+EmitContext::build_named_alloca (MonoType *t, char const *name)
 {
 	MonoClass *k = mono_class_from_mono_type_internal (t);
 	int align;
 
 	g_assert (!mini_is_gsharedvt_variable_type (t));
 
-	if (MONO_CLASS_IS_SIMD (ctx->cfg, k))
+	if (MONO_CLASS_IS_SIMD (cfg, k))
 		align = mono_class_value_size (k, NULL);
 	else
 		align = mono_class_min_align (k);
@@ -1167,7 +1167,7 @@ build_named_alloca (EmitContext *ctx, MonoType *t, char const *name)
 	while (mono_is_power_of_two (align) == -1)
 		align ++;
 
-	return build_alloca_llvm_type_name (ctx, ctx->type_to_llvm_type (t), align, name);
+	return build_alloca_llvm_type_name (type_to_llvm_type (t), align, name);
 }
 
 /*
@@ -1175,24 +1175,24 @@ build_named_alloca (EmitContext *ctx, MonoType *t, char const *name)
  * compile-time mempool, so it lives exactly as long as the EmitContext.
  */
 Address*
-create_address (EmitContext *ctx, LLVMValueRef value, LLVMTypeRef type)
+EmitContext::create_address (LLVMValueRef value, LLVMTypeRef type)
 {
-	Address *res = static_cast<Address *>(mono_mempool_alloc0 (ctx->mempool, sizeof (Address)));
+	Address *res = static_cast<Address *>(mono_mempool_alloc0 (mempool, sizeof (Address)));
 	res->value = llvm::unwrap (value);
 	res->type = llvm::unwrap (type);
 	return res;
 }
 
 Address*
-build_alloca_address (EmitContext *ctx, MonoType *t)
+EmitContext::build_alloca_address (MonoType *t)
 {
-	return create_address (ctx, build_named_alloca (ctx, t, ""), ctx->type_to_llvm_type (t));
+	return create_address (build_named_alloca (t, ""), type_to_llvm_type (t));
 }
 
 Address*
 build_named_alloca_address (EmitContext *ctx, MonoType *t, const char *name)
 {
-	return create_address (ctx, build_named_alloca (ctx, t, name), ctx->type_to_llvm_type (t));
+	return ctx->create_address (ctx->build_named_alloca (t, name), ctx->type_to_llvm_type (t));
 }
 
 LLVMValueRef

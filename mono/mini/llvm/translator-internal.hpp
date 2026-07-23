@@ -253,6 +253,19 @@ typedef struct {
 	LLVMTypeRef sig_to_llvm_sig_no_cinfo (MonoMethodSignature *sig);
 	LLVMTypeRef sig_to_llvm_sig_full (MonoMethodSignature *sig, LLVMCallInfo *cinfo);
 	LLVMTypeRef sig_to_llvm_sig (MonoMethodSignature *sig);
+
+	/* Basic-block helpers (defined in translator-emit.cpp). */
+	LLVMBasicBlockRef get_bb (MonoBasicBlock *bb);
+	LLVMBasicBlockRef get_end_bb (MonoBasicBlock *bb);
+	LLVMBasicBlockRef gen_bb (const char *prefix);
+
+	/* Builder / alloca / address helpers (defined in translator-emit.cpp). */
+	llvm::IRBuilder<> *create_builder ();
+	LLVMValueRef build_alloca_llvm_type_name (LLVMTypeRef t, int align, const char *name);
+	LLVMValueRef build_alloca_llvm_type (LLVMTypeRef t, int align);
+	LLVMValueRef build_named_alloca (MonoType *t, char const *name);
+	Address *create_address (LLVMValueRef value, LLVMTypeRef type);
+	Address *build_alloca_address (MonoType *t);
 } EmitContext;
 
 /*
@@ -427,12 +440,6 @@ void
 set_call_cold_cconv (LLVMValueRef func);
 
 /* Defined in translator-emit.cpp. */
-LLVMBasicBlockRef
-get_bb (EmitContext *ctx, MonoBasicBlock *bb);
-LLVMBasicBlockRef
-get_end_bb (EmitContext *ctx, MonoBasicBlock *bb);
-LLVMBasicBlockRef
-gen_bb (EmitContext *ctx, const char *prefix);
 void
 emit_memset (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValueRef v, LLVMValueRef size, int alignment);
 LLVMValueRef
@@ -442,8 +449,6 @@ emit_volatile_store (EmitContext *ctx, int vreg);
 G_GNUC_UNUSED LLVMTypeRef
 LLVMFunctionType0 (LLVMTypeRef ReturnType,
 				   int IsVarArg);
-llvm::IRBuilder<> *
-create_builder (EmitContext *ctx);
 LLVMValueRef
 get_aotconst (EmitContext *ctx, MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type);
 LLVMValueRef
@@ -468,16 +473,6 @@ void
 emit_args_to_vtype (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, LLVMValueRef address, LLVMArgInfo *ainfo, LLVMValueRef *args);
 void
 emit_vtype_to_args (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoType *t, LLVMValueRef address, LLVMArgInfo *ainfo, LLVMValueRef *args, guint32 *nargs);
-LLVMValueRef
-build_alloca_llvm_type_name (EmitContext *ctx, LLVMTypeRef t, int align, const char *name);
-LLVMValueRef
-build_alloca_llvm_type (EmitContext *ctx, LLVMTypeRef t, int align);
-LLVMValueRef
-build_named_alloca (EmitContext *ctx, MonoType *t, char const *name);
-Address*
-create_address (EmitContext *ctx, LLVMValueRef value, LLVMTypeRef type);
-Address*
-build_alloca_address (EmitContext *ctx, MonoType *t);
 Address*
 build_named_alloca_address (EmitContext *ctx, MonoType *t, const char *name);
 LLVMValueRef
