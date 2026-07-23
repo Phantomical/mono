@@ -4252,6 +4252,107 @@ class Tests
 		return 1;
 	}
 
+	/*
+	 * Null-deref shapes that the LLVM ImplicitNullChecks pass folds into faulting
+	 * loads in the tier-1 JIT (design doc 25). Each must still raise a catchable
+	 * NullReferenceException, identically to the classic explicit-branch path.
+	 */
+	class NullFoldNode {
+		public int val;
+		public NullFoldNode next;
+	}
+
+	interface INullFold { int Do (); }
+	class NullFoldImpl : INullFold { public int x; public virtual int Do () { return x; } }
+
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static int nullfold_load (NullFoldNode n) { return n.val; }
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static void nullfold_store (NullFoldNode n) { n.val = 5; }
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static int nullfold_aload (int[] a) { return a [3]; }
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static void nullfold_astore (int[] a) { a [3] = 9; }
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static int nullfold_vcall (NullFoldImpl o) { return o.Do (); }
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static int nullfold_icall (INullFold o) { return o.Do (); }
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static int nullfold_chain (NullFoldNode a) { return a.next.val; }
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static int nullfold_loop (NullFoldNode n, int iters) {
+		int s = 0;
+		for (int i = 0; i < iters; i++)
+			s += n.val;
+		return s;
+	}
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static int nullfold_deref_after_try (NullFoldNode n) {
+		int r = 0;
+		try { r = 1; } finally { r = 2; }
+		/* deref is OUTSIDE the try: it folds, and the fault must unwind to the caller */
+		return r + n.val;
+	}
+
+	public static int test_0_nullfold_field_load () {
+		try { nullfold_load (null); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_field_store () {
+		try { nullfold_store (null); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_array_load () {
+		try { nullfold_aload (null); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_array_store () {
+		try { nullfold_astore (null); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_virtual_call () {
+		try { nullfold_vcall (null); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_iface_call () {
+		try { nullfold_icall (null); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_chain () {
+		/* a is non-null but a.next is null: the second deref folds */
+		try { nullfold_chain (new NullFoldNode ()); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_hot_loop () {
+		try { nullfold_loop (null, 1000); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_unwind_to_caller () {
+		/* folded fault inside the callee (deref after its try) must unwind out and be caught here */
+		try { nullfold_deref_after_try (null); } catch (NullReferenceException) { return 0; }
+		return 1;
+	}
+
+	public static int test_0_nullfold_message () {
+		try {
+			nullfold_load (null);
+		} catch (NullReferenceException e) {
+			/* The hardware/folded null path sets the message without a trailing
+			 * period; the explicit-branch path adds one. Normalize before compare. */
+			if (e.Message.TrimEnd ('.') == "Object reference not set to an instance of an object")
+				return 0;
+		}
+		return 1;
+	}
+
 	public static int throw_only () {
 		throw new Exception ();
 	}

@@ -85,6 +85,7 @@
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SmallVectorMemoryBuffer.h>
@@ -502,6 +503,26 @@ ensure_native_target ()
 		InitializeNativeTarget ();
 		InitializeNativeTargetAsmPrinter ();
 		InitializeNativeTargetAsmParser ();
+
+		/*
+		 * Enable the ImplicitNullChecks machine pass process-wide. The pass is
+		 * gated by a static default-false cl::opt inside TargetPassConfig
+		 * ("enable-implicit-null-checks"); it is not reachable by symbol, so we
+		 * flip it through the registered-options map once, here, before the
+		 * first emit_object() runs the codegen pipeline. The pass folds an
+		 * explicit `icmp/br` null check into a bare faulting load only on
+		 * branches the translator tagged `!make.implicit`, so it is inert for
+		 * any function without such tags. Recovery of a folded null fault rides
+		 * the runtime's existing null-page SIGSEGV -> NRE handler (no faultmap
+		 * is consulted). Instant off-switch:
+		 * MONO_DEBUG=llvm-disable-implicit-null-checks (drops the tags, so the
+		 * pass folds nothing). See design doc 25.
+		 */
+		auto &opts = cl::getRegisteredOptions ();
+		auto it = opts.find ("enable-implicit-null-checks");
+		if (it == opts.end ())
+			report_fatal_error ("LLVM dropped/renamed enable-implicit-null-checks");
+		static_cast<cl::opt<bool> *> (it->second)->setValue (true);
 	});
 }
 
