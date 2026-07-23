@@ -836,11 +836,11 @@ emit_method_inner (EmitContext *ctx)
 					set_failure (ctx, "incoming phi sreg1");
 					return;
 				}
-				if (LLVMTypeOf (llvm::wrap (values [sreg1])) != LLVMTypeOf (llvm::wrap (values [phi->dreg]))) {
+				if (values [sreg1]->getType () != values [phi->dreg]->getType ()) {
 					set_failure (ctx, "incoming phi arg type mismatch");
 					return;
 				}
-				g_assert (LLVMTypeOf (llvm::wrap (values [sreg1])) == LLVMTypeOf (llvm::wrap (values [phi->dreg])));
+				g_assert (values [sreg1]->getType () == values [phi->dreg]->getType ());
 				LLVMAddIncoming (llvm::wrap (values [phi->dreg]), reinterpret_cast<LLVMValueRef*> (&values [sreg1]), &in_bb, 1);
 			}
 		}

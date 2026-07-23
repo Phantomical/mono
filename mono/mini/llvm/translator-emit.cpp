@@ -139,11 +139,11 @@ convert_full (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype, gboolean is_u
 		if (stype == llvm::Type::getDoubleTy (ctx->llvm_ctx ()) && dtype == llvm::Type::getFloatTy (ctx->llvm_ctx ()))
 			return ctx->builder->CreateFPTrunc (v, dtype, "");
 
-		if (LLVMGetTypeKind (llvm::wrap (stype)) == LLVMPointerTypeKind && LLVMGetTypeKind (llvm::wrap (dtype)) == LLVMPointerTypeKind)
+		if (stype->isPointerTy () && dtype->isPointerTy ())
 			return ctx->builder->CreateBitCast (v, dtype, "");
-		if (LLVMGetTypeKind (llvm::wrap (dtype)) == LLVMPointerTypeKind)
+		if (dtype->isPointerTy ())
 			return ctx->builder->CreateIntToPtr (v, dtype, "");
-		if (LLVMGetTypeKind (llvm::wrap (stype)) == LLVMPointerTypeKind)
+		if (stype->isPointerTy ())
 			return ctx->builder->CreatePtrToInt (v, dtype, "");
 
 		if (mono_arch_is_soft_float ()) {
@@ -153,7 +153,7 @@ convert_full (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype, gboolean is_u
 				return ctx->builder->CreateBitCast (ctx->builder->CreateZExt (v, llvm::Type::getInt64Ty (ctx->llvm_ctx ()), ""), dtype, "");
 		}
 
-		if (LLVMGetTypeKind (llvm::wrap (stype)) == LLVMVectorTypeKind && LLVMGetTypeKind (llvm::wrap (dtype)) == LLVMVectorTypeKind)
+		if (stype->getTypeID () == llvm::Type::FixedVectorTyID && dtype->getTypeID () == llvm::Type::FixedVectorTyID)
 			return ctx->builder->CreateBitCast (v, dtype, "");
 
 		mono_llvm_dump_value (llvm::wrap (v));
