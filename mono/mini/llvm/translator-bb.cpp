@@ -329,7 +329,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 		case OP_SWITCH: {
 			int i;
-			LLVMValueRef v;
+			llvm::SwitchInst *v;
 			char bb_name [128];
 			LLVMBasicBlockRef new_bb;
 			llvm::IRBuilder<> *new_builder;
@@ -342,11 +342,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			new_bb = LLVMAppendBasicBlock (ctx->lmethod, bb_name);
 
 			lhs = convert (ctx, lhs, llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
-			v = llvm::wrap (builder->CreateSwitch (lhs, llvm::unwrap (new_bb), GPOINTER_TO_UINT (ins->klass)));
+			v = builder->CreateSwitch (lhs, llvm::unwrap (new_bb), GPOINTER_TO_UINT (ins->klass));
 			for (i = 0; i < GPOINTER_TO_UINT (ins->klass); ++i) {
 				MonoBasicBlock *target_bb = ins->inst_many_bb [i];
 
-				LLVMAddCase (v, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), get_bb (ctx, target_bb));
+				v->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (get_bb (ctx, target_bb)));
 			}
 
 			new_builder = create_builder (ctx);
@@ -2431,7 +2431,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		case OP_XINSERT_I2: {
 			LLVMBasicBlockRef bbs [64];
-			LLVMValueRef switch_ins;
+			llvm::SwitchInst *switch_ins;
 			llvm::Value *vector = lhs;
 			llvm::Value *value = rhs;
 			llvm::Value *index = values [ins->sreg3];
@@ -2454,9 +2454,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				bbs [i] = gen_bb (ctx, "XINSERT_CASE_BB");
 			cbb = gen_bb (ctx, "XINSERT_COND_BB");
 
-			switch_ins = llvm::wrap (builder->CreateSwitch (builder->CreateAnd (index, llvm::unwrap (const_int32 (0xf)), ""), llvm::unwrap (bbs [0]), 0));
+			switch_ins = builder->CreateSwitch (builder->CreateAnd (index, llvm::unwrap (const_int32 (0xf)), ""), llvm::unwrap (bbs [0]), 0);
 			for (i = 0; i < nelems; ++i) {
-				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), bbs [i]);
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (bbs [i]));
 				builder->SetInsertPoint (llvm::unwrap (bbs [i]));
 				phi_values [i] = builder->CreateInsertElement (vector, convert (ctx, value, llvm::cast<llvm::VectorType> (vector->getType ())->getElementType ()), llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false), "");
 				llvm::wrap (builder->CreateBr (llvm::unwrap (cbb)));
@@ -2464,7 +2464,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			builder->SetInsertPoint (llvm::unwrap (cbb));
 			values [ins->dreg] = builder->CreatePHI (phi_values [0]->getType (), 0, "");
-			LLVMAddIncoming (llvm::wrap (values [ins->dreg]), reinterpret_cast<LLVMValueRef*> (phi_values), bbs, nelems);
+			for (i = 0; i < nelems; ++i)
+				llvm::cast<llvm::PHINode> (values [ins->dreg])->addIncoming (phi_values [i], llvm::unwrap (bbs [i]));
 
 			ctx->bblocks [bb->block_num].end_bblock = cbb;
 			break;
@@ -3495,7 +3496,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE2_PSLLDQ:
 		case OP_SSE2_PSRLDQ: {
 			LLVMBasicBlockRef bbs [16 + 1];
-			LLVMValueRef switch_ins;
+			llvm::SwitchInst *switch_ins;
 			llvm::Value *value = lhs;
 			llvm::Value *index = rhs;
 			llvm::Value *phi_values [16 + 1];
@@ -3513,9 +3514,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			bbs [nelems] = gen_bb (ctx, "PSLLDQ_DEF_BB");
 			cbb = gen_bb (ctx, "PSLLDQ_COND_BB");
 
-			switch_ins = llvm::wrap (builder->CreateSwitch (index, llvm::unwrap (bbs [nelems]), 0));
+			switch_ins = builder->CreateSwitch (index, llvm::unwrap (bbs [nelems]), 0);
 			for (i = 0; i < nelems; ++i) {
-				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), bbs [i]);
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (bbs [i]));
 				builder->SetInsertPoint (llvm::unwrap (bbs [i]));
 
 				int mask_values [16];
@@ -3541,7 +3542,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			builder->SetInsertPoint (llvm::unwrap (cbb));
 			values [ins->dreg] = builder->CreatePHI (phi_values [0]->getType (), 0, "");
-			LLVMAddIncoming (llvm::wrap (values [ins->dreg]), reinterpret_cast<LLVMValueRef*> (phi_values), bbs, nelems + 1);
+			for (i = 0; i < nelems + 1; ++i)
+				llvm::cast<llvm::PHINode> (values [ins->dreg])->addIncoming (phi_values [i], llvm::unwrap (bbs [i]));
 			values [ins->dreg] = convert (ctx, values [ins->dreg], llvm::unwrap (type_to_sse_type (ins->inst_c1)));
 
 			ctx->bblocks [bb->block_num].end_bblock = cbb;
@@ -3581,7 +3583,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_SSE2_PSHUFHW:
 		case OP_SSE2_PSHUFLW: {
 			LLVMBasicBlockRef bbs [256 + 1];
-			LLVMValueRef switch_ins;
+			llvm::SwitchInst *switch_ins;
 			llvm::Value *v1, *v2, *mask;
 			llvm::Value *phi_values [256 + 1];
 			int ncases;
@@ -3605,9 +3607,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				bbs [i] = gen_bb (ctx, "PSHUFHW_CASE_BB");
 			cbb = gen_bb (ctx, "PSHUFHW_COND_BB");
 			/* No default case */
-			switch_ins = llvm::wrap (builder->CreateSwitch (mask, llvm::unwrap (bbs [0]), 0));
+			switch_ins = builder->CreateSwitch (mask, llvm::unwrap (bbs [0]), 0);
 			for (int i = 0; i < ncases; ++i) {
-				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), bbs [i]);
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (bbs [i]));
 				builder->SetInsertPoint (llvm::unwrap (bbs [i]));
 
 				/* Convert the x86 shuffle mask to LLVM's */
@@ -3666,7 +3668,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			builder->SetInsertPoint (llvm::unwrap (cbb));
 			values [ins->dreg] = builder->CreatePHI (phi_values [0]->getType (), 0, "");
-			LLVMAddIncoming (llvm::wrap (values [ins->dreg]), reinterpret_cast<LLVMValueRef*> (phi_values), bbs, ncases);
+			for (int i = 0; i < ncases; ++i)
+				llvm::cast<llvm::PHINode> (values [ins->dreg])->addIncoming (phi_values [i], llvm::unwrap (bbs [i]));
 			break;
 		}
 
@@ -4342,7 +4345,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMBasicBlockRef resume_bb;
 			MonoBasicBlock *handler_bb;
 			llvm::Value *val;
-			LLVMValueRef switch_ins, callee;
+			llvm::SwitchInst *switch_ins;
+			LLVMValueRef callee;
 			GSList *bb_list;
 			BBInfo *info;
 			bool is_fault = MONO_REGION_FLAGS (bb->region) == MONO_EXCEPTION_CLAUSE_FAULT;
@@ -4369,7 +4373,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				llvm::wrap (builder->CreateStore (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false), lhs));
 
 				/* Branch to either resume_bb, or to the bblocks in bb_list */
-				switch_ins = llvm::wrap (builder->CreateSwitch (val, llvm::unwrap (resume_bb), g_slist_length (bb_list)));
+				switch_ins = builder->CreateSwitch (val, llvm::unwrap (resume_bb), g_slist_length (bb_list));
 				/*
 				 * The other targets are added at the end to handle OP_CALL_HANDLER
 				 * opcodes processed later.

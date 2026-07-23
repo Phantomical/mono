@@ -1021,7 +1021,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 	if (bblocks [bb->block_num].invoke_target) {
 		MonoExceptionClause *this_clause = &cfg->header->clauses [clause_index];
 		LLVMValueRef landing_pad;
-		LLVMValueRef switch_ins;
+		llvm::SwitchInst *switch_ins;
 		int i;
 
 		get_mono_personality (ctx);
@@ -1108,7 +1108,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 				 * straight to the encloser's body.
 				 */
 				LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
-				switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0));
+				switch_ins = builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0);
 
 				for (i = 0; i < cfg->header->num_clauses; ++i) {
 					MonoExceptionClause *enc = &cfg->header->clauses [i];
@@ -1142,7 +1142,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 						case_target = store_bb;
 					}
 
-					LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), case_target);
+					switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (case_target));
 				}
 			}
 		} else {
@@ -1190,7 +1190,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 			 * sibling handler that owns it (this clause's own body is the default).
 			 */
 			LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
-			switch_ins = llvm::wrap (builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0));
+			switch_ins = builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0);
 
 			for (i = 0; i < cfg->header->num_clauses; ++i) {
 				MonoExceptionClause *c = &cfg->header->clauses [i];
@@ -1207,7 +1207,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 				handler_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
 				g_assert (handler_bb);
 				g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
-				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (ctx->bblocks [handler_bb->block_num].call_handler_target_bb));
 			}
 
 			/*
@@ -1239,7 +1239,7 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 				handler_bb = clause_it != ctx->clause_to_handler.end () ? clause_it->second : nullptr;
 				g_assert (handler_bb);
 				g_assert (ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
-				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), ctx->bblocks [handler_bb->block_num].call_handler_target_bb);
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false)), llvm::unwrap (ctx->bblocks [handler_bb->block_num].call_handler_target_bb));
 			}
 		}
 	} else {

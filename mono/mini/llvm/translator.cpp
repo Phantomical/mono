@@ -828,8 +828,7 @@ emit_method_inner (EmitContext *ctx)
 				g_assert (ctx->addresses [sreg1]);
 				g_assert (ctx->addresses [phi->dreg]);
 				g_assert (ctx->addresses [sreg1]->type == ctx->addresses [phi->dreg]->type);
-				LLVMValueRef incoming_val = llvm::wrap (ctx->addresses [sreg1]->value);
-				LLVMAddIncoming (llvm::wrap (values [phi->dreg]), &incoming_val, &in_bb, 1);
+				llvm::cast<llvm::PHINode> (values [phi->dreg])->addIncoming (ctx->addresses [sreg1]->value, llvm::unwrap (in_bb));
 			} else {
 				if (!values [sreg1]) {
 					/* Can happen with values in EH clauses */
@@ -841,7 +840,7 @@ emit_method_inner (EmitContext *ctx)
 					return;
 				}
 				g_assert (values [sreg1]->getType () == values [phi->dreg]->getType ());
-				LLVMAddIncoming (llvm::wrap (values [phi->dreg]), reinterpret_cast<LLVMValueRef*> (&values [sreg1]), &in_bb, 1);
+				llvm::cast<llvm::PHINode> (values [phi->dreg])->addIncoming (values [sreg1], llvm::unwrap (in_bb));
 			}
 		}
 	}
@@ -874,13 +873,13 @@ emit_method_inner (EmitContext *ctx)
 		BBInfo *info = &bblocks [bb->block_num];
 		GSList *l;
 		for (l = info->endfinally_switch_ins_list; l; l = l->next) {
-			LLVMValueRef switch_ins = static_cast<LLVMValueRef>(l->data);
+			llvm::SwitchInst *switch_ins = static_cast<llvm::SwitchInst*>(l->data);
 			GSList *bb_list = info->call_handler_return_bbs;
 
 			GSList *bb_list_iter;
 			i = 0;
 			for (bb_list_iter = bb_list; bb_list_iter; bb_list_iter = g_slist_next (bb_list_iter)) {
-				LLVMAddCase (switch_ins, llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i + 1, false)), static_cast<LLVMBasicBlockRef>(bb_list_iter->data));
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i + 1, false)), llvm::unwrap (static_cast<LLVMBasicBlockRef>(bb_list_iter->data)));
 				i ++;
 			}
 		}
