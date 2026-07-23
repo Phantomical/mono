@@ -10,7 +10,8 @@
  * against it unchanged).
  *
  * Two parts:
- *   1. The pure-LLVM engine core (class mono::MonoLLVMJIT + MonoJitMemoryManager).
+ *   1. The pure-LLVM engine core (class mono::MonoLLVMJIT and the JITLink
+ *      object-linking plugin MonoObjectLinkingPlugin).
  *   2. The extern "C" mono boundary: thin adapters that unwrap the llvm-c
  *      handles the translator passes and forward to the core.
  *
@@ -51,13 +52,16 @@
 #include <llvm/CodeGen/MachineFunctionPass.h>
 #include <llvm/CodeGen/MachineModuleInfo.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
+#include <llvm/ExecutionEngine/JITLink/EHFrameSupport.h>
+#include <llvm/ExecutionEngine/JITLink/JITLink.h>
+#include <llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h>
+#include <llvm/ExecutionEngine/JITLink/x86_64.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/ExecutionEngine/Orc/IRCompileLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/Mangling.h>
-#include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
-#include <llvm/ExecutionEngine/SectionMemoryManager.h>
+#include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -297,10 +301,121 @@ audit_relocations (const object::ObjectFile &obj)
 static std::mutex g_reloc_audit_mutex;
 static RelocAudit g_jit_reloc_audit;
 
-static void
-accumulate_reloc_audit (const object::ObjectFile &obj)
+/*
+ * The JITLink-edge analogue of x86_64_reloc_truncates_address(). The engine now
+ * links through JITLink, which resolves the ELF relocations LLVM emitted into
+ * its own Edge::Kind set (llvm/ExecutionEngine/JITLink/x86_64.h) - so the
+ * always-on runtime audit classifies edge kinds rather than raw ELF relocation
+ * types. The classification is the SAME property: does this edge drive an
+ * address, or a displacement to one, through a field narrower than 64 bits?
+ *
+ * Under the Large code model this engine pins, cross-section references stay
+ * 64-bit (Pointer64 / Delta64 / NegDelta64), so nothing here fires - the exact
+ * parity the reloc-widths unit test asserts. The 32-bit and narrower forms are
+ * listed truncating for the same reason their ELF counterparts were: JITLink's
+ * InProcessMemoryManager offers no in-window placement guarantee under Large,
+ * and a 32-bit field cannot span an arbitrary inter-segment distance.
+ *
+ * The caller applies this ONLY to edges that cross a placement boundary (target
+ * external, absolute, or in a different section than the referring block). An
+ * intra-section narrow delta is always in range - the section is one contiguous
+ * block - and is never a hazard; the RTDyld-era ELF audit never saw those at all
+ * because the assembler folded same-section references to constants before any
+ * relocation was emitted, whereas JITLink re-materializes them as edges (notably
+ * the FDE->CIE NegDelta32 pointer inside .eh_frame). Gating on cross-section
+ * keeps this audit's answer identical to the ELF audit's.
+ *
+ * Unlike RTDyld's silent assert(isInt<32>()), JITLink RANGE-CHECKS every 32-bit
+ * edge and hard-errors on overflow rather than truncating - so this audit is now
+ * a belt-and-braces diagnostic on top of a linker that already cannot corrupt an
+ * address silently. It is kept because it names the offending edge before the
+ * link would fail, and because it is the observable the reloc-widths test reads.
+ */
+static bool
+x86_64_edge_kind_truncates (jitlink::Edge::Kind kind)
 {
-	RelocAudit one = audit_relocations (obj);
+	using namespace llvm::jitlink::x86_64;
+	switch (kind) {
+	/* Narrow absolute addresses, deltas and PC-relative displacements. */
+	case Pointer32:
+	case Pointer32Signed:
+	case Pointer16:
+	case Pointer8:
+	case Delta32:
+	case NegDelta32:
+	case BranchPCRel32:
+	case BranchPCRel32ToPtrJumpStub:
+	case BranchPCRel32ToPtrJumpStubBypassable:
+	case PCRel32:
+	case PCRel32GOTLoadRelaxable:
+	case PCRel32GOTLoadREXRelaxable:
+	case PCRel32TLVPLoadREXRelaxable:
+	/* GOT/TLS requests that transform INTO a 32-bit form. */
+	case RequestGOTAndTransformToDelta32:
+	case RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable:
+	case RequestGOTAndTransformToPCRel32GOTLoadRelaxable:
+	case RequestTLSDescInGOTAndTransformToDelta32:
+	case RequestTLVPAndTransformToPCRel32TLVPLoadREXRelaxable:
+		return true;
+
+	/* Full 64-bit addresses or displacements - resolved at full width. */
+	case Pointer64:
+	case Delta64:
+	case NegDelta64:
+	case Delta64FromGOT:
+	case RequestGOTAndTransformToDelta64:
+	case RequestGOTAndTransformToDelta64FromGOT:
+		return false;
+
+	/* An x86_64 edge kind this analysis has not covered - treat as
+	 * unclassified (not truncating), matching audit_relocations()'s contract. */
+	default:
+		return false;
+	}
+}
+
+/*
+ * The always-on runtime audit, run as a JITLink PreFixup pass over every object
+ * this engine links. Replaces the RTDyld NotifyLoaded path: instead of
+ * re-reading raw ELF relocations, it scans the LinkGraph's resolved edges (which
+ * sees what JITLink actually settled on - GOT/PLT already synthesized) and
+ * accumulates into the same process-global tally the reloc-widths test reads.
+ * A non-x86-64 graph is left unclassified (see audit_relocations()'s contract).
+ */
+static void
+accumulate_reloc_audit_from_graph (jitlink::LinkGraph &g)
+{
+	if (g.getTargetTriple ().getArch () != Triple::x86_64)
+		return;
+
+	RelocAudit one;
+	for (auto *block : g.blocks ()) {
+		for (const jitlink::Edge &edge : block->edges ()) {
+			if (!edge.isRelocation ())
+				continue;
+			one.total++;
+			if (!x86_64_edge_kind_truncates (edge.getKind ()))
+				continue;
+			/*
+			 * A narrow field is only a truncation hazard when it must span a
+			 * placement boundary: an external or absolute target, or a defined
+			 * target in a different section than the referring block. An
+			 * intra-section narrow delta (e.g. .eh_frame's FDE->CIE NegDelta32)
+			 * is always in range and is not counted - matching the ELF audit,
+			 * which never saw same-section references as relocations at all.
+			 */
+			const jitlink::Symbol &target = edge.getTarget ();
+			bool cross_boundary =
+				!target.isDefined () || target.isAbsolute () ||
+				&target.getBlock ().getSection () != &block->getSection ();
+			if (!cross_boundary)
+				continue;
+			one.truncating++;
+			if (one.first_offender.empty ())
+				one.first_offender = block->getSection ().getName ().str ()
+				                     + "/" + g.getEdgeKindName (edge.getKind ());
+		}
+	}
 
 	std::lock_guard<std::mutex> lock (g_reloc_audit_mutex);
 	bool first = g_jit_reloc_audit.truncating == 0 && one.truncating != 0;
@@ -310,16 +425,11 @@ accumulate_reloc_audit (const object::ObjectFile &obj)
 		g_jit_reloc_audit.first_offender = one.first_offender;
 
 	/*
-	 * Say so once. Silent address truncation is the exact failure mode this
-	 * audit exists to catch, and on a release-mode LLVM nothing else would
-	 * report it. Warn rather than abort: the engine is a compiler backend and
-	 * killing the process on a diagnostic is worse than a wrong-looking JIT
-	 * that the unit test will fail on.
-	 *
-	 * Worth knowing that this is a warning BEFORE the fact, not a post-mortem:
-	 * jitLinkForORC runs loadObject -> OnLoaded (which is what calls us) ->
-	 * finalizeAsync -> resolveRelocations, so the message is emitted before
-	 * RTDyld performs the truncating write.
+	 * Say so once. JITLink hard-errors before it would truncate, so this is a
+	 * named warning ahead of a link that would otherwise fail with a less
+	 * legible out-of-range diagnostic - not a post-mortem. Warn rather than
+	 * abort: the engine is a compiler backend and killing the process on a
+	 * diagnostic is worse than a link failure the caller can decline on.
 	 */
 	if (first)
 		fprintf (stderr, "mono llvm engine: WARNING: JIT object contains an "
@@ -340,156 +450,220 @@ jit_reloc_audit ()
  * Collected object facts, keyed by the name of the JITDylib the module was
  * added to (compile() gives every module its own, uniquely named).
  *
- * DELIBERATELY NOT a thread_local. The NotifyLoaded hook runs on whichever
- * thread materializes the module, which stops being the calling thread the
- * moment the JIT is configured with compile threads (what tiering wants). A
- * thread-local channel would then leave the caller reading an empty value - a
- * zero code_size - so the keyed map is what makes this survive that change.
+ * DELIBERATELY NOT a thread_local. The object-linking plugin's capture passes
+ * run on whichever thread materializes the module, which stops being the calling
+ * thread the moment the JIT is configured with compile threads (what tiering
+ * wants). A thread-local channel would then leave the caller reading an empty
+ * value - a zero code_size - so the keyed map is what makes this survive that
+ * change.
  */
 static std::mutex g_object_info_mutex;
 static std::map<std::string, ObjectInfo> g_object_info;
 
 /*
- * Harvest the per-function sizes and the .eh_frame location out of the freshly
- * emitted object. Called from the object layer's NotifyLoaded hook.
- *
- * NOTE: sizes are keyed by the RAW ELF symbol name, while compile() looks the
- * entry up through ORC, which applies the DataLayout's global prefix. Those
- * coincide on ELF x86-64 (the prefix is empty) but would diverge on a platform
- * that uses one (Mach-O's leading '_'), silently yielding code_size 0. Mangle
- * the key here if this engine is ever ported to such a target.
+ * Locate a live section by name in a linked graph and return where it landed,
+ * {nullptr,0} if the section is absent or was dead-stripped (present container
+ * but no surviving blocks - doc 26 P1: findSectionByName() keeps the empty
+ * Section container after prune, so liveness is `blocks().empty()`, NOT a null
+ * section). The address is the SectionRange start (final executor address, since
+ * InProcessMemoryManager maps working memory in place) and the byte length is
+ * SectionRange::getSize().
  */
-static void
-capture_object_info (orc::MaterializationResponsibility &r, const object::ObjectFile &obj,
-                     const RuntimeDyld::LoadedObjectInfo &loaded)
+static EhFrameInfo
+capture_graph_section (jitlink::LinkGraph &g, StringRef want)
 {
-	ObjectInfo info;
-
-	/*
-	 * Check the relocation widths of what LLVM just emitted. This is the real
-	 * guard on the "sections may be mapped anywhere" assumption the stock
-	 * SectionMemoryManager forces on us; see RelocAudit above.
-	 */
-	accumulate_reloc_audit (obj);
-
-	if (isa<object::ELFObjectFileBase> (&obj)) {
-		for (const object::SymbolRef &sym : obj.symbols ()) {
-			Expected<object::SymbolRef::Type> type = sym.getType ();
-			if (!type) {
-				consumeError (type.takeError ());
-				continue;
-			}
-			if (*type != object::SymbolRef::ST_Function)
-				continue;
-
-			Expected<StringRef> name = sym.getName ();
-			if (!name) {
-				consumeError (name.takeError ());
-				continue;
-			}
-
-			uint64_t size = object::ELFSymbolRef (sym).getSize ();
-			if (size)
-				info.func_sizes[name->str ()] = size;
-		}
-	}
-
-	/*
-	 * Locate a loaded section by name and return where it landed, {nullptr,0} if
-	 * absent. Used for .eh_frame (EH port) and .llvm_stackmaps (gshared this-slot,
-	 * #15); the EH port's .gcc_except_table can reuse it too.
-	 */
-	auto capture_named_section = [&obj, &loaded] (StringRef want) -> EhFrameInfo {
-		EhFrameInfo r;
-		for (const object::SectionRef &sec : obj.sections ()) {
-			Expected<StringRef> name = sec.getName ();
-			if (!name) {
-				consumeError (name.takeError ());
-				continue;
-			}
-			if (*name != want)
-				continue;
-			r.addr = (uint8_t *) (uintptr_t) loaded.getSectionLoadAddress (sec);
-			r.size = sec.getSize ();
-			break;
-		}
+	EhFrameInfo r;
+	jitlink::Section *sec = g.findSectionByName (want);
+	if (!sec || sec->blocks ().empty ())
 		return r;
-	};
-
-	info.eh_frame = capture_named_section (".eh_frame");
-	info.stackmaps = capture_named_section (".llvm_stackmaps");
-	info.gcc_except_table = capture_named_section (".gcc_except_table");
-	info.mono_lsda = capture_named_section (".mono_lsda");
-
-	std::lock_guard<std::mutex> lock (g_object_info_mutex);
-	g_object_info[r.getTargetJITDylib ().getName ()] = std::move (info);
+	jitlink::SectionRange range (*sec);
+	r.addr = range.getStart ().toPtr<uint8_t *> ();
+	r.size = range.getSize ();
+	return r;
 }
 
 /*
- * Custom RTDyld memory manager. Subclasses SectionMemoryManager (which does
- * correct mmap + W^X finalization) and adds the .eh_frame capture hook.
+ * Keep a symbol-less, edge-less SHF_ALLOC metadata section alive across
+ * jitlink::prune(). doc 26 P1/P3: the real ObjectLinkingLayer seeds liveness
+ * only from the Scope::Default symbols the MaterializationResponsibility tracks,
+ * so a section reachable by nothing (`.mono_lsda`: 0 symbols, 0 incoming edges)
+ * or by only a local symbol (`.llvm_stackmaps`: local __LLVM_StackMaps, its
+ * reloc outgoing) is dead-stripped - dropping the section mono's EH / gshared
+ * this-slot recovery must read back. This runs as a PrePrune pass.
  *
- * The object linking layer constructs one of these PER OBJECT, so the capture
- * is naturally per-module.
- *
- * STEP 3b - mono-owned code allocation: to make mono's code manager own the
- * JIT code (mono_mem_manager_code_reserve), override allocateCodeSection() here
- * to route through the current MonoCompile's mem_manager (the legacy engine
- * passed it via a thread-local cfg). For this milestone SectionMemoryManager's
- * own RWX allocation is used, which is self-contained and keeps the engine core
- * free of any mono dependency.
+ * For a section that already carries symbols (.llvm_stackmaps), setLive(true) on
+ * them is the cleaner mitigation (no synthetic symbol); for a truly symbol-less
+ * section (.mono_lsda) an anchor Symbol MUST be added. `seen` records that the
+ * section was actually emitted this object, so the PostAllocation pass can assert
+ * the keep-live held (present-at-PrePrune ==> non-empty range) - the negative
+ * test that the dead-strip trap stays shut.
  */
-class MonoJitMemoryManager : public SectionMemoryManager {
-public:
+static void
+keep_section_live (jitlink::LinkGraph &g, StringRef name, StringRef anchor_name,
+                   bool &seen)
+{
+	using namespace llvm::jitlink;
+	Section *sec = g.findSectionByName (name);
+	if (!sec || sec->blocks ().empty ())
+		return;
+	seen = true;
+
+	/* Prefer marking existing symbols live over synthesizing an anchor. */
+	bool any_symbol = false;
+	for (Symbol *sym : sec->symbols ()) {
+		sym->setLive (true);
+		any_symbol = true;
+	}
+	if (any_symbol)
+		return;
+
 	/*
-	 * ORDERING INVARIANT, always on. Reclaiming a dylib must deregister its
-	 * .eh_frame with the host unwinder BEFORE the memory holding those FDEs is
-	 * unmapped, and the unmapping is exactly what this destructor does (via
-	 * ~SectionMemoryManager). __register_frame's registry is process-global, so
-	 * an FDE left registered over freed - and later reused - memory is reachable
-	 * from any unwind anywhere in the process, not just from mono's.
-	 *
-	 * The order is RTDyldObjectLinkingLayer::handleRemoveResources's to get
-	 * right (deregisterEHFrames then destroy the memory manager); this asserts
-	 * it held rather than trusting a library-internal sequencing across LLVM
-	 * upgrades. The check is O(1) on two bools set on this object's own code
-	 * path - no counters, no globals - and fires a fatal error rather than
-	 * unmapping live FDEs, because a stale process-global FDE is not something
-	 * to let slide.
+	 * No symbol to mark: add a live Scope::Local anchor at offset 0 of the
+	 * section's first (only) block. Exact 18.1.3 signature (doc 26 P4): 8 args,
+	 * none defaulted. Scope::Local skips addDefinedSymbol's uniqueness assert and
+	 * is invisible to setAutoClaimResponsibilityForObjectSymbols (auto-claim only
+	 * concerns Scope::Default object symbols), so the anchor cannot clash.
 	 */
-	~MonoJitMemoryManager () override
-	{
-		if (registered_eh_ && !deregistered_eh_)
-			llvm::report_fatal_error (
-				".eh_frame unmapped before deregisterEHFrames - JIT reclamation ordering broke");
-	}
+	Block &block = **sec->blocks ().begin ();
+	g.addDefinedSymbol (block, /*Offset=*/0, anchor_name, /*Size=*/block.getSize (),
+	                    Linkage::Strong, Scope::Local, /*IsCallable=*/false,
+	                    /*IsLive=*/true);
+}
 
-	void registerEHFrames (uint8_t *Addr, uint64_t LoadAddr, size_t Size) override
+/*
+ * The ObjectLinkingLayer plugin that ports every metadata capture the RTDyld
+ * NotifyLoaded hook used to do. Its passes are LAYER-GLOBAL (installed once, run
+ * per link), so each captured fact is threaded back to the right in-flight
+ * compile() by the SAME key compile() already drains on: the name of the
+ * per-module JITDylib, read here from MaterializationResponsibility. Every pass
+ * writes its slice of the ObjectInfo into g_object_info[jdname]; compile() picks
+ * it up (and erases it) once its synchronous lookup has driven materialization.
+ *
+ * Passes, in phase order:
+ *   PrePrune       - keep .mono_lsda and .llvm_stackmaps live (the dead-strip fix)
+ *   PostAllocation - capture their ranges + the entry's code size (Symbol::getSize
+ *                    == ELF st_size, doc 26 P2), and assert the keep-live held
+ *   PreFixup       - the always-on reloc-width audit over resolved edges
+ *   PostFixup      - capture the .eh_frame range (self-survives prune via its
+ *                    keep-alive edge; bytes are final post-fixup, which is where
+ *                    the translator later transcodes them into mono unwind ops)
+ */
+class MonoObjectLinkingPlugin : public ObjectLinkingLayer::Plugin {
+public:
+	void modifyPassConfig (orc::MaterializationResponsibility &mr, jitlink::LinkGraph &,
+	                       jitlink::PassConfiguration &config) override
 	{
+		std::string jd_name = mr.getTargetJITDylib ().getName ();
+
 		/*
-		 * Register with the host (libgcc/libunwind) __register_frame so JITted
-		 * code can unwind during this milestone. The EH port replaces this base
-		 * call with mono-native registration.
-		 *
-		 * The section is NOT captured here: the memory manager is constructed
-		 * per object by a factory that receives no context, so it cannot tell
-		 * which module it belongs to. capture_object_info() takes it from the
-		 * object file instead, where the owning JITDylib is known.
+		 * Per-link state shared between the PrePrune keep-live and the
+		 * PostAllocation assertion. A shared_ptr is captured by both lambdas; the
+		 * pass config is per-link, so this is per-link too (no cross-object state).
 		 */
-		registered_eh_ = true;
-		SectionMemoryManager::registerEHFrames (Addr, LoadAddr, Size);
+		auto seen = std::make_shared<SectionPresence> ();
+
+		config.PrePrunePasses.push_back ([seen] (jitlink::LinkGraph &g) -> Error {
+			keep_section_live (g, ".mono_lsda", "__mono_lsda_anchor", seen->lsda);
+			keep_section_live (g, ".llvm_stackmaps", "__mono_stackmaps_anchor",
+			                   seen->stackmaps);
+			return Error::success ();
+		});
+
+		config.PostAllocationPasses.push_back (
+			[jd_name, seen] (jitlink::LinkGraph &g) -> Error {
+				ObjectInfo info;
+
+				/*
+				 * Per-function machine-code size. Symbol::getSize() == ELF st_size
+				 * for a defined function symbol (doc 26 P2/Q1), so no retained ELF
+				 * buffer is needed. Keyed by the raw symbol name; compile() looks it
+				 * up through ORC, whose DataLayout global prefix is empty on ELF
+				 * x86-64 - the two coincide (they would diverge on a leading-'_'
+				 * target; mangle the key there).
+				 */
+				for (jitlink::Symbol *sym : g.defined_symbols ()) {
+					if (!sym->hasName () || !sym->isCallable ())
+						continue;
+					uint64_t size = sym->getSize ();
+					if (size)
+						info.func_sizes[sym->getName ().str ()] = size;
+				}
+
+				info.mono_lsda = capture_graph_section (g, ".mono_lsda");
+				info.stackmaps = capture_graph_section (g, ".llvm_stackmaps");
+				/*
+				 * The Itanium LSDA. Unlike the two above it needs no keep-live: the
+				 * .eh_frame FDE carries a keep-alive edge to it, so it survives prune
+				 * whenever its function does. Captured for parity with the RTDyld
+				 * path - the engine's gcc-except-table unit test asserts it and the
+				 * EH port's M2 decoder reads it; the mono runtime path ignores it.
+				 */
+				info.gcc_except_table = capture_graph_section (g, ".gcc_except_table");
+
+				/*
+				 * NEGATIVE TEST (always on): a section that WAS emitted this object
+				 * (seen at PrePrune) must have a non-empty range now. If it does
+				 * not, the keep-live failed and the section was dead-stripped -
+				 * exactly the trap that would silently lose .mono_lsda (EH declines)
+				 * or .llvm_stackmaps (gshared this-slot recovery breaks). Convert
+				 * that into an immediate abort rather than a silent {null,0}, the
+				 * same posture as the one-method-per-module invariant.
+				 */
+				if (seen->lsda && info.mono_lsda.addr == nullptr)
+					report_fatal_error (
+						"mono: .mono_lsda dead-stripped despite keep-live - "
+						"JITLink capture regressed");
+				if (seen->stackmaps && info.stackmaps.addr == nullptr)
+					report_fatal_error (
+						"mono: .llvm_stackmaps dead-stripped despite keep-live - "
+						"JITLink capture regressed");
+
+				std::lock_guard<std::mutex> lock (g_object_info_mutex);
+				ObjectInfo &slot = g_object_info[jd_name];
+				slot.func_sizes = std::move (info.func_sizes);
+				slot.mono_lsda = info.mono_lsda;
+				slot.stackmaps = info.stackmaps;
+				slot.gcc_except_table = info.gcc_except_table;
+				return Error::success ();
+			});
+
+		config.PreFixupPasses.push_back ([] (jitlink::LinkGraph &g) -> Error {
+			accumulate_reloc_audit_from_graph (g);
+			return Error::success ();
+		});
+
+		config.PostFixupPasses.push_back ([jd_name] (jitlink::LinkGraph &g) -> Error {
+			EhFrameInfo eh = capture_graph_section (g, ".eh_frame");
+			std::lock_guard<std::mutex> lock (g_object_info_mutex);
+			g_object_info[jd_name].eh_frame = eh;
+			return Error::success ();
+		});
 	}
 
-	void deregisterEHFrames () override
+	/* Drop any partial capture for a link that failed to materialize. */
+	Error notifyFailed (orc::MaterializationResponsibility &mr) override
 	{
-		deregistered_eh_ = true;
-		SectionMemoryManager::deregisterEHFrames ();
+		std::lock_guard<std::mutex> lock (g_object_info_mutex);
+		g_object_info.erase (mr.getTargetJITDylib ().getName ());
+		return Error::success ();
+	}
+
+	Error notifyRemovingResources (orc::JITDylib &, orc::ResourceKey) override
+	{
+		return Error::success ();
+	}
+
+	void notifyTransferringResources (orc::JITDylib &, orc::ResourceKey,
+	                                  orc::ResourceKey) override
+	{
 	}
 
 private:
-	/* For the teardown-ordering invariant in the destructor above. */
-	bool registered_eh_ = false;
-	bool deregistered_eh_ = false;
+	/* Which keep-live sections were actually emitted by one object (see above). */
+	struct SectionPresence {
+		bool lsda = false;
+		bool stackmaps = false;
+	};
 };
 
 /* ---- singleton bootstrap -------------------------------------------------- */
@@ -1134,25 +1308,29 @@ MonoLLVMJIT::MonoLLVMJIT ()
 			return std::make_unique<MonoIRCompiler> (std::move (JTMB));
 		});
 	/*
-	 * Force the RTDyld object-linking layer with our custom memory manager.
-	 * LLJIT would default to RTDyldObjectLinkingLayer on ELF/amd64 anyway, but
-	 * we must inject MonoJitMemoryManager to get the .eh_frame hook.
+	 * The JITLink object-linking layer (llvm/ExecutionEngine/Orc/ObjectLinkingLayer)
+	 * over an InProcessMemoryManager the layer OWNS. This replaces the legacy
+	 * RTDyldObjectLinkingLayer + SectionMemoryManager. Two plugins do what the old
+	 * MonoJitMemoryManager and NotifyLoaded hook did:
+	 *   - EHFrameRegistrationPlugin registers each object's .eh_frame with the host
+	 *     unwinder (__register_frame) - the eh-frame hook the old memory manager
+	 *     carried - and deregisters it before reclamation (the ordering the old
+	 *     destructor asserted; see release_owner ()).
+	 *   - MonoObjectLinkingPlugin ports every metadata capture (code size, .eh_frame
+	 *     / .llvm_stackmaps / .mono_lsda ranges, reloc audit) plus the keep-live
+	 *     that rescues the symbol-less .mono_lsda / .llvm_stackmaps sections from
+	 *     jitlink::prune() - the JITLink equivalent of the old
+	 *     setProcessAllSections(true).
+	 * The code model stays Large (host_target_machine_builder), so cross-section
+	 * references remain 64-bit and need no in-window placement (that is a later
+	 * slice); the reloc audit checks that invariant on the resolved edges.
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es, const Triple &) -> Expected<std::unique_ptr<ObjectLayer>> {
-			auto layer = std::make_unique<RTDyldObjectLinkingLayer> (
-				es, [] () { return std::make_unique<MonoJitMemoryManager> (); });
-			/*
-			 * The emitted object is the only place the per-function machine-code
-			 * size is available (ELF st_size). mono needs it for cfg->code_len,
-			 * which sizes the method's MonoJitInfo - a zero-length jit-info makes
-			 * mini_jit_info_table_find() unable to find the method at all.
-			 */
-			layer->setNotifyLoaded (
-				[] (orc::MaterializationResponsibility &r, const object::ObjectFile &obj,
-				    const RuntimeDyld::LoadedObjectInfo &loaded) {
-					capture_object_info (r, obj, loaded);
-				});
+			auto mm = jitlink::InProcessMemoryManager::Create ();
+			if (!mm)
+				return mm.takeError ();
+			auto layer = std::make_unique<ObjectLinkingLayer> (es, std::move (*mm));
 			/*
 			 * mono's translator creates externally-linked but UNNAMED globals
 			 * (get_jit_callee() is called with an empty name for icall and
@@ -1174,19 +1352,9 @@ MonoLLVMJIT::MonoLLVMJIT ()
 			 * moment anything consolidates modules into one dylib.
 			 */
 			layer->setAutoClaimResponsibilityForObjectSymbols (true);
-			/*
-			 * Map EVERY section, not just those RTDyld deems required for
-			 * execution. The custom-emit `.mono_lsda` clause table (plan 12) is
-			 * SHF_ALLOC but has NO incoming relocations or symbols, so with the
-			 * default (ProcessAllSections=false) RTDyld skips allocating it and
-			 * getSectionLoadAddress() returns 0 - the section is present in the
-			 * object yet unmapped, so the load-time reader sees a null pointer and
-			 * every clause-bearing method declines. (Contrast `.gcc_except_table`,
-			 * which loads only because the `.eh_frame` FDE references it.) Forcing
-			 * all sections gives `.mono_lsda` a live load address; it costs only a
-			 * few extra bytes of mapped, non-executable metadata per module.
-			 */
-			layer->setProcessAllSections (true);
+			layer->addPlugin (std::make_unique<EHFrameRegistrationPlugin> (
+				es, std::make_unique<jitlink::InProcessEHFrameRegistrar> ()));
+			layer->addPlugin (std::make_unique<MonoObjectLinkingPlugin> ());
 			return layer;
 		});
 
@@ -1341,10 +1509,20 @@ MonoLLVMJIT::get_singleton_if_created ()
  * ResourceTracker is a sub-dylib granularity we do not need because compile ()
  * already gives every module a dylib of its own. removeJITDylibs () does both
  * halves - it removes the dylib from the session AND runs every registered
- * ResourceManager's handleRemoveResources, which for RTDyldObjectLinkingLayer
- * means deregisterEHFrames () followed by destroying the object's
- * SectionMemoryManager, i.e. unmapping its code and data. That deregister-
- * before-unmap ordering is asserted in ~MonoJitMemoryManager.
+ * ResourceManager's handleRemoveResources, which for ObjectLinkingLayer runs
+ * each plugin's notifyRemovingResources - EHFrameRegistrationPlugin::
+ * notifyRemovingResources deregisters the object's .eh_frame (via the
+ * InProcessEHFrameRegistrar) - and then deallocates the object's JITLink
+ * allocation, i.e. unmaps its code and data.
+ *
+ * The deregister-before-unmap ORDER is a structural guarantee of
+ * ObjectLinkingLayer::handleRemoveResources (plugin notifications run before the
+ * memory manager deallocates), but it can no longer be asserted from a per-object
+ * destructor: the memory is freed by the ONE shared InProcessMemoryManager the
+ * layer owns, not by a per-object manager, so there is no local point at which to
+ * check "my deregister ran before my unmap" (doc 26 Q5). A reclamation
+ * integration test (compile -> run -> release_owner -> assert no stale FDE) is
+ * the substitute, landed as a later slice (J4).
  */
 uint64_t
 MonoLLVMJIT::release_owner (void *owner)
