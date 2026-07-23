@@ -2161,9 +2161,17 @@ void      mono_destroy_compile              (MonoCompile *cfg);
  * Recompile an already tier-0-compiled method through LLVM and publish the
  * result as its terminal body. Returns FALSE if the backend declined the method
  * or the compile failed, in which case tier 0 stays terminal. Called from the
- * tier-1 drain in mono/mini/llvm/tiered.cpp.
+ * background tier-1 compile worker in mono/mini/llvm/tiered.cpp.
+ *
+ * RUN_CCTORS must be FALSE when the caller is that worker thread: a promotion
+ * compile runs class initializers when it is TRUE (JIT_FLAG_RUN_CCTORS), and
+ * cctors must only ever run on a mutator thread, never on the background
+ * compiler. Passing TRUE is only safe for a caller that IS a mutator thread
+ * blocking on the compile - which, with the background worker, is nobody
+ * today; the parameter exists so that stays an explicit choice rather than an
+ * accident if a synchronous caller reappears.
  */
-gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *domain, guint32 opt);
+gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *domain, guint32 opt, gboolean run_cctors);
 
 /*
  * Deferred tier-1 promotion behind a call-count threshold (mono/mini/llvm/tiered.cpp).
@@ -2174,16 +2182,21 @@ gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *dom
  * byte-identical to before when the feature is off.
  *
  * When the threshold is non-zero the tier-0 prologue (mono_arch_emit_prolog) owns
- * a per-method, per-domain counter word obtained from mini_tiered_alloc_counter (),
- * increments it non-atomically on every entry, compares it >= threshold, and on a
- * crossing makes a cold call to mini_tiered_count_reached () with the counter block.
- * The helper enqueues the method once and runs the synchronous drain. The COUNTER
- * argument is the opaque block returned by mini_tiered_alloc_counter (); its first
- * word is the count the prologue increments.
+ * a per-method, per-domain counter block obtained from mini_tiered_alloc_counter ():
+ * an entry redirect check reads its tier1_entry slot, and an atomic (lock xadd)
+ * counter at its count word dispatches to mini_tiered_count_reached () exactly
+ * once, when the count crosses the threshold. That call only enqueues the method
+ * and wakes the background compile worker - it never runs LLVM codegen (or
+ * cctors) on the crossing thread. mini_tiered_counter_count_offset () and
+ * mini_tiered_counter_tier1_entry_offset () give the emitter the byte offsets of
+ * those two words within the opaque block, since mini-amd64.c has no visibility
+ * into the block's (C++) layout.
  */
 guint32   mono_llvm_tiered_call_threshold   (void);
 gpointer  mini_tiered_alloc_counter         (MonoDomain *domain, MonoMethod *method, guint32 opt);
 void      mini_tiered_count_reached         (gpointer counter);
+gsize     mini_tiered_counter_count_offset       (void);
+gsize     mini_tiered_counter_tier1_entry_offset (void);
 /*
  * Promotion-policy introspection for the tiered-promotion.cs functional test
  * (surfaced to managed code through the MonoTests.Tiering.Probe internal calls
@@ -2192,6 +2205,7 @@ void      mini_tiered_count_reached         (gpointer counter);
  * METHOD was never enqueued (stayed cold at tier 0).
  */
 int       mono_llvm_tiered_method_state     (MonoMethod *method);
+gboolean  mono_llvm_tiered_method_redirect_armed (MonoMethod *method);
 void      mono_empty_compile              (MonoCompile *cfg);
 MonoJitICallInfo *mono_find_jit_opcode_emulation (int opcode);
 void	  mono_print_ins_index (int i, MonoInst *ins);

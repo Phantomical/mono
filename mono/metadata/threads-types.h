@@ -82,6 +82,7 @@ typedef enum {
 } MonoThreadCreateFlags;
 
 // FIXME func should be MonoThreadStart and remove the template
+MONO_EXTERN_C
 MonoInternalThread*
 mono_thread_create_internal (MonoDomain *domain, gpointer func, gpointer arg, MonoThreadCreateFlags flags, MonoError *error);
 
@@ -94,6 +95,7 @@ mono_thread_create_internal (MonoDomain *domain, T func, gpointer arg, MonoThrea
 }
 #endif
 
+MONO_EXTERN_C
 MonoInternalThreadHandle
 mono_thread_create_internal_handle (MonoDomain *domain, gpointer func, gpointer arg, MonoThreadCreateFlags flags, MonoError *error);
 

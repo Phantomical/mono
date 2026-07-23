@@ -221,6 +221,9 @@ mono_os_cond_wait (mono_cond_t *cond, mono_mutex_t *mutex)
 		g_error ("%s: pthread_cond_wait failed with \"%s\" (%d)", __func__, g_strerror (res), res);
 }
 
+#ifdef __cplusplus
+extern "C"
+#endif
 int
 mono_os_cond_timedwait (mono_cond_t *cond, mono_mutex_t *mutex, guint32 timeout_ms);
 

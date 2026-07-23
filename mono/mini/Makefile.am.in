@@ -621,6 +621,7 @@ test_sources = 			\
 	MemoryIntrinsics.il	\
 	mixed.cs	\
 	tiered-promotion.cs	\
+	tiered-decline.cs	\
 	ratests.cs
 
 regtests_UNIVERSAL = \
@@ -961,10 +962,11 @@ rcheck: mono $(regtests)
 # settled-fast-path across a below-threshold, an at-threshold and a
 # heavy-promotion setting:
 #   make -C mono/mini tieredcheck
-tieredcheck: mono tiered-promotion.exe
+tieredcheck: mono tiered-promotion.exe tiered-decline.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
+	MONO_LLVM_METHOD='TieredDecline:NeverMatchesAnything' MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-decline.exe
 
 richeck: mono $(regtests)
 	$(INTERP_RUNTIME) --regression $(regtests)

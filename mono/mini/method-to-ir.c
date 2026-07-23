@@ -3969,7 +3969,39 @@ mono_method_check_inlining (MonoCompile *cfg, MonoMethod *method)
 					return FALSE;
 				}
 				if (!cfg->compile_aot) {
-					if (!mono_runtime_class_init_full (vtable, error)) {
+					if (!cfg->run_cctors) {
+						/*
+						 * This compile must not run cctors - the background
+						 * tier-1 promotion worker sets run_cctors to FALSE
+						 * specifically so it never does. Forcing the cctor
+						 * below is what makes an AggressiveInlining inline
+						 * safe under a normal (run_cctors == TRUE) compile;
+						 * without that, the same bar the before_field_init
+						 * branch below holds itself to applies here too -
+						 * only inline if the class already happens to be
+						 * initialized, otherwise decline (the callee's own,
+						 * non-inlined body still lazily inits it later, on
+						 * whichever mutator thread actually calls it).
+						 *
+						 * The !vtable->initialized case is defensive rather
+						 * than something a promotion compile actually hits
+						 * today: a method only becomes promotable after its
+						 * own tier-0 compile, which always carries
+						 * JIT_FLAG_RUN_CCTORS and so already forced this same
+						 * branch (with run_cctors == TRUE) for every callee
+						 * tier-0 considered inlining - and tier-0 and tier-1
+						 * see identical inlining candidates. So by the time a
+						 * promotion compile gets here the class is already
+						 * initialized and this arm is a no-op. It stays
+						 * because that chain is an invariant of the current
+						 * inliner, not a guarantee this code enforces itself -
+						 * if inlining candidates ever diverge between tiers,
+						 * this is what keeps "no cctor on the worker thread"
+						 * true without relying on that invariant.
+						 */
+						if (!vtable->initialized)
+							return FALSE;
+					} else if (!mono_runtime_class_init_full (vtable, error)) {
 						mono_error_cleanup (error);
 						return FALSE;
 					}

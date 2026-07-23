@@ -21,6 +21,15 @@ namespace MonoTests.Tiering {
 		// enqueued - the method never crossed the threshold and stayed cold.
 		[MethodImpl (MethodImplOptions.InternalCall)]
 		public static extern int MethodState (IntPtr method);
+
+		// TRUE once the background compile worker has armed METHOD's redirect
+		// sled - i.e. its tier-0 entry now tail-jumps to tier 1 - as opposed to
+		// MethodState () == 1, which only says the tier-1 body has been
+		// published and looked-up calls will find it. FALSE while promotion is
+		// still in flight, and always FALSE under eager (threshold 0) mode,
+		// which has no counter block to carry a sled.
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		public static extern bool RedirectArmed (IntPtr method);
 	}
 }
 
@@ -37,6 +46,14 @@ namespace MonoTests.Tiering {
 //
 // The helpers are marked NoInlining so their prologues (which carry the call
 // counter) actually run on every call; an inlined helper would never count.
+//
+// Promotion runs on a background compile thread: crossing the threshold only
+// enqueues the method and wakes that thread, so a test that checks Probe
+// state right after driving a method past its threshold can observe the
+// compile still in flight. Any assertion on MethodState ()/RedirectArmed ()
+// therefore polls with WaitForState ()/WaitForRedirectArmed () rather than
+// checking once - this is inherent to the design (see tiered.cpp), not a bug
+// to work around by making the wait longer in one spot.
 //
 public class TieredPromotion {
 	public static int Main (string[] args) {
@@ -110,6 +127,35 @@ public class TieredPromotion {
 		return mi.MethodHandle.Value;
 	}
 
+	// Promotion happens on the background compile worker, so a crossing does
+	// not mean "already promoted" - only "enqueued and the worker was just
+	// woken". Poll rather than check once; a compile is normally done in low
+	// milliseconds, so a generous 10s bound only ever matters if the policy
+	// itself is broken (which is exactly what a timeout here should report).
+	const int WAIT_TIMEOUT_MS = 10000;
+
+	static bool WaitForState (IntPtr method, int wantState) {
+		int waited = 0;
+		while (MonoTests.Tiering.Probe.MethodState (method) != wantState) {
+			if (waited >= WAIT_TIMEOUT_MS)
+				return false;
+			System.Threading.Thread.Sleep (5);
+			waited += 5;
+		}
+		return true;
+	}
+
+	static bool WaitForRedirectArmed (IntPtr method) {
+		int waited = 0;
+		while (!MonoTests.Tiering.Probe.RedirectArmed (method)) {
+			if (waited >= WAIT_TIMEOUT_MS)
+				return false;
+			System.Threading.Thread.Sleep (5);
+			waited += 5;
+		}
+		return true;
+	}
+
 	public static int test_0_promotion_policy () {
 		uint threshold = MonoTests.Tiering.Probe.Threshold ();
 		if (threshold == 0)
@@ -119,11 +165,13 @@ public class TieredPromotion {
 		long acc = 0;
 		for (int i = 0; i < 5000; i++)
 			acc += PolicyHot (i & 63);
-		if (MonoTests.Tiering.Probe.MethodState (HandleOf ("PolicyHot")) != STATE_PROMOTED)
+		if (!WaitForState (HandleOf ("PolicyHot"), STATE_PROMOTED))
 			return 1;			// a hot method was NOT promoted - policy regressed.
 
 		// Enter PolicyCold only a handful of times. When the threshold is above
-		// that count it can never cross, so it must NOT be promoted.
+		// that count it can never cross, so it must NOT be promoted - and since
+		// it never crosses, nothing ever enqueues it, so there is no compile in
+		// flight to wait for here.
 		int r = 0;
 		for (int i = 0; i < POLICY_COLD_CALLS; i++)
 			r += PolicyCold (i);
@@ -132,5 +180,326 @@ public class TieredPromotion {
 			return 2;			// a cold method was promoted - threshold ignored.
 
 		return (acc >= 0 && r != 0x7fffffff) ? 0 : 3;
+	}
+
+	// -- The redirect sled itself --------------------------------------------
+	//
+	// test_0_promotion_policy only proves the hash-swap happened (lookups now
+	// resolve to tier 1). It does not prove that a call already in flight
+	// through the method's OWN tier-0 entry point actually redirects - that is
+	// what the sled (mono_arch_emit_prolog, point A) is for, and it is armed
+	// separately, after the hash-swap, by the background worker. This asserts
+	// that specifically, then keeps calling through the same (never
+	// recompiled) call site and checks every result.
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SledProbe (int x) { return x * 2 + 1; }
+
+	public static int test_0_redirect_sled_fires () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		if (threshold == 0)
+			return 0;			// eager mode has no counter block, hence no sled.
+
+		IntPtr h = HandleOf ("SledProbe");
+		for (int i = 0; i < 10000; i++)
+			SledProbe (i % 17);
+
+		if (!WaitForRedirectArmed (h))
+			return 1;			// promoted, per test_0_promotion_policy's check
+						// elsewhere, but the sled never armed.
+
+		// The sled is now armed. Every one of these calls must redirect to
+		// tier 1 on entry - the call site itself was fixed when this method
+		// was first compiled and is never revisited - and every result must
+		// still be correct.
+		for (int i = 0; i < 1000; i++) {
+			int x = i % 17;
+			if (SledProbe (x) != x * 2 + 1)
+				return 2;
+		}
+		return 0;
+	}
+
+	// -- Exception thrown through a tiered method ----------------------------
+	//
+	// PassThrough is the method under test/promotion; it has no try/catch of
+	// its own, so an exception raised by Thrower (its callee) propagates
+	// STRAIGHT THROUGH its frame to the catch below. This is exactly the shape
+	// that would break if the entry-redirect sled (mono_arch_emit_prolog,
+	// point A) shifted a single byte of the prologue's unwind info: the
+	// unwinder has to walk through PassThrough's frame - using whatever
+	// unwind info its CURRENT body (tier 0, mid-redirect, or tier 1) published
+	// - to reach the handler here. Run once before promotion is likely and
+	// once after the sled is confirmed armed, so both a tier-0 and a tier-1
+	// frame get walked through.
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int Thrower (int x) {
+		if (x < 0)
+			throw new InvalidOperationException ("neg");
+		return x;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int PassThrough (int x) {
+		return Thrower (x) + 1;
+	}
+
+	public static int test_0_exception_through_tiered_method () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		IntPtr h = HandleOf ("PassThrough");
+
+		// Mid-promotion: throws on every 7th call while the driving loop is
+		// also what pushes PassThrough's counter across the threshold, so the
+		// throw and the crossing race each other.
+		int caught = 0;
+		for (int i = 0; i < 5000; i++) {
+			try {
+				int x = (i % 7 == 0) ? -1 : (i % 1000);
+				int r = PassThrough (x);
+				if (x >= 0 && r != x + 1)
+					return 1;
+			} catch (InvalidOperationException) {
+				caught++;
+			}
+		}
+		if (caught == 0)
+			return 2;			// the throwing branch never ran - test is broken,
+						// not a pass.
+
+		if (threshold != 0 && !WaitForRedirectArmed (h))
+			return 3;
+
+		// After promotion: every call here should be entirely tier 1 (sled
+		// confirmed armed above), including the ones that throw.
+		int caught2 = 0;
+		for (int i = 0; i < 200; i++) {
+			try {
+				int x = (i % 3 == 0) ? -1 : i;
+				int r = PassThrough (x);
+				if (x >= 0 && r != x + 1)
+					return 4;
+			} catch (InvalidOperationException) {
+				caught2++;
+			}
+		}
+		if (caught2 == 0)
+			return 5;
+		return 0;
+	}
+
+	// -- Concurrent callers across promotion ----------------------------------
+	//
+	// Several threads hammer the same method while it promotes underneath
+	// them; the redirect slot (MiniTieredCounter.tier1_entry) flips from NULL
+	// to a real code pointer exactly once, with a single release-store
+	// (mono_atomic_store_ptr in the worker) and a plain-load read (the
+	// prologue) - this is what proves that flip is safe to observe
+	// concurrently: no caller may ever see a torn pointer, a crash, or a
+	// wrong result, regardless of which side of the flip its particular call
+	// lands on.
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ConcurrentHot (int x) { return x * x + 1; }
+
+	public static int test_0_concurrent_callers_across_promotion () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		IntPtr h = HandleOf ("ConcurrentHot");
+
+		const int NUM_THREADS = 4;
+		const int ITERS = 20000;
+		bool[] ok = new bool[NUM_THREADS];
+		var threads = new System.Threading.Thread[NUM_THREADS];
+
+		for (int t = 0; t < NUM_THREADS; t++) {
+			int idx = t;
+			threads[t] = new System.Threading.Thread (() => {
+				bool good = true;
+				for (int i = 0; i < ITERS; i++) {
+					int x = i % 200;
+					if (ConcurrentHot (x) != x * x + 1) {
+						good = false;
+						break;
+					}
+				}
+				ok[idx] = good;
+			});
+		}
+
+		foreach (var th in threads)
+			th.Start ();
+		foreach (var th in threads)
+			th.Join ();
+
+		foreach (bool o in ok)
+			if (!o)
+				return 1;		// a caller saw a wrong result while the slot
+						// flipped underneath it.
+
+		// NUM_THREADS * ITERS = 80000 calls, comfortably past every tested
+		// threshold, so this must have promoted.
+		if (threshold != 0 && !WaitForState (h, STATE_PROMOTED))
+			return 2;
+		return 0;
+	}
+
+	// -- A cctor already run at tier 0, not re-run by promotion ---------------
+	//
+	// The original intent here was a cctor still PENDING when promotion
+	// happens. That does not occur with a plain static field reference: even
+	// HotWithPendingCctor's very first (tier-0) compile carries
+	// JIT_FLAG_RUN_CCTORS (mono_jit_compile_method_inner_1 () sets it
+	// unconditionally, nothing to do with tiering), so PendingCctor's
+	// initializer already runs during THAT compile, on the calling thread,
+	// long before any promotion. What tiering must not do is run it a SECOND
+	// time: mini_tiered_promote () recompiles this same method from scratch
+	// for tier 1, and if run_cctors were not correctly threaded through as
+	// FALSE for the background worker, that recompile could re-touch
+	// PendingCctor's vtable and re-run its initializer - on the worker
+	// thread, which is exactly the invariant this guards.
+
+	static class PendingCctor {
+		public static int RunCount;
+		public static int RunThreadId = -1;
+
+		static PendingCctor () {
+			RunCount++;
+			RunThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+		}
+
+		public static int Value = 99;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int HotWithPendingCctor (bool touch) {
+		if (touch)
+			return PendingCctor.Value;
+		return 0;
+	}
+
+	public static int test_0_cctor_not_rerun_by_promotion () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		IntPtr h = HandleOf ("HotWithPendingCctor");
+		int mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+
+		for (int i = 0; i < 5000; i++)
+			HotWithPendingCctor (false);
+
+		if (PendingCctor.RunCount != 1)
+			return 1;			// classic tier-0 semantics assumption (see
+						// above) doesn't hold - not yet even a tiering
+						// question.
+		if (PendingCctor.RunThreadId != mainThreadId)
+			return 2;
+
+		if (threshold != 0 && !WaitForRedirectArmed (h))
+			return 3;			// never promoted - nothing to have re-run
+						// the cctor to guard against.
+
+		// Promotion - a full recompile of HotWithPendingCctor, on the
+		// worker, with run_cctors = FALSE - has now happened (or, at
+		// threshold 0, happened eagerly on the tier-0 publish path, still
+		// with run_cctors plumbed through the same way). Either way it must
+		// not have re-run the cctor.
+		if (PendingCctor.RunCount != 1)
+			return 4;			// ran again - re-running an already-run
+						// cctor is exactly the defect the run_cctors
+						// fork exists to prevent.
+
+		int v = HotWithPendingCctor (true);
+		if (v != 99)
+			return 5;
+		if (PendingCctor.RunCount != 1)
+			return 6;
+		if (PendingCctor.RunThreadId != mainThreadId)
+			return 7;
+		return 0;
+	}
+
+	// -- AggressiveInlining callee's cctor not RE-RUN by promotion ------------
+	//
+	// A different site from the one above: method-to-ir.c's inlining-decision
+	// function has a dedicated branch for [MethodImplOptions.AggressiveInlining]
+	// callees that forces their cctor to run right there, specifically so the
+	// callee can be safely inlined - gated on run_cctors (like the site above)
+	// rather than unconditionally.
+	//
+	// This test does NOT reach that branch's !vtable->initialized arm: by the
+	// time HotCallerOfAggressive is promotable it has already had a tier-0
+	// compile, which - always carrying JIT_FLAG_RUN_CCTORS - already forced
+	// AggressiveCallee's class through this same branch and initialized it.
+	// Tier-0 and tier-1 see identical inlining candidates, so when the worker
+	// reconsiders inlining AggressiveCallee, the class is already initialized
+	// and the branch is a no-op either way. What this DOES verify, and is the
+	// real property at stake: promotion (a from-scratch recompile with
+	// run_cctors = FALSE) must not RE-RUN an already-run cctor - RunCount
+	// must stay exactly 1, on the original (mutator) thread, all the way
+	// through. See the comment on that branch in method-to-ir.c for why its
+	// !vtable->initialized arm is defensive rather than exercised here.
+
+	static class AggressivePendingCctor {
+		public static int RunCount;
+		public static int RunThreadId = -1;
+
+		static AggressivePendingCctor () {
+			RunCount++;
+			RunThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+		}
+
+		public static int Value = 7;
+	}
+
+	[MethodImpl (MethodImplOptions.AggressiveInlining)]
+	static int AggressiveCallee (int x) {
+		return x + AggressivePendingCctor.Value;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int HotCallerOfAggressive (int x) {
+		return AggressiveCallee (x);
+	}
+
+	public static int test_0_aggressive_inlining_cctor_not_run_on_worker () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		IntPtr h = HandleOf ("HotCallerOfAggressive");
+		int mainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+
+		// HotCallerOfAggressive's own first (tier-0) compile already reaches
+		// AggressiveCallee - inlined or not - so AggressivePendingCctor's
+		// cctor already runs here, on this thread, well before promotion;
+		// same classic eager-cctor-at-compile-time behavior as
+		// test_0_cctor_not_rerun_by_promotion above. What must not happen is
+		// a SECOND run when the worker recompiles HotCallerOfAggressive for
+		// tier 1 and its IR generation reconsiders inlining AggressiveCallee.
+		for (int i = 0; i < 5000; i++) {
+			int x = i % 1000;
+			if (HotCallerOfAggressive (x) != x + 7)
+				return 1;
+		}
+
+		if (AggressivePendingCctor.RunCount != 1)
+			return 2;
+		if (AggressivePendingCctor.RunThreadId != mainThreadId)
+			return 3;
+
+		if (threshold != 0 && !WaitForRedirectArmed (h))
+			return 4;
+
+		// Promotion - recompiling HotCallerOfAggressive on the worker, with
+		// run_cctors = FALSE, reconsidering the AggressiveInlining callee -
+		// has now happened. It must not have re-run the cctor.
+		if (AggressivePendingCctor.RunCount != 1)
+			return 5;
+
+		for (int i = 0; i < 200; i++) {
+			int x = i % 1000;
+			if (HotCallerOfAggressive (x) != x + 7)
+				return 6;
+		}
+		if (AggressivePendingCctor.RunCount != 1)
+			return 7;
+		if (AggressivePendingCctor.RunThreadId != mainThreadId)
+			return 8;
+		return 0;
 	}
 }

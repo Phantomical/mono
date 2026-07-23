@@ -4203,12 +4203,20 @@ tiered_promote_declined (MonoMethod *method, MonoJitInfo *tier0_jinfo)
  * mini_tiered_promote:
  *
  *   Recompile METHOD through LLVM and publish the result as its terminal body.
- * Runs from the tier-1 drain, which only fires when the JIT compile nesting has
- * unwound to zero, so LLVM codegen never stacks on a deep cctor-driven nest.
+ * Runs on the background tier-1 compile worker (mono/mini/llvm/tiered.cpp),
+ * never on a mutator thread, so LLVM codegen never stacks on a deep
+ * cctor-driven nest.
  *
  * Returns FALSE when the backend declined the method (an EH-clause, gshared or
  * save_lmf gate) or the compile failed; the caller then latches tier 0 as
  * terminal so we never retry.
+ *
+ * RUN_CCTORS controls whether the compile carries JIT_FLAG_RUN_CCTORS. The
+ * background worker always passes FALSE: it must never run managed class
+ * constructors itself (see the caller in tiered.cpp for why), so the tier-1
+ * body it produces uses the same lazy class-init sequences a run_cctors=FALSE
+ * tier-0 compile would, and any cctor still pending runs later, on whichever
+ * mutator thread first calls through.
  *
  * PROFILER EVENTS. mini_method_compile () raises jit_begin, but jit_done and
  * jit_failed are raised by mono_jit_compile_method_inner_1 (), which a promotion
@@ -4230,7 +4238,7 @@ tiered_promote_declined (MonoMethod *method, MonoJitInfo *tier0_jinfo)
  * window; see task #26 on that window generally.
  */
 gboolean
-mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
+mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt, gboolean run_cctors)
 {
 	MonoCompile *cfg;
 	MonoJitInfo *jinfo;
@@ -4262,6 +4270,9 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 	 * fallback runs a full second classic compile and publishes its MonoJitInfo,
 	 * which we then discard right below - the method already has an identical
 	 * tier-0 body, so that jinfo and its code are pure retention.
+	 *
+	 * JIT_FLAG_RUN_CCTORS is included only when RUN_CCTORS is set - never by the
+	 * background worker, which must not run managed class constructors itself.
 	 */
 
 	/*
@@ -4295,7 +4306,7 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt)
 	tier0_jinfo = tiered_lookup_live_jinfo (method, domain);
 
 	mono_llvm_tiered_promote_begin ();
-	cfg = mini_method_compile (method, opt, domain, (JitFlags)(JIT_FLAG_RUN_CCTORS | JIT_FLAG_NO_LLVM_FALLBACK), 0, -1);
+	cfg = mini_method_compile (method, opt, domain, (JitFlags)((run_cctors ? JIT_FLAG_RUN_CCTORS : 0) | JIT_FLAG_NO_LLVM_FALLBACK), 0, -1);
 	mono_llvm_tiered_promote_end ();
 	if (!cfg) {
 		tiered_promote_declined (method, tier0_jinfo);
@@ -4531,9 +4542,10 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 
 		/*
 		 * A tier-0 body was just published - queue it for tier 1. The promotion
-		 * itself runs when the compile nesting unwinds (see
-		 * mono_llvm_tiered_compile_end), never here, because we may be many
-		 * frames deep in a cctor-driven compile nest.
+		 * itself runs on the background compile worker (mono/mini/llvm/tiered.cpp),
+		 * never here, because we may be many frames deep in a cctor-driven
+		 * compile nest and, regardless of nesting, this thread must get back to
+		 * running the method it just compiled rather than block on an LLVM compile.
 		 *
 		 * Only eager (first-call) enqueue when the call-count threshold is off
 		 * (MONO_TIERED_CALL_THRESHOLD=0, the default-off value). With a non-zero

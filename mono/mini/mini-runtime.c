@@ -4761,6 +4761,12 @@ ves_icall_tiered_probe_method_state (gpointer method)
 	return (gint32) mono_llvm_tiered_method_state ((MonoMethod *) method);
 }
 
+static MonoBoolean
+ves_icall_tiered_probe_redirect_armed (gpointer method)
+{
+	return (MonoBoolean) mono_llvm_tiered_method_redirect_armed ((MonoMethod *) method);
+}
+
 static void
 register_icalls (void)
 {
@@ -4770,6 +4776,8 @@ register_icalls (void)
 				ves_icall_tiered_probe_threshold);
 	mono_add_internal_call_internal ("MonoTests.Tiering.Probe::MethodState",
 				ves_icall_tiered_probe_method_state);
+	mono_add_internal_call_internal ("MonoTests.Tiering.Probe::RedirectArmed",
+				ves_icall_tiered_probe_redirect_armed);
 	mono_add_internal_call_internal ("System.Diagnostics.StackTrace::get_trace",
 				ves_icall_get_trace);
 	mono_add_internal_call_internal ("Mono.Runtime::mono_runtime_install_handlers",
@@ -5147,6 +5155,23 @@ mini_cleanup (MonoDomain *domain)
 		mono_runtime_shutdown_stat_profiler ();
 
 	MONO_PROFILER_RAISE (runtime_shutdown_begin, ());
+
+#ifdef ENABLE_LLVM
+	/*
+	 * Declared locally for the same reason mono_llvm_tiered_set_ready () is,
+	 * further up in this file: backend.h also redeclares
+	 * mono_llvm_compile_method, which conflicts with the legacy llvm-jit.h
+	 * still included here.
+	 *
+	 * Stop the tiered background compile worker (if one was ever started)
+	 * before the teardown below starts freeing the domains and jit_code_hash
+	 * it touches. This signals shutdown and waits (bounded, ~5s) for the
+	 * worker to finish its current compile and exit before returning; on
+	 * timeout it proceeds anyway rather than hang process exit.
+	 */
+	void mono_llvm_tiered_shutdown (void);
+	mono_llvm_tiered_shutdown ();
+#endif
 
 #ifndef DISABLE_COM
 	mono_cominterop_release_all_rcws ();

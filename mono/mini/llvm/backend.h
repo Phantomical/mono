@@ -162,13 +162,14 @@ guint32   mono_llvm_jit_release_domain (MonoDomain *domain);
 
 /*
  * Tiered compilation (tiered.cpp). Tier 0 is the classic JIT; a method is
- * queued for tier 1 on a successful tier-0 compile and promoted once the
- * compile nesting unwinds to zero, so LLVM codegen never runs on a deep
- * JIT nest. All of these are no-ops unless MONO_TIERED is set.
+ * queued for tier 1 on a successful tier-0 compile (or, with a call-count
+ * threshold set, once its tier-0 entry count crosses that threshold) and
+ * promoted by a dedicated background compile thread, never on the thread
+ * that queued it. All of these are no-ops unless MONO_TIERED is set.
  *
  * mini.c brackets mini_method_compile with _compile_begin/_compile_end, calls
  * _enqueue after publishing a tier-0 body, and implements mini_tiered_promote
- * (declared in mini.h) which the drain calls back into.
+ * (declared in mini.h) which the worker calls back into.
  */
 gboolean  mono_llvm_tiered_enabled (void);
 void      mono_llvm_tiered_set_ready (void);
@@ -186,9 +187,21 @@ void      mono_llvm_tiered_promotion_restore (gboolean old);
  * through mono_domain_free (): the domain's assemblies have already been closed,
  * so a MonoMethod from a dynamic assembly it owned is gone, while
  * domain->jit_code_hash and the MonoDomain itself are freed shortly afterwards.
- * Purging here means no later drain can still be holding any of them.
+ * Purging here means the background worker can never pick up any of them.
  */
 void      mono_llvm_tiered_domain_unload (MonoDomain *domain);
+/*
+ * Ask the background compile worker (if one was ever started) to exit, and
+ * wait - bounded, not indefinitely - for it to actually do so before
+ * returning. Called once, from mini_cleanup (), during runtime teardown. The
+ * worker is a background, DONT_MANAGE thread, so mono_thread_manage () never
+ * waits for it; this function is what stands in for that, so that a compile
+ * still in flight finishes (or the wait times out) before teardown starts
+ * freeing domain and LLVM state it touches. On timeout it returns anyway -
+ * see the fuller comment on the definition in tiered.cpp for the residual
+ * risk that leaves.
+ */
+void      mono_llvm_tiered_shutdown (void);
 
 G_END_DECLS
 

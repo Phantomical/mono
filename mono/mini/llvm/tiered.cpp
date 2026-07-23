@@ -1,49 +1,50 @@
 /*
  * tiered.cpp: tier-0 -> tier-1 promotion policy for the LLVM backend.
  *
- * The model (design C3):
+ *   Tier 0 is the classic mini JIT, lazy, on first call - unchanged. A method
+ *   is queued for tier 1 either eagerly (on its first successful tier-0
+ *   compile, when MONO_TIERED_CALL_THRESHOLD is 0) or once its tier-0 entry
+ *   count crosses that threshold (mini_tiered_count_reached (), called from
+ *   the counter mono_arch_emit_prolog bakes into the tier-0 prologue). Either
+ *   way, queueing only ever enqueues and wakes the background compile worker
+ *   below - it never runs LLVM codegen, or the cctors a promotion compile can
+ *   trigger, on the thread that queued the method.
  *
- *   Tier 0 is the classic mini JIT, lazy, on first call - unchanged.
- *   On a successful tier-0 compile the method is queued for tier 1
- *   unconditionally; there is no hotness counting. Tier 1 is terminal: if it
- *   fails, the method latches tier-0-terminal and is never retried.
+ *   Tier 1 is terminal: if it fails - or the backend declines the method (an
+ *   EH-clause, gshared or save_lmf gate) - the method latches tier-0-terminal
+ *   and is never retried. "Tier 1" means that terminal body, not necessarily
+ *   the LLVM body; a decline is a normal outcome, not a failure.
  *
- * "Tier 1" means the terminal body, not necessarily the LLVM body. A method
- * that hits one of the backend's gates (EH clauses, gshared, save_lmf) simply
- * stays tier-0 terminal; that is a normal outcome, not a failure.
+ * The queue exists rather than promoting inline at the point a method becomes
+ * eligible because mono's JIT nests: compiling a method runs class
+ * initializers, which compile more methods, which run more initializers, and
+ * a threshold crossing can equally fire from deep inside such a nest. A tier-0
+ * frame is small, but an LLVM codegen frame is not, so promoting inline could
+ * stack a full LLVM pipeline on top of however deep the nest already is. The
+ * background worker sidesteps this entirely - it always compiles on its own,
+ * shallow stack, regardless of what triggered the enqueue or how deep that
+ * thread's own nest happened to be.
  *
- * Why the queue exists rather than promoting inline at the end of the tier-0
- * compile: mono's JIT nests. Compiling a method runs class initializers, which
- * compile more methods, which run more initializers; observed nesting reaches
- * dozens of frames. A tier-0 frame is small, but an LLVM codegen frame is not,
- * so promoting inline would stack full LLVM pipelines to the same depth as the
- * nest. Instead the method is queued and the queue is drained only when the
- * compile nesting returns to zero, so tier-1 compilation always runs on a
- * shallow stack regardless of how deep the tier-0 nest went.
- *
- * Per scope decision D2 the drain is synchronous - it runs on the thread that
- * finished the outermost compile. Moving it to a background thread is W4 and is
- * deliberately deferred; when that happens only the drain site changes, not the
- * policy here.
+ * The worker is a single dedicated thread, not a pool: MonoLLVMJIT keeps some
+ * unguarded per-process state (module_counter_, engine.cpp), so two
+ * concurrent tier-1 compiles would race each other.
  */
 
 #include <config.h>
 #include <glib.h>
 
+#include <cstddef>
+
 #include "mini.h"
 #include "mini-runtime.h"
 #include <mono/metadata/appdomain.h>
-#include <mono/utils/mono-lazy-init.h>
+#include <mono/metadata/threads.h>
 #include <mono/utils/atomic.h>
+#include <mono/utils/mono-coop-mutex.h>
+#include <mono/utils/mono-lazy-init.h>
+#include <mono/utils/mono-time.h>
+#include <mono/utils/w32api.h>
 #include "backend.h"
-
-/*
- * Declared here rather than via <mono/metadata/gc-internals.h>: that header is
- * not wrapped for C++ linkage, so including it from this C++ TU would mangle the
- * C symbols it declares. This is the only symbol we need from it. (Same
- * local-declaration pattern mini-runtime.c uses for mono_llvm_tiered_domain_unload.)
- */
-extern "C" gboolean mono_gc_is_finalizer_internal_thread (MonoInternalThread *thread);
 
 enum TierState {
 	/* queued or compiling; tier 0 is the current body */
@@ -55,14 +56,29 @@ enum TierState {
 };
 
 /*
+ * Forward declaration: TieredEntry below needs a pointer to this, but the
+ * struct itself is defined further down, next to the offsetof () accessors
+ * the codegen emitter uses.
+ */
+typedef struct MiniTieredCounter MiniTieredCounter;
+
+/*
  * A queued method, with the optimization set its tier-0 compile used - tier 1
- * must be built with the same opts, and the drain runs long after the compile
- * that chose them has returned.
+ * must be built with the same opts, and the background worker processes the
+ * entry long after the compile that chose them has returned.
  */
 typedef struct {
 	MonoMethod *method;
 	MonoDomain *domain;
 	guint32 opt;
+	/*
+	 * Set only for entries that came from mini_tiered_count_reached () (the
+	 * call-count threshold path); NULL for eager (threshold == 0) entries,
+	 * which have no counter block to arm. Once mini_tiered_promote () succeeds
+	 * for an entry with a non-NULL ctr, the worker arms its redirect slot -
+	 * see tiered_worker_process_entry ().
+	 */
+	MiniTieredCounter *ctr;
 } TieredEntry;
 
 /*
@@ -77,13 +93,22 @@ typedef struct {
  * inherit a stale TIER_STATE_TIER0_TERMINAL and never be promoted.
  *
  * The record is a separate allocation from the queue entry on purpose. The
- * table owns the record and a domain purge frees it, while the drain owns the
- * entry it popped; if they were one allocation a purge could free the entry
- * out from under a promotion that is already in flight.
+ * table owns the record and a domain purge frees it, while the background
+ * worker owns the entry it popped; if they were one allocation a purge could
+ * free the entry out from under a promotion that is already in flight.
  */
 typedef struct {
 	MonoDomain *domain;
 	TierState state;
+	/*
+	 * Mirrors the queue entry's ctr (NULL for the eager/threshold-0 path).
+	 * Kept here, past the point the queue entry itself is freed, purely so
+	 * mono_llvm_tiered_method_redirect_armed () - a test probe - can answer
+	 * "has this method's sled actually been armed" for a method whose
+	 * MiniTieredCounter would otherwise be unreachable once its TieredEntry
+	 * is gone. Nothing in the promotion path itself reads this.
+	 */
+	MiniTieredCounter *ctr;
 } TieredRecord;
 
 static mono_mutex_t tiered_mutex;
@@ -94,26 +119,19 @@ static GQueue *tiered_queue;		/* pending TieredEntry* */
  * Promotion is unsafe until mini_init () has finished: the domain is still
  * being constructed before that (create_domain_objects compiles methods), and
  * running LLVM codegen there reaches domain state that does not exist yet.
- * Methods compiled during startup still queue; they are promoted by the first
- * drain after the runtime is up.
+ * Methods compiled during startup still queue; the background worker holds
+ * off on all of them until this becomes TRUE.
  */
 static gboolean tiered_ready;
 
 /*
- * Nesting depth of mini_method_compile on this thread. Only a transition back
- * to zero is a safe point to run tier-1 compilation.
- */
-static __thread int tiered_compile_depth;
-
-/* Guards against a drain re-entering itself through the compile it triggers. */
-static __thread gboolean tiered_draining;
-
-/*
  * TRUE only for the duration of the one mini_method_compile () that is
- * promoting a method. It must NOT cover the whole drain: promotion runs cctors,
- * which compile other, unrelated methods, and those must still get a classic
- * tier-0 body. mono_jit_compile_method_inner () - the entry every nested compile
- * goes through - saves and clears this around itself, so a nested compile sees
+ * promoting a method - meaning, with the background worker, only on the
+ * worker's own thread. It must NOT cover more than that one compile: when
+ * run_cctors is TRUE, promotion runs cctors, which compile other, unrelated
+ * methods, and those must still get a classic tier-0 body.
+ * mono_jit_compile_method_inner () - the entry every nested compile goes
+ * through - saves and clears this around itself, so a nested compile sees
  * FALSE while the promotion compile, which calls mini_method_compile directly,
  * keeps it.
  */
@@ -132,41 +150,66 @@ static gboolean tiered_enabled;
 static guint32 tiered_call_threshold;
 
 /*
- * The per-method, per-domain tier-0 call counter block. COUNT is at offset 0
- * because the prologue bakes the block's address and increments/compares its
- * first word directly; OPT/METHOD/DOMAIN let the crossing helper enqueue with
- * exactly the arguments the eager path used. Allocated from the domain mem
- * manager so it is freed with the tier-0 code at domain unload; a re-JIT for a
- * new domain gets a fresh, zeroed counter, which is correct (promotion is
- * per-domain).
+ * The per-method, per-domain tier-0 call counter and redirect block. The
+ * prologue bakes this block's address twice - once at method entry to check
+ * tier1_entry (the redirect sled), and once at the prologue tail to
+ * lock-xadd count - and OPT/METHOD/DOMAIN let mini_tiered_count_reached ()
+ * enqueue with exactly the arguments the eager path uses. Allocated from the
+ * domain mem manager (mono_domain_alloc0, so every field starts zeroed) and
+ * freed with the tier-0 code at domain unload; a re-JIT for a new domain gets
+ * a fresh, zeroed counter, which is correct (promotion is per-domain).
  */
-typedef struct {
+struct MiniTieredCounter {
+	/*
+	 * Offset 0. The prologue's redirect check (mono_arch_emit_prolog, point A)
+	 * bakes this block's address and reads tier1_entry below directly; the tail
+	 * counter block (point B) bakes it again and lock-xadds this word directly.
+	 * Neither has this struct's definition to hand - mini_tiered_counter_count_offset ()
+	 * and mini_tiered_counter_tier1_entry_offset () are how they get the two
+	 * offsets they need without hardcoding them.
+	 */
 	guint32 count;
 	guint32 opt;
 	MonoMethod *method;
 	MonoDomain *domain;
 	/*
-	 * Lock-free "this method is done" latch. Read with an atomic load and set
-	 * with an atomic store, never under tiered_mutex. It is set to 1 only once
-	 * the method has reached a TERMINAL tier state - promoted, or declined to
-	 * tier-1-terminal - by mini_tiered_count_reached () after a drain that
-	 * actually settled it. A set bit lets every later crossing on a still-live,
-	 * un-redirected tier-0 call site return immediately, eliding the
-	 * mutex-locked enqueue (refused) and drain attempt those repeats would
-	 * otherwise pay on every call for the rest of the process. It does NOT elide
-	 * the baked prologue increment+cmp+call - only a sled (future W4/C4 work)
-	 * can remove that - just the dominant mutex+drain cost behind it.
-	 *
-	 * Crucially the bit is NOT set on mere enqueue. A crossing whose drain was
-	 * deferred (depth != 0, or a failed current-domain / appdomain-ref / ready
-	 * gate) leaves the method enqueued in TIER_STATE_TIER0 with this bit clear,
-	 * so its next crossing still takes the full path and RETRIES the drain -
-	 * exactly the deferral-retry the synchronous design depends on (§5.1).
-	 * Latching on enqueue would fast-path a deferred method out of every future
-	 * crossing and could lose its promotion entirely.
+	 * Idempotence guard on enqueue, not a terminal-state latch: CAS'd 0->1 by
+	 * mini_tiered_count_reached () the one time it ever runs for this counter
+	 * (the prologue's lock-xadd dispatches on an exact count match, so under
+	 * normal operation that is already at most once; this is belt-and-suspenders
+	 * against ever double-enqueuing the same counter). Read with an atomic load
+	 * and set with an atomic store/CAS, never under tiered_mutex.
 	 */
 	gint32 settled;
-} MiniTieredCounter;
+	/*
+	 * The redirect slot - the sled. NULL until the background compile worker
+	 * finishes promoting this method, at which point it is the last thing the
+	 * worker writes (mono_atomic_store_ptr, after the tier-1 jit_info is fully
+	 * published) and becomes the tier-1 entry point. The prologue's point-A
+	 * check loads this with a plain mov, and on x86-TSO a plain load is already
+	 * an acquire, so a non-NULL read is guaranteed to see fully-formed code and
+	 * its published jit_info, never a torn or in-progress write.
+	 */
+	gpointer tier1_entry;
+};
+
+/*
+ * Byte offsets of the two words within MiniTieredCounter that generated code
+ * touches directly - mono_arch_emit_prolog has no visibility into this (C++)
+ * struct's layout, so it gets them from here instead of hardcoding numbers
+ * that would silently desync from the struct on the next field reorder.
+ */
+gsize
+mini_tiered_counter_count_offset (void)
+{
+	return offsetof (MiniTieredCounter, count);
+}
+
+gsize
+mini_tiered_counter_tier1_entry_offset (void)
+{
+	return offsetof (MiniTieredCounter, tier1_entry);
+}
 
 static void
 tiered_do_init (void)
@@ -250,21 +293,42 @@ mono_llvm_tiered_set_ready (void)
 	tiered_ready = TRUE;
 }
 
+/*
+ * Bracket every mini_method_compile () so nested compiles can tell they are
+ * nested (mono_jit_compile_method_inner () uses this window to suspend
+ * mono_llvm_tiered_promotion_suspend/restore around them). Nesting depth
+ * itself no longer gates anything here - promotion runs on the background
+ * worker's own stack regardless of how deep the enqueuing thread's compile
+ * nest was - so these only need to keep the feature's lazy init warm.
+ */
 void
 mono_llvm_tiered_compile_begin (void)
 {
-	if (!mono_llvm_tiered_enabled ())
-		return;
-	tiered_compile_depth ++;
+	mono_llvm_tiered_enabled ();
 }
 
-/*
- * Queue a method that has just been compiled and published at tier 0.
- * Ignored if the method is already promoted or latched terminal.
- */
 void
-mono_llvm_tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt)
+mono_llvm_tiered_compile_end (void)
 {
+	mono_llvm_tiered_enabled ();
+}
+
+/* Forward declarations: tiered_enqueue () lazily starts and wakes the
+ * background worker defined further down in this file. */
+static void tiered_worker_ensure_started (void);
+static void tiered_worker_signal (void);
+
+/*
+ * Queue METHOD for tier 1 and wake the background compile worker. Ignored if
+ * the method is already promoted or latched terminal. CTR is the counter
+ * block to arm once the worker promotes METHOD - NULL for the eager
+ * (threshold == 0) path, which has no counter block.
+ */
+static void
+tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt, MiniTieredCounter *ctr)
+{
+	gboolean queued = FALSE;
+
 	if (!mono_llvm_tiered_enabled () || !method)
 		return;
 
@@ -275,13 +339,38 @@ mono_llvm_tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt)
 
 		rec->domain = domain;
 		rec->state = TIER_STATE_TIER0;
+		rec->ctr = ctr;
 		entry->method = method;
 		entry->domain = domain;
 		entry->opt = opt;
+		entry->ctr = ctr;
 		g_hash_table_insert (tiered_state, method, rec);
 		g_queue_push_tail (tiered_queue, entry);
+		queued = TRUE;
 	}
 	mono_os_mutex_unlock (&tiered_mutex);
+
+	/* Only wake the worker (and pay for starting it, the first time) if this
+	 * call actually added something - most calls here are the harmless repeat
+	 * enqueue mono_llvm_tiered_enqueue ()'s doc comment describes. */
+	if (queued) {
+		tiered_worker_ensure_started ();
+		tiered_worker_signal ();
+	}
+}
+
+/*
+ * Queue a method that has just been compiled and published at tier 0 - the
+ * eager (MONO_TIERED_CALL_THRESHOLD == 0) path, called from mini.c right
+ * after a tier-0 publish. The call-count threshold path enqueues through
+ * mini_tiered_count_reached () below instead, which also has a counter block
+ * to arm on success; this path never does, since threshold == 0 means the
+ * prologue emits no counter at all.
+ */
+void
+mono_llvm_tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt)
+{
+	tiered_enqueue (method, domain, opt, NULL);
 }
 
 /*
@@ -303,30 +392,6 @@ tiered_set_state (MonoMethod *method, MonoDomain *domain, TierState state)
 	if (rec && rec->domain == domain)
 		rec->state = state;
 	mono_os_mutex_unlock (&tiered_mutex);
-}
-
-/*
- * TRUE once METHOD has reached a terminal tier state in DOMAIN - promoted, or
- * declined to tier-0-terminal. This is the only state in which
- * mini_tiered_count_reached () may latch the counter's lock-free settled bit:
- * the transient TIER_STATE_TIER0 that a still-queued (possibly deferred) method
- * sits in must NOT latch, or a deferred method's retry path would be cut off. A
- * missing record means the method was never enqueued here (or its domain was
- * purged); that is not settled.
- */
-static gboolean
-tiered_state_is_settled (MonoMethod *method, MonoDomain *domain)
-{
-	TieredRecord *rec;
-	gboolean settled = FALSE;
-
-	mono_os_mutex_lock (&tiered_mutex);
-	rec = (TieredRecord *) g_hash_table_lookup (tiered_state, method);
-	if (rec && rec->domain == domain)
-		settled = rec->state != TIER_STATE_TIER0;
-	mono_os_mutex_unlock (&tiered_mutex);
-
-	return settled;
 }
 
 /*
@@ -358,6 +423,38 @@ mono_llvm_tiered_method_state (MonoMethod *method)
 }
 
 /*
+ * TRUE once the redirect sled for METHOD has actually been armed - i.e. the
+ * background worker has written a non-NULL tier1_entry into its counter
+ * block - as opposed to mono_llvm_tiered_method_state () == PROMOTED, which
+ * only says the hash-swap happened. Also for the functional test: promotion
+ * alone proves the lookup path picks up tier 1, but a test that calls the
+ * method from a single, already-JIT'd call site (the common case - a tight
+ * loop) only actually exercises tier 1 if the SLED redirects that call site,
+ * so this is the more precise thing to assert "the sled fires" with.
+ *
+ * FALSE for the eager (threshold == 0) path - there is no counter block - and
+ * for a method that has not promoted (or promotion is still in flight on the
+ * worker; the caller is expected to poll this, same as method state).
+ */
+gboolean
+mono_llvm_tiered_method_redirect_armed (MonoMethod *method)
+{
+	TieredRecord *rec;
+	gboolean armed = FALSE;
+
+	if (!mono_llvm_tiered_enabled () || !method)
+		return FALSE;
+
+	mono_os_mutex_lock (&tiered_mutex);
+	rec = (TieredRecord *) g_hash_table_lookup (tiered_state, method);
+	if (rec && rec->ctr)
+		armed = mono_atomic_load_ptr ((volatile gpointer *) &rec->ctr->tier1_entry) != NULL;
+	mono_os_mutex_unlock (&tiered_mutex);
+
+	return armed;
+}
+
+/*
  * TRUE while a domain is being torn down, i.e. once mono_domain_try_unload ()
  * has moved it past MONO_APPDOMAIN_UNLOADING_START. The state that actually
  * holds during the purge is MONO_APPDOMAIN_UNLOADED: appdomain.c sets it before
@@ -372,9 +469,10 @@ mono_llvm_tiered_method_state (MonoMethod *method)
  *
  * Note that this is advisory, not a safety barrier - it is a racy read of
  * domain->state and the domain can enter either state immediately afterwards.
- * What actually makes the promotion safe is the appdomain-ref precondition
- * enforced in mono_llvm_tiered_compile_end (); this check only avoids the
- * pointless work of compiling into a domain already known to be going away.
+ * What actually makes background promotion safe is the appdomain ref the
+ * worker takes before compiling (see tiered_worker_enter_domain ()); this
+ * check only avoids the pointless work of compiling into a domain already
+ * known to be going away.
  */
 static gboolean
 tiered_domain_is_dying (MonoDomain *domain)
@@ -437,13 +535,14 @@ mono_llvm_tiered_domain_unload (MonoDomain *domain)
 
 	if (tiered_queue) {
 		/*
-		 * Entries for a domain nobody drains just sit here (see
-		 * tiered_dequeue_for_domain ()), so at unload the queue really can
-		 * still hold some - this is not a theoretical arm.
+		 * A domain can still have entries pending here at unload - the
+		 * background worker processes the queue at its own pace, so there is
+		 * no guarantee it has drained everything queued for a domain before
+		 * that domain starts unloading.
 		 *
 		 * eglib's GQueue has no delete_link, so filter by draining into a
 		 * scratch queue and pushing the survivors back, which also keeps the
-		 * FIFO order the drain relies on.
+		 * FIFO order the worker relies on.
 		 */
 		GQueue *kept = g_queue_new ();
 		TieredEntry *entry;
@@ -466,228 +565,282 @@ mono_llvm_tiered_domain_unload (MonoDomain *domain)
 }
 
 /*
- * Pop the oldest queued entry belonging to DOMAIN, leaving entries for other
- * domains where they are. Returns NULL when this domain has nothing pending.
- * Caller holds tiered_mutex.
+ * The background tier-1 compile worker.
  *
- * Entries are deferred rather than dropped because a queue entry is the only
- * record that a method still wants tier 1: mono_llvm_tiered_enqueue () refuses
- * any method already in tiered_state, and a published tier-0 body is never
- * recompiled, so a dropped entry means that method is stuck at tier 0 for the
- * process lifetime. Deferring costs nothing - the entry is picked up by the
- * next drain that happens to run in its domain, which for the root domain is
- * almost immediately - and it is what lets a rolled-back unload recover.
+ * A single dedicated thread, not a pool: MonoLLVMJIT keeps some unguarded
+ * per-process state (module_counter_, engine.cpp), so two concurrent tier-1
+ * compiles would race each other. One thread compiling one method at a time
+ * is also all this needs - nothing here depends on throughput, only on
+ * getting LLVM codegen (and cctors) off mutator threads.
  *
- * Cost: the slow path rebuilds the whole queue, so popping k entries out of a
- * queue of n is O(k*n), not O(n). It is only taken when the head does not
- * already match, which for a single-domain process is never. Measured on a
- * three-round unload workload: 2694 fast dequeues against 446 slow ones
- * walking about 15 entries each, peak queue length 83.
+ * tiered_worker_mutex/_wake are a doorbell, not what protects the queue: the
+ * queue and its state table stay entirely under tiered_mutex, exactly as
+ * they were before this worker existed. The doorbell just lets the worker
+ * sleep when there is nothing to do and wake promptly when tiered_enqueue ()
+ * adds something, via the standard "recheck under the real lock, then wait
+ * on the doorbell" pattern - held across the recheck-and-wait, so a signal
+ * that lands between the recheck and the wait is never lost even though the
+ * recheck itself briefly takes the other lock.
  */
-static TieredEntry *
-tiered_dequeue_for_domain (MonoDomain *domain)
+
+/*
+ * How long mono_llvm_tiered_shutdown () waits for the worker to exit before
+ * giving up. Generous - long enough that a normal in-flight LLVM compile
+ * always finishes well inside it - but not infinite; see the comment on
+ * mono_llvm_tiered_shutdown () for why an unbounded wait is not acceptable
+ * here.
+ */
+#define TIERED_SHUTDOWN_TIMEOUT_MS 5000
+
+static MonoCoopMutex tiered_worker_mutex;
+static MonoCoopCond tiered_worker_wake;
+static mono_lazy_init_t tiered_worker_init = MONO_LAZY_INIT_STATUS_NOT_INITIALIZED;
+static volatile gboolean tiered_worker_shutdown;
+/* Set by tiered_worker_main () under tiered_worker_mutex, just before it
+ * returns, and signalled on the same doorbell - see mono_llvm_tiered_shutdown (). */
+static volatile gboolean tiered_worker_exited;
+
+static gsize WINAPI tiered_worker_main (gpointer unused);
+
+static void
+tiered_worker_start (void)
 {
-	GQueue *deferred;
-	TieredEntry *entry, *found = NULL;
+	ERROR_DECL (error);
 
-	if (!tiered_queue || tiered_queue->length == 0)
-		return NULL;
+	mono_coop_mutex_init (&tiered_worker_mutex);
+	mono_coop_cond_init (&tiered_worker_wake);
 
-	/* Fast path: the queue is single-domain, so the head normally matches. */
-	if (((TieredEntry *) tiered_queue->head->data)->domain == domain)
-		return (TieredEntry *) g_queue_pop_head (tiered_queue);
-
-	deferred = g_queue_new ();
-	while ((entry = (TieredEntry *) g_queue_pop_head (tiered_queue))) {
-		if (!found && entry->domain == domain)
-			found = entry;
-		else
-			g_queue_push_tail (deferred, entry);
-	}
-	while ((entry = (TieredEntry *) g_queue_pop_head (deferred)))
-		g_queue_push_tail (tiered_queue, entry);
-	g_queue_free (deferred);
-
-	return found;
+	mono_thread_create_internal (mono_get_root_domain (), tiered_worker_main, NULL, MONO_THREAD_CREATE_FLAGS_THREADPOOL, error);
+	mono_error_assert_ok (error);
 }
 
 /*
- * Drain the queue for this thread's current domain, promoting each entry.
- *
- * Factored out so it can be driven from two producers: a compile that unwound to
- * nesting zero (mono_llvm_tiered_compile_end), and a tier-0 body whose call count
- * just crossed the threshold during ordinary execution (mini_tiered_count_reached).
- * Both reach a drain on a shallow stack; the gates below are identical for both.
- *
- * The depth gate is the shared safety property: tier-1 LLVM codegen must run only
- * at nesting zero, never on the deep stack that class initializers create. A
- * compile_end has just decremented to its final depth; a count-reached crossing
- * that fires deep inside a cctor-driven compile nest simply sees depth != 0 here,
- * leaves the method enqueued, and lets the outer compile_end drain it later.
+ * Lazily create the worker on the first real enqueue - most runs of a tiered
+ * build never promote anything (the default threshold is 1000 calls), so
+ * there is no reason to spin up a thread nobody is going to wake.
  */
 static void
-tiered_try_drain (void)
+tiered_worker_ensure_started (void)
 {
-	MonoInternalThread *thread;
-	MonoDomain *domain;
+	mono_lazy_initialize (&tiered_worker_init, tiered_worker_start);
+}
 
-	if (tiered_compile_depth != 0)
-		return;
-	if (!tiered_ready)
-		return;
-	/* The promotion compile below re-enters here; do not recurse. */
-	if (tiered_draining)
-		return;
-
-	/*
-	 * Promote only into this thread's own current domain, and only when this
-	 * thread actually holds an appdomain ref to it.
-	 *
-	 * The hazard: the queue is global, so an unrestricted drain compiles
-	 * methods for whatever domain queued them. mini_tiered_promote () takes
-	 * domain->jit_code_hash_lock and mutates domain->jit_code_hash, and
-	 * mono_domain_try_unload () waits only for threads that hold an appdomain
-	 * ref to the doomed domain (collect_appdomain_thread () selects purely on
-	 * mono_thread_internal_has_appdomain_ref). A drain thread that holds no ref
-	 * is not waited for, so the domain can be freed mid-compile.
-	 *
-	 * The two checks below enforce two different things, and neither subsumes
-	 * the other:
-	 *
-	 *  - The ref check is the lifetime guarantee. It is enforced rather than
-	 *    assumed because "current domain implies a ref" is FALSE. The finalizer
-	 *    thread is the standing counterexample: gc.c makes an arbitrary object's
-	 *    domain current with no ref at all - the comment there literally reads
-	 *    "this thread can enter a doomed appdomain" - and then compiles in that
-	 *    window. mono_runtime_class_init_full (), mono_domain_try_type_unload's
-	 *    xdomain paths and cominterop transfer domains unref'd too. Once we do
-	 *    hold a ref, mono_threads_abort_appdomain_threads () is called with an
-	 *    infinite timeout, so the unload cannot reach mono_domain_free () until
-	 *    we leave. We never push a ref of our own: refs are what
-	 *    mono_thread_internal_abort () targets, so pushing one would make a
-	 *    root-domain thread abortable on behalf of an unrelated domain's unload.
-	 *
-	 *  - The current-domain check is the execution-context guarantee, and it is
-	 *    not redundant. mono_runtime_class_init_full () transfers the running
-	 *    thread into the vtable's domain with mono_domain_set_fast () and no ref
-	 *    (object.c) when it has to run a cctor for another domain. Promoting a
-	 *    method for domain D from a thread currently in domain C would therefore
-	 *    manufacture exactly the unref'd-entrant condition described above, out
-	 *    of the cctors our own JIT_FLAG_RUN_CCTORS compile triggers. Requiring
-	 *    D == C makes that transfer a no-op instead.
-	 *
-	 * Entries that fail either check are left queued, not dropped; see
-	 * tiered_dequeue_for_domain ().
-	 */
-	domain = mono_domain_get ();
-
-	/*
-	 * The ref is read from our own thread's ref stack, which only this thread
-	 * pushes and pops, so it cannot be revoked underneath us: a cctor run by
-	 * the promotion compile may move us in and out of other domains, but it
-	 * never pops the ref that got us here. One check per drain therefore covers
-	 * every entry the drain goes on to promote.
-	 *
-	 * A NULL thread is a native thread that never attached; a NULL domain never
-	 * matches a ref stack entry. Both correctly fall out as "cannot promote".
-	 */
-	thread = mono_thread_internal_current ();
-	if (!thread || !mono_thread_internal_has_appdomain_ref (thread, domain))
-		return;
-
-	/*
-	 * NEVER run a tier-1 promotion on the finalizer thread.
-	 *
-	 * A promotion is a full mini_method_compile with JIT_FLAG_RUN_CCTORS
-	 * (mini_tiered_promote): it runs LLVM codegen AND executes class
-	 * initializers. The finalizer thread must do neither - it is a background
-	 * runtime thread that may be made to enter an arbitrary object's (possibly
-	 * doomed) domain with no ref of its own, and running cctors / LLVM codegen
-	 * there is exactly what the "no cctors on the compilation thread" invariant
-	 * forbids. The appdomain-ref gate above does NOT exclude it: a finalizer
-	 * that finalizes a live root-domain object legitimately holds a root-domain
-	 * ref, so without this check the finalizer thread LLVM-compiles finalizer
-	 * bodies - and, when that compilation overlaps process teardown, faults in
-	 * LLVM Value::setName (the ~40% SIGSEGV the F4 abort-guard's changed timing
-	 * exposed).
-	 *
-	 * The entries are left queued, not dropped (like every other gate here):
-	 * the queue is global and per-domain, so the next drain on a NON-finalizer
-	 * thread in this domain - the main thread, which drains on every compile_end
-	 * and threshold crossing - promotes them normally, on a thread that may run
-	 * cctors. A method only ever reached from the finalizer simply stays at its
-	 * correct, working tier-0 body, which is the intended outcome.
-	 */
-	if (mono_gc_is_finalizer_internal_thread (thread))
-		return;
-
-	/*
-	 * Our own domain is being torn down. Leave everything queued: on a
-	 * successful unload mono_llvm_tiered_domain_unload () frees it, and on a
-	 * rolled-back one (a thread-abort, threadpool or finalization timeout makes
-	 * mono_domain_try_unload () restore MONO_APPDOMAIN_CREATED without ever
-	 * calling mono_domain_free) the domain is usable again and the next drain
-	 * promotes these normally. Dropping them here would strand every one of
-	 * them at tier 0 permanently, since enqueue refuses a method that already
-	 * has a record.
-	 */
-	if (tiered_domain_is_dying (domain))
-		return;
-
-	tiered_draining = TRUE;
-
-	for (;;) {
-		TieredEntry *entry;
-
-		mono_os_mutex_lock (&tiered_mutex);
-		entry = tiered_dequeue_for_domain (domain);
-		mono_os_mutex_unlock (&tiered_mutex);
-
-		if (!entry)
-			break;
-
-		/*
-		 * mini_tiered_promote () returns FALSE when the backend declined the
-		 * method (a gate) or the compile failed. Either way tier 0 is the
-		 * terminal body and we must not try again.
-		 */
-		if (mini_tiered_promote (entry->method, entry->domain, entry->opt))
-			tiered_set_state (entry->method, entry->domain, TIER_STATE_PROMOTED);
-		else
-			tiered_set_state (entry->method, entry->domain, TIER_STATE_TIER0_TERMINAL);
-
-		g_free (entry);
-	}
-
-	tiered_draining = FALSE;
+static void
+tiered_worker_signal (void)
+{
+	mono_coop_mutex_lock (&tiered_worker_mutex);
+	mono_coop_cond_signal (&tiered_worker_wake);
+	mono_coop_mutex_unlock (&tiered_worker_mutex);
 }
 
 /*
- * Called when mini_method_compile unwinds. When the nesting returns to zero we
- * are on a shallow stack, so it is safe to run tier-1 compilation for whatever
- * accumulated during the nest.
+ * Make DOMAIN current on this (the worker's) thread for the duration of a
+ * promotion compile, having first confirmed it is not on its way out.
+ *
+ * The worker holds no appdomain ref of its own to start with - unlike a
+ * mutator thread, which naturally holds one just by having entered the
+ * domain to run managed code - so it takes one here with
+ * mono_thread_push_appdomain_ref () + mono_domain_set_fast (), the same
+ * push-ref-then-transfer pattern mono_threadpool_enqueue_work_item ()
+ * (mono/metadata/threadpool.c) uses when the calling thread's current domain
+ * differs from the one the work item targets. That ref is what makes
+ * mono_threads_abort_appdomain_threads () wait for the
+ * worker before a concurrent mono_domain_try_unload () can reach
+ * mono_domain_free ().
+ *
+ * Checked once before taking the ref and once after: the second check closes
+ * the window where DOMAIN starts unloading in between, so the worker never
+ * proceeds holding a ref that was taken too late for the unload's thread scan
+ * to have seen. That window - and closing it this way - is not new here; it
+ * is the same one every other foreign-domain transfer in the runtime lives
+ * with.
+ */
+static gboolean
+tiered_worker_enter_domain (MonoDomain *domain)
+{
+	if (tiered_domain_is_dying (domain))
+		return FALSE;
+
+	mono_thread_push_appdomain_ref (domain);
+
+	if (tiered_domain_is_dying (domain)) {
+		mono_thread_pop_appdomain_ref ();
+		return FALSE;
+	}
+
+	mono_domain_set_fast (domain, TRUE);
+	return TRUE;
+}
+
+static void
+tiered_worker_leave_domain (MonoDomain *original)
+{
+	mono_domain_set_fast (original, TRUE);
+	mono_thread_pop_appdomain_ref ();
+}
+
+/*
+ * Promote one queued entry, then - on success - arm its redirect sled.
+ *
+ * The sled is armed LAST, strictly after mini_tiered_promote () has both
+ * compiled the tier-1 body and swapped it into domain->jit_code_hash: any
+ * thread that reads a non-NULL tier1_entry (mono_arch_emit_prolog, point A)
+ * must find fully-formed, callable code and a published jit_info behind it,
+ * never a still-in-progress compile.
+ */
+static void
+tiered_worker_process_entry (TieredEntry *entry)
+{
+	MonoDomain *original = mono_domain_get ();
+
+	if (!tiered_worker_enter_domain (entry->domain)) {
+		/*
+		 * DOMAIN is unloading (or already gone). Nothing to do here:
+		 * mono_llvm_tiered_domain_unload () owns purging this entry's
+		 * bookkeeping and either already has or shortly will.
+		 */
+		return;
+	}
+
+	/* run_cctors=FALSE: this is the background worker, which must never run
+	 * managed class constructors - see mini_tiered_promote ()'s doc comment. */
+	if (mini_tiered_promote (entry->method, entry->domain, entry->opt, FALSE)) {
+		tiered_set_state (entry->method, entry->domain, TIER_STATE_PROMOTED);
+
+		if (entry->ctr) {
+			/*
+			 * mini_tiered_promote () already swapped domain->jit_code_hash
+			 * over to the tier-1 jit_info before returning, so this lookup
+			 * finds it (see the comment on that swap in mini.c).
+			 */
+			MonoJitInfo *ji = mini_lookup_method (entry->domain, entry->method, NULL);
+			if (ji)
+				mono_atomic_store_ptr ((volatile gpointer *) &entry->ctr->tier1_entry, ji->code_start);
+		}
+	} else {
+		/*
+		 * Declined or failed. tier1_entry stays NULL, so the redirect check
+		 * never fires, and the counter block's saturating increment
+		 * (mono_arch_emit_prolog, point B) has already stopped this method
+		 * from ever crossing the threshold again - no retry, no re-dispatch
+		 * storm.
+		 */
+		tiered_set_state (entry->method, entry->domain, TIER_STATE_TIER0_TERMINAL);
+	}
+
+	tiered_worker_leave_domain (original);
+}
+
+static gsize WINAPI
+tiered_worker_main (gpointer unused)
+{
+	MonoInternalThread *internal = mono_thread_internal_current ();
+
+	internal->state |= ThreadState_Background;
+	internal->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
+	mono_thread_set_name_constant_ignore_error (internal, "Tiered JIT compiler", MonoSetThreadNameFlag_None);
+
+	mono_coop_mutex_lock (&tiered_worker_mutex);
+	while (!tiered_worker_shutdown) {
+		TieredEntry *entry;
+
+		/*
+		 * Nothing to promote before mini_init () finishes - see the comment
+		 * on tiered_ready. Poll it with a timed wait rather than blocking
+		 * forever: mono_llvm_tiered_set_ready () does not signal the
+		 * doorbell, so an infinite wait here would only ever be woken by an
+		 * unrelated enqueue or shutdown.
+		 */
+		if (!tiered_ready) {
+			mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, 200);
+			continue;
+		}
+
+		mono_os_mutex_lock (&tiered_mutex);
+		entry = (TieredEntry *) g_queue_pop_head (tiered_queue);
+		mono_os_mutex_unlock (&tiered_mutex);
+
+		if (!entry) {
+			mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, 200);
+			continue;
+		}
+
+		/*
+		 * Drop the doorbell around the actual compile - it can take
+		 * milliseconds, and nothing about it needs that lock held (the
+		 * queue itself is protected separately, by tiered_mutex above).
+		 */
+		mono_coop_mutex_unlock (&tiered_worker_mutex);
+		tiered_worker_process_entry (entry);
+		g_free (entry);
+		mono_coop_mutex_lock (&tiered_worker_mutex);
+	}
+
+	/*
+	 * Publish exit under the same mutex/cond pair mono_llvm_tiered_shutdown ()
+	 * waits on, so it cannot miss this: either it is not waiting yet (in which
+	 * case it will see tiered_worker_exited already TRUE when it checks) or it
+	 * is blocked in mono_coop_cond_timedwait () on this exact mutex, which the
+	 * signal below wakes once we unlock.
+	 */
+	tiered_worker_exited = TRUE;
+	mono_coop_cond_signal (&tiered_worker_wake);
+	mono_coop_mutex_unlock (&tiered_worker_mutex);
+
+	return 0;
+}
+
+/*
+ * Ask the worker to exit, and WAIT (bounded) for it to actually do so before
+ * returning. Not a join in the thread-API sense - the worker is a background,
+ * DONT_MANAGE thread, so mono_thread_manage () never waits for it - but
+ * mini_cleanup () calls this immediately before it starts freeing domain and
+ * LLVM state that an in-flight compile on the worker still touches, so this
+ * function has to be the thing that actually waits, or that free can race a
+ * compile that is still running.
+ *
+ * The wait is bounded, not infinite: a worker wedged in a pathological
+ * compile (or stuck unable to leave a domain) must not hang process exit
+ * forever. If the timeout fires, this returns anyway - the residual risk is
+ * exactly the use-after-free this function exists to close, just now bounded
+ * to "the worker was still running after N seconds of graceful shutdown"
+ * instead of "always", and left for the process teardown to race as best it
+ * can. There is no stronger cancellation available short of unsafely killing
+ * the thread mid-compile, which would be worse.
  */
 void
-mono_llvm_tiered_compile_end (void)
+mono_llvm_tiered_shutdown (void)
 {
-	if (!mono_llvm_tiered_enabled ())
+	gint64 start;
+
+	if (!mono_llvm_tiered_enabled () || !mono_lazy_is_initialized (&tiered_worker_init))
 		return;
 
-	tiered_compile_depth --;
-	tiered_try_drain ();
+	mono_coop_mutex_lock (&tiered_worker_mutex);
+	tiered_worker_shutdown = TRUE;
+	mono_coop_cond_signal (&tiered_worker_wake);
+
+	start = mono_msec_ticks ();
+	while (!tiered_worker_exited) {
+		gint64 elapsed = mono_msec_ticks () - start;
+		if (elapsed >= TIERED_SHUTDOWN_TIMEOUT_MS)
+			break;
+		mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, (guint32) (TIERED_SHUTDOWN_TIMEOUT_MS - elapsed));
+	}
+	mono_coop_mutex_unlock (&tiered_worker_mutex);
 }
 
 /*
  * The tier-0 prologue's cold path calls this once a method's call counter reaches
- * MONO_TIERED_CALL_THRESHOLD (see mono_arch_emit_prolog). COUNTER is the block
- * mini_tiered_alloc_counter () handed the emitter; it carries the method, its
- * domain and the opt its tier-0 compile used, so the enqueue matches the eager
- * path exactly. The enqueue is idempotent (the tiered_state guard), so the branch
- * firing on every subsequent call is harmless.
+ * MONO_TIERED_CALL_THRESHOLD (see mono_arch_emit_prolog, point B). COUNTER is the
+ * block mini_tiered_alloc_counter () handed the emitter; it carries the method,
+ * its domain and the opt its tier-0 compile used, so the enqueue matches the
+ * eager path exactly.
  *
- * With the threshold on, this REPLACES the eager enqueue at the tier-0 publish
- * site: a method is admitted to tier 1 only after it has been entered
- * threshold-many times, not on its first call.
+ * This only ever enqueues and wakes the background worker - it must NEVER run
+ * LLVM codegen (or the cctors a promotion compile can trigger) on the crossing
+ * thread, which is some arbitrary mutator thread that just wants to get back to
+ * running the method it's calling.
  */
 void
 mini_tiered_count_reached (gpointer counter)
@@ -700,53 +853,15 @@ mini_tiered_count_reached (gpointer counter)
 		return;
 
 	/*
-	 * Lock-free fast path (review NIT-2). A method's tier-0 call sites are not
-	 * redirected when it promotes (there is no sled - §1.3), so they keep
-	 * entering the orphaned tier-0 prologue with count >= threshold and calling
-	 * here on every invocation for the rest of the process. Once the method has
-	 * TERMINALLY settled, all that work is pure waste: enqueue is refused and the
-	 * drain finds nothing for it. The settled bit, published by the atomic store
-	 * below only after a real terminal settlement, turns each such repeat into a
-	 * single lock-free load and an immediate return.
-	 *
-	 * It must be read BEFORE the enqueue/drain and it must never be set on mere
-	 * enqueue: a crossing whose drain was deferred (depth != 0 or a failed gate)
-	 * leaves this bit clear on purpose, so the method keeps retrying the drain on
-	 * later crossings until one settles it (see MiniTieredCounter.settled and
-	 * §5.1). A torn read is not acceptable even though the prologue's own
-	 * increment is deliberately racy, hence the atomic load.
+	 * Idempotence guard, not a fast path: the prologue's lock-xadd already
+	 * dispatches on an exact count match, so under normal operation this runs
+	 * at most once per counter and the CAS always wins. It exists purely as a
+	 * second line of defence against ever enqueuing the same counter twice.
 	 */
-	if (mono_atomic_load_i32 ((volatile gint32 *) &ctr->settled))
+	if (mono_atomic_cas_i32 (&ctr->settled, 1, 0) != 0)
 		return;
 
-	mono_llvm_tiered_enqueue (ctr->method, ctr->domain, ctr->opt);
-
-	/*
-	 * Drive the drain from here too: a hot steady-state method crosses the
-	 * threshold during ordinary execution, when no compile is in flight whose
-	 * mono_llvm_tiered_compile_end would drain the queue. tiered_try_drain ()
-	 * applies the same depth==0 / ready / current-domain / appdomain-ref /
-	 * not-dying gates, so a crossing deep in a cctor-driven compile nest just
-	 * leaves the method enqueued for the next qualifying drain.
-	 *
-	 * W4: when the drain moves to a background compile thread this inline call
-	 * becomes a signal to that thread instead - the counter path must only ever
-	 * produce queue entries, never run LLVM codegen (or cctors) on the crossing
-	 * thread.
-	 */
-	tiered_try_drain ();
-
-	/*
-	 * Latch the fast path only now, and only if the method actually reached a
-	 * terminal state (this drain settled it, or an earlier one already had).
-	 * Reading the state here - on the crossing thread, which holds the counter -
-	 * keeps the drain itself free of any counter association: a crossing whose
-	 * drain was deferred still sees TIER_STATE_TIER0, does NOT latch, and retries
-	 * on its next call. So the bit publishes exactly at terminal settlement and
-	 * never a crossing sooner, which is what preserves the deferral-retry path.
-	 */
-	if (tiered_state_is_settled (ctr->method, ctr->domain))
-		mono_atomic_store_i32 ((volatile gint32 *) &ctr->settled, 1);
+	tiered_enqueue (ctr->method, ctr->domain, ctr->opt, ctr);
 }
 
 /*

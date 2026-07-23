@@ -7480,15 +7480,19 @@ get_max_epilog_size (MonoCompile *cfg)
 	max_epilog_size += (AMD64_NREG * 2);
 
 	/*
-	 * The prologue call counter is emitted into the entry bb but is not a
-	 * MonoInst, so ins_get_size () does not see it. get_max_epilog_size () is the
-	 * per-bb slack the branch-shortening pass adds to the entry and exit bbs, so
-	 * account for the counter's worst-case bytes here. Comfortably covers:
-	 * mov r11,imm64 (10) + add [r11],1 (4) + cmp [r11],imm32 (8) + jb (2) +
-	 * mov arg0,imm64 (10) + mov r11,imm64 (10) + call r11 (3).
+	 * The tiered redirect check and call counter are emitted into the entry bb
+	 * but are not MonoInsts, so ins_get_size () does not see them.
+	 * get_max_epilog_size () is the per-bb slack the branch-shortening pass adds
+	 * to the entry and exit bbs, so account for their worst-case bytes here.
+	 * Redirect check (entry, before push rbp): mov r11,imm64 (10) +
+	 * mov rax,[r11+disp32] (7) + test rax,rax (3) + jz (2) + jmp rax (2) = 24.
+	 * Counter (prologue tail): mov r11,imm64 (10) + mov eax,imm32 (5) +
+	 * lock xadd [r11+disp],eax (9) + add eax,1 (3) + cmp eax,imm32 (5) + jne (2) +
+	 * mov rdi,r11 (3) + mov rax,imm64 (10) + call rax (2) + test eax,eax (2) +
+	 * jns (2) + mov dword[r11+disp],imm32 (7) = 60. Rounded well up for slack.
 	 */
 	if (amd64_tiered_counter_enabled (cfg))
-		max_epilog_size += 64;
+		max_epilog_size += 128;
 
 	return max_epilog_size;
 }
@@ -7554,6 +7558,22 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 	CallInfo *cinfo;
 	MonoInst *lmf_var = cfg->lmf_var;
 	gboolean args_clobbered = FALSE;
+	/*
+	 * Allocated once, up front, so the entry redirect check (which needs it
+	 * before any frame setup) and the call counter at the prologue tail (which
+	 * needs it after) share the same block. NULL when the feature is off, or
+	 * mini_tiered_alloc_counter () declines (dynamic method, no domain yet).
+	 */
+	gpointer tiered_counter = NULL;
+	int tiered_count_off = 0, tiered_tier1_entry_off = 0;
+
+	if (amd64_tiered_counter_enabled (cfg)) {
+		tiered_counter = mini_tiered_alloc_counter (cfg->domain, cfg->orig_method, cfg->opt);
+		if (tiered_counter) {
+			tiered_count_off = (int) mini_tiered_counter_count_offset ();
+			tiered_tier1_entry_off = (int) mini_tiered_counter_tier1_entry_offset ();
+		}
+	}
 
 	cfg->code_size = MAX (cfg->header->code_size * 4, 1024);
 
@@ -7588,6 +7608,35 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 	mono_emit_unwind_op_offset (cfg, code, AMD64_RIP, -cfa_offset);
 	async_exc_point (code);
 	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
+
+	if (tiered_counter) {
+		guint8 *no_redirect;
+
+		/*
+		 * The tier-1 redirect check - the sled. Ahead of ALL frame setup
+		 * (before push rbp) and touching neither the stack nor any argument
+		 * register, so on the taken path the tail-jump hands tier-1 the
+		 * caller's exact incoming register/stack state, and on the
+		 * fall-through path it costs the unwinder nothing: CFA stays rsp+8
+		 * and the def_cfa/RIP unwind ops recorded just above remain correct
+		 * for every byte of this block, right up to push rbp actually moving
+		 * the stack. RAX and R11 are free to clobber here - SysV passes
+		 * arguments in RDI/RSI/RDX/RCX/R8/R9, neither of which this touches.
+		 *
+		 * The load is a plain mov, which is already an acquire on x86-TSO, so
+		 * it correctly observes a slot the background compile worker armed
+		 * with a release store (mono_atomic_store_ptr) only after the tier-1
+		 * jit_info was fully published (see tiered.cpp) - a non-NULL read
+		 * here always points at fully-formed, callable tier-1 code.
+		 */
+		amd64_mov_reg_imm (code, AMD64_R11, tiered_counter);
+		amd64_mov_reg_membase (code, AMD64_RAX, AMD64_R11, tiered_tier1_entry_off, 8);
+		amd64_test_reg_reg (code, AMD64_RAX, AMD64_RAX);
+		no_redirect = code;
+		amd64_branch8 (code, X86_CC_Z, 0, FALSE);
+		amd64_jump_reg (code, AMD64_RAX);
+		amd64_patch (no_redirect, code);
+	}
 
 	if (!cfg->arch.omit_fp) {
 		amd64_push_reg (code, AMD64_RBP);
@@ -8036,37 +8085,64 @@ MONO_RESTORE_WARNING
 	}
 
 	/*
-	 * Tier-0 call counter. Increment a per-method, per-domain word on every entry
-	 * and, once it reaches MONO_TIERED_CALL_THRESHOLD, make a cold call to
-	 * mini_tiered_count_reached to enqueue the method for tier 1. The increment is
-	 * deliberately non-atomic: a lost update can only undercount, never overshoot,
-	 * so it merely delays a promotion slightly, and a >= compare cannot be skipped
-	 * by a race (see tiered.cpp). Emitted last so the frame is fully set up and all
-	 * arguments have been spilled; the cold call is an ordinary C call and clobbers
-	 * every caller-saved register, all of which are dead at prologue end (see the
-	 * args_clobbered note above), so nothing needs saving around it. Nothing when
-	 * the feature is off, so a threshold-0 / non-tiered build's prologue is unchanged.
+	 * Tier-0 call counter. Atomically increment a per-method, per-domain word on
+	 * every entry and, on the one call that takes it to exactly
+	 * MONO_TIERED_CALL_THRESHOLD, make a cold call to mini_tiered_count_reached to
+	 * enqueue the method for tier 1 on the background compile worker. Emitted last
+	 * so the frame is fully set up and all arguments have been spilled; the cold
+	 * call is an ordinary C call and clobbers every caller-saved register, all of
+	 * which are dead at prologue end (see the args_clobbered note above), so
+	 * nothing needs saving around it. Nothing when the feature is off, so a
+	 * threshold-0 / non-tiered build's prologue is unchanged.
 	 */
-	if (amd64_tiered_counter_enabled (cfg)) {
-		gpointer counter = mini_tiered_alloc_counter (cfg->domain, cfg->orig_method, cfg->opt);
-		if (counter) {
-			guint32 threshold = mono_llvm_tiered_call_threshold ();
-			guint8 *skip;
+	if (tiered_counter) {
+		guint32 threshold = mono_llvm_tiered_call_threshold ();
+		guint8 *skip_dispatch, *skip_saturate, *dispatched;
 
-			/* r11 = &counter->count */
-			amd64_mov_reg_imm (code, AMD64_R11, counter);
-			/* ++*(guint32 *)r11 */
-			amd64_alu_membase_imm_size (code, X86_ADD, AMD64_R11, 0, 1, 4);
-			/* if (*(guint32 *)r11 < threshold) goto skip; (unsigned) */
-			amd64_alu_membase_imm_size (code, X86_CMP, AMD64_R11, 0, threshold, 4);
-			skip = code;
-			amd64_branch8 (code, X86_CC_B, 0, FALSE);
-			/* crossed: mini_tiered_count_reached (counter) */
-			amd64_mov_reg_imm (code, AMD64_ARG_REG1, counter);
-			amd64_mov_reg_imm (code, AMD64_R11, (gpointer) mini_tiered_count_reached);
-			amd64_call_reg (code, AMD64_R11);
-			amd64_patch (skip, code);
-		}
+		/*
+		 * lock xadd hands back the OLD count atomically (eax := OLD,
+		 * [count] := OLD+1); incrementing that locally gives NEW without a
+		 * second atomic op. xadd serializes every racing increment, so
+		 * exactly one caller, on exactly one call, ever sees NEW == threshold -
+		 * that call, and only that call, dispatches.
+		 */
+		amd64_mov_reg_imm (code, AMD64_R11, tiered_counter);
+		amd64_mov_reg_imm (code, AMD64_RAX, 1);
+		amd64_prefix (code, X86_LOCK_PREFIX);
+		amd64_xadd_membase_reg_size (code, AMD64_R11, tiered_count_off, AMD64_RAX, 4);
+		amd64_alu_reg_imm_size (code, X86_ADD, AMD64_RAX, 1, 4);
+		amd64_alu_reg_imm_size (code, X86_CMP, AMD64_RAX, threshold, 4);
+		skip_dispatch = code;
+		amd64_branch8 (code, X86_CC_NE, 0, FALSE);
+		/* crossed: mini_tiered_count_reached (counter); R11 still holds it */
+		amd64_mov_reg_reg (code, AMD64_ARG_REG1, AMD64_R11, sizeof (target_mgreg_t));
+		amd64_mov_reg_imm (code, AMD64_R11, (gpointer) mini_tiered_count_reached);
+		amd64_call_reg (code, AMD64_R11);
+		/*
+		 * NEW == threshold on this path, which is never negative, so the
+		 * saturate check below has nothing to do here - and, critically, it
+		 * would not be safe to fall into it: the call above is an ordinary C
+		 * call, free to clobber both rax and r11 (both caller-saved), so
+		 * re-reading either as if they still held NEW / &counter would read
+		 * whatever garbage the callee left behind. Jump past it instead.
+		 */
+		dispatched = code;
+		amd64_jump8 (code, 0);
+		amd64_patch (skip_dispatch, code);
+
+		/*
+		 * Saturate: once NEW wraps past 2^31 and reads negative, pin the
+		 * count back to threshold+1 so it can never compare equal to
+		 * threshold again and re-dispatch. Only reachable via skip_dispatch
+		 * above (the dispatch path jumps clean past this), so rax and r11
+		 * are exactly as this block left them - never clobbered by the call.
+		 */
+		amd64_test_reg_reg_size (code, AMD64_RAX, AMD64_RAX, 4);
+		skip_saturate = code;
+		amd64_branch8 (code, X86_CC_NS, 0, FALSE);
+		amd64_mov_membase_imm (code, AMD64_R11, tiered_count_off, threshold + 1, 4);
+		amd64_patch (skip_saturate, code);
+		amd64_patch (dispatched, code);
 	}
 
 	set_code_cursor (cfg, code);
