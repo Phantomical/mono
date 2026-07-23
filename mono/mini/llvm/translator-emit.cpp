@@ -1298,17 +1298,17 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 
 	/* entry: */
 	builder->SetInsertPoint (llvm::unwrap (entry_bb));
-	LLVMValueRef poll_val_ptr;
+	llvm::Value *poll_val_ptr;
 	if (is_aot) {
-		poll_val_ptr = get_aotconst_module (module, builder, MONO_PATCH_INFO_GC_SAFE_POINT_FLAG, NULL, ptr_type, NULL, NULL);
+		poll_val_ptr = llvm::unwrap (get_aotconst_module (module, builder, MONO_PATCH_INFO_GC_SAFE_POINT_FLAG, NULL, ptr_type, NULL, NULL));
 	} else {
-		LLVMValueRef poll_val_int = llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), reinterpret_cast<guint64>(&mono_polling_required), false));
-		poll_val_ptr = llvm::wrap (builder->CreateIntToPtr (llvm::unwrap (poll_val_int), llvm::unwrap (ptr_type), ""));
+		llvm::Value *poll_val_int = llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), reinterpret_cast<guint64>(&mono_polling_required), false);
+		poll_val_ptr = builder->CreateIntToPtr (poll_val_int, llvm::unwrap (ptr_type), "");
 	}
-	LLVMValueRef poll_val_ptr_load = llvm::wrap (builder->CreateLoad (llvm::unwrap (IntPtrType ()), llvm::unwrap (poll_val_ptr), "")); // probably needs to be volatile
-	LLVMValueRef poll_val = llvm::wrap (builder->CreatePtrToInt (llvm::unwrap (poll_val_ptr_load), llvm::unwrap (IntPtrType ()), ""));
-	LLVMValueRef poll_val_zero = llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (LLVMTypeOf (poll_val))));
-	LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (poll_val), llvm::unwrap (poll_val_zero), ""));
+	llvm::Value *poll_val_ptr_load = builder->CreateLoad (llvm::unwrap (IntPtrType ()), poll_val_ptr, ""); // probably needs to be volatile
+	llvm::Value *poll_val = builder->CreatePtrToInt (poll_val_ptr_load, llvm::unwrap (IntPtrType ()), "");
+	llvm::Value *poll_val_zero = llvm::Constant::getNullValue (poll_val->getType ());
+	LLVMValueRef cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), poll_val, poll_val_zero, ""));
 	mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, exit_bb, poll_bb, 1000 /* weight for exit_bb */, 1 /* weight for poll_bb */);
 
 	/* poll: */
@@ -1326,11 +1326,11 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 		LLVMTypeRef poll_sig_ptr = llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0));
 		gpointer target = resolve_patch (cfg, MONO_PATCH_INFO_ABS, module->gc_poll_cold_wrapper_compiled);
 		LLVMValueRef tramp_var = LLVMAddGlobal (lmodule, poll_sig_ptr, "mono_threads_state_poll");
-		LLVMValueRef target_val = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), reinterpret_cast<guint64>(target), false));
-		LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (llvm::unwrap (target_val)), llvm::unwrap (poll_sig_ptr))));
+		llvm::Value *target_val = llvm::ConstantInt::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), reinterpret_cast<guint64>(target), false);
+		LLVMSetInitializer (tramp_var, llvm::wrap (llvm::ConstantExpr::getIntToPtr (llvm::cast<llvm::Constant> (target_val), llvm::unwrap (poll_sig_ptr))));
 		LLVMSetLinkage (tramp_var, LLVMExternalLinkage);
-		LLVMValueRef callee = llvm::wrap (builder->CreateLoad (llvm::unwrap (poll_sig_ptr), llvm::unwrap (tramp_var), ""));
-		call = llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (poll_sig)), llvm::unwrap (callee), gep_index_list (NULL, 0), ""));
+		llvm::Value *callee = builder->CreateLoad (llvm::unwrap (poll_sig_ptr), llvm::unwrap (tramp_var), "");
+		call = llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (poll_sig)), callee, gep_index_list (NULL, 0), ""));
 	}
 	set_call_cold_cconv (call);
 	llvm::wrap (builder->CreateBr (llvm::unwrap (exit_bb)));

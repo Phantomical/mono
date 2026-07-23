@@ -30,7 +30,7 @@ const_vector (const LLVMValueRef *vals, unsigned count)
 }
 
 void
-emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb, MonoInst *ins, LLVMValueRef lhs, LLVMValueRef rhs)
+emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb, MonoInst *ins, llvm::Value *lhs, llvm::Value *rhs)
 {
 	bool need_div_check = ctx->cfg->backend->need_div_check;
 
@@ -62,7 +62,7 @@ emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb
 		bool is_signed = (ins->opcode == OP_IDIV || ins->opcode == OP_LDIV || ins->opcode == OP_IREM || ins->opcode == OP_LREM ||
 							  ins->opcode == OP_IDIV_IMM || ins->opcode == OP_LDIV_IMM || ins->opcode == OP_IREM_IMM || ins->opcode == OP_LREM_IMM);
 
-		cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (rhs), llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (rhs)), 0, false), ""));
+		cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), rhs, llvm::ConstantInt::get (rhs->getType (), 0, false), ""));
 		emit_cond_system_exception (ctx, bb, "DivideByZeroException", cmp, FALSE);
 		if (!ctx_ok (ctx))
 			break;
@@ -70,11 +70,11 @@ emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb
 
 		/* b == -1 && a == 0x80000000 */
 		if (is_signed) {
-			LLVMValueRef c = (LLVMTypeOf (lhs) == llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()))) ? llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (lhs)), 0x80000000, false)) : llvm::wrap (llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (lhs)), 0x8000000000000000LL, false));
-			LLVMValueRef cond1 = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (rhs), llvm::ConstantInt::get (llvm::unwrap (LLVMTypeOf (rhs)), -1, false), ""));
-			LLVMValueRef cond2 = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), llvm::unwrap (lhs), llvm::unwrap (c), ""));
+			llvm::Value *c = (lhs->getType () == llvm::Type::getInt32Ty (ctx->llvm_ctx ())) ? llvm::ConstantInt::get (lhs->getType (), 0x80000000, false) : llvm::ConstantInt::get (lhs->getType (), 0x8000000000000000LL, false);
+			llvm::Value *cond1 = builder->CreateICmp (to_llvm_pred (LLVMIntEQ), rhs, llvm::ConstantInt::get (rhs->getType (), -1, false), "");
+			llvm::Value *cond2 = builder->CreateICmp (to_llvm_pred (LLVMIntEQ), lhs, c, "");
 
-			cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), builder->CreateAnd (llvm::unwrap (cond1), llvm::unwrap (cond2), ""), llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false), ""));
+			cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), builder->CreateAnd (cond1, cond2, ""), llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false), ""));
 			emit_cond_system_exception (ctx, bb, "OverflowException", cmp, FALSE);
 			if (!ctx_ok (ctx))
 				break;
