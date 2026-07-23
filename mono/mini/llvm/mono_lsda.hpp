@@ -27,17 +27,17 @@
  * data.catch_class from cfg->header->clauses[] - the section never carries
  * them (plan 12 2), exactly as the fork's decode_llvm_eh_info did.
  *
- * CAP-EH-0 posture, modelled on lsda.cpp: on ANY uncertainty - bad magic, wrong
- * version, truncation, a size that does not exactly match the declared count, an
- * offset past the code, a join key out of range, a non-catch clause, or an
- * overlapping (nested) invoke range - the functions DECLINE (return false) so
- * the caller falls back to the classic JIT. They never assert, abort, or read
- * out of bounds on malformed input.
+ * CAP-EH-0 posture: on ANY uncertainty - bad magic, wrong version, truncation, a
+ * size that does not exactly match the declared count, an offset past the code,
+ * a join key out of range, a non-catch clause, or an overlapping (nested)
+ * invoke range - the functions DECLINE (return false) so the caller falls back
+ * to the classic JIT. They never assert, abort, or read out of bounds on
+ * malformed input.
  *
- * Like engine.hpp and lsda.hpp this is a C++-only header and must NEVER be
- * included by mono's C sources. It is consumed by mono_lsda.cpp, by
- * translator.cpp (slice C6, which wires publish_mono_lsda onto the live compile
- * path), and by mono/unit-tests/test-llvm-ehtable.cpp.
+ * Like engine.hpp this is a C++-only header and must NEVER be included by
+ * mono's C sources. It is consumed by mono_lsda.cpp, by translator.cpp (slice
+ * C6, which wires publish_mono_lsda onto the live compile path), and by
+ * mono/unit-tests/test-llvm-ehtable.cpp.
  */
 
 #ifndef __MONO_MINI_LLVM_MONO_LSDA_HPP__

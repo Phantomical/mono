@@ -96,8 +96,8 @@ struct CompileResult {
 	/*
 	 * The `.gcc_except_table` (Itanium LSDA) section of this module ({nullptr,0}
 	 * unless the translator gave the function a personalityFn and emitted an
-	 * invoke/landingpad, i.e. an EH method). The EH port (M2) feeds it to
-	 * mono::decode_gcc_except_table to recover the method's exception clauses.
+	 * invoke/landingpad, i.e. an EH method). Captured for diagnostics only -
+	 * production exception info comes from `.mono_lsda` below instead.
 	 */
 	EhFrameInfo gcc_except_table;
 	/*

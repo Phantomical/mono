@@ -79,10 +79,9 @@ void      mono_llvm_optimize_method (LLVMValueRef method);
  *
  * gcc_except_table_out / gcc_except_table_size_out (both may be NULL) receive the
  * loaded `.gcc_except_table` (Itanium LSDA) SECTION, non-empty only for a method
- * LLVM gave a personalityFn and an invoke/landingpad. The EH port (M2) decodes it
- * via mono::decode_gcc_except_table into the method's MonoJitExceptionInfo[]. The
- * gate still declines every EH method today, so this is {NULL,0} for every method
- * that currently reaches here.
+ * LLVM gave a personalityFn and an invoke/landingpad. It is captured for
+ * diagnostic purposes only - production exception info comes from `.mono_lsda`
+ * instead (see mono_lsda_out below).
  *
  * mono_lsda_out / mono_lsda_size_out (both may be NULL) receive the loaded
  * `.mono_lsda` SECTION - mono's own target-neutral clause table (magic 'MLSD',

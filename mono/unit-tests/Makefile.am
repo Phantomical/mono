@@ -78,7 +78,7 @@ endif
 # (so the link rule reruns if its mtime changes), but nothing here ever tells
 # make to go check whether that .la itself needs rebuilding first. In
 # practice that means `make -C mono/unit-tests check` can silently link
-# against a stale libmini.la after e.g. mono/mini/llvm/lsda.cpp changes,
+# against a stale libmini.la after e.g. mono/mini/llvm/mono_lsda.cpp changes,
 # unless someone has separately run `make` under mono/mini since - the same
 # hazard the llvm_config.mk rule below works around for the LLVM back end.
 # Force the recursion unconditionally on every build; the sub-make in each
@@ -126,7 +126,8 @@ if ENABLE_LLVM
 libtestlib_la_SOURCES += test-llvm-engine.cpp
 libtestlib_la_SOURCES += test-llvm-ehframe.c
 # test-llvm-ehtable.cpp is C++ (like test-llvm-engine.cpp): it includes
-# mono/mini/llvm/lsda.hpp and drives the LSDA decoder through its C++ interface.
+# mono/mini/llvm/mono_lsda.hpp and drives the .mono_lsda parser/builder through
+# its C++ interface.
 libtestlib_la_SOURCES += test-llvm-ehtable.cpp
 libtestlib_la_CXXFLAGS = $(LLVM_CXXFLAGS)
 endif

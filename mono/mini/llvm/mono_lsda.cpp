@@ -25,11 +25,10 @@
  * CAP-EH-0 (plan 12 6): every uncertainty DECLINES (returns false) so the caller
  * falls back to the classic JIT - the dispatcher cannot detect a wrong clause
  * array (doc 11 11.4), so a plausible-but-wrong table is never produced. The
- * bounds-check discipline is the one salvaged from lsda.cpp: a private cursor,
- * every read reserving its bytes first, malformed input declining rather than
- * faulting. None of the Itanium ttype/DW_EH_PE machinery is reused - this format
- * carries only code-relative offsets and IL indices, so there is no encoding to
- * chase.
+ * bounds-check discipline is a private cursor, every read reserving its bytes
+ * first, malformed input declining rather than faulting. None of the Itanium
+ * ttype/DW_EH_PE machinery is needed here - this format carries only
+ * code-relative offsets and IL indices, so there is no encoding to chase.
  */
 
 #include "config.h"
@@ -53,13 +52,13 @@ constexpr std::size_t   MONO_LSDA_HEADER_SIZE = 8;
 constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 20;
 
 /*
- * A bounds-checked, little-endian cursor over [start, end). Same contract as
- * lsda.cpp's Reader: the buffer is private, every accessor reserves its bytes
- * through has() first, and a failed read latches ok() to false so a whole
- * structure can be decoded then tested once. Reads are decoded byte-by-byte in
- * little-endian order so the result is independent of host endianness (the
- * section is written little-endian by the x86-64 object writer and stays
- * target-neutral for a future big-endian host).
+ * A bounds-checked, little-endian cursor over [start, end). The buffer is
+ * private, every accessor reserves its bytes through has() first, and a
+ * failed read latches ok() to false so a whole structure can be decoded then
+ * tested once. Reads are decoded byte-by-byte in little-endian order so the
+ * result is independent of host endianness (the section is written
+ * little-endian by the x86-64 object writer and stays target-neutral for a
+ * future big-endian host).
  */
 class Reader {
 public:

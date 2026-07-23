@@ -81,7 +81,6 @@
 #include <llvm/TargetParser/Triple.h>
 
 #include "mini/llvm/engine.hpp"
-#include "mini/llvm/lsda.hpp"
 
 using namespace llvm;
 using mono::MonoLLVMJIT;
@@ -1224,10 +1223,9 @@ build_eh_two_catch_module (Module &m)
  *
  * A plain (non-protected) nounwind call is placed BETWEEN the two invokes so
  * their PC ranges are NOT adjacent - otherwise LLVM's EHStreamer coalesces two
- * back-to-back same-landing-pad ranges into a single .gcc_except_table call-site,
- * and the "2 catch call-sites == 2 gathered clauses" cross-check could not
- * distinguish a correct 2-range gather from a bug that dropped one. The gap
- * forces two distinct call-sites, so a dropped range would fail the cross-check.
+ * back-to-back same-landing-pad ranges into a single call-site at the
+ * object-emission level, muddying the two-distinct-ranges shape this test
+ * wants to exercise.
  */
 static Function *
 build_eh_multi_call_module (Module &m)
@@ -1534,7 +1532,7 @@ object_has_gcc_except_table (MemoryBuffer &buf)
 }
 
 /*
- * Plumbing test for M2.1, and the R1 / R5 / M1-decode diagnostics the plan
+ * Plumbing test for M2.1, and the R1 / R5 diagnostics the plan
  * (09-eh-m2-plan.md 8) asks to resolve as a by-product.
  *
  * R1: does LLVM 18 emit `.gcc_except_table` only when the function carries a
@@ -1542,8 +1540,6 @@ object_has_gcc_except_table (MemoryBuffer &buf)
  * Plumbing: with a personality, drive the module through the REAL engine and
  *     assert MonoLLVMJIT::compile captures a non-empty .gcc_except_table into
  *     CompileResult (the M2.1 out-param path).
- * M1-decode: feed the captured bytes to mono::decode_gcc_except_table - a smoke
- *     check that real LLVM-18 output flows through the M1 decoder.
  * R5: run the relocation audit over the EH object under the engine's effective
  *     (Large) code model and report any truncating relocation (gates M2.4).
  */
@@ -1621,46 +1617,6 @@ test_gcc_except_table (MonoLLVMJIT *jit)
 	/* The normal path runs (may_throw returns); landing pad is never entered. */
 	auto compiled = reinterpret_cast<int64_t (*) (void)> (res.entry);
 	CHECK (compiled () == 1);
-
-	/* ---- M1-decode assertion on the captured bytes ---- */
-	{
-		/*
-		 * Real LLVM-18 x86-64 chooses the .gcc_except_table TType encoding purely
-		 * from isPositionIndependent() (TargetLoweringObjectFileImpl.cpp), independent
-		 * of code model. Before J5 the engine ran JIT-default Static+Large, which
-		 * emitted DW_EH_PE_absptr (0x00): 8-byte ABSOLUTE ttype entries relocated
-		 * with R_X86_64_64 (why R5 found no truncating reloc) - the one absolute
-		 * form mono::decode_gcc_except_table (lsda.cpp) accepts alongside
-		 * DW_EH_PE_udata4. J5 (Small+PIC) makes isPositionIndependent() true, which
-		 * switches this to DW_EH_PE_indirect|pcrel|sdata4 (0x9b): each ttype entry
-		 * becomes a signed pcrel offset to a GOT slot holding the real pointer,
-		 * rather than the pointer itself. lsda.cpp's decoder EXPLICITLY, and by
-		 * design (CAP-EH-0, doc comment in lsda.cpp/lsda.hpp - and regression-locked
-		 * by test-llvm-ehtable.cpp's ttype-encoding-indirect-declines case) declines
-		 * that form rather than guess at the extra indirection: "never produce a
-		 * plausible-but-wrong table" is exactly as true when the table is the new
-		 * common case as when it was the theoretical one. So under J5 the M1
-		 * decoder DECLINES the real captured table - correctly, safely, and as
-		 * designed, not as a regression. This is the concrete, load-bearing
-		 * instance of a fact worth flagging for whoever picks up M2: the
-		 * .gcc_except_table-based EH port cannot proceed against the Small+PIC
-		 * engine's own output until lsda.cpp is extended to actually resolve
-		 * (not just tolerate) the indirect|pcrel encoding - decode_gcc_except_table
-		 * never dereferences ttype entries today (M2's job), so simply widening the
-		 * accepted-encodings set would not be enough on its own to make that
-		 * dereference correct.
-		 */
-		mono::ParsedLsda parsed;
-		bool decoded = mono::decode_gcc_except_table (
-			res.gcc_except_table.addr, (std::size_t) res.gcc_except_table.size, parsed);
-		printf ("     M1 decode: %s (ttype_enc=0x%02x cs_enc=0x%02x "
-		        "call_sites=%zu has_ttype=%d)\n",
-		        decoded ? "OK" : "DECLINED",
-		        parsed.ttype_encoding, parsed.call_site_encoding,
-		        parsed.call_sites.size (), (int) parsed.has_ttype_table);
-		CHECK (!decoded);
-		CHECK (parsed.ttype_encoding == 0x9b);
-	}
 
 	/*
 	 * ---- R5: relocation audit over the EH object under the engine model ----
@@ -1786,18 +1742,6 @@ test_compiler_equivalence (MonoLLVMJIT *jit)
  *   2. the recovered clause indices are exactly {3, 7} - the smuggled values,
  *      matching probe2's independently-verified gather;
  *   3. no filter, no decline.
- *
- * TWO-SOURCE CROSS-CHECK. The same module still gets LLVM's redundant
- * .gcc_except_table. It is decoded OFFLINE with the committed M1 decoder
- * (mono::decode_gcc_except_table) and the STRUCTURAL geometry is asserted to
- * agree: the number of call sites that reach a landing pad via a catch action
- * equals the number of (landing pad, clause) tuples the pass gathered. The
- * .gcc_except_table's ttype->clause_index mapping needs the RELOCATED ttype
- * table (the entries are R_X86_64_64 relocations, zero in an offline object), so
- * that half is not resolvable here; the clause INDICES are cross-checked directly
- * from the gathered type_info globals instead (which is exactly where the runtime
- * reader will get them). This independent agreement is the proof the gather reads
- * the right landing pads.
  */
 static TestResult
 test_eh_gather (MonoLLVMJIT *jit)
@@ -1840,65 +1784,6 @@ test_eh_gather (MonoLLVMJIT *jit)
 	CHECK (got[0] == 3);
 	CHECK (got[1] == 7);
 
-	/* ---- two-source cross-check against the redundant .gcc_except_table ---- */
-	LLVMContext c2;
-	Module m2 ("selftest.eh.gather.xcheck", c2);
-	build_eh_two_catch_module (m2);
-
-	auto obj = emit_object_engine_model (m2);
-	if (!obj) {
-		printf ("     cross-check emit failed: %s\n", toString (obj.takeError ()).c_str ());
-		return TEST_FAIL;
-	}
-	auto bytes = object_section_bytes (**obj, ".gcc_except_table");
-	if (!bytes) {
-		printf ("     cross-check section read failed: %s\n",
-		        toString (bytes.takeError ()).c_str ());
-		return TEST_FAIL;
-	}
-	CHECK (!bytes->empty ());
-
-	mono::ParsedLsda parsed;
-	bool decoded = mono::decode_gcc_except_table (bytes->data (), bytes->size (), parsed);
-	/*
-	 * NOT a CHECK (decoded): under the J5 (Small+PIC) engine, decode_gcc_except_table
-	 * (lsda.cpp) correctly and by design DECLINES a real captured table - see
-	 * test_gcc_except_table's M1-decode block for the full explanation
-	 * (isPositionIndependent() switches TType encoding to DW_EH_PE_indirect|
-	 * pcrel|sdata4 (0x9b), a form CAP-EH-0 declines rather than guess at). This
-	 * two-source cross-check is bonus verification on top of the gather-pass
-	 * assertions already checked above (which are what actually exercise the
-	 * bug this test targets); it simply cannot run once M1 declines the table,
-	 * the same way test_reloc_widths's checks SKIP rather than fail on a host
-	 * they cannot cover.
-	 */
-	if (!decoded) {
-		printf ("     cross-check: .gcc_except_table declined (ttype_enc=0x%02x) - "
-		        "expected under Small+PIC (CAP-EH-0); skipping the geometry "
-		        "cross-check, gather-pass assertions above already passed\n",
-		        parsed.ttype_encoding);
-		return TEST_PASS;
-	}
-
-	/*
-	 * Structural geometry: count call sites that reach a landing pad with a catch
-	 * action. That must equal the number of (landing pad, clause) tuples gathered.
-	 */
-	std::size_t catch_sites = 0;
-	for (const mono::LsdaCallSite &cs : parsed.call_sites) {
-		bool has_catch = false;
-		for (std::int32_t ti : cs.ttype_indices)
-			if (ti > 0)
-				has_catch = true;
-		if (cs.landing_pad != 0 && has_catch)
-			catch_sites ++;
-	}
-	printf ("     cross-check: gather=%zu clause(s); .gcc_except_table=%zu catch "
-	        "call-site(s) of %zu call site(s) [geometry agreement; clause indices "
-	        "checked from gathered globals, not the offline ttype table]\n",
-	        fn.clauses.size (), catch_sites, parsed.call_sites.size ());
-	CHECK (catch_sites == fn.clauses.size ());
-
 	return TEST_PASS;
 }
 
@@ -1909,10 +1794,6 @@ test_eh_gather (MonoLLVMJIT *jit)
  * invoke range) - same handler, same clause_index, DIFFERENT ranges. A gather
  * that kept only the first range would drop the second call's PC range and let a
  * throw from it escape the handler at C6.
- *
- * The .gcc_except_table geometry cross-check is applied to THIS shape precisely
- * because a dropped range would break it: the table has two catch call-sites, so
- * a one-range gather would report 1 clause against 2 call-sites and fail here.
  */
 static TestResult
 test_eh_gather_multi_call (MonoLLVMJIT *jit)
@@ -1953,52 +1834,6 @@ test_eh_gather_multi_call (MonoLLVMJIT *jit)
 	CHECK (c1v.try_begin != nullptr && c1v.try_end != nullptr);
 	CHECK (c0.try_begin != c1v.try_begin);
 	CHECK (c0.try_end != c1v.try_end);
-
-	/* ---- cross-check: .gcc_except_table catch call-sites must equal 2 ---- */
-	LLVMContext c2;
-	Module m2 ("selftest.eh.multicall.xcheck", c2);
-	build_eh_multi_call_module (m2);
-
-	auto obj = emit_object_engine_model (m2);
-	if (!obj) {
-		printf ("     cross-check emit failed: %s\n", toString (obj.takeError ()).c_str ());
-		return TEST_FAIL;
-	}
-	auto bytes = object_section_bytes (**obj, ".gcc_except_table");
-	if (!bytes) {
-		printf ("     cross-check section read failed: %s\n",
-		        toString (bytes.takeError ()).c_str ());
-		return TEST_FAIL;
-	}
-	CHECK (!bytes->empty ());
-
-	mono::ParsedLsda parsed;
-	bool decoded = mono::decode_gcc_except_table (bytes->data (), bytes->size (), parsed);
-	/* See test_eh_gather's identical branch: expected decline under J5's
-	 * Small+PIC TType encoding (CAP-EH-0), not a regression. The C2 assertions
-	 * above (two distinct clause entries, same handler/index, different
-	 * ranges) already exercised the bug this test targets. */
-	if (!decoded) {
-		printf ("     cross-check: .gcc_except_table declined (ttype_enc=0x%02x) - "
-		        "expected under Small+PIC (CAP-EH-0); skipping the geometry "
-		        "cross-check, gather-pass assertions above already passed\n",
-		        parsed.ttype_encoding);
-		return TEST_PASS;
-	}
-
-	std::size_t catch_sites = 0;
-	for (const mono::LsdaCallSite &cs : parsed.call_sites) {
-		bool has_catch = false;
-		for (std::int32_t ti : cs.ttype_indices)
-			if (ti > 0)
-				has_catch = true;
-		if (cs.landing_pad != 0 && has_catch)
-			catch_sites ++;
-	}
-	printf ("     multi-call: gather=%zu range(s) on one pad; .gcc_except_table=%zu "
-	        "catch call-site(s) of %zu [a dropped range would fail this]\n",
-	        fn.clauses.size (), catch_sites, parsed.call_sites.size ());
-	CHECK (catch_sites == fn.clauses.size ());
 
 	return TEST_PASS;
 }

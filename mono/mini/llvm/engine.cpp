@@ -135,9 +135,9 @@ struct ObjectInfo {
 	/*
 	 * The loaded `.gcc_except_table` (Itanium LSDA) section, or {nullptr,0} if the
 	 * module emitted none. Present only for a method LLVM gave a personalityFn and
-	 * an invoke/landingpad; the EH port (M2) decodes it via
-	 * mono::decode_gcc_except_table into the method's MonoJitExceptionInfo[]. Same
-	 * {addr,size} shape as eh_frame, captured by the same section-name loop.
+	 * an invoke/landingpad. Captured for diagnostics only - production exception
+	 * info comes from `.mono_lsda` below instead. Same {addr,size} shape as
+	 * eh_frame, captured by the same section-name loop.
 	 */
 	EhFrameInfo gcc_except_table;
 	/*
