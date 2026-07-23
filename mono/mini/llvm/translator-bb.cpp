@@ -385,7 +385,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 						}
 					}
 				} else {
-					addr = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+					addr = llvm::wrap (builder->CreateBitCast (addresses [ins->sreg1]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 					for (i = 0; i < 2; ++i) {
 						if (linfo->ret.pair_storage [i] == LLVMArgInIReg) {
 							LLVMValueRef indexes [2], part_addr;
@@ -410,7 +410,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					retval = llvm::wrap (builder->CreateBitCast (values [ins->sreg1], llvm::unwrap (ret_type), "setret_cvt_simd"));
 				else {
 					g_assert (addresses [ins->sreg1]);
-					retval = llvm::wrap (builder->CreateLoad (llvm::unwrap (ret_type), builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""), ""));
+					retval = llvm::wrap (builder->CreateLoad (llvm::unwrap (ret_type), builder->CreateBitCast (addresses [ins->sreg1]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""), ""));
 				}
 				llvm::wrap (builder->CreateRet (llvm::unwrap (retval)));
 				break;
@@ -419,7 +419,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				LLVMValueRef retval;
 
 				g_assert (addresses [ins->sreg1]);
-				retval = llvm::wrap (builder->CreateLoad (llvm::unwrap (addresses [ins->sreg1]->type), llvm::unwrap (addresses [ins->sreg1]->value), ""));
+				retval = llvm::wrap (builder->CreateLoad (addresses [ins->sreg1]->type, addresses [ins->sreg1]->value, ""));
 				llvm::wrap (builder->CreateRet (llvm::unwrap (retval)));
 				break;
 			}
@@ -459,7 +459,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				LLVMValueRef retval;
 
 				g_assert (addresses [ins->sreg1]);
-				retval = llvm::wrap (builder->CreateLoad (llvm::unwrap (ret_type), convert (ctx, llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0)), ""));
+				retval = llvm::wrap (builder->CreateLoad (llvm::unwrap (ret_type), convert (ctx, addresses [ins->sreg1]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0)), ""));
 				llvm::wrap (builder->CreateRet (llvm::unwrap (retval)));
 				break;
 			}
@@ -1400,7 +1400,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			} else if (var->opcode == OP_GSHAREDVT_LOCAL) {
 				values [ins->dreg] = llvm::unwrap (emit_gsharedvt_ldaddr (ctx, var->dreg));
 			} else {
-				values [ins->dreg] = llvm::unwrap (addresses [var->dreg]->value);
+				values [ins->dreg] = addresses [var->dreg]->value;
 			}
 			break;
 		}
@@ -1959,7 +1959,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			if (!addresses [ins->dreg])
 				addresses [ins->dreg] = build_named_alloca_address (ctx, m_class_get_byval_arg (klass), "vzero");
-			LLVMValueRef ptr = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+			LLVMValueRef ptr = llvm::wrap (builder->CreateBitCast (addresses [ins->dreg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 			emit_memset (ctx, builder, ptr, const_int32 (mono_class_value_size (klass, NULL)), 0);
 			break;
 		}
@@ -2000,7 +2000,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					llvm::wrap (builder->CreateStore (values [ins->sreg1], llvm::unwrap (dst)));
 					done = true;
 				} else {
-					src = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+					src = llvm::wrap (builder->CreateBitCast (addresses [ins->sreg1]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 					dst = llvm::wrap (convert (ctx, builder->CreateAdd (convert (ctx, values [ins->inst_destbasereg], llvm::unwrap (IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), ""), llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 				}
 				break;
@@ -2008,15 +2008,15 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				if (!addresses [ins->dreg])
 					addresses [ins->dreg] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
 				src = llvm::wrap (convert (ctx, builder->CreateAdd (convert (ctx, values [ins->inst_basereg], llvm::unwrap (IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), ""), llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-				dst = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+				dst = llvm::wrap (builder->CreateBitCast (addresses [ins->dreg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 				break;
 			case OP_VMOVE:
 				if (!addresses [ins->sreg1])
 					addresses [ins->sreg1] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
 				if (!addresses [ins->dreg])
 					addresses [ins->dreg] = build_alloca_address (ctx, m_class_get_byval_arg (klass));
-				src = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->sreg1]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
-				dst = llvm::wrap (builder->CreateBitCast (llvm::unwrap (addresses [ins->dreg]->value), llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+				src = llvm::wrap (builder->CreateBitCast (addresses [ins->sreg1]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
+				dst = llvm::wrap (builder->CreateBitCast (addresses [ins->dreg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
 				break;
 			default:
 				g_assert_not_reached ();
@@ -2058,7 +2058,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					g_assert (values [ins->sreg1]);
 				}
 				/* Use the recorded element type, not a re-derivation (donor build_alloca_address form) */
-				llvm::wrap (builder->CreateStore (convert (ctx, values [ins->sreg1], llvm::unwrap (addresses [ins->sreg1]->type)), llvm::unwrap (addresses [ins->sreg1]->value)));
+				llvm::wrap (builder->CreateStore (convert (ctx, values [ins->sreg1], addresses [ins->sreg1]->type), addresses [ins->sreg1]->value));
 				addresses [ins->dreg] = addresses [ins->sreg1];
 			} else {
 				LLVMTypeRef etype = type_to_llvm_type (ctx, t);
@@ -2066,13 +2066,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				if (!addresses [ins->sreg1]) {
 					addresses [ins->sreg1] = build_alloca_address (ctx, t);
 					g_assert (values [ins->sreg1]);
-					llvm::wrap (builder->CreateStore (convert (ctx, values [ins->sreg1], llvm::unwrap (etype)), llvm::unwrap (addresses [ins->sreg1]->value)));
+					llvm::wrap (builder->CreateStore (convert (ctx, values [ins->sreg1], llvm::unwrap (etype)), addresses [ins->sreg1]->value));
 					addresses [ins->dreg] = addresses [ins->sreg1];
-				} else if (ainfo->storage == LLVMArgVtypeAddr || llvm::wrap (values [ins->sreg1]) == addresses [ins->sreg1]->value) {
+				} else if (ainfo->storage == LLVMArgVtypeAddr || values [ins->sreg1] == addresses [ins->sreg1]->value) {
 					/* LLVMArgVtypeByRef/LLVMArgVtypeAddr, have to make a copy */
 					addresses [ins->dreg] = build_alloca_address (ctx, t);
-					LLVMValueRef v = llvm::wrap (builder->CreateLoad (llvm::unwrap (etype), llvm::unwrap (addresses [ins->sreg1]->value), ""));
-					llvm::wrap (builder->CreateStore (convert (ctx, llvm::unwrap (v), llvm::unwrap (etype)), llvm::unwrap (addresses [ins->dreg]->value)));
+					LLVMValueRef v = llvm::wrap (builder->CreateLoad (llvm::unwrap (etype), addresses [ins->sreg1]->value, ""));
+					llvm::wrap (builder->CreateStore (convert (ctx, llvm::unwrap (v), llvm::unwrap (etype)), addresses [ins->dreg]->value));
 				} else {
 					addresses [ins->dreg] = addresses [ins->sreg1];
 				}
@@ -4400,7 +4400,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		if (spec [MONO_INST_DEST] != ' ' && !MONO_IS_STORE_MEMBASE (ins) && ctx->vreg_types [ins->dreg]) {
 			if (ctx->is_vphi [ins->dreg])
 				/* vtypes */
-				values [ins->dreg] = llvm::unwrap (addresses [ins->dreg]->value);
+				values [ins->dreg] = addresses [ins->dreg]->value;
 			else
 				values [ins->dreg] = convert (ctx, values [ins->dreg], ctx->vreg_types [ins->dreg]);
 		}

@@ -172,9 +172,9 @@ typedef struct {
  * silently mis-derived) at the point of use.
  */
 typedef struct {
-	LLVMValueRef value;
+	llvm::Value *value;
 	/* The element type of the pointer */
-	LLVMTypeRef type;
+	llvm::Type *type;
 } Address;
 
 /*

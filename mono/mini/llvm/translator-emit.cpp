@@ -203,7 +203,7 @@ emit_volatile_load (EmitContext *ctx, int vreg)
 	// register on arm64 (x15), and llvm might keep the value in that register
 	// even through the register is marked as 'reserved' inside llvm.
 
-	v = mono_llvm_build_load (llvm::wrap (ctx->builder), ctx->addresses [vreg]->type, ctx->addresses [vreg]->value, "", TRUE);
+	v = mono_llvm_build_load (llvm::wrap (ctx->builder), llvm::wrap (ctx->addresses [vreg]->type), llvm::wrap (ctx->addresses [vreg]->value), "", TRUE);
 	t = ctx->vreg_cli_types [vreg];
 	if (t && !t->byref) {
 		/* 
@@ -233,7 +233,7 @@ emit_volatile_store (EmitContext *ctx, int vreg)
 
 	if (var && var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT)) {
 		g_assert (ctx->addresses [vreg]);
-		llvm::wrap (ctx->builder->CreateStore (convert (ctx, ctx->values [vreg], llvm::unwrap (type_to_llvm_type (ctx, var->inst_vtype))), llvm::unwrap (ctx->addresses [vreg]->value)));
+		llvm::wrap (ctx->builder->CreateStore (convert (ctx, ctx->values [vreg], llvm::unwrap (type_to_llvm_type (ctx, var->inst_vtype))), ctx->addresses [vreg]->value));
 	}
 }
 
@@ -1177,8 +1177,8 @@ Address*
 create_address (EmitContext *ctx, LLVMValueRef value, LLVMTypeRef type)
 {
 	Address *res = static_cast<Address *>(mono_mempool_alloc0 (ctx->mempool, sizeof (Address)));
-	res->value = value;
-	res->type = type;
+	res->value = llvm::unwrap (value);
+	res->type = llvm::unwrap (type);
 	return res;
 }
 

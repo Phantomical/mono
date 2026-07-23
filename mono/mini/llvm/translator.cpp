@@ -828,7 +828,8 @@ emit_method_inner (EmitContext *ctx)
 				g_assert (ctx->addresses [sreg1]);
 				g_assert (ctx->addresses [phi->dreg]);
 				g_assert (ctx->addresses [sreg1]->type == ctx->addresses [phi->dreg]->type);
-				LLVMAddIncoming (llvm::wrap (values [phi->dreg]), &ctx->addresses [sreg1]->value, &in_bb, 1);
+				LLVMValueRef incoming_val = llvm::wrap (ctx->addresses [sreg1]->value);
+				LLVMAddIncoming (llvm::wrap (values [phi->dreg]), &incoming_val, &in_bb, 1);
 			} else {
 				if (!values [sreg1]) {
 					/* Can happen with values in EH clauses */
