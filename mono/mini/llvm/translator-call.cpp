@@ -64,7 +64,7 @@ emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb
 
 		cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), rhs, llvm::ConstantInt::get (rhs->getType (), 0, false), ""));
 		emit_cond_system_exception (ctx, bb, "DivideByZeroException", cmp, FALSE);
-		if (!ctx_ok (ctx))
+		if (!ctx->ok ())
 			break;
 		builder = ctx->builder;
 
@@ -76,7 +76,7 @@ emit_div_check (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb
 
 			cmp = llvm::wrap (builder->CreateICmp (to_llvm_pred (LLVMIntEQ), builder->CreateAnd (cond1, cond2, ""), llvm::ConstantInt::get (llvm::Type::getInt1Ty (ctx->llvm_ctx ()), 1, false), ""));
 			emit_cond_system_exception (ctx, bb, "OverflowException", cmp, FALSE);
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				break;
 			builder = ctx->builder;
 		}
@@ -167,7 +167,7 @@ emit_entry_bb (EmitContext *ctx, llvm::IRBuilder<> *builder)
 
 		if (var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT) || (mini_type_is_vtype (var->inst_vtype) && !MONO_CLASS_IS_SIMD (ctx->cfg, var->klass))) {
 			vtype = type_to_llvm_type (ctx, var->inst_vtype);
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				return;
 			/* Could be already created by an OP_VPHI */
 			if (!ctx->addresses [var->dreg]) {
@@ -464,7 +464,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_
 		call->rgctx_arg_reg = 0;
 
 	if (!is_supported_callconv (ctx, call)) {
-		set_failure (ctx, "non-default callconv");
+		ctx->set_failure ("non-default callconv");
 		return;
 	}
 
@@ -477,7 +477,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_
 	vretaddr = (cinfo->ret.storage == LLVMArgVtypeRetAddr || cinfo->ret.storage == LLVMArgVtypeByRef || cinfo->ret.storage == LLVMArgGsharedvtFixed || cinfo->ret.storage == LLVMArgGsharedvtVariable || cinfo->ret.storage == LLVMArgGsharedvtFixedVtype);
 
 	llvm_sig = sig_to_llvm_sig_full (ctx, sig, cinfo);
-	if (!ctx_ok (ctx))
+	if (!ctx->ok ())
 		return;
 
 	int const opcode = ins->opcode;
@@ -519,7 +519,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_
 						mono_create_jit_trampoline (mono_domain_get (),
 													call->method, error);
 					if (!is_ok (error)) {
-						set_failure (ctx, mono_error_get_message (error));
+						ctx->set_failure (mono_error_get_message (error));
 						mono_error_cleanup (error);
 						return;
 					}
@@ -535,7 +535,7 @@ process_call (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> **builder_
 
 		if (call->method && strstr (m_class_get_name (call->method->klass), "AsyncVoidMethodBuilder")) {
 			/* LLVM miscompiles async methods */
-			set_failure (ctx, "#13734");
+			ctx->set_failure ("#13734");
 			return;
 		}
 	} else if (calli) {

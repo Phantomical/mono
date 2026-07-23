@@ -15,11 +15,11 @@
 #ifndef DISABLE_JIT
 
 void
-set_failure (EmitContext *ctx, const char *message)
+EmitContext::set_failure (const char *message)
 {
-	TRACE_FAILURE (ctx, message);
-	ctx->cfg->exception_message = g_strdup (message);
-	ctx->cfg->disable_llvm = TRUE;
+	TRACE_FAILURE (this, message);
+	cfg->exception_message = g_strdup (message);
+	cfg->disable_llvm = TRUE;
 }
 
 LLVMValueRef

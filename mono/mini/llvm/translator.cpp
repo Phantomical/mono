@@ -396,7 +396,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 
 	emit_method_inner (ctx);
 
-	if (!ctx_ok (ctx)) {
+	if (!ctx->ok ()) {
 		if (ctx->lmethod) {
 			/* Need to add unused phi nodes as they can be referenced by other values */
 			LLVMBasicBlockRef phi_bb = LLVMAppendBasicBlock (ctx->lmethod, "PHI_BB");
@@ -442,7 +442,7 @@ emit_method_inner (EmitContext *ctx)
 	LLVMBasicBlockRef entry_bb = nullptr;
 
 	if (cfg->gsharedvt) {
-		set_failure (ctx, "gsharedvt");
+		ctx->set_failure ("gsharedvt");
 		return;
 	}
 
@@ -460,7 +460,7 @@ emit_method_inner (EmitContext *ctx)
 				fflush (stdout);
 			}
 			if (count > lcount) {
-				set_failure (ctx, "count");
+				ctx->set_failure ("count");
 				return;
 			}
 		}
@@ -488,14 +488,14 @@ emit_method_inner (EmitContext *ctx)
 
 	linfo = get_llvm_call_info (cfg, sig);
 	ctx->linfo = linfo;
-	if (!ctx_ok (ctx))
+	if (!ctx->ok ())
 		return;
 
 	if (cfg->rgctx_var)
 		linfo->rgctx_arg = TRUE;
 
 	ctx->method_type = method_type = sig_to_llvm_sig_full (ctx, sig, linfo);
-	if (!ctx_ok (ctx))
+	if (!ctx->ok ())
 		return;
 
 	method = LLVMAddFunction (lmodule, ctx->method_name, method_type);
@@ -553,12 +553,12 @@ emit_method_inner (EmitContext *ctx)
 	LLVMSetLinkage (method, LLVMExternalLinkage);
 
 	if (cfg->method->save_lmf) {
-		set_failure (ctx, "lmf");
+		ctx->set_failure ("lmf");
 		return;
 	}
 
 	if (sig->pinvoke && cfg->method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE) {
-		set_failure (ctx, "pinvoke signature");
+		ctx->set_failure ("pinvoke signature");
 		return;
 	}
 
@@ -575,7 +575,7 @@ emit_method_inner (EmitContext *ctx)
 		if (clause->flags != MONO_EXCEPTION_CLAUSE_NONE &&
 		    clause->flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
 		    clause->flags != MONO_EXCEPTION_CLAUSE_FAULT) {
-			set_failure (ctx, "filter clause (custom-emit EH does not support filters).");
+			ctx->set_failure ("filter clause (custom-emit EH does not support filters).");
 			return;
 		}
 	}
@@ -694,7 +694,7 @@ emit_method_inner (EmitContext *ctx)
 				LLVMTypeRef phi_type = llvm_type_to_stack_type (cfg, type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass)));
 				LLVMTypeRef phi_etype = nullptr;
 
-				if (!ctx_ok (ctx))
+				if (!ctx->ok ())
 					return;
 
 				if (ins->opcode == OP_VPHI) {
@@ -793,7 +793,7 @@ emit_method_inner (EmitContext *ctx)
 			continue;
 
 		process_bb (ctx, bb);
-		if (!ctx_ok (ctx))
+		if (!ctx->ok ())
 			return;
 	}
 	mono_memory_barrier ();
@@ -832,11 +832,11 @@ emit_method_inner (EmitContext *ctx)
 			} else {
 				if (!values [sreg1]) {
 					/* Can happen with values in EH clauses */
-					set_failure (ctx, "incoming phi sreg1");
+					ctx->set_failure ("incoming phi sreg1");
 					return;
 				}
 				if (values [sreg1]->getType () != values [phi->dreg]->getType ()) {
-					set_failure (ctx, "incoming phi arg type mismatch");
+					ctx->set_failure ("incoming phi arg type mismatch");
 					return;
 				}
 				g_assert (values [sreg1]->getType () == values [phi->dreg]->getType ());
@@ -1495,7 +1495,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 			 * with no unwind information is the one outcome we must avoid, so
 			 * bail out and let the classic JIT compile it instead.
 			 */
-			set_failure (ctx, "no usable DWARF unwind info");
+			ctx->set_failure ("no usable DWARF unwind info");
 			return;
 		}
 
@@ -1527,11 +1527,11 @@ llvm_jit_finalize_method (EmitContext *ctx)
 		std::vector<mono::MonoLsdaEntry> entries;
 
 		if (!mono::parse_mono_lsda (static_cast<const guint8*>(mono_lsda), mono_lsda_size, entries)) {
-			set_failure (ctx, "could not parse .mono_lsda clause table");
+			ctx->set_failure ("could not parse .mono_lsda clause table");
 			return;
 		}
 		if (!mono::publish_mono_lsda (cfg, entries, cfg->native_code, cfg->code_len)) {
-			set_failure (ctx, "could not publish .mono_lsda clause table");
+			ctx->set_failure ("could not publish .mono_lsda clause table");
 			return;
 		}
 	}
@@ -1545,7 +1545,7 @@ llvm_jit_finalize_method (EmitContext *ctx)
 	 */
 	if (cfg->gshared) {
 		if (!recover_gshared_this_slot (cfg, static_cast<guint8*>(stackmaps), stackmaps_size)) {
-			set_failure (ctx, "gshared this-slot not recoverable from stackmap");
+			ctx->set_failure ("gshared this-slot not recoverable from stackmap");
 			return;
 		}
 	}

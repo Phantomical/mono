@@ -94,7 +94,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 	ctx->builder = builder;
 	builder->SetInsertPoint (llvm::unwrap (cbb));
 
-	if (!ctx_ok (ctx))
+	if (!ctx->ok ())
 		return;
 
 	if (cfg->interp_entry_only && bb != cfg->bb_init && bb != cfg->bb_entry && bb != cfg->bb_exit) {
@@ -105,12 +105,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 	if (bb->flags & BB_EXCEPTION_HANDLER) {
 		if (!handler_is_reachable (ctx, bb)) {
-			set_failure (ctx, "handler without invokes");
+			ctx->set_failure ("handler without invokes");
 			return;
 		}
 
 		emit_handler_start (ctx, bb, builder);
-		if (!ctx_ok (ctx))
+		if (!ctx->ok ())
 			return;
 		builder = ctx->builder;
 	}
@@ -249,7 +249,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			} else {
 				/* It is ok for SETRET to have an uninitialized argument */
 				if (!values [ins->sreg1] && ins->opcode != OP_SETRET) {
-					set_failure (ctx, "sreg1");
+					ctx->set_failure ("sreg1");
 					return;
 				}
 				lhs = values [ins->sreg1];
@@ -264,7 +264,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				rhs = llvm::unwrap (emit_volatile_load (ctx, ins->sreg2));
 			} else {
 				if (!values [ins->sreg2]) {
-					set_failure (ctx, "sreg2");
+					ctx->set_failure ("sreg2");
 					return;
 				}
 				rhs = values [ins->sreg2];
@@ -279,7 +279,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				arg3 = llvm::unwrap (emit_volatile_load (ctx, ins->sreg3));
 			} else {
 				if (!values [ins->sreg3]) {
-					set_failure (ctx, "sreg3");
+					ctx->set_failure ("sreg3");
 					return;
 				}
 				arg3 = values [ins->sreg3];
@@ -606,11 +606,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					force_explicit_branch = true;
 				}
 				emit_cond_system_exception (ctx, bb, static_cast<const char*>(ins->next->inst_p1), llvm::wrap (cmp), force_explicit_branch);
-				if (!ctx_ok (ctx))
+				if (!ctx->ok ())
 					break;
 				builder = ctx->builder;
 			} else {
-				set_failure (ctx, "next");
+				ctx->set_failure ("next");
 				break;
 			}
 
@@ -730,7 +730,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			rhs = convert (ctx, rhs, llvm::unwrap (regtype_to_llvm_type (spec [MONO_INST_DEST])));
 
 			emit_div_check (ctx, builder, bb, ins, lhs, rhs);
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				break;
 			builder = ctx->builder;
 
@@ -869,7 +869,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			}
 
 			emit_div_check (ctx, builder, bb, ins, lhs, imm);
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				break;
 			builder = ctx->builder;
 
@@ -1247,7 +1247,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			bool is_unaligned = (ins->flags & MONO_INST_UNALIGNED) != 0;
 
 			if (!values [ins->inst_destbasereg]) {
-				set_failure (ctx, "inst_destbasereg");
+				ctx->set_failure ("inst_destbasereg");
 				break;
 			}
 
@@ -1812,7 +1812,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMValueRef index, addr, value, base;
 
 			if (!values [ins->inst_destbasereg]) {
-			    set_failure (ctx, "inst_destbasereg");
+			    ctx->set_failure ("inst_destbasereg");
 				break;
 			}
 
@@ -1855,7 +1855,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			LLVMTypeRef ptrtype = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 256));
 			values [ins->dreg] = builder->CreateLoad (llvm::unwrap (IntPtrType ()), builder->CreateIntToPtr (llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), offset, true), llvm::unwrap (ptrtype), ""), "");
 #else
-			set_failure (ctx, "opcode tls-get");
+			ctx->set_failure ("opcode tls-get");
 			break;
 #endif
 
@@ -1939,7 +1939,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			values [ins->dreg] = builder->CreateExtractValue (val, {0}, dname);
 			ovf = llvm::wrap (builder->CreateExtractValue (val, {1}, ""));
 			emit_cond_system_exception (ctx, bb, "OverflowException", ovf, FALSE);
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				break;
 			builder = ctx->builder;
 			break;
@@ -1957,7 +1957,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			if (!klass) {
 				// FIXME:
-				set_failure (ctx, "!klass");
+				ctx->set_failure ("!klass");
 				break;
 			}
 
@@ -1980,13 +1980,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 			if (!klass) {
 				// FIXME:
-				set_failure (ctx, "!klass");
+				ctx->set_failure ("!klass");
 				break;
 			}
 
 			if (mini_is_gsharedvt_klass (klass)) {
 				// FIXME:
-				set_failure (ctx, "gsharedvt");
+				ctx->set_failure ("gsharedvt");
 				break;
 			}
 
@@ -2026,7 +2026,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			default:
 				g_assert_not_reached ();
 			}
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				break;
 
 			if (done)
@@ -4299,7 +4299,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_IMPLICIT_EXCEPTION:
 			/* This marks a place where an implicit exception can happen */
 			if (bb->region != static_cast<guint>(-1))
-				set_failure (ctx, "implicit-exception");
+				ctx->set_failure ("implicit-exception");
 			break;
 		case OP_THROW:
 		case OP_RETHROW: {
@@ -4400,12 +4400,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			char reason [128];
 
 			sprintf (reason, "opcode %s", mono_inst_name (ins->opcode));
-			set_failure (ctx, reason);
+			ctx->set_failure (reason);
 			break;
 		}
 		}
 
-		if (!ctx_ok (ctx))
+		if (!ctx->ok ())
 			break;
 
 		/* Convert the value to the type required by phi nodes */
@@ -4422,7 +4422,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			emit_volatile_store (ctx, ins->dreg);
 	}
 
-	if (!ctx_ok (ctx))
+	if (!ctx->ok ())
 		return;
 
 	if (!has_terminator && bb->next_bb && (bb == cfg->bb_entry || bb->in_count > 0)) {

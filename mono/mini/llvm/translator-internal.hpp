@@ -232,6 +232,12 @@ typedef struct {
 	 * Type::getInt32Ty (C), ConstantInt::get (...), and so on.
 	 */
 	llvm::LLVMContext &llvm_ctx () const { return *llvm::unwrap (module->context); }
+
+	/* Translator liveness: false once a decline has disabled llvm for this method. */
+	bool ok () const { return !cfg->disable_llvm; }
+
+	/* Decline this method: record the reason and hand it back to the classic JIT. */
+	void set_failure (const char *message);
 } EmitContext;
 
 /*
@@ -316,12 +322,6 @@ inline constexpr bool IS_TARGET_AMD64 = true;
 inline constexpr bool IS_TARGET_AMD64 = false;
 #endif
 
-static inline bool
-ctx_ok (EmitContext *ctx)
-{
-	return !ctx->cfg->disable_llvm;
-}
-
 /* Defined in translator.cpp. */
 /*
  * NOTE: this declaration gives mini_llvm_ins_info external linkage. Without
@@ -372,8 +372,6 @@ extern GHashTable *intrins_id_to_intrins;
 extern LLVMTypeRef sse_i1_t, sse_i2_t, sse_i4_t, sse_i8_t, sse_r4_t, sse_r8_t;
 
 /* Defined in translator-types.cpp. */
-void
-set_failure (EmitContext *ctx, const char *message);
 LLVMValueRef
 const_int32 (int v);
 LLVMValueRef

@@ -247,7 +247,7 @@ sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
 	MonoType *rtype;
 
 	ret_type = type_to_llvm_type (ctx, sig->ret);
-	if (!ctx_ok (ctx))
+	if (!ctx->ok ())
 		return nullptr;
 	rtype = mini_get_underlying_type (sig->ret);
 
@@ -259,7 +259,7 @@ sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
 	for (i = 0; i < sig->param_count; ++i)
 		param_types [pindex ++] = type_to_llvm_arg_type (ctx, sig->params [i]);
 
-	if (!ctx_ok (ctx)) {
+	if (!ctx->ok ()) {
 		g_free (param_types);
 		return nullptr;
 	}
@@ -290,7 +290,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 		return sig_to_llvm_sig_no_cinfo (ctx, sig);
 
 	ret_type = type_to_llvm_type (ctx, sig->ret);
-	if (!ctx_ok (ctx))
+	if (!ctx->ok ())
 		return nullptr;
 	rtype = mini_get_underlying_type (sig->ret);
 
@@ -368,7 +368,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 		 */
 		cinfo->vret_arg_pindex = pindex;
 		param_types [pindex] = type_to_llvm_arg_type (ctx, sig->ret);
-		if (!ctx_ok (ctx)) {
+		if (!ctx->ok ()) {
 			g_free (param_types);
 			return nullptr;
 		}
@@ -438,7 +438,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 			break;
 		case LLVMArgVtypeByVal:
 			param_types [pindex] = type_to_llvm_arg_type (ctx, ainfo->type);
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				break;
 			param_types [pindex] = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
 			pindex ++;
@@ -453,7 +453,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 		case LLVMArgVtypeAddr:
 		case LLVMArgVtypeByRef:
 			param_types [pindex] = type_to_llvm_arg_type (ctx, ainfo->type);
-			if (!ctx_ok (ctx))
+			if (!ctx->ok ())
 				break;
 			param_types [pindex] = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
 			pindex ++;
@@ -483,7 +483,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 			break;
 		}
 	}
-	if (!ctx_ok (ctx)) {
+	if (!ctx->ok ()) {
 		g_free (param_types);
 		return nullptr;
 	}
