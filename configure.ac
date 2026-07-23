@@ -881,7 +881,7 @@ AC_ARG_ENABLE(visibility-hidden,
 WARN=''
 if test x"$GCC" = xyes; then
 		WARN='-Wall -Wunused -Wmissing-declarations -Wpointer-arith -Wno-cast-qual -Wwrite-strings -Wno-switch -Wno-switch-enum -Wno-unused-value -Wno-attributes'
-		CFLAGS="$CFLAGS -Wmissing-prototypes -Wstrict-prototypes -Wnested-externs -Wno-format-zero-length -Wc++-compat"
+		CFLAGS="$CFLAGS -Wmissing-prototypes -Wstrict-prototypes -Wnested-externs -Wno-format-zero-length"
 
 		# We require C99 with some GNU extensions, e.g. `linux` macro
 		CFLAGS="$CFLAGS -std=gnu99"
@@ -1255,7 +1255,7 @@ if test "x$enable_cxx" = "xyes"; then
 	CXX_REMOVE_CFLAGS=-std=gnu99
 	# These give warnings and should be removed. They are C-only.
 	# i.e. C++ never allows these, they are always errors and their warningness is not controllable.
-	CXX_REMOVE_CFLAGS="$CXX_REMOVE_CFLAGS -Wmissing-prototypes -Wstrict-prototypes -Wnested-externs -Wc++-compat"
+	CXX_REMOVE_CFLAGS="$CXX_REMOVE_CFLAGS -Wmissing-prototypes -Wstrict-prototypes -Wnested-externs"
 	# Likewise with CentOS 6 gcc 4.4.
 	CXX_REMOVE_CFLAGS="$CXX_REMOVE_CFLAGS -Werror-implicit-function-declaration"
 
