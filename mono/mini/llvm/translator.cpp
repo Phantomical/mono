@@ -366,13 +366,13 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	/*
 	 * This maps vregs to the LLVM instruction defining them
 	 */
-	ctx->values = g_new0 (LLVMValueRef, cfg->next_vreg);
+	ctx->values = g_new0 (llvm::Value *, cfg->next_vreg);
 	/*
 	 * This maps vregs for volatile variables to the LLVM instruction defining their
 	 * address.
 	 */
 	ctx->addresses = g_new0 (Address*, cfg->next_vreg);
-	ctx->vreg_types = g_new0 (LLVMTypeRef, cfg->next_vreg);
+	ctx->vreg_types = g_new0 (llvm::Type *, cfg->next_vreg);
 	ctx->is_vphi = g_new0 (gboolean, cfg->next_vreg);
 	ctx->vreg_cli_types = g_new0 (MonoType*, cfg->next_vreg);
 	ctx->phi_values.reserve (256);
@@ -427,7 +427,7 @@ emit_method_inner (EmitContext *ctx)
 	MonoBasicBlock *bb;
 	LLVMTypeRef method_type;
 	LLVMValueRef method = nullptr;
-	LLVMValueRef *values = ctx->values;
+	llvm::Value **values = ctx->values;
 	int i, max_block_num;
 	/* Indexes cfg->bblocks (guint num_bblocks) */
 	guint bb_index;
@@ -597,8 +597,8 @@ emit_method_inner (EmitContext *ctx)
 		ctx->rgctx_arg_pindex = -1;
 	}
 	if (cfg->vret_addr) {
-		values [cfg->vret_addr->dreg] = LLVMGetParam (method, linfo->vret_arg_pindex);
-		LLVMSetValueName (values [cfg->vret_addr->dreg], "vret");
+		values [cfg->vret_addr->dreg] = llvm::unwrap (LLVMGetParam (method, linfo->vret_arg_pindex));
+		LLVMSetValueName (llvm::wrap (values [cfg->vret_addr->dreg]), "vret");
 		if (linfo->ret.storage == LLVMArgVtypeByRef) {
 			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_STRUCT_RET, type_to_llvm_type (ctx, sig->ret));
 			mono_llvm_add_param_attr (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_NO_ALIAS);
@@ -608,8 +608,8 @@ emit_method_inner (EmitContext *ctx)
 	if (sig->hasthis) {
 		ctx->this_arg_pindex = linfo->this_arg_pindex;
 		ctx->this_arg = LLVMGetParam (method, linfo->this_arg_pindex);
-		values [cfg->args [0]->dreg] = ctx->this_arg;
-		LLVMSetValueName (values [cfg->args [0]->dreg], "this");
+		values [cfg->args [0]->dreg] = llvm::unwrap (ctx->this_arg);
+		LLVMSetValueName (llvm::wrap (values [cfg->args [0]->dreg]), "this");
 	}
 	if (linfo->dummy_arg)
 		LLVMSetValueName (LLVMGetParam (method, linfo->dummy_arg_pindex), "dummy_arg");
@@ -633,7 +633,7 @@ emit_method_inner (EmitContext *ctx)
 		if (ainfo->storage == LLVMArgVtypeInReg && ainfo->pair_storage [0] == LLVMArgNone && ainfo->pair_storage [1] == LLVMArgNone)
 			continue;
 
-		values [cfg->args [i + sig->hasthis]->dreg] = LLVMGetParam (method, pindex);
+		values [cfg->args [i + sig->hasthis]->dreg] = llvm::unwrap (LLVMGetParam (method, pindex));
 		if (ainfo->storage == LLVMArgGsharedvtFixed || ainfo->storage == LLVMArgGsharedvtFixedVtype) {
 			if (names [i] && names [i][0] != '\0')
 				name = g_strdup_printf ("p_arg_%s", names [i]);
@@ -710,12 +710,12 @@ emit_method_inner (EmitContext *ctx)
 				 */
 				sprintf (dname_buf, "t%d", ins->dreg);
 				dname = dname_buf;
-				values [ins->dreg] = llvm::wrap (builder->CreatePHI (llvm::unwrap (phi_type), 0, dname));
+				values [ins->dreg] = builder->CreatePHI (llvm::unwrap (phi_type), 0, dname);
 
 				if (ins->opcode == OP_VPHI)
-					ctx->addresses [ins->dreg] = create_address (ctx, values [ins->dreg], phi_etype);
+					ctx->addresses [ins->dreg] = create_address (ctx, llvm::wrap (values [ins->dreg]), phi_etype);
 
-				ctx->phi_values.push_back (values [ins->dreg]);
+				ctx->phi_values.push_back (llvm::wrap (values [ins->dreg]));
 
 				/* 
 				 * Set the expected type of the incoming arguments since these have
@@ -727,7 +727,7 @@ emit_method_inner (EmitContext *ctx)
 					if (sreg1 != -1) {
 						if (ins->opcode == OP_VPHI)
 							ctx->is_vphi [sreg1] = TRUE;
-						ctx->vreg_types [sreg1] = phi_type;
+						ctx->vreg_types [sreg1] = llvm::unwrap (phi_type);
 					}
 				}
 				break;
@@ -828,19 +828,19 @@ emit_method_inner (EmitContext *ctx)
 				g_assert (ctx->addresses [sreg1]);
 				g_assert (ctx->addresses [phi->dreg]);
 				g_assert (ctx->addresses [sreg1]->type == ctx->addresses [phi->dreg]->type);
-				LLVMAddIncoming (values [phi->dreg], &ctx->addresses [sreg1]->value, &in_bb, 1);
+				LLVMAddIncoming (llvm::wrap (values [phi->dreg]), &ctx->addresses [sreg1]->value, &in_bb, 1);
 			} else {
 				if (!values [sreg1]) {
 					/* Can happen with values in EH clauses */
 					set_failure (ctx, "incoming phi sreg1");
 					return;
 				}
-				if (LLVMTypeOf (values [sreg1]) != LLVMTypeOf (values [phi->dreg])) {
+				if (LLVMTypeOf (llvm::wrap (values [sreg1])) != LLVMTypeOf (llvm::wrap (values [phi->dreg]))) {
 					set_failure (ctx, "incoming phi arg type mismatch");
 					return;
 				}
-				g_assert (LLVMTypeOf (values [sreg1]) == LLVMTypeOf (values [phi->dreg]));
-				LLVMAddIncoming (values [phi->dreg], &values [sreg1], &in_bb, 1);
+				g_assert (LLVMTypeOf (llvm::wrap (values [sreg1])) == LLVMTypeOf (llvm::wrap (values [phi->dreg])));
+				LLVMAddIncoming (llvm::wrap (values [phi->dreg]), reinterpret_cast<LLVMValueRef*> (&values [sreg1]), &in_bb, 1);
 			}
 		}
 	}
@@ -854,7 +854,7 @@ emit_method_inner (EmitContext *ctx)
 		for (l = ins_list; l; l = l->next) {
 			PhiNode *node = static_cast<PhiNode*>(l->data);
 			MonoInst *phi = node->phi;
-			LLVMValueRef phi_ins = values [phi->dreg];
+			LLVMValueRef phi_ins = llvm::wrap (values [phi->dreg]);
 
 			if (!phi_ins)
 				/* Already removed */

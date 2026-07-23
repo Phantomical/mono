@@ -190,7 +190,7 @@ typedef struct {
 	BBInfo *bblocks;
 	int sindex, default_index, ex_index;
 	llvm::IRBuilder<> *builder;
-	LLVMValueRef *values;
+	llvm::Value **values;
 	Address **addresses;
 	MonoType **vreg_cli_types;
 	LLVMCallInfo *linfo;
@@ -202,7 +202,7 @@ typedef struct {
 	LLVMValueRef last_alloca;
 	LLVMValueRef rgctx_arg;
 	LLVMValueRef this_arg;
-	LLVMTypeRef *vreg_types;
+	llvm::Type **vreg_types;
 	gboolean *is_vphi;
 	LLVMTypeRef method_type;
 	gboolean *is_dead;
@@ -428,10 +428,10 @@ LLVMBasicBlockRef
 get_end_bb (EmitContext *ctx, MonoBasicBlock *bb);
 LLVMBasicBlockRef
 gen_bb (EmitContext *ctx, const char *prefix);
-LLVMValueRef
-convert_full (EmitContext *ctx, LLVMValueRef v, LLVMTypeRef dtype, gboolean is_unsigned);
-LLVMValueRef
-convert (EmitContext *ctx, LLVMValueRef v, LLVMTypeRef dtype);
+llvm::Value *
+convert_full (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype, gboolean is_unsigned);
+llvm::Value *
+convert (EmitContext *ctx, llvm::Value *v, llvm::Type *dtype);
 void
 emit_memset (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValueRef v, LLVMValueRef size, int alignment);
 LLVMValueRef
