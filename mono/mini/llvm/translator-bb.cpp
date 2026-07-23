@@ -2333,11 +2333,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			ones_vec = const_vector (ones, vector_size);
 
 			llvm::Value *val;
-			LLVMTypeRef ext_type = llvm::wrap (llvm::FixedVectorType::get (llvm::unwrap (ext_elem_type), vector_size));
+			llvm::Type *ext_type = llvm::FixedVectorType::get (llvm::unwrap (ext_elem_type), vector_size);
 
 			/* Have to increase the vector element size to prevent overflows */
 			/* res = trunc ((zext (lhs) + zext (rhs) + 1) >> 1) */
-			val = builder->CreateAdd (builder->CreateZExt (lhs, llvm::unwrap (ext_type), ""), builder->CreateZExt (rhs, llvm::unwrap (ext_type), ""), "");
+			val = builder->CreateAdd (builder->CreateZExt (lhs, ext_type, ""), builder->CreateZExt (rhs, ext_type, ""), "");
 			val = builder->CreateAdd (val, llvm::unwrap (ones_vec), "");
 			val = builder->CreateLShr (val, llvm::unwrap (ones_vec), "");
 			values [ins->dreg] = builder->CreateTrunc (val, lhs->getType (), "");
@@ -3416,8 +3416,8 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		}
 
 		case OP_SSE2_MASKMOVDQU: {
-			LLVMTypeRef i8ptr = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
-			LLVMValueRef dstaddr = llvm::wrap (convert (ctx, values [ins->sreg3], llvm::unwrap (i8ptr)));
+			llvm::Type *i8ptr = llvm::PointerType::get (ctx->llvm_ctx (), 0);
+			LLVMValueRef dstaddr = llvm::wrap (convert (ctx, values [ins->sreg3], i8ptr));
 			LLVMValueRef src = llvm::wrap (convert (ctx, lhs, llvm::unwrap (sse_i1_t)));
 			LLVMValueRef mask = llvm::wrap (convert (ctx, rhs, llvm::unwrap (sse_i1_t)));
 			LLVMValueRef args[] = { src, mask, dstaddr };
@@ -4072,13 +4072,13 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			case OP_IMAX: {
 				bool is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
 				llvm::Value *cmp = builder->CreateICmp (to_llvm_pred (is_unsigned ? LLVMIntUGT : LLVMIntSGT), lhs, rhs, "");
-				values [ins->dreg] = builder->CreateSelect (llvm::unwrap (cmp), lhs, rhs, "");
+				values [ins->dreg] = builder->CreateSelect (cmp, lhs, rhs, "");
 				break;
 			}
 			case OP_IMIN: {
 				bool is_unsigned = ins->inst_c1 == MONO_TYPE_U1 || ins->inst_c1 == MONO_TYPE_U2 || ins->inst_c1 == MONO_TYPE_U4 || ins->inst_c1 == MONO_TYPE_U8;
 				llvm::Value *cmp = builder->CreateICmp (to_llvm_pred (is_unsigned ? LLVMIntULT : LLVMIntSLT), lhs, rhs, "");
-				values [ins->dreg] = builder->CreateSelect (llvm::unwrap (cmp), lhs, rhs, "");
+				values [ins->dreg] = builder->CreateSelect (cmp, lhs, rhs, "");
 			}
 			break;
 
@@ -4091,18 +4091,18 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_XEXTRACT_I64:
 		case OP_XEXTRACT_R8:
 		case OP_XEXTRACT_R4: {
-			LLVMTypeRef rhst = llvm::wrap (rhs->getType ());
+			llvm::Type *rhst = rhs->getType ();
 			llvm::Value *mask = nullptr;
 			switch (ins->opcode) {
 			case OP_XEXTRACT_I32: case OP_XEXTRACT_R4:
-				mask = llvm::ConstantInt::get (llvm::unwrap (rhst), 0x3, false); break;
+				mask = llvm::ConstantInt::get (rhst, 0x3, false); break;
 			case OP_XEXTRACT_I64: case OP_XEXTRACT_R8:
-				mask = llvm::ConstantInt::get (llvm::unwrap (rhst), 0x1, false); break;
+				mask = llvm::ConstantInt::get (rhst, 0x1, false); break;
 			default:
 				g_assert_not_reached ();
 			}
 			llvm::Value *selector = builder->CreateAnd (rhs, mask, "");
-			values [ins->dreg] = builder->CreateExtractElement (lhs, llvm::unwrap (selector), "");
+			values [ins->dreg] = builder->CreateExtractElement (lhs, selector, "");
 			break;
 		}
 		case OP_POPCNT32:

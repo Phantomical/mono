@@ -241,9 +241,9 @@ emit_entry_bb (EmitContext *ctx, llvm::IRBuilder<> *builder)
 			if (size == 0) {
 			} else if (size < TARGET_SIZEOF_VOID_P) {
 				/* The upper bits of the registers might not be valid */
-				LLVMValueRef val = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (arg), {0}, ""));
-				LLVMValueRef dest = llvm::wrap (convert (ctx, ctx->addresses [reg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0)));
-				llvm::wrap (ctx->builder->CreateStore (builder->CreateTrunc (llvm::unwrap (val), llvm::Type::getIntNTy (ctx->llvm_ctx (), size * 8), ""), llvm::unwrap (dest)));
+				llvm::Value *val = builder->CreateExtractValue (llvm::unwrap (arg), {0}, "");
+				llvm::Value *dest = convert (ctx, ctx->addresses [reg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0));
+				llvm::wrap (ctx->builder->CreateStore (builder->CreateTrunc (val, llvm::Type::getIntNTy (ctx->llvm_ctx (), size * 8), ""), dest));
 			} else {
 				llvm::wrap (ctx->builder->CreateStore (llvm::unwrap (arg), convert (ctx, ctx->addresses [reg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0))));
 			}
@@ -1107,8 +1107,8 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 				 * own path. Enclosing finally/fault edges take no store and branch
 				 * straight to the encloser's body.
 				 */
-				LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
-				switch_ins = builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0);
+				llvm::Value *ex_selector = builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector");
+				switch_ins = builder->CreateSwitch (ex_selector, llvm::unwrap (target_bb), 0);
 
 				for (i = 0; i < cfg->header->num_clauses; ++i) {
 					MonoExceptionClause *enc = &cfg->header->clauses [i];
@@ -1135,8 +1135,8 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 						LLVMBasicBlockRef store_bb = LLVMAppendBasicBlock (ctx->lmethod, "finally_to_catch");
 						llvm::BasicBlock *saved_ip = builder->GetInsertBlock ();
 						builder->SetInsertPoint (llvm::unwrap (store_bb));
-						LLVMValueRef ex_obj = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {0}, "ex_obj"));
-						builder->CreateStore (convert (ctx, llvm::unwrap (ex_obj), llvm::unwrap (ObjRefType ())), ctx->ex_var);
+						llvm::Value *ex_obj = builder->CreateExtractValue (llvm::unwrap (landing_pad), {0}, "ex_obj");
+						builder->CreateStore (convert (ctx, ex_obj, llvm::unwrap (ObjRefType ())), ctx->ex_var);
 						llvm::wrap (builder->CreateBr (llvm::unwrap (case_target)));
 						builder->SetInsertPoint (saved_ip);
 						case_target = store_bb;
@@ -1189,8 +1189,8 @@ emit_handler_start (EmitContext *ctx, MonoBasicBlock *bb, llvm::IRBuilder<> *bui
 			 * The selector register holds the matched clause's index; branch to the
 			 * sibling handler that owns it (this clause's own body is the default).
 			 */
-			LLVMValueRef ex_selector = llvm::wrap (builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector"));
-			switch_ins = builder->CreateSwitch (llvm::unwrap (ex_selector), llvm::unwrap (target_bb), 0);
+			llvm::Value *ex_selector = builder->CreateExtractValue (llvm::unwrap (landing_pad), {1}, "ex_selector");
+			switch_ins = builder->CreateSwitch (ex_selector, llvm::unwrap (target_bb), 0);
 
 			for (i = 0; i < cfg->header->num_clauses; ++i) {
 				MonoExceptionClause *c = &cfg->header->clauses [i];
