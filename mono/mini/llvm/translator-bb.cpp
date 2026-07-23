@@ -429,7 +429,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				break;
 			}
 			case LLVMArgGsharedvtFixed: {
-				LLVMTypeRef ret_type = type_to_llvm_type (ctx, sig->ret);
+				LLVMTypeRef ret_type = ctx->type_to_llvm_type (sig->ret);
 				/* The return value is in lhs, need to store to the vret argument */
 				/* sreg1 might not be set */
 				if (lhs) {
@@ -474,9 +474,9 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					if (cfg->vret_addr)
 						llvm::wrap (builder->CreateRetVoid ());
 					else
-						llvm::wrap (builder->CreateRet (llvm::Constant::getNullValue (llvm::unwrap (type_to_llvm_type (ctx, sig->ret)))));
+						llvm::wrap (builder->CreateRet (llvm::Constant::getNullValue (llvm::unwrap (ctx->type_to_llvm_type (sig->ret)))));
 				} else {
-					llvm::wrap (builder->CreateRet (ctx->convert (lhs, llvm::unwrap (type_to_llvm_type (ctx, sig->ret)))));
+					llvm::wrap (builder->CreateRet (ctx->convert (lhs, llvm::unwrap (ctx->type_to_llvm_type (sig->ret)))));
 				}
 				has_terminator = true;
 				break;
@@ -2066,7 +2066,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				llvm::wrap (builder->CreateStore (ctx->convert (values [ins->sreg1], addresses [ins->sreg1]->type), addresses [ins->sreg1]->value));
 				addresses [ins->dreg] = addresses [ins->sreg1];
 			} else {
-				LLVMTypeRef etype = type_to_llvm_type (ctx, t);
+				LLVMTypeRef etype = ctx->type_to_llvm_type (t);
 
 				if (!addresses [ins->sreg1]) {
 					addresses [ins->sreg1] = build_alloca_address (ctx, t);
@@ -2142,7 +2142,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			int i;
 
 #ifdef ENABLE_NETCORE
-			t = simd_class_to_llvm_type (ctx, ins->klass);
+			t = ctx->simd_class_to_llvm_type (ins->klass);
 #else
 			t = simd_op_to_llvm_type (ins->opcode);
 #endif
@@ -2156,11 +2156,11 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_XZERO: {
-			values [ins->dreg] = llvm::Constant::getNullValue (llvm::unwrap (type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass))));
+			values [ins->dreg] = llvm::Constant::getNullValue (llvm::unwrap (ctx->type_to_llvm_type (m_class_get_byval_arg (ins->klass))));
 			break;
 		}
 		case OP_LOADX_MEMBASE: {
-			LLVMTypeRef t = type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass));
+			LLVMTypeRef t = ctx->type_to_llvm_type (m_class_get_byval_arg (ins->klass));
 			LLVMValueRef src;
 
 			src = llvm::wrap (ctx->convert (builder->CreateAdd (ctx->convert (values [ins->inst_basereg], llvm::unwrap (IntPtrType ())), llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), ins->inst_offset, false), ""), llvm::PointerType::get (ctx->llvm_ctx (), 0)));
@@ -3928,7 +3928,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 #ifdef ENABLE_NETCORE
 		case OP_XCAST: {
-			LLVMTypeRef t = simd_class_to_llvm_type (ctx, ins->klass);
+			LLVMTypeRef t = ctx->simd_class_to_llvm_type (ins->klass);
 
 			values [ins->dreg] = builder->CreateBitCast (lhs, llvm::unwrap (t), "");
 			break;

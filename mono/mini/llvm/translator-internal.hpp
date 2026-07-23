@@ -242,6 +242,17 @@ typedef struct {
 	/* Emit code to convert the LLVM value V to DTYPE (widening/truncating/bitcasting). */
 	llvm::Value *convert_full (llvm::Value *v, llvm::Type *dtype, gboolean is_unsigned);
 	llvm::Value *convert (llvm::Value *v, llvm::Type *dtype);
+
+	/* MonoType -> LLVM type mapping (defined in translator-types.cpp). */
+	LLVMTypeRef simd_class_to_llvm_type (MonoClass *klass);
+	LLVMTypeRef type_to_llvm_type (MonoType *t);
+	bool type_is_unsigned (MonoType *t);
+	LLVMTypeRef type_to_llvm_arg_type (MonoType *t);
+
+	/* Mono signature -> LLVM function type (defined in translator-emit.cpp). */
+	LLVMTypeRef sig_to_llvm_sig_no_cinfo (MonoMethodSignature *sig);
+	LLVMTypeRef sig_to_llvm_sig_full (MonoMethodSignature *sig, LLVMCallInfo *cinfo);
+	LLVMTypeRef sig_to_llvm_sig (MonoMethodSignature *sig);
 } EmitContext;
 
 /*
@@ -388,22 +399,14 @@ LLVMTypeRef
 ThisType (void);
 guint32
 get_vtype_size (MonoType *t);
-LLVMTypeRef
-simd_class_to_llvm_type (EmitContext *ctx, MonoClass *klass);
 G_GNUC_UNUSED LLVMTypeRef
 type_to_sse_type (int type);
 LLVMTypeRef
 primitive_type_to_llvm_type (MonoTypeEnum type);
 MonoTypeEnum
 inst_c1_type (const MonoInst *ins);
-LLVMTypeRef
-type_to_llvm_type (EmitContext *ctx, MonoType *t);
 bool
 primitive_type_is_unsigned (MonoTypeEnum t);
-bool
-type_is_unsigned (EmitContext *ctx, MonoType *t);
-LLVMTypeRef
-type_to_llvm_arg_type (EmitContext *ctx, MonoType *t);
 G_GNUC_UNUSED LLVMTypeRef
 llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type);
 LLVMTypeRef
@@ -436,10 +439,6 @@ LLVMValueRef
 emit_volatile_load (EmitContext *ctx, int vreg);
 void
 emit_volatile_store (EmitContext *ctx, int vreg);
-LLVMTypeRef
-sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *cinfo);
-LLVMTypeRef
-sig_to_llvm_sig (EmitContext *ctx, MonoMethodSignature *sig);
 G_GNUC_UNUSED LLVMTypeRef
 LLVMFunctionType0 (LLVMTypeRef ReturnType,
 				   int IsVarArg);

@@ -82,56 +82,56 @@ get_vtype_size (MonoType *t)
  *   Return the LLVM type corresponding to the Mono.SIMD class KLASS
  */
 LLVMTypeRef
-simd_class_to_llvm_type (EmitContext *ctx, MonoClass *klass)
+EmitContext::simd_class_to_llvm_type (MonoClass *klass)
 {
 	const char *klass_name = m_class_get_name (klass);
 	if (!strcmp (klass_name, "Vector2d")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), 2));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (llvm_ctx ()), 2));
 	} else if (!strcmp (klass_name, "Vector2l")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 2));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (llvm_ctx ()), 2));
 	} else if (!strcmp (klass_name, "Vector2ul")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), 2));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (llvm_ctx ()), 2));
 	} else if (!strcmp (klass_name, "Vector4i")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector4ui")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector4f")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector8s")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (ctx->llvm_ctx ()), 8));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (llvm_ctx ()), 8));
 	} else if (!strcmp (klass_name, "Vector8us")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (ctx->llvm_ctx ()), 8));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (llvm_ctx ()), 8));
 	} else if (!strcmp (klass_name, "Vector16sb")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), 16));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (llvm_ctx ()), 16));
 	} else if (!strcmp (klass_name, "Vector16b")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), 16));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (llvm_ctx ()), 16));
 	} else if (!strcmp (klass_name, "Vector2")) {
 		/* System.Numerics */
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector3")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector4")) {
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (llvm_ctx ()), 4));
 	} else if (!strcmp (klass_name, "Vector`1") || !strcmp (klass_name, "Vector128`1") || !strcmp (klass_name, "Vector256`1")) {
 		MonoType *etype = mono_class_get_generic_class (klass)->context.class_inst->type_argv [0];
 		int size = mono_class_value_size (klass, NULL);
 		switch (etype->type) {
 		case MONO_TYPE_I1:
 		case MONO_TYPE_U1:
-			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), size));
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (llvm_ctx ()), size));
 		case MONO_TYPE_I2:
 		case MONO_TYPE_U2:
-			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (ctx->llvm_ctx ()), size / 2));
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (llvm_ctx ()), size / 2));
 		case MONO_TYPE_I4:
 		case MONO_TYPE_U4:
-			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), size / 4));
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (llvm_ctx ()), size / 4));
 		case MONO_TYPE_I8:
 		case MONO_TYPE_U8:
-			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), size / 8));
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (llvm_ctx ()), size / 8));
 		case MONO_TYPE_R4:
-			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx->llvm_ctx ()), size / 4));
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (llvm_ctx ()), size / 4));
 		case MONO_TYPE_R8:
-			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (ctx->llvm_ctx ()), size / 8));
+			return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (llvm_ctx ()), size / 8));
 		default:
 			g_assert_not_reached ();
 			return nullptr;
@@ -250,7 +250,7 @@ inst_c1_type (const MonoInst *ins)
  *   Return the LLVM type corresponding to T.
  */
 LLVMTypeRef
-type_to_llvm_type (EmitContext *ctx, MonoType *t)
+EmitContext::type_to_llvm_type (MonoType *t)
 {
 	if (t->byref)
 		return ThisType ();
@@ -263,7 +263,7 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 
 	switch (t->type) {
 	case MONO_TYPE_VOID:
-		return llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ()));
+		return llvm::wrap (llvm::Type::getVoidTy (llvm_ctx ()));
 	case MONO_TYPE_OBJECT:
 		return ObjRefType ();
 	case MONO_TYPE_PTR:
@@ -279,7 +279,7 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 		case MONO_TYPE_U1:
 		case MONO_TYPE_U2:
 		case MONO_TYPE_U4:
-			return llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
+			return llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
 		default:
 			break;
 		}
@@ -301,24 +301,24 @@ type_to_llvm_type (EmitContext *ctx, MonoType *t)
 
 		klass = mono_class_from_mono_type_internal (t);
 
-		if (MONO_CLASS_IS_SIMD (ctx->cfg, klass))
-			return simd_class_to_llvm_type (ctx, klass);
+		if (MONO_CLASS_IS_SIMD (cfg, klass))
+			return simd_class_to_llvm_type (klass);
 
 		if (m_class_is_enumtype (klass))
-			return type_to_llvm_type (ctx, mono_class_enum_basetype_internal (klass));
+			return type_to_llvm_type (mono_class_enum_basetype_internal (klass));
 
-		ltype = static_cast<LLVMTypeRef>(g_hash_table_lookup (ctx->module->llvm_types, klass));
+		ltype = static_cast<LLVMTypeRef>(g_hash_table_lookup (module->llvm_types, klass));
 		if (!ltype) {
-			ltype = create_llvm_type_for_type (ctx->module, klass);
-			g_hash_table_insert (ctx->module->llvm_types, klass, ltype);
+			ltype = create_llvm_type_for_type (module, klass);
+			g_hash_table_insert (module->llvm_types, klass, ltype);
 		}
 		return ltype;
 	}
 
 	default:
 		printf ("X: %d\n", t->type);
-		ctx->cfg->exception_message = g_strdup_printf ("type %s", mono_type_full_name (t));
-		ctx->cfg->disable_llvm = TRUE;
+		cfg->exception_message = g_strdup_printf ("type %s", mono_type_full_name (t));
+		cfg->disable_llvm = TRUE;
 		return nullptr;
 	}
 }
@@ -344,7 +344,7 @@ primitive_type_is_unsigned (MonoTypeEnum t)
  *   Return whenever T is an unsigned int type.
  */
 bool
-type_is_unsigned (EmitContext *ctx, MonoType *t)
+EmitContext::type_is_unsigned (MonoType *t)
 {
 	t = mini_get_underlying_type (t);
 	if (t->byref)
@@ -358,21 +358,21 @@ type_is_unsigned (EmitContext *ctx, MonoType *t)
  *   Same as type_to_llvm_type, but treat i8/i16 as i32.
  */
 LLVMTypeRef
-type_to_llvm_arg_type (EmitContext *ctx, MonoType *t)
+EmitContext::type_to_llvm_arg_type (MonoType *t)
 {
-	LLVMTypeRef ptype = type_to_llvm_type (ctx, t);
+	LLVMTypeRef ptype = type_to_llvm_type (t);
 
 	/*
 	 * This works on all abis except arm64/ios which passes multiple
 	 * arguments in one stack slot.
 	 */
 #ifndef TARGET_ARM64
-	if (ptype == llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())) || ptype == llvm::wrap (llvm::Type::getInt16Ty (ctx->llvm_ctx ()))) {
+	if (ptype == llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ())) || ptype == llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ()))) {
 		/* 
 		 * LLVM generates code which only sets the lower bits, while JITted
 		 * code expects all the bits to be set.
 		 */
-		ptype = llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ()));
+		ptype = llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	}
 #endif
 

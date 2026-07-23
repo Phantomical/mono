@@ -233,12 +233,12 @@ emit_volatile_store (EmitContext *ctx, int vreg)
 
 	if (var && var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT)) {
 		g_assert (ctx->addresses [vreg]);
-		llvm::wrap (ctx->builder->CreateStore (ctx->convert (ctx->values [vreg], llvm::unwrap (type_to_llvm_type (ctx, var->inst_vtype))), ctx->addresses [vreg]->value));
+		llvm::wrap (ctx->builder->CreateStore (ctx->convert (ctx->values [vreg], llvm::unwrap (ctx->type_to_llvm_type (var->inst_vtype))), ctx->addresses [vreg]->value));
 	}
 }
 
-static LLVMTypeRef
-sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
+LLVMTypeRef
+EmitContext::sig_to_llvm_sig_no_cinfo (MonoMethodSignature *sig)
 {
 	LLVMTypeRef ret_type;
 	LLVMTypeRef *param_types = nullptr;
@@ -246,8 +246,8 @@ sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
 	int i, pindex;
 	MonoType *rtype;
 
-	ret_type = type_to_llvm_type (ctx, sig->ret);
-	if (!ctx->ok ())
+	ret_type = type_to_llvm_type (sig->ret);
+	if (!ok ())
 		return nullptr;
 	rtype = mini_get_underlying_type (sig->ret);
 
@@ -257,9 +257,9 @@ sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
 	if (sig->hasthis)
 		param_types [pindex ++] = ThisType ();
 	for (i = 0; i < sig->param_count; ++i)
-		param_types [pindex ++] = type_to_llvm_arg_type (ctx, sig->params [i]);
+		param_types [pindex ++] = type_to_llvm_arg_type (sig->params [i]);
 
-	if (!ctx->ok ()) {
+	if (!ok ()) {
 		g_free (param_types);
 		return nullptr;
 	}
@@ -277,7 +277,7 @@ sig_to_llvm_sig_no_cinfo (EmitContext *ctx, MonoMethodSignature *sig)
  * calling convention information in CINFO. Fill out the parameter mapping information in CINFO.
  */
 LLVMTypeRef
-sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *cinfo)
+EmitContext::sig_to_llvm_sig_full (MonoMethodSignature *sig, LLVMCallInfo *cinfo)
 {
 	LLVMTypeRef ret_type;
 	LLVMTypeRef *param_types = nullptr;
@@ -287,10 +287,10 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 	MonoType *rtype;
 
 	if (!cinfo)
-		return sig_to_llvm_sig_no_cinfo (ctx, sig);
+		return sig_to_llvm_sig_no_cinfo (sig);
 
-	ret_type = type_to_llvm_type (ctx, sig->ret);
-	if (!ctx->ok ())
+	ret_type = type_to_llvm_type (sig->ret);
+	if (!ok ())
 		return nullptr;
 	rtype = mini_get_underlying_type (sig->ret);
 
@@ -304,7 +304,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 			ret_type = LLVMStructType (members, 1, FALSE);
 		} else if (cinfo->ret.pair_storage [0] == LLVMArgNone && cinfo->ret.pair_storage [1] == LLVMArgNone) {
 			/* Empty struct */
-			ret_type = llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ()));
+			ret_type = llvm::wrap (llvm::Type::getVoidTy (llvm_ctx ()));
 		} else if (cinfo->ret.pair_storage [0] == LLVMArgInIReg && cinfo->ret.pair_storage [1] == LLVMArgInIReg) {
 			LLVMTypeRef members [2];
 
@@ -323,10 +323,10 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 		/* LLVM models this by returning an int */
 		if (size < TARGET_SIZEOF_VOID_P) {
 			g_assert (cinfo->ret.nslots == 1);
-			ret_type = llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), size * 8));
+			ret_type = llvm::wrap (llvm::Type::getIntNTy (llvm_ctx (), size * 8));
 		} else {
 			g_assert (cinfo->ret.nslots == 1 || cinfo->ret.nslots == 2);
-			ret_type = llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), cinfo->ret.nslots * sizeof (target_mgreg_t) * 8));
+			ret_type = llvm::wrap (llvm::Type::getIntNTy (llvm_ctx (), cinfo->ret.nslots * sizeof (target_mgreg_t) * 8));
 		}
 		break;
 	}
@@ -339,20 +339,20 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 
 		/* Have to create our own structure since we don't map fp structures to LLVM fp structures yet */
 		for (i = 0; i < cinfo->ret.nslots; ++i)
-			members [i] = cinfo->ret.esize == 8 ? llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())) : llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()));
+			members [i] = cinfo->ret.esize == 8 ? llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ())) : llvm::wrap (llvm::Type::getFloatTy (llvm_ctx ()));
 		ret_type = LLVMStructType (members, cinfo->ret.nslots, FALSE);
 		break;
 	}
 	case LLVMArgVtypeByRef:
 		/* Vtype returned using a hidden argument */
-		ret_type = llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ()));
+		ret_type = llvm::wrap (llvm::Type::getVoidTy (llvm_ctx ()));
 		break;
 	case LLVMArgVtypeRetAddr:
 	case LLVMArgGsharedvtFixed:
 	case LLVMArgGsharedvtFixedVtype:
 	case LLVMArgGsharedvtVariable:
 		vretaddr = true;
-		ret_type = llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ()));
+		ret_type = llvm::wrap (llvm::Type::getVoidTy (llvm_ctx ()));
 		break;
 	default:
 		break;
@@ -367,22 +367,22 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 		 * this is only used on arm64 which has a dedicated struct return register.
 		 */
 		cinfo->vret_arg_pindex = pindex;
-		param_types [pindex] = type_to_llvm_arg_type (ctx, sig->ret);
-		if (!ctx->ok ()) {
+		param_types [pindex] = type_to_llvm_arg_type (sig->ret);
+		if (!ok ()) {
 			g_free (param_types);
 			return nullptr;
 		}
-		param_types [pindex] = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
+		param_types [pindex] = llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
 		pindex ++;
 	}
 	if (cinfo->rgctx_arg) {
 		cinfo->rgctx_arg_pindex = pindex;
-		param_types [pindex] = ctx->module->ptr_type;
+		param_types [pindex] = module->ptr_type;
 		pindex ++;
 	}
 	if (cinfo->imt_arg) {
 		cinfo->imt_arg_pindex = pindex;
-		param_types [pindex] = ctx->module->ptr_type;
+		param_types [pindex] = module->ptr_type;
 		pindex ++;
 	}
 	if (vretaddr) {
@@ -427,7 +427,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 			for (j = 0; j < 2; ++j) {
 				switch (ainfo->pair_storage [j]) {
 				case LLVMArgInIReg:
-					param_types [pindex ++] = llvm::wrap (llvm::Type::getIntNTy (ctx->llvm_ctx (), TARGET_SIZEOF_VOID_P * 8));
+					param_types [pindex ++] = llvm::wrap (llvm::Type::getIntNTy (llvm_ctx (), TARGET_SIZEOF_VOID_P * 8));
 					break;
 				case LLVMArgNone:
 					break;
@@ -437,25 +437,25 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 			}
 			break;
 		case LLVMArgVtypeByVal:
-			param_types [pindex] = type_to_llvm_arg_type (ctx, ainfo->type);
-			if (!ctx->ok ())
+			param_types [pindex] = type_to_llvm_arg_type (ainfo->type);
+			if (!ok ())
 				break;
-			param_types [pindex] = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
+			param_types [pindex] = llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
 			pindex ++;
 			break;
 		case LLVMArgAsIArgs:
 			if (ainfo->esize == 8)
-				param_types [pindex] = LLVMArrayType (llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())), ainfo->nslots);
+				param_types [pindex] = LLVMArrayType (llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ())), ainfo->nslots);
 			else
 				param_types [pindex] = LLVMArrayType (IntPtrType (), ainfo->nslots);
 			pindex ++;
 			break;
 		case LLVMArgVtypeAddr:
 		case LLVMArgVtypeByRef:
-			param_types [pindex] = type_to_llvm_arg_type (ctx, ainfo->type);
-			if (!ctx->ok ())
+			param_types [pindex] = type_to_llvm_arg_type (ainfo->type);
+			if (!ok ())
 				break;
-			param_types [pindex] = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
+			param_types [pindex] = llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
 			pindex ++;
 			break;
 		case LLVMArgAsFpArgs: {
@@ -463,9 +463,9 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 
 			/* Emit dummy fp arguments if needed so the rest is passed on the stack */
 			for (j = 0; j < ainfo->ndummy_fpargs; ++j)
-				param_types [pindex ++] = llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ()));
+				param_types [pindex ++] = llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ()));
 			for (j = 0; j < ainfo->nslots; ++j)
-				param_types [pindex ++] = ainfo->esize == 8 ? llvm::wrap (llvm::Type::getDoubleTy (ctx->llvm_ctx ())) : llvm::wrap (llvm::Type::getFloatTy (ctx->llvm_ctx ()));
+				param_types [pindex ++] = ainfo->esize == 8 ? llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ())) : llvm::wrap (llvm::Type::getFloatTy (llvm_ctx ()));
 			break;
 		}
 		case LLVMArgVtypeAsScalar:
@@ -473,17 +473,17 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 			break;
 		case LLVMArgGsharedvtFixed:
 		case LLVMArgGsharedvtFixedVtype:
-			param_types [pindex ++] = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
+			param_types [pindex ++] = llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
 			break;
 		case LLVMArgGsharedvtVariable:
-			param_types [pindex ++] = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
+			param_types [pindex ++] = llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
 			break;
 		default:
-			param_types [pindex ++] = type_to_llvm_arg_type (ctx, ainfo->type);
+			param_types [pindex ++] = type_to_llvm_arg_type (ainfo->type);
 			break;
 		}
 	}
-	if (!ctx->ok ()) {
+	if (!ok ()) {
 		g_free (param_types);
 		return nullptr;
 	}
@@ -496,9 +496,9 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 }
 
 LLVMTypeRef
-sig_to_llvm_sig (EmitContext *ctx, MonoMethodSignature *sig)
+EmitContext::sig_to_llvm_sig (MonoMethodSignature *sig)
 {
-	return sig_to_llvm_sig_full (ctx, sig, NULL);
+	return sig_to_llvm_sig_full (sig, NULL);
 }
 
 /*
@@ -1167,7 +1167,7 @@ build_named_alloca (EmitContext *ctx, MonoType *t, char const *name)
 	while (mono_is_power_of_two (align) == -1)
 		align ++;
 
-	return build_alloca_llvm_type_name (ctx, type_to_llvm_type (ctx, t), align, name);
+	return build_alloca_llvm_type_name (ctx, ctx->type_to_llvm_type (t), align, name);
 }
 
 /*
@@ -1186,13 +1186,13 @@ create_address (EmitContext *ctx, LLVMValueRef value, LLVMTypeRef type)
 Address*
 build_alloca_address (EmitContext *ctx, MonoType *t)
 {
-	return create_address (ctx, build_named_alloca (ctx, t, ""), type_to_llvm_type (ctx, t));
+	return create_address (ctx, build_named_alloca (ctx, t, ""), ctx->type_to_llvm_type (t));
 }
 
 Address*
 build_named_alloca_address (EmitContext *ctx, MonoType *t, const char *name)
 {
-	return create_address (ctx, build_named_alloca (ctx, t, name), type_to_llvm_type (ctx, t));
+	return create_address (ctx, build_named_alloca (ctx, t, name), ctx->type_to_llvm_type (t));
 }
 
 LLVMValueRef

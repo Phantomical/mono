@@ -494,7 +494,7 @@ emit_method_inner (EmitContext *ctx)
 	if (cfg->rgctx_var)
 		linfo->rgctx_arg = TRUE;
 
-	ctx->method_type = method_type = sig_to_llvm_sig_full (ctx, sig, linfo);
+	ctx->method_type = method_type = ctx->sig_to_llvm_sig_full (sig, linfo);
 	if (!ctx->ok ())
 		return;
 
@@ -600,7 +600,7 @@ emit_method_inner (EmitContext *ctx)
 		values [cfg->vret_addr->dreg] = llvm::unwrap (LLVMGetParam (method, linfo->vret_arg_pindex));
 		LLVMSetValueName (llvm::wrap (values [cfg->vret_addr->dreg]), "vret");
 		if (linfo->ret.storage == LLVMArgVtypeByRef) {
-			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_STRUCT_RET, type_to_llvm_type (ctx, sig->ret));
+			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_STRUCT_RET, ctx->type_to_llvm_type (sig->ret));
 			mono_llvm_add_param_attr (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_NO_ALIAS);
 		}
 	}
@@ -648,7 +648,7 @@ emit_method_inner (EmitContext *ctx)
 		LLVMSetValueName (LLVMGetParam (method, pindex), name);
 		g_free (name);
 		if (ainfo->storage == LLVMArgVtypeByVal)
-			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, pindex), LLVM_ATTR_BY_VAL, type_to_llvm_arg_type (ctx, ainfo->type));
+			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, pindex), LLVM_ATTR_BY_VAL, ctx->type_to_llvm_arg_type (ainfo->type));
 
 		if (ainfo->storage == LLVMArgVtypeByRef || ainfo->storage == LLVMArgVtypeAddr) {
 			/* For OP_LDADDR */
@@ -691,7 +691,7 @@ emit_method_inner (EmitContext *ctx)
 			case OP_FPHI:
 			case OP_VPHI:
 			case OP_XPHI: {
-				LLVMTypeRef phi_type = llvm_type_to_stack_type (cfg, type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass)));
+				LLVMTypeRef phi_type = llvm_type_to_stack_type (cfg, ctx->type_to_llvm_type (m_class_get_byval_arg (ins->klass)));
 				LLVMTypeRef phi_etype = nullptr;
 
 				if (!ctx->ok ())
@@ -700,7 +700,7 @@ emit_method_inner (EmitContext *ctx)
 				if (ins->opcode == OP_VPHI) {
 					/* Treat valuetype PHI nodes as operating on the address itself */
 					g_assert (ins->klass);
-					phi_etype = type_to_llvm_type (ctx, m_class_get_byval_arg (ins->klass));
+					phi_etype = ctx->type_to_llvm_type (m_class_get_byval_arg (ins->klass));
 					phi_type = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
 				}
 
