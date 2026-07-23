@@ -109,7 +109,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			return;
 		}
 
-		emit_handler_start (ctx, bb, builder);
+		ctx->emit_handler_start (bb, builder);
 		if (!ctx->ok ())
 			return;
 		builder = ctx->builder;
@@ -185,7 +185,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 
 		if (spec [MONO_INST_DEST] != 'v')
-			emit_volatile_store (ctx, ins->dreg);
+			ctx->emit_volatile_store (ins->dreg);
 	}
 
 	has_terminator = false;
@@ -245,7 +245,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			MonoInst *var = get_vreg_to_inst (cfg, ins->sreg1);
 
 			if (var && var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT) && var->opcode != OP_GSHAREDVT_ARG_REGOFFSET) {
-				lhs = llvm::unwrap (emit_volatile_load (ctx, ins->sreg1));
+				lhs = llvm::unwrap (ctx->emit_volatile_load (ins->sreg1));
 			} else {
 				/* It is ok for SETRET to have an uninitialized argument */
 				if (!values [ins->sreg1] && ins->opcode != OP_SETRET) {
@@ -261,7 +261,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		if (spec [MONO_INST_SRC2] != ' ' && spec [MONO_INST_SRC2] != 'v') {
 			MonoInst *var = get_vreg_to_inst (cfg, ins->sreg2);
 			if (var && var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT)) {
-				rhs = llvm::unwrap (emit_volatile_load (ctx, ins->sreg2));
+				rhs = llvm::unwrap (ctx->emit_volatile_load (ins->sreg2));
 			} else {
 				if (!values [ins->sreg2]) {
 					ctx->set_failure ("sreg2");
@@ -276,7 +276,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		if (spec [MONO_INST_SRC3] != ' ' && spec [MONO_INST_SRC3] != 'v') {
 			MonoInst *var = get_vreg_to_inst (cfg, ins->sreg3);
 			if (var && var->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT)) {
-				arg3 = llvm::unwrap (emit_volatile_load (ctx, ins->sreg3));
+				arg3 = llvm::unwrap (ctx->emit_volatile_load (ins->sreg3));
 			} else {
 				if (!values [ins->sreg3]) {
 					ctx->set_failure ("sreg3");
@@ -596,7 +596,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				values [ins->next->dreg] = builder->CreateZExt (cmp, llvm::Type::getInt32Ty (ctx->llvm_ctx ()), dname);
 
 				/* Add stores for volatile variables */
-				emit_volatile_store (ctx, ins->next->dreg);
+				ctx->emit_volatile_store (ins->next->dreg);
 			} else if (MONO_IS_COND_EXC (ins->next)) {
 				bool force_explicit_branch = false;
 				if (bb->region != static_cast<guint>(-1)) {
@@ -605,7 +605,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					 */
 					force_explicit_branch = true;
 				}
-				emit_cond_system_exception (ctx, bb, static_cast<const char*>(ins->next->inst_p1), llvm::wrap (cmp), force_explicit_branch);
+				ctx->emit_cond_system_exception (bb, static_cast<const char*>(ins->next->inst_p1), llvm::wrap (cmp), force_explicit_branch);
 				if (!ctx->ok ())
 					break;
 				builder = ctx->builder;
@@ -729,7 +729,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			lhs = ctx->convert (lhs, llvm::unwrap (regtype_to_llvm_type (spec [MONO_INST_DEST])));
 			rhs = ctx->convert (rhs, llvm::unwrap (regtype_to_llvm_type (spec [MONO_INST_DEST])));
 
-			emit_div_check (ctx, builder, bb, ins, lhs, rhs);
+			ctx->emit_div_check (builder, bb, ins, lhs, rhs);
 			if (!ctx->ok ())
 				break;
 			builder = ctx->builder;
@@ -868,7 +868,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				imm = llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), ins->inst_imm, false);
 			}
 
-			emit_div_check (ctx, builder, bb, ins, lhs, imm);
+			ctx->emit_div_check (builder, bb, ins, lhs, imm);
 			if (!ctx->ok ())
 				break;
 			builder = ctx->builder;
@@ -1136,7 +1136,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			v = mono_llvm_build_alloca (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), size, false)), MONO_ARCH_FRAME_ALIGNMENT, "");
 
 			if (ins->flags & MONO_INST_INIT)
-				emit_memset (ctx, builder, v, const_int32 (size), MONO_ARCH_FRAME_ALIGNMENT);
+				ctx->emit_memset (builder, v, const_int32 (size), MONO_ARCH_FRAME_ALIGNMENT);
 
 			values [ins->dreg] = llvm::unwrap (v);
 			break;
@@ -1149,7 +1149,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			v = mono_llvm_build_alloca (llvm::wrap (builder), llvm::wrap (llvm::Type::getInt8Ty (ctx->llvm_ctx ())), size, MONO_ARCH_FRAME_ALIGNMENT, "");
 
 			if (ins->flags & MONO_INST_INIT)
-				emit_memset (ctx, builder, v, size, MONO_ARCH_FRAME_ALIGNMENT);
+				ctx->emit_memset (builder, v, size, MONO_ARCH_FRAME_ALIGNMENT);
 			values [ins->dreg] = llvm::unwrap (v);
 			break;
 		}
@@ -1212,7 +1212,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			if (is_unaligned)
 				values [ins->dreg] = llvm::unwrap (mono_llvm_build_aligned_load (llvm::wrap (builder), t, addr, dname, is_volatile, 1));
 			else
-				values [ins->dreg] = llvm::unwrap (emit_load (ctx, bb, &builder, size, t, addr, base, dname, is_faulting, is_volatile, LLVM_BARRIER_NONE));
+				values [ins->dreg] = llvm::unwrap (ctx->emit_load (bb, &builder, size, t, addr, base, dname, is_faulting, is_volatile, LLVM_BARRIER_NONE));
 
 			if (!(is_faulting || is_volatile) && (ins->flags & MONO_INST_INVARIANT_LOAD)) {
 				/*
@@ -1274,7 +1274,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			if (is_unaligned)
 				mono_llvm_build_aligned_store (llvm::wrap (builder), srcval, ptrdst, is_volatile, 1);
 			else
-				emit_store (ctx, bb, &builder, size, srcval, ptrdst, base, is_faulting, is_volatile);
+				ctx->emit_store (bb, &builder, size, srcval, ptrdst, base, is_faulting, is_volatile);
 			break;
 		}
 
@@ -1310,12 +1310,12 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			if (is_unaligned)
 				mono_llvm_build_aligned_store (llvm::wrap (builder), srcval, ptrdst, is_volatile, 1);
 			else
-				emit_store (ctx, bb, &builder, size, srcval, ptrdst, base, is_faulting, is_volatile);
+				ctx->emit_store (bb, &builder, size, srcval, ptrdst, base, is_faulting, is_volatile);
 			break;
 		}
 
 		case OP_CHECK_THIS:
-			emit_load (ctx, bb, &builder, TARGET_SIZEOF_VOID_P, IntPtrType (), llvm::wrap (ctx->convert (lhs, llvm::PointerType::get (ctx->llvm_ctx (), 0))), llvm::wrap (lhs), "", TRUE, FALSE, LLVM_BARRIER_NONE);
+			ctx->emit_load (bb, &builder, TARGET_SIZEOF_VOID_P, IntPtrType (), llvm::wrap (ctx->convert (lhs, llvm::PointerType::get (ctx->llvm_ctx (), 0))), llvm::wrap (lhs), "", TRUE, FALSE, LLVM_BARRIER_NONE);
 			break;
 		case OP_OUTARG_VTRETADDR:
 			break;
@@ -1400,7 +1400,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				/* The variable contains the vtype address */
 				values [ins->dreg] = values [var->dreg];
 			} else if (var->opcode == OP_GSHAREDVT_LOCAL) {
-				values [ins->dreg] = llvm::unwrap (emit_gsharedvt_ldaddr (ctx, var->dreg));
+				values [ins->dreg] = llvm::unwrap (ctx->emit_gsharedvt_ldaddr (var->dreg));
 			} else {
 				values [ins->dreg] = addresses [var->dreg]->value;
 			}
@@ -1784,7 +1784,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			addr = llvm::wrap (ctx->convert (llvm::unwrap (addr), llvm::PointerType::get (ctx->llvm_ctx (), 0)));
 
 			ARM64_ATOMIC_FENCE_FIX;
-			values [ins->dreg] = llvm::unwrap (emit_load (ctx, bb, &builder, size, t, addr, llvm::wrap (lhs), dname, is_faulting, is_volatile, barrier));
+			values [ins->dreg] = llvm::unwrap (ctx->emit_load (bb, &builder, size, t, addr, llvm::wrap (lhs), dname, is_faulting, is_volatile, barrier));
 			ARM64_ATOMIC_FENCE_FIX;
 
 			if (sext)
@@ -1824,7 +1824,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			value = llvm::wrap (ctx->convert (values [ins->sreg1], llvm::unwrap (t)));
 
 			ARM64_ATOMIC_FENCE_FIX;
-			emit_store_general (ctx, bb, &builder, size, value, addr, base, is_faulting, is_volatile, barrier);
+			ctx->emit_store_general (bb, &builder, size, value, addr, base, is_faulting, is_volatile, barrier);
 			ARM64_ATOMIC_FENCE_FIX;
 			break;
 		}
@@ -1938,7 +1938,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			val = llvm::unwrap (call_intrins (ctx, intrins, args, ""));
 			values [ins->dreg] = builder->CreateExtractValue (val, {0}, dname);
 			ovf = llvm::wrap (builder->CreateExtractValue (val, {1}, ""));
-			emit_cond_system_exception (ctx, bb, "OverflowException", ovf, FALSE);
+			ctx->emit_cond_system_exception (bb, "OverflowException", ovf, FALSE);
 			if (!ctx->ok ())
 				break;
 			builder = ctx->builder;
@@ -1964,7 +1964,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			if (!addresses [ins->dreg])
 				addresses [ins->dreg] = build_named_alloca_address (ctx, m_class_get_byval_arg (klass), "vzero");
 			LLVMValueRef ptr = llvm::wrap (builder->CreateBitCast (addresses [ins->dreg]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), ""));
-			emit_memset (ctx, builder, ptr, const_int32 (mono_class_value_size (klass, NULL)), 0);
+			ctx->emit_memset (builder, ptr, const_int32 (mono_class_value_size (klass, NULL)), 0);
 			break;
 		}
 		case OP_DUMMY_VZERO:
@@ -2052,7 +2052,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 					MonoInst *var = get_vreg_to_inst (cfg, ins->sreg1);
 
 					if (var && var->opcode == OP_GSHAREDVT_LOCAL) {
-						addresses [ins->dreg] = ctx->create_address (llvm::wrap (ctx->convert (llvm::unwrap (emit_gsharedvt_ldaddr (ctx, var->dreg)), llvm::PointerType::get (ctx->llvm_ctx (), 0))), IntPtrType ());
+						addresses [ins->dreg] = ctx->create_address (llvm::wrap (ctx->convert (llvm::unwrap (ctx->emit_gsharedvt_ldaddr (var->dreg)), llvm::PointerType::get (ctx->llvm_ctx (), 0))), IntPtrType ());
 					} else {
 						g_assert (addresses [ins->sreg1]);
 						addresses [ins->dreg] = addresses [ins->sreg1];
@@ -4304,7 +4304,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 		case OP_THROW:
 		case OP_RETHROW: {
 			bool rethrow = (ins->opcode == OP_RETHROW);
-			emit_throw (ctx, bb, rethrow, llvm::wrap (lhs));
+			ctx->emit_throw (bb, rethrow, llvm::wrap (lhs));
 			builder = ctx->builder;
 			break;
 		}
@@ -4419,7 +4419,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 
 		/* Add stores for volatile variables */
 		if (!skip_volatile_store && spec [MONO_INST_DEST] != ' ' && spec [MONO_INST_DEST] != 'v' && !MONO_IS_STORE_MEMBASE (ins))
-			emit_volatile_store (ctx, ins->dreg);
+			ctx->emit_volatile_store (ins->dreg);
 	}
 
 	if (!ctx->ok ())

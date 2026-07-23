@@ -76,7 +76,6 @@ LLVMTypeRef sse_i1_t, sse_i2_t, sse_i4_t, sse_i8_t, sse_r4_t, sse_r8_t;
 
 static void init_jit_module (MonoDomain *domain);
 
-void emit_cond_system_exception (EmitContext *ctx, MonoBasicBlock *bb, const char *exc_type, LLVMValueRef cmp, gboolean force_explicit);
 LLVMValueRef get_intrins (EmitContext *ctx, int id);
 static void llvm_jit_finalize_method (EmitContext *ctx);
 void set_invariant_load_flag (LLVMValueRef v);
@@ -323,9 +322,6 @@ get_llvm_call_info (MonoCompile *cfg, MonoMethodSignature *sig)
 }
 
 static void
-emit_method_inner (EmitContext *ctx);
-
-static void
 free_ctx (EmitContext *ctx)
 {
 	g_free (ctx->values);
@@ -394,7 +390,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	/* Reset this as it contains values from lmodule */
 	memset (ctx->module->intrins_by_id, 0, sizeof (LLVMValueRef) * INTRINS_NUM);
 
-	emit_method_inner (ctx);
+	ctx->emit_method_inner ();
 
 	if (!ctx->ok ()) {
 		if (ctx->lmethod) {
@@ -419,22 +415,22 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	mono_loader_unlock ();
 }
 
-static void
-emit_method_inner (EmitContext *ctx)
+void
+EmitContext::emit_method_inner ()
 {
-	MonoCompile *cfg = ctx->cfg;
+	MonoCompile *cfg = this->cfg;
 	MonoMethodSignature *sig;
 	MonoBasicBlock *bb;
 	LLVMTypeRef method_type;
 	LLVMValueRef method = nullptr;
-	llvm::Value **values = ctx->values;
+	llvm::Value **values = this->values;
 	int i, max_block_num;
 	/* Indexes cfg->bblocks (guint num_bblocks) */
 	guint bb_index;
 	LLVMCallInfo *linfo;
-	LLVMModuleRef lmodule = ctx->lmodule;
+	LLVMModuleRef lmodule = this->lmodule;
 	BBInfo *bblocks;
-	std::vector<MonoBasicBlock*> &bblock_list = ctx->bblock_list;
+	std::vector<MonoBasicBlock*> &bblock_list = this->bblock_list;
 	MonoMethodHeader *header;
 	MonoExceptionClause *clause;
 	char **names;
@@ -442,7 +438,7 @@ emit_method_inner (EmitContext *ctx)
 	LLVMBasicBlockRef entry_bb = nullptr;
 
 	if (cfg->gsharedvt) {
-		ctx->set_failure ("gsharedvt");
+		this->set_failure ("gsharedvt");
 		return;
 	}
 
@@ -460,7 +456,7 @@ emit_method_inner (EmitContext *ctx)
 				fflush (stdout);
 			}
 			if (count > lcount) {
-				ctx->set_failure ("count");
+				this->set_failure ("count");
 				return;
 			}
 		}
@@ -472,34 +468,34 @@ emit_method_inner (EmitContext *ctx)
 		if (info->subtype == WRAPPER_SUBTYPE_LLVM_FUNC) {
 			g_assert (info->d.llvm_func.subtype == LLVM_FUNC_WRAPPER_GC_POLL);
 
-			method = emit_icall_cold_wrapper (ctx->module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll, FALSE);
-			ctx->lmethod = method;
-			ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, static_cast<int>(cfg->method_index));
+			method = emit_icall_cold_wrapper (this->module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll, FALSE);
+			this->lmethod = method;
+			this->module->max_method_idx = MAX (this->module->max_method_idx, static_cast<int>(cfg->method_index));
 
-			ctx->method_name = g_strdup (LLVMGetValueName (method));
-			ctx->cfg->asm_symbol = g_strdup (ctx->method_name);
+			this->method_name = g_strdup (LLVMGetValueName (method));
+			this->cfg->asm_symbol = g_strdup (this->method_name);
 
 			goto after_codegen;
 		}
 	}
 
 	sig = mono_method_signature_internal (cfg->method);
-	ctx->sig = sig;
+	this->sig = sig;
 
 	linfo = get_llvm_call_info (cfg, sig);
-	ctx->linfo = linfo;
-	if (!ctx->ok ())
+	this->linfo = linfo;
+	if (!this->ok ())
 		return;
 
 	if (cfg->rgctx_var)
 		linfo->rgctx_arg = TRUE;
 
-	ctx->method_type = method_type = ctx->sig_to_llvm_sig_full (sig, linfo);
-	if (!ctx->ok ())
+	this->method_type = method_type = this->sig_to_llvm_sig_full (sig, linfo);
+	if (!this->ok ())
 		return;
 
-	method = LLVMAddFunction (lmodule, ctx->method_name, method_type);
-	ctx->lmethod = method;
+	method = LLVMAddFunction (lmodule, this->method_name, method_type);
+	this->lmethod = method;
 
 	/*
 	 * No calling-convention override: the rgctx/imt argument is tagged
@@ -535,12 +531,12 @@ emit_method_inner (EmitContext *ctx)
 			break;
 		}
 	}
-	ctx->has_safepoints = requires_safepoint;
+	this->has_safepoints = requires_safepoint;
 
 	if (mono_threads_are_safepoints_enabled () && requires_safepoint) {
 		if (cfg->method->wrapper_type != MONO_WRAPPER_ALLOC) {
 			LLVMSetGC (method, "coreclr");
-			emit_gc_safepoint_poll (ctx->module, ctx->lmodule, cfg);
+			emit_gc_safepoint_poll (this->module, this->lmodule, cfg);
 		}
 	}
 	LLVMSetLinkage (method, LLVMPrivateLinkage);
@@ -553,12 +549,12 @@ emit_method_inner (EmitContext *ctx)
 	LLVMSetLinkage (method, LLVMExternalLinkage);
 
 	if (cfg->method->save_lmf) {
-		ctx->set_failure ("lmf");
+		this->set_failure ("lmf");
 		return;
 	}
 
 	if (sig->pinvoke && cfg->method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE) {
-		ctx->set_failure ("pinvoke signature");
+		this->set_failure ("pinvoke signature");
 		return;
 	}
 
@@ -575,7 +571,7 @@ emit_method_inner (EmitContext *ctx)
 		if (clause->flags != MONO_EXCEPTION_CLAUSE_NONE &&
 		    clause->flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
 		    clause->flags != MONO_EXCEPTION_CLAUSE_FAULT) {
-			ctx->set_failure ("filter clause (custom-emit EH does not support filters).");
+			this->set_failure ("filter clause (custom-emit EH does not support filters).");
 			return;
 		}
 	}
@@ -584,31 +580,31 @@ emit_method_inner (EmitContext *ctx)
 		mono_llvm_add_func_attr (method, LLVM_ATTR_NO_INLINE);
 
 	if (linfo->rgctx_arg) {
-		ctx->rgctx_arg = llvm::unwrap (LLVMGetParam (method, linfo->rgctx_arg_pindex));
-		ctx->rgctx_arg_pindex = linfo->rgctx_arg_pindex;
+		this->rgctx_arg = llvm::unwrap (LLVMGetParam (method, linfo->rgctx_arg_pindex));
+		this->rgctx_arg_pindex = linfo->rgctx_arg_pindex;
 		/*
 		 * We mark the rgctx parameter with the inreg attribute, which is mapped to
 		 * MONO_ARCH_RGCTX_REG in the Mono calling convention in llvm, i.e.
 		 * CC_X86_64_Mono in X86CallingConv.td.
 		 */
-		mono_llvm_add_param_attr (llvm::wrap (ctx->rgctx_arg), LLVM_ATTR_NEST);
-		LLVMSetValueName (llvm::wrap (ctx->rgctx_arg), "rgctx");
+		mono_llvm_add_param_attr (llvm::wrap (this->rgctx_arg), LLVM_ATTR_NEST);
+		LLVMSetValueName (llvm::wrap (this->rgctx_arg), "rgctx");
 	} else {
-		ctx->rgctx_arg_pindex = -1;
+		this->rgctx_arg_pindex = -1;
 	}
 	if (cfg->vret_addr) {
 		values [cfg->vret_addr->dreg] = llvm::unwrap (LLVMGetParam (method, linfo->vret_arg_pindex));
 		LLVMSetValueName (llvm::wrap (values [cfg->vret_addr->dreg]), "vret");
 		if (linfo->ret.storage == LLVMArgVtypeByRef) {
-			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_STRUCT_RET, ctx->type_to_llvm_type (sig->ret));
+			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_STRUCT_RET, this->type_to_llvm_type (sig->ret));
 			mono_llvm_add_param_attr (LLVMGetParam (method, linfo->vret_arg_pindex), LLVM_ATTR_NO_ALIAS);
 		}
 	}
 
 	if (sig->hasthis) {
-		ctx->this_arg_pindex = linfo->this_arg_pindex;
-		ctx->this_arg = llvm::unwrap (LLVMGetParam (method, linfo->this_arg_pindex));
-		values [cfg->args [0]->dreg] = ctx->this_arg;
+		this->this_arg_pindex = linfo->this_arg_pindex;
+		this->this_arg = llvm::unwrap (LLVMGetParam (method, linfo->this_arg_pindex));
+		values [cfg->args [0]->dreg] = this->this_arg;
 		LLVMSetValueName (llvm::wrap (values [cfg->args [0]->dreg]), "this");
 	}
 	if (linfo->dummy_arg)
@@ -648,7 +644,7 @@ emit_method_inner (EmitContext *ctx)
 		LLVMSetValueName (LLVMGetParam (method, pindex), name);
 		g_free (name);
 		if (ainfo->storage == LLVMArgVtypeByVal)
-			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, pindex), LLVM_ATTR_BY_VAL, ctx->type_to_llvm_arg_type (ainfo->type));
+			mono_llvm_add_param_attr_with_type (LLVMGetParam (method, pindex), LLVM_ATTR_BY_VAL, this->type_to_llvm_arg_type (ainfo->type));
 
 		if (ainfo->storage == LLVMArgVtypeByRef || ainfo->storage == LLVMArgVtypeAddr) {
 			/* For OP_LDADDR */
@@ -660,7 +656,7 @@ emit_method_inner (EmitContext *ctx)
 	max_block_num = 0;
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb)
 		max_block_num = MAX (max_block_num, bb->block_num);
-	ctx->bblocks = bblocks = g_new0 (BBInfo, max_block_num + 1);
+	this->bblocks = bblocks = g_new0 (BBInfo, max_block_num + 1);
 
 	/* Add branches between non-consecutive bblocks */
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
@@ -683,7 +679,7 @@ emit_method_inner (EmitContext *ctx)
 		char *dname;
 		char dname_buf[128];
 
-		builder = ctx->create_builder ();
+		builder = this->create_builder ();
 
 		for (ins = bb->code; ins; ins = ins->next) {
 			switch (ins->opcode) {
@@ -691,17 +687,17 @@ emit_method_inner (EmitContext *ctx)
 			case OP_FPHI:
 			case OP_VPHI:
 			case OP_XPHI: {
-				LLVMTypeRef phi_type = llvm_type_to_stack_type (cfg, ctx->type_to_llvm_type (m_class_get_byval_arg (ins->klass)));
+				LLVMTypeRef phi_type = llvm_type_to_stack_type (cfg, this->type_to_llvm_type (m_class_get_byval_arg (ins->klass)));
 				LLVMTypeRef phi_etype = nullptr;
 
-				if (!ctx->ok ())
+				if (!this->ok ())
 					return;
 
 				if (ins->opcode == OP_VPHI) {
 					/* Treat valuetype PHI nodes as operating on the address itself */
 					g_assert (ins->klass);
-					phi_etype = ctx->type_to_llvm_type (m_class_get_byval_arg (ins->klass));
-					phi_type = llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0));
+					phi_etype = this->type_to_llvm_type (m_class_get_byval_arg (ins->klass));
+					phi_type = llvm::wrap (llvm::PointerType::get (this->llvm_ctx (), 0));
 				}
 
 				/* 
@@ -713,9 +709,9 @@ emit_method_inner (EmitContext *ctx)
 				values [ins->dreg] = builder->CreatePHI (llvm::unwrap (phi_type), 0, dname);
 
 				if (ins->opcode == OP_VPHI)
-					ctx->addresses [ins->dreg] = ctx->create_address (llvm::wrap (values [ins->dreg]), phi_etype);
+					this->addresses [ins->dreg] = this->create_address (llvm::wrap (values [ins->dreg]), phi_etype);
 
-				ctx->phi_values.push_back (values [ins->dreg]);
+				this->phi_values.push_back (values [ins->dreg]);
 
 				/* 
 				 * Set the expected type of the incoming arguments since these have
@@ -726,8 +722,8 @@ emit_method_inner (EmitContext *ctx)
 					
 					if (sreg1 != -1) {
 						if (ins->opcode == OP_VPHI)
-							ctx->is_vphi [sreg1] = TRUE;
-						ctx->vreg_types [sreg1] = llvm::unwrap (phi_type);
+							this->is_vphi [sreg1] = TRUE;
+						this->vreg_types [sreg1] = llvm::unwrap (phi_type);
 					}
 				}
 				break;
@@ -762,21 +758,21 @@ emit_method_inner (EmitContext *ctx)
 	 * Second pass: generate code.
 	 */
 	// Emit entry point
-	entry_builder = ctx->create_builder ();
-	entry_bb = ctx->get_bb (cfg->bb_entry);
+	entry_builder = this->create_builder ();
+	entry_bb = this->get_bb (cfg->bb_entry);
 	entry_builder->SetInsertPoint (llvm::unwrap (entry_bb));
-	emit_entry_bb (ctx, entry_builder);
+	emit_entry_bb (entry_builder);
 
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
 		int clause_index;
 		char name [128];
 
-		if (ctx->cfg->interp_entry_only || !(bb->region != static_cast<guint>(-1) && (bb->flags & BB_EXCEPTION_HANDLER)))
+		if (this->cfg->interp_entry_only || !(bb->region != static_cast<guint>(-1) && (bb->flags & BB_EXCEPTION_HANDLER)))
 			continue;
 
 		clause_index = MONO_REGION_CLAUSE_INDEX (bb->region);
-		ctx->region_to_handler [mono_get_block_region_notry (cfg, bb->region)] = bb;
-		ctx->clause_to_handler [clause_index] = bb;
+		this->region_to_handler [mono_get_block_region_notry (cfg, bb->region)] = bb;
+		this->clause_to_handler [clause_index] = bb;
 
 		/*
 		 * Create a new bblock which CALL_HANDLER/landing pads can branch to, because branching to the
@@ -784,7 +780,7 @@ emit_method_inner (EmitContext *ctx)
 		 * LLVM optimizer passes.
 		 */
 		sprintf (name, "BB%d_CALL_HANDLER_TARGET", bb->block_num);
-		ctx->bblocks [bb->block_num].call_handler_target_bb = LLVMAppendBasicBlock (ctx->lmethod, name);
+		this->bblocks [bb->block_num].call_handler_target_bb = LLVMAppendBasicBlock (this->lmethod, name);
 	}
 
 	for (MonoBasicBlock *bb : bblock_list) {
@@ -792,8 +788,8 @@ emit_method_inner (EmitContext *ctx)
 		if (!(bb == cfg->bb_entry || bb->in_count > 0))
 			continue;
 
-		process_bb (ctx, bb);
-		if (!ctx->ok ())
+		process_bb (this, bb);
+		if (!this->ok ())
 			return;
 	}
 	mono_memory_barrier ();
@@ -813,9 +809,9 @@ emit_method_inner (EmitContext *ctx)
 			if (sreg1 == -1)
 				continue;
 
-			in_bb = ctx->get_end_bb (node->in_bb);
+			in_bb = this->get_end_bb (node->in_bb);
 
-			if (ctx->unreachable [node->in_bb->block_num])
+			if (this->unreachable [node->in_bb->block_num])
 				continue;
 
 			if (phi->opcode == OP_VPHI) {
@@ -825,18 +821,18 @@ emit_method_inner (EmitContext *ctx)
 				 * instead -- this is the only check that an incoming address's
 				 * pointee matches the type the VPHI was created with.
 				 */
-				g_assert (ctx->addresses [sreg1]);
-				g_assert (ctx->addresses [phi->dreg]);
-				g_assert (ctx->addresses [sreg1]->type == ctx->addresses [phi->dreg]->type);
-				llvm::cast<llvm::PHINode> (values [phi->dreg])->addIncoming (ctx->addresses [sreg1]->value, llvm::unwrap (in_bb));
+				g_assert (this->addresses [sreg1]);
+				g_assert (this->addresses [phi->dreg]);
+				g_assert (this->addresses [sreg1]->type == this->addresses [phi->dreg]->type);
+				llvm::cast<llvm::PHINode> (values [phi->dreg])->addIncoming (this->addresses [sreg1]->value, llvm::unwrap (in_bb));
 			} else {
 				if (!values [sreg1]) {
 					/* Can happen with values in EH clauses */
-					ctx->set_failure ("incoming phi sreg1");
+					this->set_failure ("incoming phi sreg1");
 					return;
 				}
 				if (values [sreg1]->getType () != values [phi->dreg]->getType ()) {
-					ctx->set_failure ("incoming phi arg type mismatch");
+					this->set_failure ("incoming phi arg type mismatch");
 					return;
 				}
 				g_assert (values [sreg1]->getType () == values [phi->dreg]->getType ());
@@ -879,13 +875,13 @@ emit_method_inner (EmitContext *ctx)
 			GSList *bb_list_iter;
 			i = 0;
 			for (bb_list_iter = bb_list; bb_list_iter; bb_list_iter = g_slist_next (bb_list_iter)) {
-				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i + 1, false)), llvm::unwrap (static_cast<LLVMBasicBlockRef>(bb_list_iter->data)));
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), i + 1, false)), llvm::unwrap (static_cast<LLVMBasicBlockRef>(bb_list_iter->data)));
 				i ++;
 			}
 		}
 	}
 
-	ctx->module->max_method_idx = MAX (ctx->module->max_method_idx, static_cast<int>(cfg->method_index));
+	this->module->max_method_idx = MAX (this->module->max_method_idx, static_cast<int>(cfg->method_index));
 
 	if (mini_get_debug_options ()->llvm_disable_inlining)
 		mono_llvm_add_func_attr (method, LLVM_ATTR_NO_INLINE);
@@ -893,7 +889,7 @@ emit_method_inner (EmitContext *ctx)
 after_codegen:
 	if (cfg->verbose_level > 1) {
 		g_print ("\n*** Unoptimized LLVM IR for %s ***\n", mono_method_full_name (cfg->method, TRUE));
-		mono_llvm_dump_module (ctx->lmodule);
+		mono_llvm_dump_module (this->lmodule);
 		g_print ("***\n\n");
 	}
 
@@ -901,20 +897,20 @@ after_codegen:
 		LLVMValueRef md_args [16];
 		LLVMValueRef md_node;
 
-		md_args [0] = LLVMMDString (ctx->method_name, strlen (ctx->method_name));
-		md_args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 1, false));
+		md_args [0] = LLVMMDString (this->method_name, strlen (this->method_name));
+		md_args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), 1, false));
 		md_node = LLVMMDNode (md_args, 2);
 		LLVMAddNamedMetadataOperand (lmodule, "mono.function_indexes", md_node);
 	}
 
 	//LLVMVerifyFunction (method, 0);
-	llvm_jit_finalize_method (ctx);
+	llvm_jit_finalize_method (this);
 
-	if (ctx->module->method_to_lmethod)
-		g_hash_table_insert (ctx->module->method_to_lmethod, cfg->method, ctx->lmethod);
+	if (this->module->method_to_lmethod)
+		g_hash_table_insert (this->module->method_to_lmethod, cfg->method, this->lmethod);
 
-	if (ctx->module->idx_to_lmethod)
-		g_hash_table_insert (ctx->module->idx_to_lmethod, GINT_TO_POINTER (cfg->method_index), ctx->lmethod);
+	if (this->module->idx_to_lmethod)
+		g_hash_table_insert (this->module->idx_to_lmethod, GINT_TO_POINTER (cfg->method_index), this->lmethod);
 }
 
 /*
