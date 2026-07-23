@@ -94,13 +94,6 @@ struct CompileResult {
 	 */
 	EhFrameInfo stackmaps;
 	/*
-	 * The `.gcc_except_table` (Itanium LSDA) section of this module ({nullptr,0}
-	 * unless the translator gave the function a personalityFn and emitted an
-	 * invoke/landingpad, i.e. an EH method). Captured for diagnostics only -
-	 * production exception info comes from `.mono_lsda` below instead.
-	 */
-	EhFrameInfo gcc_except_table;
-	/*
 	 * The `.mono_lsda` section of this module ({nullptr,0} unless MonoLSDAStreamer
 	 * wrote one - i.e. an EH-bearing method whose catch clauses the C2 gather pass
 	 * resolved). This is mono's own target-neutral clause table (magic 'MLSD',

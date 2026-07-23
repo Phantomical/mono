@@ -1440,21 +1440,12 @@ EmitContext::llvm_jit_finalize_method ()
 	guint32 dwarf_eh_frame_size = 0;
 	gpointer stackmaps = nullptr;
 	guint32 stackmaps_size = 0;
-	/* The Itanium `.gcc_except_table` LLVM still emits is captured but deliberately
-	 * ignored: the custom-emit path builds cfg->llvm_ex_info from `.mono_lsda`
-	 * instead (plan 12). Kept plumbed for a future debug cross-check. */
-	gpointer gcc_except_table = nullptr;
-	guint32 gcc_except_table_size = 0;
 	/* C3 captures the `.mono_lsda` section (mono's own target-neutral clause
 	 * table); the reader below (C6) parses/publishes it into cfg->llvm_ex_info for
 	 * every admitted clause-bearing method. */
 	gpointer mono_lsda = nullptr;
 	guint32 mono_lsda_size = 0;
-	cfg->native_code = static_cast<guint8*>(mono_llvm_compile_method (this->module->mono_ee, cfg, this->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &gcc_except_table, &gcc_except_table_size, &mono_lsda, &mono_lsda_size));
-	/* The redundant Itanium `.gcc_except_table` LLVM still emits is ignored - the
-	 * custom-emit path reads the `.mono_lsda` instead (plan 12). */
-	(void) gcc_except_table;
-	(void) gcc_except_table_size;
+	cfg->native_code = static_cast<guint8*>(mono_llvm_compile_method (this->module->mono_ee, cfg, this->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &mono_lsda, &mono_lsda_size));
 	/* Stock LLVM 18 emits a standard DWARF `.eh_frame` (consumed below by the
 	 * unwind-ops transcoder), not a mono clause global, so eh_frame is always NULL
 	 * and not read here. */

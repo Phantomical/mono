@@ -133,14 +133,6 @@ struct ObjectInfo {
 	 */
 	EhFrameInfo stackmaps;
 	/*
-	 * The loaded `.gcc_except_table` (Itanium LSDA) section, or {nullptr,0} if the
-	 * module emitted none. Present only for a method LLVM gave a personalityFn and
-	 * an invoke/landingpad. Captured for diagnostics only - production exception
-	 * info comes from `.mono_lsda` below instead. Same {addr,size} shape as
-	 * eh_frame, captured by the same section-name loop.
-	 */
-	EhFrameInfo gcc_except_table;
-	/*
 	 * The loaded `.mono_lsda` section, or {nullptr,0} if the module emitted none.
 	 * This is the target-neutral, SHF_ALLOC clause table MonoLSDAStreamer writes
 	 * from the C2 gather side channel (magic 'MLSD', code-relative offsets; plan
@@ -691,14 +683,6 @@ public:
 
 				info.mono_lsda = capture_graph_section (g, ".mono_lsda");
 				info.stackmaps = capture_graph_section (g, ".llvm_stackmaps");
-				/*
-				 * The Itanium LSDA. Unlike the two above it needs no keep-live: the
-				 * .eh_frame FDE carries a keep-alive edge to it, so it survives prune
-				 * whenever its function does. Captured for parity with the RTDyld
-				 * path - the engine's gcc-except-table unit test asserts it and the
-				 * EH port's M2 decoder reads it; the mono runtime path ignores it.
-				 */
-				info.gcc_except_table = capture_graph_section (g, ".gcc_except_table");
 
 				/*
 				 * NEGATIVE TEST (always on): a section that WAS emitted this object
@@ -723,7 +707,6 @@ public:
 				slot.func_sizes = std::move (info.func_sizes);
 				slot.mono_lsda = info.mono_lsda;
 				slot.stackmaps = info.stackmaps;
-				slot.gcc_except_table = info.gcc_except_table;
 				return Error::success ();
 			});
 
@@ -2033,7 +2016,6 @@ MonoLLVMJIT::compile (Function *entry,
 				result.code_size = size_it->second;
 			result.eh_frame = info.eh_frame;
 			result.stackmaps = info.stackmaps;
-			result.gcc_except_table = info.gcc_except_table;
 			result.mono_lsda = info.mono_lsda;
 			g_object_info.erase (entry_it);
 		}
@@ -2133,7 +2115,6 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
                           gpointer *eh_frame, guint32 *code_size_out,
                           gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out,
                           gpointer *stackmaps_out, guint32 *stackmaps_size_out,
-                          gpointer *gcc_except_table_out, guint32 *gcc_except_table_size_out,
                           gpointer *mono_lsda_out, guint32 *mono_lsda_size_out)
 {
 	(void) mono_ee;
@@ -2172,10 +2153,6 @@ mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef meth
 		*stackmaps_out = (gpointer) res.stackmaps.addr;
 	if (stackmaps_size_out)
 		*stackmaps_size_out = (guint32) res.stackmaps.size;
-	if (gcc_except_table_out)
-		*gcc_except_table_out = (gpointer) res.gcc_except_table.addr;
-	if (gcc_except_table_size_out)
-		*gcc_except_table_size_out = (guint32) res.gcc_except_table.size;
 	if (mono_lsda_out)
 		*mono_lsda_out = (gpointer) res.mono_lsda.addr;
 	if (mono_lsda_size_out)
