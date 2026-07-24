@@ -845,11 +845,30 @@ get_handler_clause (MonoCompile *cfg, MonoBasicBlock *bb)
 	if (bb->region != (guint)-1 && MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))
 		return (bb->region >> 8) - 1;
 
-	/* Indirectly */
+	/*
+	 * Indirectly: bb is not itself a try block, but its IL offset falls inside
+	 * some clause's try region - e.g. bb is a catch handler that is nested inside
+	 * an enclosing finally's try. A call here that throws must reach that
+	 * enclosing clause's handler, so we return it and emit_call () turns the call
+	 * into an invoke unwinding there.
+	 *
+	 * Finally/fault clauses matter as much as catches: unlike tier-0 (which
+	 * derives a finally's native try range straight from IL offsets, so it
+	 * naturally spans a nested catch handler), the LLVM tier only covers a PC
+	 * with a clause when an actual invoke/landingpad edge puts it there. Omitting
+	 * finally/fault here leaves the throw from a catch handler nested in a finally
+	 * uncovered, so the finally never runs on that unwind. Clauses are sorted
+	 * innermost-first, so the first try region that contains bb is the innermost
+	 * one - exactly the handler the throw should reach.
+	 */
 	for (i = 0; i < header->num_clauses; ++i) {
 		clause = &header->clauses [i];
-			   
-		if (MONO_OFFSET_IN_CLAUSE (clause, bb->real_offset) && clause->flags == MONO_EXCEPTION_CLAUSE_NONE)
+
+		if (!MONO_OFFSET_IN_CLAUSE (clause, bb->real_offset))
+			continue;
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE ||
+		    clause->flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+		    clause->flags == MONO_EXCEPTION_CLAUSE_FAULT)
 			return i;
 	}
 
