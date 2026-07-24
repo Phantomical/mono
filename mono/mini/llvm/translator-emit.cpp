@@ -1364,6 +1364,8 @@ emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitI
 	name = g_strdup_printf ("%s_icall_cold_wrapper_%d", module->global_prefix, icall_id);
 
 	func = LLVMAddFunction (lmodule, name, LLVMFunctionType (llvm::wrap (llvm::Type::getVoidTy (llvm_global_ctx ())), NULL, 0, FALSE));
+	/* 64 bytes matches the x86-64 cache line; JITLink honors this as the section alignment when placing the compiled code. */
+	LLVMSetAlignment (func, 64);
 	sig = LLVMFunctionType (llvm::wrap (llvm::Type::getVoidTy (llvm_global_ctx ())), NULL, 0, FALSE);
 	LLVMSetLinkage (func, LLVMInternalLinkage);
 	mono_llvm_add_func_attr (func, LLVM_ATTR_NO_INLINE);

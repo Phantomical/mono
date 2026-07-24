@@ -563,6 +563,8 @@ EmitContext::emit_method_inner ()
 		return;
 
 	method = LLVMAddFunction (lmodule, this->method_name, method_type);
+	/* 64 bytes matches the x86-64 cache line; JITLink honors this as the section alignment when placing the compiled code. */
+	LLVMSetAlignment (method, 64);
 	this->lmethod = method;
 
 	/*
