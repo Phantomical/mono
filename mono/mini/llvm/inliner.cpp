@@ -37,6 +37,13 @@
  *     namespaced per inlined callee;
  *   - not `noinline` (covers clause-bearing/user-NoInlining/reflection-frame
  *     callees, which the translator already tags);
+ *   - does not read/write class-init-guarded static state - a callee whose body
+ *     touches a static field of a class with a non-trivial cctor. Inlining drops
+ *     the class-init barrier its own managed call carried, so the static read
+ *     can see a value from before the cctor ran (a silent miscompile). The
+ *     barrier is often elided in the materialized body (beforefieldinit /
+ *     same-class access), so this is decided from the callee's metadata, not
+ *     from a class-init call the leaf gate could see;
  *   - leaf (the body makes no non-intrinsic calls);
  *   - and the invoke / musttail guards kept from S0.
  * The rgctx and EH exclusions are hard safety gates; getting them wrong is a
@@ -322,6 +329,18 @@ MonoTopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			void *target = candidate_target (*cs, decl);
 			if (!target)
 				continue;
+
+			/*
+			 * Refuse a callee that reads/writes class-init-guarded static state.
+			 * Inlining it would drop the class-init barrier its own managed call
+			 * carries - a silent miscompile (a stale static read). Decided from
+			 * the callee's metadata because the barrier is frequently elided in
+			 * the materialized body, so the leaf gate below cannot see it.
+			 */
+			if (callee_reads_cctor_guarded_static (target)) {
+				trace ("refuse-cctor", decl->getName ());
+				continue;
+			}
 
 			/* Materialize (cached): pull the callee body into this module. */
 			Function *body;

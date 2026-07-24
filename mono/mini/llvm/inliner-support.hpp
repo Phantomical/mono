@@ -59,6 +59,17 @@ void *managed_method_from_symbol (const char *sym);
  */
 llvm::Function *materialize_callee (void *target, void *root_cfg, llvm::Module *into);
 
+/*
+ * Whether TARGET (an opaque MonoMethod *) reads or writes a static field of a
+ * class that still needs its cctor to run - i.e. an accessor of class-init-
+ * guarded static state. Inlining such a callee drops the class-init barrier that
+ * its own managed call would have carried, so the inliner must refuse it. This
+ * is decided from the callee's metadata, NOT from a class-init call in the
+ * materialized IR (the barrier is often elided there), and is conservative:
+ * true means "do not inline". Returns true if the body cannot be inspected.
+ */
+bool callee_reads_cctor_guarded_static (void *target);
+
 } // namespace mono
 
 #endif /* MONO_MINI_LLVM_INLINER_SUPPORT_HPP */

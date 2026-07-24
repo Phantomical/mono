@@ -13,6 +13,13 @@
 
 #include <llvm/IR/Module.h>
 
+#include <mono/metadata/metadata-internals.h>
+#include <mono/metadata/mono-endian.h>
+/* mono-basic-block.h has no extern "C" guard of its own. */
+extern "C" {
+#include <mono/metadata/mono-basic-block.h>
+}
+
 #include "mono_lsda.hpp"
 #include "inliner-support.hpp"
 
@@ -1279,6 +1286,104 @@ callee_needs_generic_context (MonoMethod *method)
 	if (sig->has_type_parameters)
 		return true;
 	return false;
+}
+
+/*
+ * True if METHOD's body reads or writes a static field of a class that still
+ * needs its cctor to run (relative to METHOD).
+ *
+ * A static-field access is normally protected by a class-init barrier, but the
+ * front-end elides that barrier inside the accessor itself in the common cases
+ * (a beforefieldinit type, an accessor defined in the field's own class, an
+ * already-initialized vtable) on the assumption the accessor is only ever
+ * reached through its own managed call - which itself carries the guarantee the
+ * cctor ran. Folding such an accessor into a caller removes that call, so the
+ * static read happens with no guarantee the cctor has run yet, yielding a stale
+ * value: a silent miscompile.
+ *
+ * We detect this from the IL/metadata rather than the materialized IR precisely
+ * because the elided case leaves NO class-init call in the body for the leaf
+ * gate to catch. This is deliberately conservative: any touch of a static field
+ * whose declaring class has a non-trivial cctor disqualifies the callee, even
+ * where the barrier would in fact have survived.
+ */
+bool
+callee_reads_cctor_guarded_static (void *target)
+{
+	MonoMethod *method = static_cast<MonoMethod *> (target);
+	if (!method)
+		return true;
+
+	/*
+	 * Only non-generic callees reach the inliner's cctor gate (generic-context
+	 * callees are refused earlier). For those the method's generic context is
+	 * empty, so field tokens resolve with a NULL context; leave the
+	 * generic-context refusal to materialize_callee ().
+	 */
+	if (callee_needs_generic_context (method))
+		return false;
+
+	ERROR_DECL (error);
+	MonoMethodHeader *header = mono_method_get_header_internal (method, error);
+	if (!header || !is_ok (error)) {
+		mono_error_cleanup (error);
+		return true;                 /* cannot inspect the body -> be conservative */
+	}
+
+	MonoImage *image = m_class_get_image (method->klass);
+	const unsigned char *ip = header->code;
+	const unsigned char *end = ip + header->code_size;
+
+	bool guarded = false;
+	while (ip < end) {
+		MonoOpcodeEnum il_op = MonoOpcodeEnum_Invalid;
+		const unsigned char *tmp = ip;
+		const int op_size = mono_opcode_value_and_size (&tmp, end, &il_op);
+		if (op_size <= 0)
+			break;                   /* malformed IL -> stop scanning */
+		const unsigned char *next_ip = ip + op_size;
+
+		switch (il_op) {
+		case MONO_CEE_LDFLD:
+		case MONO_CEE_LDFLDA:
+		case MONO_CEE_STFLD:
+		case MONO_CEE_LDSFLD:
+		case MONO_CEE_LDSFLDA:
+		case MONO_CEE_STSFLD: {
+			/* InlineField: a 4-byte token sits just before the next instruction. */
+			guint32 token = read32 (next_ip - 4);
+			MonoClass *fklass = NULL;
+			ERROR_DECL (ferror);
+			MonoClassField *field =
+				mono_field_from_token_checked (image, token, &fklass, NULL, ferror);
+			if (!field || !is_ok (ferror)) {
+				mono_error_cleanup (ferror);
+				guarded = true;      /* unresolved field access -> conservative */
+				break;
+			}
+			/*
+			 * LDFLD/STFLD on a static field is legal IL and the front-end treats
+			 * it as static, so gate on the field's actual staticness, not the
+			 * opcode. Use the resolved access class (fklass) for the cctor test,
+			 * exactly as the field-access path in method-to-ir.c does.
+			 */
+			MonoType *ftype = mono_field_get_type_internal (field);
+			if (ftype && (ftype->attrs & FIELD_ATTRIBUTE_STATIC) &&
+			    mono_class_needs_cctor_run (fklass ? fklass : field->parent, method))
+				guarded = true;
+			break;
+		}
+		default:
+			break;
+		}
+
+		if (guarded)
+			break;
+		ip = next_ip;
+	}
+
+	mono_metadata_free_mh (header);
+	return guarded;
 }
 
 llvm::Function *
