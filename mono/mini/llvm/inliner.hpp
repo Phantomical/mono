@@ -42,7 +42,7 @@ class MonoTopDownInlinerPass
     : public llvm::PassInfoMixin<MonoTopDownInlinerPass> {
 public:
 	MonoTopDownInlinerPass (llvm::PassBuilder &pb, llvm::OptimizationLevel level)
-	    : pb_ (pb), level_ (level)
+	    : pb_ (&pb), level_ (level)
 	{
 	}
 
@@ -50,7 +50,13 @@ public:
 	                             llvm::ModuleAnalysisManager &mam);
 
 private:
-	llvm::PassBuilder &pb_;
+	/*
+	 * Held by pointer, not reference: a reference member would delete the class's
+	 * implicit copy/move-assignment and has non-obvious lifetime/rebinding
+	 * behaviour. The PassBuilder outlives the pass (it owns the pipeline the pass
+	 * is inserted into).
+	 */
+	llvm::PassBuilder *pb_;
 	llvm::OptimizationLevel level_;
 };
 

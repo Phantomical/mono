@@ -114,8 +114,8 @@ MonoTopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		mam.getResult<FunctionAnalysisManagerModuleProxy> (m).getManager ();
 
 	FunctionPassManager fpm =
-		pb_.buildFunctionSimplificationPipeline (level_,
-		                                         ThinOrFullLTOPhase::None);
+		pb_->buildFunctionSimplificationPipeline (level_,
+		                                          ThinOrFullLTOPhase::None);
 
 	/*
 	 * Simplify the root once before we inline, so the body we clone in is the
