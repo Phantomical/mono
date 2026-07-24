@@ -32,6 +32,7 @@
 #endif
 
 #include "engine.hpp"
+#include "inliner.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1929,6 +1930,13 @@ MonoLLVMJIT::optimize (Function *func)
 	pb.registerFunctionAnalyses (fam);
 	pb.registerLoopAnalyses (lam);
 	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	/*
+	 * Slot the top-down tier-1 inliner into the otherwise-intact -O2 pipeline
+	 * at the pipeline-start extension point, before the stock CGSCC inliner.
+	 * Must be registered before the pipeline is built.
+	 */
+	register_top_down_inliner (pb);
 
 	ModulePassManager mpm =
 		pb.buildPerModuleDefaultPipeline (OptimizationLevel::O2);

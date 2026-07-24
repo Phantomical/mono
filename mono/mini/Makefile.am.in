@@ -454,6 +454,8 @@ llvm_sources = \
 	llvm/backend.h \
 	llvm/engine.hpp \
 	llvm/engine.cpp \
+	llvm/inliner.hpp \
+	llvm/inliner.cpp \
 	llvm/translator-cpp.hpp \
 	llvm/translator-cpp.cpp \
 	llvm/ehframe.cpp \
