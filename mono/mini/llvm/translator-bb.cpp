@@ -385,17 +385,39 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 						}
 					}
 				} else {
+					/*
+					 * The vtype lives in a stack slot only sizeof(vtype) bytes wide, which
+					 * can be smaller than the register-sized members we return it in (e.g. a
+					 * 2-byte Nullable returned in a single i64). Loading a whole register from
+					 * the slot reads past its end; the optimizer then refuses to forward the
+					 * narrow stores that produced the value and the return degrades to undef.
+					 * Load only each slot's valid bytes and zero-extend to the register type.
+					 */
+					int size = mono_class_value_size (mono_class_from_mono_type_internal (sig->ret), NULL);
+
 					addr = builder->CreateBitCast (addresses [ins->sreg1]->value, llvm::PointerType::get (ctx->llvm_ctx (), 0), "");
 					for (i = 0; i < 2; ++i) {
 						if (linfo->ret.pair_storage [i] == LLVMArgInIReg) {
-							LLVMValueRef indexes [2];
-							llvm::Value *part_addr;
+							llvm::Type *slot_type = llvm::unwrap (LLVMStructGetTypeAtIndex (ret_type, i));
+							int slot_offset = i * TARGET_SIZEOF_VOID_P;
+							int slot_bytes = size - slot_offset;
+							LLVMValueRef offset;
+							llvm::Value *part_addr, *part;
 
-							indexes [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false));
-							indexes [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), i, false));
-							part_addr = builder->CreateGEP (llvm::unwrap (ret_type), addr, gep_index_list (indexes, 2), "");
+							if (slot_bytes > TARGET_SIZEOF_VOID_P)
+								slot_bytes = TARGET_SIZEOF_VOID_P;
 
-							retval = builder->CreateInsertValue (retval, builder->CreateLoad (llvm::unwrap (LLVMStructGetTypeAtIndex (ret_type, i)), part_addr, ""), {(unsigned) i}, "");
+							offset = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), slot_offset, false));
+							part_addr = builder->CreateGEP (llvm::Type::getInt8Ty (ctx->llvm_ctx ()), addr, gep_index_list (&offset, 1), "");
+
+							if (slot_bytes >= TARGET_SIZEOF_VOID_P) {
+								part = builder->CreateLoad (slot_type, part_addr, "");
+							} else {
+								llvm::Type *narrow = llvm::Type::getIntNTy (ctx->llvm_ctx (), slot_bytes * 8);
+								part = builder->CreateZExt (builder->CreateLoad (narrow, part_addr, ""), slot_type, "");
+							}
+
+							retval = builder->CreateInsertValue (retval, part, {(unsigned) i}, "");
 						} else {
 							g_assert (linfo->ret.pair_storage [i] == LLVMArgNone);
 						}
