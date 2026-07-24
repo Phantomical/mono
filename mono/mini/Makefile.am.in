@@ -456,6 +456,8 @@ llvm_sources = \
 	llvm/engine.cpp \
 	llvm/inliner.hpp \
 	llvm/inliner.cpp \
+	llvm/pass-dump.hpp \
+	llvm/pass-dump.cpp \
 	llvm/translator-cpp.hpp \
 	llvm/translator-cpp.cpp \
 	llvm/ehframe.cpp \

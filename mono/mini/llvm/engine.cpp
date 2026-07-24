@@ -33,6 +33,7 @@
 
 #include "engine.hpp"
 #include "inliner.hpp"
+#include "pass-dump.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1967,7 +1968,16 @@ MonoLLVMJIT::optimize (Function *func)
 	std::unique_ptr<TargetMachine> tm =
 		cantFail (host_target_machine_builder ().createTargetMachine ());
 
-	PassBuilder pb (tm.get ());
+	/*
+	 * Registered before the PassBuilder so that if MONO_LLVM_DUMP_PASS_IR is
+	 * set, every default-pipeline pass - including the ones the PassBuilder
+	 * adds internally - gets its IR dumped after it runs. See pass-dump.hpp;
+	 * a no-op when the env var isn't set.
+	 */
+	PassInstrumentationCallbacks pic;
+	register_pass_ir_dumper (pic);
+
+	PassBuilder pb (tm.get (), PipelineTuningOptions (), std::nullopt, &pic);
 	LoopAnalysisManager lam;
 	FunctionAnalysisManager fam;
 	CGSCCAnalysisManager cgam;
