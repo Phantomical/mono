@@ -1002,6 +1002,14 @@ host_target_machine_builder ()
 	jtmb.setCodeModel (CodeModel::Small);
 	jtmb.setRelocationModel (Reloc::PIC_);
 
+	/*
+	 * If codegen ever reaches an LLVM `unreachable` anyway (a translator bug,
+	 * or UB in the IL we can't prove impossible), we want a `ud2` there
+	 * instead of silently falling through into whatever bytes follow - a
+	 * defined fault beats undefined behavior.
+	 */
+	jtmb.getOptions ().TrapUnreachable = true;
+
 	StringMap<bool> features;
 	if (sys::getHostCPUFeatures (features)) {
 		std::vector<std::string> feature_vec;
