@@ -627,6 +627,8 @@ test_sources = 			\
 	tiered-promotion.cs	\
 	tiered-decline.cs	\
 	tiered-appdomain.cs	\
+	inliner-tests.cs	\
+	inliner-fault.il	\
 	ratests.cs
 
 regtests_UNIVERSAL = \
@@ -870,6 +872,9 @@ generics.exe: generics.cs TestDriver.dll generics-variant-types.dll
 unaligned.exe: unaligned.cs TestDriver.dll MemoryIntrinsics.dll
 	$(MCS) -out:$@ $(CSFLAGS) $< -r:TestDriver.dll -r:MemoryIntrinsics.dll
 
+inliner-tests.exe: inliner-tests.cs TestDriver.dll inliner-fault.dll
+	$(MCS) -out:$@ $(CSFLAGS) $< -r:TestDriver.dll -r:inliner-fault.dll
+
 %.exe: %.cs TestDriver.dll
 	$(MCS) -out:$@ $(CSFLAGS) $< -r:TestDriver.dll
 
@@ -880,6 +885,9 @@ TestDriver.dll: $(srcdir)/TestDriver.cs $(srcdir)/TestHelpers.cs
 	$(MCS) -out:$@ -target:library $^
 
 generics-variant-types.dll: generics-variant-types.il
+	$(ILASM) -dll -output=$@ $<
+
+inliner-fault.dll: inliner-fault.il
 	$(ILASM) -dll -output=$@ $<
 
 MemoryIntrinsics.dll: MemoryIntrinsics.il
@@ -972,12 +980,19 @@ rcheck: mono $(regtests)
 # a concurrency stress program (background worker vs. Reflection.Emit / AppDomain
 # create+unload) that must run to completion without crashing while promotions
 # fire on the first call.
-tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe
+# inliner-tests.exe (inliner-tests.cs) is the differential corpus for the
+# top-down LLVM inliner (mono/mini/llvm/inliner.cpp): every test_N method's
+# expected value is the classic/tier-0-correct answer, so running it here
+# under tier 1 is itself the check that inlining did not change behaviour.
+tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_LLVM_METHOD='TieredDecline:NeverMatchesAnything' MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-decline.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm tiered-appdomain.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
 
 richeck: mono $(regtests)
 	$(INTERP_RUNTIME) --regression $(regtests)
