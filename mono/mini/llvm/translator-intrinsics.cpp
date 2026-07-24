@@ -42,15 +42,20 @@ add_intrins3 (LLVMModuleRef module, IntrinsicId id, LLVMTypeRef param1, LLVMType
 	return mono_llvm_register_overloaded_intrinsic (module, id, params, 3);
 }
 
-static void
-add_intrinsic (LLVMModuleRef module, IntrinsicId id)
+/*
+ * Declare intrinsic `id` in `module`, returning the declaration. This is
+ * get-or-insert on the LLVM side, so calling it twice for the same id on the
+ * same module hands back the same Function. Declarations are module-local:
+ * every module that references an intrinsic must declare it in that same
+ * module, or the verifier rejects the cross-module reference.
+ */
+static LLVMValueRef
+create_intrinsic (LLVMModuleRef module, IntrinsicId id)
 {
 	/* Register simple intrinsics */
 	LLVMValueRef intrins = mono_llvm_register_intrinsic (module, static_cast<IntrinsicId>(id));
-	if (intrins) {
-		g_hash_table_insert (intrins_id_to_intrins, GINT_TO_POINTER (id), intrins);
-		return;
-	}
+	if (intrins)
+		return intrins;
 
 	/* Register overloaded intrinsics */
 	switch (id) {
@@ -211,17 +216,25 @@ add_intrinsic (LLVMModuleRef module, IntrinsicId id)
 		break;
 	}
 	g_assert (intrins);
-	g_hash_table_insert (intrins_id_to_intrins, GINT_TO_POINTER (id), intrins);
+	return intrins;
+}
+
+static void
+add_intrinsic (LLVMModuleRef module, IntrinsicId id)
+{
+	g_hash_table_insert (intrins_id_to_intrins, GINT_TO_POINTER (id), create_intrinsic (module, id));
 }
 
 static LLVMValueRef
 get_intrins_from_module (LLVMModuleRef lmodule, int id)
 {
-	LLVMValueRef res;
-
-	res = static_cast<LLVMValueRef>(g_hash_table_lookup (intrins_id_to_intrins, GINT_TO_POINTER (id)));
-	g_assert (res);
-	return res;
+	/*
+	 * Declare the intrinsic in the caller's own (per-method) module. Returning a
+	 * declaration owned by some other module - e.g. the shared jit-global-module
+	 * add_intrinsics() populates - would make the method body reference a function
+	 * in another module, which the verifier rejects.
+	 */
+	return create_intrinsic (lmodule, static_cast<IntrinsicId>(id));
 }
 
 LLVMValueRef

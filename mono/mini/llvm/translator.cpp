@@ -202,6 +202,27 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 		return;
 	}
 
+	/*
+	 * Non-root-domain gate. The engine keys a compiled method's code lifetime on
+	 * cfg->domain and reclaims it wholesale when that domain unloads
+	 * (mono_llvm_jit_release_domain -> release_owner). That is correct for code
+	 * that dies with the domain, but domain-neutral methods - notably the shared
+	 * remoting/proxy invoke wrappers - are cached globally and outlive the domain
+	 * they happen to be first compiled in. Compiled into an unloadable child
+	 * domain's slab, such a method's code is freed on AppDomain.Unload while a
+	 * cached pointer to it stays live, so the next cross-domain call jumps into
+	 * reclaimed (zeroed) slab memory and crashes. The classic JIT places these
+	 * methods correctly, so decline anything compiled for a non-root domain to
+	 * tier-0. Single-AppDomain programs (all corpora, the common case) run in the
+	 * root domain and never hit this; multi-AppDomain LLVM support is deferred.
+	 */
+	if (cfg->domain && cfg->domain != mono_get_root_domain ()) {
+		TRACE_FAILURE_CFG (cfg, "non-root AppDomain: code lifetime is domain-keyed (unload reclaim hazard)");
+		cfg->exception_message = g_strdup ("non-root AppDomain (unload reclaim hazard)");
+		cfg->disable_llvm = TRUE;
+		return;
+	}
+
 	/* Diagnostic filter (MONO_LLVM_METHOD); a no-op unless the variable is set. */
 	if (llvm_method_filter_excludes (cfg->method)) {
 		TRACE_FAILURE_CFG (cfg, "not selected by MONO_LLVM_METHOD");
