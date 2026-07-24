@@ -55,6 +55,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -155,6 +158,107 @@ test_arithmetic (MonoLLVMJIT *jit)
 	auto compiled = reinterpret_cast<int64_t (*) (int64_t, int64_t)> (addr);
 	CHECK (compiled (20, 22) == 42);
 	CHECK (compiled (-5, 5) == 0);
+	return TEST_PASS;
+}
+
+/* ------------------------------------------------------------ slab residency */
+
+/*
+ * Read one "Key:" line from /proc/self/status and return its value in bytes
+ * (the file reports memory sizes in kB). Returns 0 when the field or the file
+ * is unavailable - the caller treats that as "not measurable" (a skip), not a
+ * failure.
+ */
+static uint64_t
+read_proc_status_bytes (const char *key)
+{
+	FILE *f = fopen ("/proc/self/status", "r");
+	if (!f)
+		return 0;
+	char line[256];
+	size_t key_len = strlen (key);
+	uint64_t value_kb = 0;
+	while (fgets (line, sizeof (line), f)) {
+		if (strncmp (line, key, key_len) == 0) {
+			value_kb = strtoull (line + key_len, nullptr, 10);
+			break;
+		}
+	}
+	fclose (f);
+	return value_kb * 1024;
+}
+
+/*
+ * The engine backs its object-linking layer with a bounded (~2 GiB)
+ * MapperJITLinkMemoryManager slab reservation (engine.cpp,
+ * kSlabReservationGranularity). That reservation is a single PROT_READ|WRITE
+ * anonymous mmap; Linux only backs its pages with physical frames as code is
+ * emitted into them. This test pins down that "resident on demand" property,
+ * which the design flagged as inferred from Linux's demand-paging contract
+ * rather than independently confirmed:
+ *
+ *   - reserving the slab grows the process's VIRTUAL size by ~2 GiB - proving
+ *     the reservation actually happens, so the resident-size check below is not
+ *     passing vacuously; and
+ *   - compiling a handful of small methods into it grows RESIDENT size (VmRSS)
+ *     by only O(MB), NOT by the whole ~2 GiB.
+ *
+ * Runs FIRST in the suite so its first compile () is the process's first
+ * compile - which is what triggers the slab reservation - making the
+ * virtual-size jump observable here rather than in an earlier test.
+ */
+static TestResult
+test_slab_residency (MonoLLVMJIT *jit)
+{
+	uint64_t vmsize_before = read_proc_status_bytes ("VmSize:");
+	uint64_t vmrss_before = read_proc_status_bytes ("VmRSS:");
+	if (vmsize_before == 0 || vmrss_before == 0) {
+		printf ("     /proc/self/status unavailable; residency not measurable\n");
+		return TEST_SKIP;
+	}
+
+	LLVMContext &ctx = jit->context ();
+	const int num_methods = 16;
+	for (int i = 0; i < num_methods; i++) {
+		auto module = std::make_unique<Module> ("selftest.slab", ctx);
+		Type *i64 = Type::getInt64Ty (ctx);
+		FunctionType *fty = FunctionType::get (i64, {i64}, false);
+		std::string name = "slab_fn_" + std::to_string (i);
+		Function *fn = Function::Create (fty, Function::ExternalLinkage, name,
+		                                 module.get ());
+		BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
+		IRBuilder<> b (bb);
+		Value *arg = &*fn->arg_begin ();
+		b.CreateRet (b.CreateAdd (arg, ConstantInt::get (i64, i)));
+
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		CHECK (res.entry != 0);
+		auto compiled = reinterpret_cast<int64_t (*) (int64_t)> (res.entry);
+		CHECK (compiled (100) == 100 + i);
+	}
+
+	uint64_t vmsize_after = read_proc_status_bytes ("VmSize:");
+	uint64_t vmrss_after = read_proc_status_bytes ("VmRSS:");
+
+	uint64_t vmsize_delta = vmsize_after > vmsize_before ? vmsize_after - vmsize_before : 0;
+	uint64_t vmrss_delta = vmrss_after > vmrss_before ? vmrss_after - vmrss_before : 0;
+
+	printf ("     reserved slab: VmSize +%llu MiB, VmRSS +%llu KiB across %d compiles\n",
+	        (unsigned long long) (vmsize_delta >> 20),
+	        (unsigned long long) (vmrss_delta >> 10),
+	        num_methods);
+
+	/* The reservation happened: a slab-sized (~2 GiB) chunk of address space
+	 * appeared. A 1 GiB floor tolerates the exact granularity while still
+	 * ruling out the old per-method-mmap behaviour (which would move VmSize by
+	 * only kilobytes here). */
+	CHECK (vmsize_delta >= ((uint64_t) 1 << 30));
+
+	/* ...but the slab is resident on demand: only the emitted code faulted in,
+	 * so RSS grew by megabytes - nowhere near the ~2 GiB reserved. The ceiling
+	 * sits far below the reservation to make "O(MB), not O(GiB)" unambiguous. */
+	CHECK (vmrss_delta < ((uint64_t) 256 << 20));
+
 	return TEST_PASS;
 }
 
@@ -2320,6 +2424,9 @@ test_llvm_engine_main (void)
 
 	passes = failures = skips = 0;
 
+	/* First: its initial compile is the process's first, which triggers the
+	 * slab reservation this check measures. */
+	report ("slab-residency", test_slab_residency (jit));
 	report ("arithmetic", test_arithmetic (jit));
 	report ("registered-helper", test_registered_helper (jit));
 	report ("release-owner", test_release_owner (jit));

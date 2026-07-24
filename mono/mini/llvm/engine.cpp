@@ -62,6 +62,8 @@
 #include <llvm/ExecutionEngine/Orc/IRCompileLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/Mangling.h>
+#include <llvm/ExecutionEngine/Orc/MapperJITLinkMemoryManager.h>
+#include <llvm/ExecutionEngine/Orc/MemoryMapper.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -955,12 +957,14 @@ ensure_native_target ()
  * repeated for every code->code, code->data and code->GOT reference in every
  * JITted method.
  *
- * This is correct over this engine's plain, unbounded
- * jitlink::InProcessMemoryManager (no bounded reservation, no co-location of
- * JITDylibs - see setObjectLinkingLayerCreator() below) because Small+PIC
- * never emits a bare narrow relocation straight to a target that might be
- * far away. Every reference JITLink's stock x86-64 ELF pipeline cannot prove
- * is in range is intercepted, before this engine's own reloc-audit pass runs
+ * Correctness here does not depend on where code lands: the engine backs its
+ * object-linking layer with a bounded MapperJITLinkMemoryManager slab (still
+ * no co-location of a method's JITDylib with any other's - see
+ * setObjectLinkingLayerCreator() below), but Small+PIC would be correct over
+ * any memory manager because it never emits a bare narrow relocation straight
+ * to a target that might be far away. Every reference JITLink's stock x86-64
+ * ELF pipeline cannot prove is in range is intercepted, before this engine's
+ * own reloc-audit pass runs
  * (deliberately scheduled at PostAllocation, before relaxation - see
  * classify_reloc_audit_from_graph()), by the default-added
  * PLTTableManager/GOTTableManager and rerouted through an in-graph stub or GOT
@@ -974,11 +978,10 @@ ensure_native_target ()
  * see .claude/scratch/jitlink-j5/ and accumulate_reloc_audit_from_graph()
  * below, which is where that invariant is checked on every real compile.)
  *
- * A bounded reservation (MapperJITLinkMemoryManager + a tuned granularity) so
- * more references land in-range and get relaxed - and co-locating different
- * methods' JITDylibs so cross-method calls could too - are both pure
- * size/perf follow-ups, not correctness requirements of this change; they are
- * deferred.
+ * The bounded reservation is what makes more references land in-range so
+ * optimizeGOTAndStubAccesses can relax them; co-locating different methods'
+ * JITDylibs so cross-method calls could relax too is a further size/perf
+ * follow-up, not a correctness requirement, and is still deferred.
  */
 JITTargetMachineBuilder
 host_target_machine_builder ()
@@ -1560,6 +1563,14 @@ gather_eh_sidechannel (Module &m)
 	return sc;
 }
 
+/*
+ * Size of each address-space reservation the JIT memory manager carves methods
+ * out of. Just under 2 GiB (2 GiB - 64 KiB): the strict-less-than-INT32_MAX
+ * ceiling that keeps every intra-slab displacement inside a signed 32-bit field
+ * (see the memory-manager comment in the constructor below).
+ */
+static constexpr size_t kSlabReservationGranularity = 0x7FFF0000;
+
 MonoLLVMJIT::MonoLLVMJIT ()
 	: tsctx_ (std::make_unique<LLVMContext> ())
 {
@@ -1572,7 +1583,7 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 * threads) with MonoIRCompiler. Functionally identical output today (C1); the
 	 * EH port hooks a MachineFunctionPass and a custom MCStreamer into its
 	 * pipeline (C2/C3). LLJIT hands the creator the very JITTargetMachineBuilder
-	 * set just above, so the target-machine options (code model Large, host
+	 * set just above, so the target-machine options (code model Small+PIC, host
 	 * CPU/features, O3) are preserved exactly - no re-derivation.
 	 */
 	builder.setCompileFunctionCreator (
@@ -1607,7 +1618,25 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es, const Triple &) -> Expected<std::unique_ptr<ObjectLayer>> {
-			auto mm = jitlink::InProcessMemoryManager::Create ();
+			/*
+			 * Back the layer with one bounded slab reservation, bump-allocated,
+			 * instead of the previous one-mmap-per-method InProcessMemoryManager.
+			 * MapperJITLinkMemoryManager reserves kSlabReservationGranularity of
+			 * address space up front (a single PROT_READ|WRITE anonymous mmap that
+			 * stays non-resident until code is emitted into it - Linux demand-pages
+			 * the untouched pages) and carves every compiled method out of it,
+			 * only growing with a fresh reservation if one slab fills. That bounds
+			 * the process's VMA count over a long tiered-promotion run, which the
+			 * per-method path let grow toward vm.max_map_count.
+			 *
+			 * The granularity is just under 2 GiB so any two blocks inside a single
+			 * slab stay within a signed-32-bit displacement of each other - the
+			 * range optimizeGOTAndStubAccesses needs to relax a GOT/PLT indirection
+			 * back to a direct reference. A full 2 GiB would put a block at offset 0
+			 * and one at the end exactly one byte out of range.
+			 */
+			auto mm = orc::MapperJITLinkMemoryManager::CreateWithMapper<
+				orc::InProcessMemoryMapper> (kSlabReservationGranularity);
 			if (!mm)
 				return mm.takeError ();
 			auto layer = std::make_unique<ObjectLinkingLayer> (es, std::move (*mm));

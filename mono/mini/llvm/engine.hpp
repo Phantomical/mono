@@ -434,7 +434,7 @@ EhFrameRegistryStats eh_frame_registry_stats ();
 
 /*
  * The target machine configuration the engine itself JITs with (host CPU and
- * features, O3, and LLVM's default code model - Large on x86-64 for a JIT).
+ * features, O3, and code model Small+PIC - see host_target_machine_builder ()).
  * Exposed so the test can emit a probe object through an otherwise-identical
  * target machine with only the code model varied.
  */
