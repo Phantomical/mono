@@ -19,6 +19,10 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
+#if defined (__linux__) && defined (ENABLE_LLVM)
+#include <sys/syscall.h>
+#include <linux/membarrier.h>
+#endif
 #include <math.h>
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
@@ -4220,6 +4224,59 @@ tiered_promote_declined (MonoMethod *method, MonoJitInfo *tier0_jinfo)
 }
 
 /*
+ * mini_tiered_promote_publish_code:
+ *
+ *   Make a tier-1 body that was just JIT'd by THIS thread safe to execute on every
+ * other core, and issue it before the body is published anywhere a mutator can
+ * reach it (the jit_code_hash swap below, and the redirect sled the worker arms
+ * afterwards).
+ *
+ * Tier-1 promotion is the one place mono routinely has one core write a method's
+ * code and a different core be the first to run it: the background worker compiles,
+ * a mutator redirects into the result. x86 does not make that safe on its own -
+ * the Intel SDM's cross-modifying-code rule requires the *executing* core to
+ * serialize its instruction stream between another core writing the code and
+ * fetching it, and a plain data-side release/acquire on the code pointer (which is
+ * all arming the sled is) does not do that. mono_arch_flush_icache is a no-op on
+ * amd64, so without this a mutator can fetch stale instruction bytes for the first
+ * few calls into a freshly promoted body and, e.g., silently skip an exception
+ * clause's side effects. membarrier(SYNC_CORE) forces every thread in the process
+ * through a core-serializing instruction, closing the window for whichever core
+ * actually wrote the code (ORC may materialize on a helper thread) and every core
+ * that might run it. It is a no-op on the classic path, which compiles and runs a
+ * body on the same thread.
+ */
+/* The SYNC_CORE membarrier commands are enum values in <linux/membarrier.h>, so
+ * they cannot be probed with #ifdef; fall back to their ABI-stable numbers when the
+ * (older) kernel headers used for the build predate them. __NR_membarrier IS a real
+ * macro, so it is what actually gates the feature. */
+#if defined (__linux__) && defined (ENABLE_LLVM) && defined (__NR_membarrier)
+#ifndef MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
+#define MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE (1 << 5)
+#endif
+#ifndef MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE
+#define MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE (1 << 6)
+#endif
+#define MINI_HAVE_SYNC_CORE_MEMBARRIER 1
+#endif
+
+static void
+mini_tiered_promote_publish_code (void)
+{
+#ifdef MINI_HAVE_SYNC_CORE_MEMBARRIER
+	static gint32 registered;
+
+	/* SYNC_CORE has to be registered for the process before it can be used;
+	 * registration is idempotent, so a lost CAS race just registers twice. */
+	if (!mono_atomic_load_i32 (&registered)) {
+		syscall (__NR_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);
+		mono_atomic_store_i32 (&registered, 1);
+	}
+	syscall (__NR_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);
+#endif
+}
+
+/*
  * mini_tiered_promote:
  *
  *   Recompile METHOD through LLVM and publish the result as its terminal body.
@@ -4348,6 +4405,13 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt, gboole
 	}
 
 	jinfo = cfg->jit_info;
+
+	/*
+	 * Serialize the instruction stream on every core BEFORE the body becomes
+	 * reachable, so a mutator that redirects into it on another core cannot fetch
+	 * stale instruction bytes - see mini_tiered_promote_publish_code ().
+	 */
+	mini_tiered_promote_publish_code ();
 
 	/*
 	 * mini_method_compile already added the tier-1 jinfo to the jit info table,
