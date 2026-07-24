@@ -60,8 +60,13 @@
 #include "mini-runtime.h"
 #include <mono/metadata/appdomain.h>
 #include <mono/metadata/threads.h>
+#include <mono/metadata/class-internals.h>
+#include <mono/metadata/class-inlines.h>
+#include <mono/metadata/metadata-internals.h>
+#include <mono/metadata/marshal.h>
 #include <mono/utils/atomic.h>
 #include <mono/utils/mono-coop-mutex.h>
+#include <mono/utils/mono-threads-coop.h>
 #include <mono/utils/mono-lazy-init.h>
 #include <mono/utils/mono-time.h>
 #include <mono/utils/w32api.h>
@@ -377,6 +382,177 @@ static void tiered_worker_ensure_started (void);
 static void tiered_worker_signal (void);
 
 /*
+ * Depth cap on the recursive dynamic-metadata scan below. Generic
+ * instantiations nest (List<List<...>>), so rather than chase an arbitrarily
+ * deep type we stop and treat it as "touches dynamic". A bounded, conservative
+ * answer is always safe here - a false decline only costs one tier-1 body.
+ */
+#define TIERED_DYNAMIC_SCAN_MAX_DEPTH 8
+
+static gboolean tiered_type_touches_dynamic (MonoType *type, int depth);
+
+/*
+ * TRUE if KLASS is defined in a dynamic (Reflection.Emit) image, or is a
+ * generic instantiation any of whose type arguments is (or reaches) one.
+ *
+ * The container of a ginst can live in a perfectly ordinary image - e.g.
+ * Dictionary<,> in mscorlib - while a type argument is a dynamic type, so the
+ * arguments have to be walked even when the class's own image is normal.
+ */
+static gboolean
+tiered_class_touches_dynamic (MonoClass *klass, int depth)
+{
+	if (!klass || depth > TIERED_DYNAMIC_SCAN_MAX_DEPTH)
+		return TRUE;
+
+	if (image_is_dynamic (m_class_get_image (klass)))
+		return TRUE;
+
+	if (mono_class_is_ginst (klass)) {
+		MonoGenericClass *gclass = mono_class_get_generic_class (klass);
+		if (!gclass)
+			return TRUE;
+		MonoGenericInst *inst = gclass->context.class_inst;
+		if (inst) {
+			for (guint i = 0; i < inst->type_argc; ++i)
+				if (tiered_type_touches_dynamic (inst->type_argv [i], depth + 1))
+					return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+/* TRUE if any type argument in INST is, contains, or is parameterized over a
+ * dynamic type. */
+static gboolean
+tiered_inst_touches_dynamic (MonoGenericInst *inst, int depth)
+{
+	if (!inst)
+		return FALSE;
+	if (depth > TIERED_DYNAMIC_SCAN_MAX_DEPTH)
+		return TRUE;
+
+	for (guint i = 0; i < inst->type_argc; ++i)
+		if (tiered_type_touches_dynamic (inst->type_argv [i], depth + 1))
+			return TRUE;
+
+	return FALSE;
+}
+
+/*
+ * TRUE if TYPE is, contains, or is parameterized over a type from a dynamic
+ * image. Walks element types (pointers, arrays) and generic arguments so a
+ * dynamic type buried inside e.g. Foo<Bar<Dynamic>>[] is still found. Type
+ * parameters (VAR/MVAR) and primitives reach nothing dynamic and return FALSE.
+ */
+static gboolean
+tiered_type_touches_dynamic (MonoType *type, int depth)
+{
+	if (!type || depth > TIERED_DYNAMIC_SCAN_MAX_DEPTH)
+		return TRUE;
+
+	switch (type->type) {
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_VALUETYPE:
+		return tiered_class_touches_dynamic (type->data.klass, depth + 1);
+	case MONO_TYPE_GENERICINST: {
+		MonoGenericClass *gclass = type->data.generic_class;
+		if (!gclass)
+			return TRUE;
+		if (tiered_class_touches_dynamic (gclass->container_class, depth + 1))
+			return TRUE;
+		return tiered_inst_touches_dynamic (gclass->context.class_inst, depth + 1);
+	}
+	case MONO_TYPE_PTR:
+		return tiered_type_touches_dynamic (type->data.type, depth + 1);
+	case MONO_TYPE_SZARRAY:
+		return tiered_class_touches_dynamic (type->data.klass, depth + 1);
+	case MONO_TYPE_ARRAY:
+		return type->data.array ? tiered_class_touches_dynamic (type->data.array->eklass, depth + 1) : TRUE;
+	default:
+		return FALSE;
+	}
+}
+
+/*
+ * TRUE when METHOD must NOT be promoted to tier 1 - it stays at tier 0 forever.
+ *
+ * This is the whole tier-1 decline decision, and it is deliberately made HERE,
+ * at enqueue, on the mutator thread that owns METHOD's metadata. Every read
+ * below - the declaring class, the generic context, the signature, a wrapper's
+ * resolved target - is stable on this thread but a data race on the background
+ * worker, which runs on a foreign thread concurrently with the Reflection.Emit
+ * that keeps mutating dynamic metadata and the GC that moves the managed
+ * builder objects behind it. So the worker does none of this: a declined
+ * method is simply never queued (see tiered_enqueue ()), and the worker only
+ * ever compiles methods this function has already cleared.
+ *
+ * Conservative throughout - when a lookup fails or a type is too deep to scan,
+ * decline. A false decline only leaves a method at tier 0; a false accept is a
+ * memory-safety bug on the worker.
+ *
+ * Declines:
+ *   - anything not in the root domain: a non-root app-domain is transient and
+ *     can unload out from under a background compile, and its per-domain tier-1
+ *     trampolines would dangle in the process-global direct-call symbol cache
+ *     (engine.cpp) after that unload.
+ *   - Reflection.Emit metadata: a DynamicMethod; a method in a dynamic image; a
+ *     generic method or class instantiated over a dynamic type argument; a
+ *     method whose signature names a dynamic type; or a wrapper whose target is
+ *     any of those.
+ */
+static gboolean
+tiered_method_should_decline (MonoMethod *method, MonoDomain *domain)
+{
+	if (!method)
+		return TRUE;
+
+	/* Root domain is the only one with process-lifetime code/trampoline
+	 * stability; NULL or any child domain declines. */
+	if (domain != mono_get_root_domain ())
+		return TRUE;
+
+	if (method_is_dynamic (method))
+		return TRUE;
+
+	/* Declaring class: covers a dynamic image directly, and a generic class
+	 * instantiated over a dynamic type argument (Dictionary<string, Dynamic>). */
+	if (tiered_class_touches_dynamic (method->klass, 0))
+		return TRUE;
+
+	/* Method-level generic arguments (SomeClass::Bar<Dynamic> ()). */
+	MonoGenericContext *ctx = mono_method_get_context (method);
+	if (ctx && tiered_inst_touches_dynamic (ctx->method_inst, 0))
+		return TRUE;
+
+	/* Signature - a dynamic return or parameter type. */
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+	if (!sig)
+		return TRUE;
+	if (tiered_type_touches_dynamic (sig->ret, 0))
+		return TRUE;
+	for (int i = 0; i < sig->param_count; ++i)
+		if (tiered_type_touches_dynamic (sig->params [i], 0))
+			return TRUE;
+
+	/* A wrapper (e.g. the runtime-invoke wrapper MethodInfo.Invoke builds) whose
+	 * resolved target is dynamic. Resolving the target is a mutator-thread read
+	 * of the wrapper's own metadata, safe here for the same reason as the rest. */
+	if (method->wrapper_type != MONO_WRAPPER_NONE) {
+		MonoMethod *target = mono_marshal_method_from_wrapper (method);
+		if (target && target != method) {
+			if (method_is_dynamic (target))
+				return TRUE;
+			if (tiered_class_touches_dynamic (target->klass, 0))
+				return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+/*
  * Queue METHOD for tier 1 and wake the background compile worker. Ignored if
  * the method is already promoted or latched terminal. CTR is the counter
  * block mini_tiered_count_reached () was called with, which the worker arms
@@ -391,6 +567,20 @@ tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt, MiniTieredC
 	gboolean queued = FALSE;
 
 	if (!mono_llvm_tiered_enabled () || !method)
+		return;
+
+	/*
+	 * Decide here, on the mutator that owns METHOD's metadata, whether tier 1
+	 * must decline it - the background worker cannot make this call safely (it
+	 * would race Reflection.Emit / GC; see tiered_method_should_decline ()). A
+	 * declined method is latched at tier 0 by never being queued at all: the
+	 * tier-0 counter's saturating increment already stops it re-crossing the
+	 * threshold, so no state record is needed to hold it down, and NOT recording
+	 * one avoids a dangling MonoMethod* -> record for a dynamic or non-root
+	 * method whose key can die with its image or domain before we would ever
+	 * purge it.
+	 */
+	if (tiered_method_should_decline (method, domain))
 		return;
 
 	mono_os_mutex_lock (&tiered_mutex);
@@ -647,6 +837,12 @@ static volatile gboolean tiered_worker_shutdown;
 /* Set by tiered_worker_main () under tiered_worker_mutex, just before it
  * returns, and signalled on the same doorbell - see mono_llvm_tiered_shutdown (). */
 static volatile gboolean tiered_worker_exited;
+/*
+ * The worker's internal thread, kept from tiered_worker_start () so
+ * mono_llvm_tiered_shutdown () can wait on its handle for a full OS-level exit -
+ * tiered_worker_exited alone is set too early to know the thread is truly gone.
+ */
+static MonoInternalThread *tiered_worker_thread;
 
 static gsize WINAPI tiered_worker_main (gpointer unused);
 
@@ -658,7 +854,7 @@ tiered_worker_start (void)
 	mono_coop_mutex_init (&tiered_worker_mutex);
 	mono_coop_cond_init (&tiered_worker_wake);
 
-	mono_thread_create_internal (mono_get_root_domain (), tiered_worker_main, NULL, MONO_THREAD_CREATE_FLAGS_THREADPOOL, error);
+	tiered_worker_thread = mono_thread_create_internal (mono_get_root_domain (), tiered_worker_main, NULL, MONO_THREAD_CREATE_FLAGS_THREADPOOL, error);
 	mono_error_assert_ok (error);
 }
 
@@ -741,6 +937,18 @@ tiered_worker_process_entry (TieredEntry *entry)
 {
 	MonoDomain *original = mono_domain_get ();
 
+	/*
+	 * Whether METHOD is safe to promote on this foreign thread was already
+	 * decided at enqueue, on the mutator (tiered_method_should_decline ()):
+	 * non-root-domain and Reflection.Emit methods are never queued, so anything
+	 * the worker dequeues is a root-domain method backed by stable, immutable
+	 * metadata. The worker therefore does no metadata classification of its own -
+	 * touching a dynamic method's declaring image or a wrapper's target here
+	 * would be exactly the off-thread race that decision exists to avoid.
+	 *
+	 * The one thing still checked below is whether the (root) domain is on its
+	 * way out, which tiered_worker_enter_domain () handles as it takes the ref.
+	 */
 	if (!tiered_worker_enter_domain (entry->domain)) {
 		/*
 		 * DOMAIN is unloading (or already gone). Nothing to do here:
@@ -847,9 +1055,22 @@ tiered_worker_main (gpointer unused)
  * function has to be the thing that actually waits, or that free can race a
  * compile that is still running.
  *
- * The wait is bounded, not infinite: a worker wedged in a pathological
+ * Two phases. First wait on tiered_worker_exited, which the worker sets as it
+ * leaves its loop. That flag alone is NOT enough to return on: the worker sets
+ * it from inside tiered_worker_main (), still several steps short of actually
+ * terminating - it has yet to run its thread-start wrapper's teardown (apartment
+ * cleanup and mono_thread_detach_internal ()). If we returned here, that teardown
+ * would run concurrently with the mono_runtime_cleanup () mini_cleanup () does
+ * next, which tears down the very thread subsystem the worker's own detach
+ * touches - a shutdown race that trips "mono_thread_internal_is_current" in
+ * mono_thread_detach_internal (). So, second, wait on the worker's thread
+ * handle, which is signalled only once the OS thread has fully exited, then reap
+ * it - the same handle-wait-then-join the finalizer thread's shutdown uses
+ * (mono_gc_cleanup ()).
+ *
+ * Both waits are bounded, not infinite: a worker wedged in a pathological
  * compile (or stuck unable to leave a domain) must not hang process exit
- * forever. If the timeout fires, this returns anyway - the residual risk is
+ * forever. If a timeout fires, this returns anyway - the residual risk is
  * exactly the use-after-free this function exists to close, just now bounded
  * to "the worker was still running after N seconds of graceful shutdown"
  * instead of "always", and left for the process teardown to race as best it
@@ -860,6 +1081,7 @@ void
 mono_llvm_tiered_shutdown (void)
 {
 	gint64 start;
+	gboolean exited;
 
 	if (!mono_llvm_tiered_enabled () || !mono_lazy_is_initialized (&tiered_worker_init))
 		return;
@@ -875,7 +1097,22 @@ mono_llvm_tiered_shutdown (void)
 			break;
 		mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, (guint32) (TIERED_SHUTDOWN_TIMEOUT_MS - elapsed));
 	}
+	exited = tiered_worker_exited;
 	mono_coop_mutex_unlock (&tiered_worker_mutex);
+
+	/*
+	 * Only wait on the handle once the worker has told us it is on its way out;
+	 * if the loop above timed out (worker still mid-compile) its handle is not
+	 * about to signal and we proceed as before. The wait runs in GC-safe mode -
+	 * it blocks, and must not hold up a GC while it does.
+	 */
+	if (exited && tiered_worker_thread && tiered_worker_thread->handle) {
+		MONO_ENTER_GC_SAFE;
+		mono_thread_info_wait_one_handle (tiered_worker_thread->handle, TIERED_SHUTDOWN_TIMEOUT_MS, FALSE);
+		MONO_EXIT_GC_SAFE;
+
+		mono_threads_add_joinable_thread ((gpointer) (gsize) MONO_UINT_TO_NATIVE_THREAD_ID (tiered_worker_thread->tid));
+	}
 }
 
 /*
@@ -991,6 +1228,20 @@ mono_llvm_tiered_promote_sync (MonoMethod *method, MonoDomain *domain, guint32 o
 	/* See the comment on tiered_ready: LLVM codegen this early would reach
 	 * domain state mini_init () hasn't finished building yet. */
 	if (!tiered_ready)
+		return NULL;
+
+	/*
+	 * The decline decision is tier-independent - it is about which methods can
+	 * ever hold a tier-1 body, not about which thread compiles it. A non-root
+	 * domain's per-domain trampolines still dangle in the process-global
+	 * direct-call symbol cache after that domain unloads, and a Reflection.Emit
+	 * body is still unstable metadata, no matter that this synchronous path runs
+	 * on the mutator that owns it. So the same gate the background enqueue uses
+	 * (tiered_method_should_decline ()) applies here too; a declined method just
+	 * stays on the tier-0 body it already has. Running it on this thread, which
+	 * owns METHOD's metadata, keeps every read stable.
+	 */
+	if (tiered_method_should_decline (method, domain))
 		return NULL;
 
 	mono_os_mutex_lock (&tiered_mutex);

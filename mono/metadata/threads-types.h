@@ -435,7 +435,7 @@ mono_thread_create_checked (MonoDomain *domain, T func, gpointer arg, MonoError 
 #endif
 
 void mono_threads_add_joinable_runtime_thread (MonoThreadInfo *thread_info);
-void mono_threads_add_joinable_thread (gpointer tid);
+MONO_EXTERN_C void mono_threads_add_joinable_thread (gpointer tid);
 void mono_threads_join_threads (void);
 void mono_thread_join (gpointer tid);
 

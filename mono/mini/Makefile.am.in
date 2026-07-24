@@ -626,6 +626,7 @@ test_sources = 			\
 	mixed.cs	\
 	tiered-promotion.cs	\
 	tiered-decline.cs	\
+	tiered-appdomain.cs	\
 	ratests.cs
 
 regtests_UNIVERSAL = \
@@ -966,11 +967,17 @@ rcheck: mono $(regtests)
 # settled-fast-path across a below-threshold, an at-threshold and a
 # heavy-promotion setting:
 #   make -C mono/mini tieredcheck
-tieredcheck: mono tiered-promotion.exe tiered-decline.exe
+#
+# tiered-appdomain.exe is the task #28 regression: not a --regression corpus but
+# a concurrency stress program (background worker vs. Reflection.Emit / AppDomain
+# create+unload) that must run to completion without crashing while promotions
+# fire on the first call.
+tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_LLVM_METHOD='TieredDecline:NeverMatchesAnything' MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-decline.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm tiered-appdomain.exe
 
 richeck: mono $(regtests)
 	$(INTERP_RUNTIME) --regression $(regtests)

@@ -840,6 +840,7 @@ typedef enum {
 	MONO_THREAD_INFO_WAIT_RET_FAILED      = -3,
 } MonoThreadInfoWaitRet;
 
+MONO_EXTERN_C
 MonoThreadInfoWaitRet
 mono_thread_info_wait_one_handle (MonoThreadHandle *handle, guint32 timeout, gboolean alertable);
 
