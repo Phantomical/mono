@@ -165,21 +165,33 @@ const char *mono_llvm_jit_resolve_symbol_name (void *addr);
 guint32   mono_llvm_jit_release_domain (MonoDomain *domain);
 
 /*
- * Tiered compilation (tiered.cpp). Tier 0 is the classic JIT; a method is
- * queued for tier 1 on a successful tier-0 compile (or, with a call-count
- * threshold set, once its tier-0 entry count crosses that threshold) and
- * promoted by a dedicated background compile thread, never on the thread
- * that queued it. All of these are no-ops unless MONO_TIERED is set.
+ * Tiered compilation (tiered.cpp). Tier 0 is the classic JIT. With a
+ * call-count threshold set, a method is queued for tier 1 once its tier-0
+ * entry count crosses that threshold and promoted by a dedicated background
+ * compile thread, never on the thread that queued it. At threshold 0 there is
+ * no queue and no background thread: mono_llvm_tiered_promote_sync () below
+ * promotes the method synchronously, on whichever thread just published its
+ * tier-0 body. All of these are no-ops unless MONO_TIERED is set.
  *
  * mini.c brackets mini_method_compile with _compile_begin/_compile_end, calls
- * _enqueue after publishing a tier-0 body, and implements mini_tiered_promote
- * (declared in mini.h) which the worker calls back into.
+ * _promote_sync after publishing a threshold-0 tier-0 body, and implements
+ * mini_tiered_promote (declared in mini.h), which both that call and the
+ * worker call back into.
  */
 gboolean  mono_llvm_tiered_enabled (void);
 void      mono_llvm_tiered_set_ready (void);
 void      mono_llvm_tiered_compile_begin (void);
 void      mono_llvm_tiered_compile_end (void);
-void      mono_llvm_tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt);
+/*
+ * MONO_TIERED_CALL_THRESHOLD == 0 only: synchronously compile METHOD to tier 1
+ * on the calling thread - the thread that just published its tier-0 body -
+ * and return its tier-1 code pointer so the caller can start running it
+ * immediately, or NULL to keep running the tier-0 body it already has (the
+ * feature is off, promotion declined or failed, or - the recursion guard -
+ * this thread is already inside another synchronous promotion). See the
+ * fuller comment on the definition in tiered.cpp.
+ */
+gpointer  mono_llvm_tiered_promote_sync (MonoMethod *method, MonoDomain *domain, guint32 opt);
 gboolean  mono_llvm_tiered_in_promotion (void);
 void      mono_llvm_tiered_promote_begin (void);
 void      mono_llvm_tiered_promote_end (void);

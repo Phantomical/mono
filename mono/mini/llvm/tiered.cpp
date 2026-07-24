@@ -2,32 +2,53 @@
  * tiered.cpp: tier-0 -> tier-1 promotion policy for the LLVM backend.
  *
  *   Tier 0 is the classic mini JIT, lazy, on first call - unchanged. A method
- *   is queued for tier 1 either eagerly (on its first successful tier-0
- *   compile, when MONO_TIERED_CALL_THRESHOLD is 0) or once its tier-0 entry
- *   count crosses that threshold (mini_tiered_count_reached (), called from
- *   the counter mono_arch_emit_prolog bakes into the tier-0 prologue). Either
- *   way, queueing only ever enqueues and wakes the background compile worker
- *   below - it never runs LLVM codegen, or the cctors a promotion compile can
- *   trigger, on the thread that queued the method.
+ *   becomes eligible for tier 1 either on its first successful tier-0 compile
+ *   (MONO_TIERED_CALL_THRESHOLD == 0) or once its tier-0 entry count crosses
+ *   the configured threshold (mini_tiered_count_reached (), called from the
+ *   counter mono_arch_emit_prolog bakes into the tier-0 prologue). Where the
+ *   LLVM compile actually runs differs between the two:
+ *
+ *     - Threshold > 0: mini_tiered_count_reached () only enqueues the method
+ *       and wakes the background compile worker below - it never runs LLVM
+ *       codegen, or the cctors a promotion compile can trigger, on the thread
+ *       that crossed the threshold. See "The queue exists..." below for why.
+ *
+ *     - Threshold == 0: the tier-0 publish site (mono_jit_compile_method_inner_1
+ *       in mini.c) calls mono_llvm_tiered_promote_sync () directly, right
+ *       there, on the thread that just finished the tier-0 compile - no
+ *       queue, no worker hop. There is also no counter block at threshold 0
+ *       to arm a redirect sled with, so the caller gets the tier-1 code
+ *       pointer back from that same call and starts running it immediately.
  *
  *   Tier 1 is terminal: if it fails - or the backend declines the method (an
  *   EH-clause, gshared or save_lmf gate) - the method latches tier-0-terminal
  *   and is never retried. "Tier 1" means that terminal body, not necessarily
  *   the LLVM body; a decline is a normal outcome, not a failure.
  *
- * The queue exists rather than promoting inline at the point a method becomes
- * eligible because mono's JIT nests: compiling a method runs class
- * initializers, which compile more methods, which run more initializers, and
- * a threshold crossing can equally fire from deep inside such a nest. A tier-0
- * frame is small, but an LLVM codegen frame is not, so promoting inline could
- * stack a full LLVM pipeline on top of however deep the nest already is. The
- * background worker sidesteps this entirely - it always compiles on its own,
- * shallow stack, regardless of what triggered the enqueue or how deep that
- * thread's own nest happened to be.
+ * The queue exists, for the threshold path, rather than promoting inline at
+ * the point a method becomes eligible, because mono's JIT nests: compiling a
+ * method runs class initializers, which compile more methods, which run more
+ * initializers, and a threshold crossing can equally fire from deep inside
+ * such a nest. A tier-0 frame is small, but an LLVM codegen frame is not, so
+ * promoting inline there could stack a full LLVM pipeline on top of however
+ * deep the nest already is. The background worker sidesteps this entirely -
+ * it always compiles on its own, shallow stack, regardless of what triggered
+ * the enqueue or how deep that thread's own nest happened to be.
+ *
+ * The threshold-0 path promotes inline anyway, but two things keep it out of
+ * that same trap: it always compiles with run_cctors = FALSE, so it can never
+ * trigger the cctor-driven nest the queue exists to dodge, and
+ * tiered_sync_active (see mono_llvm_tiered_promote_sync ()) stops a tier-0
+ * compile that DOES happen to nest inside it - LLVM codegen resolving a
+ * helper method it needs on the spot, say - from starting a promotion of its
+ * own, which would otherwise stack a second LLVM compile on the first.
  *
  * The worker is a single dedicated thread, not a pool: MonoLLVMJIT keeps some
  * unguarded per-process state (module_counter_, engine.cpp), so two
- * concurrent tier-1 compiles would race each other.
+ * concurrent tier-1 compiles would race each other. The threshold-0 path can
+ * run on any number of mutator threads at once, so it has the same
+ * requirement without the worker's built-in single-thread serialization -
+ * tiered_llvm_compile_lock (below) is what provides it there instead.
  */
 
 #include <config.h>
@@ -72,11 +93,12 @@ typedef struct {
 	MonoDomain *domain;
 	guint32 opt;
 	/*
-	 * Set only for entries that came from mini_tiered_count_reached () (the
-	 * call-count threshold path); NULL for eager (threshold == 0) entries,
-	 * which have no counter block to arm. Once mini_tiered_promote () succeeds
-	 * for an entry with a non-NULL ctr, the worker arms its redirect slot -
-	 * see tiered_worker_process_entry ().
+	 * The counter block mini_tiered_count_reached () was called with - every
+	 * entry on this queue comes from there (the call-count threshold path;
+	 * threshold 0 promotes synchronously in mini.c instead and never reaches
+	 * this queue at all), so this is always non-NULL here. Once
+	 * mini_tiered_promote () succeeds for an entry, the worker arms its
+	 * redirect slot - see tiered_worker_process_entry ().
 	 */
 	MiniTieredCounter *ctr;
 } TieredEntry;
@@ -101,12 +123,15 @@ typedef struct {
 	MonoDomain *domain;
 	TierState state;
 	/*
-	 * Mirrors the queue entry's ctr (NULL for the eager/threshold-0 path).
-	 * Kept here, past the point the queue entry itself is freed, purely so
-	 * mono_llvm_tiered_method_redirect_armed () - a test probe - can answer
-	 * "has this method's sled actually been armed" for a method whose
-	 * MiniTieredCounter would otherwise be unreachable once its TieredEntry
-	 * is gone. Nothing in the promotion path itself reads this.
+	 * Mirrors the queue entry's ctr for a threshold-path record. Always NULL
+	 * for a threshold-0 record: mono_llvm_tiered_promote_sync () never
+	 * allocates a counter block, so there is nothing to arm a sled with -
+	 * that path returns the tier-1 code pointer straight to its caller
+	 * instead. Kept here, past the point a threshold-path queue entry itself
+	 * is freed, purely so mono_llvm_tiered_method_redirect_armed () - a test
+	 * probe - can answer "has this method's sled actually been armed" for a
+	 * method whose MiniTieredCounter would otherwise be unreachable once its
+	 * TieredEntry is gone. Nothing in the promotion path itself reads this.
 	 */
 	MiniTieredCounter *ctr;
 } TieredRecord;
@@ -116,11 +141,25 @@ static GHashTable *tiered_state;	/* MonoMethod* -> TieredRecord* */
 static GQueue *tiered_queue;		/* pending TieredEntry* */
 
 /*
+ * Serializes every tier-1 LLVM compile against every other one, however it
+ * was triggered. The background worker never needed this - it is a single
+ * thread, so its compiles are already serial by construction - but
+ * mono_llvm_tiered_promote_sync () can run concurrently on as many mutator
+ * threads as happen to first-call a method at the same time, and MonoLLVMJIT
+ * keeps some unguarded per-process state (module_counter_, engine.cpp) that
+ * two concurrent compiles would race on. Held only around the compile itself,
+ * not around the queue/state bookkeeping, which has its own lock (tiered_mutex).
+ */
+static mono_mutex_t tiered_llvm_compile_lock;
+
+/*
  * Promotion is unsafe until mini_init () has finished: the domain is still
  * being constructed before that (create_domain_objects compiles methods), and
  * running LLVM codegen there reaches domain state that does not exist yet.
- * Methods compiled during startup still queue; the background worker holds
- * off on all of them until this becomes TRUE.
+ * Methods compiled during startup still queue for the threshold path; the
+ * background worker holds off on all of them until this becomes TRUE. There
+ * is no queue for the threshold-0 path, so a method compiled that early
+ * simply never gets a synchronous promotion attempt and stays at tier 0.
  */
 static gboolean tiered_ready;
 
@@ -137,15 +176,30 @@ static gboolean tiered_ready;
  */
 static __thread gboolean tiered_promote_active;
 
+/*
+ * TRUE for the whole duration of one thread's synchronous, threshold-0
+ * promotion attempt - including through any tier-0 compile that attempt
+ * itself has to trigger on the spot (LLVM codegen resolving a helper method
+ * it needs right now, say). Unlike tiered_promote_active,
+ * mono_jit_compile_method_inner () does NOT suspend/restore this around such
+ * a nested compile, so it stays visible for the whole nest: it is what stops
+ * that nested compile's own tier-0 publish from starting a promotion of its
+ * own, which would otherwise stack a second LLVM compile on top of the first
+ * with no bound but the size of the call graph the first compile happens to
+ * touch. See mono_llvm_tiered_promote_sync ().
+ */
+static __thread gboolean tiered_sync_active;
+
 static mono_lazy_init_t tiered_lazy_init = MONO_LAZY_INIT_STATUS_NOT_INITIALIZED;
 static gboolean tiered_enabled;
 
 /*
  * MONO_TIERED_CALL_THRESHOLD: how many times a tier-0 body is entered before it
- * is enqueued for tier 1. Default 1000; 0 means enqueue eagerly on first publish
- * (the pre-threshold behaviour), which is also the feature's off switch. Read
- * once in tiered_do_init () and thereafter a constant the prologue emitter bakes
- * in. Meaningless - and left 0 - unless MONO_TIERED is set.
+ * is enqueued for tier 1. Default 1000; 0 means promote synchronously on first
+ * publish instead (see mono_llvm_tiered_promote_sync ()), which is also the
+ * feature's off switch. Read once in tiered_do_init () and thereafter a constant
+ * the prologue emitter bakes in. Meaningless - and left 0 - unless MONO_TIERED
+ * is set.
  */
 static guint32 tiered_call_threshold;
 
@@ -154,10 +208,12 @@ static guint32 tiered_call_threshold;
  * prologue bakes this block's address twice - once at method entry to check
  * tier1_entry (the redirect sled), and once at the prologue tail to
  * lock-xadd count - and OPT/METHOD/DOMAIN let mini_tiered_count_reached ()
- * enqueue with exactly the arguments the eager path uses. Allocated from the
- * domain mem manager (mono_domain_alloc0, so every field starts zeroed) and
- * freed with the tier-0 code at domain unload; a re-JIT for a new domain gets
- * a fresh, zeroed counter, which is correct (promotion is per-domain).
+ * enqueue with exactly the arguments its own tier-0 compile used. Allocated
+ * from the domain mem manager (mono_domain_alloc0, so every field starts
+ * zeroed) and freed with the tier-0 code at domain unload; a re-JIT for a new
+ * domain gets a fresh, zeroed counter, which is correct (promotion is
+ * per-domain). Threshold 0 never allocates one of these at all - see
+ * mini_tiered_alloc_counter () below.
  */
 struct MiniTieredCounter {
 	/*
@@ -218,6 +274,7 @@ tiered_do_init (void)
 	if (!tiered_enabled)
 		return;
 	mono_os_mutex_init_recursive (&tiered_mutex);
+	mono_os_mutex_init (&tiered_llvm_compile_lock);
 	tiered_state = g_hash_table_new (g_direct_hash, g_direct_equal);
 	tiered_queue = g_queue_new ();
 
@@ -237,9 +294,10 @@ tiered_do_init (void)
 
 /*
  * The call-count threshold, or 0 when the feature is off (MONO_TIERED unset, or
- * MONO_TIERED_CALL_THRESHOLD=0). At 0 the prologue emits no counter and the eager
- * enqueue at the tier-0 publish site is unchanged, so behaviour is byte-identical
- * to the pre-threshold runtime.
+ * MONO_TIERED_CALL_THRESHOLD=0). At 0 the prologue emits no counter, and the
+ * tier-0 publish site promotes the method to tier 1 synchronously, right there
+ * on the compiling thread, instead of taking the counter/background-worker path
+ * below - see mono_llvm_tiered_promote_sync ().
  */
 guint32
 mono_llvm_tiered_call_threshold (void)
@@ -321,8 +379,11 @@ static void tiered_worker_signal (void);
 /*
  * Queue METHOD for tier 1 and wake the background compile worker. Ignored if
  * the method is already promoted or latched terminal. CTR is the counter
- * block to arm once the worker promotes METHOD - NULL for the eager
- * (threshold == 0) path, which has no counter block.
+ * block mini_tiered_count_reached () was called with, which the worker arms
+ * once it promotes METHOD - see tiered_worker_process_entry (). The only
+ * caller is mini_tiered_count_reached () below (the call-count threshold
+ * path), so CTR is always non-NULL in practice; threshold 0 promotes
+ * synchronously instead and never reaches this queue.
  */
 static void
 tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt, MiniTieredCounter *ctr)
@@ -352,25 +413,12 @@ tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt, MiniTieredC
 
 	/* Only wake the worker (and pay for starting it, the first time) if this
 	 * call actually added something - most calls here are the harmless repeat
-	 * enqueue mono_llvm_tiered_enqueue ()'s doc comment describes. */
+	 * enqueue mini_tiered_count_reached ()'s idempotence guard already filters
+	 * out before it ever gets here. */
 	if (queued) {
 		tiered_worker_ensure_started ();
 		tiered_worker_signal ();
 	}
-}
-
-/*
- * Queue a method that has just been compiled and published at tier 0 - the
- * eager (MONO_TIERED_CALL_THRESHOLD == 0) path, called from mini.c right
- * after a tier-0 publish. The call-count threshold path enqueues through
- * mini_tiered_count_reached () below instead, which also has a counter block
- * to arm on success; this path never does, since threshold == 0 means the
- * prologue emits no counter at all.
- */
-void
-mono_llvm_tiered_enqueue (MonoMethod *method, MonoDomain *domain, guint32 opt)
-{
-	tiered_enqueue (method, domain, opt, NULL);
 }
 
 /*
@@ -834,8 +882,8 @@ mono_llvm_tiered_shutdown (void)
  * The tier-0 prologue's cold path calls this once a method's call counter reaches
  * MONO_TIERED_CALL_THRESHOLD (see mono_arch_emit_prolog, point B). COUNTER is the
  * block mini_tiered_alloc_counter () handed the emitter; it carries the method,
- * its domain and the opt its tier-0 compile used, so the enqueue matches the
- * eager path exactly.
+ * its domain and the opt its tier-0 compile used, so the enqueue has everything
+ * it needs without going back to the crossing thread's own state.
  *
  * This only ever enqueues and wakes the background worker - it must NEVER run
  * LLVM codegen (or the cctors a promotion compile can trigger) on the crossing
@@ -904,4 +952,88 @@ void
 mono_llvm_tiered_promotion_restore (gboolean old)
 {
 	tiered_promote_active = old;
+}
+
+/*
+ * MONO_TIERED_CALL_THRESHOLD == 0 only: promote METHOD to tier 1 right here,
+ * synchronously, on the thread that just published its tier-0 body, and
+ * return the resulting tier-1 code pointer so the caller can start running it
+ * immediately. There is no counter block at threshold 0 (mini_tiered_alloc_counter ()
+ * never allocates one), hence no redirect sled to arm - handing the tier-1
+ * pointer straight back is the only way this method's own trigger call site
+ * ever ends up on tier 1.
+ *
+ * Returns NULL - "stay on the tier-0 body you already have" - when the
+ * feature is off, METHOD already has a record (should not normally happen;
+ * mini.c only calls this once per method, right after its first tier-0
+ * publish), the compile declined or failed, or promotion hasn't opened for
+ * business yet (tiered_ready, still FALSE this early only during mini_init ()
+ * itself). The recursion guard below is also a NULL case: this thread is
+ * already inside another synchronous promotion, most likely because the LLVM
+ * compile in progress needed some other method compiled on the spot and that
+ * compile's own tier-0 publish landed right back here. Promoting it too would
+ * stack a second LLVM compile on top of the first with no bound but the
+ * shape of the call graph, so it just stays at tier 0 instead - see
+ * tiered_sync_active's comment.
+ */
+gpointer
+mono_llvm_tiered_promote_sync (MonoMethod *method, MonoDomain *domain, guint32 opt)
+{
+	TieredRecord *rec;
+	gpointer code = NULL;
+
+	if (!mono_llvm_tiered_enabled () || !method)
+		return NULL;
+
+	if (tiered_sync_active)
+		return NULL;
+
+	/* See the comment on tiered_ready: LLVM codegen this early would reach
+	 * domain state mini_init () hasn't finished building yet. */
+	if (!tiered_ready)
+		return NULL;
+
+	mono_os_mutex_lock (&tiered_mutex);
+	if (g_hash_table_lookup (tiered_state, method)) {
+		mono_os_mutex_unlock (&tiered_mutex);
+		return NULL;
+	}
+	rec = g_new0 (TieredRecord, 1);
+	rec->domain = domain;
+	rec->state = TIER_STATE_TIER0;
+	g_hash_table_insert (tiered_state, method, rec);
+	mono_os_mutex_unlock (&tiered_mutex);
+
+	/*
+	 * Unlike the background worker, this thread does not need a
+	 * push-appdomain-ref dance to make DOMAIN safe to compile into: it got
+	 * here by compiling a tier-0 body for METHOD in DOMAIN a few lines up
+	 * mini.c's call stack, on this same thread, so DOMAIN is provably alive
+	 * for as long as this call runs.
+	 */
+
+	tiered_sync_active = TRUE;
+	mono_os_mutex_lock (&tiered_llvm_compile_lock);
+	/*
+	 * run_cctors = FALSE: this runs on a mutator thread, not the background
+	 * worker, but tier 1 must still see the same class-init state tier 0 did -
+	 * see mini_tiered_promote ()'s doc comment - so codegen is identical no
+	 * matter which path promoted the method. It also means this compile can't
+	 * run a cctor that turns around and asks for another synchronous
+	 * promotion, which is one less thing tiered_sync_active has to guard
+	 * against.
+	 */
+	if (mini_tiered_promote (method, domain, opt, FALSE)) {
+		MonoJitInfo *ji = mini_lookup_method (domain, method, NULL);
+
+		tiered_set_state (method, domain, TIER_STATE_PROMOTED);
+		if (ji)
+			code = ji->code_start;
+	} else {
+		tiered_set_state (method, domain, TIER_STATE_TIER0_TERMINAL);
+	}
+	mono_os_mutex_unlock (&tiered_llvm_compile_lock);
+	tiered_sync_active = FALSE;
+
+	return code;
 }

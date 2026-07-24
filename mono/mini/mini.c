@@ -93,7 +93,7 @@
 #define mono_llvm_tiered_promotion_restore(o) do { (void)(o); } while (0)
 #define mono_llvm_tiered_compile_begin() do { } while (0)
 #define mono_llvm_tiered_compile_end() do { } while (0)
-#define mono_llvm_tiered_enqueue(m,d,o) do { (void)(m); (void)(d); (void)(o); } while (0)
+#define mono_llvm_tiered_promote_sync(m,d,o) ((void)(m), (void)(d), (void)(o), (gpointer) NULL)
 #endif
 #include "mixed_callstack_plugin.h"
 
@@ -4460,6 +4460,19 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 {
 	MonoCompile *cfg;
 	gpointer code = NULL;
+	/* Non-NULL only when threshold-0 tiering promotes METHOD to tier 1 before
+	 * this function returns - see the mono_llvm_tiered_promote_sync () call
+	 * below. Kept separate from CODE so the tier-0 pointer still goes to
+	 * mini_patch_llvm_jit_callees ()/the jit-dump hooks below, exactly as it
+	 * always has; only the pointer actually returned to the caller changes. */
+	gpointer tier1_code = NULL;
+	/*
+	 * Set inside the domain-locked block below (where cfg is still alive) if
+	 * this compile is a threshold-0 promotion candidate; acted on afterwards,
+	 * once target_domain's lock is released - see the comment there for why
+	 * that ordering is load-bearing, not cosmetic.
+	 */
+	gboolean try_sync_promote = FALSE;
 	MonoJitInfo *jinfo, *info;
 	MonoVTable *vtable;
 	MonoException *ex = NULL;
@@ -4561,20 +4574,18 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 		mono_domain_jit_code_hash_unlock (target_domain);
 
 		/*
-		 * A tier-0 body was just published - queue it for tier 1. The promotion
-		 * itself runs on the background compile worker (mono/mini/llvm/tiered.cpp),
-		 * never here, because we may be many frames deep in a cctor-driven
-		 * compile nest and, regardless of nesting, this thread must get back to
-		 * running the method it just compiled rather than block on an LLVM compile.
+		 * A tier-0 body was just published. When the call-count threshold is
+		 * off (MONO_TIERED_CALL_THRESHOLD=0, the default-off value) this is
+		 * also the promotion trigger - but unlike a non-zero threshold, whose
+		 * counter only enqueues for the background worker in
+		 * mono/mini/llvm/tiered.cpp, threshold 0 promotes right here, on this
+		 * thread, synchronously - just not from inside this lock; see below.
 		 *
-		 * Only eager (first-call) enqueue when the call-count threshold is off
-		 * (MONO_TIERED_CALL_THRESHOLD=0, the default-off value). With a non-zero
-		 * threshold the tier-0 prologue's counter enqueues instead, once the
-		 * method has been entered threshold-many times. At threshold 0 this stays
-		 * byte-identical to the pre-threshold behaviour.
+		 * With a non-zero threshold this never fires; the tier-0 prologue's
+		 * own counter enqueues instead, once the method has been entered
+		 * threshold-many times, and that path is untouched by this one.
 		 */
-		if (!cfg->compile_llvm && mono_llvm_tiered_call_threshold () == 0)
-			mono_llvm_tiered_enqueue (method, target_domain, opt);
+		try_sync_promote = !cfg->compile_llvm && mono_llvm_tiered_call_threshold () == 0;
 
 		code = cfg->native_code;
 
@@ -4601,6 +4612,25 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 #endif
 	mono_domain_unlock (target_domain);
 
+	/*
+	 * Threshold-0 promotion happens here, AFTER releasing target_domain's
+	 * lock, never before: LLVM codegen (mono_llvm_emit_method ()) takes the
+	 * loader lock, and mono's own lock-ordering rule - documented on
+	 * MonoDomain::lock in domain-internals.h - is that the loader lock must
+	 * always be taken before the domain lock, never after. Calling the
+	 * promote while still holding target_domain's lock would take the domain
+	 * lock first and the loader lock second, exactly backwards; with another
+	 * thread doing an ordinary tier-0 compile in the same domain (loader lock
+	 * first, domain lock second, e.g. to build a vtable), the two threads
+	 * deadlock on each other's lock. Nothing above this point needed the
+	 * promotion to have already happened - mono_llvm_tiered_promote_sync ()
+	 * only touches state (the tier-0 jit_code_hash entry, its own bookkeeping
+	 * table) that is already fully published by now - so there is no
+	 * ordering cost to paying for it out here instead.
+	 */
+	if (try_sync_promote)
+		tier1_code = mono_llvm_tiered_promote_sync (method, target_domain, opt);
+
 	if (!is_ok (error))
 		return NULL;
 
@@ -4624,6 +4654,18 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 		if (!mono_runtime_class_init_full (vtable, error))
 			return NULL;
 	}
+
+	/*
+	 * Hand the caller tier 1 instead of the tier-0 body it actually compiled,
+	 * now that everything above - the profiler events, jit-dump, vtable/cctor
+	 * setup - has run its normal, tier-0-shaped course against CODE and JINFO.
+	 * Whatever trampoline or call site is about to cache this return value
+	 * gets the tier-1 address directly; nothing else on this path needs to
+	 * know promotion happened at all.
+	 */
+	if (tier1_code)
+		code = tier1_code;
+
 	return MINI_ADDR_TO_FTNPTR (code);
 }
 

@@ -2168,16 +2168,18 @@ void      mono_destroy_compile              (MonoCompile *cfg);
 /*
  * Recompile an already tier-0-compiled method through LLVM and publish the
  * result as its terminal body. Returns FALSE if the backend declined the method
- * or the compile failed, in which case tier 0 stays terminal. Called from the
- * background tier-1 compile worker in mono/mini/llvm/tiered.cpp.
+ * or the compile failed, in which case tier 0 stays terminal. Called both from
+ * the background tier-1 compile worker (a non-zero threshold) and, directly,
+ * from mono_llvm_tiered_promote_sync () (threshold 0) - see mono/mini/llvm/tiered.cpp.
  *
- * RUN_CCTORS must be FALSE when the caller is that worker thread: a promotion
- * compile runs class initializers when it is TRUE (JIT_FLAG_RUN_CCTORS), and
- * cctors must only ever run on a mutator thread, never on the background
- * compiler. Passing TRUE is only safe for a caller that IS a mutator thread
- * blocking on the compile - which, with the background worker, is nobody
- * today; the parameter exists so that stays an explicit choice rather than an
- * accident if a synchronous caller reappears.
+ * RUN_CCTORS must be FALSE when the caller is the background worker: a
+ * promotion compile runs class initializers when it is TRUE
+ * (JIT_FLAG_RUN_CCTORS), and cctors must only ever run on a mutator thread,
+ * never on the background compiler. mono_llvm_tiered_promote_sync () IS a
+ * mutator thread, so running cctors there would be safe in that narrow sense -
+ * but it still passes FALSE, to keep tier-1 codegen identical regardless of
+ * which path promoted the method, and to avoid opening another way for a
+ * promotion compile to trigger nested compiles of its own.
  */
 gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *domain, guint32 opt, gboolean run_cctors);
 
@@ -2185,9 +2187,11 @@ gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *dom
  * Deferred tier-1 promotion behind a call-count threshold (mono/mini/llvm/tiered.cpp).
  *
  * mono_llvm_tiered_call_threshold () returns MONO_TIERED_CALL_THRESHOLD (default
- * 1000; 0 = eager promotion = the pre-threshold behaviour, and the feature's off
- * switch). It is 0 whenever MONO_TIERED is unset, so the eager enqueue path stays
- * byte-identical to before when the feature is off.
+ * 1000; 0 = synchronous promotion at the tier-0 publish site, and the feature's
+ * off switch). It is 0 whenever MONO_TIERED is unset, so the feature-off case
+ * and threshold 0 share the same synchronous-promotion-attempt code path in
+ * mini.c, and mono_llvm_tiered_promote_sync () itself no-ops when the feature
+ * is off.
  *
  * When the threshold is non-zero the tier-0 prologue (mono_arch_emit_prolog) owns
  * a per-method, per-domain counter block obtained from mini_tiered_alloc_counter ():
