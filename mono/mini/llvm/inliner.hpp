@@ -3,12 +3,12 @@
  * inliner.hpp - the top-down tier-1 LLVM inliner (new-PM module pass).
  *
  * This is the LLVM-side inliner for promoted (tier-1) methods. It is a genuine
- * top-down, budget-driven inliner in the end; this first slice (S0) only stands
- * up the new-PM plumbing and proves the three primitives compose once:
- * reach the FunctionAnalysisManager through the module proxy, run the stock
- * function-simplification pipeline on one function, and InlineFunction one call
- * site. Lazy cross-module materialization, the fixpoint loop, the budget, and
- * the eligibility filter are later slices.
+ * top-down, budget-driven inliner in the end; at this slice (S1) it does lazy
+ * cross-module callee materialization and a single inlining round over each
+ * annotated root's direct managed leaf-call sites (see inliner.cpp for the exact
+ * eligibility and the materialize/revert/strip machinery). The outer fixpoint
+ * loop, the flat cross-round budget and the priority queue are S2; the full
+ * eligibility hardening is S3.
  */
 
 #ifndef MONO_MINI_LLVM_INLINER_HPP

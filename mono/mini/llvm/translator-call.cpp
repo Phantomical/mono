@@ -48,19 +48,31 @@ const_vector (const LLVMValueRef *vals, unsigned count)
  * GHashTable, since the JIT compiles methods one at a time for as long as the
  * process runs rather than once per image.
  */
+/*
+ * The two halves of the method<->symbol mapping. mono_llvm_method_symbol ()
+ * fills them; mono_llvm_method_from_symbol () reads `sym_taken` to map a direct
+ * `call @name` target back to the MonoMethod it names, which is how the tier-1
+ * inliner recovers a call site's callee. Hoisted to file scope (from
+ * mono_llvm_method_symbol ()'s locals) so both directions share one table under
+ * one lock.
+ */
+static std::mutex sym_mutex;
+static std::unordered_map<MonoMethod *, std::string> *sym_names;
+static std::unordered_map<std::string, MonoMethod *> *sym_taken;
+
 const char *
 mono_llvm_method_symbol (MonoMethod *method)
 {
-	static std::mutex mutex;
-	static std::unordered_map<MonoMethod *, std::string> *names;
-	static std::unordered_map<std::string, MonoMethod *> *taken;
+	std::mutex &mutex = sym_mutex;
 
 	std::lock_guard<std::mutex> lock (mutex);
 
-	if (!names) {
-		names = new std::unordered_map<MonoMethod *, std::string> ();
-		taken = new std::unordered_map<std::string, MonoMethod *> ();
+	if (!sym_names) {
+		sym_names = new std::unordered_map<MonoMethod *, std::string> ();
+		sym_taken = new std::unordered_map<std::string, MonoMethod *> ();
 	}
+	auto *names = sym_names;
+	auto *taken = sym_taken;
 
 	auto found = names->find (method);
 	if (found != names->end ())
@@ -99,6 +111,29 @@ mono_llvm_method_symbol (MonoMethod *method)
 	auto ins = names->emplace (method, std::move (name));
 	(*taken) [ins.first->second] = method;
 	return ins.first->second.c_str ();
+}
+
+/*
+ * mono_llvm_method_from_symbol:
+ *
+ *   Inverse of mono_llvm_method_symbol (): return the MonoMethod a direct-call
+ * symbol names, or NULL if NAME was never handed out as a method symbol (an
+ * icall/intrinsic/other declaration, or a not-yet-seen method). The tier-1
+ * inliner uses this to resolve a `call @name` back to its managed callee.
+ */
+MonoMethod *
+mono_llvm_method_from_symbol (const char *name)
+{
+	if (!name)
+		return NULL;
+
+	std::lock_guard<std::mutex> lock (sym_mutex);
+	if (!sym_taken)
+		return NULL;
+	auto found = sym_taken->find (std::string (name));
+	if (found == sym_taken->end ())
+		return NULL;
+	return found->second;
 }
 
 void

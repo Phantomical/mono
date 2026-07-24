@@ -3200,6 +3200,14 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		try_llvm = mono_llvm_tiered_in_promotion ();
 	else
 		try_llvm = mono_use_llvm || llvm;
+
+	/*
+	 * IR-only compiles (the tier-1 inliner materializing a callee) always want
+	 * the LLVM path regardless of the tiering/promotion state of the thread that
+	 * is driving them.
+	 */
+	if (flags & JIT_FLAG_LLVM_IR_ONLY)
+		try_llvm = TRUE;
 #endif
 
 #ifndef MONO_ARCH_FLOAT32_SUPPORTED
@@ -3915,6 +3923,18 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 		if (cfg->flags & MONO_CFG_NEEDS_DECOMPOSE)
 			mono_decompose_array_access_opts (cfg);
+
+		if (flags & JIT_FLAG_LLVM_IR_ONLY) {
+			/*
+			 * The MonoIR is now in the LLVM-ready shape mono_llvm_emit_method ()
+			 * consumes. Hand the cfg back without emitting - the tier-1 inliner
+			 * translates it into the caller's module itself (and checks
+			 * cfg->disable_llvm / cfg->exception_type before doing so).
+			 */
+			if (MONO_METHOD_COMPILE_END_ENABLED ())
+				MONO_PROBE_METHOD_COMPILE_END (method, TRUE);
+			return cfg;
+		}
 
 		if (!cfg->disable_llvm)
 			mono_llvm_emit_method (cfg);

@@ -11,7 +11,10 @@
 
 #include <vector>
 
+#include <llvm/IR/Module.h>
+
 #include "mono_lsda.hpp"
+#include "inliner-support.hpp"
 
 #ifndef DISABLE_JIT
 /*
@@ -358,29 +361,24 @@ free_ctx (EmitContext *ctx)
  *
  *   Emit LLVM IL from the mono IL, and compile it to native code using LLVM.
  */
-void
-mono_llvm_emit_method (MonoCompile *cfg)
+/*
+ * Allocate an EmitContext and its per-vreg/per-bblock scratch arrays for CFG,
+ * and point it at the domain's shared MonoLLVMModule. The caller still has to
+ * set ctx->lmodule (the LLVM module the function is emitted into) before calling
+ * emit_method_inner ().
+ */
+static EmitContext *
+alloc_emit_context (MonoCompile *cfg)
 {
-	EmitContext *ctx;
-	char *method_name;
-
-	if (cfg->skip)
-		return;
-
-	/* The code below might acquire the loader lock, so use it for global locking */
-	mono_loader_lock ();
-
-	ctx = new EmitContext ();
+	EmitContext *ctx = new EmitContext ();
 	ctx->cfg = cfg;
 	ctx->mempool = cfg->mempool;
 
-	/*
-	 * This maps vregs to the LLVM instruction defining them
-	 */
+	/* This maps vregs to the LLVM instruction defining them */
 	ctx->values = g_new0 (llvm::Value *, cfg->next_vreg);
 	/*
-	 * This maps vregs for volatile variables to the LLVM instruction defining their
-	 * address.
+	 * This maps vregs for volatile variables to the LLVM instruction defining
+	 * their address.
 	 */
 	ctx->addresses = g_new0 (Address*, cfg->next_vreg);
 	ctx->vreg_types = g_new0 (llvm::Type *, cfg->next_vreg);
@@ -398,8 +396,50 @@ mono_llvm_emit_method (MonoCompile *cfg)
 
 	init_jit_module (cfg->domain);
 	ctx->module = static_cast<MonoLLVMModule*>(domain_jit_info (cfg->domain)->llvm_module);
-	method_name = mono_method_full_name (cfg->method, TRUE);
-	ctx->method_name = method_name;
+	ctx->method_name = mono_method_full_name (cfg->method, TRUE);
+
+	return ctx;
+}
+
+/*
+ * A declined/failed emit can leave a half-built function in the module. Wire up
+ * any dangling phi nodes (they may be referenced by other values) and delete the
+ * function so nothing malformed survives.
+ */
+static void
+cleanup_failed_emit (EmitContext *ctx)
+{
+	if (!ctx->lmethod)
+		return;
+
+	/* Need to add unused phi nodes as they can be referenced by other values */
+	LLVMBasicBlockRef phi_bb = LLVMAppendBasicBlock (ctx->lmethod, "PHI_BB");
+	llvm::IRBuilder<> *builder;
+
+	builder = ctx->create_builder ();
+	builder->SetInsertPoint (llvm::unwrap (phi_bb));
+
+	for (llvm::Value *v : ctx->phi_values) {
+		if (LLVMGetInstructionParent (llvm::wrap (v)) == nullptr)
+			LLVMInsertIntoBuilder (llvm::wrap (builder), llvm::wrap (v));
+	}
+
+	LLVMDeleteFunction (ctx->lmethod);
+	ctx->lmethod = nullptr;
+}
+
+void
+mono_llvm_emit_method (MonoCompile *cfg)
+{
+	EmitContext *ctx;
+
+	if (cfg->skip)
+		return;
+
+	/* The code below might acquire the loader lock, so use it for global locking */
+	mono_loader_lock ();
+
+	ctx = alloc_emit_context (cfg);
 
 	ctx->lmodule = LLVMModuleCreateWithName (g_strdup_printf ("jit-module-%s", cfg->method->name));
 	/* Reset this as it contains values from lmodule */
@@ -407,23 +447,8 @@ mono_llvm_emit_method (MonoCompile *cfg)
 
 	ctx->emit_method_inner ();
 
-	if (!ctx->ok ()) {
-		if (ctx->lmethod) {
-			/* Need to add unused phi nodes as they can be referenced by other values */
-			LLVMBasicBlockRef phi_bb = LLVMAppendBasicBlock (ctx->lmethod, "PHI_BB");
-			llvm::IRBuilder<> *builder;
-
-			builder = ctx->create_builder ();
-			builder->SetInsertPoint (llvm::unwrap (phi_bb));
-
-			for (llvm::Value *v : ctx->phi_values) {
-				if (LLVMGetInstructionParent (llvm::wrap (v)) == nullptr)
-					LLVMInsertIntoBuilder (llvm::wrap (builder), llvm::wrap (v));
-			}
-
-			LLVMDeleteFunction (ctx->lmethod);
-		}
-	}
+	if (!ctx->ok ())
+		cleanup_failed_emit (ctx);
 
 	free_ctx (ctx);
 
@@ -511,6 +536,15 @@ EmitContext::emit_method_inner ()
 
 	method = LLVMAddFunction (lmodule, this->method_name, method_type);
 	this->lmethod = method;
+
+	/*
+	 * Mark the top-down inliner's root. Every method the translator emits
+	 * standalone is a tier-1 root (v1 emits exactly one per module); a callee
+	 * materialized into a caller's module (translate_only) is not - it is a
+	 * candidate body, never a root.
+	 */
+	if (!this->translate_only)
+		llvm::unwrap<llvm::Function> (method)->addFnAttr ("mono-tier1-root");
 
 	/*
 	 * No calling-convention override: the rgctx/imt argument is tagged
@@ -919,7 +953,26 @@ after_codegen:
 	}
 
 	//LLVMVerifyFunction (method, 0);
+
+	if (this->translate_only)
+		/*
+		 * Materialize-into-caller path: the callee body is done; the tier-1
+		 * inliner owns it from here (inlines or strips it). Skip finalize
+		 * (optimize + JIT the module) and the method<->lmethod bookkeeping.
+		 */
+		return;
+
+	/*
+	 * Register the root so the top-down inliner (which runs inside the finalize
+	 * below, during the module optimization pipeline) can reach this method's
+	 * MonoCompile to drive callee materialization. Unregister once optimization
+	 * has returned - the cfg does not outlive this compile.
+	 */
+	mono::register_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod), cfg);
+
 	this->llvm_jit_finalize_method ();
+
+	mono::unregister_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod));
 
 	if (this->module->method_to_lmethod)
 		g_hash_table_insert (this->module->method_to_lmethod, cfg->method, this->lmethod);
@@ -1125,6 +1178,150 @@ mono_llvm_emit_aot_module (const char *filename, const char *cu_name)
 {
 	g_error ("LLVM AOT compilation is not supported by this build.");
 }
+
+/* ------------------------------------------------------------------------ *
+ * Tier-1 inliner support: root registry + lazy callee materialization.
+ *
+ * These are the mono-aware half of the top-down inliner. The pure-LLVM pass
+ * (inliner.cpp) reaches them through inliner-support.hpp with everything mono
+ * passed as an opaque void *, because that TU has no mono headers.
+ * ------------------------------------------------------------------------ */
+
+namespace mono {
+
+/*
+ * The root registry, keyed by the root's LLVM Function. Only ever holds the
+ * root(s) currently being optimized (v1: exactly one at a time), since a root is
+ * unregistered as soon as its optimization returns. A plain map under the loader
+ * lock (held across the whole emit) is enough - no separate lock needed.
+ */
+static std::unordered_map<llvm::Function *, MonoCompile *> *tier1_roots;
+
+void
+register_tier1_root (llvm::Function *root, void *root_cfg)
+{
+	if (!tier1_roots)
+		tier1_roots = new std::unordered_map<llvm::Function *, MonoCompile *> ();
+	(*tier1_roots) [root] = static_cast<MonoCompile *> (root_cfg);
+}
+
+void
+unregister_tier1_root (llvm::Function *root)
+{
+	if (tier1_roots)
+		tier1_roots->erase (root);
+}
+
+void *
+tier1_root_cfg (llvm::Function *root)
+{
+	if (!tier1_roots)
+		return nullptr;
+	auto found = tier1_roots->find (root);
+	return found == tier1_roots->end () ? nullptr : found->second;
+}
+
+bool
+tier1_root_allows_inlining (void *root_cfg)
+{
+	MonoCompile *cfg = static_cast<MonoCompile *> (root_cfg);
+	if (!cfg)
+		return false;
+	/* #1/#19: NOOPTIMIZATION/debug method, or -O=inline cleared. */
+	if (cfg->disable_inline)
+		return false;
+	if (!(cfg->opt & MONO_OPT_INLINE))
+		return false;
+	/* #2: gsharedvt layout is frame-local and unrecoverable once folded. */
+	if (cfg->gsharedvt)
+		return false;
+	return true;
+}
+
+void *
+managed_method_from_symbol (const char *sym)
+{
+	return mono_llvm_method_from_symbol (sym);
+}
+
+llvm::Function *
+materialize_callee (void *target, void *root_cfg, llvm::Module *into)
+{
+	MonoMethod *method = static_cast<MonoMethod *> (target);
+	MonoCompile *root = static_cast<MonoCompile *> (root_cfg);
+
+	if (!method || !root)
+		return nullptr;
+
+	/*
+	 * Conservative mono-side refusals, on top of whatever the front-end declines
+	 * and the pass's own LLVM-level gates:
+	 *  - wrappers have no directly-inlinable managed body (the real work lives in
+	 *    the wrapped method), and inlining e.g. a synchronized wrapper's raw body
+	 *    would drop the monitor enter/exit;
+	 *  - synchronized methods, same reason;
+	 *  - anything that would come back gshared/gsharedvt is the rgctx
+	 *    generic-context gate (#26/#2): the call-site nest check in the pass is the
+	 *    primary guard, this is belt-and-suspenders in case a gshared callee is
+	 *    ever reached without a nest arg.
+	 */
+	if (method->wrapper_type != MONO_WRAPPER_NONE)
+		return nullptr;
+	if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
+		return nullptr;
+
+	/*
+	 * Run the callee front-end into LLVM-ready MonoIR (JIT_FLAG_LLVM_IR_ONLY
+	 * stops mini_method_compile before it emits). No cctors on this thread.
+	 */
+	MonoCompile *cfg = mini_method_compile (
+		method, root->opt, root->domain,
+		(JitFlags) (JIT_FLAG_LLVM | JIT_FLAG_LLVM_IR_ONLY | JIT_FLAG_NO_LLVM_FALLBACK),
+		0, -1);
+	if (!cfg)
+		return nullptr;
+
+	llvm::Function *result = nullptr;
+
+	/* The front-end may have declined LLVM or produced a shared/gshared body. */
+	if (cfg->disable_llvm || cfg->exception_type != MONO_EXCEPTION_NONE)
+		goto done;
+	if (cfg->gshared || cfg->gsharedvt)
+		goto done;
+
+	{
+		EmitContext *ctx = alloc_emit_context (cfg);
+		/*
+		 * Translate into the caller's module. The intrinsic cache on the shared
+		 * MonoLLVMModule is already keyed to this lmodule (the root filled it),
+		 * so - unlike the standalone emit path - it must NOT be reset here.
+		 */
+		ctx->lmodule = llvm::wrap (into);
+		ctx->translate_only = true;
+
+		ctx->emit_method_inner ();
+
+		if (!ctx->ok () || !ctx->lmethod) {
+			cleanup_failed_emit (ctx);
+		} else {
+			result = llvm::unwrap<llvm::Function> (ctx->lmethod);
+			/*
+			 * The body is only ever referenced from within this module (inlined
+			 * or stripped), so internal linkage - and it must be DCE-able if the
+			 * inliner declines it.
+			 */
+			result->setLinkage (llvm::GlobalValue::InternalLinkage);
+		}
+
+		free_ctx (ctx);
+	}
+
+done:
+	mono_destroy_compile (cfg);
+	return result;
+}
+
+} // namespace mono
 
 
 /*

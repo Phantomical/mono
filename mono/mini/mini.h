@@ -1255,6 +1255,14 @@ typedef enum {
 	 * only produce a second copy of it that is immediately discarded.
 	 */
 	JIT_FLAG_NO_LLVM_FALLBACK = (1 << 13),
+	/*
+	 * Run the front-end (and the LLVM-path IR transforms) but stop before
+	 * mono_llvm_emit_method (): return the MonoCompile with LLVM-ready MonoIR
+	 * instead of emitting/codegen'ing it. The tier-1 inliner's lazy callee
+	 * materialization uses this to obtain a callee body it then translates into
+	 * the caller's module itself. Implies the LLVM path.
+	 */
+	JIT_FLAG_LLVM_IR_ONLY = (1 << 14),
 } JitFlags;
 
 /* Bit-fields in the MonoBasicBlock.region */

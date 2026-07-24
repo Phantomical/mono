@@ -208,6 +208,14 @@ typedef struct {
 	gboolean *is_dead;
 	gboolean *unreachable;
 	gboolean has_safepoints;
+	/*
+	 * Set when this context is translating a callee body into an already-open
+	 * caller module for the tier-1 inliner (materialize). In that mode
+	 * emit_method_inner () skips the root annotation, the finalize/optimize/JIT
+	 * step and the method<->lmethod bookkeeping - the inliner owns the resulting
+	 * Function and either inlines it or strips it.
+	 */
+	bool translate_only;
 	int this_arg_pindex, rgctx_arg_pindex;
 	llvm::Value *imt_rgctx_loc;
 	GHashTable *llvm_types;
@@ -515,6 +523,10 @@ get_float_const (MonoCompile *cfg, float val);
  */
 const char *
 mono_llvm_method_symbol (MonoMethod *method);
+
+/* Inverse of mono_llvm_method_symbol (); NULL if NAME is not a method symbol. */
+MonoMethod *
+mono_llvm_method_from_symbol (const char *name);
 
 /* Defined in translator-bb.cpp. */
 void
