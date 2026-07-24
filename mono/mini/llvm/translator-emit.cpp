@@ -193,7 +193,14 @@ EmitContext::emit_memset (llvm::IRBuilder<> *builder, LLVMValueRef v, LLVMValueR
 /*
  * emit_volatile_load:
  *
- *   If vreg is volatile, emit a load from its address.
+ *   Reload a memory-resident variable (VOLATILE|INDIRECT flagged) from its
+ *   address. Despite the name, this has nothing to do with the `volatile`
+ *   LLVM/C# memory-ordering attribute: the var is in memory because mini
+ *   decided it must be (EH liveness or an address escape), not because loads
+ *   from it need to be ordered. The matching store (emit_volatile_store) is
+ *   already a plain store; emitting a plain load here too lets SROA/mem2reg
+ *   promote the alloca once nothing forces it to stay in memory (e.g. once
+ *   an address-escaping call is inlined away).
  */
 LLVMValueRef
 EmitContext::emit_volatile_load (int vreg)
@@ -201,11 +208,7 @@ EmitContext::emit_volatile_load (int vreg)
 	MonoType *t;
 	LLVMValueRef v;
 
-	// On arm64, we pass the rgctx in a callee saved
-	// register on arm64 (x15), and llvm might keep the value in that register
-	// even through the register is marked as 'reserved' inside llvm.
-
-	v = mono_llvm_build_load (llvm::wrap (this->builder), llvm::wrap (this->addresses [vreg]->type), llvm::wrap (this->addresses [vreg]->value), "", TRUE);
+	v = mono_llvm_build_load (llvm::wrap (this->builder), llvm::wrap (this->addresses [vreg]->type), llvm::wrap (this->addresses [vreg]->value), "", FALSE);
 	t = this->vreg_cli_types [vreg];
 	if (t && !t->byref) {
 		/* 
