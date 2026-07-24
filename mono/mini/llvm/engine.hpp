@@ -228,6 +228,17 @@ public:
 	 */
 	void register_symbol (llvm::StringRef name, void *addr);
 
+	/*
+	 * Reverse lookup for register_symbol (): the name ADDR was registered
+	 * under, or nullptr if it was never registered. Used by the disassembler
+	 * to annotate tier-1 call targets (every one of which is a direct
+	 * `call @symbol` resolved against a name registered here). Like
+	 * named_symbols_, first-wins on a collision and stable for the life of
+	 * the process, so the returned pointer needs no lifetime management by
+	 * the caller.
+	 */
+	const char *resolve_symbol_name (void *addr);
+
 	/* Run an O2 function-simplification pipeline over `func` in place. */
 	void optimize (llvm::Function *func);
 
@@ -309,6 +320,13 @@ private:
 	 */
 	std::mutex named_symbols_mutex_;
 	std::unordered_map<std::string, void *> named_symbols_;
+
+	/*
+	 * The reverse of named_symbols_, kept in lockstep under the same mutex,
+	 * so resolve_symbol_name () doesn't have to scan named_symbols_ linearly.
+	 * Same first-wins/never-erased lifetime as named_symbols_.
+	 */
+	std::unordered_map<void *, std::string> symbols_by_addr_;
 
 	/*
 	 * owner key -> the dylibs compiled under it, for release_owner ().

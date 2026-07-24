@@ -1893,6 +1893,16 @@ MonoLLVMJIT::register_symbol (StringRef name, void *addr)
 
 	cantFail (helpers_jd_->define (absoluteSymbols (std::move (symbols))));
 	named_symbols_.emplace (name.str (), addr);
+	symbols_by_addr_.emplace (addr, name.str ());
+}
+
+const char *
+MonoLLVMJIT::resolve_symbol_name (void *addr)
+{
+	std::lock_guard<std::mutex> lock (named_symbols_mutex_);
+
+	auto it = symbols_by_addr_.find (addr);
+	return it != symbols_by_addr_.end () ? it->second.c_str () : nullptr;
 }
 
 void
@@ -2104,6 +2114,19 @@ void
 mono_llvm_jit_register_symbol (const char *name, void *addr)
 {
 	mono::MonoLLVMJIT::get_singleton ()->register_symbol (name, addr);
+}
+
+const char *
+mono_llvm_jit_resolve_symbol_name (void *addr)
+{
+	/*
+	 * get_singleton_if_created (), not get_singleton (): a disassembly
+	 * request should never be the thing that stands up the JIT engine. If
+	 * nothing has been compiled through it yet, ADDR can't be registered
+	 * either, so there's nothing to find.
+	 */
+	mono::MonoLLVMJIT *jit = mono::MonoLLVMJIT::get_singleton_if_created ();
+	return jit ? jit->resolve_symbol_name (addr) : nullptr;
 }
 
 MonoEERef

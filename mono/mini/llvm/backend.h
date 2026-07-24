@@ -117,6 +117,16 @@ gboolean  mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_s
 void      mono_llvm_jit_register_symbol (const char *name, void *addr);
 
 /*
+ * Reverse lookup: the name ADDR was registered under via
+ * mono_llvm_jit_register_symbol (), or NULL if ADDR has never been
+ * registered. Used by the disassembler (helpers.c) to annotate tier-1 call
+ * targets with a symbolic name instead of a bare address. The returned
+ * pointer, if non-NULL, is stable for the life of the process and must not
+ * be freed.
+ */
+const char *mono_llvm_jit_resolve_symbol_name (void *addr);
+
+/*
  * Reclaim every JIT'd body compiled for DOMAIN: drop its symbols from the
  * ExecutionSession, deregister its .eh_frame with the host unwinder and UNMAP
  * its code and data. Returns the number of per-method JITDylibs removed.

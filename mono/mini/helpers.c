@@ -18,6 +18,10 @@
 #include <unistd.h>
 #endif
 
+#ifdef ENABLE_LLVM
+#include "llvm/backend.h"
+#endif
+
 #ifndef DISABLE_JIT
 
 #ifndef DISABLE_LOGGING
@@ -195,6 +199,50 @@ disasm_branch_target (const char *line, int *repl_start, int *repl_end, guint64 
 	return TRUE;
 }
 
+#ifdef ENABLE_LLVM
+/*
+ * resolve_llvm_call_target:
+ *
+ *   TARGET is the runtime address a tier-1 call instruction actually
+ * transfers control to. Try the JIT engine's symbol registry directly first.
+ *
+ *   Mono's native trampolines and icall wrappers can live anywhere in the
+ * address space, unlike JITted code, which is confined to the region the
+ * JIT's own memory mapper reserves. When such a target doesn't fit a rel32
+ * call, JITLink's ELF x86-64 backend bridges the reach with a small stub
+ * co-located with the calling code - "jmp *disp32(%rip)" through a nearby
+ * GOT slot holding the real absolute address - and it's the stub's address,
+ * not the callee's, that ends up baked into the call instruction. Recognize
+ * that exact byte pattern and follow it to the real address before giving
+ * up. The GOT-slot displacement is bounded to rule out chasing an address
+ * that only coincidentally starts with the same two opcode bytes.
+ */
+static const char *
+resolve_llvm_call_target (guint64 target)
+{
+	const char *name = mono_llvm_jit_resolve_symbol_name ((void *) (gsize) target);
+	guint8 *stub;
+	gint32 disp;
+	guint8 *got_slot;
+	guint64 real_target;
+
+	if (name)
+		return name;
+
+	stub = (guint8 *) (gsize) target;
+	if (stub [0] != 0xff || stub [1] != 0x25)
+		return NULL;
+
+	memcpy (&disp, stub + 2, sizeof (disp));
+	if (disp > 0x10000 || disp < -0x10000)
+		return NULL;
+
+	got_slot = stub + 6 + disp;
+	memcpy (&real_target, got_slot, sizeof (real_target));
+	return mono_llvm_jit_resolve_symbol_name ((void *) (gsize) real_target);
+}
+#endif
+
 /*
  * annotate_disassembly:
  *
@@ -205,14 +253,15 @@ disasm_branch_target (const char *line, int *repl_start, int *repl_end, guint64 
  *     rewritten to reference them;
  *   - for the classic tier-0 JIT, authoritative "; <type> <name>" comments on
  *     outgoing calls, correlated by native offset against cfg->patch_info;
- *   - for the LLVM tier-1 backend, a trailing patch-target legend (its calls
- *     route through GOT slots so per-site offsets are unavailable — see the
- *     tier-1 note below).
+ *   - for the LLVM tier-1 backend, the same "; <name>" comments on outgoing
+ *     calls, resolved by reversing the printed (VMA-0) target back to a
+ *     runtime address and looking it up in the JIT engine's symbol registry
+ *     (every tier-1 call target is registered there at compile time).
  * Nothing is ever fabricated: unresolved sites are left as objdump rendered
  * them. cfg may be NULL (trampoline disassembly) — only the label pass runs.
  */
 static void
-annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
+annotate_disassembly (FILE *fp, MonoCompile *cfg, guint8 *code, int size)
 {
 	GPtrArray *lines = g_ptr_array_new ();
 	GHashTable *instr_offsets = g_hash_table_new (NULL, NULL);      /* set of real insn offsets */
@@ -295,7 +344,7 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 	/* Pass 2: re-emit with labels, rewritten operands, and call names. */
 	for (i = 0; i < lines->len; ++i) {
 		char *line = (char *) g_ptr_array_index (lines, i);
-		char *name;
+		const char *name;
 		int off, rs, re;
 		guint64 tgt;
 		gboolean has_target;
@@ -322,7 +371,7 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 			}
 		}
 
-		name = (char *) g_hash_table_lookup (off2name, GINT_TO_POINTER (off));
+		name = (const char *) g_hash_table_lookup (off2name, GINT_TO_POINTER (off));
 		has_target = disasm_branch_target (line, &rs, &re, &tgt);
 
 		if (has_target && tgt < (guint64) size) {
@@ -340,6 +389,19 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 			/* External call/branch. objdump's "<fn+0xhuge>" is bogus (code was
 			 * relocated to 0); replace it with the authoritative name if we have
 			 * one, else leave objdump's text untouched. */
+#ifdef ENABLE_LLVM
+			/*
+			 * Tier-1: TGT is objdump's printed target, computed as if the
+			 * method were loaded at VMA 0. For a rel32 call baked in at JIT
+			 * time against the method's real load address CODE, that printed
+			 * value and the real runtime target differ by exactly CODE (the
+			 * two ends of the relocation cancel out — see the design notes
+			 * for the derivation). Recover the real target and look it up in
+			 * the engine's symbol registry.
+			 */
+			if (!name && is_llvm && code)
+				name = resolve_llvm_call_target (tgt + (guint64) (gsize) code);
+#endif
 			if (name)
 				printf ("%.*s<target>\t; %s\n", rs, line, name);
 			else
@@ -353,30 +415,6 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 			printf ("%s\t; %s\n", line, name);
 		else
 			printf ("%s\n", line);
-	}
-
-	/* Tier-1 legend: the LLVM backend routes outgoing calls through GOT slots
-	 * (movabs $slot,%rax; call *(%rax)); the patch site's native offset is not
-	 * recorded on the ji, so per-call inline correlation is unavailable. Print
-	 * the authoritative target list once as a legend; the reader matches it via
-	 * the movabs GOT-slot immediate.
-	 *
-	 * NOTE: at this dump site cfg->patch_info carries the GOT targets only for
-	 * the AOT compile path; in the tiered JIT the LLVM patches are resolved and
-	 * consumed before we get here, so the list is typically empty. Inline
-	 * per-call names (the GOT-base spike, design 19 §6) are deferred/unverified
-	 * and intentionally NOT attempted here — never fabricate a name. */
-	if (is_llvm) {
-		MonoJumpInfo *ji;
-		int idx = 0;
-		printf ("; tier-1 (LLVM): outgoing calls route through GOT slots (movabs $slot,%%reg; call *(%%reg))\n");
-		for (ji = cfg->patch_info; ji; ji = ji->next) {
-			char *s = mono_ji_to_string (ji);
-			printf (";   got target [%d] %s\n", idx++, s);
-			g_free (s);
-		}
-		if (idx == 0)
-			printf (";   (call-target names unavailable: cfg->patch_info empty in JIT mode; inline GOT-slot resolution deferred — design 19 §6)\n");
 	}
 
 	{
@@ -574,7 +612,7 @@ mono_disassemble_code (MonoCompile *cfg, guint8 *code, int size, char *id)
 	{
 		FILE *dis = popen (cmd, "r");
 		if (dis) {
-			annotate_disassembly (dis, cfg, size);
+			annotate_disassembly (dis, cfg, code, size);
 			pclose (dis);
 		} else {
 			unused = system (cmd);
