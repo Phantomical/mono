@@ -1232,8 +1232,15 @@ tier1_root_allows_inlining (void *root_cfg)
 		return false;
 	if (!(cfg->opt & MONO_OPT_INLINE))
 		return false;
-	/* #2: gsharedvt layout is frame-local and unrecoverable once folded. */
-	if (cfg->gsharedvt)
+	/*
+	 * #2/#26: shared generic code. gsharedvt layout is frame-local and
+	 * unrecoverable once folded; a plain gshared root can reach an open,
+	 * type-parameter-bearing callee whose front-end aborts (method-to-ir.c's
+	 * !sig->has_type_parameters assert) the moment we try to materialize it -
+	 * see materialize_callee (). Refuse both outright at this slice: we do not
+	 * inline anything that touches generic sharing.
+	 */
+	if (cfg->gshared || cfg->gsharedvt)
 		return false;
 	return true;
 }
@@ -1242,6 +1249,36 @@ void *
 managed_method_from_symbol (const char *sym)
 {
 	return mono_llvm_method_from_symbol (sym);
+}
+
+/*
+ * True if METHOD still needs a generic context to be compiled - it is open
+ * (a generic type/method definition) or shared over type parameters. Such a
+ * callee cannot be folded into the root: mini_method_compile () asserts
+ * !sig->has_type_parameters for a non-gshared compile, so running its front-end
+ * would abort inside the compile. This is checked up front, before that compile,
+ * because the context can arrive via `this`/the receiver type rather than an
+ * explicit rgctx argument, which the pass's call-site nest check does not see.
+ */
+static bool
+callee_needs_generic_context (MonoMethod *method)
+{
+	/* Open declaring type: the generic type definition itself (Box`1<T>). */
+	if (mono_class_is_gtd (method->klass))
+		return true;
+	/* Declaring type instantiated over type parameters (the shared Box`1<T_REF>). */
+	if (mono_class_is_open_constructed_type (m_class_get_byval_arg (method->klass)))
+		return true;
+	/* A generic method definition (uninstantiated). */
+	if (method->is_generic)
+		return true;
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+	if (!sig)
+		return true;                 /* cannot tell -> be conservative */
+	/* The exact condition method-to-ir.c asserts against for a non-gshared compile. */
+	if (sig->has_type_parameters)
+		return true;
+	return false;
 }
 
 llvm::Function *
@@ -1268,6 +1305,15 @@ materialize_callee (void *target, void *root_cfg, llvm::Module *into)
 	if (method->wrapper_type != MONO_WRAPPER_NONE)
 		return nullptr;
 	if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
+		return nullptr;
+	/*
+	 * #26/#2: refuse an open/shared-generic callee BEFORE its front-end runs.
+	 * A gshared root can reach a type-parameter-bearing callee with no nest arg
+	 * (the context rides in via `this`/the receiver type), and mini_method_compile
+	 * would then abort on !sig->has_type_parameters. The cfg->gshared check below
+	 * only catches this after the compile returns - too late; this is the gate.
+	 */
+	if (callee_needs_generic_context (method))
 		return nullptr;
 
 	/*

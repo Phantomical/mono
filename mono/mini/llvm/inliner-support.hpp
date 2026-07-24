@@ -34,7 +34,8 @@ void *tier1_root_cfg (llvm::Function *root);
 /*
  * Whether ROOT_CFG (an opaque MonoCompile *) permits inlining at all - the
  * caller-level eligibility gates: -O=inline on, not a NOOPTIMIZATION/debug
- * method (disable_inline), and not gsharedvt. Checked once per root.
+ * method (disable_inline), and not shared generic code (gshared/gsharedvt).
+ * Checked once per root.
  */
 bool tier1_root_allows_inlining (void *root_cfg);
 
@@ -51,9 +52,10 @@ void *managed_method_from_symbol (const char *sym);
  * ROOT_CFG are opaque MonoMethod * / MonoCompile *. Returns the materialized
  * Function, or NULL if the callee cannot be materialized - a decline the caller
  * treats as "leave the trampoline call in place". This is conservative: it
- * refuses wrappers, synchronized methods, and any gshared/gsharedvt callee
- * (the rgctx generic-context gate, #26) outright, in addition to whatever the
- * front-end itself declines.
+ * refuses wrappers, synchronized methods, and any callee that still needs a
+ * generic context - open/shared generic types and methods (the rgctx gate,
+ * #26), checked up front before the front-end runs - in addition to whatever
+ * the front-end itself declines.
  */
 llvm::Function *materialize_callee (void *target, void *root_cfg, llvm::Module *into);
 
