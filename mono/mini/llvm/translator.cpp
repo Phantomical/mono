@@ -1801,6 +1801,20 @@ EmitContext::llvm_jit_finalize_method ()
 	 * renames, nor constant-folds them - the by-name symbol resolution the
 	 * compile path performs afterwards still finds every one.
 	 */
+
+	/*
+	 * phi_values caches the phi nodes we pre-created during emission so a decline
+	 * that happens mid-emission can re-home any still-floating ones before deleting
+	 * the half-built function (see cleanup_failed_emit). By this point emission is
+	 * complete and the optimizer below is about to rewrite the IR in place -
+	 * mem2reg and friends will delete most of these phis outright. That leaves the
+	 * cached pointers dangling, so a post-codegen decline (e.g. an unparseable
+	 * .mono_lsda clause table) that reaches cleanup_failed_emit would feed freed
+	 * values back into the IRBuilder. The cache has served its purpose; drop it now
+	 * so cleanup on any later decline simply deletes the finished function.
+	 */
+	this->phi_values.clear ();
+
 	mono_llvm_optimize_method (this->lmethod);
 
 	mono_codeman_enable_write ();
