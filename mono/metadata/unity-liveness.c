@@ -6,7 +6,17 @@
 #include <mono/metadata/object-internals.h>
 #include <mono/metadata/object.h>
 #include <mono/metadata/tabledefs.h>
+#include <mono/utils/gc_wrapper.h>
 #include <mono/utils/mono-error.h>
+
+#if defined(HAVE_SGEN_GC)
+void sgen_stop_world (int generation, gboolean serial_collection);
+void sgen_restart_world (int generation, gboolean serial_collection);
+#elif defined(HAVE_BOEHM_GC)
+/* GC_stop_world_external/GC_start_world_external come from mono/utils/gc_wrapper.h's <gc.h> */
+#else
+#error need to implement liveness GC API
+#endif
 
 typedef struct _LivenessState LivenessState;
 
@@ -161,6 +171,9 @@ MONO_API void mono_unity_liveness_stop_gc_world();
 MONO_API void mono_unity_liveness_finalize(LivenessState *state);
 MONO_API void mono_unity_liveness_start_gc_world();
 MONO_API void mono_unity_liveness_free_struct(LivenessState *state);
+
+MONO_API LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, ReallocateArray reallocateArray);
+MONO_API void mono_unity_liveness_calculation_end(LivenessState *state);
 
 MONO_API void mono_unity_liveness_calculation_from_root(MonoObject *root, LivenessState *state);
 MONO_API void mono_unity_liveness_calculation_from_statics(LivenessState *state);
@@ -856,4 +869,41 @@ void mono_unity_liveness_free_struct(LivenessState *state)
 	block_array_destroy(state->all_objects, state);
 	block_array_destroy(state->process_array, state);
 	g_free(state);
+}
+
+void mono_unity_liveness_stop_gc_world()
+{
+#if defined(HAVE_SGEN_GC)
+	sgen_stop_world (0, FALSE);
+#elif defined(HAVE_BOEHM_GC)
+	GC_stop_world_external ();
+#else
+#error need to implement liveness GC API
+#endif
+}
+
+void mono_unity_liveness_start_gc_world()
+{
+#if defined(HAVE_SGEN_GC)
+	sgen_restart_world (0, FALSE);
+#elif defined(HAVE_BOEHM_GC)
+	GC_start_world_external ();
+#else
+#error need to implement liveness GC API
+#endif
+}
+
+LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, ReallocateArray reallocateArray)
+{
+	LivenessState *state = mono_unity_liveness_allocate_struct(filter, max_count, callback, callback_userdata, reallocateArray);
+	mono_unity_liveness_stop_gc_world();
+	// no allocations can happen beyond this point
+	return state;
+}
+
+void mono_unity_liveness_calculation_end(LivenessState *state)
+{
+	mono_unity_liveness_finalize(state);
+	mono_unity_liveness_start_gc_world();
+	mono_unity_liveness_free_struct(state);
 }
