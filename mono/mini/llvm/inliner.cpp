@@ -44,6 +44,12 @@
  *     barrier is often elided in the materialized body (beforefieldinit /
  *     same-class access), so this is decided from the callee's metadata, not
  *     from a class-init call the leaf gate could see;
+ *   - does not still owe its own class's cctor - the call itself is that
+ *     class's init trigger (the first one goes through a trampoline, which
+ *     compiles the method and then runs the cctor), so folding the callee in
+ *     deletes the trigger and the class stays uninitialized for the life of the
+ *     process. The mirror image of the gate above: that one is about static
+ *     state the callee reads, this one about the initialization the call does;
  *   - leaf (the body makes no non-intrinsic calls);
  *   - and the invoke / musttail guards kept from S0.
  * The rgctx and EH exclusions are hard safety gates; getting them wrong is a
@@ -347,6 +353,18 @@ MonoTopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			 */
 			if (callee_reads_cctor_guarded_static (target)) {
 				trace ("refuse-cctor", decl->getName ());
+				continue;
+			}
+
+			/*
+			 * Refuse a callee whose own class still has a cctor pending: this
+			 * call is what would have run it, and folding the callee in deletes
+			 * the trigger. The gate above is the mirror image - that one is
+			 * about static state the callee reads, this one about the class
+			 * initialization the call itself performs.
+			 */
+			if (callee_class_init_pending (target, root_cfg)) {
+				trace ("refuse-cctor-pending", decl->getName ());
 				continue;
 			}
 

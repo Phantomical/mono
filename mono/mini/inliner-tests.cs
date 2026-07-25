@@ -556,6 +556,65 @@ public class InlinerTests {
 	}
 
 	// ==========================================================================
+	// CLASS-INIT TRIGGER - refuse-cctor-pending. The mirror image of the section
+	// above: there the callee read cctor-guarded static state, here the callee
+	// touches no static state at all, so nothing about its body is suspect. What
+	// makes it ineligible is that the CALL is the class-init trigger for the
+	// callee's own class - the first one lands in a trampoline, which compiles
+	// the method and then runs its class's cctor. Fold the callee in and that
+	// cctor never runs, for the whole process.
+	//
+	// Only bites when the caller is promoted before the callee's class has been
+	// initialized, i.e. at MONO_TIERED_CALL_THRESHOLD=0, where a method is
+	// promoted right after its tier-0 compile and before it has ever run.
+	// ==========================================================================
+
+	static class TriggerObserver {
+		public static int Ran;
+	}
+
+	static class TriggerHolder {
+		static TriggerHolder () { TriggerObserver.Ran = 1234; }
+
+		// Deliberately reads nothing static, and does no division: the callee has
+		// to be blameless to every other gate - refuse-cctor sees no static
+		// access, and there is no idiv overflow check to make the body non-leaf -
+		// so that only the pending-cctor gate can refuse it. No IL-size padding
+		// is needed either: classic mini declines to inline a callee whose class
+		// is not initialized yet, which is precisely the situation under test, so
+		// the call always survives to the top-down pass.
+		public static int Compute (int x) {
+			int p1 = x + 1, p2 = p1 * 2, p3 = p2 - 3, p4 = p3 ^ 5, p5 = p4 & 0xFF;
+			int p6 = p5 | 0x10, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = p9 + 1;
+			int p11 = p10 + p3, p12 = p11 - p4, p13 = p12 ^ p6, p14 = p13 + p7, p15 = p14 - p8;
+			if (p15 == int.MinValue)
+				return -1;
+			return x + 9;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ComputeHotCaller (int x) {
+		return TriggerHolder.Compute (x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_cctor_class_init_trigger_refused () {
+		long sum = 0;
+		const int ITERS = 5000;
+		for (int i = 0; i < ITERS; i++)
+			sum += ComputeHotCaller (i);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += i + 9;
+		if (sum != expected)
+			return 1;
+		// The cctor is the whole point: if the call got inlined away, nothing
+		// ever ran it and TriggerObserver.Ran is still 0.
+		return TriggerObserver.Ran == 1234 ? 0 : 2;
+	}
+
+	// ==========================================================================
 	// EH CLAUSE-BEARING CALLEES - refuse-eh (and, for the one shape custom-emit
 	// EH cannot handle at all, a front-end decline with no trace). None of
 	// these need IL-size padding: mono_method_check_inlining() in classic mini

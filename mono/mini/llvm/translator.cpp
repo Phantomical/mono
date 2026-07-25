@@ -1426,6 +1426,54 @@ callee_reads_cctor_guarded_static (void *target)
 	return guarded;
 }
 
+/*
+ * True if a managed call to METHOD still carries a class-init side effect -
+ * METHOD's declaring class has a cctor that has not run yet in ROOT_CFG's
+ * domain.
+ *
+ * Calling a method is one of the runtime's class-init triggers: the first call
+ * lands in a jit trampoline, which compiles the method and then runs the
+ * declaring class's cctor (mono_jit_compile_method_with_opt ()). Folding the
+ * callee into the root deletes the call, and with it the only thing that would
+ * ever have run that cctor - a silent miscompile whose symptom is a static
+ * field that never gets its initial value, arbitrarily far from here. It bites
+ * hardest on exactly the callees this pass likes: an empty ctor or a trivial
+ * accessor inlines down to nothing at all, so the class is left uninitialized
+ * for the rest of the process.
+ *
+ * This is the same rule mini_method_check_inlining () holds itself to, and for
+ * the same reason. Note it cannot be satisfied by initializing the class here:
+ * a tier-1 compile must never run a cctor (it can happen on the background
+ * worker, and cctors are managed code). So a pending cctor is simply a refusal
+ * - the callee keeps its own managed call and initializes itself the usual way.
+ */
+bool
+callee_class_init_pending (void *target, void *root_cfg)
+{
+	MonoMethod *method = static_cast<MonoMethod *> (target);
+	MonoCompile *root = static_cast<MonoCompile *> (root_cfg);
+
+	if (!method || !root)
+		return true;
+
+	if (!m_class_has_cctor (method->klass))
+		return false;
+
+	/* No vtable built yet, so the class cannot have been initialized. Asking
+	 * for one would build it as a side effect of a compile; don't. */
+	if (!m_class_get_runtime_info (method->klass))
+		return true;
+
+	ERROR_DECL (error);
+	MonoVTable *vtable = mono_class_vtable_checked (root->domain, method->klass, error);
+	if (!vtable || !is_ok (error)) {
+		mono_error_cleanup (error);
+		return true;
+	}
+
+	return !vtable->initialized;
+}
+
 llvm::Function *
 materialize_callee (void *target, void *root_cfg, llvm::Module *into)
 {
