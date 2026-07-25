@@ -111,6 +111,15 @@ using namespace llvm;
 
 namespace mono {
 
+struct RoundState {
+	/* Set while a round's stock-inliner sub-pipeline is running. */
+	bool recording = false;
+	/* Set while the stock InlinerPass itself is on the stack. */
+	bool in_inliner = false;
+	/* Functions the stock inliner inlined something into this round. */
+	SmallPtrSet<const Function *, 8> inlined_into;
+};
+
 namespace {
 
 /*
@@ -163,20 +172,6 @@ trace (const char *what, StringRef sym)
 	if (trace_enabled ())
 		errs () << "[inliner] " << what << " " << sym << "\n";
 }
-
-/*
- * Shared between the pass and the instrumentation callbacks registered
- * alongside it. The pass object gets copied into the pipeline's type-erased
- * pass model, so this lives behind a shared_ptr rather than in the pass itself.
- */
-struct RoundState {
-	/* Set while a round's stock-inliner sub-pipeline is running. */
-	bool recording = false;
-	/* Set while the stock InlinerPass itself is on the stack. */
-	bool in_inliner = false;
-	/* Functions the stock inliner inlined something into this round. */
-	SmallPtrSet<const Function *, 8> inlined_into;
-};
 
 /*
  * True if CB carries a generic-context (rgctx/mrgctx or imt) argument. Those
@@ -400,45 +395,7 @@ localize_foreign_declarations (Module &m)
 	}
 }
 
-/*
- * The tier-1 inlining stage. See the file comment for the algorithm; this is
- * the module pass that build_tier1_pipeline () splices into the -O2 pipeline
- * where LLVM's own inlining stage would otherwise sit.
- */
-class MonoInlinerPass : public PassInfoMixin<MonoInlinerPass> {
-public:
-	MonoInlinerPass (PassBuilder &pb, OptimizationLevel level,
-	                 std::shared_ptr<RoundState> state)
-	    : pb_ (&pb), level_ (level), state_ (std::move (state))
-	{
-	}
-
-	PreservedAnalyses run (Module &m, ModuleAnalysisManager &mam);
-
-	/*
-	 * This pass carries the per-function simplification pipeline that the stock
-	 * inlining stage it replaced used to carry, so skipping it would quietly
-	 * turn -O2 into something much weaker.
-	 */
-	static bool isRequired () { return true; }
-
-private:
-	void expose_callees (Module &m, Function &root, void *root_cfg,
-	                     DenseSet<void *> &refused,
-	                     SmallVectorImpl<Function *> &added);
-	void run_stock_inliner (Module &m, ModuleAnalysisManager &mam,
-	                        bool module_mutated);
-
-	/*
-	 * Held by pointer, not reference: a reference member would delete the
-	 * class's implicit copy/move-assignment and has non-obvious
-	 * lifetime/rebinding behaviour. The PassBuilder outlives the pass (it owns
-	 * the pipeline the pass is spliced into).
-	 */
-	PassBuilder *pb_;
-	OptimizationLevel level_;
-	std::shared_ptr<RoundState> state_;
-};
+} // namespace
 
 /*
  * Walk ROOT kMaterializeDepth call levels deep, materializing every callee that
@@ -660,6 +617,8 @@ MonoInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 	return PreservedAnalyses::none ();
 }
+
+namespace {
 
 /*
  * Observe the stock inliner's own per-caller analysis invalidation to learn

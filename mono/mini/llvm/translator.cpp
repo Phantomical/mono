@@ -25,7 +25,7 @@ extern "C" {
 }
 
 #include "mono_lsda.hpp"
-#include "inliner-support.hpp"
+#include "passes/inliner-support.hpp"
 
 #ifndef DISABLE_JIT
 /*
@@ -1223,8 +1223,9 @@ mono_llvm_emit_aot_module (const char *filename, const char *cu_name)
  * Tier-1 inliner support: root registry + lazy callee materialization.
  *
  * These are the mono-aware half of the top-down inliner. The pure-LLVM pass
- * (inliner.cpp) reaches them through inliner-support.hpp with everything mono
- * passed as an opaque void *, because that TU has no mono headers.
+ * (passes/inliner.cpp) reaches them through passes/inliner-support.hpp with
+ * everything mono passed as an opaque void *, because that TU has no mono
+ * headers.
  * ------------------------------------------------------------------------ */
 
 namespace mono {

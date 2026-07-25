@@ -76,7 +76,7 @@ EmitContext::handler_is_reachable (MonoBasicBlock *bb)
  * FINALLY clause: catch and fault handlers are not abort-protected.
  *
  * Only the SLOT is recorded here. Which PCs belong to the handler body is a
- * separate question, answered by MonoFinallyRangePass (engine.cpp) from this
+ * separate question, answered by MonoFinallyRangePass (passes/finally-range.cpp) from this
  * marker and the one OP_ENDFINALLY plants, once LLVM has finished moving code
  * around. LLVM may duplicate this marker along with the code it sits in; every
  * copy names the same alloca, so the recovery just requires them to agree.

@@ -255,7 +255,7 @@ EmitContext::emit_this_slot_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef s
  * built from. They are the ONLY thing about the body that survives codegen: an
  * instruction moves, is cloned and is merged along with the code around it,
  * whereas a block loses its identity to the first merge that touches it.
- * MonoFinallyRangePass (engine.cpp) walks between the two to recover which PCs
+ * MonoFinallyRangePass (passes/finally-range.cpp) walks between the two to recover which PCs
  * are body.
  *
  * SLOT must be the same exvar the shared IR checks after the finally returns

@@ -111,7 +111,7 @@ struct CompileResult {
 
 /* ---- EH gather side channel (C2) -----------------------------------------
  *
- * MonoEHGatherPass (a MachineFunctionPass in engine.cpp, scheduled right after
+ * MonoEHGatherPass (a MachineFunctionPass in passes/eh-gather.cpp, scheduled right after
  * addMachinePasses() in MonoIRCompiler's object-emission pipeline) reads the
  * target-neutral MF.getLandingPads() and recovers, per landing pad, mono's IL
  * clause_index from the type_info_N global's i32 initializer - all in-process,

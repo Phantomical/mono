@@ -446,6 +446,9 @@ if ENABLE_LLVM
 #     lines on its own and splitting it is a code change, not a move.
 #   - translator-cpp.cpp/.hpp: the C++ shim over the LLVM C++ API that the
 #     translator builds on (forward-ported from mini-llvm-cpp.cpp).
+#   - passes/: the custom passes the pipelines are built from - the tier-1
+#     inliner, the two machine-level EH passes engine.cpp schedules after
+#     addMachinePasses (), and the opt-in per-pass IR dumper.
 #   - backend.h: the extern "C" boundary the rest of mono links against. It did
 #     not grow to accommodate the split; translator-internal.hpp is internal to
 #     this directory.
@@ -454,10 +457,15 @@ llvm_sources = \
 	llvm/backend.h \
 	llvm/engine.hpp \
 	llvm/engine.cpp \
-	llvm/inliner.hpp \
-	llvm/inliner.cpp \
-	llvm/pass-dump.hpp \
-	llvm/pass-dump.cpp \
+	llvm/passes/eh-gather.hpp \
+	llvm/passes/eh-gather.cpp \
+	llvm/passes/finally-range.hpp \
+	llvm/passes/finally-range.cpp \
+	llvm/passes/inliner.hpp \
+	llvm/passes/inliner.cpp \
+	llvm/passes/inliner-support.hpp \
+	llvm/passes/pass-dump.hpp \
+	llvm/passes/pass-dump.cpp \
 	llvm/translator-cpp.hpp \
 	llvm/translator-cpp.cpp \
 	llvm/ehframe.cpp \
@@ -982,7 +990,7 @@ rcheck: mono $(regtests)
 # create+unload) that must run to completion without crashing while promotions
 # fire on the first call.
 # inliner-tests.exe (inliner-tests.cs) is the differential corpus for the
-# top-down LLVM inliner (mono/mini/llvm/inliner.cpp): every test_N method's
+# top-down LLVM inliner (mono/mini/llvm/passes/inliner.cpp): every test_N method's
 # expected value is the classic/tier-0-correct answer, so running it here
 # under tier 1 is itself the check that inlining did not change behaviour.
 # It runs BOTH ways, and only the standalone (Main/TestDriver) run inlines

@@ -40,6 +40,12 @@ Legacy files being superseded:
   is **non-destructive**: it JITs a private clone of the caller's module and leaves the
   original intact (mono keeps using it after the call, e.g. `remove_gc_safepoint_poll`), and
   `mono_llvm_create_ee` returns `NULL` (there is no per-EE handle; the engine is a singleton).
+- `passes/` — every custom pass, one pair of files each, so neither `engine.cpp` nor the
+  translator carries them inline: `inliner.{hpp,cpp}` (the tier-1 inliner that occupies the
+  stock inliner's slot in the -O2 pipeline, plus `inliner-support.hpp`, its mono-side
+  boundary), `eh-gather.{hpp,cpp}` and `finally-range.{hpp,cpp}` (the two machine-level
+  passes `engine.cpp` schedules after `addMachinePasses()` to recover EH clauses and finally
+  body ranges), and `pass-dump.{hpp,cpp}` (the opt-in per-pass IR dumper).
 - `backend.h` — the single `extern "C"` entry-point header mono's C code includes.
 - `depatch.md` — running notes on removing the fork's dependence: `nest` attribute in place of
   `CallingConv::Mono`, consuming stock `.eh_frame`/`.gcc_except_table`.

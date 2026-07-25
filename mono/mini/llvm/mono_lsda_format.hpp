@@ -6,7 +6,7 @@
  *
  * Split out of mono_lsda.hpp because the two sides of the section are compiled
  * against different worlds: the WRITER (MonoLSDAStreamer and the machine passes
- * feeding it, engine.cpp) is pure LLVM and must not pull in mini.h, while the
+ * feeding it, passes/) is pure LLVM and must not pull in mini.h, while the
  * READER (mono_lsda.cpp) needs the mono clause types. These constants are the
  * only thing both sides must agree on beyond the byte layout, so they live here
  * with no dependencies at all.
@@ -39,8 +39,9 @@ constexpr std::uint32_t MONO_LSDA_KIND_RESUME_PAD = 0x10000;
 
 /*
  * The entry is not a protected region at all: it is one PC range clause_index's
- * FINALLY handler BODY occupies, recorded by MonoFinallyRangePass (engine.cpp).
- * A clause can have several, one per surviving copy of its body.
+ * FINALLY handler BODY occupies, recorded by MonoFinallyRangePass
+ * (passes/finally-range.cpp). A clause can have several, one per surviving copy
+ * of its body.
  *
  * try_start_off/try_len carry the range; handler_off is unused and zero. The
  * runtime's thread-abort guard is the only consumer: it asks whether a stopped
@@ -58,7 +59,8 @@ constexpr std::uint32_t MONO_LSDA_KIND_FINALLY_BODY = 0x10001;
  * so neither an IR block nor a MachineBasicBlock still means "body" by the time
  * the ranges have to be recorded. An instruction does - passes move and clone
  * instructions rather than rewriting them - so the body is bracketed by a pair of
- * markers and MonoFinallyRangePass (engine.cpp) walks between them.
+ * markers and MonoFinallyRangePass (passes/finally-range.cpp) walks between
+ * them.
  *
  * The low 32 bits of a finally marker's ID are the IL clause index.
  */
