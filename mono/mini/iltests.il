@@ -3929,4 +3929,222 @@ L3:
 		ldc.i4.0
 		ret
 	}
+
+	// ------------------------------------------------------------------
+	// A clause whose HANDLER sits at a lower IL offset than its own try
+	// region. Nothing requires a handler to follow the try it protects -
+	// mono's verifier accepts both of the methods below - but no compiler
+	// emits it, so a backend that reads handler_offset as a stand-in for
+	// where a try region ends sees the nesting inverted and routes a throw
+	// to the wrong handler. Reachable from hand-written IL and from
+	// rewriters that reorder blocks, which is what these pin down.
+	// ------------------------------------------------------------------
+
+	.field public static int32 eh_flip_sink
+
+	.method private hidebysig static void eh_flip_nop () cil managed noinlining
+	{
+		.maxstack 1
+		ret
+	}
+
+	// An outer catch whose handler is emitted before its try region, with a
+	// finally nested inside that try and a call of its own in the outer try
+	// (so the outer clause is protecting something in its own right).
+	.method private hidebysig static int32 eh_flip_outer_call (int32 x) cil managed
+	{
+		.maxstack 3
+		.locals init (int32 s)
+		ldc.i4.0
+		stloc.0
+		br.s FLIP_START
+
+	FLIP_H_OUT:
+		pop
+		ldloc.0
+		ldc.i4 10000
+		add
+		stloc.0
+		leave.s FLIP_DONE
+	FLIP_H_OUT_END:
+
+	FLIP_START:
+	FLIP_T_IN:
+		ldloc.0
+		ldc.i4.1
+		add
+		stloc.0
+		ldarg.0
+		brfalse.s FLIP_SKIP
+		newobj instance void [mscorlib]System.InvalidOperationException::.ctor()
+		throw
+	FLIP_SKIP:
+		leave.s FLIP_TAIL
+	FLIP_T_IN_END:
+
+	FLIP_H_IN:
+		ldloc.0
+		ldc.i4.s 10
+		add
+		stloc.0
+		endfinally
+	FLIP_H_IN_END:
+
+	FLIP_TAIL:
+		call void Tests::eh_flip_nop()
+		ldloc.0
+		ldc.i4.5
+		add
+		stloc.0
+		leave.s FLIP_DONE
+	FLIP_T_OUT_END:
+
+	FLIP_DONE:
+		ldloc.0
+		ret
+
+		.try FLIP_T_IN to FLIP_T_IN_END finally handler FLIP_H_IN to FLIP_H_IN_END
+		.try FLIP_START to FLIP_T_OUT_END catch [mscorlib]System.Exception handler FLIP_H_OUT to FLIP_H_OUT_END
+	}
+
+	// The same flip with the enclosing clause a FINALLY rather than a catch,
+	// so an escaping throw has to run both cleanups on the way out.
+	.method private hidebysig static int32 eh_flip_nested_finally (int32 x) cil managed
+	{
+		.maxstack 3
+		.locals init (int32 s)
+		ldc.i4.0
+		stloc.0
+		br.s FLIP2_START
+
+	FLIP2_H_OUT:
+		ldsfld int32 Tests::eh_flip_sink
+		ldc.i4 100
+		add
+		stsfld int32 Tests::eh_flip_sink
+		ldloc.0
+		ldc.i4 100
+		add
+		stloc.0
+		endfinally
+	FLIP2_H_OUT_END:
+
+	FLIP2_START:
+	FLIP2_T_IN:
+		ldloc.0
+		ldc.i4.1
+		add
+		stloc.0
+		ldarg.0
+		brfalse.s FLIP2_SKIP
+		newobj instance void [mscorlib]System.InvalidOperationException::.ctor()
+		throw
+	FLIP2_SKIP:
+		leave.s FLIP2_TAIL
+	FLIP2_T_IN_END:
+
+	FLIP2_H_IN:
+		ldsfld int32 Tests::eh_flip_sink
+		ldc.i4.s 10
+		add
+		stsfld int32 Tests::eh_flip_sink
+		ldloc.0
+		ldc.i4.s 10
+		add
+		stloc.0
+		endfinally
+	FLIP2_H_IN_END:
+
+	FLIP2_TAIL:
+		call void Tests::eh_flip_nop()
+		leave.s FLIP2_DONE
+	FLIP2_T_OUT_END:
+
+	FLIP2_DONE:
+		ldloc.0
+		ldsfld int32 Tests::eh_flip_sink
+		add
+		ret
+
+		.try FLIP2_T_IN to FLIP2_T_IN_END finally handler FLIP2_H_IN to FLIP2_H_IN_END
+		.try FLIP2_START to FLIP2_T_OUT_END finally handler FLIP2_H_OUT to FLIP2_H_OUT_END
+	}
+
+	.method public static int32 test_0_flipped_handler_placement_catch () cil managed
+	{
+		.maxstack 4
+
+		// Throws: the finally adds 10 and the enclosing catch 10000.
+		ldc.i4.1
+		call int32 Tests::eh_flip_outer_call(int32)
+		ldc.i4 10011
+		beq.s FLIPT_L1
+		ldc.i4.1
+		ret
+	FLIPT_L1:
+		// Falls through: 1 in the try, 10 leaving it, 5 in the outer tail.
+		ldc.i4.0
+		call int32 Tests::eh_flip_outer_call(int32)
+		ldc.i4.s 16
+		beq.s FLIPT_L2
+		ldc.i4.2
+		ret
+	FLIPT_L2:
+		ldc.i4.0
+		ret
+	}
+
+	.method public static int32 test_0_flipped_handler_placement_finally () cil managed
+	{
+		.maxstack 4
+		.locals init (int32 res)
+
+		// Falls through: both cleanups run on the leave, so s is 111 and the
+		// sink 110; the method returns their sum.
+		ldc.i4.0
+		stsfld int32 Tests::eh_flip_sink
+		ldc.i4.0
+		call int32 Tests::eh_flip_nested_finally(int32)
+		ldc.i4 221
+		beq.s FLIPF_L1
+		ldc.i4.1
+		ret
+	FLIPF_L1:
+		ldsfld int32 Tests::eh_flip_sink
+		ldc.i4 110
+		beq.s FLIPF_L2
+		ldc.i4.2
+		ret
+
+	FLIPF_L2:
+		// Throws: the exception leaves the method, but both cleanups still
+		// have to have run on the way out.
+		ldc.i4.0
+		stsfld int32 Tests::eh_flip_sink
+		ldc.i4.3
+		stloc.0
+		.try {
+			ldc.i4.1
+			call int32 Tests::eh_flip_nested_finally(int32)
+			pop
+			ldc.i4.4
+			stloc.0
+			leave.s FLIPF_DONE
+		} catch [mscorlib]System.Exception {
+			pop
+			ldsfld int32 Tests::eh_flip_sink
+			ldc.i4 110
+			beq.s FLIPF_OK
+			ldc.i4.5
+			stloc.0
+			leave.s FLIPF_DONE
+		FLIPF_OK:
+			ldc.i4.0
+			stloc.0
+			leave.s FLIPF_DONE
+		}
+	FLIPF_DONE:
+		ldloc.0
+		ret
+	}
 }

@@ -356,6 +356,14 @@ gep_index_list (LLVMValueRef *idx, unsigned n)
  * SIBLINGS - identical try_offset AND try_len, i.e. try { } catch(A) catch(B) -
  * are excluded: they share one landing pad and are routed by the same-range loops,
  * not by nesting.
+ *
+ * The test is on the try regions' own extents. Handler PLACEMENT says nothing about
+ * nesting: nothing requires a clause's handler to sit after its try region, and IL
+ * that puts an enclosing clause's handler at a lower offset than its try inverts any
+ * predicate that reads handler_offset as a stand-in for where the try region ends.
+ * Comparing ends also keeps a clause that lives inside another's HANDLER body out -
+ * its try region is past the end of the other's, so it is not contained, which is
+ * right: a throw in a handler is not protected by that handler's own clause.
  */
 static inline bool
 clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
@@ -363,7 +371,7 @@ clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
 	bool siblings = c->try_offset == j->try_offset && c->try_len == j->try_len;
 	return !siblings &&
 	       c->try_offset >= j->try_offset &&
-	       c->handler_offset <= j->handler_offset;
+	       (guint64)c->try_offset + c->try_len <= (guint64)j->try_offset + j->try_len;
 }
 
 typedef struct {

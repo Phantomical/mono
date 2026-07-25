@@ -118,11 +118,12 @@ ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
 }
 
 /*
- * Does IL clause J strictly ENCLOSE clause C - i.e. is C nested in J's try?
- * (doc 21 4, EH N1). This is byte-for-byte the translator nesting gate's
- * containment predicate (translator.cpp) plus its sibling exemption:
+ * Does IL clause J strictly ENCLOSE clause C - i.e. is C nested in J's try? This
+ * has to answer identically to the translator's predicate of the same name
+ * (translator-internal.hpp), which decides where the landing pads it emits send
+ * control; the two disagreeing means dispatching to a handler the IR never routed.
  *
- *   c.try_offset >= j.try_offset && c.handler_offset <= j.handler_offset
+ *   c.try_offset >= j.try_offset && c.try_offset + c.try_len <= j.try_offset + j.try_len
  *
  * with SIBLINGS (identical protected region: same try_offset AND same try_len)
  * excluded. Siblings - try { } catch(A) catch(B) - are NOT nesting; they share
@@ -130,9 +131,11 @@ ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
  * by the gather, so folding them into nested_in would synthesise a spurious
  * duplicate of the co-sibling over the same range.
  *
- * The predicate keys on handler_offset (not try_len), so it correctly EXCLUDES a
- * clause sitting in another clause's HANDLER body (disjoint try ranges) - those
- * are admitted today and must not be treated as nested.
+ * Comparing the try regions' own extents - rather than reading handler_offset as a
+ * stand-in for where a try region ends - is what makes this hold for IL that places
+ * an enclosing clause's handler at a LOWER offset than its try. It still excludes a
+ * clause sitting in another clause's HANDLER body, whose try region starts past the
+ * end of the other's and so is not contained.
  */
 bool
 clause_encloses (const MonoExceptionClause &c, const MonoExceptionClause &j)
@@ -140,7 +143,7 @@ clause_encloses (const MonoExceptionClause &c, const MonoExceptionClause &j)
 	bool siblings = c.try_offset == j.try_offset && c.try_len == j.try_len;
 	return !siblings &&
 	       c.try_offset >= j.try_offset &&
-	       c.handler_offset <= j.handler_offset;
+	       (std::uint64_t) c.try_offset + c.try_len <= (std::uint64_t) j.try_offset + j.try_len;
 }
 
 } // anonymous namespace

@@ -984,7 +984,14 @@ rcheck: mono $(regtests)
 # top-down LLVM inliner (mono/mini/llvm/inliner.cpp): every test_N method's
 # expected value is the classic/tier-0-correct answer, so running it here
 # under tier 1 is itself the check that inlining did not change behaviour.
-tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe inliner-tests.exe
+# exceptions.exe and iltests.exe are ordinary rcheck corpora, replayed at
+# threshold 0 so every method is compiled by tier 1 from its first call. The
+# same expected values hold whichever tier ran them, which makes this the
+# differential check on tier-1 EH codegen - the coverage gap that let a
+# same-frame handler chain go wrong for a whole milestone. Threshold 0 rather
+# than a hot loop: these are one-shot test methods, so waiting for a call count
+# to build would just leave most of them at tier 0.
+tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe inliner-tests.exe exceptions.exe iltests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
@@ -993,6 +1000,8 @@ tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe i
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression exceptions.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression iltests.exe
 
 richeck: mono $(regtests)
 	$(INTERP_RUNTIME) --regression $(regtests)
