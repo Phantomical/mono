@@ -2520,8 +2520,21 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 	mono_jit_info_init (jinfo, cfg->method_to_register, cfg->native_code, cfg->code_len, flags, num_clauses, num_holes);
 	jinfo->domain_neutral = (cfg->opt & MONO_OPT_SHARED) != 0;
 
-	if (COMPILE_LLVM (cfg))
+	if (COMPILE_LLVM (cfg)) {
 		jinfo->from_llvm = TRUE;
+		/*
+		 * Neither of the runtime's native-offset -> IL-offset mappings is
+		 * produced by this backend: sequence points get their native offsets
+		 * from mono_add_seq_point (), and the symbol-file line table from
+		 * mono_debug_open_method ()/mono_debug_close_method () - all three only
+		 * ever run inside mono_codegen (), i.e. for a classic body. Both
+		 * mappings are keyed by MonoMethod, so under tiering a promoted method
+		 * still has the tier-0 body's mapping registered, and reading it with a
+		 * tier-1 native offset yields a plausible but fabricated IL offset.
+		 * Drop this flag if the backend ever grows a real mapping.
+		 */
+		jinfo->no_il_offsets = TRUE;
+	}
 
 	if (cfg->gshared) {
 		MonoInst *inst;

@@ -1135,13 +1135,19 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 		 * mono_debug_lookup_source_location() returns both the file / line number information
 		 * and the IL offset.  Note that computing the IL offset is already an expensive
 		 * operation, so we shouldn't call this method twice.
+		 *
+		 * Both lookups are keyed by MonoMethod and answer for whichever body was
+		 * compiled first, so for a body that isn't described by them (ji->no_il_offsets)
+		 * they would return an offset read off a different code layout. Report the frame
+		 * as having no IL offset instead - the caller then prints it in the
+		 * '<code_start + native_offset>' form, which is at least true.
 		 */
-		location = mono_debug_lookup_source_location (jinfo_get_method (ji), sf->native_offset, domain);
+		location = ji->no_il_offsets ? NULL : mono_debug_lookup_source_location (jinfo_get_method (ji), sf->native_offset, domain);
 		if (location) {
 			sf->il_offset = location->il_offset;
 		} else {
 			SeqPoint sp;
-			if (mono_find_prev_seq_point_for_native_offset (domain, jinfo_get_method (ji), sf->native_offset, NULL, &sp))
+			if (!ji->no_il_offsets && mono_find_prev_seq_point_for_native_offset (domain, jinfo_get_method (ji), sf->native_offset, NULL, &sp))
 				sf->il_offset = sp.il_offset;
 			else
 				sf->il_offset = -1;
@@ -1350,7 +1356,9 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 		if (frame.type == FRAME_TYPE_TRAMPOLINE)
 			goto next;
 
-		if ((unwind_options & MONO_UNWIND_LOOKUP_IL_OFFSET) && frame.ji) {
+		/* See the ji->no_il_offsets comment in ves_icall_get_trace () - a body the
+		 * per-method mappings don't describe has no IL offset to report. */
+		if ((unwind_options & MONO_UNWIND_LOOKUP_IL_OFFSET) && frame.ji && !frame.ji->no_il_offsets) {
 			MonoDebugSourceLocation *source = NULL;
 
 			// Don't do this when we can be in a signal handler
@@ -1937,6 +1945,10 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 
 	if (il_offset != -1) {
 		location = mono_debug_lookup_source_location_by_il (jmethod, il_offset, domain);
+	} else if (ji && ji->no_il_offsets) {
+		/* The line table is registered per method and describes a different body
+		 * than this frame's - see ves_icall_get_trace (). */
+		location = NULL;
 	} else {
 		location = mono_debug_lookup_source_location (jmethod, *native_offset, domain);
 	}

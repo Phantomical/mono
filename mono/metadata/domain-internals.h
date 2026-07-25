@@ -279,6 +279,17 @@ struct _MonoJitInfo {
 
 	gboolean    dbg_ignore : 1;
 
+	/*
+	 * This body has no native-offset -> IL-offset mapping of its own. Both of
+	 * the runtime's mappings (the symbol-file line table and the sequence point
+	 * table) are registered per MonoMethod rather than per body, so when a
+	 * method has more than one body only the first one to be compiled is
+	 * described. Consulting either mapping for one of the others reads offsets
+	 * belonging to a completely different code layout, so the honest answer for
+	 * such a body is "no IL offset" - see mini-exceptions.c.
+	 */
+	gboolean    no_il_offsets : 1;
+
 	/* FIXME: Embed this after the structure later*/
 	gpointer    gc_info; /* Currently only used by SGen */
 
