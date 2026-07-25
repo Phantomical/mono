@@ -1730,6 +1730,11 @@ LLVM_DISABLED_TESTS = \
 LLVM_DISABLED_TESTS += \
 	weak-fields.exe
 
+# Test is too sensitive: it reads back a dangling localloc block and only passes
+# if two different methods happen to get byte-identical frame layouts. LLVM
+# vectorizes one of them and not the other, so their frames differ by 32 bytes.
+LLVM_DISABLED_TESTS += localloc-noinit.exe
+
 if HOST_WIN32
 # https://github.com/mono/mono/issues/19603
 LLVM_DISABLED_TESTS += sgen-bridge.exe
