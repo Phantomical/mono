@@ -249,11 +249,24 @@ mono_handle_stack_free (HandleStack *stack)
 void
 mono_handle_stack_free_domain (HandleStack *stack, MonoDomain *domain)
 {
-	/* Called by the GC while clearing out objects of the given domain from the heap. */
-	/* If there are no handles-related bugs, there is nothing to do: if a
-	 * thread accessed objects from the domain it was aborted, so any
-	 * threads left alive cannot have any handles that point into the
-	 * unloading domain.  However if there is a handle leak, the handle stack is not */
+	/*
+	 * Called by the GC, with the world stopped, while clearing out objects of the
+	 * given domain from the heap.
+	 *
+	 * Usually there is nothing to do here: a thread that touched objects of the
+	 * domain was aborted, and by the time we get here it has unwound out of the
+	 * domain. But an abort that unwinds through a native frame - an icall that
+	 * called back into managed code, say - never runs that frame's
+	 * HANDLE_FUNCTION_RETURN, so the handles it allocated stay on the thread's
+	 * handle stack until the thread either returns through an outer
+	 * HANDLE_FUNCTION_RETURN or exits. The unload only waits for such a thread to
+	 * drop its appdomain ref, not to finish detaching, so we can get here while
+	 * those handles are still around.
+	 *
+	 * They are dead either way - nothing will read them again - but they are still
+	 * in the range the GC scans, so leaving them alone turns them into dangling
+	 * pointers the moment the domain's memory goes away. Clear them.
+	 */
 	if (!stack)
 		return;
 	/* Root domain only unloaded when mono is shutting down, don't need to check anything */
@@ -268,7 +281,8 @@ mono_handle_stack_free_domain (HandleStack *stack, MonoDomain *domain)
 			HandleChunkElem *elem = &cur->elems[idx];
 			if (!elem->o)
 				continue;
-			g_assert (mono_object_domain (elem->o) != domain);
+			if (mono_object_domain (elem->o) == domain)
+				elem->o = NULL;
 		}
 		if (cur == last)
 			break;
