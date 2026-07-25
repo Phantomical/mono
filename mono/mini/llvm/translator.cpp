@@ -1232,7 +1232,12 @@ tier1_root_allows_inlining (void *root_cfg)
 	MonoCompile *cfg = static_cast<MonoCompile *> (root_cfg);
 	if (!cfg)
 		return false;
-	/* #1/#19: NOOPTIMIZATION/debug method, or -O=inline cleared. */
+	/*
+	 * Debug method (DebuggableAttribute.IsJITOptimizerDisabled), or -O=inline
+	 * cleared. A NOOPTIMIZATION method can't reach here as a root: it never
+	 * compiles under LLVM at all, since mono_llvm_check_method_supported
+	 * declines it up front.
+	 */
 	if (cfg->disable_inline)
 		return false;
 	if (!(cfg->opt & MONO_OPT_INLINE))

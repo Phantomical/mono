@@ -493,6 +493,8 @@ tiered_type_touches_dynamic (MonoType *type, int depth)
  * memory-safety bug on the worker.
  *
  * Declines:
+ *   - NoOptimization methods: mono_llvm_check_method_supported () refuses them
+ *     unconditionally, so they can never hold a tier-1 body.
  *   - anything not in the root domain: a non-root app-domain is transient and
  *     can unload out from under a background compile, and its per-domain tier-1
  *     trampolines would dangle in the process-global direct-call symbol cache
@@ -506,6 +508,13 @@ static gboolean
 tiered_method_should_decline (MonoMethod *method, MonoDomain *domain)
 {
 	if (!method)
+		return TRUE;
+
+	/* A NoOptimization method never gets a tier-1 body (see
+	 * mono_llvm_check_method_supported () in translator.cpp), so promoting it
+	 * would just burn a background compile that declines at the end. Decline
+	 * it here instead, before it ever gets queued. */
+	if (method->iflags & METHOD_IMPL_ATTRIBUTE_NOOPTIMIZATION)
 		return TRUE;
 
 	/* Root domain is the only one with process-lifetime code/trampoline
