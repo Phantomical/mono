@@ -919,6 +919,23 @@ private:
 
 static std::once_flag g_targets_once;
 
+/*
+ * Set one of LLVM's internal boolean cl::opts. Several codegen knobs we need are
+ * static file-local options with no public setter, so the registered-options map
+ * is the only way in. A missing name means the LLVM we built against renamed or
+ * dropped the knob, which would silently change codegen - fatal rather than
+ * quietly ignored.
+ */
+static void
+set_llvm_flag (const char *name, bool value)
+{
+	auto &opts = cl::getRegisteredOptions ();
+	auto it = opts.find (name);
+	if (it == opts.end ())
+		report_fatal_error (Twine ("LLVM dropped/renamed the '") + name + "' option");
+	static_cast<cl::opt<bool> *> (it->second)->setValue (value);
+}
+
 static void
 ensure_native_target ()
 {
@@ -941,11 +958,22 @@ ensure_native_target ()
 		 * MONO_DEBUG=llvm-disable-implicit-null-checks (drops the tags, so the
 		 * pass folds nothing). See design doc 25.
 		 */
-		auto &opts = cl::getRegisteredOptions ();
-		auto it = opts.find ("enable-implicit-null-checks");
-		if (it == opts.end ())
-			report_fatal_error ("LLVM dropped/renamed enable-implicit-null-checks");
-		static_cast<cl::opt<bool> *> (it->second)->setValue (true);
+		set_llvm_flag ("enable-implicit-null-checks", true);
+
+		/*
+		 * Turn off X86CallFrameOptimization. For a call that needs stack
+		 * arguments it rewrites the stores into prologue-reserved space as
+		 * pushes right before the call plus a compensating `add %rsp` after it,
+		 * so the CFA offset is 0x10 higher at the call than at the rest of the
+		 * body. The runtime's EH does not model that: when it jumps to a catch
+		 * handler it restores the stack pointer the protected call was made
+		 * with, and never undoes the pushes - the handler then runs, and
+		 * returns, one argument area below the real frame. Both the classic and
+		 * the tier-1 backend need the CFA offset to be the same at every
+		 * instruction of a method for that to be sound, which is what this
+		 * gives us. See mono/tests/bug-gh-17285.cs.
+		 */
+		set_llvm_flag ("no-x86-call-frame-opt", true);
 	});
 }
 
