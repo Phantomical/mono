@@ -83,6 +83,11 @@ namespace mono {
  * differential fixtures assert on this: e.g. that a gshared rgctx-passing callee
  * or a clause-bearing callee is REFUSED (never INLINEd), which is otherwise a
  * silent miscompile to eyeball.
+ *
+ * The caller-level gates trace too ("refuse-root-*"), because the failure mode
+ * they produce is a run that inlines nothing at all while every test still
+ * passes - indistinguishable from a corpus with no candidates in it unless the
+ * pass says why it stood down.
  */
 static bool
 trace_enabled ()
@@ -298,8 +303,11 @@ MonoTopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 	for (Function *root : roots) {
 		void *root_cfg = tier1_root_cfg (root);
 		/* Caller-level gates #1/#19/#2 (and: no cfg => nothing to materialize with). */
-		if (!root_cfg || !tier1_root_allows_inlining (root_cfg))
+		if (!root_cfg || !tier1_root_allows_inlining (root_cfg)) {
+			trace (root_cfg ? tier1_root_refusal_reason (root_cfg) : "refuse-root-nocfg",
+			       root->getName ());
 			continue;
+		}
 
 		/*
 		 * Simplify the root once so eligibility and costs see canonical IR (the

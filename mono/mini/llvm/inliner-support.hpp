@@ -40,6 +40,12 @@ void *tier1_root_cfg (llvm::Function *root);
 bool tier1_root_allows_inlining (void *root_cfg);
 
 /*
+ * Which of the gates above turned ROOT_CFG down, as a MONO_INLINER_TRACE tag.
+ * Only meaningful when tier1_root_allows_inlining () returned false.
+ */
+const char *tier1_root_refusal_reason (void *root_cfg);
+
+/*
  * Map a direct-call target symbol back to the managed MonoMethod it names
  * (returned opaque), or NULL if SYM is not a managed-method symbol (an icall,
  * an intrinsic, the root itself, ...).

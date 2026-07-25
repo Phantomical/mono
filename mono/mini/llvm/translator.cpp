@@ -1250,6 +1250,21 @@ tier1_root_allows_inlining (void *root_cfg)
 	return true;
 }
 
+const char *
+tier1_root_refusal_reason (void *root_cfg)
+{
+	MonoCompile *cfg = static_cast<MonoCompile *> (root_cfg);
+	if (cfg->disable_inline)
+		return "refuse-root-disable-inline";
+	if (!(cfg->opt & MONO_OPT_INLINE))
+		return "refuse-root-no-opt-inline";
+	if (cfg->gshared)
+		return "refuse-root-gshared";
+	if (cfg->gsharedvt)
+		return "refuse-root-gsharedvt";
+	return "refuse-root";
+}
+
 void *
 managed_method_from_symbol (const char *sym)
 {

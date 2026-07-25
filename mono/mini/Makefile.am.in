@@ -984,6 +984,15 @@ rcheck: mono $(regtests)
 # top-down LLVM inliner (mono/mini/llvm/inliner.cpp): every test_N method's
 # expected value is the classic/tier-0-correct answer, so running it here
 # under tier 1 is itself the check that inlining did not change behaviour.
+# It runs BOTH ways, and only the standalone (Main/TestDriver) run inlines
+# anything. --regression drives the opt_sets [] table, whose first entry is 0,
+# and mini_regression_step () pushes that through mono_set_defaults (), so the
+# whole first pass compiles with MONO_OPT_INLINE clear. Tier 1 latches an opt
+# per method the first time it is promoted (tiered_state is keyed by MonoMethod
+# and never re-enqueues), so every root ends up carrying opt-set 0's flags for
+# the rest of the process and tier1_root_allows_inlining () turns all of them
+# down on -O=-inline. The --regression runs stay because they still cover tier-1
+# codegen across 26 opt combinations; they just are not inliner coverage.
 # exceptions.exe and iltests.exe are ordinary rcheck corpora replayed under
 # tiering. Their expected values hold whichever tier ran them, which makes this
 # the differential check on tier-1 EH codegen - the coverage gap that let a
@@ -1007,6 +1016,9 @@ tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe i
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm inliner-tests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm inliner-tests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression exceptions.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression exceptions.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression iltests.exe

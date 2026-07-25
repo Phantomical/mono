@@ -26,6 +26,14 @@ using MonoTests.Inliner;
 // same, correct value - if a wrong inlining decision changes observable
 // behaviour, only the tier-1 run goes wrong and the test fails there.
 //
+// The tier-1 run that actually inlines is the STANDALONE one (Main below, via
+// TestDriver), not `--regression`. Under --regression the first opt-set is 0,
+// mini_regression_step () installs it with mono_set_defaults (), and tier 1
+// latches a method's opt the first time it promotes - so every root spends the
+// rest of the process at -O=-inline and the pass stands down on all of them
+// (visible as "refuse-root-no-opt-inline" under MONO_INLINER_TRACE=1). Both
+// runs are in tieredcheck; only the standalone one is inliner coverage.
+//
 // A test that works out its expected value by recomputing the callee's logic
 // inline carries [MethodImpl(NoOptimization)], which keeps it on the classic
 // JIT (mono_llvm_check_method_supported declines it). Without that the test
