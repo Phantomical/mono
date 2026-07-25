@@ -993,6 +993,12 @@ rcheck: mono $(regtests)
 # the rest of the process and tier1_root_allows_inlining () turns all of them
 # down on -O=-inline. The --regression runs stay because they still cover tier-1
 # codegen across 26 opt combinations; they just are not inliner coverage.
+# The standalone runs include threshold 0 because that is the only setting where
+# a method that runs once ever actually executes a tier-1 body: at any threshold
+# above it promotion is queued and published by the worker, which for one-shot
+# code lands long after the method has returned. Everything the corpus drives
+# through the class libraries - and most of what a short program does at all - is
+# one-shot, so the higher thresholds only ever cover the hot-loop half.
 # exceptions.exe and iltests.exe are ordinary rcheck corpora replayed under
 # tiering. Their expected values hold whichever tier ran them, which makes this
 # the differential check on tier-1 EH codegen - the coverage gap that let a
@@ -1019,6 +1025,7 @@ tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe i
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm inliner-tests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression exceptions.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression exceptions.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression iltests.exe

@@ -4008,23 +4008,31 @@ mono_method_check_inlining (MonoCompile *cfg, MonoMethod *method)
 				}
 			}
 		} else if (mono_class_is_before_field_init (method->klass)) {
-			if (cfg->run_cctors && m_class_has_cctor (method->klass)) {
+			if (m_class_has_cctor (method->klass) && !cfg->compile_aot) {
 				ERROR_DECL (error);
 				/*FIXME it would easier and lazier to just use mono_class_try_get_vtable */
 				if (!m_class_get_runtime_info (method->klass))
 					/* No vtable created yet */
 					return FALSE;
+
 				vtable = mono_class_vtable_checked (cfg->domain, method->klass, error);
 				if (!is_ok (error)) {
 					mono_error_cleanup (error);
 					return FALSE;
 				}
+
 				/* This makes so that inline cannot trigger */
 				/* .cctors: too many apps depend on them */
 				/* running with a specific order... */
-				if (! vtable->initialized)
+				if (!vtable->initialized)
 					return FALSE;
-				if (!mono_runtime_class_init_full (vtable, error)) {
+
+				/**
+				 * Only run the class init if we are permitted to run cctors.
+				 * Otherwise codegen will take care to insert the correct cctor
+				 * checks in the generated code.
+				 */
+				if (cfg->run_cctors && !mono_runtime_class_init_full (vtable, error)) {
 					mono_error_cleanup (error);
 					return FALSE;
 				}
