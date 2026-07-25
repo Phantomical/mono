@@ -1440,6 +1440,56 @@ callee_reads_cctor_guarded_static (void *target)
 }
 
 /*
+ * True if calling METHOD reports something about the CALLER's own stack frame -
+ * the frame-walking reflection entry points. A method that makes such a call
+ * has to keep its frame: fold it into its caller and the frame those APIs
+ * report becomes the caller's, so GetCurrentMethod () names the wrong method
+ * and StackTrace's frame 0 is the wrong frame (gate #25).
+ *
+ * mono marks only some of these no_inline itself (intrinsics.c, and only under
+ * llvm_only for GetCurrentMethod), and its own inliner mostly gets away with it
+ * because its 20-IL-byte ceiling keeps such methods out of reach anyway. We
+ * hand size decisions to LLVM's cost model, which has no such accident to rely
+ * on, so the rule has to be stated.
+ *
+ * Deliberately conservative about StackTrace/StackFrame: the ctors taking an
+ * Exception report that exception's frames rather than the caller's and would
+ * be safe to fold, but telling the overloads apart is not worth it for what is
+ * cold, throw-path code either way.
+ */
+bool
+method_reports_caller_frame (void *target)
+{
+	MonoMethod *method = static_cast<MonoMethod *> (target);
+	if (!method)
+		return true;
+
+	MonoClass *klass = method->klass;
+	if (m_class_get_image (klass) != mono_defaults.corlib)
+		return false;
+
+	const char *name_space = m_class_get_name_space (klass);
+	const char *name = m_class_get_name (klass);
+
+	if (!strcmp (name_space, "System.Diagnostics"))
+		return (!strcmp (name, "StackTrace") || !strcmp (name, "StackFrame")) &&
+		       !strcmp (method->name, ".ctor");
+
+	if (!strcmp (name_space, "System.Reflection")) {
+		if (!strcmp (name, "MethodBase"))
+			return !strcmp (method->name, "GetCurrentMethod");
+		if (!strcmp (name, "Assembly"))
+			return !strcmp (method->name, "GetCallingAssembly") ||
+			       !strcmp (method->name, "GetExecutingAssembly");
+	}
+
+	if (!strcmp (name_space, "System") && !strcmp (name, "Environment"))
+		return !strcmp (method->name, "get_StackTrace");
+
+	return false;
+}
+
+/*
  * True if a managed call to METHOD still carries a class-init side effect -
  * METHOD's declaring class has a cctor that has not run yet in ROOT_CFG's
  * domain.
@@ -1544,10 +1594,17 @@ materialize_callee (void *target, void *root_cfg, llvm::Module *into)
 	{
 		EmitContext *ctx = alloc_emit_context (cfg);
 		/*
-		 * Translate into the caller's module. The intrinsic cache on the shared
-		 * MonoLLVMModule is already keyed to this lmodule (the root filled it),
-		 * so - unlike the standalone emit path - it must NOT be reset here.
+		 * Translate into the caller's module, and drop the intrinsic cache
+		 * first. Its entries are LLVM Functions the root emitted into this same
+		 * module, but we run from inside the optimization pipeline, and a pass
+		 * that folds away the last use of an intrinsic leaves the declaration
+		 * dead for GlobalOpt to delete - so a cached pointer can already be
+		 * dangling by the time we get here. Rebuilding costs nothing:
+		 * Intrinsic::getDeclaration () hands back the declaration the module
+		 * still has, and only creates one when it really is gone.
 		 */
+		memset (ctx->module->intrins_by_id, 0,
+		        sizeof (LLVMValueRef) * INTRINS_NUM);
 		ctx->lmodule = llvm::wrap (into);
 		ctx->translate_only = true;
 

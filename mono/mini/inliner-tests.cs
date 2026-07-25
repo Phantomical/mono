@@ -862,12 +862,12 @@ public class InlinerTests {
 	}
 
 	// ==========================================================================
-	// REFLECTION-FRAME CALLEES - refuse-nonleaf. Each of these makes a call
-	// into corlib/runtime frame-walking machinery, which is itself a call, so
-	// is_leaf_body() disqualifies them without needing any special-casing.
-	// StackTrace's frame-0 check is the most sensitive of the three: if the
-	// callee's own call frame were ever folded away by a wrong inline, frame 0
-	// would resolve to the CALLER instead.
+	// REFLECTION-FRAME CALLEES - refuse-frame. Each of these calls into the
+	// runtime's frame-walking machinery, which reports the frame of the method
+	// making the call - so folding that method into its caller changes the
+	// answer. StackTrace's frame-0 check is the most sensitive of the three:
+	// if the callee's own call frame were ever folded away by a wrong inline,
+	// frame 0 would resolve to the CALLER instead.
 	// ==========================================================================
 
 	static int LeafGetCurrentMethod () {

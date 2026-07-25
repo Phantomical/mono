@@ -1,14 +1,14 @@
 /**
  * \file
- * inliner.hpp - the top-down tier-1 LLVM inliner (new-PM module pass).
+ * inliner.hpp - mono's tier-1 LLVM inliner, packaged as the -O2 pipeline's
+ * inlining stage.
  *
- * This is the LLVM-side inliner for promoted (tier-1) methods. It is a genuine
- * top-down, budget-driven inliner in the end; at this slice (S1) it does lazy
- * cross-module callee materialization and a single inlining round over each
- * annotated root's direct managed leaf-call sites (see inliner.cpp for the exact
- * eligibility and the materialize/revert/strip machinery). The outer fixpoint
- * loop, the flat cross-round budget and the priority queue are S2; the full
- * eligibility hardening is S3.
+ * The tier-1 pipeline is the stock per-module -O2 pipeline with exactly one
+ * entry swapped out: LLVM's own inlining stage is replaced by a mono pass that
+ * pulls callee bodies into the module (they arrive as bodyless trampoline
+ * declarations otherwise) and then drives that same stock inliner over them,
+ * round by round, until nothing more folds into the root. build_tier1_pipeline
+ * () is the whole public surface; inliner.cpp has the algorithm.
  */
 
 #ifndef MONO_MINI_LLVM_INLINER_HPP
@@ -27,45 +27,22 @@
 
 namespace llvm {
 class PassBuilder;
+class PassInstrumentationCallbacks;
 }
 
 namespace mono {
 
 /*
- * The top-down inliner, packaged as a new-PM module pass slotted into the
- * otherwise-intact -O2 pipeline (see register_top_down_inliner ()). It holds a
- * reference to the PassBuilder that owns it so run () can build the same
- * function-simplification pipeline the stock CGSCC adaptor runs, and the
- * OptimizationLevel that pipeline is built at.
+ * Build the per-module default pipeline at LEVEL with mono's tier-1 inliner
+ * substituted for LLVM's stock inlining stage, in that stage's exact position.
+ * PIC must be the same instrumentation-callbacks object PB was constructed
+ * with - the pass observes the stock inliner's per-function analysis
+ * invalidations through it to tell whether a round changed a root.
  */
-class MonoTopDownInlinerPass
-    : public llvm::PassInfoMixin<MonoTopDownInlinerPass> {
-public:
-	MonoTopDownInlinerPass (llvm::PassBuilder &pb, llvm::OptimizationLevel level)
-	    : pb_ (&pb), level_ (level)
-	{
-	}
-
-	llvm::PreservedAnalyses run (llvm::Module &m,
-	                             llvm::ModuleAnalysisManager &mam);
-
-private:
-	/*
-	 * Held by pointer, not reference: a reference member would delete the class's
-	 * implicit copy/move-assignment and has non-obvious lifetime/rebinding
-	 * behaviour. The PassBuilder outlives the pass (it owns the pipeline the pass
-	 * is inserted into).
-	 */
-	llvm::PassBuilder *pb_;
-	llvm::OptimizationLevel level_;
-};
-
-/*
- * Insert MonoTopDownInlinerPass into PB's default pipeline at the pipeline-start
- * extension point, so it runs before the stock CGSCC inliner. Call this on the
- * PassBuilder before building the per-module default pipeline.
- */
-void register_top_down_inliner (llvm::PassBuilder &pb);
+llvm::ModulePassManager
+build_tier1_pipeline (llvm::PassBuilder &pb,
+                      llvm::PassInstrumentationCallbacks &pic,
+                      llvm::OptimizationLevel level);
 
 } // namespace mono
 

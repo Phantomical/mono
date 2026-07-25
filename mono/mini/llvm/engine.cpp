@@ -2356,14 +2356,12 @@ MonoLLVMJIT::optimize (Function *func)
 	pb.crossRegisterProxies (lam, fam, cgam, mam);
 
 	/*
-	 * Slot the top-down tier-1 inliner into the otherwise-intact -O2 pipeline
-	 * at the pipeline-start extension point, before the stock CGSCC inliner.
-	 * Must be registered before the pipeline is built.
+	 * The stock -O2 pipeline with mono's tier-1 inliner in place of LLVM's own
+	 * inlining stage - the callee bodies that stage would need are not in the
+	 * module until our pass puts them there. See inliner.hpp.
 	 */
-	register_top_down_inliner (pb);
-
 	ModulePassManager mpm =
-		pb.buildPerModuleDefaultPipeline (OptimizationLevel::O2);
+		build_tier1_pipeline (pb, pic, OptimizationLevel::O2);
 	mpm.run (*module, mam);
 }
 

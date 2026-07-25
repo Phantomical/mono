@@ -1,70 +1,92 @@
 /**
  * \file
- * inliner.cpp - the top-down tier-1 LLVM inliner (new-PM module pass), S1.
+ * inliner.cpp - mono's tier-1 LLVM inliner.
  *
- * S1 adds lazy cross-module callee materialization and a single inlining round
- * on top of S0's new-PM plumbing. For each annotated tier-1 root the pass:
+ * mono translates one method per LLVM module, so every managed call in a
+ * tier-1 root is a direct call to a bodyless trampoline declaration - there is
+ * nothing in the module for an inliner to fold in. This pass supplies the
+ * missing bodies and then lets LLVM's own bottom-up inliner make every actual
+ * inlining decision. Per root, per round:
  *
- *   1. Reaches the FunctionAnalysisManager through the module->function proxy and
- *      builds the stock function-simplification pipeline (once).
- *   2. Simplifies the root, then scans it for direct managed leaf-call sites.
- *   3. Per candidate: checks cheap eligibility, MATERIALIZES the callee (runs its
- *      front-end and translates its body into THIS module as an internal
- *      function - inliner-support.hpp / translator.cpp), checks body-level
- *      eligibility, per-function-simplifies the body, checks a size cap, then
- *      either InlineFunctions it or reverts the call site back to its trampoline
- *      declaration.
- *   4. Strips every materialized body that ended up unused, so nothing is emitted
- *      standalone and the stock CGSCC inliner has no leftover to act on.
- *   5. Verifies the module (a bug in the hand-rolled inline aborts here rather
- *      than miscompiling).
+ *   1. Walk the root two call levels deep and materialize each callee that
+ *      clears the hard eligibility gates below: run its front-end, translate
+ *      its body into THIS module as an internal function (inliner-support.hpp,
+ *      implemented in translator.cpp), and rewire its call sites to call that
+ *      body directly.
+ *   2. Run the stock function-simplification pipeline over the bodies that
+ *      round newly translated, so the inliner's cost model sees canonical IR.
+ *   3. Run LLVM's stock inliner pipeline over the module - buildInlinerPipeline
+ *      (), cost model and CGSCC ordering and all.
+ *   4. If it inlined anything into the root, go round again: a call that was
+ *      three levels down is now one level down, so the next walk reaches
+ *      deeper than this one could.
+ *   5. Otherwise stop, and revert every materialized body the inliner did not
+ *      consume back to its trampoline call, so none is ever emitted standalone.
  *
- * This is ONE round, not a fixpoint: no cross-round budget, no priority queue, no
- * re-optimize-and-rescan loop (those are S2). Because S1 only inlines LEAF
- * callees, an inlined body exposes no new managed calls, so the in-round rescan
- * of InlinedCallSites is present (for S2) but naturally finds nothing.
+ * The loop is capped at kMaxInlinerRounds, but normally exits well before that
+ * - as soon as a round folds nothing new into the root.
  *
- * Eligibility at this slice is deliberately narrow - only trivially-safe callees:
- *   - direct calls (getCalledFunction non-null) to a managed method (the callee
- *     declaration symbol maps back to a MonoMethod);
- *   - NOT self-recursive (the root's own body is a definition, not a trampoline
- *     declaration, so it is skipped by the "callee is a declaration" test);
+ * Note that this pass occupies the stock inliner's slot in the -O2 pipeline
+ * (build_tier1_pipeline () at the bottom), and that slot carries the whole
+ * per-function simplification pipeline nested inside it. So the pass has to run
+ * buildInlinerPipeline () at least once even when it finds no root to work on,
+ * or -O2 silently loses its function simplification stage.
+ *
+ * Eligibility is decided entirely at wiring time, because once a call site
+ * names a materialized body the stock inliner is free to fold it in with no
+ * further say from us. A callee that fails any gate simply never gets
+ * materialized: its call site stays a trampoline declaration, which is what
+ * structurally keeps it out of the stock inliner's reach. The gates:
+ *   - direct calls only (getCalledFunction non-null), to a managed method (the
+ *     callee declaration symbol maps back to a MonoMethod);
+ *   - NOT self-recursive: the root's own body is a definition, not a
+ *     declaration, so it is skipped by the "callee is a declaration" test;
  *   - NO rgctx/mrgctx argument (the `nest`-attributed arg) - gate #26, the
- *     generic-context silent-miscompile trap: a separately-translated callee body
- *     has no independent frame slot for a recovered generic context;
+ *     generic-context silent-miscompile trap: a separately-translated callee
+ *     body has no independent frame slot for a recovered generic context;
  *   - clause-free (no personality function) - gate #8, the wrong-EH-handler
  *     silent-miscompile trap: the custom-emit EH clause_index join key is not
  *     namespaced per inlined callee;
  *   - not `noinline` (covers clause-bearing/user-NoInlining/reflection-frame
  *     callees, which the translator already tags);
  *   - does not read/write class-init-guarded static state - a callee whose body
- *     touches a static field of a class with a non-trivial cctor. Inlining drops
- *     the class-init barrier its own managed call carried, so the static read
- *     can see a value from before the cctor ran (a silent miscompile). The
- *     barrier is often elided in the materialized body (beforefieldinit /
- *     same-class access), so this is decided from the callee's metadata, not
- *     from a class-init call the leaf gate could see;
+ *     touches a static field of a class with a non-trivial cctor. Inlining
+ *     drops the class-init barrier that its own managed call carried, so the
+ *     static read can see a value from before the cctor ran (a silent
+ *     miscompile). The barrier is often elided in the materialized body
+ *     (beforefieldinit / same-class access), so this is decided from the
+ *     callee's metadata rather than from anything visible in the IR;
  *   - does not still owe its own class's cctor - the call itself is that
  *     class's init trigger (the first one goes through a trampoline, which
  *     compiles the method and then runs the cctor), so folding the callee in
- *     deletes the trigger and the class stays uninitialized for the life of the
- *     process. The mirror image of the gate above: that one is about static
- *     state the callee reads, this one about the initialization the call does;
- *   - leaf (the body makes no non-intrinsic calls);
- *   - and the invoke / musttail guards kept from S0.
+ *     deletes the trigger and the class stays uninitialized for the life of
+ *     the process. The mirror image of the gate above: that one is about
+ *     static state the callee reads, this one about the initialization the
+ *     call itself performs;
+ *   - does not ask the runtime about its own frame - GetCurrentMethod,
+ *     GetCallingAssembly, StackTrace's frame 0. Folding such a callee in makes
+ *     those report the caller's frame instead (gate #25);
+ *   - and the invoke / musttail guards.
  * The rgctx and EH exclusions are hard safety gates; getting them wrong is a
- * silent miscompile, so they are asserted by the differential fixtures, not
- * eyeballed. materialize_callee () additionally refuses wrappers, synchronized
- * methods and gshared/gsharedvt bodies mono-side.
+ * silent miscompile, so they are asserted by the differential fixtures in
+ * inliner-tests.cs, not eyeballed. materialize_callee () additionally refuses
+ * wrappers, synchronized methods and gshared/gsharedvt bodies mono-side.
+ *
+ * There is deliberately no size or leaf-only restriction here: bounding what is
+ * worth folding in is the stock inliner's cost model's job, and starving it of
+ * non-leaf callees would defeat the point of handing the decision over.
  */
 
 #include "inliner.hpp"
 #include "inliner-support.hpp"
 
-#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/Any.h>
 #include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringMap.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -72,30 +94,61 @@
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/PassInstrumentation.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/Transforms/Utils/Cloning.h>
 
+#include <algorithm>
+#include <cassert>
 #include <cstdlib>
+#include <memory>
+#include <string>
+#include <utility>
 
 using namespace llvm;
 
 namespace mono {
 
+namespace {
+
 /*
- * Optional tracing of every inline decision, gated on MONO_INLINER_TRACE. The
- * differential fixtures assert on this: e.g. that a gshared rgctx-passing callee
- * or a clause-bearing callee is REFUSED (never INLINEd), which is otherwise a
- * silent miscompile to eyeball.
- *
- * The caller-level gates trace too ("refuse-root-*"), because the failure mode
- * they produce is a run that inlines nothing at all while every test still
- * passes - indistinguishable from a corpus with no candidates in it unless the
- * pass says why it stood down.
+ * Ceiling on how many materialize/inline rounds one root gets, purely to bound
+ * compile time. The loop normally stops long before this, the moment a round
+ * folds nothing new into the root.
  */
-static bool
+const unsigned kMaxInlinerRounds = 10;
+
+/*
+ * How many call levels below the root one round exposes. Deeper callees are
+ * left as trampoline calls; they come into reach on a later round, once the
+ * stock inliner has collapsed a level above them. This is what bounds how much
+ * front-end work a single round can trigger.
+ */
+const unsigned kMaterializeDepth = 2;
+
+/* The translator marks the method being promoted with this (translator.cpp). */
+const char kRootAttr[] = "mono-tier1-root";
+
+/*
+ * Marks a function this pass translated into the module, with the symbol of the
+ * trampoline declaration it stands in for as the attribute's value. The module
+ * is then the only bookkeeping we need: the stock inliner erases materialized
+ * bodies it fully consumes, so any pointer table we kept on the side would go
+ * stale mid-round.
+ */
+const char kMaterializedAttr[] = "mono-materialized";
+
+/*
+ * Optional tracing of every materialization decision, gated on
+ * MONO_INLINER_TRACE. Worth having because the interesting failures here are
+ * quiet ones: a gshared rgctx-passing callee or a clause-bearing callee that
+ * gets exposed when it should have been refused is a silent miscompile, and a
+ * root that stands down entirely looks exactly like a corpus with no candidates
+ * in it unless the pass says why.
+ */
+bool
 trace_enabled ()
 {
 	static int state = -1;
@@ -104,7 +157,7 @@ trace_enabled ()
 	return state != 0;
 }
 
-static void
+void
 trace (const char *what, StringRef sym)
 {
 	if (trace_enabled ())
@@ -112,12 +165,18 @@ trace (const char *what, StringRef sym)
 }
 
 /*
- * A single-round S1 cap on the size of an individual materialized callee, in
- * post-simplification IR instructions. This is a plain sanity brake, NOT the
- * flat cross-round budget (that is S2): it just keeps one pathologically large
- * leaf out of the root. Tuned properly in S4.
+ * Shared between the pass and the instrumentation callbacks registered
+ * alongside it. The pass object gets copied into the pipeline's type-erased
+ * pass model, so this lives behind a shared_ptr rather than in the pass itself.
  */
-static const unsigned kInlineInstrCap = 400;
+struct RoundState {
+	/* Set while a round's stock-inliner sub-pipeline is running. */
+	bool recording = false;
+	/* Set while the stock InlinerPass itself is on the stack. */
+	bool in_inliner = false;
+	/* Functions the stock inliner inlined something into this round. */
+	SmallPtrSet<const Function *, 8> inlined_into;
+};
 
 /*
  * True if CB carries a generic-context (rgctx/mrgctx or imt) argument. Those
@@ -126,7 +185,7 @@ static const unsigned kInlineInstrCap = 400;
  * correctness requirement: a folded callee body has no independent frame slot
  * from which the runtime could recover its generic context.
  */
-static bool
+bool
 passes_generic_context (const CallBase &cb)
 {
 	for (unsigned i = 0, n = cb.arg_size (); i < n; ++i)
@@ -137,15 +196,15 @@ passes_generic_context (const CallBase &cb)
 
 /*
  * Resolve a call site to its managed callee for the cheap, pre-materialization
- * eligibility gates. Returns the target MonoMethod (opaque) and the callee
- * declaration, or {null, null} if CB is not an S1 candidate.
+ * eligibility gates. Returns the target MonoMethod (opaque) and the trampoline
+ * declaration it calls, or {null, null} if CB is not a candidate.
  */
-static void *
+void *
 candidate_target (CallBase &cb, Function *&decl_out)
 {
 	decl_out = nullptr;
 
-	/* S0 guards: invokes carry EH edges, musttail a guaranteed tail position. */
+	/* Invokes carry EH edges, musttail a guaranteed tail position. */
 	if (isa<InvokeInst> (&cb))
 		return nullptr;
 	if (cb.isMustTailCall ())
@@ -157,7 +216,7 @@ candidate_target (CallBase &cb, Function *&decl_out)
 		return nullptr;
 
 	/*
-	 * A managed callee is a body-less trampoline declaration in this module. The
+	 * A managed callee is a bodyless trampoline declaration in this module. The
 	 * self-recursive call targets the defined root itself, so requiring a
 	 * declaration also excludes self-recursion (and any already-materialized
 	 * body) for free.
@@ -181,52 +240,112 @@ candidate_target (CallBase &cb, Function *&decl_out)
 }
 
 /*
- * A leaf body makes no non-intrinsic calls. Anything else - a managed call, a
- * runtime-helper/icall call, a GC safepoint poll, an indirect call, an invoke -
- * disqualifies it at S1 (inlining a body with its own calls, safepoints or EH is
- * later slices' work).
+ * The mono-side gates that can be decided from the callee's metadata alone,
+ * before paying for its front-end. Traces the reason it turned TARGET down.
  */
-static bool
-is_leaf_body (Function &f)
+bool
+callee_gates_pass (void *target, void *root_cfg, StringRef sym)
 {
-	for (Instruction &i : instructions (f)) {
-		auto *cb = dyn_cast<CallBase> (&i);
-		if (!cb)
-			continue;
-		if (auto *ci = dyn_cast<CallInst> (cb))
-			if (ci->getIntrinsicID () != Intrinsic::not_intrinsic)
-				continue;
+	if (callee_reads_cctor_guarded_static (target)) {
+		trace ("refuse-cctor", sym);
+		return false;
+	}
+	if (callee_class_init_pending (target, root_cfg)) {
+		trace ("refuse-cctor-pending", sym);
 		return false;
 	}
 	return true;
 }
 
 /*
- * Revert a materialized call site back to its trampoline declaration. Used when
- * a candidate is materialized but then declined (body ineligible, over cap, type
- * mismatch) or InlineFunction fails: the direct edge to the materialized body is
- * dropped so the body becomes unreferenced and strip_dead_materialized_bodies ()
- * can erase it, leaving the ordinary `call @trampoline` behind.
+ * #25: a body that asks the runtime about its own frame - GetCurrentMethod,
+ * StackTrace's frame 0, GetCallingAssembly - has to keep that frame, so it
+ * cannot be folded into its caller. mono marks a few such methods no_inline
+ * itself, but not reliably (see method_reports_caller_frame ()), so read it off
+ * the body's own calls instead.
  */
-static void
-revert_to_trampoline (CallBase &cb, Function *trampoline_decl)
+bool
+body_observes_own_frame (Function &body)
 {
-	cb.setCalledFunction (trampoline_decl);
+	for (Instruction &i : instructions (body)) {
+		auto *cb = dyn_cast<CallBase> (&i);
+		if (!cb)
+			continue;
+		Function *callee = cb->getCalledFunction ();
+		if (!callee || !callee->isDeclaration ())
+			continue;
+		void *method = managed_method_from_symbol (callee->getName ().data ());
+		if (method && method_reports_caller_frame (method))
+			return true;
+	}
+	return false;
+}
+
+/* The gates that only the translated body can answer. */
+bool
+body_gates_pass (Function &body)
+{
+	/* #8: a clause-bearing callee would collide clause indices when folded. */
+	if (body.hasPersonalityFn ()) {
+		trace ("refuse-eh", body.getName ());
+		return false;
+	}
+	if (body.hasFnAttribute (Attribute::NoInline)) {
+		trace ("refuse-noinline", body.getName ());
+		return false;
+	}
+	if (body_observes_own_frame (body)) {
+		trace ("refuse-frame", body.getName ());
+		return false;
+	}
+	return true;
 }
 
 /*
- * Erase every materialized body that ended up with no uses - the declines and
- * reverts above, plus any body that was never wired to a surviving call. This
- * runs before the pass returns so the module leaves the driver in exactly the
- * shape the stock CGSCC inliner treats as inert: every surviving call is again a
- * trampoline declaration with no co-present body.
+ * Index the bodies already materialized into M by the trampoline symbol each
+ * one stands in for, so a callee reached from several call sites - or reached
+ * again on a later round - is only ever translated once.
  */
-static void
-strip_dead_materialized_bodies (const SmallVectorImpl<Function *> &bodies)
+StringMap<Function *>
+index_materialized (Module &m)
 {
-	for (Function *f : bodies) {
-		if (f->use_empty ())
-			f->eraseFromParent ();
+	StringMap<Function *> by_symbol;
+	for (Function &f : m) {
+		Attribute a = f.getFnAttribute (kMaterializedAttr);
+		if (a.isValid ())
+			by_symbol [a.getValueAsString ()] = &f;
+	}
+	return by_symbol;
+}
+
+/*
+ * Undo every materialization the stock inliner did not consume: a body it fully
+ * inlined is already gone (it erases dead internal functions itself), and
+ * anything still standing gets its call sites pointed back at the trampoline
+ * declaration before it is erased.
+ *
+ * This matters beyond tidiness. A surviving materialized body would be JITed as
+ * a second copy of the callee, reached by a direct branch that bypasses the
+ * trampoline - and with it the lazy compile, patching and per-callee
+ * indirection the runtime relies on, and the jit info that unwinding through
+ * that code would need.
+ */
+void
+strip_materialized_bodies (Module &m)
+{
+	for (Function &f : make_early_inc_range (m)) {
+		Attribute a = f.getFnAttribute (kMaterializedAttr);
+		if (!a.isValid ())
+			continue;
+
+		if (!f.use_empty ()) {
+			trace ("revert", f.getName ());
+			FunctionCallee tramp =
+				m.getOrInsertFunction (a.getValueAsString (),
+				                       f.getFunctionType ());
+			f.replaceAllUsesWith (tramp.getCallee ());
+		}
+		f.eraseFromParent ();
 	}
 }
 
@@ -245,7 +364,7 @@ strip_dead_materialized_bodies (const SmallVectorImpl<Function *> &bodies)
  * module) and codegen-identical, so it is safe to leave in the module that goes
  * on to codegen.
  */
-static void
+void
 localize_foreign_declarations (Module &m)
 {
 	SmallVector<Function *, 16> foreign;
@@ -281,20 +400,172 @@ localize_foreign_declarations (Module &m)
 	}
 }
 
-PreservedAnalyses
-MonoTopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
-{
-	/* Enumerate annotated roots (v1: exactly one). */
-	SmallVector<Function *, 1> roots;
-	for (Function &f : m) {
-		if (f.isDeclaration ())
-			continue;
-		if (f.hasFnAttribute ("mono-tier1-root"))
-			roots.push_back (&f);
+/*
+ * The tier-1 inlining stage. See the file comment for the algorithm; this is
+ * the module pass that build_tier1_pipeline () splices into the -O2 pipeline
+ * where LLVM's own inlining stage would otherwise sit.
+ */
+class MonoInlinerPass : public PassInfoMixin<MonoInlinerPass> {
+public:
+	MonoInlinerPass (PassBuilder &pb, OptimizationLevel level,
+	                 std::shared_ptr<RoundState> state)
+	    : pb_ (&pb), level_ (level), state_ (std::move (state))
+	{
 	}
-	if (roots.empty ())
-		return PreservedAnalyses::all ();
 
+	PreservedAnalyses run (Module &m, ModuleAnalysisManager &mam);
+
+	/*
+	 * This pass carries the per-function simplification pipeline that the stock
+	 * inlining stage it replaced used to carry, so skipping it would quietly
+	 * turn -O2 into something much weaker.
+	 */
+	static bool isRequired () { return true; }
+
+private:
+	void expose_callees (Module &m, Function &root, void *root_cfg,
+	                     DenseSet<void *> &refused,
+	                     SmallVectorImpl<Function *> &added);
+	void run_stock_inliner (Module &m, ModuleAnalysisManager &mam,
+	                        bool module_mutated);
+
+	/*
+	 * Held by pointer, not reference: a reference member would delete the
+	 * class's implicit copy/move-assignment and has non-obvious
+	 * lifetime/rebinding behaviour. The PassBuilder outlives the pass (it owns
+	 * the pipeline the pass is spliced into).
+	 */
+	PassBuilder *pb_;
+	OptimizationLevel level_;
+	std::shared_ptr<RoundState> state_;
+};
+
+/*
+ * Walk ROOT kMaterializeDepth call levels deep, materializing every callee that
+ * clears the gates and pointing its call sites at the materialized body - which
+ * is what puts the call within the stock inliner's reach. Bodies translated for
+ * the first time on this walk land in ADDED (they still need simplifying);
+ * REFUSED accumulates targets that failed a gate, so a later round does not pay
+ * for them again.
+ */
+void
+MonoInlinerPass::expose_callees (Module &m, Function &root, void *root_cfg,
+                                 DenseSet<void *> &refused,
+                                 SmallVectorImpl<Function *> &added)
+{
+	StringMap<Function *> by_symbol = index_materialized (m);
+	SmallPtrSet<Function *, 16> scanned;
+
+	SmallVector<Function *, 8> level;
+	level.push_back (&root);
+	scanned.insert (&root);
+
+	for (unsigned depth = 0; depth < kMaterializeDepth && !level.empty (); ++depth) {
+		SmallVector<Function *, 8> next;
+
+		for (Function *caller : level) {
+			for (Instruction &i : instructions (*caller)) {
+				auto *cb = dyn_cast<CallBase> (&i);
+				if (!cb)
+					continue;
+
+				/*
+				 * Already pointed at a body an earlier round materialized:
+				 * nothing to wire, but descend into it so the walk keeps
+				 * measuring depth from the root through materialized bodies.
+				 */
+				Function *called = cb->getCalledFunction ();
+				if (called && called->hasFnAttribute (kMaterializedAttr)) {
+					if (scanned.insert (called).second)
+						next.push_back (called);
+					continue;
+				}
+
+				Function *decl;
+				void *target = candidate_target (*cb, decl);
+				if (!target || refused.contains (target))
+					continue;
+
+				Function *body = nullptr;
+				auto found = by_symbol.find (decl->getName ());
+				if (found != by_symbol.end ()) {
+					body = found->second;
+				} else {
+					if (!callee_gates_pass (target, root_cfg, decl->getName ())) {
+						refused.insert (target);
+						continue;
+					}
+
+					body = materialize_callee (target, root_cfg, &m);
+					if (!body) {
+						trace ("refuse-materialize", decl->getName ());
+						refused.insert (target);
+						continue;
+					}
+
+					if (!body_gates_pass (*body)) {
+						body->eraseFromParent ();
+						refused.insert (target);
+						continue;
+					}
+
+					body->addFnAttr (kMaterializedAttr, decl->getName ());
+					by_symbol [decl->getName ()] = body;
+					added.push_back (body);
+					trace ("materialize", body->getName ());
+				}
+
+				/*
+				 * The call's stored function type must match the body's, or the
+				 * arguments would not line up once it is folded in. They derive
+				 * from the same MonoMethodSignature so they normally match; if
+				 * they somehow do not, leave the trampoline call alone rather
+				 * than force a bitcast.
+				 */
+				if (cb->getFunctionType () != body->getFunctionType ())
+					continue;
+
+				cb->setCalledFunction (body);
+				trace ("expose", body->getName ());
+
+				if (scanned.insert (body).second)
+					next.push_back (body);
+			}
+		}
+
+		level = std::move (next);
+	}
+}
+
+/*
+ * Run LLVM's stock inlining stage over the whole module. A fresh wrapper every
+ * time: ModuleInlinerWrapperPass::run () appends the CGSCC adaptor to its own
+ * nested pipeline as it runs, so the object is single-use.
+ */
+void
+MonoInlinerPass::run_stock_inliner (Module &m, ModuleAnalysisManager &mam,
+                                    bool module_mutated)
+{
+	/*
+	 * Materializing a body adds a function to the module behind the analysis
+	 * managers' backs, and the stock inliner runs off a cached LazyCallGraph
+	 * that would not know about it. Drop everything cached about the module -
+	 * and, through the function-analysis proxy, everything cached about its
+	 * functions - so the call graph it walks is the module we actually have.
+	 * (It keeps its own call graph honest across the inlines it performs, so
+	 * the previous round's run is not what makes this necessary.)
+	 */
+	if (module_mutated)
+		mam.invalidate (m, PreservedAnalyses::none ());
+
+	ModulePassManager mpm;
+	mpm.addPass (pb_->buildInlinerPipeline (level_, ThinOrFullLTOPhase::None));
+	mpm.run (m, mam);
+}
+
+PreservedAnalyses
+MonoInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
+{
 	FunctionAnalysisManager &fam =
 		mam.getResult<FunctionAnalysisManagerModuleProxy> (m).getManager ();
 
@@ -302,176 +573,219 @@ MonoTopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		pb_->buildFunctionSimplificationPipeline (level_,
 		                                          ThinOrFullLTOPhase::None);
 
-	bool changed = false;
-	/* Every materialized body, so unused ones can be stripped at the end. */
-	SmallVector<Function *, 8> materialized_bodies;
+	/* Annotated roots (v1: exactly one - the method being promoted). */
+	SmallVector<Function *, 1> roots;
+	for (Function &f : m) {
+		if (!f.isDeclaration () && f.hasFnAttribute (kRootAttr))
+			roots.push_back (&f);
+	}
+
+	bool materialized_anything = false;
+	bool ran_stock_inliner = false;
 
 	for (Function *root : roots) {
 		void *root_cfg = tier1_root_cfg (root);
 		/* Caller-level gates #1/#19/#2 (and: no cfg => nothing to materialize with). */
 		if (!root_cfg || !tier1_root_allows_inlining (root_cfg)) {
-			trace (root_cfg ? tier1_root_refusal_reason (root_cfg) : "refuse-root-nocfg",
+			trace (root_cfg ? tier1_root_refusal_reason (root_cfg)
+			                : "refuse-root-nocfg",
 			       root->getName ());
 			continue;
 		}
 
-		/*
-		 * Simplify the root once so eligibility and costs see canonical IR (the
-		 * same order the stock CGSCC adaptor uses: simplify, then inline).
-		 */
-		fpm.run (*root, fam);
+		/* Targets that failed a gate once and need not be reconsidered. */
+		DenseSet<void *> refused;
 
-		/* One materialized body per callee method, reused across its call sites. */
-		DenseMap<void *, Function *> cache;
-		/* Bodies already run through the per-function simplification pipeline. */
-		DenseSet<Function *> simplified;
-
-		/* Seed the worklist from the root's current direct managed leaf calls. */
-		SmallVector<CallBase *, 16> worklist;
-		for (Instruction &i : instructions (*root)) {
-			if (auto *cb = dyn_cast<CallBase> (&i)) {
-				Function *decl;
-				if (candidate_target (*cb, decl))
-					worklist.push_back (cb);
-			}
-		}
-
-		while (!worklist.empty ()) {
-			CallBase *cs = worklist.pop_back_val ();
-
-			Function *decl;
-			void *target = candidate_target (*cs, decl);
-			if (!target)
-				continue;
+		for (unsigned round = 0; round < kMaxInlinerRounds; ++round) {
+			SmallVector<Function *, 8> added;
+			expose_callees (m, *root, root_cfg, refused, added);
 
 			/*
-			 * Refuse a callee that reads/writes class-init-guarded static state.
-			 * Inlining it would drop the class-init barrier its own managed call
-			 * carries - a silent miscompile (a stale static read). Decided from
-			 * the callee's metadata because the barrier is frequently elided in
-			 * the materialized body, so the leaf gate below cannot see it.
+			 * Nothing new to offer since the last round, so the stock inliner
+			 * would be looking at the module it just finished with.
 			 */
-			if (callee_reads_cctor_guarded_static (target)) {
-				trace ("refuse-cctor", decl->getName ());
-				continue;
+			if (round > 0 && added.empty ())
+				break;
+
+			if (!added.empty ()) {
+				materialized_anything = true;
+				/*
+				 * A fresh body can reference declarations that live in the
+				 * shared jit-global module. That has always been tolerable for
+				 * codegen, but the stock inliner builds a call graph over this
+				 * module and cannot follow an edge that leaves it, so make the
+				 * module self-contained first.
+				 */
+				localize_foreign_declarations (m);
 			}
 
-			/*
-			 * Refuse a callee whose own class still has a cctor pending: this
-			 * call is what would have run it, and folding the callee in deletes
-			 * the trigger. The gate above is the mirror image - that one is
-			 * about static state the callee reads, this one about the class
-			 * initialization the call itself performs.
-			 */
-			if (callee_class_init_pending (target, root_cfg)) {
-				trace ("refuse-cctor-pending", decl->getName ());
-				continue;
-			}
+			/* Canonicalize the fresh bodies before the cost model sees them. */
+			for (Function *f : added)
+				fpm.run (*f, fam);
 
-			/* Materialize (cached): pull the callee body into this module. */
-			Function *body;
-			auto found = cache.find (target);
-			if (found != cache.end ()) {
-				body = found->second;
-			} else {
-				body = materialize_callee (target, root_cfg, &m);
-				cache [target] = body;              /* cache misses too (as null) */
-				if (body)
-					materialized_bodies.push_back (body);
-			}
-			if (!body)
-				continue;                            /* unmaterializable -> leave trampoline */
+			state_->inlined_into.clear ();
+			state_->recording = true;
+			run_stock_inliner (m, mam, true);
+			state_->recording = false;
+			ran_stock_inliner = true;
 
-			/* Body-level eligibility: #8 (EH clauses) and the noinline family. */
-			if (body->hasPersonalityFn ()) {
-				trace ("refuse-eh", body->getName ());
-				continue;
-			}
-			if (body->hasFnAttribute (Attribute::NoInline)) {
-				trace ("refuse-noinline", body->getName ());
-				continue;
-			}
-			if (!is_leaf_body (*body)) {
-				trace ("refuse-nonleaf", body->getName ());
-				continue;
-			}
-
-			/* Per-function simplify the body once, then measure its cost. */
-			if (simplified.insert (body).second)
-				fpm.run (*body, fam);
-
-			if (body->getInstructionCount () > kInlineInstrCap) {
-				trace ("refuse-oversize", body->getName ());
-				continue;
-			}
-
-			/*
-			 * The call's stored function type must match the body's, or the
-			 * inlined arguments would not line up. They derive from the same
-			 * MonoMethodSignature so they normally match; if they somehow do not,
-			 * decline rather than force a bitcast.
-			 */
-			if (cs->getFunctionType () != body->getFunctionType ())
-				continue;
-
-			/* Wire the call to the materialized body and inline it. */
-			cs->setCalledFunction (body);
-
-			StringRef body_name = body->getName ();
-			InlineFunctionInfo ifi;
-			InlineResult res = InlineFunction (*cs, ifi);
-			if (!res.isSuccess ()) {
-				trace ("revert", body_name);
-				revert_to_trampoline (*cs, decl);
-				continue;
-			}
-
-			trace ("inline", body_name);
-			changed = true;
-
-			/*
-			 * InlineFunction preserves nothing, so drop the root's cached
-			 * analyses before anything else consults them.
-			 */
-			fam.invalidate (*root, PreservedAnalyses::none ());
-
-			/*
-			 * Re-scan the newly exposed call sites into the same round. For a
-			 * leaf callee this is empty; the machinery is here for S2.
-			 */
-			for (CallBase *ncs : ifi.InlinedCallSites) {
-				Function *ndecl;
-				if (candidate_target (*ncs, ndecl))
-					worklist.push_back (ncs);
-			}
+			/* Another round only reaches deeper if the root itself grew. */
+			if (!state_->inlined_into.contains (root))
+				break;
 		}
 	}
 
-	/* Reject/never-inlined bodies are unreferenced now: erase them. */
-	strip_dead_materialized_bodies (materialized_bodies);
+	strip_materialized_bodies (m);
+
+	/*
+	 * We stand in for the stock inlining stage, and that stage is where -O2
+	 * runs its per-function simplification pipeline. If no root drove a round
+	 * above, run it once anyway so the rest of the pipeline sees the same IR it
+	 * would have without us. Nothing touched the module in that case, so the
+	 * analyses the pipeline has cached so far are still good.
+	 */
+	if (!ran_stock_inliner)
+		run_stock_inliner (m, mam, false);
 
 	/*
 	 * optimize () builds its PassBuilder without verifier instrumentation, so a
-	 * malformed-IR bug in an inline would surface as a JIT crash or wrong result.
-	 * Verify here so it aborts at the pass boundary instead. Fatal by default.
-	 * Localize mono's pre-existing cross-module intrinsic/helper references first,
-	 * so the verifier judges the inline, not that (benign, codegen-safe) pattern.
+	 * malformed-IR bug in a materialized body would surface as a JIT crash or a
+	 * wrong result. Verify here so it aborts at the pass boundary instead. The
+	 * cross-module references mono emits by default were already localized
+	 * above, so the verifier judges what we did rather than that (benign,
+	 * codegen-safe) pattern.
 	 */
-	if (changed) {
-		localize_foreign_declarations (m);
+	if (materialized_anything)
 		VerifierPass ().run (m, mam);
-	}
 
-	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
+	return PreservedAnalyses::none ();
 }
 
+/*
+ * Observe the stock inliner's own per-caller analysis invalidation to learn
+ * which functions it inlined into. InlinerPass::run () calls FAM.invalidate (F,
+ * none ()) once it has folded something into F and not otherwise, and that
+ * invalidation is reported to instrumentation per Function - it is a real
+ * signal, unlike the coarse module-scope PreservedAnalyses the stage returns.
+ *
+ * The in_inliner window is what makes it specific: plain simplification
+ * invalidates function analyses too, and the stage runs the whole function
+ * simplification pipeline alongside the inliner. InlinerPass runs no nested
+ * passes, so between its before- and after-pass callbacks any function
+ * invalidation is one of its own.
+ */
 void
-register_top_down_inliner (PassBuilder &pb)
+register_round_callbacks (PassInstrumentationCallbacks &pic,
+                          const std::shared_ptr<RoundState> &state)
 {
-	pb.registerPipelineStartEPCallback (
-		[&pb] (ModulePassManager &mpm, OptimizationLevel level) {
-			mpm.addPass (MonoTopDownInlinerPass (pb, level));
+	pic.registerBeforeNonSkippedPassCallback ([state] (StringRef id, Any) {
+		if (state->recording && id == "InlinerPass")
+			state->in_inliner = true;
+	});
+	pic.registerAfterPassCallback (
+		[state] (StringRef id, Any, const PreservedAnalyses &) {
+			if (id == "InlinerPass")
+				state->in_inliner = false;
 		});
+	pic.registerAfterPassInvalidatedCallback (
+		[state] (StringRef id, const PreservedAnalyses &) {
+			if (id == "InlinerPass")
+				state->in_inliner = false;
+		});
+	pic.registerAnalysisInvalidatedCallback ([state] (StringRef, Any ir) {
+		if (!state->in_inliner)
+			return;
+		if (const Function *const *f = any_cast<const Function *> (&ir))
+			state->inlined_into.insert (*f);
+	});
+}
+
+/*
+ * A built ModulePassManager is a flat vector of type-erased passes, but the
+ * vector is protected - reachable by a subclass, and nothing else. This exists
+ * only to reach it, so build_tier1_pipeline () can put its own pass exactly
+ * where LLVM's inlining stage was rather than somewhere merely nearby.
+ */
+class PipelineSplicer : public ModulePassManager {
+public:
+	explicit PipelineSplicer (ModulePassManager &&built)
+	    : ModulePassManager (std::move (built))
+	{
+	}
+
+	/*
+	 * Swap PASS in for the sole entry named NAME, keeping its position. Fails
+	 * (changing nothing) unless exactly one entry matches - see the caller for
+	 * why that is treated as a hard error rather than a fallback.
+	 */
+	template <typename PassT>
+	bool replace_sole (StringRef name, PassT &&pass)
+	{
+		size_t at = 0;
+		unsigned found = 0;
+		for (size_t i = 0, n = Passes.size (); i < n; ++i) {
+			if (Passes [i]->name () == name) {
+				at = i;
+				++found;
+			}
+		}
+		if (found != 1)
+			return false;
+
+		/* addPass () appends, wrapping in the right pass model; move it home. */
+		addPass (std::forward<PassT> (pass));
+		Passes [at] = std::move (Passes.back ());
+		Passes.pop_back ();
+		return true;
+	}
+
+	template <typename PassT>
+	void prepend (PassT &&pass)
+	{
+		addPass (std::forward<PassT> (pass));
+		std::rotate (Passes.begin (), Passes.end () - 1, Passes.end ());
+	}
+
+	ModulePassManager take () { return std::move (*this); }
+};
+
+/*
+ * What buildInlinerPipeline () contributes to the default pipeline, by name.
+ * It returns a ModuleInlinerWrapperPass rather than a ModulePassManager, so -
+ * unlike every other stage, which gets flattened into the enclosing manager by
+ * addPass ()'s same-type overload - it lands as one opaque, unambiguously named
+ * entry. That is what makes swapping it out a single lookup.
+ */
+const char kStockInlinerPass[] = "ModuleInlinerWrapperPass";
+
+} // namespace
+
+ModulePassManager
+build_tier1_pipeline (PassBuilder &pb, PassInstrumentationCallbacks &pic,
+                      OptimizationLevel level)
+{
+	auto state = std::make_shared<RoundState> ();
+	register_round_callbacks (pic, state);
+
+	PipelineSplicer pipeline (pb.buildPerModuleDefaultPipeline (level));
+
+	if (!pipeline.replace_sole (kStockInlinerPass,
+	                            MonoInlinerPass (pb, level, state))) {
+		/*
+		 * The stage we replace is not where we expect it: an LLVM upgrade
+		 * renamed it, or -enable-module-inliner swapped in the other one. Say
+		 * so loudly - the quiet failure is far worse, since LLVM's inliner
+		 * would then run over our materialized bodies with its own budget while
+		 * everything still appears to work.
+		 */
+		errs () << "mono: no unique " << kStockInlinerPass
+		        << " in the -O2 pipeline; running the tier-1 inliner at the "
+		           "pipeline start instead\n";
+		assert (false && "tier-1 inliner could not take the stock inliner's slot");
+		pipeline.prepend (MonoInlinerPass (pb, level, state));
+	}
+
+	return pipeline.take ();
 }
 
 } // namespace mono
