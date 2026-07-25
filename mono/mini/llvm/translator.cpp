@@ -584,9 +584,18 @@ EmitContext::emit_method_inner ()
 		}
 	}
 	if (cfg->method->wrapper_type) {
+		/*
+		 * A WrapperInfo is optional: plenty of wrapper kinds are built through
+		 * paths that pass no info at all (mono_mb_create_and_cache () hands NULL
+		 * to every cominterop wrapper, and a native-to-managed wrapper built for
+		 * a specific delegate target gets none either), so this is NULL far more
+		 * often than not. Only the gsharedvt subtypes below matter here, and
+		 * those always carry an info, so no info simply means "not one of them" -
+		 * keep the safepoint.
+		 */
 		WrapperInfo *info = mono_marshal_get_wrapper_info (cfg->method);
 
-		switch (info->subtype) {
+		switch (info ? info->subtype : WRAPPER_SUBTYPE_NONE) {
 		case WRAPPER_SUBTYPE_GSHAREDVT_IN:
 		case WRAPPER_SUBTYPE_GSHAREDVT_OUT:
 		case WRAPPER_SUBTYPE_GSHAREDVT_IN_SIG:

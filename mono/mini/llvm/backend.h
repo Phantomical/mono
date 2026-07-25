@@ -218,6 +218,16 @@ void      mono_llvm_tiered_domain_unload (MonoDomain *domain);
  * risk that leaves.
  */
 void      mono_llvm_tiered_shutdown (void);
+/*
+ * Hold the background compile worker off any tier-1 compile, waiting out one
+ * already in flight, so the caller can mutate runtime state a compile reads.
+ * The --regression harness brackets its between-opt-combination wipe of
+ * domain->jit_trampoline_hash / domain->jit_code_hash with these; nothing else
+ * replaces those tables underneath a running compile. Nests, and is a no-op
+ * only when tiering is off. See tiered.cpp for the full contract.
+ */
+void      mono_llvm_tiered_quiesce (void);
+void      mono_llvm_tiered_resume (void);
 
 G_END_DECLS
 

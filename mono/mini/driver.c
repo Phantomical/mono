@@ -503,10 +503,27 @@ mini_regression_step (MonoImage *image, int verbose, int *total_run, int *total,
 
 	/* fixme: ugly hack - delete all previously compiled methods */
 	if (domain_jit_info (domain)) {
+#ifdef ENABLE_LLVM
+		/*
+		 * Both tables below get destroyed and replaced outright, which the
+		 * domain locks that guard their normal use cannot defend against - a
+		 * tier-1 compile on the background worker walks jit_trampoline_hash
+		 * (mono_create_jit_trampoline) and publishes into jit_code_hash, and
+		 * would be left reading freed slots. Stop the worker across the swap.
+		 * Declared locally for the same header-conflict reason
+		 * mono_llvm_tiered_shutdown () is, below.
+		 */
+		void mono_llvm_tiered_quiesce (void);
+		void mono_llvm_tiered_resume (void);
+		mono_llvm_tiered_quiesce ();
+#endif
 		g_hash_table_destroy (domain_jit_info (domain)->jit_trampoline_hash);
 		domain_jit_info (domain)->jit_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 		mono_internal_hash_table_destroy (&(domain->jit_code_hash));
 		mono_jit_code_hash_init (&(domain->jit_code_hash));
+#ifdef ENABLE_LLVM
+		mono_llvm_tiered_resume ();
+#endif
 	}
 
 	g_timer_start (timer);

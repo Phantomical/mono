@@ -158,6 +158,15 @@ static GQueue *tiered_queue;		/* pending TieredEntry* */
 static mono_mutex_t tiered_llvm_compile_lock;
 
 /*
+ * The background worker's doorbell - what lets it sleep when the queue is empty
+ * and wake when something lands on it. Declared up here, away from the rest of
+ * the worker's state further down, only because tiered_do_init () initializes
+ * it; see the comment there.
+ */
+static MonoCoopMutex tiered_worker_mutex;
+static MonoCoopCond tiered_worker_wake;
+
+/*
  * Promotion is unsafe until mini_init () has finished: the domain is still
  * being constructed before that (create_domain_objects compiles methods), and
  * running LLVM codegen there reaches domain state that does not exist yet.
@@ -282,6 +291,15 @@ tiered_do_init (void)
 	mono_os_mutex_init (&tiered_llvm_compile_lock);
 	tiered_state = g_hash_table_new (g_direct_hash, g_direct_equal);
 	tiered_queue = g_queue_new ();
+	/*
+	 * The worker's doorbell is set up here rather than in tiered_worker_start ()
+	 * because mono_llvm_tiered_quiesce () has to be able to take it before the
+	 * worker thread exists - a quiesce that no-oped for want of a worker, and
+	 * then had one start under it, would leave exactly the race it is there to
+	 * prevent. Costs a mutex and a condvar in a run that never promotes.
+	 */
+	mono_coop_mutex_init (&tiered_worker_mutex);
+	mono_coop_cond_init (&tiered_worker_wake);
 
 	tiered_call_threshold = 1000;
 	{
@@ -839,10 +857,16 @@ mono_llvm_tiered_domain_unload (MonoDomain *domain)
  */
 #define TIERED_SHUTDOWN_TIMEOUT_MS 5000
 
-static MonoCoopMutex tiered_worker_mutex;
-static MonoCoopCond tiered_worker_wake;
 static mono_lazy_init_t tiered_worker_init = MONO_LAZY_INIT_STATUS_NOT_INITIALIZED;
 static volatile gboolean tiered_worker_shutdown;
+/*
+ * Both guarded by tiered_worker_mutex, and both only interesting to
+ * mono_llvm_tiered_quiesce (). The worker holds _compiling across the one
+ * window where it is doing real work with the doorbell dropped; _quiesce_depth
+ * being nonzero is what stops it opening another such window.
+ */
+static gboolean tiered_worker_compiling;
+static int tiered_quiesce_depth;
 /* Set by tiered_worker_main () under tiered_worker_mutex, just before it
  * returns, and signalled on the same doorbell - see mono_llvm_tiered_shutdown (). */
 static volatile gboolean tiered_worker_exited;
@@ -859,9 +883,6 @@ static void
 tiered_worker_start (void)
 {
 	ERROR_DECL (error);
-
-	mono_coop_mutex_init (&tiered_worker_mutex);
-	mono_coop_cond_init (&tiered_worker_wake);
 
 	tiered_worker_thread = mono_thread_create_internal (mono_get_root_domain (), tiered_worker_main, NULL, MONO_THREAD_CREATE_FLAGS_THREADPOOL, error);
 	mono_error_assert_ok (error);
@@ -1021,6 +1042,13 @@ tiered_worker_main (gpointer unused)
 			continue;
 		}
 
+		/* Somebody is mutating state a compile would touch - leave the queue
+		 * alone until they say otherwise. */
+		if (tiered_quiesce_depth) {
+			mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, 200);
+			continue;
+		}
+
 		mono_os_mutex_lock (&tiered_mutex);
 		entry = (TieredEntry *) g_queue_pop_head (tiered_queue);
 		mono_os_mutex_unlock (&tiered_mutex);
@@ -1035,10 +1063,15 @@ tiered_worker_main (gpointer unused)
 		 * milliseconds, and nothing about it needs that lock held (the
 		 * queue itself is protected separately, by tiered_mutex above).
 		 */
+		tiered_worker_compiling = TRUE;
 		mono_coop_mutex_unlock (&tiered_worker_mutex);
 		tiered_worker_process_entry (entry);
 		g_free (entry);
 		mono_coop_mutex_lock (&tiered_worker_mutex);
+		tiered_worker_compiling = FALSE;
+		/* Broadcast, not signal: a quiescing thread and the shutdown path can
+		 * both be waiting on this doorbell, and they want different news. */
+		mono_coop_cond_broadcast (&tiered_worker_wake);
 	}
 
 	/*
@@ -1122,6 +1155,71 @@ mono_llvm_tiered_shutdown (void)
 
 		mono_threads_add_joinable_thread ((gpointer) (gsize) MONO_UINT_TO_NATIVE_THREAD_ID (tiered_worker_thread->tid));
 	}
+}
+
+/*
+ * Stop the background worker from running any tier-1 compile, and wait for one
+ * already in flight to finish, so the caller can mutate runtime state a compile
+ * would otherwise be reading. Undone by mono_llvm_tiered_resume (); the pair
+ * nests.
+ *
+ * This exists for the --regression harness, which between opt combinations
+ * throws away everything the domain has compiled so far - it destroys and
+ * recreates domain->jit_trampoline_hash and domain->jit_code_hash outright
+ * (mini_regression_step ()). A compile on the worker walks the first of those
+ * inside mono_create_jit_trampoline () and publishes into the second, both
+ * under the domain locks, which does nothing to protect them from a wipe that
+ * takes no lock at all: the worker ends up walking a slot chain in freed
+ * memory. Nothing else in the runtime replaces those tables mid-flight, which
+ * is why this is the only caller.
+ *
+ * Deliberately does NOT drop what is queued. A pending entry is the only record
+ * that its method crossed the promotion threshold - the counter that got it
+ * there is spent - so dropping it would silently strand that method at tier 0
+ * for the rest of the run. The worker just picks it up after the resume, and
+ * the wipe having removed the method's tier-0 jit_code_hash entry in the
+ * meantime is a case mini_tiered_promote () already handles (see jit_failed).
+ *
+ * Takes effect whether or not the worker thread has been started yet - a
+ * worker that starts during a quiesce honours it on its first trip round the
+ * loop. A no-op only with tiering off entirely.
+ */
+void
+mono_llvm_tiered_quiesce (void)
+{
+	if (!mono_llvm_tiered_enabled ())
+		return;
+
+	mono_coop_mutex_lock (&tiered_worker_mutex);
+	tiered_quiesce_depth++;
+	/*
+	 * Unbounded, unlike the shutdown wait: this runs with the process healthy
+	 * and the worker guaranteed to finish and clear the flag, and returning
+	 * early would hand the caller exactly the use-after-free it called this to
+	 * avoid. Timed rather than plain so the wait is a GC-safe point that keeps
+	 * getting re-entered - the compile we are waiting on may itself need a GC,
+	 * which needs this thread to stop.
+	 */
+	while (tiered_worker_compiling)
+		mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, 50);
+	mono_coop_mutex_unlock (&tiered_worker_mutex);
+}
+
+/*
+ * Let the background worker start compiling again, undoing one
+ * mono_llvm_tiered_quiesce ().
+ */
+void
+mono_llvm_tiered_resume (void)
+{
+	if (!mono_llvm_tiered_enabled ())
+		return;
+
+	mono_coop_mutex_lock (&tiered_worker_mutex);
+	g_assert (tiered_quiesce_depth > 0);
+	if (--tiered_quiesce_depth == 0)
+		mono_coop_cond_broadcast (&tiered_worker_wake);
+	mono_coop_mutex_unlock (&tiered_worker_mutex);
 }
 
 /*
