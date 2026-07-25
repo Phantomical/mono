@@ -26,6 +26,18 @@ using MonoTests.Inliner;
 // same, correct value - if a wrong inlining decision changes observable
 // behaviour, only the tier-1 run goes wrong and the test fails there.
 //
+// A test that works out its expected value by recomputing the callee's logic
+// inline carries [MethodImpl(NoOptimization)], which keeps it on the classic
+// JIT (mono_llvm_check_method_supported declines it). Without that the test
+// method promotes as well - it is entered once per opt combination and the
+// tier-0 prologue's call counter takes it over any threshold >= 1 - and the
+// reference arithmetic ends up compiled by the very backend it is meant to be
+// checking, so the comparison stops being differential. The method under test
+// is never the test method itself: it is always the [MethodImpl(NoInlining)]
+// hot wrapper the test drives, which still promotes normally. Tests comparing
+// against a plain literal need no attribute, since a constant cannot be
+// co-miscompiled.
+//
 // A note on why some leaf helpers below look padded with unused arithmetic:
 // classic mini has its own, much older front-end inliner (method-to-ir.c,
 // inline_method()) that runs regardless of backend, and for a method compiled
@@ -79,6 +91,7 @@ public class InlinerTests {
 		return LeafSquarePlus (x) + 1;
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_leaf_inline_correct () {
 		leaf_square_plus_calls = 0;
 		long sum = 0;
@@ -132,6 +145,7 @@ public class InlinerTests {
 		return LeafChainC (LeafChainB (LeafChainA (x)));
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_chained_leaf_inline () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -166,6 +180,7 @@ public class InlinerTests {
 		return v > 3 ? v * 10 : v + 1;
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_leaf_computed_value_branch () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -212,6 +227,7 @@ public class InlinerTests {
 		return GenericPick<int> (x, x + 1000, (x & 1) == 0, x);
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_leaf_valuetype_inlines () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -232,6 +248,7 @@ public class InlinerTests {
 		return r.Length;
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_leaf_reftype_refused () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -282,6 +299,7 @@ public class InlinerTests {
 		return Mix<string> ("v" + x, x).Length;
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_constructs_generic_type () {
 		long sumInt = 0, sumStr = 0;
 		const int ITERS = 5000;
@@ -315,6 +333,7 @@ public class InlinerTests {
 		return Identity (Mix (a, 0));
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_gshared_root_declines_inlining () {
 		string last = null;
 		const int ITERS = 5000;
@@ -388,6 +407,7 @@ public class InlinerTests {
 		return p.First * 1000 + p.Second;
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_container_helper () {
 		const int ITERS = 5000;
 		long sum = 0;
@@ -427,6 +447,7 @@ public class InlinerTests {
 		return ReadSeed (x);
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_field_read_refused () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -458,6 +479,7 @@ public class InlinerTests {
 		return x + CctorProp.Val;
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_property_getter_refused () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -488,6 +510,7 @@ public class InlinerTests {
 		return ReadReadonly (x);
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_readonly_field_refused () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -547,6 +570,7 @@ public class InlinerTests {
 		return LeafTryCatch (x);
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_try_catch_leaf_refused () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -678,6 +702,7 @@ public class InlinerTests {
 		return LeafWithFilter (x);
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_try_filter_when_refused () {
 		long sum = 0;
 		const int ITERS = 5000;
@@ -896,6 +921,7 @@ public class InlinerTests {
 		return TSHolder.Value;
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_threadstatic_isolation () {
 		const int NUM_THREADS = 4;
 		const int ITERS = 5000;

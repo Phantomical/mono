@@ -984,13 +984,20 @@ rcheck: mono $(regtests)
 # top-down LLVM inliner (mono/mini/llvm/inliner.cpp): every test_N method's
 # expected value is the classic/tier-0-correct answer, so running it here
 # under tier 1 is itself the check that inlining did not change behaviour.
-# exceptions.exe and iltests.exe are ordinary rcheck corpora, replayed at
-# threshold 0 so every method is compiled by tier 1 from its first call. The
-# same expected values hold whichever tier ran them, which makes this the
-# differential check on tier-1 EH codegen - the coverage gap that let a
-# same-frame handler chain go wrong for a whole milestone. Threshold 0 rather
-# than a hot loop: these are one-shot test methods, so waiting for a call count
-# to build would just leave most of them at tier 0.
+# exceptions.exe and iltests.exe are ordinary rcheck corpora replayed under
+# tiering. Their expected values hold whichever tier ran them, which makes this
+# the differential check on tier-1 EH codegen - the coverage gap that let a
+# same-frame handler chain go wrong for a whole milestone.
+#
+# Both thresholds, because --regression reaches tier 1 two different ways.
+# mini_regression_step () compiles each test_N method with mini_method_compile ()
+# and jumps straight at cfg->native_code, so it never goes through
+# mono_jit_compile_method_inner_1 () - where threshold 0 promotes. At threshold 0
+# the test methods therefore stay at tier 0 and only what they CALL is promoted
+# (625 methods for exceptions.exe, none of them a test_N). Threshold 1 promotes
+# off the tier-0 prologue's own call counter, which fires wherever the code was
+# entered from, so the test bodies reach tier 1 too. Neither run alone covers
+# both halves.
 tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe inliner-tests.exe exceptions.exe iltests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1000 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression tiered-promotion.exe
@@ -1001,7 +1008,9 @@ tieredcheck: mono tiered-promotion.exe tiered-decline.exe tiered-appdomain.exe i
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression inliner-tests.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression exceptions.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression exceptions.exe
 	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=0 $(MINI_RUNTIME) --llvm --regression iltests.exe
+	MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 $(MINI_RUNTIME) --llvm --regression iltests.exe
 
 richeck: mono $(regtests)
 	$(INTERP_RUNTIME) --regression $(regtests)
