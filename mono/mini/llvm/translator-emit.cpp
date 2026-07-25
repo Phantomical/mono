@@ -834,6 +834,33 @@ EmitContext::get_jit_callee (const char *name, LLVMTypeRef llvm_sig, MonoJumpInf
 	return this->get_direct_callee (sym_name.c_str (), llvm_sig, target);
 }
 
+/*
+ * Is BB a hole in CLAUSE_INDEX's try region - code the IR emitted inside the
+ * try's extent that the try must NOT protect?
+ *
+ * The leave path is the case that matters: after running a finally it emits the
+ * check that rethrows a thread abort the guard deferred, and that check lands in
+ * a bblock still inside the try it is leaving. Letting the try protect it would
+ * make an abort thrown there re-enter the finally that just finished - the same
+ * handler running twice for one exception. The classic JIT punches these out of
+ * the native try range with mono_cfg_add_try_hole (mini.c); the LLVM tier has no
+ * range to punch, so it declines to emit the protecting edge in the first place.
+ */
+static gboolean
+bb_is_clause_hole (MonoBasicBlock *bb, int clause_index, MonoMethodHeader *header)
+{
+	GList *tmp;
+
+	for (tmp = bb->clause_holes; tmp; tmp = tmp->prev) {
+		MonoLeaveClause *leave = (MonoLeaveClause *) tmp->data;
+
+		if (leave->clause == &header->clauses [clause_index])
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 static int
 get_handler_clause (MonoCompile *cfg, MonoBasicBlock *bb)
 {
@@ -842,8 +869,17 @@ get_handler_clause (MonoCompile *cfg, MonoBasicBlock *bb)
 	int i;
 
 	/* Directly */
-	if (bb->region != (guint)-1 && MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY))
-		return (bb->region >> 8) - 1;
+	if (bb->region != (guint)-1 && MONO_BBLOCK_IS_IN_REGION (bb, MONO_REGION_TRY)) {
+		int direct = (bb->region >> 8) - 1;
+
+		if (!bb_is_clause_hole (bb, direct, header))
+			return direct;
+		/*
+		 * A hole in its own try still needs the clauses AROUND that try: an
+		 * abort rethrown here has to reach them. Fall through to the walk
+		 * below, which skips this clause and finds the next enclosing one.
+		 */
+	}
 
 	/*
 	 * Indirectly: bb is not itself a try block, but its IL offset falls inside
@@ -865,6 +901,8 @@ get_handler_clause (MonoCompile *cfg, MonoBasicBlock *bb)
 		clause = &header->clauses [i];
 
 		if (!MONO_OFFSET_IN_CLAUSE (clause, bb->real_offset))
+			continue;
+		if (bb_is_clause_hole (bb, i, header))
 			continue;
 		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE ||
 		    clause->flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
