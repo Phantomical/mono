@@ -128,10 +128,7 @@ ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
  * excluded. Siblings - try { } catch(A) catch(B) - are NOT nesting; they share
  * one landing pad and are already published as several same-range base entries
  * by the gather, so folding them into nested_in would synthesise a spurious
- * duplicate of the co-sibling over the same range. Excluding them keeps the
- * synthesis a no-op for every shape the gate admits today (catch/finally, no
- * true nesting), which is why N1 is runtime-inert: the gate still declines every
- * strictly-nested method, so no live method has a non-empty nested_in here.
+ * duplicate of the co-sibling over the same range.
  *
  * The predicate keys on handler_offset (not try_len), so it correctly EXCLUDES a
  * clause sitting in another clause's HANDLER body (disjoint try ranges) - those
@@ -271,6 +268,17 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	std::vector<BaseEntry> bases;
 	bases.reserve (ordered.size ());
 
+	/*
+	 * The RESUME pad of each finally/fault clause that has one - the landing pad
+	 * its resume-trampoline invoke unwinds to, reached only once the cleanup has
+	 * run (emit_resume_unwind). The synthesis below dispatches everything that
+	 * comes after a cleanup through it, so that the block the runtime re-enters is
+	 * the block the IR shows control reaching, carrying the state the cleanup left
+	 * behind. Recognised by its MONO_LSDA_KIND_RESUME_PAD marker and published only
+	 * that way: a resume pad is not itself a protected region.
+	 */
+	std::vector<gpointer> resume_pad (num_clauses > 0 ? num_clauses : 0, nullptr);
+
 	/* --- base entries: validate + join, exactly as the landed catch/finally path --- */
 	for (std::size_t i = 0; i < ordered.size (); ++i) {
 		const MonoLsdaEntry &e = ordered[i];
@@ -295,6 +303,25 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		 */
 		if (num_clauses <= 0 || e.clause_index >= static_cast<std::uint32_t> (num_clauses))
 			return false;
+
+		/*
+		 * A cleanup's resume pad. It describes where to continue AFTER
+		 * clause_index's handler has run, not a protected region of its own, so
+		 * record it for the synthesis below and publish nothing for it. Its own
+		 * range only ever covers the resume trampoline's call site, which cannot
+		 * throw back into this frame.
+		 */
+		if (e.kind == MONO_LSDA_KIND_RESUME_PAD) {
+			const MonoExceptionClause &rc = clauses[e.clause_index];
+
+			/* Only a cleanup resumes, so only a cleanup can own one of these. */
+			if (rc.flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
+			    rc.flags != MONO_EXCEPTION_CLAUSE_FAULT)
+				return false;
+
+			resume_pad[e.clause_index] = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
+			continue;
+		}
 
 		const MonoExceptionClause &cl = clauses[e.clause_index];
 
@@ -355,15 +382,23 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	}
 
 	/*
+	 * Fail-safe 7 again, now that the resume-pad markers have been filtered out: a
+	 * section carrying nothing but those describes no protected region at all, so
+	 * publishing it would silently swallow every exception the method can take.
+	 */
+	if (num_clauses > 0 && bases.empty ())
+		return false;
+
+	/*
 	 * NESTING SYNTHESIS (doc 21 4, EH N1). For each DISTINCT base range whose
 	 * innermost clause is `c`, append one extra MonoJitExceptionInfo per ENCLOSING
 	 * clause `j` (clause c strictly try-contained in clause j) - at most once per
 	 * (range, j) pair, so a sibling group over one range does not multiply its
 	 * enclosers (see DE-DUP below). Each synthesised entry copies the base's EXACT
-	 * native range and EXACT handler_start (the inner landing pad) and overrides
-	 * only j's flags / catch_class / clause_index - the reference oracle is
-	 * aot-runtime.c's decode_llvm_mono_eh_frame:3247-3267 (memcpy the base entry,
-	 * then override the three join fields).
+	 * native range and overrides j's flags / catch_class / clause_index. Its
+	 * handler_start is the pad control is actually in by the time the runtime gets
+	 * to clause j, which is the base's own pad until a cleanup runs and its resume
+	 * pad after that (see HANDLER CHAINING below).
 	 *
 	 * ORDERING (load-bearing, doc 21 1.1 / 4 step 4). All synthesised entries are
 	 * APPENDED after every base entry, so every base (inner) entry occupies a
@@ -409,13 +444,6 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	 * range, NOT globally - a multi-invoke inner try enclosed by a finally has
 	 * several DISTINCT base ranges and MUST keep one enclosing entry per range, so
 	 * distinct ranges are never folded together.
-	 *
-	 * RUNTIME-INERT (doc 21 8.2, EH N1). The translator nesting gate still declines
-	 * every strictly-nested method, so on the live compile path nested_in is empty
-	 * for every clause a base entry can name (siblings are excluded by
-	 * clause_encloses) and this loop appends nothing - the published array is
-	 * byte-identical to the landed catch/finally path. The synthesis is exercised
-	 * only by the offline unit tests, which feed a synthetic nested clause table.
 	 */
 	if (num_clauses > 0) {
 		/*
@@ -432,6 +460,13 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		for (std::size_t bi = 0; bi < base_count; ++bi) {
 			const BaseEntry &b = bases[bi];
 			const MonoExceptionClause &cc = clauses[b.clause_index];
+			/*
+			 * The pad the runtime is currently entering this range's handlers
+			 * through, walked outwards with the enclosers (see HANDLER CHAINING
+			 * below). It starts at the base's own pad, and moves to a cleanup's
+			 * resume pad once that cleanup has run.
+			 */
+			gpointer cur_handler = resume_pad[b.clause_index] ? resume_pad[b.clause_index] : b.handler_start;
 
 			for (int j = 0; j < num_clauses; ++j) {
 				if (static_cast<std::uint32_t> (j) == b.clause_index)
@@ -466,6 +501,24 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 						break;
 					}
 				}
+				/*
+				 * HANDLER CHAINING. Enclosers are reached through whichever pad
+				 * control is in when the runtime gets to them, and that pad's
+				 * selector switch routes each one on to its handler body. It only
+				 * MOVES when a cleanup runs: a finally/fault ends in an invoke of
+				 * the resume trampoline that unwinds to a pad of its own, so from
+				 * there on the enclosers are dispatched through that resume pad -
+				 * the one block the IR shows the cleanup's updates flowing into.
+				 * A catch that did not match ran nothing, so it leaves the pad
+				 * where it was.
+				 *
+				 * Advanced even when the entry itself is a duplicate, so a sibling
+				 * group's second base walks the same chain as its first.
+				 */
+				gpointer handler = cur_handler;
+				if (resume_pad[j])
+					cur_handler = resume_pad[j];
+
 				if (dup)
 					continue;
 				synthesised.push_back ({ b.try_start_off, b.try_len, j });
@@ -478,7 +531,7 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 				ei.clause_index = j;
 				ei.try_start = (gpointer) (native_code + b.try_start_off);
 				ei.try_end = (gpointer) (native_code + b.try_start_off + b.try_len);
-				ei.handler_start = b.handler_start; /* the INNER landing pad, verbatim */
+				ei.handler_start = handler;
 
 				out.push_back (ei);
 				ranges.push_back ({ static_cast<std::uint64_t> (b.try_start_off),

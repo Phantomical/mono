@@ -294,6 +294,7 @@ typedef struct {
 	void emit_entry_bb (llvm::IRBuilder<> *builder);
 	void emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
 	void emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder);
+	void emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref);
 	bool is_supported_callconv (MonoCallInst *call);
 	void process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, MonoInst *ins);
 	LLVMValueRef call_intrins (int id, LLVMValueRef *args, const char *name);
@@ -340,6 +341,29 @@ gep_index_list (LLVMValueRef *idx, unsigned n)
 	for (unsigned i = 0; i < n; ++i)
 		v.push_back (llvm::unwrap (idx [i]));
 	return v;
+}
+
+/*
+ * clause_encloses:
+ *
+ *   Does IL clause J strictly ENCLOSE clause C - i.e. is C's try region nested in
+ * J's? Every stage that has to reason about nesting shares this one predicate: the
+ * translator's crossing-clause gate, the landing-pad selector routing
+ * (emit_handler_start) and the resume pad's dispatch (emit_resume_unwind).
+ * The `.mono_lsda` synthesis in mono_lsda.cpp answers the same question over its
+ * own clause type and must stay in step with this.
+ *
+ * SIBLINGS - identical try_offset AND try_len, i.e. try { } catch(A) catch(B) -
+ * are excluded: they share one landing pad and are routed by the same-range loops,
+ * not by nesting.
+ */
+static inline bool
+clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
+{
+	bool siblings = c->try_offset == j->try_offset && c->try_len == j->try_len;
+	return !siblings &&
+	       c->try_offset >= j->try_offset &&
+	       c->handler_offset <= j->handler_offset;
 }
 
 typedef struct {

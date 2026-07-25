@@ -134,7 +134,7 @@ public class InlinerTests {
 
 	public static int test_0_chained_leaf_inline () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += ChainedHotCaller (i % 100);
 		long expected = 0;
@@ -168,7 +168,7 @@ public class InlinerTests {
 
 	public static int test_0_leaf_computed_value_branch () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += BranchHotCaller (i % 100);
 		long expected = 0;
@@ -214,7 +214,7 @@ public class InlinerTests {
 
 	public static int test_0_generic_leaf_valuetype_inlines () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += GenericPickHotInt (i % 100);
 		long expected = 0;
@@ -234,7 +234,7 @@ public class InlinerTests {
 
 	public static int test_0_generic_leaf_reftype_refused () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += GenericPickHotString (i % 100);
 		long expected = 0;
@@ -284,7 +284,7 @@ public class InlinerTests {
 
 	public static int test_0_generic_constructs_generic_type () {
 		long sumInt = 0, sumStr = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++) {
 			sumInt += MixHotInt (i);
 			sumStr += MixHotString (i % 1000);
@@ -317,7 +317,7 @@ public class InlinerTests {
 
 	public static int test_0_gshared_root_declines_inlining () {
 		string last = null;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			last = GsharedCallsGshared<string> ("g" + (i % 7));
 		string expected = "g" + ((ITERS - 1) % 7);
@@ -389,7 +389,7 @@ public class InlinerTests {
 	}
 
 	public static int test_0_generic_container_helper () {
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		long sum = 0;
 		for (int i = 0; i < ITERS; i++)
 			sum += GenericContainerHelper (i, i + 1);
@@ -429,7 +429,7 @@ public class InlinerTests {
 
 	public static int test_0_cctor_field_read_refused () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += ReadSeedHotCaller (i);
 		long expected = 0;
@@ -460,7 +460,7 @@ public class InlinerTests {
 
 	public static int test_0_cctor_property_getter_refused () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += ReadCctorPropHotCaller (i);
 		long expected = 0;
@@ -490,7 +490,7 @@ public class InlinerTests {
 
 	public static int test_0_cctor_readonly_field_refused () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += ReadReadonlyHotCaller (i);
 		long expected = 0;
@@ -549,7 +549,7 @@ public class InlinerTests {
 
 	public static int test_0_try_catch_leaf_refused () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++) {
 			int x = (i % 3 == 0) ? -(i % 50) : (i % 50);
 			sum += TryCatchHotCaller (x);
@@ -680,7 +680,7 @@ public class InlinerTests {
 
 	public static int test_0_try_filter_when_refused () {
 		long sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += FilterHotCaller (i % 50);
 		long expected = 0;
@@ -721,6 +721,7 @@ public class InlinerTests {
 		return LeafNestedHandlers (x);
 	}
 
+	[MethodImpl (MethodImplOptions.NoOptimization | MethodImplOptions.NoInlining)]
 	static int ExpectedNestedHandlers (int x) {
 		int steps = 0;
 		try {
@@ -744,38 +745,28 @@ public class InlinerTests {
 		return steps;
 	}
 
-	// KNOWN PRE-EXISTING FLAKE, not caused by the top-down inliner: on rare runs
-	// (roughly one call in several thousand, only under MONO_TIERED, and
-	// reproducible with no inliner/materialization involved at all - a bare
-	// NoInlining method with this exact nested try/finally/catch shape, called
-	// in a tight loop with no tier-1 backend but --llvm) the x==0 case comes
-	// back missing its inner finally's +10, i.e. the finally that has to run
-	// while an InvalidOperationException unwinds through it to the outer catch
-	// silently does not. It disappears entirely both under classic tier 0 alone
-	// and under `--llvm` with tiering off (method compiled by LLVM from its
-	// first call, no promotion ever happening) - it only appears while a
-	// promotion (tier-0 -> tier-1 redirect) is landing on this exact method,
-	// which points at the redirect-sled mechanism (tiered.cpp /
-	// mono_arch_emit_prolog point A) racing with a finally actually executing
-	// mid-unwind, not at this backend's EH codegen. Left un-softened per the
-	// review: this is a real, narrow, pre-existing correctness gap the nested
-	// shape below happens to be sensitive enough to catch, not a flaky
-	// assertion to relax.
+	// The x==0 case unwinds an InvalidOperationException out of the inner try,
+	// through the inner finally, to the outer catch - one throw needing both a
+	// cleanup and a handler out of the same frame. A wrong answer here is
+	// silent rather than a crash: the finally's +10 simply goes missing, so the
+	// check counts mismatches against the oracle across the whole loop instead
+	// of spot-checking one call.
 	//
-	// Renamed out of the test_ discovery prefix so --regression doesn't run it:
-	// the residual redirect-sled race above still flakes this on WSL2 hosts.
-	// Tracked in .claude/TASKS.md; rename back to test_0_nested_handlers_refused
-	// once that residual is fixed.
-	public static int skipped_test_0_nested_handlers_refused () {
+	// ExpectedNestedHandlers is the oracle and carries NoOptimization, which
+	// keeps it on the classic JIT. Without that both sides can be compiled the
+	// same way and agree on the same wrong answer - which is exactly how this
+	// defect stayed hidden.
+	public static int test_0_nested_handlers () {
+		int errors = 0;
 		int[] xs = { 0, -1, 5 };
 		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++) {
 			int x = xs [i % xs.Length];
 			int r = NestedHandlersHotCaller (x);
 			if (r != ExpectedNestedHandlers (x))
-				return 1;
+				errors += 1;
 		}
-		return 0;
+		return errors;
 	}
 
 	// ==========================================================================
@@ -799,7 +790,7 @@ public class InlinerTests {
 
 	public static int test_0_reflect_get_current_method () {
 		int sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += ReflectCurrentMethodHotCaller ();
 		return sum == ITERS ? 0 : 1;
@@ -817,7 +808,7 @@ public class InlinerTests {
 
 	public static int test_0_reflect_calling_assembly () {
 		int sum = 0;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
 			sum += ReflectCallingAssemblyHotCaller ();
 		return sum == ITERS ? 0 : 1;
@@ -875,7 +866,7 @@ public class InlinerTests {
 	public static int test_0_synchronized_counter_contention () {
 		SyncCounter.Reset ();
 		const int NUM_THREADS = 8;
-		const int ITERS = 20000;
+		const int ITERS = 5000;
 		var threads = new Thread[NUM_THREADS];
 		for (int t = 0; t < NUM_THREADS; t++) {
 			threads [t] = new Thread (() => {

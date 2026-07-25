@@ -502,4 +502,328 @@ public class TieredPromotion {
 			return 8;
 		return 0;
 	}
+
+	// -- Same-frame handler chains across promotion ---------------------------
+	//
+	// One throw, several handlers from the SAME frame. The runtime does not
+	// deliver those in one go: it enters the frame's landing pad, runs the
+	// innermost cleanup, and the cleanup's resume trampoline hands the frame
+	// back so the runtime can come in again for the next clause out. Every one
+	// of these shapes has each handler write the same local and the next one
+	// read it, so if tier 1 loses track of that re-entry - the LLVM IR has to
+	// carry an honest edge from the resume out to where control really goes, or
+	// the optimizer folds the cleanup's stores away as dead - the answer comes
+	// back short by exactly the missing handler's contribution. No crash, just a
+	// wrong number, which is why these are value checks rather than "did it
+	// throw" checks.
+	//
+	// The Nop () in each cleanup body is load-bearing: without a call in there
+	// the enclosing clause has no protected call of its own, and the whole
+	// method declines to tier 0 with "handler without invokes" - passing for the
+	// wrong reason.
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void Boom () { throw new InvalidOperationException ("boom"); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void BoomArg () { throw new ArgumentException ("arg"); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void Nop () { }
+
+	// Two cleanups then a catch, all in this frame: finally, finally, catch.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CleanupChain3 () {
+		int s = 0;
+		try {
+			try {
+				try {
+					s += 1;
+					Boom ();
+					s += 2;
+				} finally {
+					Nop ();
+					s += 10;
+				}
+			} finally {
+				Nop ();
+				s += 100;
+			}
+		} catch (Exception) {
+			s += 10000;
+		}
+		return s;
+	}
+
+	// One link longer, to check the chain is not capped at a single re-entry.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CleanupChain4 () {
+		int s = 0;
+		try {
+			try {
+				try {
+					try {
+						s += 1;
+						Boom ();
+					} finally {
+						Nop ();
+						s += 10;
+					}
+				} finally {
+					Nop ();
+					s += 100;
+				}
+			} finally {
+				Nop ();
+				s += 1000;
+			}
+		} catch (Exception) {
+			s += 100000;
+		}
+		return s;
+	}
+
+	// A catch nested inside a cleanup's try region. The inner catch does not
+	// match, so the walk passes through it, runs the finally, and only then
+	// reaches the outer catch.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CatchInsideCleanup () {
+		int s = 0;
+		try {
+			try {
+				try {
+					s += 1;
+					Boom ();
+				} catch (ArgumentException) {
+					s += 10;
+				}
+			} finally {
+				Nop ();
+				s += 100;
+			}
+		} catch (Exception) {
+			s += 10000;
+		}
+		return s;
+	}
+
+	// The same shape with the inner catch MATCHING, so it swallows the throw and
+	// the finally runs on the ordinary leave path instead of on a resume.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CatchInsideCleanupMatched () {
+		int s = 0;
+		try {
+			try {
+				try {
+					s += 1;
+					BoomArg ();
+				} catch (ArgumentException) {
+					s += 10;
+				}
+			} finally {
+				Nop ();
+				s += 100;
+			}
+		} catch (Exception) {
+			s += 10000;
+		}
+		return s;
+	}
+
+	// A cleanup enclosed by SIBLING catches: the re-entry has to pick between
+	// two clauses over one try region by selector, not just fall into the first.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CleanupUnderSiblingCatches (bool arg) {
+		int s = 0;
+		try {
+			try {
+				s += 1;
+				if (arg)
+					BoomArg ();
+				else
+					Boom ();
+			} finally {
+				Nop ();
+				s += 10;
+			}
+		} catch (ArgumentException) {
+			s += 100;
+		} catch (InvalidOperationException) {
+			s += 1000;
+		}
+		return s;
+	}
+
+	// The throw happens in the MIDDLE try, outside the innermost clause, so the
+	// innermost cleanup must NOT run and the chain starts one level out.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CleanupChainSkipInnermost () {
+		int s = 0;
+		try {
+			try {
+				try {
+					s += 1;
+					Nop ();
+				} finally {
+					Nop ();
+					s += 10;
+				}
+				Boom ();
+				s += 2;
+			} finally {
+				Nop ();
+				s += 100;
+			}
+		} catch (Exception) {
+			s += 10000;
+		}
+		return s;
+	}
+
+	// The chain inside a loop, so the optimizer has real phis to fold across
+	// each re-entry rather than a single straight-line path.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CleanupChainInLoop (int n) {
+		int s = 0;
+		for (int i = 0; i < n; i++) {
+			try {
+				try {
+					try {
+						s += 1;
+						if ((i % 2) == 0)
+							Boom ();
+						s += 2;
+					} finally {
+						Nop ();
+						s += 10;
+					}
+				} finally {
+					Nop ();
+					s += 100;
+				}
+			} catch (Exception) {
+				s += 10000;
+			}
+		}
+		return s;
+	}
+
+	// The second cleanup throws a NEW exception, which has to abandon the one
+	// already in flight and leave the frame instead of continuing the chain.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CleanupThrowsFromCleanup () {
+		int s = 0;
+		try {
+			try {
+				s += 1;
+				Boom ();
+			} finally {
+				Nop ();
+				s += 10;
+			}
+		} finally {
+			Nop ();
+			s += 100;
+			BoomArg ();
+		}
+		return s;
+	}
+
+	public static int test_0_same_frame_handler_chain () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		IntPtr h = HandleOf ("CleanupChain3");
+
+		// Drive every shape well past any threshold, checking each call: the
+		// tier-0 answers, the mid-promotion ones and the tier-1 ones all have to
+		// agree, so a body that only goes wrong once promoted still fails here.
+		for (int i = 0; i < 3000; i++) {
+			if (CleanupChain3 () != 10111)
+				return 1;
+			if (CleanupChain4 () != 101111)
+				return 2;
+			if (CatchInsideCleanup () != 10101)
+				return 3;
+			if (CatchInsideCleanupMatched () != 111)
+				return 4;
+			if (CleanupUnderSiblingCatches (true) != 111)
+				return 5;
+			if (CleanupUnderSiblingCatches (false) != 1011)
+				return 6;
+			if (CleanupChainSkipInnermost () != 10111)
+				return 7;
+		}
+
+		if (threshold != 0 && !WaitForRedirectArmed (h))
+			return 8;
+
+		// Same again with the sled confirmed armed, so these calls are tier 1
+		// end to end.
+		for (int i = 0; i < 200; i++) {
+			if (CleanupChain3 () != 10111)
+				return 9;
+			if (CleanupChain4 () != 101111)
+				return 10;
+			if (CatchInsideCleanup () != 10101)
+				return 11;
+			if (CatchInsideCleanupMatched () != 111)
+				return 12;
+			if (CleanupUnderSiblingCatches (true) != 111)
+				return 13;
+			if (CleanupUnderSiblingCatches (false) != 1011)
+				return 14;
+			if (CleanupChainSkipInnermost () != 10111)
+				return 15;
+		}
+		return 0;
+	}
+
+	public static int test_0_same_frame_handler_chain_in_loop () {
+		IntPtr h = HandleOf ("CleanupChainInLoop");
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+
+		// n throwing iterations contribute 10111 each and n non-throwing ones
+		// 113 each (1 + 2 in the try, then both cleanups).
+		for (int i = 0; i < 2000; i++) {
+			if (CleanupChainInLoop (1) != 10111)
+				return 1;
+			if (CleanupChainInLoop (2) != 10111 + 113)
+				return 2;
+			if (CleanupChainInLoop (7) != 4 * 10111 + 3 * 113)
+				return 3;
+		}
+
+		if (threshold != 0 && !WaitForRedirectArmed (h))
+			return 4;
+
+		if (CleanupChainInLoop (7) != 4 * 10111 + 3 * 113)
+			return 5;
+		return 0;
+	}
+
+	public static int test_0_exception_from_within_cleanup_chain () {
+		IntPtr h = HandleOf ("CleanupThrowsFromCleanup");
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		int caught = 0;
+
+		for (int i = 0; i < 3000; i++) {
+			try {
+				CleanupThrowsFromCleanup ();
+				return 1;			// it always throws
+			} catch (ArgumentException) {
+				caught++;
+			}
+		}
+		if (caught != 3000)
+			return 2;
+
+		if (threshold != 0 && !WaitForRedirectArmed (h))
+			return 3;
+
+		try {
+			CleanupThrowsFromCleanup ();
+			return 4;
+		} catch (ArgumentException) {
+		}
+		return 0;
+	}
 }

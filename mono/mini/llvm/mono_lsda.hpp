@@ -66,6 +66,23 @@ namespace mono {
  * streamer anchored on); parse_mono_lsda cannot range-check them against the
  * code - that is the loaded function's size, which publish/build supplies.
  */
+/*
+ * The `kind` a `.mono_lsda` entry carries when its landing pad is a cleanup's
+ * RESUME pad rather than an ordinary handler pad.
+ *
+ * A finally/fault that some other clause protects ends in an invoke of the resume
+ * trampoline whose unwind edge lands on a pad of its own (emit_resume_unwind),
+ * reached only after the cleanup has run. That is where the runtime has to
+ * continue when it goes on to dispatch an enclosing clause for the same throw, so
+ * build_ex_info () picks these entries out by their kind, records the pad against
+ * clause_index, and uses it as the handler_start of the enclosing entries it
+ * synthesises - it publishes no entry of its own for them.
+ *
+ * Deliberately outside the ECMA flags range (NONE=0, FILTER=1, FINALLY=2,
+ * FAULT=4) so it can never be confused with a clause kind.
+ */
+constexpr std::uint32_t MONO_LSDA_KIND_RESUME_PAD = 0x10000;
+
 struct MonoLsdaEntry {
 	std::uint32_t try_start_off = 0;
 	std::uint32_t try_len = 0;
@@ -115,14 +132,15 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
  * from clauses[].try_offset/handler_offset), de-duplicated so a SIBLING catch
  * group over one shared range - several base entries with one landing pad - yields
  * that encloser only ONCE, not once per sibling. The synthesised entry copies the
- * base's EXACT native range and handler_start (the inner landing pad) and
- * overrides only j's flags/catch_class/clause_index, so out.size() >=
- * entries.size(): base entries occupy the lower slots [0, base_count), enclosing
- * entries the higher ones (the ordering the runtime's flat first-match resume
- * relies on). The
- * translator nesting gate still declines every nested method, so on the live
- * path nested_in is empty and out.size() == entries.size() - the synthesis is
- * exercised only by the offline unit tests.
+ * base's EXACT native range and overrides j's flags/catch_class/clause_index, so
+ * out.size() >= entries.size(): base entries occupy the lower slots
+ * [0, base_count), enclosing entries the higher ones (the ordering the runtime's
+ * flat first-match resume relies on).
+ *
+ * Its handler_start is whichever pad control is in when the runtime reaches j -
+ * the base's own pad, until a cleanup runs, and that cleanup's RESUME pad
+ * afterwards (MONO_LSDA_KIND_RESUME_PAD). A resume-pad entry is consumed for that
+ * purpose only; it is never published.
  */
 bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const MonoExceptionClause *clauses, int num_clauses,

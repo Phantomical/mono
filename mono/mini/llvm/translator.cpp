@@ -155,26 +155,6 @@ llvm_method_filter_excludes (MonoMethod *method)
 }
 
 /*
- * clause_encloses:
- *
- *   Does IL clause J strictly ENCLOSE clause C - i.e. is C's try region nested in
- * J's? This is byte-for-byte the containment predicate the .mono_lsda synthesis
- * (mono_lsda.cpp, EH N1) and the landing-pad emission (translator-call.cpp, EH N2)
- * use, with SIBLINGS (identical try_offset AND try_len - try { } catch(A) catch(B))
- * excluded. Keeping the nesting gate's admit set in lock-step with those two stages
- * is load-bearing: the gate must admit exactly the pairs the synthesis + switch can
- * represent, or a live nested method would consume an array that mis-dispatches.
- */
-static inline bool
-clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
-{
-	bool siblings = c->try_offset == j->try_offset && c->try_len == j->try_len;
-	return !siblings &&
-	       c->try_offset >= j->try_offset &&
-	       c->handler_offset <= j->handler_offset;
-}
-
-/*
  * mono_llvm_check_method_supported:
  *
  *   Do some quick checks to decide whenever cfg->method can be compiled by LLVM, to avoid
@@ -287,38 +267,28 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 		return;
 
 	/*
-	 * Nesting gate (arbitrary depth, EH N6). The `.mono_lsda` synthesis
-	 * (build_ex_info, EH N1) plus the landing-pad selector routing
-	 * (emit_handler_start, EH N2) represent a clause whose try region is strictly
-	 * contained in an enclosing clause's try: for each faulting PC the runtime
-	 * still delivers to the INNERMOST landing pad, whose selector switch
-	 * re-dispatches RDX == the enclosing clause_index to that enclosing handler's
-	 * body (doc 21 5/6). The synthesised enclosing entries reuse the inner landing
-	 * pad and copy the inner base entry's exact range, so the published native
-	 * ranges stay equal-or-disjoint (doc 21 2.2). All try-containment of
-	 * NONE/FINALLY/FAULT clauses is admitted to ANY depth: a clause with several
-	 * enclosers (a 3-or-more-deep nest) gets one synthesised enclosing entry per
-	 * encloser, appended in ascending clause_index (= innermost-encloser first,
-	 * doc 21 4.1) so pass-2 runs the intervening finallys innermost-first and
-	 * reaches enclosing catches in precedence order - matching the classic JIT's
-	 * inner-first clause array. The N1 synthesis + N2 emission carry no depth cap
-	 * (the selector switch adds one value-keyed case per encloser regardless of
-	 * count), so nothing here limits depth either.
+	 * Crossing-clause gate. Nesting itself is fine at any depth: the runtime
+	 * delivers a fault to the INNERMOST landing pad and the `.mono_lsda` synthesis
+	 * (build_ex_info) hands it one entry per enclosing clause over the same range,
+	 * in ascending clause_index (= innermost-encloser first), so it walks a nest
+	 * outwards in the same order the classic JIT's inner-first clause array gives
+	 * it. Where each of those entries sends control is the synthesis's job -
+	 * either the pad already entered, whose selector switch re-dispatches RDX ==
+	 * the enclosing clause_index, or, once a cleanup has run, that cleanup's
+	 * resume pad. Nothing in either stage caps the depth.
 	 *
-	 * The only residual decline (CAP-EH-0, doc 21 7 / 8.1) is defensive: a pair
-	 * that overlaps but is neither siblings nor cleanly contained (neither
-	 * encloses the other) - a CROSSING / partial overlap the synthesis cannot
-	 * faithfully encode (malformed IL). Gate-A(FILTER)/save_lmf/dynamic declines
-	 * still apply on top of this.
+	 * What CANNOT be encoded is a pair that overlaps but is neither siblings nor
+	 * cleanly contained - a CROSSING / partial overlap, which only malformed IL
+	 * produces. Synthesising an enclosing entry for it would publish a native
+	 * range that strictly nests inside another's, and the runtime's first-match
+	 * walk over the array would then be ambiguous, so decline instead (CAP-EH-0).
 	 *
 	 * True SIBLING catches - try { } catch(A) catch(B) - share the IDENTICAL
 	 * protected region (same try_offset AND try_len) and are NOT nesting: they are
 	 * emitted as one landing pad carrying a clause per sibling, routed by the
-	 * selector (doc 11 3/6). clause_encloses is false for siblings, so they pass
-	 * the crossing test - admitted, as before. The crossing test uses
-	 * clause_encloses, byte-for-byte the predicate the N1 synthesis and N2
-	 * emission use, so the gate admits exactly the pairs those two stages can
-	 * represent.
+	 * selector. clause_encloses is false for siblings, so they pass the crossing
+	 * test. That predicate is the one every stage shares, so the gate admits
+	 * exactly the pairs the synthesis and the pad emission can represent.
 	 */
 	for (i = 0; i < cfg->header->num_clauses; ++i) {
 		MonoExceptionClause *clause1 = &cfg->header->clauses [i];

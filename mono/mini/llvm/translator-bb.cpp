@@ -4368,7 +4368,6 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			MonoBasicBlock *handler_bb;
 			llvm::Value *val;
 			llvm::SwitchInst *switch_ins;
-			LLVMValueRef callee;
 			GSList *bb_list;
 			BBInfo *info;
 			bool is_fault = MONO_REGION_FLAGS (bb->region) == MONO_EXCEPTION_CLAUSE_FAULT;
@@ -4406,12 +4405,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 				ctx->builder->SetInsertPoint (llvm::unwrap (resume_bb));
 			}
 
-			{
-				LLVMTypeRef icall_sig = LLVMFunctionType (llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ())), NULL, 0, FALSE);
-				callee = ctx->get_jit_callee ("llvm_resume_unwind_trampoline", icall_sig, MONO_PATCH_INFO_JIT_ICALL_ID, GUINT_TO_POINTER (MONO_JIT_ICALL_mono_llvm_resume_unwind_trampoline));
-				llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (icall_sig)), llvm::unwrap (callee), gep_index_list (NULL, 0), ""));
-				llvm::wrap (builder->CreateUnreachable ());
-			}
+			ctx->emit_resume_unwind (bb, &builder);
 
 			has_terminator = true;
 			break;
