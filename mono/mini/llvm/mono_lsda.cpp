@@ -207,11 +207,62 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 	return true;
 }
 
-bool
-build_ex_info (const std::vector<MonoLsdaEntry> &entries,
-               const MonoExceptionClause *clauses, int num_clauses,
-               const std::uint8_t *native_code, std::uint32_t code_len,
-               std::vector<MonoJitExceptionInfo> &out)
+/*
+ * Append one entry per recovered finally body range, carrying the two things the
+ * runtime's thread-abort guard reads about a running finally: the PC range that
+ * says a frame is inside the body (find_last_handler_block) and the frame byte
+ * to flag the abort through (install_handler_block_guard writes
+ * *(bp + exvar_offset) = 1; the shared IR reads it once the finally returns).
+ *
+ * These are DELIBERATELY entries of their own rather than fields on the FINALLY
+ * entries built above. A finally whose protected region has no call that can
+ * unwind gets no dispatch entry at all - exactly the shape that left the guard
+ * uninstallable - so there would be nothing to attach to. And the partitions
+ * differ anyway: one guard entry per clause against one dispatch entry per
+ * invoke range.
+ *
+ * They are inert for dispatch: an EMPTY try range makes is_address_protected ()
+ * false for every PC, so neither exception delivery nor mono_handle_finally_block
+ * can reach them, and they cannot make a handler run twice. Appending them last
+ * also keeps the base/enclosing slot ordering the pass-2 resume walk depends on.
+ */
+static void
+append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
+                       const MonoExceptionClause *clauses, int num_clauses,
+                       const std::uint8_t *native_code, std::uint32_t code_len,
+                       std::vector<MonoJitExceptionInfo> &out)
+{
+	for (const MonoFinallyGuard &g : guards) {
+		/*
+		 * The caller keyed these off the same cfg->header, and both bounds are
+		 * label differences inside this method's own code. A body that runs to
+		 * the end of the function ends at exactly code_len, which is where its
+		 * closing label sits, not an overrun.
+		 */
+		g_assert (static_cast<int> (g.clause_index) < num_clauses);
+		g_assert (clauses[g.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
+		g_assert (g.handler_start_off < g.handler_end_off);
+		g_assert (g.handler_end_off <= code_len);
+
+		MonoJitExceptionInfo ei;
+		memset (&ei, 0, sizeof (ei));
+		ei.flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		ei.clause_index = static_cast<int> (g.clause_index);
+		ei.try_start = (gpointer) native_code;
+		ei.try_end = (gpointer) native_code;
+		ei.handler_start = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + g.handler_start_off);
+		ei.data.handler_end = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + g.handler_end_off);
+		ei.exvar_offset = g.exvar_offset;
+
+		out.push_back (ei);
+	}
+}
+
+static bool
+build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
+                       const MonoExceptionClause *clauses, int num_clauses,
+                       const std::uint8_t *native_code, std::uint32_t code_len,
+                       std::vector<MonoJitExceptionInfo> &out)
 {
 	out.clear ();
 
@@ -348,6 +399,18 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 			         rc.flags == MONO_EXCEPTION_CLAUSE_FAULT);
 
 			resume_pad[e.clause_index] = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
+			continue;
+		}
+
+		/*
+		 * A finally handler body's PC range. It describes where the handler's own
+		 * code sits, not a region the handler protects, and is consumed only by
+		 * the thread-abort guard - the caller has already turned these into
+		 * MonoFinallyGuards and passes them in as GUARDS, joined with the frame
+		 * slot the stackmap named. Nothing to publish for it here.
+		 */
+		if (e.kind == MONO_LSDA_KIND_FINALLY_BODY) {
+			g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
 			continue;
 		}
 
@@ -609,15 +672,30 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 }
 
 bool
+build_ex_info (const std::vector<MonoLsdaEntry> &entries,
+               const MonoExceptionClause *clauses, int num_clauses,
+               const std::uint8_t *native_code, std::uint32_t code_len,
+               std::vector<MonoJitExceptionInfo> &out,
+               const std::vector<MonoFinallyGuard> &guards)
+{
+	if (!build_ex_info_entries (entries, clauses, num_clauses, native_code, code_len, out))
+		return false;
+
+	append_finally_guards (guards, clauses, num_clauses, native_code, code_len, out);
+	return true;
+}
+
+bool
 publish_mono_lsda (MonoCompile *cfg,
                    const std::vector<MonoLsdaEntry> &entries,
-                   const std::uint8_t *native_code, std::uint32_t code_len)
+                   const std::uint8_t *native_code, std::uint32_t code_len,
+                   const std::vector<MonoFinallyGuard> &guards)
 {
 	int num_clauses = cfg->header ? static_cast<int> (cfg->header->num_clauses) : 0;
 	const MonoExceptionClause *clauses = cfg->header ? cfg->header->clauses : nullptr;
 
 	std::vector<MonoJitExceptionInfo> built;
-	if (!build_ex_info (entries, clauses, num_clauses, native_code, code_len, built))
+	if (!build_ex_info (entries, clauses, num_clauses, native_code, code_len, built, guards))
 		return false; /* caller set_failure -> classic JIT */
 
 	/*

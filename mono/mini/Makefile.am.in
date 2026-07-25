@@ -461,6 +461,7 @@ llvm_sources = \
 	llvm/translator-cpp.hpp \
 	llvm/translator-cpp.cpp \
 	llvm/ehframe.cpp \
+	llvm/mono_lsda_format.hpp \
 	llvm/mono_lsda.hpp \
 	llvm/mono_lsda.cpp \
 	llvm/tiered.cpp \

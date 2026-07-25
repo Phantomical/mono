@@ -9,9 +9,13 @@
 
 #include "translator-internal.hpp"
 
+#include <algorithm>
+#include <map>
+#include <utility>
 #include <vector>
 
 #include <llvm/IR/Module.h>
+#include <llvm/Object/StackMapParser.h>
 
 #include <mono/metadata/metadata-internals.h>
 #include <mono/metadata/mono-endian.h>
@@ -650,6 +654,15 @@ EmitContext::emit_method_inner ()
 			this->set_failure ("filter clause (custom-emit EH does not support filters).");
 			return;
 		}
+		/*
+		 * The thread-abort guard writes *(RBP + exvar_offset) = 1 into a running
+		 * finally's frame, and that offset comes back from a stackmap as an
+		 * RBP-relative location, so a finally-bearing method has to keep its frame
+		 * pointer. The stackmap and the EH pad each force one anyway; pinning it
+		 * makes the slot's home unambiguous rather than incidental.
+		 */
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_FINALLY)
+			mono_llvm_add_func_attr_nv (method, "frame-pointer", "all");
 	}
 	if (header->num_clauses || (cfg->method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) || cfg->no_inline)
 		/* We can't handle inlined methods with clauses */
@@ -1727,17 +1740,65 @@ init_jit_module (MonoDomain *domain)
 	mono_loader_unlock ();
 }
 
-/* Unaligned little-endian reads for the stackmap parser below. */
-static inline guint16
-read_le16 (const guint8 *p)
-{
-	return static_cast<guint16>(p [0] | (p [1] << 8));
-}
+/*
+ * One `.llvm_stackmaps` record, reduced to what the recovery passes below need:
+ * which stackmap it came from (ID), where in the code it sits, and the frame
+ * home of its first location operand.
+ */
+struct StackmapRecord {
+	guint64 id;
+	guint32 instr_off;
+	bool loc_is_direct;
+	guint16 loc_dwarf_reg;
+	gint32 loc_offset;
+};
 
-static inline guint32
-read_le32 (const guint8 *p)
+/*
+ * Decode every record in the `.llvm_stackmaps` section into OUT, or return
+ * false if the section is absent or its header does not validate.
+ *
+ * Records carrying no location operand are skipped: both consumers key off a
+ * location, and LLVM is free to emit bare records of its own.
+ */
+static bool
+parse_stackmap_records (const guint8 *stackmaps, guint32 size, std::vector<StackmapRecord> &out)
 {
-	return static_cast<guint32>(p [0]) | (static_cast<guint32>(p [1]) << 8) | (static_cast<guint32>(p [2]) << 16) | (static_cast<guint32>(p [3]) << 24);
+	out.clear ();
+
+	if (!stackmaps)
+		return false;
+
+	llvm::ArrayRef<uint8_t> section (stackmaps, size);
+
+	/*
+	 * The parser itself only asserts on a bad header, and this LLVM is built
+	 * without assertions - so check first rather than walk a malformed section.
+	 */
+	if (llvm::Error err = llvm::StackMapParser<llvm::endianness::little>::validateHeader (section)) {
+		llvm::consumeError (std::move (err));
+		return false;
+	}
+
+	llvm::StackMapParser<llvm::endianness::little> parser (section);
+
+	for (const auto &record : parser.records ()) {
+		if (record.getNumLocations () == 0)
+			continue;
+
+		auto loc = record.getLocation (0);
+		StackmapRecord sr;
+
+		sr.id = record.getID ();
+		sr.instr_off = record.getInstructionOffset ();
+		sr.loc_is_direct = loc.getKind () ==
+			llvm::StackMapParser<llvm::endianness::little>::LocationKind::Direct;
+		sr.loc_dwarf_reg = loc.getDwarfRegNum ();
+		/* getOffset () asserts unless the location is Direct or Indirect. */
+		sr.loc_offset = sr.loc_is_direct ? loc.getOffset () : 0;
+		out.push_back (sr);
+	}
+
+	return true;
 }
 
 /*
@@ -1750,27 +1811,23 @@ read_le32 (const guint8 *p)
  * reconstruct its generic context (mini-exceptions.c:831-835).
  *
  * The translator planted exactly one llvm.experimental.stackmap over the alloca
- * that holds this/mrgctx (emit_this_slot_stackmap, translator-call.cpp), so the
- * first record's first location is that slot. LLVM lowers an alloca operand to a
+ * that holds this/mrgctx (emit_this_slot_stackmap, translator-call.cpp), tagged
+ * with MONO_LLVM_THIS_SLOT_STACKMAP_ID. LLVM lowers an alloca operand to a
  * Direct location {DwarfReg, Offset} whose value is the slot's ADDRESS =
  * reg+offset; the consumer dereferences it, reading the stored this/mrgctx.
  * this_in_reg is forced to 0 by the LLVM branch in mini.c, matching Direct.
  *
  * Returns FALSE (declining the method to the classic JIT, per CAP-EH-0: a
  * plausible-but-wrong this-slot is worse than a fallback) if the section is
- * absent, malformed, or the location is anything other than Direct - in which
- * case *(reg+offset) would not equal this and stack walks would read garbage.
- *
- * Stackmap format is version 3 (LLVM's StackMapParser layout), little-endian.
+ * absent, malformed, carries no this-slot record, or the location is anything
+ * other than Direct - in which case *(reg+offset) would not equal this and
+ * stack walks would read garbage.
  */
 static bool
 recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 {
-	/* StackMap location kinds (llvm/CodeGen/StackMaps.h). */
-	enum { LOC_REGISTER = 1, LOC_DIRECT = 2, LOC_INDIRECT = 3, LOC_CONSTANT = 4, LOC_CONST_INDEX = 5 };
-
-	if (!stackmaps || size < 16)
-		return false;
+	std::vector<StackmapRecord> records;
+	const StackmapRecord *this_slot = nullptr;
 
 	/*
 	 * A gshared reference-type instance default-interface-method with
@@ -1786,36 +1843,24 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 		return false;
 	}
 
-	guint8 version = stackmaps [0];
-	if (version != 3)
+	if (!parse_stackmap_records (stackmaps, size, records))
 		return false;
 
-	guint32 num_functions = read_le32 (stackmaps + 4);
-	guint32 num_constants = read_le32 (stackmaps + 8);
-	guint32 num_records = read_le32 (stackmaps + 12);
-	if (num_records == 0)
+	/*
+	 * Select by ID rather than by position: a method that also has a finally
+	 * carries the abort-guard records in the same section, and nothing orders
+	 * this one first.
+	 */
+	for (const StackmapRecord &r : records) {
+		if (r.id == MONO_LLVM_THIS_SLOT_STACKMAP_ID) {
+			this_slot = &r;
+			break;
+		}
+	}
+	if (!this_slot)
 		return false;
 
-	/* Header (16) + StkSizeRecord[num_functions] (24 each) + Constants (8 each). */
-	guint64 rec_off = static_cast<guint64>(16) + static_cast<guint64>(num_functions) * 24 + static_cast<guint64>(num_constants) * 8;
-	/* First record: u64 id, u32 instr_offset, u16 pad, u16 num_locations, then locations. */
-	if (rec_off + 16 > size)
-		return false;
-	guint8 *rec = stackmaps + rec_off;
-
-	guint16 num_locations = read_le16 (rec + 14);
-	if (num_locations == 0)
-		return false;
-
-	/* Location[0]: u8 kind, u8 reserved, u16 size, u16 dwarf_reg, u16 reserved, i32 offset. */
-	if (rec_off + 16 + 12 > size)
-		return false;
-	guint8 *loc = rec + 16;
-	guint8 kind = loc [0];
-	guint16 dwarf_reg = read_le16 (loc + 4);
-	gint32 offset = static_cast<gint32>(read_le32 (loc + 8));
-
-	if (kind != LOC_DIRECT) {
+	if (!this_slot->loc_is_direct) {
 		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap not Direct");
 		return false;
 	}
@@ -1826,14 +1871,98 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 	 * this never fires in practice, but guard it like every other read above rather
 	 * than index out of bounds on a malformed stackmap.
 	 */
-	if (!mono_dwarf_reg_is_valid (dwarf_reg)) {
+	if (!mono_dwarf_reg_is_valid (this_slot->loc_dwarf_reg)) {
 		TRACE_FAILURE_CFG (cfg, "gshared this-slot stackmap dwarf reg out of range");
 		return false;
 	}
 
-	cfg->llvm_this_reg = mono_dwarf_reg_to_hw_reg (dwarf_reg);
-	cfg->llvm_this_offset = offset;
+	cfg->llvm_this_reg = mono_dwarf_reg_to_hw_reg (this_slot->loc_dwarf_reg);
+	cfg->llvm_this_offset = this_slot->loc_offset;
 	return true;
+}
+
+/*
+ * What the marker stackmaps say about one FINALLY clause: where its exvar lives,
+ * and every PC a marker ended up at.
+ */
+struct FinallyExvar {
+	gint32 offset = 0;
+	std::vector<guint32> marker_pcs;
+};
+
+/*
+ * recover_finally_exvars:
+ *
+ *   Recover, per FINALLY clause of CFG, the frame slot the thread-abort guard
+ * flags a running finally through - the byte install_handler_block_guard ()
+ * writes and the shared IR checks once the finally returns.
+ *
+ * Which PCs the handler body occupies is a separate question, about where the
+ * code ended up rather than about the frame, and MonoFinallyRangePass
+ * (engine.cpp) answers it after LLVM has finished moving code around. That split
+ * is what makes this immune to duplication: LLVM may clone the marker along with
+ * the code around it, but every copy names the same alloca.
+ *
+ * The marker PCs are kept so the caller can check them against that pass's
+ * ranges - two independent readings of the same markers, so either one drifting
+ * shows up as a marker outside every range of its own clause.
+ *
+ * A FINALLY clause with no record is not an error - its body was optimized away
+ * entirely, so there is nothing for a thread to be stopped inside.
+ */
+static void
+recover_finally_exvars (MonoCompile *cfg, guint8 *stackmaps, guint32 size,
+                        std::map<guint32, FinallyExvar> &out)
+{
+	MonoMethodHeader *header = cfg->header;
+	std::vector<StackmapRecord> records;
+	bool has_finally = false;
+
+	out.clear ();
+
+	for (int i = 0; i < header->num_clauses; ++i) {
+		if (header->clauses [i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
+			has_finally = true;
+	}
+	if (!has_finally)
+		return;
+
+	/*
+	 * No section at all means every finally body optimized away, so there is
+	 * nothing for a thread to be stopped inside and no guard to publish. A
+	 * section that is present but unreadable is our own emission breaking.
+	 */
+	if (!stackmaps || !size)
+		return;
+	g_assert (parse_stackmap_records (stackmaps, size, records));
+
+	for (const StackmapRecord &r : records) {
+		if ((r.id >> 32) != (MONO_LLVM_FINALLY_STACKMAP_ID_BASE >> 32))
+			continue;
+
+		guint32 clause_index = static_cast<guint32>(r.id & MONO_LLVM_FINALLY_STACKMAP_ID_MASK);
+
+		/* We built this ID out of the same cfg->header we are checking it against. */
+		g_assert (clause_index < static_cast<guint32>(header->num_clauses));
+		g_assert (header->clauses [clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
+
+		/*
+		 * The slot is a volatile alloca in a method whose frame pointer we pin,
+		 * so LLVM has nowhere else to put it than RBP-relative Direct.
+		 */
+		g_assert (r.loc_is_direct);
+		g_assert (mono_dwarf_reg_is_valid (r.loc_dwarf_reg));
+		g_assert (mono_dwarf_reg_to_hw_reg (r.loc_dwarf_reg) == AMD64_RBP);
+
+		auto known = out.find (clause_index);
+		if (known == out.end ())
+			out [clause_index].offset = r.loc_offset;
+		else
+			/* Every copy stackmaps the one alloca, so every copy sees one home. */
+			g_assert (known->second.offset == r.loc_offset);
+
+		out [clause_index].marker_pcs.push_back (r.instr_off);
+	}
 }
 
 void
@@ -1983,12 +2112,77 @@ EmitContext::llvm_jit_finalize_method ()
 	 */
 	if (cfg->header->num_clauses > 0) {
 		std::vector<mono::MonoLsdaEntry> entries;
+		std::vector<mono::MonoFinallyGuard> guards;
+		std::map<guint32, FinallyExvar> exvars;
 
 		if (!mono::parse_mono_lsda (static_cast<const guint8*>(mono_lsda), mono_lsda_size, entries)) {
 			this->set_failure ("could not parse .mono_lsda clause table");
 			return;
 		}
-		if (!mono::publish_mono_lsda (cfg, entries, cfg->native_code, cfg->code_len)) {
+
+		/*
+		 * The thread-abort guard for this method's finallys, assembled from the
+		 * two halves that describe a handler body: MonoFinallyRangePass
+		 * (engine.cpp) put its PC ranges in the section, and the marker stackmap
+		 * named the frame slot to flag an abort through. Both are keyed on the
+		 * IL clause index. Empty for a method with no finally.
+		 */
+		recover_finally_exvars (cfg, static_cast<guint8*>(stackmaps), stackmaps_size, exvars);
+
+		for (const mono::MonoLsdaEntry &e : entries) {
+			if (e.kind != mono::MONO_LSDA_KIND_FINALLY_BODY)
+				continue;
+
+			/*
+			 * A body only reaches the section because MonoFinallyRangePass found
+			 * the markers bracketing it, and the opening marker is the one that
+			 * named the exvar. So the two halves are present together or not at
+			 * all.
+			 */
+			auto ex = exvars.find (e.clause_index);
+			g_assert (ex != exvars.end ());
+
+			/*
+			 * An empty range is a body the optimizer emptied out between its two
+			 * markers. There is no PC for a thread to be stopped at, so there is
+			 * nothing to guard - but it still counts as covering its own marker
+			 * in the check below.
+			 */
+			if (e.try_len == 0)
+				continue;
+
+			mono::MonoFinallyGuard g;
+			g.clause_index = e.clause_index;
+			g.handler_start_off = e.try_start_off;
+			g.handler_end_off = e.try_start_off + e.try_len;
+			g.exvar_offset = ex->second.offset;
+
+			guards.push_back (g);
+		}
+
+		/*
+		 * Cross-check the two halves against each other. Every opening marker sits
+		 * at the start of a body run, so it must fall inside one of the ranges
+		 * recorded for its clause; one that does not means a run was missed and
+		 * some of the body is unguarded.
+		 */
+		for (const auto &kv : exvars) {
+			for (guint32 pc : kv.second.marker_pcs) {
+				bool covered = false;
+
+				for (const mono::MonoLsdaEntry &e : entries) {
+					if (e.kind != mono::MONO_LSDA_KIND_FINALLY_BODY ||
+					    e.clause_index != kv.first)
+						continue;
+					if (pc >= e.try_start_off && pc <= e.try_start_off + e.try_len)
+						covered = true;
+				}
+
+				g_assert (covered);
+			}
+		}
+
+		if (!mono::publish_mono_lsda (cfg, entries, cfg->native_code, cfg->code_len, guards)) {
 			this->set_failure ("could not publish .mono_lsda clause table");
 			return;
 		}

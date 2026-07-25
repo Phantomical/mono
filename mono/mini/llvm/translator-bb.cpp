@@ -70,6 +70,46 @@ EmitContext::handler_is_reachable (MonoBasicBlock *bb)
 	return false;
 }
 
+/*
+ * Record where BB's FINALLY clause keeps its thread-abort exvar, so the runtime
+ * guard can flag an abort through that frame slot. A no-op unless BB is in a
+ * FINALLY clause: catch and fault handlers are not abort-protected.
+ *
+ * Only the SLOT is recorded here. Which PCs belong to the handler body is a
+ * separate question, answered by MonoFinallyRangePass (engine.cpp) from this
+ * marker and the one OP_ENDFINALLY plants, once LLVM has finished moving code
+ * around. LLVM may duplicate this marker along with the code it sits in; every
+ * copy names the same alloca, so the recovery just requires them to agree.
+ */
+static void
+emit_finally_guard_exvar (EmitContext *ctx, llvm::IRBuilder<> *builder, MonoBasicBlock *bb)
+{
+	MonoCompile *cfg = ctx->cfg;
+	int clause_index = (mono_get_block_region_notry (cfg, bb->region) >> 8) - 1;
+	MonoInst *exvar;
+	Address *addr;
+
+	if (clause_index < 0 || clause_index >= cfg->header->num_clauses)
+		return;
+	if (cfg->header->clauses [clause_index].flags != MONO_EXCEPTION_CLAUSE_FINALLY)
+		return;
+
+	/*
+	 * method-to-ir.c creates this exvar for every FINALLY clause up front, and
+	 * the leave path compares it against 0 once the finally returns - it is the
+	 * byte the guard flags the abort through, so the stackmap must name that
+	 * same slot and no other.
+	 */
+	exvar = mono_find_exvar_for_offset (cfg, cfg->header->clauses [clause_index].handler_offset);
+	g_assert (exvar);
+
+	/* Created volatile by method-to-ir.c, so it always has a frame home. */
+	addr = ctx->addresses [exvar->dreg];
+	g_assert (addr);
+
+	ctx->emit_finally_guard_stackmap (builder, llvm::wrap (addr->value), clause_index);
+}
+
 void
 process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 {
@@ -4361,6 +4401,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_START_HANDLER: {
+			emit_finally_guard_exvar (ctx, builder, bb);
 			break;
 		}
 		case OP_ENDFINALLY: {
@@ -4371,6 +4412,17 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			GSList *bb_list;
 			BBInfo *info;
 			bool is_fault = MONO_REGION_FLAGS (bb->region) == MONO_EXCEPTION_CLAUSE_FAULT;
+			int finally_clause = (mono_get_block_region_notry (cfg, bb->region) >> 8) - 1;
+
+			/*
+			 * Close the abort guard's view of this handler body before the
+			 * dispatch below: from the marker on, control is on its way back to
+			 * the leave path and the thread is no longer inside the finally.
+			 * Fault clauses are not abort-protected, so they get no marker.
+			 */
+			if (finally_clause >= 0 && finally_clause < cfg->header->num_clauses &&
+			    cfg->header->clauses [finally_clause].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
+				ctx->emit_finally_end_stackmap (builder, finally_clause);
 
 			/*
 			 * Fault clauses are like finally clauses, but they are only called if an exception is thrown.

@@ -196,43 +196,92 @@ EmitContext::emit_div_check (llvm::IRBuilder<> *builder, MonoBasicBlock *bb, Mon
 }
 
 /*
- * Stackmap patchpoint id for the gshared this/rgctx home slot. There is exactly
- * one llvm.experimental.stackmap per gshared method, so the value is arbitrary;
- * the parser (translator.cpp) reads the first record's first location regardless.
- */
-constexpr int MONO_LLVM_THIS_SLOT_STACKMAP_ID = 0;
-
-/*
- * Record the location of SLOT (an alloca holding this/mrgctx) with a
- * llvm.experimental.stackmap intrinsic, so that after code emission the backend
- * can read the slot's home register+offset out of the `.llvm_stackmaps` section
- * and publish it as cfg->llvm_this_reg/llvm_this_offset (mini.c:2573-2577).
+ * Record the frame home of SLOT (an alloca) with an llvm.experimental.stackmap
+ * intrinsic carrying ID, so that after code emission the backend can read the
+ * slot's home register+offset - and the stackmap's own PC - back out of the
+ * `.llvm_stackmaps` section (the recovery passes in translator.cpp).
  *
- * Stock LLVM has no built-in way to publish that location, so gshared methods
- * would otherwise reach mini.c's g_assert(cfg->llvm_this_reg != -1) with the
- * field unset. A stackmap over the alloca supplies it (design 3.1 / S6): it
- * records the slot's address as a frame reg+offset that is stable for the whole
- * method, exactly what a stack walk needs.
+ * Stock LLVM has no other way to publish where an alloca ended up, and LLVM
+ * lowers an alloca operand to a Direct location {DwarfReg, Offset} whose value
+ * is the slot's ADDRESS - exactly what a stack walk over a live frame needs.
  *
  * The intrinsic is declared on demand in the method's own module (every method
  * gets its own, so declaring by name is race-free), variadic void(i64,i32,...).
  */
+static llvm::CallInst *
+emit_slot_stackmap (EmitContext *ctx, llvm::IRBuilder<> *builder, LLVMValueRef slot, guint64 id)
+{
+	LLVMTypeRef params [] = { llvm::wrap (llvm::Type::getInt64Ty (ctx->llvm_ctx ())), llvm::wrap (llvm::Type::getInt32Ty (ctx->llvm_ctx ())) };
+	LLVMTypeRef sm_type = LLVMFunctionType (llvm::wrap (llvm::Type::getVoidTy (ctx->llvm_ctx ())), params, 2, TRUE);
+	LLVMValueRef sm = LLVMGetNamedFunction (ctx->lmodule, "llvm.experimental.stackmap");
+
+	if (!sm)
+		sm = LLVMAddFunction (ctx->lmodule, "llvm.experimental.stackmap", sm_type);
+
+	LLVMValueRef args [] = {
+		llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (ctx->llvm_ctx ()), id, false)),
+		llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (ctx->llvm_ctx ()), 0, false)),
+		slot,
+	};
+	/* A marker with no slot records only its own ID and PC. */
+	llvm::CallInst *call = builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (sm_type)), llvm::unwrap (sm), gep_index_list (args, slot ? 3 : 2), "");
+
+	/*
+	 * llvm.experimental.stackmap is declared Throws (Intrinsics.td), so left alone
+	 * a marker planted inside a protected region reads as a call that can unwind
+	 * out of it - which changes the EH geometry the gather pass then describes.
+	 * A stackmap emits no code at all, so say what is actually true.
+	 */
+	call->setDoesNotThrow ();
+	return call;
+}
+
+/*
+ * Publish the home of the slot holding this/mrgctx as cfg->llvm_this_reg /
+ * llvm_this_offset (mini.c:2573-2577), so a stack walk over a live frame of a
+ * gshared method can reconstruct its generic context. Without it those methods
+ * reach mini.c's g_assert (cfg->llvm_this_reg != -1) with the field unset.
+ */
 void
 EmitContext::emit_this_slot_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot)
 {
-	LLVMTypeRef params [] = { llvm::wrap (llvm::Type::getInt64Ty (this->llvm_ctx ())), llvm::wrap (llvm::Type::getInt32Ty (this->llvm_ctx ())) };
-	LLVMTypeRef sm_type = LLVMFunctionType (llvm::wrap (llvm::Type::getVoidTy (this->llvm_ctx ())), params, 2, TRUE);
-	LLVMValueRef sm = LLVMGetNamedFunction (this->lmodule, "llvm.experimental.stackmap");
+	emit_slot_stackmap (this, builder, slot, MONO_LLVM_THIS_SLOT_STACKMAP_ID);
+}
 
-	if (!sm)
-		sm = LLVMAddFunction (this->lmodule, "llvm.experimental.stackmap", sm_type);
+/*
+ * Open CLAUSE_INDEX's handler body, over SLOT - that clause's thread-abort exvar.
+ *
+ * This and emit_finally_end_stackmap () are what the runtime's abort guard is
+ * built from. They are the ONLY thing about the body that survives codegen: an
+ * instruction moves, is cloned and is merged along with the code around it,
+ * whereas a block loses its identity to the first merge that touches it.
+ * MonoFinallyRangePass (engine.cpp) walks between the two to recover which PCs
+ * are body.
+ *
+ * SLOT must be the same exvar the shared IR checks after the finally returns
+ * (method-to-ir.c, the OP_ENDFINALLY abort check) - install_handler_block_guard ()
+ * writes *(bp + exvar_offset) = 1 and that check is what reads it - or the
+ * guard's write would never be seen.
+ */
+void
+EmitContext::emit_finally_guard_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot, int clause_index)
+{
+	guint64 id = MONO_LLVM_FINALLY_STACKMAP_ID_BASE | (guint64) (guint32) clause_index;
 
-	LLVMValueRef args [] = {
-		llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (this->llvm_ctx ()), MONO_LLVM_THIS_SLOT_STACKMAP_ID, false)),
-		llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), 0, false)),
-		slot,
-	};
-	llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (sm_type)), llvm::unwrap (sm), gep_index_list (args, 3), ""));
+	emit_slot_stackmap (this, builder, slot, id);
+}
+
+/*
+ * Close CLAUSE_INDEX's handler body: from here on control is leaving the finally,
+ * so a thread stopped past this point is no longer inside it and the abort needs
+ * no deferring. Carries no slot - the opening marker already named the exvar.
+ */
+void
+EmitContext::emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_index)
+{
+	guint64 id = MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE | (guint64) (guint32) clause_index;
+
+	emit_slot_stackmap (this, builder, nullptr, id);
 }
 
 /*

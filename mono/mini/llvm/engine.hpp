@@ -182,11 +182,43 @@ struct MonoEHFunctionClauses {
 };
 
 /*
+ * One PC range a FINALLY clause's handler body occupies, as MonoFinallyRangePass
+ * found it. A clause can have SEVERAL: the optimizer duplicates a body along its
+ * entry paths, and each surviving copy is a range of its own.
+ *
+ * This is what the runtime's thread-abort guard asks about a stopped frame ("is it
+ * inside this finally?"), so the bounds have to be exact. They are labels the pass
+ * plants at the run's two ends - a label emits no code and can sit anywhere in a
+ * block, so the range names where the body actually lies.
+ */
+struct MonoEHFinallyBody {
+	const llvm::MCSymbol *body_begin = nullptr;
+	const llvm::MCSymbol *body_end = nullptr;
+	/* The IL clause index, read back from the markers bracketing the run. */
+	int clause_index = -1;
+};
+
+/* The finally body ranges MonoFinallyRangePass found in one MachineFunction. */
+struct MonoEHFinallyFunction {
+	/*
+	 * MF.getName (), which MonoLSDAStreamer::finishImpl () matches against
+	 * MonoEHFunctionClauses::function to write both into one record.
+	 */
+	std::string function;
+	std::vector<MonoEHFinallyBody> bodies;
+};
+
+/*
  * The per-compile side channel: one entry per EH-bearing function. A non-EH
  * module (no landing pads) leaves this empty, so the gather pass is inert.
+ *
+ * finally_functions is a SEPARATE list because a different pass fills it, at a
+ * different point in the pipeline; MonoLSDAStreamer::finishImpl () joins the two
+ * by function name when it writes the section.
  */
 struct MonoEHSideChannel {
 	std::vector<MonoEHFunctionClauses> functions;
+	std::vector<MonoEHFinallyFunction> finally_functions;
 };
 
 /*

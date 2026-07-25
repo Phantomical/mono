@@ -82,6 +82,7 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Function.h>
 
+#include "mono_lsda_format.hpp"
 #include "translator-cpp.hpp"
 #include "backend.h"
 #include "aot-compiler.h"
@@ -291,6 +292,8 @@ typedef struct {
 	/* Call / prologue / exception-emission helpers (defined in translator-call.cpp). */
 	void emit_div_check (llvm::IRBuilder<> *builder, MonoBasicBlock *bb, MonoInst *ins, llvm::Value *lhs, llvm::Value *rhs);
 	void emit_this_slot_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot);
+	void emit_finally_guard_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot, int clause_index);
+	void emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_index);
 	void emit_entry_bb (llvm::IRBuilder<> *builder);
 	void emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
 	void emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder);
@@ -533,6 +536,25 @@ LLVMValueRef
 emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id, gboolean aot);
 void
 emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompile *cfg);
+
+/*
+ * llvm.experimental.stackmap patchpoint IDs. Every stackmap this translator
+ * plants carries one of these, and each recovery pass in translator.cpp picks
+ * out its own records by ID - a method can carry both kinds at once (a gshared
+ * method with a finally), so neither pass may assume a record's position.
+ *
+ * The gshared this/mrgctx home slot uses ID 0; there is at most one per method.
+ *
+ * The thread-abort guard records (one at each finally body ENTRY and one at each
+ * body TAIL) encode their clause_index plus a start/end bit in the low 32 bits,
+ * under a marker in the high 32. LLVM may duplicate a finally body, so a clause
+ * legitimately yields several entry/tail pairs; recovery pairs them up by PC.
+ * clause_index is a 15-bit IL header field, so it fits well below the start bit.
+ */
+using mono::MONO_LLVM_THIS_SLOT_STACKMAP_ID;
+using mono::MONO_LLVM_FINALLY_STACKMAP_ID_BASE;
+using mono::MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE;
+using mono::MONO_LLVM_FINALLY_STACKMAP_ID_MASK;
 
 /* Defined in translator-call.cpp. */
 LLVMValueRef

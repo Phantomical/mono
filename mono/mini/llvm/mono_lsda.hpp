@@ -17,7 +17,9 @@
  *     u32 handler_off                native handler entry = code + handler_off
  *     u32 clause_index               IL clause index (the join key)
  *     u32 kind                       MonoExceptionEnum: 0=NONE(catch), 2=FINALLY,
- *                                    4=FAULT (self-describing; F1 admits only catch)
+ *                                    4=FAULT - or one of the marker kinds in
+ *                                    mono_lsda_format.hpp, which describe
+ *                                    something other than a protected region
  *
  * This header exposes the SOURCE-AGNOSTIC load-time core (plan 12 3): it turns
  * that byte section into MonoLsdaEntry tuples (parse_mono_lsda), validates them
@@ -64,6 +66,9 @@
 #include <mono/metadata/metadata.h>
 #include <mono/mini/mini.h>
 
+/* The non-ECMA `kind` values, shared with the writer side (engine.cpp). */
+#include "mono_lsda_format.hpp"
+
 namespace mono {
 
 /*
@@ -72,23 +77,6 @@ namespace mono {
  * streamer anchored on); parse_mono_lsda cannot range-check them against the
  * code - that is the loaded function's size, which publish/build supplies.
  */
-/*
- * The `kind` a `.mono_lsda` entry carries when its landing pad is a cleanup's
- * RESUME pad rather than an ordinary handler pad.
- *
- * A finally/fault that some other clause protects ends in an invoke of the resume
- * trampoline whose unwind edge lands on a pad of its own (emit_resume_unwind),
- * reached only after the cleanup has run. That is where the runtime has to
- * continue when it goes on to dispatch an enclosing clause for the same throw, so
- * build_ex_info () picks these entries out by their kind, records the pad against
- * clause_index, and uses it as the handler_start of the enclosing entries it
- * synthesises - it publishes no entry of its own for them.
- *
- * Deliberately outside the ECMA flags range (NONE=0, FILTER=1, FINALLY=2,
- * FAULT=4) so it can never be confused with a clause kind.
- */
-constexpr std::uint32_t MONO_LSDA_KIND_RESUME_PAD = 0x10000;
-
 struct MonoLsdaEntry {
 	std::uint32_t try_start_off = 0;
 	std::uint32_t try_len = 0;
@@ -101,6 +89,26 @@ struct MonoLsdaEntry {
 	 * table (CAP-EH-0) rather than trusting the join blindly.
 	 */
 	std::uint32_t kind = 0;
+};
+
+/*
+ * What the runtime's thread-abort guard needs to know about one FINALLY clause:
+ * the PC range its handler body occupies, and the frame home of the exvar the
+ * guard flags the abort through.
+ *
+ * One per surviving copy of the body, so a clause whose body the optimizer
+ * duplicated has several - all naming the same exvar. MonoFinallyRangePass
+ * (engine.cpp) records the ranges; the exvar offset is joined from the marker
+ * stackmap.
+ *
+ * build_ex_info publishes each as a guard-only MonoJitExceptionInfo; see there
+ * for why it is a separate entry rather than fields on the dispatch entries.
+ */
+struct MonoFinallyGuard {
+	std::uint32_t clause_index = 0;
+	std::uint32_t handler_start_off = 0;
+	std::uint32_t handler_end_off = 0;
+	std::int32_t exvar_offset = 0;
 };
 
 /*
@@ -157,11 +165,18 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
  * the base's own pad, until a cleanup runs, and that cleanup's RESUME pad
  * afterwards (MONO_LSDA_KIND_RESUME_PAD). A resume-pad entry is consumed for that
  * purpose only; it is never published.
+ *
+ * GUARDS supplies the thread-abort guard ranges for this method's FINALLY
+ * clauses (empty for a catch/fault-only method), several per clause where the
+ * body was duplicated. Each is published as one extra guard-only entry APPENDED
+ * after the base and enclosing entries, so it does not disturb the slot ordering
+ * above.
  */
 bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const MonoExceptionClause *clauses, int num_clauses,
                     const std::uint8_t *native_code, std::uint32_t code_len,
-                    std::vector<MonoJitExceptionInfo> &out);
+                    std::vector<MonoJitExceptionInfo> &out,
+                    const std::vector<MonoFinallyGuard> &guards = {});
 
 /*
  * Validate ENTRIES against cfg->header->clauses[] and the loaded code, then, on
@@ -173,7 +188,8 @@ bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
  */
 bool publish_mono_lsda (MonoCompile *cfg,
                         const std::vector<MonoLsdaEntry> &entries,
-                        const std::uint8_t *native_code, std::uint32_t code_len);
+                        const std::uint8_t *native_code, std::uint32_t code_len,
+                        const std::vector<MonoFinallyGuard> &guards = {});
 
 } // namespace mono
 

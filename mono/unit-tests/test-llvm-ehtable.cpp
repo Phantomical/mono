@@ -39,6 +39,7 @@
 #include "mini/llvm/mono_lsda.hpp"
 
 using mono::MonoLsdaEntry;
+using mono::MonoFinallyGuard;
 
 /* ------------------------------------------------------------ reporting */
 
@@ -1398,6 +1399,146 @@ cases_mono_lsda_nesting (void)
 	}
 }
 
+/* ------------------------------------------------------------ guard cases */
+
+/*
+ * The thread-abort guard entries build_ex_info appends for a FINALLY clause,
+ * one per PC range the recovery found the handler body occupying.
+ *
+ * What these pin down is that a guard entry is inert for dispatch (empty try
+ * range) while still carrying the handler extent and exvar the runtime's guard
+ * reads, that a clause gets one entry per body copy rather than a single span
+ * over all of them, and that an extent we cannot state declines the method.
+ */
+static void
+cases_mono_lsda_finally_guards (void)
+{
+	const std::uint32_t code_len = 0x100;
+	std::vector<std::uint8_t> code (code_len, 0);
+	const std::uint8_t *base = code.data ();
+
+	MonoExceptionClause clauses [2];
+	memset (clauses, 0, sizeof (clauses));
+	clauses[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+	clauses[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+	clauses[1].data.catch_class = CC0;
+
+	/*
+	 * A finally whose try region has no protected call publishes no dispatch
+	 * entry at all - the shape that left the guard uninstallable. The guard
+	 * entry must appear anyway, which is the whole point of it being separate.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents;
+		std::vector<MonoFinallyGuard> guards = { { 0, 0x20, 0x30, -24 } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "guard-no-dispatch-entry";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out, guards);
+		bool good = ok && out.size () == 1 &&
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
+			out[0].clause_index == 0 &&
+			/* Empty try range: is_address_protected () is false for every PC. */
+			out[0].try_start == (gpointer) base &&
+			out[0].try_end == (gpointer) base &&
+			out[0].handler_start == (gpointer) (base + 0x20) &&
+			out[0].data.handler_end == (gpointer) (base + 0x30) &&
+			out[0].exvar_offset == -24;
+		if (!good) {
+			printf ("FAIL guard-no-dispatch-entry: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   guard-no-dispatch-entry (1 guard ei)\n");
+		}
+	}
+
+	/*
+	 * A duplicated body: two ranges for one clause, published as two entries
+	 * with the same exvar. A single span [0x20,0x90) would have covered the
+	 * unrelated code between them and made the guard match PCs that are not in
+	 * the finally at all.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents = {
+			{ 0x10, 0x08, 0x40, 1 },
+		};
+		std::vector<MonoFinallyGuard> guards = {
+			{ 0, 0x20, 0x30, -24 },
+			{ 0, 0x80, 0x90, -24 },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "guard-duplicated-body";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out, guards);
+		bool good = ok && out.size () == 3 &&
+			/* The dispatch entry keeps slot 0; guards are appended after it. */
+			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE &&
+			out[1].handler_start == (gpointer) (base + 0x20) &&
+			out[1].data.handler_end == (gpointer) (base + 0x30) &&
+			out[2].handler_start == (gpointer) (base + 0x80) &&
+			out[2].data.handler_end == (gpointer) (base + 0x90) &&
+			out[1].exvar_offset == -24 && out[2].exvar_offset == -24;
+		if (!good) {
+			printf ("FAIL guard-duplicated-body: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   guard-duplicated-body (2 guard ei)\n");
+		}
+	}
+
+	/*
+	 * Two clauses each with their own body, to pin that a guard entry is keyed to
+	 * the right clause when there is more than one to confuse it with.
+	 */
+	{
+		MonoExceptionClause two_finally [2];
+		memset (two_finally, 0, sizeof (two_finally));
+		two_finally[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		two_finally[1].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+
+		std::vector<MonoLsdaEntry> ents;
+		std::vector<MonoFinallyGuard> guards = {
+			{ 0, 0x20, 0x30, -24 },
+			{ 1, 0x60, 0x70, -32 },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "guard-two-clauses";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, two_finally, 2, base, code_len, out, guards);
+		bool good = ok && out.size () == 2 &&
+			out[0].clause_index == 0 && out[0].exvar_offset == -24 &&
+			out[0].handler_start == (gpointer) (base + 0x20) &&
+			out[1].clause_index == 1 && out[1].exvar_offset == -32 &&
+			out[1].handler_start == (gpointer) (base + 0x60);
+		if (!good) {
+			printf ("FAIL guard-two-clauses: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   guard-two-clauses\n");
+		}
+	}
+
+	/* A catch-only method passes no guards and is unaffected. */
+	{
+		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 1 } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "guard-absent-for-catch";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out);
+		/* data is a union - a catch entry's slot holds catch_class, not an extent. */
+		bool good = ok && out.size () == 1 &&
+			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE &&
+			out[0].data.catch_class == CC0 &&
+			out[0].exvar_offset == 0;
+		if (!good) {
+			printf ("FAIL guard-absent-for-catch: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   guard-absent-for-catch\n");
+		}
+	}
+}
+
 /* ------------------------------------------------------------ publish cases */
 
 /*
@@ -1522,6 +1663,7 @@ test_llvm_ehtable_main (void)
 	cases_mono_lsda_parse ();
 	cases_mono_lsda_build ();
 	cases_mono_lsda_nesting ();
+	cases_mono_lsda_finally_guards ();
 	cases_mono_lsda_publish ();
 
 	printf ("%d cases run, %d failed\n", cases_run, failures);
