@@ -185,6 +185,18 @@ mono_llvm_check_method_supported (MonoCompile *cfg)
 {
 	int i, j;
 
+	/**
+	 * If optimization is disabled for this function then we don't want to run
+	 * it through the tier1 optimizer.
+	 */
+	if (cfg->method->iflags & METHOD_IMPL_ATTRIBUTE_NOOPTIMIZATION)
+	{
+		TRACE_FAILURE_CFG(cfg, "NoOptimization");
+		cfg->exception_message = g_strdup("optimization is disabled for this function");
+		cfg->disable_llvm = TRUE;
+		return;
+	}
+
 	/*
 	 * GC-safepoint gate (#20; design doc 23 §5.1). The tier-1 pipeline sets
 	 * GC=coreclr and emits the gc.safepoint_poll body but never runs LLVM's
