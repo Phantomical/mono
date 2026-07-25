@@ -1946,6 +1946,19 @@ mono_method_signature_checked_slow (MonoMethod *m, MonoError *error)
 }
 
 /**
+ * mono_method_signature_checked:
+ *
+ * Return the signature of the method M. On failure, returns NULL, and ERR is set.
+ */
+MonoMethodSignature*
+mono_method_signature_checked (MonoMethod *m, MonoError *error)
+{
+	error_init (error);
+	MonoMethodSignature* sig = m->signature;
+	return sig ? sig : mono_method_signature_checked_slow (m, error);
+}
+
+/**
  * mono_method_signature_internal_slow:
  * \returns the signature of the method \p m. On failure, returns NULL.
  * Call mono_method_signature_internal instead.

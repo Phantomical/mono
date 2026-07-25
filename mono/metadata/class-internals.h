@@ -880,13 +880,8 @@ mono_method_signature_internal_slow (MonoMethod *m);
  *
  * Return the signature of the method M. On failure, returns NULL, and ERR is set.
  */
-static inline MonoMethodSignature*
-mono_method_signature_checked (MonoMethod *m, MonoError *error)
-{
-	error_init (error);
-	MonoMethodSignature* sig = m->signature;
-	return sig ? sig : mono_method_signature_checked_slow (m, error);
-}
+MONO_PROFILER_API MonoMethodSignature*
+mono_method_signature_checked (MonoMethod *m, MonoError *error);
 
 /**
  * mono_method_signature_internal:

@@ -1530,7 +1530,7 @@ exit:
 }
 
 MonoArrayHandle
-mono_custom_attrs_construct_by_type (MonoCustomAttrInfo *cinfo, MonoClass *attr_klass, MonoError *error)
+mono_custom_attrs_construct_by_type_handle (MonoCustomAttrInfo *cinfo, MonoClass *attr_klass, MonoError *error)
 {
 	HANDLE_FUNCTION_ENTER ();
 
@@ -1588,8 +1588,23 @@ mono_custom_attrs_construct (MonoCustomAttrInfo *cinfo)
 {
 	HANDLE_FUNCTION_ENTER ();
 	ERROR_DECL (error);
-	MonoArrayHandle result = mono_custom_attrs_construct_by_type (cinfo, NULL, error);
+	MonoArrayHandle result = mono_custom_attrs_construct_by_type_handle (cinfo, NULL, error);
 	mono_error_assert_ok (error); /*FIXME proper error handling*/
+	HANDLE_FUNCTION_RETURN_OBJ (result);
+}
+
+/**
+ * mono_custom_attrs_construct_by_type:
+ *
+ * Construct an array of custom attribute objects from \p cinfo, filtered to
+ * instances of \p attr_klass if it is non-NULL. Returns NULL on error, with
+ * \p error set.
+ */
+MonoArray*
+mono_custom_attrs_construct_by_type (MonoCustomAttrInfo *cinfo, MonoClass *attr_klass, MonoError *error)
+{
+	HANDLE_FUNCTION_ENTER ();
+	MonoArrayHandle result = mono_custom_attrs_construct_by_type_handle (cinfo, attr_klass, error);
 	HANDLE_FUNCTION_RETURN_OBJ (result);
 }
 
@@ -2281,7 +2296,7 @@ mono_reflection_get_custom_attrs_by_type_handle (MonoObjectHandle obj, MonoClass
 	cinfo = mono_reflection_get_custom_attrs_info_checked (obj, error);
 	goto_if_nok (error, leave);
 	if (cinfo) {
-		MONO_HANDLE_ASSIGN (result, mono_custom_attrs_construct_by_type (cinfo, attr_klass, error));
+		MONO_HANDLE_ASSIGN (result, mono_custom_attrs_construct_by_type_handle (cinfo, attr_klass, error));
 		if (!cinfo->cached)
 			mono_custom_attrs_free (cinfo);
 	} else {

@@ -173,7 +173,7 @@ MONO_API MonoArray*
 mono_unity_custom_attrs_construct (MonoCustomAttrInfo *cinfo, MonoError *error)
 {
 	HANDLE_FUNCTION_ENTER ();
-	MonoArrayHandle result = mono_custom_attrs_construct_by_type (cinfo, NULL, error);
+	MonoArrayHandle result = mono_custom_attrs_construct_by_type_handle (cinfo, NULL, error);
 	HANDLE_FUNCTION_RETURN_OBJ (result);
 }
 
