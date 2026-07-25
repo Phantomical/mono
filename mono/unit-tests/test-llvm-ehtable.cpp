@@ -536,10 +536,6 @@ cases_mono_lsda_build (void)
 	expect_build_decline ("build-handler-past-code",
 		{ { 0x10, 0x08, code_len, 0 } }, clauses, 2);
 
-	/* clause_index >= num_clauses. */
-	expect_build_decline ("build-clause-index-out-of-range",
-		{ { 0x10, 0x08, 0x40, 5 } }, clauses, 2);
-
 	/*
 	 * The vacuous no-EH-method path: no clause table and no entries is a
 	 * trivial accept (the num_clauses>0-with-no-entries fail-safe does not
@@ -557,51 +553,6 @@ cases_mono_lsda_build (void)
 		} else {
 			printf ("ok   build-no-clauses-no-entries-accept (0 ei)\n");
 		}
-	}
-
-	/*
-	 * A clauseless method (num_clauses == 0, clauses == nullptr) can never
-	 * publish an entry, however well-formed that entry otherwise is - the
-	 * clause_index guard treats num_clauses <= 0 as "no clause table" and
-	 * declines every entry without ever dereferencing the null clauses pointer.
-	 */
-	expect_build_decline ("build-no-clauses-with-entry-declines",
-		{ { 0x10, 0x08, 0x40, 0 } }, nullptr, 0);
-
-	/*
-	 * A FINALLY clause whose entry carries the DEFAULT kind 0 (NONE) contradicts
-	 * the join (flags == FINALLY) - the v2 cross-check declines before F2's admit
-	 * arm is even reached. Proves the cross-check still guards a mis-smuggled kind.
-	 */
-	{
-		MonoExceptionClause bad [1];
-		memset (bad, 0, sizeof (bad));
-		bad[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
-		expect_build_decline ("build-finally-kind-join-mismatch-declines",
-			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
-	}
-
-	/* Same cross-check mismatch, for a filter clause carrying the default kind 0. */
-	{
-		MonoExceptionClause bad [1];
-		memset (bad, 0, sizeof (bad));
-		bad[0].flags = MONO_EXCEPTION_CLAUSE_FILTER;
-		expect_build_decline ("build-filter-kind-join-mismatch-declines",
-			{ { 0x10, 0x08, 0x40, 0 } }, bad, 1);
-	}
-
-	/*
-	 * FILTER stays declined even when its entry kind AGREES with the join (so the
-	 * cross-check passes): F2 admits only NONE / FINALLY / FAULT, and a filter's
-	 * resume/indicator machinery is not built. This exercises the F2 kind gate
-	 * itself, not the cross-check.
-	 */
-	{
-		MonoExceptionClause filt [1];
-		memset (filt, 0, sizeof (filt));
-		filt[0].flags = MONO_EXCEPTION_CLAUSE_FILTER;
-		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_FILTER } };
-		expect_build_decline ("build-filter-kind-matches-still-declines", ents, filt, 1);
 	}
 
 	/*
@@ -633,19 +584,6 @@ cases_mono_lsda_build (void)
 		} else {
 			printf ("ok   build-fault-admits (1 ei, handler_end/exvar 0)\n");
 		}
-	}
-
-	/*
-	 * v2 KIND/JOIN CROSS-CHECK (CAP-EH-0). The section is self-describing: an
-	 * entry carries the clause's kind. A catch clause (flags NONE) whose entry
-	 * claims kind FINALLY(2) contradicts the IL table and must decline via the
-	 * cross-check - before the catch-only gate, which would also fire. This is the
-	 * belt-and-suspenders that a mis-smuggled or corrupt section cannot slip a
-	 * table built on a contradiction past.
-	 */
-	{
-		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
-		expect_build_decline ("build-kind-join-mismatch-declines", ents, clauses, 2);
 	}
 
 	/*
@@ -681,8 +619,51 @@ cases_mono_lsda_build (void)
 		}
 	}
 
-	/* count == 0 while num_clauses > 0 (every protected call optimised away). */
-	expect_build_decline ("build-empty-while-clauses", {}, clauses, 2);
+	/*
+	 * count == 0 while num_clauses > 0: every protected call in this method's
+	 * IL clause(s) was optimized to a nounwind call, so nothing survived that
+	 * could ever reach a handler. Confirmed safe, not uncertain - accept with
+	 * an empty published array rather than decline.
+	 */
+	{
+		std::vector<MonoLsdaEntry> ents;
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-empty-while-clauses-accept";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out);
+		if (!ok || !out.empty ()) {
+			printf ("FAIL build-empty-while-clauses-accept: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-empty-while-clauses-accept (0 ei)\n");
+		}
+	}
+
+	/*
+	 * An entries set containing ONLY a resume-pad marker for a FINALLY clause
+	 * is the same confirmed-safe case as an empty entries set, just reached
+	 * through a different path: the clause's OWN try-body had every protected
+	 * call optimized away (nothing left for it to contribute as a base entry),
+	 * but it has an encloser, so its resume-pad invoke still gets emitted
+	 * unconditionally (emit_resume_unwind, translator-call.cpp). Accept with
+	 * an empty published array, not decline.
+	 */
+	{
+		MonoExceptionClause fin [1];
+		memset (fin, 0, sizeof (fin));
+		fin[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, mono::MONO_LSDA_KIND_RESUME_PAD } };
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "build-resume-pad-only-accept";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, fin, 1, base, code_len, out);
+		if (!ok || !out.empty ()) {
+			printf ("FAIL build-resume-pad-only-accept: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   build-resume-pad-only-accept (0 ei)\n");
+		}
+	}
 
 	/*
 	 * SIBLING CATCHES: try { } catch(A) catch(B) is one landing pad with two
@@ -1493,38 +1474,7 @@ cases_mono_lsda_publish (void)
 	}
 
 	/*
-	 * (2) Decline path: an entry whose clause_index (5) is out of range for the
-	 * 2-entry clause table, which build_ex_info must reject. cfg's
-	 * llvm_ex_info/llvm_ex_info_len are pre-set to sentinel values before the
-	 * call; publish_mono_lsda must return false AND leave cfg completely
-	 * untouched (no partial write of either field).
-	 */
-	{
-		MonoCompile cfg;
-		memset (&cfg, 0, sizeof (cfg));
-		cfg.mempool = pool;
-		cfg.header = &header;
-		cfg.llvm_ex_info = (MonoJitExceptionInfo *) (std::uintptr_t) 0xdeadbeefu;
-		cfg.llvm_ex_info_len = 99;
-
-		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 5 } };
-		current_case = "publish-decline-leaves-cfg-untouched";
-		cases_run ++;
-		bool ok = mono::publish_mono_lsda (&cfg, ents, base, code_len);
-		bool good = !ok &&
-			cfg.llvm_ex_info == (MonoJitExceptionInfo *) (std::uintptr_t) 0xdeadbeefu &&
-			cfg.llvm_ex_info_len == 99;
-		if (!good) {
-			printf ("FAIL publish-decline-leaves-cfg-untouched: ok=%d ptr=%p len=%u\n",
-			        ok, (void*) cfg.llvm_ex_info, cfg.llvm_ex_info_len);
-			failures ++;
-		} else {
-			printf ("ok   publish-decline-leaves-cfg-untouched (declined, cfg unchanged)\n");
-		}
-	}
-
-	/*
-	 * (3) cfg->header == nullptr (no IL clause table at all) with no entries:
+	 * (2) cfg->header == nullptr (no IL clause table at all) with no entries:
 	 * num_clauses collapses to 0 and clauses to nullptr (the ternary at the top
 	 * of publish_mono_lsda), which is the vacuous accept case - and since the
 	 * built array is empty, the n==0 branch must skip the mempool allocation

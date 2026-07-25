@@ -552,6 +552,19 @@ EmitContext::emit_method_inner ()
 		llvm::unwrap<llvm::Function> (method)->addFnAttr ("mono-tier1-root");
 
 	/*
+	 * Mark that this method's IL declared at least one exception clause, so
+	 * MonoEHGatherPass (engine.cpp) can tell "this try/finally's protected
+	 * calls all got optimized to nounwind, nothing to publish" apart from
+	 * "this method never had a try block at all" - both look identical to the
+	 * gather pass otherwise (zero landing pads). Only cfg->header (this
+	 * method's own IL) is checked, never a callee's - an inlined callee's own
+	 * clauses are irrelevant here (translate_only bodies never carry this
+	 * attribute, matching mono-tier1-root above).
+	 */
+	if (!this->translate_only && cfg->header->num_clauses > 0)
+		llvm::unwrap<llvm::Function> (method)->addFnAttr ("mono-has-eh-clauses");
+
+	/*
 	 * No calling-convention override: the rgctx/imt argument is tagged
 	 * LLVM_ATTR_NEST instead, which stock LLVM pins to R10 on SysV. See the
 	 * note in process_call ().
@@ -1898,12 +1911,18 @@ EmitContext::llvm_jit_finalize_method ()
 	 * code extent, then joined into the MonoJitExceptionInfo[] mini.c copies
 	 * verbatim into jinfo->clauses (from_llvm = 1).
 	 *
-	 * On ANY uncertainty - an absent/empty `.mono_lsda` for a clause-bearing
-	 * method (every protected call optimised to a nounwind `call`), bad magic or
-	 * truncation, an offset past the code, a join key out of range, a non-catch
-	 * clause slipping the gate - decline to the classic JIT (CAP-EH-0). The
-	 * dispatcher cannot detect a wrong clause array (doc 11 11.4), so a
-	 * plausible-but-wrong table must never be published.
+	 * On ANY uncertainty - an ABSENT `.mono_lsda` for a clause-bearing method
+	 * (MonoEHGatherPass declined it, engine.cpp), bad magic or truncation, an
+	 * offset past the code, a join key out of range, a non-catch clause
+	 * slipping the gate - decline to the classic JIT (CAP-EH-0). The dispatcher
+	 * cannot detect a wrong clause array (doc 11 11.4), so a plausible-but-wrong
+	 * table must never be published.
+	 *
+	 * An EMPTY (but present) `.mono_lsda` is a separate, confirmed-safe case,
+	 * not uncertainty: it means every protected call under this method's IL
+	 * clause(s) optimized to a nounwind `call`, so nothing survived that could
+	 * ever reach a handler. mono_lsda.cpp's build_ex_info () publishes it as
+	 * zero clauses rather than declining.
 	 */
 	if (cfg->header->num_clauses > 0) {
 		std::vector<mono::MonoLsdaEntry> entries;

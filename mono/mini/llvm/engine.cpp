@@ -1033,11 +1033,15 @@ host_target_machine_builder ()
  * analyses), so scheduling it leaves the emitted object byte-identical for a
  * non-EH module. C3 turns the side channel into a .mono_lsda section.
  *
- * Robustness (CAP-EH-0): it must not assert or crash on any module. A landing
- * pad missing a begin/end/lpad label, a type_info that is not a GlobalVariable
- * with a ConstantInt initializer, or a negative (filter) / zero (cleanup) TypeId
- * is recorded as unexpected (declined / has_filter) so a later slice can decline
- * the method - it is never a fatal error here.
+ * Robustness (CAP-EH-0): declining is reserved for shapes that are valid input
+ * we just don't support yet - right now that is exactly a filter clause
+ * (`catch when (...)`), flagged via has_filter so translator.cpp can decline
+ * with a specific reason instead of the generic parse failure. Everything else
+ * this pass checks is an invariant of LLVM's own landing-pad bookkeeping or of
+ * mono's own type_info_N emission (translator-call.cpp) - not something
+ * unsupported input can trigger - so violating it means our own code or our
+ * assumptions about LLVM are wrong, and report_fatal_error says so loudly
+ * instead of quietly declining a method forever with no signal anything broke.
  *
  * A static char ID is all the legacy PassManager needs - no INITIALIZE_PASS
  * (plan 12 1.3).
@@ -1066,9 +1070,31 @@ public:
 	{
 		const std::vector<LandingPadInfo> &pads = mf.getLandingPads ();
 
-		/* Inert on a non-EH function: no landing pads -> nothing recorded. */
-		if (pads.empty ())
+		if (pads.empty ()) {
+			/*
+			 * No landing pads survived to codegen. For an ordinary non-EH
+			 * function this is simply nothing to do - stay inert so the emitted
+			 * object is byte-identical to a module the EH machinery never
+			 * touched (mono-has-eh-clauses is unset; translator.cpp never marks
+			 * a method whose IL declared no clauses).
+			 *
+			 * For a method translator.cpp DID mark mono-has-eh-clauses, zero
+			 * landing pads means every protected call under its try region got
+			 * optimized to a nounwind call before isel - there is nothing left
+			 * that can unwind through it. That is not uncertain, it is
+			 * confirmed safe, so record a clean (not declined, no clauses)
+			 * entry rather than leaving this function out of the side channel
+			 * entirely: C3 turns a present-but-empty entry into a genuinely
+			 * empty (but valid) `.mono_lsda` record, which C4 (translator.cpp)
+			 * can tell apart from "absent because declined".
+			 */
+			if (mf.getFunction ().hasFnAttribute ("mono-has-eh-clauses")) {
+				MonoEHFunctionClauses fn;
+				fn.function = mf.getName ().str ();
+				sc_.functions.push_back (std::move (fn));
+			}
 			return false;
+		}
 
 		const std::vector<const GlobalValue *> &type_infos = mf.getTypeInfos ();
 
@@ -1077,31 +1103,33 @@ public:
 
 		for (const LandingPadInfo &lp : pads) {
 			const MCSymbol *handler = lp.LandingPadLabel;
+			/*
+			 * Every entry in mf.getLandingPads () was created by isel lowering a
+			 * real `invoke`, which always assigns the pad's label at the same
+			 * time; there is no legitimate input shape that leaves it null by the
+			 * time this pass runs (after addMachinePasses (), before the
+			 * AsmPrinter). If it ever is, either LLVM's own invariant broke or we
+			 * are misreading LandingPadInfo - either way, keep going would publish
+			 * (or wrongly decline) against a handler we cannot name.
+			 */
 			if (!handler)
-				fn.declined = true;
+				report_fatal_error ("mono: landing pad has no label - LLVM invariant broken");
 
 			/*
-			 * A cleanup (finally/fault) landing pad is out of the catch-only
-			 * milestone and must decline, exactly like a filter. But the
-			 * per-TypeId loop below - the only other place fn.declined is set -
-			 * never sees a cleanup marker for a PURE-cleanup pad: LLVM pushes the
-			 * implicit cleanup TypeId 0 onto LandingPadInfo::TypeIds only when the
-			 * pad ALSO has clauses (MachineFunction::addLandingPad: `isCleanup ()
-			 * && getNumClauses () != 0`), so a setCleanup(true) pad with zero
-			 * clauses leaves TypeIds empty and the loop runs zero iterations,
-			 * returning {declined:false, clauses:[]}. Read the cleanup bit
-			 * straight off the IR LandingPadInst the pad was lowered from - the
-			 * exact instruction addLandingPad inspects - so the decline is set
-			 * for both the pure-cleanup and the catch+cleanup shapes, and the
-			 * `declined` side channel is correct on its own rather than relying on
-			 * MonoLSDAStreamer's downstream empty-clauses guard.
+			 * mono's own finally/fault emission (emit_handler_start,
+			 * translator-call.cpp) never calls LLVMSetCleanup - a finally/fault
+			 * clause is published through the same smuggled type_info_N clause a
+			 * catch uses, not LLVM's native cleanup bit. So a landing pad this
+			 * pass sees should never be cleanup-flagged; if one is, some code path
+			 * (ours or LLVM's) set it without our knowledge, and treating that as
+			 * an ordinary decline would hide a case we don't understand yet.
 			 */
 			if (const BasicBlock *bb =
 			        lp.LandingPadBlock ? lp.LandingPadBlock->getBasicBlock () : nullptr) {
 				if (const auto *lpi =
 				        dyn_cast_or_null<LandingPadInst> (bb->getFirstNonPHI ()))
 					if (lpi->isCleanup ())
-						fn.declined = true;
+						report_fatal_error ("mono: landing pad unexpectedly cleanup-flagged - mono never sets LLVMSetCleanup");
 			}
 
 			/*
@@ -1120,40 +1148,61 @@ public:
 			 * the same clause_index/handler over disjoint ranges is expected.
 			 * .mono_lsda is therefore "one entry per invoke range"; C3/C4 honor it.
 			 *
-			 * The two vectors are paired by index (an LLVM invariant). If they ever
-			 * disagree in length, decline rather than mispair; likewise a landing
-			 * pad with no invoke range at all is malformed.
+			 * The two vectors are paired by index - an LLVM invariant, not
+			 * something an input program can violate - so a length mismatch means
+			 * LandingPadInfo is broken or we are reading it wrong.
 			 */
 			if (lp.BeginLabels.size () != lp.EndLabels.size ())
-				fn.declined = true;
+				report_fatal_error ("mono: landing pad Begin/EndLabels length mismatch - LLVM invariant broken");
 			size_t nranges = std::min (lp.BeginLabels.size (), lp.EndLabels.size ());
+			/*
+			 * A landing pad with zero invoke ranges CAN legitimately happen: if
+			 * every call this specific clause protected got optimized to a
+			 * nounwind call before isel, its invokes (and so its Begin/EndLabels)
+			 * never existed. This clause contributes no protected range - not an
+			 * error, just nothing to publish for it - so it is skipped rather than
+			 * declining the whole method.
+			 */
 			if (nranges == 0)
-				fn.declined = true;
+				continue;
 
 			for (size_t i = 0; i < nranges; ++i) {
 				/*
 				 * The invoke range and handler entry are the same MCSymbol*s the
 				 * AsmPrinter emits into .text; C3 turns them into
-				 * func_begin-relative offsets. A missing label is malformed -
-				 * record the decline, do not crash.
+				 * func_begin-relative offsets. Both are populated by the same
+				 * addInvoke () call that grew Begin/EndLabels, so a null one here
+				 * is the same class of broken invariant as the length mismatch
+				 * above, not something unsupported input can produce.
 				 */
 				const MCSymbol *begin = lp.BeginLabels[i];
 				const MCSymbol *end = lp.EndLabels[i];
 				if (!begin || !end)
-					fn.declined = true;
+					report_fatal_error ("mono: landing pad invoke range has a null label - LLVM invariant broken");
 
 				for (int type_id : lp.TypeIds) {
-					if (type_id <= 0) {
-						/*
-						 * type_id < 0 is a filter (exception-specification), == 0
-						 * a cleanup action - neither is a catch clause, and both
-						 * are out of the catch-only milestone. Flag and skip.
-						 */
-						if (type_id < 0)
-							fn.has_filter = true;
+					/*
+					 * type_id < 0 is a filter (exception-specification) - a real,
+					 * valid `catch (T) when (cond)` clause we simply don't support
+					 * yet (Option F1, out of scope by design). This is the one
+					 * legitimate decline left in this pass: flag it explicitly so
+					 * translator.cpp can report the specific reason instead of a
+					 * generic parse failure, and skip just this TypeId.
+					 */
+					if (type_id < 0) {
+						fn.has_filter = true;
 						fn.declined = true;
 						continue;
 					}
+					/*
+					 * type_id == 0 is LLVM's implicit cleanup marker, pushed onto
+					 * TypeIds only alongside isCleanup () (see the report_fatal_error
+					 * above). We already asserted this landing pad is not
+					 * cleanup-flagged, so reaching a zero TypeId here means that
+					 * assumption about LLVM's own bookkeeping was wrong.
+					 */
+					if (type_id == 0)
+						report_fatal_error ("mono: TypeId 0 (cleanup marker) on a landing pad that isCleanup () said was not cleanup-flagged");
 
 					MonoEHClause clause;
 					clause.try_begin = begin;
@@ -1201,8 +1250,14 @@ public:
 							}
 						}
 					}
+					/*
+					 * type_info_N is a global WE emit (emit_handler_start,
+					 * translator-call.cpp) with a fixed, known shape. Failing to
+					 * read it back means our own emission or our own reader is
+					 * wrong, not that the input did something we don't support.
+					 */
 					if (!clause.clause_resolved)
-						fn.declined = true;
+						report_fatal_error ("mono: type_info_N clause global did not decode - our own emission or reader is wrong");
 
 					fn.clauses.push_back (clause);
 				}
@@ -1243,9 +1298,12 @@ private:
  * labels all live in .text, the writer folds each difference to a constant and
  * the section carries zero relocations.
  *
- * A declined function (CAP-EH-0: a missing label, an unresolvable clause index,
- * a filter/cleanup TypeId - anything the gather flagged) gets NO record, so the
- * load side sees no `.mono_lsda` for it and declines cleanly to the classic JIT.
+ * A declined function (CAP-EH-0: a filter clause, the one thing the gather
+ * still flags) gets NO record, so the load side sees no `.mono_lsda` for it and
+ * declines cleanly to the classic JIT. A function the gather marked confirmed-
+ * clean (mono-has-eh-clauses, but every landing pad optimized away - see
+ * MonoEHGatherPass) still gets a record, just with a zero entry count: a valid,
+ * empty table the load side can tell apart from "absent because declined".
  */
 class MonoLSDAStreamer : public MCELFStreamer {
 public:
@@ -1265,10 +1323,12 @@ public:
 
 		for (const MonoEHFunctionClauses &fn : sc_.functions) {
 			/*
-			 * Declined (CAP-EH-0) or clause-less functions get no record: the
-			 * load side must then decline, never publish a partial table.
+			 * Declined (CAP-EH-0: a filter clause) functions get no record: the
+			 * load side must then decline, never publish a partial table. A
+			 * confirmed-clean function with zero clauses (see MonoEHGatherPass)
+			 * still gets a record below, with a zero entry count.
 			 */
-			if (fn.declined || fn.clauses.empty ())
+			if (fn.declined)
 				continue;
 
 			/*
@@ -1518,29 +1578,14 @@ private:
 };
 
 /*
- * Test hooks for the C1 compiler-equivalence check (test-llvm-engine.cpp),
- * declared in engine.hpp. Compile `m` to an object two ways - through
- * MonoIRCompiler and through LLVM's stock TMOwningSimpleCompiler - from the SAME
- * host JITTargetMachineBuilder, so the test can assert the two objects are
- * byte-identical: the proof that swapping in MonoIRCompiler is observably inert.
- * Not part of the engine's runtime surface.
+ * Test hook (test-llvm-engine.cpp), declared in engine.hpp. Compile `m` to an
+ * object through MonoIRCompiler from the same host JITTargetMachineBuilder the
+ * engine JITs with. Not part of the engine's runtime surface.
  */
 Expected<std::unique_ptr<MemoryBuffer>>
 compile_object_with_mono_compiler (Module &m)
 {
 	MonoIRCompiler compiler (host_target_machine_builder ());
-	return compiler (m);
-}
-
-Expected<std::unique_ptr<MemoryBuffer>>
-compile_object_with_simple_compiler (Module &m)
-{
-	Expected<std::unique_ptr<TargetMachine>> tm =
-		host_target_machine_builder ().createTargetMachine ();
-	if (!tm)
-		return tm.takeError ();
-	/* TMOwningSimpleCompiler is exactly what LLJIT builds by default at 0 threads. */
-	TMOwningSimpleCompiler compiler (std::move (*tm));
 	return compiler (m);
 }
 

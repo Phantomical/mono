@@ -22,11 +22,17 @@
  * calls publish_mono_lsda from translator.cpp once the EH gate is lifted; C4
  * only lands the core and its offline tests.
  *
- * CAP-EH-0 (plan 12 6): every uncertainty DECLINES (returns false) so the caller
- * falls back to the classic JIT - the dispatcher cannot detect a wrong clause
- * array (doc 11 11.4), so a plausible-but-wrong table is never produced. The
- * bounds-check discipline is a private cursor, every read reserving its bytes
- * first, malformed input declining rather than faulting. None of the Itanium
+ * CAP-EH-0 (plan 12 6): declining (returning false) is reserved for genuine
+ * uncertainty about UNSUPPORTED INPUT - right now that is only a filter
+ * clause, caught upstream by MonoEHGatherPass (engine.cpp) before any section
+ * reaches here - because the dispatcher cannot detect a wrong clause array
+ * (doc 11 11.4), so a plausible-but-wrong table is never produced. The
+ * build_ex_info () checks that instead validate our own round-trip of data we
+ * ourselves wrote (a clause_index/kind read back from the SAME immutable
+ * cfg->header we wrote it from) assert: if those ever disagree, it is our own
+ * bug, not the input. parse_mono_lsda ()'s own bounds/format checks (magic,
+ * version, exact size, offsets within code_len) are still declines - not yet
+ * audited for the same split, so left as originally written. None of the Itanium
  * ttype/DW_EH_PE machinery is needed here - this format carries only
  * code-relative offsets and IL indices, so there is no encoding to chase.
  */
@@ -210,13 +216,25 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	out.clear ();
 
 	/*
-	 * Fail-safe 7 (plan 12 3.5 / 6): a clause-bearing method that produced NO
-	 * entries - every protected call optimised to a nounwind `call` so the pass
-	 * gathered no landing pad - must decline; publishing an empty clause array
-	 * for a method that can throw would silently swallow the exception.
+	 * A clause-bearing method that produced NO entries - every protected call
+	 * optimised to a nounwind `call`, so the gather pass found nothing to
+	 * publish - is safe to publish as an EMPTY clause array, not a reason to
+	 * decline: this function is reached only via a successfully parsed
+	 * `.mono_lsda` section, and MonoEHGatherPass/MonoLSDAStreamer (engine.cpp)
+	 * only ever publish a section - even a zero-entry one - for a method
+	 * explicitly marked mono-has-eh-clauses that the gather did NOT decline.
+	 * A genuinely uncertain method (the gather declined it, or nothing was
+	 * ever marked) never reaches here: its section is absent, so
+	 * parse_mono_lsda () already failed and the caller declined before this
+	 * runs. So num_clauses > 0 && entries.empty () here just means "confirmed
+	 * nothing in this method can throw" - return success with out left empty,
+	 * short-circuiting before the resume-pad-marker fail-safe further down:
+	 * that one guards a DIFFERENT, non-empty-entries shape (every entry turns
+	 * out to be a resume-pad marker, not a real protected range) that this
+	 * change has no bearing on and leaves untouched.
 	 */
-	if (num_clauses > 0 && entries.empty ())
-		return false;
+	if (entries.empty ())
+		return true;
 
 	/*
 	 * Order the entries so that, within one try range, ascending IL clause_index
@@ -299,13 +317,14 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 			return false;
 
 		/*
-		 * Join key in range. num_clauses is a 15-bit IL header field (never
-		 * negative); the guard treats <= 0 as "no clause table", so any entry
-		 * declines - an entry cannot reference a clause that does not exist. The
-		 * cast is safe because num_clauses > 0 here.
+		 * Join key in range. clause_index was itself read out of
+		 * cfg->header->clauses[] at emission time (emit_handler_start,
+		 * translator-call.cpp) - the SAME immutable cfg->header this call is
+		 * given num_clauses from, for the same compile. It cannot legitimately
+		 * come back out of range; if it does, our own object round-trip (or our
+		 * own indexing) is wrong, not the IL.
 		 */
-		if (num_clauses <= 0 || e.clause_index >= static_cast<std::uint32_t> (num_clauses))
-			return false;
+		g_assert (num_clauses > 0 && e.clause_index < static_cast<std::uint32_t> (num_clauses));
 
 		/*
 		 * A cleanup's resume pad. It describes where to continue AFTER
@@ -317,10 +336,16 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		if (e.kind == MONO_LSDA_KIND_RESUME_PAD) {
 			const MonoExceptionClause &rc = clauses[e.clause_index];
 
-			/* Only a cleanup resumes, so only a cleanup can own one of these. */
-			if (rc.flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
-			    rc.flags != MONO_EXCEPTION_CLAUSE_FAULT)
-				return false;
+			/*
+			 * Only a cleanup resumes, so only a cleanup can own one of these.
+			 * emit_resume_unwind only ever runs for the clause it is itself
+			 * emitting the resume pad for (translator-call.cpp), which is only
+			 * reachable for a FINALLY/FAULT handler body - so rc.flags here is
+			 * the same cfg->header entry emit_handler_start already required
+			 * to be FINALLY/FAULT before building this clause's handler at all.
+			 */
+			g_assert (rc.flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+			         rc.flags == MONO_EXCEPTION_CLAUSE_FAULT);
 
 			resume_pad[e.clause_index] = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
 			continue;
@@ -329,28 +354,26 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		const MonoExceptionClause &cl = clauses[e.clause_index];
 
 		/*
-		 * v2 self-describing cross-check (CAP-EH-0, belt-and-suspenders). The
-		 * section carries the clause's kind (smuggled through the gather pass);
-		 * it MUST agree with the flags the IL clause table joins in. A mismatch
-		 * means the section and the IL header disagree about this clause - a
-		 * producer bug or a corrupt section - so decline rather than publish a
-		 * table built on a contradiction. (For a catch method both are NONE.)
+		 * v2 self-describing cross-check. The section carries the clause's kind,
+		 * smuggled through the gather pass from the SAME cfg->header->clauses[]
+		 * this call reads cl.flags from (emit_handler_start writes both from one
+		 * this_clause->flags read, translator-call.cpp). Same immutable header,
+		 * same compile - a mismatch is our own round-trip breaking, not the IL
+		 * disagreeing with itself. (For a catch clause both are NONE.)
 		 */
-		if (e.kind != static_cast<std::uint32_t> (cl.flags))
-			return false;
+		g_assert (e.kind == static_cast<std::uint32_t> (cl.flags));
 
 		/*
-		 * EH F2 admits catch (NONE), standalone FINALLY and standalone FAULT. A
-		 * FILTER clause still needs resume/indicator machinery this path does not
-		 * build, and the translator gate already declines it upstream, so decline
-		 * here too rather than mis-dispatch (belt-and-suspenders; the cross-check
-		 * above has already confirmed kind == flags). Anything that is not one of
-		 * NONE / FINALLY / FAULT is likewise refused.
+		 * EH F2 admits catch (NONE), standalone FINALLY and standalone FAULT -
+		 * mono_llvm_check_method_supported (translator.cpp, the 3b EH gate)
+		 * already declined every OTHER flags value on this same cfg->header
+		 * before this method reached codegen at all, so cl.flags being anything
+		 * else here is that earlier gate's own invariant breaking, not new
+		 * information about the IL.
 		 */
-		if (cl.flags != MONO_EXCEPTION_CLAUSE_NONE &&
-		    cl.flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
-		    cl.flags != MONO_EXCEPTION_CLAUSE_FAULT)
-			return false;
+		g_assert (cl.flags == MONO_EXCEPTION_CLAUSE_NONE ||
+		         cl.flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+		         cl.flags == MONO_EXCEPTION_CLAUSE_FAULT);
 
 		/*
 		 * Build the published ei (CAP-EH-1). flags is joined from the IL header -
@@ -385,12 +408,19 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	}
 
 	/*
-	 * Fail-safe 7 again, now that the resume-pad markers have been filtered out: a
-	 * section carrying nothing but those describes no protected region at all, so
-	 * publishing it would silently swallow every exception the method can take.
+	 * Every entry turned out to be a resume-pad marker: a nested finally/fault
+	 * whose OWN protected try-body had every call optimized to a nounwind call
+	 * (nothing left that can unwind into it - MonoEHGatherPass, engine.cpp)
+	 * still emits its resume-pad invoke unconditionally whenever it has an
+	 * encloser (emit_resume_unwind, translator-call.cpp), regardless of
+	 * whether its own body has any protected calls left. So a clause-bearing
+	 * method can legitimately reach here with entries but no bases: the same
+	 * "confirmed nothing can throw" case as an empty section, just reached
+	 * through the resume-pad path. out is already empty (built in lockstep with
+	 * bases above) and nothing further to synthesize, so this is done.
 	 */
-	if (num_clauses > 0 && bases.empty ())
-		return false;
+	if (bases.empty ())
+		return true;
 
 	/*
 	 * NESTING SYNTHESIS (doc 21 4, EH N1). For each DISTINCT base range whose

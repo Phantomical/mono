@@ -440,23 +440,17 @@ EhFrameRegistryStats eh_frame_registry_stats ();
  */
 llvm::orc::JITTargetMachineBuilder host_target_machine_builder ();
 
-/* ---- C1 compiler-equivalence hooks ---------------------------------------
+/* ---- C1 compiler hook -----------------------------------------------------
  *
  * The engine compiles IR through MonoIRCompiler (engine.cpp), a drop-in for
  * LLJIT's default object-emission compiler that hand-inlines
- * addPassesToEmitMC so the EH port can later splice a MachineFunctionPass and a
- * custom MCStreamer into the pipeline. These two hooks compile `m` to an object
- * both ways - through MonoIRCompiler and through LLVM's stock
- * TMOwningSimpleCompiler - from the same host JITTargetMachineBuilder, so
- * test-llvm-engine.cpp can assert the two objects are byte-identical (proof that
- * MonoIRCompiler is observably inert). They exist ONLY for that test; nothing in
- * the engine's runtime path calls them.
+ * addPassesToEmitMC so the EH port can splice a MachineFunctionPass and a
+ * custom MCStreamer into the pipeline. Exposed so test-llvm-engine.cpp can
+ * drive MonoIRCompiler directly on a hand-built module; nothing in the
+ * engine's runtime path calls it.
  */
 llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
 compile_object_with_mono_compiler (llvm::Module &m);
-
-llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
-compile_object_with_simple_compiler (llvm::Module &m);
 
 /* ---- C2 EH-gather hook ---------------------------------------------------
  *

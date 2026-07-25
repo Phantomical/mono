@@ -27,12 +27,18 @@
  * data.catch_class from cfg->header->clauses[] - the section never carries
  * them (plan 12 2), exactly as the fork's decode_llvm_eh_info did.
  *
- * CAP-EH-0 posture: on ANY uncertainty - bad magic, wrong version, truncation, a
- * size that does not exactly match the declared count, an offset past the code,
- * a join key out of range, a non-catch clause, or an overlapping (nested)
- * invoke range - the functions DECLINE (return false) so the caller falls back
- * to the classic JIT. They never assert, abort, or read out of bounds on
- * malformed input.
+ * CAP-EH-0 posture: parse_mono_lsda () declines (returns false) on bad magic,
+ * wrong version, truncation, or a size that does not exactly match the
+ * declared count - genuine uncertainty about whether the section survived
+ * intact. build_ex_info () declines only for a non-catch/finally/fault clause
+ * (a filter slipping the gate) or an overlapping (nested) invoke range - real
+ * unsupported-input shapes; a join key out of range or a kind/flags mismatch
+ * against cfg->header->clauses[] now assert instead, since both sides of that
+ * comparison trace back to the SAME immutable cfg->header within one compile,
+ * so disagreement can only mean our own round-trip broke, not the input. An
+ * entry set that is empty, or contains only resume-pad markers, is published
+ * as zero clauses rather than declined - confirmed proof nothing in this
+ * method's protected regions survived optimization, not uncertainty.
  *
  * Like engine.hpp this is a C++-only header and must NEVER be included by
  * mono's C sources. It is consumed by mono_lsda.cpp, by translator.cpp (slice
@@ -113,18 +119,28 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
  * The pure validate-and-join core, factored out of publish_mono_lsda so it is
  * unit-testable without a MonoCompile. Validates ENTRIES against the IL clause
  * table (CLAUSES / NUM_CLAUSES) and the loaded code extent (NATIVE_CODE /
- * CODE_LEN), building one MonoJitExceptionInfo per entry into OUT. Returns false
- * (decline, CAP-EH-0) on ANY failure:
- *   - a clause-bearing method (num_clauses > 0) with no entries (plan 12 3.5);
+ * CODE_LEN), building one MonoJitExceptionInfo per entry into OUT.
+ *
+ * An empty ENTRIES (or one containing only resume-pad markers) publishes as
+ * zero clauses (out left empty), not a decline - confirmed proof this method's
+ * protected regions never survived optimization, not uncertainty.
+ *
+ * Returns false (decline, CAP-EH-0) - real unsupported-input uncertainty - on:
  *   - try_start_off >= code_len, try_start_off+try_len > code_len (64-bit sum,
  *     no wrap), or handler_off >= code_len;
- *   - clause_index >= num_clauses (the join key out of range);
- *   - the entry's kind disagrees with the joined clause's flags (the v2 self-
- *     describing cross-check - the section must not contradict the IL table);
- *   - the joined clause's flags is not NONE / FINALLY / FAULT (a filter that
- *     slipped the gate, or an enclosing clause of an unrepresentable kind);
  *   - two entries whose invoke ranges PARTIALLY overlap or strictly nest (see
  *     mono_lsda.cpp for why equal-or-disjoint is the ordering invariant).
+ *
+ * Asserts (our own invariant, not uncertainty) on: a join key out of range; a
+ * kind/flags mismatch against the joined clause; or the joined clause's flags
+ * being outside NONE / FINALLY / FAULT. clause_index/kind were read out of the
+ * SAME immutable cfg->header this call is given, at emission time - by a
+ * translator that already declined every other flags value upstream
+ * (mono_llvm_check_method_supported, translator.cpp) before this method
+ * reached codegen at all - so any of these disagreeing means our own
+ * round-trip or that earlier gate broke, not that the IL disagrees with
+ * itself. A filter clause never reaches this function at all: it is caught by
+ * MonoEHGatherPass (engine.cpp) before any section is even published.
  *
  * NESTING SYNTHESIS (EH N1, doc 21 4). For each DISTINCT base range whose
  * innermost clause is `c`, build_ex_info APPENDS one extra MonoJitExceptionInfo
