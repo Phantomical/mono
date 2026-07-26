@@ -2959,10 +2959,7 @@ END:
    * C# cannot express a fault handler, so this is hand-written IL. The thrower
    * holds a single, non-nested fault clause (the shape F2 admits); the fault
    * runs on the exceptional path and re-raises to the SEPARATE standalone
-   * try/catch in the test method (unlike test_2_fault, whose inner try throws
-   * directly with no call/invoke in its protected region, so no landing pad is
-   * recovered and the pre-existing "handler without invokes" net - not nesting -
-   * declines it to the classic JIT).
+   * try/catch in the test method.
    */
   .field public static int32 llvm_f2_fault_log
 

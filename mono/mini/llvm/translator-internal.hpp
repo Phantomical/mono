@@ -312,9 +312,6 @@ typedef struct {
 	LLVMValueRef get_direct_callee (const char *name, LLVMTypeRef llvm_sig, gpointer target);
 	Address *build_named_alloca_address (MonoType *t, const char *name);
 
-	/* Per-instruction translator support (defined in translator-bb.cpp). */
-	bool handler_is_reachable (MonoBasicBlock *bb);
-
 	/* Whole-method emission (defined in translator.cpp). */
 	void emit_method_inner ();
 	void llvm_jit_finalize_method ();

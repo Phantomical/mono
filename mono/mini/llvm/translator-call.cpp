@@ -1501,11 +1501,19 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 		}
 	} else {
 		/*
-		 * A secondary sibling has no landing pad of its own - it is reached only
-		 * through the group's invoke-target landing pad selector switch, which
-		 * branches straight to this clause's call_handler_target_bb. Its own EH
-		 * entry block is never an unwind destination, so terminate it as
-		 * unreachable to keep the IR well-formed.
+		 * No landing pad for this clause, for one of two reasons. Either it is a
+		 * secondary sibling, reached only through the group's invoke-target
+		 * landing pad selector switch, which branches straight to this clause's
+		 * call_handler_target_bb; or nothing in its protected region can raise
+		 * into it at all. Every throw the translator emits - implicit exceptions
+		 * and explicit throw/rethrow alike - goes through emit_call (), which is
+		 * what turns a call inside a try region into an invoke, so a clause with
+		 * no invoke has nothing to catch. A finally in that position is still
+		 * entered normally through OP_CALL_HANDLER on the leave path, which is
+		 * why the handler body below is emitted either way.
+		 *
+		 * In both cases this clause's own EH entry block is never an unwind
+		 * destination, so terminate it as unreachable to keep the IR well-formed.
 		 */
 		llvm::wrap (builder->CreateUnreachable ());
 	}

@@ -517,10 +517,9 @@ public class TieredPromotion {
 	// wrong number, which is why these are value checks rather than "did it
 	// throw" checks.
 	//
-	// The Nop () in each cleanup body is load-bearing: without a call in there
-	// the enclosing clause has no protected call of its own, and the whole
-	// method declines to tier 0 with "handler without invokes" - passing for the
-	// wrong reason.
+	// The Nop () in each cleanup body gives the enclosing clause a protected
+	// call of its own, so the chain is exercised with a landing pad at every
+	// level rather than only at the innermost one.
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static void Boom () { throw new InvalidOperationException ("boom"); }
@@ -824,6 +823,170 @@ public class TieredPromotion {
 			return 4;
 		} catch (ArgumentException) {
 		}
+		return 0;
+	}
+
+	// -- Clauses whose protected region holds no call ------------------------
+	//
+	// A try region with no call in it gets no invoke, so its clause gets no
+	// landing pad: the handler is reachable only through OP_CALL_HANDLER on the
+	// leave path. That is the common shape once tier 0 has inlined a small body
+	// away - every foreach over a struct enumerator ends up here - so these
+	// check that the cleanup still runs, and runs once, with nothing for the
+	// unwinder to find.
+	//
+	// The throwing variants are the other half of the pair: a region that only
+	// LOOKS call-free in the IL still gets an invoke, because implicit
+	// exceptions and explicit throws are emitted as calls. Their answers must
+	// match tier 0's too.
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CallFreeFinally () {
+		int x = 0;
+		try {
+			for (int i = 0; i < 4; i++)
+				x += i;
+		} finally {
+			x += 100;
+		}
+		return x;
+	}
+
+	// Cleanup reached by continue (a leave out of the try) as well as by
+	// falling off the end, so it has to run once per iteration either way.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CallFreeFinallyLoop (int n) {
+		int x = 0;
+		for (int i = 0; i < n; i++) {
+			try {
+				if (i == 2)
+					continue;
+				x += i;
+			} finally {
+				x += 1000;
+			}
+		}
+		return x;
+	}
+
+	// Cleanup reached by a return out of the try.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CallFreeFinallyReturn (int n, int[] log) {
+		try {
+			if (n > 0)
+				return n + 1;
+			return 5;
+		} finally {
+			log [0]++;
+		}
+	}
+
+	// Call-free in the IL, but the null deref is an implicit exception - the
+	// translator emits it as a throw call, so the region does carry an invoke.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CallFreeThrowFinally (int[] a) {
+		int x = 0;
+		try {
+			x += a [0];
+			x += a [1];
+		} catch (NullReferenceException) {
+			x += 10;
+		} finally {
+			x += 100;
+		}
+		return x;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CallFreeExplicitThrow (int n) {
+		int x = 0;
+		try {
+			if (n < 0)
+				throw new ArgumentException ("neg");
+			x += n;
+		} catch (ArgumentException) {
+			x += 10;
+		} finally {
+			x += 100;
+		}
+		return x;
+	}
+
+	// A struct enumerator whose MoveNext/Current/Dispose all inline away, which
+	// is what leaves the foreach's try/finally with a call-free protected
+	// region in the first place.
+	struct Counter {
+		int i, n;
+		public Counter (int n) { this.i = -1; this.n = n; }
+		public bool MoveNext () { i++; return i < n; }
+		public int Current { get { return i; } }
+		public void Dispose () { }
+	}
+
+	struct Counted {
+		int n;
+		public Counted (int n) { this.n = n; }
+		public Counter GetEnumerator () { return new Counter (n); }
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int StructEnumeratorForeach (int n) {
+		int x = 0;
+		foreach (int v in new Counted (n))
+			x += v;
+		return x;
+	}
+
+	public static int test_0_call_free_protected_region () {
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		IntPtr h = HandleOf ("CallFreeFinally");
+		int[] log = new int [1];
+
+		for (int i = 0; i < 3000; i++) {
+			if (CallFreeFinally () != 106)
+				return 1;
+			if (CallFreeFinallyLoop (5) != 5008)
+				return 2;
+			if (CallFreeFinallyReturn (3, log) != 4)
+				return 3;
+			if (CallFreeFinallyReturn (0, log) != 5)
+				return 4;
+			if (CallFreeThrowFinally (new int[] { 1, 2 }) != 103)
+				return 5;
+			if (CallFreeThrowFinally (null) != 110)
+				return 6;
+			if (CallFreeExplicitThrow (7) != 107)
+				return 7;
+			if (CallFreeExplicitThrow (-1) != 110)
+				return 8;
+			if (StructEnumeratorForeach (5) != 10)
+				return 9;
+		}
+
+		// Each cleanup ran exactly once per call, neither skipped nor doubled.
+		if (log [0] != 2 * 3000)
+			return 10;
+
+		if (threshold != 0 && !WaitForRedirectArmed (h))
+			return 11;
+
+		// Same again with the sled armed, so these calls are tier 1 end to end.
+		for (int i = 0; i < 200; i++) {
+			if (CallFreeFinally () != 106)
+				return 12;
+			if (CallFreeFinallyLoop (5) != 5008)
+				return 13;
+			if (CallFreeFinallyReturn (3, log) != 4)
+				return 14;
+			if (CallFreeThrowFinally (null) != 110)
+				return 15;
+			if (CallFreeExplicitThrow (-1) != 110)
+				return 16;
+			if (StructEnumeratorForeach (5) != 10)
+				return 17;
+		}
+		if (log [0] != 2 * 3000 + 200)
+			return 18;
 		return 0;
 	}
 }
