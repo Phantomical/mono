@@ -62,13 +62,6 @@
  *     miscompile). The barrier is often elided in the materialized body
  *     (beforefieldinit / same-class access), so this is decided from the
  *     callee's metadata rather than from anything visible in the IR;
- *   - does not still owe its own class's cctor - the call itself is that
- *     class's init trigger (the first one goes through a trampoline, which
- *     compiles the method and then runs the cctor), so folding the callee in
- *     deletes the trigger and the class stays uninitialized for the life of
- *     the process. The mirror image of the gate above: that one is about
- *     static state the callee reads, this one about the initialization the
- *     call itself performs;
  *   - does not ask the runtime about its own frame - GetCurrentMethod,
  *     GetCallingAssembly, StackTrace's frame 0. Folding such a callee in makes
  *     those report the caller's frame instead (gate #25);
@@ -390,11 +383,6 @@ private:
 
 		if (method->iflags & METHOD_IMPL_ATTRIBUTE_NOOPTIMIZATION) {
 			trace ("method has optimization disabled", candidate->getName ());
-			return nullptr;
-		}
-
-		if (callee_class_init_pending (method, config)) {
-			trace ("method class has not been initialized", candidate->getName ());
 			return nullptr;
 		}
 

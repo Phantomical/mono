@@ -556,13 +556,14 @@ public class InlinerTests {
 	}
 
 	// ==========================================================================
-	// CLASS-INIT TRIGGER - refuse-cctor-pending. The mirror image of the section
-	// above: there the callee read cctor-guarded static state, here the callee
-	// touches no static state at all, so nothing about its body is suspect. What
-	// makes it ineligible is that the CALL is the class-init trigger for the
-	// callee's own class - the first one lands in a trampoline, which compiles
-	// the method and then runs its class's cctor. Fold the callee in and that
-	// cctor never runs, for the whole process.
+	// CLASS-INIT TRIGGER. The mirror image of the section above: there the callee
+	// read cctor-guarded static state, here it touches no static state at all, so
+	// nothing about its body is suspect. What is at stake is that the CALL is the
+	// class-init trigger for the callee's own class - the first one lands in a
+	// trampoline, which compiles the method and then runs its class's cctor. Fold
+	// the callee in and the only surviving trigger is the class-init preamble the
+	// tier-1 body carries; if that is missing, the cctor never runs at all for the
+	// whole process, and the failure surfaces at an arbitrary static read far away.
 	//
 	// Only bites when the caller is promoted before the callee's class has been
 	// initialized, i.e. at MONO_TIERED_CALL_THRESHOLD=0, where a method is
@@ -577,11 +578,11 @@ public class InlinerTests {
 		static TriggerHolder () { TriggerObserver.Ran = 1234; }
 
 		// Deliberately reads nothing static, and does no division: the callee has
-		// to be blameless to every other gate - refuse-cctor sees no static
-		// access, and there is no idiv overflow check to make the body non-leaf -
-		// so that only the pending-cctor gate can refuse it. No IL-size padding
-		// is needed either: classic mini declines to inline a callee whose class
-		// is not initialized yet, which is precisely the situation under test, so
+		// to be blameless to every other gate - there is no static access to
+		// blame, and no idiv overflow check to make the body non-leaf - so the
+		// class-init trigger is the only thing under test. No IL-size padding is
+		// needed either: classic mini declines to inline a callee whose class is
+		// not initialized yet, which is precisely the situation under test, so
 		// the call always survives to the top-down pass.
 		public static int Compute (int x) {
 			int p1 = x + 1, p2 = p1 * 2, p3 = p2 - 3, p4 = p3 ^ 5, p5 = p4 & 0xFF;
@@ -599,7 +600,7 @@ public class InlinerTests {
 	}
 
 	[MethodImpl (MethodImplOptions.NoOptimization)]
-	public static int test_0_cctor_class_init_trigger_refused () {
+	public static int test_0_cctor_class_init_trigger () {
 		long sum = 0;
 		const int ITERS = 5000;
 		for (int i = 0; i < ITERS; i++)
@@ -612,6 +613,85 @@ public class InlinerTests {
 		// The cctor is the whole point: if the call got inlined away, nothing
 		// ever ran it and TriggerObserver.Ran is still 0.
 		return TriggerObserver.Ran == 1234 ? 0 : 2;
+	}
+
+	// ==========================================================================
+	// ELIDED FOREIGN BARRIER - refuse-cctor, for the shape where there is nothing
+	// in the IR to notice. LazyHolder has no explicit static ctor, so the C#
+	// compiler marks it beforefieldinit; for a beforefieldinit class read from the
+	// method being compiled, the front-end emits no class-init barrier at all. The
+	// three fixtures above all use an explicit static ctor and so keep a barrier in
+	// the body; here the refusal has to come purely from the metadata scan. Fold
+	// ReadLazy in without it and the static reads back as 0.
+	// ==========================================================================
+
+	static class LazyHolder {
+		public static int Value = 31337;
+	}
+
+	static int ReadLazy (int x) {
+		int p1 = x + 4, p2 = p1 * 3, p3 = p2 - 8, p4 = p3 ^ 12, p5 = p4 & 0xFF;
+		int p6 = p5 | 0x04, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = (p9 >> 1) + 1;
+		int p11 = p10 + p3, p12 = p11 - p4, p13 = p12 ^ p6, p14 = p13 + p7, p15 = p14 - p8;
+		if (p15 == int.MinValue)
+			return -1;
+		return x + LazyHolder.Value;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ReadLazyHotCaller (int x) {
+		return ReadLazy (x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_cctor_beforefieldinit_static_refused () {
+		long sum = 0;
+		const int ITERS = 5000;
+		for (int i = 0; i < ITERS; i++)
+			sum += ReadLazyHotCaller (i);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += i + 31337;
+		return sum == expected ? 0 : 1;
+	}
+
+	// ==========================================================================
+	// FAILING CCTOR. ThrowingHolder's cctor throws, so its vtable never reaches
+	// initialized and Compute's class-init preamble runs on every single call. The
+	// exception has to come out of Compute and be caught by the caller's handler,
+	// which is where the call site is - both when Compute keeps its call and when
+	// it gets folded in, where the preamble's call has to be rewritten into an
+	// invoke on the caller's landing pad.
+	// ==========================================================================
+
+	static class ThrowingHolder {
+		static ThrowingHolder () { throw new InvalidOperationException ("boom"); }
+
+		public static int Compute (int x) {
+			int p1 = x + 7, p2 = p1 * 3, p3 = p2 - 2, p4 = p3 ^ 9, p5 = p4 & 0xFF;
+			int p6 = p5 | 0x01, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = (p9 >> 1) + 1;
+			int p11 = p10 + p3, p12 = p11 - p4, p13 = p12 ^ p6, p14 = p13 + p7, p15 = p14 - p8;
+			if (p15 == int.MinValue)
+				return -1;
+			return x + 2;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ThrowingCctorHotCaller (int x) {
+		try {
+			return ThrowingHolder.Compute (x);
+		} catch (TypeInitializationException) {
+			return -1;
+		}
+	}
+
+	public static int test_0_cctor_failure_caught_by_caller () {
+		const int ITERS = 5000;
+		for (int i = 0; i < ITERS; i++)
+			if (ThrowingCctorHotCaller (i) != -1)
+				return 1;
+		return 0;
 	}
 
 	// ==========================================================================

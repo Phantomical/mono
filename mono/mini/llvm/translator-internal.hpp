@@ -295,6 +295,7 @@ typedef struct {
 	void emit_finally_guard_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot, int clause_index);
 	void emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_index);
 	void emit_entry_bb (llvm::IRBuilder<> *builder);
+	void emit_class_init_guards (llvm::IRBuilder<> *builder);
 	void emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
 	void emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder);
 	void emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref);
@@ -582,6 +583,18 @@ mono_llvm_method_from_symbol (const char *name);
 /* Defined in translator-bb.cpp. */
 void
 process_bb (EmitContext *ctx, MonoBasicBlock *bb);
+
+namespace mono {
+
+/*
+ * The vtable whose cctor the body being compiled for CFG has to trigger itself,
+ * NULL if there is none. *INDETERMINATE is set when the vtable cannot be named;
+ * see the definition in translator.cpp.
+ */
+MonoVTable *
+pending_class_init_vtable (MonoCompile *cfg, bool *indeterminate);
+
+} // namespace mono
 
 /* Defined in translator-intrinsics.cpp. */
 void

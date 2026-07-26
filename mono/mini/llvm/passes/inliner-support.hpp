@@ -85,15 +85,6 @@ llvm::Function *materialize_callee (MonoMethod *target, MonoCompile *root_cfg,
  */
 bool callee_reads_cctor_guarded_static (MonoMethod *target);
 
-/*
- * Whether a call to TARGET is still the thing that runs its own class's cctor -
- * i.e. that class has a cctor which has not run yet in ROOT_CFG's domain.
- * Inlining such a callee deletes the call and with it the class-init trigger,
- * leaving the class uninitialized forever, so the inliner must refuse it.
- * Conservative: true means "do not inline".
- */
-bool callee_class_init_pending (MonoMethod *target, MonoCompile *root_cfg);
-
 } // namespace mono
 
 #endif /* MONO_MINI_LLVM_INLINER_SUPPORT_HPP */

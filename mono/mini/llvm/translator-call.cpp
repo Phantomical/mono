@@ -584,6 +584,144 @@ EmitContext::emit_entry_bb (llvm::IRBuilder<> *builder)
 	this->builder = old_builder;
 }
 
+/*
+ * emit_class_init_guards:
+ *
+ *   Emit the class-init preamble: a guarded call to the cctor trigger for this
+ * method's declaring class, if that cctor still owes a run.
+ *
+ * Normally the trigger is the managed call that reaches the method - the first
+ * one lands in a jit trampoline, which compiles the method and then runs the
+ * declaring class's cctor. A tier-1 body that the inliner folds into a caller has
+ * no such call left, so it carries the trigger itself:
+ *
+ *   if (!vtable->initialized)
+ *           mono_generic_class_init (vtable);
+ *
+ * the same sequence the front-end emits for an in-body class-init barrier,
+ * hoisted to the prologue.
+ *
+ * It is tempting to follow that with llvm.invariant.start / llvm.assume on the
+ * `initialized` byte, so that the barriers the front-end left further down for
+ * the same class fold away. That would be unsound. When the calling thread is
+ * the one already running that cctor, mono_runtime_class_init_full () returns
+ * success with the byte still 0 (object.c, the initializing_tid checks) - and
+ * reaching a method of C from C's own cctor is just what a static field
+ * initializer calling a helper looks like. So an assume of `initialized == 1`
+ * would be plainly false there, and an invariant.start would be claiming a byte
+ * immutable that the cctor further up our own stack is about to write.
+ */
+void
+EmitContext::emit_class_init_guards (llvm::IRBuilder<> *builder)
+{
+	MonoCompile *cfg = this->cfg;
+
+	/*
+	 * AOT would want a GOT slot rather than a baked vtable pointer, shared
+	 * generic code has no single vtable to bake at all, and a wrapper's cctor
+	 * relationship to its declaring class is the runtime's business (the
+	 * trampoline skips it outright for the remoting ones).
+	 */
+	if (cfg->compile_aot || cfg->gshared || cfg->gsharedvt)
+		return;
+	if (cfg->method->wrapper_type != MONO_WRAPPER_NONE)
+		return;
+
+	bool indeterminate = false;
+	MonoVTable *vtable = mono::pending_class_init_vtable (cfg, &indeterminate);
+
+	if (indeterminate && this->translate_only) {
+		/*
+		 * A body destined to be inlined has to carry the trigger for the cctor it
+		 * owes, so not being able to name the vtable is a refusal:
+		 * materialize_callee () hands back nothing and the inliner leaves the call
+		 * in place, which initializes the class the usual way. A root needs no such
+		 * refusal - it keeps its own managed entry point either way.
+		 */
+		this->set_failure ("indeterminate pending class init");
+		return;
+	}
+
+	if (!vtable)
+		return;
+
+	llvm::IRBuilder<> *old_builder = this->builder;
+	this->builder = builder;
+
+	llvm::Type *byte_type = llvm::Type::getInt8Ty (this->llvm_ctx ());
+	llvm::Type *ptr_type = llvm::PointerType::get (this->llvm_ctx (), 0);
+	llvm::Type *intptr_type = llvm::unwrap (IntPtrType ());
+
+	/*
+	 * Close the entry block with an unconditional branch and emit the check in
+	 * fresh blocks after it, rather than growing the entry block itself. The entry
+	 * block is special in more ways than one - it is where every alloca has to live
+	 * for SROA to see it, and build_alloca_llvm_type_name () keeps inserting into
+	 * it for the rest of the method - so leaving it as nothing but prologue, and
+	 * terminated once, keeps the two concerns apart.
+	 */
+	LLVMBasicBlockRef check_bb = this->gen_bb ("CLASS_INIT_CHECK_BB");
+	llvm::Instruction *entry_br = builder->CreateBr (llvm::unwrap (check_bb));
+	/*
+	 * Those allocas now have to land before that branch, and a null last_alloca
+	 * means "at the end of the entry block" - which from here would be past it,
+	 * leaving the block with no terminator as far as LLVM is concerned.
+	 */
+	this->last_alloca = entry_br;
+	builder->SetInsertPoint (llvm::unwrap (check_bb));
+
+	llvm::Value *vtable_val = llvm::ConstantInt::get (intptr_type, (guint64) (gsize) vtable, false);
+	/* Fold the field offset into the constant rather than emitting a GEP. */
+	llvm::Value *flag_addr = builder->CreateIntToPtr (
+		llvm::ConstantInt::get (intptr_type,
+		                        (guint64) ((gsize) vtable + MONO_STRUCT_OFFSET (MonoVTable, initialized)),
+		                        false),
+		ptr_type, "class_init_flag");
+
+	llvm::Value *inited = builder->CreateLoad (byte_type, flag_addr, "");
+	LLVMValueRef cmp = llvm::wrap (builder->CreateICmpNE (inited, llvm::ConstantInt::get (byte_type, 0)));
+
+	LLVMValueRef expect_args [2];
+	expect_args [0] = cmp;
+	expect_args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt1Ty (this->llvm_ctx ()), 1, false));
+	cmp = this->call_intrins (INTRINS_EXPECT_I1, expect_args, "");
+
+	LLVMBasicBlockRef init_bb = this->gen_bb ("CLASS_INIT_BB");
+	LLVMBasicBlockRef cont_bb = this->gen_bb ("CLASS_INIT_CONT_BB");
+	mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, cont_bb, init_bb, 1000, 1);
+
+	/*
+	 * The cold arm. Not an invoke: the prologue sits outside every EH clause, so a
+	 * TypeInitializationException from here has to unwind past this frame rather
+	 * than reach the method's own handlers - and once the body is inlined, LLVM
+	 * rewrites this into an invoke on the caller's landing pad if the call site it
+	 * replaced was one, which lands the exception exactly where the deleted call
+	 * would have raised it.
+	 */
+	builder->SetInsertPoint (llvm::unwrap (init_bb));
+	MonoJitICallInfo *info = mono_find_jit_icall_info (MONO_JIT_ICALL_mono_generic_class_init);
+	LLVMTypeRef icall_sig = this->sig_to_llvm_sig (info->sig);
+	LLVMValueRef callee = this->get_jit_callee ("", icall_sig, MONO_PATCH_INFO_JIT_ICALL_ID,
+	                                           GUINT_TO_POINTER (MONO_JIT_ICALL_mono_generic_class_init));
+	/*
+	 * A mismatch would mean the front-end's own barrier declared this icall with a
+	 * different type, which would make the call below malformed.
+	 */
+	g_assert (LLVMGlobalGetValueType (callee) == icall_sig);
+	builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (icall_sig)),
+	                     llvm::unwrap (callee), { vtable_val });
+	builder->CreateBr (llvm::unwrap (cont_bb));
+
+	/*
+	 * The rest of bb_entry, and the branch out of it, belong in the join block -
+	 * process_bb () picks the entry bb up from here (get_end_bb ()), and so do the
+	 * phi incoming edges.
+	 */
+	builder->SetInsertPoint (llvm::unwrap (cont_bb));
+	this->bblocks [cfg->bb_entry->block_num].end_bblock = cont_bb;
+	this->builder = old_builder;
+}
+
 bool
 EmitContext::is_supported_callconv (MonoCallInst *call)
 {

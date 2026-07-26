@@ -851,6 +851,10 @@ EmitContext::emit_method_inner ()
 	entry_bb = this->get_bb (cfg->bb_entry);
 	entry_builder->SetInsertPoint (llvm::unwrap (entry_bb));
 	emit_entry_bb (entry_builder);
+	/* Runs the cctor this body owes; may decline the method outright. */
+	emit_class_init_guards (entry_builder);
+	if (!this->ok ())
+		return;
 
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb) {
 		int clause_index;
@@ -1436,48 +1440,53 @@ callee_reads_cctor_guarded_static (MonoMethod *method)
 }
 
 /*
- * True if a managed call to METHOD still carries a class-init side effect -
- * METHOD's declaring class has a cctor that has not run yet in the root's
- * domain.
+ * The vtable whose cctor the body being compiled for CFG has to trigger itself,
+ * or NULL if there is nothing to do.
  *
  * Calling a method is one of the runtime's class-init triggers: the first call
  * lands in a jit trampoline, which compiles the method and then runs the
- * declaring class's cctor (mono_jit_compile_method_with_opt ()). Folding the
- * callee into the root deletes the call, and with it the only thing that would
- * ever have run that cctor - a silent miscompile whose symptom is a static
- * field that never gets its initial value, arbitrarily far from here. It bites
- * hardest on exactly the callees this pass likes: an empty ctor or a trivial
- * accessor inlines down to nothing at all, so the class is left uninitialized
- * for the rest of the process.
+ * declaring class's cctor (mono_jit_compile_method_inner_1 ()). A tier-1 body
+ * that the inliner folds into a caller has no such call left, so it carries the
+ * trigger in its own prologue instead - see emit_class_init_guards (). Instance
+ * methods included: .ctor is exactly the callee whose inlining would otherwise
+ * lose the trigger, and passing METHOD as the caller is what keeps a cctor from
+ * guarding against itself.
  *
- * This is the same rule mini_method_check_inlining () holds itself to, and for
- * the same reason. Note it cannot be satisfied by initializing the class here:
- * a tier-1 compile must never run a cctor (it can happen on the background
- * worker, and cctors are managed code). So a pending cctor is simply a refusal
- * - the callee keeps its own managed call and initializes itself the usual way.
+ * Sets *INDETERMINATE when the answer cannot be established - an open or
+ * context-dependent class has one vtable per instantiation, none of which is the
+ * one to bake into the code, and a vtable that will not build is no better. The
+ * caller decides what to do about that.
  */
-bool
-callee_class_init_pending (MonoMethod *method, MonoCompile *root)
+MonoVTable *
+pending_class_init_vtable (MonoCompile *cfg, bool *indeterminate)
 {
-	if (!method || !root)
-		return true;
+	MonoMethod *method = cfg->method;
+	MonoClass *klass = method->klass;
 
-	if (!m_class_has_cctor (method->klass))
-		return false;
+	if (!mono_class_needs_cctor_run (klass, method))
+		return nullptr;
 
-	/* No vtable built yet, so the class cannot have been initialized. Asking
-	 * for one would build it as a side effect of a compile; don't. */
-	if (!m_class_get_runtime_info (method->klass))
-		return true;
-
-	ERROR_DECL (error);
-	MonoVTable *vtable = mono_class_vtable_checked (root->domain, method->klass, error);
-	if (!vtable || !is_ok (error)) {
-		mono_error_cleanup (error);
-		return true;
+	if (mono_class_is_gtd (klass) ||
+	    mono_class_is_open_constructed_type (m_class_get_byval_arg (klass)) ||
+	    mini_class_check_context_used (cfg, klass)) {
+		*indeterminate = true;
+		return nullptr;
 	}
 
-	return !vtable->initialized;
+	ERROR_DECL (error);
+	MonoVTable *vtable = mono_class_vtable_checked (cfg->domain, klass, error);
+	if (!vtable || !is_ok (error)) {
+		mono_error_cleanup (error);
+		*indeterminate = true;
+		return nullptr;
+	}
+
+	/*
+	 * Already initialized - nothing for a guard to trigger. This is the
+	 * overwhelmingly common case: by the time a method is hot enough to promote,
+	 * its class was initialized long ago.
+	 */
+	return vtable->initialized ? nullptr : vtable;
 }
 
 llvm::Function *
