@@ -1222,10 +1222,8 @@ mono_llvm_emit_aot_module (const char *filename, const char *cu_name)
 /* ------------------------------------------------------------------------ *
  * Tier-1 inliner support: root registry + lazy callee materialization.
  *
- * These are the mono-aware half of the top-down inliner. The pure-LLVM pass
- * (passes/inliner.cpp) reaches them through passes/inliner-support.hpp with
- * everything mono passed as an opaque void *, because that TU has no mono
- * headers.
+ * These are the mono-aware half of the top-down inliner; the pure-LLVM pass
+ * (passes/inliner.cpp) reaches them through passes/inliner-support.hpp.
  * ------------------------------------------------------------------------ */
 
 namespace mono {
@@ -1239,11 +1237,11 @@ namespace mono {
 static std::unordered_map<llvm::Function *, MonoCompile *> *tier1_roots;
 
 void
-register_tier1_root (llvm::Function *root, void *root_cfg)
+register_tier1_root (llvm::Function *root, MonoCompile *root_cfg)
 {
 	if (!tier1_roots)
 		tier1_roots = new std::unordered_map<llvm::Function *, MonoCompile *> ();
-	(*tier1_roots) [root] = static_cast<MonoCompile *> (root_cfg);
+	(*tier1_roots) [root] = root_cfg;
 }
 
 void
@@ -1253,7 +1251,7 @@ unregister_tier1_root (llvm::Function *root)
 		tier1_roots->erase (root);
 }
 
-void *
+MonoCompile *
 tier1_root_cfg (llvm::Function *root)
 {
 	if (!tier1_roots)
@@ -1263,9 +1261,8 @@ tier1_root_cfg (llvm::Function *root)
 }
 
 bool
-tier1_root_allows_inlining (void *root_cfg)
+tier1_root_allows_inlining (MonoCompile *cfg)
 {
-	MonoCompile *cfg = static_cast<MonoCompile *> (root_cfg);
 	if (!cfg)
 		return false;
 	/*
@@ -1292,9 +1289,8 @@ tier1_root_allows_inlining (void *root_cfg)
 }
 
 const char *
-tier1_root_refusal_reason (void *root_cfg)
+tier1_root_refusal_reason (MonoCompile *cfg)
 {
-	MonoCompile *cfg = static_cast<MonoCompile *> (root_cfg);
 	if (cfg->disable_inline)
 		return "refuse-root-disable-inline";
 	if (!(cfg->opt & MONO_OPT_INLINE))
@@ -1306,7 +1302,7 @@ tier1_root_refusal_reason (void *root_cfg)
 	return "refuse-root";
 }
 
-void *
+MonoMethod *
 managed_method_from_symbol (const char *sym)
 {
 	return mono_llvm_method_from_symbol (sym);
@@ -1362,9 +1358,8 @@ callee_needs_generic_context (MonoMethod *method)
  * where the barrier would in fact have survived.
  */
 bool
-callee_reads_cctor_guarded_static (void *target)
+callee_reads_cctor_guarded_static (MonoMethod *method)
 {
-	MonoMethod *method = static_cast<MonoMethod *> (target);
 	if (!method)
 		return true;
 
@@ -1459,9 +1454,8 @@ callee_reads_cctor_guarded_static (void *target)
  * cold, throw-path code either way.
  */
 bool
-method_reports_caller_frame (void *target)
+method_reports_caller_frame (MonoMethod *method)
 {
-	MonoMethod *method = static_cast<MonoMethod *> (target);
 	if (!method)
 		return true;
 
@@ -1492,7 +1486,7 @@ method_reports_caller_frame (void *target)
 
 /*
  * True if a managed call to METHOD still carries a class-init side effect -
- * METHOD's declaring class has a cctor that has not run yet in ROOT_CFG's
+ * METHOD's declaring class has a cctor that has not run yet in the root's
  * domain.
  *
  * Calling a method is one of the runtime's class-init triggers: the first call
@@ -1512,11 +1506,8 @@ method_reports_caller_frame (void *target)
  * - the callee keeps its own managed call and initializes itself the usual way.
  */
 bool
-callee_class_init_pending (void *target, void *root_cfg)
+callee_class_init_pending (MonoMethod *method, MonoCompile *root)
 {
-	MonoMethod *method = static_cast<MonoMethod *> (target);
-	MonoCompile *root = static_cast<MonoCompile *> (root_cfg);
-
 	if (!method || !root)
 		return true;
 
@@ -1539,11 +1530,8 @@ callee_class_init_pending (void *target, void *root_cfg)
 }
 
 llvm::Function *
-materialize_callee (void *target, void *root_cfg, llvm::Module *into)
+materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 {
-	MonoMethod *method = static_cast<MonoMethod *> (target);
-	MonoCompile *root = static_cast<MonoCompile *> (root_cfg);
-
 	if (!method || !root)
 		return nullptr;
 

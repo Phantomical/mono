@@ -1,22 +1,38 @@
 /**
  * \file
- * inliner.hpp - mono's tier-1 LLVM inliner, packaged as the -O2 pipeline's
- * inlining stage.
+ * \brief The top-down inlining pass used by mono's LLVM JIT tier1 pipeline.
  *
- * The tier-1 pipeline is the stock per-module -O2 pipeline with exactly one
- * entry swapped out: LLVM's own inlining stage is replaced by a mono pass that
- * pulls callee bodies into the module (they arrive as bodyless trampoline
- * declarations otherwise) and then drives that same stock inliner over them,
- * round by round, until nothing more folds into the root. inliner.cpp has the
- * algorithm and the gates deciding what may be pulled in.
+ * Normally, LLVM inlining is done bottom-up. Leaf functions get inlined into
+ * their callers and so on, until they get big enough to not be worth inlining.
+ * Unfortunately, when we compile a method we don't have access to the LLVM IR
+ * for all the methods. Even if we did, we couldn't afford to compile everything.
+ * As such, we take a bit of a hybrid approach:
+ *
+ * 1. Start with one or more "root" methods. These are the methods that we
+ *    are actually trying to compile.
+ * 2. Add methods called by our root methods to the module. We do this recursively
+ *    up to a depth of 2.
+ * 3. Run the regular function optimization pipeline on these methods in order
+ *    to simplify them as much as possible.
+ * 4. Run LLVM's usual bottom-up inliner on the module.
+ * 5. If any of the root functions have been modified (i.e. something got inlined
+ *    into them) then go back to step 2 with the new inlined function body.
+ * 6. Otherwise strip out any non-root function then continue down the pipeline.
+ *
+ * This is loosely based on these EuroLLVM slides for Azul's Falcon JIT:
+ * https://llvm.org/devmtg/2022-05/slides/2022EuroLLVM-CustomBenefitDrivenInliner-in-FalconJIT.pdf
  */
 
 #ifndef MONO_MINI_LLVM_INLINER_HPP
 #define MONO_MINI_LLVM_INLINER_HPP
 
+/* MonoCompile and MonoMethod, the two mono types the pass threads around. */
+#include <mono/mini/mini.h>
+
 /*
- * Same reason engine.cpp drops mono's PIC macro: PassBuilder.h uses `PIC` as an
- * identifier, so the macro would rewrite it and break the header.
+ * PassBuilder.h uses PIC as an identifier so we need to undef it. This has to
+ * come after mini.h: libtool passes -DPIC, and mono-tls.h defines it itself
+ * when we are built as PIE, so it is back in scope after any mono header.
  */
 #ifdef PIC
 #undef PIC
@@ -38,18 +54,10 @@ class PassInstrumentationCallbacks;
 
 namespace mono {
 
-/*
- * Shared between the pass and the instrumentation callbacks build_tier1_pipeline
- * () registers alongside it. The pass object gets copied into the pipeline's
- * type-erased pass model, so this lives behind a shared_ptr rather than in the
- * pass itself.
- */
 struct RoundState;
 
 /*
- * The tier-1 inlining stage. It takes the slot LLVM's own inlining stage would
- * occupy in the -O2 pipeline, which means it also carries the per-function
- * simplification pipeline nested inside that slot.
+ * A hybrid top-down/bottom-up inlining pass.
  */
 class MonoInlinerPass : public llvm::PassInfoMixin<MonoInlinerPass> {
 public:
@@ -69,8 +77,8 @@ public:
 	static bool isRequired () { return true; }
 
 private:
-	void expose_callees (llvm::Module &m, llvm::Function &root, void *root_cfg,
-	                     llvm::DenseSet<void *> &refused,
+	void expose_callees (llvm::Module &m, llvm::Function &root, MonoCompile *root_cfg,
+	                     llvm::DenseSet<MonoMethod *> &refused,
 	                     llvm::SmallVectorImpl<llvm::Function *> &added);
 	void run_stock_inliner (llvm::Module &m, llvm::ModuleAnalysisManager &mam,
 	                        bool module_mutated);

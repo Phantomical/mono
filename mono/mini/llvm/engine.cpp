@@ -33,10 +33,6 @@
 
 #include "engine.hpp"
 #include "mono_lsda_format.hpp"
-#include "passes/eh-gather.hpp"
-#include "passes/finally-range.hpp"
-#include "passes/inliner.hpp"
-#include "passes/pass-dump.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -110,6 +106,16 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+
+/*
+ * The custom passes. inliner.hpp reaches into mono proper (mini.h) for
+ * MonoCompile/MonoMethod, and mini.h's DW_* unwind macros collide with
+ * llvm/BinaryFormat/Dwarf.h, so these have to come after the LLVM headers.
+ */
+#include "passes/eh-gather.hpp"
+#include "passes/finally-range.hpp"
+#include "passes/inliner.hpp"
+#include "passes/pass-dump.hpp"
 
 using namespace llvm;
 using namespace llvm::orc;
@@ -1717,7 +1723,7 @@ MonoLLVMJIT::get_singleton_if_created ()
  * test-reclamation-deregisters-eh-frame in test-llvm-engine.cpp (doc 26 J4).
  */
 uint64_t
-MonoLLVMJIT::release_owner (void *owner)
+MonoLLVMJIT::release_owner (MonoDomain *owner)
 {
 	std::vector<JITDylibSP> jds;
 
@@ -1733,12 +1739,12 @@ MonoLLVMJIT::release_owner (void *owner)
 		for (JITDylib *jd : it->second)
 			jds.push_back (jd);
 		/*
-		 * Erase the map entry under the same lock that published it. The key is
-		 * a MonoDomain * whose storage is freed moments after mono calls us, so
-		 * leaving it behind would let a later domain allocated at the same
-		 * address inherit this one's dylib list - the dangling-key/address-reuse
-		 * hazard that task #29 hit with MonoMethod * keys, except that here it
-		 * would hand a live domain a list of already-unmapped dylibs.
+		 * Erase the map entry under the same lock that published it. The
+		 * domain's storage is freed moments after mono calls us, so leaving the
+		 * key behind would let a later domain allocated at the same address
+		 * inherit this one's dylib list - the dangling-key/address-reuse hazard
+		 * that task #29 hit with MonoMethod * keys, except that here it would
+		 * hand a live domain a list of already-unmapped dylibs.
 		 */
 		owners_.erase (it);
 	}
@@ -1875,7 +1881,7 @@ MonoLLVMJIT::compile (Function *entry,
                       ArrayRef<GlobalVariable *> callee_vars,
                       uint64_t *callee_addrs,
                       StringRef eh_symbol,
-                      void *owner)
+                      MonoDomain *owner)
 {
 	/* Snapshot the names we need to resolve. */
 	std::string entry_name = entry->getName ().str ();
@@ -2028,13 +2034,13 @@ mono_llvm_jit_init (void)
 }
 
 void
-mono_llvm_jit_register_symbol (const char *name, void *addr)
+mono_llvm_jit_register_symbol (const char *name, gpointer addr)
 {
 	mono::MonoLLVMJIT::get_singleton ()->register_symbol (name, addr);
 }
 
 const char *
-mono_llvm_jit_resolve_symbol_name (void *addr)
+mono_llvm_jit_resolve_symbol_name (gpointer addr)
 {
 	/*
 	 * get_singleton_if_created (), not get_singleton (): a disassembly

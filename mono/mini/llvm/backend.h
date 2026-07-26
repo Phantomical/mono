@@ -114,7 +114,7 @@ gboolean  mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_s
  * legacy engine's -rdynamic/process-symbol search. Step 3b registers mono's
  * icall helper targets through this before compiling methods that call them.
  */
-void      mono_llvm_jit_register_symbol (const char *name, void *addr);
+void      mono_llvm_jit_register_symbol (const char *name, gpointer addr);
 
 /*
  * Reverse lookup: the name ADDR was registered under via
@@ -124,7 +124,7 @@ void      mono_llvm_jit_register_symbol (const char *name, void *addr);
  * pointer, if non-NULL, is stable for the life of the process and must not
  * be freed.
  */
-const char *mono_llvm_jit_resolve_symbol_name (void *addr);
+const char *mono_llvm_jit_resolve_symbol_name (gpointer addr);
 
 /*
  * Reclaim every JIT'd body compiled for DOMAIN: drop its symbols from the

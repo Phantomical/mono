@@ -191,10 +191,10 @@ passes_generic_context (const CallBase &cb)
 
 /*
  * Resolve a call site to its managed callee for the cheap, pre-materialization
- * eligibility gates. Returns the target MonoMethod (opaque) and the trampoline
+ * eligibility gates. Returns the target MonoMethod and the trampoline
  * declaration it calls, or {null, null} if CB is not a candidate.
  */
-void *
+MonoMethod *
 candidate_target (CallBase &cb, Function *&decl_out)
 {
 	decl_out = nullptr;
@@ -226,7 +226,7 @@ candidate_target (CallBase &cb, Function *&decl_out)
 	}
 
 	/* Managed method symbol? (Filters icalls, intrinsics, runtime helpers.) */
-	void *method = managed_method_from_symbol (callee->getName ().data ());
+	MonoMethod *method = managed_method_from_symbol (callee->getName ().data ());
 	if (!method)
 		return nullptr;
 
@@ -239,7 +239,7 @@ candidate_target (CallBase &cb, Function *&decl_out)
  * before paying for its front-end. Traces the reason it turned TARGET down.
  */
 bool
-callee_gates_pass (void *target, void *root_cfg, StringRef sym)
+callee_gates_pass (MonoMethod *target, MonoCompile *root_cfg, StringRef sym)
 {
 	if (callee_reads_cctor_guarded_static (target)) {
 		trace ("refuse-cctor", sym);
@@ -269,7 +269,7 @@ body_observes_own_frame (Function &body)
 		Function *callee = cb->getCalledFunction ();
 		if (!callee || !callee->isDeclaration ())
 			continue;
-		void *method = managed_method_from_symbol (callee->getName ().data ());
+		MonoMethod *method = managed_method_from_symbol (callee->getName ().data ());
 		if (method && method_reports_caller_frame (method))
 			return true;
 	}
@@ -406,8 +406,8 @@ localize_foreign_declarations (Module &m)
  * for them again.
  */
 void
-MonoInlinerPass::expose_callees (Module &m, Function &root, void *root_cfg,
-                                 DenseSet<void *> &refused,
+MonoInlinerPass::expose_callees (Module &m, Function &root, MonoCompile *root_cfg,
+                                 DenseSet<MonoMethod *> &refused,
                                  SmallVectorImpl<Function *> &added)
 {
 	StringMap<Function *> by_symbol = index_materialized (m);
@@ -439,7 +439,7 @@ MonoInlinerPass::expose_callees (Module &m, Function &root, void *root_cfg,
 				}
 
 				Function *decl;
-				void *target = candidate_target (*cb, decl);
+				MonoMethod *target = candidate_target (*cb, decl);
 				if (!target || refused.contains (target))
 					continue;
 
@@ -541,7 +541,7 @@ MonoInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 	bool ran_stock_inliner = false;
 
 	for (Function *root : roots) {
-		void *root_cfg = tier1_root_cfg (root);
+		MonoCompile *root_cfg = tier1_root_cfg (root);
 		/* Caller-level gates #1/#19/#2 (and: no cfg => nothing to materialize with). */
 		if (!root_cfg || !tier1_root_allows_inlining (root_cfg)) {
 			trace (root_cfg ? tier1_root_refusal_reason (root_cfg)
@@ -551,7 +551,7 @@ MonoInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		}
 
 		/* Targets that failed a gate once and need not be reconsidered. */
-		DenseSet<void *> refused;
+		DenseSet<MonoMethod *> refused;
 
 		for (unsigned round = 0; round < kMaxInlinerRounds; ++round) {
 			SmallVector<Function *, 8> added;

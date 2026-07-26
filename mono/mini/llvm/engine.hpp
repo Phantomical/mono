@@ -31,6 +31,10 @@
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 
+/* MonoDomain, the lifetime key compiled code is owned by. Forward decls only -
+ * this header stays clear of the rest of mono. */
+#include <mono/utils/mono-forward.h>
+
 namespace llvm {
 class Function;
 class GlobalVariable;
@@ -289,18 +293,17 @@ public:
 	 *                  (Resolved by name in the clone, so pass the originals.)
 	 *   eh_symbol    - if non-empty, looked up and reported in the result's
 	 *                  mono_eh_frame field (the mono-format global, per the donor).
-	 *   owner        - opaque lifetime key for the code this compile produces;
-	 *                  mono passes the MonoCompile's MonoDomain *. Everything
-	 *                  compiled under one key is torn down together by
-	 *                  release_owner (). nullptr means "never reclaim", which is
-	 *                  what the unit tests want and what a caller with no domain
-	 *                  to name gets.
+	 *   owner        - lifetime key for the code this compile produces; mono
+	 *                  passes the MonoCompile's domain. Everything compiled
+	 *                  under one domain is torn down together by release_owner
+	 *                  (). nullptr means "never reclaim", which is what the unit
+	 *                  tests want and what a caller with no domain to name gets.
 	 */
 	CompileResult compile (llvm::Function *entry,
 	                       llvm::ArrayRef<llvm::GlobalVariable *> callee_vars,
 	                       uint64_t *callee_addrs,
 	                       llvm::StringRef eh_symbol,
-	                       void *owner = nullptr);
+	                       MonoDomain *owner = nullptr);
 
 	/*
 	 * Tear down every JITDylib compiled under OWNER: unregister its symbols,
@@ -313,7 +316,7 @@ public:
 	 *
 	 * A key that was never compiled for (including nullptr) is a no-op.
 	 */
-	uint64_t release_owner (void *owner);
+	uint64_t release_owner (MonoDomain *owner);
 
 	~MonoLLVMJIT ();
 
@@ -361,16 +364,14 @@ private:
 	std::unordered_map<void *, std::string> symbols_by_addr_;
 
 	/*
-	 * owner key -> the dylibs compiled under it, for release_owner ().
+	 * owner domain -> the dylibs compiled under it, for release_owner ().
 	 *
-	 * Keyed by an opaque pointer rather than typed as MonoDomain * so that this
-	 * header stays free of mono types (see the file comment). The map entry is
-	 * erased by release_owner (), which mono calls from the domain's own free
-	 * path, so a MonoDomain * key never outlives the domain and cannot be
+	 * The map entry is erased by release_owner (), which mono calls from the
+	 * domain's own free path, so a key never outlives its domain and cannot be
 	 * aliased by a later domain reusing the address.
 	 */
 	std::mutex owners_mutex_;
-	std::map<void *, std::vector<llvm::orc::JITDylib *>> owners_;
+	std::map<MonoDomain *, std::vector<llvm::orc::JITDylib *>> owners_;
 };
 
 /* ---- relocation audit ----------------------------------------------------

@@ -220,7 +220,7 @@ disasm_branch_target (const char *line, int *repl_start, int *repl_end, guint64 
 static const char *
 resolve_llvm_call_target (guint64 target)
 {
-	const char *name = mono_llvm_jit_resolve_symbol_name ((void *) (gsize) target);
+	const char *name = mono_llvm_jit_resolve_symbol_name ((gpointer) (gsize) target);
 	guint8 *stub;
 	gint32 disp;
 	guint8 *got_slot;
@@ -239,7 +239,7 @@ resolve_llvm_call_target (guint64 target)
 
 	got_slot = stub + 6 + disp;
 	memcpy (&real_target, got_slot, sizeof (real_target));
-	return mono_llvm_jit_resolve_symbol_name ((void *) (gsize) real_target);
+	return mono_llvm_jit_resolve_symbol_name ((gpointer) (gsize) real_target);
 }
 #endif
 

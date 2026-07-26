@@ -325,7 +325,7 @@ test_registered_helper (MonoLLVMJIT *jit)
 
 /* i64 <fn_name>(void) { return retval; }, compiled under `owner`. */
 static mono::CompileResult
-compile_trivial_under_owner (MonoLLVMJIT *jit, const char *fn_name, int64_t retval, void *owner)
+compile_trivial_under_owner (MonoLLVMJIT *jit, const char *fn_name, int64_t retval, MonoDomain *owner)
 {
 	LLVMContext &ctx = jit->context ();
 	auto module = std::make_unique<Module> (std::string ("selftest.owner.") + fn_name, ctx);
@@ -364,14 +364,14 @@ static TestResult
 test_release_owner (MonoLLVMJIT *jit)
 {
 	/* Five distinct local objects give five distinct, guaranteed-unique
-	 * addresses to use as opaque owner keys - exactly mono's usage, which
-	 * keys by a MonoDomain *. */
+	 * addresses to stand in for the MonoDomains mono keys by. The engine only
+	 * ever compares these keys, so a synthetic address does the job. */
 	int tag_a = 0, tag_b = 0, tag_c = 0, tag_d = 0, tag_unused = 0;
-	void *owner_a = &tag_a;
-	void *owner_b = &tag_b;
-	void *owner_c = &tag_c;
-	void *owner_d = &tag_d;
-	void *owner_fresh = &tag_unused; /* never passed to compile() */
+	MonoDomain *owner_a = (MonoDomain *) &tag_a;
+	MonoDomain *owner_b = (MonoDomain *) &tag_b;
+	MonoDomain *owner_c = (MonoDomain *) &tag_c;
+	MonoDomain *owner_d = (MonoDomain *) &tag_d;
+	MonoDomain *owner_fresh = (MonoDomain *) &tag_unused; /* never passed to compile() */
 
 	/* (a) one dylib under owner_a. */
 	mono::CompileResult res_a = compile_trivial_under_owner (jit, "owner_a_fn", 111, owner_a);
@@ -2006,7 +2006,7 @@ build_reclaim_eh_module (Module &m, const char *fn_name)
 
 /* Compile build_reclaim_eh_module(fn_name) through the real engine, under `owner`. */
 static mono::CompileResult
-compile_reclaim_eh_module_under_owner (MonoLLVMJIT *jit, const char *fn_name, void *owner)
+compile_reclaim_eh_module_under_owner (MonoLLVMJIT *jit, const char *fn_name, MonoDomain *owner)
 {
 	LLVMContext &ctx = jit->context ();
 	auto module = std::make_unique<Module> (std::string ("selftest.reclaim.") + fn_name, ctx);
@@ -2040,7 +2040,7 @@ static TestResult
 test_reclamation_deregisters_eh_frame (MonoLLVMJIT *jit)
 {
 	static int owner_tag;
-	void *owner = &owner_tag;
+	MonoDomain *owner = (MonoDomain *) &owner_tag;
 
 	mono::EhFrameRegistryStats before = mono::eh_frame_registry_stats ();
 
