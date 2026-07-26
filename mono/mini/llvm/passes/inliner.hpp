@@ -69,19 +69,9 @@ public:
 
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
 
-	/*
-	 * This pass carries the per-function simplification pipeline that the stock
-	 * inlining stage it replaced used to carry, so skipping it would quietly
-	 * turn -O2 into something much weaker.
-	 */
 	static bool isRequired () { return true; }
 
 private:
-	void expose_callees (llvm::Module &m, llvm::Function &root, MonoCompile *root_cfg,
-	                     llvm::DenseSet<MonoMethod *> &refused,
-	                     llvm::SmallVectorImpl<llvm::Function *> &added);
-	void run_stock_inliner (llvm::Module &m, llvm::ModuleAnalysisManager &mam,
-	                        bool module_mutated);
 
 	llvm::PassBuilder *pb_;
 	llvm::OptimizationLevel level_;

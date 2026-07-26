@@ -86,15 +86,6 @@ llvm::Function *materialize_callee (MonoMethod *target, MonoCompile *root_cfg,
 bool callee_reads_cctor_guarded_static (MonoMethod *target);
 
 /*
- * Whether calling TARGET reports something about the CALLER's own stack frame -
- * MethodBase.GetCurrentMethod, GetCallingAssembly, StackTrace/StackFrame
- * construction and friends. A callee that makes such a call must keep its frame,
- * so the inliner refuses it (gate #25). Conservative: true means "do not inline
- * the method that calls this".
- */
-bool method_reports_caller_frame (MonoMethod *target);
-
-/*
  * Whether a call to TARGET is still the thing that runs its own class's cctor -
  * i.e. that class has a cctor which has not run yet in ROOT_CFG's domain.
  * Inlining such a callee deletes the call and with it the class-init trigger,

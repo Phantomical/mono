@@ -19,11 +19,148 @@
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/class-abi-details.h>
 #include <mono/metadata/gc-internals.h>
+#include <mono/metadata/metadata-internals.h>
 #include <mono/metadata/monitor.h>
+#include <mono/metadata/mono-basic-block.h>
+#include <mono/metadata/mono-endian.h>
 #include <mono/utils/mono-memory-model.h>
 
 static GENERATE_GET_CLASS_WITH_CACHE (runtime_helpers, "System.Runtime.CompilerServices", "RuntimeHelpers")
 static GENERATE_TRY_GET_CLASS_WITH_CACHE (math, "System", "Math")
+
+/*
+ * mini_method_reports_caller_frame:
+ *
+ *   True if calling CMETHOD reports something about the CALLER's own stack frame
+ * - the frame-walking reflection entry points. A method containing such a call
+ * has to keep its frame: inline it away and the frame those APIs report becomes
+ * its caller's, so GetCurrentMethod () names the wrong method and StackTrace's
+ * frame 0 is the wrong frame.
+ *
+ * A method that calls one of these gets cfg->no_inline, which the LLVM backends
+ * turn into an LLVM `noinline` attribute. mono's own inliner never had to state
+ * the rule - its 20-IL-byte ceiling keeps methods this shape out of reach by
+ * accident - but the LLVM tier hands size decisions to LLVM's cost model, which
+ * has no such limit.
+ *
+ * Deliberately conservative about StackTrace/StackFrame: the ctors taking an
+ * Exception report that exception's frames rather than the caller's and would be
+ * safe to inline, but telling the overloads apart is not worth it for what is
+ * cold, throw-path code either way.
+ */
+gboolean
+mini_method_reports_caller_frame (MonoMethod *cmethod)
+{
+	MonoClass *klass;
+	const char *name_space, *name;
+
+	if (!cmethod)
+		return FALSE;
+
+	klass = cmethod->klass;
+	if (m_class_get_image (klass) != mono_defaults.corlib)
+		return FALSE;
+
+	name_space = m_class_get_name_space (klass);
+	name = m_class_get_name (klass);
+
+	if (!strcmp (name_space, "System.Diagnostics"))
+		return (!strcmp (name, "StackTrace") || !strcmp (name, "StackFrame")) &&
+			!strcmp (cmethod->name, ".ctor");
+
+	if (!strcmp (name_space, "System.Reflection")) {
+		if (!strcmp (name, "MethodBase"))
+			return !strcmp (cmethod->name, "GetCurrentMethod");
+		if (!strcmp (name, "Assembly"))
+			return !strcmp (cmethod->name, "GetCallingAssembly") ||
+				!strcmp (cmethod->name, "GetExecutingAssembly");
+	}
+
+	if (!strcmp (name_space, "System") && !strcmp (name, "Environment"))
+		return !strcmp (cmethod->name, "get_StackTrace");
+
+	return FALSE;
+}
+
+/*
+ * mini_method_body_reports_caller_frame:
+ *
+ *   The same question as mini_method_reports_caller_frame (), asked about
+ * METHOD's body: does it CALL one of those entry points, so that inlining METHOD
+ * would hand them the wrong frame?
+ *
+ * The front-end answers this incidentally, by setting cfg->no_inline as it walks
+ * the IL. This answers it from the IL alone, for a caller that has to decide
+ * whether METHOD is worth compiling in the first place. Conservative: TRUE if the
+ * body cannot be inspected or a call token will not resolve.
+ */
+gboolean
+mini_method_body_reports_caller_frame (MonoMethod *method)
+{
+	MonoMethodHeader *header;
+	MonoImage *image;
+	const unsigned char *ip, *end;
+	gboolean observes = FALSE;
+	ERROR_DECL (error);
+
+	if (!method)
+		return TRUE;
+
+	header = mono_method_get_header_internal (method, error);
+	if (!header || !is_ok (error)) {
+		mono_error_cleanup (error);
+		return TRUE;             /* cannot inspect the body -> be conservative */
+	}
+
+	image = m_class_get_image (method->klass);
+	ip = header->code;
+	end = ip + header->code_size;
+
+	while (ip < end) {
+		MonoOpcodeEnum il_op = MonoOpcodeEnum_Invalid;
+		const unsigned char *tmp = ip;
+		const int op_size = mono_opcode_value_and_size (&tmp, end, &il_op);
+		const unsigned char *next_ip;
+
+		if (op_size <= 0)
+			break;               /* malformed IL -> stop scanning */
+		next_ip = ip + op_size;
+
+		switch (il_op) {
+		case MONO_CEE_CALL:
+		case MONO_CEE_CALLVIRT:
+		case MONO_CEE_NEWOBJ: {
+			/* InlineMethod: a 4-byte token sits just before the next instruction. */
+			guint32 token = read32 (next_ip - 4);
+			MonoMethod *target;
+			ERROR_DECL (merror);
+
+			/*
+			 * A NULL generic context is enough: the inliner only asks about
+			 * callees it has already established need no context of their own.
+			 */
+			target = mono_get_method_checked (image, token, NULL, NULL, merror);
+			if (!target || !is_ok (merror)) {
+				mono_error_cleanup (merror);
+				observes = TRUE; /* unresolved call target -> conservative */
+				break;
+			}
+			if (mini_method_reports_caller_frame (target))
+				observes = TRUE;
+			break;
+		}
+		default:
+			break;
+		}
+
+		if (observes)
+			break;
+		ip = next_ip;
+	}
+
+	mono_metadata_free_mh (header);
+	return observes;
+}
 
 /* optimize the simple GetGenericValueImpl/SetGenericValueImpl generic calls */
 static MonoInst*
@@ -75,6 +212,9 @@ mono_type_is_native_blittable (MonoType *t)
 MonoInst*
 mini_emit_inst_for_ctor (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSignature *fsig, MonoInst **args)
 {
+	/* `new StackTrace ()` and friends - see mini_method_reports_caller_frame (). */
+	cfg->no_inline |= COMPILE_LLVM (cfg) && mini_method_reports_caller_frame (cmethod);
+
 	const char* cmethod_klass_name_space = m_class_get_name_space (cmethod->klass);
 	const char* cmethod_klass_name = m_class_get_name (cmethod->klass);
 	MonoImage *cmethod_klass_image = m_class_get_image (cmethod->klass);
@@ -660,6 +800,9 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 {
 	MonoInst *ins = NULL;
 	MonoClass *runtime_helpers_class = mono_class_get_runtime_helpers_class ();
+
+	/* GetCurrentMethod () and friends - see mini_method_reports_caller_frame (). */
+	cfg->no_inline |= COMPILE_LLVM (cfg) && mini_method_reports_caller_frame (cmethod);
 
 	const char* cmethod_klass_name_space;
 	if (m_class_get_nested_in (cmethod->klass))
@@ -1630,11 +1773,12 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 			return ins;
 		}
 
-		// While it is not required per
-		//  https://msdn.microsoft.com/en-us/library/system.reflection.assembly.getcallingassembly(v=vs.110).aspx.
-		// have GetCallingAssembly be consistent independently of varying optimization.
-		// This fixes mono/tests/test-inline-call-stack.cs under FullAOT+LLVM.
-		cfg->no_inline |= COMPILE_LLVM (cfg) && strcmp (cmethod->name, "GetCallingAssembly") == 0;
+		// GetCallingAssembly has to be consistent independently of varying
+		// optimization (it fixes mono/tests/test-inline-call-stack.cs under
+		// FullAOT+LLVM), even though
+		//  https://msdn.microsoft.com/en-us/library/system.reflection.assembly.getcallingassembly(v=vs.110).aspx
+		// does not require it. mini_method_reports_caller_frame () covers it at
+		// the top of this function, along with the rest of the family.
 
 	} else if (in_corlib &&
 			   (strcmp (cmethod_klass_name_space, "System.Reflection") == 0) &&

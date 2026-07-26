@@ -2366,6 +2366,10 @@ void              mini_emit_memory_copy (MonoCompile *cfg, MonoInst *dest, MonoI
 MonoInst*         mini_emit_array_store (MonoCompile *cfg, MonoClass *klass, MonoInst **sp, gboolean safety_checks);
 MonoInst*         mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSignature *fsig, MonoInst **args);
 MonoInst*         mini_emit_inst_for_ctor (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSignature *fsig, MonoInst **args);
+/* True if calling CMETHOD reports something about its CALLER's stack frame. */
+gboolean          mini_method_reports_caller_frame (MonoMethod *cmethod);
+/* True if METHOD's body calls such a method, so METHOD must keep its frame. */
+gboolean          mini_method_body_reports_caller_frame (MonoMethod *method);
 #ifndef ENABLE_NETCORE
 MonoInst*         mini_emit_inst_for_sharable_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSignature *fsig, MonoInst **args);
 #endif
