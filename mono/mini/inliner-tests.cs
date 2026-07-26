@@ -59,9 +59,25 @@ using MonoTests.Inliner;
 // exception clauses, is NoInlining/Synchronized, or already makes non-leaf
 // calls - no padding is needed, since classic mini declines it outright too.
 //
+namespace MonoTests.Tiering {
+	static class Probe {
+		// MONO_TIERED_CALL_THRESHOLD, or 0 when deferred promotion is off.
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		public static extern uint Threshold ();
+	}
+}
+
 public class InlinerTests {
 	public static int Main (string[] args) {
 		return TestDriver.RunTests (typeof (InlinerTests), args);
+	}
+
+	// How many times to enter a helper so that it is promoted well before the
+	// loop ends. Sized from the configured threshold rather than fixed at some
+	// number that clears the largest one: --regression replays every test in
+	// here once per opt set, and these loops are most of what that costs.
+	static int Iters () {
+		return (int) MonoTests.Tiering.Probe.Threshold () * 2 + 100;
 	}
 
 	// ==========================================================================
@@ -103,7 +119,8 @@ public class InlinerTests {
 	public static int test_0_leaf_inline_correct () {
 		leaf_square_plus_calls = 0;
 		long sum = 0;
-		const int ITERS = 20000, CYCLE = 50;
+		const int CYCLE = 50;
+		int ITERS = (Iters () + CYCLE - 1) / CYCLE * CYCLE;
 		for (int i = 0; i < ITERS; i++)
 			sum += HotLeafCaller (i % CYCLE);
 		long perCycle = 0;
@@ -156,7 +173,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_chained_leaf_inline () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ChainedHotCaller (i % 100);
 		long expected = 0;
@@ -191,7 +208,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_leaf_computed_value_branch () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += BranchHotCaller (i % 100);
 		long expected = 0;
@@ -238,7 +255,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_leaf_valuetype_inlines () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += GenericPickHotInt (i % 100);
 		long expected = 0;
@@ -259,7 +276,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_leaf_reftype_refused () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += GenericPickHotString (i % 100);
 		long expected = 0;
@@ -310,7 +327,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_constructs_generic_type () {
 		long sumInt = 0, sumStr = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++) {
 			sumInt += MixHotInt (i);
 			sumStr += MixHotString (i % 1000);
@@ -344,7 +361,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_gshared_root_declines_inlining () {
 		string last = null;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			last = GsharedCallsGshared<string> ("g" + (i % 7));
 		string expected = "g" + ((ITERS - 1) % 7);
@@ -375,7 +392,7 @@ public class InlinerTests {
 	}
 
 	public static int test_0_nested_generics_container () {
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++) {
 			if (NestedGenericsHotInt (i) != 2)
 				return 1;
@@ -417,7 +434,7 @@ public class InlinerTests {
 
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_container_helper () {
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		long sum = 0;
 		for (int i = 0; i < ITERS; i++)
 			sum += GenericContainerHelper (i, i + 1);
@@ -458,7 +475,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_field_read_refused () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ReadSeedHotCaller (i);
 		long expected = 0;
@@ -490,7 +507,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_property_getter_refused () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ReadCctorPropHotCaller (i);
 		long expected = 0;
@@ -521,7 +538,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_readonly_field_refused () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ReadReadonlyHotCaller (i);
 		long expected = 0;
@@ -546,7 +563,7 @@ public class InlinerTests {
 	}
 
 	public static int test_0_cctor_dictionary_roundtrip () {
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++) {
 			string key = "key" + i;
 			if (DictRoundtrip (key, i * 7) != i * 7)
@@ -602,7 +619,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_class_init_trigger () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ComputeHotCaller (i);
 		long expected = 0;
@@ -646,7 +663,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_beforefieldinit_static_refused () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ReadLazyHotCaller (i);
 		long expected = 0;
@@ -687,7 +704,7 @@ public class InlinerTests {
 	}
 
 	public static int test_0_cctor_failure_caught_by_caller () {
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			if (ThrowingCctorHotCaller (i) != -1)
 				return 1;
@@ -720,7 +737,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_try_catch_leaf_refused () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++) {
 			int x = (i % 3 == 0) ? -(i % 50) : (i % 50);
 			sum += TryCatchHotCaller (x);
@@ -807,7 +824,7 @@ public class InlinerTests {
 
 	public static int test_0_try_fault_leaf_refused () {
 		FaultHelpers.FaultRunCount = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		int caught = 0;
 		for (int i = 0; i < ITERS; i++) {
 			int x = (i % 4 == 0) ? -1 : (i % 50);
@@ -852,7 +869,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_try_filter_when_refused () {
 		long sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += FilterHotCaller (i % 50);
 		long expected = 0;
@@ -931,7 +948,7 @@ public class InlinerTests {
 	public static int test_0_nested_handlers () {
 		int errors = 0;
 		int[] xs = { 0, -1, 5 };
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++) {
 			int x = xs [i % xs.Length];
 			int r = NestedHandlersHotCaller (x);
@@ -962,7 +979,7 @@ public class InlinerTests {
 
 	public static int test_0_reflect_get_current_method () {
 		int sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ReflectCurrentMethodHotCaller ();
 		return sum == ITERS ? 0 : 1;
@@ -980,7 +997,7 @@ public class InlinerTests {
 
 	public static int test_0_reflect_calling_assembly () {
 		int sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ReflectCallingAssemblyHotCaller ();
 		return sum == ITERS ? 0 : 1;
@@ -1000,7 +1017,7 @@ public class InlinerTests {
 
 	public static int test_0_reflect_stack_trace_frame () {
 		int sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ReflectStackTraceHotCaller ();
 		return sum == ITERS ? 0 : 1;
@@ -1071,7 +1088,7 @@ public class InlinerTests {
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_threadstatic_isolation () {
 		const int NUM_THREADS = 4;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		bool[] ok = new bool[NUM_THREADS];
 		var threads = new Thread[NUM_THREADS];
 		for (int t = 0; t < NUM_THREADS; t++) {
@@ -1139,7 +1156,7 @@ public class InlinerTests {
 	}
 
 	public static int test_0_varargs_sum () {
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++) {
 			int a = i % 7, b = i % 11, c = i % 13;
 			if (VarArgsHotCaller (a, b, c) != a + b + c)
@@ -1168,7 +1185,7 @@ public class InlinerTests {
 
 	public static int test_0_exception_ctor_no_stack_captured_yet () {
 		int sum = 0;
-		const int ITERS = 5000;
+		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
 			sum += ExceptionCtorHotCaller (i);
 		return sum == ITERS ? 0 : 1;
