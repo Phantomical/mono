@@ -26,6 +26,12 @@
  * The loop is capped at kMaxInlinerRounds, but normally exits well before that
  * - as soon as a round folds nothing new into the root.
  *
+ * Steps 1 and 5 are plain code rather than passes, so they announce themselves
+ * to pass instrumentation by hand (report_stage () below) - otherwise a
+ * MONO_LLVM_DUMP_PASS_IR dump would show the stock inliner's passes with the
+ * materialized bodies appearing and vanishing between them for no visible
+ * reason.
+ *
  * Note that this pass occupies the stock inliner's slot in the -O2 pipeline
  * (build_tier1_pipeline () at the bottom), and that slot carries the whole
  * per-function simplification pipeline nested inside it. So the pass has to run
@@ -87,6 +93,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/ADT/Twine.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -174,6 +181,30 @@ passes_generic_context (const CallBase &cb)
 	return false;
 }
 
+/*
+ * Report a stage of this pass to LLVM's pass instrumentation as if it were a
+ * pass in its own right. The round loop's materialize and strip steps are plain
+ * code rather than passes, so nothing would otherwise report them - and they are
+ * precisely the steps that put callee bodies into the module and take the
+ * unconsumed ones back out, which is what someone reading a
+ * MONO_LLVM_DUMP_PASS_IR dump is usually after.
+ *
+ * runAfterPass () only ever asks the pass for its name, and it asks the object
+ * rather than the type, so a stand-in with a per-instance name is enough - and
+ * that name can carry the round number, which a real pass's static name ()
+ * could not.
+ */
+void
+report_stage (const PassInstrumentation &pi, Module &module, const Twine &stage)
+{
+	struct StageMarker {
+		std::string text;
+		StringRef name () const { return text; }
+	} marker { ("mono::MonoInlinerPass " + stage).str () };
+
+	pi.runAfterPass (marker, module, PreservedAnalyses::none ());
+}
+
 class MonoInlinerState {
 private:
 	llvm::Module *module;
@@ -216,11 +247,17 @@ public:
 	PreservedAnalyses run (llvm::ModuleAnalysisManager &mam, llvm::PassBuilder &pb,
 	                       llvm::OptimizationLevel level)
 	{
+		// PassInstrumentationAnalysis is a required analysis and never
+		// invalidated, so one fetch covers every round.
+		const PassInstrumentation pi = mam.getResult<PassInstrumentationAnalysis> (*module);
+
 		for (unsigned round = 0; round < MaxInlinerRounds; ++round) {
 			// Nothing new was added, so there's nothing else to do.
 			// We always need to run at least one round, though, because the
 			if (!import_candidates () && round != 0)
 				break;
+
+			report_stage (pi, *module, "round " + Twine (round) + ": after materialize");
 
 			// Invalidate all module-level analyses, preserve function-level ones
 			PreservedAnalyses pa;
@@ -237,12 +274,15 @@ public:
 			pa = mpm.run (*module, mam);
 			round_state->recording = false;
 
+			report_stage (pi, *module, "round " + Twine (round) + ": after inlining");
+
 			// inliner did nothing, so nothing for us to do
 			if (round_state->inlined_into.empty ())
 				break;
 		}
 
 		strip_materialized_bodies ();
+		report_stage (pi, *module, "after strip");
 		return PreservedAnalyses::none ();
 	}
 
