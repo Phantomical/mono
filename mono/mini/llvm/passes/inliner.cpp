@@ -238,6 +238,9 @@ public:
 			if (!config)
 				continue;
 
+			// Make sure we can tell which method is under consideration here.
+			trace ("root", func.getName ());
+
 			roots.push_back (&func);
 		}
 	}
@@ -415,11 +418,9 @@ private:
 		if (depth > limit)
 			return nullptr;
 
-		// Refused mono-side: a wrapper, a synchronized method, one that still
-		// needs a generic context, or a front-end that declined LLVM.
 		auto body = materialize_callee (method, config, module);
 		if (!body) {
-			trace ("refuse-materialize", candidate->getName ());
+			trace ("method is not supported by the tier1 jit", candidate->getName ());
 			return nullptr;
 		}
 
