@@ -50,7 +50,7 @@ namespace llvm {
 class Function;
 class PassBuilder;
 class PassInstrumentationCallbacks;
-}
+} // namespace llvm
 
 namespace mono {
 
@@ -95,10 +95,9 @@ private:
  * with - the pass observes the stock inliner's per-function analysis
  * invalidations through it to tell whether a round changed a root.
  */
-llvm::ModulePassManager
-build_tier1_pipeline (llvm::PassBuilder &pb,
-                      llvm::PassInstrumentationCallbacks &pic,
-                      llvm::OptimizationLevel level);
+llvm::ModulePassManager build_tier1_pipeline (llvm::PassBuilder &pb,
+                                              llvm::PassInstrumentationCallbacks &pic,
+                                              llvm::OptimizationLevel level);
 
 } // namespace mono
 

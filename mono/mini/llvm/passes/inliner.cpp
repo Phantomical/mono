@@ -308,7 +308,7 @@ index_materialized (Module &m)
 	for (Function &f : m) {
 		Attribute a = f.getFnAttribute (kMaterializedAttr);
 		if (a.isValid ())
-			by_symbol [a.getValueAsString ()] = &f;
+			by_symbol[a.getValueAsString ()] = &f;
 	}
 	return by_symbol;
 }
@@ -336,8 +336,7 @@ strip_materialized_bodies (Module &m)
 		if (!f.use_empty ()) {
 			trace ("revert", f.getName ());
 			FunctionCallee tramp =
-				m.getOrInsertFunction (a.getValueAsString (),
-				                       f.getFunctionType ());
+				m.getOrInsertFunction (a.getValueAsString (), f.getFunctionType ());
 			f.replaceAllUsesWith (tramp.getCallee ());
 		}
 		f.eraseFromParent ();
@@ -380,9 +379,8 @@ localize_foreign_declarations (Module &m)
 	}
 
 	for (Function *f : foreign) {
-		FunctionCallee local =
-			m.getOrInsertFunction (f->getName (), f->getFunctionType (),
-			                       f->getAttributes ());
+		FunctionCallee local = m.getOrInsertFunction (f->getName (), f->getFunctionType (),
+		                                              f->getAttributes ());
 		auto *local_fn = cast<Function> (local.getCallee ());
 		f->replaceUsesWithIf (local_fn, [&] (Use &u) {
 			User *user = u.getUser ();
@@ -448,7 +446,8 @@ MonoInlinerPass::expose_callees (Module &m, Function &root, MonoCompile *root_cf
 				if (found != by_symbol.end ()) {
 					body = found->second;
 				} else {
-					if (!callee_gates_pass (target, root_cfg, decl->getName ())) {
+					if (!callee_gates_pass (target, root_cfg,
+					                        decl->getName ())) {
 						refused.insert (target);
 						continue;
 					}
@@ -467,7 +466,7 @@ MonoInlinerPass::expose_callees (Module &m, Function &root, MonoCompile *root_cf
 					}
 
 					body->addFnAttr (kMaterializedAttr, decl->getName ());
-					by_symbol [decl->getName ()] = body;
+					by_symbol[decl->getName ()] = body;
 					added.push_back (body);
 					trace ("materialize", body->getName ());
 				}
@@ -500,8 +499,7 @@ MonoInlinerPass::expose_callees (Module &m, Function &root, MonoCompile *root_cf
  * nested pipeline as it runs, so the object is single-use.
  */
 void
-MonoInlinerPass::run_stock_inliner (Module &m, ModuleAnalysisManager &mam,
-                                    bool module_mutated)
+MonoInlinerPass::run_stock_inliner (Module &m, ModuleAnalysisManager &mam, bool module_mutated)
 {
 	/*
 	 * Materializing a body adds a function to the module behind the analysis
@@ -527,8 +525,7 @@ MonoInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		mam.getResult<FunctionAnalysisManagerModuleProxy> (m).getManager ();
 
 	FunctionPassManager fpm =
-		pb_->buildFunctionSimplificationPipeline (level_,
-		                                          ThinOrFullLTOPhase::None);
+		pb_->buildFunctionSimplificationPipeline (level_, ThinOrFullLTOPhase::None);
 
 	/* Annotated roots (v1: exactly one - the method being promoted). */
 	SmallVector<Function *, 1> roots;
@@ -641,11 +638,10 @@ register_round_callbacks (PassInstrumentationCallbacks &pic,
 		if (state->recording && id == "InlinerPass")
 			state->in_inliner = true;
 	});
-	pic.registerAfterPassCallback (
-		[state] (StringRef id, Any, const PreservedAnalyses &) {
-			if (id == "InlinerPass")
-				state->in_inliner = false;
-		});
+	pic.registerAfterPassCallback ([state] (StringRef id, Any, const PreservedAnalyses &) {
+		if (id == "InlinerPass")
+			state->in_inliner = false;
+	});
 	pic.registerAfterPassInvalidatedCallback (
 		[state] (StringRef id, const PreservedAnalyses &) {
 			if (id == "InlinerPass")
@@ -667,8 +663,7 @@ register_round_callbacks (PassInstrumentationCallbacks &pic,
  */
 class PipelineSplicer : public ModulePassManager {
 public:
-	explicit PipelineSplicer (ModulePassManager &&built)
-	    : ModulePassManager (std::move (built))
+	explicit PipelineSplicer (ModulePassManager &&built) : ModulePassManager (std::move (built))
 	{
 	}
 
@@ -677,13 +672,13 @@ public:
 	 * (changing nothing) unless exactly one entry matches - see the caller for
 	 * why that is treated as a hard error rather than a fallback.
 	 */
-	template <typename PassT>
+	template<typename PassT>
 	bool replace_sole (StringRef name, PassT &&pass)
 	{
 		size_t at = 0;
 		unsigned found = 0;
 		for (size_t i = 0, n = Passes.size (); i < n; ++i) {
-			if (Passes [i]->name () == name) {
+			if (Passes[i]->name () == name) {
 				at = i;
 				++found;
 			}
@@ -693,12 +688,12 @@ public:
 
 		/* addPass () appends, wrapping in the right pass model; move it home. */
 		addPass (std::forward<PassT> (pass));
-		Passes [at] = std::move (Passes.back ());
+		Passes[at] = std::move (Passes.back ());
 		Passes.pop_back ();
 		return true;
 	}
 
-	template <typename PassT>
+	template<typename PassT>
 	void prepend (PassT &&pass)
 	{
 		addPass (std::forward<PassT> (pass));
@@ -720,16 +715,14 @@ const char kStockInlinerPass[] = "ModuleInlinerWrapperPass";
 } // namespace
 
 ModulePassManager
-build_tier1_pipeline (PassBuilder &pb, PassInstrumentationCallbacks &pic,
-                      OptimizationLevel level)
+build_tier1_pipeline (PassBuilder &pb, PassInstrumentationCallbacks &pic, OptimizationLevel level)
 {
 	auto state = std::make_shared<RoundState> ();
 	register_round_callbacks (pic, state);
 
 	PipelineSplicer pipeline (pb.buildPerModuleDefaultPipeline (level));
 
-	if (!pipeline.replace_sole (kStockInlinerPass,
-	                            MonoInlinerPass (pb, level, state))) {
+	if (!pipeline.replace_sole (kStockInlinerPass, MonoInlinerPass (pb, level, state))) {
 		/*
 		 * The stage we replace is not where we expect it: an LLVM upgrade
 		 * renamed it, or -enable-module-inliner swapped in the other one. Say
@@ -738,8 +731,8 @@ build_tier1_pipeline (PassBuilder &pb, PassInstrumentationCallbacks &pic,
 		 * everything still appears to work.
 		 */
 		errs () << "mono: no unique " << kStockInlinerPass
-		        << " in the -O2 pipeline; running the tier-1 inliner at the "
-		           "pipeline start instead\n";
+			<< " in the -O2 pipeline; running the tier-1 inliner at the "
+			   "pipeline start instead\n";
 		assert (false && "tier-1 inliner could not take the stock inliner's slot");
 		pipeline.prepend (MonoInlinerPass (pb, level, state));
 	}
