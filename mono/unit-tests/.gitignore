@@ -20,3 +20,4 @@
 /test-llvm-reloc-widths
 /test-llvm-ehframe
 /test-llvm-ehtable
+/test-llvm-class-init

@@ -129,6 +129,10 @@ libtestlib_la_SOURCES += test-llvm-ehframe.c
 # mono/mini/llvm/mono_lsda.hpp and drives the .mono_lsda parser/builder through
 # its C++ interface.
 libtestlib_la_SOURCES += test-llvm-ehtable.cpp
+# test-llvm-class-init.cpp is C++ for the same reason: it includes
+# mono/mini/llvm/passes/elide-class-init.hpp and builds LLVM IR by hand to drive
+# the class-init redundancy analysis.
+libtestlib_la_SOURCES += test-llvm-class-init.cpp
 libtestlib_la_CXXFLAGS = $(LLVM_CXXFLAGS)
 endif
 libtestlib_la_LIBADD = ../metadata/libmonoruntimesgen.la ../sgen/libmonosgen.la ../utils/libmonoutils.la
@@ -216,6 +220,11 @@ test_llvm_ehtable_SOURCES = main.c
 test_llvm_ehtable_CFLAGS = $(test_cflags) -DMAIN=test_llvm_ehtable_main
 test_llvm_ehtable_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-ehtable.lo
 test_llvm_ehtable_LDFLAGS = $(test_ldflags)
+
+test_llvm_class_init_SOURCES = main.c
+test_llvm_class_init_CFLAGS = $(test_cflags) -DMAIN=test_llvm_class_init_main
+test_llvm_class_init_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-class-init.lo
+test_llvm_class_init_LDFLAGS = $(test_ldflags)
 endif
 
 
@@ -228,8 +237,8 @@ TESTS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-conc-hashta
 	test-mono-callspec test-mono-string test-mono-embed test-embed-invoke
 
 if ENABLE_LLVM
-check_PROGRAMS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable
-TESTS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable
+check_PROGRAMS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable test-llvm-class-init
+TESTS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable test-llvm-class-init
 endif
 
 AM_TESTS_ENVIRONMENT = export MONO_PATH=$(mcs_topdir)/class/lib/build;
