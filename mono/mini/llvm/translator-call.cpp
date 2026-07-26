@@ -36,6 +36,21 @@ const_vector (const LLVMValueRef *vals, unsigned count)
 }
 
 /*
+ * Tag INS as one half of a class-init barrier for KLASS: "mono.class-init" on
+ * the call to the cctor trigger, "mono.class-init-check" on the branch that
+ * tests vtable->initialized. The two together let a pass find the barriers in a
+ * body, and say which class each one is for, without matching on their shape.
+ */
+static void
+tag_class_init (LLVMValueRef ins, const char *tag, MonoClass *klass)
+{
+	char *name = mono_class_full_name (klass);
+
+	mono_llvm_add_string_metadata (ins, tag, name);
+	g_free (name);
+}
+
+/*
  * mono_llvm_method_symbol:
  *
  *   Return a stable, linker-safe symbol name for METHOD, for naming a direct
@@ -688,7 +703,8 @@ EmitContext::emit_class_init_guards (llvm::IRBuilder<> *builder)
 
 	LLVMBasicBlockRef init_bb = this->gen_bb ("CLASS_INIT_BB");
 	LLVMBasicBlockRef cont_bb = this->gen_bb ("CLASS_INIT_CONT_BB");
-	mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, cont_bb, init_bb, 1000, 1);
+	LLVMValueRef br = mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, cont_bb, init_bb, 1000, 1);
+	tag_class_init (br, "mono.class-init-check", vtable->klass);
 
 	/*
 	 * The cold arm. Not an invoke: the prologue sits outside every EH clause, so a
@@ -708,8 +724,9 @@ EmitContext::emit_class_init_guards (llvm::IRBuilder<> *builder)
 	 * different type, which would make the call below malformed.
 	 */
 	g_assert (LLVMGlobalGetValueType (callee) == icall_sig);
-	builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (icall_sig)),
-	                     llvm::unwrap (callee), { vtable_val });
+	llvm::CallInst *init_call = builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (icall_sig)),
+	                                                llvm::unwrap (callee), { vtable_val });
+	tag_class_init (llvm::wrap (init_call), "mono.class-init", vtable->klass);
 	builder->CreateBr (llvm::unwrap (cont_bb));
 
 	/*
@@ -873,6 +890,16 @@ EmitContext::process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, 
 	memset (args, 0, len);
 	l = call->out_ireg_args;
 
+	/*
+	 * Grab the trigger's vtable argument while the arg list is still untouched -
+	 * the loop below consumes L, and the conversion it does buries the constant
+	 * under an inttoptr. call->args would be the obvious place to read it from,
+	 * but it points at the emitter's stack frame and is long gone by now.
+	 */
+	llvm::Value *class_init_vtable = nullptr;
+	if (call->jit_icall_id == MONO_JIT_ICALL_mono_generic_class_init && l)
+		class_init_vtable = values [static_cast<guint32>(reinterpret_cast<gssize>(l->data)) & 0xffffff];
+
 	if (call->rgctx_arg_reg) {
 		g_assert (values [call->rgctx_arg_reg]);
 		g_assert (cinfo->rgctx_arg_pindex < nargs);
@@ -1030,6 +1057,28 @@ EmitContext::process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, 
 	// Add original method name we are currently emitting as a custom string metadata (the only way to leave comments in LLVM IR)
 	if (mono_debug_enabled () && call && call->method)
 		mono_llvm_add_string_metadata (lcall, "managed_name", mono_method_full_name (call->method, TRUE));
+
+	/*
+	 * Tag the front-end's in-body class-init barrier. The vtable is a baked
+	 * constant except in shared generic code, which loads it out of the rgctx -
+	 * and then there is no single class to name, so the barrier goes untagged.
+	 */
+	if (auto *baked = llvm::dyn_cast_or_null<llvm::ConstantInt> (class_init_vtable)) {
+		MonoClass *init_klass = ((MonoVTable *) (gsize) baked->getZExtValue ())->klass;
+
+		tag_class_init (lcall, "mono.class-init", init_klass);
+
+		/*
+		 * emit_class_init () gives the trigger call a block of its own, entered
+		 * only from the block that tested vtable->initialized, so the check is
+		 * that block's terminator.
+		 */
+		llvm::BasicBlock *check_bb = llvm::unwrap<llvm::Instruction> (lcall)->getParent ()->getUniquePredecessor ();
+		auto *check_br = check_bb ? llvm::dyn_cast<llvm::BranchInst> (check_bb->getTerminator ()) : nullptr;
+
+		if (check_br && check_br->isConditional ())
+			tag_class_init (llvm::wrap (check_br), "mono.class-init-check", init_klass);
+	}
 
 	// As per the LLVM docs, a function has a noalias return value if and only if
 	// it is an allocation function. This is an allocation function.
