@@ -83,12 +83,6 @@ private:
 	void run_stock_inliner (llvm::Module &m, llvm::ModuleAnalysisManager &mam,
 	                        bool module_mutated);
 
-	/*
-	 * Held by pointer, not reference: a reference member would delete the
-	 * class's implicit copy/move-assignment and has non-obvious
-	 * lifetime/rebinding behaviour. The PassBuilder outlives the pass (it owns
-	 * the pipeline the pass is spliced into).
-	 */
 	llvm::PassBuilder *pb_;
 	llvm::OptimizationLevel level_;
 	std::shared_ptr<RoundState> state_;
