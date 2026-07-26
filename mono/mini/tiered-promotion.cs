@@ -127,6 +127,15 @@ public class TieredPromotion {
 		return mi.MethodHandle.Value;
 	}
 
+	// How many times to enter a helper to drive it past the configured
+	// threshold. The margin either side of the crossing is what makes a
+	// mid-promotion body observable, so this is deliberately more than the
+	// bare threshold - but scaled to it, because the exception-heavy loops
+	// below cost real time and --regression reruns them once per opt set.
+	static int DriveCount () {
+		return (int) MonoTests.Tiering.Probe.Threshold () * 2 + 100;
+	}
+
 	// Promotion happens on the background compile worker, so a crossing does
 	// not mean "already promoted" - only "enqueued and the worker was just
 	// woken". Poll rather than check once; a compile is normally done in low
@@ -253,7 +262,7 @@ public class TieredPromotion {
 		// also what pushes PassThrough's counter across the threshold, so the
 		// throw and the crossing race each other.
 		int caught = 0;
-		for (int i = 0; i < 5000; i++) {
+		for (int i = 0, n = DriveCount (); i < n; i++) {
 			try {
 				int x = (i % 7 == 0) ? -1 : (i % 1000);
 				int r = PassThrough (x);
@@ -735,7 +744,7 @@ public class TieredPromotion {
 		// Drive every shape well past any threshold, checking each call: the
 		// tier-0 answers, the mid-promotion ones and the tier-1 ones all have to
 		// agree, so a body that only goes wrong once promoted still fails here.
-		for (int i = 0; i < 3000; i++) {
+		for (int i = 0, n = DriveCount (); i < n; i++) {
 			if (CleanupChain3 () != 10111)
 				return 1;
 			if (CleanupChain4 () != 101111)
@@ -782,7 +791,7 @@ public class TieredPromotion {
 
 		// n throwing iterations contribute 10111 each and n non-throwing ones
 		// 113 each (1 + 2 in the try, then both cleanups).
-		for (int i = 0; i < 2000; i++) {
+		for (int i = 0, n = DriveCount (); i < n; i++) {
 			if (CleanupChainInLoop (1) != 10111)
 				return 1;
 			if (CleanupChainInLoop (2) != 10111 + 113)
@@ -799,31 +808,47 @@ public class TieredPromotion {
 		return 0;
 	}
 
+	// The InvalidOperationException this drives has no handler anywhere on the
+	// stack - only the ArgumentException that the outer cleanup throws in its
+	// place does. So the runtime's first pass finds nothing, reports it as
+	// unhandled, and only then runs the second pass, where the cleanup replaces
+	// it with the exception that is actually caught. That report is expected
+	// here, but it prints a freshly built managed backtrace per iteration,
+	// which costs far more than the exception itself. Swallow it for the
+	// duration of the test - narrowly, so a genuinely unhandled exception
+	// anywhere else in the suite still gets reported.
 	public static int test_0_exception_from_within_cleanup_chain () {
 		IntPtr h = HandleOf ("CleanupThrowsFromCleanup");
 		uint threshold = MonoTests.Tiering.Probe.Threshold ();
 		int caught = 0;
+		int n = DriveCount ();
 
-		for (int i = 0; i < 3000; i++) {
+		UnhandledExceptionEventHandler expected = (sender, e) => { };
+		AppDomain.CurrentDomain.UnhandledException += expected;
+		try {
+			for (int i = 0; i < n; i++) {
+				try {
+					CleanupThrowsFromCleanup ();
+					return 1;		// it always throws
+				} catch (ArgumentException) {
+					caught++;
+				}
+			}
+			if (caught != n)
+				return 2;
+
+			if (threshold != 0 && !WaitForRedirectArmed (h))
+				return 3;
+
 			try {
 				CleanupThrowsFromCleanup ();
-				return 1;			// it always throws
+				return 4;
 			} catch (ArgumentException) {
-				caught++;
 			}
+			return 0;
+		} finally {
+			AppDomain.CurrentDomain.UnhandledException -= expected;
 		}
-		if (caught != 3000)
-			return 2;
-
-		if (threshold != 0 && !WaitForRedirectArmed (h))
-			return 3;
-
-		try {
-			CleanupThrowsFromCleanup ();
-			return 4;
-		} catch (ArgumentException) {
-		}
-		return 0;
 	}
 
 	// -- Clauses whose protected region holds no call ------------------------
@@ -941,8 +966,9 @@ public class TieredPromotion {
 		uint threshold = MonoTests.Tiering.Probe.Threshold ();
 		IntPtr h = HandleOf ("CallFreeFinally");
 		int[] log = new int [1];
+		int n = DriveCount ();
 
-		for (int i = 0; i < 3000; i++) {
+		for (int i = 0; i < n; i++) {
 			if (CallFreeFinally () != 106)
 				return 1;
 			if (CallFreeFinallyLoop (5) != 5008)
@@ -964,7 +990,7 @@ public class TieredPromotion {
 		}
 
 		// Each cleanup ran exactly once per call, neither skipped nor doubled.
-		if (log [0] != 2 * 3000)
+		if (log [0] != 2 * n)
 			return 10;
 
 		if (threshold != 0 && !WaitForRedirectArmed (h))
@@ -985,7 +1011,7 @@ public class TieredPromotion {
 			if (StructEnumeratorForeach (5) != 10)
 				return 17;
 		}
-		if (log [0] != 2 * 3000 + 200)
+		if (log [0] != 2 * n + 200)
 			return 18;
 		return 0;
 	}
