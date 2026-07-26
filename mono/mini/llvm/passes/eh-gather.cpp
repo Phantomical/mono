@@ -62,7 +62,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 		if (mf.getFunction ().hasFnAttribute ("mono-has-eh-clauses")) {
 			MonoEHFunctionClauses fn;
 			fn.function = mf.getName ().str ();
-			sc_.functions.push_back (std::move (fn));
+			sc_->functions.push_back (std::move (fn));
 		}
 		return false;
 	}
@@ -235,7 +235,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 		}
 	}
 
-	sc_.functions.push_back (std::move (fn));
+	sc_->functions.push_back (std::move (fn));
 	return false;
 }
 

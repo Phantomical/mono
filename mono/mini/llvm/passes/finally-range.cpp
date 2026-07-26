@@ -240,7 +240,7 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 		record_ranges (mf, clause, in_body, fn);
 	}
 
-	sc_.finally_functions.push_back (std::move (fn));
+	sc_->finally_functions.push_back (std::move (fn));
 
 	/* Only labels were added, and a label emits no code. */
 	return true;

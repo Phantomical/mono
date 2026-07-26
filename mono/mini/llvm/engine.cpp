@@ -1340,7 +1340,7 @@ private:
 		 * to SimpleCompiler's - asserted by compiler-equivalence in
 		 * test-llvm-engine.cpp.
 		 */
-		pm.add (new MonoEHGatherPass (eh_side_channel));
+		pm.add (new MonoEHGatherPass (&eh_side_channel));
 
 		/*
 		 * Record the PC ranges each finally handler body occupies, for the
@@ -1348,7 +1348,7 @@ private:
 		 * move or duplicate code, so it goes here with the gather rather than
 		 * inside addMachinePasses ().
 		 */
-		pm.add (new MonoFinallyRangePass (eh_side_channel));
+		pm.add (new MonoFinallyRangePass (&eh_side_channel));
 
 		tpc->setInitialized ();
 
