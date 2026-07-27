@@ -4417,6 +4417,7 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_IL_SEQ_POINT:
+		case OP_SEQ_POINT:
 			break;
 		default: {
 			char reason [128];
