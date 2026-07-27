@@ -125,6 +125,7 @@
 #include "passes/eh-gather.hpp"
 #include "passes/elide-class-init.hpp"
 #include "passes/finally-range.hpp"
+#include "passes/inline-advisor.hpp"
 #include "passes/inliner.hpp"
 #include "passes/null-check-guard.hpp"
 #include "passes/pass-dump.hpp"
@@ -2253,7 +2254,19 @@ MonoLLVMJIT::optimize (const Tier1Root &root)
 	PassInstrumentationCallbacks pic;
 	register_pass_ir_dumper (pic);
 
-	PassBuilder pb (tm.get (), PipelineTuningOptions (), std::nullopt, &pic);
+	/*
+	 * MONO_LLVM_INLINE_THRESHOLD overrides the stock inliner's cost ceiling,
+	 * which buildInlinerPipeline () otherwise derives from the -O level (225 at
+	 * -O2). Diagnostic for now: the default is too low for the IR the translator
+	 * produces - a managed method pays ~35 per null/bounds check for the throw
+	 * call the check branches to, so a handful of checks exhausts the budget
+	 * before any of the method's real work is costed at all.
+	 */
+	PipelineTuningOptions pto;
+	if (const char *env = std::getenv ("MONO_LLVM_INLINE_THRESHOLD"))
+		pto.InlinerThreshold = atoi (env);
+
+	PassBuilder pb (tm.get (), pto, std::nullopt, &pic);
 	LoopAnalysisManager lam;
 	FunctionAnalysisManager fam;
 	CGSCCAnalysisManager cgam;
@@ -2263,6 +2276,14 @@ MonoLLVMJIT::optimize (const Tier1Root &root)
 	pb.registerFunctionAnalyses (fam);
 	pb.registerLoopAnalyses (lam);
 	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	/*
+	 * Credits back what the stock cost model charges for a callee's runtime
+	 * check failure blocks, which it prices as ordinary calls. Has to be
+	 * registered before the inliner runs, since that is when the advisor is
+	 * built. See passes/inline-advisor.hpp.
+	 */
+	register_mono_inline_advisor (mam);
 
 	/*
 	 * Drops the class-init barriers a body ends up with more than one of, which

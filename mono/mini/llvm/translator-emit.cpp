@@ -1152,12 +1152,22 @@ EmitContext::emit_cond_system_exception (MonoBasicBlock *bb, const char *exc_typ
 	 * The LLVM mono branch contains changes so a block address can be passed as an
 	 * argument to a call.
 	 */
+	LLVMValueRef throw_call;
 	if (no_pc) {
-		emit_call (bb, &builder, sig, callee, args, 1);
+		throw_call = emit_call (bb, &builder, sig, callee, args, 1);
 	} else {
 		args [1] = LLVMBlockAddress (this->lmethod, ex_bb);
-		emit_call (bb, &builder, sig, callee, args, 2);
+		throw_call = emit_call (bb, &builder, sig, callee, args, 2);
 	}
+
+	/*
+	 * Mark the call as belonging to a runtime check rather than to anything the
+	 * method's IL asked for, so the inline advisor can tell that the block it
+	 * sits in is cold and never runs. Without it the cost model prices this as
+	 * an ordinary call and a method's null and bounds checks alone can exhaust
+	 * the inlining budget - see passes/inline-advisor.hpp.
+	 */
+	mono_llvm_add_string_metadata (throw_call, "mono.runtime-check", exc_type);
 
 	llvm::wrap (builder->CreateUnreachable ());
 

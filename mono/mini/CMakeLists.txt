@@ -123,6 +123,7 @@ if(MONO_ENABLE_LLVM)
     llvm/passes/eh-gather.cpp
     llvm/passes/elide-class-init.cpp
     llvm/passes/finally-range.cpp
+    llvm/passes/inline-advisor.cpp
     llvm/passes/inliner.cpp
     llvm/passes/null-check-guard.cpp
     llvm/passes/pass-dump.cpp
