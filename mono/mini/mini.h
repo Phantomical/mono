@@ -1590,6 +1590,15 @@ typedef struct {
 	guint32 llvm_ex_info_len;
 	int llvm_this_reg, llvm_this_offset;
 
+	/*
+	 * The tier-1 native_offset -> il_offset map recovered from the `.llvm_stackmaps`
+	 * section (llvm/translator.cpp:recover_il_seq_points), copied verbatim onto
+	 * jit_info->llvm_seq_points by create_jit_info (). NULL/0 if translation produced
+	 * none (e.g. cfg->seq_points was never allocated for this method).
+	 */
+	MonoLLVMSeqPoint *llvm_seq_points;
+	guint32 n_llvm_seq_points;
+
 	GSList *try_block_holes;
 
 	/* DWARF location list for 'this' */

@@ -2005,6 +2005,76 @@ recover_finally_exvars (MonoCompile *cfg, guint8 *stackmaps, guint32 size,
 	}
 }
 
+/*
+ * recover_il_seq_points:
+ *
+ *   Recover CFG's tier-1 native_offset -> il_offset map from the
+ * `.llvm_stackmaps` section: one record per OP_IL_SEQ_POINT the translator saw
+ * (emit_il_seq_point_stackmap, translator-call.cpp), tagged with
+ * MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE | il_offset. Fills in
+ * cfg->llvm_seq_points/n_llvm_seq_points, which create_jit_info () (mini.c) then
+ * copies onto the method's MonoJitInfo.
+ *
+ * This is diagnostics-quality data (stack traces, profiler attribution), not
+ * something whose absence makes execution wrong, so unlike the gshared this-slot
+ * and finally-guard recoveries above, a missing or unparseable section just
+ * leaves the map empty (cfg->llvm_seq_points stays NULL) rather than declining
+ * the method to the classic JIT.
+ *
+ * Two things the classic backend's mono_add_seq_point () never has to handle,
+ * because it runs during its own linear codegen pass instead of reading a
+ * section back after the fact:
+ *
+ *  - Records are not necessarily in native-offset order (LLVM is free to
+ *    reorder blocks after the translator emitted the markers), but
+ *    mono_seq_point_find_prev/next_by_native_offset()-style lookups need
+ *    ascending order - so this sorts before publishing.
+ *  - LLVM may duplicate the block a marker sits in (tail duplication, loop
+ *    unrolling, ...), yielding more than one record for the same il_offset.
+ *    That is not a conflict to resolve: each copy has its own native range, so
+ *    every record is independently correct and all are kept.
+ */
+static void
+recover_il_seq_points (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
+{
+	std::vector<StackmapRecord> records;
+	std::vector<const StackmapRecord*> il_records;
+
+	cfg->llvm_seq_points = NULL;
+	cfg->n_llvm_seq_points = 0;
+
+	if (!parse_stackmap_records (stackmaps, size, records))
+		return;
+
+	for (const StackmapRecord &r : records) {
+		if ((r.id >> 32) == (MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE >> 32))
+			il_records.push_back (&r);
+	}
+	if (il_records.empty ())
+		return;
+
+	std::sort (il_records.begin (), il_records.end (),
+	           [](const StackmapRecord *a, const StackmapRecord *b) {
+	               return a->instr_off < b->instr_off;
+	           });
+
+	/*
+	 * Allocated out of cfg->mem_manager, the same pool the MonoJitInfo itself
+	 * comes from (create_jit_info (), mini.c), so it is reclaimed alongside it
+	 * with no separate free needed.
+	 */
+	MonoLLVMSeqPoint *map = (MonoLLVMSeqPoint *) mono_mem_manager_alloc (
+		cfg->mem_manager, il_records.size () * sizeof (MonoLLVMSeqPoint));
+
+	for (size_t i = 0; i < il_records.size (); ++i) {
+		map [i].native_offset = il_records [i]->instr_off;
+		map [i].il_offset = (guint32) (il_records [i]->id & MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_MASK);
+	}
+
+	cfg->llvm_seq_points = map;
+	cfg->n_llvm_seq_points = (guint32) il_records.size ();
+}
+
 void
 EmitContext::llvm_jit_finalize_method ()
 {
@@ -2241,6 +2311,8 @@ EmitContext::llvm_jit_finalize_method ()
 			return;
 		}
 	}
+
+	recover_il_seq_points (cfg, static_cast<guint8*>(stackmaps), stackmaps_size);
 
 	mono_domain_lock (domain);
 	domain_info = domain_jit_info (domain);

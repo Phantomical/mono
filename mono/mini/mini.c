@@ -2531,9 +2531,20 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 		 * mappings are keyed by MonoMethod, so under tiering a promoted method
 		 * still has the tier-0 body's mapping registered, and reading it with a
 		 * tier-1 native offset yields a plausible but fabricated IL offset.
-		 * Drop this flag if the backend ever grows a real mapping.
+		 *
+		 * cfg->llvm_seq_points (llvm/translator.cpp:recover_il_seq_points) is a
+		 * separate, per-body mapping that does not have this problem - it hangs
+		 * directly off this jinfo rather than being looked up by MonoMethod - so
+		 * when translation actually recovered one, publish it here and let
+		 * mini-exceptions.c report real IL offsets for this body instead of
+		 * "unknown".
 		 */
 		jinfo->no_il_offsets = TRUE;
+		if (cfg->n_llvm_seq_points > 0) {
+			jinfo->llvm_seq_points = cfg->llvm_seq_points;
+			jinfo->n_llvm_seq_points = cfg->n_llvm_seq_points;
+			jinfo->no_il_offsets = FALSE;
+		}
 	}
 
 	if (cfg->gshared) {

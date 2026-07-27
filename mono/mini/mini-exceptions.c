@@ -1046,6 +1046,39 @@ mono_exception_walk_trace_internal (MonoException *ex, MonoExceptionFrameWalk fu
 	return captured_has_traces || otherwise_has_traces;
 }
 
+/*
+ * Binary search JI's own tier-1 native_offset -> il_offset map (recovered by
+ * mono/mini/llvm's translator from OP_IL_SEQ_POINT markers - see
+ * MonoJitInfo::llvm_seq_points) for the entry at or immediately before
+ * NATIVE_OFFSET, i.e. the same "most recent point execution passed" semantics
+ * mono_find_prev_seq_point_for_native_offset () has for a classic body.
+ *
+ * Unlike that function this never consults anything keyed by MonoMethod, so it
+ * is safe to call for a tier-1 frame regardless of whether a tier-0 body for
+ * the same method is (or ever was) also registered.
+ *
+ * Returns -1 if the map is empty (translation recovered nothing) or
+ * NATIVE_OFFSET precedes every entry.
+ */
+static int
+mono_jit_info_llvm_il_offset (MonoJitInfo *ji, guint32 native_offset)
+{
+	guint32 lo = 0, hi = ji->n_llvm_seq_points;
+
+	while (lo < hi) {
+		guint32 mid = lo + (hi - lo) / 2;
+		if (ji->llvm_seq_points [mid].native_offset <= native_offset)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+
+	if (lo == 0)
+		return -1;
+
+	return (int) ji->llvm_seq_points [lo - 1].il_offset;
+}
+
 MonoArray *
 ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info)
 {
@@ -1141,10 +1174,17 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 		 * they would return an offset read off a different code layout. Report the frame
 		 * as having no IL offset instead - the caller then prints it in the
 		 * '<code_start + native_offset>' form, which is at least true.
+		 *
+		 * A tier-1 frame (ji->from_llvm) is never described by either of those
+		 * mappings, no matter what no_il_offsets says - it has its own per-body
+		 * map instead (MonoJitInfo::llvm_seq_points), which mono_jit_info_llvm_il_offset ()
+		 * reads directly rather than through method-keyed lookups.
 		 */
-		location = ji->no_il_offsets ? NULL : mono_debug_lookup_source_location (jinfo_get_method (ji), sf->native_offset, domain);
+		location = (ji->no_il_offsets || ji->from_llvm) ? NULL : mono_debug_lookup_source_location (jinfo_get_method (ji), sf->native_offset, domain);
 		if (location) {
 			sf->il_offset = location->il_offset;
+		} else if (ji->from_llvm) {
+			sf->il_offset = ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, sf->native_offset);
 		} else {
 			SeqPoint sp;
 			if (!ji->no_il_offsets && mono_find_prev_seq_point_for_native_offset (domain, jinfo_get_method (ji), sf->native_offset, NULL, &sp))
@@ -1361,25 +1401,36 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 		if ((unwind_options & MONO_UNWIND_LOOKUP_IL_OFFSET) && frame.ji && !frame.ji->no_il_offsets) {
 			MonoDebugSourceLocation *source = NULL;
 
-			// Don't do this when we can be in a signal handler
-			if (!crash_context)
-				source = mono_debug_lookup_source_location (jinfo_get_method (frame.ji), frame.native_offset, domain);
-			if (source) {
-				il_offset = source->il_offset;
+			if (frame.ji->from_llvm) {
+				/*
+				 * Neither mapping below is safe for a tier-1 frame - both are
+				 * keyed by MonoMethod and would describe a different body's
+				 * code layout (see the no_il_offsets comment in
+				 * create_jit_info ()). Its own per-body map has no file/line,
+				 * only an IL offset.
+				 */
+				il_offset = mono_jit_info_llvm_il_offset (frame.ji, frame.native_offset);
 			} else {
-				MonoSeqPointInfo *seq_points = NULL;
+				// Don't do this when we can be in a signal handler
+				if (!crash_context)
+					source = mono_debug_lookup_source_location (jinfo_get_method (frame.ji), frame.native_offset, domain);
+				if (source) {
+					il_offset = source->il_offset;
+				} else {
+					MonoSeqPointInfo *seq_points = NULL;
 
-				// It's more reliable to look into the global cache if possible
-				if (crash_context)
-					seq_points = (MonoSeqPointInfo *) frame.ji->seq_points;
-				else
-					seq_points = mono_get_seq_points (domain, jinfo_get_method (frame.ji));
+					// It's more reliable to look into the global cache if possible
+					if (crash_context)
+						seq_points = (MonoSeqPointInfo *) frame.ji->seq_points;
+					else
+						seq_points = mono_get_seq_points (domain, jinfo_get_method (frame.ji));
 
-				SeqPoint sp;
-				if (seq_points && mono_seq_point_find_prev_by_native_offset (seq_points, frame.native_offset, &sp))
-					il_offset = sp.il_offset;
-				else
-					il_offset = -1;
+					SeqPoint sp;
+					if (seq_points && mono_seq_point_find_prev_by_native_offset (seq_points, frame.native_offset, &sp))
+						il_offset = sp.il_offset;
+					else
+						il_offset = -1;
+				}
 			}
 			mono_debug_free_source_location (source);
 		} else
@@ -1945,9 +1996,11 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 
 	if (il_offset != -1) {
 		location = mono_debug_lookup_source_location_by_il (jmethod, il_offset, domain);
-	} else if (ji && ji->no_il_offsets) {
+	} else if (ji && (ji->no_il_offsets || ji->from_llvm)) {
 		/* The line table is registered per method and describes a different body
-		 * than this frame's - see ves_icall_get_trace (). */
+		 * than this frame's - see ves_icall_get_trace (). A tier-1 frame has its
+		 * own IL-offset map (MonoJitInfo::llvm_seq_points), but no equivalent for
+		 * file/line, which is all this particular lookup is after. */
 		location = NULL;
 	} else {
 		location = mono_debug_lookup_source_location (jmethod, *native_offset, domain);

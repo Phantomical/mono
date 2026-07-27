@@ -84,7 +84,20 @@ typedef enum {
 	 * AMD64_R10, so tagging the rgctx/imt argument 'nest' under the default C
 	 * calling convention passes it in the register mono expects.
 	 */
-	LLVM_ATTR_NEST
+	LLVM_ATTR_NEST,
+	/*
+	 * Call-site only (pass index = ~0 to mono_llvm_add_instr_attr, never use
+	 * mono_llvm_add_func_attr): blocks tail merging/CSE of this call with any
+	 * other call the optimizer finds identical. explicit `throw` sites
+	 * (emit_throw, translator-call.cpp) carry this so two `throw new
+	 * SomeException (...)` statements that only differ in, say, a format
+	 * string argument don't get folded into one shared call - that would
+	 * leave both statements' native code pointing at the same PC, and
+	 * recover_il_seq_points ()'s nearest-preceding-marker lookup can then
+	 * only recover the IL offset of whichever throw happened to end up
+	 * adjacent in the final layout, silently misattributing the other one.
+	 */
+	LLVM_ATTR_NO_MERGE
 } AttrKind;
 
 void

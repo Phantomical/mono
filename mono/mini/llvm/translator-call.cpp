@@ -300,6 +300,27 @@ EmitContext::emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_i
 }
 
 /*
+ * Mark the point OP_IL_SEQ_POINT sat at, so translator.cpp's recover_il_seq_points ()
+ * can read back a native_offset -> il_offset mapping for this method after codegen (used
+ * for stack traces and profiler attribution; the debugger's real seq points, OP_SEQ_POINT,
+ * are a separate opcode this backend does not translate).
+ *
+ * Unlike the other markers this one needs a location operand: parse_stackmap_records ()
+ * skips zero-location records, since the this-slot/finally-guard readers only ever want the
+ * PC of a marker that also names a frame slot. This marker has no slot of its own to name,
+ * so it carries a throwaway constant purely to give its record one - the value is never
+ * read back, only the record's ID and PC are.
+ */
+void
+EmitContext::emit_il_seq_point_stackmap (llvm::IRBuilder<> *builder, guint32 il_offset)
+{
+	guint64 id = MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE | (guint64) il_offset;
+	LLVMValueRef marker = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), 0));
+
+	emit_slot_stackmap (this, builder, marker, id);
+}
+
+/*
  * emit_entry_bb:
  *
  *   Emit code to load/convert arguments.
@@ -1230,7 +1251,16 @@ EmitContext::emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc)
 	}
 	LLVMValueRef arg;
 	arg = llvm::wrap (this->convert (llvm::unwrap (exc), llvm::unwrap (this->type_to_llvm_type (m_class_get_byval_arg (mono_get_object_class ())))));
-	emit_call (bb, &this->builder, sig, callee, &arg, 1);
+	LLVMValueRef lcall = emit_call (bb, &this->builder, sig, callee, &arg, 1);
+
+	/*
+	 * Without this, two `throw new X (...)` statements whose only difference
+	 * is a constant argument (a message string, an exception type) look
+	 * identical to the optimizer once that argument is hoisted into each
+	 * predecessor, and it tail-merges them into one shared call - see
+	 * LLVM_ATTR_NO_MERGE's doc comment (translator-cpp.hpp).
+	 */
+	mono_llvm_add_instr_attr (lcall, LLVMAttributeFunctionIndex, LLVM_ATTR_NO_MERGE);
 }
 
 LLVMValueRef

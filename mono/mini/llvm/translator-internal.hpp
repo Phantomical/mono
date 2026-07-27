@@ -302,6 +302,7 @@ typedef struct {
 	void emit_this_slot_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot);
 	void emit_finally_guard_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot, int clause_index);
 	void emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_index);
+	void emit_il_seq_point_stackmap (llvm::IRBuilder<> *builder, guint32 il_offset);
 	void emit_entry_bb (llvm::IRBuilder<> *builder);
 	void emit_class_init_guards (llvm::IRBuilder<> *builder);
 	void emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
@@ -561,6 +562,8 @@ using mono::MONO_LLVM_THIS_SLOT_STACKMAP_ID;
 using mono::MONO_LLVM_FINALLY_STACKMAP_ID_BASE;
 using mono::MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE;
 using mono::MONO_LLVM_FINALLY_STACKMAP_ID_MASK;
+using mono::MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE;
+using mono::MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_MASK;
 
 /* Defined in translator-call.cpp. */
 LLVMValueRef

@@ -487,6 +487,8 @@ convert_attr (AttrKind kind)
 	case LLVM_ATTR_NEST:
 		/* 'nest' pins the rgctx/imt argument to R10 on SysV. */
 		return Attribute::Nest;
+	case LLVM_ATTR_NO_MERGE:
+		return Attribute::NoMerge;
 	default:
 		assert (0);
 		return Attribute::NoUnwind;

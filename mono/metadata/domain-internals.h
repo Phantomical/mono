@@ -235,6 +235,23 @@ typedef enum {
 
 G_ENUM_FUNCTIONS (MonoJitInfoFlags)
 
+/*
+ * One entry of a tier-1 body's native_offset -> il_offset map (mono/mini/llvm's
+ * translator.cpp:recover_il_seq_points, from OP_IL_SEQ_POINT markers). Sorted
+ * ascending by native_offset; see MonoJitInfo::llvm_seq_points below.
+ *
+ * Deliberately its own tiny format rather than the SeqPoint/MonoSeqPointInfo
+ * machinery in seq-points.c: that table is keyed per MonoMethod, not per body,
+ * so a tier-1 promotion racing a still-live tier-0 registration for the same
+ * method can never win it a correct entry - see mono_save_seq_point_info()'s
+ * "second publication" comment. This one hangs directly off the MonoJitInfo it
+ * describes, so there is nothing to collide with.
+ */
+typedef struct {
+	guint32 native_offset;
+	guint32 il_offset;
+} MonoLLVMSeqPoint;
+
 struct _MonoJitInfo {
 	/* NOTE: These first two elements (method and
 	   next_jit_code_hash) must be in the same order and at the
@@ -289,6 +306,16 @@ struct _MonoJitInfo {
 	 * such a body is "no IL offset" - see mini-exceptions.c.
 	 */
 	gboolean    no_il_offsets : 1;
+
+	/*
+	 * This body's own native_offset -> il_offset map, present (n_llvm_seq_points > 0)
+	 * only for a tier-1 body whose translation actually recovered one - see
+	 * MonoLLVMSeqPoint above. Allocated out of the same mem_manager as this MonoJitInfo,
+	 * so it needs no separate freeing. no_il_offsets is FALSE whenever this is set;
+	 * mini-exceptions.c consults it instead of the method-keyed seq-points.c tables.
+	 */
+	MonoLLVMSeqPoint *llvm_seq_points;
+	guint32     n_llvm_seq_points;
 
 	/* FIXME: Embed this after the structure later*/
 	gpointer    gc_info; /* Currently only used by SGen */
