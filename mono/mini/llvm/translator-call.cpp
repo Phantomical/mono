@@ -281,7 +281,7 @@ EmitContext::emit_this_slot_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef s
 void
 EmitContext::emit_finally_guard_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot, int clause_index)
 {
-	guint64 id = MONO_LLVM_FINALLY_STACKMAP_ID_BASE | (guint64) (guint32) clause_index;
+	guint64 id = MONO_LLVM_FINALLY_STACKMAP_ID_BASE | (guint64) (guint32) this->clause_id (clause_index);
 
 	emit_slot_stackmap (this, builder, slot, id);
 }
@@ -294,7 +294,7 @@ EmitContext::emit_finally_guard_stackmap (llvm::IRBuilder<> *builder, LLVMValueR
 void
 EmitContext::emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_index)
 {
-	guint64 id = MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE | (guint64) (guint32) clause_index;
+	guint64 id = MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE | (guint64) (guint32) this->clause_id (clause_index);
 
 	emit_slot_stackmap (this, builder, nullptr, id);
 }
@@ -1436,8 +1436,8 @@ EmitContext::emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder
 		landing_pad = llvm::wrap (pad_builder->CreateLandingPad (llvm::unwrap (ret_type), 1, ""));
 	}
 
-	sprintf (ti_name, "resume_type_info_%d", clause_index);
-	ti_init [0] = llvm::wrap (llvm::ConstantInt::get (i32_ty, clause_index, false));
+	sprintf (ti_name, "resume_type_info_%d", this->clause_id (clause_index));
+	ti_init [0] = llvm::wrap (llvm::ConstantInt::get (i32_ty, this->clause_id (clause_index), false));
 	ti_init [1] = llvm::wrap (llvm::ConstantInt::get (i32_ty, mono::MONO_LSDA_KIND_RESUME_PAD, false));
 	type_info = LLVMAddGlobal (this->lmodule, ti_type, ti_name);
 	LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
@@ -1478,10 +1478,106 @@ EmitContext::emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder
 
 		switch_ins = pad_builder->CreateSwitch (ex_selector, llvm::unwrap (dispatch_target (enclosers [0])), enclosers.size () - 1);
 		for (std::size_t k = 1; k < enclosers.size (); ++k)
-			switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (i32_ty, enclosers [k], false)), llvm::unwrap (dispatch_target (enclosers [k])));
+			switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (i32_ty, this->clause_id (enclosers [k]), false)), llvm::unwrap (dispatch_target (enclosers [k])));
 	}
 
 	*builder_ref = this->builder = builder;
+}
+
+/*
+ * clause_type_info_global:
+ *
+ *   The global that names IL clause CLAUSE_INDEX where a landing pad has to refer
+ * to it, created on first use. Its 2-word {i32 clause_index, i32 kind} initializer
+ * smuggles both the join key and the clause's flags past the ttype table, which
+ * MonoEHGatherPass (eh-gather.cpp) reads back in-process, before any relocation.
+ *
+ * One global per clause rather than one per mention: a clause covers every pad
+ * nested inside it, so the same clause is named from several pads, and sharing the
+ * global is what makes those mentions recognisably the same clause.
+ */
+LLVMValueRef
+EmitContext::clause_type_info_global (int clause_index)
+{
+	auto known = this->clause_type_info.find (clause_index);
+
+	if (known != this->clause_type_info.end ())
+		return known->second;
+
+	/*
+	 * Only has to be unique within a module, but it is cheaper to keep one
+	 * counter for the process than to thread one through - and it has to be
+	 * atomic, because several compiles run at once.
+	 */
+	static std::atomic<int> ti_generator;
+	llvm::Type *i32_ty = llvm::Type::getInt32Ty (this->llvm_ctx ());
+	LLVMTypeRef ti_members [2] = { llvm::wrap (i32_ty), llvm::wrap (i32_ty) };
+	LLVMTypeRef ti_type = struct_type (this->llvm_ctx (), ti_members, 2, FALSE);
+	LLVMValueRef ti_init [2];
+	LLVMValueRef type_info;
+	char ti_name [128];
+
+	sprintf (ti_name, "type_info_%d", ti_generator.fetch_add (1, std::memory_order_relaxed));
+
+	ti_init [0] = llvm::wrap (llvm::ConstantInt::get (i32_ty, this->clause_id (clause_index), false));
+	ti_init [1] = llvm::wrap (llvm::ConstantInt::get (i32_ty, this->cfg->header->clauses [clause_index].flags, false));
+
+	type_info = LLVMAddGlobal (this->lmodule, ti_type, ti_name);
+	LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
+
+	this->clause_type_info [clause_index] = type_info;
+	return type_info;
+}
+
+/*
+ * add_covering_clauses:
+ *
+ *   Name, on LANDING_PAD, every clause that covers it: CLAUSE_INDEX's own sibling
+ * group first, then each enclosing clause from innermost outwards.
+ *
+ * That operand list is the nesting chain the published table is built from. The
+ * gather pass reads it back and `.mono_lsda` keeps it in order, so build_ex_info ()
+ * gets the chain for a faulting PC without having to re-derive it from IL offsets -
+ * which is what lets a chain span methods, since an inlined body's IL offsets mean
+ * nothing in the caller. LLVM's own inliner extends the chain for us: folding a
+ * body into an invoke appends the call site's chain to every pad it brought along
+ * (InlineFunction.cpp), which is exactly the outer half of the nest.
+ *
+ * Ascending IL clause index is innermost-first (ECMA-335 12.4.2.5 puts a more
+ * deeply nested clause before its enclosers), which is the order the runtime's flat
+ * first-match walk needs to run an intervening finally before an enclosing catch.
+ */
+void
+EmitContext::add_covering_clauses (LLVMValueRef landing_pad, int clause_index)
+{
+	MonoCompile *cfg = this->cfg;
+	MonoExceptionClause *self = &cfg->header->clauses [clause_index];
+
+	for (int i = 0; i < cfg->header->num_clauses; ++i) {
+		MonoExceptionClause *c = &cfg->header->clauses [i];
+
+		/*
+		 * A finally/fault owns its pad alone - it takes no exception object and
+		 * has no siblings. A catch shares one pad with every catch over the
+		 * identical try region, in declaration order, so the runtime's isinst
+		 * walk tries the more-derived one first.
+		 */
+		if (self->flags == MONO_EXCEPTION_CLAUSE_NONE) {
+			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
+				continue;
+			if (c->try_offset != self->try_offset || c->try_len != self->try_len)
+				continue;
+		} else if (i != clause_index) {
+			continue;
+		}
+
+		LLVMAddClause (landing_pad, this->clause_type_info_global (i));
+	}
+
+	for (int i = 0; i < cfg->header->num_clauses; ++i) {
+		if (clause_encloses (self, &cfg->header->clauses [i]))
+			LLVMAddClause (landing_pad, this->clause_type_info_global (i));
+	}
 }
 
 void
@@ -1489,18 +1585,10 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 {
 	MonoCompile *cfg = this->cfg;
 	llvm::Value **values = this->values;
-	LLVMModuleRef lmodule = this->lmodule;
 	BBInfo *bblocks = this->bblocks;
 	LLVMTypeRef i8ptr;
 	LLVMBasicBlockRef target_bb;
 	MonoInst *exvar;
-	/*
-	 * Only has to be unique within a module, but it is cheaper to keep one
-	 * counter for the process than to thread one through - and it has to be
-	 * atomic, because several compiles run at once.
-	 */
-	static std::atomic<int> ti_generator;
-	char ti_name [128];
 	int clause_index;
 
 	// <resultval> = landingpad <somety> personality <type> <pers_fn> <clause>+
@@ -1541,29 +1629,13 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 		    this_clause->flags == MONO_EXCEPTION_CLAUSE_FAULT) {
 			/*
 			 * A finally/fault handler owns its landing pad alone - unlike a catch it
-			 * receives no exception object and has no siblings. Give the pad just its
-			 * OWN smuggled type_info clause - the same 2-word {i32 clause_index, i32
-			 * kind} global catch uses, with kind = this clause's flags (FINALLY == 2 /
-			 * FAULT == 4) - so the gather pass records one self-describing .mono_lsda
-			 * entry for it. Control then goes to call_handler_target_bb, which the
-			 * OP_START_HANDLER / OP_ENDFINALLY machinery drives on both the
-			 * exceptional-unwind and the leave normal-exit paths. No catch-style
-			 * exception-object store, and no sibling selector switch.
+			 * receives no exception object and has no siblings. Control goes to
+			 * call_handler_target_bb, which the OP_START_HANDLER / OP_ENDFINALLY
+			 * machinery drives on both the exceptional-unwind and the leave
+			 * normal-exit paths. No catch-style exception-object store, and no
+			 * sibling selector switch.
 			 */
-			LLVMTypeRef i32_ty = llvm::wrap (llvm::Type::getInt32Ty (this->llvm_ctx ()));
-			LLVMTypeRef ti_members [2] = { i32_ty, i32_ty };
-			LLVMTypeRef ti_type = struct_type (llvm_ctx (), ti_members, 2, FALSE);
-			LLVMValueRef ti_init [2];
-			LLVMValueRef type_info;
-
-			sprintf (ti_name, "type_info_%d", ti_generator.fetch_add (1, std::memory_order_relaxed));
-
-			ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), clause_index, false));
-			ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), this_clause->flags, false));
-
-			type_info = LLVMAddGlobal (lmodule, ti_type, ti_name);
-			LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
-			LLVMAddClause (landing_pad, type_info);
+			this->add_covering_clauses (landing_pad, clause_index);
 
 			/*
 			 * A pad that takes part in nesting grows a selector switch; a standalone
@@ -1640,43 +1712,16 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 						case_target = store_bb;
 					}
 
-					switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), i, false)), llvm::unwrap (case_target));
+					switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), this->clause_id (i), false)), llvm::unwrap (case_target));
 				}
 			}
 		} else {
 			/*
-			 * Carry one landingpad clause per catch that shares this try region, in
-			 * ascending IL clause_index order. Each is a type_info_N global whose
-			 * 2-word {i32 clause_index, i32 kind} initializer smuggles the IL
-			 * clause_index AND the clause's flags (kind); the gather pass reads both
-			 * (one .mono_lsda entry per catch over the shared invoke range, carrying a
-			 * self-describing kind column) and the runtime picks the handler by isinst
-			 * in that order, so declaration order (inner/more-derived catch first) is
-			 * preserved. A single catch adds just its own clause; sibling catches add
-			 * the whole group. Every clause admitted here is catch (flags == NONE == 0).
+			 * The runtime picks among sibling catches by isinst in operand order, so
+			 * declaration order (inner/more-derived catch first) has to survive into
+			 * the pad - which is what add_covering_clauses () emits.
 			 */
-			for (i = 0; i < cfg->header->num_clauses; ++i) {
-				MonoExceptionClause *c = &cfg->header->clauses [i];
-				LLVMValueRef type_info;
-				LLVMTypeRef i32_ty = llvm::wrap (llvm::Type::getInt32Ty (this->llvm_ctx ()));
-				LLVMTypeRef ti_members [2] = { i32_ty, i32_ty };
-				LLVMTypeRef ti_type = struct_type (llvm_ctx (), ti_members, 2, FALSE);
-				LLVMValueRef ti_init [2];
-
-				if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
-					continue;
-				if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
-					continue;
-
-				sprintf (ti_name, "type_info_%d", ti_generator.fetch_add (1, std::memory_order_relaxed));
-
-				ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), i, false));
-				ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), c->flags, false));
-
-				type_info = LLVMAddGlobal (lmodule, ti_type, ti_name);
-				LLVMSetInitializer (type_info, LLVMConstNamedStruct (ti_type, ti_init, 2));
-				LLVMAddClause (landing_pad, type_info);
-			}
+			this->add_covering_clauses (landing_pad, clause_index);
 
 			/* Store the exception into the exvar */
 			if (this->ex_var)
@@ -1704,7 +1749,7 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 				handler_bb = clause_it != this->clause_to_handler.end () ? clause_it->second : nullptr;
 				g_assert (handler_bb);
 				g_assert (this->bblocks [handler_bb->block_num].call_handler_target_bb);
-				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), i, false)), llvm::unwrap (this->bblocks [handler_bb->block_num].call_handler_target_bb));
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), this->clause_id (i), false)), llvm::unwrap (this->bblocks [handler_bb->block_num].call_handler_target_bb));
 			}
 
 			/*
@@ -1736,7 +1781,7 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 				handler_bb = clause_it != this->clause_to_handler.end () ? clause_it->second : nullptr;
 				g_assert (handler_bb);
 				g_assert (this->bblocks [handler_bb->block_num].call_handler_target_bb);
-				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), i, false)), llvm::unwrap (this->bblocks [handler_bb->block_num].call_handler_target_bb));
+				switch_ins->addCase (llvm::cast<llvm::ConstantInt> (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), this->clause_id (i), false)), llvm::unwrap (this->bblocks [handler_bb->block_num].call_handler_target_bb));
 			}
 		}
 	} else {

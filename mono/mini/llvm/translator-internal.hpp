@@ -154,6 +154,26 @@ struct MonoLLVMModule {
 	GHashTable *objc_selector_to_var;
 	GHashTable *got_idx_to_type;
 
+	/*
+	 * The clause table being assembled for this compile, indexed by the clause
+	 * ids the IR carries (EmitContext::clause_id) - NOT by any one method's IL
+	 * clause index. It starts as a copy of the root's own clause table and grows
+	 * as clause-bearing callees are materialized in, so it ends up describing
+	 * every clause in the finished function whichever method contributed it.
+	 *
+	 * It has to be a copy, not a pointer into a MonoMethodHeader:
+	 * materialize_callee () destroys the callee's MonoCompile - and with it that
+	 * header - as soon as the body is translated, long before anything is
+	 * published.
+	 *
+	 * Only `flags` and `data.catch_class` are read back out of the entries. The
+	 * IL offsets a MonoExceptionClause also carries describe positions in one
+	 * method's IL, which says nothing once clauses from several methods share a
+	 * table; nesting is carried by the landing pads instead
+	 * (add_covering_clauses).
+	 */
+	std::vector<MonoExceptionClause> clauses;
+
 	/* The context as a plain reference, for the llvm:: APIs that want one. */
 	llvm::LLVMContext &ctx () { return *context.getContext (); }
 };
@@ -215,6 +235,25 @@ typedef struct {
 	std::vector<std::unique_ptr<llvm::IRBuilder<>>> builders;
 	std::unordered_map<int, MonoBasicBlock*> region_to_handler;
 	std::unordered_map<int, MonoBasicBlock*> clause_to_handler;
+	/*
+	 * The type_info_N global that names one clause on a landing pad. Every pad
+	 * that a clause covers names it through the SAME global, so which clause a
+	 * landingpad operand stands for is decided by identity rather than by
+	 * content.
+	 */
+	std::unordered_map<int, LLVMValueRef> clause_type_info;
+	/*
+	 * What this body's own clause 0 is called in the root's numbering. Zero for a
+	 * root; for a materialized callee, the slot its clauses were appended at.
+	 *
+	 * Everything a clause's identity is baked into - the type_info globals, the
+	 * finally marker stackmap IDs, the landing pad selector cases - has to be
+	 * unique across the WHOLE function the inliner eventually builds, not just
+	 * within the body being translated. Two bodies both numbering from 0 would
+	 * collide the moment one is folded into the other. cfg->header->clauses[] and
+	 * clause_to_handler stay local: they are about the body being translated.
+	 */
+	int clause_id_base;
 	llvm::IRBuilder<> *alloca_builder;
 	llvm::Value *last_alloca;
 	llvm::Value *rgctx_arg;
@@ -350,6 +389,10 @@ typedef struct {
 	void emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
 	void emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder);
 	void emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref);
+	LLVMValueRef clause_type_info_global (int clause_index);
+	void add_covering_clauses (LLVMValueRef landing_pad, int clause_index);
+	/* This body's local clause index, as the root's numbering knows it. */
+	int clause_id (int clause_index) const { return this->clause_id_base + clause_index; }
 	bool is_supported_callconv (MonoCallInst *call);
 	void process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, MonoInst *ins);
 	LLVMValueRef call_intrins (int id, LLVMValueRef *args, const char *name);

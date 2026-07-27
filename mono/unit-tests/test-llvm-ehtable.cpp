@@ -701,38 +701,43 @@ cases_mono_lsda_build (void)
 	}
 
 	/*
-	 * SIBLING ORDER is authoritative on clause_index, NOT on section order. The
-	 * gather pass records one entry per landing-pad TypeId, and LLVM hands those
-	 * back in REVERSE of the emitted clause order, so a sibling group arrives with
-	 * DESCENDING clause_index. build_ex_info must reorder each shared range to
-	 * ASCENDING clause_index (declaration order) so the runtime's first-isinst-
-	 * match picks the earlier-declared catch - otherwise `catch(Derived)
-	 * catch(Base)` lets Base swallow a Derived throw. Feed the reversed order and
-	 * assert the published array is ascending within the range.
+	 * SECTION ORDER within one pad's run is authoritative - build_ex_info must NOT
+	 * re-sort it by clause_index. The order comes from the landing pad's own operand
+	 * list (add_covering_clauses, translator-call.cpp) with the gather undoing LLVM's
+	 * reversal, so it is already declaration-order for siblings and innermost-first
+	 * for enclosers.
+	 *
+	 * Re-sorting on clause_index would look harmless while every clause belongs to
+	 * the one method being compiled, since ECMA-335 12.4.2.5 makes ascending index
+	 * mean innermost-first there. It stops being true the moment a chain spans an
+	 * inlined body, whose clauses are numbered independently of the caller's - so a
+	 * clause_index sort key would silently reorder a cross-method nest. Feed a run
+	 * whose indices DESCEND and assert it publishes exactly as given.
 	 */
 	{
 		std::vector<MonoLsdaEntry> ents = {
-			{ 0x10, 0x20, 0x90, 1 }, /* catch B first in the section (clause 1) */
-			{ 0x10, 0x20, 0x60, 0 }, /* catch A second (clause 0) */
+			{ 0x10, 0x20, 0x60, 1 }, /* clause 1 first in the run... */
+			{ 0x10, 0x20, 0x60, 0 }, /* ...clause 0 second, one shared pad */
 		};
 		std::vector<MonoJitExceptionInfo> out;
-		current_case = "build-sibling-reversed-order";
+		current_case = "build-section-order-authoritative";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out);
 		bool good = ok && out.size () == 2 &&
 			out[0].try_start == (gpointer) (base + 0x10) &&
 			out[1].try_start == (gpointer) (base + 0x10) &&
-			out[0].clause_index == 0 && out[1].clause_index == 1 &&
-			out[0].data.catch_class == CC0 && out[1].data.catch_class == CC1 &&
+			out[0].clause_index == 1 && out[1].clause_index == 0 &&
+			out[0].data.catch_class == CC1 && out[1].data.catch_class == CC0 &&
 			out[0].handler_start == (gpointer) (base + 0x60) &&
-			out[1].handler_start == (gpointer) (base + 0x90);
+			out[1].handler_start == (gpointer) (base + 0x60);
 		if (!good) {
-			printf ("FAIL build-sibling-reversed-order: ok=%d size=%zu clauses %d/%d\n",
+			printf ("FAIL build-section-order-authoritative: ok=%d size=%zu clauses %d/%d "
+			        "(0/1 == a clause_index re-sort crept back in)\n",
 			        ok, out.size (), out.size () > 0 ? out[0].clause_index : -1,
 			        out.size () > 1 ? out[1].clause_index : -1);
 			failures ++;
 		} else {
-			printf ("ok   build-sibling-reversed-order (reordered to ascending clause_index)\n");
+			printf ("ok   build-section-order-authoritative (run published verbatim)\n");
 		}
 	}
 
@@ -808,25 +813,24 @@ cases_mono_lsda_build (void)
 	}
 }
 
-/* ------------------------------------------------------ nesting synthesis cases */
+/* ------------------------------------------------------ nesting chain cases */
 
 /*
- * EH N1 (doc 21 4): build_ex_info's nesting synthesis. For each base entry whose
- * innermost clause is `c`, one extra ei is APPENDED per enclosing clause `j`
- * (clause c strictly try-contained in clause j), copying the base's EXACT range
- * and handler_start and overriding only j's flags/catch_class/clause_index. These
- * cases feed a SYNTHETIC nested IL clause table (try_offset/try_len/handler_offset
- * set so the containment predicate fires) plus a base `.mono_lsda`-derived tuple,
- * and assert the synthesised ei array: count, per-entry range/handler/flags/
- * clause_index, base-before-synthesised slot order, and equal-or-disjoint still
- * holding. This is the offline exercise of a synthesis the live gate still
- * declines (N1 is runtime-inert), the same OFFLINE byte-driven style as above.
+ * EH N1 (doc 21 4): how build_ex_info turns a nesting chain into published
+ * entries. A landing pad names every clause that covers it - its own sibling
+ * group, then its enclosers innermost-first - and .mono_lsda carries that list in
+ * order, one run per invoke range. build_ex_info publishes the run as it stands,
+ * so nesting is encoded by same-range entries plus array order.
  *
- * The IL clause geometry mirrors doc 21 6.1 / 6.2: an inner clause with try
- * [0x10,0x20) / handler at 0x20, and an outer clause whose try [0x10,0x25) spans
- * {inner try + inner handler} with its own handler at 0x25. These are IL offsets
- * (only their ordering matters to clause_encloses); the NATIVE range/handler come
- * from the base entry independently.
+ * These cases feed such runs directly, and assert the published array: count,
+ * per-entry range/handler/flags/clause_index, innermost-first slot order within a
+ * range, and equal-or-disjoint still holding.
+ *
+ * The IL clause table each case passes is now read ONLY for flags and
+ * catch_class - the try offsets are set to a plausible nest for readability, but
+ * nothing derives containment from them any more. That is the point: an inlined
+ * body's IL offsets are meaningless in the caller, and the chain has to come from
+ * the pads instead.
  */
 static void
 cases_mono_lsda_nesting (void)
@@ -840,12 +844,9 @@ cases_mono_lsda_nesting (void)
 
 	/*
 	 * (1) C# try/catch/finally (doc 21 6.1): inner CATCH(E) nested in outer
-	 * FINALLY. IL clause0 = inner catch (try [0x10,0x20), handler 0x20); clause1 =
-	 * outer finally (try [0x10,0x25) covering the inner try+catch, handler 0x25).
-	 * The gather hands a single base entry over the inner catch (clause0). Expect
-	 * TWO ei: the base inner-catch (slot 0) AND the synthesised outer-finally (slot
-	 * 1) over the SAME native range with the SAME handler_start, carrying the
-	 * finally's flags/clause_index - base-before-synthesised.
+	 * FINALLY. IL clause0 = inner catch, clause1 = outer finally. The inner catch's
+	 * pad names both, so the gather hands back a two-entry run over one invoke
+	 * range. Expect TWO ei in that order, sharing range and handler_start.
 	 */
 	{
 		MonoExceptionClause cl [2];
@@ -856,20 +857,23 @@ cases_mono_lsda_nesting (void)
 		cl[1].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer finally */
 		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
 
-		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_NONE } };
+		std::vector<MonoLsdaEntry> ents = {
+			{ R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_NONE },
+			{ R_START, R_LEN, H_OFF, 1, MONO_EXCEPTION_CLAUSE_FINALLY },
+		};
 		std::vector<MonoJitExceptionInfo> out;
 		current_case = "nest-try-catch-finally";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
 		bool good = ok && out.size () == 2 &&
-			/* slot 0: the base inner catch */
+			/* slot 0: the innermost clause, the catch */
 			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE &&
 			out[0].clause_index == 0 &&
 			out[0].data.catch_class == CC0 &&
 			out[0].try_start == (gpointer) (base + R_START) &&
 			out[0].try_end == (gpointer) (base + R_START + R_LEN) &&
 			out[0].handler_start == (gpointer) MINI_ADDR_TO_FTNPTR (base + H_OFF) &&
-			/* slot 1: the SYNTHESISED outer finally, SAME range + SAME handler */
+			/* slot 1: the enclosing finally, SAME range + SAME handler */
 			out[1].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
 			out[1].clause_index == 1 &&
 			out[1].try_start == out[0].try_start &&
@@ -881,17 +885,14 @@ cases_mono_lsda_nesting (void)
 			printf ("FAIL nest-try-catch-finally: ok=%d size=%zu\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-try-catch-finally (base catch @0, synth finally @1, same range/handler)\n");
+			printf ("ok   nest-try-catch-finally (catch @0, finally @1, same range/handler)\n");
 		}
 	}
 
 	/*
 	 * (2) The mirror - try/finally inside try/catch (doc 21 6.2, the sharpest
-	 * case): inner FINALLY nested in outer CATCH(E). IL clause0 = inner finally
-	 * (try [0x10,0x20), handler 0x20); clause1 = outer catch (try [0x10,0x25),
-	 * handler 0x25). The base entry is over the inner finally (clause0). Expect the
-	 * base inner-finally (slot 0) AND the synthesised outer-catch (slot 1) - carrying
-	 * the catch's flags NONE + catch_class + clause_index - over the same range/handler.
+	 * case): inner FINALLY nested in outer CATCH(E). The enclosing entry has to
+	 * carry the catch's flags NONE + catch_class + clause_index.
 	 */
 	{
 		MonoExceptionClause cl [2];
@@ -902,7 +903,10 @@ cases_mono_lsda_nesting (void)
 		cl[1].data.catch_class = CC1;
 		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
 
-		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		std::vector<MonoLsdaEntry> ents = {
+			{ R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY },
+			{ R_START, R_LEN, H_OFF, 1, MONO_EXCEPTION_CLAUSE_NONE },
+		};
 		std::vector<MonoJitExceptionInfo> out;
 		current_case = "nest-try-finally-in-try-catch";
 		cases_run ++;
@@ -923,16 +927,13 @@ cases_mono_lsda_nesting (void)
 			printf ("FAIL nest-try-finally-in-try-catch: ok=%d size=%zu\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-try-finally-in-try-catch (base finally @0, synth catch @1)\n");
+			printf ("ok   nest-try-finally-in-try-catch (finally @0, catch @1)\n");
 		}
 	}
 
 	/*
-	 * (3) Synthesis is a NO-OP when the base names the OUTERMOST clause. Same
-	 * nested clause table as (1), but the base entry is over the outer finally
-	 * (clause1), which has no enclosing clause (nested_in[1] is empty). Output is
-	 * the single base entry, unchanged - proving no spurious synthesis and no
-	 * regression to the landed finally publish.
+	 * (3) The OUTERMOST clause's own pad names only itself - nothing encloses it -
+	 * so its run is one entry long and publishes unchanged.
 	 */
 	{
 		MonoExceptionClause cl [2];
@@ -949,22 +950,20 @@ cases_mono_lsda_nesting (void)
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
 		bool good = ok && out.size () == 1 &&
-			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
-			out[0].clause_index == 1;
+			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[0].clause_index == 1 &&
+			out[0].try_start == (gpointer) (base + R_START) &&
+			out[0].handler_start == (gpointer) MINI_ADDR_TO_FTNPTR (base + H_OFF);
 		if (!good) {
 			printf ("FAIL nest-outermost-base-noop: ok=%d size=%zu\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-outermost-base-noop (1 ei, no synthesis)\n");
+			printf ("ok   nest-outermost-base-noop (1 ei, chain of one)\n");
 		}
 	}
 
 	/*
-	 * (4) DEPTH-1 (non-nested) input is unchanged: two disjoint clauses that do NOT
-	 * nest (clause0 try [0x10,0x20)/handler 0x20; clause1 try [0x40,0x50)/handler
-	 * 0x50 - a later, disjoint try) yield exactly their two base entries, no
-	 * synthesis. Proves the synthesis no-ops for the common non-nested method the
-	 * landed catch/finally path already handles.
+	 * (4) Two clauses that do NOT nest yield two independent one-entry runs over
+	 * disjoint ranges - the common non-nested method, unchanged.
 	 */
 	{
 		MonoExceptionClause cl [2];
@@ -990,18 +989,20 @@ cases_mono_lsda_nesting (void)
 			printf ("FAIL nest-depth1-unchanged: ok=%d size=%zu\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-depth1-unchanged (2 ei, no synthesis)\n");
+			printf ("ok   nest-depth1-unchanged (2 ei, two chains of one)\n");
 		}
 	}
 
 	/*
 	 * (5) Multi-call under nesting: the inner catch's try has TWO protected calls,
-	 * so the gather hands TWO disjoint base entries over clause0, each nested in the
-	 * outer finally (clause1). Expect FOUR ei: two base entries (slots 0,1) then two
-	 * synthesised finally entries (slots 2,3), each synth copying its OWN base's
-	 * range - so the base block precedes the synth block (base-before-synthesised
-	 * across multiple calls) and equal-or-disjoint still holds (each synth equals
-	 * its base; the two base ranges are disjoint).
+	 * so its pad carries TWO invoke ranges and the gather emits its whole clause
+	 * list once per range. Expect FOUR ei as two chains of two - each range's inner
+	 * catch immediately followed by its enclosing finally over that SAME range.
+	 *
+	 * The chains are interleaved rather than blocked (all inner, then all outer)
+	 * because they are published per range. That is safe precisely because the two
+	 * ranges are disjoint: no PC matches both, so the runtime's flat walk only ever
+	 * sees one chain, in order.
 	 */
 	{
 		MonoExceptionClause cl [2];
@@ -1013,43 +1014,40 @@ cases_mono_lsda_nesting (void)
 		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
 
 		std::vector<MonoLsdaEntry> ents = {
-			{ 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* call 1 */
-			{ 0x28, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* call 2, disjoint */
+			{ 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE },    /* call 1, inner */
+			{ 0x10, 0x08, 0x40, 1, MONO_EXCEPTION_CLAUSE_FINALLY }, /* call 1, encloser */
+			{ 0x28, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE },    /* call 2, disjoint */
+			{ 0x28, 0x08, 0x40, 1, MONO_EXCEPTION_CLAUSE_FINALLY },
 		};
 		std::vector<MonoJitExceptionInfo> out;
-		current_case = "nest-multicall-base-before-synth";
+		current_case = "nest-multicall-chain-per-range";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
 		bool good = ok && out.size () == 4 &&
-			/* the two base inner-catch entries occupy the lower slots */
+			/* range 1's chain: inner catch then its encloser */
 			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE && out[0].clause_index == 0 &&
-			out[1].flags == MONO_EXCEPTION_CLAUSE_NONE && out[1].clause_index == 0 &&
+			out[1].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[1].clause_index == 1 &&
 			out[0].try_start == (gpointer) (base + 0x10) &&
-			out[1].try_start == (gpointer) (base + 0x28) &&
-			/* the two synthesised finally entries occupy the higher slots */
-			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 1 &&
+			out[1].try_start == out[0].try_start && out[1].try_end == out[0].try_end &&
+			out[1].handler_start == out[0].handler_start &&
+			/* range 2's chain, over its OWN range */
+			out[2].flags == MONO_EXCEPTION_CLAUSE_NONE && out[2].clause_index == 0 &&
 			out[3].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[3].clause_index == 1 &&
-			/* each synth copies its OWN base's range + handler */
-			out[2].try_start == out[0].try_start && out[2].try_end == out[0].try_end &&
-			out[2].handler_start == out[0].handler_start &&
-			out[3].try_start == out[1].try_start && out[3].try_end == out[1].try_end &&
-			out[3].handler_start == out[1].handler_start;
+			out[2].try_start == (gpointer) (base + 0x28) &&
+			out[3].try_start == out[2].try_start && out[3].try_end == out[2].try_end &&
+			out[3].handler_start == out[2].handler_start;
 		if (!good) {
-			printf ("FAIL nest-multicall-base-before-synth: ok=%d size=%zu\n", ok, out.size ());
+			printf ("FAIL nest-multicall-chain-per-range: ok=%d size=%zu\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-multicall-base-before-synth (4 ei: 2 base then 2 synth)\n");
+			printf ("ok   nest-multicall-chain-per-range (4 ei: two chains of two)\n");
 		}
 	}
 
 	/*
-	 * (6) SIBLINGS are NOT synthesised. try { } catch(A) catch(B) share the
-	 * identical protected region (equal try_offset AND try_len) and differ only in
-	 * handler - the sibling exemption in clause_encloses must keep nested_in empty
-	 * so no spurious co-sibling duplicate is appended. Feed both sibling base
-	 * entries over the shared range; expect exactly TWO ei (the siblings), no third
-	 * synthesised entry. This is the property that keeps N1 runtime-inert for the
-	 * sibling-catch methods the gate admits today.
+	 * (6) SIBLINGS are not nesting. try { } catch(A) catch(B) share the identical
+	 * protected region and one landing pad, so the pad names both and neither is an
+	 * encloser of the other. Expect exactly TWO ei, in declaration order.
 	 */
 	{
 		MonoExceptionClause cl [2];
@@ -1063,59 +1061,30 @@ cases_mono_lsda_nesting (void)
 
 		std::vector<MonoLsdaEntry> ents = {
 			{ 0x10, 0x10, 0x60, 0, MONO_EXCEPTION_CLAUSE_NONE },
-			{ 0x10, 0x10, 0x90, 1, MONO_EXCEPTION_CLAUSE_NONE },
+			{ 0x10, 0x10, 0x60, 1, MONO_EXCEPTION_CLAUSE_NONE },
 		};
 		std::vector<MonoJitExceptionInfo> out;
-		current_case = "nest-siblings-not-synthesised";
+		current_case = "nest-siblings-in-declaration-order";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
 		bool good = ok && out.size () == 2 &&
-			out[0].clause_index == 0 && out[1].clause_index == 1;
+			out[0].clause_index == 0 && out[1].clause_index == 1 &&
+			out[0].data.catch_class == CC0 && out[1].data.catch_class == CC1;
 		if (!good) {
-			printf ("FAIL nest-siblings-not-synthesised: ok=%d size=%zu\n", ok, out.size ());
+			printf ("FAIL nest-siblings-in-declaration-order: ok=%d size=%zu\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-siblings-not-synthesised (2 ei, no co-sibling duplicate)\n");
+			printf ("ok   nest-siblings-in-declaration-order (2 ei, A before B)\n");
 		}
 	}
 
 	/*
-	 * (7) An enclosing clause of an UNREPRESENTABLE kind declines (CAP-EH-0, doc 21
-	 * 7 item 3). clause0 = inner catch nested in clause1 = a FILTER (the kind the
-	 * gate forbids). The base inner-catch entry is well-formed, but synthesising its
-	 * enclosing FILTER entry is impossible, so the whole array declines rather than
-	 * publish a partial one.
-	 */
-	{
-		MonoExceptionClause cl [2];
-		memset (cl, 0, sizeof (cl));
-		cl[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
-		cl[0].data.catch_class = CC0;
-		cl[0].try_offset = 0x10; cl[0].try_len = 0x10; cl[0].handler_offset = 0x20; cl[0].handler_len = 0x05;
-		cl[1].flags = MONO_EXCEPTION_CLAUSE_FILTER;
-		cl[1].try_offset = 0x10; cl[1].try_len = 0x15; cl[1].handler_offset = 0x25; cl[1].handler_len = 0x05;
-
-		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_NONE } };
-		std::vector<MonoJitExceptionInfo> out;
-		current_case = "nest-enclosing-filter-declines";
-		cases_run ++;
-		if (mono::build_ex_info (ents, cl, 2, base, code_len, out)) {
-			printf ("FAIL nest-enclosing-filter-declines: accepted an unrepresentable enclosing kind\n");
-			failures ++;
-		} else {
-			printf ("ok   nest-enclosing-filter-declines (declined)\n");
-		}
-	}
-
-	/*
-	 * (8) A genuinely CROSSING clause table (neither containment nor siblings) is
-	 * not folded into nested_in: clause0 try [0x10,0x30) and clause1 try [0x20,0x40)
-	 * partially overlap in IL but neither encloses the other, so clause_encloses is
-	 * false both ways and no synthesis happens. The base entries are disjoint native
-	 * ranges, so the array is ACCEPTED as two plain base entries - the crossing is an
-	 * IL-shape concern the translator gate declines, not something the synthesis
-	 * invents coverage for. (The native-range crossing decline is covered by
-	 * build-overlapping-ranges / build-strict-nesting above.)
+	 * (7) Two clauses whose IL try regions CROSS are published as the two
+	 * independent runs the pads describe. Nothing here reads their try offsets, so
+	 * a crossing IL shape is not this stage's problem - the translator's gate
+	 * declines it - and the native ranges are disjoint, so the array is accepted.
+	 * (The native-range crossing decline is covered by build-overlapping-ranges /
+	 * build-strict-nesting above.)
 	 */
 	{
 		MonoExceptionClause cl [2];
@@ -1132,32 +1101,29 @@ cases_mono_lsda_nesting (void)
 			{ 0x80, 0x08, 0x60, 1, MONO_EXCEPTION_CLAUSE_NONE },
 		};
 		std::vector<MonoJitExceptionInfo> out;
-		current_case = "nest-crossing-no-synthesis";
+		current_case = "nest-crossing-il-not-consulted";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 2, base, code_len, out);
 		bool good = ok && out.size () == 2 &&
 			out[0].clause_index == 0 && out[1].clause_index == 1;
 		if (!good) {
-			printf ("FAIL nest-crossing-no-synthesis: ok=%d size=%zu\n", ok, out.size ());
+			printf ("FAIL nest-crossing-il-not-consulted: ok=%d size=%zu\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-crossing-no-synthesis (2 ei, no synthesis for crossing clauses)\n");
+			printf ("ok   nest-crossing-il-not-consulted (2 ei)\n");
 		}
 	}
 
 	/*
-	 * (9) SIBLING GROUP ENCLOSED BY A FINALLY - the enclosing entry is synthesised
-	 * EXACTLY ONCE, not once per sibling (the fix for the tier-1 double-run finally).
-	 * try { try {throw} catch(A) catch(B) } finally {}: clause0 = inner catch A,
-	 * clause1 = inner catch B (sibling of 0 - identical try_offset AND try_len),
-	 * clause2 = outer finally spanning both inner handlers. The gather publishes TWO
-	 * base entries over the SAME native range sharing the ONE inner landing pad. Each
-	 * sibling base would, un-de-duplicated, re-synthesise the SAME enclosing finally
-	 * over that range, giving TWO identical finally ei; pass-2's first-match-and-
-	 * continue then runs the finally twice when an exception propagates past both
-	 * siblings (ECMA-335 §12.4.2 violation). De-dup by (range, enclosing clause_index)
-	 * collapses them to ONE. Expect exactly THREE ei: the two sibling base catches
-	 * (slots 0,1) then the SINGLE synthesised finally (slot 2) - NOT four.
+	 * (8) SIBLING GROUP ENCLOSED BY A FINALLY - the enclosing entry appears EXACTLY
+	 * ONCE, not once per sibling (the tier-1 double-run finally). try { try {throw}
+	 * catch(A) catch(B) } finally {}: clause0/clause1 are the inner sibling catches,
+	 * clause2 the outer finally. All three sit on the ONE inner landing pad, so the
+	 * run is [A, B, finally] - the finally is named once by the pad, which is what
+	 * makes the duplicate structurally impossible rather than deduplicated after the
+	 * fact. Two identical finally ei would make pass-2's first-match-and-continue
+	 * run it twice when an exception propagates past both siblings (an ECMA-335
+	 * §12.4.2 violation). Expect exactly THREE ei - NOT four.
 	 */
 	{
 		MonoExceptionClause cl [3];
@@ -1171,46 +1137,42 @@ cases_mono_lsda_nesting (void)
 		cl[2].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer finally over both handlers */
 		cl[2].try_offset = 0x10; cl[2].try_len = 0x18; cl[2].handler_offset = 0x28; cl[2].handler_len = 0x04;
 
-		/* Two sibling base entries: SAME range, SAME (shared) landing pad 0x40. */
+		/* One run over one range, from the shared inner landing pad 0x40. */
 		std::vector<MonoLsdaEntry> ents = {
 			{ 0x10, 0x10, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE },
 			{ 0x10, 0x10, 0x40, 1, MONO_EXCEPTION_CLAUSE_NONE },
+			{ 0x10, 0x10, 0x40, 2, MONO_EXCEPTION_CLAUSE_FINALLY },
 		};
 		std::vector<MonoJitExceptionInfo> out;
 		current_case = "nest-sibling-group-in-finally-once";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 3, base, code_len, out);
 		bool good = ok && out.size () == 3 &&
-			/* slots 0,1: the two sibling base catches, shared range + landing pad */
+			/* slots 0,1: the two sibling catches, shared range + landing pad */
 			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE && out[0].clause_index == 0 &&
 			out[1].flags == MONO_EXCEPTION_CLAUSE_NONE && out[1].clause_index == 1 &&
 			out[0].try_start == (gpointer) (base + 0x10) &&
 			out[0].try_end == (gpointer) (base + 0x20) &&
 			out[1].try_start == out[0].try_start && out[1].try_end == out[0].try_end &&
 			out[0].handler_start == out[1].handler_start &&
-			/* slot 2: the ONE synthesised finally over the shared range/landing pad */
+			/* slot 2: the ONE enclosing finally over the shared range/landing pad */
 			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 2 &&
 			out[2].try_start == out[0].try_start && out[2].try_end == out[0].try_end &&
 			out[2].handler_start == out[0].handler_start;
 		if (!good) {
 			printf ("FAIL nest-sibling-group-in-finally-once: ok=%d size=%zu (expected 3, "
-			        "size 4 == the double-synthesised finally bug)\n", ok, out.size ());
+			        "size 4 == the double-published finally bug)\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-sibling-group-in-finally-once (3 ei: 2 sibling catches, finally synthesised once)\n");
+			printf ("ok   nest-sibling-group-in-finally-once (3 ei: 2 sibling catches, finally once)\n");
 		}
 	}
 
 	/*
-	 * (10) SIBLING GROUP with the inner try spanning TWO DISTINCT invoke ranges,
-	 * enclosed by an outer finally: the de-dup collapses siblings WITHIN a range but
-	 * keeps one enclosing entry PER DISTINCT range (it must not over-dedup across
-	 * invoke ranges). Same clause table as (9); the gather hands FOUR base entries -
-	 * two sibling pairs, one pair at range R1 [0x10,0x18), one at R2 [0x28,0x30),
-	 * each pair sharing its own landing pad. Expect SIX ei: the four sibling base
-	 * catches (slots 0..3) then TWO synthesised finallys (slots 4,5) - one per
-	 * distinct range, each over its own range/landing pad - NOT one (over-deduped)
-	 * and NOT four (un-deduped).
+	 * (9) The same sibling group with the inner try spanning TWO DISTINCT invoke
+	 * ranges: the enclosing finally must appear once PER RANGE, not once overall.
+	 * The pad carries both ranges and the gather emits its clause list for each, so
+	 * expect SIX ei as two chains of three, each over its own range/landing pad.
 	 */
 	{
 		MonoExceptionClause cl [3];
@@ -1225,49 +1187,47 @@ cases_mono_lsda_nesting (void)
 		cl[2].try_offset = 0x10; cl[2].try_len = 0x18; cl[2].handler_offset = 0x28; cl[2].handler_len = 0x04;
 
 		std::vector<MonoLsdaEntry> ents = {
-			{ 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* R1 sibling A */
-			{ 0x10, 0x08, 0x40, 1, MONO_EXCEPTION_CLAUSE_NONE }, /* R1 sibling B (shared pad) */
-			{ 0x28, 0x08, 0x50, 0, MONO_EXCEPTION_CLAUSE_NONE }, /* R2 sibling A */
-			{ 0x28, 0x08, 0x50, 1, MONO_EXCEPTION_CLAUSE_NONE }, /* R2 sibling B (shared pad) */
+			{ 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE },    /* R1 sibling A */
+			{ 0x10, 0x08, 0x40, 1, MONO_EXCEPTION_CLAUSE_NONE },    /* R1 sibling B (shared pad) */
+			{ 0x10, 0x08, 0x40, 2, MONO_EXCEPTION_CLAUSE_FINALLY }, /* R1 encloser */
+			{ 0x28, 0x08, 0x50, 0, MONO_EXCEPTION_CLAUSE_NONE },    /* R2 sibling A */
+			{ 0x28, 0x08, 0x50, 1, MONO_EXCEPTION_CLAUSE_NONE },    /* R2 sibling B (shared pad) */
+			{ 0x28, 0x08, 0x50, 2, MONO_EXCEPTION_CLAUSE_FINALLY }, /* R2 encloser */
 		};
 		std::vector<MonoJitExceptionInfo> out;
 		current_case = "nest-sibling-group-multirange-one-per-range";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 3, base, code_len, out);
 		bool good = ok && out.size () == 6 &&
-			/* the four sibling base catches occupy the lower slots */
+			/* R1's chain */
 			out[0].clause_index == 0 && out[1].clause_index == 1 &&
-			out[2].clause_index == 0 && out[3].clause_index == 1 &&
+			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 2 &&
 			out[0].try_start == (gpointer) (base + 0x10) &&
-			out[2].try_start == (gpointer) (base + 0x28) &&
-			/* exactly one synthesised finally PER distinct range */
-			out[4].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[4].clause_index == 2 &&
+			out[2].try_start == out[0].try_start && out[2].try_end == out[0].try_end &&
+			out[2].handler_start == out[0].handler_start &&
+			/* R2's chain, over its OWN range and pad */
+			out[3].clause_index == 0 && out[4].clause_index == 1 &&
 			out[5].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[5].clause_index == 2 &&
-			out[4].try_start == out[0].try_start && out[4].try_end == out[0].try_end &&
-			out[4].handler_start == out[0].handler_start &&
-			out[5].try_start == out[2].try_start && out[5].try_end == out[2].try_end &&
-			out[5].handler_start == out[2].handler_start &&
-			out[4].try_start != out[5].try_start;
+			out[3].try_start == (gpointer) (base + 0x28) &&
+			out[5].try_start == out[3].try_start && out[5].try_end == out[3].try_end &&
+			out[5].handler_start == out[3].handler_start &&
+			out[2].try_start != out[5].try_start;
 		if (!good) {
 			printf ("FAIL nest-sibling-group-multirange-one-per-range: ok=%d size=%zu "
-			        "(expected 6: 4 base + one finally per distinct range)\n", ok, out.size ());
+			        "(expected 6: two chains of three)\n", ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-sibling-group-multirange-one-per-range (6 ei: finally synthesised once per distinct range)\n");
+			printf ("ok   nest-sibling-group-multirange-one-per-range (6 ei: one finally per range)\n");
 		}
 	}
 
 	/*
-	 * (11) DEPTH-3 try/finally x3 - the enclosing-entry ORDER at depth >= 3 (doc 21 4.1,
-	 * EH N6). clause0 (inner finally) is nested in clause1 (middle finally) is nested in
-	 * clause2 (outer finally): nested_in[0] = {1, 2}. The single inner base entry
-	 * synthesises TWO enclosing finally entries. They MUST be appended in ASCENDING
-	 * clause_index (1 then 2) = innermost-encloser first: pass-2 resumes at the running
-	 * clause's ARRAY slot + 1, so the array order [inner@0, middle@1, outer@2] is what
-	 * makes the runtime run the finallys inner-to-outer (C, B, A). This is the exact
-	 * property a DESCENDING order (legacy mini-llvm.c:3821 prepend, which would give
-	 * [inner@0, outer@2, middle@1]) would get wrong. Assert the clause_index sequence is
-	 * 0,1,2 and every entry shares the inner base's range + landing pad.
+	 * (10) DEPTH-3 try/finally x3 - encloser ORDER at depth >= 3 (doc 21 4.1, EH N6).
+	 * clause0 (inner) in clause1 (middle) in clause2 (outer), all finallys, all named
+	 * by the inner pad. Order is load-bearing: pass-2 resumes at the running clause's
+	 * ARRAY slot + 1, so [inner@0, middle@1, outer@2] is what makes the runtime run
+	 * the finallys inner-to-outer. A DESCENDING chain would give [inner, outer,
+	 * middle] and run them out of order.
 	 */
 	{
 		MonoExceptionClause cl [3];
@@ -1279,21 +1239,23 @@ cases_mono_lsda_nesting (void)
 		cl[2].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer */
 		cl[2].try_offset = 0x10; cl[2].try_len = 0x20; cl[2].handler_offset = 0x30; cl[2].handler_len = 0x04;
 
-		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		std::vector<MonoLsdaEntry> ents = {
+			{ R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY },
+			{ R_START, R_LEN, H_OFF, 1, MONO_EXCEPTION_CLAUSE_FINALLY },
+			{ R_START, R_LEN, H_OFF, 2, MONO_EXCEPTION_CLAUSE_FINALLY },
+		};
 		std::vector<MonoJitExceptionInfo> out;
 		current_case = "nest-depth3-finally-ascending-order";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 3, base, code_len, out);
 		bool good = ok && out.size () == 3 &&
-			/* slot 0: base inner finally */
 			out[0].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[0].clause_index == 0 &&
 			out[0].try_start == (gpointer) (base + R_START) &&
 			out[0].try_end == (gpointer) (base + R_START + R_LEN) &&
 			out[0].handler_start == (gpointer) MINI_ADDR_TO_FTNPTR (base + H_OFF) &&
-			/* slots 1,2: enclosing finallys, ASCENDING clause_index (middle before outer) */
 			out[1].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[1].clause_index == 1 &&
 			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 2 &&
-			/* every synthesised encloser shares the inner base's range + landing pad */
+			/* every encloser shares the inner clause's range + landing pad */
 			out[1].try_start == out[0].try_start && out[1].try_end == out[0].try_end &&
 			out[1].handler_start == out[0].handler_start &&
 			out[2].try_start == out[0].try_start && out[2].try_end == out[0].try_end &&
@@ -1308,9 +1270,7 @@ cases_mono_lsda_nesting (void)
 	}
 
 	/*
-	 * (12) DEPTH-4 try/finally x4 - the same ordering over THREE enclosers of one base.
-	 * nested_in[0] = {1, 2, 3}. Assert FOUR ei with clause_index 0,1,2,3 (ascending =
-	 * innermost-encloser first) all over the inner base's range/landing pad.
+	 * (11) DEPTH-4 - the same ordering over THREE enclosers of one clause.
 	 */
 	{
 		MonoExceptionClause cl [4];
@@ -1324,7 +1284,12 @@ cases_mono_lsda_nesting (void)
 		cl[3].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
 		cl[3].try_offset = 0x10; cl[3].try_len = 0x28; cl[3].handler_offset = 0x38; cl[3].handler_len = 0x04;
 
-		std::vector<MonoLsdaEntry> ents = { { R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY } };
+		std::vector<MonoLsdaEntry> ents = {
+			{ R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY },
+			{ R_START, R_LEN, H_OFF, 1, MONO_EXCEPTION_CLAUSE_FINALLY },
+			{ R_START, R_LEN, H_OFF, 2, MONO_EXCEPTION_CLAUSE_FINALLY },
+			{ R_START, R_LEN, H_OFF, 3, MONO_EXCEPTION_CLAUSE_FINALLY },
+		};
 		std::vector<MonoJitExceptionInfo> out;
 		current_case = "nest-depth4-finally-ascending-order";
 		cases_run ++;
@@ -1346,14 +1311,9 @@ cases_mono_lsda_nesting (void)
 	}
 
 	/*
-	 * (13) DEPTH-3 DE-DUP - a sibling catch group enclosed by TWO finallys. clause0/clause1
-	 * are inner sibling catches (identical try range), enclosed by clause2 (middle finally)
-	 * and clause3 (outer finally): nested_in[0] = nested_in[1] = {2, 3}. The gather hands
-	 * TWO sibling base entries over the SAME range/landing pad. Each would re-synthesise the
-	 * SAME two enclosing finallys; the (range, enclosing clause_index) de-dup collapses them
-	 * so EACH encloser appears exactly ONCE. Expect FOUR ei: two sibling base catches
-	 * (slots 0,1) then the two enclosing finallys ONCE each in ascending order (slots 2,3) -
-	 * NOT six (un-deduped) - proving the dedup and the depth>=3 order compose.
+	 * (12) A sibling catch group enclosed by TWO finallys - siblings and depth >= 3
+	 * composing. One pad names all four clauses, so the run is [A, B, middle, outer]
+	 * and each encloser appears exactly once, after both siblings, in nesting order.
 	 */
 	{
 		MonoExceptionClause cl [4];
@@ -1369,36 +1329,36 @@ cases_mono_lsda_nesting (void)
 		cl[3].flags = MONO_EXCEPTION_CLAUSE_FINALLY; /* outer finally */
 		cl[3].try_offset = 0x10; cl[3].try_len = 0x20; cl[3].handler_offset = 0x30; cl[3].handler_len = 0x04;
 
-		/* Two sibling base entries: SAME range, SAME (shared) landing pad 0x40. */
 		std::vector<MonoLsdaEntry> ents = {
 			{ 0x10, 0x10, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE },
 			{ 0x10, 0x10, 0x40, 1, MONO_EXCEPTION_CLAUSE_NONE },
+			{ 0x10, 0x10, 0x40, 2, MONO_EXCEPTION_CLAUSE_FINALLY },
+			{ 0x10, 0x10, 0x40, 3, MONO_EXCEPTION_CLAUSE_FINALLY },
 		};
 		std::vector<MonoJitExceptionInfo> out;
-		current_case = "nest-depth3-sibling-dedup-ascending";
+		current_case = "nest-depth3-sibling-ascending";
 		cases_run ++;
 		bool ok = mono::build_ex_info (ents, cl, 4, base, code_len, out);
 		bool good = ok && out.size () == 4 &&
-			/* slots 0,1: the two sibling base catches over the shared range/pad */
+			/* slots 0,1: the two sibling catches over the shared range/pad */
 			out[0].flags == MONO_EXCEPTION_CLAUSE_NONE && out[0].clause_index == 0 &&
 			out[1].flags == MONO_EXCEPTION_CLAUSE_NONE && out[1].clause_index == 1 &&
 			out[0].try_start == out[1].try_start && out[0].handler_start == out[1].handler_start &&
-			/* slots 2,3: the two enclosing finallys, ONCE each, ascending clause_index */
+			/* slots 2,3: the two enclosing finallys, once each, innermost-first */
 			out[2].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[2].clause_index == 2 &&
 			out[3].flags == MONO_EXCEPTION_CLAUSE_FINALLY && out[3].clause_index == 3 &&
 			out[2].try_start == out[0].try_start && out[2].handler_start == out[0].handler_start &&
 			out[3].try_start == out[0].try_start && out[3].handler_start == out[0].handler_start;
 		if (!good) {
-			printf ("FAIL nest-depth3-sibling-dedup-ascending: ok=%d size=%zu "
-			        "(expected 4: 2 sibling catches + 2 enclosers once each; 6 == un-deduped)\n",
+			printf ("FAIL nest-depth3-sibling-ascending: ok=%d size=%zu "
+			        "(expected 4: 2 sibling catches + 2 enclosers once each)\n",
 			        ok, out.size ());
 			failures ++;
 		} else {
-			printf ("ok   nest-depth3-sibling-dedup-ascending (4 ei: 2 siblings, 2 enclosers deduped ascending)\n");
+			printf ("ok   nest-depth3-sibling-ascending (4 ei: 2 siblings, 2 enclosers ascending)\n");
 		}
 	}
 }
-
 /* ------------------------------------------------------------ guard cases */
 
 /*
@@ -1572,7 +1532,7 @@ cases_mono_lsda_publish (void)
 	MonoMemPool *pool = mono_mempool_new ();
 
 	/*
-	 * (1) Happy path: two valid disjoint entries against a real cfg/header pair
+	 * (1) Happy path: two valid disjoint entries against a real cfg + clause table
 	 * publish exactly what build_ex_info would produce for the same inputs
 	 * (cross-checked against cases_mono_lsda_build's equivalent vectors).
 	 */
@@ -1582,13 +1542,14 @@ cases_mono_lsda_publish (void)
 		cfg.mempool = pool;
 		cfg.header = &header;
 
+		std::vector<MonoExceptionClause> table (clauses, clauses + 2);
 		std::vector<MonoLsdaEntry> ents = {
 			{ 0x10, 0x20, 0x40, 0 }, /* [0x10,0x30) -> handler 0x40, clause 0 */
 			{ 0x50, 0x10, 0x80, 1 }, /* [0x50,0x60) -> handler 0x80, clause 1 */
 		};
 		current_case = "publish-valid-two-clause";
 		cases_run ++;
-		bool ok = mono::publish_mono_lsda (&cfg, ents, base, code_len);
+		bool ok = mono::publish_mono_lsda (&cfg, table, ents, base, code_len);
 		bool good = ok && cfg.llvm_ex_info_len == 2 && cfg.llvm_ex_info != nullptr;
 		if (good) {
 			const MonoJitExceptionInfo &e0 = cfg.llvm_ex_info [0];
@@ -1615,11 +1576,9 @@ cases_mono_lsda_publish (void)
 	}
 
 	/*
-	 * (2) cfg->header == nullptr (no IL clause table at all) with no entries:
-	 * num_clauses collapses to 0 and clauses to nullptr (the ternary at the top
-	 * of publish_mono_lsda), which is the vacuous accept case - and since the
-	 * built array is empty, the n==0 branch must skip the mempool allocation
-	 * entirely, leaving llvm_ex_info null.
+	 * (2) An EMPTY clause table with no entries is the vacuous accept case - and
+	 * since the built array is empty, the n==0 branch must skip the mempool
+	 * allocation entirely, leaving llvm_ex_info null.
 	 */
 	{
 		MonoCompile cfg;
@@ -1627,17 +1586,18 @@ cases_mono_lsda_publish (void)
 		cfg.mempool = pool;
 		cfg.header = nullptr;
 
+		std::vector<MonoExceptionClause> table;
 		std::vector<MonoLsdaEntry> ents;
-		current_case = "publish-no-header-empty-entries";
+		current_case = "publish-empty-table-empty-entries";
 		cases_run ++;
-		bool ok = mono::publish_mono_lsda (&cfg, ents, base, code_len);
+		bool ok = mono::publish_mono_lsda (&cfg, table, ents, base, code_len);
 		bool good = ok && cfg.llvm_ex_info == nullptr && cfg.llvm_ex_info_len == 0;
 		if (!good) {
-			printf ("FAIL publish-no-header-empty-entries: ok=%d ptr=%p len=%u\n",
+			printf ("FAIL publish-empty-table-empty-entries: ok=%d ptr=%p len=%u\n",
 			        ok, (void*) cfg.llvm_ex_info, cfg.llvm_ex_info_len);
 			failures ++;
 		} else {
-			printf ("ok   publish-no-header-empty-entries (llvm_ex_info_len=0)\n");
+			printf ("ok   publish-empty-table-empty-entries (llvm_ex_info_len=0)\n");
 		}
 	}
 

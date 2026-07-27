@@ -123,35 +123,6 @@ ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
 	return a_start < b_end && b_start < a_end;
 }
 
-/*
- * Does IL clause J strictly ENCLOSE clause C - i.e. is C nested in J's try? This
- * has to answer identically to the translator's predicate of the same name
- * (translator-internal.hpp), which decides where the landing pads it emits send
- * control; the two disagreeing means dispatching to a handler the IR never routed.
- *
- *   c.try_offset >= j.try_offset && c.try_offset + c.try_len <= j.try_offset + j.try_len
- *
- * with SIBLINGS (identical protected region: same try_offset AND same try_len)
- * excluded. Siblings - try { } catch(A) catch(B) - are NOT nesting; they share
- * one landing pad and are already published as several same-range base entries
- * by the gather, so folding them into nested_in would synthesise a spurious
- * duplicate of the co-sibling over the same range.
- *
- * Comparing the try regions' own extents - rather than reading handler_offset as a
- * stand-in for where a try region ends - is what makes this hold for IL that places
- * an enclosing clause's handler at a LOWER offset than its try. It still excludes a
- * clause sitting in another clause's HANDLER body, whose try region starts past the
- * end of the other's and so is not contained.
- */
-bool
-clause_encloses (const MonoExceptionClause &c, const MonoExceptionClause &j)
-{
-	bool siblings = c.try_offset == j.try_offset && c.try_len == j.try_len;
-	return !siblings &&
-	       c.try_offset >= j.try_offset &&
-	       (std::uint64_t) c.try_offset + c.try_len <= (std::uint64_t) j.try_offset + j.try_len;
-}
-
 } // anonymous namespace
 
 bool
@@ -278,28 +249,33 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 	 * ever marked) never reaches here: its section is absent, so
 	 * parse_mono_lsda () already failed and the caller declined before this
 	 * runs. So num_clauses > 0 && entries.empty () here just means "confirmed
-	 * nothing in this method can throw" - return success with out left empty,
-	 * short-circuiting before the resume-pad-marker fail-safe further down:
-	 * that one guards a DIFFERENT, non-empty-entries shape (every entry turns
-	 * out to be a resume-pad marker, not a real protected range) that this
-	 * change has no bearing on and leaves untouched.
+	 * nothing in this method can throw" - return success with out left empty.
 	 */
 	if (entries.empty ())
 		return true;
 
 	/*
-	 * Order the entries so that, within one try range, ascending IL clause_index
-	 * comes first. Sibling catches - try { } catch(A) catch(B) - share one try
-	 * range and one landing pad, and the runtime takes the FIRST isinst match in
-	 * array order (mini-exceptions.c is_address_protected + the catch loop), so
-	 * the earlier-declared catch (smaller clause_index) MUST precede the later
-	 * one - otherwise `catch(Derived) catch(Base)` would let the Base clause
-	 * swallow a Derived throw. The gather pass records one entry per landing-pad
-	 * TypeId, and LLVM hands those back in reverse of the emitted clause order, so
-	 * the section order is NOT authoritative; clause_index is. Sort on
-	 * (try_start_off, try_len, clause_index) - disjoint ranges never share a PC so
-	 * their relative order is immaterial, and the sort keeps identical ranges
-	 * grouped and clause-ordered. A stable sort keeps duplicate tuples put.
+	 * Keep one landing pad's entries for one invoke range together, in the order
+	 * the pad named them. That order IS the nesting chain - innermost clause
+	 * first, then outwards through the enclosers - because the translator emits a
+	 * pad's covering clauses in it (add_covering_clauses, translator-call.cpp) and
+	 * the gather pass undoes LLVM's reversal on the way out (eh-gather.cpp).
+	 *
+	 * Taking the chain from the pad rather than re-deriving it from IL try offsets
+	 * is what lets a chain span methods: an inlined body's offsets mean nothing in
+	 * the caller, but its pads are right there in the caller's IR, already extended
+	 * by LLVM's inliner with the call site's own chain.
+	 *
+	 * Order is load-bearing twice over. Sibling catches - try { } catch(A) catch(B)
+	 * - share a range and a pad, and the runtime takes the FIRST isinst match in
+	 * array order (mini-exceptions.c is_address_protected + the catch loop), so the
+	 * earlier-declared catch must come first, or `catch(Derived) catch(Base)` lets
+	 * Base swallow a Derived throw. And enclosers must come innermost-first so an
+	 * intervening finally runs before an enclosing catch is entered.
+	 *
+	 * Sorting on (try_start_off, try_len, handler_off) groups a pad's entries for
+	 * one range without disturbing them, since a stable sort leaves equal keys put.
+	 * Disjoint ranges never share a PC, so their relative order is immaterial.
 	 */
 	std::vector<MonoLsdaEntry> ordered (entries);
 	std::stable_sort (ordered.begin (), ordered.end (),
@@ -308,53 +284,29 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 			return a.try_start_off < b.try_start_off;
 		if (a.try_len != b.try_len)
 			return a.try_len < b.try_len;
-		return a.clause_index < b.clause_index;
+		return a.handler_off < b.handler_off;
 	});
-
-	out.reserve (ordered.size ());
-
-	/*
-	 * Per published entry, its [start, end) native invoke range in offsets, so the
-	 * equal-or-disjoint invariant (below) can be validated over the FINAL array -
-	 * base entries AND the entries the nesting synthesis appends. For base entries
-	 * the range is the entry's own; for a synthesised enclosing entry it is a copy
-	 * of its base's range (doc 21 2.2), so the array stays equal-or-disjoint.
-	 */
-	struct RangeOff { std::uint64_t start; std::uint64_t end; };
-	std::vector<RangeOff> ranges;
-	ranges.reserve (ordered.size ());
-
-	/*
-	 * Per base entry, what the synthesis stage needs to append its enclosing
-	 * entries: the innermost clause it names, its exact native range, and its
-	 * handler_start - the INNER landing pad, which every synthesised enclosing
-	 * entry reuses verbatim (doc 21 1.2 / 4: aot-runtime.c's memcpy keeps the base
-	 * handler_start, overriding only flags/catch_class/clause_index).
-	 */
-	struct BaseEntry {
-		std::uint32_t clause_index;
-		std::uint32_t try_start_off;
-		std::uint32_t try_len;
-		gpointer handler_start;
-	};
-	std::vector<BaseEntry> bases;
-	bases.reserve (ordered.size ());
 
 	/*
 	 * The RESUME pad of each finally/fault clause that has one - the landing pad
 	 * its resume-trampoline invoke unwinds to, reached only once the cleanup has
-	 * run (emit_resume_unwind). The synthesis below dispatches everything that
-	 * comes after a cleanup through it, so that the block the runtime re-enters is
-	 * the block the IR shows control reaching, carrying the state the cleanup left
-	 * behind. Recognised by its MONO_LSDA_KIND_RESUME_PAD marker and published only
-	 * that way: a resume pad is not itself a protected region.
+	 * run (emit_resume_unwind). The chaining below sends everything that comes
+	 * after a cleanup through it, so the block the runtime re-enters is the block
+	 * the IR shows control reaching, carrying the state the cleanup left behind.
+	 * Recognised by its MONO_LSDA_KIND_RESUME_PAD marker and consumed only that
+	 * way: a resume pad is not itself a protected region.
 	 */
 	std::vector<gpointer> resume_pad (num_clauses > 0 ? num_clauses : 0, nullptr);
 
-	/* --- base entries: validate + join, exactly as the landed catch/finally path --- */
-	for (std::size_t i = 0; i < ordered.size (); ++i) {
-		const MonoLsdaEntry &e = ordered[i];
+	/*
+	 * The entries that describe a real protected region, in chain order. The rest
+	 * of the section is markers - resume pads and finally body extents - which
+	 * describe where code sits rather than what it protects.
+	 */
+	std::vector<MonoLsdaEntry> dispatch;
+	dispatch.reserve (ordered.size ());
 
+	for (const MonoLsdaEntry &e : ordered) {
 		/*
 		 * Offsets in range. 64-bit intermediates so try_start_off + try_len
 		 * cannot wrap a 32-bit add (the check the fork deferred to the loader,
@@ -369,7 +321,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 
 		/*
 		 * Join key in range. clause_index was itself read out of
-		 * cfg->header->clauses[] at emission time (emit_handler_start,
+		 * cfg->header->clauses[] at emission time (add_covering_clauses,
 		 * translator-call.cpp) - the SAME immutable cfg->header this call is
 		 * given num_clauses from, for the same compile. It cannot legitimately
 		 * come back out of range; if it does, our own object round-trip (or our
@@ -380,7 +332,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		/*
 		 * A cleanup's resume pad. It describes where to continue AFTER
 		 * clause_index's handler has run, not a protected region of its own, so
-		 * record it for the synthesis below and publish nothing for it. Its own
+		 * record it for the chaining below and publish nothing for it. Its own
 		 * range only ever covers the resume trampoline's call site, which cannot
 		 * throw back into this frame.
 		 */
@@ -414,244 +366,138 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 			continue;
 		}
 
-		const MonoExceptionClause &cl = clauses[e.clause_index];
-
 		/*
 		 * v2 self-describing cross-check. The section carries the clause's kind,
 		 * smuggled through the gather pass from the SAME cfg->header->clauses[]
-		 * this call reads cl.flags from (emit_handler_start writes both from one
-		 * this_clause->flags read, translator-call.cpp). Same immutable header,
+		 * this call reads cl.flags from (clause_type_info_global writes both from
+		 * one clauses[i].flags read, translator-call.cpp). Same immutable header,
 		 * same compile - a mismatch is our own round-trip breaking, not the IL
 		 * disagreeing with itself. (For a catch clause both are NONE.)
 		 */
-		g_assert (e.kind == static_cast<std::uint32_t> (cl.flags));
+		g_assert (e.kind == static_cast<std::uint32_t> (clauses[e.clause_index].flags));
 
 		/*
-		 * EH F2 admits catch (NONE), standalone FINALLY and standalone FAULT -
+		 * EH F2 admits catch (NONE), FINALLY and FAULT -
 		 * mono_llvm_check_method_supported (translator.cpp, the 3b EH gate)
 		 * already declined every OTHER flags value on this same cfg->header
 		 * before this method reached codegen at all, so cl.flags being anything
 		 * else here is that earlier gate's own invariant breaking, not new
 		 * information about the IL.
 		 */
-		g_assert (cl.flags == MONO_EXCEPTION_CLAUSE_NONE ||
-		         cl.flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
-		         cl.flags == MONO_EXCEPTION_CLAUSE_FAULT);
+		g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_NONE ||
+		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FAULT);
 
-		/*
-		 * Build the published ei (CAP-EH-1). flags is joined from the IL header -
-		 * the section never carries it. handler_start is FTNPTR-encoded at publish
-		 * (never in the section). The try_offset/try_len/handler_offset/handler_len
-		 * fields stay 0 (memset): only the llvmonly match path reads them, and catch
-		 * delivery is via RAX for from_llvm (doc 11 6.4).
-		 *
-		 * The `data` union and `exvar_offset` are kind-dependent:
-		 *   - CATCH (NONE): data.catch_class is joined from the IL header.
-		 *   - FINALLY: the abort-guard fields data.handler_end and exvar_offset are
-		 *     the F2 quiet-gap intermediate - both left 0 (memset). The runtime's
-		 *     find_last_handler_block never matches on handler_end == 0, so it never
-		 *     writes *(bp + exvar_offset); publishing both 0 keeps the §1.3 invariant
-		 *     (both real or both 0). F4 supplies both via the stackmap sideband.
-		 *   - FAULT: the runtime reads neither field, so 0 is simply correct.
-		 */
-		MonoJitExceptionInfo ei;
-		memset (&ei, 0, sizeof (ei));
-		ei.flags = cl.flags;
-		if (cl.flags == MONO_EXCEPTION_CLAUSE_NONE)
-			ei.data.catch_class = cl.data.catch_class;
-		ei.clause_index = static_cast<int> (e.clause_index);
-		ei.try_start = (gpointer) (native_code + e.try_start_off);
-		ei.try_end = (gpointer) (native_code + e.try_start_off + e.try_len);
-		ei.handler_start = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
-
-		out.push_back (ei);
-		ranges.push_back ({ static_cast<std::uint64_t> (e.try_start_off),
-		                    static_cast<std::uint64_t> (e.try_start_off) + e.try_len });
-		bases.push_back ({ e.clause_index, e.try_start_off, e.try_len, ei.handler_start });
+		dispatch.push_back (e);
 	}
 
 	/*
-	 * Every entry turned out to be a resume-pad marker: a nested finally/fault
-	 * whose OWN protected try-body had every call optimized to a nounwind call
-	 * (nothing left that can unwind into it - MonoEHGatherPass, engine.cpp)
-	 * still emits its resume-pad invoke unconditionally whenever it has an
-	 * encloser (emit_resume_unwind, translator-call.cpp), regardless of
-	 * whether its own body has any protected calls left. So a clause-bearing
-	 * method can legitimately reach here with entries but no bases: the same
-	 * "confirmed nothing can throw" case as an empty section, just reached
-	 * through the resume-pad path. out is already empty (built in lockstep with
-	 * bases above) and nothing further to synthesize, so this is done.
+	 * Nothing left that describes a protected region. Either the section was all
+	 * markers - a nested finally/fault whose OWN protected try-body had every call
+	 * optimized to a nounwind call still emits its resume-pad invoke whenever it
+	 * has an encloser (emit_resume_unwind, translator-call.cpp) - or the method's
+	 * protected calls all optimized away. Both are the same confirmed-safe "nothing
+	 * in this method can throw" case as an empty section, so publish zero clauses.
 	 */
-	if (bases.empty ())
+	if (dispatch.empty ())
 		return true;
 
 	/*
-	 * NESTING SYNTHESIS (doc 21 4, EH N1). For each DISTINCT base range whose
-	 * innermost clause is `c`, append one extra MonoJitExceptionInfo per ENCLOSING
-	 * clause `j` (clause c strictly try-contained in clause j) - at most once per
-	 * (range, j) pair, so a sibling group over one range does not multiply its
-	 * enclosers (see DE-DUP below). Each synthesised entry copies the base's EXACT
-	 * native range and overrides j's flags / catch_class / clause_index. Its
-	 * handler_start is the pad control is actually in by the time the runtime gets
-	 * to clause j, which is the base's own pad until a cleanup runs and its resume
-	 * pad after that (see HANDLER CHAINING below).
-	 *
-	 * ORDERING (load-bearing, doc 21 1.1 / 4 step 4). All synthesised entries are
-	 * APPENDED after every base entry, so every base (inner) entry occupies a
-	 * LOWER array slot than its enclosing (outer) entries. Because a synthesised
-	 * entry copies its base's range, for any faulting PC the runtime's flat
-	 * first-match walk sees, at that PC's range, the base entry first and its
-	 * enclosing entries after - so an intervening finally runs before an enclosing
-	 * catch is entered, and pass-2 resume (which continues at the running clause's
-	 * ARRAY slot + 1) reaches the enclosers in innermost-first order. The base
-	 * block was already stable_sort-ed above; the synthesised block is NEVER fed
-	 * into that sort, so nothing can hoist an enclosing entry ahead of its base.
-	 *
-	 * For a single base range, its enclosing entries are appended in ASCENDING
-	 * clause_index order (the j loop runs low->high). By ECMA-335 12.4.2.5 a
-	 * more-deeply-nested try clause precedes its enclosers in the clause table, so
-	 * SMALLER clause_index == more inner, and ascending clause_index ==
-	 * innermost-enclosing first (doc 21 4.1). This ORDER is load-bearing at depth
-	 * >= 3, where a base has MULTIPLE enclosers: pass-2 resumes at the running
-	 * clause's ARRAY slot + 1, so the enclosers must sit innermost-first for the
-	 * intervening finallys to run inner-to-outer and enclosing catches to be
-	 * reached in precedence order. For a depth-3 try/finally C(0) in B(1) in A(2),
-	 * the published array is [C@0, B@1, A@2] and pass-2 runs finallys C, B, A -
-	 * BYTE-for-slot identical to the classic JIT, which emits jinfo->clauses in the
-	 * same inner-first IL clause order (verified live, EH N6). The legacy
-	 * mini-llvm.c:3821 prepend built nested_in DESCENDING (A, B), which for AOT
-	 * fed the load-time synthesis the opposite order and would have run C, A, B -
-	 * that path only ever ran depth-2 nests live, where a single encloser makes the
-	 * order moot; ascending is the correct order and resolves doc 21 4.1's open Q.
-	 *
-	 * DE-DUP BY (base range, enclosing clause_index). A SIBLING catch group -
-	 * try { } catch(A) catch(B) - publishes SEVERAL base entries over the SAME
-	 * invoke range (one per sibling clause), all sharing the one inner landing pad
-	 * the gather emits. Driving synthesis off every base entry would then make each
-	 * sibling base independently re-synthesise the SAME enclosing clause `j` over
-	 * that one range, appending {range R, clause j, handler H} once per sibling.
-	 * For a CATCH encloser that is only latent (a matching catch stops pass-2's
-	 * walk), but for a FINALLY/FAULT encloser - which pass-2 does NOT stop on - the
-	 * duplicates make its handler run once per sibling when an exception propagates
-	 * past every sibling (an ECMA-335 §12.4.2 violation). All sibling bases over R
-	 * carry the identical landing pad, so {R, j, H} is the same whichever sibling it
-	 * came from: appending clause `j` AT MOST ONCE PER DISTINCT (try_start_off,
-	 * try_len) base range collapses the duplicates losslessly. This is keyed on the
-	 * range, NOT globally - a multi-invoke inner try enclosed by a finally has
-	 * several DISTINCT base ranges and MUST keep one enclosing entry per range, so
-	 * distinct ranges are never folded together.
+	 * Per published entry, its [start, end) native invoke range in offsets, so the
+	 * equal-or-disjoint invariant (below) can be validated over the FINAL array.
+	 * Every entry of one chain copies that chain's range, so the array stays
+	 * equal-or-disjoint.
 	 */
-	if (num_clauses > 0) {
+	struct RangeOff { std::uint64_t start; std::uint64_t end; };
+	std::vector<RangeOff> ranges;
+
+	out.reserve (dispatch.size ());
+	ranges.reserve (dispatch.size ());
+
+	/*
+	 * ORDERING (load-bearing). A chain is published innermost-first, so for any
+	 * faulting PC the runtime's flat first-match walk sees the innermost clause
+	 * first and its enclosers after - an intervening finally runs before an
+	 * enclosing catch is entered, and pass-2 resume (which continues at the running
+	 * clause's ARRAY slot + 1) reaches the enclosers in innermost-first order. For a
+	 * depth-3 try/finally C in B in A the published array is [C, B, A] and pass-2
+	 * runs finallys C, B, A - slot-for-slot what the classic JIT produces, which
+	 * emits jinfo->clauses in the same inner-first IL clause order.
+	 */
+	for (std::size_t i = 0; i < dispatch.size (); ) {
+		/* One landing pad's entries for one invoke range: a single nesting chain. */
+		std::size_t end = i;
+		while (end < dispatch.size () &&
+		       dispatch[end].try_start_off == dispatch[i].try_start_off &&
+		       dispatch[end].try_len == dispatch[i].try_len &&
+		       dispatch[end].handler_off == dispatch[i].handler_off)
+			++end;
+
 		/*
-		 * The (range, enclosing clause_index) pairs already appended, so a second
-		 * base entry sharing a range does not re-synthesise an encloser its
-		 * co-sibling already produced. Keyed on the native range - NOT the base's
-		 * clause_index - so distinct invoke ranges each keep their own enclosing
-		 * entry.
+		 * HANDLER CHAINING. A chain's clauses are reached through whichever pad
+		 * control is in by the time the runtime gets to them, and that pad's
+		 * selector switch routes each one on to its handler body. It only MOVES
+		 * when a cleanup runs: a finally/fault ends in an invoke of the resume
+		 * trampoline that unwinds to a pad of its own, so from there on the rest
+		 * of the chain is dispatched through that resume pad. A catch that did not
+		 * match ran nothing, so it leaves the pad where it was.
 		 */
-		struct Synth { std::uint32_t try_start_off; std::uint32_t try_len; int j; };
-		std::vector<Synth> synthesised;
+		gpointer cur_handler = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + dispatch[i].handler_off);
 
-		std::size_t base_count = bases.size ();
-		for (std::size_t bi = 0; bi < base_count; ++bi) {
-			const BaseEntry &b = bases[bi];
-			const MonoExceptionClause &cc = clauses[b.clause_index];
+		for (std::size_t k = i; k < end; ++k) {
+			const MonoLsdaEntry &e = dispatch[k];
+			const MonoExceptionClause &cl = clauses[e.clause_index];
+
 			/*
-			 * The pad the runtime is currently entering this range's handlers
-			 * through, walked outwards with the enclosers (see HANDLER CHAINING
-			 * below). It starts at the base's own pad, and moves to a cleanup's
-			 * resume pad once that cleanup has run.
+			 * Build the published ei (CAP-EH-1). flags is joined from the IL
+			 * header - the section never carries it. handler_start is
+			 * FTNPTR-encoded at publish (never in the section). The
+			 * try_offset/try_len/handler_offset/handler_len fields stay 0
+			 * (memset): only the llvmonly match path reads them, and catch
+			 * delivery is via RAX for from_llvm (doc 11 6.4).
+			 *
+			 * The `data` union and `exvar_offset` are kind-dependent:
+			 *   - CATCH (NONE): data.catch_class is joined from the IL header.
+			 *   - FINALLY: the abort-guard fields data.handler_end and
+			 *     exvar_offset are left 0 here and supplied by the guard entries
+			 *     append_finally_guards () adds.
+			 *   - FAULT: the runtime reads neither field, so 0 is simply correct.
 			 */
-			gpointer cur_handler = resume_pad[b.clause_index] ? resume_pad[b.clause_index] : b.handler_start;
+			MonoJitExceptionInfo ei;
+			memset (&ei, 0, sizeof (ei));
+			ei.flags = cl.flags;
+			if (cl.flags == MONO_EXCEPTION_CLAUSE_NONE)
+				ei.data.catch_class = cl.data.catch_class;
+			ei.clause_index = static_cast<int> (e.clause_index);
+			ei.try_start = (gpointer) (native_code + e.try_start_off);
+			ei.try_end = (gpointer) (native_code + e.try_start_off + e.try_len);
+			ei.handler_start = cur_handler;
 
-			for (int j = 0; j < num_clauses; ++j) {
-				if (static_cast<std::uint32_t> (j) == b.clause_index)
-					continue;
-				const MonoExceptionClause &cj = clauses[j];
-				if (!clause_encloses (cc, cj))
-					continue;
+			if (resume_pad[e.clause_index])
+				cur_handler = resume_pad[e.clause_index];
 
-				/*
-				 * CAP-EH-0 (doc 21 7 item 3): an enclosing clause whose kind is
-				 * not one of NONE / FINALLY / FAULT (e.g. a FILTER that slipped a
-				 * relaxed gate) cannot be encoded by this path. Decline the whole
-				 * array rather than publish a partial one. Checked BEFORE the dedup
-				 * skip so an unrepresentable encloser declines even when a co-sibling
-				 * would have folded it away.
-				 */
-				if (cj.flags != MONO_EXCEPTION_CLAUSE_NONE &&
-				    cj.flags != MONO_EXCEPTION_CLAUSE_FINALLY &&
-				    cj.flags != MONO_EXCEPTION_CLAUSE_FAULT)
-					return false;
-
-				/*
-				 * Already synthesised for this exact base range by an earlier
-				 * (co-sibling) base? Then it is byte-identical - skip it. Distinct
-				 * ranges never match here, so they still each get their own entry.
-				 */
-				bool dup = false;
-				for (const Synth &s : synthesised) {
-					if (s.try_start_off == b.try_start_off &&
-					    s.try_len == b.try_len && s.j == j) {
-						dup = true;
-						break;
-					}
-				}
-				/*
-				 * HANDLER CHAINING. Enclosers are reached through whichever pad
-				 * control is in when the runtime gets to them, and that pad's
-				 * selector switch routes each one on to its handler body. It only
-				 * MOVES when a cleanup runs: a finally/fault ends in an invoke of
-				 * the resume trampoline that unwinds to a pad of its own, so from
-				 * there on the enclosers are dispatched through that resume pad -
-				 * the one block the IR shows the cleanup's updates flowing into.
-				 * A catch that did not match ran nothing, so it leaves the pad
-				 * where it was.
-				 *
-				 * Advanced even when the entry itself is a duplicate, so a sibling
-				 * group's second base walks the same chain as its first.
-				 */
-				gpointer handler = cur_handler;
-				if (resume_pad[j])
-					cur_handler = resume_pad[j];
-
-				if (dup)
-					continue;
-				synthesised.push_back ({ b.try_start_off, b.try_len, j });
-
-				MonoJitExceptionInfo ei;
-				memset (&ei, 0, sizeof (ei));
-				ei.flags = cj.flags;
-				if (cj.flags == MONO_EXCEPTION_CLAUSE_NONE)
-					ei.data.catch_class = cj.data.catch_class;
-				ei.clause_index = j;
-				ei.try_start = (gpointer) (native_code + b.try_start_off);
-				ei.try_end = (gpointer) (native_code + b.try_start_off + b.try_len);
-				ei.handler_start = handler;
-
-				out.push_back (ei);
-				ranges.push_back ({ static_cast<std::uint64_t> (b.try_start_off),
-				                    static_cast<std::uint64_t> (b.try_start_off) + b.try_len });
-			}
+			out.push_back (ei);
+			ranges.push_back ({ static_cast<std::uint64_t> (e.try_start_off),
+			                    static_cast<std::uint64_t> (e.try_start_off) + e.try_len });
 		}
+
+		i = end;
 	}
 
 	/*
 	 * EQUAL-OR-DISJOINT invariant over the FINAL published array (doc 21 2.2 / 4
-	 * step 5). Kept as the CAP-EH-0 backstop it was for the non-nested milestone,
-	 * now validated over base + synthesised entries:
+	 * step 5), the CAP-EH-0 backstop:
 	 *   - SIBLING catches - try { } catch(A) catch(B) - are ONE landing pad
-	 *     carrying one TypeId per catch over the shared invoke range, so C2/C3
-	 *     emit several entries with IDENTICAL try_start_off/try_len and DIFFERENT
-	 *     clause_index. mono consumes this natively: is_address_protected matches
-	 *     the shared PC range for every entry, then mono_object_isinst_checked on
-	 *     each catch_class picks the type, RDX = ei->clause_index as the selector.
-	 *     Exactly-equal ranges are legitimate and accepted.
+	 *     carrying one clause per catch over the shared invoke range, so they
+	 *     publish several entries with IDENTICAL try_start_off/try_len and
+	 *     DIFFERENT clause_index. mono consumes this natively: is_address_protected
+	 *     matches the shared PC range for every entry, then
+	 *     mono_object_isinst_checked on each catch_class picks the type, RDX =
+	 *     ei->clause_index as the selector. Exactly-equal ranges are legitimate.
 	 *   - A try with N protected calls yields N DISJOINT ranges (one per call).
-	 *   - A synthesised enclosing entry copies its base's EXACT range, so it is
-	 *     always EQUAL to that base (and equal-or-disjoint to everything else the
-	 *     base was). Nesting is thus encoded purely by same-range entries + array
-	 *     order, never by a nested native extent - the invariant is PRESERVED.
+	 *   - An enclosing entry shares its chain's EXACT range, so it is always EQUAL
+	 *     to the entries beside it. Nesting is thus encoded purely by same-range
+	 *     entries + array order, never by a nested native extent.
 	 * Only a PARTIAL overlap or STRICT nesting ([0x10,0x40) containing [0x20,0x30))
 	 * is illegal - it implies a genuine crossing (malformed IL / a producer bug),
 	 * making is_address_protected's first-match ambiguous. Such ranges are never
@@ -687,15 +533,14 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 
 bool
 publish_mono_lsda (MonoCompile *cfg,
+                   const std::vector<MonoExceptionClause> &clauses,
                    const std::vector<MonoLsdaEntry> &entries,
                    const std::uint8_t *native_code, std::uint32_t code_len,
                    const std::vector<MonoFinallyGuard> &guards)
 {
-	int num_clauses = cfg->header ? static_cast<int> (cfg->header->num_clauses) : 0;
-	const MonoExceptionClause *clauses = cfg->header ? cfg->header->clauses : nullptr;
-
 	std::vector<MonoJitExceptionInfo> built;
-	if (!build_ex_info (entries, clauses, num_clauses, native_code, code_len, built, guards))
+	if (!build_ex_info (entries, clauses.data (), static_cast<int> (clauses.size ()),
+	                    native_code, code_len, built, guards))
 		return false; /* caller set_failure -> classic JIT */
 
 	/*

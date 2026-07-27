@@ -179,7 +179,7 @@ bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const std::vector<MonoFinallyGuard> &guards = {});
 
 /*
- * Validate ENTRIES against cfg->header->clauses[] and the loaded code, then, on
+ * Validate ENTRIES against CLAUSES and the loaded code, then, on
  * success, allocate cfg->llvm_ex_info[] from cfg->mempool and set
  * cfg->llvm_ex_info / cfg->llvm_ex_info_len (mini.c copies it verbatim into
  * jinfo->clauses with from_llvm=1). Returns false on any validation failure, in
@@ -187,6 +187,7 @@ bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
  * (CAP-EH-0). Thin wrapper over build_ex_info.
  */
 bool publish_mono_lsda (MonoCompile *cfg,
+                        const std::vector<MonoExceptionClause> &clauses,
                         const std::vector<MonoLsdaEntry> &entries,
                         const std::uint8_t *native_code, std::uint32_t code_len,
                         const std::vector<MonoFinallyGuard> &guards = {});

@@ -151,7 +151,18 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 			if (!begin || !end)
 				report_fatal_error ("mono: landing pad invoke range has a null label - LLVM invariant broken");
 
-			for (int type_id : lp.TypeIds) {
+			/*
+			 * Back to front: MachineFunction::addLandingPad () walks the
+			 * landingpad's clauses in reverse when it builds TypeIds, so
+			 * reversing here restores the order the translator emitted them in -
+			 * innermost clause first, then outwards through the enclosers
+			 * (add_covering_clauses, translator-call.cpp). That order is the
+			 * nesting chain, and .mono_lsda carries it by position, so it has to
+			 * survive this hop.
+			 */
+			for (auto it = lp.TypeIds.rbegin (); it != lp.TypeIds.rend (); ++it) {
+				int type_id = *it;
+
 				/*
 				 * type_id < 0 is a filter (exception-specification) - a real,
 				 * valid `catch (T) when (cond)` clause we simply don't support

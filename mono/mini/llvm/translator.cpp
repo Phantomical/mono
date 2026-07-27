@@ -369,6 +369,8 @@ alloc_emit_context (MonoCompile *cfg, MonoLLVMModule *module)
 	EmitContext *ctx = new EmitContext ();
 	ctx->cfg = cfg;
 	ctx->mempool = cfg->mempool;
+	/* A root numbers its clauses from 0; materialize_callee () rebases a callee. */
+	ctx->clause_id_base = 0;
 
 	/* This maps vregs to the LLVM instruction defining them */
 	ctx->values = g_new0 (llvm::Value *, cfg->next_vreg);
@@ -1541,6 +1543,22 @@ materialize_callee (MonoMethod *method, const Tier1Root &root)
 		 */
 		ctx->keep_rgctx_arg = mini_method_call_passes_rgctx (root.cfg, method);
 
+		/*
+		 * Give this body's clauses a block of ids of their own in the root's
+		 * numbering, so nothing it bakes into the IR - type_info globals, finally
+		 * marker stackmap IDs, landing pad selector cases - can collide with the
+		 * root's clauses or another callee's once the inliner folds them into one
+		 * function. The entries are COPIED because cfg dies at the end of this
+		 * call, taking its header with it.
+		 */
+		if (cfg->header && cfg->header->num_clauses) {
+			std::vector<MonoExceptionClause> &table = root.module->clauses;
+
+			ctx->clause_id_base = (int) table.size ();
+			table.insert (table.end (), cfg->header->clauses,
+			              cfg->header->clauses + cfg->header->num_clauses);
+		}
+
 		ctx->emit_method_inner ();
 
 		if (!ctx->ok () || !ctx->lmethod) {
@@ -1883,17 +1901,17 @@ struct FinallyExvar {
  * entirely, so there is nothing for a thread to be stopped inside.
  */
 static void
-recover_finally_exvars (MonoCompile *cfg, guint8 *stackmaps, guint32 size,
+recover_finally_exvars (const std::vector<MonoExceptionClause> &clauses,
+                        guint8 *stackmaps, guint32 size,
                         std::map<guint32, FinallyExvar> &out)
 {
-	MonoMethodHeader *header = cfg->header;
 	std::vector<StackmapRecord> records;
 	bool has_finally = false;
 
 	out.clear ();
 
-	for (int i = 0; i < header->num_clauses; ++i) {
-		if (header->clauses [i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
+	for (const MonoExceptionClause &c : clauses) {
+		if (c.flags == MONO_EXCEPTION_CLAUSE_FINALLY)
 			has_finally = true;
 	}
 	if (!has_finally)
@@ -1914,9 +1932,9 @@ recover_finally_exvars (MonoCompile *cfg, guint8 *stackmaps, guint32 size,
 
 		guint32 clause_index = static_cast<guint32>(r.id & MONO_LLVM_FINALLY_STACKMAP_ID_MASK);
 
-		/* We built this ID out of the same cfg->header we are checking it against. */
-		g_assert (clause_index < static_cast<guint32>(header->num_clauses));
-		g_assert (header->clauses [clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
+		/* We built this ID out of the same clause table we are checking it against. */
+		g_assert (clause_index < clauses.size ());
+		g_assert (clauses [clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
 
 		/*
 		 * The slot is a volatile alloca in a method whose frame pointer we pin,
@@ -2057,6 +2075,18 @@ EmitContext::llvm_jit_finalize_method ()
 	 * LLVMContext every callee body must be built in).
 	 */
 	mono::Tier1Root root { llvm::unwrap<llvm::Function> (this->lmethod), cfg, this->module };
+
+	/*
+	 * Seed the compile's clause table with the root's own clauses, at the ids its
+	 * IR already names them by (a root emits with clause_id_base 0). Inlining
+	 * appends to this, so by publish time it describes every clause in the
+	 * finished function whatever method each one came from.
+	 */
+	g_assert (this->module->clauses.empty ());
+	if (cfg->header)
+		this->module->clauses.assign (cfg->header->clauses,
+		                              cfg->header->clauses + cfg->header->num_clauses);
+
 	mono::MonoLLVMJIT::get_singleton ()->optimize (root);
 
 	mono_codeman_enable_write ();
@@ -2169,7 +2199,13 @@ EmitContext::llvm_jit_finalize_method ()
 	 * ever reach a handler. mono_lsda.cpp's build_ex_info () publishes it as
 	 * zero clauses rather than declining.
 	 */
-	if (cfg->header->num_clauses > 0) {
+	/*
+	 * The clause table for the function that actually got emitted: the root's own
+	 * clauses plus any an inlined callee brought with it.
+	 */
+	const std::vector<MonoExceptionClause> &clauses = this->module->clauses;
+
+	if (!clauses.empty ()) {
 		std::vector<mono::MonoLsdaEntry> entries;
 		std::vector<mono::MonoFinallyGuard> guards;
 		std::map<guint32, FinallyExvar> exvars;
@@ -2186,7 +2222,7 @@ EmitContext::llvm_jit_finalize_method ()
 		 * named the frame slot to flag an abort through. Both are keyed on the
 		 * IL clause index. Empty for a method with no finally.
 		 */
-		recover_finally_exvars (cfg, static_cast<guint8*>(stackmaps), stackmaps_size, exvars);
+		recover_finally_exvars (clauses, static_cast<guint8*>(stackmaps), stackmaps_size, exvars);
 
 		for (const mono::MonoLsdaEntry &e : entries) {
 			if (e.kind != mono::MONO_LSDA_KIND_FINALLY_BODY)
@@ -2241,7 +2277,7 @@ EmitContext::llvm_jit_finalize_method ()
 			}
 		}
 
-		if (!mono::publish_mono_lsda (cfg, entries, cfg->native_code, cfg->code_len, guards)) {
+		if (!mono::publish_mono_lsda (cfg, clauses, entries, cfg->native_code, cfg->code_len, guards)) {
 			this->set_failure ("could not publish .mono_lsda clause table");
 			return;
 		}
