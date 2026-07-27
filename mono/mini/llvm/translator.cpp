@@ -500,6 +500,41 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	free_compile_module (module);
 }
 
+/*
+ * Give this root a line table to hang IL offsets off. Materialized inliner
+ * callees deliberately get none - see IlLineTable's comment for why that is what
+ * makes an inlined body report the ROOT's call site.
+ */
+void
+EmitContext::begin_il_line_table ()
+{
+	this->il_line_table = std::make_unique<mono::IlLineTable> (
+		llvm::unwrap (this->lmodule), llvm::unwrap<llvm::Function> (this->lmethod),
+		this->method_name);
+}
+
+/*
+ * Attribute everything emitted from here on to IL_OFFSET, until the next
+ * OP_IL_SEQ_POINT moves it. This is the whole mapping: the line in effect at a
+ * native address is what `.debug_line` records, and the assembler writes those
+ * rows in code order, so a run of seq points that optimization collapsed onto
+ * one address resolves to the last one - the same "most recent point execution
+ * passed" the classic JIT's own lookup has.
+ */
+void
+EmitContext::set_il_debug_location (llvm::IRBuilder<> *builder, guint32 il_offset)
+{
+	if (this->il_line_table)
+		this->il_line_table->set_location (builder, il_offset);
+}
+
+void
+EmitContext::finish_il_line_table ()
+{
+	if (this->il_line_table)
+		this->il_line_table->finish ();
+}
+
 void
 EmitContext::emit_method_inner ()
 {
@@ -571,8 +606,10 @@ EmitContext::emit_method_inner ()
 	 * pass itself does not read this - it is handed its root directly (see
 	 * Tier1Root, passes/inliner-support.hpp).
 	 */
-	if (!this->translate_only)
+	if (!this->translate_only) {
 		llvm::unwrap<llvm::Function> (method)->addFnAttr ("mono-tier1-root");
+		this->begin_il_line_table ();
+	}
 
 	/*
 	 * Mark that this method's IL declared at least one exception clause, so
@@ -1015,6 +1052,8 @@ after_codegen:
 	}
 
 	//LLVMVerifyFunction (method, 0);
+
+	this->finish_il_line_table ();
 
 	if (this->translate_only)
 		/*
@@ -1975,57 +2014,24 @@ recover_finally_markers (const std::vector<MonoExceptionClause> &clauses,
 }
 
 /*
- * recover_il_seq_points:
+ * Fill in CFG's tier-1 native_offset -> il_offset map from ROWS, the line table
+ * the engine read out of this method's `.debug_line` (each row's line is the IL
+ * offset, biased by one). Fills cfg->llvm_seq_points/n_llvm_seq_points, which
+ * create_jit_info () (mini.c) copies onto the method's MonoJitInfo.
  *
- *   Recover CFG's tier-1 native_offset -> il_offset map from the
- * `.llvm_stackmaps` section: one record per OP_IL_SEQ_POINT the translator saw
- * (emit_il_seq_point_stackmap, translator-call.cpp), tagged with
- * MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE | il_offset. Fills in
- * cfg->llvm_seq_points/n_llvm_seq_points, which create_jit_info () (mini.c) then
- * copies onto the method's MonoJitInfo.
- *
- * This is diagnostics-quality data (stack traces, profiler attribution), not
- * something whose absence makes execution wrong, so unlike the gshared this-slot
- * and finally-guard recoveries above, a missing or unparseable section just
- * leaves the map empty (cfg->llvm_seq_points stays NULL) rather than declining
- * the method to the classic JIT.
- *
- * Two things the classic backend's mono_add_seq_point () never has to handle,
- * because it runs during its own linear codegen pass instead of reading a
- * section back after the fact:
- *
- *  - Records are not necessarily in native-offset order (LLVM is free to
- *    reorder blocks after the translator emitted the markers), but
- *    mono_seq_point_find_prev/next_by_native_offset()-style lookups need
- *    ascending order - so this sorts before publishing.
- *  - LLVM may duplicate the block a marker sits in (tail duplication, loop
- *    unrolling, ...), yielding more than one record for the same il_offset.
- *    That is not a conflict to resolve: each copy has its own native range, so
- *    every record is independently correct and all are kept.
+ * This is diagnostics-quality data - stack traces, profiler attribution - not
+ * something whose absence makes execution wrong, so an empty or missing line
+ * table just leaves the map empty rather than declining the method to the
+ * classic JIT.
  */
 static void
-recover_il_seq_points (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
+recover_il_seq_points (MonoCompile *cfg, const std::vector<mono::MonoIlLineRow> &rows)
 {
-	std::vector<StackmapRecord> records;
-	std::vector<const StackmapRecord*> il_records;
-
 	cfg->llvm_seq_points = NULL;
 	cfg->n_llvm_seq_points = 0;
 
-	if (!parse_stackmap_records (stackmaps, size, records))
+	if (rows.empty ())
 		return;
-
-	for (const StackmapRecord &r : records) {
-		if ((r.id >> 32) == (MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE >> 32))
-			il_records.push_back (&r);
-	}
-	if (il_records.empty ())
-		return;
-
-	std::sort (il_records.begin (), il_records.end (),
-	           [](const StackmapRecord *a, const StackmapRecord *b) {
-	               return a->instr_off < b->instr_off;
-	           });
 
 	/*
 	 * Allocated out of cfg->mem_manager, the same pool the MonoJitInfo itself
@@ -2033,15 +2039,15 @@ recover_il_seq_points (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 	 * with no separate free needed.
 	 */
 	MonoLLVMSeqPoint *map = (MonoLLVMSeqPoint *) mono_mem_manager_alloc (
-		cfg->mem_manager, il_records.size () * sizeof (MonoLLVMSeqPoint));
+		cfg->mem_manager, rows.size () * sizeof (MonoLLVMSeqPoint));
 
-	for (size_t i = 0; i < il_records.size (); ++i) {
-		map [i].native_offset = il_records [i]->instr_off;
-		map [i].il_offset = (guint32) (il_records [i]->id & MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_MASK);
+	for (size_t i = 0; i < rows.size (); ++i) {
+		map [i].native_offset = rows [i].native_offset;
+		map [i].il_offset = rows [i].il_offset;
 	}
 
 	cfg->llvm_seq_points = map;
-	cfg->n_llvm_seq_points = (guint32) il_records.size ();
+	cfg->n_llvm_seq_points = (guint32) rows.size ();
 }
 
 void
@@ -2369,7 +2375,7 @@ EmitContext::llvm_jit_finalize_method ()
 		}
 	}
 
-	recover_il_seq_points (cfg, static_cast<guint8*>(stackmaps), stackmaps_size);
+	recover_il_seq_points (cfg, res.il_lines);
 
 	mono_domain_lock (domain);
 	domain_info = domain_jit_info (domain);

@@ -69,21 +69,6 @@ constexpr std::uint64_t MONO_LLVM_FINALLY_STACKMAP_ID_BASE = 0xF19A11ULL << 32;
 constexpr std::uint64_t MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE = 0xF19A12ULL << 32;
 constexpr std::uint64_t MONO_LLVM_FINALLY_STACKMAP_ID_MASK = 0xFFFFFFFFULL;
 
-/*
- * One marker per OP_IL_SEQ_POINT the translator saw (emit_il_seq_point_stackmap,
- * translator-call.cpp), recording where in the code that IL offset landed. The
- * low 32 bits of the ID are the IL offset itself rather than an index into a
- * side table, since an IL offset already fits comfortably and it saves having
- * to correlate the record back to anything else.
- *
- * Unlike the other markers this one is read back by address (translator.cpp's
- * recover_il_seq_points), not by ID lookup, so duplication from LLVM cloning a
- * block is not a problem: two records with the same IL offset at different PCs
- * are both simply correct, one for each surviving copy.
- */
-constexpr std::uint64_t MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE = 0xF19A13ULL << 32;
-constexpr std::uint64_t MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_MASK = 0xFFFFFFFFULL;
-
 } // namespace mono
 
 #endif /* __MONO_MINI_LLVM_MONO_LSDA_FORMAT_HPP__ */

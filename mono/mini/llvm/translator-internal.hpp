@@ -84,6 +84,8 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Function.h>
 
+#include "il-line-table.hpp"
+
 #include "mono_lsda_format.hpp"
 #include "translator-cpp.hpp"
 #include "backend.h"
@@ -233,6 +235,20 @@ typedef struct {
 	LLVMCallInfo *linfo;
 	MonoMethodSignature *sig;
 	std::vector<std::unique_ptr<llvm::IRBuilder<>>> builders;
+	/*
+	 * Line-table debug info, the carrier for this method's native_offset ->
+	 * il_offset map: each OP_IL_SEQ_POINT sets a DILocation whose line is the IL
+	 * offset, and the map is read back out of the emitted object's `.debug_line`
+	 * (engine.cpp). Roots only - a materialized callee is left with no debug info
+	 * at all, which is what makes LLVM's inliner stamp the whole inlined body with
+	 * the ROOT's call-site location (fixupLineNumbers (), InlineFunction.cpp)
+	 * rather than leaving the callee's own IL offsets in the root's line table.
+	 *
+	 * di_cur_loc is the location in effect, carried across create_builder () so a
+	 * new basic block's instructions do not come out unattributed - LLVM requires
+	 * an inlinable call in a function with debug info to carry one.
+	 */
+	std::unique_ptr<mono::IlLineTable> il_line_table;
 	std::unordered_map<int, MonoBasicBlock*> region_to_handler;
 	std::unordered_map<int, MonoBasicBlock*> clause_to_handler;
 	/*
@@ -378,12 +394,16 @@ typedef struct {
 	void emit_vtype_to_args (llvm::IRBuilder<> *builder, MonoType *t, LLVMValueRef address, LLVMArgInfo *ainfo, LLVMValueRef *args, guint32 *nargs);
 	LLVMValueRef emit_gsharedvt_ldaddr (int vreg);
 
+	/* Line-table debug info (defined in translator.cpp). */
+	void begin_il_line_table ();
+	void set_il_debug_location (llvm::IRBuilder<> *builder, guint32 il_offset);
+	void finish_il_line_table ();
+
 	/* Call / prologue / exception-emission helpers (defined in translator-call.cpp). */
 	void emit_div_check (llvm::IRBuilder<> *builder, MonoBasicBlock *bb, MonoInst *ins, llvm::Value *lhs, llvm::Value *rhs);
 	void emit_this_slot_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot);
 	void emit_finally_guard_stackmap (llvm::IRBuilder<> *builder, LLVMValueRef slot, int clause_index);
 	void emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_index);
-	void emit_il_seq_point_stackmap (llvm::IRBuilder<> *builder, guint32 il_offset);
 	void emit_entry_bb (llvm::IRBuilder<> *builder);
 	void emit_class_init_guards (llvm::IRBuilder<> *builder);
 	void emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc);
@@ -678,8 +698,6 @@ using mono::MONO_LLVM_THIS_SLOT_STACKMAP_ID;
 using mono::MONO_LLVM_FINALLY_STACKMAP_ID_BASE;
 using mono::MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE;
 using mono::MONO_LLVM_FINALLY_STACKMAP_ID_MASK;
-using mono::MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE;
-using mono::MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_MASK;
 
 /* Defined in translator-call.cpp. */
 /*

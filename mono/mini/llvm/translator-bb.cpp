@@ -4409,7 +4409,7 @@ EmitContext::process_bb (MonoBasicBlock *bb)
 			break;
 		}
 		case OP_IL_SEQ_POINT:
-			ctx->emit_il_seq_point_stackmap (builder, (guint32) ins->inst_imm);
+			ctx->set_il_debug_location (builder, (guint32) ins->inst_imm);
 			break;
 		case OP_SEQ_POINT:
 			break;

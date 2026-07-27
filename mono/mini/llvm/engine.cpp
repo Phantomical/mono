@@ -97,6 +97,7 @@
 #include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/MCSymbol.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
@@ -171,7 +172,114 @@ struct ObjectInfo {
 	 * folds every offset to a constant - the section carries NO relocations.
 	 */
 	EhFrameInfo mono_lsda;
+	/*
+	 * Per-function line tables read out of the input object's `.debug_line`,
+	 * keyed by function symbol name, ascending by native offset. This is the
+	 * native_offset -> il_offset map for stack traces; see MonoIlLineRow.
+	 */
+	std::map<std::string, std::vector<MonoIlLineRow>> il_lines;
 };
+
+/*
+ * Read the `.debug_line` table out of the just-compiled (not yet linked) object
+ * and reduce it to per-function (native_offset, il_offset) rows.
+ *
+ * Reading the INPUT object rather than the linked graph is deliberate:
+ * `.debug_line` is not SHF_ALLOC, so JITLink neither allocates nor relocates it,
+ * and there would be nothing to read on the other side. In a relocatable object
+ * DWARFContext applies the debug-section relocations itself, so a row's address
+ * is already the function's offset within `.text`.
+ *
+ * Rows at the same address are what a run of IL seq points collapses to once the
+ * optimizer is done. They arrive in code order, so the LAST one is the offset in
+ * effect there - keeping it is what makes the map single-valued, and what the
+ * classic JIT's own "most recent point execution passed" lookup agrees with.
+ */
+static void
+parse_il_line_tables (MemoryBufferRef obj_buf,
+                      std::map<std::string, std::vector<MonoIlLineRow>> &out)
+{
+	Expected<std::unique_ptr<object::ObjectFile>> obj =
+		object::ObjectFile::createObjectFile (obj_buf);
+	if (!obj) {
+		consumeError (obj.takeError ());
+		return;
+	}
+
+	std::unique_ptr<DWARFContext> dw = DWARFContext::create (**obj);
+	if (!dw)
+		return;
+
+	struct FuncRange { uint64_t start; uint64_t size; std::string name; };
+	std::vector<FuncRange> funcs;
+
+	for (const object::SymbolRef &sym : (*obj)->symbols ()) {
+		Expected<object::SymbolRef::Type> type = sym.getType ();
+		if (!type) {
+			consumeError (type.takeError ());
+			continue;
+		}
+		if (*type != object::SymbolRef::ST_Function)
+			continue;
+
+		Expected<StringRef> name = sym.getName ();
+		Expected<uint64_t> value = sym.getValue ();
+		if (!name || !value) {
+			if (!name)
+				consumeError (name.takeError ());
+			if (!value)
+				consumeError (value.takeError ());
+			continue;
+		}
+		funcs.push_back ({ *value, object::ELFSymbolRef (sym).getSize (), name->str () });
+	}
+
+	if (funcs.empty ())
+		return;
+
+	for (const std::unique_ptr<DWARFUnit> &cu : dw->compile_units ()) {
+		const DWARFDebugLine::LineTable *lt = dw->getLineTableForUnit (cu.get ());
+		if (!lt)
+			continue;
+
+		for (const DWARFDebugLine::Row &row : lt->Rows) {
+			/* Line 0 is DWARF's "no source location"; the bias keeps IL offset 0 out of it. */
+			if (row.EndSequence || row.Line == 0)
+				continue;
+
+			for (const FuncRange &f : funcs) {
+				if (row.Address.Address < f.start)
+					continue;
+				if (f.size && row.Address.Address >= f.start + f.size)
+					continue;
+
+				MonoIlLineRow r;
+				r.native_offset = (uint32_t) (row.Address.Address - f.start);
+				r.il_offset = (uint32_t) (row.Line - 1);
+
+				std::vector<MonoIlLineRow> &rows = out[f.name];
+				if (!rows.empty () && rows.back ().native_offset == r.native_offset)
+					rows.back () = r;
+				else
+					rows.push_back (r);
+				break;
+			}
+		}
+	}
+
+	/*
+	 * The rows arrive in code order, which is ascending by address within a
+	 * sequence but need not be across sequences (LLVM is free to lay blocks out
+	 * in any order). mono binary-searches this, so sort - stably, so the
+	 * last-row-wins choice above survives.
+	 */
+	for (auto &kv : out) {
+		std::stable_sort (kv.second.begin (), kv.second.end (),
+		                  [] (const MonoIlLineRow &a, const MonoIlLineRow &b) {
+		                      return a.native_offset < b.native_offset;
+		                  });
+	}
+}
 
 /* ---- relocation audit ----------------------------------------------------
  *
@@ -761,6 +869,27 @@ public:
 			g_object_info[jd_name].eh_frame = eh;
 			return Error::success ();
 		});
+	}
+
+	/*
+	 * The one hook that sees the object bytes before linking, which is where
+	 * `.debug_line` still exists - it is not SHF_ALLOC, so it never reaches the
+	 * LinkGraph passes above. Upstream marks this deprecated and promises "a
+	 * proper mechanism for capturing object buffers"; LLVM 18 does not have one
+	 * yet, so this is the mechanism.
+	 */
+	void notifyMaterializing (orc::MaterializationResponsibility &mr,
+	                          jitlink::LinkGraph &, jitlink::JITLinkContext &,
+	                          MemoryBufferRef input_object) override
+	{
+		std::map<std::string, std::vector<MonoIlLineRow>> lines;
+
+		parse_il_line_tables (input_object, lines);
+		if (lines.empty ())
+			return;
+
+		std::lock_guard<std::mutex> lock (g_object_info_mutex);
+		g_object_info[mr.getTargetJITDylib ().getName ()].il_lines = std::move (lines);
 	}
 
 	/* Drop any partial capture for a link that failed to materialize. */
@@ -2217,6 +2346,9 @@ MonoLLVMJIT::compile (Function *entry,
 			result.eh_frame = info.eh_frame;
 			result.stackmaps = info.stackmaps;
 			result.mono_lsda = info.mono_lsda;
+			auto lines_it = info.il_lines.find (entry_name);
+			if (lines_it != info.il_lines.end ())
+				result.il_lines = lines_it->second;
 			g_object_info.erase (entry_it);
 		}
 	}

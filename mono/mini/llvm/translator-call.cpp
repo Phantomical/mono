@@ -300,35 +300,6 @@ EmitContext::emit_finally_end_stackmap (llvm::IRBuilder<> *builder, int clause_i
 }
 
 /*
- * Mark the point OP_IL_SEQ_POINT sat at, so translator.cpp's recover_il_seq_points ()
- * can read back a native_offset -> il_offset mapping for this method after codegen (used
- * for stack traces and profiler attribution; the debugger's real seq points, OP_SEQ_POINT,
- * are a separate opcode this backend does not translate).
- *
- * Unlike the other markers this one needs a location operand: parse_stackmap_records ()
- * skips zero-location records, since the this-slot/finally-guard readers only ever want the
- * PC of a marker that also names a frame slot. This marker has no slot of its own to name,
- * so it carries a throwaway constant purely to give its record one - the value is never
- * read back, only the record's ID and PC are.
- *
- * Only a root gets these. An inline candidate's offsets index ITS il, not the root's, so
- * folding its markers in would hand recover_il_seq_points () records it can only attribute
- * to the wrong method - and a body full of intrinsic calls prices itself out of the stock
- * inliner's cost model besides, which is how this first showed up.
- */
-void
-EmitContext::emit_il_seq_point_stackmap (llvm::IRBuilder<> *builder, guint32 il_offset)
-{
-	if (this->translate_only)
-		return;
-
-	guint64 id = MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE | (guint64) il_offset;
-	LLVMValueRef marker = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), 0));
-
-	emit_slot_stackmap (this, builder, marker, id);
-}
-
-/*
  * emit_entry_bb:
  *
  *   Emit code to load/convert arguments.

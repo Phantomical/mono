@@ -92,7 +92,7 @@ _mono_add_il_target(inliner-fault.dll          inliner-fault.il          LIBRARY
 # Plain "compile against TestDriver" corpora.
 foreach(_t basic basic-float basic-long basic-calls objects arrays basic-math
            exceptions devirtualization gshared aot-tests ratests
-           tiered-promotion tiered-decline tiered-appdomain)
+           tiered-promotion tiered-decline tiered-appdomain il-offset-tests)
   _mono_add_cs_target(${_t}.exe SOURCES ${_t}.cs REFS "${_driver}")
 endforeach()
 
@@ -198,6 +198,19 @@ if(MONO_ENABLE_LLVM)
                    "${CMAKE_CURRENT_SOURCE_DIR}/inliner-tests.cs"
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties(tiered-inliner-tags PROPERTIES
+    LABELS tiered FIXTURES_REQUIRED mini_corpora)
+
+  # Tier 1 reads its native_offset -> il_offset map back out of the emitted
+  # object rather than building it during codegen, so the map can be wrong --
+  # or carry a body it inlined -- with every corpus still green, because a bad
+  # map only makes stack traces lie. This diffs it against the classic JIT,
+  # which computes the same mapping the direct way.
+  add_test(NAME tiered-il-offsets
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/check-il-offsets.sh"
+                   "MONO_PATH=${_class_dir} ${_wrapper}"
+                   "${CMAKE_CURRENT_BINARY_DIR}/il-offset-tests.exe"
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(tiered-il-offsets PROPERTIES
     LABELS tiered FIXTURES_REQUIRED mini_corpora)
 endif()
 

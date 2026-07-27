@@ -565,6 +565,14 @@ EmitContext::create_builder ()
 	auto *b = new llvm::IRBuilder<> (llvm_ctx ());
 	if (mono_use_fast_math)
 		mono_llvm_set_fast_math (llvm::wrap (b));
+	/*
+	 * Carry the IL offset in effect over to the new builder. A block that starts
+	 * before its first OP_IL_SEQ_POINT would otherwise emit unattributed
+	 * instructions, and an inlinable call with no location in a function that has
+	 * debug info is a verifier error, not just a gap in the table.
+	 */
+	if (il_line_table)
+		il_line_table->reapply (b);
 
 	builders.emplace_back (b);
 

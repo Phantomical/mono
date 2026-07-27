@@ -109,6 +109,7 @@ if(MONO_ENABLE_LLVM)
     llvm-runtime.cpp
     llvm/engine.cpp
     llvm/ehframe.cpp
+    llvm/il-line-table.cpp
     llvm/jitdump.cpp
     llvm/mono_lsda.cpp
     llvm/tiered.cpp

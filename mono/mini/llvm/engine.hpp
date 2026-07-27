@@ -85,6 +85,17 @@ struct EhFrameInfo {
  * the module's own JITDylib and handed back here, which stays correct whoever
  * does the work.
  */
+/*
+ * One row of the entry function's line table: a native offset from the start of
+ * the function, and the IL offset in effect there. The translator sets the line
+ * numbers (set_il_debug_location (), translator.cpp) and the engine reads them
+ * back out of the emitted object's `.debug_line`.
+ */
+struct MonoIlLineRow {
+	uint32_t native_offset;
+	uint32_t il_offset;
+};
+
 struct CompileResult {
 	/* Executable address of the entry function. */
 	uint64_t entry = 0;
@@ -106,6 +117,12 @@ struct CompileResult {
 	 * generic context.
 	 */
 	EhFrameInfo stackmaps;
+	/*
+	 * The entry function's `.debug_line` rows, ascending by native offset, empty
+	 * if the module carried no line table. This is the method's native_offset ->
+	 * il_offset map; mono hangs it off the MonoJitInfo for stack traces.
+	 */
+	std::vector<MonoIlLineRow> il_lines;
 	/*
 	 * The `.mono_lsda` section of this module ({nullptr,0} unless MonoLSDAStreamer
 	 * wrote one - i.e. an EH-bearing method whose catch clauses the C2 gather pass
