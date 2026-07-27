@@ -44,6 +44,21 @@ option(MONO_WITH_UNITYJIT "Install the unityjit class library profile" ON)
 option(MONO_WITH_UNITYAOT "Install the unityaot class library profile" ON)
 option(MONO_UNITY_DEFINE  "Define UNITY in config.h"                   ON)
 
+# How wide the class-library build runs.  mcs has to be told, because it cannot
+# work it out: a make jobserver is inherited through a recursive $(MAKE), and
+# ninja is not make, so the gmake underneath starts with an empty MAKEFLAGS and
+# builds all ~140 assemblies of a profile one at a time.  There is no way to
+# share ninja's -j with it, so the two can briefly oversubscribe -- mcs waits on
+# the runtime link, but ninja may still have other native targets to go.  The
+# overlap is small, and far cheaper than serializing the class libraries.
+include(ProcessorCount)
+ProcessorCount(_mono_ncpu)
+if(_mono_ncpu EQUAL 0)
+  set(_mono_ncpu 1)
+endif()
+set(MONO_MCS_JOBS "${_mono_ncpu}" CACHE STRING
+    "Parallel jobs for the class-library build; 1 serializes it")
+
 # --- build-time managed tools -----------------------------------------------
 # Which mono hosts csc and ilasm while building; see MonoToolsRuntime.cmake for
 # what moves, what does not, and why this is off by default.

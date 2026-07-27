@@ -152,6 +152,7 @@ if(MONO_ENABLE_MCS_BUILD)
     COMMAND ${CMAKE_COMMAND} -E env
             "PATH=$ENV{PATH}:${_tmpinst}"
             "${MONO_GNU_MAKE}" --no-print-directory -s
+            "-j${MONO_MCS_JOBS}"
             -C "${MONO_MCS_TOPDIR}"
             NO_DIR_CHECK=1
             "PROFILES=${MONO_BUILD_PROFILES}"
