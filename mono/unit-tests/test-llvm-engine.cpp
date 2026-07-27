@@ -54,6 +54,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -71,6 +72,7 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
@@ -318,6 +320,109 @@ test_registered_helper (MonoLLVMJIT *jit)
 	/* selftest_helper_impl(x) = x*3+7, then +1. Only reachable via registration. */
 	CHECK (compiled (10) == 38); /* (10*3+7)+1 */
 	CHECK (compiled (0) == 8);   /* (0*3+7)+1  */
+	return TEST_PASS;
+}
+
+/* ------------------------------------------------------ libm fold symbols */
+
+/*
+ * SimplifyLibCalls rewrites the llvm.pow/llvm.exp2 intrinsics mono's
+ * translator emits directly (translator-bb.cpp's OP_FPOW/OP_RPOW) into a
+ * call to a DIFFERENT libm function that never appears anywhere in the IR
+ * mono builds, whenever the pow call has one of a few specific shapes:
+ *
+ *   pow(2.0, sitofp(n))      -> ldexp(1.0, n)             unconditional
+ *   pow(10.0, x)             -> exp10(x)                  unconditional
+ *   pow(x, 1/3) [fast-math]  -> cbrt(x)                    needs nsz+ninf+nnan+afn
+ *
+ * (See register_c_runtime_symbols () in engine.cpp for the full writeup and
+ * the KSP crash - a real Math.Pow(2, level) - that found the first of these.)
+ *
+ * The fold only fires inside a real -O2 run, so each case below builds the
+ * fold's INPUT shape (a genuine llvm.pow call, exactly as call_intrins ()
+ * emits it), runs it through jit->optimize () - the same pass pipeline
+ * production compiles use - and only then compiles it. A helper missing from
+ * register_c_runtime_symbols () does not fail a CHECK gracefully here: it
+ * aborts the whole process inside compile () via cantFail (), same as it
+ * would in a real JIT session. A clean pass is therefore the only way to
+ * know the registered set still covers everything -O2 can synthesize from a
+ * plain pow call.
+ */
+static TestResult
+test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
+{
+	LLVMContext &ctx = jit->context ();
+	Type *f64 = Type::getDoubleTy (ctx);
+	Type *i32 = Type::getInt32Ty (ctx);
+
+	/* pow(2.0, (double) n) -> ldexp(1.0, n) */
+	{
+		auto module = std::make_unique<Module> ("selftest.libmfold.ldexp", ctx);
+		FunctionType *fty = FunctionType::get (f64, {i32}, false);
+		Function *fn = Function::Create (fty, Function::ExternalLinkage,
+		                                 "pow2_of_int", module.get ());
+		BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
+		IRBuilder<> b (bb);
+		Value *n = &*fn->arg_begin ();
+		Value *base = ConstantFP::get (f64, 2.0);
+		Value *expo = b.CreateSIToFP (n, f64);
+		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
+		b.CreateRet (b.CreateCall (powf, {base, expo}));
+
+		jit->optimize (fn);
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		CHECK (res.entry != 0);
+		auto compiled = reinterpret_cast<double (*) (int32_t)> (res.entry);
+		CHECK (compiled (0) == 1.0);
+		CHECK (compiled (10) == 1024.0);
+		CHECK (compiled (-3) == 0.125);
+	}
+
+	/* pow(10.0, x) -> exp10(x) */
+	{
+		auto module = std::make_unique<Module> ("selftest.libmfold.exp10", ctx);
+		FunctionType *fty = FunctionType::get (f64, {f64}, false);
+		Function *fn = Function::Create (fty, Function::ExternalLinkage,
+		                                 "pow10_of", module.get ());
+		BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
+		IRBuilder<> b (bb);
+		Value *x = &*fn->arg_begin ();
+		Value *base = ConstantFP::get (f64, 10.0);
+		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
+		b.CreateRet (b.CreateCall (powf, {base, x}));
+
+		jit->optimize (fn);
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		CHECK (res.entry != 0);
+		auto compiled = reinterpret_cast<double (*) (double)> (res.entry);
+		CHECK (std::abs (compiled (0.0) - 1.0) < 1e-9);
+		CHECK (std::abs (compiled (3.0) - 1000.0) < 1e-6);
+	}
+
+	/* pow(x, 1/3) under fast-math -> cbrt(x) */
+	{
+		auto module = std::make_unique<Module> ("selftest.libmfold.cbrt", ctx);
+		FunctionType *fty = FunctionType::get (f64, {f64}, false);
+		Function *fn = Function::Create (fty, Function::ExternalLinkage,
+		                                 "cbrt_of", module.get ());
+		BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
+		IRBuilder<> b (bb);
+		FastMathFlags fmf;
+		fmf.setFast ();
+		b.setFastMathFlags (fmf);
+		Value *x = &*fn->arg_begin ();
+		Value *third = ConstantFP::get (f64, 1.0 / 3.0);
+		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
+		b.CreateRet (b.CreateCall (powf, {x, third}));
+
+		jit->optimize (fn);
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		CHECK (res.entry != 0);
+		auto compiled = reinterpret_cast<double (*) (double)> (res.entry);
+		CHECK (std::abs (compiled (27.0) - 3.0) < 1e-9);
+		CHECK (std::abs (compiled (8.0) - 2.0) < 1e-9);
+	}
+
 	return TEST_PASS;
 }
 
@@ -2130,6 +2235,7 @@ test_llvm_engine_main (void)
 	report ("slab-residency", test_slab_residency (jit));
 	report ("arithmetic", test_arithmetic (jit));
 	report ("registered-helper", test_registered_helper (jit));
+	report ("libm-fold-symbols-resolve", test_libm_fold_symbols_resolve (jit));
 	report ("release-owner", test_release_owner (jit));
 	report ("eh-gather", test_eh_gather (jit));
 	report ("eh-gather-multi-call", test_eh_gather_multi_call (jit));
