@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <map>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -435,6 +436,23 @@ cleanup_failed_emit (EmitContext *ctx)
 	ctx->lmethod = nullptr;
 }
 
+/*
+ * Serializes the whole per-method IR-build/optimize/codegen pipeline below
+ * against every unguarded per-process piece of engine state it touches along
+ * the way: the shared LLVMContext and MonoLLVMModule here, plus engine.cpp's
+ * module_counter_ and ExecutionSession (reached only from inside this
+ * function's critical section, so this one mutex covers both sides).
+ *
+ * A lock of its own, not mono_loader_lock (): the compile it wraps can run on
+ * the tiered background worker (tiered.cpp) at the same time mutator threads
+ * are doing perfectly ordinary, unrelated work that also needs the loader
+ * lock - a ho-hum tier-0 compile, a vtable build, a class init. Reusing that
+ * global lock here serialized all of that behind however long the background
+ * compile took, defeating the point of moving tier-1 off the mutator thread.
+ * This lock only ever contends with another LLVM compile.
+ */
+static std::mutex g_llvm_compile_mutex;
+
 void
 mono_llvm_emit_method (MonoCompile *cfg)
 {
@@ -443,8 +461,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	if (cfg->skip)
 		return;
 
-	/* The code below might acquire the loader lock, so use it for global locking */
-	mono_loader_lock ();
+	std::lock_guard<std::mutex> compile_lock (g_llvm_compile_mutex);
 
 	ctx = alloc_emit_context (cfg);
 
@@ -458,8 +475,6 @@ mono_llvm_emit_method (MonoCompile *cfg)
 		cleanup_failed_emit (ctx);
 
 	free_ctx (ctx);
-
-	mono_loader_unlock ();
 }
 
 void
@@ -1712,13 +1727,12 @@ init_jit_module (MonoDomain *domain)
 	if (dinfo->llvm_module)
 		return;
 
-	mono_loader_lock ();
-
-	if (dinfo->llvm_module) {
-		mono_loader_unlock ();
-		return;
-	}
-
+	/*
+	 * No locking here: the only caller is alloc_emit_context (), reached from
+	 * mono_llvm_emit_method () after it has already taken g_llvm_compile_mutex,
+	 * so this always runs with that same-thread serialization already in
+	 * place. A second, non-recursive lock attempt here would just deadlock.
+	 */
 	module = g_new0 (MonoLLVMModule, 1);
 
 	module->context = LLVMGetGlobalContext ();
@@ -1736,8 +1750,6 @@ init_jit_module (MonoDomain *domain)
 	mono_memory_barrier ();
 
 	dinfo->llvm_module = module;
-
-	mono_loader_unlock ();
 }
 
 /*
