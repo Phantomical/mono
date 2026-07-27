@@ -21,17 +21,18 @@ set(_class    "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}")
 set(_buildcls "${MONO_MCS_TOPDIR}/class/lib/build")
 set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 
-# csc and ilasm run on the runtime this build produced, against the build
-# profile of the class libraries.
-set(_csc "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}"
-         "--aot-path=${_buildcls}" "${MONO_CSC}"
+# csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected,
+# against the build profile of the class libraries.  These compiles do not pass
+# -nostdlib, so with a system runtime they see its mscorlib rather than this
+# tree's; see MonoToolsRuntime.cmake.
+mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
+set(_csc ${_host} "${MONO_CSC}"
          -debug:portable -noconfig -nologo
          -nowarn:0162 -nowarn:0168 -nowarn:0219 -nowarn:0414 -nowarn:0618
          -nowarn:0169 -nowarn:1690 -nowarn:0649 -nowarn:0612 -nowarn:3021
          -nowarn:0197 -langversion:latest)
 set(_csc_unsafe ${_csc} -unsafe)
-set(_ilasm "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}"
-           "${_buildcls}/ilasm.exe")
+set(_ilasm ${_host} "${_buildcls}/ilasm.exe")
 
 # The reference set an ordinary test gets. Mono.Posix is what TestDriver uses
 # to hard-kill a test that hangs past its timeout.
@@ -169,7 +170,9 @@ add_custom_target(mono-test-toolchain
 # meant every `ctest` invocation re-ran the whole class-library scan. The class
 # libraries are in `all`, so a normal build has already refreshed them, and the
 # `check` targets depend on mcs directly for the from-scratch case.
-add_dependencies(mono-test-toolchain mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
+# With MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS this adds nothing: the compiles no
+# longer need a runtime out of this build, which is most of the point of it.
+mono_tools_runtime_depends(mono-test-toolchain)
 
 # ---------------------------------------------------------------------------
 # Generated sources: three array tests are the same body instantiated over a

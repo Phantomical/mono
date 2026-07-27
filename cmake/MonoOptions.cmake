@@ -44,6 +44,14 @@ option(MONO_WITH_UNITYJIT "Install the unityjit class library profile" ON)
 option(MONO_WITH_UNITYAOT "Install the unityaot class library profile" ON)
 option(MONO_UNITY_DEFINE  "Define UNITY in config.h"                   ON)
 
+# --- build-time managed tools -----------------------------------------------
+# Which mono hosts csc and ilasm while building; see MonoToolsRuntime.cmake for
+# what moves, what does not, and why this is off by default.
+option(MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS
+       "Compile C# on a mono already installed on this machine instead of the one being built" OFF)
+set(MONO_SYSTEM_RUNTIME "" CACHE FILEPATH
+    "Runtime to compile C# on when MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS is on; empty picks mono-sgen, then mono, off PATH")
+
 # --- misc -------------------------------------------------------------------
 option(MONO_ENABLE_COMPILE_WARNINGS "Use the maintainer warning set"    ON)
 option(MONO_ENABLE_VISIBILITY_HIDDEN "Compile the runtime with -fvisibility=hidden" ON)

@@ -20,14 +20,16 @@ set(_build_dir  "${MONO_MCS_TOPDIR}/class/lib/build")
 set(_wrapper    "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 set(_csflags    -unsafe -nowarn:0219,0169,0414,0649,0618)
 
-# csc and ilasm both run on the runtime we just built.
-set(_mcs   "${CMAKE_COMMAND}" -E env "MONO_PATH=${_build_dir}" "${_wrapper}"
+# csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected;
+# the corpora themselves are always compiled -nostdlib against this tree's
+# mscorlib, so the host makes no difference to what comes out.
+mono_tools_runtime(_host MONO_PATH "${_build_dir}")
+set(_mcs   ${_host}
            "${MONO_CSC}" -langversion:8.0 -nostdlib -unsafe -nowarn:0162 -nologo -noconfig
            "-r:${_class_dir}/mscorlib.dll"
            "-r:${_class_dir}/System.dll"
            "-r:${_class_dir}/System.Core.dll")
-set(_ilasm "${CMAKE_COMMAND}" -E env "MONO_PATH=${_build_dir}" "${_wrapper}"
-           "${_build_dir}/ilasm.exe")
+set(_ilasm ${_host} "${_build_dir}/ilasm.exe")
 
 set(_corpora_outputs "")
 

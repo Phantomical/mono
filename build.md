@@ -82,6 +82,9 @@ want to change:
 - `-DMONO_WITH_UNITYJIT=OFF -DMONO_WITH_UNITYAOT=OFF` — skip the Unity
   class-library profiles.
 - `-DMONO_ENABLE_MCS_BUILD=OFF` — native runtime only, no class libraries.
+- `-DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON` — compile C# on a mono already
+  installed on the machine instead of the one being built. See
+  [Compiling C# on the system mono](#compiling-c-on-the-system-mono).
 
 `cmake -LH build` lists the rest; they all start with `MONO_`.
 
@@ -300,6 +303,59 @@ additionally labelled `stress`/`slow` because they run for hours by design.
 - **Clean rebuild:** `rm -rf build` and repeat from step 3. There is no stale
   `config.status` to worry about — changing a cache variable and re-running
   `cmake -S . -B build` is enough.
+
+## Compiling C# on the system mono
+
+Every managed thing this build produces — the test corpora, the CoreCLR suites,
+the class libraries — is compiled by Roslyn, which is itself a managed program
+and so needs a mono to run on. By default that is the mono this build produces.
+It is also the slow choice: that runtime is unoptimised with the LLVM tier on,
+and every C# compile ends up downstream of the native link, so a one-line change
+under `mono/mini` relinks the runtime before any C# can be compiled at all.
+
+```bash
+cmake -S . -B build -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON
+# or name one explicitly:
+cmake -S . -B build -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON \
+                    -DMONO_SYSTEM_RUNTIME=/opt/mono/bin/mono-sgen
+```
+
+Empty picks `mono-sgen`, then `mono`, off `PATH`. Configure prints which one it
+settled on:
+
+```
+--     C# compiles on: /usr/bin/mono-sgen (version 6.8.0.105)
+```
+
+Measured over twelve CoreMangLib tests: **54.5s in-tree against 12.5s** on the
+system mono 6.8. The bigger win is the dependency edge that disappears — the
+corpora no longer wait on the native build, so they can be compiled in a tree
+where the runtime has never been linked.
+
+**Tests still run on the runtime being built.** That is the thing under test and
+it never moves; only the compiler's host changes. Likewise the tools that
+surround the compiler in the class-library build — `resgen`, `ilasm`,
+`cil-stringreplacer`, `gensources`, `gacutil`, and the AOT step — stay on the
+in-tree runtime. They load assemblies out of `mcs/class/lib/build`, whose
+`mscorlib.dll` belongs to this tree, and a foreign runtime rejects that pairing
+outright (`Corlib not in sync with this runtime`).
+
+### When not to use it
+
+The class libraries and the mini corpora compile `-nostdlib` against an explicit
+`-r:.../mscorlib.dll`, so for those the host runtime cannot affect the output —
+verified by disassembling both and diffing: identical IL, differing only in the
+MVID that a non-deterministic `csc` stamps into every build.
+
+`mono/tests` and `acceptance-tests` do **not** pass `-nostdlib`. Those compiles
+pick up whichever `mscorlib` the hosting runtime hands Roslyn, so with this on
+they see the system mono's BCL surface rather than this tree's. In practice both
+are 4.x Mono BCLs and the resulting assemblies run unchanged, but a test that
+depends on an API present in only one of them will compile differently.
+
+Treat the option as an iteration aid: fine while you are working on test wiring
+or the corpora, but validate on a default configuration before believing a
+result.
 
 ## Troubleshooting
 

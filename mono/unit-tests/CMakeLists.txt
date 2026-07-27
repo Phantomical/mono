@@ -119,8 +119,8 @@ endif()
 if(MONO_ENABLE_MCS_BUILD)
   set(_class_dir "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}")
   set(_build_dir "${MONO_MCS_TOPDIR}/class/lib/build")
-  set(_mcs "${CMAKE_COMMAND}" -E env "MONO_PATH=${_build_dir}"
-           "${CMAKE_BINARY_DIR}/runtime/mono-wrapper"
+  mono_tools_runtime(_host MONO_PATH "${_build_dir}")
+  set(_mcs ${_host}
            "${MONO_CSC}" -debug:portable -noconfig -nologo -unsafe
            -nowarn:0162 -nowarn:0168 -nowarn:0219 -nowarn:0414 -nowarn:0618
            -nowarn:0169 -nowarn:1690 -nowarn:0649 -nowarn:0612 -nowarn:3021
@@ -146,6 +146,7 @@ if(MONO_ENABLE_MCS_BUILD)
     "${CMAKE_CURRENT_BINARY_DIR}/callspec.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed-invoke-cs.exe")
+  mono_tools_runtime_depends(unit-test-assemblies)
 
   # Same trick as the mini corpora: CTest cannot build, so building the managed
   # inputs is itself a fixture the tests that need them depend on.

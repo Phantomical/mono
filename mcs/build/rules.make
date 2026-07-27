@@ -54,8 +54,17 @@ INSTALL_LIB = $(INSTALL_BIN)
 MKINSTALLDIRS = $(SHELL) $(topdir)/mkinstalldirs
 INTERNAL_CSC_LOCATION = $(CSC_LOCATION)
 
+# The runtime the C# compiler itself runs on.  config.make may point this at a
+# mono other than $(RUNTIME) -- typically one already installed on the machine,
+# so that a class-library compile neither waits for the runtime being built nor
+# runs on it.  Nothing else below may move: the tools underneath load out of
+# $(BUILD_TOOLS_PROFILE), whose mscorlib.dll belongs to this tree and pairs only
+# with $(RUNTIME).  csc has no such tie -- every reference it gets is an
+# explicit path, which CSC_SDK_PATH_DISABLED below exists to enforce.
+CSC_RUNTIME = $(RUNTIME)
+
 # Using CSC_SDK_PATH_DISABLED for sanity check that all references have path specified
-INTERNAL_CSC = CSC_SDK_PATH_DISABLED= $(RUNTIME) $(RUNTIME_FLAGS) $(CSC_RUNTIME_FLAGS) $(INTERNAL_CSC_LOCATION)
+INTERNAL_CSC = CSC_SDK_PATH_DISABLED= $(CSC_RUNTIME) $(RUNTIME_FLAGS) $(CSC_RUNTIME_FLAGS) $(INTERNAL_CSC_LOCATION)
 
 RESGEN = MONO_PATH="$(topdir)/class/lib/$(BUILD_TOOLS_PROFILE)$(PLATFORM_PATH_SEPARATOR)$$MONO_PATH" $(RUNTIME) $(RUNTIME_FLAGS) $(topdir)/class/lib/$(BUILD_TOOLS_PROFILE)/resgen.exe
 STRING_REPLACER = MONO_PATH="$(topdir)/class/lib/$(BUILD_TOOLS_PROFILE)$(PLATFORM_PATH_SEPARATOR)$$MONO_PATH" $(RUNTIME) $(RUNTIME_FLAGS) $(topdir)/class/lib/$(BUILD_TOOLS_PROFILE)/cil-stringreplacer.exe

@@ -88,9 +88,12 @@ set(_class    "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}")
 set(_buildcls "${MONO_MCS_TOPDIR}/class/lib/build")
 set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 
-# RUNTIME / TOOLS_RUNTIME.
-set(_runtime       "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}"    "${_wrapper}" --debug)
-set(_tools_runtime "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}" --debug)
+# RUNTIME / TOOLS_RUNTIME.  RUNTIME is what the suites are *testing*, so it is
+# always the one this build produced.  TOOLS_RUNTIME only hosts the compiler and
+# follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS -- see MonoToolsRuntime.cmake, and
+# note that these compiles do not pass -nostdlib.
+set(_runtime "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}" "${_wrapper}" --debug)
+mono_tools_runtime(_tools_runtime MONO_PATH "${_buildcls}" ARGS --debug)
 
 # MCS and ILASM.  Note the -lib:/bare -r: spelling: acceptance-tests resolves
 # its references off -lib, where mono/tests passes absolute paths.
@@ -102,12 +105,14 @@ set(_ilasm ${_tools_runtime} "${_buildcls}/ilasm.exe")
 # this, but naming it here keeps the directory independent of that ordering.
 find_program(MONO_GNU_MAKE NAMES gmake make REQUIRED)
 
-# The suites all need a built runtime and class libraries before anything can
-# be compiled.  Same decoupling as mono/tests: `mcs` wraps a foreign make
-# system and is always out of date, so the fixtures below depend on the
-# runtime, not on the class-library scan.
+# What every compile below has to wait for.  Same decoupling as mono/tests:
+# `mcs` wraps a foreign make system and is always out of date, so this names the
+# runtime rather than the class-library scan.  Under
+# MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS it names nothing -- the compiles no longer
+# come out of this build, and the whole corpus can be built while the native
+# side is still linking.
 add_custom_target(acceptance-toolchain)
-add_dependencies(acceptance-toolchain mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
+mono_tools_runtime_depends(acceptance-toolchain)
 
 # test-runner.exe, shared by the CoreCLR suites.  mono/tests builds its own
 # copy in its own binary dir; this is the acceptance-tests one, exactly as

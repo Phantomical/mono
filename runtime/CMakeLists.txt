@@ -67,14 +67,22 @@ file(MAKE_DIRECTORY "${_tmpinst}")
 configure_file("${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper" "${_tmpinst}/mono" COPYONLY)
 
 function(_mono_tmpinst_shim name target)
+  cmake_parse_arguments(ARG "" "RUNTIME" "" ${ARGN})
+  set(_on "${_tmpinst}/mono")
+  if(ARG_RUNTIME)
+    set(_on "${ARG_RUNTIME}")
+  endif()
   file(WRITE "${_tmpinst}/${name}"
-       "#! /bin/sh\nexec \"${_tmpinst}/mono\" \"${target}\" \"$@\"\n")
+       "#! /bin/sh\nexec \"${_on}\" \"${target}\" \"$@\"\n")
   file(CHMOD "${_tmpinst}/${name}" PERMISSIONS
        OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
        WORLD_READ WORLD_EXECUTE)
 endfunction()
 
-_mono_tmpinst_shim(csc   "${MONO_CSC}")
+# csc follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS like every other C# compile.
+# mcs, ilasm and al do not: they are assemblies out of this tree, built against
+# this tree's corlib.
+_mono_tmpinst_shim(csc   "${MONO_CSC}" RUNTIME "${MONO_CSC_HOST}")
 _mono_tmpinst_shim(mcs   "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}/mcs.exe")
 _mono_tmpinst_shim(ilasm "${MONO_MCS_TOPDIR}/ilasm/ilasm.exe")
 _mono_tmpinst_shim(al    "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}/al.exe")
@@ -115,6 +123,16 @@ if(MONO_ENABLE_MCS_BUILD)
     set(_mono_native_supported "true")
   else()
     set(_mono_native_supported "false")
+  endif()
+
+  # Move just the C# compiler off $(RUNTIME) when asked; rules.make defaults
+  # CSC_RUNTIME to $(RUNTIME), so saying nothing leaves the build as it was.
+  # The tools that surround csc stay put -- they load out of class/lib/build,
+  # which only the runtime being built can read.
+  if(MONO_TOOLS_RUNTIME_IS_SYSTEM)
+    set(_csc_runtime "CSC_RUNTIME = ${MONO_CSC_HOST}")
+  else()
+    set(_csc_runtime "")
   endif()
 
   configure_file("${CMAKE_SOURCE_DIR}/cmake/mcs-config.make.in"
