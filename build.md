@@ -238,10 +238,22 @@ version that was linked in.)
 The suites are registered with CTest:
 
 ```bash
-ctest --test-dir build -L regression   # mini regression, classic JIT (--nollvm)
-ctest --test-dir build -L tiered       # the LLVM tier at each promotion threshold
-ctest --test-dir build -R '^test-'     # the native unit tests
-ctest --test-dir build                 # everything, including eglib's own suite
+cmake --build build --target check       # the inner loop: unit tests, eglib,
+                                         # mini regression, the LLVM tier (~20s)
+cmake --build build --target check-all   # everything but the slow/stress sets
+```
+
+Both run CTest with `-j $(nproc)`. Prefer them to a bare `ctest`, which is
+serial and so takes minutes to do seconds of work.
+
+Individual groups, if you want one:
+
+```bash
+ctest --test-dir build -j16 -L runtime   # the mono/tests corpus, ~700 programs
+ctest --test-dir build -j16 -L gshared   # generic sharing
+ctest --test-dir build -j16 -L sgen      # the SGen collector matrix
+ctest --test-dir build -j16 -L interp    # the corpus under the interpreter
+ctest --test-dir build -j16 -L stress    # long-running
 ```
 
 The suites that need managed test assemblies build them through a CTest fixture,

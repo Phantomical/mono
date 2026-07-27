@@ -95,7 +95,43 @@ add_subdirectory(man)
 add_subdirectory(runtime)
 if(BUILD_TESTING)
   add_subdirectory(mono/unit-tests)
+  add_subdirectory(mono/tests)
 endif()
+
+# ---------------------------------------------------------------------------
+# Test entry points
+# ---------------------------------------------------------------------------
+# `ctest` is serial unless told otherwise, and every suite here is either
+# internally parallel or tiny, so a bare `ctest` is much slower than the work
+# requires. These two targets run it with the machine's core count.
+#
+#   check      the fast set -- unit tests, eglib, mini regression, the LLVM
+#              tier, and the runtime one-offs. Seconds, not minutes.
+#   check-all  everything except the stress suites and the minutes-long ones.
+#
+# The heavy labels (runtime, gshared, sgen, interp, slow, stress) are opt-in:
+#   ctest --test-dir build -L runtime -j <n>
+include(ProcessorCount)
+ProcessorCount(MONO_NPROC)
+if(MONO_NPROC EQUAL 0)
+  set(MONO_NPROC 1)
+endif()
+
+add_custom_target(check
+  COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+          -LE "runtime|gshared|sgen|interp|slow|stress|fixture"
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+  USES_TERMINAL
+  VERBATIM)
+add_dependencies(check mini-corpora unit-test-assemblies)
+
+add_custom_target(check-all
+  COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+          -LE "slow|stress"
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+  USES_TERMINAL
+  VERBATIM)
+add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
 
 # ---------------------------------------------------------------------------
 # Convenience targets

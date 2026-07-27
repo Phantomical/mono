@@ -17,6 +17,7 @@ cmake/
   MonoGenVersion.cmake         build-time version.h
   MonoGenBuildVer.cmake        build-time buildver-<gc>.h
   MonoBuildTreeConfig.cmake    build-time etc/mono/config
+  MonoCheckEglibRemap.cmake    the "no bare g_* exports" check
   config.h.in                  cmakedefine form of the autoheader template
   bdwgc/                       the Boehm collector's build and its config.h
   mono-wrapper.in              the uninstalled-runtime wrapper
@@ -78,14 +79,58 @@ those two entries, so they silently did nothing and both libraries resolved
 through `ld.so` -- which finds a system-wide mono's copies in preference to the
 ones just built.
 
+## Tests
+
+```bash
+cmake --build build --target check       # the inner loop, ~20s
+cmake --build build --target check-all   # everything but the slow/stress sets
+```
+
+Use those rather than a bare `ctest`: CTest is serial unless told otherwise,
+and almost everything here is either internally parallel or tiny, so a bare
+`ctest` takes minutes to do seconds of work. The targets pass `-j` with the
+machine's core count.
+
+| label | what | in `check`? |
+|---|---|---|
+| (none) | `mono/unit-tests`, eglib's own suite | yes |
+| `regression` | the `mono/mini` corpus, classic JIT | yes |
+| `tiered` | the LLVM tier at each promotion threshold | yes |
+| `runtime` | the `mono/tests` corpus (~700 programs) and its one-off suites | `check-all` |
+| `gshared` | generic sharing, over four optimization sets | `check-all` |
+| `sgen` | the SGen collector matrix, 42 configurations | `check-all` |
+| `interp` | the whole corpus again under the interpreter | `check-all` |
+| `slow` | minutes-long single tests | no |
+| `stress` | long-running stress tests | no |
+| `fixture` | builds the managed inputs | pulled in on demand |
+
+The suites that drive `test-runner.exe` already use every core, so they carry a
+`PROCESSORS` property and CTest runs them one at a time while packing the
+one-off tests around them.
+
+The managed corpora are built through CTest fixtures rather than as part of
+`all`, so a plain `cmake --build` does not wait on ~900 csc invocations and a
+bare `ctest` still does the right thing. Those fixtures deliberately do **not**
+depend on the `mcs` target: it wraps a foreign make system and is therefore
+always out of date, so depending on it made every `ctest` invocation re-scan the
+whole class library. The class libraries are in `all`, and the `check` targets
+carry the dependency for the from-scratch case.
+
+`mono/tests` keeps its corpus in `tests.cmake` (the lists), `special-tests.cmake`
+(the ~60 tests automake gave a recipe of their own) and `runtime-suites.cmake`
+(the CTest wiring). The lists are the amd64/Linux/JIT resolution of what
+`Makefile.am` carried; entries that only applied to another architecture or to
+an AOT profile are gone, as everywhere else in this port.
+
+Disabled tests are not built, which is what automake did too -- it filtered them
+out of the lists before those lists became build targets, and a few of them no
+longer compile.
+
 ## What is not here
 
-These directories still have only their `Makefile.am` and are not built by
-CMake:
-
-* `mono/tests` -- the large managed regression corpus (3.3k lines of
-  `Makefile.am`).  The suites this port actually runs, `mono/mini`'s regression
-  and tiered checks and `mono/unit-tests`, are wired into CTest.
+* The AOT modes. `mono/tests/fullaot-mixed` and `llvmonly-mixed`, the
+  `TESTSAOT_*` lists and the `%.exe.so` rules that shadowed every test are out
+  of this port's JIT-only scope.
 * `mono/benchmark`, `acceptance-tests`, `samples`, `docs`, `po`, `msvc`,
   `tools/locale-builder`, `sdks` -- out of scope for a Linux/amd64 JIT build, or
   (in the case of `po` and `docs`) disabled by the configuration this tree uses

@@ -111,8 +111,8 @@ _mono_add_cs_target(inliner-tests.exe SOURCES inliner-tests.cs
                     REFS "${_driver}" "${CMAKE_CURRENT_BINARY_DIR}/inliner-fault.dll")
 _mono_add_il_target(iltests.exe iltests.il)
 
+# Not dependent on `mcs` -- see the note in mono/tests/CMakeLists.txt.
 add_custom_target(mini-corpora DEPENDS ${_corpora_outputs})
-add_dependencies(mini-corpora mcs)
 
 # ---------------------------------------------------------------------------
 # CTest wiring
@@ -121,7 +121,7 @@ add_dependencies(mini-corpora mcs)
 # else depends on through a fixture.
 add_test(NAME mini-corpora
          COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}" --target mini-corpora)
-set_tests_properties(mini-corpora PROPERTIES FIXTURES_SETUP mini_corpora)
+set_tests_properties(mini-corpora PROPERTIES FIXTURES_SETUP mini_corpora LABELS fixture)
 
 set(_regtests
   aot-tests.exe basic.exe basic-float.exe basic-long.exe basic-calls.exe
