@@ -242,10 +242,8 @@ namespace System.Reflection.Emit
 		//
 		// AssemblyBuilder inherits from Assembly, but the runtime thinks its layout inherits from RuntimeAssembly
 		//
+		// _mono_assembly is inherited from Assembly.
 		#region Sync with RuntimeAssembly.cs and ReflectionAssembly in object-internals.h
-#pragma warning disable 649
-		internal IntPtr _mono_assembly;
-#pragma warning restore 649
 #if !MOBILE
 		internal Evidence _evidence;
 #else

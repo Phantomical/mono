@@ -58,7 +58,14 @@ namespace System.Reflection {
 	public abstract class Assembly : ICustomAttributeProvider, _Assembly, IEvidenceFactory, ISerializable
 #endif
 	{
-		internal class ResolveEventHolder {	
+		// Declared here rather than on RuntimeAssembly/AssemblyBuilder so that reflection
+		// against the public Assembly type finds it directly. Sync with RuntimeAssembly.cs,
+		// AssemblyBuilder.cs and _MonoReflectionAssembly in object-internals.h.
+#pragma warning disable 649
+		internal IntPtr _mono_assembly;
+#pragma warning restore 649
+
+		internal class ResolveEventHolder {
 #pragma warning disable 67
 			public event ModuleResolveEventHandler ModuleResolve;
 #pragma warning restore

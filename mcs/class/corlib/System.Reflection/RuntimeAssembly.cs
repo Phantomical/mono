@@ -54,15 +54,15 @@ namespace System.Reflection {
 	[StructLayout (LayoutKind.Sequential)]
 	class RuntimeAssembly : Assembly
 	{
+		// _mono_assembly is inherited from Assembly.
 		#region Sync with AssemblyBuilder.cs and ReflectionAssembly in object-internals.h
 #pragma warning disable 649
-		internal IntPtr _mono_assembly;
-#pragma warning restore 649
 #if !MOBILE
 		internal Evidence _evidence;
 #else
 		object _evidence;
 #endif
+#pragma warning restore 649
 		#endregion
 
 		internal ResolveEventHolder resolve_event_holder;
