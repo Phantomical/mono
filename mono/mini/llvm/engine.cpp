@@ -1663,6 +1663,16 @@ MonoLLVMJIT::register_c_runtime_symbols ()
 		{ "truncf",   (void *) (uintptr_t) (f1) &::truncf },
 		{ "fma",      (void *) (uintptr_t) (d3) &::fma },
 		{ "fmaf",     (void *) (uintptr_t) (f3) &::fmaf },
+
+		/*
+		 * Not emitted by the translator at all - SimplifyLibCalls rewrites
+		 * pow(2.0, itofp(x)) and exp2(itofp(x)) into ldexp(1.0, x) whenever an
+		 * integer is converted to float purely to feed a power-of-two, which
+		 * is exactly the shape of level/LOD scaling code (radius * 2^-level).
+		 * ldexp itself has no x86 instruction, so it's always a libcall.
+		 */
+		{ "ldexp",    (void *) (uintptr_t) (double (*) (double, int)) &::ldexp },
+		{ "ldexpf",   (void *) (uintptr_t) (float (*) (float, int)) &::ldexpf },
 	};
 
 	for (const auto &sym : c_runtime)
