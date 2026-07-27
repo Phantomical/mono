@@ -1,11 +1,10 @@
 # Test corpus for mono/tests -- the data half of this directory's build, kept
-# apart from CMakeLists.txt for the same reason the automake version kept the
-# lists at the top: they are long and they change independently of the rules.
+# apart from CMakeLists.txt because the lists are long and they change
+# independently of the rules.
 #
-# The lists are the amd64/Linux/JIT resolution of what Makefile.am carried.
-# Entries that only ever applied to another architecture, to Windows or Darwin,
-# or to one of the AOT profiles are not here -- the same scope this port applies
-# everywhere else.
+# These are the amd64/Linux/JIT lists. Tests that only ever applied to another
+# architecture, to Windows or Darwin, or to one of the AOT profiles are not
+# here -- the same scope this build applies everywhere else.
 
 # Ordinary C# tests: one assembly each, compiled against TestDriver.dll.
 set(MONO_TESTS_CS_SRC

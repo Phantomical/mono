@@ -33,13 +33,10 @@ add_custom_command(
 add_custom_target(gc-descriptor-tests DEPENDS "${_gcd_bin}/descriptor-tests.exe")
 add_dependencies(runtime-corpora gc-descriptor-tests)
 
-# automake only ever *built* this one: gc-descriptors/Makefile.am has
-# `check-local: test` and `test-local: descriptor-tests.exe`, so `make check`
-# compiled the generated test and stopped. Running it is worth doing, but the
-# generator emits a few thousand field layouts and walking all of them takes
-# well over fifteen minutes, so it is labelled `slow` and stays out of the
-# default run. The build still happens on every `cmake --build`, which is
-# exactly the coverage automake had.
+# Building this one is the coverage that matters, and it happens on every
+# `cmake --build`. Running it is worth doing too, but the generator emits a few
+# thousand field layouts and walking all of them takes well over fifteen
+# minutes, so the test is labelled `slow` and stays out of the default run.
 add_test(NAME gc-descriptors
          COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}"
                  "${_wrapper}" descriptor-tests.exe

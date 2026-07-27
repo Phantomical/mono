@@ -59,6 +59,20 @@ endif()
 set(MONO_MCS_JOBS "${_mono_ncpu}" CACHE STRING
     "Parallel jobs for the class-library build; 1 serializes it")
 
+# --- the peripheral directories ---------------------------------------------
+# None of these are part of the runtime.  They are on by default when they cost
+# almost nothing to build and catch something when they break; off when they
+# need a tool or a download that a plain checkout does not have.
+option(MONO_ENABLE_SAMPLES    "Build the embedding and profiler samples"      ON)
+option(MONO_ENABLE_BENCHMARKS "Build the mono/benchmark microbenchmarks"      ON)
+option(MONO_ENABLE_NLS        "Compile and install the gettext catalogues"    ON)
+# Regenerating the culture tables downloads a CLDR release and overwrites a
+# checked-in generated header, so it is opt-in and not part of `all`.
+option(MONO_ENABLE_LOCALE_BUILDER "Build tools/locale-builder"                OFF)
+# The API documentation needs monodoc's mdoc/monodocer plus perl, none of which
+# this build otherwise depends on.
+option(MONO_ENABLE_DOCS       "Build the monodoc API documentation"           OFF)
+
 # --- build-time managed tools -----------------------------------------------
 # Which mono hosts csc and ilasm while building; see MonoToolsRuntime.cmake for
 # what moves, what does not, and why this is off by default.

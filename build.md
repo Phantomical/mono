@@ -4,9 +4,9 @@ These are reproducible, from-scratch instructions for building this repository
 (Unity's fork of Mono, branch `unity-main`) on a Linux or WSL2 machine using the
 **system toolchain**.
 
-The build is CMake; the autotools files (`configure.ac`, the `Makefile.am`s) are
-still in the tree but no longer drive it. `cmake/README.md` describes the layout,
-how it maps onto the old one, and what it does not cover.
+The build is CMake. The autotools files it replaced (`configure.ac`, `autogen.sh`,
+the `Makefile.am`s, `m4/`) have been removed from the tree. `cmake/README.md`
+describes the layout, how it maps onto the old one, and what it does not cover.
 
 It produces a fully working `mono` runtime (`mono-sgen` / `mono-boehm`) plus the
 C# class-library profiles (`net_4_x`, `unityjit`, `unityaot`, and their `-linux`
@@ -294,6 +294,48 @@ ctest --test-dir build -j16 -L acceptance
 Compiling the CoreCLR corpus is itself a CTest fixture and takes on the order of
 half an hour; `coreclr-gcstress`, `profiler-stress` and the microbenchmarks are
 additionally labelled `stress`/`slow` because they run for hours by design.
+
+### Microbenchmarks
+
+`mono/benchmark` builds with `all` and registers 38 CTest entries labelled
+`benchmark;slow`, so `check` and `check-all` skip them. Run them with:
+
+```bash
+cmake --build build --target check-benchmarks
+```
+
+They are timing programs with no expected output, so a pass only means the
+program finished — the value is in the shapes they stress (inlining, constant
+folding, register allocation, cmov selection) when you are changing codegen.
+
+## The peripheral directories
+
+Five directories are not part of the runtime and have their own switches:
+
+| directory              | option                       | default |
+| ---------------------- | ---------------------------- | ------- |
+| `samples`              | `MONO_ENABLE_SAMPLES`        | ON      |
+| `mono/benchmark`       | `MONO_ENABLE_BENCHMARKS`     | ON      |
+| `po`                   | `MONO_ENABLE_NLS`            | ON      |
+| `tools/locale-builder` | `MONO_ENABLE_LOCALE_BUILDER` | OFF     |
+| `docs`                 | `MONO_ENABLE_DOCS`           | OFF     |
+
+The samples are `EXCLUDE_FROM_ALL`, so ask for them by name:
+
+```bash
+cmake --build build --target samples
+```
+
+They are the only in-tree users of the embedding API and the profiler module
+ABI, which is why they are compiled at all — nothing runs or installs them.
+
+`po` needs `msgfmt`; without it the catalogues are skipped with a message at
+configure time. Note that nothing actually reads them (the compiler has no
+gettext binding), so they are installed for completeness only.
+
+`docs` needs perl plus `mdoc.exe` out of the class libraries, and `culture-table`
+under `tools/locale-builder` downloads a CLDR release and rewrites a checked-in
+header — hence both being off by default.
 
 ## Rebuilding after changes
 

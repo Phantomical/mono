@@ -180,10 +180,14 @@ Compilation and Installation
 Building the Software
 ---------------------
 
-Please see our guides for building Mono on
-[Mac OS X](https://www.mono-project.com/docs/compiling-mono/mac/),
-[Linux](https://www.mono-project.com/docs/compiling-mono/linux/) and 
-[Windows](https://www.mono-project.com/docs/compiling-mono/windows/).
+The build is CMake. From a clean checkout:
+
+    cmake -S . -B build -G Ninja
+    cmake --build build
+
+[`build.md`](build.md) has the full from-scratch instructions, including the
+dependency list and the LLVM options; [`cmake/README.md`](cmake/README.md)
+describes how the build is laid out.
 
 Note that building from Git assumes that you already have Mono installed,
 so please download and [install the latest Mono release](https://www.mono-project.com/download/)
@@ -198,25 +202,25 @@ If you don't have a working Mono installation, you can try a slightly
 more risky approach: getting the latest version of the 'monolite' distribution,
 which contains just enough to run the 'mcs' compiler. You do this with:
 
-    # Run the following line after ./autogen.sh
-    make get-monolite-latest
+    # Run the following line after configuring the build
+    cmake --build build --target get-monolite-latest
 
 This will download and place the files appropriately so that you can then
 just run:
 
-    make
+    cmake --build build
 
-The build will then use the files downloaded by `make get-monolite-latest`.
+The build will then use the files downloaded by `get-monolite-latest`.
 
 Testing and Installation
 ------------------------
 
-You can run the mono and mcs test suites with the command: `make check`.
+You can run the test suites with `cmake --build build --target check-all`, or
+drive them directly with `ctest --test-dir build`.
 
-Expect to find a few test suite failures. As a sanity check, you
-can compare the failures you got with [https://jenkins.mono-project.com/](https://jenkins.mono-project.com/).
+Expect to find a few test suite failures.
 
-You can now install mono with: `make install`
+You can now install mono with: `cmake --install build`
 
 You can verify your installation by using the mono-test-install
 script, it can diagnose some common problems with Mono's install.

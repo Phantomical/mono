@@ -59,52 +59,32 @@ _ReSharper*/
 ~.*
 ~$*
 
-# Autotools-generated files
-/Makefile
+# CMake
+/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+config.h
+releases
+
+# Left behind by the autotools builds this tree used to have, and by the
+# submodules under external/ that still use them.
 Makefile.in
 aclocal.m4
 autom4te.cache
-/build/
 config.cache
 config.guess
-config.h
-config.h.in
-# ...but cmake/ holds hand-written config.h templates, not autoheader output.
-!cmake/**/config.h.in
 config.log
 config.status
-config.sub
 configure
-configure.scan
-cygconfig.h
-depcomp
-install-sh
 libtool
-ltmain.sh
-missing
-mkinstalldirs
-releases
-stamp-h
-stamp-h1
-stamp-h.in
-/test-driver
+.deps
+.libs
+
 *~
 *.swp
 *.o
 *.dylib
-.deps
-.libs
-
-# Libtool
-libtool.m4
-lt~obsolete.m4
-ltoptions.m4
-ltsugar.m4
-ltversion.m4
-
-# Dolt (libtool replacement)
-doltlibtool
-doltcompile
 
 # pkg-config
 *.pc

@@ -41,7 +41,12 @@ set(_mph_sources
   minizip/zip.c)
 
 add_library(MonoPosixHelper SHARED ${_mph_sources})
-target_include_directories(MonoPosixHelper PRIVATE "${CMAKE_SOURCE_DIR}")
+# minizip spells its zlib include "../mono/zlib/zlib.h", so it needs a search
+# path that is a direct child of the source root for that to land on
+# mono/zlib/. This directory is the obvious one; relying on the build tree
+# happening to sit at <srcroot>/build works only for in-tree build dirs.
+target_include_directories(MonoPosixHelper PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(MonoPosixHelper PRIVATE
   mono::common mono::eglib_headers eglib)
 if(ZLIB_FOUND)
@@ -65,7 +70,8 @@ target_link_libraries(MonoSupportW PRIVATE
 
 # Static archives alongside the shared libraries, as libtool produced.
 add_library(MonoPosixHelper-static STATIC ${_mph_sources})
-target_include_directories(MonoPosixHelper-static PRIVATE "${CMAKE_SOURCE_DIR}")
+target_include_directories(MonoPosixHelper-static PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(MonoPosixHelper-static PRIVATE mono::common mono::eglib_headers)
 if(ZLIB_FOUND)
   target_compile_definitions(MonoPosixHelper-static PRIVATE HAVE_UNISTD_H HAVE_HIDDEN)

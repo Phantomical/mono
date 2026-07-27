@@ -3,11 +3,10 @@
 #
 # The corpus itself lives in tests.cmake; this file is the rules.
 #
-# What is here is the JIT half of what Makefile.am built. The AOT modes
-# (fullaot-mixed, llvmonly-mixed, and the `%.exe.so` AOT-image rules that
-# shadowed every test) are out of this port's scope, so the TESTSAOT_* lists
-# and the AOT variants of each suite are gone rather than carried along
-# switched off.
+# Only the JIT modes are here. The AOT ones (fullaot-mixed, llvmonly-mixed, and
+# the `%.exe.so` AOT-image rules that shadowed every test) are out of this
+# port's scope, so the TESTSAOT_* lists and the AOT variants of each suite are
+# absent rather than carried along switched off.
 
 if(NOT MONO_ENABLE_MCS_BUILD OR NOT MONO_ENABLE_EXECUTABLES)
   return()

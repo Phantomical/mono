@@ -93,10 +93,16 @@ add_subdirectory(tools/mono-hang-watchdog)
 add_subdirectory(data)
 add_subdirectory(scripts)
 add_subdirectory(man)
+add_subdirectory(po)
 add_subdirectory(runtime)
+# After runtime/: these need the mono-wrapper and the class libraries it drives.
+add_subdirectory(samples)
+add_subdirectory(docs)
+add_subdirectory(tools/locale-builder)
 if(BUILD_TESTING)
   add_subdirectory(mono/unit-tests)
   add_subdirectory(mono/tests)
+  add_subdirectory(mono/benchmark)
   add_subdirectory(acceptance-tests)
 endif()
 
@@ -140,9 +146,9 @@ add_custom_target(check-all
   VERBATIM)
 add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
 
-# `check-full` in acceptance-tests/Makefile.am, near enough: the CoreCLR suites
-# and ms-test-suite, with the hours-long members (coreclr-gcstress,
-# profiler-stress, the microbenchmarks) left behind their stress/slow labels.
+# The CoreCLR suites and ms-test-suite, with the hours-long members
+# (coreclr-gcstress, profiler-stress, the microbenchmarks) left behind their
+# stress/slow labels.
 # Compiling the CoreCLR corpus happens through the CTest fixture, so this is a
 # single command from a clean tree -- and a long one.
 if(MONO_ENABLE_ACCEPTANCE_TESTS)
@@ -152,6 +158,18 @@ if(MONO_ENABLE_ACCEPTANCE_TESTS)
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
+endif()
+
+# The microbenchmarks. They carry `slow`, so `check` and `check-all` skip them;
+# this is the way to ask for them. Serial on purpose -- they are timing
+# programs, and running sixteen at once makes the numbers meaningless.
+if(MONO_ENABLE_BENCHMARKS AND BUILD_TESTING)
+  add_custom_target(check-benchmarks
+    COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L benchmark
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+  add_dependencies(check-benchmarks benchmarks)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -181,5 +199,10 @@ message(STATUS "    Mono.Native:   ${MONO_ENABLE_MONO_NATIVE}")
 message(STATUS "    BTLS:          ${MONO_ENABLE_BTLS}")
 message(STATUS "    class libs:    ${MONO_ENABLE_MCS_BUILD} (${MONO_MCS_PROFILES})")
 message(STATUS "    C# compiles on: ${MONO_TOOLS_RUNTIME} (${MONO_TOOLS_RUNTIME_VERSION})")
+message(STATUS "    samples:       ${MONO_ENABLE_SAMPLES}")
+message(STATUS "    benchmarks:    ${MONO_ENABLE_BENCHMARKS}")
+message(STATUS "    catalogues:    ${MONO_ENABLE_NLS}")
+message(STATUS "    locale-builder: ${MONO_ENABLE_LOCALE_BUILDER}")
+message(STATUS "    docs:          ${MONO_ENABLE_DOCS}")
 message(STATUS "    prefix:        ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "")

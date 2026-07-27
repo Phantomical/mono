@@ -2,15 +2,13 @@
 *.cs	diff=csharp
 
 # ensure LF endings on all checkouts
-configure.ac	crlf=input
-config.rpath	crlf=input
-configure.host	crlf=input
 mkinstalldirs	crlf=input
 *.sh	crlf=input
 *.sources	crlf=input
+*.cmake	crlf=input
+CMakeLists.txt	crlf=input
 .gitattributes	crlf=input
 *akefile*	crlf=input
-m4/mono-output.m4	crlf=input
 
 # ensure native line endings on checkout
 *.c	crlf

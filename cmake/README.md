@@ -58,9 +58,11 @@ translation units inline the collector's allocation and write-barrier paths.
 
 ## Verifying against the autotools build
 
-`config.h` was the risky part of the port, so it is checked rather than
-asserted: generate it and diff against a `config.h` produced by `./autogen.sh &&
-./configure` with the equivalent flags.  All 568 macros match.
+`config.h` was the risky part of the port, so it was checked rather than
+asserted: the generated one was diffed against a `config.h` produced by
+`./autogen.sh && ./configure` with the equivalent flags, and all 568 macros
+matched.  The autotools files were deleted once that held; to repeat the
+comparison, check them out from before their removal.
 
 Two probes are deliberately faithful to a bug rather than to intent, because the
 runtime has only ever been built and tested with the buggy answer:
@@ -118,9 +120,9 @@ carry the dependency for the from-scratch case.
 
 `mono/tests` keeps its corpus in `tests.cmake` (the lists), `special-tests.cmake`
 (the ~60 tests automake gave a recipe of their own) and `runtime-suites.cmake`
-(the CTest wiring). The lists are the amd64/Linux/JIT resolution of what
-`Makefile.am` carried; entries that only applied to another architecture or to
-an AOT profile are gone, as everywhere else in this port.
+(the CTest wiring). The lists are the amd64/Linux/JIT set; tests that only
+applied to another architecture or to an AOT profile are absent, as everywhere
+else in this port.
 
 Disabled tests are not built, which is what automake did too -- it filtered them
 out of the lists before those lists became build targets, and a few of them no
@@ -131,10 +133,40 @@ longer compile.
 * The AOT modes. `mono/tests/fullaot-mixed` and `llvmonly-mixed`, the
   `TESTSAOT_*` lists and the `%.exe.so` rules that shadowed every test are out
   of this port's JIT-only scope.
-* `mono/benchmark`, `acceptance-tests`, `samples`, `docs`, `po`, `msvc`,
-  `tools/locale-builder`, `sdks` -- out of scope for a Linux/amd64 JIT build, or
-  (in the case of `po` and `docs`) disabled by the configuration this tree uses
-  anyway.
+* `msvc/`, which drives a Visual Studio build of the runtime.  Out of scope for
+  a Linux/amd64 build; the `.vcxproj` files are untouched and still work under
+  MSVC, they simply have no CMake entry point.
+* `sdks/`, which carries its own make-based build for the mobile and wasm
+  cross-targets.  Those are out of this port's scope and their makefiles still
+  expect the deleted `configure`, so they no longer work.
+* `scripts/ci/`, Mono's Jenkins entry points.  They shell out to `./autogen.sh`
+  and read the version out of `configure.ac`, so they are dead; Unity's CI goes
+  through `external/buildscripts` instead.
+
+## The peripheral directories
+
+These are built, but none of them is part of the runtime and each has its own
+switch (see `MonoOptions.cmake`):
+
+| directory             | option                       | default | notes |
+| --------------------- | ---------------------------- | ------- | ----- |
+| `samples`             | `MONO_ENABLE_SAMPLES`        | ON      | built, not run and not installed; `EXCLUDE_FROM_ALL`, so `--target samples` |
+| `mono/benchmark`      | `MONO_ENABLE_BENCHMARKS`     | ON      | assemblies build with `all`; the CTest entries carry `benchmark;slow` |
+| `po`                  | `MONO_ENABLE_NLS`            | ON      | skipped with a message when `msgfmt` is absent |
+| `tools/locale-builder`| `MONO_ENABLE_LOCALE_BUILDER` | OFF     | `culture-table` downloads CLDR and rewrites a checked-in header |
+| `docs`                | `MONO_ENABLE_DOCS`           | OFF     | needs `mdoc.exe` from the class libraries and perl |
+
+Two of them differ from what automake did, on purpose.  `samples` was never
+compiled at all -- the old `Makefile.am` only listed the files for `make dist`
+-- and it is built here because these are the only in-tree users of the
+embedding API and the profiler module ABI.  `mono/benchmark` gains CTest
+entries; the perl `test-driver` it used to run under is not ported, because
+none of the benchmarks has an expected-output file, so a run only ever checked
+the exit status, which CTest does natively.
+
+The gettext catalogues under `po/` are compiled and installed as before, but be
+aware that nothing reads them: the compiler has no gettext binding, so the four
+translations have no effect at runtime.
 
 Everything else that the autotools build produced for this configuration --
 the runtime, both collectors, the LLVM tier, the interpreter, the debugger

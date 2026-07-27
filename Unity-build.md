@@ -87,4 +87,5 @@ From the root of your cloned mono directory run:
 ### Build on other platforms
 - Run external/buildscripts/build_runtime_myplatform.pl (Runtime only)
 or
-- Run ./autogen.sh followed by make. (All platforms (requires cygwin on windows))
+- Configure and build with CMake: `cmake -S . -B build -G Ninja && cmake --build build`.
+  See [build.md](build.md); note that this fork's CMake build targets Linux/amd64.
