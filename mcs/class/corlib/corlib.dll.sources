@@ -1719,8 +1719,8 @@ corert/RuntimeAugments.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/SpanHelpers*.cs
 ../../../external/corefx-bugfix/src/Common/src/CoreLib/System/String.cs
 ../../../external/corefx-bugfix/src/Common/src/CoreLib/System/String.Comparison.cs
-../../../external/corefx/src/Common/src/CoreLib/System/String.Manipulation.cs
-../../../external/corefx/src/Common/src/CoreLib/System/String.Searching.cs
+../../../external/corefx-bugfix/src/Common/src/CoreLib/System/String.Manipulation.cs
+../../../external/corefx-bugfix/src/Common/src/CoreLib/System/String.Searching.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/StringSplitOptions.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Tuple.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/TupleExtensions.cs

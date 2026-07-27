@@ -25,7 +25,7 @@ namespace System
             Debug.Assert(strB != null);
             int length = Math.Min(strA.Length, strB.Length);
 
-            fixed (char* ap = &strA._firstChar) fixed (char* bp = &strB._firstChar)
+            fixed (char* ap = &strA.m_firstChar) fixed (char* bp = &strB.m_firstChar)
             {
                 char* a = ap;
                 char* b = bp;
@@ -91,7 +91,7 @@ namespace System
             Debug.Assert(strA.Length == strB.Length);
             int length = strA.Length;
 
-            fixed (char* ap = &strA._firstChar) fixed (char* bp = &strB._firstChar)
+            fixed (char* ap = &strA.m_firstChar) fixed (char* bp = &strB.m_firstChar)
             {
                 char* a = ap;
                 char* b = bp;
@@ -129,19 +129,19 @@ namespace System
 
             // NOTE: This may be subject to change if eliminating the check
             // in the callers makes them small enough to be inlined
-            Debug.Assert(strA._firstChar == strB._firstChar,
+            Debug.Assert(strA.m_firstChar == strB.m_firstChar,
                 "For performance reasons, callers of this method should " +
                 "check/short-circuit beforehand if the first char is the same.");
 
             int length = Math.Min(strA.Length, strB.Length);
 
-            fixed (char* ap = &strA._firstChar) fixed (char* bp = &strB._firstChar)
+            fixed (char* ap = &strA.m_firstChar) fixed (char* bp = &strB.m_firstChar)
             {
                 char* a = ap;
                 char* b = bp;
 
                 // Check if the second chars are different here
-                // The reason we check if _firstChar is different is because
+                // The reason we check if m_firstChar is different is because
                 // it's the most common case and allows us to avoid a method call
                 // to here.
                 // The reason we check if the second char is different is because
@@ -302,9 +302,9 @@ namespace System
                 case StringComparison.Ordinal:
                     // Most common case: first character is different.
                     // Returns false for empty strings.
-                    if (strA._firstChar != strB._firstChar)
+                    if (strA.m_firstChar != strB.m_firstChar)
                     {
-                        return strA._firstChar - strB._firstChar;
+                        return strA.m_firstChar - strB.m_firstChar;
                     }
 
                     return CompareOrdinalHelper(strA, strB);
@@ -527,9 +527,9 @@ namespace System
 
             // Most common case, first character is different.
             // This will return false for empty strings.
-            if (strA._firstChar != strB._firstChar)
+            if (strA.m_firstChar != strB.m_firstChar)
             {
-                return strA._firstChar - strB._firstChar;
+                return strA.m_firstChar - strB.m_firstChar;
             }
 
             return CompareOrdinalHelper(strA, strB);
@@ -858,7 +858,7 @@ namespace System
 #if UNITY
             return GetLegacyNonRandomizedHashCode();
 #else
-            return Marvin.ComputeHash32(ref Unsafe.As<char, byte>(ref _firstChar), _stringLength * 2, Marvin.DefaultSeed);
+            return Marvin.ComputeHash32(ref Unsafe.As<char, byte>(ref m_firstChar), m_stringLength * 2, Marvin.DefaultSeed);
 #endif
         }
 
@@ -872,7 +872,7 @@ namespace System
         {
             unsafe
             {
-                fixed (char* src = &_firstChar)
+                fixed (char* src = &m_firstChar)
                 {
                     Debug.Assert(src[this.Length] == '\0', "src[this.Length] == '\\0'");
                     Debug.Assert(((int)src) % 4 == 0, "Managed string should start at 4 bytes boundary");
@@ -962,7 +962,7 @@ namespace System
                     return CompareInfo.Invariant.IsPrefix(this, value, CompareOptions.IgnoreCase);
 
                 case StringComparison.Ordinal:
-                    if (this.Length < value.Length || _firstChar != value._firstChar)
+                    if (this.Length < value.Length || m_firstChar != value.m_firstChar)
                     {
                         return false;
                     }
@@ -1001,7 +1001,7 @@ namespace System
             return referenceCulture.CompareInfo.IsPrefix(this, value, ignoreCase ? CompareOptions.IgnoreCase : CompareOptions.None);
         }
 
-        public bool StartsWith(char value) => Length != 0 && _firstChar == value;
+        public bool StartsWith(char value) => Length != 0 && m_firstChar == value;
 
         internal static void CheckStringComparison(StringComparison comparisonType)
         {

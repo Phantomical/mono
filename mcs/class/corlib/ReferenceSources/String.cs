@@ -53,13 +53,13 @@ namespace System
 	partial class String
 	{
 		[NonSerialized]
-		int _stringLength;
+		int m_stringLength;
 		[NonSerialized]
-		char _firstChar;
+		char m_firstChar;
 
 		public static readonly String Empty;
 
-		public int Length => _stringLength;
+		public int Length => m_stringLength;
 
 		internal unsafe int IndexOfUnchecked (string value, int startIndex, int count)
 		{
@@ -70,7 +70,7 @@ namespace System
 			if (valueLen == 0)
 				return startIndex;
 
-			fixed (char* thisptr = &_firstChar, valueptr = value) {
+			fixed (char* thisptr = &m_firstChar, valueptr = value) {
 				char* ap = thisptr + startIndex;
 				char* thisEnd = ap + count - valueLen + 1;
 				while (ap != thisEnd) {
@@ -106,7 +106,7 @@ namespace System
 
 			var ti = CultureInfo.InvariantCulture.TextInfo;
 
-			fixed (char* thisptr = &_firstChar, valueptr = value) {
+			fixed (char* thisptr = &m_firstChar, valueptr = value) {
 				char* ap = thisptr + startIndex;
 				char* thisEnd = ap + count - valueLen + 1;
 				char valueUpper = ti.ToUpper (*valueptr);
@@ -134,7 +134,7 @@ namespace System
 			if (valueLen == 0)
 				return startIndex;
 
-			fixed (char* thisptr = &_firstChar, valueptr = value) {
+			fixed (char* thisptr = &m_firstChar, valueptr = value) {
 				char* ap = thisptr + startIndex;
 
 				char* thisEnd = ap - count + valueLen - 1;
@@ -174,7 +174,7 @@ namespace System
 
 			var ti = CultureInfo.InvariantCulture.TextInfo;
 
-			fixed (char* thisptr = &_firstChar, valueptr = value) {
+			fixed (char* thisptr = &m_firstChar, valueptr = value) {
 				char* ap = thisptr + startIndex;
 
 				char* thisEnd = ap - count + valueLen - 1;
@@ -207,7 +207,7 @@ namespace System
 
 		internal bool StartsWithOrdinalUnchecked (String value)
 		{
-			if (this.Length < value.Length || _firstChar != value._firstChar)
+			if (this.Length < value.Length || m_firstChar != value.m_firstChar)
 				return false;
 
 			return value.Length == 1 ?
@@ -387,10 +387,10 @@ namespace System
 		public char this [int index] {
 			[IntrinsicAttribute]
 			get {
-				if ((uint)index >= _stringLength)
+				if ((uint)index >= m_stringLength)
 					ThrowHelper.ThrowIndexOutOfRangeException ();
 
-				return Unsafe.Add (ref _firstChar, index);
+				return Unsafe.Add (ref m_firstChar, index);
 			}
 		}
 

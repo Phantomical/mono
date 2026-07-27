@@ -47,7 +47,7 @@ namespace System
             string result = FastAllocateString(value.Length);
             unsafe
             {
-                fixed (char* dest = &result._firstChar, source = value)
+                fixed (char* dest = &result.m_firstChar, source = value)
                     wstrcpy(dest, source, value.Length);
             }
             return result;
@@ -83,7 +83,7 @@ namespace System
             string result = FastAllocateString(length);
             unsafe
             {
-                fixed (char* dest = &result._firstChar, source = value)
+                fixed (char* dest = &result.m_firstChar, source = value)
                     wstrcpy(dest, source + startIndex, length);
             }
             return result;
@@ -110,7 +110,7 @@ namespace System
                 return Empty;
 
             string result = FastAllocateString(count);
-            fixed (char* dest = &result._firstChar)
+            fixed (char* dest = &result.m_firstChar)
                 wstrcpy(dest, ptr, count);
             return result;
         }
@@ -147,7 +147,7 @@ namespace System
                 throw new ArgumentOutOfRangeException(nameof(ptr), SR.ArgumentOutOfRange_PartialWCHAR);
 
             string result = FastAllocateString(length);
-            fixed (char* dest = &result._firstChar)
+            fixed (char* dest = &result.m_firstChar)
                 wstrcpy(dest, pStart, length);
             return result;
         }
@@ -229,7 +229,7 @@ namespace System
                 throw new ArgumentException(SR.Arg_InvalidANSIString);
 
             string newString = FastAllocateString(numCharsRequired);
-            fixed (char *pFirstChar = &newString._firstChar)
+            fixed (char *pFirstChar = &newString.m_firstChar)
             {
                 numCharsRequired = Interop.Kernel32.MultiByteToWideChar(Interop.Kernel32.CP_ACP, Interop.Kernel32.MB_PRECOMPOSED, pb, numBytes, pFirstChar, numCharsRequired);
             }
@@ -307,7 +307,7 @@ namespace System
             {
                 unsafe
                 {
-                    fixed (char* dest = &result._firstChar)
+                    fixed (char* dest = &result.m_firstChar)
                     {
                         uint cc = (uint)((c << 16) | c);
                         uint* dmem = (uint*)dest;
@@ -351,7 +351,7 @@ namespace System
                 return Empty;
 
             string result = FastAllocateString(value.Length);
-            fixed (char* dest = &result._firstChar, src = &MemoryMarshal.GetReference(value))
+            fixed (char* dest = &result.m_firstChar, src = &MemoryMarshal.GetReference(value))
                 wstrcpy(dest, src, value.Length);
             return result;
         }
@@ -388,7 +388,7 @@ namespace System
                 throw new ArgumentNullException(nameof(str));
 
             string result = FastAllocateString(str.Length);
-            fixed (char* dest = &result._firstChar, src = &str._firstChar)
+            fixed (char* dest = &result.m_firstChar, src = &str.m_firstChar)
                 wstrcpy(dest, src, str.Length);
             return result;
         }
@@ -411,7 +411,7 @@ namespace System
             if (destinationIndex > destination.Length - count || destinationIndex < 0)
                 throw new ArgumentOutOfRangeException(nameof(destinationIndex), SR.ArgumentOutOfRange_IndexCount);
 
-            fixed (char* src = &_firstChar, dest = destination)
+            fixed (char* src = &m_firstChar, dest = destination)
                 wstrcpy(dest + destinationIndex, src + sourceIndex, count);
         }
 
@@ -422,7 +422,7 @@ namespace System
                 return Array.Empty<char>();
 
             char[] chars = new char[Length];
-            fixed (char* src = &_firstChar, dest = &chars[0])
+            fixed (char* src = &m_firstChar, dest = &chars[0])
                 wstrcpy(dest, src, Length);
             return chars;
         }
@@ -443,7 +443,7 @@ namespace System
             }
 
             char[] chars = new char[length];
-            fixed (char* src = &_firstChar, dest = &chars[0])
+            fixed (char* src = &m_firstChar, dest = &chars[0])
                 wstrcpy(dest, src + startIndex, length);
             return chars;
         }
@@ -472,7 +472,7 @@ namespace System
             return true;
         }
 
-        internal ref char GetRawStringData() => ref _firstChar;
+        internal ref char GetRawStringData() => ref m_firstChar;
 
         // Helper for encodings so they can talk to our buffer directly
         // stringLength must be the exact size we'll expect
@@ -492,7 +492,7 @@ namespace System
                 return Empty;
 
             string s = FastAllocateString(stringLength);
-            fixed (char* pTempChars = &s._firstChar)
+            fixed (char* pTempChars = &s.m_firstChar)
             {
                 int doubleCheck = encoding.GetChars(bytes, byteLength, pTempChars, stringLength, null);
                 Debug.Assert(stringLength == doubleCheck,
@@ -503,12 +503,12 @@ namespace System
         }
 
         // This is only intended to be used by char.ToString.
-        // It is necessary to put the code in this class instead of Char, since _firstChar is a private member.
-        // Making _firstChar internal would be dangerous since it would make it much easier to break String's immutability.
+        // It is necessary to put the code in this class instead of Char, since m_firstChar is a private member.
+        // Making m_firstChar internal would be dangerous since it would make it much easier to break String's immutability.
         internal static string CreateFromChar(char c)
         {
             string result = FastAllocateString(1);
-            result._firstChar = c;
+            result.m_firstChar = c;
             return result;
         }
 
