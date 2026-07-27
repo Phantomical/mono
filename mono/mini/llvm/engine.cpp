@@ -1128,6 +1128,24 @@ tier1_dump_dir ()
 			         dir, ec.message ().c_str ());
 			return;
 		}
+
+		/*
+		 * X86 AsmPrinter's AT&T-vs-Intel choice is a hidden, target-local
+		 * cl::opt ("x86-asm-syntax", X86MCAsmInfo.cpp) with no public setter -
+		 * its enum type isn't exposed in any header, so it can't be reached as
+		 * a cl::opt<T>. addOccurrence() is the type-erased path every
+		 * cl::Option supports for exactly this: it parses "intel" the same way
+		 * -x86-asm-syntax=intel would from argv, without re-running
+		 * cl::ParseCommandLineOptions() (which MONO_LLVM_OPT already owns) or
+		 * needing the concrete option type. Purely a readability choice for
+		 * the dump file; the real JIT still emits binary object code, which
+		 * has no assembler dialect to pick.
+		 */
+		StringMap<cl::Option *> &opts = cl::getRegisteredOptions ();
+		auto it = opts.find ("x86-asm-syntax");
+		if (it != opts.end ())
+			it->second->addOccurrence (0, "x86-asm-syntax", "intel");
+
 		g_tier1_dump_dir = dir;
 	});
 	return g_tier1_dump_dir;
