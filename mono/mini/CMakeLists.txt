@@ -122,7 +122,9 @@ if(MONO_ENABLE_LLVM)
     llvm/passes/elide-class-init.cpp
     llvm/passes/finally-range.cpp
     llvm/passes/inliner.cpp
-    llvm/passes/pass-dump.cpp)
+    llvm/passes/null-check-guard.cpp
+    llvm/passes/pass-dump.cpp
+    llvm/passes/wbarrier.cpp)
 endif()
 
 mono_add_object_library(mini

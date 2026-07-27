@@ -113,6 +113,10 @@ if(MONO_ENABLE_LLVM)
     SOURCES test-llvm-ehtable.cpp    ENTRY test_llvm_ehtable_main     RUNTIME)
   mono_add_unit_test(test-llvm-class-init
     SOURCES test-llvm-class-init.cpp ENTRY test_llvm_class_init_main  RUNTIME)
+  # C++ for the same reason again: it includes llvm/passes/wbarrier.hpp and
+  # drives the write-barrier lowering over IR it assembles by hand.
+  mono_add_unit_test(test-llvm-wbarrier
+    SOURCES test-llvm-wbarrier.cpp   ENTRY test_llvm_wbarrier_main    RUNTIME)
 endif()
 
 # The managed side of the tests that need one.

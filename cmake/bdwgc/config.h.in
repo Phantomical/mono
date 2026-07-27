@@ -1,0 +1,65 @@
+/* config.h for the bundled Boehm-Demers-Weiser collector.
+ *
+ * external/bdwgc is a submodule and keeps its own autotools build; this is the
+ * CMake equivalent of what mono's configure passed down to it.  Only the knobs
+ * mono actually sets are here -- the collector reads a great many more, but
+ * they all have workable defaults in include/private/gcconfig.h.
+ */
+
+#ifndef GC_CONFIG_H
+#define GC_CONFIG_H
+
+#define PACKAGE         "gc"
+#define PACKAGE_NAME    "gc"
+#define PACKAGE_TARNAME "gc"
+#define PACKAGE_VERSION "@BDWGC_VERSION@"
+#define PACKAGE_STRING  "gc @BDWGC_VERSION@"
+#define PACKAGE_URL     ""
+#define PACKAGE_BUGREPORT "https://github.com/ivmai/bdwgc/issues"
+#define VERSION         "@BDWGC_VERSION@"
+#define LT_OBJDIR       ".libs/"
+
+#define GC_VERSION_MAJOR @BDWGC_VERSION_MAJOR@
+#define GC_VERSION_MINOR @BDWGC_VERSION_MINOR@
+#define GC_VERSION_MICRO @BDWGC_VERSION_MICRO@
+
+#define STDC_HEADERS 1
+#cmakedefine HAVE_DLFCN_H 1
+#cmakedefine HAVE_INTTYPES_H 1
+#cmakedefine HAVE_STDINT_H 1
+#cmakedefine HAVE_STDIO_H 1
+#cmakedefine HAVE_STDLIB_H 1
+#cmakedefine HAVE_STRINGS_H 1
+#cmakedefine HAVE_STRING_H 1
+#cmakedefine HAVE_SYS_STAT_H 1
+#cmakedefine HAVE_SYS_TYPES_H 1
+#cmakedefine HAVE_UNISTD_H 1
+#cmakedefine HAVE_DLADDR 1
+#cmakedefine HAVE_DL_ITERATE_PHDR 1
+
+/* Interior pointers keep an object alive.  Mono needs this: managed code
+   routinely holds only a pointer into the middle of an array. */
+#define ALL_INTERIOR_POINTERS 1
+
+/* Threading.  --with-libgc-threads=pthreads, and mono asks for the collector
+   not to discover threads on its own -- the runtime registers them. */
+#define GC_THREADS 1
+#define GC_NO_THREADS_DISCOVERY 1
+#define GC_ENABLE_SUSPEND_THREAD 1
+#define _REENTRANT 1
+
+#cmakedefine PARALLEL_MARK 1
+
+/* Finalization and typed allocation the runtime relies on. */
+#define JAVA_FINALIZATION 1
+#define GC_GCJ_SUPPORT 1
+#define GC_ATOMIC_UNCOLLECTABLE 1
+#define ENABLE_DISCLAIM 1
+
+/* Return memory to the OS, and never map the heap executable. */
+#define USE_MMAP 1
+#define USE_MUNMAP 1
+#define MUNMAP_THRESHOLD 6
+#define NO_EXECUTE_PERMISSION 1
+
+#endif /* GC_CONFIG_H */

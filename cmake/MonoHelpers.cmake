@@ -20,7 +20,14 @@ function(mono_add_object_library name)
     target_compile_options(${name} PRIVATE ${ARG_OPTIONS})
   endif()
   if(ARG_INCLUDES)
-    target_include_directories(${name} PRIVATE ${ARG_INCLUDES})
+    # The generated config.h goes first.  Some of the vendored trees these
+    # targets include from -- bdwgc, libatomic_ops -- ship a config.h of their
+    # own, and PRIVATE directories are searched ahead of the ${CMAKE_BINARY_DIR}
+    # that mono::common contributes.  In a tree where autotools has ever run
+    # there are real files at those paths, so `#include <config.h>` lands on one
+    # with none of mono's defines and the arch dispatch collapses into
+    # "Don't know how to do memory barriers!".
+    target_include_directories(${name} PRIVATE "${CMAKE_BINARY_DIR}" ${ARG_INCLUDES})
   endif()
 endfunction()
 

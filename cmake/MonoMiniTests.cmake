@@ -164,7 +164,15 @@ if(MONO_ENABLE_LLVM)
     _mono_add_tiered_test(promotion tiered-promotion.exe ${_n} ARGS --regression)
     _mono_add_tiered_test(inliner-regression inliner-tests.exe ${_n} ARGS --regression)
   endforeach()
+  # The same corpus again under the runtime's DEFAULT optimization set, which is
+  # the only way these runs get MONO_OPT_GSHARED: --regression drives its own
+  # list of opt combinations and all but one of them leave gshared out, and the
+  # first combination to run has already JIT'd -- and latched the tier state of
+  # -- every method by the time the one that includes it comes around. Methods
+  # that are only interesting when compiled shared are therefore untested by the
+  # --regression runs above, however many thresholds they sweep.
   foreach(_n 1000 20 1 0)
+    _mono_add_tiered_test(promotion-gshared tiered-promotion.exe ${_n})
     _mono_add_tiered_test(inliner inliner-tests.exe ${_n})
   endforeach()
   # The decline corpus needs tier-1 to never actually fire, so point the
@@ -176,6 +184,21 @@ if(MONO_ENABLE_LLVM)
     _mono_add_tiered_test(exceptions exceptions.exe ${_n} ARGS --regression)
     _mono_add_tiered_test(iltests    iltests.exe    ${_n} ARGS --regression)
   endforeach()
+
+  # The corpus only ever checks that tier-1 code computes the right answer,
+  # which it does whether or not anything was inlined -- so this asserts the
+  # decisions themselves, read out of the pass's own trace, against expectations
+  # written next to the fixtures. Without it an inliner that quietly stands down
+  # is a green run; that has happened before.  The script evals its first
+  # argument as a command prefix, environment assignments and all.
+  add_test(NAME tiered-inliner-tags
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/check-inliner-tags.sh"
+                   "MONO_PATH=${_class_dir} ${_wrapper}"
+                   "${CMAKE_CURRENT_BINARY_DIR}/inliner-tests.exe"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/inliner-tests.cs"
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(tiered-inliner-tags PROPERTIES
+    LABELS tiered FIXTURES_REQUIRED mini_corpora)
 endif()
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,8 @@ config.cache
 config.guess
 config.h
 config.h.in
+# ...but cmake/ holds hand-written config.h templates, not autoheader output.
+!cmake/**/config.h.in
 config.log
 config.status
 config.sub
