@@ -42,11 +42,14 @@
 #include <string>
 #include <vector>
 
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
+#include <llvm/ADT/Hashing.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>
@@ -97,9 +100,12 @@
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/SmallVectorMemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -1065,6 +1071,114 @@ host_target_machine_builder ()
 	return jtmb;
 }
 
+/* ---- MONO_TIER1_DUMP_DIR: textual tier-1 asm dump ------------------------
+ *
+ * A debugging aid, not part of the compile pipeline proper: every method that
+ * reaches tier 1 gets its final assembly written out as a plain-text .s file,
+ * one per method. Read once, lazily, on the first compile after startup - most
+ * runs never set this, so paying for a getenv/mkdir on every compile would be
+ * pure waste.
+ */
+
+static std::once_flag g_dump_dir_once;
+static const char *g_tier1_dump_dir;
+
+static const char *
+tier1_dump_dir ()
+{
+	std::call_once (g_dump_dir_once, [] {
+		const char *dir = std::getenv ("MONO_TIER1_DUMP_DIR");
+		if (!dir || !dir [0])
+			return;
+		if (std::error_code ec = sys::fs::create_directories (dir)) {
+			fprintf (stderr, "mono llvm engine: MONO_TIER1_DUMP_DIR='%s': %s\n",
+			         dir, ec.message ().c_str ());
+			return;
+		}
+		g_tier1_dump_dir = dir;
+	});
+	return g_tier1_dump_dir;
+}
+
+/*
+ * The translator names the LLVM entry function after mono_method_full_name()
+ * (translator.cpp), which carries characters no filesystem name should - '/',
+ * ':', '<', '>', spaces, the commas of a generic argument list. Replace
+ * anything outside [A-Za-z0-9._-] with '_'. A deeply nested generic can still
+ * run past a filesystem's name-length limit even after that, so an overlong
+ * name is truncated and given a hash suffix - truncation alone would collide
+ * two long names that only differ after the cut point.
+ */
+static std::string
+sanitize_dump_filename (StringRef name)
+{
+	std::string out;
+	out.reserve (name.size ());
+	for (char c : name)
+		out.push_back (isalnum ((unsigned char) c) || c == '.' || c == '_' || c == '-'
+		               ? c : '_');
+
+	constexpr size_t kMaxLen = 160;
+	if (out.size () <= kMaxLen)
+		return out;
+
+	char hash[17];
+	snprintf (hash, sizeof (hash), "%016llx",
+	          (unsigned long long) hash_value (name));
+	out.resize (kMaxLen);
+	return out + "_" + hash;
+}
+
+/*
+ * Write M's compiled form out as a plain-text .s file under MONO_TIER1_DUMP_DIR,
+ * named after ENTRY_NAME, or do nothing if that variable is unset. This is a
+ * second, independent codegen run - over its own clone of M, through a freshly
+ * built TargetMachine from the same host_target_machine_builder() the engine
+ * JITs with - rather than a tee on the real compile, so it cannot perturb the
+ * MonoIRCompiler pipeline (shared mutable pass state, the EH side channel) that
+ * actually produces the code the runtime executes. Every failure path here
+ * warns to stderr and returns; a dump going wrong must never take a real
+ * compile down with it.
+ */
+static void
+dump_tier1_asm (const Module &m, StringRef entry_name)
+{
+	const char *dir = tier1_dump_dir ();
+	if (!dir)
+		return;
+
+	std::unique_ptr<Module> clone = CloneModule (m);
+
+	Expected<std::unique_ptr<TargetMachine>> tm =
+		host_target_machine_builder ().createTargetMachine ();
+	if (!tm) {
+		fprintf (stderr, "mono llvm engine: MONO_TIER1_DUMP_DIR: %s\n",
+		         toString (tm.takeError ()).c_str ());
+		return;
+	}
+	auto *ltm = static_cast<LLVMTargetMachine *> (tm->get ());
+	clone->setDataLayout (ltm->createDataLayout ());
+
+	SmallString<256> path (dir);
+	sys::path::append (path, sanitize_dump_filename (entry_name) + ".s");
+
+	std::error_code ec;
+	raw_fd_ostream out (path, ec, sys::fs::OF_Text);
+	if (ec) {
+		fprintf (stderr, "mono llvm engine: MONO_TIER1_DUMP_DIR: failed to open '%s': %s\n",
+		         path.c_str (), ec.message ().c_str ());
+		return;
+	}
+
+	legacy::PassManager pm;
+	if (ltm->addPassesToEmitFile (pm, out, nullptr, CodeGenFileType::AssemblyFile)) {
+		fprintf (stderr, "mono llvm engine: MONO_TIER1_DUMP_DIR: target does not support "
+		         "emitting assembly\n");
+		return;
+	}
+	pm.run (*clone);
+}
+
 namespace {
 
 /* ---- .mono_lsda emitter --------------------------------------------------
@@ -1930,6 +2044,14 @@ MonoLLVMJIT::compile (Function *entry,
 	for (auto *gv : callee_vars)
 		var_names.push_back (gv->getName ().str ());
 	std::string eh_name = eh_symbol.str ();
+
+	/*
+	 * MONO_TIER1_DUMP_DIR debugging aid: off entry->getParent(), the module the
+	 * translator built and already ran mono_llvm_optimize_method() over, i.e.
+	 * exactly what the clone below is about to hand the JIT. A no-op (a cached
+	 * getenv check) unless the variable is set.
+	 */
+	dump_tier1_asm (*entry->getParent (), entry_name);
 
 	/*
 	 * Hand the JIT a private CLONE of the caller's module, not the module
