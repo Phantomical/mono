@@ -1904,8 +1904,10 @@ mono_jit_parse_options (int argc, char * argv[])
 #elif !defined(ENABLE_LLVM)
 			fprintf (stderr, "Mono Warning: --llvm not enabled in this runtime.\n");
 #else
-			mono_use_llvm = TRUE;
+			mini_set_use_llvm (TRUE);
 #endif
+		} else if (strcmp (argv [i], "--nollvm") == 0) {
+			mini_set_use_llvm (FALSE);
 		} else if (strcmp (argv [i], "--profile") == 0) {
 			mini_add_profiler_argument (NULL);
 		} else if (strncmp (argv [i], "--profile=", 10) == 0) {
@@ -2511,10 +2513,10 @@ mono_main (int argc, char* argv[])
 #elif !defined(ENABLE_LLVM)
 			fprintf (stderr, "Mono Warning: --llvm not enabled in this runtime.\n");
 #else
-			mono_use_llvm = TRUE;
+			mini_set_use_llvm (TRUE);
 #endif
 		} else if (strcmp (argv [i], "--nollvm") == 0){
-			mono_use_llvm = FALSE;
+			mini_set_use_llvm (FALSE);
 		} else if (strcmp (argv [i], "--ffast-math") == 0){
 			mono_use_fast_math = TRUE;
 		} else if ((strcmp (argv [i], "--interpreter") == 0) || !strcmp (argv [i], "--interp")) {

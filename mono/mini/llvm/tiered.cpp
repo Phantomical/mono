@@ -210,10 +210,9 @@ static gboolean tiered_enabled;
 /*
  * MONO_TIERED_CALL_THRESHOLD: how many times a tier-0 body is entered before it
  * is enqueued for tier 1. Default 1000; 0 means promote synchronously on first
- * publish instead (see mono_llvm_tiered_promote_sync ()), which is also the
- * feature's off switch. Read once in tiered_do_init () and thereafter a constant
- * the prologue emitter bakes in. Meaningless - and left 0 - unless MONO_TIERED
- * is set.
+ * publish instead (see mono_llvm_tiered_promote_sync ()). Read once in
+ * tiered_do_init () and thereafter a constant the prologue emitter bakes in.
+ * Meaningless - and left 0 - when tiering is off.
  */
 static guint32 tiered_call_threshold;
 
@@ -281,10 +280,36 @@ mini_tiered_counter_tier1_entry_offset (void)
 	return offsetof (MiniTieredCounter, tier1_entry);
 }
 
+/*
+ * MONO_TIERED, which is on unless it is turned off by hand: an empty value or one
+ * that reads as a negative disables tiering, anything else - including the variable
+ * not being set at all - leaves it on.
+ */
+static gboolean
+tiered_env_enabled (void)
+{
+	char *e = g_getenv ("MONO_TIERED");
+	gboolean enabled = TRUE;
+
+	if (e) {
+		if (!*e || !g_ascii_strcasecmp (e, "0") || !g_ascii_strcasecmp (e, "no") || !g_ascii_strcasecmp (e, "false"))
+			enabled = FALSE;
+		g_free (e);
+	}
+	return enabled;
+}
+
 static void
 tiered_do_init (void)
 {
-	tiered_enabled = g_getenv ("MONO_TIERED") != NULL;
+	/*
+	 * Tier 1 is LLVM, so a run that turned LLVM off has no tier 1 to promote to
+	 * and tiering goes with it - otherwise --nollvm would leave the counters and
+	 * the worker in place and still hand back LLVM-compiled bodies. mini_init ()
+	 * has settled mono_use_llvm by the time anything gets here: the first caller
+	 * is always a compile, and nothing compiles before the runtime is up.
+	 */
+	tiered_enabled = mono_use_llvm && tiered_env_enabled ();
 	if (!tiered_enabled)
 		return;
 	mono_os_mutex_init_recursive (&tiered_mutex);
@@ -316,7 +341,7 @@ tiered_do_init (void)
 }
 
 /*
- * The call-count threshold, or 0 when the feature is off (MONO_TIERED unset, or
+ * The call-count threshold, or 0 when the feature is off (tiering disabled, or
  * MONO_TIERED_CALL_THRESHOLD=0). At 0 the prologue emits no counter, and the
  * tier-0 publish site promotes the method to tier 1 synchronously, right there
  * on the compiling thread, instead of taking the counter/background-worker path

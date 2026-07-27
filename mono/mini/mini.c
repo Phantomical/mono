@@ -3210,8 +3210,8 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	 *
 	 * AOT is excluded: there is no tiering when compiling ahead of time, and
 	 * `llvm' here is the AOT compiler's JIT_FLAG_LLVM. Without the compile_aot
-	 * guard an inherited MONO_TIERED in the environment would make
-	 * `mono --aot=llvm' silently emit no LLVM methods at all.
+	 * guard tiering would make `mono --aot=llvm' silently emit no LLVM methods
+	 * at all.
 	 */
 	if (!compile_aot && mono_llvm_tiered_enabled ())
 		try_llvm = mono_llvm_tiered_in_promotion ();
@@ -4335,11 +4335,11 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt, gboole
 	MonoJitInfo *tier0_jinfo;
 
 	/*
-	 * mini_init () only initializes LLVM when mono_use_llvm is set, i.e. when
-	 * --llvm made LLVM the primary JIT. Under tiering it is not, so nothing has
-	 * initialized the backend yet: the SSE vector types would still be NULL when
-	 * add_intrinsics () registers the overloaded intrinsics that use them, and
-	 * intrins_id_to_intrins would still be NULL.
+	 * mini_init () only initializes LLVM when mono_use_llvm is set, which is the
+	 * usual case but not something promotion can lean on - an embedder that never
+	 * goes through mini_init ()'s default can leave the backend uninitialized, and
+	 * then the SSE vector types would still be NULL when add_intrinsics () registers
+	 * the overloaded intrinsics that use them, as would intrins_id_to_intrins.
 	 *
 	 * mini_llvm_init () is idempotent but takes the loader lock, so gate it on a
 	 * one-shot rather than paying that on every promotion. Racing threads at

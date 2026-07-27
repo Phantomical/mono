@@ -1919,8 +1919,12 @@ check_usable (MonoAssembly *assembly, MonoAotFileInfo *info, guint8 *blob, char 
 		msg = g_strdup ("not compiled with --aot=llvmonly");
 		usable = FALSE;
 	}
-	if (mono_use_llvm && !(info->flags & MONO_AOT_FILE_FLAG_WITH_LLVM)) {
-		/* Prefer LLVM JITted code when using --llvm */
+	if (mono_use_llvm && mini_use_llvm_explicitly_set () && !(info->flags & MONO_AOT_FILE_FLAG_WITH_LLVM)) {
+		/*
+		 * Prefer LLVM JITted code when the user asked for --llvm by name. Only
+		 * then - LLVM is on by default now, and "the LLVM tier is available"
+		 * is no reason to throw away a perfectly good non-LLVM AOT image.
+		 */
 		msg = g_strdup ("not compiled with --aot=llvm");
 		usable = FALSE;
 	}

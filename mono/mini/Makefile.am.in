@@ -968,8 +968,12 @@ endif
 checktests: $(regtests)
 	for i in $(regtests); do $(MINI_RUNTIME) $$i; done
 
+# --nollvm on the two rcheck targets below is deliberate. LLVM and tiering are on
+# by default now, so without it this suite would stop being the classic-JIT
+# baseline it is here to be and a tier-0 regression could hide behind a tier-1
+# body. The default configuration is what tieredcheck covers.
 rcheck-nunit: mono $(regtests)
-	$(MINI_RUNTIME) --regression $(regtests) > regressiontests.out 2>&1; cat regressiontests.out; \
+	$(MINI_RUNTIME) --nollvm --regression $(regtests) > regressiontests.out 2>&1; cat regressiontests.out; \
 	if grep -q "100% pass" regressiontests.out; then successbool=True; failurescount=0; else successbool=False; failurescount=1; fi; \
 	echo "<?xml version='1.0' encoding='utf-8'?>\
 		<test-results failures='$$failurescount' total='1' not-run='0' name='regression-tests.dummy' date='$$(date +%F)' time='$$(date +%T)'>\
@@ -981,7 +985,7 @@ rcheck-nunit: mono $(regtests)
 		</test-results>" >> TestResult-regression.xml; exit $$failurescount
 
 rcheck: mono $(regtests)
-	$(MINI_RUNTIME) --regression $(regtests)
+	$(MINI_RUNTIME) --nollvm --regression $(regtests)
 
 # The tier-1 corpora are kept out of $(regtests): they need the LLVM backend and
 # JIT-only probe icalls, which the AOT suites that share $(regtests) do not have.

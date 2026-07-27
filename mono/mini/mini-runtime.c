@@ -132,8 +132,20 @@ int mini_verbose = 0;
 /*
  * This flag controls whenever the runtime uses LLVM for JIT compilation, and whenever
  * it can load AOT code compiled by LLVM.
+ *
+ * The value here is only the pre-startup one; mini_init () resolves the real
+ * default (on for JIT runs, off for the AOT compiler) unless --llvm, --nollvm or
+ * mono_set_use_llvm () already picked a side.
  */
 gboolean mono_use_llvm = FALSE;
+
+/*
+ * TRUE once somebody named LLVM explicitly rather than taking whatever mini_init ()
+ * defaults to. Two things want to tell those apart: the default must not clobber a
+ * choice that was already made, and only a deliberate --llvm means "prefer LLVM code
+ * over anything else", which is what the AOT image usability check keys off.
+ */
+static gboolean use_llvm_explicit;
 
 gboolean mono_use_fast_math = FALSE;
 
@@ -193,7 +205,24 @@ mono_running_on_valgrind (void)
 void
 mono_set_use_llvm (mono_bool use_llvm)
 {
-	mono_use_llvm = (gboolean)use_llvm;
+	mini_set_use_llvm ((gboolean)use_llvm);
+}
+
+/*
+ * The runtime-internal half of mono_set_use_llvm (), which is embedder API and
+ * deprecated for our own use.
+ */
+void
+mini_set_use_llvm (gboolean use_llvm)
+{
+	mono_use_llvm = use_llvm;
+	use_llvm_explicit = TRUE;
+}
+
+gboolean
+mini_use_llvm_explicitly_set (void)
+{
+	return use_llvm_explicit;
 }
 
 
@@ -4405,6 +4434,20 @@ mini_init (const char *filename, const char *runtime_version)
 
 	CHECKED_MONO_INIT ();
 
+#if defined(ENABLE_LLVM) && defined(MONO_ARCH_LLVM_SUPPORTED)
+	/*
+	 * Settle mono_use_llvm before anything can compile a method - the tiering
+	 * policy reads it once, the first time it is asked whether it is enabled, and
+	 * that first question comes from a compile.
+	 *
+	 * The AOT compiler is left out: mono/mini/llvm/ is a JIT backend only, so
+	 * defaulting this on there would send every plain `--aot' down the LLVM AOT
+	 * path, which does nothing but refuse.
+	 */
+	if (!use_llvm_explicit && !mono_compile_aot)
+		mono_use_llvm = TRUE;
+#endif
+
 #if defined(__linux__)
 	if (access ("/proc/self/maps", F_OK) != 0) {
 		g_print ("Mono requires /proc to be mounted.\n");
@@ -4554,8 +4597,9 @@ mini_init (const char *filename, const char *runtime_version)
 	 * Go through mini_llvm_init (), not mono_llvm_init () directly: the latter
 	 * unconditionally reallocates intrins_id_to_intrins, so a second call
 	 * discards every intrinsic registered by the first and leaks the table.
-	 * Tiering initializes LLVM lazily on its first promotion, so with --llvm and
-	 * MONO_TIERED together this would otherwise be initialized twice.
+	 * Tiering initializes LLVM lazily on its first promotion, so without this
+	 * being the idempotent entry point it would be initialized twice in the
+	 * default configuration.
 	 */
 	if (mono_use_llvm)
 		mini_llvm_init ();

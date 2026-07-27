@@ -171,7 +171,10 @@ guint32   mono_llvm_jit_release_domain (MonoDomain *domain);
  * compile thread, never on the thread that queued it. At threshold 0 there is
  * no queue and no background thread: mono_llvm_tiered_promote_sync () below
  * promotes the method synchronously, on whichever thread just published its
- * tier-0 body. All of these are no-ops unless MONO_TIERED is set.
+ * tier-0 body.
+ *
+ * Tiering is on by default; MONO_TIERED=0 and --nollvm each turn it off, and
+ * then all of these are no-ops.
  *
  * mini.c brackets mini_method_compile with _compile_begin/_compile_end, calls
  * _promote_sync after publishing a threshold-0 tier-0 body, and implements

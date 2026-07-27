@@ -397,6 +397,14 @@ MONO_API_DATA gboolean mono_use_interpreter;
 MONO_API_DATA MonoCPUFeatures mono_cpu_features_enabled;
 MONO_API_DATA MonoCPUFeatures mono_cpu_features_disabled;
 MONO_END_DECLS
+
+/*
+ * Set mono_use_llvm above and record that it was a deliberate choice rather than
+ * the default mini_init () would otherwise settle on. This is what --llvm and
+ * --nollvm go through; mono_set_use_llvm () is the same thing for embedders.
+ */
+void     mini_set_use_llvm (gboolean use_llvm);
+gboolean mini_use_llvm_explicitly_set (void);
 extern const char* mono_interp_opts_string;
 extern gboolean mono_do_single_method_regression;
 extern guint32 mono_single_method_regression_opt;

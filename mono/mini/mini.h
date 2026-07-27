@@ -2187,11 +2187,11 @@ gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *dom
  * Deferred tier-1 promotion behind a call-count threshold (mono/mini/llvm/tiered.cpp).
  *
  * mono_llvm_tiered_call_threshold () returns MONO_TIERED_CALL_THRESHOLD (default
- * 1000; 0 = synchronous promotion at the tier-0 publish site, and the feature's
- * off switch). It is 0 whenever MONO_TIERED is unset, so the feature-off case
- * and threshold 0 share the same synchronous-promotion-attempt code path in
- * mini.c, and mono_llvm_tiered_promote_sync () itself no-ops when the feature
- * is off.
+ * 1000; 0 = synchronous promotion at the tier-0 publish site). It is also 0 when
+ * tiering itself is off (MONO_TIERED=0, or --nollvm - see tiered_do_init ()), so
+ * the feature-off case and threshold 0 share the same synchronous-promotion-attempt
+ * code path in mini.c, and mono_llvm_tiered_promote_sync () itself no-ops when the
+ * feature is off.
  *
  * When the threshold is non-zero the tier-0 prologue (mono_arch_emit_prolog) owns
  * a per-method, per-domain counter block obtained from mini_tiered_alloc_counter ():
