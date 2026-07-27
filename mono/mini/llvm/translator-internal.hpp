@@ -575,8 +575,6 @@ to_llvm_pred (LLVMRealPredicate p)
 	return static_cast<llvm::CmpInst::Predicate> (p);
 }
 
-extern MonoLLVMModule aot_module;
-
 /* Defined in translator-types.cpp. */
 /*
  * The 128-bit SIMD type for the mono type TYPE, in context C. The intrinsic

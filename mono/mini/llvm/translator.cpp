@@ -85,8 +85,6 @@ LLVMRealPredicate fpcond_to_llvm_cond [] = {
 	LLVMRealUNO
 };
 
-MonoLLVMModule aot_module;
-
 void set_invariant_load_flag (LLVMValueRef v);
 
 /*
@@ -526,27 +524,6 @@ EmitContext::emit_method_inner ()
 		this->set_failure ("gsharedvt");
 		return;
 	}
-
-#if 0
-	{
-		static int count = 0;
-		count ++;
-
-		char *llvm_count_str = g_getenv ("LLVM_COUNT");
-		if (llvm_count_str) {
-			int lcount = atoi (llvm_count_str);
-			g_free (llvm_count_str);
-			if (count == lcount) {
-				printf ("LAST: %s\n", mono_method_full_name (cfg->method, TRUE));
-				fflush (stdout);
-			}
-			if (count > lcount) {
-				this->set_failure ("count");
-				return;
-			}
-		}
-	}
-#endif
 
 	if (cfg->method->wrapper_type == MONO_WRAPPER_OTHER) {
 		WrapperInfo *info = mono_marshal_get_wrapper_info (cfg->method);
@@ -1164,12 +1141,11 @@ mono_llvm_init (gboolean enable_jit)
 void
 mono_llvm_cleanup (void)
 {
-	MonoLLVMModule *module = &aot_module;
-
-	if (module->lmodule)
-		LLVMDisposeModule (module->lmodule);
-
-	module->context = llvm::orc::ThreadSafeContext ();
+	/*
+	 * Nothing to do: the translator holds no state outliving a compile. Tearing
+	 * down what does outlive one - the compile workers, then the engine and the
+	 * code it owns - is mini_cleanup ()'s job, and happens before this runs.
+	 */
 }
 
 void
