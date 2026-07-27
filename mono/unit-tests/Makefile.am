@@ -133,6 +133,10 @@ libtestlib_la_SOURCES += test-llvm-ehtable.cpp
 # mono/mini/llvm/passes/elide-class-init.hpp and builds LLVM IR by hand to drive
 # the class-init redundancy analysis.
 libtestlib_la_SOURCES += test-llvm-class-init.cpp
+# test-llvm-wbarrier.cpp is C++ for the same reason again: it includes
+# mono/mini/llvm/passes/wbarrier.hpp and drives the write-barrier lowering over
+# IR it assembles by hand.
+libtestlib_la_SOURCES += test-llvm-wbarrier.cpp
 libtestlib_la_CXXFLAGS = $(LLVM_CXXFLAGS)
 endif
 libtestlib_la_LIBADD = ../metadata/libmonoruntimesgen.la ../sgen/libmonosgen.la ../utils/libmonoutils.la
@@ -225,6 +229,11 @@ test_llvm_class_init_SOURCES = main.c
 test_llvm_class_init_CFLAGS = $(test_cflags) -DMAIN=test_llvm_class_init_main
 test_llvm_class_init_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-class-init.lo
 test_llvm_class_init_LDFLAGS = $(test_ldflags)
+
+test_llvm_wbarrier_SOURCES = main.c
+test_llvm_wbarrier_CFLAGS = $(test_cflags) -DMAIN=test_llvm_wbarrier_main
+test_llvm_wbarrier_LDADD = $(test_ldadd) $(mini_libs) $(sgen_libs) $(LLVMMONOF) libtestlib_la-test-llvm-wbarrier.lo
+test_llvm_wbarrier_LDFLAGS = $(test_ldflags)
 endif
 
 
@@ -237,8 +246,8 @@ TESTS = test-sgen-qsort test-memfuncs test-mono-linked-list-set test-conc-hashta
 	test-mono-callspec test-mono-string test-mono-embed test-embed-invoke
 
 if ENABLE_LLVM
-check_PROGRAMS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable test-llvm-class-init
-TESTS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable test-llvm-class-init
+check_PROGRAMS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable test-llvm-class-init test-llvm-wbarrier
+TESTS += test-llvm-engine test-llvm-reloc-widths test-llvm-ehframe test-llvm-ehtable test-llvm-class-init test-llvm-wbarrier
 endif
 
 AM_TESTS_ENVIRONMENT = export MONO_PATH=$(mcs_topdir)/class/lib/build;

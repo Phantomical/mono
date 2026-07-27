@@ -351,6 +351,24 @@ guint8* mono_gc_get_card_table (int *shift_bits, gpointer *card_mask);
 guint8* mono_gc_get_target_card_table (int *shift_bits, target_mgreg_t *card_mask);
 gboolean mono_gc_card_table_nursery_check (void);
 
+/*
+ * The GC's dirty-page bitmap, for a backend that wants to mark it inline rather
+ * than call the barrier: one bit per page, and the bit for an address is
+ *
+ *   index = (address >> *shift_bits) & *index_mask
+ *
+ * counted from the start of the returned buffer. Marking a page that is already
+ * marked is a no-op, and marking extra pages only costs the collector some
+ * redundant scanning, so a caller is free to be imprecise in that direction.
+ *
+ * Returns NULL when there is no such bitmap, or when the GC is not currently
+ * maintaining one - callers must fall back to the ordinary barrier. This is a
+ * property of the running collector, not of the target, so it has no bearing on
+ * AOT and there is no _target_ variant.
+ */
+/* G_EXTERN_C: the LLVM backend's write-barrier lowering calls this from C++. */
+G_EXTERN_C gpointer mono_gc_get_card_bitmap (int *shift_bits, gsize *index_mask);
+
 void* mono_gc_get_nursery (int *shift_bits, size_t *size);
 
 // Don't use directly; set/unset MONO_THREAD_INFO_FLAGS_NO_GC instead.

@@ -1044,6 +1044,21 @@ EmitContext::process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, 
 		mono_llvm_set_call_nonnull_ret (lcall);
 	}
 
+	/*
+	 * Tag the GC write barrier so passes/wbarrier.hpp can find it. This is the
+	 * out-of-line form mini_emit_write_barrier () falls back to when the GC
+	 * exposes no card table to inline against - boehm, in practice. The whole
+	 * wrapper is one call to mono_gc_wbarrier_generic_nostore_internal (the
+	 * address to mark being its only argument), which is what the lowering
+	 * replaces; matching the tag rather than the callee keeps the pass out of
+	 * the business of knowing how a wrapper's entry point got materialized.
+	 */
+	if (call->method && call->method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER) {
+		auto &ctx = this->llvm_ctx ();
+		llvm::unwrap<llvm::Instruction> (lcall)->setMetadata ("mono.wbarrier",
+		                                                      llvm::MDNode::get (ctx, {}));
+	}
+
 	if (ins->opcode != OP_TAILCALL && ins->opcode != OP_TAILCALL_MEMBASE && LLVMGetInstructionOpcode (lcall) == LLVMCall)
 		mono_llvm_set_call_notailcall (lcall);
 

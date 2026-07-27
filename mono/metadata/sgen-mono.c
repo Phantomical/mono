@@ -2986,6 +2986,18 @@ mono_gc_get_target_card_table (int *shift_bits, target_mgreg_t *mask)
 	return sgen_get_target_card_table_configuration (shift_bits, mask);
 }
 
+gpointer
+mono_gc_get_card_bitmap (int *shift_bits, gsize *index_mask)
+{
+	/*
+	 * Sgen's remembered set is a byte per card, not a bitmap, and a plain store
+	 * marks it - see mini_emit_write_barrier (), which inlines that store off
+	 * mono_gc_get_target_card_table (). Nothing here needs the read-test-set
+	 * shape this reports.
+	 */
+	return NULL;
+}
+
 gboolean
 mono_gc_card_table_nursery_check (void)
 {

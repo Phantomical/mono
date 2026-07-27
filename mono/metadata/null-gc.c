@@ -510,6 +510,12 @@ mono_gc_get_target_card_table (int *shift_bits, target_mgreg_t *card_mask)
 	return NULL;
 }
 
+gpointer
+mono_gc_get_card_bitmap (int *shift_bits, gsize *index_mask)
+{
+	return NULL;
+}
+
 gboolean
 mono_gc_card_table_nursery_check (void)
 {

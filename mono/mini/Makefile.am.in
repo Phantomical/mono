@@ -453,8 +453,8 @@ if ENABLE_LLVM
 #   - passes/: the custom passes the pipelines are built from - the tier-1
 #     inliner, the two machine-level EH passes engine.cpp schedules after
 #     addMachinePasses (), the class-init barrier redundancy analysis, the
-#     ImplicitNullChecks guard engine.cpp schedules before it, and the opt-in
-#     per-pass IR dumper.
+#     ImplicitNullChecks guard engine.cpp schedules before it, the GC
+#     write-barrier lowering, and the opt-in per-pass IR dumper.
 #   - backend.h: the extern "C" boundary the rest of mono links against. It did
 #     not grow to accommodate the split; translator-internal.hpp is internal to
 #     this directory.
@@ -476,6 +476,8 @@ llvm_sources = \
 	llvm/passes/null-check-guard.cpp \
 	llvm/passes/pass-dump.hpp \
 	llvm/passes/pass-dump.cpp \
+	llvm/passes/wbarrier.hpp \
+	llvm/passes/wbarrier.cpp \
 	llvm/translator-cpp.hpp \
 	llvm/translator-cpp.cpp \
 	llvm/ehframe.cpp \

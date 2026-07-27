@@ -1383,6 +1383,43 @@ mono_gc_get_target_card_table (int *shift_bits, target_mgreg_t *card_mask)
 	return NULL;
 }
 
+gpointer
+mono_gc_get_card_bitmap (int *shift_bits, gsize *index_mask)
+{
+#if defined(MANUAL_VDB) && !defined(GC_DISABLE_INCREMENTAL)
+	/*
+	 * Outside incremental mode nothing ever reads the bits, and the barrier
+	 * itself is compiled out - mono_gc_needs_write_barriers () says so, off the
+	 * same flag. Report no bitmap so a caller that asked early doesn't bake an
+	 * address into code that is not supposed to be marking at all.
+	 */
+	if (!GC_is_incremental_mode ())
+		return NULL;
+
+	/*
+	 * Callers address the bitmap in pointer-sized words, which is what the
+	 * collector's own get_pht_entry_from_index () does the bit arithmetic in.
+	 * Both widths follow the ABI's long, so they agree everywhere we run; if
+	 * that ever stops being true the bit numbering silently diverges, hence the
+	 * assert rather than a comment.
+	 */
+	g_static_assert (sizeof (word) == sizeof (gpointer));
+
+	*shift_bits = LOG_HBLKSIZE;
+	*index_mask = PHT_ENTRIES - 1;
+
+	/*
+	 * Masked, so the table aliases: distinct pages can share a bit once the heap
+	 * outgrows PHT_ENTRIES blocks. That is the same deal GC_dirty_inner () takes
+	 * through PHT_HASH, and the collector already treats spurious bits as
+	 * legitimate.
+	 */
+	return (gpointer) (gsize) GC_dirty_pages;
+#else
+	return NULL;
+#endif
+}
+
 gboolean
 mono_gc_card_table_nursery_check (void)
 {

@@ -125,6 +125,7 @@
 #include "passes/inliner.hpp"
 #include "passes/null-check-guard.hpp"
 #include "passes/pass-dump.hpp"
+#include "passes/wbarrier.hpp"
 
 using namespace llvm;
 using namespace llvm::orc;
@@ -2083,6 +2084,15 @@ MonoLLVMJIT::optimize (Function *func)
 	 * function simplification pipeline. See passes/elide-class-init.hpp.
 	 */
 	register_class_init_elision (pb, fam);
+
+	/*
+	 * Turns the GC write barrier from a call into an inline conditional card
+	 * mark, for the collectors that leave it as a call at all. Like the elision
+	 * above it hangs off an extension point, so it has to be registered before
+	 * the pipeline is built; a no-op when the collector has no bitmap to mark.
+	 * See passes/wbarrier.hpp.
+	 */
+	register_write_barrier_lowering (pb);
 
 	/*
 	 * The stock -O2 pipeline with mono's tier-1 inliner in place of LLVM's own
