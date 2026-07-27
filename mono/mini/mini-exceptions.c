@@ -1048,7 +1048,7 @@ mono_exception_walk_trace_internal (MonoException *ex, MonoExceptionFrameWalk fu
 
 /*
  * Binary search JI's own tier-1 native_offset -> il_offset map (recovered by
- * mono/mini/llvm's translator from OP_IL_SEQ_POINT markers - see
+ * mono/mini/llvm's translator from the emitted line table - see
  * MonoJitInfo::llvm_seq_points) for the entry at or immediately before
  * NATIVE_OFFSET, i.e. the same "most recent point execution passed" semantics
  * mono_find_prev_seq_point_for_native_offset () has for a classic body.
@@ -1057,11 +1057,11 @@ mono_exception_walk_trace_internal (MonoException *ex, MonoExceptionFrameWalk fu
  * is safe to call for a tier-1 frame regardless of whether a tier-0 body for
  * the same method is (or ever was) also registered.
  *
- * Returns -1 if the map is empty (translation recovered nothing) or
- * NATIVE_OFFSET precedes every entry.
+ * Returns the index into ji->llvm_seq_points, or -1 if the map is empty
+ * (translation recovered nothing) or NATIVE_OFFSET precedes every entry.
  */
 static int
-mono_jit_info_llvm_il_offset (MonoJitInfo *ji, guint32 native_offset)
+mono_jit_info_llvm_row (MonoJitInfo *ji, guint32 native_offset)
 {
 	guint32 lo = 0, hi = ji->n_llvm_seq_points;
 
@@ -1073,10 +1073,79 @@ mono_jit_info_llvm_il_offset (MonoJitInfo *ji, guint32 native_offset)
 			hi = mid;
 	}
 
-	if (lo == 0)
-		return -1;
+	return lo == 0 ? -1 : (int) (lo - 1);
+}
 
-	return (int) ji->llvm_seq_points [lo - 1].il_offset;
+static int
+mono_jit_info_llvm_il_offset (MonoJitInfo *ji, guint32 native_offset)
+{
+	int row = mono_jit_info_llvm_row (ji, native_offset);
+
+	return row < 0 ? -1 : (int) ji->llvm_seq_points [row].il_offset;
+}
+
+/*
+ * The bodies inlined into JI at NATIVE_OFFSET, innermost first. Returns how many
+ * there are and stores the first in *FRAMES; they are contiguous and ascending
+ * by depth. Zero means the code there came from JI's own method only.
+ *
+ * The chain is keyed on the exact address of the governing line-table row rather
+ * than searched for on its own. Both tables are built from the same rows, so a
+ * chain describes the address it was recorded at and no other; looking for the
+ * nearest preceding chain instead would report an address with no inlining as
+ * belonging to whatever happened to be inlined earlier in the body.
+ */
+static guint32
+mono_jit_info_llvm_inline_frames (MonoJitInfo *ji, guint32 native_offset, MonoLLVMInlineFrame **frames)
+{
+	guint32 lo, hi, first, n;
+	guint32 anchor;
+	int row;
+
+	*frames = NULL;
+	if (ji->n_llvm_inline_frames == 0)
+		return 0;
+
+	row = mono_jit_info_llvm_row (ji, native_offset);
+	if (row < 0)
+		return 0;
+	anchor = ji->llvm_seq_points [row].native_offset;
+
+	lo = 0;
+	hi = ji->n_llvm_inline_frames;
+	while (lo < hi) {
+		guint32 mid = lo + (hi - lo) / 2;
+		if (ji->llvm_inline_frames [mid].native_offset < anchor)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+
+	first = lo;
+	for (n = 0; first + n < ji->n_llvm_inline_frames; ++n)
+		if (ji->llvm_inline_frames [first + n].native_offset != anchor)
+			break;
+
+	if (n == 0)
+		return 0;
+
+	*frames = &ji->llvm_inline_frames [first];
+	return n;
+}
+
+/*
+ * How many stack frames JI reports for IP: its own, plus one for each body
+ * inlined into it there.
+ */
+static int
+jinfo_frame_count (MonoJitInfo *ji, gpointer ip)
+{
+	MonoLLVMInlineFrame *inlined;
+
+	if (!ji->from_llvm || ji->no_il_offsets)
+		return 1;
+
+	return 1 + (int) mono_jit_info_llvm_inline_frames (ji, (guint32) ((char *) ip - (char *) ji->code_start), &inlined);
 }
 
 MonoArray *
@@ -1087,7 +1156,7 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 	MonoArray *res;
 	MonoArray *ta = exc->trace_ips;
 	MonoDebugSourceLocation *location;
-	int i, len;
+	int i, len, total, seen, out_idx, res_len;
 
 	if (ta == NULL) {
 		/* Exception is not thrown yet */
@@ -1102,7 +1171,23 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 
 	len = mono_array_length_internal (ta) / TRACE_IP_ENTRY_SIZE;
 
-	res = mono_array_new_checked (domain, mono_defaults.stack_frame_class, len > skip ? len - skip : 0, error);
+	/*
+	 * A tier-1 body reports the bodies inlined into it as frames in their own
+	 * right, so the trace is longer than the captured IP array. The managed array
+	 * has to be sized before anything goes into it, hence the counting pass.
+	 */
+	total = 0;
+	for (i = 0; i < len; i++) {
+		ExceptionTraceIp trace_ip;
+		MonoJitInfo *ji;
+
+		memcpy (&trace_ip, mono_array_addr_fast (ta, ExceptionTraceIp, i), sizeof (ExceptionTraceIp));
+		ji = trace_ip.ji ? trace_ip.ji : mono_jit_info_table_find (domain, trace_ip.ip);
+		total += ji ? jinfo_frame_count (ji, trace_ip.ip) : 1;
+	}
+
+	res_len = total > skip ? total - skip : 0;
+	res = mono_array_new_checked (domain, mono_defaults.stack_frame_class, res_len, error);
 	if (!is_ok (error))
 		goto fail;
 
@@ -1111,12 +1196,14 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 	MonoObjectHandle sf_h;
 	sf_h = MONO_HANDLE_NEW (MonoObject, NULL);
 
-	for (i = skip; i < len; i++) {
+	seen = 0;
+	out_idx = 0;
+
+	for (i = 0; i < len; i++) {
 		MonoJitInfo *ji;
-		MonoStackFrame *sf = (MonoStackFrame *)mono_object_new_checked (domain, mono_defaults.stack_frame_class, error);
-		if (!is_ok (error))
-			goto fail;
-		MONO_HANDLE_ASSIGN_RAW (sf_h, sf);
+		MonoLLVMInlineFrame *inlined;
+		guint32 n_inlined, j;
+		MonoStackFrame *sf;
 
 		ExceptionTraceIp trace_ip;
 		memcpy (&trace_ip, mono_array_addr_fast (ta, ExceptionTraceIp, i), sizeof (ExceptionTraceIp));
@@ -1130,85 +1217,140 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 			ji = mono_jit_info_table_find (domain, ip);
 			if (ji == NULL) {
 				/* Unmanaged frame */
-				mono_array_setref_internal (res, i, sf);
+				if (seen++ < skip)
+					continue;
+				sf = (MonoStackFrame *)mono_object_new_checked (domain, mono_defaults.stack_frame_class, error);
+				if (!is_ok (error))
+					goto fail;
+				MONO_HANDLE_ASSIGN_RAW (sf_h, sf);
+				g_assert (out_idx < res_len);
+				mono_array_setref_internal (res, out_idx++, sf);
 				continue;
 			}
 		}
 
 		g_assert (ji != NULL);
 
-		if (mono_llvm_only || !generic_info)
-			/* Can't resolve actual method */
-			method = jinfo_get_method (ji);
-		else
-			method = get_method_from_stack_frame (ji, generic_info);
-		if (jinfo_get_method (ji)->wrapper_type) {
-			char *s;
+		int native_offset = (char *)ip - (char *)ji->code_start;
 
-			sf->method = NULL;
-			s = mono_method_get_name_full (method, TRUE, FALSE, MONO_TYPE_NAME_FORMAT_REFLECTION);
-			MonoString *name = mono_string_new_checked (domain, s, error);
-			g_free (s);
-			if (!is_ok (error))
-				goto fail;
-			MONO_OBJECT_SETREF_INTERNAL (sf, internal_method_name, name);
-		}
-		else {
-			MonoReflectionMethod *rm = mono_method_get_object_checked (domain, method, NULL, error);
-			if (!is_ok (error))
-				goto fail;
-			MONO_OBJECT_SETREF_INTERNAL (sf, method, rm);
-		}
-
-		sf->method_index = ji->from_aot ? mono_aot_find_method_index (method) : 0xffffff;
-		sf->method_address = (gsize) ji->code_start;
-		sf->native_offset = (char *)ip - (char *)ji->code_start;
+		n_inlined = 0;
+		inlined = NULL;
+		if (ji->from_llvm && !ji->no_il_offsets)
+			n_inlined = mono_jit_info_llvm_inline_frames (ji, native_offset, &inlined);
 
 		/*
-		 * mono_debug_lookup_source_location() returns both the file / line number information
-		 * and the IL offset.  Note that computing the IL offset is already an expensive
-		 * operation, so we shouldn't call this method twice.
-		 *
-		 * Both lookups are keyed by MonoMethod and answer for whichever body was
-		 * compiled first, so for a body that isn't described by them (ji->no_il_offsets)
-		 * they would return an offset read off a different code layout. Report the frame
-		 * as having no IL offset instead - the caller then prints it in the
-		 * '<code_start + native_offset>' form, which is at least true.
-		 *
-		 * A tier-1 frame (ji->from_llvm) is never described by either of those
-		 * mappings, no matter what no_il_offsets says - it has its own per-body
-		 * map instead (MonoJitInfo::llvm_seq_points), which mono_jit_info_llvm_il_offset ()
-		 * reads directly rather than through method-keyed lookups.
+		 * Innermost first: the bodies inlined here, deepest one leading, and then
+		 * the method that was actually compiled. The compiled method keeps its own
+		 * IL offset, which is the call site it inlined through.
 		 */
-		location = (ji->no_il_offsets || ji->from_llvm) ? NULL : mono_debug_lookup_source_location (jinfo_get_method (ji), sf->native_offset, domain);
-		if (location) {
-			sf->il_offset = location->il_offset;
-		} else if (ji->from_llvm) {
-			sf->il_offset = ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, sf->native_offset);
-		} else {
-			SeqPoint sp;
-			if (!ji->no_il_offsets && mono_find_prev_seq_point_for_native_offset (domain, jinfo_get_method (ji), sf->native_offset, NULL, &sp))
-				sf->il_offset = sp.il_offset;
-			else
-				sf->il_offset = -1;
-		}
+		for (j = 0; j <= n_inlined; j++) {
+			gboolean is_inlined = j < n_inlined;
+			int il_offset;
 
-		if (need_file_info) {
-			if (location && location->source_file) {
-				MonoString *filename = mono_string_new_checked (domain, location->source_file, error);
+			if (seen++ < skip)
+				continue;
+
+			sf = (MonoStackFrame *)mono_object_new_checked (domain, mono_defaults.stack_frame_class, error);
+			if (!is_ok (error))
+				goto fail;
+			MONO_HANDLE_ASSIGN_RAW (sf_h, sf);
+
+			if (is_inlined)
+				method = inlined [j].method;
+			else if (mono_llvm_only || !generic_info)
+				/* Can't resolve actual method */
+				method = jinfo_get_method (ji);
+			else
+				method = get_method_from_stack_frame (ji, generic_info);
+
+			if (method->wrapper_type) {
+				char *s;
+
+				sf->method = NULL;
+				s = mono_method_get_name_full (method, TRUE, FALSE, MONO_TYPE_NAME_FORMAT_REFLECTION);
+				MonoString *name = mono_string_new_checked (domain, s, error);
+				g_free (s);
 				if (!is_ok (error))
 					goto fail;
-				MONO_OBJECT_SETREF_INTERNAL (sf, filename, filename);
-				sf->line = location->row;
-				sf->column = location->column;
-			} else {
-				sf->line = sf->column = 0;
-				sf->filename = NULL;
+				MONO_OBJECT_SETREF_INTERNAL (sf, internal_method_name, name);
 			}
-		}
+			else {
+				MonoReflectionMethod *rm = mono_method_get_object_checked (domain, method, NULL, error);
+				if (!is_ok (error))
+					goto fail;
+				MONO_OBJECT_SETREF_INTERNAL (sf, method, rm);
+			}
 
-		mono_debug_free_source_location (location);
-		mono_array_setref_internal (res, i - skip, sf);
+			/*
+			 * An inlined frame has no code of its own, so it borrows the address of
+			 * the body it was folded into. That is what the frame really executed
+			 * at, and it keeps mono_exception_stackframe_obj_walk () - which maps
+			 * these back through the jit info table - resolving.
+			 */
+			sf->method_index = (!is_inlined && ji->from_aot) ? mono_aot_find_method_index (method) : 0xffffff;
+			sf->method_address = (gsize) ji->code_start;
+			sf->native_offset = native_offset;
+
+			/*
+			 * mono_debug_lookup_source_location() returns both the file / line number information
+			 * and the IL offset.  Note that computing the IL offset is already an expensive
+			 * operation, so we shouldn't call this method twice.
+			 *
+			 * Both lookups are keyed by MonoMethod and answer for whichever body was
+			 * compiled first, so for a body that isn't described by them (ji->no_il_offsets)
+			 * they would return an offset read off a different code layout. Report the frame
+			 * as having no IL offset instead - the caller then prints it in the
+			 * '<code_start + native_offset>' form, which is at least true.
+			 *
+			 * A tier-1 frame (ji->from_llvm) is never described by either of those
+			 * mappings, no matter what no_il_offsets says - it has its own per-body
+			 * map instead (MonoJitInfo::llvm_seq_points). Once that has produced an IL
+			 * offset the file / line lookup can go by (method, IL offset), which is
+			 * keyed on nothing this body's layout affects.
+			 */
+			if (is_inlined)
+				il_offset = inlined [j].il_offset;
+			else if (ji->from_llvm)
+				il_offset = ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, native_offset);
+			else
+				il_offset = -1;
+
+			if (is_inlined || ji->from_llvm) {
+				location = il_offset == -1 ? NULL : mono_debug_lookup_source_location_by_il (method, il_offset, domain);
+				sf->il_offset = il_offset;
+			} else {
+				location = ji->no_il_offsets ? NULL : mono_debug_lookup_source_location (jinfo_get_method (ji), native_offset, domain);
+				if (location) {
+					sf->il_offset = location->il_offset;
+				} else {
+					SeqPoint sp;
+					if (!ji->no_il_offsets && mono_find_prev_seq_point_for_native_offset (domain, jinfo_get_method (ji), native_offset, NULL, &sp))
+						sf->il_offset = sp.il_offset;
+					else
+						sf->il_offset = -1;
+				}
+			}
+
+			if (need_file_info) {
+				if (location && location->source_file) {
+					MonoString *filename = mono_string_new_checked (domain, location->source_file, error);
+					if (!is_ok (error))
+						goto fail;
+					MONO_OBJECT_SETREF_INTERNAL (sf, filename, filename);
+					sf->line = location->row;
+					sf->column = location->column;
+				} else {
+					sf->line = sf->column = 0;
+					sf->filename = NULL;
+				}
+			}
+
+			mono_debug_free_source_location (location);
+			/* The counting pass above is what sized res; if the two ever
+			 * disagreed this would write past the array. */
+			g_assert (out_idx < res_len);
+			mono_array_setref_internal (res, out_idx++, sf);
+		}
 	}
 	goto exit;
 
@@ -1910,6 +2052,8 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 	gboolean res;
 	Unwinder unwinder;
 	int il_offset = -1;
+	MonoLLVMInlineFrame *inlined = NULL;
+	int n_inlined = 0, inline_index = 0;
 
 	MONO_ARCH_CONTEXT_DEF;
 
@@ -1972,18 +2116,38 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 				jmethod = jinfo_get_method (ji);
 				if (jmethod->wrapper_type != MONO_WRAPPER_NONE && jmethod->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD && jmethod->wrapper_type != MONO_WRAPPER_MANAGED_TO_NATIVE)
 					continue;
-				skip--;
+				/*
+				 * A tier-1 body stands for itself and for every body inlined into
+				 * it, so it consumes that many of the caller's skip count.
+				 */
+				inlined = NULL;
+				n_inlined = 0;
+				if (ji->from_llvm && !ji->no_il_offsets)
+					n_inlined = (int) mono_jit_info_llvm_inline_frames (ji, frame.native_offset, &inlined);
+				skip -= 1 + n_inlined;
 				break;
 			default:
 				g_assert_not_reached ();
 			}
 		} while (skip >= 0);
 
+		/*
+		 * Which of the frames this body reports the caller landed on. The loop
+		 * above overshot by however far skip went negative, and the frames are
+		 * innermost first, so counting back from the end gives the index.
+		 */
+		inline_index = skip + 1 + n_inlined;
+
 		if (frame.type == FRAME_TYPE_INTERP) {
 			jmethod = frame.method;
 			actual_method = frame.actual_method;
+		} else if (inline_index < n_inlined) {
+			jmethod = actual_method = inlined [inline_index].method;
+			il_offset = (int) inlined [inline_index].il_offset;
 		} else {
 			actual_method = get_method_from_stack_frame (ji, get_generic_info_from_stack_frame (ji, &ctx));
+			if (ji->from_llvm && !ji->no_il_offsets)
+				il_offset = mono_jit_info_llvm_il_offset (ji, frame.native_offset);
 		}
 	}
 
@@ -1999,14 +2163,16 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 	} else if (ji && (ji->no_il_offsets || ji->from_llvm)) {
 		/* The line table is registered per method and describes a different body
 		 * than this frame's - see ves_icall_get_trace (). A tier-1 frame has its
-		 * own IL-offset map (MonoJitInfo::llvm_seq_points), but no equivalent for
-		 * file/line, which is all this particular lookup is after. */
+		 * own IL-offset map (MonoJitInfo::llvm_seq_points); when that came up empty
+		 * there is nothing left to key a file/line lookup on. */
 		location = NULL;
 	} else {
 		location = mono_debug_lookup_source_location (jmethod, *native_offset, domain);
 	}
 	if (location)
 		*iloffset = location->il_offset;
+	else if (il_offset != -1)
+		*iloffset = il_offset;
 	else
 		*iloffset = 0;
 

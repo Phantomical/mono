@@ -31,6 +31,29 @@ class ILOffsetTests {
 	}
 
 	/*
+	 * Frames taken off the live stack, stopping at the scenario entry point so that
+	 * Main and the runtime's invoke wrappers stay out of the comparison.
+	 *
+	 * The IL offset is printed as "-" rather than compared. For a live frame the
+	 * classic JIT resolves an offset only through the symbol file, so with none
+	 * present it reports 0 for every frame, while a tier-1 frame answers from its
+	 * own map - the two disagree for reasons that have nothing to do with inlining.
+	 * Which methods appear, and in what order, is what this scenario is about; the
+	 * exception scenarios are where offsets get checked.
+	 */
+	static void DumpLive (string label, StackTrace st)
+	{
+		for (int i = 0; i < st.FrameCount; i++) {
+			var m = st.GetFrame (i).GetMethod ();
+			if (m == null)
+				continue;
+			Console.WriteLine ("{0}\t{1}:{2}\t-", label, m.DeclaringType.Name, m.Name);
+			if (m.Name == "ScenarioLiveStackTrace")
+				break;
+		}
+	}
+
+	/*
 	 * Padded to ~15 statements for the same reason inliner-tests.cs pads its
 	 * fixtures: without it the classic JIT folds the call away before tier 1 ever
 	 * sees it, and the scenario stops being about tier-1 inlining.
@@ -131,6 +154,112 @@ class ILOffsetTests {
 		}
 	}
 
+	/*
+	 * Two inlinable bodies stacked, so that once tier 1 folds both into Level1 a
+	 * single native offset stands for three methods. That is the only fixture
+	 * here that exercises an inline chain deeper than one - a chain the runtime
+	 * reports in the wrong order, or truncates to its innermost body, still looks
+	 * right with only one level to get wrong.
+	 */
+	static int Level3 (int x)
+	{
+		int p1 = x + 1, p2 = p1 * 2, p3 = p2 - 3, p4 = p3 ^ 5, p5 = p4 & 0xFF;
+		int p6 = p5 | 0x10, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = p9 + 1;
+		int p11 = p10 + p3, p12 = p11 - p4, p13 = p12 ^ p6, p14 = p13 + p7, p15 = p14 - p8;
+		if (p15 == int.MinValue)
+			return -1;
+		if (x == 7)
+			throw new InvalidOperationException ("level3");
+		return x + 9;
+	}
+
+	/*
+	 * Padded on a constant rather than on the argument, unlike every other fixture
+	 * here. The two inliners measure different things: mono's goes by raw IL length,
+	 * so this stays out of its reach, while LLVM's cost model folds the whole run to
+	 * a constant and charges nothing for it. That is what leaves LLVM room to take
+	 * Level2 *and* the Level3 already folded into it, which is what makes the chain
+	 * two deep rather than one.
+	 */
+	static int Level2 (int x)
+	{
+		int c = 1;
+		c += 2; c += 3; c += 4; c += 5; c += 6; c += 7; c += 8; c += 9;
+		c += 10; c += 11; c += 12; c += 13; c += 14; c += 15; c += 16;
+		c += 17; c += 18; c += 19; c += 20; c += 21; c += 22; c += 23;
+		c += 24; c += 25; c += 26; c += 27; c += 28; c += 29; c += 30;
+		if (c == 0)
+			return -1;
+		return Level3 (x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int Level1 (int x)
+	{
+		return Level2 (x) + 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void ScenarioNestedInline ()
+	{
+		for (int i = 0; i < 3; i++)
+			Level1 (i);
+		try {
+			Level1 (7);
+		} catch (Exception e) {
+			Dump ("nested-inline", e);
+		}
+	}
+
+	/*
+	 * The same question for a trace taken off the running stack rather than out of
+	 * an exception. It reaches the runtime through a different icall
+	 * (ves_icall_get_frame_info, one frame per call, driven by a skip count) than
+	 * the exception traces above, so an inlined body can be missing from one and
+	 * present in the other.
+	 *
+	 * Offsets are not compared for these - see DumpLive.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void LiveLeaf ()
+	{
+		DumpLive ("live-inlined", new StackTrace (false));
+	}
+
+	/*
+	 * The body that gets inlined has to sit between the capture and the frame we
+	 * want it under, not do the capturing itself - constructing a StackTrace costs
+	 * more than the inliner will spend, so a capturing method never gets folded in
+	 * and the scenario would prove nothing. Padded on a constant, as Level2 is, so
+	 * that only LLVM's inliner takes it.
+	 */
+	static void LiveMiddle (int x)
+	{
+		int c = 1;
+		c += 2; c += 3; c += 4; c += 5; c += 6; c += 7; c += 8; c += 9;
+		c += 10; c += 11; c += 12; c += 13; c += 14; c += 15; c += 16;
+		c += 17; c += 18; c += 19; c += 20; c += 21; c += 22; c += 23;
+		c += 24; c += 25; c += 26; c += 27; c += 28; c += 29; c += 30;
+		if (c == 0)
+			return;
+		if (x == 7)
+			LiveLeaf ();
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void LiveCaller (int x)
+	{
+		LiveMiddle (x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void ScenarioLiveStackTrace ()
+	{
+		for (int i = 0; i < 3; i++)
+			LiveCaller (i);
+		LiveCaller (7);
+	}
+
 	/* A throw from inside a finally-bearing frame, which unwinds differently. */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int ThrowUnderFinally (int x)
@@ -163,6 +292,8 @@ class ILOffsetTests {
 		ScenarioInlinedCallee ();
 		ScenarioNoInlining ();
 		ScenarioMergeableThrows ();
+		ScenarioNestedInline ();
+		ScenarioLiveStackTrace ();
 		ScenarioThrowUnderFinally ();
 		return 0;
 	}

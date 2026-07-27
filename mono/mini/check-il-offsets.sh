@@ -1,27 +1,31 @@
 #!/bin/sh
 #
-# check-il-offsets.sh - assert tier-1 frames report the same IL offsets as the
-# classic JIT.
+# check-il-offsets.sh - assert tier-1 stack traces name the same methods, at the
+# same IL offsets, as the classic JIT.
 #
-# Tier 1 recovers its native_offset -> il_offset map by reading back stackmap
-# markers from the emitted object (recover_il_seq_points (), translator.cpp).
-# Nothing about execution goes wrong when that map is off, so a corpus run stays
-# green while stack traces quietly blame the wrong IL - or the wrong method,
-# since markers from a body inlined into the root land in the root's section
-# indistinguishable from its own.
+# Tier 1 gets its native_offset -> il_offset map, and the chain of bodies inlined
+# at each offset, out of the debug info LLVM emits for the compiled body. Nothing
+# about execution goes wrong when either is off, so a corpus run stays green while
+# stack traces quietly blame the wrong IL - or drop a frame, since a body LLVM
+# folded in has no call site left to name it.
 #
 # The classic JIT is the oracle: it computes the same mapping during its own
 # codegen, so this compares the two rather than hardcoding offsets, which would
 # only re-encode whatever the C# compiler happened to emit.
 #
-# Tier 1 legitimately has FEWER frames - it inlines more - so the rule is:
+# The rule is equality - same methods, same order, same IL offsets. Tier 1 inlines
+# far more than the classic JIT does, so the frames it reports for a folded-in body
+# are synthesized from that debug info; getting them back is exactly what is under
+# test, and anything less than equality would pass whether or not they came back.
 #
-#   the tier-1 frames must be a subsequence of the classic frames, and every
-#   frame present in both must report the same IL offset.
-#
-# A missing frame is an inline; a frame whose offset moved is a mapping bug. In
-# particular a caller that inlined a callee must still report its own call site,
-# which is what the classic run has for that frame.
+# That holds only while no fixture method has an IL length between the two
+# frontends' inline limits (INLINE_LENGTH_LIMIT 20 for the classic JIT,
+# LLVM_JIT_INLINE_LENGTH_LIMIT 100 for a tier-1 compile, method-to-ir.c). In that
+# window mono's own inliner folds the method away for tier 1 but not for the
+# classic JIT, and a frontend inline leaves nothing to recover: the inlined IR
+# carries the CALLER's offset by construction (cfg->real_offset = inline_offset),
+# so the frame is gone from tier 1 with no debug info describing it. The fixtures
+# are padded well past 100 to stay clear of it.
 #
 # Usage: check-il-offsets.sh <runtime> <corpus.exe>
 # where <runtime> is a single word or a quoted command prefix.
@@ -106,40 +110,39 @@ awk -v classic="$CLASSIC" '
 
 		for (i = 1; i <= nlbl; i++) {
 			lbl = order[i]
+			total++
+
 			if (!(lbl in tn)) {
 				fail(lbl ": tier 1 produced no frames for this scenario")
 				continue
 			}
 
-			# Walk the tier-1 frames against the classic ones, allowing classic
-			# frames to be skipped (those were inlined away at tier 1) but never
-			# the other way round.
-			ci = 1
-			matched = 0
-			inlined = 0
 			bad_before = bad + 0
-			for (ti = 1; ti <= tn[lbl]; ti++) {
-				while (ci <= cn[lbl] && cmeth[lbl, ci] != tmeth[lbl, ti]) {
-					ci++
-					inlined++
-				}
-				if (ci > cn[lbl]) {
-					fail(lbl ": tier-1 frame " tmeth[lbl, ti] " is not in the classic trace (or is out of order)")
-					matched = -1
-					break
-				}
-				if (coff[lbl, ci] != toff[lbl, ti]) {
-					fail(lbl ": " tmeth[lbl, ti] " il " toff[lbl, ti] ", classic has " coff[lbl, ci])
-				} else {
-					matched++
-				}
-				ci++
+
+			# Compare as far as both go, then report any length difference, so
+			# that a dropped frame names the frame rather than only the count.
+			nmin = cn[lbl] < tn[lbl] ? cn[lbl] : tn[lbl]
+			for (j = 1; j <= nmin; j++) {
+				if (cmeth[lbl, j] != tmeth[lbl, j])
+					fail(lbl " frame " j ": tier 1 has " tmeth[lbl, j] ", classic has " cmeth[lbl, j])
+				else if (coff[lbl, j] != toff[lbl, j])
+					fail(lbl " frame " j ": " tmeth[lbl, j] " il " toff[lbl, j] ", classic has " coff[lbl, j])
 			}
 
-			if (matched >= 0 && bad + 0 == bad_before)
-				printf "  ok   %-22s %d frame(s) matched, %d inlined away\n", lbl, matched, inlined
-			total++
+			for (j = nmin + 1; j <= cn[lbl]; j++)
+				fail(lbl ": tier 1 is missing " cmeth[lbl, j] " (il " coff[lbl, j] ")")
+			for (j = nmin + 1; j <= tn[lbl]; j++)
+				fail(lbl ": tier 1 has an extra frame " tmeth[lbl, j] " (il " toff[lbl, j] ")")
+
+			if (bad + 0 == bad_before)
+				printf "  ok   %-22s %d frame(s)\n", lbl, cn[lbl]
 		}
+
+		# A scenario only the tier-1 run produced would otherwise go unnoticed:
+		# the loop above is driven by the classic run.
+		for (lbl in tn)
+			if (!(lbl in seenlbl))
+				fail(lbl ": tier 1 produced frames for a scenario the classic run did not")
 
 		printf "%d scenarios, %d mismatch(es)\n", total + 0, bad + 0
 		exit (bad > 0)
