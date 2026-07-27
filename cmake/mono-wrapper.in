@@ -1,0 +1,14 @@
+#! /bin/sh
+# Runs the freshly built runtime out of the build tree, with the build tree's
+# own dllmap configuration.  The autotools version of this script went through
+# `libtool --mode=execute`; CMake links the real binary in place, so it can be
+# exec'ed directly.
+r='@MONO_BUILD_ROOT@'
+MONO_CFG_DIR='@MONO_BUILD_CFG_DIR@'
+PATH="$r/runtime/_tmpinst/bin:$PATH"
+if [ -z "$MONO_EXECUTABLE_WRAPPER" ]; then
+    MONO_EXECUTABLE_WRAPPER=${MONO_EXECUTABLE:-"@MONO_RUNTIME_BINARY@"}
+fi
+MONO_EXECUTABLE=${MONO_EXECUTABLE:-"@MONO_RUNTIME_BINARY@"}
+export MONO_CFG_DIR PATH MONO_EXECUTABLE
+exec "${MONO_EXECUTABLE_WRAPPER}" --config "$MONO_CFG_DIR/mono/config" "$@"

@@ -1,0 +1,127 @@
+cmake_minimum_required(VERSION 3.28)
+
+project(mono
+        VERSION 6.13.0
+        DESCRIPTION "Mono runtime (Unity fork, LLVM 18 tiered JIT)"
+        HOMEPAGE_URL "https://github.com/mono/mono"
+        LANGUAGES C CXX ASM)
+
+#
+# This is the version of the corlib-runtime interface.  Change it whenever a
+# change on one side requires the other to change too: icall signatures or
+# semantics, the layout of a class the runtime knows about, and so on.  There
+# is no ordering -- corlib and runtime must match exactly.
+#
+# Generate a new one with uuidgen.
+#
+set(MONO_CORLIB_VERSION_GUID "1A5E0066-58DC-428A-B21C-0AD6CDAE2789")
+
+set(MONO_API_VERSION "2.0")
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# CMake writes compile_commands.json itself, which is why this tree no longer
+# carries the bear/citnames wrappers the automake build needed for it.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+include(GNUInstallDirs)
+include(CTest)
+
+include(MonoOptions)
+include(MonoCompilerFlags)
+include(MonoConfigureChecks)
+include(MonoConfigureFixed)
+include(MonoLLVM)
+include(MonoHelpers)
+
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.h.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/config.h")
+
+# A .pc file describing the runtime as it sits in the build tree, for anything
+# that wants to link an uninstalled mono.
+set(VERSION         "${PROJECT_VERSION}")
+set(mono_build_root "${CMAKE_BINARY_DIR}")
+set(abs_top_srcdir  "${CMAKE_SOURCE_DIR}")
+set(export_ldflags  "-Wl,--export-dynamic")
+set(libmono_ldflags "")
+set(libmono_cflags  "")
+configure_file(mono-uninstalled.pc.in
+               "${CMAKE_CURRENT_BINARY_DIR}/mono-uninstalled.pc" @ONLY)
+
+# ---------------------------------------------------------------------------
+# Subdirectories
+# ---------------------------------------------------------------------------
+# zlib first: it may define the ZLIB::ZLIB everything else links against.
+add_subdirectory(mono/zlib)
+add_subdirectory(mono/eglib)
+if(BUILD_TESTING)
+  add_subdirectory(mono/eglib/test)
+endif()
+add_subdirectory(mono/utils)
+add_subdirectory(mono/culture)
+add_subdirectory(mono/metadata)
+if(MONO_ENABLE_SGEN)
+  add_subdirectory(mono/sgen)
+endif()
+if(MONO_ENABLE_BOEHM)
+  # external/bdwgc is a submodule; its build lives under cmake/ so the
+  # submodule itself stays untouched.
+  add_subdirectory(cmake/bdwgc)
+endif()
+add_subdirectory(mono/mini)
+add_subdirectory(mono/cil)
+add_subdirectory(mono/dis)
+if(MONO_ENABLE_PROFILER)
+  add_subdirectory(mono/profiler)
+endif()
+if(MONO_ENABLE_MONO_NATIVE)
+  add_subdirectory(mono/native)
+endif()
+if(MONO_ENABLE_SUPPORT)
+  add_subdirectory(support)
+endif()
+if(MONO_ENABLE_BTLS)
+  include(MonoBtls)
+endif()
+if(MONO_ENABLE_IKVM_NATIVE)
+  add_subdirectory(ikvm-native)
+endif()
+add_subdirectory(tools/pedump)
+add_subdirectory(tools/sgen)
+add_subdirectory(tools/mono-hang-watchdog)
+add_subdirectory(data)
+add_subdirectory(scripts)
+add_subdirectory(man)
+add_subdirectory(runtime)
+if(BUILD_TESTING)
+  add_subdirectory(mono/unit-tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# Convenience targets
+# ---------------------------------------------------------------------------
+if(MONO_ENABLE_MCS_BUILD)
+  # Refresh the bootstrap compiler used when no mono is available to build the
+  # class libraries with.
+  add_custom_target(get-monolite-latest
+    COMMAND "${MONO_GNU_MAKE}" -C "${MONO_MCS_TOPDIR}/class" get-monolite-latest
+    USES_TERMINAL
+    VERBATIM)
+endif()
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+message(STATUS "")
+message(STATUS "  mono ${PROJECT_VERSION}")
+message(STATUS "    host/target:   ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}")
+message(STATUS "    GC:            ${DEFAULT_GC_NAME}")
+message(STATUS "    suspend:       ${MONO_THREAD_SUSPEND}")
+message(STATUS "    TLS:           ${MONO_WITH_TLS}")
+message(STATUS "    LLVM back end: ${MONO_ENABLE_LLVM} ${MONO_LLVM_PREFIX}")
+message(STATUS "    interpreter:   ${MONO_ENABLE_INTERPRETER}")
+message(STATUS "    Mono.Native:   ${MONO_ENABLE_MONO_NATIVE}")
+message(STATUS "    BTLS:          ${MONO_ENABLE_BTLS}")
+message(STATUS "    class libs:    ${MONO_ENABLE_MCS_BUILD} (${MONO_MCS_PROFILES})")
+message(STATUS "    prefix:        ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "")

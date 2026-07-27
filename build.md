@@ -2,10 +2,11 @@
 
 These are reproducible, from-scratch instructions for building this repository
 (Unity's fork of Mono, branch `unity-main`) on a Linux or WSL2 machine using the
-**system toolchain**. This is the documented "other platforms" fallback from
-[`Unity-build.md`](./Unity-build.md) (`./autogen.sh` followed by `make`), with the
-exact `configure` flags that Unity's own `external/buildscripts/build.pl` uses for
-a desktop Linux build.
+**system toolchain**.
+
+The build is CMake; the autotools files (`configure.ac`, the `Makefile.am`s) are
+still in the tree but no longer drive it. `cmake/README.md` describes the layout,
+how it maps onto the old one, and what it does not cover.
 
 It produces a fully working `mono` runtime (`mono-sgen` / `mono-boehm`) plus the
 C# class-library profiles (`net_4_x`, `unityjit`, `unityaot`, and their `-linux`
@@ -20,36 +21,34 @@ host variants).
 > [§ Official Unity build path](#official-unity-build-path) for how to use it when
 > you *are* on-network.
 
-Verified on: **Ubuntu 24.04.4 LTS (WSL2), x86_64**, gcc 13.3, autoconf 2.71,
-automake 1.16.5, libtool 2.4.7, cmake, and Mono 6.8 as the bootstrap compiler.
-Full build time was roughly 10 minutes on 16 cores.
+Verified on: **Ubuntu 24.04.4 LTS (WSL2), x86_64**, gcc 13.3, CMake 3.28, Ninja
+1.11, LLVM 18.1.3. Full build time was roughly 10 minutes on 16 cores.
 
 ---
 
 ## 1. Install dependencies
 
-The build needs: a C/C++ toolchain, autotools, `cmake` (for the bundled BoringSSL /
-`btls`), `gettext`, `python3`, and — crucially — an **existing Mono** in `PATH` to
-bootstrap the C# class libraries (the build compiles C# with Roslyn/mcs, which run
-on Mono).
+The build needs a C/C++ toolchain, CMake 3.28 or newer, a generator (Ninja or
+make), `python3`, and an LLVM 14+ development install for the tier-1 backend.
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
     build-essential \
-    autoconf automake libtool libtool-bin \
-    gettext bison gawk \
-    cmake \
+    cmake ninja-build \
     python3 \
     git \
-    mono-complete          # bootstrap C# compiler + runtime (provides mcs, mono)
+    llvm-18-dev \
+    zlib1g-dev
 ```
 
 Notes:
-- `mono-complete` provides the `mono` runtime and `mcs` compiler used to bootstrap
-  the class-library build. Any reasonably recent Mono works (6.8 was used here).
-- `libtool-bin` is required — it provides `libtoolize`, which `autogen.sh` calls.
-- `cmake` is required because the runtime build compiles the bundled BoringSSL.
+- CMake 3.28 is the floor; earlier versions are not supported.
+- `llvm-18-dev` provides `/usr/lib/llvm-18/bin/llvm-config`. Leave it out and
+  configure without `MONO_LLVM_PREFIX` to build with the classic JIT only.
+- No system Mono is needed: the class libraries are compiled by the Roslyn
+  binaries under `external/roslyn-binaries`, running on the runtime this build
+  produces.
 
 ## 2. Get the source (with submodules)
 
@@ -63,51 +62,36 @@ git submodule update --init --recursive
 
 ## 3. Configure
 
-Run `autogen.sh` with the same flags Unity's `build.pl` passes for a desktop Linux
-build. `autogen.sh` regenerates `configure` (via autoreconf) and then runs it.
-
 ```bash
 cd /home/swlynch/projects/mono
 
-export CFLAGS="-fPIC -Os"
-export CXXFLAGS="-fPIC -Os"
-
-./autogen.sh \
-  --with-glib=embedded \
-  --disable-nls \
-  --with-mcs-docs=no \
-  --prefix="$PWD/tmp" \
-  --enable-no-threads-discovery=yes \
-  --enable-thread-local-alloc=no \
-  --enable-unity-define=yes \
-  --with-unityjit=yes \
-  --with-unityaot=yes \
-  --with-monotouch=no
+cmake -S . -B build -G Ninja \
+  -DMONO_LLVM_PREFIX=/usr/lib/llvm-18 \
+  -DCMAKE_INSTALL_PREFIX="$PWD/tmp"
 ```
 
-What the flags mean:
-- `--with-glib=embedded` — use Mono's bundled eglib (no system glib dependency).
-- `--disable-nls` — drop the gettext/translation dependency.
-- `--prefix="$PWD/tmp"` — install into an **in-repo** `tmp/` dir, never system-wide.
-- `--with-unityjit=yes --with-unityaot=yes` — build the Unity JIT/AOT class-lib profiles.
-- `--enable-unity-define=yes` and the `--enable-*` toggles — Unity's runtime tweaks.
+The defaults already match Unity's desktop Linux configuration — embedded eglib,
+both collectors, the Unity class-library profiles, `UNITY` defined. What you may
+want to change:
 
-> **Note:** Unity's stock build also passes `--enable-ignore-dynamic-loading=yes`
-> and `--enable-dont-register-main-static-data=yes`. Those tell the bundled Boehm
-> GC (`external/bdwgc`) not to scan the main program's static-data segment or
-> dynamically-loaded libraries for roots — correct for Mono (which manages its own
-> roots / defaults to SGen), but it makes bdwgc's own self-tests `gctest` and
-> `staticrootstest` fail under `make check`. They are omitted here so `make check`
-> is clean. Re-add them to match Unity's exact configuration.
+- `-DMONO_LLVM_PREFIX=<prefix>` — build the tier-1 LLVM backend against that LLVM
+  install. Empty (the default) means no LLVM tier. This is the CMake spelling of
+  the old `--with-llvm=`.
+- `-DCMAKE_INSTALL_PREFIX="$PWD/tmp"` — install into an **in-repo** `tmp/` dir,
+  never system-wide.
+- `-DMONO_WITH_UNITYJIT=OFF -DMONO_WITH_UNITYAOT=OFF` — skip the Unity
+  class-library profiles.
+- `-DMONO_ENABLE_MCS_BUILD=OFF` — native runtime only, no class libraries.
 
-A successful configure ends with a summary and `Now type 'make' to compile`. It
-reports `C# Compiler: roslyn`, `GC: sgen ... and Included Boehm GC`, and
-`Unity JIT: yes / Unity AOT: yes`.
+`cmake -LH build` lists the rest; they all start with `MONO_`.
+
+Configure ends with a summary reporting the collector, the suspend policy, the
+LLVM prefix, and which class-library profiles will be built.
 
 ## 4. Build
 
 ```bash
-make -j"$(nproc)"
+cmake --build build -j"$(nproc)"
 ```
 
 This builds, in order: eglib, the bundled Boehm GC, BoringSSL (`btls`), the native
@@ -115,7 +99,7 @@ runtime (`libmonoruntime` / `libmonoruntimesgen`), the `mono-sgen` and `mono-boe
 executables and tools, and then the C# class libraries.
 
 Artifacts land at:
-- `mono/mini/mono-sgen`, `mono/mini/mono-boehm` — the runtime executables
+- `build/mono/mini/mono-sgen`, `build/mono/mini/mono-boehm` — the runtime executables
 - `mcs/class/lib/net_4_x-linux/` — the runnable class-library profile (mscorlib, System.*, …)
 - `mcs/class/lib/{net_4_x,unityjit,unityaot,unityjit-linux,unityaot-linux}/`
 
@@ -139,7 +123,7 @@ EOF
 mcs -out:/tmp/Hello.exe /tmp/Hello.cs        # bootstrap compiler
 
 MONO_PATH="$PWD/mcs/class/lib/net_4_x-linux" \
-    ./mono/mini/mono-sgen /tmp/Hello.exe
+    ./build/mono/mini/mono-sgen /tmp/Hello.exe
 ```
 
 Expected output:
@@ -151,8 +135,8 @@ Hello from Unity Mono! mscorlib=4.0.0.0, sum=55
 And the runtime identifies itself as the build from this tree:
 
 ```bash
-./mono/mini/mono-sgen --version
-# Mono JIT compiler version 6.13.0 (llvm-14/<git-hash> ...)
+./build/mono/mini/mono-sgen --version
+# Mono JIT compiler version 6.13.0 (<branch>/<git-hash> ...)
 ```
 
 That is your locally built runtime executing managed code against the class
@@ -162,11 +146,11 @@ libraries you just compiled — the build is working end to end.
 
 ## Optional: `make install` into the in-repo prefix
 
-`make install` copies everything into `./tmp` (the `--prefix` you set — **not** a
-system location):
+`cmake --install` copies everything into `./tmp` (the `CMAKE_INSTALL_PREFIX` you
+set — **not** a system location):
 
 ```bash
-make install
+cmake --install build
 ls tmp/bin        # mono, mcs, csc, xbuild, monodis, gacutil, ...
 ```
 
@@ -187,7 +171,7 @@ ls tmp/bin        # mono, mcs, csc, xbuild, monodis, gacutil, ...
 ## Optional: build with the LLVM backend
 
 Mono can use LLVM as its code-generation engine instead of the built-in JIT
-backend. Enabling it adds one `configure` flag.
+backend. Enabling it adds one cache variable.
 
 Mono no longer vendors an LLVM source tree — the `external/llvm-project`
 submodule (a Mono-patched LLVM 6.0.1 fork) has been removed. The LLVM backend
@@ -206,42 +190,28 @@ sudo apt-get install -y llvm-18-dev
 
 ### Configure + build
 
-Re-run `configure` with the same flags as [§ 3](#3-configure) plus
-`--with-llvm=<prefix>`. Reconfiguring changes `config.h` (defines `ENABLE_LLVM`),
-so remove the stale `config.status` first:
-
 ```bash
 cd /home/swlynch/projects/mono
-export CFLAGS="-fPIC -Os" CXXFLAGS="-fPIC -Os"
-rm -f config.status eglib/config.status libgc/config.status
-
-./autogen.sh \
-  --with-glib=embedded --disable-nls --with-mcs-docs=no --prefix="$PWD/tmp" \
-  --enable-no-threads-discovery=yes --enable-thread-local-alloc=no \
-  --enable-unity-define=yes --with-unityjit=yes --with-unityaot=yes \
-  --with-monotouch=no \
-  --with-llvm=/usr/lib/llvm-18
-
-make -j"$(nproc)"
+cmake -S . -B build -DMONO_LLVM_PREFIX=/usr/lib/llvm-18
+cmake --build build -j"$(nproc)"
 ```
 
-The config summary should now report:
+The configure summary should now report:
 
 ```
-LLVM Back End: yes (built in-tree: no, assertions: no, msvc only: no)
+LLVM back end: ON /usr/lib/llvm-18
 ```
 
-`make` runs `llvm/build_llvm_config.sh` against `<prefix>/bin/llvm-config` to
-produce `llvm/llvm_config.mk`, which `mono/mini` includes for its LLVM
-CFLAGS/LDFLAGS/libs. There is no LLVM compile step — LLVM itself is already
-built.
+CMake queries `<prefix>/bin/llvm-config` for the include path, the libraries and
+the API version, and hands them to `mono/mini` through the `mono::llvm` target.
+There is no LLVM compile step — LLVM itself is already built.
 
 ### Verify the backend is present and engages
 
 ```bash
 # 1. The runtime advertises LLVM (the number is the LLVM API version):
-./mono/mini/mono-sgen --version | grep LLVM
-#   LLVM:          yes(610)
+./build/mono/mini/mono-sgen --version | grep LLVM
+#   LLVM:          yes(1800)
 
 # 2. And it actually generates code via LLVM when asked. Compile a tiny program,
 #    then force the LLVM backend and dump the IR it emits:
@@ -252,8 +222,8 @@ EOF
 mcs -out:/tmp/Hv.exe /tmp/Hv.cs
 
 export MONO_PATH="$PWD/mcs/class/lib/net_4_x-linux"
-./mono/mini/mono-sgen --llvm /tmp/Hv.exe                 # runs -> 55
-MONO_VERBOSE_METHOD=Main ./mono/mini/mono-sgen --llvm /tmp/Hv.exe 2>&1 | grep -i llvm
+./build/mono/mini/mono-sgen --llvm /tmp/Hv.exe           # runs -> 55
+MONO_VERBOSE_METHOD=Main ./build/mono/mini/mono-sgen --llvm /tmp/Hv.exe 2>&1 | grep -i llvm
 #   converting llvm method void Hello:Main ()
 #   *** Unoptimized LLVM IR for Hello:Main () ***   ...
 ```
@@ -263,35 +233,45 @@ built-in JIT — compiled the method. `--nollvm` forces the built-in backend if 
 want to compare. (`<prefix>/bin/llvm-config --version` prints the upstream LLVM
 version that was linked in.)
 
+## Testing
+
+The suites are registered with CTest:
+
+```bash
+ctest --test-dir build -L regression   # mini regression, classic JIT (--nollvm)
+ctest --test-dir build -L tiered       # the LLVM tier at each promotion threshold
+ctest --test-dir build -R '^test-'     # the native unit tests
+ctest --test-dir build                 # everything, including eglib's own suite
+```
+
+The suites that need managed test assemblies build them through a CTest fixture,
+so a bare `ctest` does the right thing without a separate build step.
+
 ## Rebuilding after changes
 
-- **Runtime (C) change:** `make -j"$(nproc)"` (incremental).
-- **Class-library (C#) change:** rebuild just the profiles from `mcs/`:
-  ```bash
-  make -C mcs -j"$(nproc)" HOST_PLATFORM=linux
-  ```
-- **Clean rebuild:** `make clean` then repeat from step 4. If configure inputs
-  changed, remove `config.status eglib/config.status libgc/config.status` and rerun
-  step 3.
+- **Runtime (C/C++) change:** `cmake --build build -j"$(nproc)"` (incremental).
+- **Class-library (C#) change:** `cmake --build build --target mcs`, or drive
+  `mcs/` directly with `make -C mcs -j"$(nproc)" HOST_PLATFORM=linux`.
+- **Clean rebuild:** `rm -rf build` and repeat from step 3. There is no stale
+  `config.status` to worry about — changing a cache variable and re-running
+  `cmake -S . -B build` is enough.
 
 ## Troubleshooting
 
-- **`libtoolize: command not found`** → install `libtool-bin`.
-- **BoringSSL / `btls` fails** → install `cmake`.
 - **`The assembly mscorlib.dll was not found`** when running a program → you didn't
   set `MONO_PATH` to a real profile dir, or you're using the installed `tmp/bin/mono`
   (see the install wrinkle above). Point `MONO_PATH` at `mcs/class/lib/net_4_x-linux`.
+- **`external/bdwgc is empty`** or **`external/corefx is empty`** → rerun
+  `git submodule update --init --recursive`, or turn the corresponding option off
+  (`-DMONO_ENABLE_BOEHM=OFF`, `-DMONO_ENABLE_MONO_NATIVE=OFF`).
 - **A submodule is empty / a file under `external/` is missing** → rerun
   `git submodule update --init --recursive`.
 - **`No usable version of libssl was found`** — this only affects the older
   `build_classlibs_wsl.pl` path (see `Unity-build.md`), not these instructions.
-- **`--enable-llvm requires --with-llvm=<llvm prefix>`** → there is no in-tree
-  LLVM any more; install an upstream LLVM 14+ and pass its prefix, e.g.
-  `--with-llvm=/usr/lib/llvm-18`. See
+- **`No llvm-config under <prefix>/bin`** → there is no in-tree LLVM any more;
+  install an upstream LLVM 14+ and point `MONO_LLVM_PREFIX` at it, e.g.
+  `-DMONO_LLVM_PREFIX=/usr/lib/llvm-18`. See
   [§ build with the LLVM backend](#optional-build-with-the-llvm-backend).
-- **`--with-llvm` but summary says `LLVM Back End: no`** → you left a stale
-  `config.status`; remove `config.status eglib/config.status libgc/config.status`
-  and rerun `./autogen.sh ... --with-llvm=<prefix>`.
 
 ---
 
