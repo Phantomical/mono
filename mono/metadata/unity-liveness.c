@@ -64,6 +64,8 @@ struct _LivenessState {
 	register_object_callback filter_callback;
 	ReallocateArray reallocateArray;
 	guint traverse_depth; // track recursion. Prevent stack overflow by limiting recursion
+
+	WorldStateChanged on_world_started;
 };
 
 custom_growable_block_array * block_array_create(LivenessState *state)
@@ -172,7 +174,7 @@ MONO_API void mono_unity_liveness_finalize(LivenessState *state);
 MONO_API void mono_unity_liveness_start_gc_world();
 MONO_API void mono_unity_liveness_free_struct(LivenessState *state);
 
-MONO_API LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, ReallocateArray reallocateArray);
+MONO_API LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, WorldStateChanged onWorldStarted, WorldStateChanged onWorldStopped);
 MONO_API void mono_unity_liveness_calculation_end(LivenessState *state);
 
 MONO_API void mono_unity_liveness_calculation_from_root(MonoObject *root, LivenessState *state);
@@ -893,17 +895,38 @@ void mono_unity_liveness_start_gc_world()
 #endif
 }
 
-LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, ReallocateArray reallocateArray)
+/*
+ * Unity's scripting_liveness_calculation_begin() tail-calls straight into this
+ * function rather than going through mono_unity_liveness_allocate_struct(), so
+ * there's no caller-supplied ReallocateArray on this path; back the block
+ * array with g_malloc/g_free instead.
+ */
+static void * default_liveness_reallocate_array(void *ptr, int size, void *callback_userdata)
 {
-	LivenessState *state = mono_unity_liveness_allocate_struct(filter, max_count, callback, callback_userdata, reallocateArray);
+	if (size == 0) {
+		g_free(ptr);
+		return NULL;
+	}
+	return g_malloc(size);
+}
+
+LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, WorldStateChanged onWorldStarted, WorldStateChanged onWorldStopped)
+{
+	LivenessState *state = mono_unity_liveness_allocate_struct(filter, max_count, callback, callback_userdata, default_liveness_reallocate_array);
+	state->on_world_started = onWorldStarted;
 	mono_unity_liveness_stop_gc_world();
+	if (onWorldStopped)
+		onWorldStopped();
 	// no allocations can happen beyond this point
 	return state;
 }
 
 void mono_unity_liveness_calculation_end(LivenessState *state)
 {
+	WorldStateChanged on_world_started = state->on_world_started;
 	mono_unity_liveness_finalize(state);
 	mono_unity_liveness_start_gc_world();
+	if (on_world_started)
+		on_world_started();
 	mono_unity_liveness_free_struct(state);
 }
