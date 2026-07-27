@@ -2384,6 +2384,15 @@ EmitContext::llvm_jit_finalize_method ()
 		i ++;
 	}
 	mono_domain_unlock (domain);
+
+	/*
+	 * Report the body to perf from here, past every decline above, rather than
+	 * from the publish site: this is the last point at which the .eh_frame
+	 * behind it is still in hand, and a promotion never reaches mini.c's own
+	 * mono_emit_jit_dump () call anyway.
+	 */
+	mono_llvm_jitdump_emit_method (cfg->method, cfg->native_code, cfg->code_len,
+	                               static_cast<const guint8*>(dwarf_eh_frame), dwarf_eh_frame_size);
 }
 
 #else

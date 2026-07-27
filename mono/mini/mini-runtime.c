@@ -2113,7 +2113,8 @@ add_file_header_info (FileHeader *header)
 {
 	header->magic = JIT_DUMP_MAGIC;
 	header->version = JIT_DUMP_VERSION;
-	header->total_size = sizeof (header);
+	/* The size of the header itself, which is how perf finds the first record. */
+	header->total_size = sizeof (*header);
 	header->elf_mach = ELF_MACHINE;
 	header->pad1 = 0;
 	header->pid = perf_dump_pid;
@@ -2121,36 +2122,51 @@ add_file_header_info (FileHeader *header)
 	header->flags = 0;
 }
 
+gboolean
+mono_jit_dump_is_enabled (void)
+{
+	return perf_dump_file != NULL;
+}
+
 void
-mono_emit_jit_dump (MonoJitInfo *jinfo, gpointer code)
+mono_emit_jit_dump_code (const char *name, gpointer code, guint32 code_size, const guint8 *pre_record, guint32 pre_record_size)
 {
 	static uint64_t code_index;
-	
+
 	if (perf_dump_file) {
 		JitCodeLoadRecord record;
-		size_t nameLen = strlen (jinfo->d.method->name);
+		size_t nameLen = strlen (name);
 		memset (&record, 0, sizeof (record));
-		
+
 		add_basic_JitCodeLoadRecord_info (&record);
-		record.header.total_size = sizeof (record) + nameLen + 1 + jinfo->code_size;
-		record.vma = (guint64)jinfo->code_start;
-		record.code_addr = (guint64)jinfo->code_start;
-		record.code_size = (guint64)jinfo->code_size;
+		record.header.total_size = sizeof (record) + nameLen + 1 + code_size;
+		record.vma = (guint64)(gsize)code;
+		record.code_addr = (guint64)(gsize)code;
+		record.code_size = (guint64)code_size;
 
 		mono_os_mutex_lock (&perf_dump_mutex);
-		
+
 		record.code_index = ++code_index;
-		
-		// TODO: write debugInfo and unwindInfo immediately before the JitCodeLoadRecord (while lock is held).
-		
+
+		// TODO: write debugInfo immediately before the JitCodeLoadRecord (while lock is held).
+
 		record.header.timestamp = mono_clock_get_time_ns (clock_id);
-		
+
+		if (pre_record)
+			fwrite (pre_record, pre_record_size, 1, perf_dump_file);
+
 		fwrite (&record, sizeof (record), 1, perf_dump_file);
-		fwrite (jinfo->d.method->name, nameLen + 1, 1, perf_dump_file);
-		fwrite (code, jinfo->code_size, 1, perf_dump_file);
+		fwrite (name, nameLen + 1, 1, perf_dump_file);
+		fwrite (code, code_size, 1, perf_dump_file);
 
 		mono_os_mutex_unlock (&perf_dump_mutex);
 	}
+}
+
+void
+mono_emit_jit_dump (MonoJitInfo *jinfo, gpointer code)
+{
+	mono_emit_jit_dump_code (jinfo->d.method->name, code, (guint32)jinfo->code_size, NULL, 0);
 }
 
 static void
@@ -2175,6 +2191,17 @@ mono_jit_dump_cleanup (void)
 
 void
 mono_enable_jit_dump (void)
+{
+}
+
+gboolean
+mono_jit_dump_is_enabled (void)
+{
+	return FALSE;
+}
+
+void
+mono_emit_jit_dump_code (const char *name, gpointer code, guint32 code_size, const guint8 *pre_record, guint32 pre_record_size)
 {
 }
 

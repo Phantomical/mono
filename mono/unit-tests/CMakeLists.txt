@@ -111,6 +111,8 @@ if(MONO_ENABLE_LLVM)
     SOURCES test-llvm-ehframe.c      ENTRY test_llvm_ehframe_main     RUNTIME)
   mono_add_unit_test(test-llvm-ehtable
     SOURCES test-llvm-ehtable.cpp    ENTRY test_llvm_ehtable_main     RUNTIME)
+  mono_add_unit_test(test-llvm-jitdump
+    SOURCES test-llvm-jitdump.cpp    ENTRY test_llvm_jitdump_main     RUNTIME)
   mono_add_unit_test(test-llvm-class-init
     SOURCES test-llvm-class-init.cpp ENTRY test_llvm_class_init_main  RUNTIME)
   # C++ for the same reason again: it includes llvm/passes/wbarrier.hpp and

@@ -551,7 +551,16 @@ gboolean mono_jit_map_is_enabled (void);
 #endif
 
 void mono_enable_jit_dump (void);
+gboolean mono_jit_dump_is_enabled (void);
 void mono_emit_jit_dump (MonoJitInfo *jinfo, gpointer code);
+/*
+ * Append a JIT_CODE_LOAD record for [CODE, CODE + CODE_SIZE) under NAME. If
+ * PRE_RECORD is given it is a complete jitdump record - an unwinding record,
+ * say - written immediately before it and under the same lock: perf applies
+ * such a record to the next code load it reads, so no other writer may slip
+ * between the two.
+ */
+void mono_emit_jit_dump_code (const char *name, gpointer code, guint32 code_size, const guint8 *pre_record, guint32 pre_record_size);
 void mono_jit_dump_cleanup (void);
 
 /*

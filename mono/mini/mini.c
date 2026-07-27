@@ -4588,6 +4588,8 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 	 * that ordering is load-bearing, not cosmetic.
 	 */
 	gboolean try_sync_promote = FALSE;
+	/* Likewise read off cfg before it is destroyed, and acted on below. */
+	gboolean jitdump_reported = FALSE;
 	MonoJitInfo *jinfo, *info;
 	MonoVTable *vtable;
 	MonoException *ex = NULL;
@@ -4718,12 +4720,18 @@ mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, 
 	 */
 	mono_update_jit_stats (cfg);
 
+	/* The LLVM backend has already reported this body to perf, with the DWARF
+	 * unwind tables that only it has (llvm/jitdump.cpp). Reporting it again
+	 * here would replace that record with a bare one. */
+	jitdump_reported = cfg->compile_llvm;
+
 	mono_destroy_compile (cfg);
 
 	mini_patch_llvm_jit_callees (target_domain, method, code);
 #ifndef DISABLE_JIT
 	mono_emit_jit_map (jinfo);
-	mono_emit_jit_dump (jinfo, code);
+	if (!jitdump_reported)
+		mono_emit_jit_dump (jinfo, code);
 #endif
 	mono_domain_unlock (target_domain);
 
