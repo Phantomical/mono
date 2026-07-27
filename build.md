@@ -259,6 +259,39 @@ ctest --test-dir build -j16 -L stress    # long-running
 The suites that need managed test assemblies build them through a CTest fixture,
 so a bare `ctest` does the right thing without a separate build step.
 
+### Acceptance tests
+
+`acceptance-tests/` is a separate, much heavier set: the CoreCLR corpus (~4,700
+assemblies), the DebianShootoutMono microbenchmarks, and the profiler stress
+test. It is off by default and its tests carry the `acceptance` label, so they
+never join `check` or `check-all`.
+
+The corpora are git submodules under `acceptance-tests/external`, and this build
+never fetches them. All of them are marked `update = none` in `.gitmodules`, so
+the `git submodule update --init --recursive` in step 2 skips them — together
+they are well over a gigabyte. Ask for one by name:
+
+```bash
+cmake --build build --target print-versions   # which are checked out, and the
+                                              # exact git command for each
+git submodule update --init --checkout acceptance-tests/external/coreclr
+```
+
+`ms-test-suite` is skipped for a second reason: it is Xamarin-internal and not
+readable from outside, so `update = none` is what keeps a bare `--init` from
+failing on it rather than merely saving a download.
+
+With the checkouts in place:
+
+```bash
+cmake -B build -D MONO_ENABLE_ACCEPTANCE_TESTS=ON
+ctest --test-dir build -j16 -L acceptance
+```
+
+Compiling the CoreCLR corpus is itself a CTest fixture and takes on the order of
+half an hour; `coreclr-gcstress`, `profiler-stress` and the microbenchmarks are
+additionally labelled `stress`/`slow` because they run for hours by design.
+
 ## Rebuilding after changes
 
 - **Runtime (C/C++) change:** `cmake --build build -j"$(nproc)"` (incremental).

@@ -67,3 +67,48 @@
 [submodule "external/bdwgc"]
 	path = external/bdwgc
 	url = https://github.com/Unity-Technologies/bdwgc.git
+
+# The acceptance-test corpora.  Every one of these carries `update = none`, so
+# the `git submodule update --init --recursive` that sets up an ordinary build
+# skips them: together they are well over a gigabyte (coreclr ~650M,
+# benchmarker ~440M), and only the acceptance suites -- which are themselves off
+# unless you configure with MONO_ENABLE_ACCEPTANCE_TESTS=ON -- ever read them.
+#
+# Fetch one with:
+#     git submodule update --init --checkout acceptance-tests/external/coreclr
+[submodule "acceptance-tests/external/coreclr"]
+	path = acceptance-tests/external/coreclr
+	url = https://github.com/mono/coreclr.git
+	branch = mono
+	update = none
+[submodule "acceptance-tests/external/benchmarker"]
+	path = acceptance-tests/external/benchmarker
+	url = https://github.com/xamarin/benchmarker.git
+	branch = master
+	update = none
+[submodule "acceptance-tests/external/DebianShootoutMono"]
+	path = acceptance-tests/external/DebianShootoutMono
+	url = https://github.com/alexanderkyte/DebianShootoutMono.git
+	branch = release_11_15_2018
+	update = none
+[submodule "acceptance-tests/external/roslyn"]
+	path = acceptance-tests/external/roslyn
+	url = https://github.com/mono/roslyn.git
+	branch = mono-testing
+	update = none
+# This one is also Xamarin-internal and not readable from outside, so skipping
+# it by default keeps a bare `--init` from failing rather than merely saving a
+# download.
+[submodule "acceptance-tests/external/ms-test-suite"]
+	path = acceptance-tests/external/ms-test-suite
+	url = git@github.com:xamarin/ms-test-suite.git
+	branch = master
+	update = none
+
+# Only needed for --with-jemalloc, which this build does not yet offer; the
+# runtime always compiles its mono-jemalloc.c shim.
+[submodule "mono/utils/jemalloc/jemalloc"]
+	path = mono/utils/jemalloc/jemalloc
+	url = https://github.com/mono/jemalloc.git
+	branch = master
+	update = none

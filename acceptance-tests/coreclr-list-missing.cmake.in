@@ -1,0 +1,23 @@
+# `coreclr-list-missing-tests` from coreclr.mk: every .cs/.il under the
+# checkout's tests/ that coreclr-tests.cmake does not mention, enabled or
+# disabled.  Run it after bumping the coreclr revision to see what upstream
+# added.
+
+cmake_policy(SET CMP0007 NEW)   # keep empty list elements visible, so the
+                                # trailing newline below can be dropped on
+                                # purpose rather than silently
+
+file(STRINGS "@_bin@/coreclr-known-tests.txt" _known)
+
+file(GLOB_RECURSE _found RELATIVE "@_cc_src@"
+     "@_cc_src@/tests/*.cs" "@_cc_src@/tests/*.il")
+
+set(_missing "${_found}")
+list(REMOVE_ITEM _missing ${_known})
+list(SORT _missing)
+
+list(LENGTH _missing _n)
+message("CoreCLR tests missing from coreclr-tests.cmake: ${_n}")
+foreach(_m IN LISTS _missing)
+  message("  ${_m}")
+endforeach()

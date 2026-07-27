@@ -21,15 +21,29 @@ Some of the test suites require an installed Mono (i.e. they don't work with the
   * `make coreclr-compile-tests` - Convenience target that precompiles all the test cases in parallel.
   * `make coreclr-gcstress` - Runs the CoreCLR GC stress tests.
 
-## Updating submodules
+## The corpus submodules
 
-The SUBMODULES.json file stores information about the submodules, and make targets are used to check out submodules, check their versions, and update the submodule information:
+The test corpora under `external/` are git submodules of this repository, pinned
+by gitlink like any other. All of them carry `update = none` in `.gitmodules`,
+so an ordinary `git submodule update --init --recursive` skips them: together
+they are well over a gigabyte, and nothing outside these suites reads them.
+Ask for one by name:
 
-* `make validate-<module>` - Checks whenever `<module>` is checked out and matches the version in the info file.
-* `make reset-<module>` - Clones `<module>` if neccesary and checks out the revision specified in the info file.
-* `make bump-<module>` - Updates the revision stored in the info file for `<module>`.
-* `make bump-current-<module>` - Updates the revision stored in the info file for `<module>` to the current revision.
-* `make commit-bump-<module>` - Same as `make bump-<module>`, but commits the change.
-* `make commit-bump-current-<module>` - Same as `make bump-current-<module>`, but commits the change.
+```
+git submodule update --init --checkout acceptance-tests/external/coreclr
+```
 
-Example: when making a change in the CoreCLR submodule (like disabling something on Mono), you'd commit the change there and then run `make bump-current-coreclr` or `make commit-bump-current-coreclr` to update the version in SUBMODULES.json.
+`ms-test-suite` needs that treatment for a second reason — it is Xamarin-internal
+and not readable from outside, so skipping it by default keeps a bare `--init`
+from failing rather than merely saving a download.
+
+To see what is checked out and what each one is pinned to, configure with
+`-D MONO_ENABLE_ACCEPTANCE_TESTS=ON` and build the `print-versions` target.
+
+Re-pinning is plain git: check the submodule out at the revision you want, then
+commit the changed gitlink in the superproject.
+
+```
+git -C acceptance-tests/external/coreclr checkout <rev>
+git add acceptance-tests/external/coreclr
+```

@@ -96,6 +96,7 @@ add_subdirectory(runtime)
 if(BUILD_TESTING)
   add_subdirectory(mono/unit-tests)
   add_subdirectory(mono/tests)
+  add_subdirectory(acceptance-tests)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -109,8 +110,13 @@ endif()
 #              tier, and the runtime one-offs. Seconds, not minutes.
 #   check-all  everything except the stress suites and the minutes-long ones.
 #
-# The heavy labels (runtime, gshared, sgen, interp, slow, stress) are opt-in:
+# The heavy labels (runtime, gshared, sgen, interp, slow, stress, acceptance)
+# are opt-in:
 #   ctest --test-dir build -L runtime -j <n>
+#
+# `acceptance` additionally needs -D MONO_ENABLE_ACCEPTANCE_TESTS=ON and the
+# corpus submodules under acceptance-tests/external; run the `print-versions`
+# target to see which of those are checked out.
 include(ProcessorCount)
 ProcessorCount(MONO_NPROC)
 if(MONO_NPROC EQUAL 0)
@@ -119,7 +125,7 @@ endif()
 
 add_custom_target(check
   COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "runtime|gshared|sgen|interp|slow|stress|fixture"
+          -LE "runtime|gshared|sgen|interp|slow|stress|fixture|acceptance"
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
   VERBATIM)
@@ -127,11 +133,25 @@ add_dependencies(check mini-corpora unit-test-assemblies)
 
 add_custom_target(check-all
   COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "slow|stress"
+          -LE "slow|stress|acceptance"
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
   VERBATIM)
 add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
+
+# `check-full` in acceptance-tests/Makefile.am, near enough: the CoreCLR suites
+# and ms-test-suite, with the hours-long members (coreclr-gcstress,
+# profiler-stress, the microbenchmarks) left behind their stress/slow labels.
+# Compiling the CoreCLR corpus happens through the CTest fixture, so this is a
+# single command from a clean tree -- and a long one.
+if(MONO_ENABLE_ACCEPTANCE_TESTS)
+  add_custom_target(check-acceptance
+    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+            -L acceptance -LE "slow|stress"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+endif()
 
 # ---------------------------------------------------------------------------
 # Convenience targets

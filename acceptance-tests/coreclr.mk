@@ -5,8 +5,12 @@ clean-local-coreclr:
 
 CLEANFILES += $(CORECLR_STRESSTESTSI_CS) GCStressTests.exe coreclr-testlibrary.dll
 
+# coreclr is a git submodule; check it is there rather than cloning it.
 coreclr-validate:
-	$(MAKE) validate-coreclr RESET_VERSIONS=1
+	@test -d $(CORECLR_PATH)/tests || { \
+		echo "*** [coreclr] checkout missing; run:"; \
+		echo "***   git submodule update --init acceptance-tests/external/coreclr"; \
+		exit 1; }
 
 coreclr-compile-tests: coreclr-validate
 	$(call makeinbatches, $(CORECLR_TESTSI_CS))

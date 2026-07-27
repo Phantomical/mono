@@ -6,7 +6,7 @@ MSTESTSUITE_PATH=$(ACCEPTANCE_TESTS_PATH)/ms-test-suite
 DEBIANSHOOTOUTMONO_PATH=$(ACCEPTANCE_TESTS_PATH)/DebianShootoutMono
 
 CLEANFILES = *.dll *.exe *.mdb
-EXTRA_DIST=README.md SUBMODULES.json microbench.mk versions.mk profiler-stress.mk roslyn.mk coreclr.mk ms-test-suite.mk
+EXTRA_DIST=README.md microbench.mk profiler-stress.mk roslyn.mk coreclr.mk ms-test-suite.mk
 
 CLASS=$(mcs_topdir)/class/lib/$(DEFAULT_PROFILE)
 TOOLS_CLASS=$(mcs_topdir)/class/lib/build
@@ -17,7 +17,9 @@ MCS = $(TOOLS_RUNTIME) $(CSC) -nologo -noconfig -lib:$(CLASS) -r:System.dll -r:S
 ILASM = $(TOOLS_RUNTIME) $(TOOLS_CLASS)/ilasm.exe
 XUNIT = $(RUNTIME) $(abs_top_builddir)/external/xunit-binaries/xunit.console.exe
 
-include versions.mk
+# The corpora under external/ are plain git submodules now, so there is no
+# versions.mk to include and no validate-<name> to depend on: fetch one with
+#     git submodule update --init acceptance-tests/external/<name>
 include microbench.mk
 include profiler-stress.mk
 include roslyn.mk

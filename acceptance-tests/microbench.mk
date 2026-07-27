@@ -1,8 +1,11 @@
 check-microbench: DebianShootoutMono.stamp
 	@$(MAKE) test-run-microbench
 
-DebianShootoutMono.stamp: 
-	@$(MAKE) validate-DebianShootoutMono RESET_VERSIONS=1
+DebianShootoutMono.stamp:
+	@test -d $(DEBIANSHOOTOUTMONO_PATH)/release || { \
+		echo "*** [DebianShootoutMono] checkout missing; run:"; \
+		echo "***   git submodule update --init acceptance-tests/external/DebianShootoutMono"; \
+		exit 1; }
 	@$(MAKE) prepare-dlls
 	@touch $@
 
