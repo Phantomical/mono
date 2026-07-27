@@ -7,12 +7,18 @@
  * trigger. The translator tags both halves (`mono.class-init-check` on the
  * branch, `mono.class-init` on the call); see translator-call.cpp.
  *
- * A trigger call is redundant when, on every path that reaches it, the runtime
- * has already been asked to initialize that same class. This analysis reports
- * the calls for which a single dominating fact establishes that:
+ * A trigger call is redundant when every path reaching it has already asked the
+ * runtime to initialize that same class. Two things establish that, and either
+ * one is enough:
  *
  *   - an earlier trigger call for the same class, or
  *   - an earlier check that found `initialized` already set (its "yes" edge).
+ *
+ * They meet at merges, which is what makes this worth more than dominance. A
+ * completed barrier establishes the fact on *both* arms - one checked, the other
+ * called - so everything downstream of its join is covered even though neither
+ * half dominates it on its own. A second barrier for the same class further down
+ * is therefore redundant, which is the shape inlining keeps producing.
  *
  * Both facts are safe to lean on for slightly different reasons, and neither is
  * the tempting-but-false "the byte is now 1":
@@ -54,37 +60,25 @@
 
 namespace llvm {
 class CallBase;
-class DominatorTree;
 class Function;
-class Instruction;
 } // namespace llvm
 
 namespace mono {
 
-/* What made a trigger call redundant. */
-enum class ClassInitFactKind {
-	/* An earlier `mono_generic_class_init` call for the same class. */
-	PriorCall,
-	/* The "already initialized" edge of an earlier check for the same class. */
-	InitializedEdge,
-};
-
 struct RedundantClassInit {
 	/* The trigger call that need not run. */
 	llvm::CallBase *call;
-	/* The dominating fact: a trigger call, or the check branch it came from. */
-	llvm::Instruction *fact;
-	ClassInitFactKind kind;
 	/* The MonoVTable the barrier is for, as it appears in the IR. */
 	uint64_t vtable;
 };
 
 /*
- * The redundant trigger calls in F, in program order. DT must be F's dominator
- * tree.
+ * The redundant trigger calls in F, in program order. Calls in blocks the entry
+ * cannot reach are left out: they are covered vacuously, which is true and
+ * useless.
  */
 llvm::SmallVector<RedundantClassInit, 4>
-find_redundant_class_inits (llvm::Function &f, const llvm::DominatorTree &dt);
+find_redundant_class_inits (llvm::Function &f);
 
 /*
  * The same thing as a cached function analysis, for a pipeline consumer.
@@ -100,11 +94,7 @@ public:
 
 		llvm::ArrayRef<RedundantClassInit> redundant () const { return redundant_; }
 
-		/* The reason CALL is redundant, or null if it is not. */
-		const RedundantClassInit *lookup (const llvm::CallBase *call) const;
-
-		bool invalidate (llvm::Function &f, const llvm::PreservedAnalyses &pa,
-		                 llvm::FunctionAnalysisManager::Invalidator &inv);
+		bool is_redundant (const llvm::CallBase *call) const;
 
 	private:
 		llvm::SmallVector<RedundantClassInit, 4> redundant_;

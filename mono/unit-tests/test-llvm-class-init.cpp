@@ -2,13 +2,16 @@
  * test-llvm-class-init.cpp: unit tests for the class-init barrier redundancy
  * analysis in mono/mini/llvm/passes/elide-class-init.cpp.
  *
- * find_redundant_class_inits () answers "is this mono_generic_class_init call
- * already guaranteed to have happened?" from two dominating facts: an earlier
- * trigger call for the same class, or an earlier check that found the class
- * initialized. Getting it wrong in the permissive direction drops a cctor, so
- * the cases below lean on the negatives as hard as the positives - different
- * classes, the barrier's own guarded call, a check whose "yes" edge does not
- * actually dominate, and tags whose IR no longer decodes.
+ * find_redundant_class_inits () answers "has every path here already asked the
+ * runtime to initialize this class?" from two facts: a trigger call for the same
+ * class, and a check that found the class initialized. Either is enough on its
+ * own, and they meet at merges - which is the whole point, since a completed
+ * barrier establishes the fact on both of its arms.
+ *
+ * Getting it wrong in the permissive direction drops a cctor, so the cases below
+ * lean on the negatives as hard as the positives: different classes, one-armed
+ * coverage, the unwind side of a throwing trigger, and tags whose IR no longer
+ * decodes.
  *
  * The IR is assembled here by hand rather than translated from IL: the point is
  * to pin the analysis against shapes the optimizer can produce (an inverted
@@ -37,7 +40,7 @@
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/Dominators.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
@@ -49,12 +52,12 @@
 
 using llvm::BasicBlock;
 using llvm::BranchInst;
+using llvm::CallBase;
 using llvm::CallInst;
 using llvm::Function;
 using llvm::IRBuilder;
 using llvm::Module;
 
-using mono::ClassInitFactKind;
 using mono::RedundantClassInit;
 
 /* ------------------------------------------------------------ reporting */
@@ -138,6 +141,17 @@ struct Harness {
 	{
 		ins->setMetadata (kind, llvm::MDNode::get (ctx, llvm::MDString::get (ctx, klass)));
 	}
+
+	/* An `if (arg > 0)` fork, for building merges that carry no class-init fact. */
+	std::pair<BasicBlock *, BasicBlock *> fork (BasicBlock *in)
+	{
+		IRBuilder<> b (in);
+		BasicBlock *left = block ("left");
+		BasicBlock *right = block ("right");
+
+		b.CreateCondBr (b.CreateICmpSGT (func->getArg (0), b.getInt32 (0)), left, right);
+		return {left, right};
+	}
 };
 
 /* A `mono_generic_class_init (vtable)` call appended to IN. */
@@ -201,85 +215,73 @@ emit_check (Harness &h, BasicBlock *in, std::uint64_t vtable, const char *klass,
 	return out;
 }
 
-/*
- * A whole barrier - check, guarded trigger, join - appended to IN. Returns the
- * join block, which is where a caller keeps building.
- */
-static BasicBlock *
+struct Barrier {
+	Check check;
+	CallInst *trigger;
+	/* Where both arms land, and where the caller keeps building. */
+	BasicBlock *join;
+};
+
+/* A whole barrier - check, guarded trigger, join - appended to IN. */
+static Barrier
 emit_barrier (Harness &h, BasicBlock *in, std::uint64_t vtable, const char *klass,
               const Shape &shape = {})
 {
-	Check check = emit_check (h, in, vtable, klass, shape);
-	BasicBlock *join = h.block ("join");
+	Barrier out;
 
-	emit_trigger (h, check.not_inited, vtable, klass, shape.tag_trigger);
-	IRBuilder<> (check.not_inited).CreateBr (join);
-	IRBuilder<> (check.inited).CreateBr (join);
-	return join;
+	out.check = emit_check (h, in, vtable, klass, shape);
+	out.join = h.block ("join");
+	out.trigger = emit_trigger (h, out.check.not_inited, vtable, klass, shape.tag_trigger);
+
+	IRBuilder<> (out.check.not_inited).CreateBr (out.join);
+	IRBuilder<> (out.check.inited).CreateBr (out.join);
+	return out;
 }
 
 /* ------------------------------------------------------------- checking */
 
-static std::vector<RedundantClassInit>
-analyze (const char *what, Harness &h)
+/*
+ * Run the analysis and assert that exactly the listed calls came back, in the
+ * listed order (the analysis reports in program order).
+ */
+static void
+expect_redundant (const char *what, Harness &h, const std::vector<const CallBase *> &want)
 {
+	cases_run ++;
+
 	std::string err;
 	llvm::raw_string_ostream os (err);
-
 	if (llvm::verifyFunction (*h.func, &os)) {
 		fail (what, ("test built invalid IR: " + os.str ()).c_str ());
-		return {};
+		return;
 	}
 
-	llvm::DominatorTree dt (*h.func);
-	auto found = mono::find_redundant_class_inits (*h.func, dt);
-	return std::vector<RedundantClassInit> (found.begin (), found.end ());
-}
+	auto got = mono::find_redundant_class_inits (*h.func);
 
-/* Assert that nothing in H is redundant. */
-static void
-expect_none (const char *what, Harness &h)
-{
-	cases_run ++;
-
-	auto found = analyze (what, h);
-	if (!found.empty ()) {
+	if (got.size () != want.size ()) {
 		char buf [128];
-		snprintf (buf, sizeof (buf), "expected no redundant trigger, got %zu", found.size ());
-		fail (what, buf);
-	}
-}
-
-/* Assert that CALL, and only it, is redundant, for the stated reason. */
-static void
-expect_one (const char *what, Harness &h, const CallInst *call, ClassInitFactKind kind,
-            const llvm::Instruction *fact, std::uint64_t vtable)
-{
-	cases_run ++;
-
-	auto found = analyze (what, h);
-	if (found.size () != 1) {
-		char buf [128];
-		snprintf (buf, sizeof (buf), "expected exactly 1 redundant trigger, got %zu",
-		          found.size ());
+		snprintf (buf, sizeof (buf), "expected %zu redundant trigger(s), got %zu",
+		          want.size (), got.size ());
 		fail (what, buf);
 		return;
 	}
 
-	const RedundantClassInit &got = found [0];
-	if (got.call != call)
-		fail (what, "a different trigger call than expected was reported redundant");
-	if (got.kind != kind)
-		fail (what, kind == ClassInitFactKind::PriorCall
-		                ? "expected a prior-call fact, got an initialized-edge one"
-		                : "expected an initialized-edge fact, got a prior-call one");
-	if (got.fact != fact)
-		fail (what, "reported the wrong dominating instruction");
-	if (got.vtable != vtable)
-		fail (what, "reported the wrong vtable");
+	for (std::size_t i = 0; i < want.size (); i ++) {
+		if (got [i].call != want [i]) {
+			char buf [128];
+			snprintf (buf, sizeof (buf), "redundant trigger %zu is not the expected call", i);
+			fail (what, buf);
+		}
+	}
 }
 
-/* ------------------------------------------------- a dominating trigger call */
+static void
+expect_none (const char *what, Harness &h)
+{
+	expect_redundant (what, h, {});
+}
+
+/* ------------------------------------------------- a preceding trigger call */
 
 static void
 cases_prior_call (void)
@@ -287,25 +289,23 @@ cases_prior_call (void)
 	{
 		/* Back-to-back triggers for one class: the second cannot do anything. */
 		Harness h ("two-triggers-one-block");
-		CallInst *first = emit_trigger (h, h.entry, VTABLE_A, "A");
+		emit_trigger (h, h.entry, VTABLE_A, "A");
 		CallInst *second = emit_trigger (h, h.entry, VTABLE_A, "A");
 		IRBuilder<> (h.entry).CreateBr (h.exit);
 
-		expect_one ("prior-call-same-block", h, second, ClassInitFactKind::PriorCall,
-		            first, VTABLE_A);
+		expect_redundant ("prior-call-same-block", h, {second});
 	}
 
 	{
 		/* Same, one block apart. */
 		Harness h ("two-triggers-two-blocks");
-		CallInst *first = emit_trigger (h, h.entry, VTABLE_A, "A");
+		emit_trigger (h, h.entry, VTABLE_A, "A");
 		BasicBlock *next = h.block ("next");
 		IRBuilder<> (h.entry).CreateBr (next);
 		CallInst *second = emit_trigger (h, next, VTABLE_A, "A");
 		IRBuilder<> (next).CreateBr (h.exit);
 
-		expect_one ("prior-call-across-blocks", h, second, ClassInitFactKind::PriorCall,
-		            first, VTABLE_A);
+		expect_redundant ("prior-call-across-blocks", h, {second});
 	}
 
 	{
@@ -321,10 +321,7 @@ cases_prior_call (void)
 	{
 		/* A trigger on one arm of an `if` does not cover the other arm. */
 		Harness h ("trigger-on-one-arm");
-		IRBuilder<> b (h.entry);
-		BasicBlock *left = h.block ("left");
-		BasicBlock *right = h.block ("right");
-		b.CreateCondBr (b.CreateICmpSGT (h.func->getArg (0), b.getInt32 (0)), left, right);
+		auto [left, right] = h.fork (h.entry);
 
 		emit_trigger (h, left, VTABLE_A, "A");
 		IRBuilder<> (left).CreateBr (h.exit);
@@ -332,6 +329,21 @@ cases_prior_call (void)
 		IRBuilder<> (right).CreateBr (h.exit);
 
 		expect_none ("prior-call-sibling-arm", h);
+	}
+
+	{
+		/* Nor does it cover what follows the merge - the other arm has no fact. */
+		Harness h ("trigger-on-one-arm-then-join");
+		auto [left, right] = h.fork (h.entry);
+		BasicBlock *join = h.block ("join");
+
+		emit_trigger (h, left, VTABLE_A, "A");
+		IRBuilder<> (left).CreateBr (join);
+		IRBuilder<> (right).CreateBr (join);
+		emit_trigger (h, join, VTABLE_A, "A");
+		IRBuilder<> (join).CreateBr (h.exit);
+
+		expect_none ("one-armed-merge", h);
 	}
 
 	{
@@ -345,10 +357,10 @@ cases_prior_call (void)
 	}
 }
 
-/* ------------------------------------------- a dominating initialized edge */
+/* ------------------------------------------- a preceding initialized check */
 
 static void
-cases_initialized_edge (void)
+cases_initialized_check (void)
 {
 	{
 		/* Down the arm where the byte was already set, a trigger is dead weight. */
@@ -358,8 +370,7 @@ cases_initialized_edge (void)
 		IRBuilder<> (check.inited).CreateBr (h.exit);
 		IRBuilder<> (check.not_inited).CreateBr (h.exit);
 
-		expect_one ("inited-edge-dominates", h, call, ClassInitFactKind::InitializedEdge,
-		            check.branch, VTABLE_A);
+		expect_redundant ("inited-edge-covers", h, {call});
 	}
 
 	{
@@ -387,41 +398,203 @@ cases_initialized_edge (void)
 	{
 		/* A whole barrier on its own is exactly what it should be. */
 		Harness h ("lone-barrier");
-		BasicBlock *join = emit_barrier (h, h.entry, VTABLE_A, "A");
-		IRBuilder<> (join).CreateBr (h.exit);
+		Barrier first = emit_barrier (h, h.entry, VTABLE_A, "A");
+		IRBuilder<> (first.join).CreateBr (h.exit);
 
 		expect_none ("lone-barrier-is-clean", h);
 	}
 
 	{
-		/*
-		 * Two complete barriers for one class in sequence. Neither single fact
-		 * from the first reaches the second - the join merges the arm that
-		 * checked with the arm that called - so this analysis leaves it alone
-		 * even though the second barrier is, on every path, unnecessary.
-		 * Catching it needs the two facts met at the join, not dominance.
-		 */
-		Harness h ("barrier-after-barrier");
-		BasicBlock *join = emit_barrier (h, h.entry, VTABLE_A, "A");
-		BasicBlock *second = emit_barrier (h, join, VTABLE_A, "A");
-		IRBuilder<> (second).CreateBr (h.exit);
-
-		expect_none ("join-of-a-barrier-is-not-a-single-dominator", h);
-	}
-
-	{
-		/* A trigger inside the cold arm of a barrier for the same class is,
-		 * though - the guarded call dominates it. */
+		/* A trigger inside the cold arm, after the guarded one, is covered. */
 		Harness h ("trigger-inside-cold-arm");
 		Check check = emit_check (h, h.entry, VTABLE_A, "A");
-		CallInst *guarded = emit_trigger (h, check.not_inited, VTABLE_A, "A");
+		emit_trigger (h, check.not_inited, VTABLE_A, "A");
 		CallInst *extra = emit_trigger (h, check.not_inited, VTABLE_A, "A");
 		IRBuilder<> (check.not_inited).CreateBr (h.exit);
 		IRBuilder<> (check.inited).CreateBr (h.exit);
 
-		expect_one ("cold-arm-second-trigger", h, extra, ClassInitFactKind::PriorCall,
-		            guarded, VTABLE_A);
+		expect_redundant ("cold-arm-second-trigger", h, {extra});
 	}
+}
+
+/* ------------------------------------------------- the two facts meeting */
+
+static void
+cases_facts_meet (void)
+{
+	{
+		/*
+		 * The case the whole analysis exists for. Past a completed barrier the
+		 * class is initialized whichever arm was taken - one checked and found
+		 * it set, the other called the trigger - so a second barrier for the
+		 * same class is redundant even though neither half of the first
+		 * dominates it.
+		 */
+		Harness h ("barrier-after-barrier");
+		Barrier first = emit_barrier (h, h.entry, VTABLE_A, "A");
+		Barrier second = emit_barrier (h, first.join, VTABLE_A, "A");
+		IRBuilder<> (second.join).CreateBr (h.exit);
+
+		expect_redundant ("barrier-covers-a-later-barrier", h, {second.trigger});
+	}
+
+	{
+		/* And a bare trigger past the join, with no second check at all. */
+		Harness h ("trigger-after-barrier");
+		Barrier first = emit_barrier (h, h.entry, VTABLE_A, "A");
+		CallInst *later = emit_trigger (h, first.join, VTABLE_A, "A");
+		IRBuilder<> (first.join).CreateBr (h.exit);
+
+		expect_redundant ("barrier-covers-a-later-trigger", h, {later});
+	}
+
+	{
+		/* A barrier for A says nothing about B. */
+		Harness h ("barrier-then-other-class");
+		Barrier first = emit_barrier (h, h.entry, VTABLE_A, "A");
+		Barrier second = emit_barrier (h, first.join, VTABLE_B, "B");
+		IRBuilder<> (second.join).CreateBr (h.exit);
+
+		expect_none ("barrier-does-not-cover-another-class", h);
+	}
+
+	{
+		/*
+		 * Three in a row: the second is covered by the first, and the third by
+		 * either of them. Reported in program order.
+		 */
+		Harness h ("three-barriers");
+		Barrier a = emit_barrier (h, h.entry, VTABLE_A, "A");
+		Barrier b = emit_barrier (h, a.join, VTABLE_A, "A");
+		Barrier c = emit_barrier (h, b.join, VTABLE_A, "A");
+		IRBuilder<> (c.join).CreateBr (h.exit);
+
+		expect_redundant ("chain-of-barriers", h, {b.trigger, c.trigger});
+	}
+
+	{
+		/*
+		 * The two facts arriving from different arms of an unrelated `if`: one
+		 * side ran a trigger, the other took a check's yes edge. Either is
+		 * enough, so the merge has it.
+		 */
+		Harness h ("mixed-facts-merge");
+		auto [left, right] = h.fork (h.entry);
+		BasicBlock *join = h.block ("join");
+
+		emit_trigger (h, left, VTABLE_A, "A");
+		IRBuilder<> (left).CreateBr (join);
+
+		Check check = emit_check (h, right, VTABLE_A, "A");
+		IRBuilder<> (check.inited).CreateBr (join);
+		/* The arm that found it clear runs the trigger, as a barrier would. */
+		emit_trigger (h, check.not_inited, VTABLE_A, "A");
+		IRBuilder<> (check.not_inited).CreateBr (join);
+
+		CallInst *after = emit_trigger (h, join, VTABLE_A, "A");
+		IRBuilder<> (join).CreateBr (h.exit);
+
+		expect_redundant ("call-and-check-meet", h, {after});
+	}
+
+	{
+		/* But if one arm only *checked* and let the clear case through
+		 * uncovered, the merge has nothing. */
+		Harness h ("half-covered-merge");
+		auto [left, right] = h.fork (h.entry);
+		BasicBlock *join = h.block ("join");
+
+		emit_trigger (h, left, VTABLE_A, "A");
+		IRBuilder<> (left).CreateBr (join);
+
+		Check check = emit_check (h, right, VTABLE_A, "A");
+		IRBuilder<> (check.inited).CreateBr (join);
+		IRBuilder<> (check.not_inited).CreateBr (join);
+
+		emit_trigger (h, join, VTABLE_A, "A");
+		IRBuilder<> (join).CreateBr (h.exit);
+
+		expect_none ("uncovered-arm-poisons-the-merge", h);
+	}
+
+	{
+		/*
+		 * A loop. The header's trigger is not covered - the first iteration
+		 * arrives from the entry with nothing behind it - but the body's is,
+		 * from the header on every iteration.
+		 */
+		Harness h ("trigger-in-a-loop");
+		BasicBlock *header = h.block ("header");
+		BasicBlock *body = h.block ("body");
+		IRBuilder<> (h.entry).CreateBr (header);
+
+		emit_trigger (h, header, VTABLE_A, "A");
+		IRBuilder<> hb (header);
+		hb.CreateCondBr (hb.CreateICmpSGT (h.func->getArg (0), hb.getInt32 (0)), body, h.exit);
+
+		CallInst *in_body = emit_trigger (h, body, VTABLE_A, "A");
+		IRBuilder<> (body).CreateBr (header);
+
+		expect_redundant ("loop-header-covers-the-body", h, {in_body});
+	}
+
+	{
+		/*
+		 * A trigger reached only from a loop back edge, with no fact ahead of
+		 * it. Interior blocks start out optimistically covered, so this is the
+		 * case that catches a fixpoint that never runs.
+		 */
+		Harness h ("bare-loop");
+		BasicBlock *header = h.block ("header");
+		BasicBlock *body = h.block ("body");
+		IRBuilder<> (h.entry).CreateBr (header);
+
+		IRBuilder<> hb (header);
+		hb.CreateCondBr (hb.CreateICmpSGT (h.func->getArg (0), hb.getInt32 (0)), body, h.exit);
+
+		emit_trigger (h, body, VTABLE_A, "A");
+		IRBuilder<> (body).CreateBr (header);
+
+		expect_none ("loop-does-not-cover-itself", h);
+	}
+}
+
+/* ---------------------------------------------------- a throwing trigger */
+
+static void
+cases_invoke (void)
+{
+	/*
+	 * A trigger inside a try region is an invoke. Its normal edge carries the
+	 * fact; its unwind edge is where the cctor threw, and there the class is
+	 * emphatically not initialized - a barrier on that path still has to run.
+	 */
+	Harness h ("invoking-trigger");
+	llvm::LLVMContext &ctx = h.ctx;
+
+	auto *personality = llvm::Function::Create (
+		llvm::FunctionType::get (llvm::Type::getInt32Ty (ctx), true),
+		Function::ExternalLinkage, "__gxx_personality_v0", h.module.get ());
+	h.func->setPersonalityFn (personality);
+
+	BasicBlock *normal = h.block ("normal");
+	BasicBlock *lpad = h.block ("lpad");
+
+	IRBuilder<> b (h.entry);
+	llvm::InvokeInst *invoke = b.CreateInvoke (h.trigger_callee (), normal, lpad,
+	                                           {b.getInt64 (VTABLE_A)});
+	h.tag (invoke, "mono.class-init", "A");
+
+	IRBuilder<> lb (lpad);
+	auto *clause_ty = llvm::StructType::get (b.getPtrTy (), b.getInt32Ty ());
+	lb.CreateLandingPad (clause_ty, 0)->setCleanup (true);
+	emit_trigger (h, lpad, VTABLE_A, "A");
+	IRBuilder<> (lpad).CreateBr (h.exit);
+
+	CallInst *after = emit_trigger (h, normal, VTABLE_A, "A");
+	IRBuilder<> (normal).CreateBr (h.exit);
+
+	expect_redundant ("invoke-covers-only-its-normal-edge", h, {after});
 }
 
 /* --------------------------------------------- shapes the optimizer produces */
@@ -444,12 +617,11 @@ cases_shapes (void)
 		IRBuilder<> (check.inited).CreateBr (h.exit);
 		IRBuilder<> (check.not_inited).CreateBr (h.exit);
 
-		expect_one ("inverted-check-yes-edge", h, call, ClassInitFactKind::InitializedEdge,
-		            check.branch, VTABLE_A);
+		expect_redundant ("inverted-check-yes-edge", h, {call});
 	}
 
 	{
-		/* And the trigger on an inverted check's cold arm still is not redundant. */
+		/* And the trigger on an inverted check's cold arm still is not covered. */
 		Shape shape;
 		shape.inverted = true;
 
@@ -477,8 +649,7 @@ cases_shapes (void)
 		IRBuilder<> (check.inited).CreateBr (h.exit);
 		IRBuilder<> (check.not_inited).CreateBr (h.exit);
 
-		expect_one ("gep-form-address", h, call, ClassInitFactKind::InitializedEdge,
-		            check.branch, VTABLE_A);
+		expect_redundant ("gep-form-address", h, {call});
 	}
 
 	{
@@ -492,8 +663,7 @@ cases_shapes (void)
 		IRBuilder<> (check.inited).CreateBr (h.exit);
 		IRBuilder<> (check.not_inited).CreateBr (h.exit);
 
-		expect_one ("no-expect-wrapper", h, call, ClassInitFactKind::InitializedEdge,
-		            check.branch, VTABLE_A);
+		expect_redundant ("no-expect-wrapper", h, {call});
 	}
 
 	{
@@ -518,12 +688,8 @@ cases_shapes (void)
 		 * be what decides.
 		 */
 		Harness h ("stale-check-tag");
-		IRBuilder<> b (h.entry);
-		BasicBlock *left = h.block ("left");
-		BasicBlock *right = h.block ("right");
-		BranchInst *br = b.CreateCondBr (b.CreateICmpSGT (h.func->getArg (0), b.getInt32 (0)),
-		                                 left, right);
-		h.tag (br, "mono.class-init-check", "A");
+		auto [left, right] = h.fork (h.entry);
+		h.tag (h.entry->getTerminator (), "mono.class-init-check", "A");
 
 		emit_trigger (h, left, VTABLE_A, "A");
 		IRBuilder<> (left).CreateBr (h.exit);
@@ -539,15 +705,26 @@ cases_shapes (void)
 		 * compare, so it is neither a fact nor a candidate.
 		 */
 		Harness h ("non-constant-trigger");
-		CallInst *first = emit_trigger (h, h.entry, VTABLE_A, "A");
+		emit_trigger (h, h.entry, VTABLE_A, "A");
 		IRBuilder<> b (h.entry);
 		CallInst *dynamic = b.CreateCall (h.trigger_callee (),
 		                                  {b.CreateZExt (h.func->getArg (0), b.getInt64Ty ())});
 		h.tag (dynamic, "mono.class-init", "A");
 		b.CreateBr (h.exit);
-		(void) first;
 
 		expect_none ("non-constant-vtable-ignored", h);
+	}
+
+	{
+		/* Dead code is covered vacuously, which is true and useless; it stays
+		 * out of the result rather than inviting a transform into it. */
+		Harness h ("unreachable-trigger");
+		BasicBlock *orphan = h.block ("orphan");
+		IRBuilder<> (h.entry).CreateBr (h.exit);
+		emit_trigger (h, orphan, VTABLE_A, "A");
+		IRBuilder<> (orphan).CreateBr (h.exit);
+
+		expect_none ("unreachable-block-not-reported", h);
 	}
 }
 
@@ -570,19 +747,12 @@ cases_analysis_manager (void)
 
 	auto &result = fam.getResult<mono::ClassInitElisionAnalysis> (*h.func);
 
-	if (result.redundant ().size () != 1) {
+	if (result.redundant ().size () != 1)
 		fail ("analysis-manager-result", "expected exactly 1 redundant trigger");
-		return;
-	}
-
-	const RedundantClassInit *found = result.lookup (second);
-	if (!found)
-		fail ("analysis-manager-lookup", "lookup () did not find the redundant call");
-	else if (found->fact != first)
-		fail ("analysis-manager-lookup", "lookup () reported the wrong dominating fact");
-
-	if (result.lookup (first))
-		fail ("analysis-manager-lookup", "the dominating call was itself reported redundant");
+	if (!result.is_redundant (second))
+		fail ("analysis-manager-lookup", "the covered call was not reported redundant");
+	if (result.is_redundant (first))
+		fail ("analysis-manager-lookup", "the covering call was itself reported redundant");
 }
 
 /* ------------------------------------------------------------ entry point */
@@ -601,7 +771,9 @@ test_llvm_class_init_main (void)
 	setvbuf (stdout, nullptr, _IOLBF, 0);
 
 	cases_prior_call ();
-	cases_initialized_edge ();
+	cases_initialized_check ();
+	cases_facts_meet ();
+	cases_invoke ();
 	cases_shapes ();
 	cases_analysis_manager ();
 

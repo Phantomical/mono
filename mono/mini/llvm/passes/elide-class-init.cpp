@@ -18,9 +18,14 @@
 #include "elide-class-init.hpp"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DepthFirstIterator.h>
+#include <llvm/ADT/PostOrderIterator.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/InstrTypes.h>
@@ -152,97 +157,206 @@ decode_check (const BranchInst *branch, const DataLayout &dl, DecodedCheck *out)
 	return true;
 }
 
-} // namespace
+/* Everything tagged in one function, decoded once and shared by all the classes. */
+struct Barriers {
+	DenseMap<const CallBase *, uint64_t> triggers;
+	DenseMap<const BranchInst *, DecodedCheck> checks;
+	/* The distinct vtables, in first-seen order, so results are deterministic. */
+	SmallVector<uint64_t, 2> classes;
+};
 
-SmallVector<mono::RedundantClassInit, 4>
-mono::find_redundant_class_inits (Function &f, const DominatorTree &dt)
+Barriers
+collect_barriers (Function &f)
 {
 	const DataLayout &dl = f.getParent ()->getDataLayout ();
-
-	SmallVector<std::pair<CallBase *, uint64_t>, 4> calls;
-	SmallVector<std::pair<BranchInst *, DecodedCheck>, 4> checks;
+	Barriers out;
 
 	for (Instruction &ins : instructions (f)) {
-		if (auto *call = dyn_cast<CallBase> (&ins)) {
-			uint64_t vtable;
+		uint64_t vtable;
 
-			if (call->getMetadata (kInitTag) && trigger_vtable (call, dl, &vtable))
-				calls.emplace_back (call, vtable);
+		if (auto *call = dyn_cast<CallBase> (&ins)) {
+			if (!call->getMetadata (kInitTag) || !trigger_vtable (call, dl, &vtable))
+				continue;
+			out.triggers [call] = vtable;
 		} else if (auto *branch = dyn_cast<BranchInst> (&ins)) {
 			DecodedCheck check;
 
-			if (branch->getMetadata (kCheckTag) && decode_check (branch, dl, &check))
-				checks.emplace_back (branch, check);
+			if (!branch->getMetadata (kCheckTag) || !decode_check (branch, dl, &check))
+				continue;
+			out.checks [branch] = check;
+			vtable = check.vtable;
+		} else {
+			continue;
+		}
+
+		if (!is_contained (out.classes, vtable))
+			out.classes.push_back (vtable);
+	}
+
+	return out;
+}
+
+/* What a block contributes to the fact for one class. */
+struct BlockFacts {
+	/* A trigger among the block's non-terminator instructions: by the time
+	 * control leaves the block it has returned, so every outgoing edge has it. */
+	bool body_trigger = false;
+	/* A trigger that *is* the terminator, i.e. an invoke inside a try region.
+	 * Only its normal edge carries the fact - down the unwind edge the cctor
+	 * threw and the class is emphatically not initialized. */
+	const InvokeInst *invoke_trigger = nullptr;
+	/* A check, and the edge it leaves by when the byte was already set. */
+	const BasicBlock *inited_edge = nullptr;
+};
+
+/*
+ * Mark every trigger call for VTABLE that is already covered where it stands.
+ *
+ * A forward must-analysis: the fact holds on entry to a block only if it held
+ * along every incoming edge, which is what makes a completed barrier count -
+ * one arm checked, the other called, and the join has it either way. Interior
+ * blocks start optimistic and are refined downward to the fixpoint, so a fact
+ * generated inside a loop still covers a later trigger in the same loop.
+ * Nothing ever clears the fact - a class does not become uninitialized again -
+ * so there is no kill set to carry.
+ */
+void
+cover_class (Function &f, uint64_t vtable, const Barriers &barriers,
+             const SmallPtrSetImpl<BasicBlock *> &live,
+             SmallPtrSetImpl<const CallBase *> &covered)
+{
+	auto trigger_for = [&] (const Instruction &ins) {
+		const auto *call = dyn_cast<CallBase> (&ins);
+		if (!call)
+			return false;
+		auto it = barriers.triggers.find (call);
+		return it != barriers.triggers.end () && it->second == vtable;
+	};
+
+	DenseMap<const BasicBlock *, BlockFacts> facts;
+	DenseMap<const BasicBlock *, bool> known_in;
+	BasicBlock *entry = &f.getEntryBlock ();
+
+	for (BasicBlock *bb : live) {
+		BlockFacts bf;
+
+		for (Instruction &ins : *bb) {
+			if (!trigger_for (ins))
+				continue;
+			if (auto *invoke = dyn_cast<InvokeInst> (&ins))
+				bf.invoke_trigger = invoke;
+			else
+				bf.body_trigger = true;
+		}
+
+		if (auto *branch = dyn_cast<BranchInst> (bb->getTerminator ())) {
+			auto it = barriers.checks.find (branch);
+			if (it != barriers.checks.end () && it->second.vtable == vtable)
+				bf.inited_edge = branch->getSuccessor (it->second.inited_succ);
+		}
+
+		facts [bb] = bf;
+		known_in [bb] = bb != entry;
+	}
+
+	auto edge_known = [&] (const BasicBlock *from, const BasicBlock *to) {
+		const BlockFacts &bf = facts [from];
+
+		if (bf.body_trigger)
+			return true;
+		if (bf.invoke_trigger && to == bf.invoke_trigger->getNormalDest ())
+			return true;
+		if (bf.inited_edge == to)
+			return true;
+		return known_in [from];
+	};
+
+	/* Reverse post-order so most blocks settle in the first sweep. */
+	ReversePostOrderTraversal<Function *> rpo (&f);
+	bool changed = true;
+	while (changed) {
+		changed = false;
+
+		for (BasicBlock *bb : rpo) {
+			if (bb == entry || !live.count (bb))
+				continue;
+
+			bool in = true;
+			for (BasicBlock *pred : predecessors (bb)) {
+				/* A dead predecessor is not a path anyone takes. */
+				if (!live.count (pred))
+					continue;
+				if (!edge_known (pred, bb)) {
+					in = false;
+					break;
+				}
+			}
+
+			if (in != known_in [bb]) {
+				known_in [bb] = in;
+				changed = true;
+			}
 		}
 	}
 
+	for (BasicBlock *bb : live) {
+		bool known = known_in [bb];
+
+		for (Instruction &ins : *bb) {
+			bool is_trigger = trigger_for (ins);
+
+			if (is_trigger && known)
+				covered.insert (cast<CallBase> (&ins));
+			/* A trigger covers what follows it, never itself. */
+			known = known || is_trigger;
+		}
+	}
+}
+
+} // namespace
+
+SmallVector<mono::RedundantClassInit, 4>
+mono::find_redundant_class_inits (Function &f)
+{
+	Barriers barriers = collect_barriers (f);
+	if (barriers.triggers.empty ())
+		return {};
+
+	SmallPtrSet<BasicBlock *, 16> live;
+	for (BasicBlock *bb : depth_first (&f.getEntryBlock ()))
+		live.insert (bb);
+
+	SmallPtrSet<const CallBase *, 4> covered;
+	for (uint64_t vtable : barriers.classes)
+		cover_class (f, vtable, barriers, live, covered);
+
 	SmallVector<RedundantClassInit, 4> redundant;
+	for (Instruction &ins : instructions (f)) {
+		auto *call = dyn_cast<CallBase> (&ins);
 
-	for (auto &[call, vtable] : calls) {
-		/*
-		 * A dominating trigger call for the same class. Two calls can never
-		 * dominate each other, so nothing here can pair a call with itself
-		 * transitively - and a dominating call that is itself redundant is
-		 * harmless: whatever dominates it dominates this call too, and shows up
-		 * in this call's own search.
-		 */
-		bool found = false;
-
-		for (auto &[other, other_vtable] : calls) {
-			if (other == call || other_vtable != vtable)
-				continue;
-			if (dt.dominates (static_cast<const Instruction *> (other), call)) {
-				redundant.push_back ({call, other, ClassInitFactKind::PriorCall, vtable});
-				found = true;
-				break;
-			}
-		}
-		if (found)
-			continue;
-
-		/* Or a check for the same class whose "already initialized" edge dominates us. */
-		for (auto &[branch, check] : checks) {
-			if (check.vtable != vtable)
-				continue;
-
-			BasicBlockEdge edge (branch->getParent (), branch->getSuccessor (check.inited_succ));
-			if (dt.dominates (edge, call->getParent ())) {
-				redundant.push_back ({call, branch, ClassInitFactKind::InitializedEdge, vtable});
-				break;
-			}
-		}
+		if (call && covered.count (call))
+			redundant.push_back ({call, barriers.triggers.lookup (call)});
 	}
 
 	return redundant;
 }
 
-const mono::RedundantClassInit *
-mono::ClassInitElisionAnalysis::Result::lookup (const CallBase *call) const
+bool
+mono::ClassInitElisionAnalysis::Result::is_redundant (const CallBase *call) const
 {
 	for (const RedundantClassInit &entry : redundant_) {
 		if (entry.call == call)
-			return &entry;
+			return true;
 	}
-	return nullptr;
-}
-
-bool
-mono::ClassInitElisionAnalysis::Result::invalidate (Function &f, const PreservedAnalyses &pa,
-                                                    FunctionAnalysisManager::Invalidator &inv)
-{
-	auto checker = pa.getChecker<ClassInitElisionAnalysis> ();
-
-	/* Every answer here is a dominance question, so a stale tree is a stale result. */
-	return !(checker.preserved () || checker.preservedSet<AllAnalysesOn<Function>> ())
-	       || inv.invalidate<DominatorTreeAnalysis> (f, pa);
+	return false;
 }
 
 AnalysisKey mono::ClassInitElisionAnalysis::Key;
 
 mono::ClassInitElisionAnalysis::Result
-mono::ClassInitElisionAnalysis::run (Function &f, FunctionAnalysisManager &fam)
+mono::ClassInitElisionAnalysis::run (Function &f, FunctionAnalysisManager &)
 {
-	return Result (find_redundant_class_inits (f, fam.getResult<DominatorTreeAnalysis> (f)));
+	return Result (find_redundant_class_inits (f));
 }
 
 #endif /* ENABLE_LLVM */
