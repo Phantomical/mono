@@ -2148,8 +2148,6 @@ mono_emit_jit_dump_code (const char *name, gpointer code, guint32 code_size, con
 
 		record.code_index = ++code_index;
 
-		// TODO: write debugInfo immediately before the JitCodeLoadRecord (while lock is held).
-
 		record.header.timestamp = mono_clock_get_time_ns (clock_id);
 
 		if (pre_record)

@@ -23,13 +23,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #ifdef ENABLE_LLVM
 
 #include "mini/llvm/jitdump.hpp"
 
+using mono::build_perf_debug_info;
 using mono::build_perf_unwind_data;
+using mono::PerfDebugEntry;
 using mono::PERF_EH_FRAME_HDR_SIZE;
 using mono::PERF_ELF_TEXT_OFFSET;
 using mono::PERF_ELF_EH_FRAME_ALIGN;
@@ -335,6 +338,112 @@ case_truncation (void)
 	}
 }
 
+/* ------------------------------------------------ JIT_CODE_DEBUG_INFO */
+
+/*
+ * Walk a debug-info record the way perf does: a 32-byte head, then nr_entry
+ * variable-length entries, each a fixed 16 bytes followed by a NUL-terminated
+ * name. Nothing is padded or aligned, so a wrong size anywhere desynchronizes
+ * the walk - which is exactly what this is here to catch.
+ */
+struct ReadDebugEntry {
+	std::uint64_t addr;
+	std::int32_t lineno;
+	std::int32_t discrim;
+	std::string name;
+};
+
+static bool
+read_debug_record (const std::vector<std::uint8_t> &rec, std::uint64_t &code_addr,
+                   std::vector<ReadDebugEntry> &out)
+{
+	std::uint32_t id, total_size;
+	std::uint64_t nr_entry;
+	std::size_t at;
+
+	if (rec.size () < 32)
+		return false;
+	std::memcpy (&id, rec.data () + 0, 4);
+	std::memcpy (&total_size, rec.data () + 4, 4);
+	std::memcpy (&code_addr, rec.data () + 16, 8);
+	std::memcpy (&nr_entry, rec.data () + 24, 8);
+
+	if (id != 2 || total_size != rec.size ())
+		return false;
+
+	at = 32;
+	for (std::uint64_t i = 0; i < nr_entry; ++i) {
+		ReadDebugEntry e;
+
+		if (at + 16 > rec.size ())
+			return false;
+		std::memcpy (&e.addr, rec.data () + at, 8);
+		std::memcpy (&e.lineno, rec.data () + at + 8, 4);
+		std::memcpy (&e.discrim, rec.data () + at + 12, 4);
+		at += 16;
+
+		const char *name = (const char *) rec.data () + at;
+		std::size_t max = rec.size () - at;
+		std::size_t len = strnlen (name, max);
+		if (len == max)             /* unterminated */
+			return false;
+		e.name.assign (name, len);
+		at += len + 1;
+
+		out.push_back (std::move (e));
+	}
+
+	/* Every byte must be accounted for, or the walk and the writer disagree. */
+	return at == rec.size ();
+}
+
+static void
+case_debug_info_roundtrip (void)
+{
+	const std::uint64_t code_addr = 0x400000;
+	std::vector<PerfDebugEntry> entries;
+	std::vector<std::uint8_t> out;
+	std::uint64_t got_addr = 0;
+	std::vector<ReadDebugEntry> got;
+
+	entries.push_back ({code_addr + 0,    1, 0, "Foo.cs"});
+	entries.push_back ({code_addr + 0x10, 7, 0, "Foo.cs"});
+	/* A different, longer name: the entries are variable length. */
+	entries.push_back ({code_addr + 0x2b, 42, 0, "Namespace.Type:Method (int,string)"});
+
+	check (build_perf_debug_info (code_addr, entries, out),
+	       "entries produce a debug-info record");
+	if (out.empty ())
+		return;
+
+	check (read_debug_record (out, got_addr, got),
+	       "the record walks cleanly to its last byte");
+	check_eq ((std::int64_t) got_addr, (std::int64_t) code_addr,
+	          "code_addr is the address the rows are measured against");
+	check_eq ((std::int64_t) got.size (), 3, "every entry survives");
+	if (got.size () != 3)
+		return;
+
+	for (std::size_t i = 0; i < 3; ++i) {
+		check_eq ((std::int64_t) got [i].addr, (std::int64_t) entries [i].addr,
+		          "entry address round-trips");
+		check_eq (got [i].lineno, entries [i].lineno, "entry line round-trips");
+		check (got [i].name == entries [i].name, "entry name round-trips");
+	}
+}
+
+static void
+case_debug_info_declines_empty (void)
+{
+	std::vector<PerfDebugEntry> entries;
+	std::vector<std::uint8_t> out;
+
+	check (!build_perf_debug_info (0x400000, entries, out),
+	       "no rows means no record rather than an empty one");
+	check (out.empty (), "the output is left untouched when declined");
+}
+
+
 #ifdef __cplusplus
 extern "C"
 #endif
@@ -353,6 +462,8 @@ test_llvm_jitdump_main (void)
 	case_declines_unknown_encoding ();
 	case_declines_missing_fde ();
 	case_truncation ();
+	case_debug_info_roundtrip ();
+	case_debug_info_declines_empty ();
 
 	printf ("%d cases run, %d failed\n", cases_run, failures);
 	return failures ? 1 : 0;

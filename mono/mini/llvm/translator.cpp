@@ -2461,7 +2461,8 @@ EmitContext::llvm_jit_finalize_method ()
 	 * mono_emit_jit_dump () call anyway.
 	 */
 	mono_llvm_jitdump_emit_method (cfg->method, cfg->native_code, cfg->code_len,
-	                               static_cast<const guint8*>(dwarf_eh_frame), dwarf_eh_frame_size);
+	                               static_cast<const guint8*>(dwarf_eh_frame), dwarf_eh_frame_size,
+	                               cfg->llvm_seq_points, cfg->n_llvm_seq_points);
 }
 
 #else

@@ -67,17 +67,18 @@ void      mono_llvm_jit_init (void);
 gboolean  mono_llvm_eh_frame_to_unwind_ops (guint8 *eh_frame, guint32 eh_frame_size, gpointer code_start, guint32 code_len, GSList **out_ops);
 
 /*
- * Report a just-compiled tier-1 body to perf, as a JIT_CODE_LOAD record
- * preceded by the DWARF unwind tables recovered from EH_FRAME (llvm/jitdump.cpp).
+ * Report a just-compiled tier-1 body to perf, as a JIT_CODE_LOAD record preceded
+ * by the line table built from SEQ_POINTS and the DWARF unwind tables recovered
+ * from EH_FRAME (llvm/jitdump.cpp).
  *
  * A no-op unless --jitdump asked for the dump file. Methods that reach this
  * are not reported by mini.c's own mono_emit_jit_dump () call, which would
  * otherwise overwrite this richer record with a bare one.
  *
- * Unwind tables we cannot rebuild for perf's injected DSO are simply left out;
- * the method is still reported, just without them.
+ * Either extra is left out on its own terms - no seq points, or unwind tables we
+ * cannot rebuild for perf's injected DSO - and the method is still reported.
  */
-void      mono_llvm_jitdump_emit_method (MonoMethod *method, gpointer code, guint32 code_size, const guint8 *eh_frame, guint32 eh_frame_size);
+void      mono_llvm_jitdump_emit_method (MonoMethod *method, gpointer code, guint32 code_size, const guint8 *eh_frame, guint32 eh_frame_size, const MonoLLVMSeqPoint *seq_points, guint32 n_seq_points);
 
 /*
  * Explicit runtime-helper registration (ORCv2 absoluteSymbols), replacing the

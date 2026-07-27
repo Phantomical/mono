@@ -16,9 +16,13 @@
  * JIT has only mono's own unwind ops, which would have to be transcoded first,
  * so it keeps the plain record.
  *
- * Line numbers (JIT_CODE_DEBUG_INFO) are not emitted. Nothing in the tier-1
- * pipeline carries IL-to-native line information far enough to reconstruct
- * them, so a profile gets function-level attribution and no better.
+ * Line numbers (JIT_CODE_DEBUG_INFO) come from the same place: the translator
+ * records IL offsets as debug info and the engine reads a native_offset ->
+ * il_offset map back out of the emitted object, which is exactly the line table
+ * this record wants. Where the method's assembly ships symbols the rows are
+ * resolved the rest of the way to real file and line; where it does not, the row
+ * reports the IL offset against the method's own name, which is still enough to
+ * tell two parts of one body apart in a profile.
  *
  * WHY THE .eh_frame IS REWRITTEN AND NOT COPIED
  *
@@ -55,8 +59,10 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
+#include <mono/metadata/mono-debug.h>
 #include <mono/utils/mono-time.h>
 
 #include "mini.h"
@@ -89,6 +95,7 @@
 namespace {
 
 enum {
+	JIT_CODE_DEBUG_INFO = 2,
 	JIT_CODE_UNWINDING_INFO = 4,
 };
 
@@ -100,6 +107,13 @@ struct RecordHeader {
 	std::uint32_t id;
 	std::uint32_t total_size;
 	std::uint64_t timestamp;
+};
+
+struct DebugInfoRecord {
+	RecordHeader header;
+	std::uint64_t code_addr;
+	std::uint64_t nr_entry;
+	/* Followed by nr_entry variable-length entries: addr, lineno, discrim, name. */
 };
 
 struct UnwindingRecord {
@@ -114,6 +128,7 @@ struct UnwindingRecord {
  * struct here would silently shift every byte of unwind data. */
 static_assert (sizeof (RecordHeader) == 16, "jitdump record header must be 16 bytes");
 static_assert (sizeof (UnwindingRecord) == 40, "jitdump unwinding record must be 40 bytes");
+static_assert (sizeof (DebugInfoRecord) == 32, "jitdump debug-info record must be 32 bytes");
 
 /*
  * A bounds-checked cursor over a CIE. Once a read runs off the end the cursor
@@ -377,6 +392,49 @@ write32 (std::vector<std::uint8_t> &buf, std::uint32_t offset, std::int32_t valu
 } /* anonymous namespace */
 
 bool
+mono::build_perf_debug_info (std::uint64_t code_addr,
+                             const std::vector<mono::PerfDebugEntry> &entries,
+                             std::vector<std::uint8_t> &out)
+{
+	if (entries.empty ())
+		return false;
+
+	/*
+	 * Entries are variable length - a fixed head and then a NUL-terminated name -
+	 * and perf reads them by walking, not by indexing, so nothing here is padded
+	 * or aligned.
+	 */
+	std::size_t payload = 0;
+	for (const mono::PerfDebugEntry &e : entries)
+		payload += 8 + 4 + 4 + e.name.size () + 1;
+
+	DebugInfoRecord rec;
+	std::memset (&rec, 0, sizeof (rec));
+	rec.header.id = JIT_CODE_DEBUG_INFO;
+	rec.header.total_size = (std::uint32_t) (sizeof (rec) + payload);
+	rec.header.timestamp = mono_clock_get_time_ns (CLOCK_MONOTONIC);
+	rec.code_addr = code_addr;
+	rec.nr_entry = entries.size ();
+
+	out.resize (sizeof (rec) + payload);
+	std::memcpy (out.data (), &rec, sizeof (rec));
+
+	std::size_t at = sizeof (rec);
+	for (const mono::PerfDebugEntry &e : entries) {
+		std::memcpy (out.data () + at, &e.addr, 8);
+		at += 8;
+		std::memcpy (out.data () + at, &e.lineno, 4);
+		at += 4;
+		std::memcpy (out.data () + at, &e.discrim, 4);
+		at += 4;
+		std::memcpy (out.data () + at, e.name.c_str (), e.name.size () + 1);
+		at += e.name.size () + 1;
+	}
+
+	return true;
+}
+
+bool
 mono::build_perf_unwind_data (const std::uint8_t *code, std::uint32_t code_size,
                               const std::uint8_t *eh_frame, std::uint32_t eh_frame_size,
                               std::vector<std::uint8_t> &out)
@@ -422,16 +480,73 @@ mono::build_perf_unwind_data (const std::uint8_t *code, std::uint32_t code_size,
 	return true;
 }
 
+/*
+ * Turn this body's native_offset -> il_offset map into the rows perf wants.
+ *
+ * Where the method's assembly ships symbols each IL offset resolves the rest of
+ * the way to a real source file and line. Where it does not - the common case
+ * for a released assembly - the row still carries the IL offset, reported
+ * against the method's own name, which is what makes two parts of one body
+ * distinguishable in a profile at all.
+ */
+static void
+collect_debug_entries (MonoMethod *method, gpointer code, const char *name,
+                       const MonoLLVMSeqPoint *seq_points, guint32 n_seq_points,
+                       std::vector<mono::PerfDebugEntry> &out)
+{
+	MonoDomain *domain = mono_domain_get ();
+
+	out.reserve (n_seq_points);
+
+	for (guint32 i = 0; i < n_seq_points; ++i) {
+		mono::PerfDebugEntry entry;
+
+		entry.addr = (std::uint64_t) (gsize) code + seq_points [i].native_offset;
+		entry.discrim = 0;
+
+		MonoDebugSourceLocation *loc =
+			mono_debug_lookup_source_location_by_il (method, seq_points [i].il_offset, domain);
+		if (loc && loc->source_file) {
+			entry.lineno = (std::int32_t) loc->row;
+			entry.name = loc->source_file;
+		} else {
+			/* perf numbers lines from 1, and an IL offset starts at 0. */
+			entry.lineno = (std::int32_t) (seq_points [i].il_offset + 1);
+			entry.name = name;
+		}
+		if (loc)
+			mono_debug_free_source_location (loc);
+
+		out.push_back (std::move (entry));
+	}
+}
+
 void
 mono_llvm_jitdump_emit_method (MonoMethod *method, gpointer code, guint32 code_size,
-                               const guint8 *eh_frame, guint32 eh_frame_size)
+                               const guint8 *eh_frame, guint32 eh_frame_size,
+                               const MonoLLVMSeqPoint *seq_points, guint32 n_seq_points)
 {
 	std::vector<std::uint8_t> unwind_data;
+	std::vector<std::uint8_t> debug_record;
 	std::vector<std::uint8_t> record;
 	char *name;
 
 	if (!mono_jit_dump_is_enabled ())
 		return;
+
+	/*
+	 * The full name, so that the two bodies a promoted method leaves behind
+	 * are told apart by more than their addresses - the tier-0 record carries
+	 * the bare method name.
+	 */
+	name = mono_method_full_name (method, TRUE);
+
+	if (seq_points && n_seq_points) {
+		std::vector<mono::PerfDebugEntry> entries;
+
+		collect_debug_entries (method, code, name, seq_points, n_seq_points, entries);
+		mono::build_perf_debug_info ((std::uint64_t) (gsize) code, entries, debug_record);
+	}
 
 	if (mono::build_perf_unwind_data (static_cast<const std::uint8_t *> (code), code_size,
 	                                  eh_frame, eh_frame_size, unwind_data)) {
@@ -453,11 +568,12 @@ mono_llvm_jitdump_emit_method (MonoMethod *method, gpointer code, guint32 code_s
 	}
 
 	/*
-	 * The full name, so that the two bodies a promoted method leaves behind
-	 * are told apart by more than their addresses - the tier-0 record carries
-	 * the bare method name.
+	 * Both records attach to the next code load perf reads, so they go over as
+	 * one blob written under the file's lock rather than as separate calls.
 	 */
-	name = mono_method_full_name (method, TRUE);
+	if (!debug_record.empty ())
+		record.insert (record.begin (), debug_record.begin (), debug_record.end ());
+
 	mono_emit_jit_dump_code (name, code, code_size,
 	                         record.empty () ? NULL : record.data (),
 	                         (guint32) record.size ());

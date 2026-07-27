@@ -15,6 +15,7 @@
 #define __MONO_MINI_LLVM_JITDUMP_HPP__
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace mono {
@@ -42,6 +43,33 @@ constexpr std::uint32_t PERF_ELF_EH_FRAME_ALIGN = 8;
 bool build_perf_unwind_data (const std::uint8_t *code, std::uint32_t code_size,
                              const std::uint8_t *eh_frame, std::uint32_t eh_frame_size,
                              std::vector<std::uint8_t> &out);
+
+/*
+ * One line-table row as perf wants it: an absolute address in the code being
+ * reported, and where that address came from. `name` is whatever a reader should
+ * see in the file column.
+ */
+struct PerfDebugEntry {
+	std::uint64_t addr;
+	std::int32_t lineno;
+	std::int32_t discrim;
+	std::string name;
+};
+
+/*
+ * Serialize ENTRIES into a complete JIT_CODE_DEBUG_INFO record for the code at
+ * CODE_ADDR. ENTRIES must be ascending by address - perf walks them in order and
+ * treats each as running until the next.
+ *
+ * FALSE if there is nothing worth writing (no entries), leaving OUT untouched.
+ *
+ * Exposed for the same reason as build_perf_unwind_data (): the record is only
+ * ever read inside `perf inject --jit`, so nothing about the running process
+ * shows whether the bytes came out right.
+ */
+bool build_perf_debug_info (std::uint64_t code_addr,
+                            const std::vector<PerfDebugEntry> &entries,
+                            std::vector<std::uint8_t> &out);
 
 } // namespace mono
 
