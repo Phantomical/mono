@@ -1294,16 +1294,6 @@ tier1_root_allows_inlining (MonoCompile *cfg)
 		return false;
 	if (!(cfg->opt & MONO_OPT_INLINE))
 		return false;
-	/*
-	 * #2/#26: shared generic code. gsharedvt layout is frame-local and
-	 * unrecoverable once folded; a plain gshared root can reach an open,
-	 * type-parameter-bearing callee whose front-end aborts (method-to-ir.c's
-	 * !sig->has_type_parameters assert) the moment we try to materialize it -
-	 * see materialize_callee (). Refuse both outright at this slice: we do not
-	 * inline anything that touches generic sharing.
-	 */
-	if (cfg->gshared || cfg->gsharedvt)
-		return false;
 	return true;
 }
 
@@ -1314,10 +1304,6 @@ tier1_root_refusal_reason (MonoCompile *cfg)
 		return "refuse-root-disable-inline";
 	if (!(cfg->opt & MONO_OPT_INLINE))
 		return "refuse-root-no-opt-inline";
-	if (cfg->gshared)
-		return "refuse-root-gshared";
-	if (cfg->gsharedvt)
-		return "refuse-root-gsharedvt";
 	return "refuse-root";
 }
 
@@ -1560,11 +1546,7 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 	 * Compile the exact instantiation rather than the shared body mono hands
 	 * every reference-type instantiation of a sharable method. Clearing
 	 * MONO_OPT_GSHARED is the whole switch: mini_method_compile () only redirects
-	 * through mini_get_shared_method_full () when that bit is set. It is the
-	 * difference between List<string>:get_Item being inlinable and not - a
-	 * valuetype instantiation is not sharable, so those already specialized and
-	 * already inlined, while every reference-type one came back gshared and was
-	 * refused below.
+	 * through mini_get_shared_method_full () when that bit is set.
 	 *
 	 * The specialized body is also the better one to fold in: constant type
 	 * handles, no rgctx loads. It costs only the compile, since a materialized

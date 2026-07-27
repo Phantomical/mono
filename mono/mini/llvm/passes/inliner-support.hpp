@@ -40,11 +40,11 @@ void unregister_tier1_root (llvm::Function *root);
 MonoCompile *tier1_root_cfg (llvm::Function *root);
 
 /*
- * Whether ROOT_CFG permits inlining at all - the caller-level eligibility
- * gates: -O=inline on, not a debug method (disable_inline), and not shared
- * generic code (gshared/gsharedvt). A NOOPTIMIZATION method never becomes a
- * root in the first place, since it declines to the classic JIT before LLVM
- * ever sees it. Checked once per root.
+ * Whether ROOT_CFG permits inlining at all - the caller-level eligibility gates:
+ * -O=inline on, and not a method whose optimizer the user turned off
+ * (disable_inline). A NOOPTIMIZATION method never becomes a root in the first
+ * place, since it declines to the classic JIT before LLVM ever sees it. Checked
+ * once per root.
  */
 bool tier1_root_allows_inlining (MonoCompile *root_cfg);
 

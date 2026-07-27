@@ -69,10 +69,10 @@
  * wrappers, synchronized methods, open/shared-generic callees and anything that
  * still comes back gshared/gsharedvt mono-side.
  *
- * Generic callees are folded in by compiling the exact instantiation rather than
- * the shared body (materialize_callee ()), which is why a call site passing a
- * vtable/mrgctx in `nest` is no longer refused: the folded body is specialized,
- * so it has no generic context to recover and simply ignores the argument.
+ * A generic callee is materialized as its exact instantiation rather than as the
+ * shared body (materialize_callee ()), so a call site that passes a
+ * vtable/mrgctx in `nest` is eligible like any other: the folded body is
+ * specialized, has no generic context to recover, and ignores the argument.
  *
  * There is deliberately no size or leaf-only restriction here: bounding what is
  * worth folding in is the stock inliner's cost model's job, and starving it of
@@ -243,8 +243,20 @@ public:
 				continue;
 
 			auto config = tier1_root_cfg (&func);
-			if (!config)
+			if (!config) {
+				// Nothing to materialize with - the cfg is what drives every
+				// callee compile.
+				trace ("refuse-root-nocfg", func.getName ());
 				continue;
+			}
+
+			// -O=-inline, or a method the user asked not to have optimized.
+			// Honouring this here is what keeps a whole-run "inlined nothing"
+			// from being indistinguishable from "found nothing to inline".
+			if (!tier1_root_allows_inlining (config)) {
+				trace (tier1_root_refusal_reason (config), func.getName ());
+				continue;
+			}
 
 			// Make sure we can tell which method is under consideration here.
 			trace ("root", func.getName ());
@@ -459,11 +471,11 @@ private:
 			if (!cb || !cb->isCallee (&use))
 				continue;
 
-			// A call site may still pass a vtable/mrgctx in the `nest` parameter -
-			// the caller decided that from the callee's metadata. The body accepts
-			// it and ignores it: materialize_callee () compiles the exact
-			// instantiation, so there is no generic context left to recover from
-			// it, and it refuses anything that comes back gshared/gsharedvt.
+			// A call site may pass a vtable/mrgctx in the `nest` parameter - the
+			// caller decides that from the callee's metadata. The body accepts it
+			// and ignores it: materialize_callee () compiles the exact
+			// instantiation, so there is no generic context to recover from it,
+			// and it refuses anything that comes back gshared/gsharedvt.
 			//
 			// If the declaration signature is not equivalent then we should ICE.
 			g_assert (cb->getFunctionType () == body->getFunctionType ());
