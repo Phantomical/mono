@@ -1673,6 +1673,27 @@ MonoLLVMJIT::register_c_runtime_symbols ()
 		 */
 		{ "ldexp",    (void *) (uintptr_t) (double (*) (double, int)) &::ldexp },
 		{ "ldexpf",   (void *) (uintptr_t) (float (*) (float, int)) &::ldexpf },
+
+		/*
+		 * Same family as ldexp above, from the same optimizePow()/optimizeExp2()
+		 * machinery in SimplifyLibCalls: pow(10.0, x) unconditionally becomes
+		 * exp10(x), no fast-math flags required, so it fires on any llvm.pow
+		 * call mono emits for a literal base-10 Math.Pow. exp10 has no x86
+		 * instruction either.
+		 */
+		{ "exp10",    (void *) (uintptr_t) (d1) &::exp10 },
+		{ "exp10f",   (void *) (uintptr_t) (f1) &::exp10f },
+
+		/*
+		 * DAGCombiner rewrites pow(x, 1.0/3.0) into a cbrt() call - but only
+		 * under the nsz+ninf+nnan+afn fast-math flags, which mono only ever
+		 * sets when the runtime is started with --ffast-math (off by default,
+		 * see mono_use_fast_math). Registered anyway, same reasoning as
+		 * floor/ceil/trunc/fma above: cheap insurance against a codegen path
+		 * that only reproduces under a specific runtime flag.
+		 */
+		{ "cbrt",     (void *) (uintptr_t) (d1) &::cbrt },
+		{ "cbrtf",    (void *) (uintptr_t) (f1) &::cbrtf },
 	};
 
 	for (const auto &sym : c_runtime)
