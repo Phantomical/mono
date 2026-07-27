@@ -683,8 +683,7 @@ EmitContext::emit_method_inner ()
 		if (clause->flags == MONO_EXCEPTION_CLAUSE_FINALLY)
 			mono_llvm_add_func_attr_nv (method, "frame-pointer", "all");
 	}
-	if (header->num_clauses || (cfg->method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) || cfg->no_inline)
-		/* We can't handle inlined methods with clauses */
+	if ((cfg->method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) || cfg->no_inline)
 		mono_llvm_add_func_attr (method, LLVM_ATTR_NO_INLINE);
 
 	if (linfo->rgctx_arg) {

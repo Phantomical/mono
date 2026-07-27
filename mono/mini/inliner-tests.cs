@@ -879,16 +879,15 @@ public class InlinerTests {
 		}
 	}
 
-	// Unlike the other EH-clause callees below, this call site is excluded
-	// earlier than the personality-function gate: TryFinallyHotCaller needs
-	// its own try/catch to swallow LeafTryFinally's exception, so the call to
-	// LeafTryFinally compiles to an `invoke` (it has an unwind edge to this
-	// frame's own handler), and candidate_target()'s S0 guard - "invokes carry
-	// EH edges, out of scope for this slice" - refuses it before the
-	// personality-function/clause check ever runs. Net effect is identical
-	// (never inlined); LeafTryCatch and LeafNestedHandlers below are what
-	// demonstrate the personality-function gate itself, since neither of
-	// their callers wraps the call in its own handler.
+	// The fixture for the call-site half of the EH rule. TryFinallyHotCaller
+	// needs its own try/catch to swallow LeafTryFinally's exception, so the
+	// call compiles to an `invoke` - it has an unwind edge to this frame's own
+	// handler. Folding a clause-bearing body into a site like that would nest
+	// the two methods' clauses, and the pads the callee brings carry selector
+	// switches that know nothing of the caller's clauses, so the site keeps its
+	// trampoline call. Since this is LeafTryFinally's only caller, nothing ends
+	// up naming the materialized body and it is dropped again.
+	// INLINER-EXPECT: refused InlinerTests:LeafTryFinally (int)
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int TryFinallyHotCaller (int x) {
 		try {
@@ -1306,5 +1305,248 @@ public class InlinerTests {
 		for (int i = 0; i < ITERS; i++)
 			sum += ExceptionCtorHotCaller (i);
 		return sum == ITERS ? 0 : 1;
+	}
+
+	// ==========================================================================
+	// EXCEPTION CLAUSES. A callee carrying its own try/finally or try/catch is
+	// inlinable, because its clauses come along with it: the landing pads it
+	// brought name their own clauses, and .mono_lsda is built from those pads
+	// rather than from any one method's IL offsets.
+	//
+	// What decides eligibility is the CALL SITE, not the callee. At a plain call
+	// the callee's clauses land as an island in the caller and every pad's
+	// selector switch is already complete. At a call inside one of the caller's
+	// try regions - an invoke - the two methods' clauses would nest, and the
+	// pads the callee brought carry switches that know nothing of the caller's
+	// clauses, so that site keeps calling the trampoline.
+	//
+	// These are differential the same way the rest of the corpus is: the finally
+	// must run exactly once and the catch must swallow exactly what it declares,
+	// whichever tier compiled the frame.
+	// ==========================================================================
+
+	// No memory access anywhere, so no implicit null/bounds check - see the
+	// blockaddress note on test_0_finally_callee_folded_at_plain_site.
+	static int PureFinallyLeaf (int x) {
+		int r;
+		try {
+			r = x * 2;
+		} finally {
+			x = 0;
+		}
+		return r + x;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int PureFinallyHotCaller (int x) {
+		return PureFinallyLeaf (x);
+	}
+
+	// INLINER-EXPECT: folded InlinerTests:PureFinallyLeaf (int)
+	public static int test_0_pure_finally_callee_folded () {
+		int ITERS = Iters ();
+		int sum = 0;
+
+		for (int i = 0; i < ITERS; i++)
+			sum += PureFinallyHotCaller (i % 10);
+
+		return sum == ExpectedPureFinallySum (ITERS) ? 0 : 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	static int ExpectedPureFinallySum (int iters) {
+		int sum = 0;
+		for (int i = 0; i < iters; i++)
+			sum += (i % 10) * 2;
+		return sum;
+	}
+
+	// FinallyLeaf/CatchLeaf/ThrowThroughFinallyLeaf all touch memory or throw, so
+	// each carries an implicit null/bounds check, and emit_cond_throw () passes a
+	// blockaddress to the throw trampoline for those. LLVM's isInlineViable ()
+	// hard-refuses any function with a taken block address, so these reach its
+	// cost model and stop there - a general tier-1 limit that has nothing to do
+	// with EH (PureFinallyLeaf above is the same shape without the checks, and
+	// folds). They stay in the corpus as differential coverage of the clause
+	// paths themselves.
+	static int FinallyLeaf (int x, int[] log) {
+		try {
+			if (x == 7)
+				return 100;
+			return x;
+		} finally {
+			log [0] ++;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int FinallyHotCaller (int x, int[] log) {
+		return FinallyLeaf (x, log);
+	}
+
+	// INLINER-EXPECT: exposed InlinerTests:FinallyLeaf (int,int[])
+	public static int test_0_finally_callee_folded_at_plain_site () {
+		int ITERS = Iters ();
+		int[] log = new int [1];
+		int sum = 0;
+
+		for (int i = 0; i < ITERS; i++)
+			sum += FinallyHotCaller (i % 10, log);
+
+		// The finally has to have run once per call, and the x==7 early return
+		// still has to leave through it with the value it returned.
+		if (log [0] != ITERS)
+			return 1;
+		return sum == ExpectedFinallySum (ITERS) ? 0 : 2;
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	static int ExpectedFinallySum (int iters) {
+		int sum = 0;
+		for (int i = 0; i < iters; i++) {
+			int x = i % 10;
+			sum += x == 7 ? 100 : x;
+		}
+		return sum;
+	}
+
+	static int CatchLeaf (int x) {
+		try {
+			if (x == 3)
+				throw new InvalidOperationException ("three");
+			return x;
+		} catch (InvalidOperationException) {
+			return -1;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int CatchHotCaller (int x) {
+		return CatchLeaf (x);
+	}
+
+	// INLINER-EXPECT: exposed InlinerTests:CatchLeaf (int)
+	public static int test_0_catch_callee_folded_at_plain_site () {
+		int ITERS = Iters ();
+		int sum = 0;
+
+		for (int i = 0; i < ITERS; i++)
+			sum += CatchHotCaller (i % 10);
+
+		return sum == ExpectedCatchSum (ITERS) ? 0 : 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	static int ExpectedCatchSum (int iters) {
+		int sum = 0;
+		for (int i = 0; i < iters; i++) {
+			int x = i % 10;
+			sum += x == 3 ? -1 : x;
+		}
+		return sum;
+	}
+
+	// A clause-bearing callee whose caller also carries clauses, so both methods'
+	// tables are live in the same compile - the case root-scoped clause ids exist
+	// for. LeafTryFinally above is what pins the invoke-site rule itself.
+	static int NestedFinallyLeaf (int x, int[] log) {
+		try {
+			return x == 5 ? 50 : x;
+		} finally {
+			log [0] ++;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int NestedFinallyHotCaller (int x, int[] log) {
+		try {
+			return NestedFinallyLeaf (x, log);
+		} catch (InvalidOperationException) {
+			return -1;
+		}
+	}
+
+	// INLINER-EXPECT: exposed InlinerTests:NestedFinallyLeaf (int,int[])
+	public static int test_0_clause_callee_under_clause_bearing_caller () {
+		int ITERS = Iters ();
+		int[] log = new int [1];
+		int sum = 0;
+
+		for (int i = 0; i < ITERS; i++)
+			sum += NestedFinallyHotCaller (i % 10, log);
+
+		if (log [0] != ITERS)
+			return 1;
+		return sum == ExpectedNestedFinallySum (ITERS) ? 0 : 2;
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	static int ExpectedNestedFinallySum (int iters) {
+		int sum = 0;
+		for (int i = 0; i < iters; i++) {
+			int x = i % 10;
+			sum += x == 5 ? 50 : x;
+		}
+		return sum;
+	}
+
+	// A finally that a THROW passes through, so the inlined clause is exercised
+	// on the exceptional path and not just the leave path. The throw crosses the
+	// inlined finally and is caught by the non-inlined caller.
+	static int ThrowThroughFinallyLeaf (int x, int[] log) {
+		try {
+			if (x == 4)
+				throw new InvalidOperationException ("four");
+			return x;
+		} finally {
+			log [0] ++;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ThrowThroughFinallyHotCaller (int x, int[] log) {
+		return ThrowThroughFinallyLeaf (x, log);
+	}
+
+	// INLINER-EXPECT: exposed InlinerTests:ThrowThroughFinallyLeaf (int,int[])
+	public static int test_0_throw_through_inlined_finally () {
+		int ITERS = Iters ();
+		int[] log = new int [1];
+		int sum = 0, caught = 0;
+
+		for (int i = 0; i < ITERS; i++) {
+			try {
+				sum += ThrowThroughFinallyHotCaller (i % 10, log);
+			} catch (InvalidOperationException) {
+				caught ++;
+			}
+		}
+
+		// The finally runs on both paths, so once per call either way.
+		if (log [0] != ITERS)
+			return 1;
+		if (caught != ExpectedThrowCount (ITERS))
+			return 2;
+		return sum == ExpectedThrowSum (ITERS) ? 0 : 3;
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	static int ExpectedThrowCount (int iters) {
+		int n = 0;
+		for (int i = 0; i < iters; i++)
+			if (i % 10 == 4)
+				n ++;
+		return n;
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	static int ExpectedThrowSum (int iters) {
+		int sum = 0;
+		for (int i = 0; i < iters; i++) {
+			int x = i % 10;
+			if (x != 4)
+				sum += x;
+		}
+		return sum;
 	}
 }

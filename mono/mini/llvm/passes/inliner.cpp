@@ -47,11 +47,8 @@
  *     callee declaration symbol maps back to a MonoMethod);
  *   - NOT self-recursive: the root's own body is a definition, not a
  *     declaration, so it is skipped by the "callee is a declaration" test;
- *   - clause-free (no personality function) - gate #8, the wrong-EH-handler
- *     silent-miscompile trap: the custom-emit EH clause_index join key is not
- *     namespaced per inlined callee;
- *   - not `noinline` (covers clause-bearing/user-NoInlining/reflection-frame
- *     callees, which the translator already tags);
+ *   - not `noinline` (covers user-NoInlining and reflection-frame callees,
+ *     which the translator already tags);
  *   - does not read/write class-init-guarded static state - a callee whose body
  *     touches a static field of a class with a non-trivial cctor. Inlining
  *     drops the class-init barrier that its own managed call carried, so the
@@ -62,12 +59,16 @@
  *   - does not ask the runtime about its own frame - GetCurrentMethod,
  *     GetCallingAssembly, StackTrace's frame 0. Folding such a callee in makes
  *     those report the caller's frame instead (gate #25);
- *   - and the invoke / musttail guards.
- * The EH exclusion is a hard safety gate; getting it wrong is a silent
- * miscompile, so it is asserted by the differential fixtures in
- * inliner-tests.cs, not eyeballed. materialize_callee () additionally refuses
- * wrappers, synchronized methods, open/shared-generic callees and anything that
- * still comes back gshared/gsharedvt mono-side.
+ *   - and, for a callee that carries EH clauses of its own, only call sites that
+ *     are not already inside one of the CALLER's try regions - i.e. plain calls,
+ *     not invokes (replace_eligible_uses ()). This one is per SITE rather than
+ *     per callee: the body is materialized once and folded in wherever it is
+ *     safe, and the sites left out keep calling the trampoline.
+ * The EH rule is a hard safety gate; getting it wrong is a silent miscompile,
+ * so it is asserted by the differential fixtures in inliner-tests.cs, not
+ * eyeballed. materialize_callee () additionally refuses wrappers, synchronized
+ * methods, open/shared-generic callees and anything that still comes back
+ * gshared/gsharedvt mono-side.
  *
  * A generic callee is materialized as its exact instantiation rather than as the
  * shared body (materialize_callee ()), so a call site that passes a
@@ -140,8 +141,8 @@ const char kMaterializedAttr[] = "mono-materialized";
 /*
  * Optional tracing of every materialization decision, gated on
  * MONO_INLINER_TRACE. Worth having because the interesting failures here are
- * quiet ones: a gshared rgctx-passing callee or a clause-bearing callee that
- * gets exposed when it should have been refused is a silent miscompile, and a
+ * quiet ones: a gshared rgctx-passing callee, or a clause-bearing callee folded
+ * into a try region it has no selector cases for, is a silent miscompile, and a
  * root that stands down entirely looks exactly like a corpus with no candidates
  * in it unless the pass says why.
  */
@@ -456,19 +457,57 @@ private:
 		declarations[candidate] = body;
 		added.push_back (body);
 
+		/*
+		 * A body no call site ended up naming is dead on arrival - the strip
+		 * below erases it. Say so rather than letting it reach the "left with no
+		 * uses, so it must have been folded" tally, which is only true of a body
+		 * something actually called.
+		 */
+		if (!replace_eligible_uses (candidate, body)) {
+			trace_method ("method is only called from inside a protected region", method);
+			return nullptr;
+		}
+
 		trace ("expose", body->getName ());
 		if (trace_enabled ())
 			materialized.insert (body->getName ().str ());
-		replace_eligible_uses (candidate, body);
 		return body;
 	}
 
-	void replace_eligible_uses (llvm::Function *decl, llvm::Function *body)
+	/* How many call sites now name BODY instead of the trampoline DECL. */
+	unsigned replace_eligible_uses (llvm::Function *decl, llvm::Function *body)
 	{
+		unsigned wired = 0;
+		/*
+		 * A body that carries its own EH clauses can only be folded into a call
+		 * site that is NOT already inside a protected region - see the invoke
+		 * check below.
+		 */
+		bool has_clauses = body->hasPersonalityFn ();
+
 		for (auto &use : llvm::make_early_inc_range (decl->uses ())) {
 			auto *cb = llvm::dyn_cast<llvm::CallBase> (use.getUser ());
 
 			if (!cb || !cb->isCallee (&use))
+				continue;
+
+			/*
+			 * An invoke site sits inside one of the CALLER's try regions, so
+			 * folding a clause-bearing body in would nest the two methods' clauses
+			 * together. LLVM does its half of that for us - it appends the call
+			 * site's pad clauses to every pad it brings along, which is the chain
+			 * .mono_lsda needs - but each of those pads also carries a selector
+			 * switch, emitted back when the callee was translated and knowing only
+			 * the callee's own clauses. The runtime would arrive at one with RDX
+			 * naming an enclosing clause the switch has no case for and fall
+			 * through to the callee's own handler: the wrong handler, silently.
+			 *
+			 * At a plain call site nothing in the caller protects the region, so
+			 * the callee's clauses land as an island - no cross-method nesting,
+			 * every pad's switch already complete. Leave the invoke sites calling
+			 * the trampoline; the body is still folded everywhere else.
+			 */
+			if (has_clauses && llvm::isa<llvm::InvokeInst> (cb))
 				continue;
 
 			// A call site may pass a vtable/mrgctx in the `nest` parameter - the
@@ -481,7 +520,10 @@ private:
 			g_assert (cb->getFunctionType () == body->getFunctionType ());
 
 			cb->setCalledFunction (body);
+			wired ++;
 		}
+
+		return wired;
 	}
 };
 
