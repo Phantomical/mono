@@ -51,6 +51,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Transforms/Scalar/EarlyCSE.h>
 
 using llvm::AtomicOrdering;
 using llvm::AtomicRMWInst;
@@ -179,6 +180,32 @@ first_load (Function &f)
 	return nullptr;
 }
 
+static llvm::FenceInst *
+first_fence (Function &f)
+{
+	for (llvm::Instruction &ins : llvm::instructions (f))
+		if (auto *fence = llvm::dyn_cast<llvm::FenceInst> (&ins))
+			return fence;
+	return nullptr;
+}
+
+/* Whether A precedes B in the same block - the only relationship the fence,
+ * the load, and the RMW need to each other, since they may end up split
+ * across blocks by the guard branch. */
+static bool
+precedes (llvm::Instruction *a, llvm::Instruction *b)
+{
+	if (!a || !b || a->getParent () != b->getParent ())
+		return false;
+	for (llvm::Instruction &ins : *a->getParent ()) {
+		if (&ins == a)
+			return true;
+		if (&ins == b)
+			return false;
+	}
+	return false;
+}
+
 /* The conditional branch the lowering introduces, with its profile weights. */
 static BranchInst *
 guard_branch (Function &f)
@@ -254,13 +281,48 @@ case_lowers_tagged_call ()
 	       "should have left exactly one atomic RMW");
 	check ("lowers_tagged_call", count<LoadInst> (*h.func) == 1,
 	       "should have left exactly one load");
+	check ("lowers_tagged_call", count<llvm::FenceInst> (*h.func) == 1,
+	       "should have left exactly one fence");
 	check ("lowers_tagged_call", h.verifies (), "result should verify");
 }
 
 /*
- * The orderings, which are the whole argument in wbarrier.hpp: an unordered
- * read, because a stale answer can only be stale in the harmless direction, and
- * a release OR, so a thread that sees the mark also sees the store behind it.
+ * The fence that pins the real reference store on the near side of the check.
+ * Without it, nothing ties the store to the barrier at all any more - they
+ * touch disjoint addresses - and an optimizer is free to sink the store past
+ * the check that decides whether marking is necessary. See wbarrier.hpp.
+ */
+static void
+case_fence_orders_store_before_check ()
+{
+	Harness h ("fence_orders_store_before_check");
+	IRBuilder<> b (h.entry);
+	h.barrier (b, h.func->getArg (0));
+	b.CreateRetVoid ();
+
+	h.run ();
+
+	llvm::FenceInst *fence = first_fence (*h.func);
+	LoadInst *load = first_load (*h.func);
+
+	check ("fence_orders_store_before_check", fence != nullptr,
+	       "expected a fence ahead of the card read");
+	check ("fence_orders_store_before_check",
+	       fence && fence->getOrdering () == AtomicOrdering::Release,
+	       "the fence should be release - it exists to pin what comes before it");
+	check ("fence_orders_store_before_check",
+	       fence && fence->getSyncScopeID () == llvm::SyncScope::SingleThread,
+	       "the fence only needs to order this thread's own instructions - the "
+	       "collector only reads the table with every mutator already stopped");
+	check ("fence_orders_store_before_check", precedes (fence, load),
+	       "the fence must come before the card read, not after it");
+}
+
+/*
+ * The orderings, which are the whole argument in wbarrier.hpp: a monotonic
+ * read, coherent with the concurrent RMWs aliasing can put on the same word,
+ * and a release OR, so a thread that sees the mark also sees the store behind
+ * it.
  */
 static void
 case_memory_orderings ()
@@ -276,8 +338,9 @@ case_memory_orderings ()
 	AtomicRMWInst *rmw = first_rmw (*h.func);
 
 	check ("memory_orderings", load && load->isAtomic (), "the card read must be atomic");
-	check ("memory_orderings", load && load->getOrdering () == AtomicOrdering::Unordered,
-	       "the card read should be unordered");
+	check ("memory_orderings", load && load->getOrdering () == AtomicOrdering::Monotonic,
+	       "the card read should be monotonic - aliasing means concurrent RMWs on the "
+	       "same word are a real case, not just a stopped-world one");
 	check ("memory_orderings", rmw && rmw->getOperation () == AtomicRMWInst::Or,
 	       "the mark should be an OR");
 	check ("memory_orderings", rmw && rmw->getOrdering () == AtomicOrdering::Release,
@@ -431,6 +494,41 @@ case_multiple_barriers ()
 }
 
 /*
+ * Two barriers to the same word must keep independent reads. Boehm suspends
+ * mutators with a signal, not at a safepoint - see wbarrier.hpp - so the
+ * collector can clear the word between the two barriers below; each one's
+ * decision has to be based on its own read of current state. This runs a real
+ * CSE pass over the lowered IR, rather than only inspecting the lowering
+ * pass's own output, so it checks the actual property that matters: that nothing
+ * downstream merges the two reads.
+ */
+static void
+case_survives_cse ()
+{
+	Harness h ("survives_cse");
+	IRBuilder<> b (h.entry);
+
+	llvm::Value *addr = h.func->getArg (0);
+	h.barrier (b, addr);
+	h.barrier (b, addr);
+	b.CreateRetVoid ();
+
+	h.run ();
+
+	llvm::FunctionAnalysisManager fam;
+	llvm::PassBuilder pb;
+	pb.registerFunctionAnalyses (fam);
+	llvm::FunctionPassManager fpm;
+	fpm.addPass (llvm::EarlyCSEPass ());
+	fpm.run (*h.func, fam);
+
+	check ("survives_cse", count<LoadInst> (*h.func) == 2,
+	       "CSE must not merge the two card reads - the collector can clear the "
+	       "bit between them");
+	check ("survives_cse", h.verifies (), "result should verify");
+}
+
+/*
  * The wrapper's parameter is a native int today, but nothing about the lowering
  * depends on that, so a pointer-typed barrier has to work too.
  */
@@ -472,12 +570,14 @@ test_llvm_wbarrier_main (void)
 	setvbuf (stdout, nullptr, _IOLBF, 0);
 
 	case_lowers_tagged_call ();
+	case_fence_orders_store_before_check ();
 	case_memory_orderings ();
 	case_index_arithmetic ();
 	case_mark_is_cold ();
 	case_leaves_untagged_call ();
 	case_leaves_invoke ();
 	case_multiple_barriers ();
+	case_survives_cse ();
 	case_pointer_argument ();
 
 	printf ("%d cases run, %d failed\n", cases_run, failures);

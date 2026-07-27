@@ -95,13 +95,15 @@ lower_barrier (CallInst *call, const mono::CardBitmap &bitmap)
 	                                 PointerType::get (ctx, 0), "wb.table");
 	Value *word_ptr = b.CreateGEP (word_ty, table, word_index, "wb.wordptr");
 
-	/*
-	 * Unordered, not monotonic: this only has to not tear, since a stale answer
-	 * can only ever be stale in the direction that costs a redundant mark. See
-	 * wbarrier.hpp.
-	 */
+	/* Pins the guarded store in place now that it's no longer behind an
+	 * opaque call. See wbarrier.hpp. */
+	b.CreateFence (AtomicOrdering::Release, SyncScope::SingleThread);
+
+	/* Monotonic: aliasing means two mutator threads can be RMW-ing and reading
+	 * this same word concurrently, not just interleaved with a stopped-world
+	 * GC, so the load needs a coherent order with those RMWs. See wbarrier.hpp. */
 	LoadInst *cur = b.CreateLoad (word_ty, word_ptr, "wb.cur");
-	cur->setAtomic (AtomicOrdering::Unordered);
+	cur->setAtomic (AtomicOrdering::Monotonic);
 	cur->setAlignment (word_align);
 
 	Value *unmarked = b.CreateICmpEQ (b.CreateAnd (cur, mask, "wb.hit"),

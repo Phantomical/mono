@@ -2087,12 +2087,11 @@ MonoLLVMJIT::optimize (Function *func)
 
 	/*
 	 * Turns the GC write barrier from a call into an inline conditional card
-	 * mark, for the collectors that leave it as a call at all. Like the elision
-	 * above it hangs off an extension point, so it has to be registered before
-	 * the pipeline is built; a no-op when the collector has no bitmap to mark.
-	 * See passes/wbarrier.hpp.
+	 * mark, for the collectors that leave it as a call at all. Disabled for now:
+	 * it reproducibly corrupts JIT-compiled code under real-world load (KSP),
+	 * and the fence/ordering fixes applied so far haven't stopped it. See
+	 * passes/wbarrier.hpp.
 	 */
-	register_write_barrier_lowering (pb);
 
 	/*
 	 * The stock -O2 pipeline with mono's tier-1 inliner in place of LLVM's own
