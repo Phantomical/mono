@@ -162,7 +162,7 @@ void
 mono_llvm_set_must_tailcall (LLVMValueRef call_ins);
 
 LLVMValueRef
-mono_llvm_create_constant_data_array (const uint8_t *data, int len);
+mono_llvm_create_constant_data_array (llvm::LLVMContext &ctx, const uint8_t *data, int len);
 
 void
 mono_llvm_set_is_constant (LLVMValueRef global_var);

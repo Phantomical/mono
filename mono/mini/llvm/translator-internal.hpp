@@ -71,12 +71,14 @@
 #include "llvm-c/BitWriter.h"
 #include "llvm-c/Analysis.h"
 
+#include <atomic>
 #include <memory>
 #include <vector>
 #include <unordered_map>
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Type.h>
@@ -107,8 +109,23 @@
 
  /*
   * Information associated by mono with LLVM modules.
+  *
+  * One of these per compile, owning the LLVMContext that compile builds in.
+  * That ownership is what lets several threads translate at once: an
+  * LLVMContext serializes nothing internally, so its type/constant/metadata
+  * uniquing tables are only safe while exactly one thread is building in it.
+  * Everything cached here is derived from that context (LLVM types, the
+  * intrinsic declarations in lmodule) and so cannot outlive it or be shared
+  * with a compile running in another one.
   */
-typedef struct {
+struct MonoLLVMModule {
+	/*
+	 * A ThreadSafeContext rather than a bare LLVMContext because the engine
+	 * co-owns it: ORC is handed a copy of this, which shares the underlying
+	 * context and keeps it alive for as long as ORC might still touch the
+	 * module built in it.
+	 */
+	llvm::orc::ThreadSafeContext context;
 	LLVMModuleRef lmodule;
 	LLVMValueRef throw_icall, rethrow, throw_corlib_exception;
 	/*
@@ -125,11 +142,8 @@ typedef struct {
 	char **bb_names;
 	int bb_names_len;
 	LLVMTypeRef ptr_type;
-	MonoEERef *mono_ee;
-	LLVMExecutionEngineRef ee;
 	int max_got_offset;
-	LLVMValueRef *intrins_by_id;
-	gpointer gc_poll_cold_wrapper_compiled;
+	std::vector<LLVMValueRef> intrins_by_id;
 
 	char *global_prefix;
 	/* Written by emit_gc_safepoint_poll ()'s AOT arm; kept with that function. */
@@ -137,10 +151,12 @@ typedef struct {
 	int max_method_idx;
 	gboolean static_link;
 	GHashTable *idx_to_lmethod;
-	LLVMContextRef context;
 	GHashTable *objc_selector_to_var;
 	GHashTable *got_idx_to_type;
-} MonoLLVMModule;
+
+	/* The context as a plain reference, for the llvm:: APIs that want one. */
+	llvm::LLVMContext &ctx () { return *context.getContext (); }
+};
 
 /*
  * Information associated by the backend with mono basic blocks.
@@ -243,12 +259,11 @@ typedef struct {
 	llvm::Value *long_bb_break_var;
 
 	/*
-	 * The module's LLVMContext as a C++ reference. The module uses the single
-	 * process-global context (module->context is LLVMGetGlobalContext ()), so
-	 * this is the one place later C++ call sites reach for a context in scope --
-	 * Type::getInt32Ty (C), ConstantInt::get (...), and so on.
+	 * The context this compile owns, as a C++ reference -- what every C++ call
+	 * site here reaches for when it needs one: Type::getInt32Ty (C),
+	 * ConstantInt::get (...), and so on.
 	 */
-	llvm::LLVMContext &llvm_ctx () const { return *llvm::unwrap (module->context); }
+	llvm::LLVMContext &llvm_ctx () const { return module->ctx (); }
 
 	/* Translator liveness: false once a decline has disabled llvm for this method. */
 	bool ok () const { return !cfg->disable_llvm; }
@@ -260,11 +275,38 @@ typedef struct {
 	llvm::Value *convert_full (llvm::Value *v, llvm::Type *dtype, gboolean is_unsigned);
 	llvm::Value *convert (llvm::Value *v, llvm::Type *dtype);
 
-	/* MonoType -> LLVM type mapping (defined in translator-types.cpp). */
+	/*
+	 * MonoType -> LLVM type mapping (defined in translator-types.cpp).
+	 *
+	 * These are members rather than free functions purely because every LLVM
+	 * type they hand back is uniqued in a particular LLVMContext, and the one
+	 * they must use is this compile's. Nothing else about them needs the
+	 * EmitContext.
+	 */
 	LLVMTypeRef simd_class_to_llvm_type (MonoClass *klass);
 	LLVMTypeRef type_to_llvm_type (MonoType *t);
 	bool type_is_unsigned (MonoType *t);
 	LLVMTypeRef type_to_llvm_arg_type (MonoType *t);
+	LLVMValueRef const_int32 (int v);
+	LLVMValueRef const_int64 (int64_t v);
+	LLVMTypeRef IntPtrType ();
+	LLVMTypeRef ObjRefType ();
+	LLVMTypeRef ThisType ();
+	LLVMTypeRef type_to_sse_type (int type);
+	LLVMTypeRef primitive_type_to_llvm_type (MonoTypeEnum type);
+	LLVMTypeRef llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type);
+	LLVMTypeRef regtype_to_llvm_type (char c);
+	LLVMTypeRef op_to_llvm_type (int opcode);
+	LLVMTypeRef load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext);
+	LLVMTypeRef simd_op_to_llvm_type (int opcode);
+
+	/* Constant-vector builders (defined in translator-call.cpp). */
+	LLVMValueRef create_const_vector (LLVMTypeRef t, const int *vals, int count);
+	LLVMValueRef create_const_vector_i32 (const int *mask, int count);
+	LLVMValueRef create_const_vector_4_i32 (int v0, int v1, int v2, int v3);
+	LLVMValueRef create_const_vector_2_i32 (int v0, int v1);
+	LLVMValueRef get_double_const (MonoCompile *cfg, double val);
+	LLVMValueRef get_float_const (MonoCompile *cfg, float val);
 
 	/* Mono signature -> LLVM function type (defined in translator-emit.cpp). */
 	LLVMTypeRef sig_to_llvm_sig_no_cinfo (MonoMethodSignature *sig);
@@ -322,21 +364,69 @@ typedef struct {
 	LLVMValueRef get_direct_callee (const char *name, LLVMTypeRef llvm_sig, gpointer target);
 	Address *build_named_alloca_address (MonoType *t, const char *name);
 
+	/* Per-instruction translation (defined in translator-bb.cpp). */
+	void process_bb (MonoBasicBlock *bb);
+
 	/* Whole-method emission (defined in translator.cpp). */
 	void emit_method_inner ();
 	void llvm_jit_finalize_method ();
 } EmitContext;
 
 /*
- * The single process-global LLVMContext as a C++ reference, for the type
- * helpers that build LLVM types without an EmitContext in scope (the intrinsic
- * table and the type-mapping functions). The module always uses
- * LLVMGetGlobalContext (), so this is the same context as EmitContext::llvm_ctx ().
+ * The context an already-built LLVM object belongs to. Used by the handful of
+ * helpers that decorate a value or extend a module without an EmitContext in
+ * scope -- the object itself is the authority on which context it came from,
+ * which beats passing one alongside it and hoping the two agree.
  */
 static inline llvm::LLVMContext &
-llvm_global_ctx ()
+value_ctx (LLVMValueRef v)
 {
-	return *llvm::unwrap (LLVMGetGlobalContext ());
+	return llvm::unwrap (v)->getContext ();
+}
+
+static inline llvm::LLVMContext &
+module_ctx (LLVMModuleRef m)
+{
+	return llvm::unwrap (m)->getContext ();
+}
+
+/*
+ * The llvm-c entry points below have context-implicit spellings
+ * (LLVMAppendBasicBlock, LLVMMDNode, ...) that resolve to the process-global
+ * context. Nothing here builds in that context any more, so those spellings
+ * would attach objects from one context to a value in another - which is not
+ * an error LLVM reports, it is a crash later on. These wrappers take the
+ * context from the object at hand, so there is no global spelling left to
+ * reach for by accident.
+ */
+static inline LLVMBasicBlockRef
+append_basic_block (LLVMValueRef fn, const char *name)
+{
+	return LLVMAppendBasicBlockInContext (llvm::wrap (&value_ctx (fn)), fn, name);
+}
+
+static inline unsigned
+md_kind_id (llvm::LLVMContext &c, const char *name)
+{
+	return LLVMGetMDKindIDInContext (llvm::wrap (&c), name, strlen (name));
+}
+
+static inline LLVMValueRef
+md_string (llvm::LLVMContext &c, const char *str, unsigned len)
+{
+	return LLVMMDStringInContext (llvm::wrap (&c), str, len);
+}
+
+static inline LLVMValueRef
+md_node (llvm::LLVMContext &c, LLVMValueRef *vals, unsigned count)
+{
+	return LLVMMDNodeInContext (llvm::wrap (&c), vals, count);
+}
+
+static inline LLVMTypeRef
+struct_type (llvm::LLVMContext &c, LLVMTypeRef *members, unsigned count, LLVMBool packed)
+{
+	return LLVMStructTypeInContext (llvm::wrap (&c), members, count, packed);
 }
 
 /*
@@ -486,44 +576,29 @@ to_llvm_pred (LLVMRealPredicate p)
 }
 
 extern MonoLLVMModule aot_module;
-extern GHashTable *intrins_id_to_intrins;
-extern LLVMTypeRef sse_i1_t, sse_i2_t, sse_i4_t, sse_i8_t, sse_r4_t, sse_r8_t;
 
 /* Defined in translator-types.cpp. */
-LLVMValueRef
-const_int32 (int v);
-LLVMValueRef
-const_int64 (int64_t v);
+/*
+ * The 128-bit SIMD type for the mono type TYPE, in context C. The intrinsic
+ * table reaches for this without an EmitContext in scope, so the context is
+ * explicit; EmitContext::type_to_sse_type () is the same thing spelled for
+ * call sites that have one.
+ */
 LLVMTypeRef
-IntPtrType (void);
+sse_type (llvm::LLVMContext &c, int type);
+/* The integer type with width == TARGET_SIZEOF_VOID_P, in context C. */
 LLVMTypeRef
-ObjRefType (void);
-LLVMTypeRef
-ThisType (void);
+int_ptr_type (llvm::LLVMContext &c);
 guint32
 get_vtype_size (MonoType *t);
-G_GNUC_UNUSED LLVMTypeRef
-type_to_sse_type (int type);
-LLVMTypeRef
-primitive_type_to_llvm_type (MonoTypeEnum type);
 MonoTypeEnum
 inst_c1_type (const MonoInst *ins);
 bool
 primitive_type_is_unsigned (MonoTypeEnum t);
-G_GNUC_UNUSED LLVMTypeRef
-llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type);
-LLVMTypeRef
-regtype_to_llvm_type (char c);
-LLVMTypeRef
-op_to_llvm_type (int opcode);
-LLVMTypeRef
-load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext);
 IntrinsicId
 ovf_op_to_intrins (int opcode);
 IntrinsicId
 simd_ins_to_intrins (int opcode);
-LLVMTypeRef
-simd_op_to_llvm_type (int opcode);
 void
 set_cold_cconv (LLVMValueRef func);
 void
@@ -566,18 +641,6 @@ using mono::MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_BASE;
 using mono::MONO_LLVM_IL_SEQ_POINT_STACKMAP_ID_MASK;
 
 /* Defined in translator-call.cpp. */
-LLVMValueRef
-create_const_vector (LLVMTypeRef t, const int *vals, int count);
-LLVMValueRef
-create_const_vector_i32 (const int *mask, int count);
-LLVMValueRef
-create_const_vector_4_i32 (int v0, int v1, int v2, int v3);
-LLVMValueRef
-create_const_vector_2_i32 (int v0, int v1);
-LLVMValueRef
-get_double_const (MonoCompile *cfg, double val);
-LLVMValueRef
-get_float_const (MonoCompile *cfg, float val);
 /*
  * A stable, linker-safe symbol name for METHOD, suitable for naming a direct
  * `call @name` edge to it. The same method always gets the same name back
@@ -590,10 +653,6 @@ mono_llvm_method_symbol (MonoMethod *method);
 /* Inverse of mono_llvm_method_symbol (); NULL if NAME is not a method symbol. */
 MonoMethod *
 mono_llvm_method_from_symbol (const char *name);
-
-/* Defined in translator-bb.cpp. */
-void
-process_bb (EmitContext *ctx, MonoBasicBlock *bb);
 
 namespace mono {
 
@@ -609,9 +668,17 @@ pending_class_init_vtable (MonoCompile *cfg, bool *indeterminate);
 
 /* Defined in translator-intrinsics.cpp. */
 void
-add_intrinsics (LLVMModuleRef module);
-void
 add_types (MonoLLVMModule *module);
+
+/*
+ * The compiled GC-poll cold wrapper, JIT-compiling it on first use.
+ *
+ * Process-wide, not per-compile: it is a native code address, and every
+ * compile that plants a safepoint poll calls the same one. Racing callers are
+ * harmless - mono_jit_compile_method () hands both the same address.
+ */
+gpointer
+gc_poll_cold_wrapper_code (void);
 
 #endif /* DISABLE_JIT */
 

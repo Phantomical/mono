@@ -43,18 +43,20 @@
  * helper method it needs on the spot, say - from starting a promotion of its
  * own, which would otherwise stack a second LLVM compile on the first.
  *
- * The worker is a single dedicated thread, not a pool: MonoLLVMJIT keeps some
- * unguarded per-process state (module_counter_, engine.cpp), so two
- * concurrent tier-1 compiles would race each other. The threshold-0 path can
- * run on any number of mutator threads at once, so it has the same
- * requirement without the worker's built-in single-thread serialization -
- * tiered_llvm_compile_lock (below) is what provides it there instead.
+ * Tier-1 compiles run concurrently: a pool of worker threads
+ * (MONO_TIERED_COMPILE_THREADS) drains the queue, and the threshold-0 path
+ * compiles inline on however many mutator threads reach it at once. Nothing
+ * serializes them, because nothing in the compile pipeline is shared any
+ * more - each compile builds in an LLVMContext of its own
+ * (create_compile_module (), translator.cpp) and the engine's process-wide
+ * state is individually guarded.
  */
 
 #include <config.h>
 #include <glib.h>
 
 #include <cstddef>
+#include <vector>
 
 #include "mini.h"
 #include "mini-runtime.h"
@@ -68,6 +70,7 @@
 #include <mono/utils/mono-coop-mutex.h>
 #include <mono/utils/mono-threads-coop.h>
 #include <mono/utils/mono-lazy-init.h>
+#include <mono/utils/mono-proclib.h>
 #include <mono/utils/mono-time.h>
 #include <mono/utils/w32api.h>
 #include "backend.h"
@@ -146,19 +149,7 @@ static GHashTable *tiered_state;	/* MonoMethod* -> TieredRecord* */
 static GQueue *tiered_queue;		/* pending TieredEntry* */
 
 /*
- * Serializes every tier-1 LLVM compile against every other one, however it
- * was triggered. The background worker never needed this - it is a single
- * thread, so its compiles are already serial by construction - but
- * mono_llvm_tiered_promote_sync () can run concurrently on as many mutator
- * threads as happen to first-call a method at the same time, and MonoLLVMJIT
- * keeps some unguarded per-process state (module_counter_, engine.cpp) that
- * two concurrent compiles would race on. Held only around the compile itself,
- * not around the queue/state bookkeeping, which has its own lock (tiered_mutex).
- */
-static mono_mutex_t tiered_llvm_compile_lock;
-
-/*
- * The background worker's doorbell - what lets it sleep when the queue is empty
+ * The background workers' doorbell - what lets it sleep when the queue is empty
  * and wake when something lands on it. Declared up here, away from the rest of
  * the worker's state further down, only because tiered_do_init () initializes
  * it; see the comment there.
@@ -313,7 +304,6 @@ tiered_do_init (void)
 	if (!tiered_enabled)
 		return;
 	mono_os_mutex_init_recursive (&tiered_mutex);
-	mono_os_mutex_init (&tiered_llvm_compile_lock);
 	tiered_state = g_hash_table_new (g_direct_hash, g_direct_equal);
 	tiered_queue = g_queue_new ();
 	/*
@@ -855,22 +845,25 @@ mono_llvm_tiered_domain_unload (MonoDomain *domain)
 }
 
 /*
- * The background tier-1 compile worker.
+ * The background tier-1 compile workers.
  *
- * A single dedicated thread, not a pool: MonoLLVMJIT keeps some unguarded
- * per-process state (module_counter_, engine.cpp), so two concurrent tier-1
- * compiles would race each other. One thread compiling one method at a time
- * is also all this needs - nothing here depends on throughput, only on
- * getting LLVM codegen (and cctors) off mutator threads.
+ * A pool, sized by tiered_compile_thread_count (), all draining the one
+ * queue and compiling concurrently. Sizing it is a throughput-versus-
+ * politeness call, not a correctness one: nothing in the compile pipeline is
+ * shared between compiles any more, since each builds in an LLVMContext of
+ * its own (create_compile_module (), translator.cpp).
  *
  * tiered_worker_mutex/_wake are a doorbell, not what protects the queue: the
- * queue and its state table stay entirely under tiered_mutex, exactly as
- * they were before this worker existed. The doorbell just lets the worker
- * sleep when there is nothing to do and wake promptly when tiered_enqueue ()
- * adds something, via the standard "recheck under the real lock, then wait
- * on the doorbell" pattern - held across the recheck-and-wait, so a signal
- * that lands between the recheck and the wait is never lost even though the
- * recheck itself briefly takes the other lock.
+ * queue and its state table stay entirely under tiered_mutex. The doorbell
+ * just lets a worker sleep when there is nothing to do and wake promptly when
+ * tiered_enqueue () adds something, via the standard "recheck under the real
+ * lock, then wait on the doorbell" pattern - held across the recheck-and-wait,
+ * so a signal that lands between the recheck and the wait is never lost even
+ * though the recheck itself briefly takes the other lock.
+ *
+ * Two workers never compile the same method: tiered_mutex covers the pop, so
+ * an entry goes to exactly one of them, and the state table keeps a method
+ * that is already queued or promoted from being enqueued again.
  */
 
 /*
@@ -886,37 +879,79 @@ static mono_lazy_init_t tiered_worker_init = MONO_LAZY_INIT_STATUS_NOT_INITIALIZ
 static volatile gboolean tiered_worker_shutdown;
 /*
  * Both guarded by tiered_worker_mutex, and both only interesting to
- * mono_llvm_tiered_quiesce (). The worker holds _compiling across the one
- * window where it is doing real work with the doorbell dropped; _quiesce_depth
- * being nonzero is what stops it opening another such window.
+ * mono_llvm_tiered_quiesce (). A worker counts itself into _compiling across
+ * the one window where it is doing real work with the doorbell dropped;
+ * _quiesce_depth being nonzero is what stops any worker opening another such
+ * window, and a quiesce is complete once the count falls to zero.
  */
-static gboolean tiered_worker_compiling;
+static int tiered_workers_compiling;
 static int tiered_quiesce_depth;
-/* Set by tiered_worker_main () under tiered_worker_mutex, just before it
- * returns, and signalled on the same doorbell - see mono_llvm_tiered_shutdown (). */
-static volatile gboolean tiered_worker_exited;
 /*
- * The worker's internal thread, kept from tiered_worker_start () so
- * mono_llvm_tiered_shutdown () can wait on its handle for a full OS-level exit -
- * tiered_worker_exited alone is set too early to know the thread is truly gone.
+ * How many workers have left their loop. Bumped under tiered_worker_mutex just
+ * before each returns and signalled on the same doorbell - see
+ * mono_llvm_tiered_shutdown (), which waits for it to reach the pool size.
  */
-static MonoInternalThread *tiered_worker_thread;
+static int tiered_workers_exited;
+/*
+ * The pool's internal threads, kept from tiered_worker_start () so
+ * mono_llvm_tiered_shutdown () can wait on each handle for a full OS-level exit -
+ * tiered_workers_exited alone is set too early to know a thread is truly gone.
+ *
+ * Only mono_llvm_tiered_shutdown () reads this, and it runs the lazy-init check
+ * first, so it never observes the vector mid-fill: the workers themselves never
+ * touch it, even though the earlier ones are already running while
+ * tiered_worker_start () is still appending the later ones.
+ */
+static std::vector<MonoInternalThread *> tiered_worker_threads;
 
 static gsize WINAPI tiered_worker_main (gpointer unused);
+
+/*
+ * How many compile threads the pool runs.
+ *
+ * The default is a quarter of the machine, at least one and at most four.
+ * Tier-1 promotion is speculative work on behalf of code that is already
+ * running perfectly well at tier 0, so it should not be the reason a mutator
+ * waits for a core; the cap keeps a big machine from devoting a lot of
+ * hardware to it. MONO_TIERED_COMPILE_THREADS overrides, and is clamped to at
+ * least 1 - "no compile threads" is spelled MONO_TIERED=0.
+ */
+static int
+tiered_compile_thread_count (void)
+{
+	int n = MAX (1, MIN (4, mono_cpu_count () / 4));
+
+	char *e = g_getenv ("MONO_TIERED_COMPILE_THREADS");
+	if (e) {
+		char *end = NULL;
+		guint64 v = g_ascii_strtoull (e, &end, 10);
+		/* Keep the default on an empty or malformed value. */
+		if (end && end != e && *end == '\0' && v >= 1)
+			n = (int) MIN (v, (guint64) 64);
+		g_free (e);
+	}
+
+	return n;
+}
 
 static void
 tiered_worker_start (void)
 {
-	ERROR_DECL (error);
+	int n = tiered_compile_thread_count ();
 
-	tiered_worker_thread = mono_thread_create_internal (mono_get_root_domain (), tiered_worker_main, NULL, MONO_THREAD_CREATE_FLAGS_THREADPOOL, error);
-	mono_error_assert_ok (error);
+	tiered_worker_threads.reserve (n);
+	for (int i = 0; i < n; ++i) {
+		ERROR_DECL (error);
+		MonoInternalThread *thread = mono_thread_create_internal (mono_get_root_domain (), tiered_worker_main, NULL, MONO_THREAD_CREATE_FLAGS_THREADPOOL, error);
+		mono_error_assert_ok (error);
+		tiered_worker_threads.push_back (thread);
+	}
 }
 
 /*
- * Lazily create the worker on the first real enqueue - most runs of a tiered
+ * Lazily create the pool on the first real enqueue - most runs of a tiered
  * build never promote anything (the default threshold is 1000 calls), so
- * there is no reason to spin up a thread nobody is going to wake.
+ * there is no reason to spin up threads nobody is going to wake.
  */
 static void
 tiered_worker_ensure_started (void)
@@ -1088,26 +1123,28 @@ tiered_worker_main (gpointer unused)
 		 * milliseconds, and nothing about it needs that lock held (the
 		 * queue itself is protected separately, by tiered_mutex above).
 		 */
-		tiered_worker_compiling = TRUE;
+		tiered_workers_compiling++;
 		mono_coop_mutex_unlock (&tiered_worker_mutex);
 		tiered_worker_process_entry (entry);
 		g_free (entry);
 		mono_coop_mutex_lock (&tiered_worker_mutex);
-		tiered_worker_compiling = FALSE;
-		/* Broadcast, not signal: a quiescing thread and the shutdown path can
-		 * both be waiting on this doorbell, and they want different news. */
+		tiered_workers_compiling--;
+		/* Broadcast, not signal: a quiescing thread, the shutdown path and the
+		 * other workers can all be waiting on this doorbell, and they want
+		 * different news. */
 		mono_coop_cond_broadcast (&tiered_worker_wake);
 	}
 
 	/*
 	 * Publish exit under the same mutex/cond pair mono_llvm_tiered_shutdown ()
 	 * waits on, so it cannot miss this: either it is not waiting yet (in which
-	 * case it will see tiered_worker_exited already TRUE when it checks) or it
-	 * is blocked in mono_coop_cond_timedwait () on this exact mutex, which the
-	 * signal below wakes once we unlock.
+	 * case it will see the count already up when it checks) or it is blocked in
+	 * mono_coop_cond_timedwait () on this exact mutex, which the broadcast below
+	 * wakes once we unlock. Broadcast because the other workers are waiting on
+	 * the same doorbell for the shutdown flag.
 	 */
-	tiered_worker_exited = TRUE;
-	mono_coop_cond_signal (&tiered_worker_wake);
+	tiered_workers_exited++;
+	mono_coop_cond_broadcast (&tiered_worker_wake);
 	mono_coop_mutex_unlock (&tiered_worker_mutex);
 
 	return 0;
@@ -1122,10 +1159,10 @@ tiered_worker_main (gpointer unused)
  * function has to be the thing that actually waits, or that free can race a
  * compile that is still running.
  *
- * Two phases. First wait on tiered_worker_exited, which the worker sets as it
- * leaves its loop. That flag alone is NOT enough to return on: the worker sets
- * it from inside tiered_worker_main (), still several steps short of actually
- * terminating - it has yet to run its thread-start wrapper's teardown (apartment
+ * Two phases. First wait for every worker to count itself out, which each does
+ * as it leaves its loop. That count alone is NOT enough to return on: a worker
+ * bumps it from inside tiered_worker_main (), still several steps short of
+ * actually terminating - it has yet to run its thread-start wrapper's teardown (apartment
  * cleanup and mono_thread_detach_internal ()). If we returned here, that teardown
  * would run concurrently with the mono_runtime_cleanup () mini_cleanup () does
  * next, which tears down the very thread subsystem the worker's own detach
@@ -1155,30 +1192,42 @@ mono_llvm_tiered_shutdown (void)
 
 	mono_coop_mutex_lock (&tiered_worker_mutex);
 	tiered_worker_shutdown = TRUE;
-	mono_coop_cond_signal (&tiered_worker_wake);
+	/* Broadcast: every worker in the pool is waiting on this one doorbell. */
+	mono_coop_cond_broadcast (&tiered_worker_wake);
 
 	start = mono_msec_ticks ();
-	while (!tiered_worker_exited) {
+	while (tiered_workers_exited < (int) tiered_worker_threads.size ()) {
 		gint64 elapsed = mono_msec_ticks () - start;
 		if (elapsed >= TIERED_SHUTDOWN_TIMEOUT_MS)
 			break;
 		mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, (guint32) (TIERED_SHUTDOWN_TIMEOUT_MS - elapsed));
 	}
-	exited = tiered_worker_exited;
+	exited = tiered_workers_exited == (int) tiered_worker_threads.size ();
 	mono_coop_mutex_unlock (&tiered_worker_mutex);
 
 	/*
-	 * Only wait on the handle once the worker has told us it is on its way out;
-	 * if the loop above timed out (worker still mid-compile) its handle is not
-	 * about to signal and we proceed as before. The wait runs in GC-safe mode -
-	 * it blocks, and must not hold up a GC while it does.
+	 * Only wait on the handles once every worker has told us it is on its way
+	 * out; if the loop above timed out (one still mid-compile) its handle is not
+	 * about to signal and we proceed as before. The waits run in GC-safe mode -
+	 * they block, and must not hold up a GC while they do.
+	 *
+	 * The timeout is per thread rather than one budget shared across the pool.
+	 * Overshooting it takes every worker being late, which is the case where the
+	 * wait is hopeless anyway; splitting one budget between them would instead
+	 * cut short the common case of one slow worker and several already done.
 	 */
-	if (exited && tiered_worker_thread && tiered_worker_thread->handle) {
+	if (!exited)
+		return;
+
+	for (MonoInternalThread *thread : tiered_worker_threads) {
+		if (!thread || !thread->handle)
+			continue;
+
 		MONO_ENTER_GC_SAFE;
-		mono_thread_info_wait_one_handle (tiered_worker_thread->handle, TIERED_SHUTDOWN_TIMEOUT_MS, FALSE);
+		mono_thread_info_wait_one_handle (thread->handle, TIERED_SHUTDOWN_TIMEOUT_MS, FALSE);
 		MONO_EXIT_GC_SAFE;
 
-		mono_threads_add_joinable_thread ((gpointer) (gsize) MONO_UINT_TO_NATIVE_THREAD_ID (tiered_worker_thread->tid));
+		mono_threads_add_joinable_thread ((gpointer) (gsize) MONO_UINT_TO_NATIVE_THREAD_ID (thread->tid));
 	}
 }
 
@@ -1225,7 +1274,7 @@ mono_llvm_tiered_quiesce (void)
 	 * getting re-entered - the compile we are waiting on may itself need a GC,
 	 * which needs this thread to stop.
 	 */
-	while (tiered_worker_compiling)
+	while (tiered_workers_compiling)
 		mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, 50);
 	mono_coop_mutex_unlock (&tiered_worker_mutex);
 }
@@ -1396,7 +1445,6 @@ mono_llvm_tiered_promote_sync (MonoMethod *method, MonoDomain *domain, guint32 o
 	 */
 
 	tiered_sync_active = TRUE;
-	mono_os_mutex_lock (&tiered_llvm_compile_lock);
 	/*
 	 * run_cctors = FALSE: this runs on a mutator thread, not the background
 	 * worker, but tier 1 must still see the same class-init state tier 0 did -
@@ -1415,7 +1463,6 @@ mono_llvm_tiered_promote_sync (MonoMethod *method, MonoDomain *domain, guint32 o
 	} else {
 		tiered_set_state (method, domain, TIER_STATE_TIER0_TERMINAL);
 	}
-	mono_os_mutex_unlock (&tiered_llvm_compile_lock);
 	tiered_sync_active = FALSE;
 
 	return code;

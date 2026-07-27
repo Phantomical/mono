@@ -322,9 +322,9 @@ mono_llvm_replace_uses_of (LLVMValueRef var, LLVMValueRef v)
 }
 
 LLVMValueRef
-mono_llvm_create_constant_data_array (const uint8_t *data, int len)
+mono_llvm_create_constant_data_array (LLVMContext &ctx, const uint8_t *data, int len)
 {
-	return wrap(ConstantDataArray::get (*unwrap(LLVMGetGlobalContext ()), ArrayRef<uint8_t> (data, len)));
+	return wrap(ConstantDataArray::get (ctx, ArrayRef<uint8_t> (data, len)));
 }
 
 void
@@ -643,7 +643,8 @@ mono_llvm_di_create_file (void *di_builder, const char *dir, const char *file)
 void*
 mono_llvm_di_create_location (void *di_builder, void *scope, int row, int column)
 {
-	return DILocation::get (*unwrap(LLVMGetGlobalContext ()), row, column, (Metadata*)scope);
+	/* The scope node is the authority on which context this location belongs in. */
+	return DILocation::get (cast<MDNode> ((Metadata *) scope)->getContext (), row, column, (Metadata*)scope);
 }
 
 void
@@ -673,13 +674,13 @@ mono_llvm_get_or_insert_gc_safepoint_poll (LLVMModuleRef module)
 {
 #if LLVM_API_VERSION >= 900
 
-	llvm::FunctionCallee callee = unwrap(module)->getOrInsertFunction("gc.safepoint_poll", FunctionType::get(unwrap(LLVMVoidType()), false));
+	llvm::FunctionCallee callee = unwrap(module)->getOrInsertFunction("gc.safepoint_poll", FunctionType::get(Type::getVoidTy (unwrap (module)->getContext ()), false));
 	return wrap (dyn_cast<llvm::Function> (callee.getCallee ()));
 #else
 	llvm::Function *SafepointPoll;
 	llvm::Constant *SafepointPollConstant;
 
-	SafepointPollConstant = unwrap(module)->getOrInsertFunction("gc.safepoint_poll", FunctionType::get(unwrap(LLVMVoidType()), false));
+	SafepointPollConstant = unwrap(module)->getOrInsertFunction("gc.safepoint_poll", FunctionType::get(Type::getVoidTy (unwrap (module)->getContext ()), false));
 	g_assert (SafepointPollConstant);
 
 	SafepointPoll = dyn_cast<llvm::Function>(SafepointPollConstant);

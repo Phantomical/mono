@@ -138,7 +138,8 @@ report (const char *name, TestResult r)
 static TestResult
 test_arithmetic (MonoLLVMJIT *jit)
 {
-	LLVMContext &ctx = jit->context ();
+	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
+	LLVMContext &ctx = *tsctx.getContext ();
 	auto module = std::make_unique<Module> ("selftest.arith", ctx);
 	Type *i64 = Type::getInt64Ty (ctx);
 	FunctionType *fty = FunctionType::get (i64, {i64, i64}, false);
@@ -152,7 +153,7 @@ test_arithmetic (MonoLLVMJIT *jit)
 
 	/* compile() clones the module; our unique_ptr keeps owning the original and
 	 * frees it on scope exit - no release(), no leak, no double free. */
-	mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+	mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 	uint64_t addr = res.entry;
 	CHECK (addr != 0);
 	/* The size channel must report a real body, not silently zero. */
@@ -219,7 +220,8 @@ test_slab_residency (MonoLLVMJIT *jit)
 		return TEST_SKIP;
 	}
 
-	LLVMContext &ctx = jit->context ();
+	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
+	LLVMContext &ctx = *tsctx.getContext ();
 	const int num_methods = 16;
 	for (int i = 0; i < num_methods; i++) {
 		auto module = std::make_unique<Module> ("selftest.slab", ctx);
@@ -233,7 +235,7 @@ test_slab_residency (MonoLLVMJIT *jit)
 		Value *arg = &*fn->arg_begin ();
 		b.CreateRet (b.CreateAdd (arg, ConstantInt::get (i64, i)));
 
-		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 		CHECK (res.entry != 0);
 		auto compiled = reinterpret_cast<int64_t (*) (int64_t)> (res.entry);
 		CHECK (compiled (100) == 100 + i);
@@ -295,7 +297,8 @@ test_registered_helper (MonoLLVMJIT *jit)
 {
 	jit->register_symbol (SELFTEST_HELPER_NAME, (void *) &selftest_helper_impl);
 
-	LLVMContext &ctx = jit->context ();
+	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
+	LLVMContext &ctx = *tsctx.getContext ();
 	auto module = std::make_unique<Module> ("selftest.helper", ctx);
 	Type *i64 = Type::getInt64Ty (ctx);
 	FunctionType *helper_ty = FunctionType::get (i64, {i64}, false);
@@ -312,7 +315,7 @@ test_registered_helper (MonoLLVMJIT *jit)
 	jit->optimize (fn); /* also exercise the optimizer */
 
 	/* compile() clones; keep owning the original (freed on scope exit). */
-	mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+	mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 	uint64_t addr = res.entry;
 	CHECK (addr != 0);
 	CHECK (res.code_size > 0);
@@ -351,7 +354,8 @@ test_registered_helper (MonoLLVMJIT *jit)
 static TestResult
 test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 {
-	LLVMContext &ctx = jit->context ();
+	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
+	LLVMContext &ctx = *tsctx.getContext ();
 	Type *f64 = Type::getDoubleTy (ctx);
 	Type *i32 = Type::getInt32Ty (ctx);
 
@@ -370,7 +374,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		b.CreateRet (b.CreateCall (powf, {base, expo}));
 
 		jit->optimize (fn);
-		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 		CHECK (res.entry != 0);
 		auto compiled = reinterpret_cast<double (*) (int32_t)> (res.entry);
 		CHECK (compiled (0) == 1.0);
@@ -392,7 +396,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		b.CreateRet (b.CreateCall (powf, {base, x}));
 
 		jit->optimize (fn);
-		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 		CHECK (res.entry != 0);
 		auto compiled = reinterpret_cast<double (*) (double)> (res.entry);
 		CHECK (std::abs (compiled (0.0) - 1.0) < 1e-9);
@@ -416,7 +420,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		b.CreateRet (b.CreateCall (powf, {x, third}));
 
 		jit->optimize (fn);
-		mono::CompileResult res = jit->compile (fn, {}, nullptr, "");
+		mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 		CHECK (res.entry != 0);
 		auto compiled = reinterpret_cast<double (*) (double)> (res.entry);
 		CHECK (std::abs (compiled (27.0) - 3.0) < 1e-9);
@@ -432,7 +436,8 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 static mono::CompileResult
 compile_trivial_under_owner (MonoLLVMJIT *jit, const char *fn_name, int64_t retval, MonoDomain *owner)
 {
-	LLVMContext &ctx = jit->context ();
+	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
+	LLVMContext &ctx = *tsctx.getContext ();
 	auto module = std::make_unique<Module> (std::string ("selftest.owner.") + fn_name, ctx);
 	Type *i64 = Type::getInt64Ty (ctx);
 	FunctionType *fty = FunctionType::get (i64, {}, false);
@@ -440,7 +445,7 @@ compile_trivial_under_owner (MonoLLVMJIT *jit, const char *fn_name, int64_t retv
 	BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);
 	IRBuilder<> b (bb);
 	b.CreateRet (ConstantInt::get (i64, retval));
-	return jit->compile (fn, {}, nullptr, "", owner);
+	return jit->compile (fn, {}, nullptr, "", tsctx, owner);
 }
 
 /*
@@ -2113,10 +2118,11 @@ build_reclaim_eh_module (Module &m, const char *fn_name)
 static mono::CompileResult
 compile_reclaim_eh_module_under_owner (MonoLLVMJIT *jit, const char *fn_name, MonoDomain *owner)
 {
-	LLVMContext &ctx = jit->context ();
+	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
+	LLVMContext &ctx = *tsctx.getContext ();
 	auto module = std::make_unique<Module> (std::string ("selftest.reclaim.") + fn_name, ctx);
 	Function *fn = build_reclaim_eh_module (*module, fn_name);
-	return jit->compile (fn, {}, nullptr, "", owner);
+	return jit->compile (fn, {}, nullptr, "", tsctx, owner);
 }
 
 /*

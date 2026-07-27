@@ -17,6 +17,7 @@
 #ifndef __MONO_MINI_LLVM_ENGINE_HPP__
 #define __MONO_MINI_LLVM_ENGINE_HPP__
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -242,13 +243,6 @@ public:
 	static MonoLLVMJIT *get_singleton_if_created ();
 
 	/*
-	 * The LLVMContext all JIT modules must be built in. mono's translator
-	 * (step 3b) should create its jit module here rather than in the global
-	 * context, so a future background-compile thread stays race-free.
-	 */
-	llvm::LLVMContext &context ();
-
-	/*
 	 * Register a runtime helper (icall target, libc shim, cross-method call
 	 * target, ...) by name. Uses ORCv2 absoluteSymbols - the explicit-
 	 * registration path the README mandates in place of the spike's
@@ -303,6 +297,7 @@ public:
 	                       llvm::ArrayRef<llvm::GlobalVariable *> callee_vars,
 	                       uint64_t *callee_addrs,
 	                       llvm::StringRef eh_symbol,
+	                       llvm::orc::ThreadSafeContext tsctx,
 	                       MonoDomain *owner = nullptr);
 
 	/*
@@ -334,7 +329,6 @@ private:
 	MonoLLVMJIT &operator= (const MonoLLVMJIT &) = delete;
 
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
-	llvm::orc::ThreadSafeContext tsctx_;
 	/*
 	 * Dedicated dylib holding the explicitly-registered runtime helpers. Each
 	 * compiled module's dylib links ONLY to this (never to a process-symbol
@@ -342,7 +336,11 @@ private:
 	 * register_symbol() - the explicit path the README mandates.
 	 */
 	llvm::orc::JITDylib *helpers_jd_ = nullptr;
-	uint64_t module_counter_ = 0;
+	/*
+	 * Only names dylibs, so relaxed ordering is enough - but it has to be
+	 * atomic, because concurrent compiles all reach for the next value.
+	 */
+	std::atomic<uint64_t> module_counter_ {0};
 
 	/*
 	 * Every name ever handed to register_symbol (), so a repeat registration

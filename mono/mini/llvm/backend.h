@@ -42,50 +42,8 @@ void mono_llvm_set_unhandled_exception_handler (void);
  * they are unreferenced in the running mono binary (hence --llvm still fails
  * gracefully in stub.cpp's mono_llvm_emit_method).
  */
-typedef void *MonoEERef;
-
 void      mono_llvm_jit_init (void);
-MonoEERef mono_llvm_create_ee (LLVMExecutionEngineRef *ee);
-void      mono_llvm_dispose_ee (MonoEERef *mono_ee);
 void      mono_llvm_optimize_method (LLVMValueRef method);
-/*
- * Compile `method` and return its executable address.
- *
- * code_size_out (may be NULL) receives the machine-code size of the emitted
- * method, taken from the object's ELF symbol table (st_size) - authoritative and
- * per-function, unlike the code-section allocation (a module may hold several
- * functions) or an .eh_frame FDE (absent entirely for a nounwind leaf). It feeds
- * cfg->code_len, which sizes the method's MonoJitInfo.
- *
- * Under the forked LLVM that size came out of the mono-format EH table via
- * decode_llvm_eh_info(); stock LLVM emits no such table.
- *
- * It is returned through this call rather than a "last compile" accessor
- * deliberately: the size is discovered by the object layer on whichever thread
- * materializes the module, which stops being the calling thread as soon as the
- * JIT is given compile threads.
- *
- * dwarf_eh_frame_out / dwarf_eh_frame_size_out (both may be NULL) receive the
- * stock DWARF .eh_frame SECTION emitted for this module - not a per-function
- * FDE, so the caller must locate the FDE whose initial_location matches the
- * method (a module can hold more than one function). It is transcoded into
- * cfg->encoded_unwind_ops; see llvm/ehframe.cpp.
- *
- * stackmaps_out / stackmaps_size_out (both may be NULL) receive the loaded
- * `.llvm_stackmaps` SECTION, non-empty only for gshared methods (the translator
- * plants a llvm.experimental.stackmap recording the home slot of this/mrgctx).
- * Task #15 parses it into cfg->llvm_this_reg/offset so a stack walk can rebuild
- * the frame's generic context.
- *
- * mono_lsda_out / mono_lsda_size_out (both may be NULL) receive the loaded
- * `.mono_lsda` SECTION - mono's own target-neutral clause table (magic 'MLSD',
- * code-relative offsets), written by MonoLSDAStreamer from the EH-gather side
- * channel, non-empty only for an EH-bearing method whose catch clauses resolved.
- * C4/C6 parse it into the method's MonoJitExceptionInfo[]; the gate still declines
- * every EH method today, so this too is {NULL,0} for every method that currently
- * reaches here.
- */
-gpointer  mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method, int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs, gpointer *eh_frame, guint32 *code_size_out, gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out, gpointer *stackmaps_out, guint32 *stackmaps_size_out, gpointer *mono_lsda_out, guint32 *mono_lsda_size_out);
 
 /*
  * Transcode the stock DWARF .eh_frame LLVM emits into mono's unwind ops.

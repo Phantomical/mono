@@ -6,8 +6,9 @@ the port. Design + scope: `.claude/plans/mono-llvm-handoff/` (esp. `06-scope-and
 ## Target
 - Builds and runs against **unmodified system LLVM 18** (`/usr/lib/llvm-18`) — no patched fork.
 - amd64 only, JIT only, Linux first (Windows is a later port).
-- Tiered: classic mini JIT = tier 0, LLVM = tier 1 (synchronous for the first milestone; background
-  thread + full concurrency deferred).
+- Tiered: classic mini JIT = tier 0, LLVM = tier 1. Tier-1 compiles run on a pool of background
+  worker threads (`MONO_TIERED_COMPILE_THREADS`, default a quarter of the machine capped at 4) and
+  concurrently with each other: each compile owns its `LLVMContext`, so no two ever share one.
 
 ## Relationship to the legacy backend (`mono/mini/*.c`, staying put)
 The legacy backend linked **patched LLVM 6** (`LLVM_API_VERSION=610`) from the vendored

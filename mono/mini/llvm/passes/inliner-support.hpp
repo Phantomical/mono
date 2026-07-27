@@ -27,17 +27,27 @@ class Function;
 class Module;
 }
 
+/* The translator's per-compile state; opaque to the pass (translator-internal.hpp). */
+struct MonoLLVMModule;
+
 namespace mono {
 
 /*
- * The tier-1 root registry, keyed by the root's LLVM Function. The translator
- * registers a root (with its MonoCompile) right before it optimizes the module,
- * and unregisters it once optimization returns; the inliner pass runs inside
- * that window and looks the cfg up to drive materialization.
+ * The tier-1 root registry. The translator registers a root (with its
+ * MonoCompile and the per-compile MonoLLVMModule it is being emitted into)
+ * right before it optimizes the module, and unregisters it once optimization
+ * returns; the inliner pass runs inside that window and looks both up to drive
+ * materialization. Several compiles can be registered at once - one per thread
+ * currently in the optimizer.
  */
-void register_tier1_root (llvm::Function *root, MonoCompile *root_cfg);
-void unregister_tier1_root (llvm::Function *root);
+void register_tier1_root (llvm::Function *root, MonoCompile *root_cfg, MonoLLVMModule *module);
+void unregister_tier1_root (llvm::Function *root, MonoLLVMModule *module);
 MonoCompile *tier1_root_cfg (llvm::Function *root);
+/*
+ * The translator state for the compile emitting into INTO - in particular the
+ * LLVMContext that module and everything in it belongs to.
+ */
+MonoLLVMModule *tier1_root_module (llvm::Module *into);
 
 /*
  * Whether ROOT_CFG permits inlining at all - the caller-level eligibility gates:

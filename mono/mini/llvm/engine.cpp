@@ -1639,7 +1639,6 @@ gather_eh_sidechannel (Module &m)
 static constexpr size_t kSlabReservationGranularity = 0x7FFF0000;
 
 MonoLLVMJIT::MonoLLVMJIT ()
-	: tsctx_ (std::make_unique<LLVMContext> ())
 {
 	ensure_native_target ();
 
@@ -1976,11 +1975,6 @@ MonoLLVMJIT::release_owner (MonoDomain *owner)
 	return n;
 }
 
-LLVMContext &
-MonoLLVMJIT::context ()
-{
-	return *tsctx_.getContext ();
-}
 
 
 void
@@ -2107,6 +2101,7 @@ MonoLLVMJIT::compile (Function *entry,
                       ArrayRef<GlobalVariable *> callee_vars,
                       uint64_t *callee_addrs,
                       StringRef eh_symbol,
+                      ThreadSafeContext tsctx,
                       MonoDomain *owner)
 {
 	/* Snapshot the names we need to resolve. */
@@ -2128,13 +2123,16 @@ MonoLLVMJIT::compile (Function *entry,
 	/*
 	 * Hand the JIT a private CLONE of the caller's module, not the module
 	 * itself. LLJIT::addIRModule consumes and eventually frees the module it is
-	 * given; the caller (mono's translator) keeps using its original module
-	 * after compile() returns - e.g. mono_llvm_remove_gc_safepoint_poll (see
-	 * donor mini-llvm.c right after the mono_llvm_compile_method call). Cloning
-	 * keeps the caller's module valid and owned by the caller; the JIT owns and
-	 * frees the clone. (The legacy MCJIT engine achieved the same "LLVM never
-	 * frees mono's module" invariant via module.release()+NotifyCompiled, which
-	 * ORCv2 has no equivalent for - addIRModule always takes ownership.)
+	 * given, and the translator keeps using its own module after compile()
+	 * returns - mono_llvm_remove_gc_safepoint_poll () and the optimized-IR dump
+	 * both run on it. Cloning leaves the original valid and owned by the
+	 * caller; the JIT owns and frees the clone.
+	 *
+	 * CloneModule clones within a context, so the clone lives in TSCTX's
+	 * context - the same one the translator built the original in. That is the
+	 * property concurrent compiles rest on: two threads arrive here with two
+	 * different contexts, so ORC can codegen both at once without either
+	 * touching the other's uniquing tables.
 	 */
 	std::unique_ptr<Module> clone = CloneModule (*entry->getParent ());
 	clone->setDataLayout (jit_->getDataLayout ());
@@ -2177,7 +2175,7 @@ MonoLLVMJIT::compile (Function *entry,
 	 * only helpers_jd_ (explicit runtime helpers), not the LLJIT main dylib and
 	 * its process-symbol generator.
 	 */
-	std::string jd_name = "mono.jit." + std::to_string (module_counter_++);
+	std::string jd_name = "mono.jit." + std::to_string (module_counter_.fetch_add (1, std::memory_order_relaxed));
 	JITDylib &jd = es.createBareJITDylib (jd_name);
 	jd.addToLinkOrder (*helpers_jd_);
 
@@ -2191,7 +2189,7 @@ MonoLLVMJIT::compile (Function *entry,
 		owners_[owner].push_back (&jd);
 	}
 
-	cantFail (jit_->addIRModule (jd, ThreadSafeModule (std::move (clone), tsctx_)));
+	cantFail (jit_->addIRModule (jd, ThreadSafeModule (std::move (clone), std::move (tsctx))));
 
 	/*
 	 * STEP 3b: cantFail() aborts on a resolution failure (e.g. an icall helper
@@ -2286,94 +2284,10 @@ mono_llvm_jit_resolve_symbol_name (gpointer addr)
 	return jit ? jit->resolve_symbol_name (addr) : nullptr;
 }
 
-MonoEERef
-mono_llvm_create_ee (LLVMExecutionEngineRef *ee)
-{
-	/*
-	 * MUST return NULL (matching the legacy engine). The engine is a process-wide
-	 * singleton reached via get_singleton() internally, so there is no per-EE
-	 * handle to hand back. Crucially, the donor stores this return value in
-	 * module->mono_ee (a MonoEERef*) and, at teardown, calls
-	 * mono_llvm_dispose_ee(module->mono_ee) - which writes NULL *through* that
-	 * pointer. Returning a real pointer here would make dispose_ee scribble NULL
-	 * over the singleton's first member (jit_), corrupting it. Returning NULL
-	 * makes that write a guarded no-op. The donor never dereferences mono_ee (it
-	 * only stores it, passes it to compile_method - which ignores it - and to
-	 * dispose_ee), so NULL is safe. *ee is left untouched.
-	 */
-	(void) ee;
-	return NULL;
-}
-
-void
-mono_llvm_dispose_ee (MonoEERef *mono_ee)
-{
-	/*
-	 * The engine singleton lives for the process lifetime; nothing per-EE to
-	 * release. Because create_ee returns NULL, mono_ee is NULL here and this is a
-	 * no-op - it never writes through a live pointer. (If create_ee ever returned
-	 * non-NULL, this NULL store would corrupt whatever it pointed at.)
-	 */
-	if (mono_ee)
-		*mono_ee = NULL;
-}
-
 void
 mono_llvm_optimize_method (LLVMValueRef method)
 {
 	mono::MonoLLVMJIT::get_singleton ()->optimize (llvm::unwrap<llvm::Function> (method));
-}
-
-gpointer
-mono_llvm_compile_method (MonoEERef mono_ee, MonoCompile *cfg, LLVMValueRef method,
-                          int nvars, LLVMValueRef *callee_vars, gpointer *callee_addrs,
-                          gpointer *eh_frame, guint32 *code_size_out,
-                          gpointer *dwarf_eh_frame_out, guint32 *dwarf_eh_frame_size_out,
-                          gpointer *stackmaps_out, guint32 *stackmaps_size_out,
-                          gpointer *mono_lsda_out, guint32 *mono_lsda_size_out)
-{
-	(void) mono_ee;
-
-	auto *jit = mono::MonoLLVMJIT::get_singleton ();
-	auto *entry = llvm::unwrap<llvm::Function> (method);
-
-	llvm::SmallVector<llvm::GlobalVariable *, 8> vars;
-	vars.reserve (nvars);
-	for (int i = 0; i < nvars; ++i)
-		vars.push_back (llvm::unwrap<llvm::GlobalVariable> (callee_vars[i]));
-
-	std::vector<uint64_t> addrs (nvars);
-
-	/*
-	 * cfg->domain is the lifetime key: it is the domain this method's code is
-	 * published into (mini_tiered_promote () swaps the body into
-	 * domain->jit_code_hash under that same domain), and mono_domain_free ()
-	 * destroys that domain's own code manager a few dozen lines after it calls
-	 * us back through mono_llvm_jit_release_domain ().
-	 */
-	mono::CompileResult res = jit->compile (entry, vars, addrs.data (), "mono_eh_frame",
-	                                        cfg ? cfg->domain : NULL);
-
-	for (int i = 0; i < nvars; ++i)
-		callee_addrs[i] = (gpointer) (gsize) addrs[i];
-	if (eh_frame)
-		*eh_frame = (gpointer) (gsize) res.mono_eh_frame;
-	if (code_size_out)
-		*code_size_out = (guint32) res.code_size;
-	if (dwarf_eh_frame_out)
-		*dwarf_eh_frame_out = (gpointer) res.eh_frame.addr;
-	if (dwarf_eh_frame_size_out)
-		*dwarf_eh_frame_size_out = (guint32) res.eh_frame.size;
-	if (stackmaps_out)
-		*stackmaps_out = (gpointer) res.stackmaps.addr;
-	if (stackmaps_size_out)
-		*stackmaps_size_out = (guint32) res.stackmaps.size;
-	if (mono_lsda_out)
-		*mono_lsda_out = (gpointer) res.mono_lsda.addr;
-	if (mono_lsda_size_out)
-		*mono_lsda_size_out = (guint32) res.mono_lsda.size;
-
-	return (gpointer) (gsize) res.entry;
 }
 
 guint32

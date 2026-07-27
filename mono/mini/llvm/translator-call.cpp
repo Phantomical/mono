@@ -1222,17 +1222,29 @@ EmitContext::emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc)
 	MonoJitICallId icall_id = rethrow ? MONO_JIT_ICALL_mono_arch_rethrow_exception  : MONO_JIT_ICALL_mono_arch_throw_exception;
 
 	/*
-	 * emit_call () needs the signature the callee was declared with, and the
-	 * callee is cached on the module -- never derive it from the callee value
-	 * itself (a cached Function's type need not match this call site). The type
-	 * is cached too; see MonoLLVMModule::throw_sig_type.
+	 * emit_call () needs the signature the callee was declared with -- never
+	 * derive it from the callee value itself, whose type need not match this
+	 * call site.
+	 *
+	 * The MonoMethodSignature is built once for the process, not once per
+	 * compile: mono_metadata_signature_alloc () allocates out of corlib's image
+	 * mempool, which is never freed, so building one per compile would grow
+	 * that mempool for the life of the run. The LLVM function type derived from
+	 * it, by contrast, has to be per compile - it is uniqued in this compile's
+	 * context - so that one is cached on the module.
 	 */
-	if (!this->module->throw_sig_type) {
-		throw_sig = mono_metadata_signature_alloc (mono_get_corlib (), 1);
-		throw_sig->ret = m_class_get_byval_arg (mono_get_void_class ());
-		throw_sig->params [0] = m_class_get_byval_arg (mono_get_object_class ());
+	static std::once_flag throw_sig_once;
+	static MonoMethodSignature *cached_throw_sig;
+	std::call_once (throw_sig_once, [] () {
+		MonoMethodSignature *s = mono_metadata_signature_alloc (mono_get_corlib (), 1);
+		s->ret = m_class_get_byval_arg (mono_get_void_class ());
+		s->params [0] = m_class_get_byval_arg (mono_get_object_class ());
+		cached_throw_sig = s;
+	});
+	throw_sig = cached_throw_sig;
+
+	if (!this->module->throw_sig_type)
 		this->module->throw_sig_type = this->sig_to_llvm_sig (throw_sig);
-	}
 	LLVMTypeRef sig = this->module->throw_sig_type;
 
 	if (!callee) {
@@ -1264,7 +1276,7 @@ EmitContext::emit_throw (MonoBasicBlock *bb, gboolean rethrow, LLVMValueRef exc)
 }
 
 LLVMValueRef
-create_const_vector (LLVMTypeRef t, const int *vals, int count)
+EmitContext::create_const_vector (LLVMTypeRef t, const int *vals, int count)
 {
 	g_assert (count <= 16);
 	LLVMValueRef llvm_vals [16];
@@ -1274,28 +1286,28 @@ create_const_vector (LLVMTypeRef t, const int *vals, int count)
 }
 
 LLVMValueRef
-create_const_vector_i32 (const int *mask, int count)
+EmitContext::create_const_vector_i32 (const int *mask, int count)
 {
-	return create_const_vector (llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ())), mask, count);
+	return create_const_vector (llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ())), mask, count);
 }
 
 LLVMValueRef
-create_const_vector_4_i32 (int v0, int v1, int v2, int v3)
+EmitContext::create_const_vector_4_i32 (int v0, int v1, int v2, int v3)
 {
 	LLVMValueRef mask [4];
-	mask [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v0, false));
-	mask [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v1, false));
-	mask [2] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v2, false));
-	mask [3] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v3, false));
+	mask [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_ctx ()), v0, false));
+	mask [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_ctx ()), v1, false));
+	mask [2] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_ctx ()), v2, false));
+	mask [3] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_ctx ()), v3, false));
 	return const_vector (mask, 4);
 }
 
 LLVMValueRef
-create_const_vector_2_i32 (int v0, int v1)
+EmitContext::create_const_vector_2_i32 (int v0, int v1)
 {
 	LLVMValueRef mask [2];
-	mask [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v0, false));
-	mask [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v1, false));
+	mask [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_ctx ()), v0, false));
+	mask [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_ctx ()), v1, false));
 	return const_vector (mask, 2);
 }
 
@@ -1323,8 +1335,8 @@ EmitContext::get_mono_personality ()
 	LLVMTypeRef personality_type = LLVMFunctionType (llvm::wrap (llvm::Type::getInt32Ty (this->llvm_ctx ())), NULL, 0, TRUE);
 	LLVMValueRef personality = LLVMAddFunction (this->lmodule, "mono_personality", personality_type);
 	mono_llvm_add_func_attr (personality, LLVM_ATTR_NO_UNWIND);
-	LLVMBasicBlockRef entry_bb = LLVMAppendBasicBlock (personality, "ENTRY");
-	llvm::IRBuilder<> builder2_storage (llvm_global_ctx ());
+	LLVMBasicBlockRef entry_bb = append_basic_block (personality, "ENTRY");
+	llvm::IRBuilder<> builder2_storage (llvm_ctx ());
 	llvm::IRBuilder<> *builder2 = &builder2_storage;
 	builder2->SetInsertPoint (llvm::unwrap (entry_bb));
 	llvm::wrap (builder2->CreateRet (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), 0, false)));
@@ -1398,7 +1410,7 @@ EmitContext::emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder
 	llvm::IRBuilder<> *pad_builder, *cont_builder;
 	LLVMValueRef landing_pad, type_info;
 	LLVMTypeRef ti_members [2] = { llvm::wrap (i32_ty), llvm::wrap (i32_ty) };
-	LLVMTypeRef ti_type = LLVMStructType (ti_members, 2, FALSE);
+	LLVMTypeRef ti_type = struct_type (llvm_ctx (), ti_members, 2, FALSE);
 	LLVMValueRef ti_init [2];
 	llvm::SwitchInst *switch_ins;
 	char ti_name [128];
@@ -1419,7 +1431,7 @@ EmitContext::emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder
 
 		members [0] = llvm::wrap (llvm::PointerType::get (this->llvm_ctx (), 0));
 		members [1] = llvm::wrap (i32_ty);
-		ret_type = LLVMStructType (members, 2, FALSE);
+		ret_type = struct_type (llvm_ctx (), members, 2, FALSE);
 
 		landing_pad = llvm::wrap (pad_builder->CreateLandingPad (llvm::unwrap (ret_type), 1, ""));
 	}
@@ -1444,7 +1456,7 @@ EmitContext::emit_resume_unwind (MonoBasicBlock *bb, llvm::IRBuilder<> **builder
 		g_assert (target);
 
 		if (cfg->header->clauses [encloser].flags == MONO_EXCEPTION_CLAUSE_NONE && this->ex_var) {
-			LLVMBasicBlockRef store_bb = LLVMAppendBasicBlock (this->lmethod, "resume_to_catch");
+			LLVMBasicBlockRef store_bb = append_basic_block (this->lmethod, "resume_to_catch");
 			llvm::IRBuilder<> *store_builder = this->create_builder ();
 			llvm::IRBuilder<> *saved = this->builder;
 
@@ -1482,7 +1494,12 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 	LLVMTypeRef i8ptr;
 	LLVMBasicBlockRef target_bb;
 	MonoInst *exvar;
-	static int ti_generator;
+	/*
+	 * Only has to be unique within a module, but it is cheaper to keep one
+	 * counter for the process than to thread one through - and it has to be
+	 * atomic, because several compiles run at once.
+	 */
+	static std::atomic<int> ti_generator;
 	char ti_name [128];
 	int clause_index;
 
@@ -1515,7 +1532,7 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 
 			members [0] = i8ptr;
 			members [1] = llvm::wrap (llvm::Type::getInt32Ty (this->llvm_ctx ()));
-			ret_type = LLVMStructType (members, 2, FALSE);
+			ret_type = struct_type (llvm_ctx (), members, 2, FALSE);
 
 			landing_pad = llvm::wrap (builder->CreateLandingPad (llvm::unwrap (ret_type), cfg->header->num_clauses, ""));
 		}
@@ -1535,12 +1552,11 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 			 */
 			LLVMTypeRef i32_ty = llvm::wrap (llvm::Type::getInt32Ty (this->llvm_ctx ()));
 			LLVMTypeRef ti_members [2] = { i32_ty, i32_ty };
-			LLVMTypeRef ti_type = LLVMStructType (ti_members, 2, FALSE);
+			LLVMTypeRef ti_type = struct_type (llvm_ctx (), ti_members, 2, FALSE);
 			LLVMValueRef ti_init [2];
 			LLVMValueRef type_info;
 
-			sprintf (ti_name, "type_info_%d", ti_generator);
-			ti_generator ++;
+			sprintf (ti_name, "type_info_%d", ti_generator.fetch_add (1, std::memory_order_relaxed));
 
 			ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), clause_index, false));
 			ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), this_clause->flags, false));
@@ -1614,7 +1630,7 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 						 * emit the store, then restore it to the pad block for the rest
 						 * of the switch build-out.
 						 */
-						LLVMBasicBlockRef store_bb = LLVMAppendBasicBlock (this->lmethod, "finally_to_catch");
+						LLVMBasicBlockRef store_bb = append_basic_block (this->lmethod, "finally_to_catch");
 						llvm::BasicBlock *saved_ip = builder->GetInsertBlock ();
 						builder->SetInsertPoint (llvm::unwrap (store_bb));
 						llvm::Value *ex_obj = builder->CreateExtractValue (llvm::unwrap (landing_pad), {0}, "ex_obj");
@@ -1644,7 +1660,7 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 				LLVMValueRef type_info;
 				LLVMTypeRef i32_ty = llvm::wrap (llvm::Type::getInt32Ty (this->llvm_ctx ()));
 				LLVMTypeRef ti_members [2] = { i32_ty, i32_ty };
-				LLVMTypeRef ti_type = LLVMStructType (ti_members, 2, FALSE);
+				LLVMTypeRef ti_type = struct_type (llvm_ctx (), ti_members, 2, FALSE);
 				LLVMValueRef ti_init [2];
 
 				if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
@@ -1652,8 +1668,7 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 				if (c->try_offset != this_clause->try_offset || c->try_len != this_clause->try_len)
 					continue;
 
-				sprintf (ti_name, "type_info_%d", ti_generator);
-				ti_generator ++;
+				sprintf (ti_name, "type_info_%d", ti_generator.fetch_add (1, std::memory_order_relaxed));
 
 				ti_init [0] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), i, false));
 				ti_init [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), c->flags, false));
@@ -1768,28 +1783,28 @@ EmitContext::emit_handler_start (MonoBasicBlock *bb, llvm::IRBuilder<> *builder)
 
 //Wasm requires us to canonicalize NaNs.
 LLVMValueRef
-get_double_const (MonoCompile *cfg, double val)
+EmitContext::get_double_const (MonoCompile *cfg, double val)
 {
 #ifdef TARGET_WASM
 	if (mono_isnan (val))
 		*reinterpret_cast<gint64 *>(&val) = 0x7FF8000000000000ll;
 #endif
-	return llvm::wrap (llvm::ConstantFP::get (llvm::Type::getDoubleTy (llvm_global_ctx ()), val));
+	return llvm::wrap (llvm::ConstantFP::get (llvm::Type::getDoubleTy (llvm_ctx ()), val));
 }
 
 LLVMValueRef
-get_float_const (MonoCompile *cfg, float val)
+EmitContext::get_float_const (MonoCompile *cfg, float val)
 {
 #ifdef TARGET_WASM
 	if (mono_isnan (val))
 		*reinterpret_cast<int *>(&val) = 0x7FC00000;
 #endif
 	if (cfg->r4fp)
-		return llvm::wrap (llvm::ConstantFP::get (llvm::Type::getFloatTy (llvm_global_ctx ()), val));
+		return llvm::wrap (llvm::ConstantFP::get (llvm::Type::getFloatTy (llvm_ctx ()), val));
 	else
 		/* LLVM 18 removed the FPExt const-expr; val is already a float, so this
 		 * double constant is exactly the extension of the float constant. */
-		return llvm::wrap (llvm::ConstantFP::get (llvm::Type::getDoubleTy (llvm_global_ctx ()), val));
+		return llvm::wrap (llvm::ConstantFP::get (llvm::Type::getDoubleTy (llvm_ctx ()), val));
 }
 
 LLVMValueRef

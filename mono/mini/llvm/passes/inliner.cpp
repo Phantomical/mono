@@ -149,10 +149,9 @@ const char kMaterializedAttr[] = "mono-materialized";
 bool
 trace_enabled ()
 {
-	static int state = -1;
-	if (state < 0)
-		state = getenv ("MONO_INLINER_TRACE") != nullptr;
-	return state != 0;
+	/* Read once for the process; concurrent tier-1 compiles all pass through here. */
+	static const bool enabled = getenv ("MONO_INLINER_TRACE") != nullptr;
+	return enabled;
 }
 
 void

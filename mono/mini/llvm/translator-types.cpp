@@ -23,15 +23,15 @@ EmitContext::set_failure (const char *message)
 }
 
 LLVMValueRef
-const_int32 (int v)
+EmitContext::const_int32 (int v)
 {
-	return llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), v, false));
+	return llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (llvm_ctx ()), v, false));
 }
 
 LLVMValueRef
-const_int64 (int64_t v)
+EmitContext::const_int64 (int64_t v)
 {
-	return llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), v, false));
+	return llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt64Ty (llvm_ctx ()), v, false));
 }
 
 /*
@@ -40,21 +40,27 @@ const_int64 (int64_t v)
  *   The LLVM type with width == TARGET_SIZEOF_VOID_P
  */
 LLVMTypeRef
-IntPtrType (void)
+int_ptr_type (llvm::LLVMContext &c)
 {
-	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())) : llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::Type::getInt64Ty (c)) : llvm::wrap (llvm::Type::getInt32Ty (c));
 }
 
 LLVMTypeRef
-ObjRefType (void)
+EmitContext::IntPtrType ()
 {
-	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)) : llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0));
+	return int_ptr_type (llvm_ctx ());
 }
 
 LLVMTypeRef
-ThisType (void)
+EmitContext::ObjRefType ()
 {
-	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0)) : llvm::wrap (llvm::PointerType::get (llvm_global_ctx (), 0));
+	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0)) : llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
+}
+
+LLVMTypeRef
+EmitContext::ThisType ()
+{
+	return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0)) : llvm::wrap (llvm::PointerType::get (llvm_ctx (), 0));
 }
 
 /*
@@ -144,30 +150,36 @@ EmitContext::simd_class_to_llvm_type (MonoClass *klass)
 }
 
 /* Return the 128 bit SIMD type corresponding to the mono type TYPE */
-G_GNUC_UNUSED LLVMTypeRef
-type_to_sse_type (int type)
+LLVMTypeRef
+sse_type (llvm::LLVMContext &c, int type)
 {
 	switch (type) {
 	case MONO_TYPE_I1:
 	case MONO_TYPE_U1:
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (llvm_global_ctx ()), 16));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt8Ty (c), 16));
 	case MONO_TYPE_U2:
 	case MONO_TYPE_I2:
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (llvm_global_ctx ()), 8));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt16Ty (c), 8));
 	case MONO_TYPE_U4:
 	case MONO_TYPE_I4:
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (llvm_global_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt32Ty (c), 4));
 	case MONO_TYPE_U8:
 	case MONO_TYPE_I8:
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (llvm_global_ctx ()), 2));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getInt64Ty (c), 2));
 	case MONO_TYPE_R8:
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (llvm_global_ctx ()), 2));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getDoubleTy (c), 2));
 	case MONO_TYPE_R4:
-		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (llvm_global_ctx ()), 4));
+		return llvm::wrap (llvm::FixedVectorType::get (llvm::Type::getFloatTy (c), 4));
 	default:
 		g_assert_not_reached ();
 		return nullptr;
 	}
+}
+
+LLVMTypeRef
+EmitContext::type_to_sse_type (int type)
+{
+	return sse_type (llvm_ctx (), type);
 }
 
 static LLVMTypeRef
@@ -192,17 +204,17 @@ create_llvm_type_for_type (MonoLLVMModule *module, MonoClass *klass)
 		size = nfields;
 		eltypes = g_new (LLVMTypeRef, size);
 		for (i = 0; i < size; ++i)
-			eltypes [i] = esize == 4 ? llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ())) : llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
+			eltypes [i] = esize == 4 ? llvm::wrap (llvm::Type::getFloatTy (module->ctx ())) : llvm::wrap (llvm::Type::getDoubleTy (module->ctx ()));
 	} else {
 		size = get_vtype_size (t);
 
 		eltypes = g_new (LLVMTypeRef, size);
 		for (i = 0; i < size; ++i)
-			eltypes [i] = llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
+			eltypes [i] = llvm::wrap (llvm::Type::getInt8Ty (module->ctx ()));
 	}
 
 	name = mono_type_full_name (m_class_get_byval_arg (klass));
-	ltype = LLVMStructCreateNamed (module->context, name);
+	ltype = LLVMStructCreateNamed (llvm::wrap (&module->ctx ()), name);
 	LLVMStructSetBody (ltype, eltypes, size, FALSE);
 	g_free (eltypes);
 	g_free (name);
@@ -211,25 +223,25 @@ create_llvm_type_for_type (MonoLLVMModule *module, MonoClass *klass)
 }
 
 LLVMTypeRef
-primitive_type_to_llvm_type (MonoTypeEnum type)
+EmitContext::primitive_type_to_llvm_type (MonoTypeEnum type)
 {
 	switch (type) {
 	case MONO_TYPE_I1:
 	case MONO_TYPE_U1:
-		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ()));
 	case MONO_TYPE_I2:
 	case MONO_TYPE_U2:
-		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ()));
 	case MONO_TYPE_I4:
 	case MONO_TYPE_U4:
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case MONO_TYPE_I8:
 	case MONO_TYPE_U8:
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	case MONO_TYPE_R4:
-		return llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getFloatTy (llvm_ctx ()));
 	case MONO_TYPE_R8:
-		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ()));
 	case MONO_TYPE_I:
 	case MONO_TYPE_U:
 		return IntPtrType ();
@@ -385,17 +397,17 @@ EmitContext::type_to_llvm_arg_type (MonoType *t)
  *   Return the LLVM type which needs to be used when a value of type TYPE is pushed
  * on the IL stack.
  */
-G_GNUC_UNUSED LLVMTypeRef
-llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type)
+LLVMTypeRef
+EmitContext::llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type)
 {
 	if (type == nullptr)
 		return nullptr;
-	if (type == llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ())))
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
-	else if (type == llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ())))
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
-	else if (!cfg->r4fp && type == llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ())))
-		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
+	if (type == llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ())))
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
+	else if (type == llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ())))
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
+	else if (!cfg->r4fp && type == llvm::wrap (llvm::Type::getFloatTy (llvm_ctx ())))
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ()));
 	else
 		return type;
 }
@@ -407,15 +419,15 @@ llvm_type_to_stack_type (MonoCompile *cfg, LLVMTypeRef type)
  * descriptions.
  */
 LLVMTypeRef
-regtype_to_llvm_type (char c)
+EmitContext::regtype_to_llvm_type (char c)
 {
 	switch (c) {
 	case 'i':
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case 'l':
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	case 'f':
-		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ()));
 	default:
 		return nullptr;
 	}
@@ -427,72 +439,72 @@ regtype_to_llvm_type (char c)
  *   Return the LLVM type corresponding to the unary/binary opcode OPCODE.
  */
 LLVMTypeRef
-op_to_llvm_type (int opcode)
+EmitContext::op_to_llvm_type (int opcode)
 {
 	switch (opcode) {
 	case OP_ICONV_TO_I1:
 	case OP_LCONV_TO_I1:
-		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ()));
 	case OP_ICONV_TO_U1:
 	case OP_LCONV_TO_U1:
-		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ()));
 	case OP_ICONV_TO_I2:
 	case OP_LCONV_TO_I2:
-		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ()));
 	case OP_ICONV_TO_U2:
 	case OP_LCONV_TO_U2:
-		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ()));
 	case OP_ICONV_TO_I4:
 	case OP_LCONV_TO_I4:
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case OP_ICONV_TO_U4:
 	case OP_LCONV_TO_U4:
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case OP_ICONV_TO_I8:
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	case OP_ICONV_TO_R4:
-		return llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getFloatTy (llvm_ctx ()));
 	case OP_ICONV_TO_R8:
-		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ()));
 	case OP_ICONV_TO_U8:
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	case OP_FCONV_TO_I4:
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case OP_FCONV_TO_I8:
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	case OP_FCONV_TO_I1:
 	case OP_FCONV_TO_U1:
 	case OP_RCONV_TO_I1:
 	case OP_RCONV_TO_U1:
-		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ()));
 	case OP_FCONV_TO_I2:
 	case OP_FCONV_TO_U2:
 	case OP_RCONV_TO_I2:
 	case OP_RCONV_TO_U2:
-		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ()));
 	case OP_FCONV_TO_U4:
 	case OP_RCONV_TO_U4:
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case OP_FCONV_TO_U8:
 	case OP_RCONV_TO_U8:
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	case OP_FCONV_TO_I:
 	case OP_FCONV_TO_U:
-		return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ())) : llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return TARGET_SIZEOF_VOID_P == 8 ? llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ())) : llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case OP_IADD_OVF:
 	case OP_IADD_OVF_UN:
 	case OP_ISUB_OVF:
 	case OP_ISUB_OVF_UN:
 	case OP_IMUL_OVF:
 	case OP_IMUL_OVF_UN:
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case OP_LADD_OVF:
 	case OP_LADD_OVF_UN:
 	case OP_LSUB_OVF:
 	case OP_LSUB_OVF_UN:
 	case OP_LMUL_OVF:
 	case OP_LMUL_OVF_UN:
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	default:
 		printf ("%s\n", mono_inst_name (opcode));
 		g_assert_not_reached ();
@@ -510,7 +522,7 @@ op_to_llvm_type (int opcode)
  * OPCODE.
  */
 LLVMTypeRef
-load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
+EmitContext::load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 {
 	*sext = FALSE;
 	*zext = FALSE;
@@ -523,14 +535,14 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_STORE_I1:
 		*size = 1;
 		*sext = TRUE;
-		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ()));
 	case OP_LOADU1_MEMBASE:
 	case OP_LOADU1_MEM:
 	case OP_ATOMIC_LOAD_U1:
 	case OP_ATOMIC_STORE_U1:
 		*size = 1;
 		*zext = TRUE;
-		return llvm::wrap (llvm::Type::getInt8Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ()));
 	case OP_LOADI2_MEMBASE:
 	case OP_STOREI2_MEMBASE_REG:
 	case OP_STOREI2_MEMBASE_IMM:
@@ -538,14 +550,14 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_STORE_I2:
 		*size = 2;
 		*sext = TRUE;
-		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ()));
 	case OP_LOADU2_MEMBASE:
 	case OP_LOADU2_MEM:
 	case OP_ATOMIC_LOAD_U2:
 	case OP_ATOMIC_STORE_U2:
 		*size = 2;
 		*zext = TRUE;
-		return llvm::wrap (llvm::Type::getInt16Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt16Ty (llvm_ctx ()));
 	case OP_LOADI4_MEMBASE:
 	case OP_LOADU4_MEMBASE:
 	case OP_LOADI4_MEM:
@@ -557,7 +569,7 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_LOAD_U4:
 	case OP_ATOMIC_STORE_U4:
 		*size = 4;
-		return llvm::wrap (llvm::Type::getInt32Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt32Ty (llvm_ctx ()));
 	case OP_LOADI8_MEMBASE:
 	case OP_LOADI8_MEM:
 	case OP_STOREI8_MEMBASE_REG:
@@ -567,19 +579,19 @@ load_store_to_llvm_type (int opcode, int *size, gboolean *sext, gboolean *zext)
 	case OP_ATOMIC_LOAD_U8:
 	case OP_ATOMIC_STORE_U8:
 		*size = 8;
-		return llvm::wrap (llvm::Type::getInt64Ty (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getInt64Ty (llvm_ctx ()));
 	case OP_LOADR4_MEMBASE:
 	case OP_STORER4_MEMBASE_REG:
 	case OP_ATOMIC_LOAD_R4:
 	case OP_ATOMIC_STORE_R4:
 		*size = 4;
-		return llvm::wrap (llvm::Type::getFloatTy (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getFloatTy (llvm_ctx ()));
 	case OP_LOADR8_MEMBASE:
 	case OP_STORER8_MEMBASE_REG:
 	case OP_ATOMIC_LOAD_R8:
 	case OP_ATOMIC_STORE_R8:
 		*size = 8;
-		return llvm::wrap (llvm::Type::getDoubleTy (llvm_global_ctx ()));
+		return llvm::wrap (llvm::Type::getDoubleTy (llvm_ctx ()));
 	case OP_LOAD_MEMBASE:
 	case OP_LOAD_MEM:
 	case OP_STORE_MEMBASE_REG:
@@ -726,49 +738,49 @@ simd_ins_to_intrins (int opcode)
 }
 
 LLVMTypeRef
-simd_op_to_llvm_type (int opcode)
+EmitContext::simd_op_to_llvm_type (int opcode)
 {
 #if defined(TARGET_X86) || defined(TARGET_AMD64)
 	switch (opcode) {
 	case OP_EXTRACT_R8:
 	case OP_EXPAND_R8:
-		return sse_r8_t;
+		return type_to_sse_type (MONO_TYPE_R8);
 	case OP_EXTRACT_I8:
 	case OP_EXPAND_I8:
-		return sse_i8_t;
+		return type_to_sse_type (MONO_TYPE_I8);
 	case OP_EXTRACT_I4:
 	case OP_EXPAND_I4:
-		return sse_i4_t;
+		return type_to_sse_type (MONO_TYPE_I4);
 	case OP_EXTRACT_I2:
 	case OP_EXTRACT_U2:
 	case OP_EXTRACTX_U2:
 	case OP_EXPAND_I2:
-		return sse_i2_t;
+		return type_to_sse_type (MONO_TYPE_I2);
 	case OP_EXTRACT_I1:
 	case OP_EXTRACT_U1:
 	case OP_EXPAND_I1:
-		return sse_i1_t;
+		return type_to_sse_type (MONO_TYPE_I1);
 	case OP_EXTRACT_R4:
 	case OP_EXPAND_R4:
-		return sse_r4_t;
+		return type_to_sse_type (MONO_TYPE_R4);
 	case OP_CVTPD2DQ:
 	case OP_CVTPD2PS:
 	case OP_CVTTPD2DQ:
-		return sse_r8_t;
+		return type_to_sse_type (MONO_TYPE_R8);
 	case OP_CVTPS2DQ:
 	case OP_CVTTPS2DQ:
-		return sse_r4_t;
+		return type_to_sse_type (MONO_TYPE_R4);
 	case OP_EXTRACT_MASK:
-		return sse_i1_t;
+		return type_to_sse_type (MONO_TYPE_I1);
 	case OP_SQRTPS:
 	case OP_RSQRTPS:
 	case OP_RCPPS:
 	case OP_DUPPS_LOW:
 	case OP_DUPPS_HIGH:
-		return sse_r4_t;
+		return type_to_sse_type (MONO_TYPE_R4);
 	case OP_SQRTPD:
 	case OP_DUPPD:
-		return sse_r8_t;
+		return type_to_sse_type (MONO_TYPE_R8);
 	default:
 		g_assert_not_reached ();
 		return nullptr;

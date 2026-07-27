@@ -25,6 +25,7 @@ extern "C" {
 #include <mono/metadata/mono-basic-block.h>
 }
 
+#include "engine.hpp"
 #include "mono_lsda.hpp"
 #include "passes/inliner-support.hpp"
 
@@ -86,11 +87,6 @@ LLVMRealPredicate fpcond_to_llvm_cond [] = {
 
 MonoLLVMModule aot_module;
 
-GHashTable *intrins_id_to_intrins;
-LLVMTypeRef sse_i1_t, sse_i2_t, sse_i4_t, sse_i8_t, sse_r4_t, sse_r8_t;
-
-static void init_jit_module (MonoDomain *domain);
-
 void set_invariant_load_flag (LLVMValueRef v);
 
 /*
@@ -117,24 +113,19 @@ void set_invariant_load_flag (LLVMValueRef v);
  *   MONO_LLVM_METHOD='LlvmExec:Compute' mono --llvm test.exe
  */
 static char **llvm_method_filter_names;
-static bool llvm_method_filter_inited;
+static std::once_flag llvm_method_filter_once;
 
 static bool
 llvm_method_filter_excludes (MonoMethod *method)
 {
 	int i;
 
-	/*
-	 * Lazy init, unsynchronized, exactly as MONO_VERBOSE_METHOD does it in
-	 * mini.c. Compilation is single-threaded today; a race would at worst
-	 * parse the variable twice and leak one strv.
-	 */
-	if (!llvm_method_filter_inited) {
+	/* Read once for the process; several compile threads can arrive here. */
+	std::call_once (llvm_method_filter_once, [] () {
 		char *env = g_getenv ("MONO_LLVM_METHOD");
 		if (env != nullptr)
 			llvm_method_filter_names = g_strsplit (env, ";", -1);
-		llvm_method_filter_inited = true;
-	}
+	});
 
 	if (!llvm_method_filter_names)
 		return false;
@@ -371,12 +362,11 @@ free_ctx (EmitContext *ctx)
  */
 /*
  * Allocate an EmitContext and its per-vreg/per-bblock scratch arrays for CFG,
- * and point it at the domain's shared MonoLLVMModule. The caller still has to
- * set ctx->lmodule (the LLVM module the function is emitted into) before calling
- * emit_method_inner ().
+ * translating into MODULE. The caller still has to set ctx->lmodule (the LLVM
+ * module the function is emitted into) before calling emit_method_inner ().
  */
 static EmitContext *
-alloc_emit_context (MonoCompile *cfg)
+alloc_emit_context (MonoCompile *cfg, MonoLLVMModule *module)
 {
 	EmitContext *ctx = new EmitContext ();
 	ctx->cfg = cfg;
@@ -402,8 +392,7 @@ alloc_emit_context (MonoCompile *cfg)
 	ctx->unreachable = g_new0 (gboolean, cfg->max_block_num);
 	ctx->bblock_list.reserve (256);
 
-	init_jit_module (cfg->domain);
-	ctx->module = static_cast<MonoLLVMModule*>(domain_jit_info (cfg->domain)->llvm_module);
+	ctx->module = module;
 	ctx->method_name = mono_method_full_name (cfg->method, TRUE);
 
 	return ctx;
@@ -421,7 +410,7 @@ cleanup_failed_emit (EmitContext *ctx)
 		return;
 
 	/* Need to add unused phi nodes as they can be referenced by other values */
-	LLVMBasicBlockRef phi_bb = LLVMAppendBasicBlock (ctx->lmethod, "PHI_BB");
+	LLVMBasicBlockRef phi_bb = append_basic_block (ctx->lmethod, "PHI_BB");
 	llvm::IRBuilder<> *builder;
 
 	builder = ctx->create_builder ();
@@ -437,21 +426,57 @@ cleanup_failed_emit (EmitContext *ctx)
 }
 
 /*
- * Serializes the whole per-method IR-build/optimize/codegen pipeline below
- * against every unguarded per-process piece of engine state it touches along
- * the way: the shared LLVMContext and MonoLLVMModule here, plus engine.cpp's
- * module_counter_ and ExecutionSession (reached only from inside this
- * function's critical section, so this one mutex covers both sides).
+ * Build the per-compile MonoLLVMModule: a fresh LLVMContext, the LLVM module
+ * the method is emitted into, and the caches derived from both.
  *
- * A lock of its own, not mono_loader_lock (): the compile it wraps can run on
- * the tiered background worker (tiered.cpp) at the same time mutator threads
- * are doing perfectly ordinary, unrelated work that also needs the loader
- * lock - a ho-hum tier-0 compile, a vtable build, a class init. Reusing that
- * global lock here serialized all of that behind however long the background
- * compile took, defeating the point of moving tier-1 off the mutator thread.
- * This lock only ever contends with another LLVM compile.
+ * One of these per compile is what makes concurrent tier-1 compilation safe.
+ * An LLVMContext does no locking of its own, so its type, constant and
+ * metadata uniquing tables tolerate exactly one thread building in them; give
+ * every compile its own and threads never meet. Nothing here is shared, so
+ * nothing here needs a lock.
  */
-static std::mutex g_llvm_compile_mutex;
+static MonoLLVMModule *
+create_compile_module (MonoCompile *cfg)
+{
+	MonoLLVMModule *module = new MonoLLVMModule ();
+
+	module->context = llvm::orc::ThreadSafeContext (std::make_unique<llvm::LLVMContext> ());
+	module->intrins_by_id.resize (INTRINS_NUM, nullptr);
+	module->llvm_types = g_hash_table_new (NULL, NULL);
+
+	char *name = g_strdup_printf ("jit-module-%s", cfg->method->name);
+	module->lmodule = LLVMModuleCreateWithNameInContext (name, llvm::wrap (&module->ctx ()));
+	g_free (name);
+
+	add_types (module);
+
+	return module;
+}
+
+static void
+free_compile_module (MonoLLVMModule *module)
+{
+	g_hash_table_destroy (module->llvm_types);
+
+	if (module->objc_selector_to_var)
+		g_hash_table_destroy (module->objc_selector_to_var);
+
+	if (module->bb_names) {
+		for (int i = 0; i < module->bb_names_len; ++i)
+			g_free (module->bb_names [i]);
+		g_free (module->bb_names);
+	}
+
+	/*
+	 * Dispose the module but not the context: the engine holds a copy of the
+	 * ThreadSafeContext, so dropping ours is enough. If ORC is still holding
+	 * the module it copied, its copy keeps the context alive; if it isn't,
+	 * ours was the last reference and the context goes with it.
+	 */
+	LLVMDisposeModule (module->lmodule);
+
+	delete module;
+}
 
 void
 mono_llvm_emit_method (MonoCompile *cfg)
@@ -461,13 +486,10 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	if (cfg->skip)
 		return;
 
-	std::lock_guard<std::mutex> compile_lock (g_llvm_compile_mutex);
+	MonoLLVMModule *module = create_compile_module (cfg);
 
-	ctx = alloc_emit_context (cfg);
-
-	ctx->lmodule = LLVMModuleCreateWithName (g_strdup_printf ("jit-module-%s", cfg->method->name));
-	/* Reset this as it contains values from lmodule */
-	memset (ctx->module->intrins_by_id, 0, sizeof (LLVMValueRef) * INTRINS_NUM);
+	ctx = alloc_emit_context (cfg, module);
+	ctx->lmodule = module->lmodule;
 
 	ctx->emit_method_inner ();
 
@@ -475,6 +497,7 @@ mono_llvm_emit_method (MonoCompile *cfg)
 		cleanup_failed_emit (ctx);
 
 	free_ctx (ctx);
+	free_compile_module (module);
 }
 
 void
@@ -888,7 +911,7 @@ EmitContext::emit_method_inner ()
 		 * LLVM optimizer passes.
 		 */
 		sprintf (name, "BB%d_CALL_HANDLER_TARGET", bb->block_num);
-		this->bblocks [bb->block_num].call_handler_target_bb = LLVMAppendBasicBlock (this->lmethod, name);
+		this->bblocks [bb->block_num].call_handler_target_bb = append_basic_block (this->lmethod, name);
 	}
 
 	for (MonoBasicBlock *bb : bblock_list) {
@@ -896,7 +919,7 @@ EmitContext::emit_method_inner ()
 		if (!(bb == cfg->bb_entry || bb->in_count > 0))
 			continue;
 
-		process_bb (this, bb);
+		this->process_bb (bb);
 		if (!this->ok ())
 			return;
 	}
@@ -1005,9 +1028,9 @@ after_codegen:
 		LLVMValueRef md_args [16];
 		LLVMValueRef md_node;
 
-		md_args [0] = LLVMMDString (this->method_name, strlen (this->method_name));
+		md_args [0] = md_string (this->llvm_ctx (), this->method_name, strlen (this->method_name));
 		md_args [1] = llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), 1, false));
-		md_node = LLVMMDNode (md_args, 2);
+		md_node = ::md_node (this->llvm_ctx (), md_args, 2);
 		LLVMAddNamedMetadataOperand (lmodule, "mono.function_indexes", md_node);
 	}
 
@@ -1027,11 +1050,11 @@ after_codegen:
 	 * MonoCompile to drive callee materialization. Unregister once optimization
 	 * has returned - the cfg does not outlive this compile.
 	 */
-	mono::register_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod), cfg);
+	mono::register_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod), cfg, this->module);
 
 	this->llvm_jit_finalize_method ();
 
-	mono::unregister_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod));
+	mono::unregister_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod), this->module);
 
 	if (this->module->method_to_lmethod)
 		g_hash_table_insert (this->module->method_to_lmethod, cfg->method, this->lmethod);
@@ -1142,15 +1165,6 @@ mono_llvm_emit_call (MonoCompile *cfg, MonoCallInst *call)
 void
 mono_llvm_init (gboolean enable_jit)
 {
-	sse_i1_t = type_to_sse_type (MONO_TYPE_I1);
-	sse_i2_t = type_to_sse_type (MONO_TYPE_I2);
-	sse_i4_t = type_to_sse_type (MONO_TYPE_I4);
-	sse_i8_t = type_to_sse_type (MONO_TYPE_I8);
-	sse_r4_t = type_to_sse_type (MONO_TYPE_R4);
-	sse_r8_t = type_to_sse_type (MONO_TYPE_R8);
-
-	intrins_id_to_intrins = g_hash_table_new (NULL, NULL);
-
 	if (enable_jit)
 		mono_llvm_jit_init ();
 }
@@ -1163,34 +1177,18 @@ mono_llvm_cleanup (void)
 	if (module->lmodule)
 		LLVMDisposeModule (module->lmodule);
 
-	if (module->context)
-		LLVMContextDispose (module->context);
+	module->context = llvm::orc::ThreadSafeContext ();
 }
 
 void
 mono_llvm_free_domain_info (MonoDomain *domain)
 {
-	MonoJitDomainInfo *info = domain_jit_info (domain);
-	MonoLLVMModule *module = static_cast<MonoLLVMModule*>(info->llvm_module);
-	int i;
-
-	if (!module)
-		return;
-
-	g_hash_table_destroy (module->llvm_types);
-
-	mono_llvm_dispose_ee (module->mono_ee);
-
-	if (module->bb_names) {
-		for (i = 0; i < module->bb_names_len; ++i)
-			g_free (module->bb_names [i]);
-		g_free (module->bb_names);
-	}
-	//LLVMDisposeModule (module->module);
-
-	g_free (module);
-
-	info->llvm_module = NULL;
+	/*
+	 * Nothing to do: the translator's LLVM state is per-compile, created and
+	 * destroyed inside mono_llvm_emit_method (), so a domain never accumulates
+	 * any. Reclaiming the domain's compiled CODE is a separate path -
+	 * mono_llvm_jit_release_domain () in the engine.
+	 */
 }
 
 /*
@@ -1248,35 +1246,54 @@ mono_llvm_emit_aot_module (const char *filename, const char *cu_name)
 namespace mono {
 
 /*
- * The root registry, keyed by the root's LLVM Function. Only ever holds the
- * root(s) currently being optimized (v1: exactly one at a time), since a root is
- * unregistered as soon as its optimization returns. A plain map under the loader
- * lock (held across the whole emit) is enough - no separate lock needed.
+ * The root registry: how the inliner, which runs inside LLVM's optimization
+ * pipeline, reaches back into the translator state of the compile it is
+ * optimizing. Roots are keyed by their LLVM Function and their compile module
+ * by that module, and both are dropped as soon as optimization returns - so
+ * this holds one entry per compile currently in the optimizer, which with
+ * concurrent tier-1 compiles means one per busy worker.
+ *
+ * The lock is what makes that concurrency safe. It is only ever held for a map
+ * operation, never across a compile.
  */
-static std::unordered_map<llvm::Function *, MonoCompile *> *tier1_roots;
+static std::mutex tier1_roots_mutex;
+static std::unordered_map<llvm::Function *, MonoCompile *> tier1_roots;
+static std::unordered_map<llvm::Module *, MonoLLVMModule *> tier1_root_modules;
 
 void
-register_tier1_root (llvm::Function *root, MonoCompile *root_cfg)
+register_tier1_root (llvm::Function *root, MonoCompile *root_cfg, MonoLLVMModule *module)
 {
-	if (!tier1_roots)
-		tier1_roots = new std::unordered_map<llvm::Function *, MonoCompile *> ();
-	(*tier1_roots) [root] = root_cfg;
+	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
+
+	tier1_roots [root] = root_cfg;
+	tier1_root_modules [llvm::unwrap (module->lmodule)] = module;
 }
 
 void
-unregister_tier1_root (llvm::Function *root)
+unregister_tier1_root (llvm::Function *root, MonoLLVMModule *module)
 {
-	if (tier1_roots)
-		tier1_roots->erase (root);
+	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
+
+	tier1_roots.erase (root);
+	tier1_root_modules.erase (llvm::unwrap (module->lmodule));
 }
 
 MonoCompile *
 tier1_root_cfg (llvm::Function *root)
 {
-	if (!tier1_roots)
-		return nullptr;
-	auto found = tier1_roots->find (root);
-	return found == tier1_roots->end () ? nullptr : found->second;
+	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
+
+	auto found = tier1_roots.find (root);
+	return found == tier1_roots.end () ? nullptr : found->second;
+}
+
+MonoLLVMModule *
+tier1_root_module (llvm::Module *into)
+{
+	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
+
+	auto found = tier1_root_modules.find (into);
+	return found == tier1_root_modules.end () ? nullptr : found->second;
 }
 
 bool
@@ -1575,19 +1592,28 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 		goto done;
 
 	{
-		EmitContext *ctx = alloc_emit_context (cfg);
 		/*
-		 * Translate into the caller's module, and drop the intrinsic cache
-		 * first. Its entries are LLVM Functions the root emitted into this same
-		 * module, but we run from inside the optimization pipeline, and a pass
-		 * that folds away the last use of an intrinsic leaves the declaration
-		 * dead for GlobalOpt to delete - so a cached pointer can already be
-		 * dangling by the time we get here. Rebuilding costs nothing:
-		 * Intrinsic::getDeclaration () hands back the declaration the module
-		 * still has, and only creates one when it really is gone.
+		 * Translate into the root's module, sharing its MonoLLVMModule - and so
+		 * its LLVMContext, which `into` and every type in it belong to. A fresh
+		 * one here would build the callee body out of types from a different
+		 * context, which is not a thing an LLVM module can hold.
 		 */
-		memset (ctx->module->intrins_by_id, 0,
-		        sizeof (LLVMValueRef) * INTRINS_NUM);
+		MonoLLVMModule *module = tier1_root_module (into);
+		if (!module)
+			goto done;
+
+		EmitContext *ctx = alloc_emit_context (cfg, module);
+		/*
+		 * Drop the intrinsic cache first. Its entries are LLVM Functions the
+		 * root emitted into this same module, but we run from inside the
+		 * optimization pipeline, and a pass that folds away the last use of an
+		 * intrinsic leaves the declaration dead for GlobalOpt to delete - so a
+		 * cached pointer can already be dangling by the time we get here.
+		 * Rebuilding costs nothing: Intrinsic::getDeclaration () hands back the
+		 * declaration the module still has, and only creates one when it really
+		 * is gone.
+		 */
+		std::fill (module->intrins_by_id.begin (), module->intrins_by_id.end (), nullptr);
 		ctx->lmodule = llvm::wrap (into);
 		ctx->translate_only = true;
 		/*
@@ -1745,39 +1771,30 @@ mono_llvm_init (gboolean enable_jit)
 
 /* LLVM JIT support */
 
-static void
-init_jit_module (MonoDomain *domain)
+gpointer
+gc_poll_cold_wrapper_code (void)
 {
-	MonoJitDomainInfo *dinfo;
-	MonoLLVMModule *module;
+	static std::atomic<gpointer> compiled {nullptr};
 
-	dinfo = domain_jit_info (domain);
-	if (dinfo->llvm_module)
-		return;
+	gpointer code = compiled.load (std::memory_order_acquire);
+	if (code)
+		return code;
+
+	ERROR_DECL (error);
+	/* Compiling a method here is a bit ugly, but it works */
+	MonoMethod *wrapper = mono_marshal_get_llvm_func_wrapper (LLVM_FUNC_WRAPPER_GC_POLL);
+	code = mono_jit_compile_method (wrapper, error);
+	mono_error_assert_ok (error);
 
 	/*
-	 * No locking here: the only caller is alloc_emit_context (), reached from
-	 * mono_llvm_emit_method () after it has already taken g_llvm_compile_mutex,
-	 * so this always runs with that same-thread serialization already in
-	 * place. A second, non-recursive lock attempt here would just deadlock.
+	 * Two threads can get here at once and both compile the wrapper. That is
+	 * fine and not worth a lock: mono_jit_compile_method () publishes one body
+	 * per method, so they arrive at the same address and whichever store lands
+	 * second stores the same value.
 	 */
-	module = g_new0 (MonoLLVMModule, 1);
+	compiled.store (code, std::memory_order_release);
 
-	module->context = LLVMGetGlobalContext ();
-	module->intrins_by_id = g_new0 (LLVMValueRef, INTRINS_NUM);
-
-	module->mono_ee = static_cast<MonoEERef*>(mono_llvm_create_ee (&module->ee));
-
-	// This contains just the intrinsics
-	module->lmodule = LLVMModuleCreateWithName ("jit-global-module");
-	add_intrinsics (module->lmodule);
-	add_types (module);
-
-	module->llvm_types = g_hash_table_new (NULL, NULL);
-
-	mono_memory_barrier ();
-
-	dinfo->llvm_module = module;
+	return code;
 }
 
 /*
@@ -2081,10 +2098,6 @@ EmitContext::llvm_jit_finalize_method ()
 	MonoCompile *cfg = this->cfg;
 	MonoDomain *domain = mono_domain_get ();
 	MonoJitDomainInfo *domain_info;
-	int nvars = this->jit_callees.size ();
-	LLVMValueRef *callee_vars = g_new0 (LLVMValueRef, nvars);
-	gpointer *callee_addrs = g_new0 (gpointer, nvars);
-	gpointer eh_frame;
 	int i;
 
 	/*
@@ -2093,9 +2106,11 @@ EmitContext::llvm_jit_finalize_method ()
 	 * code so it can update them after their corresponding method was
 	 * compiled.
 	 */
-	i = 0;
+	std::vector<llvm::GlobalVariable *> callee_vars;
+	callee_vars.reserve (this->jit_callees.size ());
 	for (const auto &kv : this->jit_callees)
-		callee_vars [i ++] = llvm::wrap (kv.second);
+		callee_vars.push_back (llvm::cast<llvm::GlobalVariable> (kv.second));
+	std::vector<uint64_t> callee_addrs (callee_vars.size ());
 
 	/*
 	 * Run the -O2 module pipeline over the method's IR in place, before codegen.
@@ -2124,21 +2139,34 @@ EmitContext::llvm_jit_finalize_method ()
 	mono_llvm_optimize_method (this->lmethod);
 
 	mono_codeman_enable_write ();
-	guint32 llvm_code_size = 0;
-	gpointer dwarf_eh_frame = nullptr;
-	guint32 dwarf_eh_frame_size = 0;
-	gpointer stackmaps = nullptr;
-	guint32 stackmaps_size = 0;
+	/*
+	 * cfg->domain is the lifetime key for the code about to be emitted: it is
+	 * the domain the body is published into, and mono_domain_free () reclaims
+	 * everything compiled under it.
+	 *
+	 * The context goes along by shared_ptr: ORC keeps the module alive inside
+	 * its dylib and must be able to keep the context with it. Handing over this
+	 * compile's own context - rather than one the engine shares between
+	 * compiles - is what lets several of these run at once.
+	 */
+	mono::CompileResult res = mono::MonoLLVMJIT::get_singleton ()->compile (
+		llvm::unwrap<llvm::Function> (this->lmethod), callee_vars, callee_addrs.data (),
+		"mono_eh_frame", this->module->context, cfg->domain);
+
+	cfg->native_code = (guint8 *) (gsize) res.entry;
+	/* Stock LLVM 18 emits a standard DWARF `.eh_frame` (consumed below by the
+	 * unwind-ops transcoder), not a mono clause global, so res.mono_eh_frame is
+	 * always 0 and not read here. */
+	guint32 llvm_code_size = (guint32) res.code_size;
+	gpointer dwarf_eh_frame = res.eh_frame.addr;
+	guint32 dwarf_eh_frame_size = (guint32) res.eh_frame.size;
+	gpointer stackmaps = res.stackmaps.addr;
+	guint32 stackmaps_size = (guint32) res.stackmaps.size;
 	/* C3 captures the `.mono_lsda` section (mono's own target-neutral clause
 	 * table); the reader below (C6) parses/publishes it into cfg->llvm_ex_info for
 	 * every admitted clause-bearing method. */
-	gpointer mono_lsda = nullptr;
-	guint32 mono_lsda_size = 0;
-	cfg->native_code = static_cast<guint8*>(mono_llvm_compile_method (this->module->mono_ee, cfg, this->lmethod, nvars, callee_vars, callee_addrs, &eh_frame, &llvm_code_size, &dwarf_eh_frame, &dwarf_eh_frame_size, &stackmaps, &stackmaps_size, &mono_lsda, &mono_lsda_size));
-	/* Stock LLVM 18 emits a standard DWARF `.eh_frame` (consumed below by the
-	 * unwind-ops transcoder), not a mono clause global, so eh_frame is always NULL
-	 * and not read here. */
-	(void) eh_frame;
+	gpointer mono_lsda = res.mono_lsda.addr;
+	guint32 mono_lsda_size = (guint32) res.mono_lsda.size;
 	mono_llvm_remove_gc_safepoint_poll (this->lmodule);
 	mono_codeman_disable_write ();
 	if (cfg->verbose_level > 1) {
@@ -2322,7 +2350,7 @@ EmitContext::llvm_jit_finalize_method ()
 	for (const auto &kv : this->jit_callees) {
 		MonoMethod *callee = kv.first;
 		GSList *addrs = static_cast<GSList*>(g_hash_table_lookup (domain_info->llvm_jit_callees, callee));
-		addrs = g_slist_prepend (addrs, callee_addrs [i]);
+		addrs = g_slist_prepend (addrs, (gpointer) (gsize) callee_addrs [i]);
 		g_hash_table_insert (domain_info->llvm_jit_callees, callee, addrs);
 		i ++;
 	}
@@ -2330,12 +2358,6 @@ EmitContext::llvm_jit_finalize_method ()
 }
 
 #else
-
-static void
-init_jit_module (MonoDomain *domain)
-{
-	g_assert_not_reached ();
-}
 
 void
 EmitContext::llvm_jit_finalize_method ()
@@ -2345,7 +2367,7 @@ EmitContext::llvm_jit_finalize_method ()
 
 #endif
 
-static MonoCPUFeatures cpu_features;
+static std::atomic<MonoCPUFeatures> cpu_features;
 
 MonoCPUFeatures mono_llvm_get_cpu_features (void)
 {
@@ -2374,8 +2396,15 @@ MonoCPUFeatures mono_llvm_get_cpu_features (void)
 		{ "neon",	MONO_CPU_ARM64_ADVSIMD }
 #endif
 	};
-	if (!cpu_features)
-		cpu_features = MONO_CPU_INITED | static_cast<MonoCPUFeatures>(mono_llvm_check_cpu_features (flags_map, G_N_ELEMENTS (flags_map)));
+	MonoCPUFeatures features = cpu_features.load (std::memory_order_relaxed);
+	if (!features) {
+		/*
+		 * Racing callers both probe the CPU and store; the answer does not
+		 * depend on who is asking, so they store the same bits.
+		 */
+		features = MONO_CPU_INITED | static_cast<MonoCPUFeatures>(mono_llvm_check_cpu_features (flags_map, G_N_ELEMENTS (flags_map)));
+		cpu_features.store (features, std::memory_order_relaxed);
+	}
 
-	return cpu_features;
+	return features;
 }
