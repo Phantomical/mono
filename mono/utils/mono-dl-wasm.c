@@ -92,6 +92,12 @@ mono_dl_close_handle (MonoDl *module)
 {
 }
 
+/* Scoping is a POSIX concern; nothing to promote here. */
+void
+mono_dl_ensure_self_global (void)
+{
+}
+
 #else
 
 MONO_EMPTY_SOURCE_FILE (mono_dl_wasm);

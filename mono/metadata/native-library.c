@@ -973,6 +973,10 @@ cached_module_load (const char *name, int flags, char **err)
 	if (name_remap = mono_unity_remap_path (name))
 		name = name_remap;
 
+	/* Helpers like libmono-native bind runtime symbols as they load, so make
+	 * sure ours are reachable before we try. */
+	mono_dl_ensure_self_global ();
+
 	MONO_ENTER_GC_SAFE;
 	mono_global_loader_data_lock ();
 	MONO_EXIT_GC_SAFE;

@@ -158,6 +158,35 @@ mono_dl_current_error_string (void)
 	return g_strdup (dlerror ());
 }
 
+/*
+ * The helper libraries we dlopen for P/Invoke - libmono-native above all - bind a
+ * couple of runtime symbols at load time without linking against us, so they need
+ * to find those in the global scope. That is how a normal install looks, where the
+ * runtime is the executable or a library someone loaded RTLD_GLOBAL. An embedder
+ * that dlopens us with RTLD_LOCAL, which is the default and what Unity does, leaves
+ * our symbols invisible and the helper fails to load at all.
+ *
+ * Re-opening ourselves with RTLD_GLOBAL moves them into the global scope. RTLD_NOLOAD
+ * means we look up the copy that is already mapped rather than pulling in a second
+ * one, and we deliberately keep the handle: dropping it can undo the promotion, and
+ * the runtime is staying for the life of the process regardless.
+ */
+void
+mono_dl_ensure_self_global (void)
+{
+	static gboolean done = FALSE;
+	Dl_info info;
+
+	if (done)
+		return;
+	done = TRUE;
+
+	if (!dladdr ((void *) &mono_dl_ensure_self_global, &info) || !info.dli_fname)
+		return;
+
+	dlopen (info.dli_fname, RTLD_LAZY | RTLD_NOLOAD | RTLD_GLOBAL);
+}
+
 #else
 
 #include <mono/utils/mono-compiler.h>

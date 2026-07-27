@@ -218,6 +218,12 @@ mono_dl_get_system_dir (void)
 	return NULL;
 }
 
+/* Scoping is a POSIX concern; nothing to promote here. */
+void
+mono_dl_ensure_self_global (void)
+{
+}
+
 #else
 
 #include <mono/utils/mono-compiler.h>

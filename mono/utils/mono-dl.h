@@ -41,6 +41,8 @@ MonoDl*     mono_dl_open_runtime_lib (const char *lib_name, int flags, char **er
 
 MonoDl *
 mono_dl_open_self (char **error_msg);
+
+void        mono_dl_ensure_self_global (void);
 // This converts the MONO_DL_* enum to native flags, combines it with the other flags passed, and resolves some inconsistencies
 MonoDl *
 mono_dl_open_full (const char *name, int mono_flags, int native_flags, char **error_msg);
