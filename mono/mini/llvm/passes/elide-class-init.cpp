@@ -33,6 +33,7 @@
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Passes/PassBuilder.h>
 
 #ifdef ENABLE_LLVM
 
@@ -357,6 +358,73 @@ mono::ClassInitElisionAnalysis::Result
 mono::ClassInitElisionAnalysis::run (Function &f, FunctionAnalysisManager &)
 {
 	return Result (find_redundant_class_inits (f));
+}
+
+PreservedAnalyses
+mono::ClassInitElisionPass::run (Function &f, FunctionAnalysisManager &fam)
+{
+	ArrayRef<RedundantClassInit> found = fam.getResult<ClassInitElisionAnalysis> (f).redundant ();
+	if (found.empty ())
+		return PreservedAnalyses::all ();
+
+	/* Copy the calls out before touching anything: the result is cached, and
+	 * erasing what it points at while walking it is asking for trouble. */
+	SmallVector<CallBase *, 4> doomed;
+	for (const RedundantClassInit &entry : found)
+		doomed.push_back (entry.call);
+
+	bool changed = false;
+	bool cfg_changed = false;
+
+	for (CallBase *call : doomed) {
+		/*
+		 * The trigger returns void, so nothing should be waiting on one. If
+		 * something is, the tag is on a call this pass does not understand and
+		 * dropping it would take a live value with it.
+		 */
+		if (!call->use_empty ())
+			continue;
+
+		if (auto *invoke = dyn_cast<InvokeInst> (call)) {
+			/* An invoke is a terminator: its normal edge becomes the only one,
+			 * and the handler loses a predecessor along with the cctor that
+			 * could have thrown into it. */
+			BasicBlock *from = invoke->getParent ();
+
+			BranchInst::Create (invoke->getNormalDest (), invoke);
+			invoke->getUnwindDest ()->removePredecessor (from);
+			cfg_changed = true;
+		}
+
+		call->eraseFromParent ();
+		changed = true;
+	}
+
+	if (!changed)
+		return PreservedAnalyses::all ();
+
+	PreservedAnalyses pa;
+	if (!cfg_changed)
+		pa.preserveSet<CFGAnalyses> ();
+	return pa;
+}
+
+void
+mono::register_class_init_elision (PassBuilder &pb, FunctionAnalysisManager &fam)
+{
+	fam.registerPass ([] { return ClassInitElisionAnalysis (); });
+
+	/*
+	 * The scalar-late slot, which sits at the end of the function simplification
+	 * pipeline immediately before a SimplifyCFG and an InstCombine. That
+	 * pipeline is nested inside the inliner stage, so this runs on each round's
+	 * freshly inlined bodies - where the duplicate barriers come from - and the
+	 * two passes behind it clear out the guards this empties.
+	 */
+	pb.registerScalarOptimizerLateEPCallback (
+		[] (FunctionPassManager &fpm, OptimizationLevel) {
+			fpm.addPass (ClassInitElisionPass ());
+		});
 }
 
 #endif /* ENABLE_LLVM */

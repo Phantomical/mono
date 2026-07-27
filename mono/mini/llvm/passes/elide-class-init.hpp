@@ -38,6 +38,8 @@
  * *which* instructions to look at; the operands decide what they mean. Anything
  * that does not decode to the expected shape is skipped, so an unrecognized
  * barrier costs a missed elision, never a wrong one.
+ *
+ * ClassInitElisionPass, at the bottom, is the transform that acts on all this.
  */
 
 #ifndef MONO_MINI_LLVM_PASSES_ELIDE_CLASS_INIT_HPP
@@ -61,6 +63,7 @@
 namespace llvm {
 class CallBase;
 class Function;
+class PassBuilder;
 } // namespace llvm
 
 namespace mono {
@@ -106,6 +109,28 @@ private:
 	friend llvm::AnalysisInfoMixin<ClassInitElisionAnalysis>;
 	static llvm::AnalysisKey Key;
 };
+
+/*
+ * Delete calls to mono_generic_class_init that are dominated by either a
+ * previous call to mono_generic_class_init for the same class, or a branch
+ * verifying that the class is actually initialized.
+ *
+ * This uses ClassInitElisionAnalysis to determine which calls can safely
+ * be removed, other optimization passes take care of cleaning up the empty
+ * branches.
+ */
+class ClassInitElisionPass : public llvm::PassInfoMixin<ClassInitElisionPass> {
+public:
+	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+};
+
+/*
+ * Registers the analysis on FAM and schedules the elision pass inside PB's
+ * function simplification pipeline, late enough to see what inlining exposed and
+ * early enough for the SimplifyCFG behind it to clear out the emptied guards.
+ * Call before building a pipeline from PB.
+ */
+void register_class_init_elision (llvm::PassBuilder &pb, llvm::FunctionAnalysisManager &fam);
 
 } // namespace mono
 

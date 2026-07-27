@@ -113,6 +113,7 @@
  * llvm/BinaryFormat/Dwarf.h, so these have to come after the LLVM headers.
  */
 #include "passes/eh-gather.hpp"
+#include "passes/elide-class-init.hpp"
 #include "passes/finally-range.hpp"
 #include "passes/inliner.hpp"
 #include "passes/pass-dump.hpp"
@@ -1865,6 +1866,14 @@ MonoLLVMJIT::optimize (Function *func)
 	pb.registerFunctionAnalyses (fam);
 	pb.registerLoopAnalyses (lam);
 	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	/*
+	 * Drops the class-init barriers a body ends up with more than one of, which
+	 * is mostly what inlining leaves behind. Has to be registered before the
+	 * pipeline is built - it hangs itself off an extension point inside the
+	 * function simplification pipeline. See passes/elide-class-init.hpp.
+	 */
+	register_class_init_elision (pb, fam);
 
 	/*
 	 * The stock -O2 pipeline with mono's tier-1 inliner in place of LLVM's own

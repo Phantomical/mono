@@ -39,6 +39,7 @@
 #include "mini/llvm/passes/elide-class-init.hpp"
 
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -728,6 +729,211 @@ cases_shapes (void)
 	}
 }
 
+/* ------------------------------------------------------------- the transform */
+
+/* Calls to the trigger still present in BB (or in the whole function). */
+static unsigned
+triggers_in (BasicBlock *bb)
+{
+	unsigned n = 0;
+
+	for (llvm::Instruction &ins : *bb) {
+		auto *call = llvm::dyn_cast<CallBase> (&ins);
+		if (call && call->getCalledFunction () &&
+		    call->getCalledFunction ()->getName () == "mono_generic_class_init")
+			n ++;
+	}
+	return n;
+}
+
+static unsigned
+triggers_in (Function *f)
+{
+	unsigned n = 0;
+
+	for (BasicBlock &bb : *f)
+		n += triggers_in (&bb);
+	return n;
+}
+
+static void
+run_elision (Harness &h)
+{
+	llvm::PassBuilder pb;
+	llvm::FunctionAnalysisManager fam;
+
+	pb.registerFunctionAnalyses (fam);
+	mono::register_class_init_elision (pb, fam);
+
+	llvm::FunctionPassManager fpm;
+	fpm.addPass (mono::ClassInitElisionPass ());
+	fpm.run (*h.func, fam);
+}
+
+/* Run the transform and check how many triggers it left behind. */
+static void
+expect_left (const char *what, Harness &h, unsigned want)
+{
+	cases_run ++;
+
+	run_elision (h);
+
+	std::string err;
+	llvm::raw_string_ostream os (err);
+	if (llvm::verifyFunction (*h.func, &os)) {
+		fail (what, ("the transform produced invalid IR: " + os.str ()).c_str ());
+		return;
+	}
+
+	unsigned got = triggers_in (h.func);
+	if (got != want) {
+		char buf [128];
+		snprintf (buf, sizeof (buf), "expected %u trigger(s) left, got %u", want, got);
+		fail (what, buf);
+	}
+}
+
+static void
+cases_transform (void)
+{
+	{
+		/* Of two back-to-back triggers, the first survives. */
+		Harness h ("elide-back-to-back");
+		emit_trigger (h, h.entry, VTABLE_A, "A");
+		emit_trigger (h, h.entry, VTABLE_A, "A");
+		IRBuilder<> (h.entry).CreateBr (h.exit);
+
+		expect_left ("transform-back-to-back", h, 1);
+	}
+
+	{
+		/* The whole point: a second barrier past the first one's join. */
+		Harness h ("elide-barrier-after-barrier");
+		Barrier first = emit_barrier (h, h.entry, VTABLE_A, "A");
+		Barrier second = emit_barrier (h, first.join, VTABLE_A, "A");
+		IRBuilder<> (second.join).CreateBr (h.exit);
+
+		expect_left ("transform-second-barrier", h, 1);
+
+		if (triggers_in (first.check.not_inited) != 1)
+			fail ("transform-second-barrier", "the covering barrier's trigger was removed");
+		if (triggers_in (second.check.not_inited) != 0)
+			fail ("transform-second-barrier", "the covered barrier's trigger survived");
+		/*
+		 * The guard the trigger leaves behind is not this pass's to remove -
+		 * its arm is empty now and the SimplifyCFG behind it in the pipeline
+		 * folds the pair away.
+		 */
+		if (!llvm::isa<BranchInst> (second.check.branch))
+			fail ("transform-second-barrier", "the check branch was disturbed");
+	}
+
+	{
+		/* Nothing redundant, nothing touched. */
+		Harness h ("elide-lone-barrier");
+		Barrier only = emit_barrier (h, h.entry, VTABLE_A, "A");
+		IRBuilder<> (only.join).CreateBr (h.exit);
+
+		expect_left ("transform-leaves-a-lone-barrier", h, 1);
+	}
+
+	{
+		/* Two classes: each keeps its own barrier. */
+		Harness h ("elide-two-classes");
+		Barrier a = emit_barrier (h, h.entry, VTABLE_A, "A");
+		Barrier b = emit_barrier (h, a.join, VTABLE_B, "B");
+		IRBuilder<> (b.join).CreateBr (h.exit);
+
+		expect_left ("transform-keeps-both-classes", h, 2);
+	}
+
+	{
+		/* A chain collapses to the first one in a single run. */
+		Harness h ("elide-chain");
+		Barrier a = emit_barrier (h, h.entry, VTABLE_A, "A");
+		Barrier b = emit_barrier (h, a.join, VTABLE_A, "A");
+		Barrier c = emit_barrier (h, b.join, VTABLE_A, "A");
+		IRBuilder<> (c.join).CreateBr (h.exit);
+
+		expect_left ("transform-collapses-a-chain", h, 1);
+	}
+
+	{
+		/*
+		 * A redundant trigger that is an invoke. Deleting it means rewriting a
+		 * terminator: the normal edge becomes an unconditional branch and the
+		 * handler loses a predecessor.
+		 */
+		Harness h ("elide-invoke");
+		llvm::LLVMContext &ctx = h.ctx;
+
+		auto *personality = llvm::Function::Create (
+			llvm::FunctionType::get (llvm::Type::getInt32Ty (ctx), true),
+			Function::ExternalLinkage, "__gxx_personality_v0", h.module.get ());
+		h.func->setPersonalityFn (personality);
+
+		emit_trigger (h, h.entry, VTABLE_A, "A");
+
+		BasicBlock *normal = h.block ("normal");
+		BasicBlock *lpad = h.block ("lpad");
+		IRBuilder<> b (h.entry);
+		llvm::InvokeInst *invoke = b.CreateInvoke (h.trigger_callee (), normal, lpad,
+		                                           {b.getInt64 (VTABLE_A)});
+		h.tag (invoke, "mono.class-init", "A");
+
+		IRBuilder<> lb (lpad);
+		lb.CreateLandingPad (llvm::StructType::get (b.getPtrTy (), b.getInt32Ty ()), 0)
+			->setCleanup (true);
+		IRBuilder<> (lpad).CreateBr (h.exit);
+		IRBuilder<> (normal).CreateBr (h.exit);
+
+		expect_left ("transform-invoke", h, 1);
+
+		auto *br = llvm::dyn_cast<BranchInst> (h.entry->getTerminator ());
+		if (!br || br->isConditional () || br->getSuccessor (0) != normal)
+			fail ("transform-invoke", "the invoke was not replaced by a branch to its normal dest");
+		if (!llvm::pred_empty (lpad))
+			fail ("transform-invoke", "the handler kept its predecessor");
+	}
+
+	{
+		/*
+		 * A tag on a call whose result someone is using. The real trigger
+		 * returns void, so this is a tag the pass does not understand, and
+		 * deleting the call would take a live value with it. The analysis
+		 * happily calls the second one covered; the transform has to decline.
+		 */
+		cases_run ++;
+
+		Harness h ("elide-used-result");
+		IRBuilder<> b (h.entry);
+
+		auto valued = h.module->getOrInsertFunction ("class_init_with_a_result",
+		                                             b.getInt32Ty (), b.getInt64Ty ());
+		CallInst *first = b.CreateCall (valued, {b.getInt64 (VTABLE_A)});
+		h.tag (first, "mono.class-init", "A");
+		CallInst *second = b.CreateCall (valued, {b.getInt64 (VTABLE_A)});
+		h.tag (second, "mono.class-init", "A");
+
+		auto sink = h.module->getOrInsertFunction ("sink", b.getVoidTy (), b.getInt32Ty ());
+		b.CreateCall (sink, {second});
+		b.CreateBr (h.exit);
+
+		if (mono::find_redundant_class_inits (*h.func).size () != 1)
+			fail ("transform-declines-a-used-result", "expected the analysis to flag the second call");
+
+		run_elision (h);
+
+		std::string err;
+		llvm::raw_string_ostream os (err);
+		if (llvm::verifyFunction (*h.func, &os))
+			fail ("transform-declines-a-used-result",
+			      ("the transform produced invalid IR: " + os.str ()).c_str ());
+		if (second->getParent () != h.entry)
+			fail ("transform-declines-a-used-result", "a call with a live result was deleted");
+	}
+}
+
 /* ------------------------------------------------ the pass-manager wrapper */
 
 static void
@@ -775,6 +981,7 @@ test_llvm_class_init_main (void)
 	cases_facts_meet ();
 	cases_invoke ();
 	cases_shapes ();
+	cases_transform ();
 	cases_analysis_manager ();
 
 	printf ("%d cases run, %d failed\n", cases_run, failures);
