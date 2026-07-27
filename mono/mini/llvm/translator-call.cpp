@@ -706,14 +706,7 @@ EmitContext::emit_class_init_guards (llvm::IRBuilder<> *builder)
 	LLVMValueRef br = mono_llvm_build_weighted_branch (llvm::wrap (builder), cmp, cont_bb, init_bb, 1000, 1);
 	tag_class_init (br, "mono.class-init-check", vtable->klass);
 
-	/*
-	 * The cold arm. Not an invoke: the prologue sits outside every EH clause, so a
-	 * TypeInitializationException from here has to unwind past this frame rather
-	 * than reach the method's own handlers - and once the body is inlined, LLVM
-	 * rewrites this into an invoke on the caller's landing pad if the call site it
-	 * replaced was one, which lands the exception exactly where the deleted call
-	 * would have raised it.
-	 */
+	// if not initialized then we need to make a call to mono_generic_class_init
 	builder->SetInsertPoint (llvm::unwrap (init_bb));
 	MonoJitICallInfo *info = mono_find_jit_icall_info (MONO_JIT_ICALL_mono_generic_class_init);
 	LLVMTypeRef icall_sig = this->sig_to_llvm_sig (info->sig);
