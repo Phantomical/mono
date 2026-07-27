@@ -260,6 +260,7 @@ public class InlinerTests {
 		return GenericPick<int> (x, x + 1000, (x & 1) == 0, x);
 	}
 
+	// INLINER-EXPECT: folded InlinerTests:GenericPick<int> (int,int,bool,int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_leaf_valuetype_inlines () {
 		long sum = 0;
@@ -285,6 +286,7 @@ public class InlinerTests {
 	// compiles shared; the inliner materializes a specialized GenericPick<string>
 	// and folds that in instead ("expose", and GenericPick<T_REF> stops being
 	// promoted at all because nothing calls the shared body any more).
+	// INLINER-EXPECT: folded InlinerTests:GenericPick<string> (string,string,bool,int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_leaf_reftype_inlines () {
 		long sum = 0;
@@ -331,6 +333,8 @@ public class InlinerTests {
 		return StaticGenericHolder<int>.Weigh (x, x + 1000, (x & 1) == 0, x);
 	}
 
+	// INLINER-EXPECT: folded InlinerTests/StaticGenericHolder`1<string>:Weigh (string,string,bool,int)
+	// INLINER-EXPECT: folded InlinerTests/StaticGenericHolder`1<int>:Weigh (int,int,bool,int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_static_generic_class_method_inlines () {
 		long sum = 0;
@@ -384,6 +388,8 @@ public class InlinerTests {
 		return Mix<string> ("v" + x, x).Length;
 	}
 
+	// INLINER-EXPECT: refused InlinerTests/Box`1<T_REF>:.ctor (T_REF)
+	// INLINER-EXPECT: folded InlinerTests:Mix<string> (string,int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_constructs_generic_type () {
 		long sumInt = 0, sumStr = 0;
@@ -676,6 +682,7 @@ public class InlinerTests {
 		return TriggerHolder.Compute (x);
 	}
 
+	// INLINER-EXPECT: folded InlinerTests/TriggerHolder:Compute (int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_cctor_class_init_trigger () {
 		long sum = 0;
@@ -724,6 +731,8 @@ public class InlinerTests {
 		return GenericTriggerHolder<string>.Compute (x) + GenericTriggerHolder<int>.Compute (x);
 	}
 
+	// INLINER-EXPECT: folded InlinerTests/GenericTriggerHolder`1<string>:Compute (int)
+	// INLINER-EXPECT: folded InlinerTests/GenericTriggerHolder`1<int>:Compute (int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
 	public static int test_0_generic_cctor_class_init_trigger () {
 		long sum = 0;

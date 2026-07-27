@@ -107,6 +107,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -162,6 +163,24 @@ trace (const char *what, StringRef sym)
 }
 
 /*
+ * Same, naming METHOD the way the rest of the trace names methods. A refusal has
+ * the MonoMethod to hand where the LLVM declaration only has a mangled symbol,
+ * and a trace whose lines are half mangled and half not cannot be matched
+ * against one set of expectations - see check-inliner-tags.sh.
+ */
+void
+trace_method (const char *what, MonoMethod *method)
+{
+	if (!trace_enabled ())
+		return;
+
+	char *name = mono_method_full_name (method, TRUE);
+
+	errs () << "[inliner] " << what << " " << name << "\n";
+	g_free (name);
+}
+
+/*
  * Report a stage of this pass to LLVM's pass instrumentation as if it were a
  * pass in its own right. The round loop's materialize and strip steps are plain
  * code rather than passes, so nothing would otherwise report them - and they are
@@ -203,6 +222,15 @@ private:
 	llvm::DenseMap<llvm::Function *, unsigned> depth_cache;
 
 	llvm::SmallVector<llvm::Function *, 8> added;
+
+	/*
+	 * Names of the bodies this pass put into the module, so strip time can say
+	 * which of them the stock inliner actually consumed - a body it fully folded
+	 * in is either use-free by then or already erased, and one it passed on still
+	 * has its call sites. Only read when tracing. std::set rather than a hash so
+	 * the report comes out in a stable order.
+	 */
+	std::set<std::string> materialized;
 
 public:
 	MonoInlinerState (llvm::Module *module, const std::shared_ptr<RoundState> &round_state)
@@ -294,6 +322,12 @@ private:
 				continue;
 
 			if (!func.use_empty ()) {
+				// Still called from somewhere, so the stock inliner passed on at
+				// least one of its call sites and this body is about to go back to
+				// being a trampoline call.
+				trace ("unfolded", func.getName ());
+				materialized.erase (func.getName ().str ());
+
 				// definitions maps body -> declaration; declarations is the
 				// other direction, and keyed by a body it yields null.
 				auto decl = definitions.lookup (&func);
@@ -303,6 +337,13 @@ private:
 
 			func.eraseFromParent ();
 		}
+
+		// Whatever is left was folded into every one of its callers: either it
+		// reached here with no uses, or the stock inliner had already erased it
+		// once it consumed the last one.
+		for (const auto &name : materialized)
+			trace ("folded", name);
+		materialized.clear ();
 	}
 
 	static constexpr unsigned MaxInlineDepth = 2;
@@ -364,24 +405,22 @@ private:
 			return nullptr;
 
 		if (method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) {
-			trace ("method is noinline", candidate->getName ());
+			trace_method ("method is noinline", method);
 			return nullptr;
 		}
 
 		if (method->iflags & METHOD_IMPL_ATTRIBUTE_NOOPTIMIZATION) {
-			trace ("method has optimization disabled", candidate->getName ());
+			trace_method ("method has optimization disabled", method);
 			return nullptr;
 		}
 
 		if (callee_reads_cctor_guarded_static (method)) {
-			trace ("method reads a static field of an uninitialized class",
-			       candidate->getName ());
+			trace_method ("method reads a static field of an uninitialized class", method);
 			return nullptr;
 		}
 
 		if (mini_method_body_reports_caller_frame (method)) {
-			trace ("method reports its own frame to the runtime",
-			       candidate->getName ());
+			trace_method ("method reports its own frame to the runtime", method);
 			return nullptr;
 		}
 
@@ -395,7 +434,7 @@ private:
 
 		auto body = materialize_callee (method, config, module);
 		if (!body) {
-			trace ("method is not supported by the tier1 jit", candidate->getName ());
+			trace_method ("method is not supported by the tier1 jit", method);
 			return nullptr;
 		}
 
@@ -406,6 +445,8 @@ private:
 		added.push_back (body);
 
 		trace ("expose", body->getName ());
+		if (trace_enabled ())
+			materialized.insert (body->getName ().str ());
 		replace_eligible_uses (candidate, body);
 		return body;
 	}

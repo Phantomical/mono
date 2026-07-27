@@ -1052,7 +1052,15 @@ tieredcheck_runs = $(foreach g,$(tiered_groups),$(foreach n,$(tiered_$(g)_thresh
 
 $(foreach g,$(tiered_groups),$(foreach n,$(tiered_$(g)_thresholds),$(eval $(call tiered_run,$(g),$(n)))))
 
-tieredcheck: $(tieredcheck_runs)
+# The corpus only ever checks that tier-1 code computes the right answer, which
+# it does whether or not anything was inlined - so this asserts the decisions
+# themselves, from the pass's own trace, against expectations written next to the
+# fixtures. Without it an inliner that quietly stands down is a green run; that
+# has happened before.
+tieredcheck-inliner-tags: mono inliner-tests.exe
+	$(srcdir)/check-inliner-tags.sh "$(MINI_RUNTIME)" inliner-tests.exe $(srcdir)/inliner-tests.cs
+
+tieredcheck: $(tieredcheck_runs) tieredcheck-inliner-tags
 
 richeck: mono $(regtests)
 	$(INTERP_RUNTIME) --regression $(regtests)
@@ -1246,6 +1254,7 @@ EXTRA_DIST = TestDriver.cs \
 	$(posix_sources)					\
 	test_op_il_seq_point.sh			\
 	test_op_il_seq_point_headerfooter.sh	\
+	check-inliner-tags.sh			\
 	interp/whitebox-snippets.il		\
 	Makefile.am.in
 
