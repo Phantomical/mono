@@ -3159,7 +3159,23 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	static char **verbose_method_names;
 
 	mono_atomic_inc_i32 (&mono_jit_stats.methods_compiled);
-	MONO_PROFILER_RAISE (jit_begin, (method));
+	/*
+	 * An IR-only compile is the tier-1 inliner materializing a callee. It returns
+	 * before codegen, so it publishes no native code and no MonoJitInfo, and there
+	 * is therefore no jit_done that could ever close a begin raised for it -
+	 * jit_done's signature is (method, jinfo) and there is no jinfo to name.
+	 * Raising the begin anyway leaves every profiler that pairs the two
+	 * accumulating one permanently open entry per inline candidate, hundreds per
+	 * run on whichever thread is promoting, which never unwinds.
+	 *
+	 * Staying silent is also what consumers already expect of an inlined body:
+	 * classic inlining reports nothing for an inlinee (method-to-ir.c raises no
+	 * profiler events at all), so an inlinee has never been a compilation as far
+	 * as the profiler API is concerned. Nor is the time lost from a profile - it
+	 * is spent inside the root compile, between that compile's own begin and done.
+	 */
+	if (!(flags & JIT_FLAG_LLVM_IR_ONLY))
+		MONO_PROFILER_RAISE (jit_begin, (method));
 	if (MONO_METHOD_COMPILE_BEGIN_ENABLED ())
 		MONO_PROBE_METHOD_COMPILE_BEGIN (method);
 
@@ -4226,12 +4242,23 @@ tiered_lookup_live_jinfo (MonoMethod *method, MonoDomain *domain)
  * between enqueue and drain - and because an unmatched begin is the defect this
  * whole path exists to prevent. Treat it as unexercised if it ever starts
  * firing.
+ *
+ * The event names the method TIER0_JINFO actually describes rather than METHOD.
+ * The two differ only on tiered_lookup_live_jinfo ()'s shared-method fallback,
+ * and there naming METHOD would hand out a pair whose halves disagree. A
+ * consumer is entitled to reject that: UnityPlayer's jit_done callback closes
+ * its profiler span only when jinfo->d.method == method, precisely because
+ * mono_jit_compile_method_inner_1 () raises several jit_done for one jit_begin
+ * and only one of them describes its jinfo. Naming METHOD would leave those
+ * declines unclosed for such a consumer - the same unmatched begin this
+ * function exists to prevent, just relocated. For the ordinary lookup the two
+ * are the same pointer, so this only changes the shared case.
  */
 static void
 tiered_promote_declined (MonoMethod *method, MonoJitInfo *tier0_jinfo)
 {
 	if (tier0_jinfo)
-		MONO_PROFILER_RAISE (jit_done, (method, tier0_jinfo));
+		MONO_PROFILER_RAISE (jit_done, (tier0_jinfo->d.method, tier0_jinfo));
 	else
 		MONO_PROFILER_RAISE (jit_failed, (method));
 }
@@ -4368,7 +4395,7 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt, gboole
 	/*
 	 * The body that is live right now, captured before the compile because it is
 	 * what a declined promotion leaves the method running. Every decline path
-	 * closes the jit_begin with jit_done (method, tier0_jinfo): the compilation
+	 * closes the jit_begin with a jit_done carrying this jinfo: the compilation
 	 * did end, and the method's code really does live at that address. Raising
 	 * jit_failed there instead would balance the books but lie - a declined
 	 * method is not a method that failed to JIT, it keeps a working tier-0 body,
