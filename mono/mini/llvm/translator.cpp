@@ -1557,6 +1557,27 @@ materialize_callee (MonoMethod *method, const Tier1Root &root)
 			ctx->clause_id_base = (int) table.size ();
 			table.insert (table.end (), cfg->header->clauses,
 			              cfg->header->clauses + cfg->header->num_clauses);
+
+			/*
+			 * Two things the root decided about itself back when it was emitted
+			 * are now wrong, because they were answers about its OWN IL and this
+			 * body's clauses are about to become part of it.
+			 *
+			 * mono-has-eh-clauses is what lets MonoEHGatherPass tell "every
+			 * protected call optimized away" apart from "never had a try block",
+			 * and a clause-free root would otherwise publish no section at all -
+			 * so the inlined handler would simply never run.
+			 *
+			 * A finally's guard reads its exvar at an RBP-relative offset a
+			 * stackmap hands back, so the frame pointer has to stay put whether
+			 * the finally came from the root's IL or from here.
+			 */
+			root.func->addFnAttr ("mono-has-eh-clauses");
+
+			for (int i = 0; i < cfg->header->num_clauses; ++i) {
+				if (cfg->header->clauses [i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
+					root.func->addFnAttr ("frame-pointer", "all");
+			}
 		}
 
 		ctx->emit_method_inner ();
@@ -1872,38 +1893,40 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 }
 
 /*
- * What the marker stackmaps say about one FINALLY clause: where its exvar lives,
- * and every PC a marker ended up at.
+ * One opening marker: which FINALLY clause it belongs to, where it ended up, and
+ * the frame slot it named.
  */
-struct FinallyExvar {
+struct FinallyMarker {
+	guint32 clause_index = 0;
+	guint32 pc = 0;
 	gint32 offset = 0;
-	std::vector<guint32> marker_pcs;
 };
 
 /*
- * recover_finally_exvars:
+ * recover_finally_markers:
  *
- *   Recover, per FINALLY clause of CFG, the frame slot the thread-abort guard
- * flags a running finally through - the byte install_handler_block_guard ()
- * writes and the shared IR checks once the finally returns.
+ *   Recover the frame slot the thread-abort guard flags a running finally
+ * through - the byte install_handler_block_guard () writes and the shared IR
+ * checks once the finally returns - for every opening marker that survived.
  *
  * Which PCs the handler body occupies is a separate question, about where the
  * code ended up rather than about the frame, and MonoFinallyRangePass
- * (engine.cpp) answers it after LLVM has finished moving code around. That split
- * is what makes this immune to duplication: LLVM may clone the marker along with
- * the code around it, but every copy names the same alloca.
+ * (engine.cpp) answers it after LLVM has finished moving code around.
  *
- * The marker PCs are kept so the caller can check them against that pass's
- * ranges - two independent readings of the same markers, so either one drifting
- * shows up as a marker outside every range of its own clause.
+ * One record per surviving marker, NOT one per clause. A clause's body can end
+ * up in the frame more than once - the optimizer duplicates it along its entry
+ * paths, and inlining the same body at two call sites brings two copies in - and
+ * those are not always the same slot. A plain code clone reuses the one alloca,
+ * but two inlined copies each get their own, so the slot belongs to the body run
+ * rather than to the clause. The caller joins each run to the marker inside it.
  *
  * A FINALLY clause with no record is not an error - its body was optimized away
  * entirely, so there is nothing for a thread to be stopped inside.
  */
 static void
-recover_finally_exvars (const std::vector<MonoExceptionClause> &clauses,
-                        guint8 *stackmaps, guint32 size,
-                        std::map<guint32, FinallyExvar> &out)
+recover_finally_markers (const std::vector<MonoExceptionClause> &clauses,
+                         guint8 *stackmaps, guint32 size,
+                         std::vector<FinallyMarker> &out)
 {
 	std::vector<StackmapRecord> records;
 	bool has_finally = false;
@@ -1944,14 +1967,11 @@ recover_finally_exvars (const std::vector<MonoExceptionClause> &clauses,
 		g_assert (mono_dwarf_reg_is_valid (r.loc_dwarf_reg));
 		g_assert (mono_dwarf_reg_to_hw_reg (r.loc_dwarf_reg) == AMD64_RBP);
 
-		auto known = out.find (clause_index);
-		if (known == out.end ())
-			out [clause_index].offset = r.loc_offset;
-		else
-			/* Every copy stackmaps the one alloca, so every copy sees one home. */
-			g_assert (known->second.offset == r.loc_offset);
-
-		out [clause_index].marker_pcs.push_back (r.instr_off);
+		FinallyMarker m;
+		m.clause_index = clause_index;
+		m.pc = r.instr_off;
+		m.offset = r.loc_offset;
+		out.push_back (m);
 	}
 }
 
@@ -2208,7 +2228,7 @@ EmitContext::llvm_jit_finalize_method ()
 	if (!clauses.empty ()) {
 		std::vector<mono::MonoLsdaEntry> entries;
 		std::vector<mono::MonoFinallyGuard> guards;
-		std::map<guint32, FinallyExvar> exvars;
+		std::vector<FinallyMarker> markers;
 
 		if (!mono::parse_mono_lsda (static_cast<const guint8*>(mono_lsda), mono_lsda_size, entries)) {
 			this->set_failure ("could not parse .mono_lsda clause table");
@@ -2219,23 +2239,78 @@ EmitContext::llvm_jit_finalize_method ()
 		 * The thread-abort guard for this method's finallys, assembled from the
 		 * two halves that describe a handler body: MonoFinallyRangePass
 		 * (engine.cpp) put its PC ranges in the section, and the marker stackmap
-		 * named the frame slot to flag an abort through. Both are keyed on the
-		 * IL clause index. Empty for a method with no finally.
+		 * named the frame slot to flag an abort through. Empty for a method with
+		 * no finally.
 		 */
-		recover_finally_exvars (clauses, static_cast<guint8*>(stackmaps), stackmaps_size, exvars);
+		recover_finally_markers (clauses, static_cast<guint8*>(stackmaps), stackmaps_size, markers);
 
+		/*
+		 * Join each body run to the marker sitting inside it, rather than to its
+		 * clause. A clause can occupy the frame several times over - the optimizer
+		 * duplicates a body along its entry paths, and inlining one body at two
+		 * call sites brings two copies - and inlined copies do NOT share a slot,
+		 * since the alloca is cloned along with the code. The run is what the
+		 * guard is really about, so the run is what names the slot.
+		 */
 		for (const mono::MonoLsdaEntry &e : entries) {
 			if (e.kind != mono::MONO_LSDA_KIND_FINALLY_BODY)
 				continue;
 
+			const FinallyMarker *found = nullptr;
+
+			for (const FinallyMarker &m : markers) {
+				if (m.clause_index != e.clause_index)
+					continue;
+				if (m.pc < e.try_start_off || m.pc > e.try_start_off + e.try_len)
+					continue;
+				/*
+				 * A run is bracketed by one opening marker, so a second one
+				 * inside it means the two readings of the markers disagree
+				 * about where the runs are - unless it names the same slot,
+				 * which is just a marker the optimizer duplicated in place.
+				 */
+				g_assert (!found || found->offset == m.offset);
+				found = &m;
+			}
+
+			if (!found) {
+				/*
+				 * A run with no opening marker of its own. The optimizer can
+				 * split a body so a later piece is only ever entered from inside
+				 * it - BranchFolding merging a tail, say - and that piece is
+				 * still the clause's body and still needs guarding.
+				 *
+				 * Its slot is the clause's, which is unambiguous as long as the
+				 * clause has only one. Several distinct slots means several
+				 * copies of the body in this frame (inlining clones the alloca),
+				 * and nothing here says which copy this run belongs to. Guessing
+				 * would make the abort guard write into an unrelated frame byte,
+				 * so decline the method and let the classic JIT have it.
+				 */
+				bool ambiguous = false;
+
+				for (const FinallyMarker &m : markers) {
+					if (m.clause_index != e.clause_index)
+						continue;
+					if (found && found->offset != m.offset) {
+						ambiguous = true;
+						break;
+					}
+					found = &m;
+				}
+
+				if (ambiguous) {
+					this->set_failure ("could not attribute a finally body run to its exvar slot");
+					return;
+				}
+			}
+
 			/*
 			 * A body only reaches the section because MonoFinallyRangePass found
-			 * the markers bracketing it, and the opening marker is the one that
-			 * named the exvar. So the two halves are present together or not at
-			 * all.
+			 * the markers bracketing it, so the two halves are present together
+			 * or not at all.
 			 */
-			auto ex = exvars.find (e.clause_index);
-			g_assert (ex != exvars.end ());
+			g_assert (found);
 
 			/*
 			 * An empty range is a body the optimizer emptied out between its two
@@ -2250,7 +2325,7 @@ EmitContext::llvm_jit_finalize_method ()
 			g.clause_index = e.clause_index;
 			g.handler_start_off = e.try_start_off;
 			g.handler_end_off = e.try_start_off + e.try_len;
-			g.exvar_offset = ex->second.offset;
+			g.exvar_offset = found->offset;
 
 			guards.push_back (g);
 		}
@@ -2261,20 +2336,18 @@ EmitContext::llvm_jit_finalize_method ()
 		 * recorded for its clause; one that does not means a run was missed and
 		 * some of the body is unguarded.
 		 */
-		for (const auto &kv : exvars) {
-			for (guint32 pc : kv.second.marker_pcs) {
-				bool covered = false;
+		for (const FinallyMarker &m : markers) {
+			bool covered = false;
 
-				for (const mono::MonoLsdaEntry &e : entries) {
-					if (e.kind != mono::MONO_LSDA_KIND_FINALLY_BODY ||
-					    e.clause_index != kv.first)
-						continue;
-					if (pc >= e.try_start_off && pc <= e.try_start_off + e.try_len)
-						covered = true;
-				}
-
-				g_assert (covered);
+			for (const mono::MonoLsdaEntry &e : entries) {
+				if (e.kind != mono::MONO_LSDA_KIND_FINALLY_BODY ||
+				    e.clause_index != m.clause_index)
+					continue;
+				if (m.pc >= e.try_start_off && m.pc <= e.try_start_off + e.try_len)
+					covered = true;
 			}
+
+			g_assert (covered);
 		}
 
 		if (!mono::publish_mono_lsda (cfg, clauses, entries, cfg->native_code, cfg->code_len, guards)) {
