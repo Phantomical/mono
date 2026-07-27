@@ -549,7 +549,7 @@ EmitContext::emit_method_inner ()
 	if (!this->ok ())
 		return;
 
-	if (cfg->rgctx_var)
+	if (cfg->rgctx_var || this->keep_rgctx_arg)
 		linfo->rgctx_arg = TRUE;
 
 	this->method_type = method_type = this->sig_to_llvm_sig_full (sig, linfo);
@@ -1401,10 +1401,8 @@ callee_reads_cctor_guarded_static (MonoMethod *method)
 		return true;
 
 	/*
-	 * Only non-generic callees reach the inliner's cctor gate (generic-context
-	 * callees are refused earlier). For those the method's generic context is
-	 * empty, so field tokens resolve with a NULL context; leave the
-	 * generic-context refusal to materialize_callee ().
+	 * Open/shared callees never make it as far as the cctor gate - leave that
+	 * refusal to materialize_callee ().
 	 */
 	if (callee_needs_generic_context (method))
 		return false;
@@ -1417,6 +1415,13 @@ callee_reads_cctor_guarded_static (MonoMethod *method)
 	}
 
 	MonoImage *image = m_class_get_image (method->klass);
+	/*
+	 * The IL being scanned belongs to the generic type definition, so a field
+	 * token that names one of its own type parameters only resolves against the
+	 * instantiation. Without the context every closed generic callee would fail
+	 * to resolve and land in the conservative "refuse" branch below.
+	 */
+	MonoGenericContext *context = mono_method_get_context (method);
 	const unsigned char *ip = header->code;
 	const unsigned char *end = ip + header->code_size;
 
@@ -1441,7 +1446,7 @@ callee_reads_cctor_guarded_static (MonoMethod *method)
 			MonoClass *fklass = NULL;
 			ERROR_DECL (ferror);
 			MonoClassField *field =
-				mono_field_from_token_checked (image, token, &fklass, NULL, ferror);
+				mono_field_from_token_checked (image, token, &fklass, context, ferror);
 			if (!field || !is_ok (ferror)) {
 				mono_error_cleanup (ferror);
 				guarded = true;      /* unresolved field access -> conservative */
@@ -1552,11 +1557,28 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 		return nullptr;
 
 	/*
-	 * Run the callee front-end into LLVM-ready MonoIR (JIT_FLAG_LLVM_IR_ONLY
-	 * stops mini_method_compile before it emits). No cctors on this thread.
+	 * Compile the exact instantiation rather than the shared body mono hands
+	 * every reference-type instantiation of a sharable method. Clearing
+	 * MONO_OPT_GSHARED is the whole switch: mini_method_compile () only redirects
+	 * through mini_get_shared_method_full () when that bit is set. It is the
+	 * difference between List<string>:get_Item being inlinable and not - a
+	 * valuetype instantiation is not sharable, so those already specialized and
+	 * already inlined, while every reference-type one came back gshared and was
+	 * refused below.
+	 *
+	 * The specialized body is also the better one to fold in: constant type
+	 * handles, no rgctx loads. It costs only the compile, since a materialized
+	 * body is either inlined into the root or stripped - it is never published as
+	 * the method's own code, so the shared body the runtime calls is untouched.
+	 *
+	 * Only closed instantiations get this far (callee_needs_generic_context ()
+	 * refused the rest), which is exactly the case a specialized compile serves.
+	 *
+	 * JIT_FLAG_LLVM_IR_ONLY stops mini_method_compile before it emits. No cctors
+	 * on this thread.
 	 */
 	MonoCompile *cfg = mini_method_compile (
-		method, root->opt, root->domain,
+		method, root->opt & ~MONO_OPT_GSHARED, root->domain,
 		(JitFlags) (JIT_FLAG_LLVM | JIT_FLAG_LLVM_IR_ONLY | JIT_FLAG_NO_LLVM_FALLBACK),
 		0, -1);
 	if (!cfg)
@@ -1586,6 +1608,15 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 		        sizeof (LLVMValueRef) * INTRINS_NUM);
 		ctx->lmodule = llvm::wrap (into);
 		ctx->translate_only = true;
+		/*
+		 * The call site was emitted against a declaration that may carry a
+		 * vtable/mrgctx parameter, decided from METHOD's metadata back when the
+		 * root's front-end ran. The specialized body has no use for it, but it
+		 * has to accept it or the two types would not match and the site could
+		 * not be rewired at all. Asked of the ROOT's cfg because that is the
+		 * caller whose call site is being matched.
+		 */
+		ctx->keep_rgctx_arg = mini_method_call_passes_rgctx (root, method);
 
 		ctx->emit_method_inner ();
 

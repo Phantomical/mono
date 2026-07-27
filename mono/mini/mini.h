@@ -2326,6 +2326,7 @@ gboolean          mono_is_regsize_var (MonoType *t);
 MonoJumpInfo *    mono_patch_info_new (MonoMemPool *mp, int ip, MonoJumpInfoType type, gconstpointer target);
 int               mini_class_check_context_used (MonoCompile *cfg, MonoClass *klass);
 int               mini_method_check_context_used (MonoCompile *cfg, MonoMethod *method);
+gboolean          mini_method_call_passes_rgctx (MonoCompile *cfg, MonoMethod *cmethod);
 void              mini_type_from_op (MonoCompile *cfg, MonoInst *ins, MonoInst *src1, MonoInst *src2);
 void              mini_set_inline_failure (MonoCompile *cfg, const char *msg);
 void              mini_test_tailcall (MonoCompile *cfg, gboolean tailcall);

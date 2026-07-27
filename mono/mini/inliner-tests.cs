@@ -220,22 +220,30 @@ public class InlinerTests {
 	}
 
 	// ==========================================================================
-	// GENERICS / GSHARED / RGCTX - the #26 silent-miscompile gate.
+	// GENERICS / GSHARED / RGCTX.
 	//
 	// Mono JIT-compiles a generic method or type instantiated over a REFERENCE
 	// type once, in shared ("gshared") form, and threads a runtime generic
-	// context (rgctx) into calls that need it to recover the real type. That
-	// rgctx rides in an LLVM `nest`-attributed argument (see translator.cpp),
-	// which is exactly what candidate_target()'s passes_generic_context() scans
-	// for. A callee reached that way has no independent frame slot for a
-	// folded-in generic context, so the pass must refuse it - "refuse-rgctx".
-	// A VALUE type instantiation is a plain, fully specialized, non-shared
-	// compile with no rgctx, so it is judged on the ordinary gates like any
-	// other callee.
+	// context (rgctx) into calls that need it to recover the real type. The
+	// tier-1 inliner does not fold that shared body in: materialize_callee ()
+	// compiles the callee's EXACT instantiation instead, which needs no rgctx at
+	// all. So a reference-type instantiation inlines on the same terms as a value
+	// type one, and both are judged on the ordinary gates.
+	//
+	// A call site may still pass a vtable/mrgctx in the `nest` argument - the
+	// caller decided that from the callee's metadata, long before. The
+	// specialized body keeps the parameter (so the types still match) and ignores
+	// it.
+	//
+	// What is still refused is a callee that is ALREADY shared - a `T_REF` symbol,
+	// which only a gshared root can reach. There is no exact instantiation to
+	// compile there, so those keep their trampoline call. Covered below by
+	// Mix<T_REF> -> Box<T_REF>.
 	// ==========================================================================
 
-	// Same leaf, instantiated once over a value type (int - no rgctx, ordinary
-	// candidate) and once over a reference type (string - gshared, rgctx gate).
+	// Same leaf, instantiated once over a value type (int - never shared) and once
+	// over a reference type (string - shared as `T_REF` when mono compiles it for
+	// real, specialized when the inliner materializes it).
 	// The padding int-only local chain keeps this above the classic inline
 	// limit without needing arithmetic on the (unconstrained) T itself.
 	static T GenericPick<T> (T a, T b, bool pickFirst, int pad) {
@@ -273,8 +281,12 @@ public class InlinerTests {
 		return r.Length;
 	}
 
+	// The reference-type twin of the test above. GenericPick<string> is what mono
+	// compiles shared; the inliner materializes a specialized GenericPick<string>
+	// and folds that in instead ("expose", and GenericPick<T_REF> stops being
+	// promoted at all because nothing calls the shared body any more).
 	[MethodImpl (MethodImplOptions.NoOptimization)]
-	public static int test_0_generic_leaf_reftype_refused () {
+	public static int test_0_generic_leaf_reftype_inlines () {
 		long sum = 0;
 		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
@@ -288,11 +300,59 @@ public class InlinerTests {
 		return sum == expected ? 0 : 1;
 	}
 
+	// A STATIC method on a generic class - the shape that carries a `nest`
+	// argument. check_method_sharing () decides from metadata that a sharable
+	// static generic callee is passed a vtable, and that decision was made when
+	// the caller's front-end ran, so the call site has the extra argument whether
+	// or not the body ends up wanting it. The specialized body keeps the
+	// parameter and ignores it; if it dropped it, the body and the declaration
+	// would have different LLVM types and the call site could not be rewired at
+	// all (the pass asserts they match). The int instantiation is not sharable,
+	// so it is passed nothing - the two together cover both paths.
+	class StaticGenericHolder<T> {
+		public static int Weigh (T a, T b, bool first, int pad) {
+			int p1 = pad + 1, p2 = p1 * 2, p3 = p2 - 3, p4 = p3 ^ 5, p5 = p4 & 0xFF;
+			int p6 = p5 | 0x10, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = (p9 >> 1) + 1;
+			int p11 = p10 + p3, p12 = p11 - p4;
+			if (p12 == int.MinValue)
+				return 0;			// unreachable for the pad range used below
+			return (first ? a : b).ToString ().Length;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int StaticGenericHotString (int x) {
+		string a = "a" + x, b = "bb" + x;
+		return StaticGenericHolder<string>.Weigh (a, b, (x & 1) == 0, x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int StaticGenericHotInt (int x) {
+		return StaticGenericHolder<int>.Weigh (x, x + 1000, (x & 1) == 0, x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_static_generic_class_method_inlines () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += StaticGenericHotString (i % 100) + StaticGenericHotInt (i % 100);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++) {
+			int x = i % 100;
+			string a = "a" + x, b = "bb" + x;
+			expected += ((x & 1) == 0 ? a : b).Length;
+			expected += ((x & 1) == 0 ? x : x + 1000).ToString ().Length;
+		}
+		return sum == expected ? 0 : 1;
+	}
+
 	// A generic method that constructs another generic type (Mix<T> -> new
-	// Box<T>(a)). The constructor call makes this non-leaf regardless of T, so
-	// the value-type instantiation is refused via refuse-nonleaf; the
-	// reference-type one hits refuse-rgctx first (candidate_target's rgctx
-	// check runs before the leaf/body checks even see the callee's body). The
+	// Box<T>(a)). Both instantiations materialize as specialized bodies. This is
+	// also where the remaining refusal shows up: promoting Mix<T_REF> itself makes
+	// a gshared ROOT, and the Box<T_REF>:.ctor it calls is an already-shared
+	// callee with no exact instantiation to compile, so that one stays on its
+	// trampoline. The
 	// padding int parameter (unused by the real logic beyond an unreachable
 	// guard) exists for the same reason as the leaf padding above: without it
 	// Mix<T>'s IL body is small enough that CLASSIC mini's own inliner folds
@@ -368,9 +428,9 @@ public class InlinerTests {
 		return last == expected ? 0 : 1;
 	}
 
-	// Dictionary<T, List<T>>-ish nested generic container. Definitely non-leaf
-	// (Dictionary/List method calls), and for a reference-type T also gshared
-	// on the call site (refuse-rgctx fires before non-leaf is even checked);
+	// Dictionary<T, List<T>>-ish nested generic container. Deeply non-leaf
+	// (Dictionary/List method calls), and for a reference-type T every one of
+	// those callees is a shared instantiation the inliner now specializes;
 	// either way, must stay correct.
 	static int NestedGenericsContainer<T> (T a, T b) {
 		var dict = new Dictionary<T, List<T>> ();
@@ -630,6 +690,54 @@ public class InlinerTests {
 		// The cctor is the whole point: if the call got inlined away, nothing
 		// ever ran it and TriggerObserver.Ran is still 0.
 		return TriggerObserver.Ran == 1234 ? 0 : 2;
+	}
+
+	// The same trigger, on a GENERIC class. Worth its own fixture because this
+	// shape used to be unreachable: pending_class_init_vtable () gives up
+	// ("indeterminate") on a class whose vtable it cannot pin down, and before the
+	// callee was compiled specialized there was no single vtable to name. A closed
+	// instantiation has exactly one, so the preamble can trigger it like any other.
+	static class GenericTriggerObserver {
+		public static int Ran;
+	}
+
+	static class GenericTriggerHolder<T> {
+		static GenericTriggerHolder () { GenericTriggerObserver.Ran += 1; }
+
+		// Same rules as TriggerHolder.Compute above: blameless to every other gate,
+		// so the class-init preamble is the only thing under test.
+		public static int Compute (int x) {
+			int p1 = x + 1, p2 = p1 * 2, p3 = p2 - 3, p4 = p3 ^ 5, p5 = p4 & 0xFF;
+			int p6 = p5 | 0x10, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = p9 + 1;
+			int p11 = p10 + p3, p12 = p11 - p4, p13 = p12 ^ p6, p14 = p13 + p7, p15 = p14 - p8;
+			if (p15 == int.MinValue)
+				return -1;
+			return x + 11;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int GenericComputeHotCaller (int x) {
+		// Two instantiations, so two distinct classes each owing a cctor: the
+		// reference-type one is what mono would share, the value-type one it would
+		// not, and both must end up initialized exactly once.
+		return GenericTriggerHolder<string>.Compute (x) + GenericTriggerHolder<int>.Compute (x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_generic_cctor_class_init_trigger () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += GenericComputeHotCaller (i);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += (i + 11) * 2;
+		if (sum != expected)
+			return 1;
+		// One cctor run per instantiation, and no more: a preamble that re-ran it
+		// would show up here just as loudly as one that never ran it.
+		return GenericTriggerObserver.Ran == 2 ? 0 : 2;
 	}
 
 	// ==========================================================================

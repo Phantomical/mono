@@ -47,9 +47,6 @@
  *     callee declaration symbol maps back to a MonoMethod);
  *   - NOT self-recursive: the root's own body is a definition, not a
  *     declaration, so it is skipped by the "callee is a declaration" test;
- *   - NO rgctx/mrgctx argument (the `nest`-attributed arg) - gate #26, the
- *     generic-context silent-miscompile trap: a separately-translated callee
- *     body has no independent frame slot for a recovered generic context;
  *   - clause-free (no personality function) - gate #8, the wrong-EH-handler
  *     silent-miscompile trap: the custom-emit EH clause_index join key is not
  *     namespaced per inlined callee;
@@ -66,10 +63,16 @@
  *     GetCallingAssembly, StackTrace's frame 0. Folding such a callee in makes
  *     those report the caller's frame instead (gate #25);
  *   - and the invoke / musttail guards.
- * The rgctx and EH exclusions are hard safety gates; getting them wrong is a
- * silent miscompile, so they are asserted by the differential fixtures in
+ * The EH exclusion is a hard safety gate; getting it wrong is a silent
+ * miscompile, so it is asserted by the differential fixtures in
  * inliner-tests.cs, not eyeballed. materialize_callee () additionally refuses
- * wrappers, synchronized methods and gshared/gsharedvt bodies mono-side.
+ * wrappers, synchronized methods, open/shared-generic callees and anything that
+ * still comes back gshared/gsharedvt mono-side.
+ *
+ * Generic callees are folded in by compiling the exact instantiation rather than
+ * the shared body (materialize_callee ()), which is why a call site passing a
+ * vtable/mrgctx in `nest` is no longer refused: the folded body is specialized,
+ * so it has no generic context to recover and simply ignores the argument.
  *
  * There is deliberately no size or leaf-only restriction here: bounding what is
  * worth folding in is the stock inliner's cost model's job, and starving it of
@@ -156,22 +159,6 @@ trace (const char *what, StringRef sym)
 {
 	if (trace_enabled ())
 		errs () << "[inliner] " << what << " " << sym << "\n";
-}
-
-/*
- * True if CB carries a generic-context (rgctx/mrgctx or imt) argument. Those
- * travel in the `nest`-attributed parameter (see translator-call.cpp), so a
- * single attribute check is the whole gate - #26. Refusing these is a hard
- * correctness requirement: a folded callee body has no independent frame slot
- * from which the runtime could recover its generic context.
- */
-bool
-passes_generic_context (const CallBase &cb)
-{
-	for (unsigned i = 0, n = cb.arg_size (); i < n; ++i)
-		if (cb.paramHasAttr (i, Attribute::Nest))
-			return true;
-	return false;
 }
 
 /*
@@ -431,11 +418,12 @@ private:
 			if (!cb || !cb->isCallee (&use))
 				continue;
 
-			// We cannot inline methods that pass a generic context, since unwinding
-			// depends on there being exactly one generic context per frame.
-			if (passes_generic_context (*cb))
-				continue;
-
+			// A call site may still pass a vtable/mrgctx in the `nest` parameter -
+			// the caller decided that from the callee's metadata. The body accepts
+			// it and ignores it: materialize_callee () compiles the exact
+			// instantiation, so there is no generic context left to recover from
+			// it, and it refuses anything that comes back gshared/gsharedvt.
+			//
 			// If the declaration signature is not equivalent then we should ICE.
 			g_assert (cb->getFunctionType () == body->getFunctionType ());
 

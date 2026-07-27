@@ -217,6 +217,14 @@ typedef struct {
 	 * Function and either inlines it or strips it.
 	 */
 	bool translate_only;
+	/*
+	 * Set when the caller passes this body a vtable/mrgctx argument that the body
+	 * itself has no use for - a materialized callee is compiled specialized, so
+	 * every runtime lookup the shared body would have made through that argument
+	 * is a constant here. The parameter is kept anyway so the body's type still
+	 * matches the declaration the call site was emitted against; nothing reads it.
+	 */
+	bool keep_rgctx_arg;
 	int this_arg_pindex, rgctx_arg_pindex;
 	llvm::Value *imt_rgctx_loc;
 	GHashTable *llvm_types;

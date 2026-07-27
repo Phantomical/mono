@@ -2211,6 +2211,26 @@ check_method_sharing (MonoCompile *cfg, MonoMethod *cmethod, gboolean *out_pass_
 		*out_pass_mrgctx = pass_mrgctx;
 }
 
+/*
+ * mini_method_call_passes_rgctx:
+ *
+ *   Whether a direct call to CMETHOD from CFG carries a vtable/mrgctx argument.
+ *
+ * The tier-1 inliner asks because it compiles a materialized callee specialized,
+ * which leaves it with no use for that argument - but the call site was emitted
+ * long before, and its declaration has the parameter. Answering from the same
+ * function the call site itself used is what keeps the two from drifting apart.
+ */
+gboolean
+mini_method_call_passes_rgctx (MonoCompile *cfg, MonoMethod *cmethod)
+{
+	gboolean pass_vtable, pass_mrgctx;
+
+	check_method_sharing (cfg, cmethod, &pass_vtable, &pass_mrgctx);
+
+	return pass_vtable || pass_mrgctx;
+}
+
 static gboolean
 direct_icalls_enabled (MonoCompile *cfg, MonoMethod *method)
 {
