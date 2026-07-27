@@ -1329,29 +1329,47 @@ managed_method_from_symbol (const char *sym)
 
 /*
  * True if METHOD still needs a generic context to be compiled - it is open
- * (a generic type/method definition) or shared over type parameters. Such a
- * callee cannot be folded into the root: mini_method_compile () asserts
- * !sig->has_type_parameters for a non-gshared compile, so running its front-end
- * would abort inside the compile. This is checked up front, before that compile,
- * because the context can arrive via `this`/the receiver type rather than an
- * explicit rgctx argument, which the pass's call-site nest check does not see.
+ * (a generic type/method definition) or shared over type parameters.
+ *
+ * Such a callee cannot be folded into the root. mini_method_compile () only
+ * turns on cfg->gshared for a method it is about to share itself, and an
+ * already-shared method is not sharable again, so the front-end would compile
+ * the type-parameter-bearing body as if it were concrete and abort on the first
+ * call site it cannot resolve without a context. Roots that carry an rgctx are
+ * fine and expected - it is the callee that has to be context-free.
+ *
+ * This is checked up front, before that compile, because the context can arrive
+ * via `this`/the receiver type or the method instantiation rather than an
+ * explicit rgctx argument, none of which the pass's call-site nest check sees.
  */
 static bool
 callee_needs_generic_context (MonoMethod *method)
 {
+	/*
+	 * The authoritative test, and the same one method-to-ir.c asserts on at
+	 * every call site it imports. It catches the case none of the cheaper
+	 * checks below do: a method whose context lives purely in its own
+	 * instantiation, with no trace of it in the declaring class or the
+	 * signature - ExecuteEvents.GetEventList<T> (GameObject, IList<Handler>)
+	 * being the canonical shape.
+	 */
+	if (mono_method_check_context_used (method))
+		return true;
 	/* Open declaring type: the generic type definition itself (Box`1<T>). */
 	if (mono_class_is_gtd (method->klass))
 		return true;
 	/* Declaring type instantiated over type parameters (the shared Box`1<T_REF>). */
 	if (mono_class_is_open_constructed_type (m_class_get_byval_arg (method->klass)))
 		return true;
-	/* A generic method definition (uninstantiated). */
+	/*
+	 * A generic method definition (uninstantiated). It has no context of its
+	 * own for the check above to find, so it needs naming separately.
+	 */
 	if (method->is_generic)
 		return true;
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 	if (!sig)
 		return true;                 /* cannot tell -> be conservative */
-	/* The exact condition method-to-ir.c asserts against for a non-gshared compile. */
 	if (sig->has_type_parameters)
 		return true;
 	return false;
@@ -1517,21 +1535,18 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 	 *    the wrapped method), and inlining e.g. a synchronized wrapper's raw body
 	 *    would drop the monitor enter/exit;
 	 *  - synchronized methods, same reason;
-	 *  - anything that would come back gshared/gsharedvt is the rgctx
-	 *    generic-context gate (#26/#2): the call-site nest check in the pass is the
-	 *    primary guard, this is belt-and-suspenders in case a gshared callee is
-	 *    ever reached without a nest arg.
+	 *  - a callee that still needs a generic context, see below.
 	 */
 	if (method->wrapper_type != MONO_WRAPPER_NONE)
 		return nullptr;
 	if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
 		return nullptr;
 	/*
-	 * #26/#2: refuse an open/shared-generic callee BEFORE its front-end runs.
-	 * A gshared root can reach a type-parameter-bearing callee with no nest arg
-	 * (the context rides in via `this`/the receiver type), and mini_method_compile
-	 * would then abort on !sig->has_type_parameters. The cfg->gshared check below
-	 * only catches this after the compile returns - too late; this is the gate.
+	 * Refuse an open/shared-generic callee BEFORE its front-end runs. A gshared
+	 * root legitimately reaches shared callees, and running one through
+	 * mini_method_compile () aborts partway rather than failing cleanly, so the
+	 * cfg->gshared check below cannot cover it - by then the compile is over.
+	 * This is the gate.
 	 */
 	if (callee_needs_generic_context (method))
 		return nullptr;

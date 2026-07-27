@@ -113,6 +113,7 @@ public class TieredPromotion {
 	// degrades to a no-op and still passes on every path and threshold.
 
 	const int STATE_PROMOTED = 1;
+	const int STATE_TIER0_TERMINAL = 2;
 	const int POLICY_COLD_CALLS = 3;
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -163,6 +164,23 @@ public class TieredPromotion {
 			waited += 5;
 		}
 		return true;
+	}
+
+	// The worker is done with a method once it reaches either terminal state:
+	// promoted, or tier-0-terminal because the backend declined it. A test
+	// that only needs "the tier-1 compile has run, whatever it decided" waits
+	// for either, rather than for one in particular.
+	static bool WaitForResolved (IntPtr method) {
+		int waited = 0;
+		for (;;) {
+			int state = MonoTests.Tiering.Probe.MethodState (method);
+			if (state == STATE_PROMOTED || state == STATE_TIER0_TERMINAL)
+				return true;
+			if (waited >= WAIT_TIMEOUT_MS)
+				return false;
+			System.Threading.Thread.Sleep (5);
+			waited += 5;
+		}
 	}
 
 	public static int test_0_promotion_policy () {
@@ -1013,6 +1031,87 @@ public class TieredPromotion {
 		}
 		if (log [0] != 2 * n + 200)
 			return 18;
+		return 0;
+	}
+
+	// -- Shared-generic root over a type-erased generic callee ---------------
+	//
+	// Inlining INTO a method that carries an rgctx is supported, so a gshared
+	// root walks its callees like any other. What a callee may not do is still
+	// need a generic context of its own: nothing sets up a context for the
+	// materializing compile, so its front-end runs as if the body were
+	// concrete and aborts on the first call site it cannot resolve without
+	// one.
+	//
+	// ErasedGeneric<T> is the shape where that is easy to miss. Its declaring
+	// class is not generic, it is not a generic definition (the inliner sees
+	// the inflated method), and T appears nowhere in its signature - so every
+	// surface-level "is this open?" test says no. The context lives only in
+	// its own instantiation, and the call to ErasedInner<T> in its body is
+	// what needs it.
+
+	interface IErasedTag { }
+	sealed class ErasedTag : IErasedTag { }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool ErasedInner<T> (object o) where T : IErasedTag { return o != null; }
+
+	// Deliberately NOT NoInlining, and deliberately bulky: it has to be big
+	// enough that the front-end inliner leaves the call in place at tier 0
+	// (so a real call site survives for the tier-1 inliner to find), while
+	// staying an eligible candidate once it gets there - the tier-1 inliner
+	// skips anything marked noinline, which would make this test inert.
+	static int ErasedGeneric<T> (object o, int n) where T : IErasedTag {
+		int k = n;
+		for (int i = 0; i < 3; i++) {
+			k += i * 3;
+			k ^= (k >> 2);
+			k -= n;
+		}
+		return ErasedInner<T> (o) ? k | 1 : 0;
+	}
+
+	// The gshared root. NoInlining keeps it a method in its own right, so it
+	// is the one that gets promoted and runs the inliner.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SharedRoot<T> (object o, int n) where T : IErasedTag {
+		return ErasedGeneric<T> (o, n);
+	}
+
+	static int ErasedExpected (int n) {
+		int k = n;
+		for (int i = 0; i < 3; i++) {
+			k += i * 3;
+			k ^= (k >> 2);
+			k -= n;
+		}
+		return k | 1;
+	}
+
+	public static int test_0_shared_root_erased_generic_callee () {
+		object o = new ErasedTag ();
+
+		int n = DriveCount ();
+		for (int i = 0; i < n; i++)
+			if (SharedRoot<ErasedTag> (o, i) != ErasedExpected (i))
+				return 1;
+
+		// Promoting the root is what runs the inliner over the shared callee,
+		// and that happens on the worker, so wait for it before concluding
+		// anything. The tiering record is keyed on the instantiation actually
+		// called, not on the generic definition.
+		uint threshold = MonoTests.Tiering.Probe.Threshold ();
+		if (threshold != 0) {
+			MethodInfo mi = typeof (TieredPromotion).GetMethod (
+				"SharedRoot", BindingFlags.NonPublic | BindingFlags.Static);
+			if (!WaitForResolved (mi.MakeGenericMethod (typeof (ErasedTag)).MethodHandle.Value))
+				return 2;
+		}
+
+		// Same again, now that the root's tier-1 body exists.
+		for (int i = 0; i < 200; i++)
+			if (SharedRoot<ErasedTag> (o, i) != ErasedExpected (i))
+				return 3;
 		return 0;
 	}
 }

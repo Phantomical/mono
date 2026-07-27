@@ -1001,11 +1001,22 @@ rcheck: mono $(regtests)
 # --output-sync (a no-op without -j) keeps each run's output in one block.
 MAKEFLAGS += --output-sync=target
 
-tiered_groups = promotion decline appdomain inliner_regression inliner exceptions iltests
+tiered_groups = promotion promotion_gshared decline appdomain inliner_regression inliner exceptions iltests
 
 tiered_promotion_corpus = tiered-promotion.exe
 tiered_promotion_thresholds = 1000 20 1
 tiered_promotion_args = --regression
+
+# The same corpus again under the runtime's DEFAULT optimization set, which is
+# the only way these runs get MONO_OPT_GSHARED: --regression drives its own list
+# of opt combinations and all but one of them leave gshared out, and the first
+# combination to run has already JIT'd (and latched the tier state of) every
+# method by the time the one that includes it comes around. Methods that are
+# only interesting when compiled shared - see
+# test_0_shared_root_erased_generic_callee - are therefore untested by the
+# --regression runs above, however many thresholds they sweep.
+tiered_promotion_gshared_corpus = tiered-promotion.exe
+tiered_promotion_gshared_thresholds = 1000 20 1 0
 
 tiered_decline_corpus = tiered-decline.exe
 tiered_decline_thresholds = 20
