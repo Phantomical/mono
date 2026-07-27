@@ -1902,7 +1902,7 @@ realloc_code (MonoCompile *cfg, int size)
 static inline void
 set_code_len (MonoCompile *cfg, int len)
 {
-	g_assert (len <= cfg->code_size);
+	g_assert ((guint)len <= cfg->code_size);
 	cfg->code_len = len;
 }
 
