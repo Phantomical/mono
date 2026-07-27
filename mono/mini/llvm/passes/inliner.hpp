@@ -29,6 +29,8 @@
 /* MonoCompile and MonoMethod, the two mono types the pass threads around. */
 #include <mono/mini/mini.h>
 
+#include "inliner-support.hpp"
+
 /*
  * PassBuilder.h uses PIC as an identifier so we need to undef it. This has to
  * come after mini.h: libtool passes -DPIC, and mono-tls.h defines it itself
@@ -62,8 +64,8 @@ struct RoundState;
 class MonoInlinerPass : public llvm::PassInfoMixin<MonoInlinerPass> {
 public:
 	MonoInlinerPass (llvm::PassBuilder &pb, llvm::OptimizationLevel level,
-	                 std::shared_ptr<RoundState> state)
-	    : pb_ (&pb), level_ (level), state_ (std::move (state))
+	                 std::shared_ptr<RoundState> state, const Tier1Root &root)
+	    : pb_ (&pb), level_ (level), state_ (std::move (state)), root_ (root)
 	{
 	}
 
@@ -76,6 +78,7 @@ private:
 	llvm::PassBuilder *pb_;
 	llvm::OptimizationLevel level_;
 	std::shared_ptr<RoundState> state_;
+	Tier1Root root_;
 };
 
 /*
@@ -84,10 +87,15 @@ private:
  * PIC must be the same instrumentation-callbacks object PB was constructed
  * with - the pass observes the stock inliner's per-function analysis
  * invalidations through it to tell whether a round changed a root.
+ *
+ * ROOT names the compile this pipeline is for; the inliner works on that root
+ * and materializes callees into its module. Built fresh per compile, so it
+ * carries no state shared with a concurrent one.
  */
 llvm::ModulePassManager build_tier1_pipeline (llvm::PassBuilder &pb,
                                               llvm::PassInstrumentationCallbacks &pic,
-                                              llvm::OptimizationLevel level);
+                                              llvm::OptimizationLevel level,
+                                              const Tier1Root &root);
 
 } // namespace mono
 

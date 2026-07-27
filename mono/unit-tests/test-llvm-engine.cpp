@@ -86,6 +86,7 @@
 #include <llvm/TargetParser/Triple.h>
 
 #include "mini/llvm/engine.hpp"
+#include "mini/llvm/passes/inliner-support.hpp"
 
 using namespace llvm;
 using mono::MonoLLVMJIT;
@@ -312,7 +313,7 @@ test_registered_helper (MonoLLVMJIT *jit)
 	Value *called = b.CreateCall (helper, {x});
 	b.CreateRet (b.CreateAdd (called, ConstantInt::get (i64, 1)));
 
-	jit->optimize (fn); /* also exercise the optimizer */
+	jit->optimize (mono::Tier1Root { fn, nullptr, nullptr }); /* also exercise the optimizer */
 
 	/* compile() clones; keep owning the original (freed on scope exit). */
 	mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
@@ -373,7 +374,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
 		b.CreateRet (b.CreateCall (powf, {base, expo}));
 
-		jit->optimize (fn);
+		jit->optimize (mono::Tier1Root { fn, nullptr, nullptr });
 		mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 		CHECK (res.entry != 0);
 		auto compiled = reinterpret_cast<double (*) (int32_t)> (res.entry);
@@ -395,7 +396,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
 		b.CreateRet (b.CreateCall (powf, {base, x}));
 
-		jit->optimize (fn);
+		jit->optimize (mono::Tier1Root { fn, nullptr, nullptr });
 		mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 		CHECK (res.entry != 0);
 		auto compiled = reinterpret_cast<double (*) (double)> (res.entry);
@@ -419,7 +420,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
 		b.CreateRet (b.CreateCall (powf, {x, third}));
 
-		jit->optimize (fn);
+		jit->optimize (mono::Tier1Root { fn, nullptr, nullptr });
 		mono::CompileResult res = jit->compile (fn, {}, nullptr, "", tsctx);
 		CHECK (res.entry != 0);
 		auto compiled = reinterpret_cast<double (*) (double)> (res.entry);

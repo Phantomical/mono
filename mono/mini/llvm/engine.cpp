@@ -2027,15 +2027,15 @@ MonoLLVMJIT::resolve_symbol_name (void *addr)
 }
 
 void
-MonoLLVMJIT::optimize (Function *func)
+MonoLLVMJIT::optimize (const Tier1Root &root)
 {
 	/*
-	 * `func` only identifies the module to optimize; we run the full per-module
-	 * -O2 pipeline over the whole module in place, so the caller's subsequent
-	 * codegen (which clones this module) and the "Optimized LLVM IR" dump both
-	 * see the optimized IR.
+	 * The root only identifies the module to optimize; we run the full
+	 * per-module -O2 pipeline over the whole module in place, so the caller's
+	 * subsequent codegen (which clones this module) and the "Optimized LLVM IR"
+	 * dump both see the optimized IR.
 	 */
-	Module *module = func->getParent ();
+	Module *module = root.func->getParent ();
 	module->setDataLayout (jit_->getDataLayout ());
 
 	/*
@@ -2092,7 +2092,7 @@ MonoLLVMJIT::optimize (Function *func)
 	 * module until our pass puts them there. See passes/inliner.hpp.
 	 */
 	ModulePassManager mpm =
-		build_tier1_pipeline (pb, pic, OptimizationLevel::O2);
+		build_tier1_pipeline (pb, pic, OptimizationLevel::O2, root);
 	mpm.run (*module, mam);
 }
 
@@ -2114,7 +2114,7 @@ MonoLLVMJIT::compile (Function *entry,
 
 	/*
 	 * MONO_TIER1_DUMP_DIR debugging aid: off entry->getParent(), the module the
-	 * translator built and already ran mono_llvm_optimize_method() over, i.e.
+	 * translator built and already ran the -O2 pipeline over, i.e.
 	 * exactly what the clone below is about to hand the JIT. A no-op (a cached
 	 * getenv check) unless the variable is set.
 	 */
@@ -2282,12 +2282,6 @@ mono_llvm_jit_resolve_symbol_name (gpointer addr)
 	 */
 	mono::MonoLLVMJIT *jit = mono::MonoLLVMJIT::get_singleton_if_created ();
 	return jit ? jit->resolve_symbol_name (addr) : nullptr;
-}
-
-void
-mono_llvm_optimize_method (LLVMValueRef method)
-{
-	mono::MonoLLVMJIT::get_singleton ()->optimize (llvm::unwrap<llvm::Function> (method));
 }
 
 guint32

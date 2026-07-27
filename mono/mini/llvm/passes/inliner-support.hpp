@@ -33,21 +33,27 @@ struct MonoLLVMModule;
 namespace mono {
 
 /*
- * The tier-1 root registry. The translator registers a root (with its
- * MonoCompile and the per-compile MonoLLVMModule it is being emitted into)
- * right before it optimizes the module, and unregisters it once optimization
- * returns; the inliner pass runs inside that window and looks both up to drive
- * materialization. Several compiles can be registered at once - one per thread
- * currently in the optimizer.
+ * The compile the inliner pass is running inside, handed to it when its
+ * pipeline is built.
+ *
+ * An LLVM pass is normally reachable only through the IR it is given, which is
+ * why this used to be a process-wide registry the pass looked itself up in.
+ * It does not have to be: the -O2 pipeline is rebuilt for every compile
+ * (MonoLLVMJIT::optimize ()), so the pass object can simply be constructed
+ * knowing which compile it belongs to. That keeps per-compile state per
+ * compile, and is what lets several compiles optimize at once without sharing
+ * anything.
+ *
+ * FUNC is the tier-1 root - the one method the translator emitted standalone
+ * into this module. CFG is its MonoCompile and MODULE the translator state
+ * (in particular the LLVMContext) the whole compile is being built in;
+ * materializing a callee needs both.
  */
-void register_tier1_root (llvm::Function *root, MonoCompile *root_cfg, MonoLLVMModule *module);
-void unregister_tier1_root (llvm::Function *root, MonoLLVMModule *module);
-MonoCompile *tier1_root_cfg (llvm::Function *root);
-/*
- * The translator state for the compile emitting into INTO - in particular the
- * LLVMContext that module and everything in it belongs to.
- */
-MonoLLVMModule *tier1_root_module (llvm::Module *into);
+struct Tier1Root {
+	llvm::Function *func;
+	MonoCompile *cfg;
+	MonoLLVMModule *module;
+};
 
 /*
  * Whether ROOT_CFG permits inlining at all - the caller-level eligibility gates:
@@ -73,7 +79,7 @@ MonoMethod *managed_method_from_symbol (const char *sym);
 
 /*
  * Obtain TARGET's body on demand: run its front-end and translate it into
- * module INTO as an internal Function, using ROOT_CFG for domain/opt. Returns
+ * ROOT's module as an internal Function, using ROOT's cfg for domain/opt. Returns
  * the materialized Function, or NULL if the callee cannot be materialized - a
  * decline the caller treats as "leave the trampoline call in place". This is
  * conservative: it refuses wrappers, synchronized methods, and any callee that
@@ -81,8 +87,7 @@ MonoMethod *managed_method_from_symbol (const char *sym);
  * rgctx gate, #26), checked up front before the front-end runs - in addition to
  * whatever the front-end itself declines.
  */
-llvm::Function *materialize_callee (MonoMethod *target, MonoCompile *root_cfg,
-                                    llvm::Module *into);
+llvm::Function *materialize_callee (MonoMethod *target, const Tier1Root &root);
 
 /*
  * Whether TARGET reads or writes a static field of a class that still needs its

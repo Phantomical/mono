@@ -43,7 +43,6 @@ void mono_llvm_set_unhandled_exception_handler (void);
  * gracefully in stub.cpp's mono_llvm_emit_method).
  */
 void      mono_llvm_jit_init (void);
-void      mono_llvm_optimize_method (LLVMValueRef method);
 
 /*
  * Transcode the stock DWARF .eh_frame LLVM emits into mono's unwind ops.

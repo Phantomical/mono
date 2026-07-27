@@ -585,10 +585,12 @@ EmitContext::emit_method_inner ()
 	this->lmethod = method;
 
 	/*
-	 * Mark the top-down inliner's root. Every method the translator emits
-	 * standalone is a tier-1 root (v1 emits exactly one per module); a callee
-	 * materialized into a caller's module (translate_only) is not - it is a
-	 * candidate body, never a root.
+	 * Mark the top-down inliner's root, for the benefit of anyone reading an IR
+	 * dump: every method the translator emits standalone is a tier-1 root (v1
+	 * emits exactly one per module), while a callee materialized into a
+	 * caller's module (translate_only) is a candidate body, never a root. The
+	 * pass itself does not read this - it is handed its root directly (see
+	 * Tier1Root, passes/inliner-support.hpp).
 	 */
 	if (!this->translate_only)
 		llvm::unwrap<llvm::Function> (method)->addFnAttr ("mono-tier1-root");
@@ -1044,17 +1046,7 @@ after_codegen:
 		 */
 		return;
 
-	/*
-	 * Register the root so the top-down inliner (which runs inside the finalize
-	 * below, during the module optimization pipeline) can reach this method's
-	 * MonoCompile to drive callee materialization. Unregister once optimization
-	 * has returned - the cfg does not outlive this compile.
-	 */
-	mono::register_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod), cfg, this->module);
-
 	this->llvm_jit_finalize_method ();
-
-	mono::unregister_tier1_root (llvm::unwrap<llvm::Function> (this->lmethod), this->module);
 
 	if (this->module->method_to_lmethod)
 		g_hash_table_insert (this->module->method_to_lmethod, cfg->method, this->lmethod);
@@ -1237,64 +1229,13 @@ mono_llvm_emit_aot_module (const char *filename, const char *cu_name)
 }
 
 /* ------------------------------------------------------------------------ *
- * Tier-1 inliner support: root registry + lazy callee materialization.
+ * Tier-1 inliner support: root eligibility + lazy callee materialization.
  *
  * These are the mono-aware half of the top-down inliner; the pure-LLVM pass
  * (passes/inliner.cpp) reaches them through passes/inliner-support.hpp.
  * ------------------------------------------------------------------------ */
 
 namespace mono {
-
-/*
- * The root registry: how the inliner, which runs inside LLVM's optimization
- * pipeline, reaches back into the translator state of the compile it is
- * optimizing. Roots are keyed by their LLVM Function and their compile module
- * by that module, and both are dropped as soon as optimization returns - so
- * this holds one entry per compile currently in the optimizer, which with
- * concurrent tier-1 compiles means one per busy worker.
- *
- * The lock is what makes that concurrency safe. It is only ever held for a map
- * operation, never across a compile.
- */
-static std::mutex tier1_roots_mutex;
-static std::unordered_map<llvm::Function *, MonoCompile *> tier1_roots;
-static std::unordered_map<llvm::Module *, MonoLLVMModule *> tier1_root_modules;
-
-void
-register_tier1_root (llvm::Function *root, MonoCompile *root_cfg, MonoLLVMModule *module)
-{
-	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
-
-	tier1_roots [root] = root_cfg;
-	tier1_root_modules [llvm::unwrap (module->lmodule)] = module;
-}
-
-void
-unregister_tier1_root (llvm::Function *root, MonoLLVMModule *module)
-{
-	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
-
-	tier1_roots.erase (root);
-	tier1_root_modules.erase (llvm::unwrap (module->lmodule));
-}
-
-MonoCompile *
-tier1_root_cfg (llvm::Function *root)
-{
-	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
-
-	auto found = tier1_roots.find (root);
-	return found == tier1_roots.end () ? nullptr : found->second;
-}
-
-MonoLLVMModule *
-tier1_root_module (llvm::Module *into)
-{
-	std::lock_guard<std::mutex> lock (tier1_roots_mutex);
-
-	auto found = tier1_root_modules.find (into);
-	return found == tier1_root_modules.end () ? nullptr : found->second;
-}
 
 bool
 tier1_root_allows_inlining (MonoCompile *cfg)
@@ -1531,9 +1472,9 @@ pending_class_init_vtable (MonoCompile *cfg, bool *indeterminate)
 }
 
 llvm::Function *
-materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
+materialize_callee (MonoMethod *method, const Tier1Root &root)
 {
-	if (!method || !root)
+	if (!method || !root.cfg)
 		return nullptr;
 
 	/*
@@ -1577,7 +1518,7 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 	 * on this thread.
 	 */
 	MonoCompile *cfg = mini_method_compile (
-		method, root->opt & ~MONO_OPT_GSHARED, root->domain,
+		method, root.cfg->opt & ~MONO_OPT_GSHARED, root.cfg->domain,
 		(JitFlags) (JIT_FLAG_LLVM | JIT_FLAG_LLVM_IR_ONLY | JIT_FLAG_NO_LLVM_FALLBACK),
 		0, -1);
 	if (!cfg)
@@ -1594,13 +1535,11 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 	{
 		/*
 		 * Translate into the root's module, sharing its MonoLLVMModule - and so
-		 * its LLVMContext, which `into` and every type in it belong to. A fresh
-		 * one here would build the callee body out of types from a different
-		 * context, which is not a thing an LLVM module can hold.
+		 * its LLVMContext, which that module and every type in it belong to. A
+		 * fresh one here would build the callee body out of types from a
+		 * different context, which is not a thing an LLVM module can hold.
 		 */
-		MonoLLVMModule *module = tier1_root_module (into);
-		if (!module)
-			goto done;
+		MonoLLVMModule *module = root.module;
 
 		EmitContext *ctx = alloc_emit_context (cfg, module);
 		/*
@@ -1614,7 +1553,7 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 		 * is gone.
 		 */
 		std::fill (module->intrins_by_id.begin (), module->intrins_by_id.end (), nullptr);
-		ctx->lmodule = llvm::wrap (into);
+		ctx->lmodule = module->lmodule;
 		ctx->translate_only = true;
 		/*
 		 * The call site was emitted against a declaration that may carry a
@@ -1624,7 +1563,7 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 		 * not be rewired at all. Asked of the ROOT's cfg because that is the
 		 * caller whose call site is being matched.
 		 */
-		ctx->keep_rgctx_arg = mini_method_call_passes_rgctx (root, method);
+		ctx->keep_rgctx_arg = mini_method_call_passes_rgctx (root.cfg, method);
 
 		ctx->emit_method_inner ();
 
@@ -2136,7 +2075,13 @@ EmitContext::llvm_jit_finalize_method ()
 	 */
 	this->phi_values.clear ();
 
-	mono_llvm_optimize_method (this->lmethod);
+	/*
+	 * Run the pipeline for THIS compile: the inliner needs the root's cfg (to
+	 * drive callee materialization) and this compile's translator state (whose
+	 * LLVMContext every callee body must be built in).
+	 */
+	mono::Tier1Root root { llvm::unwrap<llvm::Function> (this->lmethod), cfg, this->module };
+	mono::MonoLLVMJIT::get_singleton ()->optimize (root);
 
 	mono_codeman_enable_write ();
 	/*

@@ -54,6 +54,13 @@ class LinkGraph;
 namespace mono {
 
 /*
+ * Which compile the tier-1 inliner is running inside. Defined in
+ * passes/inliner-support.hpp, which needs mini.h; this header deliberately
+ * does not, so it only ever names it by reference.
+ */
+struct Tier1Root;
+
+/*
  * The stock DWARF .eh_frame section of a compiled module, as loaded.
  *
  * THE EH PORT PLUGS IN HERE: it reads this out of the CompileResult to learn
@@ -269,8 +276,13 @@ public:
 	 */
 	const char *resolve_symbol_name (void *addr);
 
-	/* Run an O2 function-simplification pipeline over `func` in place. */
-	void optimize (llvm::Function *func);
+	/*
+	 * Run the O2 module pipeline over ROOT's module in place, with mono's
+	 * tier-1 inliner in the stock inliner's slot. ROOT tells that inliner which
+	 * compile it is running inside; nothing about the pipeline is shared with a
+	 * compile running concurrently on another thread.
+	 */
+	void optimize (const Tier1Root &root);
 
 	/*
 	 * Compile the module that owns `entry` and return the executable address

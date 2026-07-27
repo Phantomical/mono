@@ -127,7 +127,6 @@ struct RoundState {
 namespace {
 
 /* The translator marks the method being promoted with this (translator.cpp). */
-const char kRootAttr[] = "mono-tier1-root";
 
 /*
  * Marks a function this pass translated into the module, with the symbol of the
@@ -207,6 +206,7 @@ class MonoInlinerState {
 private:
 	llvm::Module *module;
 	std::shared_ptr<RoundState> round_state;
+	Tier1Root root;
 
 	llvm::SmallVector<llvm::Function *, 8> roots;
 
@@ -232,36 +232,39 @@ private:
 	std::set<std::string> materialized;
 
 public:
-	MonoInlinerState (llvm::Module *module, const std::shared_ptr<RoundState> &round_state)
-	    : module (module), round_state (round_state)
+	MonoInlinerState (llvm::Module *module, const std::shared_ptr<RoundState> &round_state,
+	                  const Tier1Root &root)
+	    : module (module), round_state (round_state), root (root)
 	{
-		for (auto &func : *module) {
-			if (func.isDeclaration ())
-				continue;
-			if (!func.hasFnAttribute (kRootAttr))
-				continue;
+		/*
+		 * No root to work on: a module the engine was handed directly rather
+		 * than through a tier-1 compile (the unit tests do this), or a root
+		 * whose body an earlier stage already deleted. Either way there is
+		 * nothing to materialize into, and the pass still has to run the
+		 * nested simplification pipeline - see the file comment.
+		 */
+		if (!root.func || root.func->isDeclaration ())
+			return;
 
-			auto config = tier1_root_cfg (&func);
-			if (!config) {
-				// Nothing to materialize with - the cfg is what drives every
-				// callee compile.
-				trace ("refuse-root-nocfg", func.getName ());
-				continue;
-			}
-
-			// -O=-inline, or a method the user asked not to have optimized.
-			// Honouring this here is what keeps a whole-run "inlined nothing"
-			// from being indistinguishable from "found nothing to inline".
-			if (!tier1_root_allows_inlining (config)) {
-				trace (tier1_root_refusal_reason (config), func.getName ());
-				continue;
-			}
-
-			// Make sure we can tell which method is under consideration here.
-			trace ("root", func.getName ());
-
-			roots.push_back (&func);
+		if (!root.cfg || !root.module) {
+			// Nothing to materialize with - the cfg drives every callee
+			// compile, and the module names the context they must be built in.
+			trace ("refuse-root-nocfg", root.func->getName ());
+			return;
 		}
+
+		// -O=-inline, or a method the user asked not to have optimized.
+		// Honouring this here is what keeps a whole-run "inlined nothing"
+		// from being indistinguishable from "found nothing to inline".
+		if (!tier1_root_allows_inlining (root.cfg)) {
+			trace (tier1_root_refusal_reason (root.cfg), root.func->getName ());
+			return;
+		}
+
+		// Make sure we can tell which method is under consideration here.
+		trace ("root", root.func->getName ());
+
+		roots.push_back (root.func);
 	}
 
 	static const unsigned MaxInlinerRounds = 10;
@@ -317,10 +320,8 @@ private:
 		for (auto root : roots)
 			depth_cache.erase (root);
 
-		for (auto root : roots) {
-			auto config = tier1_root_cfg (root);
-			process_candidate (root, 0, config);
-		}
+		for (auto func : roots)
+			process_candidate (func, 0, root.cfg);
 
 		return !added.empty ();
 	}
@@ -443,7 +444,7 @@ private:
 		if (depth > limit)
 			return nullptr;
 
-		auto body = materialize_callee (method, config, module);
+		auto body = materialize_callee (method, root);
 		if (!body) {
 			trace_method ("method is not supported by the tier1 jit", method);
 			return nullptr;
@@ -489,7 +490,7 @@ private:
 PreservedAnalyses
 MonoInlinerPass::run (Module &module, ModuleAnalysisManager &mam)
 {
-	MonoInlinerState state (&module, state_);
+	MonoInlinerState state (&module, state_, root_);
 	auto pa = state.run (mam, *pb_, level_);
 
 	VerifierPass ().run (module, mam);
@@ -597,14 +598,15 @@ const char kStockInlinerPass[] = "ModuleInlinerWrapperPass";
 } // namespace
 
 ModulePassManager
-build_tier1_pipeline (PassBuilder &pb, PassInstrumentationCallbacks &pic, OptimizationLevel level)
+build_tier1_pipeline (PassBuilder &pb, PassInstrumentationCallbacks &pic, OptimizationLevel level,
+                      const Tier1Root &root)
 {
 	auto state = std::make_shared<RoundState> ();
 	register_round_callbacks (pic, state);
 
 	PipelineSplicer pipeline (pb.buildPerModuleDefaultPipeline (level));
 
-	if (!pipeline.replace_sole (kStockInlinerPass, MonoInlinerPass (pb, level, state))) {
+	if (!pipeline.replace_sole (kStockInlinerPass, MonoInlinerPass (pb, level, state, root))) {
 		/*
 		 * The stage we replace is not where we expect it: an LLVM upgrade
 		 * renamed it, or -enable-module-inliner swapped in the other one. Say
@@ -616,7 +618,7 @@ build_tier1_pipeline (PassBuilder &pb, PassInstrumentationCallbacks &pic, Optimi
 			<< " in the -O2 pipeline; running the tier-1 inliner at the "
 			   "pipeline start instead\n";
 		assert (false && "tier-1 inliner could not take the stock inliner's slot");
-		pipeline.prepend (MonoInlinerPass (pb, level, state));
+		pipeline.prepend (MonoInlinerPass (pb, level, state, root));
 	}
 
 	return pipeline.take ();
