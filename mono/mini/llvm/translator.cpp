@@ -1563,12 +1563,6 @@ materialize_callee (MonoMethod *method, MonoCompile *root, llvm::Module *into)
 			cleanup_failed_emit (ctx);
 		} else {
 			result = llvm::unwrap<llvm::Function> (ctx->lmethod);
-			/*
-			 * The body is only ever referenced from within this module (inlined
-			 * or stripped), so internal linkage - and it must be DCE-able if the
-			 * inliner declines it.
-			 */
-			result->setLinkage (llvm::GlobalValue::InternalLinkage);
 		}
 
 		free_ctx (ctx);
