@@ -96,6 +96,26 @@ struct MonoIlLineRow {
 	uint32_t il_offset;
 };
 
+/*
+ * One frame of an inlined call chain at a native offset: the method whose IL
+ * this address really is, and the offset within it.
+ *
+ * depth 0 is the innermost body; increasing depth walks back out toward the
+ * function that was compiled. The outermost frame is NOT stored here - that one
+ * is the compiled method's own, and it is what MonoIlLineRow records, because a
+ * stack frame for that method has to report its own call site.
+ *
+ * `method` is the subprogram name from the emitted DWARF (mono_method_full_name
+ * ()); the translator resolves it back to a MonoMethod through the map it built
+ * while translating.
+ */
+struct MonoIlInlineRow {
+	uint32_t native_offset;
+	uint32_t il_offset;
+	uint32_t depth;
+	std::string method;
+};
+
 struct CompileResult {
 	/* Executable address of the entry function. */
 	uint64_t entry = 0;
@@ -123,6 +143,11 @@ struct CompileResult {
 	 * il_offset map; mono hangs it off the MonoJitInfo for stack traces.
 	 */
 	std::vector<MonoIlLineRow> il_lines;
+	/*
+	 * The inlined frames covering those same native offsets, ascending by
+	 * (native offset, depth). Empty when the entry function inlined nothing.
+	 */
+	std::vector<MonoIlInlineRow> il_inline_frames;
 	/*
 	 * The `.mono_lsda` section of this module ({nullptr,0} unless MonoLSDAStreamer
 	 * wrote one - i.e. an EH-bearing method whose catch clauses the C2 gather pass

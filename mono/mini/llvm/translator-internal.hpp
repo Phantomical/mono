@@ -72,7 +72,9 @@
 #include "llvm-c/Analysis.h"
 
 #include <atomic>
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include "llvm/ADT/DenseMap.h"
@@ -176,6 +178,16 @@ struct MonoLLVMModule {
 	 */
 	std::vector<MonoExceptionClause> clauses;
 
+	/*
+	 * This compile's debug info: one compile unit, a subprogram per function
+	 * translated in, and the name -> MonoMethod map needed to turn a subprogram
+	 * name from the emitted DWARF back into the method it describes. Names are
+	 * mono_method_full_name (), which is also what the functions are called, so
+	 * the lookup is exact rather than a parse.
+	 */
+	std::unique_ptr<mono::IlDebugModule> il_debug;
+	std::map<std::string, MonoMethod *> il_debug_methods;
+
 	/* The context as a plain reference, for the llvm:: APIs that want one. */
 	llvm::LLVMContext &ctx () { return *context.getContext (); }
 };
@@ -248,7 +260,8 @@ typedef struct {
 	 * new basic block's instructions do not come out unattributed - LLVM requires
 	 * an inlinable call in a function with debug info to carry one.
 	 */
-	std::unique_ptr<mono::IlLineTable> il_line_table;
+	/* This function's subprogram; owned by module->il_debug. */
+	mono::IlDebugScope *il_debug_scope = nullptr;
 	std::unordered_map<int, MonoBasicBlock*> region_to_handler;
 	std::unordered_map<int, MonoBasicBlock*> clause_to_handler;
 	/*
@@ -395,9 +408,9 @@ typedef struct {
 	LLVMValueRef emit_gsharedvt_ldaddr (int vreg);
 
 	/* Line-table debug info (defined in translator.cpp). */
-	void begin_il_line_table ();
+	void begin_il_debug_info ();
 	void set_il_debug_location (llvm::IRBuilder<> *builder, guint32 il_offset);
-	void finish_il_line_table ();
+	void finish_il_debug_info ();
 
 	/* Call / prologue / exception-emission helpers (defined in translator-call.cpp). */
 	void emit_div_check (llvm::IRBuilder<> *builder, MonoBasicBlock *bb, MonoInst *ins, llvm::Value *lhs, llvm::Value *rhs);

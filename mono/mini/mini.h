@@ -1598,6 +1598,9 @@ typedef struct {
 	 */
 	MonoLLVMSeqPoint *llvm_seq_points;
 	guint32 n_llvm_seq_points;
+	/* Copied onto jit_info->llvm_inline_frames by create_jit_info (). */
+	MonoLLVMInlineFrame *llvm_inline_frames;
+	guint32 n_llvm_inline_frames;
 
 	GSList *try_block_holes;
 

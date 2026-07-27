@@ -98,6 +98,8 @@
 #include <llvm/MC/MCSymbol.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
+
+#include "il-line-table.hpp"
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
@@ -132,6 +134,15 @@ using namespace llvm;
 using namespace llvm::orc;
 
 namespace mono {
+
+/*
+ * Everything one function's debug info yields: the method's own native_offset ->
+ * il_offset map, and the inlined frames sitting underneath those same offsets.
+ */
+struct IlDebugRows {
+	std::vector<MonoIlLineRow> lines;
+	std::vector<MonoIlInlineRow> inline_frames;
+};
 
 /*
  * Facts about one emitted object that are only visible at materialization time.
@@ -177,18 +188,28 @@ struct ObjectInfo {
 	 * keyed by function symbol name, ascending by native offset. This is the
 	 * native_offset -> il_offset map for stack traces; see MonoIlLineRow.
 	 */
-	std::map<std::string, std::vector<MonoIlLineRow>> il_lines;
+	std::map<std::string, IlDebugRows> il_debug;
 };
 
 /*
- * Read the `.debug_line` table out of the just-compiled (not yet linked) object
- * and reduce it to per-function (native_offset, il_offset) rows.
+ * Read the debug info out of the just-compiled (not yet linked) object and reduce
+ * it to per-function rows.
  *
- * Reading the INPUT object rather than the linked graph is deliberate:
- * `.debug_line` is not SHF_ALLOC, so JITLink neither allocates nor relocates it,
- * and there would be nothing to read on the other side. In a relocatable object
- * DWARFContext applies the debug-section relocations itself, so a row's address
- * is already the function's offset within `.text`.
+ * Reading the INPUT object rather than the linked graph is deliberate: the debug
+ * sections are not SHF_ALLOC, so JITLink neither allocates nor relocates them and
+ * there would be nothing to read on the other side. In a relocatable object
+ * DWARFContext applies the debug-section relocations itself, so a row's address is
+ * already the function's offset within `.text`.
+ *
+ * Two things the line table alone cannot answer, which is why this goes through
+ * getInliningInfoForAddress () rather than reading `.debug_line` directly:
+ *
+ *  - after inlining, the line at an address belongs to whichever body was folded
+ *    in, not to the function being compiled. The frame for the compiled method
+ *    has to report ITS OWN call site, which is the outermost frame of the chain
+ *    (DIInliningInfo is leaf-to-root, so the last one).
+ *  - the inlined bodies are worth keeping, but only if each says which method it
+ *    came from - and that identity lives in `.debug_info`, not the line table.
  *
  * Rows at the same address are what a run of IL seq points collapses to once the
  * optimizer is done. They arrive in code order, so the LAST one is the offset in
@@ -196,8 +217,7 @@ struct ObjectInfo {
  * classic JIT's own "most recent point execution passed" lookup agrees with.
  */
 static void
-parse_il_line_tables (MemoryBufferRef obj_buf,
-                      std::map<std::string, std::vector<MonoIlLineRow>> &out)
+parse_il_debug_info (MemoryBufferRef obj_buf, std::map<std::string, IlDebugRows> &out)
 {
 	Expected<std::unique_ptr<object::ObjectFile>> obj =
 		object::ObjectFile::createObjectFile (obj_buf);
@@ -237,6 +257,9 @@ parse_il_line_tables (MemoryBufferRef obj_buf,
 	if (funcs.empty ())
 		return;
 
+	DILineInfoSpecifier spec (DILineInfoSpecifier::FileLineInfoKind::RawValue,
+	                          DILineInfoSpecifier::FunctionNameKind::LinkageName);
+
 	for (const std::unique_ptr<DWARFUnit> &cu : dw->compile_units ()) {
 		const DWARFDebugLine::LineTable *lt = dw->getLineTableForUnit (cu.get ());
 		if (!lt)
@@ -247,22 +270,57 @@ parse_il_line_tables (MemoryBufferRef obj_buf,
 			if (row.EndSequence || row.Line == 0)
 				continue;
 
+			const FuncRange *owner = nullptr;
 			for (const FuncRange &f : funcs) {
 				if (row.Address.Address < f.start)
 					continue;
 				if (f.size && row.Address.Address >= f.start + f.size)
 					continue;
-
-				MonoIlLineRow r;
-				r.native_offset = (uint32_t) (row.Address.Address - f.start);
-				r.il_offset = (uint32_t) (row.Line - 1);
-
-				std::vector<MonoIlLineRow> &rows = out[f.name];
-				if (!rows.empty () && rows.back ().native_offset == r.native_offset)
-					rows.back () = r;
-				else
-					rows.push_back (r);
+				owner = &f;
 				break;
+			}
+			if (!owner)
+				continue;
+
+			object::SectionedAddress addr;
+			addr.Address = row.Address.Address;
+			addr.SectionIndex = row.Address.SectionIndex;
+
+			DIInliningInfo chain = dw->getInliningInfoForAddress (addr, spec);
+			uint32_t depth_count = chain.getNumberOfFrames ();
+			if (depth_count == 0)
+				continue;
+
+			uint32_t native_offset = (uint32_t) (row.Address.Address - owner->start);
+			IlDebugRows &rows = out[owner->name];
+
+			/*
+			 * The outermost frame is the compiled method's own position; the rest
+			 * are bodies inlined into it, innermost first.
+			 */
+			const DILineInfo &outer = chain.getFrame (depth_count - 1);
+			MonoIlLineRow line;
+			line.native_offset = native_offset;
+			line.il_offset = (uint32_t) (outer.Line - IL_OFFSET_LINE_BIAS);
+
+			if (!rows.lines.empty () && rows.lines.back ().native_offset == native_offset) {
+				rows.lines.back () = line;
+				/* Same address, so the previous chain is superseded too. */
+				while (!rows.inline_frames.empty () &&
+				       rows.inline_frames.back ().native_offset == native_offset)
+					rows.inline_frames.pop_back ();
+			} else {
+				rows.lines.push_back (line);
+			}
+
+			for (uint32_t i = 0; i + 1 < depth_count; ++i) {
+				const DILineInfo &frame = chain.getFrame (i);
+				MonoIlInlineRow inl;
+				inl.native_offset = native_offset;
+				inl.il_offset = (uint32_t) (frame.Line - IL_OFFSET_LINE_BIAS);
+				inl.depth = i;
+				inl.method = frame.FunctionName;
+				rows.inline_frames.push_back (inl);
 			}
 		}
 	}
@@ -270,13 +328,19 @@ parse_il_line_tables (MemoryBufferRef obj_buf,
 	/*
 	 * The rows arrive in code order, which is ascending by address within a
 	 * sequence but need not be across sequences (LLVM is free to lay blocks out
-	 * in any order). mono binary-searches this, so sort - stably, so the
+	 * in any order). mono binary-searches these, so sort - stably, so the
 	 * last-row-wins choice above survives.
 	 */
 	for (auto &kv : out) {
-		std::stable_sort (kv.second.begin (), kv.second.end (),
+		std::stable_sort (kv.second.lines.begin (), kv.second.lines.end (),
 		                  [] (const MonoIlLineRow &a, const MonoIlLineRow &b) {
 		                      return a.native_offset < b.native_offset;
+		                  });
+		std::stable_sort (kv.second.inline_frames.begin (), kv.second.inline_frames.end (),
+		                  [] (const MonoIlInlineRow &a, const MonoIlInlineRow &b) {
+		                      if (a.native_offset != b.native_offset)
+		                          return a.native_offset < b.native_offset;
+		                      return a.depth < b.depth;
 		                  });
 	}
 }
@@ -882,14 +946,14 @@ public:
 	                          jitlink::LinkGraph &, jitlink::JITLinkContext &,
 	                          MemoryBufferRef input_object) override
 	{
-		std::map<std::string, std::vector<MonoIlLineRow>> lines;
+		std::map<std::string, IlDebugRows> rows;
 
-		parse_il_line_tables (input_object, lines);
-		if (lines.empty ())
+		parse_il_debug_info (input_object, rows);
+		if (rows.empty ())
 			return;
 
 		std::lock_guard<std::mutex> lock (g_object_info_mutex);
-		g_object_info[mr.getTargetJITDylib ().getName ()].il_lines = std::move (lines);
+		g_object_info[mr.getTargetJITDylib ().getName ()].il_debug = std::move (rows);
 	}
 
 	/* Drop any partial capture for a link that failed to materialize. */
@@ -2346,9 +2410,11 @@ MonoLLVMJIT::compile (Function *entry,
 			result.eh_frame = info.eh_frame;
 			result.stackmaps = info.stackmaps;
 			result.mono_lsda = info.mono_lsda;
-			auto lines_it = info.il_lines.find (entry_name);
-			if (lines_it != info.il_lines.end ())
-				result.il_lines = lines_it->second;
+			auto debug_it = info.il_debug.find (entry_name);
+			if (debug_it != info.il_debug.end ()) {
+				result.il_lines = debug_it->second.lines;
+				result.il_inline_frames = debug_it->second.inline_frames;
+			}
 			g_object_info.erase (entry_it);
 		}
 	}

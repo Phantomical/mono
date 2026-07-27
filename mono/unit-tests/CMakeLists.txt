@@ -119,6 +119,10 @@ if(MONO_ENABLE_LLVM)
   # drives the write-barrier lowering over IR it assembles by hand.
   mono_add_unit_test(test-llvm-wbarrier
     SOURCES test-llvm-wbarrier.cpp   ENTRY test_llvm_wbarrier_main    RUNTIME)
+  # C++ again: it includes llvm/engine.hpp and JITs modules whose debug info has
+  # the shape the translator produces, to check what comes back out of it.
+  mono_add_unit_test(test-llvm-il-debug
+    SOURCES test-llvm-il-debug.cpp   ENTRY test_llvm_il_debug_main    RUNTIME)
 endif()
 
 # The managed side of the tests that need one.

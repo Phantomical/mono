@@ -252,6 +252,28 @@ typedef struct {
 	guint32 il_offset;
 } MonoLLVMSeqPoint;
 
+/*
+ * One frame of an inlined call chain covering a native offset of a tier-1 body:
+ * the method whose IL the code at that offset really came from, and the offset
+ * within it.
+ *
+ * depth 0 is the innermost body; increasing depth walks back out toward the
+ * method that was compiled. That outermost method's own position is NOT here -
+ * it is what MonoLLVMSeqPoint records, because a stack frame reported for the
+ * compiled method has to name its own call site.
+ *
+ * Nothing reads these yet: mono's stack walk produces one frame per MonoJitInfo,
+ * so surfacing an inlined frame needs the walker to synthesize one, which is its
+ * own piece of work. Recovering and keeping the data is the half that belongs
+ * with the translation.
+ */
+typedef struct {
+	guint32 native_offset;
+	guint32 il_offset;
+	guint32 depth;
+	MonoMethod *method;
+} MonoLLVMInlineFrame;
+
 struct _MonoJitInfo {
 	/* NOTE: These first two elements (method and
 	   next_jit_code_hash) must be in the same order and at the
@@ -316,6 +338,13 @@ struct _MonoJitInfo {
 	 */
 	MonoLLVMSeqPoint *llvm_seq_points;
 	guint32     n_llvm_seq_points;
+
+	/*
+	 * The bodies inlined into this one, ascending by (native offset, depth).
+	 * Same allocation and lifetime as llvm_seq_points above.
+	 */
+	MonoLLVMInlineFrame *llvm_inline_frames;
+	guint32     n_llvm_inline_frames;
 
 	/* FIXME: Embed this after the structure later*/
 	gpointer    gc_info; /* Currently only used by SGen */

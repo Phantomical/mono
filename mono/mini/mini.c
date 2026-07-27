@@ -2543,6 +2543,8 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 		if (cfg->n_llvm_seq_points > 0) {
 			jinfo->llvm_seq_points = cfg->llvm_seq_points;
 			jinfo->n_llvm_seq_points = cfg->n_llvm_seq_points;
+			jinfo->llvm_inline_frames = cfg->llvm_inline_frames;
+			jinfo->n_llvm_inline_frames = cfg->n_llvm_inline_frames;
 			jinfo->no_il_offsets = FALSE;
 		}
 	}

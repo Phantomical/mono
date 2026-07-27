@@ -1,17 +1,23 @@
 /**
  * \file
- * il-line-table.hpp - IL offsets as LLVM line-table debug info.
+ * il-line-table.hpp - IL offsets as LLVM debug info.
  *
  * A tier-1 method's native_offset -> il_offset map (stack traces, profiler
- * attribution) rides on a DWARF line table: each OP_IL_SEQ_POINT sets a
- * DILocation whose line is the IL offset, and the engine reads the rows back out
- * of the emitted object's `.debug_line`.
+ * attribution) rides on debug info: each OP_IL_SEQ_POINT sets a DILocation whose
+ * line is the IL offset, and the engine reads it back out of the emitted object.
+ *
+ * Every function translated into a compile's module gets a subprogram - the root
+ * and each callee the tier-1 inliner materializes. When LLVM folds a callee in it
+ * builds the inlinedAt chain itself, so the emitted DWARF says both "this address
+ * is IL offset N of the callee" and "which the root reached from its IL offset M".
+ * The engine keeps the root's offset as the method's own map (a frame in the root
+ * must report the root's call site) and hands the rest back as inline frames.
  *
  * This lives in its own translation unit because LLVM's debug-info headers pull
  * in llvm/BinaryFormat/Dwarf.h, whose enumerators collide with the DW_* macros
  * mono/utils/freebsd-dwarf.h defines - and translator-internal.hpp includes that.
- * So nothing here may be merged into the translator TUs; the interface below is
- * deliberately narrow enough that it does not need to be.
+ * So the types below stay opaque: nothing here may leak an LLVM debug type into a
+ * translator TU.
  */
 
 #ifndef __MONO_LLVM_IL_LINE_TABLE_HPP__
@@ -30,35 +36,31 @@ class Module;
 namespace mono {
 
 /*
- * One method's line table. Construct it for a tier-1 root just after its
- * Function exists, move it along with set_location () as the translator walks
- * the IL, and finish () before the module is optimized.
- *
- * Deliberately NOT created for a materialized inliner callee: a body with no
- * debug info at all is what makes LLVM's inliner stamp the whole inlined range
- * with the ROOT's call-site location (fixupLineNumbers (), InlineFunction.cpp),
- * which is the IL offset a frame in the root should report. Give the callee its
- * own line table and the root's table ends up interleaved with IL offsets from a
- * different method.
+ * One function's subprogram, plus the IL offset currently in effect for it.
+ * Owned by the IlDebugModule that handed it out; opaque here so that a
+ * translator TU can hold one without seeing an LLVM debug type.
  */
-class IlLineTable {
+struct IlDebugScope;
+
+/*
+ * The debug info for one compile's module: a single compile unit, and a
+ * subprogram per function translated into it.
+ */
+class IlDebugModule {
 public:
-	IlLineTable (llvm::Module *module, llvm::Function *fn, const char *name);
-	~IlLineTable ();
+	explicit IlDebugModule (llvm::Module *module);
+	~IlDebugModule ();
 
-	IlLineTable (const IlLineTable &) = delete;
-	IlLineTable &operator= (const IlLineTable &) = delete;
-
-	/* Attribute everything BUILDER emits from here on to IL_OFFSET. */
-	void set_location (llvm::IRBuilder<> *builder, uint32_t il_offset);
+	IlDebugModule (const IlDebugModule &) = delete;
+	IlDebugModule &operator= (const IlDebugModule &) = delete;
 
 	/*
-	 * Put the location currently in effect onto BUILDER. Called for each newly
-	 * created builder, so a block that starts before its first OP_IL_SEQ_POINT
-	 * does not emit unattributed instructions - an inlinable call with no
-	 * location in a function that has debug info is a verifier error.
+	 * Attach a subprogram named NAME to FN. NAME is what comes back out of the
+	 * emitted DWARF, so it has to be the key the caller can resolve a MonoMethod
+	 * from - mono_method_full_name (), which is what the translator names
+	 * functions with anyway.
 	 */
-	void reapply (llvm::IRBuilder<> *builder) const;
+	IlDebugScope *add_function (llvm::Function *fn, const char *name);
 
 	/* Close the metadata off. Without this it is malformed and the verifier says so. */
 	void finish ();
@@ -68,10 +70,21 @@ private:
 	std::unique_ptr<Impl> impl_;
 };
 
+/* Attribute everything BUILDER emits from here on to IL_OFFSET within SCOPE. */
+void il_debug_set_location (IlDebugScope *scope, llvm::IRBuilder<> *builder, uint32_t il_offset);
+
+/*
+ * Put SCOPE's current location onto BUILDER. Called for each newly created
+ * builder, so a block that starts before its first OP_IL_SEQ_POINT does not emit
+ * unattributed instructions - an inlinable call with no location in a function
+ * that has debug info is a verifier error, not merely a gap in the table.
+ */
+void il_debug_reapply (IlDebugScope *scope, llvm::IRBuilder<> *builder);
+
 /*
  * DWARF reserves line 0 for "no source location" and IL offset 0 is an ordinary
- * first instruction, so the line is the IL offset plus this. engine.cpp
- * subtracts it when reading the table back.
+ * first instruction, so the line is the IL offset plus this. The engine subtracts
+ * it when reading the debug info back.
  */
 constexpr uint32_t IL_OFFSET_LINE_BIAS = 1;
 

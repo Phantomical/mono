@@ -571,8 +571,7 @@ EmitContext::create_builder ()
 	 * instructions, and an inlinable call with no location in a function that has
 	 * debug info is a verifier error, not just a gap in the table.
 	 */
-	if (il_line_table)
-		il_line_table->reapply (b);
+	mono::il_debug_reapply (il_debug_scope, b);
 
 	builders.emplace_back (b);
 

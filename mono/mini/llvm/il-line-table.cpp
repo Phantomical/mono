@@ -1,9 +1,11 @@
 /**
  * \file
- * il-line-table.cpp - IL offsets as LLVM line-table debug info.
+ * il-line-table.cpp - IL offsets as LLVM debug info.
  */
 
 #include "il-line-table.hpp"
+
+#include <vector>
 
 #include <llvm/IR/DIBuilder.h>
 #include <llvm/IR/DebugInfoMetadata.h>
@@ -12,21 +14,28 @@
 
 namespace mono {
 
-struct IlLineTable::Impl {
-	llvm::DIBuilder di;
+struct IlDebugScope {
 	llvm::DISubprogram *subprogram = nullptr;
 	llvm::DILocation *cur = nullptr;
+};
+
+struct IlDebugModule::Impl {
+	llvm::DIBuilder di;
+	llvm::DICompileUnit *cu = nullptr;
+	llvm::DIFile *file = nullptr;
+	/* Stable addresses: the translator holds IlDebugScope* for the whole compile. */
+	std::vector<std::unique_ptr<IlDebugScope>> scopes;
 
 	explicit Impl (llvm::Module &m) : di (m) {}
 };
 
-IlLineTable::IlLineTable (llvm::Module *module, llvm::Function *fn, const char *name)
+IlDebugModule::IlDebugModule (llvm::Module *module)
 	: impl_ (std::make_unique<Impl> (*module))
 {
 	/*
 	 * DWARF 4 keeps the line-table header self-contained. DWARF 5 moves file and
 	 * directory names out into `.debug_line_str`, which would make reading the
-	 * table back a two-section job for names nothing here ever looks at.
+	 * tables back a two-section job for names nothing here ever looks at.
 	 */
 	if (!module->getModuleFlag ("Dwarf Version"))
 		module->addModuleFlag (llvm::Module::Warning, "Dwarf Version", 4);
@@ -35,62 +44,75 @@ IlLineTable::IlLineTable (llvm::Module *module, llvm::Function *fn, const char *
 		                       llvm::DEBUG_METADATA_VERSION);
 
 	/*
-	 * The "file" is the method: nothing here is meant to be opened, and naming it
-	 * after the method is what makes a dumped line table readable.
+	 * One file for the whole module, named after nothing in particular: the names
+	 * that matter are the per-function ones, and nothing here is meant to be
+	 * opened.
 	 */
-	llvm::DIFile *file = impl_->di.createFile (name, ".");
+	impl_->file = impl_->di.createFile ("mono-tier1", ".");
 
 	/*
-	 * LineTablesOnly - `.debug_line` and nothing else. Types and variables are
-	 * the parts of debug info mono has nothing to say about, and emitting them
-	 * would cost object size for no reader.
+	 * FullDebug rather than LineTablesOnly. Line tables alone would carry the IL
+	 * offsets, but not which method each one belongs to once a body has been
+	 * inlined - DW_TAG_inlined_subroutine lives in `.debug_info`, and that is the
+	 * whole point of naming the callees.
 	 */
-	llvm::DICompileUnit *cu = impl_->di.createCompileUnit (
-		llvm::dwarf::DW_LANG_C99, file, "mono tier-1", /*isOptimized=*/ true, "", 0,
-		llvm::StringRef (), llvm::DICompileUnit::LineTablesOnly);
+	impl_->cu = impl_->di.createCompileUnit (
+		llvm::dwarf::DW_LANG_C99, impl_->file, "mono tier-1", /*isOptimized=*/ true, "", 0,
+		llvm::StringRef (), llvm::DICompileUnit::FullDebug);
+}
 
+IlDebugModule::~IlDebugModule () = default;
+
+IlDebugScope *
+IlDebugModule::add_function (llvm::Function *fn, const char *name)
+{
 	llvm::DISubroutineType *type =
 		impl_->di.createSubroutineType (impl_->di.getOrCreateTypeArray ({}));
 
-	impl_->subprogram = impl_->di.createFunction (
-		cu, name, name, file, /*LineNo=*/ 1, type, /*ScopeLine=*/ 1,
+	llvm::DISubprogram *sp = impl_->di.createFunction (
+		impl_->cu, name, name, impl_->file, /*LineNo=*/ 1, type, /*ScopeLine=*/ 1,
 		llvm::DINode::FlagZero,
 		llvm::DISubprogram::SPFlagDefinition | llvm::DISubprogram::SPFlagOptimized);
 
-	fn->setSubprogram (impl_->subprogram);
+	fn->setSubprogram (sp);
 
+	impl_->scopes.push_back (std::make_unique<IlDebugScope> ());
+	IlDebugScope *scope = impl_->scopes.back ().get ();
+	scope->subprogram = sp;
 	/*
 	 * Everything emitted before the first OP_IL_SEQ_POINT - the prologue, the
 	 * entry block's allocas - belongs to the method's first IL byte.
 	 */
-	impl_->cur = llvm::DILocation::get (module->getContext (), IL_OFFSET_LINE_BIAS,
-	                                    /*Column=*/ 1, impl_->subprogram);
-}
-
-IlLineTable::~IlLineTable () = default;
-
-void
-IlLineTable::set_location (llvm::IRBuilder<> *builder, uint32_t il_offset)
-{
-	impl_->cur = llvm::DILocation::get (
-		impl_->subprogram->getContext (), il_offset + IL_OFFSET_LINE_BIAS,
-		/*Column=*/ 1, impl_->subprogram);
-
-	if (builder)
-		builder->SetCurrentDebugLocation (llvm::DebugLoc (impl_->cur));
+	scope->cur = llvm::DILocation::get (fn->getContext (), IL_OFFSET_LINE_BIAS,
+	                                    /*Column=*/ 1, sp);
+	return scope;
 }
 
 void
-IlLineTable::reapply (llvm::IRBuilder<> *builder) const
-{
-	if (builder && impl_->cur)
-		builder->SetCurrentDebugLocation (llvm::DebugLoc (impl_->cur));
-}
-
-void
-IlLineTable::finish ()
+IlDebugModule::finish ()
 {
 	impl_->di.finalize ();
+}
+
+void
+il_debug_set_location (IlDebugScope *scope, llvm::IRBuilder<> *builder, uint32_t il_offset)
+{
+	if (!scope)
+		return;
+
+	scope->cur = llvm::DILocation::get (
+		scope->subprogram->getContext (), il_offset + IL_OFFSET_LINE_BIAS,
+		/*Column=*/ 1, scope->subprogram);
+
+	if (builder)
+		builder->SetCurrentDebugLocation (llvm::DebugLoc (scope->cur));
+}
+
+void
+il_debug_reapply (IlDebugScope *scope, llvm::IRBuilder<> *builder)
+{
+	if (scope && builder && scope->cur)
+		builder->SetCurrentDebugLocation (llvm::DebugLoc (scope->cur));
 }
 
 } // namespace mono

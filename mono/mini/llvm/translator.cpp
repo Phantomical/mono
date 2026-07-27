@@ -501,22 +501,34 @@ mono_llvm_emit_method (MonoCompile *cfg)
 }
 
 /*
- * Give this root a line table to hang IL offsets off. Materialized inliner
- * callees deliberately get none - see IlLineTable's comment for why that is what
- * makes an inlined body report the ROOT's call site.
+ * Give this function a subprogram, creating the compile's debug info if this is
+ * the first function to need it. Both roots and materialized inliner callees get
+ * one: a callee that carries its own subprogram is what makes LLVM record a real
+ * DW_TAG_inlined_subroutine when it folds the body in, instead of quietly
+ * restamping the body with the caller's location.
  */
 void
-EmitContext::begin_il_line_table ()
+EmitContext::begin_il_debug_info ()
 {
-	this->il_line_table = std::make_unique<mono::IlLineTable> (
-		llvm::unwrap (this->lmodule), llvm::unwrap<llvm::Function> (this->lmethod),
-		this->method_name);
+	if (!this->module->il_debug)
+		this->module->il_debug = std::make_unique<mono::IlDebugModule> (
+			llvm::unwrap (this->lmodule));
+
+	this->il_debug_scope = this->module->il_debug->add_function (
+		llvm::unwrap<llvm::Function> (this->lmethod), this->method_name);
+
+	/*
+	 * So the engine can turn a subprogram name from the emitted DWARF back into
+	 * the method it describes. A materialized callee has no other route back:
+	 * once it is inlined there is no call site left naming it.
+	 */
+	this->module->il_debug_methods[this->method_name] = this->cfg->method;
 }
 
 /*
  * Attribute everything emitted from here on to IL_OFFSET, until the next
  * OP_IL_SEQ_POINT moves it. This is the whole mapping: the line in effect at a
- * native address is what `.debug_line` records, and the assembler writes those
+ * native address is what the debug info records, and the assembler writes those
  * rows in code order, so a run of seq points that optimization collapsed onto
  * one address resolves to the last one - the same "most recent point execution
  * passed" the classic JIT's own lookup has.
@@ -524,15 +536,15 @@ EmitContext::begin_il_line_table ()
 void
 EmitContext::set_il_debug_location (llvm::IRBuilder<> *builder, guint32 il_offset)
 {
-	if (this->il_line_table)
-		this->il_line_table->set_location (builder, il_offset);
+	mono::il_debug_set_location (this->il_debug_scope, builder, il_offset);
 }
 
 void
-EmitContext::finish_il_line_table ()
+EmitContext::finish_il_debug_info ()
 {
-	if (this->il_line_table)
-		this->il_line_table->finish ();
+	/* The module's, not this function's: a callee shares the root's compile unit. */
+	if (this->module->il_debug)
+		this->module->il_debug->finish ();
 }
 
 void
@@ -606,10 +618,10 @@ EmitContext::emit_method_inner ()
 	 * pass itself does not read this - it is handed its root directly (see
 	 * Tier1Root, passes/inliner-support.hpp).
 	 */
-	if (!this->translate_only) {
+	if (!this->translate_only)
 		llvm::unwrap<llvm::Function> (method)->addFnAttr ("mono-tier1-root");
-		this->begin_il_line_table ();
-	}
+
+	this->begin_il_debug_info ();
 
 	/*
 	 * Mark that this method's IL declared at least one exception clause, so
@@ -1053,7 +1065,7 @@ after_codegen:
 
 	//LLVMVerifyFunction (method, 0);
 
-	this->finish_il_line_table ();
+	this->finish_il_debug_info ();
 
 	if (this->translate_only)
 		/*
@@ -2050,6 +2062,56 @@ recover_il_seq_points (MonoCompile *cfg, const std::vector<mono::MonoIlLineRow> 
 	cfg->n_llvm_seq_points = (guint32) rows.size ();
 }
 
+/*
+ * Fill in CFG's inlined-frame table from ROWS, the inline chains the engine
+ * recovered. NAMES maps a subprogram name back to the method it describes - the
+ * translator built it while translating, since an inlined callee leaves no call
+ * site naming it.
+ *
+ * A row whose method cannot be resolved is dropped rather than guessed at: this
+ * is diagnostic data, and a frame attributed to the wrong method is worse than
+ * one that is missing.
+ */
+static void
+recover_il_inline_frames (MonoCompile *cfg, const std::vector<mono::MonoIlInlineRow> &rows,
+                          const std::map<std::string, MonoMethod *> &names)
+{
+	cfg->llvm_inline_frames = NULL;
+	cfg->n_llvm_inline_frames = 0;
+
+	if (rows.empty ())
+		return;
+
+	std::vector<const mono::MonoIlInlineRow *> resolved;
+	std::vector<MonoMethod *> methods;
+	resolved.reserve (rows.size ());
+	methods.reserve (rows.size ());
+
+	for (const mono::MonoIlInlineRow &r : rows) {
+		auto it = names.find (r.method);
+		if (it == names.end ())
+			continue;
+		resolved.push_back (&r);
+		methods.push_back (it->second);
+	}
+
+	if (resolved.empty ())
+		return;
+
+	MonoLLVMInlineFrame *map = (MonoLLVMInlineFrame *) mono_mem_manager_alloc (
+		cfg->mem_manager, resolved.size () * sizeof (MonoLLVMInlineFrame));
+
+	for (size_t i = 0; i < resolved.size (); ++i) {
+		map [i].native_offset = resolved [i]->native_offset;
+		map [i].il_offset = resolved [i]->il_offset;
+		map [i].depth = resolved [i]->depth;
+		map [i].method = methods [i];
+	}
+
+	cfg->llvm_inline_frames = map;
+	cfg->n_llvm_inline_frames = (guint32) resolved.size ();
+}
+
 void
 EmitContext::llvm_jit_finalize_method ()
 {
@@ -2376,6 +2438,7 @@ EmitContext::llvm_jit_finalize_method ()
 	}
 
 	recover_il_seq_points (cfg, res.il_lines);
+	recover_il_inline_frames (cfg, res.il_inline_frames, this->module->il_debug_methods);
 
 	mono_domain_lock (domain);
 	domain_info = domain_jit_info (domain);
