@@ -151,14 +151,27 @@ free_param_data (MonoMethodSignature *sig, void **params) {
  */
 static guint32
 find_field_index (MonoClass *klass, MonoClassField *field) {
-	int fcount = mono_class_get_field_count (klass);
 	MonoClassField *klass_fields = m_class_get_fields (klass);
-	int index = field - klass_fields;
-	if (index > fcount)
+	if (!klass_fields)
 		return 0;
 
-	g_assert (field == &klass_fields [index]);
-	return mono_class_get_first_field_idx (klass) + 1 + index;
+	/*
+	 * Embedders reach this through mono_custom_attrs_from_field with a klass
+	 * and a field that need not belong together - Unity does it while walking
+	 * the element type of a serialized container. Subtracting pointers from
+	 * two different arrays tells us nothing, so work in bytes and only trust
+	 * the result once it lands on a real slot of this klass. Anything else
+	 * means the field isn't ours, which the caller reads as "no attributes".
+	 */
+	ptrdiff_t byte_offset = (const char *) field - (const char *) klass_fields;
+	if (byte_offset < 0 || byte_offset % sizeof (MonoClassField) != 0)
+		return 0;
+
+	ptrdiff_t index = byte_offset / sizeof (MonoClassField);
+	if (index >= mono_class_get_field_count (klass))
+		return 0;
+
+	return mono_class_get_first_field_idx (klass) + 1 + (guint32) index;
 }
 
 /*
