@@ -548,8 +548,8 @@ llvm_ins_info (int opcode)
 	return &mini_llvm_ins_info [(opcode - OP_START - 1) * 4];
 }
 
-extern LLVMIntPredicate cond_to_llvm_cond [];
-extern LLVMRealPredicate fpcond_to_llvm_cond [];
+extern const LLVMIntPredicate cond_to_llvm_cond [];
+extern const LLVMRealPredicate fpcond_to_llvm_cond [];
 
 /*
  * Bridge the llvm-c predicate enums to llvm::CmpInst::Predicate for

@@ -57,7 +57,7 @@ mini_llvm_ins_info[] = {
 #undef MINI_OP3
 
 
-LLVMIntPredicate cond_to_llvm_cond [] = {
+const LLVMIntPredicate cond_to_llvm_cond [] = {
 	LLVMIntEQ,
 	LLVMIntNE,
 	LLVMIntSLE,
@@ -70,7 +70,7 @@ LLVMIntPredicate cond_to_llvm_cond [] = {
 	LLVMIntUGT,
 };
 
-LLVMRealPredicate fpcond_to_llvm_cond [] = {
+const LLVMRealPredicate fpcond_to_llvm_cond [] = {
 	LLVMRealOEQ,
 	LLVMRealUNE,
 	LLVMRealOLE,
