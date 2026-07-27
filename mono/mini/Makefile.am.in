@@ -452,8 +452,9 @@ if ENABLE_LLVM
 #     translator builds on (forward-ported from mini-llvm-cpp.cpp).
 #   - passes/: the custom passes the pipelines are built from - the tier-1
 #     inliner, the two machine-level EH passes engine.cpp schedules after
-#     addMachinePasses (), the class-init barrier redundancy analysis, and the
-#     opt-in per-pass IR dumper.
+#     addMachinePasses (), the class-init barrier redundancy analysis, the
+#     ImplicitNullChecks guard engine.cpp schedules before it, and the opt-in
+#     per-pass IR dumper.
 #   - backend.h: the extern "C" boundary the rest of mono links against. It did
 #     not grow to accommodate the split; translator-internal.hpp is internal to
 #     this directory.
@@ -471,6 +472,8 @@ llvm_sources = \
 	llvm/passes/inliner.hpp \
 	llvm/passes/inliner.cpp \
 	llvm/passes/inliner-support.hpp \
+	llvm/passes/null-check-guard.hpp \
+	llvm/passes/null-check-guard.cpp \
 	llvm/passes/pass-dump.hpp \
 	llvm/passes/pass-dump.cpp \
 	llvm/translator-cpp.hpp \

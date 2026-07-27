@@ -58,6 +58,7 @@
 #include <llvm/CodeGen/MachineFunctionPass.h>
 #include <llvm/CodeGen/MachineInstrBuilder.h>
 #include <llvm/CodeGen/MachineModuleInfo.h>
+#include <llvm/CodeGen/Passes.h>
 #include <llvm/CodeGen/TargetInstrInfo.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
 #include <llvm/CodeGen/TargetSubtargetInfo.h>
@@ -122,6 +123,7 @@
 #include "passes/elide-class-init.hpp"
 #include "passes/finally-range.hpp"
 #include "passes/inliner.hpp"
+#include "passes/null-check-guard.hpp"
 #include "passes/pass-dump.hpp"
 
 using namespace llvm;
@@ -957,6 +959,13 @@ set_llvm_flag (const char *name, bool value)
 	static_cast<cl::opt<bool> *> (it->second)->setValue (value);
 }
 
+/*
+ * Whether ImplicitNullChecks is enabled for this process - set once, below,
+ * and read by emit_object () to decide whether MonoNullCheckGuardPass needs
+ * to run at all (it is pointless work when the pass it guards is off).
+ */
+static std::atomic<bool> g_implicit_null_checks_enabled{false};
+
 static void
 ensure_native_target ()
 {
@@ -992,13 +1001,18 @@ ensure_native_target ()
 		 * routine (an out-param struct write right after a null check on the
 		 * receiver, say), so this reliably crashes on ordinary generic code -
 		 * confirmed against Dictionary<K,V>.TryGetValue under tier-1. This is an
-		 * upstream LLVM bug against unmodified system LLVM 18, so it can't be
-		 * patched here; keep the feature available for opt-in testing but do
-		 * not inflict it on every run until upstream fixes it.
+		 * upstream LLVM bug against unmodified system LLVM 18 (llvm/llvm-project
+		 * #63585, open, unfixed), so it can't be patched here. emit_object ()
+		 * schedules MonoNullCheckGuardPass (passes/null-check-guard.hpp) right
+		 * before ImplicitNullChecksID to neutralize just the tagged checks that
+		 * would hit it, but the feature stays opt-in until that guard has had
+		 * more mileage.
 		 */
 		const char *enable_inc = std::getenv ("MONO_LLVM_ENABLE_IMPLICIT_NULL_CHECKS");
-		if (enable_inc && enable_inc [0] && strcmp (enable_inc, "0") != 0)
+		if (enable_inc && enable_inc [0] && strcmp (enable_inc, "0") != 0) {
 			set_llvm_flag ("enable-implicit-null-checks", true);
+			g_implicit_null_checks_enabled.store (true, std::memory_order_relaxed);
+		}
 
 		/*
 		 * Turn off X86CallFrameOptimization. For a call that needs stack
@@ -1470,6 +1484,19 @@ private:
 			return make_error<StringError> (
 				"target does not support instruction selection",
 				inconvertibleErrorCode ());
+
+		/*
+		 * MonoNullCheckGuardPass must be scheduled before addMachinePasses ()
+		 * runs - insertPass () only registers where the pass belongs in the
+		 * pipeline addMachinePasses () is about to assemble, it does not run
+		 * anything itself. ExpandPostRAPseudosID is the nearest exported
+		 * AnalysisID upstream of ImplicitNullChecksID (see the pass's header
+		 * for why not closer); skip the insertion entirely when the pass it
+		 * guards is off.
+		 */
+		if (g_implicit_null_checks_enabled.load (std::memory_order_relaxed))
+			tpc->insertPass (&ExpandPostRAPseudosID, new MonoNullCheckGuardPass ());
+
 		tpc->addMachinePasses ();
 
 		/*
