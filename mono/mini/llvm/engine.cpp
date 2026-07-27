@@ -2087,10 +2087,9 @@ MonoLLVMJIT::optimize (Function *func)
 
 	/*
 	 * Turns the GC write barrier from a call into an inline conditional card
-	 * mark, for the collectors that leave it as a call at all. Disabled for now:
-	 * it reproducibly corrupts JIT-compiled code under real-world load (KSP),
-	 * and the fence/ordering fixes applied so far haven't stopped it. See
-	 * passes/wbarrier.hpp.
+	 * mark, for the collectors that leave it as a call at all. Disabled for
+	 * now: it reproducibly corrupts JIT-compiled code under real-world load
+	 * (KSP). See passes/wbarrier.hpp.
 	 */
 
 	/*
