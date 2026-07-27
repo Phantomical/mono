@@ -7,7 +7,11 @@ sysconfdir=@CMAKE_INSTALL_FULL_SYSCONFDIR@
 mono_libdir=${exec_prefix}/lib
 mono_build_root=@CMAKE_BINARY_DIR@
 RUNTIME = @CMAKE_BINARY_DIR@/runtime/mono-wrapper
-@_csc_runtime@
+# What hosts the C# compiler -- csc itself, and the compiler server it talks to.
+# Both have to be named here: the wrapper is a build artifact, and build.make's
+# fallback looks for it beside the sources, where autotools used to leave one.
+CSC_RUNTIME = @_csc_host@
+MONOWRAPPER_LOCATION = @_csc_host@
 JAY_CFLAGS =
 VERSION = @PROJECT_VERSION@
 INSTALL = install -c

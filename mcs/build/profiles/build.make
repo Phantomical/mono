@@ -138,7 +138,11 @@ $(PROFILE_OUT): $(PROFILE_EXE)
 
 ifeq ("$(ENABLE_COMPILER_SERVER)","1")
 BUILDLIB_LOCATION=$(realpath $(topdir))/class/lib/build
-MONOWRAPPER_LOCATION=$(realpath $(topdir)/../runtime/mono-wrapper)
+# The runtime the compiler server runs on.  config.make sets this, because the
+# wrapper is a build artifact and does not have to sit beside the sources; the
+# default below is only a fallback, and $(realpath) quietly yields nothing when
+# it is wrong, which turns into an unstartable server rather than an error.
+MONOWRAPPER_LOCATION ?= $(realpath $(topdir)/../runtime/mono-wrapper)
 VBCS_LOCATION?=$(dir $(SERVER_CSC_LOCATION))/VBCSCompiler.exe
 VBCS_RUNTIME=MONO_PATH="$(BUILDLIB_LOCATION)$(PLATFORM_PATH_SEPARATOR)$(BUILDLIB_LOCATION)/Facades$(PLATFORM_PATH_SEPARATOR)$$MONO_PATH" '$(MONOWRAPPER_LOCATION)'
 

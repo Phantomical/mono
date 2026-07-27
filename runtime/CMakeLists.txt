@@ -125,14 +125,14 @@ if(MONO_ENABLE_MCS_BUILD)
     set(_mono_native_supported "false")
   endif()
 
-  # Move just the C# compiler off $(RUNTIME) when asked; rules.make defaults
-  # CSC_RUNTIME to $(RUNTIME), so saying nothing leaves the build as it was.
-  # The tools that surround csc stay put -- they load out of class/lib/build,
-  # which only the runtime being built can read.
+  # What the C# compiler runs on.  Only csc moves when
+  # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS is set; the tools that surround it stay on
+  # $(RUNTIME), because they load out of class/lib/build and only the runtime
+  # being built can read that mscorlib.
   if(MONO_TOOLS_RUNTIME_IS_SYSTEM)
-    set(_csc_runtime "CSC_RUNTIME = ${MONO_CSC_HOST}")
+    set(_csc_host "${MONO_CSC_HOST}")
   else()
-    set(_csc_runtime "")
+    set(_csc_host "${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper")
   endif()
 
   configure_file("${CMAKE_SOURCE_DIR}/cmake/mcs-config.make.in"
@@ -140,9 +140,17 @@ if(MONO_ENABLE_MCS_BUILD)
 
   # `all-profiles` needs a working runtime, the build-tree config, and the
   # shims above already on disk.
+  #
+  # _tmpinst goes on the END of PATH, and the order is the whole point.  The
+  # bootstrap profile resolves $(EXTERNAL_RUNTIME), spelled plainly as `mono`,
+  # through PATH -- it wants a mono that already works, because it is what
+  # compiles the first class libraries.  _tmpinst/bin/mono is this build's
+  # runtime, which at that moment has no mscorlib it can reach; put it first and
+  # the profile check fails ("The assembly mscorlib.dll was not found ... in
+  # `<prefix>/lib/mono/4.5'"), falls back to monolite, and the build dies there.
   add_custom_target(mcs ALL
     COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=${_tmpinst}:$ENV{PATH}"
+            "PATH=$ENV{PATH}:${_tmpinst}"
             "${MONO_GNU_MAKE}" --no-print-directory -s
             -C "${MONO_MCS_TOPDIR}"
             NO_DIR_CHECK=1
