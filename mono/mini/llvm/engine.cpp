@@ -966,20 +966,39 @@ ensure_native_target ()
 		InitializeNativeTargetAsmParser ();
 
 		/*
-		 * Enable the ImplicitNullChecks machine pass process-wide. The pass is
-		 * gated by a static default-false cl::opt inside TargetPassConfig
+		 * The ImplicitNullChecks machine pass is opt-in, not on by default -
+		 * MONO_LLVM_ENABLE_IMPLICIT_NULL_CHECKS=1 turns it on. It is gated by a
+		 * static default-false cl::opt inside TargetPassConfig
 		 * ("enable-implicit-null-checks"); it is not reachable by symbol, so we
 		 * flip it through the registered-options map once, here, before the
 		 * first emit_object() runs the codegen pipeline. The pass folds an
 		 * explicit `icmp/br` null check into a bare faulting load only on
-		 * branches the translator tagged `!make.implicit`, so it is inert for
-		 * any function without such tags. Recovery of a folded null fault rides
-		 * the runtime's existing null-page SIGSEGV -> NRE handler (no faultmap
-		 * is consulted). Instant off-switch:
-		 * MONO_DEBUG=llvm-disable-implicit-null-checks (drops the tags, so the
-		 * pass folds nothing). See design doc 25.
+		 * branches the translator tagged `!make.implicit`, so leaving it off
+		 * just makes that tagging inert - see design doc 25 for the intended
+		 * behavior when it's on.
+		 *
+		 * Why it defaults off: LLVM 18's ImplicitNullChecks::areMemoryOpsAliased
+		 * (ImplicitNullChecks.cpp) checks whether a candidate faulting load/store
+		 * aliases every other memory op in the block, and only guards the case
+		 * where that other op's MachineMemOperand carries a PseudoSourceValue.
+		 * An MMO with neither a Value nor a PseudoSourceValue - "completely
+		 * unknown pointer", which SelectionDAG assigns to perfectly ordinary
+		 * instructions like our GC write-barrier's card-mark store (the store
+		 * address is an inttoptr of shifted/masked arithmetic, not a GEP off any
+		 * traceable IR pointer) - hits neither branch, so the pass calls
+		 * AA->isNoAlias() with MemoryLocation::getAfter(nullptr) and
+		 * BasicAAResult ends up calling stripPointerCastsForAliasAnalysis() on a
+		 * null Value*. SIGSEGV. A write barrier next to a tagged null check is
+		 * routine (an out-param struct write right after a null check on the
+		 * receiver, say), so this reliably crashes on ordinary generic code -
+		 * confirmed against Dictionary<K,V>.TryGetValue under tier-1. This is an
+		 * upstream LLVM bug against unmodified system LLVM 18, so it can't be
+		 * patched here; keep the feature available for opt-in testing but do
+		 * not inflict it on every run until upstream fixes it.
 		 */
-		set_llvm_flag ("enable-implicit-null-checks", true);
+		const char *enable_inc = std::getenv ("MONO_LLVM_ENABLE_IMPLICIT_NULL_CHECKS");
+		if (enable_inc && enable_inc [0] && strcmp (enable_inc, "0") != 0)
+			set_llvm_flag ("enable-implicit-null-checks", true);
 
 		/*
 		 * Turn off X86CallFrameOptimization. For a call that needs stack
