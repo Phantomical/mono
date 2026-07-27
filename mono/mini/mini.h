@@ -1891,10 +1891,10 @@ mini_realloc_code_slow (MonoCompile *cfg, int size);
 static inline guint8*
 realloc_code (MonoCompile *cfg, int size)
 {
-	const int EXTRA_CODE_SPACE = 16;
-	const int code_len = cfg->code_len;
+	const guint EXTRA_CODE_SPACE = 16;
+	const guint code_len = cfg->code_len;
 
-	if (G_UNLIKELY (code_len + size > (cfg->code_size - EXTRA_CODE_SPACE)))
+	if (G_UNLIKELY (code_len + (guint)size > (cfg->code_size - EXTRA_CODE_SPACE)))
 		return mini_realloc_code_slow (cfg, size);
 	return cfg->native_code + code_len;
 }
