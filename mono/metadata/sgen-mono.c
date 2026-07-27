@@ -2847,6 +2847,20 @@ mono_gchandle_free_internal (MonoGCHandle gchandle)
 	sgen_gchandle_free (MONO_GC_HANDLE_TO_UINT (gchandle));
 }
 
+/* An sgen handle is a slot and a type packed into a small integer, so it already
+ * fits in the 32 bits the public API deals in. */
+guint32
+mono_gchandle_to_u32 (MonoGCHandle gchandle)
+{
+	return (guint32)(size_t)gchandle;
+}
+
+MonoGCHandle
+mono_gchandle_from_u32 (guint32 gchandle)
+{
+	return (MonoGCHandle)(size_t)gchandle;
+}
+
 /**
  * mono_gchandle_free_domain:
  * \param unloading domain that is unloading

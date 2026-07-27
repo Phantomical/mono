@@ -104,11 +104,12 @@ void mono_gc_handle_unlock () { unlock_handles (NULL); }
  */
 #if SIZEOF_VOID_P == 4
 #define HANDLE_COUNT 992
-#define HANDLE_DATA_ALIGNMENT 4096
+#define HANDLE_DATA_ALIGNMENT_BITS 12
 #else
 #define HANDLE_COUNT 992
-#define HANDLE_DATA_ALIGNMENT 8192
+#define HANDLE_DATA_ALIGNMENT_BITS 13
 #endif
+#define HANDLE_DATA_ALIGNMENT (1 << HANDLE_DATA_ALIGNMENT_BITS)
 typedef struct HandleData HandleData;
 struct HandleData {
 	HandleData *next; //immutable
@@ -119,6 +120,7 @@ struct HandleData {
 	guint16  *domain_ids;
 	guint32   in_use;
 	guint32   size;
+	guint32   block_id; /* index into handle_blocks, see handle_to_u32 */
 	guint8    type;
 	guint     slot_hint : 24; /* starting slot for search in bitmap */
 	gpointer  entries[HANDLE_COUNT];
@@ -130,6 +132,24 @@ struct HandleData {
 
 static HandleData* gc_handles[4];
 static HandleData* gc_handles_free[4];
+
+/*
+ * A handle is a pointer into a HandleData block, so it does not survive a trip
+ * through the uint32_t the public API deals in. Every block gets an id when it is
+ * allocated, and the 32-bit form of a handle is that id plus the byte offset of the
+ * entry within its block - which carries the weak-handle tag along for free, since
+ * that lives in the low bit of the offset. See mono_gchandle_to_u32.
+ *
+ * Blocks are never freed, so an id is good for the life of the process. The table has
+ * room for every id an offset leaves space for and is only appended to, under the
+ * handle lock, so decoding can read it without taking one. It is large but virtual -
+ * one page covers a page's worth of blocks, half a million handles.
+ */
+#define HANDLE_BLOCK_MAX (1 << (32 - HANDLE_DATA_ALIGNMENT_BITS))
+#define HANDLE_OFFSET_MASK (HANDLE_DATA_ALIGNMENT - 1)
+
+static HandleData *handle_blocks [HANDLE_BLOCK_MAX];
+static guint32 handle_block_count;
 
 static void
 mono_gc_warning (char *msg, GC_word arg)
@@ -1664,6 +1684,11 @@ handle_data_alloc_entries(int type)
 	}
 	handles->bitmap = (guint32 *)g_malloc0 (handles->size / CHAR_BIT);
 
+	/* Running out means roughly half a billion live handles, i.e. a leak. */
+	g_assert (handle_block_count < HANDLE_BLOCK_MAX);
+	handles->block_id = handle_block_count++;
+	handle_blocks [handles->block_id] = handles;
+
 	return handles;
 }
 
@@ -1724,6 +1749,29 @@ get_handle_data_from_handle (MonoGCHandle handle)
 {
 	HandleData* handles = (HandleData*)ALIGN_DOWN_TO(handle, HANDLE_DATA_ALIGNMENT);
 	return handles;
+}
+
+guint32
+mono_gchandle_to_u32 (MonoGCHandle gchandle)
+{
+	if (!gchandle)
+		return 0;
+
+	HandleData *handles = get_handle_data_from_handle (gchandle);
+	return (handles->block_id << HANDLE_DATA_ALIGNMENT_BITS) | ((guint32)(uintptr_t)gchandle & HANDLE_OFFSET_MASK);
+}
+
+MonoGCHandle
+mono_gchandle_from_u32 (guint32 gchandle)
+{
+	if (!gchandle)
+		return NULL;
+
+	HandleData *handles = handle_blocks [gchandle >> HANDLE_DATA_ALIGNMENT_BITS];
+	if (!handles)
+		return NULL;
+
+	return (MonoGCHandle)((guint8 *)handles + (gchandle & HANDLE_OFFSET_MASK));
 }
 
 static HandleData*
@@ -1849,6 +1897,9 @@ mono_gchandle_new_weakref_internal (MonoObject *obj, gboolean track_resurrection
 MonoObject*
 mono_gchandle_get_target_internal (MonoGCHandle gchandle)
 {
+	if (!gchandle)
+		return NULL;
+
 	guint slot = 0;
 	HandleData* handles = handle_lookup (gchandle, &slot);
 	MonoObject *obj = NULL;
@@ -1925,6 +1976,9 @@ mono_gchandle_get_type_internal (MonoGCHandle gchandle)
 gboolean
 mono_gchandle_is_in_domain_internal (MonoGCHandle gchandle, MonoDomain *domain)
 {
+	if (!gchandle)
+		return FALSE;
+
 	guint slot = 0;
 	HandleData* handles = handle_lookup (gchandle, &slot);
 	gboolean result = FALSE;

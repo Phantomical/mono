@@ -415,6 +415,19 @@ mono_gchandle_get_type_internal (MonoGCHandle gchandle)
 	return MONO_GC_HANDLE_TYPE (gchandle);
 }
 
+/* Same packed-integer representation as sgen, so no encoding needed. */
+guint32
+mono_gchandle_to_u32 (MonoGCHandle gchandle)
+{
+	return (guint32)(size_t)gchandle;
+}
+
+MonoGCHandle
+mono_gchandle_from_u32 (guint32 gchandle)
+{
+	return (MonoGCHandle)(size_t)gchandle;
+}
+
 /**
  * mono_gchandle_free:
  * \param gchandle a GCHandle's handle.

@@ -42,7 +42,7 @@
 uint32_t
 mono_gchandle_new (MonoObject *obj, mono_bool pinned)
 {
-	MONO_EXTERNAL_ONLY_GC_UNSAFE (uint32_t, (uint32_t)(size_t)mono_gchandle_new_internal (obj, pinned));
+	MONO_EXTERNAL_ONLY_GC_UNSAFE (uint32_t, mono_gchandle_to_u32 (mono_gchandle_new_internal (obj, pinned)));
 }
 
 MonoGCHandle
@@ -75,7 +75,7 @@ mono_gchandle_new_v2 (MonoObject *obj, mono_bool pinned)
 uint32_t
 mono_gchandle_new_weakref (MonoObject *obj, mono_bool track_resurrection)
 {
-	MONO_EXTERNAL_ONLY_GC_UNSAFE (uint32_t, (uint32_t)(size_t)mono_gchandle_new_weakref_internal (obj, track_resurrection));
+	MONO_EXTERNAL_ONLY_GC_UNSAFE (uint32_t, mono_gchandle_to_u32 (mono_gchandle_new_weakref_internal (obj, track_resurrection)));
 }
 
 MonoGCHandle
@@ -97,7 +97,7 @@ mono_gchandle_new_weakref_v2 (MonoObject *obj, mono_bool track_resurrection)
 MonoObject*
 mono_gchandle_get_target (uint32_t gchandle)
 {
-	MONO_EXTERNAL_ONLY_GC_UNSAFE (MonoObject*, mono_gchandle_get_target_internal ((MonoGCHandle)(size_t)gchandle));
+	MONO_EXTERNAL_ONLY_GC_UNSAFE (MonoObject*, mono_gchandle_get_target_internal (mono_gchandle_from_u32 (gchandle)));
 }
 
 MonoObject*
@@ -122,7 +122,7 @@ mono_gchandle_free (uint32_t gchandle)
 	 * the gchandle code is lockfree.  SGen calls back into Mono which
 	 * fires a profiler event, so the profiler must be prepared to be
 	 * called from threads that aren't attached to Mono. */
-	MONO_EXTERNAL_ONLY_VOID (mono_gchandle_free_internal ((MonoGCHandle)(size_t)gchandle));
+	MONO_EXTERNAL_ONLY_VOID (mono_gchandle_free_internal (mono_gchandle_from_u32 (gchandle)));
 }
 
 void
@@ -136,7 +136,7 @@ mono_gchandle_free_v2 (MonoGCHandle gchandle)
 gboolean
 mono_gchandle_is_in_domain (uint32_t gchandle, MonoDomain* domain)
 {
-	MONO_EXTERNAL_ONLY_GC_UNSAFE (gboolean, mono_gchandle_is_in_domain_internal ((MonoGCHandle)(size_t)gchandle, domain));
+	MONO_EXTERNAL_ONLY_GC_UNSAFE (gboolean, mono_gchandle_is_in_domain_internal (mono_gchandle_from_u32 (gchandle), domain));
 }
 
 /* make sure the gchandle was allocated for an object in domain */

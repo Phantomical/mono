@@ -86,6 +86,16 @@ gboolean mono_gc_is_finalizer_thread (MonoThread *thread);
 
 void mono_gchandle_set_target (MonoGCHandle gchandle, MonoObject *obj);
 
+/*
+ * The public GC handle API (mono_gchandle_new and friends) hands embedders a
+ * uint32_t, which predates handles being pointer sized. These convert between the
+ * two, and how is up to the collector: sgen handles are small integers that survive
+ * the trip on their own, boehm handles are real pointers and need encoding.
+ * mono_gchandle_from_u32 returns NULL for anything that isn't a live handle.
+ */
+guint32      mono_gchandle_to_u32 (MonoGCHandle gchandle);
+MonoGCHandle mono_gchandle_from_u32 (guint32 gchandle);
+
 /*Ephemeron functionality. Sgen only*/
 gboolean    mono_gc_ephemeron_array_add (MonoObject *obj);
 
