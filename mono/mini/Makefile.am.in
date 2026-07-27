@@ -112,7 +112,11 @@ else
 if HOST_ANDROID
 libmonoldflags= -avoid-version $(monoldflags)
 else
-libmonoldflags=$(monoldflags) -version-info 1:0:0
+# Look next to ourselves first for the helper libraries we dlopen (libmono-native
+# in particular). An embedder drops the runtime and its helpers into one private
+# directory, and without this a bare dlopen name reaches ld.so.cache and picks up
+# whatever system mono happens to be installed instead.
+libmonoldflags=$(monoldflags) -version-info 1:0:0 -Wl,-rpath,'$$ORIGIN'
 endif
 endif
 
