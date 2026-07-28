@@ -139,31 +139,38 @@ public class TieredPromotion {
 
 	// Promotion happens on the background compile worker, so a crossing does
 	// not mean "already promoted" - only "enqueued and the worker was just
-	// woken". Poll rather than check once; a compile is normally done in low
-	// milliseconds, so a generous 10s bound only ever matters if the policy
-	// itself is broken (which is exactly what a timeout here should report).
-	const int WAIT_TIMEOUT_MS = 10000;
+	// woken". Poll rather than check once.
+	//
+	// What that poll waits out is not one compile: it is this method's turn in
+	// a queue every other crossing feeds as well, which under a threshold of 1
+	// is very nearly every method the run touches. So the bound is sized for a
+	// queue to drain rather than for a compile to finish - the latter is low
+	// milliseconds, the former has been measured in seconds - and it is read
+	// off a clock rather than accumulated from the sleeps, which overshoot by
+	// an unbounded factor on a loaded machine and so would make the real bound
+	// anyone's guess.
+	//
+	// A wait that is going to succeed returns the moment the state flips, so
+	// the only thing a generous bound costs is how long a genuinely broken
+	// policy takes to report - which is still what a timeout here means.
+	const int WAIT_TIMEOUT_MS = 30000;
 
-	static bool WaitForState (IntPtr method, int wantState) {
-		int waited = 0;
-		while (MonoTests.Tiering.Probe.MethodState (method) != wantState) {
-			if (waited >= WAIT_TIMEOUT_MS)
+	static bool WaitUntil (Func<bool> reached) {
+		var elapsed = System.Diagnostics.Stopwatch.StartNew ();
+		while (!reached ()) {
+			if (elapsed.ElapsedMilliseconds >= WAIT_TIMEOUT_MS)
 				return false;
 			System.Threading.Thread.Sleep (5);
-			waited += 5;
 		}
 		return true;
 	}
 
+	static bool WaitForState (IntPtr method, int wantState) {
+		return WaitUntil (() => MonoTests.Tiering.Probe.MethodState (method) == wantState);
+	}
+
 	static bool WaitForRedirectArmed (IntPtr method) {
-		int waited = 0;
-		while (!MonoTests.Tiering.Probe.RedirectArmed (method)) {
-			if (waited >= WAIT_TIMEOUT_MS)
-				return false;
-			System.Threading.Thread.Sleep (5);
-			waited += 5;
-		}
-		return true;
+		return WaitUntil (() => MonoTests.Tiering.Probe.RedirectArmed (method));
 	}
 
 	// The worker is done with a method once it reaches either terminal state:
@@ -171,16 +178,10 @@ public class TieredPromotion {
 	// that only needs "the tier-1 compile has run, whatever it decided" waits
 	// for either, rather than for one in particular.
 	static bool WaitForResolved (IntPtr method) {
-		int waited = 0;
-		for (;;) {
+		return WaitUntil (() => {
 			int state = MonoTests.Tiering.Probe.MethodState (method);
-			if (state == STATE_PROMOTED || state == STATE_TIER0_TERMINAL)
-				return true;
-			if (waited >= WAIT_TIMEOUT_MS)
-				return false;
-			System.Threading.Thread.Sleep (5);
-			waited += 5;
-		}
+			return state == STATE_PROMOTED || state == STATE_TIER0_TERMINAL;
+		});
 	}
 
 	public static int test_0_promotion_policy () {

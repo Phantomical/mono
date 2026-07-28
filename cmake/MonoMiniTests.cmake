@@ -142,6 +142,30 @@ add_test(NAME mini-regression
 set_tests_properties(mini-regression PROPERTIES
   LABELS regression FIXTURES_REQUIRED mini_corpora)
 
+# A tiered run is not a one-core test: besides the mutator it starts a pool of
+# background compile workers, sized by tiered_compile_thread_count () in
+# mono/mini/llvm/tiered.cpp.  Mirror that rule here so `ctest -j N` schedules
+# against the cores these tests really use.  Without it ctest counts each run as
+# one processor and packs N of them onto N cores, oversubscribing by the pool
+# size -- and since every assertion about promotion is a bounded wait for work
+# that happens on those very workers, the suite then fails on machine load
+# rather than on anything it is testing.
+#
+# The count only has to be right on the machine that runs the tests, which is
+# the one configuring: it is a scheduling hint, not a correctness contract.
+include(ProcessorCount)
+ProcessorCount(_ncpu)
+if(_ncpu EQUAL 0)
+  set(_ncpu 1)
+endif()
+math(EXPR _tiered_workers "${_ncpu} / 4")
+if(_tiered_workers LESS 1)
+  set(_tiered_workers 1)
+elseif(_tiered_workers GREATER 4)
+  set(_tiered_workers 4)
+endif()
+math(EXPR _tiered_procs "${_tiered_workers} + 1")   # + the mutator
+
 # One test per (corpus, threshold) pair so a failure names the configuration
 # that broke rather than just "tiered".
 function(_mono_add_tiered_test group corpus threshold)
@@ -155,8 +179,14 @@ function(_mono_add_tiered_test group corpus threshold)
            COMMAND "${CMAKE_COMMAND}" -E env ${_env}
                    "${_wrapper}" --llvm ${ARG_ARGS} ${corpus}
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  # Threshold 0 is eager: it promotes inline on the mutator and never starts the
+  # pool, so it really is a one-core run.
+  set(_procs ${_tiered_procs})
+  if(threshold EQUAL 0)
+    set(_procs 1)
+  endif()
   set_tests_properties(tiered-${group}-${threshold} PROPERTIES
-    LABELS tiered FIXTURES_REQUIRED mini_corpora)
+    LABELS tiered FIXTURES_REQUIRED mini_corpora PROCESSORS ${_procs})
 endfunction()
 
 if(MONO_ENABLE_LLVM)
