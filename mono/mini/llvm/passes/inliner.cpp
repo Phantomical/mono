@@ -12,7 +12,10 @@
  *      clears the hard eligibility gates below: run its front-end, translate
  *      its body into THIS module as an internal function (inliner-support.hpp,
  *      implemented in translator.cpp), and rewire its call sites to call that
- *      body directly.
+ *      body directly. A callee the walk has already materialized is rewired
+ *      again rather than passed over, because a body translated since then
+ *      arrived with call sites of its own that the first rewiring could not
+ *      have seen.
  *   2. Run the stock function-simplification pipeline over the bodies that
  *      round newly translated, so the inliner's cost model sees canonical IR.
  *   3. Run LLVM's stock inliner pipeline over the module - buildInlinerPipeline
@@ -100,6 +103,8 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassInstrumentation.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/ValueHandle.h>
+#include <llvm/IR/ValueMap.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/raw_ostream.h>
@@ -216,10 +221,21 @@ private:
 
 	// A map of imported body back to its original function declaration.
 	llvm::DenseMap<llvm::Function *, llvm::Function *> definitions;
-	llvm::DenseMap<llvm::Function *, llvm::Function *> declarations;
+	/*
+	 * The other direction, declaration -> body. Held by weak handle because the
+	 * stock inliner erases a body once it has consumed its last call site: the
+	 * entry then reads back as null, and the declaration is free to be
+	 * materialized again for whatever call sites a later round turns up.
+	 */
+	llvm::DenseMap<llvm::Function *, llvm::WeakTrackingVH> declarations;
 
-	// What is the lowest depth that this function has been processed at, if any.
-	llvm::DenseMap<llvm::Function *, unsigned> depth_cache;
+	/*
+	 * What is the lowest depth that this function has been processed at, if any.
+	 * Keyed by value handle: a body the stock inliner erased must take its entry
+	 * with it, or a body materialized later at the same address would inherit the
+	 * dead one's depth and never be walked.
+	 */
+	llvm::ValueMap<llvm::Function *, unsigned> depth_cache;
 
 	llvm::SmallVector<llvm::Function *, 8> added;
 
@@ -364,6 +380,26 @@ private:
 
 	void process_candidate (llvm::Function *candidate, unsigned depth, MonoCompile *config)
 	{
+		llvm::Function *body = nullptr;
+
+		if (candidate->isDeclaration ()) {
+			/*
+			 * Wiring is a snapshot: replace_eligible_uses () can only reach the
+			 * call sites that exist at the moment it runs. Every body
+			 * materialized after this one arrives carrying its own fresh calls
+			 * to the same declaration, and this walk is the only thing that ever
+			 * sees them - so an already-imported callee still has to have its
+			 * new sites wired up, before either of the two stopping conditions
+			 * below gets to cut the walk short. Skipping that is how a callee
+			 * ends up reported folded while the root still calls its trampoline:
+			 * every site the wiring did reach was consumed, and the ones it
+			 * never reached were never candidates for the stock inliner at all.
+			 */
+			body = cast_or_null<Function> (declarations.lookup (candidate));
+			if (body)
+				replace_eligible_uses (candidate, body);
+		}
+
 		if (depth > 0) {
 			auto it = depth_cache.find (candidate);
 			if (it != depth_cache.end () && it->second <= depth) {
@@ -376,16 +412,14 @@ private:
 		}
 
 		if (candidate->isDeclaration ()) {
-			// We've already imported this method, nothing to do here.
-			if (declarations.contains (candidate))
-				return;
-
-			bool transient = false;
-			auto body = materialize_candidate (candidate, depth, config, &transient);
 			if (!body) {
-				if (!transient)
-					ineligible.insert (candidate);
-				return;
+				bool transient = false;
+				body = materialize_candidate (candidate, depth, config, &transient);
+				if (!body) {
+					if (!transient)
+						ineligible.insert (candidate);
+					return;
+				}
 			}
 
 			g_assert (!body->isDeclaration ());
