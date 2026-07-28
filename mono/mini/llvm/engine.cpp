@@ -2292,14 +2292,7 @@ MonoLLVMJIT::optimize (const Tier1Root &root)
 
 	ReplaceMonoBuiltins::register_pass (pb);
 
-	/*
-	 * Turns the GC write barrier from a call into an inline conditional card
-	 * mark, for the collectors that leave it as a call at all. Was disabled
-	 * because it reproducibly corrupted JIT-compiled code under real-world
-	 * load (KSP); root cause was the pre-load fence compiling to a no-op on
-	 * x86 instead of a real cross-thread fence. See passes/wbarrier.hpp.
-	 */
-	mono::register_write_barrier_lowering (pb);
+	mono::WriteBarrierLoweringPass::register_pass (pb);
 
 	/*
 	 * The stock -O2 pipeline with mono's tier-1 inliner in place of LLVM's own

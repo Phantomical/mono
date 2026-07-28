@@ -219,7 +219,7 @@ mono::WriteBarrierLoweringPass::run (Function &f, FunctionAnalysisManager &)
 }
 
 void
-mono::register_write_barrier_lowering (PassBuilder &pb)
+mono::WriteBarrierLoweringPass::register_pass (PassBuilder &pb)
 {
 	std::optional<CardBitmap> bitmap = card_bitmap ();
 	if (!bitmap)

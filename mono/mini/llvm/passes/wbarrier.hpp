@@ -91,19 +91,19 @@ class WriteBarrierLoweringPass : public llvm::PassInfoMixin<WriteBarrierLowering
 public:
 	explicit WriteBarrierLoweringPass (CardBitmap bitmap) : bitmap_ (bitmap) {}
 
+	/*
+	 * Schedules the lowering inside PB's function simplification pipeline. A
+	 * no-op when the collector has no bitmap, which leaves the barrier calls
+	 * alone and the runtime behaving exactly as it did. Call before building a
+	 * pipeline from PB.
+	 */
+	static void register_pass (llvm::PassBuilder &pb);
+
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 private:
 	CardBitmap bitmap_;
 };
-
-/*
- * Schedules the lowering inside PB's function simplification pipeline. A no-op
- * when the collector has no bitmap, which leaves the barrier calls alone and
- * the runtime behaving exactly as it did. Call before building a pipeline
- * from PB.
- */
-void register_write_barrier_lowering (llvm::PassBuilder &pb);
 
 } // namespace mono
 
