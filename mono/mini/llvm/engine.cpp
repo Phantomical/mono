@@ -129,6 +129,7 @@
 #include "passes/inliner.hpp"
 #include "passes/null-check-guard.hpp"
 #include "passes/pass-dump.hpp"
+#include "passes/replace-builtins.hpp"
 #include "passes/wbarrier.hpp"
 
 using namespace llvm;
@@ -2288,6 +2289,8 @@ MonoLLVMJIT::optimize (const Tier1Root &root)
 	 * function simplification pipeline. See passes/elide-class-init.hpp.
 	 */
 	register_class_init_elision (pb, fam);
+
+	ReplaceMonoBuiltins::register_pass (pb);
 
 	/*
 	 * The stock -O2 pipeline with mono's tier-1 inliner in place of LLVM's own
