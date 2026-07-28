@@ -120,6 +120,7 @@ if(MONO_ENABLE_LLVM)
     llvm/translator-call.cpp
     llvm/translator-bb.cpp
     llvm/translator-intrinsics.cpp
+    llvm/passes/devirt.cpp
     llvm/passes/eh-gather.cpp
     llvm/passes/elide-class-init.cpp
     llvm/passes/finally-range.cpp

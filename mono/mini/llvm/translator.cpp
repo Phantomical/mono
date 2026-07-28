@@ -28,6 +28,7 @@ extern "C" {
 #include "engine.hpp"
 #include "mono_lsda.hpp"
 #include "passes/inliner-support.hpp"
+#include "passes/devirt-support.hpp"
 
 #ifndef DISABLE_JIT
 /*
@@ -1297,6 +1298,142 @@ MonoMethod *
 managed_method_from_symbol (const char *sym)
 {
 	return mono_llvm_method_from_symbol (sym);
+}
+
+/* Defined below, next to the other callee-eligibility predicates. */
+static bool callee_needs_generic_context (MonoMethod *method);
+
+MonoMethod *
+resolve_exact_virtual_target (MonoMethod *declared, MonoClass *klass, const char **reason)
+{
+	*reason = "refuse-devirt";
+
+	if (!declared || !klass)
+		return nullptr;
+
+	/*
+	 * A remoted receiver dispatches through a proxy: mini_emit_method_call_full ()
+	 * routes these to a remoting_invoke_with_check wrapper rather than the method
+	 * itself, and resolving the slot here would skip it.
+	 */
+	if (mono_class_is_marshalbyref (klass) || mono_class_is_marshalbyref (declared->klass)) {
+		*reason = "refuse-devirt-marshalbyref";
+		return nullptr;
+	}
+
+	/*
+	 * A generic virtual method dispatches on the instantiation, which travels in
+	 * the imt argument rather than the vtable slot, so the slot alone does not
+	 * name the target. A signature that will not load is treated the same way -
+	 * there is nothing to decide from.
+	 */
+	MonoMethodSignature *sig = mono_method_signature_internal (declared);
+	if (!sig || sig->generic_param_count) {
+		*reason = "refuse-devirt-generic-virtual";
+		return nullptr;
+	}
+
+	/*
+	 * An abstract or open class is not something an object is ever exactly an
+	 * instance of, so being asked to resolve against one means the receiver
+	 * proof is wrong rather than merely imprecise.
+	 */
+	if (mono_class_get_flags (klass) & TYPE_ATTRIBUTE_ABSTRACT) {
+		*reason = "refuse-devirt-abstract-receiver";
+		return nullptr;
+	}
+
+	/*
+	 * The slot holds an unbox trampoline when the receiver is boxed, and the
+	 * method behind it expects `this` already advanced past the object header.
+	 * Adjusting for that is a later slice; refuse rather than pass a boxed
+	 * pointer to a body that will treat it as unboxed.
+	 */
+	if (m_class_is_valuetype (klass)) {
+		*reason = "refuse-devirt-valuetype-receiver";
+		return nullptr;
+	}
+
+	ERROR_DECL (error);
+	/*
+	 * Reads the vtable, so it has to be built first. This runs on a compile
+	 * thread: setup takes metadata locks and can fail a type load, but it runs
+	 * no cctors, which is the constraint that matters here.
+	 */
+	mono_class_setup_vtable (klass);
+	if (mono_class_has_failure (klass)) {
+		*reason = "refuse-devirt-typeload";
+		return nullptr;
+	}
+
+	MonoMethod *target = mono_class_get_virtual_method (klass, declared, FALSE, error);
+	if (!target || !is_ok (error)) {
+		mono_error_cleanup (error);
+		*reason = "refuse-devirt-unresolved";
+		return nullptr;
+	}
+
+	if (target->flags & METHOD_ATTRIBUTE_ABSTRACT) {
+		*reason = "refuse-devirt-abstract-target";
+		return nullptr;
+	}
+
+	/*
+	 * A wrapper target means the runtime interposes something on the call
+	 * (remoting, COM, unbox); the direct edge would bypass whatever that is.
+	 */
+	if (target->wrapper_type != MONO_WRAPPER_NONE) {
+		*reason = "refuse-devirt-wrapper-target";
+		return nullptr;
+	}
+
+	/*
+	 * Refused for the same reason materialize_callee () refuses it: there is no
+	 * single body to name, and the trampoline the direct edge would go through
+	 * expects a context this site has no way to supply.
+	 */
+	if (callee_needs_generic_context (target)) {
+		*reason = "refuse-devirt-needs-rgctx";
+		return nullptr;
+	}
+
+	*reason = nullptr;
+	return target;
+}
+
+llvm::Function *
+direct_callee_decl (MonoMethod *target, llvm::FunctionType *sig, const Tier1Root &root)
+{
+	if (!target || !root.cfg || !root.module)
+		return nullptr;
+
+	ERROR_DECL (error);
+	gpointer tramp = mono_create_jit_trampoline (root.cfg->domain, target, error);
+	if (!tramp || !is_ok (error)) {
+		mono_error_cleanup (error);
+		return nullptr;
+	}
+
+	const char *name = mono_llvm_method_symbol (target);
+	mono_llvm_jit_register_symbol (name, tramp);
+
+	llvm::Module *module = llvm::unwrap (root.module->lmodule);
+	auto callee = module->getOrInsertFunction (name, sig);
+	auto *fn = llvm::dyn_cast<llvm::Function> (callee.getCallee ());
+
+	/*
+	 * Check the type rather than trusting getOrInsertFunction (). Under opaque
+	 * pointers every function is a `ptr`, so an existing declaration under this
+	 * name comes back as-is even when its type is not the one we asked for -
+	 * and the same method legitimately gets declared under more than one
+	 * signature (with and without 'this'; see the note in process_call ()).
+	 * Handing that back would be worse than declining: setCalledFunction ()
+	 * adopts the callee's type, silently reinterpreting the site's arguments.
+	 */
+	if (!fn || fn->getFunctionType () != sig)
+		return nullptr;
+
+	return fn;
 }
 
 /*

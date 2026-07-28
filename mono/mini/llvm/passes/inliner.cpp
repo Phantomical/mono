@@ -83,6 +83,7 @@
 
 #include "inliner.hpp"
 #include "inliner-support.hpp"
+#include "devirt.hpp"
 
 #include <llvm/ADT/Any.h>
 #include <llvm/ADT/DenseSet.h>
@@ -292,9 +293,20 @@ public:
 		const PassInstrumentation pi = mam.getResult<PassInstrumentationAnalysis> (*module);
 
 		for (unsigned round = 0; round < MaxInlinerRounds; ++round) {
+			/*
+			 * Resolve what the previous round exposed before deciding whether
+			 * this round has work. Inlining a callee brings its allocations
+			 * into the root, which is what lets a receiver be proven, and each
+			 * site this turns direct is a candidate import_candidates () can
+			 * then pick up - so the two have to alternate, not run once each.
+			 */
+			unsigned devirted = devirtualize (*module, root);
+			if (devirted)
+				report_stage (pi, *module, "round " + Twine (round) + ": after devirt");
+
 			// Nothing new was added, so there's nothing else to do.
 			// We always need to run at least one round, though, because the
-			if (!import_candidates () && round != 0)
+			if (!import_candidates () && !devirted && round != 0)
 				break;
 
 			report_stage (pi, *module, "round " + Twine (round) + ": after materialize");

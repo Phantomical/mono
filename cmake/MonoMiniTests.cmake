@@ -111,6 +111,7 @@ _mono_add_cs_target(unaligned.exe     SOURCES unaligned.cs
                     REFS "${_driver}" "${CMAKE_CURRENT_BINARY_DIR}/MemoryIntrinsics.dll")
 _mono_add_cs_target(inliner-tests.exe SOURCES inliner-tests.cs
                     REFS "${_driver}" "${CMAKE_CURRENT_BINARY_DIR}/inliner-fault.dll")
+_mono_add_cs_target(devirt-tests.exe  SOURCES devirt-tests.cs REFS "${_driver}")
 _mono_add_il_target(iltests.exe iltests.il)
 
 # Not dependent on `mcs` -- see the note in mono/tests/CMakeLists.txt.
@@ -204,6 +205,7 @@ if(MONO_ENABLE_LLVM)
   foreach(_n 1000 20 1 0)
     _mono_add_tiered_test(promotion-gshared tiered-promotion.exe ${_n})
     _mono_add_tiered_test(inliner inliner-tests.exe ${_n})
+    _mono_add_tiered_test(devirt devirt-tests.exe ${_n})
   endforeach()
   # The decline corpus needs tier-1 to never actually fire, so point the
   # one-method allowlist at a name nothing matches.
@@ -228,6 +230,33 @@ if(MONO_ENABLE_LLVM)
                    "${CMAKE_CURRENT_SOURCE_DIR}/inliner-tests.cs"
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties(tiered-inliner-tags PROPERTIES
+    LABELS tiered FIXTURES_REQUIRED mini_corpora)
+
+  # Same argument one layer down: devirt-tests.exe computes the same answers
+  # whether or not a single call site was resolved, so the decisions themselves
+  # have to be asserted. The negative expectations matter most -- a walk that
+  # answered with a common base instead of an exact class would still be green
+  # on every arithmetic check in the corpus.
+  add_test(NAME tiered-devirt-tags
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/check-devirt-tags.sh"
+                   "MONO_PATH=${_class_dir} ${_wrapper}"
+                   "${CMAKE_CURRENT_BINARY_DIR}/devirt-tests.exe"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/devirt-tests.cs"
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(tiered-devirt-tags PROPERTIES
+    LABELS tiered FIXTURES_REQUIRED mini_corpora)
+
+  # The direct call is not the point -- what the inliner can then do with it is.
+  # Resolving a site to something the inliner does not recognize as a managed
+  # callee would leave the pass green but pointless, so run the inliner's own
+  # assertions over the devirt corpus as well.
+  add_test(NAME tiered-devirt-inlines
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/check-inliner-tags.sh"
+                   "MONO_PATH=${_class_dir} ${_wrapper}"
+                   "${CMAKE_CURRENT_BINARY_DIR}/devirt-tests.exe"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/devirt-tests.cs"
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(tiered-devirt-inlines PROPERTIES
     LABELS tiered FIXTURES_REQUIRED mini_corpora)
 
   # Tier 1 reads its native_offset -> il_offset map back out of the emitted

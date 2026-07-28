@@ -51,6 +51,52 @@ tag_class_init (LLVMValueRef ins, const char *tag, MonoClass *klass)
 }
 
 /*
+ * Which dispatch a MEMBASE call site performs. The three are told apart the same
+ * way mini_emit_method_call_full () decided between them, rather than by the
+ * offset the slot load ended up with: a delegate's "slot" is a field of
+ * MonoDelegate and an interface's is a negative index into the IMT, so matching
+ * on offsets would be reading the answer back out of the arithmetic.
+ */
+static const char *
+virtual_call_kind (MonoMethod *method)
+{
+	if (m_class_get_parent (method->klass) == mono_defaults.multicastdelegate_class &&
+	    !strcmp (method->name, "Invoke"))
+		return "delegate";
+
+	if (mono_class_is_interface (method->klass))
+		return "imt";
+
+	return "vtable";
+}
+
+/*
+ * Tag a virtual call site with the method the front end dispatched it on and
+ * where its receiver sits in the argument list, for passes/devirt.hpp.
+ *
+ * process_call () points the callee at a slot load and never names call->method
+ * for these sites, so without this the emitted IR has nothing left that says
+ * which method the site dispatches - and that method is exactly what resolving
+ * against a known receiver class needs. The receiver's parameter index is
+ * recorded rather than assumed to be 0 because a vtype-returning call puts its
+ * return buffer ahead of 'this'.
+ */
+static void
+tag_virtual_call (LLVMValueRef ins, llvm::LLVMContext &ctx, const char *kind,
+                  MonoMethod *method, int this_pindex)
+{
+	auto *i64 = llvm::Type::getInt64Ty (ctx);
+	llvm::Metadata *elts [] = {
+		llvm::MDString::get (ctx, kind),
+		llvm::ConstantAsMetadata::get (llvm::ConstantInt::get (i64, (guint64) (gsize) method)),
+		llvm::ConstantAsMetadata::get (llvm::ConstantInt::get (i64, (guint64) this_pindex)),
+	};
+
+	llvm::unwrap<llvm::Instruction> (ins)->setMetadata ("mono.virtcall",
+	                                                    llvm::MDNode::get (ctx, elts));
+}
+
+/*
  * mono_llvm_method_symbol:
  *
  *   Return a stable, linker-safe symbol name for METHOD, for naming a direct
@@ -1052,6 +1098,16 @@ EmitContext::process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, 
 	if (call->method && call->method->wrapper_type == MONO_WRAPPER_ALLOC) {
 		mono_llvm_set_call_nonnull_ret (lcall);
 	}
+
+	/*
+	 * A virtual site is only resolvable if its receiver is an argument we can
+	 * point at, which means a signature with 'this'. Everything reaching here
+	 * with is_virtual set has one, but the tag carries the index rather than
+	 * relying on that.
+	 */
+	if (is_virtual && call->method && sig->hasthis)
+		tag_virtual_call (lcall, this->llvm_ctx (), virtual_call_kind (call->method),
+		                  call->method, cinfo->args [0].pindex);
 
 	/*
 	 * Tag the GC write barrier so passes/wbarrier.hpp can find it. This is the
