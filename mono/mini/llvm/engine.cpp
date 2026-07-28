@@ -2254,17 +2254,13 @@ MonoLLVMJIT::optimize (const Tier1Root &root)
 	PassInstrumentationCallbacks pic;
 	register_pass_ir_dumper (pic);
 
-	/*
-	 * MONO_LLVM_INLINE_THRESHOLD overrides the stock inliner's cost ceiling,
-	 * which buildInlinerPipeline () otherwise derives from the -O level (225 at
-	 * -O2). Diagnostic for now: the default is too low for the IR the translator
-	 * produces - a managed method pays ~35 per null/bounds check for the throw
-	 * call the check branches to, so a handful of checks exhausts the budget
-	 * before any of the method's real work is costed at all.
-	 */
 	PipelineTuningOptions pto;
+
+	// Allow overriding the inline threshold
 	if (const char *env = std::getenv ("MONO_LLVM_INLINE_THRESHOLD"))
 		pto.InlinerThreshold = atoi (env);
+
+	pto.SLPVectorization = true;
 
 	PassBuilder pb (tm.get (), pto, std::nullopt, &pic);
 	LoopAnalysisManager lam;
@@ -2294,19 +2290,12 @@ MonoLLVMJIT::optimize (const Tier1Root &root)
 	register_class_init_elision (pb, fam);
 
 	/*
-	 * Turns the GC write barrier from a call into an inline conditional card
-	 * mark, for the collectors that leave it as a call at all. Disabled for
-	 * now: it reproducibly corrupts JIT-compiled code under real-world load
-	 * (KSP). See passes/wbarrier.hpp.
-	 */
-
-	/*
 	 * The stock -O2 pipeline with mono's tier-1 inliner in place of LLVM's own
 	 * inlining stage - the callee bodies that stage would need are not in the
 	 * module until our pass puts them there. See passes/inliner.hpp.
 	 */
 	ModulePassManager mpm =
-		build_tier1_pipeline (pb, pic, OptimizationLevel::O2, root);
+		build_tier1_pipeline (pb, pic, OptimizationLevel::O3, root);
 	mpm.run (*module, mam);
 }
 
