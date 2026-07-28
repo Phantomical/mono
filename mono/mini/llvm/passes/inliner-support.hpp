@@ -97,8 +97,11 @@ llvm::Function *materialize_callee (MonoMethod *target, const Tier1Root &root);
  * metadata, NOT from a class-init call in the materialized IR (the barrier is
  * often elided there), and is conservative: true means "do not inline". Returns
  * true if the body cannot be inspected.
+ *
+ * DOMAIN is the domain the accessed classes' vtables are looked up in - a class
+ * whose cctor has already run there needs no barrier at all.
  */
-bool callee_reads_cctor_guarded_static (MonoMethod *target);
+bool callee_reads_cctor_guarded_static (MonoMethod *target, MonoDomain *domain);
 
 } // namespace mono
 

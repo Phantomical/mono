@@ -429,7 +429,7 @@ private:
 			return nullptr;
 		}
 
-		if (callee_reads_cctor_guarded_static (method)) {
+		if (callee_reads_cctor_guarded_static (method, root.cfg->domain)) {
 			trace_method ("method reads a static field of an uninitialized class", method);
 			return nullptr;
 		}

@@ -1348,6 +1348,27 @@ callee_needs_generic_context (MonoMethod *method)
 }
 
 /*
+ * True if KLASS's cctor has demonstrably already run in DOMAIN, so a static
+ * access to it needs no barrier.
+ *
+ * Only a set `initialized` is trusted, never a clear one: the flag is still 0 on
+ * the thread currently inside the cctor, and 0 is also what a class with no
+ * vtable yet reads as. Both mean "cannot tell", which is the answer the caller
+ * wants anyway. Once set it stays set, and it is published under the type-init
+ * lock, so seeing it set orders the cctor's writes before this read.
+ */
+static bool
+cctor_already_ran (MonoDomain *domain, MonoClass *klass)
+{
+	if (!domain || !klass)
+		return false;
+
+	/* Deliberately does not build one: no vtable means the cctor cannot have run. */
+	MonoVTable *vtable = mono_class_try_get_vtable (domain, klass);
+	return vtable && vtable->initialized;
+}
+
+/*
  * True if METHOD's body reads or writes a static field of a class that still
  * needs its cctor to run (relative to METHOD).
  *
@@ -1362,12 +1383,12 @@ callee_needs_generic_context (MonoMethod *method)
  *
  * We detect this from the IL/metadata rather than the materialized IR precisely
  * because the elided case leaves NO class-init call in the body for the leaf
- * gate to catch. This is deliberately conservative: any touch of a static field
- * whose declaring class has a non-trivial cctor disqualifies the callee, even
- * where the barrier would in fact have survived.
+ * gate to catch. Beyond the already-initialized classes cctor_already_ran ()
+ * clears, this is conservative: a static touch whose class might still need its
+ * cctor disqualifies the callee even where the barrier would have survived.
  */
 bool
-callee_reads_cctor_guarded_static (MonoMethod *method)
+callee_reads_cctor_guarded_static (MonoMethod *method, MonoDomain *domain)
 {
 	if (!method)
 		return true;
@@ -1431,8 +1452,10 @@ callee_reads_cctor_guarded_static (MonoMethod *method)
 			 * exactly as the field-access path in method-to-ir.c does.
 			 */
 			MonoType *ftype = mono_field_get_type_internal (field);
+			MonoClass *access_klass = fklass ? fklass : field->parent;
 			if (ftype && (ftype->attrs & FIELD_ATTRIBUTE_STATIC) &&
-			    mono_class_needs_cctor_run (fklass ? fklass : field->parent, method))
+			    mono_class_needs_cctor_run (access_klass, method) &&
+			    !cctor_already_ran (domain, access_klass))
 				guarded = true;
 			break;
 		}
