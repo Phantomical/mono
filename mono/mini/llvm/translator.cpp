@@ -1413,10 +1413,12 @@ target_needs_rgctx (MonoMethod *target, const Tier1Root &root)
 }
 
 llvm::Function *
-direct_callee_decl (MonoMethod *target, llvm::FunctionType *sig, const Tier1Root &root)
+direct_callee_decl (MonoMethod *target, const llvm::CallBase &site, const Tier1Root &root)
 {
 	if (!target || !root.cfg || !root.module)
 		return nullptr;
+
+	llvm::FunctionType *sig = site.getFunctionType ();
 
 	ERROR_DECL (error);
 	gpointer tramp = mono_create_jit_trampoline (root.cfg->domain, target, error);
@@ -1443,6 +1445,16 @@ direct_callee_decl (MonoMethod *target, llvm::FunctionType *sig, const Tier1Root
 	 */
 	if (!fn || fn->getFunctionType () != sig)
 		return nullptr;
+
+	/*
+	 * Mirror the site's `nest` parameter onto the declaration. A FunctionType
+	 * carries types and nothing else, so this attribute is the only record that
+	 * the extra parameter is an imt argument rather than a real one - and
+	 * materialize_callee () has to know, or it builds a body of the wrong shape.
+	 */
+	for (unsigned i = 0; i < site.arg_size (); ++i)
+		if (site.paramHasAttr (i, llvm::Attribute::Nest))
+			fn->addParamAttr (i, llvm::Attribute::Nest);
 
 	return fn;
 }
@@ -1590,8 +1602,29 @@ pending_class_init_vtable (MonoCompile *cfg, bool *indeterminate)
 	return vtable->initialized ? nullptr : vtable;
 }
 
+/*
+ * Whether DECL was declared to take an imt argument in `nest`.
+ *
+ * Only devirt_callee_decl () marks one - an ordinary direct-call declaration is
+ * built from a bare FunctionType and carries no parameter attributes at all, so
+ * a false here means "nothing to add on top of what METHOD's own metadata says".
+ */
+static bool
+decl_takes_nest_arg (const llvm::Function *decl)
+{
+	if (!decl)
+		return false;
+
+	const llvm::AttributeList attrs = decl->getAttributes ();
+	for (unsigned i = 0; i < decl->getFunctionType ()->getNumParams (); ++i)
+		if (attrs.hasParamAttr (i, llvm::Attribute::Nest))
+			return true;
+
+	return false;
+}
+
 llvm::Function *
-materialize_callee (MonoMethod *method, const Tier1Root &root)
+materialize_callee (MonoMethod *method, const Tier1Root &root, const llvm::Function *decl)
 {
 	if (!method || !root.cfg)
 		return nullptr;
@@ -1647,11 +1680,16 @@ materialize_callee (MonoMethod *method, const Tier1Root &root)
 		jit_flags |= JIT_FLAG_METHOD_IS_GSHARED;
 
 	/*
-	 * Whether the call site carries a vtable/mrgctx in `nest`. Asked of the ROOT's
-	 * cfg because that is the caller whose call site is being matched, and asked
-	 * before the compile because the body has to be built to the same shape.
+	 * Whether the call sites carry something in `nest`. Asked of the ROOT's cfg
+	 * because that is the caller whose sites are being matched, and asked before
+	 * the compile because the body has to be built to the same shape.
+	 *
+	 * A devirtualized site is the case metadata cannot answer: it passes an imt
+	 * argument there, which is not a fact about METHOD at all, so the declaration
+	 * it was rewritten against has to be consulted as well.
 	 */
-	bool passes_rgctx = mini_method_call_passes_rgctx (root.cfg, method);
+	bool passes_rgctx = mini_method_call_passes_rgctx (root.cfg, method) ||
+	                    decl_takes_nest_arg (decl);
 
 	MonoCompile *cfg = mini_method_compile (
 		method, opt, root.cfg->domain, (JitFlags) jit_flags, 0, -1);
@@ -1702,11 +1740,12 @@ materialize_callee (MonoMethod *method, const Tier1Root &root)
 		ctx->lmodule = module->lmodule;
 		ctx->translate_only = true;
 		/*
-		 * The call site was emitted against a declaration that may carry a
-		 * vtable/mrgctx parameter, decided from METHOD's metadata back when the
-		 * root's front-end ran. A specialized body has no use for it, but it has
-		 * to accept it or the two types would not match and the site could not be
-		 * rewired at all; a shared body reads its context out of it.
+		 * A specialized body has no use for the `nest` parameter, and a
+		 * devirtualized interface site's imt argument is meaningless to any body
+		 * at all - but it has to be accepted either way, or the two types would
+		 * not match and the site could not be rewired. Dead is fine: it inlines
+		 * away with everything that computed it. A shared body reads its context
+		 * out of it.
 		 */
 		ctx->keep_rgctx_arg = passes_rgctx;
 

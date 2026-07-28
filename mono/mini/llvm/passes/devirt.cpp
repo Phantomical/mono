@@ -9,11 +9,12 @@
  *   3. ask the runtime what (declared method, exact class) resolves to;
  *   4. point the call at that method's trampoline symbol.
  *
- * Step 4 is a plain operand rewrite - the callee changes and nothing else. In
- * particular the call keeps its block, so an `invoke` keeps its unwind edge and
- * the EH structure is untouched. That is the whole reason this is cheap: a
- * guarded devirtualization would have to split the site in two and duplicate
- * those edges.
+ * Step 4 is a plain operand rewrite - the callee changes and nothing else, right
+ * down to the imt argument an interface site passes in `nest`, which is left in
+ * place for the callee to ignore. The call keeps its block, so an `invoke` keeps
+ * its unwind edge and the EH structure is untouched. That is the whole reason
+ * this is cheap: a guarded devirtualization would have to split the site in two
+ * and duplicate those edges.
  */
 
 #include "devirt.hpp"
@@ -30,9 +31,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Analysis/ValueTracking.h>
-#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
@@ -229,23 +228,6 @@ prove_class (Value *v, SmallPtrSetImpl<Value *> &visited, unsigned depth = 0)
 }
 
 /*
- * Which parameter carries the imt/rgctx argument, or -1 if none does.
- *
- * Read off the call rather than out of the tag: `nest` is where the argument
- * actually travels (translator-call.cpp pins it there), so the attribute is the
- * authority on whether a site has one.
- */
-int
-nest_param_index (const CallBase &cb)
-{
-	for (unsigned i = 0; i < cb.arg_size (); ++i)
-		if (cb.paramHasAttr (i, Attribute::Nest))
-			return (int) i;
-
-	return -1;
-}
-
-/*
  * Whether CB can be rewritten at all, independently of what it resolves to.
  */
 const char *
@@ -271,72 +253,6 @@ site_refusal (const CallBase &cb, const VirtCallTag &tag)
 			return "refuse-site-musttail";
 
 	return nullptr;
-}
-
-/* CB's type with parameter DROP removed. */
-FunctionType *
-type_without_param (const CallBase &cb, unsigned drop)
-{
-	FunctionType *ft = cb.getFunctionType ();
-	SmallVector<Type *, 8> params;
-
-	for (unsigned i = 0; i < ft->getNumParams (); ++i)
-		if (i != drop)
-			params.push_back (ft->getParamType (i));
-
-	return FunctionType::get (ft->getReturnType (), params, ft->isVarArg ());
-}
-
-/*
- * Replace CB with an otherwise identical call to CALLEE that does not pass
- * argument DROP. Returns the new call; CB is erased.
- *
- * The parameter attributes have to be rebuilt rather than edited, because
- * removing an argument shifts every attribute set after it down one - and one of
- * those is a byval or sret, which silently means something else at the wrong
- * index.
- */
-CallBase *
-rebuild_without_arg (CallBase *cb, unsigned drop, Function *callee)
-{
-	LLVMContext &ctx = cb->getContext ();
-	const AttributeList attrs = cb->getAttributes ();
-
-	SmallVector<Value *, 8> args;
-	SmallVector<AttributeSet, 8> arg_attrs;
-
-	for (unsigned i = 0; i < cb->arg_size (); ++i) {
-		if (i == drop)
-			continue;
-		args.push_back (cb->getArgOperand (i));
-		arg_attrs.push_back (attrs.getParamAttrs (i));
-	}
-
-	SmallVector<OperandBundleDef, 2> bundles;
-	cb->getOperandBundlesAsDefs (bundles);
-
-	CallBase *nb;
-	if (auto *inv = dyn_cast<InvokeInst> (cb))
-		nb = InvokeInst::Create (callee->getFunctionType (), callee, inv->getNormalDest (),
-		                         inv->getUnwindDest (), args, bundles, "", cb);
-	else
-		nb = CallInst::Create (callee->getFunctionType (), callee, args, bundles, "", cb);
-
-	nb->setCallingConv (cb->getCallingConv ());
-	nb->setAttributes (AttributeList::get (ctx, attrs.getFnAttrs (), attrs.getRetAttrs (), arg_attrs));
-	nb->copyMetadata (*cb);
-	nb->setDebugLoc (cb->getDebugLoc ());
-
-	if (auto *ci = dyn_cast<CallInst> (cb))
-		cast<CallInst> (nb)->setTailCallKind (ci->getTailCallKind ());
-
-	if (!cb->getType ()->isVoidTy ()) {
-		nb->takeName (cb);
-		cb->replaceAllUsesWith (nb);
-	}
-	cb->eraseFromParent ();
-
-	return nb;
 }
 
 } // namespace
@@ -421,32 +337,28 @@ devirtualize (Module &module, const Tier1Root &root)
 		}
 
 		/*
-		 * The site's `nest` parameter, if it has one, holds an imt argument
-		 * naming the interface or generic method it dispatched on. A direct call
-		 * has no use for that - but if the target would want an rgctx of its own
-		 * there, we have nothing to put in it, and an imt argument is not one.
+		 * An interface or generic-virtual site carries an imt argument in `nest`,
+		 * which nothing downstream has any use for. It stays anyway: the
+		 * declaration is built to the site's own type, so the call is repointed
+		 * rather than rebuilt, and the body materialize_callee () hands back
+		 * accepts the parameter and ignores it. Inlining and DCE take it and
+		 * everything that computed it away.
+		 *
+		 * What that cannot absorb is a target wanting an rgctx of its own in that
+		 * parameter, since an imt argument is not one.
 		 */
-		const int nest = nest_param_index (*cb);
-
 		if (target_needs_rgctx (target, root)) {
 			trace ("refuse-target-needs-rgctx", target, recv.klass);
 			continue;
 		}
 
-		FunctionType *sig = nest < 0 ? cb->getFunctionType ()
-		                             : type_without_param (*cb, (unsigned) nest);
-
-		Function *decl = direct_callee_decl (target, sig, root);
+		Function *decl = direct_callee_decl (target, *cb, root);
 		if (!decl) {
 			trace ("refuse-no-declaration", target, recv.klass);
 			continue;
 		}
 
-		if (nest < 0)
-			cb->setCalledFunction (decl);
-		else
-			rebuild_without_arg (cb, (unsigned) nest, decl);
-
+		cb->setCalledFunction (decl);
 		rewritten++;
 		trace ("devirt", target, recv.klass);
 	}

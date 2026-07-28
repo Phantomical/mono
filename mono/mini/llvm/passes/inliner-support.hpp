@@ -91,8 +91,14 @@ MonoMethod *managed_method_from_symbol (const char *sym);
  * parameters ROOT is itself shared over. The root's call site already computes
  * the runtime generic context such a body expects, so it is materialized as the
  * shared body it is and folded in as it stands.
+ *
+ * DECL is the declaration the body is replacing, and it is what decides the
+ * body's shape: whatever the call sites were emitted against is what they will
+ * be repointed at. In particular a declaration carrying a `nest` parameter gets
+ * a body that accepts one, used or not.
  */
-llvm::Function *materialize_callee (MonoMethod *target, const Tier1Root &root);
+llvm::Function *materialize_callee (MonoMethod *target, const Tier1Root &root,
+                                    const llvm::Function *decl);
 
 } // namespace mono
 

@@ -493,7 +493,7 @@ private:
 			return nullptr;
 		}
 
-		auto body = materialize_callee (method, root);
+		auto body = materialize_callee (method, root, candidate);
 		if (!body) {
 			trace_method ("method is not supported by the tier1 jit", method);
 			return nullptr;

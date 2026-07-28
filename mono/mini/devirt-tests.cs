@@ -197,11 +197,11 @@ class DevirtTests {
 
 	// --- interface dispatch ---------------------------------------------------
 	//
-	// An interface site carries its imt argument in the nest parameter, which a
-	// direct call has no use for, so the whole call is rebuilt without it rather
-	// than repointed. Getting the argument-attribute shift wrong there moves a
-	// byval or sret onto the wrong parameter, so the value has to be checked and
-	// not just the decision.
+	// An interface site carries its imt argument in the nest parameter, and the
+	// rewrite keeps it: the target is declared to take one and the body
+	// materialized for it accepts and ignores it, which is what leaves the call a
+	// plain operand swap. Whether that argument is really inert is a question
+	// about the value, not the decision, so the answer is what gets checked.
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int IfaceHot (int x) {
@@ -224,8 +224,9 @@ class DevirtTests {
 
 	// --- an interface method taking a struct by value -------------------------
 	//
-	// Specifically to catch the attribute shift above: the argument after the
-	// dropped nest parameter is one the ABI decorates.
+	// The parameter after the imt argument is one the ABI decorates, so this is
+	// what catches a body materialized to the wrong shape: get the nest parameter
+	// wrong and the byval lands on the neighbouring argument instead.
 
 	struct Pair { public int A, B; }
 
@@ -257,10 +258,11 @@ class DevirtTests {
 
 	// --- an interface site inside a try --------------------------------------
 	//
-	// A call in a try region is emitted as an invoke, which is a terminator, so
-	// rebuilding it without the nest argument means constructing a second
-	// terminator in a block that still holds the first, and carrying both
-	// destinations across. Nothing else in the corpus reaches that path.
+	// A call in a try region is emitted as an invoke, and the inliner declines to
+	// fold a clause-bearing body into one - so this is the devirtualized site that
+	// stays a call through the trampoline, imt argument still in tow. It has to
+	// arrive at the right method with the right arguments anyway, which is the
+	// half the folded cases above never exercise.
 
 	interface ICount { int Count (Pair p, int k); }
 

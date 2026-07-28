@@ -15,8 +15,8 @@
 #include "inliner-support.hpp"
 
 namespace llvm {
+class CallBase;
 class Function;
-class FunctionType;
 }
 
 namespace mono {
@@ -45,15 +45,17 @@ MonoMethod *resolve_exact_virtual_target (MonoMethod *declared, MonoClass *klass
 bool target_needs_rgctx (MonoMethod *target, const Tier1Root &root);
 
 /*
- * A declaration of TARGET in ROOT's module, of type SIG, resolving through a
- * real symbol to TARGET's stable trampoline entry - the same edge
- * get_direct_callee () builds for a call the front end emitted directly, so a
- * rewritten site is indistinguishable from one that was never virtual (which is
- * what lets the inliner pick it up).
+ * A declaration of TARGET in ROOT's module that SITE can be repointed at,
+ * resolving through a real symbol to TARGET's stable trampoline entry - the same
+ * edge get_direct_callee () builds for a call the front end emitted directly, so
+ * a rewritten site is indistinguishable from one that was never virtual (which
+ * is what lets the inliner pick it up).
  *
- * Returns NULL if TARGET has no reachable trampoline.
+ * Declared with SITE's own type, imt argument and all, so the rewrite is an
+ * operand swap rather than a rebuild. Returns NULL if TARGET has no reachable
+ * trampoline, or if the name is already taken by a declaration of another shape.
  */
-llvm::Function *direct_callee_decl (MonoMethod *target, llvm::FunctionType *sig,
+llvm::Function *direct_callee_decl (MonoMethod *target, const llvm::CallBase &site,
                                     const Tier1Root &root);
 
 } // namespace mono
