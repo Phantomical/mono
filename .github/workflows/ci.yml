@@ -1,0 +1,174 @@
+name: CI
+
+# The LLVM 18 tiered JIT lives on `llvm18-tiered-jit`; `unity-main` is the
+# upstream tracking branch and is built by Unity's own Yamato pipelines, so
+# nothing here fires on it.
+on:
+  push:
+    branches: [llvm18-tiered-jit]
+  pull_request:
+    branches: [llvm18-tiered-jit]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # A full build is ~1500 C/C++ translation units compiled -Os -g, and a
+  # cache of the lot comes to a bit under 1 GiB compressed.
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPRESS: "true"
+  # mono/mini/buildver-*.h is generated with the wall-clock build date in it.
+  # cmake/MonoGenBuildVer.cmake honours SOURCE_DATE_EPOCH, so pinning it keeps
+  # main.c and main-sgen.c cacheable too.
+  SOURCE_DATE_EPOCH: "1700000000"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The real build: LLVM tier on, class libraries built, test suites run.
+  # ---------------------------------------------------------------------------
+  linux-x64:
+    name: Linux x64 (LLVM tier)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # roslyn-binaries, corefx, cecil, boringssl and bdwgc are all build
+          # inputs.  The acceptance corpora are `update = none` in .gitmodules,
+          # so `recursive` still skips the gigabyte of them.
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build python3 zlib1g-dev \
+            llvm-18-dev ccache mono-mcs
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+
+      # Keyed on the commit so every run writes a fresh entry and the restore-key
+      # picks up the newest older one: a cache entry is immutable once written,
+      # so a fixed key would freeze at whatever the very first run compiled.
+      # Branch isolation comes from Actions' own cache scoping, not from the key.
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-x64-${{ github.sha }}
+          restore-keys: ccache-linux-x64-
+
+      # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS hosts Roslyn on the distro mono rather
+      # than the one being built, which is worth roughly 4x on the C# half and
+      # takes it off the critical path behind the native link.  Only the
+      # compiler's host moves; the tests still run on the runtime built here.
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DMONO_LLVM_PREFIX=/usr/lib/llvm-18 \
+            -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
+            -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+
+      - name: ccache statistics
+        run: ccache --show-stats --verbose
+
+      - name: Runtime identifies itself
+        run: |
+          ./build/mono/mini/mono-sgen --version
+          ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
+
+      # The suites are separate steps so a red run names the family that broke.
+      # `!cancelled()` rather than `always()`: keep going after one suite fails,
+      # but stop when the run itself is cancelled.
+      - name: Test — fast suites
+        run: >
+          ctest --test-dir build -j "$(nproc)" --output-on-failure
+          --output-junit junit-fast.xml
+          -LE "runtime|gshared|sgen|interp|slow|stress|fixture|acceptance"
+
+      - name: Test — mono/tests runtime corpus
+        if: ${{ !cancelled() }}
+        run: >
+          ctest --test-dir build -j "$(nproc)" --output-on-failure
+          --output-junit junit-runtime.xml -L runtime
+
+      - name: Test — generic sharing
+        if: ${{ !cancelled() }}
+        run: >
+          ctest --test-dir build -j "$(nproc)" --output-on-failure
+          --output-junit junit-gshared.xml -L gshared
+
+      - name: Test — SGen collector matrix
+        if: ${{ !cancelled() }}
+        run: >
+          ctest --test-dir build -j "$(nproc)" --output-on-failure
+          --output-junit junit-sgen.xml -L sgen
+
+      - name: Test — interpreter
+        if: ${{ !cancelled() }}
+        run: >
+          ctest --test-dir build -j "$(nproc)" --output-on-failure
+          --output-junit junit-interp.xml -L interp
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-linux-x64
+          path: |
+            build/junit-*.xml
+            build/Testing/Temporary/LastTest*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # A build with the tier off, which is a different set of `#ifdef ENABLE_LLVM`
+  # arms than anything above compiles.  Class libraries are off: this is a
+  # compile check, and the classic JIT is already run by mini-regression, which
+  # passes --nollvm.
+  # ---------------------------------------------------------------------------
+  linux-x64-nollvm:
+    name: Linux x64 (classic JIT, build only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build python3 zlib1g-dev ccache
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-x64-nollvm-${{ github.sha }}
+          restore-keys: ccache-linux-x64-nollvm-
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DMONO_ENABLE_MCS_BUILD=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+
+      - name: ccache statistics
+        run: ccache --show-stats --verbose
