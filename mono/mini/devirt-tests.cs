@@ -195,11 +195,13 @@ class DevirtTests {
 		return sum == expected ? 0 : 1;
 	}
 
-	// --- interface dispatch stays indirect in this slice ---------------------
+	// --- interface dispatch ---------------------------------------------------
 	//
-	// The receiver is exactly provable, so this asserts the SITE gate rather
-	// than the walk: an interface site carries its imt argument in the nest
-	// parameter, which the rewrite cannot drop yet.
+	// An interface site carries its imt argument in the nest parameter, which a
+	// direct call has no use for, so the whole call is rebuilt without it rather
+	// than repointed. Getting the argument-attribute shift wrong there moves a
+	// byval or sret onto the wrong parameter, so the value has to be checked and
+	// not just the decision.
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int IfaceHot (int x) {
@@ -207,9 +209,9 @@ class DevirtTests {
 		return s.Volume () + (x & 1);
 	}
 
-	// DEVIRT-EXPECT: refused DevirtTests/IShout:Volume ()
+	// DEVIRT-EXPECT: devirt DevirtTests/Loud:Volume ()
 	[MethodImpl (MethodImplOptions.NoOptimization)]
-	public static int test_0_interface_site_refused_but_correct () {
+	public static int test_0_interface_site_devirts () {
 		long sum = 0;
 		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
@@ -217,6 +219,140 @@ class DevirtTests {
 		long expected = 0;
 		for (int i = 0; i < ITERS; i++)
 			expected += 11 + (i & 1);
+		return sum == expected ? 0 : 1;
+	}
+
+	// --- an interface method taking a struct by value -------------------------
+	//
+	// Specifically to catch the attribute shift above: the argument after the
+	// dropped nest parameter is one the ABI decorates.
+
+	struct Pair { public int A, B; }
+
+	interface ISum { int Add (Pair p, int k); }
+
+	class Adder : ISum {
+		public int Add (Pair p, int k) { return p.A + p.B + k; }
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int IfaceStructHot (int x) {
+		ISum s = new Adder ();
+		Pair p; p.A = x; p.B = x * 2;
+		return s.Add (p, 5);
+	}
+
+	// DEVIRT-EXPECT: devirt DevirtTests/Adder:Add (DevirtTests/Pair,int)
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_interface_struct_arg_devirts () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += IfaceStructHot (i);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += i + i * 2 + 5;
+		return sum == expected ? 0 : 1;
+	}
+
+	// --- an interface site inside a try --------------------------------------
+	//
+	// A call in a try region is emitted as an invoke, which is a terminator, so
+	// rebuilding it without the nest argument means constructing a second
+	// terminator in a block that still holds the first, and carrying both
+	// destinations across. Nothing else in the corpus reaches that path.
+
+	interface ICount { int Count (Pair p, int k); }
+
+	class Counter : ICount {
+		public int Count (Pair p, int k) {
+			if (k < 0)
+				throw new ArgumentException ();
+			return p.A - p.B + k;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int InvokeHot (int x) {
+		ICount c = new Counter ();
+		Pair p; p.A = x * 3; p.B = x;
+		try {
+			return c.Count (p, (x & 1) == 0 ? 1 : -1);
+		} catch (ArgumentException) {
+			return 100;
+		}
+	}
+
+	// DEVIRT-EXPECT: devirt DevirtTests/Counter:Count (DevirtTests/Pair,int)
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_interface_invoke_devirts () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += InvokeHot (i);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += (i & 1) == 0 ? i * 3 - i + 1 : 100;
+		return sum == expected ? 0 : 1;
+	}
+
+	// --- generic virtual methods ----------------------------------------------
+	//
+	// These dispatch through the imt argument rather than the plain vtable slot,
+	// so resolving one means going the way the runtime does: the generic method
+	// DEFINITION holds the slot, and the result is inflated with the call site's
+	// own method context afterwards. Getting that wrong lands on the definition
+	// instead of the instantiation.
+
+	class Wrapper {
+		public virtual string Describe<T> (T value) { return "base:" + value; }
+	}
+
+	class LoudWrapper : Wrapper {
+		public override string Describe<T> (T value) { return "loud:" + value; }
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int GenericVirtualHot (int x) {
+		Wrapper w = new LoudWrapper ();
+		return w.Describe<int> (x).Length;
+	}
+
+	// DEVIRT-EXPECT: devirt DevirtTests/LoudWrapper:Describe<int> (int)
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_generic_virtual_devirts () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += GenericVirtualHot (i % 100);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += ("loud:" + (i % 100)).Length;
+		return sum == expected ? 0 : 1;
+	}
+
+	// The reference-type twin. A generic method instantiated over a reference
+	// type is compiled shared, so a direct call to it would want an mrgctx in the
+	// very parameter the rewrite drops - there is nothing to put there, so the
+	// site must be left alone. Correctness is what is actually asserted; the
+	// refusal reason is checked because getting this one wrong is silent.
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int GenericVirtualRefHot (int x) {
+		Wrapper w = new LoudWrapper ();
+		return w.Describe<string> ("s" + x).Length;
+	}
+
+	// DEVIRT-EXPECT: refused DevirtTests/LoudWrapper:Describe<string> (string)
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_generic_virtual_reftype_refused () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += GenericVirtualRefHot (i % 100);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += ("loud:s" + (i % 100)).Length;
 		return sum == expected ? 0 : 1;
 	}
 

@@ -30,7 +30,9 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Analysis/ValueTracking.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
@@ -227,26 +229,38 @@ prove_class (Value *v, SmallPtrSetImpl<Value *> &visited, unsigned depth = 0)
 }
 
 /*
- * Whether CB can be rewritten at all, independently of what it resolves to.
+ * Which parameter carries the imt/rgctx argument, or -1 if none does.
  *
- * The nest check is the one with teeth. An interface site carries its imt
- * argument, and a shared-generic one its rgctx, in the `nest` parameter; the
- * resolved target wants neither, so its declaration has a different type and the
- * site would have to be rebuilt rather than repointed. That is a later slice -
- * for now such sites stay indirect.
+ * Read off the call rather than out of the tag: `nest` is where the argument
+ * actually travels (translator-call.cpp pins it there), so the attribute is the
+ * authority on whether a site has one.
+ */
+int
+nest_param_index (const CallBase &cb)
+{
+	for (unsigned i = 0; i < cb.arg_size (); ++i)
+		if (cb.paramHasAttr (i, Attribute::Nest))
+			return (int) i;
+
+	return -1;
+}
+
+/*
+ * Whether CB can be rewritten at all, independently of what it resolves to.
  */
 const char *
 site_refusal (const CallBase &cb, const VirtCallTag &tag)
 {
-	if (tag.kind != "vtable")
+	/*
+	 * A delegate's "slot" is MonoDelegate.invoke_impl, so the target follows
+	 * from the delegate's creation site rather than from the receiver's class -
+	 * a different oracle entirely, and a later slice.
+	 */
+	if (tag.kind == "delegate")
 		return "refuse-site-kind";
 
 	if (tag.this_pindex >= cb.arg_size ())
 		return "refuse-site-no-receiver";
-
-	for (unsigned i = 0; i < cb.arg_size (); ++i)
-		if (cb.paramHasAttr (i, Attribute::Nest))
-			return "refuse-site-nest-arg";
 
 	/*
 	 * A musttail call's callee has to keep matching the caller's own signature
@@ -257,6 +271,72 @@ site_refusal (const CallBase &cb, const VirtCallTag &tag)
 			return "refuse-site-musttail";
 
 	return nullptr;
+}
+
+/* CB's type with parameter DROP removed. */
+FunctionType *
+type_without_param (const CallBase &cb, unsigned drop)
+{
+	FunctionType *ft = cb.getFunctionType ();
+	SmallVector<Type *, 8> params;
+
+	for (unsigned i = 0; i < ft->getNumParams (); ++i)
+		if (i != drop)
+			params.push_back (ft->getParamType (i));
+
+	return FunctionType::get (ft->getReturnType (), params, ft->isVarArg ());
+}
+
+/*
+ * Replace CB with an otherwise identical call to CALLEE that does not pass
+ * argument DROP. Returns the new call; CB is erased.
+ *
+ * The parameter attributes have to be rebuilt rather than edited, because
+ * removing an argument shifts every attribute set after it down one - and one of
+ * those is a byval or sret, which silently means something else at the wrong
+ * index.
+ */
+CallBase *
+rebuild_without_arg (CallBase *cb, unsigned drop, Function *callee)
+{
+	LLVMContext &ctx = cb->getContext ();
+	const AttributeList attrs = cb->getAttributes ();
+
+	SmallVector<Value *, 8> args;
+	SmallVector<AttributeSet, 8> arg_attrs;
+
+	for (unsigned i = 0; i < cb->arg_size (); ++i) {
+		if (i == drop)
+			continue;
+		args.push_back (cb->getArgOperand (i));
+		arg_attrs.push_back (attrs.getParamAttrs (i));
+	}
+
+	SmallVector<OperandBundleDef, 2> bundles;
+	cb->getOperandBundlesAsDefs (bundles);
+
+	CallBase *nb;
+	if (auto *inv = dyn_cast<InvokeInst> (cb))
+		nb = InvokeInst::Create (callee->getFunctionType (), callee, inv->getNormalDest (),
+		                         inv->getUnwindDest (), args, bundles, "", cb);
+	else
+		nb = CallInst::Create (callee->getFunctionType (), callee, args, bundles, "", cb);
+
+	nb->setCallingConv (cb->getCallingConv ());
+	nb->setAttributes (AttributeList::get (ctx, attrs.getFnAttrs (), attrs.getRetAttrs (), arg_attrs));
+	nb->copyMetadata (*cb);
+	nb->setDebugLoc (cb->getDebugLoc ());
+
+	if (auto *ci = dyn_cast<CallInst> (cb))
+		cast<CallInst> (nb)->setTailCallKind (ci->getTailCallKind ());
+
+	if (!cb->getType ()->isVoidTy ()) {
+		nb->takeName (cb);
+		cb->replaceAllUsesWith (nb);
+	}
+	cb->eraseFromParent ();
+
+	return nb;
 }
 
 } // namespace
@@ -340,13 +420,33 @@ devirtualize (Module &module, const Tier1Root &root)
 			continue;
 		}
 
-		Function *decl = direct_callee_decl (target, cb->getFunctionType (), root);
+		/*
+		 * The site's `nest` parameter, if it has one, holds an imt argument
+		 * naming the interface or generic method it dispatched on. A direct call
+		 * has no use for that - but if the target would want an rgctx of its own
+		 * there, we have nothing to put in it, and an imt argument is not one.
+		 */
+		const int nest = nest_param_index (*cb);
+
+		if (target_needs_rgctx (target, root)) {
+			trace ("refuse-target-needs-rgctx", target, recv.klass);
+			continue;
+		}
+
+		FunctionType *sig = nest < 0 ? cb->getFunctionType ()
+		                             : type_without_param (*cb, (unsigned) nest);
+
+		Function *decl = direct_callee_decl (target, sig, root);
 		if (!decl) {
 			trace ("refuse-no-declaration", target, recv.klass);
 			continue;
 		}
 
-		cb->setCalledFunction (decl);
+		if (nest < 0)
+			cb->setCalledFunction (decl);
+		else
+			rebuild_without_arg (cb, (unsigned) nest, decl);
+
 		rewritten++;
 		trace ("devirt", target, recv.klass);
 	}

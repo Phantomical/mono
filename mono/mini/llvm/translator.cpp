@@ -1322,14 +1322,16 @@ resolve_exact_virtual_target (MonoMethod *declared, MonoClass *klass, const char
 	}
 
 	/*
-	 * A generic virtual method dispatches on the instantiation, which travels in
-	 * the imt argument rather than the vtable slot, so the slot alone does not
-	 * name the target. A signature that will not load is treated the same way -
-	 * there is nothing to decide from.
+	 * A signature that will not load leaves nothing to decide from.
+	 *
+	 * A generic virtual method is fine here even though it dispatches through the
+	 * imt argument rather than the plain vtable slot: mono_class_get_virtual_method ()
+	 * resolves it the same way the runtime does - the generic method DEFINITION
+	 * holds the slot, and the result is inflated with the call site's own method
+	 * context afterwards.
 	 */
-	MonoMethodSignature *sig = mono_method_signature_internal (declared);
-	if (!sig || sig->generic_param_count) {
-		*reason = "refuse-devirt-generic-virtual";
+	if (!mono_method_signature_internal (declared)) {
+		*reason = "refuse-devirt-no-signature";
 		return nullptr;
 	}
 
@@ -1399,6 +1401,15 @@ resolve_exact_virtual_target (MonoMethod *declared, MonoClass *klass, const char
 
 	*reason = nullptr;
 	return target;
+}
+
+bool
+target_needs_rgctx (MonoMethod *target, const Tier1Root &root)
+{
+	if (!target || !root.cfg)
+		return true;                 /* cannot tell -> refuse the site */
+
+	return mini_method_call_passes_rgctx (root.cfg, target) != FALSE;
 }
 
 llvm::Function *

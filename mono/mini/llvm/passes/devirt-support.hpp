@@ -33,6 +33,18 @@ MonoMethod *resolve_exact_virtual_target (MonoMethod *declared, MonoClass *klass
                                           const char **reason);
 
 /*
+ * Whether a direct call to TARGET from ROOT's compile would carry a
+ * vtable/mrgctx argument in `nest`.
+ *
+ * A devirtualized site has no way to produce one: what it holds in that
+ * parameter is an imt argument naming the interface method, which is not an
+ * rgctx and cannot be turned into one. So a target that answers true has to be
+ * left alone. Asked of the same function the front end's own call sites use, so
+ * the two cannot drift.
+ */
+bool target_needs_rgctx (MonoMethod *target, const Tier1Root &root);
+
+/*
  * A declaration of TARGET in ROOT's module, of type SIG, resolving through a
  * real symbol to TARGET's stable trampoline entry - the same edge
  * get_direct_callee () builds for a call the front end emitted directly, so a
