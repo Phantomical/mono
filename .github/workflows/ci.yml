@@ -1,13 +1,8 @@
 name: CI
 
-# The LLVM 18 tiered JIT lives on `llvm18-tiered-jit`; `unity-main` is the
-# upstream tracking branch and is built by Unity's own Yamato pipelines, so
-# nothing here fires on it.
 on:
   push:
-    branches: [llvm18-tiered-jit]
   pull_request:
-    branches: [llvm18-tiered-jit]
   workflow_dispatch:
 
 concurrency:
