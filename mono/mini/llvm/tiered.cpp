@@ -944,6 +944,13 @@ tiered_worker_start (void)
 		ERROR_DECL (error);
 		MonoInternalThread *thread = mono_thread_create_internal (mono_get_root_domain (), tiered_worker_main, NULL, MONO_THREAD_CREATE_FLAGS_THREADPOOL, error);
 		mono_error_assert_ok (error);
+		/*
+		 * Mark it from here rather than from the worker itself: the thread is
+		 * already visible to mono_thread_manage () by the time create returns,
+		 * so anything the worker does to itself is too late to be reliable.
+		 * See tiered_worker_aborted () for what happens when this is missed.
+		 */
+		thread->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
 		tiered_worker_threads.push_back (thread);
 	}
 }
@@ -1077,17 +1084,34 @@ tiered_worker_process_entry (TieredEntry *entry)
 	tiered_worker_leave_domain (original);
 }
 
+/*
+ * Whether shutdown has aborted this worker behind its back, in which case it
+ * has to leave its loop.
+ *
+ * The DONT_MANAGE flag tiered_worker_start () sets makes mono_thread_manage ()
+ * skip the pool entirely, but it cannot rule this out: the pool is created
+ * lazily, so a run that first promotes shortly before exiting can have the abort phase
+ * enumerate a worker in the window between mono_thread_create_internal ()
+ * publishing it and tiered_worker_start () marking it. Losing that race is not
+ * survivable on its own - mono_thread_manage () then waits on the worker's
+ * handle forever, and the only place the worker ever blocks is a coop condvar,
+ * which never delivers the abort - so the loop has to notice by asking.
+ */
+static gboolean
+tiered_worker_aborted (MonoInternalThread *internal)
+{
+	return mono_thread_test_state (internal, ThreadState_AbortRequested);
+}
+
 static gsize WINAPI
 tiered_worker_main (gpointer unused)
 {
 	MonoInternalThread *internal = mono_thread_internal_current ();
 
-	internal->state |= ThreadState_Background;
-	internal->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
 	mono_thread_set_name_constant_ignore_error (internal, "Tiered JIT compiler", MonoSetThreadNameFlag_None);
 
 	mono_coop_mutex_lock (&tiered_worker_mutex);
-	while (!tiered_worker_shutdown) {
+	while (!tiered_worker_shutdown && !tiered_worker_aborted (internal)) {
 		TieredEntry *entry;
 
 		/*
