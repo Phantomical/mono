@@ -380,9 +380,11 @@ private:
 			if (declarations.contains (candidate))
 				return;
 
-			auto body = materialize_candidate (candidate, depth, config);
+			bool transient = false;
+			auto body = materialize_candidate (candidate, depth, config, &transient);
 			if (!body) {
-				ineligible.insert (candidate);
+				if (!transient)
+					ineligible.insert (candidate);
 				return;
 			}
 
@@ -407,7 +409,7 @@ private:
 	}
 
 	llvm::Function *materialize_candidate (llvm::Function *candidate, unsigned depth,
-	                                       MonoCompile *config)
+	                                       MonoCompile *config, bool *transient)
 	{
 		if (ineligible.contains (candidate))
 			return nullptr;
@@ -442,8 +444,15 @@ private:
 		unsigned limit = method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING
 		                         ? MaxAggressiveInlineDepth
 		                         : MaxInlineDepth;
-		if (depth > limit)
+		if (depth > limit) {
+			/*
+			 * Depth is a property of where this callee sits in the call graph
+			 * right now, not of the callee. A later round folds its callers into
+			 * the root and moves it closer, so it must stay reconsiderable.
+			 */
+			*transient = true;
 			return nullptr;
+		}
 
 		auto body = materialize_callee (method, root);
 		if (!body) {
