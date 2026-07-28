@@ -16,12 +16,14 @@
 #include "wbarrier.hpp"
 
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
@@ -62,9 +64,39 @@ mark_address (IRBuilder<> &b, CallInst *call, IntegerType *word_ty)
 	return b.CreateZExtOrTrunc (arg, word_ty, "wb.addr");
 }
 
+/*
+ * A locked instruction is a full fence on x86 no matter what address it
+ * touches (confirmed with a store-buffering litmus test - see wbarrier.hpp),
+ * so it does not have to be the card word itself. Locking a thread-private
+ * scratch byte that nothing ever reads back gets the same cross-thread
+ * ordering as `mfence` without ever pulling the card word's cache line into
+ * this core in Exclusive state, so a marker or another mutator reading that
+ * word concurrently never contends with the fence.
+ *
+ * This has to be raw inline asm rather than an IR-level atomicrmw on the
+ * scratch alloca: nothing ever loads the scratch byte back, so an atomicrmw
+ * there is exactly the dead store DSE is designed to remove once it can see
+ * the slot never escapes. `sideeffect` inline asm is opaque to every IR-level
+ * optimization pass, the same way `fence` already was.
+ */
+void
+emit_lock_fence (IRBuilder<> &b, Value *scratch)
+{
+	LLVMContext &ctx = b.getContext ();
+	Type *scratch_ty = Type::getInt8Ty (ctx);
+	FunctionType *asm_ty = FunctionType::get (Type::getVoidTy (ctx), {scratch->getType ()}, false);
+	InlineAsm *lock_or = InlineAsm::get (asm_ty, "lock orb $$0, $0", "*m,~{memory}",
+	                                    /* hasSideEffects */ true);
+
+	CallInst *call = b.CreateCall (asm_ty, lock_or, {scratch});
+	/* Opaque pointers carry no pointee type of their own, but an indirect
+	 * ("*m") asm operand needs one to know how many bytes it is locking. */
+	call->addParamAttr (0, Attribute::get (ctx, Attribute::ElementType, scratch_ty));
+}
+
 /* Replace one tagged call with the inline card mark. */
 void
-lower_barrier (CallInst *call, const mono::CardBitmap &bitmap)
+lower_barrier (CallInst *call, const mono::CardBitmap &bitmap, Value *fence_scratch)
 {
 	LLVMContext &ctx = call->getContext ();
 	const DataLayout &dl = call->getModule ()->getDataLayout ();
@@ -95,9 +127,16 @@ lower_barrier (CallInst *call, const mono::CardBitmap &bitmap)
 	                                 PointerType::get (ctx, 0), "wb.table");
 	Value *word_ptr = b.CreateGEP (word_ty, table, word_index, "wb.wordptr");
 
-	/* Pins the guarded store in place now that it's no longer behind an
-	 * opaque call. See wbarrier.hpp. */
-	b.CreateFence (AtomicOrdering::Release, SyncScope::SingleThread);
+	/*
+	 * x86 permits StoreLoad reordering - the guarded store can retire after
+	 * this word's load - and that is exactly the reordering a concurrent
+	 * incremental mark has to not see: it can observe the card as unmarked
+	 * and the store as not-yet-visible in the same instant, decide the page
+	 * is clean, and finish marking before the store ever appears. Ruling that
+	 * out needs a real fence, seen by every thread, not just a compiler
+	 * barrier against this thread's own reordering. See emit_lock_fence ().
+	 */
+	emit_lock_fence (b, fence_scratch);
 
 	/* Monotonic: aliasing means two mutator threads can be RMW-ing and reading
 	 * this same word concurrently, not just interleaved with a stopped-world
@@ -158,12 +197,23 @@ mono::WriteBarrierLoweringPass::run (Function &f, FunctionAnalysisManager &)
 		return PreservedAnalyses::all ();
 
 	/*
+	 * One scratch byte, shared by every barrier this function lowers, for
+	 * emit_lock_fence () to lock against. Built in the entry block so the
+	 * backend treats it as a single static stack slot rather than a dynamic
+	 * allocation re-run every time a barrier reached in a loop executes.
+	 */
+	BasicBlock &entry = f.getEntryBlock ();
+	IRBuilder<> entry_b (&entry, entry.begin ());
+	Value *fence_scratch = entry_b.CreateAlloca (Type::getInt8Ty (f.getContext ()),
+	                                             nullptr, "wb.fence_scratch");
+
+	/*
 	 * Collected up front because lowering splits blocks out from under the
 	 * iteration. The calls themselves survive their neighbours being split -
 	 * they only move to the continuation block - so the list stays valid.
 	 */
 	for (CallInst *call : barriers)
-		lower_barrier (call, bitmap_);
+		lower_barrier (call, bitmap_, fence_scratch);
 
 	return PreservedAnalyses::none ();
 }

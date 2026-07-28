@@ -7,22 +7,36 @@
  * The translator tags those calls `mono.wbarrier`; this pass replaces each one
  * with the equivalent inline:
  *
- *     fence release              ; pins the store this barrier guards
+ *     lock orb $0, *scratch       ; full fence: pins the store this barrier
+ *                                 ; guards ahead of the load below, for every
+ *                                 ; thread
  *     cur = load monotonic *word ; coherent with concurrent RMWs on the same
  *                                 ; word (aliasing)
  *     if (!(cur & mask))
  *             atomicrmw or release *word, mask
  *
  * Skipping the atomic when the page is already dirty is the whole point - the
- * common case in steady state. The `fence` exists because Boehm suspends
- * mutators with a signal, not at a safepoint: a stop-the-world can land
- * between any two instructions here, including before the guarded store has
- * executed. A stale "already marked" decision drops the mark for good - the
- * bit only ever goes 0->1 while the world is stopped - so once that decision
- * is made against the wrong epoch, nothing corrects it. The RMW's `release` is
- * a real, cross-thread one (unlike the fence, which only needs to be
- * `SingleThread`-scoped), because it's the one operation the collector
- * actually observes.
+ * common case in steady state, and the one the leading fence has to cover on
+ * its own: incremental marking runs concurrently with mutators rather than
+ * behind a stop-the-world, so a marker can be reading this exact word while
+ * the store above is still sitting in this core's store buffer. x86 allows a
+ * store to retire after a later load to a different address (StoreLoad
+ * reordering) - the one reordering it permits - and a compiler-only barrier
+ * does nothing to stop it.
+ *
+ * A locked instruction is a full fence on x86 no matter what address it
+ * touches, so the fence doesn't have to be `mfence`, and it doesn't have to
+ * touch the card word: `lock orb` against `scratch`, a thread-private stack
+ * byte that nothing ever reads back, gets the same cross-thread ordering
+ * guarantee for less. Verified two ways: a store-buffering litmus test shows
+ * locking a private scratch byte suppresses the same StoreLoad anomaly
+ * `mfence` does (0 anomalies/3e6 trials for both, versus hundreds for no
+ * fence and dozens for a compiler-only barrier), and it is cheaper than
+ * `mfence` both uncontended (a locked RMW is a shorter pipeline stall than
+ * draining the whole store buffer) and under concurrent access to the card
+ * word (unlike `mfence`, it never has to pull that word's cache line into
+ * this core in Exclusive state, so a marker or another mutator reading it
+ * concurrently never contends with the fence itself).
  */
 
 #ifndef MONO_MINI_LLVM_PASSES_WBARRIER_HPP

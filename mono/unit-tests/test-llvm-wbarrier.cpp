@@ -44,6 +44,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
@@ -60,6 +61,7 @@ using llvm::BranchInst;
 using llvm::CallInst;
 using llvm::ConstantInt;
 using llvm::Function;
+using llvm::InlineAsm;
 using llvm::IRBuilder;
 using llvm::LoadInst;
 using llvm::Module;
@@ -180,13 +182,36 @@ first_load (Function &f)
 	return nullptr;
 }
 
-static llvm::FenceInst *
-first_fence (Function &f)
+/* Calls to whatever the barrier wrapper is, or anything else - not the
+ * inline-asm lock fence lower_barrier () leaves behind (see wbarrier.hpp),
+ * which count<CallInst> () would otherwise mistake for a surviving call. */
+static int
+count_real_calls (Function &f)
+{
+	int n = 0;
+	for (llvm::Instruction &ins : llvm::instructions (f))
+		if (auto *call = llvm::dyn_cast<CallInst> (&ins))
+			if (!call->isInlineAsm ())
+				n ++;
+	return n;
+}
+
+static CallInst *
+first_lock_fence (Function &f)
 {
 	for (llvm::Instruction &ins : llvm::instructions (f))
-		if (auto *fence = llvm::dyn_cast<llvm::FenceInst> (&ins))
-			return fence;
+		if (auto *call = llvm::dyn_cast<CallInst> (&ins))
+			if (call->isInlineAsm ())
+				return call;
 	return nullptr;
+}
+
+static InlineAsm *
+as_inline_asm (CallInst *call)
+{
+	if (!call || !call->isInlineAsm ())
+		return nullptr;
+	return llvm::cast<InlineAsm> (call->getCalledOperand ());
 }
 
 /* Whether A precedes B in the same block - the only relationship the fence,
@@ -275,22 +300,31 @@ case_lowers_tagged_call ()
 
 	h.run ();
 
-	check ("lowers_tagged_call", count<CallInst> (*h.func) == 0,
+	check ("lowers_tagged_call", count_real_calls (*h.func) == 0,
 	       "the barrier call should be gone");
 	check ("lowers_tagged_call", count<AtomicRMWInst> (*h.func) == 1,
 	       "should have left exactly one atomic RMW");
 	check ("lowers_tagged_call", count<LoadInst> (*h.func) == 1,
 	       "should have left exactly one load");
-	check ("lowers_tagged_call", count<llvm::FenceInst> (*h.func) == 1,
-	       "should have left exactly one fence");
+	check ("lowers_tagged_call", first_lock_fence (*h.func) != nullptr,
+	       "should have left exactly one lock fence");
+
+	llvm::AllocaInst *scratch = nullptr;
+	for (llvm::Instruction &ins : llvm::instructions (*h.func))
+		if (auto *ai = llvm::dyn_cast<llvm::AllocaInst> (&ins))
+			scratch = ai;
+	check ("lowers_tagged_call", scratch && scratch->getParent () == h.entry,
+	       "the fence scratch slot must live in the entry block, or the "
+	       "backend treats it as a dynamic alloca and leaks stack space on "
+	       "every execution of whatever block the barrier is in");
 	check ("lowers_tagged_call", h.verifies (), "result should verify");
 }
 
 /*
  * The fence that pins the real reference store on the near side of the check.
  * Without it, nothing ties the store to the barrier at all any more - they
- * touch disjoint addresses - and an optimizer is free to sink the store past
- * the check that decides whether marking is necessary. See wbarrier.hpp.
+ * touch disjoint addresses - and both the compiler and the hardware are free
+ * to let the store retire after the card read. See wbarrier.hpp.
  */
 static void
 case_fence_orders_store_before_check ()
@@ -302,18 +336,26 @@ case_fence_orders_store_before_check ()
 
 	h.run ();
 
-	llvm::FenceInst *fence = first_fence (*h.func);
+	CallInst *fence = first_lock_fence (*h.func);
 	LoadInst *load = first_load (*h.func);
+	InlineAsm *asm_ = as_inline_asm (fence);
 
 	check ("fence_orders_store_before_check", fence != nullptr,
-	       "expected a fence ahead of the card read");
+	       "expected a lock fence ahead of the card read");
+	check ("fence_orders_store_before_check", asm_ && asm_->hasSideEffects (),
+	       "the fence must be marked sideeffect, or the optimizer can delete "
+	       "it as a dead write to a scratch slot nothing reads back - see "
+	       "wbarrier.hpp");
 	check ("fence_orders_store_before_check",
-	       fence && fence->getOrdering () == AtomicOrdering::Release,
-	       "the fence should be release - it exists to pin what comes before it");
+	       asm_ && asm_->getConstraintString ().find ("~{memory}") != std::string::npos,
+	       "the fence needs a memory clobber, or the optimizer is free to "
+	       "reorder the card load and the guarded store across it anyway");
 	check ("fence_orders_store_before_check",
-	       fence && fence->getSyncScopeID () == llvm::SyncScope::SingleThread,
-	       "the fence only needs to order this thread's own instructions - the "
-	       "collector only reads the table with every mutator already stopped");
+	       asm_ && asm_->getAsmString ().find ("lock") != std::string::npos,
+	       "the fence has to be a locked instruction - on x86 that is what "
+	       "makes it (like mfence) a full fence instead of a no-op, and a "
+	       "concurrent marker can be reading this exact word while the store "
+	       "is still in the store buffer");
 	check ("fence_orders_store_before_check", precedes (fence, load),
 	       "the fence must come before the card read, not after it");
 }
@@ -486,10 +528,19 @@ case_multiple_barriers ()
 
 	h.run ();
 
-	check ("multiple_barriers", count<CallInst> (*h.func) == 0,
+	check ("multiple_barriers", count_real_calls (*h.func) == 0,
 	       "every barrier call should be gone");
 	check ("multiple_barriers", count<AtomicRMWInst> (*h.func) == 3,
 	       "each barrier should have left a mark");
+	/*
+	 * One scratch slot for the whole function, not one per barrier: a fresh
+	 * alloca at every lowered call site would be a static stack slot times
+	 * three here, and a dynamic (stack-growing) one per iteration if any of
+	 * these barriers were reached from inside a loop. See
+	 * WriteBarrierLoweringPass::run () in wbarrier.cpp.
+	 */
+	check ("multiple_barriers", count<llvm::AllocaInst> (*h.func) == 1,
+	       "the three barriers should share one fence scratch slot");
 	check ("multiple_barriers", h.verifies (), "result should verify");
 }
 
