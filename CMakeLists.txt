@@ -130,46 +130,52 @@ if(MONO_NPROC EQUAL 0)
   set(MONO_NPROC 1)
 endif()
 
-add_custom_target(check
-  COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "runtime|gshared|sgen|interp|slow|stress|fixture|acceptance"
-  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  USES_TERMINAL
-  VERBATIM)
-add_dependencies(check mini-corpora unit-test-assemblies)
-
-add_custom_target(check-all
-  COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "slow|stress|acceptance"
-  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  USES_TERMINAL
-  VERBATIM)
-add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
-
-# The CoreCLR suites and ms-test-suite, with the hours-long members
-# (coreclr-gcstress, profiler-stress, the microbenchmarks) left behind their
-# stress/slow labels.
-# Compiling the CoreCLR corpus happens through the CTest fixture, so this is a
-# single command from a clean tree -- and a long one.
-if(MONO_ENABLE_ACCEPTANCE_TESTS)
-  add_custom_target(check-acceptance
+# Every corpus below is written in C#, so each of the directories that build
+# them returns early without the class libraries.  These targets have to carry
+# the same condition: a runtime-only configure otherwise fails at generate time
+# on dependencies nothing ever created.
+if(BUILD_TESTING AND MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
+  add_custom_target(check
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -L acceptance -LE "slow|stress"
+            -LE "runtime|gshared|sgen|interp|slow|stress|fixture|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
-endif()
+  add_dependencies(check mini-corpora unit-test-assemblies)
 
-# The microbenchmarks. They carry `slow`, so `check` and `check-all` skip them;
-# this is the way to ask for them. Serial on purpose -- they are timing
-# programs, and running sixteen at once makes the numbers meaningless.
-if(MONO_ENABLE_BENCHMARKS AND BUILD_TESTING)
-  add_custom_target(check-benchmarks
-    COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L benchmark
+  add_custom_target(check-all
+    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+            -LE "slow|stress|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
-  add_dependencies(check-benchmarks benchmarks)
+  add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
+
+  # The CoreCLR suites and ms-test-suite, with the hours-long members
+  # (coreclr-gcstress, profiler-stress, the microbenchmarks) left behind their
+  # stress/slow labels.
+  # Compiling the CoreCLR corpus happens through the CTest fixture, so this is a
+  # single command from a clean tree -- and a long one.
+  if(MONO_ENABLE_ACCEPTANCE_TESTS)
+    add_custom_target(check-acceptance
+      COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+              -L acceptance -LE "slow|stress"
+      WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+      USES_TERMINAL
+      VERBATIM)
+  endif()
+
+  # The microbenchmarks. They carry `slow`, so `check` and `check-all` skip
+  # them; this is the way to ask for them. Serial on purpose -- they are timing
+  # programs, and running sixteen at once makes the numbers meaningless.
+  if(MONO_ENABLE_BENCHMARKS)
+    add_custom_target(check-benchmarks
+      COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L benchmark
+      WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+      USES_TERMINAL
+      VERBATIM)
+    add_dependencies(check-benchmarks benchmarks)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------

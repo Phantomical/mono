@@ -25,6 +25,9 @@ jobs:
   # ---------------------------------------------------------------------------
   linux-x64:
     name: Linux x64 (LLVM tier)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 
@@ -42,7 +45,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build python3 zlib1g-dev \
-            llvm-18-dev ccache mono-mcs
+            llvm-18-dev ccache mono-devel
           echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
 
       # Keyed on the commit so every run writes a fresh entry and the restore-key
@@ -70,6 +73,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
+        id: build
         run: cmake --build build -j "$(nproc)"
 
       - name: ccache statistics
@@ -81,8 +85,8 @@ jobs:
           ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
 
       # The suites are separate steps so a red run names the family that broke.
-      # `!cancelled()` rather than `always()`: keep going after one suite fails,
-      # but stop when the run itself is cancelled.
+      # Each keeps going after an earlier suite failed, but not past a cancel
+      # and not when there is no runtime to test.
       - name: Test — fast suites
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
@@ -90,25 +94,25 @@ jobs:
           -LE "runtime|gshared|sgen|interp|slow|stress|fixture|acceptance"
 
       - name: Test — mono/tests runtime corpus
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
           --output-junit junit-runtime.xml -L runtime
 
       - name: Test — generic sharing
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
           --output-junit junit-gshared.xml -L gshared
 
       - name: Test — SGen collector matrix
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
           --output-junit junit-sgen.xml -L sgen
 
       - name: Test — interpreter
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
           --output-junit junit-interp.xml -L interp
@@ -132,6 +136,9 @@ jobs:
   # ---------------------------------------------------------------------------
   linux-x64-nollvm:
     name: Linux x64 (classic JIT, build only)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
