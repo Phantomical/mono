@@ -34,6 +34,7 @@ include(MonoConfigureFixed)
 include(MonoLLVM)
 include(MonoHelpers)
 include(MonoToolsRuntime)
+include(MonoManaged)
 include(MonoCorpus)
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.h.in"
@@ -99,6 +100,9 @@ add_subdirectory(scripts)
 add_subdirectory(man)
 add_subdirectory(po)
 add_subdirectory(runtime)
+if(MONO_ENABLE_MCS_BUILD)
+  add_subdirectory(mcs)
+endif()
 # After runtime/: these need the mono-wrapper and the class libraries it drives.
 add_subdirectory(samples)
 add_subdirectory(docs)

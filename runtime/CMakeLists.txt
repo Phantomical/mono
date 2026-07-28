@@ -88,93 +88,13 @@ _mono_tmpinst_shim(ilasm "${MONO_MCS_TOPDIR}/ilasm/ilasm.exe")
 _mono_tmpinst_shim(al    "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}/al.exe")
 
 # ---------------------------------------------------------------------------
-# mcs/build/config.make -- how the class-library make system learns about this
-# build.  It is written into the source tree because that is where mcs looks
-# for it; a second build directory over the same checkout will overwrite it.
+# The class libraries
 # ---------------------------------------------------------------------------
+# mcs/ used to be driven by its own recursive make system from here.  It is
+# CMake now and lives in mcs/CMakeLists.txt; all that is left is the sanity
+# check, because the shims above are what that build shells out to.
 if(MONO_ENABLE_MCS_BUILD AND NOT MONO_ENABLE_EXECUTABLES)
   message(FATAL_ERROR
     "MONO_ENABLE_MCS_BUILD needs MONO_ENABLE_EXECUTABLES: the class libraries "
     "are compiled by Roslyn running on the runtime this build produces")
-endif()
-
-if(MONO_ENABLE_MCS_BUILD)
-  # The generator may be ninja; the class-library build needs GNU make.
-  find_program(MONO_GNU_MAKE NAMES gmake make REQUIRED)
-
-  set(_profiles "${MONO_MCS_PROFILES}")
-  if(_profiles MATCHES "net_4_x")
-    set(_profiles "binary_reference_assemblies ${_profiles} xbuild_12 xbuild_14")
-  endif()
-  if(MONO_WITH_UNITYJIT)
-    string(APPEND _profiles " unityjit")
-  endif()
-  if(MONO_WITH_UNITYAOT)
-    string(APPEND _profiles " unityaot")
-  endif()
-  string(STRIP "${_profiles}" MONO_BUILD_PROFILES)
-
-  if(MONO_ENABLE_BTLS)
-    set(_have_btls "HAVE_BTLS=1")
-  else()
-    set(_have_btls "")
-  endif()
-  if(MONO_ENABLE_MONO_NATIVE)
-    set(_mono_native_supported "true")
-  else()
-    set(_mono_native_supported "false")
-  endif()
-
-  # What the C# compiler runs on.  Only csc moves when
-  # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS is set; the tools that surround it stay on
-  # $(RUNTIME), because they load out of class/lib/build and only the runtime
-  # being built can read that mscorlib.
-  if(MONO_TOOLS_RUNTIME_IS_SYSTEM)
-    set(_csc_host "${MONO_CSC_HOST}")
-  else()
-    set(_csc_host "${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper")
-  endif()
-
-  configure_file("${CMAKE_SOURCE_DIR}/cmake/mcs-config.make.in"
-                 "${MONO_MCS_TOPDIR}/build/config.make" @ONLY)
-
-  # `all-profiles` needs a working runtime, the build-tree config, and the
-  # shims above already on disk.
-  #
-  # _tmpinst goes on the END of PATH, and the order is the whole point.  The
-  # bootstrap profile resolves $(EXTERNAL_RUNTIME), spelled plainly as `mono`,
-  # through PATH -- it wants a mono that already works, because it is what
-  # compiles the first class libraries.  _tmpinst/bin/mono is this build's
-  # runtime, which at that moment has no mscorlib it can reach; put it first and
-  # the profile check fails ("The assembly mscorlib.dll was not found ... in
-  # `<prefix>/lib/mono/4.5'"), falls back to monolite, and the build dies there.
-  add_custom_target(mcs ALL
-    COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$ENV{PATH}:${_tmpinst}"
-            "${MONO_GNU_MAKE}" --no-print-directory -s
-            "-j${MONO_MCS_JOBS}"
-            -C "${MONO_MCS_TOPDIR}"
-            NO_DIR_CHECK=1
-            "PROFILES=${MONO_BUILD_PROFILES}"
-            "CC=${CMAKE_C_COMPILER}"
-            all-profiles
-    DEPENDS mono-build-config
-    COMMENT "Building the class libraries (mcs)"
-    USES_TERMINAL
-    VERBATIM)
-  # The class-library build needs the runtime, and its AOT step invokes
-  # $(mono_build_root)/mono/mini/mono by name, so the symlink has to exist too.
-  add_dependencies(mcs mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
-
-  install(CODE "
-    execute_process(
-      COMMAND \"${MONO_GNU_MAKE}\" -C \"${MONO_MCS_TOPDIR}\"
-              NO_DIR_CHECK=1 \"PROFILES=${MONO_BUILD_PROFILES}\"
-              RUNTIME_HAS_CONSISTENT_GACDIR=yes
-              \"prefix=\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}\"
-              install-profiles
-      RESULT_VARIABLE _rc)
-    if(NOT _rc EQUAL 0)
-      message(FATAL_ERROR \"mcs install-profiles failed\")
-    endif()")
 endif()
