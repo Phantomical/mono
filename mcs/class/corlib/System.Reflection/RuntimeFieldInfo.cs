@@ -154,6 +154,8 @@ namespace System.Reflection {
                 throw new ArgumentException(Environment.GetResourceString("Arg_TypedReference_Null"));
             Contract.EndContractBlock();
 
+            CheckStaticReadonly ();
+
             unsafe
             {
                 // Passing TypedReference by reference is easier to make correct in native code
@@ -258,6 +260,18 @@ namespace System.Reflection {
 		[MethodImplAttribute(MethodImplOptions.InternalCall)]
 		private static extern void SetValueInternal (FieldInfo fi, object obj, object value);
 
+		/// <summary>
+		/// A static initonly field is not writable via reflection so that the
+		/// runtime can make optimizations that assume the value does not change.
+		/// </summary>
+		void CheckStaticReadonly ()
+		{
+			if (IsInitOnly && IsStatic)
+				throw new FieldAccessException (string.Format (
+					"Cannot set static readonly field '{0}' declared on type '{1}'",
+					Name, DeclaringType));
+		}
+
 		public override void SetValue (object obj, object val, BindingFlags invokeAttr, Binder binder, CultureInfo culture)
 		{
 			if (!IsStatic) {
@@ -271,6 +285,7 @@ namespace System.Reflection {
 			}
 			if (IsLiteral)
 				throw new FieldAccessException ("Cannot set a constant field");
+			CheckStaticReadonly ();
 			if (binder == null)
 				binder = Type.DefaultBinder;
 			CheckGeneric ();

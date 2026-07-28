@@ -452,6 +452,41 @@ namespace MonoTests.System.Reflection
 			f.SetValue (null, 0);
 		}
 
+		static readonly int static_readonly_field = 42;
+
+		readonly int instance_readonly_field = 42;
+
+		[Test]
+		[ExpectedException (typeof (FieldAccessException))]
+		public void SetValueOnStaticReadonlyField ()
+		{
+			FieldInfo f = typeof (FieldInfoTest).GetField ("static_readonly_field", BindingFlags.Static | BindingFlags.NonPublic);
+			f.SetValue (null, 0);
+		}
+
+		// The static case above throws; this one must not. Deserializers populate
+		// immutable objects by writing their readonly instance fields, so closing
+		// that would break every one of them.
+		[Test]
+		public void SetValueOnInstanceReadonlyField ()
+		{
+			FieldInfoTest t = new FieldInfoTest ();
+			FieldInfo f = typeof (FieldInfoTest).GetField ("instance_readonly_field", BindingFlags.Instance | BindingFlags.NonPublic);
+
+			f.SetValue (t, 101);
+			Assert.AreEqual (101, f.GetValue (t));
+		}
+
+		// The static readonly refusal is a check on the write, not on the field, so
+		// reading one keeps working.
+		[Test]
+		public void GetValueOnStaticReadonlyField ()
+		{
+			FieldInfo f = typeof (FieldInfoTest).GetField ("static_readonly_field", BindingFlags.Static | BindingFlags.NonPublic);
+
+			Assert.AreEqual (42, f.GetValue (null));
+		}
+
 		public int? nullable_field;
 
 		public static int? static_nullable_field;
@@ -1415,6 +1450,34 @@ namespace MonoTests.System.Reflection
 			reference = __makeref(fields);
 			info.SetValueDirect (reference, "B");
 			Assert.AreEqual ("B", fields.str);
+		}
+
+		// SetValueDirect reaches a static field just as SetValue does - the target
+		// typed reference is ignored for one - so it is refused the same way.
+		[Test]
+		[ExpectedException (typeof (FieldAccessException))]
+		public void SetValueDirectOnStaticReadonlyField ()
+		{
+			TestFields fields = new TestFields ();
+			FieldInfo f = typeof (FieldInfoTest).GetField ("static_readonly_field", BindingFlags.Static | BindingFlags.NonPublic);
+
+			f.SetValueDirect (__makeref(fields), 0);
+		}
+
+		struct ReadonlyFields {
+			public readonly int Value;
+
+			public ReadonlyFields (int value) { Value = value; }
+		}
+
+		[Test]
+		public void SetValueDirectOnInstanceReadonlyField ()
+		{
+			ReadonlyFields fields = new ReadonlyFields (42);
+			FieldInfo f = typeof (ReadonlyFields).GetField ("Value");
+
+			f.SetValueDirect (__makeref(fields), 101);
+			Assert.AreEqual (101, fields.Value);
 		}
 
 #if !DISABLE_REMOTING
