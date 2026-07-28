@@ -260,7 +260,16 @@ function(_mono_tool_depends out profile)
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
     set(${out} "" PARENT_SCOPE)
   else()
-    set(${out} mono-${MONO_DEFAULT_GC_SUFFIX} PARENT_SCOPE)
+    # mono-build-config is not optional: the wrapper points MONO_CFG_DIR at
+    # the build tree's etc/, and without the dllmap in it every tool that
+    # touches the filesystem dies with "DllNotFoundException: System.Native".
+    set(_d mono-${MONO_DEFAULT_GC_SUFFIX} mono-build-config)
+    # The BCL's filesystem and networking layers P/Invoke into this, and the
+    # dllmap names it by path in the build tree.
+    if(MONO_ENABLE_MONO_NATIVE)
+      list(APPEND _d mono-native)
+    endif()
+    set(${out} ${_d} PARENT_SCOPE)
   endif()
 endfunction()
 
@@ -544,9 +553,19 @@ macro(_mono_materialize_profile _profile)
   list(APPEND _refdeps ${_tool_deps})
   list(APPEND _csc_env ${A_ENV})
 
+  # Libraries are re-signed by default; programs only when they name a key.
+  # executable.make guards the sn call on PROGRAM_SNK, and nearly nothing sets
+  # it -- signing every .exe fails outright on assemblies delay-signed with a
+  # public key that is not mono.snk's.
   set(_sn "")
   set(_snk "")
-  if(NOT A_NO_SIGN AND NOT MONO_PROFILE_${_profile}_NO_SIGN)
+  set(_do_sign TRUE)
+  if(A_NO_SIGN OR MONO_PROFILE_${_profile}_NO_SIGN)
+    set(_do_sign FALSE)
+  elseif(A_PROGRAM AND NOT A_SNK)
+    set(_do_sign FALSE)
+  endif()
+  if(_do_sign)
     _mono_tool_command(_sn ${_profile} sn.exe)
     list(APPEND _sn -q)
     set(_snk "${MONO_MCS_TOPDIR}/class/mono.snk")

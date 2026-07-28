@@ -61,6 +61,11 @@ CONFIG_VALUES = {
     "FRAMEWORK_VERSION_MAJOR": "4",
 }
 
+# The build-system fragments; their content is the CMake module, not data.
+BUILD_FRAGMENTS = {"rules.make", "library.make", "executable.make", "tests.make",
+                   "corcompare.make", "config.make", "config-default.make",
+                   "xbuild_test.make"}
+
 # Profiles that build no Facades (mcs/class/Makefile NO_FACADES_PROFILE).
 NO_FACADES = {"xbuild_12", "xbuild_14", "binary_reference_assemblies"}
 
@@ -99,6 +104,9 @@ def truthy(name, values):
     return bool(get(values, name).strip())
 
 
+TOPDIR = ""
+
+
 def parse(path, profile):
     """Evaluate a Makefile for one profile, returning its variables."""
     values = dict(CONFIG_VALUES)
@@ -106,6 +114,8 @@ def parse(path, profile):
     values["PROFILE_DIRECTORY"] = profile
     values["XBUILD_VERSION"] = {"xbuild_12": "12.0", "xbuild_14": "14.0"}.get(
         profile, "4.0")
+    values["PARENT_PROFILE"] = (
+        "../net_4_x/" if profile in ("xbuild_12", "xbuild_14") else "")
     # Stack of (taken_now, taken_already) so `else` works.
     stack = []
     with open(path, encoding="utf-8", errors="replace") as fh:
@@ -164,7 +174,23 @@ def parse(path, profile):
                 continue
             raise Skip("recipe")
 
-        if DIRECTIVE.match(line):
+        m = DIRECTIVE.match(line)
+        if m:
+            # Follow includes of project fragments -- xbuild.make and friends
+            # define variables the including Makefile then uses, so dropping
+            # them silently loses references.
+            if m.group(1).endswith("include"):
+                rest = line.split(None, 1)
+                # $(topdir) is only given a value here.  Seeding it globally
+                # would bake absolute paths into the generated compiler flags.
+                local = dict(values, topdir=TOPDIR)
+                target = expand(rest[1].strip(), local) if len(rest) > 1 else ""
+                if target and os.path.basename(target) not in BUILD_FRAGMENTS:
+                    inc = target if os.path.isabs(target) else os.path.join(
+                        os.path.dirname(os.path.abspath(path)), target)
+                    if os.path.exists(inc):
+                        with open(inc, encoding="utf-8", errors="replace") as fh:
+                            lines[i:i] = fh.read().splitlines()
             continue
 
         if RULE.match(line):
@@ -313,6 +339,10 @@ def settings(values):
         "target_net_reference": get(values, "TARGET_NET_REFERENCE").strip(),
         "flags": flags,
         "keyfile": get(values, "KEYFILE").strip(),
+        # LIBRARY_SNK/PROGRAM_SNK pick the key sn re-signs with; it defaults to
+        # class/mono.snk, and the assemblies delay-signed with another public
+        # key override it to that key.
+        "snk": (get(values, "LIBRARY_SNK") or get(values, "PROGRAM_SNK")).strip(),
         "package": get(values, "LIBRARY_PACKAGE").strip(),
         "install_dir": (get(values, "LIBRARY_INSTALL_DIR")
                         or get(values, "PROGRAM_INSTALL_DIR")).strip(),
@@ -349,7 +379,7 @@ def emit(profiles_settings, makefile_rel):
         out.append(f"  NAME       {s['name']}")
         out.append(f"  PROFILES   {' '.join(sorted(profiles))}")
         for key, arg in (("output_name", "OUTPUT_NAME"), ("subdir", "SUBDIR"),
-                         ("keyfile", "KEYFILE"), ("package", "PACKAGE"),
+                         ("keyfile", "KEYFILE"), ("snk", "SNK"), ("package", "PACKAGE"),
                          ("install_dir", "INSTALL_DIR"),
                          ("target_net_reference", "TARGET_NET_REFERENCE")):
             if s[key]:
@@ -409,7 +439,9 @@ endforeach()
 
 
 def main():
+    global TOPDIR
     topdir = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
+    TOPDIR = topdir
     dirs_for = {p: profile_dirs(topdir, p) for p in PROFILES}
 
     written, skipped = [], []
