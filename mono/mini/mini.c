@@ -3224,6 +3224,18 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		try_generic_shared = FALSE;
 	*/
 
+	/*
+	 * The caller has already established that METHOD is a shared body, so there is
+	 * nothing to decide: compile what we were given, with a generic sharing
+	 * context. mono_method_is_generic_sharable_full () above answers FALSE for such
+	 * a method - a shared method is not sharable again - which is why this cannot
+	 * be inferred from METHOD alone.
+	 */
+	if (flags & JIT_FLAG_METHOD_IS_GSHARED) {
+		try_generic_shared = TRUE;
+		method_is_gshared = TRUE;
+	}
+
 	if (opts & MONO_OPT_GSHARED) {
 		if (try_generic_shared)
 			mono_atomic_inc_i32 (&mono_stats.generics_sharable_methods);
@@ -3608,7 +3620,13 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 	if (i < 0) {
 		if (try_generic_shared && cfg->exception_type == MONO_EXCEPTION_GENERIC_SHARING_FAILED) {
-			if (compile_aot) {
+			/*
+			 * Retrying unshared is only meaningful when sharing was our idea.
+			 * METHOD_IS_GSHARED means the caller handed us a body that is already
+			 * over type parameters, so there is no unshared version of it to fall
+			 * back to - report the failure instead.
+			 */
+			if (compile_aot || method_is_gshared) {
 				if (MONO_METHOD_COMPILE_END_ENABLED ())
 					MONO_PROBE_METHOD_COMPILE_END (method, FALSE);
 				return cfg;

@@ -70,13 +70,18 @@
  * The EH rule is a hard safety gate; getting it wrong is a silent miscompile,
  * so it is asserted by the differential fixtures in inliner-tests.cs, not
  * eyeballed. materialize_callee () additionally refuses wrappers, synchronized
- * methods, open/shared-generic callees and anything that still comes back
- * gshared/gsharedvt mono-side.
+ * methods, open/shared-generic callees and anything that comes back gsharedvt
+ * mono-side.
  *
- * A generic callee is materialized as its exact instantiation rather than as the
- * shared body (materialize_callee ()), so a call site that passes a
- * vtable/mrgctx in `nest` is eligible like any other: the folded body is
- * specialized, has no generic context to recover, and ignores the argument.
+ * Generics come in two shapes. A callee whose instantiation is closed is
+ * materialized as that exact instantiation rather than as the shared body
+ * (materialize_callee ()), so a call site that passes a vtable/mrgctx in `nest`
+ * is eligible like any other: the folded body is specialized, has no generic
+ * context to recover, and ignores the argument. A callee shared over exactly the
+ * type parameters the ROOT is shared over is materialized shared instead - its
+ * runtime generic context is the root's, which the call site already passes, and
+ * which a stack walk over the root's frame recovers for the folded-in clauses
+ * too.
  *
  * There is deliberately no size or leaf-only restriction here: bounding what is
  * worth folding in is the stock inliner's cost model's job, and starving it of
@@ -463,7 +468,7 @@ private:
 			return nullptr;
 		}
 
-		if (callee_reads_cctor_guarded_static (method, root.cfg->domain)) {
+		if (callee_reads_cctor_guarded_static (method, root)) {
 			trace_method ("method reads a static field of an uninitialized class", method);
 			return nullptr;
 		}

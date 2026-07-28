@@ -1263,6 +1263,19 @@ typedef enum {
 	 * the caller's module itself. Implies the LLVM path.
 	 */
 	JIT_FLAG_LLVM_IR_ONLY = (1 << 14),
+	/*
+	 * The method being compiled is ALREADY the shared form - its instantiation is
+	 * over type parameters rather than over real types - so compile it as it
+	 * stands with cfg->gshared on, instead of asking whether it can be shared and
+	 * redirecting through mini_get_shared_method_full (). An already-shared method
+	 * answers "no" to that question, which would otherwise get its
+	 * type-parameter-bearing body compiled as if it were concrete.
+	 *
+	 * Only the tier-1 inliner passes this, and only for a callee it resolved out
+	 * of a gshared root's own IR, where the caller supplies the runtime generic
+	 * context the shared body expects.
+	 */
+	JIT_FLAG_METHOD_IS_GSHARED = (1 << 15),
 } JitFlags;
 
 /* Bit-fields in the MonoBasicBlock.region */

@@ -1348,6 +1348,51 @@ callee_needs_generic_context (MonoMethod *method)
 }
 
 /*
+ * True if CALLEE is a shared body over exactly the type parameters ROOT_CFG is
+ * itself shared over - the same class instantiation and the same method
+ * instantiation, on the same declaring class.
+ *
+ * Such a callee can be materialized as the shared body it is, rather than
+ * refused by callee_needs_generic_context (). Its runtime generic context is the
+ * root's own: the vtable behind `this`, or the vtable/mrgctx the root's front-end
+ * already computed out of its rgctx for the call site (check_method_sharing (),
+ * method-to-ir.c). Nothing in the folded body has to be re-derived, so folding it
+ * in is the same substitution as for a context-free callee.
+ *
+ * Sharing the declaring class is also what covers the cctor: shared code cannot
+ * bake a vtable, so emit_class_init_guards () plants no trigger in a shared body
+ * (translator-call.cpp), and folding one in would otherwise drop the trigger its
+ * own trampoline entry carried. On the same class instantiation there is nothing
+ * to drop - the root was entered through that class's own trampoline. This is
+ * the same line the front-end draws when it decides whether a gshared call site
+ * needs an explicit class init (`cmethod->klass != method->klass`, the shared-
+ * callee cctor check in mono_method_to_ir ()).
+ *
+ * MonoGenericInst is interned, so comparing the insts by pointer compares them by
+ * value; and because a shared inst is built out of its own container's type
+ * parameters, equality here also pins the instantiation to that container.
+ */
+static bool
+callee_shares_root_context (MonoMethod *callee, MonoCompile *root_cfg)
+{
+	if (!root_cfg->gshared || root_cfg->gsharedvt)
+		return false;
+	/* gsharedvt bodies are declined wholesale by the backend. */
+	if (mini_is_gsharedvt_sharable_method (callee))
+		return false;
+	if (callee->klass != root_cfg->method->klass)
+		return false;
+
+	MonoGenericContext *root_ctx = mono_method_get_context (root_cfg->method);
+	MonoGenericContext *callee_ctx = mono_method_get_context (callee);
+	if (!root_ctx || !callee_ctx)
+		return false;
+
+	return root_ctx->class_inst == callee_ctx->class_inst &&
+	       root_ctx->method_inst == callee_ctx->method_inst;
+}
+
+/*
  * True if KLASS's cctor has demonstrably already run in DOMAIN, so a static
  * access to it needs no barrier.
  *
@@ -1388,16 +1433,22 @@ cctor_already_ran (MonoDomain *domain, MonoClass *klass)
  * cctor disqualifies the callee even where the barrier would have survived.
  */
 bool
-callee_reads_cctor_guarded_static (MonoMethod *method, MonoDomain *domain)
+callee_reads_cctor_guarded_static (MonoMethod *method, const Tier1Root &root)
 {
 	if (!method)
 		return true;
 
+	MonoDomain *domain = root.cfg->domain;
+
 	/*
-	 * Open/shared callees never make it as far as the cctor gate - leave that
-	 * refusal to materialize_callee ().
+	 * Open/shared callees the inliner will not take never make it as far as the
+	 * cctor gate - leave that refusal to materialize_callee (). One shared over
+	 * the root's own type parameters does get taken, so it is scanned like any
+	 * other; its field tokens resolve against the shared context, and a class
+	 * still open at that point has no vtable to clear, so such an access simply
+	 * reads as guarded.
 	 */
-	if (callee_needs_generic_context (method))
+	if (callee_needs_generic_context (method) && !callee_shares_root_context (method, root.cfg))
 		return false;
 
 	ERROR_DECL (error);
@@ -1542,36 +1593,51 @@ materialize_callee (MonoMethod *method, const Tier1Root &root)
 	if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
 		return nullptr;
 	/*
-	 * Refuse an open/shared-generic callee BEFORE its front-end runs. A gshared
-	 * root legitimately reaches shared callees, and running one through
-	 * mini_method_compile () aborts partway rather than failing cleanly, so the
+	 * A callee that still needs a generic context has to be decided BEFORE its
+	 * front-end runs: mini_method_compile () on a type-parameter-bearing body it
+	 * was not told to share aborts partway rather than failing cleanly, so the
 	 * cfg->gshared check below cannot cover it - by then the compile is over.
-	 * This is the gate.
+	 *
+	 * The exception is a callee shared over exactly the root's own type
+	 * parameters. Its context is the root's, which the call site already passes,
+	 * so it is compiled as the shared body it is (JIT_FLAG_METHOD_IS_GSHARED)
+	 * rather than refused.
 	 */
-	if (callee_needs_generic_context (method))
-		return nullptr;
+	bool shared = false;
+	if (callee_needs_generic_context (method)) {
+		if (!callee_shares_root_context (method, root.cfg))
+			return nullptr;
+		shared = true;
+	}
 
 	/*
-	 * Compile the exact instantiation rather than the shared body mono hands
-	 * every reference-type instantiation of a sharable method. Clearing
-	 * MONO_OPT_GSHARED is the whole switch: mini_method_compile () only redirects
-	 * through mini_get_shared_method_full () when that bit is set.
+	 * For everything else, compile the exact instantiation rather than the shared
+	 * body mono hands every reference-type instantiation of a sharable method.
+	 * Clearing MONO_OPT_GSHARED is the whole switch: mini_method_compile () only
+	 * redirects through mini_get_shared_method_full () when that bit is set.
 	 *
 	 * The specialized body is also the better one to fold in: constant type
 	 * handles, no rgctx loads. It costs only the compile, since a materialized
 	 * body is either inlined into the root or stripped - it is never published as
 	 * the method's own code, so the shared body the runtime calls is untouched.
 	 *
-	 * Only closed instantiations get this far (callee_needs_generic_context ()
-	 * refused the rest), which is exactly the case a specialized compile serves.
-	 *
 	 * JIT_FLAG_LLVM_IR_ONLY stops mini_method_compile before it emits. No cctors
 	 * on this thread.
 	 */
+	guint32 opt = shared ? root.cfg->opt : (root.cfg->opt & ~MONO_OPT_GSHARED);
+	int jit_flags = JIT_FLAG_LLVM | JIT_FLAG_LLVM_IR_ONLY | JIT_FLAG_NO_LLVM_FALLBACK;
+	if (shared)
+		jit_flags |= JIT_FLAG_METHOD_IS_GSHARED;
+
+	/*
+	 * Whether the call site carries a vtable/mrgctx in `nest`. Asked of the ROOT's
+	 * cfg because that is the caller whose call site is being matched, and asked
+	 * before the compile because the body has to be built to the same shape.
+	 */
+	bool passes_rgctx = mini_method_call_passes_rgctx (root.cfg, method);
+
 	MonoCompile *cfg = mini_method_compile (
-		method, root.cfg->opt & ~MONO_OPT_GSHARED, root.cfg->domain,
-		(JitFlags) (JIT_FLAG_LLVM | JIT_FLAG_LLVM_IR_ONLY | JIT_FLAG_NO_LLVM_FALLBACK),
-		0, -1);
+		method, opt, root.cfg->domain, (JitFlags) jit_flags, 0, -1);
 	if (!cfg)
 		return nullptr;
 
@@ -1580,7 +1646,19 @@ materialize_callee (MonoMethod *method, const Tier1Root &root)
 	/* The front-end may have declined LLVM or produced a shared/gshared body. */
 	if (cfg->disable_llvm || cfg->exception_type != MONO_EXCEPTION_NONE)
 		goto done;
-	if (cfg->gshared || cfg->gsharedvt)
+	if (cfg->gsharedvt)
+		goto done;
+	/* Shared where we did not ask for it, or unshared where we did. */
+	if (!!cfg->gshared != shared)
+		goto done;
+	/*
+	 * A body that wants an rgctx of its own from a call site that has none to give
+	 * cannot be wired up: the two signatures would differ by that parameter. The
+	 * two answers are made by the same rules from the same metadata
+	 * (check_method_sharing () vs mono_get_vtable_var ()), so this is a backstop
+	 * rather than an expected outcome.
+	 */
+	if (cfg->rgctx_var && !passes_rgctx)
 		goto done;
 
 	{
@@ -1609,12 +1687,11 @@ materialize_callee (MonoMethod *method, const Tier1Root &root)
 		/*
 		 * The call site was emitted against a declaration that may carry a
 		 * vtable/mrgctx parameter, decided from METHOD's metadata back when the
-		 * root's front-end ran. The specialized body has no use for it, but it
-		 * has to accept it or the two types would not match and the site could
-		 * not be rewired at all. Asked of the ROOT's cfg because that is the
-		 * caller whose call site is being matched.
+		 * root's front-end ran. A specialized body has no use for it, but it has
+		 * to accept it or the two types would not match and the site could not be
+		 * rewired at all; a shared body reads its context out of it.
 		 */
-		ctx->keep_rgctx_arg = mini_method_call_passes_rgctx (root.cfg, method);
+		ctx->keep_rgctx_arg = passes_rgctx;
 
 		/*
 		 * Give this body's clauses a block of ids of their own in the root's

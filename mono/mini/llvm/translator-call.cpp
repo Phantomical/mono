@@ -504,7 +504,16 @@ EmitContext::emit_entry_bb (llvm::IRBuilder<> *builder)
 		if (!mini_type_is_vtype (sig->params [i]))
 			emit_volatile_store (cfg->args [i + sig->hasthis]->dreg);
 
-	if (sig->hasthis && !cfg->rgctx_var && cfg->gshared) {
+	/*
+	 * Everything below is the home the runtime reads this/mrgctx out of when it
+	 * walks a live frame of a gshared method, and a materialized inliner callee
+	 * never is one - the frame belongs to the root, and it is the ROOT's context a
+	 * walk has to recover. A second slot stackmapped under the same id would just
+	 * compete with the root's for recover_gshared_this_slot () to pick up.
+	 */
+	bool wants_this_slot = cfg->gshared && !this->translate_only;
+
+	if (sig->hasthis && !cfg->rgctx_var && wants_this_slot) {
 		LLVMValueRef this_alloc;
 
 		/*
@@ -541,7 +550,7 @@ EmitContext::emit_entry_bb (llvm::IRBuilder<> *builder)
 			 * cfg->llvm_this_reg/offset. The spill is additional to the register
 			 * value above; the body keeps using the register.
 			 */
-			if (cfg->gshared) {
+			if (wants_this_slot) {
 				LLVMValueRef rgctx_slot = mono_llvm_build_alloca (llvm::wrap (builder), IntPtrType (), llvm::wrap (llvm::ConstantInt::get (llvm::Type::getInt32Ty (this->llvm_ctx ()), 1, false)), 0, "");
 				/* Volatile store keeps the slot alive. */
 				mono_llvm_build_store (llvm::wrap (builder), llvm::wrap (this->convert (this->rgctx_arg, llvm::unwrap (IntPtrType ()))), rgctx_slot, TRUE, LLVM_BARRIER_NONE);
@@ -567,7 +576,7 @@ EmitContext::emit_entry_bb (llvm::IRBuilder<> *builder)
 			 * recover cfg->llvm_this_reg/offset for stack-walk generic-context
 			 * reconstruction.
 			 */
-			if (cfg->gshared)
+			if (wants_this_slot)
 				emit_this_slot_stackmap (builder, rgctx_alloc);
 		}
 	}

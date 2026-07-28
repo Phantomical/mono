@@ -86,6 +86,11 @@ MonoMethod *managed_method_from_symbol (const char *sym);
  * still needs a generic context - open/shared generic types and methods (the
  * rgctx gate, #26), checked up front before the front-end runs - in addition to
  * whatever the front-end itself declines.
+ *
+ * The one shared callee it does accept is one instantiated over exactly the type
+ * parameters ROOT is itself shared over. The root's call site already computes
+ * the runtime generic context such a body expects, so it is materialized as the
+ * shared body it is and folded in as it stands.
  */
 llvm::Function *materialize_callee (MonoMethod *target, const Tier1Root &root);
 
@@ -98,10 +103,12 @@ llvm::Function *materialize_callee (MonoMethod *target, const Tier1Root &root);
  * often elided there), and is conservative: true means "do not inline". Returns
  * true if the body cannot be inspected.
  *
- * DOMAIN is the domain the accessed classes' vtables are looked up in - a class
- * whose cctor has already run there needs no barrier at all.
+ * ROOT supplies the domain the accessed classes' vtables are looked up in - a
+ * class whose cctor has already run there needs no barrier at all - and says
+ * which shared TARGETs are candidates in the first place, since only those are
+ * worth scanning.
  */
-bool callee_reads_cctor_guarded_static (MonoMethod *target, MonoDomain *domain);
+bool callee_reads_cctor_guarded_static (MonoMethod *target, const Tier1Root &root);
 
 } // namespace mono
 
