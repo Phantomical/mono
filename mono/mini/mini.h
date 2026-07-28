@@ -1492,6 +1492,13 @@ typedef struct {
 	guint            gsharedvt : 1;
 	guint            r4fp : 1;
 	guint            llvm_only : 1;
+	/*
+	 * JIT_FLAG_LLVM_IR_ONLY: this body is being compiled for the tier-1 inliner
+	 * to fold into a caller, not to be published as the method's own code. It
+	 * will therefore never be reached by a call to the method itself, which is
+	 * an assumption parts of the front-end otherwise make.
+	 */
+	guint            llvm_ir_only : 1;
 	guint            interp : 1;
 	guint            use_current_cpu : 1;
 	guint            self_init : 1;

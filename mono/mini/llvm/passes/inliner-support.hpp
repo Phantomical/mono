@@ -94,22 +94,6 @@ MonoMethod *managed_method_from_symbol (const char *sym);
  */
 llvm::Function *materialize_callee (MonoMethod *target, const Tier1Root &root);
 
-/*
- * Whether TARGET reads or writes a static field of a class that still needs its
- * cctor to run - i.e. an accessor of class-init-guarded static state. Inlining
- * such a callee drops the class-init barrier that its own managed call would
- * have carried, so the inliner must refuse it. This is decided from the callee's
- * metadata, NOT from a class-init call in the materialized IR (the barrier is
- * often elided there), and is conservative: true means "do not inline". Returns
- * true if the body cannot be inspected.
- *
- * ROOT supplies the domain the accessed classes' vtables are looked up in - a
- * class whose cctor has already run there needs no barrier at all - and says
- * which shared TARGETs are candidates in the first place, since only those are
- * worth scanning.
- */
-bool callee_reads_cctor_guarded_static (MonoMethod *target, const Tier1Root &root);
-
 } // namespace mono
 
 #endif /* MONO_MINI_LLVM_INLINER_SUPPORT_HPP */

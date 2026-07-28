@@ -52,13 +52,6 @@
  *     declaration, so it is skipped by the "callee is a declaration" test;
  *   - not `noinline` (covers user-NoInlining and reflection-frame callees,
  *     which the translator already tags);
- *   - does not read/write class-init-guarded static state - a callee whose body
- *     touches a static field of a class with a non-trivial cctor. Inlining
- *     drops the class-init barrier that its own managed call carried, so the
- *     static read can see a value from before the cctor ran (a silent
- *     miscompile). The barrier is often elided in the materialized body
- *     (beforefieldinit / same-class access), so this is decided from the
- *     callee's metadata rather than from anything visible in the IR;
  *   - does not ask the runtime about its own frame - GetCurrentMethod,
  *     GetCallingAssembly, StackTrace's frame 0. Folding such a callee in makes
  *     those report the caller's frame instead (gate #25);
@@ -465,11 +458,6 @@ private:
 
 		if (method->iflags & METHOD_IMPL_ATTRIBUTE_NOOPTIMIZATION) {
 			trace_method ("method has optimization disabled", method);
-			return nullptr;
-		}
-
-		if (callee_reads_cctor_guarded_static (method, root)) {
-			trace_method ("method reads a static field of an uninitialized class", method);
 			return nullptr;
 		}
 

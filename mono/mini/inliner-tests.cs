@@ -555,12 +555,13 @@ public class InlinerTests {
 	}
 
 	// ==========================================================================
-	// CCTOR BARRIER - refuse-cctor. Each callee below is an otherwise-eligible
-	// leaf (small, no clauses, not NoInlining) whose only disqualifier is a
-	// read of a static field guarded by a real class cctor. Padded to survive
-	// classic mini's own inliner so the call reaches the top-down pass, which
-	// must independently recognize the barrier from IL/metadata (the
-	// materialized body often has no explicit init-check to see) and refuse.
+	// CCTOR BARRIER. Each callee below is an otherwise-eligible leaf (small, no
+	// clauses, not NoInlining) that reads a static field guarded by a real class
+	// cctor. Padded to survive classic mini's own inliner so the call reaches the
+	// top-down pass. All three holders use an explicit static ctor, so the
+	// front-end leaves a barrier in the callee's own body and folding it in
+	// carries that barrier along - the value each test checks is what a missing
+	// or mis-hoisted one would corrupt.
 	// ==========================================================================
 
 	static class SeedHolder {
@@ -582,8 +583,9 @@ public class InlinerTests {
 		return ReadSeed (x);
 	}
 
+	// INLINER-EXPECT: folded InlinerTests:ReadSeed (int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
-	public static int test_0_cctor_field_read_refused () {
+	public static int test_0_cctor_field_read () {
 		long sum = 0;
 		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
@@ -614,8 +616,9 @@ public class InlinerTests {
 		return x + CctorProp.Val;
 	}
 
+	// INLINER-EXPECT: folded InlinerTests/CctorProp:get_Val ()
 	[MethodImpl (MethodImplOptions.NoOptimization)]
-	public static int test_0_cctor_property_getter_refused () {
+	public static int test_0_cctor_property_getter () {
 		long sum = 0;
 		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
@@ -645,8 +648,9 @@ public class InlinerTests {
 		return ReadReadonly (x);
 	}
 
+	// INLINER-EXPECT: folded InlinerTests:ReadReadonly (int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
-	public static int test_0_cctor_readonly_field_refused () {
+	public static int test_0_cctor_readonly_field () {
 		long sum = 0;
 		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
@@ -794,17 +798,23 @@ public class InlinerTests {
 	}
 
 	// ==========================================================================
-	// ELIDED FOREIGN BARRIER - refuse-cctor, for the shape where there is nothing
-	// in the IR to notice. LazyHolder has no explicit static ctor, so the C#
-	// compiler marks it beforefieldinit; for a beforefieldinit class read from the
-	// method being compiled, the front-end emits no class-init barrier at all. The
-	// three fixtures above all use an explicit static ctor and so keep a barrier in
-	// the body; here the refusal has to come purely from the metadata scan. Fold
-	// ReadLazy in without it and the static reads back as 0.
+	// ELIDED FOREIGN BARRIER, the shape with nothing in the IR to notice.
+	// LazyHolder has no explicit static ctor, so the C# compiler marks it
+	// beforefieldinit, and the front-end emits no barrier for it inside ReadLazy
+	// at all - it leaves that cctor to the SFLDA patch resolution, which a tier-1
+	// compile skips (run_cctors = FALSE). The three fixtures above keep a barrier
+	// in the body; here the guard has to come from the metadata scan
+	// (collect_static_access_classes ()), as a class-init preamble on the
+	// materialized body. Fold ReadLazy in without one and Value reads back as 0.
 	// ==========================================================================
 
 	static class LazyHolder {
-		public static int Value = 31337;
+		public static int Value = MakeValue ();
+		static int MakeValue () { LazyObserver.Ran = 1; return 31337; }
+	}
+
+	static class LazyObserver {
+		public static int Ran;
 	}
 
 	static int ReadLazy (int x) {
@@ -821,8 +831,9 @@ public class InlinerTests {
 		return ReadLazy (x);
 	}
 
+	// INLINER-EXPECT: folded InlinerTests:ReadLazy (int)
 	[MethodImpl (MethodImplOptions.NoOptimization)]
-	public static int test_0_cctor_beforefieldinit_static_refused () {
+	public static int test_0_cctor_beforefieldinit_static () {
 		long sum = 0;
 		int ITERS = Iters ();
 		for (int i = 0; i < ITERS; i++)
@@ -830,7 +841,103 @@ public class InlinerTests {
 		long expected = 0;
 		for (int i = 0; i < ITERS; i++)
 			expected += i + 31337;
-		return sum == expected ? 0 : 1;
+		if (sum != expected)
+			return 1;
+		// A guard that never ran leaves the cctor unrun for the whole process,
+		// which the value check above only catches because Value happens to be
+		// non-zero. Say it directly as well.
+		return LazyObserver.Ran == 1 ? 0 : 2;
+	}
+
+	// Same shape, two foreign classes in one callee: the preamble has to chain a
+	// guard per class rather than emit one and stop.
+
+	static class PairObserver {
+		public static int Left, Right;
+	}
+
+	static class PairLeft {
+		public static int Value = MakeValue ();
+		static int MakeValue () { PairObserver.Left = 1; return 100; }
+	}
+
+	static class PairRight {
+		public static int Value = MakeValue ();
+		static int MakeValue () { PairObserver.Right = 1; return 7; }
+	}
+
+	static int ReadPair (int x) {
+		int p1 = x + 3, p2 = p1 * 5, p3 = p2 - 7, p4 = p3 ^ 9, p5 = p4 & 0xFF;
+		int p6 = p5 | 0x02, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = (p9 >> 1) + 1;
+		int p11 = p10 + p3, p12 = p11 - p4, p13 = p12 ^ p6, p14 = p13 + p7, p15 = p14 - p8;
+		if (p15 == int.MinValue)
+			return -1;
+		return x + PairLeft.Value + PairRight.Value;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ReadPairHotCaller (int x) {
+		return ReadPair (x);
+	}
+
+	// INLINER-EXPECT: folded InlinerTests:ReadPair (int)
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_cctor_two_beforefieldinit_statics () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += ReadPairHotCaller (i);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += i + 107;
+		if (sum != expected)
+			return 1;
+		return (PairObserver.Left == 1 && PairObserver.Right == 1) ? 0 : 2;
+	}
+
+	// The barrier belongs where the access is, not in the callee's prologue.
+	// ColdHolder is read only down a branch the loop below never takes, so its
+	// cctor must never run - a preamble guard would run it on the first call and
+	// ColdObserver would say so. Explicit static ctor on purpose: a
+	// beforefieldinit class is initialized eagerly when the accessing method is
+	// JITted, which is tier-dependent and would make this untestable.
+
+	static class ColdObserver {
+		public static int Ran;
+	}
+
+	static class ColdHolder {
+		public static int Value;
+		static ColdHolder () { ColdObserver.Ran = 1; Value = 99; }
+	}
+
+	static int ReadCold (int x) {
+		int p1 = x + 6, p2 = p1 * 7, p3 = p2 - 2, p4 = p3 ^ 3, p5 = p4 & 0xFF;
+		int p6 = p5 | 0x20, p7 = p6 + p1, p8 = p7 - p2, p9 = p8 * 2, p10 = (p9 >> 1) + 1;
+		int p11 = p10 + p3, p12 = p11 - p4, p13 = p12 ^ p6, p14 = p13 + p7, p15 = p14 - p8;
+		if (p15 == int.MinValue)
+			return ColdHolder.Value;
+		return x + 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ReadColdHotCaller (int x) {
+		return ReadCold (x);
+	}
+
+	// INLINER-EXPECT: folded InlinerTests:ReadCold (int)
+	[MethodImpl (MethodImplOptions.NoOptimization)]
+	public static int test_0_cctor_barrier_stays_on_its_path () {
+		long sum = 0;
+		int ITERS = Iters ();
+		for (int i = 0; i < ITERS; i++)
+			sum += ReadColdHotCaller (i);
+		long expected = 0;
+		for (int i = 0; i < ITERS; i++)
+			expected += i + 1;
+		if (sum != expected)
+			return 1;
+		return ColdObserver.Ran == 0 ? 0 : 2;
 	}
 
 	// ==========================================================================
