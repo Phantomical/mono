@@ -18,14 +18,13 @@
 # are synthesized from that debug info; getting them back is exactly what is under
 # test, and anything less than equality would pass whether or not they came back.
 #
-# That holds only while no fixture method has an IL length between the two
-# frontends' inline limits (INLINE_LENGTH_LIMIT 20 for the classic JIT,
-# LLVM_JIT_INLINE_LENGTH_LIMIT 100 for a tier-1 compile, method-to-ir.c). In that
-# window mono's own inliner folds the method away for tier 1 but not for the
-# classic JIT, and a frontend inline leaves nothing to recover: the inlined IR
-# carries the CALLER's offset by construction (cfg->real_offset = inline_offset),
-# so the frame is gone from tier 1 with no debug info describing it. The fixtures
-# are padded well past 100 to stay clear of it.
+# That holds only while no fixture method is short enough for the CLASSIC JIT's
+# own front-end inliner to fold away (INLINE_LENGTH_LIMIT, 20 IL bytes,
+# method-to-ir.c). A front-end inline leaves nothing to recover - the inlined IR
+# carries the CALLER's offset by construction (cfg->real_offset = inline_offset)
+# - so such a method is simply missing from the oracle, while tier 1, which does
+# no front-end inlining at all, still reports it. The fixtures are padded well
+# past that to stay clear of it.
 #
 # Usage: check-il-offsets.sh <runtime> <corpus.exe>
 # where <runtime> is a single word or a quoted command prefix.

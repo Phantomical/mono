@@ -103,8 +103,20 @@
 #define LLVM_AOT_INLINE_LENGTH_LIMIT INLINE_LENGTH_LIMIT
 #endif
 
-/* Used to LLVM JIT */
-#define LLVM_JIT_INLINE_LENGTH_LIMIT 100
+/*
+ * Used by the LLVM JIT, where the front end does no inlining at all: the tier-1
+ * inliner pass materializes callees into the module itself and hands every
+ * decision to LLVM's cost model, which judges the translated body rather than
+ * its IL length. A front-end inline would pre-empt that with a worse metric, and
+ * it also stamps the CALLER's IL offset onto the inlined IR
+ * (cfg->real_offset = inline_offset), so the folded-in body leaves no debug info
+ * behind and cannot be named as a frame in a stack trace. What LLVM folds in
+ * keeps its own DILocations, and does.
+ *
+ * MONO_INLINELIMIT still overrides this - 0 is how you say "decline everything"
+ * to any of the three limits.
+ */
+#define LLVM_JIT_INLINE_LENGTH_LIMIT 0
 
 static const gboolean debug_tailcall = FALSE;               // logging
 static const gboolean debug_tailcall_try_all = FALSE;       // consider any call followed by ret
@@ -3966,6 +3978,13 @@ mono_method_check_inlining (MonoCompile *cfg, MonoMethod *method)
 		limit = inline_limit;
 	}
 
+	/*
+	 * A limit of zero declines outright, AggressiveInlining included - the hint
+	 * asks for a bigger budget, and there isn't one to spend.
+	 */
+	if (limit == 0)
+		return FALSE;
+
 	if (header.code_size >= limit && !(method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING))
 		return FALSE;
 
@@ -3991,33 +4010,19 @@ mono_method_check_inlining (MonoCompile *cfg, MonoMethod *method)
 				if (!cfg->compile_aot) {
 					if (!cfg->run_cctors) {
 						/*
-						 * This compile must not run cctors - the background
-						 * tier-1 promotion worker sets run_cctors to FALSE
-						 * specifically so it never does. Forcing the cctor
-						 * below is what makes an AggressiveInlining inline
-						 * safe under a normal (run_cctors == TRUE) compile;
-						 * without that, the same bar the before_field_init
-						 * branch below holds itself to applies here too -
-						 * only inline if the class already happens to be
-						 * initialized, otherwise decline (the callee's own,
-						 * non-inlined body still lazily inits it later, on
-						 * whichever mutator thread actually calls it).
+						 * This compile must not run cctors: run_cctors is FALSE
+						 * only on the background tier-1 promotion worker, which
+						 * must never run managed code. Forcing the cctor below is
+						 * what makes an AggressiveInlining inline safe under a
+						 * normal compile; without it we hold ourselves to the same
+						 * bar the before_field_init branch below does - inline only
+						 * if the class already happens to be initialized, otherwise
+						 * decline, and let the callee's own body init it later, on
+						 * whichever mutator thread actually calls it.
 						 *
-						 * The !vtable->initialized case is defensive rather
-						 * than something a promotion compile actually hits
-						 * today: a method only becomes promotable after its
-						 * own tier-0 compile, which always carries
-						 * JIT_FLAG_RUN_CCTORS and so already forced this same
-						 * branch (with run_cctors == TRUE) for every callee
-						 * tier-0 considered inlining - and tier-0 and tier-1
-						 * see identical inlining candidates. So by the time a
-						 * promotion compile gets here the class is already
-						 * initialized and this arm is a no-op. It stays
-						 * because that chain is an invariant of the current
-						 * inliner, not a guarantee this code enforces itself -
-						 * if inlining candidates ever diverge between tiers,
-						 * this is what keeps "no cctor on the worker thread"
-						 * true without relying on that invariant.
+						 * A promotion compile only reaches this at all when
+						 * MONO_INLINELIMIT has re-enabled front-end inlining for it;
+						 * the limit is zero there otherwise.
 						 */
 						if (!vtable->initialized)
 							return FALSE;

@@ -95,6 +95,41 @@ class ILOffsetTests {
 		}
 	}
 
+	/*
+	 * Long enough that the classic JIT's front-end inliner declines it (20 IL
+	 * bytes), short enough that mono's front end would once have folded it away
+	 * for a tier-1 compile before LLVM ever saw the call - which lost the frame
+	 * outright, since a front-end inline leaves no debug info describing what it
+	 * folded in. Tier 1 does no front-end inlining now, so this comes back.
+	 */
+	static int SmallThrower (int x)
+	{
+		int a = x + 1, b = a * 2, c = b - 3, d = c ^ 5;
+		if (d == int.MinValue)
+			return -1;
+		if (x == 7)
+			throw new InvalidOperationException ("small");
+		return x + 9;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SmallCaller (int x)
+	{
+		return SmallThrower (x) + 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void ScenarioSmallInline ()
+	{
+		for (int i = 0; i < 3; i++)
+			SmallCaller (i);
+		try {
+			SmallCaller (7);
+		} catch (Exception e) {
+			Dump ("small-inline", e);
+		}
+	}
+
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int OpaqueThrower (int x)
 	{
@@ -290,6 +325,7 @@ class ILOffsetTests {
 	public static int Main ()
 	{
 		ScenarioInlinedCallee ();
+		ScenarioSmallInline ();
 		ScenarioNoInlining ();
 		ScenarioMergeableThrows ();
 		ScenarioNestedInline ();

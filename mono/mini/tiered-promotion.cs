@@ -451,18 +451,13 @@ public class TieredPromotion {
 	// callee can be safely inlined - gated on run_cctors (like the site above)
 	// rather than unconditionally.
 	//
-	// This test does NOT reach that branch's !vtable->initialized arm: by the
-	// time HotCallerOfAggressive is promotable it has already had a tier-0
-	// compile, which - always carrying JIT_FLAG_RUN_CCTORS - already forced
-	// AggressiveCallee's class through this same branch and initialized it.
-	// Tier-0 and tier-1 see identical inlining candidates, so when the worker
-	// reconsiders inlining AggressiveCallee, the class is already initialized
-	// and the branch is a no-op either way. What this DOES verify, and is the
-	// real property at stake: promotion (a from-scratch recompile with
-	// run_cctors = FALSE) must not RE-RUN an already-run cctor - RunCount
-	// must stay exactly 1, on the original (mutator) thread, all the way
-	// through. See the comment on that branch in method-to-ir.c for why its
-	// !vtable->initialized arm is defensive rather than exercised here.
+	// A promotion compile does no front-end inlining at all, so it does not
+	// reach that branch - the LLVM inliner folds AggressiveCallee in later,
+	// under its own cctor gate. Tier 0 still reaches it, forcing the cctor
+	// there, on this thread. What this verifies is the property that outlives
+	// either arrangement: promotion (a from-scratch recompile with
+	// run_cctors = FALSE) must not RE-RUN an already-run cctor - RunCount must
+	// stay exactly 1, on the original (mutator) thread, all the way through.
 
 	static class AggressivePendingCctor {
 		public static int RunCount;
@@ -497,7 +492,7 @@ public class TieredPromotion {
 		// same classic eager-cctor-at-compile-time behavior as
 		// test_0_cctor_not_rerun_by_promotion above. What must not happen is
 		// a SECOND run when the worker recompiles HotCallerOfAggressive for
-		// tier 1 and its IR generation reconsiders inlining AggressiveCallee.
+		// tier 1 and folds AggressiveCallee in again.
 		for (int i = 0; i < 5000; i++) {
 			int x = i % 1000;
 			if (HotCallerOfAggressive (x) != x + 7)
@@ -513,7 +508,7 @@ public class TieredPromotion {
 			return 4;
 
 		// Promotion - recompiling HotCallerOfAggressive on the worker, with
-		// run_cctors = FALSE, reconsidering the AggressiveInlining callee -
+		// run_cctors = FALSE, folding the AggressiveInlining callee in again -
 		// has now happened. It must not have re-run the cctor.
 		if (AggressivePendingCctor.RunCount != 1)
 			return 5;
