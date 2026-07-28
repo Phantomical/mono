@@ -1908,6 +1908,10 @@ mono_jit_parse_options (int argc, char * argv[])
 #endif
 		} else if (strcmp (argv [i], "--nollvm") == 0) {
 			mini_set_use_llvm (FALSE);
+#ifdef ENABLE_JIT_DUMP
+		} else if (strcmp (argv [i], "--jitdump") == 0) {
+			mono_enable_jit_dump ();
+#endif
 		} else if (strcmp (argv [i], "--profile") == 0) {
 			mini_add_profiler_argument (NULL);
 		} else if (strncmp (argv [i], "--profile=", 10) == 0) {
