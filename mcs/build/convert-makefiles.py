@@ -50,10 +50,31 @@ IGNORED = {
     "MONO_DISABLE_MANAGED_COLLATION", "TEST_HARNESS_EXCLUDES",
 }
 
+# What config.make and the profile fragments contribute.  Every surviving
+# profile is FRAMEWORK_VERSION 4.5; mono_libdir is written prefix-relative
+# because that is the form CMake's install() wants.
+CONFIG_VALUES = {
+    "mono_libdir": "lib",
+    "prefix": "",
+    "sysconfdir": "etc",
+    "FRAMEWORK_VERSION": "4.5",
+    "FRAMEWORK_VERSION_MAJOR": "4",
+}
+
+# Profiles that build no Facades (mcs/class/Makefile NO_FACADES_PROFILE).
+NO_FACADES = {"xbuild_12", "xbuild_14", "binary_reference_assemblies"}
+
 ASSIGN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(:=|\+=|\?=|=)\s*(.*)$")
 COND = re.compile(r"^\s*(ifdef|ifndef|ifeq|ifneq|else|endif)\b\s*(.*)$")
 # Directives that carry no information this conversion needs.  The `include`s
 # pull in rules.make/library.make, whose content is the CMake module instead.
+# A make rule, as opposed to an assignment.  Nearly all of these build test
+# fixtures or install data, neither of which this conversion covers -- but a
+# rule on $(the_lib)/$(build_lib) adds inputs to the assembly itself and has to
+# be looked at by a human.
+RULE = re.compile(r"^[^\s=]+\s*:(?!=)")
+LIB_RULE = re.compile(r"\$\((the_lib|build_lib|the_assembly)\)\s*:")
+
 DIRECTIVE = re.compile(
     r"^\s*(-?include|export|unexport|vpath|\.PHONY|\.DEFAULT|\.SUFFIXES|define|endef)\b")
 
@@ -80,12 +101,17 @@ def truthy(name, values):
 
 def parse(path, profile):
     """Evaluate a Makefile for one profile, returning its variables."""
-    values = {"PROFILE": profile, "PROFILE_DIRECTORY": profile}
+    values = dict(CONFIG_VALUES)
+    values["PROFILE"] = profile
+    values["PROFILE_DIRECTORY"] = profile
+    values["XBUILD_VERSION"] = {"xbuild_12": "12.0", "xbuild_14": "14.0"}.get(
+        profile, "4.0")
     # Stack of (taken_now, taken_already) so `else` works.
     stack = []
     with open(path, encoding="utf-8", errors="replace") as fh:
         lines = fh.read().splitlines()
 
+    in_recipe = False
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -96,19 +122,12 @@ def parse(path, profile):
             line = line[:-1] + " " + lines[i].strip()
             i += 1
 
-        if line.startswith("\t"):
-            # Continuations were joined above, so a tab here is a real recipe.
-            if LENIENT:
-                continue
-            raise Skip("recipe")
-
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
 
-        if DIRECTIVE.match(line):
-            continue
-
+        # Conditionals are tracked even inside a branch that is not taken, so
+        # nesting stays balanced.
         m = COND.match(line)
         if m:
             kind, rest = m.group(1), m.group(2).strip()
@@ -121,6 +140,10 @@ def parse(path, profile):
                     now, ever = stack[-1]
                     stack[-1] = (not ever, True)
                 continue
+            if not all(now for now, _ in stack):
+                # Inside dead code; the condition itself may not be evaluable.
+                stack.append((False, True))
+                continue
             if kind == "ifdef":
                 cond = truthy(rest, values)
             elif kind == "ifndef":
@@ -132,6 +155,25 @@ def parse(path, profile):
 
         if not all(now for now, _ in stack):
             continue
+
+        if line.startswith("\t"):
+            # Continuations were joined above, so a tab here is a real recipe.
+            # If it belongs to a rule we already decided to drop -- a test
+            # fixture, an install step, a maintainer target -- it goes with it.
+            if in_recipe or LENIENT:
+                continue
+            raise Skip("recipe")
+
+        if DIRECTIVE.match(line):
+            continue
+
+        if RULE.match(line):
+            if LIB_RULE.search(line):
+                raise Skip("rule on the library: " + line.strip()[:50])
+            in_recipe = True
+            continue
+
+        in_recipe = False
 
         m = ASSIGN.match(line)
         if not m:
@@ -174,6 +216,22 @@ def expand(text, values):
             subject = expand(m.group(2), values).split()
             return " ".join(w for w in subject if w not in unwanted)
 
+        def do_subst(m):
+            words = expand("$(" + m.group(1) + ")", values).split()
+            pat, repl = m.group(2), m.group(3)
+            out = []
+            for w in words:
+                if "%" in pat:
+                    rx = "^" + re.escape(pat).replace("%", "(.*)") + "$"
+                    mm = re.match(rx, w)
+                    out.append(repl.replace("%", mm.group(1)) if mm else w)
+                elif w.endswith(pat):
+                    out.append(w[: -len(pat)] + repl)
+                else:
+                    out.append(w)
+            return " ".join(out)
+
+        text = re.sub(r"\$\(([A-Za-z_][A-Za-z0-9_]*):([^=()]*)=([^()]*)\)", do_subst, text)
         text = re.sub(r"\$\(filter\s+([^,()]*),([^()]*)\)", do_filter, text)
         text = re.sub(r"\$\(filter-out\s+([^,()]*),([^()]*)\)", do_filter_out, text)
         text = re.sub(r"\$[\({]([A-Za-z_][A-Za-z0-9_]*)[\)}]",
@@ -205,6 +263,8 @@ def profile_dirs(topdir, profile):
     """Directories `make PROFILE=<profile>` would recurse into, relative to mcs/."""
     found = set()
     for prefix, rel in SUBDIR_SOURCES:
+        if prefix == "class/Facades" and profile in NO_FACADES:
+            continue
         path = os.path.join(topdir, rel)
         if not os.path.exists(path):
             continue
@@ -307,6 +367,47 @@ def emit(profiles_settings, makefile_rel):
     return "\n".join(out)
 
 
+def write_subdirs(topdir):
+    """Regenerate mcs/CMakeLists.txt's add_subdirectory list.
+
+    Kept in sync here rather than by hand: a directory that is declared but
+    never added is silently absent from the build, which shows up much later as
+    an unresolved reference.
+    """
+    dirs = sorted(
+        os.path.relpath(root, topdir)
+        for root, _, files in os.walk(topdir)
+        if "CMakeLists.txt" in files and os.path.relpath(root, topdir) != "."
+    )
+    body = "\n".join(f"add_subdirectory({d})" for d in dirs)
+    with open(os.path.join(topdir, "CMakeLists.txt"), "w") as fh:
+        fh.write(HEADER + body + FOOTER)
+
+
+HEADER = """# The class libraries.
+#
+# Each subdirectory declares the assemblies it produces; nothing is built until
+# mono_managed_materialize() runs at the end, because a reference is a bare
+# assembly name and cannot be resolved to a target before every directory has
+# been read.  Order in this list is therefore irrelevant.  See
+# cmake/MonoManaged.cmake.
+#
+# Regenerated by build/convert-makefiles.py along with the declarations.
+
+"""
+
+FOOTER = """
+
+mono_managed_materialize()
+
+# `mcs` keeps its old meaning: build everything the enabled profiles produce.
+add_custom_target(mcs ALL)
+foreach(_p IN LISTS MONO_MANAGED_PROFILES)
+  add_dependencies(mcs mcs-${_p})
+endforeach()
+"""
+
+
 def main():
     topdir = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
     dirs_for = {p: profile_dirs(topdir, p) for p in PROFILES}
@@ -344,9 +445,12 @@ def main():
         # Never clobber a hand-written file: the awkward directories (corlib,
         # ilasm, the bootstrap tools) are converted by hand and this script
         # cannot express what they do.
-        if os.path.exists(os.path.join(root, "CMakeLists.txt")):
-            skipped.append((rel, "hand-written, kept"))
-            continue
+        existing = os.path.join(root, "CMakeLists.txt")
+        if os.path.exists(existing):
+            with open(existing) as fh:
+                if not fh.readline().startswith("# Converted from"):
+                    skipped.append((rel, "hand-written, kept"))
+                    continue
         body = emit(per_profile, os.path.join(rel, "Makefile"))
         if body is None:
             skipped.append((rel, "nothing to build"))
@@ -355,6 +459,7 @@ def main():
             fh.write(body)
         written.append(rel)
 
+    write_subdirs(topdir)
     print(f"wrote {len(written)} CMakeLists.txt")
     print(f"skipped {len(skipped)}:")
     for rel, why in sorted(skipped):

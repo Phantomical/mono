@@ -33,3 +33,11 @@ _mono_commit(corert_commit_hash "${CMAKE_SOURCE_DIR}/external/corert")
 _mono_commit(cecil_commit_hash  "${CMAKE_SOURCE_DIR}/external/cecil")
 configure_file(common/sourcelink.json.in
                "${CMAKE_CURRENT_SOURCE_DIR}/common/sourcelink.json" @ONLY)
+
+# A copy of Consts.cs also lands in each profile's output directory.  Nothing
+# in the build reads it; it is there so a monolite package carries the corlib
+# version stamp it was built with.
+foreach(_p IN LISTS MONO_MANAGED_PROFILES)
+  mono_profile_dir(_dir ${_p})
+  configure_file(common/Consts.cs.in "${_dir}/Consts.cs" @ONLY)
+endforeach()

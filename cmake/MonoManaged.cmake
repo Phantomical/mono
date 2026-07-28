@@ -192,7 +192,7 @@ function(mono_declare_managed)
   cmake_parse_arguments(A
     "PROGRAM;NO_SIGN;NO_INSTALL;NO_DEBUG;INTERMEDIATE;NO_DEFAULT_REFERENCES"
     "NAME;OUTPUT_NAME;SUBDIR;KEYFILE;SNK;PACKAGE;INSTALL_DIR;TARGET_NET_REFERENCE;SOURCES_FILE"
-    "PROFILES;REFS;API_BIN_REFS;FLAGS;BUILT_SOURCES;DEPENDS;RESOURCES;STRING_REPLACER_FLAGS;ENV"
+    "PROFILES;REFS;API_BIN_REFS;FLAGS;BUILT_SOURCES;DEPENDS;RESOURCES;STRING_REPLACER_FLAGS;ENV;SOURCES"
     ${ARGN})
 
   if(NOT A_NAME)
@@ -213,7 +213,7 @@ function(mono_declare_managed)
 
   foreach(_f NAME OUTPUT_NAME SUBDIR KEYFILE SNK PACKAGE INSTALL_DIR
              TARGET_NET_REFERENCE SOURCES_FILE PROFILES REFS API_BIN_REFS FLAGS
-             BUILT_SOURCES DEPENDS RESOURCES STRING_REPLACER_FLAGS ENV
+             BUILT_SOURCES DEPENDS RESOURCES STRING_REPLACER_FLAGS ENV SOURCES
              PROGRAM NO_SIGN NO_INSTALL NO_DEBUG INTERMEDIATE NO_DEFAULT_REFERENCES)
     set_property(GLOBAL PROPERTY ${_id}_${_f} "${A_${_f}}")
   endforeach()
@@ -369,7 +369,7 @@ endfunction()
 function(_mono_materialize_one id)
   foreach(_f NAME OUTPUT_NAME SUBDIR KEYFILE SNK PACKAGE INSTALL_DIR
              TARGET_NET_REFERENCE SOURCES_FILE PROFILES REFS API_BIN_REFS FLAGS
-             BUILT_SOURCES DEPENDS RESOURCES STRING_REPLACER_FLAGS ENV
+             BUILT_SOURCES DEPENDS RESOURCES STRING_REPLACER_FLAGS ENV SOURCES
              PROGRAM NO_SIGN NO_INSTALL NO_DEBUG INTERMEDIATE NO_DEFAULT_REFERENCES DIR)
     get_property(A_${_f} GLOBAL PROPERTY ${id}_${_f})
   endforeach()
@@ -494,7 +494,22 @@ macro(_mono_materialize_profile _profile)
   # -- the source list -----------------------------------------------------
   set(_sources_inputs "")
   set(_gensources "")
-  if(A_PROGRAM)
+  if(A_SOURCES)
+    # A handful of directories -- tools/security most of all -- build several
+    # assemblies from explicit source lists rather than one .sources file, so
+    # the response file is written here instead of by gensources.
+    set(_response "${MONO_MANAGED_DEPSDIR}/${_target}.sources")
+    set(_abs "")
+    foreach(_s IN LISTS A_SOURCES)
+      if(NOT IS_ABSOLUTE "${_s}")
+        set(_s "${A_DIR}/${_s}")
+      endif()
+      list(APPEND _abs "${_s}")
+    endforeach()
+    string(JOIN "\n" _body ${_abs})
+    file(CONFIGURE OUTPUT "${_response}" CONTENT "${_body}\n")
+    set(_sources_inputs ${_abs})
+  elseif(A_PROGRAM)
     # Programs are handed their .sources verbatim; no expansion step.
     set(_sourcefile "${A_SOURCES_FILE}")
     if(NOT _sourcefile)
@@ -509,6 +524,13 @@ macro(_mono_materialize_profile _profile)
       set(_response "${MONO_MANAGED_DEPSDIR}/${_profile}_${A_NAME}.sources")
     endif()
     _mono_tool_command(_gensources ${_profile} gensources.exe)
+    # Every library's source list comes out of gensources, so it has to be
+    # built first -- including for the bootstrap profile, where it is the very
+    # first assembly produced.
+    get_property(_gsprov GLOBAL PROPERTY MONO_MANAGED_PROVIDER_build/gensources)
+    if(_gsprov AND NOT _gsprov STREQUAL _target)
+      list(APPEND _refdeps "${_gsprov}")
+    endif()
     # Any .sources in the directory can change the answer, so all of them are
     # inputs.  The makefiles did the same, with the same admitted coarseness.
     file(GLOB _sources_inputs CONFIGURE_DEPENDS "${A_DIR}/*.sources")

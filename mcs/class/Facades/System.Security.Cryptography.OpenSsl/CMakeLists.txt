@@ -5,7 +5,7 @@ mono_declare_managed(
   PROFILES   unityjit
   SUBDIR     Facades
   KEYFILE    ../../msfinal.pub
-  INSTALL_DIR /mono//Facades
+  INSTALL_DIR lib/mono/4.5/Facades
   REFS       System.Core
   FLAGS      /delaysign /nowarn:1616,1699
 )

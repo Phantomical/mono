@@ -1,2 +1,3 @@
 /deps
 /config.make
+__pycache__/
