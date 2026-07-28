@@ -27,10 +27,13 @@ endif()
 configure_file(config.h.in "${CMAKE_CURRENT_BINARY_DIR}/config.h")
 
 # --enable-single-obj-compilation: the collector is one amalgamated
-# translation unit plus the pthread entry-point shim.
+# translation unit plus the pthread entry-point shim.  boehm-dirty-table.c is
+# ours rather than the collector's, and is built here so that it sees the
+# config.h below rather than mono's -- the layout it reads depends on it.
 add_library(monogc STATIC
   "${BDWGC_DIR}/extra/gc.c"
-  "${BDWGC_DIR}/pthread_start.c")
+  "${BDWGC_DIR}/pthread_start.c"
+  boehm-dirty-table.c)
 
 target_include_directories(monogc
   PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"

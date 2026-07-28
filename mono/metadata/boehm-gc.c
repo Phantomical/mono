@@ -38,6 +38,7 @@
 #include <mono/utils/gc_wrapper.h>
 #include <mono/utils/mono-os-mutex.h>
 #include <mono/utils/mono-counters.h>
+#include <mono/utils/mono-once.h>
 #include <mono/utils/mono-compiler.h>
 #include <mono/utils/unlocked.h>
 #include <mono/metadata/icall-decl.h>
@@ -46,6 +47,7 @@
 
 #include <private/gc_pmark.h>
 #include <gc_vector.h>
+#include <boehm-dirty-table.h>
 /* Internal Boehm API: wait for ongoing GC (used to avoid deregistering roots mid-mark). */
 extern void GC_wait_for_gc_completion(GC_bool wait_for_all);
 
@@ -1383,41 +1385,114 @@ mono_gc_get_target_card_table (int *shift_bits, target_mgreg_t *card_mask)
 	return NULL;
 }
 
-gpointer
-mono_gc_get_card_bitmap (int *shift_bits, gsize *index_mask)
+/*
+ * Confirm that marking a page the way a caller of mono_gc_get_card_bitmap ()
+ * will agrees with what the collector's own barrier does to the same address.
+ *
+ * The table and the hash come from a translation unit built with the
+ * collector's own configuration; this one is not, and neither is the JIT that
+ * inlines the mark. Disagreement there costs nothing at build time and shows up
+ * only as marks the collector never reads and references it therefore drops, so
+ * prove the agreement instead of assuming it: dirty a page and look for the bit
+ * the inline form would have set. Spurious dirty bits only cost a rescan.
+ *
+ * Unproven counts as disagreement - the caller falls back to the out-of-line
+ * barrier, which is always right.
+ */
+static gboolean
+card_bitmap_agrees_with_collector (gsize *table, int shift_bits, gsize index_mask)
 {
-#if defined(MANUAL_VDB) && !defined(GC_DISABLE_INCREMENTAL)
+	static char probe;
+	const gsize word_bits = sizeof (gsize) * 8;
+
+	/*
+	 * Every address in a page shares its bit, so walk a page at a time. A bit
+	 * already set proves nothing, and a collection landing between the mark and
+	 * the read clears the table under us - either way this page made a poor
+	 * witness, so try the next one rather than calling it a disagreement.
+	 */
+	for (int attempt = 0; attempt < 16; ++attempt) {
+		gsize addr = (gsize) &probe + ((gsize) attempt << shift_bits);
+		gsize index = (addr >> shift_bits) & index_mask;
+		gsize mask = (gsize) 1 << (index % word_bits);
+		gsize *word = &table [index / word_bits];
+
+		if (*word & mask)
+			continue;
+
+		mono_boehm_dirty_page ((void *) addr);
+
+		if (*word & mask)
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+static gpointer card_bitmap;
+static int card_bitmap_shift_bits;
+static gsize card_bitmap_index_mask;
+static mono_once_t card_bitmap_once = MONO_ONCE_INIT;
+
+static void
+card_bitmap_init (void)
+{
+	unsigned shift = 0;
+	size_t mask = 0;
+	gpointer table;
+
 	/*
 	 * Outside incremental mode nothing ever reads the bits, and the barrier
 	 * itself is compiled out - mono_gc_needs_write_barriers () says so, off the
-	 * same flag. Report no bitmap so a caller that asked early doesn't bake an
-	 * address into code that is not supposed to be marking at all.
+	 * same flag. Leave the bitmap null so a caller that asked early doesn't bake
+	 * an address into code that is not supposed to be marking at all.
 	 */
 	if (!GC_is_incremental_mode ())
-		return NULL;
+		return;
 
 	/*
-	 * Callers address the bitmap in pointer-sized words, which is what the
-	 * collector's own get_pht_entry_from_index () does the bit arithmetic in.
-	 * Both widths follow the ABI's long, so they agree everywhere we run; if
-	 * that ever stops being true the bit numbering silently diverges, hence the
-	 * assert rather than a comment.
+	 * Asked for rather than worked out here: where the table sits inside
+	 * GC_arrays depends on how the collector was configured, and this file does
+	 * not see that configuration. See cmake/bdwgc/boehm-dirty-table.c.
 	 */
-	g_static_assert (sizeof (word) == sizeof (gpointer));
+	table = mono_boehm_dirty_page_table (&shift, &mask);
+	if (!table)
+		return;
 
-	*shift_bits = LOG_HBLKSIZE;
-	*index_mask = PHT_ENTRIES - 1;
+	if (!card_bitmap_agrees_with_collector ((gsize *) table, (int) shift, (gsize) mask)) {
+		g_warning ("write barrier: inlined card mark disagrees with the collector; "
+		           "falling back to out-of-line barriers");
+		return;
+	}
+
+	card_bitmap_shift_bits = (int) shift;
 
 	/*
 	 * Masked, so the table aliases: distinct pages can share a bit once the heap
-	 * outgrows PHT_ENTRIES blocks. That is the same deal GC_dirty_inner () takes
+	 * outgrows the table's reach. That is the same deal GC_dirty_inner () takes
 	 * through PHT_HASH, and the collector already treats spurious bits as
 	 * legitimate.
 	 */
-	return (gpointer) (gsize) GC_dirty_pages;
-#else
-	return NULL;
-#endif
+	card_bitmap_index_mask = (gsize) mask;
+
+	card_bitmap = table;
+}
+
+gpointer
+mono_gc_get_card_bitmap (int *shift_bits, gsize *index_mask)
+{
+	/*
+	 * Once, and not once per caller: the probe leaves the bits it sets behind,
+	 * so a second run over the same pages finds them already dirty and has
+	 * nothing left to prove. Compile threads ask concurrently, hence the
+	 * mono_once () rather than a plain flag.
+	 */
+	mono_once (&card_bitmap_once, card_bitmap_init);
+
+	*shift_bits = card_bitmap_shift_bits;
+	*index_mask = card_bitmap_index_mask;
+
+	return card_bitmap;
 }
 
 gboolean

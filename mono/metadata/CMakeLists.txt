@@ -187,7 +187,10 @@ if(MONO_ENABLE_BOEHM)
     DEFINITIONS HAVE_BOEHM_GC GC_THREADS)
   target_include_directories(monoruntime_boehm PRIVATE
     "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
-    "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src")
+    "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
+    # boehm-dirty-table.h.  Its implementation is built with the collector
+    # rather than with us, which is the point of it -- see cmake/bdwgc.
+    "${CMAKE_SOURCE_DIR}/cmake/bdwgc")
 endif()
 
 if(MONO_ENABLE_SGEN)
