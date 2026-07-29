@@ -109,6 +109,8 @@ struct MonoFinallyGuard {
 	std::uint32_t handler_start_off = 0;
 	std::uint32_t handler_end_off = 0;
 	std::int32_t exvar_offset = 0;
+	/* Hardware register exvar_offset is measured from; see MonoJitExceptionInfo. */
+	std::uint8_t exvar_base_reg = 0;
 };
 
 /*

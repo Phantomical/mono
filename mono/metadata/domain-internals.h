@@ -122,6 +122,12 @@ typedef struct {
 	uint32_t try_len;
 	uint32_t handler_offset;
 	uint32_t handler_len;
+	/*
+	 * Hardware register exvar_offset is measured from. Not always the frame
+	 * pointer: LLVM homes locals off SP once it realigns a frame, and off a
+	 * base pointer if that frame also has var-sized objects.
+	 */
+	guint8 exvar_base_reg;
 	union {
 		MonoClass *catch_class;
 		gpointer filter;

@@ -726,11 +726,9 @@ EmitContext::emit_method_inner ()
 			return;
 		}
 		/*
-		 * The thread-abort guard writes *(RBP + exvar_offset) = 1 into a running
-		 * finally's frame, and that offset comes back from a stackmap as an
-		 * RBP-relative location, so a finally-bearing method has to keep its frame
-		 * pointer. The stackmap and the EH pad each force one anyway; pinning it
-		 * makes the slot's home unambiguous rather than incidental.
+		 * The stackmap and the EH pad each force a frame pointer anyway, so
+		 * pinning it is free. It says nothing about where the exvar lands -
+		 * LLVM still homes locals off SP once it realigns the frame.
 		 */
 		if (clause->flags == MONO_EXCEPTION_CLAUSE_FINALLY)
 			mono_llvm_add_func_attr_nv (method, "frame-pointer", "all");
@@ -2101,6 +2099,28 @@ recover_gshared_this_slot (MonoCompile *cfg, guint8 *stackmaps, guint32 size)
 }
 
 /*
+ * Can a stack walk rebuild HW_REG for the frame it is looking at? True for SP
+ * and for the callee-saved registers the unwind info restores; a caller-saved
+ * register's value is long gone by then.
+ */
+static bool
+exvar_base_reg_is_recoverable (int hw_reg)
+{
+	switch (hw_reg) {
+	case AMD64_RSP:
+	case AMD64_RBP:
+	case AMD64_RBX:
+	case AMD64_R12:
+	case AMD64_R13:
+	case AMD64_R14:
+	case AMD64_R15:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
  * One opening marker: which FINALLY clause it belongs to, where it ended up, and
  * the frame slot it named.
  */
@@ -2108,7 +2128,14 @@ struct FinallyMarker {
 	guint32 clause_index = 0;
 	guint32 pc = 0;
 	gint32 offset = 0;
+	int base_reg = -1;
 };
+
+static bool
+same_exvar_slot (const FinallyMarker &a, const FinallyMarker &b)
+{
+	return a.offset == b.offset && a.base_reg == b.base_reg;
+}
 
 /*
  * recover_finally_markers:
@@ -2130,8 +2157,11 @@ struct FinallyMarker {
  *
  * A FINALLY clause with no record is not an error - its body was optimized away
  * entirely, so there is nothing for a thread to be stopped inside.
+ *
+ * Returns false if a marker named a slot the guard could not reach, in which
+ * case the caller declines the method to the classic JIT (CAP-EH-0).
  */
-static void
+static bool
 recover_finally_markers (const std::vector<MonoExceptionClause> &clauses,
                          guint8 *stackmaps, guint32 size,
                          std::vector<FinallyMarker> &out)
@@ -2146,7 +2176,7 @@ recover_finally_markers (const std::vector<MonoExceptionClause> &clauses,
 			has_finally = true;
 	}
 	if (!has_finally)
-		return;
+		return true;
 
 	/*
 	 * No section at all means every finally body optimized away, so there is
@@ -2154,7 +2184,7 @@ recover_finally_markers (const std::vector<MonoExceptionClause> &clauses,
 	 * section that is present but unreadable is our own emission breaking.
 	 */
 	if (!stackmaps || !size)
-		return;
+		return true;
 	g_assert (parse_stackmap_records (stackmaps, size, records));
 
 	for (const StackmapRecord &r : records) {
@@ -2167,20 +2197,29 @@ recover_finally_markers (const std::vector<MonoExceptionClause> &clauses,
 		g_assert (clause_index < clauses.size ());
 		g_assert (clauses [clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
 
-		/*
-		 * The slot is a volatile alloca in a method whose frame pointer we pin,
-		 * so LLVM has nowhere else to put it than RBP-relative Direct.
-		 */
+		/* An alloca operand always lowers to Direct: reg+offset is its address. */
 		g_assert (r.loc_is_direct);
 		g_assert (mono_dwarf_reg_is_valid (r.loc_dwarf_reg));
-		g_assert (mono_dwarf_reg_to_hw_reg (r.loc_dwarf_reg) == AMD64_RBP);
+
+		/*
+		 * Which register LLVM homed the slot against is its own choice - FP
+		 * normally, SP once it realigns the frame, a base pointer if that frame
+		 * also has var-sized objects - so carry the register, don't assume one.
+		 */
+		int base_reg = mono_dwarf_reg_to_hw_reg (r.loc_dwarf_reg);
+
+		if (!exvar_base_reg_is_recoverable (base_reg))
+			return false;
 
 		FinallyMarker m;
 		m.clause_index = clause_index;
 		m.pc = r.instr_off;
 		m.offset = r.loc_offset;
+		m.base_reg = base_reg;
 		out.push_back (m);
 	}
+
+	return true;
 }
 
 /*
@@ -2467,7 +2506,10 @@ EmitContext::llvm_jit_finalize_method ()
 		 * named the frame slot to flag an abort through. Empty for a method with
 		 * no finally.
 		 */
-		recover_finally_markers (clauses, static_cast<guint8*>(stackmaps), stackmaps_size, markers);
+		if (!recover_finally_markers (clauses, static_cast<guint8*>(stackmaps), stackmaps_size, markers)) {
+			this->set_failure ("finally exvar slot is homed against a register a stack walk cannot rebuild");
+			return;
+		}
 
 		/*
 		 * Join each body run to the marker sitting inside it, rather than to its
@@ -2494,7 +2536,7 @@ EmitContext::llvm_jit_finalize_method ()
 				 * about where the runs are - unless it names the same slot,
 				 * which is just a marker the optimizer duplicated in place.
 				 */
-				g_assert (!found || found->offset == m.offset);
+				g_assert (!found || same_exvar_slot (*found, m));
 				found = &m;
 			}
 
@@ -2517,7 +2559,7 @@ EmitContext::llvm_jit_finalize_method ()
 				for (const FinallyMarker &m : markers) {
 					if (m.clause_index != e.clause_index)
 						continue;
-					if (found && found->offset != m.offset) {
+					if (found && !same_exvar_slot (*found, m)) {
 						ambiguous = true;
 						break;
 					}
@@ -2551,6 +2593,7 @@ EmitContext::llvm_jit_finalize_method ()
 			g.handler_start_off = e.try_start_off;
 			g.handler_end_off = e.try_start_off + e.try_len;
 			g.exvar_offset = found->offset;
+			g.exvar_base_reg = static_cast<std::uint8_t> (found->base_reg);
 
 			guards.push_back (g);
 		}

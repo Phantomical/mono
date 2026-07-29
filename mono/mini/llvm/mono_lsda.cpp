@@ -182,8 +182,9 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
  * Append one entry per recovered finally body range, carrying the two things the
  * runtime's thread-abort guard reads about a running finally: the PC range that
  * says a frame is inside the body (find_last_handler_block) and the frame byte
- * to flag the abort through (install_handler_block_guard writes
- * *(bp + exvar_offset) = 1; the shared IR reads it once the finally returns).
+ * to flag the abort through (install_handler_block_guard writes a 1 at
+ * exvar_base_reg + exvar_offset; the shared IR reads it once the finally
+ * returns).
  *
  * These are DELIBERATELY entries of their own rather than fields on the FINALLY
  * entries built above. A finally whose protected region has no call that can
@@ -224,6 +225,7 @@ append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
 		ei.handler_start = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + g.handler_start_off);
 		ei.data.handler_end = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + g.handler_end_off);
 		ei.exvar_offset = g.exvar_offset;
+		ei.exvar_base_reg = g.exvar_base_reg;
 
 		out.push_back (ei);
 	}

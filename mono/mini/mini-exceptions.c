@@ -3862,13 +3862,25 @@ find_last_handler_block (StackFrameInfo *frame, MonoContext *ctx, gpointer data)
 }
 
 
+/*
+ * Address of the byte CLAUSE's thread-abort guard flags, in the frame CTX
+ * describes. CTX comes from a stack walk, where SP holds the callee's CFA -
+ * this frame's own stack pointer at the call it is stopped in.
+ */
+static guint8*
+handler_block_exvar_addr (MonoJitExceptionInfo *clause, MonoContext *ctx)
+{
+	guint8 *base = (guint8*)(gsize)mono_arch_context_get_int_reg (ctx, clause->exvar_base_reg);
+
+	return base + clause->exvar_offset;
+}
+
 static void
 install_handler_block_guard (MonoJitInfo *ji, MonoContext *ctx)
 {
 	int i;
 	MonoJitExceptionInfo *clause = NULL;
 	gpointer ip;
-	guint8 *bp;
 
 	ip = MINI_FTNPTR_TO_ADDR (MONO_CONTEXT_GET_IP (ctx));
 
@@ -3884,8 +3896,7 @@ install_handler_block_guard (MonoJitInfo *ji, MonoContext *ctx)
 	g_assert (i < ji->num_clauses);
 
 	/*Load the spvar*/
-	bp = (guint8*)MONO_CONTEXT_GET_BP (ctx);
-	*(bp + clause->exvar_offset) = 1;
+	*handler_block_exvar_addr (clause, ctx) = 1;
 }
 
 /*

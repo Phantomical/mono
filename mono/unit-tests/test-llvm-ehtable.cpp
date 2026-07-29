@@ -1478,6 +1478,30 @@ cases_mono_lsda_finally_guards (void)
 		}
 	}
 
+	/* The base register is per guard, not per method - two copies of one body
+	 * can be homed against different registers. */
+	{
+		std::vector<MonoLsdaEntry> ents;
+		/* 4/5 are AMD64_RSP/AMD64_RBP; this only checks that the byte survives. */
+		std::vector<MonoFinallyGuard> guards = {
+			{ 0, 0x20, 0x30, -24, 4 },
+			{ 0, 0x80, 0x90, -24, 5 },
+		};
+		std::vector<MonoJitExceptionInfo> out;
+		current_case = "guard-base-reg";
+		cases_run ++;
+		bool ok = mono::build_ex_info (ents, clauses, 2, base, code_len, out, guards);
+		bool good = ok && out.size () == 2 &&
+			out[0].exvar_offset == -24 && out[0].exvar_base_reg == AMD64_RSP &&
+			out[1].exvar_offset == -24 && out[1].exvar_base_reg == AMD64_RBP;
+		if (!good) {
+			printf ("FAIL guard-base-reg: ok=%d size=%zu\n", ok, out.size ());
+			failures ++;
+		} else {
+			printf ("ok   guard-base-reg\n");
+		}
+	}
+
 	/* A catch-only method passes no guards and is unaffected. */
 	{
 		std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 1 } };

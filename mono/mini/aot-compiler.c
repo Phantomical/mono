@@ -7186,10 +7186,13 @@ emit_exception_debug_info (MonoAotCompile *acfg, MonoCompile *cfg, gboolean stor
 			encode_value (ei->flags, p, &p);
 #ifdef MONO_CONTEXT_SET_LLVM_EXC_REG
 			/* Not used for catch clauses */
-			if (ei->flags != MONO_EXCEPTION_CLAUSE_NONE)
+			if (ei->flags != MONO_EXCEPTION_CLAUSE_NONE) {
 				encode_value (ei->exvar_offset, p, &p);
+				encode_value (ei->exvar_base_reg, p, &p);
+			}
 #else
 			encode_value (ei->exvar_offset, p, &p);
+			encode_value (ei->exvar_base_reg, p, &p);
 #endif
 
 			if (ei->flags == MONO_EXCEPTION_CLAUSE_FILTER || ei->flags == MONO_EXCEPTION_CLAUSE_FINALLY)

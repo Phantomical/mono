@@ -2690,6 +2690,7 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 
 			exvar = mono_find_exvar_for_offset (cfg, ec->handler_offset);
 			ei->exvar_offset = exvar ? exvar->inst_offset : 0;
+			ei->exvar_base_reg = exvar ? exvar->inst_basereg : cfg->frame_reg;
 
 			if (ei->flags == MONO_EXCEPTION_CLAUSE_FILTER) {
 				tblock = cfg->cil_offset_to_bb [ec->data.filter_offset];
