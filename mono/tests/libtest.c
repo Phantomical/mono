@@ -7873,7 +7873,9 @@ mono_test_native_to_managed_exception_rethrow (NativeToManagedExceptionRethrowFu
 #endif
 
 typedef void (*VoidVoidCallback) (void);
-typedef void (*MonoFtnPtrEHCallback) (guint32 gchandle);
+/* A pointer, not a uint32: Boehm's handles are addresses into a handle block,
+ * so truncating one to 32 bits yields a handle the runtime rejects. */
+typedef void (*MonoFtnPtrEHCallback) (gpointer gchandle);
 
 typedef void *MonoDomain;
 typedef void *MonoAssembly;
@@ -7888,9 +7890,9 @@ typedef int32_t mono_bool;
 
 static int sym_inited = 0;
 static void (*sym_mono_install_ftnptr_eh_callback) (MonoFtnPtrEHCallback);
-static MonoObject* (*sym_mono_gchandle_get_target) (guint32 gchandle);
-static guint32 (*sym_mono_gchandle_new) (MonoObject *, mono_bool pinned);
-static void (*sym_mono_gchandle_free) (guint32 gchandle);
+static MonoObject* (*sym_mono_gchandle_get_target_v2) (gpointer gchandle);
+static gpointer (*sym_mono_gchandle_new_v2) (MonoObject *, mono_bool pinned);
+static void (*sym_mono_gchandle_free_v2) (gpointer gchandle);
 static void (*sym_mono_raise_exception) (MonoException *ex);
 static void (*sym_mono_domain_unload) (gpointer);
 static void (*sym_mono_threads_exit_gc_safe_region_unbalanced) (gpointer, gpointer *);
@@ -7933,9 +7935,9 @@ mono_test_init_symbols (void)
 		return;
 
 	SYM_LOOKUP (mono_install_ftnptr_eh_callback);
-	SYM_LOOKUP (mono_gchandle_get_target);
-	SYM_LOOKUP (mono_gchandle_new);
-	SYM_LOOKUP (mono_gchandle_free);
+	SYM_LOOKUP (mono_gchandle_get_target_v2);
+	SYM_LOOKUP (mono_gchandle_new_v2);
+	SYM_LOOKUP (mono_gchandle_free_v2);
 	SYM_LOOKUP (mono_raise_exception);
 	SYM_LOOKUP (mono_domain_unload);
 	SYM_LOOKUP (mono_threads_exit_gc_safe_region_unbalanced);
@@ -7957,10 +7959,10 @@ mono_test_init_symbols (void)
 #ifndef TARGET_WASM
 
 static jmp_buf test_jmp_buf;
-static guint32 test_gchandle;
+static gpointer test_gchandle;
 
 static void
-mono_test_longjmp_callback (guint32 gchandle)
+mono_test_longjmp_callback (gpointer gchandle)
 {
 	test_gchandle = gchandle;
 	longjmp (test_jmp_buf, 1);
@@ -7977,7 +7979,7 @@ mono_test_setjmp_and_call (VoidVoidCallback managedCallback, intptr_t *out_handl
 		*out_handle = 0; /* Do not expect to return here */
 	} else {
 		sym_mono_install_ftnptr_eh_callback (NULL);
-		*out_handle = test_gchandle;
+		*out_handle = (intptr_t)test_gchandle;
 	}
 }
 
@@ -7988,31 +7990,31 @@ mono_test_marshal_bstr (void *ptr)
 {
 }
 
-static void (*mono_test_capture_throw_callback) (guint32 gchandle, guint32 *exception_out);
+static void (*mono_test_capture_throw_callback) (gpointer gchandle, gpointer *exception_out);
 
 static void
-mono_test_ftnptr_eh_callback (guint32 gchandle)
+mono_test_ftnptr_eh_callback (gpointer gchandle)
 {
-	guint32 exception_handle = 0;
+	gpointer exception_handle = NULL;
 
-	g_assert (gchandle != 0);
-	MonoObject *exc = sym_mono_gchandle_get_target (gchandle);
-	sym_mono_gchandle_free (gchandle);
+	g_assert (gchandle != NULL);
+	MonoObject *exc = sym_mono_gchandle_get_target_v2 (gchandle);
+	sym_mono_gchandle_free_v2 (gchandle);
 
-	guint32 handle = sym_mono_gchandle_new (exc, FALSE);
+	gpointer handle = sym_mono_gchandle_new_v2 (exc, FALSE);
 	mono_test_capture_throw_callback (handle, &exception_handle);
-	sym_mono_gchandle_free (handle);
+	sym_mono_gchandle_free_v2 (handle);
 
-	g_assert (exception_handle != 0);
-	exc = sym_mono_gchandle_get_target (exception_handle);
-	sym_mono_gchandle_free (exception_handle);
+	g_assert (exception_handle != NULL);
+	exc = sym_mono_gchandle_get_target_v2 (exception_handle);
+	sym_mono_gchandle_free_v2 (exception_handle);
 
 	sym_mono_raise_exception (exc);
 	g_error ("mono_raise_exception should not return");
 }
 
 LIBTEST_API void STDCALL
-mono_test_setup_ftnptr_eh_callback (VoidVoidCallback managed_entry, void (*capture_throw_callback) (guint32, guint32 *))
+mono_test_setup_ftnptr_eh_callback (VoidVoidCallback managed_entry, void (*capture_throw_callback) (gpointer, gpointer *))
 {
 	mono_test_init_symbols ();
 	mono_test_capture_throw_callback = capture_throw_callback;

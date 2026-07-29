@@ -18,7 +18,7 @@ public class Tests {
 	public static extern void mono_test_cleanup_ftptr_eh_callback ();
 	
 	public delegate void VoidVoidDelegate ();
-	public delegate void VoidHandleHandleOutDelegate (uint handle, out int exception_handle);
+	public delegate void VoidHandleHandleOutDelegate (IntPtr handle, out IntPtr exception_handle);
 
 	public class SpecialExn : Exception {
 	}
@@ -112,20 +112,20 @@ public class Tests {
 			return_from_inner_managed_callback = false;
 		}
 
-		public static void RethrowException (uint original_exception) {
-			var e = (Exception) GCHandle.FromIntPtr ((IntPtr) original_exception).Target;
+		public static void RethrowException (IntPtr original_exception) {
+			var e = (Exception) GCHandle.FromIntPtr (original_exception).Target;
 			rethrow_called = true;
 			System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture (e).Throw ();
 		}
 
 		[MonoPInvokeCallback (typeof (VoidHandleHandleOutDelegate))]
-		public static void Del2 (uint original_exception, out int exception_handle) {
-			exception_handle = 0;
+		public static void Del2 (IntPtr original_exception, out IntPtr exception_handle) {
+			exception_handle = IntPtr.Zero;
 			try {
 				RethrowException (original_exception);
 			} catch (Exception ex) {
 				var handle = GCHandle.Alloc (ex, GCHandleType.Normal);
-				exception_handle = GCHandle.ToIntPtr (handle).ToInt32 ();
+				exception_handle = GCHandle.ToIntPtr (handle);
 				exception_caught = true;
 			}
 			return_from_inner_managed_callback = true;
