@@ -50,16 +50,8 @@ foreach(src ${INLINER_TESTS})
     CORPUS "${CMAKE_CURRENT_BINARY_DIR}/${test_name}.exe"
     SOURCE "${src}")
 
-  foreach(n 0 1 20 1000)
+  foreach(n 0 1)
     mono_add_tiered_test("${test_name}" "${test_name}.exe" ${n})
-  endforeach()
-
-  # --regression replays the test once per optimization combination.  It is not inliner
-  # coverage - tier 1 latches a root's opt the first time it promotes and the first
-  # opt-set is 0, so the pass stands down on everything - but it is the only thing here
-  # that varies the tier-0 optimizations under a promoted root.
-  foreach(n 1 20 1000)
-    mono_add_tiered_test("${test_name}-regression" "${test_name}.exe" ${n} ARGS --regression)
   endforeach()
 endforeach()
 

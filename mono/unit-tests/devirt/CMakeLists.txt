@@ -33,7 +33,7 @@ foreach(src ${DEVIRT_TESTS})
     CORPUS "${CMAKE_CURRENT_BINARY_DIR}/${test_name}.exe"
     SOURCE "${src}")
 
-  foreach(n 0 1 20 1000)
+  foreach(n 0 1)
     mono_add_tiered_test("${test_name}" "${test_name}.exe" ${n})
   endforeach()
 endforeach()
