@@ -1260,18 +1260,12 @@ set(MONO_TESTS_TAILCALL_DISABLED_RUN
 
 
 # Tests kept off the boehm half, so only `<test>@sgen` runs.
-#
-# weak-fields.exe        the runtime prints "Weak fields not supported by boehm
-#                        gc" and aborts.
-# thread-suspend-suspended  hangs, and spends the whole 300s timeout doing it.
-# monitor-resurrection   ArgumentException out of Main, every run. Resurrecting
-#                        an object from its finalizer and re-entering its
-#                        monitor; a conservative collector keeps it reachable
-#                        differently. Fails under the JIT and the interpreter
-#                        alike.
 set(MONO_TESTS_BOEHM_DISABLED
+  # boehm does not support weak fields
   weak-fields.exe
+  # currently hangs
   thread-suspend-suspended.exe
+  # this test does not run correctly under a conservative gc
   monitor-resurrection.exe
 )
 
