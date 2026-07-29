@@ -34,6 +34,7 @@ include(MonoConfigureFixed)
 include(MonoLLVM)
 include(MonoHelpers)
 include(MonoToolsRuntime)
+include(MonoCorpus)
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.h.in"
                "${CMAKE_CURRENT_BINARY_DIR}/config.h")
