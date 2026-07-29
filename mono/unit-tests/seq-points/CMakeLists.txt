@@ -19,11 +19,11 @@ if(NOT MONO_MINI_REGTESTS)
   return()
 endif()
 
-foreach(_corpus IN LISTS MONO_MINI_REGTESTS)
-  string(REGEX REPLACE "\\.exe$" "" _stem "${_corpus}")
-  mono_add_corpus_check("seq-points/${_stem}"
-    SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/check_seq_points.py"
-    CORPUS "${MONO_CORPUS_MINI_DIR}/${_corpus}"
-    LABELS manual)
-  set_tests_properties("seq-points/${_stem}" PROPERTIES DISABLED TRUE)
-endforeach()
+# foreach(_corpus IN LISTS MONO_MINI_REGTESTS)
+#   string(REGEX REPLACE "\\.exe$" "" _stem "${_corpus}")
+#   mono_add_corpus_check("seq-points/${_stem}"
+#     SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/check_seq_points.py"
+#     CORPUS "${MONO_CORPUS_MINI_DIR}/${_corpus}"
+#     LABELS manual)
+#   set_tests_properties("seq-points/${_stem}" PROPERTIES DISABLED TRUE)
+# endforeach()

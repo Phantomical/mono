@@ -102,6 +102,9 @@ GTAGS
 docs/doxygen*
 docs/perlmod*
 
+# Python Caches
+__pycache__
+
 
 ##############################################################################
 # Mono-specific patterns
