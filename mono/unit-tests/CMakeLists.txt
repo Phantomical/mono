@@ -4,12 +4,9 @@
 # Each test is its body plus main.c compiled with -DMAIN=<function>, which is
 # how the automake build shared a single entry point across all of them.
 
-# The corpus-driven checks come first: each is a managed program run under the
-# mono binary plus a Python script asserting on what a pass decided, so unlike
-# everything below they link nothing and do not care which collector is built.
 if(MONO_CORPUS_ENABLED)
-  add_subdirectory(inliner-tags)
-  add_subdirectory(devirt-tags)
+  add_subdirectory(inliner)
+  add_subdirectory(devirt)
   add_subdirectory(statics-symbols)
   add_subdirectory(il-offsets)
   add_subdirectory(seq-points)

@@ -415,24 +415,3 @@ result.
   install an upstream LLVM 14+ and point `MONO_LLVM_PREFIX` at it, e.g.
   `-DMONO_LLVM_PREFIX=/usr/lib/llvm-18`. See
   [§ build with the LLVM backend](#optional-build-with-the-llvm-backend).
-
----
-
-## Official Unity build path
-
-When you are on Unity's internal network (so the Stevedore mirror is reachable),
-the canonical Linux build — matching `.yamato/Build Linux x64.yml` — is:
-
-```bash
-export UNITY_THISISABUILDMACHINE=1
-git submodule update --init --recursive
-( cd external/buildscripts && ./bee )     # downloads pinned toolchain + sysroot
-perl external/buildscripts/build_runtime_linux.pl --stevedorebuilddeps=1
-# results land under builds/  (copied to incomingbuilds/linux64 by the CI script)
-```
-
-Setting `UNITY_THISISABUILDMACHINE=1` makes `build.pl` use the downloaded
-CentOS-7 clang + glibc-2.17 sysroot (`x86_64-glibc2.17-linux-gnu`) for a portable,
-distro-independent binary. The local build above intentionally skips that and links
-against your system glibc instead — perfect for development, not for shipping a
-redistributable artifact.
