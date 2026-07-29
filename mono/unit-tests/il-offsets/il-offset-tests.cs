@@ -54,9 +54,9 @@ class ILOffsetTests {
 	}
 
 	/*
-	 * Padded to ~15 statements for the same reason inliner-tests.cs pads its
-	 * fixtures: without it the classic JIT folds the call away before tier 1 ever
-	 * sees it, and the scenario stops being about tier-1 inlining.
+	 * Padded to ~15 statements for the same reason the inliner fixtures are: without
+	 * it the classic JIT folds the call away before tier 1 ever sees it, and the
+	 * scenario stops being about tier-1 inlining.
 	 */
 	static int InlinableThrower (int x)
 	{
