@@ -208,6 +208,19 @@ static gboolean tiered_enabled;
 static guint32 tiered_call_threshold;
 
 /*
+ * MONO_TIERED_DRAIN_ON_EXIT: whether shutdown waits for everything already
+ * queued to be compiled, instead of stopping the pool wherever it happens to
+ * have got to. Off by default - a process on its way out has nothing to gain
+ * from more tier-1 code, and waiting for it only delays exit.
+ *
+ * It is on for anything reading a pass's trace as the record of what the pass
+ * decided. Normally the trace covers whichever methods a worker happened to
+ * reach before the mutator finished, which is a race, so the same run can
+ * produce a different trace each time. See tiered_drain_queue ().
+ */
+static gboolean tiered_drain_on_exit;
+
+/*
  * The per-method, per-domain tier-0 call counter and redirect block. The
  * prologue bakes this block's address twice - once at method entry to check
  * tier1_entry (the redirect sled), and once at the prologue tail to
@@ -290,6 +303,23 @@ tiered_env_enabled (void)
 	return enabled;
 }
 
+/*
+ * MONO_TIERED_DRAIN_ON_EXIT, the other way round: off unless it is turned on by
+ * hand, using the same vocabulary as MONO_TIERED for what counts as a negative.
+ */
+static gboolean
+tiered_env_drain_on_exit (void)
+{
+	char *e = g_getenv ("MONO_TIERED_DRAIN_ON_EXIT");
+	gboolean drain = FALSE;
+
+	if (e) {
+		drain = *e && g_ascii_strcasecmp (e, "0") && g_ascii_strcasecmp (e, "no") && g_ascii_strcasecmp (e, "false");
+		g_free (e);
+	}
+	return drain;
+}
+
 static void
 tiered_do_init (void)
 {
@@ -328,6 +358,8 @@ tiered_do_init (void)
 			g_free (e);
 		}
 	}
+
+	tiered_drain_on_exit = tiered_env_drain_on_exit ();
 }
 
 /*
@@ -875,6 +907,14 @@ mono_llvm_tiered_domain_unload (MonoDomain *domain)
  */
 #define TIERED_SHUTDOWN_TIMEOUT_MS 5000
 
+/*
+ * How long tiered_drain_queue () waits for the queue to empty. Much longer than
+ * the shutdown budget above: that one bounds a graceful stop nobody is waiting
+ * on the results of, whereas a drain is work the caller asked to see finished,
+ * and a large corpus can have a lot of it left.
+ */
+#define TIERED_DRAIN_TIMEOUT_MS 120000
+
 static mono_lazy_init_t tiered_worker_init = MONO_LAZY_INIT_STATUS_NOT_INITIALIZED;
 static volatile gboolean tiered_worker_shutdown;
 /*
@@ -1175,6 +1215,63 @@ tiered_worker_main (gpointer unused)
 }
 
 /*
+ * MONO_TIERED_DRAIN_ON_EXIT only: block until the queue is empty and no worker
+ * is mid-compile, so that everything enqueued before shutdown actually gets
+ * compiled rather than dropped where the pool happened to be.
+ *
+ * Called before the shutdown flag goes up, which is the whole point: once it is
+ * set the workers leave their loop at the next opportunity and whatever is still
+ * queued is abandoned.
+ *
+ * The wait covers in-flight compiles as well as the queue because a compile can
+ * put work back on it - LLVM codegen reaching a helper it needs compiled on the
+ * spot, whose own tier-0 publish enqueues. Testing both together, in a loop,
+ * settles that: the queue is only really empty once nobody is still able to add
+ * to it.
+ *
+ * Bounded for the same reason mono_llvm_tiered_shutdown () is - a worker wedged
+ * in a pathological compile must not hang process exit - but on a much longer
+ * budget, because here the wait is for work the caller explicitly asked to see
+ * finished rather than for a graceful stop. On timeout it gives up and lets
+ * shutdown proceed; a caller that was draining to read a complete trace gets an
+ * incomplete one and should fail on that, which is better than hanging.
+ */
+static void
+tiered_drain_queue (void)
+{
+	gint64 start = mono_msec_ticks ();
+
+	mono_coop_mutex_lock (&tiered_worker_mutex);
+	for (;;) {
+		gboolean empty;
+		gint64 elapsed;
+
+		/* Same order the worker takes them in: doorbell, then queue. */
+		mono_os_mutex_lock (&tiered_mutex);
+		empty = g_queue_is_empty (tiered_queue);
+		mono_os_mutex_unlock (&tiered_mutex);
+
+		if (empty && !tiered_workers_compiling)
+			break;
+
+		elapsed = mono_msec_ticks () - start;
+		if (elapsed >= TIERED_DRAIN_TIMEOUT_MS) {
+			g_warning ("tiered: MONO_TIERED_DRAIN_ON_EXIT gave up after %dms with "
+				   "%d compile(s) in flight", TIERED_DRAIN_TIMEOUT_MS, tiered_workers_compiling);
+			break;
+		}
+
+		/*
+		 * A worker broadcasts as it finishes each compile, so the common case
+		 * wakes immediately; the timeout only matters for the window where the
+		 * queue is non-empty but every worker is still on its way to noticing.
+		 */
+		mono_coop_cond_timedwait (&tiered_worker_wake, &tiered_worker_mutex, 50);
+	}
+	mono_coop_mutex_unlock (&tiered_worker_mutex);
+}
+
+/*
  * Ask the worker to exit, and WAIT (bounded) for it to actually do so before
  * returning. Not a join in the thread-API sense - the worker is a background,
  * DONT_MANAGE thread, so mono_thread_manage () never waits for it - but
@@ -1213,6 +1310,9 @@ mono_llvm_tiered_shutdown (void)
 
 	if (!mono_llvm_tiered_enabled () || !mono_lazy_is_initialized (&tiered_worker_init))
 		return;
+
+	if (tiered_drain_on_exit)
+		tiered_drain_queue ();
 
 	mono_coop_mutex_lock (&tiered_worker_mutex);
 	tiered_worker_shutdown = TRUE;

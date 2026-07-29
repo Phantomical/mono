@@ -13,13 +13,20 @@ import os
 import subprocess
 import sys
 
-# Threshold 0 is the only deterministic mode: above it promotion is handed to a
-# background worker, so which methods reach tier 1 before the process exits --
-# and therefore which decisions the trace even contains -- varies from run to
-# run.
-EAGER_TIER1 = {
+# The configuration a trace can be read as a record of what a pass decided,
+# rather than as a sample of what it got round to.
+#
+# Threshold 0 promotes on the mutator at the tier-0 publish site, so every method
+# the corpus runs is compiled before the process exits.  Above it promotion goes
+# to a background worker and the trace stops being reproducible, which the other
+# two settings are what make recoverable: one compile thread so the decisions are
+# serialized instead of interleaved, and a drain so the ones still queued at exit
+# are made rather than dropped.
+DETERMINISTIC_TIER1 = {
     "MONO_TIERED": "1",
     "MONO_TIERED_CALL_THRESHOLD": "0",
+    "MONO_TIERED_COMPILE_THREADS": "1",
+    "MONO_TIERED_DRAIN_ON_EXIT": "1",
 }
 
 
@@ -61,7 +68,7 @@ def traced_run(runtime, corpus, trace_var, *, args=("--llvm",)):
     Bails out if the corpus itself failed, so callers only ever see a trace
     from a run that got all the way through.
     """
-    env = dict(EAGER_TIER1)
+    env = dict(DETERMINISTIC_TIER1)
     env[trace_var] = "1"
     proc = run(runtime, corpus, args=args, env=env)
     if proc.returncode != 0:

@@ -75,7 +75,7 @@ def main():
     classic = frames(proc.stdout)
 
     proc = jitcheck.run(args.runtime, args.corpus, args=("--llvm",),
-                        env=jitcheck.EAGER_TIER1)
+                        env=jitcheck.DETERMINISTIC_TIER1)
     if proc.returncode != 0:
         jitcheck.die(f"the tier-1 run failed (exit {proc.returncode})")
     tiered = frames(proc.stdout)
