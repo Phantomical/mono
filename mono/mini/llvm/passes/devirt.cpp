@@ -20,6 +20,7 @@
 #include "devirt.hpp"
 
 #include "inliner-support.hpp"
+#include "runtime-address.hpp"
 
 #ifdef PIC
 #undef PIC
@@ -127,17 +128,11 @@ allocated_class (const CallBase &cb)
 	if (!method || method->wrapper_type != MONO_WRAPPER_ALLOC)
 		return nullptr;
 
-	Value *arg = cb.getArgOperand (0);
-	/* The argument is an intptr, but a constant can arrive folded through a cast. */
-	if (auto *expr = dyn_cast<ConstantExpr> (arg))
-		if (expr->getOpcode () == Instruction::IntToPtr || expr->getOpcode () == Instruction::PtrToInt)
-			arg = expr->getOperand (0);
-
-	auto *vtable_const = dyn_cast<ConstantInt> (arg);
-	if (!vtable_const)
+	uint64_t addr;
+	if (!mono::runtime_address (cb.getArgOperand (0), cb.getModule ()->getDataLayout (), &addr))
 		return nullptr;
 
-	auto *vtable = (MonoVTable *) (gsize) vtable_const->getZExtValue ();
+	auto *vtable = (MonoVTable *) (gsize) addr;
 	return vtable ? vtable->klass : nullptr;
 }
 

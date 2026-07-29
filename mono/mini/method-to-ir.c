@@ -1713,7 +1713,7 @@ mini_emit_runtime_constant (MonoCompile *cfg, MonoJumpInfoType patch_type, gpoin
 {
 	MonoInst *ins;
 
-	if (cfg->compile_aot) {
+	if (cfg->compile_aot || COMPILE_LLVM (cfg)) {
 MONO_DISABLE_WARNING (4306) // 'type cast': conversion from 'MonoJumpInfoType' to 'MonoInst *' of greater size
 		EMIT_NEW_AOTCONST (cfg, ins, patch_type, data);
 MONO_RESTORE_WARNING
@@ -10037,7 +10037,7 @@ calli_end:
 							}
 						}
 					}
-					if (cfg->compile_aot)
+					if (cfg->compile_aot || COMPILE_LLVM (cfg))
 						EMIT_NEW_SFLDACONST (cfg, ins, field);
 					else {
 						g_assert (vtable);

@@ -748,6 +748,219 @@ EmitContext::get_direct_callee (const char *name, LLVMTypeRef llvm_sig, gpointer
 }
 
 /*
+ * MONO_LLVM_CONST_TRACE=1: report how each patch got encoded. "unclassified" is
+ * the one worth grepping for - a patch kind the conversion to linker symbols
+ * has not reached, which is otherwise invisible because it still works, just
+ * with its old encoding.
+ */
+static bool
+mono_llvm_const_trace (void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		char *e = g_getenv ("MONO_LLVM_CONST_TRACE");
+		enabled = (e && *e && strcmp (e, "0") != 0) ? 1 : 0;
+		g_free (e);
+	}
+
+	return enabled != 0;
+}
+
+/*
+ * What the runtime guarantees about the alignment of the data a patch names.
+ * Understating is free; overstating would let LLVM pick an aligned access for
+ * something that is not.
+ */
+static unsigned
+jit_const_alignment (MonoJumpInfoType type, gconstpointer data)
+{
+	switch (type) {
+	case MONO_PATCH_INFO_SFLDA: {
+		int align;
+		mono_type_size (mono_field_get_type_internal ((MonoClassField *) data), &align);
+		/* Capped: the static data block is only pointer-aligned, whatever the
+		 * field's own type would like. */
+		return MIN (align, TARGET_SIZEOF_VOID_P);
+	}
+	case MONO_PATCH_INFO_LDSTR_LIT:
+		/* A byte string. */
+		return 1;
+	default:
+		/* A runtime allocation, so pointer-aligned at least. */
+		return TARGET_SIZEOF_VOID_P;
+	}
+}
+
+/*
+ * How a patch's value has to be spelled in the IR.
+ *
+ * Data is the interesting one: a pointer to something the runtime owns, which
+ * becomes an external global the JIT linker resolves. Integer covers the patches
+ * whose "address" is really a small number (an interface id, a nursery shift),
+ * where a symbol would be meaningless. Opaque is the fallback - the address
+ * baked in as a literal, which is what every one of these used to be.
+ */
+enum class ConstShape { Data, Integer, Opaque };
+
+/*
+ * A readable name for the runtime data a patch names, or NULL to let the caller
+ * fall back to a generic one. Legibility only - mono_llvm_data_symbol () keys on
+ * the address, so nothing depends on this being unique.
+ */
+static char *
+jit_const_hint (MonoJumpInfoType type, gconstpointer data)
+{
+	switch (type) {
+	case MONO_PATCH_INFO_SFLDA: {
+		MonoClassField *field = (MonoClassField *) data;
+		char *parent = mono_type_get_full_name (mono_field_get_parent (field));
+		char *hint = g_strdup_printf ("sfld_%s_%s", parent, mono_field_get_name (field));
+		g_free (parent);
+		return hint;
+	}
+	case MONO_PATCH_INFO_VTABLE: {
+		/* The patch names the class; the vtable is what it resolves to. */
+		char *klass = mono_type_get_full_name ((MonoClass *) data);
+		char *hint = g_strdup_printf ("vtable_%s", klass);
+		g_free (klass);
+		return hint;
+	}
+	case MONO_PATCH_INFO_CLASS: {
+		char *klass = mono_type_get_full_name ((MonoClass *) data);
+		char *hint = g_strdup_printf ("class_%s", klass);
+		g_free (klass);
+		return hint;
+	}
+	case MONO_PATCH_INFO_METHODCONST:
+	case MONO_PATCH_INFO_METHOD_CODE_SLOT:
+	case MONO_PATCH_INFO_METHOD_PINVOKE_ADDR_CACHE: {
+		char *method = mono_method_full_name ((MonoMethod *) data, TRUE);
+		char *hint = g_strdup_printf ("%s_%s", mono_ji_type_to_string (type), method);
+		g_free (method);
+		return hint;
+	}
+	case MONO_PATCH_INFO_FIELD: {
+		MonoClassField *field = (MonoClassField *) data;
+		char *parent = mono_type_get_full_name (mono_field_get_parent (field));
+		char *hint = g_strdup_printf ("field_%s_%s", parent, mono_field_get_name (field));
+		g_free (parent);
+		return hint;
+	}
+	case MONO_PATCH_INFO_IMAGE:
+		return g_strdup_printf ("image_%s", ((MonoImage *) data)->assembly_name);
+	default:
+		/* Named after the patch kind alone; the address does the disambiguating. */
+		return g_strdup (mono_ji_type_to_string (type));
+	}
+}
+
+/*
+ * How the JIT has to spell TYPE's resolved value.
+ *
+ * Deliberately an allowlist rather than a rule with exceptions. The fallback
+ * (Opaque) reproduces exactly what the JIT did before any of this existed, so a
+ * patch kind nobody has classified yet is merely un-improved rather than
+ * mis-encoded - and MONO_LLVM_CONST_TRACE reports which ones those are.
+ */
+static ConstShape
+jit_const_shape (MonoJumpInfoType type)
+{
+	switch (type) {
+	/* Runtime structures the compiled code holds a pointer to. */
+	case MONO_PATCH_INFO_SFLDA:
+	case MONO_PATCH_INFO_VTABLE:
+	case MONO_PATCH_INFO_CLASS:
+	case MONO_PATCH_INFO_IMAGE:
+	case MONO_PATCH_INFO_FIELD:
+	case MONO_PATCH_INFO_METHODCONST:
+	case MONO_PATCH_INFO_SIGNATURE:
+	case MONO_PATCH_INFO_METHOD_CODE_SLOT:
+	case MONO_PATCH_INFO_METHOD_PINVOKE_ADDR_CACHE:
+	case MONO_PATCH_INFO_CASTCLASS_CACHE:
+	case MONO_PATCH_INFO_GC_CARD_TABLE_ADDR:
+	case MONO_PATCH_INFO_GC_NURSERY_START:
+	case MONO_PATCH_INFO_GC_SAFE_POINT_FLAG:
+	case MONO_PATCH_INFO_INTERRUPTION_REQUEST_FLAG:
+	case MONO_PATCH_INFO_PROFILER_ALLOCATION_COUNT:
+	case MONO_PATCH_INFO_PROFILER_CLAUSE_COUNT:
+	case MONO_PATCH_INFO_LDSTR_LIT:
+		return ConstShape::Data;
+
+	/* Resolves to a number, not to an address. */
+	case MONO_PATCH_INFO_IID:
+	case MONO_PATCH_INFO_ADJUSTED_IID:
+	case MONO_PATCH_INFO_GC_NURSERY_BITS:
+	case MONO_PATCH_INFO_RGCTX_SLOT_INDEX:
+		return ConstShape::Integer;
+
+	default:
+		return ConstShape::Opaque;
+	}
+}
+
+/*
+ * get_jit_const:
+ *
+ *   The JIT's OP_AOTCONST: the value TYPE/DATA resolves to, as a real external
+ * symbol the JIT linker resolves wherever that is possible.
+ *
+ *   The value is identical either way - resolve_patch () is what the JIT has
+ * always used to bake these in. What changes is the encoding, and with it what
+ * LLVM can see. An inttoptr'd literal is not an identified object, so alias
+ * analysis has to assume it may alias every other pointer in the function; a
+ * global is a distinct object, and two distinct globals provably do not
+ * overlap. The reference also becomes a relocation JITLink owns rather than an
+ * address welded into the instruction stream - the same reason
+ * get_direct_callee () names its targets - and the asm reads in names instead
+ * of hex.
+ */
+llvm::Value *
+EmitContext::get_jit_const (MonoJumpInfoType type, gconstpointer data)
+{
+	gpointer addr = resolve_patch (this->cfg, type, data);
+	ConstShape shape = jit_const_shape (type);
+
+	/*
+	 * A patch that resolved to nothing has no storage to name, whatever its
+	 * shape says. Rare - a direct-pinvoke placeholder is the one that turns up -
+	 * and a literal null is what the code goes on to test for.
+	 */
+	if (!addr)
+		shape = ConstShape::Integer;
+
+	if (mono_llvm_const_trace ())
+		g_printerr ("llvm-const: %-40s %s\n", mono_ji_type_to_string (type),
+		            shape == ConstShape::Data ? "symbol"
+		            : shape == ConstShape::Integer ? "literal" : "literal (unclassified)");
+
+	if (shape != ConstShape::Data)
+		return llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), (guint64) (gsize) addr, false);
+
+	char *hint = jit_const_hint (type, data);
+	const char *name = mono_llvm_data_symbol (hint, addr);
+	g_free (hint);
+
+	mono_llvm_jit_register_symbol (name, addr);
+
+	LLVMValueRef gv = LLVMGetNamedGlobal (this->lmodule, name);
+	if (!gv) {
+		/*
+		 * Declared, never defined: the storage belongs to the runtime, and only
+		 * its address is ours to speak about. Typed as a byte because most of
+		 * these are variable-length or opaque to us - a static field is the one
+		 * whose extent we actually know, and even there LLVM will not use the
+		 * size of a declaration.
+		 */
+		gv = LLVMAddGlobal (this->lmodule, llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ())), name);
+		LLVMSetLinkage (gv, LLVMExternalLinkage);
+		LLVMSetAlignment (gv, jit_const_alignment (type, data));
+	}
+
+	return llvm::unwrap (gv);
+}
+
+/*
  * get_jit_callee:
  *
  *   Return a callee for one of the non-method call shapes the translator

@@ -319,6 +319,14 @@ public:
 	const char *resolve_symbol_name (void *addr);
 
 	/*
+	 * Forward lookup for register_symbol (): the address NAME was registered
+	 * with, or nullptr if it never was. Passes that reason about runtime data
+	 * (a vtable, a static field) use this to recover the address behind a
+	 * global the translator emitted for the JIT linker to resolve.
+	 */
+	void *symbol_address (llvm::StringRef name);
+
+	/*
 	 * Run the O2 module pipeline over ROOT's module in place, with mono's
 	 * tier-1 inliner in the stock inliner's slot. ROOT tells that inliner which
 	 * compile it is running inside; nothing about the pipeline is shared with a

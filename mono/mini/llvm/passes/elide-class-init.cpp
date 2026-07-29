@@ -16,6 +16,7 @@
 #endif
 
 #include "elide-class-init.hpp"
+#include "runtime-address.hpp"
 
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/DenseMap.h>
@@ -45,30 +46,6 @@ namespace {
 const char kInitTag[] = "mono.class-init";
 const char kCheckTag[] = "mono.class-init-check";
 
-/*
- * The address a constant pointer expression names. The translator writes the
- * vtable as a literal, so both barrier shapes bottom out in an inttoptr of an
- * integer: the prologue guard folds the field offset into it, the front-end's
- * in-body barrier leaves a getelementptr on top.
- */
-bool
-constant_address (const Value *v, const DataLayout &dl, uint64_t *addr)
-{
-	APInt offset (dl.getIndexTypeSizeInBits (v->getType ()), 0);
-	const Value *base = v->stripAndAccumulateConstantOffsets (dl, offset, true);
-
-	auto *expr = dyn_cast<ConstantExpr> (base);
-	if (!expr || expr->getOpcode () != Instruction::IntToPtr)
-		return false;
-
-	auto *literal = dyn_cast<ConstantInt> (expr->getOperand (0));
-	if (!literal)
-		return false;
-
-	*addr = literal->getZExtValue () + offset.getSExtValue ();
-	return true;
-}
-
 /* The vtable a tagged trigger call initializes. */
 bool
 trigger_vtable (const CallBase *call, const DataLayout &dl, uint64_t *vtable)
@@ -76,14 +53,7 @@ trigger_vtable (const CallBase *call, const DataLayout &dl, uint64_t *vtable)
 	if (call->arg_size () != 1)
 		return false;
 
-	const Value *arg = call->getArgOperand (0);
-	if (auto *literal = dyn_cast<ConstantInt> (arg)) {
-		*vtable = literal->getZExtValue ();
-		return true;
-	}
-
-	/* Belt and braces: the icall's argument is an intptr today, not a pointer. */
-	return arg->getType ()->isPointerTy () && constant_address (arg, dl, vtable);
+	return mono::runtime_address (call->getArgOperand (0), dl, vtable);
 }
 
 struct DecodedCheck {
@@ -145,7 +115,7 @@ decode_check (const BranchInst *branch, const DataLayout &dl, DecodedCheck *out)
 		return false;
 
 	uint64_t addr;
-	if (!constant_address (load->getPointerOperand (), dl, &addr))
+	if (!mono::runtime_address (load->getPointerOperand (), dl, &addr))
 		return false;
 
 	const uint64_t field = MONO_STRUCT_OFFSET (MonoVTable, initialized);

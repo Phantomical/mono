@@ -129,6 +129,7 @@ if(MONO_ENABLE_LLVM)
     llvm/passes/null-check-guard.cpp
     llvm/passes/pass-dump.cpp
     llvm/passes/replace-builtins.cpp
+    llvm/passes/runtime-address.cpp
     llvm/passes/wbarrier.cpp)
 endif()
 

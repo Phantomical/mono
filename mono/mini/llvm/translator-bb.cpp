@@ -1362,6 +1362,11 @@ EmitContext::process_bb (MonoBasicBlock *bb)
 			MonoJumpInfoType ji_type = static_cast<MonoJumpInfoType>(ins->inst_c1);
 			gpointer ji_data = ins->inst_p0;
 
+			if (!cfg->compile_aot) {
+				values [ins->dreg] = ctx->get_jit_const (ji_type, ji_data);
+				break;
+			}
+
 			if (ji_type == MONO_PATCH_INFO_ICALL_ADDR) {
 				char *symbol = mono_aot_get_direct_call_symbol (MONO_PATCH_INFO_ICALL_ADDR_CALL, ji_data);
 				if (symbol) {

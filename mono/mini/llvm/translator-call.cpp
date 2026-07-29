@@ -12,11 +12,13 @@
 
 #include "translator-internal.hpp"
 #include "mono_lsda.hpp"
+#include "passes/runtime-address.hpp"
 
 #include <cctype>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifndef DISABLE_JIT
 
@@ -122,6 +124,34 @@ static std::mutex sym_mutex;
 static std::unordered_map<MonoMethod *, std::string> *sym_names;
 static std::unordered_map<std::string, MonoMethod *> *sym_taken;
 
+/* Fold a mono display name into something a linker will accept as a symbol. */
+static std::string
+mangle_symbol_name (const char *prefix, const char *display_name)
+{
+	size_t len = strlen (display_name);
+
+	std::string mangled = prefix;
+	mangled.reserve (mangled.size () + len);
+	for (size_t i = 0; i < len; ++i) {
+		char c = display_name [i];
+
+		if (i == 0 && c >= '0' && c <= '9')
+			mangled += '_';
+		else if (isalnum ((unsigned char) c))
+			mangled += c;
+		else if (c == ' ' && i + 2 < len && display_name [i + 1] == '(' && display_name [i + 2] == ')')
+			i += 2;
+		else if (c == ',' && i + 1 < len && display_name [i + 1] == ' ')
+			mangled += '_', i++;
+		else if (c == '(' || c == ')' || c == '>')
+			/* drop */;
+		else
+			mangled += '_';
+	}
+
+	return mangled;
+}
+
 const char *
 mono_llvm_method_symbol (MonoMethod *method)
 {
@@ -141,26 +171,7 @@ mono_llvm_method_symbol (MonoMethod *method)
 		return found->second.c_str ();
 
 	char *full_name = mono_method_full_name (method, TRUE);
-	size_t len = strlen (full_name);
-
-	std::string mangled = "mono_method_";
-	mangled.reserve (mangled.size () + len);
-	for (size_t i = 0; i < len; ++i) {
-		char c = full_name [i];
-
-		if (i == 0 && c >= '0' && c <= '9')
-			mangled += '_';
-		else if (isalnum ((unsigned char) c))
-			mangled += c;
-		else if (c == ' ' && i + 2 < len && full_name [i + 1] == '(' && full_name [i + 2] == ')')
-			i += 2;
-		else if (c == ',' && i + 1 < len && full_name [i + 1] == ' ')
-			mangled += '_', i++;
-		else if (c == '(' || c == ')' || c == '>')
-			/* drop */;
-		else
-			mangled += '_';
-	}
+	std::string mangled = mangle_symbol_name ("mono_method_", full_name);
 	g_free (full_name);
 
 	/* Disambiguate the rare case where two distinct methods mangle the same
@@ -172,6 +183,46 @@ mono_llvm_method_symbol (MonoMethod *method)
 
 	auto ins = names->emplace (method, std::move (name));
 	(*taken) [ins.first->second] = method;
+	return ins.first->second.c_str ();
+}
+
+/*
+ * The runtime-data half of the same mapping.
+ *
+ * Keyed by ADDR, not by whatever the caller derived HINT from, because the
+ * address is what the symbol has to denote and only the address is reliably
+ * unique. A vtable and a static field both have one address per domain, and two
+ * generic instantiations can stringify identically; keying on the description
+ * would hand two distinct pieces of memory one name, and register_symbol ()'s
+ * first-wins rule would then quietly bind both to whichever got there first.
+ * Keyed this way, HINT is purely for legibility - a duplicate just takes a
+ * suffix.
+ */
+static std::unordered_map<gpointer, std::string> *data_sym_names;
+static std::unordered_set<std::string> *data_sym_taken;
+
+const char *
+mono_llvm_data_symbol (const char *hint, gpointer addr)
+{
+	std::lock_guard<std::mutex> lock (sym_mutex);
+
+	if (!data_sym_names) {
+		data_sym_names = new std::unordered_map<gpointer, std::string> ();
+		data_sym_taken = new std::unordered_set<std::string> ();
+	}
+
+	auto found = data_sym_names->find (addr);
+	if (found != data_sym_names->end ())
+		return found->second.c_str ();
+
+	std::string mangled = mangle_symbol_name ("mono_", hint);
+
+	std::string name = mangled;
+	for (int suffix = 0; data_sym_taken->count (name) != 0; ++suffix)
+		name = mangled + "_" + std::to_string (suffix);
+
+	auto ins = data_sym_names->emplace (addr, std::move (name));
+	data_sym_taken->insert (ins.first->second);
 	return ins.first->second.c_str ();
 }
 
@@ -740,13 +791,11 @@ EmitContext::emit_class_init_guards (llvm::IRBuilder<> *builder)
 	this->last_alloca = entry_br;
 	builder->SetInsertPoint (llvm::unwrap (check_bb));
 
-	llvm::Value *vtable_val = llvm::ConstantInt::get (intptr_type, (guint64) (gsize) vtable, false);
-	/* Fold the field offset into the constant rather than emitting a GEP. */
-	llvm::Value *flag_addr = builder->CreateIntToPtr (
-		llvm::ConstantInt::get (intptr_type,
-		                        (guint64) ((gsize) vtable + MONO_STRUCT_OFFSET (MonoVTable, initialized)),
-		                        false),
-		ptr_type, "class_init_flag");
+	llvm::Value *vtable_val = this->get_jit_const (MONO_PATCH_INFO_VTABLE, vtable->klass);
+	/* Not inbounds: the global is a declaration, so its extent is not ours to promise. */
+	llvm::Value *flag_addr = builder->CreateConstGEP1_64 (byte_type, vtable_val,
+	                                                      MONO_STRUCT_OFFSET (MonoVTable, initialized),
+	                                                      "class_init_flag");
 
 	llvm::Value *inited = builder->CreateLoad (byte_type, flag_addr, "");
 	LLVMValueRef cmp = llvm::wrap (builder->CreateICmpNE (inited, llvm::ConstantInt::get (byte_type, 0)));
@@ -773,7 +822,8 @@ EmitContext::emit_class_init_guards (llvm::IRBuilder<> *builder)
 	 */
 	g_assert (LLVMGlobalGetValueType (callee) == icall_sig);
 	llvm::CallInst *init_call = builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (icall_sig)),
-	                                                llvm::unwrap (callee), { vtable_val });
+	                                                llvm::unwrap (callee),
+	                                                { this->convert (vtable_val, intptr_type) });
 	tag_class_init (llvm::wrap (init_call), "mono.class-init", vtable->klass);
 	builder->CreateBr (llvm::unwrap (cont_bb));
 
@@ -1132,12 +1182,14 @@ EmitContext::process_call (MonoBasicBlock *bb, llvm::IRBuilder<> **builder_ref, 
 		mono_llvm_add_string_metadata (lcall, "managed_name", mono_method_full_name (call->method, TRUE));
 
 	/*
-	 * Tag the front-end's in-body class-init barrier. The vtable is a baked
-	 * constant except in shared generic code, which loads it out of the rgctx -
-	 * and then there is no single class to name, so the barrier goes untagged.
+	 * Tag the front-end's in-body class-init barrier. The vtable is a constant
+	 * except in shared generic code, which loads it out of the rgctx - and then
+	 * there is no single class to name, so the barrier goes untagged.
 	 */
-	if (auto *baked = llvm::dyn_cast_or_null<llvm::ConstantInt> (class_init_vtable)) {
-		MonoClass *init_klass = ((MonoVTable *) (gsize) baked->getZExtValue ())->klass;
+	uint64_t init_vtable = 0;
+	if (class_init_vtable &&
+	    mono::runtime_address (class_init_vtable, llvm::unwrap (this->lmodule)->getDataLayout (), &init_vtable)) {
+		MonoClass *init_klass = ((MonoVTable *) (gsize) init_vtable)->klass;
 
 		tag_class_init (lcall, "mono.class-init", init_klass);
 

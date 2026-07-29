@@ -438,6 +438,7 @@ typedef struct {
 	LLVMValueRef get_aotconst (MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type);
 	LLVMValueRef get_jit_callee (const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data);
 	LLVMValueRef get_direct_callee (const char *name, LLVMTypeRef llvm_sig, gpointer target);
+	llvm::Value *get_jit_const (MonoJumpInfoType type, gconstpointer data);
 	Address *build_named_alloca_address (MonoType *t, const char *name);
 
 	/* Per-instruction translation (defined in translator-bb.cpp). */
@@ -725,6 +726,14 @@ mono_llvm_method_symbol (MonoMethod *method);
 /* Inverse of mono_llvm_method_symbol (); NULL if NAME is not a method symbol. */
 MonoMethod *
 mono_llvm_method_from_symbol (const char *name);
+
+/*
+ * A stable, linker-safe symbol name for the runtime data at ADDR, suitable for
+ * naming an external global the JIT linker resolves. ADDR is the identity; HINT
+ * only makes the name readable, and a duplicate hint is disambiguated.
+ */
+const char *
+mono_llvm_data_symbol (const char *hint, gpointer addr);
 
 namespace mono {
 

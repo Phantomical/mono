@@ -2221,6 +2221,15 @@ MonoLLVMJIT::resolve_symbol_name (void *addr)
 	return it != symbols_by_addr_.end () ? it->second.c_str () : nullptr;
 }
 
+void *
+MonoLLVMJIT::symbol_address (StringRef name)
+{
+	std::lock_guard<std::mutex> lock (named_symbols_mutex_);
+
+	auto it = named_symbols_.find (name.str ());
+	return it != named_symbols_.end () ? it->second : nullptr;
+}
+
 void
 MonoLLVMJIT::optimize (const Tier1Root &root)
 {
