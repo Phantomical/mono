@@ -1259,23 +1259,12 @@ set(MONO_TESTS_TAILCALL_DISABLED_RUN
 )
 
 
-# Tests kept off the boehm half. Only the two that cannot usefully report a
-# failure are here -- one asks for something Boehm does not implement, the other
-# hangs and costs five minutes of wall clock to say so. The rest of what fails on
-# Boehm is left running and red, so the breakage stays visible.
+# Tests kept off the boehm half, so only `<test>@sgen` runs. Both are here
+# because running them tells you nothing you do not already know:
 #
-# Excluded from the boehm half only, so `<test>@sgen` still runs.
-#
-# weak-fields.exe        the runtime says so itself and aborts: "Weak fields not
-#                        supported by boehm gc". Nothing to learn from running it.
-# thread-suspend-suspended  hangs; killed at the 300s timeout.
-#
-# Known to fail and deliberately still running, so `@boehm` reports them:
-#   install_eh_callback     SIGSEGV.
-#   monitor-resurrection    ArgumentException out of Main. Resurrecting an object
-#                           from its finalizer and re-entering its monitor; a
-#                           conservative collector keeps it reachable differently.
-#                           Fails under the JIT and the interpreter alike.
+# weak-fields.exe        the runtime prints "Weak fields not supported by boehm
+#                        gc" and aborts.
+# thread-suspend-suspended  hangs, and spends the whole 300s timeout doing it.
 set(MONO_TESTS_BOEHM_DISABLED
   weak-fields.exe
   thread-suspend-suspended.exe
