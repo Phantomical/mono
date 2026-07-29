@@ -5,7 +5,8 @@
 # re-runs only what broke, and a suite that covers the same programs several
 # ways (the four gshared optimization sets, the thirty-odd SGen collector
 # configurations) reports which configuration failed rather than just that one
-# did. The corresponding cost is that `ctest -N` lists ~1800 tests.
+# did. Each also runs on every collector that was built, `...@sgen` and
+# `...@boehm`. The corresponding cost is that `ctest -N` lists ~3400 tests.
 #
 # Labels. `ctest` with no arguments runs the fast set; everything heavy is
 # behind a label so the inner loop stays short. See the `check` target.
@@ -20,6 +21,43 @@
 set(_class_dir "${_class}")
 set(_run_test "${CMAKE_SOURCE_DIR}/cmake/MonoRunTest.cmake")
 
+# Which collector each suite runs on. The corpus is collector-agnostic, so it
+# runs on every runtime that was built -- mono-wrapper picks the binary out of
+# MONO_EXECUTABLE, so this costs an environment variable and a name suffix.
+#
+# The SGen matrix is the exception and asks for `GC sgen`. mono-boehm accepts
+# --gc=sgen and --gc-params, ignores them, and exits 0, so running those suites
+# on it would add a hundred and sixty passing tests that assert nothing.
+set(_mono_gcs "")
+if(MONO_ENABLE_SGEN)
+  list(APPEND _mono_gcs sgen)
+endif()
+if(MONO_ENABLE_BOEHM)
+  list(APPEND _mono_gcs boehm)
+endif()
+
+# The collector a test ran on lives in its name (`...@sgen`, `...@boehm`) and
+# not in a label. `ctest -L` matches labels as a regex, so a `gc-sgen` label
+# would also be picked up by `-L sgen` -- which already means the collector
+# matrix, a different set. Select a collector with `-R '@boehm$'`, and combine
+# it with `-L` as usual.
+function(_mono_gc_env out_env gc)
+  set(${out_env} "MONO_EXECUTABLE=${CMAKE_BINARY_DIR}/mono/mini/mono-${gc}" PARENT_SCOPE)
+endfunction()
+
+# Tests that saturate the machine on their own -- they scale their own thread
+# count off Environment.ProcessorCount, or hammer the thread pool. CTest assumes
+# one core per test, packs `-j` of them alongside everything else, and starves
+# them: appdomain-threadpool-unload runs in 3s and has twice timed out at 300s
+# in a full `check-all`. Claiming several cores each keeps that from happening.
+set(_mono_parallel_hungry
+  appdomain-threadpool-unload.exe
+  process-unref-race.exe
+  namedmutex-destroy-race.exe
+  pinvoke-detach-1.exe
+  bug-18026.exe
+)
+
 # Building the corpus is a fixture: CTest cannot build, and ~700 assemblies is
 # too much to put in `all`.
 add_test(NAME runtime-corpora
@@ -32,7 +70,7 @@ set_tests_properties(runtime-corpora PROPERTIES
 # ---------------------------------------------------------------------------
 # mono_runtime_suite(<name> TESTS ... [LABEL x] [RUNTIME_ARGS s] [ENV ...]
 #                    [OPT_SETS s] [TIMEOUT n] [EXPECT n] [WORKDIR d]
-#                    [PROCESSORS n])
+#                    [PROCESSORS n] [GC ...] [SKIP_BOEHM ...])
 #
 # One CTest test per program, named `<suite>/<program>` -- and per optimization
 # set on top of that, `<suite>/<program>:<opt-set>`, since those are separate
@@ -49,8 +87,24 @@ set_tests_properties(runtime-corpora PROPERTIES
 # ---------------------------------------------------------------------------
 function(mono_runtime_suite name)
   cmake_parse_arguments(ARG "" "LABEL;RUNTIME_ARGS;OPT_SETS;TIMEOUT;EXPECT;WORKDIR;PROCESSORS"
-                            "TESTS;ENV" ${ARGN})
+                            "TESTS;ENV;GC;SKIP_BOEHM" ${ARGN})
   if(NOT ARG_TESTS)
+    return()
+  endif()
+  if(NOT ARG_GC)
+    set(ARG_GC ${_mono_gcs})
+  else()
+    # A suite may ask for a collector this build did not produce; drop it rather
+    # than emitting a test that cannot run.
+    set(_want "")
+    foreach(_g IN LISTS ARG_GC)
+      if(_g IN_LIST _mono_gcs)
+        list(APPEND _want "${_g}")
+      endif()
+    endforeach()
+    set(ARG_GC "${_want}")
+  endif()
+  if(NOT ARG_GC)
     return()
   endif()
   if(NOT ARG_LABEL)
@@ -88,35 +142,49 @@ function(mono_runtime_suite name)
   # wins the race and CTest only steps in if that failed too.
   math(EXPR _ctest_timeout "${ARG_TIMEOUT} + 60")
 
-  foreach(_test IN LISTS ARG_TESTS)
-    string(REGEX REPLACE "\\.exe$" "" _stem "${_test}")
-    foreach(_opt IN LISTS _opt_sets)
-      if(_opt STREQUAL "-")
-        set(_tname "${name}/${_stem}")
-        set(_oarg "")
-      else()
-        set(_tname "${name}/${_stem}:${_opt}")
-        set(_oarg "-O=${_opt}")
-      endif()
-      add_test(NAME "${_tname}"
-               COMMAND "${CMAKE_COMMAND}" -E env
-                       "MONO_PATH=${_class_dir}"
-                       "MONO_CONFIG=${_bin}/tests-config"
-                       "TEST_DRIVER_TIMEOUT_SEC=${ARG_TIMEOUT}"
-                       ${ARG_ENV}
-                       "${CMAKE_COMMAND}"
-                       "-DMONO_TEST_EXPECT=${ARG_EXPECT}"
-                       "-DMONO_TEST_TIMEOUT=${ARG_TIMEOUT}"
-                       -P "${_run_test}" --
-                       "${_wrapper}" ${_oarg} ${_rt_args} "${_test}"
-               WORKING_DIRECTORY "${ARG_WORKDIR}")
-      set_tests_properties("${_tname}" PROPERTIES
-        LABELS "${ARG_LABEL}"
-        FIXTURES_REQUIRED runtime_corpora
-        TIMEOUT ${_ctest_timeout})
-      if(ARG_PROCESSORS)
-        set_tests_properties("${_tname}" PROPERTIES PROCESSORS ${ARG_PROCESSORS})
-      endif()
+  foreach(_gc IN LISTS ARG_GC)
+    _mono_gc_env(_gc_env "${_gc}")
+    # SKIP_BOEHM drops the tests that fail on Boehm from the boehm half only,
+    # so the sgen half of the suite still covers them.
+    set(_gc_tests ${ARG_TESTS})
+    if(_gc STREQUAL "boehm" AND ARG_SKIP_BOEHM)
+      list(REMOVE_ITEM _gc_tests ${ARG_SKIP_BOEHM})
+    endif()
+
+    foreach(_test IN LISTS _gc_tests)
+      string(REGEX REPLACE "\\.exe$" "" _stem "${_test}")
+      foreach(_opt IN LISTS _opt_sets)
+        if(_opt STREQUAL "-")
+          set(_tname "${name}/${_stem}")
+          set(_oarg "")
+        else()
+          set(_tname "${name}/${_stem}:${_opt}")
+          set(_oarg "-O=${_opt}")
+        endif()
+        set(_gname "${_tname}@${_gc}")
+        add_test(NAME "${_gname}"
+                 COMMAND "${CMAKE_COMMAND}" -E env
+                         "MONO_PATH=${_class_dir}"
+                         "MONO_CONFIG=${_bin}/tests-config"
+                         "TEST_DRIVER_TIMEOUT_SEC=${ARG_TIMEOUT}"
+                         "${_gc_env}"
+                         ${ARG_ENV}
+                         "${CMAKE_COMMAND}"
+                         "-DMONO_TEST_EXPECT=${ARG_EXPECT}"
+                         "-DMONO_TEST_TIMEOUT=${ARG_TIMEOUT}"
+                         -P "${_run_test}" --
+                         "${_wrapper}" ${_oarg} ${_rt_args} "${_test}"
+                 WORKING_DIRECTORY "${ARG_WORKDIR}")
+        set_tests_properties("${_gname}" PROPERTIES
+          LABELS "${ARG_LABEL}"
+          FIXTURES_REQUIRED runtime_corpora
+          TIMEOUT ${_ctest_timeout})
+        if(ARG_PROCESSORS)
+          set_tests_properties("${_gname}" PROPERTIES PROCESSORS ${ARG_PROCESSORS})
+        elseif(_test IN_LIST _mono_parallel_hungry)
+          set_tests_properties("${_gname}" PROPERTIES PROCESSORS 4)
+        endif()
+      endforeach()
     endforeach()
   endforeach()
 endfunction()
@@ -153,7 +221,8 @@ list(REMOVE_ITEM _tailcall
 # ---------------------------------------------------------------------------
 # The suites
 # ---------------------------------------------------------------------------
-mono_runtime_suite(runtime TESTS ${_regular})
+mono_runtime_suite(runtime TESTS ${_regular}
+                   SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED})
 
 # MONO_DEBUG=test-tailcall-require turns "the JIT declined to emit a tail call"
 # into a failure, which is the whole point of this suite. --compile-all makes
@@ -172,7 +241,7 @@ if(MONO_ENABLE_INTERPRETER)
   # The same ~700 programs again on a much slower engine. Useful, but not on
   # every edit, so it gets a label of its own rather than sitting in `runtime`.
   mono_runtime_suite(runtime-interp LABEL interp TESTS ${_interp}
-                     RUNTIME_ARGS "--interpreter")
+                     RUNTIME_ARGS "--interpreter" GC sgen)
 endif()
 
 mono_runtime_suite(runtime-stress LABEL stress TESTS ${_stress} TIMEOUT 900)
@@ -193,7 +262,7 @@ mono_runtime_suite(runtime-process-stress LABEL stress TESTS ${_stress_process} 
 # `interp`, where the symptom was an interpreted test that takes 7s timing out
 # at 300s.
 function(_mono_sgen_suite name tests args)
-  mono_runtime_suite(${name} LABEL sgen TESTS ${${tests}}
+  mono_runtime_suite(${name} LABEL sgen GC sgen TESTS ${${tests}}
                      RUNTIME_ARGS "${args}" TIMEOUT 900 PROCESSORS 4)
 endfunction()
 
@@ -285,19 +354,38 @@ _mono_sgen_suite(sgen-bridge3-ms-conc-par-simple-par-32m-tarjan-bridge _sgen_bri
 # --- one-off suites ----------------------------------------------------------
 # These are not test-runner corpora: each is a single program whose exit code
 # or output is the result.
+# NATIVE is for the ones that do not run managed code on the runtime being
+# built -- there is no collector to vary, so they get no @<gc> suffix.
 function(mono_runtime_check name)
-  cmake_parse_arguments(ARG "" "TIMEOUT" "COMMAND;ENV;DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "NATIVE" "TIMEOUT" "COMMAND;ENV;DEPENDS" ${ARGN})
   if(NOT ARG_TIMEOUT)
     set(ARG_TIMEOUT 300)
   endif()
-  set(_pfx "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}")
-  if(ARG_ENV)
-    set(_pfx "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}" ${ARG_ENV})
+  if(ARG_NATIVE)
+    set(_gcs "")
+  else()
+    set(_gcs ${_mono_gcs})
   endif()
-  add_test(NAME ${name} COMMAND ${_pfx} ${ARG_COMMAND}
-           WORKING_DIRECTORY "${_bin}")
-  set_tests_properties(${name} PROPERTIES
-    LABELS runtime FIXTURES_REQUIRED runtime_corpora TIMEOUT ${ARG_TIMEOUT})
+
+  foreach(_gc IN LISTS _gcs)
+    _mono_gc_env(_gc_env "${_gc}")
+    add_test(NAME "${name}@${_gc}"
+             COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                     "${_gc_env}" ${ARG_ENV} ${ARG_COMMAND}
+             WORKING_DIRECTORY "${_bin}")
+    set_tests_properties("${name}@${_gc}" PROPERTIES
+      LABELS runtime FIXTURES_REQUIRED runtime_corpora
+      TIMEOUT ${ARG_TIMEOUT})
+  endforeach()
+
+  if(ARG_NATIVE)
+    add_test(NAME ${name}
+             COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                     ${ARG_ENV} ${ARG_COMMAND}
+             WORKING_DIRECTORY "${_bin}")
+    set_tests_properties(${name} PROPERTIES
+      LABELS runtime FIXTURES_REQUIRED runtime_corpora TIMEOUT ${ARG_TIMEOUT})
+  endif()
 endfunction()
 
 mono_runtime_check(runtime-type-load
@@ -342,25 +430,32 @@ _mono_unhandled_suite(255 OFF ${_unhandled_255})
 _mono_unhandled_suite(255 ON  ${_unhandled_255})
 
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
-add_test(NAME runtime-env-options
-         COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                 "MONO_ENV_OPTIONS=--version" "${_wrapper}" array-init.exe
-         WORKING_DIRECTORY "${_bin}")
-set_tests_properties(runtime-env-options PROPERTIES
-  LABELS runtime FIXTURES_REQUIRED runtime_corpora
-  PASS_REGULAR_EXPRESSION "Architecture:")
+foreach(_gc IN LISTS _mono_gcs)
+  _mono_gc_env(_gc_env "${_gc}")
+  add_test(NAME "runtime-env-options@${_gc}"
+           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                   "${_gc_env}"
+                   "MONO_ENV_OPTIONS=--version" "${_wrapper}" array-init.exe
+           WORKING_DIRECTORY "${_bin}")
+  set_tests_properties("runtime-env-options@${_gc}" PROPERTIES
+    LABELS runtime FIXTURES_REQUIRED runtime_corpora
+    PASS_REGULAR_EXPRESSION "Architecture:")
+endforeach()
 
 # eglib's symbols are remapped to monoeg_* so that a runtime linked into a host
 # that already has glib does not collide with it. Anything still exported as a
 # bare g_* is a missed entry in eglib-remap.h.
+# It is a property of each binary that was linked, so check each of them.
 find_program(MONO_NM nm)
 if(MONO_NM)
-  add_test(NAME runtime-eglib-remap
-           COMMAND "${CMAKE_COMMAND}"
-                   "-DNM=${MONO_NM}"
-                   "-DBINARY=${CMAKE_BINARY_DIR}/mono/mini/mono-${MONO_DEFAULT_GC_SUFFIX}"
-                   -P "${CMAKE_SOURCE_DIR}/cmake/MonoCheckEglibRemap.cmake")
-  set_tests_properties(runtime-eglib-remap PROPERTIES LABELS runtime)
+  foreach(_gc IN LISTS _mono_gcs)
+    add_test(NAME "runtime-eglib-remap@${_gc}"
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DNM=${MONO_NM}"
+                     "-DBINARY=${CMAKE_BINARY_DIR}/mono/mini/mono-${_gc}"
+                     -P "${CMAKE_SOURCE_DIR}/cmake/MonoCheckEglibRemap.cmake")
+    set_tests_properties("runtime-eglib-remap@${_gc}" PROPERTIES LABELS runtime)
+  endforeach()
 endif()
 
 mono_runtime_suite(runtime-internalsvisibleto
@@ -368,6 +463,6 @@ mono_runtime_suite(runtime-internalsvisibleto
         internalsvisibleto-runtimetest-sign2048.exe
         internalsvisibleto-compilertest-sign2048.exe)
 
-mono_runtime_check(runtime-pedump
+mono_runtime_check(runtime-pedump NATIVE
   COMMAND "${CMAKE_BINARY_DIR}/tools/pedump/pedump" --verify code,metadata
           "${_class_dir}/mscorlib.dll")

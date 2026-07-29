@@ -1258,3 +1258,32 @@ set(MONO_TESTS_TAILCALL_DISABLED_RUN
   tailcall/coreclr/JIT/Methodical/tailcall_v4/delegateParamCallTarget.exe
 )
 
+
+# Tests that fail on Boehm but pass on SGen, measured on amd64/Linux by running
+# the corpus under both collectors. They are excluded from the boehm half only,
+# so `<test>@sgen` still runs; the list is the worklist for making Boehm green.
+#
+# weak-fields.exe        the runtime says so itself and aborts: "Weak fields not
+#                        supported by boehm gc".
+# install_eh_callback    SIGSEGV.
+# thread-suspend-suspended  hangs; killed at the 300s timeout.
+# monitor-resurrection   ArgumentException out of Main. Resurrecting an object
+#                        from its finalizer and re-entering its monitor; a
+#                        conservative collector keeps it reachable differently.
+#                        Fails under the JIT and the interpreter alike.
+set(MONO_TESTS_BOEHM_DISABLED
+  weak-fields.exe
+  install_eh_callback.exe
+  thread-suspend-suspended.exe
+  monitor-resurrection.exe
+)
+
+# The interpreter is not run on Boehm at all -- see the `GC sgen` on the
+# runtime-interp suite. It is not a fixed set of failures that could be listed
+# here: two back-to-back runs of the same 481 tests failed 5 and 4 of them and
+# agreed on only 2, and a full run failed 76. The names move, so the collector
+# and the interpreter are miscooperating rather than some tests being
+# unsupported. The JIT on Boehm is stable by comparison -- the four above are
+# the whole of it, and they fail the same way every time.
+#
+# Every one of those failures passes under interp+SGen and under JIT+Boehm.
