@@ -1,5 +1,5 @@
 # The runtime regression corpus: ~700 small managed programs plus the native
-# library they P/Invoke into, driven by test-runner.exe.
+# library they P/Invoke into.
 #
 # The corpus itself lives in tests.cmake; this file is the rules.
 #
@@ -141,6 +141,10 @@ add_custom_command(
 
 # test-runner.exe references the *build* profile's framework assemblies, not
 # the profile under test: it is the harness, not a test.
+#
+# CTest no longer drives it -- each corpus program is its own CTest test, see
+# runtime-suites.cmake. It stays because running a list of tests by hand,
+# without a configure step, is still the quickest way to bisect a corpus.
 add_custom_command(
   OUTPUT "${_bin}/test-runner.exe"
   COMMAND ${_csc_unsafe} -r:System.dll -r:System.Xml.dll -r:System.Core.dll

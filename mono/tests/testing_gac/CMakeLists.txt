@@ -86,16 +86,12 @@ list(APPEND _gac_outputs "${_gac_bin}/lib/mono/gac/.stamp")
 add_custom_target(testing-gac-tests DEPENDS ${_gac_outputs})
 add_dependencies(runtime-corpora testing-gac-tests)
 
-# These test strict strong-name resolution, so the loader is put in strict mode.
-set(_gac_runner
-  "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}" --debug
-  "${_bin}/test-runner.exe"
-  --config "${_bin}/tests-config"
-  --runtime "${_wrapper}"
-  --runtime-args "--assembly-loader=strict")
-
+# Each case is the same programs under a different MONO_PATH, so the env var is
+# the test. It overrides the default MONO_PATH mono_runtime_suite sets, which is
+# why it goes through ENV rather than anywhere else.
 function(_gac_test name)
-  cmake_parse_arguments(ARG "" "EXPECT" "PATH;PROGRAMS;EXTRA" ${ARGN})
+  cmake_parse_arguments(ARG "" "EXPECT;GAC_PREFIX" "PATH;PROGRAMS" ${ARGN})
+  set(_env "")
   set(_mp "")
   foreach(_p IN LISTS ARG_PATH)
     if(_mp)
@@ -104,19 +100,17 @@ function(_gac_test name)
       set(_mp "${_gac_bin}/${_p}")
     endif()
   endforeach()
-  set(_args "")
   if(_mp)
-    list(APPEND _args --mono-path "${_mp}:${_class}")
+    list(APPEND _env "MONO_PATH=${_mp}:${_class}")
   endif()
-  if(ARG_EXPECT)
-    list(APPEND _args --expected-exit-code ${ARG_EXPECT})
+  if(ARG_GAC_PREFIX)
+    list(APPEND _env "MONO_GAC_PREFIX=${ARG_GAC_PREFIX}")
   endif()
-  add_test(NAME testing_gac_${name}
-           COMMAND ${_gac_runner} --testsuite-name "testing_gac_${name}"
-                   ${_args} ${ARG_EXTRA} ${ARG_PROGRAMS}
-           WORKING_DIRECTORY "${_gac_bin}")
-  set_tests_properties(testing_gac_${name} PROPERTIES
-    LABELS runtime FIXTURES_REQUIRED runtime_corpora TIMEOUT 600)
+  # These test strict strong-name resolution, so the loader is put in strict mode.
+  mono_runtime_suite(testing_gac_${name} TESTS ${ARG_PROGRAMS}
+                     WORKDIR "${_gac_bin}" TIMEOUT 600
+                     RUNTIME_ARGS "--assembly-loader=strict"
+                     EXPECT "${ARG_EXPECT}" ENV ${_env})
 endfunction()
 
 set(_app_v1 app-v1.exe app-refl-load-v1.exe)
@@ -129,4 +123,4 @@ _gac_test(mp-signed-v2-signed-v1   PATH signed_v2 signed_v1   PROGRAMS ${_app_v1
 # Path order matters: v1 must load first, and the v2 lookup then has to fail
 # to find v2 inside the v1 directory.
 _gac_test(app-both PATH signed_v1 signed_v2 PROGRAMS app-both.exe)
-_gac_test(gac PROGRAMS ${_app_v1} EXTRA --mono-gac-prefix "${_gac_bin}")
+_gac_test(gac PROGRAMS ${_app_v1} GAC_PREFIX "${_gac_bin}")

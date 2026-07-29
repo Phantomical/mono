@@ -70,14 +70,7 @@ endforeach()
 add_custom_target(assembly-load-reference-tests DEPENDS ${_alr_outputs})
 add_dependencies(runtime-corpora assembly-load-reference-tests)
 
-add_test(NAME assembly-load-reference
-         COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}" --debug
-                 "${_bin}/test-runner.exe"
-                 --config "${_bin}/tests-config"
-                 --runtime "${_wrapper}"
-                 --mono-path "${_class}"
-                 --testsuite-name assembly-load-reference
-                 ${_alr_tests}
-         WORKING_DIRECTORY "${_alr_bin}")
-set_tests_properties(assembly-load-reference PROPERTIES
-  LABELS runtime FIXTURES_REQUIRED runtime_corpora TIMEOUT 600)
+# Run from this directory, not mono/tests: which of the three layouts a program
+# sits in is the thing under test.
+mono_runtime_suite(assembly-load-reference TESTS ${_alr_tests}
+                   WORKDIR "${_alr_bin}" TIMEOUT 600)

@@ -1,8 +1,11 @@
 # CTest wiring for the runtime corpus.
 #
-# `check-local` in the automake build was a shell loop that ran fifteen
-# sub-makes and OR'ed their exit codes together. Each of those is a CTest test
-# here, so a failure names the suite that broke and the rest still run.
+# Every program in the corpus is its own CTest test, named `<suite>/<program>`
+# -- so `ctest -R runtime/bug-18026` runs exactly one of them, `--rerun-failed`
+# re-runs only what broke, and a suite that covers the same programs several
+# ways (the four gshared optimization sets, the thirty-odd SGen collector
+# configurations) reports which configuration failed rather than just that one
+# did. The corresponding cost is that `ctest -N` lists ~1800 tests.
 #
 # Labels. `ctest` with no arguments runs the fast set; everything heavy is
 # behind a label so the inner loop stays short. See the `check` target.
@@ -15,22 +18,7 @@
 #   fixture   builds the managed inputs; pulled in automatically when needed
 
 set(_class_dir "${_class}")
-
-include(ProcessorCount)
-ProcessorCount(_mono_nproc)
-if(_mono_nproc EQUAL 0)
-  set(_mono_nproc 1)
-endif()
-
-# test-runner.exe is itself managed code, so it runs on the build profile.
-set(_runner
-  "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}" --debug
-  "${_bin}/test-runner.exe"
-  --config "${_bin}/tests-config"
-  --runtime "${_wrapper}"
-  --mono-path "${_class_dir}")
-
-string(REPLACE ";" " " _disabled_arg "${MONO_TESTS_DISABLED}")
+set(_run_test "${CMAKE_SOURCE_DIR}/cmake/MonoRunTest.cmake")
 
 # Building the corpus is a fixture: CTest cannot build, and ~700 assemblies is
 # too much to put in `all`.
@@ -43,10 +31,25 @@ set_tests_properties(runtime-corpora PROPERTIES
 
 # ---------------------------------------------------------------------------
 # mono_runtime_suite(<name> TESTS ... [LABEL x] [RUNTIME_ARGS s] [ENV ...]
-#                    [OPT_SETS s] [TIMEOUT n] [JOBS n])
+#                    [OPT_SETS s] [TIMEOUT n] [EXPECT n] [WORKDIR d]
+#                    [PROCESSORS n])
+#
+# One CTest test per program, named `<suite>/<program>` -- and per optimization
+# set on top of that, `<suite>/<program>:<opt-set>`, since those are separate
+# runs that fail separately.
+#
+# This is deliberately not test-runner.exe driving a whole list. CTest's own
+# scheduler then owns the parallelism, `ctest -R` addresses one program, and
+# `--rerun-failed` re-runs the six that broke rather than all seven hundred.
+# What test-runner did per child is small enough to reproduce inline: set
+# MONO_PATH/MONO_CONFIG, hand the runtime `-O=<opt-set>` and the suite's
+# runtime arguments, and compare the exit code. The per-test timeout it passed
+# down in TEST_DRIVER_TIMEOUT_SEC is still passed down -- tests that pace
+# themselves read it through TestTimeout.
 # ---------------------------------------------------------------------------
 function(mono_runtime_suite name)
-  cmake_parse_arguments(ARG "" "LABEL;RUNTIME_ARGS;OPT_SETS;TIMEOUT;JOBS" "TESTS;ENV" ${ARGN})
+  cmake_parse_arguments(ARG "" "LABEL;RUNTIME_ARGS;OPT_SETS;TIMEOUT;EXPECT;WORKDIR;PROCESSORS"
+                            "TESTS;ENV" ${ARGN})
   if(NOT ARG_TESTS)
     return()
   endif()
@@ -56,42 +59,69 @@ function(mono_runtime_suite name)
   if(NOT ARG_TIMEOUT)
     set(ARG_TIMEOUT 300)
   endif()
-  if(NOT ARG_JOBS)
-    set(ARG_JOBS a)
+  if(NOT ARG_EXPECT)
+    set(ARG_EXPECT 0)
+  endif()
+  if(NOT ARG_WORKDIR)
+    set(ARG_WORKDIR "${_bin}")
   endif()
 
-  set(_extra "")
+  # Both arrive as one space-separated string, the shape the automake recipes
+  # used and the shape test-runner.exe parsed.
+  set(_rt_args "")
   if(ARG_RUNTIME_ARGS)
-    list(APPEND _extra --runtime-args "${ARG_RUNTIME_ARGS}")
+    separate_arguments(_rt_args UNIX_COMMAND "${ARG_RUNTIME_ARGS}")
   endif()
+  set(_opt_sets "")
   if(ARG_OPT_SETS)
-    list(APPEND _extra --opt-sets "${ARG_OPT_SETS}")
+    separate_arguments(_opt_sets UNIX_COMMAND "${ARG_OPT_SETS}")
+  endif()
+  # `-` stands for "no optimization set", so the loop below still runs once for
+  # a suite that asked for none. An empty element cannot say that: CMake does
+  # not distinguish a one-empty-element list from an empty one, and an empty
+  # list iterates zero times.
+  if(NOT _opt_sets)
+    set(_opt_sets "-")
   endif()
 
-  set(_cmd ${_runner})
-  if(ARG_ENV)
-    set(_cmd "${CMAKE_COMMAND}" -E env ${ARG_ENV} ${_runner})
-  endif()
+  # A little above what MonoRunTest gives the test, so the SIGQUIT thread dump
+  # wins the race and CTest only steps in if that failed too.
+  math(EXPR _ctest_timeout "${ARG_TIMEOUT} + 60")
 
-  add_test(NAME ${name}
-           COMMAND ${_cmd} -j ${ARG_JOBS}
-                   --testsuite-name "${name}"
-                   --timeout ${ARG_TIMEOUT}
-                   --disabled "${_disabled_arg}"
-                   ${_extra}
-                   ${ARG_TESTS}
-           WORKING_DIRECTORY "${_bin}")
-  # Each of these drives test-runner.exe with -j a, so it already uses the
-  # whole machine; telling CTest that stops `ctest -j` from stacking two of
-  # them and thrashing.
-  set_tests_properties(${name} PROPERTIES
-    LABELS "${ARG_LABEL}"
-    PROCESSORS ${_mono_nproc}
-    FIXTURES_REQUIRED runtime_corpora
-    TIMEOUT 3600)
+  foreach(_test IN LISTS ARG_TESTS)
+    string(REGEX REPLACE "\\.exe$" "" _stem "${_test}")
+    foreach(_opt IN LISTS _opt_sets)
+      if(_opt STREQUAL "-")
+        set(_tname "${name}/${_stem}")
+        set(_oarg "")
+      else()
+        set(_tname "${name}/${_stem}:${_opt}")
+        set(_oarg "-O=${_opt}")
+      endif()
+      add_test(NAME "${_tname}"
+               COMMAND "${CMAKE_COMMAND}" -E env
+                       "MONO_PATH=${_class_dir}"
+                       "MONO_CONFIG=${_bin}/tests-config"
+                       "TEST_DRIVER_TIMEOUT_SEC=${ARG_TIMEOUT}"
+                       ${ARG_ENV}
+                       "${CMAKE_COMMAND}"
+                       "-DMONO_TEST_EXPECT=${ARG_EXPECT}"
+                       "-DMONO_TEST_TIMEOUT=${ARG_TIMEOUT}"
+                       -P "${_run_test}" --
+                       "${_wrapper}" ${_oarg} ${_rt_args} "${_test}"
+               WORKING_DIRECTORY "${ARG_WORKDIR}")
+      set_tests_properties("${_tname}" PROPERTIES
+        LABELS "${ARG_LABEL}"
+        FIXTURES_REQUIRED runtime_corpora
+        TIMEOUT ${_ctest_timeout})
+      if(ARG_PROCESSORS)
+        set_tests_properties("${_tname}" PROPERTIES PROCESSORS ${ARG_PROCESSORS})
+      endif()
+    endforeach()
+  endforeach()
 endfunction()
 
-# Turn a source list into the .exe list the runner takes, minus the disabled.
+# Turn a source list into the .exe list a suite takes, minus the disabled.
 function(_mono_exe_list out)
   set(_r "")
   foreach(_s IN LISTS ARGN)
@@ -155,9 +185,16 @@ mono_runtime_suite(runtime-process-stress LABEL stress TESTS ${_stress_process} 
 # MONO_GC_PARAMS, and the toggleref and bridge suites need their test hooks
 # (`toggleref-test`, `--gc-debug=bridge=...`) switched on or the behaviour they
 # check never happens.
+#
+# PROCESSORS: these are GC stress programs, and most of the configurations run a
+# concurrent or parallel collector, so one of them is worth several ordinary
+# tests to the scheduler. Without the hint CTest packs `-j` of them alongside
+# everything else and starves the rest -- `check-all` runs this label next to
+# `interp`, where the symptom was an interpreted test that takes 7s timing out
+# at 300s.
 function(_mono_sgen_suite name tests args)
   mono_runtime_suite(${name} LABEL sgen TESTS ${${tests}}
-                     RUNTIME_ARGS "${args}" TIMEOUT 900)
+                     RUNTIME_ARGS "${args}" TIMEOUT 900 PROCESSORS 4)
 endfunction()
 
 _mono_sgen_suite(sgen-regular-ms-simple _sgen_regular
@@ -291,20 +328,12 @@ _mono_exe_list(_unhandled_255 ${MONO_TESTS_UNHANDLED_EXCEPTION_255_SRC})
 function(_mono_unhandled_suite code handler)
   if(handler)
     set(_name "runtime-unhandled-exception-${code}-with-managed-handler")
-    set(_env "TEST_UNHANDLED_EXCEPTION_HANDLER=1")
+    mono_runtime_suite(${_name} TESTS ${ARGN} EXPECT ${code}
+                       ENV "TEST_UNHANDLED_EXCEPTION_HANDLER=1")
   else()
     set(_name "runtime-unhandled-exception-${code}-without-managed-handler")
-    set(_env "")
+    mono_runtime_suite(${_name} TESTS ${ARGN} EXPECT ${code})
   endif()
-  add_test(NAME ${_name}
-           COMMAND "${CMAKE_COMMAND}" -E env ${_env} ${_runner}
-                   -j a --testsuite-name "${_name}"
-                   --disabled "${_disabled_arg}"
-                   --expected-exit-code ${code}
-                   ${ARGN}
-           WORKING_DIRECTORY "${_bin}")
-  set_tests_properties(${_name} PROPERTIES
-    LABELS runtime FIXTURES_REQUIRED runtime_corpora TIMEOUT 900)
 endfunction()
 
 _mono_unhandled_suite(1   OFF ${_unhandled_1})
