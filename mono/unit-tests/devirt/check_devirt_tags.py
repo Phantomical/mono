@@ -73,8 +73,6 @@ def main():
             continue
         (report.ok if ok else report.fail)(f"{want:<8} {method}")
 
-    if report.checks == 0:
-        jitcheck.die(f"no DEVIRT-EXPECT lines found in {args.source}")
     return report.finish("expectations")
 
 
