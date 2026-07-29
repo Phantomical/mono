@@ -92,7 +92,8 @@ _mono_add_il_target(inliner-fault.dll          inliner-fault.il          LIBRARY
 # Plain "compile against TestDriver" corpora.
 foreach(_t basic basic-float basic-long basic-calls objects arrays basic-math
            exceptions devirtualization gshared aot-tests ratests
-           tiered-promotion tiered-decline tiered-appdomain il-offset-tests)
+           tiered-promotion tiered-decline tiered-appdomain tiered-statics
+           il-offset-tests)
   _mono_add_cs_target(${_t}.exe SOURCES ${_t}.cs REFS "${_driver}")
 endforeach()
 
@@ -206,6 +207,7 @@ if(MONO_ENABLE_LLVM)
     _mono_add_tiered_test(promotion-gshared tiered-promotion.exe ${_n})
     _mono_add_tiered_test(inliner inliner-tests.exe ${_n})
     _mono_add_tiered_test(devirt devirt-tests.exe ${_n})
+    _mono_add_tiered_test(statics tiered-statics.exe ${_n})
   endforeach()
   # The decline corpus needs tier-1 to never actually fire, so point the
   # one-method allowlist at a name nothing matches.
@@ -257,6 +259,18 @@ if(MONO_ENABLE_LLVM)
                    "${CMAKE_CURRENT_SOURCE_DIR}/devirt-tests.cs"
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties(tiered-devirt-inlines PROPERTIES
+    LABELS tiered FIXTURES_REQUIRED mini_corpora)
+
+  # And once more for the static-data blocks: tiered-statics.exe reads and
+  # writes the right values whether each field carries its own symbol or they
+  # all share their class's block, so the encoding it exists to cover has to be
+  # asserted from the trace rather than from the answers.
+  add_test(NAME tiered-statics-symbols
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/check-statics-symbols.sh"
+                   "MONO_PATH=${_class_dir} ${_wrapper}"
+                   "${CMAKE_CURRENT_BINARY_DIR}/tiered-statics.exe"
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(tiered-statics-symbols PROPERTIES
     LABELS tiered FIXTURES_REQUIRED mini_corpora)
 
   # Tier 1 reads its native_offset -> il_offset map back out of the emitted

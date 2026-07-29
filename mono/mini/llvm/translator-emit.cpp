@@ -12,6 +12,7 @@
 
 #include "translator-internal.hpp"
 
+#include <optional>
 #include <string>
 
 #ifndef DISABLE_JIT
@@ -779,8 +780,10 @@ jit_const_alignment (MonoJumpInfoType type, gconstpointer data)
 	case MONO_PATCH_INFO_SFLDA: {
 		int align;
 		mono_type_size (mono_field_get_type_internal ((MonoClassField *) data), &align);
-		/* Capped: the static data block is only pointer-aligned, whatever the
-		 * field's own type would like. */
+		/* Only the special statics get here - a field in its class block is
+		 * named through the block, which carries its own alignment - and their
+		 * slots are carved out of a thread's static data, so cap the field's
+		 * own preference at what that can promise. */
 		return MIN (align, TARGET_SIZEOF_VOID_P);
 	}
 	case MONO_PATCH_INFO_LDSTR_LIT:
@@ -899,6 +902,40 @@ jit_const_shape (MonoJumpInfoType type)
 	}
 }
 
+/* The runtime allocation holding a class's static fields. */
+struct StaticBlock {
+	gpointer base;
+	std::string hint;
+};
+
+/*
+ * The static fields of a class all live in one runtime allocation, so the block
+ * is what gets named and each field is an offset into it - one live pointer per
+ * class rather than one per field, and the offsets fold into the addressing
+ * mode. Empty for the special statics, which are kept in per-domain side tables
+ * instead and so have nothing to share.
+ */
+static std::optional<StaticBlock>
+static_field_block (MonoCompile *cfg, MonoClassField *field)
+{
+	if (mono_class_field_is_special_static (field))
+		return std::nullopt;
+
+	ERROR_DECL (error);
+	MonoClass *parent = mono_field_get_parent (field);
+	MonoVTable *vtable = mono_class_vtable_checked (cfg->domain, parent, error);
+	mono_error_assert_ok (error);
+
+	gpointer data = mono_vtable_get_static_field_data (vtable);
+	if (!data)
+		return std::nullopt;
+
+	char *name = mono_type_get_full_name (parent);
+	StaticBlock block = { data, std::string ("statics_") + name };
+	g_free (name);
+	return block;
+}
+
 /*
  * get_jit_const:
  *
@@ -929,19 +966,41 @@ EmitContext::get_jit_const (MonoJumpInfoType type, gconstpointer data)
 	if (!addr)
 		shape = ConstShape::Integer;
 
-	if (mono_llvm_const_trace ())
-		g_printerr ("llvm-const: %-40s %s\n", mono_ji_type_to_string (type),
-		            shape == ConstShape::Data ? "symbol"
-		            : shape == ConstShape::Integer ? "literal" : "literal (unclassified)");
-
-	if (shape != ConstShape::Data)
+	if (shape != ConstShape::Data) {
+		if (mono_llvm_const_trace ())
+			g_printerr ("llvm-const: %-40s %s\n", mono_ji_type_to_string (type),
+			            shape == ConstShape::Integer ? "literal" : "literal (unclassified)");
 		return llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), (guint64) (gsize) addr, false);
+	}
 
-	char *hint = jit_const_hint (type, data);
-	const char *name = mono_llvm_data_symbol (hint, addr);
-	g_free (hint);
+	std::optional<StaticBlock> block;
+	if (type == MONO_PATCH_INFO_SFLDA)
+		block = static_field_block (this->cfg, (MonoClassField *) data);
 
-	mono_llvm_jit_register_symbol (name, addr);
+	gpointer base = block ? block->base : addr;
+	unsigned align = jit_const_alignment (type, data);
+	const char *name;
+
+	if (block) {
+		name = mono_llvm_data_symbol (block->hint.c_str (), base);
+		/* The block is a runtime allocation; LLVM works the field's own
+		 * alignment out from that plus the offset. */
+		align = TARGET_SIZEOF_VOID_P;
+	} else {
+		char *hint = jit_const_hint (type, data);
+		name = mono_llvm_data_symbol (hint, base);
+		g_free (hint);
+	}
+
+	/* Derived rather than taken from the field, so that whatever
+	 * resolve_patch () decided stays the value this produces. */
+	gsize offset = (guint8 *) addr - (guint8 *) base;
+
+	if (mono_llvm_const_trace ())
+		g_printerr ("llvm-const: %-40s symbol %s+%" G_GSIZE_FORMAT "\n",
+		            mono_ji_type_to_string (type), name, offset);
+
+	mono_llvm_jit_register_symbol (name, base);
 
 	LLVMValueRef gv = LLVMGetNamedGlobal (this->lmodule, name);
 	if (!gv) {
@@ -954,10 +1013,18 @@ EmitContext::get_jit_const (MonoJumpInfoType type, gconstpointer data)
 		 */
 		gv = LLVMAddGlobal (this->lmodule, llvm::wrap (llvm::Type::getInt8Ty (llvm_ctx ())), name);
 		LLVMSetLinkage (gv, LLVMExternalLinkage);
-		LLVMSetAlignment (gv, jit_const_alignment (type, data));
+		LLVMSetAlignment (gv, align);
 	}
 
-	return llvm::unwrap (gv);
+	if (!offset)
+		return llvm::unwrap (gv);
+
+	/* Not inbounds: the global is a declaration, so its extent is not ours to
+	 * promise. */
+	return llvm::ConstantExpr::getGetElementPtr (
+		llvm::Type::getInt8Ty (llvm_ctx ()),
+		llvm::cast<llvm::Constant> (llvm::unwrap (gv)),
+		llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), offset));
 }
 
 /*
