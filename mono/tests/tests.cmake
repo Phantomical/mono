@@ -1259,23 +1259,26 @@ set(MONO_TESTS_TAILCALL_DISABLED_RUN
 )
 
 
-# Tests that fail on Boehm but pass on SGen, measured on amd64/Linux by running
-# the corpus under both collectors. They are excluded from the boehm half only,
-# so `<test>@sgen` still runs; the list is the worklist for making Boehm green.
+# Tests kept off the boehm half. Only the two that cannot usefully report a
+# failure are here -- one asks for something Boehm does not implement, the other
+# hangs and costs five minutes of wall clock to say so. The rest of what fails on
+# Boehm is left running and red, so the breakage stays visible.
+#
+# Excluded from the boehm half only, so `<test>@sgen` still runs.
 #
 # weak-fields.exe        the runtime says so itself and aborts: "Weak fields not
-#                        supported by boehm gc".
-# install_eh_callback    SIGSEGV.
+#                        supported by boehm gc". Nothing to learn from running it.
 # thread-suspend-suspended  hangs; killed at the 300s timeout.
-# monitor-resurrection   ArgumentException out of Main. Resurrecting an object
-#                        from its finalizer and re-entering its monitor; a
-#                        conservative collector keeps it reachable differently.
-#                        Fails under the JIT and the interpreter alike.
+#
+# Known to fail and deliberately still running, so `@boehm` reports them:
+#   install_eh_callback     SIGSEGV.
+#   monitor-resurrection    ArgumentException out of Main. Resurrecting an object
+#                           from its finalizer and re-entering its monitor; a
+#                           conservative collector keeps it reachable differently.
+#                           Fails under the JIT and the interpreter alike.
 set(MONO_TESTS_BOEHM_DISABLED
   weak-fields.exe
-  install_eh_callback.exe
   thread-suspend-suspended.exe
-  monitor-resurrection.exe
 )
 
 # The interpreter is not run on Boehm at all -- see the `GC sgen` on the
