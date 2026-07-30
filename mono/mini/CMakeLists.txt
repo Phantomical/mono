@@ -203,11 +203,13 @@ set(MONO_SGEN_OBJECTS
     mini ${_mini_extra}
     monoruntime_sgen monoruntime_config monoruntime_support monoculture
     monosgen monoutils eglib
+    mono-llvm
     CACHE INTERNAL "object libraries making up the SGen runtime")
 set(MONO_BOEHM_OBJECTS
     mini ${_mini_extra}
     monoruntime_boehm monoruntime_config monoruntime_support monoculture
     monoutils eglib
+    mono-llvm
     CACHE INTERNAL "object libraries making up the Boehm runtime")
 
 if(ZLIB_FOUND)
