@@ -1,8 +1,10 @@
-# Converted from class/System.Web.Routing/Makefile.
-
 mono_declare_managed(
   NAME       System.Web.Routing.dll
   PROFILES   net_4_x unityjit
   KEYFILE    ../winfx.pub
+  SNK        <topdir>/class/mono.snk
   REFS       System System.Core System.Web System.Web.Abstractions
 )
+
+# Whatever else the Makefile did.  Hand-written, and optional.
+include(${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake OPTIONAL)

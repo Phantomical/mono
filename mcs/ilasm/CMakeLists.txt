@@ -20,3 +20,13 @@ mono_declare_managed(
   DEPENDS    ilasm-parser
   TARGET_NET_REFERENCE v4.7
   INTERMEDIATE)
+
+# The shipped one, which signs what it assembles.
+mono_declare_managed(
+  PROGRAM
+  NAME       ilasm.exe
+  PROFILES   net_4_x
+  REFS       PEAPI System Mono.Security
+  FLAGS      -d:HAS_MONO_SECURITY
+  BUILT_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/ILParser.cs"
+  DEPENDS    ilasm-parser)

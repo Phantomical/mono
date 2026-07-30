@@ -194,8 +194,13 @@ endif()
 if(MONO_ENABLE_MCS_BUILD)
   # Refresh the bootstrap compiler used when no mono is available to build the
   # class libraries with.
+  set(_monolite_name "monolite-linux-${MONO_CORLIB_VERSION_GUID}-latest")
   add_custom_target(get-monolite-latest
-    COMMAND "${MONO_GNU_MAKE}" -C "${MONO_MCS_TOPDIR}/class" get-monolite-latest
+    COMMAND "${CMAKE_COMMAND}"
+            -D "MONO_MONOLITE_URL=https://download.mono-project.com/monolite/${_monolite_name}.tar.gz"
+            -D "MONO_MONOLITE_DIR=${CMAKE_BINARY_DIR}/mcs/class/lib"
+            -D "MONO_MONOLITE_NAME=${_monolite_name}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/MonoGetMonolite.cmake"
     USES_TERMINAL
     VERBATIM)
 endif()
@@ -213,7 +218,7 @@ message(STATUS "    LLVM back end: ${MONO_ENABLE_LLVM} ${MONO_LLVM_PREFIX}")
 message(STATUS "    interpreter:   ${MONO_ENABLE_INTERPRETER}")
 message(STATUS "    Mono.Native:   ${MONO_ENABLE_MONO_NATIVE}")
 message(STATUS "    BTLS:          ${MONO_ENABLE_BTLS}")
-message(STATUS "    class libs:    ${MONO_ENABLE_MCS_BUILD} (${MONO_MCS_PROFILES})")
+message(STATUS "    class libs:    ${MONO_ENABLE_MCS_BUILD}")
 message(STATUS "    C# compiles on: ${MONO_TOOLS_RUNTIME} (${MONO_TOOLS_RUNTIME_VERSION})")
 message(STATUS "    samples:       ${MONO_ENABLE_SAMPLES}")
 message(STATUS "    benchmarks:    ${MONO_ENABLE_BENCHMARKS}")

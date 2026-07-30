@@ -15,7 +15,7 @@ foreach(_p build net_4_x unityjit)
   mono_add_il_module(
     TARGET  corlib-unsafe-${_p}
     OUTPUT  "${_dir}/corlib.unsafe.dll.tmp"
-    SOURCE  System.Runtime.CompilerServices/Unsafe.il
+    SOURCES System.Runtime.CompilerServices/Unsafe.il
     PROFILE ${_p}
     FLAGS   /dll /noautoinherit)
 endforeach()
@@ -53,17 +53,54 @@ set(_common_flags
     -d:INSIDE_CORLIB,MONO_CULTURE_DATA -d:LIBC
     -d:BIT64,REGISTRY_ASSEMBLY)
 
+# The test suite's own resources.  Checked-in binaries the tests open by name,
+# and one .resx that has to be compiled first.
+set(_test_resources
+    Test/resources/MyResources.resources
+    Test/resources/MyResources.de.resources
+    Test/resources/Empty.resources
+    Test/resources/AFile.txt
+    Test/resources/StreamTest.resources
+    Test/resources/StreamTest.ja.resources
+    Test/resources/bug81759.resources
+    Test/resources/415628.bin
+    Test/resources/Fergie.GED)
+
 foreach(_p build net_4_x unityjit)
   mono_profile_dir(_dir ${_p})
   set(_flags ${_common_flags})
+  # Only net_4_x runs tests, and the fields have to stay off the bootstrap
+  # profile in particular: compiling a .resx needs resgen, which that profile
+  # is what produces.
+  set(_test "")
   if(_p STREQUAL "net_4_x")
     list(APPEND _flags -d:FEATURE_CRYPTO_CONFIGURABLE)
+    set(_test
+      RESX       Test/resources/Resources.resources
+      TEST_REFS  System.Core System Mono.Posix
+      TEST_RESOURCES ${_test_resources}
+      TEST_FLAGS -nowarn:168,219,618,672 -unsafe
+                 -nowarn:67,114,162,169,649,659
+                 -define:MONO_DATACONVERTER_STATIC_METHODS
+                 -d:FEATURE_CRYPTO_CONFIGURABLE
+                 -resource:Test/resources/Resources.resources
+                 "-resource:LinkerDescriptor/mscorlib_test.xml,${_p}_corlib_test.xml"
+      XTEST_REFS System System.Core Facades/System.Threading.Tasks
+                 Facades/System.Text.RegularExpressions System.Numerics
+                 System.Runtime.CompilerServices.Unsafe
+      XTEST_REMOTE_EXECUTOR
+      XTEST_FLAGS -d:netcoreapp -publicsign -keyfile:../mono.snk
+                  "-resource:${CMAKE_SOURCE_DIR}/external/corefx/src/System.Reflection/tests/Resources/ResourceTextFile.txt,ResourceTextFile.txt"
+                  # A netmodule the reflection tests load from beside the test
+                  # assembly; extra.cmake puts it there.
+                  "-r:${_dir}/tests/System.Reflection.TestModule.dll")
   endif()
   mono_declare_managed(
     NAME        corlib.dll
     OUTPUT_NAME mscorlib.dll
     PROFILES    ${_p}
     NO_DEFAULT_REFERENCES
+    ${_test}
     FLAGS       ${_flags}
     # The security manager reads its bootstrap database out of this directory
     # while compiling.
@@ -75,3 +112,5 @@ foreach(_p build net_4_x unityjit)
                 "--ilreplace:${_dir}/corlib.unsafe.dll.tmp"
     INSTALL_DIR "lib/mono/4.5")
 endforeach()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake)

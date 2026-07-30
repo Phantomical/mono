@@ -1,0 +1,52 @@
+# The symbolicate round-trip suite: three variants of the same check, differing
+# only in whether the copy under test was AOT-compiled first.
+mono_profile_dir(_pdir net_4_x)
+set(_src "${CMAKE_CURRENT_SOURCE_DIR}")
+set(_exe "${CMAKE_CURRENT_BINARY_DIR}/StackTraceDumper.exe")
+
+_mono_csc_command(_csc net_4_x)
+_mono_csc_env(_cscenv net_4_x)
+_mono_tool_depends(_rt net_4_x)
+set(_cscmd ${_csc})
+if(_cscenv)
+  set(_cscmd "${CMAKE_COMMAND}" -E env ${_cscenv} ${_csc})
+endif()
+
+add_custom_command(
+  OUTPUT "${_exe}"
+  COMMAND ${_cscmd} /nologo /noconfig -nostdlib ${MONO_MANAGED_DEBUG_FLAGS}
+          -warn:0 "-r:${_pdir}/mscorlib.dll" "-r:${_pdir}/System.Core.dll"
+          "-out:${_exe}" "${_src}/Test/StackTraceDumper.cs"
+  DEPENDS "${_src}/Test/StackTraceDumper.cs" mcs-net_4_x-corlib
+          mcs-net_4_x-System.Core ${_rt}
+  COMMENT "CSC [net_4_x] StackTraceDumper.exe"
+  VERBATIM)
+add_custom_target(mcs-symbolicate-tests DEPENDS "${_exe}")
+add_dependencies(mcs-symbolicate-tests mcs-net_4_x-mono-symbolicate)
+
+foreach(_variant without_aot with_aot with_aot_msym)
+  set(_aot "")
+  if(_variant STREQUAL "with_aot")
+    set(_aot plain)
+  elseif(_variant STREQUAL "with_aot_msym")
+    set(_aot msym)
+  endif()
+  add_test(NAME symbolicate-${_variant}
+           COMMAND "${CMAKE_COMMAND}"
+                   -D "RUNTIME=${CMAKE_BINARY_DIR}/runtime/mono-wrapper"
+                   -D "LIB_PATH=${_pdir}"
+                   -D "PROGRAM=${_pdir}/mono-symbolicate.exe"
+                   -D "TEST_EXE=${_exe}"
+                   -D "OUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${_variant}"
+                   -D "EXPECTED=${_src}/Test/symbolicate.expected"
+                   -D "AOT=${_aot}"
+                   -P "${_src}/symbolicate-test.cmake")
+  set_tests_properties(symbolicate-${_variant} PROPERTIES
+    LABELS "tools" TIMEOUT 900 FIXTURES_REQUIRED symbolicate_build)
+endforeach()
+
+add_test(NAME symbolicate-build
+         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
+                 --target mcs-symbolicate-tests)
+set_tests_properties(symbolicate-build PROPERTIES
+  LABELS "fixture" FIXTURES_SETUP symbolicate_build RESOURCE_LOCK ninja)

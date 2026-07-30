@@ -1,27 +1,32 @@
 # The CMake build
 
-This directory holds the shared pieces of the CMake build that replaced the
-autotools one: the `configure.ac` checks, the flag sets, and the templates for
-the files `config.status` used to generate.
+This directory holds the shared pieces of the build: the configure-time probes,
+the flag sets, the class-library machinery and the generated-file templates.
 
 ```
 cmake/
-  MonoOptions.cmake            the --with/--enable switches
+  MonoOptions.cmake            the build's switches
   MonoCompilerFlags.cmake      CPPFLAGS/CFLAGS/CXXFLAGS/LDFLAGS, as INTERFACE targets
-  MonoConfigureChecks.cmake    the AC_CHECK_* probes
+  MonoConfigureChecks.cmake    the header/function/type probes behind config.h
   MonoConfigureFixed.cmake     the config.h entries that are options, not probes
   MonoLLVM.cmake               llvm-config -> the mono::llvm interface target
   MonoBtls.cmake               the BoringSSL sub-build
   MonoHelpers.cmake            small shared helpers and install paths
+  MonoToolsRuntime.cmake       which mono the managed tools run on
   MonoMiniTests.cmake          the mini regression / tiered suites
+  MonoManaged.cmake            the class-library build: profiles and declarations
+  MonoCompileAssembly.cmake    the per-assembly compile driver, run as cmake -P
+  MonoManagedTests.cmake       the per-library NUnit and xunit suites
+  MonoResgen.cmake             .resx -> .resources
+  MonoGacInstall.cmake         the install-time gacutil driver
+  MonoGetMonolite.cmake        fetches the prebuilt bootstrap compiler
   MonoGenVersion.cmake         build-time version.h
   MonoGenBuildVer.cmake        build-time buildver-<gc>.h
   MonoBuildTreeConfig.cmake    build-time etc/mono/config
   MonoCheckEglibRemap.cmake    the "no bare g_* exports" check
-  config.h.in                  cmakedefine form of the autoheader template
+  config.h.in                  the config.h template
   bdwgc/                       the Boehm collector's build and its config.h
   mono-wrapper.in              the uninstalled-runtime wrapper
-  mcs-config.make.in           what mcs/build/config.make gets told about us
 ```
 
 ## Configuring
@@ -33,20 +38,16 @@ cmake -S . -B build -G Ninja \
 cmake --build build
 ```
 
-`MONO_LLVM_PREFIX` is the CMake spelling of `--with-llvm=`; leaving it empty
-builds without the tier-1 backend, the same way omitting `--with-llvm` did.  The
-rest of the switches are in `MonoOptions.cmake` and follow the `MONO_ENABLE_*` /
-`MONO_WITH_*` naming.
+`MONO_LLVM_PREFIX` points at an LLVM install; leaving it empty builds without
+the tier-1 backend. The rest of the switches are in `MonoOptions.cmake` and
+follow the `MONO_ENABLE_*` / `MONO_WITH_*` naming.
 
 ## How the runtime is assembled
 
-automake's `noinst_LTLIBRARIES` were *convenience* libraries: every object in
-them landed in the final shared library whether or not anything referenced it.
-libmono needs that -- most of its exported surface is reached only through
-icalls and P/Invoke, so a static archive would drop it at link time.  CMake
-OBJECT libraries give the same thing without `--whole-archive`, so each piece of
-the runtime (`eglib`, `monoutils`, `monoruntime_sgen`, `mini`, ...) is an OBJECT
-library and `libmonosgen-2.0`, `mono-sgen` and friends list the full set.
+Every piece of the runtime (`eglib`, `monoutils`, `monoruntime_sgen`, `mini`,
+...) is an OBJECT library, and `libmonosgen-2.0`, `mono-sgen` and friends list
+the full set.  libmono needs that: most of its exported surface is reached only
+through icalls and P/Invoke, so a static archive would drop it at link time.
 
 The one exception is `monosgen-static`, an archive form of the same objects used
 by the unit tests, which need archive semantics: `test-path.c` includes
@@ -56,30 +57,51 @@ would define those symbols twice.
 `mono/metadata` is compiled twice, once per collector, because a handful of its
 translation units inline the collector's allocation and write-barrier paths.
 
-## Verifying against the autotools build
+Two `config.h` entries look wrong and are deliberate -- the runtime has only
+ever been built and tested with these answers, so changing them is a behaviour
+change, not a fix:
 
-`config.h` was the risky part of the port, so it was checked rather than
-asserted: the generated one was diffed against a `config.h` produced by
-`./autogen.sh && ./configure` with the equivalent flags, and all 568 macros
-matched.  The autotools files were deleted once that held; to repeat the
-comparison, check them out from before their removal.
+* `HOST_LINUX` is never defined; `MONO_HOST_LINUX` is the one that is true.
+* `HAVE_RT_MSGHDR` only asks whether `<net/route.h>` exists.
 
-Two probes are deliberately faithful to a bug rather than to intent, because the
-runtime has only ever been built and tested with the buggy answer:
+## The class libraries
 
-* `HOST_LINUX` is never defined.  `configure.ac` guarded it with
-  `if test echo x$target_os | grep -q linux`, which is `test` with three
-  operands rather than a pipeline, so it was always false.  The automake
-  conditional of the same name *was* true; `MONO_HOST_LINUX` carries that.
-* `HAVE_RT_MSGHDR` only asks whether `<net/route.h>` exists -- the original
-  probe body was a forward declaration, which always compiles.
+Output goes to `build/mcs/class/lib/<profile>/`; nothing is written under
+`mcs/`. The profiles are `build` (the bootstrap compiler and its tools),
+`net_4_x`, `unityjit`, `xbuild_12`, `xbuild_14` and the install-only
+`binary_reference_assemblies`.
 
-Two rewrites in the build-tree `etc/mono/config` go the other way and were made
-to fire: the automake rules for `MonoPosixHelper` and `libmono-btls-shared`
-matched on a `$mono_libdir/` prefix that `data/config.in` no longer carries for
-those two entries, so they silently did nothing and both libraries resolved
-through `ld.so` -- which finds a system-wide mono's copies in preference to the
-ones just built.
+A per-directory `CMakeLists.txt` only *declares*, with
+`mono_declare_managed()`. The same source directory builds in several profiles
+and references are bare assembly names, so nothing can be resolved until every
+directory has been read; `mcs/CMakeLists.txt` materializes the whole set in an
+epilogue, resolving each reference to the target that produces it. Add an
+assembly by declaring it -- do not write `add_custom_command` yourself.
+
+Each assembly is one command running `MonoCompileAssembly.cmake`, which expands
+the directory's `.sources` through `gensources.exe`, writes a depfile naming
+every `.cs` it selected, and runs `csc`. Ninja reads the depfile afterwards, so
+editing a source rebuilds exactly the assemblies containing it.
+
+Anything a directory needs beyond a compile -- a generated source, an IL module,
+an extra install rule, a test fixture -- goes in a hand-written `extra.cmake` or
+`generated-sources.cmake` beside the declaration, included by its
+`CMakeLists.txt`. A file that several directories include must set the variables
+its includers read *before* any `return()` guard, or only the first includer
+gets them.
+
+Two ways to embed a resource, and they are not interchangeable. `RESX` names
+`.resources` files compiled from a `.resx` beside them, embedded under the file's
+own name. `RESOURCE_DEFS` takes `<id>,<file>` pairs and embeds under `<id>`, so
+the input can be a `.txt`, or a `.resx` in `external/`, and the assembly still
+finds it by the name it asks for.
+
+A `.sources` file name may be prefixed with a host platform, a profile, or
+both. `gensources` takes the two valid name sets on its command line, from
+`MONO_MANAGED_PLATFORM_NAMES` and `MONO_MANAGED_PROFILES`; it uses them to
+enumerate a directory's whole set of targets, which is a mode nothing in this
+build asks for -- the per-assembly compile names its platform and profile
+outright.
 
 ## Tests
 
@@ -102,6 +124,10 @@ machine's core count.
 | `gshared` | generic sharing, over four optimization sets | `check-all` |
 | `sgen` | the SGen collector matrix, 42 configurations | `check-all` |
 | `interp` | the whole corpus again under the interpreter | `check-all` |
+| `bcl` | the class libraries' own NUnit suites, one per assembly | `check-all` |
+| `bcl-xunit` | the same for the corefx-derived xunit suites | `check-all` |
+| `compiler` | `mcs/tests` and `mcs/errors`, ~6000 programs each | `check-all` |
+| `tools` | mdoc, the linker, mono-symbolicate, xbuild, monop, csi | `check-all` |
 | `slow` | minutes-long single tests | no |
 | `stress` | long-running stress tests | no |
 | `fixture` | builds the managed inputs | pulled in on demand |
@@ -110,38 +136,33 @@ The suites that drive `test-runner.exe` already use every core, so they carry a
 `PROCESSORS` property and CTest runs them one at a time while packing the
 one-off tests around them.
 
-The managed corpora are built through CTest fixtures rather than as part of
-`all`, so a plain `cmake --build` does not wait on ~900 csc invocations and a
-bare `ctest` still does the right thing. Those fixtures deliberately do **not**
-depend on the `mcs` target: it wraps a foreign make system and is therefore
-always out of date, so depending on it made every `ctest` invocation re-scan the
-whole class library. The class libraries are in `all`, and the `check` targets
-carry the dependency for the from-scratch case.
+The managed corpora and the class libraries' test assemblies are built through
+CTest fixtures rather than as part of `all`, so a plain `cmake --build` does not
+wait on ~900 csc invocations and a bare `ctest` still does the right thing. The
+class libraries themselves are in `all`, and the `check` targets carry the
+dependency for the from-scratch case.
 
-`mono/tests` keeps its corpus in `tests.cmake` (the lists), `special-tests.cmake`
-(the ~60 tests automake gave a recipe of their own) and `runtime-suites.cmake`
-(the CTest wiring). The lists are the amd64/Linux/JIT set; tests that only
-applied to another architecture or to an AOT profile are absent, as everywhere
-else in this port.
+Every test that builds takes `RESOURCE_LOCK ninja`. Ninja does not lock the build
+directory, so two `cmake --build` fixtures running at once under `ctest -j` pick
+rules out of the same graph and write each other's outputs half-finished.
 
-Disabled tests are not built, which is what automake did too -- it filtered them
-out of the lists before those lists became build targets, and a few of them no
-longer compile.
+A handful of `bcl` suites cannot pass here whatever the code does, and it is
+worth knowing which before chasing one: corlib has ~11 failures that follow the
+machine's ICU and tzdata, `System` has one live HTTP test, `System.Messaging`
+wants a RabbitMQ broker, and `System.Windows.Forms` wants an X display. Re-run
+the suite with `--nollvm` to tell one of those from a codegen bug.
+
+`mono/tests` keeps its corpus in `tests.cmake` (the lists),
+`special-tests.cmake` (the tests with a recipe of their own) and
+`runtime-suites.cmake` (the CTest wiring). The lists are the amd64/Linux/JIT
+set; disabled tests are not built, and a few of them no longer compile.
 
 ## What is not here
 
-* The AOT modes. `mono/tests/fullaot-mixed` and `llvmonly-mixed`, the
-  `TESTSAOT_*` lists and the `%.exe.so` rules that shadowed every test are out
-  of this port's JIT-only scope.
-* `msvc/`, which drives a Visual Studio build of the runtime.  Out of scope for
-  a Linux/amd64 build; the `.vcxproj` files are untouched and still work under
-  MSVC, they simply have no CMake entry point.
-* `sdks/`, which carries its own make-based build for the mobile and wasm
-  cross-targets.  Those are out of this port's scope and their makefiles still
-  expect the deleted `configure`, so they no longer work.
-* `scripts/ci/`, Mono's Jenkins entry points.  They shell out to `./autogen.sh`
-  and read the version out of `configure.ac`, so they are dead; Unity's CI goes
-  through `external/buildscripts` instead.
+* The AOT modes: this build is JIT-only.
+* `msvc/`, the Visual Studio build. The `.vcxproj` files still work under MSVC;
+  they simply have no CMake entry point.
+* `sdks/`, the mobile and wasm cross-targets, which carry their own build.
 
 ## The peripheral directories
 
@@ -156,22 +177,10 @@ switch (see `MonoOptions.cmake`):
 | `tools/locale-builder`| `MONO_ENABLE_LOCALE_BUILDER` | OFF     | `culture-table` downloads CLDR and rewrites a checked-in header |
 | `docs`                | `MONO_ENABLE_DOCS`           | OFF     | needs `mdoc.exe` from the class libraries and perl |
 
-Two of them differ from what automake did, on purpose.  `samples` was never
-compiled at all -- the old `Makefile.am` only listed the files for `make dist`
--- and it is built here because these are the only in-tree users of the
-embedding API and the profiler module ABI.  `mono/benchmark` gains CTest
-entries; the perl `test-driver` it used to run under is not ported, because
-none of the benchmarks has an expected-output file, so a run only ever checked
-the exit status, which CTest does natively.
+`samples` is compiled but never run: these are the only in-tree users of the
+embedding API and the profiler module ABI, so building them is the only thing
+that keeps those headers honest.
 
-The gettext catalogues under `po/` are compiled and installed as before, but be
-aware that nothing reads them: the compiler has no gettext binding, so the four
-translations have no effect at runtime.
-
-Everything else that the autotools build produced for this configuration --
-the runtime, both collectors, the LLVM tier, the interpreter, the debugger
-agent, the profiler modules, `libmono-native`, `libMonoPosixHelper`,
-`libMonoSupportW`, `libikvm-native`, BTLS, `monodis`, `pedump`,
-`sgen-grep-binprot`, `mono-hang-watchdog`, the `.pc` files, the dllmap
-configuration, the wrapper scripts, the man pages and the class libraries -- is
-built and installed by CMake.
+The gettext catalogues under `po/` are compiled and installed, but nothing reads
+them: the compiler has no gettext binding, so the four translations have no
+effect at runtime.

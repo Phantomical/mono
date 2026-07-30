@@ -15,7 +15,7 @@ endif()
 
 set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
-set(_buildcls "${MONO_MCS_TOPDIR}/class/lib/build")
+set(_buildcls "${MONO_MCS_LIBDIR}/build")
 set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
@@ -71,5 +71,5 @@ foreach(_b IN LISTS _cs_benchmarks _il_benchmarks)
   set_tests_properties("benchmark-${_b}" PROPERTIES
     LABELS "benchmark;slow"
     TIMEOUT 600
-    ENVIRONMENT "MONO_PATH=${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}")
+    ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 endforeach()

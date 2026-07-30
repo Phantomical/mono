@@ -1,12 +1,15 @@
-# Converted from class/Facades/System.Security.Claims/Makefile.
-
 mono_declare_managed(
   NAME       System.Security.Claims.dll
   PROFILES   net_4_x unityjit
   SUBDIR     Facades
   KEYFILE    ../../msfinal.pub
-  INSTALL_DIR lib/mono/4.5/Facades
+  SNK        <topdir>/class/mono.snk
+  INSTALL_DIR <libdir>/mono/4.5/Facades
   REFS       System
   FLAGS      /delaysign /nowarn:1616,1699
   NO_DEBUG
+  NO_TEST
 )
+
+# Whatever else the Makefile did.  Hand-written, and optional.
+include(${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake OPTIONAL)

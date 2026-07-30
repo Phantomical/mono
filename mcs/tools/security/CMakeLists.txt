@@ -11,20 +11,30 @@ set(_helper AssemblyInfo.cs "${MONO_MCS_TOPDIR}/build/common/Consts.cs")
 mono_declare_managed(
   PROGRAM
   NAME     sn.exe
-  PROFILES build net_4_x unityjit
+  PROFILES build net_4_x
   REFS     Mono.Security System System.Core
   SOURCES  sn.cs StrongNameManager.cs ${_helper}
   NO_INSTALL)
 
 # The rest ship, but nothing in the build uses them, so they are built only
 # where they are installed from.
+# permview has its own rule in the makefile: it reads assembly metadata, so it
+# takes Mono.Cecil and none of the references the pattern rule hands the rest.
+mono_declare_managed(
+  PROGRAM
+  NAME        permview.exe
+  PROFILES    net_4_x
+  REFS        Mono.Cecil
+  SOURCES     permview.cs ${_helper}
+  INSTALL_DIR <libdir>/mono/4.5)
+
 foreach(_p secutil cert2spc makecert chktrust crlupdate signcode setreg
-           certmgr caspol permview mozroots cert-sync httpcfg)
+           certmgr caspol mozroots cert-sync httpcfg)
   mono_declare_managed(
     PROGRAM
     NAME        ${_p}.exe
     PROFILES    net_4_x
     REFS        Mono.Security System System.Core
     SOURCES     ${_p}.cs ${_helper}
-    INSTALL_DIR lib/mono/4.5)
+    INSTALL_DIR <libdir>/mono/4.5)
 endforeach()

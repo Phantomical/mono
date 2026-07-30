@@ -19,8 +19,8 @@ set(MONO_CORPUS_ENABLED TRUE)
 # in each directory that registers one.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-set(MONO_CORPUS_CLASS_DIR "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}")
-set(MONO_CORPUS_BUILD_DIR "${MONO_MCS_TOPDIR}/class/lib/build")
+set(MONO_CORPUS_CLASS_DIR "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
+set(MONO_CORPUS_BUILD_DIR "${MONO_MCS_LIBDIR}/build")
 set(MONO_CORPUS_WRAPPER   "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 set(MONO_CORPUS_CSFLAGS   -unsafe -nowarn:0219,0169,0414,0649,0618)
 

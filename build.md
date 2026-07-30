@@ -9,8 +9,8 @@ the `Makefile.am`s, `m4/`) have been removed from the tree. `cmake/README.md`
 describes the layout, how it maps onto the old one, and what it does not cover.
 
 It produces a fully working `mono` runtime (`mono-sgen` / `mono-boehm`) plus the
-C# class-library profiles (`net_4_x`, `unityjit`, `unityaot`, and their `-linux`
-host variants).
+C# class-library profiles (`build`, `net_4_x`, `unityjit`, `xbuild_12`,
+`xbuild_14` and `binary_reference_assemblies`).
 
 > **Why not `external/buildscripts/build_runtime_linux.pl` (the official CI path)?**
 > That script first runs `external/buildscripts/bee`, which downloads a pinned
@@ -79,9 +79,9 @@ want to change:
   the old `--with-llvm=`.
 - `-DCMAKE_INSTALL_PREFIX="$PWD/tmp"` — install into an **in-repo** `tmp/` dir,
   never system-wide.
-- `-DMONO_WITH_UNITYJIT=OFF -DMONO_WITH_UNITYAOT=OFF` — skip the Unity
-  class-library profiles.
-- `-DMONO_ENABLE_MCS_BUILD=OFF` — native runtime only, no class libraries.
+- `-DMONO_ENABLE_MCS_BUILD=OFF` — native runtime only, no class libraries. To
+  build one profile rather than all of them, name its target instead:
+  `cmake --build build --target mcs-net_4_x`.
 - `-DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON` — compile C# on a mono already
   installed on the machine instead of the one being built. See
   [Compiling C# on the system mono](#compiling-c-on-the-system-mono).
@@ -103,8 +103,14 @@ executables and tools, and then the C# class libraries.
 
 Artifacts land at:
 - `build/mono/mini/mono-sgen`, `build/mono/mini/mono-boehm` — the runtime executables
-- `mcs/class/lib/net_4_x-linux/` — the runnable class-library profile (mscorlib, System.*, …)
-- `mcs/class/lib/{net_4_x,unityjit,unityaot,unityjit-linux,unityaot-linux}/`
+- `build/mcs/class/lib/net_4_x-linux/` — the runnable class-library profile
+  (mscorlib, System.*, …)
+- `build/mcs/class/lib/{build,net_4_x,unityjit}-linux/`, plus
+  `build/mcs/class/lib/{xbuild_12,xbuild_14}/`. The unsuffixed `net_4_x`,
+  `build` and `unityjit` names beside them are symlinks to the `-linux` ones.
+
+Nothing is written under `mcs/` in the source tree, so two build directories
+over one checkout do not interfere.
 
 ## 5. Verify it works
 
@@ -125,7 +131,7 @@ EOF
 
 mcs -out:/tmp/Hello.exe /tmp/Hello.cs        # bootstrap compiler
 
-MONO_PATH="$PWD/mcs/class/lib/net_4_x-linux" \
+MONO_PATH="$PWD/build/mcs/class/lib/net_4_x-linux" \
     ./build/mono/mini/mono-sgen /tmp/Hello.exe
 ```
 
@@ -147,7 +153,7 @@ libraries you just compiled — the build is working end to end.
 
 ---
 
-## Optional: `make install` into the in-repo prefix
+## Optional: install into the in-repo prefix
 
 `cmake --install` copies everything into `./tmp` (the `CMAKE_INSTALL_PREFIX` you
 set — **not** a system location):
@@ -157,19 +163,27 @@ cmake --install build
 ls tmp/bin        # mono, mcs, csc, xbuild, monodis, gacutil, ...
 ```
 
-> **Known wrinkle:** the installed `tmp/bin/mono` looks for its corlib at
-> `tmp/lib/mono/4.5/mscorlib.dll`, but on this fork `make install` places a
-> *reference-only* mscorlib (no method bodies) there, so
-> `tmp/bin/mono <app>.exe` fails with *"mscorlib.dll ... could not be loaded."*
-> This is a quirk of the install rules, **not** a build failure. Use the verified
-> approach from step 5 (the in-tree `mono-sgen` + `MONO_PATH` pointing at a real
-> profile such as `mcs/class/lib/net_4_x-linux`), or overwrite the installed corlib
-> with the real one:
+> **Known wrinkle:** `tmp/bin/mono <app>.exe` fails with *"mscorlib.dll ... could
+> not be loaded"*, naming `tmp/lib/mono/4.5/mscorlib.dll`. The message is
+> misleading: on this fork the runtime rewrites framework version `4.5` to the
+> platform directory `net_4_x-linux` before probing
+> (`mono/metadata/assembly.c`), and nothing installs a corlib there. The install
+> rules reproduce the layout the old make build produced, which never matched
+> that probe either. Use the verified approach from step 5 (the in-tree
+> `mono-sgen` + `MONO_PATH` pointing at a real profile such as
+> `build/mcs/class/lib/net_4_x-linux`), or put a corlib where the runtime looks:
 > ```bash
-> cp mcs/class/lib/net_4_x/mscorlib.dll tmp/lib/mono/4.5/mscorlib.dll
+> mkdir -p tmp/lib/mono/net_4_x-linux
+> cp build/mcs/class/lib/net_4_x-linux/mscorlib.dll tmp/lib/mono/net_4_x-linux/
 > ```
-> Unity itself does not consume a `make install` prefix — it packages the profile
+> Unity itself does not consume an install prefix — it packages the profile
 > directories and `builds/` artifacts directly.
+
+> **A second wart, preserved from the make build:** `unityjit` declares
+> framework version 4.5, the same as `net_4_x`, and installs after it. So
+> `lib/mono/4.5` and the GAC end up holding `unityjit`'s assemblies, not
+> `net_4_x`'s. This is what the old `install-profiles` did; the conversion keeps
+> it rather than silently changing what gets installed.
 
 ## Optional: build with the LLVM backend
 
@@ -224,7 +238,7 @@ class Hello { static void Main(){ Console.WriteLine(Enumerable.Range(1,5).Select
 EOF
 mcs -out:/tmp/Hv.exe /tmp/Hv.cs
 
-export MONO_PATH="$PWD/mcs/class/lib/net_4_x-linux"
+export MONO_PATH="$PWD/build/mcs/class/lib/net_4_x-linux"
 ./build/mono/mini/mono-sgen --llvm /tmp/Hv.exe           # runs -> 55
 MONO_VERBOSE_METHOD=Main ./build/mono/mini/mono-sgen --llvm /tmp/Hv.exe 2>&1 | grep -i llvm
 #   converting llvm method void Hello:Main ()
@@ -261,6 +275,22 @@ ctest --test-dir build -j16 -L stress    # long-running
 
 The managed test assemblies are built by the regular build (`cmake --build
 build`), so run that first; `ctest` itself never builds anything.
+
+### Class-library suites that depend on the machine
+
+`ctest -L bcl` will not come out clean on a bare machine, and the reasons are all
+outside this build:
+
+| suite | needs |
+| ----- | ----- |
+| `bcl-corlib` | the ICU and tzdata versions the expectations were written against; ~11 culture, file-time-epoch and DST cases differ otherwise |
+| `bcl-System` | a working internet connection; one case is `[Category("InetAccess")]` and asserts on a live response's headers |
+| `bcl-System.Messaging` | a RabbitMQ broker on localhost, for 58 of its 87 cases |
+| `bcl-System.Windows.Forms` | an X display |
+| `bcl-System.Data.Linq` | a build directory whose path is short enough that the test assembly's own path fits a 128-character connection-string field |
+
+To tell one of these from a real code regression, re-run the single suite with
+`--nollvm`: the machine-dependent failures reproduce, a codegen bug does not.
 
 ### Acceptance tests
 
@@ -341,8 +371,9 @@ header — hence both being off by default.
 ## Rebuilding after changes
 
 - **Runtime (C/C++) change:** `cmake --build build -j"$(nproc)"` (incremental).
-- **Class-library (C#) change:** `cmake --build build --target mcs`, or drive
-  `mcs/` directly with `make -C mcs -j"$(nproc)" HOST_PLATFORM=linux`.
+- **Class-library (C#) change:** `cmake --build build -j"$(nproc)"` rebuilds
+  exactly the assemblies containing the file. `--target mcs` stops at the class
+  libraries; `--target mcs-net_4_x` stops at one profile.
 - **Clean rebuild:** `rm -rf build` and repeat from step 3. There is no stale
   `config.status` to worry about — changing a cache variable and re-running
   `cmake -S . -B build` is enough.
@@ -378,8 +409,7 @@ where the runtime has never been linked.
 **Tests still run on the runtime being built.** That is the thing under test and
 it never moves; only the compiler's host changes. Likewise the tools that
 surround the compiler in the class-library build — `resgen`, `ilasm`,
-`cil-stringreplacer`, `gensources`, `gacutil`, and the AOT step — stay on the
-in-tree runtime. They load assemblies out of `mcs/class/lib/build`, whose
+`cil-stringreplacer`, `gensources` and `gacutil` — stay on the in-tree runtime. They load assemblies out of `build/mcs/class/lib/build`, whose
 `mscorlib.dll` belongs to this tree, and a foreign runtime rejects that pairing
 outright (`Corlib not in sync with this runtime`).
 
@@ -404,7 +434,7 @@ result.
 
 - **`The assembly mscorlib.dll was not found`** when running a program → you didn't
   set `MONO_PATH` to a real profile dir, or you're using the installed `tmp/bin/mono`
-  (see the install wrinkle above). Point `MONO_PATH` at `mcs/class/lib/net_4_x-linux`.
+  (see the install wrinkle above). Point `MONO_PATH` at `build/mcs/class/lib/net_4_x-linux`.
 - **`external/bdwgc is empty`** or **`external/corefx is empty`** → rerun
   `git submodule update --init --recursive`, or turn the corresponding option off
   (`-DMONO_ENABLE_BOEHM=OFF`, `-DMONO_ENABLE_MONO_NATIVE=OFF`).

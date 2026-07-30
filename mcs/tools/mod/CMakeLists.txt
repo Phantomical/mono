@@ -1,8 +1,9 @@
-# Converted from tools/mod/Makefile.
-
 mono_declare_managed(
   PROGRAM
   NAME       mod.exe
   PROFILES   net_4_x
   REFS       monodoc
 )
+
+# Whatever else the Makefile did.  Hand-written, and optional.
+include(${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake OPTIONAL)

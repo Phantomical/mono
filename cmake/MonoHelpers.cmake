@@ -51,8 +51,12 @@ set(MONO_DATA_SUBDIR    "${CMAKE_INSTALL_DATADIR}/mono-${MONO_API_VERSION}")
 # runtime does at startup.
 file(RELATIVE_PATH MONO_RELOC_LIBDIR "${CMAKE_INSTALL_PREFIX}" "${CMAKE_INSTALL_FULL_LIBDIR}")
 
-# Where the class libraries live, in the source tree and once installed.
+# Where the class libraries live.  MONO_MCS_TOPDIR is the source directory --
+# .sources files, keys, grammars -- and MONO_MCS_LIBDIR is where the build puts
+# what it compiles.  They used to be the same place; everything that consumes a
+# built assembly wants the second.
 set(MONO_MCS_TOPDIR "${CMAKE_SOURCE_DIR}/mcs")
+set(MONO_MCS_LIBDIR "${CMAKE_BINARY_DIR}/mcs/class/lib")
 set(MONO_DEFAULT_PROFILE "net_4_x")
 
 # The Roslyn compilers that drive the class-library build, from the

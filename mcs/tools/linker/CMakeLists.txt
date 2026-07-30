@@ -9,3 +9,5 @@ mono_declare_managed(
   REFS       System System.Core System.Xml Mono.Cecil
   FLAGS      -unsafe
   NO_INSTALL)
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake)

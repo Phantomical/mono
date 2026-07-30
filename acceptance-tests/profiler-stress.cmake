@@ -53,17 +53,12 @@ add_custom_target(profiler-stress-runner ALL DEPENDS "${_bin}/runner.exe")
 #   ../external/benchmarker        the benchmark descriptions
 #   ../../runtime/mono-wrapper     the runtime under test
 #   ../../mcs/class/lib/net_4_x    the class libraries
-# automake ran it from <srcdir>/acceptance-tests/profiler-stress, where all
-# three resolved because the build was in-tree.  Running it from the matching
-# directory in the build tree gets the last two right on its own -- and gets
-# the *built* runtime rather than the source tree's -- so only external/ has
-# to be bridged.
+# Running it from the matching directory in the build tree resolves the last
+# two on its own -- the built runtime, and the class libraries this build
+# produced -- so only external/ has to be bridged.
 file(MAKE_DIRECTORY "${_bin}/profiler-stress")
 if(NOT EXISTS "${_bin}/external")
   file(CREATE_LINK "${_ext}" "${_bin}/external" SYMBOLIC)
-endif()
-if(NOT EXISTS "${CMAKE_BINARY_DIR}/mcs")
-  file(CREATE_LINK "${MONO_MCS_TOPDIR}" "${CMAKE_BINARY_DIR}/mcs" SYMBOLIC)
 endif()
 
 # runner.cs gives each benchmark a six-hour ceiling of its own and walks every

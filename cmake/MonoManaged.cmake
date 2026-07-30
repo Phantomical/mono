@@ -1,21 +1,16 @@
-# The class-library build.
-#
-# mcs/ used to carry its own recursive make system, which this build shelled
-# out to.  This module replaces it: every assembly under mcs/ becomes a normal
-# CMake custom command, so the whole tree -- native and managed -- lives in one
-# dependency graph, one job pool, and one incremental rebuild.
+# The class-library build.  Every assembly under mcs/ is a normal CMake custom
+# command, so the whole tree -- native and managed -- lives in one dependency
+# graph, one job pool, and one incremental rebuild.
 #
 # Two things about the shape of this file are worth knowing up front.
 #
 # Declarations are collected, not built.  A directory's CMakeLists.txt calls
 # mono_declare_managed() and nothing happens; mcs/CMakeLists.txt calls
 # mono_managed_materialize() at the end and every target appears at once.  The
-# reason is that references are written as bare assembly names -- `LIB_REFS =
-# System System.XML` in the old makefiles -- and a name cannot be resolved to
-# the target that produces it until every directory has been read.  Collecting
-# first also means the resulting graph is the real dependency DAG rather than
-# the serial-then-barrier approximation the makefiles encoded with SUBDIRS and
-# PARALLEL_SUBDIRS.
+# reason is that references are written as bare assembly names -- `REFS System
+# System.XML` -- and a name cannot be resolved to the target that produces it
+# until every directory has been read.  Collecting first is also what makes the
+# resulting graph the real dependency DAG.
 #
 # The same directory builds in several profiles.  A declaration therefore names
 # the profiles it participates in, and produces one target per profile, named
@@ -23,18 +18,31 @@
 
 include_guard(GLOBAL)
 
+include("${CMAKE_CURRENT_LIST_DIR}/MonoManagedTests.cmake")
+
 # ---------------------------------------------------------------------------
 # Where things go
 # ---------------------------------------------------------------------------
-# Output lands in the build tree.  The makefiles wrote it back into mcs/, which
-# meant a second build directory over one checkout silently clobbered the
-# first, and left the source tree dirty after every build.
+# Output lands in the build tree, so two build directories over one checkout
+# stay independent and a build leaves the source tree clean.
 set(MONO_MANAGED_ROOT "${CMAKE_BINARY_DIR}/mcs")
-set(MONO_MANAGED_LIBDIR "${MONO_MANAGED_ROOT}/class/lib")
+set(MONO_MANAGED_LIBDIR "${MONO_MCS_LIBDIR}")
 set(MONO_MANAGED_DEPSDIR "${MONO_MANAGED_ROOT}/deps")
-set(MONO_MANAGED_PLATFORMS_DIR "${MONO_MCS_TOPDIR}/build")
+
+# The host-platform prefixes a .sources file name may carry.  This and
+# MONO_MANAGED_PROFILES below are the two name sets gensources works from, and
+# it takes them on its command line; they are the build's to define.
+set(MONO_MANAGED_PLATFORM_NAMES linux macos unix win32)
 
 file(MAKE_DIRECTORY "${MONO_MANAGED_LIBDIR}" "${MONO_MANAGED_DEPSDIR}")
+
+# Ninja's depfile parser splits a path at a backtick and no escaping recovers
+# it, so the generic-arity file names this tree uses -- `Nullable`1.cs` and its
+# 36 siblings -- cannot ride the depfile: ninja would invent two phony inputs
+# that never exist and rebuild the assembly on every run.  The driver leaves
+# them out of the depfile; they become configure-time dependencies instead,
+# which costs a rebuild only when one of them is added or removed.
+file(GLOB_RECURSE MONO_MANAGED_ODD_SOURCES "${MONO_MCS_TOPDIR}/class/*`*.cs")
 
 # ---------------------------------------------------------------------------
 # The runtime that bootstraps the compiler
@@ -50,10 +58,7 @@ if(NOT MONO_BOOTSTRAP_RUNTIME)
     "that already works; install one, or point MONO_BOOTSTRAP_RUNTIME at it.")
 endif()
 
-# Fail at configure time rather than a thousand compile commands later.  This
-# is the check the makefiles ran as `basic-profile-check`, which on failure
-# downloaded a monolite tarball and latched a flag file that silently
-# redirected later builds onto the in-tree runtime.  Failing loudly is better.
+# Fail at configure time rather than a thousand compile commands later.
 if(NOT MONO_BOOTSTRAP_RUNTIME_CHECKED STREQUAL "${MONO_BOOTSTRAP_RUNTIME}")
   execute_process(COMMAND "${MONO_BOOTSTRAP_RUNTIME}" --version
                   OUTPUT_VARIABLE _v ERROR_VARIABLE _v RESULT_VARIABLE _rc
@@ -67,14 +72,10 @@ endif()
 # ---------------------------------------------------------------------------
 # Profiles
 # ---------------------------------------------------------------------------
-# Ported from mcs/build/profiles/*.make for HOST_PLATFORM=linux.  The knobs the
-# mobile profiles used to set -- MOBILE_PROFILE, NO_SRE, AOT_FRIENDLY_PROFILE
-# and the rest -- are constants now that those profiles are gone, so the
-# conditionals they drove are folded away rather than carried over.
+# The Linux profile set.
 #
 # DIRECTORY is the on-disk name; ALIAS is the unsuffixed name everything else
-# in the tree spells.  The makefiles created the alias as a symlink lazily, as
-# a side effect of the first library built; it is made up front here.
+# in the tree spells, and is created as a symlink beside it.
 
 set(MONO_MANAGED_PROFILES build net_4_x xbuild_12 xbuild_14 unityjit)
 
@@ -117,7 +118,7 @@ _mono_profile(net_4_x
   XBUILD_VERSION     4.0
   API_BIN_PROFILE    v4.7.1
   BOOTSTRAP          build
-  OPTIONS   WARN_AS_ERROR ENABLE_GSS DEBUG FACADES)
+  OPTIONS   WARN_AS_ERROR ENABLE_GSS DEBUG FACADES TESTS)
 
 # xbuild builds against net_4_x, reached through the alias -- these two
 # profiles are unsuffixed, so `../net_4_x/mscorlib` only resolves because the
@@ -156,9 +157,7 @@ _mono_profile(unityjit
   BOOTSTRAP          build
   OPTIONS   ENABLE_GSS DEBUG FACADES)
 
-# Flags every compile gets, from build/rules.make and build/config-default.make
-# with the linux platform fragment folded in (which contributes nothing but the
-# `:` path separator and a `cat` that made the response file a plain copy).
+# Flags every compile gets.
 set(MONO_MANAGED_COMMON_FLAGS
     /codepage:65001 /nologo /noconfig /deterministic /langversion:latest
     -optimize)                              # -optimize is config.make's BCL_OPTIMIZE
@@ -168,8 +167,7 @@ function(mono_profile_dir out profile)
   set(${out} "${MONO_MANAGED_LIBDIR}/${MONO_PROFILE_${profile}_DIRECTORY}" PARENT_SCOPE)
 endfunction()
 
-# The alias directories, created before anything compiles rather than as a side
-# effect of the first library to notice they were missing.
+# The alias directories, created before anything compiles.
 foreach(_p IN LISTS MONO_MANAGED_PROFILES)
   mono_profile_dir(_dir ${_p})
   file(MAKE_DIRECTORY "${_dir}")
@@ -183,16 +181,70 @@ endforeach()
 
 # ---------------------------------------------------------------------------
 # Declaring an assembly
+# Resolves a path a declaration named.  Relative is against the declaring
+# directory, as in the makefiles.  <topdir>/ stands for the mcs root: a few
+# defaults library.make anchors there (LIBRARY_SNK) reach directories at
+# varying depths, and spelling it this way keeps the generated CMakeLists free
+# of any checkout-specific path.
+macro(_mono_resolve_path out path base)
+  if("${path}" MATCHES "^<topdir>/(.*)$")
+    set(${out} "${MONO_MCS_TOPDIR}/${CMAKE_MATCH_1}")
+  elseif(IS_ABSOLUTE "${path}")
+    set(${out} "${path}")
+  else()
+    set(${out} "${base}/${path}")
+  endif()
+endmacro()
+
+# Rewrites the -resource: flags naming a .resx-generated file, which now lives
+# in the build tree rather than beside its .resx.  An explicit resource id is
+# added where the makefile relied on the default, which csc derives from the
+# file name -- moving the file must not rename the resource.
+function(_mono_rewrite_resource_flags out flags resx resdir)
+  set(_result "")
+  foreach(_f IN LISTS flags)
+    if(_f MATCHES "^([-/]resource:)([^,]+)(,?.*)$")
+      set(_pfx "${CMAKE_MATCH_1}")
+      set(_rpath "${CMAKE_MATCH_2}")
+      set(_rrest "${CMAKE_MATCH_3}")
+      if("${_rpath}" IN_LIST resx)
+        if(_rrest STREQUAL "")
+          get_filename_component(_rid "${_rpath}" NAME)
+          set(_rrest ",${_rid}")
+        endif()
+        set(_f "${_pfx}${resdir}/${_rpath}${_rrest}")
+      endif()
+    endif()
+    list(APPEND _result "${_f}")
+  endforeach()
+  set(${out} "${_result}" PARENT_SCOPE)
+endfunction()
+
 # ---------------------------------------------------------------------------
 # One call per assembly per directory; PROFILES says which profiles build it.
 # The argument names follow the makefile variables they replace closely enough
 # to diff against them: NAME is LIBRARY/PROGRAM, OUTPUT_NAME is LIBRARY_NAME,
 # REFS is LIB_REFS, FLAGS is LIB_MCS_FLAGS.
+# Every field a declaration carries.  One list, used to stash the declaration
+# and to read it back -- they drifted apart once already, and a field missing
+# from the read-back side is silently empty at materialize time rather than an
+# error.
+set(MONO_MANAGED_FIELDS
+    NAME OUTPUT_NAME SUBDIR KEYFILE SNK PACKAGE INSTALL_DIR
+    TARGET_NET_REFERENCE SOURCES_FILE PROFILES REFS API_BIN_REFS FLAGS
+    BUILT_SOURCES DEPENDS RESOURCES STRING_REPLACER_FLAGS ENV SOURCES
+    RESX RESGEN_FLAGS RESOURCE_DEFS
+    TEST_REFS TEST_FLAGS TEST_RESOURCES TEST_EXCLUDES TEST_RUNNER_FILES
+    XTEST_REFS XTEST_FLAGS
+    TEST_CONFIG_GLOBAL TEST_CONFIG_RUNTIME
+    PROGRAM NO_SIGN NO_INSTALL NO_DEBUG INTERMEDIATE NO_DEFAULT_REFERENCES NO_TEST
+    XTEST_REMOTE_EXECUTOR)
+
 function(mono_declare_managed)
   cmake_parse_arguments(A
-    "PROGRAM;NO_SIGN;NO_INSTALL;NO_DEBUG;INTERMEDIATE;NO_DEFAULT_REFERENCES"
-    "NAME;OUTPUT_NAME;SUBDIR;KEYFILE;SNK;PACKAGE;INSTALL_DIR;TARGET_NET_REFERENCE;SOURCES_FILE"
-    "PROFILES;REFS;API_BIN_REFS;FLAGS;BUILT_SOURCES;DEPENDS;RESOURCES;STRING_REPLACER_FLAGS;ENV;SOURCES"
+    "PROGRAM;NO_SIGN;NO_INSTALL;NO_DEBUG;INTERMEDIATE;NO_DEFAULT_REFERENCES;NO_TEST;XTEST_REMOTE_EXECUTOR"
+    "NAME;OUTPUT_NAME;SUBDIR;KEYFILE;SNK;PACKAGE;INSTALL_DIR;TARGET_NET_REFERENCE;SOURCES_FILE;TEST_CONFIG_GLOBAL;TEST_CONFIG_RUNTIME"
+    "PROFILES;REFS;API_BIN_REFS;FLAGS;BUILT_SOURCES;DEPENDS;RESOURCES;STRING_REPLACER_FLAGS;ENV;SOURCES;RESX;RESGEN_FLAGS;RESOURCE_DEFS;TEST_REFS;TEST_FLAGS;TEST_RESOURCES;TEST_EXCLUDES;TEST_RUNNER_FILES;XTEST_REFS;XTEST_FLAGS"
     ${ARGN})
 
   if(NOT A_NAME)
@@ -211,10 +263,7 @@ function(mono_declare_managed)
   endif()
   set(_id "MONO_MANAGED_${_n}")
 
-  foreach(_f NAME OUTPUT_NAME SUBDIR KEYFILE SNK PACKAGE INSTALL_DIR
-             TARGET_NET_REFERENCE SOURCES_FILE PROFILES REFS API_BIN_REFS FLAGS
-             BUILT_SOURCES DEPENDS RESOURCES STRING_REPLACER_FLAGS ENV SOURCES
-             PROGRAM NO_SIGN NO_INSTALL NO_DEBUG INTERMEDIATE NO_DEFAULT_REFERENCES)
+  foreach(_f IN LISTS MONO_MANAGED_FIELDS)
     set_property(GLOBAL PROPERTY ${_id}_${_f} "${A_${_f}}")
   endforeach()
   set_property(GLOBAL PROPERTY ${_id}_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -227,9 +276,9 @@ endfunction()
 # The compiler, and the tools that surround it
 # ---------------------------------------------------------------------------
 # Roslyn's compiler server is worth a lot across ~900 compiles.  The pipe name
-# is derived from the build directory: the makefiles used the fixed literal
-# `monomake`, so two build trees shared one server -- and that server holds the
-# other tree's class/lib/build assemblies open through MONO_PATH.
+# is derived from the build directory so that two build trees do not share a
+# server: it holds the tree's class/lib/build assemblies open through
+# MONO_PATH.
 option(MONO_MCS_COMPILER_SERVER "Use the Roslyn compiler server for class-library compiles" ON)
 string(SHA256 _mono_pipe_hash "${CMAKE_BINARY_DIR}")
 string(SUBSTRING "${_mono_pipe_hash}" 0 16 _mono_pipe_hash)
@@ -263,7 +312,9 @@ function(_mono_tool_depends out profile)
     # mono-build-config is not optional: the wrapper points MONO_CFG_DIR at
     # the build tree's etc/, and without the dllmap in it every tool that
     # touches the filesystem dies with "DllNotFoundException: System.Native".
-    set(_d mono-${MONO_DEFAULT_GC_SUFFIX} mono-build-config)
+    # The tools run on the bootstrap profile, with MONO_PATH pointing at it, so
+    # the whole of it has to be there before any of them start.
+    set(_d mono-${MONO_DEFAULT_GC_SUFFIX} mono-build-config mcs-build)
     # The BCL's filesystem and networking layers P/Invoke into this, and the
     # dllmap names it by path in the build tree.
     if(MONO_ENABLE_MONO_NATIVE)
@@ -328,6 +379,44 @@ function(_mono_target_name out profile subdir name)
   endif()
 endfunction()
 
+# Registers the install-time gacutil call for one assembly.  LIBRARY_PACKAGE
+# defaults to the profile's framework version and `none` means GAC only, with
+# no symlink under lib/mono/<package>.
+function(_mono_gac_install lib profile package)
+  if(NOT package)
+    set(package "${MONO_PROFILE_${profile}_FRAMEWORK_VERSION}")
+  endif()
+  if(package STREQUAL "none")
+    set(package "")
+  endif()
+  mono_profile_dir(_builddir build)
+  # CMAKE_INSTALL_PREFIX is left for install time so that
+  # `cmake --install --prefix` still reaches the right root.
+  install(CODE "
+set(MONO_GAC_RUNTIME [==[${CMAKE_BINARY_DIR}/runtime/mono-wrapper]==])
+set(MONO_GAC_TOOL [==[${_builddir}/gacutil.exe]==])
+set(MONO_GAC_MONO_PATH [==[${_builddir}]==])
+set(MONO_GAC_LIBDIR \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+set(MONO_GAC_LIB [==[${lib}]==])
+set(MONO_GAC_PACKAGE [==[${package}]==])
+include([==[${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MonoGacInstall.cmake]==])
+" COMPONENT mcs)
+endfunction()
+
+# For the one assembly that is installed twice: mono-service.exe is a program
+# in lib/mono/4.5 *and* a GAC entry, so its directory asks for the second half
+# explicitly.  PACKAGE defaults to `none`, i.e. no lib/mono/<package> symlink.
+#
+#   mono_gac_install(PROFILE <profile> NAME <file> [PACKAGE <package>])
+function(mono_gac_install)
+  cmake_parse_arguments(G "" "PROFILE;NAME;PACKAGE" "" ${ARGN})
+  if(NOT G_PACKAGE)
+    set(G_PACKAGE none)
+  endif()
+  mono_profile_dir(_dir ${G_PROFILE})
+  _mono_gac_install("${_dir}/${G_NAME}" "${G_PROFILE}" "${G_PACKAGE}")
+endfunction()
+
 function(mono_managed_materialize)
   get_property(_count GLOBAL PROPERTY MONO_MANAGED_COUNT)
   if(NOT _count)
@@ -340,9 +429,17 @@ function(mono_managed_materialize)
   foreach(_i RANGE ${_last})
     set(_id "MONO_MANAGED_${_i}")
     get_property(_name    GLOBAL PROPERTY ${_id}_NAME)
+    get_property(_outname GLOBAL PROPERTY ${_id}_OUTPUT_NAME)
     get_property(_subdir  GLOBAL PROPERTY ${_id}_SUBDIR)
     get_property(_profs   GLOBAL PROPERTY ${_id}_PROFILES)
-    _mono_stem(_stem "${_name}")
+    # Keyed on the file that lands in the profile directory, not on the
+    # declaration's name: LIB_REFS spells the output, and Microsoft.Build.Tasks
+    # ships as Microsoft.Build.Tasks.v4.0.dll.
+    if(_outname)
+      _mono_stem(_stem "${_outname}")
+    else()
+      _mono_stem(_stem "${_name}")
+    endif()
     foreach(_p IN LISTS _profs)
       _mono_target_name(_t ${_p} "${_subdir}" "${_name}")
       if(_subdir)
@@ -358,6 +455,11 @@ function(mono_managed_materialize)
       set_property(GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${_key} "${_t}")
     endforeach()
   endforeach()
+
+  # The test assemblies are built by their own aggregates, or one at a time by
+  # the CTest fixtures in MonoManagedTests.cmake, rather than by `all`.
+  add_custom_target(mcs-tests)
+  add_custom_target(mcs-xunit-tests)
 
   # Pass 2 -- the commands.
   foreach(_i RANGE ${_last})
@@ -376,10 +478,7 @@ function(mono_managed_materialize)
 endfunction()
 
 function(_mono_materialize_one id)
-  foreach(_f NAME OUTPUT_NAME SUBDIR KEYFILE SNK PACKAGE INSTALL_DIR
-             TARGET_NET_REFERENCE SOURCES_FILE PROFILES REFS API_BIN_REFS FLAGS
-             BUILT_SOURCES DEPENDS RESOURCES STRING_REPLACER_FLAGS ENV SOURCES
-             PROGRAM NO_SIGN NO_INSTALL NO_DEBUG INTERMEDIATE NO_DEFAULT_REFERENCES DIR)
+  foreach(_f IN LISTS MONO_MANAGED_FIELDS ITEMS DIR)
     get_property(A_${_f} GLOBAL PROPERTY ${id}_${_f})
   endforeach()
 
@@ -468,13 +567,17 @@ macro(_mono_materialize_profile _profile)
       set(_refprofile "${CMAKE_MATCH_1}")
       set(_refname "${CMAKE_MATCH_2}")
       mono_profile_dir(_rdir ${_refprofile})
-      list(APPEND _refflags "-r:${_alias}${_rdir}/${_refname}.dll")
+      set(_reffile "${_rdir}/${_refname}.dll")
     else()
-      list(APPEND _refflags "-r:${_alias}${_pdir}/${_refname}.dll")
+      set(_reffile "${_pdir}/${_refname}.dll")
     endif()
+    list(APPEND _refflags "-r:${_alias}${_reffile}")
     get_property(_provider GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${_refprofile}/${_refname})
     if(_provider)
-      list(APPEND _refdeps "${_provider}")
+      # Both the target and the file.  A DEPENDS on a target name alone is an
+      # order-only edge in Ninja: it would sequence the two compiles but never
+      # recompile this assembly when the one it references changes.
+      list(APPEND _refdeps "${_provider}" "${_reffile}")
     endif()
   endforeach()
 
@@ -490,15 +593,135 @@ macro(_mono_materialize_profile _profile)
     list(APPEND _flags ${MONO_MANAGED_DEBUG_FLAGS}
                        "-sourcelink:${MONO_MCS_TOPDIR}/build/common/sourcelink.json")
   endif()
-  list(APPEND _flags ${A_FLAGS} ${_refflags})
+  # A flag may name a file by <topdir>-relative path -- the NuGet task's
+  # keyfile lives outside mcs entirely -- for the same reason KEYFILE may.
+  string(REPLACE "<topdir>" "${MONO_MCS_TOPDIR}" _aflags "${A_FLAGS}")
+  list(APPEND _flags ${_aflags} ${_refflags})
   if(A_KEYFILE)
-    list(APPEND _flags "/keyfile:${A_DIR}/${A_KEYFILE}")
+    _mono_resolve_path(_keyfile "${A_KEYFILE}" "${A_DIR}")
+    list(APPEND _flags "/keyfile:${_keyfile}")
   endif()
   if(A_PROGRAM)
     list(APPEND _flags -target:exe)
   else()
     list(APPEND _flags -target:library)
   endif()
+
+  # -- generated resources -------------------------------------------------
+  # RESX_RESOURCES in the makefiles: a .resx compiled by resgen and embedded.
+  # They were generated beside the .resx and named by a relative path, which
+  # worked only because csc ran with the source directory as its cwd.  Here
+  # they go into the build tree, so the -resource: flag that names one has to
+  # be rewritten to point at it.
+  # Checked-in files embedded as-is.  They cannot be produced, so they are here
+  # only so that editing one rebuilds the assembly.
+  set(_resdeps "")
+  foreach(_r IN LISTS A_RESOURCES)
+    if(NOT IS_ABSOLUTE "${_r}")
+      set(_r "${A_DIR}/${_r}")
+    endif()
+    list(APPEND _resdeps "${_r}")
+  endforeach()
+
+  if(A_RESX OR A_RESOURCE_DEFS)
+    set(_resdir "${MONO_MANAGED_DEPSDIR}/res/${_target}")
+    _mono_tool_command(_resgen ${_profile} resgen.exe)
+    _mono_tool_env(_resgen_env ${_profile})
+    _mono_tool_depends(_rgdeps ${_profile})
+    get_property(_rgprov GLOBAL PROPERTY MONO_MANAGED_PROVIDER_build/resgen)
+    if(_rgprov)
+      list(APPEND _rgdeps "${_rgprov}")
+    endif()
+  endif()
+
+  # An `<id>,<file>` pair names the resource itself rather than letting csc
+  # derive it from the file name, so the input can be a .txt, or a .resx off in
+  # external/, and still be embedded under the name the assembly looks up.
+  foreach(_pair IN LISTS A_RESOURCE_DEFS)
+    if(NOT _pair MATCHES "^([^,]+),(.+)$")
+      message(FATAL_ERROR
+              "mono_declare_managed(${A_NAME}): RESOURCE_DEFS wants <id>,<file>, got '${_pair}'")
+    endif()
+    set(_rid "${CMAKE_MATCH_1}")
+    set(_rin "${CMAKE_MATCH_2}")
+    if(NOT IS_ABSOLUTE "${_rin}")
+      set(_rin "${A_DIR}/${_rin}")
+    endif()
+    add_custom_command(
+      OUTPUT "${_resdir}/${_rid}.resources"
+      COMMAND "${CMAKE_COMMAND}"
+              -D "RESGEN=${_resgen}" -D "RESGEN_ENV=${_resgen_env}"
+              -D "RESGEN_FLAGS=${A_RESGEN_FLAGS}"
+              -D "INPUT=${_rin}"
+              -D "OUTPUT=${_resdir}/${_rid}.resources"
+              -D "WORKDIR=${A_DIR}"
+              -P "${CMAKE_SOURCE_DIR}/cmake/MonoResgen.cmake"
+      DEPENDS "${_rin}" ${_rgdeps}
+      COMMENT "RESGEN [${_profile}] ${_rid}.resources"
+      VERBATIM)
+    list(APPEND _resdeps "${_resdir}/${_rid}.resources")
+    list(APPEND _flags "-resource:${_resdir}/${_rid}.resources,${_rid}.resources")
+  endforeach()
+
+  if(A_RESX)
+    foreach(_r IN LISTS A_RESX)
+      string(REGEX REPLACE "\\.resources$" ".resx" _resx "${_r}")
+      add_custom_command(
+        OUTPUT "${_resdir}/${_r}"
+        COMMAND "${CMAKE_COMMAND}"
+                -D "RESGEN=${_resgen}" -D "RESGEN_ENV=${_resgen_env}"
+                -D "RESGEN_FLAGS=${A_RESGEN_FLAGS}"
+                -D "INPUT=${A_DIR}/${_resx}"
+                -D "OUTPUT=${_resdir}/${_r}"
+                -D "PREBUILT=${A_DIR}/${_r}.prebuilt"
+                -D "WORKDIR=${A_DIR}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/MonoResgen.cmake"
+        DEPENDS "${A_DIR}/${_resx}" ${_rgdeps}
+        COMMENT "RESGEN [${_profile}] ${_r}"
+        VERBATIM)
+      list(APPEND _resdeps "${_resdir}/${_r}")
+    endforeach()
+
+    # A checked-in @response file can name the resources instead of the
+    # makefile doing it -- System.Windows.Forms does -- so it needs the same
+    # rewrite, on a copy in the build tree.
+    set(_newflags "")
+    foreach(_f IN LISTS _flags)
+      if(_f MATCHES "^@(.+)$")
+        set(_rsp "${CMAKE_MATCH_1}")
+        if(NOT IS_ABSOLUTE "${_rsp}")
+          set(_rsp "${A_DIR}/${_rsp}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_rsp}")
+        file(STRINGS "${_rsp}" _rsplines)
+        _mono_rewrite_resource_flags(_rsplines "${_rsplines}" "${A_RESX}" "${_resdir}")
+        get_filename_component(_rspname "${_rsp}" NAME)
+        string(JOIN "\n" _rsptext ${_rsplines})
+        # file(GENERATE) rather than file(WRITE): it leaves the file alone when
+        # the content has not changed, so reconfiguring does not rebuild.
+        file(GENERATE OUTPUT "${_resdir}/${_rspname}" CONTENT "${_rsptext}\n")
+        set(_f "@${_resdir}/${_rspname}")
+      endif()
+      list(APPEND _newflags "${_f}")
+    endforeach()
+    _mono_rewrite_resource_flags(_flags "${_newflags}" "${A_RESX}" "${_resdir}")
+  endif()
+
+  # The sources ninja cannot name in a depfile, restricted to the ones this
+  # assembly could plausibly compile: its own directory, plus the shared
+  # referencesource pool that .sources files across the tree include from.
+  set(_odd "")
+  foreach(_o IN LISTS MONO_MANAGED_ODD_SOURCES)
+    string(FIND "${_o}" "${A_DIR}/" _pos)
+    if(_pos EQUAL 0)
+      list(APPEND _odd "${_o}")
+    else()
+      string(FIND "${_o}" "${MONO_MCS_TOPDIR}/class/referencesource/" _pos)
+      if(_pos EQUAL 0)
+        list(APPEND _odd "${_o}")
+      endif()
+    endif()
+  endforeach()
 
   # -- the source list -----------------------------------------------------
   set(_sources_inputs "")
@@ -570,7 +793,7 @@ macro(_mono_materialize_profile _profile)
     list(APPEND _sn -q)
     set(_snk "${MONO_MCS_TOPDIR}/class/mono.snk")
     if(A_SNK)
-      set(_snk "${A_DIR}/${A_SNK}")
+      _mono_resolve_path(_snk "${A_SNK}" "${A_DIR}")
     endif()
     get_property(_snprov GLOBAL PROPERTY MONO_MANAGED_PROVIDER_build/sn)
     if(_snprov)
@@ -613,7 +836,8 @@ set(MCS_DEPFILE       [==[@_depfile@]==])
 set(MCS_RESPONSE      [==[@_response@]==])
 set(MCS_SOURCES_INPUTS [==[@_sources_inputs@]==])
 set(MCS_GENSOURCES    [==[@_gensources@]==])
-set(MCS_PLATFORMS_DIR [==[@MONO_MANAGED_PLATFORMS_DIR@]==])
+set(MCS_PLATFORM_NAMES [==[@MONO_MANAGED_PLATFORM_NAMES@]==])
+set(MCS_PROFILE_NAMES [==[@MONO_MANAGED_PROFILES@]==])
 set(MCS_LIBRARY       [==[@A_NAME@]==])
 set(MCS_PLATFORM      [==[@_platform@]==])
 set(MCS_PROFILE       [==[@_prof@]==])
@@ -635,15 +859,139 @@ set(MCS_STRING_REPLACER_FLAGS [==[@A_STRING_REPLACER_FLAGS@]==])
     # Generated sources are not listed here: they are produced in another
     # directory, so they are reached through the target that owns them, which
     # the caller passes in DEPENDS.
-    DEPENDS ${_sources_inputs} ${_refdeps} ${A_DEPENDS} "${_settings}"
+    DEPENDS ${_sources_inputs} ${_refdeps} ${_resdeps} ${A_DEPENDS} ${_odd}
+            "${_settings}"
     DEPFILE "${_depfile}"
     COMMENT "CSC [${_profile}] ${_outname}"
     VERBATIM)
 
-  add_custom_target(${_target} DEPENDS "${_out}")
+  # A checked-in <assembly>.config travels with the assembly and is installed
+  # beside it.  executable.make found it with $(wildcard), preferring the
+  # profile-specific spelling.
+  set(_extra "")
+  set(_cfgsrc "")
+  if(EXISTS "${A_DIR}/${_outname}.config.${_profile}")
+    set(_cfgsrc "${A_DIR}/${_outname}.config.${_profile}")
+  elseif(EXISTS "${A_DIR}/${_outname}.config")
+    set(_cfgsrc "${A_DIR}/${_outname}.config")
+  endif()
+  if(_cfgsrc)
+    add_custom_command(
+      OUTPUT "${_out}.config"
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+              "${_cfgsrc}" "${_out}.config"
+      DEPENDS "${_cfgsrc}"
+      COMMENT "COPY [${_profile}] ${_outname}.config"
+      VERBATIM)
+    set(_extra "${_out}.config")
+  endif()
+
+  add_custom_target(${_target} DEPENDS "${_out}" ${_extra})
   set_property(GLOBAL APPEND PROPERTY MONO_MANAGED_PROFILE_TARGETS_${_profile} ${_target})
   set_property(GLOBAL PROPERTY MONO_MANAGED_OUTPUT_${_target} "${_out}")
+
+  # -- install -------------------------------------------------------------
+  # Three shapes, exactly as library.make and executable.make had them: a
+  # library with LIBRARY_INSTALL_DIR is copied there, a program goes to
+  # PROGRAM_INSTALL_DIR (default lib/mono/<framework version>), and a library
+  # without one goes through gacutil.
+  if(NOT A_NO_INSTALL AND NOT MONO_PROFILE_${_profile}_NO_INSTALL)
+    string(REGEX REPLACE "\\.(dll|exe)$" ".pdb" _pdb "${_out}")
+    string(REPLACE "<libdir>" "${CMAKE_INSTALL_LIBDIR}" _dest "${A_INSTALL_DIR}")
+    string(REPLACE "<sysconfdir>" "${CMAKE_INSTALL_SYSCONFDIR}" _dest "${_dest}")
+    if(NOT _dest AND A_PROGRAM)
+      set(_dest
+          "${CMAKE_INSTALL_LIBDIR}/mono/${MONO_PROFILE_${_profile}_FRAMEWORK_VERSION}")
+    endif()
+    if(_dest)
+      install(PROGRAMS "${_out}" DESTINATION "${_dest}" COMPONENT mcs)
+      install(FILES "${_pdb}" DESTINATION "${_dest}" COMPONENT mcs OPTIONAL)
+      if(_cfgsrc)
+        install(FILES "${_out}.config" DESTINATION "${_dest}" COMPONENT mcs)
+      endif()
+    else()
+      _mono_gac_install("${_out}" "${_profile}" "${A_PACKAGE}")
+    endif()
+  endif()
+
+  # -- tests ---------------------------------------------------------------
+  # A suite exists when the directory has a .sources file naming one, which is
+  # the same wildcard test the makefiles used.
+  if(MONO_PROFILE_${_profile}_TESTS AND NOT A_NO_TEST AND NOT A_PROGRAM)
+    # A test assembly inherits the library's flags, so it names the same
+    # generated resources and needs the same rewriting.
+    set(_tflags ${A_TEST_FLAGS})
+    set(_xflags ${A_XTEST_FLAGS})
+    if(A_RESX)
+      _mono_rewrite_resource_flags(_tflags "${_tflags}" "${A_RESX}" "${_resdir}")
+      _mono_rewrite_resource_flags(_xflags "${_xflags}" "${A_RESX}" "${_resdir}")
+    endif()
+    mono_test_fixture_dir(_fixdir ${_profile} "${_outname}")
+    _mono_rewrite_fixture_flags(_tflags "${_tflags}" "${A_DIR}" "${_fixdir}")
+    _mono_rewrite_fixture_flags(_xflags "${_xflags}" "${A_DIR}" "${_fixdir}")
+
+    _mono_test_sources(_tsrc _tstem nunit ${_profile} "${A_DIR}" "${_outname}" "${A_NAME}")
+    if(_tsrc)
+      _mono_add_managed_test(nunit ${_profile} "${A_DIR}" ${_target} "${_outname}"
+                             "${_tstem}" "${_tsrc}"
+                             REFS ${A_TEST_REFS} FLAGS ${_tflags}
+                             LIB_REFFLAGS ${_refflags}
+                             RESOURCES ${A_TEST_RESOURCES}
+                             EXCLUDES ${A_TEST_EXCLUDES}
+                             RUNNER_FILES ${A_TEST_RUNNER_FILES}
+                             GLOBAL_CONFIG "${A_TEST_CONFIG_GLOBAL}"
+                             RUNTIME_CONFIG "${A_TEST_CONFIG_RUNTIME}"
+                             DEPENDS ${A_DEPENDS})
+    endif()
+    _mono_test_sources(_xsrc _xstem xunit ${_profile} "${A_DIR}" "${_outname}" "${A_NAME}")
+    if(_xsrc)
+      _mono_add_managed_test(xunit ${_profile} "${A_DIR}" ${_target} "${_outname}"
+                             "${_xstem}" "${_xsrc}"
+                             REFS ${A_XTEST_REFS} FLAGS ${_xflags}
+                             LIB_REFFLAGS ${_refflags}
+                             REMOTE_EXECUTOR ${A_XTEST_REMOTE_EXECUTOR}
+                             DEPENDS ${A_DEPENDS})
+    endif()
+  endif()
 endmacro()
+
+# ---------------------------------------------------------------------------
+# Sources generated by a managed tool
+# ---------------------------------------------------------------------------
+# A handful of directories run something this build produced to write a .cs --
+# System.Web's culevel, RabbitMQ's Apigen.
+#
+#   mono_generated_source(TARGET <name> OUTPUT <file> PROFILE <profile>
+#                         TOOL <exe> [TOOL_PROFILE <profile>]
+#                         [ARGS <arg>...] [DEPENDS <file>...])
+#
+# TOOL_PROFILE is which profile's copy of the tool to run and defaults to the
+# bootstrap one, matching BUILD_TOOLS_PROFILE.  The tool is depended on by
+# target name rather than through the provider map, because the per-directory
+# files that call this run before mono_managed_materialize() has built it.
+function(mono_generated_source)
+  cmake_parse_arguments(G "" "TARGET;OUTPUT;PROFILE;TOOL;TOOL_PROFILE"
+                        "ARGS;DEPENDS" ${ARGN})
+  if(NOT G_TOOL_PROFILE)
+    set(G_TOOL_PROFILE build)
+  endif()
+  mono_profile_dir(_tooldir ${G_TOOL_PROFILE})
+  _mono_tool_depends(_deps ${G_PROFILE})
+  _mono_target_name(_tooltgt ${G_TOOL_PROFILE} "" "${G_TOOL}")
+  list(APPEND _deps ${_tooltgt})
+  get_filename_component(_name "${G_OUTPUT}" NAME)
+  get_filename_component(_outdir "${G_OUTPUT}" DIRECTORY)
+  add_custom_command(
+    OUTPUT "${G_OUTPUT}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_outdir}"
+    COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_tooldir}"
+            "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" "${_tooldir}/${G_TOOL}"
+            ${G_ARGS}
+    DEPENDS ${G_DEPENDS} ${_deps}
+    COMMENT "GEN     [${G_PROFILE}] ${_name}"
+    VERBATIM)
+  add_custom_target(${G_TARGET} DEPENDS "${G_OUTPUT}")
+endfunction()
 
 # ---------------------------------------------------------------------------
 # Generated parsers
@@ -684,14 +1032,18 @@ endfunction()
 # cannot express, and cil-stringreplacer then splices the result into the
 # freshly compiled mscorlib.dll.
 #
-#   mono_add_il_module(TARGET <name> OUTPUT <file> SOURCE <file.il>
+#   mono_add_il_module(TARGET <name> OUTPUT <file> SOURCES <file.il>...
 #                      PROFILE <profile> [FLAGS <flag>...])
 #
 # TARGET exists for the same reason it does on mono_jay_parser(): the compile
 # that consumes this file is created in another directory.
 function(mono_add_il_module)
-  cmake_parse_arguments(I "" "TARGET;OUTPUT;SOURCE;PROFILE" "FLAGS" ${ARGN})
-  get_filename_component(_src "${I_SOURCE}" ABSOLUTE)
+  cmake_parse_arguments(I "" "TARGET;OUTPUT;PROFILE" "SOURCES;FLAGS" ${ARGN})
+  set(_srcs "")
+  foreach(_s IN LISTS I_SOURCES)
+    get_filename_component(_s "${_s}" ABSOLUTE)
+    list(APPEND _srcs "${_s}")
+  endforeach()
   get_filename_component(_name "${I_OUTPUT}" NAME)
   _mono_tool_command(_ilasm ${I_PROFILE} ilasm.exe)
   _mono_tool_env(_env ${I_PROFILE})
@@ -699,13 +1051,28 @@ function(mono_add_il_module)
   if(_env)
     set(_cmd "${CMAKE_COMMAND}" -E env ${_env} ${_ilasm})
   endif()
-  get_property(_ilasm_target GLOBAL PROPERTY MONO_MANAGED_PROVIDER_build/ilasm)
+  # By target name, not through the provider map: this runs while the
+  # per-directory files are being read, before materialize has filled it in.
+  _mono_target_name(_ilasm_target build "" ilasm.exe)
   _mono_tool_depends(_rt ${I_PROFILE})
   add_custom_command(
     OUTPUT "${I_OUTPUT}"
-    COMMAND ${_cmd} "${_src}" ${I_FLAGS} "/out:${I_OUTPUT}"
-    DEPENDS "${_src}" ${_ilasm_target} ${_rt}
-    COMMENT "ILASM   ${_name}"
+    COMMAND ${_cmd} ${_srcs} ${I_FLAGS} "/out:${I_OUTPUT}"
+    DEPENDS ${_srcs} ${_ilasm_target} ${_rt}
+    COMMENT "ILASM   [${I_PROFILE}] ${_name}"
     VERBATIM)
   add_custom_target(${I_TARGET} DEPENDS "${I_OUTPUT}")
+endfunction()
+
+# Declares that <target> produces the assembly <name> in <profile>, for the two
+# directories that build one without going through mono_declare_managed().
+# Without this a reference to it compiles against the right path but carries no
+# dependency edge, so the build races.
+function(mono_register_managed_provider)
+  cmake_parse_arguments(R "" "PROFILE;NAME;TARGET" "" ${ARGN})
+  _mono_stem(_stem "${R_NAME}")
+  set_property(GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${R_PROFILE}/${_stem}
+               "${R_TARGET}")
+  set_property(GLOBAL APPEND PROPERTY
+               MONO_MANAGED_PROFILE_TARGETS_${R_PROFILE} ${R_TARGET})
 endfunction()

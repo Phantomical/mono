@@ -3,14 +3,26 @@ using System.Text;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 
 public static class Program {
+    // The build passes the valid platform and profile names as comma-separated
+    // lists; both are sets a sources file name may be prefixed with.
+    private static string[] SplitNames (string value) {
+        if (string.IsNullOrEmpty (value))
+            return new string[0];
+
+        return value.Split (new [] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select (n => n.Trim ())
+            .Where (n => n.Length > 0)
+            .ToArray ();
+    }
+
     public static int Main (string[] _args) {
         var args = new List<string> (_args);
         bool useStdout = false, showHelp = false, strictMode = false;
         string baseDir = null;
-        string platformsDir = null;
+        var hostPlatformNames = new string[0];
+        var profileNames = new string[0];
 
         for (int i = 0; i < args.Count; i++) {
             var arg = args[i];
@@ -45,8 +57,11 @@ public static class Program {
                 case "--basedir":
                     baseDir = argValue;
                     break;
-                case "--platformsdir":
-                    platformsDir = argValue;
+                case "--platforms":
+                    hostPlatformNames = SplitNames (argValue);
+                    break;
+                case "--profiles":
+                    profileNames = SplitNames (argValue);
                     break;
                 default:
                     Console.Error.WriteLine ($"// Unrecognized switch {arg}. Aborting.");
@@ -75,25 +90,15 @@ public static class Program {
             Console.Error.WriteLine ("  Produces an error exit code if files or directories are invalid/missing or other warnings occur");
             Console.Error.WriteLine ("--basedir:<dir>");
             Console.Error.WriteLine ("  Sets the base directory when reading a single sources/exclusions pair (default is the directory containing the sources file)");
-            Console.Error.WriteLine ("--platformsdir:<dir>");
-            Console.Error.WriteLine ("  Location of platforms directory with configurations");
+            Console.Error.WriteLine ("--platforms:<a,b,c>");
+            Console.Error.WriteLine ("  The host platform names a sources file name may be prefixed with");
+            Console.Error.WriteLine ("--profiles:<a,b,c>");
+            Console.Error.WriteLine ("  The profile names a sources file name may be prefixed with");
 
             return 1;
         }
-
-        var myAssembly = Assembly.GetExecutingAssembly ();
-        var codeBase = new Uri (myAssembly.CodeBase);
-        var executablePath = Path.GetFullPath (codeBase.LocalPath);
-        var executableDirectory = Path.GetDirectoryName (executablePath);
 
         var outFile = Path.GetFullPath (args[0]);
-
-        var platformsFolder = Path.Combine (platformsDir ?? executableDirectory, "platforms");
-        var profilesFolder = Path.Combine (platformsDir ?? executableDirectory, "profiles");
-        if (!Directory.Exists (platformsFolder) || !Directory.Exists (profilesFolder)) {
-            Console.Error.WriteLine ($"// Platforms and/or profiles folders are missing: '{platformsFolder}' '{profilesFolder}'. Aborting.");
-            return 1;
-        }
 
         ParseResult result;
         SourcesParser parser;
@@ -109,7 +114,7 @@ public static class Program {
 
             var libraryDirectory = baseDir ?? directory;
 
-            parser = new SourcesParser (platformsFolder, profilesFolder, libraryDirectory);
+            parser = new SourcesParser (hostPlatformNames, profileNames, libraryDirectory);
 
             result = parser.Parse (libraryDirectory, sourcesFile, excludesFile);
 
@@ -122,7 +127,7 @@ public static class Program {
             var libraryDirectory = Path.GetDirectoryName (libraryFullName);
             var libraryName = Path.GetFileName (libraryFullName);
 
-            parser = new SourcesParser (platformsFolder, profilesFolder, baseDir);
+            parser = new SourcesParser (hostPlatformNames, profileNames, baseDir);
 
             result = parser.Parse (libraryDirectory, libraryName, platformName, profileName);
 
@@ -441,15 +446,11 @@ public class SourcesParser {
     private string TargetProfileName = "";
 
     public SourcesParser (
-        string platformsFolder, string profilesFolder, string baseDir
+        string[] hostPlatformNames, string[] profileNames, string baseDir
     ) {
         BaseDirectory = baseDir;
-        AllHostPlatformNames = Directory.GetFiles (platformsFolder, "*.make")
-            .Select (Path.GetFileNameWithoutExtension)
-            .ToArray ();
-        AllProfileNames = Directory.GetFiles (profilesFolder, "*.make")
-            .Select (Path.GetFileNameWithoutExtension)
-            .ToArray ();
+        AllHostPlatformNames = hostPlatformNames;
+        AllProfileNames = profileNames;
     }
 
     public ParseResult Parse (string libraryDirectory, string sourcesFileName, string exclusionsFileName) {

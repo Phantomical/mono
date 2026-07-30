@@ -83,9 +83,9 @@ endfunction()
 # mcs, ilasm and al do not: they are assemblies out of this tree, built against
 # this tree's corlib.
 _mono_tmpinst_shim(csc   "${MONO_CSC}" RUNTIME "${MONO_CSC_HOST}")
-_mono_tmpinst_shim(mcs   "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}/mcs.exe")
-_mono_tmpinst_shim(ilasm "${MONO_MCS_TOPDIR}/ilasm/ilasm.exe")
-_mono_tmpinst_shim(al    "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}/al.exe")
+_mono_tmpinst_shim(mcs   "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/mcs.exe")
+_mono_tmpinst_shim(ilasm "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/ilasm.exe")
+_mono_tmpinst_shim(al    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/al.exe")
 
 # ---------------------------------------------------------------------------
 # The class libraries

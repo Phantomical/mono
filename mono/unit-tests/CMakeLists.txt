@@ -18,12 +18,8 @@ if(NOT MONO_ENABLE_SGEN)
 endif()
 
 # test-mono-callspec.c calls mono_set_assemblies_path ("../../mcs/class/lib/
-# net_4_x"), which is relative to the working directory and so only resolved
-# because automake built in the source tree.  Rather than patch the test, give
-# the build tree an mcs/ that points at the real one.
-if(NOT EXISTS "${CMAKE_BINARY_DIR}/mcs")
-  file(CREATE_LINK "${MONO_MCS_TOPDIR}" "${CMAKE_BINARY_DIR}/mcs" SYMBOLIC)
-endif()
+# net_4_x"), relative to the working directory, which is why these tests run
+# from <build>/mono/unit-tests.
 
 # RUNTIME means the test starts a runtime and therefore links the whole JIT;
 # the others only need metadata and the collector.
@@ -79,7 +75,7 @@ function(mono_add_unit_test name)
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES
     SKIP_RETURN_CODE 77
-    ENVIRONMENT "MONO_PATH=${MONO_MCS_TOPDIR}/class/lib/build")
+    ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
 endfunction()
 
 mono_add_unit_test(test-sgen-qsort
@@ -135,8 +131,8 @@ endif()
 
 # The managed side of the tests that need one.
 if(MONO_ENABLE_MCS_BUILD)
-  set(_class_dir "${MONO_MCS_TOPDIR}/class/lib/${MONO_DEFAULT_PROFILE}")
-  set(_build_dir "${MONO_MCS_TOPDIR}/class/lib/build")
+  set(_class_dir "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
+  set(_build_dir "${MONO_MCS_LIBDIR}/build")
   mono_tools_runtime(_host MONO_PATH "${_build_dir}")
   set(_mcs ${_host}
            "${MONO_CSC}" -debug:portable -noconfig -nologo -unsafe

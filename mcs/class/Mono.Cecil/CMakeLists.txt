@@ -12,3 +12,13 @@ mono_declare_managed(
   PACKAGE    none
   TARGET_NET_REFERENCE v4.7
   INTERMEDIATE)
+
+# Everywhere else it is an ordinary library built against the in-tree BCL --
+# monolinker, pdb2mdb, mono-api-info and permview all reference it.
+mono_declare_managed(
+  NAME       Mono.Cecil.dll
+  PROFILES   net_4_x
+  REFS       System.Core System
+  FLAGS      -d:NET_4_0 -unsafe
+  KEYFILE    ../mono.snk
+  PACKAGE    none)

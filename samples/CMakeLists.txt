@@ -72,7 +72,7 @@ add_dependencies(samples
 # The managed halves, when there is a class library to compile them against.
 if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
   set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
-  set(_buildcls "${MONO_MCS_TOPDIR}/class/lib/build")
+  set(_buildcls "${MONO_MCS_LIBDIR}/build")
   mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
   set(_csc ${_host} "${MONO_CSC}" -debug:portable -noconfig -nologo)
 

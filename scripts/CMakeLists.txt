@@ -40,7 +40,7 @@ foreach(_s IN LISTS _scripts_default _scripts_2_0)
   list(APPEND MONO_BIN_SCRIPTS "${_out}/${_s}")
 endforeach()
 
-if(MONO_MCS_PROFILES MATCHES "net_4_x")
+if(MONO_ENABLE_MCS_BUILD)
   foreach(_s IN LISTS _scripts_4_0)
     set(exe_name "${_s}")
     mono_configure_script("${CMAKE_CURRENT_SOURCE_DIR}/script.in" "${_out}/${_s}")

@@ -37,27 +37,10 @@ option(MONO_ENABLE_IKVM_NATIVE  "Build libikvm-native"                      ON)
 option(MONO_ENABLE_BTLS         "Build the BoringSSL-based TLS provider"    ON)
 
 # --- class libraries --------------------------------------------------------
-option(MONO_ENABLE_MCS_BUILD "Drive the mcs class-library build from this build" ON)
-set(MONO_MCS_PROFILES "net_4_x" CACHE STRING
-    "mcs profiles to build (space separated); binary_reference_assemblies and the xbuild profiles are added automatically for net_4_x")
-option(MONO_WITH_UNITYJIT "Install the unityjit class library profile" ON)
-option(MONO_WITH_UNITYAOT "Install the unityaot class library profile" ON)
-option(MONO_UNITY_DEFINE  "Define UNITY in config.h"                   ON)
-
-# How wide the class-library build runs.  mcs has to be told, because it cannot
-# work it out: a make jobserver is inherited through a recursive $(MAKE), and
-# ninja is not make, so the gmake underneath starts with an empty MAKEFLAGS and
-# builds all ~140 assemblies of a profile one at a time.  There is no way to
-# share ninja's -j with it, so the two can briefly oversubscribe -- mcs waits on
-# the runtime link, but ninja may still have other native targets to go.  The
-# overlap is small, and far cheaper than serializing the class libraries.
-include(ProcessorCount)
-ProcessorCount(_mono_ncpu)
-if(_mono_ncpu EQUAL 0)
-  set(_mono_ncpu 1)
-endif()
-set(MONO_MCS_JOBS "${_mono_ncpu}" CACHE STRING
-    "Parallel jobs for the class-library build; 1 serializes it")
+# Building a subset is `--target mcs-<profile>`; the profiles are nodes in the
+# same dependency graph as everything else, so there is nothing to configure.
+option(MONO_ENABLE_MCS_BUILD "Build the mcs class libraries"            ON)
+option(MONO_UNITY_DEFINE     "Define UNITY in config.h"                 ON)
 
 # --- the peripheral directories ---------------------------------------------
 # None of these are part of the runtime.  They are on by default when they cost

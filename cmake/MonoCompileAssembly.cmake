@@ -10,7 +10,7 @@
 # because they come out of gensources.  So the same step that expands the
 # source list also writes `<assembly>: <every .cs>` next to it, and ninja picks
 # that up after the command runs.  Editing a .cs then rebuilds exactly the
-# assemblies that name it -- the job the generated `.makefrag` files used to do.
+# assemblies that name it.
 
 cmake_minimum_required(VERSION 3.28)
 
@@ -48,13 +48,27 @@ endfunction()
 # to bootstrap before any gensources exists.
 if(MCS_GENSOURCES)
   file(REMOVE "${MCS_RESPONSE}")
-  _mono_run("gensources"
-    COMMAND ${MCS_GENSOURCES} --strict "--platformsdir:${MCS_PLATFORMS_DIR}"
+  set(_gs ${MCS_GENSOURCES})
+  if(MCS_TOOL_ENV)
+    set(_gs "${CMAKE_COMMAND}" -E env ${MCS_TOOL_ENV} ${_gs})
+  endif()
+  string(JOIN "," _gs_platforms ${MCS_PLATFORM_NAMES})
+  string(JOIN "," _gs_profiles ${MCS_PROFILE_NAMES})
+  # Spelled out rather than routed through _mono_run because the platform
+  # argument is empty for the xbuild profiles and gensources reads its four
+  # trailing arguments positionally.  An empty element inside an unquoted list
+  # expansion disappears, and the profile would silently land in its slot.
+  execute_process(
+    COMMAND ${_gs} --strict
+            "--platforms:${_gs_platforms}" "--profiles:${_gs_profiles}"
+            ${MCS_GENSOURCES_BASEDIR}
             "${MCS_RESPONSE}" "${MCS_LIBRARY}" "${MCS_PLATFORM}" "${MCS_PROFILE}"
-    ENVIRONMENT ${MCS_TOOL_ENV})
-  # --strict deletes its own output rather than returning non-zero, because
-  # make ignores exit codes on that recipe line.  We do not, but the file still
-  # has to be there.
+    WORKING_DIRECTORY "${_wd}" RESULT_VARIABLE _rc)
+  if(NOT _rc EQUAL 0)
+    message(FATAL_ERROR "gensources failed (${_rc}) for ${MCS_OUTPUT}")
+  endif()
+  # --strict signals some failures by deleting its output rather than by
+  # returning non-zero.
   if(NOT EXISTS "${MCS_RESPONSE}")
     message(FATAL_ERROR "gensources produced no source list for ${MCS_OUTPUT}")
   endif()
@@ -73,6 +87,21 @@ foreach(_s IN LISTS _srcs)
   endif()
   if(NOT IS_ABSOLUTE "${_s}")
     set(_s "${_wd}/${_s}")
+  endif()
+  # A program's .sources file is handed to csc verbatim and csc expands
+  # wildcards itself, so an entry may be `.../reflect/*.cs`.  A depfile cannot
+  # carry a pattern -- ninja would treat it as a file that never appears -- so
+  # it is expanded here into what it currently matches.
+  if(_s MATCHES "[*?]")
+    file(GLOB _matches "${_s}")
+    list(APPEND _deps ${_matches})
+    continue()
+  endif()
+  # Ninja splits a depfile path at a backtick whatever the escaping, and would
+  # then wait forever on two inputs that do not exist.  MonoManaged.cmake makes
+  # these configure-time dependencies instead.
+  if(_s MATCHES "`")
+    continue()
   endif()
   list(APPEND _deps "${_s}")
 endforeach()

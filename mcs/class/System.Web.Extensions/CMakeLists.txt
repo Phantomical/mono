@@ -1,9 +1,13 @@
-# Converted from class/System.Web.Extensions/Makefile.
-
 mono_declare_managed(
   NAME       System.Web.Extensions.dll
   PROFILES   net_4_x unityjit
   KEYFILE    ../winfx.pub
+  SNK        <topdir>/class/mono.snk
   REFS       System System.Core System.Drawing System.Data System.Data.Linq System.Xml System.Web System.Web.Services System.Configuration System.EnterpriseServices System.ServiceModel System.Web.ApplicationServices
   FLAGS      -unsafe -define:NET_3_5 -nowarn:436 -define:SYSTEM_WEB_EXTENSIONS /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjax.debug.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjax.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxTimer.debug.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxTimer.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxWebForms.debug.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxWebForms.js
+  TEST_REFS  SystemWebTestShim
+  TEST_FLAGS -unsafe -define:NET_3_5 -nowarn:436 -define:SYSTEM_WEB_EXTENSIONS /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjax.debug.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjax.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxTimer.debug.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxTimer.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxWebForms.debug.js /resource:../MicrosoftAjaxLibrary/System.Web.Extensions/3.5.0.0/3.5.21022.8/MicrosoftAjaxWebForms.js -nowarn:219,169,1591 /resource:Test/resources/Web.mono.config /resource:Test/resources/profile.config.4.x /resource:Test/resources/ListViewSort.aspx /resource:Test/resources/ListViewTest.aspx /resource:Test/resources/ListViewTotalRowCount_Bug535701_1.aspx /resource:Test/resources/ListViewTotalRowCount_Bug535701_2.aspx /resource:Test/resources/ListViewTotalRowCount_Bug604053.aspx /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/MyPage.aspx.cs /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/Global.asax /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/My.ashx /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/MyPage.aspx /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/MyPageWithDerivedMaster.aspx /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/MyPageWithMaster.aspx /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/MyPageWithMasterInvalidPlaceHolder.aspx /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/My.master /resource:../System.Web/Test/mainsoft/NunitWeb/NunitWeb/Resources/MyDerived.master -define:SYSTEM_WEB_EXTENSIONS
 )
+
+# Whatever else the Makefile did.  Hand-written, and optional.
+include(${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake OPTIONAL)

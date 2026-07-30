@@ -1,5 +1,3 @@
-# Converted from tools/nunitreport/Makefile.
-
 mono_declare_managed(
   PROGRAM
   NAME       nunitreport.exe
@@ -7,3 +5,6 @@ mono_declare_managed(
   REFS       System.Xml
   NO_INSTALL
 )
+
+# Whatever else the Makefile did.  Hand-written, and optional.
+include(${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake OPTIONAL)

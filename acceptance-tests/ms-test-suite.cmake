@@ -17,14 +17,10 @@ endif()
 
 set(_ms_dir "${MONO_SUBMODULE_MS_TEST_SUITE_PATH}")
 
-# nunitlite.dll comes from mcs/tools/nunit-lite, which ms-test-suite.mk built
-# on demand with a recursive make.
-add_custom_target(nunitlite
-  COMMAND "${MONO_GNU_MAKE}" -C "${MONO_MCS_TOPDIR}/tools/nunit-lite"
-  COMMENT "MAKE nunit-lite"
-  USES_TERMINAL
-  VERBATIM)
-add_dependencies(nunitlite acceptance-toolchain)
+# The suites are compiled against nunitlite and run by its console.
+add_custom_target(nunitlite)
+add_dependencies(nunitlite acceptance-toolchain
+                 mcs-net_4_x-nunitlite mcs-net_4_x-nunit-lite-console)
 
 string(REPLACE ";" " " _ms_mcs "${_mcs}")
 
