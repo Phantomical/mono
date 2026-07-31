@@ -81,7 +81,16 @@ private:
 	std::vector<Entry> locals;
 	std::vector<StackValue> stack;
 
+	/// The method's IL, the offset of the instruction being emitted, and how far into
+	/// that instruction its operands have been read.
+	///
+	/// `offset` stays at the start of the instruction while `ip` walks its operands,
+	/// so that a refusal names the instruction that caused it rather than the one
+	/// after it.
+	const unsigned char *code = nullptr;
+	size_t code_size = 0;
 	size_t offset = 0;
+	size_t ip = 0;
 
 public:
 	MethodLLVMEmitter (llvm::Module *module, MonoCompile *cfg, MonoMethod *method)
@@ -111,6 +120,7 @@ private:
 	llvm::Error unbalanced_stack (size_t needed);
 	llvm::Error invalid_local (uint32_t index);
 	llvm::Error invalid_argument (uint32_t index);
+	llvm::Error truncated_il (size_t needed);
 
 	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
 	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
@@ -142,7 +152,52 @@ private:
 	llvm::Error emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned);
 	llvm::Error emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned);
 
+	llvm::Expected<llvm::Value *> coerce_to_location (MonoIrBuilder &builder, StackValue value,
+	                                                  MonoType *destination);
+
+	llvm::Error emit_ldloc (MonoIrBuilder &builder, uint32_t index);
+	llvm::Error emit_ldloca (MonoIrBuilder &builder, uint32_t index);
+	llvm::Error emit_stloc (MonoIrBuilder &builder, uint32_t index);
+
 private:
+	/// The next byte of the IL stream, or a refusal if the instruction runs off the
+	/// end of the method body.
+	llvm::Expected<uint8_t> read_u8 ()
+	{
+		if (code_size - ip < 1)
+			return truncated_il (1);
+
+		return code[ip++];
+	}
+
+	/// The next two bytes, little-endian - which is how IL stores them whatever the
+	/// machine running it does.
+	llvm::Expected<uint16_t> read_u16 ()
+	{
+		if (code_size - ip < 2)
+			return truncated_il (2);
+
+		uint16_t value = static_cast<uint16_t> (code[ip] | (code[ip + 1] << 8));
+
+		ip += 2;
+		return value;
+	}
+
+	/// The next four bytes, little-endian.
+	llvm::Expected<uint32_t> read_u32 ()
+	{
+		if (code_size - ip < 4)
+			return truncated_il (4);
+
+		uint32_t value = static_cast<uint32_t> (code[ip])
+		                 | (static_cast<uint32_t> (code[ip + 1]) << 8)
+		                 | (static_cast<uint32_t> (code[ip + 2]) << 16)
+		                 | (static_cast<uint32_t> (code[ip + 3]) << 24);
+
+		ip += 4;
+		return value;
+	}
+
 	StackValue get_stack (size_t index) const
 	{
 		if (index >= stack.size ())

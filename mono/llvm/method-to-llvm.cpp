@@ -79,6 +79,8 @@ MethodLLVMEmitter::emit ()
 		return declr.takeError ();
 
 	function = declr.get ();
+	code = cfg->header->code;
+	code_size = cfg->header->code_size;
 
 	MonoIrBuilder builder (context ());
 	llvm::BasicBlock *body = llvm::BasicBlock::Create (context (), "entry", function);

@@ -41,9 +41,11 @@ llvm::Type *
 primitive_type_to_llvm_type (llvm::LLVMContext &ctx, MonoTypeEnum type)
 {
 	switch (type) {
+	case MONO_TYPE_BOOLEAN:
 	case MONO_TYPE_I1:
 	case MONO_TYPE_U1:
 		return llvm::Type::getInt8Ty (ctx);
+	case MONO_TYPE_CHAR:
 	case MONO_TYPE_I2:
 	case MONO_TYPE_U2:
 		return llvm::Type::getInt16Ty (ctx);
@@ -128,6 +130,8 @@ integer_extension (MonoType *t)
 	case MONO_TYPE_I1:
 	case MONO_TYPE_I2:
 		return llvm::Attribute::SExt;
+	case MONO_TYPE_BOOLEAN:
+	case MONO_TYPE_CHAR:
 	case MONO_TYPE_U1:
 	case MONO_TYPE_U2:
 		return llvm::Attribute::ZExt;
@@ -154,6 +158,10 @@ MethodLLVMEmitter::convert_type (MonoType *t)
 	case MONO_TYPE_VOID:
 		return llvm::Type::getVoidTy (context ());
 	case MONO_TYPE_OBJECT:
+	case MONO_TYPE_STRING:
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_ARRAY:
+	case MONO_TYPE_SZARRAY:
 	case MONO_TYPE_PTR:
 	case MONO_TYPE_FNPTR:
 	/* Generic sharing hands us these as references. */

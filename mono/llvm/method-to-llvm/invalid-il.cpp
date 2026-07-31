@@ -113,4 +113,14 @@ MethodLLVMEmitter::invalid_argument (uint32_t index)
 	                   + (sig->hasthis ? " arguments including this" : " arguments"));
 }
 
+/// The current instruction wants NEEDED more operand bytes than the method body has
+/// left to give.
+llvm::Error
+MethodLLVMEmitter::truncated_il (size_t needed)
+{
+	return invalid_il (llvm::Twine ("truncated instruction, ") + llvm::Twine (needed)
+	                   + " operand bytes needed but " + llvm::Twine (code_size - ip)
+	                   + " left in the method body");
+}
+
 } // namespace mono
