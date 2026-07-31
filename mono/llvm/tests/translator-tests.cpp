@@ -122,6 +122,9 @@ const MethodRef translatable[] = {
 	{"arrays", "Arrays:Make"},
 	{"arrays", "Arrays:ElementAddress"},
 	{"arrays", "Arrays:Sum"},
+	{"arrays", "Arrays:Make2D"},
+	{"arrays", "Arrays:MakeBounded"},
+	{"arrays", "Arrays:Make5D"},
 
 	{"eh", "Eh:TryCatch"},
 	{"eh", "Eh:TwoCatches"},
@@ -393,6 +396,30 @@ TEST_F (TranslatorTest, NewarrCallsTheAllocatorWithTheArrayVtable)
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_GE (t.count ("mono_array_new_specific"), 1u);
 	EXPECT_GE (t.count ("mono_vtable_"), 1u);
+}
+
+// Multi-dimensional arrays construct through newobj on a bodyless metadata ctor; the
+// runtime icalls implement it, keyed by that ctor's method. Two int32 lengths take
+// the direct mono_array_new_2; bounds pairs and rank five deinterleave into a buffer
+// for mono_array_new_n_icall - bounds first, lengths after.
+TEST_F (TranslatorTest, ArrayNewobjCallsTheRuntimeArrayIcalls)
+{
+	const Translation &two = translate ("arrays", "Arrays:Make2D");
+	const Translation &bounded = translate ("arrays", "Arrays:MakeBounded");
+	const Translation &five = translate ("arrays", "Arrays:Make5D");
+
+	ASSERT_NE (two.function, nullptr) << two.error;
+	EXPECT_EQ (two.count ("mono_array_new_2"), 1u) << two.text ();
+	EXPECT_GE (two.count ("mono_method_"), 1u);
+
+	ASSERT_NE (bounded.function, nullptr) << bounded.error;
+	EXPECT_EQ (bounded.count ("mono_array_new_n_icall"), 1u) << bounded.text ();
+	/* Two sign-extended bounds and two zero-extended lengths land in the buffer. */
+	EXPECT_EQ (bounded.count ("sext"), 2u);
+	EXPECT_EQ (bounded.count ("zext"), 2u);
+
+	ASSERT_NE (five.function, nullptr) << five.error;
+	EXPECT_EQ (five.count ("mono_array_new_n_icall"), 1u) << five.text ();
 }
 
 TEST_F (TranslatorTest, StoringAReferenceElementChecksTheElementType)

@@ -129,4 +129,36 @@
 		ldloc.0
 		ret
 	}
+
+	.method public static int32[,] Make2D (int32 w, int32 h) cil managed
+	{
+		.maxstack 2
+		ldarg.0
+		ldarg.1
+		newobj instance void int32[,]::.ctor (int32, int32)
+		ret
+	}
+
+	.method public static int32[,] MakeBounded (int32 b1, int32 l1, int32 b2, int32 l2) cil managed
+	{
+		.maxstack 4
+		ldarg.0
+		ldarg.1
+		ldarg.2
+		ldarg.3
+		newobj instance void int32[,]::.ctor (int32, int32, int32, int32)
+		ret
+	}
+
+	.method public static int32[,,,,] Make5D (int32 l) cil managed
+	{
+		.maxstack 5
+		ldarg.0
+		ldarg.0
+		ldarg.0
+		ldarg.0
+		ldarg.0
+		newobj instance void int32[,,,,]::.ctor (int32, int32, int32, int32, int32)
+		ret
+	}
 }

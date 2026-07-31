@@ -4,7 +4,9 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
 
+#include <algorithm>
 #include <cstring>
+#include <string>
 
 namespace mono {
 
@@ -84,7 +86,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 	/* Multi-dimensional and non-zero-based arrays construct through newobj. */
 	if (m_class_get_rank (klass) != 0)
-		return unsupported_il ("newobj on an array type");
+		return emit_array_newobj (builder, *target, sig);
 	/* A string constructor computes its length first and returns the string. */
 	if ((*target)->string_ctor)
 		return unsupported_il ("newobj on a string constructor");
@@ -150,6 +152,95 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	else
 		push_stack (created, pushed);
 
+	return llvm::Error::success ();
+}
+
+/// The array shapes of newobj: rank above one, or explicit lower bounds. The
+/// metadata constructor has no body - the runtime's array-new icalls implement it,
+/// keyed by the constructor's method so they can recover the array class.
+llvm::Error
+MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
+                                      MonoMethodSignature *sig)
+{
+	MonoClass *klass = ctor->klass;
+	size_t rank = m_class_get_rank (klass);
+	size_t count = sig->param_count;
+
+	if (stack.size () < count)
+		return unbalanced_stack (count);
+	if (count != rank && count != 2 * rank)
+		return invalid_il ("an array constructor takes a length, or a bound and "
+		                   "a length, per dimension");
+
+	llvm::LLVMContext &ctx = context ();
+	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
+	llvm::Type *word = llvm::Type::getIntNTy (ctx, TARGET_SIZEOF_VOID_P * 8);
+
+	std::vector<llvm::Value *> operands (count);
+
+	for (size_t i = 0; i < count; ++i) {
+		llvm::Expected<llvm::Value *> converted =
+			coerce_to_location (builder, get_stack (count - 1 - i), sig->params[i]);
+
+		if (!converted)
+			return converted.takeError ();
+		operands[i] = *converted;
+	}
+
+	bool int32_lengths = std::all_of (sig->params, sig->params + count,
+	                                  [] (MonoType *p) { return p->type == MONO_TYPE_I4; });
+	llvm::Value *result;
+
+	if (count == rank && count <= 4 && int32_lengths) {
+		/* One int32 length per dimension, few enough of them: the direct icalls. */
+		std::vector<llvm::Type *> params (count + 1, builder.getInt32Ty ());
+
+		params[0] = ptr;
+
+		llvm::FunctionCallee callee = module->getOrInsertFunction (
+			"mono_array_new_" + std::to_string (count),
+			llvm::FunctionType::get (ptr, params, false));
+		std::vector<llvm::Value *> args (count + 1);
+
+		args[0] = method_symbol (ctor);
+		std::copy (operands.begin (), operands.end (), args.begin () + 1);
+		result = emit_protected_call (builder, callee, args);
+	} else {
+		/*
+		 * mono_array_new_n_icall wants the lower bounds first and the lengths
+		 * after, while the constructor interleaves them per dimension - so a
+		 * (bound, length) list deinterleaves on the way into the buffer.
+		 */
+		MonoIrBuilder entry (entry_block, entry_block->begin ());
+		llvm::Type *buffer_type = llvm::ArrayType::get (word, count);
+		llvm::AllocaInst *buffer = entry.CreateAlloca (buffer_type);
+
+		buffer->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
+
+		for (size_t i = 0; i < count; ++i) {
+			bool is_bound = count == 2 * rank && i % 2 == 0;
+			size_t slot = count == 2 * rank ? (is_bound ? i / 2 : rank + i / 2)
+			                                : i;
+
+			/* Bounds are signed; lengths are not. */
+			builder.CreateAlignedStore (
+				builder.CreateIntCast (operands[i], word, is_bound),
+				builder.CreateConstGEP2_32 (buffer_type, buffer, 0,
+			                                    static_cast<unsigned> (slot)),
+				llvm::Align (TARGET_SIZEOF_VOID_P));
+		}
+
+		llvm::FunctionCallee callee = module->getOrInsertFunction (
+			"mono_array_new_n_icall", ptr, ptr, builder.getInt32Ty (), ptr);
+
+		result = emit_protected_call (builder, callee,
+		                              {method_symbol (ctor),
+		                               builder.getInt32 (static_cast<uint32_t> (count)),
+		                               buffer});
+	}
+
+	pop_stack (count);
+	push_stack (result, m_class_get_byval_arg (klass));
 	return llvm::Error::success ();
 }
 

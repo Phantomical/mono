@@ -396,6 +396,8 @@ private:
 	llvm::Value *box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
 	                        llvm::Value *value);
 	llvm::Error emit_newobj (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
+	                               MonoMethodSignature *sig);
 	llvm::Error emit_box (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox_any (MonoIrBuilder &builder, uint32_t token);
