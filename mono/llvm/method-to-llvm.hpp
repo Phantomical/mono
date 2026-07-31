@@ -357,6 +357,11 @@ private:
 	                                                StackValue address);
 	llvm::Error emit_ldind (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
+	llvm::FunctionCallee value_copy_decl ();
+	llvm::Error emit_ldobj (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_stobj (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_cpobj (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_initobj (MonoIrBuilder &builder, uint32_t token);
 
 	llvm::Error emit_ldsfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldsflda (MonoIrBuilder &builder, uint32_t token);

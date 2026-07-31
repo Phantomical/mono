@@ -76,10 +76,10 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 
 /// The address the engine has to resolve for a per-class run-time structure.
 ///
-/// A class contributes two: mono_statics_<class>, the block its static fields live in,
-/// and mono_vtable_<class>, its MonoVTable. One relocation per class rather than per
-/// field, so every static of a class shares a symbol and differs only in the offset the
-/// GEP adds.
+/// A class contributes three: mono_statics_<class>, the block its static fields live
+/// in, mono_vtable_<class>, its MonoVTable, and mono_class_<class>, the MonoClass
+/// itself. One relocation per class rather than per field, so every static of a class
+/// shares a symbol and differs only in the offset the GEP adds.
 llvm::Constant *
 MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 {

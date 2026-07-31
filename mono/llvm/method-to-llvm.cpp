@@ -794,6 +794,15 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_STIND_I:
 		return emit_stind (builder, builtin_element_type (opcode));
 
+	case MONO_CEE_LDOBJ:
+		return emit_ldobj (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_STOBJ:
+		return emit_stobj (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_CPOBJ:
+		return emit_cpobj (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_INITOBJ:
+		return emit_initobj (builder, static_cast<uint32_t> (operand));
+
 	case MONO_CEE_LDSFLD:
 		return emit_ldsfld (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_LDSFLDA:
