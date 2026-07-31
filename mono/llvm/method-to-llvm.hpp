@@ -159,6 +159,11 @@ private:
 	llvm::Expected<llvm::Value *> coerce_to_location (MonoIrBuilder &builder, StackValue value,
 	                                                  MonoType *destination);
 
+	llvm::Error emit_ldc_i4 (MonoIrBuilder &builder, int32_t value);
+	llvm::Error emit_ldc_i8 (MonoIrBuilder &builder, int64_t value);
+	llvm::Error emit_ldc_r4 (MonoIrBuilder &builder, uint32_t bits);
+	llvm::Error emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits);
+
 	llvm::Error emit_ldloc (MonoIrBuilder &builder, uint32_t index);
 	llvm::Error emit_ldloca (MonoIrBuilder &builder, uint32_t index);
 	llvm::Error emit_stloc (MonoIrBuilder &builder, uint32_t index);
@@ -199,6 +204,21 @@ private:
 		                 | (static_cast<uint32_t> (code[ip + 3]) << 24);
 
 		ip += 4;
+		return value;
+	}
+
+	/// The next eight bytes, little-endian.
+	llvm::Expected<uint64_t> read_u64 ()
+	{
+		if (code_size - ip < 8)
+			return truncated_il (8);
+
+		uint64_t value = 0;
+
+		for (size_t i = 0; i < 8; ++i)
+			value |= static_cast<uint64_t> (code[ip + i]) << (8 * i);
+
+		ip += 8;
 		return value;
 	}
 

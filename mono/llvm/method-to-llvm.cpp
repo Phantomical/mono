@@ -127,21 +127,23 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	ip = static_cast<size_t> (cursor - code) + 1;
 
 	/*
-	 * A local or argument index is decoded here rather than in the emitters: mono's
-	 * opcode table says which of the two widths to read, and an instruction that
-	 * takes one takes nothing else. The short forms that carry the index in the
-	 * opcode itself have no operand at all and pass their own constant below.
+	 * The operand is decoded here rather than in the emitters: mono's opcode table
+	 * says how wide it is, and an instruction that takes one takes nothing else. It
+	 * stays raw little-endian bits until a case below says what they mean - an index,
+	 * a signed constant, an IEC 60559 float. Instructions that carry their operand in
+	 * the opcode itself read nothing and pass their own constant.
 	 */
-	uint32_t index = 0;
+	uint64_t operand = 0;
 
 	switch (mono_opcodes[opcode].argument) {
-	case MonoShortInlineVar: {
+	case MonoShortInlineVar:
+	case MonoShortInlineI: {
 		llvm::Expected<uint8_t> read = read_u8 ();
 
 		if (!read)
 			return read.takeError ();
 
-		index = *read;
+		operand = *read;
 		break;
 	}
 	case MonoInlineVar: {
@@ -150,7 +152,27 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		if (!read)
 			return read.takeError ();
 
-		index = *read;
+		operand = *read;
+		break;
+	}
+	case MonoInlineI:
+	case MonoShortInlineR: {
+		llvm::Expected<uint32_t> read = read_u32 ();
+
+		if (!read)
+			return read.takeError ();
+
+		operand = *read;
+		break;
+	}
+	case MonoInlineI8:
+	case MonoInlineR: {
+		llvm::Expected<uint64_t> read = read_u64 ();
+
+		if (!read)
+			return read.takeError ();
+
+		operand = *read;
 		break;
 	}
 	default:
@@ -163,9 +185,41 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_RET:
 		return emit_ret (builder);
 
+	case MONO_CEE_LDC_I4:
+		return emit_ldc_i4 (builder, static_cast<int32_t> (operand));
+	/* The short form is signed, so -128..-1 arrive as 0x80..0xFF. */
+	case MONO_CEE_LDC_I4_S:
+		return emit_ldc_i4 (builder, static_cast<int8_t> (operand));
+	case MONO_CEE_LDC_I4_M1:
+		return emit_ldc_i4 (builder, -1);
+	case MONO_CEE_LDC_I4_0:
+		return emit_ldc_i4 (builder, 0);
+	case MONO_CEE_LDC_I4_1:
+		return emit_ldc_i4 (builder, 1);
+	case MONO_CEE_LDC_I4_2:
+		return emit_ldc_i4 (builder, 2);
+	case MONO_CEE_LDC_I4_3:
+		return emit_ldc_i4 (builder, 3);
+	case MONO_CEE_LDC_I4_4:
+		return emit_ldc_i4 (builder, 4);
+	case MONO_CEE_LDC_I4_5:
+		return emit_ldc_i4 (builder, 5);
+	case MONO_CEE_LDC_I4_6:
+		return emit_ldc_i4 (builder, 6);
+	case MONO_CEE_LDC_I4_7:
+		return emit_ldc_i4 (builder, 7);
+	case MONO_CEE_LDC_I4_8:
+		return emit_ldc_i4 (builder, 8);
+	case MONO_CEE_LDC_I8:
+		return emit_ldc_i8 (builder, static_cast<int64_t> (operand));
+	case MONO_CEE_LDC_R4:
+		return emit_ldc_r4 (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDC_R8:
+		return emit_ldc_r8 (builder, operand);
+
 	case MONO_CEE_LDLOC:
 	case MONO_CEE_LDLOC_S:
-		return emit_ldloc (builder, index);
+		return emit_ldloc (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_LDLOC_0:
 		return emit_ldloc (builder, 0);
 	case MONO_CEE_LDLOC_1:
@@ -177,11 +231,11 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	case MONO_CEE_LDLOCA:
 	case MONO_CEE_LDLOCA_S:
-		return emit_ldloca (builder, index);
+		return emit_ldloca (builder, static_cast<uint32_t> (operand));
 
 	case MONO_CEE_STLOC:
 	case MONO_CEE_STLOC_S:
-		return emit_stloc (builder, index);
+		return emit_stloc (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_STLOC_0:
 		return emit_stloc (builder, 0);
 	case MONO_CEE_STLOC_1:
