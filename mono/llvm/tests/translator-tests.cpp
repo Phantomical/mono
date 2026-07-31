@@ -189,6 +189,7 @@ const MethodRef translatable[] = {
 	{"fnptr", "Fnptr:CallThroughPointer"},
 	{"fnptr", "Fnptr:CallThroughArgument"},
 	{"fnptr", "Fnptr:CallNative"},
+	{"fnptr", "Fnptr:TailThroughPointer"},
 
 	{"objects", "Objects:MakeCounter"},
 	{"objects", "Objects:MakeCounterAt"},
@@ -220,6 +221,11 @@ const MethodRef translatable[] = {
 	{"calls", "Calls:CallInterface"},
 	{"calls", "Calls:CallGenericVirtual"},
 	{"calls", "Calls:CallGenericInterface"},
+	{"calls", "Calls:TailStatic"},
+	{"calls", "Calls:TailVoid"},
+	{"calls", "Calls:TailVirtual"},
+	{"calls", "Calls:TailMismatch"},
+	{"calls", "Calls:TailByref"},
 };
 
 class Translates : public TranslatorTest, public testing::WithParamInterface<MethodRef> {};
@@ -650,6 +656,32 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_TRUE (t.function->getReturnType ()->isVoidTy ());
 	EXPECT_GE (t.count ("ret void"), 1u);
+}
+
+// A tail. call whose prototype matches the caller's is honored as a musttail
+// call - a guaranteed jump - whether the target is direct, virtual, or a
+// function pointer.
+TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
+{
+	EXPECT_EQ (translate ("calls", "Calls:TailStatic").count ("musttail call"), 1u);
+	EXPECT_EQ (translate ("calls", "Calls:TailVoid").count ("musttail call"), 1u);
+	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 1u);
+	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("musttail call"),
+	           1u);
+}
+
+// Declining a tail. prefix is always legal, and it is how every risky case is
+// handled: a prototype that differs from the caller's, or an argument that could
+// point into the caller's frame.
+TEST_F (TranslatorTest, ARiskyTailCallFallsBackToAPlainCall)
+{
+	const Translation &mismatch = translate ("calls", "Calls:TailMismatch");
+	const Translation &byref = translate ("calls", "Calls:TailByref");
+
+	ASSERT_NE (mismatch.function, nullptr) << mismatch.error;
+	EXPECT_EQ (mismatch.count ("musttail"), 0u);
+	ASSERT_NE (byref.function, nullptr) << byref.error;
+	EXPECT_EQ (byref.count ("musttail"), 0u);
 }
 
 /* ----------------------------------------------------------------- boxing */

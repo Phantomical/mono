@@ -285,6 +285,10 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	if (!args)
 		return args.takeError ();
 
+	if (should_tail_call (sig, nullptr, *type))
+		return emit_tail_call (builder, llvm::FunctionCallee (*type, ftn), *args,
+		                       sig->param_count + sig->hasthis);
+
 	llvm::Value *result =
 		emit_protected_call (builder, llvm::FunctionCallee (*type, ftn), *args);
 

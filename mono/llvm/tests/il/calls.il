@@ -160,4 +160,60 @@
 		callvirt instance !!0 IPicker::Pick<int32> (!!0, !!0)
 		ret
 	}
+
+	.method public static int32 Deref (int32& p) cil managed
+	{
+		.maxstack 1
+		ldc.i4.0
+		ret
+	}
+
+	.method public static int32 TailStatic (int32 x) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		tail.
+		call int32 Calls::Helper (int32)
+		ret
+	}
+
+	.method public static void TailVoid (int32 x) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		tail.
+		call void Calls::Sink (int32)
+		ret
+	}
+
+	.method public static int32 TailVirtual (class Base b, int32 x) cil managed
+	{
+		.maxstack 2
+		ldarg.0
+		ldarg.1
+		tail.
+		callvirt instance int32 Base::Virt (int32)
+		ret
+	}
+
+	// The prototypes differ, so the prefix is declined and the call stays put.
+	.method public static int32 TailMismatch (int32 a, int32 b) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		tail.
+		call int32 Calls::Helper (int32)
+		ret
+	}
+
+	// A managed pointer among the arguments could point into this frame, so the
+	// prefix is declined.
+	.method public static int32 TailByref (int32& p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		tail.
+		call int32 Calls::Deref (int32&)
+		ret
+	}
 }

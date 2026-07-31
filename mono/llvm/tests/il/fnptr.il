@@ -78,4 +78,14 @@
 		calli unmanaged cdecl int32 (int32)
 		ret
 	}
+
+	.method public static int32 TailThroughPointer (int32 x) cil managed
+	{
+		.maxstack 2
+		ldarg.0
+		ldftn int32 Fnptr::AddOne (int32)
+		tail.
+		calli int32 (int32)
+		ret
+	}
 }

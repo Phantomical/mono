@@ -6,8 +6,11 @@
 #include "mono/metadata/loader.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
+#include "mono/metadata/opcodes.h"
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Type.h>
 
 namespace mono {
@@ -122,6 +125,137 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 
 	g_free (name);
 	return extern_symbol (symbol);
+}
+
+/*
+ * III.2.4  tail. - (prefix) call terminates current method
+ *
+ *   Format   Assembly Format   Description
+ *   FE 14    tail.             Subsequent call terminates current method.
+ *
+ *   The tail. instruction must immediately precede a call, calli, or callvirt
+ *   instruction. It indicates that the current method's stack frame is no longer
+ *   required and thus can be removed before the call instruction is executed. Because
+ *   the value returned by the call will be the value returned by this method, the call
+ *   can be converted into a cross-method jump.
+ *
+ *   The evaluation stack shall be empty except for the arguments being transferred by
+ *   the following call. The instruction following the call instruction shall be a ret.
+ *   Thus the only valid code sequence is tail. call (or calli or callvirt) ret.
+ *   Correct CIL code shall not branch to the call instruction, but it is permitted to
+ *   branch to the ret. The tail. instruction shall not be used to transfer control out
+ *   of a try, filter, catch, or finally block.
+ *
+ *   The current frame cannot be discarded when control is transferred from untrusted
+ *   code to trusted code, since this would jeopardize code identity security. Security
+ *   checks can therefore cause the tail. to be ignored, leaving a standard call
+ *   instruction.
+ *
+ *   Similarly, in order to allow the exit of a synchronized region to occur after the
+ *   call returns, the tail. prefix is ignored when used to exit a method that is
+ *   marked synchronized.
+ */
+
+/// Whether a tail.-prefixed call at this site can be honored as an LLVM musttail
+/// call. Declining is always allowed - the site falls back to an ordinary call - so
+/// every test is conservative.
+bool
+MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
+                                     llvm::FunctionType *callee_type)
+{
+	if (!prefixes.tail)
+		return false;
+
+	/*
+	 * The ret the prefix promises has to follow at once so it can be folded into
+	 * this instruction, must not be a branch target with an entry state of its own,
+	 * and the arguments must be all the evaluation stack holds.
+	 */
+	const unsigned char *cursor = code + ip;
+
+	if (ip >= code_size || mono_opcode_value (&cursor, code + code_size) != MONO_CEE_RET)
+		return false;
+	if (blocks.find (ip) != blocks.end ())
+		return false;
+	if (stack.size () != static_cast<size_t> (callee_sig->param_count) + callee_sig->hasthis)
+		return false;
+
+	/*
+	 * A protected call has to be an invoke, which cannot be a tail call - and
+	 * III.2.4 forbids tail. inside a protected region anyway.
+	 */
+	if (innermost_try (offset) >= 0)
+		return false;
+
+	/*
+	 * Nothing that could point into this frame may outlive it: a value type's
+	 * this, managed pointers, unmanaged pointers, function pointers. An indirect
+	 * target's this is a pointer to nobody-knows-what, so it gets the same
+	 * treatment a value type's would.
+	 */
+	if (callee_sig->hasthis
+	    && (callee_method == nullptr || m_class_is_valuetype (callee_method->klass)))
+		return false;
+
+	for (int i = 0; i < callee_sig->param_count; ++i) {
+		MonoType *param = callee_sig->params[i];
+
+		if (param->byref || param->type == MONO_TYPE_PTR || param->type == MONO_TYPE_FNPTR)
+			return false;
+	}
+
+	/* The transition into native code saves state a tail call would skip. */
+	if (callee_sig->pinvoke
+	    || (callee_method != nullptr && (callee_method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)))
+		return false;
+
+	/*
+	 * musttail is a guarantee, and the backend can only always keep it when the
+	 * jump changes nothing about the frame's argument area: identical prototypes,
+	 * down to the extension attributes that say how narrow integers fill their
+	 * registers.
+	 */
+	if (function->getFunctionType () != callee_type)
+		return false;
+
+	/* Positionally, because a this is just a leading pointer to the ABI. */
+	auto extensions = [] (MonoMethodSignature *s) {
+		llvm::SmallVector<llvm::Attribute::AttrKind, 8> exts;
+
+		if (s->hasthis)
+			exts.push_back (llvm::Attribute::None);
+		for (int i = 0; i < s->param_count; ++i)
+			exts.push_back (integer_extension (s->params[i]));
+		return exts;
+	};
+
+	MonoMethodSignature *caller_sig = mono_method_signature_internal (method);
+
+	if (integer_extension (caller_sig->ret) != integer_extension (callee_sig->ret))
+		return false;
+
+	return extensions (caller_sig) == extensions (callee_sig);
+}
+
+/// The honored form of a tail. call: a musttail call feeding a ret directly, which
+/// is the shape LLVM turns into a jump. The IL ret that should_tail_call verified
+/// comes next is consumed here, since this ret is its translation.
+llvm::Error
+MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+                                   llvm::ArrayRef<llvm::Value *> args, size_t arg_slots)
+{
+	llvm::CallInst *call = builder.CreateCall (callee, args);
+
+	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
+	pop_stack (arg_slots);
+
+	if (call->getType ()->isVoidTy ())
+		builder.CreateRetVoid ();
+	else
+		builder.CreateRet (call);
+
+	ip += 1;
+	return llvm::Error::success ();
 }
 
 /*
@@ -348,6 +482,14 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				virtual_callee (builder, (*args)[0], callee_method));
 		}
 	}
+
+	/*
+	 * A keyed call is never a tail call: its key argument travels outside the
+	 * regular ABI, pinned to a register the caller's own frame never carried.
+	 */
+	if (!keyed && should_tail_call (sig, callee_method, callee.getFunctionType ()))
+		return emit_tail_call (builder, callee, *args,
+		                       sig->param_count + sig->hasthis);
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);
 

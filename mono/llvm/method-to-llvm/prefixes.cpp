@@ -177,9 +177,10 @@ MethodLLVMEmitter::emit_prefix (int opcode, uint64_t operand)
 		return llvm::Error::success ();
 	case MONO_CEE_TAIL_:
 		/*
-		 * A request an implementation may decline outside the same-assembly
-		 * cases it must honor; declining everywhere is a legal starting point.
+		 * A request an implementation may decline: the call site checks whether
+		 * it can be honored and falls back to an ordinary call when not.
 		 */
+		prefixes.tail = true;
 		return llvm::Error::success ();
 	case MONO_CEE_READONLY_:
 		/*

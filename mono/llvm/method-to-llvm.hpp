@@ -194,6 +194,7 @@ private:
 	/// was one the prefix means anything to.
 	struct Prefixes {
 		bool volatile_ = false;
+		bool tail = false;
 		uint8_t unaligned = 0;
 		uint32_t constrained = 0;
 	};
@@ -360,6 +361,10 @@ private:
 	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                               MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
+	bool should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
+	                       llvm::FunctionType *callee_type);
+	llvm::Error emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+	                            llvm::ArrayRef<llvm::Value *> args, size_t arg_slots);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token);
@@ -515,6 +520,10 @@ private:
 };
 
 /// Convert an IL method definition to the corresponding LLVM method.
+/// How a narrow integer argument or return value is widened to fill its register,
+/// as an SExt/ZExt attribute, or None for everything else.
+llvm::Attribute::AttrKind integer_extension (MonoType *t);
+
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
                                                  MonoMethod *method);
 

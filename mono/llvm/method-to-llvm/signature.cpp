@@ -117,10 +117,11 @@ simd_class_to_llvm_type (llvm::LLVMContext &ctx, MonoClass *klass)
 	return nullptr;
 }
 
-/// How a narrow integer argument or return value is widened to fill its register.
-///
-/// The C ABI leaves the high bits undefined, so which way they get filled is part
-/// of the signature rather than something the two ends can each decide.
+} // namespace
+
+/// The C ABI leaves a narrow integer's high bits undefined, so which way they get
+/// filled is part of the signature rather than something the two ends can each
+/// decide.
 llvm::Attribute::AttrKind
 integer_extension (MonoType *t)
 {
@@ -140,8 +141,6 @@ integer_extension (MonoType *t)
 		return llvm::Attribute::None;
 	}
 }
-
-} // namespace
 
 llvm::Expected<llvm::Type *>
 MethodLLVMEmitter::convert_type (MonoType *t)
