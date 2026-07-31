@@ -318,6 +318,13 @@ private:
 	llvm::Value *emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                                  llvm::ArrayRef<llvm::Value *> args);
 
+	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
+	llvm::Expected<std::vector<llvm::Value *>>
+	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
+	                             MonoMethod *target);
+	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
+
 	llvm::FunctionCallee wbarrier_decl ();
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
