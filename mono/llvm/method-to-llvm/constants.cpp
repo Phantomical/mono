@@ -1,9 +1,14 @@
 #include "method-to-llvm.hpp"
+#include "runtime-error.hpp"
+#include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/tokentype.h"
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
 
 namespace mono {
 
@@ -143,6 +148,159 @@ MethodLLVMEmitter::emit_ldnull (MonoIrBuilder &builder)
 	llvm::PointerType *ptr = llvm::PointerType::get (context (), 0);
 
 	push_stack (llvm::ConstantPointerNull::get (ptr), mono_get_object_type ());
+	return llvm::Error::success ();
+}
+
+/*
+ * III.4.16  ldstr - load a literal string
+ *
+ *   Format     Assembly Format   Description
+ *   72 <T>     ldstr string      Push a string object for the literal string.
+ *
+ * Stack Transition:
+ *
+ *   ..., -> ..., string
+ *
+ * Description:
+ *
+ *   The ldstr instruction pushes a new string object representing the literal stored
+ *   in the metadata as string (which is a string literal).
+ *
+ *   By default, the CLI guarantees that the result of two ldstr instructions
+ *   referring to two metadata tokens that have the same sequence of characters,
+ *   return precisely the same string object (a process known as "string interning").
+ *   This behavior can be controlled using the
+ *   System.Runtime.CompilerServices.CompilationRelaxationsAttribute and the
+ *   System.Runtime.CompilerServices.CompilationRelaxations.NoStringInterning (see
+ *   Partition IV).
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness:
+ *
+ *   Correct CIL requires that string is a valid string literal metadata token.
+ *
+ * Verifiability:
+ *
+ *   There are no additional verification requirements.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
+{
+	if ((token & 0xff000000) != MONO_TOKEN_STRING)
+		return invalid_il ("ldstr needs a string literal token");
+
+	/*
+	 * The interned string is a runtime object, so like a vtable it travels as a
+	 * symbol the engine resolves - named by the image and token that intern it,
+	 * which is all mono_ldstr itself needs.
+	 */
+	MonoImage *image = m_class_get_image (method->klass);
+	char *symbol = g_strdup_printf ("mono_ldstr_%s_%08x", image->assembly_name, token);
+	llvm::Constant *value = extern_symbol (symbol);
+
+	g_free (symbol);
+	push_stack (value, m_class_get_byval_arg (mono_defaults.string_class));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.4.17  ldtoken - load the runtime representation of a metadata token
+ *
+ *   Format     Assembly Format   Description
+ *   D0 <T>     ldtoken token     Convert metadata token to its runtime
+ *                                representation.
+ *
+ * Stack Transition:
+ *
+ *   ... -> ..., RuntimeHandle
+ *
+ * Description:
+ *
+ *   The ldtoken instruction pushes a RuntimeHandle for the specified metadata token.
+ *   The token shall be one of:
+ *
+ *     A methoddef, methodref or methodspec: pushes a RuntimeMethodHandle
+ *     A typedef, typeref, or typespec: pushes a RuntimeTypeHandle
+ *     A fielddef or fieldref: pushes a RuntimeFieldHandle
+ *
+ *   The value pushed on the stack can be used in calls to reflection methods in the
+ *   system class library
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness:
+ *
+ *   Correct CIL requires that token describes a valid metadata token of the kinds
+ *   listed above
+ *
+ * Verifiability:
+ *
+ *   There are no additional verification requirements.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
+{
+	ERROR_DECL (metadata_error);
+	MonoClass *handle_class = nullptr;
+	gpointer handle = mono_ldtoken_checked (m_class_get_image (method->klass), token,
+	                                        &handle_class,
+	                                        mono_method_get_context (method),
+	                                        metadata_error);
+
+	if (handle == nullptr)
+		return runtime_error (metadata_error);
+
+	/*
+	 * The handle is a runtime address - a MonoType, MonoMethod or MonoClassField -
+	 * so each kind rides on the matching symbol family. A type's MonoType lives
+	 * inside its MonoClass, hence the offset from the class symbol.
+	 */
+	llvm::Value *address;
+
+	if (handle_class == mono_defaults.typehandle_class) {
+		MonoClass *klass =
+			mono_class_from_mono_type_internal (static_cast<MonoType *> (handle));
+
+		address = builder.CreateGEP (
+			builder.getInt8Ty (), class_symbol (klass, "mono_class_"),
+			builder.getInt32 (
+				static_cast<int32_t> (m_class_offsetof_byval_arg ())));
+	} else if (handle_class == mono_defaults.methodhandle_class) {
+		address = method_symbol (static_cast<MonoMethod *> (handle));
+	} else if (handle_class == mono_defaults.fieldhandle_class) {
+		char *name =
+			mono_field_full_name (static_cast<MonoClassField *> (handle));
+
+		address = extern_symbol (std::string ("mono_field_") + name);
+		g_free (name);
+	} else {
+		return unsupported_il ("ldtoken on this kind of token");
+	}
+
+	if (mono_class_value_size (handle_class, NULL) != TARGET_SIZEOF_VOID_P)
+		return invalid_il ("a runtime handle is expected to wrap one pointer");
+
+	MonoType *wrapper = m_class_get_byval_arg (handle_class);
+	llvm::Expected<llvm::Type *> htype = convert_type (wrapper);
+	if (!htype)
+		return htype.takeError ();
+
+	/*
+	 * A vtype reaches LLVM as opaque bytes, so the handle is wrapped the way any
+	 * struct is built: through memory, a pointer stored over the bytes it fills.
+	 */
+	llvm::Align align = type_alignment (wrapper);
+	MonoIrBuilder entry (entry_block, entry_block->begin ());
+	llvm::AllocaInst *temp = entry.CreateAlloca (*htype);
+
+	temp->setAlignment (align);
+	builder.CreateAlignedStore (address, temp, align);
+	push_stack (builder.CreateAlignedLoad (*htype, temp, align), wrapper);
 	return llvm::Error::success ();
 }
 

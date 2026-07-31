@@ -123,12 +123,7 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 	std::string symbol = std::string ("mono_method_") + name;
 
 	g_free (name);
-
-	if (llvm::GlobalVariable *existing = module->getNamedGlobal (symbol))
-		return existing;
-
-	return new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()), false,
-	                                 llvm::GlobalValue::ExternalLinkage, nullptr, symbol);
+	return extern_symbol (symbol);
 }
 
 /*

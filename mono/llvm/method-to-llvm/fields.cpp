@@ -74,6 +74,18 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 	return field;
 }
 
+/// The external global called NAME, whose address the engine resolves against the
+/// runtime, created on first use.
+llvm::Constant *
+MethodLLVMEmitter::extern_symbol (const std::string &name)
+{
+	if (llvm::GlobalVariable *existing = module->getNamedGlobal (name))
+		return existing;
+
+	return new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()), false,
+	                                 llvm::GlobalValue::ExternalLinkage, nullptr, name);
+}
+
 /// The address the engine has to resolve for a per-class run-time structure.
 ///
 /// A class contributes three: mono_statics_<class>, the block its static fields live
@@ -87,12 +99,7 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 	std::string symbol = std::string (prefix) + name;
 
 	g_free (name);
-
-	if (llvm::GlobalVariable *existing = module->getNamedGlobal (symbol))
-		return existing;
-
-	return new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()), false,
-	                                 llvm::GlobalValue::ExternalLinkage, nullptr, symbol);
+	return extern_symbol (symbol);
 }
 
 /// Run KLASS's static constructor if it has not run yet.

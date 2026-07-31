@@ -654,7 +654,9 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MonoInlineBrTarget:
 	case MonoInlineField:
 	case MonoInlineType:
-	case MonoInlineMethod: {
+	case MonoInlineMethod:
+	case MonoInlineString:
+	case MonoInlineTok: {
 		llvm::Expected<uint32_t> read = read_u32 ();
 
 		if (!read)
@@ -724,6 +726,10 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_ldc_r8 (builder, operand);
 	case MONO_CEE_LDNULL:
 		return emit_ldnull (builder);
+	case MONO_CEE_LDSTR:
+		return emit_ldstr (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDTOKEN:
+		return emit_ldtoken (builder, static_cast<uint32_t> (operand));
 
 	case MONO_CEE_DUP:
 		return emit_dup ();

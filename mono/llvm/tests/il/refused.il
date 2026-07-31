@@ -12,13 +12,6 @@
 
 .class public abstract auto ansi sealed beforefieldinit Refused extends [mscorlib]System.Object
 {
-	.method public static string UsesLdstr () cil managed
-	{
-		.maxstack 1
-		ldstr "hello"
-		ret
-	}
-
 	.method public static object UsesNewobj () cil managed
 	{
 		.maxstack 1

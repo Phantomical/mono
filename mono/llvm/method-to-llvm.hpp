@@ -346,7 +346,10 @@ private:
 
 	llvm::FunctionCallee wbarrier_decl ();
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);
+	llvm::Constant *extern_symbol (const std::string &name);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
+	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	void emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
 	llvm::Value *static_field_address (MonoIrBuilder &builder, MonoClassField *field);
 	static MonoType *builtin_element_type (int opcode);

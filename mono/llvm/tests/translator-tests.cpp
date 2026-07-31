@@ -143,6 +143,12 @@ const MethodRef translatable[] = {
 	{ "boxing", "Boxing:UnboxAnyPair" },
 	{ "boxing", "Boxing:RoundTrip" },
 
+	{ "tokens", "Tokens:Hello" },
+	{ "tokens", "Tokens:SameLiteralTwice" },
+	{ "tokens", "Tokens:TypeOf" },
+	{ "tokens", "Tokens:MethodToken" },
+	{ "tokens", "Tokens:FieldToken" },
+
 	{ "casts", "Casts:CastString" },
 	{ "casts", "Casts:IsString" },
 	{ "casts", "Casts:CastIface" },
@@ -529,6 +535,48 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
 }
 
+/* ----------------------------------------------------------------- tokens */
+
+// The interned string is a runtime object, so it rides on a symbol the engine
+// resolves - and the same literal twice is the same symbol, because interning
+// already promises one object.
+TEST_F (TranslatorTest, LdstrBecomesOneSymbolPerLiteral)
+{
+	const Translation &once = translate ("tokens", "Tokens:Hello");
+	const Translation &twice = translate ("tokens", "Tokens:SameLiteralTwice");
+
+	ASSERT_NE (once.function, nullptr) << once.error;
+	EXPECT_EQ (once.count ("@mono_ldstr_tokens_"), 1u) << once.text ();
+
+	ASSERT_NE (twice.function, nullptr) << twice.error;
+	EXPECT_EQ (twice.count ("@mono_ldstr_tokens_"), 2u);
+
+	size_t distinct = 0;
+
+	for (const llvm::GlobalVariable &global : twice.module->globals ())
+		if (global.getName ().starts_with ("mono_ldstr_tokens_"))
+			++distinct;
+	EXPECT_EQ (distinct, 1u);
+}
+
+// A type's handle is its MonoType, which lives inside the MonoClass - so ldtoken on
+// a type is the class symbol plus an offset, wrapped into a RuntimeTypeHandle.
+TEST_F (TranslatorTest, LdtokenWrapsTheMatchingSymbolFamily)
+{
+	const Translation &type = translate ("tokens", "Tokens:TypeOf");
+	const Translation &method = translate ("tokens", "Tokens:MethodToken");
+	const Translation &field = translate ("tokens", "Tokens:FieldToken");
+
+	ASSERT_NE (type.function, nullptr) << type.error;
+	EXPECT_EQ (type.count ("@mono_class_Holder"), 1u) << type.text ();
+
+	ASSERT_NE (method.function, nullptr) << method.error;
+	EXPECT_EQ (method.count ("@\"mono_method_"), 1u) << method.text ();
+
+	ASSERT_NE (field.function, nullptr) << field.error;
+	EXPECT_EQ (field.count ("@\"mono_field_"), 1u) << field.text ();
+}
+
 /* ------------------------------------------------------------------ casts */
 
 TEST_F (TranslatorTest, CastclassAndIsinstUseTheirOwnHelpers)
@@ -593,7 +641,6 @@ TEST_P (Refuses, WithAnErrorRatherThanACrash)
 }
 
 const RefusalRef refusals[] = {
-	{ "Refused:UsesLdstr", "ldstr" },
 	{ "Refused:UsesNewobj", "newobj" },
 	{ "Refused:StackUnderflow", "stack" },
 	{ "Refused:BadLocalIndex", "local" },
