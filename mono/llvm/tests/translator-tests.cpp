@@ -471,6 +471,12 @@ TEST_F (TranslatorTest, ArrayNewobjCallsTheRuntimeArrayIcalls)
 	EXPECT_EQ (two.count ("mono_array_new_2"), 1u) << two.text ();
 	EXPECT_GE (two.count ("mono_method_"), 1u);
 
+	/* The icall is a GC allocation and carries the allocator attributes. */
+	llvm::Function *allocator = two.module->getFunction ("mono_array_new_2");
+	ASSERT_NE (allocator, nullptr);
+	EXPECT_TRUE (allocator->hasRetAttribute (llvm::Attribute::NoAlias));
+	EXPECT_TRUE (allocator->hasFnAttribute (llvm::Attribute::AllocKind));
+
 	ASSERT_NE (bounded.function, nullptr) << bounded.error;
 	EXPECT_EQ (bounded.count ("mono_array_new_n_icall"), 1u) << bounded.text ();
 	/* Two sign-extended bounds and two zero-extended lengths land in the buffer. */
@@ -929,6 +935,12 @@ TEST_F (TranslatorTest, StringNewobjCallsTheCreatorWithANullThis)
 	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
 	EXPECT_EQ (t.count ("call ptr @\"string:.ctor"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("(ptr null"), 1u);
+
+	/* The creator's result is fresh, and its declaration says so. */
+	for (const llvm::Function &decl : t.module->functions ())
+		if (decl.getName ().starts_with ("string:.ctor")) {
+			EXPECT_TRUE (decl.hasRetAttribute (llvm::Attribute::NoAlias));
+		}
 }
 
 /* ----------------------------------------------------------------- tokens */

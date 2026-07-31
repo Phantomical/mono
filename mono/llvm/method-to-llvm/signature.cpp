@@ -313,6 +313,14 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	    ext != llvm::Attribute::None)
 		function->addRetAttr (ext);
 
+	/*
+	 * The creator's string is fresh, aliasing nothing older than the call. Nothing
+	 * stronger: the body is arbitrary managed code, so the allocator attributes'
+	 * zeroed and elidable claims are not made for it.
+	 */
+	if (method->string_ctor)
+		function->addRetAttr (llvm::Attribute::NoAlias);
+
 	if (sig->hasthis)
 		function->getArg (0)->setName ("this");
 

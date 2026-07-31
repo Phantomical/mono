@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
 
@@ -166,6 +167,30 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+namespace {
+
+/// Mark CALLEE as the GC allocation it is, with the same reasoning
+/// mono_array_new_specific's declaration documents: the result aliases nothing
+/// older than the call, arrives zeroed, and an allocation nothing observes may be
+/// elided outright. Deliberately not nounwind.
+llvm::FunctionCallee
+mark_gc_allocator (llvm::FunctionCallee callee)
+{
+	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
+		llvm::AttrBuilder allocator (function->getContext ());
+
+		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc
+		                            | llvm::AllocFnKind::Zeroed);
+		allocator.addAttribute ("alloc-family", "mono_gc");
+		function->addRetAttr (llvm::Attribute::NoAlias);
+		function->addFnAttrs (allocator);
+	}
+
+	return callee;
+}
+
+} // namespace
+
 /// The array shapes of newobj: rank above one, or explicit lower bounds. The
 /// metadata constructor has no body - the runtime's array-new icalls implement it,
 /// keyed by the constructor's method so they can recover the array class.
@@ -208,9 +233,9 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 
 		params[0] = ptr;
 
-		llvm::FunctionCallee callee = module->getOrInsertFunction (
+		llvm::FunctionCallee callee = mark_gc_allocator (module->getOrInsertFunction (
 			"mono_array_new_" + std::to_string (count),
-			llvm::FunctionType::get (ptr, params, false));
+			llvm::FunctionType::get (ptr, params, false)));
 		std::vector<llvm::Value *> args (count + 1);
 
 		args[0] = method_symbol (ctor);
@@ -241,8 +266,8 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 				llvm::Align (TARGET_SIZEOF_VOID_P));
 		}
 
-		llvm::FunctionCallee callee = module->getOrInsertFunction (
-			"mono_array_new_n_icall", ptr, ptr, builder.getInt32Ty (), ptr);
+		llvm::FunctionCallee callee = mark_gc_allocator (module->getOrInsertFunction (
+			"mono_array_new_n_icall", ptr, ptr, builder.getInt32Ty (), ptr));
 
 		result = emit_protected_call (builder, callee,
 		                              {method_symbol (ctor),
