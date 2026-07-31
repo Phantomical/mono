@@ -7,6 +7,7 @@
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Type.h>
 
 namespace mono {
@@ -64,7 +65,25 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 	return args;
 }
 
-/// The address of TARGET's entry in the vtable of the object ARGS[0] points at.
+/// The pointer stored OFFSET bytes into the vtable of the object RECEIVER points at.
+llvm::Value *
+MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver,
+                                 int32_t offset)
+{
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Value *vtable = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), receiver,
+		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	return builder.CreateAlignedLoad (ptr,
+	                                  builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                                                     builder.getInt32 (offset)),
+	                                  llvm::Align (TARGET_SIZEOF_VOID_P));
+}
+
+/// The address of TARGET's entry in the vtable of the object RECEIVER points at.
 ///
 /// A virtual call reads the callee out of the receiver rather than knowing it: the
 /// object's vtable pointer, indexed by the slot the method was assigned when its class
@@ -73,19 +92,43 @@ llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                    MonoMethod *target)
 {
-	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), receiver,
-		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
-	int32_t slot = MONO_STRUCT_OFFSET (MonoVTable, vtable)
-	               + mono_method_get_vtable_index (target) * TARGET_SIZEOF_VOID_P;
+	return vtable_entry (builder, receiver,
+	                     MONO_STRUCT_OFFSET (MonoVTable, vtable)
+	                             + mono_method_get_vtable_index (target)
+	                                       * TARGET_SIZEOF_VOID_P);
+}
 
-	return builder.CreateAlignedLoad (ptr,
-	                                  builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                                                     builder.getInt32 (slot)),
-	                                  llvm::Align (TARGET_SIZEOF_VOID_P));
+/// The address of TARGET's entry in the IMT of the object RECEIVER points at.
+///
+/// An interface method has no fixed vtable slot - where an implementation lands depends
+/// on the class implementing it - so dispatch goes through the interface method table
+/// instead, a small hash table the runtime lays out in the words immediately before
+/// each MonoVTable. Its slots are therefore reached at negative offsets from the same
+/// base the ordinary slots are.
+llvm::Value *
+MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
+                                     MonoMethod *target)
+{
+	int32_t slot = static_cast<int32_t> (mono_method_get_imt_slot (target)) - MONO_IMT_SIZE;
+
+	return vtable_entry (builder, receiver, slot * TARGET_SIZEOF_VOID_P);
+}
+
+/// The address the engine has to resolve for TARGET's own MonoMethod - the runtime's
+/// description of the method, as opposed to its code.
+llvm::Constant *
+MethodLLVMEmitter::method_symbol (MonoMethod *target)
+{
+	char *name = mono_method_full_name (target, TRUE);
+	std::string symbol = std::string ("mono_method_") + name;
+
+	g_free (name);
+
+	if (llvm::GlobalVariable *existing = module->getNamedGlobal (symbol))
+		return existing;
+
+	return new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()), false,
+	                                 llvm::GlobalValue::ExternalLinkage, nullptr, symbol);
 }
 
 /*
@@ -167,6 +210,12 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		return invalid_il ("the called method has no signature");
 	if (is_virtual && !sig->hasthis)
 		return invalid_il ("callvirt needs an instance method");
+	/*
+	 * A virtual generic method's slot does not hold code with this signature - the
+	 * runtime resolves those per instantiation - so it cannot be dispatched here yet.
+	 */
+	if (is_virtual && sig->generic_param_count != 0)
+		return unsupported_il ("generic virtual dispatch");
 
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
 	if (!declaration)
@@ -177,6 +226,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		return args.takeError ();
 
 	llvm::FunctionCallee callee = *declaration;
+	bool is_interface = false;
 
 	if (is_virtual) {
 		/*
@@ -190,18 +240,44 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		 * non-virtual one is already the answer, and a callvirt on it is a null check
 		 * with a direct call behind it.
 		 */
-		if (mono_method_get_vtable_index (*target) >= 0
-		    && ((*target)->flags & METHOD_ATTRIBUTE_VIRTUAL)
-		    && !((*target)->flags & METHOD_ATTRIBUTE_FINAL)
-		    && !mono_class_is_interface ((*target)->klass))
+		bool overridable = ((*target)->flags & METHOD_ATTRIBUTE_VIRTUAL)
+		                   && !((*target)->flags & METHOD_ATTRIBUTE_FINAL);
+
+		if (overridable && mono_class_is_interface ((*target)->klass)) {
+			/*
+			 * Several interface methods can hash to the same IMT slot, in which
+			 * case what the slot holds is a thunk that picks the real target by
+			 * looking at which method was asked for. The caller supplies that key
+			 * in a register set aside for it, and the nest attribute is how
+			 * unmodified LLVM is talked into filling it: nest pins an argument to
+			 * %r10, which is exactly MONO_ARCH_IMT_REG on amd64. The key travels
+			 * as one extra leading argument that the target, once reached, never
+			 * looks at.
+			 */
+			is_interface = true;
+
+			llvm::FunctionType *direct = (*declaration)->getFunctionType ();
+			std::vector<llvm::Type *> params (direct->param_begin (),
+			                                  direct->param_end ());
+
+			params.insert (params.begin (),
+			               llvm::PointerType::get (context (), 0));
+			callee = llvm::FunctionCallee (
+				llvm::FunctionType::get (direct->getReturnType (), params,
+			                                 direct->isVarArg ()),
+				interface_callee (builder, (*args)[0], *target));
+			args->insert (args->begin (), method_symbol (*target));
+		} else if (overridable && mono_method_get_vtable_index (*target) >= 0) {
 			callee = llvm::FunctionCallee (
 				(*declaration)->getFunctionType (),
 				virtual_callee (builder, (*args)[0], *target));
-		else if (mono_class_is_interface ((*target)->klass))
-			return unsupported_il ("interface dispatch");
+		}
 	}
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);
+
+	if (is_interface)
+		llvm::cast<llvm::CallBase> (result)->addParamAttr (0, llvm::Attribute::Nest);
 
 	pop_stack (sig->param_count + sig->hasthis);
 

@@ -321,8 +321,13 @@ private:
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
 	llvm::Expected<std::vector<llvm::Value *>>
 	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	llvm::Value *vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver,
+	                           int32_t offset);
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                             MonoMethod *target);
+	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
+	                               MonoMethod *target);
+	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
 
 	llvm::FunctionCallee wbarrier_decl ();
