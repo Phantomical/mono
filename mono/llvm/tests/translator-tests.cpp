@@ -143,6 +143,14 @@ const MethodRef translatable[] = {
 	{ "boxing", "Boxing:UnboxAnyPair" },
 	{ "boxing", "Boxing:RoundTrip" },
 
+	{ "casts", "Casts:CastString" },
+	{ "casts", "Casts:IsString" },
+	{ "casts", "Casts:CastIface" },
+	{ "casts", "Casts:IsIface" },
+	{ "casts", "Casts:IsBoxedInt" },
+	{ "casts", "Casts:TwoCasts" },
+	{ "casts", "Casts:UnboxAnyString" },
+
 	{ "calls", "Calls:CallStatic" },
 	{ "calls", "Calls:CallStaticTwice" },
 	{ "calls", "Calls:CallVoid" },
@@ -519,6 +527,44 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
+}
+
+/* ------------------------------------------------------------------ casts */
+
+TEST_F (TranslatorTest, CastclassAndIsinstUseTheirOwnHelpers)
+{
+	const Translation &cast = translate ("casts", "Casts:CastString");
+	const Translation &test = translate ("casts", "Casts:IsString");
+
+	ASSERT_NE (cast.function, nullptr) << cast.error;
+	EXPECT_EQ (cast.count ("mono_object_castclass_with_cache"), 1u);
+	ASSERT_NE (test.function, nullptr) << test.error;
+	EXPECT_EQ (test.count ("mono_object_isinst_with_cache"), 1u);
+}
+
+// The helpers memoize the last vtable that answered, so every cast site needs a
+// cache slot of its very own - two sites sharing one would fight over it.
+TEST_F (TranslatorTest, EachCastSiteGetsItsOwnCacheSlot)
+{
+	const Translation &t = translate ("casts", "Casts:TwoCasts");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("@cast_cache"), 2u) << t.text ();
+
+	const llvm::GlobalVariable *first =
+		t.module->getGlobalVariable ("cast_cache", true);
+
+	ASSERT_NE (first, nullptr);
+	EXPECT_TRUE (first->hasInternalLinkage ());
+}
+
+TEST_F (TranslatorTest, UnboxAnyOnAReferenceTypeIsACast)
+{
+	const Translation &t = translate ("casts", "Casts:UnboxAnyString");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u);
+	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
 }
 
 /* --------------------------------------------------------------- refusals */

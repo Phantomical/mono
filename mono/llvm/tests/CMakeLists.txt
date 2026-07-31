@@ -21,7 +21,7 @@ if(NOT GTest_FOUND)
 endif()
 include(GoogleTest)
 
-set(MONO_LLVM_TEST_IL arith arrays boxing calls eh fields flow locals refused stack)
+set(MONO_LLVM_TEST_IL arith arrays boxing calls casts eh fields flow locals refused stack)
 foreach(_name IN LISTS MONO_LLVM_TEST_IL)
   mono_corpus_il(${_name}.dll il/${_name}.il LIBRARY)
 endforeach()

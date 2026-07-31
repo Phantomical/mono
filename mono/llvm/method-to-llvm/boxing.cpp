@@ -334,9 +334,9 @@ MethodLLVMEmitter::emit_unbox_any (MonoIrBuilder &builder, uint32_t token)
 
 	if (mono_class_is_nullable (klass))
 		return unsupported_il ("unboxing a nullable");
-	/* On a reference type this instruction is castclass, which does not exist yet. */
+	/* The spec's reading for a reference type: this instruction is castclass. */
 	if (!m_class_is_valuetype (klass))
-		return unsupported_il ("unbox.any on a reference type");
+		return emit_castclass (builder, token);
 	if (stack.empty ())
 		return unbalanced_stack (1);
 

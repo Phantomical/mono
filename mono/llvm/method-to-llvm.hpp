@@ -370,6 +370,9 @@ private:
 	llvm::Error emit_box (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox_any (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw_on_fail);
+	llvm::Error emit_castclass (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_isinst (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_cpobj (MonoIrBuilder &builder, uint32_t token);
