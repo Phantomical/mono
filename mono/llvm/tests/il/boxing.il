@@ -88,4 +88,43 @@
 		unbox.any [mscorlib]System.Int32
 		ret
 	}
+
+	.method public static object BoxNullable (valuetype [mscorlib]System.Nullable`1<int32> v) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		box valuetype [mscorlib]System.Nullable`1<int32>
+		ret
+	}
+
+	.method public static valuetype [mscorlib]System.Nullable`1<int32> UnboxNullable (object o) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		unbox valuetype [mscorlib]System.Nullable`1<int32>
+		ldobj valuetype [mscorlib]System.Nullable`1<int32>
+		ret
+	}
+
+	.method public static valuetype [mscorlib]System.Nullable`1<int32> UnboxAnyNullable (object o) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		unbox.any valuetype [mscorlib]System.Nullable`1<int32>
+		ret
+	}
+
+	.method public static valuetype [mscorlib]System.Nullable`1<valuetype Color> UnboxAnyNullableEnum (object o) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		unbox.any valuetype [mscorlib]System.Nullable`1<valuetype Color>
+		ret
+	}
+}
+
+.class public auto ansi sealed Color extends [mscorlib]System.Enum
+{
+	.field public specialname rtspecialname int32 value__
+	.field public static literal valuetype Color Red = int32(0)
 }

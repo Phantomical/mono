@@ -43,14 +43,6 @@
 		nop
 	}
 
-	.method public static object BoxesANullable (valuetype [mscorlib]System.Nullable`1<int32> v) cil managed
-	{
-		.maxstack 1
-		ldarg.0
-		box valuetype [mscorlib]System.Nullable`1<int32>
-		ret
-	}
-
 	.method public static string ConstrainedBoxes (valuetype Plain p) cil managed
 	{
 		.maxstack 1

@@ -391,6 +391,8 @@ private:
 	llvm::FunctionCallee object_new_decl ();
 	llvm::Value *unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
 	                            MonoClass *klass);
+	llvm::Error call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
+	                                  const char *name);
 	llvm::Error emit_newobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_box (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox (MonoIrBuilder &builder, uint32_t token);

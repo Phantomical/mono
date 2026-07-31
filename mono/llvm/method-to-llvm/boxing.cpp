@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
@@ -86,6 +87,52 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 	                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 }
 
+/// The corlib helper that unboxes an object into a Nullable<T>.
+///
+/// UnboxExact when T is an enum: Unbox's (T) cast also accepts a boxed underlying
+/// type - enum and underlying interconvert under unbox.any - and a Nullable<enum>
+/// must only accept a boxed enum.
+static const char *
+nullable_unbox_helper (MonoClass *klass)
+{
+	bool exact = m_class_is_enumtype (mono_class_get_nullable_param_internal (klass));
+	return exact ? "UnboxExact" : "Unbox";
+}
+
+/// Emit a call to the one-argument Nullable<T> helper NAME - Box, Unbox or
+/// UnboxExact - consuming its argument from the stack and pushing its result.
+///
+/// Boxing and unboxing a nullable branch on HasValue against a null reference, and
+/// the corlib helpers are that branch, written once as ordinary IL.
+llvm::Error
+MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
+                                         const char *name)
+{
+	ERROR_DECL (find_error);
+	MonoMethod *helper =
+		mono_class_get_method_from_name_checked (klass, name, 1, 0, find_error);
+
+	if (!is_ok (find_error))
+		return runtime_error (find_error);
+	if (helper == nullptr)
+		return invalid_il (llvm::Twine ("Nullable has no ") + name + " helper");
+
+	llvm::Expected<llvm::Function *> declaration = create_method_decl (helper);
+	if (!declaration)
+		return declaration.takeError ();
+
+	MonoMethodSignature *sig = mono_method_signature_internal (helper);
+	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
+	if (!args)
+		return args.takeError ();
+
+	llvm::Value *result = emit_protected_call (builder, *declaration, *args);
+
+	pop_stack (1);
+	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
+	return llvm::Error::success ();
+}
+
 /*
  * III.4.1  box - convert a boxable value to its boxed form
  *
@@ -147,12 +194,8 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
-	/*
-	 * A nullable boxes to null or to a boxed T depending on HasValue, which is a
-	 * runtime branch this does not emit yet.
-	 */
 	if (mono_class_is_nullable (klass))
-		return unsupported_il ("boxing a nullable");
+		return call_nullable_helper (builder, klass, "Box");
 
 	if (stack.empty ())
 		return unbalanced_stack (1);
@@ -253,11 +296,26 @@ MethodLLVMEmitter::emit_unbox (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
 	/*
-	 * Unboxing a nullable cannot hand out an interior pointer: the boxed form is a
-	 * plain T or null, so a Nullable<T> would have to be manufactured.
+	 * A nullable has no interior pointer to hand out - the boxed form is a plain T
+	 * or null - so the Nullable<T> the helper manufactures is spilled and the
+	 * pointer pushed is to the spill.
 	 */
-	if (mono_class_is_nullable (klass))
-		return unsupported_il ("unboxing a nullable");
+	if (mono_class_is_nullable (klass)) {
+		if (llvm::Error error = call_nullable_helper (builder, klass,
+		                                              nullable_unbox_helper (klass)))
+			return error;
+
+		StackValue value = get_stack (0);
+		MonoIrBuilder entry (entry_block, entry_block->begin ());
+		llvm::AllocaInst *temp = entry.CreateAlloca (value.value->getType ());
+
+		temp->setAlignment (type_alignment (*type));
+		builder.CreateAlignedStore (value.value, temp, temp->getAlign ());
+		pop_stack (1);
+		push_stack (temp, m_class_get_this_arg (klass));
+		return llvm::Error::success ();
+	}
+
 	if (!m_class_is_valuetype (klass))
 		return invalid_il ("unbox needs a value type");
 	if (stack.empty ())
@@ -326,7 +384,7 @@ MethodLLVMEmitter::emit_unbox_any (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
 	if (mono_class_is_nullable (klass))
-		return unsupported_il ("unboxing a nullable");
+		return call_nullable_helper (builder, klass, nullable_unbox_helper (klass));
 	/* The spec's reading for a reference type: this instruction is castclass. */
 	if (!m_class_is_valuetype (klass))
 		return emit_castclass (builder, token);

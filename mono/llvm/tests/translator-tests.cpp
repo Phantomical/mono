@@ -142,6 +142,10 @@ const MethodRef translatable[] = {
 	{"boxing", "Boxing:UnboxAnyInt"},
 	{"boxing", "Boxing:UnboxAnyPair"},
 	{"boxing", "Boxing:RoundTrip"},
+	{"boxing", "Boxing:BoxNullable"},
+	{"boxing", "Boxing:UnboxNullable"},
+	{"boxing", "Boxing:UnboxAnyNullable"},
+	{"boxing", "Boxing:UnboxAnyNullableEnum"},
 
 	{"misc", "Misc:SizeOfInt"},
 	{"misc", "Misc:SizeOfObject"},
@@ -566,6 +570,46 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
 }
 
+// A nullable boxes to null or to a boxed T depending on HasValue, and that branch is
+// the corlib Box helper - so the call goes there and this function allocates nothing.
+TEST_F (TranslatorTest, BoxingANullableCallsTheCorlibHelper)
+{
+	const Translation &t = translate ("boxing", "Boxing:BoxNullable");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("Nullable`1<int>:Box"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+}
+
+TEST_F (TranslatorTest, UnboxAnyOnANullableCallsUnbox)
+{
+	const Translation &t = translate ("boxing", "Boxing:UnboxAnyNullable");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("Nullable`1<int>:Unbox"), 1u) << t.text ();
+}
+
+// T being an enum switches the helper: Unbox's cast would also accept a boxed int
+// where only a boxed Color may pass, so the exact-type variant is called instead.
+TEST_F (TranslatorTest, UnboxAnyOnANullableEnumCallsUnboxExact)
+{
+	const Translation &t = translate ("boxing", "Boxing:UnboxAnyNullableEnum");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("UnboxExact"), 1u) << t.text ();
+}
+
+// unbox on a nullable has no interior pointer to hand out, so the Nullable<int> the
+// helper manufactures is spilled and the pointer pushed points at the spill.
+TEST_F (TranslatorTest, UnboxOnANullableSpillsTheHelperResult)
+{
+	const Translation &t = translate ("boxing", "Boxing:UnboxNullable");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("Nullable`1<int>:Unbox"), 1u) << t.text ();
+	EXPECT_GE (t.count ("alloca"), 1u);
+}
+
 /* ------------------------------------------------------------------- misc */
 
 // sizeof settles at compile time, and array elements lie sizeof bytes apart - so a
@@ -843,7 +887,6 @@ const RefusalRef refusals[] = {
 	{"Refused:StackUnderflow", "stack"},
 	{"Refused:BadLocalIndex", "local"},
 	{"Refused:FallsOffTheEnd", "return"},
-	{"Refused:BoxesANullable", "nullable"},
 	{"Refused:ConstrainedBoxes", "boxes"},
 	{"Refused:UsesJmp", "jmp"},
 	{"Refused:UsesArglist", "arglist"},
