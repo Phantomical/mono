@@ -17,6 +17,13 @@ namespace mono {
 
 namespace {
 
+/// An error describing something the converter could not express in LLVM IR.
+inline llvm::Error
+conversion_error (const llvm::Twine &reason)
+{
+	return llvm::createStringError (llvm::inconvertibleErrorCode (), reason);
+}
+
 llvm::Type *
 pointer_type (llvm::LLVMContext &ctx)
 {
@@ -207,6 +214,28 @@ MethodLLVMEmitter::convert_vtype (MonoType *t)
 	return type;
 }
 
+/// The alignment an instance of T needs in memory.
+///
+/// LLVM cannot work this out for itself: a vtype reaches it as a run of bytes,
+/// which the data layout reads as 1-aligned, so every alloca of one has to be told
+/// what the runtime decided instead.
+llvm::Align
+MethodLLVMEmitter::type_alignment (MonoType *t)
+{
+	if (t->byref)
+		return llvm::Align (TARGET_SIZEOF_VOID_P);
+
+	MonoClass *klass = mono_class_from_mono_type_internal (mini_get_underlying_type (t));
+	unsigned align = MONO_CLASS_IS_SIMD (cfg, klass) ? mono_class_value_size (klass, NULL)
+	                                                 : mono_class_min_align (klass);
+
+	/* A packed layout can ask for an alignment that is not a power of two. */
+	while (mono_is_power_of_two (align) == -1)
+		align++;
+
+	return llvm::Align (align);
+}
+
 /// The LLVM function type for SIG: the managed types written out as themselves,
 /// leaving how each one travels to LLVM's own lowering.
 ///
@@ -233,7 +262,8 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 		params.push_back (*type);
 	}
 
-	return llvm::FunctionType::get (*ret_type, params, sig->call_convention == MONO_CALL_VARARG);
+	return llvm::FunctionType::get (*ret_type, params,
+	                                sig->call_convention == MONO_CALL_VARARG);
 }
 
 /// The declaration of METHOD in this module, created on first use and cached.
@@ -258,11 +288,12 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		return type.takeError ();
 
 	char *full_name = mono_method_full_name (method, TRUE);
-	llvm::Function *function = llvm::Function::Create (*type, llvm::GlobalValue::ExternalLinkage,
-	                                                   full_name, module);
+	llvm::Function *function = llvm::Function::Create (
+		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
 	g_free (full_name);
 
-	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret); ext != llvm::Attribute::None)
+	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);
+	    ext != llvm::Attribute::None)
 		function->addRetAttr (ext);
 
 	if (sig->hasthis)
