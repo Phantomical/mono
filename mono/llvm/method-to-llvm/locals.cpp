@@ -82,8 +82,7 @@ MethodLLVMEmitter::emit_ldloc (MonoIrBuilder &builder, uint32_t index)
 
 	llvm::Value *value =
 		builder.CreateAlignedLoad (*type, local.alloca, type_alignment (local.type));
-	push_stack (widen_to_stack (builder, value, local.type),
-	            stack_slot_type (local.type));
+	push_stack (widen_to_stack (builder, value, local.type), stack_slot_type (local.type));
 	return llvm::Error::success ();
 }
 
@@ -184,9 +183,8 @@ MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
 
 	char *source_name = mono_type_full_name (value.type);
 	char *destination_name = mono_type_full_name (destination);
-	llvm::Error error = invalid_il (llvm::Twine ("cannot store a value of type ")
-	                                + source_name + " into a location of type "
-	                                + destination_name);
+	llvm::Error error = invalid_il (llvm::Twine ("cannot store a value of type ") + source_name
+	                                + " into a location of type " + destination_name);
 
 	g_free (source_name);
 	g_free (destination_name);
@@ -253,8 +251,8 @@ MethodLLVMEmitter::emit_stloc (MonoIrBuilder &builder, uint32_t index)
 		return unbalanced_stack (1);
 
 	const Entry &local = locals[index];
-	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0),
-	                                                          local.type);
+	llvm::Expected<llvm::Value *> value =
+		coerce_to_location (builder, get_stack (0), local.type);
 	if (!value)
 		return value.takeError ();
 
@@ -333,8 +331,7 @@ MethodLLVMEmitter::emit_localloc (MonoIrBuilder &builder)
 	 * here, and the frame reclaims it at return exactly as the pool the spec
 	 * describes would.
 	 */
-	llvm::AllocaInst *block =
-		builder.CreateAlloca (builder.getInt8Ty (), bytes, "localloc");
+	llvm::AllocaInst *block = builder.CreateAlloca (builder.getInt8Ty (), bytes, "localloc");
 
 	block->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
 

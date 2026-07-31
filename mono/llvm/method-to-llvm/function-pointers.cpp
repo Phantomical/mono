@@ -127,10 +127,9 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 	emit_null_check (builder, obj.value);
 
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-	llvm::FunctionCallee lookup =
-		module->getOrInsertFunction ("mono_ldvirtfn", ptr, ptr, ptr);
-	llvm::Value *ftn = emit_protected_call (builder, lookup,
-	                                        { obj.value, method_symbol (*target) });
+	llvm::FunctionCallee lookup = module->getOrInsertFunction ("mono_ldvirtfn", ptr, ptr, ptr);
+	llvm::Value *ftn =
+		emit_protected_call (builder, lookup, {obj.value, method_symbol (*target)});
 
 	pop_stack (1);
 	push_stack (ftn, mono_get_int_type ());
@@ -233,8 +232,8 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	if (!args)
 		return args.takeError ();
 
-	llvm::Value *result = emit_protected_call (
-		builder, llvm::FunctionCallee (*type, ftn), *args);
+	llvm::Value *result =
+		emit_protected_call (builder, llvm::FunctionCallee (*type, ftn), *args);
 
 	pop_stack (sig->param_count + sig->hasthis);
 

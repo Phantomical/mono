@@ -73,13 +73,13 @@ using OperandTable = Cell[STACK_TYPE_COUNT][STACK_TYPE_COUNT];
 
 constexpr Cell X = {};
 
-constexpr Cell I4_ALL = { Int32, NUMERIC };
-constexpr Cell I8_ALL = { Int64, NUMERIC };
-constexpr Cell NI_ALL = { NativeInt, NUMERIC };
-constexpr Cell F_ALL = { Float, NUMERIC };
-constexpr Cell NI_SUB = { NativeInt, SUB };
-constexpr Cell MP_ADD = { ManagedPtr, ADD };
-constexpr Cell MP_ADD_SUB = { ManagedPtr, ADD | SUB };
+constexpr Cell I4_ALL = {Int32, NUMERIC};
+constexpr Cell I8_ALL = {Int64, NUMERIC};
+constexpr Cell NI_ALL = {NativeInt, NUMERIC};
+constexpr Cell F_ALL = {Float, NUMERIC};
+constexpr Cell NI_SUB = {NativeInt, SUB};
+constexpr Cell MP_ADD = {ManagedPtr, ADD};
+constexpr Cell MP_ADD_SUB = {ManagedPtr, ADD | SUB};
 
 /*
  * ECMA-335 III.1.5, Table III.2: Binary Numeric Operations. Indexed [A's type][B's
@@ -90,17 +90,17 @@ constexpr Cell MP_ADD_SUB = { ManagedPtr, ADD | SUB };
  */
 constexpr OperandTable BINARY_NUMERIC = {
 	/*              int32       int64    native int     F        &      O */
-	/* int32 */ { I4_ALL,     X,        NI_ALL,     X,      MP_ADD, X },
-	/* int64 */ { X,          I8_ALL,   X,          X,      X,      X },
-	/* nint  */ { NI_ALL,     X,        NI_ALL,     X,      MP_ADD, X },
-	/* F     */ { X,          X,        X,          F_ALL,  X,      X },
-	/* &     */ { MP_ADD_SUB, X,        MP_ADD_SUB, X,      NI_SUB, X },
-	/* O     */ { X,          X,        X,          X,      X,      X },
+	/* int32 */ {I4_ALL, X, NI_ALL, X, MP_ADD, X},
+	/* int64 */ {X, I8_ALL, X, X, X, X},
+	/* nint  */ {NI_ALL, X, NI_ALL, X, MP_ADD, X},
+	/* F     */ {X, X, X, F_ALL, X, X},
+	/* &     */ {MP_ADD_SUB, X, MP_ADD_SUB, X, NI_SUB, X},
+	/* O     */ {X, X, X, X, X, X},
 };
 
-constexpr Cell I4_INT = { Int32, INTEGER_ALL };
-constexpr Cell I8_INT = { Int64, INTEGER_ALL };
-constexpr Cell NI_INT = { NativeInt, INTEGER_ALL };
+constexpr Cell I4_INT = {Int32, INTEGER_ALL};
+constexpr Cell I8_INT = {Int64, INTEGER_ALL};
+constexpr Cell NI_INT = {NativeInt, INTEGER_ALL};
 
 /*
  * Table III.5: Integer Operations. Every box here is verifiable - neither float nor
@@ -108,17 +108,17 @@ constexpr Cell NI_INT = { NativeInt, INTEGER_ALL };
  */
 constexpr OperandTable INTEGER = {
 	/*            int32    int64   native int   F   &   O */
-	/* int32 */ { I4_INT, X,      NI_INT,     X,  X,  X },
-	/* int64 */ { X,      I8_INT, X,          X,  X,  X },
-	/* nint  */ { NI_INT, X,      NI_INT,     X,  X,  X },
-	/* F     */ { X,      X,      X,          X,  X,  X },
-	/* &     */ { X,      X,      X,          X,  X,  X },
-	/* O     */ { X,      X,      X,          X,  X,  X },
+	/* int32 */ {I4_INT, X, NI_INT, X, X, X},
+	/* int64 */ {X, I8_INT, X, X, X, X},
+	/* nint  */ {NI_INT, X, NI_INT, X, X, X},
+	/* F     */ {X, X, X, X, X, X},
+	/* &     */ {X, X, X, X, X, X},
+	/* O     */ {X, X, X, X, X, X},
 };
 
-constexpr Cell I4_SHIFT = { Int32, SHIFT_ALL };
-constexpr Cell I8_SHIFT = { Int64, SHIFT_ALL };
-constexpr Cell NI_SHIFT = { NativeInt, SHIFT_ALL };
+constexpr Cell I4_SHIFT = {Int32, SHIFT_ALL};
+constexpr Cell I8_SHIFT = {Int64, SHIFT_ALL};
+constexpr Cell NI_SHIFT = {NativeInt, SHIFT_ALL};
 
 /*
  * Table III.6: Shift Operations, indexed [value to be shifted][shift amount].
@@ -129,21 +129,21 @@ constexpr Cell NI_SHIFT = { NativeInt, SHIFT_ALL };
  */
 constexpr OperandTable SHIFT = {
 	/*             int32     int64  native int   F   &   O */
-	/* int32 */ { I4_SHIFT, X,     I4_SHIFT,   X,  X,  X },
-	/* int64 */ { I8_SHIFT, X,     I8_SHIFT,   X,  X,  X },
-	/* nint  */ { NI_SHIFT, X,     NI_SHIFT,   X,  X,  X },
-	/* F     */ { X,        X,     X,          X,  X,  X },
-	/* &     */ { X,        X,     X,          X,  X,  X },
-	/* O     */ { X,        X,     X,          X,  X,  X },
+	/* int32 */ {I4_SHIFT, X, I4_SHIFT, X, X, X},
+	/* int64 */ {I8_SHIFT, X, I8_SHIFT, X, X, X},
+	/* nint  */ {NI_SHIFT, X, NI_SHIFT, X, X, X},
+	/* F     */ {X, X, X, X, X, X},
+	/* &     */ {X, X, X, X, X, X},
+	/* O     */ {X, X, X, X, X, X},
 };
 
-constexpr Cell I4_CMP = { Int32, COMPARE_ALL };
-constexpr Cell I8_CMP = { Int64, COMPARE_ALL };
-constexpr Cell NI_CMP = { NativeInt, COMPARE_ALL };
-constexpr Cell F_CMP = { Float, COMPARE_ALL };
-constexpr Cell MP_CMP = { ManagedPtr, COMPARE_ALL };
-constexpr Cell NI_EQ = { NativeInt, COMPARE_EQ };
-constexpr Cell O_EQ = { ObjectRef, COMPARE_EQ };
+constexpr Cell I4_CMP = {Int32, COMPARE_ALL};
+constexpr Cell I8_CMP = {Int64, COMPARE_ALL};
+constexpr Cell NI_CMP = {NativeInt, COMPARE_ALL};
+constexpr Cell F_CMP = {Float, COMPARE_ALL};
+constexpr Cell MP_CMP = {ManagedPtr, COMPARE_ALL};
+constexpr Cell NI_EQ = {NativeInt, COMPARE_EQ};
+constexpr Cell O_EQ = {ObjectRef, COMPARE_EQ};
 
 /*
  * Table III.4: Binary Comparison or Branch Operations.
@@ -156,20 +156,20 @@ constexpr Cell O_EQ = { ObjectRef, COMPARE_EQ };
  */
 constexpr OperandTable COMPARISON = {
 	/*            int32   int64   native int   F      &       O */
-	/* int32 */ { I4_CMP, X,      NI_CMP,     X,     X,      X },
-	/* int64 */ { X,      I8_CMP, X,          X,     X,      X },
-	/* nint  */ { NI_CMP, X,      NI_CMP,     X,     NI_EQ,  X },
-	/* F     */ { X,      X,      X,          F_CMP, X,      X },
-	/* &     */ { X,      X,      NI_EQ,      X,     MP_CMP, X },
-	/* O     */ { X,      X,      X,          X,     X,      O_EQ },
+	/* int32 */ {I4_CMP, X, NI_CMP, X, X, X},
+	/* int64 */ {X, I8_CMP, X, X, X, X},
+	/* nint  */ {NI_CMP, X, NI_CMP, X, NI_EQ, X},
+	/* F     */ {X, X, X, F_CMP, X, X},
+	/* &     */ {X, X, NI_EQ, X, MP_CMP, X},
+	/* O     */ {X, X, X, X, X, O_EQ},
 };
 
-constexpr Cell I4_OVF = { Int32, OVERFLOW_ALL };
-constexpr Cell I8_OVF = { Int64, OVERFLOW_ALL };
-constexpr Cell NI_OVF = { NativeInt, OVERFLOW_ALL };
-constexpr Cell NI_SUB_UN = { NativeInt, SUB_OVF_UN };
-constexpr Cell MP_ADD_UN = { ManagedPtr, ADD_OVF_UN };
-constexpr Cell MP_ADD_SUB_UN = { ManagedPtr, ADD_OVF_UN | SUB_OVF_UN };
+constexpr Cell I4_OVF = {Int32, OVERFLOW_ALL};
+constexpr Cell I8_OVF = {Int64, OVERFLOW_ALL};
+constexpr Cell NI_OVF = {NativeInt, OVERFLOW_ALL};
+constexpr Cell NI_SUB_UN = {NativeInt, SUB_OVF_UN};
+constexpr Cell MP_ADD_UN = {ManagedPtr, ADD_OVF_UN};
+constexpr Cell MP_ADD_SUB_UN = {ManagedPtr, ADD_OVF_UN | SUB_OVF_UN};
 
 /*
  * Table III.7: Overflow Arithmetic Operations. The same shape as Table III.2, except
@@ -177,12 +177,12 @@ constexpr Cell MP_ADD_SUB_UN = { ManagedPtr, ADD_OVF_UN | SUB_OVF_UN };
  */
 constexpr OperandTable OVERFLOW_ARITHMETIC = {
 	/*                int32          int64   native int      F      &        O */
-	/* int32 */ { I4_OVF,        X,      NI_OVF,        X, MP_ADD_UN, X },
-	/* int64 */ { X,             I8_OVF, X,             X, X,         X },
-	/* nint  */ { NI_OVF,        X,      NI_OVF,        X, MP_ADD_UN, X },
-	/* F     */ { X,             X,      X,             X, X,         X },
-	/* &     */ { MP_ADD_SUB_UN, X,      MP_ADD_SUB_UN, X, NI_SUB_UN, X },
-	/* O     */ { X,             X,      X,             X, X,         X },
+	/* int32 */ {I4_OVF, X, NI_OVF, X, MP_ADD_UN, X},
+	/* int64 */ {X, I8_OVF, X, X, X, X},
+	/* nint  */ {NI_OVF, X, NI_OVF, X, MP_ADD_UN, X},
+	/* F     */ {X, X, X, X, X, X},
+	/* &     */ {MP_ADD_SUB_UN, X, MP_ADD_SUB_UN, X, NI_SUB_UN, X},
+	/* O     */ {X, X, X, X, X, X},
 };
 
 /// The operand table ECMA-335 gives for OP.
@@ -363,7 +363,7 @@ MethodLLVMEmitter::pop_binary_operands (BinaryOp op)
 		return result.takeError ();
 
 	pop_stack (2);
-	return BinaryOperands { value1, value2, *result };
+	return BinaryOperands{value1, value2, *result};
 }
 
 /*
@@ -545,8 +545,8 @@ MethodLLVMEmitter::emit_mul (MonoIrBuilder &builder)
 /// LLVM leaves those poison rather than trapping, so nothing downstream would raise
 /// the exception the CIL spec asks for if they were left to the hardware.
 void
-MethodLLVMEmitter::emit_division_guards (MonoIrBuilder &builder, llvm::Value *lhs,
-                                         llvm::Value *rhs, bool is_signed)
+MethodLLVMEmitter::emit_division_guards (MonoIrBuilder &builder, llvm::Value *lhs, llvm::Value *rhs,
+                                         bool is_signed)
 {
 	llvm::Type *type = lhs->getType ();
 	llvm::Value *zero = llvm::ConstantInt::get (type, 0);
@@ -575,8 +575,7 @@ MethodLLVMEmitter::emit_checked (MonoIrBuilder &builder, llvm::Intrinsic::ID int
 	llvm::Value *checked = builder.CreateBinaryIntrinsic (intrinsic, lhs, rhs);
 	llvm::Value *value = builder.CreateExtractValue (checked, 0);
 
-	emit_cond_exception (builder, builder.CreateExtractValue (checked, 1),
-	                     "OverflowException");
+	emit_cond_exception (builder, builder.CreateExtractValue (checked, 1), "OverflowException");
 	return value;
 }
 
@@ -1182,13 +1181,11 @@ MethodLLVMEmitter::emit_ckfinite (MonoIrBuilder &builder)
 	 * being equal.
 	 */
 	llvm::Type *ftype = value.value->getType ();
-	llvm::Value *magnitude = builder.CreateUnaryIntrinsic (llvm::Intrinsic::fabs,
-	                                                       value.value);
+	llvm::Value *magnitude = builder.CreateUnaryIntrinsic (llvm::Intrinsic::fabs, value.value);
 
-	emit_cond_exception (builder,
-	                     builder.CreateFCmpUEQ (magnitude,
-	                                            llvm::ConstantFP::getInfinity (ftype)),
-	                     "ArithmeticException");
+	emit_cond_exception (
+		builder, builder.CreateFCmpUEQ (magnitude, llvm::ConstantFP::getInfinity (ftype)),
+		"ArithmeticException");
 	return llvm::Error::success ();
 }
 

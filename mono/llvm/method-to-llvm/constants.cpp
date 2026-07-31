@@ -247,10 +247,9 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 {
 	ERROR_DECL (metadata_error);
 	MonoClass *handle_class = nullptr;
-	gpointer handle = mono_ldtoken_checked (m_class_get_image (method->klass), token,
-	                                        &handle_class,
-	                                        mono_method_get_context (method),
-	                                        metadata_error);
+	gpointer handle =
+		mono_ldtoken_checked (m_class_get_image (method->klass), token, &handle_class,
+	                              mono_method_get_context (method), metadata_error);
 
 	if (handle == nullptr)
 		return runtime_error (metadata_error);
@@ -268,13 +267,11 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 
 		address = builder.CreateGEP (
 			builder.getInt8Ty (), class_symbol (klass, "mono_class_"),
-			builder.getInt32 (
-				static_cast<int32_t> (m_class_offsetof_byval_arg ())));
+			builder.getInt32 (static_cast<int32_t> (m_class_offsetof_byval_arg ())));
 	} else if (handle_class == mono_defaults.methodhandle_class) {
 		address = method_symbol (static_cast<MonoMethod *> (handle));
 	} else if (handle_class == mono_defaults.fieldhandle_class) {
-		char *name =
-			mono_field_full_name (static_cast<MonoClassField *> (handle));
+		char *name = mono_field_full_name (static_cast<MonoClassField *> (handle));
 
 		address = extern_symbol (std::string ("mono_field_") + name);
 		g_free (name);
@@ -356,11 +353,9 @@ MethodLLVMEmitter::emit_sizeof (MonoIrBuilder &builder, uint32_t token)
 	uint32_t size =
 		mini_type_is_reference (*type)
 			? TARGET_SIZEOF_VOID_P
-			: mono_class_value_size (mono_class_from_mono_type_internal (*type),
-	                                         NULL);
+			: mono_class_value_size (mono_class_from_mono_type_internal (*type), NULL);
 
-	push_stack (builder.getInt32 (size),
-	            m_class_get_byval_arg (mono_defaults.uint32_class));
+	push_stack (builder.getInt32 (size), m_class_get_byval_arg (mono_defaults.uint32_class));
 	return llvm::Error::success ();
 }
 

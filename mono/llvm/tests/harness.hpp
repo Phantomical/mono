@@ -23,7 +23,7 @@ namespace llvm {
 class Function;
 class LLVMContext;
 class Module;
-}
+} // namespace llvm
 
 namespace mono {
 namespace test {

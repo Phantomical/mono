@@ -206,8 +206,8 @@ MethodLLVMEmitter::access_alignment (MonoType *location)
 /// One load from ADDRESS as TYPE, honoring the volatile. and unaligned. prefixes on
 /// the instruction being emitted.
 llvm::Value *
-MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type,
-                                     llvm::Value *address, MonoType *location)
+MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, llvm::Value *address,
+                                     MonoType *location)
 {
 	llvm::LoadInst *value =
 		builder.CreateAlignedLoad (type, address, access_alignment (location));
@@ -237,10 +237,10 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 	 * that tolerates that.
 	 */
 	if (mini_type_is_reference (location)) {
-		builder.CreateCall (wbarrier_decl (), { address, value });
+		builder.CreateCall (wbarrier_decl (), {address, value});
 	} else {
-		llvm::StoreInst *store = builder.CreateAlignedStore (
-			value, address, access_alignment (location));
+		llvm::StoreInst *store =
+			builder.CreateAlignedStore (value, address, access_alignment (location));
 
 		if (prefixes.volatile_)
 			store->setVolatile (true);

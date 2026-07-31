@@ -24,8 +24,7 @@ MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 
 	/* A native int address is only a number until something dereferences it. */
 	if (!pointer->getType ()->isPointerTy ())
-		pointer = builder.CreateIntToPtr (pointer,
-		                                  llvm::PointerType::get (context (), 0));
+		pointer = builder.CreateIntToPtr (pointer, llvm::PointerType::get (context (), 0));
 
 	emit_null_check (builder, pointer);
 	return pointer;
@@ -199,8 +198,7 @@ MethodLLVMEmitter::emit_stind (MonoIrBuilder &builder, MonoType *element)
 	if (stack.size () < 2)
 		return unbalanced_stack (2);
 
-	llvm::Expected<llvm::Value *> value =
-		coerce_to_location (builder, get_stack (0), element);
+	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), element);
 	if (!value)
 		return value.takeError ();
 
@@ -357,8 +355,7 @@ MethodLLVMEmitter::emit_stobj (MonoIrBuilder &builder, uint32_t token)
 	if (stack.size () < 2)
 		return unbalanced_stack (2);
 
-	llvm::Expected<llvm::Value *> value =
-		coerce_to_location (builder, get_stack (0), *type);
+	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), *type);
 	if (!value)
 		return value.takeError ();
 
@@ -371,9 +368,8 @@ MethodLLVMEmitter::emit_stobj (MonoIrBuilder &builder, uint32_t token)
 
 	temp->setAlignment (type_alignment (*type));
 	builder.CreateAlignedStore (*value, temp, temp->getAlign ());
-	builder.CreateCall (value_copy_decl (),
-	                    { *address, temp, builder.getInt32 (1),
-	                      class_symbol (klass, "mono_class_") });
+	builder.CreateCall (value_copy_decl (), {*address, temp, builder.getInt32 (1),
+	                                         class_symbol (klass, "mono_class_")});
 
 	pop_stack (2);
 	return llvm::Error::success ();
@@ -443,21 +439,19 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 
 	if (mini_type_is_reference (*type)) {
 		/* The reference itself moves, which is the ldind.ref/stind.ref pair. */
-		llvm::Value *value = builder.CreateAlignedLoad (
-			llvm::PointerType::get (context (), 0), *src,
-			llvm::Align (TARGET_SIZEOF_VOID_P));
+		llvm::Value *value =
+			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0), *src,
+		                                   llvm::Align (TARGET_SIZEOF_VOID_P));
 
-		builder.CreateCall (wbarrier_decl (), { *dest, value });
+		builder.CreateCall (wbarrier_decl (), {*dest, value});
 	} else if (m_class_has_references (klass)) {
-		builder.CreateCall (value_copy_decl (),
-		                    { *dest, *src, builder.getInt32 (1),
-		                      class_symbol (klass, "mono_class_") });
+		builder.CreateCall (value_copy_decl (), {*dest, *src, builder.getInt32 (1),
+		                                         class_symbol (klass, "mono_class_")});
 	} else {
 		guint32 align = 0;
 		guint32 size = mono_class_value_size (klass, &align);
 
-		builder.CreateMemCpy (*dest, llvm::Align (align), *src, llvm::Align (align),
-		                      size);
+		builder.CreateMemCpy (*dest, llvm::Align (align), *src, llvm::Align (align), size);
 	}
 
 	return llvm::Error::success ();
@@ -531,8 +525,7 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 		guint32 align = 0;
 		guint32 size = mono_class_value_size (klass, &align);
 
-		builder.CreateMemSet (*dest, builder.getInt8 (0), size,
-		                      llvm::Align (align));
+		builder.CreateMemSet (*dest, builder.getInt8 (0), size, llvm::Align (align));
 	}
 
 	return llvm::Error::success ();
@@ -701,8 +694,7 @@ MethodLLVMEmitter::emit_initblk (MonoIrBuilder &builder)
 	llvm::Value *fill = value.value;
 
 	if (fill->getType ()->isPointerTy ())
-		fill = builder.CreatePtrToInt (fill,
-		                               builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
+		fill = builder.CreatePtrToInt (fill, builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
 	fill = builder.CreateZExtOrTrunc (fill, builder.getInt8Ty ());
 
 	/* A volatile fill is a store, so the fence precedes it. */

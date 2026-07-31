@@ -33,7 +33,7 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 	MonoClass *klass = nullptr;
 	MonoClassField *field =
 		mono_field_from_token_checked (m_class_get_image (method->klass), token, &klass,
-		                               mono_method_get_context (method), metadata_error);
+	                                       mono_method_get_context (method), metadata_error);
 
 	if (field == nullptr)
 		return runtime_error (metadata_error);
@@ -50,10 +50,10 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 
 	if (is_static != want_static) {
 		char *name = mono_field_full_name (field);
-		llvm::Error error = invalid_il (llvm::Twine ("this instruction needs ")
-		                                + (want_static ? "a static" : "an instance")
-		                                + " field, but " + name + " is "
-		                                + (is_static ? "static" : "an instance field"));
+		llvm::Error error =
+			invalid_il (llvm::Twine ("this instruction needs ")
+		                    + (want_static ? "a static" : "an instance") + " field, but "
+		                    + name + " is " + (is_static ? "static" : "an instance field"));
 
 		g_free (name);
 		return std::move (error);
@@ -114,18 +114,17 @@ void
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
 	llvm::LLVMContext &ctx = context ();
-	llvm::FunctionCallee init = module->getOrInsertFunction (
-		"mono_generic_class_init", llvm::Type::getVoidTy (ctx),
-		llvm::PointerType::get (ctx, 0));
+	llvm::FunctionCallee init =
+		module->getOrInsertFunction ("mono_generic_class_init", llvm::Type::getVoidTy (ctx),
+	                                     llvm::PointerType::get (ctx, 0));
 
 	/* A cctor can throw, so inside a try region this has to be able to unwind. */
-	emit_protected_call (builder, init, { class_symbol (klass, "mono_vtable_") });
+	emit_protected_call (builder, init, {class_symbol (klass, "mono_vtable_")});
 }
 
 /// Where FIELD lives inside the object on top of the stack.
 llvm::Expected<llvm::Value *>
-MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
-                                  MonoClassField *field)
+MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object, MonoClassField *field)
 {
 	StackType type = stack_type (object.type);
 
@@ -357,8 +356,7 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 		return field.takeError ();
 
 	MonoType *ftype = mono_field_get_type_internal (*field);
-	llvm::Expected<llvm::Value *> value =
-		coerce_to_location (builder, get_stack (0), ftype);
+	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), ftype);
 	if (!value)
 		return value.takeError ();
 

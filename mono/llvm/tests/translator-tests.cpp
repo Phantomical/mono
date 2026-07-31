@@ -60,142 +60,142 @@ method_ref_name (const testing::TestParamInfo<MethodRef> &info)
 
 /// Every method in the corpus the translator is expected to accept.
 const MethodRef translatable[] = {
-	{ "arith", "Arith:Add" },
-	{ "arith", "Arith:MixInt64" },
-	{ "arith", "Arith:MixFloat" },
-	{ "arith", "Arith:Div" },
-	{ "arith", "Arith:RemUn" },
-	{ "arith", "Arith:AddOvf" },
-	{ "arith", "Arith:MulOvfUn" },
-	{ "arith", "Arith:SubOvf" },
-	{ "arith", "Arith:Neg" },
-	{ "arith", "Arith:NegFloat" },
-	{ "arith", "Arith:Bits" },
-	{ "arith", "Arith:Shifts" },
-	{ "arith", "Arith:ConvToFloat" },
-	{ "arith", "Arith:ConvNarrow" },
-	{ "arith", "Arith:ConvOvf" },
-	{ "arith", "Arith:ConvRUn" },
-	{ "arith", "Arith:Constants" },
-	{ "arith", "Arith:FloatConstants" },
+	{"arith", "Arith:Add"},
+	{"arith", "Arith:MixInt64"},
+	{"arith", "Arith:MixFloat"},
+	{"arith", "Arith:Div"},
+	{"arith", "Arith:RemUn"},
+	{"arith", "Arith:AddOvf"},
+	{"arith", "Arith:MulOvfUn"},
+	{"arith", "Arith:SubOvf"},
+	{"arith", "Arith:Neg"},
+	{"arith", "Arith:NegFloat"},
+	{"arith", "Arith:Bits"},
+	{"arith", "Arith:Shifts"},
+	{"arith", "Arith:ConvToFloat"},
+	{"arith", "Arith:ConvNarrow"},
+	{"arith", "Arith:ConvOvf"},
+	{"arith", "Arith:ConvRUn"},
+	{"arith", "Arith:Constants"},
+	{"arith", "Arith:FloatConstants"},
 
-	{ "stack", "Stack:Dup" },
-	{ "stack", "Stack:Pop" },
-	{ "stack", "Stack:Null" },
-	{ "stack", "Stack:DupAcrossBranch" },
+	{"stack", "Stack:Dup"},
+	{"stack", "Stack:Pop"},
+	{"stack", "Stack:Null"},
+	{"stack", "Stack:DupAcrossBranch"},
 
-	{ "locals", "Locals:Deref" },
-	{ "locals", "Locals:RoundTrip" },
-	{ "locals", "Locals:NarrowLocals" },
-	{ "locals", "Locals:StoreArg" },
-	{ "locals", "Locals:ArgAddress" },
-	{ "locals", "Locals:LocalAddress" },
-	{ "locals", "Locals:ManyLocals" },
+	{"locals", "Locals:Deref"},
+	{"locals", "Locals:RoundTrip"},
+	{"locals", "Locals:NarrowLocals"},
+	{"locals", "Locals:StoreArg"},
+	{"locals", "Locals:ArgAddress"},
+	{"locals", "Locals:LocalAddress"},
+	{"locals", "Locals:ManyLocals"},
 
-	{ "flow", "Flow:Max" },
-	{ "flow", "Flow:SumTo" },
-	{ "flow", "Flow:StackAcrossBranch" },
-	{ "flow", "Flow:Choose" },
-	{ "flow", "Flow:Compare" },
-	{ "flow", "Flow:Compares" },
-	{ "flow", "Flow:Nested" },
+	{"flow", "Flow:Max"},
+	{"flow", "Flow:SumTo"},
+	{"flow", "Flow:StackAcrossBranch"},
+	{"flow", "Flow:Choose"},
+	{"flow", "Flow:Compare"},
+	{"flow", "Flow:Compares"},
+	{"flow", "Flow:Nested"},
 
-	{ "fields", "Fields:GetX" },
-	{ "fields", "Fields:GetY" },
-	{ "fields", "Fields:GetSmall" },
-	{ "fields", "Fields:SetX" },
-	{ "fields", "Fields:SetRef" },
-	{ "fields", "Fields:FieldAddress" },
-	{ "fields", "Fields:GetStatic" },
-	{ "fields", "Fields:SetStatic" },
-	{ "fields", "Fields:SetStaticRef" },
-	{ "fields", "Fields:StaticAddress" },
-	{ "fields", "Fields:TwoStatics" },
+	{"fields", "Fields:GetX"},
+	{"fields", "Fields:GetY"},
+	{"fields", "Fields:GetSmall"},
+	{"fields", "Fields:SetX"},
+	{"fields", "Fields:SetRef"},
+	{"fields", "Fields:FieldAddress"},
+	{"fields", "Fields:GetStatic"},
+	{"fields", "Fields:SetStatic"},
+	{"fields", "Fields:SetStaticRef"},
+	{"fields", "Fields:StaticAddress"},
+	{"fields", "Fields:TwoStatics"},
 
-	{ "arrays", "Arrays:Length" },
-	{ "arrays", "Arrays:GetInt" },
-	{ "arrays", "Arrays:GetByte" },
-	{ "arrays", "Arrays:GetDouble" },
-	{ "arrays", "Arrays:GetRef" },
-	{ "arrays", "Arrays:SetInt" },
-	{ "arrays", "Arrays:SetRef" },
-	{ "arrays", "Arrays:Make" },
-	{ "arrays", "Arrays:ElementAddress" },
-	{ "arrays", "Arrays:Sum" },
+	{"arrays", "Arrays:Length"},
+	{"arrays", "Arrays:GetInt"},
+	{"arrays", "Arrays:GetByte"},
+	{"arrays", "Arrays:GetDouble"},
+	{"arrays", "Arrays:GetRef"},
+	{"arrays", "Arrays:SetInt"},
+	{"arrays", "Arrays:SetRef"},
+	{"arrays", "Arrays:Make"},
+	{"arrays", "Arrays:ElementAddress"},
+	{"arrays", "Arrays:Sum"},
 
-	{ "eh", "Eh:TryCatch" },
-	{ "eh", "Eh:TwoCatches" },
-	{ "eh", "Eh:TryFinally" },
-	{ "eh", "Eh:TwoLeaves" },
-	{ "eh", "Eh:NestedFinally" },
-	{ "eh", "Eh:CatchInsideFinally" },
-	{ "eh", "Eh:Throw" },
-	{ "eh", "Eh:Rethrow" },
-	{ "eh", "Eh:Filter" },
-	{ "eh", "Eh:CallInTry" },
+	{"eh", "Eh:TryCatch"},
+	{"eh", "Eh:TwoCatches"},
+	{"eh", "Eh:TryFinally"},
+	{"eh", "Eh:TwoLeaves"},
+	{"eh", "Eh:NestedFinally"},
+	{"eh", "Eh:CatchInsideFinally"},
+	{"eh", "Eh:Throw"},
+	{"eh", "Eh:Rethrow"},
+	{"eh", "Eh:Filter"},
+	{"eh", "Eh:CallInTry"},
 
-	{ "boxing", "Boxing:BoxInt" },
-	{ "boxing", "Boxing:BoxPair" },
-	{ "boxing", "Boxing:BoxRefPair" },
-	{ "boxing", "Boxing:BoxObject" },
-	{ "boxing", "Boxing:UnboxInt" },
-	{ "boxing", "Boxing:UnboxAnyInt" },
-	{ "boxing", "Boxing:UnboxAnyPair" },
-	{ "boxing", "Boxing:RoundTrip" },
+	{"boxing", "Boxing:BoxInt"},
+	{"boxing", "Boxing:BoxPair"},
+	{"boxing", "Boxing:BoxRefPair"},
+	{"boxing", "Boxing:BoxObject"},
+	{"boxing", "Boxing:UnboxInt"},
+	{"boxing", "Boxing:UnboxAnyInt"},
+	{"boxing", "Boxing:UnboxAnyPair"},
+	{"boxing", "Boxing:RoundTrip"},
 
-	{ "misc", "Misc:SizeOfInt" },
-	{ "misc", "Misc:SizeOfObject" },
-	{ "misc", "Misc:SizeOfWide" },
-	{ "misc", "Misc:CheckFinite" },
-	{ "misc", "Misc:Breakpoint" },
-	{ "misc", "Misc:StackAlloc" },
-	{ "misc", "Misc:StackAllocZeroed" },
+	{"misc", "Misc:SizeOfInt"},
+	{"misc", "Misc:SizeOfObject"},
+	{"misc", "Misc:SizeOfWide"},
+	{"misc", "Misc:CheckFinite"},
+	{"misc", "Misc:Breakpoint"},
+	{"misc", "Misc:StackAlloc"},
+	{"misc", "Misc:StackAllocZeroed"},
 
-	{ "blocks", "Blocks:Copy" },
-	{ "blocks", "Blocks:CopyUnaligned" },
-	{ "blocks", "Blocks:Fill" },
-	{ "blocks", "Blocks:FillVolatile" },
+	{"blocks", "Blocks:Copy"},
+	{"blocks", "Blocks:CopyUnaligned"},
+	{"blocks", "Blocks:Fill"},
+	{"blocks", "Blocks:FillVolatile"},
 
-	{ "prefixed", "Prefixed:VolatileRead" },
-	{ "prefixed", "Prefixed:VolatileWrite" },
-	{ "prefixed", "Prefixed:VolatileStatic" },
-	{ "prefixed", "Prefixed:UnalignedRead" },
-	{ "prefixed", "Prefixed:ConstrainedOnClass" },
-	{ "prefixed", "Prefixed:ConstrainedOnStruct" },
-	{ "prefixed", "Prefixed:TailCall" },
+	{"prefixed", "Prefixed:VolatileRead"},
+	{"prefixed", "Prefixed:VolatileWrite"},
+	{"prefixed", "Prefixed:VolatileStatic"},
+	{"prefixed", "Prefixed:UnalignedRead"},
+	{"prefixed", "Prefixed:ConstrainedOnClass"},
+	{"prefixed", "Prefixed:ConstrainedOnStruct"},
+	{"prefixed", "Prefixed:TailCall"},
 
-	{ "fnptr", "Fnptr:TakeStatic" },
-	{ "fnptr", "Fnptr:TakeVirtual" },
-	{ "fnptr", "Fnptr:CallThroughPointer" },
-	{ "fnptr", "Fnptr:CallThroughArgument" },
+	{"fnptr", "Fnptr:TakeStatic"},
+	{"fnptr", "Fnptr:TakeVirtual"},
+	{"fnptr", "Fnptr:CallThroughPointer"},
+	{"fnptr", "Fnptr:CallThroughArgument"},
 
-	{ "objects", "Objects:MakeCounter" },
-	{ "objects", "Objects:MakeCounterAt" },
-	{ "objects", "Objects:MakePoint" },
-	{ "objects", "Objects:UseThePoint" },
+	{"objects", "Objects:MakeCounter"},
+	{"objects", "Objects:MakeCounterAt"},
+	{"objects", "Objects:MakePoint"},
+	{"objects", "Objects:UseThePoint"},
 
-	{ "tokens", "Tokens:Hello" },
-	{ "tokens", "Tokens:SameLiteralTwice" },
-	{ "tokens", "Tokens:TypeOf" },
-	{ "tokens", "Tokens:MethodToken" },
-	{ "tokens", "Tokens:FieldToken" },
+	{"tokens", "Tokens:Hello"},
+	{"tokens", "Tokens:SameLiteralTwice"},
+	{"tokens", "Tokens:TypeOf"},
+	{"tokens", "Tokens:MethodToken"},
+	{"tokens", "Tokens:FieldToken"},
 
-	{ "casts", "Casts:CastString" },
-	{ "casts", "Casts:IsString" },
-	{ "casts", "Casts:CastIface" },
-	{ "casts", "Casts:IsIface" },
-	{ "casts", "Casts:IsBoxedInt" },
-	{ "casts", "Casts:TwoCasts" },
-	{ "casts", "Casts:UnboxAnyString" },
+	{"casts", "Casts:CastString"},
+	{"casts", "Casts:IsString"},
+	{"casts", "Casts:CastIface"},
+	{"casts", "Casts:IsIface"},
+	{"casts", "Casts:IsBoxedInt"},
+	{"casts", "Casts:TwoCasts"},
+	{"casts", "Casts:UnboxAnyString"},
 
-	{ "calls", "Calls:CallStatic" },
-	{ "calls", "Calls:CallStaticTwice" },
-	{ "calls", "Calls:CallVoid" },
-	{ "calls", "Calls:CallInstance" },
-	{ "calls", "Calls:CallVirtual" },
-	{ "calls", "Calls:CallSealed" },
-	{ "calls", "Calls:CallNonVirtual" },
-	{ "calls", "Calls:CallInterface" },
+	{"calls", "Calls:CallStatic"},
+	{"calls", "Calls:CallStaticTwice"},
+	{"calls", "Calls:CallVoid"},
+	{"calls", "Calls:CallInstance"},
+	{"calls", "Calls:CallVirtual"},
+	{"calls", "Calls:CallSealed"},
+	{"calls", "Calls:CallNonVirtual"},
+	{"calls", "Calls:CallInterface"},
 };
 
 class Translates : public TranslatorTest, public testing::WithParamInterface<MethodRef> {};
@@ -209,8 +209,7 @@ TEST_P (Translates, AndVerifies)
 	ASSERT_NE (translation.function, nullptr);
 }
 
-INSTANTIATE_TEST_SUITE_P (Corpus, Translates, testing::ValuesIn (translatable),
-                          method_ref_name);
+INSTANTIATE_TEST_SUITE_P (Corpus, Translates, testing::ValuesIn (translatable), method_ref_name);
 
 /// Whether the function's CFG has a back edge, by depth-first search.
 bool
@@ -220,7 +219,7 @@ has_cycle (const llvm::Function &function)
 	std::set<const llvm::BasicBlock *> on_path;
 	std::vector<std::pair<const llvm::BasicBlock *, bool>> work;
 
-	work.push_back ({ &function.getEntryBlock (), false });
+	work.push_back ({&function.getEntryBlock (), false});
 
 	while (!work.empty ()) {
 		auto [block, leaving] = work.back ();
@@ -238,11 +237,11 @@ has_cycle (const llvm::Function &function)
 			return true;
 
 		on_path.insert (block);
-		work.push_back ({ block, true });
+		work.push_back ({block, true});
 
 		for (const llvm::BasicBlock *next : llvm::successors (block))
 			if (!done.count (next))
-				work.push_back ({ next, false });
+				work.push_back ({next, false});
 	}
 
 	return false;
@@ -353,10 +352,10 @@ TEST_F (TranslatorTest, InstanceFieldAccessNullChecks)
 TEST_F (TranslatorTest, StoringAReferenceGoesThroughTheWriteBarrier)
 {
 	EXPECT_GE (translate ("fields", "Fields:SetRef")
-			   .count ("mono_gc_wbarrier_generic_store_internal"),
+	                   .count ("mono_gc_wbarrier_generic_store_internal"),
 	           1u);
 	EXPECT_GE (translate ("fields", "Fields:SetStaticRef")
-			   .count ("mono_gc_wbarrier_generic_store_internal"),
+	                   .count ("mono_gc_wbarrier_generic_store_internal"),
 	           1u);
 }
 
@@ -390,7 +389,8 @@ TEST_F (TranslatorTest, NewarrCallsTheAllocatorWithTheArrayVtable)
 
 TEST_F (TranslatorTest, StoringAReferenceElementChecksTheElementType)
 {
-	EXPECT_GE (translate ("arrays", "Arrays:SetRef").count ("mono_helper_stelem_ref_check"), 1u);
+	EXPECT_GE (translate ("arrays", "Arrays:SetRef").count ("mono_helper_stelem_ref_check"),
+	           1u);
 }
 
 TEST_F (TranslatorTest, ElementAccessIsBoundsChecked)
@@ -798,8 +798,7 @@ TEST_F (TranslatorTest, EachCastSiteGetsItsOwnCacheSlot)
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("@cast_cache"), 2u) << t.text ();
 
-	const llvm::GlobalVariable *first =
-		t.module->getGlobalVariable ("cast_cache", true);
+	const llvm::GlobalVariable *first = t.module->getGlobalVariable ("cast_cache", true);
 
 	ASSERT_NE (first, nullptr);
 	EXPECT_TRUE (first->hasInternalLinkage ());
@@ -835,30 +834,30 @@ TEST_P (Refuses, WithAnErrorRatherThanACrash)
 
 	EXPECT_EQ (t.function, nullptr) << "unexpectedly translated:\n" << t.text ();
 	EXPECT_NE (t.error.find (GetParam ().expected), std::string::npos)
-		<< "expected an error mentioning '" << GetParam ().expected << "', got: "
-		<< t.error;
+		<< "expected an error mentioning '" << GetParam ().expected
+		<< "', got: " << t.error;
 }
 
 const RefusalRef refusals[] = {
-	{ "Refused:UsesAStringCtor", "string constructor" },
-	{ "Refused:StackUnderflow", "stack" },
-	{ "Refused:BadLocalIndex", "local" },
-	{ "Refused:FallsOffTheEnd", "return" },
-	{ "Refused:BoxesANullable", "nullable" },
-	{ "Refused:ConstrainedBoxes", "boxes" },
-	{ "Refused:UsesJmp", "jmp" },
-	{ "Refused:UsesArglist", "arglist" },
-	{ "Refused:UsesMkrefany", "mkrefany" },
+	{"Refused:UsesAStringCtor", "string constructor"},
+	{"Refused:StackUnderflow", "stack"},
+	{"Refused:BadLocalIndex", "local"},
+	{"Refused:FallsOffTheEnd", "return"},
+	{"Refused:BoxesANullable", "nullable"},
+	{"Refused:ConstrainedBoxes", "boxes"},
+	{"Refused:UsesJmp", "jmp"},
+	{"Refused:UsesArglist", "arglist"},
+	{"Refused:UsesMkrefany", "mkrefany"},
 };
 
 INSTANTIATE_TEST_SUITE_P (Corpus, Refuses, testing::ValuesIn (refusals),
                           [] (const testing::TestParamInfo<RefusalRef> &info) {
-	                          std::string name = info.param.method;
+				  std::string name = info.param.method;
 
-	                          for (char &c : name)
-		                          if (!isalnum (static_cast<unsigned char> (c)))
-			                          c = '_';
-	                          return name;
-                          });
+				  for (char &c : name)
+					  if (!isalnum (static_cast<unsigned char> (c)))
+						  c = '_';
+				  return name;
+			  });
 
 } // namespace

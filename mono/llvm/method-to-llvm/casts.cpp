@@ -139,14 +139,13 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	llvm::GlobalVariable *cache = new llvm::GlobalVariable (
 		*module, ptr, false, llvm::GlobalValue::InternalLinkage,
-		llvm::ConstantPointerNull::get (llvm::cast<llvm::PointerType> (ptr)),
-		"cast_cache");
+		llvm::ConstantPointerNull::get (llvm::cast<llvm::PointerType> (ptr)), "cast_cache");
 
 	llvm::Value *result = emit_protected_call (
 		builder,
 		cast_decl (module, throw_on_fail ? "mono_object_castclass_with_cache"
-		                                 : "mono_object_isinst_with_cache"),
-		{ obj.value, class_symbol (klass, "mono_class_"), cache });
+	                                         : "mono_object_isinst_with_cache"),
+		{obj.value, class_symbol (klass, "mono_class_"), cache});
 
 	/*
 	 * A value-type token means the boxed form, so what comes back is still an

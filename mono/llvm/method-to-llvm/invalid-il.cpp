@@ -96,8 +96,8 @@ llvm::Error
 MethodLLVMEmitter::invalid_local (uint32_t index)
 {
 	return invalid_il (llvm::Twine ("local index ") + llvm::Twine (index)
-	                   + " out of range, the method declares " + llvm::Twine (local_count (method))
-	                   + " locals");
+	                   + " out of range, the method declares "
+	                   + llvm::Twine (local_count (method)) + " locals");
 }
 
 /// The current instruction names an argument the method does not take.
@@ -132,8 +132,8 @@ MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 	}
 
 	llvm::Error error = llvm::createStringError (llvm::inconvertibleErrorCode (),
-	                                             llvm::Twine ("cannot translate ") + name
-	                                                     + ": " + where + ": " + what);
+	                                             llvm::Twine ("cannot translate ") + name + ": "
+	                                                     + where + ": " + what);
 
 	g_free (name);
 	return error;

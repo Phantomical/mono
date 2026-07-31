@@ -18,11 +18,25 @@ namespace {
 /// out as one here. Which of them applies is decided by the two widths and by how the
 /// target type fills, both of which the descriptor below already carries. X is the
 /// table's invalid box.
-enum Action { X, IntToInt, PtrToInt, FloatToInt, IntToFloat, FloatToFloat };
+enum Action {
+	X,
+	IntToInt,
+	PtrToInt,
+	FloatToInt,
+	IntToFloat,
+	FloatToFloat
+};
 
 /// The rows of Table III.8. The signed and unsigned target of a width share one, since
 /// the table gives them the same cells.
-enum TargetRow { NarrowIntRow, Int32Row, Int64Row, NativeIntRow, FloatRow, TARGET_ROW_COUNT };
+enum TargetRow {
+	NarrowIntRow,
+	Int32Row,
+	Int64Row,
+	NativeIntRow,
+	FloatRow,
+	TARGET_ROW_COUNT
+};
 
 /*
  * ECMA-335 III.1.5, Table III.8: Conversion Operations. Indexed [target][source].
@@ -34,11 +48,11 @@ enum TargetRow { NarrowIntRow, Int32Row, Int64Row, NativeIntRow, FloatRow, TARGE
  */
 constexpr Action CONVERSIONS[TARGET_ROW_COUNT][STACK_TYPE_COUNT] = {
 	/*              int32       int64       native int  F             &         O */
-	/* int8/16 */ { IntToInt,   IntToInt,   IntToInt,   FloatToInt,   X,        X },
-	/* int32   */ { IntToInt,   IntToInt,   IntToInt,   FloatToInt,   X,        X },
-	/* int64   */ { IntToInt,   IntToInt,   IntToInt,   FloatToInt,   PtrToInt, PtrToInt },
-	/* nint    */ { IntToInt,   IntToInt,   IntToInt,   FloatToInt,   PtrToInt, PtrToInt },
-	/* float   */ { IntToFloat, IntToFloat, IntToFloat, FloatToFloat, X,        X },
+	/* int8/16 */ {IntToInt, IntToInt, IntToInt, FloatToInt, X, X},
+	/* int32   */ {IntToInt, IntToInt, IntToInt, FloatToInt, X, X},
+	/* int64   */ {IntToInt, IntToInt, IntToInt, FloatToInt, PtrToInt, PtrToInt},
+	/* nint    */ {IntToInt, IntToInt, IntToInt, FloatToInt, PtrToInt, PtrToInt},
+	/* float   */ {IntToFloat, IntToFloat, IntToFloat, FloatToFloat, X, X},
 };
 
 TargetRow
@@ -81,29 +95,29 @@ target_of (ConvType type)
 {
 	switch (type) {
 	case ConvType::I1:
-		return { 8, true, false };
+		return {8, true, false};
 	case ConvType::U1:
-		return { 8, false, false };
+		return {8, false, false};
 	case ConvType::I2:
-		return { 16, true, false };
+		return {16, true, false};
 	case ConvType::U2:
-		return { 16, false, false };
+		return {16, false, false};
 	case ConvType::I4:
-		return { 32, true, false };
+		return {32, true, false};
 	case ConvType::U4:
-		return { 32, false, false };
+		return {32, false, false};
 	case ConvType::I8:
-		return { 64, true, false };
+		return {64, true, false};
 	case ConvType::U8:
-		return { 64, false, false };
+		return {64, false, false};
 	case ConvType::I:
-		return { NATIVE_BITS, true, false };
+		return {NATIVE_BITS, true, false};
 	case ConvType::U:
-		return { NATIVE_BITS, false, false };
+		return {NATIVE_BITS, false, false};
 	case ConvType::R4:
-		return { 32, true, true };
+		return {32, true, true};
 	case ConvType::R8:
-		return { 64, true, true };
+		return {64, true, true};
 	}
 
 	llvm::report_fatal_error ("target_of: unknown conversion target");
@@ -377,8 +391,8 @@ MethodLLVMEmitter::emit_conv_r_un (MonoIrBuilder &builder)
 /// disagree - conv.ovf.u8 of int32 -1 has to throw, and at 64 bits the narrowing step
 /// is a no-op that would otherwise hide it.
 llvm::Value *
-MethodLLVMEmitter::emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *value,
-                                          ConvType type, bool source_unsigned)
+MethodLLVMEmitter::emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *value, ConvType type,
+                                          bool source_unsigned)
 {
 	Target target = target_of (type);
 	unsigned wide = std::max (value->getType ()->getIntegerBitWidth (), target.bits) + 1;
@@ -414,14 +428,12 @@ MethodLLVMEmitter::emit_checked_float_conv (MonoIrBuilder &builder, llvm::Value 
 	unsigned wide = target.bits + 2;
 	llvm::Type *to = builder.getIntNTy (wide);
 	llvm::Value *saturated = builder.CreateIntrinsic (llvm::Intrinsic::fptosi_sat,
-	                                                  { to, value->getType () }, { value });
+	                                                  {to, value->getType ()}, {value});
 
-	llvm::APInt lo = target.is_signed
-	                         ? llvm::APInt::getSignedMinValue (target.bits).sext (wide)
-	                         : llvm::APInt::getZero (wide);
-	llvm::APInt hi = target.is_signed
-	                         ? llvm::APInt::getSignedMaxValue (target.bits).sext (wide)
-	                         : llvm::APInt::getMaxValue (target.bits).zext (wide);
+	llvm::APInt lo = target.is_signed ? llvm::APInt::getSignedMinValue (target.bits).sext (wide)
+	                                  : llvm::APInt::getZero (wide);
+	llvm::APInt hi = target.is_signed ? llvm::APInt::getSignedMaxValue (target.bits).sext (wide)
+	                                  : llvm::APInt::getMaxValue (target.bits).zext (wide);
 
 	llvm::Value *out_of_range = builder.CreateOr (
 		builder.CreateICmpSLT (saturated, llvm::ConstantInt::get (context (), lo)),

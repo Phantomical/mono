@@ -37,9 +37,9 @@ array_new_decl (llvm::Module *module)
 {
 	llvm::LLVMContext &ctx = module->getContext ();
 	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
-	llvm::FunctionCallee callee = module->getOrInsertFunction (
-		"mono_array_new_specific", ptr, ptr,
-		llvm::Type::getIntNTy (ctx, TARGET_SIZEOF_VOID_P * 8));
+	llvm::FunctionCallee callee =
+		module->getOrInsertFunction ("mono_array_new_specific", ptr, ptr,
+	                                     llvm::Type::getIntNTy (ctx, TARGET_SIZEOF_VOID_P * 8));
 
 	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
 		/*
@@ -159,13 +159,12 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 
 	llvm::Value *slot =
 		builder.CreateGEP (builder.getInt8Ty (), array.value,
-		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, max_length)));
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, max_length)));
 
 	/* A scalar typedef, so its own size is the layout - no ABI table involved. */
 	constexpr unsigned bytes = sizeof (mono_array_size_t);
 
-	return builder.CreateAlignedLoad (builder.getIntNTy (bytes * 8), slot,
-	                                  llvm::Align (bytes));
+	return builder.CreateAlignedLoad (builder.getIntNTy (bytes * 8), slot, llvm::Align (bytes));
 }
 
 /// Where element INDEX of ARRAY lives, having established that it is there.
@@ -174,8 +173,8 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 /// is enormous, so one `uge` rejects both ends at once, which is why the index is
 /// zero-extended here rather than sign-extended.
 llvm::Expected<llvm::Value *>
-MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array,
-                                    StackValue index, MonoType *element)
+MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, StackValue index,
+                                    MonoType *element)
 {
 	StackType index_type = stack_type (index.type);
 
@@ -194,16 +193,15 @@ MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array,
 		at = builder.CreatePtrToInt (at, native);
 	at = builder.CreateZExtOrTrunc (at, native);
 
-	emit_cond_exception (builder,
-	                     builder.CreateICmpUGE (at,
-	                                            builder.CreateZExtOrTrunc (*length, native)),
-	                     "IndexOutOfRangeException");
+	emit_cond_exception (
+		builder, builder.CreateICmpUGE (at, builder.CreateZExtOrTrunc (*length, native)),
+		"IndexOutOfRangeException");
 
 	MonoClass *klass = mono_class_from_mono_type_internal (element);
 	int32_t size = mono_class_array_element_size (klass);
 	llvm::Value *vector =
 		builder.CreateGEP (builder.getInt8Ty (), array.value,
-		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, vector)));
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, vector)));
 
 	return builder.CreateGEP (builder.getInt8Ty (), vector,
 	                          builder.CreateMul (at, llvm::ConstantInt::get (native, size)));
@@ -242,8 +240,8 @@ MethodLLVMEmitter::emit_ldlen (MonoIrBuilder &builder)
 	if (!length)
 		return length.takeError ();
 
-	llvm::Value *native = builder.CreateZExtOrTrunc (
-		*length, builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
+	llvm::Value *native =
+		builder.CreateZExtOrTrunc (*length, builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
 
 	pop_stack (1);
 	push_stack (native, mono_get_int_type ());
@@ -369,8 +367,7 @@ MethodLLVMEmitter::emit_ldelem (MonoIrBuilder &builder, MonoType *element)
 	if (!address)
 		return address.takeError ();
 
-	llvm::Value *value =
-		builder.CreateAlignedLoad (*type, *address, type_alignment (element));
+	llvm::Value *value = builder.CreateAlignedLoad (*type, *address, type_alignment (element));
 
 	pop_stack (2);
 	push_stack (widen_to_stack (builder, value, element), stack_slot_type (element));
@@ -433,8 +430,7 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 		return unbalanced_stack (3);
 
 	StackValue array = get_stack (2);
-	llvm::Expected<llvm::Value *> value =
-		coerce_to_location (builder, get_stack (0), element);
+	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), element);
 	if (!value)
 		return value.takeError ();
 
@@ -445,7 +441,7 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 	 * rather than reporting back.
 	 */
 	if (mini_type_is_reference (element))
-		emit_protected_call (builder, stelem_check_decl (module), { array.value, *value });
+		emit_protected_call (builder, stelem_check_decl (module), {array.value, *value});
 
 	llvm::Expected<llvm::Value *> address =
 		element_address (builder, array, get_stack (1), element);
@@ -455,7 +451,7 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 	pop_stack (3);
 
 	if (mini_type_is_reference (element))
-		builder.CreateCall (wbarrier_decl (), { *address, *value });
+		builder.CreateCall (wbarrier_decl (), {*address, *value});
 	else
 		builder.CreateAlignedStore (*value, *address, type_alignment (element));
 
@@ -523,17 +519,16 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	 * enormous one and come back as OutOfMemory. The spec asks for OverflowException,
 	 * which means asking before the sign is lost.
 	 */
-	emit_cond_exception (builder,
-	                     builder.CreateICmpSLT (length,
-	                                            llvm::ConstantInt::get (length->getType (), 0)),
-	                     "OverflowException");
+	emit_cond_exception (
+		builder,
+		builder.CreateICmpSLT (length, llvm::ConstantInt::get (length->getType (), 0)),
+		"OverflowException");
 
-	MonoClass *array = mono_class_create_array (
-		mono_class_from_mono_type_internal (*element), 1);
+	MonoClass *array =
+		mono_class_create_array (mono_class_from_mono_type_internal (*element), 1);
 	llvm::Value *created = emit_protected_call (
 		builder, array_new_decl (module),
-		{ class_symbol (array, "mono_vtable_"),
-		  builder.CreateSExtOrTrunc (length, native) });
+		{class_symbol (array, "mono_vtable_"), builder.CreateSExtOrTrunc (length, native)});
 
 	pop_stack (1);
 	push_stack (created, m_class_get_byval_arg (array));

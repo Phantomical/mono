@@ -75,7 +75,6 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-
 namespace {
 
 /// How OP compares two integers.
@@ -284,8 +283,7 @@ MethodLLVMEmitter::emit_br (MonoIrBuilder &builder, int32_t displacement)
  *   None.
  */
 llvm::Error
-MethodLLVMEmitter::emit_brcond (MonoIrBuilder &builder, int32_t displacement,
-                                bool branch_if_true)
+MethodLLVMEmitter::emit_brcond (MonoIrBuilder &builder, int32_t displacement, bool branch_if_true)
 {
 	if (stack.empty ())
 		return unbalanced_stack (1);
@@ -394,8 +392,7 @@ MethodLLVMEmitter::emit_brcond (MonoIrBuilder &builder, int32_t displacement,
  *   details.
  */
 llvm::Error
-MethodLLVMEmitter::emit_branch_compare (MonoIrBuilder &builder, BinaryOp op,
-                                        int32_t displacement)
+MethodLLVMEmitter::emit_branch_compare (MonoIrBuilder &builder, BinaryOp op, int32_t displacement)
 {
 	llvm::Expected<llvm::Value *> condition = emit_comparison (builder, op);
 	if (!condition)
@@ -482,7 +479,8 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 	llvm::Value *index = value.value;
 
 	if (index->getType ()->isPointerTy ())
-		index = builder.CreatePtrToInt (index, builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
+		index = builder.CreatePtrToInt (index,
+		                                builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
 
 	std::vector<Slot> slots = spill_stack (builder);
 
@@ -506,7 +504,7 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 			return error;
 
 		jump->addCase (llvm::ConstantInt::get (
-			               llvm::cast<llvm::IntegerType> (index->getType ()), i),
+				       llvm::cast<llvm::IntegerType> (index->getType ()), i),
 		               blocks[*target].block);
 	}
 

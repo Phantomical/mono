@@ -45,8 +45,7 @@ MethodLLVMEmitter::object_new_decl ()
 /// class's element class must be KLASS's. Element class rather than the class itself
 /// so that a boxed enum unboxes as its underlying type and the other way around.
 llvm::Value *
-MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
-                                  MonoClass *klass)
+MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, MonoClass *klass)
 {
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 
@@ -55,12 +54,12 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
 	llvm::Value *vtable = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), obj,
-		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 	llvm::Value *rank = builder.CreateLoad (
 		builder.getInt8Ty (),
 		builder.CreateGEP (builder.getInt8Ty (), vtable,
-		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, rank))));
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, rank))));
 
 	emit_cond_exception (builder, builder.CreateICmpNE (rank, builder.getInt8 (0)),
 	                     "InvalidCastException");
@@ -68,20 +67,20 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
 	llvm::Value *cls = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), vtable,
-		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 	llvm::Value *element = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), cls,
-		                   builder.getInt32 (static_cast<int32_t> (
-			                   m_class_offsetof_element_class ()))),
+	                           builder.getInt32 (static_cast<int32_t> (
+					   m_class_offsetof_element_class ()))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	emit_cond_exception (builder,
-	                     builder.CreateICmpNE (element,
-	                                           class_symbol (m_class_get_element_class (klass),
-	                                                         "mono_class_")),
-	                     "InvalidCastException");
+	emit_cond_exception (
+		builder,
+		builder.CreateICmpNE (
+			element, class_symbol (m_class_get_element_class (klass), "mono_class_")),
+		"InvalidCastException");
 
 	return builder.CreateGEP (builder.getInt8Ty (), obj,
 	                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
@@ -162,16 +161,14 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	if (!m_class_is_valuetype (klass))
 		return llvm::Error::success ();
 
-	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0),
-	                                                          *type);
+	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), *type);
 	if (!value)
 		return value.takeError ();
 
 	llvm::Value *obj = emit_protected_call (builder, object_new_decl (),
-	                                        { class_symbol (klass, "mono_vtable_") });
-	llvm::Value *payload =
-		builder.CreateGEP (builder.getInt8Ty (), obj,
-		                   builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
+	                                        {class_symbol (klass, "mono_vtable_")});
+	llvm::Value *payload = builder.CreateGEP (builder.getInt8Ty (), obj,
+	                                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 
 	/* The same copy stobj makes: through the collector if references are inside. */
 	if (m_class_has_references (klass)) {
@@ -180,9 +177,8 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 
 		temp->setAlignment (type_alignment (*type));
 		builder.CreateAlignedStore (*value, temp, temp->getAlign ());
-		builder.CreateCall (value_copy_decl (),
-		                    { payload, temp, builder.getInt32 (1),
-		                      class_symbol (klass, "mono_class_") });
+		builder.CreateCall (value_copy_decl (), {payload, temp, builder.getInt32 (1),
+		                                         class_symbol (klass, "mono_class_")});
 	} else {
 		builder.CreateAlignedStore (*value, payload, type_alignment (*type));
 	}

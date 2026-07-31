@@ -157,8 +157,7 @@ MethodLLVMEmitter::emit_compare (MonoIrBuilder &builder, BinaryOp op)
 		result = *condition;
 	}
 
-	push_stack (builder.CreateZExt (result, builder.getInt32Ty ()),
-	            mono_get_int32_type ());
+	push_stack (builder.CreateZExt (result, builder.getInt32Ty ()), mono_get_int32_type ());
 	return llvm::Error::success ();
 }
 

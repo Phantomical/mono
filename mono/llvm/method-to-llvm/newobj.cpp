@@ -105,8 +105,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	std::vector<llvm::Value *> args (count + 1);
 
 	for (size_t i = 0; i < count; ++i) {
-		llvm::Expected<llvm::Value *> converted = coerce_to_location (
-			builder, get_stack (count - 1 - i), sig->params[i]);
+		llvm::Expected<llvm::Value *> converted =
+			coerce_to_location (builder, get_stack (count - 1 - i), sig->params[i]);
 
 		if (!converted)
 			return converted.takeError ();
@@ -138,7 +138,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		args[0] = temp;
 	} else {
 		created = emit_protected_call (builder, object_new_decl (),
-		                               { class_symbol (klass, "mono_vtable_") });
+		                               {class_symbol (klass, "mono_vtable_")});
 		args[0] = created;
 	}
 

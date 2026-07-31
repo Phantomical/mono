@@ -91,8 +91,7 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 		return state.pad;
 
 	state.pad = llvm::BasicBlock::Create (context (),
-	                                      llvm::Twine ("pad") + llvm::Twine (clause),
-	                                      function);
+	                                      llvm::Twine ("pad") + llvm::Twine (clause), function);
 
 	MonoIrBuilder pad (state.pad);
 	llvm::Type *exception = llvm::PointerType::get (context (), 0);
@@ -166,8 +165,7 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 	if (clause < 0)
 		return builder.CreateCall (callee, args);
 
-	llvm::BasicBlock *returned =
-		llvm::BasicBlock::Create (context (), "returned", function);
+	llvm::BasicBlock *returned = llvm::BasicBlock::Create (context (), "returned", function);
 	llvm::InvokeInst *call =
 		builder.CreateInvoke (callee, returned, landing_pad (clause), args);
 
@@ -215,7 +213,7 @@ MethodLLVMEmitter::emit_throw (MonoIrBuilder &builder)
 	/* The stack is emptied whatever happens next, so nothing survives to be spilled. */
 	pop_stack (stack.size ());
 	emit_unwinding_call (builder, throw_decl (module, "mono_llvm_throw_exception"),
-	                     { value.value });
+	                     {value.value});
 	return llvm::Error::success ();
 }
 
@@ -251,8 +249,7 @@ MethodLLVMEmitter::emit_rethrow (MonoIrBuilder &builder)
 		return invalid_il ("rethrow is only valid inside a catch handler");
 
 	pop_stack (stack.size ());
-	emit_unwinding_call (builder, throw_decl (module, "mono_llvm_rethrow_exception"),
-	                     { caught });
+	emit_unwinding_call (builder, throw_decl (module, "mono_llvm_rethrow_exception"), {caught});
 	return llvm::Error::success ();
 }
 
@@ -330,7 +327,7 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 			context (), llvm::Twine ("call_finally") + llvm::Twine (id), function);
 		MonoIrBuilder step (enter);
 
-		state.continuations.push_back ({ id, next });
+		state.continuations.push_back ({id, next});
 		step.CreateStore (step.getInt32 (id), state.resume_at);
 		step.CreateBr (blocks[clauses[chain[i]].handler_offset].block);
 
@@ -370,8 +367,9 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 {
 	int clause = innermost_handler (offset);
 
-	if (clause < 0 || (clauses[clause].flags != MONO_EXCEPTION_CLAUSE_FINALLY
-	                   && clauses[clause].flags != MONO_EXCEPTION_CLAUSE_FAULT))
+	if (clause < 0
+	    || (clauses[clause].flags != MONO_EXCEPTION_CLAUSE_FINALLY
+	        && clauses[clause].flags != MONO_EXCEPTION_CLAUSE_FAULT))
 		return invalid_il ("endfinally is only valid inside a finally or fault handler");
 
 	pop_stack (stack.size ());
@@ -460,8 +458,7 @@ MethodLLVMEmitter::resolve_finally_switches ()
 
 		for (auto &[id, continuation] : state.continuations)
 			state.resume->addCase (
-				llvm::ConstantInt::get (
-					llvm::Type::getInt32Ty (context ()), id),
+				llvm::ConstantInt::get (llvm::Type::getInt32Ty (context ()), id),
 				continuation);
 	}
 

@@ -19,7 +19,7 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 	ERROR_DECL (metadata_error);
 	MonoMethod *target =
 		mono_get_method_checked (m_class_get_image (method->klass), token, nullptr,
-		                         mono_method_get_context (method), metadata_error);
+	                                 mono_method_get_context (method), metadata_error);
 
 	if (target == nullptr)
 		return runtime_error (metadata_error);
@@ -67,20 +67,18 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 
 /// The pointer stored OFFSET bytes into the vtable of the object RECEIVER points at.
 llvm::Value *
-MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver,
-                                 int32_t offset)
+MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, int32_t offset)
 {
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	llvm::Value *vtable = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), receiver,
-		                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	return builder.CreateAlignedLoad (ptr,
-	                                  builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                                                     builder.getInt32 (offset)),
-	                                  llvm::Align (TARGET_SIZEOF_VOID_P));
+	return builder.CreateAlignedLoad (
+		ptr, builder.CreateGEP (builder.getInt8Ty (), vtable, builder.getInt32 (offset)),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
 }
 
 /// The address of TARGET's entry in the vtable of the object RECEIVER points at.
@@ -207,8 +205,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		if (!is_virtual)
 			return unsupported_il ("constrained. on a plain call");
 
-		llvm::Expected<MonoType *> ctype =
-			element_type_from_token (prefixes.constrained);
+		llvm::Expected<MonoType *> ctype = element_type_from_token (prefixes.constrained);
 		if (!ctype)
 			return ctype.takeError ();
 		constrained = mono_class_from_mono_type_internal (*ctype);
@@ -256,9 +253,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 	/* A reference-typed constrained receiver arrives as a pointer to the reference. */
 	if (constrained != nullptr && !direct_this)
-		(*args)[0] = builder.CreateAlignedLoad (
-			llvm::PointerType::get (context (), 0), (*args)[0],
-			llvm::Align (TARGET_SIZEOF_VOID_P));
+		(*args)[0] =
+			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
+		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
 
 	llvm::FunctionCallee callee = *declaration;
 	bool is_interface = false;
@@ -276,8 +273,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		 * with a direct call behind it - as is one a constrained. prefix already
 		 * resolved to the value type's own implementation.
 		 */
-		bool overridable = !direct_this
-		                   && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
+		bool overridable = !direct_this && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 		                   && !(callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 
 		if (overridable && mono_class_is_interface (callee_method->klass)) {
@@ -297,8 +293,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			std::vector<llvm::Type *> params (direct->param_begin (),
 			                                  direct->param_end ());
 
-			params.insert (params.begin (),
-			               llvm::PointerType::get (context (), 0));
+			params.insert (params.begin (), llvm::PointerType::get (context (), 0));
 			callee = llvm::FunctionCallee (
 				llvm::FunctionType::get (direct->getReturnType (), params,
 			                                 direct->isVarArg ()),
