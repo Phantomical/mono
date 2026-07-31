@@ -34,6 +34,15 @@
 		nop
 	}
 
+	.method public static string ConstrainedPlainCall (int32& p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		constrained. [mscorlib]System.Int32
+		call instance string [mscorlib]System.Object::ToString ()
+		ret
+	}
+
 	.method public static void UsesJmp () cil managed
 	{
 		.maxstack 0

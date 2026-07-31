@@ -1015,6 +1015,7 @@ const RefusalRef refusals[] = {
 	{"Refused:StackUnderflow", "stack"},
 	{"Refused:BadLocalIndex", "local"},
 	{"Refused:FallsOffTheEnd", "return"},
+	{"Refused:ConstrainedPlainCall", "plain call"},
 	{"Refused:UsesJmp", "jmp"},
 	{"Refused:UsesArglist", "arglist"},
 	{"Refused:UsesMkrefany", "mkrefany"},

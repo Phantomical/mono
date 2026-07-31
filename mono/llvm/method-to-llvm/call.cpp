@@ -203,8 +203,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	bool box_receiver = false;
 
 	if (prefixes.constrained != 0) {
+		/*
+		 * The prefix is only defined ahead of callvirt (III.2.1). The one
+		 * later use of constrained. call - static virtual interface members -
+		 * cannot appear in metadata this runtime accepts.
+		 */
 		if (!is_virtual)
-			return unsupported_il ("constrained. on a plain call");
+			return invalid_il ("constrained. on a plain call");
 
 		llvm::Expected<MonoType *> ctype = element_type_from_token (prefixes.constrained);
 		if (!ctype)
