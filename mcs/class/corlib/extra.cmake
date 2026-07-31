@@ -124,15 +124,8 @@ add_custom_command(
           mcs-net_4_x-corlib mcs-net_4_x-System mcs-net_4_x-nunitlite ${_rt}
   COMMENT "CSC [net_4_x] BinarySerializationOverVersionsTest.dll"
   VERBATIM)
-add_custom_target(mcs-corlib-vts-tests DEPENDS "${_vts_test}")
+add_custom_target(mcs-corlib-vts-tests ALL DEPENDS "${_vts_test}")
 add_dependencies(mcs-corlib-vts-tests mcs-net_4_x-nunit-lite-console)
-
-add_test(NAME bcl-corlib-vts-build
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target mcs-corlib-vts-tests)
-set_tests_properties(bcl-corlib-vts-build PROPERTIES
-  LABELS fixture TIMEOUT 1800 FIXTURES_SETUP fx_bcl-corlib-vts
-  RESOURCE_LOCK ninja)
 
 add_test(NAME bcl-corlib-vts
          COMMAND "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
@@ -141,5 +134,5 @@ add_test(NAME bcl-corlib-vts
                  "-result:${_tests}/TestResult-net_4_x-corlib-vts.xml"
          WORKING_DIRECTORY "${_tests}")
 set_tests_properties(bcl-corlib-vts PROPERTIES
-  LABELS bcl TIMEOUT 1800 FIXTURES_REQUIRED fx_bcl-corlib-vts
+  LABELS bcl TIMEOUT 1800
   ENVIRONMENT "MONO_PATH=${_pdir}:${_tests};MONO_TESTS_IN_PROGRESS=yes")

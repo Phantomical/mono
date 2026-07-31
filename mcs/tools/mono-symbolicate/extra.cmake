@@ -21,7 +21,7 @@ add_custom_command(
           mcs-net_4_x-System.Core ${_rt}
   COMMENT "CSC [net_4_x] StackTraceDumper.exe"
   VERBATIM)
-add_custom_target(mcs-symbolicate-tests DEPENDS "${_exe}")
+add_custom_target(mcs-symbolicate-tests ALL DEPENDS "${_exe}")
 add_dependencies(mcs-symbolicate-tests mcs-net_4_x-mono-symbolicate)
 
 foreach(_variant without_aot with_aot with_aot_msym)
@@ -42,11 +42,5 @@ foreach(_variant without_aot with_aot with_aot_msym)
                    -D "AOT=${_aot}"
                    -P "${_src}/symbolicate-test.cmake")
   set_tests_properties(symbolicate-${_variant} PROPERTIES
-    LABELS "tools" TIMEOUT 900 FIXTURES_REQUIRED symbolicate_build)
+    LABELS "tools" TIMEOUT 900)
 endforeach()
-
-add_test(NAME symbolicate-build
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target mcs-symbolicate-tests)
-set_tests_properties(symbolicate-build PROPERTIES
-  LABELS "fixture" FIXTURES_SETUP symbolicate_build RESOURCE_LOCK ninja)

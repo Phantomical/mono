@@ -130,21 +130,15 @@ machine's core count.
 | `tools` | mdoc, the linker, mono-symbolicate, xbuild, monop, csi | `check-all` |
 | `slow` | minutes-long single tests | no |
 | `stress` | long-running stress tests | no |
-| `fixture` | builds the managed inputs | pulled in on demand |
 
 The suites that drive `test-runner.exe` already use every core, so they carry a
 `PROCESSORS` property and CTest runs them one at a time while packing the
 one-off tests around them.
 
-The managed corpora and the class libraries' test assemblies are built through
-CTest fixtures rather than as part of `all`, so a plain `cmake --build` does not
-wait on ~900 csc invocations and a bare `ctest` still does the right thing. The
-class libraries themselves are in `all`, and the `check` targets carry the
-dependency for the from-scratch case.
-
-Every test that builds takes `RESOURCE_LOCK ninja`. Ninja does not lock the build
-directory, so two `cmake --build` fixtures running at once under `ctest -j` pick
-rules out of the same graph and write each other's outputs half-finished.
+Everything a test needs on disk -- the managed corpora and the class libraries'
+test assemblies included -- is built by the regular build: the aggregates are
+`ALL` targets ordered after the class libraries, so a finished `cmake --build`
+has every test input in place and running ctest never builds anything.
 
 A handful of `bcl` suites cannot pass here whatever the code does, and it is
 worth knowing which before chasing one: corlib has ~11 failures that follow the

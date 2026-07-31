@@ -94,7 +94,7 @@ foreach(_t IN LISTS _cases)
                    -D "EXPECTED=${_src}/${_t}.exe.expected"
                    -P "${_src}/standalone-test.cmake")
   set_tests_properties(config-standalone-${_t} PROPERTIES
-    LABELS bcl TIMEOUT 300 FIXTURES_REQUIRED config_standalone
+    LABELS bcl TIMEOUT 300
     ENVIRONMENT "MONO_PATH=${_pdir}")
 
   # t12 gives a ConfigurationProperty a DefaultValue of the wrong type and
@@ -106,11 +106,4 @@ foreach(_t IN LISTS _cases)
   endif()
 endforeach()
 
-add_custom_target(mcs-config-standalone-tests DEPENDS ${_exes})
-
-add_test(NAME config-standalone-build
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target mcs-config-standalone-tests)
-set_tests_properties(config-standalone-build PROPERTIES
-  LABELS fixture TIMEOUT 1800 FIXTURES_SETUP config_standalone
-  RESOURCE_LOCK ninja)
+add_custom_target(mcs-config-standalone-tests ALL DEPENDS ${_exes})

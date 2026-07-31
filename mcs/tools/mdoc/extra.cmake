@@ -50,14 +50,8 @@ foreach(_case IN LISTS _cases)
                    -D "CASE=${_case}"
                    -P "${_src}/mdoc-test.cmake")
   set_tests_properties(mdoc-${_name} PROPERTIES
-    LABELS "tools" TIMEOUT 1800 FIXTURES_REQUIRED mdoc_tests)
+    LABELS "tools" TIMEOUT 1800)
 endforeach()
 
-add_custom_target(mcs-mdoc-tests)
+add_custom_target(mcs-mdoc-tests ALL)
 add_dependencies(mcs-mdoc-tests mcs-net_4_x-mdoc mcs-net_4_x-Microsoft.CSharp)
-
-add_test(NAME mdoc-tests-build
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target mcs-mdoc-tests)
-set_tests_properties(mdoc-tests-build PROPERTIES
-  LABELS "fixture" TIMEOUT 1800 FIXTURES_SETUP mdoc_tests RESOURCE_LOCK ninja)

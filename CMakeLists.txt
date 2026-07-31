@@ -140,7 +140,7 @@ endif()
 
 add_custom_target(check
   COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "runtime|gshared|sgen|interp|slow|stress|acceptance"
+          -LE "runtime|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|slow|stress|acceptance"
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
   VERBATIM)

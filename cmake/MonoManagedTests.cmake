@@ -5,11 +5,9 @@
 # of this tree) and xunit ones (<Assembly>_xtest.dll.sources, run by the
 # prebuilt console in external/xunit-binaries).  A directory can have both.
 #
-# Each becomes one CTest test, labelled `bcl` or `bcl-xunit`, that builds its
-# own assembly through a fixture.  None of this is part of `all` -- a plain
-# build does not pay for ~100 extra compiles -- so `ctest -L bcl` from a fresh
-# build tree compiles exactly the suites it is about to run.  The aggregates
-# mcs-tests and mcs-xunit-tests build them all at once instead.
+# Each becomes one CTest test, labelled `bcl` or `bcl-xunit`.  The assemblies
+# are built by the regular build -- the mcs-tests and mcs-xunit-tests
+# aggregates are in `all` -- so running ctest never builds anything.
 
 include_guard(GLOBAL)
 
@@ -512,22 +510,12 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   # spawns `csc` or `mcs` by bare name and has to reach this tree's rather than
   # whatever the distribution installed.
   #
-  # The suites read fixture files by paths relative to their own directory.
-  # CTest cannot build, so each suite's own compile is a fixture it requires --
-  # one per suite rather than one for all of them, so running a single test
-  # does not compile the other hundred.
+  # The suites read fixture files by paths relative to their own directory,
+  # hence the working directory.
   #
-  # RESOURCE_LOCK because ninja does not lock the build directory: two `cmake
-  # --build` fixtures running at once under `ctest -j` each pick rules out of
-  # the same graph and write each other's outputs half-finished.  Every test in
-  # the tree that builds takes this same lock.
-  add_test(NAME build-${_testname}
-           COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                   --target ${_testtarget})
-  set_tests_properties(build-${_testname} PROPERTIES
-    LABELS fixture TIMEOUT 1800 FIXTURES_SETUP fx_${_testname}
-    RESOURCE_LOCK ninja)
-
+  # fx_<suite> has no setup half -- the assemblies come from the regular build.
+  # It exists so a directory can register a FIXTURES_CLEANUP against it (the
+  # Mono.Debugger.Soft sweep) and have it ordered after the suite.
   add_test(NAME ${_testname} COMMAND ${_cmd} WORKING_DIRECTORY "${dir}")
   set_tests_properties(${_testname} PROPERTIES
     LABELS "${_label}"

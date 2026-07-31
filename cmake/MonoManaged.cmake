@@ -456,10 +456,12 @@ function(mono_managed_materialize)
     endforeach()
   endforeach()
 
-  # The test assemblies are built by their own aggregates, or one at a time by
-  # the CTest fixtures in MonoManagedTests.cmake, rather than by `all`.
-  add_custom_target(mcs-tests)
-  add_custom_target(mcs-xunit-tests)
+  # The test assemblies are part of `all`, like every other test input: a
+  # finished build has every suite's assemblies on disk, so running ctest
+  # never builds anything.  The per-suite aggregates under these still exist
+  # for building one suite's inputs by hand.
+  add_custom_target(mcs-tests ALL)
+  add_custom_target(mcs-xunit-tests ALL)
 
   # Pass 2 -- the commands.
   foreach(_i RANGE ${_last})

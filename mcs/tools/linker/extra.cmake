@@ -89,14 +89,8 @@ foreach(_case IN LISTS _cases)
                    -D "ROOTS=${_roots}"
                    -P "${_src}/linker-test.cmake")
   set_tests_properties(linker-${_slug} PROPERTIES
-    LABELS "tools" TIMEOUT 900 FIXTURES_REQUIRED linker_tests)
+    LABELS "tools" TIMEOUT 900)
 endforeach()
 
-add_custom_target(mcs-linker-tests DEPENDS ${_exes})
+add_custom_target(mcs-linker-tests ALL DEPENDS ${_exes})
 add_dependencies(mcs-linker-tests mcs-build-monolinker)
-
-add_test(NAME linker-tests-build
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target mcs-linker-tests)
-set_tests_properties(linker-tests-build PROPERTIES
-  LABELS "fixture" FIXTURES_SETUP linker_tests RESOURCE_LOCK ninja)
