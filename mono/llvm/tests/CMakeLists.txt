@@ -21,18 +21,19 @@ if(NOT GTest_FOUND)
 endif()
 include(GoogleTest)
 
-set(MONO_LLVM_TEST_IL arith arrays blocks boxing calls casts eh fields flow fnptr locals misc
-    objects prefixed refused stack tokens)
-foreach(_name IN LISTS MONO_LLVM_TEST_IL)
-  mono_corpus_il(${_name}.dll il/${_name}.il LIBRARY)
+file(GLOB MONO_LLVM_TEST_IL CONFIGURE_DEPENDS il/*.il)
+foreach(ilfile IN LISTS MONO_LLVM_TEST_IL)
+  cmake_path(GET ilfile FILENAME filename)
+  cmake_path(GET filename STEM   testname)
+  mono_corpus_il("${testname}.dll" "${ilfile}" LIBRARY)
 endforeach()
 
-add_custom_target(mono-llvm-test-corpora ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
-mono_tools_runtime_depends(mono-llvm-test-corpora)
+add_custom_target(test-llvm-data ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
+mono_tools_runtime_depends(test-llvm-data)
 
-add_executable(test-llvm-translator harness.cpp translator-tests.cpp)
+add_executable(test-llvm harness.cpp translator-tests.cpp)
 
-target_include_directories(test-llvm-translator PRIVATE
+target_include_directories(test-llvm PRIVATE
   "${CMAKE_BINARY_DIR}"
   "${CMAKE_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/.."
@@ -41,7 +42,7 @@ target_include_directories(test-llvm-translator PRIVATE
   "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
   "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src")
 
-target_compile_definitions(test-llvm-translator PRIVATE
+target_compile_definitions(test-llvm PRIVATE
   MONO_LLVM_TESTS_DIR="${CMAKE_CURRENT_BINARY_DIR}"
   MONO_LLVM_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}")
 
@@ -50,15 +51,15 @@ target_compile_definitions(test-llvm-translator PRIVATE
 # in a few failure messages -- and matching LLVM matters more, since the
 # alternative is a TU that sees LLVM's polymorphic classes with a different ABI
 # than the backend it is testing.
-target_link_libraries(test-llvm-translator PRIVATE
+target_link_libraries(test-llvm PRIVATE
   monosgen-static mono::common mono::eglib_headers mono::llvm
   GTest::gtest GTest::gtest_main m)
 if(ZLIB_FOUND)
-  target_link_libraries(test-llvm-translator PRIVATE ZLIB::ZLIB)
+  target_link_libraries(test-llvm PRIVATE ZLIB::ZLIB)
 endif()
 
-gtest_discover_tests(test-llvm-translator
-  TEST_PREFIX test-llvm-translator/
+gtest_discover_tests(test-llvm
+  TEST_PREFIX test-llvm/
   DISCOVERY_MODE PRE_TEST
   PROPERTIES
     LABELS llvm
