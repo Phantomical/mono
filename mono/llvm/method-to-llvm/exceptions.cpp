@@ -72,15 +72,16 @@ MethodLLVMEmitter::innermost_handler (size_t at) const
 
 /// Where a throw inside CLAUSE's try region lands.
 ///
-/// Mono's unwinder does the whole two-pass search itself out of MonoJitInfo and resumes
-/// at the handler's native address, so nothing here dispatches: the pad exists so that
-/// LLVM emits a call-site entry covering the try region, which is what the LSDA
-/// transcoder turns into the native range the unwinder matches the faulting IP against.
-/// Its resume is unreachable in practice.
+/// The pad is what every invoke in the region unwinds to, and it hands straight on to
+/// the clause's handler - which is what gives the handler an edge and keeps it alive.
+/// Mono's own unwinder does the two-pass search out of MonoJitInfo and resumes at the
+/// handler's native address rather than arriving here, so this path is not the one taken
+/// at run time; it exists so that LLVM emits a call-site range covering the try region,
+/// and so that the blocks the runtime does jump to are still in the function to jump to.
 ///
-/// A catch handler therefore has no edge into it from anywhere in this function yet, so
-/// nothing stops LLVM deleting one. Keeping them alive needs whatever ends up recording
-/// their native addresses to say so, which is the engine's half of this.
+/// A handler is entered holding what the runtime puts there: a catch or filter gets the
+/// exception, a finally or fault gets nothing. Those entry stacks are recorded up front
+/// in emit (), so this only has to fill the slot in.
 llvm::BasicBlock *
 MethodLLVMEmitter::landing_pad (uint32_t clause)
 {
@@ -99,7 +100,30 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 		pad.CreateLandingPad (llvm::StructType::get (exception, pad.getInt32Ty ()), 0);
 
 	caught->setCleanup (true);
-	pad.CreateResume (caught);
+
+	MonoExceptionClause *info = &clauses[clause];
+	Block &handler = blocks[info->handler_offset];
+
+	if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
+		/* Arriving by unwinding is continuation 0: carry on unwinding afterwards. */
+		pad.CreateStore (pad.getInt32 (0), state.resume_at);
+	} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT && !handler.entry.empty ()) {
+		pad.CreateStore (pad.CreateExtractValue (caught, 0), handler.entry[0].alloca);
+	}
+
+	if (info->flags == MONO_EXCEPTION_CLAUSE_FILTER) {
+		/*
+		 * A filter runs first and the handler only if it agrees, so both are places
+		 * the runtime can resume; the selector picks between them here so that
+		 * neither block is left without a way in.
+		 */
+		llvm::SwitchInst *resume =
+			pad.CreateSwitch (pad.CreateExtractValue (caught, 1), handler.block, 1);
+
+		resume->addCase (pad.getInt32 (0), blocks[info->data.filter_offset].block);
+	} else {
+		pad.CreateBr (handler.block);
+	}
 
 	return state.pad;
 }

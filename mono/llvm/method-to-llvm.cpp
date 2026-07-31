@@ -521,6 +521,27 @@ MethodLLVMEmitter::emit ()
 				builder.CreateAlloca (builder.getInt32Ty (), nullptr,
 				                      llvm::Twine ("resume_at") + llvm::Twine (i));
 
+	/*
+	 * A handler is entered by the runtime rather than by anything in the IL, so what
+	 * it starts holding is settled here rather than by a predecessor: a catch or a
+	 * filter is handed the exception, a finally or a fault nothing at all.
+	 */
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		MonoExceptionClause *clause = &clauses[i];
+		std::vector<Slot> entry;
+
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
+		    || clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
+			entry.push_back ({ spill_slot (0, llvm::PointerType::get (context (), 0)),
+			                   mono_get_object_type () });
+
+		if (auto error = enter_block (clause->handler_offset, entry))
+			return std::move (error);
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
+			if (auto error = enter_block (clause->data.filter_offset, entry))
+				return std::move (error);
+	}
+
 	if (blocks[0].block == nullptr)
 		return invalid_il ("the method has no body");
 
