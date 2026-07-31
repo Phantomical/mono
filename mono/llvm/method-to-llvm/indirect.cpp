@@ -537,4 +537,179 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/// The byte count of a block operation, off the stack and widened to the machine.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::block_size (MonoIrBuilder &builder, StackValue size)
+{
+	StackType type = stack_type (size.type);
+
+	if (type != Int32 && type != NativeInt)
+		return invalid_il (llvm::Twine ("a block size cannot be operand type ")
+		                   + describe (size.type, type));
+
+	llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+	llvm::Value *value = size.value;
+
+	if (value->getType ()->isPointerTy ())
+		value = builder.CreatePtrToInt (value, native);
+
+	/* The size is unsigned int32, so a 4-byte count widens without a sign. */
+	return builder.CreateZExtOrTrunc (value, native);
+}
+
+/*
+ * III.3.30  cpblk - copy data from memory to memory
+ *
+ *   Format     Instruction   Description
+ *   FE 17      cpblk         Copy data from memory to memory.
+ *
+ * Stack Transition:
+ *
+ *   ..., destaddr, srcaddr, size -> ...
+ *
+ * Description:
+ *
+ *   The cpblk instruction copies size (of type unsigned int32) bytes from address
+ *   srcaddr (of type native int, or &) to address destaddr (of type native int, or
+ *   &). The behavior of cpblk is unspecified if the source and destination areas
+ *   overlap.
+ *
+ *   cpblk assumes that both destaddr and srcaddr are aligned to the natural size of
+ *   the machine (but see the unaligned. prefix instruction). The operation of the
+ *   cpblk instruction can be altered by an immediately preceding volatile. or
+ *   unaligned. prefix instruction.
+ *
+ *   [Rationale: cpblk is intended for copying structures (rather than arbitrary
+ *   byte-runs). All such structures, allocated by the CLI, are naturally aligned for
+ *   the current platform. Therefore, there is no need for the compiler that generates
+ *   cpblk instructions to be aware of whether the code will eventually execute on a
+ *   32-bit or 64-bit platform. end rationale]
+ *
+ * Exceptions:
+ *
+ *   System.NullReferenceException can be thrown if an invalid address is detected.
+ *
+ * Correctness:
+ *
+ *   CIL ensures the conditions specified above.
+ *
+ * Verifiability:
+ *
+ *   The cpblk instruction is never verifiable.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_cpblk (MonoIrBuilder &builder)
+{
+	if (stack.size () < 3)
+		return unbalanced_stack (3);
+
+	llvm::Expected<llvm::Value *> size = block_size (builder, get_stack (0));
+	if (!size)
+		return size.takeError ();
+
+	llvm::Expected<llvm::Value *> src = indirect_address (builder, get_stack (1));
+	if (!src)
+		return src.takeError ();
+
+	llvm::Expected<llvm::Value *> dest = indirect_address (builder, get_stack (2));
+	if (!dest)
+		return dest.takeError ();
+
+	pop_stack (3);
+
+	llvm::Align align = prefixes.unaligned != 0 ? llvm::Align (prefixes.unaligned)
+	                                            : llvm::Align (TARGET_SIZEOF_VOID_P);
+
+	/*
+	 * A block copy is a load and a store at once, so a volatile one is fenced on
+	 * both sides rather than picking an ordering to be half of.
+	 */
+	if (prefixes.volatile_)
+		builder.CreateFence (llvm::AtomicOrdering::SequentiallyConsistent);
+	builder.CreateMemCpy (*dest, align, *src, align, *size, prefixes.volatile_);
+	if (prefixes.volatile_)
+		builder.CreateFence (llvm::AtomicOrdering::SequentiallyConsistent);
+
+	return llvm::Error::success ();
+}
+
+/*
+ * III.3.36  initblk - initialize a block of memory to a value
+ *
+ *   Format     Assembly Format   Description
+ *   FE 18      initblk           Set all bytes in a block of memory to a given byte
+ *                                value.
+ *
+ * Stack Transition:
+ *
+ *   ..., addr, value, size -> ...
+ *
+ * Description:
+ *
+ *   The initblk instruction sets size (of type unsigned int32) bytes starting at addr
+ *   (of type native int, or &) to value (of type unsigned int8). initblk assumes that
+ *   addr is aligned to the natural size of the machine (but see the unaligned. prefix
+ *   instruction).
+ *
+ *   [Rationale: initblk is intended for initializing structures (rather than
+ *   arbitrary byte-runs). All such structures, allocated by the CLI, are naturally
+ *   aligned for the current platform. Therefore, there is no need for the compiler
+ *   that generates initblk instructions to be aware of whether the code will
+ *   eventually execute on a 32-bit or 64-bit platform. end rationale]
+ *
+ *   The operation of the initblk instructions can be altered by an immediately
+ *   preceding volatile. or unaligned. prefix instruction.
+ *
+ * Exceptions:
+ *
+ *   System.NullReferenceException can be thrown if an invalid address is detected.
+ *
+ * Correctness:
+ *
+ *   Correct CIL code ensures the restrictions specified above.
+ *
+ * Verifiability:
+ *
+ *   The initblk instruction is never verifiable.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_initblk (MonoIrBuilder &builder)
+{
+	if (stack.size () < 3)
+		return unbalanced_stack (3);
+
+	llvm::Expected<llvm::Value *> size = block_size (builder, get_stack (0));
+	if (!size)
+		return size.takeError ();
+
+	StackValue value = get_stack (1);
+	StackType value_type = stack_type (value.type);
+
+	if (value_type != Int32 && value_type != NativeInt)
+		return invalid_il (llvm::Twine ("a fill byte cannot be operand type ")
+		                   + describe (value.type, value_type));
+
+	llvm::Expected<llvm::Value *> dest = indirect_address (builder, get_stack (2));
+	if (!dest)
+		return dest.takeError ();
+
+	pop_stack (3);
+
+	llvm::Align align = prefixes.unaligned != 0 ? llvm::Align (prefixes.unaligned)
+	                                            : llvm::Align (TARGET_SIZEOF_VOID_P);
+	llvm::Value *fill = value.value;
+
+	if (fill->getType ()->isPointerTy ())
+		fill = builder.CreatePtrToInt (fill,
+		                               builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
+	fill = builder.CreateZExtOrTrunc (fill, builder.getInt8Ty ());
+
+	/* A volatile fill is a store, so the fence precedes it. */
+	if (prefixes.volatile_)
+		builder.CreateFence (llvm::AtomicOrdering::Release);
+	builder.CreateMemSet (*dest, fill, *size, align, prefixes.volatile_);
+
+	return llvm::Error::success ();
+}
+
 } // namespace mono

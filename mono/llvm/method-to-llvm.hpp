@@ -398,6 +398,9 @@ private:
 	llvm::Error emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw_on_fail);
 	llvm::Error emit_castclass (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_isinst (MonoIrBuilder &builder, uint32_t token);
+	llvm::Expected<llvm::Value *> block_size (MonoIrBuilder &builder, StackValue size);
+	llvm::Error emit_cpblk (MonoIrBuilder &builder);
+	llvm::Error emit_initblk (MonoIrBuilder &builder);
 	llvm::Error emit_ldobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_cpobj (MonoIrBuilder &builder, uint32_t token);

@@ -143,6 +143,11 @@ const MethodRef translatable[] = {
 	{ "boxing", "Boxing:UnboxAnyPair" },
 	{ "boxing", "Boxing:RoundTrip" },
 
+	{ "blocks", "Blocks:Copy" },
+	{ "blocks", "Blocks:CopyUnaligned" },
+	{ "blocks", "Blocks:Fill" },
+	{ "blocks", "Blocks:FillVolatile" },
+
 	{ "prefixed", "Prefixed:VolatileRead" },
 	{ "prefixed", "Prefixed:VolatileWrite" },
 	{ "prefixed", "Prefixed:VolatileStatic" },
@@ -551,6 +556,30 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
+}
+
+/* ----------------------------------------------------------------- blocks */
+
+TEST_F (TranslatorTest, BlockOpsBecomeTheIntrinsics)
+{
+	const Translation &copy = translate ("blocks", "Blocks:Copy");
+	const Translation &unaligned = translate ("blocks", "Blocks:CopyUnaligned");
+	const Translation &fill = translate ("blocks", "Blocks:Fill");
+	const Translation &fenced = translate ("blocks", "Blocks:FillVolatile");
+
+	ASSERT_NE (copy.function, nullptr) << copy.error;
+	EXPECT_EQ (copy.count ("llvm.memcpy"), 1u);
+	EXPECT_EQ (copy.count ("ptr align 8"), 2u) << copy.text ();
+
+	ASSERT_NE (unaligned.function, nullptr) << unaligned.error;
+	EXPECT_EQ (unaligned.count ("ptr align 1"), 2u) << unaligned.text ();
+
+	ASSERT_NE (fill.function, nullptr) << fill.error;
+	EXPECT_EQ (fill.count ("llvm.memset"), 1u);
+
+	ASSERT_NE (fenced.function, nullptr) << fenced.error;
+	EXPECT_EQ (fenced.count ("fence release"), 1u);
+	EXPECT_EQ (fenced.count ("i1 true"), 1u) << fenced.text ();
 }
 
 /* --------------------------------------------------------------- prefixes */
