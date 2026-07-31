@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata-internals.h"
 #include "mono/metadata/metadata.h"
 #include <llvm/IR/DerivedTypes.h>
@@ -211,9 +212,61 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 			return runtime_error (metadata_error);
 	}
 
-	/* An unmanaged target needs a managed-to-native transition, not a plain call. */
-	if (sig->pinvoke)
-		return unsupported_il ("calli to an unmanaged target");
+	/*
+	 * An unmanaged target needs a managed-to-native transition, and the runtime's
+	 * indirect native-func wrapper is that transition: a managed method built for
+	 * this signature that takes the function pointer as its leading argument,
+	 * flips the GC state, marshals, and makes the native call. What gets emitted
+	 * here is then an ordinary call to the wrapper. A signature that suppresses
+	 * the transition asked for the raw call instead, and takes the plain indirect
+	 * path below.
+	 */
+	if (sig->pinvoke && !sig->suppress_gc_transition) {
+		if (sig->hasthis)
+			return invalid_il ("an unmanaged calli signature cannot take a this");
+		/*
+		 * The wrapper cache keys on the signature, which for a dynamic method
+		 * lives in memory the method's disposal frees.
+		 */
+		if (method->dynamic)
+			return unsupported_il ("calli to an unmanaged target in a "
+			                       "dynamic method");
+
+		MonoMethod *wrapper = mono_marshal_get_native_func_wrapper_indirect (
+			method->klass, sig, FALSE);
+		llvm::Expected<llvm::Function *> declaration = create_method_decl (wrapper);
+		if (!declaration)
+			return declaration.takeError ();
+
+		MonoMethodSignature *wsig = mono_method_signature_internal (wrapper);
+
+		if (stack.empty ())
+			return unbalanced_stack (1);
+
+		llvm::Expected<llvm::Value *> ftn =
+			coerce_to_location (builder, get_stack (0), wsig->params[0]);
+		if (!ftn)
+			return ftn.takeError ();
+		pop_stack (1);
+
+		llvm::Expected<std::vector<llvm::Value *>> args =
+			pop_call_arguments (builder, sig);
+		if (!args)
+			return args.takeError ();
+
+		args->insert (args->begin (), *ftn);
+
+		llvm::Value *result = emit_protected_call (builder, *declaration, *args);
+
+		pop_stack (sig->param_count);
+
+		if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
+			return llvm::Error::success ();
+
+		push_stack (widen_to_stack (builder, result, wsig->ret),
+		            stack_slot_type (wsig->ret));
+		return llvm::Error::success ();
+	}
 
 	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (sig);
 	if (!type)

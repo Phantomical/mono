@@ -180,6 +180,7 @@ const MethodRef translatable[] = {
 	{"fnptr", "Fnptr:TakeVirtual"},
 	{"fnptr", "Fnptr:CallThroughPointer"},
 	{"fnptr", "Fnptr:CallThroughArgument"},
+	{"fnptr", "Fnptr:CallNative"},
 
 	{"objects", "Objects:MakeCounter"},
 	{"objects", "Objects:MakeCounterAt"},
@@ -829,6 +830,17 @@ TEST_F (TranslatorTest, ConstrainedCallOnANonOverridingStructBoxes)
 }
 
 /* ---------------------------------------------------------- method pointers */
+
+// calli through an unmanaged signature is not a raw call: the runtime's indirect
+// native-func wrapper takes the pointer as its leading argument and owns the GC
+// transition, so what this method emits is an ordinary call to the wrapper.
+TEST_F (TranslatorTest, UnmanagedCalliGoesThroughTheTransitionWrapper)
+{
+	const Translation &t = translate ("fnptr", "Fnptr:CallNative");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("wrapper_native_indirect"), 1u) << t.text ();
+}
 
 // ldftn's answer is the callee's own function symbol - the engine resolves it to the
 // entry point. When calli's pointer is that constant, the builder folds the whole

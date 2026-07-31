@@ -69,4 +69,13 @@
 		calli int32 (int32)
 		ret
 	}
+
+	.method public static int32 CallNative (native int f, int32 x) cil managed
+	{
+		.maxstack 2
+		ldarg.1
+		ldarg.0
+		calli unmanaged cdecl int32 (int32)
+		ret
+	}
 }
