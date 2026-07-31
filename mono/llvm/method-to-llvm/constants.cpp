@@ -276,7 +276,12 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 		address = extern_symbol (std::string ("mono_field_") + name);
 		g_free (name);
 	} else {
-		return unsupported_il ("ldtoken on this kind of token");
+		/*
+		 * mono_ldtoken_checked hands back exactly the three handle kinds above
+		 * and reports anything else as a bad image before getting here, so this
+		 * arm is only reachable if the runtime grows a new kind.
+		 */
+		return invalid_il ("ldtoken produced an unknown handle kind");
 	}
 
 	if (mono_class_value_size (handle_class, NULL) != TARGET_SIZEOF_VOID_P)
