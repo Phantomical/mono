@@ -41,6 +41,18 @@
 		add
 		ret
 	}
+
+	.method public newslot virtual instance !!0 Choose<T> (!!0 a, !!0 b) cil managed
+	{
+		.maxstack 1
+		ldarg.1
+		ret
+	}
+}
+
+.class interface public abstract auto ansi IPicker
+{
+	.method public hidebysig newslot abstract virtual instance !!0 Pick<T> (!!0 a, !!0 b) cil managed {}
 }
 
 .class public abstract auto ansi sealed beforefieldinit Calls extends [mscorlib]System.Object
@@ -126,6 +138,26 @@
 		.maxstack 1
 		ldarg.0
 		callvirt instance void [mscorlib]System.IDisposable::Dispose ()
+		ret
+	}
+
+	.method public static int32 CallGenericVirtual (class Base b) cil managed
+	{
+		.maxstack 3
+		ldarg.0
+		ldc.i4.1
+		ldc.i4.2
+		callvirt instance !!0 Base::Choose<int32> (!!0, !!0)
+		ret
+	}
+
+	.method public static int32 CallGenericInterface (class IPicker p) cil managed
+	{
+		.maxstack 3
+		ldarg.0
+		ldc.i4.1
+		ldc.i4.2
+		callvirt instance !!0 IPicker::Pick<int32> (!!0, !!0)
 		ret
 	}
 }

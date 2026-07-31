@@ -243,12 +243,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		return invalid_il ("the called method has no signature");
 	if (is_virtual && !sig->hasthis)
 		return invalid_il ("callvirt needs an instance method");
-	/*
-	 * A virtual generic method's slot does not hold code with this signature - the
-	 * runtime resolves those per instantiation - so it cannot be dispatched here yet.
-	 */
-	if (is_virtual && !direct_this && sig->generic_param_count != 0)
-		return unsupported_il ("generic virtual dispatch");
+	if (is_virtual && sig->generic_param_count != 0 && !callee_method->is_inflated)
+		return invalid_il ("callvirt on an open generic method");
 
 	/*
 	 * The boxed receiver replaces the managed pointer in its stack slot, below the
@@ -288,7 +284,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
 
 	llvm::FunctionCallee callee = *declaration;
-	bool is_interface = false;
+	bool keyed = false;
 
 	if (is_virtual) {
 		/*
@@ -306,7 +302,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		bool overridable = !direct_this && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 		                   && !(callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 
-		if (overridable && mono_class_is_interface (callee_method->klass)) {
+		bool is_interface = mono_class_is_interface (callee_method->klass);
+		bool generic_virtual = sig->generic_param_count != 0;
+
+		if (overridable && (is_interface || generic_virtual)) {
 			/*
 			 * Several interface methods can hash to the same IMT slot, in which
 			 * case what the slot holds is a thunk that picks the real target by
@@ -316,9 +315,18 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			 * %r10, which is exactly MONO_ARCH_IMT_REG on amd64. The key travels
 			 * as one extra leading argument that the target, once reached, never
 			 * looks at.
+			 *
+			 * A virtual generic method dispatches the same way even off a class:
+			 * its slot can never hold one instantiation's code, so what sits
+			 * there is a trampoline that reads the asked-for inflated method out
+			 * of that same register to pick the instantiation.
 			 */
-			is_interface = true;
+			keyed = true;
 
+			llvm::Value *code =
+				is_interface
+					? interface_callee (builder, (*args)[0], callee_method)
+					: virtual_callee (builder, (*args)[0], callee_method);
 			llvm::FunctionType *direct = (*declaration)->getFunctionType ();
 			std::vector<llvm::Type *> params (direct->param_begin (),
 			                                  direct->param_end ());
@@ -327,7 +335,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			callee = llvm::FunctionCallee (
 				llvm::FunctionType::get (direct->getReturnType (), params,
 			                                 direct->isVarArg ()),
-				interface_callee (builder, (*args)[0], callee_method));
+				code);
 			args->insert (args->begin (), method_symbol (callee_method));
 		} else if (overridable && mono_method_get_vtable_index (callee_method) >= 0) {
 			callee = llvm::FunctionCallee (
@@ -338,7 +346,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);
 
-	if (is_interface)
+	if (keyed)
 		llvm::cast<llvm::CallBase> (result)->addParamAttr (0, llvm::Attribute::Nest);
 
 	pop_stack (sig->param_count + sig->hasthis);

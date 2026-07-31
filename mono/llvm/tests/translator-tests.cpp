@@ -202,6 +202,8 @@ const MethodRef translatable[] = {
 	{"calls", "Calls:CallSealed"},
 	{"calls", "Calls:CallNonVirtual"},
 	{"calls", "Calls:CallInterface"},
+	{"calls", "Calls:CallGenericVirtual"},
+	{"calls", "Calls:CallGenericInterface"},
 };
 
 class Translates : public TranslatorTest, public testing::WithParamInterface<MethodRef> {};
@@ -507,6 +509,26 @@ TEST_F (TranslatorTest, AnInterfaceCallGoesThroughTheImt)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("ptr nest @\"mono_method_"), 1u) << t.text ();
+}
+
+// A virtual generic method's slot never holds one instantiation's code - it holds a
+// trampoline that reads the asked-for inflated method out of the IMT register - so
+// the call carries the instantiation as a nest key whether the method lives on a
+// class (vtable slot) or an interface (IMT slot).
+TEST_F (TranslatorTest, AGenericVirtualCallCarriesTheInflatedMethod)
+{
+	const Translation &on_class = translate ("calls", "Calls:CallGenericVirtual");
+	const Translation &on_iface = translate ("calls", "Calls:CallGenericInterface");
+
+	ASSERT_NE (on_class.function, nullptr) << on_class.error;
+	EXPECT_EQ (on_class.count ("ptr nest @\"mono_method_Base:Choose<int>"), 1u)
+		<< on_class.text ();
+	/* Dispatched, never called by name. */
+	EXPECT_EQ (on_class.count ("call i32 @\"Base:Choose"), 0u);
+
+	ASSERT_NE (on_iface.function, nullptr) << on_iface.error;
+	EXPECT_EQ (on_iface.count ("ptr nest @\"mono_method_IPicker:Pick<int>"), 1u)
+		<< on_iface.text ();
 }
 
 TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
