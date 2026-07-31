@@ -11,12 +11,6 @@ namespace mono {
 
 namespace {
 
-/// The six types the CLI tracks on the evaluation stack (ECMA-335 III.1.5), and
-/// a seventh for everything that cannot appear as a numeric operand.
-enum StackType { Int32, Int64, NativeInt, Float, ManagedPtr, ObjectRef, Invalid };
-
-constexpr size_t STACK_TYPE_COUNT = ObjectRef + 1;
-
 constexpr uint16_t
 bit (BinaryOp op)
 {
@@ -142,81 +136,6 @@ table_for (BinaryOp op)
 	}
 
 	llvm::report_fatal_error ("table_for: unknown binary operation");
-}
-
-/// How the CLI categorizes T on the evaluation stack.
-StackType
-stack_type (MonoType *t)
-{
-	if (t->byref)
-		return ManagedPtr;
-
-	t = mini_get_underlying_type (t);
-
-	switch (t->type) {
-	/* Anything narrower than four bytes is tracked as int32 once it is pushed. */
-	case MONO_TYPE_BOOLEAN:
-	case MONO_TYPE_CHAR:
-	case MONO_TYPE_I1:
-	case MONO_TYPE_U1:
-	case MONO_TYPE_I2:
-	case MONO_TYPE_U2:
-	case MONO_TYPE_I4:
-	case MONO_TYPE_U4:
-		return Int32;
-	case MONO_TYPE_I8:
-	case MONO_TYPE_U8:
-		return Int64;
-	case MONO_TYPE_I:
-	case MONO_TYPE_U:
-	case MONO_TYPE_PTR:
-	case MONO_TYPE_FNPTR:
-		return NativeInt;
-	case MONO_TYPE_R4:
-	case MONO_TYPE_R8:
-		return Float;
-	case MONO_TYPE_STRING:
-	case MONO_TYPE_CLASS:
-	case MONO_TYPE_OBJECT:
-	case MONO_TYPE_ARRAY:
-	case MONO_TYPE_SZARRAY:
-	/* Generic sharing hands us these as references. */
-	case MONO_TYPE_VAR:
-	case MONO_TYPE_MVAR:
-		return ObjectRef;
-	case MONO_TYPE_GENERICINST:
-		return mono_type_generic_inst_is_valuetype (t) ? Invalid : ObjectRef;
-	default:
-		return Invalid;
-	}
-}
-
-/// The CLI's name for T's category, or T's own name when it has none.
-std::string
-describe (MonoType *t, StackType type)
-{
-	switch (type) {
-	case Int32:
-		return "int32";
-	case Int64:
-		return "int64";
-	case NativeInt:
-		return "native int";
-	case Float:
-		return "float";
-	case ManagedPtr:
-		return "managed pointer";
-	case ObjectRef:
-		return "object reference";
-	case Invalid:
-		break;
-	}
-
-	char *name = mono_type_full_name (t);
-	std::string text = name;
-
-	g_free (name);
-	return text;
 }
 
 const char *

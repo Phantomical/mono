@@ -15,6 +15,8 @@
 #include <llvm/Support/Error.h>
 #include <llvm/IR/Module.h>
 
+#include <string>
+
 namespace mono {
 
 /// The binary arithmetic instructions, in the order of the three operand tables in
@@ -36,6 +38,32 @@ enum class BinaryOp {
 	MulOvfUn,
 	SubOvf,
 	SubOvfUn,
+};
+
+/// The six types the CLI tracks on the evaluation stack (ECMA-335 III.1.5), and a
+/// seventh for everything that cannot appear as an operand of one.
+///
+/// This is the axis every operand table in III.1.5 is indexed by, so the arithmetic and
+/// conversion tables are both laid out along it.
+enum StackType { Int32, Int64, NativeInt, Float, ManagedPtr, ObjectRef, Invalid };
+
+constexpr size_t STACK_TYPE_COUNT = ObjectRef + 1;
+
+/// The type a conv instruction converts to, from the opcode tables in ECMA-335
+/// III.3.27 through III.3.29.
+enum class ConvType {
+	I1,
+	U1,
+	I2,
+	U2,
+	I4,
+	U4,
+	I8,
+	U8,
+	I,
+	U,
+	R4,
+	R8,
 };
 
 struct MonoLLVMMethod {
@@ -123,6 +151,9 @@ private:
 	llvm::Error truncated_il (size_t needed);
 	llvm::Error unsupported_il (const llvm::Twine &what);
 
+	static StackType stack_type (MonoType *t);
+	static std::string describe (MonoType *t, StackType type);
+
 	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
 	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
 
@@ -158,6 +189,16 @@ private:
 
 	llvm::Expected<llvm::Value *> coerce_to_location (MonoIrBuilder &builder, StackValue value,
 	                                                  MonoType *destination);
+
+	llvm::Error check_conversion (ConvType type, MonoType *source);
+	llvm::Value *emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *value,
+	                                    ConvType type, bool source_unsigned);
+	llvm::Value *emit_checked_float_conv (MonoIrBuilder &builder, llvm::Value *value,
+	                                      ConvType type);
+
+	llvm::Error emit_conv (MonoIrBuilder &builder, ConvType type);
+	llvm::Error emit_conv_ovf (MonoIrBuilder &builder, ConvType type, bool source_unsigned);
+	llvm::Error emit_conv_r_un (MonoIrBuilder &builder);
 
 	llvm::Error emit_ldc_i4 (MonoIrBuilder &builder, int32_t value);
 	llvm::Error emit_ldc_i8 (MonoIrBuilder &builder, int64_t value);

@@ -1,6 +1,8 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
+#include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/opcodes.h"
 #include "mono/metadata/tokentype.h"
@@ -70,6 +72,81 @@ llvm::LLVMContext &
 MethodLLVMEmitter::context () const
 {
 	return module->getContext ();
+}
+
+/// How the CLI categorizes T on the evaluation stack.
+StackType
+MethodLLVMEmitter::stack_type (MonoType *t)
+{
+	if (t->byref)
+		return ManagedPtr;
+
+	t = mini_get_underlying_type (t);
+
+	switch (t->type) {
+	/* Anything narrower than four bytes is tracked as int32 once it is pushed. */
+	case MONO_TYPE_BOOLEAN:
+	case MONO_TYPE_CHAR:
+	case MONO_TYPE_I1:
+	case MONO_TYPE_U1:
+	case MONO_TYPE_I2:
+	case MONO_TYPE_U2:
+	case MONO_TYPE_I4:
+	case MONO_TYPE_U4:
+		return Int32;
+	case MONO_TYPE_I8:
+	case MONO_TYPE_U8:
+		return Int64;
+	case MONO_TYPE_I:
+	case MONO_TYPE_U:
+	case MONO_TYPE_PTR:
+	case MONO_TYPE_FNPTR:
+		return NativeInt;
+	case MONO_TYPE_R4:
+	case MONO_TYPE_R8:
+		return Float;
+	case MONO_TYPE_STRING:
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_OBJECT:
+	case MONO_TYPE_ARRAY:
+	case MONO_TYPE_SZARRAY:
+	/* Generic sharing hands us these as references. */
+	case MONO_TYPE_VAR:
+	case MONO_TYPE_MVAR:
+		return ObjectRef;
+	case MONO_TYPE_GENERICINST:
+		return mono_type_generic_inst_is_valuetype (t) ? Invalid : ObjectRef;
+	default:
+		return Invalid;
+	}
+}
+
+/// The CLI's name for T's category, or T's own name when it has none.
+std::string
+MethodLLVMEmitter::describe (MonoType *t, StackType type)
+{
+	switch (type) {
+	case Int32:
+		return "int32";
+	case Int64:
+		return "int64";
+	case NativeInt:
+		return "native int";
+	case Float:
+		return "float";
+	case ManagedPtr:
+		return "managed pointer";
+	case ObjectRef:
+		return "object reference";
+	case Invalid:
+		break;
+	}
+
+	char *name = mono_type_full_name (t);
+	std::string text = name;
+
+	g_free (name);
+	return text;
 }
 
 llvm::Expected<llvm::Function *>
@@ -272,6 +349,75 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_sub_ovf (builder, false);
 	case MONO_CEE_SUB_OVF_UN:
 		return emit_sub_ovf (builder, true);
+
+	case MONO_CEE_CONV_I1:
+		return emit_conv (builder, ConvType::I1);
+	case MONO_CEE_CONV_U1:
+		return emit_conv (builder, ConvType::U1);
+	case MONO_CEE_CONV_I2:
+		return emit_conv (builder, ConvType::I2);
+	case MONO_CEE_CONV_U2:
+		return emit_conv (builder, ConvType::U2);
+	case MONO_CEE_CONV_I4:
+		return emit_conv (builder, ConvType::I4);
+	case MONO_CEE_CONV_U4:
+		return emit_conv (builder, ConvType::U4);
+	case MONO_CEE_CONV_I8:
+		return emit_conv (builder, ConvType::I8);
+	case MONO_CEE_CONV_U8:
+		return emit_conv (builder, ConvType::U8);
+	case MONO_CEE_CONV_I:
+		return emit_conv (builder, ConvType::I);
+	case MONO_CEE_CONV_U:
+		return emit_conv (builder, ConvType::U);
+	case MONO_CEE_CONV_R4:
+		return emit_conv (builder, ConvType::R4);
+	case MONO_CEE_CONV_R8:
+		return emit_conv (builder, ConvType::R8);
+	case MONO_CEE_CONV_R_UN:
+		return emit_conv_r_un (builder);
+
+	case MONO_CEE_CONV_OVF_I1:
+		return emit_conv_ovf (builder, ConvType::I1, false);
+	case MONO_CEE_CONV_OVF_U1:
+		return emit_conv_ovf (builder, ConvType::U1, false);
+	case MONO_CEE_CONV_OVF_I2:
+		return emit_conv_ovf (builder, ConvType::I2, false);
+	case MONO_CEE_CONV_OVF_U2:
+		return emit_conv_ovf (builder, ConvType::U2, false);
+	case MONO_CEE_CONV_OVF_I4:
+		return emit_conv_ovf (builder, ConvType::I4, false);
+	case MONO_CEE_CONV_OVF_U4:
+		return emit_conv_ovf (builder, ConvType::U4, false);
+	case MONO_CEE_CONV_OVF_I8:
+		return emit_conv_ovf (builder, ConvType::I8, false);
+	case MONO_CEE_CONV_OVF_U8:
+		return emit_conv_ovf (builder, ConvType::U8, false);
+	case MONO_CEE_CONV_OVF_I:
+		return emit_conv_ovf (builder, ConvType::I, false);
+	case MONO_CEE_CONV_OVF_U:
+		return emit_conv_ovf (builder, ConvType::U, false);
+
+	case MONO_CEE_CONV_OVF_I1_UN:
+		return emit_conv_ovf (builder, ConvType::I1, true);
+	case MONO_CEE_CONV_OVF_U1_UN:
+		return emit_conv_ovf (builder, ConvType::U1, true);
+	case MONO_CEE_CONV_OVF_I2_UN:
+		return emit_conv_ovf (builder, ConvType::I2, true);
+	case MONO_CEE_CONV_OVF_U2_UN:
+		return emit_conv_ovf (builder, ConvType::U2, true);
+	case MONO_CEE_CONV_OVF_I4_UN:
+		return emit_conv_ovf (builder, ConvType::I4, true);
+	case MONO_CEE_CONV_OVF_U4_UN:
+		return emit_conv_ovf (builder, ConvType::U4, true);
+	case MONO_CEE_CONV_OVF_I8_UN:
+		return emit_conv_ovf (builder, ConvType::I8, true);
+	case MONO_CEE_CONV_OVF_U8_UN:
+		return emit_conv_ovf (builder, ConvType::U8, true);
+	case MONO_CEE_CONV_OVF_I_UN:
+		return emit_conv_ovf (builder, ConvType::I, true);
+	case MONO_CEE_CONV_OVF_U_UN:
+		return emit_conv_ovf (builder, ConvType::U, true);
 
 	default:
 		return unsupported_il (llvm::Twine ("no translation for ")
