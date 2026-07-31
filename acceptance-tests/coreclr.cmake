@@ -118,7 +118,7 @@ _coreclr_corpus(_cc_stress     coreclr-corpus-stress
 # `coreclr-compile-tests` in coreclr.mk, which drove make in batches of 100 to
 # stay under the shell's argument limit.  Ninja has no such limit and gets the
 # whole graph at once.
-add_custom_target(coreclr-compile-tests)
+add_custom_target(coreclr-compile-tests ALL)
 add_dependencies(coreclr-compile-tests
   coreclr-corpus-basic-cs coreclr-corpus-basic-il coreclr-corpus-coremanglib
   acceptance-test-runner)
@@ -141,7 +141,7 @@ add_custom_command(
   DEPENDS ${_gcstress_runner_srcs} acceptance-toolchain
   COMMENT "CSC GCStressTests.exe"
   VERBATIM)
-add_custom_target(coreclr-gcstress-runner
+add_custom_target(coreclr-gcstress-runner ALL
   DEPENDS "${_bin}/GCStressTests.exe" coreclr-corpus-stress)
 
 # ---------------------------------------------------------------------------
@@ -152,14 +152,6 @@ ProcessorCount(_cc_nproc)
 if(_cc_nproc EQUAL 0)
   set(_cc_nproc 1)
 endif()
-
-# Building the corpus is a fixture, as in mono/tests: CTest cannot build, and
-# 4700 assemblies do not belong in `all`.
-add_test(NAME coreclr-corpus
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target coreclr-compile-tests)
-set_tests_properties(coreclr-corpus PROPERTIES
-  FIXTURES_SETUP coreclr_corpus LABELS "acceptance;fixture" TIMEOUT 14400)
 
 # coreclr.mk wrote the test list to a file because the paths blow past the
 # shell's argument limit.  Same here, only the file is generated once at
@@ -184,7 +176,6 @@ function(_coreclr_suite name list_file)
   set_tests_properties(${name} PROPERTIES
     LABELS acceptance
     PROCESSORS ${_cc_nproc}
-    FIXTURES_REQUIRED coreclr_corpus
     TIMEOUT 14400)
 endfunction()
 
@@ -207,16 +198,7 @@ set_tests_properties(coreclr-gcstress PROPERTIES
   LABELS "acceptance;stress"
   PROCESSORS ${_cc_nproc}
   TIMEOUT 21600
-  FIXTURES_REQUIRED coreclr_gcstress
   ENVIRONMENT "MONO_PATH=${_class}:${_bin};BVT_ROOT=${_cc_src}/tests/src/GC/Stress/Tests")
-
-# The stress corpus is a different 26 assemblies from the two suites above, so
-# it gets a fixture of its own rather than riding on coreclr-compile-tests.
-add_test(NAME coreclr-gcstress-corpus
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target coreclr-gcstress-runner)
-set_tests_properties(coreclr-gcstress-corpus PROPERTIES
-  FIXTURES_SETUP coreclr_gcstress LABELS "acceptance;fixture" TIMEOUT 3600)
 
 # ---------------------------------------------------------------------------
 # coreclr-list-missing-tests: upstream .cs/.il files this port has never heard

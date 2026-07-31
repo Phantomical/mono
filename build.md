@@ -259,8 +259,8 @@ ctest --test-dir build -j16 -L interp    # the corpus under the interpreter
 ctest --test-dir build -j16 -L stress    # long-running
 ```
 
-The suites that need managed test assemblies build them through a CTest fixture,
-so a bare `ctest` does the right thing without a separate build step.
+The managed test assemblies are built by the regular build (`cmake --build
+build`), so run that first; `ctest` itself never builds anything.
 
 ### Acceptance tests
 
@@ -291,9 +291,10 @@ cmake -B build -D MONO_ENABLE_ACCEPTANCE_TESTS=ON
 ctest --test-dir build -j16 -L acceptance
 ```
 
-Compiling the CoreCLR corpus is itself a CTest fixture and takes on the order of
-half an hour; `coreclr-gcstress`, `profiler-stress` and the microbenchmarks are
-additionally labelled `stress`/`slow` because they run for hours by design.
+Compiling the CoreCLR corpus happens in the regular build once the option is on,
+and takes on the order of half an hour the first time; `coreclr-gcstress`,
+`profiler-stress` and the microbenchmarks are additionally labelled
+`stress`/`slow` because they run for hours by design.
 
 ### Microbenchmarks
 

@@ -42,4 +42,4 @@ add_test(NAME gc-descriptors
                  "${_wrapper}" descriptor-tests.exe
          WORKING_DIRECTORY "${_gcd_bin}")
 set_tests_properties(gc-descriptors PROPERTIES
-  LABELS slow FIXTURES_REQUIRED runtime_corpora TIMEOUT 3600)
+  LABELS slow TIMEOUT 3600)

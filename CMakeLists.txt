@@ -136,7 +136,7 @@ endif()
 
 add_custom_target(check
   COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "runtime|gshared|sgen|interp|slow|stress|fixture|acceptance"
+          -LE "runtime|gshared|sgen|interp|slow|stress|acceptance"
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
   VERBATIM)
@@ -158,9 +158,8 @@ endif()
 
 # The CoreCLR suites and ms-test-suite, with the hours-long members
 # (coreclr-gcstress, profiler-stress, the microbenchmarks) left behind their
-# stress/slow labels.
-# Compiling the CoreCLR corpus happens through the CTest fixture, so this is a
-# single command from a clean tree -- and a long one.
+# stress/slow labels.  The corpora are compiled by the regular build -- a long
+# first build once the option is on -- so this only runs the suites.
 if(MONO_ENABLE_ACCEPTANCE_TESTS)
   add_custom_target(check-acceptance
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
@@ -168,6 +167,9 @@ if(MONO_ENABLE_ACCEPTANCE_TESTS)
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
+  if(TARGET coreclr-compile-tests)
+    add_dependencies(check-acceptance coreclr-compile-tests)
+  endif()
 endif()
 
 # The microbenchmarks. They carry `slow`, so `check` and `check-all` skip them;

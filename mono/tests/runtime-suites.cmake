@@ -16,7 +16,6 @@
 #   interp    the whole corpus again under the interpreter
 #   slow      minutes-long single tests
 #   stress    long-running stress tests
-#   fixture   builds the managed inputs; pulled in automatically when needed
 
 set(_class_dir "${_class}")
 set(_run_test "${CMAKE_SOURCE_DIR}/cmake/MonoRunTest.cmake")
@@ -57,15 +56,6 @@ set(_mono_parallel_hungry
   pinvoke-detach-1.exe
   bug-18026.exe
 )
-
-# Building the corpus is a fixture: CTest cannot build, and ~700 assemblies is
-# too much to put in `all`.
-add_test(NAME runtime-corpora
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}" --target runtime-corpora)
-set_tests_properties(runtime-corpora PROPERTIES
-  FIXTURES_SETUP runtime_corpora
-  LABELS fixture
-  TIMEOUT 5400)
 
 # ---------------------------------------------------------------------------
 # mono_runtime_suite(<name> TESTS ... [LABEL x] [RUNTIME_ARGS s] [ENV ...]
@@ -177,7 +167,6 @@ function(mono_runtime_suite name)
                  WORKING_DIRECTORY "${ARG_WORKDIR}")
         set_tests_properties("${_gname}" PROPERTIES
           LABELS "${ARG_LABEL}"
-          FIXTURES_REQUIRED runtime_corpora
           TIMEOUT ${_ctest_timeout})
         if(ARG_PROCESSORS)
           set_tests_properties("${_gname}" PROPERTIES PROCESSORS ${ARG_PROCESSORS})
@@ -374,8 +363,7 @@ function(mono_runtime_check name)
                      "${_gc_env}" ${ARG_ENV} ${ARG_COMMAND}
              WORKING_DIRECTORY "${_bin}")
     set_tests_properties("${name}@${_gc}" PROPERTIES
-      LABELS runtime FIXTURES_REQUIRED runtime_corpora
-      TIMEOUT ${ARG_TIMEOUT})
+      LABELS runtime TIMEOUT ${ARG_TIMEOUT})
   endforeach()
 
   if(ARG_NATIVE)
@@ -384,7 +372,7 @@ function(mono_runtime_check name)
                      ${ARG_ENV} ${ARG_COMMAND}
              WORKING_DIRECTORY "${_bin}")
     set_tests_properties(${name} PROPERTIES
-      LABELS runtime FIXTURES_REQUIRED runtime_corpora TIMEOUT ${ARG_TIMEOUT})
+      LABELS runtime TIMEOUT ${ARG_TIMEOUT})
   endif()
 endfunction()
 
@@ -438,7 +426,7 @@ foreach(_gc IN LISTS _mono_gcs)
                    "MONO_ENV_OPTIONS=--version" "${_wrapper}" array-init.exe
            WORKING_DIRECTORY "${_bin}")
   set_tests_properties("runtime-env-options@${_gc}" PROPERTIES
-    LABELS runtime FIXTURES_REQUIRED runtime_corpora
+    LABELS runtime
     PASS_REGULAR_EXPRESSION "Architecture:")
 endforeach()
 

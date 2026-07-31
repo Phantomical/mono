@@ -27,14 +27,8 @@ foreach(_name IN LISTS MONO_LLVM_TEST_IL)
   mono_corpus_il(${_name}.dll il/${_name}.il LIBRARY)
 endforeach()
 
-# CTest cannot build, so assembling the corpus is itself a test the rest depend on.
-add_custom_target(mono-llvm-test-corpora DEPENDS ${MONO_CORPUS_OUTPUTS})
+add_custom_target(mono-llvm-test-corpora ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
 mono_tools_runtime_depends(mono-llvm-test-corpora)
-add_test(NAME mono-llvm-test-corpora
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target mono-llvm-test-corpora)
-set_tests_properties(mono-llvm-test-corpora PROPERTIES
-  FIXTURES_SETUP mono_llvm_test_corpora LABELS fixture)
 
 add_executable(test-llvm-translator harness.cpp translator-tests.cpp)
 
@@ -67,6 +61,5 @@ gtest_discover_tests(test-llvm-translator
   TEST_PREFIX test-llvm-translator/
   DISCOVERY_MODE PRE_TEST
   PROPERTIES
-    FIXTURES_REQUIRED mono_llvm_test_corpora
     LABELS llvm
     ENVIRONMENT "MONO_TIERED=0;MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc")

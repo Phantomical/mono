@@ -46,8 +46,7 @@ mono_corpus_cs(unaligned.exe     SOURCES unaligned.cs
                REFS "${_driver}" "${CMAKE_CURRENT_BINARY_DIR}/MemoryIntrinsics.dll")
 mono_corpus_il(iltests.exe iltests.il)
 
-# Not dependent on `mcs` -- see the note in mono/tests/CMakeLists.txt.
-add_custom_target(mini-corpora DEPENDS ${MONO_CORPUS_OUTPUTS})
+add_custom_target(mini-corpora ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
 
 # The corpora under mono/unit-tests reference this and are built in their own
 # directories, so they need it finished first.  A target-level dependency is the
@@ -57,12 +56,6 @@ add_custom_target(mini-test-driver DEPENDS "${_driver}")
 # ---------------------------------------------------------------------------
 # CTest wiring
 # ---------------------------------------------------------------------------
-# CTest cannot build, so building the corpora is itself a test that everything
-# else depends on through a fixture.
-add_test(NAME mini-corpora
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}" --target mini-corpora)
-set_tests_properties(mini-corpora PROPERTIES FIXTURES_SETUP mini_corpora LABELS fixture)
-
 set(_regtests
   aot-tests.exe basic.exe basic-float.exe basic-long.exe basic-calls.exe
   builtin-types.exe gshared.exe objects.exe arrays.exe basic-math.exe
@@ -80,8 +73,7 @@ add_test(NAME mini-regression
          COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                  "${_wrapper}" --nollvm --regression ${_regtests}
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-set_tests_properties(mini-regression PROPERTIES
-  LABELS regression FIXTURES_REQUIRED mini_corpora)
+set_tests_properties(mini-regression PROPERTIES LABELS regression)
 
 if(MONO_ENABLE_LLVM)
   foreach(_n 1000 20 1)
@@ -128,9 +120,9 @@ if(MONO_ENABLE_INTERPRETER)
   target_link_libraries(test-mono-interp-whitebox PRIVATE mono::llvm ${_mono_zlib} m)
   set_target_properties(test-mono-interp-whitebox PROPERTIES LINKER_LANGUAGE CXX)
 
-  # The fixture builds the corpora, but this pair is declared after the target,
-  # so hang them off it explicitly: the driver is a program rather than a
-  # corpus, and its snippets assembly is not in the mini corpus list.
+  # This pair is declared after the mini-corpora target, so hang them off it
+  # explicitly: the driver is a program rather than a corpus, and its snippets
+  # assembly is not in the mini corpus list.
   add_custom_target(mini-whitebox-snippets DEPENDS ${MONO_CORPUS_OUTPUTS})
   add_dependencies(mini-corpora mini-whitebox-snippets test-mono-interp-whitebox)
 
@@ -146,5 +138,5 @@ if(MONO_ENABLE_INTERPRETER)
   # by clearing DISABLED once that is fixed.
   set_tests_properties(interp-whitebox PROPERTIES
     DISABLED TRUE
-    LABELS manual FIXTURES_REQUIRED mini_corpora)
+    LABELS manual)
 endif()

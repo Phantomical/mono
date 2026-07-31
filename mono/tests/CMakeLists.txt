@@ -168,13 +168,9 @@ target_compile_options(libtest PRIVATE -fno-optimize-sibling-calls)
 
 add_custom_target(mono-test-toolchain
   DEPENDS "${_bin}/TestDriver.dll" "${_bin}/test-runner.exe" libtest)
-# Deliberately *not* dependent on the `mcs` target. mcs wraps a foreign make
-# system and so is always out of date; making the CTest fixtures pull it in
-# meant every `ctest` invocation re-ran the whole class-library scan. The class
-# libraries are in `all`, so a normal build has already refreshed them, and the
-# `check` targets depend on mcs directly for the from-scratch case.
-# With MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS this adds nothing: the compiles no
-# longer need a runtime out of this build, which is most of the point of it.
+# Every compile below reaches mono-test-toolchain first, so this one dependency
+# orders the whole corpus after the class libraries it compiles against.
+add_dependencies(mono-test-toolchain mcs)
 mono_tools_runtime_depends(mono-test-toolchain)
 
 # ---------------------------------------------------------------------------
@@ -321,7 +317,7 @@ foreach(_s IN LISTS MONO_TESTS_CS_SRC MONO_TESTS_BENCH_SRC MONO_TESTS_GSHARED_SR
   endif()
 endforeach()
 
-add_custom_target(runtime-corpora DEPENDS ${_all_assemblies})
+add_custom_target(runtime-corpora ALL DEPENDS ${_all_assemblies})
 add_dependencies(runtime-corpora mono-test-toolchain)
 
 # ---------------------------------------------------------------------------

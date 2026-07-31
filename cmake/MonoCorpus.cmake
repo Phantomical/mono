@@ -6,9 +6,8 @@
 # the compiler invocation, the fixture they hang off and the shape of a tiered
 # test all live here rather than being spelled twice.
 #
-# Corpora can only be built after mcs has run, so they are wired as a CTest
-# fixture rather than as part of `all`: a plain build of the runtime should not
-# have to wait for the compiler.
+# Corpora are part of `all`, ordered after `mcs`: a finished build has every
+# test input on disk, so running ctest never builds anything.
 
 set(MONO_CORPUS_ENABLED FALSE)
 if(NOT MONO_ENABLE_MCS_BUILD OR NOT MONO_ENABLE_EXECUTABLES)
@@ -83,10 +82,9 @@ function(mono_corpus_cs out)
   endforeach()
   # A reference built in this same directory has to be a dependency too, or a
   # parallel build compiles against a file that does not exist yet.  References
-  # into the class libraries are already covered by the mcs dependency on the
-  # corpus target; references built in another directory are covered by a
-  # target-level dependency, which is the only kind that crosses directories
-  # reliably.
+  # into the class libraries are covered by the mcs dependency below; references
+  # built in another directory are covered by a target-level dependency, which
+  # is the only kind that crosses directories reliably.
   set(_refs "")
   set(_ref_deps "")
   foreach(_r IN LISTS ARG_REFS)
@@ -99,7 +97,7 @@ function(mono_corpus_cs out)
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${out}"
     COMMAND ${MONO_CORPUS_CSC} ${_extra} ${MONO_CORPUS_CSFLAGS}
             "-out:${CMAKE_CURRENT_BINARY_DIR}/${out}" ${_srcs} ${_refs}
-    DEPENDS ${_srcs} ${_ref_deps}
+    DEPENDS ${_srcs} ${_ref_deps} mcs
     COMMENT "CSC ${out}"
     VERBATIM)
   set(MONO_CORPUS_OUTPUTS
@@ -122,17 +120,16 @@ function(mono_corpus_il out source)
     COMMAND ${MONO_CORPUS_ILASM} ${_extra}
             "-output=${CMAKE_CURRENT_BINARY_DIR}/${out}"
             "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}" mcs
     COMMENT "ILASM ${out}"
     VERBATIM)
   set(MONO_CORPUS_OUTPUTS
       "${MONO_CORPUS_OUTPUTS};${CMAKE_CURRENT_BINARY_DIR}/${out}" PARENT_SCOPE)
 endfunction()
 
-# Attach this directory's corpora to the fixture every corpus test requires.
-# mono/mini owns the `mini-corpora` target and is processed first, so directories
-# added later hang their own target off it rather than declaring a second
-# fixture that would build the same tree again.
+# Attach this directory's corpora to `mini-corpora`, which is what carries them
+# into `all`.  mono/mini owns that target and is processed first, so directories
+# added later hang their own target off it.
 #
 #   mono_corpus_target(<name> [DEPENDS <target>...])
 function(mono_corpus_target name)
@@ -167,7 +164,7 @@ function(mono_add_tiered_test group corpus threshold)
     set(_procs 1)
   endif()
   set_tests_properties(tiered-${group}-${threshold} PROPERTIES
-    LABELS tiered FIXTURES_REQUIRED mini_corpora PROCESSORS ${_procs})
+    LABELS tiered PROCESSORS ${_procs})
 endfunction()
 
 # A check that runs a corpus and asserts on what a pass decided, rather than on
@@ -193,6 +190,5 @@ function(mono_add_corpus_check name)
                    "${Python3_EXECUTABLE}" "${ARG_SCRIPT}"
                    "${MONO_CORPUS_WRAPPER}" "${ARG_CORPUS}" ${_source}
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  set_tests_properties(${name} PROPERTIES
-    LABELS "${ARG_LABELS}" FIXTURES_REQUIRED mini_corpora)
+  set_tests_properties(${name} PROPERTIES LABELS "${ARG_LABELS}")
 endfunction()

@@ -151,7 +151,7 @@ if(MONO_ENABLE_MCS_BUILD)
     add_custom_command(
       OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${out}"
       COMMAND ${_mcs} "-out:${CMAKE_CURRENT_BINARY_DIR}/${out}" "${source}"
-      DEPENDS "${source}"
+      DEPENDS "${source}" mcs
       COMMENT "CSC ${out}"
       VERBATIM)
   endfunction()
@@ -160,21 +160,14 @@ if(MONO_ENABLE_MCS_BUILD)
   _mono_test_assembly(test-embed.exe "${CMAKE_SOURCE_DIR}/samples/embed/test.cs")
   _mono_test_assembly(test-embed-invoke-cs.exe "${CMAKE_SOURCE_DIR}/samples/embed/invoke.cs")
 
-  add_custom_target(unit-test-assemblies DEPENDS
+  add_custom_target(unit-test-assemblies ALL DEPENDS
     "${CMAKE_CURRENT_BINARY_DIR}/callspec.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed-invoke-cs.exe")
   mono_tools_runtime_depends(unit-test-assemblies)
 
-  # Same trick as the mini corpora: CTest cannot build, so building the managed
-  # inputs is itself a fixture the tests that need them depend on.
-  add_test(NAME unit-test-assemblies
-           COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                   --target unit-test-assemblies)
-  set_tests_properties(unit-test-assemblies PROPERTIES FIXTURES_SETUP unit_assemblies LABELS fixture)
   foreach(_t test-mono-callspec test-mono-embed test-embed-invoke)
     set_tests_properties(${_t} PROPERTIES
-      FIXTURES_REQUIRED unit_assemblies
       WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   endforeach()
 endif()

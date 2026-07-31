@@ -47,7 +47,7 @@ add_custom_command(
   DEPENDS ${_ps_sources} acceptance-toolchain
   COMMENT "CSC runner.exe (profiler-stress)"
   VERBATIM)
-add_custom_target(profiler-stress-runner DEPENDS "${_bin}/runner.exe")
+add_custom_target(profiler-stress-runner ALL DEPENDS "${_bin}/runner.exe")
 
 # runner.cs hardcodes three paths relative to its working directory:
 #   ../external/benchmarker        the benchmark descriptions
@@ -66,12 +66,6 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/mcs")
   file(CREATE_LINK "${MONO_MCS_TOPDIR}" "${CMAKE_BINARY_DIR}/mcs" SYMBOLIC)
 endif()
 
-add_test(NAME profiler-stress-build
-         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
-                 --target profiler-stress-runner)
-set_tests_properties(profiler-stress-build PROPERTIES
-  FIXTURES_SETUP profiler_stress LABELS "acceptance;fixture" TIMEOUT 1800)
-
 # runner.cs gives each benchmark a six-hour ceiling of its own and walks every
 # profiler option in turn, so the whole run is measured in hours.
 add_test(NAME profiler-stress
@@ -79,5 +73,4 @@ add_test(NAME profiler-stress
          WORKING_DIRECTORY "${_bin}/profiler-stress")
 set_tests_properties(profiler-stress PROPERTIES
   LABELS "acceptance;stress"
-  FIXTURES_REQUIRED profiler_stress
   TIMEOUT 21600)

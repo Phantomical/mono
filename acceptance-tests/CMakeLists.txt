@@ -105,13 +105,11 @@ set(_ilasm ${_tools_runtime} "${_buildcls}/ilasm.exe")
 # this, but naming it here keeps the directory independent of that ordering.
 find_program(MONO_GNU_MAKE NAMES gmake make REQUIRED)
 
-# What every compile below has to wait for.  Same decoupling as mono/tests:
-# `mcs` wraps a foreign make system and is always out of date, so this names the
-# runtime rather than the class-library scan.  Under
-# MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS it names nothing -- the compiles no longer
-# come out of this build, and the whole corpus can be built while the native
-# side is still linking.
+# What every compile below has to wait for: the class libraries the -lib:/-r:
+# references resolve against, and (without MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS)
+# the runtime hosting the compiler.
 add_custom_target(acceptance-toolchain)
+add_dependencies(acceptance-toolchain mcs)
 mono_tools_runtime_depends(acceptance-toolchain)
 
 # test-runner.exe, shared by the CoreCLR suites.  mono/tests builds its own
