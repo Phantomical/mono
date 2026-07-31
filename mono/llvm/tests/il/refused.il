@@ -12,10 +12,12 @@
 
 .class public abstract auto ansi sealed beforefieldinit Refused extends [mscorlib]System.Object
 {
-	.method public static object UsesNewobj () cil managed
+	.method public static string UsesAStringCtor () cil managed
 	{
-		.maxstack 1
-		newobj instance void [mscorlib]System.Object::.ctor ()
+		.maxstack 2
+		ldc.i4.s 97
+		ldc.i4.3
+		newobj instance void [mscorlib]System.String::.ctor (char, int32)
 		ret
 	}
 

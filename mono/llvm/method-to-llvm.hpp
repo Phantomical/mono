@@ -368,8 +368,10 @@ private:
 	llvm::Error emit_ldind (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
 	llvm::FunctionCallee value_copy_decl ();
+	llvm::FunctionCallee object_new_decl ();
 	llvm::Value *unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
 	                            MonoClass *klass);
+	llvm::Error emit_newobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_box (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox_any (MonoIrBuilder &builder, uint32_t token);

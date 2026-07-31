@@ -10,18 +10,16 @@
 
 namespace mono {
 
-namespace {
-
 /// The runtime's allocator for a plain object of a known class, by its vtable.
 ///
 /// The raising form, like mono_array_new_specific, and carrying the same allocation
 /// attributes: the result aliases nothing older than the call and arrives zeroed, and
-/// allockind lets a box nothing observes be elided outright. Deliberately not nounwind
-/// - it throws OutOfMemoryException.
+/// allockind lets an object nothing observes be elided outright. Deliberately not
+/// nounwind - it throws OutOfMemoryException.
 llvm::FunctionCallee
-object_new_decl (llvm::Module *module)
+MethodLLVMEmitter::object_new_decl ()
 {
-	llvm::LLVMContext &ctx = module->getContext ();
+	llvm::LLVMContext &ctx = context ();
 	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
 	llvm::FunctionCallee callee =
 		module->getOrInsertFunction ("mono_object_new_specific", ptr, ptr);
@@ -38,8 +36,6 @@ object_new_decl (llvm::Module *module)
 
 	return callee;
 }
-
-} // namespace
 
 /// The address of the value held inside OBJ, after throwing InvalidCastException
 /// unless OBJ is a boxed KLASS.
@@ -171,7 +167,7 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	if (!value)
 		return value.takeError ();
 
-	llvm::Value *obj = emit_protected_call (builder, object_new_decl (module),
+	llvm::Value *obj = emit_protected_call (builder, object_new_decl (),
 	                                        { class_symbol (klass, "mono_vtable_") });
 	llvm::Value *payload =
 		builder.CreateGEP (builder.getInt8Ty (), obj,

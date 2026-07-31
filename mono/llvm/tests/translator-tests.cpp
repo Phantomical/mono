@@ -143,6 +143,11 @@ const MethodRef translatable[] = {
 	{ "boxing", "Boxing:UnboxAnyPair" },
 	{ "boxing", "Boxing:RoundTrip" },
 
+	{ "objects", "Objects:MakeCounter" },
+	{ "objects", "Objects:MakeCounterAt" },
+	{ "objects", "Objects:MakePoint" },
+	{ "objects", "Objects:UseThePoint" },
+
 	{ "tokens", "Tokens:Hello" },
 	{ "tokens", "Tokens:SameLiteralTwice" },
 	{ "tokens", "Tokens:TypeOf" },
@@ -535,6 +540,30 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
 }
 
+/* ----------------------------------------------------------------- newobj */
+
+TEST_F (TranslatorTest, NewobjAllocatesThenCallsTheConstructor)
+{
+	const Translation &t = translate ("objects", "Objects:MakeCounterAt");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_object_new_specific"), 1u);
+	EXPECT_EQ (t.count ("mono_vtable_Counter"), 1u);
+	EXPECT_GE (t.count ("Counter:.ctor"), 1u);
+}
+
+// A value type constructs in place: no heap allocation, a zeroed slot handed to the
+// constructor as this, and the value loaded back out.
+TEST_F (TranslatorTest, ValueTypeNewobjConstructsInATemp)
+{
+	const Translation &t = translate ("objects", "Objects:MakePoint");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (t.count ("llvm.memset"), 1u);
+	EXPECT_GE (t.count ("Point:.ctor"), 1u);
+}
+
 /* ----------------------------------------------------------------- tokens */
 
 // The interned string is a runtime object, so it rides on a symbol the engine
@@ -641,7 +670,7 @@ TEST_P (Refuses, WithAnErrorRatherThanACrash)
 }
 
 const RefusalRef refusals[] = {
-	{ "Refused:UsesNewobj", "newobj" },
+	{ "Refused:UsesAStringCtor", "string constructor" },
 	{ "Refused:StackUnderflow", "stack" },
 	{ "Refused:BadLocalIndex", "local" },
 	{ "Refused:FallsOffTheEnd", "return" },
