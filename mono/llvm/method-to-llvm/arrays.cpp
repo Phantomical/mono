@@ -71,40 +71,60 @@ array_new_decl (llvm::Module *module)
 
 } // namespace
 
-/// The element type the suffixed forms of ldelem and stelem carry in the opcode.
+/// The built-in type the suffixed forms of ldelem, stelem, ldind and stind carry in
+/// the opcode.
 MonoType *
 MethodLLVMEmitter::builtin_element_type (int opcode)
 {
 	switch (opcode) {
 	case MONO_CEE_LDELEM_I1:
+	case MONO_CEE_LDIND_I1:
 		return m_class_get_byval_arg (mono_defaults.sbyte_class);
 	case MONO_CEE_LDELEM_U1:
 	case MONO_CEE_STELEM_I1:
+	case MONO_CEE_LDIND_U1:
+	case MONO_CEE_STIND_I1:
 		return m_class_get_byval_arg (mono_defaults.byte_class);
 	case MONO_CEE_LDELEM_I2:
+	case MONO_CEE_LDIND_I2:
 		return m_class_get_byval_arg (mono_defaults.int16_class);
 	case MONO_CEE_LDELEM_U2:
 	case MONO_CEE_STELEM_I2:
+	case MONO_CEE_LDIND_U2:
+	case MONO_CEE_STIND_I2:
 		return m_class_get_byval_arg (mono_defaults.uint16_class);
 	case MONO_CEE_LDELEM_I4:
 	case MONO_CEE_STELEM_I4:
+	case MONO_CEE_LDIND_I4:
+	case MONO_CEE_STIND_I4:
 		return mono_get_int32_type ();
 	case MONO_CEE_LDELEM_U4:
+	case MONO_CEE_LDIND_U4:
 		return m_class_get_byval_arg (mono_defaults.uint32_class);
 	case MONO_CEE_LDELEM_I8:
 	case MONO_CEE_STELEM_I8:
+	case MONO_CEE_LDIND_I8:
+	case MONO_CEE_STIND_I8:
 		return m_class_get_byval_arg (mono_defaults.int64_class);
 	case MONO_CEE_LDELEM_I:
 	case MONO_CEE_STELEM_I:
+	case MONO_CEE_LDIND_I:
+	case MONO_CEE_STIND_I:
 		return mono_get_int_type ();
 	case MONO_CEE_LDELEM_R4:
 	case MONO_CEE_STELEM_R4:
+	case MONO_CEE_LDIND_R4:
+	case MONO_CEE_STIND_R4:
 		return m_class_get_byval_arg (mono_defaults.single_class);
 	case MONO_CEE_LDELEM_R8:
 	case MONO_CEE_STELEM_R8:
+	case MONO_CEE_LDIND_R8:
+	case MONO_CEE_STIND_R8:
 		return m_class_get_byval_arg (mono_defaults.double_class);
 	case MONO_CEE_LDELEM_REF:
 	case MONO_CEE_STELEM_REF:
+	case MONO_CEE_LDIND_REF:
+	case MONO_CEE_STIND_REF:
 		return mono_get_object_type ();
 	default:
 		llvm::report_fatal_error ("builtin_element_type: not an element opcode");

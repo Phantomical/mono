@@ -353,6 +353,11 @@ private:
 	llvm::Error emit_ldelem (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
 
+	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
+	                                                StackValue address);
+	llvm::Error emit_ldind (MonoIrBuilder &builder, MonoType *element);
+	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
+
 	llvm::Error emit_ldsfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldsflda (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stsfld (MonoIrBuilder &builder, uint32_t token);

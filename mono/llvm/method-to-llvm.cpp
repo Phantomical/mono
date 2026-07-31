@@ -772,6 +772,28 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_stelem (builder, *element);
 	}
 
+	case MONO_CEE_LDIND_I1:
+	case MONO_CEE_LDIND_U1:
+	case MONO_CEE_LDIND_I2:
+	case MONO_CEE_LDIND_U2:
+	case MONO_CEE_LDIND_I4:
+	case MONO_CEE_LDIND_U4:
+	case MONO_CEE_LDIND_I8:
+	case MONO_CEE_LDIND_I:
+	case MONO_CEE_LDIND_R4:
+	case MONO_CEE_LDIND_R8:
+	case MONO_CEE_LDIND_REF:
+		return emit_ldind (builder, builtin_element_type (opcode));
+	case MONO_CEE_STIND_REF:
+	case MONO_CEE_STIND_I1:
+	case MONO_CEE_STIND_I2:
+	case MONO_CEE_STIND_I4:
+	case MONO_CEE_STIND_I8:
+	case MONO_CEE_STIND_R4:
+	case MONO_CEE_STIND_R8:
+	case MONO_CEE_STIND_I:
+		return emit_stind (builder, builtin_element_type (opcode));
+
 	case MONO_CEE_LDSFLD:
 		return emit_ldsfld (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_LDSFLDA:
