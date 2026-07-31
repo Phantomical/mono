@@ -570,6 +570,17 @@ MethodLLVMEmitter::emit ()
 			pop_stack (stack.size ());
 			builder.SetInsertPoint (next.block);
 			reload_stack (builder, next);
+
+			/*
+			 * Entering a catch or filter handler is the one moment the caught
+			 * exception is reliably in hand, so it is remembered here for the
+			 * rethrow that may want it after the body has emptied the stack.
+			 */
+			for (uint32_t i = 0; i < num_clauses; ++i)
+				if (clauses[i].handler_offset == ip && !stack.empty ()
+				    && (clauses[i].flags == MONO_EXCEPTION_CLAUSE_NONE
+				        || clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER))
+					clause_state[i].caught = stack.front ().value;
 		} else if (builder.GetInsertBlock ()->getTerminator () != nullptr) {
 			return invalid_il ("unreachable instruction is not the start of a block");
 		}

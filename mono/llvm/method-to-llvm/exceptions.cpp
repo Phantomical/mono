@@ -241,17 +241,18 @@ MethodLLVMEmitter::emit_rethrow (MonoIrBuilder &builder)
 		return invalid_il ("rethrow is only valid inside a catch handler");
 
 	/*
-	 * The exception a catch handler was entered with is the one on the bottom of its
-	 * stack, put there by the runtime rather than by any instruction here.
+	 * The exception is not a stack operand - the handler was handed it on entry,
+	 * and by here the body has usually stored it away or discarded it. The value
+	 * remembered at the handler's entry is the one the runtime put there.
 	 */
-	if (stack.empty ())
-		return unbalanced_stack (1);
+	llvm::Value *caught = clause_state[clause].caught;
 
-	StackValue caught = stack.front ();
+	if (caught == nullptr)
+		return invalid_il ("rethrow is only valid inside a catch handler");
 
 	pop_stack (stack.size ());
 	emit_unwinding_call (builder, throw_decl (module, "mono_llvm_rethrow_exception"),
-	                     { caught.value });
+	                     { caught });
 	return llvm::Error::success ();
 }
 

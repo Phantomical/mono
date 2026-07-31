@@ -168,6 +168,13 @@ private:
 		llvm::AllocaInst *resume_at = nullptr;
 		llvm::SwitchInst *resume = nullptr;
 		std::vector<std::pair<uint32_t, llvm::BasicBlock *>> continuations;
+		/*
+		 * The exception a catch or filter handler was entered with, as loaded at
+		 * the handler's entry. rethrow reaches for it long after the body has
+		 * taken the stack apart, and a handler is only enterable at its start, so
+		 * the entry value dominates every use.
+		 */
+		llvm::Value *caught = nullptr;
 	};
 
 	MonoExceptionClause *clauses = nullptr;
