@@ -141,6 +141,9 @@ add_custom_target(check
   USES_TERMINAL
   VERBATIM)
 add_dependencies(check mini-corpora unit-test-assemblies)
+if(TARGET mono-llvm-test-corpora)
+  add_dependencies(check mono-llvm-test-corpora)
+endif()
 
 add_custom_target(check-all
   COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
@@ -149,6 +152,9 @@ add_custom_target(check-all
   USES_TERMINAL
   VERBATIM)
 add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
+if(TARGET mono-llvm-test-corpora)
+  add_dependencies(check-all mono-llvm-test-corpora)
+endif()
 
 # The CoreCLR suites and ms-test-suite, with the hours-long members
 # (coreclr-gcstress, profiler-stress, the microbenchmarks) left behind their

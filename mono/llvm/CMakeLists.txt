@@ -20,3 +20,7 @@ mono_add_object_library(mono-llvm
 )
 
 add_dependencies(mono-llvm mini)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
