@@ -264,8 +264,9 @@ private:
 	llvm::Error emit_switch (MonoIrBuilder &builder);
 
 	void emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name);
-	void emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
-	                          const char *name);
+	llvm::BranchInst *emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
+	                                       const char *name);
+	void emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer);
 
 	void emit_division_guards (MonoIrBuilder &builder, llvm::Value *lhs, llvm::Value *rhs,
 	                           bool is_signed);
@@ -310,6 +311,13 @@ private:
 	llvm::Error emit_ldc_i8 (MonoIrBuilder &builder, int64_t value);
 	llvm::Error emit_ldc_r4 (MonoIrBuilder &builder, uint32_t bits);
 	llvm::Error emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits);
+
+	llvm::Expected<MonoClassField *> resolve_field (uint32_t token);
+	llvm::Expected<llvm::Value *> field_address (MonoIrBuilder &builder, StackValue object,
+	                                             MonoClassField *field);
+	llvm::Error emit_ldfld (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_ldflda (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_stfld (MonoIrBuilder &builder, uint32_t token);
 
 	llvm::Error emit_ldarg (MonoIrBuilder &builder, uint32_t index);
 	llvm::Error emit_ldarga (MonoIrBuilder &builder, uint32_t index);

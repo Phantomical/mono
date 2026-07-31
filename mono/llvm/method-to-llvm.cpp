@@ -574,7 +574,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	}
 	case MonoInlineI:
 	case MonoShortInlineR:
-	case MonoInlineBrTarget: {
+	case MonoInlineBrTarget:
+	case MonoInlineField: {
 		llvm::Expected<uint32_t> read = read_u32 ();
 
 		if (!read)
@@ -642,6 +643,13 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_ldc_r4 (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_LDC_R8:
 		return emit_ldc_r8 (builder, operand);
+
+	case MONO_CEE_LDFLD:
+		return emit_ldfld (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDFLDA:
+		return emit_ldflda (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_STFLD:
+		return emit_stfld (builder, static_cast<uint32_t> (operand));
 
 	case MONO_CEE_LDARG:
 	case MONO_CEE_LDARG_S:
@@ -877,7 +885,7 @@ MethodLLVMEmitter::emit_throw_corlib_exception (MonoIrBuilder &builder, const ch
 
 /// Throw the corlib exception NAME when CONDITION holds, and go on emitting into the
 /// block where it did not.
-void
+llvm::BranchInst *
 MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
                                         const char *name)
 {
@@ -898,6 +906,25 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 	emit_throw_corlib_exception (builder, name);
 
 	builder.SetInsertPoint (next_bb);
+	return branch;
+}
+
+/// Throw NullReferenceException if POINTER is null, and go on emitting where it was not.
+///
+/// The branch is tagged !make.implicit, which is what lets LLVM's ImplicitNullChecks
+/// pass delete it again: it folds the test into whichever faulting memory operation
+/// follows in the not-taken block and records the fault address in a fault map, so the
+/// check costs nothing until it fires. That only works in the shape emitted here - the
+/// dereference in the not-taken arm, on the pointer that was tested - and the pass
+/// declines and leaves the branch alone when the field offset is too far into the page
+/// for the hardware to trap on it.
+void
+MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer)
+{
+	llvm::BranchInst *branch = emit_cond_exception (builder, builder.CreateIsNull (pointer),
+	                                                "NullReferenceException");
+
+	branch->setMetadata ("make.implicit", llvm::MDNode::get (context (), {}));
 }
 
 llvm::Error
