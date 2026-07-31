@@ -262,8 +262,10 @@ private:
 	llvm::Error emit_rethrow (MonoIrBuilder &builder);
 	llvm::Error emit_br (MonoIrBuilder &builder, int32_t displacement);
 	llvm::Error emit_brcond (MonoIrBuilder &builder, int32_t displacement, bool branch_if_true);
+	llvm::Expected<llvm::Value *> emit_comparison (MonoIrBuilder &builder, BinaryOp op);
 	llvm::Error emit_branch_compare (MonoIrBuilder &builder, BinaryOp op,
 	                                 int32_t displacement);
+	llvm::Error emit_compare (MonoIrBuilder &builder, BinaryOp op);
 	llvm::Error emit_switch (MonoIrBuilder &builder);
 
 	void emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name);

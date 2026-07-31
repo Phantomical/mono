@@ -907,6 +907,17 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_BLT_UN_S:
 		return emit_branch_compare (builder, BinaryOp::BltUn, displacement);
 
+	case MONO_CEE_CEQ:
+		return emit_compare (builder, BinaryOp::Beq);
+	case MONO_CEE_CGT:
+		return emit_compare (builder, BinaryOp::Bgt);
+	case MONO_CEE_CGT_UN:
+		return emit_compare (builder, BinaryOp::BgtUn);
+	case MONO_CEE_CLT:
+		return emit_compare (builder, BinaryOp::Blt);
+	case MONO_CEE_CLT_UN:
+		return emit_compare (builder, BinaryOp::BltUn);
+
 	case MONO_CEE_AND:
 		return emit_and (builder);
 	case MONO_CEE_OR:

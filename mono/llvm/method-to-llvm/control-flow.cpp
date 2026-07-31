@@ -143,6 +143,31 @@ float_predicate (BinaryOp op)
 
 } // namespace
 
+/// Pop the two operands Table III.4 allows for OP and compare them, leaving the i1.
+///
+/// The table's cell says what the two are compared as rather than what is left behind:
+/// an int32 against a native int is settled at native int width, and two managed
+/// pointers as addresses.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::emit_comparison (MonoIrBuilder &builder, BinaryOp op)
+{
+	llvm::Expected<BinaryOperands> operands = pop_binary_operands (op);
+	if (!operands)
+		return operands.takeError ();
+
+	auto [value1, value2, common] = *operands;
+	llvm::Expected<llvm::Type *> type = convert_type (common);
+	if (!type)
+		return type.takeError ();
+
+	llvm::Value *lhs = coerce (builder, value1.value, *type);
+	llvm::Value *rhs = coerce (builder, value2.value, *type);
+
+	if ((*type)->isFloatingPointTy ())
+		return builder.CreateFCmp (float_predicate (op), lhs, rhs);
+	return builder.CreateICmp (integer_predicate (op), lhs, rhs);
+}
+
 /*
  * III.3.15  br.<length> - unconditional branch
  *
@@ -372,29 +397,13 @@ llvm::Error
 MethodLLVMEmitter::emit_branch_compare (MonoIrBuilder &builder, BinaryOp op,
                                         int32_t displacement)
 {
-	llvm::Expected<BinaryOperands> operands = pop_binary_operands (op);
-	if (!operands)
-		return operands.takeError ();
-
-	auto [value1, value2, common] = *operands;
-	llvm::Expected<llvm::Type *> type = convert_type (common);
-	if (!type)
-		return type.takeError ();
+	llvm::Expected<llvm::Value *> condition = emit_comparison (builder, op);
+	if (!condition)
+		return condition.takeError ();
 
 	llvm::Expected<size_t> target = branch_target (displacement);
 	if (!target)
 		return target.takeError ();
-
-	/*
-	 * Table III.4's cell says what the two are compared as rather than what is left
-	 * behind, since a branch leaves nothing: an int32 against a native int is settled
-	 * at native int width, and two managed pointers as addresses.
-	 */
-	llvm::Value *lhs = coerce (builder, value1.value, *type);
-	llvm::Value *rhs = coerce (builder, value2.value, *type);
-	llvm::Value *condition = (*type)->isFloatingPointTy ()
-	                                 ? builder.CreateFCmp (float_predicate (op), lhs, rhs)
-	                                 : builder.CreateICmp (integer_predicate (op), lhs, rhs);
 
 	std::vector<Slot> slots = spill_stack (builder);
 
@@ -403,7 +412,7 @@ MethodLLVMEmitter::emit_branch_compare (MonoIrBuilder &builder, BinaryOp op,
 	if (llvm::Error error = enter_block (ip, slots))
 		return error;
 
-	builder.CreateCondBr (condition, blocks[*target].block, blocks[ip].block);
+	builder.CreateCondBr (*condition, blocks[*target].block, blocks[ip].block);
 	return llvm::Error::success ();
 }
 
