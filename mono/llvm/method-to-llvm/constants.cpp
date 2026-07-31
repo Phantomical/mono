@@ -304,4 +304,64 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.4.25  sizeof - load the size, in bytes, of a type
+ *
+ *   Format        Assembly Format   Description
+ *   FE 1C <T>     sizeof typeTok    Push the size, in bytes, of a type as an unsigned
+ *                                   int32.
+ *
+ * Stack Transition:
+ *
+ *   ..., -> ..., size (4 bytes, unsigned)
+ *
+ * Description:
+ *
+ *   Returns the size, in bytes, of a type. typeTok can be a generic parameter, a
+ *   reference type or a value type.
+ *
+ *   For a reference type, the size returned is the size of a reference value of the
+ *   corresponding type, not the size of the data stored in objects referred to by a
+ *   reference value.
+ *
+ *   [Rationale: The definition of a value type can change between the time the CIL is
+ *   generated and the time that it is loaded for execution. Thus, the size of the
+ *   type is not always known when the CIL is generated. The sizeof instruction allows
+ *   CIL code to determine the size at runtime without the need to call into the
+ *   Framework class library. The computation can occur entirely at runtime or at
+ *   CIL-to-native-code compilation time. sizeof returns the total size that would be
+ *   occupied by each element in an array of this type - including any padding the
+ *   implementation chooses to add. Specifically, array elements lie sizeof bytes
+ *   apart. end rationale]
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness:
+ *
+ *   typeTok shall be a typedef, typeref, or typespec metadata token.
+ *
+ * Verifiability:
+ *
+ *   It is always verifiable.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_sizeof (MonoIrBuilder &builder, uint32_t token)
+{
+	llvm::Expected<MonoType *> type = element_type_from_token (token);
+	if (!type)
+		return type.takeError ();
+
+	uint32_t size =
+		mini_type_is_reference (*type)
+			? TARGET_SIZEOF_VOID_P
+			: mono_class_value_size (mono_class_from_mono_type_internal (*type),
+	                                         NULL);
+
+	push_stack (builder.getInt32 (size),
+	            m_class_get_byval_arg (mono_defaults.uint32_class));
+	return llvm::Error::success ();
+}
+
 } // namespace mono

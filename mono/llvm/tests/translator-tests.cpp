@@ -143,6 +143,14 @@ const MethodRef translatable[] = {
 	{ "boxing", "Boxing:UnboxAnyPair" },
 	{ "boxing", "Boxing:RoundTrip" },
 
+	{ "misc", "Misc:SizeOfInt" },
+	{ "misc", "Misc:SizeOfObject" },
+	{ "misc", "Misc:SizeOfWide" },
+	{ "misc", "Misc:CheckFinite" },
+	{ "misc", "Misc:Breakpoint" },
+	{ "misc", "Misc:StackAlloc" },
+	{ "misc", "Misc:StackAllocZeroed" },
+
 	{ "blocks", "Blocks:Copy" },
 	{ "blocks", "Blocks:CopyUnaligned" },
 	{ "blocks", "Blocks:Fill" },
@@ -558,6 +566,49 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
 }
 
+/* ------------------------------------------------------------------- misc */
+
+// sizeof settles at compile time, and array elements lie sizeof bytes apart - so a
+// two-int64 struct answers 16, and any reference type the width of a pointer.
+TEST_F (TranslatorTest, SizeofIsACompileTimeConstant)
+{
+	EXPECT_EQ (translate ("misc", "Misc:SizeOfInt").count ("ret i32 4"), 1u);
+	EXPECT_EQ (translate ("misc", "Misc:SizeOfObject").count ("ret i32 8"), 1u);
+	EXPECT_EQ (translate ("misc", "Misc:SizeOfWide").count ("ret i32 16"), 1u);
+}
+
+// NaN answers |x| >= inf by being unordered, either infinity by being equal.
+TEST_F (TranslatorTest, CkfiniteRejectsNanAndInfinity)
+{
+	const Translation &t = translate ("misc", "Misc:CheckFinite");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("llvm.fabs"), 1u);
+	EXPECT_EQ (t.count ("fcmp ueq"), 1u);
+	EXPECT_GE (t.count ("throw_ArithmeticException"), 1u);
+}
+
+TEST_F (TranslatorTest, BreakBecomesADebugTrap)
+{
+	EXPECT_EQ (translate ("misc", "Misc:Breakpoint").count ("llvm.debugtrap"), 1u);
+}
+
+// localloc is a dynamic alloca; the localsinit flag decides whether it is zeroed.
+TEST_F (TranslatorTest, LocallocIsADynamicAlloca)
+{
+	const Translation &raw = translate ("misc", "Misc:StackAlloc");
+	const Translation &zeroed = translate ("misc", "Misc:StackAllocZeroed");
+
+	ASSERT_NE (raw.function, nullptr) << raw.error;
+	EXPECT_EQ (raw.count ("alloca i8, i64"), 1u) << raw.text ();
+	EXPECT_EQ (raw.count ("llvm.memset"), 0u);
+
+	ASSERT_NE (zeroed.function, nullptr) << zeroed.error;
+	/* One more than the locals' own zeroing accounts for: the localloc block's. */
+	EXPECT_GT (zeroed.count ("llvm.memset"), raw.count ("llvm.memset"));
+	EXPECT_EQ (zeroed.count ("alloca i8, i64"), 1u);
+}
+
 /* ----------------------------------------------------------------- blocks */
 
 TEST_F (TranslatorTest, BlockOpsBecomeTheIntrinsics)
@@ -795,6 +846,9 @@ const RefusalRef refusals[] = {
 	{ "Refused:FallsOffTheEnd", "return" },
 	{ "Refused:BoxesANullable", "nullable" },
 	{ "Refused:ConstrainedBoxes", "boxes" },
+	{ "Refused:UsesJmp", "jmp" },
+	{ "Refused:UsesArglist", "arglist" },
+	{ "Refused:UsesMkrefany", "mkrefany" },
 };
 
 INSTANTIATE_TEST_SUITE_P (Corpus, Refuses, testing::ValuesIn (refusals),

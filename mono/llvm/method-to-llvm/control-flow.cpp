@@ -513,4 +513,41 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.16  break - breakpoint instruction
+ *
+ *   Format   Assembly Format   Description
+ *   01       break             Inform a debugger that a breakpoint has been reached.
+ *
+ * Stack Transition:
+ *
+ *   ..., -> ...
+ *
+ * Description:
+ *
+ *   The break instruction is for debugging support. It signals the CLI to inform the
+ *   debugger that a break point has been tripped. It has no other effect on the
+ *   interpreter state.
+ *
+ *   The break instruction has the smallest possible instruction size so that code can
+ *   be patched with a breakpoint with minimal disturbance to the surrounding code.
+ *
+ *   The break instruction might trap to a debugger, do nothing, or raise a security
+ *   exception: the exact behavior is implementation-defined.
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Verifiability:
+ *
+ *   The break instruction is always verifiable.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_break (MonoIrBuilder &builder)
+{
+	builder.CreateIntrinsic (llvm::Intrinsic::debugtrap, {}, {});
+	return llvm::Error::success ();
+}
+
 } // namespace mono

@@ -59,6 +59,35 @@
 		callvirt instance string [mscorlib]System.Object::ToString ()
 		ret
 	}
+
+	.method public static void UsesJmp () cil managed
+	{
+		.maxstack 0
+		jmp void Refused::Target ()
+	}
+
+	.method public static void Target () cil managed
+	{
+		.maxstack 0
+		ret
+	}
+
+	.method public static vararg int32 UsesArglist () cil managed
+	{
+		.maxstack 1
+		arglist
+		pop
+		ldc.i4.0
+		ret
+	}
+
+	.method public static typedref UsesMkrefany (int32& p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		mkrefany [mscorlib]System.Int32
+		ret
+	}
 }
 
 .class public sequential ansi sealed beforefieldinit Plain extends [mscorlib]System.ValueType

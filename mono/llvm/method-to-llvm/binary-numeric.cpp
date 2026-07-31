@@ -3,6 +3,8 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata.h"
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <string>
@@ -1129,6 +1131,64 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 
 	pop_stack (1);
 	push_stack (negated, result);
+	return llvm::Error::success ();
+}
+
+/*
+ * III.3.24  ckfinite - check for a finite real number
+ *
+ *   Format   Assembly Format   Description
+ *   C3       ckfinite          Throw ArithmeticException if value is not a finite
+ *                              number.
+ *
+ * Stack Transition:
+ *
+ *   ..., value -> ..., value
+ *
+ * Description:
+ *
+ *   The ckfinite instruction throws ArithmeticException if value (a floating-point
+ *   number) is either a "not a number" value (NaN) or +/- infinity value. ckfinite
+ *   leaves the value on the stack if no exception is thrown. Execution behavior is
+ *   unspecified if value is not a floating-point number.
+ *
+ * Exceptions:
+ *
+ *   System.ArithmeticException is thrown if value is a NaN or an infinity.
+ *
+ * Correctness:
+ *
+ *   Correct CIL guarantees that value is a floating-point number.
+ *
+ * Verifiability:
+ *
+ *   There are no additional verification requirements.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ckfinite (MonoIrBuilder &builder)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	StackValue value = get_stack (0);
+
+	if (stack_type (value.type) != Float)
+		return invalid_il (llvm::Twine ("ckfinite is not defined for operand type ")
+		                   + describe (value.type, stack_type (value.type)));
+
+	/*
+	 * |x| compared unordered-or-equal against infinity says yes for exactly the
+	 * three values this must reject: NaN by being unordered, either infinity by
+	 * being equal.
+	 */
+	llvm::Type *ftype = value.value->getType ();
+	llvm::Value *magnitude = builder.CreateUnaryIntrinsic (llvm::Intrinsic::fabs,
+	                                                       value.value);
+
+	emit_cond_exception (builder,
+	                     builder.CreateFCmpUEQ (magnitude,
+	                                            llvm::ConstantFP::getInfinity (ftype)),
+	                     "ArithmeticException");
 	return llvm::Error::success ();
 }
 

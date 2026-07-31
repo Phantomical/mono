@@ -422,6 +422,10 @@ private:
 	llvm::Error emit_ldloc (MonoIrBuilder &builder, uint32_t index);
 	llvm::Error emit_ldloca (MonoIrBuilder &builder, uint32_t index);
 	llvm::Error emit_stloc (MonoIrBuilder &builder, uint32_t index);
+	llvm::Error emit_localloc (MonoIrBuilder &builder);
+	llvm::Error emit_sizeof (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_ckfinite (MonoIrBuilder &builder);
+	llvm::Error emit_break (MonoIrBuilder &builder);
 
 private:
 	/// The next byte of the IL stream, or a refusal if the instruction runs off the

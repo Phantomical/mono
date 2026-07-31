@@ -263,4 +263,88 @@ MethodLLVMEmitter::emit_stloc (MonoIrBuilder &builder, uint32_t index)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.47  localloc - allocate space in the local dynamic memory pool
+ *
+ *   Format   Assembly Format   Description
+ *   FE 0F    localloc          Allocate space from the local memory pool.
+ *
+ * Stack Transition:
+ *
+ *   size -> address
+ *
+ * Description:
+ *
+ *   The localloc instruction allocates size (type native unsigned int or U4) bytes
+ *   from the local dynamic memory pool and returns the address (an unmanaged pointer,
+ *   type native int) of the first allocated byte. If the localsinit flag on the
+ *   method is true, the block of memory returned is initialized to 0; otherwise, the
+ *   initial value of that block of memory is unspecified. The area of memory is newly
+ *   allocated. When the current method returns, the local memory pool is available
+ *   for reuse.
+ *
+ *   address is aligned so that any built-in data type can be stored there using the
+ *   stind instructions and loaded using the ldind instructions.
+ *
+ *   The localloc instruction cannot occur within an exception block: filter, catch,
+ *   finally, or fault.
+ *
+ *   [Rationale: localloc is used to create local aggregates whose size shall be
+ *   computed at runtime. It can be used for C's intrinsic alloca method. end
+ *   rationale]
+ *
+ * Exceptions:
+ *
+ *   System.StackOverflowException is thrown if there is insufficient memory to
+ *   service the request.
+ *
+ * Correctness:
+ *
+ *   Correct CIL requires that the evaluation stack be empty, apart from the size item
+ *
+ * Verifiability:
+ *
+ *   This instruction is never verifiable.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_localloc (MonoIrBuilder &builder)
+{
+	if (stack.size () != 1)
+		return invalid_il ("localloc needs the size as the only thing on the stack");
+	if (innermost_handler (offset) >= 0)
+		return invalid_il ("localloc cannot occur inside an exception handler");
+
+	StackValue size = get_stack (0);
+	StackType size_type = stack_type (size.type);
+
+	if (size_type != Int32 && size_type != NativeInt)
+		return invalid_il (llvm::Twine ("a localloc size cannot be operand type ")
+		                   + describe (size.type, size_type));
+
+	llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+	llvm::Value *bytes = size.value;
+
+	if (bytes->getType ()->isPointerTy ())
+		bytes = builder.CreatePtrToInt (bytes, native);
+	bytes = builder.CreateZExtOrTrunc (bytes, native);
+
+	/*
+	 * A dynamic alloca, deliberately not in the entry block: its size is only known
+	 * here, and the frame reclaims it at return exactly as the pool the spec
+	 * describes would.
+	 */
+	llvm::AllocaInst *block =
+		builder.CreateAlloca (builder.getInt8Ty (), bytes, "localloc");
+
+	block->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	if (cfg->header->init_locals)
+		builder.CreateMemSet (block, builder.getInt8 (0), bytes,
+		                      llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	pop_stack (1);
+	push_stack (block, mono_get_int_type ());
+	return llvm::Error::success ();
+}
+
 } // namespace mono

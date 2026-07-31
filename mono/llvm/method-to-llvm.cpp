@@ -707,8 +707,16 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	switch (opcode) {
 	case MONO_CEE_NOP:
 		return llvm::Error::success ();
+	case MONO_CEE_BREAK:
+		return emit_break (builder);
 	case MONO_CEE_RET:
 		return emit_ret (builder);
+	case MONO_CEE_LOCALLOC:
+		return emit_localloc (builder);
+	case MONO_CEE_SIZEOF:
+		return emit_sizeof (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_CKFINITE:
+		return emit_ckfinite (builder);
 
 	case MONO_CEE_LDC_I4:
 		return emit_ldc_i4 (builder, static_cast<int32_t> (operand));
