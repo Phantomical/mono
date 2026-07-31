@@ -64,14 +64,6 @@
 		ret
 	}
 
-	.method public static typedref UsesMkrefany (int32& p) cil managed
-	{
-		.maxstack 1
-		ldarg.0
-		mkrefany [mscorlib]System.Int32
-		ret
-	}
-
 	.method public static int32 MergesAStructWithAnInt (int32 c, valuetype Plain p) cil managed
 	{
 		.maxstack 1

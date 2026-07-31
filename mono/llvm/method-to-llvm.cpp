@@ -72,12 +72,6 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method)
 	return emitter.emit ();
 }
 
-llvm::LLVMContext &
-MethodLLVMEmitter::context () const
-{
-	return module->getContext ();
-}
-
 /// How the CLI categorizes T on the evaluation stack.
 StackType
 MethodLLVMEmitter::stack_type (MonoType *t)
@@ -894,6 +888,13 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_castclass (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_ISINST:
 		return emit_isinst (builder, static_cast<uint32_t> (operand));
+
+	case MONO_CEE_MKREFANY:
+		return emit_mkrefany (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_REFANYVAL:
+		return emit_refanyval (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_REFANYTYPE:
+		return emit_refanytype (builder);
 
 	case MONO_CEE_LDSFLD:
 		return emit_ldsfld (builder, static_cast<uint32_t> (operand));

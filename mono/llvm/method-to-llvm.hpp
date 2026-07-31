@@ -227,7 +227,9 @@ public:
 private:
 	typedef llvm::IRBuilder<> MonoIrBuilder;
 
-	llvm::LLVMContext &context () const;
+	llvm::LLVMContext &context () const {
+		return module->getContext ();
+	}
 
 	llvm::Expected<llvm::Function *> create_method_decl (MonoMethod *method);
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig);
@@ -369,6 +371,11 @@ private:
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_calli (MonoIrBuilder &builder, uint32_t token);
+
+	llvm::Value *spill_to_temporary (MonoIrBuilder &builder, MonoType *type);
+	llvm::Error emit_mkrefany (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_refanyval (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_refanytype (MonoIrBuilder &builder);
 
 	llvm::FunctionCallee wbarrier_decl ();
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);

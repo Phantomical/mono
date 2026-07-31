@@ -191,6 +191,11 @@ const MethodRef translatable[] = {
 	{"fnptr", "Fnptr:CallNative"},
 	{"fnptr", "Fnptr:TailThroughPointer"},
 
+	{"typedref", "TypedRef:MakeRef"},
+	{"typedref", "TypedRef:ReadBack"},
+	{"typedref", "TypedRef:TypeOfRef"},
+	{"typedref", "TypedRef:ValueOfRef"},
+
 	{"objects", "Objects:MakeCounter"},
 	{"objects", "Objects:MakeCounterAt"},
 	{"objects", "Objects:MakePoint"},
@@ -952,6 +957,30 @@ TEST_F (TranslatorTest, LdvirtftnAsksTheRuntime)
 	EXPECT_EQ (t.count ("@\"mono_method_"), 1u);
 }
 
+/* ---------------------------------------------------------------- typedref */
+
+// The descriptor mkrefany builds names the class twice: the klass field holds the
+// class itself, and the type field points at the MonoType living inside it - the
+// same symbol at an offset.
+TEST_F (TranslatorTest, MkrefanyDescribesTheClassAndTheAddress)
+{
+	const Translation &t = translate ("typedref", "TypedRef:MakeRef");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_GE (t.count ("mono_class_int"), 2u) << t.text ();
+}
+
+// refanyval only hands the address back when the descriptor's class is exactly the
+// asked-for one; anything else is an InvalidCastException.
+TEST_F (TranslatorTest, RefanyvalChecksTheClassBeforeTakingTheAddress)
+{
+	const Translation &t = translate ("typedref", "TypedRef:ValueOfRef");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_class_int"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("throw_InvalidCastException"), 2u); // 1 block, label + branch
+}
+
 /* ----------------------------------------------------------------- newobj */
 
 TEST_F (TranslatorTest, NewobjAllocatesThenCallsTheConstructor)
@@ -1106,7 +1135,6 @@ const RefusalRef refusals[] = {
 	{"Refused:ConstrainedPlainCall", "plain call"},
 	{"Refused:UsesJmp", "jmp"},
 	{"Refused:UsesArglist", "arglist"},
-	{"Refused:UsesMkrefany", "mkrefany"},
 	{"Refused:MergesAStructWithAnInt", "different type"},
 };
 
