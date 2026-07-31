@@ -216,4 +216,10 @@
 		call int32 Calls::Deref (int32&)
 		ret
 	}
+
+	.method public static int32 JumpsToHelper (int32 x) cil managed
+	{
+		.maxstack 0
+		jmp int32 Calls::Helper (int32)
+	}
 }

@@ -43,7 +43,7 @@
 		ret
 	}
 
-	.method public static void UsesJmp () cil managed
+	.method public static int32 UsesJmpBadly (int32 x) cil managed
 	{
 		.maxstack 0
 		jmp void Refused::Target ()

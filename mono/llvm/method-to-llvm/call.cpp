@@ -215,10 +215,20 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	 * down to the extension attributes that say how narrow integers fill their
 	 * registers.
 	 */
+	return matching_call_abi (callee_sig, callee_type);
+}
+
+/// Whether a call to CALLEE_SIG could replace this method's own frame: the same
+/// LLVM prototype, down to the extension attributes that say how narrow integers
+/// fill their registers - compared positionally, because a this is just a leading
+/// pointer to the ABI.
+bool
+MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
+                                      llvm::FunctionType *callee_type)
+{
 	if (function->getFunctionType () != callee_type)
 		return false;
 
-	/* Positionally, because a this is just a leading pointer to the ABI. */
 	auto extensions = [] (MonoMethodSignature *s) {
 		llvm::SmallVector<llvm::Attribute::AttrKind, 8> exts;
 
@@ -255,6 +265,93 @@ MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee 
 		builder.CreateRet (call);
 
 	ip += 1;
+	return llvm::Error::success ();
+}
+
+/*
+ * III.3.37  jmp - jump to method
+ *
+ *   Format     Assembly Format   Description
+ *   27 <T>     jmp method        Exit current method and jump to the specified method.
+ *
+ * Stack Transition:
+ *
+ *   ... -> ...
+ *
+ * Description:
+ *
+ *   Transfer control to the method specified by method, which is a metadata token
+ *   (either a methodref or methoddef (See Partition II). The current arguments are
+ *   transferred to the destination method.
+ *
+ *   The evaluation stack shall be empty when this instruction is executed. The
+ *   calling convention, number and type of arguments at the destination address
+ *   shall match that of the current method.
+ *
+ *   The jmp instruction cannot be used to transferred control out of a try, filter,
+ *   catch, fault or finally block; or out of a synchronized region. If this is done,
+ *   results are undefined. See Partition I.
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness:
+ *
+ *   Correct CIL code obeys the control flow restrictions specified above.
+ *
+ * Verifiability:
+ *
+ *   The jmp instruction is never verifiable.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
+{
+	llvm::Expected<MonoMethod *> target = resolve_method (token);
+	if (!target)
+		return target.takeError ();
+
+	if (!stack.empty ())
+		return unbalanced_stack (0);
+	if (innermost_try (offset) >= 0)
+		return invalid_il ("jmp cannot transfer control out of a protected block");
+
+	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
+	if (!declaration)
+		return declaration.takeError ();
+
+	MonoMethodSignature *sig = mono_method_signature_internal (*target);
+
+	if (sig == nullptr)
+		return invalid_il ("the jmp target has no signature");
+	if (!matching_call_abi (sig, (*declaration)->getFunctionType ()))
+		return invalid_il ("the jmp target's signature does not match this method's");
+
+	/*
+	 * The arguments transfer as they currently are - anything starg wrote goes
+	 * with them - so they reload from their slots rather than from the incoming
+	 * parameter values.
+	 */
+	std::vector<llvm::Value *> values;
+
+	for (const Entry &argument : args) {
+		llvm::Expected<llvm::Type *> type = convert_type (argument.type);
+
+		if (!type)
+			return type.takeError ();
+		values.push_back (builder.CreateAlignedLoad (*type, argument.alloca,
+		                                             type_alignment (argument.type)));
+	}
+
+	llvm::CallInst *call = builder.CreateCall (*declaration, values);
+
+	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
+
+	if (call->getType ()->isVoidTy ())
+		builder.CreateRetVoid ();
+	else
+		builder.CreateRet (call);
+
 	return llvm::Error::success ();
 }
 

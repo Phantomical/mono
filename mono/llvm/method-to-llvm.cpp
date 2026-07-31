@@ -320,6 +320,11 @@ MethodLLVMEmitter::find_block_leaders ()
 		case MONO_FLOW_ERROR:
 			leaders.push_back (next);
 			break;
+		case MONO_FLOW_CALL:
+			/* jmp is the one call control never comes back from. */
+			if (opcode == MONO_CEE_JMP)
+				leaders.push_back (next);
+			break;
 		default:
 			break;
 		}
@@ -787,6 +792,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_call (builder, static_cast<uint32_t> (operand), false);
 	case MONO_CEE_CALLVIRT:
 		return emit_call (builder, static_cast<uint32_t> (operand), true);
+	case MONO_CEE_JMP:
+		return emit_jmp (builder, static_cast<uint32_t> (operand));
 
 	case MONO_CEE_NEWARR:
 		return emit_newarr (builder, static_cast<uint32_t> (operand));

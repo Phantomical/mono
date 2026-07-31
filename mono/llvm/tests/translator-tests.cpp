@@ -231,6 +231,7 @@ const MethodRef translatable[] = {
 	{"calls", "Calls:TailVirtual"},
 	{"calls", "Calls:TailMismatch"},
 	{"calls", "Calls:TailByref"},
+	{"calls", "Calls:JumpsToHelper"},
 };
 
 class Translates : public TranslatorTest, public testing::WithParamInterface<MethodRef> {};
@@ -673,6 +674,18 @@ TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 1u);
 	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("musttail call"),
 	           1u);
+}
+
+// jmp transfers the current arguments to a matching method: they reload from
+// their slots (so anything starg wrote goes along) into a musttail call whose
+// result is returned directly.
+TEST_F (TranslatorTest, JmpReloadsTheArgumentsIntoAMustTailCall)
+{
+	const Translation &t = translate ("calls", "Calls:JumpsToHelper");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("musttail call"), 1u) << t.text ();
+	EXPECT_GE (t.count ("Calls:Helper"), 1u);
 }
 
 // Declining a tail. prefix is always legal, and it is how every risky case is
@@ -1133,7 +1146,7 @@ const RefusalRef refusals[] = {
 	{"Refused:BadLocalIndex", "local"},
 	{"Refused:FallsOffTheEnd", "return"},
 	{"Refused:ConstrainedPlainCall", "plain call"},
-	{"Refused:UsesJmp", "jmp"},
+	{"Refused:UsesJmpBadly", "signature"},
 	{"Refused:UsesArglist", "arglist"},
 	{"Refused:MergesAStructWithAnInt", "different type"},
 };

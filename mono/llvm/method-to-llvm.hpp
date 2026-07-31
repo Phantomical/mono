@@ -365,6 +365,8 @@ private:
 	llvm::Constant *method_symbol (MonoMethod *target);
 	bool should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
 	                       llvm::FunctionType *callee_type);
+	bool matching_call_abi (MonoMethodSignature *callee_sig, llvm::FunctionType *callee_type);
+	llvm::Error emit_jmp (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                            llvm::ArrayRef<llvm::Value *> args, size_t arg_slots);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
