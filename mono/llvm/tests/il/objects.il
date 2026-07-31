@@ -88,4 +88,13 @@
 		ldfld int32 Point::X
 		ret
 	}
+
+	.method public static string MakeString () cil managed
+	{
+		.maxstack 2
+		ldc.i4.s 97
+		ldc.i4.3
+		newobj instance void [mscorlib]System.String::.ctor (char, int32)
+		ret
+	}
 }

@@ -182,6 +182,7 @@ const MethodRef translatable[] = {
 	{"objects", "Objects:MakeCounterAt"},
 	{"objects", "Objects:MakePoint"},
 	{"objects", "Objects:UseThePoint"},
+	{"objects", "Objects:MakeString"},
 
 	{"tokens", "Tokens:Hello"},
 	{"tokens", "Tokens:SameLiteralTwice"},
@@ -848,6 +849,19 @@ TEST_F (TranslatorTest, ValueTypeNewobjConstructsInATemp)
 	EXPECT_GE (t.count ("Point:.ctor"), 1u);
 }
 
+// A string cannot be allocated before its length is known, so nothing is allocated
+// here: the constructor compiles as a creator that takes a null this and returns the
+// string it built.
+TEST_F (TranslatorTest, StringNewobjCallsTheCreatorWithANullThis)
+{
+	const Translation &t = translate ("objects", "Objects:MakeString");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (t.count ("call ptr @\"string:.ctor"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("(ptr null"), 1u);
+}
+
 /* ----------------------------------------------------------------- tokens */
 
 // The interned string is a runtime object, so it rides on a symbol the engine
@@ -953,7 +967,6 @@ TEST_P (Refuses, WithAnErrorRatherThanACrash)
 }
 
 const RefusalRef refusals[] = {
-	{"Refused:UsesAStringCtor", "string constructor"},
 	{"Refused:StackUnderflow", "stack"},
 	{"Refused:BadLocalIndex", "local"},
 	{"Refused:FallsOffTheEnd", "return"},

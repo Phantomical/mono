@@ -87,10 +87,6 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	/* Multi-dimensional and non-zero-based arrays construct through newobj. */
 	if (m_class_get_rank (klass) != 0)
 		return emit_array_newobj (builder, *target, sig);
-	/* A string constructor computes its length first and returns the string. */
-	if ((*target)->string_ctor)
-		return unsupported_il ("newobj on a string constructor");
-
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
 	if (!declaration)
 		return declaration.takeError ();
@@ -120,6 +116,21 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	llvm::AllocaInst *temp = nullptr;
 	llvm::Type *slot = nullptr;
 	llvm::Align align = type_alignment (pushed);
+
+	/*
+	 * A string cannot be allocated before its length is known, so its constructor
+	 * compiles as a creator: it takes a null this and returns the string it built.
+	 */
+	if ((*target)->string_ctor) {
+		args[0] = llvm::Constant::getNullValue (
+			llvm::PointerType::get (context (), 0));
+
+		llvm::Value *result = emit_protected_call (builder, *declaration, args);
+
+		pop_stack (count);
+		push_stack (result, pushed);
+		return llvm::Error::success ();
+	}
 
 	if (m_class_is_valuetype (klass)) {
 		/*

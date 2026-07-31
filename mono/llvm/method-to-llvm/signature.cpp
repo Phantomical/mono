@@ -2,6 +2,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
+#include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata.h"
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -290,6 +291,14 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		mono_error_cleanup (metadata_error);
 		return std::move (error);
 	}
+
+	/*
+	 * A string constructor compiles against a signature returning the string it
+	 * creates - there is no preallocated this to fill in - and every caller has
+	 * to see that shape.
+	 */
+	if (method->string_ctor)
+		sig = mono_marshal_get_string_ctor_signature (method);
 
 	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (sig);
 	if (!type)
