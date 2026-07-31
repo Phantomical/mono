@@ -2,6 +2,7 @@
 #include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/tokentype.h"
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/Error.h>
@@ -9,6 +10,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Type.h>
 #include <llvm/Support/ErrorHandling.h>
 
@@ -32,6 +34,26 @@ mono_arg_type (MonoMethod *method, size_t i)
 	}
 
 	return sig->params[i - sig->hasthis];
+}
+
+/// The runtime call that builds a corlib exception from its type token and unwinds
+/// out of the frame that called it.
+llvm::FunctionCallee
+throw_corlib_exception_decl (llvm::Module *module)
+{
+	llvm::LLVMContext &ctx = module->getContext ();
+	llvm::FunctionCallee callee =
+		module->getOrInsertFunction ("mono_llvm_throw_corlib_exception",
+		                             llvm::Type::getVoidTy (ctx),
+		                             llvm::Type::getInt32Ty (ctx));
+
+	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
+		/* Unwinding is not returning, so this stays free to throw. */
+		function->setDoesNotReturn ();
+		function->addFnAttr (llvm::Attribute::Cold);
+	}
+
+	return callee;
 }
 
 } // namespace
@@ -68,6 +90,43 @@ MethodLLVMEmitter::emit ()
 		return std::move (error);
 
 	llvm::report_fatal_error ("not implemented");
+}
+
+/// Throw the corlib exception NAME - "DivideByZeroException" and friends, from
+/// System - and end the block. Nothing after the call is reachable.
+void
+MethodLLVMEmitter::emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name)
+{
+	MonoClass *klass = mono_class_load_from_name (mono_get_corlib (), "System", name);
+	uint32_t token = m_class_get_type_token (klass) - MONO_TOKEN_TYPE_DEF;
+
+	builder.CreateCall (throw_corlib_exception_decl (module), builder.getInt32 (token));
+	builder.CreateUnreachable ();
+}
+
+/// Throw the corlib exception NAME when CONDITION holds, and go on emitting into the
+/// block where it did not.
+void
+MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
+                                        const char *name)
+{
+	llvm::BasicBlock *throw_bb =
+		llvm::BasicBlock::Create (context (), llvm::Twine ("throw_") + name, function);
+	llvm::BasicBlock *next_bb = llvm::BasicBlock::Create (context (), "no_throw", function);
+	llvm::BranchInst *branch = builder.CreateCondBr (condition, throw_bb, next_bb);
+
+	/*
+	 * These guards sit in the fallthrough path of ordinary arithmetic, so say which
+	 * way they go: otherwise the throw is as likely as the work it protects, and the
+	 * block layout interleaves the two.
+	 */
+	llvm::MDBuilder md (context ());
+	branch->setMetadata (llvm::LLVMContext::MD_prof, md.createBranchWeights (1, 1000));
+
+	builder.SetInsertPoint (throw_bb);
+	emit_throw_corlib_exception (builder, name);
+
+	builder.SetInsertPoint (next_bb);
 }
 
 llvm::Error

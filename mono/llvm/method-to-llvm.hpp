@@ -17,8 +17,26 @@
 
 namespace mono {
 
-/// The instructions covered by ECMA-335 III.1.5, Table III.2.
-enum class BinaryNumericOp { Add, Div, Mul, Rem, Sub };
+/// The binary arithmetic instructions, in the order of the three operand tables in
+/// ECMA-335 III.1.5 that say what each one accepts: Table III.2 binary numeric,
+/// Table III.5 integer, Table III.7 overflow arithmetic.
+enum class BinaryOp {
+	Add,
+	Div,
+	Mul,
+	Rem,
+	Sub,
+
+	DivUn,
+	RemUn,
+
+	AddOvf,
+	AddOvfUn,
+	MulOvf,
+	MulOvfUn,
+	SubOvf,
+	SubOvfUn,
+};
 
 struct MonoLLVMMethod {
 	std::unique_ptr<llvm::Module> module;
@@ -41,6 +59,13 @@ private:
 	struct StackValue {
 		llvm::Value *value;
 		MonoType *type;
+	};
+
+	/// The two operands of a binary numeric operation and the type it leaves behind.
+	struct BinaryOperands {
+		StackValue value1;
+		StackValue value2;
+		MonoType *result;
 	};
 
 	llvm::Module *module;
@@ -87,13 +112,35 @@ private:
 	llvm::Error invalid_local (uint32_t index);
 	llvm::Error invalid_argument (uint32_t index);
 
-	llvm::Expected<MonoType *> binary_numeric_result (BinaryNumericOp op, MonoType *lhs,
-	                                                  MonoType *rhs);
+	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
+	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
 
 	llvm::Error emit_arg_allocas (MonoIrBuilder &builder);
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
 
+	void emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name);
+	void emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
+	                          const char *name);
+
+	void emit_division_guards (MonoIrBuilder &builder, llvm::Value *lhs, llvm::Value *rhs,
+	                           bool is_signed);
+	llvm::Value *emit_checked (MonoIrBuilder &builder, llvm::Intrinsic::ID intrinsic,
+	                           llvm::Value *lhs, llvm::Value *rhs);
+	llvm::Value *emit_checked_pointer_offset (MonoIrBuilder &builder, llvm::Value *base,
+	                                          llvm::Value *index, bool subtract);
+
 	llvm::Error emit_add (MonoIrBuilder &builder);
+	llvm::Error emit_sub (MonoIrBuilder &builder);
+	llvm::Error emit_mul (MonoIrBuilder &builder);
+	llvm::Error emit_div (MonoIrBuilder &builder);
+	llvm::Error emit_rem (MonoIrBuilder &builder);
+
+	llvm::Error emit_div_un (MonoIrBuilder &builder);
+	llvm::Error emit_rem_un (MonoIrBuilder &builder);
+
+	llvm::Error emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned);
+	llvm::Error emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned);
+	llvm::Error emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned);
 
 private:
 	StackValue get_stack (size_t index) const
