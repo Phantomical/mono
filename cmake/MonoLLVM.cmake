@@ -56,16 +56,29 @@ _mono_llvm_config(_llvm_prefix --prefix)
 _mono_llvm_config(_llvm_libdir --libdir)
 _mono_llvm_config(_llvm_incdir --includedir)
 _mono_llvm_config(_llvm_system_libs --system-libs)
-_mono_llvm_config(_llvm_libs --libs analysis core bitwriter mcjit orcjit x86codegen)
+
+# Prefer the single libLLVM dylib when the install has one.  The static
+# archives of a RelWithDebInfo build weigh gigabytes and every test binary
+# linking them pays a multi-minute link; the dylib links in seconds and keeps
+# the backend's symbols in one place.  Name it exactly (libLLVM-<major>.so):
+# an install prefix that has hosted more than one version can carry several
+# dylibs side by side, and the unversioned libLLVM.so symlink would quietly
+# follow whichever was installed last.
+if(EXISTS "${_llvm_libdir}/libLLVM-${_llvm_major}.so")
+  set(_llvm_libs "${_llvm_libdir}/libLLVM-${_llvm_major}.so")
+  set(_llvm_system_libs "")
+else()
+  _mono_llvm_config(_llvm_libs --libs analysis core bitwriter passes orcjit x86codegen)
+  separate_arguments(_llvm_libs UNIX_COMMAND "${_llvm_libs}")
+endif()
 separate_arguments(_llvm_system_libs UNIX_COMMAND "${_llvm_system_libs}")
-separate_arguments(_llvm_libs        UNIX_COMMAND "${_llvm_libs}")
 
 target_include_directories(mono_llvm SYSTEM INTERFACE "${_llvm_incdir}")
 target_compile_definitions(mono_llvm INTERFACE
   __STDC_CONSTANT_MACROS __STDC_FORMAT_MACROS __STDC_LIMIT_MACROS
   LLVM_API_VERSION=${MONO_LLVM_API_VERSION})
 
-# LLVM 18 is built -fno-rtti.  Subclassing its polymorphic types (the JIT
+# LLVM is built -fno-rtti (upstream default).  Subclassing its polymorphic types (the JIT
 # memory manager, the custom passes) from a TU compiled with RTTI on is a
 # silent ABI break, so the C++ side of the backend must match.  Exceptions stay
 # on: the ORC APIs report failures through llvm::Error, and the unwinder needs
@@ -77,5 +90,9 @@ target_compile_options(mono_llvm INTERFACE
 
 target_link_directories(mono_llvm INTERFACE "${_llvm_libdir}")
 target_link_libraries(mono_llvm INTERFACE ${_llvm_libs} ${_llvm_system_libs})
+# The dylib lives outside the system search path (a local install prefix), so
+# bake its directory into the runpath of everything that links it - otherwise
+# every binary needs LD_LIBRARY_PATH, and the tests don't get one.
+target_link_options(mono_llvm INTERFACE "-Wl,-rpath,${_llvm_libdir}")
 
 message(STATUS "LLVM ${_llvm_version} at ${_llvm_prefix} (API version ${MONO_LLVM_API_VERSION})")

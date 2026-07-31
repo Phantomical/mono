@@ -319,7 +319,7 @@ devirtualize (Module &module, const Tier1Root &root)
 		 * self-evidently non-null (a field load, say) must either be refused
 		 * here or grow a real null check at the rewrite.
 		 */
-		if (!isKnownNonZero (receiver, module.getDataLayout (), 0, nullptr, cb)) {
+		if (!isKnownNonZero (receiver, SimplifyQuery (module.getDataLayout (), cb))) {
 			trace ("refuse-receiver-maybe-null", tag.declared, recv.klass);
 			continue;
 		}

@@ -62,7 +62,8 @@
 #include <llvm/CodeGen/TargetInstrInfo.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
 #include <llvm/CodeGen/TargetSubtargetInfo.h>
-#include <llvm/ExecutionEngine/JITLink/EHFrameSupport.h>
+#include <llvm/ExecutionEngine/Orc/EHFrameRegistrationPlugin.h>
+#include <llvm/ExecutionEngine/Orc/Shared/WrapperFunctionUtils.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h>
 #include <llvm/ExecutionEngine/JITLink/x86_64.h>
@@ -880,7 +881,7 @@ public:
 						continue;
 					uint64_t size = sym->getSize ();
 					if (size)
-						info.func_sizes[sym->getName ().str ()] = size;
+						info.func_sizes[(*sym->getName ()).str ()] = size;
 				}
 
 				info.mono_lsda = capture_graph_section (g, ".mono_lsda");
@@ -984,21 +985,33 @@ private:
 	};
 };
 
-/* ---- mono-owned eh-frame registrar (doc 26 J3) ---------------------------
+/* ---- mono-owned eh-frame registration (doc 26 J3) ------------------------
  *
- * EHFrameRegistrationPlugin (llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h) needs
- * an llvm::jitlink::EHFrameRegistrar to actually register/deregister each
- * object's .eh_frame. JL1 wired the stock InProcessEHFrameRegistrar there
- * directly; MonoEHFrameRegistrar below replaces it so this engine can observe
- * every register/deregister without changing what happens to the host unwinder.
+ * EHFrameRegistrationPlugin (llvm/ExecutionEngine/Orc/EHFrameRegistrationPlugin.h)
+ * registers each object's .eh_frame by attaching allocation actions to the
+ * LinkGraph: a register action that runs at finalize and a deregister action
+ * that runs at deallocation, each a wrapper function named by ExecutorAddr.
+ * OPTION-I DECISION (keep host registration): LLJIT's generic platform setup
+ * (setUpGenericLLVMIRPlatform, LLJIT.cpp) already attaches an
+ * EHFrameRegistrationPlugin pointed at the stock in-process pair
+ * (llvm_orc_{de,}registerEHFrameSectionAllocAction), so libgcc's
+ * __register_frame runs for every JIT'd .eh_frame exactly as before: a native
+ * crash-dump unwinder walking this process keeps FDE coverage for JIT frames.
+ * (Registering a second forwarding plugin here would register every section
+ * TWICE, which libgcc's deregistration aborts on - that is not a theoretical
+ * concern, it is how the 22 bring-up first failed.)
  *
- * OPTION-I DECISION (keep host registration): MonoEHFrameRegistrar FORWARDS both
- * calls to an InProcessEHFrameRegistrar it owns, so libgcc's __register_frame
- * still runs exactly as it did before this slice - a native crash-dump unwinder
- * walking this process keeps FDE coverage for JIT frames. Dropping that
- * registration (tier-0 parity: the classic JIT never calls __register_frame at
- * all) is a noted follow-up, not done here - this slice is required to be
- * behavior-preserving for managed code.
+ * The mono plugin below is therefore a RECORDING SIDE-CAR only: a second
+ * EHFrameRegistrationPlugin whose actions record into the registry and touch
+ * nothing else. Both plugins attach their action pairs to exactly the graphs
+ * that carry an .eh_frame section, so the recording stays symmetric with what
+ * the host actually has registered. If LLJIT ever stops attaching its plugin
+ * (a real Platform in place of the generic setup, say), these wrappers are
+ * where host forwarding would come back.
+ *
+ * Dropping host registration entirely (tier-0 parity: the classic JIT never
+ * calls __register_frame at all) is a noted follow-up, not done here - this
+ * slice is required to be behavior-preserving for managed code.
  *
  * What is new is the RECORDING: every register/deregister is tallied into
  * g_eh_frame_registry (mutex-guarded, keyed like g_object_info above), which
@@ -1092,47 +1105,45 @@ eh_frame_registry_stats ()
 }
 
 /*
- * The EHFrameRegistrar EHFrameRegistrationPlugin drives. See the file-comment
- * block above for the option-i rationale (host registration kept) and what the
- * recording substitutes for.
+ * The two allocation-action wrapper functions EHFrameRegistrationPlugin is
+ * pointed at. See the file-comment block above for the option-i rationale
+ * (host registration kept) and what the recording substitutes for.
+ *
+ * Record FIRST, unconditionally, before forwarding to the host. If the
+ * recording were gated on the host call succeeding, a host-registration
+ * failure (possible on a non-libgcc target; not on this build) would leave
+ * the graph holding a deregister action it will unconditionally run at
+ * deallocation while our own bookkeeping never recorded the range - hitting
+ * the not-live report_fatal_error above for a non-bug. Recording
+ * unconditionally keeps our bookkeeping symmetric with the actions actually
+ * attached to the graph, so that abort is reserved for a genuine accounting
+ * bug. The host call's Error is still propagated either way.
  */
-class MonoEHFrameRegistrar : public jitlink::EHFrameRegistrar {
-public:
-	Error registerEHFrames (orc::ExecutorAddrRange eh_frame_section) override
-	{
-		/*
-		 * Record FIRST, unconditionally, before forwarding to the host - mirrors
-		 * EHFrameRegistrationPlugin::notifyEmitted, which pushes into its own
-		 * EHFrameRanges[K] unconditionally and only THEN calls
-		 * Registrar->registerEHFrames (range). If our recording were gated on
-		 * the host call succeeding, a host-registration failure (possible on a
-		 * non-libgcc target; not on this build) would leave the plugin holding a
-		 * range it will unconditionally replay to deregisterEHFrames on teardown
-		 * while our own bookkeeping never recorded it - hitting the not-live
-		 * report_fatal_error below for a plugin-side non-bug. Recording
-		 * unconditionally keeps our bookkeeping symmetric with the plugin's, so
-		 * that abort is reserved for a genuine accounting bug. The host call's
-		 * Error is still forwarded/propagated to the caller either way.
-		 */
-		record_eh_frame_registered (eh_frame_section);
-		return host_.registerEHFrames (eh_frame_section);
-	}
+static orc::shared::CWrapperFunctionBuffer
+mono_register_eh_frame_action (const char *arg_data, size_t arg_size)
+{
+	using namespace llvm::orc::shared;
+	return WrapperFunction<SPSError (SPSExecutorAddrRange)>::handle (
+			   arg_data, arg_size,
+			   [] (orc::ExecutorAddrRange range) -> Error {
+				   record_eh_frame_registered (range);
+				   return Error::success ();
+			   })
+		.release ();
+}
 
-	Error deregisterEHFrames (orc::ExecutorAddrRange eh_frame_section) override
-	{
-		/* Unconditional for the same reason as registerEHFrames above. */
-		record_eh_frame_deregistered (eh_frame_section);
-		return host_.deregisterEHFrames (eh_frame_section);
-	}
-
-private:
-	/*
-	 * Owned by value, not by pointer: InProcessEHFrameRegistrar (LLVM 18.1.3,
-	 * EHFrameSupport.h) is stateless and default-constructible with no
-	 * arguments - the same construction JL1 used directly.
-	 */
-	jitlink::InProcessEHFrameRegistrar host_;
-};
+static orc::shared::CWrapperFunctionBuffer
+mono_deregister_eh_frame_action (const char *arg_data, size_t arg_size)
+{
+	using namespace llvm::orc::shared;
+	return WrapperFunction<SPSError (SPSExecutorAddrRange)>::handle (
+			   arg_data, arg_size,
+			   [] (orc::ExecutorAddrRange range) -> Error {
+				   record_eh_frame_deregistered (range);
+				   return Error::success ();
+			   })
+		.release ();
+}
 
 /* ---- singleton bootstrap -------------------------------------------------- */
 
@@ -1289,14 +1300,12 @@ host_target_machine_builder ()
 	 */
 	jtmb.getOptions ().TrapUnreachable = true;
 
-	StringMap<bool> features;
-	if (sys::getHostCPUFeatures (features)) {
-		std::vector<std::string> feature_vec;
-		for (auto &kv : features)
-			if (kv.second)
-				feature_vec.push_back ((Twine ("+") + kv.first ()).str ());
-		jtmb.addFeatures (feature_vec);
-	}
+	StringMap<bool> features = sys::getHostCPUFeatures ();
+	std::vector<std::string> feature_vec;
+	for (auto &kv : features)
+		if (kv.second)
+			feature_vec.push_back ((Twine ("+") + kv.first ()).str ());
+	jtmb.addFeatures (feature_vec);
 	return jtmb;
 }
 
@@ -1337,7 +1346,7 @@ tier1_dump_dir ()
 		 * the dump file; the real JIT still emits binary object code, which
 		 * has no assembler dialect to pick.
 		 */
-		StringMap<cl::Option *> &opts = cl::getRegisteredOptions ();
+		auto &opts = cl::getRegisteredOptions ();
 		auto it = opts.find ("x86-asm-syntax");
 		if (it != opts.end ())
 			it->second->addOccurrence (0, "x86-asm-syntax", "intel");
@@ -1403,7 +1412,7 @@ dump_tier1_asm (const Module &m, StringRef entry_name)
 		         toString (tm.takeError ()).c_str ());
 		return;
 	}
-	auto *ltm = static_cast<LLVMTargetMachine *> (tm->get ());
+	TargetMachine *ltm = tm->get ();
 	clone->setDataLayout (ltm->createDataLayout ());
 
 	SmallString<256> path (dir);
@@ -1431,17 +1440,22 @@ namespace {
 /* ---- .mono_lsda emitter --------------------------------------------------
  *
  * MonoLSDAStreamer is the object streamer MonoIRCompiler installs in place of
- * the stock createMCObjectStreamer one. It is a plain MCELFStreamer in every
- * respect but one: at finishImpl(), just before the base class writes the
- * object, it emits a target-neutral `.mono_lsda` section (plan 12 2) built from
- * the clauses the C2 MonoEHGatherPass gathered into the shared side channel.
+ * The `.mono_lsda` section (plan 12 2) is emitted into the object streamer by
+ * MonoLSDAEmitPass, added AFTER the AsmPrinter: the legacy pass manager runs
+ * doFinalization in reverse pass order, so ours runs after every function has
+ * been emitted but before the AsmPrinter's own doFinalization closes the
+ * streamer and writes the object. It builds the section from the clauses the
+ * C2 MonoEHGatherPass gathered into the shared side channel. (Under LLVM 18 this lived in a finishImpl() override of an
+ * MCELFStreamer subclass; MCELFStreamer::finishImpl is final in 22, and the
+ * suggested replacement seam - a custom MCTargetStreamer - is unusable here
+ * because X86AsmPrinter static_casts the target streamer to X86TargetStreamer.)
  *
- * The base MCELFStreamer is byte-for-byte the object streamer the C1 pipeline
- * used (createMCObjectStreamer routes ELF through createELFStreamer, which is
- * `new MCELFStreamer + setRelaxAll`; x86-64 registers no object target streamer
- * that changes the bytes - verified). So for a NON-EH module the side channel is
- * empty, no `.mono_lsda` is emitted, and the output stays byte-identical to
- * SimpleCompiler's (the compiler-equivalence invariant).
+ * The streamer itself is a plain MCELFStreamer, byte-for-byte the object
+ * streamer the C1 pipeline used (createMCObjectStreamer routes ELF through
+ * createELFStreamer, which is `new MCELFStreamer + setRelaxAll`). So for a
+ * NON-EH module the side channel is empty, no `.mono_lsda` is emitted, and the
+ * output stays byte-identical to SimpleCompiler's (the compiler-equivalence
+ * invariant).
  *
  * func_begin anchoring (resolves plan 12 9's [UNVERIFIED] flag): each side-
  * channel function carries its MF name, and every offset is a difference against
@@ -1461,23 +1475,35 @@ namespace {
  * MonoEHGatherPass) still gets a record, just with a zero entry count: a valid,
  * empty table the load side can tell apart from "absent because declined".
  */
-class MonoLSDAStreamer : public MCELFStreamer {
+class MonoLSDAEmitPass : public MachineFunctionPass {
 public:
-	MonoLSDAStreamer (MCContext &ctx, std::unique_ptr<MCAsmBackend> tab,
-	                  std::unique_ptr<MCObjectWriter> ow,
-	                  std::unique_ptr<MCCodeEmitter> emitter, MonoEHSideChannel &sc)
-		: MCELFStreamer (ctx, std::move (tab), std::move (ow), std::move (emitter)),
-		  sc_ (sc)
+	static char ID;
+
+	MonoLSDAEmitPass (MCStreamer *streamer, const MonoEHSideChannel *sc)
+		: MachineFunctionPass (ID), streamer_ (streamer), sc_ (sc)
 	{
 	}
 
-	void finishImpl () override
+	StringRef getPassName () const override { return "Mono LSDA emission"; }
+
+	/* Emission happens once, at doFinalization; per-function there is nothing
+	 * to do (the gather passes upstream fill the side channel). */
+	bool runOnMachineFunction (MachineFunction &) override { return false; }
+
+	void getAnalysisUsage (AnalysisUsage &au) const override
 	{
-		MCContext &ctx = getContext ();
+		au.setPreservesAll ();
+		MachineFunctionPass::getAnalysisUsage (au);
+	}
+
+	bool doFinalization (Module &) override
+	{
+		MCStreamer &streamer = *streamer_;
+		MCContext &ctx = streamer.getContext ();
 		bool section_open = false;
 		unsigned records_emitted = 0;
 
-		for (const MonoEHFunctionClauses &fn : sc_.functions) {
+		for (const MonoEHFunctionClauses &fn : sc_->functions) {
 			/*
 			 * Declined (CAP-EH-0: a filter clause) functions get no record: the
 			 * load side must then decline, never publish a partial table. A
@@ -1524,7 +1550,7 @@ public:
 			if (!section_open) {
 				MCSectionELF *s = ctx.getELFSection (".mono_lsda", ELF::SHT_PROGBITS,
 				                                     ELF::SHF_ALLOC);
-				switchSection (s);
+				streamer.switchSection (s);
 				section_open = true;
 			}
 
@@ -1542,7 +1568,7 @@ public:
 			 * skips them when it builds dispatch clauses.
 			 */
 			const MonoEHFinallyFunction *finally_fn = nullptr;
-			for (const MonoEHFinallyFunction &f : sc_.finally_functions) {
+			for (const MonoEHFinallyFunction &f : sc_->finally_functions) {
 				if (f.function == fn.function) {
 					finally_fn = &f;
 					break;
@@ -1551,48 +1577,51 @@ public:
 			std::size_t nbodies = finally_fn ? finally_fn->bodies.size () : 0;
 
 			/* Header: magic 'MLSD', version 2, count (one entry per invoke range). */
-			emitIntValue (0x4d4c5344u, 4);
-			emitIntValue (2, 2);
-			emitIntValue (fn.clauses.size () + nbodies, 2);
+			streamer.emitIntValue (0x4d4c5344u, 4);
+			streamer.emitIntValue (2, 2);
+			streamer.emitIntValue (fn.clauses.size () + nbodies, 2);
 
 			for (const MonoEHClause &c : fn.clauses) {
 				/* try_start_off: begin - func_begin. */
-				emitValue (off_from_begin (c.try_begin), 4);
+				streamer.emitValue (off_from_begin (c.try_begin), 4);
 				/* try_len: end - begin. */
-				emitValue (MCBinaryExpr::createSub (
+				streamer.emitValue (MCBinaryExpr::createSub (
 					           MCSymbolRefExpr::create (c.try_end, ctx),
 					           MCSymbolRefExpr::create (c.try_begin, ctx), ctx),
 				           4);
 				/* handler_off: handler - func_begin. */
-				emitValue (off_from_begin (c.handler), 4);
+				streamer.emitValue (off_from_begin (c.handler), 4);
 				/* clause_index: the IL clause index, an absolute scalar. */
-				emitIntValue ((uint32_t) c.clause_index, 4);
+				streamer.emitIntValue ((uint32_t) c.clause_index, 4);
 				/* kind: the clause's IL flags (self-describing v2; 0 for catch). */
-				emitIntValue ((uint32_t) c.kind, 4);
+				streamer.emitIntValue ((uint32_t) c.kind, 4);
 			}
 
 			for (std::size_t i = 0; i < nbodies; ++i) {
 				const MonoEHFinallyBody &b = finally_fn->bodies[i];
 
 				/* try_start_off/try_len: the handler body's one PC range. */
-				emitValue (off_from_begin (b.body_begin), 4);
-				emitValue (MCBinaryExpr::createSub (
+				streamer.emitValue (off_from_begin (b.body_begin), 4);
+				streamer.emitValue (MCBinaryExpr::createSub (
 					           MCSymbolRefExpr::create (b.body_end, ctx),
 					           MCSymbolRefExpr::create (b.body_begin, ctx), ctx),
 				           4);
 				/* handler_off: unused - a body range names no landing pad. */
-				emitIntValue (0, 4);
-				emitIntValue ((uint32_t) b.clause_index, 4);
-				emitIntValue (MONO_LSDA_KIND_FINALLY_BODY, 4);
+				streamer.emitIntValue (0, 4);
+				streamer.emitIntValue ((uint32_t) b.clause_index, 4);
+				streamer.emitIntValue (MONO_LSDA_KIND_FINALLY_BODY, 4);
 			}
 		}
 
-		MCELFStreamer::finishImpl ();
+		return false;
 	}
 
 private:
-	MonoEHSideChannel &sc_;
+	MCStreamer *streamer_;
+	const MonoEHSideChannel *sc_;
 };
+
+char MonoLSDAEmitPass::ID;
 
 } // anonymous namespace
 
@@ -1633,12 +1662,12 @@ public:
 		if (!tm)
 			return tm.takeError ();
 		/*
-		 * JITTargetMachineBuilder::createTargetMachine always yields an
-		 * LLVMTargetMachine (that is the only TargetMachine subclass the target
-		 * registry constructs), whose createPassConfig / addPassesToEmitMC surface
-		 * this pipeline replicates.
+		 * The codegen surface this pipeline replicates (createPassConfig,
+		 * addPassesToEmitMC) lives on TargetMachine itself since LLVM 20 folded
+		 * LLVMTargetMachine into it (CodeGenTargetMachineImpl carries the
+		 * implementations, but the virtuals are on the base).
 		 */
-		auto *ltm = static_cast<LLVMTargetMachine *> (tm->get ());
+		TargetMachine *ltm = tm->get ();
 
 		/*
 		 * The EH-gather side channel is a stack local of this one operator() call
@@ -1671,14 +1700,15 @@ private:
 	friend Expected<MonoEHSideChannel> gather_eh_sidechannel (Module &m);
 
 	/*
-	 * A faithful hand-inline of LLVMTargetMachine::addPassesToEmitMC followed by
-	 * PM.run - the exact recipe SimpleCompiler drives, kept open so C2/C3 can (a)
-	 * pm.add a MachineFunctionPass right after addMachinePasses() and (b) replace
-	 * createMCObjectStreamer with a custom MCStreamer subclass. Any drift from the
+	 * A faithful hand-inline of TargetMachine::addPassesToEmitMC (the
+	 * CodeGenTargetMachineImpl implementation) followed by PM.run - the exact
+	 * recipe SimpleCompiler drives, kept open so C2/C3 can (a) pm.add a
+	 * MachineFunctionPass right after addMachinePasses() and (b) schedule the
+	 * LSDA emission pass against the object streamer. Any drift from the
 	 * stock method between LLVM versions is a silent codegen difference (plan 12 8,
 	 * "highest-tax item"); the equivalence test is what guards against it.
 	 */
-	static Error emit_object (LLVMTargetMachine &ltm, Module &m, raw_pwrite_stream &out,
+	static Error emit_object (TargetMachine &ltm, Module &m, raw_pwrite_stream &out,
 	                          MonoEHSideChannel &eh_side_channel)
 	{
 		legacy::PassManager pm;
@@ -1751,32 +1781,39 @@ private:
 			                                inconvertibleErrorCode ());
 
 		/*
-		 * C3: MonoLSDAStreamer in place of the stock createMCObjectStreamer. It is
-		 * a plain MCELFStreamer that additionally writes `.mono_lsda` from
-		 * eh_side_channel at finishImpl(); driven by the very side channel the
-		 * MonoEHGatherPass above populated.
+		 * C3: a plain MCELFStreamer, with MonoLSDAEmitPass scheduled just before
+		 * the AsmPrinter to write `.mono_lsda` from eh_side_channel into it (see
+		 * the pass's doc comment for the doFinalization-ordering seam).
 		 *
 		 * This construction reproduces exactly what createMCObjectStreamer does for
 		 * ELF: it routes through createELFStreamer, which is `new MCELFStreamer`
 		 * followed by setRelaxAll(MCRelaxAll). The IncrementalLinkerCompatible and
 		 * DWARFMustBeAtTheEnd flags are consumed only by the COFF/MachO arms of
-		 * createMCObjectStreamer, never the ELF one, so they do not apply here; and
-		 * x86-64 registers no object target streamer that alters the bytes (all
-		 * verified against createMCObjectStreamer for a non-EH module). So a non-EH
-		 * module stays byte-identical to SimpleCompiler's output.
+		 * createMCObjectStreamer, never the ELF one, so they do not apply here. So
+		 * a non-EH module stays byte-identical to SimpleCompiler's output.
 		 */
 		std::unique_ptr<MCObjectWriter> ow = mab->createObjectWriter (out);
-		auto lsda_streamer = std::make_unique<MonoLSDAStreamer> (
-			*ctx, std::move (mab), std::move (ow), std::move (mce), eh_side_channel);
+		auto elf_streamer = std::make_unique<MCELFStreamer> (
+			*ctx, std::move (mab), std::move (ow), std::move (mce));
 		if (ltm.Options.MCOptions.MCRelaxAll)
-			lsda_streamer->getAssembler ().setRelaxAll (true);
-		std::unique_ptr<MCStreamer> streamer (std::move (lsda_streamer));
+			elf_streamer->getAssembler ().setRelaxAll (true);
+		MCStreamer *streamer_ptr = elf_streamer.get ();
+		std::unique_ptr<MCStreamer> streamer (std::move (elf_streamer));
 
 		FunctionPass *printer = ltm.getTarget ().createAsmPrinter (ltm, std::move (streamer));
 		if (!printer)
 			return make_error<StringError> ("target does not support an AsmPrinter",
 			                                inconvertibleErrorCode ());
 		pm.add (printer);
+
+		/*
+		 * AFTER the printer on purpose: FPPassManager::doFinalization runs the
+		 * contained passes in REVERSE order, so the last-added pass finalizes
+		 * first. Added here, the LSDA pass emits its section while the
+		 * streamer is still open, before AsmPrinter::doFinalization ends the
+		 * object.
+		 */
+		pm.add (new MonoLSDAEmitPass (streamer_ptr, &eh_side_channel));
 
 		pm.run (m);
 		return Error::success ();
@@ -1793,6 +1830,17 @@ private:
 Expected<std::unique_ptr<MemoryBuffer>>
 compile_object_with_mono_compiler (Module &m)
 {
+	/*
+	 * Stamp the target's DataLayout the way the runtime path does before any
+	 * module reaches the compiler (an assertions-on LLVM refuses to build
+	 * MachineFunctions for a module whose layout disagrees with the target).
+	 */
+	Expected<std::unique_ptr<TargetMachine>> tm =
+		host_target_machine_builder ().createTargetMachine ();
+	if (!tm)
+		return tm.takeError ();
+	m.setDataLayout ((*tm)->createDataLayout ());
+
 	MonoIRCompiler compiler (host_target_machine_builder ());
 	return compiler (m);
 }
@@ -1812,7 +1860,7 @@ gather_eh_sidechannel (Module &m)
 		host_target_machine_builder ().createTargetMachine ();
 	if (!tm)
 		return tm.takeError ();
-	auto *ltm = static_cast<LLVMTargetMachine *> (tm->get ());
+	TargetMachine *ltm = tm->get ();
 	m.setDataLayout (ltm->createDataLayout ());
 
 	MonoEHSideChannel sc;
@@ -1857,15 +1905,12 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 * over an InProcessMemoryManager the layer OWNS. This replaces the legacy
 	 * RTDyldObjectLinkingLayer + SectionMemoryManager. Two plugins do what the old
 	 * MonoJitMemoryManager and NotifyLoaded hook did:
-	 *   - EHFrameRegistrationPlugin registers each object's .eh_frame with the host
-	 *     unwinder (__register_frame) - the eh-frame hook the old memory manager
-	 *     carried - and deregisters it before reclamation (the ordering the old
-	 *     destructor asserted; see release_owner ()). It is driven by
-	 *     MonoEHFrameRegistrar (doc 26 J3, above), which forwards both calls to a
-	 *     stock InProcessEHFrameRegistrar (host registration is unchanged) and
-	 *     additionally records every register/deregister for
-	 *     eh_frame_registry_stats ()'s benefit - the substitute for the dropped
-	 *     ~MonoJitMemoryManager assert.
+	 *   - Host .eh_frame registration (__register_frame) comes from the
+	 *     EHFrameRegistrationPlugin LLJIT's generic platform setup attaches to
+	 *     this layer; the recording plugin added below is a side-car that only
+	 *     tallies every register/deregister for eh_frame_registry_stats ()'s
+	 *     benefit - the substitute for the dropped ~MonoJitMemoryManager
+	 *     assert. See the eh-frame registration comment block above.
 	 *   - MonoObjectLinkingPlugin ports every metadata capture (code size, .eh_frame
 	 *     / .llvm_stackmaps / .mono_lsda ranges, reloc audit) plus the keep-live
 	 *     that rescues the symbol-less .mono_lsda / .llvm_stackmaps sections from
@@ -1878,7 +1923,7 @@ MonoLLVMJIT::MonoLLVMJIT ()
 	 * invariant on the resolved edges.
 	 */
 	builder.setObjectLinkingLayerCreator (
-		[] (ExecutionSession &es, const Triple &) -> Expected<std::unique_ptr<ObjectLayer>> {
+		[] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
 			/*
 			 * Back the layer with one bounded slab reservation, bump-allocated,
 			 * instead of the previous one-mmap-per-method InProcessMemoryManager.
@@ -1923,7 +1968,8 @@ MonoLLVMJIT::MonoLLVMJIT ()
 			 */
 			layer->setAutoClaimResponsibilityForObjectSymbols (true);
 			layer->addPlugin (std::make_unique<EHFrameRegistrationPlugin> (
-				es, std::make_unique<MonoEHFrameRegistrar> ()));
+				ExecutorAddr::fromPtr (&mono_register_eh_frame_action),
+				ExecutorAddr::fromPtr (&mono_deregister_eh_frame_action)));
 			layer->addPlugin (std::make_unique<MonoObjectLinkingPlugin> ());
 			return layer;
 		});

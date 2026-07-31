@@ -1601,8 +1601,15 @@ EmitContext::build_alloca_llvm_type_name (LLVMTypeRef t, int align, const char *
 	/*
 	 * Have to place all alloca's at the end of the entry bb, since otherwise they would
 	 * get executed every time control reaches them.
+	 *
+	 * LLVMPositionBuilder requires a non-null instruction (an assertions-on
+	 * LLVM aborts on null), so the first alloca positions at the block's end
+	 * instead.
 	 */
-	LLVMPositionBuilder (llvm::wrap (alloca_builder), get_bb (cfg->bb_entry), llvm::wrap (last_alloca));
+	if (last_alloca)
+		LLVMPositionBuilder (llvm::wrap (alloca_builder), get_bb (cfg->bb_entry), llvm::wrap (last_alloca));
+	else
+		LLVMPositionBuilderAtEnd (llvm::wrap (alloca_builder), get_bb (cfg->bb_entry));
 
 	LLVMValueRef alloca = mono_llvm_build_alloca (llvm::wrap (alloca_builder), t, NULL, align, name);
 	last_alloca = llvm::unwrap (alloca);

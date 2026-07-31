@@ -157,7 +157,9 @@ MonoInlineAdvisor::getAdviceImpl (CallBase &cb)
 		                      get_bfi, psi, nullptr);
 	};
 
-	auto cost = shouldInline (cb, get_inline_cost, ore, params_.EnableDeferral.value_or (true));
+	auto &callee_tti = FAM.getResult<TargetIRAnalysis> (*cb.getCalledFunction ());
+	auto cost = shouldInline (cb, callee_tti, get_inline_cost, ore,
+	                          params_.EnableDeferral.value_or (true));
 
 	return std::make_unique<InlineAdvice> (this, cb, ore, cost.has_value ());
 }

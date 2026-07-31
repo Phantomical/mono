@@ -727,7 +727,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		break;
 	}
 
-	auto consumed = llvm::make_scope_exit ([this] { prefixes = Prefixes {}; });
+	llvm::scope_exit consumed ([this] { prefixes = Prefixes {}; });
 
 	switch (opcode) {
 	case MONO_CEE_NOP:

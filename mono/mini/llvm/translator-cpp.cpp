@@ -705,18 +705,11 @@ int
 mono_llvm_check_cpu_features (const CpuFeatureAliasFlag *features, int length)
 {
 	int flags = 0;
-	llvm::StringMap<bool> HostFeatures;
-	if (llvm::sys::getHostCPUFeatures (HostFeatures)) {
-		for (int i=0; i<length; i++) {
-			CpuFeatureAliasFlag feature = features [i];
-			if (HostFeatures [feature.alias])
-				flags |= feature.flag;
-		}
-		/*
-		for (auto &F : HostFeatures)
-			if (F.second)
-				outs () << "X: " << F.first () << "\n";
-		*/
+	llvm::StringMap<bool> HostFeatures = llvm::sys::getHostCPUFeatures ();
+	for (int i=0; i<length; i++) {
+		CpuFeatureAliasFlag feature = features [i];
+		if (HostFeatures [feature.alias])
+			flags |= feature.flag;
 	}
 	return flags;
 }
@@ -766,7 +759,7 @@ mono_llvm_register_intrinsic (LLVMModuleRef module, IntrinsicId id)
 
 	auto intrins_id = get_intrins_id (id);
 	if (intrins_id != Intrinsic::not_intrinsic) {
-		Function *f = Intrinsic::getDeclaration (unwrap (module), intrins_id);
+		Function *f = Intrinsic::getOrInsertDeclaration (unwrap (module), intrins_id);
 		if (!f) {
 			outs () << id << "\n";
 			g_assert_not_reached ();
@@ -792,6 +785,6 @@ mono_llvm_register_overloaded_intrinsic (LLVMModuleRef module, IntrinsicId id, L
     Type *arr [max_types];
     for (int i = 0; i < ntypes; ++i)
 		arr [i] = unwrap (types [i]);
-    auto f = Intrinsic::getDeclaration (unwrap (module), intrins_id, { arr, (size_t)ntypes });
+    auto f = Intrinsic::getOrInsertDeclaration (unwrap (module), intrins_id, { arr, (size_t)ntypes });
     return wrap (f);
 }

@@ -168,7 +168,7 @@ mono::ReplaceMonoBuiltins::run (Function &f, FunctionAnalysisManager &)
 			 */
 			BasicBlock *from = invoke->getParent ();
 
-			BranchInst::Create (invoke->getNormalDest (), invoke);
+			BranchInst::Create (invoke->getNormalDest (), invoke->getIterator ());
 			invoke->getUnwindDest ()->removePredecessor (from);
 			cfg_changed = true;
 		}

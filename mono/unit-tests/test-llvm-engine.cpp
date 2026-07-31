@@ -81,8 +81,10 @@
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/ExecutionEngine/Orc/SymbolStringPool.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/SubtargetFeature.h>
 #include <llvm/TargetParser/Triple.h>
 
 #include "mini/llvm/engine.hpp"
@@ -139,8 +141,9 @@ report (const char *name, TestResult r)
 static TestResult
 test_arithmetic (MonoLLVMJIT *jit)
 {
-	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
-	LLVMContext &ctx = *tsctx.getContext ();
+	auto owned_ctx = std::make_unique<LLVMContext> ();
+	LLVMContext &ctx = *owned_ctx;
+	orc::ThreadSafeContext tsctx (std::move (owned_ctx));
 	auto module = std::make_unique<Module> ("selftest.arith", ctx);
 	Type *i64 = Type::getInt64Ty (ctx);
 	FunctionType *fty = FunctionType::get (i64, {i64, i64}, false);
@@ -221,8 +224,9 @@ test_slab_residency (MonoLLVMJIT *jit)
 		return TEST_SKIP;
 	}
 
-	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
-	LLVMContext &ctx = *tsctx.getContext ();
+	auto owned_ctx = std::make_unique<LLVMContext> ();
+	LLVMContext &ctx = *owned_ctx;
+	orc::ThreadSafeContext tsctx (std::move (owned_ctx));
 	const int num_methods = 16;
 	for (int i = 0; i < num_methods; i++) {
 		auto module = std::make_unique<Module> ("selftest.slab", ctx);
@@ -298,8 +302,9 @@ test_registered_helper (MonoLLVMJIT *jit)
 {
 	jit->register_symbol (SELFTEST_HELPER_NAME, (void *) &selftest_helper_impl);
 
-	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
-	LLVMContext &ctx = *tsctx.getContext ();
+	auto owned_ctx = std::make_unique<LLVMContext> ();
+	LLVMContext &ctx = *owned_ctx;
+	orc::ThreadSafeContext tsctx (std::move (owned_ctx));
 	auto module = std::make_unique<Module> ("selftest.helper", ctx);
 	Type *i64 = Type::getInt64Ty (ctx);
 	FunctionType *helper_ty = FunctionType::get (i64, {i64}, false);
@@ -355,8 +360,9 @@ test_registered_helper (MonoLLVMJIT *jit)
 static TestResult
 test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 {
-	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
-	LLVMContext &ctx = *tsctx.getContext ();
+	auto owned_ctx = std::make_unique<LLVMContext> ();
+	LLVMContext &ctx = *owned_ctx;
+	orc::ThreadSafeContext tsctx (std::move (owned_ctx));
 	Type *f64 = Type::getDoubleTy (ctx);
 	Type *i32 = Type::getInt32Ty (ctx);
 
@@ -371,7 +377,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		Value *n = &*fn->arg_begin ();
 		Value *base = ConstantFP::get (f64, 2.0);
 		Value *expo = b.CreateSIToFP (n, f64);
-		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
+		Function *powf = Intrinsic::getOrInsertDeclaration (module.get (), Intrinsic::pow, f64);
 		b.CreateRet (b.CreateCall (powf, {base, expo}));
 
 		jit->optimize (mono::Tier1Root { fn, nullptr, nullptr });
@@ -393,7 +399,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		IRBuilder<> b (bb);
 		Value *x = &*fn->arg_begin ();
 		Value *base = ConstantFP::get (f64, 10.0);
-		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
+		Function *powf = Intrinsic::getOrInsertDeclaration (module.get (), Intrinsic::pow, f64);
 		b.CreateRet (b.CreateCall (powf, {base, x}));
 
 		jit->optimize (mono::Tier1Root { fn, nullptr, nullptr });
@@ -417,7 +423,7 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 		b.setFastMathFlags (fmf);
 		Value *x = &*fn->arg_begin ();
 		Value *third = ConstantFP::get (f64, 1.0 / 3.0);
-		Function *powf = Intrinsic::getDeclaration (module.get (), Intrinsic::pow, f64);
+		Function *powf = Intrinsic::getOrInsertDeclaration (module.get (), Intrinsic::pow, f64);
 		b.CreateRet (b.CreateCall (powf, {x, third}));
 
 		jit->optimize (mono::Tier1Root { fn, nullptr, nullptr });
@@ -437,8 +443,9 @@ test_libm_fold_symbols_resolve (MonoLLVMJIT *jit)
 static mono::CompileResult
 compile_trivial_under_owner (MonoLLVMJIT *jit, const char *fn_name, int64_t retval, MonoDomain *owner)
 {
-	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
-	LLVMContext &ctx = *tsctx.getContext ();
+	auto owned_ctx = std::make_unique<LLVMContext> ();
+	LLVMContext &ctx = *owned_ctx;
+	orc::ThreadSafeContext tsctx (std::move (owned_ctx));
 	auto module = std::make_unique<Module> (std::string ("selftest.owner.") + fn_name, ctx);
 	Type *i64 = Type::getInt64Ty (ctx);
 	FunctionType *fty = FunctionType::get (i64, {}, false);
@@ -1162,7 +1169,7 @@ test_graph_audit_cross_boundary (MonoLLVMJIT *jit)
 
 	/* Case 1: same-graph, cross-section, narrow (Delta32) -> not truncating. */
 	{
-		LinkGraph g ("case1", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		LinkGraph g ("case1", std::make_shared<orc::SymbolStringPool> (), tt, llvm::SubtargetFeatures (), x86_64::getEdgeKindName);
 		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
 		auto &data = g.createSection (".data", orc::MemProt::Read | orc::MemProt::Write);
 		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
@@ -1178,7 +1185,7 @@ test_graph_audit_cross_boundary (MonoLLVMJIT *jit)
 
 	/* Case 2: same-graph, same-section, narrow (Delta32) -> not truncating. */
 	{
-		LinkGraph g ("case2", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		LinkGraph g ("case2", std::make_shared<orc::SymbolStringPool> (), tt, llvm::SubtargetFeatures (), x86_64::getEdgeKindName);
 		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
 		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
 		Block &dst = make_block (g, text, orc::ExecutorAddr (0x1100));
@@ -1193,7 +1200,7 @@ test_graph_audit_cross_boundary (MonoLLVMJIT *jit)
 
 	/* Case 3: external target, narrow (BranchPCRel32) -> truncating. */
 	{
-		LinkGraph g ("case3", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		LinkGraph g ("case3", std::make_shared<orc::SymbolStringPool> (), tt, llvm::SubtargetFeatures (), x86_64::getEdgeKindName);
 		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
 		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
 		Symbol &target = g.addExternalSymbol ("ext_narrow", 0, false);
@@ -1207,7 +1214,7 @@ test_graph_audit_cross_boundary (MonoLLVMJIT *jit)
 
 	/* Case 4: external target, Pointer64 -> never truncating. */
 	{
-		LinkGraph g ("case4", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		LinkGraph g ("case4", std::make_shared<orc::SymbolStringPool> (), tt, llvm::SubtargetFeatures (), x86_64::getEdgeKindName);
 		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
 		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
 		Symbol &target = g.addExternalSymbol ("ext_wide", 0, false);
@@ -1220,7 +1227,7 @@ test_graph_audit_cross_boundary (MonoLLVMJIT *jit)
 
 	/* Case 5: absolute target, narrow (BranchPCRel32) -> truncating. */
 	{
-		LinkGraph g ("case5", tt, 8, llvm::endianness::little, x86_64::getEdgeKindName);
+		LinkGraph g ("case5", std::make_shared<orc::SymbolStringPool> (), tt, llvm::SubtargetFeatures (), x86_64::getEdgeKindName);
 		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
 		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
 		Symbol &target = g.addAbsoluteSymbol ("abs_narrow", orc::ExecutorAddr (0x600000000000),
@@ -1239,8 +1246,8 @@ test_graph_audit_cross_boundary (MonoLLVMJIT *jit)
 	 */
 	{
 		Triple arm_tt ("aarch64-unknown-linux-gnu");
-		LinkGraph g ("case_non_x86_64", arm_tt, 8, llvm::endianness::little,
-		            x86_64::getEdgeKindName);
+		LinkGraph g ("case_non_x86_64", std::make_shared<orc::SymbolStringPool> (), arm_tt,
+		            llvm::SubtargetFeatures (), x86_64::getEdgeKindName);
 		auto &text = g.createSection (".text", orc::MemProt::Read | orc::MemProt::Exec);
 		Block &src = make_block (g, text, orc::ExecutorAddr (0x1000));
 		Symbol &target = g.addExternalSymbol ("ext_on_other_arch", 0, false);
@@ -2119,8 +2126,9 @@ build_reclaim_eh_module (Module &m, const char *fn_name)
 static mono::CompileResult
 compile_reclaim_eh_module_under_owner (MonoLLVMJIT *jit, const char *fn_name, MonoDomain *owner)
 {
-	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
-	LLVMContext &ctx = *tsctx.getContext ();
+	auto owned_ctx = std::make_unique<LLVMContext> ();
+	LLVMContext &ctx = *owned_ctx;
+	orc::ThreadSafeContext tsctx (std::move (owned_ctx));
 	auto module = std::make_unique<Module> (std::string ("selftest.reclaim.") + fn_name, ctx);
 	Function *fn = build_reclaim_eh_module (*module, fn_name);
 	return jit->compile (fn, {}, nullptr, "", tsctx, owner);

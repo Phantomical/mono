@@ -499,10 +499,11 @@ RelocAudit audit_relocations_graph (llvm::jitlink::LinkGraph &g);
 
 /* ---- eh-frame registry (test-only) ---------------------------------------
  *
- * MonoEHFrameRegistrar (engine.cpp) wraps llvm::jitlink::InProcessEHFrameRegistrar
- * so host unwinder registration (__register_frame) is unchanged (doc 26 J3:
- * behavior-preserving, native crash-dump unwinders keep FDE coverage), while
- * ALSO recording every register/deregister into this process-global tally. That
+ * Host unwinder registration (__register_frame) is done by the
+ * EHFrameRegistrationPlugin LLJIT's platform setup attaches (doc 26 J3:
+ * behavior-preserving, native crash-dump unwinders keep FDE coverage); a
+ * second, mono-owned recording plugin (engine.cpp) tallies every
+ * register/deregister into this process-global tally. That
  * recording is the substitute for the deregister-before-unmap assert JL1 removed
  * from ~MonoJitMemoryManager (see release_owner () in engine.cpp): there is no
  * longer a per-object destructor to assert from, so a reclamation integration

@@ -13,9 +13,9 @@
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"
-#include <llvm-18/llvm/ADT/Twine.h>
-#include <llvm-18/llvm/IR/IRBuilder.h>
-#include <llvm-18/llvm/IR/Value.h>
+#include <llvm/ADT/Twine.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Value.h>
 
 // This breaks some LLVM headers
 #undef PIC

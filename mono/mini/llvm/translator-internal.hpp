@@ -130,6 +130,14 @@ struct MonoLLVMModule {
 	 * module built in it.
 	 */
 	llvm::orc::ThreadSafeContext context;
+	/*
+	 * The same context as a bare pointer, captured when it is created. The
+	 * translator owns the context for the whole compile and runs on one
+	 * thread, so going through withContextDo () (and its lock) for every
+	 * type/constant would be noise; ORC only ever sees the module after
+	 * translation is done.
+	 */
+	llvm::LLVMContext *context_ptr = nullptr;
 	LLVMModuleRef lmodule;
 	LLVMValueRef throw_icall, rethrow, throw_corlib_exception;
 	/*
@@ -189,7 +197,7 @@ struct MonoLLVMModule {
 	std::map<std::string, MonoMethod *> il_debug_methods;
 
 	/* The context as a plain reference, for the llvm:: APIs that want one. */
-	llvm::LLVMContext &ctx () { return *context.getContext (); }
+	llvm::LLVMContext &ctx () { return *context_ptr; }
 };
 
 /*

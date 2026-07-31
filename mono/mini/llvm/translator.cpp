@@ -441,7 +441,9 @@ create_compile_module (MonoCompile *cfg)
 {
 	MonoLLVMModule *module = new MonoLLVMModule ();
 
-	module->context = llvm::orc::ThreadSafeContext (std::make_unique<llvm::LLVMContext> ());
+	auto ctx = std::make_unique<llvm::LLVMContext> ();
+	module->context_ptr = ctx.get ();
+	module->context = llvm::orc::ThreadSafeContext (std::move (ctx));
 	module->intrins_by_id.resize (INTRINS_NUM, nullptr);
 	module->llvm_types = g_hash_table_new (NULL, NULL);
 

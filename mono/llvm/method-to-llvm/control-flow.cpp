@@ -553,7 +553,7 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 llvm::Error
 MethodLLVMEmitter::emit_break (MonoIrBuilder &builder)
 {
-	builder.CreateIntrinsic (llvm::Intrinsic::debugtrap, {}, {});
+	builder.CreateIntrinsic (llvm::Intrinsic::debugtrap, llvm::ArrayRef<llvm::Type *> (), {});
 	return llvm::Error::success ();
 }
 
