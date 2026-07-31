@@ -59,18 +59,6 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 		return std::move (error);
 	}
 
-	/*
-	 * A thread- or context-local static does not live in its class's statics block -
-	 * the offset the field records is a lookup cookie - and an RVA field's data lives
-	 * in the image. Neither is reachable through mono_statics_<class>.
-	 */
-	if (want_static) {
-		if (mono_class_field_is_special_static (field))
-			return unsupported_il ("thread- or context-static fields");
-		if (mono_field_get_flags (field) & FIELD_ATTRIBUTE_HAS_FIELD_RVA)
-			return unsupported_il ("static fields with an RVA");
-	}
-
 	return field;
 }
 
@@ -154,9 +142,29 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object, Mon
 }
 
 /// Where FIELD lives in its class's statics block.
+///
+/// An RVA field also lives there: creating the vtable copies the image data into the
+/// block at the field's offset. A thread- or context-local static does not - the
+/// offset it records is a per-thread lookup cookie - so its address has to come from
+/// the runtime, on every access.
 llvm::Value *
 MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField *field)
 {
+	if (mono_class_field_is_special_static (field)) {
+		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+		llvm::Value *domain = builder.CreateCall (
+			module->getOrInsertFunction ("mono_domain_get", ptr));
+		char *name = mono_field_full_name (field);
+		llvm::Constant *symbol = extern_symbol (std::string ("mono_field_") + name);
+
+		g_free (name);
+		return emit_protected_call (
+			builder,
+			module->getOrInsertFunction ("mono_class_static_field_address", ptr,
+		                                     ptr, ptr),
+			{domain, symbol});
+	}
+
 	/* A static's offset is into the block itself, so there is no header to discount. */
 	return builder.CreateGEP (builder.getInt8Ty (),
 	                          class_symbol (field->parent, "mono_statics_"),

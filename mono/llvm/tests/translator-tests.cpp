@@ -111,6 +111,9 @@ const MethodRef translatable[] = {
 	{"fields", "Fields:SetStaticRef"},
 	{"fields", "Fields:StaticAddress"},
 	{"fields", "Fields:TwoStatics"},
+	{"fields", "Fields:GetPerThread"},
+	{"fields", "Fields:SetPerThread"},
+	{"fields", "Fields:GetBaked"},
 
 	{"arrays", "Arrays:Length"},
 	{"arrays", "Arrays:GetInt"},
@@ -386,6 +389,36 @@ TEST_F (TranslatorTest, StaticsOfOneClassShareOneSymbol)
 
 	EXPECT_EQ (blocks, 1u);
 	EXPECT_NE (t.module->getNamedGlobal ("mono_statics_Holder"), nullptr);
+}
+
+// A thread-static's recorded offset is a per-thread lookup cookie, not a place in
+// the statics block, so its address comes from the runtime on every access - and
+// never through mono_statics_.
+TEST_F (TranslatorTest, ThreadStaticsAskTheRuntimeForTheirAddress)
+{
+	const Translation &load = translate ("fields", "Fields:GetPerThread");
+	const Translation &store = translate ("fields", "Fields:SetPerThread");
+
+	ASSERT_NE (load.function, nullptr) << load.error;
+	EXPECT_EQ (load.count ("mono_class_static_field_address"), 1u) << load.text ();
+	EXPECT_EQ (load.count ("mono_domain_get"), 1u);
+	EXPECT_EQ (load.count ("mono_field_Holder:PerThread"), 1u);
+	EXPECT_EQ (load.count ("mono_statics_"), 0u);
+
+	ASSERT_NE (store.function, nullptr) << store.error;
+	EXPECT_EQ (store.count ("mono_class_static_field_address"), 1u) << store.text ();
+}
+
+// An RVA field needs nothing special once the vtable exists: creating it copies the
+// image data into the statics block, so the ordinary block-plus-offset address is
+// the right one.
+TEST_F (TranslatorTest, RvaStaticsLiveInTheOrdinaryStaticsBlock)
+{
+	const Translation &t = translate ("fields", "Fields:GetBaked");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_statics_Holder"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("mono_class_static_field_address"), 0u);
 }
 
 /* ----------------------------------------------------------------- arrays */

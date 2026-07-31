@@ -17,6 +17,9 @@
 	.field public object Ref
 	.field public static int32 S
 	.field public static object SRef
+	.field public static int32 PerThread
+	.custom instance void [mscorlib]System.ThreadStaticAttribute::.ctor () = (01 00 00 00)
+	.field public static int32 Baked at D_BAKED
 
 	.method public hidebysig specialname rtspecialname instance void .ctor () cil managed
 	{
@@ -128,4 +131,28 @@
 		add
 		ret
 	}
+
+	.method public static int32 GetPerThread () cil managed
+	{
+		.maxstack 1
+		ldsfld int32 Holder::PerThread
+		ret
+	}
+
+	.method public static void SetPerThread (int32 v) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		stsfld int32 Holder::PerThread
+		ret
+	}
+
+	.method public static int32 GetBaked () cil managed
+	{
+		.maxstack 1
+		ldsfld int32 Holder::Baked
+		ret
+	}
 }
+
+.data D_BAKED = int32 (42)
