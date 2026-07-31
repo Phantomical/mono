@@ -11,37 +11,45 @@ namespace mono {
 
 namespace {
 
-constexpr uint16_t
+constexpr uint32_t
 bit (BinaryOp op)
 {
 	return 1u << static_cast<unsigned> (op);
 }
 
-constexpr uint16_t ADD = bit (BinaryOp::Add);
-constexpr uint16_t DIV = bit (BinaryOp::Div);
-constexpr uint16_t MUL = bit (BinaryOp::Mul);
-constexpr uint16_t REM = bit (BinaryOp::Rem);
-constexpr uint16_t SUB = bit (BinaryOp::Sub);
-constexpr uint16_t NUMERIC = ADD | DIV | MUL | REM | SUB;
+constexpr uint32_t ADD = bit (BinaryOp::Add);
+constexpr uint32_t DIV = bit (BinaryOp::Div);
+constexpr uint32_t MUL = bit (BinaryOp::Mul);
+constexpr uint32_t REM = bit (BinaryOp::Rem);
+constexpr uint32_t SUB = bit (BinaryOp::Sub);
+constexpr uint32_t NUMERIC = ADD | DIV | MUL | REM | SUB;
 
-constexpr uint16_t DIV_UN = bit (BinaryOp::DivUn);
-constexpr uint16_t REM_UN = bit (BinaryOp::RemUn);
-constexpr uint16_t INTEGER_ALL = DIV_UN | REM_UN;
+constexpr uint32_t DIV_UN = bit (BinaryOp::DivUn);
+constexpr uint32_t REM_UN = bit (BinaryOp::RemUn);
+constexpr uint32_t AND = bit (BinaryOp::And);
+constexpr uint32_t OR = bit (BinaryOp::Or);
+constexpr uint32_t XOR = bit (BinaryOp::Xor);
+constexpr uint32_t INTEGER_ALL = DIV_UN | REM_UN | AND | OR | XOR;
 
-constexpr uint16_t ADD_OVF = bit (BinaryOp::AddOvf);
-constexpr uint16_t ADD_OVF_UN = bit (BinaryOp::AddOvfUn);
-constexpr uint16_t MUL_OVF = bit (BinaryOp::MulOvf);
-constexpr uint16_t MUL_OVF_UN = bit (BinaryOp::MulOvfUn);
-constexpr uint16_t SUB_OVF = bit (BinaryOp::SubOvf);
-constexpr uint16_t SUB_OVF_UN = bit (BinaryOp::SubOvfUn);
-constexpr uint16_t OVERFLOW_ALL =
+constexpr uint32_t SHL = bit (BinaryOp::Shl);
+constexpr uint32_t SHR = bit (BinaryOp::Shr);
+constexpr uint32_t SHR_UN = bit (BinaryOp::ShrUn);
+constexpr uint32_t SHIFT_ALL = SHL | SHR | SHR_UN;
+
+constexpr uint32_t ADD_OVF = bit (BinaryOp::AddOvf);
+constexpr uint32_t ADD_OVF_UN = bit (BinaryOp::AddOvfUn);
+constexpr uint32_t MUL_OVF = bit (BinaryOp::MulOvf);
+constexpr uint32_t MUL_OVF_UN = bit (BinaryOp::MulOvfUn);
+constexpr uint32_t SUB_OVF = bit (BinaryOp::SubOvf);
+constexpr uint32_t SUB_OVF_UN = bit (BinaryOp::SubOvfUn);
+constexpr uint32_t OVERFLOW_ALL =
 	ADD_OVF | ADD_OVF_UN | MUL_OVF | MUL_OVF_UN | SUB_OVF | SUB_OVF_UN;
 
 /// One cell of an operand table: what A op B leaves on the stack, and which of that
 /// table's instructions the cell holds for. X is the table's invalid box.
 struct Cell {
 	StackType result = Invalid;
-	uint16_t ops = 0;
+	uint32_t ops = 0;
 };
 
 using OperandTable = Cell[STACK_TYPE_COUNT][STACK_TYPE_COUNT];
@@ -79,7 +87,7 @@ constexpr Cell NI_INT = { NativeInt, INTEGER_ALL };
 
 /*
  * Table III.5: Integer Operations. Every box here is verifiable - neither float nor
- * anything the GC tracks has an unsigned division.
+ * anything the GC tracks has a bitwise operation or an unsigned division.
  */
 constexpr OperandTable INTEGER = {
 	/*            int32    int64   native int   F   &   O */
@@ -89,6 +97,27 @@ constexpr OperandTable INTEGER = {
 	/* F     */ { X,      X,      X,          X,  X,  X },
 	/* &     */ { X,      X,      X,          X,  X,  X },
 	/* O     */ { X,      X,      X,          X,  X,  X },
+};
+
+constexpr Cell I4_SHIFT = { Int32, SHIFT_ALL };
+constexpr Cell I8_SHIFT = { Int64, SHIFT_ALL };
+constexpr Cell NI_SHIFT = { NativeInt, SHIFT_ALL };
+
+/*
+ * Table III.6: Shift Operations, indexed [value to be shifted][shift amount].
+ *
+ * The one table here that is not symmetric, and the one whose result does not depend on
+ * both operands: a shift does not promote what it is shifting, so every cell of a row
+ * carries that row's own type. An int64 shift amount is not accepted at all.
+ */
+constexpr OperandTable SHIFT = {
+	/*             int32     int64  native int   F   &   O */
+	/* int32 */ { I4_SHIFT, X,     I4_SHIFT,   X,  X,  X },
+	/* int64 */ { I8_SHIFT, X,     I8_SHIFT,   X,  X,  X },
+	/* nint  */ { NI_SHIFT, X,     NI_SHIFT,   X,  X,  X },
+	/* F     */ { X,        X,     X,          X,  X,  X },
+	/* &     */ { X,        X,     X,          X,  X,  X },
+	/* O     */ { X,        X,     X,          X,  X,  X },
 };
 
 constexpr Cell I4_OVF = { Int32, OVERFLOW_ALL };
@@ -125,7 +154,14 @@ table_for (BinaryOp op)
 		return BINARY_NUMERIC;
 	case BinaryOp::DivUn:
 	case BinaryOp::RemUn:
+	case BinaryOp::And:
+	case BinaryOp::Or:
+	case BinaryOp::Xor:
 		return INTEGER;
+	case BinaryOp::Shl:
+	case BinaryOp::Shr:
+	case BinaryOp::ShrUn:
+		return SHIFT;
 	case BinaryOp::AddOvf:
 	case BinaryOp::AddOvfUn:
 	case BinaryOp::MulOvf:
@@ -156,6 +192,18 @@ op_name (BinaryOp op)
 		return "div.un";
 	case BinaryOp::RemUn:
 		return "rem.un";
+	case BinaryOp::And:
+		return "and";
+	case BinaryOp::Or:
+		return "or";
+	case BinaryOp::Xor:
+		return "xor";
+	case BinaryOp::Shl:
+		return "shl";
+	case BinaryOp::Shr:
+		return "shr";
+	case BinaryOp::ShrUn:
+		return "shr.un";
 	case BinaryOp::AddOvf:
 		return "add.ovf";
 	case BinaryOp::AddOvfUn:
@@ -183,27 +231,6 @@ llvm::Type *
 native_int_type (llvm::IRBuilder<> &builder)
 {
 	return builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
-}
-
-/// VALUE as an operand of TYPE, widening it if the two operands of a binary numeric
-/// operation did not arrive as the same thing.
-///
-/// Only ever a widening: Table III.2 never pairs an operand with a result narrower
-/// than itself.
-llvm::Value *
-coerce (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *type)
-{
-	llvm::Type *from = value->getType ();
-
-	if (from == type)
-		return value;
-	if (type->isFloatingPointTy ())
-		return builder.CreateFPExt (value, type);
-	/* An unmanaged pointer is tracked as native int but travels as a pointer. */
-	if (from->isPointerTy ())
-		return builder.CreatePtrToInt (value, type);
-	/* int32 paired with native int is sign-extended, never zero-extended. */
-	return builder.CreateSExt (value, type);
 }
 
 } // namespace

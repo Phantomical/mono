@@ -121,6 +121,27 @@ MethodLLVMEmitter::stack_type (MonoType *t)
 	}
 }
 
+/// VALUE as an operand of TYPE, widening it if the two operands of a binary operation
+/// did not arrive as the same thing.
+///
+/// Only ever a widening: no operand table in III.1.5 pairs an operand with a result
+/// narrower than itself.
+llvm::Value *
+MethodLLVMEmitter::coerce (MonoIrBuilder &builder, llvm::Value *value, llvm::Type *type)
+{
+	llvm::Type *from = value->getType ();
+
+	if (from == type)
+		return value;
+	if (type->isFloatingPointTy ())
+		return builder.CreateFPExt (value, type);
+	/* An unmanaged pointer is tracked as native int but travels as a pointer. */
+	if (from->isPointerTy ())
+		return builder.CreatePtrToInt (value, type);
+	/* int32 paired with native int is sign-extended, never zero-extended. */
+	return builder.CreateSExt (value, type);
+}
+
 /// The CLI's name for T's category, or T's own name when it has none.
 std::string
 MethodLLVMEmitter::describe (MonoType *t, StackType type)
@@ -349,6 +370,21 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_sub_ovf (builder, false);
 	case MONO_CEE_SUB_OVF_UN:
 		return emit_sub_ovf (builder, true);
+
+	case MONO_CEE_AND:
+		return emit_and (builder);
+	case MONO_CEE_OR:
+		return emit_or (builder);
+	case MONO_CEE_XOR:
+		return emit_xor (builder);
+	case MONO_CEE_NOT:
+		return emit_not (builder);
+	case MONO_CEE_SHL:
+		return emit_shift (builder, BinaryOp::Shl);
+	case MONO_CEE_SHR:
+		return emit_shift (builder, BinaryOp::Shr);
+	case MONO_CEE_SHR_UN:
+		return emit_shift (builder, BinaryOp::ShrUn);
 
 	case MONO_CEE_CONV_I1:
 		return emit_conv (builder, ConvType::I1);

@@ -19,9 +19,9 @@
 
 namespace mono {
 
-/// The binary arithmetic instructions, in the order of the three operand tables in
-/// ECMA-335 III.1.5 that say what each one accepts: Table III.2 binary numeric,
-/// Table III.5 integer, Table III.7 overflow arithmetic.
+/// The instructions that take two operands from one of the tables in ECMA-335 III.1.5,
+/// grouped by the table that says what each one accepts: Table III.2 binary numeric,
+/// Table III.5 integer, Table III.6 shift, Table III.7 overflow arithmetic.
 enum class BinaryOp {
 	Add,
 	Div,
@@ -31,6 +31,13 @@ enum class BinaryOp {
 
 	DivUn,
 	RemUn,
+	And,
+	Or,
+	Xor,
+
+	Shl,
+	Shr,
+	ShrUn,
 
 	AddOvf,
 	AddOvfUn,
@@ -153,6 +160,8 @@ private:
 
 	static StackType stack_type (MonoType *t);
 	static std::string describe (MonoType *t, StackType type);
+	static llvm::Value *coerce (MonoIrBuilder &builder, llvm::Value *value,
+	                            llvm::Type *type);
 
 	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
 	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
@@ -189,6 +198,12 @@ private:
 
 	llvm::Expected<llvm::Value *> coerce_to_location (MonoIrBuilder &builder, StackValue value,
 	                                                  MonoType *destination);
+
+	llvm::Error emit_and (MonoIrBuilder &builder);
+	llvm::Error emit_or (MonoIrBuilder &builder);
+	llvm::Error emit_xor (MonoIrBuilder &builder);
+	llvm::Error emit_not (MonoIrBuilder &builder);
+	llvm::Error emit_shift (MonoIrBuilder &builder, BinaryOp op);
 
 	llvm::Error check_conversion (ConvType type, MonoType *source);
 	llvm::Value *emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *value,
