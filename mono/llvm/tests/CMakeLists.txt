@@ -21,10 +21,12 @@ if(NOT GTest_FOUND)
 endif()
 include(GoogleTest)
 
-file(GLOB MONO_LLVM_TEST_IL CONFIGURE_DEPENDS il/*.il)
+# RELATIVE, because mono_corpus_il resolves its source against the current
+# source directory itself.
+file(GLOB MONO_LLVM_TEST_IL CONFIGURE_DEPENDS
+     RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" il/*.il)
 foreach(ilfile IN LISTS MONO_LLVM_TEST_IL)
-  cmake_path(GET ilfile FILENAME filename)
-  cmake_path(GET filename STEM   testname)
+  cmake_path(GET ilfile STEM testname)
   mono_corpus_il("${testname}.dll" "${ilfile}" LIBRARY)
 endforeach()
 
