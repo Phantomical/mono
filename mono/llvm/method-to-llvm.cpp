@@ -711,6 +711,13 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_ldc_r4 (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_LDC_R8:
 		return emit_ldc_r8 (builder, operand);
+	case MONO_CEE_LDNULL:
+		return emit_ldnull (builder);
+
+	case MONO_CEE_DUP:
+		return emit_dup ();
+	case MONO_CEE_POP:
+		return emit_pop ();
 
 	case MONO_CEE_LDFLD:
 		return emit_ldfld (builder, static_cast<uint32_t> (operand));
@@ -839,6 +846,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_div_un (builder);
 	case MONO_CEE_REM_UN:
 		return emit_rem_un (builder);
+	case MONO_CEE_NEG:
+		return emit_neg (builder);
 
 	case MONO_CEE_ADD_OVF:
 		return emit_add_ovf (builder, false);

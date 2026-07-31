@@ -107,4 +107,43 @@ MethodLLVMEmitter::emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.45  ldnull - load a null pointer
+ *
+ *   Format   Assembly Format   Description
+ *   14       ldnull            Push a null reference on the stack.
+ *
+ * Stack Transition:
+ *
+ *   ... -> ..., null value
+ *
+ * Description:
+ *
+ *   The ldnull pushes a null reference (type O) on the stack. This is used to
+ *   initialize locations before they become live or when they become dead.
+ *
+ *   [Rationale: It might be thought that ldnull is redundant: why not use ldc.i4.0 or
+ *   ldc.i8.0 instead? The answer is that ldnull provides a size-agnostic null -
+ *   analogous to an ldc.i instruction, which does not exist. However, even if CIL were
+ *   to include an ldc.i instruction it would still benefit verification algorithms to
+ *   retain the ldnull instruction because it makes type tracking easier. end rationale]
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Verifiability:
+ *
+ *   The ldnull instruction is always verifiable, and produces a value of the null type
+ *   (§III.1.8.1.2) that is assignable-to (§I.8.7.3) any other reference type.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ldnull (MonoIrBuilder &builder)
+{
+	llvm::PointerType *ptr = llvm::PointerType::get (context (), 0);
+
+	push_stack (llvm::ConstantPointerNull::get (ptr), mono_get_object_type ());
+	return llvm::Error::success ();
+}
+
 } // namespace mono

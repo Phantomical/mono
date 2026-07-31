@@ -1056,4 +1056,80 @@ MethodLLVMEmitter::emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.50  neg - negate
+ *
+ *   Format   Assembly Format   Description
+ *   65       neg               Negate value.
+ *
+ * Stack Transition:
+ *
+ *   ..., value -> ..., result
+ *
+ * Description:
+ *
+ *   The neg instruction negates value and pushes the result on top of the stack. The
+ *   return type is the same as the operand type.
+ *
+ *   Negation of integral values is standard twos-complement negation. In particular,
+ *   negating the most negative number (which does not have a positive counterpart)
+ *   yields the most negative number. To detect this overflow use the sub.ovf
+ *   instruction instead (i.e., subtract from 0).
+ *
+ *   Negating a floating-point number cannot overflow; negating NaN returns NaN.
+ *
+ *   The acceptable operand types and their corresponding result data types are
+ *   encapsulated in Table 3: Unary Numeric Operations.
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 3: Unary Numeric Operations.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	StackValue value = get_stack (0);
+	StackType type = stack_type (value.type);
+	MonoType *result;
+
+	/* Table III.3: Unary Numeric Operations - each numeric type to itself. */
+	switch (type) {
+	case Int32:
+		result = mono_get_int32_type ();
+		break;
+	case Int64:
+		result = m_class_get_byval_arg (mono_defaults.int64_class);
+		break;
+	case NativeInt:
+		result = mono_get_int_type ();
+		break;
+	case Float:
+		/* F keeps the width it already has, r4 or r8. */
+		result = value.type;
+		break;
+	default:
+		return invalid_il (llvm::Twine ("neg is not defined for operand type ")
+		                   + describe (value.type, type));
+	}
+
+	llvm::Expected<llvm::Type *> ltype = convert_type (result);
+	if (!ltype)
+		return ltype.takeError ();
+
+	llvm::Value *coerced = coerce (builder, value.value, *ltype);
+	llvm::Value *negated = (*ltype)->isFloatingPointTy () ? builder.CreateFNeg (coerced)
+	                                                      : builder.CreateNeg (coerced);
+
+	pop_stack (1);
+	push_stack (negated, result);
+	return llvm::Error::success ();
+}
+
 } // namespace mono

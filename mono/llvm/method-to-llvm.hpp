@@ -288,6 +288,7 @@ private:
 
 	llvm::Error emit_div_un (MonoIrBuilder &builder);
 	llvm::Error emit_rem_un (MonoIrBuilder &builder);
+	llvm::Error emit_neg (MonoIrBuilder &builder);
 
 	llvm::Error emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned);
 	llvm::Error emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned);
@@ -316,6 +317,10 @@ private:
 	llvm::Error emit_ldc_i8 (MonoIrBuilder &builder, int64_t value);
 	llvm::Error emit_ldc_r4 (MonoIrBuilder &builder, uint32_t bits);
 	llvm::Error emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits);
+	llvm::Error emit_ldnull (MonoIrBuilder &builder);
+
+	llvm::Error emit_dup ();
+	llvm::Error emit_pop ();
 
 	llvm::Value *emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                                  llvm::ArrayRef<llvm::Value *> args);
