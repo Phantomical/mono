@@ -620,7 +620,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MonoInlineI:
 	case MonoShortInlineR:
 	case MonoInlineBrTarget:
-	case MonoInlineField: {
+	case MonoInlineField:
+	case MonoInlineType: {
 		llvm::Expected<uint32_t> read = read_u32 ();
 
 		if (!read)
@@ -691,6 +692,52 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	case MONO_CEE_LDFLD:
 		return emit_ldfld (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_NEWARR:
+		return emit_newarr (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDLEN:
+		return emit_ldlen (builder);
+	case MONO_CEE_LDELEMA:
+		return emit_ldelema (builder, static_cast<uint32_t> (operand));
+
+	case MONO_CEE_LDELEM_I1:
+	case MONO_CEE_LDELEM_U1:
+	case MONO_CEE_LDELEM_I2:
+	case MONO_CEE_LDELEM_U2:
+	case MONO_CEE_LDELEM_I4:
+	case MONO_CEE_LDELEM_U4:
+	case MONO_CEE_LDELEM_I8:
+	case MONO_CEE_LDELEM_I:
+	case MONO_CEE_LDELEM_R4:
+	case MONO_CEE_LDELEM_R8:
+	case MONO_CEE_LDELEM_REF:
+		return emit_ldelem (builder, builtin_element_type (opcode));
+	case MONO_CEE_LDELEM: {
+		llvm::Expected<MonoType *> element =
+			element_type_from_token (static_cast<uint32_t> (operand));
+
+		if (!element)
+			return element.takeError ();
+		return emit_ldelem (builder, *element);
+	}
+
+	case MONO_CEE_STELEM_I1:
+	case MONO_CEE_STELEM_I2:
+	case MONO_CEE_STELEM_I4:
+	case MONO_CEE_STELEM_I8:
+	case MONO_CEE_STELEM_I:
+	case MONO_CEE_STELEM_R4:
+	case MONO_CEE_STELEM_R8:
+	case MONO_CEE_STELEM_REF:
+		return emit_stelem (builder, builtin_element_type (opcode));
+	case MONO_CEE_STELEM: {
+		llvm::Expected<MonoType *> element =
+			element_type_from_token (static_cast<uint32_t> (operand));
+
+		if (!element)
+			return element.takeError ();
+		return emit_stelem (builder, *element);
+	}
+
 	case MONO_CEE_LDSFLD:
 		return emit_ldsfld (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_STSFLD:

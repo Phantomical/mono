@@ -11,22 +11,18 @@
 
 namespace mono {
 
-namespace {
-
 /// The collector's hook for storing a reference through a pointer it does not otherwise
 /// know about, which is the general form that also covers a field reached through the
-/// interior of an object.
+/// interior of an object and an element reached through an array.
 llvm::FunctionCallee
-wbarrier_decl (llvm::Module *module)
+MethodLLVMEmitter::wbarrier_decl ()
 {
-	llvm::LLVMContext &ctx = module->getContext ();
+	llvm::LLVMContext &ctx = context ();
 	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
 
 	return module->getOrInsertFunction ("mono_gc_wbarrier_generic_store_internal",
 	                                    llvm::Type::getVoidTy (ctx), ptr, ptr);
 }
-
-} // namespace
 
 /// The field TOKEN names, with its declaring class laid out so that its offset can be
 /// asked for.
@@ -359,7 +355,7 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 	 * somewhere it did not before.
 	 */
 	if (mini_type_is_reference (ftype))
-		builder.CreateCall (wbarrier_decl (module), { *address, *value });
+		builder.CreateCall (wbarrier_decl (), { *address, *value });
 	else
 		builder.CreateAlignedStore (*value, *address, type_alignment (ftype));
 
@@ -473,7 +469,7 @@ MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
 	pop_stack (1);
 
 	if (mini_type_is_reference (ftype))
-		builder.CreateCall (wbarrier_decl (module), { address, *value });
+		builder.CreateCall (wbarrier_decl (), { address, *value });
 	else
 		builder.CreateAlignedStore (*value, address, type_alignment (ftype));
 

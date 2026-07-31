@@ -318,10 +318,22 @@ private:
 	llvm::Value *emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                                  llvm::ArrayRef<llvm::Value *> args);
 
+	llvm::FunctionCallee wbarrier_decl ();
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	void emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
 	llvm::Value *static_field_address (MonoIrBuilder &builder, MonoClassField *field);
+	static MonoType *builtin_element_type (int opcode);
+	llvm::Expected<MonoType *> element_type_from_token (uint32_t token);
+	llvm::Expected<llvm::Value *> array_length (MonoIrBuilder &builder, StackValue array);
+	llvm::Expected<llvm::Value *> element_address (MonoIrBuilder &builder, StackValue array,
+	                                               StackValue index, MonoType *element);
+	llvm::Error emit_ldlen (MonoIrBuilder &builder);
+	llvm::Error emit_newarr (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_ldelema (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_ldelem (MonoIrBuilder &builder, MonoType *element);
+	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
+
 	llvm::Error emit_ldsfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stsfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<llvm::Value *> field_address (MonoIrBuilder &builder, StackValue object,
