@@ -178,7 +178,8 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 		MonoIrBuilder entry (entry_block, entry_block->begin ());
 		llvm::AllocaInst *temp = entry.CreateAlloca ((*value)->getType ());
 
-		builder.CreateAlignedStore (*value, temp, type_alignment (*type));
+		temp->setAlignment (type_alignment (*type));
+		builder.CreateAlignedStore (*value, temp, temp->getAlign ());
 		builder.CreateCall (value_copy_decl (),
 		                    { payload, temp, builder.getInt32 (1),
 		                      class_symbol (klass, "mono_class_") });
