@@ -9,6 +9,9 @@
 #include <mono/utils/mono-forward.h>
 #include "mono/utils/mono-compiler.h"
 
+/* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 /*Keep in sync with MonoError*/
 typedef union _MonoErrorInternal {
 	// Merge two uint16 into one uint32 so it can be initialized
@@ -369,5 +372,7 @@ mono_SetLastError (unsigned long err)
 
 #endif // processor
 #endif // win32
+
+G_END_DECLS
 
 #endif

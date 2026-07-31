@@ -21,6 +21,9 @@
 #include "mono/utils/mono-conc-hashtable.h"
 #include "mono/utils/refcount.h"
 
+/* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
+G_BEGIN_DECLS
+
 struct _MonoType {
 	union {
 		MonoClass *klass; /* for VALUETYPE and CLASS */
@@ -1409,5 +1412,7 @@ mono_type_get_array_type_internal (MonoType *type)
 {
 	return type->data.array;
 }
+
+G_END_DECLS
 
 #endif /* __MONO_METADATA_INTERNALS_H__ */
