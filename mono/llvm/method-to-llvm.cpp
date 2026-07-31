@@ -814,6 +814,13 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_INITOBJ:
 		return emit_initobj (builder, static_cast<uint32_t> (operand));
 
+	case MONO_CEE_BOX:
+		return emit_box (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_UNBOX:
+		return emit_unbox (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_UNBOX_ANY:
+		return emit_unbox_any (builder, static_cast<uint32_t> (operand));
+
 	case MONO_CEE_LDSFLD:
 		return emit_ldsfld (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_LDSFLDA:

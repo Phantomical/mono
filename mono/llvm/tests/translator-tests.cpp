@@ -134,6 +134,15 @@ const MethodRef translatable[] = {
 	{ "eh", "Eh:Filter" },
 	{ "eh", "Eh:CallInTry" },
 
+	{ "boxing", "Boxing:BoxInt" },
+	{ "boxing", "Boxing:BoxPair" },
+	{ "boxing", "Boxing:BoxRefPair" },
+	{ "boxing", "Boxing:BoxObject" },
+	{ "boxing", "Boxing:UnboxInt" },
+	{ "boxing", "Boxing:UnboxAnyInt" },
+	{ "boxing", "Boxing:UnboxAnyPair" },
+	{ "boxing", "Boxing:RoundTrip" },
+
 	{ "calls", "Calls:CallStatic" },
 	{ "calls", "Calls:CallStaticTwice" },
 	{ "calls", "Calls:CallVoid" },
@@ -458,6 +467,60 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 	EXPECT_GE (t.count ("ret void"), 1u);
 }
 
+/* ----------------------------------------------------------------- boxing */
+
+TEST_F (TranslatorTest, BoxAllocatesWithTheVtableAndStoresTheValue)
+{
+	const Translation &t = translate ("boxing", "Boxing:BoxInt");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_object_new_specific"), 1u);
+	/* mono_type_full_name spells System.Int32 as "int". */
+	EXPECT_EQ (t.count ("mono_vtable_int"), 1u);
+}
+
+// A reference type's boxed form is itself, so nothing may be allocated.
+TEST_F (TranslatorTest, BoxOnAReferenceTypeAllocatesNothing)
+{
+	const Translation &t = translate ("boxing", "Boxing:BoxObject");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+}
+
+// A struct with a reference inside cannot be memcpy'd into the box: the copy has to
+// go through the collector so the new object's cards get marked.
+TEST_F (TranslatorTest, BoxingARefStructCopiesThroughTheBarrier)
+{
+	const Translation &plain = translate ("boxing", "Boxing:BoxPair");
+	const Translation &with_ref = translate ("boxing", "Boxing:BoxRefPair");
+
+	ASSERT_NE (with_ref.function, nullptr) << with_ref.error;
+	EXPECT_EQ (with_ref.count ("mono_gc_wbarrier_value_copy_internal"), 1u);
+	ASSERT_NE (plain.function, nullptr) << plain.error;
+	EXPECT_EQ (plain.count ("mono_gc_wbarrier_value_copy_internal"), 0u);
+}
+
+// unbox must reject an array (whose element class would match) by its rank byte, and
+// anything whose element class is not the target's, before handing out the interior
+// pointer.
+TEST_F (TranslatorTest, UnboxChecksTheClassBeforeTakingTheAddress)
+{
+	const Translation &t = translate ("boxing", "Boxing:UnboxInt");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_class_int"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("throw_InvalidCastException"), 4u); // 2 blocks, label + branch
+}
+
+TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
+{
+	const Translation &t = translate ("boxing", "Boxing:UnboxAnyInt");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
+}
+
 /* --------------------------------------------------------------- refusals */
 
 struct RefusalRef {
@@ -489,6 +552,7 @@ const RefusalRef refusals[] = {
 	{ "Refused:StackUnderflow", "stack" },
 	{ "Refused:BadLocalIndex", "local" },
 	{ "Refused:FallsOffTheEnd", "return" },
+	{ "Refused:BoxesANullable", "nullable" },
 };
 
 INSTANTIATE_TEST_SUITE_P (Corpus, Refuses, testing::ValuesIn (refusals),
