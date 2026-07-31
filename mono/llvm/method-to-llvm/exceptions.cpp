@@ -310,7 +310,7 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 	/* leave empties the stack, so nothing has to reach either the finally or target. */
 	pop_stack (stack.size ());
 
-	if (llvm::Error error = enter_block (*target, {}))
+	if (llvm::Error error = enter_block (builder, *target, {}))
 		return error;
 
 	llvm::BasicBlock *next = blocks[*target].block;

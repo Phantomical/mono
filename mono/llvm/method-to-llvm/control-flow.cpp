@@ -212,7 +212,7 @@ MethodLLVMEmitter::emit_br (MonoIrBuilder &builder, int32_t displacement)
 	if (!target)
 		return target.takeError ();
 
-	if (llvm::Error error = enter_block (*target, spill_stack (builder)))
+	if (llvm::Error error = enter_block (builder, *target, spill_stack (builder)))
 		return error;
 
 	builder.CreateBr (blocks[*target].block);
@@ -306,9 +306,9 @@ MethodLLVMEmitter::emit_brcond (MonoIrBuilder &builder, int32_t displacement, bo
 
 	std::vector<Slot> slots = spill_stack (builder);
 
-	if (llvm::Error error = enter_block (*target, slots))
+	if (llvm::Error error = enter_block (builder, *target, slots))
 		return error;
-	if (llvm::Error error = enter_block (ip, slots))
+	if (llvm::Error error = enter_block (builder, ip, slots))
 		return error;
 
 	llvm::Value *condition = branch_if_true ? builder.CreateIsNotNull (value.value)
@@ -404,9 +404,9 @@ MethodLLVMEmitter::emit_branch_compare (MonoIrBuilder &builder, BinaryOp op, int
 
 	std::vector<Slot> slots = spill_stack (builder);
 
-	if (llvm::Error error = enter_block (*target, slots))
+	if (llvm::Error error = enter_block (builder, *target, slots))
 		return error;
-	if (llvm::Error error = enter_block (ip, slots))
+	if (llvm::Error error = enter_block (builder, ip, slots))
 		return error;
 
 	builder.CreateCondBr (*condition, blocks[*target].block, blocks[ip].block);
@@ -484,8 +484,25 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 
 	std::vector<Slot> slots = spill_stack (builder);
 
-	if (llvm::Error error = enter_block (ip, slots))
+	if (llvm::Error error = enter_block (builder, ip, slots))
 		return error;
+
+	/*
+	 * Every target is entered before the switch is created: entering a block can
+	 * emit conversion stores when the paths into it disagree on a slot's
+	 * representation, and those have to land ahead of the terminator.
+	 */
+	std::vector<size_t> targets (*count);
+
+	for (uint32_t i = 0; i < *count; ++i) {
+		llvm::Expected<size_t> target = branch_target (displacements[i]);
+
+		if (!target)
+			return target.takeError ();
+		if (llvm::Error error = enter_block (builder, *target, slots))
+			return error;
+		targets[i] = *target;
+	}
 
 	/*
 	 * Switching at the index's own width rather than truncating to int32 is what makes
@@ -495,18 +512,10 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 	 */
 	llvm::SwitchInst *jump = builder.CreateSwitch (index, blocks[ip].block, *count);
 
-	for (uint32_t i = 0; i < *count; ++i) {
-		llvm::Expected<size_t> target = branch_target (displacements[i]);
-
-		if (!target)
-			return target.takeError ();
-		if (llvm::Error error = enter_block (*target, slots))
-			return error;
-
+	for (uint32_t i = 0; i < *count; ++i)
 		jump->addCase (llvm::ConstantInt::get (
 				       llvm::cast<llvm::IntegerType> (index->getType ()), i),
-		               blocks[*target].block);
-	}
+		               blocks[targets[i]].block);
 
 	return llvm::Error::success ();
 }

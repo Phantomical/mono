@@ -167,4 +167,49 @@
 	SKIP:
 		ret
 	}
+
+	// The two paths into JOIN leave different representations at depth 0: an
+	// int32 down one and a native int down the other. The slot keeps the type
+	// the first path gave it and the other edge converts on the way in.
+	.method public static native int MergeIntWithNativeInt (int32 c, native int p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		brtrue.s WIDE
+		ldc.i4.5
+		br.s JOIN
+	WIDE:
+		ldarg.1
+	JOIN:
+		conv.i
+		ret
+	}
+
+	.method public static float64 MergeFloatWidths (int32 c, float32 f, float64 d) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		brtrue.s NARROW
+		ldarg.2
+		br.s JOIN
+	NARROW:
+		ldarg.1
+	JOIN:
+		conv.r8
+		ret
+	}
+
+	.method public static native int MergePointerWithNativeInt (int32 c, int32& r, native int p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		brtrue.s PTR
+		ldarg.2
+		br.s JOIN
+	PTR:
+		ldarg.1
+	JOIN:
+		conv.i
+		ret
+	}
 }

@@ -430,7 +430,8 @@ MethodLLVMEmitter::spill_stack (MonoIrBuilder &builder)
 /// Record that TARGET is entered holding SLOTS, which is also where the two edges of a
 /// conditional branch are checked against each other: they spill once and enter twice.
 llvm::Error
-MethodLLVMEmitter::enter_block (size_t target, const std::vector<Slot> &slots)
+MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
+                                const std::vector<Slot> &slots)
 {
 	Block &block = blocks[target];
 
@@ -453,12 +454,37 @@ MethodLLVMEmitter::enter_block (size_t target, const std::vector<Slot> &slots)
 		                   + llvm::Twine::utohexstr (target) + " is entered with "
 		                   + llvm::Twine (block.entry.size ()));
 
-	for (size_t depth = 0; depth < slots.size (); ++depth)
-		if (block.entry[depth].alloca != slots[depth].alloca)
-			return unsupported_il (llvm::Twine ("the evaluation stack holds a "
-			                                    "different type at depth ")
-			                       + llvm::Twine (depth) + " than the other paths into IL_"
-			                       + llvm::Twine::utohexstr (target) + " leave there");
+	for (size_t depth = 0; depth < slots.size (); ++depth) {
+		if (block.entry[depth].alloca == slots[depth].alloca)
+			continue;
+
+		/*
+		 * The paths disagree on the representation at this depth. The slot
+		 * keeps the type the first path gave it and this edge converts on the
+		 * way in - the same direction mini merges, whose interface variables
+		 * are typed by the first-reaching path and later edges convert_value
+		 * into them. Anything the coercion cannot express - a struct meeting
+		 * an integer, say - is a merge the spec does not define either.
+		 */
+		llvm::Value *current = builder.CreateLoad (
+			slots[depth].alloca->getAllocatedType (), slots[depth].alloca);
+		llvm::Expected<llvm::Value *> converted = coerce_to_location (
+			builder, { current, slots[depth].type }, block.entry[depth].type);
+
+		if (!converted
+		    || (*converted)->getType ()
+		               != block.entry[depth].alloca->getAllocatedType ()) {
+			if (!converted)
+				llvm::consumeError (converted.takeError ());
+			return invalid_il (llvm::Twine ("the evaluation stack holds a "
+			                                "different type at depth ")
+			                   + llvm::Twine (depth)
+			                   + " than the other paths into IL_"
+			                   + llvm::Twine::utohexstr (target) + " leave there");
+		}
+
+		builder.CreateStore (*converted, block.entry[depth].alloca);
+	}
 
 	return llvm::Error::success ();
 }
@@ -536,10 +562,10 @@ MethodLLVMEmitter::emit ()
 			entry.push_back ({ spill_slot (0, llvm::PointerType::get (context (), 0)),
 			                   mono_get_object_type () });
 
-		if (auto error = enter_block (clause->handler_offset, entry))
+		if (auto error = enter_block (builder, clause->handler_offset, entry))
 			return std::move (error);
 		if (clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
-			if (auto error = enter_block (clause->data.filter_offset, entry))
+			if (auto error = enter_block (builder, clause->data.filter_offset, entry))
 				return std::move (error);
 	}
 
@@ -562,7 +588,7 @@ MethodLLVMEmitter::emit ()
 			 * previous block happened to leave behind.
 			 */
 			if (builder.GetInsertBlock ()->getTerminator () == nullptr) {
-				if (auto error = enter_block (ip, spill_stack (builder)))
+				if (auto error = enter_block (builder, ip, spill_stack (builder)))
 					return std::move (error);
 
 				builder.CreateBr (next.block);

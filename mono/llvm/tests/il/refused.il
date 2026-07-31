@@ -71,4 +71,24 @@
 		mkrefany [mscorlib]System.Int32
 		ret
 	}
+
+	.method public static int32 MergesAStructWithAnInt (int32 c, valuetype Plain p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		brtrue.s STRUCT
+		ldc.i4.7
+		br.s JOIN
+	STRUCT:
+		ldarg.1
+	JOIN:
+		pop
+		ldc.i4.0
+		ret
+	}
+}
+
+.class public sequential ansi sealed beforefieldinit Plain extends [mscorlib]System.ValueType
+{
+	.field public int32 Value
 }

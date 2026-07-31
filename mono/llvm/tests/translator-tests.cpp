@@ -99,6 +99,9 @@ const MethodRef translatable[] = {
 	{"flow", "Flow:Compare"},
 	{"flow", "Flow:Compares"},
 	{"flow", "Flow:Nested"},
+	{"flow", "Flow:MergeIntWithNativeInt"},
+	{"flow", "Flow:MergeFloatWidths"},
+	{"flow", "Flow:MergePointerWithNativeInt"},
 
 	{"fields", "Fields:GetX"},
 	{"fields", "Fields:GetY"},
@@ -353,6 +356,27 @@ TEST_F (TranslatorTest, StackLiveAcrossABranchGoesThroughASpillSlot)
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_GE (t.count ("%stack0 = alloca"), 1u);
 	EXPECT_GE (t.count ("%stack1 = alloca"), 1u);
+}
+
+// The paths into a join can disagree on a slot's representation. The slot keeps the
+// type the first path gave it and the later edge converts on the way in, which is
+// the direction mini merges too.
+TEST_F (TranslatorTest, DivergentJoinsConvertTowardTheFirstPath)
+{
+	const Translation &ints = translate ("flow", "Flow:MergeIntWithNativeInt");
+	const Translation &floats = translate ("flow", "Flow:MergeFloatWidths");
+	const Translation &pointers = translate ("flow", "Flow:MergePointerWithNativeInt");
+
+	ASSERT_NE (ints.function, nullptr) << ints.error;
+	/* The int32 edge registered the slot first, so the native int truncates in. */
+	EXPECT_GE (ints.count ("trunc"), 1u) << ints.text ();
+
+	ASSERT_NE (floats.function, nullptr) << floats.error;
+	/* float64 registered first, so the float32 edge extends. */
+	EXPECT_EQ (floats.count ("fpext"), 1u) << floats.text ();
+
+	ASSERT_NE (pointers.function, nullptr) << pointers.error;
+	EXPECT_GE (pointers.count ("ptrtoint"), 1u) << pointers.text ();
 }
 
 /* ----------------------------------------------------------------- fields */
@@ -1019,6 +1043,7 @@ const RefusalRef refusals[] = {
 	{"Refused:UsesJmp", "jmp"},
 	{"Refused:UsesArglist", "arglist"},
 	{"Refused:UsesMkrefany", "mkrefany"},
+	{"Refused:MergesAStructWithAnInt", "different type"},
 };
 
 INSTANTIATE_TEST_SUITE_P (Corpus, Refuses, testing::ValuesIn (refusals),

@@ -268,7 +268,8 @@ private:
 	llvm::Expected<size_t> branch_target (int32_t displacement);
 	llvm::AllocaInst *spill_slot (size_t depth, llvm::Type *type);
 	std::vector<Slot> spill_stack (MonoIrBuilder &builder);
-	llvm::Error enter_block (size_t target, const std::vector<Slot> &slots);
+	llvm::Error enter_block (MonoIrBuilder &builder, size_t target,
+	                         const std::vector<Slot> &slots);
 	void reload_stack (MonoIrBuilder &builder, const Block &block);
 
 	int innermost_try (size_t at) const;
