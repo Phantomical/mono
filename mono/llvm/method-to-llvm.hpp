@@ -343,6 +343,9 @@ private:
 	                               MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
+	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_calli (MonoIrBuilder &builder, uint32_t token);
 
 	llvm::FunctionCallee wbarrier_decl ();
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);

@@ -656,7 +656,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MonoInlineType:
 	case MonoInlineMethod:
 	case MonoInlineString:
-	case MonoInlineTok: {
+	case MonoInlineTok:
+	case MonoInlineSig: {
 		llvm::Expected<uint32_t> read = read_u32 ();
 
 		if (!read)
@@ -828,6 +829,12 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_unbox_any (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_NEWOBJ:
 		return emit_newobj (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDFTN:
+		return emit_ldftn (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDVIRTFTN:
+		return emit_ldvirtftn (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_CALLI:
+		return emit_calli (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_CASTCLASS:
 		return emit_castclass (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_ISINST:

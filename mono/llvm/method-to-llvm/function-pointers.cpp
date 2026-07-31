@@ -1,0 +1,248 @@
+#include "method-to-llvm.hpp"
+#include "runtime-error.hpp"
+#include "mono/metadata/class-internals.h"
+#include "mono/metadata/metadata-internals.h"
+#include "mono/metadata/metadata.h"
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Type.h>
+
+namespace mono {
+
+/*
+ * III.3.41  ldftn - load method pointer
+ *
+ *   Format        Assembly Format   Description
+ *   FE 06 <T>     ldftn method      Push a pointer to a method referenced by method,
+ *                                   on the stack.
+ *
+ * Stack Transition:
+ *
+ *   ... -> ..., ftn
+ *
+ * Description:
+ *
+ *   The ldftn instruction pushes a method pointer (§II.14.5) to the native code
+ *   implementing the method described by method (a metadata token, either a methoddef
+ *   or methodref (see Partition II)), or to some other implementation-specific
+ *   description of method (see Note) onto the stack). The value pushed can be called
+ *   using the calli instruction if it references a managed method (or a stub that
+ *   transitions from managed to unmanaged code). It may also be used to construct a
+ *   delegate, stored in a variable, etc.
+ *
+ *   The CLI resolves the method pointer according to the rules specified in
+ *   §I.12.4.1.3 (Computed destinations), except that the destination is computed with
+ *   respect to the class specified by method.
+ *
+ *   The value returned points to native code (see Note) using the calling convention
+ *   specified by method. Thus a method pointer can be passed to unmanaged native code
+ *   (e.g., as a callback routine). Note that the address computed by this instruction
+ *   can be to a thunk produced specially for this purpose (for example, to re-enter
+ *   the CIL interpreter when a native version of the method isn't available).
+ *
+ * Exceptions:
+ *
+ *   System.MethodAccessException can be thrown when there is an invalid attempt to
+ *   access a non-public method.
+ *
+ * Correctness:
+ *
+ *   Correct CIL requires that method is a valid methoddef or methodref token.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
+{
+	llvm::Expected<MonoMethod *> target = resolve_method (token);
+	if (!target)
+		return target.takeError ();
+
+	/*
+	 * The declaration is the address: the engine resolves the function symbol to
+	 * the method's entry point, which is exactly what the spec asks this to push.
+	 */
+	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
+	if (!declaration)
+		return declaration.takeError ();
+
+	push_stack (*declaration, mono_get_int_type ());
+	return llvm::Error::success ();
+}
+
+/*
+ * III.4.18  ldvirtftn - load a virtual method pointer
+ *
+ *   Format        Assembly Format    Description
+ *   FE 07 <T>     ldvirtftn method   Push address of virtual method method on the
+ *                                    stack.
+ *
+ * Stack Transition:
+ *
+ *   ..., object -> ..., ftn
+ *
+ * Description:
+ *
+ *   The ldvirtftn instruction pushes a method pointer (§II.14.5) to the native code
+ *   implementing the virtual method associated with object and described by the
+ *   method reference method (a metadata token, a methoddef, methodref or methodspec;
+ *   see Partition II), or to some other implementation-specific description of the
+ *   method associated with object (see Note), onto the stack. The value pushed can be
+ *   called using the calli instruction if it references a managed method (or a stub
+ *   that transitions from managed to unmanaged code). It may also be used to
+ *   construct a delegate, stored in a variable, etc.
+ *
+ * Exceptions:
+ *
+ *   System.MethodAccessException can be thrown when there is an invalid attempt to
+ *   access a non-public method.
+ *
+ *   System.NullReferenceException is thrown if object is null.
+ *
+ * Correctness:
+ *
+ *   Correct CIL ensures that method is a valid methoddef, methodref or methodspec
+ *   token. Also that method references a non-static method that is defined for
+ *   object.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
+{
+	llvm::Expected<MonoMethod *> target = resolve_method (token);
+	if (!target)
+		return target.takeError ();
+
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	StackValue obj = get_stack (0);
+	StackType obj_type = stack_type (obj.type);
+
+	if (obj_type != ObjectRef)
+		return invalid_il (llvm::Twine ("ldvirtftn is not defined for operand type ")
+		                   + describe (obj.type, obj_type));
+
+	/*
+	 * Which slot the method lands in - vtable, IMT, a generic virtual resolver -
+	 * is the runtime's business, so the lookup is its helper rather than a slot
+	 * load spelled out here.
+	 */
+	emit_null_check (builder, obj.value);
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::FunctionCallee lookup =
+		module->getOrInsertFunction ("mono_ldvirtfn", ptr, ptr, ptr);
+	llvm::Value *ftn = emit_protected_call (builder, lookup,
+	                                        { obj.value, method_symbol (*target) });
+
+	pop_stack (1);
+	push_stack (ftn, mono_get_int_type ());
+	return llvm::Error::success ();
+}
+
+/*
+ * III.3.20  calli - indirect method call
+ *
+ *   Format     Assembly Format        Description
+ *   29 <T>     calli callsitedescr    Call method indicated on the stack with
+ *                                     arguments described by callsitedescr.
+ *
+ * Stack Transition:
+ *
+ *   ..., arg0, arg1 ... argN, ftn -> ..., retVal (not always returned)
+ *
+ * Description:
+ *
+ *   The calli instruction calls ftn (a pointer to a method entry point) with the
+ *   arguments arg0 ... argN. The types of these arguments are described by the
+ *   signature callsitedescr. (See Partition I for a description of the CIL calling
+ *   sequence.) The calli instruction can be immediately preceded by a tail. prefix to
+ *   specify that the current method state should be released before transferring
+ *   control.
+ *
+ *   The ftn argument must be a method pointer to a method that can be legitimately
+ *   called with the arguments described by callsitedescr (a metadata token for a
+ *   stand-alone signature). Such a pointer can be created using the ldftn or
+ *   ldvirtftn instructions, or could have been passed in from native code.
+ *
+ *   The standalone signature specifies the number and type of parameters being
+ *   passed, as well as the calling convention (See Partition II) The calling
+ *   convention is not checked dynamically, so code that uses a calli instruction will
+ *   not work correctly if the destination does not actually use the specified calling
+ *   convention.
+ *
+ *   The arguments are placed on the stack in left-to-right order. That is, the first
+ *   argument is computed and placed on the stack, then the second argument, and so
+ *   on. The argument-building code sequence for an instance or virtual method shall
+ *   push that instance reference (the this pointer, which shall not be null) first.
+ *   [Note: for calls to methods on value types, the this pointer is a managed
+ *   pointer, not an instance reference. §I.8.6.1.5. end note]
+ *
+ *   The arguments are passed as though by implicit starg (§III.3.61) instructions,
+ *   see Implicit argument coercion §III.1.6.
+ *
+ *   calli pops the this pointer, if any, and the arguments off the evaluation stack
+ *   before calling the method. If the method has a return value, it is pushed on the
+ *   stack upon method completion. On the callee side, the arg0 parameter/this pointer
+ *   is accessed as argument 0, arg1 as argument 1, and so on.
+ *
+ * Exceptions:
+ *
+ *   System.SecurityException can be thrown if the system security does not grant the
+ *   caller access to the called method. The security check can occur when the CIL is
+ *   converted to native code rather than at runtime.
+ *
+ * Correctness:
+ *
+ *   Correct CIL requires that the function pointer contains the address of a method
+ *   whose signature is method-signature compatible-with that specified by
+ *   callsitedescr and that the arguments correctly correspond to the types of the
+ *   destination function's this pointer, if required, and parameters.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
+{
+	ERROR_DECL (metadata_error);
+	MonoMethodSignature *sig = mono_metadata_parse_signature_checked (
+		m_class_get_image (method->klass), token, metadata_error);
+
+	if (sig == nullptr)
+		return runtime_error (metadata_error);
+
+	if (MonoGenericContext *ctx = mono_method_get_context (method)) {
+		sig = mono_inflate_generic_signature (sig, ctx, metadata_error);
+		if (sig == nullptr)
+			return runtime_error (metadata_error);
+	}
+
+	/* An unmanaged target needs a managed-to-native transition, not a plain call. */
+	if (sig->pinvoke)
+		return unsupported_il ("calli to an unmanaged target");
+
+	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (sig);
+	if (!type)
+		return type.takeError ();
+
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	llvm::Value *ftn = get_stack (0).value;
+
+	if (!ftn->getType ()->isPointerTy ())
+		ftn = builder.CreateIntToPtr (ftn, llvm::PointerType::get (context (), 0));
+	pop_stack (1);
+
+	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
+	if (!args)
+		return args.takeError ();
+
+	llvm::Value *result = emit_protected_call (
+		builder, llvm::FunctionCallee (*type, ftn), *args);
+
+	pop_stack (sig->param_count + sig->hasthis);
+
+	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
+		return llvm::Error::success ();
+
+	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
+	return llvm::Error::success ();
+}
+
+} // namespace mono

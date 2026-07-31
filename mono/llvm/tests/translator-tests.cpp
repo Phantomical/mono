@@ -143,6 +143,11 @@ const MethodRef translatable[] = {
 	{ "boxing", "Boxing:UnboxAnyPair" },
 	{ "boxing", "Boxing:RoundTrip" },
 
+	{ "fnptr", "Fnptr:TakeStatic" },
+	{ "fnptr", "Fnptr:TakeVirtual" },
+	{ "fnptr", "Fnptr:CallThroughPointer" },
+	{ "fnptr", "Fnptr:CallThroughArgument" },
+
 	{ "objects", "Objects:MakeCounter" },
 	{ "objects", "Objects:MakeCounterAt" },
 	{ "objects", "Objects:MakePoint" },
@@ -538,6 +543,36 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
+}
+
+/* ---------------------------------------------------------- method pointers */
+
+// ldftn's answer is the callee's own function symbol - the engine resolves it to the
+// entry point. When calli's pointer is that constant, the builder folds the whole
+// thing back into a direct call; only a pointer nothing knows stays indirect.
+TEST_F (TranslatorTest, LdftnPushesTheCalleeAndCalliCallsThroughIt)
+{
+	const Translation &take = translate ("fnptr", "Fnptr:TakeStatic");
+	const Translation &folded = translate ("fnptr", "Fnptr:CallThroughPointer");
+	const Translation &indirect = translate ("fnptr", "Fnptr:CallThroughArgument");
+
+	ASSERT_NE (take.function, nullptr) << take.error;
+	EXPECT_GE (take.count ("Fnptr:AddOne"), 1u);
+
+	ASSERT_NE (folded.function, nullptr) << folded.error;
+	EXPECT_EQ (folded.count ("call i32 @\"Fnptr:AddOne"), 1u) << folded.text ();
+
+	ASSERT_NE (indirect.function, nullptr) << indirect.error;
+	EXPECT_EQ (indirect.count ("call i32 %"), 1u) << indirect.text ();
+}
+
+TEST_F (TranslatorTest, LdvirtftnAsksTheRuntime)
+{
+	const Translation &t = translate ("fnptr", "Fnptr:TakeVirtual");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_ldvirtfn"), 1u);
+	EXPECT_EQ (t.count ("@\"mono_method_"), 1u);
 }
 
 /* ----------------------------------------------------------------- newobj */
