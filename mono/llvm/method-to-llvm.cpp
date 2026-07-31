@@ -912,7 +912,7 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	if (sig->hasthis)
 		names[0] = "this";
 
-	for (int i = 0; i < nargs; ++i) {
+	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);
 		auto ltyper = convert_type (mtype);
 		if (!ltyper)
