@@ -144,6 +144,17 @@ function(mono_test_environment)
   endif()
 endfunction()
 
+# Skips named methods of one xunit suite, for tests that cannot pass against
+# this runtime whatever the configuration.  Say why at the call site.
+#
+#   mono_test_xunit_exclude(PROFILE <p> ASSEMBLY <lib.dll> METHODS <full.name>...)
+function(mono_test_xunit_exclude)
+  cmake_parse_arguments(E "" "PROFILE;ASSEMBLY" "METHODS" ${ARGN})
+  _mono_stem(_stem "${E_ASSEMBLY}")
+  set_property(GLOBAL APPEND PROPERTY
+               MONO_TEST_XUNIT_NOMETHOD_${E_PROFILE}_${_stem} ${E_METHODS})
+endfunction()
+
 # Locates one app.config fragment.  The xbuild suites' fragment is generated
 # from a template rather than checked in, because it names the assembly version
 # their binding redirects point at.
@@ -477,6 +488,11 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
              -nunit "${_testdir}/TestResult-${profile}-${_stem}-xunit.xml")
     foreach(_t IN LISTS MONO_TEST_XUNIT_NOTRAITS)
       list(APPEND _cmd -notrait "${_t}")
+    endforeach()
+    get_property(_nomethods GLOBAL PROPERTY
+                 MONO_TEST_XUNIT_NOMETHOD_${profile}_${_astem})
+    foreach(_m IN LISTS _nomethods)
+      list(APPEND _cmd -nomethod "${_m}")
     endforeach()
     _mono_xunit_runtime(_xrt ${profile})
     list(APPEND _deps ${_xrt})
