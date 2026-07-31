@@ -1,3 +1,12 @@
+/**
+ * \file
+ * \brief Conversion between CIL and LLVM IR.
+ *
+ * This file implements the lowering of CIL to LLVM IR. The implementation
+ * details are within the MethodLLVMEmitter class, which is implemented across
+ * a number of different source files in the method-to-llvm directory.
+ */
+
 #ifndef MONO_LLVM_METHOD_TO_LLVM_HPP
 #define MONO_LLVM_METHOD_TO_LLVM_HPP
 
@@ -145,6 +154,27 @@ private:
 
 	llvm::DenseMap<MonoMethod *, llvm::Function *> declarations;
 	llvm::DenseMap<MonoClass *, llvm::Type *> vtypes;
+	/*
+	 * What an exception clause needs on the LLVM side.
+	 *
+	 * A finally block is entered from several places and has to carry on differently
+	 * for each, so which one is in progress is written to `resume_at` before it is
+	 * entered and switched on by its endfinally. Index 0 means the block was entered
+	 * by unwinding, where carrying on means resuming the unwind rather than going
+	 * anywhere in this method.
+	 */
+	struct Clause {
+		llvm::BasicBlock *pad = nullptr;
+		llvm::AllocaInst *resume_at = nullptr;
+		llvm::SwitchInst *resume = nullptr;
+		std::vector<std::pair<uint32_t, llvm::BasicBlock *>> continuations;
+	};
+
+	MonoExceptionClause *clauses = nullptr;
+	uint32_t num_clauses = 0;
+	uint32_t next_continuation = 1;
+	std::vector<Clause> clause_state;
+
 	llvm::DenseMap<size_t, Block> blocks;
 	llvm::DenseMap<std::pair<size_t, llvm::Type *>, llvm::AllocaInst *> spills;
 	llvm::BasicBlock *entry_block = nullptr;
@@ -214,7 +244,19 @@ private:
 	llvm::Error enter_block (size_t target, const std::vector<Slot> &slots);
 	void reload_stack (MonoIrBuilder &builder, const Block &block);
 
+	int innermost_try (size_t at) const;
+	int innermost_handler (size_t at) const;
+	llvm::BasicBlock *landing_pad (uint32_t clause);
+	void emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+	                          llvm::ArrayRef<llvm::Value *> args);
+	llvm::Error resolve_finally_switches ();
+
 	llvm::Error emit_ret (MonoIrBuilder &builder);
+	llvm::Error emit_leave (MonoIrBuilder &builder, int32_t displacement);
+	llvm::Error emit_endfinally (MonoIrBuilder &builder);
+	llvm::Error emit_endfilter (MonoIrBuilder &builder);
+	llvm::Error emit_throw (MonoIrBuilder &builder);
+	llvm::Error emit_rethrow (MonoIrBuilder &builder);
 	llvm::Error emit_br (MonoIrBuilder &builder, int32_t displacement);
 	llvm::Error emit_brcond (MonoIrBuilder &builder, int32_t displacement, bool branch_if_true);
 	llvm::Error emit_branch_compare (MonoIrBuilder &builder, BinaryOp op,
@@ -268,6 +310,10 @@ private:
 	llvm::Error emit_ldc_i8 (MonoIrBuilder &builder, int64_t value);
 	llvm::Error emit_ldc_r4 (MonoIrBuilder &builder, uint32_t bits);
 	llvm::Error emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits);
+
+	llvm::Error emit_ldarg (MonoIrBuilder &builder, uint32_t index);
+	llvm::Error emit_ldarga (MonoIrBuilder &builder, uint32_t index);
+	llvm::Error emit_starg (MonoIrBuilder &builder, uint32_t index);
 
 	llvm::Error emit_ldloc (MonoIrBuilder &builder, uint32_t index);
 	llvm::Error emit_ldloca (MonoIrBuilder &builder, uint32_t index);

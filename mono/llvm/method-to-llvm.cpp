@@ -17,6 +17,7 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/ErrorHandling.h>
 
+#include <algorithm>
 #include <optional>
 
 namespace mono {
@@ -286,6 +287,23 @@ MethodLLVMEmitter::find_block_leaders ()
 		at = next;
 	}
 
+	/*
+	 * A protected region and each of its handlers are entered from outside the IL's
+	 * own control flow, so their boundaries start blocks whether or not anything
+	 * branches to them.
+	 */
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		MonoExceptionClause *clause = &clauses[i];
+
+		leaders.push_back (clause->try_offset);
+		leaders.push_back (clause->try_offset + clause->try_len);
+		leaders.push_back (clause->handler_offset);
+		leaders.push_back (clause->handler_offset + clause->handler_len);
+
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
+			leaders.push_back (clause->data.filter_offset);
+	}
+
 	for (size_t leader : leaders) {
 		if (leader > code_size) {
 			offset = 0;
@@ -418,6 +436,23 @@ MethodLLVMEmitter::emit ()
 	function = declr.get ();
 	code = cfg->header->code;
 	code_size = cfg->header->code_size;
+	clauses = cfg->header->clauses;
+	num_clauses = cfg->header->num_clauses;
+	clause_state.resize (num_clauses);
+
+	/*
+	 * An invoke is only well formed on a function with a personality, and mono's is
+	 * the hook its own unwinder recognises. Nothing calls it on the managed path -
+	 * mono_handle_exception does the search - but LLVM will not emit the LSDA the
+	 * unwinder reads without one named here.
+	 */
+	if (num_clauses > 0)
+		function->setPersonalityFn (llvm::cast<llvm::Constant> (
+			module->getOrInsertFunction (
+				       "mono_personality",
+				       llvm::FunctionType::get (
+					       llvm::Type::getInt32Ty (context ()), true))
+				.getCallee ()));
 
 	MonoIrBuilder builder (context ());
 
@@ -430,6 +465,16 @@ MethodLLVMEmitter::emit ()
 		return std::move (error);
 	if (auto error = find_block_leaders ())
 		return std::move (error);
+
+	/*
+	 * A finally is entered from its own leaves as well as by unwinding, so it needs
+	 * somewhere to record which is in progress before it is jumped to.
+	 */
+	for (uint32_t i = 0; i < num_clauses; ++i)
+		if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
+			clause_state[i].resume_at =
+				builder.CreateAlloca (builder.getInt32Ty (), nullptr,
+				                      llvm::Twine ("resume_at") + llvm::Twine (i));
 
 	if (blocks[0].block == nullptr)
 		return invalid_il ("the method has no body");
@@ -469,6 +514,9 @@ MethodLLVMEmitter::emit ()
 
 	if (builder.GetInsertBlock ()->getTerminator () == nullptr)
 		return invalid_il ("method body ends without returning");
+
+	if (auto error = resolve_finally_switches ())
+		return std::move (error);
 
 	/*
 	 * A block nothing reached still has to be well formed for the verifier, and the
@@ -595,6 +643,26 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_LDC_R8:
 		return emit_ldc_r8 (builder, operand);
 
+	case MONO_CEE_LDARG:
+	case MONO_CEE_LDARG_S:
+		return emit_ldarg (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDARG_0:
+		return emit_ldarg (builder, 0);
+	case MONO_CEE_LDARG_1:
+		return emit_ldarg (builder, 1);
+	case MONO_CEE_LDARG_2:
+		return emit_ldarg (builder, 2);
+	case MONO_CEE_LDARG_3:
+		return emit_ldarg (builder, 3);
+
+	case MONO_CEE_LDARGA:
+	case MONO_CEE_LDARGA_S:
+		return emit_ldarga (builder, static_cast<uint32_t> (operand));
+
+	case MONO_CEE_STARG:
+	case MONO_CEE_STARG_S:
+		return emit_starg (builder, static_cast<uint32_t> (operand));
+
 	case MONO_CEE_LDLOC:
 	case MONO_CEE_LDLOC_S:
 		return emit_ldloc (builder, static_cast<uint32_t> (operand));
@@ -654,6 +722,17 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_BR:
 	case MONO_CEE_BR_S:
 		return emit_br (builder, displacement);
+	case MONO_CEE_LEAVE:
+	case MONO_CEE_LEAVE_S:
+		return emit_leave (builder, displacement);
+	case MONO_CEE_ENDFINALLY:
+		return emit_endfinally (builder);
+	case MONO_CEE_ENDFILTER:
+		return emit_endfilter (builder);
+	case MONO_CEE_THROW:
+		return emit_throw (builder);
+	case MONO_CEE_RETHROW:
+		return emit_rethrow (builder);
 	case MONO_CEE_BRTRUE:
 	case MONO_CEE_BRTRUE_S:
 		return emit_brcond (builder, displacement, true);
@@ -792,8 +871,8 @@ MethodLLVMEmitter::emit_throw_corlib_exception (MonoIrBuilder &builder, const ch
 	MonoClass *klass = mono_class_load_from_name (mono_get_corlib (), "System", name);
 	uint32_t token = m_class_get_type_token (klass) - MONO_TOKEN_TYPE_DEF;
 
-	builder.CreateCall (throw_corlib_exception_decl (module), builder.getInt32 (token));
-	builder.CreateUnreachable ();
+	emit_unwinding_call (builder, throw_corlib_exception_decl (module),
+	                     { builder.getInt32 (token) });
 }
 
 /// Throw the corlib exception NAME when CONDITION holds, and go on emitting into the
