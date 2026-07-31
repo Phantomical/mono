@@ -200,6 +200,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	MonoMethod *callee_method = *target;
 	MonoClass *constrained = nullptr;
 	bool direct_this = false;
+	bool box_receiver = false;
 
 	if (prefixes.constrained != 0) {
 		if (!is_virtual)
@@ -222,11 +223,17 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 			if (!is_ok (resolve_error))
 				return runtime_error (resolve_error);
-			if (impl == nullptr || impl->klass != constrained)
-				return unsupported_il (
-					"a constrained. call that boxes its receiver");
-			callee_method = impl;
-			direct_this = true;
+			if (impl != nullptr && impl->klass == constrained) {
+				callee_method = impl;
+				direct_this = true;
+			} else {
+				/*
+				 * The value type does not override the method - it lives
+				 * on Object, ValueType or Enum - so the receiver is boxed
+				 * and the call dispatches on the box.
+				 */
+				box_receiver = true;
+			}
 		}
 	}
 
@@ -243,6 +250,29 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (is_virtual && !direct_this && sig->generic_param_count != 0)
 		return unsupported_il ("generic virtual dispatch");
 
+	/*
+	 * The boxed receiver replaces the managed pointer in its stack slot, below the
+	 * explicit arguments, before the arguments are collected.
+	 */
+	if (box_receiver) {
+		size_t depth = sig->param_count;
+
+		if (stack.size () < depth + 1)
+			return unbalanced_stack (depth + 1);
+
+		MonoType *vtype = m_class_get_byval_arg (constrained);
+		llvm::Expected<llvm::Type *> slot = convert_type (vtype);
+		if (!slot)
+			return slot.takeError ();
+
+		StackValue &receiver = stack[stack.size () - 1 - depth];
+		llvm::Value *value = builder.CreateAlignedLoad (*slot, receiver.value,
+		                                                type_alignment (vtype));
+
+		receiver.value = box_value (builder, constrained, vtype, value);
+		receiver.type = mono_get_object_type ();
+	}
+
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (callee_method);
 	if (!declaration)
 		return declaration.takeError ();
@@ -252,7 +282,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		return args.takeError ();
 
 	/* A reference-typed constrained receiver arrives as a pointer to the reference. */
-	if (constrained != nullptr && !direct_this)
+	if (constrained != nullptr && !direct_this && !box_receiver)
 		(*args)[0] =
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));

@@ -393,6 +393,8 @@ private:
 	                            MonoClass *klass);
 	llvm::Error call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
 	                                  const char *name);
+	llvm::Value *box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
+	                        llvm::Value *value);
 	llvm::Error emit_newobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_box (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox (MonoIrBuilder &builder, uint32_t token);

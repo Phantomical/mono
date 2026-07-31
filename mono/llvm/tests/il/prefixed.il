@@ -41,6 +41,11 @@
 	}
 }
 
+.class public sequential ansi sealed beforefieldinit Bare extends [mscorlib]System.ValueType
+{
+	.field public int32 Inner
+}
+
 .class public abstract auto ansi sealed beforefieldinit Prefixed extends [mscorlib]System.Object
 {
 	.method public static int32 VolatileRead (native int p) cil managed
@@ -97,6 +102,25 @@
 		ldarga.s 0
 		constrained. Wrapped
 		callvirt instance string [mscorlib]System.Object::ToString ()
+		ret
+	}
+
+	.method public static string ConstrainedBoxes (valuetype Bare b) cil managed
+	{
+		.maxstack 1
+		ldarga.s 0
+		constrained. Bare
+		callvirt instance string [mscorlib]System.Object::ToString ()
+		ret
+	}
+
+	.method public static bool ConstrainedBoxesWithArg (valuetype Bare b, object o) cil managed
+	{
+		.maxstack 2
+		ldarga.s 0
+		ldarg.1
+		constrained. Bare
+		callvirt instance bool [mscorlib]System.Object::Equals (object)
 		ret
 	}
 

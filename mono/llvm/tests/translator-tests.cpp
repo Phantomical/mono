@@ -166,6 +166,8 @@ const MethodRef translatable[] = {
 	{"prefixed", "Prefixed:UnalignedRead"},
 	{"prefixed", "Prefixed:ConstrainedOnClass"},
 	{"prefixed", "Prefixed:ConstrainedOnStruct"},
+	{"prefixed", "Prefixed:ConstrainedBoxes"},
+	{"prefixed", "Prefixed:ConstrainedBoxesWithArg"},
 	{"prefixed", "Prefixed:TailCall"},
 
 	{"fnptr", "Fnptr:TakeStatic"},
@@ -724,6 +726,25 @@ TEST_F (TranslatorTest, ConstrainedResolvesTheReceiver)
 	EXPECT_EQ (on_struct.count ("mono_object_new_specific"), 0u);
 }
 
+// A value type that does not override the method boxes its receiver: the value loads
+// through the managed pointer into a fresh box, and the call dispatches on the box's
+// vtable. The second case buries the receiver under an argument, so the box has to
+// land in the right stack slot.
+TEST_F (TranslatorTest, ConstrainedCallOnANonOverridingStructBoxes)
+{
+	const Translation &plain = translate ("prefixed", "Prefixed:ConstrainedBoxes");
+	const Translation &buried = translate ("prefixed", "Prefixed:ConstrainedBoxesWithArg");
+
+	ASSERT_NE (plain.function, nullptr) << plain.error;
+	EXPECT_EQ (plain.count ("mono_object_new_specific"), 1u) << plain.text ();
+	EXPECT_EQ (plain.count ("mono_vtable_Bare"), 1u);
+	/* Dispatch stays virtual: the target comes off the box's vtable, never named. */
+	EXPECT_EQ (plain.count ("call ptr @\"System.Object:ToString"), 0u);
+
+	ASSERT_NE (buried.function, nullptr) << buried.error;
+	EXPECT_EQ (buried.count ("mono_object_new_specific"), 1u) << buried.text ();
+}
+
 /* ---------------------------------------------------------- method pointers */
 
 // ldftn's answer is the callee's own function symbol - the engine resolves it to the
@@ -887,7 +908,6 @@ const RefusalRef refusals[] = {
 	{"Refused:StackUnderflow", "stack"},
 	{"Refused:BadLocalIndex", "local"},
 	{"Refused:FallsOffTheEnd", "return"},
-	{"Refused:ConstrainedBoxes", "boxes"},
 	{"Refused:UsesJmp", "jmp"},
 	{"Refused:UsesArglist", "arglist"},
 	{"Refused:UsesMkrefany", "mkrefany"},

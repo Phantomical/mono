@@ -208,6 +208,19 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	if (!value)
 		return value.takeError ();
 
+	llvm::Value *obj = box_value (builder, klass, *type, *value);
+
+	pop_stack (1);
+	push_stack (obj, mono_get_object_type ());
+	return llvm::Error::success ();
+}
+
+/// Allocate KLASS's box and copy VALUE, already in its location type, into the
+/// payload, returning the new object.
+llvm::Value *
+MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
+                              llvm::Value *value)
+{
 	llvm::Value *obj = emit_protected_call (builder, object_new_decl (),
 	                                        {class_symbol (klass, "mono_vtable_")});
 	llvm::Value *payload = builder.CreateGEP (builder.getInt8Ty (), obj,
@@ -216,19 +229,17 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	/* The same copy stobj makes: through the collector if references are inside. */
 	if (m_class_has_references (klass)) {
 		MonoIrBuilder entry (entry_block, entry_block->begin ());
-		llvm::AllocaInst *temp = entry.CreateAlloca ((*value)->getType ());
+		llvm::AllocaInst *temp = entry.CreateAlloca (value->getType ());
 
-		temp->setAlignment (type_alignment (*type));
-		builder.CreateAlignedStore (*value, temp, temp->getAlign ());
+		temp->setAlignment (type_alignment (type));
+		builder.CreateAlignedStore (value, temp, temp->getAlign ());
 		builder.CreateCall (value_copy_decl (), {payload, temp, builder.getInt32 (1),
 		                                         class_symbol (klass, "mono_class_")});
 	} else {
-		builder.CreateAlignedStore (*value, payload, type_alignment (*type));
+		builder.CreateAlignedStore (value, payload, type_alignment (type));
 	}
 
-	pop_stack (1);
-	push_stack (obj, mono_get_object_type ());
-	return llvm::Error::success ();
+	return obj;
 }
 
 /*

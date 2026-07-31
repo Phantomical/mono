@@ -43,15 +43,6 @@
 		nop
 	}
 
-	.method public static string ConstrainedBoxes (valuetype Plain p) cil managed
-	{
-		.maxstack 1
-		ldarga.s 0
-		constrained. Plain
-		callvirt instance string [mscorlib]System.Object::ToString ()
-		ret
-	}
-
 	.method public static void UsesJmp () cil managed
 	{
 		.maxstack 0
@@ -80,9 +71,4 @@
 		mkrefany [mscorlib]System.Int32
 		ret
 	}
-}
-
-.class public sequential ansi sealed beforefieldinit Plain extends [mscorlib]System.ValueType
-{
-	.field public int32 Value
 }
