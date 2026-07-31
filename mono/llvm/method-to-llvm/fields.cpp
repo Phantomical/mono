@@ -31,7 +31,7 @@ wbarrier_decl (llvm::Module *module)
 /// The field TOKEN names, with its declaring class laid out so that its offset can be
 /// asked for.
 llvm::Expected<MonoClassField *>
-MethodLLVMEmitter::resolve_field (uint32_t token)
+MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 {
 	ERROR_DECL (metadata_error);
 	MonoClass *klass = nullptr;
@@ -50,17 +50,61 @@ MethodLLVMEmitter::resolve_field (uint32_t token)
 	if (!is_ok (metadata_error))
 		return runtime_error (metadata_error);
 
-	if (mono_field_get_flags (field) & FIELD_ATTRIBUTE_STATIC) {
+	bool is_static = (mono_field_get_flags (field) & FIELD_ATTRIBUTE_STATIC) != 0;
+
+	if (is_static != want_static) {
 		char *name = mono_field_full_name (field);
-		llvm::Error error =
-			invalid_il (llvm::Twine ("a field instruction needs an instance field, but ")
-			            + name + " is static");
+		llvm::Error error = invalid_il (llvm::Twine ("this instruction needs ")
+		                                + (want_static ? "a static" : "an instance")
+		                                + " field, but " + name + " is "
+		                                + (is_static ? "static" : "an instance field"));
 
 		g_free (name);
 		return std::move (error);
 	}
 
 	return field;
+}
+
+/// The address the engine has to resolve for a per-class run-time structure.
+///
+/// A class contributes two: mono_statics_<class>, the block its static fields live in,
+/// and mono_vtable_<class>, its MonoVTable. One relocation per class rather than per
+/// field, so every static of a class shares a symbol and differs only in the offset the
+/// GEP adds.
+llvm::Constant *
+MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
+{
+	char *name = mono_type_full_name (m_class_get_byval_arg (klass));
+	std::string symbol = std::string (prefix) + name;
+
+	g_free (name);
+
+	if (llvm::GlobalVariable *existing = module->getNamedGlobal (symbol))
+		return existing;
+
+	return new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()), false,
+	                                 llvm::GlobalValue::ExternalLinkage, nullptr, symbol);
+}
+
+/// Run KLASS's static constructor if it has not run yet.
+///
+/// This is a call rather than something settled while compiling: a cctor is arbitrary
+/// managed code and must never run on a compilation thread. mono_generic_class_init is
+/// idempotent and returns once the class is ready, so the only cost of emitting it at
+/// every access is one that a later pass can take back out - and it has to be emitted
+/// every time, because a vtable is not observably initialized even to the thread that
+/// just initialized it.
+void
+MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
+{
+	llvm::LLVMContext &ctx = context ();
+	llvm::FunctionCallee init = module->getOrInsertFunction (
+		"mono_generic_class_init", llvm::Type::getVoidTy (ctx),
+		llvm::PointerType::get (ctx, 0));
+
+	/* A cctor can throw, so inside a try region this has to be able to unwind. */
+	emit_protected_call (builder, init, { class_symbol (klass, "mono_vtable_") });
 }
 
 /// Where FIELD lives inside the object on top of the stack.
@@ -93,6 +137,16 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 		offset -= MONO_ABI_SIZEOF (MonoObject);
 
 	return builder.CreateGEP (builder.getInt8Ty (), base, builder.getInt32 (offset));
+}
+
+/// Where FIELD lives in its class's statics block.
+llvm::Value *
+MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField *field)
+{
+	/* A static's offset is into the block itself, so there is no header to discount. */
+	return builder.CreateGEP (builder.getInt8Ty (),
+	                          class_symbol (field->parent, "mono_statics_"),
+	                          builder.getInt32 (m_field_get_offset (field)));
 }
 
 /*
@@ -142,7 +196,7 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
-	llvm::Expected<MonoClassField *> field = resolve_field (token);
+	llvm::Expected<MonoClassField *> field = resolve_field (token, false);
 	if (!field)
 		return field.takeError ();
 
@@ -156,30 +210,9 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	llvm::Value *value = builder.CreateAlignedLoad (*type, *address, type_alignment (ftype));
-	MonoType *pushed = ftype;
-
-	/* The same I.8.7 widening a load out of a local or an argument gets. */
-	if (!ftype->byref) {
-		switch (mini_get_underlying_type (ftype)->type) {
-		case MONO_TYPE_I1:
-		case MONO_TYPE_I2:
-			value = builder.CreateSExt (value, builder.getInt32Ty ());
-			pushed = mono_get_int32_type ();
-			break;
-		case MONO_TYPE_BOOLEAN:
-		case MONO_TYPE_CHAR:
-		case MONO_TYPE_U1:
-		case MONO_TYPE_U2:
-			value = builder.CreateZExt (value, builder.getInt32Ty ());
-			pushed = mono_get_int32_type ();
-			break;
-		default:
-			break;
-		}
-	}
 
 	pop_stack (1);
-	push_stack (value, pushed);
+	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
 	return llvm::Error::success ();
 }
 
@@ -233,7 +266,7 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
-	llvm::Expected<MonoClassField *> field = resolve_field (token);
+	llvm::Expected<MonoClassField *> field = resolve_field (token, false);
 	if (!field)
 		return field.takeError ();
 
@@ -304,7 +337,7 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 	if (stack.size () < 2)
 		return unbalanced_stack (2);
 
-	llvm::Expected<MonoClassField *> field = resolve_field (token);
+	llvm::Expected<MonoClassField *> field = resolve_field (token, false);
 	if (!field)
 		return field.takeError ();
 
@@ -329,6 +362,120 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 		builder.CreateCall (wbarrier_decl (module), { *address, *value });
 	else
 		builder.CreateAlignedStore (*value, *address, type_alignment (ftype));
+
+	return llvm::Error::success ();
+}
+
+/*
+ * III.4.14  ldsfld - load static field of a class
+ *
+ *   Format     Assembly Format   Description
+ *   7E <T>     ldsfld field      Push the value of field on the stack.
+ *
+ * Stack Transition:
+ *
+ *   ..., -> ..., value
+ *
+ * Description:
+ *
+ *   The ldsfld instruction pushes the value of a static (shared among all instances of
+ *   a class) field on the stack. field is a metadata token (a fieldref or fielddef; see
+ *   Partition II) referring to a static field member. The return type is that
+ *   associated with field.
+ *
+ *   The ldsfld instruction can have a volatile. prefix.
+ *
+ *   If required field values are converted to the representation of their intermediate
+ *   type (§I.8.7) when loaded onto the stack (§III.1.1.1).
+ *
+ *   [Note: That is field values that are smaller than 4 bytes, a boolean or a character
+ *   are converted to 4 bytes by sign or zero-extension as appropriate. Floating-point
+ *   values are converted to their native size (type F). end note]
+ *
+ * Exceptions:
+ *
+ *   System.FieldAccessException is thrown if field is not accessible.
+ *
+ *   System.MissingFieldException is thrown if field is not found in the metadata. This
+ *   is typically checked when CIL is converted to native code, not at runtime.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
+{
+	llvm::Expected<MonoClassField *> field = resolve_field (token, true);
+	if (!field)
+		return field.takeError ();
+
+	MonoType *ftype = mono_field_get_type_internal (*field);
+	llvm::Expected<llvm::Type *> type = convert_type (ftype);
+	if (!type)
+		return type.takeError ();
+
+	emit_class_init (builder, (*field)->parent);
+
+	llvm::Value *address = static_field_address (builder, *field);
+	llvm::Value *value = builder.CreateAlignedLoad (*type, address, type_alignment (ftype));
+
+	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.4.30  stsfld - store a static field of a class
+ *
+ *   Format     Assembly Format   Description
+ *   80 <T>     stsfld field      Replace the value of field with val.
+ *
+ * Stack Transition:
+ *
+ *   ..., val -> ...,
+ *
+ * Description:
+ *
+ *   The stsfld instruction replaces the value of a static field with a value from the
+ *   stack. field is a metadata token (a fieldref or fielddef; see Partition II) that
+ *   shall refer to a static field member. stsfld pops the value off the stack and
+ *   updates the static field with that value.
+ *
+ *   Storing into fields that hold a value smaller than 4 bytes truncates the value as
+ *   it moves from the stack to the local variable. Floating-point values are rounded
+ *   from their native size (type F) to the size associated with the argument. (See
+ *   §III.1.1.1, Numeric data types.)
+ *
+ *   The stsfld instruction can have a volatile. prefix.
+ *
+ * Exceptions:
+ *
+ *   System.FieldAccessException is thrown if field is not accessible.
+ *
+ *   System.MissingFieldException is thrown if field is not found in the metadata. This
+ *   is typically checked when CIL is converted to native code, not at runtime.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	llvm::Expected<MonoClassField *> field = resolve_field (token, true);
+	if (!field)
+		return field.takeError ();
+
+	MonoType *ftype = mono_field_get_type_internal (*field);
+	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), ftype);
+	if (!value)
+		return value.takeError ();
+
+	emit_class_init (builder, (*field)->parent);
+
+	llvm::Value *address = static_field_address (builder, *field);
+
+	pop_stack (1);
+
+	if (mini_type_is_reference (ftype))
+		builder.CreateCall (wbarrier_decl (module), { address, *value });
+	else
+		builder.CreateAlignedStore (*value, address, type_alignment (ftype));
 
 	return llvm::Error::success ();
 }

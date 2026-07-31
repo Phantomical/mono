@@ -82,33 +82,8 @@ MethodLLVMEmitter::emit_ldloc (MonoIrBuilder &builder, uint32_t index)
 
 	llvm::Value *value =
 		builder.CreateAlignedLoad (*type, local.alloca, type_alignment (local.type));
-	MonoType *pushed = local.type;
-
-	/*
-	 * A location narrower than four bytes is tracked as int32 once it is on the
-	 * stack, and it is the location's own signedness - not the value's - that decides
-	 * how the bits it gains get filled.
-	 */
-	if (!local.type->byref) {
-		switch (mini_get_underlying_type (local.type)->type) {
-		case MONO_TYPE_I1:
-		case MONO_TYPE_I2:
-			value = builder.CreateSExt (value, builder.getInt32Ty ());
-			pushed = mono_get_int32_type ();
-			break;
-		case MONO_TYPE_BOOLEAN:
-		case MONO_TYPE_CHAR:
-		case MONO_TYPE_U1:
-		case MONO_TYPE_U2:
-			value = builder.CreateZExt (value, builder.getInt32Ty ());
-			pushed = mono_get_int32_type ();
-			break;
-		default:
-			break;
-		}
-	}
-
-	push_stack (value, pushed);
+	push_stack (widen_to_stack (builder, value, local.type),
+	            stack_slot_type (local.type));
 	return llvm::Error::success ();
 }
 

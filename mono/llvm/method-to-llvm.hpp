@@ -228,6 +228,9 @@ private:
 	static std::string describe (MonoType *t, StackType type);
 	static llvm::Value *coerce (MonoIrBuilder &builder, llvm::Value *value,
 	                            llvm::Type *type);
+	static llvm::Value *widen_to_stack (MonoIrBuilder &builder, llvm::Value *value,
+	                                    MonoType *t);
+	static MonoType *stack_slot_type (MonoType *t);
 
 	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
 	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
@@ -312,7 +315,15 @@ private:
 	llvm::Error emit_ldc_r4 (MonoIrBuilder &builder, uint32_t bits);
 	llvm::Error emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits);
 
-	llvm::Expected<MonoClassField *> resolve_field (uint32_t token);
+	llvm::Value *emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+	                                  llvm::ArrayRef<llvm::Value *> args);
+
+	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);
+	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
+	void emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
+	llvm::Value *static_field_address (MonoIrBuilder &builder, MonoClassField *field);
+	llvm::Error emit_ldsfld (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_stsfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<llvm::Value *> field_address (MonoIrBuilder &builder, StackValue object,
 	                                             MonoClassField *field);
 	llvm::Error emit_ldfld (MonoIrBuilder &builder, uint32_t token);

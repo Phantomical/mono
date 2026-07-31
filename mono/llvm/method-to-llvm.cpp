@@ -145,6 +145,51 @@ MethodLLVMEmitter::coerce (MonoIrBuilder &builder, llvm::Value *value, llvm::Typ
 	return builder.CreateSExt (value, type);
 }
 
+/// VALUE, freshly loaded out of a location of type T, as the CLI tracks it on the stack.
+///
+/// I.8.7: a location narrower than four bytes reaches the stack as int32, and it is the
+/// location's own signedness - not the value's - that decides how the bits it gains get
+/// filled.
+llvm::Value *
+MethodLLVMEmitter::widen_to_stack (MonoIrBuilder &builder, llvm::Value *value, MonoType *t)
+{
+	if (t->byref)
+		return value;
+
+	switch (mini_get_underlying_type (t)->type) {
+	case MONO_TYPE_I1:
+	case MONO_TYPE_I2:
+		return builder.CreateSExt (value, builder.getInt32Ty ());
+	case MONO_TYPE_BOOLEAN:
+	case MONO_TYPE_CHAR:
+	case MONO_TYPE_U1:
+	case MONO_TYPE_U2:
+		return builder.CreateZExt (value, builder.getInt32Ty ());
+	default:
+		return value;
+	}
+}
+
+/// The type a value loaded out of a location of type T is tracked as once it is pushed.
+MonoType *
+MethodLLVMEmitter::stack_slot_type (MonoType *t)
+{
+	if (t->byref)
+		return t;
+
+	switch (mini_get_underlying_type (t)->type) {
+	case MONO_TYPE_BOOLEAN:
+	case MONO_TYPE_CHAR:
+	case MONO_TYPE_I1:
+	case MONO_TYPE_U1:
+	case MONO_TYPE_I2:
+	case MONO_TYPE_U2:
+		return mono_get_int32_type ();
+	default:
+		return t;
+	}
+}
+
 /// The CLI's name for T's category, or T's own name when it has none.
 std::string
 MethodLLVMEmitter::describe (MonoType *t, StackType type)
@@ -646,6 +691,11 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	case MONO_CEE_LDFLD:
 		return emit_ldfld (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDSFLD:
+		return emit_ldsfld (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_STSFLD:
+		return emit_stsfld (builder, static_cast<uint32_t> (operand));
+
 	case MONO_CEE_LDFLDA:
 		return emit_ldflda (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_STFLD:

@@ -67,32 +67,8 @@ MethodLLVMEmitter::emit_ldarg (MonoIrBuilder &builder, uint32_t index)
 
 	llvm::Value *value =
 		builder.CreateAlignedLoad (*type, argument.alloca, type_alignment (argument.type));
-	MonoType *pushed = argument.type;
-
-	/*
-	 * The same I.8.7 widening ldloc does: an argument narrower than four bytes is
-	 * tracked as int32 once loaded, filled the way its own type says.
-	 */
-	if (!argument.type->byref) {
-		switch (mini_get_underlying_type (argument.type)->type) {
-		case MONO_TYPE_I1:
-		case MONO_TYPE_I2:
-			value = builder.CreateSExt (value, builder.getInt32Ty ());
-			pushed = mono_get_int32_type ();
-			break;
-		case MONO_TYPE_BOOLEAN:
-		case MONO_TYPE_CHAR:
-		case MONO_TYPE_U1:
-		case MONO_TYPE_U2:
-			value = builder.CreateZExt (value, builder.getInt32Ty ());
-			pushed = mono_get_int32_type ();
-			break;
-		default:
-			break;
-		}
-	}
-
-	push_stack (value, pushed);
+	push_stack (widen_to_stack (builder, value, argument.type),
+	            stack_slot_type (argument.type));
 	return llvm::Error::success ();
 }
 

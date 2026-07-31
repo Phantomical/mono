@@ -129,6 +129,28 @@ MethodLLVMEmitter::emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCa
 	builder.CreateUnreachable ();
 }
 
+/// Emit a call that returns but may unwind, as an invoke when a clause protects it.
+///
+/// The same decision emit_unwinding_call makes, for the callees that come back: the
+/// normal edge carries on with the translation instead of being dead.
+llvm::Value *
+MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+                                        llvm::ArrayRef<llvm::Value *> args)
+{
+	int clause = innermost_try (offset);
+
+	if (clause < 0)
+		return builder.CreateCall (callee, args);
+
+	llvm::BasicBlock *returned =
+		llvm::BasicBlock::Create (context (), "returned", function);
+	llvm::InvokeInst *call =
+		builder.CreateInvoke (callee, returned, landing_pad (clause), args);
+
+	builder.SetInsertPoint (returned);
+	return call;
+}
+
 /*
  * III.4.31  throw - throw an exception
  *
