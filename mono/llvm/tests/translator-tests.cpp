@@ -1147,7 +1147,8 @@ const RefusalRef refusals[] = {
 	{"Refused:FallsOffTheEnd", "return"},
 	{"Refused:ConstrainedPlainCall", "plain call"},
 	{"Refused:UsesJmpBadly", "signature"},
-	{"Refused:UsesArglist", "arglist"},
+	{"Refused:UsesArglist", "vararg"},
+	{"Refused:CallsAVararg", "vararg"},
 	{"Refused:MergesAStructWithAnInt", "different type"},
 };
 

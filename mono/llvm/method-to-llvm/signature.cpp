@@ -253,6 +253,17 @@ MethodLLVMEmitter::type_alignment (MonoType *t)
 llvm::Expected<llvm::FunctionType *>
 MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 {
+	/*
+	 * The runtime's vararg convention passes a signature cookie in a stack slot
+	 * between the fixed and the variadic arguments, and ArgIterator walks the rest
+	 * from it. Neither end of that is expressible as LLVM's C-style varargs, so
+	 * these signatures are declined whole rather than compiled to an ABI nothing
+	 * else speaks.
+	 */
+	if (sig->call_convention == MONO_CALL_VARARG)
+		return conversion_error ("a vararg signature uses the runtime's cookie "
+		                         "convention");
+
 	llvm::Expected<llvm::Type *> ret_type = convert_type (sig->ret);
 	if (!ret_type)
 		return ret_type.takeError ();
@@ -270,8 +281,7 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 		params.push_back (*type);
 	}
 
-	return llvm::FunctionType::get (*ret_type, params,
-	                                sig->call_convention == MONO_CALL_VARARG);
+	return llvm::FunctionType::get (*ret_type, params, false);
 }
 
 /// The declaration of METHOD in this module, created on first use and cached.

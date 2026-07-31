@@ -64,6 +64,21 @@
 		ret
 	}
 
+	.method public static vararg void Chatty (int32 n) cil managed
+	{
+		.maxstack 0
+		ret
+	}
+
+	.method public static void CallsAVararg () cil managed
+	{
+		.maxstack 2
+		ldc.i4.1
+		ldc.i4.2
+		call vararg void Refused::Chatty (int32, ..., int32)
+		ret
+	}
+
 	.method public static int32 MergesAStructWithAnInt (int32 c, valuetype Plain p) cil managed
 	{
 		.maxstack 1
