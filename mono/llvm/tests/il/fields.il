@@ -20,6 +20,9 @@
 	.field public static int32 PerThread
 	.custom instance void [mscorlib]System.ThreadStaticAttribute::.ctor () = (01 00 00 00)
 	.field public static int32 Baked at D_BAKED
+	.field public valuetype Mixed M
+	.field public static valuetype Mixed SM
+	.field public valuetype Flat F
 
 	.method public hidebysig specialname rtspecialname instance void .ctor () cil managed
 	{
@@ -153,6 +156,46 @@
 		ldsfld int32 Holder::Baked
 		ret
 	}
+
+	.method public static void SetMixed (class Holder h, valuetype Mixed v) cil managed
+	{
+		.maxstack 2
+		ldarg.0
+		ldarg.1
+		stfld valuetype Mixed Holder::M
+		ret
+	}
+
+	.method public static void SetStaticMixed (valuetype Mixed v) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		stsfld valuetype Mixed Holder::SM
+		ret
+	}
+
+	.method public static void SetFlat (class Holder h, valuetype Flat v) cil managed
+	{
+		.maxstack 2
+		ldarg.0
+		ldarg.1
+		stfld valuetype Flat Holder::F
+		ret
+	}
+}
+
+// A struct the collector cares about - its stores go through the value-copy
+// barrier - and one it does not.
+.class public sequential ansi sealed beforefieldinit Mixed extends [mscorlib]System.ValueType
+{
+	.field public object Ref
+	.field public int32 Tag
+}
+
+.class public sequential ansi sealed beforefieldinit Flat extends [mscorlib]System.ValueType
+{
+	.field public int32 A
+	.field public int32 B
 }
 
 .data D_BAKED = int32 (42)

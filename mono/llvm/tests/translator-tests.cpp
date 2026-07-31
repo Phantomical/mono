@@ -117,6 +117,9 @@ const MethodRef translatable[] = {
 	{"fields", "Fields:GetPerThread"},
 	{"fields", "Fields:SetPerThread"},
 	{"fields", "Fields:GetBaked"},
+	{"fields", "Fields:SetMixed"},
+	{"fields", "Fields:SetStaticMixed"},
+	{"fields", "Fields:SetFlat"},
 
 	{"arrays", "Arrays:Length"},
 	{"arrays", "Arrays:GetInt"},
@@ -125,6 +128,8 @@ const MethodRef translatable[] = {
 	{"arrays", "Arrays:GetRef"},
 	{"arrays", "Arrays:SetInt"},
 	{"arrays", "Arrays:SetRef"},
+	{"arrays", "Arrays:SetMixedElem"},
+	{"arrays", "Arrays:SetFlatElem"},
 	{"arrays", "Arrays:Make"},
 	{"arrays", "Arrays:ElementAddress"},
 	{"arrays", "Arrays:Sum"},
@@ -397,6 +402,21 @@ TEST_F (TranslatorTest, StoringAReferenceGoesThroughTheWriteBarrier)
 	EXPECT_GE (translate ("fields", "Fields:SetStaticRef")
 	                   .count ("mono_gc_wbarrier_generic_store_internal"),
 	           1u);
+}
+
+// A struct with a reference inside cannot be stored as bytes: the copy has to go
+// through the collector so the destination's cards get marked. A struct without
+// references keeps the plain store.
+TEST_F (TranslatorTest, StoringARefStructCopiesThroughTheBarrier)
+{
+	const char *barrier = "mono_gc_wbarrier_value_copy_internal";
+
+	EXPECT_EQ (translate ("fields", "Fields:SetMixed").count (barrier), 1u);
+	EXPECT_EQ (translate ("fields", "Fields:SetStaticMixed").count (barrier), 1u);
+	EXPECT_EQ (translate ("arrays", "Arrays:SetMixedElem").count (barrier), 1u);
+
+	EXPECT_EQ (translate ("fields", "Fields:SetFlat").count (barrier), 0u);
+	EXPECT_EQ (translate ("arrays", "Arrays:SetFlatElem").count (barrier), 0u);
 }
 
 // One relocation per class, not per field: both loads resolve through the same

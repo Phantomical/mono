@@ -341,38 +341,7 @@ MethodLLVMEmitter::emit_stobj (MonoIrBuilder &builder, uint32_t token)
 	if (!type)
 		return type.takeError ();
 
-	MonoClass *klass = mono_class_from_mono_type_internal (*type);
-
-	if (!m_class_is_valuetype (klass) || !m_class_has_references (klass))
-		return emit_stind (builder, *type);
-
-	/*
-	 * A struct with references inside cannot just be stored: the collector has to
-	 * mark the cards its reference fields land on. Its barrier copies from memory
-	 * to memory, so the value takes a detour through a stack slot to have an
-	 * address at all.
-	 */
-	if (stack.size () < 2)
-		return unbalanced_stack (2);
-
-	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), *type);
-	if (!value)
-		return value.takeError ();
-
-	llvm::Expected<llvm::Value *> address = indirect_address (builder, get_stack (1));
-	if (!address)
-		return address.takeError ();
-
-	MonoIrBuilder entry (entry_block, entry_block->begin ());
-	llvm::AllocaInst *temp = entry.CreateAlloca ((*value)->getType ());
-
-	temp->setAlignment (type_alignment (*type));
-	builder.CreateAlignedStore (*value, temp, temp->getAlign ());
-	builder.CreateCall (value_copy_decl (), {*address, temp, builder.getInt32 (1),
-	                                         class_symbol (klass, "mono_class_")});
-
-	pop_stack (2);
-	return llvm::Error::success ();
+	return emit_stind (builder, *type);
 }
 
 /*

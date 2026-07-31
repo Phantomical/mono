@@ -82,6 +82,26 @@
 		ret
 	}
 
+	.method public static void SetMixedElem (valuetype Mixed[] a, int32 i, valuetype Mixed v) cil managed
+	{
+		.maxstack 3
+		ldarg.0
+		ldarg.1
+		ldarg.2
+		stelem Mixed
+		ret
+	}
+
+	.method public static void SetFlatElem (valuetype Flat[] a, int32 i, valuetype Flat v) cil managed
+	{
+		.maxstack 3
+		ldarg.0
+		ldarg.1
+		ldarg.2
+		stelem Flat
+		ret
+	}
+
 	.method public static int32[] Make (int32 n) cil managed
 	{
 		.maxstack 1
@@ -161,4 +181,18 @@
 		newobj instance void int32[,,,,]::.ctor (int32, int32, int32, int32, int32)
 		ret
 	}
+}
+
+// A struct the collector cares about - its element stores go through the
+// value-copy barrier - and one it does not.
+.class public sequential ansi sealed beforefieldinit Mixed extends [mscorlib]System.ValueType
+{
+	.field public object Ref
+	.field public int32 Tag
+}
+
+.class public sequential ansi sealed beforefieldinit Flat extends [mscorlib]System.ValueType
+{
+	.field public int32 A
+	.field public int32 B
 }

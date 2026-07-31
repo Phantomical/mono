@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/opcodes.h"
 #include <llvm/IR/Instructions.h>
@@ -238,13 +239,35 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 	 */
 	if (mini_type_is_reference (location)) {
 		builder.CreateCall (wbarrier_decl (), {address, value});
-	} else {
-		llvm::StoreInst *store =
-			builder.CreateAlignedStore (value, address, access_alignment (location));
-
-		if (prefixes.volatile_)
-			store->setVolatile (true);
+		return;
 	}
+
+	/*
+	 * A struct with references inside cannot just be stored either: the collector
+	 * has to mark the cards its reference fields land on. Its barrier copies from
+	 * memory to memory, so the value takes a detour through a stack slot to have
+	 * an address at all. A struct without references keeps the plain store.
+	 */
+	MonoClass *klass = location->byref
+	                           ? nullptr
+	                           : mono_class_from_mono_type_internal (location);
+
+	if (klass != nullptr && m_class_is_valuetype (klass) && m_class_has_references (klass)) {
+		MonoIrBuilder entry (entry_block, entry_block->begin ());
+		llvm::AllocaInst *temp = entry.CreateAlloca (value->getType ());
+
+		temp->setAlignment (type_alignment (location));
+		builder.CreateAlignedStore (value, temp, temp->getAlign ());
+		builder.CreateCall (value_copy_decl (), {address, temp, builder.getInt32 (1),
+		                                         class_symbol (klass, "mono_class_")});
+		return;
+	}
+
+	llvm::StoreInst *store =
+		builder.CreateAlignedStore (value, address, access_alignment (location));
+
+	if (prefixes.volatile_)
+		store->setVolatile (true);
 }
 
 } // namespace mono

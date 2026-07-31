@@ -449,12 +449,7 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 		return address.takeError ();
 
 	pop_stack (3);
-
-	if (mini_type_is_reference (element))
-		builder.CreateCall (wbarrier_decl (), {*address, *value});
-	else
-		builder.CreateAlignedStore (*value, *address, type_alignment (element));
-
+	emit_memory_store (builder, *value, *address, element);
 	return llvm::Error::success ();
 }
 
