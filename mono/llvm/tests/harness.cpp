@@ -143,12 +143,11 @@ Translation::count (const std::string &needle) const
 	return found;
 }
 
-const Translation &
-TranslatorTest::translate (const std::string &image, const std::string &name)
+std::unique_ptr<Translation>
+translate_method (const std::string &image, const std::string &name)
 {
-	translations.push_back (std::make_unique<Translation> ());
-
-	Translation &result = *translations.back ();
+	auto owned = std::make_unique<Translation> ();
+	Translation &result = *owned;
 
 	result.context = std::make_unique<llvm::LLVMContext> ();
 	result.module = std::make_unique<llvm::Module> (image, *result.context);
@@ -169,7 +168,7 @@ TranslatorTest::translate (const std::string &image, const std::string &name)
 	if (cfg.get ()->header == nullptr) {
 		result.error = mono_error_get_message (metadata_error);
 		mono_error_cleanup (metadata_error);
-		return result;
+		return owned;
 	}
 
 	llvm::Expected<llvm::Function *> translated =
@@ -177,12 +176,19 @@ TranslatorTest::translate (const std::string &image, const std::string &name)
 
 	if (!translated) {
 		result.error = llvm::toString (translated.takeError ());
-		return result;
+		return owned;
 	}
 
 	result.function = *translated;
 	result.verifier_error = verify_function (*result.function);
-	return result;
+	return owned;
+}
+
+const Translation &
+TranslatorTest::translate (const std::string &image, const std::string &name)
+{
+	translations.push_back (translate_method (image, name));
+	return *translations.back ();
 }
 
 void

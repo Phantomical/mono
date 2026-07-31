@@ -22,7 +22,7 @@ C# class-library profiles (`build`, `net_4_x`, `unityjit`, `xbuild_12`,
 > you *are* on-network.
 
 Verified on: **Ubuntu 24.04.4 LTS (WSL2), x86_64**, gcc 13.3, CMake 3.28, Ninja
-1.11, LLVM 18.1.3. Full build time was roughly 10 minutes on 16 cores.
+1.11, LLVM 22.1.8. Full build time was roughly 10 minutes on 16 cores.
 
 ---
 
@@ -38,14 +38,15 @@ sudo apt-get install -y \
     cmake ninja-build \
     python3 \
     git \
-    llvm-18-dev \
     zlib1g-dev
 ```
 
 Notes:
 - CMake 3.28 is the floor; earlier versions are not supported.
-- `llvm-18-dev` provides `/usr/lib/llvm-18/bin/llvm-config`. Leave it out and
-  configure without `MONO_LLVM_PREFIX` to build with the classic JIT only.
+- The LLVM back end builds against LLVM 22 built from source at
+  `~/projects/llvm-project` (installed to `~/projects/llvm-project/install`,
+  RelWithDebInfo with assertions on); no distro package ships 22 yet. Configure
+  without `MONO_LLVM_PREFIX` to build with the classic JIT only.
 - No system Mono is needed: the class libraries are compiled by the Roslyn
   binaries under `external/roslyn-binaries`, running on the runtime this build
   produces.
@@ -66,7 +67,7 @@ git submodule update --init --recursive
 cd /home/swlynch/projects/mono
 
 cmake -S . -B build -G Ninja \
-  -DMONO_LLVM_PREFIX=/usr/lib/llvm-18 \
+  -DMONO_LLVM_PREFIX="$HOME/projects/llvm-project/install" \
   -DCMAKE_INSTALL_PREFIX="$PWD/tmp"
 ```
 
@@ -198,25 +199,29 @@ a configure error.
 
 ### Extra prerequisites
 
-Install an upstream LLVM development package, e.g. on Debian/Ubuntu:
+Build an upstream LLVM 22 from source (the backend needs 22's ORC
+redirection stack, which no distro package ships yet):
 
 ```bash
-sudo apt-get install -y llvm-18-dev
-# provides /usr/lib/llvm-18/bin/llvm-config
+cd ~/projects/llvm-project/build
+cmake -B . -S ../llvm -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=TRUE \
+  -DCMAKE_INSTALL_PREFIX="$HOME/projects/llvm-project/install" -DLLVM_BUILD_LLVM_DYLIB=TRUE
+cmake --build . && cmake --install .
+# provides ~/projects/llvm-project/install/bin/llvm-config (must say 22.x)
 ```
 
 ### Configure + build
 
 ```bash
 cd /home/swlynch/projects/mono
-cmake -S . -B build -DMONO_LLVM_PREFIX=/usr/lib/llvm-18
+cmake -S . -B build -DMONO_LLVM_PREFIX="$HOME/projects/llvm-project/install"
 cmake --build build -j"$(nproc)"
 ```
 
 The configure summary should now report:
 
 ```
-LLVM back end: ON /usr/lib/llvm-18
+LLVM back end: ON /home/swlynch/projects/llvm-project/install
 ```
 
 CMake queries `<prefix>/bin/llvm-config` for the include path, the libraries and
@@ -443,6 +448,6 @@ result.
 - **`No usable version of libssl was found`** — this only affects the older
   `build_classlibs_wsl.pl` path (see `Unity-build.md`), not these instructions.
 - **`No llvm-config under <prefix>/bin`** → there is no in-tree LLVM any more;
-  install an upstream LLVM 14+ and point `MONO_LLVM_PREFIX` at it, e.g.
-  `-DMONO_LLVM_PREFIX=/usr/lib/llvm-18`. See
+  build an upstream LLVM 22 and point `MONO_LLVM_PREFIX` at its install, e.g.
+  `-DMONO_LLVM_PREFIX=$HOME/projects/llvm-project/install`. See
   [§ build with the LLVM backend](#optional-build-with-the-llvm-backend).

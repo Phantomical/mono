@@ -60,6 +60,13 @@ struct Translation {
 	size_t count (const std::string &needle) const;
 };
 
+/// Translate `<image>.dll`'s METHOD, named as ilasm spells it ("Type:Method"),
+/// and hand the result to the caller. This is the ownership-passing form the
+/// jit tests use to move the module into a ThreadSafeModule; TranslatorTest
+/// keeps its returned translations alive itself.
+std::unique_ptr<Translation> translate_method (const std::string &image,
+                                               const std::string &method);
+
 /*
  * A test that translates methods and is failed if any of them produced IR the
  * verifier rejects.
