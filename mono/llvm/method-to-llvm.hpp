@@ -189,6 +189,17 @@ private:
 	std::vector<Entry> locals;
 	std::vector<StackValue> stack;
 
+	/// The prefixes seen since the last real instruction. They apply to the next
+	/// instruction only and are cleared once it has been emitted, whether or not it
+	/// was one the prefix means anything to.
+	struct Prefixes {
+		bool volatile_ = false;
+		uint8_t unaligned = 0;
+		uint32_t constrained = 0;
+	};
+
+	Prefixes prefixes;
+
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
@@ -246,6 +257,12 @@ private:
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
+	llvm::Error emit_prefix (int opcode, uint64_t operand);
+	llvm::Align access_alignment (MonoType *location);
+	llvm::Value *emit_memory_load (MonoIrBuilder &builder, llvm::Type *type,
+	                               llvm::Value *address, MonoType *location);
+	void emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
+	                        llvm::Value *address, MonoType *location);
 
 	llvm::Error find_block_leaders ();
 	llvm::Expected<size_t> branch_target (int32_t displacement);

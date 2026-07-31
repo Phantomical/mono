@@ -199,7 +199,41 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (!target)
 		return target.takeError ();
 
-	MonoMethodSignature *sig = mono_method_signature_internal (*target);
+	MonoMethod *callee_method = *target;
+	MonoClass *constrained = nullptr;
+	bool direct_this = false;
+
+	if (prefixes.constrained != 0) {
+		if (!is_virtual)
+			return unsupported_il ("constrained. on a plain call");
+
+		llvm::Expected<MonoType *> ctype =
+			element_type_from_token (prefixes.constrained);
+		if (!ctype)
+			return ctype.takeError ();
+		constrained = mono_class_from_mono_type_internal (*ctype);
+
+		/*
+		 * A value type that implements the method takes the call directly, with
+		 * the managed pointer as this. One that does not - the method lives on
+		 * Object, ValueType or Enum - would have its receiver boxed first.
+		 */
+		if (m_class_is_valuetype (constrained)) {
+			ERROR_DECL (resolve_error);
+			MonoMethod *impl = mono_class_get_virtual_method (
+				constrained, callee_method, FALSE, resolve_error);
+
+			if (!is_ok (resolve_error))
+				return runtime_error (resolve_error);
+			if (impl == nullptr || impl->klass != constrained)
+				return unsupported_il (
+					"a constrained. call that boxes its receiver");
+			callee_method = impl;
+			direct_this = true;
+		}
+	}
+
+	MonoMethodSignature *sig = mono_method_signature_internal (callee_method);
 
 	if (sig == nullptr)
 		return invalid_il ("the called method has no signature");
@@ -209,16 +243,22 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	 * A virtual generic method's slot does not hold code with this signature - the
 	 * runtime resolves those per instantiation - so it cannot be dispatched here yet.
 	 */
-	if (is_virtual && sig->generic_param_count != 0)
+	if (is_virtual && !direct_this && sig->generic_param_count != 0)
 		return unsupported_il ("generic virtual dispatch");
 
-	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
+	llvm::Expected<llvm::Function *> declaration = create_method_decl (callee_method);
 	if (!declaration)
 		return declaration.takeError ();
 
 	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
 	if (!args)
 		return args.takeError ();
+
+	/* A reference-typed constrained receiver arrives as a pointer to the reference. */
+	if (constrained != nullptr && !direct_this)
+		(*args)[0] = builder.CreateAlignedLoad (
+			llvm::PointerType::get (context (), 0), (*args)[0],
+			llvm::Align (TARGET_SIZEOF_VOID_P));
 
 	llvm::FunctionCallee callee = *declaration;
 	bool is_interface = false;
@@ -233,12 +273,14 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		/*
 		 * Only a method that can still be overridden has to be looked up. A final or
 		 * non-virtual one is already the answer, and a callvirt on it is a null check
-		 * with a direct call behind it.
+		 * with a direct call behind it - as is one a constrained. prefix already
+		 * resolved to the value type's own implementation.
 		 */
-		bool overridable = ((*target)->flags & METHOD_ATTRIBUTE_VIRTUAL)
-		                   && !((*target)->flags & METHOD_ATTRIBUTE_FINAL);
+		bool overridable = !direct_this
+		                   && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
+		                   && !(callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 
-		if (overridable && mono_class_is_interface ((*target)->klass)) {
+		if (overridable && mono_class_is_interface (callee_method->klass)) {
 			/*
 			 * Several interface methods can hash to the same IMT slot, in which
 			 * case what the slot holds is a thunk that picks the real target by
@@ -260,12 +302,12 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			callee = llvm::FunctionCallee (
 				llvm::FunctionType::get (direct->getReturnType (), params,
 			                                 direct->isVarArg ()),
-				interface_callee (builder, (*args)[0], *target));
-			args->insert (args->begin (), method_symbol (*target));
-		} else if (overridable && mono_method_get_vtable_index (*target) >= 0) {
+				interface_callee (builder, (*args)[0], callee_method));
+			args->insert (args->begin (), method_symbol (callee_method));
+		} else if (overridable && mono_method_get_vtable_index (callee_method) >= 0) {
 			callee = llvm::FunctionCallee (
 				(*declaration)->getFunctionType (),
-				virtual_callee (builder, (*args)[0], *target));
+				virtual_callee (builder, (*args)[0], callee_method));
 		}
 	}
 

@@ -143,6 +143,14 @@ const MethodRef translatable[] = {
 	{ "boxing", "Boxing:UnboxAnyPair" },
 	{ "boxing", "Boxing:RoundTrip" },
 
+	{ "prefixed", "Prefixed:VolatileRead" },
+	{ "prefixed", "Prefixed:VolatileWrite" },
+	{ "prefixed", "Prefixed:VolatileStatic" },
+	{ "prefixed", "Prefixed:UnalignedRead" },
+	{ "prefixed", "Prefixed:ConstrainedOnClass" },
+	{ "prefixed", "Prefixed:ConstrainedOnStruct" },
+	{ "prefixed", "Prefixed:TailCall" },
+
 	{ "fnptr", "Fnptr:TakeStatic" },
 	{ "fnptr", "Fnptr:TakeVirtual" },
 	{ "fnptr", "Fnptr:CallThroughPointer" },
@@ -545,6 +553,53 @@ TEST_F (TranslatorTest, UnboxAnyLeavesTheValueNotTheAddress)
 	EXPECT_TRUE (t.function->getReturnType ()->isIntegerTy (32));
 }
 
+/* --------------------------------------------------------------- prefixes */
+
+// A volatile read has acquire semantics and a volatile write release, so the access
+// is marked volatile and paired with the matching fence.
+TEST_F (TranslatorTest, VolatileAccessesCarryTheirFences)
+{
+	const Translation &read = translate ("prefixed", "Prefixed:VolatileRead");
+	const Translation &write = translate ("prefixed", "Prefixed:VolatileWrite");
+	const Translation &statics = translate ("prefixed", "Prefixed:VolatileStatic");
+
+	ASSERT_NE (read.function, nullptr) << read.error;
+	EXPECT_EQ (read.count ("load volatile i32"), 1u);
+	EXPECT_EQ (read.count ("fence acquire"), 1u);
+
+	ASSERT_NE (write.function, nullptr) << write.error;
+	EXPECT_EQ (write.count ("store volatile i32"), 1u);
+	EXPECT_EQ (write.count ("fence release"), 1u);
+
+	ASSERT_NE (statics.function, nullptr) << statics.error;
+	EXPECT_EQ (statics.count ("load volatile i32"), 1u);
+}
+
+TEST_F (TranslatorTest, UnalignedLowersTheAccessAlignment)
+{
+	const Translation &t = translate ("prefixed", "Prefixed:UnalignedRead");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count (", align 1"), 1u) << t.text ();
+}
+
+// constrained. on a reference type dereferences the pointer and dispatches as usual;
+// on a value type that implements the method it calls the implementation directly
+// with the pointer as this - no boxing, and no vtable in sight.
+TEST_F (TranslatorTest, ConstrainedResolvesTheReceiver)
+{
+	const Translation &on_class = translate ("prefixed", "Prefixed:ConstrainedOnClass");
+	const Translation &on_struct = translate ("prefixed", "Prefixed:ConstrainedOnStruct");
+
+	ASSERT_NE (on_class.function, nullptr) << on_class.error;
+	/* Overridable method: dispatched through the vtable, never named. */
+	EXPECT_EQ (on_class.count ("Chatty:Talk"), 0u) << on_class.text ();
+
+	ASSERT_NE (on_struct.function, nullptr) << on_struct.error;
+	EXPECT_GE (on_struct.count ("Wrapped:ToString"), 1u) << on_struct.text ();
+	EXPECT_EQ (on_struct.count ("mono_object_new_specific"), 0u);
+}
+
 /* ---------------------------------------------------------- method pointers */
 
 // ldftn's answer is the callee's own function symbol - the engine resolves it to the
@@ -710,6 +765,7 @@ const RefusalRef refusals[] = {
 	{ "Refused:BadLocalIndex", "local" },
 	{ "Refused:FallsOffTheEnd", "return" },
 	{ "Refused:BoxesANullable", "nullable" },
+	{ "Refused:ConstrainedBoxes", "boxes" },
 };
 
 INSTANTIATE_TEST_SUITE_P (Corpus, Refuses, testing::ValuesIn (refusals),

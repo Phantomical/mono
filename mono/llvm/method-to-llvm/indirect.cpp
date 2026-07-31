@@ -126,8 +126,7 @@ MethodLLVMEmitter::emit_ldind (MonoIrBuilder &builder, MonoType *element)
 	if (!address)
 		return address.takeError ();
 
-	llvm::Value *value =
-		builder.CreateAlignedLoad (*type, *address, type_alignment (element));
+	llvm::Value *value = emit_memory_load (builder, *type, *address, element);
 
 	pop_stack (1);
 	push_stack (widen_to_stack (builder, value, element), stack_slot_type (element));
@@ -210,17 +209,7 @@ MethodLLVMEmitter::emit_stind (MonoIrBuilder &builder, MonoType *element)
 		return address.takeError ();
 
 	pop_stack (2);
-
-	/*
-	 * A reference going into memory the GC may be tracking has to go through the
-	 * collector, and the address here could point anywhere - the generic barrier is
-	 * the one that tolerates that.
-	 */
-	if (mini_type_is_reference (element))
-		builder.CreateCall (wbarrier_decl (), { *address, *value });
-	else
-		builder.CreateAlignedStore (*value, *address, type_alignment (element));
-
+	emit_memory_store (builder, *value, *address, element);
 	return llvm::Error::success ();
 }
 

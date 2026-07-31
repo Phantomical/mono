@@ -15,6 +15,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Type.h>
+#include <llvm/ADT/ScopeExit.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
@@ -687,6 +688,21 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	int32_t displacement = mono_opcodes[opcode].argument == MonoShortInlineBrTarget
 	                               ? static_cast<int8_t> (operand)
 	                               : static_cast<int32_t> (operand);
+
+	/* Prefixes accumulate; anything else consumes whatever is pending and clears it. */
+	switch (opcode) {
+	case MONO_CEE_VOLATILE_:
+	case MONO_CEE_UNALIGNED_:
+	case MONO_CEE_CONSTRAINED_:
+	case MONO_CEE_TAIL_:
+	case MONO_CEE_READONLY_:
+	case MONO_CEE_NO_:
+		return emit_prefix (opcode, operand);
+	default:
+		break;
+	}
+
+	auto consumed = llvm::make_scope_exit ([this] { prefixes = Prefixes {}; });
 
 	switch (opcode) {
 	case MONO_CEE_NOP:

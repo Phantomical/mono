@@ -224,7 +224,7 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 	if (!address)
 		return address.takeError ();
 
-	llvm::Value *value = builder.CreateAlignedLoad (*type, *address, type_alignment (ftype));
+	llvm::Value *value = emit_memory_load (builder, *type, *address, ftype);
 
 	pop_stack (1);
 	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
@@ -367,17 +367,7 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	pop_stack (2);
-
-	/*
-	 * A reference going into the heap has to go through the collector rather than
-	 * straight to memory, or the card table never learns that this object now points
-	 * somewhere it did not before.
-	 */
-	if (mini_type_is_reference (ftype))
-		builder.CreateCall (wbarrier_decl (), { *address, *value });
-	else
-		builder.CreateAlignedStore (*value, *address, type_alignment (ftype));
-
+	emit_memory_store (builder, *value, *address, ftype);
 	return llvm::Error::success ();
 }
 
@@ -429,7 +419,7 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	emit_class_init (builder, (*field)->parent);
 
 	llvm::Value *address = static_field_address (builder, *field);
-	llvm::Value *value = builder.CreateAlignedLoad (*type, address, type_alignment (ftype));
+	llvm::Value *value = emit_memory_load (builder, *type, address, ftype);
 
 	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
 	return llvm::Error::success ();
@@ -553,12 +543,7 @@ MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
 	llvm::Value *address = static_field_address (builder, *field);
 
 	pop_stack (1);
-
-	if (mini_type_is_reference (ftype))
-		builder.CreateCall (wbarrier_decl (), { address, *value });
-	else
-		builder.CreateAlignedStore (*value, address, type_alignment (ftype));
-
+	emit_memory_store (builder, *value, address, ftype);
 	return llvm::Error::success ();
 }
 

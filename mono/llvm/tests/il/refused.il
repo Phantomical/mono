@@ -50,4 +50,18 @@
 		box valuetype [mscorlib]System.Nullable`1<int32>
 		ret
 	}
+
+	.method public static string ConstrainedBoxes (valuetype Plain p) cil managed
+	{
+		.maxstack 1
+		ldarga.s 0
+		constrained. Plain
+		callvirt instance string [mscorlib]System.Object::ToString ()
+		ret
+	}
+}
+
+.class public sequential ansi sealed beforefieldinit Plain extends [mscorlib]System.ValueType
+{
+	.field public int32 Value
 }
