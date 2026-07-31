@@ -2,6 +2,7 @@
 #include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/opcodes.h"
 #include "mono/metadata/tokentype.h"
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/IRBuilder.h>
@@ -91,7 +92,137 @@ MethodLLVMEmitter::emit ()
 	if (auto error = emit_local_allocas (builder))
 		return std::move (error);
 
-	llvm::report_fatal_error ("not implemented");
+	while (ip < code_size) {
+		offset = ip;
+
+		/*
+		 * Everything reachable is still one straight line, so an instruction that
+		 * follows a terminator has no block to go in. That is what branch targets
+		 * will start their own blocks for.
+		 */
+		if (builder.GetInsertBlock ()->getTerminator () != nullptr)
+			return unsupported_il ("unreachable instruction");
+
+		if (llvm::Error error = emit_instruction (builder))
+			return std::move (error);
+	}
+
+	if (builder.GetInsertBlock ()->getTerminator () == nullptr)
+		return invalid_il ("method body ends without returning");
+
+	return function;
+}
+
+/// Translate the instruction at OFFSET, leaving IP on the one after it.
+llvm::Error
+MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
+{
+	const unsigned char *cursor = code + ip;
+	MonoOpcodeEnum opcode = mono_opcode_value (&cursor, code + code_size);
+
+	if (opcode == MonoOpcodeEnum_Invalid)
+		return invalid_il ("unrecognized opcode");
+
+	/* mono_opcode_value leaves the cursor on the opcode's last byte, not past it. */
+	ip = static_cast<size_t> (cursor - code) + 1;
+
+	/*
+	 * A local or argument index is decoded here rather than in the emitters: mono's
+	 * opcode table says which of the two widths to read, and an instruction that
+	 * takes one takes nothing else. The short forms that carry the index in the
+	 * opcode itself have no operand at all and pass their own constant below.
+	 */
+	uint32_t index = 0;
+
+	switch (mono_opcodes[opcode].argument) {
+	case MonoShortInlineVar: {
+		llvm::Expected<uint8_t> read = read_u8 ();
+
+		if (!read)
+			return read.takeError ();
+
+		index = *read;
+		break;
+	}
+	case MonoInlineVar: {
+		llvm::Expected<uint16_t> read = read_u16 ();
+
+		if (!read)
+			return read.takeError ();
+
+		index = *read;
+		break;
+	}
+	default:
+		break;
+	}
+
+	switch (opcode) {
+	case MONO_CEE_NOP:
+		return llvm::Error::success ();
+	case MONO_CEE_RET:
+		return emit_ret (builder);
+
+	case MONO_CEE_LDLOC:
+	case MONO_CEE_LDLOC_S:
+		return emit_ldloc (builder, index);
+	case MONO_CEE_LDLOC_0:
+		return emit_ldloc (builder, 0);
+	case MONO_CEE_LDLOC_1:
+		return emit_ldloc (builder, 1);
+	case MONO_CEE_LDLOC_2:
+		return emit_ldloc (builder, 2);
+	case MONO_CEE_LDLOC_3:
+		return emit_ldloc (builder, 3);
+
+	case MONO_CEE_LDLOCA:
+	case MONO_CEE_LDLOCA_S:
+		return emit_ldloca (builder, index);
+
+	case MONO_CEE_STLOC:
+	case MONO_CEE_STLOC_S:
+		return emit_stloc (builder, index);
+	case MONO_CEE_STLOC_0:
+		return emit_stloc (builder, 0);
+	case MONO_CEE_STLOC_1:
+		return emit_stloc (builder, 1);
+	case MONO_CEE_STLOC_2:
+		return emit_stloc (builder, 2);
+	case MONO_CEE_STLOC_3:
+		return emit_stloc (builder, 3);
+
+	case MONO_CEE_ADD:
+		return emit_add (builder);
+	case MONO_CEE_SUB:
+		return emit_sub (builder);
+	case MONO_CEE_MUL:
+		return emit_mul (builder);
+	case MONO_CEE_DIV:
+		return emit_div (builder);
+	case MONO_CEE_REM:
+		return emit_rem (builder);
+	case MONO_CEE_DIV_UN:
+		return emit_div_un (builder);
+	case MONO_CEE_REM_UN:
+		return emit_rem_un (builder);
+
+	case MONO_CEE_ADD_OVF:
+		return emit_add_ovf (builder, false);
+	case MONO_CEE_ADD_OVF_UN:
+		return emit_add_ovf (builder, true);
+	case MONO_CEE_MUL_OVF:
+		return emit_mul_ovf (builder, false);
+	case MONO_CEE_MUL_OVF_UN:
+		return emit_mul_ovf (builder, true);
+	case MONO_CEE_SUB_OVF:
+		return emit_sub_ovf (builder, false);
+	case MONO_CEE_SUB_OVF_UN:
+		return emit_sub_ovf (builder, true);
+
+	default:
+		return unsupported_il (llvm::Twine ("no translation for ")
+		                       + mono_opcode_name (opcode));
+	}
 }
 
 /// Throw the corlib exception NAME - "DivideByZeroException" and friends, from

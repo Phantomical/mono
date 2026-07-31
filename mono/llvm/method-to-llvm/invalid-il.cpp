@@ -113,6 +113,32 @@ MethodLLVMEmitter::invalid_argument (uint32_t index)
 	                   + (sig->hasthis ? " arguments including this" : " arguments"));
 }
 
+/// Give up on a method the backend cannot translate yet.
+///
+/// Unlike the refusals above this is not an InvalidProgramException: the IL is
+/// well-formed and some other JIT can compile it, so the failure has to stay a plain
+/// one that the caller is free to fall back from.
+llvm::Error
+MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
+{
+	char *name = mono_method_full_name (method, TRUE);
+	std::string where = disassemble_one (method, offset);
+
+	if (where.empty ()) {
+		char buffer[16];
+
+		g_snprintf (buffer, sizeof (buffer), "IL_%04x", static_cast<unsigned> (offset));
+		where = buffer;
+	}
+
+	llvm::Error error = llvm::createStringError (llvm::inconvertibleErrorCode (),
+	                                             llvm::Twine ("cannot translate ") + name
+	                                                     + ": " + where + ": " + what);
+
+	g_free (name);
+	return error;
+}
+
 /// The current instruction wants NEEDED more operand bytes than the method body has
 /// left to give.
 llvm::Error

@@ -121,12 +121,16 @@ private:
 	llvm::Error invalid_local (uint32_t index);
 	llvm::Error invalid_argument (uint32_t index);
 	llvm::Error truncated_il (size_t needed);
+	llvm::Error unsupported_il (const llvm::Twine &what);
 
 	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
 	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
 
 	llvm::Error emit_arg_allocas (MonoIrBuilder &builder);
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
+
+	llvm::Error emit_instruction (MonoIrBuilder &builder);
+	llvm::Error emit_ret (MonoIrBuilder &builder);
 
 	void emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name);
 	void emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
