@@ -347,6 +347,7 @@ private:
 	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
 
 	llvm::Error emit_ldsfld (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_ldsflda (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stsfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<llvm::Value *> field_address (MonoIrBuilder &builder, StackValue object,
 	                                             MonoClassField *field);

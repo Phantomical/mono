@@ -767,6 +767,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	case MONO_CEE_LDSFLD:
 		return emit_ldsfld (builder, static_cast<uint32_t> (operand));
+	case MONO_CEE_LDSFLDA:
+		return emit_ldsflda (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_STSFLD:
 		return emit_stsfld (builder, static_cast<uint32_t> (operand));
 

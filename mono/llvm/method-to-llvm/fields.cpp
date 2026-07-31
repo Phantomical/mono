@@ -59,6 +59,18 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 		return std::move (error);
 	}
 
+	/*
+	 * A thread- or context-local static does not live in its class's statics block -
+	 * the offset the field records is a lookup cookie - and an RVA field's data lives
+	 * in the image. Neither is reachable through mono_statics_<class>.
+	 */
+	if (want_static) {
+		if (mono_class_field_is_special_static (field))
+			return unsupported_il ("thread- or context-static fields");
+		if (mono_field_get_flags (field) & FIELD_ATTRIBUTE_HAS_FIELD_RVA)
+			return unsupported_il ("static fields with an RVA");
+	}
+
 	return field;
 }
 
@@ -413,6 +425,73 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	llvm::Value *value = builder.CreateAlignedLoad (*type, address, type_alignment (ftype));
 
 	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.4.15  ldsflda - load static field address
+ *
+ *   Format     Assembly Format   Description
+ *   7F <T>     ldsflda field     Push the address of the static field, field, on the
+ *                                stack.
+ *
+ * Stack Transition:
+ *
+ *   ..., -> ..., address
+ *
+ * Description:
+ *
+ *   The ldsflda instruction pushes the address (a managed pointer, type &, if field
+ *   refers to a type whose memory is managed; otherwise an unmanaged pointer, type
+ *   native int) of a static field on the stack. field is a metadata token (a fieldref
+ *   or fielddef; see Partition II) referring to a static field member. (Note that
+ *   field can be a static global with assigned RVA, in which case its memory is
+ *   unmanaged; where RVA stands for Relative Virtual Address, the offset of the field
+ *   from the base address at which its containing PE file is loaded into memory)
+ *
+ * Exceptions:
+ *
+ *   System.FieldAccessException is thrown if field is not accessible.
+ *
+ *   System.MissingFieldException is thrown if field is not found in the metadata. This
+ *   is typically checked when CIL is converted to native code, not at runtime.
+ *
+ * Correctness:
+ *
+ *   Correct CIL ensures that field is a valid metadata token referring to a static
+ *   field member if field refers to a type whose memory is managed.
+ *
+ * Verifiability:
+ *
+ *   For verifiable code, field cannot be init-only. If field refers to a type whose
+ *   memory is managed, verification (§III.1.8) tracks the type of the value loaded
+ *   onto the stack as a managed pointer to the verification type (§I.8.7) of field. If
+ *   field refers to a type whose memory is unmanaged, verification (§III.1.8) tracks
+ *   the type of the value loaded onto the stack as an unmanaged pointer.
+ *
+ * Remark:
+ *
+ *   Using ldsflda to compute the address of a static, init-only field and then using
+ *   the resulting pointer to modify that value outside the body of the class
+ *   initializer can lead to unpredictable behavior.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_ldsflda (MonoIrBuilder &builder, uint32_t token)
+{
+	llvm::Expected<MonoClassField *> field = resolve_field (token, true);
+	if (!field)
+		return field.takeError ();
+
+	/*
+	 * Whoever takes the address is about to touch the field, so the class has to be
+	 * as initialized here as it would be for the load itself.
+	 */
+	emit_class_init (builder, (*field)->parent);
+
+	MonoType *ftype = mono_field_get_type_internal (*field);
+
+	push_stack (static_field_address (builder, *field),
+	            m_class_get_this_arg (mono_class_from_mono_type_internal (ftype)));
 	return llvm::Error::success ();
 }
 
