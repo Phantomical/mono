@@ -36,6 +36,21 @@ constexpr uint32_t SHR = bit (BinaryOp::Shr);
 constexpr uint32_t SHR_UN = bit (BinaryOp::ShrUn);
 constexpr uint32_t SHIFT_ALL = SHL | SHR | SHR_UN;
 
+constexpr uint32_t BEQ = bit (BinaryOp::Beq);
+constexpr uint32_t BGE = bit (BinaryOp::Bge);
+constexpr uint32_t BGT = bit (BinaryOp::Bgt);
+constexpr uint32_t BLE = bit (BinaryOp::Ble);
+constexpr uint32_t BLT = bit (BinaryOp::Blt);
+constexpr uint32_t BNE_UN = bit (BinaryOp::BneUn);
+constexpr uint32_t BGE_UN = bit (BinaryOp::BgeUn);
+constexpr uint32_t BGT_UN = bit (BinaryOp::BgtUn);
+constexpr uint32_t BLE_UN = bit (BinaryOp::BleUn);
+constexpr uint32_t BLT_UN = bit (BinaryOp::BltUn);
+constexpr uint32_t COMPARE_ALL =
+	BEQ | BGE | BGT | BLE | BLT | BNE_UN | BGE_UN | BGT_UN | BLE_UN | BLT_UN;
+/* The cells the table spells out by name rather than accepting wholesale. */
+constexpr uint32_t COMPARE_EQ = BEQ | BNE_UN;
+
 constexpr uint32_t ADD_OVF = bit (BinaryOp::AddOvf);
 constexpr uint32_t ADD_OVF_UN = bit (BinaryOp::AddOvfUn);
 constexpr uint32_t MUL_OVF = bit (BinaryOp::MulOvf);
@@ -120,6 +135,33 @@ constexpr OperandTable SHIFT = {
 	/* O     */ { X,        X,     X,          X,  X,  X },
 };
 
+constexpr Cell I4_CMP = { Int32, COMPARE_ALL };
+constexpr Cell I8_CMP = { Int64, COMPARE_ALL };
+constexpr Cell NI_CMP = { NativeInt, COMPARE_ALL };
+constexpr Cell F_CMP = { Float, COMPARE_ALL };
+constexpr Cell MP_CMP = { ManagedPtr, COMPARE_ALL };
+constexpr Cell NI_EQ = { NativeInt, COMPARE_EQ };
+constexpr Cell O_EQ = { ObjectRef, COMPARE_EQ };
+
+/*
+ * Table III.4: Binary Comparison or Branch Operations.
+ *
+ * The cells that carry a list rather than a tick are the ones the spec restricts to
+ * beq/bne.un (and ceq): comparing a managed pointer with a number, or two object
+ * references, is only meaningful for equality. & against & takes the whole row, with a
+ * footnote that anything other than equality is only meaningful when both point into
+ * the same array - which the CLI does not check and neither does this.
+ */
+constexpr OperandTable COMPARISON = {
+	/*            int32   int64   native int   F      &       O */
+	/* int32 */ { I4_CMP, X,      NI_CMP,     X,     X,      X },
+	/* int64 */ { X,      I8_CMP, X,          X,     X,      X },
+	/* nint  */ { NI_CMP, X,      NI_CMP,     X,     NI_EQ,  X },
+	/* F     */ { X,      X,      X,          F_CMP, X,      X },
+	/* &     */ { X,      X,      NI_EQ,      X,     MP_CMP, X },
+	/* O     */ { X,      X,      X,          X,     X,      O_EQ },
+};
+
 constexpr Cell I4_OVF = { Int32, OVERFLOW_ALL };
 constexpr Cell I8_OVF = { Int64, OVERFLOW_ALL };
 constexpr Cell NI_OVF = { NativeInt, OVERFLOW_ALL };
@@ -162,6 +204,17 @@ table_for (BinaryOp op)
 	case BinaryOp::Shr:
 	case BinaryOp::ShrUn:
 		return SHIFT;
+	case BinaryOp::Beq:
+	case BinaryOp::Bge:
+	case BinaryOp::Bgt:
+	case BinaryOp::Ble:
+	case BinaryOp::Blt:
+	case BinaryOp::BneUn:
+	case BinaryOp::BgeUn:
+	case BinaryOp::BgtUn:
+	case BinaryOp::BleUn:
+	case BinaryOp::BltUn:
+		return COMPARISON;
 	case BinaryOp::AddOvf:
 	case BinaryOp::AddOvfUn:
 	case BinaryOp::MulOvf:
@@ -204,6 +257,26 @@ op_name (BinaryOp op)
 		return "shr";
 	case BinaryOp::ShrUn:
 		return "shr.un";
+	case BinaryOp::Beq:
+		return "beq";
+	case BinaryOp::Bge:
+		return "bge";
+	case BinaryOp::Bgt:
+		return "bgt";
+	case BinaryOp::Ble:
+		return "ble";
+	case BinaryOp::Blt:
+		return "blt";
+	case BinaryOp::BneUn:
+		return "bne.un";
+	case BinaryOp::BgeUn:
+		return "bge.un";
+	case BinaryOp::BgtUn:
+		return "bgt.un";
+	case BinaryOp::BleUn:
+		return "ble.un";
+	case BinaryOp::BltUn:
+		return "blt.un";
 	case BinaryOp::AddOvf:
 		return "add.ovf";
 	case BinaryOp::AddOvfUn:
@@ -264,6 +337,9 @@ MethodLLVMEmitter::binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs)
 	case ManagedPtr:
 		/* Pointer arithmetic keeps pointing at whatever the pointer operand did. */
 		return a == ManagedPtr ? lhs : rhs;
+	case ObjectRef:
+		/* Only Table III.4 has these, where the two are compared as addresses. */
+		return lhs;
 	default:
 		llvm::report_fatal_error ("binary_result: unreachable result type");
 	}

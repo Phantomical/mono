@@ -17,6 +17,8 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/ErrorHandling.h>
 
+#include <optional>
+
 namespace mono {
 
 namespace {
@@ -170,6 +172,242 @@ MethodLLVMEmitter::describe (MonoType *t, StackType type)
 	return text;
 }
 
+namespace {
+
+/// How many bytes of operand OPCODE carries, or none for a switch, whose length is in
+/// its own operand.
+std::optional<size_t>
+operand_size (MonoOpcodeEnum opcode)
+{
+	switch (mono_opcodes[opcode].argument) {
+	case MonoInlineNone:
+		return 0;
+	case MonoShortInlineVar:
+	case MonoShortInlineI:
+	case MonoShortInlineBrTarget:
+		return 1;
+	case MonoInlineVar:
+		return 2;
+	case MonoInlineI:
+	case MonoShortInlineR:
+	case MonoInlineBrTarget:
+	case MonoInlineType:
+	case MonoInlineField:
+	case MonoInlineMethod:
+	case MonoInlineTok:
+	case MonoInlineString:
+	case MonoInlineSig:
+		return 4;
+	case MonoInlineI8:
+	case MonoInlineR:
+		return 8;
+	default:
+		return std::nullopt;
+	}
+}
+
+} // namespace
+
+/// Find every offset a block starts at and give each one an empty LLVM block.
+///
+/// A block starts where something branches to it and after anything that does not fall
+/// through, which is all this needs to know: what is on the evaluation stack when a
+/// block is entered is settled while emitting, by whichever predecessor gets there
+/// first.
+llvm::Error
+MethodLLVMEmitter::find_block_leaders ()
+{
+	std::vector<size_t> leaders = { 0 };
+	size_t at = 0;
+
+	while (at < code_size) {
+		const unsigned char *cursor = code + at;
+		MonoOpcodeEnum opcode = mono_opcode_value (&cursor, code + code_size);
+
+		if (opcode == MonoOpcodeEnum_Invalid) {
+			offset = at;
+			return invalid_il ("unrecognized opcode");
+		}
+
+		size_t operand = static_cast<size_t> (cursor - code) + 1;
+		std::optional<size_t> size = operand_size (opcode);
+		size_t next;
+
+		if (size) {
+			next = operand + *size;
+		} else {
+			/* switch: a count, then that many four-byte displacements. */
+			if (code_size - operand < 4) {
+				offset = at;
+				return truncated_il (4);
+			}
+
+			uint32_t count = code[operand] | (code[operand + 1] << 8)
+			                 | (code[operand + 2] << 16) | (code[operand + 3] << 24);
+
+			next = operand + 4 + static_cast<size_t> (count) * 4;
+		}
+
+		if (next > code_size) {
+			offset = at;
+			return truncated_il (next - code_size);
+		}
+
+		/*
+		 * Displacements are relative to the instruction after the branch, which is
+		 * why the targets are worked out here rather than from `at`.
+		 */
+		if (mono_opcodes[opcode].argument == MonoShortInlineBrTarget)
+			leaders.push_back (next + static_cast<int8_t> (code[operand]));
+		else if (mono_opcodes[opcode].argument == MonoInlineBrTarget)
+			leaders.push_back (next
+			                   + static_cast<int32_t> (code[operand]
+			                                           | (code[operand + 1] << 8)
+			                                           | (code[operand + 2] << 16)
+			                                           | (code[operand + 3] << 24)));
+		else if (!size)
+			for (size_t i = operand + 4; i < next; i += 4)
+				leaders.push_back (next
+				                   + static_cast<int32_t> (code[i] | (code[i + 1] << 8)
+				                                           | (code[i + 2] << 16)
+				                                           | (code[i + 3] << 24)));
+
+		switch (mono_opcodes[opcode].flow_type) {
+		case MONO_FLOW_BRANCH:
+		case MONO_FLOW_COND_BRANCH:
+		case MONO_FLOW_RETURN:
+		case MONO_FLOW_ERROR:
+			leaders.push_back (next);
+			break;
+		default:
+			break;
+		}
+
+		at = next;
+	}
+
+	for (size_t leader : leaders) {
+		if (leader > code_size) {
+			offset = 0;
+			return invalid_il (llvm::Twine ("branch target IL_")
+			                   + llvm::Twine::utohexstr (leader)
+			                   + " is outside the method body");
+		}
+
+		/* The leader one past the end is the fallthrough of a trailing ret. */
+		if (leader == code_size)
+			continue;
+
+		Block &block = blocks[leader];
+		char name[16];
+
+		if (block.block != nullptr)
+			continue;
+
+		g_snprintf (name, sizeof (name), "IL_%04x", static_cast<unsigned> (leader));
+		block.block = llvm::BasicBlock::Create (context (), name, function);
+	}
+
+	return llvm::Error::success ();
+}
+
+/// The offset a branch at the current instruction jumps to.
+llvm::Expected<size_t>
+MethodLLVMEmitter::branch_target (int32_t displacement)
+{
+	size_t target = static_cast<size_t> (static_cast<ptrdiff_t> (ip) + displacement);
+
+	if (blocks.find (target) == blocks.end ())
+		return invalid_il (llvm::Twine ("branch target IL_")
+		                   + llvm::Twine::utohexstr (target)
+		                   + " is not the start of an instruction");
+
+	return target;
+}
+
+/// The memory a value of TYPE at DEPTH lives in while a branch is taken.
+///
+/// Slots are shared by everything that spills the same type at the same depth, so a
+/// conditional branch writes once for both of its edges. Sharing is safe because every
+/// edge into a block stores before it jumps, so a reload always sees the store from the
+/// predecessor it actually came from.
+llvm::AllocaInst *
+MethodLLVMEmitter::spill_slot (size_t depth, llvm::Type *type)
+{
+	llvm::AllocaInst *&slot = spills[{ depth, type }];
+
+	if (slot == nullptr) {
+		MonoIrBuilder entry (entry_block, entry_block->begin ());
+
+		slot = entry.CreateAlloca (type, nullptr,
+		                           llvm::Twine ("stack") + llvm::Twine (depth));
+	}
+
+	return slot;
+}
+
+/// Put the evaluation stack in memory, and say where a block entered from here will
+/// find it.
+std::vector<MethodLLVMEmitter::Slot>
+MethodLLVMEmitter::spill_stack (MonoIrBuilder &builder)
+{
+	std::vector<Slot> slots;
+
+	for (size_t depth = 0; depth < stack.size (); ++depth) {
+		llvm::Value *value = stack[depth].value;
+
+		slots.push_back ({ spill_slot (depth, value->getType ()), stack[depth].type });
+		builder.CreateStore (value, slots.back ().alloca);
+	}
+
+	return slots;
+}
+
+/// Record that TARGET is entered holding SLOTS, which is also where the two edges of a
+/// conditional branch are checked against each other: they spill once and enter twice.
+llvm::Error
+MethodLLVMEmitter::enter_block (size_t target, const std::vector<Slot> &slots)
+{
+	Block &block = blocks[target];
+
+	/*
+	 * The fallthrough edge of a conditional branch is not checked by branch_target,
+	 * so this is where a branch as the last instruction of the method is caught.
+	 */
+	if (block.block == nullptr)
+		return invalid_il ("control falls off the end of the method body");
+
+	if (!block.entry_known) {
+		block.entry = slots;
+		block.entry_known = true;
+		return llvm::Error::success ();
+	}
+
+	if (block.entry.size () != slots.size ())
+		return invalid_il (llvm::Twine ("the evaluation stack is ")
+		                   + llvm::Twine (slots.size ()) + " deep here but IL_"
+		                   + llvm::Twine::utohexstr (target) + " is entered with "
+		                   + llvm::Twine (block.entry.size ()));
+
+	for (size_t depth = 0; depth < slots.size (); ++depth)
+		if (block.entry[depth].alloca != slots[depth].alloca)
+			return unsupported_il (llvm::Twine ("the evaluation stack holds a "
+			                                    "different type at depth ")
+			                       + llvm::Twine (depth) + " than the other paths into IL_"
+			                       + llvm::Twine::utohexstr (target) + " leave there");
+
+	return llvm::Error::success ();
+}
+
+/// Read back what a predecessor spilled, so the block starts with the stack it expects.
+void
+MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
+{
+	for (const Slot &slot : block.entry)
+		push_stack (builder.CreateLoad (slot.alloca->getAllocatedType (), slot.alloca),
+		            slot.type);
+}
+
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::emit ()
 {
@@ -182,24 +420,48 @@ MethodLLVMEmitter::emit ()
 	code_size = cfg->header->code_size;
 
 	MonoIrBuilder builder (context ());
-	llvm::BasicBlock *body = llvm::BasicBlock::Create (context (), "entry", function);
-	builder.SetInsertPoint (body);
+
+	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
+	builder.SetInsertPoint (entry_block);
 
 	if (auto error = emit_arg_allocas (builder))
 		return std::move (error);
 	if (auto error = emit_local_allocas (builder))
 		return std::move (error);
+	if (auto error = find_block_leaders ())
+		return std::move (error);
+
+	if (blocks[0].block == nullptr)
+		return invalid_il ("the method has no body");
+
+	builder.CreateBr (blocks[0].block);
+	blocks[0].entry_known = true;
+	builder.SetInsertPoint (blocks[0].block);
 
 	while (ip < code_size) {
 		offset = ip;
 
-		/*
-		 * Everything reachable is still one straight line, so an instruction that
-		 * follows a terminator has no block to go in. That is what branch targets
-		 * will start their own blocks for.
-		 */
-		if (builder.GetInsertBlock ()->getTerminator () != nullptr)
-			return unsupported_il ("unreachable instruction");
+		if (auto found = blocks.find (ip); found != blocks.end () && ip != 0) {
+			Block &next = found->second;
+
+			/*
+			 * Falling into a block is an edge like any other, so the stack goes
+			 * through memory here too rather than staying in the values the
+			 * previous block happened to leave behind.
+			 */
+			if (builder.GetInsertBlock ()->getTerminator () == nullptr) {
+				if (auto error = enter_block (ip, spill_stack (builder)))
+					return std::move (error);
+
+				builder.CreateBr (next.block);
+			}
+
+			pop_stack (stack.size ());
+			builder.SetInsertPoint (next.block);
+			reload_stack (builder, next);
+		} else if (builder.GetInsertBlock ()->getTerminator () != nullptr) {
+			return invalid_il ("unreachable instruction is not the start of a block");
+		}
 
 		if (llvm::Error error = emit_instruction (builder))
 			return std::move (error);
@@ -207,6 +469,14 @@ MethodLLVMEmitter::emit ()
 
 	if (builder.GetInsertBlock ()->getTerminator () == nullptr)
 		return invalid_il ("method body ends without returning");
+
+	/*
+	 * A block nothing reached still has to be well formed for the verifier, and the
+	 * only honest thing to put in one is that control never gets here.
+	 */
+	for (auto &entry : blocks)
+		if (entry.second.block->empty ())
+			MonoIrBuilder (entry.second.block).CreateUnreachable ();
 
 	return function;
 }
@@ -235,7 +505,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	switch (mono_opcodes[opcode].argument) {
 	case MonoShortInlineVar:
-	case MonoShortInlineI: {
+	case MonoShortInlineI:
+	case MonoShortInlineBrTarget: {
 		llvm::Expected<uint8_t> read = read_u8 ();
 
 		if (!read)
@@ -254,7 +525,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		break;
 	}
 	case MonoInlineI:
-	case MonoShortInlineR: {
+	case MonoShortInlineR:
+	case MonoInlineBrTarget: {
 		llvm::Expected<uint32_t> read = read_u32 ();
 
 		if (!read)
@@ -276,6 +548,14 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	default:
 		break;
 	}
+
+	/*
+	 * A branch displacement is signed and is counted from the instruction after the
+	 * branch, which `ip` now points at. Only the branch cases below read this.
+	 */
+	int32_t displacement = mono_opcodes[opcode].argument == MonoShortInlineBrTarget
+	                               ? static_cast<int8_t> (operand)
+	                               : static_cast<int32_t> (operand);
 
 	switch (opcode) {
 	case MONO_CEE_NOP:
@@ -370,6 +650,49 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_sub_ovf (builder, false);
 	case MONO_CEE_SUB_OVF_UN:
 		return emit_sub_ovf (builder, true);
+
+	case MONO_CEE_BR:
+	case MONO_CEE_BR_S:
+		return emit_br (builder, displacement);
+	case MONO_CEE_BRTRUE:
+	case MONO_CEE_BRTRUE_S:
+		return emit_brcond (builder, displacement, true);
+	case MONO_CEE_BRFALSE:
+	case MONO_CEE_BRFALSE_S:
+		return emit_brcond (builder, displacement, false);
+	case MONO_CEE_SWITCH:
+		return emit_switch (builder);
+
+	case MONO_CEE_BEQ:
+	case MONO_CEE_BEQ_S:
+		return emit_branch_compare (builder, BinaryOp::Beq, displacement);
+	case MONO_CEE_BGE:
+	case MONO_CEE_BGE_S:
+		return emit_branch_compare (builder, BinaryOp::Bge, displacement);
+	case MONO_CEE_BGT:
+	case MONO_CEE_BGT_S:
+		return emit_branch_compare (builder, BinaryOp::Bgt, displacement);
+	case MONO_CEE_BLE:
+	case MONO_CEE_BLE_S:
+		return emit_branch_compare (builder, BinaryOp::Ble, displacement);
+	case MONO_CEE_BLT:
+	case MONO_CEE_BLT_S:
+		return emit_branch_compare (builder, BinaryOp::Blt, displacement);
+	case MONO_CEE_BNE_UN:
+	case MONO_CEE_BNE_UN_S:
+		return emit_branch_compare (builder, BinaryOp::BneUn, displacement);
+	case MONO_CEE_BGE_UN:
+	case MONO_CEE_BGE_UN_S:
+		return emit_branch_compare (builder, BinaryOp::BgeUn, displacement);
+	case MONO_CEE_BGT_UN:
+	case MONO_CEE_BGT_UN_S:
+		return emit_branch_compare (builder, BinaryOp::BgtUn, displacement);
+	case MONO_CEE_BLE_UN:
+	case MONO_CEE_BLE_UN_S:
+		return emit_branch_compare (builder, BinaryOp::BleUn, displacement);
+	case MONO_CEE_BLT_UN:
+	case MONO_CEE_BLT_UN_S:
+		return emit_branch_compare (builder, BinaryOp::BltUn, displacement);
 
 	case MONO_CEE_AND:
 		return emit_and (builder);

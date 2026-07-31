@@ -39,6 +39,17 @@ enum class BinaryOp {
 	Shr,
 	ShrUn,
 
+	Beq,
+	Bge,
+	Bgt,
+	Ble,
+	Blt,
+	BneUn,
+	BgeUn,
+	BgtUn,
+	BleUn,
+	BltUn,
+
 	AddOvf,
 	AddOvfUn,
 	MulOvf,
@@ -103,6 +114,28 @@ private:
 		MonoType *result;
 	};
 
+	/// One evaluation-stack slot, held in memory so that it survives a branch.
+	struct Slot {
+		llvm::AllocaInst *alloca;
+		MonoType *type;
+	};
+
+	/*
+	 * A block the IL branches to, and the evaluation stack it is entered holding.
+	 *
+	 * Values that are live across a branch go through memory rather than through phis
+	 * this translator builds itself: the arguments and the locals already work that
+	 * way, so mem2reg is already what turns this function's stores into SSA, and
+	 * spilling needs to know only how deep the stack is at a join - never what is on
+	 * it. Building phis directly would need the types up front, which is a whole
+	 * dataflow pass over the method before a single instruction could be emitted.
+	 */
+	struct Block {
+		llvm::BasicBlock *block = nullptr;
+		std::vector<Slot> entry;
+		bool entry_known = false;
+	};
+
 	llvm::Module *module;
 	llvm::Function *function;
 	llvm::IRBuilder<> builder;
@@ -112,6 +145,9 @@ private:
 
 	llvm::DenseMap<MonoMethod *, llvm::Function *> declarations;
 	llvm::DenseMap<MonoClass *, llvm::Type *> vtypes;
+	llvm::DenseMap<size_t, Block> blocks;
+	llvm::DenseMap<std::pair<size_t, llvm::Type *>, llvm::AllocaInst *> spills;
+	llvm::BasicBlock *entry_block = nullptr;
 	std::vector<Entry> args;
 	std::vector<Entry> locals;
 	std::vector<StackValue> stack;
@@ -170,7 +206,20 @@ private:
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
+
+	llvm::Error find_block_leaders ();
+	llvm::Expected<size_t> branch_target (int32_t displacement);
+	llvm::AllocaInst *spill_slot (size_t depth, llvm::Type *type);
+	std::vector<Slot> spill_stack (MonoIrBuilder &builder);
+	llvm::Error enter_block (size_t target, const std::vector<Slot> &slots);
+	void reload_stack (MonoIrBuilder &builder, const Block &block);
+
 	llvm::Error emit_ret (MonoIrBuilder &builder);
+	llvm::Error emit_br (MonoIrBuilder &builder, int32_t displacement);
+	llvm::Error emit_brcond (MonoIrBuilder &builder, int32_t displacement, bool branch_if_true);
+	llvm::Error emit_branch_compare (MonoIrBuilder &builder, BinaryOp op,
+	                                 int32_t displacement);
+	llvm::Error emit_switch (MonoIrBuilder &builder);
 
 	void emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name);
 	void emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
