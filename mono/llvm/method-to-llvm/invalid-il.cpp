@@ -115,14 +115,16 @@ MethodLLVMEmitter::invalid_argument (uint32_t index)
 
 /// Give up on a method the backend cannot translate yet.
 ///
-/// Unlike the refusals above this is not an InvalidProgramException: the IL is
-/// well-formed and some other JIT can compile it, so the failure has to stay a plain
-/// one that the caller is free to fall back from.
+/// An ExecutionEngineException rather than the InvalidProgramException above: the
+/// IL is well formed, and what went wrong is that this engine has no translation
+/// for it. There is no other JIT to hand the method to, so the refusal is what
+/// managed code sees when it calls the method.
 llvm::Error
 MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 {
 	char *name = mono_method_full_name (method, TRUE);
 	std::string where = disassemble_one (method, offset);
+	ERROR_DECL (error);
 
 	if (where.empty ()) {
 		char buffer[16];
@@ -131,12 +133,11 @@ MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 		where = buffer;
 	}
 
-	llvm::Error error = llvm::createStringError (llvm::inconvertibleErrorCode (),
-	                                             llvm::Twine ("cannot translate ") + name + ": "
-	                                                     + where + ": " + what);
+	mono_error_set_execution_engine (error, "Cannot translate %s: %s: %s", name,
+	                                 where.c_str (), what.str ().c_str ());
 
 	g_free (name);
-	return error;
+	return runtime_error (error);
 }
 
 /// The current instruction wants NEEDED more operand bytes than the method body has

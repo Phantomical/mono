@@ -98,6 +98,28 @@ struct MonoLLVMMethod {
 	llvm::Function *function;
 };
 
+/// A symbol the emitted module leaves for the engine to resolve, and the runtime
+/// object behind it.
+///
+/// The names are built out of metadata (a class's full name, a method's signature),
+/// and taking one apart again to find what it was built from is neither cheap nor
+/// reliable. So the translator says what it meant as it goes, and the engine looks
+/// nothing up by name.
+struct ExternalSymbol {
+	enum class Kind {
+		Class,   ///< `object` is the MonoClass this names
+		VTable,  ///< the MonoVTable of the MonoClass in `object`
+		Statics, ///< the static field block of the MonoClass in `object`
+		Method,  ///< `object` is the MonoMethod this names
+		Field,   ///< `object` is the MonoClassField this names
+		Code,    ///< the entry point of the MonoMethod in `object`
+	};
+
+	std::string name;
+	Kind kind;
+	void *object;
+};
+
 class MethodLLVMEmitter {
 private:
 	struct Entry {
@@ -151,6 +173,10 @@ private:
 
 	MonoCompile *cfg;
 	MonoMethod *method;
+
+	/// Where the symbols this method leaves unresolved are reported, or null when
+	/// nothing is collecting them.
+	std::vector<ExternalSymbol> *externals = nullptr;
 
 	llvm::DenseMap<MonoMethod *, llvm::Function *> declarations;
 	llvm::DenseMap<MonoClass *, llvm::Type *> vtypes;
@@ -213,12 +239,14 @@ private:
 	size_t ip = 0;
 
 public:
-	MethodLLVMEmitter (llvm::Module *module, MonoCompile *cfg, MonoMethod *method)
+	MethodLLVMEmitter (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
+	                   std::vector<ExternalSymbol> *externals = nullptr)
 	    : module (module),
 	      function (nullptr),
 	      builder (module->getContext ()),
 	      cfg (cfg),
-	      method (method)
+	      method (method),
+	      externals (externals)
 	{
 	}
 
@@ -382,7 +410,10 @@ private:
 	llvm::FunctionCallee wbarrier_decl ();
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);
 	llvm::Constant *extern_symbol (const std::string &name);
+	void record_external (const std::string &name, ExternalSymbol::Kind kind,
+	                      void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
+	llvm::Constant *field_symbol (MonoClassField *field);
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	void emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
@@ -533,8 +564,12 @@ private:
 /// as an SExt/ZExt attribute, or None for everything else.
 llvm::Attribute::AttrKind integer_extension (MonoType *t);
 
+/// EXTERNALS, when given, collects the symbols the emitted module leaves for the
+/// engine to resolve.
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
-                                                 MonoMethod *method);
+                                                 MonoMethod *method,
+                                                 std::vector<ExternalSymbol> *externals
+                                                 = nullptr);
 
 } // namespace mono
 

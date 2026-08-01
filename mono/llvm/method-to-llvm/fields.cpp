@@ -74,6 +74,16 @@ MethodLLVMEmitter::extern_symbol (const std::string &name)
 	                                 llvm::GlobalValue::ExternalLinkage, nullptr, name);
 }
 
+/// Note that NAME stands for OBJECT, so that the engine can resolve it without
+/// reading the metadata back out of the name.
+void
+MethodLLVMEmitter::record_external (const std::string &name, ExternalSymbol::Kind kind,
+                                    void *object)
+{
+	if (externals != nullptr)
+		externals->push_back ({ name, kind, object });
+}
+
 /// The address the engine has to resolve for a per-class run-time structure.
 ///
 /// A class contributes three: mono_statics_<class>, the block its static fields live
@@ -85,8 +95,27 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 {
 	char *name = mono_type_full_name (m_class_get_byval_arg (klass));
 	std::string symbol = std::string (prefix) + name;
+	ExternalSymbol::Kind kind = ExternalSymbol::Kind::Class;
+
+	if (!strcmp (prefix, "mono_vtable_"))
+		kind = ExternalSymbol::Kind::VTable;
+	else if (!strcmp (prefix, "mono_statics_"))
+		kind = ExternalSymbol::Kind::Statics;
 
 	g_free (name);
+	record_external (symbol, kind, klass);
+	return extern_symbol (symbol);
+}
+
+/// The address the engine has to resolve for FIELD's own MonoClassField.
+llvm::Constant *
+MethodLLVMEmitter::field_symbol (MonoClassField *field)
+{
+	char *name = mono_field_full_name (field);
+	std::string symbol = std::string ("mono_field_") + name;
+
+	g_free (name);
+	record_external (symbol, ExternalSymbol::Kind::Field, field);
 	return extern_symbol (symbol);
 }
 
@@ -154,10 +183,8 @@ MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField 
 		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 		llvm::Value *domain = builder.CreateCall (
 			module->getOrInsertFunction ("mono_domain_get", ptr));
-		char *name = mono_field_full_name (field);
-		llvm::Constant *symbol = extern_symbol (std::string ("mono_field_") + name);
+		llvm::Constant *symbol = field_symbol (field);
 
-		g_free (name);
 		return emit_protected_call (
 			builder,
 			module->getOrInsertFunction ("mono_class_static_field_address", ptr,

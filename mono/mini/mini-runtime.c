@@ -108,6 +108,7 @@
 #include "llvm-jit.h"
 #endif
 #endif
+#include "../llvm/runtime.hpp"
 #include "mono/metadata/icall-signatures.h"
 #include "mono/utils/mono-tls-inline.h"
 
@@ -2770,7 +2771,10 @@ lookup_start:
 
 		if (wait_or_register_method_to_compile (method, target_domain))
 			goto lookup_start;
-		code = mono_jit_compile_method_inner (method, target_domain, opt, error);
+		if (mono_llvm_jit_wants_method (method))
+			code = mono_llvm_jit_compile_method (method, error);
+		else
+			code = mono_jit_compile_method_inner (method, target_domain, opt, error);
 		unregister_method_for_compile (method, target_domain);
 	}
 	if (!is_ok (error))

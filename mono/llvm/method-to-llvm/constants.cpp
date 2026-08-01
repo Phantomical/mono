@@ -271,10 +271,7 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	} else if (handle_class == mono_defaults.methodhandle_class) {
 		address = method_symbol (static_cast<MonoMethod *> (handle));
 	} else if (handle_class == mono_defaults.fieldhandle_class) {
-		char *name = mono_field_full_name (static_cast<MonoClassField *> (handle));
-
-		address = extern_symbol (std::string ("mono_field_") + name);
-		g_free (name);
+		address = field_symbol (static_cast<MonoClassField *> (handle));
 	} else {
 		/*
 		 * mono_ldtoken_checked hands back exactly the three handle kinds above

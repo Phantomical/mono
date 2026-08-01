@@ -124,6 +124,7 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 	std::string symbol = std::string ("mono_method_") + name;
 
 	g_free (name);
+	record_external (symbol, ExternalSymbol::Kind::Method, target);
 	return extern_symbol (symbol);
 }
 

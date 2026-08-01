@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
@@ -19,10 +20,17 @@ namespace mono {
 namespace {
 
 /// An error describing something the converter could not express in LLVM IR.
+///
+/// An ExecutionEngineException, like the refusals in invalid-il.cpp: a signature
+/// or a type this engine cannot express is a limit of the engine, not of the
+/// program, and nothing else is going to compile the method instead.
 inline llvm::Error
 conversion_error (const llvm::Twine &reason)
 {
-	return llvm::createStringError (llvm::inconvertibleErrorCode (), reason);
+	ERROR_DECL (error);
+
+	mono_error_set_execution_engine (error, "%s", reason.str ().c_str ());
+	return runtime_error (error);
 }
 
 llvm::Type *
@@ -316,6 +324,8 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	char *full_name = mono_method_full_name (method, TRUE);
 	llvm::Function *function = llvm::Function::Create (
 		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
+
+	record_external (full_name, ExternalSymbol::Kind::Code, method);
 	g_free (full_name);
 
 	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);

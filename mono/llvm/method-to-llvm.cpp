@@ -66,9 +66,10 @@ throw_corlib_exception_decl (llvm::Module *module)
 } // namespace
 
 llvm::Expected<llvm::Function *>
-method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method)
+method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
+                std::vector<ExternalSymbol> *externals)
 {
-	auto emitter = MethodLLVMEmitter (module, cfg, method);
+	auto emitter = MethodLLVMEmitter (module, cfg, method, externals);
 	return emitter.emit ();
 }
 
