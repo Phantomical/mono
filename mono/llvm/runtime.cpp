@@ -37,6 +37,7 @@ extern "C" {
 }
 
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/utils/mono-error-internals.h"
 
@@ -111,6 +112,16 @@ runtime_helpers ()
 		 * handler.
 		 */
 		{ "mono_personality", (void *) &mono_personality },
+
+		/*
+		 * The libcalls LLVM lowers its memory intrinsics to. The translator never
+		 * names these; codegen synthesizes the calls, so linking against the
+		 * process's libc is part of what the backend has to provide.
+		 */
+		{ "memcmp", (void *) &memcmp },
+		{ "memcpy", (void *) &memcpy },
+		{ "memmove", (void *) &memmove },
+		{ "memset", (void *) &memset },
 	};
 #pragma GCC diagnostic pop
 }
@@ -150,6 +161,29 @@ tracing ()
 	static bool on = g_getenv ("MONO_LLVM_JIT_TRACE") != NULL;
 
 	return on;
+}
+
+/// Whether MONO_LLVM_JIT_DUMP names this method: a substring of its full name
+/// selects it for having its IL and translated IR printed to stderr.
+bool
+dumping (const char *name)
+{
+	static const char *filter = g_getenv ("MONO_LLVM_JIT_DUMP");
+
+	return filter != nullptr && strstr (name, filter) != nullptr;
+}
+
+void
+dump_il (MonoMethod *method, MonoMethodHeader *header)
+{
+	const uint8_t *code = mono_method_header_get_code (header, nullptr, nullptr);
+	uint32_t size;
+
+	mono_method_header_get_code (header, &size, nullptr);
+
+	char *il = mono_disasm_code (nullptr, method, code, code + size);
+	fprintf (stderr, "%s\n", il);
+	g_free (il);
 }
 
 /*
@@ -347,12 +381,23 @@ Backend::translate_and_compile (MonoMethod *method)
 
 	std::string entry = (*function)->getName ().str ();
 
+	if (dumping (entry.c_str ())) {
+		dump_il (method, cfg.get ()->header);
+		module->print (llvm::errs (), nullptr);
+	}
+
 	if (Error err = resolve (externals))
 		return std::move (err);
 
-	return jit_->compile (ThreadSafeModule (std::move (module),
-	                                        ThreadSafeContext (std::move (context))),
-	                      entry);
+	Expected<void *> code =
+		jit_->compile (ThreadSafeModule (std::move (module),
+		                                 ThreadSafeContext (std::move (context))),
+		               entry);
+
+	if (code && tracing ())
+		fprintf (stderr, "[llvm-jit] %s is at %p\n", entry.c_str (), *code);
+
+	return code;
 }
 
 Expected<void *>
