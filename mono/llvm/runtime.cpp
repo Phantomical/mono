@@ -26,6 +26,7 @@
 
 #include "mini.h"
 #include "mini-llvm.h"
+#include "mini-runtime.h"
 
 /*
  * The icalls generated code calls are declared without extern "C" unless the
@@ -149,6 +150,32 @@ tracing ()
 	static bool on = g_getenv ("MONO_LLVM_JIT_TRACE") != NULL;
 
 	return on;
+}
+
+/*
+ * Whether METHOD's code comes from somewhere other than IL: an icall or a
+ * pinvoke, whose body is the native function plus whatever marshalling wrapper
+ * the runtime builds around it, or a method the runtime implements itself.
+ *
+ * There is nothing to translate for one of these. Working out what to call
+ * instead means resolving the native entry point, deciding whether it needs a
+ * wrapper at all and building one if it does - all of which the runtime already
+ * does on its way to us, so these go back to it rather than being handled here.
+ */
+bool
+implemented_outside_il (MonoMethod *method)
+{
+	/*
+	 * A wrapper is excluded however it is marked. The wrapper the runtime
+	 * builds around a pinvoke keeps the flags of the method it wraps, so
+	 * handing one back would have the runtime wrap it again, and again.
+	 */
+	if (method->wrapper_type != MONO_WRAPPER_NONE)
+		return false;
+
+	return (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) != 0 ||
+	       (method->iflags & METHOD_IMPL_ATTRIBUTE_RUNTIME) != 0 ||
+	       (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) != 0;
 }
 
 std::string
@@ -288,6 +315,16 @@ Backend::translate_and_compile (MonoMethod *method)
 {
 	auto context = std::make_unique<LLVMContext> ();
 	auto module = std::make_unique<Module> (symbol_for_code (method), *context);
+
+	if (implemented_outside_il (method)) {
+		ERROR_DECL (compile_error);
+		void *code = mono_jit_compile_method (method, compile_error);
+
+		if (code == nullptr)
+			return runtime_error (compile_error);
+
+		return code;
+	}
 
 	if (tracing ()) {
 		char *name = mono_method_full_name (method, TRUE);
