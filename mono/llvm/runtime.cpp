@@ -25,6 +25,7 @@
 #include "method-to-llvm.hpp"
 
 #include "mini.h"
+#include "mini-llvm.h"
 
 /*
  * The icalls generated code calls are declared without extern "C" unless the
@@ -102,6 +103,13 @@ runtime_helpers ()
 		  (void *) &mono_object_castclass_with_cache },
 		{ "mono_object_isinst_with_cache", (void *) &mono_object_isinst_with_cache },
 		{ "mono_object_new_specific", (void *) &mono_object_new_specific },
+
+		/*
+		 * The personality routine a landing pad names. Generated code never
+		 * calls it; the unwinder does, on the way through a frame that has a
+		 * handler.
+		 */
+		{ "mono_personality", (void *) &mono_personality },
 	};
 #pragma GCC diagnostic pop
 }
@@ -241,6 +249,7 @@ Backend::resolve (const std::vector<ExternalSymbol> &externals)
 			break;
 		case ExternalSymbol::Kind::Method:
 		case ExternalSymbol::Kind::Field:
+		case ExternalSymbol::Kind::Address:
 			address = external.object;
 			break;
 		case ExternalSymbol::Kind::VTable:

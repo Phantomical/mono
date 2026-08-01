@@ -206,11 +206,18 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 			builder.getInt64 (reinterpret_cast<uint64_t> (data)), ptr);
 		llvm::Value *value = literal;
 
-		if (method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD)
+		if (method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD) {
+			MonoJitICallInfo *info = mono_find_jit_icall_info (
+				MONO_JIT_ICALL_mono_string_new_wrapper_internal);
+			llvm::FunctionType *type =
+				llvm::FunctionType::get (ptr, { ptr }, false);
+
 			value = builder.CreateCall (
-				module->getOrInsertFunction ("mono_string_new_wrapper_internal",
-			                                     ptr, ptr),
+				llvm::FunctionCallee (
+					type, address_symbol (std::string ("mono_icall_") + info->name,
+			                                      const_cast<void *> (info->func))),
 				{ literal });
+		}
 
 		push_stack (value, m_class_get_byval_arg (mono_defaults.string_class));
 		return llvm::Error::success ();

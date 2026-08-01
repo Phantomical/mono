@@ -113,6 +113,7 @@ struct ExternalSymbol {
 		Method,  ///< `object` is the MonoMethod this names
 		Field,   ///< `object` is the MonoClassField this names
 		Code,    ///< the entry point of the MonoMethod in `object`
+		Address, ///< `object` is the address itself, which the name stands for
 	};
 
 	std::string name;
@@ -425,6 +426,15 @@ private:
 	                      void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	llvm::Constant *field_symbol (MonoClassField *field);
+	llvm::Constant *address_symbol (const std::string &name, void *address);
+
+	llvm::Error emit_mono_icall (MonoIrBuilder &builder, uint32_t id);
+	llvm::Error emit_mono_objaddr (MonoIrBuilder &builder);
+	llvm::Error emit_mono_vtaddr (MonoIrBuilder &builder);
+	llvm::Error emit_mono_rethrow (MonoIrBuilder &builder);
+	llvm::Error emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_mono_classconst (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_mono_methodconst (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	void emit_class_init (MonoIrBuilder &builder, MonoClass *klass);

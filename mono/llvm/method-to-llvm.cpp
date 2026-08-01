@@ -1143,6 +1143,57 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_CONV_OVF_U_UN:
 		return emit_conv_ovf (builder, ConvType::U, true);
 
+	/*
+	 * The runtime's own opcodes, which only ever appear in a body it generated.
+	 * A method loaded from metadata carrying one is not IL at all.
+	 */
+	case MONO_CEE_MONO_ICALL:
+	case MONO_CEE_MONO_LDPTR:
+	case MONO_CEE_MONO_CLASSCONST:
+	case MONO_CEE_MONO_METHODCONST:
+	case MONO_CEE_MONO_NOT_TAKEN:
+	case MONO_CEE_MONO_OBJADDR:
+	case MONO_CEE_MONO_VTADDR:
+	case MONO_CEE_MONO_RETHROW:
+	case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
+		if (!in_wrapper ())
+			return invalid_il (llvm::Twine (mono_opcode_name (opcode))
+			                   + " outside a wrapper");
+
+		switch (opcode) {
+		case MONO_CEE_MONO_ICALL:
+			return emit_mono_icall (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_LDPTR:
+			return emit_mono_ldptr (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_CLASSCONST:
+			return emit_mono_classconst (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_METHODCONST:
+			return emit_mono_methodconst (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_OBJADDR:
+			return emit_mono_objaddr (builder);
+		case MONO_CEE_MONO_VTADDR:
+			return emit_mono_vtaddr (builder);
+		case MONO_CEE_MONO_RETHROW:
+			return emit_mono_rethrow (builder);
+
+		/* A hint that the branch it precedes is the unlikely one. */
+		case MONO_CEE_MONO_NOT_TAKEN:
+			return llvm::Error::success ();
+
+		/*
+		 * The flag a thread polls to notice it has been asked to stop. Its
+		 * address, not its value - an ldind follows.
+		 */
+		case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
+			push_stack (address_symbol ("mono_thread_interruption_request_flag",
+			                            &mono_thread_interruption_request_flag),
+			            m_class_get_byval_arg (mono_defaults.int_class));
+			return llvm::Error::success ();
+
+		default:
+			g_assert_not_reached ();
+		}
+
 	default:
 		return unsupported_il (llvm::Twine ("no translation for ")
 		                       + mono_opcode_name (opcode));

@@ -197,6 +197,32 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
  *   Correct CIL ensures that object is always either null or an object reference (i.e.,
  *   of type O).
  */
+/*
+ * III.F0.1F  mono_rethrow - throw an exception again without disturbing its trace
+ *
+ * Unlike CIL rethrow this names the exception rather than taking the one the
+ * handler was entered with, so a wrapper can rethrow what it caught after doing
+ * something else in between.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_rethrow (MonoIrBuilder &builder)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	StackValue value = get_stack (0);
+	StackType type = stack_type (value.type);
+
+	if (type != ObjectRef)
+		return invalid_il (llvm::Twine ("mono_rethrow is not defined for operand type ")
+		                   + describe (value.type, type));
+
+	pop_stack (stack.size ());
+	emit_unwinding_call (builder, throw_decl (module, "mono_llvm_rethrow_exception"),
+	                     {value.value});
+	return llvm::Error::success ();
+}
+
 llvm::Error
 MethodLLVMEmitter::emit_throw (MonoIrBuilder &builder)
 {
