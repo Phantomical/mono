@@ -5,8 +5,10 @@
 
 #include "jit.hpp"
 
+#include "compiler.hpp"
 #include "stubs.hpp"
 
+#include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
@@ -19,7 +21,10 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <map>
 #include <memory>
+#include <optional>
+#include <vector>
 
 using namespace llvm;
 using namespace llvm::orc;
@@ -37,6 +42,113 @@ lazy_compile_failed ()
 {
 	report_fatal_error ("a method failed to compile on first call", false);
 }
+
+/*
+ * Reads, for every linked object, where the pieces the runtime needs landed:
+ * each defined function's extent and the two mono side-table sections. Keyed by
+ * the per-compile dylib, whose name is unique, so a method compiled twice never
+ * collides with itself.
+ *
+ * The side-table sections carry no symbols and nothing references them, so
+ * JITLink's pruning would drop them; the pre-prune pass marks their blocks
+ * live. The read itself runs post-fixup, when addresses are final - and with
+ * the in-process memory manager those addresses are readable memory in this
+ * process from finalization on.
+ */
+class MonoJit::ObjectCapturePlugin : public ObjectLinkingLayer::Plugin {
+public:
+	struct Extents {
+		std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>>
+			functions;
+		const uint8_t *clause_table = nullptr;
+		size_t clause_table_size = 0;
+		const uint8_t *unwind_table = nullptr;
+		size_t unwind_table_size = 0;
+	};
+
+	void modifyPassConfig (MaterializationResponsibility &mr,
+	                       jitlink::LinkGraph &g,
+	                       jitlink::PassConfiguration &config) override
+	{
+		std::string dylib = mr.getTargetJITDylib ().getName ();
+
+		config.PrePrunePasses.push_back ([] (jitlink::LinkGraph &graph) -> Error {
+			for (jitlink::Section &section : graph.sections ()) {
+				if (section.getName () != ".mono_lsda"
+				    && section.getName () != ".mono_unwind")
+					continue;
+				for (jitlink::Block *block : section.blocks ())
+					graph.addAnonymousSymbol (*block, 0,
+					                          block->getSize (), false,
+					                          /*IsLive=*/true);
+			}
+			return Error::success ();
+		});
+
+		config.PostFixupPasses.push_back (
+			[this, dylib] (jitlink::LinkGraph &graph) -> Error {
+				Extents extents;
+
+				for (jitlink::Section &section : graph.sections ()) {
+					jitlink::SectionRange range (section);
+
+					if (section.getName () == ".mono_lsda") {
+						extents.clause_table =
+							range.getStart ().toPtr<const uint8_t *> ();
+						extents.clause_table_size = range.getSize ();
+					} else if (section.getName () == ".mono_unwind") {
+						extents.unwind_table =
+							range.getStart ().toPtr<const uint8_t *> ();
+						extents.unwind_table_size = range.getSize ();
+					}
+				}
+
+				for (jitlink::Symbol *sym : graph.defined_symbols ()) {
+					if (!sym->hasName () || !sym->isCallable ())
+						continue;
+					extents.functions.emplace_back (
+						std::string (*sym->getName ()),
+						std::make_pair (
+							sym->getAddress ().toPtr<const uint8_t *> (),
+							(size_t) sym->getSize ()));
+				}
+
+				std::lock_guard<std::mutex> lock (mutex_);
+				captured_[dylib] = std::move (extents);
+				return Error::success ();
+			});
+	}
+
+	/// The extents captured for DYLIB's one object, surrendered to the caller.
+	std::optional<Extents> take (StringRef dylib)
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		auto it = captured_.find (std::string (dylib));
+
+		if (it == captured_.end ())
+			return std::nullopt;
+
+		Extents extents = std::move (it->second);
+		captured_.erase (it);
+		return extents;
+	}
+
+	Error notifyFailed (MaterializationResponsibility &) override
+	{
+		return Error::success ();
+	}
+	Error notifyRemovingResources (JITDylib &, ResourceKey) override
+	{
+		return Error::success ();
+	}
+	void notifyTransferringResources (JITDylib &, ResourceKey, ResourceKey) override
+	{
+	}
+
+private:
+	std::mutex mutex_;
+	std::map<std::string, Extents> captured_;
+};
 
 static void
 ensure_native_target ()
@@ -137,11 +249,25 @@ MonoJit::create ()
 			return std::make_unique<ObjectLinkingLayer> (es);
 		});
 
+	/*
+	 * The compiler that carries mono's clause gather and side-table emission
+	 * along with stock codegen; SimpleCompiler emits neither.
+	 */
+	builder.setCompileFunctionCreator (
+		[] (JITTargetMachineBuilder jtmb)
+			-> Expected<std::unique_ptr<IRCompileLayer::IRCompiler>> {
+			return std::make_unique<MethodObjectCompiler> (std::move (jtmb));
+		});
+
 	auto jit = builder.create ();
 	if (!jit)
 		return jit.takeError ();
 
 	std::unique_ptr<MonoJit> self (new MonoJit (std::move (*jit)));
+
+	self->capture_ = std::make_shared<ObjectCapturePlugin> ();
+	static_cast<ObjectLinkingLayer &> (self->jit_->getObjLinkingLayer ())
+		.addPlugin (self->capture_);
 
 	/*
 	 * Every added module goes through the tier-0 pipeline on its way to the
@@ -286,7 +412,7 @@ MonoJit::stub_address (StringRef name)
 	return sym->toPtr<void *> ();
 }
 
-Expected<void *>
+Expected<CompiledMethod>
 MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 {
 	/*
@@ -307,8 +433,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	 */
 	std::string jd_name =
 		("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
-	JITDylib &jd =
-		jit_->getExecutionSession ().createBareJITDylib (std::move (jd_name));
+	JITDylib &jd = jit_->getExecutionSession ().createBareJITDylib (jd_name);
 	jd.addToLinkOrder (*helpers_);
 	jd.addToLinkOrder (*stubs_);
 
@@ -319,7 +444,32 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	if (!sym)
 		return sym.takeError ();
 
-	return sym->toPtr<void *> ();
+	std::optional<ObjectCapturePlugin::Extents> extents = capture_->take (jd_name);
+	if (!extents)
+		return createStringError (inconvertibleErrorCode (),
+		                          "no object was captured while compiling %s",
+		                          entry.str ().c_str ());
+
+	CompiledMethod compiled;
+	compiled.entry = sym->toPtr<void *> ();
+	compiled.clause_table = extents->clause_table;
+	compiled.clause_table_size = extents->clause_table_size;
+	compiled.unwind_table = extents->unwind_table;
+	compiled.unwind_table_size = extents->unwind_table_size;
+
+	for (auto &[name, extent] : extents->functions) {
+		if (name == entry) {
+			compiled.code = extent.first;
+			compiled.code_size = extent.second;
+		}
+	}
+
+	if (compiled.code == nullptr)
+		return createStringError (inconvertibleErrorCode (),
+		                          "the linked object for %s does not define it",
+		                          entry.str ().c_str ());
+
+	return compiled;
 }
 
 } // namespace mono

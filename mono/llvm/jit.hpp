@@ -32,6 +32,23 @@ class JITCompileCallbackManager;
 
 namespace mono {
 
+/// Where a compiled method's pieces landed: the code itself, and the side
+/// tables the compiler wrote next to it for the runtime to read back.
+struct CompiledMethod {
+	void *entry = nullptr;
+
+	const uint8_t *code = nullptr;
+	size_t code_size = 0;
+
+	/// The `.mono_lsda` clause table; null when the method has no clauses.
+	const uint8_t *clause_table = nullptr;
+	size_t clause_table_size = 0;
+
+	/// The `.mono_unwind` frame description; never null for a method.
+	const uint8_t *unwind_table = nullptr;
+	size_t unwind_table_size = 0;
+};
+
 class MonoJit {
 public:
 	/// Produces the entry point of a method's code, called the first time
@@ -83,15 +100,15 @@ public:
 	/// The address of the stub published for NAME.
 	llvm::Expected<void *> stub_address (llvm::StringRef name);
 
-	/// Compile TSM and return the executable address of ENTRY.
+	/// Compile TSM and return where ENTRY and its side tables landed.
 	///
 	/// The module gets the tier-0 treatment (run_tier0_pipeline + FastISel)
 	/// and lands in a JITDylib of its own that resolves external symbols
 	/// through register_symbol () and the published stubs, and nothing else -
 	/// there is no process-symbol search, so an unregistered helper fails the
 	/// compile loudly.
-	llvm::Expected<void *> compile (llvm::orc::ThreadSafeModule tsm,
-	                                llvm::StringRef entry);
+	llvm::Expected<CompiledMethod> compile (llvm::orc::ThreadSafeModule tsm,
+	                                        llvm::StringRef entry);
 
 	/// The tier-0 IR pipeline, run over M in place: the stock per-module O1
 	/// pipeline, whose load-bearing effect is mem2reg over the allocas the
@@ -131,6 +148,11 @@ private:
 
 	/// Names the per-module dylibs; atomic because compiles may be concurrent.
 	std::atomic<uint64_t> module_counter_ {0};
+
+	class ObjectCapturePlugin;
+	/// Captures each linked object's code extent and side tables, keyed by the
+	/// per-compile dylib; compile () collects its own entry after the lookup.
+	std::shared_ptr<ObjectCapturePlugin> capture_;
 };
 
 } // namespace mono

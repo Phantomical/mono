@@ -195,7 +195,7 @@ TEST (Stubs, CompiledCallersBindToTheStub)
 
 	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
-	EXPECT_EQ (reinterpret_cast<IntFn> (*caller) (), 1);
+	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
 	/*
 	 * The caller was compiled and linked while the stub pointed at target one.
@@ -203,7 +203,7 @@ TEST (Stubs, CompiledCallersBindToTheStub)
 	 * would be invisible to everything already compiled.
 	 */
 	ASSERT_FALSE (bool ((*jit)->redirect_stub ("m", (void *) &stub_target_two)));
-	EXPECT_EQ (reinterpret_cast<IntFn> (*caller) (), 2);
+	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2);
 }
 
 TEST (Stubs, GeometryLeavesRoomForADetour)
@@ -250,7 +250,7 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
 
 	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
-	ASSERT_EQ (reinterpret_cast<IntFn> (*caller) (), 1);
+	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
 	char saved[detour_size];
 	write_detour (*stub, (void *) &stub_detour_target, saved);
@@ -259,7 +259,7 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
 
 	/* Both the direct call and the compiled caller now divert. */
 	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 99);
-	EXPECT_EQ (reinterpret_cast<IntFn> (*caller) (), 99);
+	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 99);
 
 	/*
 	 * A promotion while the method is patched writes a slot nothing reads any
@@ -269,12 +269,12 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
 	ASSERT_FALSE (
 		bool ((*jit)->redirect_stub ("m", (void *) &stub_target_three)));
 	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 99);
-	EXPECT_EQ (reinterpret_cast<IntFn> (*caller) (), 99);
+	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 99);
 
 	/* Unpatching restores the jump, which lands on the newest tier. */
 	std::memcpy (*stub, saved, detour_size);
 	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 3);
-	EXPECT_EQ (reinterpret_cast<IntFn> (*caller) (), 3);
+	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 3);
 }
 
 /*
@@ -319,7 +319,10 @@ TEST (LazyStubs, CompileOnceOnTheFirstCall)
 	int compiles = 0;
 	auto stub = (*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
 		compiles++;
-		return (*jit)->compile (build_constant_module (7), "constant");
+		auto compiled = (*jit)->compile (build_constant_module (7), "constant");
+		if (!compiled)
+			return compiled.takeError ();
+		return compiled->entry;
 	});
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
@@ -362,7 +365,10 @@ TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 	ASSERT_TRUE (
 		bool ((*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
 			compiles++;
-			return (*jit)->compile (build_constant_module (7), "constant");
+			auto compiled = (*jit)->compile (build_constant_module (7), "constant");
+		if (!compiled)
+			return compiled.takeError ();
+		return compiled->entry;
 		})));
 
 	/* Resolves against a method that has no code yet. */
@@ -370,7 +376,7 @@ TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	EXPECT_EQ (compiles, 0);
 
-	EXPECT_EQ (reinterpret_cast<IntFn> (*caller) (), 7);
+	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 7);
 	EXPECT_EQ (compiles, 1);
 }
 
@@ -382,7 +388,10 @@ TEST (LazyStubs, RacingFirstCallsCompileOnce)
 	std::atomic<int> compiles {0};
 	auto stub = (*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
 		compiles++;
-		return (*jit)->compile (build_constant_module (7), "constant");
+		auto compiled = (*jit)->compile (build_constant_module (7), "constant");
+		if (!compiled)
+			return compiled.takeError ();
+		return compiled->entry;
 	});
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 

@@ -92,7 +92,7 @@ TEST (Jit, CompilesAndRunsHandBuiltIr)
 	auto entry = (*jit)->compile (build_add_module ().take (), "add");
 	ASSERT_TRUE (bool (entry)) << toString (entry.takeError ());
 
-	auto add = reinterpret_cast<int32_t (*) (int32_t, int32_t)> (*entry);
+	auto add = reinterpret_cast<int32_t (*) (int32_t, int32_t)> (entry->entry);
 	EXPECT_EQ (add (2, 40), 42);
 	EXPECT_EQ (add (-7, 3), -4);
 }
@@ -112,7 +112,7 @@ TEST (Jit, ResolvesRegisteredHelpers)
 		build_helper_call_module ("mono_jit_test_double_it").take (), "entry");
 	ASSERT_TRUE (bool (entry)) << toString (entry.takeError ());
 
-	auto fn = reinterpret_cast<int64_t (*) (int64_t)> (*entry);
+	auto fn = reinterpret_cast<int64_t (*) (int64_t)> (entry->entry);
 	EXPECT_EQ (fn (20), 41);
 }
 
@@ -172,7 +172,7 @@ protected:
 		                      ThreadSafeContext (std::move (t->context))),
 			entry);
 		EXPECT_TRUE (bool (addr)) << toString (addr.takeError ());
-		return addr ? *addr : nullptr;
+		return addr ? addr->entry : nullptr;
 	}
 };
 

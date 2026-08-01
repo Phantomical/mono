@@ -21,6 +21,7 @@
 
 #include "runtime.hpp"
 
+#include "jinfo.hpp"
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
 
@@ -97,10 +98,28 @@ runtime_helpers ()
 		{ "mono_generic_class_init", (void *) &mono_generic_class_init },
 		{ "mono_helper_stelem_ref_check", (void *) &mono_helper_stelem_ref_check },
 		{ "mono_ldvirtfn", (void *) &mono_ldvirtfn },
-		{ "mono_llvm_rethrow_exception", (void *) &mono_llvm_rethrow_exception },
-		{ "mono_llvm_throw_exception", (void *) &mono_llvm_throw_exception },
+
+		/*
+		 * The throw path. These are mono's own throw trampolines: they
+		 * capture the register state and enter mono_handle_exception, whose
+		 * two-pass search over the MonoJitInfo published per method is how a
+		 * handler is found - the native unwinder is never involved. The
+		 * corlib variant takes the exception's type-def index and reads the
+		 * throw site out of the return address; resume_unwind is what a
+		 * finally or fault calls when it was entered by unwinding and has
+		 * run out.
+		 */
+		{ "mono_llvm_throw_exception", mono_get_throw_exception () },
+		{ "mono_llvm_rethrow_exception", mono_get_rethrow_exception () },
 		{ "mono_llvm_throw_corlib_exception",
-		  (void *) &mono_llvm_throw_corlib_exception },
+		  (void *) mono_find_jit_icall_info (
+			  MONO_JIT_ICALL_mono_llvm_throw_corlib_exception_abs_trampoline)
+			  ->func },
+		{ "mono_llvm_resume_unwind",
+		  (void *) mono_find_jit_icall_info (
+			  MONO_JIT_ICALL_mono_llvm_resume_unwind_trampoline)
+			  ->func },
+
 		{ "mono_object_castclass_with_cache",
 		  (void *) &mono_object_castclass_with_cache },
 		{ "mono_object_isinst_with_cache", (void *) &mono_object_isinst_with_cache },
@@ -389,15 +408,21 @@ Backend::translate_and_compile (MonoMethod *method)
 	if (Error err = resolve (externals))
 		return std::move (err);
 
-	Expected<void *> code =
+	Expected<CompiledMethod> compiled =
 		jit_->compile (ThreadSafeModule (std::move (module),
 		                                 ThreadSafeContext (std::move (context))),
 		               entry);
+	if (!compiled)
+		return compiled.takeError ();
 
-	if (code && tracing ())
-		fprintf (stderr, "[llvm-jit] %s is at %p\n", entry.c_str (), *code);
+	if (tracing ())
+		fprintf (stderr, "[llvm-jit] %s is at %p\n", entry.c_str (),
+		         compiled->entry);
 
-	return code;
+	if (Error err = register_jit_info (method, cfg.get ()->header, *compiled))
+		return std::move (err);
+
+	return compiled->entry;
 }
 
 Expected<void *>

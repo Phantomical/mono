@@ -513,6 +513,14 @@ MethodLLVMEmitter::emit ()
 	clause_state.resize (num_clauses);
 
 	/*
+	 * Every frame needs a description mono's unwinder can walk through,
+	 * clauses or not - an exception below it unwinds through it, and so does
+	 * a stack scan - so codegen must describe this function even where LLVM
+	 * proves it cannot itself unwind.
+	 */
+	function->setUWTableKind (llvm::UWTableKind::Default);
+
+	/*
 	 * A filter runs during the unwinder's search pass, called into the frame like
 	 * a function, which needs an entry point this translation cannot yet give it.
 	 */
@@ -526,13 +534,19 @@ MethodLLVMEmitter::emit ()
 	 * mono_handle_exception does the search - but LLVM will not emit the LSDA the
 	 * unwinder reads without one named here.
 	 */
-	if (num_clauses > 0)
+	if (num_clauses > 0) {
 		function->setPersonalityFn (llvm::cast<llvm::Constant> (
 			module->getOrInsertFunction (
 				       "mono_personality",
 				       llvm::FunctionType::get (
 					       llvm::Type::getInt32Ty (context ()), true))
 				.getCallee ()));
+		/*
+		 * What lets the clause gather tell "every protected call optimized
+		 * away" - an empty record, published - from "never had clauses".
+		 */
+		function->addFnAttr ("mono-has-eh-clauses");
+	}
 
 	MonoIrBuilder builder (context ());
 
