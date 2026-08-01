@@ -125,24 +125,9 @@ MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klas
 	if (!args)
 		return args.takeError ();
 
-	llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (sig, *args);
-	if (!vret)
-		return vret.takeError ();
-
-	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
-	if (!abi)
-		return abi.takeError ();
-
 	llvm::Value *result = emit_protected_call (builder, *declaration, *args);
 
-	apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
-
-	if (*vret != nullptr)
-		result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (), *vret,
-		                                    (*vret)->getAlign ());
-
 	pop_stack (1);
-	result = decoerce_vtype_return (builder, result, sig->ret, **abi);
 	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
 	return llvm::Error::success ();
 }

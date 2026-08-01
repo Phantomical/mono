@@ -57,14 +57,11 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 		return target.takeError ();
 
 	/*
-	 * The declaration is the address: the engine resolves the function symbol to
-	 * the method's entry point, which is exactly what the spec asks this to push.
+	 * The pushed value is the method's published entry point - the legacy one,
+	 * because this pointer escapes: a delegate stores it, native code may be
+	 * handed it, and any calli through it dispatches as a legacy call.
 	 */
-	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
-	if (!declaration)
-		return declaration.takeError ();
-
-	push_stack (*declaration, mono_get_int_type ());
+	push_stack (code_address_symbol (*target), mono_get_int_type ());
 	return llvm::Error::success ();
 }
 
@@ -271,38 +268,19 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		pop_stack (1);
 
 		llvm::Expected<std::vector<llvm::Value *>> args =
-			pop_call_arguments (builder, sig, wsig, 1);
+			pop_call_arguments (builder, sig);
 		if (!args)
 			return args.takeError ();
 
 		args->insert (args->begin (), *ftn);
 
-		/*
-		 * The wrapper is a managed method, so its return follows the managed
-		 * convention like anyone else's - and its leading parameter is the
-		 * ftn, an intptr, so a by-address slot goes in front of everything.
-		 */
-		llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (wsig, *args);
-		if (!vret)
-			return vret.takeError ();
-
-		llvm::Expected<const SignatureABI *> wabi = lower_signature (wsig);
-		if (!wabi)
-			return wabi.takeError ();
-
 		llvm::Value *result = emit_protected_call (builder, *declaration, *args);
 
-		apply_arg_abi (llvm::cast<llvm::CallBase> (result), **wabi, 0);
 		pop_stack (sig->param_count);
 
 		if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 			return llvm::Error::success ();
 
-		if (*vret != nullptr)
-			result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (),
-			                                    *vret, (*vret)->getAlign ());
-
-		result = decoerce_vtype_return (builder, result, wsig->ret, **wabi);
 		push_stack (widen_to_stack (builder, result, wsig->ret),
 		            stack_slot_type (wsig->ret));
 		return llvm::Error::success ();
@@ -325,32 +303,19 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	if (!args)
 		return args.takeError ();
 
-	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
-	if (!abi)
-		return abi.takeError ();
-
-	if (should_tail_call (sig, nullptr, *type))
-		return emit_tail_call (builder, llvm::FunctionCallee (*type, ftn), **abi,
-		                       *args, sig->param_count + sig->hasthis);
-
-	llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (sig, *args);
-	if (!vret)
-		return vret.takeError ();
-
+	/*
+	 * Whatever the pointer came from - ldftn, ldvirtftn, native code - it is a
+	 * published entry, so the call crosses the legacy boundary.
+	 */
 	llvm::Value *result =
 		emit_protected_call (builder, llvm::FunctionCallee (*type, ftn), *args);
 
-	apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
+	mark_legacy_call (llvm::cast<llvm::CallBase> (result), sig);
 	pop_stack (sig->param_count + sig->hasthis);
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
 
-	if (*vret != nullptr)
-		result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (), *vret,
-		                                    (*vret)->getAlign ());
-
-	result = decoerce_vtype_return (builder, result, sig->ret, **abi);
 	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
 	return llvm::Error::success ();
 }

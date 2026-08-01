@@ -97,10 +97,6 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	if (stack.size () < count)
 		return unbalanced_stack (count);
 
-	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
-	if (!abi)
-		return abi.takeError ();
-
 	/*
 	 * The constructor sees the fresh instance as argument 0 and the operands
 	 * follow, so the stack unwinds into positions 1..N.
@@ -113,8 +109,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 		if (!converted)
 			return converted.takeError ();
-		args[i + 1] = coerce_vtype_arg (builder, *converted, sig->params[i],
-		                                (*abi)->args[i + 1]);
+		args[i + 1] = *converted;
 	}
 
 	MonoType *pushed = m_class_get_byval_arg (klass);
@@ -133,7 +128,6 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 		llvm::Value *result = emit_protected_call (builder, *declaration, args);
 
-		apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
 		pop_stack (count);
 		push_stack (result, pushed);
 		return llvm::Error::success ();
@@ -169,9 +163,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		args[0] = created;
 	}
 
-	llvm::Value *ctor_call = emit_protected_call (builder, *declaration, args);
-
-	apply_arg_abi (llvm::cast<llvm::CallBase> (ctor_call), **abi, 0);
+	emit_protected_call (builder, *declaration, args);
 	pop_stack (count);
 
 	if (temp != nullptr)

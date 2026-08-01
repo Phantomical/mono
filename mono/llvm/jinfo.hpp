@@ -17,7 +17,8 @@ namespace mono {
 
 /// Build METHOD's MonoJitInfo - unwind description, and the clause table where
 /// the method has clauses - from COMPILED's side tables, and register it so the
-/// runtime's unwinder and stack walks can see the frame.
+/// runtime's unwinder and stack walks can see the frame. A null HEADER
+/// registers clauseless code compiled for the method (its interop thunk).
 llvm::Error register_jit_info (MonoMethod *method, MonoMethodHeader *header,
                                const CompiledMethod &compiled);
 

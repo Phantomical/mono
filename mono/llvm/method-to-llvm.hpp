@@ -10,6 +10,8 @@
 #ifndef MONO_LLVM_METHOD_TO_LLVM_HPP
 #define MONO_LLVM_METHOD_TO_LLVM_HPP
 
+#include "passes/legacy-abi.hpp"
+
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"
@@ -215,11 +217,12 @@ private:
 	llvm::BasicBlock *entry_block = nullptr;
 	std::vector<Entry> args;
 	std::vector<Entry> locals;
-
-	/// The hidden return-slot parameter, when this method's own return travels
-	/// by address; ret stores through it instead of returning a value.
-	llvm::Value *vret_param = nullptr;
 	std::vector<StackValue> stack;
+
+	/// This frame's LMF and where the thread's chain head lives, when the
+	/// method keeps one (a save_lmf wrapper); null everywhere else.
+	llvm::Value *lmf_slot = nullptr;
+	llvm::Value *lmf_addr = nullptr;
 
 	/// The prefixes seen since the last real instruction. They apply to the next
 	/// instruction only and are cleared once it has been emitted, whether or not it
@@ -258,6 +261,13 @@ public:
 
 	llvm::Expected<llvm::Function *> emit ();
 
+	/// The declaration of METHOD in this emitter's module, for callers outside
+	/// the translation itself (the runtime builds interop thunks against it).
+	llvm::Expected<llvm::Function *> declare (MonoMethod *method)
+	{
+		return create_method_decl (method);
+	}
+
 private:
 	typedef llvm::IRBuilder<> MonoIrBuilder;
 
@@ -271,49 +281,7 @@ private:
 	                                            llvm::Function *callee,
 	                                            llvm::ArrayRef<llvm::Value *> args);
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig);
-	static bool returns_by_address (MonoMethodSignature *sig);
-	static unsigned vret_arg_index (MonoMethodSignature *sig);
-	llvm::Expected<llvm::AllocaInst *> insert_vret_arg (MonoMethodSignature *sig,
-	                                                    std::vector<llvm::Value *> &args);
-
-	/// How one argument travels in the runtime's calling convention.
-	struct ArgABI {
-		enum Kind {
-			Direct,  ///< the converted type itself: scalars, references, pointers
-			Coerced, ///< a value type travelling as register-sized words
-			Memory,  ///< a value type copied onto the stack: a byval pointer
-		} kind = Direct;
-		llvm::Type *travel = nullptr; ///< the IR parameter type
-		llvm::Type *memory = nullptr; ///< the byval pointee when kind is Memory
-	};
-
-	/// A signature's lowering: what mini's get_call_info decides, restated as the
-	/// IR types each value travels as.
-	struct SignatureABI {
-		llvm::FunctionType *type = nullptr;
-		std::vector<ArgABI> args; ///< [this?, params...] - no vret entry
-		/// A value-type return travelling in registers travels as this.
-		llvm::Type *ret_coerced = nullptr;
-		bool ret_by_address = false;
-		unsigned vret_index = 0;
-
-		/// The IR parameter index of logical argument ARG, stepping over the
-		/// return slot's parameter where the convention inserts one.
-		unsigned param_index (unsigned arg) const {
-			return ret_by_address && arg >= vret_index ? arg + 1 : arg;
-		}
-	};
-
-	llvm::DenseMap<MonoMethodSignature *, std::unique_ptr<SignatureABI>> signature_abis;
-
-	llvm::Expected<const SignatureABI *> lower_signature (MonoMethodSignature *sig);
-	static void apply_arg_abi (llvm::CallBase *call, const SignatureABI &abi,
-	                           unsigned leading);
-	static void apply_arg_abi (llvm::Function *fn, const SignatureABI &abi);
-	llvm::Value *coerce_vtype_arg (MonoIrBuilder &builder, llvm::Value *value,
-	                               MonoType *mtype, const ArgABI &abi);
-	llvm::Value *decoerce_vtype_return (MonoIrBuilder &builder, llvm::Value *result,
-	                                    MonoType *ret, const SignatureABI &abi);
+	static void mark_legacy_call (llvm::CallBase *call, MonoMethodSignature *sig);
 
 	llvm::Expected<llvm::Type *> convert_type (MonoType *t);
 	llvm::Expected<llvm::Type *> convert_vtype (MonoType *t);
@@ -350,6 +318,8 @@ private:
 
 	llvm::Error emit_arg_allocas (MonoIrBuilder &builder);
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
+	llvm::Error emit_push_lmf (MonoIrBuilder &builder);
+	void emit_pop_lmf (MonoIrBuilder &builder);
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
 	llvm::Error emit_prefix (int opcode, uint64_t operand);
@@ -449,8 +419,7 @@ private:
 
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
 	llvm::Expected<std::vector<llvm::Value *>>
-	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
-	                    MonoMethodSignature *lowered_as = nullptr, unsigned skip = 0);
+	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Value *vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver,
 	                           int32_t offset);
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
@@ -458,12 +427,12 @@ private:
 	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                               MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
+	llvm::Constant *code_address_symbol (MonoMethod *target);
 	bool should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
 	                       llvm::FunctionType *callee_type);
 	bool matching_call_abi (MonoMethodSignature *callee_sig, llvm::FunctionType *callee_type);
 	llvm::Error emit_jmp (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
-	                            const SignatureABI &abi,
 	                            llvm::ArrayRef<llvm::Value *> args, size_t arg_slots);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
@@ -645,6 +614,18 @@ private:
 /// How a narrow integer argument or return value is widened to fill its register,
 /// as an SExt/ZExt attribute, or None for everything else.
 llvm::Attribute::AttrKind integer_extension (MonoType *t);
+
+/// Whether METHOD's code comes from somewhere other than IL - an icall, a
+/// pinvoke, or a method the runtime implements itself - so what stands behind
+/// its symbol is whatever mini compiles for it, never this backend's fastcc
+/// code.
+bool implemented_outside_il (MonoMethod *method);
+
+/// The legacy-boundary flavor of a call through SIG: native signatures keep
+/// the C classification, managed ones mini's, with the hidden return pointer
+/// behind the first argument whenever the runtime's trampolines insist on
+/// finding a receiver there.
+LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
 
 /// EXTERNALS, when given, collects the symbols the emitted module leaves for the
 /// engine to resolve.

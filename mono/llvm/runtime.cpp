@@ -39,6 +39,7 @@ extern "C" {
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
+#include "mono/metadata/marshal.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/utils/mono-error-internals.h"
 
@@ -185,32 +186,6 @@ dump_il (MonoMethod *method, MonoMethodHeader *header)
 	g_free (il);
 }
 
-/*
- * Whether METHOD's code comes from somewhere other than IL: an icall or a
- * pinvoke, whose body is the native function plus whatever marshalling wrapper
- * the runtime builds around it, or a method the runtime implements itself.
- *
- * There is nothing to translate for one of these. Working out what to call
- * instead means resolving the native entry point, deciding whether it needs a
- * wrapper at all and building one if it does - all of which the runtime already
- * does on its way to us, so these go back to it rather than being handled here.
- */
-bool
-implemented_outside_il (MonoMethod *method)
-{
-	/*
-	 * A wrapper is excluded however it is marked. The wrapper the runtime
-	 * builds around a pinvoke keeps the flags of the method it wraps, so
-	 * handing one back would have the runtime wrap it again, and again.
-	 */
-	if (method->wrapper_type != MONO_WRAPPER_NONE)
-		return false;
-
-	return (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) != 0 ||
-	       (method->iflags & METHOD_IMPL_ATTRIBUTE_RUNTIME) != 0 ||
-	       (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) != 0;
-}
-
 std::string
 symbol_for_code (MonoMethod *method)
 {
@@ -235,6 +210,15 @@ symbol_for_code (MonoMethod *method)
 	return symbol;
 }
 
+/// The `$fast` symbol: the fastcc body generated callers bind to directly.
+/// The plain symbol stays the legacy entry - the interop thunk - which is what
+/// the runtime, delegates and every escaped function pointer see.
+std::string
+symbol_for_body (MonoMethod *method)
+{
+	return symbol_for_code (method) + "$fast";
+}
+
 /// The engine, and everything it needs that outlives one compile.
 class Backend {
 public:
@@ -245,24 +229,32 @@ public:
 
 	/// The address to call METHOD at, compiling it on the first call rather than
 	/// now. This is how a method's callees are published: reaching one is what
-	/// says it is worth compiling.
+	/// says it is worth compiling. Defines both of the method's stubs and
+	/// returns the legacy one.
 	Expected<void *> publish (MonoMethod *method);
 
 private:
+	/// Where one method's code ended up: the legacy entry the runtime hands
+	/// out, and the fastcc body generated callers reach.
+	struct Compiled {
+		void *entry;
+		void *body;
+	};
+
 	Error start ();
 	Error resolve (const std::vector<ExternalSymbol> &externals);
-	Expected<void *> translate_and_compile (MonoMethod *method);
+	Expected<Compiled> translate_and_compile (MonoMethod *method);
+	Expected<Compiled> ensure_compiled (MonoMethod *method);
 
 	std::unique_ptr<MonoJit> jit_;
 
 	std::mutex mutex_;
 	/// Methods already published, so a callee reached from several places is
-	/// only given a stub once.
+	/// only given its stubs once. Holds the legacy stub's address.
 	std::unordered_map<MonoMethod *, void *> published_;
-	/// Methods whose stub already points at real code - and where that code is,
-	/// so that asking again is a lookup rather than another compile, and so the
-	/// callers that must see the body rather than the stub can.
-	std::unordered_map<MonoMethod *, void *> compiled_;
+	/// Methods whose stubs already point at real code - and where that code
+	/// is, so that asking again is a lookup rather than another compile.
+	std::unordered_map<MonoMethod *, Compiled> compiled_;
 };
 
 Expected<Backend *>
@@ -358,11 +350,11 @@ Backend::resolve (const std::vector<ExternalSymbol> &externals)
 	return Error::success ();
 }
 
-Expected<void *>
+Expected<Backend::Compiled>
 Backend::translate_and_compile (MonoMethod *method)
 {
 	auto context = std::make_unique<LLVMContext> ();
-	auto module = std::make_unique<Module> (symbol_for_code (method), *context);
+	auto module = std::make_unique<Module> (symbol_for_body (method), *context);
 
 	if (implemented_outside_il (method)) {
 		ERROR_DECL (compile_error);
@@ -371,7 +363,12 @@ Backend::translate_and_compile (MonoMethod *method)
 		if (code == nullptr)
 			return runtime_error (compile_error);
 
-		return code;
+		/*
+		 * mini's code is the legacy convention; generated code declares such
+		 * a method against the plain symbol and lowers its calls, so nothing
+		 * ever reaches the body stub expecting fastcc.
+		 */
+		return Compiled { code, code };
 	}
 
 	if (tracing ()) {
@@ -410,14 +407,59 @@ Backend::translate_and_compile (MonoMethod *method)
 	if (!compiled)
 		return compiled.takeError ();
 
-	if (tracing ())
-		fprintf (stderr, "[llvm-jit] %s is at %p\n", entry.c_str (),
-		         compiled->entry);
-
 	if (Error err = register_jit_info (method, cfg.get ()->header, *compiled))
 		return std::move (err);
 
-	return compiled->entry;
+	/*
+	 * The legacy entry, as a module of its own: the side tables attribute
+	 * their records to the one function a module holds, so the thunk cannot
+	 * share the body's. It calls the body through the body's stub, which keeps
+	 * it valid across repromotions, and it gets jit info of its own so the
+	 * unwinder can walk a frame suspended inside it.
+	 */
+	auto thunk_context = std::make_unique<LLVMContext> ();
+	auto thunk_module =
+		std::make_unique<Module> (symbol_for_code (method), *thunk_context);
+
+	std::vector<ExternalSymbol> thunk_externals;
+	MethodLLVMEmitter declarer (thunk_module.get (), cfg.get (), method,
+	                            &thunk_externals);
+	Expected<Function *> target = declarer.declare (method);
+
+	if (!target)
+		return target.takeError ();
+
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (method->string_ctor)
+		sig = mono_marshal_get_string_ctor_signature (method);
+
+	std::string thunk_name = symbol_for_code (method);
+
+	create_legacy_entry_thunk (*thunk_module, thunk_name, *target,
+	                           legacy_call_flavor (sig));
+
+	if (dumping (entry.c_str ()))
+		thunk_module->print (llvm::errs (), nullptr);
+
+	if (Error err = resolve (thunk_externals))
+		return std::move (err);
+
+	Expected<CompiledMethod> thunk = jit_->compile (
+		ThreadSafeModule (std::move (thunk_module),
+		                  ThreadSafeContext (std::move (thunk_context))),
+		thunk_name);
+	if (!thunk)
+		return thunk.takeError ();
+
+	if (Error err = register_jit_info (method, nullptr, *thunk))
+		return std::move (err);
+
+	if (tracing ())
+		fprintf (stderr, "[llvm-jit] %s is at %p (enters at %p)\n",
+		         entry.c_str (), compiled->entry, thunk->entry);
+
+	return Compiled { thunk->entry, compiled->entry };
 }
 
 Expected<void *>
@@ -427,7 +469,7 @@ Backend::compile (MonoMethod *method)
 	 * SGen identifies threads suspended inside the managed allocator and the
 	 * write barrier by resolving code addresses through the jit-info table,
 	 * and the runtime asserts the pointer it hands out for those wrappers
-	 * resolves too. The jit info covers the body, so the body is what they
+	 * resolves too. The legacy entry carries jit info, so it is what they
 	 * get; everything else gets the stub, which is what keeps callers correct
 	 * across promotions.
 	 */
@@ -438,39 +480,55 @@ Backend::compile (MonoMethod *method)
 	if (!stub)
 		return stub;
 
-	{
-		std::lock_guard<std::mutex> lock (mutex_);
-		auto it = compiled_.find (method);
-		if (it != compiled_.end ())
-			return wants_body ? it->second : *stub;
-	}
-
 	/*
 	 * Publishing only reserves the address; the code still has to exist before
 	 * the caller is handed something to call. Compiling here rather than on the
 	 * first call is what lets a refusal come back through MonoError and be
 	 * raised by the runtime, which knows how to throw from where it stands.
 	 */
-	Expected<void *> code = translate_and_compile (method);
+	Expected<Compiled> code = ensure_compiled (method);
 	if (!code)
 		return code.takeError ();
 
-	if (Error err = jit_->redirect_stub (symbol_for_code (method), *code))
+	return wants_body ? code->entry : *stub;
+}
+
+Expected<Backend::Compiled>
+Backend::ensure_compiled (MonoMethod *method)
+{
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		auto it = compiled_.find (method);
+
+		if (it != compiled_.end ())
+			return it->second;
+	}
+
+	Expected<Compiled> code = translate_and_compile (method);
+	if (!code)
+		return code.takeError ();
+
+	if (Error err = jit_->redirect_stub (symbol_for_code (method), code->entry))
+		return std::move (err);
+	if (Error err = jit_->redirect_stub (symbol_for_body (method), code->body))
 		return std::move (err);
 
+	/*
+	 * Two threads racing here both compile; the loser's code is merely
+	 * unreferenced, and both ends stay coherent because the redirects above
+	 * always point a method's two stubs at one compile's output.
+	 */
 	std::lock_guard<std::mutex> lock (mutex_);
 	compiled_[method] = *code;
-	return wants_body ? *code : *stub;
+	return *code;
 }
 
 Expected<void *>
 Backend::publish (MonoMethod *method)
 {
-	std::string name = symbol_for_code (method);
-
 	/*
 	 * Held across the creation, not just the lookup: two threads reaching an
-	 * unpublished method together must not both define its stub, and stub
+	 * unpublished method together must not both define its stubs, and stub
 	 * creation is cheap enough that one lock for the whole step is fine.
 	 */
 	std::lock_guard<std::mutex> lock (mutex_);
@@ -480,11 +538,26 @@ Backend::publish (MonoMethod *method)
 		return it->second;
 
 	Expected<void *> stub = jit_->create_lazy_stub (
-		name, [this, method] () -> Expected<void *> {
-			return translate_and_compile (method);
+		symbol_for_code (method), [this, method] () -> Expected<void *> {
+			Expected<Compiled> code = ensure_compiled (method);
+
+			if (!code)
+				return code.takeError ();
+			return code->entry;
 		});
 	if (!stub)
 		return stub;
+
+	Expected<void *> body_stub = jit_->create_lazy_stub (
+		symbol_for_body (method), [this, method] () -> Expected<void *> {
+			Expected<Compiled> code = ensure_compiled (method);
+
+			if (!code)
+				return code.takeError ();
+			return code->body;
+		});
+	if (!body_stub)
+		return body_stub.takeError ();
 
 	published_[method] = *stub;
 	return *stub;

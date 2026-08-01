@@ -5,6 +5,8 @@ file(GLOB sources CONFIGURE_DEPENDS
     *.hpp
     method-to-llvm/*.cpp
     method-to-llvm/*.hpp
+    passes/*.cpp
+    passes/*.hpp
 )
 
 mono_add_object_library(mono-llvm

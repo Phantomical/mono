@@ -249,10 +249,11 @@ register_jit_info (MonoMethod *method, MonoMethodHeader *header,
 	 * The clause table, joined against the IL clauses. An absent section for a
 	 * clause-bearing method means the gather declined it - nothing may be
 	 * published, since a partial table dispatches wrongly rather than failing.
+	 * A null HEADER registers clauseless code (an interop thunk).
 	 */
 	std::vector<MonoJitExceptionInfo> clauses;
 
-	if (header->num_clauses > 0) {
+	if (header != nullptr && header->num_clauses > 0) {
 		std::vector<MonoLsdaEntry> entries;
 
 		if (!parse_mono_lsda (compiled.clause_table, compiled.clause_table_size,

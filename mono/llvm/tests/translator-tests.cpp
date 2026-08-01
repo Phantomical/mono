@@ -702,15 +702,17 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 }
 
 // A tail. call whose prototype matches the caller's is honored as a musttail
-// call - a guaranteed jump - whether the target is direct, virtual, or a
-// function pointer.
+// call - a guaranteed jump - when the target is another fastcc method reached
+// directly. A dispatched or indirect target is a legacy-boundary call whose
+// prototype changes under LegacyAbiPass, so the prefix is declined there and
+// the call stays an ordinary one.
 TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 {
 	EXPECT_EQ (translate ("calls", "Calls:TailStatic").count ("musttail call"), 1u);
 	EXPECT_EQ (translate ("calls", "Calls:TailVoid").count ("musttail call"), 1u);
-	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 1u);
+	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 0u);
 	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("musttail call"),
-	           1u);
+	           0u);
 }
 
 // jmp transfers the current arguments to a matching method: they reload from

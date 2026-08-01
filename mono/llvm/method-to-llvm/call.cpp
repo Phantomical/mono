@@ -58,24 +58,12 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 /// is settled by the caller, which is the only one that knows whether the call is
 /// virtual.
 llvm::Expected<std::vector<llvm::Value *>>
-MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
-                                       MonoMethodSignature *lowered_as, unsigned skip)
+MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig)
 {
 	size_t count = sig->param_count + sig->hasthis;
 
 	if (stack.size () < count)
 		return unbalanced_stack (count);
-
-	/*
-	 * How each value travels is decided by the signature of the function
-	 * actually called, which is not always the one the values were pushed
-	 * for: a calli to native code really calls its managed wrapper, whose
-	 * leading ftn parameter shifts everything else along by SKIP.
-	 */
-	llvm::Expected<const SignatureABI *> abi =
-		lower_signature (lowered_as != nullptr ? lowered_as : sig);
-	if (!abi)
-		return abi.takeError ();
 
 	std::vector<llvm::Value *> args (count);
 
@@ -88,15 +76,13 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 			continue;
 		}
 
-		MonoType *ptype = sig->params[i - sig->hasthis];
 		llvm::Expected<llvm::Value *> converted =
-			coerce_to_location (builder, value, ptype);
+			coerce_to_location (builder, value, sig->params[i - sig->hasthis]);
 
 		if (!converted)
 			return converted.takeError ();
 
-		args[i] = coerce_vtype_arg (builder, *converted, ptype,
-		                            (*abi)->args[i + skip]);
+		args[i] = *converted;
 	}
 
 	return args;
@@ -162,6 +148,25 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 	return extern_symbol (symbol);
 }
 
+/// The address of TARGET as something other than a direct call target: what
+/// ldftn pushes, what a delegate stores. This is the plain symbol - the legacy
+/// entry the runtime publishes - because the pointer escapes to callers that
+/// know nothing of fastcc; an indirect call through it is a legacy call.
+llvm::Constant *
+MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
+{
+	char *name = mono_method_full_name (target, TRUE);
+	std::string symbol = name;
+	char suffix[32];
+
+	g_free (name);
+	snprintf (suffix, sizeof (suffix), "@%p", (void *) target);
+	symbol += suffix;
+
+	record_external (symbol, ExternalSymbol::Kind::Code, target);
+	return extern_symbol (symbol);
+}
+
 /*
  * III.2.4  tail. - (prefix) call terminates current method
  *
@@ -199,6 +204,19 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
                                      llvm::FunctionType *callee_type)
 {
 	if (!prefixes.tail)
+		return false;
+
+	/*
+	 * A musttail call has to keep the caller's own convention, so only a
+	 * direct call to another fastcc method qualifies: an indirect target or a
+	 * runtime-implemented one is a legacy call, lowered to a different
+	 * prototype after the fact.
+	 */
+	if (callee_method == nullptr || implemented_outside_il (callee_method))
+		return false;
+
+	/* This frame owes an LMF pop on the way out, so it cannot be discarded. */
+	if (method->save_lmf)
 		return false;
 
 	/*
@@ -245,13 +263,6 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 		return false;
 
 	/*
-	 * A return that travels by address would need this frame's hidden slot
-	 * forwarded through the jump; decline into an ordinary call instead.
-	 */
-	if (returns_by_address (callee_sig))
-		return false;
-
-	/*
 	 * musttail is a guarantee, and the backend can only always keep it when the
 	 * jump changes nothing about the frame's argument area: identical prototypes,
 	 * down to the extension attributes that say how narrow integers fill their
@@ -270,33 +281,6 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 {
 	if (function->getFunctionType () != callee_type)
 		return false;
-
-	/*
-	 * The same function type can hide different value-type lowerings: two
-	 * differently-sized stack-copied types are both just pointer parameters
-	 * to it, and byval is one of the attributes musttail requires to match.
-	 */
-	llvm::Expected<const SignatureABI *> caller_abi =
-		lower_signature (mono_method_signature_internal (method));
-	llvm::Expected<const SignatureABI *> callee_abi = lower_signature (callee_sig);
-
-	if (!caller_abi || !callee_abi) {
-		if (!caller_abi)
-			llvm::consumeError (caller_abi.takeError ());
-		if (!callee_abi)
-			llvm::consumeError (callee_abi.takeError ());
-		return false;
-	}
-
-	if ((*caller_abi)->args.size () != (*callee_abi)->args.size ())
-		return false;
-	for (size_t i = 0; i < (*caller_abi)->args.size (); ++i) {
-		const ArgABI &a = (*caller_abi)->args[i];
-		const ArgABI &b = (*callee_abi)->args[i];
-
-		if (a.kind != b.kind || a.travel != b.travel || a.memory != b.memory)
-			return false;
-	}
 
 	auto extensions = [] (MonoMethodSignature *s) {
 		llvm::SmallVector<llvm::Attribute::AttrKind, 8> exts;
@@ -321,13 +305,12 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 /// comes next is consumed here, since this ret is its translation.
 llvm::Error
 MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
-                                   const SignatureABI &abi,
                                    llvm::ArrayRef<llvm::Value *> args, size_t arg_slots)
 {
 	llvm::CallInst *call = builder.CreateCall (callee, args);
 
 	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
-	apply_arg_abi (call, abi, 0);
+	call->setCallingConv (llvm::CallingConv::Fast);
 	pop_stack (arg_slots);
 
 	if (call->getType ()->isVoidTy ())
@@ -386,6 +369,11 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		return unbalanced_stack (0);
 	if (innermost_try (offset) >= 0)
 		return invalid_il ("jmp cannot transfer control out of a protected block");
+	/* A legacy target's call lowers to a different prototype; no musttail. */
+	if (implemented_outside_il (*target))
+		return unsupported_il ("jmp to a runtime-implemented method");
+	if (method->save_lmf)
+		return unsupported_il ("jmp out of a frame that keeps an LMF");
 
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
 	if (!declaration)
@@ -398,34 +386,15 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	if (!matching_call_abi (sig, (*declaration)->getFunctionType ()))
 		return invalid_il ("the jmp target's signature does not match this method's");
 
-	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
-	if (!abi)
-		return abi.takeError ();
-
 	/*
 	 * The arguments transfer as they currently are - anything starg wrote goes
 	 * with them - so they reload from their slots rather than from the incoming
-	 * parameter values. A stack-copied value type's slot is this frame's own
-	 * incoming byval copy, which forwards as the pointer itself; a coerced
-	 * one's home is already shaped as its register words.
+	 * parameter values.
 	 */
 	std::vector<llvm::Value *> values;
 
 	for (size_t i = 0; i < args.size (); ++i) {
 		const Entry &argument = args[i];
-		const ArgABI &arg_abi = (*abi)->args[i];
-
-		if (arg_abi.kind == ArgABI::Memory) {
-			values.push_back (argument.alloca);
-			continue;
-		}
-		if (arg_abi.kind == ArgABI::Coerced) {
-			values.push_back (builder.CreateAlignedLoad (
-				arg_abi.travel, argument.alloca,
-				std::max (type_alignment (argument.type), llvm::Align (8))));
-			continue;
-		}
-
 		llvm::Expected<llvm::Type *> type = convert_type (argument.type);
 
 		if (!type)
@@ -434,18 +403,10 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		                                             type_alignment (argument.type)));
 	}
 
-	/*
-	 * A matching ABI means the target returns by address exactly when this
-	 * method does, so the caller's slot is handed straight through: the target
-	 * fills in the same memory this frame was given to fill.
-	 */
-	if ((*abi)->ret_by_address)
-		values.insert (values.begin () + (*abi)->vret_index, vret_param);
-
 	llvm::CallInst *call = builder.CreateCall (*declaration, values);
 
 	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
-	apply_arg_abi (call, **abi, 0);
+	call->setCallingConv (llvm::CallingConv::Fast);
 
 	if (call->getType ()->isVoidTy ())
 		builder.CreateRetVoid ();
@@ -625,13 +586,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	/* After the receiver fixups: the slot lands at index 1, behind the this. */
-	llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (sig, *args);
-	if (!vret)
-		return vret.takeError ();
-
 	llvm::FunctionCallee callee = *declaration;
 	bool keyed = false;
+	bool through_slot = false;
 
 	if (is_virtual) {
 		/*
@@ -684,41 +641,43 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			                                 direct->isVarArg ()),
 				code);
 			args->insert (args->begin (), method_symbol (callee_method));
+			through_slot = true;
 		} else if (overridable && mono_method_get_vtable_index (callee_method) >= 0) {
 			callee = llvm::FunctionCallee (
 				(*declaration)->getFunctionType (),
 				virtual_callee (builder, (*args)[0], callee_method));
+			through_slot = true;
 		}
 	}
-
-	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
-	if (!abi)
-		return abi.takeError ();
 
 	/*
 	 * A keyed call is never a tail call: its key argument travels outside the
 	 * regular ABI, pinned to a register the caller's own frame never carried.
 	 */
-	if (!keyed && should_tail_call (sig, callee_method, callee.getFunctionType ()))
-		return emit_tail_call (builder, callee, **abi, *args,
+	if (!keyed && !through_slot
+	    && should_tail_call (sig, callee_method, callee.getFunctionType ()))
+		return emit_tail_call (builder, callee, *args,
 		                       sig->param_count + sig->hasthis);
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);
+	llvm::CallBase *site = llvm::cast<llvm::CallBase> (result);
 
-	apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, keyed ? 1 : 0);
 	if (keyed)
-		llvm::cast<llvm::CallBase> (result)->addParamAttr (0, llvm::Attribute::Nest);
+		site->addParamAttr (0, llvm::Attribute::Nest);
+
+	/*
+	 * A dispatched call goes through whatever pointer the runtime put in the
+	 * slot, which is always a legacy entry - the slots are shared with every
+	 * caller that is not generated code.
+	 */
+	if (through_slot)
+		mark_legacy_call (site, sig);
 
 	pop_stack (sig->param_count + sig->hasthis);
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
 
-	if (*vret != nullptr)
-		result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (), *vret,
-		                                    (*vret)->getAlign ());
-
-	result = decoerce_vtype_return (builder, result, sig->ret, **abi);
 	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
 	return llvm::Error::success ();
 }

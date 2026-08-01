@@ -7,6 +7,7 @@
 
 #include "compiler.hpp"
 #include "nearmem.hpp"
+#include "passes/legacy-abi.hpp"
 #include "stubs.hpp"
 
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
@@ -228,6 +229,12 @@ MonoJit::run_tier0_pipeline (Module &m)
 
 	ModulePassManager mpm =
 		pb.buildPerModuleDefaultPipeline (OptimizationLevel::O1);
+
+	/*
+	 * After the whole pipeline: the optimizer works over natural-typed calls,
+	 * and only what survives it is lowered to the legacy boundary convention.
+	 */
+	mpm.addPass (LegacyAbiPass ());
 	mpm.run (m, mam);
 }
 

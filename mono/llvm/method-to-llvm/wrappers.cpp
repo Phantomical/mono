@@ -24,6 +24,8 @@
 #include "mono/utils/mono-tls.h"
 
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InlineAsm.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Type.h>
 
 #include <string>
@@ -41,6 +43,96 @@ MethodLLVMEmitter::address_symbol (const std::string &name, void *address)
 {
 	record_external (name, ExternalSymbol::Kind::Address, address);
 	return extern_symbol (name);
+}
+
+/*
+ * A save_lmf wrapper links a frame onto the thread's LMF chain, which is how a
+ * stack walk that starts in native code finds its way back to managed frames:
+ * the walker reads the caller ip out of *(lmf->rsp - 8) and carries on from
+ * this frame's own unwind info (mono_arch_unwind_frame, exceptions-amd64.c).
+ *
+ * Only the linking and the two register values are emitted here, exactly what
+ * mini's lmf_ir mode records. rsp has to be the frame's settled value - the
+ * one live at the transition call - which stacksave reads after the prologue
+ * has reserved everything, since codegen never moves rsp again inside a frame
+ * without dynamic allocas. frameaddress pins rbp the same way.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
+{
+	MonoJitICallInfo *info = mono_find_jit_icall_info (
+		mono_get_tls_key_to_jit_icall_id (TLS_KEY_LMF_ADDR));
+
+	if (info == nullptr || info->func == nullptr)
+		return invalid_il ("the LMF thread-local's getter is not registered");
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Type *i8 = builder.getInt8Ty ();
+	llvm::Align align (TARGET_SIZEOF_VOID_P);
+
+	/*
+	 * Unwinding through the LMF hop zeroes every callee-saved register and
+	 * rebuilds them from this frame's own unwind info
+	 * (mono_arch_unwind_frame, exceptions-amd64.c) - which can only restore
+	 * what the frame saved. Clobbering the whole file makes the prologue
+	 * save all of it, the way mini's save_lmf prologues do.
+	 */
+	builder.CreateCall (llvm::InlineAsm::get (
+		llvm::FunctionType::get (builder.getVoidTy (), false), "",
+		"~{rbx},~{r12},~{r13},~{r14},~{r15}", /*hasSideEffects=*/true));
+
+	llvm::AllocaInst *slot = builder.CreateAlloca (
+		llvm::ArrayType::get (i8, sizeof (MonoLMF)), nullptr, "lmf");
+
+	slot->setAlignment (align);
+	lmf_slot = slot;
+
+	lmf_addr = builder.CreateCall (
+		llvm::FunctionCallee (
+			llvm::FunctionType::get (ptr, false),
+			address_symbol (std::string ("mono_icall_") + info->name,
+	                                const_cast<void *> (info->func))),
+		{}, "lmf_addr");
+
+	llvm::Value *previous = builder.CreateAlignedLoad (ptr, lmf_addr, align);
+
+	builder.CreateAlignedStore (
+		previous,
+		builder.CreateConstInBoundsGEP1_32 (
+			i8, slot, MONO_STRUCT_OFFSET (MonoLMF, previous_lmf)),
+		align);
+	builder.CreateAlignedStore (
+		builder.CreatePtrToInt (
+			builder.CreateIntrinsic (llvm::Intrinsic::frameaddress, { ptr },
+		                                 { builder.getInt32 (0) }),
+			builder.getInt64Ty ()),
+		builder.CreateConstInBoundsGEP1_32 (i8, slot,
+	                                            MONO_STRUCT_OFFSET (MonoLMF, rbp)),
+		align);
+	builder.CreateAlignedStore (
+		builder.CreatePtrToInt (builder.CreateStackSave (),
+	                                builder.getInt64Ty ()),
+		builder.CreateConstInBoundsGEP1_32 (i8, slot,
+	                                            MONO_STRUCT_OFFSET (MonoLMF, rsp)),
+		align);
+	builder.CreateAlignedStore (slot, lmf_addr, align);
+	return llvm::Error::success ();
+}
+
+void
+MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
+{
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Align align (TARGET_SIZEOF_VOID_P);
+
+	llvm::Value *previous = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateConstInBoundsGEP1_32 (
+			builder.getInt8Ty (), lmf_slot,
+			MONO_STRUCT_OFFSET (MonoLMF, previous_lmf)),
+		align);
+
+	builder.CreateAlignedStore (previous, lmf_addr, align);
 }
 
 /*
@@ -67,23 +159,19 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 	if (!args)
 		return args.takeError ();
 
-	llvm::Expected<const SignatureABI *> abi = lower_signature (info->sig);
-	if (!abi)
-		return abi.takeError ();
-
 	llvm::Constant *target =
 		address_symbol (std::string ("mono_icall_") + info->name,
 	                        const_cast<void *> (info->func));
 	llvm::Value *result =
 		emit_protected_call (builder, llvm::FunctionCallee (*type, target), *args);
 
-	apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
+	/* The icall is a C function; its signature says so. */
+	mark_legacy_call (llvm::cast<llvm::CallBase> (result), info->sig);
 	pop_stack (info->sig->param_count);
 
 	if (info->sig->ret->type == MONO_TYPE_VOID && !info->sig->ret->byref)
 		return llvm::Error::success ();
 
-	result = decoerce_vtype_return (builder, result, info->sig->ret, **abi);
 	push_stack (widen_to_stack (builder, result, info->sig->ret),
 	            stack_slot_type (info->sig->ret));
 	return llvm::Error::success ();

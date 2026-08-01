@@ -461,12 +461,24 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	/*
 	 * The allocator's count is unsigned, so a negative length would reach it as an
 	 * enormous one and come back as OutOfMemory. The spec asks for OverflowException,
-	 * which means asking before the sign is lost.
+	 * which means asking before the sign is lost - and the allocator takes an int32,
+	 * so a native-int length that does not survive the narrowing overflowed too.
 	 */
 	emit_cond_exception (
 		builder,
 		builder.CreateICmpSLT (length, llvm::ConstantInt::get (length->getType (), 0)),
 		"OverflowException");
+
+	if (length->getType ()->getIntegerBitWidth () > 32) {
+		llvm::Value *narrowed = builder.CreateTrunc (length, builder.getInt32Ty ());
+
+		emit_cond_exception (
+			builder,
+			builder.CreateICmpNE (builder.CreateSExt (narrowed,
+		                                                  length->getType ()),
+		                              length),
+			"OverflowException");
+	}
 
 	MonoClass *array =
 		mono_class_create_array (mono_class_from_mono_type_internal (*element), 1);
