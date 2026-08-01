@@ -12,6 +12,7 @@
 #ifndef MONO_LLVM_JIT_HPP
 #define MONO_LLVM_JIT_HPP
 
+#include <llvm/ADT/FunctionExtras.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/RedirectionManager.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
@@ -23,10 +24,20 @@
 #include <string>
 #include <unordered_map>
 
+namespace llvm {
+namespace orc {
+class JITCompileCallbackManager;
+}
+} // namespace llvm
+
 namespace mono {
 
 class MonoJit {
 public:
+	/// Produces the entry point of a method's code, called the first time
+	/// something calls that method. Returning an error is fatal to the call.
+	using LazyCompileFunction = llvm::unique_function<llvm::Expected<void *> ()>;
+
 	/// Build the JIT for the host: JITLink object linking, code model
 	/// Small+PIC, FastISel code generation, and the tier-0 IR pipeline
 	/// applied to every added module.
@@ -50,6 +61,19 @@ public:
 	/// resolves to the stub, so a redirect_stub () is seen by callers that were
 	/// compiled long before it.
 	llvm::Expected<void *> create_stub (llvm::StringRef name, void *target);
+
+	/// Publish NAME as a stub that compiles itself the first time it is called.
+	///
+	/// COMPILE runs on the calling thread, in the middle of that first call,
+	/// and returns the entry point to continue into; the stub is redirected
+	/// there, so every later call goes straight to the code. Callers can be
+	/// compiled against NAME before it has any code at all, which is what lets
+	/// a method be published without compiling it.
+	///
+	/// Threads racing on that first call compile once and all land on the same
+	/// code.
+	llvm::Expected<void *> create_lazy_stub (llvm::StringRef name,
+	                                         LazyCompileFunction compile);
 
 	/// Point NAME's stub at TARGET, which every subsequent call through the
 	/// stub reaches. Callers are untouched - nothing is patched but the stub's
@@ -95,6 +119,10 @@ private:
 	/// and rewrites them.
 	llvm::orc::JITDylib *stubs_ = nullptr;
 	std::unique_ptr<llvm::orc::RedirectableSymbolManager> redirectable_;
+
+	/// Hands out the re-entry trampolines lazy stubs point at until they are
+	/// compiled, and owns the resolver they call through.
+	std::unique_ptr<llvm::orc::JITCompileCallbackManager> callbacks_;
 
 	/// Names ever handed to register_symbol (), so a repeat registration is
 	/// recognized instead of tripping ORC's duplicate-definition error.

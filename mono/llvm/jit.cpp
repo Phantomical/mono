@@ -8,18 +8,35 @@
 #include "stubs.hpp"
 
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
+#include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
+#include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
+
+#include <memory>
 
 using namespace llvm;
 using namespace llvm::orc;
 
 namespace mono {
+
+/*
+ * Where a stub lands when the compile behind it failed. The trampoline has
+ * already put the call's arguments back and jumped here, so this is running as
+ * the method the caller asked for: there is no value it could return and no
+ * caller that would know what to do with one.
+ */
+[[noreturn]] static void
+lazy_compile_failed ()
+{
+	report_fatal_error ("a method failed to compile on first call", false);
+}
 
 static void
 ensure_native_target ()
@@ -147,6 +164,13 @@ MonoJit::create ()
 		return redirectable.takeError ();
 	self->redirectable_ = std::move (*redirectable);
 
+	auto callbacks =
+		LocalJITCompileCallbackManager<OrcX86_64_SysV>::Create (
+			es, ExecutorAddr::fromPtr (&lazy_compile_failed));
+	if (!callbacks)
+		return callbacks.takeError ();
+	self->callbacks_ = std::move (*callbacks);
+
 	return std::move (self);
 }
 
@@ -200,6 +224,43 @@ MonoJit::create_stub (StringRef name, void *target)
 		return std::move (err);
 
 	return stub_address (name);
+}
+
+Expected<void *>
+MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
+{
+	ExecutionSession &es = jit_->getExecutionSession ();
+
+	/*
+	 * ORC's callback takes a copyable std::function, and a compile closure
+	 * carrying a module is move-only.
+	 */
+	auto shared = std::make_shared<LazyCompileFunction> (std::move (compile));
+	std::string method = name.str ();
+
+	/*
+	 * ORC materializes this once however many threads arrive together, and
+	 * hands them all the same answer, so the redirect below happens once too.
+	 */
+	Expected<ExecutorAddr> trampoline = callbacks_->getCompileCallback (
+		[this, &es, method, shared] () -> ExecutorAddr {
+			Expected<void *> code = (*shared) ();
+			if (!code) {
+				es.reportError (code.takeError ());
+				return ExecutorAddr::fromPtr (&lazy_compile_failed);
+			}
+
+			if (Error err = redirect_stub (method, *code)) {
+				es.reportError (std::move (err));
+				return ExecutorAddr::fromPtr (&lazy_compile_failed);
+			}
+
+			return ExecutorAddr::fromPtr (*code);
+		});
+	if (!trampoline)
+		return trampoline.takeError ();
+
+	return create_stub (name, trampoline->toPtr<void *> ());
 }
 
 Error

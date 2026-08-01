@@ -22,10 +22,12 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace llvm;
@@ -60,6 +62,56 @@ stub_detour_target ()
 }
 
 using IntFn = int32_t (*) ();
+
+/*
+ * Enough arguments to fill the SysV registers and spill: eight integers over
+ * six integer registers, nine doubles over eight vector ones. A trampoline
+ * that dropped a register, or that returned with the stack shifted, gets a
+ * wrong answer here rather than a plausible one, since every argument is
+ * weighted by its position.
+ */
+extern "C" int64_t
+lazy_many_args (int64_t a, int64_t b, int64_t c, int64_t d, int64_t e,
+                int64_t f, int64_t g, int64_t h, double i, double j, double k,
+                double l, double m, double n, double o, double p, double q)
+{
+	int64_t ints = a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h;
+	double doubles =
+		i + 2 * j + 3 * k + 4 * l + 5 * m + 6 * n + 7 * o + 8 * p + 9 * q;
+	return ints + static_cast<int64_t> (doubles);
+}
+
+using ManyArgsFn = int64_t (*) (int64_t, int64_t, int64_t, int64_t, int64_t,
+                                int64_t, int64_t, int64_t, double, double,
+                                double, double, double, double, double, double,
+                                double);
+
+/// Call FN with the fixed argument list the checks below compare against.
+static int64_t
+call_many_args (ManyArgsFn fn)
+{
+	return fn (1, 2, 3, 4, 5, 6, 7, 8, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0,
+	           9.0);
+}
+
+/// i32 constant() { return VALUE; }, so a lazy compile has something real to
+/// produce rather than a function that was there all along.
+static ThreadSafeModule
+build_constant_module (int32_t value)
+{
+	auto context = std::make_unique<LLVMContext> ();
+	auto module = std::make_unique<Module> ("stub.constant", *context);
+
+	FunctionType *fty = FunctionType::get (Type::getInt32Ty (*context), false);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "constant",
+	                                 module.get ());
+	IRBuilder<> b (BasicBlock::Create (*context, "entry", fn));
+	b.CreateRet (b.getInt32 (value));
+
+	EXPECT_FALSE (verifyFunction (*fn, &errs ()));
+	return ThreadSafeModule (std::move (module),
+	                         ThreadSafeContext (std::move (context)));
+}
 
 /// i32 caller() { return callee(); } with callee external, so it can only be
 /// satisfied by a published stub.
@@ -257,6 +309,106 @@ TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
 	/* Every one of them still works. */
 	EXPECT_EQ (reinterpret_cast<IntFn> (addrs.front ()) (), 1);
 	EXPECT_EQ (reinterpret_cast<IntFn> (addrs.back ()) (), 1);
+}
+
+TEST (LazyStubs, CompileOnceOnTheFirstCall)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	int compiles = 0;
+	auto stub = (*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
+		compiles++;
+		return (*jit)->compile (build_constant_module (7), "constant");
+	});
+	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+
+	/* Publishing it compiles nothing. */
+	EXPECT_EQ (compiles, 0);
+
+	for (int i = 0; i < 3; i++)
+		EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 7) << "call " << i;
+	EXPECT_EQ (compiles, 1);
+}
+
+/*
+ * The compile happens in the middle of the call it was triggered by, so the
+ * trampoline has to hand every argument back untouched before continuing into
+ * the code it just produced.
+ */
+TEST (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	auto stub = (*jit)->create_lazy_stub (
+		"m", [] () -> Expected<void *> { return (void *) &lazy_many_args; });
+	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+
+	int64_t expected = call_many_args (&lazy_many_args);
+
+	/* Through the trampoline ... */
+	EXPECT_EQ (call_many_args (reinterpret_cast<ManyArgsFn> (*stub)), expected);
+	/* ... and again now that the stub points straight at the code. */
+	EXPECT_EQ (call_many_args (reinterpret_cast<ManyArgsFn> (*stub)), expected);
+}
+
+TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	int compiles = 0;
+	ASSERT_TRUE (
+		bool ((*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
+			compiles++;
+			return (*jit)->compile (build_constant_module (7), "constant");
+		})));
+
+	/* Resolves against a method that has no code yet. */
+	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
+	EXPECT_EQ (compiles, 0);
+
+	EXPECT_EQ (reinterpret_cast<IntFn> (*caller) (), 7);
+	EXPECT_EQ (compiles, 1);
+}
+
+TEST (LazyStubs, RacingFirstCallsCompileOnce)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	std::atomic<int> compiles {0};
+	auto stub = (*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
+		compiles++;
+		return (*jit)->compile (build_constant_module (7), "constant");
+	});
+	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+
+	constexpr int threads = 8;
+	std::atomic<int> ready {0};
+	std::atomic<bool> go {false};
+	std::vector<int32_t> results (threads, 0);
+
+	std::vector<std::thread> workers;
+	for (int i = 0; i < threads; i++)
+		workers.emplace_back ([&, i] {
+			ready++;
+			while (!go.load ())
+				std::this_thread::yield ();
+			results[i] = reinterpret_cast<IntFn> (*stub) ();
+		});
+
+	while (ready.load () != threads)
+		std::this_thread::yield ();
+	go.store (true);
+	for (std::thread &t : workers)
+		t.join ();
+
+	EXPECT_EQ (compiles.load (), 1);
+	for (int i = 0; i < threads; i++)
+		EXPECT_EQ (results[i], 7) << "thread " << i;
 }
 
 } // namespace
