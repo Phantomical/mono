@@ -13,6 +13,7 @@
 #define MONO_LLVM_JIT_HPP
 
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/ExecutionEngine/Orc/RedirectionManager.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Support/Error.h>
 
@@ -41,12 +42,30 @@ public:
 	/// same helper.
 	llvm::Error register_symbol (llvm::StringRef name, void *addr);
 
+	/// Publish NAME as a redirectable stub initially jumping to TARGET, and
+	/// return the stub's address.
+	///
+	/// This is the address handed out for a method: callers bind to it once
+	/// and every tier is reached through it. Compiled code that calls NAME
+	/// resolves to the stub, so a redirect_stub () is seen by callers that were
+	/// compiled long before it.
+	llvm::Expected<void *> create_stub (llvm::StringRef name, void *target);
+
+	/// Point NAME's stub at TARGET, which every subsequent call through the
+	/// stub reaches. Callers are untouched - nothing is patched but the stub's
+	/// own slot.
+	llvm::Error redirect_stub (llvm::StringRef name, void *target);
+
+	/// The address of the stub published for NAME.
+	llvm::Expected<void *> stub_address (llvm::StringRef name);
+
 	/// Compile TSM and return the executable address of ENTRY.
 	///
 	/// The module gets the tier-0 treatment (run_tier0_pipeline + FastISel)
 	/// and lands in a JITDylib of its own that resolves external symbols
-	/// exclusively through register_symbol () - there is no process-symbol
-	/// search, so an unregistered helper fails the compile loudly.
+	/// through register_symbol () and the published stubs, and nothing else -
+	/// there is no process-symbol search, so an unregistered helper fails the
+	/// compile loudly.
 	llvm::Expected<void *> compile (llvm::orc::ThreadSafeModule tsm,
 	                                llvm::StringRef entry);
 
@@ -69,8 +88,13 @@ private:
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 
 	/// Dedicated dylib holding the explicitly-registered runtime helpers;
-	/// every compiled module's dylib links only against this.
+	/// every compiled module's dylib links against this and mono.stubs.
 	llvm::orc::JITDylib *helpers_ = nullptr;
+
+	/// Dylib holding the published method stubs, and the manager that emits
+	/// and rewrites them.
+	llvm::orc::JITDylib *stubs_ = nullptr;
+	std::unique_ptr<llvm::orc::RedirectableSymbolManager> redirectable_;
 
 	/// Names ever handed to register_symbol (), so a repeat registration is
 	/// recognized instead of tripping ORC's duplicate-definition error.

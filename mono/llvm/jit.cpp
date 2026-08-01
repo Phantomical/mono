@@ -5,6 +5,8 @@
 
 #include "jit.hpp"
 
+#include "stubs.hpp"
+
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
@@ -109,9 +111,9 @@ MonoJit::create ()
 	/*
 	 * JITLink, not the RTDyldObjectLinkingLayer LLJIT still defaults to on
 	 * ELF. The layer's default in-process memory manager is enough for now; a
-	 * bounded slab reservation (and the redirectable-stub manager, which
-	 * wants this layer type) come later. LLJIT's generic platform setup
-	 * attaches its eh-frame registration plugin to this layer on its own.
+	 * bounded slab reservation for method bodies comes later. LLJIT's generic
+	 * platform setup attaches its eh-frame registration plugin to this layer
+	 * on its own.
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
@@ -136,8 +138,14 @@ MonoJit::create ()
 			return std::move (tsm);
 		});
 
-	self->helpers_ =
-		&self->jit_->getExecutionSession ().createBareJITDylib ("mono.helpers");
+	ExecutionSession &es = self->jit_->getExecutionSession ();
+	self->helpers_ = &es.createBareJITDylib ("mono.helpers");
+	self->stubs_ = &es.createBareJITDylib ("mono.stubs");
+
+	auto redirectable = make_redirectable_symbol_manager (es);
+	if (!redirectable)
+		return redirectable.takeError ();
+	self->redirectable_ = std::move (*redirectable);
 
 	return std::move (self);
 }
@@ -177,6 +185,47 @@ MonoJit::register_symbol (StringRef name, void *addr)
 }
 
 Expected<void *>
+MonoJit::create_stub (StringRef name, void *target)
+{
+	ExecutionSession &es = jit_->getExecutionSession ();
+
+	SymbolMap dests;
+	dests[es.intern (name)] = {
+		ExecutorAddr::fromPtr (target),
+		JITSymbolFlags::Exported | JITSymbolFlags::Callable,
+	};
+
+	if (Error err = redirectable_->createRedirectableSymbols (
+	        stubs_->getDefaultResourceTracker (), std::move (dests)))
+		return std::move (err);
+
+	return stub_address (name);
+}
+
+Error
+MonoJit::redirect_stub (StringRef name, void *target)
+{
+	ExecutionSession &es = jit_->getExecutionSession ();
+
+	SymbolMap dests;
+	dests[es.intern (name)] = {
+		ExecutorAddr::fromPtr (target),
+		JITSymbolFlags::Exported | JITSymbolFlags::Callable,
+	};
+
+	return redirectable_->redirect (*stubs_, dests);
+}
+
+Expected<void *>
+MonoJit::stub_address (StringRef name)
+{
+	Expected<ExecutorAddr> sym = jit_->lookup (*stubs_, name);
+	if (!sym)
+		return sym.takeError ();
+	return sym->toPtr<void *> ();
+}
+
+Expected<void *>
 MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 {
 	/*
@@ -189,15 +238,18 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	});
 
 	/*
-	 * A dylib per module, resolving only through mono.helpers: JIT'd code can
-	 * reach exactly what was registered, nothing else. Bare, because these
-	 * modules carry no initializers for the platform to manage.
+	 * A dylib per module, resolving only through mono.helpers and mono.stubs:
+	 * JIT'd code can reach exactly what was registered and the methods that
+	 * have been published, nothing else. Calls to another method bind to its
+	 * stub by name, which is what keeps them correct across promotions. Bare,
+	 * because these modules carry no initializers for the platform to manage.
 	 */
 	std::string jd_name =
 		("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
 	JITDylib &jd =
 		jit_->getExecutionSession ().createBareJITDylib (std::move (jd_name));
 	jd.addToLinkOrder (*helpers_);
+	jd.addToLinkOrder (*stubs_);
 
 	if (Error err = jit_->addIRModule (jd, std::move (tsm)))
 		return std::move (err);
