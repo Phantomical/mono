@@ -93,6 +93,35 @@
 		ldc.i4.0
 		ret
 	}
+
+	.method public static int32 HasAFilterClause (int32 x) cil managed
+	{
+		.maxstack 2
+		.locals init (int32 result, class [mscorlib]System.Exception ex)
+		.try
+		{
+			ldarg.0
+			ldc.i4.2
+			div
+			stloc.0
+			leave.s DONE
+		}
+		filter
+		{
+			stloc.1
+			ldc.i4.1
+			endfilter
+		}
+		{
+			stloc.1
+			ldc.i4.m1
+			stloc.0
+			leave.s DONE
+		}
+	DONE:
+		ldloc.0
+		ret
+	}
 }
 
 .class public sequential ansi sealed beforefieldinit Plain extends [mscorlib]System.ValueType

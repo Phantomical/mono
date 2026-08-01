@@ -145,8 +145,8 @@ const MethodRef translatable[] = {
 	{"eh", "Eh:CatchInsideFinally"},
 	{"eh", "Eh:Throw"},
 	{"eh", "Eh:Rethrow"},
-	{"eh", "Eh:Filter"},
 	{"eh", "Eh:CallInTry"},
+	{"eh", "Eh:CallUnderCatchAndFinally"},
 
 	{"boxing", "Boxing:BoxInt"},
 	{"boxing", "Boxing:BoxPair"},
@@ -543,6 +543,39 @@ TEST_F (TranslatorTest, ACatchGetsALandingPadAndAPersonality)
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_TRUE (t.function->hasPersonalityFn ());
 	EXPECT_GE (t.count ("landingpad"), 1u);
+}
+
+// The runtime resumes at the innermost pad with the chosen clause's index in the
+// selector register, so the pad has to carry the clause's marker and route on the
+// selector rather than branching straight to one handler.
+TEST_F (TranslatorTest, APadNamesItsClausesAndRoutesBySelector)
+{
+	const Translation &t = translate ("eh", "Eh:TryCatch");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_GE (t.count ("catch ptr @mono_eh_clause_0"), 1u);
+	EXPECT_GE (t.count ("switch i32"), 1u);
+}
+
+// A catch nested inside another protected region can only be reached through the
+// inner pad, so the pad's chain has to name the enclosing clause as well.
+TEST_F (TranslatorTest, ANestedPadCarriesTheEnclosingClause)
+{
+	const Translation &t = translate ("eh", "Eh:CallUnderCatchAndFinally");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_GE (t.count ("catch ptr @mono_eh_clause_0"), 1u);
+	EXPECT_GE (t.count ("catch ptr @mono_eh_clause_1"), 1u);
+}
+
+// A finally entered by unwinding ends by handing control back to the unwinder,
+// which saved where it was; falling off the end would be resuming nowhere.
+TEST_F (TranslatorTest, AnUnwoundFinallyResumesThroughTheRuntime)
+{
+	const Translation &t = translate ("eh", "Eh:TryFinally");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_GE (t.count ("mono_llvm_resume_unwind"), 1u);
 }
 
 TEST_F (TranslatorTest, ACallInsideATryIsAnInvoke)
@@ -1150,6 +1183,7 @@ const RefusalRef refusals[] = {
 	{"Refused:UsesArglist", "vararg"},
 	{"Refused:CallsAVararg", "vararg"},
 	{"Refused:MergesAStructWithAnInt", "different type"},
+	{"Refused:HasAFilterClause", "filter"},
 };
 
 INSTANTIATE_TEST_SUITE_P (Corpus, Refuses, testing::ValuesIn (refusals),

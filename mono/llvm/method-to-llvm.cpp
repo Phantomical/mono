@@ -513,6 +513,14 @@ MethodLLVMEmitter::emit ()
 	clause_state.resize (num_clauses);
 
 	/*
+	 * A filter runs during the unwinder's search pass, called into the frame like
+	 * a function, which needs an entry point this translation cannot yet give it.
+	 */
+	for (uint32_t i = 0; i < num_clauses; ++i)
+		if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER)
+			return unsupported_il ("the method has a filter clause");
+
+	/*
 	 * An invoke is only well formed on a function with a personality, and mono's is
 	 * the hook its own unwinder recognises. Nothing calls it on the managed path -
 	 * mono_handle_exception does the search - but LLVM will not emit the LSDA the

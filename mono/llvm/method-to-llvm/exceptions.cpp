@@ -29,6 +29,21 @@ throw_decl (llvm::Module *module, const char *name)
 	return callee;
 }
 
+/// The runtime call a finally or fault makes when it was entered by unwinding and
+/// has run out: hand control back to the unwinder, which knows where it was.
+llvm::FunctionCallee
+resume_unwind_decl (llvm::Module *module)
+{
+	llvm::LLVMContext &ctx = module->getContext ();
+	llvm::FunctionCallee callee = module->getOrInsertFunction (
+		"mono_llvm_resume_unwind", llvm::Type::getVoidTy (ctx));
+
+	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ()))
+		function->setDoesNotReturn ();
+
+	return callee;
+}
+
 } // namespace
 
 /// The innermost clause whose try region covers AT, or -1 if nothing protects it.
@@ -70,17 +85,65 @@ MethodLLVMEmitter::innermost_handler (size_t at) const
 	return found;
 }
 
+/// Every clause covering CLAUSE's try region, innermost first: the clause itself,
+/// then each enclosing clause outward.
+///
+/// Well-formed IL nests protected regions properly, so the set of clauses covering
+/// any instruction whose innermost clause is CLAUSE is the same set, and it is a
+/// property of the clause rather than of the instruction.
+std::vector<uint32_t>
+MethodLLVMEmitter::covering_chain (uint32_t clause) const
+{
+	std::vector<uint32_t> chain;
+
+	for (uint32_t j = 0; j < num_clauses; ++j)
+		if (j == clause
+		    || (MONO_OFFSET_IN_CLAUSE (&clauses[j], clauses[clause].try_offset)
+		        && clauses[j].try_len > clauses[clause].try_len))
+			chain.push_back (j);
+
+	std::sort (chain.begin (), chain.end (), [&] (uint32_t a, uint32_t b) {
+		return clauses[a].try_len < clauses[b].try_len;
+	});
+	return chain;
+}
+
+/// The global that stands for clause CLAUSE in the exception tables.
+///
+/// A landing pad's catch operands travel into the object's type table, and that is
+/// the one channel through which a clause's identity survives codegen: the table
+/// entry points at this global, and the global's one word is the clause index. The
+/// runtime side reads it back when it builds the method's MonoJitInfo.
+llvm::Constant *
+MethodLLVMEmitter::clause_marker (uint32_t clause)
+{
+	std::string name = "mono_eh_clause_" + std::to_string (clause);
+
+	if (llvm::GlobalVariable *existing = module->getNamedGlobal (name))
+		return existing;
+
+	llvm::Type *i32 = llvm::Type::getInt32Ty (context ());
+	return new llvm::GlobalVariable (*module, i32, /*isConstant=*/true,
+	                                 llvm::GlobalValue::PrivateLinkage,
+	                                 llvm::ConstantInt::get (i32, clause), name);
+}
+
 /// Where a throw inside CLAUSE's try region lands.
 ///
-/// The pad is what every invoke in the region unwinds to, and it hands straight on to
-/// the clause's handler - which is what gives the handler an edge and keeps it alive.
-/// Mono's own unwinder does the two-pass search out of MonoJitInfo and resumes at the
-/// handler's native address rather than arriving here, so this path is not the one taken
-/// at run time; it exists so that LLVM emits a call-site range covering the try region,
-/// and so that the blocks the runtime does jump to are still in the function to jump to.
+/// The pad is what every invoke in the region unwinds to. Mono's own unwinder does
+/// the two-pass search out of MonoJitInfo, picks the clause, and resumes here - at
+/// the innermost pad of the throw site - with the exception and the chosen clause's
+/// index in the two registers a landing pad reads. The switch is what routes that
+/// entry to the chosen clause, which need not be the innermost: a finally that has
+/// run, or a catch the innermost clause does not satisfy, hands dispatch to an
+/// encloser whose only way in is this same pad.
 ///
-/// A handler is entered holding what the runtime puts there: a catch or filter gets the
-/// exception, a finally or fault gets nothing. Those entry stacks are recorded up front
+/// The catch operands name every clause the switch can route to, so the object's
+/// exception table carries the whole chain for each call site - which is also what
+/// keeps every handler reachable and alive through optimization.
+///
+/// A handler is entered holding what the runtime puts there: a catch gets the
+/// exception, a finally or fault nothing. Those entry stacks are recorded up front
 /// in emit (), so this only has to fill the slot in.
 llvm::BasicBlock *
 MethodLLVMEmitter::landing_pad (uint32_t clause)
@@ -95,33 +158,49 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 
 	MonoIrBuilder pad (state.pad);
 	llvm::Type *exception = llvm::PointerType::get (context (), 0);
-	llvm::LandingPadInst *caught =
-		pad.CreateLandingPad (llvm::StructType::get (exception, pad.getInt32Ty ()), 0);
+	std::vector<uint32_t> chain = covering_chain (clause);
+	llvm::LandingPadInst *caught = pad.CreateLandingPad (
+		llvm::StructType::get (exception, pad.getInt32Ty ()),
+		static_cast<unsigned> (chain.size ()));
 
-	caught->setCleanup (true);
+	for (uint32_t j : chain)
+		caught->addClause (clause_marker (j));
 
-	MonoExceptionClause *info = &clauses[clause];
-	Block &handler = blocks[info->handler_offset];
+	llvm::Value *exc = pad.CreateExtractValue (caught, 0);
+	llvm::Value *selector = pad.CreateExtractValue (caught, 1);
 
-	if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
-		/* Arriving by unwinding is continuation 0: carry on unwinding afterwards. */
-		pad.CreateStore (pad.getInt32 (0), state.resume_at);
-	} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT && !handler.entry.empty ()) {
-		pad.CreateStore (pad.CreateExtractValue (caught, 0), handler.entry[0].alloca);
-	}
+	/*
+	 * The runtime only ever enters with one of the chain's indices; anything else
+	 * is a table we built wrongly, and there is nowhere sensible to go.
+	 */
+	llvm::BasicBlock *impossible =
+		llvm::BasicBlock::Create (context (),
+		                          llvm::Twine ("pad") + llvm::Twine (clause) + "_bad",
+		                          function);
+	MonoIrBuilder (impossible).CreateUnreachable ();
 
-	if (info->flags == MONO_EXCEPTION_CLAUSE_FILTER) {
-		/*
-		 * A filter runs first and the handler only if it agrees, so both are places
-		 * the runtime can resume; the selector picks between them here so that
-		 * neither block is left without a way in.
-		 */
-		llvm::SwitchInst *resume =
-			pad.CreateSwitch (pad.CreateExtractValue (caught, 1), handler.block, 1);
+	llvm::SwitchInst *dispatch = pad.CreateSwitch (selector, impossible,
+	                                               static_cast<unsigned> (chain.size ()));
 
-		resume->addCase (pad.getInt32 (0), blocks[info->data.filter_offset].block);
-	} else {
-		pad.CreateBr (handler.block);
+	for (uint32_t j : chain) {
+		MonoExceptionClause *info = &clauses[j];
+		Block &handler = blocks[info->handler_offset];
+		llvm::BasicBlock *enter = llvm::BasicBlock::Create (
+			context (),
+			llvm::Twine ("enter_clause") + llvm::Twine (j), function);
+		MonoIrBuilder prep (enter);
+
+		if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
+			/* Arriving by unwinding is continuation 0: hand control back
+			 * to the unwinder afterwards. */
+			prep.CreateStore (prep.getInt32 (0), clause_state[j].resume_at);
+		} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT
+		           && !handler.entry.empty ()) {
+			prep.CreateStore (exc, handler.entry[0].alloca);
+		}
+
+		prep.CreateBr (handler.block);
+		dispatch->addCase (pad.getInt32 (j), enter);
 	}
 
 	return state.pad;
@@ -402,17 +481,21 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 
 	/*
 	 * A fault has only ever been entered by unwinding, so there is nothing to switch
-	 * on: carrying on means carrying on unwinding, which the runtime does for us.
+	 * on: carrying on means handing control back to the unwinder, which saved where
+	 * it was before entering the handler.
 	 */
 	if (clauses[clause].flags == MONO_EXCEPTION_CLAUSE_FAULT) {
+		builder.CreateCall (resume_unwind_decl (module));
 		builder.CreateUnreachable ();
 		return llvm::Error::success ();
 	}
 
 	llvm::BasicBlock *unwinding =
 		llvm::BasicBlock::Create (context (), "resume_unwind", function);
+	MonoIrBuilder resume (unwinding);
 
-	MonoIrBuilder (unwinding).CreateUnreachable ();
+	resume.CreateCall (resume_unwind_decl (module));
+	resume.CreateUnreachable ();
 
 	Clause &state = clause_state[clause];
 	llvm::Value *which =

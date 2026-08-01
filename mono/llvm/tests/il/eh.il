@@ -202,6 +202,42 @@
 		throw
 	}
 
+	// A call protected by two nested clauses at once: its landing pad has to
+	// carry both, since the runtime re-enters through it for either.
+	.method public static int32 CallUnderCatchAndFinally (int32 x) cil managed
+	{
+		.maxstack 2
+		.locals init (int32 result, class [mscorlib]System.Exception ex)
+		.try
+		{
+			.try
+			{
+				ldarg.0
+				call int32 Eh::CallInTry (int32)
+				stloc.0
+				leave.s DONE
+			}
+			catch [mscorlib]System.Exception
+			{
+				stloc.1
+				ldc.i4.m1
+				stloc.0
+				leave.s DONE
+			}
+		}
+		finally
+		{
+			ldloc.0
+			ldc.i4.1
+			add
+			stloc.0
+			endfinally
+		}
+	DONE:
+		ldloc.0
+		ret
+	}
+
 	.method public static int32 Rethrow (int32 x) cil managed
 	{
 		.maxstack 2
@@ -216,35 +252,6 @@
 		{
 			stloc.1
 			rethrow
-		}
-	DONE:
-		ldloc.0
-		ret
-	}
-
-	.method public static int32 Filter (int32 x) cil managed
-	{
-		.maxstack 2
-		.locals init (int32 result, class [mscorlib]System.Exception ex)
-		.try
-		{
-			ldarg.0
-			ldc.i4.2
-			div
-			stloc.0
-			leave.s DONE
-		}
-		filter
-		{
-			stloc.1
-			ldc.i4.1
-			endfilter
-		}
-		{
-			stloc.1
-			ldc.i4.m1
-			stloc.0
-			leave.s DONE
 		}
 	DONE:
 		ldloc.0

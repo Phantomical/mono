@@ -317,6 +317,8 @@ private:
 
 	int innermost_try (size_t at) const;
 	int innermost_handler (size_t at) const;
+	std::vector<uint32_t> covering_chain (uint32_t clause) const;
+	llvm::Constant *clause_marker (uint32_t clause);
 	llvm::BasicBlock *landing_pad (uint32_t clause);
 	void emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                          llvm::ArrayRef<llvm::Value *> args);
