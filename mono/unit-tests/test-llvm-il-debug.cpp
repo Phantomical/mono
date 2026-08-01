@@ -99,7 +99,7 @@ struct DebugFixture {
 	explicit DebugFixture (const char *name)
 		: tsctx (std::make_unique<LLVMContext> ())
 	{
-		module = std::make_unique<Module> (name, *tsctx.getContext ());
+		module = std::make_unique<Module> (name, ctx ());
 		module->addModuleFlag (Module::Warning, "Dwarf Version", 4);
 		module->addModuleFlag (Module::Warning, "Debug Info Version",
 		                       DEBUG_METADATA_VERSION);
@@ -117,7 +117,13 @@ struct DebugFixture {
 		                           DISubprogram::SPFlagDefinition | DISubprogram::SPFlagOptimized);
 	}
 
-	LLVMContext &ctx () { return *tsctx.getContext (); }
+	LLVMContext &ctx ()
+	{
+		LLVMContext *raw = nullptr;
+
+		tsctx.withContextDo ([&] (LLVMContext *c) { raw = c; });
+		return *raw;
+	}
 };
 
 /* i64 NAME(i64) with a body long enough that its locations land at distinct PCs. */
@@ -475,8 +481,9 @@ test_inline_chain_from_real_inlining (MonoLLVMJIT *jit)
 static TestResult
 test_no_debug_info_yields_nothing (MonoLLVMJIT *jit)
 {
-	orc::ThreadSafeContext tsctx (std::make_unique<LLVMContext> ());
-	LLVMContext &ctx = *tsctx.getContext ();
+	auto owned = std::make_unique<LLVMContext> ();
+	LLVMContext &ctx = *owned;
+	orc::ThreadSafeContext tsctx (std::move (owned));
 	auto module = std::make_unique<Module> ("selftest.il.nodebug", ctx);
 	Function *fn = make_fn (module.get (), "il_nodebug_root");
 	BasicBlock *bb = BasicBlock::Create (ctx, "entry", fn);

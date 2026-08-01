@@ -199,7 +199,7 @@ emit_check (Harness &h, BasicBlock *in, std::uint64_t vtable, const char *klass,
 	                                   : b.CreateICmpNE (loaded, b.getInt8 (0));
 
 	if (shape.expect) {
-		llvm::Function *expect = llvm::Intrinsic::getDeclaration (
+		llvm::Function *expect = llvm::Intrinsic::getOrInsertDeclaration (
 			h.module.get (), llvm::Intrinsic::expect, {b.getInt1Ty ()});
 		cond = b.CreateCall (expect, {cond, b.getInt1 (!shape.inverted)});
 	}
