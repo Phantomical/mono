@@ -20,9 +20,29 @@ llvm::Expected<MonoMethod *>
 MethodLLVMEmitter::resolve_method (uint32_t token)
 {
 	ERROR_DECL (metadata_error);
+	MonoGenericContext *context = mono_method_get_context (method);
+
+	if (in_wrapper ()) {
+		MonoMethod *target = static_cast<MonoMethod *> (wrapper_data (token));
+
+		if (target == nullptr)
+			return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+			                   + " does not name a method");
+
+		if (context == nullptr)
+			return target;
+
+		target = mono_class_inflate_generic_method_checked (target, context,
+		                                                    metadata_error);
+		if (target == nullptr)
+			return runtime_error (metadata_error);
+
+		return target;
+	}
+
 	MonoMethod *target =
 		mono_get_method_checked (m_class_get_image (method->klass), token, nullptr,
-	                                 mono_method_get_context (method), metadata_error);
+	                                 context, metadata_error);
 
 	if (target == nullptr)
 		return runtime_error (metadata_error);

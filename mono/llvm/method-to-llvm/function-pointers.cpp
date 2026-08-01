@@ -200,11 +200,21 @@ llvm::Error
 MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 {
 	ERROR_DECL (metadata_error);
-	MonoMethodSignature *sig = mono_metadata_parse_signature_checked (
-		m_class_get_image (method->klass), token, metadata_error);
+	MonoMethodSignature *sig;
 
-	if (sig == nullptr)
-		return runtime_error (metadata_error);
+	if (in_wrapper ()) {
+		sig = static_cast<MonoMethodSignature *> (wrapper_data (token));
+
+		if (sig == nullptr)
+			return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+			                   + " does not hold a call site signature");
+	} else {
+		sig = mono_metadata_parse_signature_checked (
+			m_class_get_image (method->klass), token, metadata_error);
+
+		if (sig == nullptr)
+			return runtime_error (metadata_error);
+	}
 
 	if (MonoGenericContext *ctx = mono_method_get_context (method)) {
 		sig = mono_inflate_generic_signature (sig, ctx, metadata_error);

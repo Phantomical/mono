@@ -58,6 +58,28 @@ local_count (MonoMethod *method)
 
 } // namespace
 
+bool
+MethodLLVMEmitter::in_wrapper () const
+{
+	return method->wrapper_type != MONO_WRAPPER_NONE;
+}
+
+/*
+ * Slot 0 of the table holds how many entries follow it, so an index past that
+ * is one the wrapper never filled in - a malformed body rather than something
+ * to read off the end of the array.
+ */
+void *
+MethodLLVMEmitter::wrapper_data (uint32_t index) const
+{
+	void **data = static_cast<void **> (((MonoMethodWrapper *) method)->method_data);
+
+	if (data == nullptr || index > GPOINTER_TO_UINT (data[0]))
+		return nullptr;
+
+	return data[index];
+}
+
 /// Refuse the method the way mini refuses IL it cannot translate: an
 /// InvalidProgramException naming the method and the offending instruction, so
 /// that which JIT was asked to compile it does not change what the caller sees.

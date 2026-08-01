@@ -189,6 +189,33 @@ MethodLLVMEmitter::emit_ldnull (MonoIrBuilder &builder)
 llvm::Error
 MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 {
+	/*
+	 * A wrapper has no string heap to point into, so what it carries is a plain
+	 * C string that the runtime turns into a managed one at the point of use.
+	 * A dynamic method is the exception: its operand is already the MonoString.
+	 */
+	if (in_wrapper ()) {
+		void *data = wrapper_data (token);
+
+		if (data == nullptr)
+			return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+			                   + " does not hold a string");
+
+		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+		llvm::Constant *literal = llvm::ConstantExpr::getIntToPtr (
+			builder.getInt64 (reinterpret_cast<uint64_t> (data)), ptr);
+		llvm::Value *value = literal;
+
+		if (method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD)
+			value = builder.CreateCall (
+				module->getOrInsertFunction ("mono_string_new_wrapper_internal",
+			                                     ptr, ptr),
+				{ literal });
+
+		push_stack (value, m_class_get_byval_arg (mono_defaults.string_class));
+		return llvm::Error::success ();
+	}
+
 	if ((token & 0xff000000) != MONO_TOKEN_STRING)
 		return invalid_il ("ldstr needs a string literal token");
 
@@ -247,12 +274,35 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 {
 	ERROR_DECL (metadata_error);
 	MonoClass *handle_class = nullptr;
-	gpointer handle =
-		mono_ldtoken_checked (m_class_get_image (method->klass), token, &handle_class,
-	                              mono_method_get_context (method), metadata_error);
+	gpointer handle = nullptr;
 
-	if (handle == nullptr)
-		return runtime_error (metadata_error);
+	if (in_wrapper ()) {
+		/*
+		 * Two consecutive slots: the handle, and the class saying which of the
+		 * three kinds it is. Only the wrappers that can carry a token at all
+		 * fill these in.
+		 */
+		if (method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD &&
+		    method->wrapper_type != MONO_WRAPPER_SYNCHRONIZED)
+			return unsupported_il ("ldtoken in this kind of wrapper");
+
+		handle = wrapper_data (token);
+		handle_class = static_cast<MonoClass *> (wrapper_data (token + 1));
+
+		if (handle == nullptr || handle_class == nullptr)
+			return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+			                   + " does not hold a token");
+
+		if (handle_class == mono_defaults.typehandle_class)
+			handle = m_class_get_byval_arg (static_cast<MonoClass *> (handle));
+	} else {
+		handle = mono_ldtoken_checked (m_class_get_image (method->klass), token,
+		                               &handle_class, mono_method_get_context (method),
+		                               metadata_error);
+
+		if (handle == nullptr)
+			return runtime_error (metadata_error);
+	}
 
 	/*
 	 * The handle is a runtime address - a MonoType, MonoMethod or MonoClassField -

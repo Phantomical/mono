@@ -31,12 +31,22 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 {
 	ERROR_DECL (metadata_error);
 	MonoClass *klass = nullptr;
-	MonoClassField *field =
-		mono_field_from_token_checked (m_class_get_image (method->klass), token, &klass,
-	                                       mono_method_get_context (method), metadata_error);
+	MonoClassField *field;
 
-	if (field == nullptr)
-		return runtime_error (metadata_error);
+	if (in_wrapper ()) {
+		field = static_cast<MonoClassField *> (wrapper_data (token));
+
+		if (field == nullptr)
+			return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+			                   + " does not name a field");
+	} else {
+		field = mono_field_from_token_checked (
+			m_class_get_image (method->klass), token, &klass,
+			mono_method_get_context (method), metadata_error);
+
+		if (field == nullptr)
+			return runtime_error (metadata_error);
+	}
 
 	/*
 	 * Laying the class out is what makes the offset readable; it settles metadata
