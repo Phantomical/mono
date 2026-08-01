@@ -127,10 +127,15 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 	 */
 	emit_null_check (builder, obj.value);
 
-	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-	llvm::FunctionCallee lookup = module->getOrInsertFunction ("mono_ldvirtfn", ptr, ptr, ptr);
-	llvm::Value *ftn =
-		emit_protected_call (builder, lookup, {obj.value, method_symbol (*target)});
+	llvm::Expected<llvm::Function *> lookup =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_ldvirtfn);
+
+	if (!lookup)
+		return lookup.takeError ();
+
+	llvm::Value *ftn = emit_protected_call (
+		builder, *lookup,
+		adapt_to_callee (builder, *lookup, {obj.value, method_symbol (*target)}));
 
 	pop_stack (1);
 	push_stack (ftn, mono_get_int_type ());
@@ -266,7 +271,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		pop_stack (1);
 
 		llvm::Expected<std::vector<llvm::Value *>> args =
-			pop_call_arguments (builder, sig);
+			pop_call_arguments (builder, sig, wsig, 1);
 		if (!args)
 			return args.takeError ();
 
@@ -281,8 +286,13 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		if (!vret)
 			return vret.takeError ();
 
+		llvm::Expected<const SignatureABI *> wabi = lower_signature (wsig);
+		if (!wabi)
+			return wabi.takeError ();
+
 		llvm::Value *result = emit_protected_call (builder, *declaration, *args);
 
+		apply_arg_abi (llvm::cast<llvm::CallBase> (result), **wabi, 0);
 		pop_stack (sig->param_count);
 
 		if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
@@ -292,6 +302,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 			result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (),
 			                                    *vret, (*vret)->getAlign ());
 
+		result = decoerce_vtype_return (builder, result, wsig->ret, **wabi);
 		push_stack (widen_to_stack (builder, result, wsig->ret),
 		            stack_slot_type (wsig->ret));
 		return llvm::Error::success ();
@@ -314,9 +325,13 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	if (!args)
 		return args.takeError ();
 
+	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
+	if (!abi)
+		return abi.takeError ();
+
 	if (should_tail_call (sig, nullptr, *type))
-		return emit_tail_call (builder, llvm::FunctionCallee (*type, ftn), *args,
-		                       sig->param_count + sig->hasthis);
+		return emit_tail_call (builder, llvm::FunctionCallee (*type, ftn), **abi,
+		                       *args, sig->param_count + sig->hasthis);
 
 	llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (sig, *args);
 	if (!vret)
@@ -325,6 +340,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	llvm::Value *result =
 		emit_protected_call (builder, llvm::FunctionCallee (*type, ftn), *args);
 
+	apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
 	pop_stack (sig->param_count + sig->hasthis);
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
@@ -334,6 +350,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (), *vret,
 		                                    (*vret)->getAlign ());
 
+	result = decoerce_vtype_return (builder, result, sig->ret, **abi);
 	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
 	return llvm::Error::success ();
 }

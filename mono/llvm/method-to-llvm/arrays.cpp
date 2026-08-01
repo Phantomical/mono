@@ -12,65 +12,6 @@
 
 namespace mono {
 
-namespace {
-
-/// The runtime's assignability test for stelem.ref, which throws
-/// ArrayTypeMismatchException rather than returning an answer.
-llvm::FunctionCallee
-stelem_check_decl (llvm::Module *module)
-{
-	llvm::LLVMContext &ctx = module->getContext ();
-	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
-
-	return module->getOrInsertFunction ("mono_helper_stelem_ref_check",
-	                                    llvm::Type::getVoidTy (ctx), ptr, ptr);
-}
-
-/// The runtime's allocator for a zero-based one-dimensional array, taking the vtable of
-/// the array class rather than of its elements.
-///
-/// This is the raising form rather than mono_array_new_specific_checked: it reports a
-/// failed allocation by throwing it, so there is no MonoError for generated code to
-/// carry, inspect and re-raise.
-llvm::FunctionCallee
-array_new_decl (llvm::Module *module)
-{
-	llvm::LLVMContext &ctx = module->getContext ();
-	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
-	llvm::FunctionCallee callee =
-		module->getOrInsertFunction ("mono_array_new_specific", ptr, ptr,
-	                                     llvm::Type::getIntNTy (ctx, TARGET_SIZEOF_VOID_P * 8));
-
-	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
-		/*
-		 * What LLVM needs to reason about a fresh object: the result aliases nothing
-		 * that existed before the call, and its storage arrives zeroed, so the
-		 * zeroing the CLI promises for a new array does not have to be re-emitted or
-		 * re-read. allockind additionally makes it an allocation as far as
-		 * MemoryBuiltins is concerned, which is what an elision pass looks for.
-		 *
-		 * Deliberately not nounwind: this throws OutOfMemoryException, and claiming
-		 * otherwise is what would let a surrounding handler be optimized away.
-		 *
-		 * allockind alone is enough for LLVM to delete an allocation whose result is
-		 * never used, unwinding or not. That is a real choice rather than a free win:
-		 * it says a failure nothing could observe the result of did not need to
-		 * happen, so an array allocated and dropped no longer reports OOM.
-		 */
-		llvm::AttrBuilder allocator (ctx);
-
-		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc | llvm::AllocFnKind::Zeroed);
-		allocator.addAttribute ("alloc-family", "mono_gc");
-
-		function->addRetAttr (llvm::Attribute::NoAlias);
-		function->addFnAttrs (allocator);
-	}
-
-	return callee;
-}
-
-} // namespace
-
 /// The built-in type the suffixed forms of ldelem, stelem, ldind and stind carry in
 /// the opcode.
 MonoType *
@@ -436,12 +377,20 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 
 	/*
 	 * The element type is the opcode's, but what the array actually holds is only
-	 * known at run time, so storing a reference has to ask before it writes - that is
-	 * the ArrayTypeMismatchException the spec lists, and the check throws it itself
-	 * rather than reporting back.
+	 * known at run time, so storing a reference has to ask before it writes - that
+	 * is the ArrayTypeMismatchException the spec lists. The check leaves it
+	 * pending, so it goes through the wrapper whose check throws it.
 	 */
-	if (mini_type_is_reference (element))
-		emit_protected_call (builder, stelem_check_decl (module), {array.value, *value});
+	if (mini_type_is_reference (element)) {
+		llvm::Expected<llvm::Function *> check =
+			icall_wrapper_decl (MONO_JIT_ICALL_mono_helper_stelem_ref_check);
+
+		if (!check)
+			return check.takeError ();
+		emit_protected_call (builder, *check,
+		                     adapt_to_callee (builder, *check,
+		                                      {array.value, *value}));
+	}
 
 	llvm::Expected<llvm::Value *> address =
 		element_address (builder, array, get_stack (1), element);
@@ -521,9 +470,36 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 
 	MonoClass *array =
 		mono_class_create_array (mono_class_from_mono_type_internal (*element), 1);
+
+	/*
+	 * Through the allocator's wrapper: it reports a failed allocation as a
+	 * pending OutOfMemoryException, which only the wrapper's check throws. The
+	 * result aliases nothing older than the call and arrives zeroed, and
+	 * allockind lets an array nothing observes be elided outright - that is a
+	 * real choice: an allocation whose failure nothing could observe did not
+	 * need to happen. Deliberately not nounwind.
+	 */
+	llvm::Expected<llvm::Function *> allocate =
+		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
+
+	if (!allocate)
+		return allocate.takeError ();
+
+	{
+		llvm::AttrBuilder allocator (context ());
+
+		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc
+		                            | llvm::AllocFnKind::Zeroed);
+		allocator.addAttribute ("alloc-family", "mono_gc");
+		(*allocate)->addRetAttr (llvm::Attribute::NoAlias);
+		(*allocate)->addFnAttrs (allocator);
+	}
+
 	llvm::Value *created = emit_protected_call (
-		builder, array_new_decl (module),
-		{class_symbol (array, "mono_vtable_"), builder.CreateSExtOrTrunc (length, native)});
+		builder, *allocate,
+		adapt_to_callee (builder, *allocate,
+	                         {class_symbol (array, "mono_vtable_"),
+	                          builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
 
 	pop_stack (1);
 	push_stack (created, m_class_get_byval_arg (array));

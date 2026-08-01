@@ -8,23 +8,6 @@
 
 namespace mono {
 
-namespace {
-
-/// The runtime's cast test. Both forms take a per-call-site cache slot they fill with
-/// the last vtable that answered, so a monomorphic site settles into one comparison;
-/// the castclass form reports a failed cast as InvalidCastException where the isinst
-/// form returns null.
-llvm::FunctionCallee
-cast_decl (llvm::Module *module, const char *name)
-{
-	llvm::LLVMContext &ctx = module->getContext ();
-	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
-
-	return module->getOrInsertFunction (name, ptr, ptr, ptr, ptr);
-}
-
-} // namespace
-
 /*
  * III.4.3  castclass - cast an object to a class
  *
@@ -141,11 +124,24 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 		*module, ptr, false, llvm::GlobalValue::InternalLinkage,
 		llvm::ConstantPointerNull::get (llvm::cast<llvm::PointerType> (ptr)), "cast_cache");
 
+	/*
+	 * The runtime's cast test, through its wrapper: both forms take a
+	 * per-call-site cache slot they fill with the last vtable that answered,
+	 * so a monomorphic site settles into one comparison. The castclass form
+	 * reports a failed cast as a pending InvalidCastException, which only the
+	 * wrapper's check turns into a throw.
+	 */
+	llvm::Expected<llvm::Function *> test = icall_wrapper_decl (
+		throw_on_fail ? MONO_JIT_ICALL_mono_object_castclass_with_cache
+	                      : MONO_JIT_ICALL_mono_object_isinst_with_cache);
+
+	if (!test)
+		return test.takeError ();
+
 	llvm::Value *result = emit_protected_call (
-		builder,
-		cast_decl (module, throw_on_fail ? "mono_object_castclass_with_cache"
-	                                         : "mono_object_isinst_with_cache"),
-		{obj.value, class_symbol (klass, "mono_class_"), cache});
+		builder, *test,
+		adapt_to_callee (builder, *test,
+	                         {obj.value, class_symbol (klass, "mono_class_"), cache}));
 
 	/*
 	 * A value-type token means the boxed form, so what comes back is still an

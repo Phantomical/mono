@@ -11,31 +11,30 @@
 
 namespace mono {
 
-/// The runtime's allocator for a plain object of a known class, by its vtable.
+/// The runtime's allocator for a plain object of a known class, by its vtable -
+/// through its wrapper, whose check turns a pending OutOfMemoryException into a
+/// throw.
 ///
-/// The raising form, like mono_array_new_specific, and carrying the same allocation
-/// attributes: the result aliases nothing older than the call and arrives zeroed, and
-/// allockind lets an object nothing observes be elided outright. Deliberately not
-/// nounwind - it throws OutOfMemoryException.
-llvm::FunctionCallee
+/// The allocation attributes: the result aliases nothing older than the call and
+/// arrives zeroed, and allockind lets an object nothing observes be elided
+/// outright. Deliberately not nounwind - it throws.
+llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
 {
-	llvm::LLVMContext &ctx = context ();
-	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
-	llvm::FunctionCallee callee =
-		module->getOrInsertFunction ("mono_object_new_specific", ptr, ptr);
+	llvm::Expected<llvm::Function *> wrapper =
+		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_object_new_specific);
 
-	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
-		llvm::AttrBuilder allocator (ctx);
+	if (!wrapper)
+		return wrapper;
 
-		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc | llvm::AllocFnKind::Zeroed);
-		allocator.addAttribute ("alloc-family", "mono_gc");
+	llvm::AttrBuilder allocator (context ());
 
-		function->addRetAttr (llvm::Attribute::NoAlias);
-		function->addFnAttrs (allocator);
-	}
+	allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc | llvm::AllocFnKind::Zeroed);
+	allocator.addAttribute ("alloc-family", "mono_gc");
 
-	return callee;
+	(*wrapper)->addRetAttr (llvm::Attribute::NoAlias);
+	(*wrapper)->addFnAttrs (allocator);
+	return wrapper;
 }
 
 /// The address of the value held inside OBJ, after throwing InvalidCastException
@@ -130,13 +129,20 @@ MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klas
 	if (!vret)
 		return vret.takeError ();
 
+	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
+	if (!abi)
+		return abi.takeError ();
+
 	llvm::Value *result = emit_protected_call (builder, *declaration, *args);
+
+	apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
 
 	if (*vret != nullptr)
 		result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (), *vret,
 		                                    (*vret)->getAlign ());
 
 	pop_stack (1);
+	result = decoerce_vtype_return (builder, result, sig->ret, **abi);
 	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
 	return llvm::Error::success ();
 }
@@ -216,21 +222,31 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	if (!value)
 		return value.takeError ();
 
-	llvm::Value *obj = box_value (builder, klass, *type, *value);
+	llvm::Expected<llvm::Value *> obj = box_value (builder, klass, *type, *value);
+
+	if (!obj)
+		return obj.takeError ();
 
 	pop_stack (1);
-	push_stack (obj, mono_get_object_type ());
+	push_stack (*obj, mono_get_object_type ());
 	return llvm::Error::success ();
 }
 
 /// Allocate KLASS's box and copy VALUE, already in its location type, into the
 /// payload, returning the new object.
-llvm::Value *
+llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
                               llvm::Value *value)
 {
-	llvm::Value *obj = emit_protected_call (builder, object_new_decl (),
-	                                        {class_symbol (klass, "mono_vtable_")});
+	llvm::Expected<llvm::Function *> allocate = object_new_decl ();
+
+	if (!allocate)
+		return allocate.takeError ();
+
+	llvm::Value *obj = emit_protected_call (
+		builder, *allocate,
+		adapt_to_callee (builder, *allocate,
+	                         {class_symbol (klass, "mono_vtable_")}));
 	llvm::Value *payload = builder.CreateGEP (builder.getInt8Ty (), obj,
 	                                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 

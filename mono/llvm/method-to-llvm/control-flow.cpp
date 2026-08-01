@@ -79,6 +79,27 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 		return llvm::Error::success ();
 	}
 
+	/*
+	 * A value type that comes back in registers leaves as its travel type: the
+	 * value's bytes reread as the register words the convention fills.
+	 */
+	llvm::Expected<const SignatureABI *> abi =
+		lower_signature (mono_method_signature_internal (method));
+
+	if (!abi)
+		return abi.takeError ();
+
+	if ((*abi)->ret_coerced != nullptr) {
+		MonoIrBuilder entry (entry_block, entry_block->begin ());
+		llvm::AllocaInst *temp = entry.CreateAlloca ((*abi)->ret_coerced);
+
+		temp->setAlignment (std::max (type_alignment (ret), llvm::Align (8)));
+		builder.CreateAlignedStore (*value, temp, temp->getAlign ());
+		builder.CreateRet (builder.CreateAlignedLoad ((*abi)->ret_coerced, temp,
+		                                              temp->getAlign ()));
+		return llvm::Error::success ();
+	}
+
 	builder.CreateRet (*value);
 	return llvm::Error::success ();
 }

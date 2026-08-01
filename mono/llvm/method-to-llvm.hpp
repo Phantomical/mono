@@ -24,6 +24,7 @@
 #include <llvm/Support/Error.h>
 #include <llvm/IR/Module.h>
 
+#include <memory>
 #include <string>
 
 namespace mono {
@@ -265,11 +266,54 @@ private:
 	}
 
 	llvm::Expected<llvm::Function *> create_method_decl (MonoMethod *method);
+	llvm::Expected<llvm::Function *> icall_wrapper_decl (MonoJitICallId id);
+	std::vector<llvm::Value *> adapt_to_callee (MonoIrBuilder &builder,
+	                                            llvm::Function *callee,
+	                                            llvm::ArrayRef<llvm::Value *> args);
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig);
 	static bool returns_by_address (MonoMethodSignature *sig);
 	static unsigned vret_arg_index (MonoMethodSignature *sig);
 	llvm::Expected<llvm::AllocaInst *> insert_vret_arg (MonoMethodSignature *sig,
 	                                                    std::vector<llvm::Value *> &args);
+
+	/// How one argument travels in the runtime's calling convention.
+	struct ArgABI {
+		enum Kind {
+			Direct,  ///< the converted type itself: scalars, references, pointers
+			Coerced, ///< a value type travelling as register-sized words
+			Memory,  ///< a value type copied onto the stack: a byval pointer
+		} kind = Direct;
+		llvm::Type *travel = nullptr; ///< the IR parameter type
+		llvm::Type *memory = nullptr; ///< the byval pointee when kind is Memory
+	};
+
+	/// A signature's lowering: what mini's get_call_info decides, restated as the
+	/// IR types each value travels as.
+	struct SignatureABI {
+		llvm::FunctionType *type = nullptr;
+		std::vector<ArgABI> args; ///< [this?, params...] - no vret entry
+		/// A value-type return travelling in registers travels as this.
+		llvm::Type *ret_coerced = nullptr;
+		bool ret_by_address = false;
+		unsigned vret_index = 0;
+
+		/// The IR parameter index of logical argument ARG, stepping over the
+		/// return slot's parameter where the convention inserts one.
+		unsigned param_index (unsigned arg) const {
+			return ret_by_address && arg >= vret_index ? arg + 1 : arg;
+		}
+	};
+
+	llvm::DenseMap<MonoMethodSignature *, std::unique_ptr<SignatureABI>> signature_abis;
+
+	llvm::Expected<const SignatureABI *> lower_signature (MonoMethodSignature *sig);
+	static void apply_arg_abi (llvm::CallBase *call, const SignatureABI &abi,
+	                           unsigned leading);
+	static void apply_arg_abi (llvm::Function *fn, const SignatureABI &abi);
+	llvm::Value *coerce_vtype_arg (MonoIrBuilder &builder, llvm::Value *value,
+	                               MonoType *mtype, const ArgABI &abi);
+	llvm::Value *decoerce_vtype_return (MonoIrBuilder &builder, llvm::Value *result,
+	                                    MonoType *ret, const SignatureABI &abi);
 
 	llvm::Expected<llvm::Type *> convert_type (MonoType *t);
 	llvm::Expected<llvm::Type *> convert_vtype (MonoType *t);
@@ -405,7 +449,8 @@ private:
 
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
 	llvm::Expected<std::vector<llvm::Value *>>
-	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
+	                    MonoMethodSignature *lowered_as = nullptr, unsigned skip = 0);
 	llvm::Value *vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver,
 	                           int32_t offset);
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
@@ -418,6 +463,7 @@ private:
 	bool matching_call_abi (MonoMethodSignature *callee_sig, llvm::FunctionType *callee_type);
 	llvm::Error emit_jmp (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+	                            const SignatureABI &abi,
 	                            llvm::ArrayRef<llvm::Value *> args, size_t arg_slots);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
@@ -451,8 +497,9 @@ private:
 	llvm::Error emit_mono_atomic_store_i4 (MonoIrBuilder &builder, uint32_t barrier);
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
-	void emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
-	llvm::Value *static_field_address (MonoIrBuilder &builder, MonoClassField *field);
+	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
+	llvm::Expected<llvm::Value *> static_field_address (MonoIrBuilder &builder,
+	                                                    MonoClassField *field);
 	static MonoType *builtin_element_type (int opcode);
 	llvm::Expected<MonoType *> element_type_from_token (uint32_t token);
 	llvm::Expected<llvm::Value *> array_length (MonoIrBuilder &builder, StackValue array);
@@ -469,12 +516,12 @@ private:
 	llvm::Error emit_ldind (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
 	llvm::FunctionCallee value_copy_decl ();
-	llvm::FunctionCallee object_new_decl ();
+	llvm::Expected<llvm::Function *> object_new_decl ();
 	llvm::Value *unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
 	                            MonoClass *klass);
 	llvm::Error call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
 	                                  const char *name);
-	llvm::Value *box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
+	llvm::Expected<llvm::Value *> box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
 	                        llvm::Value *value);
 	llvm::Error emit_newobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,

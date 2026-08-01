@@ -1331,16 +1331,19 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	if (sig->hasthis)
 		names[0] = "this";
 
+	llvm::Expected<const SignatureABI *> abir = lower_signature (sig);
+	if (!abir)
+		return abir.takeError ();
+
+	const SignatureABI &abi = **abir;
+
 	/*
 	 * A return that travels by address is a parameter of the IR function but
 	 * not an argument of the method: it sits at the convention's position and
 	 * everything from there on shifts along by one.
 	 */
-	bool by_address = returns_by_address (sig);
-	unsigned vret_at = by_address ? vret_arg_index (sig) : ~0u;
-
-	if (by_address)
-		vret_param = function->getArg (vret_at);
+	if (abi.ret_by_address)
+		vret_param = function->getArg (abi.vret_index);
 
 	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);
@@ -1349,13 +1352,36 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 			return ltyper.takeError ();
 		auto ltype = ltyper.get ();
 
-		auto alloca = builder.CreateAlloca (ltype, nullptr, names[i]);
-		alloca->setAlignment (type_alignment (mtype));
+		llvm::Argument *param = function->getArg (abi.param_index (i));
 
-		unsigned param = by_address && i >= vret_at ? i + 1 : i;
+		/*
+		 * A stack-copied value type already has a home: the byval copy the
+		 * caller made is this frame's own, so the argument reads and writes
+		 * it in place.
+		 */
+		if (abi.args[i].kind == ArgABI::Memory) {
+			args.push_back ({
+				.alloca = param,
+				.type = mtype,
+			});
+			continue;
+		}
 
-		builder.CreateAlignedStore (function->getArg (param), alloca,
-		                            alloca->getAlign ());
+		/*
+		 * A coerced value type arrives as register words wider than the
+		 * value can be, so its home is sized for the words; every later
+		 * access reads it as the value's own type through the pointer.
+		 */
+		llvm::Type *home = abi.args[i].kind == ArgABI::Coerced
+		                           ? abi.args[i].travel
+		                           : ltype;
+		auto alloca = builder.CreateAlloca (home, nullptr, names[i]);
+
+		alloca->setAlignment (abi.args[i].kind == ArgABI::Coerced
+		                              ? std::max (type_alignment (mtype),
+		                                          llvm::Align (8))
+		                              : type_alignment (mtype));
+		builder.CreateAlignedStore (param, alloca, alloca->getAlign ());
 
 		args.push_back ({
 			.alloca = alloca,

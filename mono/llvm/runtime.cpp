@@ -78,26 +78,12 @@ struct Helper {
 std::vector<Helper>
 runtime_helpers ()
 {
-	/*
-	 * Two allocators here are marked deprecated for the runtime to call. This is
-	 * not a call: generated code reaches them the same way mini's icall tables
-	 * do, by their address.
-	 */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 	return {
-		{ "mono_array_new_specific", (void *) &mono_array_new_specific },
-		{ "mono_array_new_n_icall", (void *) &mono_array_new_n_icall },
-		{ "mono_class_static_field_address",
-		  (void *) &mono_class_static_field_address },
 		{ "mono_domain_get", (void *) &mono_domain_get },
 		{ "mono_gc_wbarrier_generic_store_internal",
 		  (void *) &mono_gc_wbarrier_generic_store_internal },
 		{ "mono_gc_wbarrier_value_copy_internal",
 		  (void *) &mono_gc_wbarrier_value_copy_internal },
-		{ "mono_generic_class_init", (void *) &mono_generic_class_init },
-		{ "mono_helper_stelem_ref_check", (void *) &mono_helper_stelem_ref_check },
-		{ "mono_ldvirtfn", (void *) &mono_ldvirtfn },
 
 		/*
 		 * The throw path. These are mono's own throw trampolines: they
@@ -120,11 +106,6 @@ runtime_helpers ()
 			  MONO_JIT_ICALL_mono_llvm_resume_unwind_trampoline)
 			  ->func },
 
-		{ "mono_object_castclass_with_cache",
-		  (void *) &mono_object_castclass_with_cache },
-		{ "mono_object_isinst_with_cache", (void *) &mono_object_isinst_with_cache },
-		{ "mono_object_new_specific", (void *) &mono_object_new_specific },
-
 		/*
 		 * The personality routine a landing pad names. Generated code never
 		 * calls it; the unwinder does, on the way through a frame that has a
@@ -142,7 +123,6 @@ runtime_helpers ()
 		{ "memmove", (void *) &memmove },
 		{ "memset", (void *) &memset },
 	};
-#pragma GCC diagnostic pop
 }
 
 /*

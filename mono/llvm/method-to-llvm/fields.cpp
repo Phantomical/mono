@@ -137,16 +137,21 @@ MethodLLVMEmitter::field_symbol (MonoClassField *field)
 /// every access is one that a later pass can take back out - and it has to be emitted
 /// every time, because a vtable is not observably initialized even to the thread that
 /// just initialized it.
-void
+llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
-	llvm::LLVMContext &ctx = context ();
-	llvm::FunctionCallee init =
-		module->getOrInsertFunction ("mono_generic_class_init", llvm::Type::getVoidTy (ctx),
-	                                     llvm::PointerType::get (ctx, 0));
+	/* Through the wrapper: a cctor can throw, and the failure is pending until
+	 * the wrapper's check turns it into a real one. */
+	llvm::Expected<llvm::Function *> init =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_generic_class_init);
 
-	/* A cctor can throw, so inside a try region this has to be able to unwind. */
-	emit_protected_call (builder, init, {class_symbol (klass, "mono_vtable_")});
+	if (!init)
+		return init.takeError ();
+
+	emit_protected_call (builder, *init,
+	                     adapt_to_callee (builder, *init,
+	                                      {class_symbol (klass, "mono_vtable_")}));
+	return llvm::Error::success ();
 }
 
 /// Where FIELD lives inside the object on top of the stack.
@@ -186,7 +191,7 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object, Mon
 /// block at the field's offset. A thread- or context-local static does not - the
 /// offset it records is a per-thread lookup cookie - so its address has to come from
 /// the runtime, on every access.
-llvm::Value *
+llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField *field)
 {
 	if (mono_class_field_is_special_static (field)) {
@@ -194,12 +199,20 @@ MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField 
 		llvm::Value *domain = builder.CreateCall (
 			module->getOrInsertFunction ("mono_domain_get", ptr));
 		llvm::Constant *symbol = field_symbol (field);
+		llvm::Expected<llvm::Function *> lookup =
+			icall_wrapper_decl (MONO_JIT_ICALL_mono_class_static_field_address);
 
-		return emit_protected_call (
-			builder,
-			module->getOrInsertFunction ("mono_class_static_field_address", ptr,
-		                                     ptr, ptr),
-			{domain, symbol});
+		if (!lookup)
+			return lookup.takeError ();
+
+		llvm::Value *address = emit_protected_call (
+			builder, *lookup,
+			adapt_to_callee (builder, *lookup, {domain, symbol}));
+
+		/* The signature says native int; every user here wants the pointer. */
+		if (!address->getType ()->isPointerTy ())
+			address = builder.CreateIntToPtr (address, ptr);
+		return address;
 	}
 
 	/* A static's offset is into the block itself, so there is no header to discount. */
@@ -481,10 +494,14 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	if (!type)
 		return type.takeError ();
 
-	emit_class_init (builder, (*field)->parent);
+	if (llvm::Error error = emit_class_init (builder, (*field)->parent))
+		return error;
 
-	llvm::Value *address = static_field_address (builder, *field);
-	llvm::Value *value = emit_memory_load (builder, *type, address, ftype);
+	llvm::Expected<llvm::Value *> address = static_field_address (builder, *field);
+	if (!address)
+		return address.takeError ();
+
+	llvm::Value *value = emit_memory_load (builder, *type, *address, ftype);
 
 	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
 	return llvm::Error::success ();
@@ -548,11 +565,16 @@ MethodLLVMEmitter::emit_ldsflda (MonoIrBuilder &builder, uint32_t token)
 	 * Whoever takes the address is about to touch the field, so the class has to be
 	 * as initialized here as it would be for the load itself.
 	 */
-	emit_class_init (builder, (*field)->parent);
+	if (llvm::Error error = emit_class_init (builder, (*field)->parent))
+		return error;
 
 	MonoType *ftype = mono_field_get_type_internal (*field);
+	llvm::Expected<llvm::Value *> address = static_field_address (builder, *field);
 
-	push_stack (static_field_address (builder, *field),
+	if (!address)
+		return address.takeError ();
+
+	push_stack (*address,
 	            m_class_get_this_arg (mono_class_from_mono_type_internal (ftype)));
 	return llvm::Error::success ();
 }
@@ -603,12 +625,16 @@ MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
 	if (!value)
 		return value.takeError ();
 
-	emit_class_init (builder, (*field)->parent);
+	if (llvm::Error error = emit_class_init (builder, (*field)->parent))
+		return error;
 
-	llvm::Value *address = static_field_address (builder, *field);
+	llvm::Expected<llvm::Value *> address = static_field_address (builder, *field);
+
+	if (!address)
+		return address.takeError ();
 
 	pop_stack (1);
-	emit_memory_store (builder, *value, address, ftype);
+	emit_memory_store (builder, *value, *address, ftype);
 	return llvm::Error::success ();
 }
 

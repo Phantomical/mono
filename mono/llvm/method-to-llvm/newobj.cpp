@@ -97,6 +97,10 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	if (stack.size () < count)
 		return unbalanced_stack (count);
 
+	llvm::Expected<const SignatureABI *> abi = lower_signature (sig);
+	if (!abi)
+		return abi.takeError ();
+
 	/*
 	 * The constructor sees the fresh instance as argument 0 and the operands
 	 * follow, so the stack unwinds into positions 1..N.
@@ -109,7 +113,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 		if (!converted)
 			return converted.takeError ();
-		args[i + 1] = *converted;
+		args[i + 1] = coerce_vtype_arg (builder, *converted, sig->params[i],
+		                                (*abi)->args[i + 1]);
 	}
 
 	MonoType *pushed = m_class_get_byval_arg (klass);
@@ -128,6 +133,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 		llvm::Value *result = emit_protected_call (builder, *declaration, args);
 
+		apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
 		pop_stack (count);
 		push_stack (result, pushed);
 		return llvm::Error::success ();
@@ -151,12 +157,21 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		                      mono_class_value_size (klass, NULL), align);
 		args[0] = temp;
 	} else {
-		created = emit_protected_call (builder, object_new_decl (),
-		                               {class_symbol (klass, "mono_vtable_")});
+		llvm::Expected<llvm::Function *> allocate = object_new_decl ();
+
+		if (!allocate)
+			return allocate.takeError ();
+
+		created = emit_protected_call (
+			builder, *allocate,
+			adapt_to_callee (builder, *allocate,
+		                         {class_symbol (klass, "mono_vtable_")}));
 		args[0] = created;
 	}
 
-	emit_protected_call (builder, *declaration, args);
+	llvm::Value *ctor_call = emit_protected_call (builder, *declaration, args);
+
+	apply_arg_abi (llvm::cast<llvm::CallBase> (ctor_call), **abi, 0);
 	pop_stack (count);
 
 	if (temp != nullptr)
@@ -209,7 +224,6 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 		                   "a length, per dimension");
 
 	llvm::LLVMContext &ctx = context ();
-	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
 	llvm::Type *word = llvm::Type::getIntNTy (ctx, TARGET_SIZEOF_VOID_P * 8);
 
 	std::vector<llvm::Value *> operands (count);
@@ -229,18 +243,25 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 
 	if (count == rank && count <= 4 && int32_lengths) {
 		/* One int32 length per dimension, few enough of them: the direct icalls. */
-		std::vector<llvm::Type *> params (count + 1, builder.getInt32Ty ());
+		constexpr MonoJitICallId by_rank[] = {
+			MONO_JIT_ICALL_mono_array_new_1,
+			MONO_JIT_ICALL_mono_array_new_2,
+			MONO_JIT_ICALL_mono_array_new_3,
+			MONO_JIT_ICALL_mono_array_new_4,
+		};
+		llvm::Expected<llvm::Function *> allocate =
+			icall_wrapper_decl (by_rank[count - 1]);
 
-		params[0] = ptr;
+		if (!allocate)
+			return allocate.takeError ();
+		mark_gc_allocator (*allocate);
 
-		llvm::FunctionCallee callee = mark_gc_allocator (module->getOrInsertFunction (
-			"mono_array_new_" + std::to_string (count),
-			llvm::FunctionType::get (ptr, params, false)));
 		std::vector<llvm::Value *> args (count + 1);
 
 		args[0] = method_symbol (ctor);
 		std::copy (operands.begin (), operands.end (), args.begin () + 1);
-		result = emit_protected_call (builder, callee, args);
+		result = emit_protected_call (builder, *allocate,
+		                              adapt_to_callee (builder, *allocate, args));
 	} else {
 		/*
 		 * mono_array_new_n_icall wants the lower bounds first and the lengths
@@ -266,13 +287,19 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 				llvm::Align (TARGET_SIZEOF_VOID_P));
 		}
 
-		llvm::FunctionCallee callee = mark_gc_allocator (module->getOrInsertFunction (
-			"mono_array_new_n_icall", ptr, ptr, builder.getInt32Ty (), ptr));
+		llvm::Expected<llvm::Function *> allocate =
+			icall_wrapper_decl (MONO_JIT_ICALL_mono_array_new_n_icall);
 
-		result = emit_protected_call (builder, callee,
-		                              {method_symbol (ctor),
-		                               builder.getInt32 (static_cast<uint32_t> (count)),
-		                               buffer});
+		if (!allocate)
+			return allocate.takeError ();
+		mark_gc_allocator (*allocate);
+
+		result = emit_protected_call (
+			builder, *allocate,
+			adapt_to_callee (builder, *allocate,
+		                         {method_symbol (ctor),
+		                          builder.getInt32 (static_cast<uint32_t> (count)),
+		                          buffer}));
 	}
 
 	pop_stack (count);

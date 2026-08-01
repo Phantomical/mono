@@ -485,7 +485,7 @@ TEST_F (TranslatorTest, NewarrCallsTheAllocatorWithTheArrayVtable)
 	const Translation &t = translate ("arrays", "Arrays:Make");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_GE (t.count ("mono_array_new_specific"), 1u);
+	EXPECT_GE (t.count ("ves_icall_array_new_specific"), 1u);
 	EXPECT_GE (t.count ("mono_vtable_"), 1u);
 }
 
@@ -503,8 +503,12 @@ TEST_F (TranslatorTest, ArrayNewobjCallsTheRuntimeArrayIcalls)
 	EXPECT_EQ (two.count ("mono_array_new_2"), 1u) << two.text ();
 	EXPECT_GE (two.count ("mono_method_"), 1u);
 
-	/* The icall is a GC allocation and carries the allocator attributes. */
-	llvm::Function *allocator = two.module->getFunction ("mono_array_new_2");
+	/* The icall is a GC allocation and carries the allocator attributes. The
+	 * call goes through the icall wrapper, whose name decorates the icall's. */
+	llvm::Function *allocator = nullptr;
+	for (llvm::Function &f : *two.module)
+		if (f.getName ().contains ("mono_array_new_2"))
+			allocator = &f;
 	ASSERT_NE (allocator, nullptr);
 	EXPECT_TRUE (allocator->hasRetAttribute (llvm::Attribute::NoAlias));
 	EXPECT_TRUE (allocator->hasFnAttribute (llvm::Attribute::AllocKind));
@@ -742,7 +746,7 @@ TEST_F (TranslatorTest, BoxAllocatesWithTheVtableAndStoresTheValue)
 	const Translation &t = translate ("boxing", "Boxing:BoxInt");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("mono_object_new_specific"), 1u);
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 1u);
 	/* mono_type_full_name spells System.Int32 as "int". */
 	EXPECT_EQ (t.count ("mono_vtable_int"), 1u);
 }
@@ -753,7 +757,7 @@ TEST_F (TranslatorTest, BoxOnAReferenceTypeAllocatesNothing)
 	const Translation &t = translate ("boxing", "Boxing:BoxObject");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 }
 
 // A struct with a reference inside cannot be memcpy'd into the box: the copy has to
@@ -797,7 +801,7 @@ TEST_F (TranslatorTest, BoxingANullableCallsTheCorlibHelper)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("Nullable`1<int>:Box"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 }
 
 TEST_F (TranslatorTest, UnboxAnyOnANullableCallsUnbox)
@@ -940,7 +944,7 @@ TEST_F (TranslatorTest, ConstrainedResolvesTheReceiver)
 
 	ASSERT_NE (on_struct.function, nullptr) << on_struct.error;
 	EXPECT_GE (on_struct.count ("Wrapped:ToString"), 1u) << on_struct.text ();
-	EXPECT_EQ (on_struct.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (on_struct.count ("ves_icall_object_new_specific"), 0u);
 }
 
 // A value type that does not override the method boxes its receiver: the value loads
@@ -953,13 +957,13 @@ TEST_F (TranslatorTest, ConstrainedCallOnANonOverridingStructBoxes)
 	const Translation &buried = translate ("prefixed", "Prefixed:ConstrainedBoxesWithArg");
 
 	ASSERT_NE (plain.function, nullptr) << plain.error;
-	EXPECT_EQ (plain.count ("mono_object_new_specific"), 1u) << plain.text ();
+	EXPECT_EQ (plain.count ("ves_icall_object_new_specific"), 1u) << plain.text ();
 	EXPECT_EQ (plain.count ("mono_vtable_Bare"), 1u);
 	/* Dispatch stays virtual: the target comes off the box's vtable, never named. */
 	EXPECT_EQ (plain.count ("call ptr @\"System.Object:ToString"), 0u);
 
 	ASSERT_NE (buried.function, nullptr) << buried.error;
-	EXPECT_EQ (buried.count ("mono_object_new_specific"), 1u) << buried.text ();
+	EXPECT_EQ (buried.count ("ves_icall_object_new_specific"), 1u) << buried.text ();
 }
 
 /* ---------------------------------------------------------- method pointers */
@@ -1034,7 +1038,7 @@ TEST_F (TranslatorTest, NewobjAllocatesThenCallsTheConstructor)
 	const Translation &t = translate ("objects", "Objects:MakeCounterAt");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("mono_object_new_specific"), 1u);
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 1u);
 	EXPECT_EQ (t.count ("mono_vtable_Counter"), 1u);
 	EXPECT_GE (t.count ("Counter:.ctor"), 1u);
 }
@@ -1046,7 +1050,7 @@ TEST_F (TranslatorTest, ValueTypeNewobjConstructsInATemp)
 	const Translation &t = translate ("objects", "Objects:MakePoint");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 	EXPECT_EQ (t.count ("llvm.memset"), 1u);
 	EXPECT_GE (t.count ("Point:.ctor"), 1u);
 }
@@ -1059,7 +1063,7 @@ TEST_F (TranslatorTest, StringNewobjCallsTheCreatorWithANullThis)
 	const Translation &t = translate ("objects", "Objects:MakeString");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 	EXPECT_EQ (t.count ("call ptr @\"string:.ctor"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("(ptr null"), 1u);
 
@@ -1146,7 +1150,7 @@ TEST_F (TranslatorTest, UnboxAnyOnAReferenceTypeIsACast)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u);
-	EXPECT_EQ (t.count ("mono_object_new_specific"), 0u);
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 }
 
 /* --------------------------------------------------------------- refusals */

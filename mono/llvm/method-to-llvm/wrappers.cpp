@@ -67,17 +67,23 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 	if (!args)
 		return args.takeError ();
 
+	llvm::Expected<const SignatureABI *> abi = lower_signature (info->sig);
+	if (!abi)
+		return abi.takeError ();
+
 	llvm::Constant *target =
 		address_symbol (std::string ("mono_icall_") + info->name,
 	                        const_cast<void *> (info->func));
 	llvm::Value *result =
 		emit_protected_call (builder, llvm::FunctionCallee (*type, target), *args);
 
+	apply_arg_abi (llvm::cast<llvm::CallBase> (result), **abi, 0);
 	pop_stack (info->sig->param_count);
 
 	if (info->sig->ret->type == MONO_TYPE_VOID && !info->sig->ret->byref)
 		return llvm::Error::success ();
 
+	result = decoerce_vtype_return (builder, result, info->sig->ret, **abi);
 	push_stack (widen_to_stack (builder, result, info->sig->ret),
 	            stack_slot_type (info->sig->ret));
 	return llvm::Error::success ();
