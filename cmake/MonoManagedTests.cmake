@@ -61,8 +61,11 @@ function(_mono_rewrite_fixture_flags out flags dir fixdir)
   set(${out} "${_result}" PARENT_SCOPE)
 endfunction()
 
-# Compiles a fixture assembly for one directory's suite.  Called from that
-# directory's extra.cmake, before the suite is materialized.
+set(MONO_TEST_FIXTURE_FIELDS
+    PROFILE ASSEMBLY NAME SOURCES REFS FLAGS PROGRAM IN_TESTS_DIR)
+
+# Declares a fixture assembly for one directory's suite.  Called from that
+# directory's extra.cmake.
 #
 #   mono_test_fixture_assembly(PROFILE <p> ASSEMBLY <lib.dll> NAME <fixture.dll>
 #                              SOURCES <file>... [REFS <assembly>...]
@@ -70,9 +73,57 @@ endfunction()
 #
 # IN_TESTS_DIR puts it beside the test assemblies instead, for the suites that
 # find it by looking next to themselves.
+#
+# Recorded here and built later, with the assemblies: REFS names a reference the
+# way a library does, and the map from a bare name to the target that produces
+# it is not filled in until every directory has been read.
 function(mono_test_fixture_assembly)
   cmake_parse_arguments(F "PROGRAM;IN_TESTS_DIR" "PROFILE;ASSEMBLY;NAME"
                         "SOURCES;REFS;FLAGS" ${ARGN})
+  # The sources are relative to the directory declaring them, which is not the
+  # directory this is built from.
+  set(_abs "")
+  foreach(_s IN LISTS F_SOURCES)
+    get_filename_component(_s "${_s}" ABSOLUTE)
+    list(APPEND _abs "${_s}")
+  endforeach()
+  set(F_SOURCES "${_abs}")
+
+  get_property(_n GLOBAL PROPERTY MONO_TEST_FIXTURE_COUNT)
+  if(NOT _n)
+    set(_n 0)
+  endif()
+  foreach(_f IN LISTS MONO_TEST_FIXTURE_FIELDS)
+    set_property(GLOBAL PROPERTY MONO_TEST_FIXTURE_${_n}_${_f} "${F_${_f}}")
+  endforeach()
+  math(EXPR _n "${_n} + 1")
+  set_property(GLOBAL PROPERTY MONO_TEST_FIXTURE_COUNT ${_n})
+
+  # The suite that embeds this asks for the target by name while it is being
+  # materialized, so the name is settled here rather than below.
+  _mono_stem(_stem "${F_NAME}")
+  _mono_stem(_astem "${F_ASSEMBLY}")
+  set_property(GLOBAL APPEND PROPERTY MONO_TEST_FIXTURES_${F_PROFILE}_${_astem}
+               "mcs-${F_PROFILE}-${_astem}-fixture-${_stem}")
+endfunction()
+
+# Turns every fixture declaration into a target.  Called once, from
+# mono_managed_materialize(), after the provider map exists.
+function(mono_test_fixtures_materialize)
+  get_property(_count GLOBAL PROPERTY MONO_TEST_FIXTURE_COUNT)
+  if(NOT _count)
+    return()
+  endif()
+  math(EXPR _last "${_count} - 1")
+  foreach(_i RANGE ${_last})
+    _mono_materialize_test_fixture(${_i})
+  endforeach()
+endfunction()
+
+function(_mono_materialize_test_fixture i)
+  foreach(_f IN LISTS MONO_TEST_FIXTURE_FIELDS)
+    get_property(F_${_f} GLOBAL PROPERTY MONO_TEST_FIXTURE_${i}_${_f})
+  endforeach()
   mono_profile_dir(_pdir ${F_PROFILE})
   mono_test_fixture_dir(_dir ${F_PROFILE} "${F_ASSEMBLY}")
   if(F_IN_TESTS_DIR)
@@ -91,16 +142,14 @@ function(mono_test_fixture_assembly)
   foreach(_r IN LISTS F_REFS ITEMS mscorlib)
     list(APPEND _refflags "-r:${_pdir}/${_r}.dll")
     get_property(_p GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${F_PROFILE}/${_r})
-    if(_p)
-      list(APPEND _deps "${_p}" "${_pdir}/${_r}.dll")
+    if(NOT _p)
+      message(FATAL_ERROR
+              "fixture ${F_NAME}: nothing produces ${_r} in profile ${F_PROFILE}")
     endif()
+    list(APPEND _deps "${_p}")
   endforeach()
 
-  set(_srcs "")
-  foreach(_s IN LISTS F_SOURCES)
-    get_filename_component(_s "${_s}" ABSOLUTE)
-    list(APPEND _srcs "${_s}")
-  endforeach()
+  set(_srcs ${F_SOURCES})
 
   _mono_csc_command(_csc ${F_PROFILE})
   _mono_csc_env(_env ${F_PROFILE})
@@ -121,8 +170,6 @@ function(mono_test_fixture_assembly)
     COMMENT "CSC [${F_PROFILE}] fixture ${F_NAME}"
     VERBATIM)
   add_custom_target(${_target} DEPENDS "${_out}")
-  set_property(GLOBAL APPEND PROPERTY
-               MONO_TEST_FIXTURES_${F_PROFILE}_${_astem} ${_target})
 endfunction()
 
 # Extra environment and build dependencies for one directory's suite, set from

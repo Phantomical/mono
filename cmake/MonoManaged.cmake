@@ -285,47 +285,71 @@ string(SUBSTRING "${_mono_pipe_hash}" 0 16 _mono_pipe_hash)
 set(MONO_MCS_PIPENAME "mono-${_mono_pipe_hash}" CACHE STRING
     "Roslyn compiler-server pipe name (per build directory)")
 
-# Assembles the argv for one managed tool.
+# Which runtime a managed tool runs on, for a compile of `profile`.
 #
-# The `build` profile is the odd one.  Its tools run on system mono with no
-# MONO_PATH, out of a `tmp/` directory holding nothing but themselves -- mono
-# resolves an assembly's dependencies from its own directory, and the normal
-# location is simultaneously being filled with this tree's mscorlib.dll, which
-# system mono cannot load.  Every other profile runs them on the runtime being
-# built, with MONO_PATH pointing at the bootstrap output.
-function(_mono_tool_command out profile tool)
-  mono_profile_dir(_builddir build)
+# The bootstrap profile is pinned to system mono whatever the configuration --
+# it is producing the first mscorlib, so it cannot be the runtime being built.
+# Every other profile follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS, csc and the
+# tools around it alike: leaving any one of them on the in-tree runtime would
+# put the entire class-library build, and every test corpus downstream of it,
+# back behind the native link.
+function(_mono_tool_host out profile)
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
-    set(${out} "${MONO_BOOTSTRAP_RUNTIME}" "${_builddir}/tmp/${tool}" PARENT_SCOPE)
+    set(${out} "${MONO_BOOTSTRAP_RUNTIME}" PARENT_SCOPE)
+  elseif(MONO_TOOLS_RUNTIME_IS_SYSTEM)
+    set(${out} "${MONO_TOOLS_RUNTIME_HOST}" PARENT_SCOPE)
   else()
-    set(${out} "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" "${_builddir}/${tool}" PARENT_SCOPE)
+    set(${out} "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" PARENT_SCOPE)
   endif()
 endfunction()
 
-# Tools for every profile but the bootstrap one run on the runtime this build
-# produces, so that runtime has to exist first.  The bootstrap profile runs on
-# system mono and depends on nothing here.
+# Assembles the argv for one managed tool.  Whichever profile is being compiled,
+# the tool itself comes out of the bootstrap one.
+#
+# The bootstrap profile reaches for a `tmp/` copy holding nothing but the tools
+# themselves: mono resolves an assembly's dependencies from its own directory,
+# and at that point the normal location is simultaneously being filled with this
+# tree's mscorlib.dll, which system mono cannot load.  Once the bootstrap
+# profile is finished that directory is safe to run out of, on either host.
+function(_mono_tool_command out profile tool)
+  mono_profile_dir(_builddir build)
+  _mono_tool_host(_host ${profile})
+  if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
+    set(${out} "${_host}" "${_builddir}/tmp/${tool}" PARENT_SCOPE)
+  else()
+    set(${out} "${_host}" "${_builddir}/${tool}" PARENT_SCOPE)
+  endif()
+endfunction()
+
+# The tools are bootstrap-profile programs, so that profile has to be finished
+# before any of them start.  On the runtime this build produces they need the
+# runtime as well, and everything it needs to get off the ground; on a system
+# mono they need none of that.
 function(_mono_tool_depends out profile)
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
     set(${out} "" PARENT_SCOPE)
-  else()
+    return()
+  endif()
+  set(_d mcs-build)
+  if(NOT MONO_TOOLS_RUNTIME_IS_SYSTEM)
     # mono-build-config is not optional: the wrapper points MONO_CFG_DIR at
     # the build tree's etc/, and without the dllmap in it every tool that
     # touches the filesystem dies with "DllNotFoundException: System.Native".
-    # The tools run on the bootstrap profile, with MONO_PATH pointing at it, so
-    # the whole of it has to be there before any of them start.
-    set(_d mono-${MONO_DEFAULT_GC_SUFFIX} mono-build-config mcs-build)
+    list(APPEND _d mono-${MONO_DEFAULT_GC_SUFFIX} mono-build-config)
     # The BCL's filesystem and networking layers P/Invoke into this, and the
     # dllmap names it by path in the build tree.
     if(MONO_ENABLE_MONO_NATIVE)
       list(APPEND _d mono-native)
     endif()
-    set(${out} ${_d} PARENT_SCOPE)
   endif()
+  set(${out} ${_d} PARENT_SCOPE)
 endfunction()
 
+# MONO_PATH is what the in-tree runtime needs to find the tools' dependencies in
+# the bootstrap output.  A system mono must not see it: that same directory
+# holds this tree's mscorlib.dll, which it refuses to load.
 function(_mono_tool_env out profile)
-  if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
+  if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER OR MONO_TOOLS_RUNTIME_IS_SYSTEM)
     set(${out} "" PARENT_SCOPE)
   else()
     mono_profile_dir(_builddir build)
@@ -333,17 +357,14 @@ function(_mono_tool_env out profile)
   endif()
 endfunction()
 
-# What csc itself runs on.  In the bootstrap profile that is always system mono
-# -- it is producing the first mscorlib, so it cannot be the runtime being
-# built.  Later profiles follow MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS.
+# csc follows the same rule, with a bigger nursery: it is the one tool here that
+# allocates enough for the default to cost real time.
 function(_mono_csc_command out profile)
+  _mono_tool_host(_host ${profile})
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
-    set(${out} "${MONO_BOOTSTRAP_RUNTIME}" "${MONO_CSC}" PARENT_SCOPE)
-  elseif(MONO_TOOLS_RUNTIME_IS_SYSTEM)
-    set(${out} "${MONO_CSC_HOST}" --gc-params=nursery-size=64m "${MONO_CSC}" PARENT_SCOPE)
+    set(${out} "${_host}" "${MONO_CSC}" PARENT_SCOPE)
   else()
-    set(${out} "${CMAKE_BINARY_DIR}/runtime/mono-wrapper"
-               --gc-params=nursery-size=64m "${MONO_CSC}" PARENT_SCOPE)
+    set(${out} "${_host}" --gc-params=nursery-size=64m "${MONO_CSC}" PARENT_SCOPE)
   endif()
 endfunction()
 
@@ -462,6 +483,10 @@ function(mono_managed_materialize)
   # for building one suite's inputs by hand.
   add_custom_target(mcs-tests ALL)
   add_custom_target(mcs-xunit-tests ALL)
+
+  # The fixtures resolve their references through the map above, so they wait
+  # for it too.
+  mono_test_fixtures_materialize()
 
   # Pass 2 -- the commands.
   foreach(_i RANGE ${_last})
@@ -981,14 +1006,19 @@ function(mono_generated_source)
   _mono_tool_depends(_deps ${G_PROFILE})
   _mono_target_name(_tooltgt ${G_TOOL_PROFILE} "" "${G_TOOL}")
   list(APPEND _deps ${_tooltgt})
+  # Same rule as every other tool, except that the app base is the tool's own
+  # profile rather than the bootstrap one, so _mono_tool_env() cannot name it.
+  _mono_tool_host(_host ${G_PROFILE})
+  set(_cmd "${_host}" "${_tooldir}/${G_TOOL}")
+  if(NOT MONO_PROFILE_${G_PROFILE}_BOOTSTRAP_COMPILER AND NOT MONO_TOOLS_RUNTIME_IS_SYSTEM)
+    set(_cmd "${CMAKE_COMMAND}" -E env "MONO_PATH=${_tooldir}" ${_cmd})
+  endif()
   get_filename_component(_name "${G_OUTPUT}" NAME)
   get_filename_component(_outdir "${G_OUTPUT}" DIRECTORY)
   add_custom_command(
     OUTPUT "${G_OUTPUT}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_outdir}"
-    COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_tooldir}"
-            "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" "${_tooldir}/${G_TOOL}"
-            ${G_ARGS}
+    COMMAND ${_cmd} ${G_ARGS}
     DEPENDS ${G_DEPENDS} ${_deps}
     COMMENT "GEN     [${G_PROFILE}] ${_name}"
     VERBATIM)
