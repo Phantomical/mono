@@ -1059,7 +1059,9 @@ function(mono_add_il_module)
   _mono_tool_depends(_rt ${I_PROFILE})
   add_custom_command(
     OUTPUT "${I_OUTPUT}"
-    COMMAND ${_cmd} ${_srcs} ${I_FLAGS} "/out:${I_OUTPUT}"
+    # /quiet drops the per-file banner and the success line; warnings and errors
+    # are printed either way.
+    COMMAND ${_cmd} /quiet ${_srcs} ${I_FLAGS} "/out:${I_OUTPUT}"
     DEPENDS ${_srcs} ${_ilasm_target} ${_rt}
     COMMENT "ILASM   [${I_PROFILE}] ${_name}"
     VERBATIM)

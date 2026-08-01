@@ -40,7 +40,9 @@ set(MONO_CORPUS_CSC ${_host}
     "-r:${MONO_CORPUS_CLASS_DIR}/mscorlib.dll"
     "-r:${MONO_CORPUS_CLASS_DIR}/System.dll"
     "-r:${MONO_CORPUS_CLASS_DIR}/System.Core.dll")
-set(MONO_CORPUS_ILASM ${_host} "${MONO_CORPUS_BUILD_DIR}/ilasm.exe")
+# -quiet drops the per-file banner and the success line; warnings and errors are
+# printed either way.
+set(MONO_CORPUS_ILASM ${_host} "${MONO_CORPUS_BUILD_DIR}/ilasm.exe" -quiet)
 
 # A tiered run is not a one-core test: besides the mutator it starts a pool of
 # background compile workers, sized by tiered_compile_thread_count () in

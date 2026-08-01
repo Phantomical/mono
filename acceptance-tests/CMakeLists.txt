@@ -99,7 +99,9 @@ mono_tools_runtime(_tools_runtime MONO_PATH "${_buildcls}" ARGS --debug)
 # its references off -lib, where mono/tests passes absolute paths.
 set(_mcs ${_tools_runtime} "${MONO_CSC}" -nologo -noconfig "-lib:${_class}"
          -r:System.dll -r:System.Core.dll -r:System.Xml.dll -r:Microsoft.CSharp.dll)
-set(_ilasm ${_tools_runtime} "${_buildcls}/ilasm.exe")
+# -quiet drops the per-file banner and the success line; warnings and errors are
+# printed either way.
+set(_ilasm ${_tools_runtime} "${_buildcls}/ilasm.exe" -quiet)
 
 # ms-test-suite drives the suites' own Makefiles; runtime/ has already found
 # this, but naming it here keeps the directory independent of that ordering.

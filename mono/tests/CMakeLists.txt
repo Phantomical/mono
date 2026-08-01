@@ -31,7 +31,9 @@ set(_csc ${_host} "${MONO_CSC}"
          -nowarn:0169 -nowarn:1690 -nowarn:0649 -nowarn:0612 -nowarn:3021
          -nowarn:0197 -langversion:latest)
 set(_csc_unsafe ${_csc} -unsafe)
-set(_ilasm ${_host} "${_buildcls}/ilasm.exe")
+# /quiet drops the per-file banner and the success line; warnings and errors are
+# printed either way.
+set(_ilasm ${_host} "${_buildcls}/ilasm.exe" /quiet)
 
 # The reference set an ordinary test gets. Mono.Posix is what TestDriver uses
 # to hard-kill a test that hangs past its timeout.
