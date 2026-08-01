@@ -9,7 +9,7 @@
  * method, which is most of a gigabyte over a game's worth of them. Redirecting
  * likewise goes through a full symbol lookup.
  *
- * So we carve stubs out of a slab instead. A stub costs 40 bytes, publishing
+ * So we carve stubs out of a slab instead. A stub costs 24 bytes, publishing
  * one is a bump-allocate plus a few stores, and a redirect is a single atomic
  * store to the slot. The ORC interface is unchanged, which is what the
  * promotion machinery is written against.
