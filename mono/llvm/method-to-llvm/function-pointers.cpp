@@ -230,8 +230,14 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	 * here is then an ordinary call to the wrapper. A signature that suppresses
 	 * the transition asked for the raw call instead, and takes the plain indirect
 	 * path below.
+	 *
+	 * Inside a wrapper the calli is the other side of that arrangement: it is the
+	 * native call the wrapper exists to make, and the wrapper's own body already
+	 * says everything the transition needs. Wrapping it again would ask the cache
+	 * for this signature's wrapper - which is the method being translated - and
+	 * emit a call to it from inside itself.
 	 */
-	if (sig->pinvoke && !sig->suppress_gc_transition) {
+	if (sig->pinvoke && !sig->suppress_gc_transition && !in_wrapper ()) {
 		if (sig->hasthis)
 			return invalid_il ("an unmanaged calli signature cannot take a this");
 		/*
