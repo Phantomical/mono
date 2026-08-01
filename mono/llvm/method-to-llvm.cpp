@@ -1156,6 +1156,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_VTADDR:
 	case MONO_CEE_MONO_RETHROW:
 	case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
+	case MONO_CEE_MONO_JIT_ICALL_ADDR:
+	case MONO_CEE_MONO_ICALL_ADDR:
 		if (!in_wrapper ())
 			return invalid_il (llvm::Twine (mono_opcode_name (opcode))
 			                   + " outside a wrapper");
@@ -1175,6 +1177,10 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_vtaddr (builder);
 		case MONO_CEE_MONO_RETHROW:
 			return emit_mono_rethrow (builder);
+		case MONO_CEE_MONO_JIT_ICALL_ADDR:
+			return emit_mono_jit_icall_addr (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_ICALL_ADDR:
+			return emit_mono_icall_addr (builder, static_cast<uint32_t> (operand));
 
 		/* A hint that the branch it precedes is the unlikely one. */
 		case MONO_CEE_MONO_NOT_TAKEN:

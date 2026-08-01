@@ -173,6 +173,62 @@ MethodLLVMEmitter::emit_mono_classconst (MonoIrBuilder &builder, uint32_t token)
 }
 
 /*
+ * III.F0.14  mono_jit_icall_addr - push a runtime entry point's address
+ *
+ * The operand is a MonoJitICallId, as in mono_icall; this pushes the entry
+ * point where that calls it.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_jit_icall_addr (MonoIrBuilder &builder, uint32_t id)
+{
+	MonoJitICallInfo *info = mono_find_jit_icall_info (static_cast<MonoJitICallId> (id));
+
+	if (info == nullptr || info->func == nullptr)
+		return invalid_il (llvm::Twine ("icall id ") + llvm::Twine (id)
+		                   + " is not one the runtime registered");
+
+	push_stack (address_symbol (std::string ("mono_icall_") + info->name,
+	                            const_cast<void *> (info->func)),
+	            m_class_get_byval_arg (mono_defaults.int_class));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.F0.08  mono_icall_addr - push an internal call's native entry point
+ *
+ * The operand names a MonoMethod in the wrapper's data; what gets pushed is the
+ * C function the runtime registered as that method's implementation.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_icall_addr (MonoIrBuilder &builder, uint32_t token)
+{
+	MonoMethod *target = static_cast<MonoMethod *> (wrapper_data (token));
+
+	if (target == nullptr)
+		return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+		                   + " does not name a method");
+
+	void *address = mono_lookup_internal_call (target);
+
+	if (address == nullptr) {
+		char *name = mono_method_full_name (target, TRUE);
+		llvm::Error refusal = invalid_il (
+			llvm::Twine (name) + " has no registered internal call");
+
+		g_free (name);
+		return refusal;
+	}
+
+	char *name = mono_method_full_name (target, TRUE);
+	std::string symbol = std::string ("mono_icall_impl_") + name;
+
+	g_free (name);
+	push_stack (address_symbol (symbol, address),
+	            m_class_get_byval_arg (mono_defaults.int_class));
+	return llvm::Error::success ();
+}
+
+/*
  * III.F0.21  mono_methodconst - push a MonoMethod the wrapper was built with
  */
 llvm::Error
