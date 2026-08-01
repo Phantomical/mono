@@ -3,7 +3,9 @@
 #include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
+#include "mono/metadata/domain-internals.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/object-internals.h"
 #include "mono/metadata/tokentype.h"
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
@@ -228,12 +230,21 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 
 	/*
 	 * The interned string is a runtime object, so like a vtable it travels as a
-	 * symbol the engine resolves - named by the image and token that intern it,
-	 * which is all mono_ldstr itself needs.
+	 * symbol the engine resolves. Interning here rather than at run time is what
+	 * mini does at this same point, and rests on the same guarantee: an interned
+	 * string is rooted and never moves, so its address can outlive the compile.
 	 */
 	MonoImage *image = m_class_get_image (method->klass);
+	ERROR_DECL (intern_error);
+	MonoString *interned = mono_ldstr_checked (mono_domain_get (), image,
+	                                           mono_metadata_token_index (token),
+	                                           intern_error);
+
+	if (interned == nullptr)
+		return runtime_error (intern_error);
+
 	char *symbol = g_strdup_printf ("mono_ldstr_%s_%08x", image->assembly_name, token);
-	llvm::Constant *value = extern_symbol (symbol);
+	llvm::Constant *value = address_symbol (symbol, interned);
 
 	g_free (symbol);
 	push_stack (value, m_class_get_byval_arg (mono_defaults.string_class));
