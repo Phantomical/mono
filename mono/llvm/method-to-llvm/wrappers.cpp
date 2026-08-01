@@ -20,6 +20,8 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
+#include "mono/utils/mono-memory-model.h"
+#include "mono/utils/mono-tls.h"
 
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Type.h>
@@ -125,13 +127,25 @@ MethodLLVMEmitter::emit_mono_objaddr (MonoIrBuilder &builder)
 		return unbalanced_stack (1);
 
 	StackValue object = get_stack (0);
+	StackType type = stack_type (object.type);
 
-	if (stack_type (object.type) != ObjectRef)
-		return invalid_il (llvm::Twine ("mono_objaddr wants an object reference, not ")
-		                   + describe (object.type, stack_type (object.type)));
+	/*
+	 * Anything address-shaped is admitted, not just a reference: an alloc
+	 * wrapper builds its object out of raw pointer arithmetic, so what it
+	 * relabels here has been a native int the whole way.
+	 */
+	if (type != ObjectRef && type != NativeInt && type != ManagedPtr)
+		return invalid_il (llvm::Twine ("mono_objaddr wants an address, not ")
+		                   + describe (object.type, type));
+
+	llvm::Value *value = object.value;
+
+	if (!value->getType ()->isPointerTy ())
+		value = builder.CreateIntToPtr (value,
+		                                llvm::PointerType::get (context (), 0));
 
 	pop_stack (1);
-	push_stack (object.value, m_class_get_this_arg (mono_defaults.object_class));
+	push_stack (value, m_class_get_this_arg (mono_defaults.object_class));
 	return llvm::Error::success ();
 }
 
@@ -225,6 +239,85 @@ MethodLLVMEmitter::emit_mono_icall_addr (MonoIrBuilder &builder, uint32_t token)
 	g_free (name);
 	push_stack (address_symbol (symbol, address),
 	            m_class_get_byval_arg (mono_defaults.int_class));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.F0.16  mono_tls - push one of the runtime's per-thread variables
+ *
+ * The operand is a MonoTlsKey. The runtime registers a getter for each as a
+ * jit icall, so the value comes from a call rather than from reproducing the
+ * thread-local access sequence here.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_tls (MonoIrBuilder &builder, uint32_t key)
+{
+	if (key >= TLS_KEY_NUM)
+		return invalid_il (llvm::Twine (key) + " is not a thread-local the runtime keeps");
+
+	MonoJitICallInfo *info = mono_find_jit_icall_info (
+		mono_get_tls_key_to_jit_icall_id (static_cast<MonoTlsKey> (key)));
+
+	if (info == nullptr || info->func == nullptr)
+		return invalid_il ("the thread-local's getter is not registered");
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::FunctionType *type = llvm::FunctionType::get (ptr, false);
+	llvm::Value *value = builder.CreateCall (llvm::FunctionCallee (
+		type, address_symbol (std::string ("mono_icall_") + info->name,
+	                              const_cast<void *> (info->func))));
+
+	push_stack (value, m_class_get_byval_arg (mono_defaults.int_class));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.F0.17  mono_atomic_store_i4 - store an int32 with ordering
+ *
+ * The operand is a MonoMemoryBarrierKind saying how strongly the store orders
+ * against its neighbors. The stack carries the address below the value.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_atomic_store_i4 (MonoIrBuilder &builder, uint32_t barrier)
+{
+	if (stack.size () < 2)
+		return unbalanced_stack (2);
+
+	StackValue value = get_stack (0);
+	StackValue address = get_stack (1);
+
+	if (stack_type (value.type) != Int32)
+		return invalid_il (llvm::Twine ("mono_atomic_store_i4 stores an int32, not ")
+		                   + describe (value.type, stack_type (value.type)));
+
+	llvm::AtomicOrdering ordering;
+
+	switch (barrier) {
+	case MONO_MEMORY_BARRIER_NONE:
+		ordering = llvm::AtomicOrdering::Monotonic;
+		break;
+	case MONO_MEMORY_BARRIER_REL:
+		ordering = llvm::AtomicOrdering::Release;
+		break;
+	case MONO_MEMORY_BARRIER_SEQ:
+		ordering = llvm::AtomicOrdering::SequentiallyConsistent;
+		break;
+	default:
+		return invalid_il (llvm::Twine ("a store cannot order as barrier kind ")
+		                   + llvm::Twine (barrier));
+	}
+
+	llvm::Value *target = address.value;
+
+	if (!target->getType ()->isPointerTy ())
+		target = builder.CreateIntToPtr (target,
+		                                 llvm::PointerType::get (context (), 0));
+
+	llvm::StoreInst *store =
+		builder.CreateAlignedStore (value.value, target, llvm::Align (4));
+
+	store->setAtomic (ordering);
+	pop_stack (2);
 	return llvm::Error::success ();
 }
 

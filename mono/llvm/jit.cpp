@@ -6,11 +6,13 @@
 #include "jit.hpp"
 
 #include "compiler.hpp"
+#include "nearmem.hpp"
 #include "stubs.hpp"
 
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
+#include <llvm/ExecutionEngine/Orc/MapperJITLinkMemoryManager.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
@@ -239,14 +241,20 @@ MonoJit::create ()
 
 	/*
 	 * JITLink, not the RTDyldObjectLinkingLayer LLJIT still defaults to on
-	 * ELF. The layer's default in-process memory manager is enough for now; a
-	 * bounded slab reservation for method bodies comes later. LLJIT's generic
-	 * platform setup attaches its eh-frame registration plugin to this layer
-	 * on its own.
+	 * ELF, with memory placed low so mini's rel32 call patching can always
+	 * reach what gets published here (nearmem.hpp). LLJIT's generic platform
+	 * setup attaches its eh-frame registration plugin to this layer on its
+	 * own.
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
-			return std::make_unique<ObjectLinkingLayer> (es);
+			auto mapper = NearMemoryMapper::Create ();
+
+			if (!mapper)
+				return mapper.takeError ();
+			return std::make_unique<ObjectLinkingLayer> (
+				es, std::make_unique<MapperJITLinkMemoryManager> (
+					    16 * 1024 * 1024, std::move (*mapper)));
 		});
 
 	/*

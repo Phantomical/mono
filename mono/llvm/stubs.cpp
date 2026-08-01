@@ -26,6 +26,8 @@
 #include <mutex>
 #include <vector>
 
+#include <sys/mman.h>
+
 using namespace llvm;
 using namespace llvm::orc;
 
@@ -105,12 +107,25 @@ private:
 	 */
 	Error add_slab ()
 	{
-		std::error_code ec;
-		sys::MemoryBlock slab = sys::Memory::allocateMappedMemory (
-			slot_region_size + stub_region_size, nullptr,
-			sys::Memory::MF_READ | sys::Memory::MF_WRITE, ec);
-		if (ec)
-			return make_error<StringError> ("could not map a stub slab", ec);
+		/*
+		 * Low, like every other piece of published code (nearmem.hpp): a
+		 * stub is exactly what mini's rel32 call patching targets, so it
+		 * has to stay within reach of mini's own allocations.
+		 */
+		int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+
+#ifdef MAP_32BIT
+		flags |= MAP_32BIT;
+#endif
+
+		void *base = mmap (nullptr, slot_region_size + stub_region_size,
+		                   PROT_READ | PROT_WRITE, flags, -1, 0);
+
+		if (base == MAP_FAILED)
+			return make_error<StringError> ("could not map a stub slab",
+			                                inconvertibleErrorCode ());
+
+		sys::MemoryBlock slab (base, slot_region_size + stub_region_size);
 
 		if (sys::Memory::protectMappedMemory (
 		        sys::MemoryBlock (static_cast<char *> (slab.base ()) +

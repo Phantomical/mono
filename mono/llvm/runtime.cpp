@@ -279,9 +279,10 @@ private:
 	/// Methods already published, so a callee reached from several places is
 	/// only given a stub once.
 	std::unordered_map<MonoMethod *, void *> published_;
-	/// Methods whose stub already points at real code, so that asking for one
-	/// again is a lookup rather than another compile.
-	std::unordered_set<MonoMethod *> compiled_;
+	/// Methods whose stub already points at real code - and where that code is,
+	/// so that asking again is a lookup rather than another compile, and so the
+	/// callers that must see the body rather than the stub can.
+	std::unordered_map<MonoMethod *, void *> compiled_;
 };
 
 Expected<Backend *>
@@ -442,14 +443,26 @@ Backend::translate_and_compile (MonoMethod *method)
 Expected<void *>
 Backend::compile (MonoMethod *method)
 {
+	/*
+	 * SGen identifies threads suspended inside the managed allocator and the
+	 * write barrier by resolving code addresses through the jit-info table,
+	 * and the runtime asserts the pointer it hands out for those wrappers
+	 * resolves too. The jit info covers the body, so the body is what they
+	 * get; everything else gets the stub, which is what keeps callers correct
+	 * across promotions.
+	 */
+	bool wants_body = method->wrapper_type == MONO_WRAPPER_ALLOC
+	                  || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER;
+
 	Expected<void *> stub = publish (method);
 	if (!stub)
 		return stub;
 
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
-		if (compiled_.count (method) != 0)
-			return stub;
+		auto it = compiled_.find (method);
+		if (it != compiled_.end ())
+			return wants_body ? it->second : *stub;
 	}
 
 	/*
@@ -466,8 +479,8 @@ Backend::compile (MonoMethod *method)
 		return std::move (err);
 
 	std::lock_guard<std::mutex> lock (mutex_);
-	compiled_.insert (method);
-	return stub;
+	compiled_[method] = *code;
+	return wants_body ? *code : *stub;
 }
 
 Expected<void *>

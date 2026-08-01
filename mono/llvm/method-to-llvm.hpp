@@ -447,6 +447,8 @@ private:
 	llvm::Error emit_mono_methodconst (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_mono_jit_icall_addr (MonoIrBuilder &builder, uint32_t id);
 	llvm::Error emit_mono_icall_addr (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_mono_tls (MonoIrBuilder &builder, uint32_t key);
+	llvm::Error emit_mono_atomic_store_i4 (MonoIrBuilder &builder, uint32_t barrier);
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	void emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
