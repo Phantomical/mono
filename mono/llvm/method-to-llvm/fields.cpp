@@ -264,7 +264,29 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 	if (!type)
 		return type.takeError ();
 
-	llvm::Expected<llvm::Value *> address = field_address (builder, get_stack (0), *field);
+	StackValue object = get_stack (0);
+
+	/*
+	 * The object may also be an instance of a value type, sitting on the stack
+	 * as the value itself (III.4.10). It has no address until it is given one,
+	 * so it goes to a temporary and the field is read out of that. No null
+	 * check: a value is never null.
+	 */
+	if (stack_type (object.type) == Invalid && !object.type->byref
+	    && mini_type_is_vtype (mini_get_underlying_type (object.type))) {
+		llvm::Value *home = spill_to_temporary (builder, object.type);
+		int32_t offset = static_cast<int32_t> (m_field_get_offset (*field))
+		                 - MONO_ABI_SIZEOF (MonoObject);
+		llvm::Value *address = builder.CreateGEP (builder.getInt8Ty (), home,
+		                                          builder.getInt32 (offset));
+		llvm::Value *value = emit_memory_load (builder, *type, address, ftype);
+
+		pop_stack (1);
+		push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
+		return llvm::Error::success ();
+	}
+
+	llvm::Expected<llvm::Value *> address = field_address (builder, object, *field);
 	if (!address)
 		return address.takeError ();
 

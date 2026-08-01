@@ -214,6 +214,10 @@ private:
 	llvm::BasicBlock *entry_block = nullptr;
 	std::vector<Entry> args;
 	std::vector<Entry> locals;
+
+	/// The hidden return-slot parameter, when this method's own return travels
+	/// by address; ret stores through it instead of returning a value.
+	llvm::Value *vret_param = nullptr;
 	std::vector<StackValue> stack;
 
 	/// The prefixes seen since the last real instruction. They apply to the next
@@ -262,6 +266,10 @@ private:
 
 	llvm::Expected<llvm::Function *> create_method_decl (MonoMethod *method);
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig);
+	static bool returns_by_address (MonoMethodSignature *sig);
+	static unsigned vret_arg_index (MonoMethodSignature *sig);
+	llvm::Expected<llvm::AllocaInst *> insert_vret_arg (MonoMethodSignature *sig,
+	                                                    std::vector<llvm::Value *> &args);
 
 	llvm::Expected<llvm::Type *> convert_type (MonoType *t);
 	llvm::Expected<llvm::Type *> convert_vtype (MonoType *t);

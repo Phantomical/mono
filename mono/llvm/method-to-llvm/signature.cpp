@@ -252,12 +252,56 @@ MethodLLVMEmitter::type_alignment (MonoType *t)
 	return llvm::Align (align);
 }
 
+/// Whether SIG's return value travels through a pointer the caller passes,
+/// rather than in registers: every value type a managed signature returns.
+///
+/// This must be explicit in the IR rather than left to LLVM. Left implicit,
+/// LLVM demotes a struct return to a hidden first argument by its own rule -
+/// counted in flattened IR elements, so even a two-word span with a padding
+/// array demotes - and a hidden FIRST argument shifts `this` out of the first
+/// register, where the runtime's trampolines insist on finding it when they
+/// recover a receiver from a call site. Making every one explicit, at the
+/// position mono's convention dictates (vret_arg_index), removes LLVM's
+/// discretion entirely. Native signatures keep the C ABI, which LLVM speaks
+/// for itself.
+bool
+MethodLLVMEmitter::returns_by_address (MonoMethodSignature *sig)
+{
+	if (sig->pinvoke)
+		return false;
+
+	MonoType *ret = mini_get_underlying_type (sig->ret);
+
+	return !ret->byref && mini_type_is_vtype (ret);
+}
+
+/// Where the hidden return pointer sits in SIG's argument list.
+///
+/// The runtime keeps `this` in the first argument register no matter what, so
+/// the trampolines that recover a receiver from a call site always know where
+/// to look; the return pointer comes second. The same applies when the first
+/// declared parameter is a reference type, because delegate-invoke wrappers
+/// make virtual calls through calli signatures with hasthis unset
+/// (mini-amd64.c, get_call_info).
+unsigned
+MethodLLVMEmitter::vret_arg_index (MonoMethodSignature *sig)
+{
+	if (sig->hasthis)
+		return 1;
+	if (sig->param_count > 0
+	    && MONO_TYPE_IS_REFERENCE (mini_get_underlying_type (sig->params[0])))
+		return 1;
+	return 0;
+}
+
 /// The LLVM function type for SIG: the managed types written out as themselves,
 /// leaving how each one travels to LLVM's own lowering.
 ///
 /// So a vtype is a parameter of that struct type rather than a pointer plus an
-/// attribute, and a returned one is returned - LLVM decides for itself which of
-/// those fit in registers and which need a hidden return-address argument.
+/// attribute, and a small returned one is returned - LLVM decides for itself
+/// how those fill the return registers. The one thing not left to LLVM is a
+/// return too big for registers, which becomes an explicit pointer parameter at
+/// the position the runtime's convention dictates (vret_arg_index).
 llvm::Expected<llvm::FunctionType *>
 MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 {
@@ -289,7 +333,36 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 		params.push_back (*type);
 	}
 
+	if (returns_by_address (sig)) {
+		params.insert (params.begin () + vret_arg_index (sig),
+		               pointer_type (context ()));
+		return llvm::FunctionType::get (llvm::Type::getVoidTy (context ()),
+		                                params, false);
+	}
+
 	return llvm::FunctionType::get (*ret_type, params, false);
+}
+
+/// Give ARGS ([this?, params...]) the hidden return slot SIG's convention asks
+/// for, if any: a temporary is allocated, its address inserted where the callee
+/// expects it, and returned so the caller can read the result back out.
+llvm::Expected<llvm::AllocaInst *>
+MethodLLVMEmitter::insert_vret_arg (MonoMethodSignature *sig,
+                                    std::vector<llvm::Value *> &args)
+{
+	if (!returns_by_address (sig))
+		return nullptr;
+
+	llvm::Expected<llvm::Type *> type = convert_type (sig->ret);
+	if (!type)
+		return type.takeError ();
+
+	MonoIrBuilder entry (entry_block, entry_block->begin ());
+	llvm::AllocaInst *slot = entry.CreateAlloca (*type, nullptr, "vret");
+
+	slot->setAlignment (type_alignment (sig->ret));
+	args.insert (args.begin () + vret_arg_index (sig), slot);
+	return slot;
 }
 
 /// The declaration of METHOD in this module, created on first use and cached.
@@ -321,12 +394,26 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	if (!type)
 		return type.takeError ();
 
-	char *full_name = mono_method_full_name (method, TRUE);
+	char *printed = mono_method_full_name (method, TRUE);
+	std::string full_name = printed;
+	char suffix[32];
+
+	g_free (printed);
+
+	/*
+	 * The printed name is for reading; the pointer is the identity. No name
+	 * scheme is unique on its own - conversion operators overload on their
+	 * return type, which no printed signature carries, and runtime-minted
+	 * wrappers print alike - and this name is how a caller's reference finds
+	 * the method's stub. symbol_for_code () (runtime.cpp) must agree.
+	 */
+	snprintf (suffix, sizeof (suffix), "@%p", (void *) method);
+	full_name += suffix;
+
 	llvm::Function *function = llvm::Function::Create (
 		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
 
 	record_external (full_name, ExternalSymbol::Kind::Code, method);
-	g_free (full_name);
 
 	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);
 	    ext != llvm::Attribute::None)

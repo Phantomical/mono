@@ -236,8 +236,22 @@ symbol_for_code (MonoMethod *method)
 {
 	char *name = mono_method_full_name (method, TRUE);
 	std::string symbol = name;
+	char suffix[32];
 
 	g_free (name);
+
+	/*
+	 * The printed name is for reading; the pointer is the identity. No name
+	 * scheme is unique on its own - conversion operators overload on their
+	 * return type, which no printed signature carries, and the runtime mints
+	 * wrappers whose names are only as distinct as what they were generated
+	 * from - and a symbol is one method's identity here.
+	 *
+	 * create_method_decl () names methods the same way; the two must agree or
+	 * a caller's reference never finds the stub.
+	 */
+	snprintf (suffix, sizeof (suffix), "@%p", (void *) method);
+	symbol += suffix;
 	return symbol;
 }
 
@@ -461,12 +475,16 @@ Backend::publish (MonoMethod *method)
 {
 	std::string name = symbol_for_code (method);
 
-	{
-		std::lock_guard<std::mutex> lock (mutex_);
-		auto it = published_.find (method);
-		if (it != published_.end ())
-			return it->second;
-	}
+	/*
+	 * Held across the creation, not just the lookup: two threads reaching an
+	 * unpublished method together must not both define its stub, and stub
+	 * creation is cheap enough that one lock for the whole step is fine.
+	 */
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	auto it = published_.find (method);
+	if (it != published_.end ())
+		return it->second;
 
 	Expected<void *> stub = jit_->create_lazy_stub (
 		name, [this, method] () -> Expected<void *> {
@@ -475,7 +493,6 @@ Backend::publish (MonoMethod *method)
 	if (!stub)
 		return stub;
 
-	std::lock_guard<std::mutex> lock (mutex_);
 	published_[method] = *stub;
 	return *stub;
 }

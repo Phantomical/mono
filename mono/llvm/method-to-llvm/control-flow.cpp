@@ -71,6 +71,14 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 		return value.takeError ();
 
 	pop_stack (1);
+
+	/* A return that travels by address goes to the caller's slot, not a register. */
+	if (vret_param != nullptr) {
+		builder.CreateAlignedStore (*value, vret_param, type_alignment (ret));
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
 	builder.CreateRet (*value);
 	return llvm::Error::success ();
 }

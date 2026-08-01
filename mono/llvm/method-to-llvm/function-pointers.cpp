@@ -272,12 +272,25 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 
 		args->insert (args->begin (), *ftn);
 
+		/*
+		 * The wrapper is a managed method, so its return follows the managed
+		 * convention like anyone else's - and its leading parameter is the
+		 * ftn, an intptr, so a by-address slot goes in front of everything.
+		 */
+		llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (wsig, *args);
+		if (!vret)
+			return vret.takeError ();
+
 		llvm::Value *result = emit_protected_call (builder, *declaration, *args);
 
 		pop_stack (sig->param_count);
 
 		if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 			return llvm::Error::success ();
+
+		if (*vret != nullptr)
+			result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (),
+			                                    *vret, (*vret)->getAlign ());
 
 		push_stack (widen_to_stack (builder, result, wsig->ret),
 		            stack_slot_type (wsig->ret));
@@ -305,6 +318,10 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		return emit_tail_call (builder, llvm::FunctionCallee (*type, ftn), *args,
 		                       sig->param_count + sig->hasthis);
 
+	llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (sig, *args);
+	if (!vret)
+		return vret.takeError ();
+
 	llvm::Value *result =
 		emit_protected_call (builder, llvm::FunctionCallee (*type, ftn), *args);
 
@@ -312,6 +329,10 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
+
+	if (*vret != nullptr)
+		result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (), *vret,
+		                                    (*vret)->getAlign ());
 
 	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
 	return llvm::Error::success ();

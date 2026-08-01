@@ -231,6 +231,13 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 		return false;
 
 	/*
+	 * A return that travels by address would need this frame's hidden slot
+	 * forwarded through the jump; decline into an ordinary call instead.
+	 */
+	if (returns_by_address (callee_sig))
+		return false;
+
+	/*
 	 * musttail is a guarantee, and the backend can only always keep it when the
 	 * jump changes nothing about the frame's argument area: identical prototypes,
 	 * down to the extension attributes that say how narrow integers fill their
@@ -363,6 +370,14 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		values.push_back (builder.CreateAlignedLoad (*type, argument.alloca,
 		                                             type_alignment (argument.type)));
 	}
+
+	/*
+	 * A matching ABI means the target returns by address exactly when this
+	 * method does, so the caller's slot is handed straight through: the target
+	 * fills in the same memory this frame was given to fill.
+	 */
+	if (returns_by_address (sig))
+		values.insert (values.begin () + vret_arg_index (sig), vret_param);
 
 	llvm::CallInst *call = builder.CreateCall (*declaration, values);
 
@@ -540,6 +555,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
 
+	/* After the receiver fixups: the slot lands at index 1, behind the this. */
+	llvm::Expected<llvm::AllocaInst *> vret = insert_vret_arg (sig, *args);
+	if (!vret)
+		return vret.takeError ();
+
 	llvm::FunctionCallee callee = *declaration;
 	bool keyed = false;
 
@@ -618,6 +638,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
+
+	if (*vret != nullptr)
+		result = builder.CreateAlignedLoad ((*vret)->getAllocatedType (), *vret,
+		                                    (*vret)->getAlign ());
 
 	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
 	return llvm::Error::success ();

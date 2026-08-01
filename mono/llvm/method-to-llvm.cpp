@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string_view>
 
 namespace mono {
 
@@ -552,6 +553,33 @@ MethodLLVMEmitter::emit ()
 
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
 	builder.SetInsertPoint (entry_block);
+
+	/*
+	 * ByReference<T> is a contract with the JIT rather than code: its IL
+	 * bodies just throw, and every JIT is required to substitute the real
+	 * semantics (mini's required intrinsics). The struct is one interior
+	 * pointer; the ctor stores it, the getter loads it.
+	 */
+	if (m_class_get_image (method->klass) == mono_get_corlib ()
+	    && std::string_view (m_class_get_name_space (method->klass)) == "System"
+	    && std::string_view (m_class_get_name (method->klass)) == "ByReference`1") {
+		llvm::Align align (TARGET_SIZEOF_VOID_P);
+		std::string_view name = method->name;
+
+		if (name == ".ctor") {
+			builder.CreateAlignedStore (function->getArg (1),
+			                            function->getArg (0), align);
+			builder.CreateRetVoid ();
+			return function;
+		}
+		if (name == "get_Value") {
+			builder.CreateRet (builder.CreateAlignedLoad (
+				llvm::PointerType::get (context (), 0),
+				function->getArg (0), align));
+			return function;
+		}
+		return unsupported_il ("an unrecognized ByReference member");
+	}
 
 	if (auto error = emit_arg_allocas (builder))
 		return std::move (error);
@@ -1296,6 +1324,17 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	if (sig->hasthis)
 		names[0] = "this";
 
+	/*
+	 * A return that travels by address is a parameter of the IR function but
+	 * not an argument of the method: it sits at the convention's position and
+	 * everything from there on shifts along by one.
+	 */
+	bool by_address = returns_by_address (sig);
+	unsigned vret_at = by_address ? vret_arg_index (sig) : ~0u;
+
+	if (by_address)
+		vret_param = function->getArg (vret_at);
+
 	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);
 		auto ltyper = convert_type (mtype);
@@ -1305,7 +1344,11 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 
 		auto alloca = builder.CreateAlloca (ltype, nullptr, names[i]);
 		alloca->setAlignment (type_alignment (mtype));
-		builder.CreateAlignedStore (function->getArg (i), alloca, alloca->getAlign ());
+
+		unsigned param = by_address && i >= vret_at ? i + 1 : i;
+
+		builder.CreateAlignedStore (function->getArg (param), alloca,
+		                            alloca->getAlign ());
 
 		args.push_back ({
 			.alloca = alloca,
