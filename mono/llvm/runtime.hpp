@@ -28,6 +28,14 @@ typedef struct _MonoMethod MonoMethod;
 /// any other failing compile.
 void *mono_llvm_jit_compile_method (MonoMethod *method, MonoError *error);
 
+/// Queue OPT for LLVM's own command-line option registry - the same options
+/// `opt` and `llc` take, e.g. "-print-after-all". A leading dash is optional.
+///
+/// This is what `--llvm-opt=<opt>` on the command line does. The options take
+/// effect when the backend starts, so they have to be set before the first
+/// method is compiled; one LLVM rejects fails the backend's startup.
+void mono_llvm_jit_add_option (const char *opt);
+
 MONO_END_DECLS
 
 #endif

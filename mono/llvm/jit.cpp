@@ -21,13 +21,16 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 
 using namespace llvm;
@@ -165,6 +168,44 @@ ensure_native_target ()
 	});
 }
 
+static std::mutex g_options_mutex;
+static std::vector<std::string> g_options;
+
+void
+MonoJit::add_option (StringRef opt)
+{
+	std::lock_guard<std::mutex> lock (g_options_mutex);
+
+	g_options.push_back (opt.starts_with ("-") ? opt.str () : "-" + opt.str ());
+}
+
+/*
+ * cl::ParseCommandLineOptions () is all-at-once - each call re-parses argv from
+ * scratch - so the queued options are handed over in one batch, and only once.
+ * Passing an error stream is what keeps a bad option from calling exit () out
+ * from under the runtime.
+ */
+static Error
+apply_options ()
+{
+	static bool applied = false;
+
+	std::lock_guard<std::mutex> lock (g_options_mutex);
+	if (applied || g_options.empty ())
+		return Error::success ();
+	applied = true;
+
+	std::vector<const char *> argv {"mono"};
+	for (const std::string &opt : g_options)
+		argv.push_back (opt.c_str ());
+
+	if (!cl::ParseCommandLineOptions ((int) argv.size (), argv.data (), "",
+	                                  &errs ()))
+		return createStringError (inconvertibleErrorCode (),
+		                          "llvm rejected an option given with --llvm-opt");
+	return Error::success ();
+}
+
 /*
  * The host target configuration every compile uses.
  *
@@ -244,6 +285,9 @@ Expected<std::unique_ptr<MonoJit>>
 MonoJit::create ()
 {
 	ensure_native_target ();
+
+	if (Error err = apply_options ())
+		return std::move (err);
 
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());

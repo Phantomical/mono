@@ -61,6 +61,14 @@ public:
 	/// something calls that method. Returning an error is fatal to the call.
 	using LazyCompileFunction = llvm::unique_function<llvm::Expected<void *> ()>;
 
+	/// Queue OPT for LLVM's own command-line option registry - the same
+	/// options `opt` and `llc` take, e.g. "-print-after-all" or
+	/// "-x86-asm-syntax=intel". A leading dash is optional.
+	///
+	/// The options are applied when create () builds the JIT, so everything
+	/// queued has to be in before then; create () fails if LLVM rejects one.
+	static void add_option (llvm::StringRef opt);
+
 	/// Build the JIT for the host: JITLink object linking, code model
 	/// Small+PIC, FastISel code generation, and the tier-0 IR pipeline
 	/// applied to every added module.

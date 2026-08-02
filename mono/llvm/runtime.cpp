@@ -652,3 +652,9 @@ mono_llvm_jit_compile_method (MonoMethod *method, MonoError *error)
 	g_assert (recovered);
 	return NULL;
 }
+
+void
+mono_llvm_jit_add_option (const char *opt)
+{
+	mono::MonoJit::add_option (opt);
+}

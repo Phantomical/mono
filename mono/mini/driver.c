@@ -64,6 +64,7 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 #include "interp/interp.h"
+#include "../llvm/runtime.hpp"
 
 #include <string.h>
 #include <ctype.h>
@@ -1507,6 +1508,9 @@ mini_usage_jitdeveloper (void)
 		 "    --verify-all           Run the verifier on all assemblies and methods\n"
 		 "    --full-aot             Avoid JITting any code\n"
 		 "    --llvmonly             Use LLVM compiled code only\n"
+		 "    --llvm-opt=OPT         Pass OPT to LLVM as one of its own command line\n"
+		 "                           options, e.g. --llvm-opt=-print-after-all. Repeat\n"
+		 "                           the flag to pass more than one.\n"
 		 "    --agent=ASSEMBLY[:ARG] Loads the specific agent assembly and executes its Main method with the given argument before loading the main assembly.\n"
 		 "    --no-x86-stack-align   Don't align stack on x86\n"
 		 "\n"
@@ -1799,6 +1803,8 @@ mono_jit_parse_options (int argc, char * argv[])
 			mono_gc_debug_set (argv[i] + 11);
 		} else if (strcmp (argv [i], "--llvm") == 0 || strcmp (argv [i], "--nollvm") == 0) {
 			fprintf (stderr, "Mono Warning: %s is deprecated and ignored: LLVM is the only JIT.\n", argv [i]);
+		} else if (strncmp (argv [i], "--llvm-opt=", 11) == 0) {
+			mono_llvm_jit_add_option (argv [i] + 11);
 #ifdef ENABLE_JIT_DUMP
 		} else if (strcmp (argv [i], "--jitdump") == 0) {
 			mono_enable_jit_dump ();
@@ -2404,6 +2410,8 @@ mono_main (int argc, char* argv[])
 #endif
 		} else if (strcmp (argv [i], "--llvm") == 0 || strcmp (argv [i], "--nollvm") == 0) {
 			fprintf (stderr, "Mono Warning: %s is deprecated and ignored: LLVM is the only JIT.\n", argv [i]);
+		} else if (strncmp (argv [i], "--llvm-opt=", 11) == 0) {
+			mono_llvm_jit_add_option (argv [i] + 11);
 		} else if (strcmp (argv [i], "--ffast-math") == 0){
 			mono_use_fast_math = TRUE;
 		} else if ((strcmp (argv [i], "--interpreter") == 0) || !strcmp (argv [i], "--interp")) {
