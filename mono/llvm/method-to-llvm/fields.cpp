@@ -299,10 +299,12 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 	 * The object may also be an instance of a value type, sitting on the stack
 	 * as the value itself (III.4.10). It has no address until it is given one,
 	 * so it goes to a temporary and the field is read out of that. No null
-	 * check: a value is never null.
+	 * check: a value is never null. Decided off the raw type, not the
+	 * underlying one: a magic nint rides the stack as its scalar, and reading
+	 * its field through the underlying native int would dereference the value.
 	 */
-	if (stack_type (object.type) == Invalid && !object.type->byref
-	    && mini_type_is_vtype (mini_get_underlying_type (object.type))) {
+	if (!object.type->byref && MONO_TYPE_ISSTRUCT (object.type)
+	    && !object.value->getType ()->isPointerTy ()) {
 		llvm::Value *home = spill_to_temporary (builder, object.type);
 		int32_t offset = static_cast<int32_t> (m_field_get_offset (*field))
 		                 - MONO_ABI_SIZEOF (MonoObject);

@@ -355,8 +355,17 @@ MethodLLVMEmitter::type_alignment (MonoType *t)
 		return llvm::Align (TARGET_SIZEOF_VOID_P);
 
 	MonoClass *klass = mono_class_from_mono_type_internal (mini_get_underlying_type (t));
-	unsigned align = MONO_CLASS_IS_SIMD (cfg, klass) ? mono_class_value_size (klass, NULL)
-	                                                 : mono_class_min_align (klass);
+	unsigned align = mono_class_min_align (klass);
+
+	/*
+	 * A vector's natural alignment is its size, but nothing the runtime hands
+	 * out promises more than 8 - the GC allocates on words, so a vector inside
+	 * an array or an object is only word-aligned. Claiming 8 keeps every
+	 * vector access an unaligned instruction; LLVM raises it back where it can
+	 * prove more, which is exactly the allocas.
+	 */
+	if (MONO_CLASS_IS_SIMD (cfg, klass))
+		align = std::min (8, mono_class_value_size (klass, NULL));
 
 	/* A packed layout can ask for an alignment that is not a power of two. */
 	while (mono_is_power_of_two (align) == -1)

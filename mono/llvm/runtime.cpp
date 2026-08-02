@@ -51,6 +51,7 @@ extern "C" {
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -117,14 +118,17 @@ runtime_helpers ()
 		{ "mono_personality", (void *) &mono_personality },
 
 		/*
-		 * The libcalls LLVM lowers its memory intrinsics to. The translator never
-		 * names these; codegen synthesizes the calls, so linking against the
-		 * process's libc is part of what the backend has to provide.
+		 * The libcalls LLVM lowers its memory and float-remainder operations
+		 * to. The translator never names these; codegen synthesizes the calls,
+		 * so linking against the process's libc is part of what the backend has
+		 * to provide.
 		 */
 		{ "memcmp", (void *) &memcmp },
 		{ "memcpy", (void *) &memcpy },
 		{ "memmove", (void *) &memmove },
 		{ "memset", (void *) &memset },
+		{ "fmod", (void *) static_cast<double (*) (double, double)> (&fmod) },
+		{ "fmodf", (void *) static_cast<float (*) (float, float)> (&fmodf) },
 	};
 }
 
