@@ -15,9 +15,11 @@ namespace mono {
 /// through its wrapper, whose check turns a pending OutOfMemoryException into a
 /// throw.
 ///
-/// The allocation attributes: the result aliases nothing older than the call and
-/// arrives zeroed, and allockind lets an object nothing observes be elided
-/// outright. Deliberately not nounwind - it throws.
+/// The allocation attributes: the result aliases nothing older than the call,
+/// and allockind lets an object nothing observes be elided outright. Not
+/// AllocFnKind::Zeroed - the fields do arrive zeroed, but the claim covers the
+/// whole allocation and the header comes back initialized, so LLVM would fold
+/// vtable loads to null. Deliberately not nounwind - it throws.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
 {
@@ -29,7 +31,7 @@ MethodLLVMEmitter::object_new_decl ()
 
 	llvm::AttrBuilder allocator (context ());
 
-	allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc | llvm::AllocFnKind::Zeroed);
+	allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc);
 	allocator.addAttribute ("alloc-family", "mono_gc");
 
 	(*wrapper)->addRetAttr (llvm::Attribute::NoAlias);

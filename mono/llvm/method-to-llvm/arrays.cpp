@@ -648,6 +648,9 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	 * result aliases nothing older than the call, and allockind lets an array
 	 * nothing observes be elided outright - that is a real choice: an
 	 * allocation whose failure nothing could observe did not need to happen.
+	 * Not AllocFnKind::Zeroed, although the elements do arrive zeroed: the
+	 * claim covers the whole allocation, and the header - vtable, length -
+	 * comes back initialized, so LLVM would fold those loads to zero.
 	 * Deliberately not nounwind.
 	 */
 	llvm::Expected<llvm::Function *> allocate =
@@ -659,8 +662,7 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	{
 		llvm::AttrBuilder allocator (context ());
 
-		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc
-		                            | llvm::AllocFnKind::Zeroed);
+		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc);
 		allocator.addAttribute ("alloc-family", "mono_gc");
 		(*allocate)->addRetAttr (llvm::Attribute::NoAlias);
 		(*allocate)->addFnAttrs (allocator);
