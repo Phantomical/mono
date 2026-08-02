@@ -226,6 +226,13 @@ symbol_for_body (MonoMethod *method)
 }
 
 /// The engine, and everything it needs that outlives one compile.
+///
+/// Code is compiled per domain, the way mini kept a jit_code_hash per domain: a
+/// compiled body bakes in addresses that belong to one domain - its vtables,
+/// its statics blocks, its interned strings - so a body is only correct in the
+/// domain it was compiled against. Each domain therefore gets a linker of its
+/// own, a whole MonoJit: its symbols never meet another domain's, and unloading
+/// the domain tears the linker down, stubs, code and all.
 class Backend {
 public:
 	static Expected<Backend *> get ();
@@ -233,11 +240,9 @@ public:
 	/// Compile METHOD now and return the address of its stub.
 	Expected<void *> compile (MonoMethod *method);
 
-	/// The address to call METHOD at, compiling it on the first call rather than
-	/// now. This is how a method's callees are published: reaching one is what
-	/// says it is worth compiling. Defines both of the method's stubs and
-	/// returns the legacy one.
-	Expected<void *> publish (MonoMethod *method);
+	/// Drop DOMAIN's linker and everything in it. The caller proves the code
+	/// dead: nothing may be executing in, or about to call into, the domain.
+	static void free_domain (MonoDomain *domain);
 
 private:
 	/// Where one method's code ended up: the legacy entry the runtime hands
@@ -247,59 +252,92 @@ private:
 		void *body;
 	};
 
-	Error start ();
-	Error resolve (const std::vector<ExternalSymbol> &externals);
-	Expected<Compiled> translate_and_compile (MonoMethod *method);
-	Expected<Compiled> ensure_compiled (MonoMethod *method);
+	/// One domain's whole compilation state.
+	struct DomainState {
+		std::unique_ptr<MonoJit> jit;
+		/// Methods already published, so a callee reached from several places
+		/// is only given its stubs once. Holds the legacy stub's address.
+		std::unordered_map<MonoMethod *, void *> published;
+		/// Methods whose stubs already point at real code - and where that
+		/// code is, so that asking again is a lookup rather than a compile.
+		std::unordered_map<MonoMethod *, Compiled> compiled;
+	};
 
-	std::unique_ptr<MonoJit> jit_;
+	/// The current domain's state, created - linker, helpers and all - the
+	/// first time the domain compiles something.
+	Expected<DomainState *> state ();
+
+	Error resolve (DomainState &state, const std::vector<ExternalSymbol> &externals);
+	Expected<Compiled> translate_and_compile (DomainState &state, MonoMethod *method);
+	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method);
+
+	/// The address to call METHOD at, compiling it on the first call rather
+	/// than now. This is how a method's callees are published: reaching one is
+	/// what says it is worth compiling. Defines both of the method's stubs and
+	/// returns the legacy one.
+	Expected<void *> publish (DomainState &state, MonoMethod *method);
 
 	std::mutex mutex_;
-	/// Methods already published, so a callee reached from several places is
-	/// only given its stubs once. Holds the legacy stub's address.
-	std::unordered_map<MonoMethod *, void *> published_;
-	/// Methods whose stubs already point at real code - and where that code
-	/// is, so that asking again is a lookup rather than another compile.
-	std::unordered_map<MonoMethod *, Compiled> compiled_;
+	std::unordered_map<MonoDomain *, std::unique_ptr<DomainState>> domains_;
 };
+
+/// The one Backend, once get () has made it. Kept at file scope so that
+/// free_domain () can decline quietly when nothing was ever compiled.
+Backend *live_backend = nullptr;
 
 Expected<Backend *>
 Backend::get ()
 {
-	static Backend *backend = nullptr;
-	static Error *failure = nullptr;
 	static std::once_flag once;
 
-	std::call_once (once, [] {
-		auto *fresh = new Backend ();
-		if (Error err = fresh->start ()) {
-			failure = new Error (std::move (err));
-			delete fresh;
-			return;
-		}
-		backend = fresh;
-	});
-
-	if (backend == nullptr)
-		return createStringError (inconvertibleErrorCode (),
-		                          "the llvm backend failed to start: %s",
-		                          toString (Error (std::move (*failure))).c_str ());
-	return backend;
+	std::call_once (once, [] { live_backend = new Backend (); });
+	return live_backend;
 }
 
-Error
-Backend::start ()
+Expected<Backend::DomainState *>
+Backend::state ()
 {
+	MonoDomain *domain = mono_domain_get ();
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	auto it = domains_.find (domain);
+	if (it != domains_.end ())
+		return it->second.get ();
+
 	Expected<std::unique_ptr<MonoJit>> jit = MonoJit::create ();
 	if (!jit)
-		return jit.takeError ();
-	jit_ = std::move (*jit);
+		return createStringError (
+			inconvertibleErrorCode (),
+			"the llvm backend failed to start for this domain: %s",
+			toString (jit.takeError ()).c_str ());
 
 	for (const Helper &helper : runtime_helpers ())
-		if (Error err = jit_->register_symbol (helper.name, helper.address))
-			return err;
+		if (Error err = (*jit)->register_symbol (helper.name, helper.address))
+			return std::move (err);
 
-	return Error::success ();
+	auto fresh = std::make_unique<DomainState> ();
+
+	fresh->jit = std::move (*jit);
+	return (domains_[domain] = std::move (fresh)).get ();
+}
+
+void
+Backend::free_domain (MonoDomain *domain)
+{
+	if (live_backend == nullptr)
+		return;
+
+	std::unique_ptr<DomainState> state;
+	{
+		std::lock_guard<std::mutex> lock (live_backend->mutex_);
+		auto it = live_backend->domains_.find (domain);
+
+		if (it == live_backend->domains_.end ())
+			return;
+		state = std::move (it->second);
+		live_backend->domains_.erase (it);
+	}
+	/* The linker goes down with the state, releasing the domain's code. */
 }
 
 /*
@@ -309,7 +347,7 @@ Backend::start ()
  * for at the point it actually needs it.
  */
 Error
-Backend::resolve (const std::vector<ExternalSymbol> &externals)
+Backend::resolve (DomainState &state, const std::vector<ExternalSymbol> &externals)
 {
 	MonoDomain *domain = mono_domain_get ();
 
@@ -341,7 +379,7 @@ Backend::resolve (const std::vector<ExternalSymbol> &externals)
 		}
 		case ExternalSymbol::Kind::Code: {
 			Expected<void *> stub =
-				publish (static_cast<MonoMethod *> (external.object));
+				publish (state, static_cast<MonoMethod *> (external.object));
 			if (!stub)
 				return stub.takeError ();
 			/* publish () defines the symbol itself. */
@@ -349,7 +387,7 @@ Backend::resolve (const std::vector<ExternalSymbol> &externals)
 		}
 		}
 
-		if (Error err = jit_->register_symbol (external.name, address))
+		if (Error err = state.jit->register_symbol (external.name, address))
 			return err;
 	}
 
@@ -357,7 +395,7 @@ Backend::resolve (const std::vector<ExternalSymbol> &externals)
 }
 
 Expected<Backend::Compiled>
-Backend::translate_and_compile (MonoMethod *method)
+Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 {
 	/*
 	 * Array Get/Set/Address have no body and no icall - every call site
@@ -414,13 +452,13 @@ Backend::translate_and_compile (MonoMethod *method)
 		module->print (llvm::errs (), nullptr);
 	}
 
-	if (Error err = resolve (externals))
+	if (Error err = resolve (state, externals))
 		return std::move (err);
 
 	Expected<CompiledMethod> compiled =
-		jit_->compile (ThreadSafeModule (std::move (module),
-		                                 ThreadSafeContext (std::move (context))),
-		               entry);
+		state.jit->compile (ThreadSafeModule (std::move (module),
+		                                      ThreadSafeContext (std::move (context))),
+		                    entry);
 	if (!compiled)
 		return compiled.takeError ();
 
@@ -475,10 +513,10 @@ Backend::translate_and_compile (MonoMethod *method)
 	if (dumping (entry.c_str ()))
 		thunk_module->print (llvm::errs (), nullptr);
 
-	if (Error err = resolve (thunk_externals))
+	if (Error err = resolve (state, thunk_externals))
 		return std::move (err);
 
-	Expected<CompiledMethod> thunk = jit_->compile (
+	Expected<CompiledMethod> thunk = state.jit->compile (
 		ThreadSafeModule (std::move (thunk_module),
 		                  ThreadSafeContext (std::move (thunk_context))),
 		thunk_name);
@@ -509,7 +547,11 @@ Backend::compile (MonoMethod *method)
 	bool wants_body = method->wrapper_type == MONO_WRAPPER_ALLOC
 	                  || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER;
 
-	Expected<void *> stub = publish (method);
+	Expected<DomainState *> state = this->state ();
+	if (!state)
+		return state.takeError ();
+
+	Expected<void *> stub = publish (**state, method);
 	if (!stub)
 		return stub;
 
@@ -519,7 +561,7 @@ Backend::compile (MonoMethod *method)
 	 * first call is what lets a refusal come back through MonoError and be
 	 * raised by the runtime, which knows how to throw from where it stands.
 	 */
-	Expected<Compiled> code = ensure_compiled (method);
+	Expected<Compiled> code = ensure_compiled (**state, method);
 	if (!code)
 		return code.takeError ();
 
@@ -527,23 +569,23 @@ Backend::compile (MonoMethod *method)
 }
 
 Expected<Backend::Compiled>
-Backend::ensure_compiled (MonoMethod *method)
+Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 {
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
-		auto it = compiled_.find (method);
+		auto it = state.compiled.find (method);
 
-		if (it != compiled_.end ())
+		if (it != state.compiled.end ())
 			return it->second;
 	}
 
-	Expected<Compiled> code = translate_and_compile (method);
+	Expected<Compiled> code = translate_and_compile (state, method);
 	if (!code)
 		return code.takeError ();
 
-	if (Error err = jit_->redirect_stub (symbol_for_code (method), code->entry))
+	if (Error err = state.jit->redirect_stub (symbol_for_code (method), code->entry))
 		return std::move (err);
-	if (Error err = jit_->redirect_stub (symbol_for_body (method), code->body))
+	if (Error err = state.jit->redirect_stub (symbol_for_body (method), code->body))
 		return std::move (err);
 
 	/*
@@ -552,12 +594,12 @@ Backend::ensure_compiled (MonoMethod *method)
 	 * always point a method's two stubs at one compile's output.
 	 */
 	std::lock_guard<std::mutex> lock (mutex_);
-	compiled_[method] = *code;
+	state.compiled[method] = *code;
 	return *code;
 }
 
 Expected<void *>
-Backend::publish (MonoMethod *method)
+Backend::publish (DomainState &state, MonoMethod *method)
 {
 	/*
 	 * Held across the creation, not just the lookup: two threads reaching an
@@ -566,13 +608,19 @@ Backend::publish (MonoMethod *method)
 	 */
 	std::lock_guard<std::mutex> lock (mutex_);
 
-	auto it = published_.find (method);
-	if (it != published_.end ())
+	auto it = state.published.find (method);
+	if (it != state.published.end ())
 		return it->second;
 
-	Expected<void *> stub = jit_->create_lazy_stub (
-		symbol_for_code (method), [this, method] () -> Expected<void *> {
-			Expected<Compiled> code = ensure_compiled (method);
+	/*
+	 * The lambdas capture the owning state rather than looking the domain up
+	 * again: a stub is only reachable from its own domain's code, and the state
+	 * outlives the stub - free_domain () takes them down together.
+	 */
+	DomainState *owner = &state;
+	Expected<void *> stub = state.jit->create_lazy_stub (
+		symbol_for_code (method), [this, owner, method] () -> Expected<void *> {
+			Expected<Compiled> code = ensure_compiled (*owner, method);
 
 			if (!code)
 				return code.takeError ();
@@ -581,9 +629,9 @@ Backend::publish (MonoMethod *method)
 	if (!stub)
 		return stub;
 
-	Expected<void *> body_stub = jit_->create_lazy_stub (
-		symbol_for_body (method), [this, method] () -> Expected<void *> {
-			Expected<Compiled> code = ensure_compiled (method);
+	Expected<void *> body_stub = state.jit->create_lazy_stub (
+		symbol_for_body (method), [this, owner, method] () -> Expected<void *> {
+			Expected<Compiled> code = ensure_compiled (*owner, method);
 
 			if (!code)
 				return code.takeError ();
@@ -597,7 +645,8 @@ Backend::publish (MonoMethod *method)
 	 * so anything recovering a method from a code pointer - delegate creation
 	 * off a ldftn most visibly - must find it in the jit-info table. Register
 	 * it the way mini registers trampolines: an is_trampoline entry carrying
-	 * the method.
+	 * the method, in the domain whose linker holds the stub so the two die
+	 * together.
 	 */
 	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
 
@@ -605,14 +654,20 @@ Backend::publish (MonoMethod *method)
 	tramp->code_size = (guint32) stub_block_size;
 	tramp->name = g_strdup (symbol_for_code (method).c_str ());
 	tramp->method = method;
-	mono_tramp_info_register (tramp, NULL);
+	mono_tramp_info_register (tramp, mono_domain_get ());
 
-	published_[method] = *stub;
+	state.published[method] = *stub;
 	return *stub;
 }
 
 } // namespace
 } // namespace mono
+
+void
+mono_llvm_jit_free_domain (MonoDomain *domain)
+{
+	mono::Backend::free_domain (domain);
+}
 
 void *
 mono_llvm_jit_compile_method (MonoMethod *method, MonoError *error)

@@ -6,6 +6,7 @@
 #include "mono/metadata/loader.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
+#include "mono/metadata/remoting.h"
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
 
@@ -162,6 +163,49 @@ MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 	return llvm::Error::success ();
 }
 
+/// Whether an instance access to FIELD through RECEIVER can land on a
+/// transparent proxy, in which case the field's bytes are not at their offset -
+/// they are in the real object the proxy stands for, possibly in another
+/// context or domain - and the access has to go through the runtime's remoting
+/// field wrappers.
+///
+/// A receiver that is this method's own `this` is usually proof of a real
+/// object, but not on ContextBoundObject and not on MarshalByRefObject itself:
+/// the runtime runs those bodies with `this` still the proxy (the same-context
+/// shortcut in mono_remoting_wrapper does exactly that), so their fields check
+/// every time.
+bool
+MethodLLVMEmitter::remote_field_access (StackValue receiver, MonoClassField *field)
+{
+#ifdef DISABLE_REMOTING
+	return false;
+#else
+	MonoClass *klass = field->parent;
+
+	if (m_class_is_valuetype (klass) || stack_type (receiver.type) != ObjectRef)
+		return false;
+	if (mono_class_is_contextbound (klass)
+	    || klass == mono_defaults.marshalbyrefobject_class)
+		return true;
+	return mono_class_is_marshalbyref (klass) && !is_own_this (receiver.value);
+#endif
+}
+
+/// The constant operands every remoting field wrapper takes after the object:
+/// the declaring MonoClass, the MonoClassField, and the field's offset, pushed
+/// in that order so a wrapper call can be collected off the stack like any
+/// other.
+void
+MethodLLVMEmitter::push_field_wrapper_operands (MonoIrBuilder &builder,
+                                                MonoClassField *field)
+{
+	MonoType *nint = mono_get_int_type ();
+
+	push_stack (class_symbol (field->parent, "mono_class_"), nint);
+	push_stack (field_symbol (field), nint);
+	push_stack (builder.getInt64 (m_field_get_offset (field)), nint);
+}
+
 /// Where FIELD lives inside the object on top of the stack.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
@@ -295,6 +339,33 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 
 	StackValue object = get_stack (0);
 
+#ifndef DISABLE_REMOTING
+	if (remote_field_access (object, *field)) {
+		MonoMethod *wrapper = mono_marshal_get_ldfld_wrapper (ftype);
+		llvm::Expected<llvm::Function *> decl = create_method_decl (wrapper);
+
+		if (!decl)
+			return decl.takeError ();
+
+		MonoMethodSignature *wsig = mono_method_signature_internal (wrapper);
+
+		push_field_wrapper_operands (builder, *field);
+
+		llvm::Expected<std::vector<llvm::Value *>> args =
+			pop_call_arguments (builder, wsig);
+
+		if (!args)
+			return args.takeError ();
+
+		llvm::Value *value = emit_protected_call (builder, *decl, *args);
+
+		pop_stack (4);
+		push_stack (widen_to_stack (builder, value, wsig->ret),
+		            stack_slot_type (wsig->ret));
+		return llvm::Error::success ();
+	}
+#endif
+
 	/*
 	 * The object may also be an instance of a value type, sitting on the stack
 	 * as the value itself (III.4.10). It has no address until it is given one,
@@ -390,6 +461,37 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 
 	StackValue object = get_stack (0);
 
+#ifndef DISABLE_REMOTING
+	if (remote_field_access (object, *field)) {
+		MonoMethod *wrapper =
+			mono_marshal_get_ldflda_wrapper (mono_field_get_type_internal (*field));
+		llvm::Expected<llvm::Function *> decl = create_method_decl (wrapper);
+
+		if (!decl)
+			return decl.takeError ();
+
+		push_field_wrapper_operands (builder, *field);
+
+		llvm::Expected<std::vector<llvm::Value *>> args =
+			pop_call_arguments (builder, mono_method_signature_internal (wrapper));
+
+		if (!args)
+			return args.takeError ();
+
+		llvm::Value *value = emit_protected_call (builder, *decl, *args);
+
+		if (!value->getType ()->isPointerTy ())
+			value = builder.CreateIntToPtr (
+				value, llvm::PointerType::get (context (), 0));
+
+		pop_stack (4);
+		push_stack (value,
+		            m_class_get_this_arg (mono_class_from_mono_type_internal (
+				    mono_field_get_type_internal (*field))));
+		return llvm::Error::success ();
+	}
+#endif
+
 	/*
 	 * Taking the address dereferences nothing, so only an object-reference
 	 * receiver is checked - through a native pointer even null just computes,
@@ -477,6 +579,35 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 	}
 
 	MonoType *ftype = mono_field_get_type_internal (*field);
+
+#ifndef DISABLE_REMOTING
+	if (remote_field_access (get_stack (1), *field)) {
+		MonoMethod *wrapper = mono_marshal_get_stfld_wrapper (ftype);
+		llvm::Expected<llvm::Function *> decl = create_method_decl (wrapper);
+
+		if (!decl)
+			return decl.takeError ();
+
+		/* The wrapper wants the value after the constants, so it comes off
+		 * and goes back on top of them. */
+		StackValue stored = get_stack (0);
+
+		pop_stack (1);
+		push_field_wrapper_operands (builder, *field);
+		push_stack (stored.value, stored.type);
+
+		llvm::Expected<std::vector<llvm::Value *>> args =
+			pop_call_arguments (builder, mono_method_signature_internal (wrapper));
+
+		if (!args)
+			return args.takeError ();
+
+		emit_protected_call (builder, *decl, *args);
+		pop_stack (5);
+		return llvm::Error::success ();
+	}
+#endif
+
 	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), ftype);
 	if (!value)
 		return value.takeError ();

@@ -446,6 +446,7 @@ private:
 	                               MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Constant *code_address_symbol (MonoMethod *target);
+	bool is_own_this (llvm::Value *value);
 	bool matching_call_abi (MonoMethodSignature *callee_sig, llvm::FunctionType *callee_type);
 	llvm::Error emit_jmp (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
@@ -542,6 +543,8 @@ private:
 	llvm::Expected<llvm::Value *> field_address (MonoIrBuilder &builder, StackValue object,
 	                                             MonoClassField *field,
 	                                             bool null_check = true);
+	bool remote_field_access (StackValue receiver, MonoClassField *field);
+	void push_field_wrapper_operands (MonoIrBuilder &builder, MonoClassField *field);
 	llvm::Error emit_ldfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldflda (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stfld (MonoIrBuilder &builder, uint32_t token);

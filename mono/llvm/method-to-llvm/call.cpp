@@ -7,6 +7,7 @@
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
+#include "mono/metadata/remoting.h"
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/InstrTypes.h>
@@ -175,6 +176,22 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 	g_free (name);
 	record_external (symbol, ExternalSymbol::Kind::Method, target);
 	return extern_symbol (symbol);
+}
+
+/// Whether VALUE is this method's own `this`, straight out of its slot. Used
+/// to skip transparent-proxy checks: a body only ever executes on the real
+/// object, so its own `this` can never be a proxy. A value that went through a
+/// spill on its way here is missed, which costs a check, never correctness.
+bool
+MethodLLVMEmitter::is_own_this (llvm::Value *value)
+{
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (sig == nullptr || !sig->hasthis || args.empty ())
+		return false;
+
+	auto *load = llvm::dyn_cast<llvm::LoadInst> (value);
+	return load != nullptr && load->getPointerOperand () == args[0].alloca;
 }
 
 /// The address of TARGET as something other than a direct call target: what
@@ -511,6 +528,51 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		receiver.value = *boxed;
 		receiver.type = mono_get_object_type ();
 	}
+
+#ifndef DISABLE_REMOTING
+	/*
+	 * A receiver of a MarshalByRefObject-derived class - or of Object itself,
+	 * whose non-virtual methods a proxy also answers - may be a transparent
+	 * proxy, and calling the body directly would run it locally, in the wrong
+	 * domain or context. A direct call to such a method therefore goes through
+	 * the with-check wrapper, which runs the body only after proving the
+	 * receiver real, and remotes the call otherwise. Dispatched calls need
+	 * none of this: a proxy's vtable already routes every slot to remoting.
+	 *
+	 * A receiver that is this method's own `this` is exempt - a body only ever
+	 * executes on the real object. So are the remoting wrappers themselves:
+	 * their calls are made after the check has already decided locality, and
+	 * re-wrapping the with-check wrapper's own direct call would make the
+	 * wrapper call itself.
+	 */
+	bool devirtualized = !is_virtual
+	                     || direct_this
+	                     || !(callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
+	                     || (callee_method->flags & METHOD_ATTRIBUTE_FINAL);
+
+	bool in_remoting_wrapper =
+		method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE
+		|| method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK
+		|| method->wrapper_type == MONO_WRAPPER_XDOMAIN_INVOKE
+		|| method->wrapper_type == MONO_WRAPPER_XDOMAIN_DISPATCH;
+
+	if (devirtualized && sig->hasthis && !direct_this && !box_receiver
+	    && !in_remoting_wrapper
+	    && callee_method->wrapper_type == MONO_WRAPPER_NONE
+	    && (mono_class_is_marshalbyref (callee_method->klass)
+	        || callee_method->klass == mono_defaults.object_class)
+	    && stack.size () > sig->param_count
+	    && !is_own_this (stack[stack.size () - 1 - sig->param_count].value)) {
+		ERROR_DECL (wrap_error);
+		MonoMethod *checked =
+			mono_marshal_get_remoting_invoke_with_check (callee_method, wrap_error);
+
+		if (!is_ok (wrap_error))
+			return runtime_error (wrap_error);
+		callee_method = checked;
+		sig = mono_method_signature_internal (callee_method);
+	}
+#endif
 
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (callee_method);
 	if (!declaration)

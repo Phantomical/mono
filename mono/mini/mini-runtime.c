@@ -4345,6 +4345,7 @@ mini_free_jit_domain_info (MonoDomain *domain)
 	}
 	mono_llvm_free_domain_info (domain);
 #endif
+	mono_llvm_jit_free_domain (domain);
 
 	g_free (domain->runtime_info);
 	domain->runtime_info = NULL;

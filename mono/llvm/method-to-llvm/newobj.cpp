@@ -1,6 +1,8 @@
 #include "method-to-llvm.hpp"
+#include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/remoting.h"
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
@@ -88,7 +90,31 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	/* Multi-dimensional and non-zero-based arrays construct through newobj. */
 	if (m_class_get_rank (klass) != 0)
 		return emit_array_newobj (builder, *target, sig);
-	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
+
+	MonoMethod *ctor = *target;
+
+#ifndef DISABLE_REMOTING
+	/*
+	 * Allocating a context-bound class hands back a transparent proxy, and the
+	 * construction has to be remoted through it - that is what activates the
+	 * object and gives the proxy its identity; running the constructor's body
+	 * directly on the proxy would just scribble on it. The with-check wrapper
+	 * remotes exactly the proxy case, and on the real object every other
+	 * MarshalByRefObject-derived class allocates, it falls through to the
+	 * plain constructor call.
+	 */
+	if (!m_class_is_valuetype (klass) && mono_class_is_marshalbyref (klass)) {
+		ERROR_DECL (wrap_error);
+		MonoMethod *checked =
+			mono_marshal_get_remoting_invoke_with_check (ctor, wrap_error);
+
+		if (!is_ok (wrap_error))
+			return runtime_error (wrap_error);
+		ctor = checked;
+	}
+#endif
+
+	llvm::Expected<llvm::Function *> declaration = create_method_decl (ctor);
 	if (!declaration)
 		return declaration.takeError ();
 

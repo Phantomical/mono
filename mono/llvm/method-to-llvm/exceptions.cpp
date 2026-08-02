@@ -520,6 +520,55 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 		return target.takeError ();
 
 	/*
+	 * Leaving a catch handler asks the runtime whether an undeniable exception
+	 * is pending and rethrows it: a thread abort raised for an appdomain unload
+	 * survives ResetAbort, and rethrowing it at every catch exit is what stops
+	 * a handler from swallowing it and keeping the thread in the dying domain.
+	 * Not in runtime-invoke wrappers, whose native callers expect the wrapper
+	 * to catch everything.
+	 */
+	bool leaving_catch = false;
+
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		MonoExceptionClause *clause = &clauses[i];
+
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
+		    && MONO_OFFSET_IN_HANDLER (clause, offset)
+		    && ip <= (size_t) clause->handler_offset + clause->handler_len) {
+			leaving_catch = true;
+			break;
+		}
+	}
+
+	if (leaving_catch && method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE) {
+		/*
+		 * Through the icall wrapper, not as a bare call: the runtime answers by
+		 * walking the stack from the last LMF, and the wrapper's is what makes
+		 * the walk start here rather than at whichever frame saved one last.
+		 */
+		llvm::Expected<llvm::Function *> undeniable = icall_wrapper_decl (
+			MONO_JIT_ICALL_mono_thread_get_undeniable_exception);
+
+		if (!undeniable)
+			return undeniable.takeError ();
+
+		llvm::Value *pending = emit_protected_call (
+			builder, *undeniable, adapt_to_callee (builder, *undeniable, {}));
+
+		llvm::BasicBlock *rethrow = llvm::BasicBlock::Create (
+			context (), "rethrow_undeniable", function);
+		llvm::BasicBlock *carry_on = llvm::BasicBlock::Create (
+			context (), "no_undeniable", function);
+
+		builder.CreateCondBr (builder.CreateIsNotNull (pending), rethrow, carry_on);
+
+		MonoIrBuilder thrower (rethrow);
+		emit_unwinding_call (thrower, throw_decl (module, "mono_llvm_throw_exception"),
+		                     {pending});
+		builder.SetInsertPoint (carry_on);
+	}
+
+	/*
 	 * Every finally whose try region we are inside but the target is not, innermost
 	 * first. A fault is not in the chain: it runs only when something went wrong, and
 	 * a leave is an ordinary exit.

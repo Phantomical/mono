@@ -16,6 +16,7 @@
 MONO_BEGIN_DECLS
 
 typedef struct _MonoMethod MonoMethod;
+typedef struct _MonoDomain MonoDomain;
 
 /// Compile METHOD and return the address to call it at.
 ///
@@ -27,6 +28,12 @@ typedef struct _MonoMethod MonoMethod;
 /// malformed IL an InvalidProgramException, exactly as the caller would get from
 /// any other failing compile.
 void *mono_llvm_jit_compile_method (MonoMethod *method, MonoError *error);
+
+/// Release everything the backend holds for DOMAIN: its code, its stubs, the
+/// linker they live in. Called on the domain's way out, after the runtime has
+/// proved nothing can execute in it any more; a domain the backend never
+/// compiled for is a quiet no-op.
+void mono_llvm_jit_free_domain (MonoDomain *domain);
 
 /// Queue OPT for LLVM's own command-line option registry - the same options
 /// `opt` and `llc` take, e.g. "-print-after-all". A leading dash is optional.
