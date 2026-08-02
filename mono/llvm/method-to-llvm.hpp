@@ -340,7 +340,10 @@ private:
 	int innermost_handler (size_t at) const;
 	std::vector<uint32_t> covering_chain (uint32_t clause) const;
 	llvm::Constant *clause_marker (uint32_t clause);
+	llvm::Constant *resume_marker (uint32_t clause);
+	llvm::BasicBlock *handler_entry (uint32_t clause, llvm::Value *exc);
 	llvm::BasicBlock *landing_pad (uint32_t clause);
+	void emit_resume_exit (MonoIrBuilder &builder, uint32_t clause);
 	void emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                          llvm::ArrayRef<llvm::Value *> args);
 	llvm::Error resolve_finally_switches ();
