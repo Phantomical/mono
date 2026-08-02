@@ -353,6 +353,17 @@ Backend::resolve (const std::vector<ExternalSymbol> &externals)
 Expected<Backend::Compiled>
 Backend::translate_and_compile (MonoMethod *method)
 {
+	/*
+	 * Array Get/Set/Address have no body and no icall - every call site
+	 * lowers them inline. The compilable form, for the runtime paths that
+	 * need the method itself, is the marshal wrapper, whose inner call to
+	 * the accessor lowers the same way.
+	 */
+	if (m_class_get_rank (method->klass) > 0
+	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+		method = mono_marshal_get_array_accessor_wrapper (method);
+
 	auto context = std::make_unique<LLVMContext> ();
 	auto module = std::make_unique<Module> (symbol_for_body (method), *context);
 

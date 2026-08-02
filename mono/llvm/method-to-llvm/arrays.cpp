@@ -1,11 +1,13 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
+#include "../passes/array-address.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-init.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
+#include "mono/metadata/tokentype.h"
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
@@ -402,6 +404,163 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 	return llvm::Error::success ();
 }
 
+/// The symbolic element-address call ArrayAddressPass expands: (array, idx...) to a
+/// pointer at the element, throwing IndexOutOfRangeException when an index misses
+/// its dimension. Everything the expansion needs travels on the declaration, which
+/// is what keeps mono's layouts out of the pass.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::array_accessor_address (MonoIrBuilder &builder, MonoClass *klass,
+                                           llvm::Value *array,
+                                           llvm::ArrayRef<llvm::Value *> indices)
+{
+	MonoClass *eclass = m_class_get_element_class (klass);
+	int32_t size = mono_class_array_element_size (eclass);
+	bool bounded = m_class_get_byval_arg (klass)->type == MONO_TYPE_ARRAY;
+	std::string name = (llvm::Twine (array_address_prefix) + "r"
+	                    + llvm::Twine (indices.size ()) + ".s" + llvm::Twine (size)
+	                    + (bounded ? ".b" : ""))
+	                           .str ();
+	llvm::Function *decl = module->getFunction (name);
+
+	if (decl == nullptr) {
+		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+		std::vector<llvm::Type *> params (1 + indices.size (), builder.getInt32Ty ());
+
+		params[0] = ptr;
+		decl = llvm::Function::Create (llvm::FunctionType::get (ptr, params, false),
+		                               llvm::GlobalValue::ExternalLinkage, name,
+		                               module);
+
+		MonoClass *ioor = mono_class_load_from_name (mono_get_corlib (), "System",
+		                                             "IndexOutOfRangeException");
+		char spec[256];
+
+		snprintf (spec, sizeof (spec),
+		          "rank=%zu,size=%d,bounded=%d,token=%u,bounds=%d,maxlen=%d,"
+		          "maxlen_bytes=%zu,vector=%d,stride=%zu,blen=%d,blen_bytes=%zu,"
+		          "blb=%d,blb_bytes=%zu",
+		          indices.size (), size, bounded ? 1 : 0,
+		          m_class_get_type_token (ioor) - MONO_TOKEN_TYPE_DEF,
+		          (int) MONO_STRUCT_OFFSET (MonoArray, bounds),
+		          (int) MONO_STRUCT_OFFSET (MonoArray, max_length),
+		          sizeof (mono_array_size_t),
+		          (int) MONO_STRUCT_OFFSET (MonoArray, vector),
+		          sizeof (MonoArrayBounds),
+		          (int) MONO_STRUCT_OFFSET (MonoArrayBounds, length),
+		          sizeof (mono_array_size_t),
+		          (int) MONO_STRUCT_OFFSET (MonoArrayBounds, lower_bound),
+		          sizeof (mono_array_lower_bound_t));
+		decl->addFnAttr (llvm::Attribute::get (context (), array_address_attribute,
+		                                       spec));
+	}
+
+	std::vector<llvm::Value *> args;
+
+	args.reserve (1 + indices.size ());
+	args.push_back (array);
+	args.insert (args.end (), indices.begin (), indices.end ());
+	return emit_protected_call (builder, decl, args);
+}
+
+/// A call to Get, Set or Address on an array class. These have no IL body - the
+/// runtime resolves them per call site, and the marshal wrapper it offers instead
+/// just calls the accessor again - so the site lowers here: the address as the
+/// symbolic call above, the load or store around it shaped like ldelem/stelem.
+llvm::Error
+MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod *accessor,
+                                             MonoMethodSignature *sig)
+{
+	std::string_view what = accessor->name;
+	bool is_set = what == "Set";
+
+	if (!is_set && what != "Get" && what != "Address")
+		return unsupported_il (llvm::Twine ("array runtime method ") + accessor->name);
+
+	uint32_t rank = sig->param_count - (is_set ? 1 : 0);
+	size_t depth = 1 + sig->param_count;
+
+	if (stack.size () < depth)
+		return unbalanced_stack (depth);
+
+	MonoClass *eclass = m_class_get_element_class (accessor->klass);
+	MonoType *element = m_class_get_byval_arg (eclass);
+	StackValue array = get_stack (sig->param_count);
+
+	if (stack_type (array.type) != ObjectRef)
+		return invalid_il (llvm::Twine ("an array was expected, not operand type ")
+		                   + describe (array.type, stack_type (array.type)));
+
+	llvm::Value *value = nullptr;
+
+	if (is_set) {
+		llvm::Expected<llvm::Value *> coerced =
+			coerce_to_location (builder, get_stack (0), element);
+
+		if (!coerced)
+			return coerced.takeError ();
+		value = *coerced;
+
+		/* The covariance question stelem asks before it writes. */
+		if (mini_type_is_reference (element)) {
+			llvm::Expected<llvm::Function *> check =
+				icall_wrapper_decl (MONO_JIT_ICALL_mono_helper_stelem_ref_check);
+
+			if (!check)
+				return check.takeError ();
+			emit_protected_call (builder, *check,
+			                     adapt_to_callee (builder, *check,
+			                                      {array.value, value}));
+		}
+	}
+
+	emit_null_check (builder, array.value);
+
+	std::vector<llvm::Value *> indices;
+
+	indices.reserve (rank);
+	for (uint32_t i = 0; i < rank; ++i) {
+		StackValue index = get_stack ((is_set ? 1 : 0) + (rank - 1 - i));
+		StackType type = stack_type (index.type);
+
+		if (type != Int32 && type != NativeInt)
+			return invalid_il (llvm::Twine ("an array index cannot be operand type ")
+			                   + describe (index.type, type));
+
+		llvm::Value *raw = index.value;
+
+		if (raw->getType ()->isPointerTy ())
+			raw = builder.CreatePtrToInt (
+				raw, builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
+		indices.push_back (builder.CreateZExtOrTrunc (raw, builder.getInt32Ty ()));
+	}
+
+	llvm::Expected<llvm::Value *> address =
+		array_accessor_address (builder, accessor->klass, array.value, indices);
+
+	if (!address)
+		return address.takeError ();
+
+	pop_stack (depth);
+
+	if (is_set) {
+		emit_memory_store (builder, value, *address, element);
+	} else if (what == "Get") {
+		llvm::Expected<llvm::Type *> type = convert_type (element);
+
+		if (!type)
+			return type.takeError ();
+
+		llvm::Value *loaded =
+			builder.CreateAlignedLoad (*type, *address, type_alignment (element));
+
+		push_stack (widen_to_stack (builder, loaded, element),
+		            stack_slot_type (element));
+	} else {
+		push_stack (*address, m_class_get_this_arg (eclass));
+	}
+	return llvm::Error::success ();
+}
+
 /*
  * III.4.20  newarr - create a zero-based, one-dimensional array
  *
@@ -486,10 +645,10 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	/*
 	 * Through the allocator's wrapper: it reports a failed allocation as a
 	 * pending OutOfMemoryException, which only the wrapper's check throws. The
-	 * result aliases nothing older than the call and arrives zeroed, and
-	 * allockind lets an array nothing observes be elided outright - that is a
-	 * real choice: an allocation whose failure nothing could observe did not
-	 * need to happen. Deliberately not nounwind.
+	 * result aliases nothing older than the call, and allockind lets an array
+	 * nothing observes be elided outright - that is a real choice: an
+	 * allocation whose failure nothing could observe did not need to happen.
+	 * Deliberately not nounwind.
 	 */
 	llvm::Expected<llvm::Function *> allocate =
 		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);

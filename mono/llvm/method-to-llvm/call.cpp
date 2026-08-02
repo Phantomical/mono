@@ -474,6 +474,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (is_virtual && sig->generic_param_count != 0 && !callee_method->is_inflated)
 		return invalid_il ("callvirt on an open generic method");
 
+	if (m_class_get_rank (callee_method->klass) > 0
+	    && (callee_method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+	    && (callee_method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+		return emit_array_accessor_call (builder, callee_method, sig);
+
 	/*
 	 * The boxed receiver replaces the managed pointer in its stack slot, below the
 	 * explicit arguments, before the arguments are collected.

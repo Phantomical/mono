@@ -7,6 +7,7 @@
 
 #include "compiler.hpp"
 #include "nearmem.hpp"
+#include "passes/array-address.hpp"
 #include "passes/legacy-abi.hpp"
 #include "stubs.hpp"
 
@@ -226,13 +227,15 @@ MonoJit::run_tier0_pipeline (Module &m)
 	pb.registerLoopAnalyses (lam);
 	pb.crossRegisterProxies (lam, fam, cgam, mam);
 
-	ModulePassManager mpm =
-		pb.buildPerModuleDefaultPipeline (OptimizationLevel::O1);
+	ModulePassManager mpm;
 
 	/*
-	 * After the whole pipeline: the optimizer works over natural-typed calls,
-	 * and only what survives it is lowered to the legacy boundary convention.
+	 * Before the pipeline, so the optimizer sees the element arithmetic;
+	 * after it, so it works over natural-typed calls and only what survives
+	 * is lowered to the legacy boundary convention.
 	 */
+	mpm.addPass (ArrayAddressPass ());
+	mpm.addPass (pb.buildPerModuleDefaultPipeline (OptimizationLevel::O1));
 	mpm.addPass (LegacyAbiPass ());
 	mpm.run (m, mam);
 }

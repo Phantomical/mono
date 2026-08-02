@@ -481,6 +481,12 @@ private:
 	llvm::Error emit_ldelema (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldelem (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
+	llvm::Expected<llvm::Value *> array_accessor_address (MonoIrBuilder &builder,
+	                                                      MonoClass *klass,
+	                                                      llvm::Value *array,
+	                                                      llvm::ArrayRef<llvm::Value *> indices);
+	llvm::Error emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod *accessor,
+	                                      MonoMethodSignature *sig);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
