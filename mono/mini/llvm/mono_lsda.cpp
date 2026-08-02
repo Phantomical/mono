@@ -377,14 +377,12 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		g_assert (e.kind == static_cast<std::uint32_t> (clauses[e.clause_index].flags));
 
 		/*
-		 * EH F2 admits catch (NONE), FINALLY and FAULT -
-		 * mono_llvm_check_method_supported (translator.cpp, the 3b EH gate)
-		 * already declined every OTHER flags value on this same cfg->header
-		 * before this method reached codegen at all, so cl.flags being anything
-		 * else here is that earlier gate's own invariant breaking, not new
+		 * Catch (NONE), FILTER, FINALLY and FAULT are the publishable kinds;
+		 * anything else here is the emitter's own invariant breaking, not new
 		 * information about the IL.
 		 */
 		g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_NONE ||
+		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FILTER ||
 		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
 		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FAULT);
 

@@ -480,6 +480,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 			compiled.code_size = extent.second;
 		}
 	}
+	compiled.functions = std::move (extents->functions);
 
 	if (compiled.code == nullptr)
 		return createStringError (inconvertibleErrorCode (),

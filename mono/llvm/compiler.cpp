@@ -173,6 +173,13 @@ private:
 			if (fn.declined)
 				continue;
 
+			/*
+			 * A filter body compiled alongside its method carries no clauses
+			 * of its own; the section describes the method alone.
+			 */
+			if (fn.function.find ("$filter") != std::string::npos)
+				continue;
+
 			if (++records > 1)
 				report_fatal_error ("mono: multiple EH functions in one "
 				                    "JIT module - .mono_lsda attribution "
@@ -221,10 +228,12 @@ private:
 
 		if (frames.empty ())
 			return;
-		if (frames.size () > 1)
-			report_fatal_error ("mono: multiple frames in one JIT module - "
-			                    ".mono_unwind attribution is ambiguous");
 
+		/*
+		 * The entry function is created first and machine passes run in
+		 * module order, so its frame is the first; any frames after it
+		 * belong to filter bodies, whose unwind state nothing consumes.
+		 */
 		const MCDwarfFrameInfo &frame = frames.front ();
 		const std::vector<MCCFIInstruction> &initial =
 			ctx.getAsmInfo ()->getInitialFrameState ();

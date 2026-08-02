@@ -56,6 +56,15 @@ MethodLLVMEmitter::innermost_try (size_t at) const
 {
 	int found = -1;
 
+	/*
+	 * A filter body runs during the search pass, before anything has been
+	 * unwound; an exception it fails to contain makes the filter answer no,
+	 * it is never dispatched into this frame's clauses. So nothing in a
+	 * filter function is protected and its calls stay plain calls.
+	 */
+	if (filter_mode)
+		return -1;
+
 	for (uint32_t i = 0; i < num_clauses; ++i) {
 		MonoExceptionClause *clause = &clauses[i];
 
@@ -113,11 +122,16 @@ MethodLLVMEmitter::covering_chain (uint32_t clause) const
 	std::vector<uint32_t> chain;
 	MonoExceptionClause *self = &clauses[clause];
 
+	bool self_catches = self->flags == MONO_EXCEPTION_CLAUSE_NONE
+	                    || self->flags == MONO_EXCEPTION_CLAUSE_FILTER;
+
 	for (uint32_t j = 0; j < num_clauses; ++j) {
 		MonoExceptionClause *c = &clauses[j];
 
-		if (self->flags == MONO_EXCEPTION_CLAUSE_NONE) {
-			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE)
+		/* Filtered catches are siblings of plain ones over the same try. */
+		if (self_catches) {
+			if (c->flags != MONO_EXCEPTION_CLAUSE_NONE
+			    && c->flags != MONO_EXCEPTION_CLAUSE_FILTER)
 				continue;
 			if (c->try_offset != self->try_offset || c->try_len != self->try_len)
 				continue;

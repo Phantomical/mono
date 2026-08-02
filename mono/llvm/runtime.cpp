@@ -424,7 +424,23 @@ Backend::translate_and_compile (MonoMethod *method)
 	if (!compiled)
 		return compiled.takeError ();
 
-	if (Error err = register_jit_info (method, cfg.get ()->header, *compiled))
+	/*
+	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`;
+	 * their entries go into the published clauses.
+	 */
+	std::vector<std::pair<uint32_t, void *>> filters;
+
+	for (const auto &[name, extent] : compiled->functions) {
+		size_t at = name.rfind ("$filter");
+
+		if (at == std::string::npos)
+			continue;
+		filters.emplace_back (
+			(uint32_t) std::stoul (name.substr (at + 7)),
+			const_cast<uint8_t *> (extent.first));
+	}
+
+	if (Error err = register_jit_info (method, cfg.get ()->header, *compiled, filters))
 		return std::move (err);
 
 	/*

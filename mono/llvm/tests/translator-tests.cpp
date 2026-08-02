@@ -503,7 +503,8 @@ TEST_F (TranslatorTest, ArrayNewobjCallsTheRuntimeArrayIcalls)
 	EXPECT_EQ (two.count ("mono_array_new_2"), 1u) << two.text ();
 	EXPECT_GE (two.count ("mono_method_"), 1u);
 
-	/* The icall is a GC allocation and carries the allocator attributes. The
+	/* The allocation's whole claim is NoAlias: an allockind would let a dead
+	 * allocation - and its catchable OutOfMemoryException - be deleted. The
 	 * call goes through the icall wrapper, whose name decorates the icall's. */
 	llvm::Function *allocator = nullptr;
 	for (llvm::Function &f : *two.module)
@@ -511,7 +512,7 @@ TEST_F (TranslatorTest, ArrayNewobjCallsTheRuntimeArrayIcalls)
 			allocator = &f;
 	ASSERT_NE (allocator, nullptr);
 	EXPECT_TRUE (allocator->hasRetAttribute (llvm::Attribute::NoAlias));
-	EXPECT_TRUE (allocator->hasFnAttribute (llvm::Attribute::AllocKind));
+	EXPECT_FALSE (allocator->hasFnAttribute (llvm::Attribute::AllocKind));
 
 	ASSERT_NE (bounded.function, nullptr) << bounded.error;
 	EXPECT_EQ (bounded.count ("mono_array_new_n_icall"), 1u) << bounded.text ();
@@ -1174,8 +1175,23 @@ const RefusalRef refusals[] = {
 	{"Refused:UsesArglist", "vararg"},
 	{"Refused:CallsAVararg", "vararg"},
 	{"Refused:MergesAStructWithAnInt", "different type"},
-	{"Refused:HasAFilterClause", "filter"},
 };
+
+/* A filter clause translates: the body becomes a function of its own beside
+ * the method, reaching the frame's locals through llvm.localrecover. */
+TEST_F (TranslatorTest, AFilterClauseBecomesItsOwnFunction)
+{
+	const Translation &t = translate ("refused", "Refused:HasAFilterClause");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	llvm::Function *body = nullptr;
+	for (llvm::Function &f : *t.module)
+		if (f.getName ().contains ("$filter"))
+			body = &f;
+	ASSERT_NE (body, nullptr) << t.text ();
+	EXPECT_FALSE (body->isDeclaration ());
+}
 
 INSTANTIATE_TEST_SUITE_P (Corpus, Refuses, testing::ValuesIn (refusals),
                           [] (const testing::TestParamInfo<RefusalRef> &info) {

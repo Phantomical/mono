@@ -7,6 +7,8 @@
 #include "mono/metadata/opcodes.h"
 #include "mono/metadata/tokentype.h"
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/InlineAsm.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/Error.h>
 #include <llvm/IR/Attributes.h>
@@ -71,7 +73,24 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
                 std::vector<ExternalSymbol> *externals)
 {
 	auto emitter = MethodLLVMEmitter (module, cfg, method, externals);
-	return emitter.emit ();
+	llvm::Expected<llvm::Function *> function = emitter.emit ();
+
+	if (!function)
+		return function;
+
+	/* Each filter body rides along as a function of its own. */
+	for (uint32_t i = 0; i < cfg->header->num_clauses; ++i) {
+		if (cfg->header->clauses[i].flags != MONO_EXCEPTION_CLAUSE_FILTER)
+			continue;
+
+		MethodLLVMEmitter filter (module, cfg, method, externals);
+		llvm::Expected<llvm::Function *> body = filter.emit_filter (*function, i);
+
+		if (!body)
+			return body.takeError ();
+	}
+
+	return function;
 }
 
 /// How the CLI categorizes T on the evaluation stack.
@@ -522,14 +541,6 @@ MethodLLVMEmitter::emit ()
 	function->setUWTableKind (llvm::UWTableKind::Default);
 
 	/*
-	 * A filter runs during the unwinder's search pass, called into the frame like
-	 * a function, which needs an entry point this translation cannot yet give it.
-	 */
-	for (uint32_t i = 0; i < num_clauses; ++i)
-		if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER)
-			return unsupported_il ("the method has a filter clause");
-
-	/*
 	 * An invoke is only well formed on a function with a personality, and mono's is
 	 * the hook its own unwinder recognises. Nothing calls it on the managed path -
 	 * mono_handle_exception does the search - but LLVM will not emit the LSDA the
@@ -593,6 +604,29 @@ MethodLLVMEmitter::emit ()
 		return std::move (error);
 	if (auto error = emit_local_allocas (builder))
 		return std::move (error);
+
+	/*
+	 * A filter body runs as a function of its own against this frame, and
+	 * llvm.localrecover is how it reaches the arguments and locals: escaping
+	 * them here is what pins each to a frame offset the filter can recompute
+	 * from the frame pointer. Order is the recovery index: arguments first,
+	 * then locals.
+	 */
+	bool has_filters = false;
+
+	for (uint32_t i = 0; i < num_clauses; ++i)
+		has_filters |= clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER;
+	if (has_filters) {
+		std::vector<llvm::Value *> escaped;
+
+		for (const Entry &arg : args)
+			escaped.push_back (arg.alloca);
+		for (const Entry &local : locals)
+			escaped.push_back (local.alloca);
+		builder.CreateIntrinsic (llvm::Intrinsic::localescape, {}, escaped);
+		function->addFnAttr ("frame-pointer", "all");
+	}
+
 	if (auto error = find_block_leaders ())
 		return std::move (error);
 
@@ -622,9 +656,6 @@ MethodLLVMEmitter::emit ()
 
 		if (auto error = enter_block (builder, clause->handler_offset, entry))
 			return std::move (error);
-		if (clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
-			if (auto error = enter_block (builder, clause->data.filter_offset, entry))
-				return std::move (error);
 	}
 
 	/*
@@ -644,10 +675,45 @@ MethodLLVMEmitter::emit ()
 	blocks[0].entry_known = true;
 	builder.SetInsertPoint (blocks[0].block);
 
-	while (ip < code_size) {
+	if (auto error = translate_range (builder, 0, code_size))
+		return std::move (error);
+
+	if (auto error = resolve_finally_switches ())
+		return std::move (error);
+
+	finish_function ();
+	return function;
+}
+
+/// Translate the IL in [BEGIN, END), leaving the builder wherever the last
+/// instruction did.
+llvm::Error
+MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t end)
+{
+	ip = begin;
+
+	while (ip < end) {
+		/*
+		 * A filter body belongs to a function of its own; nothing in this
+		 * one reaches it, so its range is not translated here.
+		 */
+		if (!filter_mode) {
+			bool skipped = false;
+
+			for (uint32_t i = 0; i < num_clauses; ++i)
+				if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER
+				    && ip >= clauses[i].data.filter_offset
+				    && ip < clauses[i].handler_offset) {
+					ip = clauses[i].handler_offset;
+					skipped = true;
+				}
+			if (skipped)
+				continue;
+		}
+
 		offset = ip;
 
-		if (auto found = blocks.find (ip); found != blocks.end () && ip != 0) {
+		if (auto found = blocks.find (ip); found != blocks.end () && ip != begin) {
 			Block &next = found->second;
 
 			/*
@@ -687,9 +753,97 @@ MethodLLVMEmitter::emit ()
 	if (builder.GetInsertBlock ()->getTerminator () == nullptr)
 		return invalid_il ("method body ends without returning");
 
-	if (auto error = resolve_finally_switches ())
+	return llvm::Error::success ();
+}
+
+/// The filter body of PARENT's clause CLAUSE_INDEX, as a function of its own.
+///
+/// The runtime's search pass calls it through call_filter with the parent
+/// frame's registers restored: the exception arrives in RAX, the chained frame
+/// pointer is the parent's frame, and the answer - match or keep searching -
+/// is returned like any int. The parent escaped its arguments and locals
+/// (llvm.localescape, same order as here), so llvm.localrecover turns the
+/// parent frame pointer back into their addresses.
+llvm::Expected<llvm::Function *>
+MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
+{
+	code = cfg->header->code;
+	code_size = cfg->header->code_size;
+	clauses = cfg->header->clauses;
+	num_clauses = cfg->header->num_clauses;
+	clause_state.resize (num_clauses);
+	filter_mode = true;
+
+	size_t begin = clauses[clause_index].data.filter_offset;
+	size_t end = clauses[clause_index].handler_offset;
+
+	function = llvm::Function::Create (
+		llvm::FunctionType::get (llvm::Type::getInt32Ty (context ()), false),
+		llvm::GlobalValue::ExternalLinkage,
+		parent->getName () + "$filter" + llvm::Twine (clause_index), module);
+	/* The chained frame pointer is how the parent frame is found. */
+	function->addFnAttr ("frame-pointer", "all");
+	/*
+	 * call_filter enters with the stack 16-aligned - the opposite parity from
+	 * a SysV call - so the frame realigns itself or every callee inherits the
+	 * wrong parity.
+	 */
+	function->addFnAttr ("stackrealign");
+
+	MonoIrBuilder builder (context ());
+
+	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
+	builder.SetInsertPoint (entry_block);
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Value *exc = builder.CreateCall (llvm::InlineAsm::get (
+		llvm::FunctionType::get (ptr, false), "", "={rax}",
+		/*hasSideEffects=*/true));
+	llvm::Value *frame = builder.CreateIntrinsic (
+		ptr, llvm::Intrinsic::frameaddress, { builder.getInt32 (1) });
+
+	auto recover = [&] (unsigned index) {
+		return builder.CreateIntrinsic (
+			llvm::Intrinsic::localrecover, {},
+			{ parent, frame, builder.getInt32 (static_cast<int32_t> (index)) });
+	};
+	auto sig = method->signature;
+	unsigned nargs = sig->param_count + sig->hasthis;
+	unsigned index = 0;
+
+	for (unsigned i = 0; i < nargs; ++i)
+		args.push_back ({ recover (index++), mono_arg_type (method, i) });
+	for (size_t i = 0; i < cfg->header->num_locals; ++i)
+		locals.push_back ({ recover (index++), cfg->header->locals[i] });
+
+	if (auto error = find_block_leaders ())
 		return std::move (error);
 
+	/* Entered like a handler: the exception is the whole evaluation stack. */
+	llvm::AllocaInst *exc_slot = spill_slot (0, ptr);
+
+	builder.CreateAlignedStore (exc, exc_slot, exc_slot->getAlign ());
+	if (auto error = enter_block (builder, begin,
+	                              { { exc_slot, mono_get_object_type () } }))
+		return std::move (error);
+
+	Block &first = blocks[begin];
+
+	builder.CreateBr (first.block);
+	builder.SetInsertPoint (first.block);
+	reload_stack (builder, first);
+
+	if (auto error = translate_range (builder, begin, end))
+		return std::move (error);
+
+	finish_function ();
+	return function;
+}
+
+/// The function-wide sweeps every translation ends with.
+void
+MethodLLVMEmitter::finish_function ()
+{
 	/*
 	 * A block nothing reached still has to be well formed for the verifier, and the
 	 * only honest thing to put in one is that control never gets here.
@@ -711,8 +865,6 @@ MethodLLVMEmitter::emit ()
 				    callee != nullptr
 				    && callee->getCallingConv () == llvm::CallingConv::Fast)
 					call->setCallingConv (llvm::CallingConv::Fast);
-
-	return function;
 }
 
 /// Translate the instruction at OFFSET, leaving IP on the one after it.

@@ -224,7 +224,8 @@ transcode_unwind (const std::vector<WireRecord> &records)
 
 Error
 register_jit_info (MonoMethod *method, MonoMethodHeader *header,
-                   const CompiledMethod &compiled)
+                   const CompiledMethod &compiled,
+                   const std::vector<std::pair<uint32_t, void *>> &filters)
 {
 	guint8 *code = (guint8 *) compiled.code;
 	guint32 code_size = (guint32) compiled.code_size;
@@ -271,6 +272,28 @@ register_jit_info (MonoMethod *method, MonoMethodHeader *header,
 			return createStringError (inconvertibleErrorCode (),
 			                          "the clause table does not join "
 			                          "against the method's IL clauses");
+		}
+
+		/*
+		 * The filter body's entry only exists once the object is linked, so
+		 * it is joined in here rather than travelling through the section.
+		 */
+		for (MonoJitExceptionInfo &ei : clauses) {
+			if (ei.flags != MONO_EXCEPTION_CLAUSE_FILTER)
+				continue;
+
+			void *body = nullptr;
+
+			for (const auto &filter : filters)
+				if (filter.first == (uint32_t) ei.clause_index)
+					body = filter.second;
+			if (body == nullptr) {
+				g_free (encoded);
+				return createStringError (inconvertibleErrorCode (),
+				                          "no compiled filter body for "
+				                          "clause %d", ei.clause_index);
+			}
+			ei.data.filter = body;
 		}
 	}
 

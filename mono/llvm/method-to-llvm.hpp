@@ -240,6 +240,11 @@ private:
 	/// prefix an address push may sit between the two.
 	bool pending_save_last_error = false;
 
+	/// Translating a filter body into a function of its own: locals and
+	/// arguments resolve into the parent frame through llvm.localrecover, and
+	/// nothing in the range is protected.
+	bool filter_mode = false;
+
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
@@ -264,6 +269,8 @@ public:
 	}
 
 	llvm::Expected<llvm::Function *> emit ();
+	llvm::Expected<llvm::Function *> emit_filter (llvm::Function *parent,
+	                                              uint32_t clause_index);
 
 	/// The declaration of METHOD in this emitter's module, for callers outside
 	/// the translation itself (the runtime builds interop thunks against it).
@@ -335,6 +342,8 @@ private:
 
 	llvm::Error find_block_leaders ();
 	llvm::Expected<size_t> branch_target (int32_t displacement);
+	llvm::Error translate_range (MonoIrBuilder &builder, size_t begin, size_t end);
+	void finish_function ();
 	llvm::AllocaInst *spill_slot (size_t depth, llvm::Type *type);
 	std::vector<Slot> spill_stack (MonoIrBuilder &builder);
 	llvm::Error enter_block (MonoIrBuilder &builder, size_t target,

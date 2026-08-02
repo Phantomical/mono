@@ -508,6 +508,16 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	if (!legacy)
 		full_name += "$fast";
 
+	/*
+	 * The emitter's cache is per instance, but filter bodies share the
+	 * method's module across instances - a name already declared there must
+	 * be reused or LLVM quietly uniques it into a symbol nothing resolves.
+	 */
+	if (llvm::Function *existing = module->getFunction (full_name)) {
+		declarations[method] = existing;
+		return existing;
+	}
+
 	llvm::Function *function = llvm::Function::Create (
 		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
 

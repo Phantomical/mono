@@ -19,8 +19,11 @@ namespace mono {
 /// the method has clauses - from COMPILED's side tables, and register it so the
 /// runtime's unwinder and stack walks can see the frame. A null HEADER
 /// registers clauseless code compiled for the method (its interop thunk).
+/// FILTERS maps an IL clause index to the entry of its compiled filter body,
+/// which the published clause hands the runtime's search pass.
 llvm::Error register_jit_info (MonoMethod *method, MonoMethodHeader *header,
-                               const CompiledMethod &compiled);
+                               const CompiledMethod &compiled,
+                               const std::vector<std::pair<uint32_t, void *>> &filters = {});
 
 } // namespace mono
 

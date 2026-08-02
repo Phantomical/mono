@@ -23,6 +23,8 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace llvm {
 namespace orc {
@@ -47,6 +49,10 @@ struct CompiledMethod {
 	/// The `.mono_unwind` frame description; never null for a method.
 	const uint8_t *unwind_table = nullptr;
 	size_t unwind_table_size = 0;
+
+	/// Every function the linked object defines, name to [code, size): the
+	/// entry, and any filter bodies compiled alongside it.
+	std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
 };
 
 class MonoJit {
