@@ -150,6 +150,30 @@ MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, St
 	                          builder.CreateMul (at, llvm::ConstantInt::get (native, size)));
 }
 
+/// Throw ArrayTypeMismatchException unless ARRAY is exactly an ARRAY_CLASS instance.
+///
+/// The exact-vtable compare mini emits: covariance lets a string[] arrive where an
+/// object[] is expected, and an address into it typed at the wrong element must be
+/// refused before anything writes through it.
+void
+MethodLLVMEmitter::emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
+                                          MonoClass *array_class)
+{
+	emit_null_check (builder, array);
+
+	llvm::Value *slot = builder.CreateGEP (
+		builder.getInt8Ty (), array,
+		builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable)));
+	llvm::Value *vtable = builder.CreateAlignedLoad (
+		llvm::PointerType::get (context (), 0), slot,
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	emit_cond_exception (
+		builder,
+		builder.CreateICmpNE (vtable, class_symbol (array_class, "mono_vtable_")),
+		"ArrayTypeMismatchException");
+}
+
 /*
  * III.4.12  ldlen - load the length of an array
  *
@@ -229,12 +253,21 @@ MethodLLVMEmitter::emit_ldelema (MonoIrBuilder &builder, uint32_t token)
 	if (!element)
 		return element.takeError ();
 
+	MonoClass *klass = mono_class_from_mono_type_internal (*element);
+
+	/*
+	 * Wrappers are deliberately lax about the element type they name, so the
+	 * exactness question is only asked for ordinary IL - mini's rule.
+	 */
+	if (!m_class_is_valuetype (klass) && method->wrapper_type == MONO_WRAPPER_NONE
+	    && !prefixes.readonly_)
+		emit_array_type_check (builder, get_stack (1).value,
+		                       mono_class_create_array (klass, 1));
+
 	llvm::Expected<llvm::Value *> address =
 		element_address (builder, get_stack (1), get_stack (0), *element);
 	if (!address)
 		return address.takeError ();
-
-	MonoClass *klass = mono_class_from_mono_type_internal (*element);
 
 	pop_stack (2);
 	push_stack (*address, m_class_get_this_arg (klass));
@@ -512,6 +545,9 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 			                                      {array.value, value}));
 		}
 	}
+
+	if (what == "Address" && !m_class_is_valuetype (eclass) && !prefixes.readonly_)
+		emit_array_type_check (builder, array.value, accessor->klass);
 
 	emit_null_check (builder, array.value);
 

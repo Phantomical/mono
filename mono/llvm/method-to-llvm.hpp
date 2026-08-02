@@ -229,6 +229,7 @@ private:
 	/// was one the prefix means anything to.
 	struct Prefixes {
 		bool volatile_ = false;
+		bool readonly_ = false;
 		uint8_t unaligned = 0;
 		uint32_t constrained = 0;
 	};
@@ -481,6 +482,8 @@ private:
 	llvm::Error emit_ldelema (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldelem (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
+	void emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
+	                            MonoClass *array_class);
 	llvm::Expected<llvm::Value *> array_accessor_address (MonoIrBuilder &builder,
 	                                                      MonoClass *klass,
 	                                                      llvm::Value *array,

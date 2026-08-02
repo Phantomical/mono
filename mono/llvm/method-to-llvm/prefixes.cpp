@@ -179,10 +179,7 @@ MethodLLVMEmitter::emit_prefix (int opcode, uint64_t operand)
 		/* Permission to drop the frame before the call, never an obligation. */
 		return llvm::Error::success ();
 	case MONO_CEE_READONLY_:
-		/*
-		 * Skips a covariance check ldelema does not emit and loosens the
-		 * verifier's view of the result; neither changes what is generated.
-		 */
+		prefixes.readonly_ = true;
 		return llvm::Error::success ();
 	case MONO_CEE_NO_:
 		/* Permission to skip fault checks, never an obligation. */
