@@ -749,12 +749,12 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 
 	/*
 	 * Through the allocator's wrapper: it reports a failed allocation as a
-	 * pending OutOfMemoryException, which only the wrapper's check throws. The
-	 * result aliases nothing older than the call, and allockind lets an array
-	 * nothing observes be elided outright - that is a real choice: an
-	 * allocation whose failure nothing could observe did not need to happen.
-	 * Not AllocFnKind::Zeroed, although the elements do arrive zeroed: the
-	 * claim covers the whole allocation, and the header - vtable, length -
+	 * pending OutOfMemoryException, which only the wrapper's check throws.
+	 * NoAlias is the whole claim - the result aliases nothing older than the
+	 * call. No allockind: it would let LLVM delete an unused allocation, and a
+	 * mono allocation that fails throws a catchable OutOfMemoryException, so
+	 * even a dead one is observable. Not AllocFnKind::Zeroed either - the
+	 * claim covers the whole allocation, and the header (vtable, length)
 	 * comes back initialized, so LLVM would fold those loads to zero.
 	 * Deliberately not nounwind.
 	 */
@@ -764,14 +764,7 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	if (!allocate)
 		return allocate.takeError ();
 
-	{
-		llvm::AttrBuilder allocator (context ());
-
-		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc);
-		allocator.addAttribute ("alloc-family", "mono_gc");
-		(*allocate)->addRetAttr (llvm::Attribute::NoAlias);
-		(*allocate)->addFnAttrs (allocator);
-	}
+	(*allocate)->addRetAttr (llvm::Attribute::NoAlias);
 
 	llvm::Value *created = emit_protected_call (
 		builder, *allocate,

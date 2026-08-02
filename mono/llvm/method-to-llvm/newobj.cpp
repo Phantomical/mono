@@ -177,22 +177,15 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 namespace {
 
 /// Mark CALLEE as the GC allocation it is, with the same reasoning
-/// mono_array_new_specific's declaration documents: the result aliases nothing
-/// older than the call, and an allocation nothing observes may be elided
-/// outright. Not AllocFnKind::Zeroed - the fields do arrive zeroed, but the
-/// claim covers the whole allocation and the header comes back initialized,
-/// so LLVM would fold vtable loads to null. Deliberately not nounwind.
+/// mono_array_new_specific's declaration documents: NoAlias and nothing more -
+/// an allockind would let LLVM delete an unused allocation whose failure is
+/// still a catchable OutOfMemoryException, and a Zeroed claim would fold loads
+/// of the initialized header to zero. Deliberately not nounwind.
 llvm::FunctionCallee
 mark_gc_allocator (llvm::FunctionCallee callee)
 {
-	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
-		llvm::AttrBuilder allocator (function->getContext ());
-
-		allocator.addAllocKindAttr (llvm::AllocFnKind::Alloc);
-		allocator.addAttribute ("alloc-family", "mono_gc");
+	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ()))
 		function->addRetAttr (llvm::Attribute::NoAlias);
-		function->addFnAttrs (allocator);
-	}
 
 	return callee;
 }
