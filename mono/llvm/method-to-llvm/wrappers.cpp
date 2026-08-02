@@ -20,6 +20,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
+#include "mono/metadata/object-internals.h"
 #include "mono/utils/mono-memory-model.h"
 #include "mono/utils/mono-tls.h"
 
@@ -260,6 +261,31 @@ MethodLLVMEmitter::emit_mono_vtaddr (MonoIrBuilder &builder)
 
 	pop_stack (1);
 	push_stack (address, m_class_get_this_arg (mono_defaults.object_class));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.F0.1E  mono_ld_delegate_method_ptr - load a delegate's bound entry point
+ *
+ * Pops a delegate reference and pushes its method_ptr, the entry the runtime
+ * published into the delegate when it was bound. The invoke wrapper feeds it
+ * straight into a calli.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_ld_delegate_method_ptr (MonoIrBuilder &builder)
+{
+	if (stack.size () < 1)
+		return unbalanced_stack (1);
+
+	llvm::Value *delegate = get_stack (0).value;
+	llvm::Value *ftn = builder.CreateAlignedLoad (
+		llvm::PointerType::get (context (), 0),
+		builder.CreateGEP (builder.getInt8Ty (), delegate,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoDelegate, method_ptr))),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	pop_stack (1);
+	push_stack (ftn, m_class_get_byval_arg (mono_defaults.int_class));
 	return llvm::Error::success ();
 }
 

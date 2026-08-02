@@ -627,6 +627,16 @@ MethodLLVMEmitter::emit ()
 				return std::move (error);
 	}
 
+	/*
+	 * The type initializer runs before the first entry into any of the class's
+	 * methods (ECMA-335 II.10.5.3), and the method's own entry is the one
+	 * point every way of reaching it funnels through - stubs, vtable slots,
+	 * delegates, calli - so the check lives here rather than at call sites.
+	 */
+	if (mono_class_needs_cctor_run (method->klass, method))
+		if (auto error = emit_class_init (builder, method->klass))
+			return std::move (error);
+
 	if (blocks[0].block == nullptr)
 		return invalid_il ("the method has no body");
 
@@ -1232,6 +1242,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_ICALL_ADDR:
 	case MONO_CEE_MONO_TLS:
 	case MONO_CEE_MONO_ATOMIC_STORE_I4:
+	case MONO_CEE_MONO_LD_DELEGATE_METHOD_PTR:
+	case MONO_CEE_MONO_CALLI_EXTRA_ARG:
 		if (!in_wrapper ())
 			return invalid_il (llvm::Twine (mono_opcode_name (opcode))
 			                   + " outside a wrapper");
@@ -1259,6 +1271,11 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_tls (builder, static_cast<uint32_t> (operand));
 		case MONO_CEE_MONO_ATOMIC_STORE_I4:
 			return emit_mono_atomic_store_i4 (builder,
+			                                  static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_LD_DELEGATE_METHOD_PTR:
+			return emit_mono_ld_delegate_method_ptr (builder);
+		case MONO_CEE_MONO_CALLI_EXTRA_ARG:
+			return emit_mono_calli_extra_arg (builder,
 			                                  static_cast<uint32_t> (operand));
 
 		/* A hint that the branch it precedes is the unlikely one. */

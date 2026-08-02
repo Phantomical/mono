@@ -320,4 +320,27 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.F0.18  mono_calli_extra_arg - calli carrying a hidden context argument
+ *
+ * The delegate invoke wrapper calls the bound method through its published
+ * method_ptr and stacks the delegate's extra_arg on the way, right under the
+ * function pointer. The extra argument is llvmonly's way of passing a gshared
+ * context; under the JIT any hidden context is materialized by the entry
+ * itself (a static-rgctx trampoline), so the value is dropped and what
+ * remains is an ordinary calli.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_calli_extra_arg (MonoIrBuilder &builder, uint32_t token)
+{
+	if (stack.size () < 2)
+		return unbalanced_stack (2);
+
+	StackValue ftn = get_stack (0);
+
+	pop_stack (2);
+	push_stack (ftn.value, ftn.type);
+	return emit_calli (builder, token);
+}
+
 } // namespace mono

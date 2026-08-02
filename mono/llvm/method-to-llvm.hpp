@@ -464,6 +464,8 @@ private:
 	llvm::Error emit_mono_icall_addr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_mono_tls (MonoIrBuilder &builder, uint32_t key);
 	llvm::Error emit_mono_atomic_store_i4 (MonoIrBuilder &builder, uint32_t barrier);
+	llvm::Error emit_mono_ld_delegate_method_ptr (MonoIrBuilder &builder);
+	llvm::Error emit_mono_calli_extra_arg (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
