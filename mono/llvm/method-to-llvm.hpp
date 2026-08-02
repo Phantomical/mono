@@ -236,6 +236,10 @@ private:
 
 	Prefixes prefixes;
 
+	/// Set by mono_save_last_error, consumed by the next call emitted: unlike a
+	/// prefix an address push may sit between the two.
+	bool pending_save_last_error = false;
+
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
@@ -484,6 +488,7 @@ private:
 	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
 	void emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
 	                            MonoClass *array_class);
+	void consume_save_last_error (MonoIrBuilder &builder);
 	llvm::Expected<llvm::Value *> array_accessor_address (MonoIrBuilder &builder,
 	                                                      MonoClass *klass,
 	                                                      llvm::Value *array,
@@ -524,7 +529,8 @@ private:
 	llvm::Error emit_ldsflda (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stsfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<llvm::Value *> field_address (MonoIrBuilder &builder, StackValue object,
-	                                             MonoClassField *field);
+	                                             MonoClassField *field,
+	                                             bool null_check = true);
 	llvm::Error emit_ldfld (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldflda (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_stfld (MonoIrBuilder &builder, uint32_t token);

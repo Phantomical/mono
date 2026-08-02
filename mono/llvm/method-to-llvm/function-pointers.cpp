@@ -311,6 +311,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		emit_protected_call (builder, llvm::FunctionCallee (*type, ftn), *args);
 
 	mark_legacy_call (llvm::cast<llvm::CallBase> (result), sig);
+	consume_save_last_error (builder);
 	pop_stack (sig->param_count + sig->hasthis);
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)

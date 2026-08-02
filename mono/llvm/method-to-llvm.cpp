@@ -1244,6 +1244,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_ATOMIC_STORE_I4:
 	case MONO_CEE_MONO_LD_DELEGATE_METHOD_PTR:
 	case MONO_CEE_MONO_CALLI_EXTRA_ARG:
+	case MONO_CEE_MONO_SAVE_LAST_ERROR:
 		if (!in_wrapper ())
 			return invalid_il (llvm::Twine (mono_opcode_name (opcode))
 			                   + " outside a wrapper");
@@ -1278,6 +1279,15 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_calli_extra_arg (builder,
 			                                  static_cast<uint32_t> (operand));
 
+		/*
+		 * A sticky flag rather than a prefix: an address push may sit
+		 * between it and the call whose errno it asks for, so it rides
+		 * until the next call consumes it.
+		 */
+		case MONO_CEE_MONO_SAVE_LAST_ERROR:
+			pending_save_last_error = true;
+			return llvm::Error::success ();
+
 		/* A hint that the branch it precedes is the unlikely one. */
 		case MONO_CEE_MONO_NOT_TAKEN:
 			return llvm::Error::success ();
@@ -1300,6 +1310,24 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return unsupported_il (llvm::Twine ("no translation for ")
 		                       + mono_opcode_name (opcode));
 	}
+}
+
+/// The errno capture a pending mono_save_last_error asked for, right after the
+/// call it decorated. Nothing may come between: any other runtime call can
+/// clobber the value.
+void
+MethodLLVMEmitter::consume_save_last_error (MonoIrBuilder &builder)
+{
+	if (!pending_save_last_error)
+		return;
+	pending_save_last_error = false;
+
+	llvm::FunctionCallee decl = module->getOrInsertFunction (
+		"mono_marshal_set_last_error", llvm::Type::getVoidTy (context ()));
+
+	if (auto *function = llvm::dyn_cast<llvm::Function> (decl.getCallee ()))
+		function->setDoesNotThrow ();
+	builder.CreateCall (decl);
 }
 
 /// Throw the corlib exception NAME - "DivideByZeroException" and friends, from

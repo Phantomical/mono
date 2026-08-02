@@ -81,6 +81,7 @@ runtime_helpers ()
 {
 	return {
 		{ "mono_domain_get", (void *) &mono_domain_get },
+		{ "mono_marshal_set_last_error", (void *) &mono_marshal_set_last_error },
 		{ "mono_gc_wbarrier_generic_store_internal",
 		  (void *) &mono_gc_wbarrier_generic_store_internal },
 		{ "mono_gc_wbarrier_value_copy_internal",

@@ -156,7 +156,8 @@ MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 
 /// Where FIELD lives inside the object on top of the stack.
 llvm::Expected<llvm::Value *>
-MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object, MonoClassField *field)
+MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
+                                  MonoClassField *field, bool null_check)
 {
 	StackType type = stack_type (object.type);
 
@@ -170,7 +171,8 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object, Mon
 	if (!base->getType ()->isPointerTy ())
 		base = builder.CreateIntToPtr (base, llvm::PointerType::get (context (), 0));
 
-	emit_null_check (builder, base);
+	if (null_check)
+		emit_null_check (builder, base);
 
 	/*
 	 * A field's recorded offset counts from the start of the MonoObject, so a value
@@ -365,7 +367,15 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 		return field.takeError ();
 
 	StackValue object = get_stack (0);
-	llvm::Expected<llvm::Value *> address = field_address (builder, object, *field);
+
+	/*
+	 * Taking the address dereferences nothing, so only an object-reference
+	 * receiver is checked - through a native pointer even null just computes,
+	 * and the fault waits for whatever dereferences the result.
+	 */
+	llvm::Expected<llvm::Value *> address =
+		field_address (builder, object, *field,
+		               stack_type (object.type) == ObjectRef);
 	if (!address)
 		return address.takeError ();
 
