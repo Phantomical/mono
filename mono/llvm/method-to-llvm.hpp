@@ -450,7 +450,8 @@ private:
 	llvm::Error emit_refanytype (MonoIrBuilder &builder);
 
 	llvm::FunctionCallee wbarrier_decl ();
-	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static);
+	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static,
+	                                                bool *out_is_static = nullptr);
 	llvm::Constant *extern_symbol (const std::string &name);
 	void record_external (const std::string &name, ExternalSymbol::Kind kind,
 	                      void *object);

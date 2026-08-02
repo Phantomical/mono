@@ -643,7 +643,8 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	StackValue count = get_stack (0);
 	StackType count_type = stack_type (count.type);
 
-	if (count_type != Int32 && count_type != NativeInt)
+	/* int64 is mini's 64-bit leniency; the narrowing below checks it fits. */
+	if (count_type != Int32 && count_type != NativeInt && count_type != Int64)
 		return invalid_il (llvm::Twine ("an array length cannot be operand type ")
 		                   + describe (count.type, count_type));
 

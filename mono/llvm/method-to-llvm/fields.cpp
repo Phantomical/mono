@@ -26,8 +26,12 @@ MethodLLVMEmitter::wbarrier_decl ()
 
 /// The field TOKEN names, with its declaring class laid out so that its offset can be
 /// asked for.
+///
+/// The instance opcodes accept a static field - the object is popped and discarded -
+/// so their callers pass IS_STATIC and reroute; the static opcodes refuse an instance
+/// field outright.
 llvm::Expected<MonoClassField *>
-MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
+MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is_static)
 {
 	ERROR_DECL (metadata_error);
 	MonoClass *klass = nullptr;
@@ -58,6 +62,10 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static)
 
 	bool is_static = (mono_field_get_flags (field) & FIELD_ATTRIBUTE_STATIC) != 0;
 
+	if (out_is_static != nullptr)
+		*out_is_static = is_static;
+	if (is_static && !want_static && out_is_static != nullptr)
+		return field;
 	if (is_static != want_static) {
 		char *name = mono_field_full_name (field);
 		llvm::Error error =
@@ -270,9 +278,15 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
-	llvm::Expected<MonoClassField *> field = resolve_field (token, false);
+	bool is_static = false;
+	llvm::Expected<MonoClassField *> field = resolve_field (token, false, &is_static);
 	if (!field)
 		return field.takeError ();
+
+	if (is_static) {
+		pop_stack (1);
+		return emit_ldsfld (builder, token);
+	}
 
 	MonoType *ftype = mono_field_get_type_internal (*field);
 	llvm::Expected<llvm::Type *> type = convert_type (ftype);
@@ -362,9 +376,15 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
-	llvm::Expected<MonoClassField *> field = resolve_field (token, false);
+	bool is_static = false;
+	llvm::Expected<MonoClassField *> field = resolve_field (token, false, &is_static);
 	if (!field)
 		return field.takeError ();
+
+	if (is_static) {
+		pop_stack (1);
+		return emit_ldsflda (builder, token);
+	}
 
 	StackValue object = get_stack (0);
 
@@ -441,9 +461,18 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 	if (stack.size () < 2)
 		return unbalanced_stack (2);
 
-	llvm::Expected<MonoClassField *> field = resolve_field (token, false);
+	bool is_static = false;
+	llvm::Expected<MonoClassField *> field = resolve_field (token, false, &is_static);
 	if (!field)
 		return field.takeError ();
+
+	if (is_static) {
+		StackValue stored = get_stack (0);
+
+		pop_stack (2);
+		push_stack (stored.value, stored.type);
+		return emit_stsfld (builder, token);
+	}
 
 	MonoType *ftype = mono_field_get_type_internal (*field);
 	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), ftype);

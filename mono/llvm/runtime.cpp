@@ -23,6 +23,7 @@
 
 #include "jinfo.hpp"
 #include "jit.hpp"
+#include "stubs.hpp"
 #include "method-to-llvm.hpp"
 
 #include "mini.h"
@@ -570,6 +571,21 @@ Backend::publish (MonoMethod *method)
 		});
 	if (!body_stub)
 		return body_stub.takeError ();
+
+	/*
+	 * The stub is the only address the runtime ever hands out for the method,
+	 * so anything recovering a method from a code pointer - delegate creation
+	 * off a ldftn most visibly - must find it in the jit-info table. Register
+	 * it the way mini registers trampolines: an is_trampoline entry carrying
+	 * the method.
+	 */
+	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
+
+	tramp->code = (guint8 *) *stub;
+	tramp->code_size = (guint32) stub_block_size;
+	tramp->name = g_strdup (symbol_for_code (method).c_str ());
+	tramp->method = method;
+	mono_tramp_info_register (tramp, NULL);
 
 	published_[method] = *stub;
 	return *stub;
