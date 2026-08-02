@@ -148,11 +148,47 @@ lower_call (CallBase *site, const AddressSpec &spec)
 	};
 
 	Value *linear;
-	if (!spec.bounded) {
+	if (!spec.bounded || spec.rank == 1) {
+		linear = b.CreateZExtOrTrunc (site->getArgOperand (1), i32);
+
+		if (spec.bounded) {
+			/*
+			 * The runtime allocates a one-dimensional array whose lower
+			 * bound is zero without a bounds vector at all; absent bounds
+			 * mean a lower bound of zero.
+			 */
+			Value *bounds = b.CreateAlignedLoad (
+				PointerType::get (ctx, 0),
+				b.CreateInBoundsGEP (b.getInt8Ty (), array,
+			                             b.getInt64 (spec.bounds_offset)),
+				Align (sizeof (void *)));
+			BasicBlock *from = b.GetInsertBlock ();
+			BasicBlock *have =
+				BasicBlock::Create (ctx, "array_addr_lb", fn, cont);
+			BasicBlock *merge =
+				BasicBlock::Create (ctx, "array_addr_idx", fn, cont);
+
+			b.CreateCondBr (b.CreateIsNull (bounds), merge, have);
+
+			IRBuilder<> hb (have);
+			Value *lower = hb.CreateZExtOrTrunc (
+				load_field (hb, bounds, spec.lower_bound_offset,
+			                    spec.lower_bound_bytes),
+				i32);
+
+			hb.CreateBr (merge);
+			b.SetInsertPoint (merge);
+
+			PHINode *bound = b.CreatePHI (i32, 2);
+
+			bound->addIncoming (b.getInt32 (0), from);
+			bound->addIncoming (lower, have);
+			linear = b.CreateSub (linear, bound);
+		}
+
 		Value *length =
 			load_field (b, array, spec.max_length_offset, spec.max_length_bytes);
 
-		linear = b.CreateZExtOrTrunc (site->getArgOperand (1), i32);
 		check (b.CreateICmpUGE (b.CreateZExt (linear, b.getInt64Ty ()),
 		                        b.CreateZExtOrTrunc (length, b.getInt64Ty ())));
 	} else {
