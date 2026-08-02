@@ -17,16 +17,6 @@ MONO_BEGIN_DECLS
 
 typedef struct _MonoMethod MonoMethod;
 
-/// Whether METHOD should be compiled by the LLVM-only backend.
-///
-/// MONO_LLVM_JIT in the environment decides: unset compiles nothing here, `1`
-/// compiles everything, and any other value names the methods to take, matched
-/// as a substring of the full method name. The last is how a single method is
-/// put through this backend while the runtime around it still boots on the
-/// classic JIT - which is the only way to run anything at all until wrappers
-/// translate.
-mono_bool mono_llvm_jit_wants_method (MonoMethod *method);
-
 /// Compile METHOD and return the address to call it at.
 ///
 /// The address is the method's stub, which is stable for the life of the process

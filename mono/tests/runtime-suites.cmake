@@ -221,8 +221,7 @@ mono_runtime_suite(runtime-tailcall TESTS ${_tailcall}
                    ENV "MONO_DEBUG=test-tailcall-require"
                    RUNTIME_ARGS "--compile-all")
 
-mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared}
-                   OPT_SETS "gshared gshared,shared gshared,-inline gshared,-inline,shared")
+mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 
 if(MONO_ENABLE_INTERPRETER)
   set(_interp ${_regular})

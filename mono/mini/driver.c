@@ -485,46 +485,16 @@ method_should_be_regression_tested (MonoMethod *method, gboolean interp)
 
 static void
 mini_regression_step (MonoImage *image, int verbose, int *total_run, int *total,
-		guint32 opt_flags,
 		GTimer *timer, MonoDomain *domain)
 {
-	int result, expected, failed, cfailed, run, code_size;
+	int result, expected, failed, cfailed, run;
 	double elapsed, comp_time, start_time;
-	char *n;
 	int i;
 
-	mono_set_defaults (verbose, opt_flags);
-	n = mono_opt_descr (opt_flags);
-	g_print ("Test run: image=%s, opts=%s\n", mono_image_get_filename (image), n);
-	g_free (n);
-	cfailed = failed = run = code_size = 0;
+	g_print ("Test run: image=%s\n", mono_image_get_filename (image));
+	cfailed = failed = run = 0;
 	comp_time = elapsed = 0.0;
 	int local_skip_index = 0;
-
-	/* fixme: ugly hack - delete all previously compiled methods */
-	if (domain_jit_info (domain)) {
-#ifdef ENABLE_LLVM
-		/*
-		 * Both tables below get destroyed and replaced outright, which the
-		 * domain locks that guard their normal use cannot defend against - a
-		 * tier-1 compile on the background worker walks jit_trampoline_hash
-		 * (mono_create_jit_trampoline) and publishes into jit_code_hash, and
-		 * would be left reading freed slots. Stop the worker across the swap.
-		 * Declared locally for the same header-conflict reason
-		 * mono_llvm_tiered_shutdown () is, below.
-		 */
-		void mono_llvm_tiered_quiesce (void);
-		void mono_llvm_tiered_resume (void);
-		mono_llvm_tiered_quiesce ();
-#endif
-		g_hash_table_destroy (domain_jit_info (domain)->jit_trampoline_hash);
-		domain_jit_info (domain)->jit_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
-		mono_internal_hash_table_destroy (&(domain->jit_code_hash));
-		mono_jit_code_hash_init (&(domain->jit_code_hash));
-#ifdef ENABLE_LLVM
-		mono_llvm_tiered_resume ();
-#endif
-	}
 
 	g_timer_start (timer);
 	if (mini_stats_fd)
@@ -537,41 +507,19 @@ mini_regression_step (MonoImage *image, int verbose, int *total_run, int *total,
 			continue;
 		}
 		if (method_should_be_regression_tested (method, FALSE)) {
-			MonoCompile *cfg = NULL;
-			TestMethod func = NULL;
+			TestMethod func;
 
 			expected = atoi (method->name + 5);
 			run++;
 			start_time = g_timer_elapsed (timer, NULL);
-
-#ifdef DISABLE_JIT
-#ifdef MONO_USE_AOT_COMPILER
-			ERROR_DECL (error);
-			func = (TestMethod)mono_aot_get_method (mono_get_root_domain (), method, error);
-			mono_error_cleanup (error);
-#else
-			g_error ("No JIT or AOT available, regression testing not possible!");
-#endif
-
-#else
 			comp_time -= start_time;
-			cfg = mini_method_compile (method, mono_get_optimizations_for_method (method, opt_flags), mono_get_root_domain (), JIT_FLAG_RUN_CCTORS, 0, -1);
+			func = (TestMethod)mono_jit_compile_method (method, error);
 			comp_time += g_timer_elapsed (timer, NULL);
-			if (cfg->exception_type == MONO_EXCEPTION_NONE) {
-#ifdef MONO_USE_AOT_COMPILER
-				ERROR_DECL (error);
-				func = (TestMethod)mono_aot_get_method (mono_get_root_domain (), method, error);
+			if (!is_ok (error)) {
+				g_print ("Test '%s' failed compilation: %s\n", method->name, mono_error_get_message (error));
 				mono_error_cleanup (error);
-				if (!func) {
-					func = (TestMethod)MINI_ADDR_TO_FTNPTR (cfg->native_code);
-				}
-#else
-				func = (TestMethod)(gpointer)cfg->native_code;
-				func = MINI_ADDR_TO_FTNPTR (func);
-#endif
-				func = (TestMethod)mono_create_ftnptr (mono_get_root_domain (), (gpointer)func);
+				func = NULL;
 			}
-#endif
 
 			if (func) {
 				if (do_regression_retries) {
@@ -585,24 +533,13 @@ mini_regression_step (MonoImage *image, int verbose, int *total_run, int *total,
 				if (verbose >= 2)
 					g_print ("Running '%s' ...\n", method->name);
 
-#if HOST_WASM
-				//WASM AOT injects dummy args and we must call with exact signatures
-				int (*func_2)(int) = (int (*)(int))(void*)func;
-				result = func_2 (-1);
-#else
 				result = func ();
-#endif
 				if (result != expected) {
 					failed++;
 					g_print ("Test '%s' failed result (got %d, expected %d).\n", method->name, result, expected);
 				}
-				if (cfg) {
-					code_size += cfg->code_len;
-					mono_destroy_compile (cfg);
-				}
 			} else {
 				cfailed++;
-				g_print ("Test '%s' failed compilation.\n", method->name);
 			}
 			if (mini_stats_fd)
 				fprintf (mini_stats_fd, "%f, ",
@@ -620,8 +557,8 @@ mini_regression_step (MonoImage *image, int verbose, int *total_run, int *total,
 		g_print ("Results: total tests: %d, all pass \n",  run);
 	}
 
-	g_print ("Elapsed time: %f secs (%f, %f), Code size: %d\n\n", elapsed,
-			elapsed - comp_time, comp_time, code_size);
+	g_print ("Elapsed time: %f secs (%f, %f)\n\n", elapsed,
+			elapsed - comp_time, comp_time);
 	*total += failed + cfailed;
 	*total_run += run;
 }
@@ -629,34 +566,16 @@ mini_regression_step (MonoImage *image, int verbose, int *total_run, int *total,
 static int
 mini_regression (MonoImage *image, int verbose, int *total_run)
 {
-	guint32 i, opt;
+	guint32 i;
 	MonoMethod *method;
-	char *n;
 	GTimer *timer = g_timer_new ();
 	MonoDomain *domain = mono_domain_get ();
-	guint32 exclude = 0;
 	int total;
 
-	/* Note: mono_hwcap_init () called in mono_init () before we get here. */
-	mono_arch_cpu_optimizations (&exclude);
+	mono_set_defaults (verbose, DEFAULT_OPTIMIZATIONS);
 
 	if (mini_stats_fd) {
-		fprintf (mini_stats_fd, "$stattitle = \'Mono Benchmark Results (various optimizations)\';\n");
-
-		fprintf (mini_stats_fd, "$graph->set_legend(qw(");
-		for (opt = 0; opt < G_N_ELEMENTS (opt_sets); opt++) {
-			guint32 opt_flags = opt_sets [opt];
-			n = mono_opt_descr (opt_flags);
-			if (!n [0])
-				n = (char *)"none";
-			if (opt)
-				fprintf (mini_stats_fd, " ");
-			fprintf (mini_stats_fd, "%s", n);
-		
-
-		}
-		fprintf (mini_stats_fd, "));\n");
-
+		fprintf (mini_stats_fd, "$stattitle = \'Mono Benchmark Results\';\n");
 		fprintf (mini_stats_fd, "@data = (\n");
 		fprintf (mini_stats_fd, "[");
 	}
@@ -684,9 +603,7 @@ mini_regression (MonoImage *image, int verbose, int *total_run)
 	if (mono_do_single_method_regression) {
 		GSList *iter;
 
-		mini_regression_step (image, verbose, total_run, &total,
-				0,
-				timer, domain);
+		mini_regression_step (image, verbose, total_run, &total, timer, domain);
 		if (total)
 			return total;
 		g_print ("Single method regression: %d methods\n", g_slist_length (mono_single_method_list));
@@ -700,28 +617,12 @@ mini_regression (MonoImage *image, int verbose, int *total_run)
 			g_print ("Current single method: %s\n", method_name);
 			g_free (method_name);
 
-			mini_regression_step (image, verbose, total_run, &total,
-					0,
-					timer, domain);
+			mini_regression_step (image, verbose, total_run, &total, timer, domain);
 			if (total)
 				return total;
 		}
 	} else {
-		for (opt = 0; opt < G_N_ELEMENTS (opt_sets); ++opt) {
-			/* builtin-types.cs & aot-tests.cs need OPT_INTRINS enabled */
-			if (!strcmp ("builtin-types", image->assembly_name) || !strcmp ("aot-tests", image->assembly_name))
-				if (!(opt_sets [opt] & MONO_OPT_INTRINS))
-					continue;
-
-			//we running in AOT only, it makes no sense to try multiple flags
-			if ((mono_aot_mode == MONO_AOT_MODE_FULL || mono_aot_mode == MONO_AOT_MODE_LLVMONLY) && opt_sets [opt] != DEFAULT_OPTIMIZATIONS) {
-				continue;
-			}
-
-			mini_regression_step (image, verbose, total_run, &total,
-					opt_sets [opt] & ~exclude,
-					timer, domain);
-		}
+		mini_regression_step (image, verbose, total_run, &total, timer, domain);
 	}
 
 	if (mini_stats_fd) {
@@ -752,11 +653,10 @@ mini_regression_list (int verbose, int count, char *images [])
 		total_run += run;
 	}
 	if (total > 0){
-		g_print ("Overall results: tests: %d, failed: %d, opt combinations: %d (pass: %.2f%%)\n", 
-			 total_run, total, (int)G_N_ELEMENTS (opt_sets), 100.0*(total_run-total)/total_run);
+		g_print ("Overall results: tests: %d, failed: %d (pass: %.2f%%)\n",
+			 total_run, total, 100.0*(total_run-total)/total_run);
 	} else {
-		g_print ("Overall results: tests: %d, 100%% pass, opt combinations: %d\n", 
-			 total_run, (int)G_N_ELEMENTS (opt_sets));
+		g_print ("Overall results: tests: %d, 100%% pass\n", total_run);
 	}
 	
 	return total;
@@ -1665,7 +1565,6 @@ mini_usage (void)
 		"                           Use --list-opt to get a list of optimizations\n"
 		"    --attach=OPTIONS       Pass OPTIONS to the attach agent in the runtime.\n"
 		"                           Currently the only supported option is 'disable'.\n"
-		"    --llvm, --nollvm       Controls whenever the runtime uses LLVM to compile code.\n"
 	        "    --gc=[sgen,boehm]      Select SGen or Boehm GC (runs mono or mono-sgen)\n"
 #ifdef TARGET_OSX
 		"    --arch=[32,64]         Select architecture (runs mono32 or mono64)\n"
@@ -1898,16 +1797,8 @@ mono_jit_parse_options (int argc, char * argv[])
 			mono_gc_params_set (argv[i] + 12);
 		} else if (strncmp (argv[i], "--gc-debug=", 11) == 0) {
 			mono_gc_debug_set (argv[i] + 11);
-		} else if (strcmp (argv [i], "--llvm") == 0) {
-#ifndef MONO_ARCH_LLVM_SUPPORTED
-			fprintf (stderr, "Mono Warning: --llvm not supported on this platform.\n");
-#elif !defined(ENABLE_LLVM)
-			fprintf (stderr, "Mono Warning: --llvm not enabled in this runtime.\n");
-#else
-			mini_set_use_llvm (TRUE);
-#endif
-		} else if (strcmp (argv [i], "--nollvm") == 0) {
-			mini_set_use_llvm (FALSE);
+		} else if (strcmp (argv [i], "--llvm") == 0 || strcmp (argv [i], "--nollvm") == 0) {
+			fprintf (stderr, "Mono Warning: %s is deprecated and ignored: LLVM is the only JIT.\n", argv [i]);
 #ifdef ENABLE_JIT_DUMP
 		} else if (strcmp (argv [i], "--jitdump") == 0) {
 			mono_enable_jit_dump ();
@@ -2511,16 +2402,8 @@ mono_main (int argc, char* argv[])
 		} else if (strcmp (argv [i], "--test-jit-info-table") == 0) {
 			test_jit_info_table = TRUE;
 #endif
-		} else if (strcmp (argv [i], "--llvm") == 0) {
-#ifndef MONO_ARCH_LLVM_SUPPORTED
-			fprintf (stderr, "Mono Warning: --llvm not supported on this platform.\n");
-#elif !defined(ENABLE_LLVM)
-			fprintf (stderr, "Mono Warning: --llvm not enabled in this runtime.\n");
-#else
-			mini_set_use_llvm (TRUE);
-#endif
-		} else if (strcmp (argv [i], "--nollvm") == 0){
-			mini_set_use_llvm (FALSE);
+		} else if (strcmp (argv [i], "--llvm") == 0 || strcmp (argv [i], "--nollvm") == 0) {
+			fprintf (stderr, "Mono Warning: %s is deprecated and ignored: LLVM is the only JIT.\n", argv [i]);
 		} else if (strcmp (argv [i], "--ffast-math") == 0){
 			mono_use_fast_math = TRUE;
 		} else if ((strcmp (argv [i], "--interpreter") == 0) || !strcmp (argv [i], "--interp")) {

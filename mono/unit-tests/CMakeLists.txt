@@ -4,13 +4,6 @@
 # Each test is its body plus main.c compiled with -DMAIN=<function>, which is
 # how the automake build shared a single entry point across all of them.
 
-if(MONO_CORPUS_ENABLED)
-  add_subdirectory(inliner)
-  add_subdirectory(devirt)
-  add_subdirectory(statics-symbols)
-  add_subdirectory(il-offsets)
-  add_subdirectory(seq-points)
-endif()
 
 if(NOT MONO_ENABLE_SGEN)
   # The tests link the SGen runtime.

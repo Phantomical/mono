@@ -1,14 +1,5 @@
-# The mini regression suites.
-#
-# Two entry points, matching what the automake build called `rcheck` and
-# `tieredcheck`:
-#
-#   ctest -L regression   classic JIT, --nollvm, the shared corpora
-#   ctest -L tiered       LLVM tier-1 at a range of promotion thresholds
-#
-# The corpora that exist to pin down what a single tier-1 pass decided live with
-# their check under mono/unit-tests instead; see MonoCorpus.cmake for the pieces
-# both halves share.
+# The mini regression suites: `ctest -L regression`, the shared corpora on the
+# JIT. See MonoCorpus.cmake for the shared corpus plumbing.
 
 if(NOT MONO_CORPUS_ENABLED)
   return()
@@ -26,8 +17,7 @@ mono_corpus_il(MemoryIntrinsics.dll       MemoryIntrinsics.il       LIBRARY)
 
 # Plain "compile against TestDriver" corpora.
 foreach(_t basic basic-float basic-long basic-calls objects arrays basic-math
-           exceptions devirtualization gshared aot-tests ratests
-           tiered-promotion tiered-decline tiered-appdomain)
+           exceptions devirtualization gshared aot-tests ratests)
   mono_corpus_cs(${_t}.exe SOURCES ${_t}.cs REFS "${_driver}")
 endforeach()
 
@@ -62,43 +52,16 @@ set(_regtests
   exceptions.exe iltests.exe devirtualization.exe generics.exe basic-simd.exe
   unaligned.exe basic-vectors.exe ratests.exe)
 
-# The sequence-point check under mono/unit-tests runs over the same list.
-set(MONO_MINI_REGTESTS ${_regtests} CACHE INTERNAL "the mini regression corpora")
-
-# --nollvm is deliberate.  LLVM and tiering are on by default, so without it
-# this suite would stop being the classic-JIT baseline it exists to be and a
-# tier-0 regression could hide behind a tier-1 body.  The default configuration
-# is what the tiered tests below cover.
-add_test(NAME mini-regression
-         COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                 "${_wrapper}" --nollvm --regression ${_regtests}
-         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-set_tests_properties(mini-regression PROPERTIES LABELS regression)
-
-if(MONO_ENABLE_LLVM)
-  foreach(_n 1000 20 1)
-    mono_add_tiered_test(promotion tiered-promotion.exe ${_n} ARGS --regression)
-  endforeach()
-  # The same corpus again under the runtime's DEFAULT optimization set, which is
-  # the only way these runs get MONO_OPT_GSHARED: --regression drives its own
-  # list of opt combinations and all but one of them leave gshared out, and the
-  # first combination to run has already JIT'd -- and latched the tier state of
-  # -- every method by the time the one that includes it comes around. Methods
-  # that are only interesting when compiled shared are therefore untested by the
-  # --regression runs above, however many thresholds they sweep.
-  foreach(_n 1000 20 1 0)
-    mono_add_tiered_test(promotion-gshared tiered-promotion.exe ${_n})
-  endforeach()
-  # The decline corpus needs tier-1 to never actually fire, so point the
-  # one-method allowlist at a name nothing matches.
-  mono_add_tiered_test(decline tiered-decline.exe 20 ARGS --regression
-                       ENV "MONO_LLVM_METHOD=TieredDecline:NeverMatchesAnything")
-  mono_add_tiered_test(appdomain tiered-appdomain.exe 1)
-  foreach(_n 0 1)
-    mono_add_tiered_test(exceptions exceptions.exe ${_n} ARGS --regression)
-    mono_add_tiered_test(iltests    iltests.exe    ${_n} ARGS --regression)
-  endforeach()
-endif()
+# One test per corpus, so a failure names the corpus and --rerun-failed re-runs
+# only what broke.
+foreach(_t IN LISTS _regtests)
+  string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
+  add_test(NAME "mini-regression/${_stem}"
+           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                   "${_wrapper}" --regression ${_t}
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties("mini-regression/${_stem}" PROPERTIES LABELS regression)
+endforeach()
 
 # ---------------------------------------------------------------------------
 # The interpreter whitebox test: a C driver that reaches into the interpreter's

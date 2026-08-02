@@ -2771,10 +2771,7 @@ lookup_start:
 
 		if (wait_or_register_method_to_compile (method, target_domain))
 			goto lookup_start;
-		if (mono_llvm_jit_wants_method (method))
-			code = mono_llvm_jit_compile_method (method, error);
-		else
-			code = mono_jit_compile_method_inner (method, target_domain, opt, error);
+		code = mono_llvm_jit_compile_method (method, error);
 		unregister_method_for_compile (method, target_domain);
 	}
 	if (!is_ok (error))
@@ -4462,20 +4459,6 @@ mini_init (const char *filename, const char *runtime_version)
 	MONO_VES_INIT_BEGIN ();
 
 	CHECKED_MONO_INIT ();
-
-#if defined(ENABLE_LLVM) && defined(MONO_ARCH_LLVM_SUPPORTED)
-	/*
-	 * Settle mono_use_llvm before anything can compile a method - the tiering
-	 * policy reads it once, the first time it is asked whether it is enabled, and
-	 * that first question comes from a compile.
-	 *
-	 * The AOT compiler is left out: mono/mini/llvm/ is a JIT backend only, so
-	 * defaulting this on there would send every plain `--aot' down the LLVM AOT
-	 * path, which does nothing but refuse.
-	 */
-	if (!use_llvm_explicit && !mono_compile_aot)
-		mono_use_llvm = TRUE;
-#endif
 
 #if defined(__linux__)
 	if (access ("/proc/self/maps", F_OK) != 0) {

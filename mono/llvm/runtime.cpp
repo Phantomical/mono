@@ -566,36 +566,6 @@ Backend::publish (MonoMethod *method)
 } // namespace
 } // namespace mono
 
-mono_bool
-mono_llvm_jit_wants_method (MonoMethod *method)
-{
-	enum { Unread = -1, Off, Everything, Named };
-	static int mode = Unread;
-	static const char *filter = NULL;
-
-	if (mode == Unread) {
-		const char *value = g_getenv ("MONO_LLVM_JIT");
-
-		if (value == NULL || *value == '\0' || !strcmp (value, "0"))
-			mode = Off;
-		else if (!strcmp (value, "1"))
-			mode = Everything;
-		else {
-			filter = value;
-			mode = Named;
-		}
-	}
-
-	if (mode != Named)
-		return mode == Everything;
-
-	char *name = mono_method_full_name (method, TRUE);
-	mono_bool wanted = strstr (name, filter) != NULL;
-
-	g_free (name);
-	return wanted;
-}
-
 void *
 mono_llvm_jit_compile_method (MonoMethod *method, MonoError *error)
 {

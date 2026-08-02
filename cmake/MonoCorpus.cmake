@@ -44,30 +44,6 @@ set(MONO_CORPUS_CSC ${_host}
 # printed either way.
 set(MONO_CORPUS_ILASM ${_host} "${MONO_CORPUS_BUILD_DIR}/ilasm.exe" -quiet)
 
-# A tiered run is not a one-core test: besides the mutator it starts a pool of
-# background compile workers, sized by tiered_compile_thread_count () in
-# mono/mini/llvm/tiered.cpp.  Mirror that rule here so `ctest -j N` schedules
-# against the cores these tests really use.  Without it ctest counts each run as
-# one processor and packs N of them onto N cores, oversubscribing by the pool
-# size -- and since every assertion about promotion is a bounded wait for work
-# that happens on those very workers, the suite then fails on machine load
-# rather than on anything it is testing.
-#
-# The count only has to be right on the machine that runs the tests, which is
-# the one configuring: it is a scheduling hint, not a correctness contract.
-include(ProcessorCount)
-ProcessorCount(_ncpu)
-if(_ncpu EQUAL 0)
-  set(_ncpu 1)
-endif()
-math(EXPR _workers "${_ncpu} / 4")
-if(_workers LESS 1)
-  set(_workers 1)
-elseif(_workers GREATER 4)
-  set(_workers 4)
-endif()
-math(EXPR MONO_TIERED_PROCESSORS "${_workers} + 1")   # + the mutator
-
 # Compile one C# corpus into the calling directory's binary dir, appending it to
 # MONO_CORPUS_OUTPUTS in the caller's scope.
 #
@@ -143,54 +119,3 @@ function(mono_corpus_target name)
   add_dependencies(mini-corpora ${name})
 endfunction()
 
-# One tiered run of one corpus at one promotion threshold.  Named
-# tiered-<group>-<threshold> so a failure names the configuration that broke
-# rather than just "tiered".
-#
-#   mono_add_tiered_test(<group> <corpus.exe> <threshold> [ARGS <arg>...] [ENV <k=v>])
-function(mono_add_tiered_test group corpus threshold)
-  cmake_parse_arguments(ARG "" "ENV" "ARGS" ${ARGN})
-  set(_env "MONO_PATH=${MONO_CORPUS_MONO_PATH}" "MONO_TIERED=1"
-           "MONO_TIERED_CALL_THRESHOLD=${threshold}")
-  if(ARG_ENV)
-    list(APPEND _env "${ARG_ENV}")
-  endif()
-  add_test(NAME tiered-${group}-${threshold}
-           COMMAND "${CMAKE_COMMAND}" -E env ${_env}
-                   "${MONO_CORPUS_WRAPPER}" --llvm ${ARG_ARGS} ${corpus}
-           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  # Threshold 0 is eager: it promotes inline on the mutator and never starts the
-  # pool, so it really is a one-core run.
-  set(_procs ${MONO_TIERED_PROCESSORS})
-  if(threshold EQUAL 0)
-    set(_procs 1)
-  endif()
-  set_tests_properties(tiered-${group}-${threshold} PROPERTIES
-    LABELS tiered PROCESSORS ${_procs})
-endfunction()
-
-# A check that runs a corpus and asserts on what a pass decided, rather than on
-# what the corpus computed.  The script is Python under mono/unit-tests; it takes
-# the runtime, the corpus, and for the tag checks the source carrying the
-# expectations.
-#
-#   mono_add_corpus_check(<name> SCRIPT <py> CORPUS <exe> [SOURCE <cs>] [LABELS <l>...])
-function(mono_add_corpus_check name)
-  cmake_parse_arguments(ARG "" "SCRIPT;CORPUS;SOURCE" "LABELS" ${ARGN})
-  set(_source "")
-  if(ARG_SOURCE)
-    set(_source "${ARG_SOURCE}")
-  endif()
-  if(NOT ARG_LABELS)
-    set(ARG_LABELS tiered)
-  endif()
-  # The scripts import a module next to them, and a test run has no business
-  # leaving a __pycache__ behind in the source tree.
-  add_test(NAME ${name}
-           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${MONO_CORPUS_MONO_PATH}"
-                   "PYTHONDONTWRITEBYTECODE=1"
-                   "${Python3_EXECUTABLE}" "${ARG_SCRIPT}"
-                   "${MONO_CORPUS_WRAPPER}" "${ARG_CORPUS}" ${_source}
-           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  set_tests_properties(${name} PROPERTIES LABELS "${ARG_LABELS}")
-endfunction()

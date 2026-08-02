@@ -66,4 +66,4 @@ gtest_discover_tests(test-llvm
   DISCOVERY_MODE PRE_TEST
   PROPERTIES
     LABELS llvm
-    ENVIRONMENT "MONO_TIERED=0;MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc")
+    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc")
