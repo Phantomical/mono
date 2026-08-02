@@ -87,12 +87,17 @@ constexpr Cell MP_ADD_SUB = {ManagedPtr, ADD | SUB};
  *
  * The managed-pointer cells are the ones the spec shades as unverifiable; the JIT is
  * not a verifier, so they are accepted like any other.
+ *
+ * The int64 column and row carry cells the spec leaves empty: mini's 64-bit tables
+ * accept int64 mixed with int32 or native int (this one, the integer table, and the
+ * overflow table alike), the narrower operand riding sign-extended in the full
+ * register. Same leniency here, with the extension made explicit by coerce ().
  */
 constexpr OperandTable BINARY_NUMERIC = {
 	/*              int32       int64    native int     F        &      O */
-	/* int32 */ {I4_ALL, X, NI_ALL, X, MP_ADD, X},
-	/* int64 */ {X, I8_ALL, X, X, X, X},
-	/* nint  */ {NI_ALL, X, NI_ALL, X, MP_ADD, X},
+	/* int32 */ {I4_ALL, I8_ALL, NI_ALL, X, MP_ADD, X},
+	/* int64 */ {I8_ALL, I8_ALL, NI_ALL, X, X, X},
+	/* nint  */ {NI_ALL, NI_ALL, NI_ALL, X, MP_ADD, X},
 	/* F     */ {X, X, X, F_ALL, X, X},
 	/* &     */ {MP_ADD_SUB, X, MP_ADD_SUB, X, NI_SUB, X},
 	/* O     */ {X, X, X, X, X, X},
@@ -108,9 +113,9 @@ constexpr Cell NI_INT = {NativeInt, INTEGER_ALL};
  */
 constexpr OperandTable INTEGER = {
 	/*            int32    int64   native int   F   &   O */
-	/* int32 */ {I4_INT, X, NI_INT, X, X, X},
-	/* int64 */ {X, I8_INT, X, X, X, X},
-	/* nint  */ {NI_INT, X, NI_INT, X, X, X},
+	/* int32 */ {I4_INT, I8_INT, NI_INT, X, X, X},
+	/* int64 */ {I8_INT, I8_INT, NI_INT, X, X, X},
+	/* nint  */ {NI_INT, NI_INT, NI_INT, X, X, X},
 	/* F     */ {X, X, X, X, X, X},
 	/* &     */ {X, X, X, X, X, X},
 	/* O     */ {X, X, X, X, X, X},
@@ -153,12 +158,15 @@ constexpr Cell O_EQ = {ObjectRef, COMPARE_EQ};
  * references, is only meaningful for equality. & against & takes the whole row, with a
  * footnote that anything other than equality is only meaningful when both point into
  * the same array - which the CLI does not check and neither does this.
+ *
+ * int64 against native int is mini's 64-bit leniency again; int64 against int32 is
+ * not - mini refuses that pairing even for comparisons.
  */
 constexpr OperandTable COMPARISON = {
 	/*            int32   int64   native int   F      &       O */
 	/* int32 */ {I4_CMP, X, NI_CMP, X, X, X},
-	/* int64 */ {X, I8_CMP, X, X, X, X},
-	/* nint  */ {NI_CMP, X, NI_CMP, X, NI_EQ, X},
+	/* int64 */ {X, I8_CMP, NI_CMP, X, X, X},
+	/* nint  */ {NI_CMP, NI_CMP, NI_CMP, X, NI_EQ, X},
 	/* F     */ {X, X, X, F_CMP, X, X},
 	/* &     */ {X, X, NI_EQ, X, MP_CMP, X},
 	/* O     */ {X, X, X, X, X, O_EQ},
@@ -177,9 +185,9 @@ constexpr Cell MP_ADD_SUB_UN = {ManagedPtr, ADD_OVF_UN | SUB_OVF_UN};
  */
 constexpr OperandTable OVERFLOW_ARITHMETIC = {
 	/*                int32          int64   native int      F      &        O */
-	/* int32 */ {I4_OVF, X, NI_OVF, X, MP_ADD_UN, X},
-	/* int64 */ {X, I8_OVF, X, X, X, X},
-	/* nint  */ {NI_OVF, X, NI_OVF, X, MP_ADD_UN, X},
+	/* int32 */ {I4_OVF, I8_OVF, NI_OVF, X, MP_ADD_UN, X},
+	/* int64 */ {I8_OVF, I8_OVF, NI_OVF, X, X, X},
+	/* nint  */ {NI_OVF, NI_OVF, NI_OVF, X, MP_ADD_UN, X},
 	/* F     */ {X, X, X, X, X, X},
 	/* &     */ {MP_ADD_SUB_UN, X, MP_ADD_SUB_UN, X, NI_SUB_UN, X},
 	/* O     */ {X, X, X, X, X, X},

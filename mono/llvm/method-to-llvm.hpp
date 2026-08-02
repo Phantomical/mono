@@ -388,6 +388,8 @@ private:
 
 	llvm::Expected<llvm::Value *> coerce_to_location (MonoIrBuilder &builder, StackValue value,
 	                                                  MonoType *destination);
+	llvm::Expected<llvm::Value *> coerce_to_argument (MonoIrBuilder &builder, StackValue value,
+	                                                  MonoType *destination);
 
 	llvm::Error emit_and (MonoIrBuilder &builder);
 	llvm::Error emit_or (MonoIrBuilder &builder);

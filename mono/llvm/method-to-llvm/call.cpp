@@ -50,6 +50,35 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 	return target;
 }
 
+/// VALUE as something that can be passed where a call signature asks for DESTINATION.
+///
+/// Call arguments accept one mismatch that a store refuses: an int32 (or a pointer)
+/// where the parameter is int64. Mini permits it on 64-bit only at call sites -
+/// check_call_signature takes it, target_type_is_incompatible does not - and the
+/// value rides over in the full register, so a constant arrives sign-extended.
+/// The eval stack's int32 is signed, so sign-extension is the reading kept here.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
+                                       MonoType *destination)
+{
+	llvm::Expected<llvm::Type *> type = convert_type (destination);
+	if (!type)
+		return type.takeError ();
+
+	llvm::Type *from = value.value->getType ();
+
+	if (from->isIntegerTy () && (*type)->isIntegerTy ()
+	    && (*type)->getIntegerBitWidth () > from->getIntegerBitWidth ())
+		return builder.CreateSExt (value.value, *type);
+	/* An int32 meeting a pointer-typed parameter widens the same way before the cast. */
+	if (from->isIntegerTy () && (*type)->isPointerTy ()
+	    && from->getIntegerBitWidth () < TARGET_SIZEOF_VOID_P * 8)
+		value.value = builder.CreateSExt (value.value,
+		                                  builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
+
+	return coerce_to_location (builder, value, destination);
+}
+
 /// Take a call's arguments off the evaluation stack, converted to what the signature
 /// asks for.
 ///
@@ -77,7 +106,7 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 		}
 
 		llvm::Expected<llvm::Value *> converted =
-			coerce_to_location (builder, value, sig->params[i - sig->hasthis]);
+			coerce_to_argument (builder, value, sig->params[i - sig->hasthis]);
 
 		if (!converted)
 			return converted.takeError ();

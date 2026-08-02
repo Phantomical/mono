@@ -105,7 +105,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 	for (size_t i = 0; i < count; ++i) {
 		llvm::Expected<llvm::Value *> converted =
-			coerce_to_location (builder, get_stack (count - 1 - i), sig->params[i]);
+			coerce_to_argument (builder, get_stack (count - 1 - i), sig->params[i]);
 
 		if (!converted)
 			return converted.takeError ();
@@ -222,7 +222,7 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 
 	for (size_t i = 0; i < count; ++i) {
 		llvm::Expected<llvm::Value *> converted =
-			coerce_to_location (builder, get_stack (count - 1 - i), sig->params[i]);
+			coerce_to_argument (builder, get_stack (count - 1 - i), sig->params[i]);
 
 		if (!converted)
 			return converted.takeError ();
