@@ -225,81 +225,6 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
  *   marked synchronized.
  */
 
-/// Whether a tail.-prefixed call at this site can be honored as an LLVM musttail
-/// call. Declining is always allowed - the site falls back to an ordinary call - so
-/// every test is conservative.
-bool
-MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
-                                     llvm::FunctionType *callee_type)
-{
-	if (!prefixes.tail)
-		return false;
-
-	/*
-	 * A musttail call has to keep the caller's own convention, so only a
-	 * direct call to another fastcc method qualifies: an indirect target or a
-	 * runtime-implemented one is a legacy call, lowered to a different
-	 * prototype after the fact.
-	 */
-	if (callee_method == nullptr || implemented_outside_il (callee_method))
-		return false;
-
-	/* This frame owes an LMF pop on the way out, so it cannot be discarded. */
-	if (method->save_lmf)
-		return false;
-
-	/*
-	 * The ret the prefix promises has to follow at once so it can be folded into
-	 * this instruction, must not be a branch target with an entry state of its own,
-	 * and the arguments must be all the evaluation stack holds.
-	 */
-	const unsigned char *cursor = code + ip;
-
-	if (ip >= code_size || mono_opcode_value (&cursor, code + code_size) != MONO_CEE_RET)
-		return false;
-	if (blocks.find (ip) != blocks.end ())
-		return false;
-	if (stack.size () != static_cast<size_t> (callee_sig->param_count) + callee_sig->hasthis)
-		return false;
-
-	/*
-	 * A protected call has to be an invoke, which cannot be a tail call - and
-	 * III.2.4 forbids tail. inside a protected region anyway.
-	 */
-	if (innermost_try (offset) >= 0)
-		return false;
-
-	/*
-	 * Nothing that could point into this frame may outlive it: a value type's
-	 * this, managed pointers, unmanaged pointers, function pointers. An indirect
-	 * target's this is a pointer to nobody-knows-what, so it gets the same
-	 * treatment a value type's would.
-	 */
-	if (callee_sig->hasthis
-	    && (callee_method == nullptr || m_class_is_valuetype (callee_method->klass)))
-		return false;
-
-	for (int i = 0; i < callee_sig->param_count; ++i) {
-		MonoType *param = callee_sig->params[i];
-
-		if (param->byref || param->type == MONO_TYPE_PTR || param->type == MONO_TYPE_FNPTR)
-			return false;
-	}
-
-	/* The transition into native code saves state a tail call would skip. */
-	if (callee_sig->pinvoke
-	    || (callee_method != nullptr && (callee_method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)))
-		return false;
-
-	/*
-	 * musttail is a guarantee, and the backend can only always keep it when the
-	 * jump changes nothing about the frame's argument area: identical prototypes,
-	 * down to the extension attributes that say how narrow integers fill their
-	 * registers.
-	 */
-	return matching_call_abi (callee_sig, callee_type);
-}
-
 /// Whether a call to CALLEE_SIG could replace this method's own frame: the same
 /// LLVM prototype, down to the extension attributes that say how narrow integers
 /// fill their registers - compared positionally, because a this is just a leading
@@ -327,28 +252,6 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 		return false;
 
 	return extensions (caller_sig) == extensions (callee_sig);
-}
-
-/// The honored form of a tail. call: a musttail call feeding a ret directly, which
-/// is the shape LLVM turns into a jump. The IL ret that should_tail_call verified
-/// comes next is consumed here, since this ret is its translation.
-llvm::Error
-MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
-                                   llvm::ArrayRef<llvm::Value *> args, size_t arg_slots)
-{
-	llvm::CallInst *call = builder.CreateCall (callee, args);
-
-	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
-	call->setCallingConv (llvm::CallingConv::Fast);
-	pop_stack (arg_slots);
-
-	if (call->getType ()->isVoidTy ())
-		builder.CreateRetVoid ();
-	else
-		builder.CreateRet (call);
-
-	ip += 1;
-	return llvm::Error::success ();
 }
 
 /*
@@ -398,7 +301,7 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		return unbalanced_stack (0);
 	if (innermost_try (offset) >= 0)
 		return invalid_il ("jmp cannot transfer control out of a protected block");
-	/* A legacy target's call lowers to a different prototype; no musttail. */
+	/* A legacy target's call lowers to a different prototype than this method's. */
 	if (implemented_outside_il (*target))
 		return unsupported_il ("jmp to a runtime-implemented method");
 	if (method->save_lmf)
@@ -434,7 +337,6 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 
 	llvm::CallInst *call = builder.CreateCall (*declaration, values);
 
-	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
 	call->setCallingConv (llvm::CallingConv::Fast);
 
 	if (call->getType ()->isVoidTy ())
@@ -678,15 +580,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			through_slot = true;
 		}
 	}
-
-	/*
-	 * A keyed call is never a tail call: its key argument travels outside the
-	 * regular ABI, pinned to a register the caller's own frame never carried.
-	 */
-	if (!keyed && !through_slot
-	    && should_tail_call (sig, callee_method, callee.getFunctionType ()))
-		return emit_tail_call (builder, callee, *args,
-		                       sig->param_count + sig->hasthis);
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);
 	llvm::CallBase *site = llvm::cast<llvm::CallBase> (result);

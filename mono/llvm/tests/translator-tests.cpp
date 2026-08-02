@@ -701,44 +701,29 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 	EXPECT_GE (t.count ("ret void"), 1u);
 }
 
-// A tail. call whose prototype matches the caller's is honored as a musttail
-// call - a guaranteed jump - when the target is another fastcc method reached
-// directly. A dispatched or indirect target is a legacy-boundary call whose
-// prototype changes under LegacyAbiPass, so the prefix is declined there and
-// the call stays an ordinary one.
-TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
+// tail.-prefixed IL of every shape parses and leaves an ordinary, unmarked call;
+// tailcallelim and codegen decide whether it becomes a jump.
+TEST_F (TranslatorTest, ATailPrefixedCallStaysAnOrdinaryCall)
 {
-	EXPECT_EQ (translate ("calls", "Calls:TailStatic").count ("musttail call"), 1u);
-	EXPECT_EQ (translate ("calls", "Calls:TailVoid").count ("musttail call"), 1u);
-	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 0u);
-	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("musttail call"),
-	           0u);
+	for (const char *name : {"Calls:TailStatic", "Calls:TailVoid", "Calls:TailVirtual",
+	                         "Calls:TailMismatch", "Calls:TailByref"}) {
+		const Translation &t = translate ("calls", name);
+
+		ASSERT_NE (t.function, nullptr) << name << ": " << t.error;
+		EXPECT_EQ (t.count ("tail call"), 0u) << name;
+	}
+	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("tail call"), 0u);
 }
 
 // jmp transfers the current arguments to a matching method: they reload from
-// their slots (so anything starg wrote goes along) into a musttail call whose
-// result is returned directly.
-TEST_F (TranslatorTest, JmpReloadsTheArgumentsIntoAMustTailCall)
+// their slots (so anything starg wrote goes along) into a call whose result is
+// returned directly.
+TEST_F (TranslatorTest, JmpReloadsTheArgumentsIntoACallFeedingTheRet)
 {
 	const Translation &t = translate ("calls", "Calls:JumpsToHelper");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("musttail call"), 1u) << t.text ();
 	EXPECT_GE (t.count ("Calls:Helper"), 1u);
-}
-
-// Declining a tail. prefix is always legal, and it is how every risky case is
-// handled: a prototype that differs from the caller's, or an argument that could
-// point into the caller's frame.
-TEST_F (TranslatorTest, ARiskyTailCallFallsBackToAPlainCall)
-{
-	const Translation &mismatch = translate ("calls", "Calls:TailMismatch");
-	const Translation &byref = translate ("calls", "Calls:TailByref");
-
-	ASSERT_NE (mismatch.function, nullptr) << mismatch.error;
-	EXPECT_EQ (mismatch.count ("musttail"), 0u);
-	ASSERT_NE (byref.function, nullptr) << byref.error;
-	EXPECT_EQ (byref.count ("musttail"), 0u);
 }
 
 /* ----------------------------------------------------------------- boxing */
