@@ -479,6 +479,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	    && (callee_method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
 		return emit_array_accessor_call (builder, callee_method, sig);
 
+	if (callee_method->klass == mono_defaults.array_class
+	    && std::string_view (callee_method->name) == "UnsafeMov")
+		return emit_unsafe_mov (builder, sig);
+
 	/*
 	 * The boxed receiver replaces the managed pointer in its stack slot, below the
 	 * explicit arguments, before the arguments are collected.

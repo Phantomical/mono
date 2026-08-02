@@ -597,6 +597,74 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 	return llvm::Error::success ();
 }
 
+/// Whether mini's UnsafeMov intrinsic reinterprets FROM as TO
+/// (is_unsafe_mov_compatible): both references, or blittable value types of
+/// equal size - or scalars that both fit the same register class.
+static bool
+unsafe_mov_compatible (MonoClass *from, MonoClass *to)
+{
+	if (!m_class_is_valuetype (from) && !m_class_is_valuetype (to))
+		return true;
+	if (!m_class_is_valuetype (from) || !m_class_is_valuetype (to))
+		return false;
+	if (m_class_has_references (from) || m_class_has_references (to))
+		return false;
+
+	MonoType *ftype = m_class_get_byval_arg (from);
+	MonoType *ttype = m_class_get_byval_arg (to);
+
+	if (MONO_TYPE_ISSTRUCT (ftype) != MONO_TYPE_ISSTRUCT (ttype))
+		return false;
+	if (ftype->type == MONO_TYPE_R4 || ftype->type == MONO_TYPE_R8
+	    || ttype->type == MONO_TYPE_R4 || ttype->type == MONO_TYPE_R8)
+		return false;
+
+	int32_t from_size = mono_class_value_size (from, nullptr);
+	int32_t to_size = mono_class_value_size (to, nullptr);
+
+	return from_size == to_size
+	       || (!MONO_TYPE_ISSTRUCT (ftype) && from_size <= 4 && to_size <= 4);
+}
+
+/// R Array.UnsafeMov<S,R> (S): the reinterpret mini performs as a plain move.
+/// Running the body instead would box S and unbox it as R, which the unbox
+/// type check rightly refuses for pairs like an enum and its unsigned
+/// underlying type - the whole point of the helper is to skip that question.
+llvm::Error
+MethodLLVMEmitter::emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	MonoClass *from = mono_class_from_mono_type_internal (sig->params[0]);
+	MonoClass *to = mono_class_from_mono_type_internal (sig->ret);
+
+	if (!unsafe_mov_compatible (from, to))
+		return unsupported_il ("UnsafeMov between incompatible types");
+
+	llvm::Expected<llvm::Type *> type = convert_type (sig->ret);
+	if (!type)
+		return type.takeError ();
+
+	StackValue value = get_stack (0);
+	llvm::Value *raw = value.value;
+	llvm::Value *result;
+
+	if (raw->getType () == *type) {
+		result = raw;
+	} else if (raw->getType ()->isIntegerTy () && (*type)->isIntegerTy ()) {
+		result = builder.CreateSExtOrTrunc (raw, *type);
+	} else {
+		llvm::Value *home = spill_to_temporary (builder, value.type);
+
+		result = builder.CreateAlignedLoad (*type, home, type_alignment (sig->ret));
+	}
+
+	pop_stack (1);
+	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
+	return llvm::Error::success ();
+}
+
 /*
  * III.4.20  newarr - create a zero-based, one-dimensional array
  *
