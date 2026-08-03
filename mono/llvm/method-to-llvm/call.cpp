@@ -365,6 +365,38 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/// Refuse a call the image should never have contained, the way mini refuses it:
+/// not by failing the translation, but by compiling the method with a throw where
+/// the call would have been, so that a body reached some other way still runs.
+///
+/// The call site is left holding a result nothing can read - control does not come
+/// back from the throw - and the instructions after it are translated into a block
+/// nothing branches to.
+llvm::Error
+MethodLLVMEmitter::emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignature *sig)
+{
+	size_t operands = sig->param_count + sig->hasthis;
+
+	if (stack.size () < operands)
+		return unbalanced_stack (operands);
+
+	pop_stack (operands);
+	emit_throw_corlib_exception (builder, "BadImageFormatException");
+	builder.SetInsertPoint (llvm::BasicBlock::Create (context (), "bad_image", function));
+
+	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
+		return llvm::Error::success ();
+
+	MonoType *slot = stack_slot_type (sig->ret);
+	llvm::Expected<llvm::Type *> type = convert_type (slot);
+
+	if (!type)
+		return type.takeError ();
+
+	push_stack (llvm::PoisonValue::get (*type), slot);
+	return llvm::Error::success ();
+}
+
 /*
  * III.3.19  call - call a method
  *
@@ -497,6 +529,19 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	 */
 	if (callee_method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (callee_method);
+
+	/*
+	 * An abstract method has no body for a plain call to enter. A default interface
+	 * method reaching another member of its own interface is the one place that
+	 * spelling is legal - it dispatches on the receiver the way callvirt would -
+	 * and anywhere else the image is bad.
+	 */
+	if (!is_virtual && (callee_method->flags & METHOD_ATTRIBUTE_ABSTRACT)) {
+		if (!mono_class_is_interface (method->klass))
+			return emit_bad_image_call (builder, sig);
+
+		is_virtual = true;
+	}
 
 	if (is_virtual && !sig->hasthis)
 		return invalid_il ("callvirt needs an instance method");

@@ -317,6 +317,7 @@ private:
 	llvm::Error invalid_argument (uint32_t index);
 	llvm::Error truncated_il (size_t needed);
 	llvm::Error unsupported_il (const llvm::Twine &what);
+	llvm::Error emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignature *sig);
 
 	static StackType stack_type (MonoType *t);
 	static std::string describe (MonoType *t, StackType type);
