@@ -177,6 +177,24 @@
 		ret
 	}
 
+	// A narrow return travels with an extension attribute, and tail-call
+	// eligibility reads that attribute off the call site itself.
+	.method public static bool NarrowHelper (int32 x) cil managed
+	{
+		.maxstack 1
+		ldc.i4.0
+		ret
+	}
+
+	.method public static bool TailNarrow (int32 x) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		tail.
+		call bool Calls::NarrowHelper (int32)
+		ret
+	}
+
 	.method public static void TailVoid (int32 x) cil managed
 	{
 		.maxstack 1

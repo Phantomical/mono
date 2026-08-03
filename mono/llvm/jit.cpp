@@ -220,7 +220,8 @@ apply_options ()
  * which is the cheap-and-cheerful instruction selection this tier wants - the
  * easy wins come from the O1 IR pipeline (run_tier0_pipeline), not from the
  * optimizing selector. FastISel falls back to SelectionDAG per block for
- * constructs it does not cover, which costs compile time, never correctness.
+ * constructs it does not cover (musttail among them), which costs compile
+ * time, never correctness.
  */
 static JITTargetMachineBuilder
 host_target_machine_builder ()

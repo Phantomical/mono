@@ -9,7 +9,9 @@
 #include "mono/metadata/opcodes.h"
 #include "mono/metadata/remoting.h"
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Function.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Type.h>
@@ -238,6 +240,141 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
  *   marked synchronized.
  */
 
+/// Whether a value of TYPE comes back in the return registers rather than through
+/// a hidden pointer the caller passes in.
+///
+/// The demotion to that hidden pointer happens when the call is lowered, far below
+/// the IR, and it turns tail-call elimination off. A musttail site cannot survive
+/// that: the backend aborts the process with "failed to perform tail call
+/// elimination on a call site marked musttail" rather than break the guarantee.
+///
+/// Whether a return is demoted is CanLowerReturn's answer, which nothing at the IR
+/// level can ask. It is not a question of size: an aggregate return is flattened
+/// into its scalar leaves and each leaf assigned a return register, so what matters
+/// is how many leaves there are and of which class - two integers and two SSE on
+/// amd64. { i64 } is returned in a register and { i32, i32, i32, i32, i32 } is not,
+/// but so is any packed eight-byte struct that happens to flatten into four leaves.
+/// A size test would therefore be wrong in exactly the cases that abort.
+///
+/// So this admits only what is already a single leaf, and leaves every aggregate to
+/// the ordinary path. Declining costs a tail call, which the prefix always permits;
+/// guessing wrong costs the process.
+static bool
+returns_in_registers (llvm::Type *type)
+{
+	if (type->isVoidTy () || type->isPointerTy ())
+		return true;
+	if (type->isIntegerTy ())
+		return type->getIntegerBitWidth () <= 64;
+	return type->isFloatTy () || type->isDoubleTy ();
+}
+
+/// Copy TARGET's return attributes onto CALL, which is about to be marked musttail.
+///
+/// Tail-call eligibility compares the caller's return attributes against the call
+/// site's own attribute list (attributesPermitTailCall), and that comparison has no
+/// fallback to the called function - unlike the argument attributes, which do fall
+/// back. So a caller returning `zeroext i8` whose site says plain `i8` reads as a
+/// mismatched ABI. LLVM then drops the tail call silently rather than failing, and
+/// the frame the prefix promised to hand away stays on the stack: a deep recursion
+/// that should run in constant space overflows instead. matching_call_abi has
+/// already proved the two extensions agree; this is what says so on the instruction.
+static void
+carry_return_attributes (llvm::CallInst *call, llvm::Function *target)
+{
+	llvm::AttrBuilder ret_attrs (target->getContext (),
+	                             target->getAttributes ().getRetAttrs ());
+
+	call->addRetAttrs (ret_attrs);
+}
+
+/// Whether a tail.-prefixed call at this site can be honored as an LLVM musttail
+/// call. Declining is always allowed - the site falls back to an ordinary call - so
+/// every test is conservative.
+bool
+MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
+                                     llvm::FunctionType *callee_type)
+{
+	if (!prefixes.tail)
+		return false;
+
+	/*
+	 * A musttail call has to keep the caller's own convention, so only a
+	 * direct call to another fastcc method qualifies: an indirect target or a
+	 * runtime-implemented one is a legacy call, lowered to a different
+	 * prototype after the fact.
+	 */
+	if (callee_method == nullptr || implemented_outside_il (callee_method))
+		return false;
+
+	/*
+	 * A filter body is a function of its own over the parent's frame. Returning
+	 * from it answers the filter, not the method, so there is no frame here to
+	 * hand away.
+	 */
+	if (filter_mode)
+		return false;
+
+	/* This frame owes an LMF pop on the way out, so it cannot be discarded. */
+	if (method->save_lmf || lmf_slot != nullptr)
+		return false;
+
+	/* A return that is really a pointer the caller passed in cannot be forwarded. */
+	if (!returns_in_registers (callee_type->getReturnType ()))
+		return false;
+
+	/*
+	 * The ret the prefix promises has to follow at once so it can be folded into
+	 * this instruction, must not be a branch target with an entry state of its own,
+	 * and the arguments must be all the evaluation stack holds.
+	 */
+	const unsigned char *cursor = code + ip;
+
+	if (ip >= code_size || mono_opcode_value (&cursor, code + code_size) != MONO_CEE_RET)
+		return false;
+	if (blocks.find (ip) != blocks.end ())
+		return false;
+	if (stack.size () != static_cast<size_t> (callee_sig->param_count) + callee_sig->hasthis)
+		return false;
+
+	/*
+	 * A protected call has to be an invoke, which cannot be a tail call - and
+	 * III.2.4 forbids tail. inside a protected region anyway.
+	 */
+	if (innermost_try (offset) >= 0)
+		return false;
+
+	/*
+	 * Nothing that could point into this frame may outlive it: a value type's
+	 * this, managed pointers, unmanaged pointers, function pointers. An indirect
+	 * target's this is a pointer to nobody-knows-what, so it gets the same
+	 * treatment a value type's would.
+	 */
+	if (callee_sig->hasthis
+	    && (callee_method == nullptr || m_class_is_valuetype (callee_method->klass)))
+		return false;
+
+	for (int i = 0; i < callee_sig->param_count; ++i) {
+		MonoType *param = callee_sig->params[i];
+
+		if (param->byref || param->type == MONO_TYPE_PTR || param->type == MONO_TYPE_FNPTR)
+			return false;
+	}
+
+	/* The transition into native code saves state a tail call would skip. */
+	if (callee_sig->pinvoke
+	    || (callee_method != nullptr && (callee_method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)))
+		return false;
+
+	/*
+	 * musttail is a guarantee, and the backend can only always keep it when the
+	 * jump changes nothing about the frame's argument area: identical prototypes,
+	 * down to the extension attributes that say how narrow integers fill their
+	 * registers.
+	 */
+	return matching_call_abi (callee_sig, callee_type);
+}
+
 /// Whether a call to CALLEE_SIG could replace this method's own frame: the same
 /// LLVM prototype, down to the extension attributes that say how narrow integers
 /// fill their registers - compared positionally, because a this is just a leading
@@ -265,6 +402,32 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 		return false;
 
 	return extensions (caller_sig) == extensions (callee_sig);
+}
+
+/// The honored form of a tail. call: a musttail call feeding a ret directly, which
+/// is the shape LLVM turns into a jump at every optimization level - including the
+/// one tier 0 compiles at, where the sibling-call optimization that would find an
+/// ordinary call in tail position never runs. The IL ret that should_tail_call
+/// verified comes next is consumed here, since this ret is its translation.
+llvm::Error
+MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+                                   llvm::ArrayRef<llvm::Value *> args, size_t arg_slots)
+{
+	llvm::CallInst *call = builder.CreateCall (callee, args);
+
+	if (auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ()))
+		carry_return_attributes (call, target);
+	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
+	call->setCallingConv (llvm::CallingConv::Fast);
+	pop_stack (arg_slots);
+
+	if (call->getType ()->isVoidTy ())
+		builder.CreateRetVoid ();
+	else
+		builder.CreateRet (call);
+
+	ip += 1;
+	return llvm::Error::success ();
 }
 
 /*
@@ -350,6 +513,16 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 
 	llvm::CallInst *call = builder.CreateCall (*declaration, values);
 
+	/*
+	 * jmp releases this frame by definition, so the jump is the point rather than
+	 * an optimization - but musttail is still only markable where the backend can
+	 * always keep it. A return that arrives through a hidden pointer cannot be
+	 * forwarded, and there the call weakens to an ordinary one.
+	 */
+	if (returns_in_registers ((*declaration)->getReturnType ())) {
+		carry_return_attributes (call, *declaration);
+		call->setTailCallKind (llvm::CallInst::TCK_MustTail);
+	}
 	call->setCallingConv (llvm::CallingConv::Fast);
 
 	if (call->getType ()->isVoidTy ())
@@ -697,6 +870,17 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			through_slot = true;
 		}
 	}
+
+	/*
+	 * A keyed call is never a tail call: its key argument travels outside the
+	 * regular ABI, pinned to a register the caller's own frame never carried. Nor
+	 * is a dispatched one - what the slot holds is a legacy entry, whose
+	 * convention is not this method's.
+	 */
+	if (!keyed && !through_slot
+	    && should_tail_call (sig, callee_method, callee.getFunctionType ()))
+		return emit_tail_call (builder, callee, *args,
+		                       sig->param_count + sig->hasthis);
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);
 	llvm::CallBase *site = llvm::cast<llvm::CallBase> (result);

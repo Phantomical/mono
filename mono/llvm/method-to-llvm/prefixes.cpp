@@ -176,7 +176,11 @@ MethodLLVMEmitter::emit_prefix (int opcode, uint64_t operand)
 		prefixes.constrained = static_cast<uint32_t> (operand);
 		return llvm::Error::success ();
 	case MONO_CEE_TAIL_:
-		/* Permission to drop the frame before the call, never an obligation. */
+		/*
+		 * A request an implementation may decline: the call site checks whether
+		 * it can be honored and falls back to an ordinary call when not.
+		 */
+		prefixes.tail = true;
 		return llvm::Error::success ();
 	case MONO_CEE_READONLY_:
 		prefixes.readonly_ = true;

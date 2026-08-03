@@ -227,6 +227,7 @@ const MethodRef translatable[] = {
 	{"calls", "Calls:CallGenericVirtual"},
 	{"calls", "Calls:CallGenericInterface"},
 	{"calls", "Calls:TailStatic"},
+	{"calls", "Calls:TailNarrow"},
 	{"calls", "Calls:TailVoid"},
 	{"calls", "Calls:TailVirtual"},
 	{"calls", "Calls:TailMismatch"},
@@ -720,19 +721,45 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 	EXPECT_GE (t.count ("ret void"), 1u);
 }
 
-// tail.-prefixed IL of every shape parses and leaves an ordinary call; the prefix
-// buys nothing, because a managed frame has to stay observable.
-TEST_F (TranslatorTest, ATailPrefixedCallStaysAnOrdinaryCall)
+// A tail. call whose prototype matches the caller's is honored as a musttail
+// call - a guaranteed jump, which is what the prefix needs at tier 0, where the
+// sibling-call optimization that would find an unmarked call in tail position
+// never runs. A dispatched or indirect target is a legacy-boundary call whose
+// prototype changes under LegacyAbiPass, so the prefix is declined there.
+TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 {
-	for (const char *name : {"Calls:TailStatic", "Calls:TailVoid", "Calls:TailVirtual",
-	                         "Calls:TailMismatch", "Calls:TailByref"}) {
+	EXPECT_EQ (translate ("calls", "Calls:TailStatic").count ("musttail call"), 1u);
+	EXPECT_EQ (translate ("calls", "Calls:TailVoid").count ("musttail call"), 1u);
+	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 0u);
+	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("musttail call"),
+	           0u);
+}
+
+// The site carries the callee's return attributes itself. Tail-call eligibility
+// compares the caller's against the site's own list and does not fall back to the
+// called function, so a musttail call that leaves the extension off reads as a
+// mismatched ABI - and LLVM drops the tail call silently, which puts the frame back
+// and turns a constant-space recursion into a stack overflow.
+TEST_F (TranslatorTest, AMustTailCallCarriesTheReturnExtension)
+{
+	const Translation &t = translate ("calls", "Calls:TailNarrow");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("musttail call fastcc zeroext i8"), 1u) << t.text ();
+}
+
+// Declining a tail. prefix is always legal, and it is how every risky case is
+// handled: a prototype that differs from the caller's, or an argument that could
+// point into the caller's frame. A declined site is an ordinary call, which the
+// notail policy then covers like any other.
+TEST_F (TranslatorTest, ARiskyTailCallFallsBackToAPlainCall)
+{
+	for (const char *name : {"Calls:TailMismatch", "Calls:TailByref"}) {
 		const Translation &t = translate ("calls", name);
 
 		ASSERT_NE (t.function, nullptr) << name << ": " << t.error;
-		EXPECT_EQ (t.count (" tail call"), 0u) << name;
-		EXPECT_EQ (t.count ("musttail call"), 0u) << name;
+		EXPECT_EQ (t.count ("musttail"), 0u) << name;
 	}
-	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count (" tail call"), 0u);
 }
 
 // Frames have to survive the optimizer: without notail, tailcallelim rewrites a
@@ -746,13 +773,14 @@ TEST_F (TranslatorTest, ACallIsMarkedNotail)
 }
 
 // jmp transfers the current arguments to a matching method: they reload from
-// their slots (so anything starg wrote goes along) into a call whose result is
-// returned directly.
-TEST_F (TranslatorTest, JmpReloadsTheArgumentsIntoACallFeedingTheRet)
+// their slots (so anything starg wrote goes along) into a musttail call whose
+// result is returned directly.
+TEST_F (TranslatorTest, JmpReloadsTheArgumentsIntoAMustTailCall)
 {
 	const Translation &t = translate ("calls", "Calls:JumpsToHelper");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("musttail call"), 1u) << t.text ();
 	EXPECT_GE (t.count ("Calls:Helper"), 1u);
 }
 
