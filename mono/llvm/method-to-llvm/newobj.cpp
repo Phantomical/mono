@@ -146,16 +146,18 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 	/*
 	 * A string cannot be allocated before its length is known, so its constructor
-	 * compiles as a creator: it takes a null this and returns the string it built.
+	 * is a creator: it builds the string rather than filling one in. There is
+	 * nothing to allocate here - the object arrives from the call.
 	 */
 	if ((*target)->string_ctor) {
-		args[0] = llvm::Constant::getNullValue (
-			llvm::PointerType::get (context (), 0));
+		llvm::Expected<llvm::Value *> created =
+			emit_creator (builder, ctor, llvm::ArrayRef (args).drop_front ());
 
-		llvm::Value *result = emit_protected_call (builder, *declaration, args);
+		if (!created)
+			return created.takeError ();
 
 		pop_stack (count);
-		push_stack (result, pushed);
+		push_stack (*created, pushed);
 		return llvm::Error::success ();
 	}
 

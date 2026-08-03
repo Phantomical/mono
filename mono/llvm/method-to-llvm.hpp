@@ -532,6 +532,10 @@ private:
 	llvm::Error emit_newobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 	                               MonoMethodSignature *sig);
+	llvm::Expected<llvm::Value *> emit_creator (MonoIrBuilder &builder, MonoMethod *ctor,
+	                                            llvm::ArrayRef<llvm::Value *> args);
+	llvm::Error emit_creator_call (MonoIrBuilder &builder, MonoMethod *ctor,
+	                               MonoMethodSignature *sig);
 	llvm::Error emit_box (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox_any (MonoIrBuilder &builder, uint32_t token);

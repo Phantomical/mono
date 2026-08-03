@@ -9,6 +9,7 @@
 #include "nearmem.hpp"
 #include "passes/array-address.hpp"
 #include "passes/legacy-abi.hpp"
+#include "passes/lower-builtins.hpp"
 #include "stubs.hpp"
 
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
@@ -276,6 +277,7 @@ MonoJit::run_tier0_pipeline (Module &m)
 	 * is lowered to the legacy boundary convention.
 	 */
 	mpm.addPass (ArrayAddressPass ());
+	mpm.addPass (LowerBuiltinsPass ());
 	mpm.addPass (pb.buildPerModuleDefaultPipeline (OptimizationLevel::O1));
 	mpm.addPass (LegacyAbiPass ());
 	mpm.run (m, mam);

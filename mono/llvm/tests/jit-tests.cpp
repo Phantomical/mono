@@ -10,11 +10,14 @@
 #include "harness.hpp"
 
 #include "jit.hpp"
+#include "passes/lower-builtins.hpp"
 
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Passes/PassBuilder.h>
 
 #include <cstdint>
 #include <memory>
@@ -217,6 +220,29 @@ TEST_F (JitExecution, Tier0PipelinePromotesAllocasToSsa)
 
 	EXPECT_EQ (t->count ("alloca"), 0u);
 	EXPECT_GT (t->count ("add"), 0u);
+}
+
+// The creator's call shape belongs to the pass. What the translator emitted names no
+// this at all; what survives the lowering is the constructor itself, called with the
+// null this the runtime hands it and nothing of the builtin left over.
+TEST_F (JitExecution, LowerBuiltinsGivesTheCreatorItsNullThis)
+{
+	std::unique_ptr<Translation> t = translate_method ("objects", "Objects:MakeString");
+	ASSERT_NE (t->function, nullptr) << t->error;
+	ASSERT_EQ (t->count ("mono.builtin.creator."), 1u) << t->text ();
+
+	PassBuilder pb;
+	ModuleAnalysisManager mam;
+	ModulePassManager mpm;
+
+	pb.registerModuleAnalyses (mam);
+	mpm.addPass (LowerBuiltinsPass ());
+	mpm.run (*t->module, mam);
+
+	EXPECT_EQ (t->count ("mono.builtin."), 0u) << t->text ();
+	EXPECT_EQ (t->count ("call ptr @\"string:.ctor"), 1u) << t->text ();
+	EXPECT_EQ (t->count ("(ptr null"), 1u) << t->text ();
+	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
 }
 
 } // namespace

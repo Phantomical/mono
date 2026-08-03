@@ -97,4 +97,20 @@
 		newobj instance void [mscorlib]System.String::.ctor (char, int32)
 		ret
 	}
+
+	// The shape the runtime-invoke wrapper emits: reflection has no instance to
+	// construct into either, so it pushes a placeholder this, calls the
+	// constructor outright and stores the string that comes back.
+	.method public static string CallStringCtor () cil managed
+	{
+		.maxstack 3
+		.locals init (string made)
+		ldnull
+		ldc.i4.s 97
+		ldc.i4.3
+		call instance void [mscorlib]System.String::.ctor (char, int32)
+		stloc.0
+		ldloc.0
+		ret
+	}
 }
