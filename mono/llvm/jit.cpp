@@ -382,8 +382,20 @@ MonoJit::register_symbol (StringRef name, void *addr)
 	std::lock_guard<std::mutex> lock (named_symbols_mutex_);
 
 	auto it = named_symbols_.find (name.str ());
-	if (it != named_symbols_.end ())
+	if (it != named_symbols_.end ()) {
+		/*
+		 * A name is a promise about what it stands for. Two addresses under one
+		 * name means a caller built a name that is not unique, and the first
+		 * definition is the one every later module would silently link against -
+		 * so say so here rather than emit code that reads the wrong object.
+		 */
+		if (it->second != addr)
+			return createStringError (
+				inconvertibleErrorCode (),
+				"symbol %s already stands for a different address",
+				name.str ().c_str ());
 		return Error::success ();
+	}
 
 	SymbolMap symbols;
 	symbols[jit_->getExecutionSession ().intern (name)] = {

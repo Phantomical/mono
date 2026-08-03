@@ -245,10 +245,10 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	if (interned == nullptr)
 		return runtime_error (intern_error);
 
-	char *symbol = g_strdup_printf ("mono_ldstr_%s_%08x", image->assembly_name, token);
-	llvm::Constant *value = address_symbol (symbol, interned);
+	char *name = g_strdup_printf ("mono_ldstr_%s_%08x", image->assembly_name, token);
+	llvm::Constant *value = address_symbol (identity_symbol (name, image), interned);
 
-	g_free (symbol);
+	g_free (name);
 	push_stack (value, m_class_get_byval_arg (mono_defaults.string_class));
 	return llvm::Error::success ();
 }

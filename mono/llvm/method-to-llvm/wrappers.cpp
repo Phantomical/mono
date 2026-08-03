@@ -236,13 +236,10 @@ MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
 		return llvm::Error::success ();
 	}
 
-	/*
-	 * Named after the slot it came from. Two wrappers' slots are unrelated, so
-	 * the method's own name is what keeps one from colliding with another.
-	 */
+	/* Named after the slot it came from, within the wrapper that owns it. */
 	char *owner = mono_method_full_name (method, TRUE);
-	std::string name =
-		std::string ("mono_wrapper_ptr_") + owner + "_" + std::to_string (token);
+	std::string name = identity_symbol (
+		std::string ("mono_wrapper_ptr_") + owner + "_" + std::to_string (token), method);
 
 	g_free (owner);
 	push_stack (address_symbol (name, pointer),

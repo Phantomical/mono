@@ -158,8 +158,9 @@ private:
 	/// compiled, and owns the resolver they call through.
 	std::unique_ptr<llvm::orc::JITCompileCallbackManager> callbacks_;
 
-	/// Names ever handed to register_symbol (), so a repeat registration is
-	/// recognized instead of tripping ORC's duplicate-definition error.
+	/// What each name handed to register_symbol () stands for, so a repeat
+	/// registration is recognized instead of tripping ORC's duplicate-definition
+	/// error - and so a name given two different addresses is caught.
 	std::mutex named_symbols_mutex_;
 	std::unordered_map<std::string, void *> named_symbols_;
 

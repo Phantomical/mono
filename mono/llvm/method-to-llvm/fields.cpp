@@ -7,8 +7,10 @@
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/remoting.h"
+#include <llvm/ADT/StringRef.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
+#include <cstdio>
 
 namespace mono {
 
@@ -103,6 +105,25 @@ MethodLLVMEmitter::record_external (const std::string &name, ExternalSymbol::Kin
 		externals->push_back ({ name, kind, object });
 }
 
+/// A symbol name standing for OBJECT: NAME is what makes it readable, the pointer
+/// is what makes it unique.
+///
+/// No printed name is unique on its own. Two assemblies loaded from different
+/// bytes can carry the same assembly name and define classes, methods and fields
+/// that print identically - Assembly.Load (byte[]) over two builds of the same
+/// source is the ordinary way to get there. The engine resolves a symbol by name
+/// and keeps the first definition it is given, so without the pointer the second
+/// assembly's code would link against the first's MonoClass, vtable, statics and
+/// string literals.
+std::string
+MethodLLVMEmitter::identity_symbol (const std::string &name, const void *object)
+{
+	char suffix[32];
+
+	snprintf (suffix, sizeof (suffix), "@%p", object);
+	return name + suffix;
+}
+
 /// The address the engine has to resolve for a per-class run-time structure.
 ///
 /// A class contributes three: mono_statics_<class>, the block its static fields live
@@ -113,12 +134,12 @@ llvm::Constant *
 MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 {
 	char *name = mono_type_full_name (m_class_get_byval_arg (klass));
-	std::string symbol = std::string (prefix) + name;
+	std::string symbol = identity_symbol (std::string (prefix) + name, klass);
 	ExternalSymbol::Kind kind = ExternalSymbol::Kind::Class;
 
-	if (!strcmp (prefix, "mono_vtable_"))
+	if (llvm::StringRef (prefix) == "mono_vtable_")
 		kind = ExternalSymbol::Kind::VTable;
-	else if (!strcmp (prefix, "mono_statics_"))
+	else if (llvm::StringRef (prefix) == "mono_statics_")
 		kind = ExternalSymbol::Kind::Statics;
 
 	g_free (name);
@@ -131,7 +152,7 @@ llvm::Constant *
 MethodLLVMEmitter::field_symbol (MonoClassField *field)
 {
 	char *name = mono_field_full_name (field);
-	std::string symbol = std::string ("mono_field_") + name;
+	std::string symbol = identity_symbol (std::string ("mono_field_") + name, field);
 
 	g_free (name);
 	record_external (symbol, ExternalSymbol::Kind::Field, field);

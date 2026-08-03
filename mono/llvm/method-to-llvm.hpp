@@ -473,6 +473,7 @@ private:
 	llvm::Constant *extern_symbol (const std::string &name);
 	void record_external (const std::string &name, ExternalSymbol::Kind kind,
 	                      void *object);
+	std::string identity_symbol (const std::string &name, const void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	llvm::Constant *field_symbol (MonoClassField *field);
 	llvm::Constant *address_symbol (const std::string &name, void *address);

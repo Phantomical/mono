@@ -440,12 +440,18 @@ TEST_F (TranslatorTest, StaticsOfOneClassShareOneSymbol)
 	ASSERT_NE (t.function, nullptr) << t.error;
 
 	size_t blocks = 0;
-	for (const llvm::GlobalVariable &global : t.module->globals ())
-		if (global.getName ().starts_with ("mono_statics_"))
-			++blocks;
+	size_t holder = 0;
 
-	EXPECT_EQ (blocks, 1u);
-	EXPECT_NE (t.module->getNamedGlobal ("mono_statics_Holder"), nullptr);
+	/* Names carry the class's pointer, so match on the prefix rather than whole. */
+	for (const llvm::GlobalVariable &global : t.module->globals ())
+		if (global.getName ().starts_with ("mono_statics_")) {
+			++blocks;
+			if (global.getName ().starts_with ("mono_statics_Holder"))
+				++holder;
+		}
+
+	EXPECT_EQ (blocks, 1u) << t.text ();
+	EXPECT_EQ (holder, 1u) << t.text ();
 }
 
 // A thread-static's recorded offset is a per-thread lookup cookie, not a place in
@@ -1099,10 +1105,10 @@ TEST_F (TranslatorTest, LdstrBecomesOneSymbolPerLiteral)
 	const Translation &twice = translate ("tokens", "Tokens:SameLiteralTwice");
 
 	ASSERT_NE (once.function, nullptr) << once.error;
-	EXPECT_EQ (once.count ("@mono_ldstr_tokens_"), 1u) << once.text ();
+	EXPECT_EQ (once.count ("@\"mono_ldstr_tokens_"), 1u) << once.text ();
 
 	ASSERT_NE (twice.function, nullptr) << twice.error;
-	EXPECT_EQ (twice.count ("@mono_ldstr_tokens_"), 2u);
+	EXPECT_EQ (twice.count ("@\"mono_ldstr_tokens_"), 2u);
 
 	size_t distinct = 0;
 
@@ -1121,7 +1127,7 @@ TEST_F (TranslatorTest, LdtokenWrapsTheMatchingSymbolFamily)
 	const Translation &field = translate ("tokens", "Tokens:FieldToken");
 
 	ASSERT_NE (type.function, nullptr) << type.error;
-	EXPECT_EQ (type.count ("@mono_class_Holder"), 1u) << type.text ();
+	EXPECT_EQ (type.count ("@\"mono_class_Holder"), 1u) << type.text ();
 
 	ASSERT_NE (method.function, nullptr) << method.error;
 	EXPECT_EQ (method.count ("@\"mono_method_"), 1u) << method.text ();

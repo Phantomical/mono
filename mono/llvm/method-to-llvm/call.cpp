@@ -171,7 +171,7 @@ llvm::Constant *
 MethodLLVMEmitter::method_symbol (MonoMethod *target)
 {
 	char *name = mono_method_full_name (target, TRUE);
-	std::string symbol = std::string ("mono_method_") + name;
+	std::string symbol = identity_symbol (std::string ("mono_method_") + name, target);
 
 	g_free (name);
 	record_external (symbol, ExternalSymbol::Kind::Method, target);
@@ -202,13 +202,9 @@ llvm::Constant *
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
 	char *name = mono_method_full_name (target, TRUE);
-	std::string symbol = name;
-	char suffix[32];
+	std::string symbol = identity_symbol (name, target);
 
 	g_free (name);
-	snprintf (suffix, sizeof (suffix), "@%p", (void *) target);
-	symbol += suffix;
-
 	record_external (symbol, ExternalSymbol::Kind::Code, target);
 	return extern_symbol (symbol);
 }

@@ -545,20 +545,18 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 
 	bool legacy = implemented_outside_il (method);
 	char *printed = mono_method_full_name (method, TRUE);
-	std::string full_name = printed;
-	char suffix[32];
+
+	/*
+	 * identity_symbol () for the same reason it is used everywhere else, with one
+	 * more of its own: conversion operators overload on their return type, which
+	 * no printed signature carries, and runtime-minted wrappers print alike. This
+	 * name is how a caller's reference finds the method's stub, so
+	 * symbol_for_code () (runtime.cpp) must agree with it.
+	 */
+	std::string full_name = identity_symbol (printed, method);
 
 	g_free (printed);
 
-	/*
-	 * The printed name is for reading; the pointer is the identity. No name
-	 * scheme is unique on its own - conversion operators overload on their
-	 * return type, which no printed signature carries, and runtime-minted
-	 * wrappers print alike - and this name is how a caller's reference finds
-	 * the method's stub. symbol_for_code () (runtime.cpp) must agree.
-	 */
-	snprintf (suffix, sizeof (suffix), "@%p", (void *) method);
-	full_name += suffix;
 	if (!legacy)
 		full_name += "$fast";
 
