@@ -150,6 +150,11 @@ MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
  * turns that into a throw at the call site. Calling the raw address instead
  * leaves the exception pending until some unrelated later checkpoint - by
  * which time the frames that would have caught it are gone.
+ *
+ * Registration decides which ones are the exception: an icall registered to
+ * avoid a wrapper had `wrapper` filled in with `func`, and there is no wrapper
+ * to call. Those have to be called raw - mono_threads_attach_coop runs on a
+ * thread that cannot execute managed code at all yet.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
@@ -160,18 +165,36 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 		return invalid_il (llvm::Twine ("icall id ") + llvm::Twine (id)
 		                   + " is not one the runtime registered");
 
-	llvm::Expected<llvm::Function *> callee =
-		icall_wrapper_decl (static_cast<MonoJitICallId> (id));
-	if (!callee)
-		return callee.takeError ();
-
 	llvm::Expected<std::vector<llvm::Value *>> args =
 		pop_call_arguments (builder, info->sig);
 	if (!args)
 		return args.takeError ();
 
-	llvm::Value *result = emit_protected_call (
-		builder, *callee, adapt_to_callee (builder, *callee, *args));
+	llvm::Value *result;
+
+	if (info->wrapper != nullptr && info->wrapper == info->func) {
+		llvm::Expected<llvm::FunctionType *> type = convert_method_signature (info->sig);
+		if (!type)
+			return type.takeError ();
+
+		llvm::Constant *target =
+			address_symbol (std::string ("mono_icall_") + info->name,
+		                        const_cast<void *> (info->func));
+
+		result = emit_protected_call (builder, llvm::FunctionCallee (*type, target),
+		                              *args);
+
+		/* The icall is a C function; its signature says so. */
+		mark_legacy_call (llvm::cast<llvm::CallBase> (result), info->sig);
+	} else {
+		llvm::Expected<llvm::Function *> wrapper =
+			icall_wrapper_decl (static_cast<MonoJitICallId> (id));
+		if (!wrapper)
+			return wrapper.takeError ();
+
+		result = emit_protected_call (builder, *wrapper,
+		                              adapt_to_callee (builder, *wrapper, *args));
+	}
 
 	pop_stack (info->sig->param_count);
 

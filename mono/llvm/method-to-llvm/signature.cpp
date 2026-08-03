@@ -502,7 +502,10 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 {
 	MonoJitICallInfo *info = mono_find_jit_icall_info (id);
 
-	return create_method_decl (mono_marshal_get_icall_wrapper (info, TRUE));
+	/* The checkpoint icall is that check, so wrapping it in one would recurse. */
+	bool check = id != MONO_JIT_ICALL_mono_thread_interruption_checkpoint;
+
+	return create_method_decl (mono_marshal_get_icall_wrapper (info, check));
 }
 
 /// The declaration of METHOD in this module, created on first use and cached.
