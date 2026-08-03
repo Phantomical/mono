@@ -141,6 +141,13 @@ MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
  *
  * The operand is a MonoJitICallId rather than a token: the runtime knows the
  * signature and the address, and nothing about either is in any metadata.
+ *
+ * Through the wrapper rather than straight to the C function, as mini does
+ * (mono_emit_jit_icall_id): an entry point that fails leaves a pending
+ * exception behind and returns normally, and the wrapper's checkpoint is what
+ * turns that into a throw at the call site. Calling the raw address instead
+ * leaves the exception pending until some unrelated later checkpoint - by
+ * which time the frames that would have caught it are gone.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
@@ -151,23 +158,19 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 		return invalid_il (llvm::Twine ("icall id ") + llvm::Twine (id)
 		                   + " is not one the runtime registered");
 
-	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (info->sig);
-	if (!type)
-		return type.takeError ();
+	llvm::Expected<llvm::Function *> callee =
+		icall_wrapper_decl (static_cast<MonoJitICallId> (id));
+	if (!callee)
+		return callee.takeError ();
 
 	llvm::Expected<std::vector<llvm::Value *>> args =
 		pop_call_arguments (builder, info->sig);
 	if (!args)
 		return args.takeError ();
 
-	llvm::Constant *target =
-		address_symbol (std::string ("mono_icall_") + info->name,
-	                        const_cast<void *> (info->func));
-	llvm::Value *result =
-		emit_protected_call (builder, llvm::FunctionCallee (*type, target), *args);
+	llvm::Value *result = emit_protected_call (
+		builder, *callee, adapt_to_callee (builder, *callee, *args));
 
-	/* The icall is a C function; its signature says so. */
-	mark_legacy_call (llvm::cast<llvm::CallBase> (result), info->sig);
 	pop_stack (info->sig->param_count);
 
 	if (info->sig->ret->type == MONO_TYPE_VOID && !info->sig->ret->byref)
