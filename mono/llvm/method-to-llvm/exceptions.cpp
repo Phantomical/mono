@@ -371,8 +371,19 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 {
 	int clause = innermost_try (offset);
 
-	if (clause < 0)
-		return builder.CreateCall (callee, args);
+	if (clause < 0) {
+		llvm::CallInst *call = builder.CreateCall (callee, args);
+
+		/*
+		 * A managed frame is observable - stack traces, StackFrame, the
+		 * runtime's own stack walks - so a call in tail position still has to
+		 * be a call. Left unmarked, tailcallelim marks it `tail`, which either
+		 * rewrites self-recursion into a loop or lets codegen hand this frame
+		 * to the callee. Either way the frame stops existing.
+		 */
+		call->setTailCallKind (llvm::CallInst::TCK_NoTail);
+		return call;
+	}
 
 	llvm::BasicBlock *returned = llvm::BasicBlock::Create (context (), "returned", function);
 	llvm::InvokeInst *call =

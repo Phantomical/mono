@@ -702,8 +702,8 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 	EXPECT_GE (t.count ("ret void"), 1u);
 }
 
-// tail.-prefixed IL of every shape parses and leaves an ordinary, unmarked call;
-// tailcallelim and codegen decide whether it becomes a jump.
+// tail.-prefixed IL of every shape parses and leaves an ordinary call; the prefix
+// buys nothing, because a managed frame has to stay observable.
 TEST_F (TranslatorTest, ATailPrefixedCallStaysAnOrdinaryCall)
 {
 	for (const char *name : {"Calls:TailStatic", "Calls:TailVoid", "Calls:TailVirtual",
@@ -711,9 +711,20 @@ TEST_F (TranslatorTest, ATailPrefixedCallStaysAnOrdinaryCall)
 		const Translation &t = translate ("calls", name);
 
 		ASSERT_NE (t.function, nullptr) << name << ": " << t.error;
-		EXPECT_EQ (t.count ("tail call"), 0u) << name;
+		EXPECT_EQ (t.count (" tail call"), 0u) << name;
+		EXPECT_EQ (t.count ("musttail call"), 0u) << name;
 	}
-	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("tail call"), 0u);
+	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count (" tail call"), 0u);
+}
+
+// Frames have to survive the optimizer: without notail, tailcallelim rewrites a
+// self-recursive call into a loop and every recursive frame vanishes from the trace.
+TEST_F (TranslatorTest, ACallIsMarkedNotail)
+{
+	const Translation &t = translate ("calls", "Calls:CallVoid");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_GE (t.count ("notail call"), 1u) << t.text ();
 }
 
 // jmp transfers the current arguments to a matching method: they reload from
