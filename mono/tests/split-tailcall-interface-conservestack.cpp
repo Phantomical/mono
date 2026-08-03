@@ -15,6 +15,7 @@
 #include <vector>
 #include <string>
 #include <assert.h>
+#include <stdio.h>
 using namespace std;
 #include <sys/stat.h>
 #ifdef _WIN32
@@ -56,7 +57,15 @@ int main()
 		{
 			tests.resize(tests.size() + 1);
 			test = &tests.back();
-			assert(getline(cin, line));
+			// Checked rather than asserted: a release build defines NDEBUG,
+			// and an assert that reads the line does not read it there. The
+			// suffix marker below is then never seen, so the loop runs to end
+			// of input and every test is written without its suffix.
+			if (!getline(cin, line))
+			{
+				fprintf(stderr, "unexpected end of input\n");
+				exit(1);
+			}
 			if (line == "// test-split-suffix do not remove or edit this line")
 				break;
 		}

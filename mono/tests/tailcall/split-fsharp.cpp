@@ -87,12 +87,24 @@ int main ()
 			}
 			tests.resize (tests.size () + 1);
 			test = &tests.back ();
-			assert (getline (cin, line));
+			// Checked rather than asserted: a release build defines NDEBUG,
+			// and an assert that reads the line does not read it there - the
+			// unread line then falls through to the strchr below, which finds
+			// no quote and returns null.
+			if (!getline (cin, line))
+			{
+				fprintf(stderr, "unexpected end of input\n");
+				exit(1);
+			}
 			// tests start with ldstr
 			//printf("%s\n", line.c_str());
 			const bool ldstr = line.length () >= marker_ldstr.length () && memcmp(line.c_str (), marker_ldstr.c_str (), marker_ldstr.length ()) == 0;
 			const bool ldc_i4_0 = line.length () >= marker_ldc_i4_0.length () && memcmp(line.c_str (), marker_ldc_i4_0.c_str (), marker_ldc_i4_0.length ()) == 0;
-			assert (ldstr || ldc_i4_0);
+			if (!ldstr && !ldc_i4_0)
+			{
+				fprintf(stderr, "expected ldstr or ldc.i4.0, got: %s\n", line.c_str());
+				exit(1);
+			}
 			if (ldc_i4_0)
 			{
 				suffix.push_back (line);
