@@ -33,9 +33,11 @@ class Driver
 			threads.CompleteAdding ();
 		}));
 
+		// GetConsumingEnumerable rather than "while (!IsCompleted) Take ()": the latter
+		// races, because CompleteAdding can land in the window between the check and a
+		// Take that is already blocked, and a blocked Take woken that way throws.
 		Thread consumer = new Thread (new ThreadStart(() => {
-			while (!threads.IsCompleted) {
-				Thread worker = threads.Take ();
+			foreach (Thread worker in threads.GetConsumingEnumerable ()) {
 				worker.Join ();
 				Console.WriteLine ("Joined thread {0}", worker.ManagedThreadId);
 			}
