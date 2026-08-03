@@ -330,6 +330,22 @@ TEST_F (TranslatorTest, DivisionIsGuarded)
 	EXPECT_EQ (t.count ("sdiv i32"), 1u);
 }
 
+// The width matters, not just the intrinsic: anything wider than the target legalizes
+// to i128, and codegen lowers a 128-bit conversion to a compiler-rt call that nothing
+// in the JIT's link order defines.
+TEST_F (TranslatorTest, CheckedFloatConversionSaturatesAtTheTargetWidth)
+{
+	const Translation &s = translate ("arith", "Arith:ConvOvfLongFromDouble");
+
+	ASSERT_NE (s.function, nullptr) << s.error;
+	EXPECT_EQ (s.count ("llvm.fptosi.sat.i64.f64"), 1u) << s.text ();
+
+	const Translation &u = translate ("arith", "Arith:ConvOvfULongFromDouble");
+
+	ASSERT_NE (u.function, nullptr) << u.error;
+	EXPECT_EQ (u.count ("llvm.fptoui.sat.i64.f64"), 1u) << u.text ();
+}
+
 TEST_F (TranslatorTest, IntToFloatConversionSignExtends)
 {
 	EXPECT_EQ (translate ("arith", "Arith:ConvToFloat").count ("sitofp"), 1u);

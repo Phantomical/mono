@@ -3201,6 +3201,215 @@ class Tests
 		return 0;
 	}
 
+	[MethodImplAttribute (MethodImplOptions.NoInlining)]
+	static double opaque_double (double d) {
+		return d;
+	}
+
+	[MethodImplAttribute (MethodImplOptions.NoInlining)]
+	static float opaque_float (float f) {
+		return f;
+	}
+
+	/*
+	 * conv.ovf at the edges of each target's range, on operands the compiler cannot see
+	 * through. What makes these worth stating is that the interesting values are the ones
+	 * a float cannot hold exactly: the last double below 2^63 is 1024 short of it, and
+	 * truncation means a fraction past either end still fits.
+	 */
+	public static int test_0_checked_float_to_int_boundaries () {
+		bool failed;
+
+		try {
+			failed = false;
+			checked {
+				if ((long) opaque_double (9223372036854774784.0) != 9223372036854774784)
+					return 1;
+			}
+		} catch (OverflowException) {
+			failed = true;
+		}
+		if (failed)
+			return 2;
+
+		try {
+			failed = false;
+			checked {
+				if ((long) opaque_double (-9223372036854775808.0) != Int64.MinValue)
+					return 3;
+			}
+		} catch (OverflowException) {
+			failed = true;
+		}
+		if (failed)
+			return 4;
+
+		/* 2^63 itself, and the first double past Int64.MinValue, are both out. */
+		try {
+			failed = true;
+			checked {
+				long l = (long) opaque_double (9223372036854775808.0);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 5;
+
+		try {
+			failed = true;
+			checked {
+				long l = (long) opaque_double (-9223372036854777856.0);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 6;
+
+		try {
+			failed = true;
+			checked {
+				long l = (long) opaque_double (Double.NaN);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 7;
+
+		try {
+			failed = true;
+			checked {
+				long l = (long) opaque_double (Double.PositiveInfinity);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 8;
+
+		try {
+			failed = false;
+			checked {
+				if ((ulong) opaque_double (18446744073709549568.0) != 18446744073709549568)
+					return 9;
+			}
+		} catch (OverflowException) {
+			failed = true;
+		}
+		if (failed)
+			return 10;
+
+		try {
+			failed = true;
+			checked {
+				ulong u = (ulong) opaque_double (18446744073709551616.0);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 11;
+
+		/* A negative fraction truncates to zero, which is in range; -1.0 is not. */
+		try {
+			failed = false;
+			checked {
+				if ((ulong) opaque_double (-0.5) != 0)
+					return 12;
+			}
+		} catch (OverflowException) {
+			failed = true;
+		}
+		if (failed)
+			return 13;
+
+		try {
+			failed = true;
+			checked {
+				ulong u = (ulong) opaque_double (-1.0);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 14;
+
+		try {
+			failed = false;
+			checked {
+				if ((int) opaque_double (-2147483648.5) != Int32.MinValue)
+					return 15;
+				if ((int) opaque_double (2147483647.5) != Int32.MaxValue)
+					return 16;
+				if ((uint) opaque_double (4294967295.5) != UInt32.MaxValue)
+					return 17;
+				if ((sbyte) opaque_double (-128.9) != -128)
+					return 18;
+				if ((sbyte) opaque_double (127.9) != 127)
+					return 19;
+			}
+		} catch (OverflowException) {
+			failed = true;
+		}
+		if (failed)
+			return 20;
+
+		try {
+			failed = true;
+			checked {
+				int i = (int) opaque_double (2147483648.0);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 21;
+
+		/*
+		 * float32 sources, where the spacing is coarse enough that the last value in
+		 * range is Int32.MinValue itself and the next one down is 256 away.
+		 */
+		try {
+			failed = false;
+			checked {
+				if ((long) opaque_float (-9223372036854775808.0f) != Int64.MinValue)
+					return 22;
+				if ((int) opaque_float (-2147483648.0f) != Int32.MinValue)
+					return 23;
+			}
+		} catch (OverflowException) {
+			failed = true;
+		}
+		if (failed)
+			return 24;
+
+		try {
+			failed = true;
+			checked {
+				int i = (int) opaque_float (-2147483904.0f);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 25;
+
+		try {
+			failed = true;
+			checked {
+				ulong u = (ulong) opaque_float (18446744073709551616.0f);
+			}
+		} catch (OverflowException) {
+			failed = false;
+		}
+		if (failed)
+			return 26;
+
+		return 0;
+	}
+
 	public static int test_0_simple_double_casts () {
 
 		double d = 0xffffffff;

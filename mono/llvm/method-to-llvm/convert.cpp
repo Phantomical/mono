@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
+#include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Intrinsics.h>
@@ -184,6 +185,28 @@ adjust (llvm::IRBuilder<> &builder, llvm::Value *value, unsigned bits, bool is_s
 		return builder.CreateTrunc (value, to);
 
 	return is_signed ? builder.CreateSExt (value, to) : builder.CreateZExt (value, to);
+}
+
+/// A float to compare an operand against, and the predicate to compare it with.
+struct FloatBound {
+	llvm::Constant *bound;
+	llvm::CmpInst::Predicate pred;
+};
+
+/// BOUND in FP, and the predicate that still means what EXCLUSIVE meant of BOUND itself.
+///
+/// Rounding toward zero lands on the nearest float on the range's side of BOUND, so when
+/// BOUND is not representable there is nothing between the two for the comparison to
+/// misplace and it only has to take the endpoint in.
+FloatBound
+float_bound (llvm::Type *fp, const llvm::APInt &bound, llvm::CmpInst::Predicate exclusive,
+             llvm::CmpInst::Predicate inclusive)
+{
+	llvm::APFloat value (fp->getFltSemantics ());
+	bool exact = value.convertFromAPInt (bound, /* IsSigned */ true,
+	                                     llvm::APFloat::rmTowardZero) == llvm::APFloat::opOK;
+
+	return {llvm::ConstantFP::get (fp, value), exact ? exclusive : inclusive};
 }
 
 /// The operand as a number.
@@ -408,42 +431,43 @@ MethodLLVMEmitter::emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *v
 /// VALUE truncated toward zero into TARGET, throwing OverflowException if it does not
 /// fit.
 ///
-/// This is the one float conversion that pays for the saturating intrinsic, because it
-/// is the one that has to know whether the value fit: a frozen poison is a fine result
-/// but says nothing about where it came from.
+/// The check is made on the operand rather than on the result: the values that survive
+/// truncation are exactly those in the open interval (lo-1, hi+1), since anything in
+/// (lo-1, lo] or [hi, hi+1) loses its fraction and lands back inside. Both ends of that
+/// interval are one past the target's range, which is what leaves them representable
+/// where lo and hi themselves are not - 2^(n-1) is a power of two, and only 2^(n-1)-1
+/// needs a mantissa the source may not have.
 ///
-/// Saturating two bits wider than the target is what makes the check possible: a value
-/// that overflowed is still outside the target's range once clamped, so the bounds can
-/// be compared as integers, where they are exact. Comparing against them as floats
-/// would need 2^(n-1)+1 to be representable, and at 64 bits it is not.
-///
-/// The saturation is signed even for an unsigned target, so that a negative operand
-/// stays negative and fails the range check rather than clamping to zero and passing.
-/// NaN saturates to zero, which would pass, so it is asked about on its own.
+/// The comparisons are ordered, so a NaN is on neither side and overflows, and the
+/// conversion saturates so that it is defined even on the path that goes on to throw.
 llvm::Value *
 MethodLLVMEmitter::emit_checked_float_conv (MonoIrBuilder &builder, llvm::Value *value,
                                             ConvType type)
 {
 	Target target = target_of (type);
+	llvm::Type *fp = value->getType ();
 	unsigned wide = target.bits + 2;
-	llvm::Type *to = builder.getIntNTy (wide);
-	llvm::Value *saturated = builder.CreateIntrinsic (llvm::Intrinsic::fptosi_sat,
-	                                                  {to, value->getType ()}, {value});
 
 	llvm::APInt lo = target.is_signed ? llvm::APInt::getSignedMinValue (target.bits).sext (wide)
 	                                  : llvm::APInt::getZero (wide);
 	llvm::APInt hi = target.is_signed ? llvm::APInt::getSignedMaxValue (target.bits).sext (wide)
 	                                  : llvm::APInt::getMaxValue (target.bits).zext (wide);
 
-	llvm::Value *out_of_range = builder.CreateOr (
-		builder.CreateICmpSLT (saturated, llvm::ConstantInt::get (context (), lo)),
-		builder.CreateICmpSGT (saturated, llvm::ConstantInt::get (context (), hi)));
+	FloatBound below = float_bound (fp, lo - 1, llvm::CmpInst::FCMP_OGT, llvm::CmpInst::FCMP_OGE);
+	FloatBound above = float_bound (fp, hi + 1, llvm::CmpInst::FCMP_OLT, llvm::CmpInst::FCMP_OLE);
 
-	emit_cond_exception (builder,
-	                     builder.CreateOr (builder.CreateFCmpUNO (value, value), out_of_range),
-	                     "OverflowException");
+	llvm::Value *in_range =
+		builder.CreateAnd (builder.CreateFCmp (below.pred, value, below.bound),
+	                           builder.CreateFCmp (above.pred, value, above.bound));
 
-	return adjust (builder, saturated, stack_bits (target), target.is_signed);
+	emit_cond_exception (builder, builder.CreateNot (in_range), "OverflowException");
+
+	llvm::Type *to = builder.getIntNTy (target.bits);
+	llvm::Intrinsic::ID convert =
+		target.is_signed ? llvm::Intrinsic::fptosi_sat : llvm::Intrinsic::fptoui_sat;
+	llvm::Value *converted = builder.CreateIntrinsic (convert, {to, fp}, {value});
+
+	return adjust (builder, converted, stack_bits (target), target.is_signed);
 }
 
 /*
