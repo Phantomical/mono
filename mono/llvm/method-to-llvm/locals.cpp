@@ -155,9 +155,10 @@ MethodLLVMEmitter::emit_ldloca (MonoIrBuilder &builder, uint32_t index)
 /// VALUE as something that can be stored into a location of type DESTINATION.
 ///
 /// The evaluation stack tracks fewer types than a location can hold, so this is where
-/// an int32 narrows back into the byte or the char it came out of, and where an
-/// address and a native int swap representations. Anything wider than that is a
-/// mismatch the locals signature says cannot happen.
+/// an int32 narrows back into the byte or the char it came out of, where an int32
+/// widens into a native int, and where an address and a native int swap
+/// representations. Anything beyond that is a mismatch the signature says cannot
+/// happen.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
                                        MonoType *destination)
@@ -173,6 +174,16 @@ MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
 	if (from->isIntegerTy () && (*type)->isIntegerTy ()
 	    && (*type)->getIntegerBitWidth () < from->getIntegerBitWidth ())
 		return builder.CreateTrunc (value.value, *type);
+	/*
+	 * I.8.7 makes int32 assignable to a native int location, so `ldc.i4.0; stloc` into
+	 * one is correct IL and has to widen here - sign-extended, the same as conv.i.
+	 * Native int is the only location that grows a value like this; an int64 one that
+	 * wanted an int32 would have said conv.i8.
+	 */
+	if (from->isIntegerTy () && (*type)->isIntegerTy ()
+	    && stack_type (destination) == NativeInt
+	    && (*type)->getIntegerBitWidth () > from->getIntegerBitWidth ())
+		return builder.CreateSExt (value.value, *type);
 	if (from->isPointerTy () && (*type)->isIntegerTy ())
 		return builder.CreatePtrToInt (value.value, *type);
 	if (from->isIntegerTy () && (*type)->isPointerTy ())
