@@ -1383,6 +1383,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	 */
 	case MONO_CEE_MONO_ICALL:
 	case MONO_CEE_MONO_LDPTR:
+	case MONO_CEE_MONO_LDDOMAIN:
 	case MONO_CEE_MONO_CLASSCONST:
 	case MONO_CEE_MONO_METHODCONST:
 	case MONO_CEE_MONO_NOT_TAKEN:
@@ -1406,6 +1407,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_icall (builder, static_cast<uint32_t> (operand));
 		case MONO_CEE_MONO_LDPTR:
 			return emit_mono_ldptr (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_LDDOMAIN:
+			return emit_mono_lddomain (builder);
 		case MONO_CEE_MONO_CLASSCONST:
 			return emit_mono_classconst (builder, static_cast<uint32_t> (operand));
 		case MONO_CEE_MONO_METHODCONST:

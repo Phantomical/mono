@@ -474,6 +474,7 @@ private:
 	llvm::Error emit_mono_vtaddr (MonoIrBuilder &builder);
 	llvm::Error emit_mono_rethrow (MonoIrBuilder &builder);
 	llvm::Error emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_mono_lddomain (MonoIrBuilder &builder);
 	llvm::Error emit_mono_classconst (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_mono_methodconst (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_mono_jit_icall_addr (MonoIrBuilder &builder, uint32_t id);

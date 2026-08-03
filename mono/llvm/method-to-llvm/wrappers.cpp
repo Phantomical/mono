@@ -209,6 +209,28 @@ MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
 }
 
 /*
+ * III.F0.19  mono_lddomain - push the domain the wrapper was built for
+ *
+ * A native-to-managed wrapper opens by attaching the thread it was entered on,
+ * and has to say which domain to attach it to. It cannot ask the thread: an
+ * unattached one has no answer to give, which is the whole reason the wrapper
+ * is attaching it. The domain is settled when the wrapper is compiled, so it
+ * is baked in here - the same constant mini folds in.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_lddomain (MonoIrBuilder &builder)
+{
+	/*
+	 * One name for every domain: a linker belongs to a single domain and
+	 * resolves the symbol to that domain, so two domains' copies of the same
+	 * wrapper never share a binding for it.
+	 */
+	push_stack (address_symbol ("mono_domain", cfg->domain),
+	            m_class_get_byval_arg (mono_defaults.int_class));
+	return llvm::Error::success ();
+}
+
+/*
  * III.F0.01  mono_objaddr - take an object reference as a managed pointer
  *
  * A reference already is the object's address, so this only changes what the
