@@ -566,8 +566,14 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 		module->print (llvm::errs (), nullptr);
 	}
 
+	/*
+	 * Laying out a class to create its vtable is the other place metadata gets
+	 * loaded, and the last one: a method whose callee's class will not load
+	 * fails here rather than in the translation above. It is the same failure
+	 * and it is raised the same way - at the call, not at the declaration.
+	 */
 	if (Error err = resolve (state, externals))
-		return std::move (err);
+		return recover (state, method, std::move (err));
 
 	Expected<CompiledMethod> compiled =
 		state.jit->compile (ThreadSafeModule (std::move (module),
