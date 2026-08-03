@@ -84,14 +84,17 @@ public:
 	/// same helper.
 	llvm::Error register_symbol (llvm::StringRef name, void *addr);
 
-	/// Publish NAME as a redirectable stub initially jumping to TARGET, and
-	/// return the stub's address.
+	/// Publish NAME as a redirectable stub initially jumping to TARGET.
 	///
 	/// This is the address handed out for a method: callers bind to it once
 	/// and every tier is reached through it. Compiled code that calls NAME
 	/// resolves to the stub, so a redirect_stub () is seen by callers that were
 	/// compiled long before it.
-	llvm::Expected<void *> create_stub (llvm::StringRef name, void *target);
+	///
+	/// Only defines the symbol - nothing is materialized, so this is safe to
+	/// call with locks held. The address comes from stub_address (), whose
+	/// lookup can run other threads' pending compiles inline and so must not.
+	llvm::Error create_stub (llvm::StringRef name, void *target);
 
 	/// Publish NAME as a stub that compiles itself the first time it is called.
 	///
@@ -102,9 +105,9 @@ public:
 	/// a method be published without compiling it.
 	///
 	/// Threads racing on that first call compile once and all land on the same
-	/// code.
-	llvm::Expected<void *> create_lazy_stub (llvm::StringRef name,
-	                                         LazyCompileFunction compile);
+	/// code. Define-only, like create_stub ().
+	llvm::Error create_lazy_stub (llvm::StringRef name,
+	                              LazyCompileFunction compile);
 
 	/// Point NAME's stub at TARGET, which every subsequent call through the
 	/// stub reaches. Callers are untouched - nothing is patched but the stub's

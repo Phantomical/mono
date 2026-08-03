@@ -64,6 +64,27 @@ stub_detour_target ()
 using IntFn = int32_t (*) ();
 
 /*
+ * create_stub ()/create_lazy_stub () only define the symbol (jit.hpp explains
+ * why); the tests want the address too, which is a separate lookup.
+ */
+static Expected<void *>
+make_stub (MonoJit &jit, const std::string &name, void *target)
+{
+	if (Error err = jit.create_stub (name, target))
+		return std::move (err);
+	return jit.stub_address (name);
+}
+
+static Expected<void *>
+make_lazy_stub (MonoJit &jit, const std::string &name,
+                MonoJit::LazyCompileFunction compile)
+{
+	if (Error err = jit.create_lazy_stub (name, std::move (compile)))
+		return std::move (err);
+	return jit.stub_address (name);
+}
+
+/*
  * Enough arguments to fill the SysV registers and spill: eight integers over
  * six integer registers, nine doubles over eight vector ones. A trampoline
  * that dropped a register, or that returned with the stack shifted, gets a
@@ -173,7 +194,7 @@ TEST (Stubs, CallsInitialTargetAndFollowsRedirects)
 	auto jit = MonoJit::create ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
-	auto stub = (*jit)->create_stub ("m", (void *) &stub_target_one);
+	auto stub = make_stub (**jit, "m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 1);
 
@@ -191,7 +212,7 @@ TEST (Stubs, CompiledCallersBindToTheStub)
 	auto jit = MonoJit::create ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
-	ASSERT_TRUE (bool ((*jit)->create_stub ("m", (void *) &stub_target_one)));
+	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_one)));
 
 	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
@@ -211,8 +232,8 @@ TEST (Stubs, GeometryLeavesRoomForADetour)
 	auto jit = MonoJit::create ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
-	auto a = (*jit)->create_stub ("a", (void *) &stub_target_one);
-	auto b = (*jit)->create_stub ("b", (void *) &stub_target_two);
+	auto a = make_stub (**jit, "a", (void *) &stub_target_one);
+	auto b = make_stub (**jit, "b", (void *) &stub_target_two);
 	ASSERT_TRUE (bool (a)) << toString (a.takeError ());
 	ASSERT_TRUE (bool (b)) << toString (b.takeError ());
 
@@ -245,7 +266,7 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
 	auto jit = MonoJit::create ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
-	auto stub = (*jit)->create_stub ("m", (void *) &stub_target_one);
+	auto stub = make_stub (**jit, "m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
 	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
@@ -291,7 +312,7 @@ TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
 	constexpr int count = 512;
 	std::vector<uintptr_t> addrs;
 	for (int i = 0; i < count; i++) {
-		auto stub = (*jit)->create_stub ("m" + std::to_string (i),
+		auto stub = make_stub (**jit, "m" + std::to_string (i),
 		                                 (void *) &stub_target_one);
 		ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 		addrs.push_back (reinterpret_cast<uintptr_t> (*stub));
@@ -317,7 +338,7 @@ TEST (LazyStubs, CompileOnceOnTheFirstCall)
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
 	int compiles = 0;
-	auto stub = (*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
+	auto stub = make_lazy_stub (**jit, "m", [&] () -> Expected<void *> {
 		compiles++;
 		auto compiled = (*jit)->compile (build_constant_module (7), "constant");
 		if (!compiled)
@@ -344,7 +365,7 @@ TEST (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
 	auto jit = MonoJit::create ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
-	auto stub = (*jit)->create_lazy_stub (
+	auto stub = make_lazy_stub (**jit, 
 		"m", [] () -> Expected<void *> { return (void *) &lazy_many_args; });
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
@@ -363,7 +384,7 @@ TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 
 	int compiles = 0;
 	ASSERT_TRUE (
-		bool ((*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
+		bool (make_lazy_stub (**jit, "m", [&] () -> Expected<void *> {
 			compiles++;
 			auto compiled = (*jit)->compile (build_constant_module (7), "constant");
 		if (!compiled)
@@ -386,7 +407,7 @@ TEST (LazyStubs, RacingFirstCallsCompileOnce)
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
 	std::atomic<int> compiles {0};
-	auto stub = (*jit)->create_lazy_stub ("m", [&] () -> Expected<void *> {
+	auto stub = make_lazy_stub (**jit, "m", [&] () -> Expected<void *> {
 		compiles++;
 		auto compiled = (*jit)->compile (build_constant_module (7), "constant");
 		if (!compiled)

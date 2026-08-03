@@ -47,9 +47,11 @@ extern "C" {
 // This breaks some LLVM headers
 #undef PIC
 
+#include <llvm/ADT/Twine.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Support/ErrorHandling.h>
 
 #include <cmath>
 #include <memory>
@@ -138,10 +140,16 @@ runtime_helpers ()
  */
 class MinimalCompile {
 public:
-	MinimalCompile (MonoMethod *method, MonoError *error)
+	MinimalCompile (MonoMethod *method, MonoDomain *domain, MonoError *error)
 	{
 		memset (&cfg, 0, sizeof (cfg));
 		cfg.method = method;
+		/*
+		 * The domain the code is being compiled for - the owning linker's,
+		 * not the compiling thread's current one. The translator reads it
+		 * wherever it resolves per-domain state at translate time (ldstr).
+		 */
+		cfg.domain = domain;
 		cfg.compile_llvm = TRUE;
 		cfg.opt = MONO_OPT_SIMD;
 		cfg.header = mono_method_get_header_checked (method, error);
@@ -237,8 +245,9 @@ class Backend {
 public:
 	static Expected<Backend *> get ();
 
-	/// Compile METHOD now and return the address of its stub.
-	Expected<void *> compile (MonoMethod *method);
+	/// Compile METHOD into TARGET_DOMAIN's linker now and return the address
+	/// of its stub there.
+	Expected<void *> compile (MonoMethod *method, MonoDomain *target_domain);
 
 	/// Drop DOMAIN's linker and everything in it. The caller proves the code
 	/// dead: nothing may be executing in, or about to call into, the domain.
@@ -254,22 +263,57 @@ private:
 
 	/// One domain's whole compilation state.
 	struct DomainState {
+		/// The domain this state compiles for. Everything materialized into
+		/// the linker resolves against this domain - never against the
+		/// thread's current domain, which can point elsewhere while a stub
+		/// fires (AppDomain:InvokeInDomain switches the domain and then calls).
+		MonoDomain *domain;
 		std::unique_ptr<MonoJit> jit;
-		/// Methods already published, so a callee reached from several places
-		/// is only given its stubs once. Holds the legacy stub's address.
+		/// Methods whose stubs are defined in the linker, so a callee reached
+		/// from several places is only given its stubs once. Defined is all a
+		/// caller's module needs to link.
+		std::unordered_set<MonoMethod *> defined;
+		/// Methods already published: stubs defined, address in hand, tramp
+		/// info registered. Holds the legacy stub's address.
 		std::unordered_map<MonoMethod *, void *> published;
 		/// Methods whose stubs already point at real code - and where that
 		/// code is, so that asking again is a lookup rather than a compile.
 		std::unordered_map<MonoMethod *, Compiled> compiled;
+		/// Methods whose body stub was first reached from another domain, and
+		/// the per-call dispatcher each got instead of a direct binding.
+		std::unordered_map<MonoMethod *, void *> dispatchers;
 	};
 
 	/// The current domain's state, created - linker, helpers and all - the
 	/// first time the domain compiles something.
 	Expected<DomainState *> state ();
 
+	/// DOMAIN's state, created on first use like state ().
+	Expected<DomainState *> state_for (MonoDomain *domain);
+
 	Error resolve (DomainState &state, const std::vector<ExternalSymbol> &externals);
 	Expected<Compiled> translate_and_compile (DomainState &state, MonoMethod *method);
 	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method);
+
+	/// The legacy entry - the interop thunk - as a compile of its own. It
+	/// reaches the method through the body's stub, so it is domain-neutral
+	/// and safe to build whichever domain the building thread has current.
+	Expected<void *> compile_entry_thunk (DomainState &state, MonoMethod *method);
+
+	/// The per-call dispatcher a body stub binds to when its first caller
+	/// arrived from another domain: resolves the current domain's body on
+	/// every call instead of baking one domain's copy into another's code.
+	Expected<void *> dispatcher (DomainState &state, MonoMethod *method);
+
+	/// The runtime helper behind the dispatcher: the current domain's compiled
+	/// body for METHOD, compiling it now if this domain has not yet.
+	static void *body_for_current_domain (MonoMethod *method);
+
+	/// Define METHOD's two stubs in STATE's linker, without materializing
+	/// either. This is all resolve () needs for a callee: the caller's module
+	/// links against the names. Cheap and lock-safe - definitions never run
+	/// anyone else's compile.
+	Error publish_defs (DomainState &state, MonoMethod *method);
 
 	/// The address to call METHOD at, compiling it on the first call rather
 	/// than now. This is how a method's callees are published: reaching one is
@@ -297,7 +341,12 @@ Backend::get ()
 Expected<Backend::DomainState *>
 Backend::state ()
 {
-	MonoDomain *domain = mono_domain_get ();
+	return state_for (mono_domain_get ());
+}
+
+Expected<Backend::DomainState *>
+Backend::state_for (MonoDomain *domain)
+{
 	std::lock_guard<std::mutex> lock (mutex_);
 
 	auto it = domains_.find (domain);
@@ -314,9 +363,14 @@ Backend::state ()
 	for (const Helper &helper : runtime_helpers ())
 		if (Error err = (*jit)->register_symbol (helper.name, helper.address))
 			return std::move (err);
+	if (Error err = (*jit)->register_symbol (
+	        "mono_llvm_jit_body_for_current_domain",
+	        (void *) &Backend::body_for_current_domain))
+		return std::move (err);
 
 	auto fresh = std::make_unique<DomainState> ();
 
+	fresh->domain = domain;
 	fresh->jit = std::move (*jit);
 	return (domains_[domain] = std::move (fresh)).get ();
 }
@@ -349,7 +403,13 @@ Backend::free_domain (MonoDomain *domain)
 Error
 Backend::resolve (DomainState &state, const std::vector<ExternalSymbol> &externals)
 {
-	MonoDomain *domain = mono_domain_get ();
+	/*
+	 * The owning domain, never the current one: a vtable or statics address
+	 * baked into this linker's code must belong to the domain the code will
+	 * run as. The two can differ here - a lazy stub fires under whatever
+	 * domain the calling thread has current.
+	 */
+	MonoDomain *domain = state.domain;
 
 	for (const ExternalSymbol &external : externals) {
 		void *address = nullptr;
@@ -378,6 +438,12 @@ Backend::resolve (DomainState &state, const std::vector<ExternalSymbol> &externa
 			break;
 		}
 		case ExternalSymbol::Kind::Code: {
+			/*
+			 * The full publish, not just the definitions: an ldftn'd pointer
+			 * escapes into delegates, and recovering the method from it needs
+			 * the tramp info publish () registers. resolve () runs with no
+			 * backend lock held, so the address lookup inside is safe.
+			 */
 			Expected<void *> stub =
 				publish (state, static_cast<MonoMethod *> (external.object));
 			if (!stub)
@@ -426,15 +492,29 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 		return Compiled { code, code };
 	}
 
+	/*
+	 * Translation itself resolves everything per-domain against state.domain
+	 * (resolve (), ldstr through cfg->domain) - never against the thread's
+	 * current domain, and any new translate-time mono_domain_get () is a
+	 * cross-domain bug of the kind the dispatcher exists to prevent. The
+	 * stub lambdas keep the two equal except for vararg methods, which
+	 * cannot be dispatched and so still compile here when first reached
+	 * from another domain.
+	 */
+	g_assert (mono_domain_get () == state.domain
+	          || mono_method_signature_internal (method)->call_convention
+	                 == MONO_CALL_VARARG);
+
 	if (tracing ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
-		fprintf (stderr, "[llvm-jit] translating %s\n", name);
+		fprintf (stderr, "[llvm-jit] translating %s (for %s)\n", name,
+		         state.domain->friendly_name);
 		g_free (name);
 	}
 
 	ERROR_DECL (metadata_error);
-	MinimalCompile cfg (method, metadata_error);
+	MinimalCompile cfg (method, state.domain, metadata_error);
 
 	if (cfg.get ()->header == nullptr)
 		return runtime_error (metadata_error);
@@ -478,7 +558,8 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 			const_cast<uint8_t *> (extent.first));
 	}
 
-	if (Error err = register_jit_info (method, cfg.get ()->header, *compiled, filters))
+	if (Error err = register_jit_info (state.domain, method, cfg.get ()->header,
+	                                   *compiled, filters))
 		return std::move (err);
 
 	/*
@@ -488,6 +569,33 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 	 * it valid across repromotions, and it gets jit info of its own so the
 	 * unwinder can walk a frame suspended inside it.
 	 */
+	Expected<void *> thunk_entry = compile_entry_thunk (state, method);
+
+	if (!thunk_entry)
+		return thunk_entry.takeError ();
+
+	if (tracing ())
+		fprintf (stderr, "[llvm-jit] %s is at %p (enters at %p, for %s)\n",
+		         entry.c_str (), compiled->entry, *thunk_entry,
+		         state.domain->friendly_name);
+
+	return Compiled { *thunk_entry, compiled->entry };
+}
+
+Expected<void *>
+Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
+{
+	if (m_class_get_rank (method->klass) > 0
+	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+		method = mono_marshal_get_array_accessor_wrapper (method);
+
+	ERROR_DECL (metadata_error);
+	MinimalCompile cfg (method, state.domain, metadata_error);
+
+	if (cfg.get ()->header == nullptr)
+		return runtime_error (metadata_error);
+
 	auto thunk_context = std::make_unique<LLVMContext> ();
 	auto thunk_module =
 		std::make_unique<Module> (symbol_for_code (method), *thunk_context);
@@ -510,7 +618,7 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 	create_legacy_entry_thunk (*thunk_module, thunk_name, *target,
 	                           legacy_call_flavor (sig));
 
-	if (dumping (entry.c_str ()))
+	if (dumping (thunk_name.c_str ()))
 		thunk_module->print (llvm::errs (), nullptr);
 
 	if (Error err = resolve (state, thunk_externals))
@@ -523,18 +631,14 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 	if (!thunk)
 		return thunk.takeError ();
 
-	if (Error err = register_jit_info (method, nullptr, *thunk))
+	if (Error err = register_jit_info (state.domain, method, nullptr, *thunk))
 		return std::move (err);
 
-	if (tracing ())
-		fprintf (stderr, "[llvm-jit] %s is at %p (enters at %p)\n",
-		         entry.c_str (), compiled->entry, thunk->entry);
-
-	return Compiled { thunk->entry, compiled->entry };
+	return thunk->entry;
 }
 
 Expected<void *>
-Backend::compile (MonoMethod *method)
+Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 {
 	/*
 	 * SGen identifies threads suspended inside the managed allocator and the
@@ -547,7 +651,7 @@ Backend::compile (MonoMethod *method)
 	bool wants_body = method->wrapper_type == MONO_WRAPPER_ALLOC
 	                  || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER;
 
-	Expected<DomainState *> state = this->state ();
+	Expected<DomainState *> state = this->state_for (target_domain);
 	if (!state)
 		return state.takeError ();
 
@@ -579,7 +683,24 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 			return it->second;
 	}
 
+	/*
+	 * Materialize as the domain the code is for. Translation itself is kept
+	 * domain-clean, but what it calls back into is not: the outside-il branch
+	 * re-enters mono_jit_compile_method, which compiles wrappers for the
+	 * thread's current domain, and welding another domain's wrapper stub into
+	 * this linker is a pointer into code that can be freed under it. The
+	 * runtime asking for an icall wrapper with the root domain as target
+	 * arrives here the same way, whatever domain the thread is running as.
+	 */
+	MonoDomain *entered = mono_domain_get ();
+
+	if (entered != state.domain)
+		mono_domain_set_internal_with_options (state.domain, FALSE);
+
 	Expected<Compiled> code = translate_and_compile (state, method);
+
+	if (entered != state.domain)
+		mono_domain_set_internal_with_options (entered, FALSE);
 	if (!code)
 		return code.takeError ();
 
@@ -592,6 +713,9 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 	 * Two threads racing here both compile; the loser's code is merely
 	 * unreferenced, and both ends stay coherent because the redirects above
 	 * always point a method's two stubs at one compile's output.
+	 * A stub that had already gone to a dispatcher gets rebound to this
+	 * domain's own code here, which is mini's behavior too: a same-domain
+	 * resolve patches the call site.
 	 */
 	std::lock_guard<std::mutex> lock (mutex_);
 	state.compiled[method] = *code;
@@ -599,46 +723,232 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 }
 
 Expected<void *>
-Backend::publish (DomainState &state, MonoMethod *method)
+Backend::dispatcher (DomainState &state, MonoMethod *method)
+{
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		auto it = state.dispatchers.find (method);
+
+		if (it != state.dispatchers.end ())
+			return it->second;
+	}
+
+	/*
+	 * The dispatcher borrows the fastcc body's exact type - signature,
+	 * convention, attributes - from a declaration; the accessor substitution
+	 * mirrors translate_and_compile (), whose compiled body is what the helper
+	 * will return. The declaration itself goes back out of the module: the
+	 * forward is through the helper's answer, never through the stub, or the
+	 * dispatcher would bounce off its own binding forever.
+	 */
+	MonoMethod *declared = method;
+
+	if (m_class_get_rank (declared->klass) > 0
+	    && (declared->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+	    && (declared->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+		declared = mono_marshal_get_array_accessor_wrapper (declared);
+
+	ERROR_DECL (metadata_error);
+	MinimalCompile cfg (declared, state.domain, metadata_error);
+
+	if (cfg.get ()->header == nullptr)
+		return runtime_error (metadata_error);
+
+	auto context = std::make_unique<LLVMContext> ();
+	std::string name = symbol_for_body (method) + "$dispatch";
+	auto module = std::make_unique<Module> (name, *context);
+
+	std::vector<ExternalSymbol> externals;
+	MethodLLVMEmitter declarer (module.get (), cfg.get (), declared, &externals);
+	Expected<Function *> target = declarer.declare (declared);
+
+	if (!target)
+		return target.takeError ();
+
+	FunctionType *type = (*target)->getFunctionType ();
+	CallingConv::ID conv = (*target)->getCallingConv ();
+	AttributeList attrs = (*target)->getAttributes ();
+
+	if ((*target)->use_empty ())
+		(*target)->eraseFromParent ();
+
+	Function *disp =
+		Function::Create (type, Function::ExternalLinkage, name, module.get ());
+
+	disp->setCallingConv (conv);
+	disp->setAttributes (attrs);
+
+	IRBuilder<> builder (BasicBlock::Create (*context, "", disp));
+	PointerType *ptr = PointerType::getUnqual (*context);
+	FunctionCallee helper = module->getOrInsertFunction (
+		"mono_llvm_jit_body_for_current_domain",
+		FunctionType::get (ptr, { ptr }, false));
+	Value *self = builder.CreateIntToPtr (
+		builder.getInt64 ((uint64_t) (uintptr_t) method), ptr);
+	Value *body = builder.CreateCall (helper, { self });
+
+	std::vector<Value *> args;
+
+	for (Argument &arg : disp->args ())
+		args.push_back (&arg);
+
+	CallInst *forward = builder.CreateCall (type, body, args);
+
+	forward->setCallingConv (conv);
+	forward->setAttributes (attrs);
+	forward->setTailCallKind (CallInst::TCK_MustTail);
+
+	if (type->getReturnType ()->isVoidTy ())
+		builder.CreateRetVoid ();
+	else
+		builder.CreateRet (forward);
+
+	Expected<CompiledMethod> compiled = state.jit->compile (
+		ThreadSafeModule (std::move (module),
+		                  ThreadSafeContext (std::move (context))),
+		name);
+	if (!compiled)
+		return compiled.takeError ();
+
+	if (tracing ())
+		fprintf (stderr,
+		         "[llvm-jit] %s dispatches per call (owner %s, first reached "
+		         "from %s)\n",
+		         name.c_str (), state.domain->friendly_name,
+		         mono_domain_get ()->friendly_name);
+
+	std::lock_guard<std::mutex> lock (mutex_);
+	return state.dispatchers[method] = compiled->entry;
+}
+
+void *
+Backend::body_for_current_domain (MonoMethod *method)
 {
 	/*
-	 * Held across the creation, not just the lookup: two threads reaching an
-	 * unpublished method together must not both define its stubs, and stub
-	 * creation is cheap enough that one lock for the whole step is fine.
+	 * A dispatcher is the only caller, so the backend exists. Failure lands
+	 * where lazy_compile_failed () lands for a stub: the call's arguments are
+	 * already in place and there is no caller prepared for a miss.
+	 */
+	Expected<DomainState *> state = live_backend->state ();
+
+	if (!state)
+		report_fatal_error (
+			Twine ("no domain state for a dispatched call: ")
+				+ toString (state.takeError ()),
+			false);
+
+	Expected<Compiled> code = live_backend->ensure_compiled (**state, method);
+
+	if (!code)
+		report_fatal_error (
+			Twine ("a dispatched method failed to compile: ")
+				+ toString (code.takeError ()),
+			false);
+
+	return code->body;
+}
+
+Error
+Backend::publish_defs (DomainState &state, MonoMethod *method)
+{
+	/*
+	 * Held across the creation: two threads reaching an undefined method
+	 * together must not both define its stubs. Everything under the lock is
+	 * definition only - trampoline, callback unit, stub symbols - and none of
+	 * it materializes. The address lookup lives in publish (), outside this
+	 * lock, because an ORC lookup drains the session's pending
+	 * materializations inline on the calling thread, and a drained lazy-stub
+	 * compile re-enters this backend and takes mutex_: holding it across a
+	 * lookup deadlocks against ourselves.
 	 */
 	std::lock_guard<std::mutex> lock (mutex_);
 
-	auto it = state.published.find (method);
-	if (it != state.published.end ())
-		return it->second;
+	if (state.defined.count (method))
+		return Error::success ();
 
 	/*
 	 * The lambdas capture the owning state rather than looking the domain up
 	 * again: a stub is only reachable from its own domain's code, and the state
 	 * outlives the stub - free_domain () takes them down together.
+	 *
+	 * The thread that fires a stub is not necessarily running as the owning
+	 * domain: AppDomain:InvokeInDomain switches the domain and then calls, so
+	 * the first caller through a stub can arrive from the far side of that
+	 * switch. Binding then would weld one domain's copy into another domain's
+	 * code - wrong statics and vtables while it runs, dangling code once the
+	 * bound domain unloads. mini refused to patch such a call site and left
+	 * the trampoline to re-resolve each call; the dispatcher below is that
+	 * refusal here. Methods without a body of their own bind directly - what
+	 * stands behind them is mini's, one copy for the whole process - and
+	 * vararg signatures too, because a dispatcher cannot forward an arglist.
 	 */
 	DomainState *owner = &state;
-	Expected<void *> stub = state.jit->create_lazy_stub (
-		symbol_for_code (method), [this, owner, method] () -> Expected<void *> {
-			Expected<Compiled> code = ensure_compiled (*owner, method);
+	auto bindable = [owner, method] () {
+		return mono_domain_get () == owner->domain
+		       || implemented_outside_il (method)
+		       || mono_method_signature_internal (method)->call_convention
+		              == MONO_CALL_VARARG;
+	};
+	if (Error err = state.jit->create_lazy_stub (
+	        symbol_for_code (method),
+	        [this, owner, method, bindable] () -> Expected<void *> {
+		        if (!bindable ())
+			        return compile_entry_thunk (*owner, method);
 
-			if (!code)
-				return code.takeError ();
-			return code->entry;
-		});
+		        Expected<Compiled> code = ensure_compiled (*owner, method);
+
+		        if (!code)
+			        return code.takeError ();
+		        return code->entry;
+	        }))
+		return err;
+
+	if (Error err = state.jit->create_lazy_stub (
+	        symbol_for_body (method),
+	        [this, owner, method, bindable] () -> Expected<void *> {
+		        if (!bindable ())
+			        return dispatcher (*owner, method);
+
+		        Expected<Compiled> code = ensure_compiled (*owner, method);
+
+		        if (!code)
+			        return code.takeError ();
+		        return code->body;
+	        }))
+		return err;
+
+	state.defined.insert (method);
+	return Error::success ();
+}
+
+Expected<void *>
+Backend::publish (DomainState &state, MonoMethod *method)
+{
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		auto it = state.published.find (method);
+
+		if (it != state.published.end ())
+			return it->second;
+	}
+
+	if (Error err = publish_defs (state, method))
+		return std::move (err);
+
+	/*
+	 * Unlocked on purpose - see publish_defs (). Concurrent lookups of one
+	 * symbol are ORC's bread and butter; every thread that races through here
+	 * computes the same address.
+	 */
+	Expected<void *> stub = state.jit->stub_address (symbol_for_code (method));
 	if (!stub)
 		return stub;
 
-	Expected<void *> body_stub = state.jit->create_lazy_stub (
-		symbol_for_body (method), [this, owner, method] () -> Expected<void *> {
-			Expected<Compiled> code = ensure_compiled (*owner, method);
+	std::lock_guard<std::mutex> lock (mutex_);
+	auto it = state.published.find (method);
 
-			if (!code)
-				return code.takeError ();
-			return code->body;
-		});
-	if (!body_stub)
-		return body_stub.takeError ();
+	if (it != state.published.end ())
+		return it->second;
 
 	/*
 	 * The stub is the only address the runtime ever hands out for the method,
@@ -646,7 +956,8 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	 * off a ldftn most visibly - must find it in the jit-info table. Register
 	 * it the way mini registers trampolines: an is_trampoline entry carrying
 	 * the method, in the domain whose linker holds the stub so the two die
-	 * together.
+	 * together. The published check above keeps racing threads from
+	 * registering it twice.
 	 */
 	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
 
@@ -654,7 +965,7 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	tramp->code_size = (guint32) stub_block_size;
 	tramp->name = g_strdup (symbol_for_code (method).c_str ());
 	tramp->method = method;
-	mono_tramp_info_register (tramp, mono_domain_get ());
+	mono_tramp_info_register (tramp, state.domain);
 
 	state.published[method] = *stub;
 	return *stub;
@@ -670,7 +981,8 @@ mono_llvm_jit_free_domain (MonoDomain *domain)
 }
 
 void *
-mono_llvm_jit_compile_method (MonoMethod *method, MonoError *error)
+mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domain,
+                              MonoError *error)
 {
 	error_init (error);
 
@@ -681,7 +993,7 @@ mono_llvm_jit_compile_method (MonoMethod *method, MonoError *error)
 		return NULL;
 	}
 
-	llvm::Expected<void *> code = (*backend)->compile (method);
+	llvm::Expected<void *> code = (*backend)->compile (method, target_domain);
 	if (code)
 		return *code;
 

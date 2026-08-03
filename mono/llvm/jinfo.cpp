@@ -223,8 +223,8 @@ transcode_unwind (const std::vector<WireRecord> &records)
 } // namespace
 
 Error
-register_jit_info (MonoMethod *method, MonoMethodHeader *header,
-                   const CompiledMethod &compiled,
+register_jit_info (MonoDomain *domain, MonoMethod *method,
+                   MonoMethodHeader *header, const CompiledMethod &compiled,
                    const std::vector<std::pair<uint32_t, void *>> &filters)
 {
 	guint8 *code = (guint8 *) compiled.code;
@@ -297,7 +297,6 @@ register_jit_info (MonoMethod *method, MonoMethodHeader *header,
 		}
 	}
 
-	MonoDomain *domain = mono_domain_get ();
 	int num_clauses = (int) clauses.size ();
 	MonoJitInfo *jinfo = (MonoJitInfo *) mono_domain_alloc0 (
 		domain, mono_jit_info_size (JIT_INFO_NONE, num_clauses, 0));

@@ -395,7 +395,7 @@ MonoJit::register_symbol (StringRef name, void *addr)
 	return Error::success ();
 }
 
-Expected<void *>
+Error
 MonoJit::create_stub (StringRef name, void *target)
 {
 	ExecutionSession &es = jit_->getExecutionSession ();
@@ -406,14 +406,11 @@ MonoJit::create_stub (StringRef name, void *target)
 		JITSymbolFlags::Exported | JITSymbolFlags::Callable,
 	};
 
-	if (Error err = redirectable_->createRedirectableSymbols (
-	        stubs_->getDefaultResourceTracker (), std::move (dests)))
-		return std::move (err);
-
-	return stub_address (name);
+	return redirectable_->createRedirectableSymbols (
+		stubs_->getDefaultResourceTracker (), std::move (dests));
 }
 
-Expected<void *>
+Error
 MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
 {
 	ExecutionSession &es = jit_->getExecutionSession ();
@@ -453,6 +450,16 @@ MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
 Error
 MonoJit::redirect_stub (StringRef name, void *target)
 {
+	/*
+	 * A stub only has a slot to write once its object has been emitted, and
+	 * stubs are defined without being materialized: the sibling of the stub
+	 * that fired may never have been reached by any link. Look it up first -
+	 * a no-op once emitted - or the redirect has nothing to write to.
+	 */
+	Expected<void *> addr = stub_address (name);
+	if (!addr)
+		return addr.takeError ();
+
 	ExecutionSession &es = jit_->getExecutionSession ();
 
 	SymbolMap dests;

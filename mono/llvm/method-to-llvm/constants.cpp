@@ -233,10 +233,12 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	 * symbol the engine resolves. Interning here rather than at run time is what
 	 * mini does at this same point, and rests on the same guarantee: an interned
 	 * string is rooted and never moves, so its address can outlive the compile.
+	 * Interned into the domain the code is compiled for, not the thread's
+	 * current one - the root only holds while that domain holds the code.
 	 */
 	MonoImage *image = m_class_get_image (method->klass);
 	ERROR_DECL (intern_error);
-	MonoString *interned = mono_ldstr_checked (mono_domain_get (), image,
+	MonoString *interned = mono_ldstr_checked (cfg->domain, image,
 	                                           mono_metadata_token_index (token),
 	                                           intern_error);
 

@@ -2771,7 +2771,7 @@ lookup_start:
 
 		if (wait_or_register_method_to_compile (method, target_domain))
 			goto lookup_start;
-		code = mono_llvm_jit_compile_method (method, error);
+		code = mono_llvm_jit_compile_method (method, target_domain, error);
 		unregister_method_for_compile (method, target_domain);
 	}
 	if (!is_ok (error))

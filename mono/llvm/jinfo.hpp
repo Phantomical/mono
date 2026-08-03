@@ -10,6 +10,7 @@
 
 #include <llvm/Support/Error.h>
 
+typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoMethodHeader MonoMethodHeader;
 
@@ -20,8 +21,12 @@ namespace mono {
 /// runtime's unwinder and stack walks can see the frame. A null HEADER
 /// registers clauseless code compiled for the method (its interop thunk).
 /// FILTERS maps an IL clause index to the entry of its compiled filter body,
-/// which the published clause hands the runtime's search pass.
-llvm::Error register_jit_info (MonoMethod *method, MonoMethodHeader *header,
+/// which the published clause hands the runtime's search pass. DOMAIN is the
+/// domain whose linker holds the code: the record lives and dies with it, so
+/// it is never the thread's current domain, which mid-unload managed code -
+/// AppDomain:InvokeInDomain most visibly - runs with set elsewhere.
+llvm::Error register_jit_info (MonoDomain *domain, MonoMethod *method,
+                               MonoMethodHeader *header,
                                const CompiledMethod &compiled,
                                const std::vector<std::pair<uint32_t, void *>> &filters = {});
 

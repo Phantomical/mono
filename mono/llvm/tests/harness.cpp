@@ -54,6 +54,8 @@ public:
 	{
 		memset (&cfg, 0, sizeof (cfg));
 		cfg.method = method;
+		/* The translator interns ldstr literals into cfg->domain. */
+		cfg.domain = mono_domain_get ();
 		cfg.compile_llvm = TRUE;
 		cfg.opt = MONO_OPT_SIMD;
 		cfg.header = mono_method_get_header_checked (method, error);
