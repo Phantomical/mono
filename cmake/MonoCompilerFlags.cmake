@@ -73,20 +73,49 @@ target_include_directories(mono_eglib_headers INTERFACE
   "${CMAKE_BINARY_DIR}/mono/eglib")
 
 # --- ccache -----------------------------------------------------------------
-# With CCACHE_BASE_DIR set, ccache rewrites absolute paths under the source
-# tree to relative ones before hashing, so a second worktree -- or this one
-# after it moves -- hits the entries the first already wrote instead of filling
-# the cache with a near-identical copy.  It has to reach ccache through the
-# environment, hence wrapping the launcher rather than just setting it here.
+# Two separate things keep a second worktree from hitting the entries the first
+# one wrote, and both have to go for the cache to be shared.
 #
-# Note that -g still puts the working directory into the hash unless ccache's
-# own `hash_dir = false` is set, so cross-worktree sharing wants that too.
+# The first is that ccache hashes the absolute path of the source file and of
+# every -I directory.  CCACHE_BASEDIR makes it rewrite the ones under this tree
+# into paths relative to the build directory -- both for the hash and for the
+# command it eventually runs -- so they read the same from any worktree.  It
+# only reaches ccache through the environment, hence wrapping the launcher
+# rather than just setting a variable here.
+set(_mono_ccache FALSE)
 foreach(_lang C CXX ASM)
   if(CMAKE_${_lang}_COMPILER_LAUNCHER MATCHES "ccache")
+    set(_mono_ccache TRUE)
     list(PREPEND CMAKE_${_lang}_COMPILER_LAUNCHER
-         "${CMAKE_COMMAND}" -E env "CCACHE_BASE_DIR=${CMAKE_SOURCE_DIR}")
+         "${CMAKE_COMMAND}" -E env "CCACHE_BASEDIR=${CMAKE_SOURCE_DIR}")
   endif()
 endforeach()
+
+# The second is -g: it puts this tree's build directory in the object as
+# DW_AT_comp_dir, and ccache hashes the working directory precisely so that a
+# hit can never hand back an object naming some other tree.  Remapping the roots
+# we build out of to fixed stand-ins makes the debug info identical everywhere,
+# and the hashed directory with it -- ccache applies the same maps to the
+# working directory before hashing it.
+#
+# What that costs is that the debug info no longer names the tree it was built
+# in.  gdb started from the build directory still finds the sources, since the
+# file names stay relative and $cwd is on its source path; from anywhere else
+# it wants
+#     set substitute-path /mono ${CMAKE_SOURCE_DIR}
+if(_mono_ccache)
+  include(CheckCCompilerFlag)
+  check_c_compiler_flag("-ffile-prefix-map=/a=/b" MONO_HAVE_FFILE_PREFIX_MAP)
+  if(MONO_HAVE_FFILE_PREFIX_MAP)
+    add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=/mono")
+    # An out-of-tree build directory is not covered by the map above, and
+    # CCACHE_BASEDIR does not reach it either, so it needs its own.
+    string(FIND "${CMAKE_BINARY_DIR}" "${CMAKE_SOURCE_DIR}/" _mono_bindir_pos)
+    if(NOT _mono_bindir_pos EQUAL 0)
+      add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}=/mono-build")
+    endif()
+  endif()
+endif()
 
 # --- global defaults --------------------------------------------------------
 set(CMAKE_C_STANDARD_REQUIRED OFF)
