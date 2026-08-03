@@ -4,6 +4,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
+#include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
@@ -486,6 +487,17 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 	if (sig == nullptr)
 		return invalid_il ("the called method has no signature");
+
+	/*
+	 * A string constructor compiles as a creator returning the string it built,
+	 * so a call to one leaves that string behind rather than nothing. Ordinary
+	 * IL reaches these through newobj; a plain call to one comes from the
+	 * runtime-invoke wrapper, which calls the ctor directly and stores what it
+	 * returns.
+	 */
+	if (callee_method->string_ctor)
+		sig = mono_marshal_get_string_ctor_signature (callee_method);
+
 	if (is_virtual && !sig->hasthis)
 		return invalid_il ("callvirt needs an instance method");
 	if (is_virtual && sig->generic_param_count != 0 && !callee_method->is_inflated)
