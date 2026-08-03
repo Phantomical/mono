@@ -1201,7 +1201,6 @@ set(MONO_TESTS_INTERP_DISABLED
   tailcall/interface-conservestack/8.exe
   tailcall/interface-conservestack/9.exe
   calli_sig_check.exe
-  localloc-noinit.exe
   dim-diamondshape.exe
   pinvoke3.exe
   cominterop.exe

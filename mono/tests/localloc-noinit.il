@@ -3,22 +3,23 @@ using System;
 
 class A
 {
-	// In the il, remove "init" in the ".locals" of this function:
-	// There might be a way to write this in C# directly, but it is not
-	// straightforward.
-	static unsafe byte* NoInit (int size, byte value)
+	// In the il, remove "init" from the ".locals" of this function: a method
+	// without the localsinit flag cannot be written in C# directly.
+	//
+	// Both blocks come from two calls to the *same* method on purpose. A given
+	// method's localloc lands at the same stack offset on every call, so the
+	// second call is handed exactly the bytes the first one left behind, and
+	// "was it zeroed?" is the only thing left to observe. Comparing the blocks
+	// of two *different* methods would instead depend on their frames coming
+	// out byte-identical, which no optimizing code generator promises -- that
+	// is what an earlier version of this test did, and it broke as soon as one
+	// of the two loops vectorized and the other did not.
+	static unsafe byte* Probe (int size, byte value, bool write)
 	{
 		byte* data = stackalloc byte [0x10000 + size];
-		for (int i = 0; i < size; ++i)
-			data [i] += value; // try to keep same form as Init function
-		return data;
-	}
-
-	static unsafe byte* Init (int size, byte value)
-	{
-		byte* data = stackalloc byte [0x10000 + size];
-		for (int i = 0; i < size; ++i)
-			data [i] = value;
+		if (write)
+			for (int i = 0; i < size; ++i)
+				data [i] = value;
 		return data;
 	}
 
@@ -34,20 +35,16 @@ class A
 	{
 		int count = 123;
 		byte value = 31;
-		byte * data;
 
-		data = Init (count, value);
-		for (int i = 0; i < 100; ++i)
-			assert (1, i, data [i], data [i] == value);
+		byte* first = Probe (count, value, true);
+		byte* second = Probe (count, 0, false);
 
-		data = NoInit (count, 0);
-		// Previously this would work:
-		for (int i = 0; i < 100; ++i)
-			assert (2, i, data [i], data [i] == 0);
+		// Same method, same call depth: the same memory both times.
+		assert (1, 0, 0, first == second);
 
-		// Now this works:
-		for (int i = 0; i < 100; ++i)
-			assert (3, i, data [i], data [i] == value);
+		// localsinit is off, so the second localloc left it alone.
+		for (int i = 0; i < count; ++i)
+			assert (2, i, second [i], second [i] == value);
 	}
 }
 */
@@ -60,7 +57,7 @@ class A
 
 .class A
 {
-  .method static uint8* NoInit(int32 size, uint8 valu) noinlining
+  .method static uint8* Probe (int32 size, uint8 valu, bool write) noinlining
   {
     .maxstack  3
     .locals      (uint8* data, int32 i)
@@ -69,49 +66,16 @@ class A
 	ldarg size
 	add
 	localloc
-//	ret		// changes stack layout do not match Init?
 	stloc data
+
+	ldarg write
+	brfalse    IL_DONE
+
 	ldc.i4 0
 	stloc i
-	br       IL_001d
+	br         IL_COND
 
-IL_0010:
-	ldloc data
-	ldloc i
-	add
-	dup
-	ldind.u1
-	ldarg valu
-	add
-	stind.i1
-	ldloc i
-	ldc.i4 1
-	add
-	stloc i
-IL_001d:
-	ldloc 1
-	ldarg size
-	clt
-	brtrue   IL_0010
-
-	ldloc data
-	ret
-  }
-
-  .method static uint8* Init (int32 size, uint8 valu) noinlining
-  {
-	.maxstack  2
-	.locals init (uint8* data, int32 i)
-	ldc.i4     0x10000
-	ldarg size
-	add
-	localloc
-	stloc data
-	ldc.i4 0
-	stloc i
-	br.s       IL_0019
-
-IL_0010:
+IL_BODY:
 	ldloc data
 	ldloc i
 	add
@@ -121,12 +85,13 @@ IL_0010:
 	ldc.i4 1
 	add
 	stloc i
-IL_0019:
+IL_COND:
 	ldloc i
 	ldarg size
 	clt
-	brtrue   IL_0010
+	brtrue     IL_BODY
 
+IL_DONE:
 	ldloc data
 	ret
   }
@@ -158,9 +123,7 @@ IL_002c:
   {
     .entrypoint
     .maxstack  5
-    .locals init (int32 count, uint8 valu, uint8* data, int32 i)
-
-// --------------------------------------------------
+    .locals init (int32 count, uint8 valu, uint8* first, uint8* second, int32 i)
 
 	ldc.i4   123
 	stloc count
@@ -171,77 +134,36 @@ IL_002c:
 
 	ldloc count
 	ldloc valu
-	call       uint8* A::Init (int32, uint8)
-	stloc data
-
-
-	ldc.i4 0
-	stloc i
-	br.s       IL_0031
-IL_0013:
-	ldc.i4 1
-	ldloc i
-	ldloc i
-	ldloc data
-	add
-	ldind.u1
-	dup
-	ldloc valu
-	ceq
-	call       void A::'assert' (int32, int32, int32, bool)
-	ldloc i
-	ldc.i4 1
-	add
-	stloc i
-IL_0031:
-	ldloc i
-	ldc.i4   100
-	clt
-	brtrue   IL_0013
-
- // --------------------------------------------------
+	ldc.i4.1
+	call       uint8* A::Probe (int32, uint8, bool)
+	stloc first
 
 	ldloc count
-	ldc.i4 0
-	call       uint8* A::NoInit (int32, uint8)
-	stloc data
+	ldc.i4.0
+	ldc.i4.0
+	call       uint8* A::Probe (int32, uint8, bool)
+	stloc second
 
 // --------------------------------------------------
-/*
-	ldc.i4 0
-	stloc.s    i
-	br.s       IL_0065
 
-IL_0049:
-	ldc.i4 2
-	ldloc    i
-	ldloc data
-	ldloc    i
-	add
-	ldind.u1
-	dup
+	ldc.i4 1
 	ldc.i4 0
+	ldc.i4 0
+	ldloc first
+	ldloc second
 	ceq
 	call       void A::'assert' (int32, int32, int32, bool)
-	ldloc    i
-	ldc.i4 1
-	add
-	stloc    i
-IL_0065:
-	ldloc    i
-	ldc.i4   100
-	clt
-	brtrue   IL_0049
-*/
-// --------------------------------------------------
-	ldc.i4.0
-	stloc.s    i
-	br.s       IL_0092
 
-IL_0076:
-	ldc.i4 3
+// --------------------------------------------------
+
+	ldc.i4.0
+	stloc i
+	br.s       IL_COND
+
+IL_BODY:
+	ldc.i4 2
 	ldloc    i
-	ldloc data
+	ldloc second
 	ldloc    i
 	add
 	ldind.u1
@@ -253,11 +175,11 @@ IL_0076:
 	ldc.i4 1
 	add
 	stloc    i
-IL_0092:
+IL_COND:
 	ldloc    i
-	ldc.i4   100
+	ldloc count
 	clt
-	brtrue   IL_0076
+	brtrue   IL_BODY
 	ret
   }
 }
