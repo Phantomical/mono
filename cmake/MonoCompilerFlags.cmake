@@ -72,6 +72,22 @@ target_include_directories(mono_eglib_headers INTERFACE
   "${CMAKE_SOURCE_DIR}/mono/eglib"
   "${CMAKE_BINARY_DIR}/mono/eglib")
 
+# --- ccache -----------------------------------------------------------------
+# With CCACHE_BASE_DIR set, ccache rewrites absolute paths under the source
+# tree to relative ones before hashing, so a second worktree -- or this one
+# after it moves -- hits the entries the first already wrote instead of filling
+# the cache with a near-identical copy.  It has to reach ccache through the
+# environment, hence wrapping the launcher rather than just setting it here.
+#
+# Note that -g still puts the working directory into the hash unless ccache's
+# own `hash_dir = false` is set, so cross-worktree sharing wants that too.
+foreach(_lang C CXX ASM)
+  if(CMAKE_${_lang}_COMPILER_LAUNCHER MATCHES "ccache")
+    list(PREPEND CMAKE_${_lang}_COMPILER_LAUNCHER
+         "${CMAKE_COMMAND}" -E env "CCACHE_BASE_DIR=${CMAKE_SOURCE_DIR}")
+  endif()
+endforeach()
+
 # --- global defaults --------------------------------------------------------
 set(CMAKE_C_STANDARD_REQUIRED OFF)
 set(CMAKE_CXX_STANDARD 17)
