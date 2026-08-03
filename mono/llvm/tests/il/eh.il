@@ -127,6 +127,38 @@
 		ret
 	}
 
+	// One finally with two endfinallys — the shape a C# `using` compiles to,
+	// one for the disposable path and one for the null one. Either can be the
+	// one reached, so both have to carry the leave on to its continuation.
+	.method public static int32 TwoEndfinallys (int32 x) cil managed
+	{
+		.maxstack 2
+		.locals init (int32 result)
+		.try
+		{
+			ldarg.0
+			stloc.0
+			leave.s DONE
+		}
+		finally
+		{
+			ldloc.0
+			brfalse.s WAS_ZERO
+			ldloc.0
+			ldc.i4.1
+			add
+			stloc.0
+			endfinally
+		WAS_ZERO:
+			ldc.i4.s 99
+			stloc.0
+			endfinally
+		}
+	DONE:
+		ldloc.0
+		ret
+	}
+
 	// A leave out of the inner try crosses two finallys on the way out.
 	.method public static int32 NestedFinally (int32 x) cil managed
 	{

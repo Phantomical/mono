@@ -690,7 +690,7 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 		builder.CreateLoad (builder.getInt32Ty (), state.resume_at, "resume_at");
 
 	/* The cases are filled in once every leave that reaches this block has been seen. */
-	state.resume = builder.CreateSwitch (which, unwinding);
+	state.resume.push_back (builder.CreateSwitch (which, unwinding));
 	return llvm::Error::success ();
 }
 
@@ -738,7 +738,7 @@ MethodLLVMEmitter::emit_endfilter (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/// Fill in each finally's endfinally switch, now that every leave that runs it has been
+/// Fill in each finally's endfinally switches, now that every leave that runs it has been
 /// translated and knows which id it used.
 llvm::Error
 MethodLLVMEmitter::resolve_finally_switches ()
@@ -748,15 +748,16 @@ MethodLLVMEmitter::resolve_finally_switches ()
 
 		if (state.continuations.empty ())
 			continue;
-		if (state.resume == nullptr)
+		if (state.resume.empty ())
 			return invalid_il (llvm::Twine ("a leave runs the finally at IL_")
 			                   + llvm::Twine::utohexstr (clauses[i].handler_offset)
 			                   + " but it has no endfinally");
 
-		for (auto &[id, continuation] : state.continuations)
-			state.resume->addCase (
-				llvm::ConstantInt::get (llvm::Type::getInt32Ty (context ()), id),
-				continuation);
+		for (llvm::SwitchInst *resume : state.resume)
+			for (auto &[id, continuation] : state.continuations)
+				resume->addCase (
+					llvm::ConstantInt::get (llvm::Type::getInt32Ty (context ()), id),
+					continuation);
 	}
 
 	return llvm::Error::success ();

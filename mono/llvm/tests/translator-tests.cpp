@@ -625,6 +625,18 @@ TEST_F (TranslatorTest, TwoLeavesOutOfOneTryGetTwoContinuations)
 	EXPECT_GE (t.count ("i32 2, label"), 1u);
 }
 
+// Every endfinally in a handler gets the same set of continuations. Filling in
+// only one of them leaves the others sending an ordinary leave to the unwinder,
+// which has no unwind in progress to resume.
+TEST_F (TranslatorTest, EveryEndfinallyCarriesTheLeaveOn)
+{
+	const Translation &t = translate ("eh", "Eh:TwoEndfinallys");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("switch i32"), 2u);
+	EXPECT_EQ (t.count ("i32 1, label"), 2u);
+}
+
 TEST_F (TranslatorTest, ThrowDoesNotReturn)
 {
 	const Translation &t = translate ("eh", "Eh:Throw");

@@ -192,11 +192,14 @@ private:
 	 * entered and switched on by its endfinally. Index 0 means the block was entered
 	 * by unwinding, where carrying on means resuming the unwind rather than going
 	 * anywhere in this method.
+	 *
+	 * A handler may have more than one endfinally, and any of them can be the one
+	 * reached, so each gets its own switch and they all get the same set of cases.
 	 */
 	struct Clause {
 		llvm::BasicBlock *pad = nullptr;
 		llvm::AllocaInst *resume_at = nullptr;
-		llvm::SwitchInst *resume = nullptr;
+		std::vector<llvm::SwitchInst *> resume;
 		std::vector<std::pair<uint32_t, llvm::BasicBlock *>> continuations;
 		/*
 		 * The exception a catch or filter handler was entered with, as loaded at
