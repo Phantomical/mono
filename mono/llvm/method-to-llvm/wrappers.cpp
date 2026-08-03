@@ -19,11 +19,13 @@
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
+#include "mono/metadata/domain-internals.h"
 #include "mono/metadata/loader.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/utils/mono-memory-model.h"
 #include "mono/utils/mono-tls.h"
 
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
@@ -191,11 +193,25 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 llvm::Error
 MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
 {
+	if (!has_wrapper_data (token))
+		return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+		                   + " is not one the wrapper filled in");
+
 	void *pointer = wrapper_data (token);
 
-	if (pointer == nullptr)
-		return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
-		                   + " does not hold a pointer");
+	/*
+	 * A null is a value the wrapper meant, not a slot it left empty: a COM
+	 * interface argument's conversion opens by storing one into the local that
+	 * will hold the interface pointer (mono_cominterop_emit_marshal_com_interface,
+	 * cominterop.c). There is nothing to name, so it is pushed as the constant
+	 * it is.
+	 */
+	if (pointer == nullptr) {
+		push_stack (llvm::ConstantPointerNull::get (
+			            llvm::PointerType::get (context (), 0)),
+		            m_class_get_byval_arg (mono_defaults.int_class));
+		return llvm::Error::success ();
+	}
 
 	/*
 	 * Named after the slot it came from. Two wrappers' slots are unrelated, so

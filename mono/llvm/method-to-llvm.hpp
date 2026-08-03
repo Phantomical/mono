@@ -304,11 +304,16 @@ private:
 	/// metadata, which changes what its operands mean - see wrapper_data ().
 	bool in_wrapper () const;
 
+	/// Whether INDEX names a slot the wrapper filled in - which says nothing
+	/// about what the slot holds, since a wrapper may bake in a null.
+	bool has_wrapper_data (uint32_t index) const;
+
 	/// What a generated body's operand refers to.
 	///
 	/// A wrapper's IL carries indices into a table the runtime filled in while
 	/// building it, not metadata tokens: there is no metadata to point at.
-	/// Returns null if INDEX is not one the wrapper filled in.
+	/// Returns null if INDEX is not one the wrapper filled in - so a caller
+	/// that would accept a null has to ask has_wrapper_data () instead.
 	void *wrapper_data (uint32_t index) const;
 
 	llvm::Error invalid_il (const llvm::Twine &reason);

@@ -65,19 +65,26 @@ MethodLLVMEmitter::in_wrapper () const
 }
 
 /*
- * Slot 0 of the table holds how many entries follow it, so an index past that
- * is one the wrapper never filled in - a malformed body rather than something
- * to read off the end of the array.
+ * Slot 0 of the table holds how many entries follow it, so an index past that -
+ * or slot 0 itself, which is the count and not an entry - is one the wrapper
+ * never filled in: a malformed body rather than something to read off the end
+ * of the array. mono_mb_add_data () hands out indices from 1 upwards.
  */
-void *
-MethodLLVMEmitter::wrapper_data (uint32_t index) const
+bool
+MethodLLVMEmitter::has_wrapper_data (uint32_t index) const
 {
 	void **data = static_cast<void **> (((MonoMethodWrapper *) method)->method_data);
 
-	if (data == nullptr || index > GPOINTER_TO_UINT (data[0]))
+	return data != nullptr && index >= 1 && index <= GPOINTER_TO_UINT (data[0]);
+}
+
+void *
+MethodLLVMEmitter::wrapper_data (uint32_t index) const
+{
+	if (!has_wrapper_data (index))
 		return nullptr;
 
-	return data[index];
+	return static_cast<void **> (((MonoMethodWrapper *) method)->method_data)[index];
 }
 
 /// Refuse the method the way mini refuses IL it cannot translate: an
