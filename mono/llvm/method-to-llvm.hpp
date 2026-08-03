@@ -293,6 +293,8 @@ private:
 	                                            llvm::ArrayRef<llvm::Value *> args);
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig);
 	static void mark_legacy_call (llvm::CallBase *call, MonoMethodSignature *sig);
+	static void mark_legacy_entry_call (llvm::CallBase *call, MonoMethod *method,
+	                                    MonoMethodSignature *sig);
 
 	llvm::Expected<llvm::Type *> convert_type (MonoType *t);
 	llvm::Expected<llvm::Type *> convert_vtype (MonoType *t);
@@ -658,6 +660,18 @@ bool implemented_outside_il (MonoMethod *method);
 /// behind the first argument whenever the runtime's trampolines insist on
 /// finding a receiver there.
 LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
+
+/// The flavor of the code the runtime publishes for METHOD, whose signature is
+/// SIG.
+///
+/// A method implemented outside IL declares a pinvoke signature - the loader
+/// sets that flag for every icall and every DllImport - but the address behind
+/// its symbol is almost never a C function: it is the marshaling wrapper the
+/// runtime builds around it, a managed method that speaks mini's convention.
+/// The one exception is an icall registered as needing no wrapper at all, whose
+/// published address really is the C function. So the method, not its
+/// signature, is what says which convention its entry speaks.
+LegacyFlavor legacy_entry_flavor (MonoMethod *method, MonoMethodSignature *sig);
 
 /// EXTERNALS, when given, collects the symbols the emitted module leaves for the
 /// engine to resolve.

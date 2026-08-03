@@ -676,7 +676,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	 * caller that is not generated code.
 	 */
 	if (through_slot)
-		mark_legacy_call (site, sig);
+		mark_legacy_entry_call (site, callee_method, sig);
 
 	pop_stack (sig->param_count + sig->hasthis);
 

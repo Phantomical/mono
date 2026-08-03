@@ -10,6 +10,10 @@
 #include <glib.h>
 #include <mono/metadata/object-internals.h>
 
+/* These are defined in icall.c, which is compiled as C: a C++ caller that took
+ * them at their word here would look for mangled names nothing defines. */
+MONO_BEGIN_DECLS
+
 // UNITY
 guint32
 ves_icall_System_CurrentSystemTimeZone_GetTimeZoneData (guint32 year, MonoArray **data, MonoArray **names, MonoBoolean *daylight_inverted);
@@ -86,6 +90,8 @@ mono_dangerous_add_internal_call_no_wrapper (const char *name, const void* metho
 
 gboolean
 mono_is_missing_icall_addr (gconstpointer addr);
+
+MONO_END_DECLS
 
 #ifdef __cplusplus
 

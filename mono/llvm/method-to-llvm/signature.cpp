@@ -2,6 +2,7 @@
 #include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
+#include "mono/metadata/icall-internals.h"
 #include "mono/metadata/loader.h"
 #include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata.h"
@@ -126,6 +127,23 @@ simd_class_to_llvm_type (llvm::LLVMContext &ctx, MonoClass *klass)
 	return nullptr;
 }
 
+/// The hidden return pointer sits behind the first argument whenever the
+/// runtime keeps a receiver there: the trampolines that recover a receiver
+/// from a call site always look in the first register. The same applies when
+/// the first declared parameter is a reference type, because delegate-invoke
+/// wrappers make virtual calls through calli signatures with hasthis unset
+/// (mini-amd64.c, get_call_info).
+LegacyFlavor
+managed_call_flavor (MonoMethodSignature *sig)
+{
+	if (sig->hasthis)
+		return LegacyFlavor::ManagedVret1;
+	if (sig->param_count > 0
+	    && MONO_TYPE_IS_REFERENCE (mini_get_underlying_type (sig->params[0])))
+		return LegacyFlavor::ManagedVret1;
+	return LegacyFlavor::Managed;
+}
+
 } // namespace
 
 /// The C ABI leaves a narrow integer's high bits undefined, so which way they get
@@ -167,23 +185,34 @@ implemented_outside_il (MonoMethod *method)
 	       (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) != 0;
 }
 
-/// The hidden return pointer sits behind the first argument whenever the
-/// runtime keeps a receiver there: the trampolines that recover a receiver
-/// from a call site always look in the first register. The same applies when
-/// the first declared parameter is a reference type, because delegate-invoke
-/// wrappers make virtual calls through calli signatures with hasthis unset
-/// (mini-amd64.c, get_call_info).
 LegacyFlavor
 legacy_call_flavor (MonoMethodSignature *sig)
 {
 	if (sig->pinvoke)
 		return LegacyFlavor::Pinvoke;
-	if (sig->hasthis)
-		return LegacyFlavor::ManagedVret1;
-	if (sig->param_count > 0
-	    && MONO_TYPE_IS_REFERENCE (mini_get_underlying_type (sig->params[0])))
-		return LegacyFlavor::ManagedVret1;
-	return LegacyFlavor::Managed;
+	return managed_call_flavor (sig);
+}
+
+LegacyFlavor
+legacy_entry_flavor (MonoMethod *method, MonoMethodSignature *sig)
+{
+	/*
+	 * The address the runtime publishes for a no-wrapper icall is the
+	 * registered C function itself (mono_jit_compile_method_inner), so that
+	 * one entry really is C. Everything else implemented outside IL is
+	 * reached through a wrapper, and a wrapper is a managed method whose own
+	 * signature has the pinvoke flag cleared - the convention to speak to it
+	 * is mini's, not the C ABI its declaration reads like.
+	 */
+	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) != 0) {
+		guint32 flags = 0;
+
+		mono_lookup_internal_call_full_with_flags (method, FALSE, &flags);
+		if ((flags & MONO_ICALL_FLAGS_NO_WRAPPER) != 0)
+			return LegacyFlavor::Pinvoke;
+	}
+
+	return managed_call_flavor (sig);
 }
 
 void
@@ -192,6 +221,15 @@ MethodLLVMEmitter::mark_legacy_call (llvm::CallBase *call, MonoMethodSignature *
 	call->addFnAttr (llvm::Attribute::get (
 		call->getContext (), legacy_cc_attribute,
 		legacy_flavor_value (legacy_call_flavor (sig))));
+}
+
+void
+MethodLLVMEmitter::mark_legacy_entry_call (llvm::CallBase *call, MonoMethod *method,
+                                           MonoMethodSignature *sig)
+{
+	call->addFnAttr (llvm::Attribute::get (
+		call->getContext (), legacy_cc_attribute,
+		legacy_flavor_value (legacy_entry_flavor (method, sig))));
 }
 
 llvm::Expected<llvm::Type *>
@@ -539,7 +577,7 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	if (legacy)
 		function->addFnAttr (llvm::Attribute::get (
 			context (), legacy_cc_attribute,
-			legacy_flavor_value (legacy_call_flavor (sig))));
+			legacy_flavor_value (legacy_entry_flavor (method, sig))));
 	else
 		function->setCallingConv (llvm::CallingConv::Fast);
 

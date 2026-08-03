@@ -282,12 +282,18 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 
 		if (!shape.memory) {
 			low.ret_travel = travel_type (ctx, shape);
-		} else if (!pinvoke) {
+		} else {
 			/*
-			 * A native return the C ABI keeps in memory stays the raw
-			 * aggregate: LLVM demotes it to the C hidden-pointer shape on
-			 * its own, and native is the one place its own rule is right.
-			 * A managed one gets the explicit pointer, placed by flavor.
+			 * The hidden pointer is spelled out rather than left to LLVM,
+			 * for native returns as much as managed ones. Left alone LLVM
+			 * does not demote a memory-class aggregate at all: three
+			 * doubles come back in XMM0, XMM1 and ST0, which no C callee
+			 * writes, and the argument that should have followed the
+			 * pointer takes the register the pointer was owed.
+			 *
+			 * Its position is the flavor's business. A C function keeps it
+			 * in front of everything; a managed one puts it behind a
+			 * receiver the trampolines insist on finding first.
 			 */
 			unsigned leading_nest = 0;
 
