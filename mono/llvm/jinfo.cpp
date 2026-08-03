@@ -303,13 +303,13 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 
 	mono_jit_info_init (jinfo, method, code, code_size, JIT_INFO_NONE,
 	                    num_clauses, 0);
-	jinfo->from_llvm = TRUE;
+	jinfo->from_llvm = true;
 	/*
 	 * No native-offset -> IL-offset mapping is produced yet, and reading the
 	 * classic JIT's by MonoMethod would attribute this body's offsets to
 	 * another body's table.
 	 */
-	jinfo->no_il_offsets = TRUE;
+	jinfo->no_il_offsets = true;
 
 	if (num_clauses > 0)
 		memcpy (&jinfo->clauses[0], clauses.data (),
