@@ -80,6 +80,22 @@ struct Helper {
 	void *address;
 };
 
+/*
+ * Re-create the failure a method's metadata carried as the exception its call
+ * site is owed. The box is metadata and lives in the assembly's mempool; the
+ * exception is not, so every call through a stand-in body builds its own, which
+ * is what mono does everywhere else it raises a boxed class failure.
+ */
+MonoObject *
+load_error_exception (MonoErrorBoxed *failure)
+{
+	ERROR_DECL (error);
+
+	mono_error_set_from_boxed (error, failure);
+
+	return (MonoObject *) mono_error_convert_to_exception (error);
+}
+
 std::vector<Helper>
 runtime_helpers ()
 {
@@ -111,6 +127,12 @@ runtime_helpers ()
 		  (void *) mono_find_jit_icall_info (
 			  MONO_JIT_ICALL_mono_llvm_resume_unwind_trampoline)
 			  ->func },
+
+		/*
+		 * What a stand-in body for a method whose metadata would not load
+		 * calls to build the exception it then throws.
+		 */
+		{ "mono_llvm_load_error_exception", (void *) &load_error_exception },
 
 		/*
 		 * The personality routine a landing pad names. Generated code never
@@ -293,6 +315,18 @@ private:
 
 	Error resolve (DomainState &state, const std::vector<ExternalSymbol> &externals);
 	Expected<Compiled> translate_and_compile (DomainState &state, MonoMethod *method);
+
+	/// Decide what a failed translation of METHOD means. A metadata failure is
+	/// something the program is owed as an exception rather than a method that
+	/// would not compile, and becomes a stand-in body that raises it; anything
+	/// else is handed straight back, unchanged.
+	Expected<Compiled> recover (DomainState &state, MonoMethod *method, Error failure);
+
+	/// Compile a body for METHOD that raises FAILURE and nothing else. Consumes
+	/// FAILURE.
+	Expected<Compiled> compile_thrower (DomainState &state, MonoMethod *method,
+	                                    MonoError *failure);
+
 	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method);
 
 	/// The legacy entry - the interop thunk - as a compile of its own. It
@@ -517,13 +551,13 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 	MinimalCompile cfg (method, state.domain, metadata_error);
 
 	if (cfg.get ()->header == nullptr)
-		return runtime_error (metadata_error);
+		return recover (state, method, runtime_error (metadata_error));
 
 	std::vector<ExternalSymbol> externals;
 	Expected<Function *> function =
 		method_to_llvm (module.get (), cfg.get (), method, &externals);
 	if (!function)
-		return function.takeError ();
+		return recover (state, method, function.takeError ());
 
 	std::string entry = (*function)->getName ().str ();
 
@@ -580,6 +614,140 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 		         state.domain->friendly_name);
 
 	return Compiled { *thunk_entry, compiled->entry };
+}
+
+/*
+ * The metadata failures ECMA-335 says are raised where the thing is used rather
+ * than where it is declared: a method calling one that is missing gets to run
+ * until the call, and its caller gets to catch what the call throws. Everything
+ * else - a type the translator cannot express, a broken module - is a failure of
+ * this engine, and nothing would be served by deferring it to a call.
+ */
+bool
+raised_where_used (uint16_t code)
+{
+	switch (code) {
+	case MONO_ERROR_MISSING_METHOD:
+	case MONO_ERROR_MISSING_FIELD:
+	case MONO_ERROR_TYPE_LOAD:
+	case MONO_ERROR_FILE_NOT_FOUND:
+	case MONO_ERROR_BAD_IMAGE:
+	case MONO_ERROR_MEMBER_ACCESS:
+		return true;
+	default:
+		return false;
+	}
+}
+
+Expected<Backend::Compiled>
+Backend::recover (DomainState &state, MonoMethod *method, Error failure)
+{
+	if (!failure.isA<RuntimeError> ())
+		return std::move (failure);
+
+	ERROR_DECL (metadata_error);
+
+	handleAllErrors (std::move (failure),
+	                 [&] (RuntimeError &runtime) { runtime.move_to (metadata_error); });
+
+	if (!raised_where_used (mono_error_get_error_code (metadata_error)))
+		return runtime_error (metadata_error);
+
+	return compile_thrower (state, method, metadata_error);
+}
+
+/*
+ * A method whose metadata will not load is not a method that failed to compile;
+ * it is a method whose every call must raise. The exception cannot be raised
+ * from here - this runs inside the lazy-compile callback, and the frames between
+ * it and the caller carry no jit info for mono's two-pass search to walk - so
+ * the failure is boxed into the assembly that owns the method and a body is
+ * compiled that unboxes and throws it. That body has jit info of its own, so the
+ * throw happens somewhere the search can start, and the caller's catch sees it.
+ *
+ * The stand-in takes no arguments and returns nothing whatever the method's real
+ * signature was, which is the point: the signature is often exactly what would
+ * not convert. A function that never returns leaves its arguments and its return
+ * slot untouched, so no caller can tell.
+ */
+Expected<Backend::Compiled>
+Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *failure)
+{
+	MonoErrorBoxed *boxed =
+		mono_error_box (failure, m_class_get_image (method->klass));
+
+	if (boxed == nullptr)
+		return runtime_error (failure);
+
+	if (tracing ()) {
+		char *name = mono_method_full_name (method, TRUE);
+
+		fprintf (stderr, "[llvm-jit] %s throws on call: %s\n", name,
+		         mono_error_get_message (failure));
+		g_free (name);
+	}
+
+	mono_error_cleanup (failure);
+
+	/*
+	 * One function per module, as everywhere else here: the side tables
+	 * attribute their records to the single function a module holds. So the
+	 * entry and the body are two compiles of the same three instructions.
+	 */
+	auto build = [&] (const std::string &name) -> Expected<void *> {
+		auto context = std::make_unique<LLVMContext> ();
+		auto module = std::make_unique<Module> (name, *context);
+		LLVMContext &ctx = *context;
+		Type *ptr = PointerType::get (ctx, 0);
+
+		FunctionCallee load = module->getOrInsertFunction (
+			"mono_llvm_load_error_exception",
+			FunctionType::get (ptr, { ptr }, false));
+		FunctionCallee raise = module->getOrInsertFunction (
+			"mono_llvm_throw_exception",
+			FunctionType::get (Type::getVoidTy (ctx), { ptr }, false));
+
+		Function *function =
+			Function::Create (FunctionType::get (Type::getVoidTy (ctx), false),
+			                  GlobalValue::ExternalLinkage, name, module.get ());
+
+		/* Mono walks this frame like any other, from its unwind record. */
+		function->setUWTableKind (UWTableKind::Default);
+
+		IRBuilder<> builder (BasicBlock::Create (ctx, "entry", function));
+		Value *box = builder.CreateIntToPtr (
+			builder.getInt64 ((uint64_t) (uintptr_t) boxed), ptr);
+
+		builder.CreateCall (raise, { builder.CreateCall (load, { box }) });
+		builder.CreateUnreachable ();
+
+		if (dumping (name.c_str ()))
+			module->print (llvm::errs (), nullptr);
+
+		Expected<CompiledMethod> compiled = state.jit->compile (
+			ThreadSafeModule (std::move (module),
+			                  ThreadSafeContext (std::move (context))),
+			name);
+		if (!compiled)
+			return compiled.takeError ();
+
+		if (Error err = register_jit_info (state.domain, method, nullptr, *compiled))
+			return std::move (err);
+
+		return compiled->entry;
+	};
+
+	Expected<void *> entry = build (symbol_for_code (method));
+
+	if (!entry)
+		return entry.takeError ();
+
+	Expected<void *> body = build (symbol_for_body (method));
+
+	if (!body)
+		return body.takeError ();
+
+	return Compiled { *entry, *body };
 }
 
 Expected<void *>

@@ -251,6 +251,19 @@ MethodLLVMEmitter::convert_vtype (MonoType *t)
 {
 	MonoClass *klass = mono_class_from_mono_type_internal (t);
 
+	/*
+	 * Laying the class out is what discovers a bad layout - an unaligned
+	 * reference field, say - and a class that cannot be laid out has no
+	 * layout to convert. Surface its own failure rather than reading the
+	 * offsets it never got: the caller turns that into the TypeLoadException
+	 * the program is owed. This settles metadata only, and is not the class
+	 * initializer, which must never run here.
+	 */
+	ERROR_DECL (metadata_error);
+
+	if (!mono_class_init_checked (klass, metadata_error))
+		return runtime_error (metadata_error);
+
 	if (MONO_CLASS_IS_SIMD (cfg, klass)) {
 		llvm::Type *vector = simd_class_to_llvm_type (context (), klass);
 
