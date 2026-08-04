@@ -317,12 +317,30 @@ public:
 	/// dead: nothing may be executing in, or about to call into, the domain.
 	static void free_domain (MonoDomain *domain);
 
+	/// Drop everything the backend holds for METHOD, in every domain it was
+	/// compiled into: its code, its jit-info records, and every cache entry
+	/// keyed by it. The caller proves the code dead, the way free_domain ()
+	/// does.
+	///
+	/// Only dynamic methods are ever freed, and freeing one hands its
+	/// MonoMethod straight back to the allocator, so this is not housekeeping
+	/// that can be deferred: an entry left keyed by that address is found again
+	/// by whatever method lands there next.
+	static void free_method (MonoMethod *method);
+
 private:
 	/// Where one method's code ended up: the legacy entry the runtime hands
 	/// out, and the fastcc body generated callers reach.
 	struct Compiled {
 		void *entry;
 		void *body;
+	};
+
+	/// What compiling a method put somewhere it has to be taken back out of.
+	/// Only tracked for dynamic methods; nothing else is ever freed.
+	struct Owned {
+		std::vector<llvm::orc::JITDylib *> dylibs;
+		std::vector<MonoJitInfo *> jinfos;
 	};
 
 	/// One domain's whole compilation state.
@@ -346,6 +364,8 @@ private:
 		/// Methods whose body stub was first reached from another domain, and
 		/// the per-call dispatcher each got instead of a direct binding.
 		std::unordered_map<MonoMethod *, void *> dispatchers;
+		/// What each dynamic method's compiles produced, for free_method ().
+		std::unordered_map<MonoMethod *, Owned> owned;
 	};
 
 	/// The current domain's state, created - linker, helpers and all - the
@@ -357,6 +377,15 @@ private:
 
 	Error resolve (DomainState &state, const std::vector<ExternalSymbol> &externals);
 	Expected<Compiled> translate_and_compile (DomainState &state, MonoMethod *method);
+
+	/// Note that COMPILED, and the jit-info record JINFO registered for it, were
+	/// produced for METHOD, so that free_method () can undo both. Either may be
+	/// absent - a dispatcher carries no jit info.
+	///
+	/// Every compile of a method has to pass through here, or freeing the method
+	/// leaves that compile's code and record behind for good.
+	void remember (DomainState &state, MonoMethod *method,
+	               const CompiledMethod &compiled, MonoJitInfo *jinfo);
 
 	/// Decide what a failed translation of METHOD means. A metadata failure is
 	/// something the program is owed as an exception rather than a method that
@@ -478,6 +507,123 @@ Backend::free_domain (MonoDomain *domain)
 		live_backend->domains_.erase (it);
 	}
 	/* The linker goes down with the state, releasing the domain's code. */
+}
+
+void
+Backend::remember (DomainState &state, MonoMethod *method,
+                   const CompiledMethod &compiled, MonoJitInfo *jinfo)
+{
+	if (!method->dynamic)
+		return;
+
+	std::lock_guard<std::mutex> lock (mutex_);
+	Owned &owned = state.owned[method];
+
+	if (compiled.dylib != nullptr)
+		owned.dylibs.push_back (compiled.dylib);
+	if (jinfo != nullptr)
+		owned.jinfos.push_back (jinfo);
+}
+
+void
+Backend::free_method (MonoMethod *method)
+{
+	if (live_backend == nullptr)
+		return;
+
+	/* One domain's share of the release: gathered under the lock, carried out
+	 * after it, because both removals take the ORC session lock. */
+	struct Release {
+		MonoDomain *domain;
+		MonoJit *jit;
+		Owned owned;
+		std::vector<std::string> stubs;
+	};
+	std::vector<Release> releases;
+
+	{
+		std::lock_guard<std::mutex> lock (live_backend->mutex_);
+
+		/*
+		 * Every domain, not just the one that asked for the method: a body
+		 * reached across a domain boundary is compiled into the calling
+		 * domain's linker too (body_for_current_domain ()), and every one of
+		 * those copies is keyed by this MonoMethod.
+		 */
+		for (auto &entry : live_backend->domains_) {
+			DomainState &state = *entry.second;
+
+			if (!state.published.count (method) && !state.defined.count (method)
+			    && !state.owned.count (method))
+				continue;
+
+			Release release { state.domain, state.jit.get (), {}, {} };
+
+			/*
+			 * The symbols carry the method's printed name as well as its
+			 * address, so two methods at one recycled address usually want
+			 * different names - but not always: nothing stops a program from
+			 * minting DynamicMethods that all print the same, and a compiler
+			 * emitting lambdas does exactly that. Undefining the names is what
+			 * lets the next method publish stubs of its own instead of
+			 * colliding with this one's.
+			 */
+			if (state.defined.erase (method) != 0) {
+				release.stubs.push_back (symbol_for_code (method));
+				release.stubs.push_back (symbol_for_body (method));
+			}
+			state.published.erase (method);
+			state.compiled.erase (method);
+			state.dispatchers.erase (method);
+
+			auto tracked = state.owned.find (method);
+
+			if (tracked != state.owned.end ()) {
+				release.owned = std::move (tracked->second);
+				state.owned.erase (tracked);
+			}
+			releases.push_back (std::move (release));
+		}
+	}
+
+	for (Release &release : releases) {
+		if (tracing ()) {
+			char *name = mono_method_full_name (method, TRUE);
+
+			fprintf (stderr,
+			         "[llvm-jit] freeing %s releases %zu modules and %zu "
+			         "records (from %s)\n",
+			         name, release.owned.dylibs.size (),
+			         release.owned.jinfos.size (),
+			         release.domain->friendly_name);
+			g_free (name);
+		}
+
+		/*
+		 * Either removal only fails on something the caller promised - a stub
+		 * caught materializing means the method being freed is being called.
+		 * Carrying on would leave the caches saying the method is gone and the
+		 * linker saying it is not, and the next method at this address would
+		 * inherit the disagreement.
+		 */
+		auto must = [] (Error err) {
+			if (err)
+				report_fatal_error (
+					Twine ("a freed method could not be released: ")
+						+ toString (std::move (err)),
+					false);
+		};
+
+		/*
+		 * In this order: a lookup must never find a record covering memory a
+		 * later compile has already been handed, and nothing may reach the code
+		 * through a stub while it is being released.
+		 */
+		for (MonoJitInfo *jinfo : release.owned.jinfos)
+			mono_jit_info_table_remove (release.domain, jinfo);
+		must (release.jit->undefine_stubs (release.stubs));
+		must (release.jit->remove_dylibs (release.owned.dylibs));
+	}
 }
 
 /*
@@ -650,9 +796,12 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 			const_cast<uint8_t *> (extent.first));
 	}
 
-	if (Error err = register_jit_info (state.domain, method, cfg.get ()->header,
-	                                   *compiled, filters))
-		return std::move (err);
+	Expected<MonoJitInfo *> jinfo = register_jit_info (
+		state.domain, method, cfg.get ()->header, *compiled, filters);
+
+	if (!jinfo)
+		return jinfo.takeError ();
+	remember (state, method, *compiled, *jinfo);
 
 	/*
 	 * The legacy entry, as a module of its own: the side tables attribute
@@ -789,8 +938,12 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 		if (!compiled)
 			return compiled.takeError ();
 
-		if (Error err = register_jit_info (state.domain, method, nullptr, *compiled))
-			return std::move (err);
+		Expected<MonoJitInfo *> jinfo =
+			register_jit_info (state.domain, method, nullptr, *compiled);
+
+		if (!jinfo)
+			return jinfo.takeError ();
+		remember (state, method, *compiled, *jinfo);
 
 		return compiled->entry;
 	};
@@ -857,8 +1010,12 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 	if (!thunk)
 		return thunk.takeError ();
 
-	if (Error err = register_jit_info (state.domain, method, nullptr, *thunk))
-		return std::move (err);
+	Expected<MonoJitInfo *> jinfo =
+		register_jit_info (state.domain, method, nullptr, *thunk);
+
+	if (!jinfo)
+		return jinfo.takeError ();
+	remember (state, method, *thunk, *jinfo);
 
 	return thunk->entry;
 }
@@ -1035,6 +1192,8 @@ Backend::dispatcher (DomainState &state, MonoMethod *method)
 		name);
 	if (!compiled)
 		return compiled.takeError ();
+
+	remember (state, method, *compiled, nullptr);
 
 	if (tracing ())
 		fprintf (stderr,
@@ -1273,6 +1432,12 @@ void
 mono_llvm_jit_free_domain (MonoDomain *domain)
 {
 	mono::Backend::free_domain (domain);
+}
+
+void
+mono_llvm_jit_free_method (MonoMethod *method)
+{
+	mono::Backend::free_method (method);
 }
 
 void *

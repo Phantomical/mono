@@ -317,7 +317,7 @@ transcode_unwind (const std::vector<WireRecord> &records)
 
 } // namespace
 
-Error
+Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
                    const std::vector<std::pair<uint32_t, void *>> &filters)
@@ -401,8 +401,18 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	}
 
 	int num_clauses = (int) clauses.size ();
-	MonoJitInfo *jinfo = (MonoJitInfo *) mono_domain_alloc0 (
-		domain, mono_jit_info_size (JIT_INFO_NONE, num_clauses, 0));
+	size_t jinfo_size = mono_jit_info_size (JIT_INFO_NONE, num_clauses, 0);
+
+	/*
+	 * A dynamic method's record is unregistered again when the method is freed,
+	 * and mono_jit_info_table_remove () frees what it unregisters, so it has to
+	 * come from the allocator that call uses. Everything else lives exactly as
+	 * long as its domain, so it comes out of the domain's mempool.
+	 */
+	MonoJitInfo *jinfo =
+		method->dynamic
+			? (MonoJitInfo *) g_malloc0 (jinfo_size)
+			: (MonoJitInfo *) mono_domain_alloc0 (domain, jinfo_size);
 
 	mono_jit_info_init (jinfo, method, code, code_size, JIT_INFO_NONE,
 	                    num_clauses, 0);
@@ -422,7 +432,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	g_free (encoded);
 
 	mono_jit_info_table_add (domain, jinfo);
-	return Error::success ();
+	return jinfo;
 }
 
 } // namespace mono

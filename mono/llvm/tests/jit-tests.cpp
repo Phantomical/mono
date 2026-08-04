@@ -139,6 +139,39 @@ TEST (Jit, UnregisteredHelperFailsTheCompile)
 }
 
 /*
+ * Removal is how a freed method's code is given back. What has to hold is that
+ * the memory returns to the pool the linker allocates out of - otherwise a
+ * process that churns dynamic methods grows without bound - and that the JIT is
+ * still usable afterwards.
+ */
+TEST (Jit, RemovedCodeIsReusedByLaterCompiles)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	auto first = (*jit)->compile (build_add_module ().take (), "add");
+	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
+	ASSERT_NE (first->dylib, nullptr);
+
+	const uint8_t *was = first->code;
+	JITDylib *dylib = first->dylib;
+
+	ASSERT_FALSE (bool ((*jit)->remove_dylibs ({ dylib })));
+
+	/*
+	 * Same module, so the same size request: the allocator has nothing else to
+	 * satisfy it from, which is what makes the address a real check that the
+	 * first one's memory came back rather than a coincidence.
+	 */
+	auto second = (*jit)->compile (build_add_module ().take (), "add");
+	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
+	EXPECT_EQ (second->code, was);
+
+	auto add = reinterpret_cast<int32_t (*) (int32_t, int32_t)> (second->entry);
+	EXPECT_EQ (add (2, 40), 42);
+}
+
+/*
  * The end-to-end fixture: runtime booted, methods translated from the corpus,
  * compiled through one shared jit, executed.
  */

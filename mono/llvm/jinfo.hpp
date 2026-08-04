@@ -13,6 +13,7 @@
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoMethodHeader MonoMethodHeader;
+typedef struct _MonoJitInfo MonoJitInfo;
 
 namespace mono {
 
@@ -25,10 +26,13 @@ namespace mono {
 /// domain whose linker holds the code: the record lives and dies with it, so
 /// it is never the thread's current domain, which mid-unload managed code -
 /// AppDomain:InvokeInDomain most visibly - runs with set elsewhere.
-llvm::Error register_jit_info (MonoDomain *domain, MonoMethod *method,
-                               MonoMethodHeader *header,
-                               const CompiledMethod &compiled,
-                               const std::vector<std::pair<uint32_t, void *>> &filters = {});
+///
+/// Returns the registered record, which mono_jit_info_table_remove () takes to
+/// unregister it again.
+llvm::Expected<MonoJitInfo *>
+register_jit_info (MonoDomain *domain, MonoMethod *method,
+                   MonoMethodHeader *header, const CompiledMethod &compiled,
+                   const std::vector<std::pair<uint32_t, void *>> &filters = {});
 
 } // namespace mono
 

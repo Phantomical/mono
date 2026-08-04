@@ -66,6 +66,10 @@ struct CompiledMethod {
 	/// Every function the linked object defines, name to [code, size): the
 	/// entry, and any filter bodies compiled alongside it.
 	std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
+
+	/// The dylib this compile's object was linked into - what remove_dylibs ()
+	/// takes to release all of the above again.
+	llvm::orc::JITDylib *dylib = nullptr;
 };
 
 class MonoJit {
@@ -143,6 +147,21 @@ public:
 	/// fails the compile loudly.
 	llvm::Expected<CompiledMethod> compile (llvm::orc::ThreadSafeModule tsm,
 	                                        llvm::StringRef entry);
+
+	/// Release DYLIBS: their code, their side tables, and the memory both were
+	/// linked into, which later compiles may then reuse.
+	///
+	/// The caller proves the code dead - nothing executing in it, nothing about
+	/// to call into it - and must have undefined any stub still pointing at it.
+	llvm::Error remove_dylibs (const std::vector<llvm::orc::JITDylib *> &dylibs);
+
+	/// Undefine NAMES, which must all be stubs this JIT published, so that the
+	/// names are free to be published again.
+	///
+	/// The stub bodies themselves are not reclaimed - the redirection manager
+	/// hands them out of blocks it owns for the life of the JIT - so what this
+	/// buys is the name, not the memory.
+	llvm::Error undefine_stubs (const std::vector<std::string> &names);
 
 	/// The tier-0 IR pipeline, run over M in place: the stock O1 function
 	/// simplification pipeline, whose load-bearing effect is mem2reg over the

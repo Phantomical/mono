@@ -41,6 +41,19 @@ void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domai
 /// compiled for is a quiet no-op.
 void mono_llvm_jit_free_domain (MonoDomain *domain);
 
+/// Release everything the backend holds for METHOD: its code in every domain it
+/// was compiled into, the jit-info records covering that code, and the caches
+/// keyed by it.
+///
+/// Called when the runtime frees a dynamic method - the only kind it ever frees
+/// - after it has proved nothing can be executing in the method any more. A
+/// method this backend never compiled is a quiet no-op.
+///
+/// Freeing the method hands its MonoMethod back to the allocator, so this is
+/// what keeps the next method to land on that address from being handed this
+/// one's code.
+void mono_llvm_jit_free_method (MonoMethod *method);
+
 /// Queue OPT for LLVM's own command-line option registry - the same options
 /// `opt` and `llc` take, e.g. "-print-after-all". A leading dash is optional.
 ///

@@ -597,6 +597,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 
 	CompiledMethod compiled;
 	compiled.entry = sym->toPtr<void *> ();
+	compiled.dylib = &jd;
 	compiled.clause_table = extents->clause_table;
 	compiled.clause_table_size = extents->clause_table_size;
 	compiled.guard_table = extents->guard_table;
@@ -618,6 +619,32 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 		                          entry.str ().c_str ());
 
 	return compiled;
+}
+
+Error
+MonoJit::remove_dylibs (const std::vector<JITDylib *> &dylibs)
+{
+	if (dylibs.empty ())
+		return Error::success ();
+
+	std::vector<JITDylibSP> owned (dylibs.begin (), dylibs.end ());
+
+	return jit_->getExecutionSession ().removeJITDylibs (std::move (owned));
+}
+
+Error
+MonoJit::undefine_stubs (const std::vector<std::string> &names)
+{
+	if (names.empty ())
+		return Error::success ();
+
+	ExecutionSession &es = jit_->getExecutionSession ();
+	SymbolNameSet symbols;
+
+	for (const std::string &name : names)
+		symbols.insert (es.intern (name));
+
+	return stubs_->remove (symbols);
 }
 
 } // namespace mono

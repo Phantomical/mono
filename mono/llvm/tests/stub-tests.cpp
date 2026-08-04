@@ -207,6 +207,62 @@ TEST (Stubs, CallsInitialTargetAndFollowsRedirects)
 	EXPECT_EQ (*again, *stub);
 }
 
+/*
+ * A method is published under a name built from its printed name and its
+ * MonoMethod address, and a freed method hands that address straight back to the
+ * allocator - so the next method along can want the very same name. That only
+ * works if undefining releases the name.
+ */
+TEST (Stubs, AnUndefinedNameCanBePublishedAgain)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	auto first = make_stub (**jit, "m", (void *) &stub_target_one);
+	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
+	EXPECT_EQ (reinterpret_cast<IntFn> (*first) (), 1);
+
+	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
+
+	auto second = make_stub (**jit, "m", (void *) &stub_target_two);
+	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
+	EXPECT_EQ (reinterpret_cast<IntFn> (*second) (), 2);
+}
+
+/*
+ * The common case for a method that was published and then freed without ever
+ * being called: its stub was defined but never materialized, so undefining has
+ * a pending definition to discard rather than an emitted stub to forget.
+ */
+TEST (Stubs, AnUnmaterializedStubCanBeUndefined)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	ASSERT_FALSE (bool ((*jit)->create_stub ("m", (void *) &stub_target_one)));
+	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
+
+	auto again = make_stub (**jit, "m", (void *) &stub_target_two);
+	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
+	EXPECT_EQ (reinterpret_cast<IntFn> (*again) (), 2);
+}
+
+/*
+ * Undefining is driven by the backend's own record of what it published, so a
+ * name that was never published means that record is wrong. Saying so is what
+ * keeps it from becoming a stub silently pointing at released code.
+ */
+TEST (Stubs, UndefiningANameThatWasNeverPublishedFails)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	Error err = (*jit)->undefine_stubs ({ "m" });
+
+	ASSERT_TRUE (bool (err));
+	consumeError (std::move (err));
+}
+
 TEST (Stubs, CompiledCallersBindToTheStub)
 {
 	auto jit = MonoJit::create ();
