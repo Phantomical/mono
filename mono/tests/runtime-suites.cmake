@@ -60,7 +60,8 @@ set(_mono_parallel_hungry
 # ---------------------------------------------------------------------------
 # mono_runtime_suite(<name> TESTS ... [LABEL x] [RUNTIME_ARGS s] [ENV ...]
 #                    [OPT_SETS s] [TIMEOUT n] [EXPECT n] [WORKDIR d]
-#                    [PROCESSORS n] [GC ...] [SKIP_BOEHM ...])
+#                    [PROCESSORS n] [GC ...] [SKIP_BOEHM ...]
+#                    [LONG ... [LONG_TIMEOUT n]])
 #
 # One CTest test per program, named `<suite>/<program>` -- and per optimization
 # set on top of that, `<suite>/<program>:<opt-set>`, since those are separate
@@ -76,8 +77,8 @@ set(_mono_parallel_hungry
 # themselves read it through TestTimeout.
 # ---------------------------------------------------------------------------
 function(mono_runtime_suite name)
-  cmake_parse_arguments(ARG "" "LABEL;RUNTIME_ARGS;OPT_SETS;TIMEOUT;EXPECT;WORKDIR;PROCESSORS"
-                            "TESTS;ENV;GC;SKIP_BOEHM" ${ARGN})
+  cmake_parse_arguments(ARG "" "LABEL;RUNTIME_ARGS;OPT_SETS;TIMEOUT;EXPECT;WORKDIR;PROCESSORS;LONG_TIMEOUT"
+                            "TESTS;ENV;GC;SKIP_BOEHM;LONG" ${ARGN})
   if(NOT ARG_TESTS)
     return()
   endif()
@@ -102,6 +103,9 @@ function(mono_runtime_suite name)
   endif()
   if(NOT ARG_TIMEOUT)
     set(ARG_TIMEOUT 300)
+  endif()
+  if(NOT ARG_LONG_TIMEOUT)
+    set(ARG_LONG_TIMEOUT 900)
   endif()
   if(NOT ARG_EXPECT)
     set(ARG_EXPECT 0)
@@ -128,10 +132,6 @@ function(mono_runtime_suite name)
     set(_opt_sets "-")
   endif()
 
-  # A little above what MonoRunTest gives the test, so the SIGQUIT thread dump
-  # wins the race and CTest only steps in if that failed too.
-  math(EXPR _ctest_timeout "${ARG_TIMEOUT} + 60")
-
   foreach(_gc IN LISTS ARG_GC)
     _mono_gc_env(_gc_env "${_gc}")
     # SKIP_BOEHM drops the tests that fail on Boehm from the boehm half only,
@@ -143,6 +143,18 @@ function(mono_runtime_suite name)
 
     foreach(_test IN LISTS _gc_tests)
       string(REGEX REPLACE "\\.exe$" "" _stem "${_test}")
+
+      # LONG names the programs whose work does not fit the suite's budget --
+      # not slow by accident, but asking for far more of the runtime than their
+      # neighbours do.
+      set(_timeout ${ARG_TIMEOUT})
+      if(_test IN_LIST ARG_LONG)
+        set(_timeout ${ARG_LONG_TIMEOUT})
+      endif()
+      # A little above what MonoRunTest gives the test, so the SIGQUIT thread
+      # dump wins the race and CTest only steps in if that failed too.
+      math(EXPR _ctest_timeout "${_timeout} + 60")
+
       foreach(_opt IN LISTS _opt_sets)
         if(_opt STREQUAL "-")
           set(_tname "${name}/${_stem}")
@@ -156,12 +168,12 @@ function(mono_runtime_suite name)
                  COMMAND "${CMAKE_COMMAND}" -E env
                          "MONO_PATH=${_class_dir}"
                          "MONO_CONFIG=${_bin}/tests-config"
-                         "TEST_DRIVER_TIMEOUT_SEC=${ARG_TIMEOUT}"
+                         "TEST_DRIVER_TIMEOUT_SEC=${_timeout}"
                          "${_gc_env}"
                          ${ARG_ENV}
                          "${CMAKE_COMMAND}"
                          "-DMONO_TEST_EXPECT=${ARG_EXPECT}"
-                         "-DMONO_TEST_TIMEOUT=${ARG_TIMEOUT}"
+                         "-DMONO_TEST_TIMEOUT=${_timeout}"
                          -P "${_run_test}" --
                          "${_wrapper}" ${_oarg} ${_rt_args} "${_test}"
                  WORKING_DIRECTORY "${ARG_WORKDIR}")
@@ -210,8 +222,14 @@ list(REMOVE_ITEM _tailcall
 # ---------------------------------------------------------------------------
 # The suites
 # ---------------------------------------------------------------------------
+# dynamic-method-churn asks the JIT for 40000 compiles -- 20000 dynamic
+# methods, each with a runtime-invoke wrapper of its own, since a dynamic method
+# cannot share the cached one. That is minutes of LLVM at any per-method cost
+# this backend could plausibly reach, so it gets a budget that reflects what it
+# asks for rather than the corpus default.
 mono_runtime_suite(runtime TESTS ${_regular}
-                   SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED})
+                   SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
+                   LONG dynamic-method-churn.exe)
 
 # MONO_DEBUG=test-tailcall-require turns "the JIT declined to emit a tail call"
 # into a failure, which is the whole point of this suite. --compile-all makes
