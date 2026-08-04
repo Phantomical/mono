@@ -3902,6 +3902,11 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 {
 	MonoDelegate *del = MONO_HANDLE_RAW (delegate);
 	MonoDomain *domain = MONO_HANDLE_DOMAIN (delegate);
+	/*
+	 * Only the address is known here when the delegate comes from ldftn +
+	 * newobj; every other caller already knows the method it is binding.
+	 */
+	gboolean from_ldftn = method == NULL;
 
 	if (!method) {
 		MonoJitInfo *ji;
@@ -3920,6 +3925,30 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 				method = mono_jit_info_get_method (ji);
 				g_assert (!mono_class_is_gtd (method->klass));
 			}
+		}
+	}
+
+	/*
+	 * Binding an instance method needs a receiver to bind it to, and a delegate
+	 * built over a null one would not fail until it was invoked. Classic mini
+	 * emits the check into the code it generates for the ldftn + newobj pair
+	 * (method-to-ir.c) and the interpreter makes it in interp_delegate_ctor; a
+	 * back end that calls the real constructor rather than open-coding it
+	 * reaches neither, so the rule has to hold here too.
+	 *
+	 * An open delegate is the exception. Its Invoke passes the receiver as its
+	 * own first argument, which leaves it one parameter longer than the method
+	 * being bound, and there a null target is exactly what is meant.
+	 */
+	if (from_ldftn && method && MONO_HANDLE_IS_NULL (target)
+	    && !(method->flags & METHOD_ATTRIBUTE_STATIC)) {
+		MonoMethod *invoke = mono_get_delegate_invoke_internal (mono_handle_class (MONO_HANDLE_CAST (MonoObject, delegate)));
+		MonoMethodSignature *invoke_sig = invoke ? mono_method_signature_internal (invoke) : NULL;
+		MonoMethodSignature *bound_sig = mono_method_signature_internal (method);
+
+		if (invoke_sig && bound_sig && invoke_sig->param_count == bound_sig->param_count) {
+			mono_error_set_argument (error, "this", "Delegate to an instance method cannot have null 'this'");
+			return;
 		}
 	}
 
