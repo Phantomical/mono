@@ -85,10 +85,14 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is
 
 /// The external global called NAME, whose address the engine resolves against the
 /// runtime, created on first use.
+///
+/// Whatever already answers to the name is that address, declaration of a function
+/// included - the engine defines one symbol per name, so anything else in the module
+/// claiming it would be renamed out of reach of the definition rather than share it.
 llvm::Constant *
 MethodLLVMEmitter::extern_symbol (const std::string &name)
 {
-	if (llvm::GlobalVariable *existing = module->getNamedGlobal (name))
+	if (llvm::GlobalValue *existing = module->getNamedValue (name))
 		return existing;
 
 	return new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()), false,

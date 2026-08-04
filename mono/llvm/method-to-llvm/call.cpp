@@ -201,9 +201,19 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 /// ldftn pushes, what a delegate stores. This is the plain symbol - the legacy
 /// entry the runtime publishes - because the pointer escapes to callers that
 /// know nothing of fastcc; an indirect call through it is a legacy call.
-llvm::Constant *
+///
+/// A method whose code mini produces is declared against this very name, since
+/// create_method_decl () withholds the `$fast` suffix from exactly the methods
+/// that are entered in the legacy convention. Its declaration is therefore the
+/// address, and asking for one here has to produce it: a name belongs to one
+/// object, and LLVM answers a second claim on it by silently renaming the
+/// newcomer, leaving a reference to a symbol the engine never defines.
+llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
+	if (implemented_outside_il (target))
+		return create_method_decl (target);
+
 	char *name = mono_method_full_name (target, TRUE);
 	std::string symbol = identity_symbol (name, target);
 

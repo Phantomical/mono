@@ -61,7 +61,11 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 	 * because this pointer escapes: a delegate stores it, native code may be
 	 * handed it, and any calli through it dispatches as a legacy call.
 	 */
-	push_stack (code_address_symbol (*target), mono_get_int_type ());
+	llvm::Expected<llvm::Constant *> address = code_address_symbol (*target);
+	if (!address)
+		return address.takeError ();
+
+	push_stack (*address, mono_get_int_type ());
 	return llvm::Error::success ();
 }
 

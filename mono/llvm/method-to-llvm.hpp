@@ -486,7 +486,7 @@ private:
 	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                               MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
-	llvm::Constant *code_address_symbol (MonoMethod *target);
+	llvm::Expected<llvm::Constant *> code_address_symbol (MonoMethod *target);
 	bool is_own_this (llvm::Value *value);
 	bool should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
 	                       llvm::FunctionType *callee_type);
