@@ -17,6 +17,7 @@
 #include "mono/metadata/object-forward.h"
 #include <llvm/ADT/Twine.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Value.h>
 
 // This breaks some LLVM headers
@@ -488,12 +489,14 @@ private:
 	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Expected<llvm::Constant *> code_address_symbol (MonoMethod *target);
 	bool is_own_this (llvm::Value *value);
-	bool should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
-	                       llvm::FunctionType *callee_type);
+	llvm::CallInst::TailCallKind should_tail_call (MonoMethodSignature *callee_sig,
+	                                               MonoMethod *callee_method,
+	                                               llvm::FunctionType *callee_type);
 	bool matching_call_abi (MonoMethodSignature *callee_sig, llvm::FunctionType *callee_type);
 	llvm::Error emit_jmp (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
-	                            llvm::ArrayRef<llvm::Value *> args, size_t arg_slots);
+	                            llvm::ArrayRef<llvm::Value *> args,
+	                            llvm::CallInst::TailCallKind kind, size_t arg_slots);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token);

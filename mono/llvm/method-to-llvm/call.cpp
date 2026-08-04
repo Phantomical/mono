@@ -251,13 +251,15 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
  *   marked synchronized.
  */
 
-/// Whether a value of TYPE comes back in the return registers rather than through
-/// a hidden pointer the caller passes in.
+/// Whether a value of TYPE certainly comes back in the return registers rather than
+/// through a hidden pointer the caller passes in.
 ///
 /// The demotion to that hidden pointer happens when the call is lowered, far below
 /// the IR, and it turns tail-call elimination off. A musttail site cannot survive
 /// that: the backend aborts the process with "failed to perform tail call
-/// elimination on a call site marked musttail" rather than break the guarantee.
+/// elimination on a call site marked musttail" rather than break the guarantee. A
+/// plain tail site can - it quietly becomes the ordinary call it would otherwise
+/// have been - so this only decides which of the two a site may be marked with.
 ///
 /// Whether a return is demoted is CanLowerReturn's answer, which nothing at the IR
 /// level can ask. It is not a question of size: an aggregate return is flattened
@@ -268,8 +270,8 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 /// A size test would therefore be wrong in exactly the cases that abort.
 ///
 /// So this admits only what is already a single leaf, and leaves every aggregate to
-/// the ordinary path. Declining costs a tail call, which the prefix always permits;
-/// guessing wrong costs the process.
+/// the weaker marker. Being wrong in that direction costs a tail call the prefix
+/// only ever permitted; being wrong in the other costs the process.
 static bool
 returns_in_registers (llvm::Type *type)
 {
@@ -280,7 +282,8 @@ returns_in_registers (llvm::Type *type)
 	return type->isFloatTy () || type->isDoubleTy ();
 }
 
-/// Copy TARGET's return attributes onto CALL, which is about to be marked musttail.
+/// Copy TARGET's return attributes onto CALL, which is about to be marked as a tail
+/// call.
 ///
 /// Tail-call eligibility compares the caller's return attributes against the call
 /// site's own attribute list (attributesPermitTailCall), and that comparison has no
@@ -288,8 +291,10 @@ returns_in_registers (llvm::Type *type)
 /// back. So a caller returning `zeroext i8` whose site says plain `i8` reads as a
 /// mismatched ABI. LLVM then drops the tail call silently rather than failing, and
 /// the frame the prefix promised to hand away stays on the stack: a deep recursion
-/// that should run in constant space overflows instead. matching_call_abi has
-/// already proved the two extensions agree; this is what says so on the instruction.
+/// that should run in constant space overflows instead. The site describes the
+/// callee, so saying what the callee actually returns is right either way; where
+/// matching_call_abi has proved the two extensions agree, it is what makes the
+/// instruction say so.
 static void
 carry_return_attributes (llvm::CallInst *call, llvm::Function *target)
 {
@@ -299,24 +304,31 @@ carry_return_attributes (llvm::CallInst *call, llvm::Function *target)
 	call->addRetAttrs (ret_attrs);
 }
 
-/// Whether a tail.-prefixed call at this site can be honored as an LLVM musttail
-/// call. Declining is always allowed - the site falls back to an ordinary call - so
-/// every test is conservative.
-bool
+/// How a tail.-prefixed call at this site may be marked: not at all, as a plain tail
+/// call, or as a musttail one.
+///
+/// The two markers differ in what happens when the backend cannot form the jump.
+/// musttail is a demand, and an unmet one aborts the process; tail is a permission,
+/// and an unmet one is silently the ordinary call the site would have been. So the
+/// tests below split in two. Everything up to the last pair is a question of whether
+/// a jump is *correct* here at all, and answering no means leaving the site alone.
+/// The last pair only decides which of the two markers a correct site may carry -
+/// getting that wrong in the weaker direction costs a tail call the prefix never
+/// obliged us to make, which is what declining would have cost anyway.
+llvm::CallInst::TailCallKind
 MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
                                      llvm::FunctionType *callee_type)
 {
 	if (!prefixes.tail)
-		return false;
+		return llvm::CallInst::TCK_None;
 
 	/*
-	 * A musttail call has to keep the caller's own convention, so only a
-	 * direct call to another fastcc method qualifies: an indirect target or a
-	 * runtime-implemented one is a legacy call, lowered to a different
-	 * prototype after the fact.
+	 * A tail call keeps the caller's own convention, so only a direct call to
+	 * another fastcc method qualifies: an indirect target or a runtime-implemented
+	 * one is a legacy call, lowered to a different prototype after the fact.
 	 */
 	if (callee_method == nullptr || implemented_outside_il (callee_method))
-		return false;
+		return llvm::CallInst::TCK_None;
 
 	/*
 	 * A filter body is a function of its own over the parent's frame. Returning
@@ -324,15 +336,11 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	 * hand away.
 	 */
 	if (filter_mode)
-		return false;
+		return llvm::CallInst::TCK_None;
 
 	/* This frame owes an LMF pop on the way out, so it cannot be discarded. */
 	if (method->save_lmf || lmf_slot != nullptr)
-		return false;
-
-	/* A return that is really a pointer the caller passed in cannot be forwarded. */
-	if (!returns_in_registers (callee_type->getReturnType ()))
-		return false;
+		return llvm::CallInst::TCK_None;
 
 	/*
 	 * The ret the prefix promises has to follow at once so it can be folded into
@@ -342,48 +350,72 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	const unsigned char *cursor = code + ip;
 
 	if (ip >= code_size || mono_opcode_value (&cursor, code + code_size) != MONO_CEE_RET)
-		return false;
+		return llvm::CallInst::TCK_None;
 	if (blocks.find (ip) != blocks.end ())
-		return false;
+		return llvm::CallInst::TCK_None;
 	if (stack.size () != static_cast<size_t> (callee_sig->param_count) + callee_sig->hasthis)
-		return false;
+		return llvm::CallInst::TCK_None;
+
+	/*
+	 * That ret is this method's own, so the two returns have to be the same LLVM
+	 * type. An ordinary call would have widened its result onto the evaluation
+	 * stack and let the ret narrow it back on the way out; folding the two together
+	 * leaves nowhere for that to happen.
+	 */
+	if (callee_type->getReturnType () != function->getReturnType ())
+		return llvm::CallInst::TCK_None;
 
 	/*
 	 * A protected call has to be an invoke, which cannot be a tail call - and
 	 * III.2.4 forbids tail. inside a protected region anyway.
 	 */
 	if (innermost_try (offset) >= 0)
-		return false;
+		return llvm::CallInst::TCK_None;
 
 	/*
-	 * Nothing that could point into this frame may outlive it: a value type's
-	 * this, managed pointers, unmanaged pointers, function pointers. An indirect
+	 * Both markers carry the same promise: the callee touches nothing of this
+	 * frame, which is what lets the frame go before the callee runs. So nothing
+	 * that could point into it may travel in an argument - a value type's this,
+	 * managed pointers, unmanaged pointers, function pointers. An indirect
 	 * target's this is a pointer to nobody-knows-what, so it gets the same
-	 * treatment a value type's would.
+	 * treatment a value type's would. Aggregates need no test: on this convention
+	 * they pass as first-class values, and only the legacy ABI ever hands over a
+	 * pointer to one.
 	 */
 	if (callee_sig->hasthis
 	    && (callee_method == nullptr || m_class_is_valuetype (callee_method->klass)))
-		return false;
+		return llvm::CallInst::TCK_None;
 
 	for (int i = 0; i < callee_sig->param_count; ++i) {
 		MonoType *param = callee_sig->params[i];
 
 		if (param->byref || param->type == MONO_TYPE_PTR || param->type == MONO_TYPE_FNPTR)
-			return false;
+			return llvm::CallInst::TCK_None;
 	}
 
 	/* The transition into native code saves state a tail call would skip. */
 	if (callee_sig->pinvoke
 	    || (callee_method != nullptr && (callee_method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)))
-		return false;
+		return llvm::CallInst::TCK_None;
 
 	/*
-	 * musttail is a guarantee, and the backend can only always keep it when the
-	 * jump changes nothing about the frame's argument area: identical prototypes,
-	 * down to the extension attributes that say how narrow integers fill their
-	 * registers.
+	 * A guarantee is only worth demanding where the backend can always keep it:
+	 * where the jump changes nothing about the frame's argument area - identical
+	 * prototypes, down to the extension attributes that say how narrow integers
+	 * fill their registers - and where the return does not arrive through a hidden
+	 * pointer, which switches tail-call elimination off outright.
+	 *
+	 * That set is the one III.2.4 makes mandatory, so demanding it is what turns
+	 * the spec's obligation into something that fails loudly rather than quietly.
+	 * Outside it the prefix is still worth marking: an argument area that has to be
+	 * rebuilt is one the backend will often still rebuild in place, and where it
+	 * will not, the site is exactly the ordinary call declining would have left.
 	 */
-	return matching_call_abi (callee_sig, callee_type);
+	if (returns_in_registers (callee_type->getReturnType ())
+	    && matching_call_abi (callee_sig, callee_type))
+		return llvm::CallInst::TCK_MustTail;
+
+	return llvm::CallInst::TCK_Tail;
 }
 
 /// Whether a call to CALLEE_SIG could replace this method's own frame: the same
@@ -415,20 +447,25 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 	return extensions (caller_sig) == extensions (callee_sig);
 }
 
-/// The honored form of a tail. call: a musttail call feeding a ret directly, which
-/// is the shape LLVM turns into a jump at every optimization level - including the
-/// one tier 0 compiles at, where the sibling-call optimization that would find an
-/// ordinary call in tail position never runs. The IL ret that should_tail_call
-/// verified comes next is consumed here, since this ret is its translation.
+/// The honored form of a tail. call: a marked call feeding a ret directly, which is
+/// the shape LLVM turns into a jump. The IL ret that should_tail_call verified comes
+/// next is consumed here, since this ret is its translation.
+///
+/// The marker is what the jump is made of, not a hint about one. The backend never
+/// turns an *unmarked* call in tail position into a sibling call, at any
+/// optimization level, so a site left plain is a site that keeps its frame. That is
+/// why KIND is worth setting even when it is only the weaker of the two: the
+/// alternative is not a jump that might happen anyway, it is no jump at all.
 llvm::Error
 MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
-                                   llvm::ArrayRef<llvm::Value *> args, size_t arg_slots)
+                                   llvm::ArrayRef<llvm::Value *> args,
+                                   llvm::CallInst::TailCallKind kind, size_t arg_slots)
 {
 	llvm::CallInst *call = builder.CreateCall (callee, args);
 
 	if (auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ()))
 		carry_return_attributes (call, target);
-	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
+	call->setTailCallKind (kind);
 	call->setCallingConv (llvm::CallingConv::Fast);
 	pop_stack (arg_slots);
 
@@ -526,14 +563,16 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 
 	/*
 	 * jmp releases this frame by definition, so the jump is the point rather than
-	 * an optimization - but musttail is still only markable where the backend can
-	 * always keep it. A return that arrives through a hidden pointer cannot be
-	 * forwarded, and there the call weakens to an ordinary one.
+	 * an optimization - but musttail is still only demandable where the backend can
+	 * always keep it. matching_call_abi has settled the prototype above, so all that
+	 * is left to ask is whether the return arrives through a hidden pointer. Where
+	 * it does the site weakens to a plain tail call, which the backend jumps through
+	 * where it can and quietly does not where it cannot.
 	 */
-	if (returns_in_registers ((*declaration)->getReturnType ())) {
-		carry_return_attributes (call, *declaration);
-		call->setTailCallKind (llvm::CallInst::TCK_MustTail);
-	}
+	carry_return_attributes (call, *declaration);
+	call->setTailCallKind (returns_in_registers ((*declaration)->getReturnType ())
+	                               ? llvm::CallInst::TCK_MustTail
+	                               : llvm::CallInst::TCK_Tail);
 	call->setCallingConv (llvm::CallingConv::Fast);
 
 	if (call->getType ()->isVoidTy ())
@@ -888,9 +927,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	 * is a dispatched one - what the slot holds is a legacy entry, whose
 	 * convention is not this method's.
 	 */
-	if (!keyed && !through_slot
-	    && should_tail_call (sig, callee_method, callee.getFunctionType ()))
-		return emit_tail_call (builder, callee, *args,
+	llvm::CallInst::TailCallKind tail_kind =
+		keyed || through_slot
+			? llvm::CallInst::TCK_None
+			: should_tail_call (sig, callee_method, callee.getFunctionType ());
+
+	if (tail_kind != llvm::CallInst::TCK_None)
+		return emit_tail_call (builder, callee, *args, tail_kind,
 		                       sig->param_count + sig->hasthis);
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);

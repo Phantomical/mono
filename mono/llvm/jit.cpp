@@ -11,6 +11,7 @@
 #include "passes/array-address.hpp"
 #include "passes/legacy-abi.hpp"
 #include "passes/lower-builtins.hpp"
+#include "passes/restore-tail-position.hpp"
 #include "stubs.hpp"
 
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
@@ -325,6 +326,15 @@ MonoJit::run_tier0_pipeline (Module &m)
 	 * calls, so every reflection invoke - shows up twice in a stack trace.
 	 */
 	fpm.addPass (TailCallElimPass ());
+
+	/*
+	 * Last, because what it repairs is the pipeline's own doing: SimplifyCFG
+	 * merges a function's returning blocks into one, which turns the ret a tail
+	 * call needs to sit in front of into a branch and leaves the marker meaning
+	 * nothing. It steps around musttail, whose adjacency is a verifier rule, and
+	 * around nothing else.
+	 */
+	fpm.addPass (RestoreTailPositionPass ());
 	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
 	mpm.addPass (LegacyAbiPass ());
 	mpm.run (m, mam);

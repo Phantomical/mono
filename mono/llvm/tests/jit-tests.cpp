@@ -13,6 +13,7 @@
 #include "passes/lower-builtins.hpp"
 
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
@@ -242,6 +243,36 @@ TEST_F (JitExecution, LowerBuiltinsGivesTheCreatorItsNullThis)
 	EXPECT_EQ (t->count ("mono.builtin."), 0u) << t->text ();
 	EXPECT_EQ (t->count ("call ptr @\"string:.ctor"), 1u) << t->text ();
 	EXPECT_EQ (t->count ("(ptr null"), 1u) << t->text ();
+	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
+}
+
+// A call only becomes a jump if a ret follows it in the same block, and the
+// pipeline's own SimplifyCFG takes that away: a method with a base case has two
+// returns, which get merged into one block reached by a branch. musttail is
+// protected from that by a verifier rule and a plain tail call is not, so
+// without the repair the marker survives the pipeline meaning nothing - no
+// diagnostic, and a recursion that should run in constant space overflows.
+TEST_F (JitExecution, TheTier0PipelineLeavesATailCallInTailPosition)
+{
+	std::unique_ptr<Translation> t = translate_method ("calls", "Calls:TailMerged");
+	ASSERT_NE (t->function, nullptr) << t->error;
+	ASSERT_EQ (t->count ("tail call"), 1u) << t->text ();
+
+	MonoJit::run_tier0_pipeline (*t->module);
+
+	const CallInst *jump = nullptr;
+
+	for (const BasicBlock &block : *t->function) {
+		for (const Instruction &instruction : block) {
+			auto *call = dyn_cast<CallInst> (&instruction);
+
+			if (call != nullptr && call->getTailCallKind () == CallInst::TCK_Tail)
+				jump = call;
+		}
+	}
+
+	ASSERT_NE (jump, nullptr) << t->text ();
+	EXPECT_TRUE (isa<ReturnInst> (jump->getNextNode ())) << t->text ();
 	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
 }
 

@@ -232,6 +232,7 @@ const MethodRef translatable[] = {
 	{"calls", "Calls:TailVoid"},
 	{"calls", "Calls:TailVirtual"},
 	{"calls", "Calls:TailMismatch"},
+	{"calls", "Calls:TailMerged"},
 	{"calls", "Calls:TailByref"},
 	{"calls", "Calls:JumpsToHelper"},
 };
@@ -766,9 +767,9 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 }
 
 // A tail. call whose prototype matches the caller's is honored as a musttail
-// call - a guaranteed jump, which is what the prefix needs at tier 0, where the
-// sibling-call optimization that would find an unmarked call in tail position
-// never runs. A dispatched or indirect target is a legacy-boundary call whose
+// call - a guaranteed jump, which is the only form that fails loudly rather than
+// quietly, and so the only one worth using where III.2.4 makes the jump
+// mandatory. A dispatched or indirect target is a legacy-boundary call whose
 // prototype changes under LegacyAbiPass, so the prefix is declined there.
 TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 {
@@ -777,6 +778,20 @@ TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 0u);
 	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("musttail call"),
 	           0u);
+}
+
+// Where the guarantee cannot be made the prefix is still worth asking for. A
+// prototype that differs from the caller's is a jump the backend forms or does
+// not, and a plain tail call is how that question gets put to it - demanding it
+// would abort the process over a jump the prefix only ever permitted.
+TEST_F (TranslatorTest, AnUnmatchedTailCallIsStillMarked)
+{
+	const Translation &t = translate ("calls", "Calls:TailMismatch");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("musttail"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("notail"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("tail call"), 1u) << t.text ();
 }
 
 // The site carries the callee's return attributes itself. Tail-call eligibility
@@ -792,18 +807,17 @@ TEST_F (TranslatorTest, AMustTailCallCarriesTheReturnExtension)
 	EXPECT_EQ (t.count ("musttail call fastcc zeroext i8"), 1u) << t.text ();
 }
 
-// Declining a tail. prefix is always legal, and it is how every risky case is
-// handled: a prototype that differs from the caller's, or an argument that could
-// point into the caller's frame. A declined site is an ordinary call, which the
-// notail policy then covers like any other.
-TEST_F (TranslatorTest, ARiskyTailCallFallsBackToAPlainCall)
+// Declining a tail. prefix is always legal, and it is how the unsafe cases are
+// handled. Both markers promise the callee touches nothing of this frame, so an
+// argument that could point into it rules out either one - the site becomes an
+// ordinary call, which the notail policy then covers like any other.
+TEST_F (TranslatorTest, AnUnsafeTailCallFallsBackToAPlainCall)
 {
-	for (const char *name : {"Calls:TailMismatch", "Calls:TailByref"}) {
-		const Translation &t = translate ("calls", name);
+	const Translation &t = translate ("calls", "Calls:TailByref");
 
-		ASSERT_NE (t.function, nullptr) << name << ": " << t.error;
-		EXPECT_EQ (t.count ("musttail"), 0u) << name;
-	}
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("musttail"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("notail call"), 1u) << t.text ();
 }
 
 // Frames have to survive the optimizer: without notail, tailcallelim rewrites a

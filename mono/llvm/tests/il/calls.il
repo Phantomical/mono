@@ -214,10 +214,28 @@
 		ret
 	}
 
-	// The prototypes differ, so the prefix is declined and the call stays put.
+	// The prototypes differ, so the jump cannot be demanded - but it can still be
+	// asked for, and the backend forms it where the argument area allows.
 	.method public static int32 TailMismatch (int32 a, int32 b) cil managed
 	{
 		.maxstack 1
+		ldarg.0
+		tail.
+		call int32 Calls::Helper (int32)
+		ret
+	}
+
+	// Two returns, which is what every recursion with a base case looks like. The
+	// optimizer merges them into one block and leaves the tail call in front of a
+	// branch; nothing but the marker says the ret has to come back.
+	.method public static int32 TailMerged (int32 a, int32 b) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		brtrue.s IL_recurse
+		ldc.i4.0
+		ret
+	IL_recurse:
 		ldarg.0
 		tail.
 		call int32 Calls::Helper (int32)
