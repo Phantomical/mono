@@ -663,8 +663,17 @@ MethodLLVMEmitter::emit ()
 	 * methods (ECMA-335 II.10.5.3), and the method's own entry is the one
 	 * point every way of reaching it funnels through - stubs, vtable slots,
 	 * delegates, calli - so the check lives here rather than at call sites.
+	 *
+	 * A native-to-managed wrapper is the exception. It is entered from C on a
+	 * thread that may not be attached yet, and attaching it is the first thing
+	 * its body does; anything running before that - the class initializer's own
+	 * icall included - reads a null LMF address off a thread that has none. The
+	 * wrapper is not one of the class's methods anyway, only glue in front of
+	 * one, and the method it goes on to call runs the initializer at its own
+	 * entry, by which point the thread is attached.
 	 */
-	if (mono_class_needs_cctor_run (method->klass, method))
+	if (method->wrapper_type != MONO_WRAPPER_NATIVE_TO_MANAGED
+	    && mono_class_needs_cctor_run (method->klass, method))
 		if (auto error = emit_class_init (builder, method->klass))
 			return std::move (error);
 
