@@ -53,9 +53,11 @@ extern "C" {
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/RuntimeLibcalls.h>
+#include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/TargetParser/Triple.h>
 
-#include <cmath>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -144,18 +146,56 @@ runtime_helpers ()
 		{ "mono_personality", (void *) &mono_personality },
 
 		/*
-		 * The libcalls LLVM lowers its memory and float-remainder operations
-		 * to. The translator never names these; codegen synthesizes the calls,
-		 * so linking against the process's libc is part of what the backend has
-		 * to provide.
+		 * Not a runtime libcall as far as RuntimeLibcallsInfo is concerned -
+		 * amd64 has no MEMCMP libcall - so resolvable_libcalls () does not
+		 * cover it, but MergeICmps builds calls to it at the IR level.
 		 */
 		{ "memcmp", (void *) &memcmp },
-		{ "memcpy", (void *) &memcpy },
-		{ "memmove", (void *) &memmove },
-		{ "memset", (void *) &memset },
-		{ "fmod", (void *) static_cast<double (*) (double, double)> (&fmod) },
-		{ "fmodf", (void *) static_cast<float (*) (float, float)> (&fmodf) },
 	};
+}
+
+/*
+ * The runtime libcalls this process can satisfy: every name codegen is allowed to
+ * synthesize for TRIPLE that something already loaded defines, minus whatever
+ * TAKEN spells out for itself.
+ *
+ * The translator never names any of these - codegen invents the calls during
+ * lowering, so the first anyone hears of one is a materialization failure. Asking
+ * LLVM which names it might invent is the only way to get ahead of that; the list
+ * is generated from the same tables lowering picks from, so it tracks the LLVM the
+ * backend is built against instead of being maintained by hand.
+ *
+ * Names that resolve to nothing are dropped rather than diagnosed. Most of what
+ * amd64 declares available is soft-float and small-integer arithmetic it has
+ * instructions for, or the __atomic_/__sync_ families that live in a libatomic
+ * nothing here links, and none of it is reachable in practice.
+ */
+std::vector<Helper>
+resolvable_libcalls (const Triple &triple, const std::vector<Helper> &taken)
+{
+	std::unordered_set<std::string> skip;
+	for (const Helper &helper : taken)
+		skip.insert (helper.name);
+
+	/* Without this the search below only sees libraries LLVM itself opened. */
+	sys::DynamicLibrary::LoadLibraryPermanently (nullptr);
+
+	RTLIB::RuntimeLibcallsInfo libcalls (triple);
+	std::vector<Helper> resolved;
+
+	for (RTLIB::LibcallImpl impl : RTLIB::libcall_impls ()) {
+		if (!libcalls.isAvailable (impl))
+			continue;
+
+		StringRef name = RTLIB::RuntimeLibcallsInfo::getLibcallImplName (impl);
+		if (name.empty () || skip.count (name.str ()))
+			continue;
+
+		if (void *addr = sys::DynamicLibrary::SearchForAddressOfSymbol (name.str ()))
+			resolved.push_back ({ name.data (), addr });
+	}
+
+	return resolved;
 }
 
 /*
@@ -396,9 +436,19 @@ Backend::state_for (MonoDomain *domain)
 			"the llvm backend failed to start for this domain: %s",
 			toString (jit.takeError ()).c_str ());
 
-	for (const Helper &helper : runtime_helpers ())
+	std::vector<Helper> helpers = runtime_helpers ();
+	for (const Helper &helper : helpers)
 		if (Error err = (*jit)->register_symbol (helper.name, helper.address))
 			return std::move (err);
+
+	std::vector<Helper> libcalls = resolvable_libcalls ((*jit)->triple (), helpers);
+	for (const Helper &libcall : libcalls)
+		if (Error err = (*jit)->register_symbol (libcall.name, libcall.address))
+			return std::move (err);
+	if (tracing ())
+		fprintf (stderr, "[llvm-jit] %zu runtime libcalls registered\n",
+		         libcalls.size ());
+
 	if (Error err = (*jit)->register_symbol (
 	        "mono_llvm_jit_body_for_current_domain",
 	        (void *) &Backend::body_for_current_domain))

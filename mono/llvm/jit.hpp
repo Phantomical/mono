@@ -139,8 +139,8 @@ public:
 	/// The module gets the tier-0 treatment (run_tier0_pipeline + FastISel)
 	/// and lands in a JITDylib of its own that resolves external symbols
 	/// through register_symbol () and the published stubs, and nothing else -
-	/// there is no process-symbol search, so an unregistered helper fails the
-	/// compile loudly.
+	/// a lookup never falls back to the process, so an unregistered helper
+	/// fails the compile loudly.
 	llvm::Expected<CompiledMethod> compile (llvm::orc::ThreadSafeModule tsm,
 	                                        llvm::StringRef entry);
 
@@ -157,6 +157,9 @@ public:
 	/// The DataLayout modules compiled here must carry. compile () stamps it
 	/// on modules that do not have one yet.
 	const llvm::DataLayout &data_layout () const;
+
+	/// The target codegen is emitting for.
+	const llvm::Triple &triple () const;
 
 private:
 	explicit MonoJit (std::unique_ptr<llvm::orc::LLJIT> jit);

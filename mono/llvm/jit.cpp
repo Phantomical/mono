@@ -433,6 +433,12 @@ MonoJit::data_layout () const
 	return jit_->getDataLayout ();
 }
 
+const Triple &
+MonoJit::triple () const
+{
+	return jit_->getExecutionSession ().getTargetTriple ();
+}
+
 Error
 MonoJit::register_symbol (StringRef name, void *addr)
 {
