@@ -396,7 +396,9 @@ mono_thread_interruption_checkpoint_void (void);
 MonoExceptionHandle
 mono_thread_interruption_checkpoint_handle (void);
 
-ICALL_EXTERN_C
+/* G_EXTERN_C rather than ICALL_EXTERN_C: the backend calls this from C++, and
+ * the definition is in C whether or not the icalls are exported. */
+G_EXTERN_C
 MonoException* mono_thread_force_interruption_checkpoint_noraise (void);
 
 /**

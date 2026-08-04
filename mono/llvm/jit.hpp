@@ -115,6 +115,10 @@ public:
 	///
 	/// Threads racing on that first call compile once and all land on the same
 	/// code. Define-only, like create_stub ().
+	///
+	/// That first call does not always continue into the method: an async
+	/// abort that arrived while the thread was compiling is thrown from the
+	/// caller's frame instead, which is lazy-entry.hpp's business.
 	llvm::Error create_lazy_stub (llvm::StringRef name,
 	                              LazyCompileFunction compile);
 

@@ -6,6 +6,7 @@
 #include "jit.hpp"
 
 #include "compiler.hpp"
+#include "lazy-entry.hpp"
 #include "nearmem.hpp"
 #include "passes/array-address.hpp"
 #include "passes/legacy-abi.hpp"
@@ -393,7 +394,7 @@ MonoJit::create ()
 	self->redirectable_ = std::move (*redirectable);
 
 	auto callbacks =
-		LocalJITCompileCallbackManager<OrcX86_64_SysV>::Create (
+		LocalJITCompileCallbackManager<MonoOrcX86_64_SysV>::Create (
 			es, ExecutorAddr::fromPtr (&lazy_compile_failed));
 	if (!callbacks)
 		return callbacks.takeError ();
