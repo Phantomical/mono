@@ -27,12 +27,21 @@
 #include <vector>
 
 namespace llvm {
+class TargetMachine;
 namespace orc {
 class JITCompileCallbackManager;
 }
 } // namespace llvm
 
 namespace mono {
+
+/// The host TargetMachine every compile runs against - code model Small+PIC and
+/// FastISel code generation.
+///
+/// One instance per calling thread, reused for every module that thread
+/// compiles: building one costs more than compiling a typical method, and a
+/// TargetMachine cannot be shared across threads.
+llvm::TargetMachine &host_target_machine ();
 
 /// Where a compiled method's pieces landed: the code itself, and the side
 /// tables the compiler wrote next to it for the runtime to read back.
@@ -127,9 +136,10 @@ public:
 	llvm::Expected<CompiledMethod> compile (llvm::orc::ThreadSafeModule tsm,
 	                                        llvm::StringRef entry);
 
-	/// The tier-0 IR pipeline, run over M in place: the stock per-module O1
-	/// pipeline, whose load-bearing effect is mem2reg over the allocas the
-	/// translator routes every argument, local and spill slot through.
+	/// The tier-0 IR pipeline, run over M in place: the stock O1 function
+	/// simplification pipeline, whose load-bearing effect is mem2reg over the
+	/// allocas the translator routes every argument, local and spill slot
+	/// through.
 	///
 	/// Static and public so tests can assert what it does to translator
 	/// output; compile () applies it to every module through the LLJIT

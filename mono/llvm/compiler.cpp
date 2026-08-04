@@ -27,6 +27,7 @@
 
 #include "compiler.hpp"
 
+#include "jit.hpp"
 #include "sidetables.hpp"
 
 #include "../mini/llvm/engine.hpp"
@@ -357,23 +358,19 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 } // namespace
 
 MethodObjectCompiler::MethodObjectCompiler (orc::JITTargetMachineBuilder jtmb)
-	: IRCompiler (orc::irManglingOptionsFromTargetOptions (jtmb.getOptions ())),
-	  jtmb_ (std::move (jtmb))
+	: IRCompiler (orc::irManglingOptionsFromTargetOptions (jtmb.getOptions ()))
 {
 }
 
 Expected<std::unique_ptr<MemoryBuffer>>
 MethodObjectCompiler::operator() (Module &m)
 {
-	Expected<std::unique_ptr<TargetMachine>> tm = jtmb_.createTargetMachine ();
-	if (!tm)
-		return tm.takeError ();
-
 	MonoEHSideChannel side_channel;
 	SmallVector<char, 0> buffer;
 	{
 		raw_svector_ostream stream (buffer);
-		if (Error err = emit_object (**tm, m, stream, side_channel))
+		if (Error err = emit_object (host_target_machine (), m, stream,
+		                             side_channel))
 			return std::move (err);
 	}
 

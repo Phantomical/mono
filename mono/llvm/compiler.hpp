@@ -18,17 +18,17 @@ namespace mono {
 /// tables the runtime reads back - the clause table and the frame description -
 /// are written into the object next to the code they describe.
 ///
-/// A fresh TargetMachine is built per call, so the compiler carries no mutable
-/// cross-call state and stays safe under concurrent compiles.
+/// Codegen runs against the calling thread's host_target_machine (), so the
+/// compiler carries no mutable cross-call state and stays safe under concurrent
+/// compiles.
 class MethodObjectCompiler : public llvm::orc::IRCompileLayer::IRCompiler {
 public:
+	/// JTMB supplies only the mangling options; the target itself is the host
+	/// one every compile in this backend shares.
 	explicit MethodObjectCompiler (llvm::orc::JITTargetMachineBuilder jtmb);
 
 	llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
 	operator() (llvm::Module &m) override;
-
-private:
-	llvm::orc::JITTargetMachineBuilder jtmb_;
 };
 
 } // namespace mono

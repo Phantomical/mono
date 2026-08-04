@@ -23,6 +23,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Transforms/Scalar/TailRecursionElimination.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
@@ -208,7 +209,7 @@ apply_options ()
 }
 
 /*
- * The host target configuration every compile uses.
+ * The host target configuration every compile uses, detected once.
  *
  * Code model Small with Reloc::PIC_ rather than the JIT default (Large):
  * JITLink reroutes any reference it cannot prove in-range through an in-graph
@@ -224,28 +225,48 @@ apply_options ()
 static JITTargetMachineBuilder
 host_target_machine_builder ()
 {
-	ensure_native_target ();
+	static const JITTargetMachineBuilder jtmb = [] {
+		ensure_native_target ();
 
-	auto jtmb = cantFail (JITTargetMachineBuilder::detectHost ());
-	jtmb.setCodeGenOptLevel (CodeGenOptLevel::None);
-	jtmb.setCPU (std::string (sys::getHostCPUName ()));
-	jtmb.setCodeModel (CodeModel::Small);
-	jtmb.setRelocationModel (Reloc::PIC_);
+		auto b = cantFail (JITTargetMachineBuilder::detectHost ());
+		b.setCodeGenOptLevel (CodeGenOptLevel::None);
+		b.setCPU (std::string (sys::getHostCPUName ()));
+		b.setCodeModel (CodeModel::Small);
+		b.setRelocationModel (Reloc::PIC_);
 
-	/*
-	 * If codegen ever reaches an LLVM `unreachable` (a translator bug, or UB
-	 * the IL could not rule out), a `ud2` beats falling through into whatever
-	 * bytes come next.
-	 */
-	jtmb.getOptions ().TrapUnreachable = true;
+		/*
+		 * If codegen ever reaches an LLVM `unreachable` (a translator bug, or
+		 * UB the IL could not rule out), a `ud2` beats falling through into
+		 * whatever bytes come next.
+		 */
+		b.getOptions ().TrapUnreachable = true;
 
-	StringMap<bool> features = sys::getHostCPUFeatures ();
-	std::vector<std::string> feature_vec;
-	for (auto &kv : features)
-		if (kv.second)
-			feature_vec.push_back ((Twine ("+") + kv.first ()).str ());
-	jtmb.addFeatures (feature_vec);
+		StringMap<bool> features = sys::getHostCPUFeatures ();
+		std::vector<std::string> feature_vec;
+		for (auto &kv : features)
+			if (kv.second)
+				feature_vec.push_back ((Twine ("+") + kv.first ()).str ());
+		b.addFeatures (feature_vec);
+		return b;
+	}();
 	return jtmb;
+}
+
+/*
+ * One per compile thread, because building one is far from free - the X86
+ * subtarget alone resolves a ~200-entry feature string against the implication
+ * graph and then builds every lowering and legalizer table behind it, which for
+ * methods the size the translator emits costs more than compiling them. A
+ * TargetMachine is not safe to share between threads (this is why ORC's stock
+ * ConcurrentIRCompiler builds one per module), but reusing one for module after
+ * module on a single thread is exactly what SimpleCompiler does.
+ */
+TargetMachine &
+host_target_machine ()
+{
+	static thread_local std::unique_ptr<TargetMachine> tm =
+		cantFail (host_target_machine_builder ().createTargetMachine ());
+	return *tm;
 }
 
 void
@@ -255,10 +276,7 @@ MonoJit::run_tier0_pipeline (Module &m)
 	 * A TargetMachine so TargetTransformInfo is real; without one the
 	 * cost-model-driven parts of the pipeline silently no-op.
 	 */
-	std::unique_ptr<TargetMachine> tm =
-		cantFail (host_target_machine_builder ().createTargetMachine ());
-
-	PassBuilder pb (tm.get ());
+	PassBuilder pb (&host_target_machine ());
 	LoopAnalysisManager lam;
 	FunctionAnalysisManager fam;
 	CGSCCAnalysisManager cgam;
@@ -278,7 +296,27 @@ MonoJit::run_tier0_pipeline (Module &m)
 	 */
 	mpm.addPass (ArrayAddressPass ());
 	mpm.addPass (LowerBuiltinsPass ());
-	mpm.addPass (pb.buildPerModuleDefaultPipeline (OptimizationLevel::O1));
+
+	/*
+	 * The function simplification pipeline rather than the whole O1 module
+	 * pipeline: a module here is a single method, so the module and CGSCC
+	 * layers have nothing to work on - no internal function to specialize, and
+	 * no callee body to inline, since every call the translator emits leaves
+	 * the module by symbol. Running them anyway costs a large fraction of
+	 * tier-0 compile time.
+	 */
+	FunctionPassManager fpm = pb.buildFunctionSimplificationPipeline (
+		OptimizationLevel::O1, ThinOrFullLTOPhase::None);
+
+	/*
+	 * At O1 this is the one pass that only the module pipeline would have run,
+	 * and it is load-bearing: it marks the entry thunk's call to the method
+	 * body as a tail call, which is what lets the thunk leave no frame behind.
+	 * Without it every method entered through its thunk - anything the runtime
+	 * calls, so every reflection invoke - shows up twice in a stack trace.
+	 */
+	fpm.addPass (TailCallElimPass ());
+	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
 	mpm.addPass (LegacyAbiPass ());
 	mpm.run (m, mam);
 }
