@@ -242,6 +242,26 @@
 		ret
 	}
 
+	// Two tail calls sharing one merged return. Restoring the first withdraws a
+	// predecessor and collapses the phi the merge left behind, so the second has
+	// to be recognised in the shape that collapse produces rather than the one it
+	// started in.
+	.method public static int32 TailTwoWays (int32 a, int32 b) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		brtrue.s IL_second
+		ldarg.1
+		tail.
+		call int32 Calls::Helper (int32)
+		ret
+	IL_second:
+		ldarg.0
+		tail.
+		call int32 Calls::Helper (int32)
+		ret
+	}
+
 	// A managed pointer among the arguments could point into this frame, so the
 	// prefix is declined.
 	.method public static int32 TailByref (int32& p) cil managed

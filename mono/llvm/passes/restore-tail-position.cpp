@@ -26,10 +26,13 @@ wants_to_be_a_jump (const llvm::CallInst *call)
 /// What a ret in MERGED returns when it is reached from BLOCK: nothing for a void
 /// return, the value otherwise. Empty when that cannot be established here.
 ///
-/// A merged return block returns either nothing, a constant, or a phi over its
-/// predecessors - the last being what the merge itself creates. Anything else is
-/// a value defined somewhere that need not be available in BLOCK, so it is left
-/// alone rather than reasoned about.
+/// A merged return block returns either nothing or a phi over its predecessors,
+/// that phi being what the merge itself creates. The other two cases are what the
+/// phi decays to once predecessors start leaving: withdrawing the second-to-last
+/// one collapses it to the single value that remains, which is either a constant
+/// or something the last predecessor computes. Anything else is defined somewhere
+/// that need not be available in BLOCK, so it is left alone rather than reasoned
+/// about.
 std::optional<llvm::Value *>
 returned_value_from (llvm::ReturnInst *ret, llvm::BasicBlock *merged, llvm::BasicBlock *block)
 {
@@ -41,7 +44,10 @@ returned_value_from (llvm::ReturnInst *ret, llvm::BasicBlock *merged, llvm::Basi
 	if (auto *phi = llvm::dyn_cast<llvm::PHINode> (value);
 	    phi != nullptr && phi->getParent () == merged)
 		return phi->getIncomingValueForBlock (block);
-	if (llvm::isa<llvm::Constant> (value))
+	if (llvm::isa<llvm::Constant> (value) || llvm::isa<llvm::Argument> (value))
+		return value;
+	if (auto *instruction = llvm::dyn_cast<llvm::Instruction> (value);
+	    instruction != nullptr && instruction->getParent () == block)
 		return value;
 
 	return std::nullopt;

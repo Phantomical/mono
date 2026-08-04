@@ -233,6 +233,7 @@ const MethodRef translatable[] = {
 	{"calls", "Calls:TailVirtual"},
 	{"calls", "Calls:TailMismatch"},
 	{"calls", "Calls:TailMerged"},
+	{"calls", "Calls:TailTwoWays"},
 	{"calls", "Calls:TailByref"},
 	{"calls", "Calls:JumpsToHelper"},
 };

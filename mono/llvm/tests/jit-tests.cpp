@@ -276,6 +276,36 @@ TEST_F (JitExecution, TheTier0PipelineLeavesATailCallInTailPosition)
 	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
 }
 
+// Every tail call gets its ret back, not just the first. Restoring one withdraws
+// a predecessor from the merged block, which collapses the phi standing in for
+// the returned value - so the ones that follow arrive at a block that no longer
+// looks the way the merge left it.
+TEST_F (JitExecution, EveryMergedTailCallGetsItsReturnBack)
+{
+	std::unique_ptr<Translation> t = translate_method ("calls", "Calls:TailTwoWays");
+	ASSERT_NE (t->function, nullptr) << t->error;
+	ASSERT_EQ (t->count ("tail call"), 2u) << t->text ();
+
+	MonoJit::run_tier0_pipeline (*t->module);
+
+	unsigned jumps = 0;
+
+	for (const BasicBlock &block : *t->function) {
+		for (const Instruction &instruction : block) {
+			auto *call = dyn_cast<CallInst> (&instruction);
+
+			if (call == nullptr || call->getTailCallKind () != CallInst::TCK_Tail)
+				continue;
+
+			++jumps;
+			EXPECT_TRUE (isa<ReturnInst> (call->getNextNode ())) << t->text ();
+		}
+	}
+
+	EXPECT_EQ (jumps, 2u) << t->text ();
+	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
+}
+
 } // namespace
 } // namespace test
 } // namespace mono
