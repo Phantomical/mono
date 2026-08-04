@@ -166,14 +166,15 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 		                   + " is not one the runtime registered");
 
 	llvm::Expected<std::vector<llvm::Value *>> args =
-		pop_call_arguments (builder, info->sig);
+		pop_call_arguments (builder, info->sig, info->sig->pinvoke);
 	if (!args)
 		return args.takeError ();
 
 	llvm::Value *result;
 
 	if (info->wrapper != nullptr && info->wrapper == info->func) {
-		llvm::Expected<llvm::FunctionType *> type = convert_method_signature (info->sig);
+		llvm::Expected<llvm::FunctionType *> type =
+			convert_method_signature (info->sig, info->sig->pinvoke);
 		if (!type)
 			return type.takeError ();
 

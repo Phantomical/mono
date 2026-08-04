@@ -90,7 +90,8 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 /// is settled by the caller, which is the only one that knows whether the call is
 /// virtual.
 llvm::Expected<std::vector<llvm::Value *>>
-MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig)
+MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
+                                       bool native)
 {
 	size_t count = sig->param_count + sig->hasthis;
 
@@ -109,7 +110,7 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 		}
 
 		llvm::Expected<llvm::Value *> converted = coerce_to_argument (
-			builder, value, sig->params[i - sig->hasthis], sig->pinvoke);
+			builder, value, sig->params[i - sig->hasthis], native);
 
 		if (!converted)
 			return converted.takeError ();

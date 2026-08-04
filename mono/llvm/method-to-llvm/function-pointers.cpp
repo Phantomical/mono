@@ -286,7 +286,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		return llvm::Error::success ();
 	}
 
-	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (sig);
+	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (sig, sig->pinvoke);
 	if (!type)
 		return type.takeError ();
 
@@ -299,7 +299,8 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		ftn = builder.CreateIntToPtr (ftn, llvm::PointerType::get (context (), 0));
 	pop_stack (1);
 
-	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
+	llvm::Expected<std::vector<llvm::Value *>> args =
+		pop_call_arguments (builder, sig, sig->pinvoke);
 	if (!args)
 		return args.takeError ();
 

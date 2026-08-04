@@ -1572,12 +1572,12 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		names[0] = "this";
 
 	/*
-	 * A pinvoke signature arrives in marshalled layout, so the slot an
-	 * argument is spilled to has to be that shape and that size - the wrapper
-	 * reads the native fields straight out of it, past where the managed
-	 * layout would have ended.
+	 * A wrapper that is itself a native entry is called with its value types
+	 * already marshalled, so the slot an argument is spilled to has to be that
+	 * shape and that size - the body reads the native fields straight out of
+	 * it, past where the managed layout would have ended.
 	 */
-	bool native = sig->pinvoke;
+	bool native = native_signature ();
 
 	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);

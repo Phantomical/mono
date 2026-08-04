@@ -140,6 +140,21 @@ marshals_unchanged (MonoClass *klass)
 	       || m_class_is_enumtype (klass);
 }
 
+/// Whether METHOD is entered with SIG's value types already marshalled.
+///
+/// A pinvoke signature describes native code, but that is not enough on its own
+/// to say that a caller holds marshalled values. A [DllImport] method carries
+/// one too, and a managed call to it enters at the marshalling wrapper the
+/// runtime built - the marshalled layout only begins inside that wrapper, past
+/// where its arguments were converted. What does speak it is a method whose own
+/// body is native-facing: the wrapper a delegate is handed out to native code
+/// as, whose signature is the native one because it is the native entry.
+bool
+speaks_marshalled_layout (MonoMethod *method, MonoMethodSignature *sig)
+{
+	return sig->pinvoke != 0 && method->wrapper_type != MONO_WRAPPER_NONE;
+}
+
 /// One field of a value type, ready to be packed into a struct body.
 struct LayoutField {
 	int offset;
@@ -514,6 +529,12 @@ MethodLLVMEmitter::convert_native_vtype (MonoClass *klass)
 	return type;
 }
 
+bool
+MethodLLVMEmitter::native_signature () const
+{
+	return speaks_marshalled_layout (method, mono_method_signature_internal (method));
+}
+
 /// The alignment an instance of T needs in memory.
 ///
 /// The struct convert_vtype builds is packed, which the data layout reads as
@@ -560,8 +581,15 @@ MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 /// The LLVM function type for SIG, in this backend's own convention: every
 /// value in its natural type, value types by value as their struct, aggregate
 /// returns returned as aggregates. Only LegacyAbiPass ever lowers any of it.
+///
+/// NATIVE says the operands are in the layout marshalling produced rather than
+/// the managed one, which is what a signature the C side was compiled against
+/// describes. Whether a given pinvoke signature is being used that way is the
+/// caller's to know: an indirect call through one really does reach native
+/// code, while a [DllImport] method's own signature is a description of the
+/// native function and not of the wrapper every managed caller enters.
 llvm::Expected<llvm::FunctionType *>
-MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
+MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool native)
 {
 	/*
 	 * The runtime's vararg convention passes a signature cookie in a stack slot
@@ -574,14 +602,6 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 		return conversion_error ("a vararg signature uses the runtime's cookie "
 		                         "convention");
 
-	/*
-	 * A pinvoke signature is the one the C side was compiled against, so its
-	 * value types are in the layout marshalling produced rather than the
-	 * managed one. Both directions need this: the wrapper around a pinvoke
-	 * calls out with a marshalled struct, and the wrapper a delegate is
-	 * entered through is called with one.
-	 */
-	bool native = sig->pinvoke;
 	llvm::Expected<llvm::Type *> ret = convert_type (sig->ret, native);
 
 	if (!ret)
@@ -679,7 +699,8 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	if (method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (method);
 
-	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (sig);
+	llvm::Expected<llvm::FunctionType *> type =
+		convert_method_signature (sig, speaks_marshalled_layout (method, sig));
 	if (!type)
 		return type.takeError ();
 
