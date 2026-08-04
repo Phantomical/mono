@@ -52,7 +52,8 @@ namespace mono {
 llvm::Error
 MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 {
-	MonoType *ret = mono_method_signature_internal (method)->ret;
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+	MonoType *ret = sig->ret;
 
 	if (ret->type == MONO_TYPE_VOID && !ret->byref) {
 		if (!stack.empty ())
@@ -68,7 +69,8 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 		return unbalanced_stack (1);
 
 	/* The return slot is a location like any other, so it narrows the same way. */
-	llvm::Expected<llvm::Value *> value = coerce_to_location (builder, get_stack (0), ret);
+	llvm::Expected<llvm::Value *> value =
+		coerce_to_location (builder, get_stack (0), ret, sig->pinvoke);
 	if (!value)
 		return value.takeError ();
 

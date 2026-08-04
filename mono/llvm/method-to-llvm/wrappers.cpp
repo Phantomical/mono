@@ -306,6 +306,118 @@ MethodLLVMEmitter::emit_mono_objaddr (MonoIrBuilder &builder)
 }
 
 /*
+ * III.F0.04  mono_newobj - allocate an instance without running a constructor
+ *
+ * Marshalling builds the managed side of a struct by allocating the object and
+ * then storing the converted fields into it, so there is no constructor to run
+ * and no arguments to pass - only the allocation.
+ *
+ * The vtable is the compiling domain's, the same constant every other
+ * allocation here resolves; mini reaches the same one by handing the domain and
+ * the class to ves_icall_object_new, which looks it up again at run time.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_newobj (MonoIrBuilder &builder, uint32_t token)
+{
+	MonoClass *klass = static_cast<MonoClass *> (wrapper_data (token));
+	ERROR_DECL (metadata_error);
+
+	if (!mono_class_init_checked (klass, metadata_error))
+		return runtime_error (metadata_error);
+
+	llvm::Expected<llvm::Function *> allocate = object_new_decl ();
+
+	if (!allocate)
+		return allocate.takeError ();
+
+	llvm::Value *created = emit_protected_call (
+		builder, *allocate,
+		adapt_to_callee (builder, *allocate, { class_symbol (klass, "mono_vtable_") }));
+
+	push_stack (created, m_class_get_byval_arg (klass));
+	return llvm::Error::success ();
+}
+
+/*
+ * III.F0.06  mono_ldnativeobj - load a value type in its marshalled layout
+ *
+ * Pops an address and pushes the value type at it, read as the layout
+ * marshalling gave it rather than the managed one - the ldobj a native callee
+ * is fed with. The wrapper has just filled that buffer field by field
+ * (emit_struct_conv), and the callee's parameter is in the same terms, so the
+ * value goes straight into the call.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_ldnativeobj (MonoIrBuilder &builder, uint32_t token)
+{
+	MonoClass *klass = static_cast<MonoClass *> (wrapper_data (token));
+
+	if (!m_class_is_valuetype (klass))
+		return invalid_il (llvm::Twine ("mono_ldnativeobj wants a value type, not ")
+		                   + m_class_get_name (klass));
+	if (stack.size () < 1)
+		return unbalanced_stack (1);
+
+	MonoType *type = m_class_get_byval_arg (klass);
+	llvm::Expected<llvm::Type *> native = convert_type (type, /*native=*/true);
+
+	if (!native)
+		return native.takeError ();
+
+	llvm::Value *address = get_stack (0).value;
+
+	/* The buffer is a localloc the wrapper stored into a native int local. */
+	if (!address->getType ()->isPointerTy ())
+		address = builder.CreateIntToPtr (address,
+		                                  llvm::PointerType::get (context (), 0));
+
+	llvm::Value *value = builder.CreateAlignedLoad (
+		*native, address, type_alignment (type, /*native=*/true));
+
+	pop_stack (1);
+	push_stack (value, type);
+	return llvm::Error::success ();
+}
+
+/*
+ * III.F0.05  mono_retobj - return a value type in its marshalled layout
+ *
+ * Like ret, but the value is at an address rather than on the stack, and it is
+ * already in the layout the caller reads - the wrapper marshalled it into a
+ * buffer of its own and hands the whole thing back. The signature is a pinvoke
+ * one, so the function's return type is that same layout and the load is
+ * exactly as wide as the caller's.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_retobj (MonoIrBuilder &builder, uint32_t token)
+{
+	MonoClass *klass = static_cast<MonoClass *> (wrapper_data (token));
+
+	if (!m_class_is_valuetype (klass))
+		return invalid_il (llvm::Twine ("mono_retobj wants a value type, not ")
+		                   + m_class_get_name (klass));
+	if (stack.size () != 1)
+		return unbalanced_stack (1);
+
+	llvm::Value *address = get_stack (0).value;
+
+	if (!address->getType ()->isPointerTy ())
+		address = builder.CreateIntToPtr (address,
+		                                  llvm::PointerType::get (context (), 0));
+
+	llvm::Value *value =
+		builder.CreateAlignedLoad (function->getReturnType (), address,
+	                                   type_alignment (m_class_get_byval_arg (klass),
+	                                                   /*native=*/true));
+
+	pop_stack (1);
+	if (lmf_slot != nullptr)
+		emit_pop_lmf (builder);
+	builder.CreateRet (value);
+	return llvm::Error::success ();
+}
+
+/*
  * III.F0.03  mono_vtaddr - take the address of a value type on the stack
  *
  * The stack holds the value itself, so there is nothing to point at until it

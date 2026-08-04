@@ -127,6 +127,80 @@ simd_class_to_llvm_type (llvm::LLVMContext &ctx, MonoClass *klass)
 	return nullptr;
 }
 
+/// Whether marshalling hands KLASS across a native boundary byte for byte, so
+/// that its native layout is the managed one convert_vtype already builds.
+///
+/// The same three cases marshal-ilgen skips conversion for
+/// (emit_marshal_vtype_ilgen): everything else is copied field by field into a
+/// buffer that can be a different size, with the fields somewhere else in it.
+bool
+marshals_unchanged (MonoClass *klass)
+{
+	return mono_class_is_explicit_layout (klass) || m_class_is_blittable (klass)
+	       || m_class_is_enumtype (klass);
+}
+
+/// One field of a value type, ready to be packed into a struct body.
+struct LayoutField {
+	int offset;
+	int size;
+	llvm::Type *type;
+};
+
+/*
+ * FIELDS laid into TYPE's body as a packed struct spelling out the real layout:
+ * each field at the offset it was laid out at, with the gaps filled in as
+ * [n x i1]. Real layout so LLVM can reason about the fields; packed so the
+ * offsets are exactly the runtime's rather than whatever the DataLayout would
+ * infer; padding as i1 arrays because no real field is ever one, which is what
+ * lets LegacyAbiPass tell data from padding when it classifies (a float sharing
+ * an eightbyte with padding is still a float to the C ABI).
+ */
+void
+set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
+                 std::vector<LayoutField> &fields)
+{
+	std::sort (fields.begin (), fields.end (),
+	           [] (const LayoutField &a, const LayoutField &b) {
+		           return a.offset < b.offset;
+	           });
+
+	/*
+	 * An explicit layout can overlap fields, which a struct cannot express;
+	 * whichever comes first keeps its slot and the rest of the union becomes
+	 * padding. What that loses is only the overlapped fields' say in the
+	 * native classification - the bytes are all still there.
+	 */
+	llvm::Type *pad = llvm::Type::getInt1Ty (ctx);
+	std::vector<llvm::Type *> body;
+	int at = 0;
+	bool expressible = true;
+
+	for (const LayoutField &field : fields) {
+		if (field.offset < at)
+			continue;
+		if (field.offset > at)
+			body.push_back (llvm::ArrayType::get (pad, field.offset - at));
+		if (field.offset + field.size > static_cast<int> (size)) {
+			expressible = false;
+			break;
+		}
+		body.push_back (field.type);
+		at = field.offset + field.size;
+	}
+
+	if (expressible) {
+		if (at < static_cast<int> (size))
+			body.push_back (llvm::ArrayType::get (pad, size - at));
+		type->setBody (body, /*isPacked=*/true);
+		return;
+	}
+
+	/* A layout the walk cannot restate keeps the right size, opaquely. */
+	type->setBody (llvm::ArrayType::get (llvm::Type::getInt8Ty (ctx), size),
+	               /*isPacked=*/true);
+}
+
 /// The hidden return pointer sits behind the first argument whenever the
 /// runtime keeps a receiver there: the trampolines that recover a receiver
 /// from a call site always look in the first register. The same applies when
@@ -233,7 +307,7 @@ MethodLLVMEmitter::mark_legacy_entry_call (llvm::CallBase *call, MonoMethod *met
 }
 
 llvm::Expected<llvm::Type *>
-MethodLLVMEmitter::convert_type (MonoType *t)
+MethodLLVMEmitter::convert_type (MonoType *t, bool native)
 {
 	if (t->byref)
 		return pointer_type (context ());
@@ -264,7 +338,7 @@ MethodLLVMEmitter::convert_type (MonoType *t)
 		/* Fall through */
 	case MONO_TYPE_VALUETYPE:
 	case MONO_TYPE_TYPEDBYREF:
-		return convert_vtype (t);
+		return convert_vtype (t, native);
 	default: {
 		char *name = mono_type_full_name (t);
 		llvm::Error error = conversion_error (llvm::Twine ("unsupported type ") + name);
@@ -276,16 +350,18 @@ MethodLLVMEmitter::convert_type (MonoType *t)
 }
 
 /*
- * A value type converts to a packed struct spelling out its real layout: each
- * field at the offset the runtime laid it out at, with the gaps filled in as
- * [n x i1]. Real layout so LLVM can reason about the fields; packed so the
- * offsets are exactly the runtime's rather than whatever the DataLayout would
- * infer; padding as i1 arrays because no real field is ever one, which is what
- * lets LegacyAbiPass tell data from padding when it classifies (a float
- * sharing an eightbyte with padding is still a float to the C ABI).
+ * A value type converts to a packed struct spelling out its real layout - see
+ * set_packed_body (), which is where that shape is described.
+ *
+ * NATIVE asks for the layout marshalling gives the class instead, which is a
+ * different struct whenever it moves a field or changes its width. Only a
+ * pinvoke signature is in those terms, and only for the classes marshalling
+ * actually rewrites: for the rest the two layouts are the same bytes, and
+ * sharing one type keeps a value crossing between the two worlds from needing
+ * a conversion that would be the identity.
  */
 llvm::Expected<llvm::Type *>
-MethodLLVMEmitter::convert_vtype (MonoType *t)
+MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 {
 	MonoClass *klass = mono_class_from_mono_type_internal (t);
 
@@ -314,6 +390,9 @@ MethodLLVMEmitter::convert_vtype (MonoType *t)
 	if (m_class_is_enumtype (klass))
 		return convert_type (mono_class_enum_basetype_internal (klass));
 
+	if (native && !marshals_unchanged (klass))
+		return convert_native_vtype (klass);
+
 	auto it = vtypes.find (klass);
 	if (it != vtypes.end ())
 		return it->second;
@@ -324,13 +403,7 @@ MethodLLVMEmitter::convert_vtype (MonoType *t)
 	g_free (printed);
 
 	unsigned size = mono_class_value_size (klass, NULL);
-
-	struct Field {
-		int offset;
-		int size;
-		llvm::Type *type;
-	};
-	std::vector<Field> fields;
+	std::vector<LayoutField> fields;
 
 	gpointer iter = NULL;
 
@@ -352,45 +425,92 @@ MethodLLVMEmitter::convert_vtype (MonoType *t)
 		});
 	}
 
-	std::sort (fields.begin (), fields.end (),
-	           [] (const Field &a, const Field &b) { return a.offset < b.offset; });
+	set_packed_body (context (), type, size, fields);
+	vtypes[klass] = type;
+	return type;
+}
 
-	/*
-	 * An explicit layout can overlap fields, which a struct cannot express;
-	 * whichever comes first keeps its slot and the rest of the union becomes
-	 * padding. What that loses is only the overlapped fields' say in the
-	 * native classification - the bytes are all still there.
-	 */
-	llvm::Type *pad = llvm::Type::getInt1Ty (context ());
-	std::vector<llvm::Type *> body;
-	int at = 0;
-	bool expressible = true;
+/// The LLVM type for one field of a native layout, of SIZE bytes.
+///
+/// Only two things about a native field reach LegacyAbiPass: how many bytes it
+/// covers, and whether those bytes ride in an SSE register. A field marshalling
+/// passes through keeps its own type so the classifier still sees the float or
+/// recurses into the nested struct; everything marshalling rewrites - a bool
+/// widened to a Win32 BOOL, a string turned into a pointer, an array inlined -
+/// becomes opaque data of the right width, which classifies as integer whatever
+/// it started as.
+llvm::Expected<llvm::Type *>
+MethodLLVMEmitter::native_field_type (MonoType *t, MonoMarshalSpec *mspec, int size)
+{
+	if (mspec == nullptr && !t->byref) {
+		MonoType *underlying = mini_get_underlying_type (t);
 
-	for (const Field &field : fields) {
-		if (field.offset < at)
-			continue;
-		if (field.offset > at)
-			body.push_back (llvm::ArrayType::get (pad, field.offset - at));
-		if (field.offset + field.size > static_cast<int> (size)) {
-			expressible = false;
+		switch (underlying->type) {
+		case MONO_TYPE_R4:
+		case MONO_TYPE_R8:
+			return convert_type (underlying);
+		case MONO_TYPE_VALUETYPE:
+		case MONO_TYPE_GENERICINST:
+			if (m_class_is_valuetype (
+			            mono_class_from_mono_type_internal (underlying)))
+				return convert_type (underlying, /*native=*/true);
+			break;
+		default:
 			break;
 		}
-		body.push_back (field.type);
-		at = field.offset + field.size;
 	}
 
-	if (expressible) {
-		if (at < static_cast<int> (size))
-			body.push_back (llvm::ArrayType::get (pad, size - at));
-		type->setBody (body, /*isPacked=*/true);
-	} else {
-		/* A layout the walk cannot restate keeps the right size, opaquely. */
-		type->setBody (llvm::ArrayType::get (llvm::Type::getInt8Ty (context ()),
-		                                     size),
-		               /*isPacked=*/true);
+	if (size == 1 || size == 2 || size == 4 || size == 8)
+		return llvm::Type::getIntNTy (context (), size * 8);
+	return llvm::ArrayType::get (llvm::Type::getInt8Ty (context ()), size);
+}
+
+/// KLASS in the layout marshalling copies it into: the offsets and widths
+/// mono_marshal_load_type_info () worked out, which is what the C on the other
+/// side of the boundary was compiled against.
+llvm::Expected<llvm::Type *>
+MethodLLVMEmitter::convert_native_vtype (MonoClass *klass)
+{
+	auto it = native_vtypes.find (klass);
+	if (it != native_vtypes.end ())
+		return it->second;
+
+	MonoMarshalType *info = mono_marshal_load_type_info (klass);
+
+	if (info == nullptr)
+		return conversion_error (llvm::Twine ("no native layout for ")
+		                         + m_class_get_name (klass));
+
+	char *printed = mono_type_full_name (m_class_get_byval_arg (klass));
+	std::string name = std::string (printed) + "$native";
+	llvm::StructType *type = llvm::StructType::create (context (), name);
+
+	g_free (printed);
+
+	unsigned size = mono_class_native_size (klass, NULL);
+	bool unicode = m_class_is_unicode (klass);
+	std::vector<LayoutField> fields;
+
+	for (guint32 i = 0; i < info->num_fields; ++i) {
+		MonoMarshalField &field = info->fields[i];
+
+		if (field.field->type->attrs & FIELD_ATTRIBUTE_STATIC)
+			continue;
+
+		guint32 align;
+		int width = mono_marshal_type_size (field.field->type, field.mspec, &align,
+		                                    /*as_field=*/TRUE, unicode);
+		llvm::Expected<llvm::Type *> converted =
+			native_field_type (field.field->type, field.mspec, width);
+
+		if (!converted)
+			return converted.takeError ();
+
+		fields.push_back ({ static_cast<int> (field.offset), width, *converted });
 	}
 
-	vtypes[klass] = type;
+	set_packed_body (context (), type, size, fields);
+	native_vtypes[klass] = type;
 	return type;
 }
 
@@ -400,13 +520,25 @@ MethodLLVMEmitter::convert_vtype (MonoType *t)
 /// 1-aligned, so every alloca of one has to be told what the runtime decided
 /// instead.
 llvm::Align
-MethodLLVMEmitter::type_alignment (MonoType *t)
+MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 {
 	if (t->byref)
 		return llvm::Align (TARGET_SIZEOF_VOID_P);
 
 	MonoClass *klass = mono_class_from_mono_type_internal (mini_get_underlying_type (t));
 	unsigned align = mono_class_min_align (klass);
+
+	/*
+	 * A marshalled layout widens fields the managed one packs tightly, so it
+	 * is the marshalling code's own alignment that a buffer of it needs.
+	 */
+	if (native && m_class_is_valuetype (klass) && !marshals_unchanged (klass)) {
+		guint32 native_align = 0;
+
+		mono_class_native_size (klass, &native_align);
+		if (native_align != 0)
+			align = native_align;
+	}
 
 	/*
 	 * A vector's natural alignment is its size, but nothing the runtime hands
@@ -442,7 +574,15 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 		return conversion_error ("a vararg signature uses the runtime's cookie "
 		                         "convention");
 
-	llvm::Expected<llvm::Type *> ret = convert_type (sig->ret);
+	/*
+	 * A pinvoke signature is the one the C side was compiled against, so its
+	 * value types are in the layout marshalling produced rather than the
+	 * managed one. Both directions need this: the wrapper around a pinvoke
+	 * calls out with a marshalled struct, and the wrapper a delegate is
+	 * entered through is called with one.
+	 */
+	bool native = sig->pinvoke;
+	llvm::Expected<llvm::Type *> ret = convert_type (sig->ret, native);
 
 	if (!ret)
 		return ret.takeError ();
@@ -453,7 +593,7 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig)
 		params.push_back (pointer_type (context ()));
 
 	for (int i = 0; i < sig->param_count; ++i) {
-		llvm::Expected<llvm::Type *> converted = convert_type (sig->params[i]);
+		llvm::Expected<llvm::Type *> converted = convert_type (sig->params[i], native);
 
 		if (!converted)
 			return converted.takeError ();

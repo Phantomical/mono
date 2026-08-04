@@ -161,9 +161,9 @@ MethodLLVMEmitter::emit_ldloca (MonoIrBuilder &builder, uint32_t index)
 /// happen.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
-                                       MonoType *destination)
+                                       MonoType *destination, bool native)
 {
-	llvm::Expected<llvm::Type *> type = convert_type (destination);
+	llvm::Expected<llvm::Type *> type = convert_type (destination, native);
 	if (!type)
 		return type.takeError ();
 

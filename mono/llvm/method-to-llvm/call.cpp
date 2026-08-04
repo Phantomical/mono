@@ -62,9 +62,9 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 /// The eval stack's int32 is signed, so sign-extension is the reading kept here.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
-                                       MonoType *destination)
+                                       MonoType *destination, bool native)
 {
-	llvm::Expected<llvm::Type *> type = convert_type (destination);
+	llvm::Expected<llvm::Type *> type = convert_type (destination, native);
 	if (!type)
 		return type.takeError ();
 
@@ -79,7 +79,7 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 		value.value = builder.CreateSExt (value.value,
 		                                  builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
 
-	return coerce_to_location (builder, value, destination);
+	return coerce_to_location (builder, value, destination, native);
 }
 
 /// Take a call's arguments off the evaluation stack, converted to what the signature
@@ -108,8 +108,8 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 			continue;
 		}
 
-		llvm::Expected<llvm::Value *> converted =
-			coerce_to_argument (builder, value, sig->params[i - sig->hasthis]);
+		llvm::Expected<llvm::Value *> converted = coerce_to_argument (
+			builder, value, sig->params[i - sig->hasthis], sig->pinvoke);
 
 		if (!converted)
 			return converted.takeError ();

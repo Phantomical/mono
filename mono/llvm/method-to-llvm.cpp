@@ -821,7 +821,7 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	unsigned index = 0;
 
 	for (unsigned i = 0; i < nargs; ++i)
-		args.push_back ({ recover (index++), mono_arg_type (method, i) });
+		args.push_back ({ recover (index++), mono_arg_type (method, i), sig->pinvoke != 0 });
 	for (size_t i = 0; i < cfg->header->num_locals; ++i)
 		locals.push_back ({ recover (index++), cfg->header->locals[i] });
 
@@ -1399,6 +1399,9 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_OBJADDR:
 	case MONO_CEE_MONO_VTADDR:
 	case MONO_CEE_MONO_RETHROW:
+	case MONO_CEE_MONO_NEWOBJ:
+	case MONO_CEE_MONO_LDNATIVEOBJ:
+	case MONO_CEE_MONO_RETOBJ:
 	case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
 	case MONO_CEE_MONO_JIT_ICALL_ADDR:
 	case MONO_CEE_MONO_ICALL_ADDR:
@@ -1428,6 +1431,12 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_vtaddr (builder);
 		case MONO_CEE_MONO_RETHROW:
 			return emit_mono_rethrow (builder);
+		case MONO_CEE_MONO_NEWOBJ:
+			return emit_mono_newobj (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_LDNATIVEOBJ:
+			return emit_mono_ldnativeobj (builder, static_cast<uint32_t> (operand));
+		case MONO_CEE_MONO_RETOBJ:
+			return emit_mono_retobj (builder, static_cast<uint32_t> (operand));
 		case MONO_CEE_MONO_JIT_ICALL_ADDR:
 			return emit_mono_jit_icall_addr (builder, static_cast<uint32_t> (operand));
 		case MONO_CEE_MONO_ICALL_ADDR:
@@ -1562,22 +1571,31 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	if (sig->hasthis)
 		names[0] = "this";
 
+	/*
+	 * A pinvoke signature arrives in marshalled layout, so the slot an
+	 * argument is spilled to has to be that shape and that size - the wrapper
+	 * reads the native fields straight out of it, past where the managed
+	 * layout would have ended.
+	 */
+	bool native = sig->pinvoke;
+
 	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);
-		auto ltyper = convert_type (mtype);
+		auto ltyper = convert_type (mtype, native);
 		if (!ltyper)
 			return ltyper.takeError ();
 		auto ltype = ltyper.get ();
 
 		auto alloca = builder.CreateAlloca (ltype, nullptr, names[i]);
 
-		alloca->setAlignment (type_alignment (mtype));
+		alloca->setAlignment (type_alignment (mtype, native));
 		builder.CreateAlignedStore (function->getArg (i), alloca,
 		                            alloca->getAlign ());
 
 		args.push_back ({
 			.alloca = alloca,
 			.type = mtype,
+			.native = native,
 		});
 	}
 
