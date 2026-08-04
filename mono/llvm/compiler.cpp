@@ -32,6 +32,7 @@
 
 #include "../mini/llvm/engine.hpp"
 #include "../mini/llvm/passes/eh-gather.hpp"
+#include "../mini/llvm/passes/finally-range.hpp"
 
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>
@@ -148,6 +149,7 @@ public:
 	bool doFinalization (Module &) override
 	{
 		emit_clause_table ();
+		emit_guard_table ();
 		emit_unwind_table ();
 		return false;
 	}
@@ -212,6 +214,56 @@ private:
 				streamer.emitValue (from_begin (c.handler), 4);
 				streamer.emitIntValue ((uint32_t) c.clause_index, 4);
 				streamer.emitIntValue ((uint32_t) c.kind, 4);
+			}
+		}
+	}
+
+	/*
+	 * `.mono_guards`: where each finally handler body ended up and where its
+	 * thread-abort guard byte lives. Absent when the method has no finally, or
+	 * when every body was optimized away - there is then nothing a thread can be
+	 * stopped inside, so an absent section is a fact and not a refusal.
+	 *
+	 * A body whose slot could not be pinned to one place is dropped rather than
+	 * published: an abort then lands inside that finally, where a wrong slot
+	 * would have the runtime flag a byte belonging to something else.
+	 */
+	void emit_guard_table ()
+	{
+		MCStreamer &streamer = *streamer_;
+		MCContext &ctx = streamer.getContext ();
+
+		for (const MonoEHFinallyFunction &fn : sc_->finally_functions) {
+			std::vector<const MonoEHFinallyBody *> bodies;
+
+			for (const MonoEHFinallyBody &body : fn.bodies)
+				if (body.exvar_dwarf_reg >= 0)
+					bodies.push_back (&body);
+
+			if (bodies.empty ())
+				continue;
+
+			MCSymbol *begin = ctx.getOrCreateSymbol (fn.function);
+
+			streamer.switchSection (ctx.getELFSection (
+				".mono_guards", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+
+			auto from_begin = [&] (const MCSymbol *sym) {
+				return MCBinaryExpr::createSub (
+					MCSymbolRefExpr::create (sym, ctx),
+					MCSymbolRefExpr::create (begin, ctx), ctx);
+			};
+
+			streamer.emitIntValue (guards_section_magic, 4);
+			streamer.emitIntValue (guards_section_version, 2);
+			streamer.emitIntValue (bodies.size (), 2);
+
+			for (const MonoEHFinallyBody *body : bodies) {
+				streamer.emitIntValue ((uint32_t) body->clause_index, 4);
+				streamer.emitValue (from_begin (body->body_begin), 4);
+				streamer.emitValue (from_begin (body->body_end), 4);
+				streamer.emitIntValue ((uint32_t) body->exvar_offset, 4);
+				streamer.emitIntValue ((uint32_t) body->exvar_dwarf_reg, 4);
 			}
 		}
 	}
@@ -306,6 +358,13 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 * object byte-identical to SimpleCompiler's.
 	 */
 	pm.add (new MonoEHGatherPass (&side_channel));
+
+	/*
+	 * Also before the printer, and after the frame is laid out: it plants the
+	 * labels that name where the finally bodies ended up, and reads the guard
+	 * slot's frame home out of markers PEI has already resolved.
+	 */
+	pm.add (new MonoFinallyRangePass (&side_channel));
 
 	tpc->setInitialized ();
 

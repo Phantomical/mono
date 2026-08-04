@@ -205,6 +205,13 @@ private:
 	struct Clause {
 		llvm::BasicBlock *pad = nullptr;
 		llvm::AllocaInst *resume_at = nullptr;
+		/*
+		 * The byte another thread's abort request flags a running finally through,
+		 * so that the abort lands after the handler instead of inside it. Written
+		 * from outside this thread, hence read volatile. See
+		 * emit_finally_abort_check.
+		 */
+		llvm::AllocaInst *abort_guard = nullptr;
 		std::vector<llvm::SwitchInst *> resume;
 		std::vector<std::pair<uint32_t, llvm::BasicBlock *>> continuations;
 		/*
@@ -387,6 +394,10 @@ private:
 	void emit_resume_exit (MonoIrBuilder &builder, uint32_t clause);
 	void emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                          llvm::ArrayRef<llvm::Value *> args);
+	void enter_finally (MonoIrBuilder &builder, uint32_t clause, uint32_t continuation);
+	void emit_finally_body_marker (MonoIrBuilder &builder, uint32_t clause, bool opening);
+	llvm::Error emit_finally_abort_check (MonoIrBuilder &builder, uint32_t clause,
+	                                      llvm::Value *which);
 	llvm::Error resolve_finally_switches ();
 
 	llvm::Error emit_ret (MonoIrBuilder &builder);

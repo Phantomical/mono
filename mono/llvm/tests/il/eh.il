@@ -91,6 +91,33 @@
 		ret
 	}
 
+	// A fault runs only when the try was left by an exception, so it is only
+	// ever entered by unwinding and only ever carries on by resuming it.
+	.method public static int32 TryFault (int32 x) cil managed
+	{
+		.maxstack 2
+		.locals init (int32 result)
+		.try
+		{
+			ldarg.0
+			ldc.i4.1
+			add
+			stloc.0
+			leave.s DONE
+		}
+		fault
+		{
+			ldloc.0
+			ldc.i4.2
+			mul
+			stloc.0
+			endfinally
+		}
+	DONE:
+		ldloc.0
+		ret
+	}
+
 	// Two leaves out of one try, to two different targets: the finally's
 	// endfinally has to switch on which one is in progress.
 	.method public static int32 TwoLeaves (int32 x) cil managed

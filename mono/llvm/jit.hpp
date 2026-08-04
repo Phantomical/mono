@@ -54,6 +54,10 @@ struct CompiledMethod {
 	/// The `.mono_lsda` clause table; null when the method has no clauses.
 	const uint8_t *clause_table = nullptr;
 	size_t clause_table_size = 0;
+	/// The `.mono_guards` finally-guard table; null when the method has no
+	/// finally body left to guard.
+	const uint8_t *guard_table = nullptr;
+	size_t guard_table_size = 0;
 
 	/// The `.mono_unwind` frame description; never null for a method.
 	const uint8_t *unwind_table = nullptr;

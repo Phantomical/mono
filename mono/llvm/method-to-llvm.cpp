@@ -632,13 +632,20 @@ MethodLLVMEmitter::emit ()
 
 	/*
 	 * A finally is entered from its own leaves as well as by unwinding, so it needs
-	 * somewhere to record which is in progress before it is jumped to.
+	 * somewhere to record which is in progress before it is jumped to, and a byte for
+	 * a thread abort that arrives while it is running to be held in until it is done.
 	 */
-	for (uint32_t i = 0; i < num_clauses; ++i)
-		if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
-			clause_state[i].resume_at =
-				builder.CreateAlloca (builder.getInt32Ty (), nullptr,
-				                      llvm::Twine ("resume_at") + llvm::Twine (i));
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		if (clauses[i].flags != MONO_EXCEPTION_CLAUSE_FINALLY)
+			continue;
+
+		clause_state[i].resume_at =
+			builder.CreateAlloca (builder.getInt32Ty (), nullptr,
+			                      llvm::Twine ("resume_at") + llvm::Twine (i));
+		clause_state[i].abort_guard =
+			builder.CreateAlloca (builder.getInt8Ty (), nullptr,
+			                      llvm::Twine ("abort_guard") + llvm::Twine (i));
+	}
 
 	/*
 	 * A handler is entered by the runtime rather than by anything in the IL, so what
@@ -746,11 +753,22 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			 * exception is reliably in hand, so it is remembered here for the
 			 * rethrow that may want it after the body has emptied the stack.
 			 */
-			for (uint32_t i = 0; i < num_clauses; ++i)
-				if (clauses[i].handler_offset == ip && !stack.empty ()
+			for (uint32_t i = 0; i < num_clauses; ++i) {
+				if (clauses[i].handler_offset != ip)
+					continue;
+
+				if (!stack.empty ()
 				    && (clauses[i].flags == MONO_EXCEPTION_CLAUSE_NONE
 				        || clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER))
 					clause_state[i].caught = stack.front ().value;
+
+				/*
+				 * Every way into a finally lands here, so this is where its
+				 * body starts as far as a thread abort is concerned.
+				 */
+				if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
+					emit_finally_body_marker (builder, i, /* opening */ true);
+			}
 		} else if (builder.GetInsertBlock ()->getTerminator () != nullptr) {
 			return invalid_il ("unreachable instruction is not the start of a block");
 		}

@@ -18,14 +18,18 @@
 #include "../engine.hpp"
 #include "../mono_lsda_format.hpp"
 
+#include <map>
 #include <set>
 #include <string>
+#include <utility>
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/CodeGen/MachineBasicBlock.h>
 #include <llvm/CodeGen/MachineFunction.h>
 #include <llvm/CodeGen/MachineInstrBuilder.h>
+#include <llvm/CodeGen/StackMaps.h>
 #include <llvm/CodeGen/TargetInstrInfo.h>
+#include <llvm/CodeGen/TargetRegisterInfo.h>
 #include <llvm/CodeGen/TargetSubtargetInfo.h>
 #include <llvm/MC/MCContext.h>
 #include <llvm/MC/MCSymbol.h>
@@ -58,6 +62,35 @@ finally_marker (const MachineInstr &mi, int *clause, bool *is_start)
 	return true;
 }
 
+/*
+ * Where the opening marker's operand ended up in the frame, as a DWARF register and a
+ * displacement from it, or reg -1 if it named no slot.
+ *
+ * By the time this pass runs the frame is laid out and PEI has already resolved the
+ * marker's frame index against it, leaving the triple a stackmap's direct location is
+ * written as: the kind, the register the slot is addressed off, and the offset. Which
+ * register that is is the target's choice - the frame pointer normally, a base pointer
+ * where the frame also has variable-sized objects - so it is carried, not assumed.
+ */
+std::pair<int, std::int64_t>
+marker_slot (const MachineInstr &mi, const TargetRegisterInfo *tri)
+{
+	/* id, shadow bytes, then the live values. */
+	if (mi.getNumOperands () < 5)
+		return { -1, 0 };
+
+	const MachineOperand &kind = mi.getOperand (2);
+	const MachineOperand &base = mi.getOperand (3);
+	const MachineOperand &offset = mi.getOperand (4);
+
+	if (!kind.isImm () || kind.getImm () != StackMaps::DirectMemRefOp)
+		return { -1, 0 };
+	if (!base.isReg () || !offset.isImm ())
+		return { -1, 0 };
+
+	return { tri->getDwarfRegNum (base.getReg (), false), offset.getImm () };
+}
+
 MCSymbol *
 plant_label (MachineBasicBlock &mbb, MachineBasicBlock::iterator at, MCContext &ctx,
              const TargetInstrInfo *tii, const char *name)
@@ -71,13 +104,15 @@ plant_label (MachineBasicBlock &mbb, MachineBasicBlock::iterator at, MCContext &
 void
 close_range (MonoEHFinallyFunction &fn, MachineBasicBlock &mbb,
              MachineBasicBlock::iterator at, MCContext &ctx, const TargetInstrInfo *tii,
-             MCSymbol *begin, int clause)
+             MCSymbol *begin, int clause, std::pair<int, std::int64_t> slot)
 {
 	MonoEHFinallyBody body;
 
 	body.body_begin = begin;
 	body.body_end = plant_label (mbb, at, ctx, tii, "mono_finally_end");
 	body.clause_index = clause;
+	body.exvar_dwarf_reg = slot.first;
+	body.exvar_offset = slot.second;
 	fn.bodies.push_back (body);
 }
 
@@ -165,7 +200,7 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 void
 record_ranges (MachineFunction &mf, int clause,
                const DenseMap<const MachineBasicBlock *, bool> &in_body,
-               MonoEHFinallyFunction &fn)
+               MonoEHFinallyFunction &fn, std::pair<int, std::int64_t> slot)
 {
 	MCContext &ctx = mf.getContext ();
 	const TargetInstrInfo *tii = mf.getSubtarget ().getInstrInfo ();
@@ -188,14 +223,22 @@ record_ranges (MachineFunction &mf, int clause,
 				begin = plant_label (mbb, it, ctx, tii, "mono_finally_begin");
 				state = true;
 			} else if (!is_start && state) {
-				close_range (fn, mbb, it, ctx, tii, begin, clause);
+				close_range (fn, mbb, it, ctx, tii, begin, clause, slot);
 				begin = nullptr;
 				state = false;
 			}
 		}
 
+		/*
+		 * Before the terminators, not at the very end: an instruction after a
+		 * block's branch makes getFirstTerminator () walk off the end, and the
+		 * printer then reads the block as falling through to its successor and
+		 * leaves that successor's label unemitted. The branch itself is the
+		 * only code left outside the range, and nothing there can abort.
+		 */
 		if (state)
-			close_range (fn, mbb, mbb.end (), ctx, tii, begin, clause);
+			close_range (fn, mbb, mbb.getFirstTerminator (), ctx, tii, begin,
+			             clause, slot);
 	}
 }
 
@@ -204,14 +247,34 @@ record_ranges (MachineFunction &mf, int clause,
 bool
 MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 {
+	const TargetRegisterInfo *tri = mf.getSubtarget ().getRegisterInfo ();
 	std::set<int> clauses;
+	std::map<int, std::pair<int, std::int64_t>> slots;
 
 	for (MachineBasicBlock &mbb : mf) {
 		for (MachineInstr &mi : mbb) {
 			int clause;
 			bool is_start;
-			if (finally_marker (mi, &clause, &is_start))
-				clauses.insert (clause);
+
+			if (!finally_marker (mi, &clause, &is_start))
+				continue;
+
+			clauses.insert (clause);
+			if (!is_start)
+				continue;
+
+			/*
+			 * A clause's body can end up in the frame more than once - the
+			 * optimizer duplicates it along its entry paths - and a clone
+			 * reuses the one slot. Two markers naming different slots would
+			 * mean the copies do not share one, which no guard entry can
+			 * describe, so the clause goes unguarded rather than wrongly.
+			 */
+			std::pair<int, std::int64_t> slot = marker_slot (mi, tri);
+			auto [known, fresh] = slots.emplace (clause, slot);
+
+			if (!fresh && known->second != slot)
+				known->second = { -1, 0 };
 		}
 	}
 
@@ -237,7 +300,7 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 		DenseMap<const MachineBasicBlock *, bool> in_body;
 
 		solve (mf, clause, in_body);
-		record_ranges (mf, clause, in_body, fn);
+		record_ranges (mf, clause, in_body, fn, slots[clause]);
 	}
 
 	sc_->finally_functions.push_back (std::move (fn));

@@ -250,6 +250,15 @@ struct MonoEHFinallyBody {
 	const llvm::MCSymbol *body_end = nullptr;
 	/* The IL clause index, read back from the markers bracketing the run. */
 	int clause_index = -1;
+	/*
+	 * Where the clause's thread-abort guard byte sits in the frame, as the DWARF
+	 * number of the register it is addressed off and a displacement from it - what
+	 * install_handler_block_guard () needs to reach it from a stack walk. -1 when
+	 * the opening marker named no slot, which is how the tiered backend uses these
+	 * markers: it recovers the slot from the stackmap section instead.
+	 */
+	int exvar_dwarf_reg = -1;
+	std::int64_t exvar_offset = 0;
 };
 
 /* The finally body ranges MonoFinallyRangePass found in one MachineFunction. */

@@ -140,6 +140,7 @@ const MethodRef translatable[] = {
 	{"eh", "Eh:TryCatch"},
 	{"eh", "Eh:TwoCatches"},
 	{"eh", "Eh:TryFinally"},
+	{"eh", "Eh:TryFault"},
 	{"eh", "Eh:TwoLeaves"},
 	{"eh", "Eh:NestedFinally"},
 	{"eh", "Eh:CatchInsideFinally"},
@@ -604,6 +605,33 @@ TEST_F (TranslatorTest, AnUnwoundFinallyResumesThroughTheRuntime)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_GE (t.count ("mono_llvm_resume_unwind"), 1u);
+}
+
+// A thread aborted inside a finally has to finish it first. The request only sets a
+// byte in the frame, so the handler's exit is what has to notice and deliver, and the
+// markers bracketing the body are what tell the runtime the frame is in there at all.
+TEST_F (TranslatorTest, AFinallyHoldsAnAbortInUntilItIsDone)
+{
+	const Translation &t = translate ("eh", "Eh:TryFinally");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("%abort_guard0 = alloca i8"), 1u) << t.text ();
+	/* One marker opening the body, one closing it at the endfinally. */
+	EXPECT_EQ (t.count ("llvm.experimental.stackmap"), 2u) << t.text ();
+	/* Written from another thread, so the exit has to go back to memory for it. */
+	EXPECT_EQ (t.count ("load volatile i8, ptr %abort_guard0"), 1u) << t.text ();
+	EXPECT_GE (t.count ("ves_icall_thread_finish_async_abort"), 1u) << t.text ();
+}
+
+// A fault runs only while an exception is already on its way out, where the runtime
+// carries the abort behind it - there is nothing to defer and no byte to defer it in.
+TEST_F (TranslatorTest, AFaultCarriesNoAbortGuard)
+{
+	const Translation &t = translate ("eh", "Eh:TryFault");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("abort_guard"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("llvm.experimental.stackmap"), 0u) << t.text ();
 }
 
 TEST_F (TranslatorTest, ACallInsideATryIsAnInvoke)

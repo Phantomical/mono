@@ -3,11 +3,33 @@
  * \brief The wire format of the side tables the compiler writes into a method's
  * object, shared between the writer (compiler.cpp) and the reader (jinfo.cpp).
  *
- * Two sections, both target-neutral and code-relative:
+ * Three sections, all target-neutral and code-relative:
  *
  * `.mono_lsda` is the clause table - the tiered backend's format, verbatim, so
  * its reader (mono/mini/llvm/mono_lsda.cpp) parses ours too. See mono_lsda.hpp
  * for the layout.
+ *
+ * `.mono_guards` is what the thread-abort guard needs about the finally handler
+ * bodies: which PCs each occupies, so a stack walk can tell a frame is inside
+ * one, and where in that frame the guard byte sits. Its own section rather than
+ * more `.mono_lsda` entries because the partitions differ - one record per
+ * surviving copy of a body against one clause entry per invoke range - and
+ * because the clause table's format is shared with a backend that recovers the
+ * same facts elsewhere.
+ *
+ *   Header (8 bytes, little-endian):
+ *     u32 magic   = 0x4d475244 ('MGRD')
+ *     u16 version = 1
+ *     u16 count
+ *   Record[count] (20 bytes each, little-endian):
+ *     u32 clause_index     the IL clause the body belongs to
+ *     u32 body_start       body covers [code+body_start, code+body_end)
+ *     u32 body_end
+ *     i32 exvar_offset     guard byte at exvar_base_reg + exvar_offset
+ *     i32 exvar_dwarf_reg  DWARF number of the register that offset is from
+ *
+ * The register is carried as DWARF rather than as a mono hardware register so
+ * the writer needs nothing from mono's target headers; the reader converts.
  *
  * `.mono_unwind` is the frame description: the CFI program LLVM tracked for the
  * function, recorded at the MC layer before any target encoding exists.
@@ -37,6 +59,11 @@
 #include <cstdint>
 
 namespace mono {
+
+constexpr uint32_t guards_section_magic = 0x4d475244; /* 'MGRD' */
+constexpr uint16_t guards_section_version = 1;
+constexpr std::size_t guards_header_size = 8;
+constexpr std::size_t guards_record_size = 20;
 
 constexpr uint32_t unwind_section_magic = 0x4d555744; /* 'MUWD' */
 constexpr uint16_t unwind_section_version = 1;

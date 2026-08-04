@@ -82,6 +82,101 @@ parse_unwind_records (const uint8_t *section, size_t size,
 	return true;
 }
 
+/// Can a stack walk rebuild HW_REG for the frame it is looking at?
+///
+/// True for the stack pointer and for the callee-saved registers the unwind info
+/// restores; a caller-saved register's value is long gone by the time the walk
+/// reaches the frame that set it.
+bool
+guard_base_reg_is_recoverable (int hw_reg)
+{
+	switch (hw_reg) {
+	case AMD64_RSP:
+	case AMD64_RBP:
+	case AMD64_RBX:
+	case AMD64_R12:
+	case AMD64_R13:
+	case AMD64_R14:
+	case AMD64_R15:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/// The finally guard records, or an error if the section is malformed or names a
+/// slot a stack walk could not reach.
+///
+/// A null section is not a failure: a method with no finally, or one whose bodies
+/// all optimized away, has nothing for a thread to be stopped inside.
+Expected<std::vector<MonoFinallyGuard>>
+parse_guards (const uint8_t *section, size_t size, uint32_t code_size)
+{
+	std::vector<MonoFinallyGuard> guards;
+
+	if (section == nullptr || size == 0)
+		return guards;
+
+	if (size < guards_header_size || read_le<uint32_t> (section) != guards_section_magic
+	    || read_le<uint16_t> (section + 4) != guards_section_version)
+		return createStringError (inconvertibleErrorCode (),
+		                          "the compiled object's finally-guard table is "
+		                          "not one of ours");
+
+	uint32_t count = read_le<uint16_t> (section + 6);
+
+	if (size != guards_header_size + (size_t) count * guards_record_size)
+		return createStringError (inconvertibleErrorCode (),
+		                          "the finally-guard table's length does not match "
+		                          "its %u records", count);
+
+	const uint8_t *p = section + guards_header_size;
+
+	for (uint32_t i = 0; i < count; ++i, p += guards_record_size) {
+		MonoFinallyGuard g;
+
+		g.clause_index = read_le<uint32_t> (p);
+		g.handler_start_off = read_le<uint32_t> (p + 4);
+		g.handler_end_off = read_le<uint32_t> (p + 8);
+		g.exvar_offset = read_le<int32_t> (p + 12);
+
+		int dwarf_reg = read_le<int32_t> (p + 16);
+
+		/*
+		 * A run can bracket no code at all - the two markers end up in the same
+		 * place once what was between them has folded away - and there is then
+		 * no PC for a thread to be stopped at. The writer cannot tell, since it
+		 * emits label differences the assembler folds later.
+		 */
+		if (g.handler_start_off == g.handler_end_off)
+			continue;
+
+		if (g.handler_start_off > g.handler_end_off || g.handler_end_off > code_size)
+			return createStringError (inconvertibleErrorCode (),
+			                          "finally body range [%u, %u) is not inside "
+			                          "the method's %u bytes of code",
+			                          g.handler_start_off, g.handler_end_off,
+			                          code_size);
+
+		if (!mono_dwarf_reg_is_valid (dwarf_reg))
+			return createStringError (inconvertibleErrorCode (),
+			                          "finally guard register %d has no mono "
+			                          "mapping", dwarf_reg);
+
+		int hw_reg = mono_dwarf_reg_to_hw_reg (dwarf_reg);
+
+		if (!guard_base_reg_is_recoverable (hw_reg))
+			return createStringError (inconvertibleErrorCode (),
+			                          "the finally guard slot is homed against a "
+			                          "register a stack walk cannot rebuild");
+
+		g.exvar_base_reg = (uint8_t) hw_reg;
+		guards.push_back (g);
+	}
+
+	return guards;
+}
+
 /// The frame description as mono unwind ops, or an error naming what could not
 /// be expressed.
 ///
@@ -265,9 +360,17 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 			                          "clause table");
 		}
 
+		Expected<std::vector<MonoFinallyGuard>> guards = parse_guards (
+			compiled.guard_table, compiled.guard_table_size, code_size);
+
+		if (!guards) {
+			g_free (encoded);
+			return guards.takeError ();
+		}
+
 		if (!build_ex_info (entries, header->clauses,
 		                    (int) header->num_clauses, code, code_size,
-		                    clauses)) {
+		                    clauses, *guards)) {
 			g_free (encoded);
 			return createStringError (inconvertibleErrorCode (),
 			                          "the clause table does not join "

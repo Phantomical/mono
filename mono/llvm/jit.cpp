@@ -72,6 +72,8 @@ public:
 			functions;
 		const uint8_t *clause_table = nullptr;
 		size_t clause_table_size = 0;
+		const uint8_t *guard_table = nullptr;
+		size_t guard_table_size = 0;
 		const uint8_t *unwind_table = nullptr;
 		size_t unwind_table_size = 0;
 	};
@@ -85,6 +87,7 @@ public:
 		config.PrePrunePasses.push_back ([] (jitlink::LinkGraph &graph) -> Error {
 			for (jitlink::Section &section : graph.sections ()) {
 				if (section.getName () != ".mono_lsda"
+				    && section.getName () != ".mono_guards"
 				    && section.getName () != ".mono_unwind")
 					continue;
 				for (jitlink::Block *block : section.blocks ())
@@ -106,6 +109,10 @@ public:
 						extents.clause_table =
 							range.getStart ().toPtr<const uint8_t *> ();
 						extents.clause_table_size = range.getSize ();
+					} else if (section.getName () == ".mono_guards") {
+						extents.guard_table =
+							range.getStart ().toPtr<const uint8_t *> ();
+						extents.guard_table_size = range.getSize ();
 					} else if (section.getName () == ".mono_unwind") {
 						extents.unwind_table =
 							range.getStart ().toPtr<const uint8_t *> ();
@@ -576,6 +583,8 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	compiled.entry = sym->toPtr<void *> ();
 	compiled.clause_table = extents->clause_table;
 	compiled.clause_table_size = extents->clause_table_size;
+	compiled.guard_table = extents->guard_table;
+	compiled.guard_table_size = extents->guard_table_size;
 	compiled.unwind_table = extents->unwind_table;
 	compiled.unwind_table_size = extents->unwind_table_size;
 

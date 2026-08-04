@@ -211,7 +211,7 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 	if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
 		/* Arriving by unwinding is continuation 0: hand control back
 		 * to the unwinder afterwards. */
-		prep.CreateStore (prep.getInt32 (0), clause_state[clause].resume_at);
+		enter_finally (prep, clause, 0);
 	} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT
 	           && !handler.entry.empty ()) {
 		prep.CreateStore (exc, handler.entry[0].alloca);
@@ -334,6 +334,98 @@ MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 
 	for (uint32_t j : enclosers)
 		dispatch->addCase (pad.getInt32 (j), handler_entry (j, exc));
+}
+
+/// Record on the way in how CLAUSE's handler is being entered.
+///
+/// CONTINUATION is the id its endfinally switches on: 0 for an entry by unwinding,
+/// which carries on by resuming that unwind. The abort guard is cleared here rather
+/// than at the top of the body, because from the body's first instruction on the byte
+/// belongs to the runtime - another thread writes it while this one is in there.
+void
+MethodLLVMEmitter::enter_finally (MonoIrBuilder &builder, uint32_t clause,
+                                  uint32_t continuation)
+{
+	Clause &state = clause_state[clause];
+
+	builder.CreateStore (builder.getInt32 (continuation), state.resume_at);
+	builder.CreateStore (builder.getInt8 (0), state.abort_guard);
+}
+
+/// Mark where CLAUSE's handler body begins or ends.
+///
+/// The pair is what MonoFinallyRangePass reads back after codegen to work out which
+/// PCs the body occupies - the question find_last_handler_block () asks of a frame it
+/// is about to guard. A stackmap answers it because it is an instruction: it is moved,
+/// cloned and merged along with the code around it, where a block loses its identity
+/// to the first merge that touches it. The opening one also names the guard byte, so
+/// that its frame home can be recovered once the frame has been laid out.
+void
+MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t clause,
+                                             bool opening)
+{
+	/* A filter body is a function of its own and holds no clause's frame state. */
+	if (clause_state[clause].abort_guard == nullptr)
+		return;
+
+	uint64_t id = (opening ? MONO_LLVM_FINALLY_STACKMAP_ID_BASE
+	                       : MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE)
+	              | clause;
+	std::vector<llvm::Value *> args = { builder.getInt64 (id), builder.getInt32 (0) };
+
+	if (opening)
+		args.push_back (clause_state[clause].abort_guard);
+
+	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, args);
+}
+
+/// Deliver an abort that arrived while CLAUSE's handler was running, now that it has.
+///
+/// A thread aborted inside a finally has to finish it first, so the request does not
+/// raise anything: it sets a byte in this frame (install_handler_block_guard) and
+/// leaves the delivery to the handler's own exit. The icall hands the abort to its
+/// wrapper's interruption checkpoint, which raises it here - past the body, but still
+/// inside whatever protects the handler, so it reaches the catch it would have reached
+/// had it been raised on time.
+///
+/// Only on the way out through a leave. WHICH is the continuation the endfinally is
+/// about to take, and 0 says the handler was entered by unwinding: an exception is
+/// already on its way out of the frame and the runtime delivers the abort behind it.
+llvm::Error
+MethodLLVMEmitter::emit_finally_abort_check (MonoIrBuilder &builder, uint32_t clause,
+                                             llvm::Value *which)
+{
+	if (clause_state[clause].abort_guard == nullptr)
+		return llvm::Error::success ();
+
+	llvm::Expected<llvm::Function *> finish =
+		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_thread_finish_async_abort);
+
+	if (!finish)
+		return finish.takeError ();
+
+	llvm::BasicBlock *test =
+		llvm::BasicBlock::Create (context (), "abort_guard", function);
+	llvm::BasicBlock *deliver =
+		llvm::BasicBlock::Create (context (), "deliver_abort", function);
+	llvm::BasicBlock *leaving =
+		llvm::BasicBlock::Create (context (), "finally_left", function);
+
+	builder.CreateCondBr (builder.CreateIsNotNull (which), test, leaving);
+
+	MonoIrBuilder guard (test);
+	llvm::Value *flagged = guard.CreateLoad (guard.getInt8Ty (),
+	                                         clause_state[clause].abort_guard,
+	                                         /* isVolatile */ true, "abort_pending");
+
+	guard.CreateCondBr (guard.CreateIsNotNull (flagged), deliver, leaving);
+
+	builder.SetInsertPoint (deliver);
+	emit_protected_call (builder, *finish, adapt_to_callee (builder, *finish, {}));
+	builder.CreateBr (leaving);
+
+	builder.SetInsertPoint (leaving);
+	return llvm::Error::success ();
 }
 
 /// Emit a call that unwinds, as an invoke when a clause in this method protects the
@@ -623,7 +715,7 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 		MonoIrBuilder step (enter);
 
 		state.continuations.push_back ({id, next});
-		step.CreateStore (step.getInt32 (id), state.resume_at);
+		enter_finally (step, chain[i], id);
 		step.CreateBr (blocks[clauses[chain[i]].handler_offset].block);
 
 		next = enter;
@@ -688,6 +780,16 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 	Clause &state = clause_state[clause];
 	llvm::Value *which =
 		builder.CreateLoad (builder.getInt32Ty (), state.resume_at, "resume_at");
+
+	/*
+	 * The body is over from here, so a thread stopped past this point is no longer
+	 * in it - which is what lets the abort check below raise rather than defer.
+	 */
+	emit_finally_body_marker (builder, static_cast<uint32_t> (clause), /* opening */ false);
+
+	if (llvm::Error error =
+	            emit_finally_abort_check (builder, static_cast<uint32_t> (clause), which))
+		return error;
 
 	/* The cases are filled in once every leave that reaches this block has been seen. */
 	state.resume.push_back (builder.CreateSwitch (which, unwinding));
