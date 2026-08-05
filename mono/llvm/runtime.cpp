@@ -21,9 +21,9 @@
 
 #include "runtime.hpp"
 
+#include "arch/arch.hpp"
 #include "jinfo.hpp"
 #include "jit.hpp"
-#include "lazy-entry.hpp"
 #include "stubs.hpp"
 #include "method-to-llvm.hpp"
 
@@ -994,8 +994,8 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 
 	std::string thunk_name = symbol_for_code (method);
 
-	create_legacy_entry_thunk (*thunk_module, thunk_name, *target,
-	                           legacy_call_flavor (sig));
+	arch::create_legacy_entry_thunk (*thunk_module, thunk_name, *target,
+	                                 legacy_call_flavor (sig));
 
 	if (dumping (thunk_name.c_str ()))
 		thunk_module->print (llvm::errs (), nullptr);
@@ -1347,7 +1347,7 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
 
 	tramp->code = (guint8 *) *stub;
-	tramp->code_size = (guint32) stub_block_size;
+	tramp->code_size = (guint32) arch::stub_block_size;
 	tramp->name = g_strdup (symbol_for_code (method).c_str ());
 	tramp->method = method;
 	mono_tramp_info_register (tramp, state.domain);
@@ -1357,74 +1357,6 @@ Backend::publish (DomainState &state, MonoMethod *method)
 }
 
 } // namespace
-
-/*
- * What the lazy-entry resolver reserves stack for. A plain LMF - not one of the
- * MonoLMFExt kinds - because an ordinary managed-to-native transition is what
- * this is: rsp and rbp below are the caller's, and its ip is read back off its
- * own stack from there.
- *
- * Crossing one of these zeroes the rest of the callee-saved registers, which a
- * managed-to-native wrapper makes up for by restoring them from its own frame
- * and there is no wrapper here. That costs only an exception raised inside the
- * compiler, and an abort does not come out that way: the resolver throws it
- * from the caller's frame, having already unlinked this.
- */
-struct LazyFrame {
-	MonoLMF lmf;
-	MonoLMF **addr;
-};
-
-static_assert (sizeof (LazyFrame) <= lazy_frame_size,
-               "the resolver does not reserve enough for a lazy-entry frame");
-
-void
-lazy_frame_enter (void *frame, uint64_t caller_rbp, uint64_t caller_rsp)
-{
-	LazyFrame *lazy = static_cast<LazyFrame *> (frame);
-
-	/*
-	 * No LMF chain to link onto means a thread that has not run managed code,
-	 * which reaches a stub only by the runtime calling one directly. There is
-	 * no managed caller for the walk to find, and nothing to deliver an abort
-	 * to either.
-	 */
-	lazy->addr = mono_tls_get_lmf_addr ();
-
-	if (!lazy->addr)
-		return;
-
-	lazy->lmf.rbp = caller_rbp;
-	lazy->lmf.rsp = caller_rsp;
-	lazy->lmf.previous_lmf = *lazy->addr;
-	*lazy->addr = &lazy->lmf;
-}
-
-void *
-lazy_frame_leave (void *frame)
-{
-	LazyFrame *lazy = static_cast<LazyFrame *> (frame);
-
-	if (!lazy->addr)
-		return nullptr;
-
-	*lazy->addr = (MonoLMF *) (((gsize) lazy->lmf.previous_lmf) & ~7);
-
-	/*
-	 * An abort aimed at a thread inside the compiler is left as a flag rather
-	 * than delivered by hijack, because the thread is not running managed code
-	 * at the point it was suspended. This is where it gets picked up - the
-	 * forced variant, since the method being compiled may well have been
-	 * called from a protected wrapper.
-	 */
-	return mono_thread_force_interruption_checkpoint_noraise ();
-}
-
-void **
-rethrow_trampoline_slot ()
-{
-	return (void **) mono_get_rethrow_preserve_exception_addr ();
-}
 
 } // namespace mono
 

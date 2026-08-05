@@ -1,16 +1,35 @@
 /**
  * \file
  * \brief The re-entry resolver a stub's first call lands in.
+ *
+ * A method's stub starts out pointing at an ORC trampoline, so the thread that
+ * calls it first is the thread that compiles it. ORC's own resolver saves the
+ * call's registers, asks the session for the method's address and returns into
+ * it - and for the whole of that compile the thread is running native code
+ * with nothing on the LMF chain to say where it came from.
+ *
+ * That costs two things the runtime expects of any managed-to-native
+ * transition. A signal-safe stack walk (an async abort deciding whether it can
+ * hijack the thread, the profiler, the debugger) crosses a native frame only
+ * through an LMF, so it reports a thread with no managed frames at all. And an
+ * abort that arrives during the compile is therefore not delivered by hijack;
+ * it is left as a flag, which an ordinary compiled body never polls.
+ *
+ * So the resolver here is ORC's with a mono lazy-entry frame around the
+ * compile: an LMF carrying the caller's frame, and a forced interruption
+ * checkpoint once it is unlinked. mini's generic trampoline does exactly this,
+ * down to throwing from the caller's frame rather than from the trampoline's -
+ * see the tail of mono_arch_create_generic_trampoline ().
  */
 
-#include "lazy-entry.hpp"
+#include "arch/arch.hpp"
 
 #include <cstring>
 
 using namespace llvm;
 using namespace llvm::orc;
 
-namespace mono {
+namespace mono::arch {
 
 /*
  * ORC's OrcX86_64_SysV::writeResolverCode () with the lazy-entry frame added:
@@ -35,10 +54,9 @@ namespace mono {
  * mini's trampoline puts it after its `leave`.
  */
 void
-MonoOrcX86_64_SysV::writeResolverCode (char *resolver_mem,
-                                       ExecutorAddr resolver_addr,
-                                       ExecutorAddr reentry_fn,
-                                       ExecutorAddr reentry_ctx)
+LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
+                                 ExecutorAddr reentry_fn,
+                                 ExecutorAddr reentry_ctx)
 {
 	(void) resolver_addr; /* Nothing here is written relative to itself. */
 
@@ -161,4 +179,4 @@ MonoOrcX86_64_SysV::writeResolverCode (char *resolver_mem,
 	             sizeof (rethrow_slot));
 }
 
-} // namespace mono
+} // namespace mono::arch

@@ -2,6 +2,14 @@
  * \file
  * \brief Lowering calls that cross into code compiled by mini.
  *
+ * Generated code speaks fastcc with every value in its natural IR type; only
+ * the boundary with the rest of the runtime - code mini compiled, raw C entry
+ * points, and every function pointer the runtime hands out - still speaks
+ * mini's convention. The translator marks those boundary calls with the
+ * `mono-legacycc` attribute and emits them naturally; LegacyAbiPass rewrites
+ * them into the legacy convention after the optimization pipeline has run, so
+ * nothing upstream of it ever sees a lowered call.
+ *
  * The convention restated here is mini's (get_call_info / add_valuetype,
  * mini-amd64.c), classified from IR types and the DataLayout:
  *
@@ -24,7 +32,7 @@
  * with padding spelled [n x i1] so it stays distinguishable from data.
  */
 
-#include "legacy-abi.hpp"
+#include "arch/arch.hpp"
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
@@ -45,7 +53,7 @@
 
 using namespace llvm;
 
-namespace mono {
+namespace mono::arch {
 
 StringRef
 legacy_flavor_value (LegacyFlavor flavor)
@@ -696,4 +704,4 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 	return thunk;
 }
 
-} // namespace mono
+} // namespace mono::arch

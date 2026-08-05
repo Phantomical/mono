@@ -823,9 +823,7 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	builder.SetInsertPoint (entry_block);
 
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-	llvm::Value *exc = builder.CreateCall (llvm::InlineAsm::get (
-		llvm::FunctionType::get (ptr, false), "", "={rax}",
-		/*hasSideEffects=*/true));
+	llvm::Value *exc = arch::emit_entered_exception (builder);
 	llvm::Value *frame = builder.CreateIntrinsic (
 		ptr, llvm::Intrinsic::frameaddress, { builder.getInt32 (1) });
 

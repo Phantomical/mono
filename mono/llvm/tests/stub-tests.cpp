@@ -8,6 +8,7 @@
  * redirect, and lands on the newest target once it is removed.
  */
 
+#include "arch/arch.hpp"
 #include "jit.hpp"
 #include "stubs.hpp"
 
@@ -175,7 +176,7 @@ make_writable (void *addr, size_t len)
  */
 constexpr size_t detour_size = 14;
 
-static_assert (detour_size <= stub_block_size,
+static_assert (detour_size <= arch::stub_block_size,
                "a detour has to fit inside the stub it patches");
 
 static void
@@ -293,7 +294,7 @@ TEST (Stubs, GeometryLeavesRoomForADetour)
 	ASSERT_TRUE (bool (a)) << toString (a.takeError ());
 	ASSERT_TRUE (bool (b)) << toString (b.takeError ());
 
-	char bytes[stub_block_size];
+	char bytes[arch::stub_block_size];
 	std::memcpy (bytes, *a, sizeof (bytes));
 
 	/* jmpq *ptr(%rip) ... */
@@ -301,11 +302,11 @@ TEST (Stubs, GeometryLeavesRoomForADetour)
 	EXPECT_EQ (static_cast<unsigned char> (bytes[1]), 0x25);
 
 	/* ... and the rest of the block is ours, so a 14-byte patch fits. */
-	for (size_t i = 6; i < stub_block_size; i++)
+	for (size_t i = 6; i < arch::stub_block_size; i++)
 		EXPECT_EQ (static_cast<unsigned char> (bytes[i]), 0xcc)
 			<< "stub byte " << i << " is not padding";
 
-	EXPECT_EQ (reinterpret_cast<uintptr_t> (*a) % stub_alignment, 0u);
+	EXPECT_EQ (reinterpret_cast<uintptr_t> (*a) % arch::stub_alignment, 0u);
 
 	uintptr_t delta = reinterpret_cast<uintptr_t> (*a) >
 	                          reinterpret_cast<uintptr_t> (*b)
@@ -313,7 +314,7 @@ TEST (Stubs, GeometryLeavesRoomForADetour)
 	                            reinterpret_cast<uintptr_t> (*b)
 	                      : reinterpret_cast<uintptr_t> (*b) -
 	                            reinterpret_cast<uintptr_t> (*a);
-	EXPECT_GE (delta, stub_block_size)
+	EXPECT_GE (delta, arch::stub_block_size)
 		<< "stubs overlap: patching one would clobber the other";
 }
 
@@ -376,11 +377,11 @@ TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
 
 	std::sort (addrs.begin (), addrs.end ());
 	for (size_t i = 1; i < addrs.size (); i++)
-		ASSERT_GE (addrs[i] - addrs[i - 1], stub_block_size)
+		ASSERT_GE (addrs[i] - addrs[i - 1], arch::stub_block_size)
 			<< "stubs " << i - 1 << " and " << i << " overlap";
 
 	uintptr_t span = addrs.back () - addrs.front ();
-	EXPECT_LE (span, count * stub_block_size)
+	EXPECT_LE (span, count * arch::stub_block_size)
 		<< "stubs are spread over " << span / count << " bytes each";
 
 	/* Every one of them still works. */

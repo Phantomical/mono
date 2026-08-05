@@ -126,7 +126,7 @@ public:
 	///
 	/// That first call does not always continue into the method: an async
 	/// abort that arrived while the thread was compiling is thrown from the
-	/// caller's frame instead, which is lazy-entry.hpp's business.
+	/// caller's frame instead, which is the arch resolver's business.
 	llvm::Error create_lazy_stub (llvm::StringRef name,
 	                              LazyCompileFunction compile);
 

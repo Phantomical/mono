@@ -10,7 +10,7 @@
 #ifndef MONO_LLVM_METHOD_TO_LLVM_HPP
 #define MONO_LLVM_METHOD_TO_LLVM_HPP
 
-#include "passes/legacy-abi.hpp"
+#include "arch/arch.hpp"
 
 #include "mini.h"
 #include "mono/metadata/metadata.h"
@@ -713,7 +713,7 @@ bool implemented_outside_il (MonoMethod *method);
 /// the C classification, managed ones mini's, with the hidden return pointer
 /// behind the first argument whenever the runtime's trampolines insist on
 /// finding a receiver there.
-LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
+arch::LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
 
 /// The flavor of the code the runtime publishes for METHOD, whose signature is
 /// SIG.
@@ -725,7 +725,7 @@ LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
 /// The one exception is an icall registered as needing no wrapper at all, whose
 /// published address really is the C function. So the method, not its
 /// signature, is what says which convention its entry speaks.
-LegacyFlavor legacy_entry_flavor (MonoMethod *method, MonoMethodSignature *sig);
+arch::LegacyFlavor legacy_entry_flavor (MonoMethod *method, MonoMethodSignature *sig);
 
 /// EXTERNALS, when given, collects the symbols the emitted module leaves for the
 /// engine to resolve.

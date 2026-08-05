@@ -16,23 +16,9 @@
 #include <llvm/ExecutionEngine/Orc/RedirectionManager.h>
 #include <llvm/Support/Error.h>
 
-#include <cstdint>
 #include <memory>
 
 namespace mono {
-
-/*
- * A stub is the 6 bytes of `jmpq *slot(%rip)` padded with int3 out to 16.
- *
- * Stock JITLink stubs are those 6 bytes at alignment 1, so they pack tightly
- * and a detour would run off the end of one and into its neighbour. The widest
- * patch Harmony and MonoMod write is 14 bytes - `jmp *0(%rip)` plus the 8-byte
- * destination behind it - so a stub has to own at least that many for a detour
- * to be containable. 16 is that, rounded up to the alignment, and the two
- * bytes left over trap anything that jumps into the tail.
- */
-constexpr uint64_t stub_block_size = 16;
-constexpr uint64_t stub_alignment = 16;
 
 /// Build the redirectable-symbol manager the JIT publishes stubs through.
 /// Fails on architectures we do not emit stubs for.

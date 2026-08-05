@@ -5,11 +5,10 @@
 
 #include "jit.hpp"
 
+#include "arch/arch.hpp"
 #include "compiler.hpp"
-#include "lazy-entry.hpp"
 #include "nearmem.hpp"
 #include "passes/array-address.hpp"
-#include "passes/legacy-abi.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "stubs.hpp"
@@ -336,7 +335,7 @@ MonoJit::run_tier0_pipeline (Module &m)
 	 */
 	fpm.addPass (RestoreTailPositionPass ());
 	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
-	mpm.addPass (LegacyAbiPass ());
+	mpm.addPass (arch::LegacyAbiPass ());
 	mpm.run (m, mam);
 }
 
@@ -411,7 +410,7 @@ MonoJit::create ()
 	self->redirectable_ = std::move (*redirectable);
 
 	auto callbacks =
-		LocalJITCompileCallbackManager<MonoOrcX86_64_SysV>::Create (
+		LocalJITCompileCallbackManager<arch::LazyEntryABI>::Create (
 			es, ExecutorAddr::fromPtr (&lazy_compile_failed));
 	if (!callbacks)
 		return callbacks.takeError ();

@@ -13,6 +13,7 @@
 
 #include "jinfo.hpp"
 
+#include "arch/arch.hpp"
 #include "sidetables.hpp"
 
 #include "../mini/llvm/mono_lsda.hpp"
@@ -82,28 +83,6 @@ parse_unwind_records (const uint8_t *section, size_t size,
 	return true;
 }
 
-/// Can a stack walk rebuild HW_REG for the frame it is looking at?
-///
-/// True for the stack pointer and for the callee-saved registers the unwind info
-/// restores; a caller-saved register's value is long gone by the time the walk
-/// reaches the frame that set it.
-bool
-guard_base_reg_is_recoverable (int hw_reg)
-{
-	switch (hw_reg) {
-	case AMD64_RSP:
-	case AMD64_RBP:
-	case AMD64_RBX:
-	case AMD64_R12:
-	case AMD64_R13:
-	case AMD64_R14:
-	case AMD64_R15:
-		return true;
-	default:
-		return false;
-	}
-}
-
 /// The finally guard records, or an error if the section is malformed or names a
 /// slot a stack walk could not reach.
 ///
@@ -165,7 +144,7 @@ parse_guards (const uint8_t *section, size_t size, uint32_t code_size)
 
 		int hw_reg = mono_dwarf_reg_to_hw_reg (dwarf_reg);
 
-		if (!guard_base_reg_is_recoverable (hw_reg))
+		if (!arch::reg_is_recoverable (hw_reg))
 			return createStringError (inconvertibleErrorCode (),
 			                          "the finally guard slot is homed against a "
 			                          "register a stack walk cannot rebuild");

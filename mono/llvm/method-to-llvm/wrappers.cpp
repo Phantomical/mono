@@ -51,14 +51,11 @@ MethodLLVMEmitter::address_symbol (const std::string &name, void *address)
 /*
  * A save_lmf wrapper links a frame onto the thread's LMF chain, which is how a
  * stack walk that starts in native code finds its way back to managed frames:
- * the walker reads the caller ip out of *(lmf->rsp - 8) and carries on from
- * this frame's own unwind info (mono_arch_unwind_frame, exceptions-amd64.c).
+ * the walker reads the caller ip off the stack the LMF points at and carries
+ * on from this frame's own unwind info (mono_arch_unwind_frame).
  *
- * Only the linking and the two register values are emitted here, exactly what
- * mini's lmf_ir mode records. rsp has to be the frame's settled value - the
- * one live at the transition call - which stacksave reads after the prologue
- * has reserved everything, since codegen never moves rsp again inside a frame
- * without dynamic allocas. frameaddress pins rbp the same way.
+ * Only the linking and the frame's two register values are emitted here,
+ * exactly what mini's lmf_ir mode records.
  */
 llvm::Error
 MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
@@ -75,14 +72,10 @@ MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
 
 	/*
 	 * Unwinding through the LMF hop zeroes every callee-saved register and
-	 * rebuilds them from this frame's own unwind info
-	 * (mono_arch_unwind_frame, exceptions-amd64.c) - which can only restore
-	 * what the frame saved. Clobbering the whole file makes the prologue
-	 * save all of it, the way mini's save_lmf prologues do.
+	 * rebuilds them from this frame's own unwind info, so the prologue has to
+	 * save all of them, the way mini's save_lmf prologues do.
 	 */
-	builder.CreateCall (llvm::InlineAsm::get (
-		llvm::FunctionType::get (builder.getVoidTy (), false), "",
-		"~{rbx},~{r12},~{r13},~{r14},~{r15}", /*hasSideEffects=*/true));
+	arch::emit_callee_saved_clobber (builder);
 
 	llvm::AllocaInst *slot = builder.CreateAlloca (
 		llvm::ArrayType::get (i8, sizeof (MonoLMF)), nullptr, "lmf");
@@ -104,20 +97,7 @@ MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
 		builder.CreateConstInBoundsGEP1_32 (
 			i8, slot, MONO_STRUCT_OFFSET (MonoLMF, previous_lmf)),
 		align);
-	builder.CreateAlignedStore (
-		builder.CreatePtrToInt (
-			builder.CreateIntrinsic (llvm::Intrinsic::frameaddress, { ptr },
-		                                 { builder.getInt32 (0) }),
-			builder.getInt64Ty ()),
-		builder.CreateConstInBoundsGEP1_32 (i8, slot,
-	                                            MONO_STRUCT_OFFSET (MonoLMF, rbp)),
-		align);
-	builder.CreateAlignedStore (
-		builder.CreatePtrToInt (builder.CreateStackSave (),
-	                                builder.getInt64Ty ()),
-		builder.CreateConstInBoundsGEP1_32 (i8, slot,
-	                                            MONO_STRUCT_OFFSET (MonoLMF, rsp)),
-		align);
+	arch::emit_lmf_capture_registers (builder, slot);
 	builder.CreateAlignedStore (slot, lmf_addr, align);
 	return llvm::Error::success ();
 }

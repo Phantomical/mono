@@ -17,8 +17,9 @@
 
 #include "stubs.hpp"
 
+#include "arch/arch.hpp"
+
 #include <llvm/ADT/DenseMap.h>
-#include <llvm/ExecutionEngine/JITLink/x86_64.h>
 #include <llvm/Support/Memory.h>
 
 #include <atomic>
@@ -41,7 +42,7 @@ namespace {
  */
 constexpr size_t stubs_per_slab = 2048;
 constexpr size_t slot_region_size = stubs_per_slab * sizeof (void *);
-constexpr size_t stub_region_size = stubs_per_slab * stub_block_size;
+constexpr size_t stub_region_size = stubs_per_slab * arch::stub_block_size;
 
 using Slot = std::atomic<void *>;
 
@@ -70,34 +71,16 @@ public:
 		size_t i = next_++;
 
 		Slot *slot = reinterpret_cast<Slot *> (base + i * sizeof (void *));
-		char *code = base + slot_region_size + i * stub_block_size;
+		char *code = base + slot_region_size + i * arch::stub_block_size;
 
 		slot->store (target, std::memory_order_release);
-		write_stub (code, slot);
-		sys::Memory::InvalidateInstructionCache (code, stub_block_size);
+		arch::write_jump_stub (code, slot);
+		sys::Memory::InvalidateInstructionCache (code, arch::stub_block_size);
 
 		return Stub { code, slot };
 	}
 
 private:
-	/// `jmpq *slot(%rip)`, int3 to the end of the block.
-	static void write_stub (char *code, const Slot *slot)
-	{
-		std::memcpy (code, jitlink::x86_64::PointerJumpStubContent,
-		             sizeof (jitlink::x86_64::PointerJumpStubContent));
-		std::memset (code + sizeof (jitlink::x86_64::PointerJumpStubContent),
-		             0xcc,
-		             stub_block_size -
-		                 sizeof (jitlink::x86_64::PointerJumpStubContent));
-
-		/* rip is the end of the instruction, and the displacement follows the
-		 * two opcode bytes. */
-		int32_t disp = static_cast<int32_t> (
-			reinterpret_cast<const char *> (slot) -
-			(code + sizeof (jitlink::x86_64::PointerJumpStubContent)));
-		std::memcpy (code + 2, &disp, sizeof (disp));
-	}
-
 	/*
 	 * Stubs stay writable rather than being flipped to read-execute once
 	 * written: they are carved one at a time out of a page other stubs are
@@ -225,10 +208,9 @@ Expected<std::unique_ptr<RedirectableSymbolManager>>
 make_redirectable_symbol_manager (ExecutionSession &es)
 {
 	const Triple &tt = es.getTargetTriple ();
-	if (tt.getArch () != Triple::x86_64)
+	if (tt.getArch () != arch::target_arch)
 		return make_error<StringError> (
-			"redirectable stubs are only implemented for x86-64, not " +
-				tt.str (),
+			"redirectable stubs are not implemented for " + tt.str (),
 			inconvertibleErrorCode ());
 
 	return std::make_unique<SlabRedirectableSymbolManager> ();
