@@ -398,6 +398,12 @@ private:
 	Expected<Compiled> compile_thrower (DomainState &state, MonoMethod *method,
 	                                    MonoError *failure);
 
+	/// Turn FAILURE into a body for METHOD that raises it, whatever the
+	/// failure was: what a call already under way gets instead of an answer.
+	/// Consumes FAILURE.
+	Expected<Compiled> raise_on_call (DomainState &state, MonoMethod *method,
+	                                  Error failure);
+
 	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method);
 
 	/// The legacy entry - the interop thunk - as a compile of its own. It
@@ -869,6 +875,32 @@ Backend::recover (DomainState &state, MonoMethod *method, Error failure)
 }
 
 /*
+ * A stub is the end of the line for a failure. The trampoline behind it has
+ * already put the call's arguments back and there is no caller expecting a
+ * miss, so a failure that gets this far either becomes an exception the program
+ * can see or ends the process. Which means the choice recover () makes - defer
+ * this one, report that one - is not available here: everything is deferred,
+ * and a failure that never went through a MonoError becomes the
+ * ExecutionEngineException managed code sees for an engine that gave up. A
+ * symbol that failed to resolve then costs the one method that named it rather
+ * than every method in the process.
+ */
+Expected<Backend::Compiled>
+Backend::raise_on_call (DomainState &state, MonoMethod *method, Error failure)
+{
+	ERROR_DECL (call_error);
+
+	if (failure.isA<RuntimeError> ())
+		handleAllErrors (std::move (failure),
+		                 [&] (RuntimeError &runtime) { runtime.move_to (call_error); });
+	else
+		mono_error_set_execution_engine (call_error, "%s",
+		                                 toString (std::move (failure)).c_str ());
+
+	return compile_thrower (state, method, call_error);
+}
+
+/*
  * A method whose metadata will not load is not a method that failed to compile;
  * it is a method whose every call must raise. The exception cannot be raised
  * from here - this runs inside the lazy-compile callback, and the frames between
@@ -1215,9 +1247,9 @@ void *
 Backend::body_for_current_domain (MonoMethod *method)
 {
 	/*
-	 * A dispatcher is the only caller, so the backend exists. Failure lands
-	 * where lazy_compile_failed () lands for a stub: the call's arguments are
-	 * already in place and there is no caller prepared for a miss.
+	 * A dispatcher is the only caller, so the backend exists. Having no state
+	 * for the domain being called into is not something the program could be
+	 * told about - there is no linker to compile the telling.
 	 */
 	Expected<DomainState *> state = live_backend->state ();
 
@@ -1229,13 +1261,20 @@ Backend::body_for_current_domain (MonoMethod *method)
 
 	Expected<Compiled> code = live_backend->ensure_compiled (**state, method);
 
-	if (!code)
+	if (code)
+		return code->body;
+
+	/* The call is already under way, so the failure is raised from it. */
+	Expected<Compiled> raising =
+		live_backend->raise_on_call (**state, method, code.takeError ());
+
+	if (!raising)
 		report_fatal_error (
 			Twine ("a dispatched method failed to compile: ")
-				+ toString (code.takeError ()),
+				+ toString (raising.takeError ()),
 			false);
 
-	return code->body;
+	return raising->body;
 }
 
 Error
@@ -1279,30 +1318,51 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 		       || mono_method_signature_internal (method)->call_convention
 		              == MONO_CALL_VARARG;
 	};
+	/* HALF says which of the stand-in's two compiles this stub wants. */
+	auto raising = [this, owner, method] (Error failure,
+	                                      void *Compiled::*half) -> Expected<void *> {
+		Expected<Compiled> thrower =
+			raise_on_call (*owner, method, std::move (failure));
+
+		if (!thrower)
+			return thrower.takeError ();
+		return (*thrower).*half;
+	};
+
 	if (Error err = state.jit->create_lazy_stub (
 	        symbol_for_code (method),
-	        [this, owner, method, bindable] () -> Expected<void *> {
-		        if (!bindable ())
-			        return compile_entry_thunk (*owner, method);
+	        [this, owner, method, bindable, raising] () -> Expected<void *> {
+		        if (!bindable ()) {
+			        Expected<void *> thunk = compile_entry_thunk (*owner, method);
+
+			        if (!thunk)
+				        return raising (thunk.takeError (), &Compiled::entry);
+			        return *thunk;
+		        }
 
 		        Expected<Compiled> code = ensure_compiled (*owner, method);
 
 		        if (!code)
-			        return code.takeError ();
+			        return raising (code.takeError (), &Compiled::entry);
 		        return code->entry;
 	        }))
 		return err;
 
 	if (Error err = state.jit->create_lazy_stub (
 	        symbol_for_body (method),
-	        [this, owner, method, bindable] () -> Expected<void *> {
-		        if (!bindable ())
-			        return dispatcher (*owner, method);
+	        [this, owner, method, bindable, raising] () -> Expected<void *> {
+		        if (!bindable ()) {
+			        Expected<void *> call = dispatcher (*owner, method);
+
+			        if (!call)
+				        return raising (call.takeError (), &Compiled::body);
+			        return *call;
+		        }
 
 		        Expected<Compiled> code = ensure_compiled (*owner, method);
 
 		        if (!code)
-			        return code.takeError ();
+			        return raising (code.takeError (), &Compiled::body);
 		        return code->body;
 	        }))
 		return err;
