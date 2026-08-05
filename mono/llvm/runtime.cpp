@@ -397,6 +397,12 @@ private:
 	Error resolve (DomainState &state, const std::vector<ExternalSymbol> &externals);
 	Expected<Compiled> translate_and_compile (DomainState &state, MonoMethod *method);
 
+	/// Translate METHOD's IL and compile what comes out, storing the jit info
+	/// of the body in PUBLISHED. PUBLISHED is left null when a metadata
+	/// failure was turned into a stand-in body instead of a real one.
+	Expected<Compiled> translate_body (DomainState &state, MonoMethod *method,
+	                                   MonoJitInfo **published);
+
 	/// Note that COMPILED, and the jit-info record JINFO registered for it, were
 	/// produced for METHOD, so that free_method () can undo both. Either may be
 	/// absent - a dispatcher carries no jit info.
@@ -717,6 +723,28 @@ Backend::resolve (DomainState &state, const std::vector<ExternalSymbol> &externa
 	return Error::success ();
 }
 
+/*
+ * The end of a compile as the profiler API models it: one jit_done naming the
+ * method, and for a managed-to-native wrapper one more naming the icall or
+ * pinvoke it wraps, which is the only name a profiler ever hears for those.
+ * The alias carries the wrapper's jit info, so a consumer that pairs its
+ * begin/done on jinfo->d.method == method drops it and closes on the raise for
+ * METHOD itself.
+ */
+void
+raise_jit_done (MonoMethod *method, MonoJitInfo *jinfo)
+{
+	if (method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE) {
+		MonoMethod *wrapped = mono_marshal_method_from_wrapper (method);
+
+		/* A wrapper around a bare native function wraps no method. */
+		if (wrapped != nullptr)
+			MONO_PROFILER_RAISE (jit_done, (wrapped, jinfo));
+	}
+
+	MONO_PROFILER_RAISE (jit_done, (method, jinfo));
+}
+
 Expected<Backend::Compiled>
 Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 {
@@ -731,9 +759,6 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
 		method = mono_marshal_get_array_accessor_wrapper (method);
 
-	auto context = std::make_unique<LLVMContext> ();
-	auto module = std::make_unique<Module> (symbol_for_body (method), *context);
-
 	if (implemented_outside_il (method)) {
 		ERROR_DECL (compile_error);
 		void *code = mono_jit_compile_method (method, compile_error);
@@ -744,10 +769,41 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 		/*
 		 * mini's code is the legacy convention; generated code declares such
 		 * a method against the plain symbol and lowers its calls, so nothing
-		 * ever reaches the body stub expecting fastcc.
+		 * ever reaches the body stub expecting fastcc. The profiler hears
+		 * about this one from mono_jit_compile_method_with_opt (), which
+		 * reports the declaration against the wrapper it built - and that
+		 * wrapper came back through here and bracketed itself.
 		 */
 		return Compiled { code, code };
 	}
+
+	/*
+	 * This is the one place a method is translated, so it is where the
+	 * profiler's compilation of it begins and ends. Exactly one end follows
+	 * every begin: a consumer pairing the two would otherwise carry an open
+	 * span for the rest of the process. A method whose metadata would not load
+	 * gets a stand-in body that raises instead of a translation, and that is a
+	 * failed compile however it is served.
+	 */
+	MONO_PROFILER_RAISE (jit_begin, (method));
+
+	MonoJitInfo *published = nullptr;
+	Expected<Compiled> code = translate_body (state, method, &published);
+
+	if (code && published != nullptr)
+		raise_jit_done (method, published);
+	else
+		MONO_PROFILER_RAISE (jit_failed, (method));
+
+	return code;
+}
+
+Expected<Backend::Compiled>
+Backend::translate_body (DomainState &state, MonoMethod *method,
+                         MonoJitInfo **published)
+{
+	auto context = std::make_unique<LLVMContext> ();
+	auto module = std::make_unique<Module> (symbol_for_body (method), *context);
 
 	/*
 	 * Translation itself resolves everything per-domain against state.domain
@@ -823,6 +879,7 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 	if (!jinfo)
 		return jinfo.takeError ();
 	remember (state, method, *compiled, *jinfo);
+	*published = *jinfo;
 
 	/*
 	 * The legacy entry, as a module of its own: the side tables attribute

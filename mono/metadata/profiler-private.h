@@ -13,6 +13,9 @@
 #include <mono/utils/mono-os-semaphore.h>
 #include <mono/metadata/icalls.h>
 
+/* Everything here is defined in C, and the JIT calls it from C++. */
+MONO_BEGIN_DECLS
+
 struct _MonoProfilerDesc {
 	MonoProfilerHandle next;
 	MonoProfiler *prof;
@@ -191,6 +194,8 @@ mono_profiler_clauses_enabled (void)
 #undef MONO_PROFILER_EVENT_4
 #undef MONO_PROFILER_EVENT_5
 #undef _MONO_PROFILER_EVENT
+
+MONO_END_DECLS
 
 /* These are the macros the rest of the runtime should use. */
 
