@@ -1426,6 +1426,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_LD_DELEGATE_METHOD_PTR:
 	case MONO_CEE_MONO_CALLI_EXTRA_ARG:
 	case MONO_CEE_MONO_SAVE_LAST_ERROR:
+	case MONO_CEE_MONO_SAVE_LMF:
+	case MONO_CEE_MONO_RESTORE_LMF:
 		if (!in_wrapper ())
 			return invalid_il (llvm::Twine (mono_opcode_name (opcode))
 			                   + " outside a wrapper");
@@ -1479,6 +1481,16 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 		/* A hint that the branch it precedes is the unlikely one. */
 		case MONO_CEE_MONO_NOT_TAKEN:
+			return llvm::Error::success ();
+
+		/*
+		 * Bracketing marks around a call out to native code. Every wrapper that
+		 * emits them is a save_lmf wrapper, so the chain is already linked for
+		 * the whole body and unlinked on every exit; there is nothing narrower
+		 * to do here.
+		 */
+		case MONO_CEE_MONO_SAVE_LMF:
+		case MONO_CEE_MONO_RESTORE_LMF:
 			return llvm::Error::success ();
 
 		/*
