@@ -490,6 +490,7 @@ private:
 	                               MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Expected<llvm::Constant *> code_address_symbol (MonoMethod *target);
+	MonoMethod *synchronized_target (MonoMethod *target);
 	bool is_own_this (llvm::Value *value);
 	llvm::CallInst::TailCallKind should_tail_call (MonoMethodSignature *callee_sig,
 	                                               MonoMethod *callee_method,

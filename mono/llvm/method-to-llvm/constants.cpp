@@ -313,8 +313,27 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 			return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
 			                   + " does not hold a token");
 
-		if (handle_class == mono_defaults.typehandle_class)
-			handle = m_class_get_byval_arg (static_cast<MonoClass *> (handle));
+		if (handle_class == mono_defaults.typehandle_class) {
+			MonoClass *klass = static_cast<MonoClass *> (handle);
+			MonoGenericContext *ctx = mono_method_get_context (method);
+
+			/*
+			 * A synchronized wrapper is built once, over the generic
+			 * definition, and inflated per instantiation - so its class
+			 * token names Gen<T> and the instantiation has to be put back
+			 * in here. Without it every Gen<X> would lock typeof (Gen<>),
+			 * and so lock each other out.
+			 */
+			if (ctx != nullptr && mono_class_is_gtd (klass)) {
+				klass = mono_class_inflate_generic_class_checked (klass, ctx,
+				                                                  metadata_error);
+
+				if (klass == nullptr)
+					return runtime_error (metadata_error);
+			}
+
+			handle = m_class_get_byval_arg (klass);
+		}
 	} else {
 		handle = mono_ldtoken_checked (m_class_get_image (method->klass), token,
 		                               &handle_class, mono_method_get_context (method),

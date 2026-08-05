@@ -4,6 +4,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
+#include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
@@ -196,6 +197,32 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 	g_free (name);
 	record_external (symbol, ExternalSymbol::Kind::Method, target);
 	return extern_symbol (symbol);
+}
+
+/// TARGET, or the wrapper that takes and releases its lock if TARGET is
+/// [MethodImpl(Synchronized)].
+///
+/// A synchronized method's monitor is not in its body: the runtime builds a
+/// wrapper that enters the monitor, calls the body and exits from a finally, and
+/// the flagged method itself is only ever the body. Every reference this front
+/// end resolves while it compiles - a direct callee, an escaping code address -
+/// therefore has to name the wrapper, because nothing between here and the code
+/// will substitute one later.
+///
+/// A dispatched site must not ask: what the receiver's vtable slot holds is
+/// already the wrapper, put there by the runtime, and the IMT key has to stay the
+/// method the caller named.
+MonoMethod *
+MethodLLVMEmitter::synchronized_target (MonoMethod *target)
+{
+	if (!(target->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED))
+		return target;
+
+	/* The wrapper's own call to the body it locks, which would call itself. */
+	if (method->wrapper_type == MONO_WRAPPER_SYNCHRONIZED)
+		return target;
+
+	return mono_marshal_get_synchronized_wrapper (target);
 }
 
 /// Whether VALUE is this method's own `this`, straight out of its slot. Used
@@ -545,21 +572,23 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	if (!target)
 		return target.takeError ();
 
+	MonoMethod *callee_method = synchronized_target (*target);
+
 	if (!stack.empty ())
 		return unbalanced_stack (0);
 	if (innermost_try (offset) >= 0)
 		return invalid_il ("jmp cannot transfer control out of a protected block");
 	/* A legacy target's call lowers to a different prototype than this method's. */
-	if (implemented_outside_il (*target))
+	if (implemented_outside_il (callee_method))
 		return unsupported_il ("jmp to a runtime-implemented method");
 	if (method->save_lmf)
 		return unsupported_il ("jmp out of a frame that keeps an LMF");
 
-	llvm::Expected<llvm::Function *> declaration = create_method_decl (*target);
+	llvm::Expected<llvm::Function *> declaration = create_method_decl (callee_method);
 	if (!declaration)
 		return declaration.takeError ();
 
-	MonoMethodSignature *sig = mono_method_signature_internal (*target);
+	MonoMethodSignature *sig = mono_method_signature_internal (callee_method);
 
 	if (sig == nullptr)
 		return invalid_il ("the jmp target has no signature");
@@ -822,6 +851,16 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		receiver.type = mono_get_object_type ();
 	}
 
+	/*
+	 * Whether the callee is settled here rather than looked up off the receiver.
+	 * Everything below that names a different method than the IL did depends on
+	 * it: a site that still dispatches gets whatever the runtime put in the slot.
+	 */
+	bool devirtualized = !is_virtual
+	                     || direct_this
+	                     || !(callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
+	                     || (callee_method->flags & METHOD_ATTRIBUTE_FINAL);
+
 #ifndef DISABLE_REMOTING
 	/*
 	 * A receiver of a MarshalByRefObject-derived class - or of Object itself,
@@ -838,11 +877,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	 * re-wrapping the with-check wrapper's own direct call would make the
 	 * wrapper call itself.
 	 */
-	bool devirtualized = !is_virtual
-	                     || direct_this
-	                     || !(callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
-	                     || (callee_method->flags & METHOD_ATTRIBUTE_FINAL);
-
 	bool in_remoting_wrapper =
 		method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE
 		|| method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK
@@ -866,6 +900,20 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		sig = mono_method_signature_internal (callee_method);
 	}
 #endif
+
+	/*
+	 * Asked after the remoting check, so that a synchronized method on a
+	 * remotable class locks inside the with-check wrapper rather than around it:
+	 * the wrapper's own call to the body is where the lock belongs.
+	 */
+	if (devirtualized) {
+		MonoMethod *locked = synchronized_target (callee_method);
+
+		if (locked != callee_method) {
+			callee_method = locked;
+			sig = mono_method_signature_internal (callee_method);
+		}
+	}
 
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (callee_method);
 	if (!declaration)

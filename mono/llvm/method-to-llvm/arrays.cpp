@@ -84,6 +84,19 @@ MethodLLVMEmitter::element_type_from_token (uint32_t token)
 		return invalid_il (llvm::Twine ("token 0x") + llvm::Twine::utohexstr (token)
 		                   + " does not name a type");
 
+	/*
+	 * A class the runtime has already given up on still resolves - the failure is
+	 * recorded on it rather than in place of it - so naming one in IL has to be
+	 * refused here. The failure is a type load, which recover () turns into a
+	 * method that raises TypeLoadException when it is called.
+	 */
+	if (mono_class_has_failure (klass)) {
+		ERROR_DECL (load_error);
+
+		mono_error_set_for_class_failure (load_error, klass);
+		return runtime_error (load_error);
+	}
+
 	return m_class_get_byval_arg (klass);
 }
 

@@ -59,9 +59,12 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 	/*
 	 * The pushed value is the method's published entry point - the legacy one,
 	 * because this pointer escapes: a delegate stores it, native code may be
-	 * handed it, and any calli through it dispatches as a legacy call.
+	 * handed it, and any calli through it dispatches as a legacy call. For a
+	 * synchronized method that entry has to be the locking wrapper's: whoever
+	 * ends up calling through the pointer has no other chance to take the lock.
 	 */
-	llvm::Expected<llvm::Constant *> address = code_address_symbol (*target);
+	llvm::Expected<llvm::Constant *> address =
+		code_address_symbol (synchronized_target (*target));
 	if (!address)
 		return address.takeError ();
 

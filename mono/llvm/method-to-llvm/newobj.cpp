@@ -114,6 +114,9 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	}
 #endif
 
+	/* A synchronized constructor holds its lock over the body, not the allocation. */
+	ctor = synchronized_target (ctor);
+
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (ctor);
 	if (!declaration)
 		return declaration.takeError ();
