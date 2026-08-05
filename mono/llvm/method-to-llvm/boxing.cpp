@@ -3,6 +3,7 @@
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/exception-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include <llvm/IR/Attributes.h>
@@ -218,6 +219,21 @@ llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
                               llvm::Value *value)
 {
+	/*
+	 * A byreflike value may hold managed pointers into a stack frame, so a box
+	 * of one would outlive what it points at. Metadata refuses the type as a
+	 * generic argument; the box opcode is the remaining way to smuggle one onto
+	 * the heap, and it is refused here.
+	 */
+	if (m_class_is_byreflike (klass)) {
+		ERROR_DECL (error);
+
+		mono_error_set_bad_image (error, m_class_get_image (method->klass),
+		                          "Cannot box IsByRefLike type '%s.%s'",
+		                          m_class_get_name_space (klass), m_class_get_name (klass));
+		return runtime_error (error);
+	}
+
 	llvm::Expected<llvm::Function *> allocate = object_new_decl ();
 
 	if (!allocate)
