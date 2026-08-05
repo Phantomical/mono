@@ -711,9 +711,27 @@ MethodLLVMEmitter::emit ()
 	 * then locals.
 	 */
 	bool has_filters = false;
+	bool has_finally = false;
 
-	for (uint32_t i = 0; i < num_clauses; ++i)
+	for (uint32_t i = 0; i < num_clauses; ++i) {
 		has_filters |= clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER;
+		has_finally |= clauses[i].flags == MONO_EXCEPTION_CLAUSE_FINALLY;
+	}
+
+	/*
+	 * Both of the ways this frame is described to something outside it - the
+	 * localescape below, and the stackmap a finally marker carries - name a stack
+	 * object as a single frame-pointer-relative offset, with nowhere to say which
+	 * register it is relative to. A realigned frame addresses its non-fixed objects
+	 * off RSP instead, so X86 asserts on the stackmap ("Expected the FP as base
+	 * register") and quietly emits the wrong offset for LOCAL_ESCAPE. Nothing here
+	 * asks for more than 16-byte alignment, so the only thing that ever realigns
+	 * these frames is a vector spill slot regalloc invented; declining the
+	 * realignment clamps that slot instead, which costs an unaligned move.
+	 */
+	if (has_filters || has_finally)
+		function->addFnAttr ("no-realign-stack");
+
 	if (has_filters) {
 		std::vector<llvm::Value *> escaped;
 
