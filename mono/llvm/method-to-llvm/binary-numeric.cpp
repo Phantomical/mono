@@ -64,9 +64,15 @@ constexpr uint32_t OVERFLOW_ALL =
 
 /// One cell of an operand table: what A op B leaves on the stack, and which of that
 /// table's instructions the cell holds for. X is the table's invalid box.
+///
+/// A pairing can push different things for different instructions - adding an address
+/// to a number gives an address, subtracting one gives the distance between them - so a
+/// cell may name a second result covering a subset of its own ops.
 struct Cell {
 	StackType result = Invalid;
 	uint32_t ops = 0;
+	uint32_t alt_ops = 0;
+	StackType alt_result = Invalid;
 };
 
 using OperandTable = Cell[STACK_TYPE_COUNT][STACK_TYPE_COUNT];
@@ -78,7 +84,7 @@ constexpr Cell I8_ALL = {Int64, NUMERIC};
 constexpr Cell NI_ALL = {NativeInt, NUMERIC};
 constexpr Cell F_ALL = {Float, NUMERIC};
 constexpr Cell NI_SUB = {NativeInt, SUB};
-constexpr Cell MP_ADD = {ManagedPtr, ADD};
+constexpr Cell MP_ADD_NI_SUB = {ManagedPtr, ADD | SUB, SUB, NativeInt};
 constexpr Cell MP_ADD_SUB = {ManagedPtr, ADD | SUB};
 
 /*
@@ -92,12 +98,18 @@ constexpr Cell MP_ADD_SUB = {ManagedPtr, ADD | SUB};
  * accept int64 mixed with int32 or native int (this one, the integer table, and the
  * overflow table alike), the narrower operand riding sign-extended in the full
  * register. Same leniency here, with the extension made explicit by coerce ().
+ *
+ * So does `number - &`, which the spec has no cell for at all. A C# compiler reaches it
+ * whenever a pointer difference has a `fixed` local on the right, since that local is a
+ * managed pointer while the other operand is a plain unmanaged one - and every C#
+ * compiler emits it, so refusing would be refusing ordinary code. The distance between
+ * two addresses is a number, not an address, hence the native-int result.
  */
 constexpr OperandTable BINARY_NUMERIC = {
 	/*              int32       int64    native int     F        &      O */
-	/* int32 */ {I4_ALL, I8_ALL, NI_ALL, X, MP_ADD, X},
+	/* int32 */ {I4_ALL, I8_ALL, NI_ALL, X, MP_ADD_NI_SUB, X},
 	/* int64 */ {I8_ALL, I8_ALL, NI_ALL, X, X, X},
-	/* nint  */ {NI_ALL, NI_ALL, NI_ALL, X, MP_ADD, X},
+	/* nint  */ {NI_ALL, NI_ALL, NI_ALL, X, MP_ADD_NI_SUB, X},
 	/* F     */ {X, X, X, F_ALL, X, X},
 	/* &     */ {MP_ADD_SUB, X, MP_ADD_SUB, X, NI_SUB, X},
 	/* O     */ {X, X, X, X, X, X},
@@ -147,28 +159,32 @@ constexpr Cell I8_CMP = {Int64, COMPARE_ALL};
 constexpr Cell NI_CMP = {NativeInt, COMPARE_ALL};
 constexpr Cell F_CMP = {Float, COMPARE_ALL};
 constexpr Cell MP_CMP = {ManagedPtr, COMPARE_ALL};
-constexpr Cell NI_EQ = {NativeInt, COMPARE_EQ};
 constexpr Cell O_EQ = {ObjectRef, COMPARE_EQ};
 
 /*
  * Table III.4: Binary Comparison or Branch Operations.
  *
- * The cells that carry a list rather than a tick are the ones the spec restricts to
- * beq/bne.un (and ceq): comparing a managed pointer with a number, or two object
- * references, is only meaningful for equality. & against & takes the whole row, with a
- * footnote that anything other than equality is only meaningful when both point into
- * the same array - which the CLI does not check and neither does this.
+ * The object-reference cell carries a list rather than a tick because the spec
+ * restricts it to beq/bne.un (and ceq): comparing two object references is only
+ * meaningful for equality. & against & takes the whole row, with a footnote that
+ * anything other than equality is only meaningful when both point into the same array -
+ * which the CLI does not check and neither does this.
  *
  * int64 against native int is mini's 64-bit leniency again; int64 against int32 is
  * not - mini refuses that pairing even for comparisons.
+ *
+ * Native int against & takes the whole row rather than the spec's beq/bne.un, for the
+ * same reason `number - &` is in Table III.2 above: order-comparing a `fixed` local
+ * against a plain pointer is ordinary C#, the two are the same address either way, and
+ * mini's table accepts every predicate for the pairing.
  */
 constexpr OperandTable COMPARISON = {
 	/*            int32   int64   native int   F      &       O */
 	/* int32 */ {I4_CMP, X, NI_CMP, X, X, X},
 	/* int64 */ {X, I8_CMP, NI_CMP, X, X, X},
-	/* nint  */ {NI_CMP, NI_CMP, NI_CMP, X, NI_EQ, X},
+	/* nint  */ {NI_CMP, NI_CMP, NI_CMP, X, NI_CMP, X},
 	/* F     */ {X, X, X, F_CMP, X, X},
-	/* &     */ {X, X, NI_EQ, X, MP_CMP, X},
+	/* &     */ {X, X, NI_CMP, X, MP_CMP, X},
 	/* O     */ {X, X, X, X, X, O_EQ},
 };
 
@@ -176,18 +192,18 @@ constexpr Cell I4_OVF = {Int32, OVERFLOW_ALL};
 constexpr Cell I8_OVF = {Int64, OVERFLOW_ALL};
 constexpr Cell NI_OVF = {NativeInt, OVERFLOW_ALL};
 constexpr Cell NI_SUB_UN = {NativeInt, SUB_OVF_UN};
-constexpr Cell MP_ADD_UN = {ManagedPtr, ADD_OVF_UN};
+constexpr Cell MP_ADD_NI_SUB_UN = {ManagedPtr, ADD_OVF_UN | SUB_OVF_UN, SUB_OVF_UN, NativeInt};
 constexpr Cell MP_ADD_SUB_UN = {ManagedPtr, ADD_OVF_UN | SUB_OVF_UN};
 
 /*
  * Table III.7: Overflow Arithmetic Operations. The same shape as Table III.2, except
- * that only the unsigned forms may touch a pointer.
+ * that only the unsigned forms may touch a pointer - `number - &` included.
  */
 constexpr OperandTable OVERFLOW_ARITHMETIC = {
 	/*                int32          int64   native int      F      &        O */
-	/* int32 */ {I4_OVF, I8_OVF, NI_OVF, X, MP_ADD_UN, X},
+	/* int32 */ {I4_OVF, I8_OVF, NI_OVF, X, MP_ADD_NI_SUB_UN, X},
 	/* int64 */ {I8_OVF, I8_OVF, NI_OVF, X, X, X},
-	/* nint  */ {NI_OVF, NI_OVF, NI_OVF, X, MP_ADD_UN, X},
+	/* nint  */ {NI_OVF, NI_OVF, NI_OVF, X, MP_ADD_NI_SUB_UN, X},
 	/* F     */ {X, X, X, X, X, X},
 	/* &     */ {MP_ADD_SUB_UN, X, MP_ADD_SUB_UN, X, NI_SUB_UN, X},
 	/* O     */ {X, X, X, X, X, X},
@@ -332,7 +348,7 @@ MethodLLVMEmitter::binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs)
 		return invalid_il (llvm::Twine (op_name (op)) + " is not defined for operand types "
 		                   + describe (lhs, a) + " and " + describe (rhs, b));
 
-	switch (cell.result) {
+	switch ((cell.alt_ops & bit (op)) != 0 ? cell.alt_result : cell.result) {
 	case Int32:
 		return mono_get_int32_type ();
 	case Int64:
@@ -477,8 +493,8 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 
 	if (result->byref) {
 		/*
-		 * Only & - int gets a managed pointer back, so value1 is the pointer;
-		 * int - & is not in the table. Index it the way add does, backwards.
+		 * Only & - int gets a managed pointer back, so value1 is the pointer -
+		 * int - & is a number. Index it the way add does, backwards.
 		 */
 		llvm::Value *index = coerce (builder, value2.value, native_int_type (builder));
 
@@ -489,7 +505,7 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 		if (!type)
 			return type.takeError ();
 
-		/* & - & lands here: coerce turns both pointers into their addresses. */
+		/* & - & and int - & land here: coerce turns a pointer into its address. */
 		llvm::Value *lhs = coerce (builder, value1.value, *type);
 		llvm::Value *rhs = coerce (builder, value2.value, *type);
 
@@ -1000,7 +1016,7 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 		if (!type)
 			return type.takeError ();
 
-		/* & - & lands here: coerce turns both pointers into their addresses. */
+		/* & - & and int - & land here: coerce turns a pointer into its address. */
 		difference = emit_checked (builder,
 		                           is_unsigned ? llvm::Intrinsic::usub_with_overflow
 		                                       : llvm::Intrinsic::ssub_with_overflow,
