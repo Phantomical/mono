@@ -649,6 +649,7 @@ MethodLLVMEmitter::emit ()
 		return declr.takeError ();
 
 	function = declr.get ();
+	resolve_call_instrumentation ();
 	code = cfg->header->code;
 	code_size = cfg->header->code_size;
 	clauses = cfg->header->clauses;
@@ -814,6 +815,8 @@ MethodLLVMEmitter::emit ()
 		if (auto error = enter_block (builder, clause->handler_offset, entry))
 			return std::move (error);
 	}
+
+	emit_profiler_enter (builder);
 
 	/*
 	 * The type initializer runs before the first entry into any of the class's

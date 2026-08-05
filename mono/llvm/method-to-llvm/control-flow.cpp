@@ -59,6 +59,7 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 		if (!stack.empty ())
 			return unbalanced_stack (0);
 
+		emit_profiler_leave (builder);
 		if (lmf_slot != nullptr)
 			emit_pop_lmf (builder);
 		builder.CreateRetVoid ();
@@ -75,6 +76,7 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 		return value.takeError ();
 
 	pop_stack (1);
+	emit_profiler_leave (builder);
 	if (lmf_slot != nullptr)
 		emit_pop_lmf (builder);
 

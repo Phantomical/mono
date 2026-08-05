@@ -730,10 +730,18 @@ Backend::resolve (DomainState &state, const std::vector<ExternalSymbol> &externa
  * The alias carries the wrapper's jit info, so a consumer that pairs its
  * begin/done on jinfo->d.method == method drops it and closes on the raise for
  * METHOD itself.
+ *
+ * The code range goes out too. It is how a profiler that symbolicates native
+ * addresses - the log profiler's coverage of the JIT-produced ranges, a
+ * perf-map writer - learns that this stretch of memory belongs to a method.
  */
 void
 raise_jit_done (MonoMethod *method, MonoJitInfo *jinfo)
 {
+	MONO_PROFILER_RAISE (jit_code_buffer,
+	                     (static_cast<const mono_byte *> (jinfo->code_start),
+	                      jinfo->code_size, MONO_PROFILER_CODE_BUFFER_METHOD, method));
+
 	if (method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE) {
 		MonoMethod *wrapped = mono_marshal_method_from_wrapper (method);
 

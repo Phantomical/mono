@@ -740,6 +740,8 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	if (hidden != nullptr)
 		values.insert (values.begin (), hidden_return_pointer (function));
 
+	emit_profiler_frame_handover (builder, callee_method);
+
 	llvm::CallInst *call = builder.CreateCall (*declaration, values);
 
 	if (hidden != nullptr)
@@ -1238,10 +1240,24 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (through_slot && tail_kind == llvm::CallInst::TCK_MustTail)
 		tail_kind = llvm::CallInst::TCK_Tail;
 
-	if (tail_kind != llvm::CallInst::TCK_None)
+	/*
+	 * An instrumented method has to report its exit in front of a site the frame
+	 * does not come back from, so it can only honour the marker that is a
+	 * guarantee. Under the weaker one the backend is free to leave an ordinary
+	 * call, and the report would then land before the callee's own entry instead
+	 * of after its exit.
+	 */
+	if (tail_kind == llvm::CallInst::TCK_Tail
+	    && (instrumented (MONO_PROFILER_CALL_INSTRUMENTATION_LEAVE)
+	        || instrumented (MONO_PROFILER_CALL_INSTRUMENTATION_TAIL_CALL)))
+		tail_kind = llvm::CallInst::TCK_None;
+
+	if (tail_kind != llvm::CallInst::TCK_None) {
+		emit_profiler_frame_handover (builder, callee_method);
 		return emit_tail_call (builder, callee, *args, tail_kind,
 		                       sig->param_count + sig->hasthis, *declaration,
 		                       describe_site);
+	}
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args, describe_site);
 

@@ -279,6 +279,12 @@ private:
 	/// nothing in the range is protected.
 	bool filter_mode = false;
 
+	/// Which of enter, leave and tail call a profiler asked to be told about for
+	/// this method. NONE - the answer whenever no profiler is attached - is what
+	/// keeps the instrumentation out of every ordinary compile.
+	MonoProfilerCallInstrumentationFlags prof_flags =
+		MONO_PROFILER_CALL_INSTRUMENTATION_NONE;
+
 	/// A vararg method's trailing parameter: the buffer holding the call-site
 	/// signature and the variable arguments, which is what arglist pushes.
 	llvm::Value *sig_cookie = nullptr;
@@ -418,6 +424,14 @@ private:
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
 	llvm::Error emit_push_lmf (MonoIrBuilder &builder);
 	void emit_pop_lmf (MonoIrBuilder &builder);
+
+	void resolve_call_instrumentation ();
+	bool instrumented (MonoProfilerCallInstrumentationFlags flag) const;
+	void emit_profiler_event (MonoIrBuilder &builder, const char *raise, void *address,
+	                          llvm::ArrayRef<llvm::Value *> args);
+	void emit_profiler_enter (MonoIrBuilder &builder);
+	void emit_profiler_leave (MonoIrBuilder &builder);
+	void emit_profiler_frame_handover (MonoIrBuilder &builder, MonoMethod *target);
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
 	llvm::Error emit_prefix (int opcode, uint64_t operand);
