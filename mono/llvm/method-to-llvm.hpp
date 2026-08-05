@@ -15,6 +15,7 @@
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/Twine.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
@@ -497,7 +498,9 @@ private:
 	llvm::Error emit_jmp (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                            llvm::ArrayRef<llvm::Value *> args,
-	                            llvm::CallInst::TailCallKind kind, size_t arg_slots);
+	                            llvm::CallInst::TailCallKind kind, size_t arg_slots,
+	                            llvm::Function *declaration,
+	                            llvm::function_ref<void (llvm::CallBase *)> describe_site);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token);

@@ -468,6 +468,12 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 /// the shape LLVM turns into a jump. The IL ret that should_tail_call verified comes
 /// next is consumed here, since this ret is its translation.
 ///
+/// DECLARATION is the callee's own declaration, which is where the site's return
+/// attributes come from even when the call goes through a pointer rather than to it.
+/// DESCRIBE_SITE says the rest of what the site is; a dispatched call has to say the
+/// same things here that it would on the ordinary path, since a jump that lost its
+/// key would dispatch on nothing.
+///
 /// The marker is what the jump is made of, not a hint about one. The backend never
 /// turns an *unmarked* call in tail position into a sibling call, at any
 /// optimization level, so a site left plain is a site that keeps its frame. That is
@@ -476,14 +482,15 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 llvm::Error
 MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
                                    llvm::ArrayRef<llvm::Value *> args,
-                                   llvm::CallInst::TailCallKind kind, size_t arg_slots)
+                                   llvm::CallInst::TailCallKind kind, size_t arg_slots,
+                                   llvm::Function *declaration,
+                                   llvm::function_ref<void (llvm::CallBase *)> describe_site)
 {
 	llvm::CallInst *call = builder.CreateCall (callee, args);
 
-	if (auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ()))
-		carry_return_attributes (call, target);
+	carry_return_attributes (call, declaration);
+	describe_site (call);
 	call->setTailCallKind (kind);
-	call->setCallingConv (llvm::CallingConv::Fast);
 	pop_stack (arg_slots);
 
 	if (call->getType ()->isVoidTy ())
@@ -938,35 +945,44 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		}
 	}
 
-	/*
-	 * A keyed call is never a tail call: its key argument travels outside the
-	 * regular ABI, pinned to a register the caller's own frame never carried. Nor
-	 * is a dispatched one - what the slot holds is a legacy entry, whose
-	 * convention is not this method's.
-	 */
+	/* What the site says about its callee, whether or not it becomes a jump. */
+	auto describe_site = [&] (llvm::CallBase *site) {
+		if (keyed)
+			site->addParamAttr (0, llvm::Attribute::Nest);
+
+		/*
+		 * A dispatched call goes through whatever pointer the runtime put in
+		 * the slot, which is always a legacy entry - the slots are shared with
+		 * every caller that is not generated code.
+		 */
+		if (through_slot)
+			mark_legacy_entry_call (site, callee_method, sig);
+	};
+
 	llvm::CallInst::TailCallKind tail_kind =
-		keyed || through_slot
-			? llvm::CallInst::TCK_None
-			: should_tail_call (sig, callee_method, callee.getFunctionType ());
+		should_tail_call (sig, callee_method, callee.getFunctionType ());
+
+	/*
+	 * A dispatched site can hand its frame over like any other - the key rides a
+	 * register of its own that a jump leaves alone, and a legacy entry is reached
+	 * by a jump as readily as by a call - but it can never demand one. Its
+	 * arguments are still to be lowered into the legacy convention, and a site
+	 * whose argument area that rebuilds is not one the backend can jump through;
+	 * musttail across the two conventions is not even well-formed IR. So the
+	 * marker stays the permission, which LegacyAbiPass drops again where the
+	 * lowering turns out to need this frame.
+	 */
+	if (through_slot && tail_kind == llvm::CallInst::TCK_MustTail)
+		tail_kind = llvm::CallInst::TCK_Tail;
 
 	if (tail_kind != llvm::CallInst::TCK_None)
 		return emit_tail_call (builder, callee, *args, tail_kind,
-		                       sig->param_count + sig->hasthis);
+		                       sig->param_count + sig->hasthis, *declaration,
+		                       describe_site);
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args);
-	llvm::CallBase *site = llvm::cast<llvm::CallBase> (result);
 
-	if (keyed)
-		site->addParamAttr (0, llvm::Attribute::Nest);
-
-	/*
-	 * A dispatched call goes through whatever pointer the runtime put in the
-	 * slot, which is always a legacy entry - the slots are shared with every
-	 * caller that is not generated code.
-	 */
-	if (through_slot)
-		mark_legacy_entry_call (site, callee_method, sig);
-
+	describe_site (llvm::cast<llvm::CallBase> (result));
 	pop_stack (sig->param_count + sig->hasthis);
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)

@@ -367,6 +367,41 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 	return low;
 }
 
+/// The tail-call kind the lowered site may carry over from CALL, which crossed the
+/// boundary as LOW describes.
+///
+/// A refusal to be a jump carries as it is; it constrains nothing. A permission to
+/// be one survives only where the lowering left this frame out of the call:
+///
+///   - a Memory argument is a pointer into an alloca of this frame, which is the one
+///     thing a tail call promises the callee never sees;
+///   - a return that travels - through a hidden pointer or as register words - is
+///     read back after the call, so there is no longer a call the ret follows.
+///
+/// A Coerced argument is none of that: its spill is loaded before the call and what
+/// crosses is the loaded word, so the alloca is dead by the time the frame goes.
+///
+/// And only ever as the permission - the lowered site speaks the C convention while
+/// the managed caller speaks fastcc, and the verifier rejects a musttail call across
+/// that.
+CallInst::TailCallKind
+carried_tail_kind (const CallInst *call, const CallLowering &low)
+{
+	CallInst::TailCallKind kind = call->getTailCallKind ();
+
+	if (kind != CallInst::TCK_Tail && kind != CallInst::TCK_MustTail)
+		return kind;
+
+	if (low.ret_by_address || low.ret_travel != nullptr)
+		return CallInst::TCK_None;
+
+	for (const ParamLowering &p : low.params)
+		if (p.kind == ParamLowering::Memory)
+			return CallInst::TCK_None;
+
+	return CallInst::TCK_Tail;
+}
+
 void
 rewrite_call (CallBase *call, LegacyFlavor flavor)
 {
@@ -490,6 +525,10 @@ rewrite_call (CallBase *call, LegacyFlavor flavor)
 
 	lowered->setAttributes (new_attrs);
 	lowered->setCallingConv (CallingConv::C);
+
+	if (auto *plain = dyn_cast<CallInst> (call))
+		cast<CallInst> (lowered)->setTailCallKind (
+			carried_tail_kind (plain, low));
 
 	Value *result = lowered;
 
