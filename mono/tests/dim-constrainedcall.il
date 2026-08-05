@@ -164,10 +164,10 @@ AfterBoxingCall:
 
 IGen3_OK:
 
-    ldloca 0
+    ldloca 2
     initobj valuetype Adder`1<valuetype Atom>
 
-    ldloc.0
+    ldloc.2
     call int32 Check<valuetype Adder`1<valuetype Atom>,valuetype Atom>(!!0)
     ldc.i4 2
     ceq
