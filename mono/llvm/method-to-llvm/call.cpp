@@ -779,6 +779,22 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		 */
 		if (m_class_is_valuetype (constrained)) {
 			ERROR_DECL (resolve_error);
+
+			/*
+			 * mono_class_get_virtual_method () lays the vtable out and then
+			 * indexes it without looking at whether that worked, so a class
+			 * whose vtable cannot be built - one that leaves an inherited
+			 * abstract method unimplemented, say - reaches vtable[slot] with
+			 * vtable NULL, and reports nothing through the MonoError either.
+			 * Build it here instead and surface the failure as the type load
+			 * the program is owed.
+			 */
+			mono_class_setup_vtable (constrained);
+			if (mono_class_has_failure (constrained)) {
+				mono_error_set_for_class_failure (resolve_error, constrained);
+				return runtime_error (resolve_error);
+			}
+
 			MonoMethod *impl = mono_class_get_virtual_method (
 				constrained, callee_method, FALSE, resolve_error);
 
