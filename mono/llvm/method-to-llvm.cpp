@@ -1534,6 +1534,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_NOT_TAKEN:
 	case MONO_CEE_MONO_OBJADDR:
 	case MONO_CEE_MONO_VTADDR:
+	case MONO_CEE_MONO_GET_SP:
 	case MONO_CEE_MONO_RETHROW:
 	case MONO_CEE_MONO_NEWOBJ:
 	case MONO_CEE_MONO_LDNATIVEOBJ:
@@ -1567,6 +1568,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_objaddr (builder);
 		case MONO_CEE_MONO_VTADDR:
 			return emit_mono_vtaddr (builder);
+		case MONO_CEE_MONO_GET_SP:
+			return emit_mono_get_sp (builder);
 		case MONO_CEE_MONO_RETHROW:
 			return emit_mono_rethrow (builder);
 		case MONO_CEE_MONO_NEWOBJ:

@@ -251,6 +251,27 @@ MethodLLVMEmitter::emit_mono_lddomain (MonoIrBuilder &builder)
 }
 
 /*
+ * III.F0.29  mono_get_sp - push a marker for where this frame's stack is
+ *
+ * The GC-safe transition helpers take a `gpointer *stackdata` that they only ever
+ * read as an approximation of the stack pointer at the call - a checked build
+ * measures the frame against it, and nothing else looks at it. So any address in
+ * this frame will do, and a pointer-sized slot of its own is the cheapest one to
+ * hand out. Mini creates a local and pushes its address the same way.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_mono_get_sp (MonoIrBuilder &builder)
+{
+	MonoIrBuilder entry (entry_block, entry_block->begin ());
+	llvm::AllocaInst *slot =
+		entry.CreateAlloca (entry.getPtrTy (), nullptr, "stackdata");
+
+	slot->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
+	push_stack (slot, m_class_get_byval_arg (mono_defaults.int_class));
+	return llvm::Error::success ();
+}
+
+/*
  * III.F0.01  mono_objaddr - take an object reference as a managed pointer
  *
  * A reference already is the object's address, so this only changes what the
