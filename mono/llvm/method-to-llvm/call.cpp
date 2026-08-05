@@ -998,8 +998,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		llvm::Value *value = builder.CreateAlignedLoad (*slot, receiver.value,
 		                                                type_alignment (vtype));
 
+		/* Boxing a nullable yields a boxed T, or null - the box opcode's rule
+		 * holds here too, and it is what makes the receiver's type observable
+		 * as T and a receiver without a value throw. */
 		llvm::Expected<llvm::Value *> boxed =
-			box_value (builder, constrained, vtype, value);
+			mono_class_is_nullable (constrained)
+				? box_nullable (builder, constrained, { value, vtype })
+				: box_value (builder, constrained, vtype, value);
 
 		if (!boxed)
 			return boxed.takeError ();

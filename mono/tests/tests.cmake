@@ -306,6 +306,7 @@ set(MONO_TESTS_CS_SRC
   thunks.cs
   winx64structs.cs
   nullable_boxing.2.cs
+  constrained-nullable-receiver.cs
   valuetype-equals.cs
   custom-modifiers.2.cs
   custom-modifiers-inheritance.cs

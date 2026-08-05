@@ -128,6 +128,39 @@ MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klas
 	return llvm::Error::success ();
 }
 
+/// Box VALUE, a Nullable<T>, into null or a boxed T.
+///
+/// Unlike every other value type, the boxed form of a Nullable<T> is not a boxed
+/// Nullable<T>: it is a boxed T, or a null reference when the value has none
+/// (III.4.1). Nullable<T>:Box is that branch, written once as ordinary IL, and
+/// every site that boxes a nullable has to go through it - the plain allocate-and-copy
+/// would manufacture an object whose type the program can observe and never expects.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::box_nullable (MonoIrBuilder &builder, MonoClass *klass, StackValue value)
+{
+	ERROR_DECL (find_error);
+	MonoMethod *helper =
+		mono_class_get_method_from_name_checked (klass, "Box", 1, 0, find_error);
+
+	if (!is_ok (find_error))
+		return runtime_error (find_error);
+	if (helper == nullptr)
+		return invalid_il ("Nullable has no Box helper");
+
+	llvm::Expected<llvm::Function *> declaration = create_method_decl (helper);
+	if (!declaration)
+		return declaration.takeError ();
+
+	MonoMethodSignature *sig = mono_method_signature_internal (helper);
+	llvm::Expected<llvm::Value *> argument =
+		coerce_to_argument (builder, value, sig->params[0]);
+
+	if (!argument)
+		return argument.takeError ();
+
+	return emit_protected_call (builder, *declaration, {*argument});
+}
+
 /*
  * III.4.1  box - convert a boxable value to its boxed form
  *
@@ -189,11 +222,19 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
-	if (mono_class_is_nullable (klass))
-		return call_nullable_helper (builder, klass, "Box");
-
 	if (stack.empty ())
 		return unbalanced_stack (1);
+
+	if (mono_class_is_nullable (klass)) {
+		llvm::Expected<llvm::Value *> obj = box_nullable (builder, klass, get_stack (0));
+
+		if (!obj)
+			return obj.takeError ();
+
+		pop_stack (1);
+		push_stack (*obj, mono_get_object_type ());
+		return llvm::Error::success ();
+	}
 
 	/* A reference type's boxed form is itself, so there is nothing to do. */
 	if (!m_class_is_valuetype (klass))
