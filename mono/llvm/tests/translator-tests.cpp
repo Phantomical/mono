@@ -15,6 +15,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -771,7 +772,8 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 // call - a guaranteed jump, which is the only form that fails loudly rather than
 // quietly, and so the only one worth using where III.2.4 makes the jump
 // mandatory. A dispatched or indirect target is a legacy-boundary call whose
-// prototype changes under LegacyAbiPass, so the prefix is declined there.
+// prototype LegacyAbiPass may yet change, so the guarantee cannot be demanded of
+// one - and musttail across the two conventions is not even well-formed IR.
 TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 {
 	EXPECT_EQ (translate ("calls", "Calls:TailStatic").count ("musttail call"), 1u);
@@ -779,6 +781,43 @@ TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 	EXPECT_EQ (translate ("calls", "Calls:TailVirtual").count ("musttail call"), 0u);
 	EXPECT_EQ (translate ("fnptr", "Fnptr:TailThroughPointer").count ("musttail call"),
 	           0u);
+}
+
+// A dispatched site still hands its frame away: the jump reaches a legacy entry as
+// readily as a call does, and the IMT key rides a register of its own that the jump
+// leaves alone. Left as an ordinary call instead, a tail. callvirt recursing in
+// constant space overflows the stack. The key and the boundary marker have to
+// survive onto the marked site - a jump that lost either dispatches on nothing.
+TEST_F (TranslatorTest, ADispatchedTailCallIsMarkedAndKeepsItsKey)
+{
+	/* The marker is an attribute group in the printed text, so it is read here. */
+	auto legacy_sites = [] (const Translation &t) {
+		unsigned n = 0;
+
+		for (const llvm::BasicBlock &block : *t.function)
+			for (const llvm::Instruction &instruction : block) {
+				const auto *call =
+					llvm::dyn_cast<llvm::CallBase> (&instruction);
+
+				if (call != nullptr
+				    && call->getFnAttr ("mono-legacycc").isValid ())
+					n++;
+			}
+		return n;
+	};
+
+	const Translation &vtable = translate ("calls", "Calls:TailVirtual");
+	const Translation &imt = translate ("calls", "Calls:TailInterface");
+
+	ASSERT_NE (vtable.function, nullptr) << vtable.error;
+	EXPECT_EQ (vtable.count ("tail call"), 1u) << vtable.text ();
+	EXPECT_EQ (vtable.count ("notail"), 0u) << vtable.text ();
+	EXPECT_EQ (legacy_sites (vtable), 1u) << vtable.text ();
+
+	ASSERT_NE (imt.function, nullptr) << imt.error;
+	EXPECT_EQ (imt.count ("tail call"), 1u) << imt.text ();
+	EXPECT_EQ (imt.count ("ptr nest @\"mono_method_"), 1u) << imt.text ();
+	EXPECT_EQ (legacy_sites (imt), 1u) << imt.text ();
 }
 
 // Where the guarantee cannot be made the prefix is still worth asking for. A

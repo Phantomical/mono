@@ -214,6 +214,17 @@
 		ret
 	}
 
+	// Dispatched through an IMT slot, so the site carries a key as well.
+	.method public static void TailInterface (class [mscorlib]System.IDisposable d)
+		cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		tail.
+		callvirt instance void [mscorlib]System.IDisposable::Dispose ()
+		ret
+	}
+
 	// The prototypes differ, so the jump cannot be demanded - but it can still be
 	// asked for, and the backend forms it where the argument area allows.
 	.method public static int32 TailMismatch (int32 a, int32 b) cil managed
