@@ -148,6 +148,7 @@ set(MONO_TESTS_CS_SRC
   pop.cs
   time.cs
   pointer.cs
+  pointer-this.cs
   hashcode.cs
   delegate1.cs
   delegate2.cs

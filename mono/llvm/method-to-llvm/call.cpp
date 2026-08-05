@@ -82,13 +82,30 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 	return coerce_to_location (builder, value, destination, native);
 }
 
+/// VALUE as the receiver of an instance call.
+///
+/// A `this` is a pointer in every signature this backend converts, but the eval stack
+/// hands one over as a native int often enough to matter: pointer arithmetic, `ldind.i`
+/// and the marshalling wrappers' own `ldarg; ldind.i; call instance` all leave a number
+/// where the callee declared an address.
+llvm::Value *
+MethodLLVMEmitter::coerce_to_receiver (MonoIrBuilder &builder, llvm::Value *value)
+{
+	if (!value->getType ()->isIntegerTy ())
+		return value;
+
+	if (value->getType ()->getIntegerBitWidth () < TARGET_SIZEOF_VOID_P * 8)
+		value = builder.CreateSExt (value, builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
+
+	return builder.CreateIntToPtr (value, llvm::PointerType::get (context (), 0));
+}
+
 /// Take a call's arguments off the evaluation stack, converted to what the signature
 /// asks for.
 ///
 /// The receiver of an instance method is argument zero and is not in the parameter list,
-/// so it comes back at the front having been coerced to nothing - what a `this` may be
-/// is settled by the caller, which is the only one that knows whether the call is
-/// virtual.
+/// so it is converted against the pointer every instance signature declares rather than
+/// against a MonoType.
 llvm::Expected<std::vector<llvm::Value *>>
 MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
                                        bool native)
@@ -105,7 +122,7 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 		StackValue value = get_stack (count - 1 - i);
 
 		if (sig->hasthis && i == 0) {
-			args[i] = value.value;
+			args[i] = coerce_to_receiver (builder, value.value);
 			continue;
 		}
 

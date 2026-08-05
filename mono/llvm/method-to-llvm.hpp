@@ -477,6 +477,7 @@ private:
 	                                  llvm::ArrayRef<llvm::Value *> args);
 
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
+	llvm::Value *coerce_to_receiver (MonoIrBuilder &builder, llvm::Value *value);
 	llvm::Expected<std::vector<llvm::Value *>>
 	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
 	                    bool native = false);
