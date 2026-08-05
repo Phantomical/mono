@@ -397,14 +397,26 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 /// Whether a return is demoted is CanLowerReturn's answer, which nothing at the IR
 /// level can ask. It is not a question of size: an aggregate return is flattened
 /// into its scalar leaves and each leaf assigned a return register, so what matters
-/// is how many leaves there are and of which class - two integers and two SSE on
-/// amd64. { i64 } is returned in a register and { i32, i32, i32, i32, i32 } is not,
-/// but so is any packed eight-byte struct that happens to flatten into four leaves.
+/// is how many leaves there are and of which class - RAX, RDX, RCX and XMM0, XMM1 on
+/// amd64. { i64, i64, i64 } is returned in registers and { i32, i32, i32, i32 } is
+/// not, nor is any packed eight-byte struct that flattens into eight i8 leaves.
 /// A size test would therefore be wrong in exactly the cases that abort.
 ///
 /// So this admits only what is already a single leaf, and leaves every aggregate to
 /// the weaker marker. Being wrong in that direction costs a tail call the prefix
 /// only ever permitted; being wrong in the other costs the process.
+///
+/// A demoted return therefore never becomes a jump, whatever the prefix says: the
+/// slot LowerCallTo invents is a fresh stack object in this frame, so handing the
+/// frame away would leave the callee writing into dead stack. Making one of these a
+/// real tail call means spelling the hidden pointer in the IR instead - a void
+/// prototype with a leading sret parameter - so that a tail site can forward the
+/// caller's *own* incoming pointer, which lives in an ancestor frame and survives.
+/// X86 recognises exactly that shape (mayBeSRetTailCallCompatible) and rejects a
+/// forwarded local. It is a change to this convention rather than to this site,
+/// though: the prototype has to be derived from the signature so that both ends
+/// agree, which moves every aggregate return, every ldarg index, and LegacyAbiPass's
+/// own hidden return pointer along with it.
 static bool
 returns_in_registers (llvm::Type *type)
 {
