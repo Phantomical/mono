@@ -211,6 +211,12 @@ Backend debugging env vars (read in `mono/llvm/runtime.cpp`):
   says it happened.
 - `MONO_LLVM_JIT_DUMP=<substr>` — dump the IL and translated IR of methods whose full
   name contains the substring.
+- `MONO_LLVM_JIT_VERIFY=<0|off|each|all>` — how much of the IR the verifier sees. On by
+  default when LLVM was built with assertions (the configuration this project uses), and
+  then it checks the translator's output, the module after each pass written here, and the
+  module codegen is handed; `each` extends that to every stock pass in the pipeline, `0`
+  turns it off. Costs roughly 6% of compile CPU on the default setting and 29% on `each`.
+  A failure names the method, the pass and prints the module, then aborts.
 
 Running a single corpus directly against the freshly built runtime:
 

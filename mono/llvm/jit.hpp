@@ -43,6 +43,11 @@ namespace mono {
 /// TargetMachine cannot be shared across threads.
 llvm::TargetMachine &host_target_machine ();
 
+/// Whether the IR verifier runs over what this backend produces. Set by
+/// MONO_LLVM_JIT_VERIFY: `0`/`off` to turn it off, `each` to check after every
+/// pass in the pipeline rather than only the ones written here.
+bool ir_verification_enabled ();
+
 /// One row of a compiled function's line table: an offset from the start of the
 /// function, and the IL offset in effect at it. The translator records these as
 /// debug locations (il-line-table.hpp) and the engine reads them back out of the

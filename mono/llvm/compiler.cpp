@@ -343,7 +343,13 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	auto *mmiwp = new MachineModuleInfoWrapperPass (&tm);
 	TargetPassConfig *tpc = tm.createPassConfig (pm);
 
-	tpc->setDisableVerify (true);
+	/*
+	 * The two IR verifier runs this gates bracket codegen's own IR passes
+	 * (CodeGenPrepare and friends), which are the last thing to touch the
+	 * module before ISel reads it. The machine verifier is a separate,
+	 * far more expensive switch and stays off either way.
+	 */
+	tpc->setDisableVerify (!ir_verification_enabled ());
 	pm.add (tpc);
 	pm.add (mmiwp);
 	if (tpc->addISelPasses ())

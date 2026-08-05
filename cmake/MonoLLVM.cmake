@@ -78,6 +78,16 @@ target_compile_definitions(mono_llvm INTERFACE
   __STDC_CONSTANT_MACROS __STDC_FORMAT_MACROS __STDC_LIMIT_MACROS
   LLVM_API_VERSION=${MONO_LLVM_API_VERSION})
 
+# An LLVM with assertions on is the configuration that is being checked rather
+# than shipped, and the IR verifier belongs to the same class of check - it
+# costs a few percent of every compile and buys a diagnostic where a malformed
+# module would otherwise miscompile silently.  So the backend's default for it
+# follows this, and MONO_LLVM_JIT_VERIFY overrides either way.
+_mono_llvm_config(_llvm_assertions --assertion-mode)
+if(_llvm_assertions STREQUAL "ON")
+  target_compile_definitions(mono_llvm INTERFACE MONO_LLVM_ASSERTIONS=1)
+endif()
+
 # LLVM is built -fno-rtti (upstream default).  Subclassing its polymorphic types (the JIT
 # memory manager, the custom passes) from a TU compiled with RTTI on is a
 # silent ABI break, so the C++ side of the backend must match.  Exceptions stay

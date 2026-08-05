@@ -25,6 +25,7 @@
 #include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -37,6 +38,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -71,6 +73,89 @@ lazy_compile_failed ()
 	fflush (nullptr);
 	_exit (1);
 }
+
+namespace {
+
+/// How much of what this backend produces the IR verifier gets to see.
+enum class VerifyLevel {
+	/// Nothing is checked.
+	off,
+	/// The translator's output, every pass written here, and the module
+	/// codegen is handed.
+	mono,
+	/// The above plus every stock pass in the optimization pipeline.
+	each,
+};
+
+/*
+ * MONO_LLVM_JIT_VERIFY picks the level, defaulting to `mono` against an LLVM
+ * built with assertions - the configuration that is being checked rather than
+ * shipped. Malformed IR is worth that: it does not crash codegen, it
+ * miscompiles, because the register allocator reads whatever the broken value
+ * happened to leave behind.
+ */
+VerifyLevel
+verify_level ()
+{
+	static VerifyLevel level = [] {
+#ifdef MONO_LLVM_ASSERTIONS
+		constexpr VerifyLevel unset = VerifyLevel::mono;
+#else
+		constexpr VerifyLevel unset = VerifyLevel::off;
+#endif
+		const char *v = std::getenv ("MONO_LLVM_JIT_VERIFY");
+
+		if (v == nullptr)
+			return unset;
+
+		StringRef setting (v);
+		if (setting == "0" || setting == "off")
+			return VerifyLevel::off;
+		if (setting == "each" || setting == "all")
+			return VerifyLevel::each;
+		return VerifyLevel::mono;
+	}();
+
+	return level;
+}
+
+/*
+ * The verifier's diagnostics name the offending instruction and nothing else,
+ * which in a JIT that compiles thousands of methods leaves out both the method
+ * and what had just run over it. Print those, and the module the failure is
+ * about, so this is diagnosable from the log rather than by bisecting.
+ */
+[[noreturn]] void
+report_broken_ir (const Module &m, StringRef when, StringRef diagnostics)
+{
+	errs () << "mono: broken IR " << when << ", in " << m.getModuleIdentifier ()
+	        << "\n"
+	        << diagnostics << m << "\n";
+	report_fatal_error ("mono: IR verification failed", /*GenCrashDiag=*/false);
+}
+
+void
+verify_or_die (const Module &m, StringRef when)
+{
+	std::string diagnostics;
+	raw_string_ostream os (diagnostics);
+
+	if (verifyModule (m, &os))
+		report_broken_ir (m, when, diagnostics);
+}
+
+/// The passes this backend writes, by the name the pass instrumentation reports
+/// them under. A break introduced by one of these is a bug here.
+bool
+is_mono_pass (StringRef pass)
+{
+	return pass == ArrayAddressPass::name () ||
+	       pass == LowerBuiltinsPass::name () ||
+	       pass == RestoreTailPositionPass::name () ||
+	       pass == arch::LegacyAbiPass::name ();
+}
+
+} // namespace
 
 /*
  * Reduce the just-compiled (not yet linked) object's `.debug_line` to per-
@@ -449,14 +534,34 @@ host_target_machine ()
 	return *tm;
 }
 
+bool
+ir_verification_enabled ()
+{
+	return verify_level () != VerifyLevel::off;
+}
+
 void
 MonoJit::run_tier0_pipeline (Module &m)
 {
+	VerifyLevel verify = verify_level ();
+	PassInstrumentationCallbacks pic;
+
+	if (verify != VerifyLevel::off) {
+		verify_or_die (m, "as translated");
+		pic.registerAfterPassCallback (
+			[&m, verify] (StringRef pass, Any, const PreservedAnalyses &) {
+				if (verify == VerifyLevel::each || is_mono_pass (pass))
+					verify_or_die (
+						m, ("after pass \"" + pass + "\"").str ());
+			});
+	}
+
 	/*
 	 * A TargetMachine so TargetTransformInfo is real; without one the
 	 * cost-model-driven parts of the pipeline silently no-op.
 	 */
-	PassBuilder pb (&host_target_machine ());
+	PassBuilder pb (&host_target_machine (), PipelineTuningOptions (),
+	                std::nullopt, &pic);
 	LoopAnalysisManager lam;
 	FunctionAnalysisManager fam;
 	CGSCCAnalysisManager cgam;
