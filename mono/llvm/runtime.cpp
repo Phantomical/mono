@@ -754,13 +754,9 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 	 * (resolve (), ldstr through cfg->domain) - never against the thread's
 	 * current domain, and any new translate-time mono_domain_get () is a
 	 * cross-domain bug of the kind the dispatcher exists to prevent. The
-	 * stub lambdas keep the two equal except for vararg methods, which
-	 * cannot be dispatched and so still compile here when first reached
-	 * from another domain.
+	 * stub lambdas keep the two equal.
 	 */
-	g_assert (mono_domain_get () == state.domain
-	          || mono_method_signature_internal (method)->call_convention
-	                 == MONO_CALL_VARARG);
+	g_assert (mono_domain_get () == state.domain);
 
 	if (tracing ()) {
 		char *name = mono_method_full_name (method, TRUE);
@@ -1327,15 +1323,12 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 	 * bound domain unloads. mini refused to patch such a call site and left
 	 * the trampoline to re-resolve each call; the dispatcher below is that
 	 * refusal here. Methods without a body of their own bind directly - what
-	 * stands behind them is mini's, one copy for the whole process - and
-	 * vararg signatures too, because a dispatcher cannot forward an arglist.
+	 * stands behind them is mini's, one copy for the whole process.
 	 */
 	DomainState *owner = &state;
 	auto bindable = [owner, method] () {
 		return mono_domain_get () == owner->domain
-		       || implemented_outside_il (method)
-		       || mono_method_signature_internal (method)->call_convention
-		              == MONO_CALL_VARARG;
+		       || implemented_outside_il (method);
 	};
 	/* HALF says which of the stand-in's two compiles this stub wants. */
 	auto raising = [this, owner, method] (Error failure,

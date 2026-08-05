@@ -304,6 +304,14 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	}
 
 	/*
+	 * A vararg callee wants its variable arguments packed into a cookie buffer,
+	 * which only the direct call path builds; the pointer here would be handed
+	 * the raw list instead.
+	 */
+	if (sig->call_convention == MONO_CALL_VARARG)
+		return unsupported_il ("calli through a vararg signature");
+
+	/*
 	 * An unmanaged target needs a managed-to-native transition, and the runtime's
 	 * indirect native-func wrapper is that transition: a managed method built for
 	 * this signature that takes the function pointer as its leading argument,

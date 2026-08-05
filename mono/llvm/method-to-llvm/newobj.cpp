@@ -90,6 +90,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		return invalid_il ("the constructor has no signature");
 	if (!sig->hasthis || strcmp ((*target)->name, ".ctor") != 0)
 		return invalid_il ("newobj needs an instance constructor");
+	if (sig->call_convention == MONO_CALL_VARARG)
+		return unsupported_il ("newobj on a vararg constructor");
 
 	MonoClass *klass = (*target)->klass;
 

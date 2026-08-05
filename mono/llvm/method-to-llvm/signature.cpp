@@ -622,15 +622,12 @@ llvm::Expected<llvm::FunctionType *>
 MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool native)
 {
 	/*
-	 * The runtime's vararg convention passes a signature cookie in a stack slot
-	 * between the fixed and the variadic arguments, and ArgIterator walks the rest
-	 * from it. Neither end of that is expressible as LLVM's C-style varargs, so
-	 * these signatures are declined whole rather than compiled to an ABI nothing
-	 * else speaks.
+	 * A vararg signature that is also a native one is C varargs, a different
+	 * convention entirely from the runtime's cookie one, and nothing here
+	 * speaks it.
 	 */
-	if (sig->call_convention == MONO_CALL_VARARG)
-		return conversion_error ("a vararg signature uses the runtime's cookie "
-		                         "convention");
+	if (sig->call_convention == MONO_CALL_VARARG && native)
+		return conversion_error ("a native vararg signature is C varargs");
 
 	llvm::Expected<llvm::Type *> ret = convert_type (sig->ret, native);
 
@@ -642,7 +639,7 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 	if (sig->hasthis)
 		params.push_back (pointer_type (context ()));
 
-	for (int i = 0; i < sig->param_count; ++i) {
+	for (int i = 0; i < vararg_fixed_params (sig); ++i) {
 		llvm::Expected<llvm::Type *> converted = convert_type (sig->params[i], native);
 
 		if (!converted)
@@ -650,7 +647,27 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 		params.push_back (*converted);
 	}
 
+	/* The cookie buffer the variable part travels in - see build_sig_cookie (). */
+	if (sig->call_convention == MONO_CALL_VARARG)
+		params.push_back (pointer_type (context ()));
+
 	return llvm::FunctionType::get (*ret, params, false);
+}
+
+/// The number of SIG's parameters that are ordinary ones, which for a vararg
+/// signature means the fixed part ahead of the sentinel.
+///
+/// A vararg method's own signature carries its sentinel past the last
+/// parameter, so a declaration and every call site that names it agree on this
+/// count - which is what lets both convert to one function type.
+int
+vararg_fixed_params (MonoMethodSignature *sig)
+{
+	if (sig->call_convention != MONO_CALL_VARARG || sig->sentinelpos < 0)
+		return sig->param_count;
+
+	return std::min (static_cast<int> (sig->sentinelpos),
+	                 static_cast<int> (sig->param_count));
 }
 
 /// ARGS shaped to CALLEE's declared parameter types.

@@ -25,6 +25,74 @@ MethodLLVMEmitter::spill_to_temporary (MonoIrBuilder &builder, MonoType *type)
 }
 
 /*
+ * III.3.4  arglist - get argument list
+ *
+ *   Format   Assembly Format   Description
+ *   FE 00    arglist           Return argument list handle for the current method.
+ *
+ * Stack Transition:
+ *
+ *   ... -> ..., argListHandle
+ *
+ * Description:
+ *
+ *   The arglist instruction returns an opaque handle (having type
+ *   System.RuntimeArgumentHandle) representing the argument list of the current
+ *   method. This handle is valid only during the lifetime of the current method. The
+ *   handle can, however, be passed to other methods as long as the current method is
+ *   on the thread of control. The arglist instruction can only be executed within a
+ *   method that takes a variable number of arguments.
+ *
+ *   [Rationale: This instruction is needed to implement the C 'va_*' macros used to
+ *   implement procedures like 'printf'. It is intended for use with the class library
+ *   implementation of System.ArgIterator. end rationale]
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness:
+ *
+ *   It is incorrect CIL generation to emit this instruction except in the body of a
+ *   method whose signature indicates it accepts a variable number of arguments.
+ *
+ * Verifiability:
+ *
+ *   Its use is verifiable within the body of a method whose signature indicates it
+ *   accepts a variable number of arguments, but verification requires that the result
+ *   be an instance of the System.RuntimeArgumentHandle class.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_arglist (MonoIrBuilder &builder)
+{
+	if (sig_cookie == nullptr) {
+		/* A filter runs as its own function and is not handed the cookie. */
+		if (filter_mode)
+			return unsupported_il ("arglist in a filter clause of a vararg method");
+
+		return invalid_il ("arglist outside a vararg method");
+	}
+
+	/*
+	 * A RuntimeArgumentHandle is a struct wrapping the buffer address, and what
+	 * ArgIterator's constructor takes is the struct, so the pointer goes back
+	 * through memory to come out in whatever shape the field converted to.
+	 */
+	MonoType *handle = m_class_get_byval_arg (mono_defaults.argumenthandle_class);
+	llvm::Expected<llvm::Type *> slot = convert_type (handle);
+	if (!slot)
+		return slot.takeError ();
+
+	MonoIrBuilder entry (entry_block, entry_block->begin ());
+	llvm::AllocaInst *temp = entry.CreateAlloca (*slot);
+
+	temp->setAlignment (type_alignment (handle));
+	builder.CreateAlignedStore (sig_cookie, temp, temp->getAlign ());
+	push_stack (builder.CreateAlignedLoad (*slot, temp, temp->getAlign ()), handle);
+	return llvm::Error::success ();
+}
+
+/*
  * III.4.19  mkrefany - push a typed reference on the stack
  *
  *   Format     Assembly Format   Description

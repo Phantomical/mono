@@ -198,6 +198,8 @@ const MethodRef translatable[] = {
 	{"typedref", "TypedRef:ReadBack"},
 	{"typedref", "TypedRef:TypeOfRef"},
 	{"typedref", "TypedRef:ValueOfRef"},
+	{"typedref", "TypedRef:CountVarargs"},
+	{"typedref", "TypedRef:CallsAVararg"},
 
 	{"objects", "Objects:MakeCounter"},
 	{"objects", "Objects:MakeCounterAt"},
@@ -1186,6 +1188,33 @@ TEST_F (TranslatorTest, RefanyvalChecksTheClassBeforeTakingTheAddress)
 	EXPECT_EQ (t.count ("throw_InvalidCastException"), 2u); // 1 block, label + branch
 }
 
+// A vararg method's variable arguments never become parameters: they travel in a
+// buffer whose address is the one trailing pointer the declaration carries, so a
+// method declaring one fixed int32 takes two arguments.
+TEST_F (TranslatorTest, AVarargMethodTakesACookieBufferAsItsLastArgument)
+{
+	const Translation &t = translate ("typedref", "TypedRef:CountVarargs");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	ASSERT_EQ (t.function->arg_size (), 2u) << t.text ();
+	EXPECT_TRUE (t.function->getArg (1)->getType ()->isPointerTy ()) << t.text ();
+}
+
+// The call packs the variable part into that buffer behind the call-site
+// signature: 8 bytes of cookie, an int32 in a whole slot, then a float in four.
+TEST_F (TranslatorTest, AVarargCallPacksTheVariableArgumentsBehindTheSignature)
+{
+	const Translation &t = translate ("typedref", "TypedRef:CallsAVararg");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("mono_sig_"), 1u) << t.text ();
+	/* The buffer runs to 8 + 8 + 4 + 8. */
+	EXPECT_EQ (t.count ("alloca [28 x i8]"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("i64 8"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("i64 16"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("i64 20"), 1u) << t.text ();
+}
+
 /* ----------------------------------------------------------------- newobj */
 
 TEST_F (TranslatorTest, NewobjAllocatesThenCallsTheConstructor)
@@ -1354,8 +1383,8 @@ const RefusalRef refusals[] = {
 	{"Refused:FallsOffTheEnd", "return"},
 	{"Refused:ConstrainedPlainCall", "plain call"},
 	{"Refused:UsesJmpBadly", "signature"},
-	{"Refused:UsesArglist", "vararg"},
-	{"Refused:CallsAVararg", "vararg"},
+	{"Refused:ArglistOutsideAVararg", "vararg"},
+	{"Refused:JumpsToAVararg", "vararg"},
 	{"Refused:MergesAStructWithAnInt", "different type"},
 };
 

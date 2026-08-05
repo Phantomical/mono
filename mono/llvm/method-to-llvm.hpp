@@ -278,6 +278,10 @@ private:
 	/// nothing in the range is protected.
 	bool filter_mode = false;
 
+	/// A vararg method's trailing parameter: the buffer holding the call-site
+	/// signature and the variable arguments, which is what arglist pushes.
+	llvm::Value *sig_cookie = nullptr;
+
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
@@ -499,6 +503,11 @@ private:
 	                                  llvm::ArrayRef<llvm::Value *> args);
 
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
+	llvm::Expected<MonoMethodSignature *> call_site_signature (MonoMethod *target,
+	                                                           uint32_t token);
+	llvm::Expected<llvm::Value *> build_sig_cookie (MonoIrBuilder &builder,
+	                                                MonoMethodSignature *sig,
+	                                                llvm::ArrayRef<llvm::Value *> args);
 	llvm::Value *coerce_to_receiver (MonoIrBuilder &builder, llvm::Value *value);
 	llvm::Expected<std::vector<llvm::Value *>>
 	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
@@ -531,6 +540,7 @@ private:
 	                                       MonoMethodSignature *sig);
 
 	llvm::Value *spill_to_temporary (MonoIrBuilder &builder, MonoType *type);
+	llvm::Error emit_arglist (MonoIrBuilder &builder);
 	llvm::Error emit_mkrefany (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_refanyval (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_refanytype (MonoIrBuilder &builder);
@@ -737,6 +747,14 @@ llvm::Attribute::AttrKind integer_extension (MonoType *t);
 /// its symbol is whatever mini compiles for it, never this backend's fastcc
 /// code.
 bool implemented_outside_il (MonoMethod *method);
+
+/// The number of SIG's parameters that are ordinary ones, which for a vararg
+/// signature means the fixed part ahead of the sentinel.
+///
+/// A vararg method's own signature carries its sentinel past the last
+/// parameter, so a declaration and every call site that names it agree on this
+/// count - which is what lets both convert to one function type.
+int vararg_fixed_params (MonoMethodSignature *sig);
 
 /// The legacy-boundary flavor of a call through SIG: native signatures keep
 /// the C classification, managed ones mini's, with the hidden return pointer

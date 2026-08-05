@@ -6,6 +6,7 @@
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
 #include "mono/metadata/marshal.h"
+#include "mono/metadata/metadata-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
@@ -53,6 +54,93 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 		return runtime_error (metadata_error);
 
 	return target;
+}
+
+/// The signature TARGET is being called with here, which for a vararg callee
+/// names the types the caller chose for the variable part as well as the fixed
+/// parameters the callee declared.
+llvm::Expected<MonoMethodSignature *>
+MethodLLVMEmitter::call_site_signature (MonoMethod *target, uint32_t token)
+{
+	/*
+	 * A wrapper's call carries wrapper data where a token would be, so there is
+	 * no memberref to read. What it gets is the signature as declared, whose
+	 * sentinel sits past the last parameter and so names no variable part -
+	 * which is right, since the IL a wrapper is built from cannot spell one.
+	 */
+	if (in_wrapper ())
+		return mono_method_signature_internal (target);
+
+	ERROR_DECL (metadata_error);
+	MonoMethodSignature *sig = mono_method_get_signature_checked (
+		target, m_class_get_image (method->klass), token,
+		mono_method_get_context (method), metadata_error);
+
+	if (sig == nullptr)
+		return runtime_error (metadata_error);
+
+	return sig;
+}
+
+/// The buffer a vararg call's variable arguments cross in, filled from ARGS,
+/// whose entries are the call-site signature's parameters in order.
+///
+/// ves_icall_System_ArgIterator_Setup () reads the signature out of the first
+/// word and starts the walk at the second, and IntGetNextArg () advances by
+/// mono_type_stack_size () with no realignment of its own, so the offsets here
+/// are that running sum and nothing else. A float taking four bytes rather than
+/// a whole slot is part of that, and getting it wrong would not be caught by
+/// the argument that follows arriving as garbage.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature *sig,
+                                     llvm::ArrayRef<llvm::Value *> args)
+{
+	const llvm::DataLayout &layout = module->getDataLayout ();
+	int fixed = vararg_fixed_params (sig);
+	std::vector<uint64_t> offsets;
+	uint64_t cursor = TARGET_SIZEOF_VOID_P;
+	uint64_t size = cursor;
+
+	for (int i = fixed; i < sig->param_count; ++i) {
+		llvm::Type *stored = args[i + sig->hasthis]->getType ();
+
+		offsets.push_back (cursor);
+		/*
+		 * The stride is the stack size the iterator will advance by, but the
+		 * buffer still has to be big enough for what actually gets written
+		 * into the last slot.
+		 */
+		size = std::max (size, cursor + layout.getTypeStoreSize (stored));
+		cursor += static_cast<uint64_t> (mono_type_stack_size (sig->params[i], nullptr));
+		size = std::max (size, cursor);
+	}
+
+	MonoIrBuilder entry (entry_block, entry_block->begin ());
+	llvm::AllocaInst *buffer = entry.CreateAlloca (
+		llvm::ArrayType::get (builder.getInt8Ty (), size), nullptr, "arglist");
+
+	buffer->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	/*
+	 * ArgIterator names the variable part by index into this signature, so it
+	 * has to be the call-site one; the declaration knows only the fixed part.
+	 */
+	builder.CreateAlignedStore (
+		address_symbol (identity_symbol ("mono_sig_", sig), sig), buffer,
+		buffer->getAlign ());
+
+	for (int i = fixed; i < sig->param_count; ++i) {
+		uint64_t offset = offsets[i - fixed];
+		llvm::Value *slot =
+			builder.CreateGEP (builder.getInt8Ty (), buffer,
+		                           builder.getInt64 (offset));
+
+		builder.CreateAlignedStore (
+			args[i + sig->hasthis], slot,
+			llvm::commonAlignment (buffer->getAlign (), offset));
+	}
+
+	return buffer;
 }
 
 /// VALUE as something that can be passed where a call signature asks for DESTINATION.
@@ -388,6 +476,13 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 		return llvm::CallInst::TCK_None;
 
 	/*
+	 * A vararg call hands the callee a cookie buffer allocated in this frame,
+	 * which the callee walks for the whole of its own execution.
+	 */
+	if (callee_sig->call_convention == MONO_CALL_VARARG)
+		return llvm::CallInst::TCK_None;
+
+	/*
 	 * The ret the prefix promises has to follow at once so it can be folded into
 	 * this instruction, must not be a branch target with an entry state of its own,
 	 * and the arguments must be all the evaluation stack holds.
@@ -593,6 +688,10 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 
 	if (sig == nullptr)
 		return invalid_il ("the jmp target has no signature");
+	/* Neither end has an arglist to forward: the cookie is not in `args`. */
+	if (sig->call_convention == MONO_CALL_VARARG
+	    || mono_method_signature_internal (method)->call_convention == MONO_CALL_VARARG)
+		return unsupported_il ("jmp across a vararg signature");
 	if (!matching_call_abi (sig, (*declaration)->getFunctionType ()))
 		return invalid_il ("the jmp target's signature does not match this method's");
 
@@ -820,6 +919,24 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		return invalid_il ("the called method has no signature");
 
 	/*
+	 * A vararg call site brings its own signature, and it is that one the
+	 * arguments on the evaluation stack were pushed against: the callee's fixed
+	 * parameters, a sentinel, then whatever types the caller chose. The
+	 * declaration knows nothing of the variable part, so everything below that
+	 * counts arguments has to work from this instead.
+	 */
+	bool vararg = sig->call_convention == MONO_CALL_VARARG;
+
+	if (vararg) {
+		llvm::Expected<MonoMethodSignature *> site =
+			call_site_signature (callee_method, token);
+
+		if (!site)
+			return site.takeError ();
+		sig = *site;
+	}
+
+	/*
 	 * An abstract method has no body for a plain call to enter. A default interface
 	 * method reaching another member of its own interface is the one place that
 	 * spelling is legal - it dispatches on the receiver the way callvirt would -
@@ -918,6 +1035,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	        || callee_method->klass == mono_defaults.object_class)
 	    && stack.size () > sig->param_count
 	    && !is_own_this (stack[stack.size () - 1 - sig->param_count].value)) {
+		/* The wrapper forwards a fixed argument list, which loses the arglist. */
+		if (vararg)
+			return unsupported_il ("a vararg call that may reach a proxy");
+
 		ERROR_DECL (wrap_error);
 		MonoMethod *checked =
 			mono_marshal_get_remoting_invoke_with_check (callee_method, wrap_error);
@@ -938,6 +1059,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		MonoMethod *locked = synchronized_target (callee_method);
 
 		if (locked != callee_method) {
+			/* The wrapper forwards a fixed argument list, losing the arglist. */
+			if (vararg)
+				return unsupported_il ("a vararg call to a synchronized method");
+
 			callee_method = locked;
 			sig = mono_method_signature_internal (callee_method);
 		}
@@ -956,6 +1081,21 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		(*args)[0] =
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	/*
+	 * The variable arguments leave the argument list for the cookie buffer, whose
+	 * address takes their place as the one trailing parameter every vararg
+	 * declaration carries.
+	 */
+	if (vararg) {
+		llvm::Expected<llvm::Value *> cookie = build_sig_cookie (builder, sig, *args);
+
+		if (!cookie)
+			return cookie.takeError ();
+
+		args->resize (vararg_fixed_params (sig) + sig->hasthis);
+		args->push_back (*cookie);
+	}
 
 	llvm::FunctionCallee callee = *declaration;
 	bool keyed = false;

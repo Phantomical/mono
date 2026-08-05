@@ -1276,6 +1276,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_ISINST:
 		return emit_isinst (builder, static_cast<uint32_t> (operand));
 
+	case MONO_CEE_ARGLIST:
+		return emit_arglist (builder);
 	case MONO_CEE_MKREFANY:
 		return emit_mkrefany (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_REFANYVAL:
@@ -1749,6 +1751,15 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 			.native = native,
 		});
 	}
+
+	/*
+	 * The trailing parameter of a vararg method is the caller's cookie buffer,
+	 * which arglist hands straight to ArgIterator. It gets no slot of its own -
+	 * nothing writes to it, and keeping it out of `args` leaves the
+	 * llvm.localescape order a filter recovers from untouched.
+	 */
+	if (sig->call_convention == MONO_CALL_VARARG)
+		sig_cookie = function->getArg (nargs);
 
 	return llvm::Error::success ();
 }

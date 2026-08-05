@@ -45,4 +45,32 @@
 		ldind.i4
 		ret
 	}
+
+	// A vararg method reaches its variable arguments through arglist, which
+	// hands back the buffer the caller filled.
+	.method public static vararg int32 CountVarargs (int32 first) cil managed
+	{
+		.maxstack 2
+		.locals init (valuetype [mscorlib]System.ArgIterator it)
+
+		ldloca.s 0
+		arglist
+		call instance void [mscorlib]System.ArgIterator::.ctor (valuetype [mscorlib]System.RuntimeArgumentHandle)
+		ldloca.s 0
+		call instance int32 [mscorlib]System.ArgIterator::GetRemainingCount ()
+		ret
+	}
+
+	// The variable part leaves the argument list for that buffer: a float takes
+	// four bytes of it, so the double behind it starts at 8 + 8 + 4.
+	.method public static int32 CallsAVararg () cil managed
+	{
+		.maxstack 4
+		ldc.i4.1
+		ldc.i4.2
+		ldc.r4 3.5
+		ldc.r8 6.75
+		call vararg int32 TypedRef::CountVarargs (int32, ..., int32, float32, float64)
+		ret
+	}
 }

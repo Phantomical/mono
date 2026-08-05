@@ -319,6 +319,7 @@ set(MONO_TESTS_CS_SRC
   filter-stack.cs
   vararg.cs
   vararg2.cs
+  vararg4.cs
   bug-461867.cs
   bug-461941.cs
   bug-461261.cs
