@@ -25,9 +25,13 @@
 #include <mono/metadata/mono-debug.h>
 #include <mono/utils/mono-error-internals.h>
 #include <mono/utils/mono-logger-internals.h>
+#include <stdio.h>
 #include <string.h>
 #ifdef HAVE_EXECINFO_H
 #include <execinfo.h>
+#endif
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
 #endif
 #include "class-init.h"
 #include "icall-decl.h"
@@ -1316,7 +1320,23 @@ mono_invoke_unhandled_exception_hook (MonoObject *exc)
 #if defined(HOST_IOS)
 		g_assertion_message ("Terminating runtime due to unhandled exception");
 #else
-		exit (mono_environment_exitcode_get ());
+		/*
+		 * We are on whatever thread raised the exception and the rest of the
+		 * runtime is still running. exit() would walk the atexit list from
+		 * here, and that list holds every C++ static destructor in the
+		 * process - the JIT's LLVM ones included - so a thread still inside a
+		 * compile would have what it is using freed underneath it. That shows
+		 * up as a heap-corruption abort milliseconds after this message, and
+		 * then as a hang when the crash reporter forks while a dying thread
+		 * holds the malloc lock.
+		 *
+		 * The atexit handlers this skips are the bundled-library temp
+		 * directory, the perf-counter shared area (reaped by the next process
+		 * that enumerates it and finds the pid gone) and the tty restore, all
+		 * three of which every fatal-signal path in the runtime skips too.
+		 */
+		fflush (NULL);
+		_exit (mono_environment_exitcode_get ());
 #endif
 	}
 

@@ -30,11 +30,13 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
-#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <unistd.h>
+
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -56,7 +58,18 @@ namespace mono {
 [[noreturn]] static void
 lazy_compile_failed ()
 {
-	report_fatal_error ("a method failed to compile on first call", false);
+	/*
+	 * Printed and left by hand rather than through report_fatal_error, which
+	 * ends in exit() when it is told not to produce a crash diagnostic. exit()
+	 * runs the static destructors of every C++ library loaded into the
+	 * process, LLVM's own among them, while the threads that are still
+	 * compiling are using what those destructors free.
+	 */
+	static const char msg[] =
+		"LLVM ERROR: a method failed to compile on first call\n";
+	[[maybe_unused]] ssize_t written = write (2, msg, sizeof (msg) - 1);
+	fflush (nullptr);
+	_exit (1);
 }
 
 /*
