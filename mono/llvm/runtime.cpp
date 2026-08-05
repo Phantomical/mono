@@ -63,6 +63,7 @@ extern "C" {
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <unwind.h>
 #include <vector>
 
 using namespace llvm;
@@ -90,6 +91,24 @@ struct Helper {
  * exception is not, so every call through a stand-in body builds its own, which
  * is what mono does everywhere else it raises a boxed class failure.
  */
+/*
+ * The personality routine every method with a handler names.
+ *
+ * mono finds a handler by searching the MonoJitInfo it publishes per method, so
+ * nothing on the managed path ever calls this. What does call it is a foreign
+ * unwinder walking a JIT'd frame: glibc implements pthread_exit as
+ * _Unwind_ForcedUnwind, and libgcc finds the frame through the FDEs ORC
+ * registered. A forced unwind runs no managed finally blocks, so there is nothing
+ * to do here beyond letting it carry on - and it has to be _URC_CONTINUE_UNWIND
+ * rather than _URC_NO_REASON, which phase 2 reads as a fatal error.
+ */
+_Unwind_Reason_Code
+jit_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Exception *,
+                 struct _Unwind_Context *)
+{
+	return _URC_CONTINUE_UNWIND;
+}
+
 MonoObject *
 load_error_exception (MonoErrorBoxed *failure)
 {
@@ -143,7 +162,7 @@ runtime_helpers ()
 		 * calls it; the unwinder does, on the way through a frame that has a
 		 * handler.
 		 */
-		{ "mono_personality", (void *) &mono_personality },
+		{ "mono_personality", (void *) &jit_personality },
 
 		/*
 		 * Not a runtime libcall as far as RuntimeLibcallsInfo is concerned -
