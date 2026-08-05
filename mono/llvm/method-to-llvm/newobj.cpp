@@ -188,6 +188,20 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		                      mono_class_value_size (klass, NULL), align);
 		args[0] = temp;
 	} else {
+		/*
+		 * An abstract class has no instances, and neither the allocator nor the
+		 * constructor it would run refuses one, so the refusal has to be here.
+		 */
+		if (mono_class_get_flags (klass) & TYPE_ATTRIBUTE_ABSTRACT) {
+			char *name = mono_type_get_full_name (klass);
+			ERROR_DECL (error);
+
+			mono_error_set_member_access (error, "Cannot create an abstract class: %s",
+			                              name);
+			g_free (name);
+			return runtime_error (error);
+		}
+
 		llvm::Expected<llvm::Function *> allocate = object_new_decl ();
 
 		if (!allocate)
