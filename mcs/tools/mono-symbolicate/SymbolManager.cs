@@ -46,7 +46,10 @@ namespace Mono
 			}
 
 			SeqPointInfo seqPointInfo = null;
-			if (!sfData.IsILOffset && sfData.Aotid != null)
+			// A frame with no #aotid suffix parses to an empty aotid, not a null
+			// one, and the empty string names the store's root rather than an
+			// aotid directory inside it.
+			if (!sfData.IsILOffset && !string.IsNullOrEmpty (sfData.Aotid))
 				seqPointInfo = GetOrCreateSeqPointInfo (sfData.Aotid);
 
 
@@ -97,9 +100,13 @@ namespace Mono
 				return null;
 			}
 
-			string msymFile = null;
-			var msymFiles = Directory.GetFiles(aotidDir, "*.msym");
-			msymFile = msymFiles[0];
+			var msymFiles = Directory.GetFiles (aotidDir, "*.msym");
+			if (msymFiles.Length == 0) {
+				logger.LogError ("AOTID directory contains no .msym file: {0}", aotidDir);
+				return null;
+			}
+
+			var msymFile = msymFiles[0];
 
 			var seqPointInfo = SeqPointInfo.Read (msymFile);
 
