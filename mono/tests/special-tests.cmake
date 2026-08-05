@@ -74,6 +74,12 @@ _mono_special(bug-3903.exe NO_DEFAULT_REFS SOURCES bug-3903.cs
 _mono_special(bug-80307.exe SOURCES bug-80307.cs NO_DEFAULT_REFS
               REFS "${_class}/System.Web.dll")
 
+# The corpus is compiled unoptimized, and the shape this one is about - a
+# value-type call result flowing into a loop-carried local across a try - only
+# survives in optimized IL.
+_mono_special(vtype-return-in-try.exe SOURCES vtype-return-in-try.cs
+              FLAGS -optimize)
+
 # --- tests whose library is rebuilt after the test, to make the test see a
 # --- different definition at run time than it compiled against --------------
 # bug-81673 and bug-36848 both link a library, then overwrite it with a

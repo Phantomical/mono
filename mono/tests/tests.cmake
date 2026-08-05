@@ -176,6 +176,7 @@ set(MONO_TESTS_CS_SRC
   test-arr.cs
   decimal.cs
   decimal-array.cs
+  vtype-return-in-try.cs
   marshal.cs
   marshal1.cs
   marshal2.cs

@@ -403,6 +403,28 @@ carried_tail_kind (const CallInst *call, const CallLowering &low)
 	return CallInst::TCK_Tail;
 }
 
+/// A block of INVOKE's own on its normal edge, so a value read back after the
+/// call has somewhere to sit ahead of every use of it.
+///
+/// The normal destination is no good on its own: a PHI there comes before
+/// anything else the block can hold, and a PHI taking the call's result is
+/// exactly what the optimizer leaves behind when the value flows into a loop.
+/// Inserting the read-back after it would name it before it is defined.
+BasicBlock *
+split_normal_edge (InvokeInst *invoke)
+{
+	BasicBlock *from = invoke->getParent ();
+	BasicBlock *to = invoke->getNormalDest ();
+	BasicBlock *edge =
+		BasicBlock::Create (to->getContext (), to->getName () + ".readback",
+		                    from->getParent (), to);
+
+	BranchInst::Create (to, edge);
+	invoke->setNormalDest (edge);
+	to->replacePhiUsesWith (from, edge);
+	return edge;
+}
+
 void
 rewrite_call (CallBase *call, LegacyFlavor flavor)
 {
@@ -535,17 +557,17 @@ rewrite_call (CallBase *call, LegacyFlavor flavor)
 
 	if (low.ret_by_address || low.ret_travel != nullptr) {
 		/*
-		 * The natural value reads back after the call - for an invoke, at
-		 * the top of the normal edge, which is the only edge the result was
-		 * ever usable on.
+		 * The natural value reads back after the call - for an invoke, in a
+		 * block of the normal edge's own, which is the only edge the result
+		 * was ever usable on.
 		 */
 		IRBuilder<> after (ctx);
 
-		if (auto *invoke = dyn_cast<InvokeInst> (lowered))
-			after.SetInsertPoint (
-				invoke->getNormalDest (),
-				invoke->getNormalDest ()->getFirstInsertionPt ());
-		else
+		if (auto *invoke = dyn_cast<InvokeInst> (lowered)) {
+			BasicBlock *edge = split_normal_edge (invoke);
+
+			after.SetInsertPoint (edge, edge->begin ());
+		} else
 			after.SetInsertPoint (lowered->getParent (),
 			                      std::next (lowered->getIterator ()));
 
