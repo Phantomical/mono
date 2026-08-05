@@ -1,5 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
+#include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata-internals.h"
@@ -55,6 +56,11 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 	llvm::Expected<MonoMethod *> target = resolve_method (token);
 	if (!target)
 		return target.takeError ();
+
+	if (checks_accessibility () && !mono_method_can_access_method (method, *target)) {
+		if (llvm::Error error = emit_method_access_failure (builder, *target))
+			return error;
+	}
 
 	/*
 	 * The pushed value is the method's published entry point - the legacy one,

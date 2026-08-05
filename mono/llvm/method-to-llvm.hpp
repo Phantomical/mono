@@ -366,6 +366,11 @@ private:
 	llvm::Error unsupported_il (const llvm::Twine &what);
 	llvm::Error emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignature *sig);
 
+	/// Whether the CLI's accessibility rules bind what this body may reach.
+	bool checks_accessibility () const;
+	llvm::Error field_access_failure (MonoClassField *field);
+	llvm::Error emit_method_access_failure (MonoIrBuilder &builder, MonoMethod *callee);
+
 	static StackType stack_type (MonoType *t);
 	static std::string describe (MonoType *t, StackType type);
 	static llvm::Value *coerce (MonoIrBuilder &builder, llvm::Value *value,

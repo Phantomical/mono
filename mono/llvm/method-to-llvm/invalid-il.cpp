@@ -1,7 +1,11 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
+#include "mono/metadata/class.h"
+#include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
+#include "mono/metadata/metadata-internals.h"
+#include <llvm/IR/BasicBlock.h>
 
 #include <string>
 
@@ -167,6 +171,69 @@ MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 
 	g_free (name);
 	return runtime_error (error);
+}
+
+/*
+ * Three kinds of body are exempt. One that asked to skip visibility got the
+ * permission from whoever emitted it - Reflection.Emit hands that out, and the
+ * runtime's own marshalling builders take it. A wrapper's body is the runtime's,
+ * not an image author's, and reaches whatever the thing it wraps is made of.
+ * And corlib-internal assemblies are the runtime's own halves of corlib, which
+ * are written against each other's privates on purpose.
+ */
+bool
+MethodLLVMEmitter::checks_accessibility () const
+{
+	if (method->skip_visibility || in_wrapper ())
+		return false;
+
+	MonoImage *image = m_class_get_image (method->klass);
+
+	return image->assembly == nullptr || !image->assembly->corlib_internal;
+}
+
+/// Refuse a field this method may not reach.
+///
+/// The refusal is the whole method's rather than the instruction's: a body that
+/// names a field it cannot see never compiles, and the FieldAccessException comes
+/// out of it when something calls it.
+llvm::Error
+MethodLLVMEmitter::field_access_failure (MonoClassField *field)
+{
+	char *field_name = mono_field_full_name (field);
+	char *method_name = mono_method_full_name (method, TRUE);
+	ERROR_DECL (error);
+
+	mono_error_set_generic_error (error, "System", "FieldAccessException",
+	                              "Field `%s' is inaccessible from method `%s'\n",
+	                              field_name, method_name);
+
+	g_free (method_name);
+	g_free (field_name);
+	return runtime_error (error);
+}
+
+/// Refuse a method this one may not reach, with a throw where the access would
+/// have been.
+///
+/// Unlike a field, the instruction alone is refused: emission carries on into a
+/// block nothing branches to, so the stack keeps its shape and a path through
+/// the body that never reaches this instruction still runs.
+llvm::Error
+MethodLLVMEmitter::emit_method_access_failure (MonoIrBuilder &builder, MonoMethod *callee)
+{
+	llvm::Expected<llvm::Function *> raise =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_throw_method_access);
+
+	if (!raise)
+		return raise.takeError ();
+
+	emit_unwinding_call (builder, *raise,
+	                     adapt_to_callee (builder, *raise,
+	                                      { method_symbol (method), method_symbol (callee) }));
+	builder.SetInsertPoint (
+		llvm::BasicBlock::Create (context (), "method_access", function));
+	return llvm::Error::success ();
 }
 
 /// The current instruction wants NEEDED more operand bytes than the method body has

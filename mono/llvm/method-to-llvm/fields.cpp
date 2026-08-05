@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
+#include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
@@ -54,6 +55,9 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is
 		if (field == nullptr)
 			return runtime_error (metadata_error);
 	}
+
+	if (checks_accessibility () && !mono_method_can_access_field (method, field))
+		return field_access_failure (field);
 
 	/*
 	 * Laying the class out is what makes the offset readable; it settles metadata

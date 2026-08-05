@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
+#include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
@@ -740,6 +741,17 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	llvm::Expected<MonoMethod *> target = resolve_method (token);
 	if (!target)
 		return target.takeError ();
+
+	/*
+	 * The subject is the callee the token names, taken before a constrained.
+	 * prefix resolves it to an override below: naming a method you cannot see is
+	 * the thing being refused, and which implementation the receiver would have
+	 * dispatched to does not change that.
+	 */
+	if (checks_accessibility () && !mono_method_can_access_method (method, *target)) {
+		if (llvm::Error error = emit_method_access_failure (builder, *target))
+			return error;
+	}
 
 	MonoMethod *callee_method = *target;
 	MonoClass *constrained = nullptr;
