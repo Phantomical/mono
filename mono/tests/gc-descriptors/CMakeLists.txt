@@ -33,13 +33,13 @@ add_custom_command(
 add_custom_target(gc-descriptor-tests DEPENDS "${_gcd_bin}/descriptor-tests.exe")
 add_dependencies(runtime-corpora gc-descriptor-tests)
 
-# Building this one is the coverage that matters, and it happens on every
-# `cmake --build`. Running it is worth doing too, but the generator emits a few
-# thousand field layouts and walking all of them takes well over fifteen
-# minutes, so the test is labelled `slow` and stays out of the default run.
+# The run is dominated by compiling the generated code, not by executing it:
+# one pass allocates every shape, which drags roughly twenty thousand tiny
+# methods through the JIT, and everything after that is fast. That is what puts
+# the test on the `slow` label. Pass a pass count as argv[1] for a longer soak.
 add_test(NAME gc-descriptors
          COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}"
                  "${_wrapper}" descriptor-tests.exe
          WORKING_DIRECTORY "${_gcd_bin}")
 set_tests_properties(gc-descriptors PROPERTIES
-  LABELS slow TIMEOUT 3600)
+  LABELS slow TIMEOUT 1800)
