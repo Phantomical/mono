@@ -198,6 +198,10 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 		builder, *build,
 		adapt_to_callee (builder, *build, { image, signature, target }));
 
+	/* The icall hands the address back as a native int; a call target is a pointer. */
+	if (!wrapper->getType ()->isPointerTy ())
+		wrapper = builder.CreateIntToPtr (wrapper, ptr);
+
 	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
 	if (!args)
 		return args.takeError ();
