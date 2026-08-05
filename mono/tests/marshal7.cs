@@ -209,8 +209,9 @@ public class Test
 			return 11;
 		if (Marshal.SizeOf (typeof (TestStruct6)) != IntPtr.Size)
 			return 12;
-		// a VARIANT is 
-		if (Marshal.SizeOf (typeof (TestStruct7)) != 16)
+		// a VARIANT is a 2-byte discriminant plus three reserved shorts, then a
+		// union whose widest member is two pointers: 16 bytes on 32-bit, 24 on 64
+		if (Marshal.SizeOf (typeof (TestStruct7)) != 8 + 2 * IntPtr.Size)
 			return 13;
 		if (IsOSX () && IntPtr.Size == 4) {
 			if (Marshal.SizeOf (typeof (TestStruct8)) != 12)

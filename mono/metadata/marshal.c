@@ -6122,9 +6122,15 @@ mono_marshal_type_size (MonoType *type, MonoMarshalSpec *mspec, guint32 *align,
 		klass = mono_class_from_mono_type_internal (type);
 		if (klass == mono_defaults.object_class &&
 			(mspec && mspec->native == MONO_NATIVE_STRUCT)) {
-			*align = 16;
-			return 16;
-		} 
+			/*
+			 * An object marshalled as a struct is a VARIANT: a 2-byte
+			 * discriminant, three 2-byte reserved fields, then a union whose
+			 * widest member is BRECORD, two pointers. So 16 bytes on 32-bit and
+			 * 24 on 64-bit, which is also what System.Variant lays out to.
+			 */
+			*align = MONO_ABI_ALIGNOF (gpointer);
+			return 8 + 2 * TARGET_SIZEOF_VOID_P;
+		}
 #ifdef ENABLE_NETCORE
 		else if (strcmp (m_class_get_name_space (klass), "System") == 0 && 
 			strcmp (m_class_get_name (klass), "Decimal") == 0) {
