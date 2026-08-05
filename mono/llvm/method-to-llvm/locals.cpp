@@ -191,28 +191,6 @@ MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
 	/* The stack tracks one float type, so an R4 location rounds and an R8 one widens. */
 	if (from->isFloatingPointTy () && (*type)->isFloatingPointTy ())
 		return builder.CreateFPCast (value.value, *type);
-	/*
-	 * Two value types of the same size are the same bytes, and IL that reinterprets
-	 * one as another - a local declared as `Adder<object>` handed to a parameter of
-	 * `Adder<Atom>` - is unverifiable but runnable: mini's check_call_signature and
-	 * target_type_is_incompatible both settle a value type on the stack kind alone
-	 * and never compare the classes. Aggregates cannot be bitcast, so the
-	 * reinterpretation goes through a slot.
-	 */
-	if (from->isStructTy () && (*type)->isStructTy ()) {
-		const llvm::DataLayout &layout = module->getDataLayout ();
-
-		if (layout.getTypeStoreSize (from) == layout.getTypeStoreSize (*type)) {
-			llvm::Align align = std::max (type_alignment (value.type),
-			                              type_alignment (destination, native));
-			MonoIrBuilder entry (entry_block, entry_block->begin ());
-			llvm::AllocaInst *slot = entry.CreateAlloca (from);
-
-			slot->setAlignment (align);
-			builder.CreateAlignedStore (value.value, slot, align);
-			return builder.CreateAlignedLoad (*type, slot, align);
-		}
-	}
 
 	char *source_name = mono_type_full_name (value.type);
 	char *destination_name = mono_type_full_name (destination);
