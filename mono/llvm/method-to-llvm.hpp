@@ -174,6 +174,20 @@ private:
 		llvm::BasicBlock *block = nullptr;
 		std::vector<Slot> entry;
 		bool entry_known = false;
+		/// Whether control can actually get here. A block nothing reaches has
+		/// no entry stack, so its body is never translated.
+		bool reachable = false;
+	};
+
+	/// Where control can go from a single instruction: the offset just past it, and
+	/// every branch target it names.
+	struct Flow {
+		MonoOpcodeEnum opcode = MonoOpcodeEnum_Invalid;
+		size_t next = 0;
+		llvm::SmallVector<size_t, 4> targets;
+
+		/// Whether control can carry on into the instruction after this one.
+		bool falls_through () const;
 	};
 
 	llvm::Module *module;
@@ -376,7 +390,9 @@ private:
 	void emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
 	                        llvm::Value *address, MonoType *location);
 
+	llvm::Expected<Flow> decode_flow (size_t at);
 	llvm::Error find_block_leaders ();
+	void mark_reachable_blocks ();
 	llvm::Expected<size_t> branch_target (int32_t displacement);
 	llvm::Error translate_range (MonoIrBuilder &builder, size_t begin, size_t end);
 	void finish_function ();

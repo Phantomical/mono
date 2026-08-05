@@ -270,6 +270,90 @@ operand_size (MonoOpcodeEnum opcode)
 
 } // namespace
 
+/// Decode the instruction at AT far enough to say where control goes from it.
+llvm::Expected<MethodLLVMEmitter::Flow>
+MethodLLVMEmitter::decode_flow (size_t at)
+{
+	const unsigned char *cursor = code + at;
+	Flow flow;
+
+	flow.opcode = mono_opcode_value (&cursor, code + code_size);
+
+	if (flow.opcode == MonoOpcodeEnum_Invalid) {
+		offset = at;
+		return invalid_il ("unrecognized opcode");
+	}
+
+	size_t operand = static_cast<size_t> (cursor - code) + 1;
+	std::optional<size_t> size = operand_size (flow.opcode);
+
+	if (size) {
+		flow.next = operand + *size;
+	} else {
+		/* switch: a count, then that many four-byte displacements. */
+		if (code_size - operand < 4) {
+			offset = at;
+			return truncated_il (4);
+		}
+
+		uint32_t count = code[operand] | (code[operand + 1] << 8)
+		                 | (code[operand + 2] << 16) | (code[operand + 3] << 24);
+
+		flow.next = operand + 4 + static_cast<size_t> (count) * 4;
+	}
+
+	if (flow.next > code_size) {
+		offset = at;
+		return truncated_il (flow.next - code_size);
+	}
+
+	/*
+	 * Displacements are relative to the instruction after the branch, which is why
+	 * the targets are worked out from `next` rather than from `at`.
+	 */
+	if (mono_opcodes[flow.opcode].argument == MonoShortInlineBrTarget)
+		flow.targets.push_back (flow.next + static_cast<int8_t> (code[operand]));
+	else if (mono_opcodes[flow.opcode].argument == MonoInlineBrTarget)
+		flow.targets.push_back (flow.next
+		                        + static_cast<int32_t> (code[operand]
+		                                                | (code[operand + 1] << 8)
+		                                                | (code[operand + 2] << 16)
+		                                                | (code[operand + 3] << 24)));
+	else if (!size)
+		for (size_t i = operand + 4; i < flow.next; i += 4)
+			flow.targets.push_back (
+				flow.next
+				+ static_cast<int32_t> (code[i] | (code[i + 1] << 8)
+				                        | (code[i + 2] << 16)
+				                        | (code[i + 3] << 24)));
+
+	return flow;
+}
+
+bool
+MethodLLVMEmitter::Flow::falls_through () const
+{
+	/*
+	 * mono's flow types are not quite an oracle for this: `break` is filed under
+	 * ERROR though a debugger breakpoint comes back, and mono_ldnativeobj under
+	 * RETURN though all it does is push a value.
+	 */
+	if (opcode == MONO_CEE_BREAK || opcode == MONO_CEE_MONO_LDNATIVEOBJ)
+		return true;
+
+	switch (mono_opcodes[opcode].flow_type) {
+	case MONO_FLOW_BRANCH:
+	case MONO_FLOW_RETURN:
+	case MONO_FLOW_ERROR:
+		return false;
+	case MONO_FLOW_CALL:
+		/* jmp is the one call control never comes back from. */
+		return opcode != MONO_CEE_JMP;
+	default:
+		return true;
+	}
+}
+
 /// Find every offset a block starts at and give each one an empty LLVM block.
 ///
 /// A block starts where something branches to it and after anything that does not fall
@@ -283,74 +367,19 @@ MethodLLVMEmitter::find_block_leaders ()
 	size_t at = 0;
 
 	while (at < code_size) {
-		const unsigned char *cursor = code + at;
-		MonoOpcodeEnum opcode = mono_opcode_value (&cursor, code + code_size);
+		llvm::Expected<Flow> flow = decode_flow (at);
 
-		if (opcode == MonoOpcodeEnum_Invalid) {
-			offset = at;
-			return invalid_il ("unrecognized opcode");
-		}
+		if (!flow)
+			return flow.takeError ();
 
-		size_t operand = static_cast<size_t> (cursor - code) + 1;
-		std::optional<size_t> size = operand_size (opcode);
-		size_t next;
+		for (size_t target : flow->targets)
+			leaders.push_back (target);
 
-		if (size) {
-			next = operand + *size;
-		} else {
-			/* switch: a count, then that many four-byte displacements. */
-			if (code_size - operand < 4) {
-				offset = at;
-				return truncated_il (4);
-			}
+		if (!flow->falls_through ()
+		    || mono_opcodes[flow->opcode].flow_type == MONO_FLOW_COND_BRANCH)
+			leaders.push_back (flow->next);
 
-			uint32_t count = code[operand] | (code[operand + 1] << 8)
-			                 | (code[operand + 2] << 16) | (code[operand + 3] << 24);
-
-			next = operand + 4 + static_cast<size_t> (count) * 4;
-		}
-
-		if (next > code_size) {
-			offset = at;
-			return truncated_il (next - code_size);
-		}
-
-		/*
-		 * Displacements are relative to the instruction after the branch, which is
-		 * why the targets are worked out here rather than from `at`.
-		 */
-		if (mono_opcodes[opcode].argument == MonoShortInlineBrTarget)
-			leaders.push_back (next + static_cast<int8_t> (code[operand]));
-		else if (mono_opcodes[opcode].argument == MonoInlineBrTarget)
-			leaders.push_back (next
-			                   + static_cast<int32_t> (code[operand]
-			                                           | (code[operand + 1] << 8)
-			                                           | (code[operand + 2] << 16)
-			                                           | (code[operand + 3] << 24)));
-		else if (!size)
-			for (size_t i = operand + 4; i < next; i += 4)
-				leaders.push_back (next
-				                   + static_cast<int32_t> (code[i] | (code[i + 1] << 8)
-				                                           | (code[i + 2] << 16)
-				                                           | (code[i + 3] << 24)));
-
-		switch (mono_opcodes[opcode].flow_type) {
-		case MONO_FLOW_BRANCH:
-		case MONO_FLOW_COND_BRANCH:
-		case MONO_FLOW_RETURN:
-		case MONO_FLOW_ERROR:
-			leaders.push_back (next);
-			break;
-		case MONO_FLOW_CALL:
-			/* jmp is the one call control never comes back from. */
-			if (opcode == MONO_CEE_JMP)
-				leaders.push_back (next);
-			break;
-		default:
-			break;
-		}
-
-		at = next;
+		at = flow->next;
 	}
 
 	/*
@@ -392,7 +421,76 @@ MethodLLVMEmitter::find_block_leaders ()
 		block.block = llvm::BasicBlock::Create (context (), name, function);
 	}
 
+	mark_reachable_blocks ();
 	return llvm::Error::success ();
+}
+
+/// Flag the blocks control can actually get to.
+///
+/// Unreachable IL is legal and compilers emit it - a `br` after a `leave`, the tail of a
+/// protected region after every path out of it has branched. It has no entry stack for
+/// the same reason nothing reaches it, so translating it means inventing one, which both
+/// mistypes its own body and, through its fallthrough edge, can settle the entry stack of
+/// the live block it runs into.
+void
+MethodLLVMEmitter::mark_reachable_blocks ()
+{
+	std::vector<size_t> worklist;
+
+	auto reach = [&] (size_t at) {
+		auto found = blocks.find (at);
+
+		if (found == blocks.end () || found->second.reachable)
+			return;
+
+		found->second.reachable = true;
+		worklist.push_back (at);
+	};
+
+	reach (0);
+
+	/*
+	 * A protected region and its handlers are entered by the runtime rather than by
+	 * anything in the IL. The `+ len` boundaries are not roots: they are block starts
+	 * only because a region has to end somewhere, and nobody enters them.
+	 */
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		reach (clauses[i].try_offset);
+		reach (clauses[i].handler_offset);
+
+		if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER)
+			reach (clauses[i].data.filter_offset);
+	}
+
+	while (!worklist.empty ()) {
+		size_t at = worklist.back ();
+		worklist.pop_back ();
+
+		/* Walk the block's instructions to find where it can go from here. */
+		while (at < code_size) {
+			llvm::Expected<Flow> flow = decode_flow (at);
+
+			if (!flow) {
+				/* find_block_leaders already reported anything malformed. */
+				llvm::consumeError (flow.takeError ());
+				break;
+			}
+
+			for (size_t target : flow->targets)
+				reach (target);
+
+			if (!flow->falls_through ())
+				break;
+
+			at = flow->next;
+
+			/* The next block is a successor; the rest of this one is not. */
+			if (blocks.count (at) != 0) {
+				reach (at);
+				break;
+			}
+		}
+	}
 }
 
 /// The offset a branch at the current instruction jumps to.
@@ -729,6 +827,30 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 
 		if (auto found = blocks.find (ip); found != blocks.end () && ip != begin) {
 			Block &next = found->second;
+
+			/*
+			 * Nothing gets here, so there is no entry stack to translate the
+			 * body against - skip to the next block something does reach and
+			 * let finish_function leave this one as `unreachable`. Whatever
+			 * came before cannot have fallen in, or this block would be
+			 * reachable, so no edge is being dropped.
+			 */
+			if (!next.reachable) {
+				while (ip < end) {
+					llvm::Expected<Flow> flow = decode_flow (ip);
+
+					if (!flow)
+						return flow.takeError ();
+
+					ip = flow->next;
+
+					if (auto live = blocks.find (ip);
+					    live != blocks.end () && live->second.reachable)
+						break;
+				}
+
+				continue;
+			}
 
 			/*
 			 * Falling into a block is an edge like any other, so the stack goes

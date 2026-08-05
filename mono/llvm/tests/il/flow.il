@@ -212,4 +212,24 @@
 		conv.i
 		ret
 	}
+
+	// A block nothing reaches has no entry stack, so there is nothing to translate
+	// its body against. The dead pop below would underflow a fabricated empty one,
+	// and its fallthrough would tell JOIN it is entered holding nothing - which the
+	// live edge from brtrue, which arrives holding a value, then disagrees with.
+	.method public static int32 DeadBlockBeforeJoin (int32 x) cil managed
+	{
+		.maxstack 2
+		ldc.i4.1
+		ldarg.0
+		brtrue.s TAKEN
+		ldc.i4.2
+		br.s JOIN
+		pop
+	TAKEN:
+		ldc.i4.3
+	JOIN:
+		add
+		ret
+	}
 }

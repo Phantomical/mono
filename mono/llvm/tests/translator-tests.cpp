@@ -103,6 +103,7 @@ const MethodRef translatable[] = {
 	{"flow", "Flow:MergeIntWithNativeInt"},
 	{"flow", "Flow:MergeFloatWidths"},
 	{"flow", "Flow:MergePointerWithNativeInt"},
+	{"flow", "Flow:DeadBlockBeforeJoin"},
 
 	{"fields", "Fields:GetX"},
 	{"fields", "Fields:GetY"},
@@ -415,6 +416,17 @@ TEST_F (TranslatorTest, DivergentJoinsConvertTowardTheFirstPath)
 
 	ASSERT_NE (pointers.function, nullptr) << pointers.error;
 	EXPECT_GE (pointers.count ("ptrtoint"), 1u) << pointers.text ();
+}
+
+// Unreachable IL is legal and compilers emit it. Translating it means inventing an
+// entry stack for it, which mistypes its own body and lets it settle the entry stack
+// of the live block it falls into, so the block is left empty instead.
+TEST_F (TranslatorTest, UnreachableBlocksAreNotTranslated)
+{
+	const Translation &t = translate ("flow", "Flow:DeadBlockBeforeJoin");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("unreachable"), 1u) << t.text ();
 }
 
 /* ----------------------------------------------------------------- fields */
