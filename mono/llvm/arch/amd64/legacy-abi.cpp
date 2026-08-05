@@ -29,10 +29,12 @@
  * The classification recurses to leaf fields exactly as mini's
  * collect_field_info_nested does, which is why it agrees with mini despite
  * never seeing the metadata: the translator emits the same layout mini reads,
- * with padding spelled [n x i1] so it stays distinguishable from data.
+ * with padding spelled the one way (layout.hpp) that keeps it distinguishable
+ * from data.
  */
 
 #include "arch/arch.hpp"
+#include "layout.hpp"
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
@@ -101,12 +103,15 @@ struct Leaf {
 };
 
 /// Every leaf field of T with its flattened offset - mini's
-/// collect_field_info_nested, walked over the IR layout. [n x i1] runs are the
-/// padding the translator spelled that way, and no field of mini's walk.
+/// collect_field_info_nested, walked over the IR layout. What the translator
+/// spelled as padding (layout.hpp) is no field of mini's walk either.
 void
 collect_leaves (Type *t, uint64_t offset, const DataLayout &dl,
                 SmallVectorImpl<Leaf> &out)
 {
+	if (is_padding_type (t))
+		return;
+
 	if (auto *st = dyn_cast<StructType> (t)) {
 		const StructLayout *layout = dl.getStructLayout (st);
 
@@ -117,10 +122,6 @@ collect_leaves (Type *t, uint64_t offset, const DataLayout &dl,
 	}
 	if (auto *at = dyn_cast<ArrayType> (t)) {
 		Type *element = at->getElementType ();
-
-		if (element->isIntegerTy (1))
-			return;
-
 		uint64_t stride = dl.getTypeAllocSize (element);
 
 		for (uint64_t i = 0; i < at->getNumElements (); ++i)

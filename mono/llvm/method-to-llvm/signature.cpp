@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "layout.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
@@ -163,13 +164,58 @@ struct LayoutField {
 };
 
 /*
+ * The bytes from AT to SIZE, appended to BODY as the continuation of LAST.
+ *
+ * A gap at the end of a value type is not padding. A C# `fixed` buffer is a
+ * single field of the element type inside a class sized for the whole array,
+ * so everything past the first element has no metadata field to be found
+ * under; a .pack directive leaves the same shape. Those bytes are live data,
+ * and the classification only ever sees fields, so the last field has to be
+ * carried out to the end of the type - which is what mini does too, in
+ * collect_field_info_nested (mini-amd64.c, "This can happen with .pack
+ * directives eg. 'fixed' arrays").
+ *
+ * Repeating a primitive is what keeps the register file right: the tail of a
+ * `fixed float` buffer rides the SSE file, which bytes would not say. Anything
+ * else - a pointer, an inlined array, a marshalled string - classifies as
+ * integer whatever width it is given, which is what plain bytes say as well,
+ * and is what mini widens rather than replicates for the same reason.
+ */
+void
+fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
+           const LayoutField *last, int at, unsigned size)
+{
+	int gap = static_cast<int> (size) - at;
+
+	/* A type with no field at all is all padding, and stays that way. */
+	if (last == nullptr) {
+		body.push_back (padding_type (ctx, gap));
+		return;
+	}
+
+	if (last->size > 0
+	    && (last->type->isIntegerTy () || last->type->isFloatingPointTy ())) {
+		int count = gap / last->size;
+
+		if (count == 1)
+			body.push_back (last->type);
+		else if (count > 1)
+			body.push_back (llvm::ArrayType::get (last->type, count));
+		gap -= count * last->size;
+	}
+
+	if (gap > 0)
+		body.push_back (llvm::ArrayType::get (llvm::Type::getInt8Ty (ctx), gap));
+}
+
+/*
  * FIELDS laid into TYPE's body as a packed struct spelling out the real layout:
- * each field at the offset it was laid out at, with the gaps filled in as
- * [n x i1]. Real layout so LLVM can reason about the fields; packed so the
- * offsets are exactly the runtime's rather than whatever the DataLayout would
- * infer; padding as i1 arrays because no real field is ever one, which is what
- * lets LegacyAbiPass tell data from padding when it classifies (a float sharing
- * an eightbyte with padding is still a float to the C ABI).
+ * each field at the offset it was laid out at, with the gaps between them
+ * filled in by padding_type (). Real layout so LLVM can reason about the
+ * fields; packed so the offsets are exactly the runtime's rather than whatever
+ * the DataLayout would infer; padding spelled as a shape no field ever takes,
+ * which is what lets LegacyAbiPass tell data from padding when it classifies
+ * (a float sharing an eightbyte with padding is still a float to the C ABI).
  */
 void
 set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
@@ -186,8 +232,8 @@ set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
 	 * padding. What that loses is only the overlapped fields' say in the
 	 * native classification - the bytes are all still there.
 	 */
-	llvm::Type *pad = llvm::Type::getInt1Ty (ctx);
 	std::vector<llvm::Type *> body;
+	const LayoutField *last = nullptr;
 	int at = 0;
 	bool expressible = true;
 
@@ -195,18 +241,19 @@ set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
 		if (field.offset < at)
 			continue;
 		if (field.offset > at)
-			body.push_back (llvm::ArrayType::get (pad, field.offset - at));
+			body.push_back (padding_type (ctx, field.offset - at));
 		if (field.offset + field.size > static_cast<int> (size)) {
 			expressible = false;
 			break;
 		}
 		body.push_back (field.type);
 		at = field.offset + field.size;
+		last = &field;
 	}
 
 	if (expressible) {
 		if (at < static_cast<int> (size))
-			body.push_back (llvm::ArrayType::get (pad, size - at));
+			fill_tail (ctx, body, last, at, size);
 		type->setBody (body, /*isPacked=*/true);
 		return;
 	}
