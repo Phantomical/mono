@@ -842,18 +842,15 @@ MethodLLVMEmitter::emit_endfilter (MonoIrBuilder &builder)
 
 /// Fill in each finally's endfinally switches, now that every leave that runs it has been
 /// translated and knows which id it used.
-llvm::Error
+///
+/// A handler whose every path throws or loops has no endfinally at all, and so no switch
+/// to fill in: the leave's continuation is simply never resumed. That is legal IL, and
+/// what C# emits for `finally { throw ...; }`.
+void
 MethodLLVMEmitter::resolve_finally_switches ()
 {
 	for (uint32_t i = 0; i < num_clauses; ++i) {
 		Clause &state = clause_state[i];
-
-		if (state.continuations.empty ())
-			continue;
-		if (state.resume.empty ())
-			return invalid_il (llvm::Twine ("a leave runs the finally at IL_")
-			                   + llvm::Twine::utohexstr (clauses[i].handler_offset)
-			                   + " but it has no endfinally");
 
 		for (llvm::SwitchInst *resume : state.resume)
 			for (auto &[id, continuation] : state.continuations)
@@ -861,8 +858,6 @@ MethodLLVMEmitter::resolve_finally_switches ()
 					llvm::ConstantInt::get (llvm::Type::getInt32Ty (context ()), id),
 					continuation);
 	}
-
-	return llvm::Error::success ();
 }
 
 } // namespace mono

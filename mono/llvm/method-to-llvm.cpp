@@ -694,9 +694,7 @@ MethodLLVMEmitter::emit ()
 	if (auto error = translate_range (builder, 0, code_size))
 		return std::move (error);
 
-	if (auto error = resolve_finally_switches ())
-		return std::move (error);
-
+	resolve_finally_switches ();
 	finish_function ();
 	return function;
 }

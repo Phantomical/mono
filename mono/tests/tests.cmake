@@ -478,6 +478,7 @@ set(MONO_TESTS_CS_SRC
   async-exc-compilation.cs
   finally_guard.cs
   finally_block_ending_in_dead_bb.cs
+  finally-throwing-handler.cs
   bug-60862.cs
 )
 

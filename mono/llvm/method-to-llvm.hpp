@@ -400,7 +400,7 @@ private:
 	void emit_finally_body_marker (MonoIrBuilder &builder, uint32_t clause, bool opening);
 	llvm::Error emit_finally_abort_check (MonoIrBuilder &builder, uint32_t clause,
 	                                      llvm::Value *which);
-	llvm::Error resolve_finally_switches ();
+	void resolve_finally_switches ();
 
 	llvm::Error emit_ret (MonoIrBuilder &builder);
 	llvm::Error emit_leave (MonoIrBuilder &builder, int32_t displacement);
