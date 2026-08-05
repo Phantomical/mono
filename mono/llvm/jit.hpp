@@ -43,6 +43,15 @@ namespace mono {
 /// TargetMachine cannot be shared across threads.
 llvm::TargetMachine &host_target_machine ();
 
+/// One row of a compiled function's line table: an offset from the start of the
+/// function, and the IL offset in effect at it. The translator records these as
+/// debug locations (il-line-table.hpp) and the engine reads them back out of the
+/// emitted object's `.debug_line`.
+struct IlLineRow {
+	uint32_t native_offset;
+	uint32_t il_offset;
+};
+
 /// Where a compiled method's pieces landed: the code itself, and the side
 /// tables the compiler wrote next to it for the runtime to read back.
 struct CompiledMethod {
@@ -66,6 +75,10 @@ struct CompiledMethod {
 	/// Every function the linked object defines, name to [code, size): the
 	/// entry, and any filter bodies compiled alongside it.
 	std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
+
+	/// The entry function's native_offset -> il_offset rows, ascending by
+	/// native offset. Empty when the module carried no line table.
+	std::vector<IlLineRow> il_lines;
 
 	/// The dylib this compile's object was linked into - what remove_dylibs ()
 	/// takes to release all of the above again.

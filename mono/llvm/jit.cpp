@@ -8,11 +8,14 @@
 #include "arch/arch.hpp"
 #include "compiler.hpp"
 #include "nearmem.hpp"
+
+#include "../mini/llvm/il-line-table.hpp"
 #include "passes/array-address.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "stubs.hpp"
 
+#include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
@@ -22,6 +25,8 @@
 #include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Object/ELFObjectFile.h>
+#include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
@@ -29,6 +34,7 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -54,6 +60,123 @@ lazy_compile_failed ()
 }
 
 /*
+ * Reduce the just-compiled (not yet linked) object's `.debug_line` to per-
+ * function rows: the IL offset in effect at each offset into each function.
+ *
+ * Reading the INPUT object rather than the linked graph is what forces the hook
+ * this runs from: the debug sections are not SHF_ALLOC, so JITLink neither
+ * allocates nor relocates them and there would be nothing to read on the other
+ * side. In a relocatable object DWARFContext applies the debug-section
+ * relocations itself, so a row's address is already an offset within `.text`.
+ *
+ * Several rows landing on one address is what a run of IL instructions collapses
+ * to once the optimizer is done with it. They arrive in code order, so the last
+ * one is the offset in effect there; keeping that one is what makes the map
+ * single-valued, and it agrees with the "most recent point execution passed"
+ * lookup that reads the map back.
+ */
+static void
+parse_il_line_table (MemoryBufferRef obj_buf,
+                     std::map<std::string, std::vector<IlLineRow>> &out)
+{
+	Expected<std::unique_ptr<object::ObjectFile>> obj =
+		object::ObjectFile::createObjectFile (obj_buf);
+
+	if (!obj) {
+		consumeError (obj.takeError ());
+		return;
+	}
+
+	std::unique_ptr<DWARFContext> dw = DWARFContext::create (**obj);
+	if (!dw)
+		return;
+
+	struct FuncRange {
+		uint64_t start;
+		uint64_t size;
+		std::string name;
+	};
+	std::vector<FuncRange> funcs;
+
+	for (const object::SymbolRef &sym : (*obj)->symbols ()) {
+		Expected<object::SymbolRef::Type> type = sym.getType ();
+		Expected<StringRef> name = sym.getName ();
+		Expected<uint64_t> value = sym.getValue ();
+
+		if (!type || !name || !value) {
+			consumeError (joinErrors (
+				type ? Error::success () : type.takeError (),
+				joinErrors (name ? Error::success () : name.takeError (),
+				            value ? Error::success () : value.takeError ())));
+			continue;
+		}
+		if (*type != object::SymbolRef::ST_Function)
+			continue;
+
+		funcs.push_back ({ *value, object::ELFSymbolRef (sym).getSize (),
+		                   name->str () });
+	}
+
+	if (funcs.empty ())
+		return;
+
+	for (const std::unique_ptr<DWARFUnit> &cu : dw->compile_units ()) {
+		const DWARFDebugLine::LineTable *lt = dw->getLineTableForUnit (cu.get ());
+
+		if (!lt)
+			continue;
+
+		for (const DWARFDebugLine::Row &row : lt->Rows) {
+			/*
+			 * Line 0 is DWARF's "no source location" - what an instruction the
+			 * translator never attributed produces. The bias keeps a real IL
+			 * offset of 0 from looking like one.
+			 */
+			if (row.EndSequence || row.Line == 0)
+				continue;
+
+			const FuncRange *owner = nullptr;
+
+			for (const FuncRange &f : funcs) {
+				if (row.Address.Address < f.start)
+					continue;
+				if (f.size && row.Address.Address >= f.start + f.size)
+					continue;
+				owner = &f;
+				break;
+			}
+			if (!owner)
+				continue;
+
+			IlLineRow line;
+			line.native_offset =
+				(uint32_t) (row.Address.Address - owner->start);
+			line.il_offset = (uint32_t) (row.Line - IL_OFFSET_LINE_BIAS);
+
+			std::vector<IlLineRow> &rows = out[owner->name];
+
+			if (!rows.empty ()
+			    && rows.back ().native_offset == line.native_offset)
+				rows.back () = line;
+			else
+				rows.push_back (line);
+		}
+	}
+
+	/*
+	 * Rows are ascending by address within a sequence but need not be across
+	 * sequences, since LLVM lays blocks out as it likes. The runtime binary-
+	 * searches these, so sort - stably, so the last-row-wins choice above
+	 * survives.
+	 */
+	for (auto &kv : out)
+		std::stable_sort (kv.second.begin (), kv.second.end (),
+		                  [] (const IlLineRow &a, const IlLineRow &b) {
+			                  return a.native_offset < b.native_offset;
+		                  });
+}
+
+/*
  * Reads, for every linked object, where the pieces the runtime needs landed:
  * each defined function's extent and the two mono side-table sections. Keyed by
  * the per-compile dylib, whose name is unique, so a method compiled twice never
@@ -76,7 +199,30 @@ public:
 		size_t guard_table_size = 0;
 		const uint8_t *unwind_table = nullptr;
 		size_t unwind_table_size = 0;
+		/// Each defined function's line table, by name.
+		std::map<std::string, std::vector<IlLineRow>> il_lines;
 	};
+
+	/*
+	 * The one hook that sees the object bytes, which is the only place
+	 * `.debug_line` exists: it is not SHF_ALLOC, so it never reaches the
+	 * LinkGraph the passes below run over. Upstream marks this deprecated and
+	 * promises "a proper mechanism for capturing object buffers"; there is not
+	 * one yet, so this is the mechanism.
+	 */
+	void notifyMaterializing (MaterializationResponsibility &mr,
+	                          jitlink::LinkGraph &, jitlink::JITLinkContext &,
+	                          MemoryBufferRef input_object) override
+	{
+		std::map<std::string, std::vector<IlLineRow>> lines;
+
+		parse_il_line_table (input_object, lines);
+		if (lines.empty ())
+			return;
+
+		std::lock_guard<std::mutex> lock (mutex_);
+		il_lines_[mr.getTargetJITDylib ().getName ()] = std::move (lines);
+	}
 
 	void modifyPassConfig (MaterializationResponsibility &mr,
 	                       jitlink::LinkGraph &g,
@@ -147,6 +293,17 @@ public:
 
 		Extents extents = std::move (it->second);
 		captured_.erase (it);
+
+		/*
+		 * Captured by the other hook, before linking, so it is merged here
+		 * rather than written into the same slot.
+		 */
+		if (auto lines = il_lines_.find (std::string (dylib));
+		    lines != il_lines_.end ()) {
+			extents.il_lines = std::move (lines->second);
+			il_lines_.erase (lines);
+		}
+
 		return extents;
 	}
 
@@ -165,6 +322,7 @@ public:
 private:
 	std::mutex mutex_;
 	std::map<std::string, Extents> captured_;
+	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> il_lines_;
 };
 
 static void
@@ -611,6 +769,10 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 		}
 	}
 	compiled.functions = std::move (extents->functions);
+
+	if (auto lines = extents->il_lines.find (entry.str ());
+	    lines != extents->il_lines.end ())
+		compiled.il_lines = std::move (lines->second);
 
 	if (compiled.code == nullptr)
 		return createStringError (inconvertibleErrorCode (),

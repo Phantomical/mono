@@ -1047,8 +1047,8 @@ mono_exception_walk_trace_internal (MonoException *ex, MonoExceptionFrameWalk fu
 }
 
 /*
- * Binary search JI's own tier-1 native_offset -> il_offset map (recovered by
- * mono/mini/llvm's translator from the emitted line table - see
+ * Binary search JI's own native_offset -> il_offset map (recovered from the
+ * emitted line table - see
  * MonoJitInfo::llvm_seq_points) for the entry at or immediately before
  * NATIVE_OFFSET, i.e. the same "most recent point execution passed" semantics
  * mono_find_prev_seq_point_for_native_offset () has for a classic body.

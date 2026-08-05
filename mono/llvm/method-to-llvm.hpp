@@ -12,6 +12,7 @@
 
 #include "arch/arch.hpp"
 
+#include "../mini/llvm/il-line-table.hpp"
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"
@@ -293,15 +294,42 @@ private:
 	size_t offset = 0;
 	size_t ip = 0;
 
+	/// The compile's debug info, and this function's scope within it. The map a
+	/// stack trace reads back is built from the locations these stamp on the
+	/// emitted instructions; both are null when the caller wants none.
+	IlDebugModule *il_debug = nullptr;
+	IlDebugScope *il_scope = nullptr;
+
+	/// Attribute everything emitted from here on to the IL instruction at
+	/// OFFSET.
+	void set_il_location (llvm::IRBuilder<> &builder, size_t offset)
+	{
+		il_debug_set_location (il_scope, &builder, (uint32_t) offset);
+	}
+
+	/// Whether OFFSET is where a catch, filter or finally body begins.
+	bool is_handler_start (size_t offset) const
+	{
+		for (uint32_t i = 0; i < num_clauses; ++i)
+			if (clauses[i].handler_offset == offset
+			    || (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER
+			        && clauses[i].data.filter_offset == offset))
+				return true;
+
+		return false;
+	}
+
 public:
 	MethodLLVMEmitter (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
-	                   std::vector<ExternalSymbol> *externals = nullptr)
+	                   std::vector<ExternalSymbol> *externals = nullptr,
+	                   IlDebugModule *il_debug = nullptr)
 	    : module (module),
 	      function (nullptr),
 	      builder (module->getContext ()),
 	      cfg (cfg),
 	      method (method),
-	      externals (externals)
+	      externals (externals),
+	      il_debug (il_debug)
 	{
 	}
 

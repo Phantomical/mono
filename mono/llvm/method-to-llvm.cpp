@@ -72,7 +72,14 @@ llvm::Expected<llvm::Function *>
 method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
                 std::vector<ExternalSymbol> *externals)
 {
-	auto emitter = MethodLLVMEmitter (module, cfg, method, externals);
+	/*
+	 * Shared by the method and its filter bodies: they are separate functions
+	 * but one module, and debug info is per module.
+	 */
+	IlDebugModule il_debug (module);
+	llvm::scope_exit finish_debug ([&] { il_debug.finish (); });
+
+	auto emitter = MethodLLVMEmitter (module, cfg, method, externals, &il_debug);
 	llvm::Expected<llvm::Function *> function = emitter.emit ();
 
 	if (!function)
@@ -83,7 +90,7 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 		if (cfg->header->clauses[i].flags != MONO_EXCEPTION_CLAUSE_FILTER)
 			continue;
 
-		MethodLLVMEmitter filter (module, cfg, method, externals);
+		MethodLLVMEmitter filter (module, cfg, method, externals, &il_debug);
 		llvm::Expected<llvm::Function *> body = filter.emit_filter (*function, i);
 
 		if (!body)
@@ -638,6 +645,12 @@ MethodLLVMEmitter::emit ()
 	 */
 	function->setUWTableKind (llvm::UWTableKind::Default);
 
+	if (il_debug) {
+		std::string name = function->getName ().str ();
+
+		il_scope = il_debug->add_function (function, name.c_str ());
+	}
+
 	/*
 	 * An invoke is only well formed on a function with a personality, and mono's is
 	 * the hook its own unwinder recognises. Nothing calls it on the managed path -
@@ -659,6 +672,8 @@ MethodLLVMEmitter::emit ()
 	}
 
 	MonoIrBuilder builder (context ());
+
+	il_debug_reapply (il_scope, &builder);
 
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
 	builder.SetInsertPoint (entry_block);
@@ -911,6 +926,18 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			return invalid_il ("unreachable instruction is not the start of a block");
 		}
 
+		/*
+		 * Only statement boundaries go in the line table, which is what the CLI
+		 * calls a sequence point: an IL offset where the evaluation stack is
+		 * empty, plus the first instruction of a handler, where it holds only
+		 * the exception. Recording every IL instruction instead would be finer
+		 * than the consumers can use - a stack trace resolves an IL offset to a
+		 * source line by finding the first sequence point at or after it, so an
+		 * offset in the middle of a statement names the NEXT statement's line.
+		 */
+		if (stack.empty () || is_handler_start (ip))
+			set_il_location (builder, offset);
+
 		if (llvm::Error error = emit_instruction (builder))
 			return std::move (error);
 	}
@@ -955,7 +982,15 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	 */
 	function->addFnAttr ("stackrealign");
 
+	if (il_debug) {
+		std::string name = function->getName ().str ();
+
+		il_scope = il_debug->add_function (function, name.c_str ());
+	}
+
 	MonoIrBuilder builder (context ());
+
+	il_debug_reapply (il_scope, &builder);
 
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
 	builder.SetInsertPoint (entry_block);

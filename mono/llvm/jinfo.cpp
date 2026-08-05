@@ -383,6 +383,16 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	size_t jinfo_size = mono_jit_info_size (JIT_INFO_NONE, num_clauses, 0);
 
 	/*
+	 * The IL-offset map rides in the same allocation, past everything
+	 * mono_jit_info_size () accounts for, so it is reclaimed exactly when the
+	 * record is. A dynamic method's record is g_free ()d wholesale and there is
+	 * nowhere to hang a second pointer that anyone would know to free.
+	 */
+	size_t n_seq_points = compiled.il_lines.size ();
+	size_t map_offset = (size_t) ALIGN_TO (jinfo_size, sizeof (guint32));
+	size_t total_size = map_offset + n_seq_points * sizeof (MonoLLVMSeqPoint);
+
+	/*
 	 * A dynamic method's record is unregistered again when the method is freed,
 	 * and mono_jit_info_table_remove () frees what it unregisters, so it has to
 	 * come from the allocator that call uses. Everything else lives exactly as
@@ -390,18 +400,33 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	 */
 	MonoJitInfo *jinfo =
 		method->dynamic
-			? (MonoJitInfo *) g_malloc0 (jinfo_size)
-			: (MonoJitInfo *) mono_domain_alloc0 (domain, jinfo_size);
+			? (MonoJitInfo *) g_malloc0 (total_size)
+			: (MonoJitInfo *) mono_domain_alloc0 (domain, total_size);
 
 	mono_jit_info_init (jinfo, method, code, code_size, JIT_INFO_NONE,
 	                    num_clauses, 0);
 	jinfo->from_llvm = true;
 	/*
-	 * No native-offset -> IL-offset mapping is produced yet, and reading the
-	 * classic JIT's by MonoMethod would attribute this body's offsets to
-	 * another body's table.
+	 * Reading the classic JIT's mapping instead is not an option: it is keyed by
+	 * MonoMethod, so it would attribute this body's offsets to another body's
+	 * table. This one is recovered from this body's own line table, so it says
+	 * "unknown" only when there was nothing to recover - a method compiled
+	 * without debug info, e.g. an interop thunk.
 	 */
-	jinfo->no_il_offsets = true;
+	jinfo->no_il_offsets = n_seq_points == 0;
+
+	if (n_seq_points > 0) {
+		MonoLLVMSeqPoint *map =
+			(MonoLLVMSeqPoint *) ((char *) jinfo + map_offset);
+
+		for (size_t i = 0; i < n_seq_points; ++i) {
+			map[i].native_offset = compiled.il_lines[i].native_offset;
+			map[i].il_offset = compiled.il_lines[i].il_offset;
+		}
+
+		jinfo->llvm_seq_points = map;
+		jinfo->n_llvm_seq_points = (guint32) n_seq_points;
+	}
 
 	if (num_clauses > 0)
 		memcpy (&jinfo->clauses[0], clauses.data (),
