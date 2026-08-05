@@ -231,6 +231,20 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 			return runtime_error (error);
 		}
 
+		/*
+		 * The constructor runs the type initializer at its own entry, but the
+		 * allocation happens first, and for a finalizable class that is already
+		 * too late: the object is registered for finalization before the cctor
+		 * gets a chance to throw. The constructor then unwinds, nothing ever
+		 * holds the instance, and at shutdown mono_gc_run_finalize re-runs the
+		 * failed initializer on the finalizer thread, where the
+		 * TypeInitializationException has nobody to catch it. Initializing
+		 * before we allocate keeps the orphan from existing at all.
+		 */
+		if (mono_class_needs_cctor_run (klass, method))
+			if (llvm::Error error = emit_class_init (builder, klass))
+				return error;
+
 		llvm::Expected<llvm::Function *> allocate = object_new_decl ();
 
 		if (!allocate)
