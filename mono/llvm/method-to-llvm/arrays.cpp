@@ -74,15 +74,56 @@ MethodLLVMEmitter::builtin_element_type (int opcode)
 	}
 }
 
+/// The class TOKEN names, resolved against this method's generic context.
+llvm::Expected<MonoClass *>
+MethodLLVMEmitter::resolve_class (uint32_t token)
+{
+	ERROR_DECL (metadata_error);
+	MonoGenericContext *context = mono_method_get_context (method);
+	MonoClass *klass;
+
+	if (in_wrapper ()) {
+		klass = static_cast<MonoClass *> (wrapper_data (token));
+
+		if (klass == nullptr)
+			return invalid_il (llvm::Twine ("wrapper data slot ") + llvm::Twine (token)
+			                   + " does not name a type");
+
+		if (context != nullptr) {
+			klass = mono_class_inflate_generic_class_checked (klass, context,
+			                                                  metadata_error);
+			if (klass == nullptr)
+				return runtime_error (metadata_error);
+		}
+	} else {
+		klass = mono_class_get_and_inflate_typespec_checked (
+			m_class_get_image (method->klass), token, context, metadata_error);
+
+		/*
+		 * A token that names a type which is not there is a defect in the
+		 * program's environment, not in its encoding, so the failure the
+		 * loader recorded travels on rather than becoming invalid IL. It
+		 * already carries the assembly and type names that went missing.
+		 */
+		if (klass == nullptr)
+			return runtime_error (metadata_error);
+	}
+
+	mono_class_init_internal (klass);
+
+	return klass;
+}
+
 /// The element type TOKEN names, for the two forms that carry one.
 llvm::Expected<MonoType *>
 MethodLLVMEmitter::element_type_from_token (uint32_t token)
 {
-	MonoClass *klass = mini_get_class (method, token, mono_method_get_context (method));
+	llvm::Expected<MonoClass *> resolved = resolve_class (token);
 
-	if (klass == nullptr)
-		return invalid_il (llvm::Twine ("token 0x") + llvm::Twine::utohexstr (token)
-		                   + " does not name a type");
+	if (!resolved)
+		return resolved.takeError ();
+
+	MonoClass *klass = *resolved;
 
 	/*
 	 * A class the runtime has already given up on still resolves - the failure is

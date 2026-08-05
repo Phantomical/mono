@@ -580,6 +580,7 @@ private:
 	llvm::Expected<llvm::Value *> static_field_address (MonoIrBuilder &builder,
 	                                                    MonoClassField *field);
 	static MonoType *builtin_element_type (int opcode);
+	llvm::Expected<MonoClass *> resolve_class (uint32_t token);
 	llvm::Expected<MonoType *> element_type_from_token (uint32_t token);
 	llvm::Expected<llvm::Value *> array_length (MonoIrBuilder &builder, StackValue array);
 	llvm::Expected<llvm::Value *> element_address (MonoIrBuilder &builder, StackValue array,

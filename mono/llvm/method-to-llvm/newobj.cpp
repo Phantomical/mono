@@ -2,7 +2,9 @@
 #include "runtime-error.hpp"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/loader.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/object-internals.h"
 #include "mono/metadata/remoting.h"
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -94,6 +96,31 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		return unsupported_il ("newobj on a vararg constructor");
 
 	MonoClass *klass = (*target)->klass;
+
+	/*
+	 * A delegate's constructor is implemented by the runtime, which builds an
+	 * invoke trampoline out of the Invoke signature and has nowhere to report
+	 * one that will not load - it takes the null and crashes on it. A delegate
+	 * whose Invoke names a type that is not there is a type load, so the
+	 * refusal belongs here, where it becomes a TypeLoadException at the call.
+	 */
+	if (m_class_get_parent (klass) == mono_defaults.multicastdelegate_class) {
+		ERROR_DECL (invoke_error);
+		MonoMethod *invoke = mono_get_delegate_invoke_internal (klass);
+
+		if (invoke == nullptr) {
+			char *name = mono_type_get_full_name (klass);
+
+			mono_error_set_type_load_class (invoke_error, klass,
+			                                "Delegate %s has no Invoke method",
+			                                name);
+			g_free (name);
+			return runtime_error (invoke_error);
+		}
+
+		if (mono_method_signature_checked (invoke, invoke_error) == nullptr)
+			return runtime_error (invoke_error);
+	}
 
 	/* Multi-dimensional and non-zero-based arrays construct through newobj. */
 	if (m_class_get_rank (klass) != 0)
