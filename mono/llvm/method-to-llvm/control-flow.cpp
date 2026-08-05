@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "hidden-return.hpp"
 #include "mono/metadata/loader.h"
 #include "mono/metadata/metadata.h"
 #include <llvm/IR/Constants.h>
@@ -76,6 +77,14 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 	pop_stack (1);
 	if (lmf_slot != nullptr)
 		emit_pop_lmf (builder);
+
+	if (llvm::Argument *hidden = hidden_return_pointer (function)) {
+		builder.CreateAlignedStore (*value, hidden,
+		                            type_alignment (ret, native_signature ()));
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
 	builder.CreateRet (*value);
 	return llvm::Error::success ();
 }

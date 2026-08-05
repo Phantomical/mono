@@ -34,6 +34,7 @@
  */
 
 #include "arch/arch.hpp"
+#include "hidden-return.hpp"
 #include "layout.hpp"
 
 #include <llvm/ADT/STLFunctionalExtras.h>
@@ -434,6 +435,15 @@ rewrite_call (CallBase *call, LegacyFlavor flavor)
 	LLVMContext &ctx = m->getContext ();
 	FunctionType *old_type = call->getFunctionType ();
 
+	/*
+	 * This convention's own hidden return pointer goes in a place the runtime's
+	 * trampolines fixed, so a site reaching here has to still be in the
+	 * signature's terms for the lowering below to put it there.
+	 */
+	if (call->hasStructRetAttr ())
+		report_fatal_error ("mono: a call marked for the legacy convention already "
+		                    "carries a hidden return pointer");
+
 	CallLowering low = compute_lowering (
 		old_type,
 		[&] (unsigned i) { return call->paramHasAttr (i, Attribute::Nest); },
@@ -629,8 +639,20 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 {
 	LLVMContext &ctx = m.getContext ();
 	const DataLayout &dl = m.getDataLayout ();
-	FunctionType *natural = target->getFunctionType ();
 	AttributeList target_attrs = target->getAttributes ();
+
+	/*
+	 * The two conventions each have their own answer for a return too wide for the
+	 * registers, and they do not agree - this one puts the pointer where the
+	 * runtime's trampolines expect it, the target's puts it first. So the lowering
+	 * is computed from the signature both ends were derived from, and the bridging
+	 * happens at the call.
+	 */
+	Type *hidden = hidden_return_type (target);
+	unsigned leading = hidden != nullptr ? 1 : 0;
+	FunctionType *natural = hidden != nullptr
+	                                ? natural_prototype (target->getFunctionType (), hidden)
+	                                : target->getFunctionType ();
 
 	CallLowering low =
 		compute_lowering (natural, [] (unsigned) { return false; }, flavor,
@@ -645,7 +667,7 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 		switch (p.kind) {
 		case ParamLowering::Direct:
 			types.push_back (natural->getParamType (i));
-			attrs.push_back (target_attrs.getParamAttrs (i));
+			attrs.push_back (target_attrs.getParamAttrs (i + leading));
 			break;
 		case ParamLowering::Coerced:
 			types.push_back (p.travel);
@@ -726,25 +748,44 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 		}
 	}
 
+	/*
+	 * A slot of the thunk's own rather than whatever pointer this convention was
+	 * handed: the value type's own alignment is what the target will store at, and
+	 * the only thing known about the caller's slot is where it is.
+	 */
+	AllocaInst *returned = nullptr;
+
+	if (hidden != nullptr) {
+		returned = b.CreateAlloca (hidden);
+		returned->setAlignment (Align (8));
+		args.insert (args.begin (), returned);
+	}
+
 	CallInst *call = b.CreateCall (target, args);
 
 	call->setCallingConv (target->getCallingConv ());
 
 	SmallVector<AttributeSet, 8> call_attrs;
 
+	if (hidden != nullptr)
+		call_attrs.push_back (hidden_return_attributes (ctx, hidden));
 	for (unsigned i = 0; i < natural->getNumParams (); ++i)
-		call_attrs.push_back (target_attrs.getParamAttrs (i));
+		call_attrs.push_back (target_attrs.getParamAttrs (i + leading));
 	call->setAttributes (AttributeList::get (ctx, AttributeSet (),
 	                                         target_attrs.getRetAttrs (),
 	                                         call_attrs));
+
+	Value *result = returned != nullptr
+	                        ? b.CreateAlignedLoad (natural->getReturnType (), returned,
+	                                               Align (8))
+	                        : static_cast<Value *> (call);
 
 	if (low.ret_by_address) {
 		/*
 		 * The caller's slot is only as aligned as the value type itself
 		 * asks; claim nothing stronger.
 		 */
-		b.CreateAlignedStore (call, thunk->getArg (low.vret_index),
-		                      Align (1));
+		b.CreateAlignedStore (result, thunk->getArg (low.vret_index), Align (1));
 		b.CreateRetVoid ();
 	} else if (low.ret_travel != nullptr) {
 		if (dl.getTypeStoreSize (low.ret_travel) == 0) {
@@ -753,14 +794,14 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 			AllocaInst *slot = b.CreateAlloca (low.ret_travel);
 
 			slot->setAlignment (Align (8));
-			b.CreateAlignedStore (call, slot, Align (8));
+			b.CreateAlignedStore (result, slot, Align (8));
 			b.CreateRet (
 				b.CreateAlignedLoad (low.ret_travel, slot, Align (8)));
 		}
 	} else if (ret_type->isVoidTy ()) {
 		b.CreateRetVoid ();
 	} else {
-		b.CreateRet (call);
+		b.CreateRet (result);
 	}
 
 	return thunk;

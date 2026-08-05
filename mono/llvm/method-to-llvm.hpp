@@ -433,6 +433,7 @@ private:
 	llvm::Expected<size_t> branch_target (int32_t displacement);
 	llvm::Error translate_range (MonoIrBuilder &builder, size_t begin, size_t end);
 	void finish_function ();
+	llvm::AllocaInst *entry_alloca (llvm::Type *type, const llvm::Twine &name);
 	llvm::AllocaInst *spill_slot (size_t depth, llvm::Type *type);
 	std::vector<Slot> spill_stack (MonoIrBuilder &builder);
 	llvm::Error enter_block (MonoIrBuilder &builder, size_t target,
@@ -527,8 +528,10 @@ private:
 	llvm::Error emit_dup ();
 	llvm::Error emit_pop ();
 
-	llvm::Value *emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
-	                                  llvm::ArrayRef<llvm::Value *> args);
+	llvm::Value *emit_protected_call (
+		MonoIrBuilder &builder, llvm::FunctionCallee callee,
+		llvm::ArrayRef<llvm::Value *> args,
+		llvm::function_ref<void (llvm::CallBase *)> describe_site = {});
 
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
 	llvm::Expected<MonoMethodSignature *> call_site_signature (MonoMethod *target,
@@ -552,8 +555,10 @@ private:
 	bool is_own_this (llvm::Value *value);
 	llvm::CallInst::TailCallKind should_tail_call (MonoMethodSignature *callee_sig,
 	                                               MonoMethod *callee_method,
-	                                               llvm::FunctionType *callee_type);
-	bool matching_call_abi (MonoMethodSignature *callee_sig, llvm::FunctionType *callee_type);
+	                                               llvm::FunctionType *callee_type,
+	                                               llvm::Type *callee_hidden);
+	bool matching_call_abi (MonoMethodSignature *callee_sig, llvm::FunctionType *callee_type,
+	                        llvm::Type *callee_hidden);
 	llvm::Error emit_jmp (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
 	                            llvm::ArrayRef<llvm::Value *> args,

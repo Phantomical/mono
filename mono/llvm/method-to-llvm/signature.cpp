@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "hidden-return.hpp"
 #include "layout.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
@@ -681,9 +682,11 @@ MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::Function *call
 {
 	llvm::FunctionType *type = callee->getFunctionType ();
 	std::vector<llvm::Value *> adapted (args.begin (), args.end ());
+	/* ARGS are the signature's arguments, which start past any hidden return pointer. */
+	unsigned leading = hidden_return_type (callee) != nullptr ? 1 : 0;
 
-	for (unsigned i = 0; i < adapted.size () && i < type->getNumParams (); ++i) {
-		llvm::Type *want = type->getParamType (i);
+	for (unsigned i = 0; i < adapted.size () && i + leading < type->getNumParams (); ++i) {
+		llvm::Type *want = type->getParamType (i + leading);
 		llvm::Value *have = adapted[i];
 
 		if (have->getType () == want)
@@ -722,6 +725,12 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 /// mini produces instead - an icall, a pinvoke, a runtime-implemented method -
 /// is declared against the plain symbol in the legacy convention, and every
 /// call to it lowers in LegacyAbiPass.
+///
+/// A fastcc declaration whose return will not fit in the return registers
+/// carries the hidden pointer it comes back through as its leading parameter -
+/// see hidden-return.hpp. The legacy convention has a hidden pointer of its
+/// own, in a place the runtime's trampolines fixed, so a legacy declaration is
+/// left in the signature's own terms for LegacyAbiPass to lower.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 {
@@ -752,6 +761,13 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		return type.takeError ();
 
 	bool legacy = implemented_outside_il (method);
+	llvm::Type *hidden = nullptr;
+
+	if (!legacy && returns_by_hidden_pointer ((*type)->getReturnType ())) {
+		hidden = (*type)->getReturnType ();
+		*type = hidden_return_prototype (*type, hidden);
+	}
+
 	char *printed = mono_method_full_name (method, TRUE);
 
 	/*
@@ -802,15 +818,29 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	if (method->string_ctor)
 		function->addRetAttr (llvm::Attribute::NoAlias);
 
+	/*
+	 * Every parameter index below is an IL argument number shifted past the
+	 * hidden return pointer, which is a parameter of this convention's own and
+	 * belongs to none of them.
+	 */
+	unsigned leading = hidden != nullptr ? 1 : 0;
+
+	if (hidden != nullptr) {
+		function->addParamAttrs (0, llvm::AttrBuilder (
+						    context (),
+						    hidden_return_attributes (context (), hidden)));
+		function->getArg (0)->setName ("ret");
+	}
+
 	if (sig->hasthis)
-		function->getArg (0)->setName ("this");
+		function->getArg (leading)->setName ("this");
 
 	std::vector<const char *> names (sig->param_count);
 	if (sig->param_count > 0)
 		mono_method_get_param_names (method, names.data ());
 
 	for (int i = 0; i < sig->param_count; ++i) {
-		unsigned pindex = i + sig->hasthis;
+		unsigned pindex = i + sig->hasthis + leading;
 
 		if (names[i] != nullptr && names[i][0] != '\0')
 			function->getArg (pindex)->setName (std::string ("arg_") + names[i]);

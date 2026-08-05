@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "hidden-return.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
@@ -515,6 +516,22 @@ MethodLLVMEmitter::branch_target (int32_t displacement)
 	return target;
 }
 
+/// A slot of this frame's for a value of TYPE, placed where the frame is laid out
+/// rather than where the translation happens to be.
+llvm::AllocaInst *
+MethodLLVMEmitter::entry_alloca (llvm::Type *type, const llvm::Twine &name)
+{
+	MonoIrBuilder entry (entry_block, entry_block->begin ());
+	llvm::AllocaInst *slot = entry.CreateAlloca (type, nullptr, name);
+
+	/*
+	 * Nothing the runtime hands out promises more than a word, and a value type
+	 * whose alignment is spelled in its metadata is asking for no more than that.
+	 */
+	slot->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
+	return slot;
+}
+
 /// The memory a value of TYPE at DEPTH lives in while a branch is taken.
 ///
 /// Slots are shared by everything that spills the same type at the same depth, so a
@@ -690,17 +707,18 @@ MethodLLVMEmitter::emit ()
 	    && std::string_view (m_class_get_name (method->klass)) == "ByReference`1") {
 		llvm::Align align (TARGET_SIZEOF_VOID_P);
 		std::string_view name = method->name;
+		unsigned leading = hidden_return_pointer (function) != nullptr ? 1 : 0;
 
 		if (name == ".ctor") {
-			builder.CreateAlignedStore (function->getArg (1),
-			                            function->getArg (0), align);
+			builder.CreateAlignedStore (function->getArg (leading + 1),
+			                            function->getArg (leading), align);
 			builder.CreateRetVoid ();
 			return function;
 		}
 		if (name == "get_Value") {
 			builder.CreateRet (builder.CreateAlignedLoad (
 				llvm::PointerType::get (context (), 0),
-				function->getArg (0), align));
+				function->getArg (leading), align));
 			return function;
 		}
 		return unsupported_il ("an unrecognized ByReference member");
@@ -1799,6 +1817,8 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	 * it, past where the managed layout would have ended.
 	 */
 	bool native = native_signature ();
+	/* The hidden return pointer is a parameter of the convention, not an argument. */
+	unsigned leading = hidden_return_pointer (function) != nullptr ? 1 : 0;
 
 	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);
@@ -1810,7 +1830,7 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		auto alloca = builder.CreateAlloca (ltype, nullptr, names[i]);
 
 		alloca->setAlignment (type_alignment (mtype, native));
-		builder.CreateAlignedStore (function->getArg (i), alloca,
+		builder.CreateAlignedStore (function->getArg (i + leading), alloca,
 		                            alloca->getAlign ());
 
 		args.push_back ({
@@ -1827,7 +1847,7 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	 * llvm.localescape order a filter recovers from untouched.
 	 */
 	if (sig->call_convention == MONO_CALL_VARARG)
-		sig_cookie = function->getArg (nargs);
+		sig_cookie = function->getArg (nargs + leading);
 
 	return llvm::Error::success ();
 }

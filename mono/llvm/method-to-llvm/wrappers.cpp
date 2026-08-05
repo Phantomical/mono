@@ -15,6 +15,7 @@
  */
 
 #include "method-to-llvm.hpp"
+#include "hidden-return.hpp"
 #include "runtime-error.hpp"
 
 #include "mono/metadata/class-internals.h"
@@ -403,14 +404,23 @@ MethodLLVMEmitter::emit_mono_retobj (MonoIrBuilder &builder, uint32_t token)
 		address = builder.CreateIntToPtr (address,
 		                                  llvm::PointerType::get (context (), 0));
 
-	llvm::Value *value =
-		builder.CreateAlignedLoad (function->getReturnType (), address,
-	                                   type_alignment (m_class_get_byval_arg (klass),
-	                                                   /*native=*/true));
+	llvm::Argument *hidden = hidden_return_pointer (function);
+	MonoType *returned = m_class_get_byval_arg (klass);
+	llvm::Value *value = builder.CreateAlignedLoad (
+		hidden != nullptr ? hidden_return_type (function) : function->getReturnType (),
+		address, type_alignment (returned, /*native=*/true));
 
 	pop_stack (1);
 	if (lmf_slot != nullptr)
 		emit_pop_lmf (builder);
+
+	if (hidden != nullptr) {
+		builder.CreateAlignedStore (value, hidden,
+		                            type_alignment (returned, /*native=*/true));
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
 	builder.CreateRet (value);
 	return llvm::Error::success ();
 }

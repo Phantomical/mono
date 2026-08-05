@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "hidden-return.hpp"
 #include "../../mini/llvm/mono_lsda_format.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
@@ -456,15 +457,33 @@ MethodLLVMEmitter::emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCa
 /// Emit a call that returns but may unwind, as an invoke when a clause protects it.
 ///
 /// The same decision emit_unwinding_call makes, for the callees that come back: the
-/// normal edge carries on with the translation instead of being dead.
+/// normal edge carries on with the translation instead of being dead. DESCRIBE says
+/// the rest of what the site is, on the call instruction itself, which is not always
+/// what comes back from here.
+///
+/// ARGS are the callee's declared arguments. A callee whose return travels through a
+/// hidden pointer is handed a slot of this frame's to fill in, and what comes back is
+/// what it left there.
 llvm::Value *
 MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
-                                        llvm::ArrayRef<llvm::Value *> args)
+                                        llvm::ArrayRef<llvm::Value *> args,
+                                        llvm::function_ref<void (llvm::CallBase *)> describe)
 {
+	auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ());
+	llvm::Type *hidden = target != nullptr ? hidden_return_type (target) : nullptr;
+	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());
+	llvm::AllocaInst *slot = nullptr;
+
+	if (hidden != nullptr) {
+		slot = entry_alloca (hidden, "retslot");
+		operands.insert (operands.begin (), slot);
+	}
+
 	int clause = innermost_try (offset);
+	llvm::CallBase *call;
 
 	if (clause < 0) {
-		llvm::CallInst *call = builder.CreateCall (callee, args);
+		llvm::CallInst *plain = builder.CreateCall (callee, operands);
 
 		/*
 		 * A managed frame is observable - stack traces, StackFrame, the
@@ -473,16 +492,27 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 		 * rewrites self-recursion into a loop or lets codegen hand this frame
 		 * to the callee. Either way the frame stops existing.
 		 */
-		call->setTailCallKind (llvm::CallInst::TCK_NoTail);
-		return call;
+		plain->setTailCallKind (llvm::CallInst::TCK_NoTail);
+		call = plain;
+	} else {
+		llvm::BasicBlock *returned =
+			llvm::BasicBlock::Create (context (), "returned", function);
+
+		call = builder.CreateInvoke (callee, returned, landing_pad (clause),
+		                             operands);
+		builder.SetInsertPoint (returned);
 	}
 
-	llvm::BasicBlock *returned = llvm::BasicBlock::Create (context (), "returned", function);
-	llvm::InvokeInst *call =
-		builder.CreateInvoke (callee, returned, landing_pad (clause), args);
+	if (hidden != nullptr)
+		call->addParamAttrs (0, llvm::AttrBuilder (
+					       context (),
+					       hidden_return_attributes (context (), hidden)));
+	if (describe)
+		describe (call);
 
-	builder.SetInsertPoint (returned);
-	return call;
+	if (hidden == nullptr)
+		return call;
+	return builder.CreateAlignedLoad (hidden, slot, slot->getAlign ());
 }
 
 /*

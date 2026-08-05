@@ -718,6 +718,7 @@ set(MONO_TESTS_IL_SRC
   tailcall-generic-cast-nocrash-il.il
   tailcall-member-function-in-valuetype.il
   tailcall-return-valuetype.il
+  tailcall-return-valuetype-deep.il
   tailcall-valuetype-parameter.il
   ldfldvt.il
   newobj-abstract.il
@@ -1086,6 +1087,7 @@ set(MONO_TESTS_INTERP_DISABLED
   tailcall-rgctxb-static.exe
   tailcall-virt.exe
   tailcall-return-valuetype.exe
+  tailcall-return-valuetype-deep.exe
   tailcall/fsharp-deeptail.exe
   tailcall/2.exe
   tailcall/3.exe

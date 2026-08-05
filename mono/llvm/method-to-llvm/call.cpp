@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "hidden-return.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
@@ -385,38 +386,22 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
  */
 
 /// Whether a value of TYPE certainly comes back in the return registers rather than
-/// through a hidden pointer the caller passes in.
+/// through a pointer the caller passes in.
 ///
-/// The demotion to that hidden pointer happens when the call is lowered, far below
-/// the IR, and it turns tail-call elimination off. A musttail site cannot survive
-/// that: the backend aborts the process with "failed to perform tail call
-/// elimination on a call site marked musttail" rather than break the guarantee. A
-/// plain tail site can - it quietly becomes the ordinary call it would otherwise
-/// have been - so this only decides which of the two a site may be marked with.
+/// A prototype that spells the hidden pointer out (hidden-return.hpp) returns void
+/// and so answers yes, which is the point of spelling it: the forwarded pointer is
+/// the caller's own and the jump is one the backend can always make.
 ///
-/// Whether a return is demoted is CanLowerReturn's answer, which nothing at the IR
-/// level can ask. It is not a question of size: an aggregate return is flattened
-/// into its scalar leaves and each leaf assigned a return register, so what matters
-/// is how many leaves there are and of which class - RAX, RDX, RCX and XMM0, XMM1 on
-/// amd64. { i64, i64, i64 } is returned in registers and { i32, i32, i32, i32 } is
-/// not, nor is any packed eight-byte struct that flattens into eight i8 leaves.
-/// A size test would therefore be wrong in exactly the cases that abort.
+/// What is left to be careful about is the aggregate that stayed an aggregate.
+/// Whether such a return is demoted anyway is CanLowerReturn's answer, taken far
+/// below the IR, and a musttail site cannot survive being wrong about it: the
+/// backend aborts the process with "failed to perform tail call elimination on a
+/// call site marked musttail" rather than break the guarantee. A plain tail site
+/// can - it quietly becomes the ordinary call it would otherwise have been.
 ///
 /// So this admits only what is already a single leaf, and leaves every aggregate to
 /// the weaker marker. Being wrong in that direction costs a tail call the prefix
 /// only ever permitted; being wrong in the other costs the process.
-///
-/// A demoted return therefore never becomes a jump, whatever the prefix says: the
-/// slot LowerCallTo invents is a fresh stack object in this frame, so handing the
-/// frame away would leave the callee writing into dead stack. Making one of these a
-/// real tail call means spelling the hidden pointer in the IR instead - a void
-/// prototype with a leading sret parameter - so that a tail site can forward the
-/// caller's *own* incoming pointer, which lives in an ancestor frame and survives.
-/// X86 recognises exactly that shape (mayBeSRetTailCallCompatible) and rejects a
-/// forwarded local. It is a change to this convention rather than to this site,
-/// though: the prototype has to be derived from the signature so that both ends
-/// agree, which moves every aggregate return, every ldarg index, and LegacyAbiPass's
-/// own hidden return pointer along with it.
 static bool
 returns_in_registers (llvm::Type *type)
 {
@@ -462,7 +447,8 @@ carry_return_attributes (llvm::CallInst *call, llvm::Function *target)
 /// obliged us to make, which is what declining would have cost anyway.
 llvm::CallInst::TailCallKind
 MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
-                                     llvm::FunctionType *callee_type)
+                                     llvm::FunctionType *callee_type,
+                                     llvm::Type *callee_hidden)
 {
 	if (!prefixes.tail)
 		return llvm::CallInst::TCK_None;
@@ -512,9 +498,13 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	 * That ret is this method's own, so the two returns have to be the same LLVM
 	 * type. An ordinary call would have widened its result onto the evaluation
 	 * stack and let the ret narrow it back on the way out; folding the two together
-	 * leaves nowhere for that to happen.
+	 * leaves nowhere for that to happen. Where the return travels through a hidden
+	 * pointer the type is in the pointer's attribute rather than the prototype, and
+	 * agreeing on it is what says the pointer this frame was entered with is one
+	 * the callee may fill in.
 	 */
-	if (callee_type->getReturnType () != function->getReturnType ())
+	if (callee_type->getReturnType () != function->getReturnType ()
+	    || callee_hidden != hidden_return_type (function))
 		return llvm::CallInst::TCK_None;
 
 	/*
@@ -554,8 +544,8 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	 * A guarantee is only worth demanding where the backend can always keep it:
 	 * where the jump changes nothing about the frame's argument area - identical
 	 * prototypes, down to the extension attributes that say how narrow integers
-	 * fill their registers - and where the return does not arrive through a hidden
-	 * pointer, which switches tail-call elimination off outright.
+	 * fill their registers - and where the return does not arrive through a pointer
+	 * this frame invented, which switches tail-call elimination off outright.
 	 *
 	 * That set is the one III.2.4 makes mandatory, so demanding it is what turns
 	 * the spec's obligation into something that fails loudly rather than quietly.
@@ -564,7 +554,7 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	 * will not, the site is exactly the ordinary call declining would have left.
 	 */
 	if (returns_in_registers (callee_type->getReturnType ())
-	    && matching_call_abi (callee_sig, callee_type))
+	    && matching_call_abi (callee_sig, callee_type, callee_hidden))
 		return llvm::CallInst::TCK_MustTail;
 
 	return llvm::CallInst::TCK_Tail;
@@ -572,13 +562,15 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 
 /// Whether a call to CALLEE_SIG could replace this method's own frame: the same
 /// LLVM prototype, down to the extension attributes that say how narrow integers
-/// fill their registers - compared positionally, because a this is just a leading
-/// pointer to the ABI.
+/// fill their registers and the type a hidden return pointer points at - compared
+/// positionally, because a this is just a leading pointer to the ABI.
 bool
 MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
-                                      llvm::FunctionType *callee_type)
+                                      llvm::FunctionType *callee_type,
+                                      llvm::Type *callee_hidden)
 {
-	if (function->getFunctionType () != callee_type)
+	if (function->getFunctionType () != callee_type
+	    || hidden_return_type (function) != callee_hidden)
 		return false;
 
 	auto extensions = [] (MonoMethodSignature *s) {
@@ -621,7 +613,25 @@ MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee 
                                    llvm::Function *declaration,
                                    llvm::function_ref<void (llvm::CallBase *)> describe_site)
 {
-	llvm::CallInst *call = builder.CreateCall (callee, args);
+	auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ());
+	llvm::Type *hidden = target != nullptr ? hidden_return_type (target) : nullptr;
+	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());
+
+	/*
+	 * The pointer this frame was entered with, not a slot of its own: it points
+	 * into an ancestor frame, so it is still there once this one is gone. A local
+	 * would be dead the moment the jump happened, and X86 refuses one.
+	 * should_tail_call () has already agreed the two ends mean the same type by it.
+	 */
+	if (hidden != nullptr)
+		operands.insert (operands.begin (), hidden_return_pointer (function));
+
+	llvm::CallInst *call = builder.CreateCall (callee, operands);
+
+	if (hidden != nullptr)
+		call->addParamAttrs (0, llvm::AttrBuilder (
+					       context (),
+					       hidden_return_attributes (context (), hidden)));
 
 	carry_return_attributes (call, declaration);
 	describe_site (call);
@@ -704,7 +714,9 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	if (sig->call_convention == MONO_CALL_VARARG
 	    || mono_method_signature_internal (method)->call_convention == MONO_CALL_VARARG)
 		return unsupported_il ("jmp across a vararg signature");
-	if (!matching_call_abi (sig, (*declaration)->getFunctionType ()))
+	llvm::Type *hidden = hidden_return_type (*declaration);
+
+	if (!matching_call_abi (sig, (*declaration)->getFunctionType (), hidden))
 		return invalid_il ("the jmp target's signature does not match this method's");
 
 	/*
@@ -724,15 +736,24 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		                                             type_alignment (argument.type)));
 	}
 
+	/* The return goes where this method's own caller asked for it. */
+	if (hidden != nullptr)
+		values.insert (values.begin (), hidden_return_pointer (function));
+
 	llvm::CallInst *call = builder.CreateCall (*declaration, values);
+
+	if (hidden != nullptr)
+		call->addParamAttrs (0, llvm::AttrBuilder (
+					       context (),
+					       hidden_return_attributes (context (), hidden)));
 
 	/*
 	 * jmp releases this frame by definition, so the jump is the point rather than
 	 * an optimization - but musttail is still only demandable where the backend can
 	 * always keep it. matching_call_abi has settled the prototype above, so all that
-	 * is left to ask is whether the return arrives through a hidden pointer. Where
-	 * it does the site weakens to a plain tail call, which the backend jumps through
-	 * where it can and quietly does not where it cannot.
+	 * is left to ask is whether the return is an aggregate this convention still
+	 * hands back by value. Where it is the site weakens to a plain tail call, which
+	 * the backend jumps through where it can and quietly does not where it cannot.
 	 */
 	carry_return_attributes (call, *declaration);
 	call->setTailCallKind (returns_in_registers ((*declaration)->getReturnType ())
@@ -1115,6 +1136,16 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	}
 
 	llvm::FunctionCallee callee = *declaration;
+	llvm::Type *hidden = hidden_return_type (*declaration);
+	/*
+	 * A slot always holds a legacy entry, and the legacy convention has a hidden
+	 * return pointer of its own in a place the runtime's trampolines fixed. So a
+	 * dispatched site is built in the signature's own terms and left to
+	 * LegacyAbiPass, which is what puts the pointer where that convention wants it.
+	 */
+	llvm::FunctionType *slot_type =
+		hidden != nullptr ? natural_prototype ((*declaration)->getFunctionType (), hidden)
+	                          : (*declaration)->getFunctionType ();
 	bool keyed = false;
 	bool through_slot = false;
 
@@ -1159,20 +1190,19 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				is_interface
 					? interface_callee (builder, (*args)[0], callee_method)
 					: virtual_callee (builder, (*args)[0], callee_method);
-			llvm::FunctionType *direct = (*declaration)->getFunctionType ();
-			std::vector<llvm::Type *> params (direct->param_begin (),
-			                                  direct->param_end ());
+			std::vector<llvm::Type *> params (slot_type->param_begin (),
+			                                  slot_type->param_end ());
 
 			params.insert (params.begin (), llvm::PointerType::get (context (), 0));
 			callee = llvm::FunctionCallee (
-				llvm::FunctionType::get (direct->getReturnType (), params,
-			                                 direct->isVarArg ()),
+				llvm::FunctionType::get (slot_type->getReturnType (), params,
+			                                 slot_type->isVarArg ()),
 				code);
 			args->insert (args->begin (), method_symbol (callee_method));
 			through_slot = true;
 		} else if (overridable && mono_method_get_vtable_index (callee_method) >= 0) {
 			callee = llvm::FunctionCallee (
-				(*declaration)->getFunctionType (),
+				slot_type,
 				virtual_callee (builder, (*args)[0], callee_method));
 			through_slot = true;
 		}
@@ -1192,8 +1222,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			mark_legacy_entry_call (site, callee_method, sig);
 	};
 
-	llvm::CallInst::TailCallKind tail_kind =
-		should_tail_call (sig, callee_method, callee.getFunctionType ());
+	llvm::CallInst::TailCallKind tail_kind = should_tail_call (
+		sig, callee_method, callee.getFunctionType (), through_slot ? nullptr : hidden);
 
 	/*
 	 * A dispatched site can hand its frame over like any other - the key rides a
@@ -1213,9 +1243,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		                       sig->param_count + sig->hasthis, *declaration,
 		                       describe_site);
 
-	llvm::Value *result = emit_protected_call (builder, callee, *args);
+	llvm::Value *result = emit_protected_call (builder, callee, *args, describe_site);
 
-	describe_site (llvm::cast<llvm::CallBase> (result));
 	pop_stack (sig->param_count + sig->hasthis);
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
