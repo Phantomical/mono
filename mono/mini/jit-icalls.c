@@ -1245,6 +1245,15 @@ mono_object_castclass_unbox (MonoObject *obj, MonoClass *klass)
 	return NULL;
 }
 
+/*
+ * A transparent proxy never gets into the cache. Answering the cast for one is not a
+ * pure test: mono_object_isinst_checked () asks the proxy's CanCastTo () and then
+ * mono_upgrade_remote_class () gives the object a new vtable carrying the interface it
+ * just admitted to. Caching the vtable it had on the way in would let the next proxy
+ * short-circuit to "yes" without ever being upgraded, and the call that follows would
+ * dispatch through an IMT slot nobody filled. Since a proxy's vtable is only ever a
+ * proxy's, keeping them all out of the cache also keeps one out of the fast path above.
+ */
 MonoObject*
 mono_object_castclass_with_cache (MonoObject *obj, MonoClass *klass, gpointer *cache)
 {
@@ -1267,7 +1276,8 @@ mono_object_castclass_with_cache (MonoObject *obj, MonoClass *klass, gpointer *c
 		return obj;
 
 	if (mono_object_isinst_checked (obj, klass, error)) {
-		*cache = obj_vtable;
+		if (!mono_object_is_transparent_proxy (obj))
+			*cache = obj_vtable;
 		return obj;
 	}
 	if (mono_error_set_pending_exception (error))
@@ -1284,6 +1294,8 @@ mono_object_castclass_with_cache (MonoObject *obj, MonoClass *klass, gpointer *c
 	return NULL;
 }
 
+/* Excludes transparent proxies for the reason mono_object_castclass_with_cache () gives,
+ * the negative cache included - a proxy's CanCastTo () may well say yes to the next one. */
 MonoObject*
 mono_object_isinst_with_cache (MonoObject *obj, MonoClass *klass, gpointer *cache)
 {
@@ -1301,13 +1313,15 @@ mono_object_isinst_with_cache (MonoObject *obj, MonoClass *klass, gpointer *cach
 	}
 
 	if (mono_object_isinst_checked (obj, klass, error)) {
-		*cache = (gpointer)obj_vtable;
+		if (!mono_object_is_transparent_proxy (obj))
+			*cache = (gpointer)obj_vtable;
 		return obj;
 	} else {
 		if (mono_error_set_pending_exception (error))
 			return NULL;
 		/*negative cache*/
-		*cache = (gpointer)(obj_vtable | 0x1);
+		if (!mono_object_is_transparent_proxy (obj))
+			*cache = (gpointer)(obj_vtable | 0x1);
 		return NULL;
 	}
 }

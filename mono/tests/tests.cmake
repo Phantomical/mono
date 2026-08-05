@@ -427,6 +427,7 @@ set(MONO_TESTS_CS_SRC
   generic-marshalbyref.2.cs
   stackframes-async.2.cs
   transparentproxy.cs
+  proxy-cast-cache.cs
   bug-48015.cs
   delegate9.cs
   marshal-valuetypes.cs
