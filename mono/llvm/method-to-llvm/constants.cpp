@@ -351,12 +351,21 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	llvm::Value *address;
 
 	if (handle_class == mono_defaults.typehandle_class) {
-		MonoClass *klass =
-			mono_class_from_mono_type_internal (static_cast<MonoType *> (handle));
+		MonoType *type = static_cast<MonoType *> (handle);
+		MonoClass *klass = mono_class_from_mono_type_internal (type);
 
-		address = builder.CreateGEP (
-			builder.getInt8Ty (), class_symbol (klass, "mono_class_"),
-			builder.getInt32 (static_cast<int32_t> (m_class_offsetof_byval_arg ())));
+		/*
+		 * mono_class_from_mono_type_internal switches on type->type alone, so a
+		 * typespec's byref-ness does not survive the round trip through the class.
+		 * Every class keeps both spellings of itself, though - this_arg is byval_arg
+		 * with byref set - so pick the one the token actually named.
+		 */
+		size_t offset = type->byref ? m_class_offsetof_this_arg ()
+		                            : m_class_offsetof_byval_arg ();
+
+		address = builder.CreateGEP (builder.getInt8Ty (),
+		                             class_symbol (klass, "mono_class_"),
+		                             builder.getInt32 (static_cast<int32_t> (offset)));
 	} else if (handle_class == mono_defaults.methodhandle_class) {
 		address = method_symbol (static_cast<MonoMethod *> (handle));
 	} else if (handle_class == mono_defaults.fieldhandle_class) {

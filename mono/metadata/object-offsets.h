@@ -57,6 +57,7 @@ DECL_OFFSET(MonoObject, synchronisation)
 
 DECL_OFFSET(MonoClass, interface_bitmap)
 DECL_OFFSET(MonoClass, _byval_arg)
+DECL_OFFSET(MonoClass, this_arg)
 DECL_OFFSET(MonoClass, cast_class)
 DECL_OFFSET(MonoClass, element_class)
 DECL_OFFSET(MonoClass, idepth)

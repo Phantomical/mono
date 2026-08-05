@@ -107,6 +107,7 @@ MONO_CLASS_GETTER(m_classpointer_get_klass, MonoClass*, &, MonoClassPointer, kla
 
 MONO_CLASS_OFFSET(m_class_offsetof_interface_bitmap, MonoClass, interface_bitmap)
 MONO_CLASS_OFFSET(m_class_offsetof_byval_arg, MonoClass, _byval_arg)
+MONO_CLASS_OFFSET(m_class_offsetof_this_arg, MonoClass, this_arg)
 MONO_CLASS_OFFSET(m_class_offsetof_cast_class, MonoClass, cast_class)
 MONO_CLASS_OFFSET(m_class_offsetof_element_class, MonoClass, element_class)
 MONO_CLASS_OFFSET(m_class_offsetof_idepth, MonoClass, idepth)
