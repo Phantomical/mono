@@ -2470,6 +2470,15 @@ do_transform_method (InterpFrame *frame, ThreadContext *context)
 	return mono_error_convert_to_exception (error);
 }
 
+/*
+ * Fill the buffer ArgIterator walks: the call-site signature in the first word,
+ * then the variable arguments behind it.
+ *
+ * ves_icall_System_ArgIterator_IntGetNextArg () advances by mono_type_stack_size
+ * and realigns only on arm and mips, so everywhere else the offsets are that
+ * running sum and nothing more. A float is four bytes rather than a whole slot,
+ * so padding one out to its slot would leave every argument behind it misread.
+ */
 static void
 init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *arglist)
 {
@@ -2477,9 +2486,15 @@ init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *
 	arglist += sizeof (gpointer);
 
 	for (int i = sig->sentinelpos; i < sig->param_count; i++) {
-		int align, arg_size, sv_size;
+		int arg_size, sv_size;
+#if defined(__arm__) || defined(__mips__)
+		int align;
+
 		arg_size = mono_type_stack_size (sig->params [i], &align);
 		arglist = (char*)ALIGN_PTR_TO (arglist, align);
+#else
+		arg_size = mono_type_stack_size (sig->params [i], NULL);
+#endif
 
 		sv_size = stackval_to_data (sig->params [i], sp, arglist, FALSE);
 		arglist += arg_size;
