@@ -505,6 +505,8 @@ private:
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_calli (MonoIrBuilder &builder, uint32_t token);
+	llvm::Error emit_dynamic_native_calli (MonoIrBuilder &builder,
+	                                       MonoMethodSignature *sig);
 
 	llvm::Value *spill_to_temporary (MonoIrBuilder &builder, MonoType *type);
 	llvm::Error emit_mkrefany (MonoIrBuilder &builder, uint32_t token);

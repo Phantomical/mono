@@ -143,6 +143,72 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/// Call the native target on the stack from a dynamic method, through the
+/// managed-to-native wrapper the runtime builds for it.
+///
+/// The wrapper cache the direct path uses is keyed on the signature, and a
+/// dynamic method's signature is memory its disposal frees - a later method
+/// whose signature landed at the same address would be handed this one's
+/// wrapper. So the wrapper is built where the signature is still known to be
+/// alive, at the point of the call: mono_get_native_calli_wrapper () takes the
+/// image, the signature and the target and returns the address of a compiled
+/// wrapper for exactly that target, which is then an ordinary managed call.
+llvm::Error
+MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
+                                              MonoMethodSignature *sig)
+{
+	llvm::Expected<llvm::Function *> build =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_get_native_calli_wrapper);
+	if (!build)
+		return build.takeError ();
+
+	/* The wrapper is a managed method, whatever the signature it wraps says. */
+	llvm::Expected<llvm::FunctionType *> type =
+		convert_method_signature (sig, /*native=*/false);
+	if (!type)
+		return type.takeError ();
+
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Value *target = get_stack (0).value;
+
+	if (!target->getType ()->isPointerTy ())
+		target = builder.CreateIntToPtr (target, ptr);
+	pop_stack (1);
+
+	llvm::Constant *image = llvm::ConstantExpr::getIntToPtr (
+		builder.getInt64 (
+			reinterpret_cast<uint64_t> (m_class_get_image (method->klass))),
+		ptr);
+	llvm::Constant *signature = llvm::ConstantExpr::getIntToPtr (
+		builder.getInt64 (reinterpret_cast<uint64_t> (sig)), ptr);
+
+	llvm::Value *wrapper = emit_protected_call (
+		builder, *build,
+		adapt_to_callee (builder, *build, { image, signature, target }));
+
+	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
+	if (!args)
+		return args.takeError ();
+
+	llvm::Value *result =
+		emit_protected_call (builder, llvm::FunctionCallee (*type, wrapper), *args);
+
+	llvm::cast<llvm::CallBase> (result)->addFnAttr (llvm::Attribute::get (
+		context (), arch::legacy_cc_attribute,
+		arch::legacy_flavor_value (arch::managed_call_flavor (sig))));
+
+	pop_stack (sig->param_count);
+
+	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
+		return llvm::Error::success ();
+
+	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
+	return llvm::Error::success ();
+}
+
 /*
  * III.3.20  calli - indirect method call
  *
@@ -241,18 +307,20 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	 * native call the wrapper exists to make, and the wrapper's own body already
 	 * says everything the transition needs. Wrapping it again would ask the cache
 	 * for this signature's wrapper - which is the method being translated - and
-	 * emit a call to it from inside itself.
+	 * emit a call to it from inside itself. A dynamic method is the exception:
+	 * its body is the program's own IL and was never built to make a native
+	 * call, so it needs the transition like any other method - it is a wrapper
+	 * only because that is how the runtime gives an emitted body somewhere to
+	 * keep its token references.
 	 */
-	if (sig->pinvoke && !sig->suppress_gc_transition && !in_wrapper ()) {
+	bool dynamic_method = method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD;
+
+	if (sig->pinvoke && !sig->suppress_gc_transition && (!in_wrapper () || dynamic_method)) {
 		if (sig->hasthis)
 			return invalid_il ("an unmanaged calli signature cannot take a this");
-		/*
-		 * The wrapper cache keys on the signature, which for a dynamic method
-		 * lives in memory the method's disposal frees.
-		 */
-		if (method->dynamic)
-			return unsupported_il ("calli to an unmanaged target in a "
-			                       "dynamic method");
+
+		if (dynamic_method)
+			return emit_dynamic_native_calli (builder, sig);
 
 		MonoMethod *wrapper = mono_marshal_get_native_func_wrapper_indirect (
 			method->klass, sig, FALSE);
