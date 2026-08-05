@@ -327,16 +327,12 @@ MethodLLVMEmitter::emit_mono_newobj (MonoIrBuilder &builder, uint32_t token)
 	if (!mono_class_init_checked (klass, metadata_error))
 		return runtime_error (metadata_error);
 
-	llvm::Expected<llvm::Function *> allocate = object_new_decl ();
+	llvm::Expected<llvm::Value *> created = emit_object_alloc (builder, klass, false);
 
-	if (!allocate)
-		return allocate.takeError ();
+	if (!created)
+		return created.takeError ();
 
-	llvm::Value *created = emit_protected_call (
-		builder, *allocate,
-		adapt_to_callee (builder, *allocate, { class_symbol (klass, "mono_vtable_") }));
-
-	push_stack (created, m_class_get_byval_arg (klass));
+	push_stack (*created, m_class_get_byval_arg (klass));
 	return llvm::Error::success ();
 }
 

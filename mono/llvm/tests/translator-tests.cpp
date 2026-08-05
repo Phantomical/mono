@@ -898,12 +898,15 @@ TEST_F (TranslatorTest, JmpReloadsTheArgumentsIntoAMustTailCall)
 
 /* ----------------------------------------------------------------- boxing */
 
+// This harness links SGen, which hands out a managed allocator for a class this
+// small, so an allocation shows up as a call to that wrapper rather than to the
+// runtime entry point ves_icall_object_new_specific.
 TEST_F (TranslatorTest, BoxAllocatesWithTheVtableAndStoresTheValue)
 {
 	const Translation &t = translate ("boxing", "Boxing:BoxInt");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 1u);
+	EXPECT_EQ (t.count ("object:AllocSmall"), 1u) << t.text ();
 	/* mono_type_full_name spells System.Int32 as "int". */
 	EXPECT_EQ (t.count ("mono_vtable_int"), 1u);
 }
@@ -914,6 +917,7 @@ TEST_F (TranslatorTest, BoxOnAReferenceTypeAllocatesNothing)
 	const Translation &t = translate ("boxing", "Boxing:BoxObject");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("object:AllocSmall"), 0u);
 	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 }
 
@@ -1114,13 +1118,13 @@ TEST_F (TranslatorTest, ConstrainedCallOnANonOverridingStructBoxes)
 	const Translation &buried = translate ("prefixed", "Prefixed:ConstrainedBoxesWithArg");
 
 	ASSERT_NE (plain.function, nullptr) << plain.error;
-	EXPECT_EQ (plain.count ("ves_icall_object_new_specific"), 1u) << plain.text ();
+	EXPECT_EQ (plain.count ("object:AllocSmall"), 1u) << plain.text ();
 	EXPECT_EQ (plain.count ("mono_vtable_Bare"), 1u);
 	/* Dispatch stays virtual: the target comes off the box's vtable, never named. */
 	EXPECT_EQ (plain.count ("call ptr @\"System.Object:ToString"), 0u);
 
 	ASSERT_NE (buried.function, nullptr) << buried.error;
-	EXPECT_EQ (buried.count ("ves_icall_object_new_specific"), 1u) << buried.text ();
+	EXPECT_EQ (buried.count ("object:AllocSmall"), 1u) << buried.text ();
 }
 
 /* ---------------------------------------------------------- method pointers */
@@ -1222,9 +1226,20 @@ TEST_F (TranslatorTest, NewobjAllocatesThenCallsTheConstructor)
 	const Translation &t = translate ("objects", "Objects:MakeCounterAt");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 1u);
+	EXPECT_EQ (t.count ("object:AllocSmall"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("mono_vtable_Counter"), 1u);
 	EXPECT_GE (t.count ("Counter:.ctor"), 1u);
+}
+
+// Not every class gets a managed allocator - the collector declines a finalizable
+// one, among others - and those sites go on allocating through the runtime.
+TEST_F (TranslatorTest, NewobjOnAFinalizableClassAllocatesThroughTheRuntime)
+{
+	const Translation &t = translate ("objects", "Objects:MakeFinalized");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("object:AllocSmall"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 1u) << t.text ();
 }
 
 // A value type constructs in place: no heap allocation, a zeroed slot handed to the
@@ -1234,6 +1249,7 @@ TEST_F (TranslatorTest, ValueTypeNewobjConstructsInATemp)
 	const Translation &t = translate ("objects", "Objects:MakePoint");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("object:AllocSmall"), 0u);
 	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 	EXPECT_EQ (t.count ("llvm.memset"), 1u);
 	EXPECT_GE (t.count ("Point:.ctor"), 1u);

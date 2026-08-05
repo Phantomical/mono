@@ -6,6 +6,12 @@
 #include "mono/metadata/exception-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
+
+/* The collector's interface is C, and its header does not say so itself. */
+extern "C" {
+#include "mono/metadata/gc-internals.h"
+}
+
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
@@ -31,6 +37,55 @@ MethodLLVMEmitter::object_new_decl ()
 
 	(*wrapper)->addRetAttr (llvm::Attribute::NoAlias);
 	return wrapper;
+}
+
+/// Allocate an instance of KLASS - as an object in its own right, or as the box
+/// a value of it goes into - and return the reference.
+///
+/// Where the collector offers a class-specific allocator, that is what a newobj
+/// costs: managed code that bumps the thread's allocation pointer inline and
+/// only calls out when the region runs dry. Which classes get one is the
+/// collector's answer, not ours: Boehm never offers one, SGen declines for
+/// anything finalizable, remotable, oversized or with weak fields, and those
+/// all fall back on the runtime entry point.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
+{
+	llvm::Constant *vtable = class_symbol (klass, "mono_vtable_");
+	int32_t size = mono_class_instance_size (klass);
+	MonoMethod *allocator = nullptr;
+
+	/*
+	 * The allocator is handed the instance size, so a class whose size does not
+	 * even cover the object header is not one to hand it. A string's allocator
+	 * is a different shape again - a length in, a string out - and does not fit
+	 * this call at all.
+	 */
+	if (size >= static_cast<int32_t> (MONO_ABI_SIZEOF (MonoObject))
+	    && m_class_get_byval_arg (klass)->type != MONO_TYPE_STRING)
+		allocator = mono_gc_get_managed_allocator (klass, for_box, TRUE);
+
+	if (allocator != nullptr) {
+		llvm::Expected<llvm::Function *> fast = create_method_decl (allocator);
+
+		if (!fast)
+			return fast.takeError ();
+
+		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
+		return emit_protected_call (
+			builder, *fast,
+			adapt_to_callee (builder, *fast,
+		                         {vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8,
+		                                                   size)}));
+	}
+
+	llvm::Expected<llvm::Function *> slow = object_new_decl ();
+
+	if (!slow)
+		return slow.takeError ();
+
+	return emit_protected_call (builder, *slow,
+	                            adapt_to_callee (builder, *slow, {vtable}));
 }
 
 /// The address of the value held inside OBJ, after throwing InvalidCastException
@@ -275,15 +330,12 @@ MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType
 		return runtime_error (error);
 	}
 
-	llvm::Expected<llvm::Function *> allocate = object_new_decl ();
+	llvm::Expected<llvm::Value *> allocated = emit_object_alloc (builder, klass, true);
 
-	if (!allocate)
-		return allocate.takeError ();
+	if (!allocated)
+		return allocated.takeError ();
 
-	llvm::Value *obj = emit_protected_call (
-		builder, *allocate,
-		adapt_to_callee (builder, *allocate,
-	                         {class_symbol (klass, "mono_vtable_")}));
+	llvm::Value *obj = *allocated;
 	llvm::Value *payload = builder.CreateGEP (builder.getInt8Ty (), obj,
 	                                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 

@@ -50,6 +50,27 @@
 	}
 }
 
+// A finalizable class is one the collector will not hand out a managed allocator
+// for, so allocating one exercises the fallback.
+.class public auto ansi beforefieldinit Finalized extends [mscorlib]System.Object
+{
+	.method public hidebysig specialname rtspecialname instance void .ctor () cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		call instance void [mscorlib]System.Object::.ctor ()
+		ret
+	}
+
+	.method family hidebysig virtual instance void Finalize () cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		call instance void [mscorlib]System.Object::Finalize ()
+		ret
+	}
+}
+
 .class public abstract auto ansi sealed beforefieldinit Objects extends [mscorlib]System.Object
 {
 	.method public static class Counter MakeCounter () cil managed
@@ -64,6 +85,13 @@
 		.maxstack 1
 		ldarg.0
 		newobj instance void Counter::.ctor (int32)
+		ret
+	}
+
+	.method public static class Finalized MakeFinalized () cil managed
+	{
+		.maxstack 1
+		newobj instance void Finalized::.ctor ()
 		ret
 	}
 

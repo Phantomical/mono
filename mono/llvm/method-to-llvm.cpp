@@ -5,6 +5,7 @@
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/opcodes.h"
+#include "mono/metadata/profiler-private.h"
 #include "mono/metadata/tokentype.h"
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/InlineAsm.h>
@@ -1595,6 +1596,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_LDNATIVEOBJ:
 	case MONO_CEE_MONO_RETOBJ:
 	case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
+	case MONO_CEE_MONO_LDPTR_PROFILER_ALLOCATION_COUNT:
 	case MONO_CEE_MONO_JIT_ICALL_ADDR:
 	case MONO_CEE_MONO_ICALL_ADDR:
 	case MONO_CEE_MONO_TLS:
@@ -1678,6 +1680,19 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
 			push_stack (address_symbol ("mono_thread_interruption_request_flag",
 			                            &mono_thread_interruption_request_flag),
+			            m_class_get_byval_arg (mono_defaults.int_class));
+			return llvm::Error::success ();
+
+		/*
+		 * How many profilers asked to hear about allocations. The managed
+		 * allocator reads it to decide whether to raise the event; its
+		 * address, an ldind follows.
+		 */
+		case MONO_CEE_MONO_LDPTR_PROFILER_ALLOCATION_COUNT:
+			push_stack (address_symbol (
+					    "mono_profiler_gc_allocation_count",
+					    const_cast<gint32 *> (
+						    &mono_profiler_state.gc_allocation_count)),
 			            m_class_get_byval_arg (mono_defaults.int_class));
 			return llvm::Error::success ();
 

@@ -635,6 +635,8 @@ private:
 	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
 	llvm::FunctionCallee value_copy_decl ();
 	llvm::Expected<llvm::Function *> object_new_decl ();
+	llvm::Expected<llvm::Value *> emit_object_alloc (MonoIrBuilder &builder,
+	                                                 MonoClass *klass, bool for_box);
 	llvm::Value *unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
 	                            MonoClass *klass);
 	llvm::Error call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
