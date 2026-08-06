@@ -2,112 +2,58 @@ EGlib Unit Testing
 ===============================================================================
 
 	1. Writing new tests
-	2. Using the test driver
+	2. Running them
 
 ===============================================================================
 1. Writing new tests
 ===============================================================================
 
-Tests are easy to write, but must be grouped in to logical cases. For instance,
-the GPtrArray group has a number of tests that cover the entire GPtrArray
-implementation.
-
-These logical case groups should be in a single C file, and must have
-three elements:
+Tests are gtest cases, grouped by the API they cover: the GPtrArray cases are
+in ptrarray.cpp and share the `ptrarray` suite name, and so on.  A file looks
+like:
 
 	#include <glib.h>
-	#include "test.h"
+	#include <gtest/gtest.h>
 
-	...
-	<define test implementations>
-	...
-
-	static Test groupname_tests [] = {
-		{"groupname_test1", groupname_test1},
-		{"groupname_test1", groupname_test2},
-		{NULL, NULL}
-	};
-
-	DEFINE_TEST_GROUP_INIT(groupname_tests_init, groupname_tests)
-
-A test implementation should look like:
-
-	RESULT groupname_test1()
+	TEST (groupname, what_it_checks)
 	{
-		<perform the test>
-
-		if(test_failed) {
-			return FAILED("reason: %s", "this works like printf");
-		}
-
-		return OK; /* just NULL, but OK is cute */
+		ASSERT_EQ (expected, g_something (input));
 	}
 
-Once a test group is written, it needs to be added to the groups table
-in tests.h:
+Two things to know before naming a case:
 
-	DEFINE_TEST_GROUP_INIT_H(groupname_tests_init) // same as in impl
+  * eglib-remap.h rewrites the public names to their monoeg_ spellings, and
+    gtest expands the name it is handed before stringizing it.  `TEST (strutil,
+    g_strsplit)` therefore registers as `strutil.monoeg_g_strsplit`.  Leave the
+    g_ off.
 
-	static Group test_groups [] = {
-		...
-		{"groupname", groupname_tests_init}
-		...
-	};
+  * A case that needs process-wide state -- the working directory, an
+    environment variable -- has to put it back, whether it passes or not.  See
+    the fixture at the top of path.cpp; gtest is free to run these in any
+    order, and `--gtest_shuffle` will.
+
+Add the file to test-eglib's source list in CMakeLists.txt.  Nothing else
+registers it: gtest_discover_tests runs the binary and picks up whatever is
+there.
 
 ===============================================================================
-2. Using the test driver
+2. Running them
 ===============================================================================
 
-When tests are written, they are rebuilt with make. Two programs will be
-built:
+	ctest --test-dir <build> -L eglib
 
-	test-eglib: the test driver and tests linked against eglib
-	test-glib:  the test driver and tests linked against system glib-2.0
+Every case is its own ctest test, named eglib/<suite>.<case>, so a failure
+names exactly what broke and `ctest -R` reaches one of them.
 
-Each driver program works exactly the same. Running test-eglib will run 
-the tests against eglib, and test-glib against glib-2.0.
+The binary is also runnable on its own, from <build>/mono/eglib/test.  It has
+to run from there: path/find_program_in_path_cwd blanks $PATH and then looks
+for the test binary itself in the working directory.
 
-The test driver supports a few options to allow for performance measuring:
+	./test-eglib                              everything
+	./test-eglib --gtest_filter='ptrarray.*'  one suite
+	./test-eglib --gtest_shuffle              in a random order
+	./test-eglib --gtest_repeat=100           a hundred times over
 
-	--help          show all options and available test groups
-	--time          time the overall run and report it, even if --quiet is set
-	--quiet         do not print test results, useful for timing
-	--iterations N  run all or specified test groups N times
-
-Run "test-eglib --help" for more details.
-
-Example: run the ptrarray test group 100000 times and only print the time 
-         it took to perform all iterations
-
-	./test-eglib -tqi 100000 ptrarray
-
-Example: show single iteration of test output for two groups
-	
-	./test-eglib ptrarray hashtable
-
-Example: show test output of all available groups
-
-	./test-eglib
-
-The 'test-both' script can be used to run both test-eglib and test-glib
-with the same options back to back:
-
-	$ ./test-both -tqi 100000 ptrarray
-	EGlib Total Time: 1.1961s
-	GLib Total Time: 0.955957s
-
-test-both also has a nice --speed-compare mode that shows comparison
-information about EGlib vs GLib. It can run all tests or specific tests
-with a configurable number of iterations. --speed-compare mode always runs
-the drivers with -qtni
-
-The syntax for --speed-compare is:
-
-	./test-both --speed-compare [ITERATIONS] [GROUPS...]
-
-	$ ./test-both --speed-compare       Runs all tests with default iterations
-	$ ./test-both --speed-compare 500   Runs all tests with 500 iterations
-	$ ./test-both --speed-compare ptrarray   Runs ptrarray test with default
-	                                         iterations
-
-
+The UTF-* fixture files next to this README are read at run time.  They are
+found through the source directory baked in at configure time; setting $srcdir
+points the suite at a different copy.
