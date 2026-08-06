@@ -48,13 +48,18 @@
 #include <llvm/MC/MCDwarf.h>
 #include <llvm/MC/MCELFStreamer.h>
 #include <llvm/MC/MCExpr.h>
+#include <llvm/MC/MCInstPrinter.h>
 #include <llvm/MC/MCObjectWriter.h>
 #include <llvm/MC/MCSectionELF.h>
 #include <llvm/MC/MCStreamer.h>
 #include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/FormattedStream.h>
 #include <llvm/Support/SmallVectorMemoryBuffer.h>
 #include <llvm/Target/TargetMachine.h>
+#include <llvm/Transforms/Utils/Cloning.h>
+
+#include <cstdlib>
 
 using namespace llvm;
 
@@ -283,6 +288,15 @@ private:
 		if (frames.empty ())
 			return;
 
+		/*
+		 * Only an object streamer plants the frame and rule labels; textual
+		 * assembly stands the `.cfi_*` directives in for them and fills the
+		 * label fields with a dummy pointer. There is nothing to take a
+		 * difference against, and the directives say the same thing.
+		 */
+		if (frames.front ().Begin == nullptr)
+			return;
+
 		const std::vector<MCCFIInstruction> &initial =
 			ctx.getAsmInfo ()->getInitialFrameState ();
 
@@ -328,6 +342,64 @@ private:
 
 char SideTableEmitPass::ID;
 
+/// What codegen writes to OUT: the ELF object the linker loads, or the assembly
+/// text a human reads.
+enum class OutputKind { object, assembly };
+
+/*
+ * The streamer for one codegen run: either the ELF one createMCObjectStreamer
+ * builds, or the assembly printer addPassesToEmitFile's AssemblyFile arm does.
+ */
+Expected<std::unique_ptr<MCStreamer>>
+make_streamer (TargetMachine &tm, MCContext &ctx, raw_pwrite_stream &out,
+               OutputKind kind)
+{
+	const MCSubtargetInfo &sti = *tm.getMCSubtargetInfo ();
+	const MCAsmInfo &mai = *tm.getMCAsmInfo ();
+	const MCInstrInfo &mii = *tm.getMCInstrInfo ();
+	const MCRegisterInfo &mri = *tm.getMCRegisterInfo ();
+	std::unique_ptr<MCAsmBackend> mab (
+		tm.getTarget ().createMCAsmBackend (sti, mri, tm.Options.MCOptions));
+
+	if (!mab)
+		return make_error<StringError> ("target does not support MC emission",
+		                                inconvertibleErrorCode ());
+
+	if (kind == OutputKind::assembly) {
+		std::unique_ptr<MCInstPrinter> printer (
+			tm.getTarget ().createMCInstPrinter (
+				tm.getTargetTriple (),
+				tm.Options.MCOptions.OutputAsmVariant.value_or (
+					mai.getAssemblerDialect ()),
+				mai, mii, mri));
+
+		if (!printer)
+			return make_error<StringError> (
+				"target does not support an MCInstPrinter",
+				inconvertibleErrorCode ());
+
+		return std::unique_ptr<MCStreamer> (tm.getTarget ().createAsmStreamer (
+			ctx, std::make_unique<formatted_raw_ostream> (out),
+			std::move (printer), /*CE=*/nullptr, std::move (mab)));
+	}
+
+	std::unique_ptr<MCCodeEmitter> mce (
+		tm.getTarget ().createMCCodeEmitter (mii, ctx));
+
+	if (!mce)
+		return make_error<StringError> ("target does not support MC emission",
+		                                inconvertibleErrorCode ());
+
+	std::unique_ptr<MCObjectWriter> ow = mab->createObjectWriter (out);
+	auto streamer = std::make_unique<MCELFStreamer> (
+		ctx, std::move (mab), std::move (ow), std::move (mce));
+
+	if (tm.Options.MCOptions.MCRelaxAll)
+		streamer->getAssembler ().setRelaxAll (true);
+
+	return std::unique_ptr<MCStreamer> (std::move (streamer));
+}
+
 /*
  * A faithful restatement of TargetMachine::addPassesToEmitMC followed by
  * PassManager::run - the recipe SimpleCompiler drives - kept open so the gather
@@ -337,7 +409,7 @@ char SideTableEmitPass::ID;
  */
 Error
 emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
-             MonoEHSideChannel &side_channel)
+             MonoEHSideChannel &side_channel, OutputKind kind)
 {
 	legacy::PassManager pm;
 
@@ -382,29 +454,13 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 */
 	MCContext *ctx = &mmiwp->getMMI ().getContext ();
 
-	const MCSubtargetInfo &sti = *tm.getMCSubtargetInfo ();
-	const MCRegisterInfo &mri = *tm.getMCRegisterInfo ();
-	std::unique_ptr<MCCodeEmitter> mce (
-		tm.getTarget ().createMCCodeEmitter (*tm.getMCInstrInfo (), *ctx));
-	std::unique_ptr<MCAsmBackend> mab (
-		tm.getTarget ().createMCAsmBackend (sti, mri, tm.Options.MCOptions));
-	if (!mce || !mab)
-		return make_error<StringError> ("target does not support MC emission",
-		                                inconvertibleErrorCode ());
+	Expected<std::unique_ptr<MCStreamer>> streamer =
+		make_streamer (tm, *ctx, out, kind);
+	if (!streamer)
+		return streamer.takeError ();
 
-	/*
-	 * A plain MCELFStreamer, reproducing exactly what createMCObjectStreamer
-	 * does for ELF.
-	 */
-	std::unique_ptr<MCObjectWriter> ow = mab->createObjectWriter (out);
-	auto elf_streamer = std::make_unique<MCELFStreamer> (
-		*ctx, std::move (mab), std::move (ow), std::move (mce));
-	if (tm.Options.MCOptions.MCRelaxAll)
-		elf_streamer->getAssembler ().setRelaxAll (true);
-	MCStreamer *streamer_ptr = elf_streamer.get ();
-	std::unique_ptr<MCStreamer> streamer (std::move (elf_streamer));
-
-	AsmPrinter *printer = tm.getTarget ().createAsmPrinter (tm, std::move (streamer));
+	MCStreamer *streamer_ptr = streamer->get ();
+	AsmPrinter *printer = tm.getTarget ().createAsmPrinter (tm, std::move (*streamer));
 	if (!printer)
 		return make_error<StringError> ("target does not support an AsmPrinter",
 		                                inconvertibleErrorCode ());
@@ -421,6 +477,37 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	return Error::success ();
 }
 
+/// Whether MONO_LLVM_JIT_ASM names this module: a substring of its identifier,
+/// which is the full name of the one method it holds.
+bool
+dumping_asm (StringRef module_name)
+{
+	static const char *filter = std::getenv ("MONO_LLVM_JIT_ASM");
+
+	return filter != nullptr && module_name.contains (filter);
+}
+
+/*
+ * Print the assembly M compiles to - side-table sections included, which is the
+ * half no offline llc run can reproduce - to stderr.
+ *
+ * Codegen consumes the module it is given, and the MCContext, the MMI and the
+ * streamer are entangled with the single run they were built for, so this
+ * compiles a clone and leaves the caller's module for the object run. Being a
+ * separate run also means nothing here can change the code that gets published:
+ * a bug in the printout stays a bug in the printout. The side channel it fills
+ * is discarded for the same reason.
+ */
+Error
+dump_assembly (TargetMachine &tm, const Module &m)
+{
+	std::unique_ptr<Module> copy = CloneModule (m);
+	MonoEHSideChannel side_channel;
+
+	errs () << "*** assembly for " << m.getModuleIdentifier () << " ***\n";
+	return emit_object (tm, *copy, errs (), side_channel, OutputKind::assembly);
+}
+
 } // namespace
 
 MethodObjectCompiler::MethodObjectCompiler (orc::JITTargetMachineBuilder jtmb)
@@ -433,10 +520,15 @@ MethodObjectCompiler::operator() (Module &m)
 {
 	MonoEHSideChannel side_channel;
 	SmallVector<char, 0> buffer;
+
+	if (dumping_asm (m.getName ()))
+		if (Error err = dump_assembly (host_target_machine (), m))
+			return std::move (err);
+
 	{
 		raw_svector_ostream stream (buffer);
 		if (Error err = emit_object (host_target_machine (), m, stream,
-		                             side_channel))
+		                             side_channel, OutputKind::object))
 			return std::move (err);
 	}
 
