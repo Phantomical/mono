@@ -71,7 +71,8 @@ typedef struct {
 	/*
 	 * The exception being unwound, parked here while an LLVM finally or fault
 	 * handler runs. Nothing else in the process refers to it over that window,
-	 * so the slot is registered as a pinning GC root - see setup_jit_tls_data ().
+	 * so the whole stack of these is registered as a pinning GC root - see
+	 * mono_setup_resume_states ().
 	 */
 	MonoObject *ex_obj;
 	MonoLMF *lmf;
@@ -98,7 +99,15 @@ struct MonoJitTlsData {
 
 	/* Stores state needed by handler block with a guard */
 	MonoContext     ex_ctx;
-	ResumeState resume_state;
+
+	/*
+	 * One entry per LLVM finally/fault handler this thread has entered by
+	 * unwinding and not yet resumed out of. A handler is free to throw, and
+	 * that exception unwinds through handlers of its own, so they nest.
+	 */
+	ResumeState     *resume_states;
+	int             resume_state_depth;
+	int             resume_state_capacity;
 
 	/* handler block been guarded. It's safe to store this even for dynamic methods since there
 	is an activation on stack making sure it will remain alive.*/

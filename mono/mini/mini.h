@@ -2648,6 +2648,8 @@ gboolean mono_thread_state_init_from_monoctx    (MonoThreadUnwindState *ctx, Mon
 
 void     mono_setup_altstack                    (MonoJitTlsData *tls);
 void     mono_free_altstack                     (MonoJitTlsData *tls);
+void     mono_setup_resume_states               (MonoJitTlsData *tls);
+void     mono_free_resume_states                (MonoJitTlsData *tls);
 gpointer mono_altstack_restore_prot             (host_mgreg_t *regs, guint8 *code, gpointer *tramp_data, guint8* tramp);
 MonoJitInfo* mini_jit_info_table_find           (MonoDomain *domain, gpointer addr, MonoDomain **out_domain);
 MonoJitInfo* mini_jit_info_table_find_ext       (MonoDomain *domain, gpointer addr, gboolean allow_trampolines, MonoDomain **out_domain);

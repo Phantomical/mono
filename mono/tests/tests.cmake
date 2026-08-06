@@ -484,6 +484,7 @@ set(MONO_TESTS_CS_SRC
   finally_block_ending_in_dead_bb.cs
   finally-throwing-handler.cs
   finally-gc-move.cs
+  finally-nested-resume.cs
   bug-60862.cs
 )
 

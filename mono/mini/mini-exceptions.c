@@ -2794,14 +2794,137 @@ mono_get_exception_runtime_wrapped_checked (MonoObject *wrapped_exception_raw, M
 	HANDLE_FUNCTION_RETURN_OBJ (ret);
 }
 
+/*
+ * An LLVM finally or fault handler entered by unwinding does not return to its
+ * caller: it calls mono_llvm_resume_unwind () when it runs out, and until then
+ * the state the unwind carries on from is parked in the thread's resume state
+ * stack. A stack rather than a slot because handlers nest - a handler is free
+ * to throw, and that exception unwinds through handlers of its own, which would
+ * otherwise take over the state the outer one is waiting on.
+ */
+#define RESUME_STATE_INITIAL_CAPACITY 4
+
+static void
+resume_states_grow (MonoJitTlsData *jit_tls, int capacity)
+{
+	ResumeState *states = g_new0 (ResumeState, capacity);
+
+	if (jit_tls->resume_state_depth)
+		memcpy (states, jit_tls->resume_states, jit_tls->resume_state_depth * sizeof (ResumeState));
+
+	/*
+	 * The frames between a throw and a handler entered by unwinding are gone by
+	 * the time that handler runs, so this stack is the only reference to the
+	 * exceptions parked in it. Root it, or a collection landing inside such a
+	 * handler frees one out from under the resumed unwind.
+	 *
+	 * Conservative rather than precise, for the same reason a thread stack is:
+	 * entries above the current depth keep their last value, and an appdomain
+	 * unload frees those objects without asking anyone who refers to them. A
+	 * pinning root reads a leftover word as a maybe-pointer and shrugs, where a
+	 * precise one would walk it as an object. Pinning also settles the address
+	 * a parked entry holds - it stays the one the object lives at.
+	 *
+	 * Register the new allocation before dropping the old root: registering
+	 * takes the GC lock and can let a collection through, and no parked
+	 * exception may be unrooted over that window.
+	 */
+	mono_gc_register_root ((char*)states, capacity * sizeof (ResumeState), MONO_GC_DESCRIPTOR_NULL, MONO_ROOT_SOURCE_JIT, NULL, "Unwind Resume State");
+	if (jit_tls->resume_states) {
+		mono_gc_deregister_root ((char*)jit_tls->resume_states);
+		g_free (jit_tls->resume_states);
+	}
+
+	jit_tls->resume_states = states;
+	jit_tls->resume_state_capacity = capacity;
+}
+
+void
+mono_setup_resume_states (MonoJitTlsData *jit_tls)
+{
+	resume_states_grow (jit_tls, RESUME_STATE_INITIAL_CAPACITY);
+}
+
+void
+mono_free_resume_states (MonoJitTlsData *jit_tls)
+{
+	if (!jit_tls->resume_states)
+		return;
+
+	mono_gc_deregister_root ((char*)jit_tls->resume_states);
+	g_free (jit_tls->resume_states);
+	jit_tls->resume_states = NULL;
+	jit_tls->resume_state_depth = 0;
+	jit_tls->resume_state_capacity = 0;
+}
+
+static ResumeState *
+resume_state_push (MonoJitTlsData *jit_tls)
+{
+	if (jit_tls->resume_state_depth == jit_tls->resume_state_capacity)
+		resume_states_grow (jit_tls, jit_tls->resume_state_capacity * 2);
+
+	return &jit_tls->resume_states [jit_tls->resume_state_depth ++];
+}
+
+static gboolean
+resume_state_pop (MonoJitTlsData *jit_tls, ResumeState *state)
+{
+	if (jit_tls->resume_state_depth == 0)
+		return FALSE;
+
+	*state = jit_tls->resume_states [-- jit_tls->resume_state_depth];
+	return TRUE;
+}
+
+/*
+ * Discard the states parked for handlers running in frames below \p sp, which
+ * an unwind reaching \p sp has destroyed. Those handlers never get to run to
+ * their end, so nothing will ever resume out of them.
+ */
+static void
+resume_states_drop_below (MonoJitTlsData *jit_tls, gpointer sp)
+{
+	while (jit_tls->resume_state_depth > 0) {
+		ResumeState *state = &jit_tls->resume_states [jit_tls->resume_state_depth - 1];
+
+		if ((guint8*)MONO_CONTEXT_GET_SP (&state->ctx) >= (guint8*)sp)
+			break;
+		jit_tls->resume_state_depth --;
+	}
+}
+
+/*
+ * Discard the states that transferring control to the catch clause \p catch_ei
+ * of \p ji abandons: everything below this frame, plus any handler in this
+ * frame whose code the clause protects. A catch nested inside a running
+ * handler, on the other hand, returns to it, so its state stays parked.
+ */
+static void
+resume_states_drop_abandoned (MonoJitTlsData *jit_tls, MonoJitInfo *ji, MonoJitExceptionInfo *catch_ei, MonoContext *ctx)
+{
+	resume_states_drop_below (jit_tls, MONO_CONTEXT_GET_SP (ctx));
+
+	while (jit_tls->resume_state_depth > 0) {
+		ResumeState *state = &jit_tls->resume_states [jit_tls->resume_state_depth - 1];
+
+		if (state->ji != ji || MONO_CONTEXT_GET_SP (&state->ctx) != MONO_CONTEXT_GET_SP (ctx))
+			break;
+		/* clause_index is the one after the clause whose handler was entered. */
+		if (!is_address_protected (ji, catch_ei, ji->clauses [state->clause_index - 1].handler_start))
+			break;
+		jit_tls->resume_state_depth --;
+	}
+}
+
 /**
  * mono_handle_exception_internal:
  * \param ctx saved processor state
  * \param obj the exception object
- * \param resume whenever to resume unwinding based on the state in \c MonoJitTlsData.
+ * \param resume_state the state to resume unwinding from, or NULL to start a new unwind.
  */
 static gboolean
-mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, gboolean resume, MonoJitInfo **out_ji)
+mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *resume_state, MonoJitInfo **out_ji)
 {
 	ERROR_DECL (error);
 	MonoDomain *domain = mono_domain_get ();
@@ -2913,7 +3036,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, gboolean resu
 	 */
 	memcpy (&jit_tls->orig_ex_ctx, ctx, sizeof (MonoContext));
 
-	if (!resume) {
+	if (!resume_state) {
 		MonoContext ctx_cp = *ctx;
 		if (mono_trace_is_enabled ()) {
 			ERROR_DECL (error);
@@ -3028,15 +3151,15 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, gboolean resu
 		StackFrameInfo frame;
 		gpointer ip;
 		
-		if (resume) {
-			resume = FALSE;
-			ji = jit_tls->resume_state.ji;
-			new_ctx = jit_tls->resume_state.new_ctx;
-			clause_index_start = jit_tls->resume_state.clause_index;
-			lmf = jit_tls->resume_state.lmf;
-			first_filter_idx = jit_tls->resume_state.first_filter_idx;
-			filter_idx = jit_tls->resume_state.filter_idx;
+		if (resume_state) {
+			ji = resume_state->ji;
+			new_ctx = resume_state->new_ctx;
+			clause_index_start = resume_state->clause_index;
+			lmf = resume_state->lmf;
+			first_filter_idx = resume_state->first_filter_idx;
+			filter_idx = resume_state->filter_idx;
 			in_interp = FALSE;
+			resume_state = NULL;
 		} else {
 			unwind_res = unwinder_unwind_frame (&unwinder, domain, jit_tls, NULL, ctx, &new_ctx, NULL, &lmf, NULL, &frame);
 			if (!unwind_res) {
@@ -3196,6 +3319,8 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, gboolean resu
 
 					mini_set_abort_threshold (&frame);
 
+					resume_states_drop_abandoned (jit_tls, ji, ei, ctx);
+
 					if (in_interp) {
 						interp_exit_finally_abort_blocks (ji, clause_index_start, i, ip);
 						/*
@@ -3260,14 +3385,16 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, gboolean resu
 						 * mono_resume_unwind () will call us again to continue
 						 * the unwinding.
 						 */
-						jit_tls->resume_state.ex_obj = obj;
-						jit_tls->resume_state.ji = ji;
-						jit_tls->resume_state.clause_index = i + 1;
-						jit_tls->resume_state.ctx = *ctx;
-						jit_tls->resume_state.new_ctx = new_ctx;
-						jit_tls->resume_state.lmf = lmf;
-						jit_tls->resume_state.first_filter_idx = first_filter_idx;
-						jit_tls->resume_state.filter_idx = filter_idx;
+						ResumeState *state = resume_state_push (jit_tls);
+
+						state->ex_obj = obj;
+						state->ji = ji;
+						state->clause_index = i + 1;
+						state->ctx = *ctx;
+						state->new_ctx = new_ctx;
+						state->lmf = lmf;
+						state->first_filter_idx = first_filter_idx;
+						state->filter_idx = filter_idx;
 						mini_set_abort_threshold (&frame);
 						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
 						return 0;
@@ -3302,6 +3429,9 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, gboolean resu
 			MONO_PROFILER_RAISE (method_exception_leave, (method, ex_obj));
 			jit_tls->orig_ex_ctx_set = FALSE;
 		}
+
+		/* This frame is about to go; so is any handler parked in it or below it. */
+		resume_states_drop_below (jit_tls, MONO_CONTEXT_GET_SP (&new_ctx));
 
 		*ctx = new_ctx;
 	}
@@ -3367,7 +3497,7 @@ mono_handle_exception (MonoContext *ctx, gpointer void_obj)
 	mono_atomic_inc_i32 (&mono_perfcounters->exceptions_thrown);
 #endif
 
-	return mono_handle_exception_internal (ctx, obj, FALSE, NULL);
+	return mono_handle_exception_internal (ctx, obj, NULL, NULL);
 }
 
 #ifdef MONO_ARCH_SIGSEGV_ON_ALTSTACK
@@ -3816,12 +3946,21 @@ mono_resume_unwind (MonoContext *ctx)
 
 	MonoJitTlsData *jit_tls = mono_tls_get_jit_tls ();
 	MonoContext new_ctx;
+	ResumeState state;
 
-	MONO_CONTEXT_SET_IP (ctx, MONO_CONTEXT_GET_IP (&jit_tls->resume_state.ctx));
-	MONO_CONTEXT_SET_SP (ctx, MONO_CONTEXT_GET_SP (&jit_tls->resume_state.ctx));
+	/*
+	 * The state comes off the stack here rather than staying parked for the
+	 * unwind that continues below: everything it holds is read out now, and
+	 * this copy lives in a stack frame the collector scans.
+	 */
+	if (!resume_state_pop (jit_tls, &state))
+		g_error ("Resuming an unwind with no handler state parked for it.");
+
+	MONO_CONTEXT_SET_IP (ctx, MONO_CONTEXT_GET_IP (&state.ctx));
+	MONO_CONTEXT_SET_SP (ctx, MONO_CONTEXT_GET_SP (&state.ctx));
 	new_ctx = *ctx;
 
-	mono_handle_exception_internal (&new_ctx, jit_tls->resume_state.ex_obj, TRUE, NULL);
+	mono_handle_exception_internal (&new_ctx, state.ex_obj, &state, NULL);
 
 	mono_restore_context (&new_ctx);
 }

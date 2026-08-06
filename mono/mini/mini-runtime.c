@@ -994,21 +994,7 @@ setup_jit_tls_data (gpointer stack_start, MonoAbortFunction abort_func)
 
 	jit_tls->lmf = lmf;
 
-	/*
-	 * A finally or fault handler that was entered by unwinding runs arbitrary
-	 * managed code, and the frames that threw are already unwound past by then,
-	 * so the resume state is the only reference to the in-flight exception until
-	 * mono_resume_unwind () picks it back up. Root it, or a collection landing
-	 * inside such a handler frees the object out from under the resumed unwind.
-	 *
-	 * Conservative rather than precise, for the same reason a thread stack is:
-	 * the slot keeps its last value after the unwind is over, and an appdomain
-	 * unload frees that object without asking anyone who refers to it. A
-	 * pinning root reads a leftover word as a maybe-pointer and shrugs, where a
-	 * precise one would walk it as an object. Pinning also means the address
-	 * parked here stays the one the object lives at.
-	 */
-	MONO_GC_REGISTER_ROOT_PINNING (jit_tls->resume_state.ex_obj, MONO_ROOT_SOURCE_JIT, NULL, "Unwind Resume State Exception");
+	mono_setup_resume_states (jit_tls);
 
 #ifdef MONO_ARCH_HAVE_TLS_INIT
 	mono_arch_tls_init ();
@@ -1030,7 +1016,7 @@ free_jit_tls_data (MonoJitTlsData *jit_tls)
 	if (jit_tls->interp_context)
 		mini_get_interp_callbacks ()->free_context (jit_tls->interp_context);
 
-	MONO_GC_UNREGISTER_ROOT (jit_tls->resume_state.ex_obj);
+	mono_free_resume_states (jit_tls);
 
 	g_free (jit_tls->first_lmf);
 	g_free (jit_tls);
