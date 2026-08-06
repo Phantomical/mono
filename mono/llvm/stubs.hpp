@@ -20,6 +20,8 @@
 
 namespace mono {
 
+class CodeSlabs;
+
 /// The manager the JIT publishes stubs through: ORC's redirectable-symbol
 /// interface, plus a way to take a stub back that the interface does not have.
 class StubManager : public llvm::orc::RedirectableSymbolManager {
@@ -34,10 +36,10 @@ public:
 	                      const llvm::orc::SymbolNameSet &names) = 0;
 };
 
-/// Build the stub manager the JIT publishes stubs through.
-/// Fails on architectures we do not emit stubs for.
+/// Build the stub manager the JIT publishes stubs through, carving stubs out of
+/// SLABS. Fails on architectures we do not emit stubs for.
 llvm::Expected<std::unique_ptr<StubManager>>
-make_stub_manager (llvm::orc::ExecutionSession &es);
+make_stub_manager (llvm::orc::ExecutionSession &es, CodeSlabs &slabs);
 
 } // namespace mono
 

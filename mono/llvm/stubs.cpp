@@ -19,6 +19,7 @@
 #include "stubs.hpp"
 
 #include "arch/arch.hpp"
+#include "codemem.hpp"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/Support/Memory.h>
@@ -28,8 +29,6 @@
 #include <mutex>
 #include <vector>
 
-#include <sys/mman.h>
-
 using namespace llvm;
 using namespace llvm::orc;
 
@@ -37,9 +36,10 @@ namespace mono {
 namespace {
 
 /*
- * How many stubs a slab holds. The two regions come out of one mapping so the
- * jump's rel32 displacement always reaches, and both are whole pages at this
- * count, which keeps the stub region 16-aligned without padding between them.
+ * How many stubs a batch holds. The slot and stub regions come out of one
+ * allocation so the jump's rel32 displacement always reaches, and the slot
+ * region is a whole number of 16-byte blocks at this count, which keeps the
+ * stub region aligned without padding between them.
  */
 constexpr size_t stubs_per_slab = 2048;
 constexpr size_t slot_region_size = stubs_per_slab * sizeof (void *);
@@ -52,14 +52,16 @@ struct Stub {
 	Slot *slot;
 };
 
-/// Allocator over mapped slabs of (slot region, stub region) pairs: bump within
-/// a slab, with a free list of the stubs handed back.
+/// Allocator over batches of (slot region, stub region) pairs carved from the
+/// code slabs: bump within a batch, with a free list of the stubs handed back.
 class StubSlabs {
 public:
+	explicit StubSlabs (CodeSlabs *slabs) : slabs_ (slabs) {}
+
 	~StubSlabs ()
 	{
-		for (sys::MemoryBlock &slab : slabs_)
-			sys::Memory::releaseMappedMemory (slab);
+		for (const CodeSlabs::Alloc &batch : batches_)
+			slabs_->release_writable (batch);
 	}
 
 	/// Carve one stub, jumping to TARGET.
@@ -81,7 +83,7 @@ public:
 			if (Error err = add_slab ())
 				return std::move (err);
 
-		char *base = static_cast<char *> (slabs_.back ().base ());
+		char *base = batches_.back ().base;
 		size_t i = next_++;
 
 		Slot *slot = reinterpret_cast<Slot *> (base + i * sizeof (void *));
@@ -99,7 +101,7 @@ public:
 
 private:
 	/*
-	 * Stubs stay writable rather than being flipped to read-execute once
+	 * The writable region, so stubs are never flipped to read-execute once
 	 * written: they are carved one at a time out of a page other stubs are
 	 * already running from, so there is no point at which the page is quiet
 	 * enough to reprotect. A detour library mprotects the entry it patches
@@ -107,40 +109,27 @@ private:
 	 */
 	Error add_slab ()
 	{
-		void *base = mmap (nullptr, slot_region_size + stub_region_size,
-		                   PROT_READ | PROT_WRITE,
-		                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		Expected<CodeSlabs::Alloc> batch = slabs_->allocate_writable (
+			slot_region_size + stub_region_size, arch::stub_block_size);
 
-		if (base == MAP_FAILED)
-			return make_error<StringError> ("could not map a stub slab",
-			                                inconvertibleErrorCode ());
+		if (!batch)
+			return batch.takeError ();
 
-		sys::MemoryBlock slab (base, slot_region_size + stub_region_size);
-
-		if (sys::Memory::protectMappedMemory (
-		        sys::MemoryBlock (static_cast<char *> (slab.base ()) +
-		                              slot_region_size,
-		                          stub_region_size),
-		        sys::Memory::MF_READ | sys::Memory::MF_WRITE |
-		            sys::Memory::MF_EXEC)) {
-			sys::Memory::releaseMappedMemory (slab);
-			return make_error<StringError> ("could not make a stub slab "
-			                                "executable",
-			                                inconvertibleErrorCode ());
-		}
-
-		slabs_.push_back (slab);
+		batches_.push_back (*batch);
 		next_ = 0;
 		return Error::success ();
 	}
 
-	std::vector<sys::MemoryBlock> slabs_;
+	CodeSlabs *slabs_;
+	std::vector<CodeSlabs::Alloc> batches_;
 	std::vector<Stub> free_;
 	size_t next_ = stubs_per_slab;
 };
 
 class SlabStubManager : public StubManager {
 public:
+	explicit SlabStubManager (CodeSlabs &slabs) : slabs_ (&slabs) {}
+
 	void emitRedirectableSymbols (std::unique_ptr<MaterializationResponsibility> r,
 	                              SymbolMap initial_dests) override
 	{
@@ -229,7 +218,7 @@ private:
 } // namespace
 
 Expected<std::unique_ptr<StubManager>>
-make_stub_manager (ExecutionSession &es)
+make_stub_manager (ExecutionSession &es, CodeSlabs &slabs)
 {
 	const Triple &tt = es.getTargetTriple ();
 	if (tt.getArch () != arch::target_arch)
@@ -237,7 +226,7 @@ make_stub_manager (ExecutionSession &es)
 			"redirectable stubs are not implemented for " + tt.str (),
 			inconvertibleErrorCode ());
 
-	return std::make_unique<SlabStubManager> ();
+	return std::make_unique<SlabStubManager> (slabs);
 }
 
 } // namespace mono

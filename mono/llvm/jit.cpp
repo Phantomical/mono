@@ -708,7 +708,7 @@ MonoJit::create ()
 	self->helpers_ = &es.createBareJITDylib ("mono.helpers");
 	self->stubs_ = &es.createBareJITDylib ("mono.stubs");
 
-	auto redirectable = make_stub_manager (es);
+	auto redirectable = make_stub_manager (es, *self->slabs_);
 	if (!redirectable)
 		return redirectable.takeError ();
 	self->redirectable_ = std::move (*redirectable);
