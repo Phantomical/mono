@@ -4,9 +4,6 @@
 #
 # The bodies are gtest, and gtest_discover_tests turns each case into its own
 # ctest test running in its own process -- so a crash still names one check.
-# ENTRY is the older shape, a body plus main.c compiled with -DMAIN=<function>;
-# tests that have no ENTRY are the gtest ones.
-
 
 if(NOT MONO_ENABLE_SGEN)
   # The tests link the SGen runtime.
@@ -20,20 +17,9 @@ endif()
 # RUNTIME means the test starts a runtime and therefore links the whole JIT;
 # the others only need metadata and the collector.
 function(mono_add_unit_test name)
-  cmake_parse_arguments(ARG "RUNTIME" "ENTRY" "SOURCES" ${ARGN})
+  cmake_parse_arguments(ARG "RUNTIME" "" "SOURCES" ${ARGN})
 
-  set(_sources ${ARG_SOURCES})
-  if(ARG_ENTRY)
-    # Source properties are scoped to a directory, not to a target, so every
-    # test needs its own copy of the shim to carry its own -DMAIN.
-    set(_shim "${CMAKE_CURRENT_BINARY_DIR}/main-${name}.c")
-    configure_file(main.c "${_shim}" COPYONLY)
-    set_source_files_properties("${_shim}" PROPERTIES
-      COMPILE_DEFINITIONS "MAIN=${ARG_ENTRY}")
-    list(APPEND _sources "${_shim}")
-  endif()
-
-  add_executable(${name} ${_sources})
+  add_executable(${name} ${ARG_SOURCES})
 
   target_include_directories(${name} PRIVATE
     "${CMAKE_SOURCE_DIR}"
@@ -66,27 +52,20 @@ function(mono_add_unit_test name)
   # libmini contains C++, so the test binaries need the C++ runtime.
   set_target_properties(${name} PROPERTIES LINKER_LANGUAGE CXX)
 
-  if(ARG_ENTRY)
-    add_test(NAME ${name} COMMAND ${name})
-    set_tests_properties(${name} PROPERTIES
-      SKIP_RETURN_CODE 77
-      ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
-  else()
-    target_link_libraries(${name} PRIVATE GTest::gtest GTest::gtest_main)
+  target_link_libraries(${name} PRIVATE GTest::gtest GTest::gtest_main)
 
-    # PRE_TEST because discovery has to happen where the tests run: the working
-    # directory is load-bearing (see above) and MONO_PATH has to be set.
-    #
-    # A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest
-    # says so only in its output -- the process still exits 0.
-    gtest_discover_tests(${name}
-      TEST_PREFIX ${name}/
-      DISCOVERY_MODE PRE_TEST
-      WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-      PROPERTIES
-        SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
-        ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
-  endif()
+  # PRE_TEST because discovery has to happen where the tests run: the working
+  # directory is load-bearing (see above) and MONO_PATH has to be set.
+  #
+  # A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest
+  # says so only in its output -- the process still exits 0.
+  gtest_discover_tests(${name}
+    TEST_PREFIX ${name}/
+    DISCOVERY_MODE PRE_TEST
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    PROPERTIES
+      SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
+      ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
 endfunction()
 
 mono_add_unit_test(test-sgen-qsort           SOURCES test-sgen-qsort.cpp)
@@ -99,13 +78,6 @@ mono_add_unit_test(test-mono-string          SOURCES test-mono-string.cpp     RU
 mono_add_unit_test(test-mono-embed           SOURCES test-mono-embed.cpp      RUNTIME)
 mono_add_unit_test(test-embed-invoke         SOURCES test-embed-invoke.cpp    RUNTIME)
 mono_add_unit_test(test-path                 SOURCES test-path.cpp            RUNTIME)
-
-if(MONO_ENABLE_LLVM)
-  # C++: it drives the .mono_lsda parser through mono/llvm/mono_lsda.hpp, a
-  # C++-only interface, so it cannot live inside libmono's C surface.
-  mono_add_unit_test(test-llvm-ehtable
-    SOURCES test-llvm-ehtable.cpp    ENTRY test_llvm_ehtable_main     RUNTIME)
-endif()
 
 # The managed side of the tests that need one.
 if(MONO_ENABLE_MCS_BUILD)

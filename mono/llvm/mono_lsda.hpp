@@ -45,7 +45,7 @@
  * Like engine.hpp this is a C++-only header and must NEVER be included by
  * mono's C sources. It is consumed by mono_lsda.cpp, by translator.cpp (slice
  * C6, which wires publish_mono_lsda onto the live compile path), and by
- * mono/unit-tests/test-llvm-ehtable.cpp.
+ * tests/mono-lsda-tests.cpp.
  */
 
 #ifndef MONO_LLVM_MONO_LSDA_HPP

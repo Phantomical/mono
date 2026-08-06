@@ -1,10 +1,8 @@
-# Tests for the IL -> LLVM IR translator.
+# The backend's native tests, all in one binary.
 #
-# These drive method_to_llvm () over real metadata, so each case is a method in a
-# `.il` file under il/ that ilasm assembles into an assembly the test loads.  That
-# is why they live here rather than in mono/unit-tests: the corpus is part of the
-# test, and the whole thing is gtest rather than the hand-rolled reporting the
-# tests over there share.
+# Most of them drive method_to_llvm () over real metadata, so each case is a method
+# in a `.il` file under il/ that ilasm assembles into an assembly the test loads --
+# that corpus is why the whole directory is gated on ilasm being available.
 
 if(NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRARIES)
   return()
@@ -27,7 +25,7 @@ add_custom_target(test-llvm-data ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
 mono_tools_runtime_depends(test-llvm-data)
 
 add_executable(test-llvm harness.cpp translator-tests.cpp jit-tests.cpp
-                         stub-tests.cpp codemem-tests.cpp)
+                         stub-tests.cpp codemem-tests.cpp mono-lsda-tests.cpp)
 
 target_include_directories(test-llvm PRIVATE
   "${CMAKE_BINARY_DIR}"
@@ -54,9 +52,12 @@ if(ZLIB_FOUND)
   target_link_libraries(test-llvm PRIVATE ZLIB::ZLIB)
 endif()
 
+# A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest says
+# so only in its output -- the process still exits 0.
 gtest_discover_tests(test-llvm
   TEST_PREFIX test-llvm/
   DISCOVERY_MODE PRE_TEST
   PROPERTIES
     LABELS llvm
+    SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc")
