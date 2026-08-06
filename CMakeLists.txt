@@ -164,8 +164,8 @@ if(BUILD_TESTING)
     USES_TERMINAL
     VERBATIM)
   add_dependencies(check mini-corpora unit-test-assemblies)
-  if(TARGET mono-llvm-test-corpora)
-    add_dependencies(check mono-llvm-test-corpora)
+  if(TARGET test-llvm-data)
+    add_dependencies(check test-llvm-data)
   endif()
 
   add_custom_target(check-all
@@ -175,8 +175,8 @@ if(BUILD_TESTING)
     USES_TERMINAL
     VERBATIM)
   add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
-  if(TARGET mono-llvm-test-corpora)
-    add_dependencies(check-all mono-llvm-test-corpora)
+  if(TARGET test-llvm-data)
+    add_dependencies(check-all test-llvm-data)
   endif()
 
   # The CoreCLR suites and ms-test-suite, with the hours-long members

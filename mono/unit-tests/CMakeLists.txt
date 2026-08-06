@@ -113,6 +113,10 @@ if(MONO_ENABLE_MCS_BUILD)
   mono_tools_runtime_depends(unit-test-assemblies)
 endif()
 
+# The backend's own tests.  Their own directory because they come with a corpus
+# of .il fixtures and link the backend rather than just the runtime.
+add_subdirectory(llvm)
+
 # Checks that run a managed corpus and assert on what the runtime recorded while
 # compiling it, rather than on what the corpus computed.  They need the corpus
 # plumbing, which mono/mini sets up.
