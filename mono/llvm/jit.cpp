@@ -716,7 +716,7 @@ MonoJit::create ()
 	self->helpers_ = &es.createBareJITDylib ("mono.helpers");
 	self->stubs_ = &es.createBareJITDylib ("mono.stubs");
 
-	auto redirectable = make_redirectable_symbol_manager (es);
+	auto redirectable = make_stub_manager (es);
 	if (!redirectable)
 		return redirectable.takeError ();
 	self->redirectable_ = std::move (*redirectable);
@@ -959,7 +959,15 @@ MonoJit::undefine_stubs (const std::vector<std::string> &names)
 	for (const std::string &name : names)
 		symbols.insert (es.intern (name));
 
-	return stubs_->remove (symbols);
+	/*
+	 * Undefine before reclaiming: a stub has to be unreachable by name before
+	 * its block can be handed to the next method along.
+	 */
+	if (Error err = stubs_->remove (symbols))
+		return err;
+
+	redirectable_->discard (*stubs_, symbols);
+	return Error::success ();
 }
 
 } // namespace mono

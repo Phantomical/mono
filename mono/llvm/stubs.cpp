@@ -10,9 +10,10 @@
  * likewise goes through a full symbol lookup.
  *
  * So we carve stubs out of a slab instead. A stub costs 24 bytes, publishing
- * one is a bump-allocate plus a few stores, and a redirect is a single atomic
- * store to the slot. The ORC interface is unchanged, which is what the
- * promotion machinery is written against.
+ * one is a bump-allocate (or a pop off the free list) plus a few stores, and a
+ * redirect is a single atomic store to the slot. The ORC interface is unchanged
+ * bar the reclaim hook, which is what the promotion machinery is written
+ * against.
  */
 
 #include "stubs.hpp"
@@ -51,7 +52,8 @@ struct Stub {
 	Slot *slot;
 };
 
-/// Bump allocator over mapped slabs of (slot region, stub region) pairs.
+/// Allocator over mapped slabs of (slot region, stub region) pairs: bump within
+/// a slab, with a free list of the stubs handed back.
 class StubSlabs {
 public:
 	~StubSlabs ()
@@ -63,6 +65,18 @@ public:
 	/// Carve one stub, jumping to TARGET.
 	Expected<Stub> allocate (void *target)
 	{
+		if (!free_.empty ()) {
+			Stub stub = free_.back ();
+
+			free_.pop_back ();
+			/*
+			 * The jump reads this stub's own slot and always did, so
+			 * there is nothing to rewrite but the destination.
+			 */
+			stub.slot->store (target, std::memory_order_release);
+			return stub;
+		}
+
 		if (next_ == stubs_per_slab)
 			if (Error err = add_slab ())
 				return std::move (err);
@@ -79,6 +93,9 @@ public:
 
 		return Stub { code, slot };
 	}
+
+	/// Take STUB back, for a later allocate () to hand out again.
+	void release (Stub stub) { free_.push_back (stub); }
 
 private:
 	/*
@@ -128,10 +145,11 @@ private:
 	}
 
 	std::vector<sys::MemoryBlock> slabs_;
+	std::vector<Stub> free_;
 	size_t next_ = stubs_per_slab;
 };
 
-class SlabRedirectableSymbolManager : public RedirectableSymbolManager {
+class SlabStubManager : public StubManager {
 public:
 	void emitRedirectableSymbols (std::unique_ptr<MaterializationResponsibility> r,
 	                              SymbolMap initial_dests) override
@@ -150,7 +168,7 @@ public:
 					return r->failMaterialization ();
 				}
 
-				slots_[&jd][name] = stub->slot;
+				stubs_[&jd][name] = *stub;
 				resolved[name] = { ExecutorAddr::fromPtr (stub->code),
 					               dest.getFlags () };
 			}
@@ -170,12 +188,12 @@ public:
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
 
-		auto jd_slots = slots_.find (&jd);
+		auto jd_stubs = stubs_.find (&jd);
 		for (auto &[name, dest] : new_dests) {
-			auto slot = jd_slots == slots_.end ()
-			                ? nullptr
-			                : jd_slots->second.lookup (name);
-			if (!slot)
+			Stub stub = jd_stubs == stubs_.end ()
+			                ? Stub {}
+			                : jd_stubs->second.lookup (name);
+			if (stub.slot == nullptr)
 				return make_error<StringError> (
 					"no stub to redirect for " + *name + " in " + jd.getName (),
 					inconvertibleErrorCode ());
@@ -183,29 +201,45 @@ public:
 			/* Callers may be running through this stub right now: the store has
 			 * to land whole, and everything the new target reads has to be
 			 * visible by the time it does. */
-			slot->store (dest.getAddress ().toPtr<void *> (),
-			             std::memory_order_release);
+			stub.slot->store (dest.getAddress ().toPtr<void *> (),
+			                  std::memory_order_release);
 		}
 
 		return Error::success ();
+	}
+
+	void discard (JITDylib &jd, const SymbolNameSet &names) override
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+
+		auto jd_stubs = stubs_.find (&jd);
+
+		if (jd_stubs == stubs_.end ())
+			return;
+
+		for (const SymbolStringPtr &name : names) {
+			auto it = jd_stubs->second.find (name);
+
+			if (it == jd_stubs->second.end ())
+				continue;
+			slabs_.release (it->second);
+			jd_stubs->second.erase (it);
+		}
 	}
 
 private:
 	std::mutex mutex_;
 	StubSlabs slabs_;
 
-	/*
-	 * The slot behind each published stub. Stubs are never reclaimed - a
-	 * method keeps its entry for the life of the process - so these stay valid
-	 * once recorded.
-	 */
-	DenseMap<JITDylib *, DenseMap<SymbolStringPtr, Slot *>> slots_;
+	/// Each published stub, by the name it was published under. Recorded here
+	/// until discard () gives it back.
+	DenseMap<JITDylib *, DenseMap<SymbolStringPtr, Stub>> stubs_;
 };
 
 } // namespace
 
-Expected<std::unique_ptr<RedirectableSymbolManager>>
-make_redirectable_symbol_manager (ExecutionSession &es)
+Expected<std::unique_ptr<StubManager>>
+make_stub_manager (ExecutionSession &es)
 {
 	const Triple &tt = es.getTargetTriple ();
 	if (tt.getArch () != arch::target_arch)
@@ -213,7 +247,7 @@ make_redirectable_symbol_manager (ExecutionSession &es)
 			"redirectable stubs are not implemented for " + tt.str (),
 			inconvertibleErrorCode ());
 
-	return std::make_unique<SlabRedirectableSymbolManager> ();
+	return std::make_unique<SlabStubManager> ();
 }
 
 } // namespace mono

@@ -249,6 +249,30 @@ TEST (Stubs, AnUnmaterializedStubCanBeUndefined)
 }
 
 /*
+ * A stub is 24 bytes of the low-memory pool, which is one gigabyte for the
+ * whole process. A program that mints DynamicMethods forever - what a compiler
+ * emitting lambdas does - would walk through it if freeing a method only ever
+ * gave the name back.
+ */
+TEST (Stubs, AnUndefinedStubIsHandedOutAgain)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	auto first = make_stub (**jit, "m", (void *) &stub_target_one);
+	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
+
+	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
+
+	/* A different name, so this is the block being reused and not the name. */
+	auto second = make_stub (**jit, "n", (void *) &stub_target_two);
+	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
+
+	EXPECT_EQ (*first, *second);
+	EXPECT_EQ (reinterpret_cast<IntFn> (*second) (), 2);
+}
+
+/*
  * Undefining is driven by the backend's own record of what it published, so a
  * name that was never published means that record is wrong. Saying so is what
  * keeps it from becoming a stub silently pointing at released code.

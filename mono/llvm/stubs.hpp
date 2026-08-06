@@ -20,10 +20,24 @@
 
 namespace mono {
 
-/// Build the redirectable-symbol manager the JIT publishes stubs through.
+/// The manager the JIT publishes stubs through: ORC's redirectable-symbol
+/// interface, plus a way to take a stub back that the interface does not have.
+class StubManager : public llvm::orc::RedirectableSymbolManager {
+public:
+	/// Reclaim the stubs published for NAMES in JD, so that a later
+	/// createRedirectableSymbols () can hand out the same blocks again. A name
+	/// that never got a stub is ignored.
+	///
+	/// The caller has already undefined the names and proved nothing can reach
+	/// the stubs.
+	virtual void discard (llvm::orc::JITDylib &jd,
+	                      const llvm::orc::SymbolNameSet &names) = 0;
+};
+
+/// Build the stub manager the JIT publishes stubs through.
 /// Fails on architectures we do not emit stubs for.
-llvm::Expected<std::unique_ptr<llvm::orc::RedirectableSymbolManager>>
-make_redirectable_symbol_manager (llvm::orc::ExecutionSession &es);
+llvm::Expected<std::unique_ptr<StubManager>>
+make_stub_manager (llvm::orc::ExecutionSession &es);
 
 } // namespace mono
 

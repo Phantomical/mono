@@ -14,7 +14,6 @@
 
 #include <llvm/ADT/FunctionExtras.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
-#include <llvm/ExecutionEngine/Orc/RedirectionManager.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Support/Error.h>
 
@@ -34,6 +33,8 @@ class JITCompileCallbackManager;
 } // namespace llvm
 
 namespace mono {
+
+class StubManager;
 
 /// The host TargetMachine every compile runs against - code model Small+PIC and
 /// FastISel code generation.
@@ -173,12 +174,12 @@ public:
 	/// to call into it - and must have undefined any stub still pointing at it.
 	llvm::Error remove_dylibs (const std::vector<llvm::orc::JITDylib *> &dylibs);
 
-	/// Undefine NAMES, which must all be stubs this JIT published, so that the
-	/// names are free to be published again.
+	/// Undefine NAMES, which must all be stubs this JIT published, so that both
+	/// the names and the stub blocks behind them are free to be handed out
+	/// again.
 	///
-	/// The stub bodies themselves are not reclaimed - the redirection manager
-	/// hands them out of blocks it owns for the life of the JIT - so what this
-	/// buys is the name, not the memory.
+	/// The caller proves nothing can reach the stubs: a later method published
+	/// here may be given the very same block.
 	llvm::Error undefine_stubs (const std::vector<std::string> &names);
 
 	/// The tier-0 IR pipeline, run over M in place: the stock O1 function
@@ -207,10 +208,10 @@ private:
 	/// every compiled module's dylib links against this and mono.stubs.
 	llvm::orc::JITDylib *helpers_ = nullptr;
 
-	/// Dylib holding the published method stubs, and the manager that emits
-	/// and rewrites them.
+	/// Dylib holding the published method stubs, and the manager that emits,
+	/// rewrites and reclaims them.
 	llvm::orc::JITDylib *stubs_ = nullptr;
-	std::unique_ptr<llvm::orc::RedirectableSymbolManager> redirectable_;
+	std::unique_ptr<StubManager> redirectable_;
 
 	/// Hands out the re-entry trampolines lazy stubs point at until they are
 	/// compiled, and owns the resolver they call through.
