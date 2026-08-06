@@ -249,8 +249,8 @@ G_ENUM_FUNCTIONS (MonoJitInfoFlags)
  * Deliberately its own tiny format rather than the SeqPoint/MonoSeqPointInfo
  * machinery in seq-points.c: that table is keyed per MonoMethod, not per body,
  * so a tier-1 promotion racing a still-live tier-0 registration for the same
- * method can never win it a correct entry - see mono_save_seq_point_info()'s
- * "second publication" comment. This one hangs directly off the MonoJitInfo it
+ * method can never win it a correct entry - see publish_seq_points () in
+ * mono/llvm/jinfo.cpp. This one hangs directly off the MonoJitInfo it
  * describes, so there is nothing to collide with.
  */
 typedef struct {

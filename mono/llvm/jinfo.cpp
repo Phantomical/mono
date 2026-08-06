@@ -330,11 +330,10 @@ transcode_unwind (const std::vector<WireRecord> &records)
  *
  * The rows come out of the line table in the encoding seq-point-marker.hpp
  * describes and are already ascending by native offset, which is what
- * mono_seq_point_find_prev_by_native_offset () walks. Registration mirrors
- * mono_save_seq_point_info (): the table is keyed per MonoMethod rather than
- * per body, so a second body for the same method leaves the first one's
- * registration alone and publishes it, rather than pointing the new jit info at
- * a table that is about to be freed.
+ * mono_seq_point_find_prev_by_native_offset () walks. The table is keyed per
+ * MonoMethod rather than per body, so a second body for the same method leaves
+ * the first one's registration alone and publishes it, rather than pointing the
+ * new jit info at a table that is about to be freed.
  *
  * GRAPH says which sequence points can follow which, as IL offsets; what goes
  * into the table are indices into the table itself, so it is joined against the

@@ -3470,7 +3470,6 @@ save_seq_points (TransformData *td, MonoJitInfo *jinfo)
 	/*
 	 * For each sequence point, compute the list of sequence points immediately
 	 * following it, this is needed to implement 'step over' in the debugger agent.
-	 * Similar to the code in mono_save_seq_point_info ().
 	 */
 	for (i = 0; i < td->seq_points->len; ++i) {
 		SeqPoint *sp = (SeqPoint*)g_ptr_array_index (td->seq_points, i);

@@ -217,110 +217,9 @@ enum {
 
 #define MONO_VARINFO(cfg,varnum) (&(cfg)->vars [varnum])
 
-#define MONO_INST_NULLIFY_SREGS(dest) do {				\
-		(dest)->sreg1 = (dest)->sreg2 = (dest)->sreg3 = -1;	\
-	} while (0)
-
-#define MONO_INST_NEW(cfg,dest,op) do {	\
-		(dest) = (MonoInst *)mono_mempool_alloc0 ((cfg)->mempool, sizeof (MonoInst));	\
-		(dest)->opcode = (op);	\
-		(dest)->dreg = -1;			    \
-		MONO_INST_NULLIFY_SREGS ((dest));	    \
-        (dest)->cil_code = (cfg)->ip;  \
-	} while (0)
-
-#define MONO_INST_NEW_CALL(cfg,dest,op) do {	\
-		(dest) = (MonoCallInst *)mono_mempool_alloc0 ((cfg)->mempool, sizeof (MonoCallInst));	\
-		(dest)->inst.opcode = (op);	\
-		(dest)->inst.dreg = -1;					\
-		MONO_INST_NULLIFY_SREGS (&(dest)->inst);		\
-        (dest)->inst.cil_code = (cfg)->ip;  \
-	} while (0)
-
-#define MONO_ADD_INS(b,inst) do {	\
-		if ((b)->last_ins) {	\
-			(b)->last_ins->next = (inst);	\
-            (inst)->prev = (b)->last_ins;   \
-			(b)->last_ins = (inst);	\
-		} else {	\
-			(b)->code = (b)->last_ins = (inst);	\
-		}	\
-	} while (0)
-
-#define NULLIFY_INS(ins) do { \
-        (ins)->opcode = OP_NOP; \
-        (ins)->dreg = -1;				\
-	MONO_INST_NULLIFY_SREGS ((ins));		\
-    } while (0)
-
-/* Remove INS from BB */
-#define MONO_REMOVE_INS(bb,ins) do { \
-        if ((ins)->prev) \
-            (ins)->prev->next = (ins)->next; \
-        if ((ins)->next) \
-            (ins)->next->prev = (ins)->prev; \
-        if ((bb)->code == (ins)) \
-            (bb)->code = (ins)->next; \
-        if ((bb)->last_ins == (ins)) \
-            (bb)->last_ins = (ins)->prev; \
-    } while (0)
-
-/* Remove INS from BB and nullify it */
-#define MONO_DELETE_INS(bb,ins) do { \
-        MONO_REMOVE_INS ((bb), (ins)); \
-        NULLIFY_INS ((ins)); \
-    } while (0)
-
-/* 
- * this is used to determine when some branch optimizations are possible: we exclude FP compares
- * because they have weird semantics with NaNs.
- */
-#define MONO_IS_COND_BRANCH_OP(ins) (((ins)->opcode >= OP_LBEQ && (ins)->opcode <= OP_LBLT_UN) || ((ins)->opcode >= OP_FBEQ && (ins)->opcode <= OP_FBLT_UN) || ((ins)->opcode >= OP_IBEQ && (ins)->opcode <= OP_IBLT_UN))
-#define MONO_IS_COND_BRANCH_NOFP(ins) (MONO_IS_COND_BRANCH_OP(ins) && !(((ins)->opcode >= OP_FBEQ) && ((ins)->opcode <= OP_FBLT_UN)))
-
-#define MONO_IS_BRANCH_OP(ins) (MONO_IS_COND_BRANCH_OP(ins) || ((ins)->opcode == OP_BR) || ((ins)->opcode == OP_BR_REG) || ((ins)->opcode == OP_SWITCH))
-
-#define MONO_IS_COND_EXC(ins) ((((ins)->opcode >= OP_COND_EXC_EQ) && ((ins)->opcode <= OP_COND_EXC_LT_UN)) || (((ins)->opcode >= OP_COND_EXC_IEQ) && ((ins)->opcode <= OP_COND_EXC_ILT_UN)))
-
-#define MONO_IS_SETCC(ins) ((((ins)->opcode >= OP_CEQ) && ((ins)->opcode <= OP_CLT_UN)) || (((ins)->opcode >= OP_ICEQ) && ((ins)->opcode <= OP_ICLE_UN)) || (((ins)->opcode >= OP_LCEQ) && ((ins)->opcode <= OP_LCLT_UN)) || (((ins)->opcode >= OP_FCEQ) && ((ins)->opcode <= OP_FCLT_UN)))
-
-#define MONO_HAS_CUSTOM_EMULATION(ins) (((ins)->opcode >= OP_FBEQ && (ins)->opcode <= OP_FBLT_UN) || ((ins)->opcode >= OP_FCEQ && (ins)->opcode <= OP_FCLT_UN))
-
-#define MONO_IS_LOAD_MEMBASE(ins) (((ins)->opcode >= OP_LOAD_MEMBASE && (ins)->opcode <= OP_LOADV_MEMBASE) || ((ins)->opcode >= OP_ATOMIC_LOAD_I1 && (ins)->opcode <= OP_ATOMIC_LOAD_R8))
-#define MONO_IS_STORE_MEMBASE(ins) (((ins)->opcode >= OP_STORE_MEMBASE_REG && (ins)->opcode <= OP_STOREV_MEMBASE) || ((ins)->opcode >= OP_ATOMIC_STORE_I1 && (ins)->opcode <= OP_ATOMIC_STORE_R8))
-#define MONO_IS_STORE_MEMINDEX(ins) (((ins)->opcode >= OP_STORE_MEMINDEX) && ((ins)->opcode <= OP_STORER8_MEMINDEX))
-
-// This is internal because it is easily confused with any enum or integer.
-#define MONO_IS_TAILCALL_OPCODE_INTERNAL(opcode) ((opcode) == OP_TAILCALL || (opcode) == OP_TAILCALL_MEMBASE || (opcode) == OP_TAILCALL_REG)
-
-#define MONO_IS_TAILCALL_OPCODE(call) (MONO_IS_TAILCALL_OPCODE_INTERNAL (call->inst.opcode))
-
-// OP_DYN_CALL is not a MonoCallInst
-#define MONO_IS_CALL(ins) (((ins)->opcode >= OP_VOIDCALL && (ins)->opcode <= OP_VCALL2_MEMBASE) || \
-	MONO_IS_TAILCALL_OPCODE_INTERNAL ((ins)->opcode))
-
-#define MONO_IS_JUMP_TABLE(ins) (((ins)->opcode == OP_JUMP_TABLE) ? TRUE : ((((ins)->opcode == OP_AOTCONST) && (ins->inst_i1 == (gpointer)MONO_PATCH_INFO_SWITCH)) ? TRUE : ((ins)->opcode == OP_SWITCH) ? TRUE : ((((ins)->opcode == OP_GOT_ENTRY) && ((ins)->inst_right->inst_i1 == (gpointer)MONO_PATCH_INFO_SWITCH)) ? TRUE : FALSE)))
-
-#define MONO_JUMP_TABLE_FROM_INS(ins) (((ins)->opcode == OP_JUMP_TABLE) ? (ins)->inst_p0 : (((ins)->opcode == OP_AOTCONST) && (ins->inst_i1 == (gpointer)MONO_PATCH_INFO_SWITCH) ? (ins)->inst_p0 : (((ins)->opcode == OP_SWITCH) ? (ins)->inst_p0 : ((((ins)->opcode == OP_GOT_ENTRY) && ((ins)->inst_right->inst_i1 == (gpointer)MONO_PATCH_INFO_SWITCH)) ? (ins)->inst_right->inst_p0 : NULL))))
-
-/* FIXME: Add more instructions */
-/* INEG sets the condition codes, and the OP_LNEG decomposition depends on this on x86 */
-#define MONO_INS_HAS_NO_SIDE_EFFECT(ins) (MONO_IS_MOVE (ins) || (ins->opcode == OP_ICONST) || (ins->opcode == OP_I8CONST) || MONO_IS_ZERO (ins) || (ins->opcode == OP_ADD_IMM) || (ins->opcode == OP_R8CONST) || (ins->opcode == OP_LADD_IMM) || (ins->opcode == OP_ISUB_IMM) || (ins->opcode == OP_IADD_IMM) || (ins->opcode == OP_LNEG) || (ins->opcode == OP_ISUB) || (ins->opcode == OP_CMOV_IGE) || (ins->opcode == OP_ISHL_IMM) || (ins->opcode == OP_ISHR_IMM) || (ins->opcode == OP_ISHR_UN_IMM) || (ins->opcode == OP_IAND_IMM) || (ins->opcode == OP_ICONV_TO_U1) || (ins->opcode == OP_ICONV_TO_I1) || (ins->opcode == OP_SEXT_I4) || (ins->opcode == OP_LCONV_TO_U1) || (ins->opcode == OP_ICONV_TO_U2) || (ins->opcode == OP_ICONV_TO_I2) || (ins->opcode == OP_LCONV_TO_I2) || (ins->opcode == OP_LDADDR) || (ins->opcode == OP_PHI) || (ins->opcode == OP_NOP) || (ins->opcode == OP_ZEXT_I4) || (ins->opcode == OP_NOT_NULL) || (ins->opcode == OP_IL_SEQ_POINT) || (ins->opcode == OP_XZERO))
-
-#define MONO_INS_IS_PCONST_NULL(ins) ((ins)->opcode == OP_PCONST && (ins)->inst_p0 == 0)
-
 #define MONO_METHOD_IS_FINAL(m) (((m)->flags & METHOD_ATTRIBUTE_FINAL) || ((m)->klass && (mono_class_get_flags ((m)->klass) & TYPE_ATTRIBUTE_SEALED)))
 
-/* Determine whenever 'ins' represents a load of the 'this' argument */
-#define MONO_CHECK_THIS(ins) (mono_method_signature_internal (cfg->method)->hasthis && ((ins)->opcode == OP_MOVE) && ((ins)->sreg1 == cfg->args [0]->dreg))
-
 #ifdef MONO_ARCH_SIMD_INTRINSICS
-
-#define MONO_IS_PHI(ins) (((ins)->opcode == OP_PHI) || ((ins)->opcode == OP_FPHI) || ((ins)->opcode == OP_VPHI)  || ((ins)->opcode == OP_XPHI))
-#define MONO_IS_MOVE(ins) (((ins)->opcode == OP_MOVE) || ((ins)->opcode == OP_FMOVE) || ((ins)->opcode == OP_VMOVE) || ((ins)->opcode == OP_XMOVE) || ((ins)->opcode == OP_RMOVE))
-#define MONO_IS_NON_FP_MOVE(ins) (((ins)->opcode == OP_MOVE) || ((ins)->opcode == OP_VMOVE) || ((ins)->opcode == OP_XMOVE))
-#define MONO_IS_REAL_MOVE(ins) (((ins)->opcode == OP_MOVE) || ((ins)->opcode == OP_FMOVE) || ((ins)->opcode == OP_XMOVE) || ((ins)->opcode == OP_RMOVE))
-#define MONO_IS_ZERO(ins) (((ins)->opcode == OP_VZERO) || ((ins)->opcode == OP_XZERO))
 
 #ifdef TARGET_ARM64
 // SIMD is only supported on arm64 when using the LLVM backend. When not using
@@ -332,27 +231,8 @@ enum {
 
 #else
 
-#define MONO_IS_PHI(ins) (((ins)->opcode == OP_PHI) || ((ins)->opcode == OP_FPHI) || ((ins)->opcode == OP_VPHI))
-#define MONO_IS_MOVE(ins) (((ins)->opcode == OP_MOVE) || ((ins)->opcode == OP_FMOVE) || ((ins)->opcode == OP_VMOVE) || ((ins)->opcode == OP_RMOVE))
-#define MONO_IS_NON_FP_MOVE(ins) (((ins)->opcode == OP_MOVE) || ((ins)->opcode == OP_VMOVE))
-/*A real MOVE is one that isn't decomposed such as a VMOVE or LMOVE*/
-#define MONO_IS_REAL_MOVE(ins) (((ins)->opcode == OP_MOVE) || ((ins)->opcode == OP_FMOVE) || ((ins)->opcode == OP_RMOVE))
-#define MONO_IS_ZERO(ins) ((ins)->opcode == OP_VZERO)
-
 #define MONO_CLASS_IS_SIMD(cfg, klass) (0)
 
-#endif
-
-#if defined(TARGET_X86) || defined(TARGET_AMD64)
-#define EMIT_NEW_X86_LEA(cfg,dest,sr1,sr2,shift,imm) do { \
-		MONO_INST_NEW (cfg, dest, OP_X86_LEA); \
-		(dest)->dreg = alloc_ireg_mp ((cfg)); \
-		(dest)->sreg1 = (sr1); \
-		(dest)->sreg2 = (sr2); \
-		(dest)->inst_imm = (imm); \
-		(dest)->backend.shift_amount = (shift); \
-		MONO_ADD_INS ((cfg)->cbb, (dest)); \
-	} while (0)
 #endif
 
 typedef struct MonoInstList MonoInstList;
@@ -370,83 +250,6 @@ extern int mono_break_at_bb_bb_num;
 extern gboolean mono_do_x86_stack_align;
 extern int mini_verbose;
 extern int valgrind_register;
-
-#define INS_INFO(opcode) (&mini_ins_info [((opcode) - OP_START - 1) * 4])
-
-/* instruction description for use in regalloc/scheduling */
-
-enum {
-	MONO_INST_DEST = 0,
-	MONO_INST_SRC1 = 1,             /* we depend on the SRCs to be consecutive */
-	MONO_INST_SRC2 = 2,
-	MONO_INST_SRC3 = 3,
-	MONO_INST_LEN = 4,
-	MONO_INST_CLOB = 5,
-	/* Unused, commented out to reduce the size of the mdesc tables
-	MONO_INST_FLAGS,
-	MONO_INST_COST,
-	MONO_INST_DELAY,
-	MONO_INST_RES,
-	*/
-	MONO_INST_MAX = 6
-};
-
-typedef union MonoInstSpec { // instruction specification
-	struct {
-		char dest;
-		char src1;
-		char src2;
-		char src3;
-		unsigned char len;
-		char clob;
-		// char flags;
-		// char cost;
-		// char delay;
-		// char res;
-	};
-	struct {
-		char xdest;
-		char src [3];
-		unsigned char xlen;
-		char xclob;
-	};
-	char bytes[MONO_INST_MAX];
-} MonoInstSpec;
-
-extern const char mini_ins_info[];
-extern const gint8 mini_ins_sreg_counts [];
-
-#ifndef DISABLE_JIT
-#define mono_inst_get_num_src_registers(ins) (mini_ins_sreg_counts [(ins)->opcode - OP_START - 1])
-#else
-#define mono_inst_get_num_src_registers(ins) 0
-#endif
-
-#define mono_inst_get_src_registers(ins, regs) (((regs) [0] = (ins)->sreg1), ((regs) [1] = (ins)->sreg2), ((regs) [2] = (ins)->sreg3), mono_inst_get_num_src_registers ((ins)))
-
-#define MONO_BB_FOR_EACH_INS(bb, ins) for ((ins) = (bb)->code; (ins); (ins) = (ins)->next)
-
-#define MONO_BB_FOR_EACH_INS_SAFE(bb, n, ins) for ((ins) = (bb)->code, n = (ins) ? (ins)->next : NULL; (ins); (ins) = (n), (n) = (ins) ? (ins)->next : NULL)
-
-#define MONO_BB_FOR_EACH_INS_REVERSE(bb, ins) for ((ins) = (bb)->last_ins; (ins); (ins) = (ins)->prev)
-
-#define MONO_BB_FOR_EACH_INS_REVERSE_SAFE(bb, p, ins) for ((ins) = (bb)->last_ins, p = (ins) ? (ins)->prev : NULL; (ins); (ins) = (p), (p) = (ins) ? (ins)->prev : NULL)
-
-#define mono_bb_first_ins(bb) (bb)->code
-
-/*
- * Iterate through all used registers in the instruction.
- * Relies on the existing order of the MONO_INST enum: MONO_INST_{DREG,SREG1,SREG2,SREG3,LEN}
- * INS is the instruction, IDX is the register index, REG is the pointer to a register.
- */
-#define MONO_INS_FOR_EACH_REG(ins, idx, reg) for ((idx) = INS_INFO ((ins)->opcode)[MONO_INST_DEST] != ' ' ? MONO_INST_DEST : \
-							  (mono_inst_get_num_src_registers (ins) ? MONO_INST_SRC1 : MONO_INST_LEN); \
-						  (reg) = (idx) == MONO_INST_DEST ? &(ins)->dreg : \
-							  ((idx) == MONO_INST_SRC1 ? &(ins)->sreg1 : \
-							   ((idx) == MONO_INST_SRC2 ? &(ins)->sreg2 : \
-							    ((idx) == MONO_INST_SRC3 ? &(ins)->sreg3 : NULL))), \
-							  idx < MONO_INST_LEN; \
-						  (idx) = (idx) > mono_inst_get_num_src_registers (ins) + (INS_INFO ((ins)->opcode)[MONO_INST_DEST] != ' ') ? MONO_INST_LEN : (idx) + 1)
 
 struct MonoSpillInfo {
 	int offset;
@@ -1769,94 +1572,6 @@ typedef struct {
 
 extern MonoJitStats mono_jit_stats;
 
-/* opcodes: value assigned after all the CIL opcodes */
-#ifdef MINI_OP
-#undef MINI_OP
-#endif
-#ifdef MINI_OP3
-#undef MINI_OP3
-#endif
-#define MINI_OP(a,b,dest,src1,src2) a,
-#define MINI_OP3(a,b,dest,src1,src2,src3) a,
-enum {
-	OP_START = MONO_CEE_LAST - 1,
-#include "mini-ops.h"
-	OP_LAST
-};
-#undef MINI_OP
-#undef MINI_OP3
-
-#if TARGET_SIZEOF_VOID_P == 8
-#define OP_PCONST OP_I8CONST
-#define OP_DUMMY_PCONST OP_DUMMY_I8CONST
-#define OP_PADD OP_LADD
-#define OP_PADD_IMM OP_LADD_IMM
-#define OP_PSUB_IMM OP_LSUB_IMM
-#define OP_PAND_IMM OP_LAND_IMM
-#define OP_PXOR_IMM OP_LXOR_IMM
-#define OP_PSUB OP_LSUB
-#define OP_PMUL OP_LMUL
-#define OP_PMUL_IMM OP_LMUL_IMM
-#define OP_PNEG OP_LNEG
-#define OP_PCONV_TO_I1 OP_LCONV_TO_I1
-#define OP_PCONV_TO_U1 OP_LCONV_TO_U1
-#define OP_PCONV_TO_I2 OP_LCONV_TO_I2
-#define OP_PCONV_TO_U2 OP_LCONV_TO_U2
-#define OP_PCONV_TO_OVF_I1_UN OP_LCONV_TO_OVF_I1_UN
-#define OP_PCONV_TO_OVF_I1 OP_LCONV_TO_OVF_I1
-#define OP_PBEQ OP_LBEQ
-#define OP_PCEQ OP_LCEQ
-#define OP_PCLT OP_LCLT
-#define OP_PCGT OP_LCGT
-#define OP_PCLT_UN OP_LCLT_UN
-#define OP_PCGT_UN OP_LCGT_UN
-#define OP_PBNE_UN OP_LBNE_UN
-#define OP_PBGE_UN OP_LBGE_UN
-#define OP_PBLT_UN OP_LBLT_UN
-#define OP_PBGE OP_LBGE
-#define OP_STOREP_MEMBASE_REG OP_STOREI8_MEMBASE_REG
-#define OP_STOREP_MEMBASE_IMM OP_STOREI8_MEMBASE_IMM
-#else
-#define OP_PCONST OP_ICONST
-#define OP_DUMMY_PCONST OP_DUMMY_ICONST
-#define OP_PADD OP_IADD
-#define OP_PADD_IMM OP_IADD_IMM
-#define OP_PSUB_IMM OP_ISUB_IMM
-#define OP_PAND_IMM OP_IAND_IMM
-#define OP_PXOR_IMM OP_IXOR_IMM
-#define OP_PSUB OP_ISUB
-#define OP_PMUL OP_IMUL
-#define OP_PMUL_IMM OP_IMUL_IMM
-#define OP_PNEG OP_INEG
-#define OP_PCONV_TO_I1 OP_ICONV_TO_I1
-#define OP_PCONV_TO_U1 OP_ICONV_TO_U1
-#define OP_PCONV_TO_I2 OP_ICONV_TO_I2
-#define OP_PCONV_TO_U2 OP_ICONV_TO_U2
-#define OP_PCONV_TO_OVF_I1_UN OP_ICONV_TO_OVF_I1_UN
-#define OP_PCONV_TO_OVF_I1 OP_ICONV_TO_OVF_I1
-#define OP_PBEQ OP_IBEQ
-#define OP_PCEQ OP_ICEQ
-#define OP_PCLT OP_ICLT
-#define OP_PCGT OP_ICGT
-#define OP_PCLT_UN OP_ICLT_UN
-#define OP_PCGT_UN OP_ICGT_UN
-#define OP_PBNE_UN OP_IBNE_UN
-#define OP_PBGE_UN OP_IBGE_UN
-#define OP_PBLT_UN OP_IBLT_UN
-#define OP_PBGE OP_IBGE
-#define OP_STOREP_MEMBASE_REG OP_STOREI4_MEMBASE_REG
-#define OP_STOREP_MEMBASE_IMM OP_STOREI4_MEMBASE_IMM
-#endif
-
-/* Opcodes to load/store regsize quantities */
-#if defined (MONO_ARCH_ILP32)
-#define OP_LOADR_MEMBASE OP_LOADI8_MEMBASE
-#define OP_STORER_MEMBASE_REG OP_STOREI8_MEMBASE_REG
-#else
-#define OP_LOADR_MEMBASE OP_LOAD_MEMBASE
-#define OP_STORER_MEMBASE_REG OP_STORE_MEMBASE_REG
-#endif
-
 typedef enum {
 	STACK_INV,
 	STACK_I4,
@@ -2021,68 +1736,6 @@ struct MonoTrampInfo
 	 gboolean owns_uw_info;
 };
 
-typedef void (*MonoInstFunc) (MonoInst *tree, gpointer data);
-
-enum {
-	FILTER_IL_SEQ_POINT = 1 << 0,
-	FILTER_NOP          = 1 << 1,
-};
-
-static inline gboolean
-mono_inst_filter (MonoInst *ins, int filter)
-{
-	if (!ins || !filter)
-		return FALSE;
-
-	if ((filter & FILTER_IL_SEQ_POINT) && ins->opcode == OP_IL_SEQ_POINT)
-		return TRUE;
-
-	if ((filter & FILTER_NOP) && ins->opcode == OP_NOP)
-		return TRUE;
-
-	return FALSE;
-}
-
-static inline MonoInst*
-mono_inst_next (MonoInst *ins, int filter)
-{
-	do {
-		ins = ins->next;
-	} while (mono_inst_filter (ins, filter));
-
-	return ins;
-}
-
-static inline MonoInst*
-mono_inst_prev (MonoInst *ins, int filter)
-{
-	do {
-		ins = ins->prev;
-	} while (mono_inst_filter (ins, filter));
-
-	return ins;
-}
-
-static inline MonoInst*
-mono_bb_first_inst (MonoBasicBlock *bb, int filter)
-{
-	MonoInst *ins = bb->code;
-	if (mono_inst_filter (ins, filter))
-		ins = mono_inst_next (ins, filter);
-
-	return ins;
-}
-
-static inline MonoInst*
-mono_bb_last_inst (MonoBasicBlock *bb, int filter)
-{
-	MonoInst *ins = bb->last_ins;
-	if (mono_inst_filter (ins, filter))
-		ins = mono_inst_prev (ins, filter);
-
-	return ins;
-}
-
 /* profiler support */
 void        mini_add_profiler_argument (const char *desc);
 void        mini_profiler_emit_enter (MonoCompile *cfg);
@@ -2143,7 +1796,6 @@ GString  *mono_print_ins_index_strbuf       (int i, MonoInst *ins);
 void      mono_print_ins                    (MonoInst *ins);
 void      mono_print_bb                     (MonoBasicBlock *bb, const char *msg);
 void      mono_print_code                   (MonoCompile *cfg, const char *msg);
-const char* mono_inst_name (int op);
 int       mono_op_to_op_imm                 (int opcode);
 int       mono_op_imm_to_op                 (int opcode);
 int       mono_load_membase_to_load_mem     (int opcode);
@@ -2618,7 +2270,6 @@ void        mono_ssa_deadce2                    (MonoCompile *cfg);
 void      mono_debug_init_method                (MonoCompile *cfg, MonoBasicBlock *start_block,
 						 guint32 breakpoint_id);
 void      mono_debug_open_method                (MonoCompile *cfg);
-void      mono_debug_close_method               (MonoCompile *cfg);
 void      mono_debug_free_method                (MonoCompile *cfg);
 void      mono_debug_open_block                 (MonoCompile *cfg, MonoBasicBlock *bb, guint32 address);
 void      mono_debug_record_line_number         (MonoCompile *cfg, MonoInst *ins, guint32 address);

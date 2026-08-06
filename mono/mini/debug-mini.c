@@ -83,36 +83,6 @@ mono_debug_open_method (MonoCompile *cfg)
 	jit->locals = g_new0 (MonoDebugVarInfo, jit->num_locals);
 }
 
-static void
-write_variable (MonoInst *inst, MonoDebugVarInfo *var)
-{
-	var->type = inst->inst_vtype;
-
-	if (inst->opcode == OP_REGVAR)
-		var->index = inst->dreg | MONO_DEBUG_VAR_ADDRESS_MODE_REGISTER;
-	else if (inst->flags & MONO_INST_IS_DEAD)
-		var->index = MONO_DEBUG_VAR_ADDRESS_MODE_DEAD;
-	else if (inst->opcode == OP_REGOFFSET) {
-		/* the debug interface needs fixing to allow 0(%base) address */
-		var->index = inst->inst_basereg | MONO_DEBUG_VAR_ADDRESS_MODE_REGOFFSET;
-		var->offset = inst->inst_offset;
-	} else if (inst->opcode == OP_GSHAREDVT_ARG_REGOFFSET) {
-		var->index = inst->inst_basereg | MONO_DEBUG_VAR_ADDRESS_MODE_REGOFFSET_INDIR;
-		var->offset = inst->inst_offset;
-	} else if (inst->opcode == OP_GSHAREDVT_LOCAL) {
-		var->index = inst->inst_imm | MONO_DEBUG_VAR_ADDRESS_MODE_GSHAREDVT_LOCAL;
-	} else if (inst->opcode == OP_VTARG_ADDR) {
-		MonoInst *vtaddr;
-
-		vtaddr = inst->inst_left;
-		g_assert (vtaddr->opcode == OP_REGOFFSET);
-		var->offset = vtaddr->inst_offset;
-		var->index  = vtaddr->inst_basereg | MONO_DEBUG_VAR_ADDRESS_MODE_VTADDR;
-	} else {
-		g_assert_not_reached ();
-	}
-}
-
 /*
  * mono_debug_add_vg_method:
  *
@@ -215,73 +185,6 @@ mono_debug_add_vg_method (MonoMethod *method, MonoDebugMethodJitInfo *jit)
 	g_free (lines);
 	mono_metadata_free_mh (header);
 #endif /* VALGRIND_ADD_LINE_INFO */
-}
-
-void
-mono_debug_close_method (MonoCompile *cfg)
-{
-	MiniDebugMethodInfo *info;
-	MonoDebugMethodJitInfo *jit;
-	MonoMethodHeader *header;
-	MonoMethodSignature *sig;
-	MonoMethod *method;
-	int i;
-
-	info = (MiniDebugMethodInfo *) cfg->debug_info;
-	if (!info || !info->jit) {
-		if (info)
-			g_free (info);
-		return;
-	}
-
-	method = cfg->method;
-	header = cfg->header;
-	sig = mono_method_signature_internal (method);
-
-	jit = info->jit;
-	jit->code_start = cfg->native_code;
-	jit->epilogue_begin = cfg->epilog_begin;
-	jit->code_size = cfg->code_len;
-	jit->has_var_info = mini_debug_options.mdb_optimizations || MONO_CFG_PROFILE_CALL_CONTEXT (cfg);
-
-	if (jit->epilogue_begin)
-		   record_line_number (info, jit->epilogue_begin, header->code_size);
-
-	if (jit->has_var_info) {
-		jit->num_params = sig->param_count;
-		jit->params = g_new0 (MonoDebugVarInfo, jit->num_params);
-
-		for (i = 0; i < jit->num_locals; i++)
-			write_variable (cfg->locals [i], &jit->locals [i]);
-
-		if (sig->hasthis) {
-			jit->this_var = g_new0 (MonoDebugVarInfo, 1);
-			write_variable (cfg->args [0], jit->this_var);
-		}
-
-		for (i = 0; i < jit->num_params; i++)
-			write_variable (cfg->args [i + sig->hasthis], &jit->params [i]);
-
-		if (cfg->gsharedvt_info_var) {
-			jit->gsharedvt_info_var = g_new0 (MonoDebugVarInfo, 1);
-			jit->gsharedvt_locals_var = g_new0 (MonoDebugVarInfo, 1);
-			write_variable (cfg->gsharedvt_info_var, jit->gsharedvt_info_var);
-			write_variable (cfg->gsharedvt_locals_var, jit->gsharedvt_locals_var);
-		}
-	}
-
-	jit->num_line_numbers = info->line_numbers->len;
-	jit->line_numbers = g_new0 (MonoDebugLineNumberEntry, jit->num_line_numbers);
-
-	for (i = 0; i < jit->num_line_numbers; i++)
-		jit->line_numbers [i] = g_array_index (info->line_numbers, MonoDebugLineNumberEntry, i);
-
-	mono_debug_add_method (cfg->method_to_register, jit, cfg->domain);
-
-	mono_debug_add_vg_method (method, jit);
-
-	mono_debug_free_method_jit_info (jit);
-	mono_debug_free_method (cfg);
 }
 
 void
