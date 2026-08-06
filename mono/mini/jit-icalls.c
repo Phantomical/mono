@@ -46,7 +46,7 @@ mono_ldftn (MonoMethod *method)
 			/* The caller doesn't pass it */
 			g_assert_not_reached ();
 
-		addr = mini_add_method_trampoline (method, addr, mono_method_needs_static_rgctx_invoke (method, FALSE), FALSE);
+		addr = mini_add_method_trampoline (method, addr, FALSE);
 		return addr;
 	}
 
@@ -56,8 +56,6 @@ mono_ldftn (MonoMethod *method)
 		addr = mono_compile_method_checked (method, error);
 	} else {
 		addr = mono_create_jump_trampoline (mono_domain_get (), method, FALSE, error);
-		if (mono_method_needs_static_rgctx_invoke (method, FALSE))
-                        addr = mono_create_static_rgctx_trampoline (method, addr);
 	}
 	if (!is_ok (error)) {
 		mono_error_set_pending_exception (error);
@@ -115,7 +113,7 @@ ldvirtfn_internal (MonoObject *obj, MonoMethod *method, gboolean gshared)
 			// FIXME:
 			g_assert_not_reached ();
 
-		addr = mini_add_method_trampoline (res, addr, mono_method_needs_static_rgctx_invoke (res, FALSE), TRUE);
+		addr = mini_add_method_trampoline (res, addr, TRUE);
 	} else {
 		addr = mono_ldftn (res);
 	}
@@ -1111,7 +1109,7 @@ mono_helper_compile_generic_method (MonoObject *obj, MonoMethod *method, gpointe
 		return NULL;
 	g_assert (addr);
 
-	addr = mini_add_method_trampoline (vmethod, addr, mono_method_needs_static_rgctx_invoke (vmethod, FALSE), FALSE);
+	addr = mini_add_method_trampoline (vmethod, addr, FALSE);
 
 	/* Since this is a virtual call, have to unbox vtypes */
 	if (m_class_is_valuetype (obj->vtable->klass))

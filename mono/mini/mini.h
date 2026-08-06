@@ -1125,7 +1125,6 @@ typedef struct
 	gpointer invoke_impl;
 	gpointer impl_this;
 	gpointer impl_nothis;
-	gboolean need_rgctx_tramp;
 } MonoDelegateTrampInfo;
 
 /*
@@ -2312,7 +2311,6 @@ gpointer          mono_create_delegate_trampoline (MonoDomain *domain, MonoClass
 MonoDelegateTrampInfo* mono_create_delegate_trampoline_info (MonoDomain *domain, MonoClass *klass, MonoMethod *method);
 gpointer          mono_create_delegate_virtual_trampoline (MonoDomain *domain, MonoClass *klass, MonoMethod *method);
 gpointer          mono_create_rgctx_lazy_fetch_trampoline (guint32 offset);
-gpointer          mono_create_static_rgctx_trampoline (MonoMethod *m, gpointer addr);
 gpointer          mono_create_ftnptr_arg_trampoline (gpointer arg, gpointer addr);
 guint32           mono_find_rgctx_lazy_fetch_trampoline_by_addr (gconstpointer addr);
 gpointer          mono_magic_trampoline (host_mgreg_t *regs, guint8 *code, gpointer arg, guint8* tramp);
@@ -2332,11 +2330,10 @@ char*             mono_get_rgctx_fetch_trampoline_name (int slot);
 gpointer          mini_get_single_step_trampoline (void);
 gpointer          mini_get_breakpoint_trampoline (void);
 gpointer*         mono_arch_get_single_step_tramp_addr (void);
-gpointer          mini_add_method_trampoline (MonoMethod *m, gpointer compiled_method, gboolean add_static_rgctx_tramp, gboolean add_unbox_tramp);
+gpointer          mini_add_method_trampoline (MonoMethod *m, gpointer compiled_method, gboolean add_unbox_tramp);
 gboolean          mini_jit_info_is_gsharedvt (MonoJitInfo *ji);
 gpointer*         mini_resolve_imt_method (MonoVTable *vt, gpointer *vtable_slot, MonoMethod *imt_method, MonoMethod **impl_method, gpointer *out_aot_addr,
-					   gboolean *out_need_rgctx_tramp, MonoMethod **variant_iface,
-					   MonoError *error);
+					   MonoMethod **variant_iface, MonoError *error);
 
 void*             mono_global_codeman_reserve (int size);
 

@@ -1081,7 +1081,7 @@ class_type_info (MonoDomain *domain, MonoClass *klass, MonoRgctxInfoType info_ty
 		ji = mini_jit_info_table_find (mono_domain_get (), (char *)mono_get_addr_from_ftnptr (addr), NULL);
 		g_assert (ji);
 		if (mini_jit_info_is_gsharedvt (ji))
-			return mono_create_static_rgctx_trampoline (method, addr);
+			return addr;
 		else {
 			/* Need to add an out wrapper */
 
@@ -1092,9 +1092,7 @@ class_type_info (MonoDomain *domain, MonoClass *klass, MonoRgctxInfoType info_ty
 			sig = mono_method_signature_internal (method);
 			gsig = mono_method_signature_internal (gmethod);
 
-			addr = mini_get_gsharedvt_wrapper (FALSE, addr, sig, gsig, -1, FALSE);
-			addr = mono_create_static_rgctx_trampoline (method, addr);
-			return addr;
+			return mini_get_gsharedvt_wrapper (FALSE, addr, sig, gsig, -1, FALSE);
 		}
 	}
 	default:
@@ -2175,7 +2173,7 @@ instantiate_info (MonoDomain *domain, MonoRuntimeGenericContextInfoTemplate *oti
 		g_assert (!mono_llvm_only);
 		addr = mono_compile_method_checked (m, error);
 		return_val_if_nok (error, NULL);
-		return mini_add_method_trampoline (m, addr, mono_method_needs_static_rgctx_invoke (m, FALSE), FALSE);
+		return mini_add_method_trampoline (m, addr, FALSE);
 	}
 	case MONO_RGCTX_INFO_METHOD_FTNDESC: {
 		MonoMethod *m = (MonoMethod*)data;
@@ -2247,7 +2245,7 @@ instantiate_info (MonoDomain *domain, MonoRuntimeGenericContextInfoTemplate *oti
 			/* Returns an ftndesc */
 			return mini_llvmonly_create_ftndesc (domain, addr, arg);
 		} else {
-			return mini_add_method_trampoline (method, addr, mono_method_needs_static_rgctx_invoke (method, FALSE), FALSE);
+			return mini_add_method_trampoline (method, addr, FALSE);
 		}
 	}
 	case MONO_RGCTX_INFO_VIRT_METHOD_BOX_TYPE: {

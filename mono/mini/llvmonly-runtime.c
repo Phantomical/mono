@@ -587,12 +587,11 @@ mini_llvmonly_resolve_generic_virtual_iface_call (MonoVTable *vt, int imt_slot, 
 	MonoFtnDesc *ftndesc;
 	gpointer aot_addr;
 	gboolean need_unbox_tramp = FALSE;
-	gboolean need_rgctx_tramp;
 	gpointer *imt;
 
 	imt = (gpointer*)vt - MONO_IMT_SIZE;
 
-	mini_resolve_imt_method (vt, imt + imt_slot, generic_virtual, &m, &aot_addr, &need_rgctx_tramp, &variant_iface, error);
+	mini_resolve_imt_method (vt, imt + imt_slot, generic_virtual, &m, &aot_addr, &variant_iface, error);
 	if (!is_ok (error)) {
 		MonoException *ex = mono_error_convert_to_exception (error);
 		mono_llvm_throw_exception ((MonoObject*)ex);
@@ -721,7 +720,7 @@ resolve_iface_call (MonoObject *this_obj, int imt_slot, MonoMethod *imt_method, 
 	gpointer *imt;
 	MonoMethod *impl_method, *generic_virtual = NULL, *variant_iface = NULL;
 	gpointer addr, aot_addr;
-	gboolean need_rgctx_tramp = FALSE, need_unbox_tramp = FALSE;
+	gboolean need_unbox_tramp = FALSE;
 
 	error_init (error);
 	if (!this_obj)
@@ -731,7 +730,7 @@ resolve_iface_call (MonoObject *this_obj, int imt_slot, MonoMethod *imt_method, 
 	vt = this_obj->vtable;
 	imt = (gpointer*)vt - MONO_IMT_SIZE;
 
-	mini_resolve_imt_method (vt, imt + imt_slot, imt_method, &impl_method, &aot_addr, &need_rgctx_tramp, &variant_iface, error);
+	mini_resolve_imt_method (vt, imt + imt_slot, imt_method, &impl_method, &aot_addr, &variant_iface, error);
 	return_val_if_nok (error, NULL);
 
 	if (imt_method->is_inflated && ((MonoMethodInflated*)imt_method)->context.method_inst)
