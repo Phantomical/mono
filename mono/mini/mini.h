@@ -102,20 +102,6 @@ G_BEGIN_DECLS
 #endif
 #endif
 
-#if ENABLE_LLVM
-#define COMPILE_LLVM(cfg) ((cfg)->compile_llvm)
-#define LLVM_ENABLED TRUE
-#else
-#define COMPILE_LLVM(cfg) (0)
-#define LLVM_ENABLED FALSE
-#endif
-
-#ifdef MONO_ARCH_SOFT_FLOAT_FALLBACK
-#define COMPILE_SOFT_FLOAT(cfg) (!COMPILE_LLVM ((cfg)) && mono_arch_is_soft_float ())
-#else
-#define COMPILE_SOFT_FLOAT(cfg) (0)
-#endif
-
 #define NOT_IMPLEMENTED do { g_assert_not_reached (); } while (0)
 
 /* for 32 bit systems */
@@ -214,19 +200,11 @@ enum {
 };
 #undef OPDEF
 
-#define MONO_VARINFO(cfg,varnum) (&(cfg)->vars [varnum])
-
 #define MONO_METHOD_IS_FINAL(m) (((m)->flags & METHOD_ATTRIBUTE_FINAL) || ((m)->klass && (mono_class_get_flags ((m)->klass) & TYPE_ATTRIBUTE_SEALED)))
 
 #ifdef MONO_ARCH_SIMD_INTRINSICS
 
-#ifdef TARGET_ARM64
-// SIMD is only supported on arm64 when using the LLVM backend. When not using
-// the LLVM backend, treat SIMD datatypes as regular value types.
-#define MONO_CLASS_IS_SIMD(cfg, klass) ( ((cfg)->opt & MONO_OPT_SIMD) && ( COMPILE_LLVM (cfg) ) && m_class_is_simd_type (klass) )
-#else
 #define MONO_CLASS_IS_SIMD(cfg, klass) (((cfg)->opt & MONO_OPT_SIMD) && m_class_is_simd_type (klass))
-#endif
 
 #else
 
@@ -1086,398 +1064,18 @@ typedef enum {
 #define MONO_REGION_FLAGS(region) ((region) & 0x7)
 #define MONO_REGION_CLAUSE_INDEX(region) (((region) >> 8) - 1)
 
-#define get_vreg_to_inst(cfg, vreg) ((vreg) < (cfg)->vreg_to_inst_len ? (cfg)->vreg_to_inst [(vreg)] : NULL)
-
-#define vreg_is_volatile(cfg, vreg) (G_UNLIKELY (get_vreg_to_inst ((cfg), (vreg)) && (get_vreg_to_inst ((cfg), (vreg))->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT))))
-
-#define vreg_is_ref(cfg, vreg) ((vreg) < (cfg)->vreg_is_ref_len ? (cfg)->vreg_is_ref [(vreg)] : 0)
-#define vreg_is_mp(cfg, vreg) ((vreg) < (cfg)->vreg_is_mp_len ? (cfg)->vreg_is_mp [(vreg)] : 0)
-
 /*
- * Control Flow Graph and compilation unit information
+ * What the translator is handed for one method.  The classic compiler kept its
+ * whole pipeline state here; the LLVM back end reads the method, its header,
+ * the domain the code is being compiled for and the optimization set, and
+ * nothing else.
  */
 typedef struct {
 	MonoMethod      *method;
 	MonoMethodHeader *header;
-	MonoMemPool     *mempool;
-	MonoInst       **varinfo;
-	MonoMethodVar   *vars;
-	MonoInst        *ret;
-	MonoBasicBlock  *bb_entry;
-	MonoBasicBlock  *bb_exit;
-	MonoBasicBlock  *bb_init;
-	MonoBasicBlock **bblocks;
-	MonoBasicBlock **cil_offset_to_bb;
-	MonoMemPool     *state_pool; /* used by instruction selection */
-	MonoBasicBlock  *cbb;        /* used by instruction selection */
-	MonoInst        *prev_ins;   /* in decompose */
-	MonoJumpInfo    *patch_info;
-	MonoJitInfo     *jit_info;
-	MonoJitDynamicMethodInfo *dynamic_info;
-	guint            num_bblocks, max_block_num;
-	guint            locals_start;
-	guint            num_varinfo; /* used items in varinfo */
-	guint            varinfo_count; /* total storage in varinfo */
-	gint             stack_offset;
-	gint             max_ireg;
-	gint             cil_offset_to_bb_len;
-	MonoSpillInfo   *spill_info [16]; /* machine register spills */
-	gint             spill_count;
-	gint             spill_info_len [16];
-	/* unsigned char   *cil_code; */
-	MonoInst        *domainvar; /* a cache for the current domain */
-	MonoInst        *got_var; /* Global Offset Table variable */
-	MonoInst        **locals;
-	/* Variable holding the mrgctx/vtable address for gshared methods */
-	MonoInst        *rgctx_var;
-	MonoInst        **args;
-	MonoType        **arg_types;
-	MonoMethod      *current_method; /* The method currently processed by method_to_ir () */
-	MonoMethod      *method_to_register; /* The method to register in JIT info tables */
-	MonoGenericContext *generic_context;
-	MonoInst        *this_arg;
-
-	MonoBackend *backend;
-
-	/* 
-	 * This variable represents the hidden argument holding the vtype
-	 * return address. If the method returns something other than a vtype, or
-	 * the vtype is returned in registers this is NULL.
-	 */
-	MonoInst        *vret_addr;
-
-	/*
-	 * This is used to initialize the cil_code field of MonoInst's.
-	 */
-	const unsigned char *ip;
-	
-	struct MonoAliasingInformation *aliasing_info;
-
-	/* A hashtable of region ID-> SP var mappings */
-	/* An SP var is a place to store the stack pointer (used by handlers)*/
-	/*
-	 * FIXME We can potentially get rid of this, since it was mainly used
-	 * for hijacking return address for handler.
-	 */
-	GHashTable      *spvars;
-
-	/*
-	 * A hashtable of region ID -> EX var mappings
-	 * An EX var stores the exception object passed to catch/filter blocks
-	 * For finally blocks, it is set to TRUE if we should throw an abort
-	 * once the execution of the finally block is over.
-	 */
-	GHashTable      *exvars;
-
-	GList           *ldstr_list; /* used by AOT */
-	
 	MonoDomain      *domain;
-
-	guint            real_offset;
-	GHashTable      *cbb_hash;
-
-	/* The current virtual register number */
-	guint32 next_vreg;
-
-	MonoGenericSharingContext gsctx;
-	MonoGenericContext *gsctx_context;
-
-	MonoGSharedVtMethodInfo *gsharedvt_info;
-
-	MonoMemoryManager *mem_manager;
-
-	/* Points to the gsharedvt locals area at runtime */
-	MonoInst *gsharedvt_locals_var;
-
-	/* The localloc instruction used to initialize gsharedvt_locals_var */
-	MonoInst *gsharedvt_locals_var_ins;
-
-	/* Points to a MonoGSharedVtMethodRuntimeInfo at runtime */
-	MonoInst *gsharedvt_info_var;
-
-	/* For native-to-managed wrappers, CEE_MONO_JIT_(AT|DE)TACH opcodes */
-	MonoInst *orig_domain_var;
-
-	MonoInst *lmf_var;
-	MonoInst *lmf_addr_var;
-
-	MonoInst *stack_inbalance_var;
-
-	unsigned char   *cil_start;
-	unsigned char   *native_code;
-	guint            code_size;
-	guint            code_len;
-	guint            prolog_end;
-	guint            epilog_begin;
-	guint            epilog_end;
 	guint32          opt;
-	guint32          flags;
-	guint32          comp_done;
-	guint32          verbose_level;
-	guint32          stack_usage;
-	guint32          param_area;
-	guint32          frame_reg;
-	gint32           sig_cookie;
-	guint            disable_aot : 1;
-	guint            disable_ssa : 1;
-	guint            disable_llvm : 1;
-	guint            enable_extended_bblocks : 1;
-	guint            run_cctors : 1;
-	guint            need_lmf_area : 1;
-	guint            compile_aot : 1;
-	guint            full_aot : 1;
-	guint            compile_llvm : 1;
-	guint            got_var_allocated : 1;
-	guint            ret_var_is_local : 1;
-	guint            ret_var_set : 1;
-	guint            unverifiable : 1;
-	guint            skip_visibility : 1;
-	guint            disable_llvm_implicit_null_checks : 1;
-	guint            disable_reuse_registers : 1;
-	guint            disable_reuse_stack_slots : 1;
-	guint            disable_reuse_ref_stack_slots : 1;
-	guint            disable_ref_noref_stack_slot_share : 1;
-	guint            disable_initlocals_opt : 1;
-	guint            disable_initlocals_opt_refs : 1;
-	guint            disable_omit_fp : 1;
-	guint            disable_vreg_to_lvreg : 1;
-	guint            disable_deadce_vars : 1;
-	guint            disable_out_of_line_bblocks : 1;
-	guint            disable_direct_icalls : 1;
-	guint            disable_gc_safe_points : 1;
-	guint            direct_pinvoke : 1;
-	guint            create_lmf_var : 1;
-	/*
-	 * When this is set, the code to push/pop the LMF from the LMF stack is generated as IR
-	 * instead of being generated in emit_prolog ()/emit_epilog ().
-	 */
-	guint            lmf_ir : 1;
-	/*
-	 * Whenever to use the mono_lmf TLS variable instead of indirection through the
-	 * mono_lmf_addr TLS variable.
-	 */
-	guint            gen_write_barriers : 1;
-	guint            init_ref_vars : 1;
-	guint            extend_live_ranges : 1;
-	guint            compute_precise_live_ranges : 1;
-	guint            has_got_slots : 1;
-	guint            uses_rgctx_reg : 1;
-	guint            uses_vtable_reg : 1;
-	guint            keep_cil_nops : 1;
-	guint            gen_seq_points : 1;
-	/* Generate seq points for use by the debugger */
-	guint            gen_sdb_seq_points : 1;
-	guint            explicit_null_checks : 1;
-	guint            compute_gc_maps : 1;
-	guint            soft_breakpoints : 1;
-	guint            arch_eh_jit_info : 1;
-	guint            has_calls : 1;
-	guint            has_emulated_ops : 1;
-	guint            has_indirection : 1;
-	guint            has_atomic_add_i4 : 1;
-	guint            has_atomic_exchange_i4 : 1;
-	guint            has_atomic_cas_i4 : 1;
-	guint            check_pinvoke_callconv : 1;
-	guint            has_unwind_info_for_epilog : 1;
-	guint            disable_inline : 1;
-	/* Disable inlining into caller */
-	guint            no_inline : 1;
-	guint            gshared : 1;
-	guint            gsharedvt : 1;
-	guint            r4fp : 1;
-	guint            llvm_only : 1;
-	/*
-	 * JIT_FLAG_LLVM_IR_ONLY: this body is being compiled for the tier-1 inliner
-	 * to fold into a caller, not to be published as the method's own code. It
-	 * will therefore never be reached by a call to the method itself, which is
-	 * an assumption parts of the front-end otherwise make.
-	 */
-	guint            llvm_ir_only : 1;
-	guint            interp : 1;
-	guint            use_current_cpu : 1;
-	guint            self_init : 1;
-	guint            domainvar_inited : 1;
-	guint            code_exec_only : 1;
-	guint            interp_entry_only : 1;
-	guint8           uses_simd_intrinsics;
-	int              r4_stack_type;
-	gpointer         debug_info;
-	guint32          lmf_offset;
-	guint16          *intvars;
-	MonoProfilerCoverageInfo *coverage_info;
-	GHashTable       *token_info_hash;
-	MonoCompileArch  arch;
-	guint32          inline_depth;
-	/* Size of memory reserved for thunks */
-	int              thunk_area;
-	/* Thunks */
-	guint8          *thunks;
-	/* Offset between the start of code and the thunks area */
-	int              thunks_offset;
-	MonoExceptionType exception_type;	/* MONO_EXCEPTION_* */
-	guint32          exception_data;
-	char*            exception_message;
-	gpointer         exception_ptr;
-
-	guint8 *         encoded_unwind_ops;
-	guint32          encoded_unwind_ops_len;
-	GSList*          unwind_ops;
-
-	GList*           dont_inline;
-
-	/* Fields used by the local reg allocator */
-	void*            reginfo;
-	int              reginfo_len;
-
-	/* Maps vregs to their associated MonoInst's */
-	/* vregs with an associated MonoInst are 'global' while others are 'local' */
-	MonoInst **vreg_to_inst;
-
-	/* Size of above array */
-	guint32 vreg_to_inst_len;
-
-	/* Marks vregs which hold a GC ref */
-	/* FIXME: Use a bitmap */
-	gboolean *vreg_is_ref;
-
-	/* Size of above array */
-	guint32 vreg_is_ref_len;
-
-	/* Marks vregs which hold a managed pointer */
-	/* FIXME: Use a bitmap */
-	gboolean *vreg_is_mp;
-
-	/* Size of above array */
-	guint32 vreg_is_mp_len;
-
-	/* 
-	 * The original method to compile, differs from 'method' when doing generic
-	 * sharing.
-	 */
-	MonoMethod *orig_method;
-
-	/* Patches which describe absolute addresses embedded into the native code */
-	GHashTable *abs_patches;
-
-	/* Used to implement move_i4_to_f on archs that can't do raw
-	copy between an ireg and a freg. This is an int32 var.*/
-	MonoInst *iconv_raw_var;
-
-	/* Used to implement fconv_to_r8_x. This is a double (8 bytes) var.*/
-	MonoInst *fconv_to_r8_x_var;
-
-	/*Use to implement simd constructors. This is a vector (16 bytes) var.*/
-	MonoInst *simd_ctor_var;
-
-	/* Used to implement dyn_call */
-	MonoInst *dyn_call_var;
-
-	MonoInst *last_seq_point;
-	/*
-	 * List of sequence points represented as IL offset+native offset pairs.
-	 * Allocated using glib.
-	 * IL offset can be -1 or 0xffffff to refer to the sequence points
-	 * inside the prolog and epilog used to implement method entry/exit events.
-	 */
-	GPtrArray *seq_points;
-
-	/* The encoded sequence point info */
-	struct MonoSeqPointInfo *seq_point_info;
-
-	/* Method headers which need to be freed after compilation */
-	GSList *headers_to_free;
-
-	/* Used by AOT */
-	guint32 got_offset, ex_info_offset, method_info_offset, method_index;
-	guint32 aot_method_flags;
-	/* For llvm */
-	guint32 got_access_count;
-	gpointer llvmonly_init_cond;
-	gpointer llvm_dummy_info_var, llvm_info_var;
-	/* Symbol used to refer to this method in generated assembly */
-	char *asm_symbol;
-	char *asm_debug_symbol;
-	char *llvm_method_name;
-	int castclass_cache_index;
-
-	MonoJitExceptionInfo *llvm_ex_info;
-	guint32 llvm_ex_info_len;
-	int llvm_this_reg, llvm_this_offset;
-
-	/*
-	 * The native_offset -> il_offset map the LLVM backend recovered for this body,
-	 * copied verbatim onto jit_info->llvm_seq_points by create_jit_info (). NULL/0
-	 * if translation produced none.
-	 */
-	MonoLLVMSeqPoint *llvm_seq_points;
-	guint32 n_llvm_seq_points;
-	/* Copied onto jit_info->llvm_inline_frames by create_jit_info (). */
-	MonoLLVMInlineFrame *llvm_inline_frames;
-	guint32 n_llvm_inline_frames;
-
-	GSList *try_block_holes;
-
-	/* DWARF location list for 'this' */
-	GSList *this_loclist;
-
-	/* DWARF location list for 'rgctx_var' */
-	GSList *rgctx_loclist;
-
-	int *gsharedvt_vreg_to_idx;
-
-	GSList *signatures;
-	GSList *interp_in_signatures;
-
-	/* GC Maps */
-   
-	/* The offsets of the locals area relative to the frame pointer */
-	gint locals_min_stack_offset, locals_max_stack_offset;
-
-	/* The current CFA rule */
-	int cur_cfa_reg, cur_cfa_offset;
-
-	/* The final CFA rule at the end of the prolog */
-	int cfa_reg, cfa_offset;
-
-	/* Points to a MonoCompileGC */
-	gpointer gc_info;
-
-	/*
-	 * The encoded GC map along with its size. This contains binary data so it can be saved in an AOT
-	 * image etc, but it requires a 4 byte alignment.
-	 */
-	guint8 *gc_map;
-	guint32 gc_map_size;
-
-	/* Error handling */
-	MonoError* error;
-	MonoErrorInternal error_value;
-
-	/* pointer to context datastructure used for graph dumping */
-
-	/* Stats */
-	int stat_allocate_var;
-	int stat_locals_stack_size;
-	int stat_basic_blocks;
-	int stat_cil_code_size;
-	int stat_n_regvars;
-	int stat_inlineable_methods;
-	int stat_inlined_methods;
-	int stat_code_reallocs;
-
-	MonoProfilerCallInstrumentationFlags prof_flags;
-	gboolean prof_coverage;
-
-	/* For deduplication */
-	gboolean skip;
 } MonoCompile;
-
-#define MONO_CFG_PROFILE(cfg, flag) \
-	G_UNLIKELY ((cfg)->prof_flags & MONO_PROFILER_CALL_INSTRUMENTATION_ ## flag)
-
-#define MONO_CFG_PROFILE_CALL_CONTEXT(cfg) \
-	(MONO_CFG_PROFILE (cfg, ENTER_CONTEXT) || MONO_CFG_PROFILE (cfg, LEAVE_CONTEXT))
-
 typedef enum {
 	MONO_CFG_HAS_ALLOCA = 1 << 0,
 	MONO_CFG_HAS_CALLS  = 1 << 1,
@@ -1594,39 +1192,6 @@ typedef struct {
 	} data;
 	int type;
 } StackSlot;
-
-#ifndef DISABLE_JIT
-
-guint8*
-mini_realloc_code_slow (MonoCompile *cfg, int size);
-
-static inline guint8*
-realloc_code (MonoCompile *cfg, int size)
-{
-	const guint EXTRA_CODE_SPACE = 16;
-	const guint code_len = cfg->code_len;
-
-	if (G_UNLIKELY (code_len + (guint)size > (cfg->code_size - EXTRA_CODE_SPACE)))
-		return mini_realloc_code_slow (cfg, size);
-	return cfg->native_code + code_len;
-}
-
-static inline void
-set_code_len (MonoCompile *cfg, int len)
-{
-	g_assert ((guint)len <= cfg->code_size);
-	cfg->code_len = len;
-}
-
-static inline void
-set_code_cursor (MonoCompile *cfg, void* void_code)
-{
-	guint8* code = (guint8*)void_code;
-	g_assert (code <= (cfg->native_code + cfg->code_size));
-	set_code_len (cfg, code - cfg->native_code);
-}
-
-#endif
 
 enum {
 	MONO_COMP_DOM = 1,
@@ -2177,7 +1742,6 @@ mono_arch_setup_async_callback (MonoContext *ctx, void (*async_cb)(void *fun), g
 gboolean
 mono_thread_state_init_from_handle (MonoThreadUnwindState *tctx, MonoThreadInfo *info, /*optional*/ void *sigctx);
 
-
 /* Exception handling */
 typedef gboolean (*MonoJitStackWalk)            (StackFrameInfo *frame, MonoContext *ctx, gpointer data);
 
@@ -2477,7 +2041,6 @@ typedef enum {
 	MONO_CPU_X86_BMI1	= 1 << 14,
 	MONO_CPU_X86_BMI2	= 1 << 15,
 
-
 	//
 	// Dependencies (based on System.Runtime.Intrinsics.X86 class hierarchy):
 	//
@@ -2667,7 +2230,7 @@ void        mono_simd_intrinsics_init (void);
 gboolean    mono_class_is_magic_int (MonoClass *klass);
 gboolean    mono_class_is_magic_float (MonoClass *klass);
 MonoInst*   mono_emit_native_types_intrinsics (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSignature *fsig, MonoInst **args);
-gsize       mini_magic_type_size (MonoCompile *cfg, MonoType *type);
+gsize       mini_magic_type_size (MonoType *type);
 gboolean    mini_magic_is_int_type (MonoType *t);
 gboolean    mini_magic_is_float_type (MonoType *t);
 MonoType* mini_native_type_replace_type (MonoType *type);

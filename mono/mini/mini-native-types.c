@@ -17,13 +17,13 @@
 
 
 gsize
-mini_magic_type_size (MonoCompile *cfg, MonoType *type)
+mini_magic_type_size (MonoType *type)
 {
 	if (type->type == MONO_TYPE_I4 || type->type == MONO_TYPE_U4)
 		return 4;
 	else if (type->type == MONO_TYPE_I8 || type->type == MONO_TYPE_U8)
 		return 8;
-	else if (type->type == MONO_TYPE_R4 && !type->byref && (!cfg || cfg->r4fp))
+	else if (type->type == MONO_TYPE_R4 && !type->byref)
 		return 4;
 	else if (type->type == MONO_TYPE_R8 && !type->byref)
 		return 8;

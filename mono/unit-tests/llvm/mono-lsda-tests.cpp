@@ -4,8 +4,7 @@
  *
  * parse_mono_lsda () decodes the target-neutral `.mono_lsda` section the compiler
  * emits next to the code; build_ex_info () validates those tuples against the IL
- * clause table and joins them into a MonoJitExceptionInfo[] (the pure core of
- * publish_mono_lsda, factored out so it needs no MonoCompile). Everything here
+ * clause table and joins them into a MonoJitExceptionInfo[]. Everything here
  * drives them with byte buffers and synthetic clause tables, offline - no runtime
  * and no compiled method involved.
  *
@@ -1378,87 +1377,6 @@ TEST_F (MonoLsdaGuards, AbsentForCatch)
 	EXPECT_EQ (out[0].flags, (guint32) MONO_EXCEPTION_CLAUSE_NONE);
 	EXPECT_EQ (out[0].data.catch_class, CC0);
 	EXPECT_EQ (out[0].exvar_offset, 0);
-}
-
-/* ------------------------------------------------------------ publish cases */
-
-/*
- * publish_mono_lsda is the thin MonoCompile-aware wrapper over build_ex_info: it
- * joins cfg->header->clauses[] into the entries, and on success allocates
- * cfg->llvm_ex_info[] from cfg->mempool and sets cfg->llvm_ex_info_len. These cases
- * drive it with a real MonoMethodHeader/MonoCompile pair instead of calling
- * build_ex_info directly, pinning that wiring.
- */
-class MonoLsdaPublish : public LsdaJoinTest {
-protected:
-	void
-	SetUp () override
-	{
-		memset (clauses, 0, sizeof (clauses));
-		clauses[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
-		clauses[0].data.catch_class = CC0;
-		clauses[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
-		clauses[1].data.catch_class = CC1;
-
-		memset (&header, 0, sizeof (header));
-		header.num_clauses = 2;
-		header.clauses = clauses;
-
-		memset (&cfg, 0, sizeof (cfg));
-		pool = mono_mempool_new ();
-		cfg.mempool = pool;
-		cfg.header = &header;
-	}
-
-	void TearDown () override { mono_mempool_destroy (pool); }
-
-	MonoExceptionClause clauses [2];
-	MonoMethodHeader header;
-	MonoCompile cfg;
-	MonoMemPool *pool = nullptr;
-};
-
-/*
- * Two valid disjoint entries against a real cfg + clause table publish exactly what
- * build_ex_info would produce for the same inputs (cross-checked against
- * MonoLsdaBuild.ValidTwoClause's vectors).
- */
-TEST_F (MonoLsdaPublish, ValidTwoClause)
-{
-	std::vector<MonoExceptionClause> table (clauses, clauses + 2);
-	std::vector<MonoLsdaEntry> ents = {
-		{ 0x10, 0x20, 0x40, 0 }, /* [0x10,0x30) -> handler 0x40, clause 0 */
-		{ 0x50, 0x10, 0x80, 1 }, /* [0x50,0x60) -> handler 0x80, clause 1 */
-	};
-
-	ASSERT_TRUE (mono::publish_mono_lsda (&cfg, table, ents, base, code_len));
-	ASSERT_NE (cfg.llvm_ex_info, nullptr);
-	ASSERT_EQ (cfg.llvm_ex_info_len, 2u);
-
-	EXPECT_EQ (cfg.llvm_ex_info[0].clause_index, 0);
-	EXPECT_EQ (cfg.llvm_ex_info[0].try_start, at (0x10));
-	EXPECT_EQ (cfg.llvm_ex_info[0].try_end, at (0x30));
-	EXPECT_EQ (cfg.llvm_ex_info[0].handler_start, at (0x40));
-	EXPECT_EQ (cfg.llvm_ex_info[0].data.catch_class, CC0);
-	EXPECT_EQ (cfg.llvm_ex_info[1].clause_index, 1);
-	EXPECT_EQ (cfg.llvm_ex_info[1].try_start, at (0x50));
-	EXPECT_EQ (cfg.llvm_ex_info[1].try_end, at (0x60));
-	EXPECT_EQ (cfg.llvm_ex_info[1].handler_start, at (0x80));
-	EXPECT_EQ (cfg.llvm_ex_info[1].data.catch_class, CC1);
-}
-
-/*
- * An EMPTY clause table with no entries is the vacuous accept case - and since the
- * built array is empty, the n==0 branch must skip the mempool allocation entirely,
- * leaving llvm_ex_info null.
- */
-TEST_F (MonoLsdaPublish, EmptyTableEmptyEntries)
-{
-	cfg.header = nullptr;
-
-	ASSERT_TRUE (mono::publish_mono_lsda (&cfg, {}, {}, base, code_len));
-	EXPECT_EQ (cfg.llvm_ex_info, nullptr);
-	EXPECT_EQ (cfg.llvm_ex_info_len, 0u);
 }
 
 } // namespace test

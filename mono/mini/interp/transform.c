@@ -1725,7 +1725,7 @@ interp_handle_magic_type_intrinsics (TransformData *td, MonoMethod *target_metho
 	if (!strcmp (".ctor", tm)) {
 		MonoType *arg = csignature->params [0];
 		/* depending on SIZEOF_VOID_P and the type of the value passed to the .ctor we either have to CONV it, or do nothing */
-		int arg_size = mini_magic_type_size (NULL, arg);
+		int arg_size = mini_magic_type_size (arg);
 
 		if (arg_size > SIZEOF_VOID_P) { // 8 -> 4
 			switch (type_index) {
@@ -1776,8 +1776,8 @@ interp_handle_magic_type_intrinsics (TransformData *td, MonoMethod *target_metho
 		MonoType *src = csignature->params [0];
 		MonoType *dst = csignature->ret;
 		MonoClass *src_klass = mono_class_from_mono_type_internal (src);
-		int src_size = mini_magic_type_size (NULL, src);
-		int dst_size = mini_magic_type_size (NULL, dst);
+		int src_size = mini_magic_type_size (src);
+		int dst_size = mini_magic_type_size (dst);
 
 		gboolean store_value_as_local = FALSE;
 

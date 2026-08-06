@@ -18,9 +18,7 @@
  *                                    2=FINALLY, 4=FAULT); self-describing v2
  *
  * This TU is pure C++ with no LLVM dependency: it consumes the emitted BYTES,
- * not any LLVM type. It is not wired onto the live compile path yet - slice C6
- * calls publish_mono_lsda from translator.cpp once the EH gate is lifted; C4
- * only lands the core and its offline tests.
+ * not any LLVM type.
  *
  * CAP-EH-0 (plan 12 6): declining (returning false) is reserved for genuine
  * uncertainty about UNSUPPORTED INPUT - right now that is only a filter
@@ -29,7 +27,7 @@
  * (doc 11 11.4), so a plausible-but-wrong table is never produced. The
  * build_ex_info () checks that instead validate our own round-trip of data we
  * ourselves wrote (a clause_index/kind read back from the SAME immutable
- * cfg->header we wrote it from) assert: if those ever disagree, it is our own
+ * header we wrote it from) assert: if those ever disagree, it is our own
  * bug, not the input. parse_mono_lsda ()'s own bounds/format checks (magic,
  * version, exact size, offsets within code_len) are still declines - not yet
  * audited for the same split, so left as originally written. None of the Itanium
@@ -528,36 +526,6 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 		return false;
 
 	append_finally_guards (guards, clauses, num_clauses, native_code, code_len, out);
-	return true;
-}
-
-bool
-publish_mono_lsda (MonoCompile *cfg,
-                   const std::vector<MonoExceptionClause> &clauses,
-                   const std::vector<MonoLsdaEntry> &entries,
-                   const std::uint8_t *native_code, std::uint32_t code_len,
-                   const std::vector<MonoFinallyGuard> &guards)
-{
-	std::vector<MonoJitExceptionInfo> built;
-	if (!build_ex_info (entries, clauses.data (), static_cast<int> (clauses.size ()),
-	                    native_code, code_len, built, guards))
-		return false; /* caller set_failure -> classic JIT */
-
-	/*
-	 * Copy the validated array into the compile mempool (freed with the
-	 * MonoCompile); mini.c:create_jit_info memcpys it verbatim into
-	 * jinfo->clauses (num_clauses = llvm_ex_info_len, from_llvm = 1).
-	 */
-	guint32 n = static_cast<guint32> (built.size ());
-	MonoJitExceptionInfo *arr = nullptr;
-	if (n) {
-		arr = (MonoJitExceptionInfo *) mono_mempool_alloc0 (
-			cfg->mempool, n * sizeof (MonoJitExceptionInfo));
-		memcpy (arr, built.data (), n * sizeof (MonoJitExceptionInfo));
-	}
-	cfg->llvm_ex_info = arr;
-	cfg->llvm_ex_info_len = n;
-
 	return true;
 }
 

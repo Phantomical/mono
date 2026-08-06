@@ -24,10 +24,9 @@
  * This header exposes the SOURCE-AGNOSTIC load-time core (plan 12 3): it turns
  * that byte section into MonoLsdaEntry tuples (parse_mono_lsda), validates them
  * against the method's IL clause table and joins the two into a
- * MonoJitExceptionInfo[] that mini.c copies verbatim into jinfo->clauses
- * (build_ex_info / publish_mono_lsda). The join deliberately reads flags and
- * data.catch_class from cfg->header->clauses[] - the section never carries
- * them (plan 12 2), exactly as the fork's decode_llvm_eh_info did.
+ * MonoJitExceptionInfo[] the runtime's unwinder reads (build_ex_info). The
+ * join deliberately reads flags and data.catch_class from the method's own
+ * clause table - the section never carries them.
  *
  * CAP-EH-0 posture: parse_mono_lsda () declines (returns false) on bad magic,
  * wrong version, truncation, or a size that does not exactly match the
@@ -35,17 +34,15 @@
  * intact. build_ex_info () declines only for a non-catch/finally/fault clause
  * (a filter slipping the gate) or an overlapping (nested) invoke range - real
  * unsupported-input shapes; a join key out of range or a kind/flags mismatch
- * against cfg->header->clauses[] now assert instead, since both sides of that
- * comparison trace back to the SAME immutable cfg->header within one compile,
+ * against the clause table now assert instead, since both sides of that
+ * comparison trace back to the SAME immutable header within one compile,
  * so disagreement can only mean our own round-trip broke, not the input. An
  * entry set that is empty, or contains only resume-pad markers, is published
  * as zero clauses rather than declined - confirmed proof nothing in this
  * method's protected regions survived optimization, not uncertainty.
  *
- * Like engine.hpp this is a C++-only header and must NEVER be included by
- * mono's C sources. It is consumed by mono_lsda.cpp, by translator.cpp (slice
- * C6, which wires publish_mono_lsda onto the live compile path), and by
- * tests/mono-lsda-tests.cpp.
+ * This is a C++-only header and must NEVER be included by mono's C sources.
+ * It is consumed by mono_lsda.cpp, by jinfo.cpp and by the unit tests.
  */
 
 #ifndef MONO_LLVM_MONO_LSDA_HPP
@@ -56,12 +53,10 @@
 #include <vector>
 
 /*
- * MonoCompile is an anonymous-struct typedef (mini.h), so it cannot be
- * forward-declared; publish_mono_lsda names it directly. mini.h transitively
- * supplies MonoExceptionClause + MONO_EXCEPTION_CLAUSE_NONE (metadata.h),
- * MonoJitExceptionInfo (domain-internals.h), MINI_ADDR_TO_FTNPTR (ftnptr.h) and
- * mono_mempool_alloc0 (mempool.h). metadata.h is named explicitly for the two
- * types build_ex_info's callers (tests) touch without a MonoCompile.
+ * mini.h transitively supplies MonoExceptionClause +
+ * MONO_EXCEPTION_CLAUSE_NONE (metadata.h), MonoJitExceptionInfo
+ * (domain-internals.h) and MINI_ADDR_TO_FTNPTR (ftnptr.h); metadata.h is named
+ * explicitly for the two types build_ex_info's callers touch directly.
  */
 #include <mono/metadata/metadata.h>
 #include <mono/mini/mini.h>
@@ -126,8 +121,7 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
                       std::vector<MonoLsdaEntry> &out);
 
 /*
- * The pure validate-and-join core, factored out of publish_mono_lsda so it is
- * unit-testable without a MonoCompile. Validates ENTRIES against the IL clause
+ * The validate-and-join core. Validates ENTRIES against the IL clause
  * table (CLAUSES / NUM_CLAUSES) and the loaded code extent (NATIVE_CODE /
  * CODE_LEN), building one MonoJitExceptionInfo per entry into OUT.
  *
@@ -179,20 +173,6 @@ bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const std::uint8_t *native_code, std::uint32_t code_len,
                     std::vector<MonoJitExceptionInfo> &out,
                     const std::vector<MonoFinallyGuard> &guards = {});
-
-/*
- * Validate ENTRIES against CLAUSES and the loaded code, then, on
- * success, allocate cfg->llvm_ex_info[] from cfg->mempool and set
- * cfg->llvm_ex_info / cfg->llvm_ex_info_len (mini.c copies it verbatim into
- * jinfo->clauses with from_llvm=1). Returns false on any validation failure, in
- * which case cfg is left untouched and the caller declines to the classic JIT
- * (CAP-EH-0). Thin wrapper over build_ex_info.
- */
-bool publish_mono_lsda (MonoCompile *cfg,
-                        const std::vector<MonoExceptionClause> &clauses,
-                        const std::vector<MonoLsdaEntry> &entries,
-                        const std::uint8_t *native_code, std::uint32_t code_len,
-                        const std::vector<MonoFinallyGuard> &guards = {});
 
 } // namespace mono
 

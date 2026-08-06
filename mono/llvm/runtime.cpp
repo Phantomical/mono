@@ -233,7 +233,6 @@ public:
 		 * wherever it resolves per-domain state at translate time (ldstr).
 		 */
 		cfg.domain = domain;
-		cfg.compile_llvm = TRUE;
 		cfg.opt = MONO_OPT_SIMD;
 		cfg.header = mono_method_get_header_checked (method, error);
 	}

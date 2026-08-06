@@ -40,12 +40,9 @@ namespace {
  * Everything a method_to_llvm () call needs out of the MonoCompile it is handed.
  *
  * The translator reads the header - the IL, the locals signature and the clause
- * table - and it reads `opt` and `compile_llvm`, which together are all
- * MONO_CLASS_IS_SIMD looks at. Both are set the way an LLVM compile would have
- * them, so a SIMD class lowers to a vector here as it would in the JIT.
- *
- * The rest of a MonoCompile belongs to the mini pipeline, which is not running,
- * so it stays zeroed rather than half-filled with values nothing reads.
+ * table - and it reads `opt`, which is what MONO_CLASS_IS_SIMD looks at. It is
+ * set the way an LLVM compile would have it, so a SIMD class lowers to a vector
+ * here as it would in the JIT.
  */
 class MinimalCompile {
 public:
@@ -55,7 +52,6 @@ public:
 		cfg.method = method;
 		/* The translator interns ldstr literals into cfg->domain. */
 		cfg.domain = mono_domain_get ();
-		cfg.compile_llvm = TRUE;
 		cfg.opt = MONO_OPT_SIMD;
 		cfg.header = mono_method_get_header_checked (method, error);
 	}
