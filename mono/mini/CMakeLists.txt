@@ -57,7 +57,6 @@ set(mini_sources
   debug-mini.c
   linear-scan.c
   aot-runtime.c
-  graph.c
   mini-codegen.c
   mini-exceptions.c
   mini-trampolines.c
@@ -65,7 +64,6 @@ set(mini_sources
   mini-generic-sharing.c
   tasklets.c
   simd-intrinsics.c
-  simd-intrinsics-netcore.c
   mini-native-types.c
   unwind.c
   mini-gc.c
