@@ -1459,8 +1459,6 @@ mini_usage_jitdeveloper (void)
 		 "    --stats                Print statistics about the JIT operations\n"
 		 "    --inject-async-exc METHOD OFFSET Inject an asynchronous exception at METHOD\n"
 		 "    --verify-all           Run the verifier on all assemblies and methods\n"
-		 "    --full-aot             Avoid JITting any code\n"
-		 "    --llvmonly             Use LLVM compiled code only\n"
 		 "    --llvm-opt=OPT         Pass OPT to LLVM as one of its own command line\n"
 		 "                           options, e.g. --llvm-opt=-print-after-all. Repeat\n"
 		 "                           the flag to pass more than one.\n"
@@ -1529,7 +1527,6 @@ mini_usage (void)
 	        "    --mixed-mode           Enable mixed-mode image support.\n"
 #endif
 		"    --handlers             Install custom handlers, use --help-handlers for details.\n"
-		"    --aot-path=PATH        List of additional directories to search for AOT images.\n"
 	  );
 
 	g_print ("\nOptions:\n");
@@ -1652,9 +1649,9 @@ mono_get_version_info (void)
 }
 
 /*
- * This runtime has no AOT compiler, so the options that would drive one are
- * refused while parsing the command line rather than left to fail later on a
- * back end that is not there.
+ * This runtime has no AOT compiler and loads no AOT images, so the whole
+ * option family is refused while parsing the command line rather than left to
+ * fail later against a back end and a loader that are not there.
  */
 #define error_aot_unsupported(opt) do { \
 		fprintf (stderr, "%s: ahead-of-time compilation is not supported by this runtime.\n", (opt)); \
@@ -2187,16 +2184,12 @@ mono_main (int argc, char* argv[])
 			mono_inject_async_exc_pos = atoi (argv [++i]);
 		} else if (strcmp (argv [i], "--verify-all") == 0) {
 			mono_verifier_enable_verify_all ();
-		} else if (strcmp (argv [i], "--full-aot") == 0) {
-			mono_jit_set_aot_mode (MONO_AOT_MODE_FULL);
-		} else if (strcmp (argv [i], "--llvmonly") == 0) {
-			mono_jit_set_aot_mode (MONO_AOT_MODE_LLVMONLY);
-		} else if (strcmp (argv [i], "--hybrid-aot") == 0) {
-			mono_jit_set_aot_mode (MONO_AOT_MODE_HYBRID);
-		} else if (strcmp (argv [i], "--full-aot-interp") == 0) {
-			mono_jit_set_aot_mode (MONO_AOT_MODE_INTERP);
-		} else if (strcmp (argv [i], "--llvmonly-interp") == 0) {
-			mono_jit_set_aot_mode (MONO_AOT_MODE_LLVMONLY_INTERP);
+		} else if (strcmp (argv [i], "--full-aot") == 0 ||
+				   strcmp (argv [i], "--llvmonly") == 0 ||
+				   strcmp (argv [i], "--hybrid-aot") == 0 ||
+				   strcmp (argv [i], "--full-aot-interp") == 0 ||
+				   strcmp (argv [i], "--llvmonly-interp") == 0) {
+			error_aot_unsupported (argv [i]);
 		} else if (strcmp (argv [i], "--print-vtable") == 0) {
 			mono_print_vtable = TRUE;
 		} else if (strcmp (argv [i], "--stats") == 0) {
@@ -2211,15 +2204,7 @@ mono_main (int argc, char* argv[])
 		} else if (strncmp (argv [i], "--apply-bindings=", 17) == 0) {
 			extra_bindings_config_file = &argv[i][17];
 		} else if (strncmp (argv [i], "--aot-path=", 11) == 0) {
-			char **splitted;
-
-			splitted = g_strsplit (argv [i] + 11, G_SEARCHPATH_SEPARATOR_S, 1000);
-			while (*splitted) {
-				char *tmp = *splitted;
-				mono_aot_paths = g_list_append (mono_aot_paths, g_strdup (tmp));
-				g_free (tmp);
-				splitted++;
-			}
+			error_aot_unsupported ("--aot-path");
 		} else if (strncmp (argv [i], "--compile-all=", 14) == 0) {
 			action = DO_COMPILE;
 			recompilation_times = atoi (argv [i] + 14);

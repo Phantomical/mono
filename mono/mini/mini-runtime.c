@@ -176,7 +176,6 @@ char *sdb_options;
 #ifdef VALGRIND_JIT_REGISTER_MAP
 int valgrind_register;
 #endif
-GList* mono_aot_paths;
 
 static GPtrArray *profile_options;
 

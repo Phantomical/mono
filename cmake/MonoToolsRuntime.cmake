@@ -97,9 +97,9 @@ else()
   set(MONO_TOOLS_RUNTIME "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
   set(MONO_TOOLS_RUNTIME_IS_SYSTEM FALSE)
   set(MONO_TOOLS_RUNTIME_VERSION "this build")
-  # The wrapper is a script around mono/mini/mono-<gc>, and the mcs AOT step
-  # reaches for the mono-<gc> symlink by name, so both have to exist before
-  # anything is compiled.
+  # The wrapper is a script around mono/mini/mono-<gc>, and some callers reach
+  # for the mono-<gc> symlink by name, so both have to exist before anything is
+  # compiled.
   set(MONO_TOOLS_RUNTIME_DEPENDS mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
   set(MONO_TOOLS_RUNTIME_HOST "")
   # Turning the option back off in an existing tree would otherwise leave the
@@ -109,16 +109,14 @@ endif()
 
 # Spell out one invocation of a managed build tool.
 #
-#   mono_tools_runtime(<out> [MONO_PATH <dir>] [AOT_PATH <dir>] [ARGS <arg>...])
+#   mono_tools_runtime(<out> [MONO_PATH <dir>] [ARGS <arg>...])
 #
 # The result is a command prefix; the caller appends the assembly to run and
-# its arguments.  MONO_PATH and AOT_PATH describe what the *in-tree* runtime
-# needs and are dropped for a system one -- MONO_PATH because it would put this
-# tree's mscorlib.dll in front of the one that runtime was built against, and
-# AOT_PATH because the images under it were produced by, and are only loadable
-# by, the runtime being built.
+# its arguments.  MONO_PATH describes what the *in-tree* runtime needs and is
+# dropped for a system one, where it would put this tree's mscorlib.dll in
+# front of the one that runtime was built against.
 function(mono_tools_runtime out)
-  cmake_parse_arguments(ARG "" "MONO_PATH;AOT_PATH" "ARGS" ${ARGN})
+  cmake_parse_arguments(ARG "" "MONO_PATH" "ARGS" ${ARGN})
   if(MONO_TOOLS_RUNTIME_IS_SYSTEM)
     set(_cmd "${MONO_TOOLS_RUNTIME_HOST}" ${ARG_ARGS})
   else()
@@ -127,9 +125,6 @@ function(mono_tools_runtime out)
       list(APPEND _cmd "MONO_PATH=${ARG_MONO_PATH}")
     endif()
     list(APPEND _cmd "${MONO_TOOLS_RUNTIME}")
-    if(ARG_AOT_PATH)
-      list(APPEND _cmd "--aot-path=${ARG_AOT_PATH}")
-    endif()
     list(APPEND _cmd ${ARG_ARGS})
   endif()
   set(${out} "${_cmd}" PARENT_SCOPE)
