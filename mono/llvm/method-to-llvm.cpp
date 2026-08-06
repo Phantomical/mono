@@ -794,6 +794,8 @@ MethodLLVMEmitter::emit ()
 		has_finally |= clauses[i].flags == MONO_EXCEPTION_CLAUSE_FINALLY;
 	}
 
+	bool pinned_vars = emit_debug_var_marker (builder);
+
 	/*
 	 * Both of the ways this frame is described to something outside it - the
 	 * localescape below, and the stackmap a finally marker carries - name a stack
@@ -805,7 +807,7 @@ MethodLLVMEmitter::emit ()
 	 * these frames is a vector spill slot regalloc invented; declining the
 	 * realignment clamps that slot instead, which costs an unaligned move.
 	 */
-	if (has_filters || has_finally)
+	if (has_filters || has_finally || pinned_vars)
 		function->addFnAttr ("no-realign-stack");
 
 	if (has_filters) {

@@ -490,6 +490,9 @@ private:
 	llvm::Error emit_push_lmf (MonoIrBuilder &builder);
 	void emit_pop_lmf (MonoIrBuilder &builder);
 
+	bool debug_var_slots_wanted () const;
+	bool emit_debug_var_marker (MonoIrBuilder &builder);
+
 	void resolve_call_instrumentation ();
 	bool instrumented (MonoProfilerCallInstrumentationFlags flag) const;
 	void emit_profiler_event (MonoIrBuilder &builder, const char *raise, void *address,

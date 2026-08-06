@@ -78,6 +78,14 @@ constexpr uint16_t unwind_section_version = 2;
 constexpr std::size_t unwind_header_size = 20;
 constexpr std::size_t unwind_record_size = 17;
 
+/*
+ * The id of the stackmap naming this frame's argument and local slots, in
+ * `.llvm_stackmaps` - LLVM's own section, not one of ours. The finally markers
+ * share that section, so the id is what tells the two apart; it is picked out of
+ * the same high-half tag space (mono/mini/llvm/mono_lsda_format.hpp).
+ */
+constexpr uint64_t vars_stackmap_id = 0xF19A13ULL << 32;
+
 enum MonoUnwindWireOp : uint8_t {
 	MONO_UNWIND_OP_UNSUPPORTED = 0,
 	MONO_UNWIND_OP_DEF_CFA = 1,        /* cfa = reg + value */

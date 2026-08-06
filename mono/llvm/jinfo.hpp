@@ -37,7 +37,8 @@ namespace mono {
 ///
 /// Where the runtime was started with debug info on, this also publishes the
 /// code's line table through mono_debug_add_method (), which is the only way a
-/// stack frame below the top one gets an IL offset.
+/// stack frame below the top one gets an IL offset, together with where each
+/// argument and local lives when the translator pinned them to the frame.
 ///
 /// Returns the registered record, which mono_jit_info_table_remove () takes to
 /// unregister it again.

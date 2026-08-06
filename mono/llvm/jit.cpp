@@ -11,6 +11,7 @@
 
 #include "../mini/llvm/il-line-table.hpp"
 #include "seq-point-marker.hpp"
+#include "sidetables.hpp"
 #include "passes/array-address.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
@@ -28,6 +29,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/Object/StackMapParser.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
@@ -174,19 +176,11 @@ is_mono_pass (StringRef pass)
  * lookup that reads the map back.
  */
 static void
-parse_il_line_table (MemoryBufferRef obj_buf,
+parse_il_line_table (object::ObjectFile &obj,
                      std::map<std::string, std::vector<IlLineRow>> &out,
                      std::map<std::string, std::vector<IlLineRow>> &seq_points)
 {
-	Expected<std::unique_ptr<object::ObjectFile>> obj =
-		object::ObjectFile::createObjectFile (obj_buf);
-
-	if (!obj) {
-		consumeError (obj.takeError ());
-		return;
-	}
-
-	std::unique_ptr<DWARFContext> dw = DWARFContext::create (**obj);
+	std::unique_ptr<DWARFContext> dw = DWARFContext::create (obj);
 	if (!dw)
 		return;
 
@@ -197,7 +191,7 @@ parse_il_line_table (MemoryBufferRef obj_buf,
 	};
 	std::vector<FuncRange> funcs;
 
-	for (const object::SymbolRef &sym : (*obj)->symbols ()) {
+	for (const object::SymbolRef &sym : obj.symbols ()) {
 		Expected<object::SymbolRef::Type> type = sym.getType ();
 		Expected<StringRef> name = sym.getName ();
 		Expected<uint64_t> value = sym.getValue ();
@@ -291,6 +285,68 @@ parse_il_line_table (MemoryBufferRef obj_buf,
 }
 
 /*
+ * Where the translator's debug-variable marker says this method's arguments and
+ * locals ended up, in the order it named them - arguments then locals.
+ *
+ * Read out of the object rather than off the linked graph because none of it
+ * needs relocating: a slot is a register number and a displacement, both settled
+ * at codegen. The section holds a record per stackmap in the module, so the
+ * marker is found by its id; a module has at most one, since only a method's own
+ * body carries it.
+ */
+static void
+parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out)
+{
+	for (const object::SectionRef &section : obj.sections ()) {
+		Expected<StringRef> name = section.getName ();
+
+		if (!name) {
+			consumeError (name.takeError ());
+			continue;
+		}
+		if (*name != ".llvm_stackmaps")
+			continue;
+
+		Expected<StringRef> contents = section.getContents ();
+
+		if (!contents) {
+			consumeError (contents.takeError ());
+			return;
+		}
+
+		ArrayRef<uint8_t> bytes ((const uint8_t *) contents->data (),
+		                         contents->size ());
+		StackMapParser<llvm::endianness::little> parser (bytes);
+
+		for (const auto &record : parser.records ()) {
+			if (record.getID () != vars_stackmap_id)
+				continue;
+
+			for (const auto &location : record.locations ()) {
+				/*
+				 * An alloca operand lowers to Direct - register plus
+				 * displacement is the slot's address. Anything else
+				 * means the operand was not the slot we named, and a
+				 * partial list would misattribute every variable after
+				 * it, so give up on the method's variables entirely.
+				 */
+				if (location.getKind ()
+				    != StackMapParser<llvm::endianness::little>::
+				               LocationKind::Direct) {
+					out.clear ();
+					return;
+				}
+
+				out.push_back ({ (int32_t) location.getDwarfRegNum (),
+				                 (int32_t) location.getOffset () });
+			}
+			return;
+		}
+		return;
+	}
+}
+
+/*
  * Reads, for every linked object, where the pieces the runtime needs landed:
  * each defined function's extent and the two mono side-table sections. Keyed by
  * the per-compile dylib, whose name is unique, so a method compiled twice never
@@ -317,6 +373,8 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> il_lines;
 		/// Each defined function's sequence point markers, by name.
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
+		/// Where the body's arguments and locals live in its frame.
+		std::vector<VarSlot> var_slots;
 	};
 
 	/*
@@ -332,14 +390,25 @@ public:
 	{
 		std::map<std::string, std::vector<IlLineRow>> lines;
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
+		std::vector<VarSlot> var_slots;
 
-		parse_il_line_table (input_object, lines, seq_points);
-		if (lines.empty () && seq_points.empty ())
+		Expected<std::unique_ptr<object::ObjectFile>> obj =
+			object::ObjectFile::createObjectFile (input_object);
+
+		if (!obj) {
+			consumeError (obj.takeError ());
+			return;
+		}
+
+		parse_il_line_table (**obj, lines, seq_points);
+		parse_debug_var_slots (**obj, var_slots);
+		if (lines.empty () && seq_points.empty () && var_slots.empty ())
 			return;
 
 		std::lock_guard<std::mutex> lock (mutex_);
 		il_lines_[mr.getTargetJITDylib ().getName ()] = std::move (lines);
 		seq_points_[mr.getTargetJITDylib ().getName ()] = std::move (seq_points);
+		var_slots_[mr.getTargetJITDylib ().getName ()] = std::move (var_slots);
 	}
 
 	void modifyPassConfig (MaterializationResponsibility &mr,
@@ -426,6 +495,11 @@ public:
 			extents.seq_points = std::move (points->second);
 			seq_points_.erase (points);
 		}
+		if (auto slots = var_slots_.find (std::string (dylib));
+		    slots != var_slots_.end ()) {
+			extents.var_slots = std::move (slots->second);
+			var_slots_.erase (slots);
+		}
 
 		return extents;
 	}
@@ -447,6 +521,7 @@ private:
 	std::map<std::string, Extents> captured_;
 	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> il_lines_;
 	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> seq_points_;
+	std::map<std::string, std::vector<VarSlot>> var_slots_;
 };
 
 static void
@@ -923,6 +998,8 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	if (auto points = extents->seq_points.find (entry.str ());
 	    points != extents->seq_points.end ())
 		compiled.seq_points = std::move (points->second);
+
+	compiled.var_slots = std::move (extents->var_slots);
 
 	if (compiled.code == nullptr)
 		return createStringError (inconvertibleErrorCode (),

@@ -22,6 +22,8 @@
 #include "mini-unwind.h"
 #include "mini-runtime.h"
 
+#include "mono/metadata/class-inlines.h"
+#include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-internals.h"
 #include "mono/metadata/domain-internals.h"
 #include "mono/metadata/mono-debug.h"
@@ -419,22 +421,49 @@ publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
 }
 
 /*
- * Publish METHOD's code extent and line table where the mono_debug_* API can
- * find them.
+ * Fill in VAR from SLOT, or say the slot is not one a stack walk can address.
  *
- * That API is how an address is turned into an IL offset for anything that is
- * not the frame a debugger stopped in: the soft debugger reads the sequence
- * point table for its top frame and this for every frame below it, so without
- * it a caller's line number is simply unknown.
+ * The translator pinned the variable to a frame slot for exactly this, so there
+ * is one home for the whole method and REGOFFSET can say where it is. Which
+ * register the slot is addressed off is LLVM's choice, and a caller-saved one
+ * would be long gone by the time a walk reached this frame.
+ */
+static bool
+fill_var_info (MonoDebugVarInfo &var, const VarSlot &slot, MonoType *type)
+{
+	if (!mono_dwarf_reg_is_valid (slot.dwarf_reg))
+		return false;
+
+	int hw_reg = mono_dwarf_reg_to_hw_reg (slot.dwarf_reg);
+
+	if (!arch::reg_is_recoverable (hw_reg))
+		return false;
+
+	memset (&var, 0, sizeof (var));
+	var.index = (uint32_t) hw_reg | MONO_DEBUG_VAR_ADDRESS_MODE_REGOFFSET;
+	var.offset = (uint32_t) slot.offset;
+	var.type = type;
+	return true;
+}
+
+/*
+ * Publish METHOD's code extent, line table and variable homes where the
+ * mono_debug_* API can find them.
  *
- * has_var_info stays off. Where a local or an argument lives is the register
- * allocator's decision and nothing hands that decision back to us, so there is
- * nothing honest to put in a MonoDebugVarInfo; the debugger answers
- * ERR_ABSENT_INFORMATION for a frame without one, which is the truth.
+ * The line table is how an address is turned into an IL offset for anything that
+ * is not the frame a debugger stopped in: the soft debugger reads the sequence
+ * point table for its top frame and this for every frame below it, so without it
+ * a caller's line number is simply unknown.
+ *
+ * The variable half is only filled in when the translator pinned this method's
+ * arguments and locals to frame slots, which it does when a debugger is
+ * attached. Without that there is one home per variable to report and no such
+ * home to report, so has_var_info stays off and the debugger answers
+ * ERR_ABSENT_INFORMATION - which is the truth.
  */
 static void
 publish_debug_info (MonoDomain *domain, MonoMethod *method,
-                    const CompiledMethod &compiled)
+                    MonoMethodHeader *header, const CompiledMethod &compiled)
 {
 	if (!mono_debug_enabled () || compiled.il_lines.empty ())
 		return;
@@ -452,6 +481,49 @@ publish_debug_info (MonoDomain *domain, MonoMethod *method,
 	jit.code_size = (uint32_t) compiled.code_size;
 	jit.num_line_numbers = (uint32_t) lines.size ();
 	jit.line_numbers = lines.data ();
+
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+	unsigned num_params = sig->param_count;
+	unsigned num_locals = header->num_locals;
+	unsigned nargs = num_params + (sig->hasthis ? 1u : 0u);
+	MonoDebugVarInfo this_var = {};
+	std::vector<MonoDebugVarInfo> params (num_params);
+	std::vector<MonoDebugVarInfo> locals (num_locals);
+
+	/*
+	 * The marker named every argument and then every local, so a list of any
+	 * other length is not describing this method and nothing in it can be
+	 * trusted position by position.
+	 */
+	if (compiled.var_slots.size () == nargs + num_locals) {
+		unsigned first_param = nargs - num_params;
+		bool complete = true;
+
+		if (sig->hasthis)
+			complete = fill_var_info (
+				this_var, compiled.var_slots[0],
+				m_class_is_valuetype (method->klass)
+					? m_class_get_this_arg (method->klass)
+					: m_class_get_byval_arg (method->klass));
+
+		for (unsigned i = 0; complete && i < num_params; ++i)
+			complete = fill_var_info (params[i],
+			                          compiled.var_slots[first_param + i],
+			                          sig->params[i]);
+		for (unsigned i = 0; complete && i < num_locals; ++i)
+			complete = fill_var_info (locals[i], compiled.var_slots[nargs + i],
+			                          header->locals[i]);
+
+		if (complete) {
+			jit.has_var_info = 1;
+			jit.num_params = num_params;
+			jit.params = params.data ();
+			jit.num_locals = num_locals;
+			jit.locals = locals.data ();
+			if (sig->hasthis)
+				jit.this_var = &this_var;
+		}
+	}
 
 	mono_debug_add_method (method, &jit, domain);
 }
@@ -613,7 +685,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	 * put there anyway.
 	 */
 	if (header != nullptr)
-		publish_debug_info (domain, method, compiled);
+		publish_debug_info (domain, method, header, compiled);
 
 	mono_jit_info_table_add (domain, jinfo);
 	return jinfo;

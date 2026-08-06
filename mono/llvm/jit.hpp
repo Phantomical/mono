@@ -59,6 +59,13 @@ struct IlLineRow {
 	uint32_t il_offset;
 };
 
+/// One frame slot, as the address of a register plus a displacement - the shape
+/// a MonoDebugVarInfo names a variable's home in.
+struct VarSlot {
+	int32_t dwarf_reg;
+	int32_t offset;
+};
+
 /// Where a compiled method's pieces landed: the code itself, and the side
 /// tables the compiler wrote next to it for the runtime to read back.
 struct CompiledMethod {
@@ -92,6 +99,11 @@ struct CompiledMethod {
 	/// encoding seq-point-marker.hpp describes. Empty unless the method was
 	/// translated with sequence points in it.
 	std::vector<IlLineRow> seq_points;
+
+	/// The entry function's argument and local slots, arguments first, in the
+	/// order the signature and the method header give them. Empty unless the
+	/// method was translated with its variables pinned to the frame.
+	std::vector<VarSlot> var_slots;
 
 	/// The dylib this compile's object was linked into - what remove_dylibs ()
 	/// takes to release all of the above again.
