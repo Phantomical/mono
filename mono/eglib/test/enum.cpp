@@ -1,7 +1,14 @@
-#include "config.h"
-#include "glib.h"
+/*
+ * G_ENUM_FUNCTIONS gives a C++ enum the bitwise operators C gives it for free.
+ * eglib's headers are included from the runtime's C++ translation units, so
+ * this has to keep compiling and keep meaning what the C spelling means.
+ */
+#include <glib.h>
+#include <gtest/gtest.h>
 
-typedef enum {
+namespace {
+
+enum Color {
 	Black = 0,
 	Red = 1,
 	Blue = 2,
@@ -9,12 +16,13 @@ typedef enum {
 	Green = 4,
 	Yellow = Red | Green, // 5
 	White = 7,
-} Color;
+};
 
 G_ENUM_FUNCTIONS (Color)
 
-static void
-test_enum1 (void)
+}
+
+TEST (enums, bitwise_operators)
 {
 	const Color green = Green;
 	const Color blue = Blue;
@@ -22,46 +30,30 @@ test_enum1 (void)
 	const Color white = White;
 	const Color purple = Purple;
 
-	g_assert ((red & blue) == Black);
-	g_assert ((red | blue | green) == White);
-	g_assert ((red | blue) == Purple);
-	g_assert ((white ^ purple) == green);
+	ASSERT_EQ (Black, red & blue);
+	ASSERT_EQ (White, red | blue | green);
+	ASSERT_EQ (Purple, red | blue);
+	ASSERT_EQ (green, white ^ purple);
 
 	Color c = Black;
 	Color c2 = Black;
 	c |= red;
-	g_assert (c == Red);
+	ASSERT_EQ (Red, c);
 	c ^= red;
-	g_assert (c == Black);
+	ASSERT_EQ (Black, c);
 
 	c |= (c2 |= Red) | Blue;
-	g_assert (c == Purple);
-	g_assert (c2 == Red);
+	ASSERT_EQ (Purple, c);
+	ASSERT_EQ (Red, c2);
 
 	c = c2 = Black;
 	c |= (c2 |= Red) |= Blue;
-	g_assert (c == Purple);
-	g_assert (c2 == Purple);
+	ASSERT_EQ (Purple, c);
+	ASSERT_EQ (Purple, c2);
 
 	c = red;
 	c &= red;
-	g_assert (c == Red);
+	ASSERT_EQ (Red, c);
 	c &= blue;
-	g_assert (c == Black);
-}
-
-#include "test.h"
-
-static RESULT
-test_enum (void)
-{
-	test_enum1 ();
-	return OK;
-}
-
-const static Test enum_tests [2] = {{"test_enum", test_enum}};
-
-extern "C"
-{
-DEFINE_TEST_GROUP_INIT (enum_tests_init, enum_tests)
+	ASSERT_EQ (Black, c);
 }
