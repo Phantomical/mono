@@ -517,7 +517,6 @@ gpointer mono_create_jit_trampoline (MonoDomain *domain, MonoMethod *method, Mon
 gpointer          mono_create_jit_trampoline_from_token (MonoImage *image, guint32 token);
 gpointer          mono_create_delegate_trampoline (MonoDomain *domain, MonoClass *klass);
 MonoDelegateTrampInfo* mono_create_delegate_trampoline_info (MonoDomain *domain, MonoClass *klass, MonoMethod *method);
-gpointer          mono_create_delegate_virtual_trampoline (MonoDomain *domain, MonoClass *klass, MonoMethod *method);
 gpointer          mono_create_rgctx_lazy_fetch_trampoline (guint32 offset);
 gpointer          mono_create_ftnptr_arg_trampoline (gpointer arg, gpointer addr);
 guint32           mono_find_rgctx_lazy_fetch_trampoline_by_addr (gconstpointer addr);
@@ -561,10 +560,6 @@ void              mono_aot_tramp_info_register (MonoTrampInfo *info, MonoDomain 
 void              mono_tramp_info_register (MonoTrampInfo *info, MonoDomain *domain);
 MonoJitInfo*      mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gpointer code, guint32 code_size, const char *name);
 
-/* Delegates */
-char*             mono_get_delegate_virtual_invoke_impl_name (gboolean load_imt_reg, int offset);
-gpointer          mono_get_delegate_virtual_invoke_impl  (MonoMethodSignature *sig, MonoMethod *method);
-
 /* methods that must be provided by the arch-specific port */
 void      mono_arch_init                        (void);
 void      mono_arch_finish_init                 (void);
@@ -587,7 +582,6 @@ void      mono_arch_dyn_call_free               (MonoDynCallInfo *info);
 int       mono_arch_dyn_call_get_buf_size       (MonoDynCallInfo *info);
 void      mono_arch_start_dyn_call              (MonoDynCallInfo *info, gpointer **args, guint8 *ret, guint8 *buf);
 void      mono_arch_finish_dyn_call             (MonoDynCallInfo *info, guint8 *buf);
-GSList*   mono_arch_get_delegate_invoke_impls   (void);
 guint8*   mono_arch_emit_load_aotconst          (guint8 *start, guint8 *code, MonoJumpInfo **ji, MonoJumpInfoType tramp_type, gconstpointer target);
 GSList*   mono_arch_get_cie_program             (void);
 gboolean  mono_arch_gsharedvt_sig_supported     (MonoMethodSignature *sig);
@@ -658,7 +652,6 @@ void     mono_arch_patch_jump_trampoline        (guint8* jump_tramp, guint8* add
 int      mono_arch_get_this_arg_reg             (guint8 *code);
 gpointer mono_arch_get_this_arg_from_call       (host_mgreg_t *regs, guint8 *code);
 gpointer mono_arch_get_delegate_invoke_impl     (MonoMethodSignature *sig, gboolean has_target);
-gpointer mono_arch_get_delegate_virtual_invoke_impl (MonoMethodSignature *sig, MonoMethod *method, int offset, gboolean load_imt_reg);
 gpointer mono_arch_create_specific_trampoline   (gpointer arg1, MonoTrampolineType tramp_type, MonoMemoryManager *mem_manager, guint32 *code_len);
 MonoMethod* mono_arch_find_imt_method           (host_mgreg_t *regs, guint8 *code);
 MonoVTable* mono_arch_find_static_call_vtable   (host_mgreg_t *regs, guint8 *code);

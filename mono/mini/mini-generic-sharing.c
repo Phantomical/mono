@@ -2540,10 +2540,8 @@ instantiate_info (MonoDomain *domain, MonoRuntimeGenericContextInfoTemplate *oti
 		MonoDelegateClassMethodPair *dele_info = (MonoDelegateClassMethodPair*)data;
 		gpointer trampoline;
 
-		if (dele_info->is_virtual)
-			trampoline = mono_create_delegate_virtual_trampoline (domain, dele_info->klass, dele_info->method);
-		else
-			trampoline = mono_create_delegate_trampoline_info (domain, dele_info->klass, dele_info->method);
+		g_assert (!dele_info->is_virtual);
+		trampoline = mono_create_delegate_trampoline_info (domain, dele_info->klass, dele_info->method);
 
 		g_assert (trampoline);
 		return trampoline;
