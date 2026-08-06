@@ -47,9 +47,8 @@ namespace mono {
 /// mutable data at the top.
 ///
 /// A related hazard worth knowing about, though nothing reaches it today:
-/// mini's MONO_PATCH_INFO_METHOD_JUMP patching (mini_patch_jump_sites) asserts
-/// rather than thunks when a jump does not reach, and jump sites are only
-/// registered from mono_codegen, which the mainline JIT no longer enters.
+/// MONO_PATCH_INFO_METHOD_JUMP patching (mini_patch_jump_sites) asserts rather
+/// than thunks when a jump does not reach, and no jump site is ever registered.
 class CodeSlabs {
 public:
 	/// A range handed out by one of the allocate calls. SLAB indexes the

@@ -535,10 +535,6 @@ common_call_trampoline (host_mgreg_t *regs, guint8 *code, MonoMethod *m, MonoVTa
 		mini_patch_jump_sites (domain, m, mono_get_addr_from_ftnptr (addr));
 
 		/* Patch the got entries pointing to this method */
-		/* 
-		 * We do this here instead of in mono_codegen () to cover the case when m
-		 * was loaded from an aot image.
-		 */
 		if (domain_jit_info (domain)->jump_target_got_slot_hash) {
 			GSList *list, *tmp;
 			MonoMethod *shared_method = mini_method_to_shared (m);

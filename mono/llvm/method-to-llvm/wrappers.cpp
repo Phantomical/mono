@@ -125,8 +125,8 @@ MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
  * The operand is a MonoJitICallId rather than a token: the runtime knows the
  * signature and the address, and nothing about either is in any metadata.
  *
- * Through the wrapper rather than straight to the C function, as mini does
- * (mono_emit_jit_icall_id): an entry point that fails leaves a pending
+ * Through the wrapper rather than straight to the C function: an entry point
+ * that fails leaves a pending
  * exception behind and returns normally, and the wrapper's checkpoint is what
  * turns that into a throw at the call site. Calling the raw address instead
  * leaves the exception pending until some unrelated later checkpoint - by

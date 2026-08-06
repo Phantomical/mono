@@ -77,8 +77,6 @@ struct sigcontext {
 
 #ifndef DISABLE_SIMD
 #define MONO_ARCH_SIMD_INTRINSICS 1
-#define MONO_ARCH_NEED_SIMD_BANK 1
-#define MONO_ARCH_USE_SHARED_FP_SIMD_BANK 1
 #endif
 
 
@@ -94,45 +92,7 @@ struct sigcontext {
 
 #define MONO_MAX_FREGS AMD64_XMM_NREG
 
-#define MONO_ARCH_FP_RETURN_REG AMD64_XMM0
-
-#ifdef TARGET_WIN32
-/* xmm5 is used as a scratch register */
-#define MONO_ARCH_CALLEE_FREGS 0x1f
-/* xmm6:xmm15 */
-#define MONO_ARCH_CALLEE_SAVED_FREGS (0xffff - 0x3f)
-#define MONO_ARCH_FP_SCRATCH_REG AMD64_XMM5
-#else
-/* xmm15 is used as a scratch register */
-#define MONO_ARCH_CALLEE_FREGS 0x7fff
-#define MONO_ARCH_CALLEE_SAVED_FREGS 0
-#define MONO_ARCH_FP_SCRATCH_REG AMD64_XMM15
-#endif
-
-#define MONO_MAX_XREGS MONO_MAX_FREGS
-
-#define MONO_ARCH_CALLEE_XREGS MONO_ARCH_CALLEE_FREGS
-#define MONO_ARCH_CALLEE_SAVED_XREGS MONO_ARCH_CALLEE_SAVED_FREGS
-
-
-#define MONO_ARCH_CALLEE_REGS AMD64_CALLEE_REGS
-#define MONO_ARCH_CALLEE_SAVED_REGS AMD64_CALLEE_SAVED_REGS
-
-#define MONO_ARCH_USE_FPSTACK FALSE
-
-#define MONO_ARCH_INST_FIXED_REG(desc) ((desc == '\0') ? -1 : ((desc == 'i' ? -1 : ((desc == 'a') ? AMD64_RAX : ((desc == 's') ? AMD64_RCX : ((desc == 'd') ? AMD64_RDX : ((desc == 'A') ? MONO_AMD64_ARG_REG1 : -1)))))))
-
-/* RDX is clobbered by the opcode implementation before accessing sreg2 */
-#define MONO_ARCH_INST_SREG2_MASK(ins) (((ins [MONO_INST_CLOB] == 'a') || (ins [MONO_INST_CLOB] == 'd')) ? (1 << AMD64_RDX) : 0)
-
-#define MONO_ARCH_INST_IS_REGPAIR(desc) FALSE
-#define MONO_ARCH_INST_REGPAIR_REG2(desc,hreg1) (-1)
-
 #define MONO_ARCH_FRAME_ALIGNMENT 16
-
-/* fixme: align to 16byte instead of 32byte (we align to 32byte to get 
- * reproduceable results for benchmarks */
-#define MONO_ARCH_CODE_ALIGNMENT 32
 
 struct MonoLMF {
 	/* 
@@ -153,26 +113,6 @@ typedef struct {
 	MonoContext *ctx;
 	gpointer lmf_addr;
 } MonoLMFTramp;
-
-typedef struct MonoCompileArch {
-	gint32 localloc_offset;
-	gint32 reg_save_area_offset;
-	gint32 stack_alloc_size;
-	gint32 sp_fp_offset;
-	guint32 saved_iregs;
-	gboolean omit_fp;
-	gboolean omit_fp_computed;
-	CallInfo *cinfo;
-	gint32 async_point_count;
-	MonoInst *vret_addr_loc;
-	MonoInst *seq_point_info_var;
-	MonoInst *ss_tramp_var;
-	MonoInst *bp_tramp_var;
-	MonoInst *lmf_var;
-#ifdef HOST_WIN32
-	struct _UNWIND_INFO* unwindinfo;
-#endif
-} MonoCompileArch;
 
 #ifdef TARGET_WIN32
 
@@ -370,7 +310,6 @@ typedef struct {
 #define MONO_ARCH_EMULATE_FREM 1
 #define MONO_ARCH_HAVE_IS_INT_OVERFLOW 1
 #define MONO_ARCH_HAVE_INVALIDATE_METHOD 1
-#define MONO_ARCH_HAVE_FULL_AOT_TRAMPOLINES 1
 #define MONO_ARCH_IMT_REG AMD64_R10
 #define MONO_ARCH_IMT_SCRATCH_REG AMD64_R11
 #define MONO_ARCH_VTABLE_REG MONO_AMD64_ARG_REG1
@@ -380,10 +319,6 @@ typedef struct {
  * clobbered across method call boundaries.
  */
 #define MONO_ARCH_RGCTX_REG MONO_ARCH_IMT_REG
-#define MONO_ARCH_HAVE_CMOV_OPS 1
-#define MONO_ARCH_HAVE_EXCEPTIONS_INIT 1
-#define MONO_ARCH_HAVE_GENERALIZED_IMT_TRAMPOLINE 1
-#define MONO_ARCH_HAVE_GET_TRAMPOLINES 1
 
 #define MONO_ARCH_INTERPRETER_SUPPORTED 1
 #define MONO_ARCH_AOT_SUPPORTED 1
@@ -393,7 +328,6 @@ typedef struct {
 
 #define MONO_ARCH_GSHARED_SUPPORTED 1
 #define MONO_ARCH_DYN_CALL_SUPPORTED 1
-#define MONO_ARCH_DYN_CALL_PARAM_AREA 0
 
 #define MONO_ARCH_LLVM_SUPPORTED 1
 #if defined(HOST_WIN32) && defined(TARGET_WIN32) && !defined(_MSC_VER)
@@ -402,21 +336,12 @@ typedef struct {
 #undef MONO_ARCH_LLVM_SUPPORTED
 #endif
 
-#define MONO_ARCH_HAVE_CARD_TABLE_WBARRIER 1
 #define MONO_ARCH_HAVE_SETUP_RESUME_FROM_SIGNAL_HANDLER_CTX 1
-#define MONO_ARCH_GC_MAPS_SUPPORTED 1
 #define MONO_ARCH_HAVE_CONTEXT_SET_INT_REG 1
 #define MONO_ARCH_HAVE_SETUP_ASYNC_CALLBACK 1
-#define MONO_ARCH_HAVE_CREATE_LLVM_NATIVE_THUNK 1
-#define MONO_ARCH_HAVE_OP_TAILCALL_MEMBASE 1
-#define MONO_ARCH_HAVE_OP_TAILCALL_REG 1
 #define MONO_ARCH_HAVE_SDB_TRAMPOLINES 1
 #define MONO_ARCH_HAVE_PATCH_CODE_NEW 1
-#define MONO_ARCH_HAVE_OP_GENERIC_CLASS_INIT 1
-#define MONO_ARCH_HAVE_GENERAL_RGCTX_LAZY_FETCH_TRAMPOLINE 1
 #define MONO_ARCH_HAVE_PATCH_JUMP_TRAMPOLINE 1
-#define MONO_ARCH_FLOAT32_SUPPORTED 1
-#define MONO_ARCH_LLVM_TARGET_LAYOUT "e-i64:64-i128:128-n8:16:32:64-S128"
 
 #define MONO_ARCH_HAVE_INTERP_PINVOKE_TRAMP
 #define MONO_ARCH_HAVE_INTERP_ENTRY_TRAMPOLINE 1
@@ -434,10 +359,6 @@ typedef struct {
  * can't use signals to translate SIGFPE into a .NET-level exception. */
 #define MONO_ARCH_NEED_DIV_CHECK 1
 #endif
-
-// Does the ABI have a volatile non-parameter register, so tailcall
-// can pass context to generics or interfaces?
-#define MONO_ARCH_HAVE_VOLATILE_NON_PARAM_REGISTER 1
 
 #ifdef MONO_XEN_OPT
 extern gboolean mono_amd64_optimize_for_xen;
