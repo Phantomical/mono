@@ -7,6 +7,7 @@
 #define MONO_LLVM_JINFO_HPP
 
 #include "jit.hpp"
+#include "method-to-llvm.hpp"
 
 #include <llvm/Support/Error.h>
 
@@ -28,11 +29,11 @@ namespace mono {
 /// naming its own code range and leaving the tables it has no records in null.
 /// FILTERS maps an IL clause index to the entry of its compiled filter body,
 /// which the published clause hands the runtime's search pass. BP_SWITCH is
-/// the body's soft-debugger breakpoint switch, when it was translated with
-/// sequence points in it. DOMAIN is the domain whose linker holds the code: the
-/// record lives and dies with it, so it is never the thread's current domain,
-/// which mid-unload managed code - AppDomain:InvokeInDomain most visibly - runs
-/// with set elsewhere.
+/// the body's soft-debugger breakpoint switch and SEQ_POINTS its sequence-point
+/// graph, both present when it was translated with sequence points in it.
+/// DOMAIN is the domain whose linker holds the code: the record lives and dies
+/// with it, so it is never the thread's current domain, which mid-unload managed
+/// code - AppDomain:InvokeInDomain most visibly - runs with set elsewhere.
 ///
 /// Returns the registered record, which mono_jit_info_table_remove () takes to
 /// unregister it again.
@@ -40,7 +41,8 @@ llvm::Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
                    const std::vector<std::pair<uint32_t, void *>> &filters = {},
-                   MonoLLVMBreakpointSwitch *bp_switch = nullptr);
+                   MonoLLVMBreakpointSwitch *bp_switch = nullptr,
+                   const SeqPointGraph &seq_points = {});
 
 } // namespace mono
 

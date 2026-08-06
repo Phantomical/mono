@@ -2959,6 +2959,17 @@ mono_jit_search_all_backends_for_jit_info (MonoDomain *domain, MonoMethod *metho
 
 	code = mono_jit_find_compiled_method_with_jit_info (domain, method, &ji);
 	if (!code) {
+		/*
+		 * Might be JITted. The LLVM backend compiles a method reached as a
+		 * callee without the runtime ever asking for it, so nothing put the
+		 * body in this domain's jit_code_hash and the lookup above cannot see
+		 * it - the backend's own map is the only place it is recorded.
+		 */
+		code = mono_llvm_jit_find_body (domain, method);
+		if (code)
+			ji = mono_jit_info_table_find (domain, code);
+	}
+	if (!code) {
 		ERROR_DECL (oerror);
 
 		/* Might be AOTed code */

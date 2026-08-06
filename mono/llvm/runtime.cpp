@@ -359,6 +359,10 @@ public:
 	/// by whatever method lands there next.
 	static void free_method (MonoMethod *method);
 
+	/// Where METHOD's body starts in DOMAIN, or null when this backend has not
+	/// compiled it there.
+	static void *body_of (MonoDomain *domain, MonoMethod *method);
+
 private:
 	/// Where one method's code ended up: the legacy entry the runtime hands
 	/// out, and the fastcc body generated callers reach.
@@ -552,6 +556,25 @@ Backend::free_domain (MonoDomain *domain)
 		live_backend->domains_.erase (it);
 	}
 	/* The linker goes down with the state, releasing the domain's code. */
+}
+
+void *
+Backend::body_of (MonoDomain *domain, MonoMethod *method)
+{
+	if (live_backend == nullptr)
+		return nullptr;
+
+	std::lock_guard<std::mutex> lock (live_backend->mutex_);
+	auto state = live_backend->domains_.find (domain);
+
+	if (state == live_backend->domains_.end ())
+		return nullptr;
+
+	auto compiled = state->second->compiled.find (method);
+
+	if (compiled == state->second->compiled.end ())
+		return nullptr;
+	return compiled->second.body;
 }
 
 void
@@ -852,8 +875,10 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 
 	std::vector<ExternalSymbol> externals;
 	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
+	SeqPointGraph seq_points;
 	Expected<Function *> function =
-		method_to_llvm (module.get (), cfg.get (), method, &externals, &bp_switch);
+		method_to_llvm (module.get (), cfg.get (), method, &externals, &bp_switch,
+		                &seq_points);
 	if (!function)
 		return recover (state, method, function.takeError ());
 
@@ -941,7 +966,8 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		                          "entry", entry.c_str ());
 
 	Expected<MonoJitInfo *> jinfo = register_jit_info (
-		state.domain, method, cfg.get ()->header, *compiled, filters, bp_switch);
+		state.domain, method, cfg.get ()->header, *compiled, filters, bp_switch,
+		seq_points);
 
 	if (!jinfo)
 		return jinfo.takeError ();
@@ -1582,6 +1608,12 @@ void
 mono_llvm_jit_free_method (MonoMethod *method)
 {
 	mono::Backend::free_method (method);
+}
+
+void *
+mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method)
+{
+	return mono::Backend::body_of (domain, method);
 }
 
 void *

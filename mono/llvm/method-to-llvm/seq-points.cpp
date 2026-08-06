@@ -41,10 +41,16 @@
 
 #include "mono/metadata/domain-internals.h"
 
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+
+#include <algorithm>
 
 namespace mono {
 
@@ -76,6 +82,9 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 	if (bp_switch == nullptr)
 		bp_switch = (MonoLLVMBreakpointSwitch *) mono_domain_alloc0 (
 			cfg->domain, sizeof (MonoLLVMBreakpointSwitch));
+
+	if (encoded_il < SEQ_POINT_ENCODED_ENTRY)
+		seq_point_offsets.push_back (encoded_il);
 
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	llvm::Type *i64 = builder.getInt64Ty ();
@@ -143,6 +152,134 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 
 	builder.CreateBr (cont);
 	builder.SetInsertPoint (cont);
+}
+
+/*
+ * Work out which sequence points can execute next after each of this body's.
+ *
+ * This is what the debugger single-steps with: a step places a breakpoint at
+ * every successor of the point the thread is stopped at, and if a body offers
+ * none the stepper falls back to trapping every method entry in the process and
+ * stops wherever that first lands. The graph is over the CIL rather than over
+ * the code that came out, because an IL offset is how the debugger names a
+ * place - and mono_seq_point_init_next () reads the entries back as indices
+ * into the published table, which jinfo.cpp turns these offsets into.
+ *
+ * Edges are the ones the IL itself draws, plus the two an exception clause adds:
+ * a `leave` reaches the finallys it unwinds through on its way to its target,
+ * and their endfinallys reach that target back again.
+ */
+void
+MethodLLVMEmitter::build_seq_point_graph ()
+{
+	if (seq_point_offsets.empty ())
+		return;
+
+	llvm::DenseSet<uint32_t> points (seq_point_offsets.begin (),
+	                                 seq_point_offsets.end ());
+	llvm::DenseMap<uint32_t, llvm::SmallVector<uint32_t, 2>> edges;
+
+	auto add = [&] (size_t from, size_t to) {
+		if (to >= code_size)
+			return;
+
+		llvm::SmallVectorImpl<uint32_t> &out = edges[(uint32_t) from];
+
+		if (!llvm::is_contained (out, (uint32_t) to))
+			out.push_back ((uint32_t) to);
+	};
+
+	/*
+	 * Which target an endfinally carries on to depends on which leave entered
+	 * the handler, so the leaves are what say where its handler's endfinallys
+	 * can go.
+	 */
+	std::vector<std::vector<uint32_t>> leave_targets (num_clauses);
+	std::vector<uint32_t> endfinallys;
+
+	for (size_t at = 0; at < code_size;) {
+		llvm::Expected<Flow> flow = decode_flow (at);
+
+		if (!flow) {
+			/* The body translated, so nothing here fails to decode. */
+			llvm::consumeError (flow.takeError ());
+			return;
+		}
+
+		for (size_t target : flow->targets)
+			add (at, target);
+		if (flow->falls_through ())
+			add (at, flow->next);
+
+		if ((flow->opcode == MONO_CEE_LEAVE || flow->opcode == MONO_CEE_LEAVE_S)
+		    && !flow->targets.empty ()) {
+			size_t target = flow->targets[0];
+
+			for (uint32_t i = 0; i < num_clauses; ++i) {
+				MonoExceptionClause *clause = &clauses[i];
+
+				if (clause->flags != MONO_EXCEPTION_CLAUSE_FINALLY)
+					continue;
+				if (!MONO_OFFSET_IN_CLAUSE (clause, at)
+				    || MONO_OFFSET_IN_CLAUSE (clause, target))
+					continue;
+
+				add (at, clause->handler_offset);
+				leave_targets[i].push_back ((uint32_t) target);
+			}
+		} else if (flow->opcode == MONO_CEE_ENDFINALLY) {
+			endfinallys.push_back ((uint32_t) at);
+		}
+
+		at = flow->next;
+	}
+
+	for (uint32_t at : endfinallys) {
+		int clause = innermost_handler (at);
+
+		if (clause < 0)
+			continue;
+		for (uint32_t target : leave_targets[clause])
+			add (at, target);
+	}
+
+	auto successors = [&] (uint32_t at) -> llvm::ArrayRef<uint32_t> {
+		auto found = edges.find (at);
+
+		if (found == edges.end ())
+			return {};
+		return found->second;
+	};
+
+	for (uint32_t from : seq_point_offsets) {
+		auto [entry, fresh] = seq_point_graph.try_emplace (from);
+
+		if (!fresh)
+			continue;
+
+		llvm::DenseSet<uint32_t> seen;
+		llvm::SmallVector<uint32_t, 8> work;
+		auto push = [&] (uint32_t at) {
+			if (seen.insert (at).second)
+				work.push_back (at);
+		};
+
+		for (uint32_t next : successors (from))
+			push (next);
+
+		while (!work.empty ()) {
+			uint32_t at = work.pop_back_val ();
+
+			if (points.contains (at))
+				entry->second.push_back (at);
+			else
+				for (uint32_t next : successors (at))
+					push (next);
+		}
+
+		/* The order a worklist happens to visit in is nobody's business. */
+		std::sort (entry->second.begin (), entry->second.end ());
+	}
 }
 
 } // namespace mono

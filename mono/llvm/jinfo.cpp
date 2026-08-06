@@ -34,6 +34,7 @@ extern "C" {
 #include <llvm/Support/Error.h>
 
 #include <cstring>
+#include <map>
 #include <vector>
 
 using namespace llvm;
@@ -330,17 +331,34 @@ transcode_unwind (const std::vector<WireRecord> &records)
  * per body, so a second body for the same method leaves the first one's
  * registration alone and publishes it, rather than pointing the new jit info at
  * a table that is about to be freed.
+ *
+ * GRAPH says which sequence points can follow which, as IL offsets; what goes
+ * into the table are indices into the table itself, so it is joined against the
+ * rows on the way past.
  */
 static void
 publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
-                    const std::vector<IlLineRow> &rows)
+                    const std::vector<IlLineRow> &rows,
+                    const SeqPointGraph &graph)
 {
+	/*
+	 * With debug data every row is published, so a row's position here is the
+	 * index mono_seq_point_init_next () will resolve a successor by. The two
+	 * markers are left out: they are not IL offsets and nothing names them.
+	 */
+	std::map<uint32_t, unsigned> index_of;
+
+	for (size_t i = 0; i < rows.size (); ++i)
+		if (rows[i].il_offset < SEQ_POINT_ENCODED_ENTRY)
+			index_of.emplace (rows[i].il_offset, (unsigned) i);
+
 	GByteArray *array = g_byte_array_new ();
 	SeqPoint last = { 0, 0, 0, 0, 0 };
 	int len = 0;
 
 	for (const IlLineRow &row : rows) {
 		SeqPoint sp;
+		GSList *next = NULL;
 
 		memset (&sp, 0, sizeof (sp));
 		sp.native_offset = (int) row.native_offset;
@@ -352,11 +370,23 @@ publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
 		else
 			sp.il_offset = (int) row.il_offset;
 
-		if (!mono_seq_point_info_add_seq_point (array, &sp, &last, NULL, TRUE))
-			continue;
+		auto successors = graph.find (row.il_offset);
 
-		last = sp;
-		len ++;
+		if (successors != graph.end ())
+			for (uint32_t offset : successors->second) {
+				auto index = index_of.find (offset);
+
+				if (index != index_of.end ())
+					next = g_slist_prepend (
+						next, GUINT_TO_POINTER (index->second));
+			}
+
+		if (mono_seq_point_info_add_seq_point (array, &sp, &last, next, TRUE)) {
+			last = sp;
+			len ++;
+		}
+
+		g_slist_free (next);
 	}
 
 	int size = 0;
@@ -390,7 +420,8 @@ Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
                    const std::vector<std::pair<uint32_t, void *>> &filters,
-                   MonoLLVMBreakpointSwitch *bp_switch)
+                   MonoLLVMBreakpointSwitch *bp_switch,
+                   const SeqPointGraph &seq_points)
 {
 	guint8 *code = (guint8 *) compiled.code;
 	guint32 code_size = (guint32) compiled.code_size;
@@ -533,7 +564,8 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	 */
 	jinfo->llvm_bp_switch = bp_switch;
 	if (!compiled.seq_points.empty ())
-		publish_seq_points (domain, method, jinfo, compiled.seq_points);
+		publish_seq_points (domain, method, jinfo, compiled.seq_points,
+		                    seq_points);
 
 	mono_jit_info_table_add (domain, jinfo);
 	return jinfo;

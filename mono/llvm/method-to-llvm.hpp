@@ -29,10 +29,18 @@
 #include <llvm/Support/Error.h>
 #include <llvm/IR/Module.h>
 
+#include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mono {
+
+/// For each sequence point a body emitted, the sequence points control can
+/// reach from it without passing another one - all as IL offsets. The soft
+/// debugger single-steps by breakpointing a point's successors, so this is the
+/// graph it steps over.
+using SeqPointGraph = std::map<uint32_t, std::vector<uint32_t>>;
 
 /// The instructions that take two operands from one of the tables in ECMA-335 III.1.5,
 /// grouped by the table that says what each one accepts: Table III.2 binary numeric,
@@ -302,6 +310,15 @@ private:
 	/// it.
 	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
 
+	/// The IL offsets this body emitted a sequence point at, in code order.
+	/// The two synthetic ones - method entry and exit - are left out: they are
+	/// not places the IL can branch to or from, and the debugger's stepper
+	/// leaves them out of its graph for the same reason.
+	std::vector<uint32_t> seq_point_offsets;
+
+	/// seq_point_offsets as a graph, built once the body has been translated.
+	SeqPointGraph seq_point_graph;
+
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
@@ -366,6 +383,10 @@ public:
 	/// The breakpoint switch this body's sequence points call through, or null
 	/// when it was translated without any.
 	MonoLLVMBreakpointSwitch *breakpoint_switch () const { return bp_switch; }
+
+	/// Which sequence points can execute next after each of this body's, empty
+	/// when it was translated without any.
+	const SeqPointGraph &sequence_points () const { return seq_point_graph; }
 
 private:
 	typedef llvm::IRBuilder<> MonoIrBuilder;
@@ -478,6 +499,7 @@ private:
 	void emit_profiler_frame_handover (MonoIrBuilder &builder, MonoMethod *target);
 
 	void emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il);
+	void build_seq_point_graph ();
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
 	llvm::Error emit_prefix (int opcode, uint64_t operand);
@@ -875,12 +897,15 @@ arch::LegacyFlavor legacy_entry_flavor (MonoMethod *method, MonoMethodSignature 
 /// EXTERNALS, when given, collects the symbols the emitted module leaves for the
 /// engine to resolve. BP_SWITCH, when given, receives the body's soft-debugger
 /// breakpoint switch, which is null unless sequence points were emitted.
+/// SEQ_POINTS, when given, receives the body's sequence-point graph, which is
+/// empty for the same reason.
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
                                                  MonoMethod *method,
                                                  std::vector<ExternalSymbol> *externals
                                                  = nullptr,
                                                  MonoLLVMBreakpointSwitch **bp_switch
-                                                 = nullptr);
+                                                 = nullptr,
+                                                 SeqPointGraph *seq_points = nullptr);
 
 } // namespace mono
 

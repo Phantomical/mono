@@ -74,7 +74,7 @@ throw_corlib_exception_decl (llvm::Module *module)
 llvm::Expected<llvm::Function *>
 method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
                 std::vector<ExternalSymbol> *externals,
-                MonoLLVMBreakpointSwitch **bp_switch)
+                MonoLLVMBreakpointSwitch **bp_switch, SeqPointGraph *seq_points)
 {
 	/*
 	 * Shared by the method and its filter bodies: they are separate functions
@@ -91,6 +91,8 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 
 	if (bp_switch != nullptr)
 		*bp_switch = emitter.breakpoint_switch ();
+	if (seq_points != nullptr)
+		*seq_points = emitter.sequence_points ();
 
 	/* Each filter body rides along as a function of its own. */
 	for (uint32_t i = 0; i < cfg->header->num_clauses; ++i) {
@@ -896,6 +898,7 @@ MethodLLVMEmitter::emit ()
 
 	resolve_finally_switches ();
 	finish_function ();
+	build_seq_point_graph ();
 	return function;
 }
 

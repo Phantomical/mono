@@ -54,6 +54,16 @@ void mono_llvm_jit_free_domain (MonoDomain *domain);
 /// one's code.
 void mono_llvm_jit_free_method (MonoMethod *method);
 
+/// Where METHOD's body starts in DOMAIN, or NULL when this backend has not
+/// compiled it there.
+///
+/// This is the address the method's own jit info covers - not the stub the
+/// runtime calls it through, and not the interop thunk in front of it - so it
+/// is what to hand mono_jit_info_table_find () to get back at that record. The
+/// runtime has no method-keyed map of its own to answer this from: a method
+/// reached as a callee is compiled without the runtime ever asking for it.
+void *mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method);
+
 /// Queue OPT for LLVM's own command-line option registry - the same options
 /// `opt` and `llc` take, e.g. "-print-after-all". A leading dash is optional.
 ///
