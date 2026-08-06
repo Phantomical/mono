@@ -27,6 +27,24 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(GNUInstallDirs)
 include(CTest)
 
+# googletest is a build prerequisite of the test suites, not something they
+# work around.  Found here rather than per-directory so that the answer is the
+# same for every suite, and so that a machine without it is told once, at
+# configure time, instead of quietly producing a smaller `ctest -N`.  The way
+# to build without it is -DBUILD_TESTING=OFF, which drops every test rather
+# than an arbitrary subset.
+if(BUILD_TESTING)
+  find_package(GTest QUIET)
+  if(NOT GTest_FOUND)
+    message(FATAL_ERROR
+      "googletest not found, and the native test suites are built on it.\n"
+      "  Install it (Debian/Ubuntu: apt install libgtest-dev), or point\n"
+      "  GTest_DIR at an install, or configure with -DBUILD_TESTING=OFF to\n"
+      "  build no tests at all.")
+  endif()
+  include(GoogleTest)
+endif()
+
 include(MonoOptions)
 include(MonoCompilerFlags)
 include(MonoConfigureChecks)
@@ -138,41 +156,43 @@ if(MONO_NPROC EQUAL 0)
   set(MONO_NPROC 1)
 endif()
 
-add_custom_target(check
-  COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "runtime|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|slow|stress|acceptance"
-  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  USES_TERMINAL
-  VERBATIM)
-add_dependencies(check mini-corpora unit-test-assemblies)
-if(TARGET mono-llvm-test-corpora)
-  add_dependencies(check mono-llvm-test-corpora)
-endif()
-
-add_custom_target(check-all
-  COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-          -LE "slow|stress|acceptance"
-  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  USES_TERMINAL
-  VERBATIM)
-add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
-if(TARGET mono-llvm-test-corpora)
-  add_dependencies(check-all mono-llvm-test-corpora)
-endif()
-
-# The CoreCLR suites and ms-test-suite, with the hours-long members
-# (coreclr-gcstress, profiler-stress, the microbenchmarks) left behind their
-# stress/slow labels.  The corpora are compiled by the regular build -- a long
-# first build once the option is on -- so this only runs the suites.
-if(MONO_ENABLE_ACCEPTANCE_TESTS)
-  add_custom_target(check-acceptance
+if(BUILD_TESTING)
+  add_custom_target(check
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -L acceptance -LE "slow|stress"
+            -LE "runtime|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|slow|stress|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
-  if(TARGET coreclr-compile-tests)
-    add_dependencies(check-acceptance coreclr-compile-tests)
+  add_dependencies(check mini-corpora unit-test-assemblies)
+  if(TARGET mono-llvm-test-corpora)
+    add_dependencies(check mono-llvm-test-corpora)
+  endif()
+
+  add_custom_target(check-all
+    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+            -LE "slow|stress|acceptance"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+  add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
+  if(TARGET mono-llvm-test-corpora)
+    add_dependencies(check-all mono-llvm-test-corpora)
+  endif()
+
+  # The CoreCLR suites and ms-test-suite, with the hours-long members
+  # (coreclr-gcstress, profiler-stress, the microbenchmarks) left behind their
+  # stress/slow labels.  The corpora are compiled by the regular build -- a long
+  # first build once the option is on -- so this only runs the suites.
+  if(MONO_ENABLE_ACCEPTANCE_TESTS)
+    add_custom_target(check-acceptance
+      COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+              -L acceptance -LE "slow|stress"
+      WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+      USES_TERMINAL
+      VERBATIM)
+    if(TARGET coreclr-compile-tests)
+      add_dependencies(check-acceptance coreclr-compile-tests)
+    endif()
   endif()
 endif()
 

@@ -14,13 +14,6 @@ if(NOT MONO_CORPUS_ENABLED)
   return()
 endif()
 
-find_package(GTest QUIET)
-if(NOT GTest_FOUND)
-  message(STATUS "gtest not found -- not building the mono/llvm translator tests")
-  return()
-endif()
-include(GoogleTest)
-
 # RELATIVE, because mono_corpus_il resolves its source against the current
 # source directory itself.
 file(GLOB MONO_LLVM_TEST_IL CONFIGURE_DEPENDS

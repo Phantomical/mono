@@ -29,7 +29,8 @@ Verified on: **Ubuntu 24.04.4 LTS (WSL2), x86_64**, gcc 13.3, CMake 3.28, Ninja
 ## 1. Install dependencies
 
 The build needs a C/C++ toolchain, CMake 3.28 or newer, a generator (Ninja or
-make), `python3`, and an LLVM 14+ development install for the tier-1 backend.
+make), `python3`, googletest, and an LLVM 14+ development install for the tier-1
+backend.
 
 ```bash
 sudo apt-get update
@@ -38,11 +39,19 @@ sudo apt-get install -y \
     cmake ninja-build \
     python3 \
     git \
-    zlib1g-dev
+    zlib1g-dev \
+    libgtest-dev
 ```
 
 Notes:
 - CMake 3.28 is the floor; earlier versions are not supported.
+- googletest is required, not optional: the native test suites are written
+  against it, so configure fails when it is missing rather than silently
+  building fewer tests. `-DBUILD_TESTING=OFF` is the way to build without it,
+  and it drops every test rather than an arbitrary subset. Ubuntu 24.04's
+  `libgtest-dev` (1.14) ships the CMake config package, so nothing else is
+  needed; on distros that ship only sources, build and install googletest and
+  point `GTest_DIR` at it.
 - The LLVM back end builds against LLVM 22 built from source at
   `~/projects/llvm-project` (installed to `~/projects/llvm-project/install`,
   RelWithDebInfo with assertions on); no distro package ships 22 yet. Configure
