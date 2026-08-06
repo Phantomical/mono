@@ -1023,6 +1023,9 @@ set(MONO_TESTS_DISABLED
   merp-json-valid.exe
   merp-crash-test.exe
   finally_guard.exe
+  # scrapes "converting method ..." out of a --compile-all run; neither the
+  # option nor that trace exists any more
+  verbose.exe
 )
 
 # Additionally excluded when running under the interpreter.
@@ -1272,6 +1275,9 @@ set(MONO_TESTS_TAILCALL_DISABLED_RUN
   tailcall/coreclr/JIT/Methodical/tailcall/gcval_sideeffect.exe
   tailcall/coreclr/JIT/Methodical/tailcall/test_3b.exe
   tailcall/coreclr/JIT/Methodical/tailcall_v4/delegateParamCallTarget.exe
+  # prints PASS and then returns CoreCLR's 100-means-success, which this
+  # harness reads as a failure
+  tailcall/coreclr/JIT/Methodical/tailcall/Desktop/thread-race.exe
 )
 
 

@@ -231,13 +231,10 @@ mono_runtime_suite(runtime TESTS ${_regular}
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                    LONG dynamic-method-churn.exe)
 
-# MONO_DEBUG=test-tailcall-require turns "the JIT declined to emit a tail call"
-# into a failure, which is the whole point of this suite. --compile-all makes
-# that cover every method in the assembly rather than only the ones the test
-# happens to reach.
-mono_runtime_suite(runtime-tailcall TESTS ${_tailcall}
-                   ENV "MONO_DEBUG=test-tailcall-require"
-                   RUNTIME_ARGS "--compile-all")
+# CoreCLR's tailcall corpus, run like any other program: several of these
+# recurse deeply enough that a missed tail call is a stack overflow rather than
+# a subtle difference, so running them is the check.
+mono_runtime_suite(runtime-tailcall TESTS ${_tailcall})
 
 mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 

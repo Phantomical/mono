@@ -825,38 +825,6 @@ generics, for example "System.Collections.Generic.Queue`1:Peek"
 \fB--breakonex\fR
 Inserts a breakpoint on exceptions.  This allows you to debug your
 application with a native debugger when an exception is thrown.
-.TP
-\fB--compile name\fR
-This compiles a method (namespace.name:methodname), this is used for
-testing the compiler performance or to examine the output of the code
-generator. 
-.TP
-\fB--compile-all\fR
-Compiles all the methods in an assembly.  This is used to test the
-compiler performance or to examine the output of the code generator
-.TP 
-\fB--graph=TYPE METHOD\fR
-This generates a postscript file with a graph with the details about
-the specified method (namespace.name:methodname).  This requires `dot'
-and ghostview to be installed (it expects Ghostview to be called
-"gv"). 
-.Sp
-The following graphs are available:
-.nf
-          cfg        Control Flow Graph (CFG)
-          dtree      Dominator Tree
-          code       CFG showing code
-          ssa        CFG showing code after SSA translation
-          optcode    CFG showing code after IR optimizations
-.fi
-.Sp
-Some graphs will only be available if certain optimizations are turned
-on.
-.TP
-\fB--ncompile\fR
-Instruct the runtime on the number of times that the method specified
-by --compile (or all the methods if --compile-all is used) to be
-compiled.  This is used for testing the code generator performance. 
 .TP 
 \fB--stats=[method]\fR
 Displays information about the work done by the runtime during the
