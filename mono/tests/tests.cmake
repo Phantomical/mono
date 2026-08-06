@@ -348,6 +348,7 @@ set(MONO_TESTS_CS_SRC
   bug-685908.cs
   sgen-long-vtype.cs
   delegate-invoke.cs
+  delegate-invoke-shapes.cs
   delegate-prop.cs
   bug-696593.cs
   bug-705140.cs
