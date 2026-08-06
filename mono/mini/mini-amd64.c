@@ -88,16 +88,6 @@ debug_omit_fp (void)
 #endif
 }
 
-static gboolean
-amd64_is_near_call (guint8 *code)
-{
-	/* Skip REX */
-	if ((code [0] >= 0x40) && (code [0] <= 0x4f))
-		code += 1;
-
-	return code [0] == 0xe8;
-}
-
 /*
  * arch-amd64.c carries its own copies of amd64_patch and amd64_use_imm32: both
  * halves emit and patch machine code, and a file-local copy stays inlinable in
@@ -5498,37 +5488,6 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 
 #endif /* DISABLE_JIT */
 
-void
-mono_arch_patch_code_new (MonoCompile *cfg, MonoDomain *domain, guint8 *code, MonoJumpInfo *ji, gpointer target)
-{
-	unsigned char *ip = ji->ip.i + code;
-
-	/*
-	 * Debug code to help track down problems where the target of a near call is
-	 * is not valid.
-	 */
-	if (amd64_is_near_call (ip)) {
-		gint64 disp = (guint8*)target - (guint8*)ip;
-
-		if (!amd64_is_imm32 (disp)) {
-			printf ("TYPE: %d\n", ji->type);
-			switch (ji->type) {
-			case MONO_PATCH_INFO_JIT_ICALL_ID:
-				printf ("V: %s\n", mono_find_jit_icall_info (ji->data.jit_icall_id)->name);
-				break;
-			case MONO_PATCH_INFO_METHOD_JUMP:
-			case MONO_PATCH_INFO_METHOD:
-				printf ("V: %s\n", ji->data.method->name);
-				break;
-			default:
-				break;
-			}
-		}
-	}
-
-	amd64_patch (ip, (gpointer)target);
-}
-
 #ifndef DISABLE_JIT
 
 static int
@@ -6447,22 +6406,6 @@ mono_arch_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMetho
 	return ins;
 }
 #endif
-
-/*
- * mono_arch_emit_load_aotconst:
- *
- *   Emit code to load the contents of the GOT slot identified by TRAMP_TYPE and
- * TARGET from the mscorlib GOT in full-aot code.
- * On AMD64, the result is placed into R11.
- */
-guint8*
-mono_arch_emit_load_aotconst (guint8 *start, guint8 *code, MonoJumpInfo **ji, MonoJumpInfoType tramp_type, gconstpointer target)
-{
-	*ji = mono_patch_info_list_prepend (*ji, code - start, tramp_type, target);
-	amd64_mov_reg_membase (code, AMD64_R11, AMD64_RIP, 0, 8);
-
-	return code;
-}
 
 gboolean
 mono_arch_opcode_supported (int opcode)

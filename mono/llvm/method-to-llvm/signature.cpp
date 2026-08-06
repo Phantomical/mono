@@ -14,6 +14,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Type.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/Support/MathExtras.h>
 
 #include <algorithm>
 #include <string>
@@ -646,11 +647,11 @@ MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 	if (MONO_CLASS_IS_SIMD (cfg, klass))
 		align = std::min (8, mono_class_value_size (klass, NULL));
 
-	/* A packed layout can ask for an alignment that is not a power of two. */
-	while (mono_is_power_of_two (align) == -1)
-		align++;
-
-	return llvm::Align (align);
+	/*
+	 * A packed layout can ask for an alignment that is not a power of two, and
+	 * a class whose metadata failed to load has no alignment at all.
+	 */
+	return llvm::Align (llvm::PowerOf2Ceil (std::max (align, 1u)));
 }
 
 /// The LLVM function type for SIG, in this backend's own convention: every

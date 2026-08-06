@@ -157,6 +157,100 @@ mono_amd64_patch (unsigned char* code, gpointer target)
 	amd64_patch (code, target);
 }
 
+gboolean
+mono_is_regsize_var (MonoType *t)
+{
+	t = mini_get_underlying_type (t);
+	switch (t->type) {
+	case MONO_TYPE_I1:
+	case MONO_TYPE_U1:
+	case MONO_TYPE_I2:
+	case MONO_TYPE_U2:
+	case MONO_TYPE_I4:
+	case MONO_TYPE_U4:
+	case MONO_TYPE_I:
+	case MONO_TYPE_U:
+	case MONO_TYPE_PTR:
+	case MONO_TYPE_FNPTR:
+#if SIZEOF_REGISTER == 8
+	case MONO_TYPE_I8:
+	case MONO_TYPE_U8:
+#endif
+		return TRUE;
+	case MONO_TYPE_OBJECT:
+	case MONO_TYPE_STRING:
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_SZARRAY:
+	case MONO_TYPE_ARRAY:
+		return TRUE;
+	case MONO_TYPE_GENERICINST:
+		if (!mono_type_generic_inst_is_valuetype (t))
+			return TRUE;
+		return FALSE;
+	case MONO_TYPE_VALUETYPE:
+		return FALSE;
+	default:
+		return FALSE;
+	}
+}
+
+static gboolean
+amd64_is_near_call (guint8 *code)
+{
+	/* Skip REX */
+	if ((code [0] >= 0x40) && (code [0] <= 0x4f))
+		code += 1;
+
+	return code [0] == 0xe8;
+}
+
+void
+mono_arch_patch_code_new (MonoCompile *cfg, MonoDomain *domain, guint8 *code, MonoJumpInfo *ji, gpointer target)
+{
+	unsigned char *ip = ji->ip.i + code;
+
+	/*
+	 * Debug code to help track down problems where the target of a near call is
+	 * is not valid.
+	 */
+	if (amd64_is_near_call (ip)) {
+		gint64 disp = (guint8*)target - (guint8*)ip;
+
+		if (!amd64_is_imm32 (disp)) {
+			printf ("TYPE: %d\n", ji->type);
+			switch (ji->type) {
+			case MONO_PATCH_INFO_JIT_ICALL_ID:
+				printf ("V: %s\n", mono_find_jit_icall_info (ji->data.jit_icall_id)->name);
+				break;
+			case MONO_PATCH_INFO_METHOD_JUMP:
+			case MONO_PATCH_INFO_METHOD:
+				printf ("V: %s\n", ji->data.method->name);
+				break;
+			default:
+				break;
+			}
+		}
+	}
+
+	amd64_patch (ip, (gpointer)target);
+}
+
+/*
+ * mono_arch_emit_load_aotconst:
+ *
+ *   Emit code to load the contents of the GOT slot identified by TRAMP_TYPE and
+ * TARGET from the mscorlib GOT in full-aot code.
+ * On AMD64, the result is placed into R11.
+ */
+guint8*
+mono_arch_emit_load_aotconst (guint8 *start, guint8 *code, MonoJumpInfo **ji, MonoJumpInfoType tramp_type, gconstpointer target)
+{
+	*ji = mono_patch_info_list_prepend (*ji, code - start, tramp_type, target);
+	amd64_mov_reg_membase (code, AMD64_R11, AMD64_RIP, 0, 8);
+
+	return code;
+}
+
 static void inline
 add_general (guint32 *gr, guint32 *stack_size, ArgInfo *ainfo)
 {
