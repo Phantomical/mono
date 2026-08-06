@@ -230,15 +230,28 @@ record_ranges (MachineFunction &mf, int clause,
 		}
 
 		/*
-		 * Before the terminators, not at the very end: an instruction after a
-		 * block's branch makes getFirstTerminator () walk off the end, and the
-		 * printer then reads the block as falling through to its successor and
-		 * leaves that successor's label unemitted. The branch itself is the
-		 * only code left outside the range, and nothing there can abort.
+		 * A run reaching the end of a block ends at the first byte of the next
+		 * one, so the block's branch is covered too - a thread can be stopped on
+		 * a branch, and `while (!foo);` inside a finally spends most of its time
+		 * on exactly that.
+		 *
+		 * Hence the label at the head of the next block rather than after this
+		 * block's branch: an instruction after the branch makes
+		 * getFirstTerminator () walk off the end, and the printer then reads the
+		 * block as falling through and leaves the successor's label unemitted.
+		 * The last block in layout has no successor whose label could be lost,
+		 * so there the end does go at the very end - the end of the function.
 		 */
-		if (state)
-			close_range (fn, mbb, mbb.getFirstTerminator (), ctx, tii, begin,
-			             clause, slot);
+		if (state) {
+			MachineBasicBlock *next = mbb.getNextNode ();
+
+			if (next)
+				close_range (fn, *next, next->begin (), ctx, tii, begin,
+				             clause, slot);
+			else
+				close_range (fn, mbb, mbb.end (), ctx, tii, begin, clause,
+				             slot);
+		}
 	}
 }
 
