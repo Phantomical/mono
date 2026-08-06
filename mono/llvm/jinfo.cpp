@@ -640,6 +640,8 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	mono_jit_info_init (jinfo, method, code, code_size, JIT_INFO_NONE,
 	                    num_clauses, 0);
 	jinfo->from_llvm = true;
+	/* A null HEADER is how the caller says this is not the method's main body. */
+	jinfo->llvm_side_body = header == nullptr;
 	/*
 	 * Reading the classic JIT's mapping instead is not an option: it is keyed by
 	 * MonoMethod, so it would attribute this body's offsets to another body's

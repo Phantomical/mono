@@ -3255,9 +3255,18 @@ no_seq_points_found (MonoMethod *method, int offset)
 }
 
 static int
-calc_il_offset (MonoDomain *domain, MonoMethod *method, int native_offset, gboolean is_top_frame)
+calc_il_offset (MonoDomain *domain, MonoJitInfo *ji, MonoMethod *method, int native_offset, gboolean is_top_frame)
 {
 	int ret = -1;
+
+	/*
+	 * Both lookups below are keyed by MonoMethod and so answer for the method's
+	 * main body. A filter body is a body of its own, laid out differently, and
+	 * they would place its frame by reading a completely unrelated offset.
+	 */
+	if (ji && ji->llvm_side_body)
+		return ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, native_offset);
+
 	if (is_top_frame) {
 		SeqPoint sp;
 		/* mono_debug_il_offset_from_address () doesn't seem to be precise enough (#2092) */
@@ -3314,7 +3323,7 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 	}
 
 	if (info->il_offset == -1) {
-		info->il_offset = calc_il_offset (info->domain, method, info->native_offset, ud->frames == NULL);
+		info->il_offset = calc_il_offset (info->domain, info->ji, method, info->native_offset, ud->frames == NULL);
 	}
 
 	PRINT_DEBUG_MSG (1, "\tFrame: %s:[il=0x%x, native=0x%x] %d\n", mono_method_full_name (method, TRUE), info->il_offset, info->native_offset, info->managed);
@@ -3554,7 +3563,7 @@ compute_frame_info (MonoInternalThread *thread, DebuggerTlsData *tls, gboolean f
 			StackFrame *top_frame = tls->frames [0];
 			if (interp_resume_frame == top_frame->interp_frame) {
 				int native_offset = (int) ((uintptr_t) interp_resume_ip - (uintptr_t) top_frame->de.ji->code_start);
-				top_frame->il_offset = calc_il_offset (top_frame->de.domain, top_frame->de.method, native_offset, TRUE);
+				top_frame->il_offset = calc_il_offset (top_frame->de.domain, top_frame->de.ji, top_frame->de.method, native_offset, TRUE);
 			}
 		}
 	}

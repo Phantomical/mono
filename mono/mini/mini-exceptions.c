@@ -1064,7 +1064,7 @@ mono_jit_info_llvm_row (MonoJitInfo *ji, guint32 native_offset)
 	return lo == 0 ? -1 : (int) (lo - 1);
 }
 
-static int
+int
 mono_jit_info_llvm_il_offset (MonoJitInfo *ji, guint32 native_offset)
 {
 	int row = mono_jit_info_llvm_row (ji, native_offset);

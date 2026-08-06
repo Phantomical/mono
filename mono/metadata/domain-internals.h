@@ -358,6 +358,15 @@ struct _MonoJitInfo {
 	gboolean    no_il_offsets : 1;
 
 	/*
+	 * This code was compiled for the method without being a translation of its
+	 * body: a filter body, an entry thunk, the stub that raises a deferred
+	 * error. It is reached and unwound like any other frame, but every mapping
+	 * registered against the MonoMethod describes the body, so llvm_seq_points
+	 * below is the only thing that can place such a frame in the IL.
+	 */
+	gboolean    llvm_side_body : 1;
+
+	/*
 	 * This body's own native_offset -> il_offset map, present (n_llvm_seq_points > 0)
 	 * only for a tier-1 body whose translation actually recovered one - see
 	 * MonoLLVMSeqPoint above. Allocated out of the same mem_manager as this MonoJitInfo,

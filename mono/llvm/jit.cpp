@@ -1024,8 +1024,14 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	compiled.functions = std::move (extents->functions);
 
 	if (auto lines = extents->il_lines.find (entry.str ());
-	    lines != extents->il_lines.end ())
+	    lines != extents->il_lines.end ()) {
 		compiled.il_lines = std::move (lines->second);
+		extents->il_lines.erase (lines);
+	}
+
+	for (auto &lines : extents->il_lines)
+		compiled.other_il_lines.emplace_back (lines.first,
+		                                      std::move (lines.second));
 
 	if (auto points = extents->seq_points.find (entry.str ());
 	    points != extents->seq_points.end ())

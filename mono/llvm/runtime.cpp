@@ -1115,41 +1115,62 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	*published = *jinfo;
 
 	/*
-	 * A record of its own for each entry: an exception unwinding out of the
-	 * body passes back through it, and a suspended thread can be stopped in
-	 * it, so the runtime has to be able to resolve the frame. They carry no
-	 * clauses and no line table, so their own frame description is all they
-	 * take from the module's side tables - and no dylib, since the body's
-	 * record already owns the one they all share.
+	 * A record of its own for each of the module's other functions: an
+	 * exception unwinding out of the body passes back through the entries, a
+	 * suspended thread can be stopped in any of them, and a filter body is a
+	 * frame something walking the stack has to be able to name. They carry no
+	 * clauses, so their frame description - and, for a filter, the IL-offset
+	 * map that says where in the method's IL its frame is - is all they take
+	 * from the module's side tables. No dylib either: the body's record
+	 * already owns the one they all share.
 	 */
-	auto register_forwarder = [&] (const uint8_t *code, size_t size) -> Error {
-		CompiledMethod forwarder;
+	auto register_side_body = [&] (const uint8_t *code, size_t size,
+	                               std::vector<IlLineRow> lines) -> Error {
+		CompiledMethod side;
 
-		forwarder.entry = const_cast<uint8_t *> (code);
-		forwarder.code = code;
-		forwarder.code_size = size;
-		forwarder.unwind_table = compiled->unwind_table;
-		forwarder.unwind_table_size = compiled->unwind_table_size;
+		side.entry = const_cast<uint8_t *> (code);
+		side.code = code;
+		side.code_size = size;
+		side.unwind_table = compiled->unwind_table;
+		side.unwind_table_size = compiled->unwind_table_size;
+		side.il_lines = std::move (lines);
 
 		Expected<MonoJitInfo *> jinfo =
-			register_jit_info (state.domain, method, nullptr, forwarder);
+			register_jit_info (state.domain, method, nullptr, side);
 
 		if (!jinfo)
 			return jinfo.takeError ();
-		remember (state, method, forwarder, *jinfo);
+		remember (state, method, side, *jinfo);
 		return Error::success ();
 	};
 
-	if (Error err = register_forwarder (entry_code, entry_code_size))
+	if (Error err = register_side_body (entry_code, entry_code_size, {}))
 		return std::move (err);
 
 	if (unbox_code != nullptr) {
-		if (Error err = register_forwarder (unbox_code, unbox_code_size))
+		if (Error err = register_side_body (unbox_code, unbox_code_size, {}))
 			return std::move (err);
 	} else if (!unbox_entry.empty ()) {
 		return createStringError (inconvertibleErrorCode (),
 		                          "the linked object for %s defines no unboxing "
 		                          "entry", entry.c_str ());
+	}
+
+	for (const auto &[name, extent] : compiled->functions) {
+		if (name.find ("$filter") == std::string::npos)
+			continue;
+
+		std::vector<IlLineRow> lines;
+
+		for (auto &rows : compiled->other_il_lines)
+			if (rows.first == name) {
+				lines = std::move (rows.second);
+				break;
+			}
+
+		if (Error err = register_side_body (extent.first, extent.second,
+		                                    std::move (lines)))
+			return std::move (err);
 	}
 
 	if (tracing ())

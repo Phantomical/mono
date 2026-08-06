@@ -94,6 +94,11 @@ struct CompiledMethod {
 	/// native offset. Empty when the module carried no line table.
 	std::vector<IlLineRow> il_lines;
 
+	/// The same rows for every other function the object defines, by name -
+	/// the filter bodies, each of which is a frame of its own and needs a map
+	/// of its own to say where in the method's IL it is.
+	std::vector<std::pair<std::string, std::vector<IlLineRow>>> other_il_lines;
+
 	/// The entry function's sequence points, ascending by native offset: where
 	/// each soft-debugger check landed, and the IL offset it stands for in the
 	/// encoding seq-point-marker.hpp describes. Empty unless the method was
