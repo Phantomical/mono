@@ -1,5 +1,5 @@
-# The symbolicate round-trip suite: three variants of the same check, differing
-# only in whether the copy under test was AOT-compiled first.
+# The symbolicate round-trip check. Only the JIT variant is registered: the two
+# AOT ones ask for --aot, which this runtime refuses outright.
 mono_profile_dir(_pdir net_4_x)
 set(_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_exe "${CMAKE_CURRENT_BINARY_DIR}/StackTraceDumper.exe")
@@ -24,23 +24,15 @@ add_custom_command(
 add_custom_target(mcs-symbolicate-tests ALL DEPENDS "${_exe}")
 add_dependencies(mcs-symbolicate-tests mcs-net_4_x-mono-symbolicate)
 
-foreach(_variant without_aot with_aot with_aot_msym)
-  set(_aot "")
-  if(_variant STREQUAL "with_aot")
-    set(_aot plain)
-  elseif(_variant STREQUAL "with_aot_msym")
-    set(_aot msym)
-  endif()
-  add_test(NAME symbolicate-${_variant}
-           COMMAND "${CMAKE_COMMAND}"
-                   -D "RUNTIME=${CMAKE_BINARY_DIR}/runtime/mono-wrapper"
-                   -D "LIB_PATH=${_pdir}"
-                   -D "PROGRAM=${_pdir}/mono-symbolicate.exe"
-                   -D "TEST_EXE=${_exe}"
-                   -D "OUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${_variant}"
-                   -D "EXPECTED=${_src}/Test/symbolicate.expected"
-                   -D "AOT=${_aot}"
-                   -P "${_src}/symbolicate-test.cmake")
-  set_tests_properties(symbolicate-${_variant} PROPERTIES
-    LABELS "tools" TIMEOUT 900)
-endforeach()
+add_test(NAME symbolicate-without_aot
+         COMMAND "${CMAKE_COMMAND}"
+                 -D "RUNTIME=${CMAKE_BINARY_DIR}/runtime/mono-wrapper"
+                 -D "LIB_PATH=${_pdir}"
+                 -D "PROGRAM=${_pdir}/mono-symbolicate.exe"
+                 -D "TEST_EXE=${_exe}"
+                 -D "OUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/without_aot"
+                 -D "EXPECTED=${_src}/Test/symbolicate.expected"
+                 -D "AOT="
+                 -P "${_src}/symbolicate-test.cmake")
+set_tests_properties(symbolicate-without_aot PROPERTIES
+  LABELS "tools" TIMEOUT 900)
