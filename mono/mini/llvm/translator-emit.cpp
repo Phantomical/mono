@@ -579,146 +579,6 @@ EmitContext::create_builder ()
 	return b;
 }
 
-static char*
-get_aotconst_name (MonoJumpInfoType type, gconstpointer data, int got_offset)
-{
-	char *name;
-	int len;
-
-	switch (type) {
-	case MONO_PATCH_INFO_JIT_ICALL_ID:
-		name = g_strdup_printf ("jit_icall_%s", mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)))->name);
-		break;
-	case MONO_PATCH_INFO_JIT_ICALL_ADDR_NOCALL:
-		name = g_strdup_printf ("jit_icall_addr_nocall_%s", mono_find_jit_icall_info (static_cast<MonoJitICallId>(reinterpret_cast<gsize>(data)))->name);
-		break;
-	case MONO_PATCH_INFO_RGCTX_SLOT_INDEX: {
-		MonoJumpInfoRgctxEntry *entry = (MonoJumpInfoRgctxEntry*)data;
-		name = g_strdup_printf ("rgctx_slot_index_%s", mono_rgctx_info_type_to_str (entry->info_type));
-		break;
-	}
-	case MONO_PATCH_INFO_AOT_MODULE:
-	case MONO_PATCH_INFO_GC_SAFE_POINT_FLAG:
-	case MONO_PATCH_INFO_GC_CARD_TABLE_ADDR:
-	case MONO_PATCH_INFO_GC_NURSERY_START:
-	case MONO_PATCH_INFO_GC_NURSERY_BITS:
-	case MONO_PATCH_INFO_INTERRUPTION_REQUEST_FLAG:
-		name = g_strdup_printf ("%s", mono_ji_type_to_string (type));
-		len = strlen (name);
-		for (int i = 0; i < len; ++i)
-			name [i] = tolower (name [i]);
-		break;
-	default:
-		name = g_strdup_printf ("%s_%d", mono_ji_type_to_string (type), got_offset);
-		len = strlen (name);
-		for (int i = 0; i < len; ++i)
-			name [i] = tolower (name [i]);
-		break;
-	}
-
-	return name;
-}
-
-static int
-compute_aot_got_offset (MonoLLVMModule *module, MonoJumpInfo *ji, LLVMTypeRef llvm_type)
-{
-	guint32 got_offset = mono_aot_get_got_offset (ji);
-
-	LLVMTypeRef lookup_type = static_cast<LLVMTypeRef>(g_hash_table_lookup (module->got_idx_to_type, GINT_TO_POINTER (got_offset)));
-
-	if (!lookup_type) {
-		lookup_type = llvm_type;
-	} else if (llvm_type != lookup_type) {
-		lookup_type = module->ptr_type;
-	} else {
-		return got_offset;
-	}
-
-	g_hash_table_insert (module->got_idx_to_type, GINT_TO_POINTER (got_offset), lookup_type);
-	return got_offset;
-}
-
-/* Allocate a GOT slot for TYPE/DATA, and emit IR to load it */
-static LLVMValueRef
-get_aotconst_module (MonoLLVMModule *module, llvm::IRBuilder<> *builder, MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type,
-					 guint32 *out_got_offset, MonoJumpInfo **out_ji)
-{
-	guint32 got_offset;
-	LLVMValueRef load;
-
-	MonoJumpInfo tmp_ji;
-	tmp_ji.type = type;
-	tmp_ji.data.target = data;
-
-	MonoJumpInfo *ji = mono_aot_patch_info_dup (&tmp_ji);
-
-	if (out_ji)
-		*out_ji = ji;
-
-	got_offset = compute_aot_got_offset (module, ji, llvm_type);
-	module->max_got_offset = MAX (module->max_got_offset, got_offset);
-
-	if (out_got_offset)
-		*out_got_offset = got_offset;
-
-	LLVMValueRef const_var = static_cast<LLVMValueRef>(g_hash_table_lookup (module->aotconst_vars, GINT_TO_POINTER (got_offset)));
-	if (!const_var) {
-		LLVMTypeRef type = llvm_type;
-		// FIXME:
-		char *name = get_aotconst_name (ji->type, ji->data.target, got_offset);
-		char *symbol = g_strdup_printf ("aotconst_%s", name);
-		g_free (name);
-		LLVMValueRef v = LLVMAddGlobal (module->lmodule, type, symbol);
-		LLVMSetVisibility (v, LLVMHiddenVisibility);
-		LLVMSetLinkage (v, LLVMInternalLinkage);
-		LLVMSetInitializer (v, llvm::wrap (llvm::Constant::getNullValue (llvm::unwrap (type))));
-		// FIXME:
-		LLVMSetAlignment (v, 8);
-
-		g_hash_table_insert (module->aotconst_vars, GINT_TO_POINTER (got_offset), v);
-		const_var = v;
-	}
-
-	load = llvm::wrap (builder->CreateLoad (llvm::unwrap (llvm_type), llvm::unwrap (const_var), ""));
-
-	if (mono_aot_is_shared_got_offset (got_offset))
-		set_invariant_load_flag (load);
-	if (type == MONO_PATCH_INFO_LDSTR)
-		set_nonnull_load_flag (load);
-
-	load = llvm::wrap (builder->CreateBitCast (llvm::unwrap (load), llvm::unwrap (llvm_type), ""));
-
-	return load;
-}
-
-LLVMValueRef
-EmitContext::get_aotconst (MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type)
-{
-	MonoCompile *cfg;
-	guint32 got_offset;
-	MonoJumpInfo *ji;
-	LLVMValueRef load;
-
-	cfg = this->cfg;
-
-	load = get_aotconst_module (this->module, this->builder, type, data, llvm_type, &got_offset, &ji);
-
-	ji->next = cfg->patch_info;
-	cfg->patch_info = ji;
-
-	/*
-	 * If the got slot is shared, it means its initialized when the aot image is loaded, so we don't need to
-	 * explicitly initialize it.
-	 */
-	if (!mono_aot_is_shared_got_offset (got_offset)) {
-		//mono_print_ji (ji);
-		//printf ("\n");
-		this->cfg->got_access_count ++;
-	}
-
-	return load;
-}
-
 /*
  * get_direct_callee:
  *
@@ -1702,7 +1562,7 @@ EmitContext::emit_gsharedvt_ldaddr (int vreg)
 
 /* Emit a wrapper around the parameterless JIT icall ICALL_ID with a cold calling convention */
 LLVMValueRef
-emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id, gboolean aot)
+emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id)
 {
 	LLVMValueRef func, callee;
 	LLVMBasicBlockRef entry_bb;
@@ -1724,9 +1584,7 @@ emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitI
 	builder = new llvm::IRBuilder<> (module->ctx ());
 	builder->SetInsertPoint (llvm::unwrap (entry_bb));
 
-	if (aot) {
-		callee = get_aotconst_module (module, builder, MONO_PATCH_INFO_JIT_ICALL_ID, GUINT_TO_POINTER (icall_id), llvm::wrap (llvm::PointerType::get (module->ctx (), 0)), NULL, NULL);
-	} else {
+	{
 		MonoJitICallInfo * const info = mono_find_jit_icall_info (icall_id);
 		gpointer target = const_cast<gpointer>(mono_icall_get_wrapper_full (info, TRUE));
 
@@ -1747,20 +1605,10 @@ emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitI
 void
 emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompile *cfg)
 {
-	bool is_aot = cfg == nullptr || cfg->compile_aot;
 	LLVMValueRef func = mono_llvm_get_or_insert_gc_safepoint_poll (lmodule);
 	mono_llvm_add_func_attr (func, LLVM_ATTR_NO_UNWIND);
-	if (is_aot) {
-#if TARGET_WIN32
-		if (module->static_link)
-			LLVMSetLinkage (func, LLVMInternalLinkage);
-		else
-#endif
-			LLVMSetLinkage (func, LLVMWeakODRLinkage);
-	} else {
-		mono_llvm_add_func_attr (func, LLVM_ATTR_OPTIMIZE_NONE); // no need to waste time here, the function is already optimized and will be inlined.
-		mono_llvm_add_func_attr (func, LLVM_ATTR_NO_INLINE); // optnone attribute requires noinline (but it will be inlined anyway)
-	}
+	mono_llvm_add_func_attr (func, LLVM_ATTR_OPTIMIZE_NONE); // no need to waste time here, the function is already optimized and will be inlined.
+	mono_llvm_add_func_attr (func, LLVM_ATTR_NO_INLINE); // optnone attribute requires noinline (but it will be inlined anyway)
 	LLVMBasicBlockRef entry_bb = append_basic_block (func, "gc.safepoint_poll.entry");
 	LLVMBasicBlockRef poll_bb = append_basic_block (func, "gc.safepoint_poll.poll");
 	LLVMBasicBlockRef exit_bb = append_basic_block (func, "gc.safepoint_poll.exit");
@@ -1769,13 +1617,8 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 
 	/* entry: */
 	builder->SetInsertPoint (llvm::unwrap (entry_bb));
-	llvm::Value *poll_val_ptr;
-	if (is_aot) {
-		poll_val_ptr = llvm::unwrap (get_aotconst_module (module, builder, MONO_PATCH_INFO_GC_SAFE_POINT_FLAG, NULL, ptr_type, NULL, NULL));
-	} else {
-		llvm::Value *poll_val_int = llvm::ConstantInt::get (llvm::unwrap (int_ptr_type (module->ctx ())), reinterpret_cast<guint64>(&mono_polling_required), false);
-		poll_val_ptr = builder->CreateIntToPtr (poll_val_int, llvm::unwrap (ptr_type), "");
-	}
+	llvm::Value *poll_val_int = llvm::ConstantInt::get (llvm::unwrap (int_ptr_type (module->ctx ())), reinterpret_cast<guint64>(&mono_polling_required), false);
+	llvm::Value *poll_val_ptr = builder->CreateIntToPtr (poll_val_int, llvm::unwrap (ptr_type), "");
 	llvm::Value *poll_val_ptr_load = builder->CreateLoad (llvm::unwrap (int_ptr_type (module->ctx ())), poll_val_ptr, ""); // probably needs to be volatile
 	llvm::Value *poll_val = builder->CreatePtrToInt (poll_val_ptr_load, llvm::unwrap (int_ptr_type (module->ctx ())), "");
 	llvm::Value *poll_val_zero = llvm::Constant::getNullValue (poll_val->getType ());
@@ -1785,11 +1628,7 @@ emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompi
 	/* poll: */
 	builder->SetInsertPoint (llvm::unwrap (poll_bb));
 	LLVMValueRef call;
-	if (is_aot) {
-		LLVMValueRef icall_wrapper = emit_icall_cold_wrapper (module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll, TRUE);
-		module->gc_poll_cold_wrapper = icall_wrapper;
-		call = llvm::wrap (builder->CreateCall (llvm::cast<llvm::FunctionType> (llvm::unwrap (LLVMGlobalGetValueType (icall_wrapper))), llvm::unwrap (icall_wrapper), gep_index_list (NULL, 0), ""));
-	} else {
+	{
 		// in JIT mode we have to emit @gc.safepoint_poll function for each method (module)
 		// this function calls gc_poll_cold_wrapper_compiled via a global variable.
 		// @gc.safepoint_poll will be inlined and can be deleted after -place-safepoints pass.

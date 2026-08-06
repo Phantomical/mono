@@ -13,7 +13,6 @@
 #include "llvmonly-runtime.h"
 #include "mini-llvm.h"
 #include "jit-icalls.h"
-#include "aot-compiler.h"
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/class-abi-details.h>
 #include <mono/utils/mono-utils-debug.h>
@@ -428,9 +427,6 @@ can_enter_interp (MonoCompile *cfg, MonoMethod *method, gboolean virtual_)
 		return FALSE;
 
 	if (m_class_get_image (method->klass) == m_class_get_image (cfg->method->klass)) {
-		/* When using AOT profiling, the method might not be AOTed */
-		if (cfg->compile_aot && mono_aot_can_enter_interp (method))
-			return TRUE;
 		/* Virtual calls from corlib can go outside corlib */
 		if (!virtual_)
 			return FALSE;

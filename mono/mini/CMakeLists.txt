@@ -55,7 +55,6 @@ set(mini_sources
   driver.c
   debug-mini.c
   linear-scan.c
-  aot-compiler.c
   aot-runtime.c
   graph.c
   mini-codegen.c

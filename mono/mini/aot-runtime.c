@@ -66,7 +66,6 @@
 #include "mini.h"
 #include "seq-points.h"
 #include "debugger-agent.h"
-#include "aot-compiler.h"
 #include "aot-runtime.h"
 #include "jit-icalls.h"
 #include "mini-runtime.h"
@@ -6563,6 +6562,204 @@ mono_aot_get_method_flags (guint8 *code)
 	flags = GPOINTER_TO_UINT (g_hash_table_lookup (code_to_method_flags, code));
 	mono_aot_unlock ();
 	return (MonoAotMethodFlags)flags;
+}
+
+/*
+ * The method hash below depends only on metadata, so a loaded image's method
+ * table can be probed without materialising anything.
+ */
+
+#define rot(x,k) (((x)<<(k)) | ((x)>>(32-(k))))
+#define mix(a,b,c) { \
+	a -= c;  a ^= rot(c, 4);  c += b; \
+	b -= a;  b ^= rot(a, 6);  a += c; \
+	c -= b;  c ^= rot(b, 8);  b += a; \
+	a -= c;  a ^= rot(c,16);  c += b; \
+	b -= a;  b ^= rot(a,19);  a += c; \
+	c -= b;  c ^= rot(b, 4);  b += a; \
+}
+#define mono_final(a,b,c) { \
+	c ^= b; c -= rot(b,14); \
+	a ^= c; a -= rot(c,11); \
+	b ^= a; b -= rot(a,25); \
+	c ^= b; c -= rot(b,16); \
+	a ^= c; a -= rot(c,4);  \
+	b ^= a; b -= rot(a,14); \
+	c ^= b; c -= rot(b,24); \
+}
+
+static guint
+mono_aot_type_hash (MonoType *t1)
+{
+	guint hash = t1->type;
+
+	hash |= t1->byref << 6; /* do not collide with t1->type values */
+	switch (t1->type) {
+	case MONO_TYPE_VALUETYPE:
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_SZARRAY:
+		/* check if the distribution is good enough */
+		return ((hash << 5) - hash) ^ mono_metadata_str_hash (m_class_get_name (t1->data.klass));
+	case MONO_TYPE_PTR:
+		return ((hash << 5) - hash) ^ mono_metadata_type_hash (t1->data.type);
+	case MONO_TYPE_ARRAY:
+		return ((hash << 5) - hash) ^ mono_metadata_type_hash (m_class_get_byval_arg (t1->data.array->eklass));
+	case MONO_TYPE_GENERICINST:
+		return ((hash << 5) - hash) ^ 0;
+	default:
+		return hash;
+	}
+}
+
+/*
+ * mono_aot_method_hash:
+ *
+ *   Return a hash code for methods which only depends on metadata.
+ */
+guint32
+mono_aot_method_hash (MonoMethod *method)
+{
+	MonoMethodSignature *sig;
+	MonoClass *klass;
+	int i, hindex;
+	int hashes_count;
+	guint32 *hashes_start, *hashes;
+	guint32 a, b, c;
+	MonoGenericInst *class_ginst = NULL;
+	MonoGenericInst *ginst = NULL;
+
+	/* Similar to the hash in mono_method_get_imt_slot () */
+
+	sig = mono_method_signature_internal (method);
+
+	if (mono_class_is_ginst (method->klass))
+		class_ginst = mono_class_get_generic_class (method->klass)->context.class_inst;
+	if (method->is_inflated)
+		ginst = ((MonoMethodInflated*)method)->context.method_inst;
+
+	hashes_count = sig->param_count + 5 + (class_ginst ? class_ginst->type_argc : 0) + (ginst ? ginst->type_argc : 0);
+	hashes_start = (guint32 *)g_malloc0 (hashes_count * sizeof (guint32));
+	hashes = hashes_start;
+
+	/* Some wrappers are assigned to random classes */
+	if (!method->wrapper_type || method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK)
+		klass = method->klass;
+	else
+		klass = mono_defaults.object_class;
+
+	if (!method->wrapper_type) {
+		char *full_name;
+
+		if (mono_class_is_ginst (klass))
+			full_name = mono_type_full_name (m_class_get_byval_arg (mono_class_get_generic_class (klass)->container_class));
+		else
+			full_name = mono_type_full_name (m_class_get_byval_arg (klass));
+
+		hashes [0] = mono_metadata_str_hash (full_name);
+		hashes [1] = 0;
+		g_free (full_name);
+	} else {
+		hashes [0] = mono_metadata_str_hash (m_class_get_name (klass));
+		hashes [1] = mono_metadata_str_hash (m_class_get_name_space (klass));
+	}
+	if (method->wrapper_type == MONO_WRAPPER_STFLD || method->wrapper_type == MONO_WRAPPER_LDFLD || method->wrapper_type == MONO_WRAPPER_LDFLDA)
+		/* The method name includes a stringified pointer */
+		hashes [2] = 0;
+	else
+		hashes [2] = mono_metadata_str_hash (method->name);
+	hashes [3] = method->wrapper_type;
+	hashes [4] = mono_aot_type_hash (sig->ret);
+	hindex = 5;
+	for (i = 0; i < sig->param_count; i++) {
+		hashes [hindex ++] = mono_aot_type_hash (sig->params [i]);
+	}
+	if (class_ginst) {
+		for (i = 0; i < class_ginst->type_argc; ++i)
+			hashes [hindex ++] = mono_aot_type_hash (class_ginst->type_argv [i]);
+	}
+	if (ginst) {
+		for (i = 0; i < ginst->type_argc; ++i)
+			hashes [hindex ++] = mono_aot_type_hash (ginst->type_argv [i]);
+	}		
+	g_assert (hindex == hashes_count);
+
+	/* Setup internal state */
+	a = b = c = 0xdeadbeef + (((guint32)hashes_count)<<2);
+
+	/* Handle most of the hashes */
+	while (hashes_count > 3) {
+		a += hashes [0];
+		b += hashes [1];
+		c += hashes [2];
+		mix (a,b,c);
+		hashes_count -= 3;
+		hashes += 3;
+	}
+
+	/* Handle the last 3 hashes (all the case statements fall through) */
+	switch (hashes_count) { 
+	case 3 : c += hashes [2];
+	case 2 : b += hashes [1];
+	case 1 : a += hashes [0];
+		mono_final (a,b,c);
+	case 0: /* nothing left to add */
+		break;
+	}
+	
+	g_free (hashes_start);
+	
+	return c;
+}
+#undef rot
+#undef mix
+#undef mono_final
+
+/*
+ * mono_aot_get_array_helper_from_wrapper;
+ *
+ * Get the helper method in Array called by an array wrapper method.
+ */
+MonoMethod*
+mono_aot_get_array_helper_from_wrapper (MonoMethod *method)
+{
+	MonoMethod *m;
+	const char *prefix;
+	MonoGenericContext ctx;
+	char *mname, *iname, *s, *s2, *helper_name = NULL;
+
+	prefix = "System.Collections.Generic";
+	s = g_strdup_printf ("%s", method->name + strlen (prefix) + 1);
+	s2 = strstr (s, "`1.");
+	g_assert (s2);
+	s2 [0] = '\0';
+	iname = s;
+	mname = s2 + 3;
+
+	//printf ("X: %s %s\n", iname, mname);
+
+	if (!strcmp (iname, "IList"))
+		helper_name = g_strdup_printf ("InternalArray__%s", mname);
+	else
+		helper_name = g_strdup_printf ("InternalArray__%s_%s", iname, mname);
+	{
+		ERROR_DECL (error);
+		m = mono_class_get_method_from_name_checked (mono_defaults.array_class, helper_name, mono_method_signature_internal (method)->param_count, 0, error);
+		mono_error_assert_ok (error);
+		g_assertf (m, "Expected to find method %s in klass %s", helper_name, m_class_get_name (mono_defaults.array_class));
+	}
+	g_free (helper_name);
+	g_free (s);
+
+	if (m->is_generic) {
+		ERROR_DECL (error);
+		memset (&ctx, 0, sizeof (ctx));
+		MonoType *args [ ] = { m_class_get_byval_arg (m_class_get_element_class (method->klass)) };
+		ctx.method_inst = mono_metadata_get_generic_inst (1, args);
+		m = mono_class_inflate_generic_method_checked (m, &ctx, error);
+		g_assert (is_ok (error)); /* FIXME don't swallow the error */
+	}
+
+	return m;
 }
 
 #else

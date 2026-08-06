@@ -60,7 +60,6 @@
 
 #include "mini.h"
 #include "jit.h"
-#include "aot-compiler.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 #include "interp/interp.h"
@@ -1326,14 +1325,13 @@ mono_jit_exec_internal (MonoDomain *domain, MonoAssembly *assembly, int argc, ch
 	}
 }
 
-typedef struct 
+typedef struct
 {
 	MonoDomain *domain;
 	const char *file;
 	int argc;
 	char **argv;
 	guint32 opts;
-	char *aot_options;
 } MainThreadArgs;
 
 static void main_thread_handler (gpointer user_data)
@@ -1341,62 +1339,20 @@ static void main_thread_handler (gpointer user_data)
 	MainThreadArgs *main_args = (MainThreadArgs *)user_data;
 	MonoAssembly *assembly;
 
-	if (mono_compile_aot) {
-		int i, res;
-		gpointer *aot_state = NULL;
-
-		/* Treat the other arguments as assemblies to compile too */
-		for (i = 0; i < main_args->argc; ++i) {
-			assembly = mono_domain_assembly_open_internal (main_args->domain, mono_domain_default_alc (main_args->domain), main_args->argv [i]);
-			if (!assembly) {
-				if (mono_is_problematic_file (main_args->argv [i])) {
-					fprintf (stderr, "Info: AOT of problematic assembly %s skipped. This is expected.\n", main_args->argv [i]);
-					continue;
-				} else {
-					fprintf (stderr, "Can not open image %s\n", main_args->argv [i]);
-					exit (1);
-				}
-			}
-			/* Check that the assembly loaded matches the filename */
-			{
-				MonoImageOpenStatus status;
-				MonoImage *img;
-
-				img = mono_image_open (main_args->argv [i], &status);
-				if (img && strcmp (img->name, assembly->image->name)) {
-					fprintf (stderr, "Error: Loaded assembly '%s' doesn't match original file name '%s'. Set MONO_PATH to the assembly's location.\n", assembly->image->name, img->name);
-					exit (1);
-				}
-			}
-			res = mono_compile_assembly (assembly, main_args->opts, main_args->aot_options, &aot_state);
-			if (res != 0) {
-				fprintf (stderr, "AOT of image %s failed.\n", main_args->argv [i]);
-				exit (1);
-			}
-		}
-		if (aot_state) {
-			res = mono_compile_deferred_assemblies (main_args->opts, main_args->aot_options, &aot_state);
-			if (res != 0) {
-				fprintf (stderr, "AOT of mode-specific deferred assemblies failed.\n");
-				exit (1);
-			}
-		}
-	} else {
-		assembly = mono_domain_assembly_open_internal (main_args->domain, mono_domain_default_alc (main_args->domain), main_args->file);
-		if (!assembly){
-			fprintf (stderr, "Can not open image %s\n", main_args->file);
-			exit (1);
-		}
-
-		/* 
-		 * This must be done in a thread managed by mono since it can invoke
-		 * managed code.
-		 */
-		if (main_args->opts & MONO_OPT_PRECOMP)
-			mono_precompile_assemblies ();
-
-		mono_jit_exec (main_args->domain, assembly, main_args->argc, main_args->argv);
+	assembly = mono_domain_assembly_open_internal (main_args->domain, mono_domain_default_alc (main_args->domain), main_args->file);
+	if (!assembly){
+		fprintf (stderr, "Can not open image %s\n", main_args->file);
+		exit (1);
 	}
+
+	/*
+	 * This must be done in a thread managed by mono since it can invoke
+	 * managed code.
+	 */
+	if (main_args->opts & MONO_OPT_PRECOMP)
+		mono_precompile_assemblies ();
+
+	mono_jit_exec (main_args->domain, assembly, main_args->argc, main_args->argv);
 }
 
 static int
@@ -1540,7 +1496,6 @@ mini_usage (void)
 		"Usage is: mono [options] program [program-options]\n"
 		"\n"
 		"Development:\n"
-		"    --aot[=<options>]      Compiles the assembly to native code\n"
 #ifdef ENABLE_NETCORE
 		"    --debug=ignore         Disable debugging support (on by default)\n"
 		"    --debug=[<options>]    Disable debugging support or enable debugging extras, use --help-debug for details\n"
@@ -1699,11 +1654,15 @@ mono_get_version_info (void)
 	return g_string_free (output, FALSE);
 }
 
-#ifndef MONO_ARCH_AOT_SUPPORTED
-#define error_if_aot_unsupported() do {fprintf (stderr, "AOT compilation is not supported on this platform.\n"); exit (1);} while (0)
-#else
-#define error_if_aot_unsupported()
-#endif
+/*
+ * This runtime has no AOT compiler, so the options that would drive one are
+ * refused while parsing the command line rather than left to fail later on a
+ * back end that is not there.
+ */
+#define error_aot_unsupported(opt) do { \
+		fprintf (stderr, "%s: ahead-of-time compilation is not supported by this runtime.\n", (opt)); \
+		exit (1); \
+	} while (0)
 
 static gboolean enable_debugging;
 
@@ -2032,7 +1991,6 @@ mono_main (int argc, char* argv[])
 	MonoGraphOptions mono_graph_options = (MonoGraphOptions)0;
 	int mini_verbose_level = 0;
 	char *trace_options = NULL;
-	char *aot_options = NULL;
 	char *forced_version = NULL;
 	GPtrArray *agents = NULL;
 	char *attach_options = NULL;
@@ -2251,21 +2209,8 @@ mono_main (int argc, char* argv[])
 			if (mono_stats_method_desc)
 				g_free (mono_stats_method_desc);
 			mono_stats_method_desc = parse_qualified_method_name (argv [i] + 8);
-#ifndef DISABLE_AOT
-		} else if (strcmp (argv [i], "--aot") == 0) {
-			error_if_aot_unsupported ();
-			mono_compile_aot = TRUE;
-		} else if (strncmp (argv [i], "--aot=", 6) == 0) {
-			error_if_aot_unsupported ();
-			mono_compile_aot = TRUE;
-			if (aot_options) {
-				char *tmp = g_strdup_printf ("%s,%s", aot_options, &argv [i][6]);
-				g_free (aot_options);
-				aot_options = tmp;
-			} else {
-				aot_options = g_strdup (&argv [i][6]);
-			}
-#endif
+		} else if (strcmp (argv [i], "--aot") == 0 || strncmp (argv [i], "--aot=", 6) == 0) {
+			error_aot_unsupported ("--aot");
 		} else if (strncmp (argv [i], "--apply-bindings=", 17) == 0) {
 			extra_bindings_config_file = &argv[i][17];
 		} else if (strncmp (argv [i], "--aot-path=", 11) == 0) {
@@ -2700,7 +2645,6 @@ mono_main (int argc, char* argv[])
 		main_args.argc = argc - i;
 		main_args.argv = argv + i;
 		main_args.opts = opt;
-		main_args.aot_options = aot_options;
 		main_thread_handler (&main_args);
 		mono_thread_manage_internal ();
 

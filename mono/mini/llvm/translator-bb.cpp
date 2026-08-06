@@ -1362,25 +1362,7 @@ EmitContext::process_bb (MonoBasicBlock *bb)
 			MonoJumpInfoType ji_type = static_cast<MonoJumpInfoType>(ins->inst_c1);
 			gpointer ji_data = ins->inst_p0;
 
-			if (!cfg->compile_aot) {
-				values [ins->dreg] = ctx->get_jit_const (ji_type, ji_data);
-				break;
-			}
-
-			if (ji_type == MONO_PATCH_INFO_ICALL_ADDR) {
-				char *symbol = mono_aot_get_direct_call_symbol (MONO_PATCH_INFO_ICALL_ADDR_CALL, ji_data);
-				if (symbol) {
-					/*
-					 * Avoid emitting a got entry for these since the method is directly called, and it might not be
-					 * resolvable at runtime using dlsym ().
-					 */
-					g_free (symbol);
-					values [ins->dreg] = llvm::ConstantInt::get (llvm::unwrap (IntPtrType ()), 0, false);
-					break;
-				}
-			}
-
-			values [ins->dreg] = llvm::unwrap (ctx->get_aotconst (ji_type, ji_data, llvm::wrap (llvm::PointerType::get (ctx->llvm_ctx (), 0))));
+			values [ins->dreg] = ctx->get_jit_const (ji_type, ji_data);
 			break;
 		}
 		case OP_MEMMOVE: {

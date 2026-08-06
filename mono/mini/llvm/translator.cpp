@@ -582,7 +582,7 @@ EmitContext::emit_method_inner ()
 		if (info->subtype == WRAPPER_SUBTYPE_LLVM_FUNC) {
 			g_assert (info->d.llvm_func.subtype == LLVM_FUNC_WRAPPER_GC_POLL);
 
-			method = emit_icall_cold_wrapper (this->module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll, FALSE);
+			method = emit_icall_cold_wrapper (this->module, lmodule, MONO_JIT_ICALL_mono_threads_state_poll);
 			this->lmethod = method;
 			this->module->max_method_idx = MAX (this->module->max_method_idx, static_cast<int>(cfg->method_index));
 

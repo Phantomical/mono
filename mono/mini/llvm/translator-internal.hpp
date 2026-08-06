@@ -91,7 +91,6 @@
 #include "mono_lsda_format.hpp"
 #include "translator-cpp.hpp"
 #include "backend.h"
-#include "aot-compiler.h"
 #include "mini-llvm.h"
 #include "mini-runtime.h"
 #include <mono/utils/mono-math.h>
@@ -158,8 +157,6 @@ struct MonoLLVMModule {
 	std::vector<LLVMValueRef> intrins_by_id;
 
 	char *global_prefix;
-	/* Written by emit_gc_safepoint_poll ()'s AOT arm; kept with that function. */
-	LLVMValueRef gc_poll_cold_wrapper;
 	int max_method_idx;
 	gboolean static_link;
 	GHashTable *idx_to_lmethod;
@@ -442,8 +439,7 @@ typedef struct {
 	/* Intrinsic declaration cache (defined in translator-intrinsics.cpp). */
 	LLVMValueRef get_intrins (int id);
 
-	/* AOT-const / jit-callee / named-alloca helpers (defined in translator-emit.cpp). */
-	LLVMValueRef get_aotconst (MonoJumpInfoType type, gconstpointer data, LLVMTypeRef llvm_type);
+	/* jit-callee / named-alloca helpers (defined in translator-emit.cpp). */
 	LLVMValueRef get_jit_callee (const char *name, LLVMTypeRef llvm_sig, MonoJumpInfoType type, gconstpointer data);
 	LLVMValueRef get_direct_callee (const char *name, LLVMTypeRef llvm_sig, gpointer target);
 	llvm::Value *get_jit_const (MonoJumpInfoType type, gconstpointer data);
@@ -698,7 +694,7 @@ set_nontemporal_flag (LLVMValueRef v);
 void
 set_invariant_load_flag (LLVMValueRef v);
 LLVMValueRef
-emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id, gboolean aot);
+emit_icall_cold_wrapper (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoJitICallId icall_id);
 void
 emit_gc_safepoint_poll (MonoLLVMModule *module, LLVMModuleRef lmodule, MonoCompile *cfg);
 
