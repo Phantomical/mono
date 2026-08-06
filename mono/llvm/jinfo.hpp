@@ -21,7 +21,11 @@ namespace mono {
 /// Build METHOD's MonoJitInfo - unwind description, and the clause table where
 /// the method has clauses - from COMPILED's side tables, and register it so the
 /// runtime's unwinder and stack walks can see the frame. A null HEADER
-/// registers clauseless code compiled for the method (its interop thunk).
+/// registers clauseless code compiled for the method (its legacy entry).
+///
+/// COMPILED.code picks which of the object's functions is being registered,
+/// so a forwarder sharing a module with the body it enters is registered by
+/// naming its own code range and leaving the tables it has no records in null.
 /// FILTERS maps an IL clause index to the entry of its compiled filter body,
 /// which the published clause hands the runtime's search pass. BP_SWITCH is
 /// the body's soft-debugger breakpoint switch, when it was translated with

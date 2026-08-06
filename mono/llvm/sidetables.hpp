@@ -32,18 +32,26 @@
  * the writer needs nothing from mono's target headers; the reader converts.
  *
  * `.mono_unwind` is the frame description: the CFI program LLVM tracked for the
- * function, recorded at the MC layer before any target encoding exists.
+ * function, recorded at the MC layer before any target encoding exists. One
+ * block per function the object defines, concatenated - a module holds the
+ * method's body, its filter bodies and its legacy entry, and each of those is a
+ * frame something may be suspended in - so the block names the function it
+ * describes rather than leaving attribution to position.
  *
- *   Header (12 bytes, little-endian):
+ *   Header (20 bytes, little-endian):
  *     u32 magic   = 0x4d555744 ('MUWD')
- *     u16 version = 1
+ *     u16 version = 2
  *     u16 reserved
  *     u32 count
+ *     u64 function    where the function this describes was linked
  *   Record[count] (17 bytes each, little-endian):
  *     u32 offset      code offset the rule takes effect at
  *     u8  operation   one of the MONO_UNWIND_OP_* codes below
  *     i32 reg         DWARF register number, or 0 where the op has none
  *     i64 value       the op's offset operand, or 0
+ *
+ * The function address is the one field that is not code-relative, so it is the
+ * one thing in these sections the linker has to relocate.
  *
  * The operation codes are this format's own, not LLVM's OpType enumerators -
  * those are not a stable ABI across LLVM versions - and not DW_CFA opcodes,
@@ -66,8 +74,8 @@ constexpr std::size_t guards_header_size = 8;
 constexpr std::size_t guards_record_size = 20;
 
 constexpr uint32_t unwind_section_magic = 0x4d555744; /* 'MUWD' */
-constexpr uint16_t unwind_section_version = 1;
-constexpr std::size_t unwind_header_size = 12;
+constexpr uint16_t unwind_section_version = 2;
+constexpr std::size_t unwind_header_size = 20;
 constexpr std::size_t unwind_record_size = 17;
 
 enum MonoUnwindWireOp : uint8_t {

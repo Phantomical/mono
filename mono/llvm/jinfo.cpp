@@ -58,36 +58,51 @@ read_le (const uint8_t *p)
 	return value;
 }
 
+/// The records of the block describing the function linked at CODE, or false
+/// when the section holds no such block.
 bool
-parse_unwind_records (const uint8_t *section, size_t size,
+parse_unwind_records (const uint8_t *section, size_t size, const uint8_t *code,
                       std::vector<WireRecord> &out)
 {
-	if (section == nullptr || size < unwind_header_size)
-		return false;
-	if (read_le<uint32_t> (section) != unwind_section_magic)
-		return false;
-	if (read_le<uint16_t> (section + 4) != unwind_section_version)
+	if (section == nullptr)
 		return false;
 
-	uint32_t count = read_le<uint32_t> (section + 8);
+	const uint8_t *end = section + size;
 
-	if (size != unwind_header_size + (size_t) count * unwind_record_size)
-		return false;
+	for (const uint8_t *block = section; (size_t) (end - block) >= unwind_header_size;) {
+		if (read_le<uint32_t> (block) != unwind_section_magic)
+			return false;
+		if (read_le<uint16_t> (block + 4) != unwind_section_version)
+			return false;
 
-	const uint8_t *p = section + unwind_header_size;
+		uint32_t count = read_le<uint32_t> (block + 8);
+		const uint8_t *function =
+			(const uint8_t *) (uintptr_t) read_le<uint64_t> (block + 12);
+		const uint8_t *p = block + unwind_header_size;
+		size_t records = (size_t) count * unwind_record_size;
 
-	out.reserve (count);
-	for (uint32_t i = 0; i < count; ++i, p += unwind_record_size) {
-		WireRecord r;
+		if ((size_t) (end - p) < records)
+			return false;
+		if (function != code) {
+			block = p + records;
+			continue;
+		}
 
-		r.offset = read_le<uint32_t> (p);
-		r.op = p[4];
-		r.reg = read_le<int32_t> (p + 5);
-		r.value = read_le<int64_t> (p + 9);
-		out.push_back (r);
+		out.reserve (count);
+		for (uint32_t i = 0; i < count; ++i, p += unwind_record_size) {
+			WireRecord r;
+
+			r.offset = read_le<uint32_t> (p);
+			r.op = p[4];
+			r.reg = read_le<int32_t> (p + 5);
+			r.value = read_le<int64_t> (p + 9);
+			out.push_back (r);
+		}
+
+		return true;
 	}
 
-	return true;
+	return false;
 }
 
 /// The finally guard records, or an error if the section is malformed or names a
@@ -382,10 +397,10 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 
 	std::vector<WireRecord> records;
 	if (!parse_unwind_records (compiled.unwind_table, compiled.unwind_table_size,
-	                           records))
+	                           compiled.code, records))
 		return createStringError (inconvertibleErrorCode (),
 		                          "the compiled object carries no frame "
-		                          "description");
+		                          "description for the function at %p", code);
 
 	Expected<GSList *> ops = transcode_unwind (records);
 	if (!ops)

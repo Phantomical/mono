@@ -635,7 +635,7 @@ LegacyAbiPass::run (Module &m, ModuleAnalysisManager &)
 
 Function *
 create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
-                           LegacyFlavor flavor)
+                           LegacyFlavor flavor, Value *through)
 {
 	LLVMContext &ctx = m.getContext ();
 	const DataLayout &dl = m.getDataLayout ();
@@ -761,7 +761,8 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 		args.insert (args.begin (), returned);
 	}
 
-	CallInst *call = b.CreateCall (target, args);
+	CallInst *call = b.CreateCall (target->getFunctionType (),
+	                               through != nullptr ? through : target, args);
 
 	call->setCallingConv (target->getCallingConv ());
 

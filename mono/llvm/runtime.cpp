@@ -316,6 +316,18 @@ symbol_for_body (MonoMethod *method)
 	return symbol_for_code (method) + "$fast";
 }
 
+/// The `$entry` symbol: the legacy entry compiled beside a method's body.
+///
+/// A name of its own rather than the plain symbol, which in the body's module
+/// means the stub - a body that takes its own address gets the stub, not the
+/// entry sitting next to it, since that pointer escapes and must survive every
+/// later recompile.
+std::string
+symbol_for_entry (MonoMethod *method)
+{
+	return symbol_for_code (method) + "$entry";
+}
+
 /// The engine, and everything it needs that outlives one compile.
 ///
 /// Code is compiled per domain, the way mini kept a jit_code_hash per domain: a
@@ -431,9 +443,11 @@ private:
 
 	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method);
 
-	/// The legacy entry - the interop thunk - as a compile of its own. It
-	/// reaches the method through the body's stub, so it is domain-neutral
-	/// and safe to build whichever domain the building thread has current.
+	/// The legacy entry - the interop thunk - as a compile of its own, with
+	/// no body beside it. It reaches the method through the body's stub, so
+	/// it is domain-neutral and safe to build whichever domain the building
+	/// thread has current; a method compiled for its own domain gets its
+	/// entry emitted into the body's module instead.
 	Expected<void *> compile_entry_thunk (DomainState &state, MonoMethod *method);
 
 	/// The per-call dispatcher a body stub binds to when its first caller
@@ -845,10 +859,8 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 
 	std::string entry = (*function)->getName ().str ();
 
-	if (dumping (entry.c_str ())) {
+	if (dumping (entry.c_str ()))
 		dump_il (method, cfg.get ()->header);
-		module->print (llvm::errs (), nullptr);
-	}
 
 	/*
 	 * Laying out a class to create its vtable is the other place metadata gets
@@ -859,6 +871,38 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	if (Error err = resolve (state, externals))
 		return recover (state, method, std::move (err));
 
+	/*
+	 * The legacy entry rides along in the body's module. It is a handful of
+	 * instructions, and a module of its own would cost a whole second pass
+	 * pipeline, codegen and link to hold them.
+	 *
+	 * It calls the body's stub rather than the definition beside it, which is
+	 * what keeps it correct across a later recompile - the stub is redirected
+	 * and the entry follows it without being rebuilt. Translating the method
+	 * declared it, so resolve () above has published that stub.
+	 */
+	Expected<void *> body_stub = state.jit->stub_address (symbol_for_body (method));
+
+	if (!body_stub)
+		return body_stub.takeError ();
+
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (method->string_ctor)
+		sig = mono_marshal_get_string_ctor_signature (method);
+
+	std::string legacy_entry = symbol_for_entry (method);
+
+	arch::create_legacy_entry_thunk (
+		*module, legacy_entry, *function, legacy_call_flavor (sig),
+		ConstantExpr::getIntToPtr (
+			ConstantInt::get (Type::getInt64Ty (*context),
+			                  (uint64_t) (uintptr_t) *body_stub),
+			PointerType::get (*context, 0)));
+
+	if (dumping (entry.c_str ()))
+		module->print (llvm::errs (), nullptr);
+
 	Expected<CompiledMethod> compiled =
 		state.jit->compile (ThreadSafeModule (std::move (module),
 		                                      ThreadSafeContext (std::move (context))),
@@ -868,11 +912,20 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 
 	/*
 	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`;
-	 * their entries go into the published clauses.
+	 * their entries go into the published clauses. The legacy entry rode along
+	 * too, and is what the runtime is handed for the method.
 	 */
 	std::vector<std::pair<uint32_t, void *>> filters;
+	const uint8_t *entry_code = nullptr;
+	size_t entry_code_size = 0;
 
 	for (const auto &[name, extent] : compiled->functions) {
+		if (name == legacy_entry) {
+			entry_code = extent.first;
+			entry_code_size = extent.second;
+			continue;
+		}
+
 		size_t at = name.rfind ("$filter");
 
 		if (at == std::string::npos)
@@ -881,6 +934,11 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 			(uint32_t) std::stoul (name.substr (at + 7)),
 			const_cast<uint8_t *> (extent.first));
 	}
+
+	if (entry_code == nullptr)
+		return createStringError (inconvertibleErrorCode (),
+		                          "the linked object for %s defines no legacy "
+		                          "entry", entry.c_str ());
 
 	Expected<MonoJitInfo *> jinfo = register_jit_info (
 		state.domain, method, cfg.get ()->header, *compiled, filters, bp_switch);
@@ -891,23 +949,34 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	*published = *jinfo;
 
 	/*
-	 * The legacy entry, as a module of its own: the side tables attribute
-	 * their records to the one function a module holds, so the thunk cannot
-	 * share the body's. It calls the body through the body's stub, which keeps
-	 * it valid across repromotions, and it gets jit info of its own so the
-	 * unwinder can walk a frame suspended inside it.
+	 * A record of its own for the entry: an exception unwinding out of the
+	 * body passes back through it, and a suspended thread can be stopped in
+	 * it, so the runtime has to be able to resolve the frame. It carries no
+	 * clauses and no line table, so its own frame description is all it takes
+	 * from the module's side tables - and no dylib, since the body's record
+	 * already owns the one they share.
 	 */
-	Expected<void *> thunk_entry = compile_entry_thunk (state, method);
+	CompiledMethod entry_forwarder;
 
-	if (!thunk_entry)
-		return thunk_entry.takeError ();
+	entry_forwarder.entry = const_cast<uint8_t *> (entry_code);
+	entry_forwarder.code = entry_code;
+	entry_forwarder.code_size = entry_code_size;
+	entry_forwarder.unwind_table = compiled->unwind_table;
+	entry_forwarder.unwind_table_size = compiled->unwind_table_size;
+
+	Expected<MonoJitInfo *> entry_jinfo =
+		register_jit_info (state.domain, method, nullptr, entry_forwarder);
+
+	if (!entry_jinfo)
+		return entry_jinfo.takeError ();
+	remember (state, method, entry_forwarder, *entry_jinfo);
 
 	if (tracing ())
 		fprintf (stderr, "[llvm-jit] %s is at %p (enters at %p, for %s)\n",
-		         entry.c_str (), compiled->entry, *thunk_entry,
+		         entry.c_str (), compiled->entry, entry_code,
 		         state.domain->friendly_name);
 
-	return Compiled { *thunk_entry, compiled->entry };
+	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry };
 }
 
 /*
@@ -1015,9 +1084,9 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 	mono_error_cleanup (failure);
 
 	/*
-	 * One function per module, as everywhere else here: the side tables
-	 * attribute their records to the single function a module holds. So the
-	 * entry and the body are two compiles of the same three instructions.
+	 * The entry and the body are separate symbols the runtime redirects
+	 * independently, and here they stand for the same three instructions - so
+	 * this is that body, built twice under the two names.
 	 */
 	auto build = [&] (const std::string &name) -> Expected<void *> {
 		auto context = std::make_unique<LLVMContext> ();

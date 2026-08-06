@@ -269,9 +269,11 @@ private:
 	}
 
 	/*
-	 * `.mono_unwind`: the function's CFI program, initial frame state first.
-	 * The offsets are label differences against the frame's begin label, which
-	 * sits at the function's entry, so the writer folds them to constants.
+	 * `.mono_unwind`: one block per function, each its CFI program with the
+	 * initial frame state first. The rule offsets are label differences
+	 * against the frame's begin label, which sits at the function's entry, so
+	 * the writer folds them to constants; the begin label itself is emitted
+	 * whole, as the address the reader matches a block to a function by.
 	 */
 	void emit_unwind_table ()
 	{
@@ -282,43 +284,43 @@ private:
 		if (frames.empty ())
 			return;
 
-		/*
-		 * The entry function is created first and machine passes run in
-		 * module order, so its frame is the first; any frames after it
-		 * belong to filter bodies, whose unwind state nothing consumes.
-		 */
-		const MCDwarfFrameInfo &frame = frames.front ();
 		const std::vector<MCCFIInstruction> &initial =
 			ctx.getAsmInfo ()->getInitialFrameState ();
 
 		streamer.switchSection (ctx.getELFSection (
 			".mono_unwind", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
 
-		streamer.emitIntValue (unwind_section_magic, 4);
-		streamer.emitIntValue (unwind_section_version, 2);
-		streamer.emitIntValue (0, 2);
-		streamer.emitIntValue (initial.size () + frame.Instructions.size (), 4);
+		for (const MCDwarfFrameInfo &frame : frames) {
+			auto emit_record = [&] (const UnwindRecord &r, bool at_entry) {
+				if (at_entry || r.at == nullptr) {
+					streamer.emitIntValue (0, 4);
+				} else {
+					streamer.emitValue (
+						MCBinaryExpr::createSub (
+							MCSymbolRefExpr::create (r.at, ctx),
+							MCSymbolRefExpr::create (frame.Begin,
+							                         ctx),
+							ctx),
+						4);
+				}
+				streamer.emitIntValue (r.op, 1);
+				streamer.emitIntValue (static_cast<uint32_t> (r.reg), 4);
+				streamer.emitIntValue (static_cast<uint64_t> (r.value), 8);
+			};
 
-		auto emit_record = [&] (const UnwindRecord &r, bool at_entry) {
-			if (at_entry || r.at == nullptr) {
-				streamer.emitIntValue (0, 4);
-			} else {
-				streamer.emitValue (
-					MCBinaryExpr::createSub (
-						MCSymbolRefExpr::create (r.at, ctx),
-						MCSymbolRefExpr::create (frame.Begin, ctx),
-						ctx),
-					4);
-			}
-			streamer.emitIntValue (r.op, 1);
-			streamer.emitIntValue (static_cast<uint32_t> (r.reg), 4);
-			streamer.emitIntValue (static_cast<uint64_t> (r.value), 8);
-		};
+			streamer.emitIntValue (unwind_section_magic, 4);
+			streamer.emitIntValue (unwind_section_version, 2);
+			streamer.emitIntValue (0, 2);
+			streamer.emitIntValue (initial.size ()
+			                               + frame.Instructions.size (),
+			                       4);
+			streamer.emitValue (MCSymbolRefExpr::create (frame.Begin, ctx), 8);
 
-		for (const MCCFIInstruction &i : initial)
-			emit_record (transcribe_cfi (i), /*at_entry=*/true);
-		for (const MCCFIInstruction &i : frame.Instructions)
-			emit_record (transcribe_cfi (i), /*at_entry=*/false);
+			for (const MCCFIInstruction &i : initial)
+				emit_record (transcribe_cfi (i), /*at_entry=*/true);
+			for (const MCCFIInstruction &i : frame.Instructions)
+				emit_record (transcribe_cfi (i), /*at_entry=*/false);
+		}
 	}
 
 	MCStreamer *streamer_;

@@ -125,11 +125,16 @@ public:
 
 /// Create NAME in M: a legacy-convention entry point that unpacks its
 /// arguments out of the convention into natural values and calls TARGET (a
-/// fastcc declaration in M) with them. This is what the runtime publishes for
-/// a method - every caller that is not generated code enters through it.
+/// fastcc function in M) with them. This is what the runtime publishes for a
+/// method - every caller that is not generated code enters through it.
+///
+/// THROUGH, when given, is the address the call is actually made to; TARGET
+/// then only supplies the shape of the call. That is how an entry emitted
+/// beside the body it enters still reaches it through the body's stub.
 llvm::Function *create_legacy_entry_thunk (llvm::Module &m, llvm::StringRef name,
                                            llvm::Function *target,
-                                           LegacyFlavor flavor);
+                                           LegacyFlavor flavor,
+                                           llvm::Value *through = nullptr);
 
 } // namespace mono::arch
 
