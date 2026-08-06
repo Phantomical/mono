@@ -148,6 +148,27 @@ These are the two most likely to be genuine budget cases rather than hangs —
 swing with machine load. `bcl-xunit-System.Core` has no recorded completion
 anywhere, so its honest cost is still unknown.
 
+## A concrete suspect for `bcl-Mono.Debugger.Soft`
+
+Independent of this investigation, the exception-filter debugger work had to build a
+watchdogged runner to get through that suite at all, because **a debuggee wedges
+every so often on a shutdown race in the debugger agent and the runner then waits
+forever.** Its watchdog reaps any `dtest-app` or `dtest-excfilter` of its own worktree
+older than 150 s, on a 20-second poll, and that was enough to make the suite complete
+reliably.
+
+That is a ready-made hypothesis for the 1800 s wall: not a slow suite and not a
+wedged runtime, but one hung debuggee that the runner sits on until CTest kills the
+whole thing. It also explains why the suite completes sometimes and not others without
+anything about the machine changing.
+
+The runner is `.claude/scratch/filter-frames/run-part.sh` — it splits the suite in two
+(`part1.args`, `part2.args`) and is worth reading before writing anything new. Testing
+the hypothesis is cheap: run the suite unwatched, and when it stalls, look for a
+`dtest-*` process outstanding and take a stack from **both** it and the runner. If it
+holds, the fix is in the debugger agent's shutdown path rather than anywhere near a
+timeout budget, and task #79 is the prior art.
+
 ## What to do
 
 Roughly in value order. Each is independent; there is no need to do them all.
