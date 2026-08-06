@@ -419,7 +419,8 @@ private:
 	Expected<DomainState *> state_for (MonoDomain *domain);
 
 	Error resolve (DomainState &state, const std::vector<ExternalSymbol> &externals);
-	Expected<Compiled> translate_and_compile (DomainState &state, MonoMethod *method);
+	Expected<Compiled> translate_and_compile (DomainState &state, MonoMethod *method,
+	                                          MonoJitInfo **published);
 
 	/// Translate METHOD's IL and compile what comes out, storing the jit info
 	/// of the body in PUBLISHED. PUBLISHED is left null when a metadata
@@ -815,8 +816,11 @@ raise_jit_done (MonoMethod *method, MonoJitInfo *jinfo)
 }
 
 Expected<Backend::Compiled>
-Backend::translate_and_compile (DomainState &state, MonoMethod *method)
+Backend::translate_and_compile (DomainState &state, MonoMethod *method,
+                                MonoJitInfo **published)
 {
+	*published = nullptr;
+
 	/*
 	 * Array Get/Set/Address have no body and no icall - every call site
 	 * lowers them inline. The compilable form, for the runtime paths that
@@ -848,21 +852,22 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method)
 
 	/*
 	 * This is the one place a method is translated, so it is where the
-	 * profiler's compilation of it begins and ends. Exactly one end follows
-	 * every begin: a consumer pairing the two would otherwise carry an open
-	 * span for the rest of the process. A method whose metadata would not load
-	 * gets a stand-in body that raises instead of a translation, and that is a
-	 * failed compile however it is served.
+	 * profiler's compilation of it begins. Exactly one end follows every
+	 * begin: a consumer pairing the two would otherwise carry an open span for
+	 * the rest of the process. A method whose metadata would not load gets a
+	 * stand-in body that raises instead of a translation, and that is a failed
+	 * compile however it is served. The successful end is raised by the caller,
+	 * once the method can be looked up - PUBLISHED being non-null is what says
+	 * one is owed.
 	 */
 	MONO_PROFILER_RAISE (jit_begin, (method));
 
-	MonoJitInfo *published = nullptr;
-	Expected<Compiled> code = translate_body (state, method, &published);
+	Expected<Compiled> code = translate_body (state, method, published);
 
-	if (code && published != nullptr)
-		raise_jit_done (method, published);
-	else
+	if (!code || *published == nullptr) {
+		*published = nullptr;
 		MONO_PROFILER_RAISE (jit_failed, (method));
+	}
 
 	return code;
 }
@@ -1317,17 +1322,25 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 	if (entered != state.domain)
 		mono_domain_set_internal_with_options (state.domain, FALSE);
 
-	Expected<Compiled> code = translate_and_compile (state, method);
+	MonoJitInfo *published = nullptr;
+	Expected<Compiled> code = translate_and_compile (state, method, &published);
 
 	if (entered != state.domain)
 		mono_domain_set_internal_with_options (entered, FALSE);
+
+	auto give_up = [&] (Error err) {
+		if (published != nullptr)
+			MONO_PROFILER_RAISE (jit_failed, (jinfo_get_method (published)));
+		return std::move (err);
+	};
+
 	if (!code)
-		return code.takeError ();
+		return give_up (code.takeError ());
 
 	if (Error err = state.jit->redirect_stub (symbol_for_code (method), code->entry))
-		return std::move (err);
+		return give_up (std::move (err));
 	if (Error err = state.jit->redirect_stub (symbol_for_body (method), code->body))
-		return std::move (err);
+		return give_up (std::move (err));
 
 	/*
 	 * Two threads racing here both compile; the loser's code is merely
@@ -1337,8 +1350,21 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 	 * domain's own code here, which is mini's behavior too: a same-domain
 	 * resolve patches the call site.
 	 */
-	std::lock_guard<std::mutex> lock (mutex_);
-	state.compiled[method] = *code;
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		state.compiled[method] = *code;
+	}
+
+	/*
+	 * Only now, and outside the lock. The debugger agent's handler for this
+	 * parks the compiling thread and lets its own thread run, and what that
+	 * thread does with a freshly compiled method is look it up - through
+	 * mono_llvm_jit_find_body (), which reads the record above and takes the
+	 * same lock.
+	 */
+	if (published != nullptr)
+		raise_jit_done (jinfo_get_method (published), published);
+
 	return *code;
 }
 
