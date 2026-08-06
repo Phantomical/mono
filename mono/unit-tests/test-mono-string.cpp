@@ -9,25 +9,14 @@
 
 #include <gtest/gtest.h>
 
+#include "harness.hpp"
+
 namespace {
 
-/*
- * A runtime cannot be shut down and started again in one process, so it comes up
- * once per suite.  Each case is also its own process under ctest, which is why
- * this has to be safe to reach twice.
- *
- * The Test suffix keeps the fixture from shadowing MonoString inside the bodies.
- */
+/* The Test suffix keeps the fixture from shadowing MonoString inside the bodies. */
 class MonoStringTest : public ::testing::Test {
 public:
-	static void SetUpTestSuite ()
-	{
-		static bool started = false;
-		if (started)
-			return;
-		started = true;
-		mono_jit_init_version_for_test_only ("test-mono-string", "v4.0.30319");
-	}
+	static void SetUpTestSuite () { mono::test::init_runtime (); }
 };
 
 } // namespace

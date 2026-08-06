@@ -13,12 +13,12 @@ if(NOT MONO_ENABLE_SGEN)
   return()
 endif()
 
-# test-mono-callspec.cpp calls mono_set_assemblies_path ("../../mcs/class/lib/
-# net_4_x") and opens callspec.exe by bare name, both relative to the working
-# directory, which is why these tests run from <build>/mono/unit-tests.
+# harness.cpp calls mono_set_assemblies_path ("../../mcs/class/lib/net_4_x") and
+# test-mono-callspec.cpp opens callspec.exe by bare name, both relative to the
+# working directory, which is why these tests run from <build>/mono/unit-tests.
 
-# RUNTIME means the test starts a runtime and therefore links the whole JIT;
-# the others only need metadata and the collector.
+# RUNTIME links the whole JIT as an archive; the rest link only metadata and the
+# collector, whose objects are force-linked.
 function(mono_add_unit_test name)
   cmake_parse_arguments(ARG "RUNTIME" "" "SOURCES" ${ARGN})
 
@@ -96,16 +96,15 @@ mono_unit_test_cases(test-mono-utils test-conc-hashtable "ConcHashTable.*")
 mono_add_unit_test(test-mono-linked-list-set SOURCES test-mono-linked-list-set.cpp)
 mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
 
-mono_add_unit_test(test-mono-callspec        SOURCES test-mono-callspec.cpp   RUNTIME)
-mono_unit_test_cases(test-mono-callspec test-mono-callspec "*")
-mono_add_unit_test(test-mono-string          SOURCES test-mono-string.cpp     RUNTIME)
-mono_unit_test_cases(test-mono-string test-mono-string "*")
-
-# RUNTIME not because it starts one, but because it reaches mono-path.c's
-# statics by including the file: only the archive lets the linker leave the
-# library's own copy of those symbols out.
-mono_add_unit_test(test-path                 SOURCES test-path.cpp            RUNTIME)
-mono_unit_test_cases(test-path test-path "*")
+# The tests that run against a live runtime, which harness.cpp brings up once for
+# the binary.  test-path is here without needing one: it reaches mono-path.c's
+# statics by including the file, and only the archive semantics of the RUNTIME
+# link let the linker leave the library's own copy of those symbols out.
+mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
+  harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp)
+mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
+mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
+mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
 
 # One case each, and there could not be a second: the samples they are built out
 # of run a domain to completion and call mono_jit_cleanup, and nothing in the

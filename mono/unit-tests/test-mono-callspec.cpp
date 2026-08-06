@@ -33,6 +33,8 @@
 
 #include <gtest/gtest.h>
 
+#include "harness.hpp"
+
 #define TESTPROG "callspec.exe"
 
 namespace {
@@ -65,24 +67,19 @@ class_from_name (MonoImage *image, const char *name_space, const char *name)
 
 /*
  * The methods the callspecs are matched against, loaded from callspec.exe and
- * from corlib.  Both the runtime and the assembly come up once per suite: a
- * runtime cannot be restarted in a process, and each case is its own process
- * under ctest anyway.
+ * from corlib.  The assembly comes up once per process alongside the runtime,
+ * which gtest reaches again under --gtest_repeat.
  */
 class Callspec : public ::testing::Test {
 public:
 	static void SetUpTestSuite ()
 	{
-		static bool started = false;
-		if (started)
+		mono::test::init_runtime ();
+
+		static bool loaded = false;
+		if (loaded)
 			return;
-		started = true;
-
-		//FIXME This is a hack due to embedding simply not working from the tree
-		mono_set_assemblies_path ("../../mcs/class/lib/net_4_x");
-
-		MonoDomain *domain = mono_jit_init_version_for_test_only ("TEST RUNNER", "mobile");
-		ASSERT_NE (nullptr, domain);
+		loaded = true;
 
 		MonoImageOpenStatus status;
 		MonoAssembly *assembly = mono_assembly_open (TESTPROG, &status);

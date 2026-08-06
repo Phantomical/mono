@@ -7,7 +7,16 @@
 #include <stdlib.h>
 #include "glib.h"
 
+/*
+ * The file rather than the header, because the helpers under test are static to
+ * it.  extern "C" because mono_path_filename_in_basedir is the one entry point
+ * here without MONO_API on it: without this the name it gets in a C++ TU is not
+ * the one the runtime's callers ask for, the linker pulls mono-path.o out of
+ * libmonosgen to satisfy them, and its other two definitions collide with ours.
+ */
+extern "C" {
 #include "mono/utils/mono-path.c"
+}
 
 #include <string_view>
 
