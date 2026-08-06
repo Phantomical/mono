@@ -199,6 +199,10 @@ public:
 	///
 	/// The caller proves nothing can reach the stubs: a later method published
 	/// here may be given the very same block.
+	///
+	/// A compile running concurrently may still be linking against one of
+	/// NAMES; that link either gets its definition or fails to find the name,
+	/// and either way this returns without an error.
 	llvm::Error undefine_stubs (const std::vector<std::string> &names);
 
 	/// The tier-0 IR pipeline, run over M in place: the stock O1 function
@@ -230,6 +234,11 @@ private:
 	/// Every stub this JIT has published. Declared before jit_ so it outlives
 	/// the dylib generator that reads it.
 	std::unique_ptr<StubTable> stub_table_;
+
+	/// Held while a stub is being handed to mono.stubs and while one is being
+	/// taken back out of the table, so a name is never sitting claimed-but-not-
+	/// yet-defined when undefine_stubs () decides what the linker knows about.
+	std::mutex stub_defs_mutex_;
 
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 

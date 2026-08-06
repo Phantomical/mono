@@ -166,12 +166,23 @@ is_mono_pass (StringRef pass)
 /// asks for everything it is missing at once.
 class StubGenerator : public DefinitionGenerator {
 public:
-	explicit StubGenerator (StubTable &table) : table_ (&table) {}
+	StubGenerator (StubTable &table, std::mutex &defs)
+		: table_ (&table), defs_ (&defs)
+	{
+	}
 
 	Error tryToGenerate (LookupState &, LookupKind, JITDylib &jd,
 	                     JITDylibLookupFlags,
 	                     const SymbolLookupSet &lookup) override
 	{
+		/*
+		 * Claiming and defining have to look like one step to undefine_stubs ():
+		 * a name claimed here is already marked as one the linker knows, so an
+		 * undefine landing in between would go looking for a symbol that does
+		 * not exist yet and then leave this definition standing over a table
+		 * entry that is gone.
+		 */
+		std::lock_guard<std::mutex> lock (*defs_);
 		SymbolMap symbols;
 
 		for (const auto &[name, flags] : lookup) {
@@ -192,6 +203,7 @@ public:
 
 private:
 	StubTable *table_;
+	std::mutex *defs_;
 };
 
 } // namespace
@@ -825,8 +837,8 @@ MonoJit::create ()
 	if (!table)
 		return table.takeError ();
 	self->stub_table_ = std::move (*table);
-	self->stubs_->addGenerator (
-		std::make_unique<StubGenerator> (*self->stub_table_));
+	self->stubs_->addGenerator (std::make_unique<StubGenerator> (
+		*self->stub_table_, self->stub_defs_mutex_));
 
 	auto callbacks = LazyCallbacks::create ((void *) &lazy_compile_failed);
 	if (!callbacks)
@@ -1038,30 +1050,53 @@ MonoJit::undefine_stubs (const std::vector<std::string> &names)
 	if (names.empty ())
 		return Error::success ();
 
+	ExecutionSession &es = jit_->getExecutionSession ();
+	StubTable::Removed removed;
+
 	/*
 	 * Out of the table first: nothing can reach these stubs by name once they
-	 * are gone from it, and no later link can ask for a definition of one.
+	 * are gone from it, and no later link can ask for a definition of one. The
+	 * lock is what makes "what the linker knows" a settled question - without
+	 * it a name can be claimed by a link that has not defined it yet.
 	 */
-	Expected<StubTable::Removed> removed = stub_table_->remove (names);
+	{
+		std::lock_guard<std::mutex> lock (stub_defs_mutex_);
+		Expected<StubTable::Removed> taken = stub_table_->remove (names);
 
-	if (!removed)
-		return removed.takeError ();
+		if (!taken)
+			return taken.takeError ();
+		removed = std::move (*taken);
+	}
 
-	ExecutionSession &es = jit_->getExecutionSession ();
 	SymbolNameSet symbols;
 
-	for (const std::string &name : removed->defined)
+	for (const std::string &name : removed.defined)
 		symbols.insert (es.intern (name));
 
 	/*
 	 * Undefine before reclaiming: a stub has to be unreachable by address as
 	 * well as by name before its block can be handed to the next method along.
 	 */
-	if (!symbols.empty ())
+	if (!symbols.empty ()) {
+		/*
+		 * ORC refuses to remove a symbol that is materializing, and one a link
+		 * has just been handed is exactly that until that link's query
+		 * finishes. Waiting for it is a lookup, so it happens with no lock
+		 * held: a lookup drains materialization inline and what it drains may
+		 * be a link that wants the generator.
+		 */
+		Expected<SymbolMap> settled = es.lookup (
+			makeJITDylibSearchOrder (stubs_, JITDylibLookupFlags::MatchAllSymbols),
+			SymbolLookupSet (symbols), LookupKind::Static, SymbolState::Ready);
+
+		if (!settled)
+			return settled.takeError ();
+
 		if (Error err = stubs_->remove (symbols))
 			return err;
+	}
 
-	stub_table_->reclaim (std::move (*removed));
+	stub_table_->reclaim (std::move (removed));
 	for (const std::string &name : names)
 		callbacks_->release (name);
 

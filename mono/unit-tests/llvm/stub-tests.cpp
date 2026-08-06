@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -151,6 +152,39 @@ build_caller_module (const char *callee_name)
 	b.CreateRet (b.CreateCall (callee));
 
 	EXPECT_FALSE (verifyFunction (*fn, &errs ()));
+	return ThreadSafeModule (std::move (module),
+	                         ThreadSafeContext (std::move (context)));
+}
+
+/*
+ * i32 entry() { return 0; } plus an external global holding a pointer to every
+ * one of NAMES, so linking the module asks mono.stubs for all of them in one
+ * lookup without codegen having to emit a call to each.
+ */
+static ThreadSafeModule
+build_table_module (const std::vector<std::string> &names)
+{
+	auto context = std::make_unique<LLVMContext> ();
+	auto module = std::make_unique<Module> ("stub.table", *context);
+
+	FunctionType *fty = FunctionType::get (Type::getInt32Ty (*context), false);
+	PointerType *pty = PointerType::get (*context, 0);
+
+	std::vector<Constant *> entries;
+	entries.reserve (names.size ());
+	for (const std::string &name : names)
+		entries.push_back (
+			cast<Constant> (module->getOrInsertFunction (name, fty).getCallee ()));
+
+	ArrayType *aty = ArrayType::get (pty, entries.size ());
+	new GlobalVariable (*module, aty, true, GlobalValue::ExternalLinkage,
+	                    ConstantArray::get (aty, entries), "table");
+
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "entry",
+	                                 module.get ());
+	IRBuilder<> b (BasicBlock::Create (*context, "entry", fn));
+	b.CreateRet (b.getInt32 (0));
+
 	return ThreadSafeModule (std::move (module),
 	                         ThreadSafeContext (std::move (context)));
 }
@@ -436,6 +470,227 @@ TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
 	/* Every one of them still works. */
 	EXPECT_EQ (reinterpret_cast<IntFn> (addrs.front ()) (), 1);
 	EXPECT_EQ (reinterpret_cast<IntFn> (addrs.back ()) (), 1);
+}
+
+/*
+ * A stub reaches mono.stubs the first time some module names it, and the
+ * definition generator that puts it there runs on whichever thread is linking.
+ * Several links wanting the same undefined name at once must still produce one
+ * definition: two of them defining it would be a duplicate-definition error out
+ * of the second, which is a compile failure the runtime raises on.
+ */
+TEST (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_one)));
+
+	constexpr int threads = 16;
+	std::atomic<int> ready {0};
+	std::atomic<bool> go {false};
+	std::vector<std::string> errors (threads);
+	std::vector<int32_t> results (threads, 0);
+
+	std::vector<std::thread> workers;
+	for (int i = 0; i < threads; i++)
+		workers.emplace_back ([&, i] {
+			ready++;
+			while (!go.load ())
+				std::this_thread::yield ();
+
+			auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+			if (!caller) {
+				errors[i] = toString (caller.takeError ());
+				return;
+			}
+			results[i] = reinterpret_cast<IntFn> (caller->entry) ();
+		});
+
+	while (ready.load () != threads)
+		std::this_thread::yield ();
+	go.store (true);
+	for (std::thread &t : workers)
+		t.join ();
+
+	for (int i = 0; i < threads; i++) {
+		EXPECT_EQ (errors[i], "") << "thread " << i;
+		EXPECT_EQ (results[i], 1) << "thread " << i;
+	}
+}
+
+/*
+ * Undefining a name while a link is asking mono.stubs for it. The linker
+ * claims a batch of names before it defines any of them, so an undefine landing
+ * in the middle can decide the linker knows about a name whose definition has
+ * not been written yet - and then find nothing to take back, leave the
+ * definition standing, and hand the block to the next method along.
+ *
+ * The module names its stubs from a pointer table rather than by calling each
+ * one, which makes the lookup set large without making codegen large, so the
+ * window this is aiming at is wide enough to hit. Where in a compile the link
+ * happens is a property of the machine, so one compile is timed first and the
+ * undefines are spread across it rather than fired at a guessed delay.
+ */
+TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
+{
+	constexpr int count = 4000;
+	constexpr int rounds = 16;
+
+	std::vector<std::string> names;
+	for (int i = 0; i < count; i++)
+		names.push_back ("s" + std::to_string (i));
+
+	auto reserve_all = [&] (MonoJit &jit, void *target) {
+		for (const std::string &name : names)
+			if (Error err = jit.create_stub (name, target))
+				return toString (std::move (err));
+		return std::string ();
+	};
+
+	int64_t compile_us = 0;
+	{
+		auto jit = MonoJit::create ();
+		ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+		ASSERT_EQ (reserve_all (**jit, (void *) &stub_target_one), "");
+
+		auto start = std::chrono::steady_clock::now ();
+		auto compiled = (*jit)->compile (build_table_module (names), "entry");
+		ASSERT_TRUE (bool (compiled)) << toString (compiled.takeError ());
+		compile_us = std::chrono::duration_cast<std::chrono::microseconds> (
+			             std::chrono::steady_clock::now () - start)
+		                     .count ();
+	}
+
+	for (int round = 0; round < rounds; round++) {
+		auto jit = MonoJit::create ();
+		ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+		ASSERT_EQ (reserve_all (**jit, (void *) &stub_target_one), "");
+
+		std::atomic<int> ready {0};
+		std::atomic<bool> go {false};
+		std::string undef_err;
+		auto delay = std::chrono::microseconds (compile_us * (round + 4) /
+		                                        (rounds + 5));
+
+		std::thread linker ([&] {
+			ready++;
+			while (!go.load ())
+				std::this_thread::yield ();
+			/*
+			 * Either outcome is fine: the undefine either got there first, in
+			 * which case there is nothing left to link against, or it did not.
+			 */
+			consumeError (
+				(*jit)->compile (build_table_module (names), "entry").takeError ());
+		});
+		std::thread undefiner ([&] {
+			ready++;
+			while (!go.load ())
+				std::this_thread::yield ();
+			std::this_thread::sleep_for (delay);
+			if (Error err = (*jit)->undefine_stubs (names))
+				undef_err = toString (std::move (err));
+		});
+
+		while (ready.load () != 2)
+			std::this_thread::yield ();
+		go.store (true);
+		linker.join ();
+		undefiner.join ();
+
+		ASSERT_EQ (undef_err, "") << "round " << round;
+
+		/*
+		 * Whatever the linker managed to do, every name has to have come back
+		 * clean. A definition left standing over a removed table entry shows up
+		 * here: publishing the name again and linking against it either finds
+		 * the old stub - which nothing redirects any more - or collides with it.
+		 */
+		ASSERT_EQ (reserve_all (**jit, (void *) &stub_target_two), "")
+			<< "round " << round;
+
+		auto caller = (*jit)->compile (build_caller_module ("s0"), "caller");
+		ASSERT_TRUE (bool (caller))
+			<< "round " << round << ": " << toString (caller.takeError ());
+		ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2)
+			<< "round " << round;
+	}
+}
+
+/*
+ * The generator runs inside ORC's lookup machinery and defines into mono.stubs
+ * from there; undefining goes the other way, taking the session lock while the
+ * table is settled. Threads publishing, linking, redirecting and undefining at
+ * once are what says those two orders agree - a disagreement hangs rather than
+ * fails, so this test failing means it timed out.
+ */
+TEST (Stubs, PublishRedirectAndUndefineFromManyThreads)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	constexpr int threads = 8;
+	constexpr int iterations = 24;
+	std::atomic<int> ready {0};
+	std::atomic<bool> go {false};
+	std::vector<std::string> errors (threads);
+
+	std::vector<std::thread> workers;
+	for (int i = 0; i < threads; i++)
+		workers.emplace_back ([&, i] {
+			auto fail = [&] (Error err) {
+				if (errors[i].empty ())
+					errors[i] = toString (std::move (err));
+				else
+					consumeError (std::move (err));
+			};
+
+			ready++;
+			while (!go.load ())
+				std::this_thread::yield ();
+
+			/* Each thread owns its names, so the contention is all in ORC. */
+			for (int n = 0; n < iterations; n++) {
+				std::string name =
+					"t" + std::to_string (i) + "." + std::to_string (n);
+
+				if (Error err = (*jit)->create_stub (
+				        name, (void *) &stub_target_one)) {
+					fail (std::move (err));
+					return;
+				}
+
+				auto caller = (*jit)->compile (
+					build_caller_module (name.c_str ()), "caller");
+				if (!caller) {
+					fail (caller.takeError ());
+					return;
+				}
+				EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
+
+				if (Error err = (*jit)->redirect_stub (
+				        name, (void *) &stub_target_two)) {
+					fail (std::move (err));
+					return;
+				}
+				EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2);
+
+				if (Error err = (*jit)->undefine_stubs ({ name })) {
+					fail (std::move (err));
+					return;
+				}
+			}
+		});
+
+	while (ready.load () != threads)
+		std::this_thread::yield ();
+	go.store (true);
+	for (std::thread &t : workers)
+		t.join ();
+
+	for (int i = 0; i < threads; i++)
+		EXPECT_EQ (errors[i], "") << "thread " << i;
 }
 
 TEST (LazyStubs, CompileOnceOnTheFirstCall)
