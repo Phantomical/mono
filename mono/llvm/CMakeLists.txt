@@ -3,9 +3,8 @@
 file(GLOB sources CONFIGURE_DEPENDS
     *.cpp
     *.hpp
-    arch/*.hpp
-    arch/amd64/*.cpp
-    arch/amd64/*.hpp
+    arch/**/*.cpp
+    arch/**/*.hpp
     method-to-llvm/*.cpp
     method-to-llvm/*.hpp
     passes/*.cpp
