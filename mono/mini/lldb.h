@@ -10,8 +10,6 @@
 
 void mono_lldb_init (const char *options);
 
-void mono_lldb_save_method_info (MonoCompile *cfg);
-
 void mono_lldb_save_trampoline_info (MonoTrampInfo *info);
 
 void mono_lldb_remove_method (MonoDomain *domain, MonoMethod *method, MonoJitDynamicMethodInfo *info);

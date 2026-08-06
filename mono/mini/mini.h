@@ -2266,16 +2266,6 @@ void        mono_ssa_cprop2                     (MonoCompile *cfg);
 void        mono_ssa_deadce2                    (MonoCompile *cfg);
 
 /* debugging support */
-void      mono_debug_init_method                (MonoCompile *cfg, MonoBasicBlock *start_block,
-						 guint32 breakpoint_id);
-void      mono_debug_open_method                (MonoCompile *cfg);
-void      mono_debug_free_method                (MonoCompile *cfg);
-void      mono_debug_open_block                 (MonoCompile *cfg, MonoBasicBlock *bb, guint32 address);
-void      mono_debug_record_line_number         (MonoCompile *cfg, MonoInst *ins, guint32 address);
-void      mono_debug_serialize_debug_info       (MonoCompile *cfg, guint8 **out_buf, guint32 *buf_len);
-void      mono_debug_add_aot_method             (MonoDomain *domain,
-						 MonoMethod *method, guint8 *code_start, 
-						 guint8 *debug_info, guint32 debug_info_len);
 MONO_API void      mono_debug_print_vars                 (gpointer ip, gboolean only_arguments);
 MONO_API void      mono_debugger_run_finally             (MonoContext *start_ctx);
 

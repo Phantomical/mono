@@ -8,13 +8,15 @@
 #include "llvmonly-runtime.h"
 #include "aot-runtime.h"
 
+static gpointer mini_llvmonly_get_delegate_arg (MonoMethod *method, gpointer method_ptr);
+
 /*
  * mini_llvmonly_load_method:
  *
  *   Return the AOT-ed code METHOD, or an interpreter entry for it.
  *
  */
-gpointer
+static gpointer
 mini_llvmonly_load_method (MonoMethod *method, gboolean caller_gsharedvt, gboolean need_unbox, gpointer *out_arg, MonoError *error)
 {
 	gpointer addr = mono_compile_method_checked (method, error);
@@ -80,7 +82,7 @@ mini_llvmonly_load_method_delegate (MonoMethod *method, gboolean caller_gsharedv
 	}
 }
 
-gpointer
+static gpointer
 mini_llvmonly_get_delegate_arg (MonoMethod *method, gpointer method_ptr)
 {
 	gpointer arg = NULL;

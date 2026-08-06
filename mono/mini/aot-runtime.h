@@ -247,7 +247,6 @@ gpointer  mono_aot_get_method               (MonoDomain *domain,
 gpointer  mono_aot_get_method_from_token    (MonoDomain *domain, MonoImage *image, guint32 token, MonoError *error);
 gboolean  mono_aot_is_got_entry             (guint8 *code, guint8 *addr);
 guint8*   mono_aot_get_plt_entry            (host_mgreg_t *regs, guint8 *code);
-guint32   mono_aot_get_plt_info_offset      (gpointer aot_module, guint8 *plt_entry, host_mgreg_t *regs, guint8 *code);
 gboolean  mono_aot_get_cached_class_info    (MonoClass *klass, MonoCachedClassInfo *res);
 gboolean  mono_aot_get_class_from_name      (MonoImage *image, const char *name_space, const char *name, MonoClass **klass);
 MonoJitInfo* mono_aot_find_jit_info         (MonoDomain *domain, MonoImage *image, gpointer addr);
@@ -263,7 +262,6 @@ gpointer mono_aot_get_static_rgctx_trampoline (gpointer ctx, gpointer addr);
 gpointer mono_aot_get_imt_trampoline        (MonoVTable *vtable, MonoDomain *domain, MonoIMTCheckItem **imt_entries, int count, gpointer fail_tramp);
 gpointer mono_aot_get_gsharedvt_arg_trampoline(gpointer arg, gpointer addr);
 gpointer mono_aot_get_ftnptr_arg_trampoline (gpointer arg, gpointer addr);
-gpointer mono_aot_get_unbox_arbitrary_trampoline (gpointer addr);
 guint8*  mono_aot_get_unwind_info           (MonoJitInfo *ji, guint32 *unwind_info_len);
 gboolean mono_aot_can_dedup                 (MonoMethod *method);
 void     mono_aot_set_make_unreadable       (gboolean unreadable);

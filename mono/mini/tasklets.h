@@ -28,7 +28,6 @@ typedef struct {
 typedef void (*MonoContinuationRestore) (MonoContinuation *cont, int state, MonoLMF **lmf_addr);
 
 void  mono_tasklets_init    (void);
-void  mono_tasklets_cleanup (void);
 
 MonoContinuationRestore mono_tasklets_arch_restore (void);
 

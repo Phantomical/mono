@@ -141,14 +141,6 @@ mono_aot_get_method_from_vt_slot (MonoDomain *domain, MonoVTable *vtable, int sl
 	return NULL;
 }
 
-guint32
-mono_aot_get_plt_info_offset (gpointer aot_module, guint8 *plt_entry, host_mgreg_t *regs, guint8 *code)
-{
-	g_assert_not_reached ();
-
-	return 0;
-}
-
 gpointer
 mono_aot_create_specific_trampoline (gpointer arg1, MonoTrampolineType tramp_type, MonoDomain *domain, guint32 *code_len)
 {
@@ -172,13 +164,6 @@ mono_aot_get_trampoline_full (const char *name, MonoTrampInfo **out_tinfo)
 
 gpointer
 mono_aot_get_trampoline (const char *name)
-{
-	g_assert_not_reached ();
-	return NULL;
-}
-
-gpointer
-mono_aot_get_unbox_arbitrary_trampoline (gpointer addr)
 {
 	g_assert_not_reached ();
 	return NULL;
