@@ -494,7 +494,6 @@ MONO_API void
 mono_install_ftnptr_eh_callback (MonoFtnPtrEHCallback callback);
 
 void      mini_jit_init                    (void);
-void      mini_jit_cleanup                 (void);
 void      mono_disable_optimizations       (guint32 opts);
 void      mono_set_optimizations           (guint32 opts);
 void      mono_precompile_assemblies        (void);

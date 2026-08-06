@@ -31,50 +31,6 @@ MonoMethodDesc *mono_break_at_bb_method;
 int mono_break_at_bb_bb_num;
 gboolean mono_do_x86_stack_align = TRUE;
 
-#define EMUL_HIT_SHIFT 3
-#define EMUL_HIT_MASK ((1 << EMUL_HIT_SHIFT) - 1)
-/* small hit bitmap cache */
-static mono_byte emul_opcode_hit_cache [(OP_LAST>>EMUL_HIT_SHIFT) + 1] = {0};
-static short emul_opcode_num = 0;
-static short emul_opcode_alloced = 0;
-static short *emul_opcode_opcodes;
-static MonoJitICallInfo **emul_opcode_map;
-
-MonoJitICallInfo *
-mono_find_jit_opcode_emulation (int opcode)
-{
-	g_assert (opcode >= 0 && opcode <= OP_LAST);
-	if (emul_opcode_hit_cache [opcode >> (EMUL_HIT_SHIFT + 3)] & (1 << (opcode & EMUL_HIT_MASK))) {
-		int i;
-		for (i = 0; i < emul_opcode_num; ++i) {
-			if (emul_opcode_opcodes [i] == opcode)
-				return emul_opcode_map [i];
-		}
-	}
-	return NULL;
-}
-
-void
-mini_register_opcode_emulation (int opcode, MonoJitICallInfo *info, const char *name, MonoMethodSignature *sig, gpointer func, const char *symbol, gboolean no_wrapper)
-{
-	g_assert (info);
-	g_assert (!sig->hasthis);
-	g_assert (sig->param_count < 3);
-
-	mono_register_jit_icall_info (info, func, name, sig, no_wrapper, symbol);
-
-	if (emul_opcode_num >= emul_opcode_alloced) {
-		int incr = emul_opcode_alloced? emul_opcode_alloced/2: 16;
-		emul_opcode_alloced += incr;
-		emul_opcode_map = (MonoJitICallInfo **)g_realloc (emul_opcode_map, sizeof (emul_opcode_map [0]) * emul_opcode_alloced);
-		emul_opcode_opcodes = (short *)g_realloc (emul_opcode_opcodes, sizeof (emul_opcode_opcodes [0]) * emul_opcode_alloced);
-	}
-	emul_opcode_map [emul_opcode_num] = info;
-	emul_opcode_opcodes [emul_opcode_num] = opcode;
-	emul_opcode_num++;
-	emul_opcode_hit_cache [opcode >> (EMUL_HIT_SHIFT + 3)] |= (1 << (opcode & EMUL_HIT_MASK));
-}
-
 gint64 mono_time_track_start ()
 {
 	return mono_100ns_ticks ();
@@ -107,13 +63,6 @@ void
 mini_jit_init (void)
 {
 	mono_counters_register ("Allocated seq points size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.allocated_seq_points_size);
-}
-
-void
-mini_jit_cleanup (void)
-{
-	g_free (emul_opcode_map);
-	g_free (emul_opcode_opcodes);
 }
 
 #if !defined(ENABLE_LLVM_RUNTIME) && !defined(ENABLE_LLVM)

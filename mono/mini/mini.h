@@ -2176,7 +2176,6 @@ MonoCompile *mini_method_compile            (MonoMethod *method, guint32 opts, M
 void      mono_destroy_compile              (MonoCompile *cfg);
 
 void      mono_empty_compile              (MonoCompile *cfg);
-MonoJitICallInfo *mono_find_jit_opcode_emulation (int opcode);
 void	  mono_print_ins_index (int i, MonoInst *ins);
 void	  mono_print_ins (MonoInst *ins);
 gboolean  mini_assembly_can_skip_verification (MonoDomain *domain, MonoMethod *method);
@@ -2204,25 +2203,10 @@ void      mono_liveness_handle_exception_clauses (MonoCompile *cfg);
 
 gpointer mono_realloc_native_code (MonoCompile *cfg);
 
-void      mono_register_opcode_emulation    (int opcode, const char* name, MonoMethodSignature *sig, gpointer func, gboolean no_throw);
 void      mono_draw_graph                   (MonoCompile *cfg, MonoGraphOptions draw_options);
 void      mono_add_ins_to_end               (MonoBasicBlock *bb, MonoInst *inst);
 
 void      mono_replace_ins                  (MonoCompile *cfg, MonoBasicBlock *bb, MonoInst *ins, MonoInst **prev, MonoBasicBlock *first_bb, MonoBasicBlock *last_bb);
-
-void      mini_register_opcode_emulation (int opcode, MonoJitICallInfo *jit_icall_info, const char *name, MonoMethodSignature *sig, gpointer func, const char *symbol, gboolean no_throw);
-
-/* A template cannot have C linkage, so step outside the guard for it. */
-G_END_DECLS
-#ifdef __cplusplus
-template <typename T>
-inline void
-mini_register_opcode_emulation (int opcode, MonoJitICallInfo *jit_icall_info, const char *name, MonoMethodSignature *sig, T func, const char *symbol, gboolean no_throw)
-{
-	mini_register_opcode_emulation (opcode, jit_icall_info, name, sig, (gpointer)func, symbol, no_throw);
-}
-#endif // __cplusplus
-G_BEGIN_DECLS
 
 void              mono_trampolines_init (void);
 void              mono_trampolines_cleanup (void);
