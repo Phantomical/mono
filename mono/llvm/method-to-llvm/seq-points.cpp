@@ -83,7 +83,17 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 		bp_switch = (MonoLLVMBreakpointSwitch *) mono_domain_alloc0 (
 			cfg->domain, sizeof (MonoLLVMBreakpointSwitch));
 
-	if (encoded_il < SEQ_POINT_ENCODED_ENTRY)
+	/*
+	 * The entry and exit markers name places the debugger can put a breakpoint
+	 * on to ask for a METHOD_ENTRY or METHOD_EXIT event; they are not places
+	 * execution can be said to be at. A stepper that stopped at one would
+	 * report the frame twice - once at the marker and once at the first real
+	 * sequence point, which is the same source construct - so they get the
+	 * breakpoint arm only.
+	 */
+	bool marker = encoded_il >= SEQ_POINT_ENCODED_ENTRY;
+
+	if (!marker)
 		seq_point_offsets.push_back (encoded_il);
 
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
@@ -104,12 +114,17 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 	 * load may be hoisted out of a loop or folded with the one at the previous
 	 * sequence point.
 	 */
-	llvm::Value *ss = builder.CreateLoad (ptr, ss_slot, true, "sp.ss");
+	llvm::Value *ss = marker
+		? nullptr
+		: builder.CreateLoad (ptr, ss_slot, true, "sp.ss");
 	llvm::Value *bp = builder.CreateLoad (ptr, bp_slot, true, "sp.bp");
+	llvm::Value *any = builder.CreatePtrToInt (bp, i64);
+
+	if (ss != nullptr)
+		any = builder.CreateOr (builder.CreatePtrToInt (ss, i64), any);
+
 	llvm::Value *armed = builder.CreateICmpNE (
-		builder.CreateOr (builder.CreatePtrToInt (ss, i64),
-	                          builder.CreatePtrToInt (bp, i64)),
-		llvm::ConstantInt::get (i64, 0), "sp.armed");
+		any, llvm::ConstantInt::get (i64, 0), "sp.armed");
 
 	llvm::BasicBlock *trap =
 		llvm::BasicBlock::Create (context (), "sp.trap", function);
@@ -117,11 +132,13 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 		llvm::BasicBlock::Create (context (), "sp.cont", function);
 
 	/*
-	 * The two targets are chosen before the branch so that nothing but the
-	 * marked nop and the calls themselves is left to emit inside the block.
+	 * The targets are chosen before the branch so that nothing but the marked
+	 * nop and the calls themselves is left to emit inside the block.
 	 */
 	llvm::Value *ss_target =
-		builder.CreateSelect (builder.CreateIsNotNull (ss), ss, nop);
+		ss == nullptr
+			? nullptr
+			: builder.CreateSelect (builder.CreateIsNotNull (ss), ss, nop);
 	llvm::Value *bp_target =
 		builder.CreateSelect (builder.CreateIsNotNull (bp), bp, nop);
 
@@ -130,9 +147,10 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 
 	/*
 	 * The nop's address is what the runtime records for this sequence point.
-	 * It is here so that both return addresses are after it and nothing else
-	 * with an address of its own is between: an asm block cannot be reordered
-	 * across a call, which is all the ordering this needs.
+	 * It is ahead of both calls so that either trampoline's return address
+	 * resolves back here through mono_find_prev_seq_point_for_native_offset (),
+	 * and nothing else with an address of its own is between: an asm block
+	 * cannot be reordered across a call, which is all the ordering this needs.
 	 */
 	uint32_t restore = (uint32_t) offset;
 
@@ -140,14 +158,16 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 	builder.CreateCall (llvm::InlineAsm::get (hook, "nop", "", true));
 	set_il_location (builder, restore);
 
-	llvm::CallInst *ss_call = builder.CreateCall (hook, ss_target);
+	llvm::CallInst *ss_call =
+		ss_target == nullptr ? nullptr : builder.CreateCall (hook, ss_target);
 	llvm::CallInst *bp_call = builder.CreateCall (hook, bp_target);
 
 	/*
 	 * A trampoline reads the frame it was called from and the debugger walks
 	 * out of it, so neither call may become a jump.
 	 */
-	ss_call->setTailCallKind (llvm::CallInst::TCK_NoTail);
+	if (ss_call != nullptr)
+		ss_call->setTailCallKind (llvm::CallInst::TCK_NoTail);
 	bp_call->setTailCallKind (llvm::CallInst::TCK_NoTail);
 
 	builder.CreateBr (cont);

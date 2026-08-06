@@ -861,10 +861,12 @@ mono_de_process_single_step (void *tls, gboolean from_signal)
 	}
 
 	/*
-	 * The ip points to the instruction causing the single step event, which is before
-	 * the offset recorded in the seq point map, so find the next seq point after ip.
+	 * The ip is where the single-step trampoline was called from, which is after
+	 * the offset recorded in the seq point map, so find the prev seq point before
+	 * ip - the same direction the breakpoint path and calc_il_offset () look, so
+	 * that the stepper and the location it reports cannot disagree.
 	 */
-	if (!mono_find_next_seq_point_for_native_offset (domain, method, (guint8*)ip - (guint8*)ji->code_start, &info, &sp)) {
+	if (!mono_find_prev_seq_point_for_native_offset (domain, method, (guint8*)ip - (guint8*)ji->code_start, &info, &sp)) {
 		g_assert_not_reached ();
 		goto exit;
 	}
