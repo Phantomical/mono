@@ -103,11 +103,9 @@
 
 #if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
 #include <unwind.h>
-/* Both are registered as JIT icalls below; defined in mini-exceptions.c and
- * llvm/engine.cpp respectively. */
+/* Registered as a JIT icall below; defined in mini-exceptions.c. */
 G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
 	uint64_t c, struct _Unwind_Exception *d, struct _Unwind_Context *e);
-void mono_llvm_set_unhandled_exception_handler (void);
 #endif
 #include "../llvm/runtime.hpp"
 #include "mono/metadata/icall-signatures.h"
@@ -4428,61 +4426,10 @@ mini_free_jit_domain_info (MonoDomain *domain)
 		g_hash_table_destroy (info->llvm_jit_callees);
 	}
 	mono_internal_hash_table_destroy (&info->interp_code_hash);
-#ifdef ENABLE_LLVM
-	{
-		/*
-		 * Declared in mono/mini/llvm/backend.h; declared locally to keep that
-		 * header's llvm-c dependencies out of this file (same as
-		 * mono_llvm_tiered_set_ready () in mini_init ()).
-		 *
-		 * The tier-1 queue holds (MonoMethod, MonoDomain) pairs for methods that
-		 * have not been promoted yet. Nothing else drops them, so without this
-		 * a drain after the unload would compile and publish into a dead domain.
-		 */
-		void mono_llvm_tiered_domain_unload (MonoDomain *domain);
-
-		mono_llvm_tiered_domain_unload (domain);
-	}
-	mono_llvm_free_domain_info (domain);
-#endif
 	mono_llvm_jit_free_domain (domain);
 
 	g_free (domain->runtime_info);
 	domain->runtime_info = NULL;
-}
-
-#ifdef ENABLE_LLVM
-static gboolean
-llvm_init_inner (void)
-{
-	mono_llvm_init (!mono_compile_aot);
-	return TRUE;
-}
-#endif
-
-/*
- * mini_llvm_init:
- *
- *   Load and initialize LLVM support.
- * Return TRUE on success.
- */
-gboolean
-mini_llvm_init (void)
-{
-#ifdef ENABLE_LLVM
-	static gboolean llvm_inited;
-	static gboolean init_result;
-
-	mono_loader_lock_if_inited ();
-	if (!llvm_inited) {
-		init_result = llvm_init_inner ();
-		llvm_inited = TRUE;
-	}
-	mono_loader_unlock_if_inited ();
-	return init_result;
-#else
-	return FALSE;
-#endif
 }
 
 void
@@ -4690,19 +4637,6 @@ mini_init (const char *filename, const char *runtime_version)
 		mono_dont_free_domains = TRUE;
 	}
 
-#ifdef ENABLE_LLVM
-	/*
-	 * Go through mini_llvm_init (), not mono_llvm_init () directly: the latter
-	 * unconditionally reallocates intrins_id_to_intrins, so a second call
-	 * discards every intrinsic registered by the first and leaks the table.
-	 * Tiering initializes LLVM lazily on its first promotion, so without this
-	 * being the idempotent entry point it would be initialized twice in the
-	 * default configuration.
-	 */
-	if (mono_use_llvm)
-		mini_llvm_init ();
-#endif
-
 	mono_trampolines_init ();
 
 	if (default_opt & MONO_OPT_AOT)
@@ -4862,50 +4796,7 @@ mini_init (const char *filename, const char *runtime_version)
 
 	MONO_VES_INIT_END ();
 
-#ifdef ENABLE_LLVM
-	/*
-	 * Declared in mono/mini/llvm/backend.h; declared locally to keep that
-	 * header's llvm-c dependencies out of this file.
-	 */
-	void mono_llvm_tiered_set_ready (void);
-
-	/*
-	 * The runtime is now fully constructed, so tier-1 promotion is safe. Before
-	 * this point the domain is still being built (create_domain_objects compiles
-	 * methods), and running LLVM codegen there touches domain state that does not
-	 * exist yet.
-	 */
-	mono_llvm_tiered_set_ready ();
-#endif
-
 	return domain;
-}
-
-/*
- * Promotion-policy introspection for tiered-promotion.cs. Registered as the
- * MonoTests.Tiering.Probe internal calls so the functional test can assert the
- * POLICY - a cold method stays tier 0, a hot method is actually promoted - not
- * just semantic preservation across promotion. Both are read-only and cheap.
- * These are JIT-only (runtime-registered) internal calls; they are not in the
- * AOT icall table, which is why the test is run from a dedicated tiered target
- * rather than the AOT-shared regression set.
- */
-static guint32
-ves_icall_tiered_probe_threshold (void)
-{
-	return mono_llvm_tiered_call_threshold ();
-}
-
-static gint32
-ves_icall_tiered_probe_method_state (gpointer method)
-{
-	return (gint32) mono_llvm_tiered_method_state ((MonoMethod *) method);
-}
-
-static MonoBoolean
-ves_icall_tiered_probe_redirect_armed (gpointer method)
-{
-	return (MonoBoolean) mono_llvm_tiered_method_redirect_armed ((MonoMethod *) method);
 }
 
 static void
@@ -4913,12 +4804,6 @@ register_icalls (void)
 {
 	mono_add_internal_call_internal ("System.Diagnostics.StackFrame::get_frame_info",
 				ves_icall_get_frame_info);
-	mono_add_internal_call_internal ("MonoTests.Tiering.Probe::Threshold",
-				ves_icall_tiered_probe_threshold);
-	mono_add_internal_call_internal ("MonoTests.Tiering.Probe::MethodState",
-				ves_icall_tiered_probe_method_state);
-	mono_add_internal_call_internal ("MonoTests.Tiering.Probe::RedirectArmed",
-				ves_icall_tiered_probe_redirect_armed);
 	mono_add_internal_call_internal ("System.Diagnostics.StackTrace::get_trace",
 				ves_icall_get_trace);
 	mono_add_internal_call_internal ("Mono.Runtime::mono_runtime_install_handlers",
@@ -4958,8 +4843,6 @@ register_icalls (void)
 	register_icall (mono_llvm_load_exception, mono_icall_sig_object, TRUE);
 	register_icall (mono_llvm_throw_corlib_exception, mono_icall_sig_void_int, TRUE);
 #if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
-	register_icall (mono_llvm_set_unhandled_exception_handler, NULL, TRUE);
-
 	// FIXME: This is broken
 #ifndef TARGET_WASM
 	register_icall (mono_debug_personality, mono_icall_sig_int_int_int_ptr_ptr_ptr, TRUE);
@@ -5297,21 +5180,6 @@ mini_cleanup (MonoDomain *domain)
 
 	MONO_PROFILER_RAISE (runtime_shutdown_begin, ());
 
-#ifdef ENABLE_LLVM
-	/*
-	 * Declared locally for the same reason mono_llvm_tiered_set_ready () is,
-	 * further up in this file: to keep backend.h's llvm-c dependencies out.
-	 *
-	 * Stop the tiered background compile worker (if one was ever started)
-	 * before the teardown below starts freeing the domains and jit_code_hash
-	 * it touches. This signals shutdown and waits (bounded, ~5s) for the
-	 * worker to finish its current compile and exit before returning; on
-	 * timeout it proceeds anyway rather than hang process exit.
-	 */
-	void mono_llvm_tiered_shutdown (void);
-	mono_llvm_tiered_shutdown ();
-#endif
-
 #ifndef DISABLE_COM
 	mono_cominterop_release_all_rcws ();
 #endif
@@ -5354,11 +5222,6 @@ mini_cleanup (MonoDomain *domain)
 	mono_domain_free (domain, TRUE);
 #endif
 	free_jit_tls_data (mono_tls_get_jit_tls ());
-
-#ifdef ENABLE_LLVM
-	if (mono_use_llvm)
-		mono_llvm_cleanup ();
-#endif
 
 	mono_aot_cleanup ();
 

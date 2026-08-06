@@ -1,7 +1,0 @@
-# Build artifacts from the mono/mini/llvm backend build.
-# Only sources (.cpp/.hpp/.h) and docs should be tracked.
-*.o
-*.lo
-.deps/
-.libs/
-.dirstamp

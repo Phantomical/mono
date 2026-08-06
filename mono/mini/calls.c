@@ -248,14 +248,7 @@ mini_emit_call_args (MonoCompile *cfg, MonoMethodSignature *sig,
 
 	call->need_unbox_trampoline = unbox_trampoline;
 
-#ifdef ENABLE_LLVM
-	if (COMPILE_LLVM (cfg))
-		mono_llvm_emit_call (cfg, call);
-	else
-		mono_arch_emit_call (cfg, call);
-#else
 	mono_arch_emit_call (cfg, call);
-#endif
 
 	cfg->param_area = MAX (cfg->param_area, call->stack_usage);
 	cfg->flags |= MONO_CFG_HAS_CALLS;

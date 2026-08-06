@@ -1,4 +1,5 @@
-# The JIT: tier 0 (mini) plus the tier-1 LLVM backend under llvm/.
+# The runtime half of the JIT: everything the LLVM backend under mono/llvm/
+# links against.
 
 # ---------------------------------------------------------------------------
 # Generated sources
@@ -99,28 +100,7 @@ set(mini_sources
   "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
 if(MONO_ENABLE_LLVM)
-  list(APPEND mini_sources
-    llvm-runtime.cpp
-    llvm/engine.cpp
-    llvm/ehframe.cpp
-    llvm/jitdump.cpp
-    llvm/tiered.cpp
-    llvm/translator-cpp.cpp
-    llvm/translator.cpp
-    llvm/translator-types.cpp
-    llvm/translator-emit.cpp
-    llvm/translator-call.cpp
-    llvm/translator-bb.cpp
-    llvm/translator-intrinsics.cpp
-    llvm/passes/devirt.cpp
-    llvm/passes/elide-class-init.cpp
-    llvm/passes/inline-advisor.cpp
-    llvm/passes/inliner.cpp
-    llvm/passes/null-check-guard.cpp
-    llvm/passes/pass-dump.cpp
-    llvm/passes/replace-builtins.cpp
-    llvm/passes/runtime-address.cpp
-    llvm/passes/wbarrier.cpp)
+  list(APPEND mini_sources llvm-runtime.cpp)
 endif()
 
 mono_add_object_library(mini
@@ -134,9 +114,7 @@ mono_add_object_library(mini
 add_dependencies(mini mono-version mono-cpu-desc)
 
 # The C sources of the tree are not ready for -Wswitch (configure puts
-# -Wno-switch in the global flags), but the C++ ones are, and an unhandled
-# enumerator in the translator's opcode and type switches is exactly the kind
-# of bug worth catching.
+# -Wno-switch in the global flags), but the C++ ones are.
 target_compile_options(mini PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wswitch>)
 
 # ---------------------------------------------------------------------------

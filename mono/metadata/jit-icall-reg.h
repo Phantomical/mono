@@ -32,7 +32,7 @@
 
 // No include guard needed.
 
-/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+/* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
 G_BEGIN_DECLS
 
 // Changes within MONO_JIT_ICALLS require revising MONO_AOT_FILE_VERSION.
@@ -228,7 +228,6 @@ MONO_JIT_ICALL (mono_llvm_resume_exception) \
 MONO_JIT_ICALL (mono_llvm_resume_unwind_trampoline) \
 MONO_JIT_ICALL (mono_llvm_rethrow_exception) \
 MONO_JIT_ICALL (mono_llvm_rethrow_exception_trampoline) \
-MONO_JIT_ICALL (mono_llvm_set_unhandled_exception_handler) \
 MONO_JIT_ICALL (mono_llvm_throw_corlib_exception) \
 MONO_JIT_ICALL (mono_llvm_throw_corlib_exception_abs_trampoline) \
 MONO_JIT_ICALL (mono_llvm_throw_corlib_exception_trampoline) \

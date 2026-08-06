@@ -93,33 +93,10 @@ mono_add_unit_test(test-embed-invoke
 mono_add_unit_test(test-path SOURCES test-path.c RUNTIME)
 
 if(MONO_ENABLE_LLVM)
-  # These are C++: they include mono/mini/llvm/*.hpp and drive the engine, the
-  # .mono_lsda parser and the class-init analysis through their C++ interfaces,
-  # so they cannot live inside libmono's C surface.
-  mono_add_unit_test(test-llvm-engine
-    SOURCES test-llvm-engine.cpp     ENTRY test_llvm_engine_main      RUNTIME)
-  # The relocation-width check gets a program of its own: it is the one check
-  # that can legitimately not run (its classifier covers x86-64 ELF only), and
-  # a result is reported per program -- folded into test-llvm-engine it would
-  # show a green board while testing nothing.
-  mono_add_unit_test(test-llvm-reloc-widths
-    SOURCES test-llvm-engine.cpp     ENTRY test_llvm_reloc_widths_main RUNTIME)
-  mono_add_unit_test(test-llvm-ehframe
-    SOURCES test-llvm-ehframe.c      ENTRY test_llvm_ehframe_main     RUNTIME)
+  # C++: it drives the .mono_lsda parser through mono/llvm/mono_lsda.hpp, a
+  # C++-only interface, so it cannot live inside libmono's C surface.
   mono_add_unit_test(test-llvm-ehtable
     SOURCES test-llvm-ehtable.cpp    ENTRY test_llvm_ehtable_main     RUNTIME)
-  mono_add_unit_test(test-llvm-jitdump
-    SOURCES test-llvm-jitdump.cpp    ENTRY test_llvm_jitdump_main     RUNTIME)
-  mono_add_unit_test(test-llvm-class-init
-    SOURCES test-llvm-class-init.cpp ENTRY test_llvm_class_init_main  RUNTIME)
-  # C++ for the same reason again: it includes llvm/passes/wbarrier.hpp and
-  # drives the write-barrier lowering over IR it assembles by hand.
-  mono_add_unit_test(test-llvm-wbarrier
-    SOURCES test-llvm-wbarrier.cpp   ENTRY test_llvm_wbarrier_main    RUNTIME)
-  # C++ again: it includes llvm/engine.hpp and JITs modules whose debug info has
-  # the shape the translator produces, to check what comes back out of it.
-  mono_add_unit_test(test-llvm-il-debug
-    SOURCES test-llvm-il-debug.cpp   ENTRY test_llvm_il_debug_main    RUNTIME)
 endif()
 
 # The managed side of the tests that need one.

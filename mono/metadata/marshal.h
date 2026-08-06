@@ -22,7 +22,7 @@
 #include <mono/utils/mono-error.h>
 #include <mono/metadata/icalls.h>
 
-/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+/* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
 G_BEGIN_DECLS
 
 typedef gunichar2 *mono_bstr;

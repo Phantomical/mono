@@ -2300,20 +2300,6 @@ mono_main (int argc, char* argv[])
 	case DO_SINGLE_METHOD_REGRESSION:
 	case DO_REGRESSION: {
 		int regression_result = mono_exec_regression_internal (mini_verbose_level, argc -i, argv + i, action == DO_SINGLE_METHOD_REGRESSION);
-#ifdef ENABLE_LLVM
-		/*
-		 * Unlike every other action, the regression path returns here without
-		 * going through mini_cleanup (). mini_cleanup () is what stops the tiered
-		 * background compile worker; skip it and a tier-1 compile still in flight
-		 * when the process exits races libc/LLVM teardown - the worker faults in
-		 * _dl_fini. Drain the worker here so process exit is safe. Declared
-		 * locally for the same header-conflict reason mini_cleanup () does.
-		 */
-		{
-			void mono_llvm_tiered_shutdown (void);
-			mono_llvm_tiered_shutdown ();
-		}
-#endif
 		return regression_result;
 	}
 

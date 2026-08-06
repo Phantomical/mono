@@ -15,7 +15,7 @@
 #include "mini.h"
 #include "ee.h"
 
-/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+/* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
 G_BEGIN_DECLS
 
 /* Per-domain information maintained by the JIT */

@@ -65,7 +65,7 @@ typedef struct SeqPointInfo SeqPointInfo;
 
 /*
  * Everything below declares C functions. mini.h is included from C++ too
- * (mono/mini/llvm/), where without this guard the declarations would take C++
+ * (mono/llvm/), where without this guard the declarations would take C++
  * linkage and calls would emit mangled references that do not resolve against
  * mono's C definitions. G_BEGIN_DECLS expands to nothing when compiling C, so
  * this is a no-op for every existing C consumer.
@@ -1609,10 +1609,9 @@ typedef struct {
 	int llvm_this_reg, llvm_this_offset;
 
 	/*
-	 * The tier-1 native_offset -> il_offset map recovered from the `.llvm_stackmaps`
-	 * section (llvm/translator.cpp:recover_il_seq_points), copied verbatim onto
-	 * jit_info->llvm_seq_points by create_jit_info (). NULL/0 if translation produced
-	 * none (e.g. cfg->seq_points was never allocated for this method).
+	 * The native_offset -> il_offset map the LLVM backend recovered for this body,
+	 * copied verbatim onto jit_info->llvm_seq_points by create_jit_info (). NULL/0
+	 * if translation produced none.
 	 */
 	MonoLLVMSeqPoint *llvm_seq_points;
 	guint32 n_llvm_seq_points;
@@ -2194,59 +2193,6 @@ void      mono_create_jump_table            (MonoCompile *cfg, MonoInst *label, 
 MonoCompile *mini_method_compile            (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFlags flags, int parts, int aot_method_index);
 void      mono_destroy_compile              (MonoCompile *cfg);
 
-/*
- * Recompile an already tier-0-compiled method through LLVM and publish the
- * result as its terminal body. Returns FALSE if the backend declined the method
- * or the compile failed, in which case tier 0 stays terminal. Called both from
- * the background tier-1 compile worker (a non-zero threshold) and, directly,
- * from mono_llvm_tiered_promote_sync () (threshold 0) - see mono/mini/llvm/tiered.cpp.
- *
- * RUN_CCTORS must be FALSE when the caller is the background worker: a
- * promotion compile runs class initializers when it is TRUE
- * (JIT_FLAG_RUN_CCTORS), and cctors must only ever run on a mutator thread,
- * never on the background compiler. mono_llvm_tiered_promote_sync () IS a
- * mutator thread, so running cctors there would be safe in that narrow sense -
- * but it still passes FALSE, to keep tier-1 codegen identical regardless of
- * which path promoted the method, and to avoid opening another way for a
- * promotion compile to trigger nested compiles of its own.
- */
-gboolean  mini_tiered_promote               (MonoMethod *method, MonoDomain *domain, guint32 opt, gboolean run_cctors);
-
-/*
- * Deferred tier-1 promotion behind a call-count threshold (mono/mini/llvm/tiered.cpp).
- *
- * mono_llvm_tiered_call_threshold () returns MONO_TIERED_CALL_THRESHOLD (default
- * 1000; 0 = synchronous promotion at the tier-0 publish site). It is also 0 when
- * tiering itself is off (MONO_TIERED=0 - see tiered_do_init ()), so
- * the feature-off case and threshold 0 share the same synchronous-promotion-attempt
- * code path in mini.c, and mono_llvm_tiered_promote_sync () itself no-ops when the
- * feature is off.
- *
- * When the threshold is non-zero the tier-0 prologue (mono_arch_emit_prolog) owns
- * a per-method, per-domain counter block obtained from mini_tiered_alloc_counter ():
- * an entry redirect check reads its tier1_entry slot, and an atomic (lock xadd)
- * counter at its count word dispatches to mini_tiered_count_reached () exactly
- * once, when the count crosses the threshold. That call only enqueues the method
- * and wakes the background compile worker - it never runs LLVM codegen (or
- * cctors) on the crossing thread. mini_tiered_counter_count_offset () and
- * mini_tiered_counter_tier1_entry_offset () give the emitter the byte offsets of
- * those two words within the opaque block, since mini-amd64.c has no visibility
- * into the block's (C++) layout.
- */
-guint32   mono_llvm_tiered_call_threshold   (void);
-gpointer  mini_tiered_alloc_counter         (MonoDomain *domain, MonoMethod *method, guint32 opt);
-void      mini_tiered_count_reached         (gpointer counter);
-gsize     mini_tiered_counter_count_offset       (void);
-gsize     mini_tiered_counter_tier1_entry_offset (void);
-/*
- * Promotion-policy introspection for the tiered-promotion.cs functional test
- * (surfaced to managed code through the MonoTests.Tiering.Probe internal calls
- * registered in mini-runtime.c). Returns METHOD's recorded tier state - 0
- * queued/tier-0, 1 promoted, 2 tier-0 terminal - or -1 when tiering is off or
- * METHOD was never enqueued (stayed cold at tier 0).
- */
-int       mono_llvm_tiered_method_state     (MonoMethod *method);
-gboolean  mono_llvm_tiered_method_redirect_armed (MonoMethod *method);
 void      mono_empty_compile              (MonoCompile *cfg);
 MonoJitICallInfo *mono_find_jit_opcode_emulation (int opcode);
 void	  mono_print_ins_index (int i, MonoInst *ins);

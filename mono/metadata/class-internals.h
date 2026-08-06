@@ -17,7 +17,7 @@
 #include "mono/utils/mono-error-internals.h"
 #include "mono/utils/mono-memory-model.h"
 
-/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+/* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
 G_BEGIN_DECLS
 
 #define MONO_CLASS_IS_ARRAY(c) (m_class_get_rank (c))

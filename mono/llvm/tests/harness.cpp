@@ -2,8 +2,7 @@
 
 /*
  * assembly-internals.h has no linkage guard of its own, so it has to be pulled in
- * before anything else reaches it and given one here.  Same treatment
- * mono/mini/llvm/translator.cpp gives mono-basic-block.h.
+ * before anything else reaches it and given one here.
  */
 #include "config.h"
 #include <glib.h>

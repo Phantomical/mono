@@ -2,13 +2,11 @@
  * test-llvm-ehtable.cpp: unit tests for the `.mono_lsda` publish/validate core
  * in mono/llvm/mono_lsda.cpp.
  *
- * parse_mono_lsda() decodes the target-neutral `.mono_lsda` section
- * MonoLSDAStreamer (engine.cpp, C3) emits; build_ex_info() validates those
- * tuples against the IL clause table and joins them into a
- * MonoJitExceptionInfo[] (the pure core of publish_mono_lsda, factored out so
- * it needs no MonoCompile). Everything here drives them with byte buffers and
- * synthetic clause tables, an OFFLINE style similar to how test-llvm-ehframe.c
- * drives the .eh_frame transcoder.
+ * parse_mono_lsda() decodes the target-neutral `.mono_lsda` section a compiler
+ * emits next to the code; build_ex_info() validates those tuples against the IL
+ * clause table and joins them into a MonoJitExceptionInfo[] (the pure core of
+ * publish_mono_lsda, factored out so it needs no MonoCompile). Everything here
+ * drives them with byte buffers and synthetic clause tables, offline.
  *
  * ---- the guard-page runner ----
  *
@@ -83,15 +81,10 @@ static void install_crash_handler (void) { }
 #endif
 
 /* ============================================================================
- * mono_lsda.cpp - the load-time .mono_lsda publish/validate core (plan 12 C4).
+ * mono_lsda.cpp - the load-time .mono_lsda publish/validate core.
  *
- * parse_mono_lsda() decodes the target-neutral `.mono_lsda` section
- * MonoLSDAStreamer (engine.cpp, C3) emits; build_ex_info() validates those
- * tuples against the IL clause table and joins them into a MonoJitExceptionInfo[]
- * (the pure core of publish_mono_lsda, factored out so it needs no MonoCompile).
- * Everything here drives them with byte buffers and synthetic clause tables,
- * an OFFLINE style. Expectations are hand-derived from the format, not echoed
- * from the implementation.
+ * Expectations below are hand-derived from the format, not echoed from the
+ * implementation.
  * ==========================================================================*/
 
 /* Little-endian append helpers for assembling .mono_lsda byte vectors. */
@@ -169,9 +162,8 @@ parse_guarded (const std::uint8_t *data, std::size_t len, std::vector<MonoLsdaEn
 /* ------------------------------------------------------------ parse cases */
 
 /*
- * The exact bytes MonoLSDAStreamer emits for the v2 format (self-describing kind
- * column). Same catch geometry as plan 12 1.2's probe2.o dump, now version 2 with
- * a trailing per-entry kind == 0 (catch):
+ * The exact bytes a writer emits for the v2 format (self-describing kind
+ * column), for a two-catch geometry with a trailing per-entry kind == 0:
  *   44534c4d 02000200   magic 'MLSD', version 2, count 2
  *   01000000 05000000 11000000 07000000 00000000  {try=1, len=5, h=0x11, clause=7, kind=0}
  *   06000000 05000000 0f000000 03000000 00000000  {try=6, len=5, h=0x0f, clause=3, kind=0}
@@ -255,7 +247,7 @@ expect_parse_decline (const char *what, const std::uint8_t *data, std::size_t le
 static void
 cases_mono_lsda_parse (void)
 {
-	/* The C3 golden vector decodes to its two hand-derived entries (kind 0). */
+	/* The golden vector decodes to its two hand-derived entries (kind 0). */
 	static const MonoLsdaEntry golden_exp [] = {
 		{ 1, 5, 0x11, 7, 0 },
 		{ 6, 5, 0x0f, 3, 0 },
@@ -326,7 +318,7 @@ cases_mono_lsda_parse (void)
 	}
 
 	/*
-	 * THE EXACT-SIZE / TWO-RECORD DECLINE (plan 12 3, C4's belt-and-suspenders).
+	 * THE EXACT-SIZE / TWO-RECORD DECLINE.
 	 * Two full method records concatenated: the first header declares count 1
 	 * (expected size 24) but the buffer is 48 bytes. A longer-than-exact section
 	 * means the one-method-per-module invariant broke; reading only the first
@@ -371,7 +363,7 @@ cases_mono_lsda_parse (void)
 	}
 
 	/*
-	 * Truncation sweep: every proper prefix of the C3 golden vector must decline
+	 * Truncation sweep: every proper prefix of the golden vector must decline
 	 * and must not read past its guarded end (a forgotten bounds check faults
 	 * here, not in a later heisenbug).
 	 */
@@ -668,7 +660,7 @@ cases_mono_lsda_build (void)
 
 	/*
 	 * SIBLING CATCHES: try { } catch(A) catch(B) is one landing pad with two
-	 * TypeIds over ONE invoke range, so C2/C3 emit two entries with the SAME
+	 * TypeIds over ONE invoke range, so the writer emits two entries with the SAME
 	 * range and DIFFERENT clause_index. Both must publish (equal-or-disjoint
 	 * invariant) - mono matches the shared PC range for both, then picks the type
 	 * by catch_class with RDX = clause_index. Assert ACCEPT, both ei sharing the

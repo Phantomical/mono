@@ -242,9 +242,9 @@ typedef enum {
 G_ENUM_FUNCTIONS (MonoJitInfoFlags)
 
 /*
- * One entry of a tier-1 body's native_offset -> il_offset map (mono/mini/llvm's
- * translator.cpp:recover_il_seq_points, from OP_IL_SEQ_POINT markers). Sorted
- * ascending by native_offset; see MonoJitInfo::llvm_seq_points below.
+ * One entry of a compiled body's native_offset -> il_offset map, as the LLVM
+ * backend recovers it from the emitted debug info. Sorted ascending by
+ * native_offset; see MonoJitInfo::llvm_seq_points below.
  *
  * Deliberately its own tiny format rather than the SeqPoint/MonoSeqPointInfo
  * machinery in seq-points.c: that table is keyed per MonoMethod, not per body,

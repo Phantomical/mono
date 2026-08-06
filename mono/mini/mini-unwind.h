@@ -13,7 +13,7 @@
 
 #include "mini.h"
 
-/* Included from C++ (mono/mini/llvm/); see the note in mini.h. No-op for C. */
+/* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
 G_BEGIN_DECLS
 
 

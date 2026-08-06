@@ -85,20 +85,6 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 
-#ifdef ENABLE_LLVM
-#include "llvm/backend.h"
-#else
-/* Tiering lives in the LLVM backend; without it every hook is a no-op. */
-#define mono_llvm_tiered_enabled() FALSE
-#define mono_llvm_tiered_in_promotion() FALSE
-#define mono_llvm_tiered_promote_begin() do { } while (0)
-#define mono_llvm_tiered_promote_end() do { } while (0)
-#define mono_llvm_tiered_promotion_suspend() FALSE
-#define mono_llvm_tiered_promotion_restore(o) do { (void)(o); } while (0)
-#define mono_llvm_tiered_compile_begin() do { } while (0)
-#define mono_llvm_tiered_compile_end() do { } while (0)
-#define mono_llvm_tiered_promote_sync(m,d,o) ((void)(m), (void)(d), (void)(o), (gpointer) NULL)
-#endif
 #include "mixed_callstack_plugin.h"
 
 MonoCallSpec *mono_jit_trace_calls;
@@ -2075,14 +2061,7 @@ mono_compile_create_vars (MonoCompile *cfg)
 	if (cfg->verbose_level > 2)
 		g_print ("locals done\n");
 
-#ifdef ENABLE_LLVM
-	if (COMPILE_LLVM (cfg))
-		mono_llvm_create_vars (cfg);
-	else
-		mono_arch_create_vars (cfg);
-#else
 	mono_arch_create_vars (cfg);
-#endif
 
 	if (cfg->method->save_lmf && cfg->create_lmf_var) {
 		MonoInst *lmf_var = mono_compile_create_var (cfg, mono_get_int_type (), OP_LOCAL);
@@ -2514,12 +2493,11 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 		 * still has the tier-0 body's mapping registered, and reading it with a
 		 * tier-1 native offset yields a plausible but fabricated IL offset.
 		 *
-		 * cfg->llvm_seq_points (llvm/translator.cpp:recover_il_seq_points) is a
-		 * separate, per-body mapping that does not have this problem - it hangs
-		 * directly off this jinfo rather than being looked up by MonoMethod - so
-		 * when translation actually recovered one, publish it here and let
-		 * mini-exceptions.c report real IL offsets for this body instead of
-		 * "unknown".
+		 * cfg->llvm_seq_points is a separate, per-body mapping that does not
+		 * have this problem - it hangs directly off this jinfo rather than being
+		 * looked up by MonoMethod - so when translation actually recovered one,
+		 * publish it here and let mini-exceptions.c report real IL offsets for
+		 * this body instead of "unknown".
 		 */
 		jinfo->no_il_offsets = TRUE;
 		if (cfg->n_llvm_seq_points > 0) {
@@ -3148,9 +3126,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	gboolean full_aot = (flags & JIT_FLAG_FULL_AOT) ? 1 : 0;
 	gboolean disable_direct_icalls = (flags & JIT_FLAG_NO_DIRECT_ICALLS) ? 1 : 0;
 	gboolean gsharedvt_method = FALSE;
-#ifdef ENABLE_LLVM
-	gboolean llvm = (flags & JIT_FLAG_LLVM) ? 1 : 0;
-#endif
 	static gboolean verbose_method_inited;
 	static char **verbose_method_names;
 
@@ -3225,31 +3200,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		else if (mono_method_is_generic_impl (method))
 			mono_atomic_inc_i32 (&mono_stats.generics_unsharable_methods);
 	}
-
-#ifdef ENABLE_LLVM
-	/*
-	 * Under tiering, tier 0 is always the classic JIT and only the tier-1
-	 * promotion compile goes through LLVM - otherwise every first call would
-	 * pay LLVM codegen and there would be no tier 0 at all.
-	 *
-	 * AOT is excluded: there is no tiering when compiling ahead of time, and
-	 * `llvm' here is the AOT compiler's JIT_FLAG_LLVM. Without the compile_aot
-	 * guard tiering would make `mono --aot=llvm' silently emit no LLVM methods
-	 * at all.
-	 */
-	if (!compile_aot && mono_llvm_tiered_enabled ())
-		try_llvm = mono_llvm_tiered_in_promotion ();
-	else
-		try_llvm = mono_use_llvm || llvm;
-
-	/*
-	 * IR-only compiles (the tier-1 inliner materializing a callee) always want
-	 * the LLVM path regardless of the tiering/promotion state of the thread that
-	 * is driving them.
-	 */
-	if (flags & JIT_FLAG_LLVM_IR_ONLY)
-		try_llvm = TRUE;
-#endif
 
 #ifndef MONO_ARCH_FLOAT32_SUPPORTED
 	opts &= ~MONO_OPT_FLOAT32;
@@ -3403,45 +3353,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 			MONO_PROBE_METHOD_COMPILE_END (method, FALSE);
 		return cfg;
 	}
-
-#ifdef ENABLE_LLVM
-	{
-		static gboolean inited;
-
-		if (!inited)
-			inited = TRUE;
-
-		/* 
-		 * Check for methods which cannot be compiled by LLVM early, to avoid
-		 * the extra compilation pass.
-		 */
-		if (COMPILE_LLVM (cfg)) {
-			mono_llvm_check_method_supported (cfg);
-			if (cfg->disable_llvm) {
-				if (cfg->verbose_level >= (cfg->llvm_only ? 0 : 1)) {
-					//nm = mono_method_full_name (cfg->method, TRUE);
-					printf ("LLVM failed for '%s.%s': %s\n", m_class_get_name (method->klass), method->name, cfg->exception_message);
-					//g_free (nm);
-				}
-				if (cfg->llvm_only) {
-					g_free (cfg->exception_message);
-					cfg->disable_aot = TRUE;
-					return cfg;
-				}
-				if (flags & JIT_FLAG_NO_LLVM_FALLBACK) {
-					/* The caller has no use for a classic body - see the flag's comment. */
-					if (MONO_METHOD_COMPILE_END_ENABLED ())
-						MONO_PROBE_METHOD_COMPILE_END (method, FALSE);
-					mono_destroy_compile (cfg);
-					return NULL;
-				}
-				mono_destroy_compile (cfg);
-				try_llvm = FALSE;
-				goto restart_compile;
-			}
-		}
-	}
-#endif
 
 	cfg->prof_flags = mono_profiler_get_call_instrumentation_flags (cfg->method);
 	cfg->prof_coverage = mono_profiler_coverage_instrumentation_enabled (cfg->method);
@@ -3947,69 +3858,10 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 	mono_insert_branches_between_bblocks (cfg);
 
-	if (COMPILE_LLVM (cfg)) {
-#ifdef ENABLE_LLVM
-		char *nm;
-
-		/* The IR has to be in SSA form for LLVM */
-		if (!(cfg->comp_done & MONO_COMP_SSA)) {
-			cfg->exception_message = g_strdup ("SSA disabled.");
-			cfg->disable_llvm = TRUE;
-		}
-
-		if (cfg->flags & MONO_CFG_NEEDS_DECOMPOSE)
-			mono_decompose_array_access_opts (cfg);
-
-		if (flags & JIT_FLAG_LLVM_IR_ONLY) {
-			/*
-			 * The MonoIR is now in the LLVM-ready shape mono_llvm_emit_method ()
-			 * consumes. Hand the cfg back without emitting - the tier-1 inliner
-			 * translates it into the caller's module itself (and checks
-			 * cfg->disable_llvm / cfg->exception_type before doing so).
-			 */
-			if (MONO_METHOD_COMPILE_END_ENABLED ())
-				MONO_PROBE_METHOD_COMPILE_END (method, TRUE);
-			return cfg;
-		}
-
-		if (!cfg->disable_llvm)
-			mono_llvm_emit_method (cfg);
-		if (cfg->disable_llvm) {
-			if (cfg->verbose_level >= (cfg->llvm_only ? 0 : 1)) {
-				//nm = mono_method_full_name (cfg->method, TRUE);
-				printf ("LLVM failed for '%s.%s': %s\n", m_class_get_name (method->klass), method->name, cfg->exception_message);
-				//g_free (nm);
-			}
-			if (cfg->llvm_only) {
-				cfg->disable_aot = TRUE;
-				return cfg;
-			}
-			if (flags & JIT_FLAG_NO_LLVM_FALLBACK) {
-				/* The caller has no use for a classic body - see the flag's comment. */
-				if (MONO_METHOD_COMPILE_END_ENABLED ())
-					MONO_PROBE_METHOD_COMPILE_END (method, FALSE);
-				mono_destroy_compile (cfg);
-				return NULL;
-			}
-			mono_destroy_compile (cfg);
-			try_llvm = FALSE;
-			goto restart_compile;
-		}
-
-		if (cfg->verbose_level > 0 && !cfg->compile_aot) {
-			nm = mono_method_get_full_name (cfg->method);
-			g_print ("LLVM Method %s emitted at %p to %p (code length %d) [%s]\n", 
-					 nm, 
-					 cfg->native_code, cfg->native_code + cfg->code_len, cfg->code_len, cfg->domain->friendly_name);
-			g_free (nm);
-		}
-#endif
-	} else {
-		MONO_TIME_TRACK (mono_jit_stats.jit_codegen, mono_codegen (cfg));
-		mono_cfg_dump_ir (cfg, "codegen");
-		if (cfg->exception_type)
-			return cfg;
-	}
+	MONO_TIME_TRACK (mono_jit_stats.jit_codegen, mono_codegen (cfg));
+	mono_cfg_dump_ir (cfg, "codegen");
+	if (cfg->exception_type)
+		return cfg;
 
 	if (COMPILE_LLVM (cfg))
 		mono_atomic_inc_i32 (&mono_jit_stats.methods_with_llvm);
@@ -4181,348 +4033,6 @@ mono_update_jit_stats (MonoCompile *cfg)
 }
 
 /*
- * tiered_lookup_live_jinfo:
- *
- *   The MonoJitInfo METHOD is currently running out of in DOMAIN, or NULL.
- *
- * The plain jit_code_hash lookup misses generic-sharable methods, whose tier-0
- * entry is keyed by the shared method rather than by METHOD - and those are a
- * large share of the promotions that decline, since gshared is one of the
- * backend's decline gates. Falling back the same way mini-runtime.c's
- * lookup_method () does recovers them; measured, it takes the number of
- * promotions with no findable live body from 24 to 0 on basic.exe and from 131
- * to 0 on generics.exe.
- */
-static MonoJitInfo *
-tiered_lookup_live_jinfo (MonoMethod *method, MonoDomain *domain)
-{
-	ERROR_DECL (error);
-	MonoJitInfo *ji;
-	MonoMethod *shared;
-
-	ji = mini_lookup_method (domain, method, NULL);
-	if (ji)
-		return ji;
-
-	if (!mono_method_is_generic_sharable (method, FALSE))
-		return NULL;
-
-	/*
-	 * Best-effort: this only decides which profiler event closes the begin, so a
-	 * failure here must not disturb the promotion. Swallow it and report
-	 * jit_failed.
-	 */
-	shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, error);
-	if (!is_ok (error)) {
-		mono_error_cleanup (error);
-		return NULL;
-	}
-
-	return mini_lookup_method (domain, method, shared);
-}
-
-/*
- * tiered_promote_declined:
- *
- *   Close the jit_begin of a promotion that produced no published code. See the
- * comment on TIER0_JINFO in mini_tiered_promote ().
- *
- * UNTESTED BRANCH: the jit_failed arm has never executed. TIER0_JINFO was
- * non-NULL on every one of the >12,000 declined promotions measured across
- * eight workloads (including a threaded + appdomain + throwing-cctor stress),
- * i.e. a promotion has never yet been attempted for a method with no findable
- * live body. It is kept because the caller cannot prove that invariant - the
- * queue entry is only a (method, domain) pair, and nothing pins the tier-0 body
- * between enqueue and drain - and because an unmatched begin is the defect this
- * whole path exists to prevent. Treat it as unexercised if it ever starts
- * firing.
- *
- * The event names the method TIER0_JINFO actually describes rather than METHOD.
- * The two differ only on tiered_lookup_live_jinfo ()'s shared-method fallback,
- * and there naming METHOD would hand out a pair whose halves disagree. A
- * consumer is entitled to reject that: UnityPlayer's jit_done callback closes
- * its profiler span only when jinfo->d.method == method, because a single
- * jit_begin can be followed by several jit_done and only one of them describes
- * its jinfo. Naming METHOD would leave those declines unclosed for such a
- * consumer - the same unmatched begin this function exists to prevent, just
- * relocated. For the ordinary lookup the two are the same pointer, so this only
- * changes the shared case.
- */
-static void
-tiered_promote_declined (MonoMethod *method, MonoJitInfo *tier0_jinfo)
-{
-	if (tier0_jinfo)
-		MONO_PROFILER_RAISE (jit_done, (tier0_jinfo->d.method, tier0_jinfo));
-	else
-		MONO_PROFILER_RAISE (jit_failed, (method));
-}
-
-/*
- * mini_tiered_promote_publish_code:
- *
- *   Make a tier-1 body that was just JIT'd by THIS thread safe to execute on every
- * other core, and issue it before the body is published anywhere a mutator can
- * reach it (the jit_code_hash swap below, and the redirect sled the worker arms
- * afterwards).
- *
- * Tier-1 promotion is the one place mono routinely has one core write a method's
- * code and a different core be the first to run it: the background worker compiles,
- * a mutator redirects into the result. x86 does not make that safe on its own -
- * the Intel SDM's cross-modifying-code rule requires the *executing* core to
- * serialize its instruction stream between another core writing the code and
- * fetching it, and a plain data-side release/acquire on the code pointer (which is
- * all arming the sled is) does not do that. mono_arch_flush_icache is a no-op on
- * amd64, so without this a mutator can fetch stale instruction bytes for the first
- * few calls into a freshly promoted body and, e.g., silently skip an exception
- * clause's side effects. membarrier(SYNC_CORE) forces every thread in the process
- * through a core-serializing instruction, closing the window for whichever core
- * actually wrote the code (ORC may materialize on a helper thread) and every core
- * that might run it. It is a no-op on the classic path, which compiles and runs a
- * body on the same thread.
- */
-/* The SYNC_CORE membarrier commands are enum values in <linux/membarrier.h>, so
- * they cannot be probed with #ifdef; fall back to their ABI-stable numbers when the
- * (older) kernel headers used for the build predate them. __NR_membarrier IS a real
- * macro, so it is what actually gates the feature. */
-#if defined (__linux__) && defined (ENABLE_LLVM) && defined (__NR_membarrier)
-#ifndef MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
-#define MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE (1 << 5)
-#endif
-#ifndef MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE
-#define MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE (1 << 6)
-#endif
-#define MINI_HAVE_SYNC_CORE_MEMBARRIER 1
-#endif
-
-static void
-mini_tiered_promote_publish_code (void)
-{
-#ifdef MINI_HAVE_SYNC_CORE_MEMBARRIER
-	static gint32 registered;
-
-	/* SYNC_CORE has to be registered for the process before it can be used;
-	 * registration is idempotent, so a lost CAS race just registers twice. */
-	if (!mono_atomic_load_i32 (&registered)) {
-		syscall (__NR_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);
-		mono_atomic_store_i32 (&registered, 1);
-	}
-	syscall (__NR_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);
-#endif
-}
-
-/*
- * mini_tiered_promote:
- *
- *   Recompile METHOD through LLVM and publish the result as its terminal body.
- * Runs on the background tier-1 compile worker (mono/mini/llvm/tiered.cpp),
- * never on a mutator thread, so LLVM codegen never stacks on a deep
- * cctor-driven nest.
- *
- * Returns FALSE when the backend declined the method (an EH-clause, gshared or
- * save_lmf gate) or the compile failed; the caller then latches tier 0 as
- * terminal so we never retry.
- *
- * RUN_CCTORS controls whether the compile carries JIT_FLAG_RUN_CCTORS. The
- * background worker always passes FALSE: it must never run managed class
- * constructors itself (see the caller in tiered.cpp for why), so the tier-1
- * body it produces uses the same lazy class-init sequences a run_cctors=FALSE
- * tier-0 compile would, and any cctor still pending runs later, on whichever
- * mutator thread first calls through.
- *
- * PROFILER EVENTS. mini_method_compile () raises jit_begin, but the matching
- * jit_done/jit_failed belongs to whoever publishes the code - and a promotion
- * publishes it here. Without the raises below every promotion would leave an
- * unmatched begin, and profilers that pair the two leak an entry per promoted
- * method. This function therefore owns the end event on all four of its exits.
- *
- * The begin is deliberately left where it is, at the real start of the compile,
- * rather than being suppressed and re-raised adjacent to the end. Tier-1 LLVM
- * compilation is where a tiered runtime spends nearly all of its compile budget
- * - measured at ~95% of total JIT time on the mini regression workloads, with
- * single promotions of 39ms against an entire tier-0 budget of 80ms - so an
- * adjacent pair would report the runtime's most expensive compiles as costing
- * zero, and invert the picture by leaving all attributed JIT time on the cheap
- * tier-0 compiles. A begin at the true start also nests correctly around the
- * compiles that this one's cctors trigger.
- *
- * Note the raises are arbitrary-code call sites inside the tiered_draining
- * window; see task #26 on that window generally.
- */
-gboolean
-mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt, gboolean run_cctors)
-{
-	MonoCompile *cfg;
-	MonoJitInfo *jinfo;
-	MonoJitInfo *tier0_jinfo;
-
-	/*
-	 * mini_init () only initializes LLVM when mono_use_llvm is set, which is the
-	 * usual case but not something promotion can lean on - an embedder that never
-	 * goes through mini_init ()'s default can leave the backend uninitialized, and
-	 * then the SSE vector types would still be NULL when add_intrinsics () registers
-	 * the overloaded intrinsics that use them, as would intrins_id_to_intrins.
-	 *
-	 * mini_llvm_init () is idempotent but takes the loader lock, so gate it on a
-	 * one-shot rather than paying that on every promotion. Racing threads at
-	 * worst call it twice, which is harmless - it is itself guarded. Its result
-	 * is deliberately not checked: under ENABLE_LLVM llvm_init_inner () returns
-	 * TRUE unconditionally, so there is no failure to propagate.
-	 */
-	static gboolean tiered_llvm_inited;
-
-	if (!tiered_llvm_inited) {
-		mini_llvm_init ();
-		tiered_llvm_inited = TRUE;
-	}
-
-	/*
-	 * JIT_FLAG_NO_LLVM_FALLBACK: when the backend declines, mini_method_compile
-	 * returns NULL instead of restarting as a classic compile. Without it the
-	 * fallback runs a full second classic compile and publishes its MonoJitInfo,
-	 * which we then discard right below - the method already has an identical
-	 * tier-0 body, so that jinfo and its code are pure retention.
-	 *
-	 * JIT_FLAG_RUN_CCTORS is included only when RUN_CCTORS is set - never by the
-	 * background worker, which must not run managed class constructors itself.
-	 */
-
-	/*
-	 * The body that is live right now, captured before the compile because it is
-	 * what a declined promotion leaves the method running. Every decline path
-	 * closes the jit_begin with a jit_done carrying this jinfo: the compilation
-	 * did end, and the method's code really does live at that address. Raising
-	 * jit_failed there instead would balance the books but lie - a declined
-	 * method is not a method that failed to JIT, it keeps a working tier-0 body,
-	 * and 19% of promotion attempts decline (149 of 783 on basic.exe), so a
-	 * profiler would report hundreds of bogus JIT failures under MONO_TIERED.
-	 *
-	 * Re-reporting a jinfo the profiler has already seen is safe rather than
-	 * merely tolerable: mono/profiler/log.c dedupes by MonoMethod in
-	 * register_method_local (), mono/profiler/aot.c dedupes when it writes, and
-	 * mono_de_add_pending_breakpoints () skips any breakpoint that already has a
-	 * BreakpointInstance for this exact ji, so the debugger agent is idempotent
-	 * here. vtune re-registers the unchanged range under a fresh method id, which
-	 * is redundant but not wrong - and, load-bearing, not inconsistent: both
-	 * JIT_FLAG_NO_LLVM_FALLBACK returns are upstream of mono_codegen (), hence
-	 * upstream of the mono_debug_close_method () inside it, so a declined
-	 * promotion leaves the tier-0 debug info in place and the re-reported range
-	 * still resolves to tier-0 line numbers. Were a decline ever moved after
-	 * codegen, this would start pairing tier-1 line numbers with tier-0
-	 * addresses.
-	 *
-	 * NULL only if the method has no findable entry in this domain's
-	 * jit_code_hash; that closes with jit_failed. Never observed - see
-	 * tiered_promote_declined ().
-	 */
-	tier0_jinfo = tiered_lookup_live_jinfo (method, domain);
-
-	mono_llvm_tiered_promote_begin ();
-	cfg = mini_method_compile (method, opt, domain, (JitFlags)((run_cctors ? JIT_FLAG_RUN_CCTORS : 0) | JIT_FLAG_NO_LLVM_FALLBACK), 0, -1);
-	mono_llvm_tiered_promote_end ();
-	if (!cfg) {
-		tiered_promote_declined (method, tier0_jinfo);
-		return FALSE;
-	}
-
-	/*
-	 * !cfg->jit_info is the live half of this check: a generic-sharing failure
-	 * returns a cfg with no jit_info, and that must not be published.
-	 * exception_type likewise still fires. !cfg->compile_llvm is now dead -
-	 * compile_llvm is copied from try_llvm, and under JIT_FLAG_NO_LLVM_FALLBACK
-	 * both places that clear try_llvm return NULL instead of restarting - but it
-	 * is kept as a cheap guard against a future third decline path.
-	 */
-	if (cfg->exception_type != MONO_EXCEPTION_NONE || !cfg->compile_llvm || !cfg->jit_info) {
-		mono_destroy_compile (cfg);
-		tiered_promote_declined (method, tier0_jinfo);
-		return FALSE;
-	}
-
-	jinfo = cfg->jit_info;
-
-	/*
-	 * Serialize the instruction stream on every core BEFORE the body becomes
-	 * reachable, so a mutator that redirects into it on another core cannot fetch
-	 * stale instruction bytes - see mini_tiered_promote_publish_code ().
-	 */
-	mini_tiered_promote_publish_code ();
-
-	/*
-	 * mini_method_compile already added the tier-1 jinfo to the jit info table,
-	 * so an IP inside the new code resolves before anything can reach it.
-	 * Publish it to lookups last, by swapping the jit_code_hash entry under its
-	 * lock - that hash is fully lock-protected, so remove-then-insert is safe.
-	 * After the swap mini_lookup_method returns the tier-1 code_start and every
-	 * downstream consumer (call sites, vtable slots, IMT, delegates) picks it up
-	 * with no indirection. The barrier is belt-and-braces: readers synchronize
-	 * through the same lock taken below, which already provides the ordering.
-	 */
-	mono_memory_barrier ();
-
-	mono_domain_jit_code_hash_lock (domain);
-	/*
-	 * The tier-0 entry must be in THIS domain's hash - tier 0 published into the
-	 * domain carried on the queue entry, which is not necessarily
-	 * mono_domain_get () (MONO_OPT_SHARED publishes icall wrappers into the root
-	 * domain). If the remove fails we are looking at the wrong hash and the
-	 * insert below would trip its own no-duplicate assert.
-	 */
-	if (!mono_internal_hash_table_remove (&domain->jit_code_hash, method)) {
-		mono_domain_jit_code_hash_unlock (domain);
-		mono_destroy_compile (cfg);
-		/*
-		 * Closed like any other decline, not with jit_failed. The remove fails
-		 * precisely when the entry is keyed by the shared method rather than by
-		 * METHOD - which is the case tiered_lookup_live_jinfo ()'s fallback exists
-		 * to find, so there usually IS a live body here and reporting a JIT
-		 * failure for it would be the same lie the other exits refuse to tell.
-		 * jit_failed only when no body is findable at all.
-		 *
-		 * Unreachable today: gshared is declined at the !cfg exit long before
-		 * here, so this path is measured at 0 across every workload. It sits on
-		 * the path of task #15 (teaching the backend to accept gshared), which is
-		 * exactly when it starts firing with a non-NULL tier0_jinfo.
-		 *
-		 * Raised outside the hash lock - profiler callbacks run arbitrary code.
-		 */
-		tiered_promote_declined (method, tier0_jinfo);
-		return FALSE;
-	}
-	mono_internal_hash_table_insert (&domain->jit_code_hash, jinfo->d.method, jinfo);
-	mono_domain_jit_code_hash_unlock (domain);
-
-	mono_destroy_compile (cfg);
-
-	/*
-	 * Closes the jit_begin raised at the top of the promotion's
-	 * mini_method_compile (). Raised after the hash swap and the destroy, and
-	 * outside the hash lock, so a profiler that reacts to this by looking the
-	 * method up sees the tier-1 body.
-	 *
-	 * jit_done cannot express "recompiled at a higher tier" - its signature is
-	 * (method, jinfo) - so this is necessarily reported as a second compilation
-	 * of the method, which is what actually happened. What each consumer takes
-	 * from it differs, and only some learn the new code range: log.c dedupes by
-	 * MonoMethod, so it drops this event and its mlpd keeps the tier-0
-	 * code_start/code_size (635 of 868 methods have two distinct code starts
-	 * under tiering, so this is real data loss for log.c - though not a
-	 * regression, since before this event existed at all there was nothing to
-	 * drop). vtune does learn it: it allocates a fresh method id per callback and
-	 * mono_debug_add_method () has already replaced the tier-0 debug info.
-	 * mono_de_add_pending_breakpoints () also acts, inserting into the tier-1
-	 * body - without this event the debugger agent would leave breakpoints in the
-	 * dead tier-0 code.
-	 *
-	 * No extra jit_done is raised for an icall-wrapper alias or a shared
-	 * prof_method: those aliases were reported at tier 0, and a second one here
-	 * would be an end with no begin - the very imbalance this is fixing.
-	 */
-	MONO_PROFILER_RAISE (jit_done, (method, jinfo));
-
-	return TRUE;
-}
-
-/*
  * mini_get_underlying_type:
  *
  *   Return the type the JIT will use during compilation.
@@ -4614,27 +4124,6 @@ mini_jit_cleanup (void)
 #endif
 }
 
-#ifndef ENABLE_LLVM
-void
-mono_llvm_emit_aot_file_info (MonoAotFileInfo *info, gboolean has_jitted_code)
-{
-	g_assert_not_reached ();
-}
-
-gpointer
-mono_llvm_emit_aot_data (const char *symbol, guint8 *data, int data_len)
-{
-	g_assert_not_reached ();
-}
-
-gpointer
-mono_llvm_emit_aot_data_aligned (const char *symbol, guint8 *data, int data_len, int align)
-{
-	g_assert_not_reached ();
-}
-
-#endif
-
 #if !defined(ENABLE_LLVM_RUNTIME) && !defined(ENABLE_LLVM)
 
 void
@@ -4722,9 +4211,7 @@ mini_get_cpu_features (MonoCompile* cfg)
 #if !defined(MONO_CROSS_COMPILE)
 	if (!cfg->compile_aot || cfg->use_current_cpu) {
 		// detect current CPU features if we are in JIT mode or AOT with use_current_cpu flag.
-#if defined(ENABLE_LLVM)
-		features = mono_llvm_get_cpu_features (); // llvm has a nice built-in API to detect features
-#elif defined(TARGET_AMD64) || defined(TARGET_X86)
+#if defined(TARGET_AMD64) || defined(TARGET_X86)
 		features = mono_arch_get_cpu_features ();
 #endif
 	}

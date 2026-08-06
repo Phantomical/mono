@@ -306,7 +306,7 @@ void mono_thread_internal_suspend_for_shutdown (MonoInternalThread *thread);
 void mono_thread_internal_terminate_for_shutdown (MonoInternalThread* thread);
 
 /*
- * MONO_EXTERN_C because mono/mini/llvm/tiered.cpp calls this from C++, and this
+ * MONO_EXTERN_C because the LLVM backend calls this from C++, and this
  * header cannot be wrapped in a blanket linkage guard - it declares templates.
  * The macro expands to nothing in a C build.
  */
