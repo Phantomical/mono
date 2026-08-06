@@ -20,7 +20,11 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
 
+#include <sys/mman.h>
+
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <utility>
 
@@ -337,6 +341,64 @@ TEST_F (JitExecution, EveryMergedTailCallGetsItsReturnBack)
 
 	EXPECT_EQ (jumps, 2u) << t->text ();
 	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
+}
+
+/*
+ * Slabs are placed wherever mmap puts them, so a helper can end up further from
+ * the code calling it than a direct call reaches. What saves that is the
+ * combination of code model Small with Reloc::PIC_ and every callee being
+ * external: the callee is not dso_local, so lowering emits R_X86_64_PLT32, and
+ * JITLink turns a BranchPCRel32 whose target is undefined in the graph into a
+ * jump stub - collapsing it back to a direct branch only when the displacement
+ * actually fits.
+ *
+ * Nothing in the runtime would fail loudly if that stopped holding; the call
+ * would simply be built with a truncated displacement and land somewhere else.
+ * So put a helper far enough away that the direct form cannot encode, and call
+ * it.
+ */
+TEST (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
+{
+	/* mov rax, rdi; add rax, rax; ret - mono_jit_test_double_it by hand,
+	 * because what has to move is the callee's address. */
+	static const uint8_t body[] = { 0x48, 0x89, 0xf8, 0x48, 0x01, 0xc0, 0xc3 };
+
+	size_t page = 4096;
+	void *far = nullptr;
+
+	/* Somewhere no ordinary mapping lands, and > 4GB from both the test binary
+	 * and any slab, so a rel32 from either cannot encode it. */
+	for (uintptr_t at = 0x200000000000ULL; at < 0x400000000000ULL; at += 0x10000000000ULL) {
+		void *got = mmap (reinterpret_cast<void *> (at), page,
+		                  PROT_READ | PROT_WRITE | PROT_EXEC,
+		                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (got != MAP_FAILED) {
+			far = got;
+			break;
+		}
+	}
+	ASSERT_NE (far, nullptr) << "could not place a far helper";
+	memcpy (far, body, sizeof (body));
+
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	ASSERT_FALSE (bool ((*jit)->register_symbol ("mono_jit_test_far_helper", far)));
+
+	auto entry = (*jit)->compile (
+		build_helper_call_module ("mono_jit_test_far_helper").take (), "entry");
+	ASSERT_TRUE (bool (entry)) << toString (entry.takeError ());
+
+	int64_t distance = std::abs (static_cast<int64_t> (
+		reinterpret_cast<intptr_t> (far)
+		- reinterpret_cast<intptr_t> (entry->entry)));
+	EXPECT_GT (distance, int64_t (1) << 32)
+		<< "the helper is close enough for a direct call, so this proves nothing";
+
+	auto fn = reinterpret_cast<int64_t (*) (int64_t)> (entry->entry);
+	EXPECT_EQ (fn (20), 41);
+
+	munmap (far, page);
 }
 
 } // namespace

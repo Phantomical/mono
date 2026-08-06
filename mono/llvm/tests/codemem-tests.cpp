@@ -318,27 +318,80 @@ TEST (CodeSlabs, CommittedBytesTrackPagesRatherThanReservation)
 	EXPECT_LE (slabs->committed_bytes (), 8 * page);
 }
 
-TEST (CodeSlabs, StubsComeFromTheTopAndStayWritable)
+TEST (CodeSlabs, TheWritableRegionComesFromTheTopAndNeverSeals)
 {
 	auto slabs = make_slabs ();
 	ASSERT_TRUE (slabs != nullptr);
 
 	CodeSlabs::Alloc code = must_allocate (*slabs, 64, 16);
-	Expected<CodeSlabs::Alloc> stubs = slabs->allocate_stubs (4096, 16);
+	Expected<CodeSlabs::Alloc> stubs = slabs->allocate_writable (4096, 16);
 	ASSERT_TRUE (bool (stubs)) << toString (stubs.takeError ());
 
 	EXPECT_GT (stubs->base, code.base);
 	EXPECT_TRUE (is_writable (stubs->base));
 	EXPECT_TRUE (is_executable (stubs->base));
 
-	Expected<CodeSlabs::Alloc> more = slabs->allocate_stubs (4096, 16);
+	Expected<CodeSlabs::Alloc> more = slabs->allocate_writable (4096, 16);
 	ASSERT_TRUE (bool (more)) << toString (more.takeError ());
-	EXPECT_LT (more->base, stubs->base) << "stub region did not grow down";
+	EXPECT_LT (more->base, stubs->base) << "writable region did not grow down";
 
-	/* Sealing the code region has nothing to say about the stub region. */
+	/* Sealing the code region has nothing to say about the writable one. */
 	ASSERT_FALSE (bool (slabs->finish (code)));
 	EXPECT_TRUE (is_writable (stubs->base));
 	EXPECT_TRUE (is_writable (more->base));
+
+	slabs->release_writable (*stubs);
+	Expected<CodeSlabs::Alloc> again = slabs->allocate_writable (4096, 16);
+	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
+	EXPECT_EQ (again->base, stubs->base) << "released bytes were not reused";
+}
+
+TEST (CodeSlabs, AnObjectsCodeAndDataShareASlabButNotAPage)
+{
+	auto slabs = make_slabs ();
+	ASSERT_TRUE (slabs != nullptr);
+
+	Expected<CodeSlabs::Object> obj = slabs->allocate_object (300, 16, 8, 8);
+	ASSERT_TRUE (bool (obj)) << toString (obj.takeError ());
+
+	EXPECT_EQ (obj->code.slab, obj->data.slab);
+	EXPECT_GT (obj->data.base, obj->code.base);
+
+	/* The PCRel32 edge from the code to its own mutable data has no stub to
+	 * fall back on, so a slab has to stay well inside that reach. */
+	EXPECT_LT (size_t (obj->data.base - obj->code.base), size_t (2) << 30);
+
+	EXPECT_TRUE (is_writable (obj->code.base));
+	EXPECT_TRUE (is_writable (obj->data.base));
+
+	memset (obj->code.base, 0x90, obj->code.size);
+	memset (obj->data.base, 0, obj->data.size);
+	ASSERT_FALSE (bool (slabs->finish (*obj)));
+
+	EXPECT_FALSE (is_writable (obj->code.base)) << "code did not seal";
+	EXPECT_TRUE (is_writable (obj->data.base)) << "data must stay writable";
+
+	/* What the running program actually does to a cast cache. */
+	*reinterpret_cast<void **> (obj->data.base) = obj->code.base;
+
+	slabs->release (*obj);
+	EXPECT_EQ (slabs->live_bytes (), 0u);
+}
+
+TEST (CodeSlabs, AnObjectWithNoDataIsStillFine)
+{
+	auto slabs = make_slabs ();
+	ASSERT_TRUE (slabs != nullptr);
+
+	Expected<CodeSlabs::Object> obj = slabs->allocate_object (128, 16, 0, 1);
+	ASSERT_TRUE (bool (obj)) << toString (obj.takeError ());
+
+	EXPECT_NE (obj->code.base, nullptr);
+	EXPECT_EQ (obj->data.base, nullptr);
+
+	ASSERT_FALSE (bool (slabs->finish (*obj)));
+	slabs->release (*obj);
+	EXPECT_EQ (slabs->live_bytes (), 0u);
 }
 
 TEST (CodeSlabs, TheReservationItselfIsNotMapped)

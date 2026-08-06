@@ -7,7 +7,7 @@
 
 #include "arch/arch.hpp"
 #include "compiler.hpp"
-#include "nearmem.hpp"
+#include "codemem.hpp"
 
 #include "../mini/llvm/il-line-table.hpp"
 #include "seq-point-marker.hpp"
@@ -20,7 +20,6 @@
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
-#include <llvm/ExecutionEngine/Orc/MapperJITLinkMemoryManager.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
@@ -450,42 +449,6 @@ private:
 	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> seq_points_;
 };
 
-/*
- * The one JITLink memory manager every MonoJit links through.
- *
- * There is a MonoJit per appdomain and this reserves address space in 16MB
- * units, so one per domain would leave each domain sitting on up to 16MB no
- * other domain could touch. Shared, a domain's ranges return to a common free
- * list when its linker goes down and any live domain can take them.
- *
- * Nothing domain-owned lives in here. It holds address ranges, not symbols or
- * relocations, and a range only reaches the free list after JITLink has run the
- * allocation's deallocation actions - so the code that was there is already
- * unreachable and deregistered before anyone else can be given the memory.
- *
- * Leaked on purpose: the ObjectLinkingLayers that borrow it are destroyed
- * whenever their domain is unloaded, and it has to outlive every one of them.
- */
-static Expected<jitlink::JITLinkMemoryManager *>
-shared_memory_manager ()
-{
-	static std::mutex mutex;
-	static MapperJITLinkMemoryManager *shared = nullptr;
-
-	std::lock_guard<std::mutex> lock (mutex);
-
-	if (shared == nullptr) {
-		auto mapper = NearMemoryMapper::Create ();
-
-		if (!mapper)
-			return mapper.takeError ();
-		shared = new MapperJITLinkMemoryManager (16 * 1024 * 1024,
-		                                         std::move (*mapper));
-	}
-
-	return shared;
-}
-
 static void
 ensure_native_target ()
 {
@@ -686,6 +649,10 @@ MonoJit::create ()
 	if (Error err = apply_options ())
 		return std::move (err);
 
+	Expected<std::shared_ptr<CodeSlabs>> slabs = CodeSlabs::create ();
+	if (!slabs)
+		return slabs.takeError ();
+
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());
 
@@ -693,14 +660,15 @@ MonoJit::create ()
 	 * JITLink, not the RTDyldObjectLinkingLayer LLJIT still defaults to on
 	 * ELF. LLJIT's generic platform setup attaches its eh-frame registration
 	 * plugin to this layer on its own.
+	 *
+	 * The slabs are made here rather than by the MonoJit constructor because
+	 * this lambda runs inside builder.create (), before there is a MonoJit to
+	 * own them.
 	 */
 	builder.setObjectLinkingLayerCreator (
-		[] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
-			auto memmgr = shared_memory_manager ();
-
-			if (!memmgr)
-				return memmgr.takeError ();
-			return std::make_unique<ObjectLinkingLayer> (es, **memmgr);
+		[&slabs] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
+			return std::make_unique<ObjectLinkingLayer> (
+				es, std::make_unique<SlabMemoryManager> (*slabs));
 		});
 
 	/*
@@ -717,7 +685,8 @@ MonoJit::create ()
 	if (!jit)
 		return jit.takeError ();
 
-	std::unique_ptr<MonoJit> self (new MonoJit (std::move (*jit)));
+	std::unique_ptr<MonoJit> self (
+		new MonoJit (std::move (*jit), std::move (*slabs)));
 
 	self->capture_ = std::make_shared<ObjectCapturePlugin> ();
 	static_cast<ObjectLinkingLayer &> (self->jit_->getObjLinkingLayer ())
@@ -754,8 +723,8 @@ MonoJit::create ()
 	return std::move (self);
 }
 
-MonoJit::MonoJit (std::unique_ptr<LLJIT> jit)
-	: jit_ (std::move (jit))
+MonoJit::MonoJit (std::unique_ptr<LLJIT> jit, std::shared_ptr<CodeSlabs> slabs)
+	: slabs_ (std::move (slabs)), jit_ (std::move (jit))
 {
 }
 

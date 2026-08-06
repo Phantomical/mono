@@ -34,6 +34,7 @@ class JITCompileCallbackManager;
 
 namespace mono {
 
+class CodeSlabs;
 class StubManager;
 
 /// The host TargetMachine every compile runs against - code model Small+PIC and
@@ -206,7 +207,13 @@ public:
 	const llvm::Triple &triple () const;
 
 private:
-	explicit MonoJit (std::unique_ptr<llvm::orc::LLJIT> jit);
+	MonoJit (std::unique_ptr<llvm::orc::LLJIT> jit,
+	         std::shared_ptr<CodeSlabs> slabs);
+
+	/// The code memory this domain's objects are linked into. Declared before
+	/// jit_ so it outlives the LLJIT, and with it the ObjectLinkingLayer whose
+	/// SlabMemoryManager hands memory out of it.
+	std::shared_ptr<CodeSlabs> slabs_;
 
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 
