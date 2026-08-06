@@ -31,6 +31,23 @@ namespace test {
 /// Start the runtime, once per process. Safe to call repeatedly.
 void init_runtime ();
 
+/// Whether this build has the managed corpus these tests run against.
+bool have_corpus ();
+
+/*
+ * Skip the case unless the corpus is there.  A build configured with
+ * -DMONO_ENABLE_MCS_BUILD=OFF has the backend and nothing managed, so there is
+ * no class library to boot a runtime on and no il/ image to translate -- and a
+ * case that cannot run has to say so as a skip rather than vanish from the list.
+ * Good in a test body and in SetUpTestSuite (), which is where the fixtures that
+ * bring the runtime up need it.
+ */
+#define MONO_SKIP_WITHOUT_CORPUS()					\
+	do {								\
+		if (!mono::test::have_corpus ())			\
+			GTEST_SKIP () << "no managed corpus in this build"; \
+	} while (0)
+
 /// The image of `<name>.dll`, built from `<name>.il` in this directory.
 ///
 /// Aborts rather than returning null: a missing corpus is a build failure, not a
@@ -78,7 +95,11 @@ std::unique_ptr<Translation> translate_method (const std::string &image,
  */
 class TranslatorTest : public ::testing::Test {
 public:
-	static void SetUpTestSuite () { init_runtime (); }
+	static void SetUpTestSuite ()
+	{
+		MONO_SKIP_WITHOUT_CORPUS ();
+		init_runtime ();
+	}
 
 protected:
 	/// Translate `<image>.dll`'s METHOD, named as ilasm spells it: "Type:Method".

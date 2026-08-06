@@ -82,6 +82,18 @@ init_runtime ()
 	mono_jit_init_version_for_test_only ("mono-llvm-tests", "v4.0.30319");
 }
 
+/*
+ * The class library and the il/ images are built by the same gate, so one file
+ * answers for both: MONO_LLVM_TESTS_ASSEMBLIES is the class directory when there
+ * is a corpus and empty when there is not.  mscorlib is also what goes missing
+ * first -- init_runtime () dies on it before any image can be opened.
+ */
+bool
+have_corpus ()
+{
+	return g_file_test (MONO_LLVM_TESTS_ASSEMBLIES "/mscorlib.dll", G_FILE_TEST_EXISTS);
+}
+
 MonoImage *
 load_image (const std::string &name)
 {

@@ -183,6 +183,7 @@ class JitExecution : public ::testing::Test {
 public:
 	static void SetUpTestSuite ()
 	{
+		MONO_SKIP_WITHOUT_CORPUS ();
 		init_runtime ();
 		jit_holder () = cantFail (MonoJit::create ());
 	}

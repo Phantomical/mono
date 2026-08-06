@@ -102,7 +102,11 @@ test_personality (void)
 
 class AsmDump : public ::testing::Test {
 public:
-	static void SetUpTestSuite () { init_runtime (); }
+	static void SetUpTestSuite ()
+	{
+		MONO_SKIP_WITHOUT_CORPUS ();
+		init_runtime ();
+	}
 
 protected:
 	/// Translate and compile IMAGE's METHOD, having renamed its module so the

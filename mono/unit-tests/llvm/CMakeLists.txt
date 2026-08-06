@@ -9,16 +9,16 @@ if(NOT MONO_ENABLE_LLVM OR NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRARIES)
   return()
 endif()
 
-set(MONO_LLVM_TEST_SOURCES stub-tests.cpp codemem-tests.cpp mono-lsda-tests.cpp)
-
 # Most of the cases drive method_to_llvm () over real metadata, so each one is a
 # method in a `.il` file under il/ that ilasm assembles into an assembly the test
-# loads.  Without ilasm there is no corpus to build them from and those cases drop
-# out; the ones that only need a mempool and a buffer stay.
-if(MONO_CORPUS_ENABLED)
-  list(APPEND MONO_LLVM_TEST_SOURCES
-       harness.cpp translator-tests.cpp jit-tests.cpp compiler-tests.cpp)
+# loads.  Their sources are compiled either way and the fixtures skip themselves
+# when there is no corpus to load: a case that disappears from `ctest -N` reads
+# exactly like a case that passed.
+set(MONO_LLVM_TEST_SOURCES
+    stub-tests.cpp codemem-tests.cpp mono-lsda-tests.cpp
+    harness.cpp translator-tests.cpp jit-tests.cpp compiler-tests.cpp)
 
+if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current
   # source directory itself.
   file(GLOB MONO_LLVM_TEST_IL CONFIGURE_DEPENDS
