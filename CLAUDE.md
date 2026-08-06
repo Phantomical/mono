@@ -229,6 +229,12 @@ Backend debugging env vars:
   every stock pass in the pipeline, `0`/`off` turns it off, and anything else means the
   default. Costs roughly 6% of compile CPU on the default setting and 29% on `each`.
   A failure names the method, the pass and prints the module, then aborts.
+- `MONO_LLVM_JIT_TIMING=1` (`timing.cpp`) — at exit, print how long each phase of a
+  compile took, summed over every method: metadata, translation, resolution, the IR
+  pipeline, codegen setup and codegen proper, JITLink, and the pieces around them.
+  Phases nest and the self column is a share of the whole, so it sums to 100. Worth
+  reaching for before theorising about compile latency — `perf` does not work on this
+  kernel and `--llvm-opt=-time-passes` aborts under concurrent compiles.
 - `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code
   is bump-allocated out of. Capped at 2GB whatever you ask for, because a slab's code
   and its mutable data reference each other with a PCRel32 and nothing stubs that.

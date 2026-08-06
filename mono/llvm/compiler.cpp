@@ -28,6 +28,7 @@
 
 #include "jit.hpp"
 #include "sidetables.hpp"
+#include "timing.hpp"
 
 #include "eh-side-channel.hpp"
 #include "passes/eh-gather.hpp"
@@ -60,6 +61,7 @@
 #include <llvm/Transforms/Utils/Cloning.h>
 
 #include <cstdlib>
+#include <optional>
 
 using namespace llvm;
 
@@ -412,6 +414,8 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
              MonoEHSideChannel &side_channel, OutputKind kind)
 {
 	legacy::PassManager pm;
+	std::optional<timing::Scope> timed_setup (std::in_place,
+	                                          timing::Phase::cgsetup);
 
 	auto *mmiwp = new MachineModuleInfoWrapperPass (&tm);
 	TargetPassConfig *tpc = tm.createPassConfig (pm);
@@ -473,7 +477,11 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 */
 	pm.add (new SideTableEmitPass (streamer_ptr, &side_channel));
 
-	pm.run (m);
+	timed_setup.reset ();
+	{
+		timing::Scope timed_run (timing::Phase::cgrun);
+		pm.run (m);
+	}
 	return Error::success ();
 }
 
@@ -518,6 +526,7 @@ MethodObjectCompiler::MethodObjectCompiler (orc::JITTargetMachineBuilder jtmb)
 Expected<std::unique_ptr<MemoryBuffer>>
 MethodObjectCompiler::operator() (Module &m)
 {
+	timing::Scope timed (timing::Phase::codegen);
 	MonoEHSideChannel side_channel;
 	SmallVector<char, 0> buffer;
 

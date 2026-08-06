@@ -25,6 +25,7 @@
 #include "jinfo.hpp"
 #include "jit.hpp"
 #include "stubs.hpp"
+#include "timing.hpp"
 #include "method-to-llvm.hpp"
 
 #include "mini.h"
@@ -60,6 +61,7 @@ extern "C" {
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -960,24 +962,33 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	}
 
 	ERROR_DECL (metadata_error);
-	MinimalCompile cfg (method, state.domain, metadata_error);
+	std::optional<MinimalCompile> cfg;
 
-	if (cfg.get ()->header == nullptr)
+	{
+		timing::Scope timed (timing::Phase::metadata);
+
+		cfg.emplace (method, state.domain, metadata_error);
+	}
+
+	if (cfg->get ()->header == nullptr)
 		return recover (state, method, runtime_error (metadata_error));
 
 	std::vector<ExternalSymbol> externals;
 	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
 	SeqPointGraph seq_points;
-	Expected<Function *> function =
-		method_to_llvm (module.get (), cfg.get (), method, &externals, &bp_switch,
-		                &seq_points);
+	Expected<Function *> function = [&] {
+		timing::Scope timed (timing::Phase::translate);
+
+		return method_to_llvm (module.get (), cfg->get (), method, &externals,
+		                       &bp_switch, &seq_points);
+	}();
 	if (!function)
 		return recover (state, method, function.takeError ());
 
 	std::string entry = (*function)->getName ().str ();
 
 	if (dumping (entry.c_str ()))
-		dump_il (method, cfg.get ()->header);
+		dump_il (method, cfg->get ()->header);
 
 	/*
 	 * Laying out a class to create its vtable is the other place metadata gets
@@ -985,8 +996,14 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	 * fails here rather than in the translation above. It is the same failure
 	 * and it is raised the same way - at the call, not at the declaration.
 	 */
-	if (Error err = resolve (state, externals))
-		return recover (state, method, std::move (err));
+	Error resolved = [&] {
+		timing::Scope timed (timing::Phase::resolve);
+
+		return resolve (state, externals);
+	}();
+
+	if (resolved)
+		return recover (state, method, std::move (resolved));
 
 	/*
 	 * The legacy entry rides along in the body's module. It is a handful of
@@ -1036,10 +1053,14 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	if (dumping (entry.c_str ()))
 		module->print (llvm::errs (), nullptr);
 
-	Expected<CompiledMethod> compiled =
-		state.jit->compile (ThreadSafeModule (std::move (module),
-		                                      ThreadSafeContext (std::move (context))),
-		                    entry);
+	Expected<CompiledMethod> compiled = [&] {
+		timing::Scope timed (timing::Phase::orc);
+
+		return state.jit->compile (
+			ThreadSafeModule (std::move (module),
+		                      ThreadSafeContext (std::move (context))),
+			entry);
+	}();
 	if (!compiled)
 		return compiled.takeError ();
 
@@ -1081,9 +1102,12 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		                          "the linked object for %s defines no legacy "
 		                          "entry", entry.c_str ());
 
-	Expected<MonoJitInfo *> jinfo = register_jit_info (
-		state.domain, method, cfg.get ()->header, *compiled, filters, bp_switch,
-		seq_points);
+	Expected<MonoJitInfo *> jinfo = [&] {
+		timing::Scope timed (timing::Phase::jinfo);
+
+		return register_jit_info (state.domain, method, cfg->get ()->header,
+		                          *compiled, filters, bp_switch, seq_points);
+	}();
 
 	if (!jinfo)
 		return jinfo.takeError ();
@@ -1427,7 +1451,11 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 		mono_domain_set_internal_with_options (state.domain, FALSE);
 
 	MonoJitInfo *published = nullptr;
-	Expected<Compiled> code = translate_and_compile (state, method, &published);
+	Expected<Compiled> code = [&] {
+		timing::Scope timed (timing::Phase::compile);
+
+		return translate_and_compile (state, method, &published);
+	}();
 
 	if (entered != state.domain)
 		mono_domain_set_internal_with_options (entered, FALSE);

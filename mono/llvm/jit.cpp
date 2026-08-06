@@ -17,6 +17,7 @@
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "stubs.hpp"
+#include "timing.hpp"
 
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
@@ -441,6 +442,7 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> lines;
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
 		std::vector<VarSlot> var_slots;
+		timing::Scope timed (timing::Phase::dwarf);
 
 		Expected<std::unique_ptr<object::ObjectFile>> obj =
 			object::ObjectFile::createObjectFile (input_object);
@@ -694,6 +696,7 @@ ir_verification_enabled ()
 void
 MonoJit::run_tier0_pipeline (Module &m)
 {
+	timing::Scope timed (timing::Phase::pipeline);
 	VerifyLevel verify = verify_level ();
 	PassInstrumentationCallbacks pic;
 
@@ -980,9 +983,14 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	 */
 	std::string jd_name =
 		("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
-	JITDylib &jd = jit_->getExecutionSession ().createBareJITDylib (jd_name);
-	jd.addToLinkOrder (*helpers_);
-	jd.addToLinkOrder (*stubs_);
+	JITDylib &jd = [&] () -> JITDylib & {
+		timing::Scope timed (timing::Phase::dylib);
+		JITDylib &made = jit_->getExecutionSession ().createBareJITDylib (jd_name);
+
+		made.addToLinkOrder (*helpers_);
+		made.addToLinkOrder (*stubs_);
+		return made;
+	}();
 
 	if (Error err = jit_->addIRModule (jd, std::move (tsm)))
 		return std::move (err);
