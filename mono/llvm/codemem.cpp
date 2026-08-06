@@ -419,9 +419,40 @@ CodeSlabs::release (const Alloc &a)
 
 	std::lock_guard<std::mutex> lock (mutex_);
 	Slab &s = *slabs_[a.slab];
+	size_t offset = size_t (a.base - s.base), length = a.size;
 
 	s.live -= a.size;
-	put_free (s.free, size_t (a.base - s.base), a.size);
+	put_free (s.free, offset, length, &offset, &length);
+	drop_pages (s, offset, length);
+}
+
+/*
+ * Hands back the whole pages inside a free range, so that a domain minting and
+ * dropping dynamic methods settles at its live size rather than its high-water
+ * mark. Only pages the range covers entirely: a page it shares with a live
+ * allocation still has something on it.
+ *
+ * The mapping keeps its protection - MADV_DONTNEED drops the physical page, not
+ * the VMA - but the page is recorded as uncommitted so that the next allocation
+ * to reach it charges for it again.
+ */
+void
+CodeSlabs::drop_pages (Slab &s, size_t offset, size_t length)
+{
+	size_t first = align_up (offset, page_size_) / page_size_;
+	size_t last = (offset + length) / page_size_;
+
+	if (last <= first)
+		return;
+
+	madvise (s.base + first * page_size_, (last - first) * page_size_,
+	         MADV_DONTNEED);
+
+	for (size_t p = first; p < last && p < s.prot.size (); p++)
+		if (s.prot[p] != PageProt::None) {
+			s.prot[p] = PageProt::None;
+			s.committed_pages--;
+		}
 }
 
 void
@@ -445,7 +476,8 @@ CodeSlabs::release (const Object &o)
 }
 
 void
-CodeSlabs::put_free (std::map<size_t, size_t> &set, size_t offset, size_t length)
+CodeSlabs::put_free (std::map<size_t, size_t> &set, size_t offset, size_t length,
+                     size_t *merged_offset, size_t *merged_length)
 {
 	auto next = set.lower_bound (offset);
 
@@ -464,6 +496,10 @@ CodeSlabs::put_free (std::map<size_t, size_t> &set, size_t offset, size_t length
 	}
 
 	set[offset] = length;
+	if (merged_offset)
+		*merged_offset = offset;
+	if (merged_length)
+		*merged_length = length;
 }
 
 size_t

@@ -318,6 +318,65 @@ TEST (CodeSlabs, CommittedBytesTrackPagesRatherThanReservation)
 	EXPECT_LE (slabs->committed_bytes (), 8 * page);
 }
 
+/// Resident bytes of this process, from /proc/self/statm.
+size_t
+resident_bytes ()
+{
+	FILE *f = fopen ("/proc/self/statm", "r");
+	unsigned long total = 0, rss = 0;
+
+	if (!f)
+		return 0;
+	if (fscanf (f, "%lu %lu", &total, &rss) != 2)
+		rss = 0;
+	fclose (f);
+	return size_t (rss) * 4096;
+}
+
+/*
+ * The failure this guards against is a domain that mints and drops dynamic
+ * methods holding its high-water mark for as long as it lives. Reusing the
+ * bytes is not enough on its own - a burst that frees everything afterwards
+ * would stay resident - so what has to come back down is the kernel's idea of
+ * how much memory this process is using, not just the allocator's.
+ */
+TEST (CodeSlabs, FreedPagesGoBackToTheKernel)
+{
+	setenv ("MONO_LLVM_SLAB_SIZE", "128M", 1);
+	auto slabs = make_slabs ();
+	unsetenv ("MONO_LLVM_SLAB_SIZE");
+	ASSERT_TRUE (slabs != nullptr);
+
+	size_t chunk = 64 * 1024;
+	size_t count = 512; /* 32MB, all live at once */
+	std::vector<CodeSlabs::Alloc> live;
+	size_t rss_idle = resident_bytes ();
+
+	for (size_t i = 0; i < count; i++) {
+		CodeSlabs::Alloc a = must_allocate (*slabs, chunk, 16);
+
+		memset (a.base, 0x90, a.size);
+		ASSERT_FALSE (bool (slabs->finish (a)));
+		live.push_back (a);
+	}
+
+	size_t rss_peak = resident_bytes ();
+	EXPECT_GE (rss_peak - rss_idle, count * chunk / 2)
+		<< "the burst never became resident, so the drop proves nothing";
+	EXPECT_GE (slabs->committed_bytes (), count * chunk);
+
+	for (CodeSlabs::Alloc &a : live)
+		slabs->release (a);
+
+	EXPECT_EQ (slabs->live_bytes (), 0u);
+	EXPECT_LE (slabs->committed_bytes (), 2 * slabs->page_size ())
+		<< "committed bytes did not come back down";
+
+	size_t rss_after = resident_bytes ();
+	EXPECT_LT (rss_after, rss_peak - count * chunk / 2)
+		<< "the pages were never handed back to the kernel";
+}
+
 TEST (CodeSlabs, TheWritableRegionComesFromTheTopAndNeverSeals)
 {
 	auto slabs = make_slabs ();

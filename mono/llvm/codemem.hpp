@@ -148,7 +148,10 @@ private:
 	llvm::Error open (const Alloc &a);
 	llvm::Error close (const Alloc &a);
 	llvm::Error reprotect (Slab &s, size_t first, size_t last, bool seal);
-	void put_free (std::map<size_t, size_t> &set, size_t offset, size_t length);
+	void put_free (std::map<size_t, size_t> &set, size_t offset, size_t length,
+	               size_t *merged_offset = nullptr,
+	               size_t *merged_length = nullptr);
+	void drop_pages (Slab &s, size_t offset, size_t length);
 
 	std::mutex mutex_;
 	std::vector<std::unique_ptr<Slab>> slabs_;
