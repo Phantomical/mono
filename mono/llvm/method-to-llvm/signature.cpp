@@ -765,10 +765,10 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 
 /// The declaration of METHOD in this module, created on first use and cached.
 ///
-/// A method this backend compiles is declared fastcc against its `$fast`
-/// symbol, which the engine resolves to the fastcc body's stub. One whose code
-/// mini produces instead - an icall, a pinvoke, a runtime-implemented method -
-/// is declared against the plain symbol in the legacy convention, and every
+/// A method this backend compiles is declared fastcc against its plain symbol,
+/// which the engine resolves to the fastcc body's stub. One whose code mini
+/// produces instead - an icall, a pinvoke, a runtime-implemented method - is
+/// declared against the `$legacy` symbol in the legacy convention, and every
 /// call to it lowers in LegacyAbiPass.
 ///
 /// A fastcc declaration whose return will not fit in the return registers
@@ -820,14 +820,14 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	 * more of its own: conversion operators overload on their return type, which
 	 * no printed signature carries, and runtime-minted wrappers print alike. This
 	 * name is how a caller's reference finds the method's stub, so
-	 * symbol_for_code () (runtime.cpp) must agree with it.
+	 * symbol_for_body () (runtime.cpp) must agree with it.
 	 */
 	std::string full_name = identity_symbol (printed, method);
 
 	g_free (printed);
 
-	if (!legacy)
-		full_name += "$fast";
+	if (legacy)
+		full_name += "$legacy";
 
 	/*
 	 * The emitter's cache is per instance, but filter bodies share the

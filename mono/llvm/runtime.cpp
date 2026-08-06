@@ -282,8 +282,11 @@ dump_il (MonoMethod *method, MonoMethodHeader *header)
 	g_free (il);
 }
 
+/// The plain symbol: the fastcc body, which is the method's implementation and
+/// what generated callers bind to. Every other symbol a method owns hangs a
+/// suffix off this one.
 std::string
-symbol_for_code (MonoMethod *method)
+symbol_for_body (MonoMethod *method)
 {
 	char *name = mono_method_full_name (method, TRUE);
 	std::string symbol = name;
@@ -306,33 +309,34 @@ symbol_for_code (MonoMethod *method)
 	return symbol;
 }
 
-/// The `$fast` symbol: the fastcc body generated callers bind to directly.
-/// The plain symbol stays the legacy entry - the interop thunk - which is what
-/// the runtime, delegates and every escaped function pointer see.
+/// The `$legacy` symbol: the legacy-convention entry - the interop thunk - which
+/// is what the runtime, delegates and every escaped function pointer see. It is
+/// the stub every module binds to and the address publish () hands out.
 std::string
-symbol_for_body (MonoMethod *method)
+symbol_for_code (MonoMethod *method)
 {
-	return symbol_for_code (method) + "$fast";
+	return symbol_for_body (method) + "$legacy";
 }
 
 /// The `$entry` symbol: the legacy entry compiled beside a method's body.
 ///
-/// A name of its own rather than the plain symbol, which in the body's module
-/// means the stub - a body that takes its own address gets the stub, not the
-/// entry sitting next to it, since that pointer escapes and must survive every
-/// later recompile.
+/// This is a definition, not the stub above, and it needs a name of its own
+/// because the two share a module: a body that takes its own address emits the
+/// `$legacy` symbol and must get the stub, which survives every later recompile,
+/// rather than the copy sitting next to it.
 std::string
 symbol_for_entry (MonoMethod *method)
 {
-	return symbol_for_code (method) + "$entry";
+	return symbol_for_body (method) + "$entry";
 }
 
 /// The `$unbox` symbol: the legacy entry that steps a boxed receiver past the
-/// object header before entering the method.
+/// object header before entering the method. Compiled beside the body like
+/// `$entry`, and likewise never stubbed.
 std::string
 symbol_for_unbox (MonoMethod *method)
 {
-	return symbol_for_code (method) + "$unbox";
+	return symbol_for_body (method) + "$unbox";
 }
 
 /// Whether a call can ever reach METHOD with a boxed receiver, so that the

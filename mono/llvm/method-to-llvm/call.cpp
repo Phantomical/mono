@@ -339,16 +339,17 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 }
 
 /// The address of TARGET as something other than a direct call target: what
-/// ldftn pushes, what a delegate stores. This is the plain symbol - the legacy
-/// entry the runtime publishes - because the pointer escapes to callers that
-/// know nothing of fastcc; an indirect call through it is a legacy call.
+/// ldftn pushes, what a delegate stores. This is the `$legacy` symbol - the
+/// legacy entry the runtime publishes - because the pointer escapes to callers
+/// that know nothing of fastcc; an indirect call through it is a legacy call.
 ///
-/// A method whose code mini produces is declared against this very name, since
-/// create_method_decl () withholds the `$fast` suffix from exactly the methods
-/// that are entered in the legacy convention. Its declaration is therefore the
-/// address, and asking for one here has to produce it: a name belongs to one
-/// object, and LLVM answers a second claim on it by silently renaming the
-/// newcomer, leaving a reference to a symbol the engine never defines.
+/// Both branches below name that same symbol. A method whose code mini produces
+/// is declared against it, since create_method_decl () gives the `$legacy`
+/// suffix to exactly the methods that are entered in the legacy convention. Its
+/// declaration is therefore the address, and asking for one here has to produce
+/// it: a name belongs to one object, and LLVM answers a second claim on it by
+/// silently renaming the newcomer, leaving a reference to a symbol the engine
+/// never defines.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
@@ -356,7 +357,7 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 		return create_method_decl (target);
 
 	char *name = mono_method_full_name (target, TRUE);
-	std::string symbol = identity_symbol (name, target);
+	std::string symbol = identity_symbol (name, target) + "$legacy";
 
 	g_free (name);
 	record_external (symbol, ExternalSymbol::Kind::Code, target);
