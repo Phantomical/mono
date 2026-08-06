@@ -102,11 +102,13 @@
 #include "interp/interp.h"
 #include "mixed_callstack_plugin.h"
 
-#ifdef MONO_ARCH_LLVM_SUPPORTED
-#ifdef ENABLE_LLVM
-#include "mini-llvm-cpp.h"
-#include "llvm-jit.h"
-#endif
+#if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
+#include <unwind.h>
+/* Both are registered as JIT icalls below; defined in mini-exceptions.c and
+ * llvm/engine.cpp respectively. */
+G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
+	uint64_t c, struct _Unwind_Exception *d, struct _Unwind_Context *e);
+void mono_llvm_set_unhandled_exception_handler (void);
 #endif
 #include "../llvm/runtime.hpp"
 #include "mono/metadata/icall-signatures.h"
@@ -4372,9 +4374,8 @@ mini_free_jit_domain_info (MonoDomain *domain)
 #ifdef ENABLE_LLVM
 	{
 		/*
-		 * Declared in mono/mini/llvm/backend.h; declared locally because that
-		 * header also redeclares mono_llvm_compile_method, which conflicts with
-		 * the legacy llvm-jit.h still included here (same reason as
+		 * Declared in mono/mini/llvm/backend.h; declared locally to keep that
+		 * header's llvm-c dependencies out of this file (same as
 		 * mono_llvm_tiered_set_ready () in mini_init ()).
 		 *
 		 * The tier-1 queue holds (MonoMethod, MonoDomain) pairs for methods that
@@ -4821,9 +4822,8 @@ mini_init (const char *filename, const char *runtime_version)
 
 #ifdef ENABLE_LLVM
 	/*
-	 * Declared in mono/mini/llvm/backend.h; declared locally because that header
-	 * also redeclares mono_llvm_compile_method, which conflicts with the legacy
-	 * llvm-jit.h still included here.
+	 * Declared in mono/mini/llvm/backend.h; declared locally to keep that
+	 * header's llvm-c dependencies out of this file.
 	 */
 	void mono_llvm_tiered_set_ready (void);
 
@@ -5258,9 +5258,7 @@ mini_cleanup (MonoDomain *domain)
 #ifdef ENABLE_LLVM
 	/*
 	 * Declared locally for the same reason mono_llvm_tiered_set_ready () is,
-	 * further up in this file: backend.h also redeclares
-	 * mono_llvm_compile_method, which conflicts with the legacy llvm-jit.h
-	 * still included here.
+	 * further up in this file: to keep backend.h's llvm-c dependencies out.
 	 *
 	 * Stop the tiered background compile worker (if one was ever started)
 	 * before the teardown below starts freeing the domains and jit_code_hash

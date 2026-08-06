@@ -82,10 +82,6 @@
 #include "mini-runtime.h"
 #include "interp/interp.h"
 
-#ifdef ENABLE_LLVM
-#include "mini-llvm-cpp.h"
-#endif
-
 #ifndef MONO_ARCH_CONTEXT_DEF
 #define MONO_ARCH_CONTEXT_DEF
 #endif

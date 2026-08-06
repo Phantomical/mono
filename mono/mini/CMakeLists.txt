@@ -101,9 +101,6 @@ set(mini_sources
   "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
 if(MONO_ENABLE_LLVM)
-  # The legacy LLVM 6 backend (mini-llvm.c, mini-llvm-cpp.cpp, llvm-jit.cpp)
-  # does not compile against unmodified system LLVM.  It stays in the tree but
-  # out of the build; llvm/ below replaces it.
   list(APPEND mini_sources
     llvm-runtime.cpp
     llvm/engine.cpp
