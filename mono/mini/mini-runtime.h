@@ -68,8 +68,12 @@ typedef struct {
 	MonoJitInfo *ji;
 	int clause_index;
 	MonoContext ctx, new_ctx;
-	/* FIXME: GC */
-	gpointer        ex_obj;
+	/*
+	 * The exception being unwound, parked here while an LLVM finally or fault
+	 * handler runs. Nothing else in the process refers to it over that window,
+	 * so the slot is registered as a pinning GC root - see setup_jit_tls_data ().
+	 */
+	MonoObject *ex_obj;
 	MonoLMF *lmf;
 	int first_filter_idx, filter_idx;
 } ResumeState;
