@@ -53,7 +53,6 @@ typedef struct SeqPointInfo SeqPointInfo;
 #include "regalloc.h"
 #include "mini-unwind.h"
 #include "jit.h"
-#include "cfgdump.h"
 #include "tiered.h"
 
 #include "mono/metadata/tabledefs.h"
@@ -1658,7 +1657,6 @@ typedef struct {
 	MonoErrorInternal error_value;
 
 	/* pointer to context datastructure used for graph dumping */
-	MonoGraphDumper *gdump_ctx;
 
 	/* Stats */
 	int stat_allocate_var;
@@ -2116,10 +2114,6 @@ gpointer    mini_profiler_context_get_result (MonoProfilerCallContext *ctx);
 void        mini_profiler_context_free_buffer (gpointer buffer);
 
 /* graph dumping */
-void mono_cfg_dump_create_context (MonoCompile *cfg);
-void mono_cfg_dump_begin_group (MonoCompile *cfg);
-void mono_cfg_dump_close_group (MonoCompile *cfg);
-void mono_cfg_dump_ir (MonoCompile *cfg, const char *phase_name);
 
 /* helper methods */
 MonoInst* mono_find_spvar_for_region        (MonoCompile *cfg, int region);

@@ -42,16 +42,12 @@ set(mini_sources
   mini-runtime.c
   seq-points.c
   method-to-ir.c
-  cfgdump.c
   decompose.c
   jit-icalls.c
   trace.c
-  dominators.c
   cfold.c
   helpers.c
   liveness.c
-  ssa.c
-  abcremoval.c
   local-propagation.c
   driver.c
   debug-mini.c
@@ -68,7 +64,6 @@ set(mini_sources
   unwind.c
   mini-gc.c
   debugger-agent-stubs.c
-  alias-analysis.c
   mini-cross-helpers.c
   arch-stubs.c
   type-checking.c
