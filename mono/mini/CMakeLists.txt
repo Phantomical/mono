@@ -57,7 +57,6 @@ set(mini_sources
   linear-scan.c
   aot-compiler.c
   aot-runtime.c
-  aot-runtime-wasm.c
   graph.c
   mini-codegen.c
   mini-exceptions.c

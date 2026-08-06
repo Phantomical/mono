@@ -77,9 +77,6 @@
 #include <mono/mini/ee.h>
 #include <mono/mini/trace.h>
 
-#ifdef TARGET_ARM
-#include <mono/mini/mini-arm.h>
-#endif
 #include <mono/metadata/icall-decl.h>
 
 /* Arguments that are passed when invoking only a finally/filter clause from the frame */
