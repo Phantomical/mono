@@ -371,6 +371,14 @@ private:
 		void *body;
 	};
 
+	/// What publishing a method handed the rest of the runtime: the legacy
+	/// stub's address, and the trampoline jit-info record that resolves that
+	/// address back to the method.
+	struct Publication {
+		void *stub;
+		MonoJitInfo *tramp_jinfo;
+	};
+
 	/// What compiling a method put somewhere it has to be taken back out of.
 	/// Only tracked for dynamic methods; nothing else is ever freed.
 	struct Owned {
@@ -391,8 +399,8 @@ private:
 		/// caller's module needs to link.
 		std::unordered_set<MonoMethod *> defined;
 		/// Methods already published: stubs defined, address in hand, tramp
-		/// info registered. Holds the legacy stub's address.
-		std::unordered_map<MonoMethod *, void *> published;
+		/// info registered.
+		std::unordered_map<MonoMethod *, Publication> published;
 		/// Methods whose stubs already point at real code - and where that
 		/// code is, so that asking again is a lookup rather than a compile.
 		std::unordered_map<MonoMethod *, Compiled> compiled;
@@ -640,7 +648,6 @@ Backend::free_method (MonoMethod *method)
 				release.stubs.push_back (symbol_for_code (method));
 				release.stubs.push_back (symbol_for_body (method));
 			}
-			state.published.erase (method);
 			state.compiled.erase (method);
 			state.dispatchers.erase (method);
 
@@ -649,6 +656,23 @@ Backend::free_method (MonoMethod *method)
 			if (tracked != state.owned.end ()) {
 				release.owned = std::move (tracked->second);
 				state.owned.erase (tracked);
+			}
+
+			/*
+			 * The record that resolves the stub's address back to this method
+			 * goes out with the stub, for the same reason the names do: once the
+			 * block is on the free list it belongs to whichever method publishes
+			 * next, and a delegate built over that method's address would
+			 * otherwise be bound to this one - by then freed metadata.
+			 * Unreachable by name is not enough; the address is reachable too.
+			 */
+			auto published = state.published.find (method);
+
+			if (published != state.published.end ()) {
+				if (published->second.tramp_jinfo != nullptr)
+					release.owned.jinfos.push_back (
+						published->second.tramp_jinfo);
+				state.published.erase (published);
 			}
 			releases.push_back (std::move (release));
 		}
@@ -1552,7 +1576,7 @@ Backend::publish (DomainState &state, MonoMethod *method)
 		auto it = state.published.find (method);
 
 		if (it != state.published.end ())
-			return it->second;
+			return it->second.stub;
 	}
 
 	if (Error err = publish_defs (state, method))
@@ -1571,7 +1595,7 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	auto it = state.published.find (method);
 
 	if (it != state.published.end ())
-		return it->second;
+		return it->second.stub;
 
 	/*
 	 * The stub is the only address the runtime ever hands out for the method,
@@ -1581,16 +1605,31 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	 * the method, in the domain whose linker holds the stub so the two die
 	 * together. The published check above keeps racing threads from
 	 * registering it twice.
+	 *
+	 * A dynamic method's stub block goes back on the free list when the method
+	 * is freed, so its record has to be taken out again before the next method
+	 * lands there - and mono_jit_info_table_remove () frees what it unregisters,
+	 * so that record has to come from the allocator that call uses. Every other
+	 * method lives exactly as long as its domain, and so does its record.
 	 */
-	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
+	std::string name = symbol_for_code (method);
+	MonoJitInfo *tramp_jinfo = nullptr;
 
-	tramp->code = (guint8 *) *stub;
-	tramp->code_size = (guint32) arch::stub_block_size;
-	tramp->name = g_strdup (symbol_for_code (method).c_str ());
-	tramp->method = method;
-	mono_tramp_info_register (tramp, state.domain);
+	if (method->dynamic) {
+		tramp_jinfo = mono_tramp_info_register_reclaimable (
+			state.domain, method, *stub, (guint32) arch::stub_block_size,
+			name.c_str ());
+	} else {
+		MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
 
-	state.published[method] = *stub;
+		tramp->code = (guint8 *) *stub;
+		tramp->code_size = (guint32) arch::stub_block_size;
+		tramp->name = g_strdup (name.c_str ());
+		tramp->method = method;
+		mono_tramp_info_register (tramp, state.domain);
+	}
+
+	state.published[method] = Publication { *stub, tramp_jinfo };
 	return *stub;
 }
 

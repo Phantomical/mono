@@ -522,18 +522,70 @@ mono_tramp_info_free (MonoTrampInfo *info)
 }
 
 static void
-register_trampoline_jit_info (MonoDomain *domain, MonoTrampInfo *info)
+init_trampoline_jit_info (MonoJitInfo *ji, MonoTrampInfo *info)
 {
-	MonoJitInfo *ji;
-
-	ji = (MonoJitInfo *)mono_domain_alloc0 (domain, mono_jit_info_size ((MonoJitInfoFlags)0, 0, 0));
 	mono_jit_info_init (ji, NULL, (guint8*)MINI_FTNPTR_TO_ADDR (info->code), info->code_size, (MonoJitInfoFlags)0, 0, 0);
 	ji->d.tramp_info = info;
 	ji->is_trampoline = TRUE;
 
 	ji->unwind_info = mono_cache_unwind_info (info->uw_info, info->uw_info_len);
+}
+
+static void
+register_trampoline_jit_info (MonoDomain *domain, MonoTrampInfo *info)
+{
+	MonoJitInfo *ji;
+
+	ji = (MonoJitInfo *)mono_domain_alloc0 (domain, mono_jit_info_size ((MonoJitInfoFlags)0, 0, 0));
+	init_trampoline_jit_info (ji, info);
 
 	mono_jit_info_table_add (domain, ji);
+}
+
+/*
+ * mono_tramp_info_register_reclaimable:
+ *
+ *   Register a trampoline jit-info record for METHOD covering CODE_SIZE bytes at
+ * CODE, and hand it back so the caller can unregister it again.
+ *
+ * The record, the MonoTrampInfo behind it and NAME are one allocation, from the
+ * allocator mono_jit_info_table_remove () frees with - so removing the record
+ * takes all three, and takes them under the same hazard-pointer delay that makes
+ * removal safe against a lookup already in flight.
+ */
+MonoJitInfo *
+mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gpointer code,
+									  guint32 code_size, const char *name)
+{
+	MonoJitInfo *ji;
+	MonoTrampInfo *info;
+	char *block;
+	size_t info_offset = ALIGN_TO (mono_jit_info_size ((MonoJitInfoFlags)0, 0, 0), sizeof (gpointer));
+	size_t name_offset = info_offset + sizeof (MonoTrampInfo);
+	size_t name_size = name ? strlen (name) + 1 : 0;
+
+	block = (char *)g_malloc0 (name_offset + name_size);
+	ji = (MonoJitInfo *)block;
+	info = (MonoTrampInfo *)(block + info_offset);
+
+	info->code = (guint8*)code;
+	info->code_size = code_size;
+	info->method = method;
+	if (name) {
+		memcpy (block + name_offset, name, name_size);
+		info->name = block + name_offset;
+	}
+
+	init_trampoline_jit_info (ji, info);
+
+	mono_lldb_save_trampoline_info (info);
+	mixed_callstack_plugin_save_trampoline_info (info, domain);
+	if (mono_jit_map_is_enabled ())
+		mono_emit_jit_tramp (info->code, info->code_size, info->name);
+
+	mono_jit_info_table_add (domain, ji);
+
+	return ji;
 }
 
 /*

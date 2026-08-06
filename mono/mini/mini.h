@@ -2419,6 +2419,7 @@ MonoTrampInfo*    mono_tramp_info_create (const char *name, guint8 *code, guint3
 void              mono_tramp_info_free (MonoTrampInfo *info);
 void              mono_aot_tramp_info_register (MonoTrampInfo *info, MonoDomain *domain);
 void              mono_tramp_info_register (MonoTrampInfo *info, MonoDomain *domain);
+MonoJitInfo*      mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gpointer code, guint32 code_size, const char *name);
 int mini_exception_id_by_name (const char *name);
 gboolean mini_type_is_hfa (MonoType *t, int *out_nfields, int *out_esize);
 
