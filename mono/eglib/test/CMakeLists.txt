@@ -10,15 +10,27 @@ add_executable(test-eglib
   enum.cpp
   hashtable.cpp
   list.cpp
+  markup.cpp
   memory.cpp
+  pattern.cpp
   ptrarray.cpp
   queue.cpp
+  shell.cpp
   sizes.cpp
-  slist.cpp)
+  slist.cpp
+  string-util.cpp
+  string.cpp
+  unicode.cpp
+  utf8.cpp)
 
 target_link_libraries(test-eglib PRIVATE
   mono::common eglib GTest::gtest GTest::gtest_main)
-target_compile_definitions(test-eglib PRIVATE EGLIB_TESTS=1 _FORTIFY_SOURCE=2)
+# The UTF-* fixtures and the machine.config the markup parser is pointed at are
+# read at runtime; naming both here keeps them off the working directory.
+target_compile_definitions(test-eglib PRIVATE
+  EGLIB_TESTS=1 _FORTIFY_SOURCE=2
+  EGLIB_TEST_DATA_SRCDIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  EGLIB_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 target_compile_options(test-eglib PRIVATE -Wall)
 
 # g_find_program_in_path2 looks for the test binary itself in ".", so the tests
@@ -35,19 +47,12 @@ gtest_discover_tests(test-eglib
 add_executable(test-eglib-driver
   test.c
   driver.c
-  string-util.c
-  string.c
   fake.c
   path.c
-  shell.c
   spawn.c
   timer.c
   file.c
-  pattern.c
   dir.c
-  markup.c
-  unicode.c
-  utf8.c
   module.c)
 
 target_link_libraries(test-eglib-driver PRIVATE mono::common eglib)
