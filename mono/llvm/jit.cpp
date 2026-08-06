@@ -6,6 +6,7 @@
 #include "jit.hpp"
 
 #include "arch/arch.hpp"
+#include "callbacks.hpp"
 #include "compiler.hpp"
 #include "codemem.hpp"
 
@@ -20,10 +21,8 @@
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
-#include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
-#include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -789,9 +788,7 @@ MonoJit::create ()
 		return redirectable.takeError ();
 	self->redirectable_ = std::move (*redirectable);
 
-	auto callbacks =
-		LocalJITCompileCallbackManager<arch::LazyEntryABI>::Create (
-			es, ExecutorAddr::fromPtr (&lazy_compile_failed));
+	auto callbacks = LazyCallbacks::create ((void *) &lazy_compile_failed);
 	if (!callbacks)
 		return callbacks.takeError ();
 	self->callbacks_ = std::move (*callbacks);
@@ -870,37 +867,32 @@ Error
 MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
 {
 	ExecutionSession &es = jit_->getExecutionSession ();
-
-	/*
-	 * ORC's callback takes a copyable std::function, and a compile closure
-	 * carrying a module is move-only.
-	 */
-	auto shared = std::make_shared<LazyCompileFunction> (std::move (compile));
 	std::string method = name.str ();
 
-	/*
-	 * ORC materializes this once however many threads arrive together, and
-	 * hands them all the same answer, so the redirect below happens once too.
-	 */
-	Expected<ExecutorAddr> trampoline = callbacks_->getCompileCallback (
-		[this, &es, method, shared] () -> ExecutorAddr {
-			Expected<void *> code = (*shared) ();
+	Expected<void *> trampoline = callbacks_->reserve (
+		name, [this, &es, method, compile = std::move (compile)] () mutable {
+			Expected<void *> code = compile ();
 			if (!code) {
 				es.reportError (code.takeError ());
-				return ExecutorAddr::fromPtr (&lazy_compile_failed);
+				return (void *) &lazy_compile_failed;
 			}
 
 			if (Error err = redirect_stub (method, *code)) {
 				es.reportError (std::move (err));
-				return ExecutorAddr::fromPtr (&lazy_compile_failed);
+				return (void *) &lazy_compile_failed;
 			}
 
-			return ExecutorAddr::fromPtr (*code);
+			return *code;
 		});
 	if (!trampoline)
 		return trampoline.takeError ();
 
-	return create_stub (name, trampoline->toPtr<void *> ());
+	if (Error err = create_stub (name, *trampoline)) {
+		callbacks_->release (name);
+		return err;
+	}
+
+	return Error::success ();
 }
 
 Error
@@ -1041,6 +1033,25 @@ MonoJit::undefine_stubs (const std::vector<std::string> &names)
 		return err;
 
 	redirectable_->discard (*stubs_, symbols);
+	for (const std::string &name : names)
+		callbacks_->release (name);
+
+	/*
+	 * A name stays in the session's pool until somebody asks for the dead
+	 * entries back, and every method published here interns two of them. The
+	 * sweep walks the whole pool, so it runs once a batch's worth of names have
+	 * gone dead rather than once per method; the cost of that is a backlog of
+	 * at most that many. Dropping the set first is what puts this batch's own
+	 * names in the sweep rather than the next one's.
+	 */
+	symbols.clear ();
+
+	if (dropped_names_.fetch_add (names.size ()) + names.size ()
+	    >= dead_name_sweep) {
+		dropped_names_.store (0);
+		es.getSymbolStringPool ()->clearDeadEntries ();
+	}
+
 	return Error::success ();
 }
 

@@ -27,14 +27,12 @@
 
 namespace llvm {
 class TargetMachine;
-namespace orc {
-class JITCompileCallbackManager;
-}
 } // namespace llvm
 
 namespace mono {
 
 class CodeSlabs;
+class LazyCallbacks;
 class StubManager;
 
 /// The host TargetMachine every compile runs against - code model Small+PIC and
@@ -242,7 +240,7 @@ private:
 
 	/// Hands out the re-entry trampolines lazy stubs point at until they are
 	/// compiled, and owns the resolver they call through.
-	std::unique_ptr<llvm::orc::JITCompileCallbackManager> callbacks_;
+	std::unique_ptr<LazyCallbacks> callbacks_;
 
 	/// What each name handed to register_symbol () stands for, so a repeat
 	/// registration is recognized instead of tripping ORC's duplicate-definition
@@ -252,6 +250,13 @@ private:
 
 	/// Names the per-module dylibs; atomic because compiles may be concurrent.
 	std::atomic<uint64_t> module_counter_ {0};
+
+	/// How many undefined names it takes to be worth sweeping the session's
+	/// symbol-string pool for the entries they left dead.
+	static constexpr uint64_t dead_name_sweep = 1024;
+
+	/// Names undefined since the last sweep.
+	std::atomic<uint64_t> dropped_names_ {0};
 
 	class ObjectCapturePlugin;
 	/// Captures each linked object's code extent and side tables, keyed by the
