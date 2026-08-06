@@ -13,6 +13,7 @@
 #include "nearmem.hpp"
 
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
+#include <llvm/Support/MathExtras.h>
 #include <llvm/Support/Process.h>
 
 #include <sys/mman.h>
@@ -120,16 +121,38 @@ NearMemoryMapper::deinitialize (ArrayRef<ExecutorAddr> allocations,
 		std::lock_guard<std::mutex> lock (mutex_);
 
 		for (ExecutorAddr base : llvm::reverse (allocations)) {
+			auto it = allocations_.find (base);
+
+			if (it == allocations_.end ())
+				continue;
+
+			void *addr = base.toPtr<void *> ();
+			/*
+			 * Whole pages: the allocator lays segments out page by page
+			 * and keeps the rest of the reservation for itself, so the
+			 * page the last segment ends in belongs to this allocation
+			 * and to nothing else.
+			 */
+			size_t size = alignTo (it->second.size, page_size_);
+
 			if (Error err = shared::runDeallocActions (
-				    allocations_[base].deinit_actions))
+				    it->second.deinit_actions))
 				all = joinErrors (std::move (all), std::move (err));
 
 			if (auto ec = sys::Memory::protectMappedMemory (
-				    { base.toPtr<void *> (), allocations_[base].size },
+				    { addr, size },
 				    sys::Memory::MF_READ | sys::Memory::MF_WRITE))
 				all = joinErrors (std::move (all), errorCodeToError (ec));
 
-			allocations_.erase (base);
+			/*
+			 * The reservation stays mapped - it is handed back to the
+			 * allocator, not to the kernel - so without this the freed
+			 * method's pages would stay resident for the life of the
+			 * process. Whoever is given this range next faults in zeroes.
+			 */
+			madvise (addr, size, MADV_DONTNEED);
+
+			allocations_.erase (it);
 		}
 	}
 
