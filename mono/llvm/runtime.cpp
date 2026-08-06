@@ -402,11 +402,13 @@ private:
 	};
 
 	/// What publishing a method handed the rest of the runtime: the legacy
-	/// stub's address, and the trampoline jit-info record that resolves that
-	/// address back to the method.
+	/// stub's address, and the trampoline jit-info record each of the method's
+	/// two stubs was registered under. A record is only held here when it has
+	/// to be taken out again by hand - see register_stub_jinfo ().
 	struct Publication {
 		void *stub;
-		MonoJitInfo *tramp_jinfo;
+		MonoJitInfo *entry_jinfo;
+		MonoJitInfo *body_jinfo;
 	};
 
 	/// What compiling a method put somewhere it has to be taken back out of.
@@ -717,19 +719,23 @@ Backend::free_method (MonoMethod *method)
 			}
 
 			/*
-			 * The record that resolves the stub's address back to this method
-			 * goes out with the stub, for the same reason the names do: once the
+			 * The records that resolve the stubs' addresses back to this method
+			 * go out with the stubs, for the same reason the names do: once a
 			 * block is on the free list it belongs to whichever method publishes
 			 * next, and a delegate built over that method's address would
 			 * otherwise be bound to this one - by then freed metadata.
 			 * Unreachable by name is not enough; the address is reachable too.
+			 * Both stubs are released, so both records have to go.
 			 */
 			auto published = state.published.find (method);
 
 			if (published != state.published.end ()) {
-				if (published->second.tramp_jinfo != nullptr)
+				if (published->second.entry_jinfo != nullptr)
 					release.owned.jinfos.push_back (
-						published->second.tramp_jinfo);
+						published->second.entry_jinfo);
+				if (published->second.body_jinfo != nullptr)
+					release.owned.jinfos.push_back (
+						published->second.body_jinfo);
 				state.published.erase (published);
 			}
 			releases.push_back (std::move (release));
@@ -1688,6 +1694,66 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 	return Error::success ();
 }
 
+/// The encoded unwind program every stub runs under.
+///
+/// A stub is a bare jump: it has pushed nothing, so at any instruction in it the
+/// frame is still exactly the one the call left behind - which is what the
+/// arch's CIE describes and nothing more. Without this a walk that catches a
+/// thread mid-jump cannot step off the stub into its caller at all.
+ArrayRef<uint8_t>
+stub_unwind_info ()
+{
+	static const std::vector<uint8_t> encoded = [] {
+		GSList *ops = mono_arch_get_cie_program ();
+		guint32 len = 0;
+		guint8 *bytes = mono_unwind_ops_encode (ops, &len);
+		std::vector<uint8_t> program (bytes, bytes + len);
+
+		g_free (bytes);
+		mono_free_unwind_info (ops);
+		return program;
+	}();
+
+	return encoded;
+}
+
+/// Register the jit-info record that resolves STUB's address back to METHOD,
+/// under the stub's own symbol NAME.
+///
+/// Returns the record when the caller has to take it out again, and null when
+/// it dies with its domain.
+MonoJitInfo *
+register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub,
+                     const std::string &name)
+{
+	ArrayRef<uint8_t> unwind = stub_unwind_info ();
+	guint8 *uw_info = const_cast<guint8 *> (unwind.data ());
+	guint32 uw_info_len = (guint32) unwind.size ();
+
+	/*
+	 * A dynamic method's stub block goes back on the free list when the method
+	 * is freed, so its record has to be taken out again before the next method
+	 * lands there - and mono_jit_info_table_remove () frees what it unregisters,
+	 * so that record has to come from the allocator that call uses. Every other
+	 * method lives exactly as long as its domain, and so does its record.
+	 */
+	if (method->dynamic)
+		return mono_tramp_info_register_reclaimable (
+			domain, method, stub, (guint32) arch::stub_block_size,
+			name.c_str (), uw_info, uw_info_len);
+
+	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
+
+	tramp->code = (guint8 *) stub;
+	tramp->code_size = (guint32) arch::stub_block_size;
+	tramp->name = g_strdup (name.c_str ());
+	tramp->method = method;
+	tramp->uw_info = uw_info;
+	tramp->uw_info_len = uw_info_len;
+	mono_tramp_info_register (tramp, domain);
+	return nullptr;
+}
+
 Expected<void *>
 Backend::publish (DomainState &state, MonoMethod *method)
 {
@@ -1702,10 +1768,16 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	if (Error err = publish_defs (state, method))
 		return std::move (err);
 
-	/* Whichever thread reserved it, this is the address it reserved. */
-	Expected<void *> stub = state.jit->stub_address (symbol_for_code (method));
+	/* Whichever thread reserved them, these are the addresses it reserved. */
+	std::string entry_name = symbol_for_code (method);
+	std::string body_name = symbol_for_body (method);
+	Expected<void *> stub = state.jit->stub_address (entry_name);
 	if (!stub)
 		return stub;
+
+	Expected<void *> body = state.jit->stub_address (body_name);
+	if (!body)
+		return body;
 
 	std::lock_guard<std::mutex> lock (mutex_);
 	auto it = state.published.find (method);
@@ -1714,38 +1786,23 @@ Backend::publish (DomainState &state, MonoMethod *method)
 		return it->second.stub;
 
 	/*
-	 * The stub is the only address the runtime ever hands out for the method,
-	 * so anything recovering a method from a code pointer - delegate creation
-	 * off a ldftn most visibly - must find it in the jit-info table. Register
-	 * it the way mini registers trampolines: an is_trampoline entry carrying
-	 * the method, in the domain whose linker holds the stub so the two die
-	 * together. The published check above keeps racing threads from
-	 * registering it twice.
-	 *
-	 * A dynamic method's stub block goes back on the free list when the method
-	 * is freed, so its record has to be taken out again before the next method
-	 * lands there - and mono_jit_info_table_remove () frees what it unregisters,
-	 * so that record has to come from the allocator that call uses. Every other
-	 * method lives exactly as long as its domain, and so does its record.
+	 * A stub is the only address the runtime ever sees for the method, so
+	 * anything recovering a method from a code pointer - delegate creation off
+	 * a ldftn most visibly - must find it in the jit-info table. Register both
+	 * the way mini registers trampolines: an is_trampoline entry carrying the
+	 * method, in the domain whose linker holds the stub so the two die
+	 * together. The legacy entry is what the runtime calls, but the body stub
+	 * is what every cross-method call jumps through, so it is the one a thread
+	 * is far more likely to be caught in. The published check above keeps
+	 * racing threads from registering either twice.
 	 */
-	std::string name = symbol_for_code (method);
-	MonoJitInfo *tramp_jinfo = nullptr;
+	MonoJitInfo *entry_jinfo =
+		register_stub_jinfo (state.domain, method, *stub, entry_name);
+	MonoJitInfo *body_jinfo =
+		register_stub_jinfo (state.domain, method, *body, body_name);
 
-	if (method->dynamic) {
-		tramp_jinfo = mono_tramp_info_register_reclaimable (
-			state.domain, method, *stub, (guint32) arch::stub_block_size,
-			name.c_str ());
-	} else {
-		MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
+	state.published[method] = Publication { *stub, entry_jinfo, body_jinfo };
 
-		tramp->code = (guint8 *) *stub;
-		tramp->code_size = (guint32) arch::stub_block_size;
-		tramp->name = g_strdup (name.c_str ());
-		tramp->method = method;
-		mono_tramp_info_register (tramp, state.domain);
-	}
-
-	state.published[method] = Publication { *stub, tramp_jinfo };
 	return *stub;
 }
 

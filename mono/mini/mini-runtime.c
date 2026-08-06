@@ -544,7 +544,9 @@ register_trampoline_jit_info (MonoDomain *domain, MonoTrampInfo *info)
  * mono_tramp_info_register_reclaimable:
  *
  *   Register a trampoline jit-info record for METHOD covering CODE_SIZE bytes at
- * CODE, and hand it back so the caller can unregister it again.
+ * CODE, and hand it back so the caller can unregister it again. UW_INFO is that
+ * code's already-encoded unwind program; the caller keeps owning it and it has
+ * to outlive the record.
  *
  * The record, the MonoTrampInfo behind it and NAME are one allocation, from the
  * allocator mono_jit_info_table_remove () frees with - so removing the record
@@ -553,7 +555,8 @@ register_trampoline_jit_info (MonoDomain *domain, MonoTrampInfo *info)
  */
 MonoJitInfo *
 mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gpointer code,
-									  guint32 code_size, const char *name)
+									  guint32 code_size, const char *name,
+									  guint8 *uw_info, guint32 uw_info_len)
 {
 	MonoJitInfo *ji;
 	MonoTrampInfo *info;
@@ -569,6 +572,8 @@ mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gp
 	info->code = (guint8*)code;
 	info->code_size = code_size;
 	info->method = method;
+	info->uw_info = uw_info;
+	info->uw_info_len = uw_info_len;
 	if (name) {
 		memcpy (block + name_offset, name, name_size);
 		info->name = block + name_offset;

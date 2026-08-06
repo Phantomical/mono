@@ -558,7 +558,7 @@ MonoTrampInfo*    mono_tramp_info_create (const char *name, guint8 *code, guint3
 void              mono_tramp_info_free (MonoTrampInfo *info);
 void              mono_aot_tramp_info_register (MonoTrampInfo *info, MonoDomain *domain);
 void              mono_tramp_info_register (MonoTrampInfo *info, MonoDomain *domain);
-MonoJitInfo*      mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gpointer code, guint32 code_size, const char *name);
+MonoJitInfo*      mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gpointer code, guint32 code_size, const char *name, guint8 *uw_info, guint32 uw_info_len);
 
 /* methods that must be provided by the arch-specific port */
 void      mono_arch_init                        (void);
