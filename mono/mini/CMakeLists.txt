@@ -67,11 +67,8 @@ set(mini_sources
   simd-intrinsics-netcore.c
   mini-native-types.c
   unwind.c
-  image-writer.c
-  dwarfwriter.c
   mini-gc.c
   debugger-agent-stubs.c
-  xdebug.c
   alias-analysis.c
   mini-cross-helpers.c
   arch-stubs.c

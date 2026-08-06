@@ -540,7 +540,7 @@ register_trampoline_jit_info (MonoDomain *domain, MonoTrampInfo *info)
 /*
  * mono_tramp_info_register:
  *
- * Remember INFO for use by xdebug, mono_print_method_from_ip (), jit maps, etc.
+ * Remember INFO for use by mono_print_method_from_ip (), jit maps, etc.
  * INFO can be NULL.
  * Frees INFO.
  */
@@ -581,7 +581,6 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 		copy->uw_info_len = info->uw_info_len;
 	}
 
-	mono_save_trampoline_xdebug_info (info);
 	mono_lldb_save_trampoline_info (info);
 	mixed_callstack_plugin_save_trampoline_info (info, domain);
 
@@ -4112,8 +4111,6 @@ mini_parse_debug_option (const char *option)
 		mono_dont_free_domains = TRUE;
 	else if (!strcmp (option, "dyn-runtime-invoke"))
 		mini_debug_options.dyn_runtime_invoke = TRUE;
-	else if (!strcmp (option, "gdb"))
-		mini_debug_options.gdb = TRUE;
 	else if (!strcmp (option, "lldb"))
 		mini_debug_options.lldb = TRUE;
 	else if (!strcmp (option, "llvm-disable-inlining"))
@@ -4201,7 +4198,7 @@ mini_parse_debug_options (void)
 			// test-tailcall-require is also accepted but not documented.
 			// empty string is also accepted and ignored as a consequence
 			// of appending ",foo" without checking for empty.
-			fprintf (stderr, "Available options: 'handle-sigint', 'keep-delegates', 'reverse-pinvoke-exceptions', 'collect-pagefault-stats', 'break-on-unverified', 'no-gdb-backtrace', 'suspend-on-native-crash', 'suspend-on-sigsegv', 'suspend-on-exception', 'suspend-on-unhandled', 'dont-free-domains', 'dyn-runtime-invoke', 'gdb', 'explicit-null-checks', 'gen-seq-points', 'no-compact-seq-points', 'single-imm-size', 'init-stacks', 'casts', 'soft-breakpoints', 'check-pinvoke-callconv', 'use-fallback-tls', 'debug-domain-unload', 'partial-sharing', 'align-small-structs', 'native-debugger-break', 'thread-dump-dir=DIR', 'no-verbose-gdb', 'llvm_disable_inlining', 'llvm-disable-self-init', 'llvm-disable-implicit-null-checks', 'weak-memory-model'.\n");
+			fprintf (stderr, "Available options: 'handle-sigint', 'keep-delegates', 'reverse-pinvoke-exceptions', 'collect-pagefault-stats', 'break-on-unverified', 'no-gdb-backtrace', 'suspend-on-native-crash', 'suspend-on-sigsegv', 'suspend-on-exception', 'suspend-on-unhandled', 'dont-free-domains', 'dyn-runtime-invoke', 'explicit-null-checks', 'gen-seq-points', 'no-compact-seq-points', 'single-imm-size', 'init-stacks', 'casts', 'soft-breakpoints', 'check-pinvoke-callconv', 'use-fallback-tls', 'debug-domain-unload', 'partial-sharing', 'align-small-structs', 'native-debugger-break', 'thread-dump-dir=DIR', 'no-verbose-gdb', 'llvm_disable_inlining', 'llvm-disable-self-init', 'llvm-disable-implicit-null-checks', 'weak-memory-model'.\n");
 			exit (1);
 		}
 	}
@@ -4631,21 +4628,6 @@ mini_init (const char *filename, const char *runtime_version)
 		mono_lldb_init ("");
 		mono_dont_free_domains = TRUE;
 	}
-
-#ifdef XDEBUG_ENABLED
-	char *mono_xdebug = g_getenv ("MONO_XDEBUG");
-	if (mono_xdebug) {
-		mono_xdebug_init (mono_xdebug);
-		g_free (mono_xdebug);
-		/* So methods for multiple domains don't have the same address */
-		mono_dont_free_domains = TRUE;
-		mono_using_xdebug = TRUE;
-	} else if (mini_debug_options.gdb) {
-		mono_xdebug_init ((char*)"gdb");
-		mono_dont_free_domains = TRUE;
-		mono_using_xdebug = TRUE;
-	}
-#endif
 
 #ifdef ENABLE_LLVM
 	/*

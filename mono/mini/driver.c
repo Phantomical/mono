@@ -218,9 +218,6 @@ parse_debug_options (const char* p)
 		} else if (!strncmp (p, "mdb-optimizations", 17)) {
 			opt->mdb_optimizations = TRUE;
 			p += 17;
-		} else if (!strncmp (p, "gdb", 3)) {
-			opt->gdb = TRUE;
-			p += 3;
 #ifdef ENABLE_NETCORE
 		} else if (!strncmp (p, "ignore", 6)) {
 			opt->enabled = FALSE;
@@ -2459,9 +2456,6 @@ mono_main (int argc, char* argv[])
 		}
 	}
 #endif
-
-	if (g_hasenv ("MONO_XDEBUG"))
-		enable_debugging = TRUE;
 
 #ifdef MONO_CROSS_COMPILE
        if (!mono_compile_aot) {
