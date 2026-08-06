@@ -1,5 +1,5 @@
 /*
- * test-mono-callspec.c: Unit test for the callspec parsing and evaluation.
+ * test-mono-callspec.cpp: Unit test for the callspec parsing and evaluation.
  *
  * Copyright (C) 2017 vFunction, Inc.
  *
@@ -29,9 +29,13 @@
 #include <mono/mini/jit.h>
 #include <mono/utils/mono-error-internals.h>
 
+#include <vector>
+
+#include <gtest/gtest.h>
+
 #define TESTPROG "callspec.exe"
 
-GArray *test_methods = NULL;
+namespace {
 
 enum test_method_enums {
 	FOO_BAR,
@@ -41,119 +45,14 @@ enum test_method_enums {
 	CONSOLE_WRITELINE,
 };
 
-struct {
-	int method;
+struct TestEntry {
+	test_method_enums method;
 	const char *callspec;
 	gboolean expect_match;
-} test_entries[] = {
-    /* program tests */
-    {FOO_BAR, "program", TRUE},
-    {CONSOLE_WRITELINE, "program", FALSE},
-    {FOO_BAR, "all,-program", FALSE},
-    {CONSOLE_WRITELINE, "all,-program", TRUE},
+};
 
-    /* assembly tests */
-    {FOO_BAR, "mscorlib", FALSE},
-    {CONSOLE_WRITELINE, "mscorlib", TRUE},
-    {FOO_BAR, "all,-mscorlib", TRUE},
-    {CONSOLE_WRITELINE, "all,-mscorlib", FALSE},
-
-    /* class tests */
-    {FOO_BAR, "T:Baz.Foo", TRUE},
-    {CONSOLE_WRITELINE, "T:Baz.Foo", FALSE},
-    {FOO_BAR, "all,-T:Baz.Foo", FALSE},
-    {CONSOLE_WRITELINE, "all,-T:Baz.Foo", TRUE},
-
-    /* namespace tests */
-    {FOO_BAR, "N:Baz", TRUE},
-    {CONSOLE_WRITELINE, "N:Baz", FALSE},
-    {FOO_BAR, "all,-N:Baz", FALSE},
-    {CONSOLE_WRITELINE, "all,-N:Baz", TRUE},
-
-    /* method tests without parameters */
-    {FOO_BAR, "M:Baz.Foo:Bar", TRUE},
-    {FOO_BARP, "M:Baz.Foo:Bar", TRUE},
-    {GOO_BAR, "M:Baz.Foo:Bar", FALSE},
-    {FOO2_BAR, "M:Baz.Foo:Bar", FALSE},
-    {CONSOLE_WRITELINE, "M:Baz.Foo:Bar", FALSE},
-    {FOO_BAR, "all,-M:Baz.Foo:Bar", FALSE},
-    {CONSOLE_WRITELINE, "all,-M:Baz.Foo:Bar", TRUE},
-
-    /* method tests without class */
-    {FOO_BAR, "M::Bar", TRUE},
-    {FOO_BARP, "M::Bar", TRUE},
-    {GOO_BAR, "M::Bar", TRUE},
-    {FOO2_BAR, "M::Bar", TRUE},
-
-    {0, NULL, FALSE}};
-
-static int test_callspec (int test_idx,
-			  MonoMethod *method,
-			  const char *callspec,
-			  gboolean expect_match)
-{
-	int res = 0;
-	gboolean initialized = FALSE;
-	gboolean match;
-	MonoCallSpec spec = {0};
-	char *errstr;
-	char *method_name = mono_method_full_name (method, TRUE);
-	if (!method_name) {
-		printf ("FAILED getting method name in callspec test #%d\n",
-			test_idx);
-		res = 1;
-		goto out;
-	}
-
-	if (!mono_callspec_parse (callspec, &spec, &errstr)) {
-		printf ("FAILED parsing callspec '%s' - %s\n", callspec,
-			errstr);
-		g_free (errstr);
-		res = 1;
-		goto out;
-	}
-	initialized = TRUE;
-
-	match = mono_callspec_eval (method, &spec);
-
-	if (match && !expect_match) {
-		printf ("FAILED unexpected match '%s' against '%s'\n",
-			method_name, callspec);
-		res = 1;
-		goto out;
-	}
-	if (!match && expect_match) {
-		printf ("FAILED unexpected mismatch '%s' against '%s'\n",
-			method_name, callspec);
-		res = 1;
-		goto out;
-	}
-
-out:
-	if (initialized)
-		mono_callspec_cleanup(&spec);
-	if (method_name)
-		g_free (method_name);
-	return res;
-}
-
-static int test_all_callspecs (void)
-{
-	int idx;
-	for (idx = 0; test_entries[idx].callspec; ++idx) {
-		MonoMethod *meth = g_array_index (test_methods, MonoMethod *,
-						  test_entries[idx].method);
-		if (test_callspec (idx, meth, test_entries[idx].callspec,
-				   test_entries[idx].expect_match))
-			return 1;
-	}
-
-	return 0;
-}
-
-static MonoClass *test_mono_class_from_name (MonoImage *image,
-					     const char *name_space,
-					     const char *name)
+MonoClass *
+class_from_name (MonoImage *image, const char *name_space, const char *name)
 {
 	ERROR_DECL (error);
 	MonoClass *klass;
@@ -164,112 +63,148 @@ static MonoClass *test_mono_class_from_name (MonoImage *image,
 	return klass;
 }
 
-#ifdef __cplusplus
-extern "C"
-#endif
-int
-test_mono_callspec_main (void);
+/*
+ * The methods the callspecs are matched against, loaded from callspec.exe and
+ * from corlib.  Both the runtime and the assembly come up once per suite: a
+ * runtime cannot be restarted in a process, and each case is its own process
+ * under ctest anyway.
+ */
+class Callspec : public ::testing::Test {
+public:
+	static void SetUpTestSuite ()
+	{
+		static bool started = false;
+		if (started)
+			return;
+		started = true;
 
-int
-test_mono_callspec_main (void)
+		//FIXME This is a hack due to embedding simply not working from the tree
+		mono_set_assemblies_path ("../../mcs/class/lib/net_4_x");
+
+		MonoDomain *domain = mono_jit_init_version_for_test_only ("TEST RUNNER", "mobile");
+		ASSERT_NE (nullptr, domain);
+
+		MonoImageOpenStatus status;
+		MonoAssembly *assembly = mono_assembly_open (TESTPROG, &status);
+		ASSERT_NE (nullptr, assembly) << "failed loading " TESTPROG;
+
+		mono_callspec_set_assembly (assembly);
+
+		MonoImage *prog_image = mono_assembly_get_image_internal (assembly);
+
+		ASSERT_NO_FATAL_FAILURE (add_method (prog_image, "Baz", "Foo", "Bar", 0));
+		ASSERT_NO_FATAL_FAILURE (add_method (prog_image, "Baz", "Foo", "Bar", 1));
+		ASSERT_NO_FATAL_FAILURE (add_method (prog_image, "Baz", "Goo", "Bar", 1));
+		ASSERT_NO_FATAL_FAILURE (add_method (prog_image, "Baz", "Foo2", "Bar", 1));
+		ASSERT_NO_FATAL_FAILURE (add_method (mono_get_corlib (), "System", "Console", "WriteLine", 1));
+	}
+
+protected:
+	/* Every entry's method has to match the callspec exactly as the entry says. */
+	static void check (const std::vector<TestEntry> &entries)
+	{
+		for (const TestEntry &entry : entries) {
+			MonoMethod *method = test_methods [entry.method];
+			char *method_name = mono_method_full_name (method, TRUE);
+			ASSERT_NE (nullptr, method_name);
+
+			MonoCallSpec spec = {0};
+			char *errstr = NULL;
+			ASSERT_TRUE (mono_callspec_parse (entry.callspec, &spec, &errstr))
+				<< "parsing '" << entry.callspec << "': " << (errstr ? errstr : "");
+			g_free (errstr);
+
+			EXPECT_EQ (entry.expect_match, mono_callspec_eval (method, &spec))
+				<< "matching '" << method_name << "' against '" << entry.callspec << "'";
+
+			mono_callspec_cleanup (&spec);
+			g_free (method_name);
+		}
+	}
+
+private:
+	static void add_method (MonoImage *image, const char *name_space, const char *name,
+				const char *method_name, int param_count)
+	{
+		MonoClass *klass = class_from_name (image, name_space, name);
+		ASSERT_NE (nullptr, klass) << "finding " << name_space << "." << name;
+
+		MonoMethod *method = mono_class_get_method_from_name (klass, method_name, param_count);
+		ASSERT_NE (nullptr, method)
+			<< "finding " << name_space << "." << name << ":" << method_name
+			<< " (" << param_count << " args)";
+
+		test_methods.push_back (method);
+	}
+
+	static std::vector<MonoMethod *> test_methods;
+};
+
+std::vector<MonoMethod *> Callspec::test_methods;
+
+} // namespace
+
+TEST_F (Callspec, Program)
 {
-	int res = 0;
-	MonoDomain *domain = NULL;
-	MonoAssembly *assembly = NULL;
-	MonoImage *prog_image = NULL;
-	MonoImage *corlib = NULL;
-	MonoClass *prog_klass, *console_klass;
-	MonoMethod *meth;
-	MonoImageOpenStatus status;
+	check ({
+		{FOO_BAR, "program", TRUE},
+		{CONSOLE_WRITELINE, "program", FALSE},
+		{FOO_BAR, "all,-program", FALSE},
+		{CONSOLE_WRITELINE, "all,-program", TRUE},
+	});
+}
 
-	//FIXME This is a hack due to embedding simply not working from the tree
-	mono_set_assemblies_path ("../../mcs/class/lib/net_4_x");
+TEST_F (Callspec, Assembly)
+{
+	check ({
+		{FOO_BAR, "mscorlib", FALSE},
+		{CONSOLE_WRITELINE, "mscorlib", TRUE},
+		{FOO_BAR, "all,-mscorlib", TRUE},
+		{CONSOLE_WRITELINE, "all,-mscorlib", FALSE},
+	});
+}
 
-	test_methods = g_array_new (FALSE, TRUE, sizeof (MonoMethod *));
-	if (!test_methods) {
-		res = 1;
-		printf ("FAILED INITIALIZING METHODS ARRAY\n");
-		goto out;
-	}
+TEST_F (Callspec, Class)
+{
+	check ({
+		{FOO_BAR, "T:Baz.Foo", TRUE},
+		{CONSOLE_WRITELINE, "T:Baz.Foo", FALSE},
+		{FOO_BAR, "all,-T:Baz.Foo", FALSE},
+		{CONSOLE_WRITELINE, "all,-T:Baz.Foo", TRUE},
+	});
+}
 
-	domain = mono_jit_init_version_for_test_only ("TEST RUNNER", "mobile");
-	assembly = mono_assembly_open (TESTPROG, &status);
-	if (!domain || !assembly) {
-		res = 1;
-		printf("FAILED LOADING TEST PROGRAM\n");
-		goto out;
-	}
+TEST_F (Callspec, Namespace)
+{
+	check ({
+		{FOO_BAR, "N:Baz", TRUE},
+		{CONSOLE_WRITELINE, "N:Baz", FALSE},
+		{FOO_BAR, "all,-N:Baz", FALSE},
+		{CONSOLE_WRITELINE, "all,-N:Baz", TRUE},
+	});
+}
 
-	mono_callspec_set_assembly(assembly);
+/* A method spec with no parameter list matches every overload of the name. */
+TEST_F (Callspec, MethodWithoutParameters)
+{
+	check ({
+		{FOO_BAR, "M:Baz.Foo:Bar", TRUE},
+		{FOO_BARP, "M:Baz.Foo:Bar", TRUE},
+		{GOO_BAR, "M:Baz.Foo:Bar", FALSE},
+		{FOO2_BAR, "M:Baz.Foo:Bar", FALSE},
+		{CONSOLE_WRITELINE, "M:Baz.Foo:Bar", FALSE},
+		{FOO_BAR, "all,-M:Baz.Foo:Bar", FALSE},
+		{CONSOLE_WRITELINE, "all,-M:Baz.Foo:Bar", TRUE},
+	});
+}
 
-	prog_image = mono_assembly_get_image_internal (assembly);
-
-	prog_klass = test_mono_class_from_name (prog_image, "Baz", "Foo");
-	if (!prog_klass) {
-		res = 1;
-		printf ("FAILED FINDING Baz.Foo\n");
-		goto out;
-	}
-	meth = mono_class_get_method_from_name (prog_klass, "Bar", 0);
-	if (!meth) {
-		res = 1;
-		printf ("FAILED FINDING Baz.Foo:Bar ()\n");
-		goto out;
-	}
-	g_array_append_val (test_methods, meth);
-	meth = mono_class_get_method_from_name (prog_klass, "Bar", 1);
-	if (!meth) {
-		res = 1;
-		printf ("FAILED FINDING Baz.Foo:Bar (string)\n");
-		goto out;
-	}
-	g_array_append_val (test_methods, meth);
-
-	prog_klass = test_mono_class_from_name (prog_image, "Baz", "Goo");
-	if (!prog_klass) {
-		res = 1;
-		printf ("FAILED FINDING Baz.Goo\n");
-		goto out;
-	}
-	meth = mono_class_get_method_from_name (prog_klass, "Bar", 1);
-	if (!meth) {
-		res = 1;
-		printf ("FAILED FINDING Baz.Goo:Bar (string)\n");
-		goto out;
-	}
-	g_array_append_val (test_methods, meth);
-
-	prog_klass = test_mono_class_from_name (prog_image, "Baz", "Foo2");
-	if (!prog_klass) {
-		res = 1;
-		printf ("FAILED FINDING Baz.Foo2\n");
-		goto out;
-	}
-	meth = mono_class_get_method_from_name (prog_klass, "Bar", 1);
-	if (!meth) {
-		res = 1;
-		printf ("FAILED FINDING Baz.Foo2:Bar (string)\n");
-		goto out;
-	}
-	g_array_append_val (test_methods, meth);
-
-	corlib = mono_get_corlib ();
-
-	console_klass = test_mono_class_from_name (corlib, "System", "Console");
-	if (!console_klass) {
-		res = 1;
-		printf ("FAILED FINDING System.Console\n");
-		goto out;
-	}
-	meth = mono_class_get_method_from_name (console_klass, "WriteLine", 1);
-	if (!meth) {
-		res = 1;
-		printf ("FAILED FINDING System.Console:WriteLine\n");
-		goto out;
-	}
-	g_array_append_val (test_methods, meth);
-
-	res = test_all_callspecs ();
-out:
-	return res;
+/* ... and one with no class matches the name in any class. */
+TEST_F (Callspec, MethodWithoutClass)
+{
+	check ({
+		{FOO_BAR, "M::Bar", TRUE},
+		{FOO_BARP, "M::Bar", TRUE},
+		{GOO_BAR, "M::Bar", TRUE},
+		{FOO2_BAR, "M::Bar", TRUE},
+	});
 }

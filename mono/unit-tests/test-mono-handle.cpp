@@ -12,23 +12,11 @@
 #include <glib.h>
 #include <mono/metadata/handle.h>
 
-static void
-test2_arena_push_pop (void)
+#include <gtest/gtest.h>
+
+TEST (MonoHandle, StackAllocFree)
 {
 	HandleStack *h = mono_handle_stack_alloc ();
+	ASSERT_NE (nullptr, h);
 	mono_handle_stack_free (h);
-}
-
-#ifdef __cplusplus
-extern "C"
-#endif
-int
-test_mono_handle_main (void);
-
-int
-test_mono_handle_main (void)
-{
-	test2_arena_push_pop ();
-
-	return 0;
 }

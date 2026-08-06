@@ -1,8 +1,11 @@
-# Native unit tests.  Each one is a separate executable so that a skip (exit
-# 77) or a crash is attributed to exactly one check.
+# Native unit tests.  Each one is a separate executable, which is not just
+# tidiness: several of them start a runtime, and a runtime cannot be shut down
+# and started again in one process, so a binary gets at most one of those.
 #
-# Each test is its body plus main.c compiled with -DMAIN=<function>, which is
-# how the automake build shared a single entry point across all of them.
+# The bodies are gtest, and gtest_discover_tests turns each case into its own
+# ctest test running in its own process -- so a crash still names one check.
+# ENTRY is the older shape, a body plus main.c compiled with -DMAIN=<function>;
+# tests that have no ENTRY are the gtest ones.
 
 
 if(NOT MONO_ENABLE_SGEN)
@@ -10,9 +13,9 @@ if(NOT MONO_ENABLE_SGEN)
   return()
 endif()
 
-# test-mono-callspec.c calls mono_set_assemblies_path ("../../mcs/class/lib/
-# net_4_x"), relative to the working directory, which is why these tests run
-# from <build>/mono/unit-tests.
+# test-mono-callspec.cpp calls mono_set_assemblies_path ("../../mcs/class/lib/
+# net_4_x") and opens callspec.exe by bare name, both relative to the working
+# directory, which is why these tests run from <build>/mono/unit-tests.
 
 # RUNTIME means the test starts a runtime and therefore links the whole JIT;
 # the others only need metadata and the collector.
@@ -22,13 +25,11 @@ function(mono_add_unit_test name)
   set(_sources ${ARG_SOURCES})
   if(ARG_ENTRY)
     # Source properties are scoped to a directory, not to a target, so every
-    # test needs its own copy of the shim to carry its own -DMAIN.  The shim
-    # is also the only file that sees HAVE_SGEN_GC: mini.h refuses to compile
-    # when a collector is selected, and several of the bodies include it.
+    # test needs its own copy of the shim to carry its own -DMAIN.
     set(_shim "${CMAKE_CURRENT_BINARY_DIR}/main-${name}.c")
     configure_file(main.c "${_shim}" COPYONLY)
     set_source_files_properties("${_shim}" PROPERTIES
-      COMPILE_DEFINITIONS "MAIN=${ARG_ENTRY};HAVE_SGEN_GC")
+      COMPILE_DEFINITIONS "MAIN=${ARG_ENTRY}")
     list(APPEND _sources "${_shim}")
   endif()
 
@@ -65,32 +66,39 @@ function(mono_add_unit_test name)
   # libmini contains C++, so the test binaries need the C++ runtime.
   set_target_properties(${name} PROPERTIES LINKER_LANGUAGE CXX)
 
-  add_test(NAME ${name} COMMAND ${name})
-  set_tests_properties(${name} PROPERTIES
-    SKIP_RETURN_CODE 77
-    ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
+  if(ARG_ENTRY)
+    add_test(NAME ${name} COMMAND ${name})
+    set_tests_properties(${name} PROPERTIES
+      SKIP_RETURN_CODE 77
+      ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
+  else()
+    target_link_libraries(${name} PRIVATE GTest::gtest GTest::gtest_main)
+
+    # PRE_TEST because discovery has to happen where the tests run: the working
+    # directory is load-bearing (see above) and MONO_PATH has to be set.
+    #
+    # A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest
+    # says so only in its output -- the process still exits 0.
+    gtest_discover_tests(${name}
+      TEST_PREFIX ${name}/
+      DISCOVERY_MODE PRE_TEST
+      WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+      PROPERTIES
+        SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
+        ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
+  endif()
 endfunction()
 
-mono_add_unit_test(test-sgen-qsort
-  SOURCES test-sgen-qsort.c            ENTRY test_sgen_qsort_main)
-mono_add_unit_test(test-memfuncs
-  SOURCES test-memfuncs.c              ENTRY test_memfuncs_main)
-mono_add_unit_test(test-mono-linked-list-set
-  SOURCES test-mono-linked-list-set.c  ENTRY test_mono_linked_list_set_main)
-mono_add_unit_test(test-conc-hashtable
-  SOURCES test-conc-hashtable.c        ENTRY test_conc_hashtable_main)
-mono_add_unit_test(test-mono-handle
-  SOURCES test-mono-handle.c           ENTRY test_mono_handle_main)
-mono_add_unit_test(test-mono-callspec
-  SOURCES test-mono-callspec.c         ENTRY test_mono_callspec_main       RUNTIME)
-mono_add_unit_test(test-mono-string
-  SOURCES test-mono-string.c           ENTRY test_mono_string_main         RUNTIME)
-mono_add_unit_test(test-mono-embed
-  SOURCES test-mono-embed.c            ENTRY test_mono_embed_main          RUNTIME)
-mono_add_unit_test(test-embed-invoke
-  SOURCES test-embed-invoke.c          ENTRY test_mono_embed_invoke_main   RUNTIME)
-# test-path brings its own main rather than using the shared shim.
-mono_add_unit_test(test-path SOURCES test-path.c RUNTIME)
+mono_add_unit_test(test-sgen-qsort           SOURCES test-sgen-qsort.cpp)
+mono_add_unit_test(test-memfuncs             SOURCES test-memfuncs.cpp)
+mono_add_unit_test(test-mono-linked-list-set SOURCES test-mono-linked-list-set.cpp)
+mono_add_unit_test(test-conc-hashtable       SOURCES test-conc-hashtable.cpp)
+mono_add_unit_test(test-mono-handle          SOURCES test-mono-handle.cpp)
+mono_add_unit_test(test-mono-callspec        SOURCES test-mono-callspec.cpp   RUNTIME)
+mono_add_unit_test(test-mono-string          SOURCES test-mono-string.cpp     RUNTIME)
+mono_add_unit_test(test-mono-embed           SOURCES test-mono-embed.cpp      RUNTIME)
+mono_add_unit_test(test-embed-invoke         SOURCES test-embed-invoke.cpp    RUNTIME)
+mono_add_unit_test(test-path                 SOURCES test-path.cpp            RUNTIME)
 
 if(MONO_ENABLE_LLVM)
   # C++: it drives the .mono_lsda parser through mono/llvm/mono_lsda.hpp, a
@@ -131,11 +139,6 @@ if(MONO_ENABLE_MCS_BUILD)
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed-invoke-cs.exe")
   mono_tools_runtime_depends(unit-test-assemblies)
-
-  foreach(_t test-mono-callspec test-mono-embed test-embed-invoke)
-    set_tests_properties(${_t} PROPERTIES
-      WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  endforeach()
 endif()
 
 # Checks that run a managed corpus and assert on what the runtime recorded while

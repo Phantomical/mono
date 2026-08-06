@@ -1,5 +1,5 @@
 /*
- * test-path.c
+ * test-path.cpp
  */
 
 #include "config.h"
@@ -9,10 +9,16 @@
 
 #include "mono/utils/mono-path.c"
 
-static char*
+#include <string_view>
+
+#include <gtest/gtest.h>
+
+namespace {
+
+/* A with 0, 1 or 2 trailing slashes, optionally spelled the Windows way. */
+char*
 make_path (const char *a, int itrail, int slash, int upcase)
 {
-	// Append 0, 1, or 2 trailing slashes to a.
 	g_assert (itrail >= 0 && itrail <= 2);
 	char trail [] = "//";
 	trail [itrail] = 0;
@@ -27,8 +33,13 @@ make_path (const char *a, int itrail, int slash, int upcase)
 	return b;
 }
 
-int
-main (void)
+} // namespace
+
+/*
+ * The cross product of base and file, each spelled every way that must not
+ * change the answer: trailing slashes, and on Windows also separator and case.
+ */
+TEST (MonoPath, FilenameInBasedir)
 {
 	// Use letters not numbers in this data to exercise case insensitivity.
 	static const char * const bases [2] = {"/", "/a"};
@@ -39,47 +50,33 @@ main (void)
 		{ FALSE, TRUE, FALSE, FALSE, FALSE, FALSE }
 	};
 
-	int i = 0;
-	gboolean const verbose = !!getenv("V");
-
 #ifdef HOST_WIN32
 	const int win32 = 1;
 #else
 	const int win32 = 0;
 #endif
 
-	// Iterate a cross product.
 	for (int upcase_file = 0; upcase_file <= win32; ++upcase_file) {
-		for (int upcase_base = 0; upcase_base <= win32; ++upcase_base) {
-			for (int itrail_base = 0; itrail_base <= 2; ++itrail_base) {
-				for (int itrail_file = 0; itrail_file <= 2; ++itrail_file) {
-					for (int ibase = 0; ibase < G_N_ELEMENTS (bases); ++ibase) {
-						for (int ifile = 0; ifile < G_N_ELEMENTS (files); ++ifile) {
-							for (int islash_base = 0; islash_base <= win32; ++islash_base) {
-								for (int islash_file = 0; islash_file <= win32; ++islash_file) {
+	for (int upcase_base = 0; upcase_base <= win32; ++upcase_base) {
+	for (int itrail_base = 0; itrail_base <= 2; ++itrail_base) {
+	for (int itrail_file = 0; itrail_file <= 2; ++itrail_file) {
+	for (int ibase = 0; ibase < G_N_ELEMENTS (bases); ++ibase) {
+	for (int ifile = 0; ifile < G_N_ELEMENTS (files); ++ifile) {
+	for (int islash_base = 0; islash_base <= win32; ++islash_base) {
+	for (int islash_file = 0; islash_file <= win32; ++islash_file) {
+		char *base = make_path (bases [ibase], itrail_base, islash_base, upcase_base);
+		char *file = make_path (files [ifile], itrail_file, islash_file, upcase_file);
 
-									char *base = make_path (bases [ibase], itrail_base, islash_base, upcase_base);
-									char *file = make_path (files [ifile], itrail_file, islash_file, upcase_file);
-									//verbose && printf ("mono_path_filename_in_basedir (%s, %s)\n", file, base);
-									gboolean r = mono_path_filename_in_basedir (file, base);
-									verbose && printf ("mono_path_filename_in_basedir (%s, %s):%d\n", file, base, r);
-									g_assertf (result [ibase][ifile] == r,
-										"mono_path_filename_in_basedir (%s, %s):%d\n", file, base, r);
-									if (strcmp (base, file) == 0)
-										g_assertf (!r,
-											"mono_path_filename_in_basedir (%s, %s):%d\n", file, base, r);
-									g_free (base);
-									g_free (file);
-									++i;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	printf ("%d tests\n", i);
+		gboolean r = mono_path_filename_in_basedir (file, base);
 
-	return 0;
+		EXPECT_EQ (result [ibase][ifile], r)
+			<< "mono_path_filename_in_basedir (" << file << ", " << base << ")";
+		/* A path is never inside itself. */
+		if (std::string_view (base) == file)
+			EXPECT_FALSE (r)
+				<< "mono_path_filename_in_basedir (" << file << ", " << base << ")";
+
+		g_free (base);
+		g_free (file);
+	}}}}}}}}
 }

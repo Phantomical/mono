@@ -8,7 +8,11 @@
 #include <mono/utils/mono-linked-list-set.h>
 #include <mono/utils/atomic.h>
 
-static MonoLinkedListSet lls;
+#include <gtest/gtest.h>
+
+namespace {
+
+MonoLinkedListSet lls;
 
 enum {
 	STATE_OUT,
@@ -32,9 +36,9 @@ typedef struct {
 	pthread_t thread;
 } thread_data_t;
 
-static node_t nodes [N];
+node_t nodes [N];
 
-static void
+void
 mono_hazard_pointer_clear_all (MonoThreadHazardPointers *hp, int retain)
 {
 	if (retain != 0)
@@ -45,7 +49,7 @@ mono_hazard_pointer_clear_all (MonoThreadHazardPointers *hp, int retain)
 		mono_hazard_pointer_clear (hp, 2);
 }
 
-static void
+void
 free_node (void *n)
 {
 	node_t *node = (node_t *)n;
@@ -53,7 +57,12 @@ free_node (void *n)
 	node->state = STATE_OUT;
 }
 
-static void*
+/*
+ * The checks in here run on worker threads, where gtest's assertions are not
+ * usable, so they stay plain assert (): a failure aborts the process and ctest
+ * attributes it to this test.
+ */
+void*
 worker (void *arg)
 {
 	thread_data_t *thread_data = (thread_data_t *)arg;
@@ -112,14 +121,9 @@ worker (void *arg)
 	return NULL;
 }
 
-#ifdef __cplusplus
-extern "C"
-#endif
-int
-test_mono_linked_list_set_main (void);
+} // namespace
 
-int
-test_mono_linked_list_set_main (void)
+TEST (MonoLinkedListSet, ConcurrentInsertFindRemove)
 {
 	int primes [] = { 1, 2, 3, 5, 7, 11, 13, 17 };
 	thread_data_t thread_data [NUM_THREADS];
@@ -137,19 +141,13 @@ test_mono_linked_list_set_main (void)
 	}
 
 	for (i = 0; i < NUM_THREADS; ++i) {
-		int result;
-
 		thread_data [i].num_adds = thread_data [i].num_removes = 0;
 		thread_data [i].skip = primes [i];
-		result = pthread_create (&thread_data [i].thread, NULL, worker, &thread_data [i]);
-		assert (!result);
+		ASSERT_EQ (0, pthread_create (&thread_data [i].thread, NULL, worker, &thread_data [i]));
 	}
 
 	for (i = 0; i < NUM_THREADS; ++i) {
-		int result = pthread_join (thread_data [i].thread, NULL);
-		assert (!result);
+		ASSERT_EQ (0, pthread_join (thread_data [i].thread, NULL));
 		printf ("thread %d  adds %d  removes %d\n", i, thread_data [i].num_adds, thread_data [i].num_removes);
 	}
-
-	return 0;
 }

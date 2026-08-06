@@ -1,5 +1,5 @@
 /*
- * test-sgen-qsort.c: Unit test for quicksort.
+ * test-sgen-qsort.cpp: Unit test for quicksort.
  *
  * Copyright (C) 2013 Xamarin Inc
  *
@@ -16,9 +16,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <assert.h>
 
-static int
+#include <vector>
+
+#include <gtest/gtest.h>
+
+namespace {
+
+int
 compare_ints (const void *pa, const void *pb)
 {
 	int a = *(const int*)pa;
@@ -35,7 +40,7 @@ typedef struct {
 	int val;
 } teststruct_t;
 
-static int
+int
 compare_teststructs (const void *pa, const void *pb)
 {
 	int a = ((const teststruct_t*)pa)->key;
@@ -47,7 +52,7 @@ compare_teststructs (const void *pa, const void *pb)
 	return 1;
 }
 
-static int
+int
 compare_teststructs2 (const void *pa, const void *pb)
 {
 	int a = (*((const teststruct_t**)pa))->key;
@@ -61,95 +66,91 @@ compare_teststructs2 (const void *pa, const void *pb)
 
 DEF_QSORT_INLINE(test_struct, teststruct_t*, compare_teststructs)
 
-static void
-compare_sorts (void *base, size_t nel, size_t width, int (*compar) (const void*, const void*))
+/*
+ * We can't assert that qsort and sgen_qsort agree element for element, because
+ * qsort is not guaranteed to be stable and the two will tend to differ among
+ * adjacent equal elements.  What is checked instead is that the result is
+ * ordered by the comparator.
+ */
+void
+check_sorted (const void *base, size_t nel, size_t width, int (*compar) (const void*, const void*))
 {
-	size_t len = nel * width;
-	void *b1 = malloc (len);
-	void *b2 = malloc (len);
-
-	memcpy (b1, base, len);
-	memcpy (b2, base, len);
-
-	mono_qsort (b1, nel, width, compar);
-	sgen_qsort (b2, nel, width, compar);
-
-	/* We can't assert that qsort and sgen_qsort produce the same results
-	 * because qsort is not guaranteed to be stable, so they will tend to differ
-	 * in adjacent equal elements. Instead, we assert that the array is sorted
-	 * according to the comparator.
-	 */
 	for (size_t i = 0; i < nel - 1; ++i)
-		assert (compar ((char *)b2 + i * width, (char *)b2 + (i + 1) * width) <= 0);
-
-	free (b1);
-	free (b2);
+		ASSERT_LE (compar ((const char *)base + i * width, (const char *)base + (i + 1) * width), 0)
+			<< "element " << i << " of " << nel << " is out of order";
 }
 
-static void
-compare_sorts2 (void *base, size_t nel)
+void
+compare_sorts (const void *base, size_t nel, size_t width, int (*compar) (const void*, const void*))
+{
+	std::vector<char> b1 (nel * width), b2 (nel * width);
+
+	memcpy (b1.data (), base, b1.size ());
+	memcpy (b2.data (), base, b2.size ());
+
+	mono_qsort (b1.data (), nel, width, compar);
+	sgen_qsort (b2.data (), nel, width, compar);
+
+	check_sorted (b2.data (), nel, width, compar);
+}
+
+void
+compare_sorts2 (const void *base, size_t nel)
 {
 	size_t width = sizeof (teststruct_t*);
-	size_t len = nel * width;
-	void *b1 = malloc (len);
-	void *b2 = malloc (len);
+	std::vector<char> b1 (nel * width), b2 (nel * width);
 
-	memcpy (b1, base, len);
-	memcpy (b2, base, len);
+	memcpy (b1.data (), base, b1.size ());
+	memcpy (b2.data (), base, b2.size ());
 
-	qsort (b1, nel, sizeof (teststruct_t*), compare_teststructs2);
-	qsort_test_struct ((teststruct_t **)b2, nel);
+	qsort (b1.data (), nel, width, compare_teststructs2);
+	qsort_test_struct ((teststruct_t **)b2.data (), nel);
 
-	for (size_t i = 0; i < nel - 1; ++i)
-		assert (compare_teststructs2 ((char *)b2 + i * width, (char *)b2 + (i + 1) * width) <= 0);
-
-	free (b1);
-	free (b2);
+	check_sorted (b2.data (), nel, width, compare_teststructs2);
 }
 
-#ifdef __cplusplus
-extern "C"
-#endif
-int
-test_sgen_qsort_main (void);
+} // namespace
 
-int
-test_sgen_qsort_main (void)
+TEST (SgenQsort, ReversedInts)
 {
-	int i;
-	for (i = 1; i < 4000; ++i) {
-		int a [i];
-		int j;
+	for (int i = 1; i < 4000; ++i) {
+		std::vector<int> a (i);
 
-		for (j = 0; j < i; ++j)
+		for (int j = 0; j < i; ++j)
 			a [j] = i - j - 1;
-		compare_sorts (a, i, sizeof (int), compare_ints);
+		ASSERT_NO_FATAL_FAILURE (compare_sorts (a.data (), i, sizeof (int), compare_ints));
 	}
+}
 
+TEST (SgenQsort, RandomStructs)
+{
 	srandom (time (NULL));
-	for (i = 0; i < 2000; ++i) {
+	for (int i = 0; i < 2000; ++i) {
 		teststruct_t a [200];
-		int j;
-		for (j = 0; j < 200; ++j) {
+
+		for (int j = 0; j < 200; ++j) {
 			a [j].key = random ();
 			a [j].val = random ();
 		}
 
-		compare_sorts (a, 200, sizeof (teststruct_t), compare_teststructs);
+		ASSERT_NO_FATAL_FAILURE (compare_sorts (a, 200, sizeof (teststruct_t), compare_teststructs));
 	}
+}
 
+/* The sort DEF_QSORT_INLINE generated, over an array of pointers. */
+TEST (SgenQsort, InlinedStructPointers)
+{
 	srandom (time (NULL));
-	for (i = 0; i < 2000; ++i) {
+	for (int i = 0; i < 2000; ++i) {
 		teststruct_t a [200];
 		teststruct_t *b [200];
-		int j;
-		for (j = 0; j < 200; ++j) {
+
+		for (int j = 0; j < 200; ++j) {
 			a [j].key = random ();
 			a [j].val = random ();
-			b [j] = &a[j];
+			b [j] = &a [j];
 		}
 
-		compare_sorts2 (b, 200);
+		ASSERT_NO_FATAL_FAILURE (compare_sorts2 (b, 200));
 	}
-	return 0;
 }

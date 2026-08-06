@@ -1,5 +1,5 @@
 /*
- * test-sgen-qsort.c: Unit test for our own bzero/memmove.
+ * test-memfuncs.cpp: Unit test for our own bzero/memmove.
  *
  * Copyright (C) 2013 Xamarin Inc
  *
@@ -13,7 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <assert.h>
+
+#include <vector>
+
+#include <gtest/gtest.h>
 
 #define POOL_SIZE	2048
 #define START_OFFSET	128
@@ -26,78 +29,85 @@
 #define MEMMOVE_SIZES			256
 #define MEMMOVE_NONOVERLAP_START	1024
 
-#ifdef __cplusplus
-extern "C"
-#endif
-int
-test_memfuncs_main (void);
+namespace {
 
-int
-test_memfuncs_main (void)
-{
-	unsigned char *random_mem = (unsigned char *)malloc (POOL_SIZE);
-	unsigned char *reference = (unsigned char *)malloc (POOL_SIZE);
-	unsigned char *playground = (unsigned char *)malloc (POOL_SIZE);
-	long *long_random_mem;
-	int i, offset, size, src_offset, dest_offset;
+/*
+ * Three pools of POOL_SIZE bytes: one of random bytes to copy from, and two that
+ * the function under test and libc's own are each applied to, so the check is
+ * that the whole pool comes out identical either way.
+ */
+class MemFuncs : public ::testing::Test {
+protected:
+	void SetUp () override
+	{
+		random_mem.resize (POOL_SIZE);
+		reference.resize (POOL_SIZE);
+		playground.resize (POOL_SIZE);
 
-	srandom (time (NULL));
-
-	/* init random memory */
-	long_random_mem = (long*)random_mem;
-	for (i = 0; i < POOL_SIZE / sizeof (long); ++i)
-		long_random_mem [i] = random ();
-
-	/* test bzero */
-	for (offset = 0; offset <= BZERO_OFFSETS; ++offset) {
-		for (size = 0; size <= BZERO_SIZES; ++size) {
-			memcpy (reference, random_mem, POOL_SIZE);
-			memcpy (playground, random_mem, POOL_SIZE);
-
-			memset (reference + START_OFFSET + offset, 0, size);
-			mono_gc_bzero_atomic (playground + START_OFFSET + offset, size);
-
-			assert (!memcmp (reference, playground, POOL_SIZE));
-		}
+		srandom (time (NULL));
+		long *words = (long*)random_mem.data ();
+		for (size_t i = 0; i < POOL_SIZE / sizeof (long); ++i)
+			words [i] = random ();
 	}
 
-	/* test memmove */
-	for (src_offset = -MEMMOVE_SRC_OFFSETS; src_offset <= MEMMOVE_SRC_OFFSETS; ++src_offset) {
-		for (dest_offset = -MEMMOVE_DEST_OFFSETS; dest_offset <= MEMMOVE_DEST_OFFSETS; ++dest_offset) {
-			for (size = 0; size <= MEMMOVE_SIZES; ++size) {
+	void reset ()
+	{
+		memcpy (reference.data (), random_mem.data (), POOL_SIZE);
+		memcpy (playground.data (), random_mem.data (), POOL_SIZE);
+	}
+
+	std::vector<unsigned char> random_mem, reference, playground;
+};
+
+} // namespace
+
+TEST_F (MemFuncs, BzeroAtomic)
+{
+	for (int offset = 0; offset <= BZERO_OFFSETS; ++offset) {
+		for (int size = 0; size <= BZERO_SIZES; ++size) {
+			reset ();
+
+			memset (reference.data () + START_OFFSET + offset, 0, size);
+			mono_gc_bzero_atomic (playground.data () + START_OFFSET + offset, size);
+
+			ASSERT_EQ (0, memcmp (reference.data (), playground.data (), POOL_SIZE))
+				<< "offset " << offset << " size " << size;
+		}
+	}
+}
+
+TEST_F (MemFuncs, MemmoveAtomic)
+{
+	for (int src_offset = -MEMMOVE_SRC_OFFSETS; src_offset <= MEMMOVE_SRC_OFFSETS; ++src_offset) {
+		for (int dest_offset = -MEMMOVE_DEST_OFFSETS; dest_offset <= MEMMOVE_DEST_OFFSETS; ++dest_offset) {
+			for (int size = 0; size <= MEMMOVE_SIZES; ++size) {
+				SCOPED_TRACE (::testing::Message ()
+					<< "src " << src_offset << " dest " << dest_offset << " size " << size);
+
 				/* overlapping */
-				memcpy (reference, random_mem, POOL_SIZE);
-				memcpy (playground, random_mem, POOL_SIZE);
-
-				memmove (reference + START_OFFSET + dest_offset, reference + START_OFFSET + src_offset, size);
-				mono_gc_memmove_atomic (playground + START_OFFSET + dest_offset, playground + START_OFFSET + src_offset, size);
-
-				assert (!memcmp (reference, playground, POOL_SIZE));
+				reset ();
+				memmove (reference.data () + START_OFFSET + dest_offset,
+					 reference.data () + START_OFFSET + src_offset, size);
+				mono_gc_memmove_atomic (playground.data () + START_OFFSET + dest_offset,
+							playground.data () + START_OFFSET + src_offset, size);
+				ASSERT_EQ (0, memcmp (reference.data (), playground.data (), POOL_SIZE)) << "overlapping";
 
 				/* non-overlapping with dest < src */
-				memcpy (reference, random_mem, POOL_SIZE);
-				memcpy (playground, random_mem, POOL_SIZE);
-
-				memmove (reference + START_OFFSET + dest_offset, reference + MEMMOVE_NONOVERLAP_START + src_offset, size);
-				mono_gc_memmove_atomic (playground + START_OFFSET + dest_offset, playground + MEMMOVE_NONOVERLAP_START + src_offset, size);
-
-				assert (!memcmp (reference, playground, POOL_SIZE));
+				reset ();
+				memmove (reference.data () + START_OFFSET + dest_offset,
+					 reference.data () + MEMMOVE_NONOVERLAP_START + src_offset, size);
+				mono_gc_memmove_atomic (playground.data () + START_OFFSET + dest_offset,
+							playground.data () + MEMMOVE_NONOVERLAP_START + src_offset, size);
+				ASSERT_EQ (0, memcmp (reference.data (), playground.data (), POOL_SIZE)) << "dest < src";
 
 				/* non-overlapping with dest > src */
-				memcpy (reference, random_mem, POOL_SIZE);
-				memcpy (playground, random_mem, POOL_SIZE);
-
-				memmove (reference + MEMMOVE_NONOVERLAP_START + dest_offset, reference + START_OFFSET + src_offset, size);
-				mono_gc_memmove_atomic (playground + MEMMOVE_NONOVERLAP_START + dest_offset, playground + START_OFFSET + src_offset, size);
-
-				assert (!memcmp (reference, playground, POOL_SIZE));
+				reset ();
+				memmove (reference.data () + MEMMOVE_NONOVERLAP_START + dest_offset,
+					 reference.data () + START_OFFSET + src_offset, size);
+				mono_gc_memmove_atomic (playground.data () + MEMMOVE_NONOVERLAP_START + dest_offset,
+							playground.data () + START_OFFSET + src_offset, size);
+				ASSERT_EQ (0, memcmp (reference.data (), playground.data (), POOL_SIZE)) << "dest > src";
 			}
 		}
 	}
-
-	free (random_mem);
-	free (reference);
-	free (playground);
-
-	return 0;
 }
