@@ -280,6 +280,28 @@ typedef struct {
 	MonoMethod *method;
 } MonoLLVMInlineFrame;
 
+/*
+ * The soft debugger's breakpoint switch for one body compiled by the LLVM back
+ * end. Every sequence point in the body loads `tramp` and calls it when it is
+ * non-null, so arming the body is a single store rather than the code patch
+ * mini's OP_SEQ_POINT relies on - there is no instruction encoding to promise
+ * when the code generator is LLVM's.
+ *
+ * One switch covers the whole body, so arming it stops at every sequence point
+ * in the method rather than only the one asked for. That is what `armed`
+ * counts: the switch stays on while any breakpoint instance in the body wants
+ * it. mono_de_process_breakpoint () resolves the hit back to a SeqPoint and
+ * finds no matching request at the other offsets, which it treats as a
+ * no-event and resumes.
+ *
+ * Allocated out of the domain the body was compiled for, so it lives exactly
+ * as long as the code that loads its address.
+ */
+typedef struct _MonoLLVMBreakpointSwitch {
+	gpointer tramp;
+	int armed;
+} MonoLLVMBreakpointSwitch;
+
 struct _MonoJitInfo {
 	/* NOTE: These first two elements (method and
 	   next_jit_code_hash) must be in the same order and at the
@@ -351,6 +373,14 @@ struct _MonoJitInfo {
 	 */
 	MonoLLVMInlineFrame *llvm_inline_frames;
 	guint32     n_llvm_inline_frames;
+
+	/*
+	 * The switch this body's sequence points call through, present only when
+	 * the body was translated with soft-debugger sequence points in it. See
+	 * MonoLLVMBreakpointSwitch above; mono_arch_set_breakpoint () is what
+	 * arms it.
+	 */
+	MonoLLVMBreakpointSwitch *llvm_bp_switch;
 
 	/* FIXME: Embed this after the structure later*/
 	gpointer    gc_info; /* Currently only used by SGen */

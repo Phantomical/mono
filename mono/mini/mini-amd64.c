@@ -9094,6 +9094,15 @@ mono_arch_set_breakpoint (MonoJitInfo *ji, guint8 *ip)
 
 		g_assert (info->bp_addrs [native_offset] == 0);
 		info->bp_addrs [native_offset] = mini_get_breakpoint_trampoline ();
+	} else if (ji->llvm_bp_switch) {
+		/*
+		 * An LLVM body has no patchable site: its sequence points load the
+		 * switch instead, so arming it is a store. The switch covers the
+		 * whole body, hence the count - clearing one breakpoint must not
+		 * disarm the ones still set elsewhere in the method.
+		 */
+		ji->llvm_bp_switch->armed ++;
+		ji->llvm_bp_switch->tramp = mini_get_breakpoint_trampoline ();
 	} else {
 		/* ip points to a mov r11, 0 */
 		g_assert (code [0] == 0x41);
@@ -9117,9 +9126,27 @@ mono_arch_clear_breakpoint (MonoJitInfo *ji, guint8 *ip)
 		SeqPointInfo *info = mono_arch_get_seq_point_info (mono_domain_get (), (guint8 *)ji->code_start);
 
 		info->bp_addrs [native_offset] = NULL;
+	} else if (ji->llvm_bp_switch) {
+		if (-- ji->llvm_bp_switch->armed <= 0) {
+			ji->llvm_bp_switch->armed = 0;
+			ji->llvm_bp_switch->tramp = NULL;
+		}
 	} else {
 		amd64_mov_reg_imm (code, AMD64_R11, 0);
 	}
+}
+
+/*
+ * mono_arch_get_single_step_tramp_addr:
+ *
+ *   Return the address of the word holding the single step trampoline, which is
+ * NULL whenever single stepping is off. Code the LLVM back end emits loads it
+ * at every sequence point.
+ */
+gpointer*
+mono_arch_get_single_step_tramp_addr (void)
+{
+	return &ss_trampoline;
 }
 
 gboolean

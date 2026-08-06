@@ -2338,6 +2338,7 @@ const char*       mono_get_generic_trampoline_name (MonoTrampolineType tramp_typ
 char*             mono_get_rgctx_fetch_trampoline_name (int slot);
 gpointer          mini_get_single_step_trampoline (void);
 gpointer          mini_get_breakpoint_trampoline (void);
+gpointer*         mono_arch_get_single_step_tramp_addr (void);
 gpointer          mini_add_method_trampoline (MonoMethod *m, gpointer compiled_method, gboolean add_static_rgctx_tramp, gboolean add_unbox_tramp);
 gboolean          mini_jit_info_is_gsharedvt (MonoJitInfo *ji);
 gpointer*         mini_resolve_imt_method (MonoVTable *vt, gpointer *vtable_slot, MonoMethod *imt_method, MonoMethod **impl_method, gpointer *out_aot_addr,

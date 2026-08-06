@@ -289,6 +289,12 @@ private:
 	/// signature and the variable arguments, which is what arglist pushes.
 	llvm::Value *sig_cookie = nullptr;
 
+	/// This body's soft-debugger breakpoint switch, allocated on the first
+	/// sequence point emitted and null when the method got none. The runtime
+	/// hangs it off the jit info so that mono_arch_set_breakpoint () can arm
+	/// it.
+	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
+
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
@@ -349,6 +355,10 @@ public:
 	{
 		return create_method_decl (method);
 	}
+
+	/// The breakpoint switch this body's sequence points call through, or null
+	/// when it was translated without any.
+	MonoLLVMBreakpointSwitch *breakpoint_switch () const { return bp_switch; }
 
 private:
 	typedef llvm::IRBuilder<> MonoIrBuilder;
@@ -432,6 +442,8 @@ private:
 	void emit_profiler_enter (MonoIrBuilder &builder);
 	void emit_profiler_leave (MonoIrBuilder &builder);
 	void emit_profiler_frame_handover (MonoIrBuilder &builder, MonoMethod *target);
+
+	void emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il);
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
 	llvm::Error emit_prefix (int opcode, uint64_t operand);
@@ -827,10 +839,13 @@ arch::LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
 arch::LegacyFlavor legacy_entry_flavor (MonoMethod *method, MonoMethodSignature *sig);
 
 /// EXTERNALS, when given, collects the symbols the emitted module leaves for the
-/// engine to resolve.
+/// engine to resolve. BP_SWITCH, when given, receives the body's soft-debugger
+/// breakpoint switch, which is null unless sequence points were emitted.
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
                                                  MonoMethod *method,
                                                  std::vector<ExternalSymbol> *externals
+                                                 = nullptr,
+                                                 MonoLLVMBreakpointSwitch **bp_switch
                                                  = nullptr);
 
 } // namespace mono

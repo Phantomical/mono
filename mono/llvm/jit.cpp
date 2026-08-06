@@ -10,6 +10,7 @@
 #include "nearmem.hpp"
 
 #include "../mini/llvm/il-line-table.hpp"
+#include "seq-point-marker.hpp"
 #include "passes/array-address.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
@@ -175,7 +176,8 @@ is_mono_pass (StringRef pass)
  */
 static void
 parse_il_line_table (MemoryBufferRef obj_buf,
-                     std::map<std::string, std::vector<IlLineRow>> &out)
+                     std::map<std::string, std::vector<IlLineRow>> &out,
+                     std::map<std::string, std::vector<IlLineRow>> &seq_points)
 {
 	Expected<std::unique_ptr<object::ObjectFile>> obj =
 		object::ObjectFile::createObjectFile (obj_buf);
@@ -251,6 +253,18 @@ parse_il_line_table (MemoryBufferRef obj_buf,
 				(uint32_t) (row.Address.Address - owner->start);
 			line.il_offset = (uint32_t) (row.Line - IL_OFFSET_LINE_BIAS);
 
+			/*
+			 * A sequence point marker says where the soft debugger's
+			 * trampolines return into, not what IL offset is in effect
+			 * there - the offset in effect is whatever the row before it
+			 * said, which is what leaving it out of the line table keeps.
+			 */
+			if (line.il_offset >= SEQ_POINT_MARKER_BASE) {
+				line.il_offset -= SEQ_POINT_MARKER_BASE;
+				seq_points[owner->name].push_back (line);
+				continue;
+			}
+
 			std::vector<IlLineRow> &rows = out[owner->name];
 
 			if (!rows.empty ()
@@ -267,11 +281,14 @@ parse_il_line_table (MemoryBufferRef obj_buf,
 	 * searches these, so sort - stably, so the last-row-wins choice above
 	 * survives.
 	 */
+	auto by_address = [] (const IlLineRow &a, const IlLineRow &b) {
+		return a.native_offset < b.native_offset;
+	};
+
 	for (auto &kv : out)
-		std::stable_sort (kv.second.begin (), kv.second.end (),
-		                  [] (const IlLineRow &a, const IlLineRow &b) {
-			                  return a.native_offset < b.native_offset;
-		                  });
+		std::stable_sort (kv.second.begin (), kv.second.end (), by_address);
+	for (auto &kv : seq_points)
+		std::stable_sort (kv.second.begin (), kv.second.end (), by_address);
 }
 
 /*
@@ -299,6 +316,8 @@ public:
 		size_t unwind_table_size = 0;
 		/// Each defined function's line table, by name.
 		std::map<std::string, std::vector<IlLineRow>> il_lines;
+		/// Each defined function's sequence point markers, by name.
+		std::map<std::string, std::vector<IlLineRow>> seq_points;
 	};
 
 	/*
@@ -313,13 +332,15 @@ public:
 	                          MemoryBufferRef input_object) override
 	{
 		std::map<std::string, std::vector<IlLineRow>> lines;
+		std::map<std::string, std::vector<IlLineRow>> seq_points;
 
-		parse_il_line_table (input_object, lines);
-		if (lines.empty ())
+		parse_il_line_table (input_object, lines, seq_points);
+		if (lines.empty () && seq_points.empty ())
 			return;
 
 		std::lock_guard<std::mutex> lock (mutex_);
 		il_lines_[mr.getTargetJITDylib ().getName ()] = std::move (lines);
+		seq_points_[mr.getTargetJITDylib ().getName ()] = std::move (seq_points);
 	}
 
 	void modifyPassConfig (MaterializationResponsibility &mr,
@@ -401,6 +422,11 @@ public:
 			extents.il_lines = std::move (lines->second);
 			il_lines_.erase (lines);
 		}
+		if (auto points = seq_points_.find (std::string (dylib));
+		    points != seq_points_.end ()) {
+			extents.seq_points = std::move (points->second);
+			seq_points_.erase (points);
+		}
 
 		return extents;
 	}
@@ -421,6 +447,7 @@ private:
 	std::mutex mutex_;
 	std::map<std::string, Extents> captured_;
 	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> il_lines_;
+	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> seq_points_;
 };
 
 /*
@@ -927,6 +954,10 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	if (auto lines = extents->il_lines.find (entry.str ());
 	    lines != extents->il_lines.end ())
 		compiled.il_lines = std::move (lines->second);
+
+	if (auto points = extents->seq_points.find (entry.str ());
+	    points != extents->seq_points.end ())
+		compiled.seq_points = std::move (points->second);
 
 	if (compiled.code == nullptr)
 		return createStringError (inconvertibleErrorCode (),

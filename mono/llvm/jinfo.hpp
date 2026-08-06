@@ -14,6 +14,7 @@ typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoMethodHeader MonoMethodHeader;
 typedef struct _MonoJitInfo MonoJitInfo;
+typedef struct _MonoLLVMBreakpointSwitch MonoLLVMBreakpointSwitch;
 
 namespace mono {
 
@@ -22,17 +23,20 @@ namespace mono {
 /// runtime's unwinder and stack walks can see the frame. A null HEADER
 /// registers clauseless code compiled for the method (its interop thunk).
 /// FILTERS maps an IL clause index to the entry of its compiled filter body,
-/// which the published clause hands the runtime's search pass. DOMAIN is the
-/// domain whose linker holds the code: the record lives and dies with it, so
-/// it is never the thread's current domain, which mid-unload managed code -
-/// AppDomain:InvokeInDomain most visibly - runs with set elsewhere.
+/// which the published clause hands the runtime's search pass. BP_SWITCH is
+/// the body's soft-debugger breakpoint switch, when it was translated with
+/// sequence points in it. DOMAIN is the domain whose linker holds the code: the
+/// record lives and dies with it, so it is never the thread's current domain,
+/// which mid-unload managed code - AppDomain:InvokeInDomain most visibly - runs
+/// with set elsewhere.
 ///
 /// Returns the registered record, which mono_jit_info_table_remove () takes to
 /// unregister it again.
 llvm::Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
-                   const std::vector<std::pair<uint32_t, void *>> &filters = {});
+                   const std::vector<std::pair<uint32_t, void *>> &filters = {},
+                   MonoLLVMBreakpointSwitch *bp_switch = nullptr);
 
 } // namespace mono
 

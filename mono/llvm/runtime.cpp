@@ -837,8 +837,9 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		return recover (state, method, runtime_error (metadata_error));
 
 	std::vector<ExternalSymbol> externals;
+	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
 	Expected<Function *> function =
-		method_to_llvm (module.get (), cfg.get (), method, &externals);
+		method_to_llvm (module.get (), cfg.get (), method, &externals, &bp_switch);
 	if (!function)
 		return recover (state, method, function.takeError ());
 
@@ -882,7 +883,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	}
 
 	Expected<MonoJitInfo *> jinfo = register_jit_info (
-		state.domain, method, cfg.get ()->header, *compiled, filters);
+		state.domain, method, cfg.get ()->header, *compiled, filters, bp_switch);
 
 	if (!jinfo)
 		return jinfo.takeError ();

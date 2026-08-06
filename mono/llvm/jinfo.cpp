@@ -24,6 +24,13 @@
 
 #include "mono/metadata/domain-internals.h"
 
+#include "seq-point-marker.hpp"
+
+/* A C header with no linkage guard of its own. */
+extern "C" {
+#include "mono/metadata/seq-points-data.h"
+}
+
 #include <llvm/Support/Error.h>
 
 #include <cstring>
@@ -296,10 +303,79 @@ transcode_unwind (const std::vector<WireRecord> &records)
 
 } // namespace
 
+/*
+ * Publish METHOD's sequence points: the table the soft debugger looks an IL
+ * offset up in to place a breakpoint, and looks a native offset up in to say
+ * where a stopped thread is.
+ *
+ * The rows come out of the line table in the encoding seq-point-marker.hpp
+ * describes and are already ascending by native offset, which is what
+ * mono_seq_point_find_prev_by_native_offset () walks. Registration mirrors
+ * mono_save_seq_point_info (): the table is keyed per MonoMethod rather than
+ * per body, so a second body for the same method leaves the first one's
+ * registration alone and publishes it, rather than pointing the new jit info at
+ * a table that is about to be freed.
+ */
+static void
+publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
+                    const std::vector<IlLineRow> &rows)
+{
+	GByteArray *array = g_byte_array_new ();
+	SeqPoint last = { 0, 0, 0, 0, 0 };
+	int len = 0;
+
+	for (const IlLineRow &row : rows) {
+		SeqPoint sp;
+
+		memset (&sp, 0, sizeof (sp));
+		sp.native_offset = (int) row.native_offset;
+
+		if (row.il_offset == SEQ_POINT_ENCODED_ENTRY)
+			sp.il_offset = METHOD_ENTRY_IL_OFFSET;
+		else if (row.il_offset == SEQ_POINT_ENCODED_EXIT)
+			sp.il_offset = METHOD_EXIT_IL_OFFSET;
+		else
+			sp.il_offset = (int) row.il_offset;
+
+		if (!mono_seq_point_info_add_seq_point (array, &sp, &last, NULL, TRUE))
+			continue;
+
+		last = sp;
+		len ++;
+	}
+
+	int size = 0;
+	MonoSeqPointInfo *info =
+		mono_seq_point_info_new (array->len, TRUE, array->data, TRUE, &size);
+
+	g_byte_array_free (array, TRUE);
+
+	if (len == 0) {
+		mono_seq_point_info_free (info);
+		return;
+	}
+
+	mono_domain_lock (domain);
+
+	MonoSeqPointInfo *live = (MonoSeqPointInfo *) g_hash_table_lookup (
+		domain_jit_info (domain)->seq_points, method);
+
+	if (live == NULL) {
+		g_hash_table_insert (domain_jit_info (domain)->seq_points, method, info);
+		live = info;
+	} else {
+		mono_seq_point_info_free (info);
+	}
+	mono_domain_unlock (domain);
+
+	jinfo->seq_points = live;
+}
+
 Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
-                   const std::vector<std::pair<uint32_t, void *>> &filters)
+                   const std::vector<std::pair<uint32_t, void *>> &filters,
+                   MonoLLVMBreakpointSwitch *bp_switch)
 {
 	guint8 *code = (guint8 *) compiled.code;
 	guint32 code_size = (guint32) compiled.code_size;
@@ -434,6 +510,15 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 
 	jinfo->unwind_info = mono_cache_unwind_info (encoded, encoded_len);
 	g_free (encoded);
+
+	/*
+	 * The debugger has to be able to find both halves before the code can be
+	 * reached, and it looks for them through the jit info - so they go in
+	 * before the record is published rather than after.
+	 */
+	jinfo->llvm_bp_switch = bp_switch;
+	if (!compiled.seq_points.empty ())
+		publish_seq_points (domain, method, jinfo, compiled.seq_points);
 
 	mono_jit_info_table_add (domain, jinfo);
 	return jinfo;

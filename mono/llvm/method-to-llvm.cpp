@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "runtime-error.hpp"
+#include "seq-point-marker.hpp"
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
@@ -72,7 +73,8 @@ throw_corlib_exception_decl (llvm::Module *module)
 
 llvm::Expected<llvm::Function *>
 method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
-                std::vector<ExternalSymbol> *externals)
+                std::vector<ExternalSymbol> *externals,
+                MonoLLVMBreakpointSwitch **bp_switch)
 {
 	/*
 	 * Shared by the method and its filter bodies: they are separate functions
@@ -86,6 +88,9 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 
 	if (!function)
 		return function;
+
+	if (bp_switch != nullptr)
+		*bp_switch = emitter.breakpoint_switch ();
 
 	/* Each filter body rides along as a function of its own. */
 	for (uint32_t i = 0; i < cfg->header->num_clauses; ++i) {
@@ -844,6 +849,14 @@ MethodLLVMEmitter::emit ()
 	blocks[0].entry_known = true;
 	builder.SetInsertPoint (blocks[0].block);
 
+	/*
+	 * The method-entry sequence point, which is what a METHOD_ENTRY event and a
+	 * step into this method stop on. It goes at the top of the first IL block
+	 * rather than in the entry block so that everything the prologue set up -
+	 * the LMF above all - is already in place when the debugger stops here.
+	 */
+	emit_seq_point (builder, SEQ_POINT_ENCODED_ENTRY);
+
 	if (auto error = translate_range (builder, 0, code_size))
 		return std::move (error);
 
@@ -957,8 +970,10 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 		 * source line by finding the first sequence point at or after it, so an
 		 * offset in the middle of a statement names the NEXT statement's line.
 		 */
-		if (stack.empty () || is_handler_start (ip))
+		if (stack.empty () || is_handler_start (ip)) {
 			set_il_location (builder, offset);
+			emit_seq_point (builder, (uint32_t) offset);
+		}
 
 		if (llvm::Error error = emit_instruction (builder))
 			return std::move (error);

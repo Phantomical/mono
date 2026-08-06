@@ -1,5 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
+#include "seq-point-marker.hpp"
 #include "mono/metadata/loader.h"
 #include "mono/metadata/metadata.h"
 #include <llvm/IR/Constants.h>
@@ -54,6 +55,13 @@ llvm::Error
 MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 {
 	MonoType *ret = mono_method_signature_internal (method)->ret;
+
+	/*
+	 * The method-exit sequence point, which is where a METHOD_EXIT event and a
+	 * step out of this method stop. Ahead of the return value's coercion so
+	 * that a debugger stopped here still sees the frame the IL described.
+	 */
+	emit_seq_point (builder, SEQ_POINT_ENCODED_EXIT);
 
 	if (ret->type == MONO_TYPE_VOID && !ret->byref) {
 		if (!stack.empty ())

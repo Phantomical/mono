@@ -86,6 +86,12 @@ struct CompiledMethod {
 	/// native offset. Empty when the module carried no line table.
 	std::vector<IlLineRow> il_lines;
 
+	/// The entry function's sequence points, ascending by native offset: where
+	/// each soft-debugger check landed, and the IL offset it stands for in the
+	/// encoding seq-point-marker.hpp describes. Empty unless the method was
+	/// translated with sequence points in it.
+	std::vector<IlLineRow> seq_points;
+
 	/// The dylib this compile's object was linked into - what remove_dylibs ()
 	/// takes to release all of the above again.
 	llvm::orc::JITDylib *dylib = nullptr;
