@@ -156,6 +156,44 @@ is_mono_pass (StringRef pass)
 	       pass == arch::LegacyAbiPass::name ();
 }
 
+/// Gives mono.stubs a definition for a published stub the first time a module
+/// names it.
+///
+/// Most published methods are never named by anything: their address goes into
+/// a vtable slot or comes back to the runtime, and a call reaches them through
+/// that rather than through a symbol. Those never cost a symbol at all - and a
+/// module that does name some gets them all in one definition, since a link
+/// asks for everything it is missing at once.
+class StubGenerator : public DefinitionGenerator {
+public:
+	explicit StubGenerator (StubTable &table) : table_ (&table) {}
+
+	Error tryToGenerate (LookupState &, LookupKind, JITDylib &jd,
+	                     JITDylibLookupFlags,
+	                     const SymbolLookupSet &lookup) override
+	{
+		SymbolMap symbols;
+
+		for (const auto &[name, flags] : lookup) {
+			void *code = table_->claim_for_linker (*name);
+
+			if (code != nullptr)
+				symbols[name] = {
+					ExecutorAddr::fromPtr (code),
+					JITSymbolFlags::Exported | JITSymbolFlags::Callable,
+				};
+		}
+
+		if (symbols.empty ())
+			return Error::success ();
+
+		return jd.define (absoluteSymbols (std::move (symbols)));
+	}
+
+private:
+	StubTable *table_;
+};
+
 } // namespace
 
 /*
@@ -783,10 +821,12 @@ MonoJit::create ()
 	self->helpers_ = &es.createBareJITDylib ("mono.helpers");
 	self->stubs_ = &es.createBareJITDylib ("mono.stubs");
 
-	auto redirectable = make_stub_manager (es, *self->slabs_);
-	if (!redirectable)
-		return redirectable.takeError ();
-	self->redirectable_ = std::move (*redirectable);
+	auto table = StubTable::create (es.getTargetTriple (), *self->slabs_);
+	if (!table)
+		return table.takeError ();
+	self->stub_table_ = std::move (*table);
+	self->stubs_->addGenerator (
+		std::make_unique<StubGenerator> (*self->stub_table_));
 
 	auto callbacks = LazyCallbacks::create ((void *) &lazy_compile_failed);
 	if (!callbacks)
@@ -851,16 +891,11 @@ MonoJit::register_symbol (StringRef name, void *addr)
 Error
 MonoJit::create_stub (StringRef name, void *target)
 {
-	ExecutionSession &es = jit_->getExecutionSession ();
+	Expected<void *> stub = stub_table_->reserve (name, target);
 
-	SymbolMap dests;
-	dests[es.intern (name)] = {
-		ExecutorAddr::fromPtr (target),
-		JITSymbolFlags::Exported | JITSymbolFlags::Callable,
-	};
-
-	return redirectable_->createRedirectableSymbols (
-		stubs_->getDefaultResourceTracker (), std::move (dests));
+	if (!stub)
+		return stub.takeError ();
+	return Error::success ();
 }
 
 Error
@@ -898,34 +933,18 @@ MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
 Error
 MonoJit::redirect_stub (StringRef name, void *target)
 {
-	/*
-	 * A stub only has a slot to write once its object has been emitted, and
-	 * stubs are defined without being materialized: the sibling of the stub
-	 * that fired may never have been reached by any link. Look it up first -
-	 * a no-op once emitted - or the redirect has nothing to write to.
-	 */
-	Expected<void *> addr = stub_address (name);
-	if (!addr)
-		return addr.takeError ();
-
-	ExecutionSession &es = jit_->getExecutionSession ();
-
-	SymbolMap dests;
-	dests[es.intern (name)] = {
-		ExecutorAddr::fromPtr (target),
-		JITSymbolFlags::Exported | JITSymbolFlags::Callable,
-	};
-
-	return redirectable_->redirect (*stubs_, dests);
+	return stub_table_->redirect (name, target);
 }
 
 Expected<void *>
 MonoJit::stub_address (StringRef name)
 {
-	Expected<ExecutorAddr> sym = jit_->lookup (*stubs_, name);
-	if (!sym)
-		return sym.takeError ();
-	return sym->toPtr<void *> ();
+	void *code = stub_table_->find (name);
+
+	if (code == nullptr)
+		return make_error<StringError> ("no stub was published for " + name,
+		                                inconvertibleErrorCode ());
+	return code;
 }
 
 Expected<CompiledMethod>
@@ -1019,35 +1038,46 @@ MonoJit::undefine_stubs (const std::vector<std::string> &names)
 	if (names.empty ())
 		return Error::success ();
 
+	/*
+	 * Out of the table first: nothing can reach these stubs by name once they
+	 * are gone from it, and no later link can ask for a definition of one.
+	 */
+	Expected<StubTable::Removed> removed = stub_table_->remove (names);
+
+	if (!removed)
+		return removed.takeError ();
+
 	ExecutionSession &es = jit_->getExecutionSession ();
 	SymbolNameSet symbols;
 
-	for (const std::string &name : names)
+	for (const std::string &name : removed->defined)
 		symbols.insert (es.intern (name));
 
 	/*
-	 * Undefine before reclaiming: a stub has to be unreachable by name before
-	 * its block can be handed to the next method along.
+	 * Undefine before reclaiming: a stub has to be unreachable by address as
+	 * well as by name before its block can be handed to the next method along.
 	 */
-	if (Error err = stubs_->remove (symbols))
-		return err;
+	if (!symbols.empty ())
+		if (Error err = stubs_->remove (symbols))
+			return err;
 
-	redirectable_->discard (*stubs_, symbols);
+	stub_table_->reclaim (std::move (*removed));
 	for (const std::string &name : names)
 		callbacks_->release (name);
 
 	/*
 	 * A name stays in the session's pool until somebody asks for the dead
-	 * entries back, and every method published here interns two of them. The
-	 * sweep walks the whole pool, so it runs once a batch's worth of names have
-	 * gone dead rather than once per method; the cost of that is a backlog of
-	 * at most that many. Dropping the set first is what puts this batch's own
-	 * names in the sweep rather than the next one's.
+	 * entries back. The sweep walks the whole pool, so it runs once a batch's
+	 * worth of names have gone dead rather than once per method; the cost of
+	 * that is a backlog of at most that many. Dropping the set first is what
+	 * puts this batch's own names in the sweep rather than the next one's.
 	 */
+	size_t dropped = symbols.size ();
+
 	symbols.clear ();
 
-	if (dropped_names_.fetch_add (names.size ()) + names.size ()
-	    >= dead_name_sweep) {
+	if (dropped != 0
+	    && dropped_names_.fetch_add (dropped) + dropped >= dead_name_sweep) {
 		dropped_names_.store (0);
 		es.getSymbolStringPool ()->clearDeadEntries ();
 	}

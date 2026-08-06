@@ -65,8 +65,8 @@ stub_detour_target ()
 using IntFn = int32_t (*) ();
 
 /*
- * create_stub ()/create_lazy_stub () only define the symbol (jit.hpp explains
- * why); the tests want the address too, which is a separate lookup.
+ * create_stub ()/create_lazy_stub () reserve the stub; the tests want the
+ * address it was reserved at too, which is a call of its own.
  */
 static Expected<void *>
 make_stub (MonoJit &jit, const std::string &name, void *target)
@@ -232,8 +232,8 @@ TEST (Stubs, AnUndefinedNameCanBePublishedAgain)
 
 /*
  * The common case for a method that was published and then freed without ever
- * being called: its stub was defined but never materialized, so undefining has
- * a pending definition to discard rather than an emitted stub to forget.
+ * being called or linked against: no module ever named it, so undefining it has
+ * no symbol to take back - only the block.
  */
 TEST (Stubs, AnUnmaterializedStubCanBeUndefined)
 {
@@ -270,6 +270,31 @@ TEST (Stubs, AnUndefinedStubIsHandedOutAgain)
 
 	EXPECT_EQ (*first, *second);
 	EXPECT_EQ (reinterpret_cast<IntFn> (*second) (), 2);
+}
+
+/*
+ * The one case where the name reached the linker: a module was compiled against
+ * it, so undefining has a symbol to take back as well as a block. The name has
+ * to come back clean enough for the next method along to be linked against.
+ */
+TEST (Stubs, ANameAModuleLinkedAgainstCanBePublishedAgain)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_one)));
+
+	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
+	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
+
+	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
+	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_two)));
+
+	/* The old caller is calling a stub that has been handed out again. */
+	auto again = (*jit)->compile (build_caller_module ("m"), "caller");
+	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
+	EXPECT_EQ (reinterpret_cast<IntFn> (again->entry) (), 2);
 }
 
 /*

@@ -33,7 +33,7 @@ namespace mono {
 
 class CodeSlabs;
 class LazyCallbacks;
-class StubManager;
+class StubTable;
 
 /// The host TargetMachine every compile runs against - code model Small+PIC and
 /// FastISel code generation.
@@ -146,9 +146,9 @@ public:
 	/// resolves to the stub, so a redirect_stub () is seen by callers that were
 	/// compiled long before it.
 	///
-	/// Only defines the symbol - nothing is materialized, so this is safe to
-	/// call with locks held. The address comes from stub_address (), whose
-	/// lookup can run other threads' pending compiles inline and so must not.
+	/// The linker is not told about NAME here. It hears about a stub the first
+	/// time a module names one, which is what keeps publishing a method that
+	/// nobody links against down to a block and a table entry.
 	llvm::Error create_stub (llvm::StringRef name, void *target);
 
 	/// Publish NAME as a stub that compiles itself the first time it is called.
@@ -160,7 +160,7 @@ public:
 	/// a method be published without compiling it.
 	///
 	/// Threads racing on that first call compile once and all land on the same
-	/// code. Define-only, like create_stub ().
+	/// code.
 	///
 	/// That first call does not always continue into the method: an async
 	/// abort that arrived while the thread was compiling is thrown from the
@@ -227,16 +227,20 @@ private:
 	/// SlabMemoryManager hands memory out of it.
 	std::shared_ptr<CodeSlabs> slabs_;
 
+	/// Every stub this JIT has published. Declared before jit_ so it outlives
+	/// the dylib generator that reads it.
+	std::unique_ptr<StubTable> stub_table_;
+
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 
 	/// Dedicated dylib holding the explicitly-registered runtime helpers;
 	/// every compiled module's dylib links against this and mono.stubs.
 	llvm::orc::JITDylib *helpers_ = nullptr;
 
-	/// Dylib holding the published method stubs, and the manager that emits,
-	/// rewrites and reclaims them.
+	/// The dylib a module's reference to a stub is resolved through. A stub
+	/// reaches it only once some module has named one; stub_table_ holds them
+	/// all either way.
 	llvm::orc::JITDylib *stubs_ = nullptr;
-	std::unique_ptr<StubManager> redirectable_;
 
 	/// Hands out the re-entry trampolines lazy stubs point at until they are
 	/// compiled, and owns the resolver they call through.

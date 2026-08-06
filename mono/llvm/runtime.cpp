@@ -1607,12 +1607,8 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 	/*
 	 * Held across the creation: two threads reaching an undefined method
 	 * together must not both define its stubs. Everything under the lock is
-	 * definition only - trampoline, callback unit, stub symbols - and none of
-	 * it materializes. The address lookup lives in publish (), outside this
-	 * lock, because an ORC lookup drains the session's pending
-	 * materializations inline on the calling thread, and a drained lazy-stub
-	 * compile re-enters this backend and takes mutex_: holding it across a
-	 * lookup deadlocks against ourselves.
+	 * reserving - a re-entry trampoline, a callback unit, a stub block - and
+	 * none of it compiles or links anything.
 	 */
 	std::lock_guard<std::mutex> lock (mutex_);
 
@@ -1706,11 +1702,7 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	if (Error err = publish_defs (state, method))
 		return std::move (err);
 
-	/*
-	 * Unlocked on purpose - see publish_defs (). Concurrent lookups of one
-	 * symbol are ORC's bread and butter; every thread that races through here
-	 * computes the same address.
-	 */
+	/* Whichever thread reserved it, this is the address it reserved. */
 	Expected<void *> stub = state.jit->stub_address (symbol_for_code (method));
 	if (!stub)
 		return stub;

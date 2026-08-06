@@ -1,19 +1,18 @@
 /**
  * \file
- * \brief A slab-allocated implementation of ORC's redirectable symbols.
+ * \brief A slab-allocated table of the redirectable stubs methods are published
+ * as.
  *
- * ORC ships one of these (JITLinkRedirectableSymbolManager), but it builds and
- * links a LinkGraph per batch of stubs, and the runtime publishes stubs one
- * method at a time. Each graph gets its own allocation, whose segments are
- * page-aligned, so a lone stub costs one page of code plus one of data: 8K a
- * method, which is most of a gigabyte over a game's worth of them. Redirecting
- * likewise goes through a full symbol lookup.
+ * ORC ships redirectable symbols of its own (JITLinkRedirectableSymbolManager),
+ * but it builds and links a LinkGraph per batch of stubs, and the runtime
+ * publishes stubs one method at a time. Each graph gets its own allocation,
+ * whose segments are page-aligned, so a lone stub costs one page of code plus
+ * one of data: 8K a method, which is most of a gigabyte over a game's worth of
+ * them. Redirecting likewise goes through a full symbol lookup.
  *
- * So we carve stubs out of a slab instead. A stub costs 24 bytes, publishing
- * one is a bump-allocate (or a pop off the free list) plus a few stores, and a
- * redirect is a single atomic store to the slot. The ORC interface is unchanged
- * bar the reclaim hook, which is what the promotion machinery is written
- * against.
+ * So we carve stubs out of a slab instead. A stub costs 24 bytes plus an entry
+ * in this table, publishing one is a bump-allocate (or a pop off the free list)
+ * plus a few stores, and a redirect is a single atomic store to the slot.
  */
 
 #include "stubs.hpp"
@@ -21,19 +20,13 @@
 #include "arch/arch.hpp"
 #include "codemem.hpp"
 
-#include <llvm/ADT/DenseMap.h>
 #include <llvm/Support/Memory.h>
 
-#include <atomic>
-#include <cstring>
-#include <mutex>
-#include <vector>
+#include <utility>
 
 using namespace llvm;
-using namespace llvm::orc;
 
 namespace mono {
-namespace {
 
 /*
  * How many stubs a batch holds. The slot and stub regions come out of one
@@ -41,16 +34,11 @@ namespace {
  * region is a whole number of 16-byte blocks at this count, which keeps the
  * stub region aligned without padding between them.
  */
+namespace {
 constexpr size_t stubs_per_slab = 2048;
 constexpr size_t slot_region_size = stubs_per_slab * sizeof (void *);
 constexpr size_t stub_region_size = stubs_per_slab * arch::stub_block_size;
-
-using Slot = std::atomic<void *>;
-
-struct Stub {
-	void *code;
-	Slot *slot;
-};
+} // namespace
 
 /// Allocator over batches of (slot region, stub region) pairs carved from the
 /// code slabs: bump within a batch, with a free list of the stubs handed back.
@@ -65,10 +53,10 @@ public:
 	}
 
 	/// Carve one stub, jumping to TARGET.
-	Expected<Stub> allocate (void *target)
+	Expected<StubTable::Stub> allocate (void *target)
 	{
 		if (!free_.empty ()) {
-			Stub stub = free_.back ();
+			StubTable::Stub stub = free_.back ();
 
 			free_.pop_back ();
 			/*
@@ -86,18 +74,19 @@ public:
 		char *base = batches_.back ().base;
 		size_t i = next_++;
 
-		Slot *slot = reinterpret_cast<Slot *> (base + i * sizeof (void *));
+		auto *slot = reinterpret_cast<std::atomic<void *> *> (
+			base + i * sizeof (void *));
 		char *code = base + slot_region_size + i * arch::stub_block_size;
 
 		slot->store (target, std::memory_order_release);
 		arch::write_jump_stub (code, slot);
 		sys::Memory::InvalidateInstructionCache (code, arch::stub_block_size);
 
-		return Stub { code, slot };
+		return StubTable::Stub { code, slot };
 	}
 
 	/// Take STUB back, for a later allocate () to hand out again.
-	void release (Stub stub) { free_.push_back (stub); }
+	void release (StubTable::Stub stub) { free_.push_back (stub); }
 
 private:
 	/*
@@ -122,111 +111,125 @@ private:
 
 	CodeSlabs *slabs_;
 	std::vector<CodeSlabs::Alloc> batches_;
-	std::vector<Stub> free_;
+	std::vector<StubTable::Stub> free_;
 	size_t next_ = stubs_per_slab;
 };
 
-class SlabStubManager : public StubManager {
-public:
-	explicit SlabStubManager (CodeSlabs &slabs) : slabs_ (&slabs) {}
-
-	void emitRedirectableSymbols (std::unique_ptr<MaterializationResponsibility> r,
-	                              SymbolMap initial_dests) override
-	{
-		ExecutionSession &es = r->getExecutionSession ();
-		JITDylib &jd = r->getTargetJITDylib ();
-
-		SymbolMap resolved;
-		{
-			std::lock_guard<std::mutex> lock (mutex_);
-			for (auto &[name, dest] : initial_dests) {
-				Expected<Stub> stub =
-					slabs_.allocate (dest.getAddress ().toPtr<void *> ());
-				if (!stub) {
-					es.reportError (stub.takeError ());
-					return r->failMaterialization ();
-				}
-
-				stubs_[&jd][name] = *stub;
-				resolved[name] = { ExecutorAddr::fromPtr (stub->code),
-					               dest.getFlags () };
-			}
-		}
-
-		if (Error err = r->notifyResolved (resolved)) {
-			es.reportError (std::move (err));
-			return r->failMaterialization ();
-		}
-		if (Error err = r->notifyEmitted ({})) {
-			es.reportError (std::move (err));
-			return r->failMaterialization ();
-		}
-	}
-
-	Error redirect (JITDylib &jd, const SymbolMap &new_dests) override
-	{
-		std::lock_guard<std::mutex> lock (mutex_);
-
-		auto jd_stubs = stubs_.find (&jd);
-		for (auto &[name, dest] : new_dests) {
-			Stub stub = jd_stubs == stubs_.end ()
-			                ? Stub {}
-			                : jd_stubs->second.lookup (name);
-			if (stub.slot == nullptr)
-				return make_error<StringError> (
-					"no stub to redirect for " + *name + " in " + jd.getName (),
-					inconvertibleErrorCode ());
-
-			/* Callers may be running through this stub right now: the store has
-			 * to land whole, and everything the new target reads has to be
-			 * visible by the time it does. */
-			stub.slot->store (dest.getAddress ().toPtr<void *> (),
-			                  std::memory_order_release);
-		}
-
-		return Error::success ();
-	}
-
-	void discard (JITDylib &jd, const SymbolNameSet &names) override
-	{
-		std::lock_guard<std::mutex> lock (mutex_);
-
-		auto jd_stubs = stubs_.find (&jd);
-
-		if (jd_stubs == stubs_.end ())
-			return;
-
-		for (const SymbolStringPtr &name : names) {
-			auto it = jd_stubs->second.find (name);
-
-			if (it == jd_stubs->second.end ())
-				continue;
-			slabs_.release (it->second);
-			jd_stubs->second.erase (it);
-		}
-	}
-
-private:
-	std::mutex mutex_;
-	StubSlabs slabs_;
-
-	/// Each published stub, by the name it was published under. Recorded here
-	/// until discard () gives it back.
-	DenseMap<JITDylib *, DenseMap<SymbolStringPtr, Stub>> stubs_;
-};
-
-} // namespace
-
-Expected<std::unique_ptr<StubManager>>
-make_stub_manager (ExecutionSession &es, CodeSlabs &slabs)
+Expected<std::unique_ptr<StubTable>>
+StubTable::create (const Triple &tt, CodeSlabs &slabs)
 {
-	const Triple &tt = es.getTargetTriple ();
 	if (tt.getArch () != arch::target_arch)
 		return make_error<StringError> (
 			"redirectable stubs are not implemented for " + tt.str (),
 			inconvertibleErrorCode ());
 
-	return std::make_unique<SlabStubManager> (slabs);
+	return std::unique_ptr<StubTable> (
+		new StubTable (std::make_unique<StubSlabs> (&slabs)));
+}
+
+StubTable::StubTable (std::unique_ptr<StubSlabs> slabs)
+	: slabs_ (std::move (slabs))
+{
+}
+
+StubTable::~StubTable () = default;
+
+Expected<void *>
+StubTable::reserve (StringRef name, void *target)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	if (stubs_.count (name))
+		return make_error<StringError> ("a stub is already published for "
+		                                    + name,
+		                                inconvertibleErrorCode ());
+
+	Expected<Stub> stub = slabs_->allocate (target);
+
+	if (!stub)
+		return stub.takeError ();
+
+	stubs_[name] = Entry { *stub, false };
+	return stub->code;
+}
+
+void *
+StubTable::find (StringRef name)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+	auto it = stubs_.find (name);
+
+	return it == stubs_.end () ? nullptr : it->second.stub.code;
+}
+
+Error
+StubTable::redirect (StringRef name, void *target)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+	auto it = stubs_.find (name);
+
+	if (it == stubs_.end ())
+		return make_error<StringError> ("no stub to redirect for " + name,
+		                                inconvertibleErrorCode ());
+
+	/*
+	 * Callers may be running through this stub right now: the store has to
+	 * land whole, and everything the new target reads has to be visible by the
+	 * time it does.
+	 */
+	it->second.stub.slot->store (target, std::memory_order_release);
+	return Error::success ();
+}
+
+void *
+StubTable::claim_for_linker (StringRef name)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+	auto it = stubs_.find (name);
+
+	if (it == stubs_.end () || it->second.defined)
+		return nullptr;
+
+	it->second.defined = true;
+	return it->second.stub.code;
+}
+
+Expected<StubTable::Removed>
+StubTable::remove (ArrayRef<std::string> names)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+	Removed removed;
+
+	/*
+	 * All of them or none: the caller is working from its own record of what
+	 * it published, so a name that was never here means that record is wrong,
+	 * and half a batch removed would leave it wrong in a second way.
+	 */
+	for (const std::string &name : names)
+		if (!stubs_.count (name))
+			return make_error<StringError> ("no stub was published for "
+			                                    + name,
+			                                inconvertibleErrorCode ());
+
+	for (const std::string &name : names) {
+		auto it = stubs_.find (name);
+
+		if (it->second.defined)
+			removed.defined.push_back (name);
+		removed.blocks.push_back (it->second.stub);
+		stubs_.erase (it);
+	}
+
+	return removed;
+}
+
+void
+StubTable::reclaim (Removed &&removed)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	for (const Stub &stub : removed.blocks)
+		slabs_->release (stub);
 }
 
 } // namespace mono
