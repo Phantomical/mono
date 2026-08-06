@@ -131,17 +131,6 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 	llvm::BasicBlock *cont =
 		llvm::BasicBlock::Create (context (), "sp.cont", function);
 
-	/*
-	 * The targets are chosen before the branch so that nothing but the marked
-	 * nop and the calls themselves is left to emit inside the block.
-	 */
-	llvm::Value *ss_target =
-		ss == nullptr
-			? nullptr
-			: builder.CreateSelect (builder.CreateIsNotNull (ss), ss, nop);
-	llvm::Value *bp_target =
-		builder.CreateSelect (builder.CreateIsNotNull (bp), bp, nop);
-
 	builder.CreateCondBr (armed, trap, cont);
 	builder.SetInsertPoint (trap);
 
@@ -158,9 +147,26 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 	builder.CreateCall (llvm::InlineAsm::get (hook, "nop", "", true));
 	set_il_location (builder, restore);
 
+	/*
+	 * Both words are read again here rather than reusing what the test above
+	 * loaded, so that the block depends on nothing its predecessor computed:
+	 * CMD_THREAD_SET_IP moves a stopped thread to the address recorded for a
+	 * sequence point, which is the nop, and everything after it has to hold up
+	 * from there.
+	 */
+	llvm::Value *ss_here = marker
+		? nullptr
+		: builder.CreateLoad (ptr, ss_slot, true, "sp.ss.trap");
+	llvm::Value *bp_here = builder.CreateLoad (ptr, bp_slot, true, "sp.bp.trap");
+
 	llvm::CallInst *ss_call =
-		ss_target == nullptr ? nullptr : builder.CreateCall (hook, ss_target);
-	llvm::CallInst *bp_call = builder.CreateCall (hook, bp_target);
+		ss_here == nullptr
+			? nullptr
+			: builder.CreateCall (hook, builder.CreateSelect (
+				builder.CreateIsNotNull (ss_here), ss_here, nop));
+	llvm::CallInst *bp_call = builder.CreateCall (
+		hook, builder.CreateSelect (builder.CreateIsNotNull (bp_here), bp_here,
+	                                    nop));
 
 	/*
 	 * A trampoline reads the frame it was called from and the debugger walks
