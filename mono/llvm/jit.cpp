@@ -453,12 +453,10 @@ private:
 /*
  * The one JITLink memory manager every MonoJit links through.
  *
- * There is a MonoJit per appdomain, and this reserves address space in 16MB
- * units out of a pool that is one gigabyte wide (nearmem.hpp). One of these per
- * domain would therefore claim 16MB no other domain could touch and cap the
- * process at 63 domains that have compiled anything; shared, a domain's ranges
- * return to a common free list when its linker goes down and any live domain
- * can take them.
+ * There is a MonoJit per appdomain and this reserves address space in 16MB
+ * units, so one per domain would leave each domain sitting on up to 16MB no
+ * other domain could touch. Shared, a domain's ranges return to a common free
+ * list when its linker goes down and any live domain can take them.
  *
  * Nothing domain-owned lives in here. It holds address ranges, not symbols or
  * relocations, and a range only reaches the free list after JITLink has run the
@@ -693,10 +691,8 @@ MonoJit::create ()
 
 	/*
 	 * JITLink, not the RTDyldObjectLinkingLayer LLJIT still defaults to on
-	 * ELF, with memory placed low so mini's rel32 call patching can always
-	 * reach what gets published here (nearmem.hpp). LLJIT's generic platform
-	 * setup attaches its eh-frame registration plugin to this layer on its
-	 * own.
+	 * ELF. LLJIT's generic platform setup attaches its eh-frame registration
+	 * plugin to this layer on its own.
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {

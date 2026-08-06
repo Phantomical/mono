@@ -107,19 +107,9 @@ private:
 	 */
 	Error add_slab ()
 	{
-		/*
-		 * Low, like every other piece of published code (nearmem.hpp): a
-		 * stub is exactly what mini's rel32 call patching targets, so it
-		 * has to stay within reach of mini's own allocations.
-		 */
-		int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-
-#ifdef MAP_32BIT
-		flags |= MAP_32BIT;
-#endif
-
 		void *base = mmap (nullptr, slot_region_size + stub_region_size,
-		                   PROT_READ | PROT_WRITE, flags, -1, 0);
+		                   PROT_READ | PROT_WRITE,
+		                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 		if (base == MAP_FAILED)
 			return make_error<StringError> ("could not map a stub slab",

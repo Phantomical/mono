@@ -1,13 +1,11 @@
 /**
  * \file
- * \brief Memory placement that keeps JIT'd code within reach of mini's.
+ * \brief Where JIT'd code is mapped.
  *
- * A restatement of ORC's InProcessMemoryMapper whose reservations come from
- * mmap with MAP_32BIT: mini patches direct calls as rel32, so the code
- * published here has to stay within +-2GB of mini's own low allocations.
- * The rest - applying segment protections, running the allocation actions the
- * plugins schedule (eh-frame registration among them) - matches the original,
- * because JITLink's contract is exacting about it.
+ * A restatement of ORC's InProcessMemoryMapper. Applying segment protections
+ * and running the allocation actions the plugins schedule (eh-frame
+ * registration among them) match the original, because JITLink's contract is
+ * exacting about it.
  */
 
 #include "nearmem.hpp"
@@ -44,18 +42,13 @@ NearMemoryMapper::~NearMemoryMapper ()
 void
 NearMemoryMapper::reserve (size_t bytes, OnReservedFunction on_reserved)
 {
-	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-
-#ifdef MAP_32BIT
-	flags |= MAP_32BIT;
-#endif
-
-	void *base = mmap (nullptr, bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
+	void *base = mmap (nullptr, bytes, PROT_READ | PROT_WRITE,
+	                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 	if (base == MAP_FAILED)
 		return on_reserved (createStringError (
 			inconvertibleErrorCode (),
-			"cannot reserve %zu bytes of low memory for JIT code", bytes));
+			"cannot reserve %zu bytes for JIT code", bytes));
 
 	{
 		std::lock_guard<std::mutex> lock (mutex_);

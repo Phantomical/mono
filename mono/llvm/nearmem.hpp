@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Memory placement that keeps JIT'd code within reach of mini's.
+ * \brief Where JIT'd code is mapped.
  */
 
 #ifndef MONO_LLVM_NEARMEM_HPP
@@ -12,17 +12,13 @@
 
 namespace mono {
 
-/// A MemoryMapper that reserves out of the MAP_32BIT window.
+/// A MemoryMapper that reserves wherever mmap cares to put it.
 ///
-/// mini's code manager allocates there too and patches direct calls as rel32
-/// with no thunk fallback, so anything it may be patched to call - a published
-/// stub, an allocator body - has to sit within +-2GB of it. Everything in the
-/// window reaches everything else in it. Behavior is otherwise
-/// InProcessMemoryMapper's.
-///
-/// Do not read that +-2GB reach as the size of the pool: Linux hands MAP_32BIT
-/// out of [0x40000000, 0x80000000), so there is one gigabyte to go around for
-/// the whole process and nothing published here can grow past it.
+/// Placement is unconstrained because nothing patches a bare rel32 at us:
+/// mini's callsite patcher declines outright for jinfos flagged from_llvm,
+/// which is every jinfo this backend registers. Our own outbound calls leave
+/// their object by symbol, so JITLink routes any that a direct branch cannot
+/// reach through a jump stub. Behavior is otherwise InProcessMemoryMapper's.
 class NearMemoryMapper final : public llvm::orc::MemoryMapper {
 public:
 	static llvm::Expected<std::unique_ptr<NearMemoryMapper>> Create ();
