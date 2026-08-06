@@ -7,6 +7,9 @@
 #include <glib.h>
 #include <mono/utils/mono-compiler.h>
 
+/* Everything here is defined in C; see the note on G_BEGIN_DECLS in mini.h. */
+G_BEGIN_DECLS
+
 typedef enum {
 	MONO_TRACEOP_ALL,
 	MONO_TRACEOP_PROGRAM,
@@ -39,5 +42,7 @@ MONO_PROFILER_API gboolean mono_callspec_eval_exception	(MonoClass *klass,
 MONO_PROFILER_API gboolean mono_callspec_eval		(MonoMethod *method,
 							 const MonoCallSpec *spec);
 void			   mono_callspec_set_assembly	(MonoAssembly *assembly);
+
+G_END_DECLS
 
 #endif /* __MONO_CALLSPEC_H__ */

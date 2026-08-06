@@ -13,6 +13,9 @@
 #include <mono/utils/mono-membar.h>
 #include <mono/utils/mono-publib.h>
 
+/* Everything here is defined in C; see the note on G_BEGIN_DECLS in mini.h. */
+G_BEGIN_DECLS
+
 #define HAZARD_POINTER_COUNT 3
 
 typedef struct {
@@ -56,4 +59,7 @@ void mono_hazard_pointer_install_free_queue_size_callback (MonoHazardFreeQueueSi
 
 void mono_thread_smr_init (void);
 void mono_thread_smr_cleanup (void);
+
+G_END_DECLS
+
 #endif /*__MONO_HAZARD_POINTER_H__*/

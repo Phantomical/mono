@@ -383,6 +383,9 @@ void sgen_init_internal_allocator (void);
 #include "mono/sgen/sgen-descriptor.h"
 #include "mono/sgen/sgen-gray.h"
 
+/* The collector is all C; see the note on G_BEGIN_DECLS in mini.h. */
+G_BEGIN_DECLS
+
 /* the runtime can register areas of memory as roots: we keep two lists of roots,
  * a pinned root set for conservatively scanned roots and a normal one for
  * precisely scanned roots (currently implemented as a single list).
@@ -1221,6 +1224,8 @@ sgen_dummy_use (gpointer v)
 #error "Implement sgen_dummy_use for your compiler"
 #endif
 }
+
+G_END_DECLS
 
 #endif /* HAVE_SGEN_GC */
 

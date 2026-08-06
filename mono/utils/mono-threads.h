@@ -122,6 +122,12 @@ and reduce the number of casts drastically.
 #define THREAD_INFO_TYPE MonoThreadInfo
 #endif
 
+/*
+ * Everything from here down is defined in C; see the note on G_BEGIN_DECLS in
+ * mini.h. The one C++ overload below has to sit outside the block.
+ */
+G_BEGIN_DECLS
+
 /* Mono Threads internal configuration knows*/
 
 /* If this is defined, use the signals backed on Mach. Debug only as signals can't be made usable on OSX. */
@@ -669,6 +675,8 @@ mono_native_thread_id_equals (MonoNativeThreadId id1, MonoNativeThreadId id2);
 MONO_API gboolean
 mono_native_thread_create (MonoNativeThreadId *tid, gpointer func, gpointer arg);
 
+G_END_DECLS
+
 #ifdef __cplusplus
 template <typename T>
 inline gboolean
@@ -677,6 +685,8 @@ mono_native_thread_create (MonoNativeThreadId *tid, T func, gpointer arg)
 	return  mono_native_thread_create (tid, (gpointer)func, arg);
 }
 #endif
+
+G_BEGIN_DECLS
 
 MONO_API void
 mono_native_thread_set_name (MonoNativeThreadId tid, const char *name);
@@ -905,5 +915,7 @@ typedef struct _MonoUnityCallstackOptions {
 
 MONO_API int
 mono_unity_managed_callstack (unsigned char* buffer, int bufferSize, const MonoUnityCallstackOptions *opts);
+
+G_END_DECLS
 
 #endif /* __MONO_THREADS_H__ */

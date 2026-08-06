@@ -25,6 +25,9 @@
 #include <mono/utils/checked-build.h>
 #include <mono/metadata/class-internals.h>
 
+/* Everything here is defined in C; see the note on G_BEGIN_DECLS in mini.h. */
+G_BEGIN_DECLS
+
 /*
 Handle stack.
 
@@ -699,5 +702,7 @@ mono_handle_hash (MonoObjectHandle object);
 
 MonoGCHandle
 mono_gchandle_new_weakref_from_handle_track_resurrection (MonoObjectHandle handle);
+
+G_END_DECLS
 
 #endif /* __MONO_HANDLE_H__ */
