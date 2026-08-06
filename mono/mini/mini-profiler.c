@@ -9,7 +9,6 @@
 #include <mono/metadata/mono-debug.h>
 
 #include "interp/interp.h"
-#include "ir-emit.h"
 #include "mini.h"
 #include "trace.h"
 

@@ -50,7 +50,6 @@ typedef struct CallInfo CallInfo;
 typedef struct SeqPointInfo SeqPointInfo;
 
 #include "mini-arch.h"
-#include "regalloc.h"
 #include "mini-unwind.h"
 #include "jit.h"
 #include "tiered.h"
@@ -799,8 +798,6 @@ struct MonoCallInst {
 	MonoJitICallId jit_icall_id;
 	guint stack_usage;
 	guint stack_align_amount;
-	regmask_t used_iregs;
-	regmask_t used_fregs;
 	GSList *out_ireg_args;
 	GSList *out_freg_args;
 	GSList *outarg_vts;
@@ -1322,7 +1319,6 @@ typedef struct {
 	gint             stack_offset;
 	gint             max_ireg;
 	gint             cil_offset_to_bb_len;
-	MonoRegState    *rs;
 	MonoSpillInfo   *spill_info [16]; /* machine register spills */
 	gint             spill_count;
 	gint             spill_info_len [16];
@@ -1412,7 +1408,6 @@ typedef struct {
 	guint            prolog_end;
 	guint            epilog_begin;
 	guint            epilog_end;
-	regmask_t        used_int_regs;
 	guint32          opt;
 	guint32          flags;
 	guint32          comp_done;
@@ -2169,7 +2164,6 @@ GList    *mono_varlist_insert_sorted        (MonoCompile *cfg, GList *list, Mono
 GList    *mono_varlist_sort                 (MonoCompile *cfg, GList *list, int sort_type);
 void      mono_analyze_liveness             (MonoCompile *cfg);
 void      mono_analyze_liveness_gc          (MonoCompile *cfg);
-void      mono_linear_scan                  (MonoCompile *cfg, GList *vars, GList *regs, regmask_t *used_mask);
 void      mono_global_regalloc              (MonoCompile *cfg);
 void      mono_create_jump_table            (MonoCompile *cfg, MonoInst *label, MonoBasicBlock **bbs, int num_blocks);
 MonoCompile *mini_method_compile            (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFlags flags, int parts, int aot_method_index);
