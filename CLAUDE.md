@@ -216,6 +216,12 @@ Backend debugging env vars:
   it, so nothing else says it happened.
 - `MONO_LLVM_JIT_DUMP=<substr>` (`runtime.cpp`) — dump the IL and translated IR of
   methods whose full name contains the substring.
+- `MONO_LLVM_JIT_ASM=<substr>` (`compiler.cpp`) — print the assembly methods whose
+  full name contains the substring compile to, side-table sections included, which
+  is the half no offline `llc` run can reproduce. The `.mono_unwind` writer wants
+  labels only an object streamer plants, so the frame description appears as the
+  `.cfi_*` directives instead. Costs a second codegen over a clone of the module,
+  which leaves the code that actually gets published untouched.
 - `MONO_LLVM_JIT_VERIFY=<0|off|each|all>` (`jit.cpp`) — how much of the IR the verifier
   sees. On by default when LLVM was built with assertions (the configuration this
   project uses), and then it checks the translator's output, the module after each pass
