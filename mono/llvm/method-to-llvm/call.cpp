@@ -1,5 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
+#include "mini-runtime.h"
 #include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
@@ -16,9 +17,12 @@
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Type.h>
+
+#include <string_view>
 
 namespace mono {
 
@@ -281,6 +285,65 @@ MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiv
 	int32_t slot = static_cast<int32_t> (mono_method_get_imt_slot (target)) - MONO_IMT_SIZE;
 
 	return vtable_entry (builder, receiver, slot * TARGET_SIZEOF_VOID_P);
+}
+
+/// Whether a call to TARGET has to be dispatched out of the delegate it is made on
+/// rather than out of a vtable slot.
+///
+/// A delegate's Invoke has no body anyone compiles. The runtime picks an implementation
+/// per delegate object - an arch stub that shuffles the receiver and jumps through
+/// method_ptr for a single-target delegate, the compiled delegate-invoke wrapper for a
+/// multicast or open-instance one, which is the shape method_ptr cannot express - and
+/// leaves it in the object's invoke_impl field. Reading that field is what keeps
+/// mono_delegate_trampoline to one firing per delegate rather than one per call.
+///
+/// Under the interpreter the field is not that answer: it still holds the trampoline,
+/// and following it would compile the target and run it as native code behind the
+/// interpreter's back.
+static bool
+dispatches_through_invoke_impl (MonoMethod *target)
+{
+	if (mono_use_interpreter)
+		return false;
+
+	return m_class_get_parent (target->klass) == mono_defaults.multicastdelegate_class
+	       && std::string_view (target->name) == "Invoke";
+}
+
+/// The implementation the runtime settled on for RECEIVER, a delegate, or TARGET's
+/// vtable slot for as long as it has none.
+///
+/// That slot holds the same delegate trampoline that fills invoke_impl in, so a
+/// delegate whose field is still unset dispatches correctly through it - which is what
+/// makes the field safe to read without knowing whether anything has written it.
+llvm::Value *
+MethodLLVMEmitter::delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *receiver,
+                                           MonoMethod *target)
+{
+	llvm::Value *impl = builder.CreateAlignedLoad (
+		llvm::PointerType::get (context (), 0),
+		builder.CreateGEP (
+			builder.getInt8Ty (), receiver,
+			builder.getInt32 (MONO_STRUCT_OFFSET (MonoDelegate, invoke_impl))),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	return builder.CreateSelect (builder.CreateIsNull (impl),
+	                             virtual_callee (builder, receiver, target), impl);
+}
+
+/// Emit something that reads VALUE, so that it is still live here.
+///
+/// An empty asm with a register constraint is the cheapest way to say it: it emits
+/// nothing, and it leaves the value wherever the allocator can still reach it - a
+/// callee-saved register or a spill slot, both of which the collector scans.
+static void
+keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
+{
+	builder.CreateCall (
+		llvm::InlineAsm::get (llvm::FunctionType::get (builder.getVoidTy (),
+	                                                       { value->getType () }, false),
+	                              "", "r", /*hasSideEffects=*/true),
+		{ value });
 }
 
 /// The address the engine has to resolve for TARGET's own MonoMethod - the runtime's
@@ -1175,6 +1238,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	                          : (*declaration)->getFunctionType ();
 	bool keyed = false;
 	bool through_slot = false;
+	/* The delegate an Invoke is dispatched out of; null for every other call. */
+	llvm::Value *delegate = nullptr;
 
 	if (is_virtual) {
 		/*
@@ -1195,7 +1260,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		bool is_interface = mono_class_is_interface (callee_method->klass);
 		bool generic_virtual = sig->generic_param_count != 0;
 
-		if (overridable && (is_interface || generic_virtual)) {
+		if (dispatches_through_invoke_impl (callee_method)) {
+			delegate = (*args)[0];
+			callee = llvm::FunctionCallee (
+				slot_type,
+				delegate_invoke_callee (builder, delegate, callee_method));
+			through_slot = true;
+		} else if (overridable && (is_interface || generic_virtual)) {
 			/*
 			 * Several interface methods can hash to the same IMT slot, in which
 			 * case what the slot holds is a thunk that picks the real target by
@@ -1241,9 +1312,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			site->addParamAttr (0, llvm::Attribute::Nest);
 
 		/*
-		 * A dispatched call goes through whatever pointer the runtime put in
-		 * the slot, which is always a legacy entry - the slots are shared with
-		 * every caller that is not generated code.
+		 * A dispatched call goes through whatever pointer the runtime left for
+		 * it, in a vtable slot or in the delegate, and that is always a legacy
+		 * entry - those are shared with every caller that is not generated code.
 		 */
 		if (through_slot)
 			mark_legacy_entry_call (site, callee_method, sig);
@@ -1285,6 +1356,16 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	}
 
 	llvm::Value *result = emit_protected_call (builder, callee, *args, describe_site);
+
+	/*
+	 * invoke_impl usually holds an arch stub that puts delegate->target in the
+	 * receiver's place on its way through, so this activation stops rooting the
+	 * delegate the moment the call is entered. Were that the last reference to a
+	 * delegate over a dynamic method, the code running underneath could be
+	 * collected. Holding it past the call is what keeps it there.
+	 */
+	if (delegate != nullptr)
+		keep_alive (builder, delegate);
 
 	pop_stack (sig->param_count + sig->hasthis);
 

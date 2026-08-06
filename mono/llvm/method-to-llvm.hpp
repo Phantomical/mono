@@ -658,6 +658,8 @@ private:
 	                             MonoMethod *target);
 	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                               MonoMethod *target);
+	llvm::Value *delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *receiver,
+	                                     MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Expected<llvm::Constant *> code_address_symbol (MonoMethod *target);
 	MonoMethod *synchronized_target (MonoMethod *target);
