@@ -26,6 +26,7 @@
 #undef PIC
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/Support/Error.h>
 #include <llvm/IR/Module.h>
 
@@ -319,6 +320,13 @@ private:
 	/// seq_point_offsets as a graph, built once the body has been translated.
 	SeqPointGraph seq_point_graph;
 
+	/// The IL offsets the symbol file names as sequence points, and whether it
+	/// had anything to say about this method at all. When it did, these are the
+	/// only places a sequence point goes: a stop that is not the start of a
+	/// statement reports the same source line twice.
+	llvm::DenseSet<uint32_t> sym_seq_point_offsets;
+	bool sym_seq_points = false;
+
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
@@ -502,6 +510,8 @@ private:
 	void emit_profiler_frame_handover (MonoIrBuilder &builder, MonoMethod *target);
 
 	void emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il);
+	void collect_sym_seq_points ();
+	bool wants_seq_point_at (size_t offset) const;
 	void build_seq_point_graph ();
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);

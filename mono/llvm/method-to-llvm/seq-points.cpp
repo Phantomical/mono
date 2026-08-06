@@ -39,6 +39,7 @@
 
 #include "mini-runtime.h"
 
+#include "mono/metadata/debug-internals.h"
 #include "mono/metadata/domain-internals.h"
 
 #include <llvm/ADT/ArrayRef.h>
@@ -61,6 +62,72 @@ namespace mono {
 extern "C" void
 mono_llvm_seq_point_nop (void)
 {
+}
+
+/*
+ * Read the symbol file's idea of where this method's statements begin.
+ *
+ * A sequence point is meant to name a source construct, and the symbol file is
+ * what knows where those start; the evaluation stack being empty is only a
+ * stand-in for that, and a coarse one - `return 0;` compiles to a store, a
+ * branch and a load, with an empty stack in the middle of all three. Stopping
+ * there reports the same source line more than once, which a step over then has
+ * to be spent on.
+ *
+ * A method the symbol file mentions gets exactly the offsets it names, plus the
+ * two an await turns into. One it does not mention gets none at all, so long as
+ * its image carries symbols - that is what a compiler-generated accessor with no
+ * source of its own looks like. Everything else falls back on the stack.
+ */
+void
+MethodLLVMEmitter::collect_sym_seq_points ()
+{
+	if (!mini_get_debug_options ()->gen_sdb_seq_points)
+		return;
+
+	MonoDebugMethodInfo *minfo = mono_debug_lookup_method (method);
+
+	if (minfo == nullptr) {
+		sym_seq_points = method->wrapper_type == MONO_WRAPPER_NONE
+			&& !method->dynamic
+			&& mono_debug_image_has_debug_info (m_class_get_image (method->klass));
+		return;
+	}
+
+	MonoSymSeqPoint *points = nullptr;
+	int num_points = 0;
+
+	mono_debug_get_seq_points (minfo, NULL, NULL, NULL, &points, &num_points);
+	sym_seq_points = true;
+
+	for (int i = 0; i < num_points; ++i)
+		if ((size_t) points[i].il_offset < code_size)
+			sym_seq_point_offsets.insert ((uint32_t) points[i].il_offset);
+	g_free (points);
+
+	/*
+	 * The stepper matches a yield or resume offset against the sequence point it
+	 * stopped at to recognise an await, so those have to be stops even though no
+	 * statement starts there.
+	 */
+	if (MonoDebugMethodAsyncInfo *async =
+	            mono_debug_lookup_method_async_debug_info (method)) {
+		for (int i = 0; i < async->num_awaits; ++i) {
+			sym_seq_point_offsets.insert (async->yield_offsets[i]);
+			sym_seq_point_offsets.insert (async->resume_offsets[i]);
+		}
+		mono_debug_free_method_async_debug_info (async);
+	}
+}
+
+/// Whether a sequence point belongs at OFFSET.
+bool
+MethodLLVMEmitter::wants_seq_point_at (size_t offset) const
+{
+	if (sym_seq_points)
+		return sym_seq_point_offsets.contains ((uint32_t) offset);
+
+	return stack.empty () || is_handler_start (offset);
 }
 
 /// Emit the check that lets the soft debugger stop at ENCODED_IL, which is an

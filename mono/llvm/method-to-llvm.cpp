@@ -696,6 +696,7 @@ MethodLLVMEmitter::emit ()
 	clauses = cfg->header->clauses;
 	num_clauses = cfg->header->num_clauses;
 	clause_state.resize (num_clauses);
+	collect_sym_seq_points ();
 
 	/*
 	 * Every frame needs a description mono's unwinder can walk through,
@@ -1001,15 +1002,14 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 		}
 
 		/*
-		 * Only statement boundaries go in the line table, which is what the CLI
-		 * calls a sequence point: an IL offset where the evaluation stack is
-		 * empty, plus the first instruction of a handler, where it holds only
-		 * the exception. Recording every IL instruction instead would be finer
-		 * than the consumers can use - a stack trace resolves an IL offset to a
-		 * source line by finding the first sequence point at or after it, so an
-		 * offset in the middle of a statement names the NEXT statement's line.
+		 * Only statement boundaries are places the debugger may stop, and
+		 * wants_seq_point_at () is what decides which those are: the symbol
+		 * file's offsets when it has any for this method, and otherwise an
+		 * empty evaluation stack (plus a handler's first instruction, where it
+		 * holds only the exception) as a stand-in. Stopping anywhere finer than
+		 * a statement reports the same source line twice over.
 		 */
-		if (stack.empty () || is_handler_start (ip)) {
+		if (wants_seq_point_at (offset)) {
 			set_il_location (builder, offset);
 			emit_seq_point (builder, (uint32_t) offset);
 		}
