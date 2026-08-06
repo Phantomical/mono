@@ -289,6 +289,29 @@ ctest --test-dir build -j16 -L stress    # long-running
 The managed test assemblies are built by the regular build (`cmake --build
 build`), so run that first; `ctest` itself never builds anything.
 
+### Per-test timeouts
+
+A test that names no budget of its own gets `MONO_CTEST_TIMEOUT` seconds, 300 by
+default, and is killed and failed if it runs past that:
+
+```bash
+cmake -S . -B build -D MONO_CTEST_TIMEOUT=600
+```
+
+It is a default, not a cap. The suites that set their own budget keep it: the
+`mono/tests` corpus gives each program 300s, the stress and SGen suites 900s,
+and a class-library suite 1800s. Raising `MONO_CTEST_TIMEOUT` does not lengthen
+any of those, and lowering it does not shorten them.
+
+A handful of individual tests are slow enough that the suite budget is too tight
+for them, and those are named where the suite is declared rather than being left
+to fail. The runtime corpus takes `LONG <program>.exe`
+(`mono/tests/runtime-suites.cmake`) and the class-library side has
+`MONO_BCL_TESTS_LONG` (`cmake/MonoManagedTests.cmake`); each entry carries a note
+saying what makes that test slow. Add to those lists rather than raising the
+budget for a whole suite -- a suite-wide raise buys the one slow test its time by
+giving every other test in the suite permission to hang for as long.
+
 ### Class-library suites that depend on the machine
 
 `ctest -L bcl` will not come out clean on a bare machine, and the reasons are all

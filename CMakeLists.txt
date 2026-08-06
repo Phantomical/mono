@@ -25,6 +25,25 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(GNUInstallDirs)
+
+# What a test gets when it names no budget of its own.  CTest's own default is
+# 1500s, which is loose enough that a wedged test sits there for twenty-five
+# minutes before anyone hears about it.  The tests this actually reaches -- the
+# mini regression corpora, the unit tests, eglib, the gtest cases under
+# mono/llvm -- run in under 20s each even with the machine busy, so 300s says
+# "hung" long before it could say "slow".
+#
+# It is a default and not a ceiling: a suite that sets TIMEOUT keeps what it
+# asked for.  Clamping the suites down to this instead would fail the handful
+# whose work genuinely does not fit in five minutes, and a slow test reported
+# as a timeout reads as a hang -- a false regression costs more than the late
+# report it was meant to prevent.  DART_TESTING_TIMEOUT is how CTest spells the
+# default, and it has to be set before include(CTest) to take.
+set(MONO_CTEST_TIMEOUT 300 CACHE STRING
+    "Seconds a CTest test that names no budget of its own may run")
+set(DART_TESTING_TIMEOUT "${MONO_CTEST_TIMEOUT}" CACHE STRING
+    "Maximum time allowed before CTest will kill the test." FORCE)
+
 include(CTest)
 
 # googletest is a build prerequisite of the test suites, not something they

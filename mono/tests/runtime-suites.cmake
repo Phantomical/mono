@@ -222,14 +222,29 @@ list(REMOVE_ITEM _tailcall
 # ---------------------------------------------------------------------------
 # The suites
 # ---------------------------------------------------------------------------
-# dynamic-method-churn asks the JIT for 40000 compiles -- 20000 dynamic
-# methods, each with a runtime-invoke wrapper of its own, since a dynamic method
-# cannot share the cached one. That is minutes of LLVM at any per-method cost
-# this backend could plausibly reach, so it gets a budget that reflects what it
-# asks for rather than the corpus default.
+# The corpus default is 300s, which the three below have been measured getting
+# uncomfortably close to on a machine with its cores busy. Each is slow for a
+# reason its neighbours are not, so each gets the long budget rather than the
+# whole corpus being loosened to cover them.
+#
+#   dynamic-method-churn  asks the JIT for 40000 compiles -- 20000 dynamic
+#     methods, each with a runtime-invoke wrapper of its own, since a dynamic
+#     method cannot share the cached one. That is minutes of LLVM at any
+#     per-method cost this backend could plausibly reach; measured at 412s.
+#   appdomain-threadpool-unload  unloads 100 domains from a PLINQ query sized
+#     to ProcessorCount, each with a thread-pool item spinning in it. It wants
+#     the whole machine and gets a share of it, so its cost is set by what else
+#     is running: 140s, 227s and 266s across runs, and killed at the 300s mark
+#     on the boehm half of a full sweep.
+#   appdomain-unload  creates and unloads domains with deliberately slow
+#     finalizers and a 10s BeginInvoke still in flight, so most of its time is
+#     spent waiting rather than running -- 171s to 247s measured, which is not
+#     margin enough to leave at 300s.
 mono_runtime_suite(runtime TESTS ${_regular}
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
-                   LONG dynamic-method-churn.exe)
+                   LONG dynamic-method-churn.exe
+                        appdomain-unload.exe
+                        appdomain-threadpool-unload.exe)
 
 # CoreCLR's tailcall corpus, run like any other program: several of these
 # recurse deeply enough that a missed tail call is a stack overflow rather than
@@ -243,11 +258,22 @@ if(MONO_ENABLE_INTERPRETER)
   list(REMOVE_ITEM _interp ${MONO_TESTS_INTERP_DISABLED})
   # The same ~700 programs again on a much slower engine. Useful, but not on
   # every edit, so it gets a label of its own rather than sitting in `runtime`.
+  # Only appdomain-threadpool-unload needs the long budget here. The other two
+  # the JIT gives it to are cheap under the interpreter -- their cost is
+  # compilation, and there is none -- but this one's cost is domain unloads
+  # against a saturated machine, which the interpreter does not make faster.
   mono_runtime_suite(runtime-interp LABEL interp TESTS ${_interp}
-                     RUNTIME_ARGS "--interpreter" GC sgen)
+                     RUNTIME_ARGS "--interpreter" GC sgen
+                     LONG appdomain-threadpool-unload.exe)
 endif()
 
-mono_runtime_suite(runtime-stress LABEL stress TESTS ${_stress} TIMEOUT 900)
+# domain-stress runs the appdomain create/unload loop for a fixed iteration
+# count rather than a fixed duration, so its wall time is whatever the machine
+# gives it. A full run has been measured at 816s of the suite's 900s, and it has
+# been killed at the 900s mark on both collectors -- which reports as a plain
+# failure, not a timeout, because it is the driver that does the killing.
+mono_runtime_suite(runtime-stress LABEL stress TESTS ${_stress} TIMEOUT 900
+                   LONG domain-stress.exe LONG_TIMEOUT 1800)
 mono_runtime_suite(runtime-process-stress LABEL stress TESTS ${_stress_process} TIMEOUT 900)
 
 # --- the SGen matrix ---------------------------------------------------------

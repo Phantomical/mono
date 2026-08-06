@@ -24,6 +24,28 @@ set(MONO_TEST_XUNIT_NOTRAITS
 # suite, which this runtime does not implement.
 set(MONO_TEST_NUNIT_EXCLUDES NotWorking CAS)
 
+# What one suite gets to run for.  A suite is a whole assembly's worth of cases
+# driven by one console, so the budget is per-assembly and generous by the
+# standards of the rest of the tree.
+set(MONO_BCL_TEST_TIMEOUT 1800)
+set(MONO_BCL_TEST_LONG_TIMEOUT 3600)
+
+# The suites that do not fit MONO_BCL_TEST_TIMEOUT.  Both of these have been
+# seen finishing and been killed at the limit on different sweeps of the same
+# tree, which is the shape of a budget that is too tight rather than of a test
+# that hangs -- a suite that wedges never reports a time at all.
+set(MONO_BCL_TESTS_LONG
+  # The largest assembly in the tree by case count, and the one whose cost
+  # swings most with machine load: 868s, 1674s, 1722s and a 1792s pass measured
+  # across four runs, against the 1800s budget it then timed out on.
+  bcl-xunit-corlib
+  # 224s on an idle machine and 1541s on a busy one, and killed at 1800s on
+  # three separate sweeps.  Most of that spread is the XSLT and schema
+  # fixtures, which are compute-bound and get whatever share of the cores is
+  # left.
+  bcl-System.Xml
+)
+
 # Suites whose source list names a file that is not in the tree.  System's
 # xunit list wants
 # external/corefx-bugfix/src/System.IO.FileSystem.Watcher/tests/Args.FileSystemEventArgs.cs,
@@ -565,6 +587,11 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
     set(_label bcl-xunit)
   endif()
 
+  set(_timeout ${MONO_BCL_TEST_TIMEOUT})
+  if(_testname IN_LIST MONO_BCL_TESTS_LONG)
+    set(_timeout ${MONO_BCL_TEST_LONG_TIMEOUT})
+  endif()
+
   # LD_LIBRARY_PATH is for the profiler suite, which re-execs the runtime with
   # --profile=log and needs it to find the module this build produced.
   #
@@ -582,7 +609,7 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   add_test(NAME ${_testname} COMMAND ${_cmd} WORKING_DIRECTORY "${dir}")
   set_tests_properties(${_testname} PROPERTIES
     LABELS "${_label}"
-    TIMEOUT 1800
+    TIMEOUT ${_timeout}
     FIXTURES_REQUIRED fx_${_testname}
     ENVIRONMENT "MONO_PATH=${_mono_path};MONO_REGISTRY_PATH=$ENV{HOME}/.mono/registry;MONO_TESTS_IN_PROGRESS=yes;PATH=${CMAKE_BINARY_DIR}/runtime/_tmpinst/bin:$ENV{PATH};LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/mono/profiler:$ENV{LD_LIBRARY_PATH};${_env_extra}${_env_dir}")
 endfunction()
