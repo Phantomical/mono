@@ -258,10 +258,12 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	emit_protected_call (builder, *declaration, args);
 	pop_stack (count);
 
-	if (temp != nullptr)
-		push_stack (builder.CreateAlignedLoad (slot, temp, align), pushed);
-	else
+	if (temp == nullptr)
 		push_stack (created, pushed);
+	else if (held_in_memory (pushed))
+		push_stack (temp, pushed);
+	else
+		push_stack (builder.CreateAlignedLoad (slot, temp, align), pushed);
 
 	return llvm::Error::success ();
 }

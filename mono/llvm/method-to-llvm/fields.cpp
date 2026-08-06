@@ -362,10 +362,6 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 	}
 
 	MonoType *ftype = mono_field_get_type_internal (*field);
-	llvm::Expected<llvm::Type *> type = convert_type (ftype);
-	if (!type)
-		return type.takeError ();
-
 	StackValue object = get_stack (0);
 
 #ifndef DISABLE_REMOTING
@@ -389,43 +385,40 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 		llvm::Value *value = emit_protected_call (builder, *decl, *args);
 
 		pop_stack (4);
-		push_stack (widen_to_stack (builder, value, wsig->ret),
-		            stack_slot_type (wsig->ret));
-		return llvm::Error::success ();
+		return push_produced (builder, value, wsig->ret);
 	}
 #endif
 
 	/*
-	 * The object may also be an instance of a value type, sitting on the stack
-	 * as the value itself (III.4.10). It has no address until it is given one,
-	 * so it goes to a temporary and the field is read out of that. No null
-	 * check: a value is never null. Decided off the raw type, not the
-	 * underlying one: a magic nint rides the stack as its scalar, and reading
-	 * its field through the underlying native int would dereference the value.
+	 * The object may also be an instance of a value type (III.4.10), which is
+	 * not something to dereference: a value class is already the slot holding
+	 * it, and a SIMD one has to be given a slot before its field has an address
+	 * at all. No null check either way - a value is never null. Decided off the
+	 * raw type, not the underlying one: a magic nint rides the stack as its
+	 * scalar, and reading its field through the underlying native int would
+	 * dereference the value.
 	 */
 	if (!object.type->byref && MONO_TYPE_ISSTRUCT (object.type)
-	    && !object.value->getType ()->isPointerTy ()) {
-		llvm::Value *home = spill_to_temporary (builder, object.type);
+	    && (held_in_memory (object.type)
+	        || !object.value->getType ()->isPointerTy ())) {
+		llvm::Value *home = held_in_memory (object.type)
+		                            ? object.value
+		                            : spill_to_temporary (builder, object.type);
 		int32_t offset = static_cast<int32_t> (m_field_get_offset (*field))
 		                 - MONO_ABI_SIZEOF (MonoObject);
 		llvm::Value *address = builder.CreateGEP (builder.getInt8Ty (), home,
 		                                          builder.getInt32 (offset));
-		llvm::Value *value = emit_memory_load (builder, *type, address, ftype);
 
 		pop_stack (1);
-		push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
-		return llvm::Error::success ();
+		return push_from_location (builder, address, ftype);
 	}
 
 	llvm::Expected<llvm::Value *> address = field_address (builder, object, *field);
 	if (!address)
 		return address.takeError ();
 
-	llvm::Value *value = emit_memory_load (builder, *type, *address, ftype);
-
 	pop_stack (1);
-	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
-	return llvm::Error::success ();
+	return push_from_location (builder, *address, ftype);
 }
 
 /*
@@ -603,7 +596,7 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 		StackValue stored = get_stack (0);
 
 		pop_stack (2);
-		push_stack (stored.value, stored.type);
+		push_stack (stored.value, stored.type, stored.native);
 		return emit_stsfld (builder, token);
 	}
 
@@ -623,7 +616,7 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 
 		pop_stack (1);
 		push_field_wrapper_operands (builder, *field);
-		push_stack (stored.value, stored.type);
+		push_stack (stored.value, stored.type, stored.native);
 
 		llvm::Expected<std::vector<llvm::Value *>> args =
 			pop_call_arguments (builder, mono_method_signature_internal (wrapper));
@@ -691,9 +684,6 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 		return field.takeError ();
 
 	MonoType *ftype = mono_field_get_type_internal (*field);
-	llvm::Expected<llvm::Type *> type = convert_type (ftype);
-	if (!type)
-		return type.takeError ();
 
 	if (llvm::Error error = emit_class_init (builder, (*field)->parent))
 		return error;
@@ -702,10 +692,7 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	if (!address)
 		return address.takeError ();
 
-	llvm::Value *value = emit_memory_load (builder, *type, *address, ftype);
-
-	push_stack (widen_to_stack (builder, value, ftype), stack_slot_type (ftype));
-	return llvm::Error::success ();
+	return push_from_location (builder, *address, ftype);
 }
 
 /*

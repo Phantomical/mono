@@ -560,6 +560,10 @@ MethodLLVMEmitter::spill_slot (size_t depth, llvm::Type *type)
 
 /// Put the evaluation stack in memory, and say where a block entered from here will
 /// find it.
+///
+/// A value class is already in memory and what goes through the slot is the address
+/// of it. The slot it points at is a frame object of its own, so it outlives the
+/// branch without being copied again.
 std::vector<MethodLLVMEmitter::Slot>
 MethodLLVMEmitter::spill_stack (MonoIrBuilder &builder)
 {
@@ -568,7 +572,8 @@ MethodLLVMEmitter::spill_stack (MonoIrBuilder &builder)
 	for (size_t depth = 0; depth < stack.size (); ++depth) {
 		llvm::Value *value = stack[depth].value;
 
-		slots.push_back ({ spill_slot (depth, value->getType ()), stack[depth].type });
+		slots.push_back ({ spill_slot (depth, value->getType ()), stack[depth].type,
+		                   stack[depth].native });
 		builder.CreateStore (value, slots.back ().alloca);
 	}
 
@@ -603,6 +608,34 @@ MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
 		                   + llvm::Twine (block.entry.size ()));
 
 	for (size_t depth = 0; depth < slots.size (); ++depth) {
+		/*
+		 * A value class travels through the same pointer slot every other
+		 * address does, so two paths landing in one slot is no evidence that
+		 * they agree on what is behind it. That agreement is checked here
+		 * rather than falling out of the coercion below.
+		 */
+		if (held_in_memory (slots[depth].type)
+		    || held_in_memory (block.entry[depth].type)) {
+			llvm::Expected<llvm::Type *> source =
+				convert_type (slots[depth].type, slots[depth].native);
+			llvm::Expected<llvm::Type *> wanted =
+				convert_type (block.entry[depth].type, block.entry[depth].native);
+			bool same = source && wanted && *source == *wanted;
+
+			if (!source)
+				llvm::consumeError (source.takeError ());
+			if (!wanted)
+				llvm::consumeError (wanted.takeError ());
+			if (!same)
+				return invalid_il (llvm::Twine ("the evaluation stack holds a "
+				                                "different type at depth ")
+				                   + llvm::Twine (depth)
+				                   + " than the other paths into IL_"
+				                   + llvm::Twine::utohexstr (target)
+				                   + " leave there");
+			continue;
+		}
+
 		if (block.entry[depth].alloca == slots[depth].alloca)
 			continue;
 
@@ -617,7 +650,8 @@ MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
 		llvm::Value *current = builder.CreateLoad (
 			slots[depth].alloca->getAllocatedType (), slots[depth].alloca);
 		llvm::Expected<llvm::Value *> converted = coerce_to_location (
-			builder, { current, slots[depth].type }, block.entry[depth].type);
+			builder, { current, slots[depth].type, slots[depth].native },
+			block.entry[depth].type, block.entry[depth].native);
 
 		if (!converted
 		    || (*converted)->getType ()
@@ -643,7 +677,7 @@ MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
 {
 	for (const Slot &slot : block.entry)
 		push_stack (builder.CreateLoad (slot.alloca->getAllocatedType (), slot.alloca),
-		            slot.type);
+		            slot.type, slot.native);
 }
 
 llvm::Expected<llvm::Function *>
@@ -1252,7 +1286,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_ldtoken (builder, static_cast<uint32_t> (operand));
 
 	case MONO_CEE_DUP:
-		return emit_dup ();
+		return emit_dup (builder);
 	case MONO_CEE_POP:
 		return emit_pop ();
 

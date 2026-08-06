@@ -387,17 +387,15 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	if (!htype)
 		return htype.takeError ();
 
-	/*
-	 * A vtype reaches LLVM as opaque bytes, so the handle is wrapped the way any
-	 * struct is built: through memory, a pointer stored over the bytes it fills.
-	 */
+	/* The handle is one pointer wide, so building it is that pointer stored
+	 * over the slot it rides the stack in. */
 	llvm::Align align = type_alignment (wrapper);
 	MonoIrBuilder entry (entry_block, entry_block->begin ());
 	llvm::AllocaInst *temp = entry.CreateAlloca (*htype);
 
 	temp->setAlignment (align);
 	builder.CreateAlignedStore (address, temp, align);
-	push_stack (builder.CreateAlignedLoad (*htype, temp, align), wrapper);
+	push_stack (temp, wrapper);
 	return llvm::Error::success ();
 }
 

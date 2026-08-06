@@ -9,13 +9,17 @@
 
 namespace mono {
 
-/// The evaluation-stack value at DEPTH spilled to a fresh slot, so its fields can
-/// be addressed. A typed reference only ever travels as a value, and both of its
-/// readers start by putting it back in memory.
+/// The address of the value on top of the evaluation stack, so that its fields can
+/// be reached. A value class is already there; anything else is put in a slot of
+/// its own first.
 llvm::Value *
 MethodLLVMEmitter::spill_to_temporary (MonoIrBuilder &builder, MonoType *type)
 {
 	StackValue value = get_stack (0);
+
+	if (held_in_memory (value.type))
+		return value.value;
+
 	MonoIrBuilder entry (entry_block, entry_block->begin ());
 	llvm::AllocaInst *temp = entry.CreateAlloca (value.value->getType ());
 
@@ -88,8 +92,7 @@ MethodLLVMEmitter::emit_arglist (MonoIrBuilder &builder)
 
 	temp->setAlignment (type_alignment (handle));
 	builder.CreateAlignedStore (sig_cookie, temp, temp->getAlign ());
-	push_stack (builder.CreateAlignedLoad (*slot, temp, temp->getAlign ()), handle);
-	return llvm::Error::success ();
+	return push_from_location (builder, temp, handle);
 }
 
 /*
@@ -179,7 +182,7 @@ MethodLLVMEmitter::emit_mkrefany (MonoIrBuilder &builder, uint32_t token)
 	                            align);
 
 	pop_stack (1);
-	push_stack (builder.CreateAlignedLoad (*slot, temp, temp->getAlign ()), tref);
+	push_stack (temp, tref);
 	return llvm::Error::success ();
 }
 
@@ -299,15 +302,12 @@ MethodLLVMEmitter::emit_refanytype (MonoIrBuilder &builder)
 	if (!slot)
 		return slot.takeError ();
 
-	llvm::Value *value = builder.CreateAlignedLoad (
-		*slot,
+	llvm::Value *address =
 		builder.CreateGEP (builder.getInt8Ty (), temp,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoTypedRef, type))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoTypedRef, type)));
 
 	pop_stack (1);
-	push_stack (value, handle);
-	return llvm::Error::success ();
+	return push_from_location (builder, address, handle);
 }
 
 } // namespace mono

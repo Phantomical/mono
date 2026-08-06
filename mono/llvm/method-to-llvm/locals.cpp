@@ -76,14 +76,8 @@ MethodLLVMEmitter::emit_ldloc (MonoIrBuilder &builder, uint32_t index)
 		return invalid_local (index);
 
 	const Entry &local = locals[index];
-	llvm::Expected<llvm::Type *> type = convert_type (local.type);
-	if (!type)
-		return type.takeError ();
 
-	llvm::Value *value =
-		builder.CreateAlignedLoad (*type, local.alloca, type_alignment (local.type));
-	push_stack (widen_to_stack (builder, value, local.type), stack_slot_type (local.type));
-	return llvm::Error::success ();
+	return push_from_location (builder, local.alloca, local.type);
 }
 
 /*
@@ -169,8 +163,23 @@ MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
 
 	llvm::Type *from = value.value->getType ();
 
-	if (from == *type)
+	/*
+	 * A value class is already in memory, so storing one is a copy from where it
+	 * sits and there is nothing to convert - only the two layouts to agree on.
+	 * They can differ without the MonoTypes doing: a marshalled slot is a
+	 * different struct of a different size.
+	 */
+	if (held_in_memory (destination)) {
+		llvm::Expected<llvm::Type *> source = convert_type (value.type, value.native);
+
+		if (source && *source == *type)
+			return value.value;
+		if (!source)
+			llvm::consumeError (source.takeError ());
+	} else if (from == *type) {
 		return value.value;
+	}
+
 	if (from->isIntegerTy () && (*type)->isIntegerTy ()
 	    && (*type)->getIntegerBitWidth () < from->getIntegerBitWidth ())
 		return builder.CreateTrunc (value.value, *type);
@@ -268,7 +277,10 @@ MethodLLVMEmitter::emit_stloc (MonoIrBuilder &builder, uint32_t index)
 		return value.takeError ();
 
 	pop_stack (1);
-	builder.CreateAlignedStore (*value, local.alloca, type_alignment (local.type));
+	if (held_in_memory (local.type))
+		copy_vtype (builder, local.alloca, *value, local.type, /*native=*/false);
+	else
+		builder.CreateAlignedStore (*value, local.alloca, type_alignment (local.type));
 	return llvm::Error::success ();
 }
 

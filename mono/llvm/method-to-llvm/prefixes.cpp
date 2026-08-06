@@ -222,6 +222,9 @@ MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, l
 
 /// One store of VALUE to ADDRESS, through the write barrier when LOCATION holds a
 /// reference, honoring the volatile. and unaligned. prefixes.
+///
+/// VALUE is what coerce_to_location () produced, so for a value class it is the
+/// address of the bytes to copy rather than the bytes themselves.
 void
 MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
                                       llvm::Value *address, MonoType *location)
@@ -240,24 +243,24 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 		return;
 	}
 
-	/*
-	 * A struct with references inside cannot just be stored either: the collector
-	 * has to mark the cards its reference fields land on. Its barrier copies from
-	 * memory to memory, so the value takes a detour through a stack slot to have
-	 * an address at all. A struct without references keeps the plain store.
-	 */
-	MonoClass *klass = location->byref
-	                           ? nullptr
-	                           : mono_class_from_mono_type_internal (location);
+	if (held_in_memory (location)) {
+		MonoClass *klass =
+			mono_class_from_mono_type_internal (mini_get_underlying_type (location));
 
-	if (klass != nullptr && m_class_is_valuetype (klass) && m_class_has_references (klass)) {
-		MonoIrBuilder entry (entry_block, entry_block->begin ());
-		llvm::AllocaInst *temp = entry.CreateAlloca (value->getType ());
-
-		temp->setAlignment (type_alignment (location));
-		builder.CreateAlignedStore (value, temp, temp->getAlign ());
-		builder.CreateCall (value_copy_decl (), {address, temp, builder.getInt32 (1),
-		                                         class_symbol (klass, "mono_class_")});
+		/*
+		 * A struct with references inside cannot just be moved: the collector
+		 * has to mark the cards its reference fields land on, which only its
+		 * own copy routine knows how to do.
+		 */
+		if (m_class_has_references (klass))
+			builder.CreateCall (value_copy_decl (),
+			                    {address, value, builder.getInt32 (1),
+			                     class_symbol (klass, "mono_class_")});
+		else
+			builder.CreateMemCpy (address, access_alignment (location), value,
+			                      type_alignment (location),
+			                      vtype_size (location, /*native=*/false),
+			                      prefixes.volatile_);
 		return;
 	}
 
@@ -266,6 +269,98 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 
 	if (prefixes.volatile_)
 		store->setVolatile (true);
+}
+
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::vtype_slot (MonoType *t, bool native)
+{
+	llvm::Expected<llvm::Type *> type = convert_type (t, native);
+
+	if (!type)
+		return type.takeError ();
+
+	MonoIrBuilder entry (entry_block, entry_block->begin ());
+	llvm::AllocaInst *slot = entry.CreateAlloca (*type, nullptr, "vt");
+
+	slot->setAlignment (type_alignment (t, native));
+	return slot;
+}
+
+void
+MethodLLVMEmitter::copy_vtype (MonoIrBuilder &builder, llvm::Value *destination,
+                               llvm::Value *source, MonoType *t, bool native)
+{
+	llvm::Align align = type_alignment (t, native);
+
+	builder.CreateMemCpy (destination, align, source, align, vtype_size (t, native));
+}
+
+llvm::Error
+MethodLLVMEmitter::push_from_location (MonoIrBuilder &builder, llvm::Value *address,
+                                       MonoType *t, bool native)
+{
+	if (!held_in_memory (t)) {
+		llvm::Expected<llvm::Type *> type = convert_type (t, native);
+
+		if (!type)
+			return type.takeError ();
+
+		llvm::Value *value = emit_memory_load (builder, *type, address, t);
+
+		push_stack (widen_to_stack (builder, value, t), stack_slot_type (t), native);
+		return llvm::Error::success ();
+	}
+
+	llvm::Expected<llvm::Value *> slot = vtype_slot (t, native);
+
+	if (!slot)
+		return slot.takeError ();
+
+	llvm::Align source = prefixes.unaligned != 0 ? llvm::Align (prefixes.unaligned)
+	                                             : type_alignment (t, native);
+
+	builder.CreateMemCpy (*slot, type_alignment (t, native), address, source,
+	                      vtype_size (t, native), prefixes.volatile_);
+	/* A volatile read has acquire semantics (I.12.6.7). */
+	if (prefixes.volatile_)
+		builder.CreateFence (llvm::AtomicOrdering::Acquire);
+
+	push_stack (*slot, stack_slot_type (t), native);
+	return llvm::Error::success ();
+}
+
+llvm::Error
+MethodLLVMEmitter::push_produced (MonoIrBuilder &builder, llvm::Value *value, MonoType *t,
+                                  bool native)
+{
+	if (!held_in_memory (t)) {
+		push_stack (widen_to_stack (builder, value, t), stack_slot_type (t), native);
+		return llvm::Error::success ();
+	}
+
+	llvm::Expected<llvm::Value *> slot = vtype_slot (t, native);
+
+	if (!slot)
+		return slot.takeError ();
+
+	builder.CreateAlignedStore (value, *slot, type_alignment (t, native));
+	push_stack (*slot, stack_slot_type (t), native);
+	return llvm::Error::success ();
+}
+
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::materialize (MonoIrBuilder &builder, llvm::Value *value, MonoType *t,
+                                bool native)
+{
+	if (!held_in_memory (t))
+		return value;
+
+	llvm::Expected<llvm::Type *> type = convert_type (t, native);
+
+	if (!type)
+		return type.takeError ();
+
+	return builder.CreateAlignedLoad (*type, value, type_alignment (t, native));
 }
 
 } // namespace mono

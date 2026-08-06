@@ -388,20 +388,13 @@ MethodLLVMEmitter::emit_ldelem (MonoIrBuilder &builder, MonoType *element)
 	if (stack.size () < 2)
 		return unbalanced_stack (2);
 
-	llvm::Expected<llvm::Type *> type = convert_type (element);
-	if (!type)
-		return type.takeError ();
-
 	llvm::Expected<llvm::Value *> address =
 		element_address (builder, get_stack (1), get_stack (0), element);
 	if (!address)
 		return address.takeError ();
 
-	llvm::Value *value = builder.CreateAlignedLoad (*type, *address, type_alignment (element));
-
 	pop_stack (2);
-	push_stack (widen_to_stack (builder, value, element), stack_slot_type (element));
-	return llvm::Error::success ();
+	return push_from_location (builder, *address, element);
 }
 
 /*
@@ -635,16 +628,7 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 	if (is_set) {
 		emit_memory_store (builder, value, *address, element);
 	} else if (what == "Get") {
-		llvm::Expected<llvm::Type *> type = convert_type (element);
-
-		if (!type)
-			return type.takeError ();
-
-		llvm::Value *loaded =
-			builder.CreateAlignedLoad (*type, *address, type_alignment (element));
-
-		push_stack (widen_to_stack (builder, loaded, element),
-		            stack_slot_type (element));
+		return push_from_location (builder, *address, element);
 	} else {
 		push_stack (*address, m_class_get_this_arg (eclass));
 	}
@@ -702,6 +686,18 @@ MethodLLVMEmitter::emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature 
 
 	StackValue value = get_stack (0);
 	llvm::Value *raw = value.value;
+
+	/*
+	 * The two are the same bytes by the compatibility check above, so a result
+	 * that lives in memory is those bytes copied into a slot of its own type.
+	 */
+	if (held_in_memory (sig->ret)) {
+		llvm::Value *home = spill_to_temporary (builder, value.type);
+
+		pop_stack (1);
+		return push_from_location (builder, home, sig->ret);
+	}
+
 	llvm::Value *result;
 
 	if (raw->getType () == *type) {
@@ -715,8 +711,7 @@ MethodLLVMEmitter::emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature 
 	}
 
 	pop_stack (1);
-	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
-	return llvm::Error::success ();
+	return push_produced (builder, result, sig->ret);
 }
 
 /*

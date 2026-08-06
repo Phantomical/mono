@@ -396,6 +396,50 @@ MethodLLVMEmitter::convert_type (MonoType *t, bool native)
 }
 
 /*
+ * Whether a value of T rides the evaluation stack as the address of a frame slot
+ * holding it, rather than as an SSA value.
+ *
+ * Exactly the types convert_type () gives a struct: a value class laid out field
+ * by field. LLVM does not keep a struct whole - SROA and InstCombine take every
+ * load of one apart into its fields and put it back together at every store - so
+ * a front end that moves them around as SSA values spends the pipeline's time
+ * undoing its own work. A memcpy between slots says the same thing in one
+ * instruction, and mem2reg still promotes the slot where the fields turn out to
+ * be all that is wanted.
+ *
+ * A SIMD class and an enum are not here. convert_type gives them a vector and a
+ * scalar, which genuinely do belong in a register.
+ */
+bool
+MethodLLVMEmitter::held_in_memory (MonoType *t)
+{
+	/*
+	 * Asked of convert_type rather than worked out again from the metadata: the
+	 * two have to agree about SIMD and enums, and the only way to be sure of
+	 * that is to let it answer. A type it cannot convert has no representation
+	 * to pick either - whichever caller needed one is about to fail on it.
+	 */
+	llvm::Expected<llvm::Type *> type = convert_type (t);
+
+	if (!type) {
+		llvm::consumeError (type.takeError ());
+		return false;
+	}
+
+	return (*type)->isStructTy ();
+}
+
+unsigned
+MethodLLVMEmitter::vtype_size (MonoType *t, bool native)
+{
+	MonoClass *klass = mono_class_from_mono_type_internal (mini_get_underlying_type (t));
+
+	if (native && !marshals_unchanged (klass))
+		return mono_class_native_size (klass, NULL);
+	return mono_class_value_size (klass, NULL);
+}
+
+/*
  * A value type converts to a packed struct spelling out its real layout - see
  * set_packed_body (), which is where that shape is described.
  *

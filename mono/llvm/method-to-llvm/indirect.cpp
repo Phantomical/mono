@@ -117,19 +117,12 @@ MethodLLVMEmitter::emit_ldind (MonoIrBuilder &builder, MonoType *element)
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
-	llvm::Expected<llvm::Type *> type = convert_type (element);
-	if (!type)
-		return type.takeError ();
-
 	llvm::Expected<llvm::Value *> address = indirect_address (builder, get_stack (0));
 	if (!address)
 		return address.takeError ();
 
-	llvm::Value *value = emit_memory_load (builder, *type, *address, element);
-
 	pop_stack (1);
-	push_stack (widen_to_stack (builder, value, element), stack_slot_type (element));
-	return llvm::Error::success ();
+	return push_from_location (builder, *address, element);
 }
 
 /*

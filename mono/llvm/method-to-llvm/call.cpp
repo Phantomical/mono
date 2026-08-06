@@ -170,7 +170,14 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 		value.value = builder.CreateSExt (value.value,
 		                                  builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
 
-	return coerce_to_location (builder, value, destination, native);
+	llvm::Expected<llvm::Value *> coerced =
+		coerce_to_location (builder, value, destination, native);
+
+	if (!coerced)
+		return coerced.takeError ();
+
+	/* Every signature this backend converts takes a value class by value. */
+	return materialize (builder, *coerced, destination, native);
 }
 
 /// VALUE as the receiver of an instance call.
@@ -794,6 +801,17 @@ MethodLLVMEmitter::emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignat
 		return llvm::Error::success ();
 
 	MonoType *slot = stack_slot_type (sig->ret);
+
+	if (held_in_memory (slot)) {
+		llvm::Expected<llvm::Value *> home = vtype_slot (slot);
+
+		if (!home)
+			return home.takeError ();
+
+		push_stack (*home, slot);
+		return llvm::Error::success ();
+	}
+
 	llvm::Expected<llvm::Type *> type = convert_type (slot);
 
 	if (!type)
@@ -1013,13 +1031,19 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			return unbalanced_stack (depth + 1);
 
 		MonoType *vtype = m_class_get_byval_arg (constrained);
-		llvm::Expected<llvm::Type *> slot = convert_type (vtype);
-		if (!slot)
-			return slot.takeError ();
-
 		StackValue &receiver = stack[stack.size () - 1 - depth];
-		llvm::Value *value = builder.CreateAlignedLoad (*slot, receiver.value,
-		                                                type_alignment (vtype));
+		/* The receiver is the managed pointer the prefix promises, which is
+		 * already what a value class is boxed from. */
+		llvm::Value *value = receiver.value;
+
+		if (!held_in_memory (vtype)) {
+			llvm::Expected<llvm::Type *> slot = convert_type (vtype);
+			if (!slot)
+				return slot.takeError ();
+
+			value = builder.CreateAlignedLoad (*slot, receiver.value,
+			                                   type_alignment (vtype));
+		}
 
 		/* Boxing a nullable yields a boxed T, or null - the box opcode's rule
 		 * holds here too, and it is what makes the receiver's type observable
@@ -1266,8 +1290,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
 
-	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
-	return llvm::Error::success ();
+	return push_produced (builder, result, sig->ret);
 }
 
 } // namespace mono

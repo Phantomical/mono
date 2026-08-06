@@ -61,15 +61,8 @@ MethodLLVMEmitter::emit_ldarg (MonoIrBuilder &builder, uint32_t index)
 		return invalid_argument (index);
 
 	const Entry &argument = args[index];
-	llvm::Expected<llvm::Type *> type = convert_type (argument.type, argument.native);
-	if (!type)
-		return type.takeError ();
 
-	llvm::Value *value = builder.CreateAlignedLoad (
-		*type, argument.alloca, type_alignment (argument.type, argument.native));
-	push_stack (widen_to_stack (builder, value, argument.type),
-	            stack_slot_type (argument.type));
-	return llvm::Error::success ();
+	return push_from_location (builder, argument.alloca, argument.type, argument.native);
 }
 
 /*
@@ -181,8 +174,11 @@ MethodLLVMEmitter::emit_starg (MonoIrBuilder &builder, uint32_t index)
 		return value.takeError ();
 
 	pop_stack (1);
-	builder.CreateAlignedStore (*value, argument.alloca,
-	                            type_alignment (argument.type, argument.native));
+	if (held_in_memory (argument.type))
+		copy_vtype (builder, argument.alloca, *value, argument.type, argument.native);
+	else
+		builder.CreateAlignedStore (*value, argument.alloca,
+		                            type_alignment (argument.type, argument.native));
 	return llvm::Error::success ();
 }
 

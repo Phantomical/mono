@@ -25,14 +25,30 @@ namespace mono {
  *   No additional requirements.
  */
 llvm::Error
-MethodLLVMEmitter::emit_dup ()
+MethodLLVMEmitter::emit_dup (MonoIrBuilder &builder)
 {
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
 	StackValue value = get_stack (0);
 
-	push_stack (value.value, value.type);
+	/*
+	 * The two copies have to be independent: whatever the program does with one
+	 * of them - hand its address to a callee, run a constructor over it - the
+	 * other still holds what was duplicated.
+	 */
+	if (held_in_memory (value.type)) {
+		llvm::Expected<llvm::Value *> slot = vtype_slot (value.type, value.native);
+
+		if (!slot)
+			return slot.takeError ();
+
+		copy_vtype (builder, *slot, value.value, value.type, value.native);
+		push_stack (*slot, value.type, value.native);
+		return llvm::Error::success ();
+	}
+
+	push_stack (value.value, value.type, value.native);
 	return llvm::Error::success ();
 }
 

@@ -218,8 +218,7 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
 
-	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
-	return llvm::Error::success ();
+	return push_produced (builder, result, sig->ret);
 }
 
 /*
@@ -374,9 +373,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 			return llvm::Error::success ();
 
-		push_stack (widen_to_stack (builder, result, wsig->ret),
-		            stack_slot_type (wsig->ret));
-		return llvm::Error::success ();
+		return push_produced (builder, result, wsig->ret);
 	}
 
 	llvm::Expected<llvm::FunctionType *> type = convert_method_signature (sig, sig->pinvoke);
@@ -411,8 +408,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
 
-	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
-	return llvm::Error::success ();
+	return push_produced (builder, result, sig->ret, sig->pinvoke != 0);
 }
 
 /*

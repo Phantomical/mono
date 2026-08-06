@@ -183,9 +183,7 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 	if (info->sig->ret->type == MONO_TYPE_VOID && !info->sig->ret->byref)
 		return llvm::Error::success ();
 
-	push_stack (widen_to_stack (builder, result, info->sig->ret),
-	            stack_slot_type (info->sig->ret));
-	return llvm::Error::success ();
+	return push_produced (builder, result, info->sig->ret);
 }
 
 /*
@@ -358,11 +356,6 @@ MethodLLVMEmitter::emit_mono_ldnativeobj (MonoIrBuilder &builder, uint32_t token
 		return unbalanced_stack (1);
 
 	MonoType *type = m_class_get_byval_arg (klass);
-	llvm::Expected<llvm::Type *> native = convert_type (type, /*native=*/true);
-
-	if (!native)
-		return native.takeError ();
-
 	llvm::Value *address = get_stack (0).value;
 
 	/* The buffer is a localloc the wrapper stored into a native int local. */
@@ -370,12 +363,8 @@ MethodLLVMEmitter::emit_mono_ldnativeobj (MonoIrBuilder &builder, uint32_t token
 		address = builder.CreateIntToPtr (address,
 		                                  llvm::PointerType::get (context (), 0));
 
-	llvm::Value *value = builder.CreateAlignedLoad (
-		*native, address, type_alignment (type, /*native=*/true));
-
 	pop_stack (1);
-	push_stack (value, type);
-	return llvm::Error::success ();
+	return push_from_location (builder, address, type, /*native=*/true);
 }
 
 /*

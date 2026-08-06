@@ -179,8 +179,7 @@ MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klas
 	llvm::Value *result = emit_protected_call (builder, *declaration, *args);
 
 	pop_stack (1);
-	push_stack (widen_to_stack (builder, result, sig->ret), stack_slot_type (sig->ret));
-	return llvm::Error::success ();
+	return push_produced (builder, result, sig->ret);
 }
 
 /// Box VALUE, a Nullable<T>, into null or a boxed T.
@@ -309,8 +308,8 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// Allocate KLASS's box and copy VALUE, already in its location type, into the
-/// payload, returning the new object.
+/// Allocate KLASS's box and copy VALUE - what coerce_to_location () produced for a
+/// location of TYPE - into the payload, returning the new object.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
                               llvm::Value *value)
@@ -340,17 +339,13 @@ MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType
 	                                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 
 	/* The same copy stobj makes: through the collector if references are inside. */
-	if (m_class_has_references (klass)) {
-		MonoIrBuilder entry (entry_block, entry_block->begin ());
-		llvm::AllocaInst *temp = entry.CreateAlloca (value->getType ());
-
-		temp->setAlignment (type_alignment (type));
-		builder.CreateAlignedStore (value, temp, temp->getAlign ());
-		builder.CreateCall (value_copy_decl (), {payload, temp, builder.getInt32 (1),
-		                                         class_symbol (klass, "mono_class_")});
-	} else {
+	if (!held_in_memory (type))
 		builder.CreateAlignedStore (value, payload, type_alignment (type));
-	}
+	else if (m_class_has_references (klass))
+		builder.CreateCall (value_copy_decl (), {payload, value, builder.getInt32 (1),
+		                                         class_symbol (klass, "mono_class_")});
+	else
+		copy_vtype (builder, payload, value, type, /*native=*/false);
 
 	return obj;
 }
@@ -429,14 +424,10 @@ MethodLLVMEmitter::emit_unbox (MonoIrBuilder &builder, uint32_t token)
 		                                              nullable_unbox_helper (klass)))
 			return error;
 
-		StackValue value = get_stack (0);
-		MonoIrBuilder entry (entry_block, entry_block->begin ());
-		llvm::AllocaInst *temp = entry.CreateAlloca (value.value->getType ());
+		llvm::Value *home = spill_to_temporary (builder, *type);
 
-		temp->setAlignment (type_alignment (*type));
-		builder.CreateAlignedStore (value.value, temp, temp->getAlign ());
 		pop_stack (1);
-		push_stack (temp, m_class_get_this_arg (klass));
+		push_stack (home, m_class_get_this_arg (klass));
 		return llvm::Error::success ();
 	}
 

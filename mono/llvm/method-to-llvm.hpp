@@ -143,9 +143,15 @@ private:
 	/// i64 covers both int64 and native int, and a pointer covers both a managed
 	/// pointer and an object reference, which are the distinctions the operand
 	/// tables in ECMA-335 III.1.5 turn on.
+	///
+	/// A value class is not here at all: `value` is the address of the frame slot
+	/// holding it - see held_in_memory (). `native` says that slot is in the
+	/// marshalled layout rather than the managed one, which the MonoType alone
+	/// cannot say.
 	struct StackValue {
 		llvm::Value *value;
 		MonoType *type;
+		bool native = false;
 	};
 
 	/// The two operands of a binary numeric operation and the type it leaves behind.
@@ -159,6 +165,7 @@ private:
 	struct Slot {
 		llvm::AllocaInst *alloca;
 		MonoType *type;
+		bool native = false;
 	};
 
 	/*
@@ -427,6 +434,33 @@ private:
 	                                    MonoType *t);
 	static MonoType *stack_slot_type (MonoType *t);
 
+	/// Whether a value of T rides the evaluation stack as the address of its
+	/// storage rather than as an SSA value.
+	bool held_in_memory (MonoType *t);
+
+	/// A slot of this frame to hold one value of T.
+	llvm::Expected<llvm::Value *> vtype_slot (MonoType *t, bool native = false);
+
+	/// How many bytes one value of T occupies.
+	unsigned vtype_size (MonoType *t, bool native);
+
+	/// Copy the value of type T at SOURCE into the frame slot DESTINATION.
+	void copy_vtype (MonoIrBuilder &builder, llvm::Value *destination,
+	                 llvm::Value *source, MonoType *t, bool native);
+
+	/// Push what a location of type T holds at ADDRESS, as the CLI tracks it.
+	llvm::Error push_from_location (MonoIrBuilder &builder, llvm::Value *address,
+	                                MonoType *t, bool native = false);
+
+	/// Push VALUE, which was produced in T's own LLVM type, as the CLI tracks it.
+	llvm::Error push_produced (MonoIrBuilder &builder, llvm::Value *value, MonoType *t,
+	                           bool native = false);
+
+	/// What coerce_to_location produced for a location of type T, as an SSA value
+	/// of that location's own LLVM type.
+	llvm::Expected<llvm::Value *> materialize (MonoIrBuilder &builder, llvm::Value *value,
+	                                           MonoType *t, bool native = false);
+
 	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
 	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
 
@@ -551,7 +585,7 @@ private:
 	llvm::Error emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits);
 	llvm::Error emit_ldnull (MonoIrBuilder &builder);
 
-	llvm::Error emit_dup ();
+	llvm::Error emit_dup (MonoIrBuilder &builder);
 	llvm::Error emit_pop ();
 
 	llvm::Value *emit_protected_call (
@@ -785,9 +819,9 @@ private:
 		return stack[stack.size () - 1 - index];
 	}
 
-	void push_stack (llvm::Value *value, MonoType *type)
+	void push_stack (llvm::Value *value, MonoType *type, bool native = false)
 	{
-		stack.push_back ({ value, type });
+		stack.push_back ({ value, type, native });
 	}
 
 	void pop_stack (size_t count)

@@ -89,13 +89,22 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 		emit_pop_lmf (builder);
 
 	if (llvm::Argument *hidden = hidden_return_pointer (function)) {
-		builder.CreateAlignedStore (*value, hidden,
-		                            type_alignment (ret, native_signature ()));
+		if (held_in_memory (ret))
+			copy_vtype (builder, hidden, *value, ret, native_signature ());
+		else
+			builder.CreateAlignedStore (*value, hidden,
+			                            type_alignment (ret, native_signature ()));
 		builder.CreateRetVoid ();
 		return llvm::Error::success ();
 	}
 
-	builder.CreateRet (*value);
+	llvm::Expected<llvm::Value *> returned =
+		materialize (builder, *value, ret, native_signature ());
+
+	if (!returned)
+		return returned.takeError ();
+
+	builder.CreateRet (*returned);
 	return llvm::Error::success ();
 }
 
