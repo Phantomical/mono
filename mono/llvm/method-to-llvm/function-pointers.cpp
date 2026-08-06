@@ -416,10 +416,8 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
  *
  * The delegate invoke wrapper calls the bound method through its published
  * method_ptr and stacks the delegate's extra_arg on the way, right under the
- * function pointer. The extra argument is llvmonly's way of passing a gshared
- * context; under the JIT any hidden context is materialized by the entry
- * itself (a static-rgctx trampoline), so the value is dropped and what
- * remains is an ordinary calli.
+ * function pointer. Only llvmonly ever fills extra_arg in, so here it is
+ * always null: drop it and what remains is an ordinary calli.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_calli_extra_arg (MonoIrBuilder &builder, uint32_t token)
