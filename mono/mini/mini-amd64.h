@@ -453,8 +453,26 @@ typedef struct {
 // can pass context to generics or interfaces?
 #define MONO_ARCH_HAVE_VOLATILE_NON_PARAM_REGISTER 1
 
-void 
+#ifdef MONO_XEN_OPT
+extern gboolean mono_amd64_optimize_for_xen;
+#else
+#define mono_amd64_optimize_for_xen 0
+#endif
+
+/* The single step trampoline */
+extern gpointer mono_amd64_ss_trampoline;
+
+/* The breakpoint trampoline */
+extern gpointer mono_amd64_bp_trampoline;
+
+void
 mono_amd64_patch (unsigned char* code, gpointer target);
+
+guint8*
+mono_amd64_emit_tls_get (guint8* code, int dreg, int tls_offset);
+
+guint8*
+mono_amd64_emit_tls_set (guint8 *code, int sreg, int tls_offset);
 
 void
 mono_amd64_throw_exception (guint64 dummy1, guint64 dummy2, guint64 dummy3, guint64 dummy4,
