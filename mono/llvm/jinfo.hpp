@@ -35,6 +35,10 @@ namespace mono {
 /// with it, so it is never the thread's current domain, which mid-unload managed
 /// code - AppDomain:InvokeInDomain most visibly - runs with set elsewhere.
 ///
+/// Where the runtime was started with debug info on, this also publishes the
+/// code's line table through mono_debug_add_method (), which is the only way a
+/// stack frame below the top one gets an IL offset.
+///
 /// Returns the registered record, which mono_jit_info_table_remove () takes to
 /// unregister it again.
 llvm::Expected<MonoJitInfo *>

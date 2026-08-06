@@ -1687,7 +1687,11 @@ get_this_addr (DbgEngineStackFrame *the_frame)
 	if (frame->de.ji->is_interp)
 		return mini_get_interp_callbacks ()->frame_get_this (frame->interp_frame);
 
+	/* Null whenever the method was compiled without variable location info. */
 	MonoDebugVarInfo *var = frame->jit->this_var;
+	if (!var)
+		return NULL;
+
 	if ((var->index & MONO_DEBUG_VAR_ADDRESS_MODE_FLAGS) != MONO_DEBUG_VAR_ADDRESS_MODE_REGOFFSET)
 		return NULL;
 

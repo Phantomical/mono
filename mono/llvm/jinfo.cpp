@@ -22,7 +22,9 @@
 #include "mini-unwind.h"
 #include "mini-runtime.h"
 
+#include "mono/metadata/debug-internals.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/metadata/mono-debug.h"
 
 #include "seq-point-marker.hpp"
 
@@ -416,6 +418,44 @@ publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
 	jinfo->seq_points = live;
 }
 
+/*
+ * Publish METHOD's code extent and line table where the mono_debug_* API can
+ * find them.
+ *
+ * That API is how an address is turned into an IL offset for anything that is
+ * not the frame a debugger stopped in: the soft debugger reads the sequence
+ * point table for its top frame and this for every frame below it, so without
+ * it a caller's line number is simply unknown.
+ *
+ * has_var_info stays off. Where a local or an argument lives is the register
+ * allocator's decision and nothing hands that decision back to us, so there is
+ * nothing honest to put in a MonoDebugVarInfo; the debugger answers
+ * ERR_ABSENT_INFORMATION for a frame without one, which is the truth.
+ */
+static void
+publish_debug_info (MonoDomain *domain, MonoMethod *method,
+                    const CompiledMethod &compiled)
+{
+	if (!mono_debug_enabled () || compiled.il_lines.empty ())
+		return;
+
+	std::vector<MonoDebugLineNumberEntry> lines;
+
+	lines.reserve (compiled.il_lines.size ());
+	for (const IlLineRow &row : compiled.il_lines)
+		lines.push_back ({ row.il_offset, row.native_offset });
+
+	MonoDebugMethodJitInfo jit;
+
+	memset (&jit, 0, sizeof (jit));
+	jit.code_start = (const mono_byte *) compiled.code;
+	jit.code_size = (uint32_t) compiled.code_size;
+	jit.num_line_numbers = (uint32_t) lines.size ();
+	jit.line_numbers = lines.data ();
+
+	mono_debug_add_method (method, &jit, domain);
+}
+
 Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
@@ -566,6 +606,14 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	if (!compiled.seq_points.empty ())
 		publish_seq_points (domain, method, jinfo, compiled.seq_points,
 		                    seq_points);
+	/*
+	 * Only the method's own body. The legacy entry is registered against the
+	 * same MonoMethod and the table is keyed by method, so publishing a line
+	 * table for it would replace the body's - and it has no IL of its own to
+	 * put there anyway.
+	 */
+	if (header != nullptr)
+		publish_debug_info (domain, method, compiled);
 
 	mono_jit_info_table_add (domain, jinfo);
 	return jinfo;

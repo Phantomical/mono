@@ -353,7 +353,11 @@ mini_profiler_context_get_local (MonoProfilerCallContext *ctx, guint32 pos)
 
 	MonoDebugMethodJitInfo *info = mono_debug_find_method (ctx->method, mono_domain_get ());
 
-	if (!info)
+	/*
+	 * A method registered without variable location info has a line table and
+	 * nothing else, so where its locals live is not something anyone knows.
+	 */
+	if (!info || !info->has_var_info || pos >= info->num_locals)
 		return NULL;
 
 	return get_variable_buffer (info, &info->locals [pos], &ctx->context);
