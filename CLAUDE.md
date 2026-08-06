@@ -227,8 +227,10 @@ Backend debugging env vars:
   project uses), and then it checks the translator's output, the module after each pass
   written here, and the module codegen is handed; `each` (or `all`) extends that to
   every stock pass in the pipeline, `0`/`off` turns it off, and anything else means the
-  default. Costs roughly 6% of compile CPU on the default setting and 29% on `each`.
-  A failure names the method, the pass and prints the module, then aborts.
+  default. The default setting costs about **9%** of compile CPU — measured with
+  `MONO_LLVM_JIT_TIMING`, paired alternating runs over `test-async-20`; the 29%
+  figure for `each` is inherited and has not been re-measured. A failure names the
+  method, the pass and prints the module, then aborts.
 - `MONO_LLVM_JIT_TIMING=1` (`timing.cpp`) — at exit, print how long each phase of a
   compile took, summed over every method: metadata, translation, resolution, the IR
   pipeline, codegen setup and codegen proper, JITLink, and the pieces around them.
@@ -305,6 +307,12 @@ every call leaves it by symbol, so there is no callee body to inline and nothing
 specialize, and running them anyway cost a large fraction of compile time. So the JIT
 does not inline across methods, and beyond taking a site the IL already settled —
 non-virtual, `final`, or resolved by `constrained.` — it does not devirtualize either.
+
+What that costs is worth knowing before optimizing anything here: **87% of a compile is
+LLVM and 5.5% is the CIL→IR front end**, and 70% of the total is a per-method floor that
+does not vary with method size — a three-instruction property getter takes ~900 µs, of
+which the translator is ~36. Making the translator faster is not where the time is;
+`.claude/plans/compile-latency-b461931af78.md` has the split.
 
 If devirtualization does arrive, it is exact-only: a rewrite must prove the receiver's
 class exactly, so the failure mode is a site left alone rather than a site left wrong,

@@ -1,15 +1,49 @@
 # Where a compile's time goes, at b461931af78
 
+## The number that decides things
+
+```
+compile time (us) = 1120 + 7.36 * IL_bytes          measured at b461931af78
+```
+
+Fitted over all 4157 methods of a realistic run. **The constant term accounts
+for 70% of all compile time spent**, and half of all compiles are 25 IL bytes or
+less — a three-instruction property getter costs 900 µs, of which the CIL→IR
+translator is 36.
+
+The cost is per *invocation* of LLVM, not per instruction compiled. That is the
+whole decision: **the way out is amortizing the fixed cost across compiles, not
+making any one phase faster.** No reordering or trimming of the pipeline, the
+machine passes or the linker changes the shape of that line — only entering LLVM
+less often per method does.
+
+Supporting: **86.7% of a compile is LLVM, 5.5% is the front end.** Nothing on
+mono's side of the boundary is worth optimizing.
+
+## Provenance
+
 Everything below was measured on `b461931af78` plus the `MONO_LLVM_JIT_TIMING`
 patch that reports it, on this WSL2 box, with sibling agents putting the load
 average somewhere between 2 and 5. Absolute milliseconds drift with that load;
 the *shares* and the *paired* A/B deltas held across every run. Figures in this
 area go stale quickly — re-measure before trusting them against a later tip.
 
-The headline: **86% of a compile is LLVM, and 70% of the total is a fixed
-per-method cost that does not depend on how much code the method has.** The
-CIL→IR front end is 5.5%. Nothing on mono's side of the boundary is worth
-optimizing.
+Re-checked at **`0ac74d20011`** after `0c92330d36a` (a mutex and a readiness wait
+around stub definition) and `ac924089ab6` (a jit-info record with unwind info for
+both of a method's stubs) landed: every share is inside run-to-run noise —
+pipeline 30.4–31.0%, cgrun 34.8–35.0%, orc self 11.4–11.5%, cgsetup 6.4–6.7%,
+translate 5.6–6.0%. The extra stub records cost nothing measurable; `resolve`,
+which brackets them for a callee, moved 0.9% → 0.9–1.0%.
+
+One caveat on what the table brackets. `compile` covers translating a method and
+linking what came out. Publishing a method's *own* stubs is inside it only when
+that happened on the way to a caller's, under `resolve`; a method the runtime
+asks for by name has its stubs published before any phase opens, and that is
+unaccounted. It is worth ~1% either way. The readiness wait `0c92330d36a` added
+sits in `undefine_stubs ()`, which is only on the method- and domain-free path
+and so is inside no phase at all — but the mutex it pairs with is taken by the
+stub generator during a lookup, so a compile blocking on a concurrent undefine
+now shows up in `orc` self, which is where it belongs.
 
 ## The tool
 
@@ -51,14 +85,15 @@ is under 10%, and more than half of that is the translator.
 
 ## It is a floor, not a slope
 
-Fitting per-method compile time against IL size over all 4157 methods:
+The fit at the top of this document, and the same fit restricted to the 94% of
+methods that are under 250 IL bytes:
 
 ```
-us = 1120 + 7.36 * IL_bytes            (all)
-us = 916  + 11.69 * IL_bytes           (IL <= 250 bytes, 94% of methods)
+us = 1120 + 7.36 * IL_bytes            (all 4157)
+us = 916  + 11.69 * IL_bytes           (IL <= 250 bytes, 3927 methods)
 ```
 
-The constant term accounts for **70% of all compile time spent**. By bucket:
+By bucket:
 
 | IL bytes | methods | sum ms | % of time | median us | us per IL byte |
 | --- | --- | --- | --- | --- | --- |

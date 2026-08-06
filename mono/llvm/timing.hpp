@@ -14,11 +14,15 @@ namespace timing {
 /// The phases a compile is broken into. They nest, so each is reported with
 /// both the time spent inside it and the time spent inside it but not inside
 /// any phase below it - the second is the one to read.
+/// Publishing a method's own stubs is only inside `compile` when it happened on
+/// the way to a caller's - that is, under `resolve`. A method the runtime asks
+/// for by name has its stubs published before any of this starts, and that is
+/// not accounted here.
 enum class Phase {
-	compile,   ///< everything the runtime asked for, from stub to code.
+	compile,   ///< translating a method and linking what came out.
 	metadata,  ///< loading the method header and whatever it drags in.
 	translate, ///< CIL to LLVM IR.
-	resolve,   ///< laying out the classes a callee names, publishing its stub.
+	resolve,   ///< laying out the classes a callee names, publishing its stubs.
 	orc,       ///< handing the module to ORC and getting an address back.
 	dylib,     ///< making the JITDylib the module is compiled into.
 	pipeline,  ///< the tier-0 IR pass pipeline.
