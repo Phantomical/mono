@@ -12,6 +12,8 @@
 
 #include <gtest/gtest.h>
 
+#include "harness.hpp"
+
 /*
  * Only one case here, and there could not be a second: the sample runs a domain
  * to completion and tears it down, and a runtime does not start again after
@@ -19,5 +21,7 @@
  */
 TEST (EmbedInvoke, RunSampleAssembly)
 {
+	MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
+
 	EXPECT_EQ (0, test_mono_embed_invoke_main ());
 }

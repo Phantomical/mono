@@ -74,6 +74,7 @@ class Callspec : public ::testing::Test {
 public:
 	static void SetUpTestSuite ()
 	{
+		MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
 		mono::test::init_runtime ();
 
 		static bool loaded = false;

@@ -108,10 +108,11 @@ mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
 
 # One case each, and there could not be a second: the samples they are built out
 # of run a domain to completion and call mono_jit_cleanup, and nothing in the
-# process gets a runtime after that.
-mono_add_unit_test(test-mono-embed           SOURCES test-mono-embed.cpp      RUNTIME)
+# process gets a runtime after that.  They take harness.cpp for its class-library
+# check alone -- the runtime they use is the one the sample starts itself.
+mono_add_unit_test(test-mono-embed   SOURCES harness.cpp test-mono-embed.cpp   RUNTIME)
 mono_unit_test_cases(test-mono-embed test-mono-embed "*")
-mono_add_unit_test(test-embed-invoke         SOURCES test-embed-invoke.cpp    RUNTIME)
+mono_add_unit_test(test-embed-invoke SOURCES harness.cpp test-embed-invoke.cpp RUNTIME)
 mono_unit_test_cases(test-embed-invoke test-embed-invoke "*")
 
 # The managed side of the tests that need one.

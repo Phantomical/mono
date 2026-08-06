@@ -16,7 +16,11 @@ namespace {
 /* The Test suffix keeps the fixture from shadowing MonoString inside the bodies. */
 class MonoStringTest : public ::testing::Test {
 public:
-	static void SetUpTestSuite () { mono::test::init_runtime (); }
+	static void SetUpTestSuite ()
+	{
+		MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
+		mono::test::init_runtime ();
+	}
 };
 
 } // namespace
