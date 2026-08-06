@@ -109,8 +109,6 @@ int mono_break_at_bb_bb_num;
 gboolean mono_do_x86_stack_align = TRUE;
 
 /* Counters */
-static guint32 discarded_code;
-static gint64 discarded_jit_time;
 static guint32 jinfo_try_holes_size;
 
 #define mono_jit_lock() mono_os_mutex_lock (&jit_mutex)
@@ -4183,14 +4181,6 @@ mono_update_jit_stats (MonoCompile *cfg)
 }
 
 /*
- * mono_jit_compile_method_inner:
- *
- *   Main entry point for the JIT.
- */
-static gpointer
-mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error);
-
-/*
  * tiered_lookup_live_jinfo:
  *
  *   The MonoJitInfo METHOD is currently running out of in DOMAIN, or NULL.
@@ -4251,12 +4241,12 @@ tiered_lookup_live_jinfo (MonoMethod *method, MonoDomain *domain)
  * The two differ only on tiered_lookup_live_jinfo ()'s shared-method fallback,
  * and there naming METHOD would hand out a pair whose halves disagree. A
  * consumer is entitled to reject that: UnityPlayer's jit_done callback closes
- * its profiler span only when jinfo->d.method == method, precisely because
- * mono_jit_compile_method_inner_1 () raises several jit_done for one jit_begin
- * and only one of them describes its jinfo. Naming METHOD would leave those
- * declines unclosed for such a consumer - the same unmatched begin this
- * function exists to prevent, just relocated. For the ordinary lookup the two
- * are the same pointer, so this only changes the shared case.
+ * its profiler span only when jinfo->d.method == method, because a single
+ * jit_begin can be followed by several jit_done and only one of them describes
+ * its jinfo. Naming METHOD would leave those declines unclosed for such a
+ * consumer - the same unmatched begin this function exists to prevent, just
+ * relocated. For the ordinary lookup the two are the same pointer, so this only
+ * changes the shared case.
  */
 static void
 tiered_promote_declined (MonoMethod *method, MonoJitInfo *tier0_jinfo)
@@ -4339,11 +4329,11 @@ mini_tiered_promote_publish_code (void)
  * tier-0 compile would, and any cctor still pending runs later, on whichever
  * mutator thread first calls through.
  *
- * PROFILER EVENTS. mini_method_compile () raises jit_begin, but jit_done and
- * jit_failed are raised by mono_jit_compile_method_inner_1 (), which a promotion
- * bypasses - so without the raises below every promotion leaves an unmatched
- * begin, and profilers that pair the two leak an entry per promoted method.
- * This function therefore owns the end event on all four of its exits.
+ * PROFILER EVENTS. mini_method_compile () raises jit_begin, but the matching
+ * jit_done/jit_failed belongs to whoever publishes the code - and a promotion
+ * publishes it here. Without the raises below every promotion would leave an
+ * unmatched begin, and profilers that pair the two leak an entry per promoted
+ * method. This function therefore owns the end event on all four of its exits.
  *
  * The begin is deliberately left where it is, at the real start of the compile,
  * rather than being suppressed and re-raised adjacent to the end. Tier-1 LLVM
@@ -4507,8 +4497,7 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt, gboole
 	 * Closes the jit_begin raised at the top of the promotion's
 	 * mini_method_compile (). Raised after the hash swap and the destroy, and
 	 * outside the hash lock, so a profiler that reacts to this by looking the
-	 * method up sees the tier-1 body, matching the ordering in
-	 * mono_jit_compile_method_inner_1 ().
+	 * method up sees the tier-1 body.
 	 *
 	 * jit_done cannot express "recompiled at a higher tier" - its signature is
 	 * (method, jinfo) - so this is necessarily reported as a second compilation
@@ -4524,265 +4513,13 @@ mini_tiered_promote (MonoMethod *method, MonoDomain *domain, guint32 opt, gboole
 	 * body - without this event the debugger agent would leave breakpoints in the
 	 * dead tier-0 code.
 	 *
-	 * Unlike mono_jit_compile_method_inner_1 () no extra jit_done is raised for an
-	 * icall-wrapper alias or a shared prof_method: those aliases were reported at
-	 * tier 0, and a second one here would be an end with no begin - the very
-	 * imbalance this is fixing.
+	 * No extra jit_done is raised for an icall-wrapper alias or a shared
+	 * prof_method: those aliases were reported at tier 0, and a second one here
+	 * would be an end with no begin - the very imbalance this is fixing.
 	 */
 	MONO_PROFILER_RAISE (jit_done, (method, jinfo));
 
 	return TRUE;
-}
-
-/*
- * Bracket every compile so tiering knows the JIT nesting depth. Tier-1
- * promotion runs only when this unwinds to zero, keeping LLVM codegen off the
- * deep nest that class initializers create. Both calls are no-ops unless
- * MONO_TIERED is set.
- */
-gpointer
-mono_jit_compile_method_inner (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error)
-{
-	gpointer code;
-	gboolean saved_promotion;
-
-	/*
-	 * Promotion runs cctors, which compile unrelated methods through here. Those
-	 * must get a classic tier-0 body, not LLVM on a nested stack - which is
-	 * exactly what the depth gate exists to prevent. The drain's own re-entrancy
-	 * guard is separate and deliberately untouched.
-	 */
-	saved_promotion = mono_llvm_tiered_promotion_suspend ();
-
-	mono_llvm_tiered_compile_begin ();
-	code = mono_jit_compile_method_inner_1 (method, target_domain, opt, error);
-	mono_llvm_tiered_compile_end ();
-
-	mono_llvm_tiered_promotion_restore (saved_promotion);
-
-	return code;
-}
-
-static gpointer
-mono_jit_compile_method_inner_1 (MonoMethod *method, MonoDomain *target_domain, int opt, MonoError *error)
-{
-	MonoCompile *cfg;
-	gpointer code = NULL;
-	/* Non-NULL only when threshold-0 tiering promotes METHOD to tier 1 before
-	 * this function returns - see the mono_llvm_tiered_promote_sync () call
-	 * below. Kept separate from CODE so the tier-0 pointer still goes to
-	 * mini_patch_llvm_jit_callees ()/the jit-dump hooks below, exactly as it
-	 * always has; only the pointer actually returned to the caller changes. */
-	gpointer tier1_code = NULL;
-	/*
-	 * Set inside the domain-locked block below (where cfg is still alive) if
-	 * this compile is a threshold-0 promotion candidate; acted on afterwards,
-	 * once target_domain's lock is released - see the comment there for why
-	 * that ordering is load-bearing, not cosmetic.
-	 */
-	gboolean try_sync_promote = FALSE;
-	/* Likewise read off cfg before it is destroyed, and acted on below. */
-	gboolean jitdump_reported = FALSE;
-	MonoJitInfo *jinfo, *info;
-	MonoVTable *vtable;
-	MonoException *ex = NULL;
-	gint64 start;
-	MonoMethod *prof_method, *shared;
-
-	error_init (error);
-
-	start = mono_time_track_start ();
-	cfg = mini_method_compile (method, opt, target_domain, JIT_FLAG_RUN_CCTORS, 0, -1);
-	gint64 jit_time = 0.0;
-	mono_time_track_end (&jit_time, start);
-	UnlockedAdd64 (&mono_jit_stats.jit_time, jit_time);
-
-	prof_method = cfg->method;
-
-	switch (cfg->exception_type) {
-	case MONO_EXCEPTION_NONE:
-		break;
-	case MONO_EXCEPTION_TYPE_LOAD:
-	case MONO_EXCEPTION_MISSING_FIELD:
-	case MONO_EXCEPTION_MISSING_METHOD:
-	case MONO_EXCEPTION_FILE_NOT_FOUND:
-	case MONO_EXCEPTION_BAD_IMAGE:
-	case MONO_EXCEPTION_INVALID_PROGRAM: {
-		/* Throw a type load exception if needed */
-		if (cfg->exception_ptr) {
-			ex = mono_class_get_exception_for_failure ((MonoClass *)cfg->exception_ptr);
-		} else {
-			if (cfg->exception_type == MONO_EXCEPTION_MISSING_FIELD)
-				ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "MissingFieldException", cfg->exception_message);
-			else if (cfg->exception_type == MONO_EXCEPTION_MISSING_METHOD)
-				ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "MissingMethodException", cfg->exception_message);
-			else if (cfg->exception_type == MONO_EXCEPTION_TYPE_LOAD)
-				ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "TypeLoadException", cfg->exception_message);
-			else if (cfg->exception_type == MONO_EXCEPTION_FILE_NOT_FOUND)
-				ex = mono_exception_from_name_msg (mono_defaults.corlib, "System.IO", "FileNotFoundException", cfg->exception_message);
-			else if (cfg->exception_type == MONO_EXCEPTION_BAD_IMAGE)
-				ex = mono_get_exception_bad_image_format (cfg->exception_message);
-			else if (cfg->exception_type == MONO_EXCEPTION_INVALID_PROGRAM)
-				ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "InvalidProgramException", cfg->exception_message);
-			else
-				g_assert_not_reached ();
-		}
-		break;
-	}
-	case MONO_EXCEPTION_MONO_ERROR:
-		// FIXME: MonoError has no copy ctor
-		g_assert (!is_ok (cfg->error));
-		ex = mono_error_convert_to_exception (cfg->error);
-		break;
-	default:
-		g_assert_not_reached ();
-	}
-
-	if (ex) {
-		MONO_PROFILER_RAISE (jit_failed, (method));
-
-		mono_destroy_compile (cfg);
-		mono_error_set_exception_instance (error, ex);
-
-		return NULL;
-	}
-
-	if (mono_method_is_generic_sharable (method, FALSE)) {
-		shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, error);
-		if (!is_ok (error)) {
-			MONO_PROFILER_RAISE (jit_failed, (method));
-			mono_destroy_compile (cfg);
-			return NULL;
-		}
-	} else {
-		shared = NULL;
-	}
-
-	mono_domain_lock (target_domain);
-
-	if (mono_stats_method_desc && mono_method_desc_full_match (mono_stats_method_desc, method)) {
-		g_printf ("Printing runtime stats at method: %s\n", mono_method_get_full_name (method));
-		mono_runtime_print_stats ();
-	}
-
-	/* Check if some other thread already did the job. In this case, we can
-       discard the code this thread generated. */
-
-	info = mini_lookup_method (target_domain, method, shared);
-	if (info) {
-		/* We can't use a domain specific method in another domain */
-		if ((target_domain == mono_domain_get ()) || info->domain_neutral) {
-			code = info->code_start;
-			discarded_code ++;
-			discarded_jit_time += jit_time;
-		}
-	}
-	if (code == NULL) {
-		/* The lookup + insert is atomic since this is done inside the domain lock */
-		mono_domain_jit_code_hash_lock (target_domain);
-		mono_internal_hash_table_insert (&target_domain->jit_code_hash, cfg->jit_info->d.method, cfg->jit_info);
-		mono_domain_jit_code_hash_unlock (target_domain);
-
-		/*
-		 * A tier-0 body was just published. When the call-count threshold is
-		 * off (MONO_TIERED_CALL_THRESHOLD=0, the default-off value) this is
-		 * also the promotion trigger - but unlike a non-zero threshold, whose
-		 * counter only enqueues for the background worker in
-		 * mono/mini/llvm/tiered.cpp, threshold 0 promotes right here, on this
-		 * thread, synchronously - just not from inside this lock; see below.
-		 *
-		 * With a non-zero threshold this never fires; the tier-0 prologue's
-		 * own counter enqueues instead, once the method has been entered
-		 * threshold-many times, and that path is untouched by this one.
-		 */
-		try_sync_promote = !cfg->compile_llvm && mono_llvm_tiered_call_threshold () == 0;
-
-		code = cfg->native_code;
-
-		if (cfg->gshared && mono_method_is_generic_sharable (method, FALSE))
-			mono_atomic_inc_i32 (&mono_stats.generics_shared_methods);
-		if (cfg->gsharedvt)
-			mono_atomic_inc_i32 (&mono_stats.gsharedvt_methods);
-	}
-
-	jinfo = cfg->jit_info;
-
-	/*
-	 * Update global stats while holding a lock, instead of doing many
-	 * mono_atomic_inc_i32 operations during JITting.
-	 */
-	mono_update_jit_stats (cfg);
-
-	/* The LLVM backend has already reported this body to perf, with the DWARF
-	 * unwind tables that only it has (llvm/jitdump.cpp). Reporting it again
-	 * here would replace that record with a bare one. */
-	jitdump_reported = cfg->compile_llvm;
-
-	mono_destroy_compile (cfg);
-
-	mini_patch_llvm_jit_callees (target_domain, method, code);
-#ifndef DISABLE_JIT
-	mono_emit_jit_map (jinfo);
-	if (!jitdump_reported)
-		mono_emit_jit_dump (jinfo, code);
-#endif
-	mono_domain_unlock (target_domain);
-
-	/*
-	 * Threshold-0 promotion happens here, AFTER releasing target_domain's
-	 * lock, never before: LLVM codegen (mono_llvm_emit_method ()) takes the
-	 * loader lock, and mono's own lock-ordering rule - documented on
-	 * MonoDomain::lock in domain-internals.h - is that the loader lock must
-	 * always be taken before the domain lock, never after. Calling the
-	 * promote while still holding target_domain's lock would take the domain
-	 * lock first and the loader lock second, exactly backwards; with another
-	 * thread doing an ordinary tier-0 compile in the same domain (loader lock
-	 * first, domain lock second, e.g. to build a vtable), the two threads
-	 * deadlock on each other's lock. Nothing above this point needed the
-	 * promotion to have already happened - mono_llvm_tiered_promote_sync ()
-	 * only touches state (the tier-0 jit_code_hash entry, its own bookkeeping
-	 * table) that is already fully published by now - so there is no
-	 * ordering cost to paying for it out here instead.
-	 */
-	if (try_sync_promote)
-		tier1_code = mono_llvm_tiered_promote_sync (method, target_domain, opt);
-
-	if (!is_ok (error))
-		return NULL;
-
-	vtable = mono_class_vtable_checked (target_domain, method->klass, error);
-	return_val_if_nok (error, NULL);
-
-	if (method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE) {
-		if (mono_marshal_method_from_wrapper (method)) {
-			/* Native func wrappers have no method */
-			/* The profiler doesn't know about wrappers, so pass the original icall method */
-			MONO_PROFILER_RAISE (jit_done, (mono_marshal_method_from_wrapper (method), jinfo));
-		}
-	}
-	MONO_PROFILER_RAISE (jit_done, (method, jinfo));
-	if (prof_method != method)
-		MONO_PROFILER_RAISE (jit_done, (prof_method, jinfo));
-
-	if (!(method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE ||
-		  method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK ||
-		  method->wrapper_type == MONO_WRAPPER_XDOMAIN_INVOKE)) {
-		if (!mono_runtime_class_init_full (vtable, error))
-			return NULL;
-	}
-
-	/*
-	 * Hand the caller tier 1 instead of the tier-0 body it actually compiled,
-	 * now that everything above - the profiler events, jit-dump, vtable/cctor
-	 * setup - has run its normal, tier-0-shaped course against CODE and JINFO.
-	 * Whatever trampoline or call site is about to cache this return value
-	 * gets the tier-1 address directly; nothing else on this path needs to
-	 * know promotion happened at all.
-	 */
-	if (tier1_code)
-		code = tier1_code;
-
-	return MINI_ADDR_TO_FTNPTR (code);
 }
 
 /*
@@ -4804,8 +4541,6 @@ mini_jit_init (void)
 	mono_os_mutex_init_recursive (&jit_mutex);
 
 #ifndef DISABLE_JIT
-	mono_counters_register ("Discarded method code", MONO_COUNTER_JIT | MONO_COUNTER_INT, &discarded_code);
-	mono_counters_register ("Time spent JITting discarded code", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &discarded_jit_time);
 	mono_counters_register ("Try holes memory size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &jinfo_try_holes_size);
 
 	mono_counters_register ("JIT/method_to_ir", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_method_to_ir);
