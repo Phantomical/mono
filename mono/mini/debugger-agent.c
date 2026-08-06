@@ -604,7 +604,11 @@ static FILE *log_file;
 /* Protected by the dbg lock */
 static GPtrArray *pending_assembly_loads;
 
-/* Whenever the debugger thread has exited */
+/*
+ * Whenever the debugger thread has exited. Owned by the debugger thread itself:
+ * it clears the flag when it starts and sets it when it exits, both under the
+ * mutex below. Nothing else may write it.
+ */
 static gboolean debugger_thread_exited;
 
 /* Cond variable used to wait for debugger_thread_exited becoming true */
@@ -1704,12 +1708,10 @@ wait_for_debugger_thread_to_stop ()
 	 * not receive an answer to its last command like a resume.
 	 */
 	if (!is_debugger_thread ()) {
-		do {
-			mono_coop_mutex_lock (&debugger_thread_exited_mutex);
-			if (!debugger_thread_exited)
-				mono_coop_cond_wait (&debugger_thread_exited_cond, &debugger_thread_exited_mutex);
-			mono_coop_mutex_unlock (&debugger_thread_exited_mutex);
-		} while (!debugger_thread_exited);
+		mono_coop_mutex_lock (&debugger_thread_exited_mutex);
+		while (!debugger_thread_exited)
+			mono_coop_cond_wait (&debugger_thread_exited_cond, &debugger_thread_exited_mutex);
+		mono_coop_mutex_unlock (&debugger_thread_exited_mutex);
 
 		if (debugger_thread_handle)
 			mono_thread_info_wait_one_handle (debugger_thread_handle, MONO_INFINITE_WAIT, TRUE);
@@ -1759,8 +1761,6 @@ start_debugger_thread (MonoError *error)
 	/* Is it possible for the thread to be dead alreay ? */
 	debugger_thread_handle = mono_threads_open_thread_handle (thread->handle);
 	g_assert (debugger_thread_handle);
-	
-	debugger_thread_exited = FALSE;
 }
 
 /*
@@ -10357,6 +10357,18 @@ debugger_thread (void *arg)
 
 	debugger_thread_id = mono_native_thread_id_get ();
 
+	/*
+	 * Claim the exited flag before doing anything else. It has to be this thread
+	 * that clears it and not whoever started us, because a thread that starts a
+	 * replacement for itself has already announced its own exit: if the replacement
+	 * ran to completion before the starter got round to clearing the flag, the
+	 * clear would land after the last set and there would be no thread left to ever
+	 * set it again - shutdown then waits on the cond variable forever.
+	 */
+	mono_coop_mutex_lock (&debugger_thread_exited_mutex);
+	debugger_thread_exited = FALSE;
+	mono_coop_mutex_unlock (&debugger_thread_exited_mutex);
+
 	MonoInternalThread *internal = mono_thread_internal_current ();
 	mono_thread_set_name_constant_ignore_error (internal, "Debugger agent", MonoSetThreadNameFlag_Permanent);
 
@@ -10525,12 +10537,20 @@ debugger_thread (void *arg)
 
 	mono_coop_mutex_lock (&debugger_thread_exited_mutex);
 	debugger_thread_exited = TRUE;
-	mono_coop_cond_signal (&debugger_thread_exited_cond);
+	mono_coop_cond_broadcast (&debugger_thread_exited_cond);
 	mono_coop_mutex_unlock (&debugger_thread_exited_mutex);
 
 	PRINT_DEBUG_MSG (1, "[dbg] Debugger thread exited.\n");
-	
-	if (!attach_failed && !(vm_death_event_sent || mono_runtime_is_shutting_down ())) {
+
+	/*
+	 * Only an agent waiting for a deferred attach can pick up another client: a
+	 * replacement thread goes back to accept () on the listening socket. Anywhere
+	 * else the connection was one-shot, so once the client detaches the transport
+	 * stays dead and a replacement would do nothing but fail its first read and
+	 * start yet another one - tens of thousands of threads a second, for as long as
+	 * the process lives.
+	 */
+	if (agent_config.defer && !attach_failed && !(vm_death_event_sent || mono_runtime_is_shutting_down ())) {
 		PRINT_DEBUG_MSG (1, "[dbg] Detached - restarting clean debugger thread.\n");
 		ERROR_DECL (error);
 		start_debugger_thread (error);
