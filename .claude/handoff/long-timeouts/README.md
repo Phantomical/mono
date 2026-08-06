@@ -242,6 +242,39 @@ ctest --test-dir build -R '^bcl-corlib$' --output-on-failure
   `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`. No references to
   plans, tasks, briefs or handoffs in the message.
 
+## What an independent triage added
+
+A separate pass over the same sweep (`.claude/plans/sweep-triage-85e7ebac6ee.md`)
+reached the same two conclusions about `bcl-corlib` and `pinvoke-detach-1`
+without seeing this document, and turned up four things worth carrying:
+
+- **`pinvoke-detach-1` reproduces.** 30 runs at the tip: 29 finished in 22-24 s,
+  one was still alive at 90 s. So it is a hang with a rate of roughly 1 in 30
+  and not a once-off, and it can be provoked in minutes rather than by waiting
+  for a sweep. This is the cheapest of the six to work on.
+- **`bcl-corlib`'s timings, independently.** Tests took ~895 s, the XML was
+  written at 18:10:44, CTest killed it around 18:25 — the process sat about 15
+  minutes without exiting.
+- **Neither `bcl-Mono.Debugger.Soft` nor `bcl-System.ServiceModel` wrote a
+  result XML in that sweep** — ServiceModel's does not exist in that tree at
+  all. Consistent with a hang, but still an inference from silence, and the
+  triage was as careful as this document to say so. Do not just raise their
+  budgets.
+- **`bcl-xunit-System.Core` has one genuine divergence hiding in an
+  environmental floor.** Its 42 recorded FAILs are all `useInterpreter: True`
+  LINQ conversions, and most give the same wrong answer on system mono. The
+  exception is `Expression.Convert (float.MaxValue, int)`, which yields 0 here
+  and `-2147483648` on system mono. The triage could not separate runtime from
+  class library because a corlib version mismatch blocks the A/B. That is a
+  correctness question, not a timeout one, but it lives in the same suite.
+- **`bcl-System.Web`'s 396 failures are one message repeated** —
+  `RemotingException: No receiver for uri`, naming a single object, and the
+  fixture passes standalone. The proposed mechanism is that `MyHost` is a
+  `MarshalByRefObject` on the default five-minute lease while the suite ran for
+  26 minutes. Unproven, and worth one experiment: if it holds, the suite's
+  failures are a duration artifact rather than a bug, which changes what a
+  bigger budget would even mean for it.
+
 ## Related
 
 - `.claude/handoff/ctest-budgets/README.md` — task #70, the timeout budgets that
