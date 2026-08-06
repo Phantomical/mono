@@ -320,10 +320,22 @@ private:
 	/// seq_point_offsets as a graph, built once the body has been translated.
 	SeqPointGraph seq_point_graph;
 
+	/// The marker of the sequence point emitted after the most recent call, and
+	/// the IL offset it stands for. Every call in an argument list but the
+	/// outermost one is tagged as a nested call, and which one is outermost only
+	/// becomes known when the next call turns up - so the tag goes on after the
+	/// fact, through this.
+	llvm::Instruction *call_seq_point_marker = nullptr;
+	uint32_t call_seq_point_offset = 0;
+
+	/// Whether a call in the statement being translated has already had a
+	/// sequence point emitted after it.
+	bool call_seq_point_run = false;
+
 	/// The IL offsets the symbol file names as sequence points, and whether it
 	/// had anything to say about this method at all. When it did, these are the
-	/// only places a sequence point goes: a stop that is not the start of a
-	/// statement reports the same source line twice.
+	/// only places an ordinary sequence point goes: a stop that is not the start
+	/// of a statement reports the same source line twice.
 	llvm::DenseSet<uint32_t> sym_seq_point_offsets;
 	bool sym_seq_points = false;
 
@@ -509,7 +521,9 @@ private:
 	void emit_profiler_leave (MonoIrBuilder &builder);
 	void emit_profiler_frame_handover (MonoIrBuilder &builder, MonoMethod *target);
 
-	void emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il);
+	llvm::Instruction *emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
+	                                   uint8_t flags = 0);
+	void emit_after_call_seq_point (MonoIrBuilder &builder, bool nests);
 	void collect_sym_seq_points ();
 	bool wants_seq_point_at (size_t offset) const;
 	void build_seq_point_graph ();

@@ -1240,6 +1240,11 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	switch (opcode) {
 	case MONO_CEE_NOP:
+		/*
+		 * A C# compiler puts one of these between statements, which is where a
+		 * run of nested calls ends as far as the debugger's stepper cares.
+		 */
+		call_seq_point_run = false;
 		return llvm::Error::success ();
 	case MONO_CEE_BREAK:
 		return emit_break (builder);
@@ -1298,9 +1303,12 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_LDFLD:
 		return emit_ldfld (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_CALL:
-		return emit_call (builder, static_cast<uint32_t> (operand), false);
 	case MONO_CEE_CALLVIRT:
-		return emit_call (builder, static_cast<uint32_t> (operand), true);
+		if (llvm::Error error = emit_call (builder, static_cast<uint32_t> (operand),
+		                                   opcode == MONO_CEE_CALLVIRT))
+			return std::move (error);
+		emit_after_call_seq_point (builder, /* nests */ true);
+		return llvm::Error::success ();
 	case MONO_CEE_JMP:
 		return emit_jmp (builder, static_cast<uint32_t> (operand));
 
@@ -1393,7 +1401,10 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_UNBOX_ANY:
 		return emit_unbox_any (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_NEWOBJ:
-		return emit_newobj (builder, static_cast<uint32_t> (operand));
+		if (llvm::Error error = emit_newobj (builder, static_cast<uint32_t> (operand)))
+			return std::move (error);
+		emit_after_call_seq_point (builder, /* nests */ false);
+		return llvm::Error::success ();
 	case MONO_CEE_LDFTN:
 		return emit_ldftn (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_LDVIRTFTN:

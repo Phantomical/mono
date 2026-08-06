@@ -41,6 +41,7 @@
 
 #include "mono/metadata/debug-internals.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/metadata/seq-points-data.h"
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseSet.h>
@@ -71,13 +72,13 @@ mono_llvm_seq_point_nop (void)
  * what knows where those start; the evaluation stack being empty is only a
  * stand-in for that, and a coarse one - `return 0;` compiles to a store, a
  * branch and a load, with an empty stack in the middle of all three. Stopping
- * there reports the same source line more than once, which a step over then has
- * to be spent on.
+ * there reports the same source line more than once, which a step over then
+ * has to be spent on.
  *
  * A method the symbol file mentions gets exactly the offsets it names, plus the
  * two an await turns into. One it does not mention gets none at all, so long as
- * its image carries symbols - that is what a compiler-generated accessor with no
- * source of its own looks like. Everything else falls back on the stack.
+ * its image carries symbols - that is what a compiler-generated accessor with
+ * no source of its own looks like. Everything else falls back on the stack.
  */
 void
 MethodLLVMEmitter::collect_sym_seq_points ()
@@ -120,7 +121,7 @@ MethodLLVMEmitter::collect_sym_seq_points ()
 	}
 }
 
-/// Whether a sequence point belongs at OFFSET.
+/// Whether an ordinary sequence point belongs at OFFSET.
 bool
 MethodLLVMEmitter::wants_seq_point_at (size_t offset) const
 {
@@ -131,9 +132,12 @@ MethodLLVMEmitter::wants_seq_point_at (size_t offset) const
 }
 
 /// Emit the check that lets the soft debugger stop at ENCODED_IL, which is an
-/// IL offset in the encoding seq-point-marker.hpp describes.
-void
-MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
+/// IL offset in the encoding seq-point-marker.hpp describes, carrying FLAGS.
+/// Hands back the marker whose address the runtime records for this stop, or
+/// null when the method is being translated without sequence points.
+llvm::Instruction *
+MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
+                                   uint8_t flags)
 {
 	/*
 	 * A filter body is a helper the runtime calls over the parent frame during
@@ -142,9 +146,9 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 	 * model knows about.
 	 */
 	if (!mini_get_debug_options ()->gen_sdb_seq_points || filter_mode)
-		return;
+		return nullptr;
 	if (il_scope == nullptr)
-		return;
+		return nullptr;
 
 	if (bp_switch == nullptr)
 		bp_switch = (MonoLLVMBreakpointSwitch *) mono_domain_alloc0 (
@@ -210,8 +214,11 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 	 */
 	uint32_t restore = (uint32_t) offset;
 
-	set_il_location (builder, SEQ_POINT_MARKER_BASE + encoded_il);
-	builder.CreateCall (llvm::InlineAsm::get (hook, "nop", "", true));
+	set_il_location (builder, seq_point_marker_line (encoded_il, flags));
+
+	llvm::CallInst *recorded =
+		builder.CreateCall (llvm::InlineAsm::get (hook, "nop", "", true));
+
 	set_il_location (builder, restore);
 
 	/*
@@ -245,6 +252,50 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il)
 
 	builder.CreateBr (cont);
 	builder.SetInsertPoint (cont);
+	return recorded;
+}
+
+/*
+ * Emit the sequence point that belongs after the call just translated, if the
+ * offset it lands on does not already get one.
+ *
+ * The pdb has no sequence point between the calls of `f (g (), h ())`, so
+ * without these a step over out of `g ()` has nowhere in the caller to stop and
+ * runs on past `h ()`. They are stops the debugger is meant to skip most of the
+ * time, which is what the flags say: NONEMPTY_STACK on all of them, and
+ * NESTED_CALL on every call of an argument list but the outermost, whose stop
+ * is the one a step over wants. mono_de_ss_update () reads both.
+ *
+ * NESTS says whether this call takes part in that run - a newobj gets a point
+ * of its own but does not open or extend one, matching mini.
+ */
+void
+MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests)
+{
+	/*
+	 * Nothing follows a call the body ended on, and an offset that is a stop in
+	 * its own right gets its point from the ordinary rule instead.
+	 */
+	if (ip >= code_size || builder.GetInsertBlock ()->getTerminator () != nullptr)
+		return;
+	if (wants_seq_point_at (ip))
+		return;
+
+	if (nests) {
+		if (call_seq_point_run)
+			il_debug_set_instruction_location (
+				il_scope, call_seq_point_marker,
+				seq_point_marker_line (
+					call_seq_point_offset,
+					MONO_SEQ_POINT_FLAG_NONEMPTY_STACK
+						| MONO_SEQ_POINT_FLAG_NESTED_CALL));
+		else
+			call_seq_point_run = true;
+	}
+
+	call_seq_point_offset = (uint32_t) ip;
+	call_seq_point_marker = emit_seq_point (builder, call_seq_point_offset,
+	                                        MONO_SEQ_POINT_FLAG_NONEMPTY_STACK);
 }
 
 /*

@@ -366,6 +366,7 @@ publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
 
 		memset (&sp, 0, sizeof (sp));
 		sp.native_offset = (int) row.native_offset;
+		sp.flags = row.flags;
 
 		if (row.il_offset == SEQ_POINT_ENCODED_ENTRY)
 			sp.il_offset = METHOD_ENTRY_IL_OFFSET;

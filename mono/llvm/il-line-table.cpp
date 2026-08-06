@@ -10,6 +10,7 @@
 #include <llvm/IR/DIBuilder.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/Instruction.h>
 #include <llvm/IR/Module.h>
 
 namespace mono {
@@ -106,6 +107,18 @@ il_debug_set_location (IlDebugScope *scope, llvm::IRBuilder<> *builder, uint32_t
 
 	if (builder)
 		builder->SetCurrentDebugLocation (llvm::DebugLoc (scope->cur));
+}
+
+void
+il_debug_set_instruction_location (IlDebugScope *scope, llvm::Instruction *inst,
+                                   uint32_t il_offset)
+{
+	if (!scope || !inst)
+		return;
+
+	inst->setDebugLoc (llvm::DebugLoc (llvm::DILocation::get (
+		scope->subprogram->getContext (), il_offset + IL_OFFSET_LINE_BIAS,
+		/*Column=*/ 1, scope->subprogram)));
 }
 
 void

@@ -252,8 +252,9 @@ parse_il_line_table (object::ObjectFile &obj,
 			 * there - the offset in effect is whatever the row before it
 			 * said, which is what leaving it out of the line table keeps.
 			 */
-			if (line.il_offset >= SEQ_POINT_MARKER_BASE) {
-				line.il_offset -= SEQ_POINT_MARKER_BASE;
+			if (seq_point_is_marker (line.il_offset)) {
+				line.flags = seq_point_marker_flags (line.il_offset);
+				line.il_offset = seq_point_marker_offset (line.il_offset);
 				seq_points[owner->name].push_back (line);
 				continue;
 			}

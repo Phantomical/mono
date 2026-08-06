@@ -57,6 +57,8 @@ bool ir_verification_enabled ();
 struct IlLineRow {
 	uint32_t native_offset;
 	uint32_t il_offset;
+	/// MonoSeqPointFlags, on a sequence point row and zero on any other.
+	uint8_t flags = 0;
 };
 
 /// One frame slot, as the address of a register plus a displacement - the shape

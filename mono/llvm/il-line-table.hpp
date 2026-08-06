@@ -30,6 +30,7 @@
 
 namespace llvm {
 class Function;
+class Instruction;
 class Module;
 }
 
@@ -72,6 +73,13 @@ private:
 
 /* Attribute everything BUILDER emits from here on to IL_OFFSET within SCOPE. */
 void il_debug_set_location (IlDebugScope *scope, llvm::IRBuilder<> *builder, uint32_t il_offset);
+
+/*
+ * Re-attribute one instruction that has already been emitted, leaving the
+ * location in effect for everything after it alone.
+ */
+void il_debug_set_instruction_location (IlDebugScope *scope, llvm::Instruction *inst,
+                                        uint32_t il_offset);
 
 /*
  * Put SCOPE's current location onto BUILDER. Called for each newly created
