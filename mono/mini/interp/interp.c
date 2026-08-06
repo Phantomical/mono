@@ -3320,9 +3320,6 @@ interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs 
 		LOCAL_VAR (frame->imethod->total_locals_size, MonoException*) = clause_args->filter_exception;
 	}
 
-#ifdef ENABLE_EXPERIMENT_TIERED
-	mini_tiered_inc (frame->imethod->domain, frame->imethod->method, &frame->imethod->tiered_counter, 0);
-#endif
 	//g_print ("(%p) Call %s\n", mono_thread_internal_current (), mono_method_get_full_name (frame->imethod->method));
 
 #if defined(ENABLE_HYBRID_SUSPEND) || defined(ENABLE_COOP_SUSPEND)
@@ -3670,22 +3667,14 @@ main_loop:
 				LOCAL_VAR (call_args_offset, gpointer) = unboxed;
 			}
 
-#ifdef ENABLE_EXPERIMENT_TIERED
-			ip += 5;
-#else
 			ip += 3;
-#endif
 			goto call;
 		}
 		MINT_IN_CASE(MINT_CALL) {
 			cmethod = (InterpMethod*)frame->imethod->data_items [ip [2]];
 			call_args_offset = ip [1];
 
-#ifdef ENABLE_EXPERIMENT_TIERED
-			ip += 5;
-#else
 			ip += 3;
-#endif
 call:
 			/*
 			 * Make a non-recursive call by loading the new interpreter state based on child frame,
@@ -3740,24 +3729,7 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_JIT_CALL2) {
-#ifdef ENABLE_EXPERIMENT_TIERED
-			InterpMethod *rmethod = (InterpMethod *) READ64 (ip + 2);
-
-			error_init_reuse (error);
-
-			frame->state.ip = ip + 6;
-			do_jit_call ((stackval*)(locals + ip [1]), frame, rmethod, error);
-			if (!is_ok (error)) {
-				MonoException *ex = mono_error_convert_to_exception (error);
-				THROW_EX (ex, ip);
-			}
-
-			CHECK_RESUME_STATE (context);
-
-			ip += 6;
-#else
-			g_error ("MINT_JIT_ICALL2 shouldn't be used");
-#endif
+			g_error ("MINT_JIT_CALL2 shouldn't be used");
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_CALLRUN) {
@@ -3797,24 +3769,13 @@ call:
 			goto exit_frame;
 		}
 
-#ifdef ENABLE_EXPERIMENT_TIERED
-#define BACK_BRANCH_PROFILE(offset) do { \
-		if (offset < 0) \
-			mini_tiered_inc (frame->imethod->domain, frame->imethod->method, &frame->imethod->tiered_counter, 0); \
-	} while (0);
-#else
-#define BACK_BRANCH_PROFILE(offset)
-#endif
-
 		MINT_IN_CASE(MINT_BR_S) {
 			short br_offset = (short) *(ip + 1);
-			BACK_BRANCH_PROFILE (br_offset);
 			ip += br_offset;
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BR) {
 			gint32 br_offset = (gint32) READ32(ip + 1);
-			BACK_BRANCH_PROFILE (br_offset);
 			ip += br_offset;
 			MINT_IN_BREAK;
 		}
@@ -3822,7 +3783,6 @@ call:
 #define ZEROP_S(datatype, op) \
 	if (LOCAL_VAR (ip [1], datatype) op 0) { \
 		gint16 br_offset = (gint16) ip [2]; \
-		BACK_BRANCH_PROFILE (br_offset); \
 		ip += br_offset; \
 	} else \
 		ip += 3;
@@ -3830,7 +3790,6 @@ call:
 #define ZEROP(datatype, op) \
 	if (LOCAL_VAR (ip [1], datatype) op 0) { \
 		gint32 br_offset = (gint32)READ32(ip + 2); \
-		BACK_BRANCH_PROFILE (br_offset); \
 		ip += br_offset; \
 	} else \
 		ip += 4;
@@ -3886,7 +3845,6 @@ call:
 #define CONDBR_S(cond) \
 	if (cond) { \
 		gint16 br_offset = (gint16) ip [3]; \
-		BACK_BRANCH_PROFILE (br_offset); \
 		ip += br_offset; \
 	} else \
 		ip += 4;
@@ -3896,7 +3854,6 @@ call:
 #define CONDBR(cond) \
 	if (cond) { \
 		gint32 br_offset = (gint32) READ32 (ip + 3); \
-		BACK_BRANCH_PROFILE (br_offset); \
 		ip += br_offset; \
 	} else \
 		ip += 5;
@@ -4124,7 +4081,6 @@ call:
 #define BRELOP_S_CAST(datatype, op) \
 	if (LOCAL_VAR (ip [1], datatype) op LOCAL_VAR (ip [2], datatype)) { \
 		gint16 br_offset = (gint16) ip [3]; \
-		BACK_BRANCH_PROFILE (br_offset); \
 		ip += br_offset; \
 	} else \
 		ip += 4;
@@ -4132,7 +4088,6 @@ call:
 #define BRELOP_CAST(datatype, op) \
 	if (LOCAL_VAR (ip [1], datatype) op LOCAL_VAR (ip [2], datatype)) { \
 		gint32 br_offset = (gint32) ip [1]; \
-		BACK_BRANCH_PROFILE (br_offset); \
 		ip += br_offset; \
 	} else \
 		ip += 5;

@@ -138,9 +138,6 @@ struct InterpMethod {
 	unsigned int hasthis; // boolean
 	MonoProfilerCallInstrumentationFlags prof_flags;
 	InterpMethodCodeType code_type;
-#ifdef ENABLE_EXPERIMENT_TIERED
-	MiniTieredCounter tiered_counter;
-#endif
 	unsigned int init_locals : 1;
 	unsigned int vararg : 1;
 	unsigned int needs_thread_attach : 1;

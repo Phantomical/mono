@@ -28,7 +28,6 @@ set(mini_sources
   seq-points.c
   jit-icalls.c
   trace.c
-  helpers.c
   driver.c
   debug-mini.c
   aot-runtime.c
@@ -41,13 +40,11 @@ set(mini_sources
   mini-gc.c
   debugger-agent-stubs.c
   mini-cross-helpers.c
-  arch-stubs.c
   lldb.c
   mixed_callstack_plugin.c
   mini-profiler.c
   interp-stubs.c
   llvmonly-runtime.c
-  tiered.c
   monovm.c
   mini-unity.c
   # amd64

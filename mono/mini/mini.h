@@ -52,7 +52,6 @@ typedef struct SeqPointInfo SeqPointInfo;
 #include "mini-arch.h"
 #include "mini-unwind.h"
 #include "jit.h"
-#include "tiered.h"
 
 #include "mono/metadata/tabledefs.h"
 #include "mono/metadata/marshal.h"

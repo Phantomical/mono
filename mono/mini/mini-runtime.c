@@ -4757,13 +4757,6 @@ mini_init (const char *filename, const char *runtime_version)
 	ep_finish_init ();
 #endif
 
-#ifdef ENABLE_EXPERIMENT_TIERED
-	if (!mono_compile_aot) {
-		/* create compilation thread in background */
-		mini_tiered_init ();
-	}
-#endif
-
 	if (mono_profiler_sampling_enabled ())
 		mono_runtime_setup_stat_profiler ();
 

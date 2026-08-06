@@ -8,7 +8,6 @@
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY 2
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_EXIT 4
 #define INTERP_INST_FLAG_SEQ_POINT_NESTED_CALL 8
-#define INTERP_INST_FLAG_RECORD_CALL_PATCH 16
 
 #define INTERP_LOCAL_FLAG_DEAD 1
 #define INTERP_LOCAL_FLAG_EXECUTION_STACK 2
@@ -172,9 +171,6 @@ typedef struct
 	int max_data_items;
 	void **data_items;
 	GHashTable *data_hash;
-#ifdef ENABLE_EXPERIMENT_TIERED
-	GHashTable *patchsite_hash;
-#endif
 	int *clause_indexes;
 	gboolean gen_sdb_seq_points;
 	GPtrArray *seq_points;
