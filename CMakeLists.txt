@@ -163,10 +163,6 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
-  add_dependencies(check mini-corpora unit-test-assemblies)
-  if(TARGET test-llvm-data)
-    add_dependencies(check test-llvm-data)
-  endif()
 
   add_custom_target(check-all
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
@@ -174,9 +170,27 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
-  add_dependencies(check-all mini-corpora unit-test-assemblies runtime-corpora)
-  if(TARGET test-llvm-data)
-    add_dependencies(check-all test-llvm-data)
+
+  # The test inputs.  Every one of these is an ALL target, so an ordinary build
+  # already leaves them on disk; naming them here is what makes `--target check`
+  # work on its own.
+  #
+  # Each exists only under the option that builds it, and add_dependencies on a
+  # target that was never created is a generate-time error -- so the conditions
+  # the defining directories return on are restated here rather than probed with
+  # if(TARGET), which stays just as quiet for a target that has been renamed as
+  # for one that was legitimately not built.
+  if(MONO_CORPUS_ENABLED)
+    add_dependencies(check     mini-corpora)
+    add_dependencies(check-all mini-corpora runtime-corpora)
+    if(MONO_ENABLE_LLVM AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
+      add_dependencies(check     test-llvm-data)
+      add_dependencies(check-all test-llvm-data)
+    endif()
+  endif()
+  if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_SGEN)
+    add_dependencies(check     unit-test-assemblies)
+    add_dependencies(check-all unit-test-assemblies)
   endif()
 
   # The CoreCLR suites and ms-test-suite, with the hours-long members
@@ -190,6 +204,9 @@ if(BUILD_TESTING)
       WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
       USES_TERMINAL
       VERBATIM)
+    # if(TARGET) rather than a condition, because the one that matters --
+    # whether the coreclr submodule is checked out -- is a variable local to
+    # acceptance-tests/.
     if(TARGET coreclr-compile-tests)
       add_dependencies(check-acceptance coreclr-compile-tests)
     endif()
@@ -199,7 +216,7 @@ endif()
 # The microbenchmarks. They carry `slow`, so `check` and `check-all` skip them;
 # this is the way to ask for them. Serial on purpose -- they are timing
 # programs, and running sixteen at once makes the numbers meaningless.
-if(MONO_ENABLE_BENCHMARKS AND BUILD_TESTING)
+if(MONO_ENABLE_BENCHMARKS AND BUILD_TESTING AND MONO_CORPUS_ENABLED)
   add_custom_target(check-benchmarks
     COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -L benchmark
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
