@@ -423,6 +423,44 @@ private:
 	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> il_lines_;
 };
 
+/*
+ * The one JITLink memory manager every MonoJit links through.
+ *
+ * There is a MonoJit per appdomain, and this reserves address space in 16MB
+ * units out of a pool that is one gigabyte wide (nearmem.hpp). One of these per
+ * domain would therefore claim 16MB no other domain could touch and cap the
+ * process at 63 domains that have compiled anything; shared, a domain's ranges
+ * return to a common free list when its linker goes down and any live domain
+ * can take them.
+ *
+ * Nothing domain-owned lives in here. It holds address ranges, not symbols or
+ * relocations, and a range only reaches the free list after JITLink has run the
+ * allocation's deallocation actions - so the code that was there is already
+ * unreachable and deregistered before anyone else can be given the memory.
+ *
+ * Leaked on purpose: the ObjectLinkingLayers that borrow it are destroyed
+ * whenever their domain is unloaded, and it has to outlive every one of them.
+ */
+static Expected<jitlink::JITLinkMemoryManager *>
+shared_memory_manager ()
+{
+	static std::mutex mutex;
+	static MapperJITLinkMemoryManager *shared = nullptr;
+
+	std::lock_guard<std::mutex> lock (mutex);
+
+	if (shared == nullptr) {
+		auto mapper = NearMemoryMapper::Create ();
+
+		if (!mapper)
+			return mapper.takeError ();
+		shared = new MapperJITLinkMemoryManager (16 * 1024 * 1024,
+		                                         std::move (*mapper));
+	}
+
+	return shared;
+}
+
 static void
 ensure_native_target ()
 {
@@ -635,13 +673,11 @@ MonoJit::create ()
 	 */
 	builder.setObjectLinkingLayerCreator (
 		[] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
-			auto mapper = NearMemoryMapper::Create ();
+			auto memmgr = shared_memory_manager ();
 
-			if (!mapper)
-				return mapper.takeError ();
-			return std::make_unique<ObjectLinkingLayer> (
-				es, std::make_unique<MapperJITLinkMemoryManager> (
-					    16 * 1024 * 1024, std::move (*mapper)));
+			if (!memmgr)
+				return memmgr.takeError ();
+			return std::make_unique<ObjectLinkingLayer> (es, **memmgr);
 		});
 
 	/*

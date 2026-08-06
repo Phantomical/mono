@@ -12,12 +12,17 @@
 
 namespace mono {
 
-/// A MemoryMapper that reserves in the low 2GB of the address space.
+/// A MemoryMapper that reserves out of the MAP_32BIT window.
 ///
-/// mini's code manager allocates low and patches direct calls as rel32 with no
-/// thunk fallback, so anything it may be patched to call - a published stub, an
-/// allocator body - has to sit within +-2GB of it. Everything low reaches
-/// everything low. Behavior is otherwise InProcessMemoryMapper's.
+/// mini's code manager allocates there too and patches direct calls as rel32
+/// with no thunk fallback, so anything it may be patched to call - a published
+/// stub, an allocator body - has to sit within +-2GB of it. Everything in the
+/// window reaches everything else in it. Behavior is otherwise
+/// InProcessMemoryMapper's.
+///
+/// Do not read that +-2GB reach as the size of the pool: Linux hands MAP_32BIT
+/// out of [0x40000000, 0x80000000), so there is one gigabyte to go around for
+/// the whole process and nothing published here can grow past it.
 class NearMemoryMapper final : public llvm::orc::MemoryMapper {
 public:
 	static llvm::Expected<std::unique_ptr<NearMemoryMapper>> Create ();
