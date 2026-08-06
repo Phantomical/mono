@@ -11,10 +11,6 @@
 #error amd64 is the only architecture this runtime targets
 #endif
 
-#ifdef TARGET_WIN32
-#include "mini-windows.h"
-#endif
-
 #if (MONO_ARCH_FRAME_ALIGNMENT == 4)
 #define MONO_ARCH_LOCALLOC_ALIGNMENT 8
 #else
