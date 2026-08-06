@@ -86,6 +86,7 @@ set(mini_sources
   mini-unity.c
   # amd64
   arch-amd64.c
+  interp-amd64.c
   mini-amd64.c
   exceptions-amd64.c
   tramp-amd64.c
