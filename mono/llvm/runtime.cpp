@@ -328,6 +328,25 @@ symbol_for_entry (MonoMethod *method)
 	return symbol_for_code (method) + "$entry";
 }
 
+/// The `$unbox` symbol: the legacy entry that steps a boxed receiver past the
+/// object header before entering the method.
+std::string
+symbol_for_unbox (MonoMethod *method)
+{
+	return symbol_for_code (method) + "$unbox";
+}
+
+/// Whether a call can ever reach METHOD with a boxed receiver, so that the
+/// method wants an unboxing entry beside its ordinary one.
+///
+/// Every such call comes off a value type's vtable or its IMT, which is
+/// exactly where the runtime asks for the unboxing address.
+bool
+wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig)
+{
+	return sig != nullptr && sig->hasthis && m_class_is_valuetype (method->klass);
+}
+
 /// The engine, and everything it needs that outlives one compile.
 ///
 /// Code is compiled per domain, the way mini kept a jit_code_hash per domain: a
@@ -363,12 +382,20 @@ public:
 	/// compiled it there.
 	static void *body_of (MonoDomain *domain, MonoMethod *method);
 
+	/// METHOD's unboxing entry in the current domain, or null when it has
+	/// none - a method not implemented in IL is entered through code this
+	/// backend did not generate.
+	static void *unbox_entry_of (MonoMethod *method);
+
 private:
 	/// Where one method's code ended up: the legacy entry the runtime hands
-	/// out, and the fastcc body generated callers reach.
+	/// out, the fastcc body generated callers reach, and - for an instance
+	/// method of a value type - the unboxing entry a call off that value
+	/// type's vtable comes in through.
 	struct Compiled {
 		void *entry;
 		void *body;
+		void *unbox = nullptr;
 	};
 
 	/// What publishing a method handed the rest of the runtime: the legacy
@@ -584,6 +611,33 @@ Backend::body_of (MonoDomain *domain, MonoMethod *method)
 	if (compiled == state->second->compiled.end ())
 		return nullptr;
 	return compiled->second.body;
+}
+
+void *
+Backend::unbox_entry_of (MonoMethod *method)
+{
+	if (live_backend == nullptr)
+		return nullptr;
+
+	Expected<DomainState *> state = live_backend->state ();
+
+	if (!state) {
+		consumeError (state.takeError ());
+		return nullptr;
+	}
+
+	/*
+	 * The caller reached this having just compiled the method, so this is a
+	 * cache lookup wearing ensure_compiled ()'s clothes.
+	 */
+	Expected<Compiled> code = live_backend->ensure_compiled (**state, method);
+
+	if (!code) {
+		consumeError (code.takeError ());
+		return nullptr;
+	}
+
+	return code->unbox;
 }
 
 void
@@ -945,14 +999,30 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	if (method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (method);
 
+	Constant *body_address = ConstantExpr::getIntToPtr (
+		ConstantInt::get (Type::getInt64Ty (*context),
+		                  (uint64_t) (uintptr_t) *body_stub),
+		PointerType::get (*context, 0));
 	std::string legacy_entry = symbol_for_entry (method);
 
-	arch::create_legacy_entry_thunk (
-		*module, legacy_entry, *function, legacy_call_flavor (sig),
-		ConstantExpr::getIntToPtr (
-			ConstantInt::get (Type::getInt64Ty (*context),
-			                  (uint64_t) (uintptr_t) *body_stub),
-			PointerType::get (*context, 0)));
+	arch::create_legacy_entry_thunk (*module, legacy_entry, *function,
+	                                 legacy_call_flavor (sig), body_address);
+
+	/*
+	 * Reached off a value type's vtable, the method arrives with the boxed
+	 * object as its receiver instead of the value. That is a second entry
+	 * rather than a branch inside the first: which one a caller wants is
+	 * settled when the address is handed out, and the ordinary entry must not
+	 * pay for the question.
+	 */
+	std::string unbox_entry;
+
+	if (wants_unbox_entry (method, sig)) {
+		unbox_entry = symbol_for_unbox (method);
+		arch::create_legacy_entry_thunk (*module, unbox_entry, *function,
+		                                 legacy_call_flavor (sig), body_address,
+		                                 MONO_ABI_SIZEOF (MonoObject));
+	}
 
 	if (dumping (entry.c_str ()))
 		module->print (llvm::errs (), nullptr);
@@ -972,11 +1042,19 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	std::vector<std::pair<uint32_t, void *>> filters;
 	const uint8_t *entry_code = nullptr;
 	size_t entry_code_size = 0;
+	const uint8_t *unbox_code = nullptr;
+	size_t unbox_code_size = 0;
 
 	for (const auto &[name, extent] : compiled->functions) {
 		if (name == legacy_entry) {
 			entry_code = extent.first;
 			entry_code_size = extent.second;
+			continue;
+		}
+
+		if (!unbox_entry.empty () && name == unbox_entry) {
+			unbox_code = extent.first;
+			unbox_code_size = extent.second;
 			continue;
 		}
 
@@ -1004,34 +1082,50 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	*published = *jinfo;
 
 	/*
-	 * A record of its own for the entry: an exception unwinding out of the
+	 * A record of its own for each entry: an exception unwinding out of the
 	 * body passes back through it, and a suspended thread can be stopped in
-	 * it, so the runtime has to be able to resolve the frame. It carries no
-	 * clauses and no line table, so its own frame description is all it takes
-	 * from the module's side tables - and no dylib, since the body's record
-	 * already owns the one they share.
+	 * it, so the runtime has to be able to resolve the frame. They carry no
+	 * clauses and no line table, so their own frame description is all they
+	 * take from the module's side tables - and no dylib, since the body's
+	 * record already owns the one they all share.
 	 */
-	CompiledMethod entry_forwarder;
+	auto register_forwarder = [&] (const uint8_t *code, size_t size) -> Error {
+		CompiledMethod forwarder;
 
-	entry_forwarder.entry = const_cast<uint8_t *> (entry_code);
-	entry_forwarder.code = entry_code;
-	entry_forwarder.code_size = entry_code_size;
-	entry_forwarder.unwind_table = compiled->unwind_table;
-	entry_forwarder.unwind_table_size = compiled->unwind_table_size;
+		forwarder.entry = const_cast<uint8_t *> (code);
+		forwarder.code = code;
+		forwarder.code_size = size;
+		forwarder.unwind_table = compiled->unwind_table;
+		forwarder.unwind_table_size = compiled->unwind_table_size;
 
-	Expected<MonoJitInfo *> entry_jinfo =
-		register_jit_info (state.domain, method, nullptr, entry_forwarder);
+		Expected<MonoJitInfo *> jinfo =
+			register_jit_info (state.domain, method, nullptr, forwarder);
 
-	if (!entry_jinfo)
-		return entry_jinfo.takeError ();
-	remember (state, method, entry_forwarder, *entry_jinfo);
+		if (!jinfo)
+			return jinfo.takeError ();
+		remember (state, method, forwarder, *jinfo);
+		return Error::success ();
+	};
+
+	if (Error err = register_forwarder (entry_code, entry_code_size))
+		return std::move (err);
+
+	if (unbox_code != nullptr) {
+		if (Error err = register_forwarder (unbox_code, unbox_code_size))
+			return std::move (err);
+	} else if (!unbox_entry.empty ()) {
+		return createStringError (inconvertibleErrorCode (),
+		                          "the linked object for %s defines no unboxing "
+		                          "entry", entry.c_str ());
+	}
 
 	if (tracing ())
 		fprintf (stderr, "[llvm-jit] %s is at %p (enters at %p, for %s)\n",
 		         entry.c_str (), compiled->entry, entry_code,
 		         state.domain->friendly_name);
 
-	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry };
+	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry,
+		              const_cast<uint8_t *> (unbox_code) };
 }
 
 /*
@@ -1200,7 +1294,8 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 	if (!body)
 		return body.takeError ();
 
-	return Compiled { *entry, *body };
+	/* Whatever a caller does with the receiver, this body never reads it. */
+	return Compiled { *entry, *body, *entry };
 }
 
 Expected<void *>
@@ -1679,6 +1774,12 @@ void *
 mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method)
 {
 	return mono::Backend::body_of (domain, method);
+}
+
+void *
+mono_llvm_jit_unbox_entry (MonoMethod *method)
+{
+	return mono::Backend::unbox_entry_of (method);
 }
 
 void *

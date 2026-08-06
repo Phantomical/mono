@@ -635,7 +635,8 @@ LegacyAbiPass::run (Module &m, ModuleAnalysisManager &)
 
 Function *
 create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
-                           LegacyFlavor flavor, Value *through)
+                           LegacyFlavor flavor, Value *through,
+                           unsigned this_adjust)
 {
 	LLVMContext &ctx = m.getContext ();
 	const DataLayout &dl = m.getDataLayout ();
@@ -747,6 +748,14 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 			break;
 		}
 	}
+
+	/*
+	 * Still the natural argument list, so the receiver is argument 0 whatever
+	 * the convention did with the rest of them.
+	 */
+	if (this_adjust != 0)
+		args[0] = b.CreateConstInBoundsGEP1_64 (b.getInt8Ty (), args[0],
+		                                        this_adjust);
 
 	/*
 	 * A slot of the thunk's own rather than whatever pointer this convention was

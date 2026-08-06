@@ -24,6 +24,7 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 #include "mixed_callstack_plugin.h"
+#include "../llvm/runtime.hpp"
 
 #include "interp/interp.h"
 
@@ -257,11 +258,19 @@ mini_add_method_trampoline (MonoMethod *m, gpointer compiled_method, gboolean ad
 	addr = compiled_method;
 
 	if (add_unbox_tramp) {
+		unbox_trampolines ++;
+
 		if (mono_aot_only) {
 			addr = mono_aot_get_unbox_trampoline (m, addr);
 		} else {
-			unbox_trampolines ++;
-			addr = mono_arch_get_unbox_trampoline (m, addr);
+			/*
+			 * The backend emits the unboxing entry beside the method's body,
+			 * so a method it compiled costs nothing extra for one. It has no
+			 * such entry for a method whose code it did not generate.
+			 */
+			gpointer unbox = mono_llvm_jit_unbox_entry (m);
+
+			addr = unbox ? unbox : mono_arch_get_unbox_trampoline (m, addr);
 		}
 	}
 

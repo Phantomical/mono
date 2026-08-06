@@ -64,6 +64,16 @@ void mono_llvm_jit_free_method (MonoMethod *method);
 /// reached as a callee is compiled without the runtime ever asking for it.
 void *mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method);
 
+/// Where to enter METHOD when the receiver is still boxed - the address a call
+/// off a value type's vtable or IMT is given, which steps the receiver past the
+/// object header and carries on into the method exactly as its ordinary entry
+/// would.
+///
+/// Returns NULL for a method this backend generated no such entry for: one not
+/// implemented in IL is entered through code the backend never emitted, and
+/// there is nothing to step the receiver in.
+void *mono_llvm_jit_unbox_entry (MonoMethod *method);
+
 /// Queue OPT for LLVM's own command-line option registry - the same options
 /// `opt` and `llc` take, e.g. "-print-after-all". A leading dash is optional.
 ///

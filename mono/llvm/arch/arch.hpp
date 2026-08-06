@@ -131,10 +131,15 @@ public:
 /// THROUGH, when given, is the address the call is actually made to; TARGET
 /// then only supplies the shape of the call. That is how an entry emitted
 /// beside the body it enters still reaches it through the body's stub.
+///
+/// THIS_ADJUST, when nonzero, is added to the first argument before it is
+/// passed on: the unboxing entry a value type's virtual method is reached
+/// through steps its receiver past the object header.
 llvm::Function *create_legacy_entry_thunk (llvm::Module &m, llvm::StringRef name,
                                            llvm::Function *target,
                                            LegacyFlavor flavor,
-                                           llvm::Value *through = nullptr);
+                                           llvm::Value *through = nullptr,
+                                           unsigned this_adjust = 0);
 
 } // namespace mono::arch
 
