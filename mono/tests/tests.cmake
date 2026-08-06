@@ -889,6 +889,12 @@ set(MONO_TESTS_UNHANDLED_EXCEPTION_255_SRC
   threadpool-exceptions5.cs
 )
 
+# A thread leaving managed code through a forced unwind. The exit code is what
+# says the process got to the end rather than aborting in a personality routine.
+set(MONO_TESTS_FORCED_UNWIND_SRC
+  thread-forced-unwind.cs
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs

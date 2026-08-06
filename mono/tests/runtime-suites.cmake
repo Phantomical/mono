@@ -434,6 +434,12 @@ _mono_unhandled_suite(1   ON  ${_unhandled_1})
 _mono_unhandled_suite(255 OFF ${_unhandled_255})
 _mono_unhandled_suite(255 ON  ${_unhandled_255})
 
+# A thread that leaves through pthread_exit drags glibc's forced unwind over
+# every JIT'd frame below it. 42 is the exit code the program asks for once it
+# has come back out of that.
+_mono_exe_list(_forced_unwind ${MONO_TESTS_FORCED_UNWIND_SRC})
+mono_runtime_suite(runtime-forced-unwind TESTS ${_forced_unwind} EXPECT 42)
+
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
   _mono_gc_env(_gc_env "${_gc}")
