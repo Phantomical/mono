@@ -934,6 +934,8 @@ namespace System.Reflection {
 			if (wrapExceptions) {
 				try {
 					o = InternalInvoke (obj, parameters, out exc);
+				} catch (ThreadAbortException) {
+					throw;
 #if MOBILE
 				} catch (MethodAccessException) {
 					throw;
