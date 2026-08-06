@@ -83,56 +83,51 @@ placed immediately after the spin loop never executes. The abort is delivered
 while the IP is still inside the finally body, `ResetAbort` never runs, `res`
 stays 4.
 
-**Root cause.** `mono/llvm/passes/finally-range.cpp:239` closes each machine
-block's guard range *before* the block's terminator:
+**Root cause.** The async stack walk that installs the guard returns **zero
+frames**, so the guard is never even considered. `async_abort_critical ()`
+(`mono/metadata/threads.c`) asks `mono_install_handler_block_guard ()` first;
+that walks the suspended thread's stack looking for a finally it is inside. On
+every failing run the walk visits no frame at all — instrumentation on the
+suspend state reports `last_managed=(none)`, `running_managed=0`, the LMF still
+at its root slot in `jit_tls`, and no `MonoJitInfo` for the suspended IP. With
+no `ji` and no LMF the walk has nothing to start from and stops at frame zero.
+The abort is then merely marked pending and delivered at the next interruption
+checkpoint, which lands inside the finally: `ResetAbort` never runs and `res`
+stays 4.
 
-```cpp
-if (state)
-    close_range (fn, mbb, mbb.getFirstTerminator (), ctx, tii, begin,
-                 clause, slot);
-```
+Dumping 32 bytes around the suspended IP identifies where the thread is stopped
+(evidence in `.claude/scratch/finally-guard-range/`):
 
-and the comment above it argues the omission is safe:
+* `ff 25 xx ff ff ff` in a run of the same — a **JITLink PLT/GOT stub**
+  (`jmp *disp(%rip)`), which no `MonoJitInfo` covers.
+* `48 c7 c0 c8 ff ff ff / 48 8b 04 02 / c3` inside `mono-sgen` — the `ret` of a
+  small unnamed native TLS getter, reached from managed code **before** the
+  wrapper's prologue has pushed an LMF.
 
-> The branch itself is the only code left outside the range, and nothing there
-> can abort.
+What makes that window wide enough to hit ~10 % of runs is codegen: the
+translator emits a `mono_generic_class_init` icall on **every** static-field
+access, so `while (!foo);` calls out through a stub into a wrapper on every
+iteration. The classic JIT emits that check once per method, which is why
+system mono is 40/40 clean; the interpreter generates no stubs at all. The same
+icall is also what puts an interruption checkpoint *inside* the finally, which
+is where the pending abort gets taken.
 
-That is exactly wrong for a spin loop. `MONO_LLVM_JIT_ASM='Driver:Stuff'`
-(dump kept at `.claude/scratch/sweep-triage/stuff.asm`) shows the one finally
-body split into three `.mono_guards` ranges, and the loop back-edge sitting in
-the hole between two of them:
+**Not the cause, though real.** `finally-range.cpp` used to close each block's
+guard range before the block's terminator, leaving the spin loop's back-edge in
+no range (`je .LBB0_3` sitting between `.Lmono_finally_end1` and
+`.Lmono_finally_begin2` in a `MONO_LLVM_JIT_ASM` dump). That hole is genuine and
+is fixed, but it is a couple of bytes of a loop dominated by a call, and closing
+it did not move the failure rate.
 
-```
-.Lmono_finally_end1:
-        .loc    1 39 1
-        je      .LBB0_3          # <-- loop back-edge, outside every range
-.Lmono_finally_begin2:
-        callq   "System.Threading.Thread:ResetAbort ()..."
-```
+**Ruled out:** the collector (fails on both), thread-start timing (an
+instrumented copy that aborts only after main has observed the thread inside the
+finally still fails with the same zero-frame signature), and `ResetAbort`
+throwing `ThreadStateException` (the caught exception is `ThreadAbortException`).
 
-A thread executing `while (!foo);` spends a real fraction of its time with the
-IP on that `je`. When the abort signal lands there,
-`find_last_handler_block ()` (`mono/mini/mini-exceptions.c:3963`) finds no
-clause whose `[handler_start, handler_end)` contains the IP, so
-`install_handler_block_guard ()` is never reached, the guard byte at `-1(%rbp)`
-is never set, and the abort is taken immediately instead of being deferred.
-
-Everything else in the mechanism is correct: the guard byte is emitted, the
-`.mono_guards` entry names `(reg 6 = rbp, offset -1)`, and the epilogue's
-`ves_icall_thread_finish_async_abort` call is in place. Only the ranges have a
-hole.
-
-**Ruled out:** the collector (fails on both), the tip's commits (they touch
-none of this), thread-start timing (the finally demonstrably runs — `res` is 4),
-and `ResetAbort` throwing `ThreadStateException` (the caught exception is
-`ThreadAbortException`).
-
-**Note for whoever fixes it.** The comment is not paranoid for no reason —
-planting a label *after* the terminator makes `getFirstTerminator ()` walk off
-the end and the AsmPrinter then drops the successor's label. The range end has
-to be made to cover the terminator without a label being emitted after it; the
-next block's begin label, which is emitted anyway, is the obvious candidate for
-an exclusive end.
+**What it needs.** Either code with no `MonoJitInfo` that managed code can be
+stopped in — JITLink's stubs, wrapper prologues before the LMF push — has to
+become walkable, or the redundant class-init calls have to go so the loop
+contains no call at all. Both are their own tasks.
 
 ### 903 `runtime/pinvoke-detach-1@sgen` — genuine intermittent hang
 
