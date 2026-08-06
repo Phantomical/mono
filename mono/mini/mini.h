@@ -1886,19 +1886,7 @@ typedef struct {
 	int type;
 } StackSlot;
 
-extern const MonoInstSpec MONO_ARCH_CPU_SPEC [];
-#define MONO_ARCH_CPU_SPEC_IDX_COMBINE(a) a ## _idx
-#define MONO_ARCH_CPU_SPEC_IDX(a) MONO_ARCH_CPU_SPEC_IDX_COMBINE(a)
-extern const guint16 MONO_ARCH_CPU_SPEC_IDX(MONO_ARCH_CPU_SPEC) [];
-#define ins_get_spec(op) ((const char*)&MONO_ARCH_CPU_SPEC [MONO_ARCH_CPU_SPEC_IDX(MONO_ARCH_CPU_SPEC)[(op) - OP_LOAD]])
-
 #ifndef DISABLE_JIT
-
-static inline int
-ins_get_size (int opcode)
-{
-	return ((guint8 *)ins_get_spec (opcode))[MONO_INST_LEN];
-}
 
 guint8*
 mini_realloc_code_slow (MonoCompile *cfg, int size);

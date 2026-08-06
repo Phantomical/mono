@@ -18,21 +18,6 @@ add_custom_command(
   VERBATIM)
 add_custom_target(mono-version DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
-# The instruction description table, from cpu-amd64.md.
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-add_custom_command(
-  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cpu-amd64.h"
-  COMMAND Python3::Interpreter
-          "${CMAKE_CURRENT_SOURCE_DIR}/genmdesc.py"
-          TARGET_AMD64 "${CMAKE_CURRENT_SOURCE_DIR}"
-          "${CMAKE_CURRENT_BINARY_DIR}/cpu-amd64.h"
-          amd64_desc
-          "${CMAKE_CURRENT_SOURCE_DIR}/cpu-amd64.md"
-  DEPENDS genmdesc.py cpu-amd64.md mini-ops.h
-  COMMENT "Generating cpu-amd64.h"
-  VERBATIM)
-add_custom_target(mono-cpu-desc DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/cpu-amd64.h")
-
 # ---------------------------------------------------------------------------
 # libmini -- shared between mono-sgen and mono-boehm; nothing in here has a
 # compile-time dependency on either collector.
@@ -75,7 +60,6 @@ set(mini_sources
   # posix
   mini-posix.c
   # generated
-  "${CMAKE_CURRENT_BINARY_DIR}/cpu-amd64.h"
   "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
 if(MONO_ENABLE_LLVM)
@@ -90,7 +74,7 @@ mono_add_object_library(mini
     "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
     "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
   DEPENDS mono::hidden mono::eglib_headers mono::llvm)
-add_dependencies(mini mono-version mono-cpu-desc)
+add_dependencies(mini mono-version)
 
 # The C sources of the tree are not ready for -Wswitch (configure puts
 # -Wno-switch in the global flags), but the C++ ones are.
@@ -114,7 +98,7 @@ if(MONO_ENABLE_INTERPRETER)
       "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
       "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
     DEPENDS mono::hidden mono::eglib_headers mono::llvm)
-  add_dependencies(mono_ee_interp mono-version mono-cpu-desc)
+  add_dependencies(mono_ee_interp mono-version)
 endif()
 
 if(MONO_ENABLE_DEBUGGER_AGENT)
@@ -129,7 +113,7 @@ if(MONO_ENABLE_DEBUGGER_AGENT)
       "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
       "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
     DEPENDS mono::hidden mono::eglib_headers mono::llvm)
-  add_dependencies(mono_dbg mono-version mono-cpu-desc)
+  add_dependencies(mono_dbg mono-version)
 endif()
 
 # ---------------------------------------------------------------------------

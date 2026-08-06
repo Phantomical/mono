@@ -89,7 +89,6 @@ struct sigcontext {
 #define MONO_ARCH_SIGNAL_STACK_SIZE (16 * 1024)
 #endif
 
-#define MONO_ARCH_CPU_SPEC mono_amd64_desc
 
 #define MONO_MAX_IREGS 16
 
