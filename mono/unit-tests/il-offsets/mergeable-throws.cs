@@ -1,23 +1,25 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.CompilerServices;
 
-// Several throws differing only in a constant argument.  LLVM's cross-jumping
-// will happily fold these into one shared call once the argument is hoisted, at
-// which point a nearest-preceding-marker lookup can only recover whichever site
-// survived -- so this is the fixture for that staying blocked.
+// Three throws differing only in a constant argument.  SimplifyCFG will happily
+// cross-jump these into one shared call once the argument is hoisted, at which
+// point all three land on the same native address and a map built by
+// nearest-preceding-marker can only recover whichever site survived.  Each of the
+// three traces below has to come back naming its own throw.
 
 class MergeableThrows {
 
-	static void Dump (string label, Exception e)
+	static void Dump (string label, StackTrace st)
 	{
-		StackTrace st = new StackTrace (e, false);
 		for (int i = 0; i < st.FrameCount; i++) {
 			StackFrame f = st.GetFrame (i);
 			var m = f.GetMethod ();
 			if (m == null)
 				continue;
-			Console.WriteLine ("{0}\t{1}:{2}\t0x{3:x}", label, m.DeclaringType.Name, m.Name, f.GetILOffset ());
+			Console.WriteLine ("{0}\t{1}:{2}\t{3}:{4}", label, m.DeclaringType.Name, m.Name,
+					   Path.GetFileName (f.GetFileName ()), f.GetFileLineNumber ());
 		}
 	}
 
@@ -25,11 +27,11 @@ class MergeableThrows {
 	static int MultiThrow (int x)
 	{
 		if (x == 1)
-			throw new InvalidOperationException ("one");
+			throw new InvalidOperationException ("one");	// IL-FRAME: mergeable-throw-1 0 MergeableThrows:MultiThrow
 		if (x == 2)
-			throw new InvalidOperationException ("two");
+			throw new InvalidOperationException ("two");	// IL-FRAME: mergeable-throw-2 0 MergeableThrows:MultiThrow
 		if (x == 3)
-			throw new InvalidOperationException ("three");
+			throw new InvalidOperationException ("three");	// IL-FRAME: mergeable-throw-3 0 MergeableThrows:MultiThrow
 		return x;
 	}
 
@@ -40,9 +42,9 @@ class MergeableThrows {
 			MultiThrow (i);
 		for (int want = 1; want <= 3; want++) {
 			try {
-				MultiThrow (want);
+				MultiThrow (want);	// IL-FRAME: mergeable-throw-1,mergeable-throw-2,mergeable-throw-3 1 MergeableThrows:Scenario
 			} catch (Exception e) {
-				Dump ("mergeable-throw-" + want, e);
+				Dump ("mergeable-throw-" + want, new StackTrace (e, true));
 			}
 		}
 	}

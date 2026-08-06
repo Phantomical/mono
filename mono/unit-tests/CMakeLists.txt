@@ -160,3 +160,10 @@ if(MONO_ENABLE_MCS_BUILD)
       WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   endforeach()
 endif()
+
+# Checks that run a managed corpus and assert on what the runtime recorded while
+# compiling it, rather than on what the corpus computed.  They need the corpus
+# plumbing, which mono/mini sets up.
+if(MONO_CORPUS_ENABLED)
+  add_subdirectory(il-offsets)
+endif()

@@ -47,12 +47,21 @@ set(MONO_CORPUS_ILASM ${_host} "${MONO_CORPUS_BUILD_DIR}/ilasm.exe" -quiet)
 # Compile one C# corpus into the calling directory's binary dir, appending it to
 # MONO_CORPUS_OUTPUTS in the caller's scope.
 #
-#   mono_corpus_cs(<out> [LIBRARY] SOURCES <src>... [REFS <dll>...])
+#   mono_corpus_cs(<out> [LIBRARY] [DEBUG] SOURCES <src>... [REFS <dll>...])
+#
+# DEBUG emits a portable PDB next to the assembly, which is what lets the
+# runtime turn an IL offset back into a source line.
 function(mono_corpus_cs out)
-  cmake_parse_arguments(ARG "LIBRARY" "" "SOURCES;REFS" ${ARGN})
+  cmake_parse_arguments(ARG "LIBRARY;DEBUG" "" "SOURCES;REFS" ${ARGN})
   set(_extra "")
+  set(_outputs "${CMAKE_CURRENT_BINARY_DIR}/${out}")
   if(ARG_LIBRARY)
     set(_extra -target:library)
+  endif()
+  if(ARG_DEBUG)
+    list(APPEND _extra -debug:portable)
+    cmake_path(GET out STEM _stem)
+    list(APPEND _outputs "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.pdb")
   endif()
   set(_srcs "")
   foreach(_s IN LISTS ARG_SOURCES)
@@ -72,14 +81,14 @@ function(mono_corpus_cs out)
     endif()
   endforeach()
   add_custom_command(
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${out}"
+    OUTPUT ${_outputs}
     COMMAND ${MONO_CORPUS_CSC} ${_extra} ${MONO_CORPUS_CSFLAGS}
             "-out:${CMAKE_CURRENT_BINARY_DIR}/${out}" ${_srcs} ${_refs}
     DEPENDS ${_srcs} ${_ref_deps} mcs
     COMMENT "CSC ${out}"
     VERBATIM)
   set(MONO_CORPUS_OUTPUTS
-      "${MONO_CORPUS_OUTPUTS};${CMAKE_CURRENT_BINARY_DIR}/${out}" PARENT_SCOPE)
+      "${MONO_CORPUS_OUTPUTS};${_outputs}" PARENT_SCOPE)
 endfunction()
 
 # The same for an IL corpus.
@@ -117,5 +126,26 @@ function(mono_corpus_target name)
     add_dependencies(${name} ${ARG_DEPENDS})
   endif()
   add_dependencies(mini-corpora ${name})
+endfunction()
+
+# A check that runs a corpus and asserts on what the runtime recorded about it,
+# rather than on what the corpus computed.  The script is Python under
+# mono/unit-tests and takes the runtime, the corpus, and the corpus source
+# carrying the expectations.
+#
+#   mono_add_corpus_check(<name> SCRIPT <py> CORPUS <exe> [SOURCE <cs>] [LABELS <l>...])
+function(mono_add_corpus_check name)
+  cmake_parse_arguments(ARG "" "SCRIPT;CORPUS;SOURCE" "LABELS" ${ARGN})
+  # The check runs from the binary directory and reads the script out of the
+  # source tree, which is no place to leave a __pycache__ behind.
+  add_test(NAME ${name}
+           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${MONO_CORPUS_MONO_PATH}"
+                   "PYTHONDONTWRITEBYTECODE=1"
+                   "${Python3_EXECUTABLE}" "${ARG_SCRIPT}"
+                   "${MONO_CORPUS_WRAPPER}" "${ARG_CORPUS}" ${ARG_SOURCE}
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  if(ARG_LABELS)
+    set_tests_properties(${name} PROPERTIES LABELS "${ARG_LABELS}")
+  endif()
 endfunction()
 

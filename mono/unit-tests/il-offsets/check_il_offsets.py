@@ -1,106 +1,147 @@
 #!/usr/bin/env python3
-"""Assert tier-1 stack traces name the same methods, at the same IL offsets, as
-the classic JIT.
+"""Assert a managed stack trace blames each frame on the source line it came from.
 
-Tier 1 gets its native_offset -> il_offset map, and the chain of bodies inlined
-at each offset, out of the debug info LLVM emits for the compiled body.  Nothing
-about execution goes wrong when either is off, so a corpus run stays green while
-stack traces quietly blame the wrong IL -- or drop a frame, since a body LLVM
-folded in has no call site left to name it.
+A JIT'd method's native_offset -> il_offset map is not built during codegen: it
+is read back out of the DWARF line table LLVM emitted for the body
+(parse_il_line_table, mono/llvm/jit.cpp), where each IL offset rode along as a
+line number.  Nothing about executing the method depends on that map being
+right, so a corpus stays green while its stack traces blame the wrong IL -- and
+an optimizer that sinks a throw, or cross-jumps two of them together, is exactly
+what makes the map disagree with the IL it claims to describe.
 
-The classic JIT is the oracle: it computes the same mapping during its own
-codegen, so this compares the two rather than hardcoding offsets, which would
-only re-encode whatever the C# compiler happened to emit.
+Each fixture prints one line per managed frame,
 
-The rule is equality -- same methods, same order, same IL offsets.  Tier 1
-inlines far more than the classic JIT does, so the frames it reports for a
-folded-in body are synthesized from that debug info; getting them back is
-exactly what is under test, and anything less than equality would pass whether
-or not they came back.
+    <label>\t<Class:Method>\t<source>:<line>
 
-That holds only while no fixture method is short enough for the CLASSIC JIT's
-own front-end inliner to fold away (INLINE_LENGTH_LIMIT, 20 IL bytes,
-method-to-ir.c).  A front-end inline leaves nothing to recover -- the inlined IR
-carries the CALLER's offset by construction (cfg->real_offset = inline_offset)
--- so such a method is simply missing from the oracle, while tier 1, which does
-no front-end inlining at all, still reports it.  The fixtures are padded well
-past that to stay clear of it.
+with the source and line resolved from the frame's IL offset through the
+corpus's portable PDB, and carries the trace it should produce as markers in its
+own source:
+
+    // IL-FRAME: <label>[,<label>...] <index> <Class:Method>
+
+sitting on the line the frame has to be blamed on.  The expected line number is
+therefore wherever the comment is, so moving code around inside a fixture cannot
+leave a stale expectation behind; INDEX is the frame's position in that label's
+trace, innermost first.
+
+The rule is equality: the frames reported for a label are exactly the ones
+marked for it, in order, each at its own marker's line.  A line is a coarser
+claim than an IL offset, but it is one a reader can check against the fixture --
+"this frame is blamed on the throw" -- where a hardcoded offset would only
+re-encode whatever the C# compiler happened to emit.
 """
 
+import argparse
 import collections
 import os
+import re
+import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import jitcheck
+MARKER = re.compile(r"//\s*IL-FRAME:\s*(\S+)\s+(\d+)\s+(\S+)\s*$")
 
 
-def frames(output):
-    """Group `<label>\\t<Class:Method>\\t<0xIL>` rows by label, in walk order."""
+def die(message, *details):
+    """Report a problem with the run itself, rather than with what it reported."""
+    print(f"{os.path.basename(sys.argv[0])}: {message}", file=sys.stderr)
+    for detail in details:
+        print(f"  {detail}", file=sys.stderr)
+    sys.exit(1)
+
+
+def expectations(source):
+    """Read the fixture's markers into label -> [(method, line)], innermost first."""
+    marked = collections.defaultdict(dict)
+    with open(source, encoding="utf-8") as handle:
+        for lineno, text in enumerate(handle, start=1):
+            found = MARKER.search(text.rstrip())
+            if not found:
+                continue
+            labels, index, method = found.groups()
+            for label in labels.split(","):
+                slot = marked[label]
+                if int(index) in slot:
+                    die(f"{label} frame {index} is marked twice, at line {lineno}")
+                slot[int(index)] = (method, lineno)
+
+    want = {}
+    for label, slot in marked.items():
+        missing = set(range(len(slot))) - set(slot)
+        if missing:
+            die(f"{label} has no marker for frame {min(missing)}")
+        want[label] = [slot[i] for i in sorted(slot)]
+    return want
+
+
+def reported(output, source_name):
+    """Group the corpus's `<label>\\t<method>\\t<file>:<line>` rows by label."""
     walked = collections.defaultdict(list)
-    for line in output.splitlines():
-        fields = line.split("\t")
-        if len(fields) < 3:
+    for row in output.splitlines():
+        fields = row.split("\t")
+        if len(fields) != 3:
             continue
-        walked[fields[0]].append((fields[1], fields[2]))
+        label, method, where = fields
+        name, _, line = where.rpartition(":")
+        if name != source_name:
+            die(f"{label}: frame {method} came back from {where!r}",
+                "The runtime resolved no source line for it, so either the",
+                f"portable PDB for the corpus is missing or {source_name} moved.")
+        walked[label].append((method, int(line)))
     return walked
 
 
 def compare(label, want, got):
     """Diff one scenario's frames, returning a message per mismatch."""
-    if got is None:
-        return [f"{label}: tier 1 produced no frames for this scenario"]
-
     issues = []
-    # Compare as far as both go, then report any length difference, so that a
-    # dropped frame names the frame rather than only the count.
-    for i, ((wm, wo), (gm, go)) in enumerate(zip(want, got), start=1):
+    for i, ((wm, wl), (gm, gl)) in enumerate(zip(want, got)):
         if wm != gm:
-            issues.append(f"{label} frame {i}: tier 1 has {gm}, classic has {wm}")
-        elif wo != go:
-            issues.append(f"{label} frame {i}: {gm} il {go}, classic has {wo}")
-    for method, offset in want[len(got):]:
-        issues.append(f"{label}: tier 1 is missing {method} (il {offset})")
-    for method, offset in got[len(want):]:
-        issues.append(f"{label}: tier 1 has an extra frame {method} (il {offset})")
+            issues.append(f"{label} frame {i}: got {gm}, marked {wm}")
+        elif wl != gl:
+            issues.append(f"{label} frame {i}: {gm} blamed on line {gl}, marked {wl}")
+    for i, (method, line) in enumerate(want[len(got):], start=len(got)):
+        issues.append(f"{label} frame {i}: {method} (line {line}) never reported")
+    for i, (method, line) in enumerate(got[len(want):], start=len(want)):
+        issues.append(f"{label} frame {i}: unmarked {method} (line {line})")
     return issues
 
 
 def main():
-    args = jitcheck.argument_parser(__doc__).parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("runtime", help="the mono binary, or the mono-wrapper script")
+    parser.add_argument("corpus", help="the corpus .exe to run")
+    parser.add_argument("source", help="the corpus source carrying the markers")
+    args = parser.parse_args()
 
-    proc = jitcheck.run(args.runtime, args.corpus, args=("--nollvm",))
+    if not os.path.isfile(args.source):
+        die(f"no such source: {args.source}")
+    want = expectations(args.source)
+    if not want:
+        die(f"{args.source} carries no IL-FRAME markers, so there is nothing to check.")
+
+    # --debug is what makes the runtime load the corpus's PDB and answer with a
+    # source line; it leaves the compile itself alone, so the map under test is
+    # the one an ordinary run would get.
+    proc = subprocess.run([args.runtime, "--debug", args.corpus],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True)
     if proc.returncode != 0:
-        jitcheck.die(f"the classic run failed (exit {proc.returncode})")
-    classic = frames(proc.stdout)
+        die(f"the corpus run failed (exit {proc.returncode})",
+            *proc.stderr.splitlines()[-20:])
+    got = reported(proc.stdout, os.path.basename(args.source))
 
-    proc = jitcheck.run(args.runtime, args.corpus, args=("--llvm",),
-                        env=jitcheck.DETERMINISTIC_TIER1)
-    if proc.returncode != 0:
-        jitcheck.die(f"the tier-1 run failed (exit {proc.returncode})")
-    tiered = frames(proc.stdout)
+    checks = problems = 0
+    for label in sorted(set(want) | set(got)):
+        checks += 1
+        issues = compare(label, want.get(label, []), got.get(label, []))
+        if not issues:
+            print(f"  ok   {label:<24} {len(want[label])} frame(s)")
+            continue
+        problems += 1
+        for issue in issues:
+            print(f"  FAIL {issue}")
 
-    if not classic:
-        jitcheck.die("the classic run produced no labelled frames.")
-
-    report = jitcheck.Report()
-    for label, want in classic.items():
-        issues = compare(label, want, tiered.get(label))
-        if issues:
-            report.fail(issues[0])
-            for issue in issues[1:]:
-                report.problem(issue)
-        else:
-            report.ok(f"{label:<22} {len(want)} frame(s)")
-
-    # A scenario only the tier-1 run produced would otherwise go unnoticed: the
-    # loop above is driven by the classic run.
-    for label in tiered:
-        if label not in classic:
-            report.problem(
-                f"{label}: tier 1 produced frames for a scenario the classic run did not")
-
-    return report.finish("scenarios")
+    print(f"{checks} scenarios, {problems} failed")
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":
