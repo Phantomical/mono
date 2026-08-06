@@ -34,7 +34,7 @@ add_custom_target(test-llvm-data ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
 mono_tools_runtime_depends(test-llvm-data)
 
 add_executable(test-llvm harness.cpp translator-tests.cpp jit-tests.cpp
-                         stub-tests.cpp)
+                         stub-tests.cpp codemem-tests.cpp)
 
 target_include_directories(test-llvm PRIVATE
   "${CMAKE_BINARY_DIR}"
