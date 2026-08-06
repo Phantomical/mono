@@ -2067,6 +2067,108 @@ ncells ) {
 		ClassAggressiveInline.inlined ();
 		return cctor_called ? 0 : 1;
 	}
+
+	/*
+	 * A value type goes onto the evaluation stack by value, so writing to the
+	 * place it was loaded from cannot show through what is already on the
+	 * stack. Argument evaluation order is what gets a write in between the
+	 * two: take_aliased (v, bump_aliased (ref v)) pushes v, then runs a call
+	 * that assigns to v, and take_aliased still has to be handed the v that
+	 * was pushed.
+	 *
+	 * Each of these covers one kind of place a value can be loaded from, since
+	 * what a JIT can prove about a local is not what it can prove about a heap
+	 * location.
+	 */
+
+	struct AliasedStruct {
+		public int a, b;
+	}
+
+	struct AliasedWithRef {
+		public object o;
+		public int a;
+	}
+
+	class AliasedHolder {
+		public AliasedStruct f;
+		public AliasedWithRef r;
+	}
+
+	static AliasedStruct[] aliased_array = new AliasedStruct [4];
+	static AliasedWithRef[] aliased_ref_array = new AliasedWithRef [4];
+	static AliasedStruct aliased_static;
+	static AliasedHolder aliased_holder = new AliasedHolder ();
+	static bool aliased_taken = true;
+
+	static int bump_aliased (ref AliasedStruct s) { s.a = 99; return 0; }
+	static int clobber_aliased_array () { aliased_array [0].a = 99; return 0; }
+	static int clobber_aliased_ref_array () { aliased_ref_array [0].a = 99; return 0; }
+	static int clobber_aliased_static () { aliased_static.a = 99; return 0; }
+	static int clobber_aliased_field () { aliased_holder.f.a = 99; return 0; }
+	static int clobber_aliased_ref_field () { aliased_holder.r.a = 99; return 0; }
+
+	static int take_aliased (AliasedStruct s, int ignored) { return s.a; }
+	static int take_aliased_ref (AliasedWithRef s, int ignored) { return s.a; }
+	static int take_two_aliased (AliasedStruct x, AliasedStruct y, int ignored) {
+		return x.a * 10 + y.a;
+	}
+
+	public static int test_0_pushed_local_survives_a_write () {
+		AliasedStruct v;
+
+		v.a = 1;
+		v.b = 0;
+		return take_aliased (v, bump_aliased (ref v)) == 1 ? 0 : 1;
+	}
+
+	public static int test_0_pushed_element_survives_a_write () {
+		aliased_array [0].a = 1;
+		return take_aliased (aliased_array [0], clobber_aliased_array ()) == 1 ? 0 : 1;
+	}
+
+	public static int test_0_pushed_field_survives_a_write () {
+		aliased_holder.f.a = 1;
+		return take_aliased (aliased_holder.f, clobber_aliased_field ()) == 1 ? 0 : 1;
+	}
+
+	public static int test_0_pushed_static_survives_a_write () {
+		aliased_static.a = 1;
+		return take_aliased (aliased_static, clobber_aliased_static ()) == 1 ? 0 : 1;
+	}
+
+	/* A struct with a reference in it is copied by the collector's own routine. */
+	public static int test_0_pushed_ref_element_survives_a_write () {
+		aliased_ref_array [0].a = 1;
+		return take_aliased_ref (aliased_ref_array [0],
+					 clobber_aliased_ref_array ()) == 1 ? 0 : 1;
+	}
+
+	public static int test_0_pushed_ref_field_survives_a_write () {
+		aliased_holder.r.a = 1;
+		return take_aliased_ref (aliased_holder.r,
+					 clobber_aliased_ref_field ()) == 1 ? 0 : 1;
+	}
+
+	/* The pushed value is still on the stack where the two arms meet. */
+	public static int test_0_pushed_local_survives_a_write_on_one_arm () {
+		AliasedStruct v;
+
+		v.a = 1;
+		v.b = 0;
+		return take_aliased (v, aliased_taken ? bump_aliased (ref v) : 0) == 1 ? 0 : 1;
+	}
+
+	/* The write lands under two values, not just the one on top. */
+	public static int test_0_pushed_locals_survive_a_write_to_the_deeper_one () {
+		AliasedStruct v, w;
+
+		v.a = 1;
+		v.b = 0;
+		w.a = 2;
+		w.b = 0;
+		return take_two_aliased (v, w, bump_aliased (ref v)) == 12 ? 0 : 1;
+	}
 }
 
 #if __MOBILE__
