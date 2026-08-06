@@ -1,6 +1,9 @@
-# Native unit tests.  Each one is a separate executable, which is not just
-# tidiness: several of them start a runtime, and a runtime cannot be shut down
-# and started again in one process, so a binary gets at most one of those.
+# Native unit tests.  A binary holds as many of them as can share one process,
+# which is what keeps the number of executables down; the split that is left is
+# forced.  Starting a runtime is a one-way door -- it cannot be shut down and
+# started again -- so a test that tears one down gets a binary to itself, and
+# two tests that want the thread-info subsystem stood up differently cannot
+# agree on one either.
 #
 # The bodies are gtest, and gtest_discover_tests turns each case into its own
 # ctest test running in its own process -- so a crash still names one check.
@@ -53,14 +56,24 @@ function(mono_add_unit_test name)
   set_target_properties(${name} PROPERTIES LINKER_LANGUAGE CXX)
 
   target_link_libraries(${name} PRIVATE GTest::gtest GTest::gtest_main)
+endfunction()
 
+# Register TARGET's cases matching FILTER as ctest tests named
+# <prefix>/<suite>.<case>.
+#
+# A binary carrying several files' worth of cases gets one call per file, so the
+# ctest names stay tied to the source the case lives in rather than to whichever
+# binary it was linked into.  The filter only narrows discovery: each case still
+# runs on its own with --gtest_filter=<suite>.<case>.
+function(mono_unit_test_cases target prefix filter)
   # PRE_TEST because discovery has to happen where the tests run: the working
   # directory is load-bearing (see above) and MONO_PATH has to be set.
   #
   # A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest
   # says so only in its output -- the process still exits 0.
-  gtest_discover_tests(${name}
-    TEST_PREFIX ${name}/
+  gtest_discover_tests(${target}
+    TEST_PREFIX ${prefix}/
+    TEST_FILTER ${filter}
     DISCOVERY_MODE PRE_TEST
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     PROPERTIES
@@ -68,16 +81,39 @@ function(mono_add_unit_test name)
       ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
 endfunction()
 
-mono_add_unit_test(test-sgen-qsort           SOURCES test-sgen-qsort.cpp)
-mono_add_unit_test(test-memfuncs             SOURCES test-memfuncs.cpp)
+# The tests that need neither a runtime nor the thread-info subsystem, plus the
+# one -- ConcHashTable -- that stands it up first.
+mono_add_unit_test(test-mono-utils SOURCES
+  test-sgen-qsort.cpp test-memfuncs.cpp test-mono-handle.cpp
+  test-conc-hashtable.cpp)
+mono_unit_test_cases(test-mono-utils test-sgen-qsort     "SgenQsort.*")
+mono_unit_test_cases(test-mono-utils test-memfuncs       "MemFuncs.*")
+mono_unit_test_cases(test-mono-utils test-mono-handle    "MonoHandle.*")
+mono_unit_test_cases(test-mono-utils test-conc-hashtable "ConcHashTable.*")
+
+# Alone because it wants mono_thread_info_init (0) where ConcHashTable wants
+# sizeof (MonoThreadInfo), and whichever runs first decides for the process.
 mono_add_unit_test(test-mono-linked-list-set SOURCES test-mono-linked-list-set.cpp)
-mono_add_unit_test(test-conc-hashtable       SOURCES test-conc-hashtable.cpp)
-mono_add_unit_test(test-mono-handle          SOURCES test-mono-handle.cpp)
+mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
+
 mono_add_unit_test(test-mono-callspec        SOURCES test-mono-callspec.cpp   RUNTIME)
+mono_unit_test_cases(test-mono-callspec test-mono-callspec "*")
 mono_add_unit_test(test-mono-string          SOURCES test-mono-string.cpp     RUNTIME)
-mono_add_unit_test(test-mono-embed           SOURCES test-mono-embed.cpp      RUNTIME)
-mono_add_unit_test(test-embed-invoke         SOURCES test-embed-invoke.cpp    RUNTIME)
+mono_unit_test_cases(test-mono-string test-mono-string "*")
+
+# RUNTIME not because it starts one, but because it reaches mono-path.c's
+# statics by including the file: only the archive lets the linker leave the
+# library's own copy of those symbols out.
 mono_add_unit_test(test-path                 SOURCES test-path.cpp            RUNTIME)
+mono_unit_test_cases(test-path test-path "*")
+
+# One case each, and there could not be a second: the samples they are built out
+# of run a domain to completion and call mono_jit_cleanup, and nothing in the
+# process gets a runtime after that.
+mono_add_unit_test(test-mono-embed           SOURCES test-mono-embed.cpp      RUNTIME)
+mono_unit_test_cases(test-mono-embed test-mono-embed "*")
+mono_add_unit_test(test-embed-invoke         SOURCES test-embed-invoke.cpp    RUNTIME)
+mono_unit_test_cases(test-embed-invoke test-embed-invoke "*")
 
 # The managed side of the tests that need one.
 if(MONO_ENABLE_MCS_BUILD)

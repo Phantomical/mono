@@ -49,6 +49,17 @@ public:
 			MONO_THREAD_INFO_RUNTIME_CALLBACKS (MONO_INIT_CALLBACK, monotest)
 		};
 
+		/*
+		 * Standing the subsystem up a second time hands out small ids that no
+		 * longer match their slots, and the hazard-pointer table asserts on it.
+		 * gtest reaches here again under --gtest_repeat, so the guard is not
+		 * theoretical.
+		 */
+		static bool started = false;
+		if (started)
+			return;
+		started = true;
+
 		CHECKED_MONO_INIT ();
 		mono_thread_info_init (sizeof (MonoThreadInfo));
 		mono_thread_info_runtime_init (&ticallbacks);
