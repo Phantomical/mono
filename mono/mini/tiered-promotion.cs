@@ -38,11 +38,11 @@ namespace MonoTests.Tiering {
 //
 // Every test method is correct regardless of whether its helpers are still at
 // tier 0 or have been promoted to tier 1, so the suite passes on the classic
-// JIT and under `MONO_TIERED=1 --llvm` at any threshold. Its purpose under
+// JIT and under `MONO_TIERED=1` at any threshold. Its purpose under
 // tiering is to exercise the promotion path and prove it preserves semantics:
 //
 //   MONO_PATH=<class> MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 \
-//     mono --llvm --regression tiered-promotion.exe
+//     mono --regression tiered-promotion.exe
 //
 // The helpers are marked NoInlining so their prologues (which carry the call
 // counter) actually run on every call; an inlined helper would never count.

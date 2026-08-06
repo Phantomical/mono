@@ -1801,8 +1801,6 @@ mono_jit_parse_options (int argc, char * argv[])
 			mono_gc_params_set (argv[i] + 12);
 		} else if (strncmp (argv[i], "--gc-debug=", 11) == 0) {
 			mono_gc_debug_set (argv[i] + 11);
-		} else if (strcmp (argv [i], "--llvm") == 0 || strcmp (argv [i], "--nollvm") == 0) {
-			fprintf (stderr, "Mono Warning: %s is deprecated and ignored: LLVM is the only JIT.\n", argv [i]);
 		} else if (strncmp (argv [i], "--llvm-opt=", 11) == 0) {
 			mono_llvm_jit_add_option (argv [i] + 11);
 #ifdef ENABLE_JIT_DUMP
@@ -2408,8 +2406,6 @@ mono_main (int argc, char* argv[])
 		} else if (strcmp (argv [i], "--test-jit-info-table") == 0) {
 			test_jit_info_table = TRUE;
 #endif
-		} else if (strcmp (argv [i], "--llvm") == 0 || strcmp (argv [i], "--nollvm") == 0) {
-			fprintf (stderr, "Mono Warning: %s is deprecated and ignored: LLVM is the only JIT.\n", argv [i]);
 		} else if (strncmp (argv [i], "--llvm-opt=", 11) == 0) {
 			mono_llvm_jit_add_option (argv [i] + 11);
 		} else if (strcmp (argv [i], "--ffast-math") == 0){

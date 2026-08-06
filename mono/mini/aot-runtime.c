@@ -1921,7 +1921,7 @@ check_usable (MonoAssembly *assembly, MonoAotFileInfo *info, guint8 *blob, char 
 	}
 	if (mono_use_llvm && mini_use_llvm_explicitly_set () && !(info->flags & MONO_AOT_FILE_FLAG_WITH_LLVM)) {
 		/*
-		 * Prefer LLVM JITted code when the user asked for --llvm by name. Only
+		 * Prefer LLVM JITted code when an embedder asked for LLVM by name. Only
 		 * then - LLVM is on by default now, and "the LLVM tier is available"
 		 * is no reason to throw away a perfectly good non-LLVM AOT image.
 		 */

@@ -235,8 +235,8 @@ There is no LLVM compile step — LLVM itself is already built.
 ./build/mono/mini/mono-sgen --version | grep LLVM
 #   LLVM:          yes(1800)
 
-# 2. And it actually generates code via LLVM when asked. Compile a tiny program,
-#    then force the LLVM backend and dump the IR it emits:
+# 2. And it actually generates code via LLVM. Compile a tiny program, then dump
+#    the IR the backend emits for it:
 cat > /tmp/Hv.cs <<'EOF'
 using System; using System.Linq;
 class Hello { static void Main(){ Console.WriteLine(Enumerable.Range(1,5).Select(x=>x*x).Sum()); } }
@@ -244,15 +244,14 @@ EOF
 mcs -out:/tmp/Hv.exe /tmp/Hv.cs
 
 export MONO_PATH="$PWD/build/mcs/class/lib/net_4_x-linux"
-./build/mono/mini/mono-sgen --llvm /tmp/Hv.exe           # runs -> 55
-MONO_VERBOSE_METHOD=Main ./build/mono/mini/mono-sgen --llvm /tmp/Hv.exe 2>&1 | grep -i llvm
+./build/mono/mini/mono-sgen /tmp/Hv.exe                  # runs -> 55
+MONO_VERBOSE_METHOD=Main ./build/mono/mini/mono-sgen /tmp/Hv.exe 2>&1 | grep -i llvm
 #   converting llvm method void Hello:Main ()
 #   *** Unoptimized LLVM IR for Hello:Main () ***   ...
 ```
 
-Seeing the emitted *"LLVM IR for Hello:Main"* confirms the LLVM backend — not the
-built-in JIT — compiled the method. `--nollvm` forces the built-in backend if you
-want to compare. (`<prefix>/bin/llvm-config --version` prints the upstream LLVM
+Seeing the emitted *"LLVM IR for Hello:Main"* confirms the LLVM backend compiled
+the method. (`<prefix>/bin/llvm-config --version` prints the upstream LLVM
 version that was linked in.)
 
 ## Testing
@@ -294,8 +293,9 @@ outside this build:
 | `bcl-System.Windows.Forms` | an X display |
 | `bcl-System.Data.Linq` | a build directory whose path is short enough that the test assembly's own path fits a 128-character connection-string field |
 
-To tell one of these from a real code regression, re-run the single suite with
-`--nollvm`: the machine-dependent failures reproduce, a codegen bug does not.
+To tell one of these from a real code regression, re-run the single suite against
+the machine's installed mono (`MONO_EXECUTABLE`): the machine-dependent failures
+reproduce there too, a codegen bug in this tree does not.
 
 ### Acceptance tests
 

@@ -378,7 +378,7 @@ class Tests
 	 * finally tags in the order they ran).
 	 *
 	 * These tests assert CORRECTNESS on every configuration (classic, and
-	 * MONO_TIERED=1 --llvm at any threshold): the exact finally order AND the frame that
+	 * MONO_TIERED=1 at any threshold): the exact finally order AND the frame that
 	 * catches. The per-frame TIER is forced deterministically OUT OF BAND with
 	 * MONO_LLVM_METHOD (an allowlist: only the named methods reach the LLVM tier, every
 	 * other stays tier-0 classic) + MONO_TIERED=1 + a low MONO_TIERED_CALL_THRESHOLD; the
@@ -943,7 +943,7 @@ class Tests
 	 *   MONO_LLVM_METHOD='n4_nested_catch_t1;n4_nested_finally_t1;\
 	 *     n4_base_catch_in_finally_t1;n4_finally_in_catch_multi_t1;\
 	 *     n4_multi_invoke_t1;n4_sibling_catch_in_finally_t1;\
-	 *     n4_sibling3_catch_in_finally_t1' ./mono --llvm -v exceptions.exe
+	 *     n4_sibling3_catch_in_finally_t1' ./mono -v exceptions.exe
 	 * forces each onto the tier-1 LLVM path (verbose "LLVM Method ... emitted"). In the
 	 * regression suite the warm-up loops are inert at the default promotion threshold,
 	 * so each is a pure correctness test with the classic JIT as the differential
@@ -1388,7 +1388,7 @@ class Tests
 	 * Driven tier-1 proof:
 	 *   MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 \
 	 *   MONO_LLVM_METHOD='n5_s1_nested_t1;n5_s2_caller_t1;n5_s3_f1_t1;n5_s3_f3_t1;\
-	 *     n5_s4_sibling_t1' ./mono --llvm -v exceptions.exe
+	 *     n5_s4_sibling_t1' ./mono -v exceptions.exe
 	 * Each nesting helper is depth-2 (every inner clause has exactly one encloser), [NoInlining]
 	 * so its frame really exists, and records finally/catch order in log (log[0]=count,
 	 * log[1..]=the run sequence). C7ExA/C7ExB/C7ExC(:C7ExB)/C7ExD are defined below.
@@ -1589,7 +1589,7 @@ class Tests
 	 * Each helper is _t1; a driven run forces it onto tier-1:
 	 *   MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=1 \
 	 *   MONO_LLVM_METHOD='n3_depth3_nested_t1;n6_finally3_t1;n6_catch3_t1;\
-	 *     n6_catch_finally_mix_t1;n6_finally4_t1' ./mono --llvm -v exceptions.exe
+	 *     n6_catch_finally_mix_t1;n6_finally4_t1' ./mono -v exceptions.exe
 	 * In the regression suite the warm-up loops are inert at the default promotion threshold,
 	 * so these stay pure correctness tests with the classic JIT as the differential oracle. The
 	 * assertions (finally order across >= 2 enclosers, catch selection/precedence across two

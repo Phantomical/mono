@@ -5,7 +5,7 @@ new **LLVM-only JIT** under `mono/llvm/` (greenfield, ORCv2, a direct CIL→LLVM
 translator in `mono/llvm/method-to-llvm/`), developed on branch `llvm18-tiered-jit`.
 It is the runtime's only JIT: every compile routes through it, the classic mini
 back end and the older tiered backend under `mono/mini/llvm/` (now a parts bin) never
-engage, and `--llvm`/`--nollvm` are deprecated no-ops. It builds against
+engage, and there is no command-line switch to select a backend. It builds against
 **unmodified upstream LLVM 22** — a local
 RelWithDebInfo+assertions build of `llvmorg-22.1.8` from
 `~/projects/llvm-project`, installed at `~/projects/llvm-project/install` — not
@@ -200,10 +200,11 @@ submodules; the `print-versions` target reports which are checked out. See `buil
 
 **The `mono/llvm/` backend is the only JIT.** Every method the runtime compiles goes
 through `mono_llvm_jit_compile_method ()`; a method it cannot translate raises an
-ExecutionEngineException rather than falling back anywhere. `--llvm` and `--nollvm` are
-deprecated no-ops that warn, and the old tiered backend under `mono/mini/llvm/` never
-engages (its `MONO_TIERED*` env vars with it). The AOT compiler is out of scope and
-refuses immediately.
+ExecutionEngineException rather than falling back anywhere. There is no `--llvm` or
+`--nollvm` any more — both are gone, and mono rejects them like any other unknown
+option. The old tiered backend under `mono/mini/llvm/` never engages (its
+`MONO_TIERED*` env vars with it). The AOT compiler is out of scope and refuses
+immediately.
 
 Backend debugging env vars (read in `mono/llvm/runtime.cpp`):
 - `MONO_LLVM_JIT_TRACE=1` — print every method the backend translates; a method reached

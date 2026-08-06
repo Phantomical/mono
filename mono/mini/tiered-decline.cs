@@ -36,7 +36,7 @@ namespace MonoTests.Tiering {
 //
 //   MONO_LLVM_METHOD='TieredDecline:NeverMatchesAnything' \
 //     MONO_TIERED=1 MONO_TIERED_CALL_THRESHOLD=20 \
-//     mono --llvm --regression tiered-decline.exe
+//     mono --regression tiered-decline.exe
 //
 public class TieredDecline {
 	public static int Main (string[] args) {

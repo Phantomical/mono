@@ -144,7 +144,8 @@ A handful of `bcl` suites cannot pass here whatever the code does, and it is
 worth knowing which before chasing one: corlib has ~11 failures that follow the
 machine's ICU and tzdata, `System` has one live HTTP test, `System.Messaging`
 wants a RabbitMQ broker, and `System.Windows.Forms` wants an X display. Re-run
-the suite with `--nollvm` to tell one of those from a codegen bug.
+the suite against the machine's installed mono (`MONO_EXECUTABLE`) to tell one
+of those from a codegen bug: the environmental failures reproduce there too.
 
 `mono/tests` keeps its corpus in `tests.cmake` (the lists),
 `special-tests.cmake` (the tests with a recipe of their own) and

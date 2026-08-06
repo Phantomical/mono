@@ -412,8 +412,8 @@ MONO_END_DECLS
 
 /*
  * Set mono_use_llvm above and record that it was a deliberate choice rather than
- * the default mini_init () would otherwise settle on. This is what --llvm and
- * --nollvm go through; mono_set_use_llvm () is the same thing for embedders.
+ * the default mini_init () would otherwise settle on. This is what the embedder
+ * API mono_set_use_llvm () goes through.
  */
 void     mini_set_use_llvm (gboolean use_llvm);
 gboolean mini_use_llvm_explicitly_set (void);

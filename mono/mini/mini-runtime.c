@@ -135,16 +135,17 @@ int mini_verbose = 0;
  * it can load AOT code compiled by LLVM.
  *
  * The value here is only the pre-startup one; mini_init () resolves the real
- * default (on for JIT runs, off for the AOT compiler) unless --llvm, --nollvm or
- * mono_set_use_llvm () already picked a side.
+ * default (on for JIT runs, off for the AOT compiler) unless an embedder already
+ * picked a side through mono_set_use_llvm ().
  */
 gboolean mono_use_llvm = FALSE;
 
 /*
  * TRUE once somebody named LLVM explicitly rather than taking whatever mini_init ()
  * defaults to. Two things want to tell those apart: the default must not clobber a
- * choice that was already made, and only a deliberate --llvm means "prefer LLVM code
- * over anything else", which is what the AOT image usability check keys off.
+ * choice that was already made, and only a deliberate mono_set_use_llvm (TRUE) means
+ * "prefer LLVM code over anything else", which is what the AOT image usability check
+ * keys off.
  */
 static gboolean use_llvm_explicit;
 
