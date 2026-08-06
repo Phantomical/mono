@@ -4,9 +4,8 @@ Unity Technologies' fork of Mono (branch `unity-main`). The **active work** here
 new **LLVM-only JIT** under `mono/llvm/` (greenfield, ORCv2, a direct CIL→LLVM-IR
 translator in `mono/llvm/method-to-llvm/`), developed on branch `llvm18-tiered-jit`.
 It is the runtime's only JIT: every compile routes through it, the classic mini
-back end and the older tiered backend under `mono/mini/llvm/` (now a parts bin) never
-engage, and there is no command-line switch to select a backend. It builds against
-**unmodified upstream LLVM 22** — a local
+back end never engages, and there is no command-line switch to select a
+backend. It builds against **unmodified upstream LLVM 22** — a local
 RelWithDebInfo+assertions build of `llvmorg-22.1.8` from
 `~/projects/llvm-project`, installed at `~/projects/llvm-project/install` — not
 a patched fork, and not the removed `external/llvm-project` submodule. (Check
@@ -169,10 +168,15 @@ ctest --test-dir build -R test-llvm  -j"$(nproc)"   # the LLVM backend unit test
 ctest --test-dir build -N                           # list without running
 ```
 
-Labels: `regression`, `runtime`, `gshared`, `sgen`, `interp`, `slow`, `stress`,
-`acceptance`. The heavy ones are excluded from `check`/`check-all` and are opt-in.
-Corpora are built by the regular build (`cmake --build build`), not by ctest, so build
-before running `ctest` directly.
+Labels: `regression`, `llvm`, `runtime`, `gshared`, `sgen`, `interp`, `bcl`,
+`bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`, `acceptance`
+(`ctest --print-labels` is authoritative for the configuration you built).
+`check` keeps `regression`, `llvm` and the unlabelled one-offs and drops
+everything else — a few hundred tests, seconds. `check-all` drops only `slow`,
+`stress` and `acceptance`, which leaves a few thousand and takes minutes, so it
+is not the target to reach for while iterating. Corpora are built by the regular
+build (`cmake --build build`), not by ctest, so build before running `ctest`
+directly.
 
 Every program in `mono/tests` is its own CTest test, named `<suite>/<program>@<gc>`, so a
 failure names the program and the collector configuration that broke. That is what makes
@@ -202,22 +206,26 @@ submodules; the `print-versions` target reports which are checked out. See `buil
 through `mono_llvm_jit_compile_method ()`; a method it cannot translate raises an
 ExecutionEngineException rather than falling back anywhere. There is no `--llvm` or
 `--nollvm` any more — both are gone, and mono rejects them like any other unknown
-option. The old tiered backend under `mono/mini/llvm/` never engages (its
-`MONO_TIERED*` env vars with it). The AOT compiler is out of scope and refuses
-immediately.
+option. `--llvm-opt=OPT` is the one LLVM-facing flag left, and it just forwards
+`OPT` to LLVM's own command-line parser (`--llvm-opt=-print-after-all`); repeat it
+to pass more than one. The AOT compiler is out of scope and refuses immediately.
 
-Backend debugging env vars (read in `mono/llvm/runtime.cpp`):
-- `MONO_LLVM_JIT_TRACE=1` — print every method the backend translates; a method reached
-  as a callee is compiled without the runtime ever being asked for it, so nothing else
-  says it happened.
-- `MONO_LLVM_JIT_DUMP=<substr>` — dump the IL and translated IR of methods whose full
-  name contains the substring.
-- `MONO_LLVM_JIT_VERIFY=<0|off|each|all>` — how much of the IR the verifier sees. On by
-  default when LLVM was built with assertions (the configuration this project uses), and
-  then it checks the translator's output, the module after each pass written here, and the
-  module codegen is handed; `each` extends that to every stock pass in the pipeline, `0`
-  turns it off. Costs roughly 6% of compile CPU on the default setting and 29% on `each`.
+Backend debugging env vars:
+- `MONO_LLVM_JIT_TRACE=1` (`runtime.cpp`) — print every method the backend translates;
+  a method reached as a callee is compiled without the runtime ever being asked for
+  it, so nothing else says it happened.
+- `MONO_LLVM_JIT_DUMP=<substr>` (`runtime.cpp`) — dump the IL and translated IR of
+  methods whose full name contains the substring.
+- `MONO_LLVM_JIT_VERIFY=<0|off|each|all>` (`jit.cpp`) — how much of the IR the verifier
+  sees. On by default when LLVM was built with assertions (the configuration this
+  project uses), and then it checks the translator's output, the module after each pass
+  written here, and the module codegen is handed; `each` (or `all`) extends that to
+  every stock pass in the pipeline, `0`/`off` turns it off, and anything else means the
+  default. Costs roughly 6% of compile CPU on the default setting and 29% on `each`.
   A failure names the method, the pass and prints the module, then aborts.
+- `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code
+  is bump-allocated out of. Capped at 2GB whatever you ask for, because a slab's code
+  and its mutable data reference each other with a PCRel32 and nothing stubs that.
 
 Running a single corpus directly against the freshly built runtime:
 
@@ -226,52 +234,80 @@ MONO_PATH=build/mcs/class/lib/net_4_x \
   build/mono/mini/mono-sgen --regression build/mono/mini/basic.exe
 ```
 
-## Architecture of the LLVM tier (`mono/mini/llvm/`)
+## Architecture of the backend (`mono/llvm/`)
 
-Everything here is **C++ (`.cpp`) by default**. Use `.hpp` for C++-only headers; use a
-`.h` with an `extern "C"` boundary **only** for the minimal surface the rest of mono's C
-code includes (`backend.h`). Keep that boundary small.
+Everything here is **C++**, and every header is a `.hpp` — there are no `.h` files.
+The one header mono's C sources include is `runtime.hpp`, whose declarations sit
+inside `MONO_BEGIN_DECLS`; its whole audience is `mini-runtime.c`,
+`mini-trampolines.c` and `driver.c`, and its whole surface is six functions. Keep
+it that small.
 
-- **`backend.h`** — the single `extern "C"` entry-point header mono's C sources include.
-- **`translator*.cpp`** — the IL→LLVM-IR translator (ported from dotnet/runtime's
-  opaque-pointer-clean `mini-llvm.c`, AOT/llvmonly/non-amd64 stripped)..
-- **`engine.cpp` / `engine.hpp`** — ORCv2 in-process JIT + `MonoJitMemoryManager`.
-  `compile()` is **non-destructive**: it JITs a private clone of the caller's module and
-  leaves the original intact (mono keeps using it afterward).
-- **`tiered.cpp`** — tiering policy: promotion thresholds, env-var config, counters.
-- **`ehframe.cpp`**, **`lsda.cpp`/`mono_lsda.cpp`** — consuming/transcoding stock
-  `.eh_frame` / `.gcc_except_table` (LSDA) so the backend runs against unmodified LLVM.
-- **`passes/`** — the custom LLVM passes. `inliner.cpp` (drives LLVM's own inliner over
-  bodies it materializes on demand), `devirt.cpp` (exact devirtualization), plus the
-  lowering/cleanup passes: `elide-class-init`, `wbarrier`, `eh-gather`, `finally-range`,
-  `replace-builtins`, `null-check-guard`, `inline-advisor`, `pass-dump`.
+- **`runtime.cpp` / `runtime.hpp`** — the boundary. `mono_llvm_jit_compile_method ()`
+  compiles a method into a domain's linker and hands back the address to call;
+  the rest is freeing a domain or a method, finding a compiled body, and the unbox
+  entry. This is also where the runtime helpers and libcalls generated code may name
+  are registered.
+- **`method-to-llvm.cpp` + `method-to-llvm/`** — the CIL→IR front end. One class,
+  `MethodLLVMEmitter`, split across `method-to-llvm/` by opcode family: `call.cpp`,
+  `casts.cpp`, `exceptions.cpp`, `fields.cpp`, `newobj.cpp`, `signature.cpp` and so on.
+- **`jit.cpp` / `jit.hpp`** — `MonoJit`, the ORCv2 stack: the JITLink object layer, the
+  pipeline, symbol resolution, a JITDylib per compile. It deliberately knows nothing
+  about mono — no metadata, no `MonoMethod` — so the unit tests can drive it directly.
+- **`compiler.cpp`** — `TargetMachine::addPassesToEmitMC` restated, so the EH passes get
+  a seat between the machine passes and the AsmPrinter and the side tables can be
+  written while the streamer is still open, with code offsets as label differences.
+- **`stubs.cpp`, `codemem.cpp`** — the redirectable stub every method is published as,
+  and the slabs both it and the code are carved out of.
+- **`jinfo.cpp`** — turns a compiled object's side tables back into the `MonoJitInfo`
+  the runtime's unwinder and stack walks read.
+- **`arch/`** — everything that names a register, encodes an instruction or restates the
+  runtime's calling convention, behind `arch/arch.hpp`. A port is a new sibling of
+  `arch/amd64/`, not a hunt through the backend for the amd64 in it.
+- **`passes/`** — `array-address` and `lower-builtins` rewrite the symbolic calls the
+  front end leaves standing; `restore-tail-position` puts back the tail position
+  SimplifyCFG merged away; `eh-gather` and `finally-range` are `MachineFunctionPass`es
+  that emit nothing and instead fill in the side channel the EH sections are written from.
 
-A pass that needs to ask the runtime something does **not** include mono's metadata
-headers itself. It declares what it needs in a small `*-support.hpp` boundary
-(`inliner-support.hpp`, `devirt-support.hpp`) and the implementation lives in
-`translator.cpp`, which already has those headers in scope. Keep new passes to that shape.
-
-The translator tags instructions so passes can find them by meaning rather than by matching
-on IR shape — `mono.class-init`, `mono.wbarrier`, `mono.virtcall`, `mono.runtime-check`.
-When a pass needs to know something only the front end knew, add a tag rather than
+No pass includes a mono header — not one of them, and that is the rule for new ones.
+Where a pass needs something only the front end knew, the front end emits a call to a
+declaration whose *name* says what the site means (`mono.array.address.*`,
+`mono.builtin.*`) and whose attributes carry the numbers, and the pass rewrites it into
+real IR before the optimizer runs. Encode the fact in the declaration rather than
 reverse-engineering it from the emitted arithmetic.
 
-**Devirtualization is exact-only, by decision.** No guarded devirtualization, no type
-profiling, no class-hierarchy analysis — every rewrite is a proof that the receiver is
-exactly some class, so the failure mode is a site left alone rather than a site left wrong,
-and no later assembly load can invalidate one. If you find yourself wanting a type check
-plus a fallback arm, that is out of scope; check with the user first.
+**Exception handling does not ride `.eh_frame`.** The compiler writes three of its own
+sections next to the code, all target-neutral and code-relative: `.mono_lsda` (the
+clause table), `.mono_guards` (where each finally body landed and where its guard byte
+sits, which is what the thread-abort delay needs) and `.mono_unwind` (the CFI program,
+recorded at the MC layer while it is still semantics rather than DWARF bytes).
+`sidetables.hpp` is the wire format the writer and `jinfo.cpp` agree on. The personality
+routine a landing pad names is never actually called: mono's own unwinder re-enters
+frames through the pads.
 
-The legacy backend (`mono/mini/mini-llvm.c`, `mini-llvm-cpp.*`, `llvm-jit.*`) linked
-patched LLVM 6 and is **excluded from the build** — do not edit those; the replacement
-grows under `mono/mini/llvm/`.
+**There is one tier.** `run_tier0_pipeline ()` is the stock O1 *function* simplification
+pipeline with this backend's own IR passes around it — `array-address` and
+`lower-builtins` before, `restore-tail-position` and the arch's legacy-ABI lowering
+after — and codegen then runs at `CodeGenOptLevel::None`, which selects FastISel. The
+module and CGSCC layers are skipped deliberately: a module holds a single method and
+every call leaves it by symbol, so there is no callee body to inline and nothing to
+specialize, and running them anyway cost a large fraction of compile time. So the JIT
+does not inline across methods, and beyond taking a site the IL already settled —
+non-virtual, `final`, or resolved by `constrained.` — it does not devirtualize either.
 
-Depatching notes (running off unmodified LLVM): `nest` attribute replaces
-`CallingConv::Mono`; consume stock `.eh_frame`/`.gcc_except_table`. See the design docs.
+If devirtualization does arrive, it is exact-only: a rewrite must prove the receiver's
+class exactly, so the failure mode is a site left alone rather than a site left wrong,
+and no later assembly load can invalidate one. Guarded devirtualization, type profiling
+and class-hierarchy analysis are out of scope — check with the user first.
+
+Depatching notes (running off unmodified LLVM): the `nest` attribute replaces
+`CallingConv::Mono`, since it pins an argument to `%r10` — exactly
+`MONO_ARCH_IMT_REG` — which is how an IMT thunk or a generic-virtual trampoline gets
+the key telling it which method was asked for. See the design docs.
 
 Build/link specifics: LLVM is `-fno-rtti` — subclassing polymorphic LLVM classes
-(memory managers, plugins) with RTTI on is a silent ABI break, so backend TUs compile
-`-std=c++17 -fno-exceptions -funwind-tables -fno-rtti`.
+(memory managers, passes) with RTTI on is a silent ABI break, so backend TUs compile
+`-std=c++17 -fno-rtti -funwind-tables`. Exceptions stay **on**: the ORC APIs report
+failures through `llvm::Error` and the unwinder needs the tables.
 
 ## Commenting Guidelines
 - Keep comments conversational. These are meant to be read by humans. Dense or cryptic
