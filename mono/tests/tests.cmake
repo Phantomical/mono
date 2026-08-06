@@ -133,6 +133,7 @@ set(MONO_TESTS_CS_SRC
   iface4.cs
   iface-large.cs
   iface-contravariant1.cs
+  imt-variance-fallback.cs
   virtual-method.cs
   intptrcast.cs
   indexer.cs

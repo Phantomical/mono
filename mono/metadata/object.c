@@ -1370,7 +1370,8 @@ mono_method_get_imt_slot (MonoMethod *method)
 #define DEBUG_IMT 0
 
 static void
-add_imt_builder_entry (MonoImtBuilderEntry **imt_builder, MonoMethod *method, guint32 *imt_collisions_bitmap, int vtable_slot, int slot_num) {
+add_imt_builder_entry (MonoImtBuilderEntry **imt_builder, MonoMethod *method, guint32 *imt_collisions_bitmap,
+		       guint32 *imt_fallback_bitmap, gboolean needs_fallback, int vtable_slot, int slot_num) {
 	MONO_REQ_GC_NEUTRAL_MODE;
 
 	guint32 imt_slot = mono_method_get_imt_slot (method);
@@ -1380,6 +1381,9 @@ add_imt_builder_entry (MonoImtBuilderEntry **imt_builder, MonoMethod *method, gu
 		/* we build just a single imt slot and this is not it */
 		return;
 	}
+
+	if (needs_fallback)
+		*imt_fallback_bitmap |= (1 << imt_slot);
 
 	entry = (MonoImtBuilderEntry *)g_malloc0 (sizeof (MonoImtBuilderEntry));
 	entry->key = method;
@@ -1539,7 +1543,28 @@ build_imt_slots (MonoClass *klass, MonoVTable *vt, MonoDomain *domain, gpointer*
 	MonoImtBuilderEntry **imt_builder = (MonoImtBuilderEntry **)g_calloc (MONO_IMT_SIZE, sizeof (MonoImtBuilderEntry*));
 	int method_count = 0;
 	gboolean record_method_count_for_max_collisions = FALSE;
-	gboolean has_generic_virtual = FALSE, has_variant_iface = FALSE;
+
+	/*
+	 * Slots that can still be handed a key we did not build an entry for. Such a slot has
+	 * to keep the IMT trampoline as its fallback, and has to be marked in
+	 * imt_collisions_bitmap so that the trampoline patches the vtable slot instead of the
+	 * IMT slot itself. Two things produce keys we cannot enumerate here:
+	 *
+	 *  - Generic virtual methods, whose set of instantiations is open. An instantiation
+	 *    hashes to its definition's slot, since mono_method_get_imt_slot () deflates
+	 *    inflated methods, so marking the definition's slot covers all of them.
+	 *  - Interface methods reached through a *sibling* instantiation of an interface the
+	 *    class does implement: mono_class_interface_offset_with_variance () matches on the
+	 *    generic type definition, both for real variance and for the array-covariance
+	 *    special interfaces, so the incoming key can name I<A> where we built an entry for
+	 *    I<B>. Both hash to the same slot, so marking the slots fed by a generic interface
+	 *    is enough.
+	 *
+	 * Every other key is exact - a call naming a non-generic interface method can only
+	 * arrive with the MonoMethod* already sitting in the slot - so those slots hold their
+	 * target directly and dispatch through them costs nothing.
+	 */
+	guint32 imt_fallback_bitmap = 0;
 
 #if DEBUG_IMT
 	printf ("Building IMT for class %s.%s slot %d\n", m_class_get_name_space (klass), m_class_get_name (klass), slot_num);
@@ -1552,8 +1577,7 @@ build_imt_slots (MonoClass *klass, MonoVTable *vt, MonoDomain *domain, gpointer*
 		int interface_offset = klass_interface_offsets_packed [i];
 		int method_slot_in_interface, vt_slot;
 
-		if (mono_class_has_variant_generic_params (iface))
-			has_variant_iface = TRUE;
+		gboolean iface_needs_fallback = mono_class_is_ginst (iface) || mono_class_is_gtd (iface);
 
 		mono_class_setup_methods (iface);
 		vt_slot = interface_offset;
@@ -1579,20 +1603,27 @@ build_imt_slots (MonoClass *klass, MonoVTable *vt, MonoDomain *domain, gpointer*
 			method = mono_class_get_method_by_index (iface, method_slot_in_interface);
 			if (method->is_generic) {
 				if (m_method_is_virtual (method)) {
-					has_generic_virtual = TRUE;
+					imt_fallback_bitmap |= (1 << mono_method_get_imt_slot (method));
 					vt_slot ++;
 				}
 				continue;
 			}
 
 			if (m_method_is_virtual (method)) {
-				add_imt_builder_entry (imt_builder, method, &imt_collisions_bitmap, vt_slot, slot_num);
+				add_imt_builder_entry (imt_builder, method, &imt_collisions_bitmap, &imt_fallback_bitmap, iface_needs_fallback, vt_slot, slot_num);
 				vt_slot ++;
 			}
 		}
 	}
 	if (extra_interfaces) {
 		int interface_offset = m_class_get_vtable_size (klass);
+
+		/*
+		 * These are the interfaces a remoting proxy stands in for, which are not on the
+		 * class and so are not what a call's key gets matched against. Rather than work
+		 * out what can reach these slots, keep every one of them fallible.
+		 */
+		imt_fallback_bitmap = ~(guint32)0;
 
 		for (list_item = extra_interfaces; list_item != NULL; list_item=list_item->next) {
 			MonoClass* iface = (MonoClass *)list_item->data;
@@ -1601,9 +1632,7 @@ build_imt_slots (MonoClass *klass, MonoVTable *vt, MonoDomain *domain, gpointer*
 			for (method_slot_in_interface = 0; method_slot_in_interface < mcount; method_slot_in_interface++) {
 				MonoMethod *method = mono_class_get_method_by_index (iface, method_slot_in_interface);
 
-				if (method->is_generic && m_method_is_virtual(method))
-					has_generic_virtual = TRUE;
-				add_imt_builder_entry (imt_builder, method, &imt_collisions_bitmap, interface_offset + method_slot_in_interface, slot_num);
+				add_imt_builder_entry (imt_builder, method, &imt_collisions_bitmap, &imt_fallback_bitmap, FALSE, interface_offset + method_slot_in_interface, slot_num);
 			}
 			interface_offset += mcount;
 		}
@@ -1632,18 +1661,22 @@ build_imt_slots (MonoClass *klass, MonoVTable *vt, MonoDomain *domain, gpointer*
 					entries->children += imt_builder [i]->children + 1;
 				}
 				imt_builder [i] = entries;
+
+				/*
+				 * Entries recorded by mono_method_add_generic_virtual_invocation () carry
+				 * an absolute target rather than a vtable slot, and more of them can turn
+				 * up, so this slot can never be filled directly.
+				 */
+				imt_fallback_bitmap |= (1 << i);
 			}
 
-			if (has_generic_virtual || has_variant_iface) {
+			if (imt_fallback_bitmap & (1 << i)) {
 				/*
-				 * There might be collisions later when the the trampoline is expanded.
+				 * A key we did not build an entry for can still arrive here, so the slot
+				 * falls back to the IMT trampoline and counts as colliding; the latter is
+				 * what makes the trampoline patch the vtable slot rather than this one.
 				 */
 				imt_collisions_bitmap |= (1 << i);
-
-				/* 
-				 * The IMT trampoline might be called with an instance of one of the 
-				 * generic virtual methods, so has to fallback to the IMT trampoline.
-				 */
 				imt [i] = initialize_imt_slot (vt, domain, imt_builder [i], callbacks.get_imt_trampoline (vt, i));
 			} else {
 				imt [i] = initialize_imt_slot (vt, domain, imt_builder [i], NULL);
