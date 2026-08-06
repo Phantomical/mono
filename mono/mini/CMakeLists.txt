@@ -41,37 +41,24 @@ set(mini_sources
   mini.c
   mini-runtime.c
   seq-points.c
-  method-to-ir.c
-  decompose.c
   jit-icalls.c
   trace.c
-  cfold.c
   helpers.c
-  liveness.c
-  local-propagation.c
   driver.c
   debug-mini.c
-  linear-scan.c
   aot-runtime.c
-  mini-codegen.c
   mini-exceptions.c
   mini-trampolines.c
-  branch-opts.c
   mini-generic-sharing.c
   tasklets.c
-  simd-intrinsics.c
   mini-native-types.c
   unwind.c
   mini-gc.c
   debugger-agent-stubs.c
   mini-cross-helpers.c
   arch-stubs.c
-  type-checking.c
-  calls.c
   lldb.c
   mixed_callstack_plugin.c
-  memory-access.c
-  intrinsics.c
   mini-profiler.c
   interp-stubs.c
   llvmonly-runtime.c
@@ -81,7 +68,6 @@ set(mini_sources
   # amd64
   arch-amd64.c
   interp-amd64.c
-  mini-amd64.c
   exceptions-amd64.c
   tramp-amd64.c
   mini-amd64-gsharedvt.c

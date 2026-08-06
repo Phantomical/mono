@@ -4750,7 +4750,6 @@ mini_init (const char *filename, const char *runtime_version)
 #endif
 
 #ifdef MONO_ARCH_SIMD_INTRINSICS
-	mono_simd_intrinsics_init ();
 #endif
 
 #ifndef ENABLE_NETCORE
