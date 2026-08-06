@@ -1002,17 +1002,25 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 		}
 
 		/*
-		 * Only statement boundaries are places the debugger may stop, and
-		 * wants_seq_point_at () is what decides which those are: the symbol
-		 * file's offsets when it has any for this method, and otherwise an
-		 * empty evaluation stack (plus a handler's first instruction, where it
-		 * holds only the exception) as a stand-in. Stopping anywhere finer than
-		 * a statement reports the same source line twice over.
+		 * Two sets, decided separately.
+		 *
+		 * Every IL instruction goes in the line table. What reads that back is
+		 * a stack walk asking where a frame is, and a frame below the top sits
+		 * at a call - rarely a statement boundary, and never one in
+		 * `throw new E ()`. Resolving a mid-statement offset to a source line
+		 * still lands on the right statement, since both symbol formats answer
+		 * with the last sequence point at or before the offset they are given.
+		 *
+		 * Where the debugger may stop is the coarser set, and
+		 * wants_seq_point_at () is what decides it: the symbol file's offsets
+		 * when it has any for this method, and otherwise an empty evaluation
+		 * stack (plus a handler's first instruction, where it holds only the
+		 * exception) as a stand-in. Stopping anywhere finer than a statement
+		 * reports the same source line twice over.
 		 */
-		if (wants_seq_point_at (offset)) {
-			set_il_location (builder, offset);
+		set_il_location (builder, offset);
+		if (wants_seq_point_at (offset))
 			emit_seq_point (builder, (uint32_t) offset);
-		}
 
 		if (llvm::Error error = emit_instruction (builder))
 			return std::move (error);
