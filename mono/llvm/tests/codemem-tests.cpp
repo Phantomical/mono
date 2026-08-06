@@ -453,6 +453,86 @@ TEST (CodeSlabs, AnObjectWithNoDataIsStillFine)
 	EXPECT_EQ (slabs->live_bytes (), 0u);
 }
 
+/*
+ * The guard page. A slab is exactly as large as a 32-bit displacement reaches,
+ * so the last few bytes of it are not usable: a fixup field sitting there is
+ * four bytes wide and its addend can be another four bytes negative. Neither
+ * region may hand out anything in the top page.
+ */
+TEST (CodeSlabs, TheTopOfASlabIsNeverHandedOut)
+{
+	setenv ("MONO_LLVM_SLAB_SIZE", "16M", 1);
+	auto slabs = make_slabs ();
+	unsetenv ("MONO_LLVM_SLAB_SIZE");
+	ASSERT_TRUE (slabs != nullptr);
+
+	size_t page = slabs->page_size ();
+	/* The code region bumps up from offset zero, so the first allocation out
+	 * of a fresh slab names the slab's base. */
+	char *base = must_allocate (*slabs, 16, 16).base;
+	char *guard = base + 16 * 1024 * 1024 - page;
+
+	/* The writable region bumps down from the guard page, not from the top. */
+	Expected<CodeSlabs::Alloc> first = slabs->allocate_writable (1, 1);
+	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
+	EXPECT_EQ (first->base + first->size, guard);
+
+	for (size_t size : { size_t (1), size_t (64), page * 2 })
+		for (size_t align : { size_t (1), size_t (16), page }) {
+			Expected<CodeSlabs::Alloc> a =
+				slabs->allocate_writable (size, align);
+
+			ASSERT_TRUE (bool (a)) << toString (a.takeError ());
+			EXPECT_LE (a->base + a->size, guard)
+				<< "a writable allocation reached into the guard page";
+		}
+}
+
+TEST (CodeSlabs, TheCodeRegionStopsBelowTheGuardPage)
+{
+	setenv ("MONO_LLVM_SLAB_SIZE", "16M", 1);
+	auto slabs = make_slabs ();
+	unsetenv ("MONO_LLVM_SLAB_SIZE");
+	ASSERT_TRUE (slabs != nullptr);
+
+	size_t page = slabs->page_size ();
+	Expected<CodeSlabs::Alloc> whole =
+		slabs->allocate (16 * 1024 * 1024 - page, 16);
+
+	ASSERT_TRUE (bool (whole)) << toString (whole.takeError ());
+	ASSERT_FALSE (bool (slabs->finish (*whole)));
+	ASSERT_EQ (slabs->slab_count (), 1u);
+
+	/* Everything a slab has is now spoken for, so the next byte has to come
+	 * out of a new reservation rather than out of the guard page. */
+	Expected<CodeSlabs::Alloc> next = slabs->allocate (16, 16);
+	ASSERT_TRUE (bool (next)) << toString (next.takeError ());
+	EXPECT_EQ (slabs->slab_count (), 2u) << "code climbed into the guard page";
+}
+
+/*
+ * A slab is address space and nothing else until something is written into it,
+ * which is what makes a reservation this large affordable in the first place.
+ */
+TEST (CodeSlabs, TheDefaultSlabIsTwoGigabytesAndCostsNothingResident)
+{
+	auto slabs = make_slabs ();
+	ASSERT_TRUE (slabs != nullptr);
+
+	size_t rss_before = resident_bytes ();
+	CodeSlabs::Alloc a = must_allocate (*slabs, 64, 16);
+
+	ASSERT_FALSE (bool (slabs->finish (a)));
+
+	const char *last_page = a.base + (size_t (2) << 30) - slabs->page_size ();
+
+	ASSERT_TRUE (is_mapped (last_page)) << "the slab is not 2GB";
+	EXPECT_EQ (mapping_perms (last_page), "---p");
+	EXPECT_EQ (slabs->committed_bytes (), slabs->page_size ());
+	EXPECT_LT (resident_bytes (), rss_before + 8 * 1024 * 1024)
+		<< "reserving 2GB became resident";
+}
+
 TEST (CodeSlabs, TheReservationItselfIsNotMapped)
 {
 	auto slabs = make_slabs ();

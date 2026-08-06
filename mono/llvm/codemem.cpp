@@ -25,9 +25,22 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-constexpr size_t default_slab_size = size_t (1) * 1024 * 1024 * 1024;
-constexpr size_t max_slab_size = size_t (1) * 1024 * 1024 * 1024;
+constexpr size_t default_slab_size = size_t (2) * 1024 * 1024 * 1024;
+constexpr size_t max_slab_size = size_t (2) * 1024 * 1024 * 1024;
 constexpr size_t min_slab_size = size_t (16) * 1024 * 1024;
+
+/*
+ * The top page of a slab is never handed out, to either region. A fixup at the
+ * very top of a 2GB slab reaching the very bottom is a four-byte field at S-4,
+ * so with a PC32's usual -4 addend the distance is exactly -2^31 - representable,
+ * with nothing to spare - and an instruction carrying an immediate after the
+ * displacement (movq $0, sym(%rip)) takes the addend to -8 and pushes it over.
+ * Holding a page back leaves every pair of bytes a slab hands out inside what a
+ * 32-bit relocation can encode, in both directions. A page rather than the four
+ * bytes strictly needed, because that is the granularity writable_floor tracks
+ * and the difference is address space only.
+ */
+constexpr size_t guard_pages = 1;
 
 size_t
 align_up (size_t value, size_t align)
@@ -39,7 +52,8 @@ align_up (size_t value, size_t align)
  * The cap is not a tuning choice. An object's code sits at the bottom of a slab
  * and its mutable data at the top, and the reference between them is a PCRel32
  * with no stub to fall back on, so the whole slab has to fit inside that reach
- * however large the environment asks for it to be.
+ * however large the environment asks for it to be. 2GB is the far edge of that
+ * reach, which is what the guard page above buys the margin for.
  */
 size_t
 configured_slab_size (size_t page_size)
@@ -126,8 +140,8 @@ CodeSlabs::add_slab ()
 
 	slab->base = static_cast<char *> (base);
 	slab->size = want;
-	slab->writable_bump = want;
-	slab->writable_floor = want / page_size_;
+	slab->writable_bump = want - guard_pages * page_size_;
+	slab->writable_floor = slab->writable_bump / page_size_;
 	slabs_.push_back (std::move (slab));
 	return Error::success ();
 }

@@ -35,13 +35,16 @@ namespace mono {
 /// copies an object's content into its final address, and under bump allocation
 /// that page very likely already holds a finished method somebody is running.
 ///
-/// **An object never spans two slabs**, and a slab is never larger than 1GB, so
-/// any two bytes in a slab are well inside PCRel32 range of each other. That
-/// matters because JITLink stubs a call it cannot reach but has no such
-/// fallback for a method reaching its own data - PCRel32 to .rodata or to a
-/// mutable global, Delta32 from .eh_frame back to .text - all of which
-/// hard-error past +-2GB. The bound is what lets an object's code sit at the
-/// bottom of a slab and its mutable data at the top.
+/// **An object never spans two slabs**, and a slab is never larger than 2GB
+/// with its top page held back from both regions, so any two bytes a slab hands
+/// out are inside PCRel32 range of each other. That matters because JITLink
+/// stubs a call it cannot reach but has no such fallback for a method reaching
+/// its own data - PCRel32 to .rodata or to a mutable global, Delta32 from
+/// .eh_frame back to .text - all of which hard-error past +-2GB. 2GB is exactly
+/// that reach rather than comfortably inside it, so the guard page is what keeps
+/// a fixup's own width and a negative addend from spilling past the edge. The
+/// bound is what lets an object's code sit at the bottom of a slab and its
+/// mutable data at the top.
 ///
 /// A related hazard worth knowing about, though nothing reaches it today:
 /// mini's MONO_PATCH_INFO_METHOD_JUMP patching (mini_patch_jump_sites) asserts
@@ -122,7 +125,9 @@ private:
 		size_t bump = 0;
 		/// Offset of the lowest byte the writable region has handed out.
 		size_t writable_bump = 0;
-		/// Lowest page index the writable region has committed.
+		/// Lowest page index the writable region has committed, which is
+		/// also the ceiling the code region bumps up against. It starts
+		/// below the guard page, so neither region can reach into it.
 		size_t writable_floor = 0;
 
 		size_t live = 0;
