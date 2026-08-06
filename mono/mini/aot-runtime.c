@@ -13,14 +13,49 @@
 
 #include <mono/metadata/class.h>
 #include <mono/metadata/object.h>
+#include <mono/metadata/assembly-internals.h>
+#include <mono/metadata/metadata-internals.h>
+#include <mono/utils/atomic.h>
+#include <mono/utils/mono-dl.h>
+#include <mono/utils/mono-logger-internals.h>
 
 #include "mini.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 
+static gint32 warned_about_aot_image;
+
+/*
+ * An AOT image sitting next to an assembly used to be picked up and used. It no
+ * longer is, and a run that is merely slower than it used to be is a miserable
+ * thing to track back to here, so say so once.
+ */
+static void
+report_ignored_aot_image (MonoAssemblyLoadContext *alc, MonoAssembly *assembly, gpointer user_data, MonoError *error)
+{
+	char *aot_name;
+
+	if (image_is_dynamic (assembly->image) || mono_asmctx_get_kind (&assembly->context) == MONO_ASMCTX_REFONLY)
+		return;
+
+	aot_name = g_strdup_printf ("%s%s", assembly->image->name, MONO_SOLIB_EXT);
+
+	if (g_file_test (aot_name, G_FILE_TEST_EXISTS)) {
+		mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_AOT, "AOT: ignoring '%s'.", aot_name);
+
+		/* g_warning () would land on stdout here, which programs and tests read. */
+		if (mono_atomic_cas_i32 (&warned_about_aot_image, 1, 0) == 0)
+			g_printerr ("This runtime does not support ahead-of-time compilation: '%s' will be ignored and the assembly JIT compiled.\n"
+					    "Any other AOT images are ignored too; set MONO_LOG_LEVEL=debug MONO_LOG_MASK=aot to list them.\n", aot_name);
+	}
+
+	g_free (aot_name);
+}
+
 void
 mono_aot_init (void)
 {
+	mono_install_assembly_load_hook_v2 (report_ignored_aot_image, NULL, FALSE);
 }
 
 void
