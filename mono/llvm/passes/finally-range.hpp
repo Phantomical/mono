@@ -4,8 +4,8 @@
  * ranges each finally handler body occupies.
  */
 
-#ifndef MONO_MINI_LLVM_PASSES_FINALLY_RANGE_HPP
-#define MONO_MINI_LLVM_PASSES_FINALLY_RANGE_HPP
+#ifndef MONO_LLVM_PASSES_FINALLY_RANGE_HPP
+#define MONO_LLVM_PASSES_FINALLY_RANGE_HPP
 
 /*
  * Same reason engine.cpp drops mono's PIC macro: libtool compiles these TUs with
@@ -52,4 +52,4 @@ private:
 
 } // namespace mono
 
-#endif /* MONO_MINI_LLVM_PASSES_FINALLY_RANGE_HPP */
+#endif /* MONO_LLVM_PASSES_FINALLY_RANGE_HPP */

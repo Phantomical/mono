@@ -10,9 +10,8 @@
  * offsets as label differences the writer folds at layout. So the recipe is
  * restated here, faithfully, with those two additions.
  *
- * The gather pass is shared with the tiered backend
- * (mono/mini/llvm/passes/eh-gather.cpp), as is the `.mono_lsda` format its
- * reader parses. The `.mono_unwind` section is this backend's own: the CFI
+ * The gather pass is shared with the tiered backend (passes/eh-gather.cpp),
+ * as is the `.mono_lsda` format its reader parses. The `.mono_unwind` section is this backend's own: the CFI
  * program LLVM tracked for the function, recorded at the MC layer where it is
  * still target-neutral semantics rather than DWARF bytes.
  */
@@ -30,9 +29,9 @@
 #include "jit.hpp"
 #include "sidetables.hpp"
 
-#include "../mini/llvm/engine.hpp"
-#include "../mini/llvm/passes/eh-gather.hpp"
-#include "../mini/llvm/passes/finally-range.hpp"
+#include "eh-side-channel.hpp"
+#include "passes/eh-gather.hpp"
+#include "passes/finally-range.hpp"
 
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>

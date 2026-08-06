@@ -15,7 +15,7 @@
 
 #include "eh-gather.hpp"
 
-#include "../engine.hpp"
+#include "../eh-side-channel.hpp"
 
 #include <algorithm>
 #include <string>

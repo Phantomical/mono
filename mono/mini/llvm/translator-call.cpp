@@ -11,7 +11,7 @@
  */
 
 #include "translator-internal.hpp"
-#include "mono_lsda.hpp"
+#include <mono/llvm/mono_lsda.hpp>
 #include "passes/runtime-address.hpp"
 
 #include <cctype>

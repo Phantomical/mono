@@ -6,7 +6,7 @@
  * Three sections, all target-neutral and code-relative:
  *
  * `.mono_lsda` is the clause table - the tiered backend's format, verbatim, so
- * its reader (mono/mini/llvm/mono_lsda.cpp) parses ours too. See mono_lsda.hpp
+ * its reader (mono_lsda.cpp) parses ours too. See mono_lsda.hpp
  * for the layout.
  *
  * `.mono_guards` is what the thread-abort guard needs about the finally handler
@@ -82,7 +82,7 @@ constexpr std::size_t unwind_record_size = 17;
  * The id of the stackmap naming this frame's argument and local slots, in
  * `.llvm_stackmaps` - LLVM's own section, not one of ours. The finally markers
  * share that section, so the id is what tells the two apart; it is picked out of
- * the same high-half tag space (mono/mini/llvm/mono_lsda_format.hpp).
+ * the same high-half tag space (mono_lsda_format.hpp).
  */
 constexpr uint64_t vars_stackmap_id = 0xF19A13ULL << 32;
 

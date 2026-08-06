@@ -20,8 +20,8 @@
  * translator TU.
  */
 
-#ifndef __MONO_LLVM_IL_LINE_TABLE_HPP__
-#define __MONO_LLVM_IL_LINE_TABLE_HPP__
+#ifndef MONO_LLVM_IL_LINE_TABLE_HPP
+#define MONO_LLVM_IL_LINE_TABLE_HPP
 
 #include <cstdint>
 #include <memory>
@@ -90,4 +90,4 @@ constexpr uint32_t IL_OFFSET_LINE_BIAS = 1;
 
 } // namespace mono
 
-#endif /* __MONO_LLVM_IL_LINE_TABLE_HPP__ */
+#endif /* MONO_LLVM_IL_LINE_TABLE_HPP */

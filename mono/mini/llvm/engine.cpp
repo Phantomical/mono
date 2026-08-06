@@ -32,7 +32,7 @@
 #endif
 
 #include "engine.hpp"
-#include "mono_lsda_format.hpp"
+#include <mono/llvm/mono_lsda_format.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -100,7 +100,7 @@
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
 
-#include "il-line-table.hpp"
+#include <mono/llvm/il-line-table.hpp>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
@@ -123,9 +123,9 @@
  * MonoCompile/MonoMethod, and mini.h's DW_* unwind macros collide with
  * llvm/BinaryFormat/Dwarf.h, so these have to come after the LLVM headers.
  */
-#include "passes/eh-gather.hpp"
+#include <mono/llvm/passes/eh-gather.hpp>
 #include "passes/elide-class-init.hpp"
-#include "passes/finally-range.hpp"
+#include <mono/llvm/passes/finally-range.hpp>
 #include "passes/inline-advisor.hpp"
 #include "passes/inliner.hpp"
 #include "passes/null-check-guard.hpp"

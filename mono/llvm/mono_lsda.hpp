@@ -48,8 +48,8 @@
  * mono/unit-tests/test-llvm-ehtable.cpp.
  */
 
-#ifndef __MONO_MINI_LLVM_MONO_LSDA_HPP__
-#define __MONO_MINI_LLVM_MONO_LSDA_HPP__
+#ifndef MONO_LLVM_MONO_LSDA_HPP
+#define MONO_LLVM_MONO_LSDA_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -196,4 +196,4 @@ bool publish_mono_lsda (MonoCompile *cfg,
 
 } // namespace mono
 
-#endif /* __MONO_MINI_LLVM_MONO_LSDA_HPP__ */
+#endif /* MONO_LLVM_MONO_LSDA_HPP */

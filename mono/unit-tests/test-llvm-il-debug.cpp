@@ -50,7 +50,7 @@
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
 
 #include "mini/llvm/engine.hpp"
-#include "mini/llvm/il-line-table.hpp"
+#include "llvm/il-line-table.hpp"
 
 using namespace llvm;
 using mono::IL_OFFSET_LINE_BIAS;

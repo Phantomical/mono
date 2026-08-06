@@ -16,7 +16,7 @@
 #include "arch/arch.hpp"
 #include "sidetables.hpp"
 
-#include "../mini/llvm/mono_lsda.hpp"
+#include "mono_lsda.hpp"
 
 #include "mini.h"
 #include "mini-unwind.h"

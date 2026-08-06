@@ -16,8 +16,8 @@
  * mistaken for a clause kind.
  */
 
-#ifndef __MONO_MINI_LLVM_MONO_LSDA_FORMAT_HPP__
-#define __MONO_MINI_LLVM_MONO_LSDA_FORMAT_HPP__
+#ifndef MONO_LLVM_MONO_LSDA_FORMAT_HPP
+#define MONO_LLVM_MONO_LSDA_FORMAT_HPP
 
 #include <cstdint>
 
@@ -71,4 +71,4 @@ constexpr std::uint64_t MONO_LLVM_FINALLY_STACKMAP_ID_MASK = 0xFFFFFFFFULL;
 
 } // namespace mono
 
-#endif /* __MONO_MINI_LLVM_MONO_LSDA_FORMAT_HPP__ */
+#endif /* MONO_LLVM_MONO_LSDA_FORMAT_HPP */

@@ -9,7 +9,7 @@
 #include "compiler.hpp"
 #include "codemem.hpp"
 
-#include "../mini/llvm/il-line-table.hpp"
+#include "il-line-table.hpp"
 #include "seq-point-marker.hpp"
 #include "sidetables.hpp"
 #include "passes/array-address.hpp"

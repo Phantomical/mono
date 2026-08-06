@@ -12,7 +12,7 @@
 
 #include "arch/arch.hpp"
 
-#include "../mini/llvm/il-line-table.hpp"
+#include "il-line-table.hpp"
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"

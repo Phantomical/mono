@@ -4,8 +4,8 @@
  * clauses from the final landing-pad set.
  */
 
-#ifndef MONO_MINI_LLVM_PASSES_EH_GATHER_HPP
-#define MONO_MINI_LLVM_PASSES_EH_GATHER_HPP
+#ifndef MONO_LLVM_PASSES_EH_GATHER_HPP
+#define MONO_LLVM_PASSES_EH_GATHER_HPP
 
 /*
  * Same reason engine.cpp drops mono's PIC macro: libtool compiles these TUs with
@@ -56,4 +56,4 @@ private:
 
 } // namespace mono
 
-#endif /* MONO_MINI_LLVM_PASSES_EH_GATHER_HPP */
+#endif /* MONO_LLVM_PASSES_EH_GATHER_HPP */

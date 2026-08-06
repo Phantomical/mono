@@ -15,7 +15,7 @@
 
 #include "finally-range.hpp"
 
-#include "../engine.hpp"
+#include "../eh-side-channel.hpp"
 #include "../mono_lsda_format.hpp"
 
 #include <map>

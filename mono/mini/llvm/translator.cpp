@@ -26,7 +26,7 @@ extern "C" {
 }
 
 #include "engine.hpp"
-#include "mono_lsda.hpp"
+#include <mono/llvm/mono_lsda.hpp>
 #include "passes/inliner-support.hpp"
 #include "passes/devirt-support.hpp"
 

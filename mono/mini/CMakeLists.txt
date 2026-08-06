@@ -103,9 +103,7 @@ if(MONO_ENABLE_LLVM)
     llvm-runtime.cpp
     llvm/engine.cpp
     llvm/ehframe.cpp
-    llvm/il-line-table.cpp
     llvm/jitdump.cpp
-    llvm/mono_lsda.cpp
     llvm/tiered.cpp
     llvm/translator-cpp.cpp
     llvm/translator.cpp
@@ -115,9 +113,7 @@ if(MONO_ENABLE_LLVM)
     llvm/translator-bb.cpp
     llvm/translator-intrinsics.cpp
     llvm/passes/devirt.cpp
-    llvm/passes/eh-gather.cpp
     llvm/passes/elide-class-init.cpp
-    llvm/passes/finally-range.cpp
     llvm/passes/inline-advisor.cpp
     llvm/passes/inliner.cpp
     llvm/passes/null-check-guard.cpp

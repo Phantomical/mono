@@ -1,6 +1,6 @@
 /*
  * test-llvm-ehtable.cpp: unit tests for the `.mono_lsda` publish/validate core
- * in mono/mini/llvm/mono_lsda.cpp.
+ * in mono/llvm/mono_lsda.cpp.
  *
  * parse_mono_lsda() decodes the target-neutral `.mono_lsda` section
  * MonoLSDAStreamer (engine.cpp, C3) emits; build_ex_info() validates those
@@ -36,7 +36,7 @@
 
 #ifdef ENABLE_LLVM
 
-#include "mini/llvm/mono_lsda.hpp"
+#include "llvm/mono_lsda.hpp"
 
 using mono::MonoLsdaEntry;
 using mono::MonoFinallyGuard;

@@ -1,6 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
-#include "../../mini/llvm/mono_lsda_format.hpp"
+#include "../mono_lsda_format.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 #include <llvm/IR/Constants.h>

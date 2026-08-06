@@ -36,6 +36,9 @@
  * this header stays clear of the rest of mono. */
 #include <mono/utils/mono-forward.h>
 
+/* MonoEHSideChannel and friends: what the EH passes hand back to a compile. */
+#include <mono/llvm/eh-side-channel.hpp>
+
 namespace llvm {
 class Function;
 class GlobalVariable;
@@ -161,127 +164,6 @@ struct CompileResult {
 	EhFrameInfo mono_lsda;
 	/* Address of the mono-format "mono_eh_frame" global, or 0 if absent. */
 	uint64_t mono_eh_frame = 0;
-};
-
-/* ---- EH gather side channel (C2) -----------------------------------------
- *
- * MonoEHGatherPass (a MachineFunctionPass in passes/eh-gather.cpp, scheduled right after
- * addMachinePasses() in MonoIRCompiler's object-emission pipeline) reads the
- * target-neutral MF.getLandingPads() and recovers, per landing pad, mono's IL
- * clause_index from the type_info_N global's i32 initializer - all in-process,
- * before any relocation. It EMITS NOTHING: it only populates this side channel,
- * a stack-local of one MonoIRCompiler::operator() call threaded into the pass
- * (plan 12 1.4). C3 turns the gathered tuples into the .mono_lsda section
- * (plan 12 2); C2 is inert (a non-EH module has no landing pads -> an empty side
- * channel -> byte-identical output).
- *
- * The MCSymbol* fields are the very symbols the AsmPrinter emits into .text;
- * they are kept as symbols here (C3 turns them into func_begin-relative label
- * differences). They are not resolvable in this offline stage and tests must not
- * dereference them - the clause_index and the tuple counts are what C2 asserts.
- */
-
-/*
- * One (invoke range, catch clause) tuple, as the gather pass sees it. A landing
- * pad carries ONE (begin,end) pair per invoke that unwinds to it, so a try with
- * N protected calls produces N clauses that share a handler and clause_index but
- * cover disjoint invoke ranges. .mono_lsda is thus one entry per invoke range.
- */
-struct MonoEHClause {
-	/* This invoke's try range: a paired LandingPadInfo BeginLabels[i]/EndLabels[i]. */
-	const llvm::MCSymbol *try_begin = nullptr;
-	const llvm::MCSymbol *try_end = nullptr;
-	/* The handler entry: LandingPadInfo LandingPadLabel. */
-	const llvm::MCSymbol *handler = nullptr;
-	/* The IL clause index, smuggled through the type_info_N initializer. */
-	int clause_index = -1;
-	/*
-	 * The clause's IL flags (a MonoExceptionEnum: NONE=0/catch, FINALLY=2,
-	 * FAULT=4), smuggled alongside clause_index through the type_info_N global's
-	 * 2-word {i32 clause_index, i32 kind} initializer. MonoLSDAStreamer writes it
-	 * into the v2 section's kind column so the section is self-describing. For a
-	 * catch clause (all F1 admits) it is 0; the legacy 1-word i32 initializer
-	 * (clause_index only) leaves it 0 too.
-	 */
-	int kind = 0;
-	/*
-	 * False if the clause_index could not be safely recovered (the type_info was
-	 * not a GlobalVariable carrying a ConstantInt / 2-word struct initializer):
-	 * downstream must decline (CAP-EH-0), never guess.
-	 */
-	bool clause_resolved = false;
-};
-
-/* Everything the gather pass found for one EH-bearing MachineFunction. */
-struct MonoEHFunctionClauses {
-	/*
-	 * The function's name (MF.getName()). C3 keys the emitted section to the
-	 * function symbol - "one record per method in the method's own object"
-	 * (plan 12 2). The JIT is one function per module, but this is structured so
-	 * C3 can emit for the right function.
-	 */
-	std::string function;
-	std::vector<MonoEHClause> clauses;
-	/*
-	 * A negative TypeId (an exception-specification filter) was seen: out of the
-	 * catch-only milestone. Recorded so a later slice can decline; never a crash.
-	 */
-	bool has_filter = false;
-	/*
-	 * Something unexpected was seen (a missing begin/end/lpad label, an
-	 * unresolvable type_info, or a filter/cleanup TypeId): downstream must
-	 * decline this method to the classic JIT (CAP-EH-0).
-	 */
-	bool declined = false;
-};
-
-/*
- * One PC range a FINALLY clause's handler body occupies, as MonoFinallyRangePass
- * found it. A clause can have SEVERAL: the optimizer duplicates a body along its
- * entry paths, and each surviving copy is a range of its own.
- *
- * This is what the runtime's thread-abort guard asks about a stopped frame ("is it
- * inside this finally?"), so the bounds have to be exact. They are labels the pass
- * plants at the run's two ends - a label emits no code and can sit anywhere in a
- * block, so the range names where the body actually lies.
- */
-struct MonoEHFinallyBody {
-	const llvm::MCSymbol *body_begin = nullptr;
-	const llvm::MCSymbol *body_end = nullptr;
-	/* The IL clause index, read back from the markers bracketing the run. */
-	int clause_index = -1;
-	/*
-	 * Where the clause's thread-abort guard byte sits in the frame, as the DWARF
-	 * number of the register it is addressed off and a displacement from it - what
-	 * install_handler_block_guard () needs to reach it from a stack walk. -1 when
-	 * the opening marker named no slot, which is how the tiered backend uses these
-	 * markers: it recovers the slot from the stackmap section instead.
-	 */
-	int exvar_dwarf_reg = -1;
-	std::int64_t exvar_offset = 0;
-};
-
-/* The finally body ranges MonoFinallyRangePass found in one MachineFunction. */
-struct MonoEHFinallyFunction {
-	/*
-	 * MF.getName (), which MonoLSDAStreamer::finishImpl () matches against
-	 * MonoEHFunctionClauses::function to write both into one record.
-	 */
-	std::string function;
-	std::vector<MonoEHFinallyBody> bodies;
-};
-
-/*
- * The per-compile side channel: one entry per EH-bearing function. A non-EH
- * module (no landing pads) leaves this empty, so the gather pass is inert.
- *
- * finally_functions is a SEPARATE list because a different pass fills it, at a
- * different point in the pipeline; MonoLSDAStreamer::finishImpl () joins the two
- * by function name when it writes the section.
- */
-struct MonoEHSideChannel {
-	std::vector<MonoEHFunctionClauses> functions;
-	std::vector<MonoEHFinallyFunction> finally_functions;
 };
 
 /*

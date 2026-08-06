@@ -86,9 +86,9 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Function.h>
 
-#include "il-line-table.hpp"
+#include <mono/llvm/il-line-table.hpp>
 
-#include "mono_lsda_format.hpp"
+#include <mono/llvm/mono_lsda_format.hpp>
 #include "translator-cpp.hpp"
 #include "backend.h"
 #include "mini-llvm.h"
