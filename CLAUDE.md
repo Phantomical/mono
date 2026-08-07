@@ -237,6 +237,19 @@ Backend debugging env vars:
   Phases nest and the self column is a share of the whole, so it sums to 100. Worth
   reaching for before theorising about compile latency — `perf` does not work on this
   kernel and `--llvm-opt=-time-passes` aborts under concurrent compiles.
+  The value is a comma-separated set of words rather than a flag. `cpu` charges
+  thread CPU time instead of wall clock, which is what makes a run on a loaded box
+  comparable to a quiet one, at ten times the cost per reading (~6 µs a compile).
+  `fine` splits the four expensive phases into the pieces a per-compile floor is
+  made of — the machine passes and their construction, the object write and the
+  read back, the LLVMContext, the analysis managers — and costs ~21 µs a compile
+  with `cpu` and ~2 µs without.
+- `MONO_LLVM_JIT_HOIST=<word>[,<word>]` (`jit.cpp`) — measurement arms that take one
+  piece of per-compile work away so it can be priced; none is a candidate
+  implementation and `sharedjd` is not even safe under concurrent compiles.
+  `passbuilder` keeps the PassBuilder and the analysis managers per thread,
+  `nodwarf` skips recovering the IL line table, `sharedjd` puts every module in one
+  JITDylib.
 - `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code
   is bump-allocated out of. Capped at 2GB whatever you ask for, because a slab's code
   and its mutable data reference each other with a PCRel32 and nothing stubs that.

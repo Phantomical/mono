@@ -5,6 +5,8 @@
 
 #include "codemem.hpp"
 
+#include "timing.hpp"
+
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/Support/Memory.h>
@@ -15,6 +17,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -562,6 +565,9 @@ public:
 
 	void finalize (OnFinalizedFunction on_finalized) override
 	{
+		std::optional<timing::Scope> timed (std::in_place,
+		                                    timing::Phase::memfin);
+
 		settled_ = true;
 
 		/*
@@ -581,7 +587,12 @@ public:
 		if (object_.code.base != nullptr)
 			sys::Memory::InvalidateInstructionCache (object_.code.base,
 			                                         object_.code.size);
-		on_finalized (owner_->record (object_, std::move (*dealloc)));
+
+		FinalizedAlloc finalized = owner_->record (object_,
+		                                           std::move (*dealloc));
+
+		timed.reset ();
+		on_finalized (std::move (finalized));
 	}
 
 	void abandon (OnAbandonedFunction on_abandoned) override

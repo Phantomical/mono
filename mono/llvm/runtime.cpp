@@ -971,8 +971,15 @@ Expected<Backend::Compiled>
 Backend::translate_body (DomainState &state, MonoMethod *method,
                          MonoJitInfo **published)
 {
-	auto context = std::make_unique<LLVMContext> ();
-	auto module = std::make_unique<Module> (symbol_for_body (method), *context);
+	std::unique_ptr<LLVMContext> context;
+	std::unique_ptr<Module> module;
+
+	{
+		timing::Scope timed (timing::Phase::ctxnew);
+
+		context = std::make_unique<LLVMContext> ();
+		module = std::make_unique<Module> (symbol_for_body (method), *context);
+	}
 
 	/*
 	 * Translation itself resolves everything per-domain against state.domain

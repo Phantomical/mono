@@ -274,6 +274,10 @@ private:
 	/// Names the per-module dylibs; atomic because compiles may be concurrent.
 	std::atomic<uint64_t> module_counter_ {0};
 
+	/// The one dylib every module goes into under MONO_LLVM_JIT_HOIST=sharedjd,
+	/// and null otherwise.
+	llvm::orc::JITDylib *shared_jd_ = nullptr;
+
 	/// How many undefined names it takes to be worth sweeping the session's
 	/// symbol-string pool for the entries they left dead.
 	static constexpr uint64_t dead_name_sweep = 1024;

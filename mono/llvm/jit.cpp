@@ -79,6 +79,38 @@ lazy_compile_failed ()
 
 namespace {
 
+/*
+ * Set when codegen hands its object over, cleared when the link picks it up:
+ * what is between the two is turning the ELF bytes into a LinkGraph, which
+ * neither side has a hook inside of.
+ */
+thread_local uint64_t g_object_handed = 0;
+
+/*
+ * MONO_LLVM_JIT_HOIST names the experiments below, comma separated. None of
+ * them is on by default and none is meant to be: they exist to put a number on
+ * what taking one piece of per-compile work away is worth.
+ */
+bool
+hoisting (StringRef what)
+{
+	static const char *setting = std::getenv ("MONO_LLVM_JIT_HOIST");
+
+	if (setting == nullptr)
+		return false;
+
+	StringRef all (setting);
+
+	while (!all.empty ()) {
+		auto [head, rest] = all.split (',');
+
+		if (head == what)
+			return true;
+		all = rest;
+	}
+	return false;
+}
+
 /// How much of what this backend produces the IR verifier gets to see.
 enum class VerifyLevel {
 	/// Nothing is checked.
@@ -468,6 +500,12 @@ public:
 	                          jitlink::LinkGraph &, jitlink::JITLinkContext &,
 	                          MemoryBufferRef input_object) override
 	{
+		timing::span_end (timing::Phase::lgraph, g_object_handed);
+		g_object_handed = 0;
+
+		if (hoisting ("nodwarf"))
+			return;
+
 		std::map<std::string, std::vector<IlLineRow>> lines;
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
 		std::vector<VarSlot> var_slots;
@@ -497,6 +535,21 @@ public:
 	                       jitlink::PassConfiguration &config) override
 	{
 		std::string dylib = mr.getTargetJITDylib ().getName ();
+
+		if (timing::fine ()) {
+			auto started = std::make_shared<uint64_t> (0);
+
+			config.PrePrunePasses.push_back (
+				[started] (jitlink::LinkGraph &) -> Error {
+					*started = timing::span_begin (timing::Phase::jlink);
+					return Error::success ();
+				});
+			config.PostFixupPasses.push_back (
+				[started] (jitlink::LinkGraph &) -> Error {
+					timing::span_end (timing::Phase::jlink, *started);
+					return Error::success ();
+				});
+		}
 
 		config.PrePrunePasses.push_back ([] (jitlink::LinkGraph &graph) -> Error {
 			for (jitlink::Section &section : graph.sections ()) {
@@ -727,6 +780,69 @@ ir_verification_enabled ()
 	return verify_level () != VerifyLevel::off;
 }
 
+namespace {
+
+thread_local Module *g_verify_module = nullptr;
+thread_local VerifyLevel g_verify_level = VerifyLevel::off;
+
+/// One thread's copy of everything run_tier0_pipeline () otherwise builds per
+/// module, for the MONO_LLVM_JIT_HOIST=passbuilder experiment.
+struct HoistedPipeline {
+	PassInstrumentationCallbacks pic;
+	LoopAnalysisManager lam;
+	FunctionAnalysisManager fam;
+	CGSCCAnalysisManager cgam;
+	ModuleAnalysisManager mam;
+	std::unique_ptr<PassBuilder> pb;
+	ModulePassManager mpm;
+
+	HoistedPipeline ();
+};
+
+HoistedPipeline::HoistedPipeline ()
+{
+	pic.registerAfterPassCallback (
+		[] (StringRef pass, Any, const PreservedAnalyses &) {
+			if (g_verify_module == nullptr)
+				return;
+			if (g_verify_level == VerifyLevel::each || is_mono_pass (pass))
+				verify_or_die (*g_verify_module,
+				               ("after pass \"" + pass + "\"").str ());
+		});
+
+	pb = std::make_unique<PassBuilder> (&host_target_machine (),
+	                                    PipelineTuningOptions (), std::nullopt,
+	                                    &pic);
+	pb->registerModuleAnalyses (mam);
+	pb->registerCGSCCAnalyses (cgam);
+	pb->registerFunctionAnalyses (fam);
+	pb->registerLoopAnalyses (lam);
+	pb->crossRegisterProxies (lam, fam, cgam, mam);
+
+	mpm.addPass (ArrayAddressPass ());
+	mpm.addPass (LowerBuiltinsPass ());
+	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
+
+	FunctionPassManager fpm = pb->buildFunctionSimplificationPipeline (
+		OptimizationLevel::O1, ThinOrFullLTOPhase::None);
+
+	fpm.addPass (ClassInitPass ());
+	fpm.addPass (TailCallElimPass ());
+	fpm.addPass (RestoreTailPositionPass ());
+	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
+	mpm.addPass (arch::LegacyAbiPass ());
+}
+
+HoistedPipeline &
+hoisted_pipeline ()
+{
+	static thread_local HoistedPipeline pipeline;
+
+	return pipeline;
+}
+
+} // namespace
+
 void
 MonoJit::run_tier0_pipeline (Module &m)
 {
@@ -742,6 +858,40 @@ MonoJit::run_tier0_pipeline (Module &m)
 					verify_or_die (
 						m, ("after pass \"" + pass + "\"").str ());
 			});
+	}
+
+	std::optional<timing::Scope> timed_setup (std::in_place,
+	                                          timing::Phase::pbsetup);
+
+	/*
+	 * Everything from here to the run is the same object graph every time, so
+	 * one kept per thread and reused answers what building it costs. The
+	 * analysis managers have to be emptied between modules: their results are
+	 * keyed by IR that the last module took with it.
+	 */
+	if (hoisting ("passbuilder")) {
+		HoistedPipeline &hoisted = hoisted_pipeline ();
+
+		g_verify_module = verify != VerifyLevel::off ? &m : nullptr;
+		g_verify_level = verify;
+		timed_setup.reset ();
+		{
+			timing::Scope timed_run (timing::Phase::prun);
+
+			hoisted.mpm.run (m, hoisted.mam);
+
+			/*
+			 * While the module is still standing: a cached result holds
+			 * references into the IR it was computed over, and MemorySSA's
+			 * destructor walks them.
+			 */
+			hoisted.mam.clear ();
+			hoisted.cgam.clear ();
+			hoisted.fam.clear ();
+			hoisted.lam.clear ();
+		}
+		g_verify_module = nullptr;
+		return;
 	}
 
 	/*
@@ -811,7 +961,13 @@ MonoJit::run_tier0_pipeline (Module &m)
 	fpm.addPass (RestoreTailPositionPass ());
 	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
 	mpm.addPass (arch::LegacyAbiPass ());
-	mpm.run (m, mam);
+
+	timed_setup.reset ();
+	{
+		timing::Scope timed_run (timing::Phase::prun);
+
+		mpm.run (m, mam);
+	}
 }
 
 Expected<std::unique_ptr<MonoJit>>
@@ -860,6 +1016,22 @@ MonoJit::create ()
 
 	std::unique_ptr<MonoJit> self (
 		new MonoJit (std::move (*jit), std::move (*slabs)));
+
+	/*
+	 * Without a hook here the module and its LLVMContext are dropped inside
+	 * ORC's own emit, where nothing accounts for them; taking delivery of it is
+	 * also the moment the object exists and the link has not started.
+	 */
+	if (timing::fine ())
+		self->jit_->getIRCompileLayer ().setNotifyCompiled (
+			[] (MaterializationResponsibility &, ThreadSafeModule tsm) {
+				{
+					timing::Scope timed (timing::Phase::tsmfree);
+
+					tsm = ThreadSafeModule ();
+				}
+				g_object_handed = timing::span_begin (timing::Phase::lgraph);
+			});
 
 	self->capture_ = std::make_shared<ObjectCapturePlugin> ();
 	static_cast<ObjectLinkingLayer &> (self->jit_->getObjLinkingLayer ())
@@ -1028,17 +1200,37 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	 */
 	std::string jd_name =
 		("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
+	/*
+	 * MONO_LLVM_JIT_HOIST=sharedjd puts every module in one dylib instead, to
+	 * price making a fresh one. It is a measurement arm and not a candidate
+	 * implementation: the capture below is keyed by the dylib's name, so two
+	 * compiles running at once would take each other's object, and no method
+	 * can be freed on its own any more.
+	 */
+	if (hoisting ("sharedjd"))
+		jd_name = "jd.shared";
+
 	JITDylib &jd = [&] () -> JITDylib & {
 		timing::Scope timed (timing::Phase::dylib);
+
+		if (shared_jd_ != nullptr)
+			return *shared_jd_;
+
 		JITDylib &made = jit_->getExecutionSession ().createBareJITDylib (jd_name);
 
 		made.addToLinkOrder (*helpers_);
 		made.addToLinkOrder (*stubs_);
+		if (hoisting ("sharedjd"))
+			shared_jd_ = &made;
 		return made;
 	}();
 
-	if (Error err = jit_->addIRModule (jd, std::move (tsm)))
-		return std::move (err);
+	{
+		timing::Scope timed (timing::Phase::addir);
+
+		if (Error err = jit_->addIRModule (jd, std::move (tsm)))
+			return std::move (err);
+	}
 
 	Expected<ExecutorAddr> sym = jit_->lookup (jd, entry);
 	if (!sym)

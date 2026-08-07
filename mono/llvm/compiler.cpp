@@ -37,6 +37,7 @@
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>
 #include <llvm/CodeGen/MachineFunctionPass.h>
+#include <llvm/Pass.h>
 #include <llvm/CodeGen/MachineModuleInfo.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -67,6 +68,94 @@ using namespace llvm;
 
 namespace mono {
 namespace {
+
+/*
+ * Where the two halves of codegen's run hand a start time over to the pass that
+ * closes it out. Nothing outside the accounting reads these, and a codegen run
+ * never leaves the thread it started on.
+ */
+thread_local uint64_t g_printer_started = 0;
+thread_local uint64_t g_object_started = 0;
+thread_local uint64_t g_isel_done = 0;
+thread_local uint64_t g_function_started = 0;
+
+/// Marks where the pass manager starts on a function, ahead of the IR passes
+/// codegen runs and of ISel; the mark after ISel closes it.
+class FunctionMarkPass : public FunctionPass {
+public:
+	static char ID;
+
+	FunctionMarkPass () : FunctionPass (ID) {}
+
+	StringRef getPassName () const override { return "Mono codegen timing mark"; }
+
+	bool runOnFunction (Function &) override
+	{
+		g_function_started = timing::span_begin (timing::Phase::isel);
+		return false;
+	}
+
+	void getAnalysisUsage (AnalysisUsage &au) const override
+	{
+		au.setPreservesAll ();
+	}
+};
+
+char FunctionMarkPass::ID;
+
+/// Marks the point ISel is finished with a function and the machine passes are
+/// about to start on it; the mark ahead of the printer closes it.
+class MachinePassMarkPass : public MachineFunctionPass {
+public:
+	static char ID;
+
+	MachinePassMarkPass () : MachineFunctionPass (ID) {}
+
+	StringRef getPassName () const override { return "Mono ISel timing mark"; }
+
+	bool runOnMachineFunction (MachineFunction &) override
+	{
+		timing::span_end (timing::Phase::isel, g_function_started);
+		g_function_started = 0;
+		g_isel_done = timing::span_begin (timing::Phase::mpass);
+		return false;
+	}
+
+	void getAnalysisUsage (AnalysisUsage &au) const override
+	{
+		au.setPreservesAll ();
+		MachineFunctionPass::getAnalysisUsage (au);
+	}
+};
+
+char MachinePassMarkPass::ID;
+
+/// Marks the start of the AsmPrinter over one function; the side-table pass,
+/// which the legacy pass manager runs immediately after the printer, closes it.
+class PrinterMarkPass : public MachineFunctionPass {
+public:
+	static char ID;
+
+	PrinterMarkPass () : MachineFunctionPass (ID) {}
+
+	StringRef getPassName () const override { return "Mono printer timing mark"; }
+
+	bool runOnMachineFunction (MachineFunction &) override
+	{
+		timing::span_end (timing::Phase::mpass, g_isel_done);
+		g_isel_done = 0;
+		g_printer_started = timing::span_begin (timing::Phase::emit);
+		return false;
+	}
+
+	void getAnalysisUsage (AnalysisUsage &au) const override
+	{
+		au.setPreservesAll ();
+		MachineFunctionPass::getAnalysisUsage (au);
+	}
+};
+
+char PrinterMarkPass::ID;
 
 /// One `.mono_unwind` record: the wire form of one MCCFIInstruction.
 struct UnwindRecord {
@@ -144,7 +233,16 @@ public:
 
 	StringRef getPassName () const override { return "Mono side-table emission"; }
 
-	bool runOnMachineFunction (MachineFunction &) override { return false; }
+	/*
+	 * This runs immediately after the AsmPrinter's own, so the interval since
+	 * the marker pass ahead of the printer is the printer over one function.
+	 */
+	bool runOnMachineFunction (MachineFunction &) override
+	{
+		timing::span_end (timing::Phase::emit, g_printer_started);
+		g_printer_started = 0;
+		return false;
+	}
 
 	void getAnalysisUsage (AnalysisUsage &au) const override
 	{
@@ -154,9 +252,20 @@ public:
 
 	bool doFinalization (Module &) override
 	{
-		emit_clause_table ();
-		emit_guard_table ();
-		emit_unwind_table ();
+		{
+			timing::Scope timed (timing::Phase::sidetbl);
+
+			emit_clause_table ();
+			emit_guard_table ();
+			emit_unwind_table ();
+		}
+
+		/*
+		 * doFinalization runs in reverse pass order, so from here to the end of
+		 * the run is the AsmPrinter closing the object out and every pass below
+		 * it being finalized.
+		 */
+		g_object_started = timing::span_begin (timing::Phase::objout);
 		return false;
 	}
 
@@ -413,12 +522,16 @@ Error
 emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
              MonoEHSideChannel &side_channel, OutputKind kind)
 {
-	legacy::PassManager pm;
+	std::optional<legacy::PassManager> pm (std::in_place);
 	std::optional<timing::Scope> timed_setup (std::in_place,
 	                                          timing::Phase::cgsetup);
+	std::optional<timing::Scope> timed_part (std::in_place, timing::Phase::mmi);
 
 	auto *mmiwp = new MachineModuleInfoWrapperPass (&tm);
-	TargetPassConfig *tpc = tm.createPassConfig (pm);
+
+	timed_part.emplace (timing::Phase::cgpass);
+
+	TargetPassConfig *tpc = tm.createPassConfig (*pm);
 
 	/*
 	 * The two IR verifier runs this gates bracket codegen's own IR passes
@@ -427,12 +540,20 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 * far more expensive switch and stays off either way.
 	 */
 	tpc->setDisableVerify (!ir_verification_enabled ());
-	pm.add (tpc);
-	pm.add (mmiwp);
+	pm->add (tpc);
+	pm->add (mmiwp);
+
+	if (timing::fine ())
+		pm->add (new FunctionMarkPass ());
+
 	if (tpc->addISelPasses ())
 		return make_error<StringError> (
 			"target does not support instruction selection",
 			inconvertibleErrorCode ());
+
+	if (timing::fine ())
+		pm->add (new MachinePassMarkPass ());
+
 	tpc->addMachinePasses ();
 
 	/*
@@ -440,14 +561,14 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 * landing-pad set. Read-only: a module with no landing pads emits an
 	 * object byte-identical to SimpleCompiler's.
 	 */
-	pm.add (new MonoEHGatherPass (&side_channel));
+	pm->add (new MonoEHGatherPass (&side_channel));
 
 	/*
 	 * Also before the printer, and after the frame is laid out: it plants the
 	 * labels that name where the finally bodies ended up, and reads the guard
 	 * slot's frame home out of markers PEI has already resolved.
 	 */
-	pm.add (new MonoFinallyRangePass (&side_channel));
+	pm->add (new MonoFinallyRangePass (&side_channel));
 
 	tpc->setInitialized ();
 
@@ -458,29 +579,49 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 */
 	MCContext *ctx = &mmiwp->getMMI ().getContext ();
 
+	timed_part.emplace (timing::Phase::strm);
+
 	Expected<std::unique_ptr<MCStreamer>> streamer =
 		make_streamer (tm, *ctx, out, kind);
 	if (!streamer)
 		return streamer.takeError ();
+
+	timed_part.emplace (timing::Phase::aprint);
 
 	MCStreamer *streamer_ptr = streamer->get ();
 	AsmPrinter *printer = tm.getTarget ().createAsmPrinter (tm, std::move (*streamer));
 	if (!printer)
 		return make_error<StringError> ("target does not support an AsmPrinter",
 		                                inconvertibleErrorCode ());
-	pm.add (printer);
+	/*
+	 * Ahead of the printer, so the pass below it closes the interval the
+	 * printer took over one function.
+	 */
+	if (timing::fine ())
+		pm->add (new PrinterMarkPass ());
+
+	pm->add (printer);
 
 	/*
 	 * After the printer on purpose: doFinalization runs in reverse pass order,
 	 * so the side tables are written while the streamer is still open, before
 	 * the AsmPrinter's own finalization ends the object.
 	 */
-	pm.add (new SideTableEmitPass (streamer_ptr, &side_channel));
+	pm->add (new SideTableEmitPass (streamer_ptr, &side_channel));
 
+	timed_part.reset ();
 	timed_setup.reset ();
 	{
 		timing::Scope timed_run (timing::Phase::cgrun);
-		pm.run (m);
+
+		g_object_started = 0;
+		pm->run (m);
+		timing::span_end (timing::Phase::objout, g_object_started);
+	}
+	{
+		timing::Scope timed_free (timing::Phase::pmfree);
+
+		pm.reset ();
 	}
 	return Error::success ();
 }
