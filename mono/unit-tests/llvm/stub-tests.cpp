@@ -439,6 +439,104 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
 }
 
 /*
+ * Promotion is a redirect performed under running code: the slot is rewritten
+ * while other threads are calling through the stub and while compiled callers
+ * hold its address. Every call has to come back with one of the targets the
+ * stub has actually had - a torn slot would return something else, or jump into
+ * nothing - and calls made after a redirect have to see it, so the redirects
+ * are not simply lost.
+ */
+TEST (Stubs, RedirectsWhileThreadsRunThroughIt)
+{
+	auto jit = MonoJit::create ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	auto stub = make_stub (**jit, "m", (void *) &stub_target_one);
+	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+
+	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
+	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
+
+	void *const targets[] = { (void *) &stub_target_one,
+		                      (void *) &stub_target_two,
+		                      (void *) &stub_target_three };
+
+	constexpr int readers = 8;
+	constexpr int all_three = 0b111;
+	std::atomic<int> ready {0};
+	std::atomic<bool> go {false};
+	std::atomic<bool> done {false};
+	/* Bit N-1 of a reader's mask says it saw target N. */
+	std::vector<std::atomic<int>> seen (readers);
+	std::vector<std::atomic<int>> bad (readers);
+
+	for (int i = 0; i < readers; i++) {
+		seen[i].store (0);
+		bad[i].store (0);
+	}
+
+	std::vector<std::thread> workers;
+	for (int i = 0; i < readers; i++)
+		workers.emplace_back ([&, i] {
+			IntFn direct = reinterpret_cast<IntFn> (*stub);
+			IntFn compiled = reinterpret_cast<IntFn> (caller->entry);
+
+			ready++;
+			while (!go.load ())
+				std::this_thread::yield ();
+
+			while (!done.load ()) {
+				for (int32_t value : { direct (), compiled () }) {
+					if (value >= 1 && value <= 3)
+						seen[i] |= 1 << (value - 1);
+					else
+						bad[i]++;
+				}
+			}
+		});
+
+	while (ready.load () != readers)
+		std::this_thread::yield ();
+	go.store (true);
+
+	/*
+	 * Redirect until every reader has been through all three targets rather
+	 * than a fixed number of times: a reader descheduled for the length of a
+	 * fixed loop would report a missed redirect that never happened.
+	 */
+	auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
+	std::string error;
+	int n = 0;
+
+	for (;;) {
+		if (Error err = (*jit)->redirect_stub ("m", targets[n++ % 3])) {
+			error = toString (std::move (err));
+			break;
+		}
+
+		bool everyone = true;
+
+		for (int i = 0; i < readers; i++)
+			everyone &= seen[i].load () == all_three;
+		if (everyone || std::chrono::steady_clock::now () > deadline)
+			break;
+	}
+
+	done.store (true);
+	for (std::thread &t : workers)
+		t.join ();
+
+	EXPECT_EQ (error, "");
+	for (int i = 0; i < readers; i++) {
+		EXPECT_EQ (bad[i].load (), 0)
+			<< "reader " << i << " reached a target the stub never had";
+		EXPECT_EQ (seen[i].load (), all_three)
+			<< "reader " << i << " never saw all three targets";
+	}
+}
+
+/*
  * One stub per method means a Unity-sized game publishes six figures of them,
  * so what a stub costs in address space is a real number rather than an
  * aesthetic one. Stubs published one at a time still have to pack: the version
