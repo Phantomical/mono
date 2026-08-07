@@ -274,8 +274,10 @@ Backend debugging env vars:
   compile took, summed over every method: metadata, translation, resolution, the IR
   pipeline, codegen setup and codegen proper, JITLink, and the pieces around them.
   Phases nest and the self column is a share of the whole, so it sums to 100. Worth
-  reaching for before theorising about compile latency — `perf` does not work on this
-  kernel and `--llvm-opt=-time-passes` aborts under concurrent compiles.
+  reaching for before theorising about compile latency; it says which phase, and
+  `perf record -g` (a locally-built `~/bin/perf` matching this kernel) says which
+  function inside it. `--llvm-opt=-time-passes` remains unusable — it aborts under
+  concurrent compiles.
   The value is a comma-separated set of words rather than a flag. `cpu` charges
   thread CPU time instead of wall clock, which is what makes a run on a loaded box
   comparable to a quiet one, at ten times the cost per reading (~6 µs a compile).
