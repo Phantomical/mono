@@ -2019,7 +2019,7 @@ cominterop_restore_domain (MonoDomain *domain)
 }
 
 static void
-cominterop_setup_marshal_context (EmitMarshalContext *m, MonoMethod *method)
+cominterop_setup_marshal_context (EmitMarshalContext *m, MonoMethod *method, MonoError *error)
 {
 	MonoMethodSignature *sig, *csig;
 	MonoImage *method_klass_image = m_class_get_image (method->klass);
@@ -2044,6 +2044,7 @@ cominterop_setup_marshal_context (EmitMarshalContext *m, MonoMethod *method)
 	m->retobj_var = 0;
 	m->sig = sig;
 	m->csig = csig;
+	m->error = error;
 }
 
 static MonoMarshalSpec*
@@ -2156,11 +2157,13 @@ cominterop_get_ccw_method (MonoClass *iface, MonoMethod *method, MonoError *erro
 	int param_index = 0;
 	MonoMethodBuilder *mb;
 	MonoMarshalSpec ** mspecs;
-	MonoMethod *wrapper_method, *adjust_method;
+	MonoMethod *adjust_method;
 	MonoMethodSignature* sig_adjusted;
 	MonoMethodSignature* sig = mono_method_signature_internal (method);
 	gboolean const preserve_sig = (method->iflags & METHOD_IMPL_ATTRIBUTE_PRESERVE_SIG) != 0;
 	EmitMarshalContext m;
+
+	error_init (error);
 
 	mb = mono_mb_new (iface, method->name, MONO_WRAPPER_NATIVE_TO_MANAGED);
 	adjust_method = cominterop_get_managed_wrapper_adjusted (method);
@@ -2202,14 +2205,21 @@ cominterop_get_ccw_method (MonoClass *iface, MonoMethod *method, MonoError *erro
 	mb->skip_visibility = TRUE;
 #endif
 
-	cominterop_setup_marshal_context (&m, adjust_method);
+	cominterop_setup_marshal_context (&m, adjust_method, error);
 	m.mb = mb;
 	mono_marshal_emit_managed_wrapper (mb, sig_adjusted, mspecs, &m, adjust_method, 0);
-	mono_cominterop_lock ();
-	wrapper_method = mono_mb_create_method (mb, m.csig, m.csig->param_count + 16);
-	mono_cominterop_unlock ();
 
-	gpointer ret = mono_compile_method_checked (wrapper_method, error);
+	/* The emitters report what they cannot marshal through m.error, and keep
+	 * emitting afterwards, so what is in mb at this point is only half a
+	 * wrapper. Throw it away rather than compile it. */
+	gpointer ret = NULL;
+	if (is_ok (error)) {
+		mono_cominterop_lock ();
+		MonoMethod *wrapper_method = mono_mb_create_method (mb, m.csig, m.csig->param_count + 16);
+		mono_cominterop_unlock ();
+
+		ret = mono_compile_method_checked (wrapper_method, error);
+	}
 
 	mono_mb_free (mb);
 	for (param_index = sig_adjusted->param_count; param_index >= 0; param_index--)

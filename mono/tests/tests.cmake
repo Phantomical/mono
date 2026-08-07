@@ -489,6 +489,7 @@ set(MONO_TESTS_CS_SRC
   last-error.cs
   rgctx-thread-static.cs
   ccw-class-iface.cs
+  ccw-array-return.cs
   bug-gh-17285.cs
   roslyn-bug-19038.cs
   sizeof-empty-structs.cs
