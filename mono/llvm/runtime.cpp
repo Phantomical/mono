@@ -2137,6 +2137,14 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method)
 	if (published != nullptr)
 		raise_jit_done (jinfo_get_method (published), published);
 
+	/*
+	 * A method the interpreter is already running calls its callees by
+	 * interpreting them, and it has no other way of noticing that one of them
+	 * has since been given code to call instead.
+	 */
+	if (mono_use_interpreter)
+		mini_get_interp_callbacks ()->method_compiled (state.domain, method);
+
 	return *code;
 }
 

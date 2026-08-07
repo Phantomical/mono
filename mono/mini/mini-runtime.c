@@ -2878,6 +2878,20 @@ mono_jit_find_compiled_method (MonoDomain *domain, MonoMethod *method)
 	return mono_jit_find_compiled_method_with_jit_info (domain, method, NULL);
 }
 
+/*
+ * mono_jit_method_is_compiled:
+ *
+ *   Whether METHOD already has native code in DOMAIN, without compiling it if it
+ * does not. The answer only ever goes from FALSE to TRUE - a body is never taken
+ * back, and recompiling redirects the method's stubs rather than replacing them -
+ * so a caller may cache a TRUE for good.
+ */
+gboolean
+mono_jit_method_is_compiled (MonoDomain *domain, MonoMethod *method)
+{
+	return mono_llvm_jit_find_body (domain, method) != NULL;
+}
+
 typedef struct {
 	MonoMethod *method;
 	gpointer compiled_method;

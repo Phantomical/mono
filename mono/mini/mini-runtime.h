@@ -526,6 +526,7 @@ void      mono_jit_search_all_backends_for_all_jit_infos (MonoDomain *domain, Mo
 void      mini_install_pending_breakpoints  (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji);
 gpointer  mono_jit_find_compiled_method_with_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji);
 gpointer  mono_jit_find_compiled_method     (MonoDomain *domain, MonoMethod *method);
+gboolean  mono_jit_method_is_compiled       (MonoDomain *domain, MonoMethod *method);
 gpointer mono_jit_compile_method (MonoMethod *method, MonoError *error);
 gpointer  mono_jit_compile_method_jit_only  (MonoMethod *method, MonoError *error);
 

@@ -224,6 +224,7 @@ set(MONO_TESTS_CS_SRC
   bug-Xamarin-5278.cs
   interlocked.cs
   interp-entries.cs
+  interp-calls-compiled.cs
   volatile-prefix.cs
   delegate-async-exit.cs
   delegate-delegate-exit.cs

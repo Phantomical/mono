@@ -2446,6 +2446,34 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 	}
 }
 
+/*
+ * Settle how calls to IMETHOD are made and record the answer on it: natively,
+ * through do_jit_call (), when the method already has code, and by interpreting
+ * it otherwise.
+ *
+ * IMETHOD_CODE_COMPILED is a permanent answer - a body is never taken back and
+ * the address it is entered at is fixed - while IMETHOD_CODE_INTERP is only true
+ * until something compiles the method, which interp_method_compiled () reports.
+ */
+static MONO_NEVER_INLINE InterpMethodCodeType
+resolve_code_type (InterpMethod *imethod)
+{
+	MonoMethod *method = imethod->method;
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+	InterpMethodCodeType code_type = IMETHOD_CODE_INTERP;
+
+	if (mono_interp_jit_call_marshallable (method, sig)
+	    && mono_jit_method_is_compiled (imethod->domain, method))
+		code_type = IMETHOD_CODE_COMPILED;
+
+	/*
+	 * A compile that finished while the queries above were running has already
+	 * written COMPILED, and that answer is the later one, so leave it alone.
+	 */
+	mono_atomic_cas_i32 ((gint32*)&imethod->code_type, code_type, IMETHOD_CODE_UNKNOWN);
+	return imethod->code_type;
+}
+
 static MONO_NEVER_INLINE void
 do_debugger_tramp (void (*tramp) (void), InterpFrame *frame)
 {
@@ -3088,6 +3116,24 @@ interp_free_method (MonoDomain *domain, MonoMethod *method)
 	mono_domain_jit_code_hash_unlock (domain);
 }
 
+/*
+ * METHOD now has native code in DOMAIN, so calls to it from interpreted code go
+ * there instead of interpreting it. Nothing is created here: a method the
+ * interpreter has never seen settles this for itself the first time it is
+ * called, and it can only be settled the other way while there is no code.
+ */
+static void
+interp_method_compiled (MonoDomain *domain, MonoMethod *method)
+{
+	InterpMethod *imethod = lookup_imethod (domain, method);
+
+	if (imethod == NULL || imethod->code_type == IMETHOD_CODE_COMPILED)
+		return;
+
+	if (mono_interp_jit_call_marshallable (method, mono_method_signature_internal (method)))
+		imethod->code_type = IMETHOD_CODE_COMPILED;
+}
+
 #if COUNT_OPS
 static long opcode_counts[MINT_LASTOP];
 
@@ -3709,38 +3755,7 @@ calli:
 				LOCAL_VAR (call_args_offset, gpointer) = unboxed;
 			}
 
-			InterpMethodCodeType code_type = cmethod->code_type;
-
-			g_assert (code_type == IMETHOD_CODE_UNKNOWN ||
-			          code_type == IMETHOD_CODE_INTERP ||
-			          code_type == IMETHOD_CODE_COMPILED);
-
-			if (G_UNLIKELY (code_type == IMETHOD_CODE_UNKNOWN)) {
-				MonoMethodSignature *sig = mono_method_signature_internal (cmethod->method);
-				if (mono_interp_jit_call_supported (cmethod->method, sig))
-					code_type = IMETHOD_CODE_COMPILED;
-				else
-					code_type = IMETHOD_CODE_INTERP;
-				cmethod->code_type = code_type;
-			}
-
-			if (code_type == IMETHOD_CODE_INTERP) {
-
-				goto call;
-
-			} else if (code_type == IMETHOD_CODE_COMPILED) {
-				frame->state.ip = ip;
-				error_init_reuse (error);
-				do_jit_call ((stackval*)(locals + call_args_offset), frame, cmethod, error);
-				if (!is_ok (error)) {
-					MonoException *ex = mono_error_convert_to_exception (error);
-					THROW_EX (ex, ip);
-				}
-
-				CHECK_RESUME_STATE (context);
-			}
-
-			MINT_IN_BREAK;
+			goto call;
 		}
 		MINT_IN_CASE(MINT_CALL_VARARG) {
 			// Same as MINT_CALL, except at ip [3] we have the index for the csignature,
@@ -3774,6 +3789,34 @@ calli:
 
 			ip += 3;
 call:
+			/*
+			 * A callee that has native code is called rather than interpreted,
+			 * so that entering the interpreter somewhere does not keep
+			 * everything reached from there in it as well.
+			 */
+			{
+				InterpMethodCodeType code_type = cmethod->code_type;
+
+				if (G_UNLIKELY (code_type != IMETHOD_CODE_INTERP)) {
+					if (code_type == IMETHOD_CODE_UNKNOWN)
+						code_type = resolve_code_type (cmethod);
+
+					if (code_type == IMETHOD_CODE_COMPILED) {
+						/* for calls, have ip pointing at the start of next instruction */
+						frame->state.ip = ip;
+						error_init_reuse (error);
+						do_jit_call ((stackval*)(locals + call_args_offset), frame, cmethod, error);
+						if (!is_ok (error)) {
+							MonoException *ex = mono_error_convert_to_exception (error);
+							THROW_EX (ex, ip);
+						}
+
+						CHECK_RESUME_STATE (context);
+						MINT_IN_BREAK;
+					}
+				}
+			}
+
 			/*
 			 * Make a non-recursive call by loading the new interpreter state based on child frame,
 			 * and going back to the main loop.

@@ -280,6 +280,9 @@ void
 mono_interp_print_code (InterpMethod *imethod);
 
 gboolean
+mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig);
+
+gboolean
 mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig);
 
 void

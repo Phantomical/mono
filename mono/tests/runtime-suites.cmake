@@ -276,6 +276,15 @@ if(MONO_ENABLE_INTERPRETER)
                      TESTS interp-entries.exe
                      RUNTIME_ARGS "--interp-tier0=Callee")
 
+  # The other direction: Interpreted's methods run in the interpreter while
+  # their callees compile, so every call in Run () leaves the interpreter for
+  # native code. Nothing else covers that crossing -- the suites above either
+  # compile everything or interpret everything, and under a bare --interp-tier0
+  # every callee is interpreted too.
+  mono_runtime_suite(runtime-interp-calls-compiled LABEL interp
+                     TESTS interp-calls-compiled.exe
+                     RUNTIME_ARGS "--interp-tier0=Interpreted")
+
   # `--interp=jit=<class>` compiles the named class and interprets the rest,
   # which is the only way today to get a compiled frame and an interpreted one
   # into the same process. Values the two engines hand each other -- a method

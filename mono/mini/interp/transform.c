@@ -1088,12 +1088,21 @@ get_data_item_index_nonshared (TransformData *td, void *ptr)
 	return index;
 }
 
+/*
+ * Whether do_jit_call () can marshal a call to METHOD at all. These are limits
+ * of that marshalling - what the gsharedvt_out wrapper can be built for and what
+ * the interpreter's stack can be handed across - rather than a policy about when
+ * calling natively is worth it. A method that fails here stays interpreted
+ * however thoroughly it has been compiled.
+ */
 gboolean
-mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
+mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig)
 {
-	GSList *l;
-
 	if (sig->param_count > 6)
+		return FALSE;
+	/* The callee's own signature says nothing about the arguments a vararg
+	 * call site actually pushed, so the wrapper cannot be built for one. */
+	if (sig->call_convention == MONO_CALL_VARARG)
 		return FALSE;
 	if (sig->pinvoke)
 		return FALSE;
@@ -1106,6 +1115,17 @@ mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
 	if (method->string_ctor)
 		return FALSE;
 	if (method->wrapper_type != MONO_WRAPPER_NONE)
+		return FALSE;
+
+	return TRUE;
+}
+
+gboolean
+mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
+{
+	GSList *l;
+
+	if (!mono_interp_jit_call_marshallable (method, sig))
 		return FALSE;
 
 	if (mono_aot_only && m_class_get_image (method->klass)->aot_module && !(method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)) {

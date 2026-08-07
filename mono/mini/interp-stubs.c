@@ -152,6 +152,12 @@ stub_free_method (MonoDomain *domain, MonoMethod *method)
 	g_assert_not_reached ();
 }
 
+/* A notification rather than a request, so there is nothing to refuse. */
+static void
+stub_method_compiled (MonoDomain *domain, MonoMethod *method)
+{
+}
+
 static MonoObject*
 stub_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObject **exc, MonoError *error)
 {
