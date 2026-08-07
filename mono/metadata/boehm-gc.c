@@ -82,7 +82,7 @@ mono_clear_ephemerons (void);
 static struct GC_ms_entry*
 mono_push_ephemerons(struct GC_ms_entry* mark_stack_ptr, struct GC_ms_entry* mark_stack_limit);
 static void*
-null_ephemerons_for_domain (MonoDomain* domain);
+null_ephemerons_for_domain (void* domain);
 
 static void
 register_test_toggleref_callback (void);
@@ -2420,7 +2420,7 @@ mono_push_ephemerons (struct GC_ms_entry* mark_stack_ptr, struct GC_ms_entry* ma
 				continue;
 
 			if (current_ephemeron->value) {
-				mark_stack_ptr = GC_mark_and_push(current_ephemeron->value, mark_stack_ptr, mark_stack_limit, &current_ephemeron->value);
+				mark_stack_ptr = GC_mark_and_push(current_ephemeron->value, mark_stack_ptr, mark_stack_limit, (void**)&current_ephemeron->value);
 			}
 		}
 	}
@@ -2428,9 +2428,11 @@ mono_push_ephemerons (struct GC_ms_entry* mark_stack_ptr, struct GC_ms_entry* ma
 	return mark_stack_ptr;
 }
 
+/* Runs under GC_call_with_alloc_lock, so it has to wear GC_fn_type exactly. */
 static void*
-null_ephemerons_for_domain (MonoDomain* domain)
+null_ephemerons_for_domain (void* user_data)
 {
+	MonoDomain* domain = (MonoDomain*)user_data;
 	ephemeron_node* prev_node = NULL;
 	ephemeron_node* current_node = NULL;
 

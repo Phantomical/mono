@@ -129,9 +129,9 @@ gint64 read_qword(const void* address)
     return v;
 }
 
-gint32 read_dword(const void* address)
+guint32 read_dword(const void* address)
 {
-    gint32 v = 0;
+    guint32 v = 0;
     read_memory(&v, address, sizeof(v));
     return v;
 }

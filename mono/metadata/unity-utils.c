@@ -1173,7 +1173,8 @@ MonoType* mono_unity_reflection_type_get_type(MonoReflectionType *type)
 MONO_API void
 mono_unity_runtime_set_main_args (int argc, const char* argv[])
 {
-	mono_runtime_set_main_args (argc, argv);
+	/* The public signature predates const-correctness; it only reads the strings. */
+	mono_runtime_set_main_args (argc, (char**)argv);
 }
 
 MONO_API MonoString*
@@ -1422,7 +1423,7 @@ ves_icall_System_IO_MonoIO_RemapPath  (MonoString *path, MonoString **new_path)
 const char*
 mono_unity_remap_path (const char* path)
 {
-	const char* path_remap = NULL;
+	char* path_remap = NULL;
 	call_remapper (path, &path_remap);
 
 	return path_remap;
