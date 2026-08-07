@@ -643,7 +643,7 @@ MethodLLVMEmitter::native_signature () const
 	return speaks_marshalled_layout (method, mono_method_signature_internal (method));
 }
 
-/// The alignment an instance of T needs in memory.
+/// The alignment a location holding a T needs.
 ///
 /// The struct convert_vtype builds is packed, which the data layout reads as
 /// 1-aligned, so every alloca of one has to be told what the runtime decided
@@ -652,6 +652,19 @@ llvm::Align
 MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 {
 	if (t->byref)
+		return llvm::Align (TARGET_SIZEOF_VOID_P);
+
+	/*
+	 * A reference is one pointer wide and the runtime puts every slot holding
+	 * one on a pointer boundary: mono_class_layout_fields force-aligns a
+	 * reference-bearing field to TARGET_SIZEOF_VOID_P whatever Pack asked for,
+	 * and an explicit layout that lands one off a boundary is a type load
+	 * failure - the collector marks in words and could not find the reference
+	 * otherwise. Resolving to a class below would answer with the alignment of
+	 * the object pointed at, which says nothing about the slot; an access that
+	 * really does name an unaligned one still has the unaligned. prefix.
+	 */
+	if (mini_type_is_reference (t))
 		return llvm::Align (TARGET_SIZEOF_VOID_P);
 
 	MonoClass *klass = mono_class_from_mono_type_internal (mini_get_underlying_type (t));
