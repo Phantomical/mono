@@ -916,6 +916,12 @@ mono_get_delegate_end_invoke_checked (MonoClass *klass, MonoError *error);
 void
 mono_runtime_free_method    (MonoDomain *domain, MonoMethod *method);
 
+MonoGCHandle
+mono_method_get_code_owner_handle (MonoDomain *domain, MonoMethod *method);
+
+MonoObject *
+mono_method_get_code_owner (MonoGCHandle owner);
+
 void
 mono_install_callbacks      (MonoRuntimeCallbacks *cbs);
 

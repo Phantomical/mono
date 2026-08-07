@@ -126,6 +126,12 @@ struct InterpMethod {
 	MonoType **param_types;
 	MonoJitInfo *jinfo;
 	MonoDomain *domain;
+	/*
+	 * Weak handle on the object whose death frees this method's code, or NULL when
+	 * nothing manages it. A frame executing the method resolves it and holds the
+	 * result for as long as it runs.
+	 */
+	MonoGCHandle code_owner;
 
 	// This doesn't include the size of stack locals
 	guint32 total_locals_size;
@@ -193,6 +199,14 @@ struct InterpFrame {
 	stackval       *retval; /* parent */
 	stackval       *stack;
 	InterpFrame    *next_free;
+	/*
+	 * What keeps the code this frame is executing from being freed underneath it -
+	 * imethod->code_owner resolved, or NULL when nothing manages the code. Frames
+	 * are allocated on the native stack, which both collectors scan conservatively,
+	 * so holding it here roots it for exactly as long as the frame lives, however
+	 * the frame ends.
+	 */
+	MonoObject     *code_owner;
 	/* State saved before calls */
 	/* This is valid if state.ip != NULL */
 	InterpState state;

@@ -476,6 +476,7 @@ set(MONO_TESTS_CS_SRC
   dynamic-method-churn.cs
   dynamic-method-delegate.cs
   dynamic-method-gc-in-body.cs
+  dynamic-method-gc-in-frame.cs
   verbose.cs
   generic-unmanaged-constraint.cs
   bug-10834.cs
@@ -1040,11 +1041,6 @@ set(MONO_TESTS_DISABLED
 
 # Additionally excluded when running under the interpreter.
 set(MONO_TESTS_INTERP_DISABLED
-  # asks whether the activation calling a delegate still roots it while the
-  # delegate's body runs. The interpreter answers no - it drops the delegate
-  # from its frame once the call is entered, so the dynamic method underneath
-  # is collected mid-call. That is the interpreter's own question to settle.
-  dynamic-method-gc-in-body.exe
   delegate-async-exception.exe
   bug-348522.2.exe
   bug-459094.exe

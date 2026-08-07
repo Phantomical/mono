@@ -215,6 +215,22 @@ frame_data_allocator_pop (FrameDataAllocator *stack, InterpFrame *frame)
 }
 
 /*
+ * frame_root_code_owner:
+ *
+ *   Have FRAME hold whatever keeps the code it is about to execute alive.
+ *
+ * Almost no method has an owner, so this is a load and a predictable branch; the
+ * resolve is paid only by the ones that do.
+ */
+static MONO_ALWAYS_INLINE void
+frame_root_code_owner (InterpFrame *frame)
+{
+	MonoGCHandle owner = frame->imethod->code_owner;
+
+	frame->code_owner = G_UNLIKELY (owner != NULL) ? mono_method_get_code_owner (owner) : NULL;
+}
+
+/*
  * reinit_frame:
  *
  *   Reinitialize a frame.
@@ -226,6 +242,7 @@ reinit_frame (InterpFrame *frame, InterpFrame *parent, InterpMethod *imethod, gp
 	frame->imethod = imethod;
 	frame->stack = (stackval*)stack;
 	frame->state.ip = NULL;
+	frame_root_code_owner (frame);
 }
 
 #define STACK_ADD_BYTES(sp,bytes) ((stackval*)((char*)(sp) + ALIGN_TO(bytes, MINT_STACK_SLOT_SIZE)))
@@ -515,6 +532,7 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 		imethod->rtype = m_class_get_byval_arg (mono_defaults.string_class);
 	else
 		imethod->rtype = mini_get_underlying_type (sig->ret);
+	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
 	imethod->param_types = (MonoType**)m_method_alloc0 (domain, method, sizeof (MonoType*) * sig->param_count);
 	for (i = 0; i < sig->param_count; ++i)
 		imethod->param_types [i] = mini_get_underlying_type (sig->params [i]);
@@ -1526,6 +1544,7 @@ ves_pinvoke_method (
 	frame.parent = parent_frame;
 	frame.imethod = imethod;
 	frame.stack = sp;
+	frame_root_code_owner (&frame);
 
 	MonoLMFExt ext;
 	gpointer args;
@@ -1915,6 +1934,7 @@ interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObject 
 	InterpFrame frame = {0};
 	frame.imethod = imethod;
 	frame.stack = sp;
+	frame_root_code_owner (&frame);
 
 	// The method to execute might not be transformed yet, so we don't know how much stack
 	// it uses. We bump the stack_pointer here so any code triggered by method compilation
@@ -2001,6 +2021,7 @@ interp_entry (InterpEntryData *data)
 	InterpFrame frame = {0};
 	frame.imethod = data->rmethod;
 	frame.stack = sp;
+	frame_root_code_owner (&frame);
 
 	context->stack_pointer = (guchar*)sp_args;
 
@@ -2685,6 +2706,7 @@ interp_entry_from_trampoline (gpointer ccontext_untyped, gpointer rmethod_untype
 	InterpFrame frame = {0};
 	frame.imethod = rmethod;
 	frame.stack = sp;
+	frame_root_code_owner (&frame);
 
 	/* Copy the args saved in the trampoline to the frame stack */
 	gpointer retp = mono_arch_get_native_call_context_args (ccontext, &frame, sig);
@@ -3453,6 +3475,7 @@ main_loop:
 			 */
 			context->stack_pointer = (guchar*)frame->stack + new_method->alloca_size;
 			frame->imethod = new_method;
+			frame_root_code_owner (frame);
 			ip = frame->imethod->code;
 			MINT_IN_BREAK;
 		}
@@ -7069,6 +7092,7 @@ interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_index, g
 	child_frame.imethod = iframe->imethod;
 	child_frame.stack = (stackval*)context->stack_pointer;
 	child_frame.retval = &retval;
+	child_frame.code_owner = iframe->code_owner;
 
 	/* Copy the stack frame of the original method */
 	memcpy (child_frame.stack, iframe->stack, iframe->imethod->total_locals_size);

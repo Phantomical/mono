@@ -838,6 +838,47 @@ mono_runtime_free_method (MonoDomain *domain, MonoMethod *method)
 }
 
 /*
+ * mono_method_get_code_owner_handle:
+ *
+ *   Return a weak handle on the managed object whose death releases METHOD's code,
+ * or NULL if nothing manages it. Today that is the DynamicMethod a dynamic method
+ * was emitted from; the reference queue frees the compiled body when it dies, so a
+ * frame executing that body has to hold the object this resolves to.
+ *
+ * The handle itself outlives every frame that can be in the code, because freeing it
+ * is part of the same teardown that frees the code.
+ */
+MonoGCHandle
+mono_method_get_code_owner_handle (MonoDomain *domain, MonoMethod *method)
+{
+	MONO_REQ_GC_NEUTRAL_MODE
+
+	MonoGCHandle owner;
+
+	if (!method->dynamic || !domain->method_to_dyn_method)
+		return NULL;
+
+	mono_domain_lock (domain);
+	owner = (MonoGCHandle) g_hash_table_lookup (domain->method_to_dyn_method, method);
+	mono_domain_unlock (domain);
+
+	return owner;
+}
+
+/*
+ * mono_method_get_code_owner:
+ *
+ *   Resolve a handle from mono_method_get_code_owner_handle ().
+ */
+MonoObject *
+mono_method_get_code_owner (MonoGCHandle owner)
+{
+	MONO_REQ_GC_UNSAFE_MODE
+
+	return owner != NULL ? mono_gchandle_get_target_internal (owner) : NULL;
+}
+
+/*
  * The vtables in the root appdomain are assumed to be reachable by other 
  * roots, and we don't use typed allocation in the other domains.
  */
