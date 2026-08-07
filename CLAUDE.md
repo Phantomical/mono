@@ -275,9 +275,11 @@ Backend debugging env vars:
   pipeline, codegen setup and codegen proper, JITLink, and the pieces around them.
   Phases nest and the self column is a share of the whole, so it sums to 100. Worth
   reaching for before theorising about compile latency; it says which phase, and
-  `perf record -g` (a locally-built `~/bin/perf` matching this kernel) says which
-  function inside it. `--llvm-opt=-time-passes` remains unusable — it aborts under
-  concurrent compiles.
+  `perf record -g` (a locally-built `~/.local/bin/perf` matching this kernel) says
+  which function inside it. Sample on `-e cpu-clock`: this is a VM with no PMU, so
+  the hardware events perf reaches for by default — `cycles`, `instructions` —
+  come back `<not supported>`, which reads like a broken perf and is not one.
+  `--llvm-opt=-time-passes` remains unusable — it aborts under concurrent compiles.
   The value is a comma-separated set of words rather than a flag. `cpu` charges
   thread CPU time instead of wall clock, which is what makes a run on a loaded box
   comparable to a quiet one, at ten times the cost per reading (~6 µs a compile).
