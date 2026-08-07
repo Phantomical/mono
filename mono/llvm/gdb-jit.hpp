@@ -6,6 +6,14 @@
  * `__jit_debug_descriptor`, whose entries name in-memory ELF objects. This
  * backend already produces such objects, so all that is missing is the section
  * addresses the linker chose and a place on that list.
+ *
+ * LLVM's own ELFDebugObjectPlugin does the same job and does it correctly right
+ * up to the point where code goes away: it registers through an alloc action
+ * with no matching deallocation action, and its notifyRemovingResources frees
+ * the object it registered without telling the debugger. Code addresses here are
+ * recycled - a freed dynamic method's stub block and slab bytes go straight back
+ * on the free list - so an entry left standing points a debugger at whatever
+ * landed there next. Hence retract () below.
  */
 
 #ifndef MONO_LLVM_GDB_JIT_HPP
