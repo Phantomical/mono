@@ -898,6 +898,38 @@ MethodLLVMEmitter::emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignat
 	return llvm::Error::success ();
 }
 
+/// String.Length, read straight out of the object the way mini and the
+/// interpreter both read it.
+///
+/// The accessor's body would be a field load either way, so this is worth
+/// little on its own. What it is for is the debugger: a step into `s.Length`
+/// that enters a one-line corlib property is a stop in code the user never
+/// wrote, and one the other engines do not offer.
+llvm::Error
+MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	StackValue receiver = get_stack (0);
+
+	if (stack_type (receiver.type) != ObjectRef)
+		return invalid_il (llvm::Twine ("a string was expected, not operand type ")
+		                   + describe (receiver.type, stack_type (receiver.type)));
+
+	emit_null_check (builder, receiver.value);
+
+	llvm::Value *slot =
+		builder.CreateGEP (builder.getInt8Ty (), receiver.value,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoString, length)));
+	llvm::Value *length =
+		builder.CreateAlignedLoad (builder.getInt32Ty (), slot, llvm::Align (4));
+
+	pop_stack (1);
+	push_stack (length, mono_get_int32_type ());
+	return llvm::Error::success ();
+}
+
 /*
  * III.3.19  call - call a method
  *
@@ -1096,6 +1128,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (callee_method->klass == mono_defaults.array_class
 	    && std::string_view (callee_method->name) == "UnsafeMov")
 		return emit_unsafe_mov (builder, sig);
+
+	if (callee_method->klass == mono_defaults.string_class
+	    && std::string_view (callee_method->name) == "get_Length"
+	    && sig->hasthis && sig->param_count == 0)
+		return emit_string_length (builder);
 
 	/*
 	 * Debugger.Break () has an empty body and a comment where the code would be:

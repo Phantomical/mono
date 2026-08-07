@@ -745,6 +745,7 @@ private:
 	llvm::Error emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod *accessor,
 	                                      MonoMethodSignature *sig);
 	llvm::Error emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	llvm::Error emit_string_length (MonoIrBuilder &builder);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
