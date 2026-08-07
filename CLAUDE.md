@@ -215,10 +215,28 @@ rebuilt rather than on every `ctest`. A listing that fails writes an empty group
 the suite registers whole — the build stays green, which matters on a branch where the
 runtime being built is routinely the reason the lister could not get that far. The xunit
 groups also carry an `unlisted` complement, which runs anything the lister missed and
-reports as a skip when it missed nothing. Timeouts follow the split: a whole suite gets
+reports as a skip when it missed nothing. Timeouts do not follow the split: a suite gets
 `MONO_BCL_TEST_TIMEOUT` (1800s), or `MONO_BCL_TEST_LONG_TIMEOUT` (3600s) if it is named in
-`MONO_BCL_TESTS_LONG`, while a group gets `MONO_BCL_GROUP_TIMEOUT` (900s) whichever of
-those its assembly would have had.
+`MONO_BCL_TESTS_LONG`, and every group it is cut into gets that same budget. Splitting a
+suite must never leave a test with less time than it had when the suite ran whole — a
+namespace can carry most of an assembly, so any smaller group budget is a bet on how the
+cases are spread.
+
+The seven class-library tests that cost minutes rather than seconds are named in
+`MONO_BCL_TESTS_SLOW` and carry `slow` on top of `bcl`/`bcl-xunit`, so `check-all` skips
+them while `-L bcl` and `-R <name>` still select them. An entry there that names a group
+the suite does not register warns at configure time. They are not disabled because most
+of what they spend is this runtime's own compile latency — `XmlSerializer` and the
+System.Web page compilers fork `mcs`, which then runs on the runtime being built — so
+their wall time is a rough alarm on the JIT rather than dead weight.
+
+CTest charges every test one slot of `-j`, and for nearly all of these that is right —
+including the slow ones, which sit waiting on a compiler they forked rather than
+computing. `MONO_BCL_TESTS_PROCESSORS` names the exceptions as `<test>=<cores>`, and it
+is the suites that exercise parallel machinery rather than the long ones: measure CPU
+time over wall time for the whole process tree before adding to it, because a name with
+`Threading` or `Parallel` in it predicts nothing (the nunit `Dataflow` suite runs at half
+a core). It shares the stale-name warning with `MONO_BCL_TESTS_SLOW`.
 
 `acceptance` additionally needs `-DMONO_ENABLE_ACCEPTANCE_TESTS=ON` and the corpus
 submodules; the `print-versions` target reports which are checked out. See `build.md`.

@@ -45,6 +45,14 @@ set(MONO_BCL_TESTS_LONG
   # fixtures, which are compute-bound and get whatever share of the cores is
   # left.
   bcl-System.Xml
+  # MonoTests.System.Web.UI.WebControls takes 1854s with the machine to itself.
+  # It spends that forking a C# compiler per page, so the console itself sits
+  # near idle while the run as a whole holds about one core throughout -- more
+  # cores would not shorten it, it just needs the wall time.
+  bcl-System.Web
+  # System.Linq.Expressions.Tests measured 1631s against the 1800s this
+  # assembly used to get -- 91% of it, which is not headroom.
+  bcl-xunit-System.Core
 )
 
 # ---------------------------------------------------------------------------
@@ -101,12 +109,101 @@ set(MONO_BCL_TESTS_SPLIT
 set(MONO_BCL_SPLIT_MAX_GROUPS_nunit 0)
 set(MONO_BCL_SPLIT_MAX_GROUPS_xunit 8)
 
-# What one group gets to run for.  Half the whole-assembly budget: the largest
-# group anywhere is System.Xml's MonoTests.System.Xml at 44% of its assembly,
-# which projects to ~680s at that assembly's loaded worst case, and corlib's
-# largest is 24% of its own.  So a group that is still running at 900s is wedged
-# rather than slow, and says so in fifteen minutes instead of thirty or sixty.
-set(MONO_BCL_GROUP_TIMEOUT 900)
+# A group runs under its assembly's budget rather than one of its own, so that
+# splitting a suite can never leave a test with less time than it had when the
+# suite ran whole.  There is deliberately no group timeout variable: the template
+# hands every test the same `_timeout`, which makes the invariant structural
+# rather than something the next person to touch this has to remember.
+#
+# Any fraction of the assembly's budget would be a bet on the cases being spread
+# evenly across namespaces, and they are not -- System.Linq.Expressions.Tests is
+# most of bcl-xunit-System.Core on its own.  Nor can cutting a suite finer than
+# namespaces recover a smaller budget: a slow group here is usually slow because
+# of one fixture, not many.  MonoTests.System.Web.Compilation is 700s of which
+# TemplateControlCompilerTest is 555, and MonoTests.System is 96 fixtures of
+# which AppDomainTest is 82% of the time -- and a fixture is the finest cut the
+# runners offer.
+#
+# Raising the budget is not the same as being happy about what it buys, which is
+# what MONO_BCL_TESTS_SLOW below is for.
+#
+# The cost is that a wedged group burns the assembly's full budget, which is no
+# better than before the split -- but no worse either, and the diagnostic the
+# split was for is untouched: the timeout names the group, and the assembly's
+# other groups still run and still report.
+
+# The class-library tests that cost minutes rather than seconds.  These carry
+# `slow` on top of their usual label, so `check` and `check-all` skip them while
+# `-L bcl`, `-R <name>` and a nightly that runs the label still get them.  They
+# are not disabled: this is the highest-signal coverage on this branch -- runtime
+# codegen, Expression.Compile, appdomain teardown, the soft debugger -- and their
+# cost is partly the JIT's own per-method floor, so a run that got slower is a
+# result rather than a nuisance.
+#
+# A name here is a CTest test name: `<suite>` for an unsplit suite, and
+# `<suite>/<group>` for one that is cut up.  Re-listing an assembly can rename
+# its groups, so an entry that matches nothing warns at configure time rather
+# than going quietly inert.
+set(MONO_BCL_TESTS_SLOW
+  # 1553s, passing, measured on its own against a 3600s budget.  Nearly all of
+  # it is XmlSerializer building temporary serializer assemblies, which forks a
+  # C# compiler that then runs on the runtime being built -- so this suite reads
+  # the JIT's startup cost several hundred times over.
+  bcl-System.Xml/MonoTests.System.XmlSerialization
+  # 1631s over 17257 cases.  Unlike the rest of this list its cost is genuinely
+  # spread -- 160 classes, heaviest 5.5%, thirteen to reach half the time -- so
+  # cutting it into four groups of ~400s would work if it ever has to come back
+  # into a sweep.  Splitting a namespace by class is machinery that does not
+  # exist yet; splitting an assembly by namespace is all MONO_BCL_TESTS_SPLIT
+  # does.
+  bcl-xunit-System.Core/System.Linq.Expressions.Tests
+  # 1854s with the machine to itself, and the most expensive test in the tree.
+  # 1912s of CPU against that, so it is one core's worth of work end to end --
+  # most of it in the C# compilers it forks, not in the console.
+  bcl-System.Web/MonoTests.System.Web.UI.WebControls
+  # 707s, of which TemplateControlCompilerTest is 555 -- the same page-compiling
+  # cost, concentrated in one fixture.
+  bcl-System.Web/MonoTests.System.Web.Compilation
+  # 527s, PageTest the largest single fixture at 167s.
+  bcl-System.Web/MonoTests.System.Web.UI
+  # 332s, half of it DynamicControlTest.
+  bcl-System.Web.DynamicData
+  # 922s, the longest single test in the tree, and unsplittable: all 124 cases
+  # live in one fixture.  Every case launches a debuggee and waits for it.
+  bcl-Mono.Debugger.Soft
+)
+
+# Tests that want more than one core, as `<test name>=<cores>`.  CTest charges
+# every test one slot of `-j` unless told otherwise, so a suite that really
+# runs several threads oversubscribes the machine for as long as it runs.
+#
+# Almost nothing here needs an entry, including the expensive suites: a slow
+# BCL test is normally slow because it forks a C# compiler and waits, so it
+# holds about one core no matter how many threads it has open.
+# MonoTests.System.Web.UI.WebControls opens dozens and still measured 1912s of
+# CPU against 1854s of wall.  The exceptions are the suites that exist to
+# exercise parallel machinery, where the threads are the point.
+#
+# Not that a name tells you which those are.  Every BCL test named for threads,
+# tasks, concurrency or parallelism was measured -- thirteen of them -- and all
+# but the two below came back within a few percent of one core.  The nunit
+# Dataflow suite manages 0.52: it spends its time waiting on blocks rather than
+# running them.
+#
+# The numbers below are CPU-seconds over wall-seconds for the whole process
+# tree, each read twice under different machine load.  Reading twice is the
+# point: contention can only push a ratio down, so a single number is just a
+# lower bound, but one that does not move when the load around it does is the
+# test's own appetite.  Rounded to nearest -- over-reserving wastes a slot as
+# surely as under-reserving oversubscribes one.
+set(MONO_BCL_TESTS_PROCESSORS
+  # 1.62 and 1.63.  PLINQ partitions across the pool, so this is the one suite
+  # here that clearly wants a second core.
+  bcl-xunit-System.Core/System.Linq.Parallel.Tests=2
+  # 1.49 and 1.53 -- close enough to the 1.5 boundary that either value would
+  # be defensible.
+  bcl-corlib/MonoTests.System.Threading.Tasks=2
+)
 
 # Suites whose source list names a file that is not in the tree.  System's
 # xunit list wants
@@ -732,11 +829,11 @@ endfunction()
 # A macro rather than a function: it reads and writes the variables its caller
 # already has in hand -- _kind, _testname, _testtarget, _workdir, _command,
 # _lister, _listing, _listing_deps, _out, _deps, _resultbase, _timeout, _label,
-# _skiprx and _env -- and its template needs them under those names.
+# _skiprx and _env -- and its template needs them under those names.  _timeout is
+# the assembly's, and every test the template registers gets it.
 macro(_mono_bcl_register)
   set(_groupfile "${MONO_MANAGED_DEPSDIR}/${_testtarget}.groups.cmake")
   set(_ctestfile "${MONO_MANAGED_DEPSDIR}/${_testtarget}.ctest.cmake")
-  set(_group_timeout ${MONO_BCL_GROUP_TIMEOUT})
   set(_max_groups ${MONO_BCL_SPLIT_MAX_GROUPS_${_kind}})
   set(_split 0)
 

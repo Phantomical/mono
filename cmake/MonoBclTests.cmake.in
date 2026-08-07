@@ -10,6 +10,10 @@
 
 set(_bcl_command [==[@_command@]==])
 set(_bcl_env [==[@_env@]==])
+set(_bcl_slow [==[@MONO_BCL_TESTS_SLOW@]==])
+set(_bcl_slow_seen "")
+set(_bcl_procs [==[@MONO_BCL_TESTS_PROCESSORS@]==])
+set(_bcl_procs_seen "")
 
 # Adds one test.  `suffix` distinguishes its result XML, since the groups run in
 # parallel and would otherwise write over each other; the remaining arguments
@@ -20,12 +24,36 @@ function(_bcl_add name suffix timeout)
   else()
     set(_result "-nunit" "@_resultbase@${suffix}.xml")
   endif()
+  set(_labels "@_label@")
+  # list(FIND) rather than IN_LIST: CTest reads this file in its own script
+  # interpreter, where the project's CMP0057 setting does not apply.
+  list(FIND _bcl_slow "${name}" _bcl_slow_at)
+  if(NOT _bcl_slow_at EQUAL -1)
+    list(APPEND _labels slow)
+    set(_bcl_seen ${_bcl_slow_seen})
+    list(APPEND _bcl_seen "${name}")
+    set(_bcl_slow_seen "${_bcl_seen}" PARENT_SCOPE)
+  endif()
+  # How many cores to charge CTest's `-j` pool for this test.  One is CTest's
+  # own assumption and right for nearly every suite here, including the slow
+  # ones -- they are waiting on a forked compiler, not computing.
+  set(_procs 1)
+  foreach(_bcl_p IN LISTS _bcl_procs)
+    string(REGEX MATCH "^(.*)=([0-9]+)$" _bcl_m "${_bcl_p}")
+    if(_bcl_m AND "${CMAKE_MATCH_1}" STREQUAL "${name}")
+      set(_procs "${CMAKE_MATCH_2}")
+      set(_bcl_seen ${_bcl_procs_seen})
+      list(APPEND _bcl_seen "${_bcl_p}")
+      set(_bcl_procs_seen "${_bcl_seen}" PARENT_SCOPE)
+    endif()
+  endforeach()
   # CTest reads this file with its own add_test(), which only has the old
   # positional form -- no NAME/COMMAND, and no WORKING_DIRECTORY.
   add_test("${name}" ${_bcl_command} ${_result} ${ARGN})
   set_tests_properties("${name}" PROPERTIES
     WORKING_DIRECTORY "@_workdir@"
-    LABELS "@_label@"
+    LABELS "${_labels}"
+    PROCESSORS "${_procs}"
     TIMEOUT "${timeout}"
     SKIP_REGULAR_EXPRESSION "@_skiprx@"
     FIXTURES_REQUIRED fx_@_testname@
@@ -48,9 +76,28 @@ else()
   foreach(_bcl_i RANGE ${_bcl_last})
     string(MAKE_C_IDENTIFIER "${BCL_GROUP_${_bcl_i}_NAME}" _bcl_suffix)
     _bcl_add("@_testname@/${BCL_GROUP_${_bcl_i}_NAME}" "-${_bcl_suffix}"
-             @_group_timeout@ ${BCL_GROUP_${_bcl_i}_ARGS})
+             @_timeout@ ${BCL_GROUP_${_bcl_i}_ARGS})
   endforeach()
   if(BCL_CATCHALL_ARGS)
-    _bcl_add("@_testname@/unlisted" "-unlisted" @_group_timeout@ ${BCL_CATCHALL_ARGS})
+    _bcl_add("@_testname@/unlisted" "-unlisted" @_timeout@ ${BCL_CATCHALL_ARGS})
   endif()
 endif()
+
+# An entry naming a group this suite no longer has would otherwise just stop
+# taking effect, which reads exactly like the test having got faster.
+foreach(_bcl_s IN LISTS _bcl_slow)
+  string(REGEX REPLACE "/.*$" "" _bcl_owner "${_bcl_s}")
+  list(FIND _bcl_slow_seen "${_bcl_s}" _bcl_seen_at)
+  if(_bcl_owner STREQUAL "@_testname@" AND _bcl_seen_at EQUAL -1)
+    message(WARNING "MONO_BCL_TESTS_SLOW names ${_bcl_s}, which @_testname@ does not register")
+  endif()
+endforeach()
+
+foreach(_bcl_p IN LISTS _bcl_procs)
+  string(REGEX REPLACE "=[0-9]+$" "" _bcl_owner "${_bcl_p}")
+  string(REGEX REPLACE "/.*$" "" _bcl_owner "${_bcl_owner}")
+  list(FIND _bcl_procs_seen "${_bcl_p}" _bcl_seen_at)
+  if(_bcl_owner STREQUAL "@_testname@" AND _bcl_seen_at EQUAL -1)
+    message(WARNING "MONO_BCL_TESTS_PROCESSORS names ${_bcl_p}, which @_testname@ does not register")
+  endif()
+endforeach()
