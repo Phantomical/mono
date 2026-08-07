@@ -14,7 +14,7 @@
 #ifndef __MONO_EE_H__
 #define __MONO_EE_H__
 
-#define MONO_EE_API_VERSION 0x11
+#define MONO_EE_API_VERSION 0x12
 
 typedef struct _MonoInterpStackIter MonoInterpStackIter;
 
@@ -29,6 +29,7 @@ typedef gpointer MonoInterpFrameHandle;
 	MONO_EE_CALLBACK (void, entry_from_trampoline, (gpointer ccontext, gpointer imethod)) \
 	MONO_EE_CALLBACK (void, to_native_trampoline, (gpointer addr, gpointer ccontext)) \
 	MONO_EE_CALLBACK (gpointer, create_method_pointer, (MonoMethod *method, gboolean compile, MonoError *error)) \
+	MONO_EE_CALLBACK (gboolean, transform_method, (MonoMethod *method, MonoError *error)) \
 	MONO_EE_CALLBACK (MonoFtnDesc*, create_method_pointer_llvmonly, (MonoMethod *method, gboolean unbox, MonoError *error)) \
 	MONO_EE_CALLBACK (void, free_method, (MonoDomain *domain, MonoMethod *method)) \
 	MONO_EE_CALLBACK (void, method_compiled, (MonoDomain *domain, MonoMethod *method)) \

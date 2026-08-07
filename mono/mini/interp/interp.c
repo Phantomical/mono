@@ -2947,6 +2947,34 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 }
 
 /*
+ * interp_transform_method:
+ *
+ * Transform METHOD now rather than on the first call into it, so that whether
+ * the interpreter can run it at all is known before anything can. Returns FALSE
+ * with ERROR set when it cannot.
+ *
+ * This is what create_method_pointer () does for itself when asked to compile,
+ * and is separate so that a caller which has to publish the entry first can
+ * still find out. Transforming runs the class initializer, so a caller holding
+ * a lock that managed code could reach has to get the entry reachable before it
+ * asks.
+ */
+static gboolean
+interp_transform_method (MonoMethod *method, MonoError *error)
+{
+	InterpMethod *imethod = mono_interp_get_imethod (mono_domain_get (), method, error);
+
+	if (!is_ok (error))
+		return FALSE;
+
+	if (imethod->transformed)
+		return TRUE;
+
+	mono_interp_transform_method (imethod, get_context (), error);
+	return is_ok (error);
+}
+
+/*
  * interp_create_method_pointer:
  *
  * Return a function pointer which can be used to call METHOD using the

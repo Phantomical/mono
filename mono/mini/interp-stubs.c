@@ -139,6 +139,13 @@ stub_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *err
 	return NULL;
 }
 
+static gboolean
+stub_transform_method (MonoMethod *method, MonoError *error)
+{
+	g_assert_not_reached ();
+	return FALSE;
+}
+
 static MonoFtnDesc*
 stub_create_method_pointer_llvmonly (MonoMethod *method, gboolean compile, MonoError *error)
 {

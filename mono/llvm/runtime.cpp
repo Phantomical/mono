@@ -2207,22 +2207,51 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 
 	if (!tier1 && runs_at_tier0 (method)) {
 		ERROR_DECL (interp_error);
-		void *legacy = mini_get_interp_callbacks ()->create_method_pointer (
-			method, TRUE, interp_error);
-
 		/*
-		 * The interpreter refusing a method is an answer, not a failure: it
-		 * gets compiled like anything else. Only what happens after it has
-		 * agreed to run the method is an error worth raising.
+		 * Not asked to transform, which is what makes the order below matter:
+		 * transforming runs the class initializer, and this can be running
+		 * inside a lazy stub's callback, which holds a lock across it. A cctor
+		 * that calls back into this very method would then re-enter the
+		 * trampoline being resolved and deadlock against that lock. So the
+		 * entry is taken without running anything, the stubs are pointed at it,
+		 * and only then is the method transformed - by which point a call
+		 * arriving from the initializer lands on the entry instead.
 		 */
+		void *legacy = mini_get_interp_callbacks ()->create_method_pointer (
+			method, FALSE, interp_error);
+
 		if (legacy == nullptr) {
 			mono_error_cleanup (interp_error);
 		} else {
 			Expected<Compiled> entries =
 				interp_entries (state, method, legacy);
 
-			leave ();
-			return entries;
+			if (!entries) {
+				leave ();
+				return entries;
+			}
+
+			/*
+			 * The interpreter refusing a method is an answer, not a failure: it
+			 * gets compiled like anything else, and the stubs published above
+			 * are redirected to the body below. Only what happens after it has
+			 * agreed to run the method is an error worth raising.
+			 */
+			ERROR_DECL (transform_error);
+
+			if (mini_get_interp_callbacks ()->transform_method (
+			            method, transform_error)) {
+				leave ();
+				return entries;
+			}
+
+			mono_error_cleanup (transform_error);
+
+			{
+				std::lock_guard<std::mutex> lock (mutex_);
+
+				state.interpreted.erase (method);
+			}
 		}
 	}
 
