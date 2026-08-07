@@ -3317,8 +3317,6 @@ extern MonoCoopMutex mono_domain_unload_mutex;
 static gsize WINAPI
 unload_thread_main (void *arg)
 {
-	mono_coop_mutex_lock(&mono_domain_unload_mutex);
-
 	unload_data *data = (unload_data*)arg;
 	MonoDomain *domain = data->domain;
 	MonoMemoryManager *memory_manager = mono_domain_memory_manager (domain);
@@ -3386,11 +3384,25 @@ unload_thread_main (void *arg)
 	/* remove from the handle table the items related to this domain */
 	mono_gchandle_free_domain (domain);
 
+	/*
+	 * mono_unity_domain_foreach_locked () holds this mutex while it walks the
+	 * domain list, so the window it has to be kept out of is the one where the
+	 * domain stops being safe to touch: mono_domain_free () is what closes the
+	 * assemblies, destroys the jit info table and hands the MonoDomain itself
+	 * back, and it is also what clears the appdomains_list slot the walk reads,
+	 * so nothing before it needs covering.
+	 *
+	 * The waits above must stay outside. Each of them can block for as long as
+	 * a threadpool job, a thread abort or a finalizer takes, and a process-wide
+	 * lock held across them makes one domain's unload wait on work that can
+	 * only be done by threads waiting for this same lock.
+	 */
+	mono_coop_mutex_lock (&mono_domain_unload_mutex);
 	mono_domain_free (domain, FALSE);
+	mono_coop_mutex_unlock (&mono_domain_unload_mutex);
 
 	result = 0; // success
 exit:
-	mono_coop_mutex_unlock(&mono_domain_unload_mutex);
 	mono_atomic_store_release (&data->done, TRUE);
 	unload_data_unref (data);
 	return result;
