@@ -2320,6 +2320,13 @@ mono_main (int argc, char* argv[])
 	case DO_SINGLE_METHOD_REGRESSION:
 	case DO_REGRESSION: {
 		int regression_result = mono_exec_regression_internal (mini_verbose_level, argc -i, argv + i, action == DO_SINGLE_METHOD_REGRESSION);
+
+		/*
+		 * This path returns without running mini_cleanup (), so nothing else
+		 * stops the background compile worker. Left running it compiles into a
+		 * process that is on its way out from under it.
+		 */
+		mono_llvm_jit_stop_compiling ();
 		return regression_result;
 	}
 

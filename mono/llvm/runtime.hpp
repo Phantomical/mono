@@ -36,6 +36,14 @@ typedef struct _MonoJitInfo MonoJitInfo;
 void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domain,
                                     MonoError *error);
 
+/// Stop compiling in the background, waiting for whatever is already under way.
+///
+/// Called at the top of runtime shutdown, and it has to be: a background
+/// compile reads metadata and allocates, and everything it touches is torn down
+/// from there on - the domain's string table goes first, its assemblies not
+/// long after. Nothing is queued again afterwards.
+void mono_llvm_jit_stop_compiling (void);
+
 /// Release everything the backend holds for DOMAIN: its code, its stubs, the
 /// linker they live in. Called on the domain's way out, after the runtime has
 /// proved nothing can execute in it any more; a domain the backend never

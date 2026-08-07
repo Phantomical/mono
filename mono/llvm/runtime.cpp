@@ -520,6 +520,10 @@ public:
 	/// of its stub there.
 	Expected<void *> compile (MonoMethod *method, MonoDomain *target_domain);
 
+	/// Take the background compile worker down, waiting for the compile it is
+	/// running. Nothing is queued after this.
+	static void stop_compiling ();
+
 	/// Drop DOMAIN's linker and everything in it. The caller proves the code
 	/// dead: nothing may be executing in, or about to call into, the domain.
 	static void free_domain (MonoDomain *domain);
@@ -805,6 +809,26 @@ Backend::state_for (MonoDomain *domain)
 	fresh->jit = std::move (*jit);
 	fresh->queue.emplace (&queue_);
 	return (domains_[domain] = std::move (fresh)).get ();
+}
+
+void
+Backend::stop_compiling ()
+{
+	if (live_backend == nullptr)
+		return;
+
+	/*
+	 * Stopping refuses everything from here on, drops what is queued and joins
+	 * the worker - which is the wait for the compile it still has in hand.
+	 *
+	 * Shutdown is the one teardown a per-domain drain cannot cover, because it
+	 * is not a domain that is going away. mono_domain_free () destroys the
+	 * string table a compile interns into and closes the assemblies it reads
+	 * long before it reaches free_domain (), and what runs before that -
+	 * finalization, the thread shutdown - is no safer to be compiling
+	 * alongside.
+	 */
+	live_backend->queue_.stop ();
 }
 
 void
@@ -2586,6 +2610,12 @@ Backend::publish (DomainState &state, MonoMethod *method)
 } // namespace
 
 } // namespace mono
+
+void
+mono_llvm_jit_stop_compiling (void)
+{
+	mono::Backend::stop_compiling ();
+}
 
 void
 mono_llvm_jit_free_domain (MonoDomain *domain)

@@ -4744,6 +4744,13 @@ mini_cleanup (MonoDomain *domain)
 void
 mini_cleanup (MonoDomain *domain)
 {
+	/*
+	 * First, because everything below it is torn down under a compile that is
+	 * still running: the string table one interns into, the assemblies one
+	 * reads. This waits for the compile in hand and queues nothing more.
+	 */
+	mono_llvm_jit_stop_compiling ();
+
 	if (mono_stats.enabled)
 		g_printf ("Printing runtime stats at shutdown\n");
 	if (mono_profiler_sampling_enabled ())
