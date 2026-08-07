@@ -1722,7 +1722,8 @@ static clockid_t clock_id = CLOCK_MONOTONIC;
 
 enum {
 	JIT_DUMP_MAGIC = 0x4A695444,
-	JIT_DUMP_VERSION = 2,
+	/* The only version perf has ever defined; it rejects the file otherwise. */
+	JIT_DUMP_VERSION = 1,
 #if HOST_X86
 	ELF_MACHINE = EM_386,
 #elif HOST_AMD64
@@ -1791,8 +1792,10 @@ mono_enable_jit_dump (void)
 		
 		g_snprintf (name, sizeof (name), "/tmp/jit-%d.dump", perf_dump_pid);
 		unlink (name);
-		perf_dump_file = fopen (name, "w");
-		
+		/* Readable as well as writable: the marker mmap below asks for
+		 * PROT_READ, which the kernel refuses on a write-only descriptor. */
+		perf_dump_file = fopen (name, "w+");
+
 		add_file_header_info (&header);
 		if (perf_dump_file) {
 			fwrite (&header, sizeof (header), 1, perf_dump_file);
