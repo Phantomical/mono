@@ -42,6 +42,7 @@
 #include "mono/metadata/debug-internals.h"
 #include "mono/metadata/domain-internals.h"
 #include "mono/metadata/seq-points-data.h"
+#include "mono/metadata/tabledefs.h"
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseSet.h>
@@ -256,15 +257,36 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 }
 
 /*
+ * Whether this method's after-call sequence points take part in the nested-call
+ * tagging below, which is a question the other engines answer like this:
+ *
+ *	if (!(method->flags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+ *
+ * METHOD_IMPL_ATTRIBUTE_NATIVE is 0x0001 and belongs to iflags, so read off
+ * flags it is bit 0 of the accessibility nibble - set for private, assembly and
+ * famorassem, clear for everything else. Nothing about a method being native
+ * comes into it.
+ *
+ * It has to be matched rather than repaired. A compiler-generated state machine
+ * is private, so neither other engine tags anything in one, and a step over
+ * walking out of an async MoveNext gets the stops it gets because of that.
+ */
+static bool
+tags_nested_calls (MonoMethod *method)
+{
+	return !(method->flags & METHOD_IMPL_ATTRIBUTE_NATIVE);
+}
+
+/*
  * Emit the sequence point that belongs after the call just translated, if the
  * offset it lands on does not already get one.
  *
  * The pdb has no sequence point between the calls of `f (g (), h ())`, so
  * without these a step over out of `g ()` has nowhere in the caller to stop and
- * runs on past `h ()`. They are stops the debugger is meant to skip most of the
- * time, which is what the flags say: NONEMPTY_STACK on all of them, and
- * NESTED_CALL on every call of an argument list but the outermost, whose stop
- * is the one a step over wants. mono_de_ss_update () reads both.
+ * runs on past `h ()`. NONEMPTY_STACK on all of them is what makes a step over
+ * pass over one, and NESTED_CALL on every call of an argument list but the
+ * outermost is what exempts the ones it has to stop at. mono_de_ss_update ()
+ * reads both.
  *
  * NESTS says whether this call takes part in that run - a newobj gets a point
  * of its own but does not open or extend one, matching mini.
@@ -290,7 +312,7 @@ MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests
 	if (sym_seq_points && sym_seq_point_offsets.empty ())
 		return;
 
-	if (nests) {
+	if (nests && tags_nested_calls (method)) {
 		if (call_seq_point_run)
 			il_debug_set_instruction_location (
 				il_scope, call_seq_point_marker,
