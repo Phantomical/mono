@@ -897,6 +897,21 @@ llvm::Attribute::AttrKind integer_extension (MonoType *t);
 /// code.
 bool implemented_outside_il (MonoMethod *method);
 
+/// The method a direct call to METHOD actually enters, which for an internal
+/// call is the marshalling wrapper the runtime publishes in its place.
+///
+/// An icall has no body of its own, so mini answers a request to compile one
+/// with the wrapper it builds around the registered C function
+/// (compile_special, mini-runtime.c) - and that wrapper is a method this
+/// backend compiles like any other. Naming it here is what lets a call site
+/// reach the same code in fastcc rather than through the legacy entry.
+///
+/// Anything else comes back unchanged, including the two kinds of icall that
+/// have no such wrapper: one registered as needing none, whose published
+/// address really is the C function, and an array accessor, which every call
+/// site lowers inline instead.
+MonoMethod *icall_wrapper_target (MonoMethod *method);
+
 /// The number of SIG's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.
 ///

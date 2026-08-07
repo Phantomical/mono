@@ -38,9 +38,19 @@ llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_creator (MonoIrBuilder &builder, MonoMethod *ctor,
                                  llvm::ArrayRef<llvm::Value *> args)
 {
-	llvm::Expected<llvm::Function *> target = create_method_decl (ctor);
+	/*
+	 * A string constructor is an icall, and what the runtime publishes for it
+	 * is the wrapper that calls the static creator behind it - a method this
+	 * backend compiles, with the same shape the constructor's own creator
+	 * signature has.
+	 */
+	llvm::Expected<llvm::Function *> target =
+		create_method_decl (icall_wrapper_target (ctor));
 	if (!target)
 		return target.takeError ();
+
+	/* Whatever it is called, a creator hands back an object nothing else holds. */
+	(*target)->addRetAttr (llvm::Attribute::NoAlias);
 
 	llvm::FunctionType *shape = (*target)->getFunctionType ();
 

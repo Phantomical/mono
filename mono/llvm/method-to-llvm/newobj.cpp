@@ -152,6 +152,14 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	/* A synchronized constructor holds its lock over the body, not the allocation. */
 	ctor = synchronized_target (ctor);
 
+	/*
+	 * A constructor the runtime answers with a marshalling wrapper - every
+	 * string constructor, and the handful of other internal-call ones - is
+	 * entered at that wrapper, which this backend compiles like any other
+	 * method. The creator path below picks the retarget up again on its own.
+	 */
+	ctor = icall_wrapper_target (ctor);
+
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (ctor);
 	if (!declaration)
 		return declaration.takeError ();

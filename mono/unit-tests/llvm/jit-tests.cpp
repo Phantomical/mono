@@ -262,8 +262,9 @@ TEST_F (JitExecution, Tier0PipelinePromotesAllocasToSsa)
 }
 
 // The creator's call shape belongs to the pass. What the translator emitted names no
-// this at all; what survives the lowering is the constructor itself, called with the
-// null this the runtime hands it and nothing of the builtin left over.
+// this at all; what survives the lowering is the constructor's wrapper - the method
+// the runtime publishes for a string constructor - called in fastcc with the null this
+// it never reads, and nothing of the builtin left over.
 TEST_F (JitExecution, LowerBuiltinsGivesTheCreatorItsNullThis)
 {
 	std::unique_ptr<Translation> t = translate_method ("objects", "Objects:MakeString");
@@ -279,7 +280,9 @@ TEST_F (JitExecution, LowerBuiltinsGivesTheCreatorItsNullThis)
 	mpm.run (*t->module, mam);
 
 	EXPECT_EQ (t->count ("mono.builtin."), 0u) << t->text ();
-	EXPECT_EQ (t->count ("call ptr @\"string:.ctor"), 1u) << t->text ();
+	EXPECT_EQ (t->count ("call fastcc ptr @\"(wrapper managed-to-managed) string:.ctor"),
+	           1u)
+		<< t->text ();
 	EXPECT_EQ (t->count ("(ptr null"), 1u) << t->text ();
 	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
 }

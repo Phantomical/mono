@@ -1196,6 +1196,22 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		}
 	}
 
+	/*
+	 * An internal call is published as the marshalling wrapper the runtime
+	 * builds around it, so naming that wrapper here reaches the same code
+	 * without crossing the legacy boundary to get there. A site that still
+	 * dispatches has to keep the method the IL named: the slot index and the
+	 * IMT key are computed from it.
+	 */
+	if (devirtualized && !vararg) {
+		MonoMethod *wrapped = icall_wrapper_target (callee_method);
+
+		if (wrapped != callee_method) {
+			callee_method = wrapped;
+			sig = mono_method_signature_internal (callee_method);
+		}
+	}
+
 	llvm::Expected<llvm::Function *> declaration = create_method_decl (callee_method);
 	if (!declaration)
 		return declaration.takeError ();

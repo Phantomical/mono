@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "layout.hpp"
+#include "mini-runtime.h"
 #include "runtime-error.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
@@ -304,6 +305,37 @@ implemented_outside_il (MonoMethod *method)
 	return (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) != 0 ||
 	       (method->iflags & METHOD_IMPL_ATTRIBUTE_RUNTIME) != 0 ||
 	       (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) != 0;
+}
+
+MonoMethod *
+icall_wrapper_target (MonoMethod *method)
+{
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (method->wrapper_type != MONO_WRAPPER_NONE)
+		return method;
+	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) == 0)
+		return method;
+	/* Array Get/Set/Address: no icall stands behind them at all. */
+	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE) != 0)
+		return method;
+	/*
+	 * A COM class's wrapper is the interop one, which is compiled out of some
+	 * builds; the loader's flag is what mono_marshal_get_native_wrapper ()
+	 * branches on before it asserts.
+	 */
+	if (MONO_CLASS_IS_IMPORT (method->klass))
+		return method;
+	if (sig == nullptr || sig->pinvoke == 0)
+		return method;
+
+	guint32 flags = 0;
+
+	mono_lookup_internal_call_full_with_flags (method, FALSE, &flags);
+	if ((flags & MONO_ICALL_FLAGS_NO_WRAPPER) != 0)
+		return method;
+
+	return mono_marshal_get_native_wrapper (method, TRUE, mono_aot_only);
 }
 
 arch::LegacyFlavor
