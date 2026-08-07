@@ -2408,8 +2408,10 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 			args [pindex ++] = sval;
 	}
 
+	/* Every field is written below and nothing reads the padding, so the
+	 * struct is not zeroed first: gcc turns a 40-byte memset into a rep stos
+	 * whose startup alone is a tenth of the call. */
 	JitCallCbData cb_data;
-	memset (&cb_data, 0, sizeof (cb_data));
 	cb_data.jit_wrapper = cinfo->wrapper;
 	cb_data.pindex = pindex;
 	cb_data.args = args;
