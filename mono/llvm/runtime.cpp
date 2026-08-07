@@ -1447,15 +1447,19 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 }
 
 /*
- * The failures raised where the thing is used rather than where it is declared.
- * Most are the metadata ones ECMA-335 defers that way: a method calling one that
- * is missing gets to run until the call, and its caller gets to catch what the
- * call throws. Invalid IL belongs with them because a body is only ever examined
- * when something calls the method, so the InvalidProgramException comes out of
- * the callee and the caller's catch sees it - which is also where mini raises
- * it. Everything else - a type the translator cannot express, a broken module -
- * is a failure of this engine, and nothing would be served by deferring it to a
+ * The metadata failures ECMA-335 raises where the thing is used rather than
+ * where it is named: a method calling one that is missing gets to run until the
+ * call, and its caller gets to catch what the call throws. Deferring one costs
+ * nothing, because the name it could not resolve is only ever consulted by a
  * call.
+ *
+ * Invalid IL is not in the set. A body's validity is the answer to the question
+ * "can this method be compiled", so whoever asked for the compile is entitled to
+ * hear it: mini reports it through the MonoError, which is why creating a
+ * delegate over a malformed DynamicMethod throws from Delegate.CreateDelegate
+ * rather than from the first call through it. A call that arrives at a stub
+ * without anyone having asked still gets the deferral it needs - raise_on_call ()
+ * defers everything, that being the only answer available there.
  */
 bool
 raised_where_used (uint16_t code)
@@ -1467,7 +1471,6 @@ raised_where_used (uint16_t code)
 	case MONO_ERROR_FILE_NOT_FOUND:
 	case MONO_ERROR_BAD_IMAGE:
 	case MONO_ERROR_MEMBER_ACCESS:
-	case MONO_ERROR_INVALID_PROGRAM:
 		return true;
 	default:
 		return false;
