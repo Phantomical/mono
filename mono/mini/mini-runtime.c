@@ -620,6 +620,16 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 	copy->name = g_strdup (info->name);
 	copy->method = info->method;
 
+	/*
+	 * Every stub and thunk the runtime plants comes through here, and they sit
+	 * on the call path of the code around them, so a profile that cannot name
+	 * them has unattributed gaps in exactly the hot places. Code in an AOT
+	 * image is already named by the image's own symbol table.
+	 */
+	if (!aot && copy->code && copy->code_size && mono_jit_dump_is_enabled ())
+		mono_emit_jit_dump_code (copy->name ? copy->name : "trampoline",
+					 copy->code, copy->code_size, NULL, 0);
+
 	if (info->unwind_ops) {
 		copy->uw_info = mono_unwind_ops_encode (info->unwind_ops, &copy->uw_info_len);
 		copy->owns_uw_info = TRUE;
