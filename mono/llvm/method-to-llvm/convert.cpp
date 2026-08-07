@@ -235,19 +235,28 @@ int_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 	return adjust (builder, narrowed, stack_bits (target), target.is_signed);
 }
 
-/// VALUE truncated toward zero into TARGET.
+/// VALUE truncated toward zero into TARGET, saturating if it does not fit.
 ///
-/// The spec says that this returns an unspecified value if the value doesn't
-/// fit in the target type. We use freeze to represent this in the LLVM IR.
+/// The spec leaves the out-of-range result unspecified, so any answer is legal - but it
+/// has to be the *same* answer however the operand was reached. fptosi/fptoui are poison
+/// out of range, and poison is not a value: LLVM folds it to zero wherever it can see the
+/// operand, while a value only known at run time gets whatever the hardware conversion
+/// leaves behind. One method would then convert -1.0f to ushort as 65535 and the next,
+/// differing only in that the constant had reached the conversion, as 0.
+///
+/// Saturating is the cheapest way to have a defined answer at all, and it is the one the
+/// checked conversions already give.
 llvm::Value *
 float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 {
 	llvm::Type *to = builder.getIntNTy (stack_bits (target));
-	llvm::Value *converted = target.is_signed ? builder.CreateFPToSI (value, to)
-	                                          : builder.CreateFPToUI (value, to);
+	llvm::Intrinsic::ID convert =
+		target.is_signed ? llvm::Intrinsic::fptosi_sat : llvm::Intrinsic::fptoui_sat;
+	llvm::Value *converted =
+		builder.CreateIntrinsic (convert, {to, value->getType ()}, {value});
 
 	/* Convert at the stack width and narrow after, the way the classic JIT does. */
-	return int_to_int (builder, builder.CreateFreeze (converted), target);
+	return int_to_int (builder, converted, target);
 }
 
 /// The type the result is tracked as once it is pushed.
