@@ -318,6 +318,14 @@ Backend debugging env vars:
   from the cache, so they end up with several live bodies. Nothing else produces one, and
   the code that has to cope — the debugger installing a breakpoint in every body a method
   is executing in — has no other exerciser.
+- `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to a debugger
+  through gdb's JIT interface, so `info functions` names JIT'd methods and a `bt`
+  taken from runtime C code unwinds managed frames with names instead of `??`. What
+  gdb gets is the object the linker was given with its section addresses filled in;
+  since the module carries no `.debug_*` sections there is no source-level stepping
+  in managed code, only symbols and unwinding. An object is retracted when the code
+  it describes goes — a freed dynamic method or an unloaded domain. Off by default:
+  it keeps a copy of every object alive for as long as the method is.
 - `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code
   is bump-allocated out of. Capped at 2GB whatever you ask for, because a slab's code
   and its mutable data reference each other with a PCRel32 and nothing stubs that.

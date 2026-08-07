@@ -36,6 +36,10 @@ class CodeSlabs;
 class LazyCallbacks;
 class StubTable;
 
+namespace gdbjit {
+struct Registration;
+}
+
 /// The host TargetMachine every compile runs against - code model Small+PIC and
 /// FastISel code generation.
 ///
@@ -309,6 +313,19 @@ private:
 	/// Captures each linked object's code extent and side tables, keyed by the
 	/// per-compile dylib; compile () collects its own entry after the lookup.
 	std::shared_ptr<ObjectCapturePlugin> capture_;
+
+	/// The objects a debugger has been told about, by the dylib holding the
+	/// code each one describes. Empty unless gdbjit::enabled ().
+	std::mutex gdb_objects_mutex_;
+	std::unordered_map<llvm::orc::JITDylib *, std::vector<gdbjit::Registration *>>
+		gdb_objects_;
+
+	/// Take back every object a debugger was told about for DYLIBS.
+	void retract_debug_objects (const std::vector<llvm::orc::JITDylib *> &dylibs);
+
+	/// Take back every object a debugger was told about, whichever dylib it
+	/// came from.
+	void retract_all_debug_objects ();
 };
 
 } // namespace mono

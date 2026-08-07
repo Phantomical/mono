@@ -9,6 +9,7 @@
 #include "callbacks.hpp"
 #include "compiler.hpp"
 #include "codemem.hpp"
+#include "gdb-jit.hpp"
 
 #include "il-line-table.hpp"
 #include "seq-point-marker.hpp"
@@ -475,6 +476,9 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
 		/// Where the body's arguments and locals live in its frame.
 		std::vector<VarSlot> var_slots;
+		/// The object as a debugger should see it, section addresses filled
+		/// in. Empty unless gdbjit::enabled ().
+		std::vector<char> debug_object;
 	};
 
 	/*
@@ -490,6 +494,19 @@ public:
 	{
 		timing::span_end (timing::Phase::lgraph, g_object_handed);
 		g_object_handed = 0;
+
+		/*
+		 * A debugger is handed the object rather than anything synthesized
+		 * from it, so the bytes have to survive until the link has decided
+		 * where everything goes and the addresses can be stamped in.
+		 */
+		if (gdbjit::enabled ()) {
+			std::vector<char> bytes (input_object.getBufferStart (),
+			                         input_object.getBufferEnd ());
+			std::lock_guard<std::mutex> lock (mutex_);
+
+			objects_[mr.getTargetJITDylib ().getName ()] = std::move (bytes);
+		}
 
 		std::vector<VarSlot> var_slots;
 		timing::Scope timed (timing::Phase::vslots);
@@ -599,6 +616,9 @@ public:
 					                  by_address, extents.il_lines,
 					                  extents.seq_points);
 
+				if (gdbjit::enabled ())
+					extents.debug_object = stamp_debug_object (dylib, graph);
+
 				std::lock_guard<std::mutex> lock (mutex_);
 				captured_[dylib] = std::move (extents);
 				return Error::success ();
@@ -643,9 +663,40 @@ public:
 	}
 
 private:
+	/// The object DYLIB's compile produced, with GRAPH's final section
+	/// addresses written into it - what a debugger is handed. Empty when the
+	/// bytes were never taken, which is every compile if gdb registration was
+	/// turned on after this JIT started.
+	std::vector<char> stamp_debug_object (const std::string &dylib,
+	                                      jitlink::LinkGraph &graph)
+	{
+		std::vector<char> bytes;
+		{
+			std::lock_guard<std::mutex> lock (mutex_);
+			auto it = objects_.find (dylib);
+
+			if (it == objects_.end ())
+				return {};
+			bytes = std::move (it->second);
+			objects_.erase (it);
+		}
+
+		return gdbjit::debug_object (
+			std::move (bytes), [&graph] (StringRef name) -> uint64_t {
+				jitlink::Section *section = graph.findSectionByName (name);
+
+				if (section == nullptr || section->blocks ().empty ())
+					return 0;
+				return jitlink::SectionRange (*section).getStart ().getValue ();
+			});
+	}
+
 	std::mutex mutex_;
 	std::map<std::string, Extents> captured_;
 	std::map<std::string, std::vector<VarSlot>> var_slots_;
+	/// Each in-flight compile's object bytes, taken before the link and given
+	/// back once it has settled. Only populated when gdbjit::enabled ().
+	std::map<std::string, std::vector<char>> objects_;
 };
 
 static void
@@ -1033,7 +1084,12 @@ MonoJit::MonoJit (std::unique_ptr<LLJIT> jit, std::shared_ptr<CodeSlabs> slabs)
 {
 }
 
-MonoJit::~MonoJit () = default;
+MonoJit::~MonoJit ()
+{
+	/* The domain's code goes with the linker below, so its description has to
+	 * go too. */
+	retract_all_debug_objects ();
+}
 
 const DataLayout &
 MonoJit::data_layout () const
@@ -1248,7 +1304,57 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 		                          "the linked object for %s does not define it",
 		                          entry.str ().c_str ());
 
+	if (!extents->debug_object.empty ()) {
+		gdbjit::Registration *reg =
+			gdbjit::publish (std::move (extents->debug_object));
+
+		if (reg != nullptr) {
+			std::lock_guard<std::mutex> lock (gdb_objects_mutex_);
+
+			gdb_objects_[&jd].push_back (reg);
+		}
+	}
+
 	return compiled;
+}
+
+void
+MonoJit::retract_debug_objects (const std::vector<JITDylib *> &dylibs)
+{
+	std::vector<gdbjit::Registration *> going;
+	{
+		std::lock_guard<std::mutex> lock (gdb_objects_mutex_);
+
+		if (gdb_objects_.empty ())
+			return;
+
+		for (JITDylib *jd : dylibs) {
+			auto it = gdb_objects_.find (jd);
+
+			if (it == gdb_objects_.end ())
+				continue;
+			going.insert (going.end (), it->second.begin (), it->second.end ());
+			gdb_objects_.erase (it);
+		}
+	}
+
+	for (gdbjit::Registration *reg : going)
+		gdbjit::retract (reg);
+}
+
+void
+MonoJit::retract_all_debug_objects ()
+{
+	decltype (gdb_objects_) going;
+	{
+		std::lock_guard<std::mutex> lock (gdb_objects_mutex_);
+
+		going.swap (gdb_objects_);
+	}
+
+	for (auto &[jd, registrations] : going)
+		for (gdbjit::Registration *reg : registrations)
+			gdbjit::retract (reg);
 }
 
 Error
@@ -1256,6 +1362,13 @@ MonoJit::remove_dylibs (const std::vector<JITDylib *> &dylibs)
 {
 	if (dylibs.empty ())
 		return Error::success ();
+
+	/*
+	 * Ahead of the removal: a debugger asked about one of these addresses
+	 * after the code is gone would read an object describing memory that has
+	 * been handed to the next method along.
+	 */
+	retract_debug_objects (dylibs);
 
 	std::vector<JITDylibSP> owned (dylibs.begin (), dylibs.end ());
 
