@@ -908,6 +908,11 @@ raise_jit_done (MonoMethod *method, MonoJitInfo *jinfo)
 	}
 
 	MONO_PROFILER_RAISE (jit_done, (method, jinfo));
+
+	/* --jitmap: name this code range in /tmp/perf-<pid>.map, so perf resolves
+	 * compiled method bodies instead of reporting a bare address. */
+	if (mono_jit_map_is_enabled ())
+		mono_emit_jit_map (jinfo);
 }
 
 Expected<Backend::Compiled>
