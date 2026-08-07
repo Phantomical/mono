@@ -4605,7 +4605,7 @@ jit_end (MonoProfiler *prof, MonoMethod *method, MonoJitInfo *jinfo)
 	send_type_load (method->klass);
 
 	if (jinfo)
-		mono_de_add_pending_breakpoints (method, jinfo);
+		mono_de_add_pending_breakpoints (mono_domain_get (), method, jinfo);
 }
 
 /*

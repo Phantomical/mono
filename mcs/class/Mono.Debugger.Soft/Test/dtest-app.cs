@@ -557,6 +557,10 @@ public class Tests : TestsBase, ITest2
 #endif
 			return 0;
 		}
+		if (args.Length > 0 && args [0] == "multi-body") {
+			multi_body ();
+			return 0;
+		}
 		if (args.Length > 0 && args [0] == "attach") {
 			new Tests ().attach ();
 			return 0;
@@ -672,6 +676,51 @@ public class Tests : TestsBase, ITest2
 		someLocalString2 = someLocalString;
 	}
 	
+
+	static volatile bool multi_body_stop;
+	static volatile int multi_body_spins;
+
+	[MethodImplAttribute (MethodImplOptions.NoInlining)]
+	public static void multi_body_loop () {
+		while (!multi_body_stop) {
+			multi_body_spins ++;
+			Thread.Sleep (10);
+		}
+	}
+
+	[MethodImplAttribute (MethodImplOptions.NoInlining)]
+	public static void multi_body_recompiled () {
+	}
+
+	/*
+	 * Leave a thread running inside one body of multi_body_loop () and compile
+	 * the method again, so that it has a body the thread is in and a body every
+	 * later call would reach. Run with MONO_LLVM_JIT_RECOMPILE naming the
+	 * method, or the second compile is answered from the cache and there is
+	 * only ever one body.
+	 */
+	public static void multi_body () {
+		var t = new Thread (delegate () { multi_body_loop (); });
+		t.Start ();
+
+		while (multi_body_spins == 0)
+			Thread.Sleep (10);
+
+		typeof (Tests).GetMethod ("multi_body_loop").MethodHandle.GetFunctionPointer ();
+		multi_body_recompiled ();
+
+		/*
+		 * Long enough for a breakpoint placed now to be hit, and no longer. The
+		 * debugger stops the VM to place it, so this only counts down once the
+		 * loop is running again and the breakpoint is already armed.
+		 */
+		int spun = multi_body_spins;
+		while (multi_body_spins < spun + 20)
+			Thread.Sleep (10);
+
+		multi_body_stop = true;
+		t.Join ();
+	}
 
 	public static void breakpoints () {
 		/* Call these early so it is JITted by the time a breakpoint is placed on it */

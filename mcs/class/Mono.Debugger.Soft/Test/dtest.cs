@@ -92,7 +92,7 @@ public class DebuggerTests
 	}
 #endif
 
-	void Start (string app, string method = null, bool forceExit = false) {
+	void Start (string app, string method = null, bool forceExit = false, Dictionary<string, string> env = null) {
 		this.forceExit = forceExit;
 
 #if MONODROID_TOOLS
@@ -100,6 +100,9 @@ public class DebuggerTests
 #else
 		if (!listening) {
 			var pi = CreateStartInfo (app, method);
+			if (env != null)
+				foreach (var v in env)
+					pi.EnvironmentVariables [v.Key] = v.Value;
 			vm = VirtualMachineManager.Launch (pi, new LaunchOptions { AgentArgs = agent_args });
 		} else
 #endif
@@ -4159,6 +4162,43 @@ public class DebuggerTests
 		Assert.AreEqual (iface, map.InterfaceType);
 		Assert.AreEqual (2, map.InterfaceMethods.Length);
 		Assert.AreEqual (2, map.TargetMethods.Length);
+	}
+
+	[Test]
+	[Category ("AndroidSdksNotWorking")]
+	public void BreakpointInEveryBody () {
+		vm.Detach ();
+
+		/*
+		 * The debuggee leaves a thread running inside one body of
+		 * multi_body_loop () and then has the method compiled again, so a
+		 * breakpoint set afterwards has to go into the body that thread is in
+		 * as well as the one every later call would reach.
+		 */
+		Start (dtest_app_path, "multi-body", env: new Dictionary<string, string> {
+			{ "MONO_LLVM_JIT_RECOMPILE", "multi_body_loop" }
+		});
+
+		/* Stops once the second body exists. */
+		run_until ("multi_body_recompiled");
+
+		var loop = entry_point.DeclaringType.GetMethod ("multi_body_loop");
+		Assert.IsNotNull (loop);
+
+		var reqs = new List<BreakpointEventRequest> ();
+		foreach (int il_offset in loop.ILOffsets)
+			reqs.Add (vm.SetBreakpoint (loop, il_offset));
+
+		vm.Resume ();
+		Event e = GetNextEvent ();
+
+		/* Or the loop traps on every iteration for the rest of the run. */
+		foreach (var req in reqs)
+			req.Disable ();
+
+		Assert.IsInstanceOfType (typeof (BreakpointEvent), e,
+					 "the thread running in the older body never stopped");
+		Assert.AreEqual ("multi_body_loop", (e as BreakpointEvent).Method.Name);
 	}
 
 	[Test]

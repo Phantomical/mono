@@ -96,6 +96,7 @@
 #include "mini-gc.h"
 #include "mini-llvm.h"
 #include "debugger-agent.h"
+#include "debugger-engine.h"
 #include "lldb.h"
 #include "mini-runtime.h"
 #include "interp/interp.h"
@@ -2682,6 +2683,80 @@ mono_jit_search_all_backends_for_jit_info (MonoDomain *domain, MonoMethod *metho
 	return code;
 }
 
+static void
+add_body (MonoJitInfo *ji, void *user_data)
+{
+	GPtrArray *bodies = (GPtrArray *)user_data;
+	guint i;
+
+	if (!ji)
+		return;
+	for (i = 0; i < bodies->len; ++i)
+		if (g_ptr_array_index (bodies, i) == ji)
+			return;
+	g_ptr_array_add (bodies, ji);
+}
+
+/*
+ * mono_jit_search_all_backends_for_all_jit_infos:
+ *
+ *   Append to BODIES the jit info of every live body of METHOD in DOMAIN.
+ *
+ * A method has more than one when it has been compiled more than once: the
+ * stubs name the newest, but a thread that entered an older body is still in
+ * it. The two engines can also both hold a body, since a method the
+ * interpreter has transformed can be JITted afterwards.
+ */
+void
+mono_jit_search_all_backends_for_all_jit_infos (MonoDomain *domain, MonoMethod *method, GPtrArray *bodies)
+{
+	MonoJitInfo *ji;
+	gpointer code;
+
+	code = mono_jit_find_compiled_method_with_jit_info (domain, method, &ji);
+	if (code)
+		add_body (ji, bodies);
+
+	mono_llvm_jit_foreach_body (domain, method, add_body, bodies);
+
+	/*
+	 * AOT code only when nothing has been compiled: asking for it loads it, and
+	 * a method already running out of the JIT has no use for another body.
+	 */
+	if (bodies->len == 0) {
+		ERROR_DECL (oerror);
+
+		mono_class_init_internal (method->klass);
+		code = mono_aot_get_method (domain, method, oerror);
+		if (code) {
+			mono_error_assert_ok (oerror);
+			add_body (mono_jit_info_table_find (domain, code), bodies);
+		} else if (!is_ok (oerror)) {
+			mono_error_cleanup (oerror);
+		}
+	}
+
+	add_body (mini_get_interp_callbacks ()->find_jit_info (domain, method), bodies);
+}
+
+/*
+ * mini_install_pending_breakpoints:
+ *
+ *   Install every breakpoint already set on METHOD into JI, a body of METHOD in
+ * DOMAIN.
+ *
+ * Called from the compiler before the body goes live, so that a body arriving
+ * while the debugger is attached starts out carrying what the debugger asked
+ * for rather than picking it up afterwards.
+ */
+void
+mini_install_pending_breakpoints (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji)
+{
+#ifndef DISABLE_SDB
+	mono_de_add_pending_breakpoints (domain, method, ji);
+#endif
+}
+
 gpointer
 mono_jit_find_compiled_method_with_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji)
 {
@@ -3904,6 +3979,20 @@ class_method_pair_hash (gconstpointer data)
 	return (gsize)pair->klass ^ (gsize)pair->method;
 }
 
+/*
+ * A method's entry in the seq_points hash is the list of tables its bodies
+ * published, one each, and the domain owns every one of them.
+ */
+static void
+free_seq_point_list (gpointer value)
+{
+	GSList *l;
+
+	for (l = (GSList *)value; l; l = l->next)
+		mono_seq_point_info_free (l->data);
+	g_slist_free ((GSList *)value);
+}
+
 static void
 mini_create_jit_domain_info (MonoDomain *domain)
 {
@@ -3914,7 +4003,7 @@ mini_create_jit_domain_info (MonoDomain *domain)
 	info->delegate_trampoline_hash = g_hash_table_new (class_method_pair_hash, class_method_pair_equal);
 	info->llvm_vcall_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->runtime_invoke_hash = mono_conc_hashtable_new_full (mono_aligned_addr_hash, NULL, NULL, runtime_invoke_info_free);
-	info->seq_points = g_hash_table_new_full (mono_aligned_addr_hash, NULL, NULL, mono_seq_point_info_free);
+	info->seq_points = g_hash_table_new_full (mono_aligned_addr_hash, NULL, NULL, free_seq_point_list);
 	info->arch_seq_points = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->jump_target_hash = g_hash_table_new (NULL, NULL);
 	mono_jit_code_hash_init (&info->interp_code_hash);

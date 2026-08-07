@@ -313,6 +313,11 @@ Backend debugging env vars:
   piece of per-compile work away so it can be priced; none is a candidate
   implementation and `sharedjd` is not even safe under concurrent compiles.
   `sharedjd` puts every module in one JITDylib.
+- `MONO_LLVM_JIT_RECOMPILE=<substr>` (`runtime.cpp`) — methods whose full name contains
+  the substring are translated afresh on every compile request instead of being answered
+  from the cache, so they end up with several live bodies. Nothing else produces one, and
+  the code that has to cope — the debugger installing a breakpoint in every body a method
+  is executing in — has no other exerciser.
 - `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code
   is bump-allocated out of. Capped at 2GB whatever you ask for, because a slab's code
   and its mutable data reference each other with a PCRel32 and nothing stubs that.

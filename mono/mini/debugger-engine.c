@@ -293,19 +293,17 @@ bp_matches_method (MonoBreakpoint *bp, MonoMethod *method)
 /*
  * mono_de_add_pending_breakpoints:
  *
- *   Insert pending breakpoints into the newly JITted method METHOD.
+ *   Insert the breakpoints already set on METHOD into JI, a body of METHOD in
+ * DOMAIN that does not carry them yet.
  */
 void
-mono_de_add_pending_breakpoints (MonoMethod *method, MonoJitInfo *ji)
+mono_de_add_pending_breakpoints (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji)
 {
 	int i, j;
 	MonoSeqPointInfo *seq_points;
-	MonoDomain *domain;
 
 	if (!breakpoints)
 		return;
-
-	domain = mono_domain_get ();
 
 	mono_loader_lock ();
 
@@ -324,20 +322,10 @@ mono_de_add_pending_breakpoints (MonoMethod *method, MonoJitInfo *ji)
 		}
 
 		if (!found) {
-			seq_points = (MonoSeqPointInfo *) ji->seq_points;
-
-			if (!seq_points) {
-				MonoMethod *jmethod = jinfo_get_method (ji);
-				if (jmethod->is_inflated) {
-					MonoJitInfo *seq_ji;
-					MonoMethod *declaring = mono_method_get_declaring_generic_method (jmethod);
-					mono_jit_search_all_backends_for_jit_info (domain, declaring, &seq_ji);
-					seq_points = (MonoSeqPointInfo *) seq_ji->seq_points;
-				}
-			}
+			seq_points = mono_get_seq_points_by_ji (domain, ji);
 
 			if (!seq_points)
-				/* Could be AOT code, or above "search_all_backends" call could have failed */
+				/* Could be AOT code compiled without debug information */
 				continue;
 
 			insert_breakpoint (seq_points, domain, ji, bp, NULL);
@@ -347,32 +335,54 @@ mono_de_add_pending_breakpoints (MonoMethod *method, MonoJitInfo *ji)
 	mono_loader_unlock ();
 }
 
+/*
+ * set_bp_in_method:
+ *
+ *   Insert BP into every live body METHOD has in DOMAIN.
+ *
+ * Native offsets belong to the body, so each is placed from its own sequence
+ * points. Whether the IL offset is one a breakpoint can go at is a property of
+ * the method, so the first body to refuse it settles the request for all of
+ * them.
+ */
 static void
-set_bp_in_method (MonoDomain *domain, MonoMethod *method, MonoSeqPointInfo *seq_points, MonoBreakpoint *bp, MonoError *error)
+set_bp_in_method (MonoDomain *domain, MonoMethod *method, MonoBreakpoint *bp, MonoError *error)
 {
-	MonoJitInfo *ji;
+	GPtrArray *bodies = g_ptr_array_new ();
+	guint i;
 
 	if (error)
 		error_init (error);
 
-	(void)mono_jit_search_all_backends_for_jit_info (domain, method, &ji);
-	g_assert (ji);
+	mono_jit_search_all_backends_for_all_jit_infos (domain, method, bodies);
+	g_assert (bodies->len > 0);
 
-	insert_breakpoint (seq_points, domain, ji, bp, error);
+	for (i = 0; i < bodies->len; ++i) {
+		MonoJitInfo *ji = (MonoJitInfo *)g_ptr_array_index (bodies, i);
+		MonoSeqPointInfo *seq_points = mono_get_seq_points_by_ji (domain, ji);
+
+		if (!seq_points)
+			continue;
+
+		insert_breakpoint (seq_points, domain, ji, bp, error);
+
+		if (error && !is_ok (error))
+			break;
+	}
+
+	g_ptr_array_free (bodies, TRUE);
 }
 
 typedef struct {
 	MonoBreakpoint *bp;
 	GPtrArray *methods;
 	GPtrArray *method_domains;
-	GPtrArray *method_seq_points;
 } CollectDomainData;
 
 static void
 collect_domain_bp (gpointer key, gpointer value, gpointer user_data)
 {
 	GHashTableIter iter;
-	MonoSeqPointInfo *seq_points;
 	MonoDomain *domain = (MonoDomain*)key;
 	CollectDomainData *ud = (CollectDomainData*)user_data;
 	MonoMethod *m;
@@ -380,14 +390,18 @@ collect_domain_bp (gpointer key, gpointer value, gpointer user_data)
 	if (mono_domain_is_unloading (domain))
 		return;
 
+	/*
+	 * A method with an entry here has at least one body carrying sequence
+	 * points; which bodies those are is worked out per method below, outside
+	 * the domain lock.
+	 */
 	mono_domain_lock (domain);
 	g_hash_table_iter_init (&iter, domain_jit_info (domain)->seq_points);
-	while (g_hash_table_iter_next (&iter, (void**)&m, (void**)&seq_points)) {
+	while (g_hash_table_iter_next (&iter, (void**)&m, NULL)) {
 		if (bp_matches_method (ud->bp, m)) {
 			/* Save the info locally to simplify the code inside the domain lock */
 			g_ptr_array_add (ud->methods, m);
 			g_ptr_array_add (ud->method_domains, domain);
-			g_ptr_array_add (ud->method_seq_points, seq_points);
 		}
 	}
 	mono_domain_unlock (domain);
@@ -416,10 +430,8 @@ mono_de_set_breakpoint (MonoMethod *method, long il_offset, EventRequest *req, M
 	MonoBreakpoint *bp;
 	MonoDomain *domain;
 	MonoMethod *m;
-	MonoSeqPointInfo *seq_points;
 	GPtrArray *methods;
 	GPtrArray *method_domains;
-	GPtrArray *method_seq_points;
 	int i;
 
 	if (error)
@@ -441,7 +453,6 @@ mono_de_set_breakpoint (MonoMethod *method, long il_offset, EventRequest *req, M
 
 	methods = g_ptr_array_new ();
 	method_domains = g_ptr_array_new ();
-	method_seq_points = g_ptr_array_new ();
 
 	mono_loader_lock ();
 
@@ -450,14 +461,12 @@ mono_de_set_breakpoint (MonoMethod *method, long il_offset, EventRequest *req, M
 	user_data.bp = bp;
 	user_data.methods = methods;
 	user_data.method_domains = method_domains;
-	user_data.method_seq_points = method_seq_points;
 	mono_de_foreach_domain (collect_domain_bp, &user_data);
 
 	for (i = 0; i < methods->len; ++i) {
 		m = (MonoMethod *)g_ptr_array_index (methods, i);
 		domain = (MonoDomain *)g_ptr_array_index (method_domains, i);
-		seq_points = (MonoSeqPointInfo *)g_ptr_array_index (method_seq_points, i);
-		set_bp_in_method (domain, m, seq_points, bp, error);
+		set_bp_in_method (domain, m, bp, error);
 	}
 
 	g_ptr_array_add (breakpoints, bp);
@@ -466,7 +475,6 @@ mono_de_set_breakpoint (MonoMethod *method, long il_offset, EventRequest *req, M
 
 	g_ptr_array_free (methods, TRUE);
 	g_ptr_array_free (method_domains, TRUE);
-	g_ptr_array_free (method_seq_points, TRUE);
 
 	if (error && !is_ok (error)) {
 		mono_de_clear_breakpoint (bp);

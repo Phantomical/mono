@@ -330,10 +330,10 @@ transcode_unwind (const std::vector<WireRecord> &records)
  *
  * The rows come out of the line table in the encoding seq-point-marker.hpp
  * describes and are already ascending by native offset, which is what
- * mono_seq_point_find_prev_by_native_offset () walks. The table is keyed per
- * MonoMethod rather than per body, so a second body for the same method leaves
- * the first one's registration alone and publishes it, rather than pointing the
- * new jit info at a table that is about to be freed.
+ * mono_seq_point_find_prev_by_native_offset () walks. Native offsets are a
+ * property of the body, so every body gets a table of its own; the domain keeps
+ * them in a list under the method, which is both who frees them and where the
+ * per-method lookup - which can only ever answer for one body - reads from.
  *
  * GRAPH says which sequence points can follow which, as IL offsets; what goes
  * into the table are indices into the table itself, so it is joined against the
@@ -404,20 +404,26 @@ publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
 		return;
 	}
 
+	/*
+	 * Appended rather than prepended: the list head is what the per-method
+	 * lookup answers with, and that has always been the method's first body.
+	 * Appending in place leaves the head where it is, so the hash entry - and
+	 * with it the domain's ownership of every table on the list - does not
+	 * have to be replaced.
+	 */
 	mono_domain_lock (domain);
 
-	MonoSeqPointInfo *live = (MonoSeqPointInfo *) g_hash_table_lookup (
+	GSList *published = (GSList *) g_hash_table_lookup (
 		domain_jit_info (domain)->seq_points, method);
 
-	if (live == NULL) {
-		g_hash_table_insert (domain_jit_info (domain)->seq_points, method, info);
-		live = info;
-	} else {
-		mono_seq_point_info_free (info);
-	}
+	if (published == NULL)
+		g_hash_table_insert (domain_jit_info (domain)->seq_points, method,
+		                     g_slist_append (NULL, info));
+	else
+		g_slist_append (published, info);
 	mono_domain_unlock (domain);
 
-	jinfo->seq_points = live;
+	jinfo->seq_points = info;
 }
 
 /*

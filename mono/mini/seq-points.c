@@ -30,6 +30,7 @@ mono_get_seq_points (MonoDomain *domain, MonoMethod *method)
 	ERROR_DECL (error);
 	MonoSeqPointInfo *seq_points;
 	MonoMethod *declaring_generic_method = NULL, *shared_method = NULL;
+	GSList *published;
 
 	if (method->is_inflated) {
 		declaring_generic_method = mono_method_get_declaring_generic_method (method);
@@ -38,13 +39,15 @@ mono_get_seq_points (MonoDomain *domain, MonoMethod *method)
 	}
 
 	mono_domain_lock (domain);
-	seq_points = (MonoSeqPointInfo *)g_hash_table_lookup (domain_jit_info (domain)->seq_points, method);
-	if (!seq_points && method->is_inflated) {
+	published = (GSList *)g_hash_table_lookup (domain_jit_info (domain)->seq_points, method);
+	if (!published && method->is_inflated) {
 		/* generic sharing + aot */
-		seq_points = (MonoSeqPointInfo *)g_hash_table_lookup (domain_jit_info (domain)->seq_points, declaring_generic_method);
-		if (!seq_points)
-			seq_points = (MonoSeqPointInfo *)g_hash_table_lookup (domain_jit_info (domain)->seq_points, shared_method);
+		published = (GSList *)g_hash_table_lookup (domain_jit_info (domain)->seq_points, declaring_generic_method);
+		if (!published)
+			published = (GSList *)g_hash_table_lookup (domain_jit_info (domain)->seq_points, shared_method);
 	}
+	/* The list is in publication order, so the head is the first body's. */
+	seq_points = published ? (MonoSeqPointInfo *)published->data : NULL;
 	mono_domain_unlock (domain);
 
 	return seq_points;

@@ -271,6 +271,27 @@ dumping (const char *name)
 	return filter != nullptr && strstr (name, filter) != nullptr;
 }
 
+/// Whether MONO_LLVM_JIT_RECOMPILE names METHOD: a substring of its full name
+/// selects it for being translated afresh on every compile request rather than
+/// answered from the cache, which is what gives a method more than one live
+/// body. It is a way to exercise the paths that have to cope with that - the
+/// debugger arming a breakpoint everywhere a method is executing - rather than
+/// a tiering policy.
+bool
+recompiling (MonoMethod *method)
+{
+	static const char *filter = g_getenv ("MONO_LLVM_JIT_RECOMPILE");
+
+	if (filter == nullptr)
+		return false;
+
+	char *name = mono_method_full_name (method, TRUE);
+	bool selected = strstr (name, filter) != nullptr;
+
+	g_free (name);
+	return selected;
+}
+
 void
 dump_il (MonoMethod *method, MonoMethodHeader *header)
 {
@@ -391,6 +412,12 @@ public:
 	/// compiled it there.
 	static void *body_of (MonoDomain *domain, MonoMethod *method);
 
+	/// Call VISIT once for each live body this backend compiled METHOD into in
+	/// DOMAIN, oldest first.
+	static void foreach_body (MonoDomain *domain, MonoMethod *method,
+	                          void (*visit) (MonoJitInfo *, void *),
+	                          void *user_data);
+
 	/// METHOD's unboxing entry in the current domain, or null when it has
 	/// none - a method not implemented in IL is entered through code this
 	/// backend did not generate.
@@ -400,11 +427,13 @@ private:
 	/// Where one method's code ended up: the legacy entry the runtime hands
 	/// out, the fastcc body generated callers reach, and - for an instance
 	/// method of a value type - the unboxing entry a call off that value
-	/// type's vtable comes in through.
+	/// type's vtable comes in through. JINFO is the body's record, and is null
+	/// for a method mini compiled instead.
 	struct Compiled {
 		void *entry;
 		void *body;
 		void *unbox = nullptr;
+		MonoJitInfo *jinfo = nullptr;
 	};
 
 	/// What publishing a method handed the rest of the runtime: the legacy
@@ -442,6 +471,12 @@ private:
 		/// Methods whose stubs already point at real code - and where that
 		/// code is, so that asking again is a lookup rather than a compile.
 		std::unordered_map<MonoMethod *, Compiled> compiled;
+		/// Bodies a method had before the one above, in publication order. The
+		/// stubs no longer name them, but a thread already running in one is
+		/// still running in it, so they stay live and anything that has to
+		/// cover every body of a method - the debugger placing a breakpoint -
+		/// has to see them. Only a method compiled more than once has an entry.
+		std::unordered_map<MonoMethod *, std::vector<MonoJitInfo *>> superseded;
 		/// Methods whose body stub was first reached from another domain, and
 		/// the per-call dispatcher each got instead of a direct binding.
 		std::unordered_map<MonoMethod *, void *> dispatchers;
@@ -492,7 +527,11 @@ private:
 	Expected<Compiled> raise_on_call (DomainState &state, MonoMethod *method,
 	                                  Error failure);
 
-	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method);
+	/// METHOD's code in STATE, compiling it if it has none. AGAIN skips the
+	/// cache, so the method is translated into a body of its own however many
+	/// it already has.
+	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method,
+	                                    bool again = false);
 
 	/// The legacy entry - the interop thunk - as a compile of its own, with
 	/// no body beside it. It reaches the method through the body's stub, so
@@ -624,6 +663,43 @@ Backend::body_of (MonoDomain *domain, MonoMethod *method)
 	return compiled->second.body;
 }
 
+void
+Backend::foreach_body (MonoDomain *domain, MonoMethod *method,
+                       void (*visit) (MonoJitInfo *, void *), void *user_data)
+{
+	if (live_backend == nullptr)
+		return;
+
+	/*
+	 * Copied out under the lock and visited without it: VISIT is the debugger
+	 * arming a breakpoint, which takes locks of its own and can end up back in
+	 * here looking a body up.
+	 */
+	std::vector<MonoJitInfo *> bodies;
+
+	{
+		std::lock_guard<std::mutex> lock (live_backend->mutex_);
+		auto state = live_backend->domains_.find (domain);
+
+		if (state == live_backend->domains_.end ())
+			return;
+
+		auto earlier = state->second->superseded.find (method);
+
+		if (earlier != state->second->superseded.end ())
+			bodies = earlier->second;
+
+		auto compiled = state->second->compiled.find (method);
+
+		if (compiled != state->second->compiled.end ()
+		    && compiled->second.jinfo != nullptr)
+			bodies.push_back (compiled->second.jinfo);
+	}
+
+	for (MonoJitInfo *body : bodies)
+		visit (body, user_data);
+}
+
 void *
 Backend::unbox_entry_of (MonoMethod *method)
 {
@@ -741,6 +817,7 @@ Backend::free_method (MonoMethod *method)
 				release.stubs.push_back (symbol_for_body (method));
 			}
 			state.compiled.erase (method);
+			state.superseded.erase (method);
 			state.dispatchers.erase (method);
 
 			auto tracked = state.owned.find (method);
@@ -1224,7 +1301,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		         state.domain->friendly_name);
 
 	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry,
-		              const_cast<uint8_t *> (unbox_code) };
+		              const_cast<uint8_t *> (unbox_code), *jinfo };
 }
 
 /*
@@ -1484,7 +1561,8 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 	 * first call is what lets a refusal come back through MonoError and be
 	 * raised by the runtime, which knows how to throw from where it stands.
 	 */
-	Expected<Compiled> code = ensure_compiled (**state, method);
+	Expected<Compiled> code =
+		ensure_compiled (**state, method, recompiling (method));
 	if (!code)
 		return code.takeError ();
 
@@ -1492,9 +1570,9 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 }
 
 Expected<Backend::Compiled>
-Backend::ensure_compiled (DomainState &state, MonoMethod *method)
+Backend::ensure_compiled (DomainState &state, MonoMethod *method, bool again)
 {
-	{
+	if (!again) {
 		std::lock_guard<std::mutex> lock (mutex_);
 		auto it = state.compiled.find (method);
 
@@ -1535,6 +1613,16 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 	if (!code)
 		return give_up (code.takeError ());
 
+	/*
+	 * Before the redirects below, which are what make the body reachable. A
+	 * body that goes live carrying none of the breakpoints already set on the
+	 * method is a breakpoint that stops being hit the moment the method is
+	 * compiled again, with nothing said about it.
+	 */
+	if (published != nullptr)
+		mini_install_pending_breakpoints (state.domain,
+		                                  jinfo_get_method (published), published);
+
 	if (Error err = state.jit->redirect_stub (symbol_for_code (method), code->entry))
 		return give_up (std::move (err));
 	if (Error err = state.jit->redirect_stub (symbol_for_body (method), code->body))
@@ -1547,10 +1635,18 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method)
 	 * A stub that had already gone to a dispatcher gets rebound to this
 	 * domain's own code here, which is mini's behavior too: a same-domain
 	 * resolve patches the call site.
+	 *
+	 * The body being replaced is not dead - the loser of that race, or an
+	 * earlier compile, can still have threads running in it - so it moves to
+	 * the superseded list rather than being dropped.
 	 */
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
-		state.compiled[method] = *code;
+		Compiled &live = state.compiled[method];
+
+		if (live.jinfo != nullptr && live.jinfo != code->jinfo)
+			state.superseded[method].push_back (live.jinfo);
+		live = *code;
 	}
 
 	/*
@@ -1920,6 +2016,13 @@ void *
 mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method)
 {
 	return mono::Backend::body_of (domain, method);
+}
+
+void
+mono_llvm_jit_foreach_body (MonoDomain *domain, MonoMethod *method,
+                            void (*visit) (MonoJitInfo *, void *), void *user_data)
+{
+	mono::Backend::foreach_body (domain, method, visit, user_data);
 }
 
 void *

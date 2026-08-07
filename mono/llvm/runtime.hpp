@@ -17,6 +17,7 @@ MONO_BEGIN_DECLS
 
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoDomain MonoDomain;
+typedef struct _MonoJitInfo MonoJitInfo;
 
 /// Compile METHOD for TARGET_DOMAIN and return the address to call it at.
 ///
@@ -63,6 +64,18 @@ void mono_llvm_jit_free_method (MonoMethod *method);
 /// runtime has no method-keyed map of its own to answer this from: a method
 /// reached as a callee is compiled without the runtime ever asking for it.
 void *mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method);
+
+/// Call VISIT with the jit info of each live body this backend compiled METHOD
+/// into in DOMAIN, oldest first.
+///
+/// A method keeps every body it has ever been compiled into: recompiling
+/// redirects the stubs at the new one, which is what every later call reaches,
+/// but a thread already running in an older body carries on there. Anything
+/// that has to hold for the method wherever it is executing - a breakpoint - has
+/// to be applied to all of them.
+void mono_llvm_jit_foreach_body (MonoDomain *domain, MonoMethod *method,
+                                 void (*visit) (MonoJitInfo *ji, void *user_data),
+                                 void *user_data);
 
 /// Where to enter METHOD when the receiver is still boxed - the address a call
 /// off a value type's vtable or IMT is given, which steps the receiver past the

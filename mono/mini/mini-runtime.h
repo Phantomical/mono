@@ -522,6 +522,8 @@ void mini_register_jump_site                (MonoDomain *domain, MonoMethod *met
 void mini_patch_jump_sites                  (MonoDomain *domain, MonoMethod *method, gpointer addr);
 void mini_patch_llvm_jit_callees            (MonoDomain *domain, MonoMethod *method, gpointer addr);
 gpointer  mono_jit_search_all_backends_for_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji);
+void      mono_jit_search_all_backends_for_all_jit_infos (MonoDomain *domain, MonoMethod *method, GPtrArray *bodies);
+void      mini_install_pending_breakpoints  (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji);
 gpointer  mono_jit_find_compiled_method_with_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji);
 gpointer  mono_jit_find_compiled_method     (MonoDomain *domain, MonoMethod *method);
 gpointer mono_jit_compile_method (MonoMethod *method, MonoError *error);
