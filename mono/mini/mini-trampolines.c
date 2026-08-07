@@ -1401,12 +1401,10 @@ gpointer
 mono_create_delegate_trampoline (MonoDomain *domain, MonoClass *klass)
 {
 	/*
-	 * Under the interpreter alone nothing ever calls this: the interpreter
-	 * dispatches a delegate itself. Started alongside the JIT it is called by
-	 * compiled code invoking a delegate, whatever engine runs the target.
+	 * llvmonly never reads invoke_impl: it dispatches a delegate through
+	 * method_ptr, which mini_delegate_ctor fills in itself.
 	 */
-	if (mono_llvm_only
-	    || (mono_ee_features.force_use_interpreter && !mono_aot_only))
+	if (mono_llvm_only)
 		return (gpointer)no_delegate_trampoline;
 
 	return mono_create_delegate_trampoline_info (domain, klass, NULL)->invoke_impl;
