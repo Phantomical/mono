@@ -50,6 +50,27 @@
  *     i32 reg         DWARF register number, or 0 where the op has none
  *     i64 value       the op's offset operand, or 0
  *
+ * `.mono_lines` is the IL-offset map: which IL offset was in effect at each
+ * code offset, which is what a managed stack trace prints and what the soft
+ * debugger's sequence points are recovered from. Same block-per-function shape
+ * as `.mono_unwind` and for the same reason.
+ *
+ *   Header (20 bytes, little-endian):
+ *     u32 magic   = 0x4d4c4e45 ('MLNE')
+ *     u16 version = 1
+ *     u16 reserved
+ *     u32 count
+ *     u64 function    where the function this describes was linked
+ *   Record[count] (8 bytes each, little-endian):
+ *     u32 offset      code offset the row takes effect at
+ *     u32 line        the translator's line number: an IL offset, or a
+ *                     sequence-point marker (seq-point-marker.hpp)
+ *
+ * Rows arrive in code order and several may land on one offset, which is what a
+ * run of IL instructions collapses to once the optimizer is done with it; the
+ * reader keeps the last, so the map stays single-valued and says the most recent
+ * point execution passed.
+ *
  * The function address is the one field that is not code-relative, so it is the
  * one thing in these sections the linker has to relocate.
  *
@@ -77,6 +98,11 @@ constexpr uint32_t unwind_section_magic = 0x4d555744; /* 'MUWD' */
 constexpr uint16_t unwind_section_version = 2;
 constexpr std::size_t unwind_header_size = 20;
 constexpr std::size_t unwind_record_size = 17;
+
+constexpr uint32_t lines_section_magic = 0x4d4c4e45; /* 'MLNE' */
+constexpr uint16_t lines_section_version = 1;
+constexpr std::size_t lines_header_size = 20;
+constexpr std::size_t lines_record_size = 8;
 
 /*
  * The id of the stackmap naming this frame's argument and local slots, in

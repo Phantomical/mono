@@ -33,7 +33,7 @@ enum class Phase {
 	codegen,   ///< ISel through the AsmPrinter, side tables included.
 	cgsetup,   ///< building codegen's pass pipeline, streamer and printer.
 	cgrun,     ///< running them.
-	dwarf,     ///< reading the IL line table back out of the object.
+	vslots,    ///< reading the debugger's frame slots back out of the object.
 	jinfo,     ///< turning the object's side tables into MonoJitInfo.
 
 	ctxnew,    ///< in compile: the fresh LLVMContext and Module.
@@ -48,7 +48,7 @@ enum class Phase {
 	isel,      ///< in cgrun: the pre-ISel IR passes and ISel, per function.
 	mpass,     ///< in cgrun: the machine passes over each function, after ISel.
 	emit,      ///< in cgrun: the AsmPrinter over each function.
-	sidetbl,   ///< in cgrun: writing .mono_lsda, .mono_guards and .mono_unwind.
+	sidetbl,   ///< in cgrun: writing the .mono_* side tables.
 	objout,    ///< in cgrun: laying the object out and writing it, plus finalization.
 	pmfree,    ///< in codegen: taking the codegen pass manager back down.
 	tsmfree,   ///< in orc: dropping the module and its LLVMContext.

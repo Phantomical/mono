@@ -50,8 +50,8 @@ bool ir_verification_enabled ();
 
 /// One row of a compiled function's line table: an offset from the start of the
 /// function, and the IL offset in effect at it. The translator records these as
-/// debug locations (il-line-table.hpp) and the engine reads them back out of the
-/// emitted object's `.debug_line`.
+/// debug locations (il-line-table.hpp), the compiler writes them into
+/// `.mono_lines` (sidetables.hpp) and the engine reads them back from there.
 struct IlLineRow {
 	uint32_t native_offset;
 	uint32_t il_offset;

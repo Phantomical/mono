@@ -94,8 +94,8 @@ name_of (Phase phase)
 		return "jinfo";
 	case Phase::dylib:
 		return "dylib";
-	case Phase::dwarf:
-		return "dwarf";
+	case Phase::vslots:
+		return "vslots";
 	case Phase::cgsetup:
 		return "cgsetup";
 	case Phase::cgrun:

@@ -20,7 +20,6 @@
 #include "stubs.hpp"
 #include "timing.hpp"
 
-#include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
@@ -42,6 +41,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -244,121 +244,106 @@ private:
 
 } // namespace
 
+template <typename T>
+static T
+read_le (const uint8_t *p)
+{
+	T value;
+
+	std::memcpy (&value, p, sizeof (T));
+	return value;
+}
+
 /*
- * Reduce the just-compiled (not yet linked) object's `.debug_line` to per-
- * function rows: the IL offset in effect at each offset into each function.
+ * Turn the linked `.mono_lines` into per-function rows: the IL offset in effect
+ * at each offset into each function, and the sequence-point markers that ride
+ * the same channel. FUNCTIONS names each function by where it was linked, which
+ * is what a block's header identifies itself with.
  *
- * Reading the INPUT object rather than the linked graph is what forces the hook
- * this runs from: the debug sections are not SHF_ALLOC, so JITLink neither
- * allocates nor relocates them and there would be nothing to read on the other
- * side. In a relocatable object DWARFContext applies the debug-section
- * relocations itself, so a row's address is already an offset within `.text`.
- *
- * Several rows landing on one address is what a run of IL instructions collapses
+ * Several rows landing on one offset is what a run of IL instructions collapses
  * to once the optimizer is done with it. They arrive in code order, so the last
  * one is the offset in effect there; keeping that one is what makes the map
  * single-valued, and it agrees with the "most recent point execution passed"
  * lookup that reads the map back.
  */
 static void
-parse_il_line_table (object::ObjectFile &obj,
-                     std::map<std::string, std::vector<IlLineRow>> &out,
-                     std::map<std::string, std::vector<IlLineRow>> &seq_points)
+parse_line_table (const uint8_t *table, size_t size,
+                  const std::map<const uint8_t *, std::string> &functions,
+                  std::map<std::string, std::vector<IlLineRow>> &out,
+                  std::map<std::string, std::vector<IlLineRow>> &seq_points)
 {
-	std::unique_ptr<DWARFContext> dw = DWARFContext::create (obj);
-	if (!dw)
-		return;
+	const uint8_t *p = table;
+	const uint8_t *end = table + size;
 
-	struct FuncRange {
-		uint64_t start;
-		uint64_t size;
-		std::string name;
-	};
-	std::vector<FuncRange> funcs;
-
-	for (const object::SymbolRef &sym : obj.symbols ()) {
-		Expected<object::SymbolRef::Type> type = sym.getType ();
-		Expected<StringRef> name = sym.getName ();
-		Expected<uint64_t> value = sym.getValue ();
-
-		if (!type || !name || !value) {
-			consumeError (joinErrors (
-				type ? Error::success () : type.takeError (),
-				joinErrors (name ? Error::success () : name.takeError (),
-				            value ? Error::success () : value.takeError ())));
-			continue;
+	while (p + lines_header_size <= end) {
+		if (read_le<uint32_t> (p) != lines_section_magic
+		    || read_le<uint16_t> (p + 4) != lines_section_version) {
+			errs () << "mono: .mono_lines is not in a format this runtime "
+			           "knows\n";
+			return;
 		}
-		if (*type != object::SymbolRef::ST_Function)
+
+		uint32_t count = read_le<uint32_t> (p + 8);
+		const uint8_t *code = (const uint8_t *) read_le<uint64_t> (p + 12);
+		const uint8_t *records = p + lines_header_size;
+
+		p = records + (size_t) count * lines_record_size;
+		if (p > end)
+			return;
+
+		auto owner = functions.find (code);
+		if (owner == functions.end ())
 			continue;
 
-		funcs.push_back ({ *value, object::ELFSymbolRef (sym).getSize (),
-		                   name->str () });
-	}
+		std::vector<IlLineRow> *rows = &out[owner->second];
+		std::vector<IlLineRow> *points = nullptr;
 
-	if (funcs.empty ())
-		return;
+		for (uint32_t i = 0; i < count; ++i) {
+			const uint8_t *r = records + (size_t) i * lines_record_size;
+			uint32_t line = read_le<uint32_t> (r + 4);
 
-	for (const std::unique_ptr<DWARFUnit> &cu : dw->compile_units ()) {
-		const DWARFDebugLine::LineTable *lt = dw->getLineTableForUnit (cu.get ());
-
-		if (!lt)
-			continue;
-
-		for (const DWARFDebugLine::Row &row : lt->Rows) {
 			/*
-			 * Line 0 is DWARF's "no source location" - what an instruction the
-			 * translator never attributed produces. The bias keeps a real IL
-			 * offset of 0 from looking like one.
+			 * Line 0 is "no source location" - what an instruction the
+			 * translator never attributed produces. The bias keeps a real
+			 * IL offset of 0 from looking like one.
 			 */
-			if (row.EndSequence || row.Line == 0)
+			if (line == 0)
 				continue;
 
-			const FuncRange *owner = nullptr;
-
-			for (const FuncRange &f : funcs) {
-				if (row.Address.Address < f.start)
-					continue;
-				if (f.size && row.Address.Address >= f.start + f.size)
-					continue;
-				owner = &f;
-				break;
-			}
-			if (!owner)
-				continue;
-
-			IlLineRow line;
-			line.native_offset =
-				(uint32_t) (row.Address.Address - owner->start);
-			line.il_offset = (uint32_t) (row.Line - IL_OFFSET_LINE_BIAS);
+			IlLineRow row;
+			row.native_offset = read_le<uint32_t> (r);
+			row.il_offset = line - IL_OFFSET_LINE_BIAS;
 
 			/*
 			 * A sequence point marker says where the soft debugger's
 			 * trampolines return into, not what IL offset is in effect
 			 * there - the offset in effect is whatever the row before it
-			 * said, which is what leaving it out of the line table keeps.
+			 * said, which is what keeping it out of the map below keeps.
 			 */
-			if (seq_point_is_marker (line.il_offset)) {
-				line.flags = seq_point_marker_flags (line.il_offset);
-				line.il_offset = seq_point_marker_offset (line.il_offset);
-				seq_points[owner->name].push_back (line);
+			if (seq_point_is_marker (row.il_offset)) {
+				row.flags = seq_point_marker_flags (row.il_offset);
+				row.il_offset = seq_point_marker_offset (row.il_offset);
+				if (points == nullptr)
+					points = &seq_points[owner->second];
+				points->push_back (row);
 				continue;
 			}
 
-			std::vector<IlLineRow> &rows = out[owner->name];
-
-			if (!rows.empty ()
-			    && rows.back ().native_offset == line.native_offset)
-				rows.back () = line;
+			if (!rows->empty ()
+			    && rows->back ().native_offset == row.native_offset)
+				rows->back () = row;
 			else
-				rows.push_back (line);
+				rows->push_back (row);
 		}
+
+		if (rows->empty ())
+			out.erase (owner->second);
 	}
 
 	/*
-	 * Rows are ascending by address within a sequence but need not be across
-	 * sequences, since LLVM lays blocks out as it likes. The runtime binary-
-	 * searches these, so sort - stably, so the last-row-wins choice above
-	 * survives.
+	 * Rows are emitted in the order the printer walked the blocks, which is not
+	 * ascending by address. The runtime binary-searches these, so sort -
+	 * stably, so the last-row-wins choice above survives.
 	 */
 	auto by_address = [] (const IlLineRow &a, const IlLineRow &b) {
 		return a.native_offset < b.native_offset;
@@ -492,10 +477,10 @@ public:
 
 	/*
 	 * The one hook that sees the object bytes, which is the only place
-	 * `.debug_line` exists: it is not SHF_ALLOC, so it never reaches the
-	 * LinkGraph the passes below run over. Upstream marks this deprecated and
-	 * promises "a proper mechanism for capturing object buffers"; there is not
-	 * one yet, so this is the mechanism.
+	 * `.llvm_stackmaps` exists in a form nothing else has to be kept alive
+	 * for. Upstream marks this deprecated and promises "a proper mechanism for
+	 * capturing object buffers"; there is not one yet, so this is the
+	 * mechanism.
 	 */
 	void notifyMaterializing (MaterializationResponsibility &mr,
 	                          jitlink::LinkGraph &, jitlink::JITLinkContext &,
@@ -504,13 +489,8 @@ public:
 		timing::span_end (timing::Phase::lgraph, g_object_handed);
 		g_object_handed = 0;
 
-		if (hoisting ("nodwarf"))
-			return;
-
-		std::map<std::string, std::vector<IlLineRow>> lines;
-		std::map<std::string, std::vector<IlLineRow>> seq_points;
 		std::vector<VarSlot> var_slots;
-		timing::Scope timed (timing::Phase::dwarf);
+		timing::Scope timed (timing::Phase::vslots);
 
 		Expected<std::unique_ptr<object::ObjectFile>> obj =
 			object::ObjectFile::createObjectFile (input_object);
@@ -520,14 +500,11 @@ public:
 			return;
 		}
 
-		parse_il_line_table (**obj, lines, seq_points);
 		parse_debug_var_slots (**obj, var_slots);
-		if (lines.empty () && seq_points.empty () && var_slots.empty ())
+		if (var_slots.empty ())
 			return;
 
 		std::lock_guard<std::mutex> lock (mutex_);
-		il_lines_[mr.getTargetJITDylib ().getName ()] = std::move (lines);
-		seq_points_[mr.getTargetJITDylib ().getName ()] = std::move (seq_points);
 		var_slots_[mr.getTargetJITDylib ().getName ()] = std::move (var_slots);
 	}
 
@@ -556,7 +533,8 @@ public:
 			for (jitlink::Section &section : graph.sections ()) {
 				if (section.getName () != ".mono_lsda"
 				    && section.getName () != ".mono_guards"
-				    && section.getName () != ".mono_unwind")
+				    && section.getName () != ".mono_unwind"
+				    && section.getName () != ".mono_lines")
 					continue;
 				for (jitlink::Block *block : section.blocks ())
 					graph.addAnonymousSymbol (*block, 0,
@@ -569,6 +547,8 @@ public:
 		config.PostFixupPasses.push_back (
 			[this, dylib] (jitlink::LinkGraph &graph) -> Error {
 				Extents extents;
+				const uint8_t *line_table = nullptr;
+				size_t line_table_size = 0;
 
 				for (jitlink::Section &section : graph.sections ()) {
 					jitlink::SectionRange range (section);
@@ -585,6 +565,10 @@ public:
 						extents.unwind_table =
 							range.getStart ().toPtr<const uint8_t *> ();
 						extents.unwind_table_size = range.getSize ();
+					} else if (section.getName () == ".mono_lines") {
+						line_table =
+							range.getStart ().toPtr<const uint8_t *> ();
+						line_table_size = range.getSize ();
 					} else if (is_linker_stub_section (section)) {
 						extents.linker_stubs.emplace_back (
 							range.getStart ()
@@ -593,15 +577,25 @@ public:
 					}
 				}
 
+				std::map<const uint8_t *, std::string> by_address;
+
 				for (jitlink::Symbol *sym : graph.defined_symbols ()) {
 					if (!sym->hasName () || !sym->isCallable ())
 						continue;
+
+					const uint8_t *code =
+						sym->getAddress ().toPtr<const uint8_t *> ();
+
 					extents.functions.emplace_back (
 						std::string (*sym->getName ()),
-						std::make_pair (
-							sym->getAddress ().toPtr<const uint8_t *> (),
-							(size_t) sym->getSize ()));
+						std::make_pair (code, (size_t) sym->getSize ()));
+					by_address[code] = std::string (*sym->getName ());
 				}
+
+				if (line_table != nullptr)
+					parse_line_table (line_table, line_table_size,
+					                  by_address, extents.il_lines,
+					                  extents.seq_points);
 
 				std::lock_guard<std::mutex> lock (mutex_);
 				captured_[dylib] = std::move (extents);
@@ -625,16 +619,6 @@ public:
 		 * Captured by the other hook, before linking, so it is merged here
 		 * rather than written into the same slot.
 		 */
-		if (auto lines = il_lines_.find (std::string (dylib));
-		    lines != il_lines_.end ()) {
-			extents.il_lines = std::move (lines->second);
-			il_lines_.erase (lines);
-		}
-		if (auto points = seq_points_.find (std::string (dylib));
-		    points != seq_points_.end ()) {
-			extents.seq_points = std::move (points->second);
-			seq_points_.erase (points);
-		}
 		if (auto slots = var_slots_.find (std::string (dylib));
 		    slots != var_slots_.end ()) {
 			extents.var_slots = std::move (slots->second);
@@ -659,8 +643,6 @@ public:
 private:
 	std::mutex mutex_;
 	std::map<std::string, Extents> captured_;
-	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> il_lines_;
-	std::map<std::string, std::map<std::string, std::vector<IlLineRow>>> seq_points_;
 	std::map<std::string, std::vector<VarSlot>> var_slots_;
 };
 

@@ -2,16 +2,16 @@
  * \file
  * il-line-table.hpp - IL offsets as LLVM debug info.
  *
- * A tier-1 method's native_offset -> il_offset map (stack traces, profiler
- * attribution) rides on debug info: each OP_IL_SEQ_POINT sets a DILocation whose
- * line is the IL offset, and the engine reads it back out of the emitted object.
+ * A method's native_offset -> il_offset map (stack traces, profiler attribution)
+ * rides on debug locations: each OP_IL_SEQ_POINT sets a DILocation whose line is
+ * the IL offset, which survives the optimizer and reaches the machine
+ * instructions. The printer reads the lines back off them and writes
+ * `.mono_lines` (sidetables.hpp); no DWARF is emitted, and the compile unit
+ * below says so.
  *
- * Every function translated into a compile's module gets a subprogram - the root
- * and each callee the tier-1 inliner materializes. When LLVM folds a callee in it
- * builds the inlinedAt chain itself, so the emitted DWARF says both "this address
- * is IL offset N of the callee" and "which the root reached from its IL offset M".
- * The engine keeps the root's offset as the method's own map (a frame in the root
- * must report the root's call site) and hands the rest back as inline frames.
+ * Every function translated into a compile's module gets a subprogram, since a
+ * location needs a scope and a filter body is a frame of its own with a map of
+ * its own.
  *
  * This lives in its own translation unit because LLVM's debug-info headers pull
  * in llvm/BinaryFormat/Dwarf.h, whose enumerators collide with the DW_* macros

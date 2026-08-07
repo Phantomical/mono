@@ -36,7 +36,11 @@
 
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>
+#include <llvm/CodeGen/AsmPrinterHandler.h>
 #include <llvm/CodeGen/MachineFunctionPass.h>
+#include <llvm/CodeGen/MachineInstr.h>
+#include <llvm/IR/DebugInfoMetadata.h>
+#include <llvm/IR/Function.h>
 #include <llvm/Pass.h>
 #include <llvm/CodeGen/MachineModuleInfo.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
@@ -63,6 +67,8 @@
 
 #include <cstdlib>
 #include <optional>
+#include <string>
+#include <vector>
 
 using namespace llvm;
 
@@ -157,6 +163,86 @@ public:
 
 char PrinterMarkPass::ID;
 
+/*
+ * Collects the rows `.mono_lines` is written from, as the printer walks each
+ * function's instructions.
+ *
+ * The translator gives every instruction a debug location whose line is the IL
+ * offset in effect at it (il-line-table.hpp); all a row needs on top of that is
+ * a label to take a difference against, so one is planted wherever the line
+ * changes. That is the same thing a `.loc` directive would do, which is why the
+ * module's compile unit can say NoDebug: nothing here wants a line table, and
+ * without one no `.debug_*` section is produced at all.
+ */
+class IlLineHandler : public AsmPrinterHandler {
+public:
+	struct Row {
+		const MCSymbol *at;
+		uint32_t line;
+	};
+
+	struct Function {
+		std::string name;
+		std::vector<Row> rows;
+	};
+
+	explicit IlLineHandler (MCStreamer *streamer) : streamer_ (streamer) {}
+
+	const std::vector<Function> &functions () const { return functions_; }
+
+	void beginFunction (const MachineFunction *mf) override
+	{
+		const DISubprogram *sp = mf->getFunction ().getSubprogram ();
+
+		functions_.push_back ({ mf->getName ().str (), {} });
+		line_ = 0;
+
+		/*
+		 * The prologue carries no location of its own, and a frame stopped
+		 * in it still has to name an IL offset, so the function opens at the
+		 * subprogram's own line - the method's first IL byte.
+		 */
+		if (sp != nullptr)
+			record (sp->getScopeLine ());
+	}
+
+	void beginInstruction (const MachineInstr *mi) override
+	{
+		if (mi->isMetaInstruction ())
+			return;
+
+		const DebugLoc &loc = mi->getDebugLoc ();
+
+		if (loc)
+			record (loc.getLine ());
+	}
+
+	void endFunction (const MachineFunction *) override {}
+	void endModule () override {}
+
+private:
+	/*
+	 * An instruction with no location leaves the line in effect alone rather
+	 * than clearing it: the translator attributes what it emits, so a gap is
+	 * codegen's own bookkeeping and belongs to whatever surrounds it.
+	 */
+	void record (unsigned line)
+	{
+		if (line == 0 || line == line_)
+			return;
+
+		MCSymbol *at = streamer_->getContext ().createTempSymbol ();
+
+		streamer_->emitLabel (at);
+		functions_.back ().rows.push_back ({ at, (uint32_t) line });
+		line_ = line;
+	}
+
+	MCStreamer *streamer_;
+	std::vector<Function> functions_;
+	unsigned line_ = 0;
+};
+
 /// One `.mono_unwind` record: the wire form of one MCCFIInstruction.
 struct UnwindRecord {
 	const MCSymbol *at;
@@ -226,8 +312,10 @@ class SideTableEmitPass : public MachineFunctionPass {
 public:
 	static char ID;
 
-	SideTableEmitPass (MCStreamer *streamer, const MonoEHSideChannel *sc)
-		: MachineFunctionPass (ID), streamer_ (streamer), sc_ (sc)
+	SideTableEmitPass (MCStreamer *streamer, const MonoEHSideChannel *sc,
+	                   const IlLineHandler *lines)
+		: MachineFunctionPass (ID), streamer_ (streamer), sc_ (sc),
+		  lines_ (lines)
 	{
 	}
 
@@ -258,6 +346,7 @@ public:
 			emit_clause_table ();
 			emit_guard_table ();
 			emit_unwind_table ();
+			emit_line_table ();
 		}
 
 		/*
@@ -447,8 +536,46 @@ private:
 		}
 	}
 
+	/*
+	 * `.mono_lines`: one block per function, each row an IL offset and the code
+	 * offset it takes effect at, as a label difference the writer folds at
+	 * layout. The rows are the ones the printer's handler planted labels for
+	 * while it walked the machine code.
+	 */
+	void emit_line_table ()
+	{
+		MCStreamer &streamer = *streamer_;
+		MCContext &ctx = streamer.getContext ();
+
+		for (const IlLineHandler::Function &fn : lines_->functions ()) {
+			if (fn.rows.empty ())
+				continue;
+
+			MCSymbol *begin = ctx.getOrCreateSymbol (fn.name);
+
+			streamer.switchSection (ctx.getELFSection (
+				".mono_lines", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+
+			streamer.emitIntValue (lines_section_magic, 4);
+			streamer.emitIntValue (lines_section_version, 2);
+			streamer.emitIntValue (0, 2);
+			streamer.emitIntValue (fn.rows.size (), 4);
+			streamer.emitValue (MCSymbolRefExpr::create (begin, ctx), 8);
+
+			for (const IlLineHandler::Row &row : fn.rows) {
+				streamer.emitValue (
+					MCBinaryExpr::createSub (
+						MCSymbolRefExpr::create (row.at, ctx),
+						MCSymbolRefExpr::create (begin, ctx), ctx),
+					4);
+				streamer.emitIntValue (row.line, 4);
+			}
+		}
+	}
+
 	MCStreamer *streamer_;
 	const MonoEHSideChannel *sc_;
+	const IlLineHandler *lines_;
 };
 
 char SideTableEmitPass::ID;
@@ -593,6 +720,16 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	if (!printer)
 		return make_error<StringError> ("target does not support an AsmPrinter",
 		                                inconvertibleErrorCode ());
+
+	/*
+	 * Registered before the printer is initialized, which is what keeps it
+	 * ahead of the printer's own handlers and alive for the whole run.
+	 */
+	auto lines = std::make_unique<IlLineHandler> (streamer_ptr);
+	IlLineHandler *lines_ptr = lines.get ();
+
+	printer->addAsmPrinterHandler (std::move (lines));
+
 	/*
 	 * Ahead of the printer, so the pass below it closes the interval the
 	 * printer took over one function.
@@ -607,7 +744,7 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 * so the side tables are written while the streamer is still open, before
 	 * the AsmPrinter's own finalization ends the object.
 	 */
-	pm->add (new SideTableEmitPass (streamer_ptr, &side_channel));
+	pm->add (new SideTableEmitPass (streamer_ptr, &side_channel, lines_ptr));
 
 	timed_part.reset ();
 	timed_setup.reset ();

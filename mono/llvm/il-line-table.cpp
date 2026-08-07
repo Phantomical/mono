@@ -33,13 +33,6 @@ struct IlDebugModule::Impl {
 IlDebugModule::IlDebugModule (llvm::Module *module)
 	: impl_ (std::make_unique<Impl> (*module))
 {
-	/*
-	 * DWARF 4 keeps the line-table header self-contained. DWARF 5 moves file and
-	 * directory names out into `.debug_line_str`, which would make reading the
-	 * tables back a two-section job for names nothing here ever looks at.
-	 */
-	if (!module->getModuleFlag ("Dwarf Version"))
-		module->addModuleFlag (llvm::Module::Warning, "Dwarf Version", 4);
 	if (!module->getModuleFlag ("Debug Info Version"))
 		module->addModuleFlag (llvm::Module::Warning, "Debug Info Version",
 		                       llvm::DEBUG_METADATA_VERSION);
@@ -52,14 +45,14 @@ IlDebugModule::IlDebugModule (llvm::Module *module)
 	impl_->file = impl_->di.createFile ("mono-tier1", ".");
 
 	/*
-	 * FullDebug rather than LineTablesOnly. Line tables alone would carry the IL
-	 * offsets, but not which method each one belongs to once a body has been
-	 * inlined - DW_TAG_inlined_subroutine lives in `.debug_info`, and that is the
-	 * whole point of naming the callees.
+	 * NoDebug: this metadata is here to carry IL offsets down to the machine
+	 * layer, where the compiler reads them off the instructions and writes
+	 * `.mono_lines`. Nothing reads DWARF back, so asking for none of it emitted
+	 * is a straight saving.
 	 */
 	impl_->cu = impl_->di.createCompileUnit (
 		llvm::dwarf::DW_LANG_C99, impl_->file, "mono tier-1", /*isOptimized=*/ true, "", 0,
-		llvm::StringRef (), llvm::DICompileUnit::FullDebug);
+		llvm::StringRef (), llvm::DICompileUnit::NoDebug);
 }
 
 IlDebugModule::~IlDebugModule () = default;

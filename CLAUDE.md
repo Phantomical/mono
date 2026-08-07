@@ -273,8 +273,7 @@ Backend debugging env vars:
 - `MONO_LLVM_JIT_HOIST=<word>[,<word>]` (`jit.cpp`) — measurement arms that take one
   piece of per-compile work away so it can be priced; none is a candidate
   implementation and `sharedjd` is not even safe under concurrent compiles.
-  `nodwarf` skips recovering the IL line table, `sharedjd` puts every module in one
-  JITDylib.
+  `sharedjd` puts every module in one JITDylib.
 - `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code
   is bump-allocated out of. Capped at 2GB whatever you ask for, because a slab's code
   and its mutable data reference each other with a PCRel32 and nothing stubs that.
@@ -331,7 +330,9 @@ reverse-engineering it from the emitted arithmetic.
 sections next to the code, all target-neutral and code-relative: `.mono_lsda` (the
 clause table), `.mono_guards` (where each finally body landed and where its guard byte
 sits, which is what the thread-abort delay needs) and `.mono_unwind` (the CFI program,
-recorded at the MC layer while it is still semantics rather than DWARF bytes).
+recorded at the MC layer while it is still semantics rather than DWARF bytes). A fourth,
+`.mono_lines`, is written the same way and carries the IL offset in effect at each code
+offset - what stack traces print and what sequence points are recovered from.
 `sidetables.hpp` is the wire format the writer and `jinfo.cpp` agree on. The personality
 routine a landing pad names is never actually called: mono's own unwinder re-enters
 frames through the pads.
