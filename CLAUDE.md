@@ -178,6 +178,28 @@ is not the target to reach for while iterating. Corpora are built by the regular
 build (`cmake --build build`), not by ctest, so build before running `ctest`
 directly.
 
+A run whose output you intend to read afterwards has to capture that output
+itself:
+
+```bash
+ctest --test-dir build -j6 --output-on-failure > my-run.log 2>&1
+```
+
+`Testing/Temporary/LastTest.log` will not do. CTest keeps one of them per build
+directory and rewrites it per invocation, so any second `ctest` in the same tree
+overwrites it *while the first is still running* — `ctest -N` included, which
+runs nothing at all. What is left looks like an intact log and is a fragment of
+the other run, with a start time and a first test number that do not match the
+run you wanted. A whole-tree sweep is hours, and it is worth giving one its own
+worktree so that nothing else can reach its build directory.
+
+Class-library suites are sensitive to what else the machine is doing, and the
+System.Web ones especially: a page test forks a C# compiler that then runs on
+the runtime being built, all inside ASP.NET's 110s `executionTimeout`, so a busy
+box turns into `HttpException: The request timed out` on a case that passes on a
+quiet one. Check the load average before believing a BCL failure, and re-run it
+quiet before calling it a regression.
+
 Every program in `mono/tests` is its own CTest test, named `<suite>/<program>@<gc>`, so a
 failure names the program and the collector configuration that broke. That is what makes
 `ctest -R runtime/bug-18026` and `--rerun-failed` useful; the price is that `ctest -N`
