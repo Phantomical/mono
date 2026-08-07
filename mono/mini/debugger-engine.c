@@ -890,9 +890,16 @@ mono_de_process_single_step (void *tls, gboolean from_signal)
 	args.nframes = 0;
 	mono_de_ss_start (ss_req, &args);
 
+	/*
+	 * The filter is about class initializers the step wandered into, not the one
+	 * it was asked to step through, so a stop in the request's own start method is
+	 * still reported - the same comparison mono_de_ss_update () and the event
+	 * filter this stop is about to be handed to both make.
+	 */
 	if ((ss_req->filter & STEP_FILTER_STATIC_CTOR) &&
 		(method->flags & METHOD_ATTRIBUTE_SPECIAL_NAME) &&
-		!strcmp (method->name, ".cctor"))
+		!strcmp (method->name, ".cctor") &&
+		method != ss_req->start_method)
 		goto exit;
 
 	// FIXME: Has to lock earlier
