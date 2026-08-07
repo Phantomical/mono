@@ -196,11 +196,19 @@ mini_above_abort_threshold (void)
 	return above_threshold;
 }
 
+/*
+ * The debug info's fallback for placing a native offset in the IL. It is reached
+ * from mono_debug_il_offset_from_address (), whose callers know a method and an
+ * offset into it and nothing about which body produced that offset, so the
+ * per-method table is all there is to answer from.
+ */
 static int
 mono_get_seq_point_for_native_offset (MonoDomain *domain, MonoMethod *method, gint32 native_offset)
 {
+	MonoSeqPointInfo *seq_points = mono_get_seq_points (domain, method);
 	SeqPoint sp;
-	if (mono_find_prev_seq_point_for_native_offset (domain, method, native_offset, NULL, &sp))
+
+	if (seq_points && mono_seq_point_find_prev_by_native_offset (seq_points, native_offset, &sp))
 		return sp.il_offset;
 	return -1;
 }
@@ -1321,7 +1329,7 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 					sf->il_offset = location->il_offset;
 				} else {
 					SeqPoint sp;
-					if (!ji->no_il_offsets && mono_find_prev_seq_point_for_native_offset (domain, jinfo_get_method (ji), native_offset, NULL, &sp))
+					if (!ji->no_il_offsets && mono_find_prev_seq_point_for_native_offset (domain, ji, native_offset, NULL, &sp))
 						sf->il_offset = sp.il_offset;
 					else
 						sf->il_offset = -1;
@@ -1556,12 +1564,10 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 				if (source) {
 					il_offset = source->il_offset;
 				} else {
-					MonoSeqPointInfo *seq_points = NULL;
+					MonoSeqPointInfo *seq_points = (MonoSeqPointInfo *) frame.ji->seq_points;
 
-					// It's more reliable to look into the global cache if possible
-					if (crash_context)
-						seq_points = (MonoSeqPointInfo *) frame.ji->seq_points;
-					else
+					/* The per-method table is behind the domain lock, which a signal handler cannot take. */
+					if (!seq_points && !crash_context)
 						seq_points = mono_get_seq_points (domain, jinfo_get_method (frame.ji));
 
 					SeqPoint sp;

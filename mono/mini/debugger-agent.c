@@ -3289,9 +3289,11 @@ calc_il_offset (MonoDomain *domain, MonoJitInfo *ji, MonoMethod *method, int nat
 	int ret = -1;
 
 	/*
-	 * Both lookups below are keyed by MonoMethod and so answer for the method's
-	 * main body. A filter body is a body of its own, laid out differently, and
-	 * they would place its frame by reading a completely unrelated offset.
+	 * A filter body is a body of its own, laid out differently from the method's
+	 * main body, and neither lookup below can place a frame in it: the sequence
+	 * points such a body carries are the main body's, and
+	 * mono_debug_il_offset_from_address () is keyed by method. Both would read a
+	 * completely unrelated offset.
 	 */
 	if (ji && ji->llvm_side_body)
 		return ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, native_offset);
@@ -3299,7 +3301,7 @@ calc_il_offset (MonoDomain *domain, MonoJitInfo *ji, MonoMethod *method, int nat
 	if (is_top_frame) {
 		SeqPoint sp;
 		/* mono_debug_il_offset_from_address () doesn't seem to be precise enough (#2092) */
-		if (mono_find_prev_seq_point_for_native_offset (domain, method, native_offset, NULL, &sp))
+		if (mono_find_prev_seq_point_for_native_offset (domain, ji, native_offset, NULL, &sp))
 			ret = sp.il_offset;
 	}
 	if (ret == -1)
@@ -5109,7 +5111,7 @@ ss_create_init_args (SingleStepReq *ss_req, SingleStepArgs *args)
 		 * Find the seq point corresponding to the landing site ip, which is the first seq
 		 * point after ip.
 		 */
-		found_sp = mono_find_next_seq_point_for_native_offset (frame.domain, frame.method, frame.native_offset, &info, &args->sp);
+		found_sp = mono_find_next_seq_point_for_native_offset (frame.domain, frame.ji, frame.native_offset, &info, &args->sp);
 		if (!found_sp)
 			no_seq_points_found (frame.method, frame.native_offset);
 		if (!found_sp) {
@@ -5157,7 +5159,7 @@ ss_create_init_args (SingleStepReq *ss_req, SingleStepArgs *args)
 		if (frame) {
 			if (!method && frame->il_offset != -1) {
 				/* FIXME: Sort the table and use a binary search */
-				found_sp = mono_find_prev_seq_point_for_native_offset (frame->de.domain, frame->de.method, frame->de.native_offset, &info, &args->sp);
+				found_sp = mono_find_prev_seq_point_for_native_offset (frame->de.domain, frame->de.ji, frame->de.native_offset, &info, &args->sp);
 				if (!found_sp)
 					no_seq_points_found (frame->de.method, frame->de.native_offset);
 				if (!found_sp) {
@@ -9417,7 +9419,7 @@ thread_commands (int command, guint8 *p, guint8 *end, Buffer *buf)
 		if (tls->frame_count == 0 || tls->frames [0]->actual_method != method)
 			return ERR_INVALID_ARGUMENT;
 
-		found_sp = mono_find_seq_point (domain, method, il_offset, &seq_points, &sp);
+		found_sp = mono_find_seq_point (domain, tls->frames [0]->de.ji, il_offset, &seq_points, &sp);
 
 		g_assert (seq_points);
 
@@ -9511,7 +9513,7 @@ frame_commands (int command, guint8 *p, guint8 *end, Buffer *buf)
 
 	sig = mono_method_signature_internal (frame->actual_method);
 
-	if (!(jit->has_var_info || frame->de.ji->is_interp) || !mono_get_seq_points (frame->de.domain, frame->actual_method))
+	if (!(jit->has_var_info || frame->de.ji->is_interp) || !mono_get_seq_points_by_ji (frame->de.domain, frame->de.ji))
 		/*
 		 * The method is probably from an aot image compiled without soft-debug, variables might be dead, etc.
 		 */
