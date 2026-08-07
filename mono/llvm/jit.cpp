@@ -35,6 +35,7 @@
 #include <llvm/Object/StackMapParser.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/Memory.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
@@ -1182,6 +1183,56 @@ MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
 	}
 
 	return Error::success ();
+}
+
+Expected<void *>
+MonoJit::create_lazy_entry (StringRef name, LazyCompileFunction compile)
+{
+	ExecutionSession &es = jit_->getExecutionSession ();
+
+	return callbacks_->reserve (
+		name, [&es, compile = std::move (compile)] () mutable {
+			Expected<void *> landing = compile ();
+
+			if (landing)
+				return *landing;
+
+			es.reportError (landing.takeError ());
+			return (void *) &lazy_compile_failed;
+		});
+}
+
+Expected<std::vector<void *>>
+MonoJit::create_counter_thunks (uint32_t threshold,
+                                ArrayRef<std::pair<void *, void *>> entries)
+{
+	/*
+	 * One allocation for the counter and every thunk that touches it. They have
+	 * to share a slab: a thunk reads its counter with a rip-relative
+	 * displacement, and only being carved together bounds how far apart they
+	 * can land.
+	 */
+	size_t head = arch::counter_thunk_alignment;
+	size_t bytes = head + entries.size () * arch::counter_thunk_size;
+	Expected<CodeSlabs::Alloc> block = slabs_->allocate_writable (
+		bytes, arch::counter_thunk_alignment);
+
+	if (!block)
+		return block.takeError ();
+
+	auto *counter = reinterpret_cast<uint32_t *> (block->base);
+	char *thunk = block->base + head;
+	std::vector<void *> entered;
+
+	*counter = 0;
+	for (const std::pair<void *, void *> &entry : entries) {
+		entered.push_back (arch::write_counter_thunk (
+			thunk, counter, threshold, entry.first, entry.second));
+		thunk += arch::counter_thunk_size;
+	}
+
+	sys::Memory::InvalidateInstructionCache (block->base, bytes);
+	return entered;
 }
 
 Error

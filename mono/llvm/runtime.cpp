@@ -331,6 +331,32 @@ async_delay ()
 	return ms;
 }
 
+/// How many calls an interpreted method is given before it is compiled.
+///
+/// Ten, and it is not a tuned number: all a threshold really has to do is keep
+/// methods that are called once or twice out of the compiler, and what the
+/// trade is worth past that needs an execution-count distribution measured off
+/// a real workload rather than an argument. MONO_LLVM_JIT_TIER1_THRESHOLD moves
+/// it, which is the point of it being a variable at all; zero there leaves the
+/// selected methods interpreted for good, which is what separates the tier-0
+/// entry path from promotion when one of them misbehaves.
+uint32_t
+tier1_threshold ()
+{
+	static uint32_t calls = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_TIER1_THRESHOLD");
+
+		if (value == nullptr)
+			return 10;
+
+		int set = atoi (value);
+
+		return set > 0 ? set : 0;
+	}();
+
+	return calls;
+}
+
 void
 dump_il (MonoMethod *method, MonoMethodHeader *header)
 {
@@ -662,6 +688,10 @@ private:
 		/// were pointed at. Separate from compiled above, which is what
 		/// everything asking where a method's *code* is reads.
 		std::unordered_map<MonoMethod *, Compiled> interpreted;
+		/// Methods whose call counter has already asked for a tier-1 compile.
+		/// A method has one counter but an entry thunk per door, so this is
+		/// what keeps the request to one however it was reached.
+		std::unordered_set<MonoMethod *> promoting;
 		/// The fastcc-to-interpreter shims compiled here, by the prototype
 		/// each serves. One shim stands for every method with that prototype.
 		std::unordered_map<std::string, void *> shims;
@@ -737,7 +767,25 @@ private:
 	/// Recording the result is what makes the new code the answer everything
 	/// downstream gives for the method; the redirects are what make callers
 	/// that were compiled long ago reach it.
-	Expected<Compiled> compile_and_publish (DomainState &state, MonoMethod *method);
+	///
+	/// TIER1 asks for a compile even where the routing would have interpreted
+	/// the method, which is what promoting one means.
+	Expected<Compiled> compile_and_publish (DomainState &state, MonoMethod *method,
+	                                        bool tier1 = false);
+
+	/// Ask for METHOD, which is being interpreted in STATE, to be compiled on
+	/// the background worker and its stubs redirected to the result.
+	///
+	/// Called from the method's own call counter, on the thread that made the
+	/// call that reached the threshold, and at most once for the method.
+	void request_promotion (DomainState &state, MonoMethod *method);
+
+	/// The entries an interpreted METHOD is reached through, each behind a
+	/// thunk counting calls towards a compile. ENTRIES is what the stubs would
+	/// have been pointed at without one; the addresses returned replace them.
+	Expected<std::vector<void *>> counted_entries (DomainState &state,
+	                                               MonoMethod *method,
+	                                               ArrayRef<void *> entries);
 
 	/// Ask for METHOD to be compiled again on the background worker, its stubs
 	/// redirected to the second body when it is done. Returns quietly when the
@@ -2025,8 +2073,118 @@ Backend::ensure_entries (DomainState &state, MonoMethod *method, bool again)
 	return code;
 }
 
+void
+Backend::request_promotion (DomainState &state, MonoMethod *method)
+{
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+
+		if (!state.promoting.insert (method).second)
+			return;
+	}
+
+	/*
+	 * The state is captured raw: it cannot be destroyed until its channel has
+	 * been closed, and closing waits for this work. See DomainState::queue.
+	 */
+	DomainState *owner = &state;
+	bool queued = state.queue->enqueue (method, [this, owner, method] {
+		if (unsigned ms = async_delay ())
+			std::this_thread::sleep_for (std::chrono::milliseconds (ms));
+
+		Expected<Compiled> code = compile_and_publish (*owner, method, true);
+
+		if (code) {
+			if (tracing ()) {
+				char *name = mono_method_full_name (method, TRUE);
+
+				fprintf (stderr, "[llvm-jit] promoted %s\n", name);
+				g_free (name);
+			}
+			return;
+		}
+
+		/*
+		 * Nobody is waiting for this and the method is still being interpreted,
+		 * which is a correct way to run it. A promotion that fails therefore
+		 * leaves the method exactly as it was rather than raising.
+		 */
+		if (tracing ()) {
+			char *name = mono_method_full_name (method, TRUE);
+
+			fprintf (stderr, "[llvm-jit] promoting %s failed: %s\n", name,
+			         toString (code.takeError ()).c_str ());
+			g_free (name);
+			return;
+		}
+		consumeError (code.takeError ());
+	});
+
+	/*
+	 * A refusal is the domain being torn down or the queue having stopped, and
+	 * the counter has already fired for good - so the method stays interpreted
+	 * for the rest of its life. That is the direction that cannot be wrong, and
+	 * it is why nothing here retries.
+	 */
+	if (!queued && tracing ()) {
+		char *name = mono_method_full_name (method, TRUE);
+
+		fprintf (stderr, "[llvm-jit] promotion of %s was refused\n", name);
+		g_free (name);
+	}
+}
+
+Expected<std::vector<void *>>
+Backend::counted_entries (DomainState &state, MonoMethod *method,
+                          ArrayRef<void *> entries)
+{
+	/*
+	 * One trampoline per entry rather than one for the method: each has to
+	 * carry on into the door the call came for, and a re-entry trampoline
+	 * remembers a single landing address. They share the counter, so whichever
+	 * fires is the only one that ever does, and they share the request behind
+	 * it either way.
+	 */
+	DomainState *owner = &state;
+	std::vector<std::pair<void *, void *>> doors;
+
+	for (size_t i = 0; i < entries.size (); ++i) {
+		void *carry_on = entries[i];
+		std::string name = symbol_for_code (method) + "$promote."
+		                   + std::to_string (i);
+		Expected<void *> promote = state.jit->create_lazy_entry (
+			name, [this, owner, method, carry_on] () -> Expected<void *> {
+				request_promotion (*owner, method);
+				return carry_on;
+			});
+
+		if (!promote)
+			return promote.takeError ();
+		doors.push_back ({ carry_on, *promote });
+	}
+
+	Expected<std::vector<void *>> thunks =
+		state.jit->create_counter_thunks (tier1_threshold (), doors);
+
+	if (!thunks)
+		return thunks;
+
+	/*
+	 * A thunk touches no stack, so a walk that catches a thread in one is
+	 * looking at the frame the call left behind - which is what the stub unwind
+	 * program says and what these records hand back.
+	 */
+	for (size_t i = 0; i < thunks->size (); ++i)
+		register_stub_jinfo (state.domain, method, (*thunks)[i],
+		                     arch::counter_thunk_code_size,
+		                     symbol_for_code (method) + "$count."
+		                             + std::to_string (i));
+
+	return thunks;
+}
+
 Expected<Backend::Compiled>
-Backend::compile_and_publish (DomainState &state, MonoMethod *method)
+Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1)
 {
 	/*
 	 * Materialize as the domain the code is for. Translation itself is kept
@@ -2047,7 +2205,7 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method)
 			mono_domain_set_internal_with_options (entered, FALSE);
 	};
 
-	if (runs_at_tier0 (method)) {
+	if (!tier1 && runs_at_tier0 (method)) {
 		ERROR_DECL (interp_error);
 		void *legacy = mini_get_interp_callbacks ()->create_method_pointer (
 			method, TRUE, interp_error);
@@ -2156,15 +2314,37 @@ Backend::interp_entries (DomainState &state, MonoMethod *method, void *legacy)
 	if (!body)
 		return body.takeError ();
 
+	void *counted_legacy = legacy;
+	void *counted_body = *body;
+
+	/*
+	 * The two doors share one counter, so N is N calls to the method rather
+	 * than N through whichever of them the callers happened to use. The
+	 * unboxing trampoline below is built over the counted legacy entry rather
+	 * than over the bare one, so a call arriving at a value type's vtable slot
+	 * counts like any other.
+	 */
+	if (tier1_threshold () != 0) {
+		Expected<std::vector<void *>> counted =
+			counted_entries (state, method, { legacy, *body });
+
+		if (!counted)
+			return counted.takeError ();
+
+		counted_legacy = (*counted)[0];
+		counted_body = (*counted)[1];
+	}
+
 	/*
 	 * The receiver a value type's vtable slot arrives with is the boxed object,
 	 * and stepping it past the header is the whole of the difference - so this
 	 * is the runtime's own unboxing trampoline over the interpreter's entry,
 	 * the same one a method whose code the backend did not generate gets.
 	 */
-	Compiled entries { legacy, *body,
+	Compiled entries { counted_legacy, counted_body,
 		           publishes_unbox_entry (method)
-		                   ? mono_arch_get_unbox_trampoline (method, legacy)
+		                   ? mono_arch_get_unbox_trampoline (method,
+		                                                     counted_legacy)
 		                   : nullptr };
 
 	/*

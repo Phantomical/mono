@@ -12,6 +12,7 @@
 #ifndef MONO_LLVM_JIT_HPP
 #define MONO_LLVM_JIT_HPP
 
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/FunctionExtras.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
@@ -201,6 +202,28 @@ public:
 	/// caller's frame instead, which is the arch resolver's business.
 	llvm::Error create_lazy_stub (llvm::StringRef name,
 	                              LazyCompileFunction compile);
+
+	/// Reserve the re-entry trampoline of a lazy stub without the stub.
+	///
+	/// COMPILE runs on the first thread to arrive, in the middle of that call,
+	/// and every later arrival continues into the address it returned. Nothing
+	/// is redirected: whatever jumps here goes on jumping here, which is what
+	/// makes this usable from code that is not a stub. NAME is what release ()
+	/// takes and has to be unique like a stub's.
+	llvm::Expected<void *> create_lazy_entry (llvm::StringRef name,
+	                                          LazyCompileFunction compile);
+
+	/// Publish a call counter shared by ENTRIES, and in front of each of them a
+	/// thunk that maintains it: a call jumps on to the entry it came for, and
+	/// the THRESHOLD'th call to any of them goes to that entry's promote
+	/// address instead.
+	///
+	/// ENTRIES is (where a call carries on, where the THRESHOLD'th one goes);
+	/// the addresses returned are the thunks, in the same order, which is what
+	/// a stub in front of them is pointed at.
+	llvm::Expected<std::vector<void *>> create_counter_thunks (
+		uint32_t threshold,
+		llvm::ArrayRef<std::pair<void *, void *>> entries);
 
 	/// Point NAME's stub at TARGET, which every subsequent call through the
 	/// stub reaches. Callers are untouched - nothing is patched but the stub's
