@@ -273,7 +273,6 @@ Backend debugging env vars:
 - `MONO_LLVM_JIT_HOIST=<word>[,<word>]` (`jit.cpp`) — measurement arms that take one
   piece of per-compile work away so it can be priced; none is a candidate
   implementation and `sharedjd` is not even safe under concurrent compiles.
-  `passbuilder` keeps the PassBuilder and the analysis managers per thread,
   `nodwarf` skips recovering the IL line table, `sharedjd` puts every module in one
   JITDylib.
 - `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code

@@ -89,7 +89,8 @@ thread_local uint64_t g_object_handed = 0;
 /*
  * MONO_LLVM_JIT_HOIST names the experiments below, comma separated. None of
  * them is on by default and none is meant to be: they exist to put a number on
- * what taking one piece of per-compile work away is worth.
+ * what taking one piece of per-compile work away is worth, and one of them
+ * (`sharedjd`) is not even safe under concurrent compiles.
  */
 bool
 hoisting (StringRef what)
@@ -785,9 +786,16 @@ namespace {
 thread_local Module *g_verify_module = nullptr;
 thread_local VerifyLevel g_verify_level = VerifyLevel::off;
 
-/// One thread's copy of everything run_tier0_pipeline () otherwise builds per
-/// module, for the MONO_LLVM_JIT_HOIST=passbuilder experiment.
-struct HoistedPipeline {
+/*
+ * The tier-0 IR pipeline and everything it is built out of, kept per thread.
+ *
+ * None of it depends on the module it is about to run over, and standing it up
+ * costs a couple of percent of a small method's compile, so a compile thread
+ * builds it once and reuses it. What that does make the caller responsible for
+ * is emptying the analysis managers after each run, since their results are
+ * keyed by IR the module is about to take with it.
+ */
+struct Tier0Pipeline {
 	PassInstrumentationCallbacks pic;
 	LoopAnalysisManager lam;
 	FunctionAnalysisManager fam;
@@ -796,10 +804,17 @@ struct HoistedPipeline {
 	std::unique_ptr<PassBuilder> pb;
 	ModulePassManager mpm;
 
-	HoistedPipeline ();
+	Tier0Pipeline ();
+
+	/*
+	 * Drop every cached analysis. Has to happen while the module the results
+	 * were computed over is still standing: a cached MemorySSA holds
+	 * references into that IR and its destructor walks them.
+	 */
+	void forget_analyses ();
 };
 
-HoistedPipeline::HoistedPipeline ()
+Tier0Pipeline::Tier0Pipeline ()
 {
 	pic.registerAfterPassCallback (
 		[] (StringRef pass, Any, const PreservedAnalyses &) {
@@ -810,6 +825,10 @@ HoistedPipeline::HoistedPipeline ()
 				               ("after pass \"" + pass + "\"").str ());
 		});
 
+	/*
+	 * A TargetMachine so TargetTransformInfo is real; without one the
+	 * cost-model-driven parts of the pipeline silently no-op.
+	 */
 	pb = std::make_unique<PassBuilder> (&host_target_machine (),
 	                                    PipelineTuningOptions (), std::nullopt,
 	                                    &pic);
@@ -818,99 +837,6 @@ HoistedPipeline::HoistedPipeline ()
 	pb->registerFunctionAnalyses (fam);
 	pb->registerLoopAnalyses (lam);
 	pb->crossRegisterProxies (lam, fam, cgam, mam);
-
-	mpm.addPass (ArrayAddressPass ());
-	mpm.addPass (LowerBuiltinsPass ());
-	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
-
-	FunctionPassManager fpm = pb->buildFunctionSimplificationPipeline (
-		OptimizationLevel::O1, ThinOrFullLTOPhase::None);
-
-	fpm.addPass (ClassInitPass ());
-	fpm.addPass (TailCallElimPass ());
-	fpm.addPass (RestoreTailPositionPass ());
-	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
-	mpm.addPass (arch::LegacyAbiPass ());
-}
-
-HoistedPipeline &
-hoisted_pipeline ()
-{
-	static thread_local HoistedPipeline pipeline;
-
-	return pipeline;
-}
-
-} // namespace
-
-void
-MonoJit::run_tier0_pipeline (Module &m)
-{
-	timing::Scope timed (timing::Phase::pipeline);
-	VerifyLevel verify = verify_level ();
-	PassInstrumentationCallbacks pic;
-
-	if (verify != VerifyLevel::off) {
-		verify_or_die (m, "as translated");
-		pic.registerAfterPassCallback (
-			[&m, verify] (StringRef pass, Any, const PreservedAnalyses &) {
-				if (verify == VerifyLevel::each || is_mono_pass (pass))
-					verify_or_die (
-						m, ("after pass \"" + pass + "\"").str ());
-			});
-	}
-
-	std::optional<timing::Scope> timed_setup (std::in_place,
-	                                          timing::Phase::pbsetup);
-
-	/*
-	 * Everything from here to the run is the same object graph every time, so
-	 * one kept per thread and reused answers what building it costs. The
-	 * analysis managers have to be emptied between modules: their results are
-	 * keyed by IR that the last module took with it.
-	 */
-	if (hoisting ("passbuilder")) {
-		HoistedPipeline &hoisted = hoisted_pipeline ();
-
-		g_verify_module = verify != VerifyLevel::off ? &m : nullptr;
-		g_verify_level = verify;
-		timed_setup.reset ();
-		{
-			timing::Scope timed_run (timing::Phase::prun);
-
-			hoisted.mpm.run (m, hoisted.mam);
-
-			/*
-			 * While the module is still standing: a cached result holds
-			 * references into the IR it was computed over, and MemorySSA's
-			 * destructor walks them.
-			 */
-			hoisted.mam.clear ();
-			hoisted.cgam.clear ();
-			hoisted.fam.clear ();
-			hoisted.lam.clear ();
-		}
-		g_verify_module = nullptr;
-		return;
-	}
-
-	/*
-	 * A TargetMachine so TargetTransformInfo is real; without one the
-	 * cost-model-driven parts of the pipeline silently no-op.
-	 */
-	PassBuilder pb (&host_target_machine (), PipelineTuningOptions (),
-	                std::nullopt, &pic);
-	LoopAnalysisManager lam;
-	FunctionAnalysisManager fam;
-	CGSCCAnalysisManager cgam;
-	ModuleAnalysisManager mam;
-	pb.registerModuleAnalyses (mam);
-	pb.registerCGSCCAnalyses (cgam);
-	pb.registerFunctionAnalyses (fam);
-	pb.registerLoopAnalyses (lam);
-	pb.crossRegisterProxies (lam, fam, cgam, mam);
-
-	ModulePassManager mpm;
 
 	/*
 	 * Before the pipeline, so the optimizer sees the element arithmetic;
@@ -937,7 +863,7 @@ MonoJit::run_tier0_pipeline (Module &m)
 	 * the module by symbol. Running them anyway costs a large fraction of
 	 * tier-0 compile time.
 	 */
-	FunctionPassManager fpm = pb.buildFunctionSimplificationPipeline (
+	FunctionPassManager fpm = pb->buildFunctionSimplificationPipeline (
 		OptimizationLevel::O1, ThinOrFullLTOPhase::None);
 
 	fpm.addPass (ClassInitPass ());
@@ -961,13 +887,54 @@ MonoJit::run_tier0_pipeline (Module &m)
 	fpm.addPass (RestoreTailPositionPass ());
 	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
 	mpm.addPass (arch::LegacyAbiPass ());
+}
 
+void
+Tier0Pipeline::forget_analyses ()
+{
+	mam.clear ();
+	cgam.clear ();
+	fam.clear ();
+	lam.clear ();
+}
+
+Tier0Pipeline &
+tier0_pipeline ()
+{
+	static thread_local Tier0Pipeline pipeline;
+
+	return pipeline;
+}
+
+} // namespace
+
+void
+MonoJit::run_tier0_pipeline (Module &m)
+{
+	timing::Scope timed (timing::Phase::pipeline);
+	VerifyLevel verify = verify_level ();
+
+	if (verify != VerifyLevel::off)
+		verify_or_die (m, "as translated");
+
+	std::optional<timing::Scope> timed_setup (std::in_place,
+	                                          timing::Phase::pbsetup);
+	Tier0Pipeline &pipeline = tier0_pipeline ();
+
+	/*
+	 * The after-pass verifier is registered once with the pipeline, so which
+	 * module it looks at is handed over here rather than captured.
+	 */
+	g_verify_module = verify != VerifyLevel::off ? &m : nullptr;
+	g_verify_level = verify;
 	timed_setup.reset ();
 	{
 		timing::Scope timed_run (timing::Phase::prun);
 
-		mpm.run (m, mam);
+		pipeline.mpm.run (m, pipeline.mam);
+		pipeline.forget_analyses ();
 	}
+	g_verify_module = nullptr;
 }
 
 Expected<std::unique_ptr<MonoJit>>
