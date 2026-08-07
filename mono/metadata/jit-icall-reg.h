@@ -333,7 +333,6 @@ MONO_JIT_ICALL (ves_icall_array_new) \
 MONO_JIT_ICALL (ves_icall_array_new_specific) \
 MONO_JIT_ICALL (ves_icall_marshal_alloc) \
 MONO_JIT_ICALL (ves_icall_mono_delegate_ctor) \
-MONO_JIT_ICALL (ves_icall_mono_delegate_ctor_interp) \
 MONO_JIT_ICALL (ves_icall_mono_ldstr) \
 MONO_JIT_ICALL (ves_icall_mono_marshal_xdomain_copy_value) \
 MONO_JIT_ICALL (ves_icall_mono_string_from_utf16) \

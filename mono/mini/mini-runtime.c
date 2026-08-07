@@ -3720,6 +3720,13 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 				g_assert (!mono_class_is_gtd (method->klass));
 			}
 		}
+
+		/*
+		 * An entry point the interpreter published is not code the jit-info table
+		 * knows about, so the engine that made it is the one that can name it.
+		 */
+		if (!method && mono_use_interpreter)
+			method = mini_get_interp_callbacks ()->method_from_entry (domain, lookup_addr);
 	}
 
 	/*
@@ -4534,7 +4541,6 @@ register_icalls (void)
 
 	/* other jit icalls */
 	register_icall (ves_icall_mono_delegate_ctor, mono_icall_sig_void_object_object_ptr, FALSE);
-	register_icall (ves_icall_mono_delegate_ctor_interp, mono_icall_sig_void_object_object_ptr, FALSE);
 	register_icall (mono_class_static_field_address,
 				 mono_icall_sig_ptr_ptr_ptr, FALSE);
 	register_icall (mono_ldtoken_wrapper, mono_icall_sig_ptr_ptr_ptr_ptr, FALSE);

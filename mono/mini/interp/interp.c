@@ -265,7 +265,11 @@ interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs 
 
 static MonoException* do_transform_method (InterpFrame *frame, ThreadContext *context);
 
-static InterpMethod* lookup_method_pointer (gpointer addr);
+static InterpMethod* lookup_method_pointer (MonoDomain *domain, gpointer addr);
+
+static gpointer interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *error);
+
+static InterpMethod* imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error);
 
 typedef void (*ICallMethod) (InterpFrame *frame);
 
@@ -484,7 +488,7 @@ interp_get_remoting_invoke (MonoMethod *method, gpointer addr, MonoError *error)
 	InterpMethod *imethod;
 
 	if (addr) {
-		imethod = lookup_method_pointer (addr);
+		imethod = lookup_method_pointer (mono_domain_get (), addr);
 	} else {
 		g_assert (method);
 		imethod = mono_interp_get_imethod (mono_domain_get (), method, error);
@@ -1649,19 +1653,26 @@ exit_pinvoke:
 static void
 interp_init_delegate (MonoDelegate *del, MonoError *error)
 {
+	MonoDomain *domain = del->object.vtable->domain;
 	MonoMethod *method;
 
 	if (del->interp_method) {
-		/* Delegate created by a call to ves_icall_mono_delegate_ctor_interp () */
+		/* A remoting invoke, already resolved by mini_init_delegate (). */
 		del->method = ((InterpMethod *)del->interp_method)->method;
-	} if (del->method_ptr && !del->method) {
-		/* Delegate created from methodInfo.MethodHandle.GetFunctionPointer() */
-		del->interp_method = (InterpMethod *)del->method_ptr;
 	} else if (del->method) {
-		/* Delegate created dynamically */
-		del->interp_method = mono_interp_get_imethod (del->object.vtable->domain, del->method, error);
+		del->interp_method = mono_interp_get_imethod (domain, del->method, error);
+		return_if_nok (error);
+	} else if (del->method_ptr) {
+		/*
+		 * An entry point and nothing else - ldftn's product, or
+		 * MethodHandle.GetFunctionPointer's. Whichever engine published it knows
+		 * which method it stands for.
+		 */
+		del->interp_method = imethod_for_entry (domain, del->method_ptr, error);
+		return_if_nok (error);
+		g_assert (del->interp_method);
+		del->method = ((InterpMethod *)del->interp_method)->method;
 	} else {
-		/* Created from JITted code */
 		g_assert_not_reached ();
 	}
 
@@ -1684,7 +1695,7 @@ interp_init_delegate (MonoDelegate *del, MonoError *error)
 			 * FIXME We should do this later, when we also know the delegate on which the
 			 * target method is called.
 			 */
-			del->interp_method = mono_interp_get_imethod (del->object.vtable->domain, mono_marshal_get_delegate_invoke (method, NULL), error);
+			del->interp_method = mono_interp_get_imethod (domain, mono_marshal_get_delegate_invoke (method, NULL), error);
 			mono_error_assert_ok (error);
 		}
 	}
@@ -1694,33 +1705,6 @@ interp_init_delegate (MonoDelegate *del, MonoError *error)
 		mono_interp_transform_method ((InterpMethod *) del->interp_method, get_context (), error);
 		return_if_nok (error);
 	}
-}
-
-static void
-interp_delegate_ctor (MonoObjectHandle this_obj, MonoObjectHandle target, gpointer addr, MonoError *error)
-{
-	/*
-	 * addr is the result of an LDFTN opcode, i.e. an InterpMethod
-	 */
-	InterpMethod *imethod = (InterpMethod*)addr;
-
-	if (!(imethod->method->flags & METHOD_ATTRIBUTE_STATIC)) {
-		MonoMethod *invoke = mono_get_delegate_invoke_internal (mono_handle_class (this_obj));
-		/* virtual invoke delegates must not have null check */
-		if (mono_method_signature_internal (imethod->method)->param_count == mono_method_signature_internal (invoke)->param_count
-				&& MONO_HANDLE_IS_NULL (target)) {
-			mono_error_set_argument (error, "this", "Delegate to an instance method cannot have null 'this'");
-			return;
-		}
-	}
-
-	g_assert (imethod->method);
-	gpointer entry = mini_get_interp_callbacks ()->create_method_pointer (imethod->method, FALSE, error);
-	return_if_nok (error);
-
-	MONO_HANDLE_SETVAL (MONO_HANDLE_CAST (MonoDelegate, this_obj), interp_method, gpointer, imethod);
-
-	mono_delegate_ctor (this_obj, target, entry, imethod->method, error);
 }
 
 /*
@@ -2767,9 +2751,8 @@ interp_entry_from_trampoline (gpointer ccontext_untyped, gpointer rmethod_untype
 #endif /* MONO_ARCH_HAVE_INTERP_ENTRY_TRAMPOLINE */
 
 static InterpMethod*
-lookup_method_pointer (gpointer addr)
+lookup_method_pointer (MonoDomain *domain, gpointer addr)
 {
-	MonoDomain *domain = mono_domain_get ();
 	MonoJitDomainInfo *info = domain_jit_info (domain);
 	InterpMethod *res = NULL;
 
@@ -2779,6 +2762,60 @@ lookup_method_pointer (gpointer addr)
 	mono_domain_unlock (domain);
 
 	return res;
+}
+
+/*
+ * The entry point standing for IMETHOD, creating one if it has none yet.
+ */
+static gpointer
+entry_for_imethod (InterpMethod *imethod, MonoError *error)
+{
+	if (imethod->jit_entry)
+		return imethod->jit_entry;
+
+	return interp_create_method_pointer (imethod->method, FALSE, error);
+}
+
+/*
+ * The method an entry point stands for, or NULL if this domain published no such
+ * entry.
+ *
+ * ldftn's product is an entry point in both engines, so a delegate constructor - or
+ * anything else handed one - recovers the method by asking the engine that published
+ * it: the jit-info table for a compiled entry, this for an interpreted one.
+ */
+static MonoMethod*
+interp_method_from_entry (MonoDomain *domain, gpointer addr)
+{
+	InterpMethod *imethod = lookup_method_pointer (domain, addr);
+
+	return imethod ? imethod->method : NULL;
+}
+
+/*
+ * The InterpMethod to execute for the entry point ADDR, whichever engine published
+ * it. Returns NULL for a pointer that names no method at all.
+ */
+static InterpMethod*
+imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
+{
+	InterpMethod *imethod = lookup_method_pointer (domain, addr);
+
+	if (imethod)
+		return imethod;
+
+	/*
+	 * A compiled entry: the method is the one whose code that address falls in.
+	 * Executing it here rather than jumping to the code keeps a single engine in
+	 * charge of the frame.
+	 */
+	MonoJitInfo *ji = mono_jit_info_table_find_internal (
+		domain, mono_get_addr_from_ftnptr (MINI_FTNPTR_TO_ADDR (addr)), TRUE, TRUE);
+
+	if (!ji || ji->is_trampoline)
+		return NULL;
+
+	return mono_interp_get_imethod (domain, mono_jit_info_get_method (ji), error);
 }
 
 #ifndef MONO_ARCH_HAVE_INTERP_NATIVE_TO_MANAGED
@@ -3299,6 +3336,7 @@ interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs 
 	const guint16 *ip = NULL;
 	unsigned char *locals = NULL;
 	int call_args_offset;
+	MonoMethodSignature *calli_signature;
 
 #if DEBUG_INTERP
 	int tracing = global_tracing;
@@ -3556,27 +3594,55 @@ main_loop:
 			goto call;
 		}
 		MINT_IN_CASE(MINT_CALLI) {
-			MonoMethodSignature *csignature;
+			gpointer ftn = LOCAL_VAR (ip [2], gpointer);
 
-			csignature = (MonoMethodSignature*)frame->imethod->data_items [ip [3]];
+			/*
+			 * A method pointer is an entry point, so which method it names is a
+			 * question for the engine that published it. The answer is cached per
+			 * call site: an indirect call site is nearly always monomorphic, and
+			 * the entry a method was published under is on its InterpMethod.
+			 */
+			cmethod = (InterpMethod*)frame->imethod->data_items [ip [4]];
+			if (G_UNLIKELY (!cmethod || cmethod->jit_entry != ftn)) {
+				error_init_reuse (error);
+				cmethod = imethod_for_entry (frame->imethod->domain, ftn, error);
+				mono_interp_error_cleanup (error); /* FIXME: don't swallow the error */
+				if (!cmethod)
+					THROW_EX (mono_get_exception_execution_engine ("Attempt to call through a pointer that names no method"), ip);
+				if (cmethod->jit_entry == ftn)
+					frame->imethod->data_items [ip [4]] = cmethod;
+			}
 
+			calli_signature = (MonoMethodSignature*)frame->imethod->data_items [ip [3]];
+			call_args_offset = ip [1];
+			ip += 5;
+			goto calli;
+		}
+		MINT_IN_CASE(MINT_CALLI_IMETHOD) {
+			/*
+			 * The private half of MINT_LD_DELEGATE_METHOD_PTR: a delegate-invoke
+			 * wrapper reads the delegate's target and calls it, and inside the
+			 * interpreter that target is already an InterpMethod. Only that pair
+			 * emits this, so no entry point ever reaches it.
+			 */
 			cmethod = LOCAL_VAR (ip [2], InterpMethod*);
+			calli_signature = (MonoMethodSignature*)frame->imethod->data_items [ip [3]];
+			call_args_offset = ip [1];
+			ip += 4;
+calli:
 			if (cmethod->method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) {
 				cmethod = mono_interp_get_imethod (frame->imethod->domain, mono_marshal_get_native_wrapper (cmethod->method, FALSE, FALSE), error);
 				mono_interp_error_cleanup (error); /* FIXME: don't swallow the error */
 			}
 
-			call_args_offset = ip [1];
-
-			if (csignature->hasthis) {
-				MonoObject *this_arg = LOCAL_VAR (call_args_offset, MonoObject*); 
+			if (calli_signature->hasthis) {
+				MonoObject *this_arg = LOCAL_VAR (call_args_offset, MonoObject*);
 
 				if (m_class_is_valuetype (this_arg->vtable->klass)) {
 					gpointer unboxed = mono_object_unbox_internal (this_arg);
 					LOCAL_VAR (call_args_offset, gpointer) = unboxed;
 				}
 			}
-			ip += 4;
 
 			goto call;
 		}
@@ -6587,7 +6653,9 @@ call:
 #undef RELOP_CAST
 
 		MINT_IN_CASE(MINT_LDFTN) {
-			LOCAL_VAR (ip [1], gpointer) = frame->imethod->data_items [ip [2]];
+			error_init_reuse (error);
+			LOCAL_VAR (ip [1], gpointer) = entry_for_imethod ((InterpMethod*)frame->imethod->data_items [ip [2]], error);
+			mono_error_assert_ok (error);
 			ip += 3;
 			MINT_IN_BREAK;
 		}
@@ -6595,8 +6663,10 @@ call:
 			InterpMethod *m = (InterpMethod*)frame->imethod->data_items [ip [3]];
 			MonoObject *o = LOCAL_VAR (ip [2], MonoObject*);
 			NULL_CHECK (o);
-				
-			LOCAL_VAR (ip [1], gpointer) = get_virtual_method (m, o->vtable);
+
+			error_init_reuse (error);
+			LOCAL_VAR (ip [1], gpointer) = entry_for_imethod (get_virtual_method (m, o->vtable), error);
+			mono_error_assert_ok (error);
 			ip += 4;
 			MINT_IN_BREAK;
 		}
@@ -6604,7 +6674,8 @@ call:
 			error_init_reuse (error);
 			InterpMethod *m = mono_interp_get_imethod (mono_domain_get (), LOCAL_VAR (ip [2], MonoMethod*), error);
 			mono_error_assert_ok (error);
-			LOCAL_VAR (ip [1], gpointer) = m;
+			LOCAL_VAR (ip [1], gpointer) = entry_for_imethod (m, error);
+			mono_error_assert_ok (error);
 			ip += 3;
 			MINT_IN_BREAK;
 		}

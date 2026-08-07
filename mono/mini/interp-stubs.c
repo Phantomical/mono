@@ -172,10 +172,11 @@ stub_get_remoting_invoke (MonoMethod *method, gpointer imethod, MonoError *error
 	return NULL;
 }
 
-static void
-stub_delegate_ctor (MonoObjectHandle this_obj, MonoObjectHandle target, gpointer addr, MonoError *error)
+static MonoMethod*
+stub_method_from_entry (MonoDomain *domain, gpointer addr)
 {
 	g_assert_not_reached ();
+	return NULL;
 }
 
 static void

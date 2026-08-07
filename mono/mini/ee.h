@@ -14,7 +14,7 @@
 #ifndef __MONO_EE_H__
 #define __MONO_EE_H__
 
-#define MONO_EE_API_VERSION 0x10
+#define MONO_EE_API_VERSION 0x11
 
 typedef struct _MonoInterpStackIter MonoInterpStackIter;
 
@@ -33,7 +33,7 @@ typedef gpointer MonoInterpFrameHandle;
 	MONO_EE_CALLBACK (void, free_method, (MonoDomain *domain, MonoMethod *method)) \
 	MONO_EE_CALLBACK (MonoObject*, runtime_invoke, (MonoMethod *method, void *obj, void **params, MonoObject **exc, MonoError *error)) \
 	MONO_EE_CALLBACK (void, init_delegate, (MonoDelegate *del, MonoError *error)) \
-	MONO_EE_CALLBACK (void, delegate_ctor, (MonoObjectHandle this_obj, MonoObjectHandle target, gpointer addr, MonoError *error)) \
+	MONO_EE_CALLBACK (MonoMethod*, method_from_entry, (MonoDomain *domain, gpointer addr)) \
 	MONO_EE_CALLBACK (gpointer, get_remoting_invoke, (MonoMethod *method, gpointer imethod, MonoError *error)) \
 	MONO_EE_CALLBACK (void, set_resume_state, (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExceptionInfo *ei, MonoInterpFrameHandle interp_frame, gpointer handler_ip)) \
 	MONO_EE_CALLBACK (void, get_resume_state, (const MonoJitTlsData *jit_tls, gboolean *has_resume_state, MonoInterpFrameHandle *interp_frame, gpointer *handler_ip)) \

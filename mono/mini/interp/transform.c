@@ -2277,7 +2277,7 @@ interp_handle_intrinsics (TransformData *td, MonoMethod *target_method, MonoClas
 		}
 #endif
 	} else if (in_corlib && !strcmp (klass_name_space, "System") && !strcmp (klass_name, "RuntimeMethodHandle") && !strcmp (tm, "GetFunctionPointer") && csignature->param_count == 1) {
-		// We must intrinsify this method on interp so we don't return a pointer to native code entering interpreter
+		// Same answer as the icall, without transforming the method to get it.
 		*op = MINT_LDFTN_DYNAMIC;
 	} else if (in_corlib && target_method->klass == mono_defaults.systemtype_class && !strcmp (target_method->name, "op_Equality")) {
 		*op = MINT_CEQ_P;
@@ -2770,7 +2770,8 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 	MonoImage *image = m_class_get_image (method->klass);
 	MonoMethodSignature *csignature;
 	int is_virtual = *td->ip == CEE_CALLVIRT;
-	int calli = *td->ip == CEE_CALLI || *td->ip == CEE_MONO_CALLI_EXTRA_ARG;
+	int calli_extra_arg = *td->ip == CEE_MONO_CALLI_EXTRA_ARG;
+	int calli = *td->ip == CEE_CALLI || calli_extra_arg;
 	int i;
 	guint32 res_size = 0;
 	int op = -1;
@@ -3120,11 +3121,23 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 				td->last_ins->data [2] = save_last_error;
 				/* Cache slot */
 				td->last_ins->data [3] = get_data_item_index_nonshared (td, NULL);
+			} else if (calli_extra_arg) {
+				/*
+				 * Only a delegate-invoke wrapper emits this, and only over what
+				 * MINT_LD_DELEGATE_METHOD_PTR just pushed - the delegate's target
+				 * as an InterpMethod, which needs no resolving.
+				 */
+				interp_add_ins (td, MINT_CALLI_IMETHOD);
+				interp_ins_set_dreg (td->last_ins, dreg);
+				interp_ins_set_sreg (td->last_ins, fp_sreg);
+				td->last_ins->data [0] = get_data_item_index (td, (void *)csignature);
 			} else {
 				interp_add_ins (td, MINT_CALLI);
 				interp_ins_set_dreg (td->last_ins, dreg);
 				interp_ins_set_sreg (td->last_ins, fp_sreg);
 				td->last_ins->data [0] = get_data_item_index (td, (void *)csignature);
+				/* Cache slot for the entry point this site last resolved */
+				td->last_ins->data [1] = get_data_item_index_nonshared (td, NULL);
 			}
 		} else {
 			InterpMethod *imethod = mono_interp_get_imethod (domain, target_method, error);
@@ -6626,7 +6639,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 					td->ip += 5;
 					const gconstpointer func = mono_find_jit_icall_info ((MonoJitICallId)token)->func;
 
-					interp_add_ins (td, MINT_LDFTN);
+					interp_add_ins (td, MINT_MONO_LDPTR);
 					push_simple_type (td, STACK_TYPE_I);
 					interp_ins_set_dreg (td->last_ins, td->sp [-1].local);
 					td->last_ins->data [0] = get_data_item_index (td, (gpointer)func);
@@ -6969,6 +6982,14 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 					break;
 				}
 			
+				/*
+				 * A method pointer is the method's entry point in both engines, so
+				 * that a delegate built from one - or a calli through it - means the
+				 * same thing wherever the frame that produced it ran. Both opcodes
+				 * carry the InterpMethod and ask for its entry when they run: the
+				 * entry is a trampoline, and creating one for every ldftn site the
+				 * program never reaches would be worse than the load.
+				 */
 				int index = get_data_item_index (td, mono_interp_get_imethod (domain, m, error));
 				goto_if_nok (error, exit);
 				if (*td->ip == CEE_LDVIRTFTN) {
@@ -8457,7 +8478,7 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 			const char *name = method->name;
 			if (m_class_get_parent (method->klass) == mono_defaults.multicastdelegate_class) {
 				if (*name == '.' && (strcmp (name, ".ctor") == 0)) {
-					MonoJitICallInfo *mi = &mono_get_jit_icall_info ()->ves_icall_mono_delegate_ctor_interp;
+					MonoJitICallInfo *mi = &mono_get_jit_icall_info ()->ves_icall_mono_delegate_ctor;
 					nm = mono_marshal_get_icall_wrapper (mi, TRUE);
 				} else if (*name == 'I' && (strcmp (name, "Invoke") == 0)) {
 					/*
