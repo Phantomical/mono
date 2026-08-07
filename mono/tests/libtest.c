@@ -8510,6 +8510,8 @@ struct names_and_mutex {
         /* mutex to coordinate test and foreign thread */
         pthread_mutex_t coord_mutex;
         pthread_cond_t coord_cond;
+        /* set under coord_mutex once the foreign thread has called the runtime */
+        int called;
         /* mutex to block the foreign thread */
 	pthread_mutex_t deadlock_mutex;
 };
@@ -8527,6 +8529,7 @@ invoke_block_foreign_thread (void *user_data)
 	}
         pthread_mutex_lock (&nm->coord_mutex);
         /* signal the test thread that we called the runtime */
+        nm->called = 1;
         pthread_cond_signal (&nm->coord_cond);
         pthread_mutex_unlock (&nm->coord_mutex);
 
@@ -8549,6 +8552,7 @@ mono_test_attach_invoke_block_foreign_thread (const char *assm_name, const char 
 	}
 	pthread_mutex_init (&nm->coord_mutex, NULL);
 	pthread_cond_init (&nm->coord_cond, NULL);
+	nm->called = 0;
 	pthread_mutex_init (&nm->deadlock_mutex, NULL);
 
 	pthread_mutex_lock (&nm->deadlock_mutex); // lock the mutex and never unlock it.
@@ -8556,10 +8560,13 @@ mono_test_attach_invoke_block_foreign_thread (const char *assm_name, const char 
 	int res = pthread_create (&t, NULL, invoke_block_foreign_thread, (void*)nm);
 	g_assert (res == 0);
 	/* wait for the foreign thread to finish calling the runtime before
-	 * detaching it and returning
+	 * detaching it and returning.  The signal carries no state of its own, so
+	 * without `called' a foreign thread that gets all the way through the
+	 * call before we reach the wait signals nobody and we block forever.
 	 */
 	pthread_mutex_lock (&nm->coord_mutex);
-	pthread_cond_wait (&nm->coord_cond, &nm->coord_mutex);
+	while (!nm->called)
+		pthread_cond_wait (&nm->coord_cond, &nm->coord_mutex);
 	pthread_mutex_unlock (&nm->coord_mutex);
 	pthread_detach (t);
 	return 0;
