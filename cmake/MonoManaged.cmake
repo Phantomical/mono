@@ -325,6 +325,21 @@ endfunction()
 # before any of them start.  On the runtime this build produces they need the
 # runtime as well, and everything it needs to get off the ground; on a system
 # mono they need none of that.
+# What anything the build runs on the freshly built runtime has to wait for.
+#
+# mono-build-config is not optional: the wrapper points MONO_CFG_DIR at the
+# build tree's etc/, and without the dllmap in it everything that touches the
+# filesystem dies with "DllNotFoundException: System.Native".  mono-native is
+# what that dllmap names, by path in the build tree, for the BCL's filesystem
+# and networking layers.
+function(_mono_runtime_depends out)
+  set(_d mono-${MONO_DEFAULT_GC_SUFFIX} mono-build-config)
+  if(MONO_ENABLE_MONO_NATIVE)
+    list(APPEND _d mono-native)
+  endif()
+  set(${out} ${_d} PARENT_SCOPE)
+endfunction()
+
 function(_mono_tool_depends out profile)
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
     set(${out} "" PARENT_SCOPE)
@@ -332,15 +347,8 @@ function(_mono_tool_depends out profile)
   endif()
   set(_d mcs-build)
   if(NOT MONO_TOOLS_RUNTIME_IS_SYSTEM)
-    # mono-build-config is not optional: the wrapper points MONO_CFG_DIR at
-    # the build tree's etc/, and without the dllmap in it every tool that
-    # touches the filesystem dies with "DllNotFoundException: System.Native".
-    list(APPEND _d mono-${MONO_DEFAULT_GC_SUFFIX} mono-build-config)
-    # The BCL's filesystem and networking layers P/Invoke into this, and the
-    # dllmap names it by path in the build tree.
-    if(MONO_ENABLE_MONO_NATIVE)
-      list(APPEND _d mono-native)
-    endif()
+    _mono_runtime_depends(_r)
+    list(APPEND _d ${_r})
   endif()
   set(${out} ${_d} PARENT_SCOPE)
 endfunction()

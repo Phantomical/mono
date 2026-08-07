@@ -5,8 +5,9 @@
 # of this tree) and xunit ones (<Assembly>_xtest.dll.sources, run by the
 # prebuilt console in external/xunit-binaries).  A directory can have both.
 #
-# Each becomes one CTest test, labelled `bcl` or `bcl-xunit`.  The assemblies
-# are built by the regular build -- the mcs-tests and mcs-xunit-tests
+# Each becomes one CTest test, labelled `bcl` or `bcl-xunit`, except for the
+# suites in MONO_BCL_TESTS_SPLIT, which become one test per namespace.  The
+# assemblies are built by the regular build -- the mcs-tests and mcs-xunit-tests
 # aggregates are in `all` -- so running ctest never builds anything.
 
 include_guard(GLOBAL)
@@ -45,6 +46,67 @@ set(MONO_BCL_TESTS_LONG
   # left.
   bcl-System.Xml
 )
+
+# ---------------------------------------------------------------------------
+# Splitting a suite up
+# ---------------------------------------------------------------------------
+# A whole assembly under one console is opaque while it runs: nothing is printed
+# between the banner and the summary, so a suite that wedges reports a timeout
+# and nothing else -- the same output whether it died on its first fixture or
+# its last.  The suites below are cut into one CTest test per namespace instead,
+# which gives a wedge a name, keeps one bad fixture from taking every other
+# result in the assembly with it, and lets a suite use more than one core.
+#
+# The listing is done at build time by MonoBclDiscover.cmake, once per build of
+# the assembly rather than once per ctest run.  A suite that cannot be listed
+# stays whole -- see that file.
+#
+# Splitting is worth it in proportion to what a suite costs, because each group
+# pays for a process of its own.  Measured on this tree with the machine busy:
+# nunit-lite-console needs ~5.5s before it runs a single case (~6.9s against
+# corlib's test assembly), essentially all of it JIT of the runner, and
+# xunit.console needs ~41s (~49s against corlib's).  So a twenty-second suite
+# would be slower split than whole, and the xunit half is capped rather than cut
+# per namespace.
+set(MONO_BCL_TESTS_SPLIT
+  # Killed at 1800s on every sweep this tree has recorded, with nothing to say
+  # where.  550 fixtures over 56 namespaces.
+  bcl-corlib
+  # 512 fixtures, 7190 cases -- second largest nunit assembly.
+  bcl-System
+  # MONO_BCL_TESTS_LONG: 224s idle, 1541s loaded.  Most of the spread is the
+  # XSLT and schema fixtures, which land in two namespaces out of eleven.
+  bcl-System.Xml
+  # 514 fixtures and near its budget either way (1583s completing, 1801s
+  # timeouts), so the parallelism is what it needs most.
+  bcl-System.Web
+  bcl-System.Data
+  bcl-System.Core
+  # Also killed at 1800s on every recorded sweep.  168 fixtures, 10 namespaces.
+  bcl-System.ServiceModel
+  # MONO_BCL_TESTS_LONG, and the largest assembly in the tree.
+  bcl-xunit-corlib
+  # Killed at 1800s on every recorded sweep.
+  bcl-xunit-System.Core
+)
+
+# `bcl-Mono.Debugger.Soft` is not here and cannot be: it is one fixture holding
+# all 124 of its cases, so there is nothing to cut along.
+
+# How many groups a split suite is allowed.  The nunit half is uncapped -- 56
+# groups for corlib costs about 6 minutes of CPU it did not spend before, and
+# buys 56-way parallelism on a suite that has never finished.  The xunit half
+# cannot afford that: 28 namespaces at ~45s of startup each would be most of an
+# hour of CPU, so the heaviest namespaces get a group and the rest share one.
+set(MONO_BCL_SPLIT_MAX_GROUPS_nunit 0)
+set(MONO_BCL_SPLIT_MAX_GROUPS_xunit 8)
+
+# What one group gets to run for.  Half the whole-assembly budget: the largest
+# group anywhere is System.Xml's MonoTests.System.Xml at 44% of its assembly,
+# which projects to ~680s at that assembly's loaded worst case, and corlib's
+# largest is 24% of its own.  So a group that is still running at 900s is wedged
+# rather than slow, and says so in fifteen minutes instead of thirty or sixty.
+set(MONO_BCL_GROUP_TIMEOUT 900)
 
 # Suites whose source list names a file that is not in the tree.  System's
 # xunit list wants
@@ -327,6 +389,35 @@ function(_mono_xunit_runtime out profile)
   add_custom_target(mcs-${profile}-xunit-runtime DEPENDS ${_copied})
 endfunction()
 
+# Lists the test classes in an xunit assembly.  One per profile, built on first
+# use; the console in external/xunit-binaries has no listing mode of its own.
+function(_mono_xunit_lister out profile)
+  mono_profile_dir(_pdir ${profile})
+  set(_exe "${_pdir}/tests/xunit-lister.exe")
+  set(${out} "${_exe}" PARENT_SCOPE)
+  if(TARGET mcs-${profile}-xunit-lister)
+    return()
+  endif()
+  set(_src "${MONO_MCS_TOPDIR}/tools/xunit-lister/xunit-lister.cs")
+  _mono_csc_command(_csc ${profile})
+  _mono_csc_env(_env ${profile})
+  _mono_tool_depends(_rt ${profile})
+  set(_cmd ${_csc})
+  if(_env)
+    set(_cmd "${CMAKE_COMMAND}" -E env ${_env} ${_csc})
+  endif()
+  get_property(_p GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${profile}/mscorlib)
+  add_custom_command(
+    OUTPUT "${_exe}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_pdir}/tests"
+    COMMAND ${_cmd} /nologo /noconfig -nostdlib
+            "-r:${_pdir}/mscorlib.dll" "-out:${_exe}" "${_src}"
+    DEPENDS "${_src}" ${_p} "${_pdir}/mscorlib.dll" ${_rt}
+    COMMENT "CSC [${profile}] xunit-lister.exe"
+    VERBATIM)
+  add_custom_target(mcs-${profile}-xunit-lister DEPENDS "${_exe}")
+endfunction()
+
 # The second process a RemoteExecutor test starts.  One per profile, built on
 # first use.
 function(_mono_remote_executor out profile)
@@ -537,31 +628,42 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
     VERBATIM)
 
   # -- run -----------------------------------------------------------------
+  # `_command` stops short of the result file, which the CTest side appends: a
+  # split suite runs its groups in parallel and each needs a result of its own.
+  set(_kind "${kind}")
+  set(_workdir "${dir}")
   set(_testname "bcl-${_stem}")
   set(_deps "${_out}")
+  set(_resultbase "${_testdir}/TestResult-${profile}-${_stem}")
+  set(_listing "${MONO_MANAGED_DEPSDIR}/${_testtarget}.listing")
   if(kind STREQUAL nunit)
     _mono_test_runner(_runner "${_stem}" ${profile} "${dir}"
                       "${T_GLOBAL_CONFIG}" "${T_RUNTIME_CONFIG}"
                       "${T_RUNNER_FILES}")
     list(APPEND _deps "${_runner}")
     string(JOIN "," _excludes ${MONO_TEST_NUNIT_EXCLUDES} ${T_EXCLUDES})
-    set(_cmd "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug "${_runner}"
-             "${_out}" "-exclude=${_excludes}" -format:nunit2
-             "-result:${_testdir}/TestResult-${profile}-${_stem}.xml")
+    set(_command "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug "${_runner}"
+                 "${_out}" "-exclude=${_excludes}" -format:nunit2)
     set(_mono_path "${_pdir}:${_testdir}:${dir}")
+    # -explore builds the whole tree and prints it instead of running it.
+    set(_lister "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug "${_runner}"
+                "${_out}" -noheader "-explore:${_listing}")
+    set(_listing_deps "${_runner}")
+    # A group where nothing was left to run after -exclude is a skip, not a pass.
+    set(_skiprx "Tests run: 0,")
   else()
     set(_testname "bcl-xunit-${_stem}")
-    set(_cmd "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
-             "${MONO_TEST_XUNIT_DIR}/xunit.console.exe" "${_out}"
-             -noappdomain -noshadow -parallel none
-             -nunit "${_testdir}/TestResult-${profile}-${_stem}-xunit.xml")
+    set(_resultbase "${_resultbase}-xunit")
+    set(_command "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
+                 "${MONO_TEST_XUNIT_DIR}/xunit.console.exe" "${_out}"
+                 -noappdomain -noshadow -parallel none)
     foreach(_t IN LISTS MONO_TEST_XUNIT_NOTRAITS)
-      list(APPEND _cmd -notrait "${_t}")
+      list(APPEND _command -notrait "${_t}")
     endforeach()
     get_property(_nomethods GLOBAL PROPERTY
                  MONO_TEST_XUNIT_NOMETHOD_${profile}_${_astem})
     foreach(_m IN LISTS _nomethods)
-      list(APPEND _cmd -nomethod "${_m}")
+      list(APPEND _command -nomethod "${_m}")
     endforeach()
     _mono_xunit_runtime(_xrt ${profile})
     list(APPEND _deps ${_xrt})
@@ -570,6 +672,13 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
       _mono_remote_executor(_remote ${profile})
       set(_env_extra "REMOTE_EXECUTOR=${_remote}")
     endif()
+    _mono_xunit_lister(_xl ${profile})
+    set(_lister "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" "${_xl}" "${_out}")
+    set(_listing_deps "${_xl}")
+    # xunit spells the assembly with its extension only in the summary of a run
+    # that matched nothing, which is what makes this safe to look for in output
+    # a test could otherwise have written itself.
+    set(_skiprx "_xunit-test.dll  Total: 0")
   endif()
 
   get_property(_env_dir GLOBAL PROPERTY MONO_TEST_ENV_${profile}_${_astem})
@@ -606,13 +715,64 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   # fx_<suite> has no setup half -- the assemblies come from the regular build.
   # It exists so a directory can register a FIXTURES_CLEANUP against it (the
   # Mono.Debugger.Soft sweep) and have it ordered after the suite.
-  add_test(NAME ${_testname} COMMAND ${_cmd} WORKING_DIRECTORY "${dir}")
-  set_tests_properties(${_testname} PROPERTIES
-    LABELS "${_label}"
-    TIMEOUT ${_timeout}
-    FIXTURES_REQUIRED fx_${_testname}
-    ENVIRONMENT "MONO_PATH=${_mono_path};MONO_REGISTRY_PATH=$ENV{HOME}/.mono/registry;MONO_TESTS_IN_PROGRESS=yes;PATH=${CMAKE_BINARY_DIR}/runtime/_tmpinst/bin:$ENV{PATH};LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/mono/profiler:$ENV{LD_LIBRARY_PATH};${_env_extra}${_env_dir}")
+  set(_env "MONO_PATH=${_mono_path};MONO_REGISTRY_PATH=$ENV{HOME}/.mono/registry;MONO_TESTS_IN_PROGRESS=yes;PATH=${CMAKE_BINARY_DIR}/runtime/_tmpinst/bin:$ENV{PATH};LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/mono/profiler:$ENV{LD_LIBRARY_PATH};${_env_extra}${_env_dir}")
+
+  _mono_bcl_register()
 endfunction()
+
+# Registers one suite with CTest, splitting it when it is in
+# MONO_BCL_TESTS_SPLIT.
+#
+# The registration itself lives in a generated file named in TEST_INCLUDE_FILES,
+# because what a suite becomes is not known until the assembly has been listed,
+# and that cannot happen while CMake is still configuring.  The build writes the
+# group list beside it; the generated file runs the assembly whole whenever that
+# list is missing.
+#
+# A macro rather than a function: it reads and writes the variables its caller
+# already has in hand -- _kind, _testname, _testtarget, _workdir, _command,
+# _lister, _listing, _listing_deps, _out, _deps, _resultbase, _timeout, _label,
+# _skiprx and _env -- and its template needs them under those names.
+macro(_mono_bcl_register)
+  set(_groupfile "${MONO_MANAGED_DEPSDIR}/${_testtarget}.groups.cmake")
+  set(_ctestfile "${MONO_MANAGED_DEPSDIR}/${_testtarget}.ctest.cmake")
+  set(_group_timeout ${MONO_BCL_GROUP_TIMEOUT})
+  set(_max_groups ${MONO_BCL_SPLIT_MAX_GROUPS_${_kind}})
+  set(_split 0)
+
+  if("${_testname}" IN_LIST MONO_BCL_TESTS_SPLIT)
+    set(_split 1)
+    set(_discover "${MONO_MANAGED_DEPSDIR}/${_testtarget}.discover.cmake")
+    # The listing runs on the runtime being built, which _mono_tool_depends does
+    # not cover when the tools are hosted on the system mono.  Without this the
+    # listing races the link and reads a half-written mono-sgen.
+    _mono_runtime_depends(_rtdeps)
+    file(CONFIGURE OUTPUT "${_discover}" CONTENT [[
+# Generated by MonoManagedTests.cmake -- do not edit.
+set(BCL_KIND           [==[@_kind@]==])
+set(BCL_TESTNAME       [==[@_testname@]==])
+set(BCL_LISTER_COMMAND [==[@_lister@]==])
+set(BCL_LISTING        [==[@_listing@]==])
+set(BCL_WORKDIR        [==[@_workdir@]==])
+set(BCL_ENVIRONMENT    [==[@_env@]==])
+set(BCL_MAX_GROUPS     [==[@_max_groups@]==])
+set(BCL_OUTPUT         [==[@_groupfile@]==])
+]] @ONLY)
+    add_custom_command(
+      OUTPUT "${_groupfile}"
+      COMMAND "${CMAKE_COMMAND}" -D "SETTINGS=${_discover}"
+              -P "${CMAKE_SOURCE_DIR}/cmake/MonoBclDiscover.cmake"
+      DEPENDS "${_out}" ${_deps} ${_listing_deps} ${_rtdeps} "${_discover}"
+      COMMENT "LIST ${_testname}"
+      VERBATIM)
+    add_custom_target(${_testtarget}-groups DEPENDS "${_groupfile}")
+    add_dependencies(${_testtarget} ${_testtarget}-groups)
+  endif()
+
+  configure_file("${CMAKE_SOURCE_DIR}/cmake/MonoBclTests.cmake.in"
+                 "${_ctestfile}" @ONLY)
+  set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${_ctestfile}")
+endmacro()
 
 # Finds the .sources file for a test assembly, preferring the profile-specific
 # spelling, and returns empty if the directory has no such suite.
