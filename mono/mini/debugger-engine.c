@@ -1338,22 +1338,48 @@ mono_de_ss_start (SingleStepReq *ss_req, SingleStepArgs *ss_args)
 
 		MonoDebugMethodAsyncInfo* asyncMethod = mono_debug_lookup_method_async_debug_info (method);
 
-		/* Need to stop in catch clauses as well */
+		/*
+		 * Need to stop in catch clauses as well. Which stop a handler begins at is
+		 * asked of the IL clause: the address of a landing pad says nothing about
+		 * it, since a block belonging to some other IL offset can be laid out
+		 * between the pad and the handler's own first stop, and several clauses can
+		 * share one pad.
+		 */
 		for (i = ss_req->depth == STEP_DEPTH_OUT ? 1 : 0; i < nframes; ++i) {
 			DbgEngineStackFrame *frame = frames [i];
+			ERROR_DECL (error);
+			MonoMethodHeader *header;
 
-			if (frame->ji) {
-				MonoJitInfo *jinfo = frame->ji;
-				for (j = 0; j < jinfo->num_clauses; ++j) {
-					// In case of async method we don't want to place breakpoint on last catch handler(which state machine added for whole method)
-					if (asyncMethod && asyncMethod->num_awaits && i == 0 && j + 1 == jinfo->num_clauses)
-						break;
-					MonoJitExceptionInfo *ei = &jinfo->clauses [j];
+			if (!frame->ji)
+				continue;
 
-					if (mono_find_next_seq_point_for_native_offset (frame->domain, jinfo, (char*)ei->handler_start - (char*)jinfo->code_start, NULL, &local_sp))
-						ss_bp_add_one (ss_req, &ss_req_bp_count, &ss_req_bp_cache, frame->method, local_sp.il_offset);
-				}
+			header = mono_method_get_header_checked (frame->method, error);
+			if (!header) {
+				mono_error_cleanup (error);
+				continue;
 			}
+
+			for (j = 0; j < header->num_clauses; ++j) {
+				// In case of async method we don't want to place breakpoint on last catch handler(which state machine added for whole method)
+				if (asyncMethod && asyncMethod->num_awaits && i == 0 && j + 1 == header->num_clauses)
+					break;
+				MonoExceptionClause *clause = &header->clauses [j];
+
+				if (!mono_find_next_seq_point_for_il_offset (frame->domain, frame->method, clause->handler_offset, NULL, &local_sp))
+					continue;
+
+				/*
+				 * The stop the thread is halted at already: it is inside this
+				 * handler, so the clause has nothing left to catch for it, and a
+				 * breakpoint there would trap again where we stand.
+				 */
+				if (i == 0 && local_sp.il_offset == sp->il_offset)
+					continue;
+
+				ss_bp_add_one (ss_req, &ss_req_bp_count, &ss_req_bp_cache, frame->method, local_sp.il_offset);
+			}
+
+			mono_metadata_free_mh (header);
 		}
 
 		if (asyncMethod && asyncMethod->num_awaits && nframes && rt_callbacks.ensure_jit (frames [0])) {

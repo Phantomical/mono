@@ -5108,10 +5108,14 @@ ss_create_init_args (SingleStepReq *ss_req, SingleStepArgs *args)
 		}
 
 		/*
-		 * Find the seq point corresponding to the landing site ip, which is the first seq
-		 * point after ip.
+		 * Find the stop the handler begins at. The frame carries the IL offset the
+		 * clause hands control to, which is what this has to be asked by: the
+		 * landing site ip says nothing about where the handler's own first stop is,
+		 * since a block belonging to some other IL offset can be laid out in
+		 * between, and sibling catches share one landing site.
 		 */
-		found_sp = mono_find_next_seq_point_for_native_offset (frame.domain, frame.ji, frame.native_offset, &info, &args->sp);
+		found_sp = frame.il_offset >= 0 &&
+			mono_find_next_seq_point_for_il_offset (frame.domain, frame.method, frame.il_offset, &info, &args->sp);
 		if (!found_sp)
 			no_seq_points_found (frame.method, frame.native_offset);
 		if (!found_sp) {

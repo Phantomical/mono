@@ -268,6 +268,35 @@ mono_seq_point_find_by_il_offset (MonoSeqPointInfo* info, int il_offset, SeqPoin
 	return FALSE;
 }
 
+/*
+ * The stop with the lowest IL offset at or after IL_OFFSET. The table is ordered
+ * by native offset rather than by IL offset, so this has to look at all of it
+ * rather than stop at the first entry that qualifies.
+ */
+gboolean
+mono_seq_point_find_next_by_il_offset (MonoSeqPointInfo* info, int il_offset, SeqPoint* seq_point)
+{
+	SeqPoint best;
+	gboolean found = FALSE;
+	SeqPointIterator it;
+
+	mono_seq_point_iterator_init (&it, info);
+	while (mono_seq_point_iterator_next (&it)) {
+		if (it.seq_point.il_offset < il_offset)
+			continue;
+		if (found && best.il_offset <= it.seq_point.il_offset)
+			continue;
+
+		memcpy (&best, &it.seq_point, sizeof (SeqPoint));
+		found = TRUE;
+	}
+
+	if (found)
+		memcpy (seq_point, &best, sizeof (SeqPoint));
+
+	return found;
+}
+
 void
 mono_seq_point_init_next (MonoSeqPointInfo* info, SeqPoint sp, SeqPoint* next)
 {

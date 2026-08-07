@@ -24,4 +24,7 @@ mono_find_prev_seq_point_for_native_offset (MonoDomain *domain, MonoJitInfo *ji,
 gboolean
 mono_find_seq_point (MonoDomain *domain, MonoJitInfo *ji, gint32 il_offset, MonoSeqPointInfo **info, SeqPoint *seq_point);
 
+gboolean
+mono_find_next_seq_point_for_il_offset (MonoDomain *domain, MonoMethod *method, gint32 il_offset, MonoSeqPointInfo **info, SeqPoint *seq_point);
+
 #endif /* __MONO_SEQ_POINTS_H__ */

@@ -2475,6 +2475,38 @@ typedef enum {
 } MonoFirstPassResult;
 
 /*
+ * The IL offset the handler of EI runs from, where EI is JI's clause number
+ * INDEX. This is the IL clause's own offset rather than anything derived from
+ * ei->handler_start: several clauses can be published against a single landing
+ * pad, so an address does not identify which handler is about to run, and the
+ * debugger needs to know that to step to a catch site.
+ *
+ * Returns -1 if the method's header cannot be read.
+ */
+static int
+handler_il_offset (MonoJitInfo *ji, MonoJitExceptionInfo *ei, int index)
+{
+	ERROR_DECL (error);
+	MonoMethodHeader *header;
+	/* Only an LLVM-compiled jinfo records the IL clause a published entry came from. */
+	int clause = ji->from_llvm ? ei->clause_index : index;
+	int il_offset = -1;
+
+	header = mono_method_get_header_checked (jinfo_get_method (ji), error);
+	if (!header) {
+		mono_error_cleanup (error);
+		return -1;
+	}
+
+	if (clause >= 0 && clause < header->num_clauses)
+		il_offset = header->clauses [clause].handler_offset;
+
+	mono_metadata_free_mh (header);
+
+	return il_offset;
+}
+
+/*
  * handle_exception_first_pass:
  *
  *   The first pass of exception handling. Unwind the stack until a catch
@@ -2718,6 +2750,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 						mini_set_abort_threshold (&frame);
 						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
 						frame.native_offset = (char*)ei->handler_start - (char*)ji->code_start;
+						frame.il_offset = handler_il_offset (ji, ei, i);
 						*catch_frame = frame;
 						result = MONO_FIRST_PASS_HANDLED;
 						return result;
@@ -2737,6 +2770,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 					if (!in_interp)
 						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
 					frame.native_offset = (char*)ei->handler_start - (char*)ji->code_start;
+					frame.il_offset = handler_il_offset (ji, ei, i);
 					*catch_frame = frame;
 					result = MONO_FIRST_PASS_HANDLED;
 					if (method->wrapper_type == MONO_WRAPPER_RUNTIME_INVOKE) {

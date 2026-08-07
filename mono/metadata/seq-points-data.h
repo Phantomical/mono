@@ -78,6 +78,9 @@ mono_seq_point_find_next_by_native_offset (MonoSeqPointInfo* info, int native_of
 gboolean
 mono_seq_point_find_by_il_offset (MonoSeqPointInfo* info, int il_offset, SeqPoint* seq_point);
 
+gboolean
+mono_seq_point_find_next_by_il_offset (MonoSeqPointInfo* info, int il_offset, SeqPoint* seq_point);
+
 /*
  * SeqPointData struct and functions
  * This is used to store/load/use sequence point from a file

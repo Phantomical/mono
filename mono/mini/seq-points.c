@@ -145,3 +145,26 @@ mono_find_seq_point (MonoDomain *domain, MonoJitInfo *ji, gint32 il_offset, Mono
 
 	return mono_seq_point_find_by_il_offset (seq_points, il_offset, seq_point);
 }
+
+/*
+ * mono_find_next_seq_point_for_il_offset:
+ *
+ *   Find the first sequence point at or after the IL offset IL_OFFSET, which
+ * need not itself be the location of one.
+ */
+gboolean
+mono_find_next_seq_point_for_il_offset (MonoDomain *domain, MonoMethod *method, gint32 il_offset, MonoSeqPointInfo **info, SeqPoint *seq_point)
+{
+	MonoSeqPointInfo *seq_points;
+
+	seq_points = mono_get_seq_points (domain, method);
+	if (!seq_points) {
+		if (info)
+			*info = NULL;
+		return FALSE;
+	}
+	if (info)
+		*info = seq_points;
+
+	return mono_seq_point_find_next_by_il_offset (seq_points, il_offset, seq_point);
+}
