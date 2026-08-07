@@ -19,6 +19,18 @@ typedef struct _MonoLLVMBreakpointSwitch MonoLLVMBreakpointSwitch;
 
 namespace mono {
 
+/// What a registered code range is to the method it was compiled for, which is
+/// what decides whether a stack walk reaching it has found a frame of the
+/// method's.
+enum class CodeKind {
+	/// A translation of the method's IL: its body, one of its filter bodies,
+	/// or the stand-in that raises what the metadata would not load.
+	Body,
+	/// A calling-convention adapter around the body - an entry thunk - holding
+	/// none of the method's IL.
+	AbiThunk,
+};
+
 /// Build METHOD's MonoJitInfo - unwind description, and the clause table where
 /// the method has clauses - from COMPILED's side tables, and register it so the
 /// runtime's unwinder and stack walks can see the frame. A null HEADER
@@ -27,6 +39,7 @@ namespace mono {
 /// COMPILED.code picks which of the object's functions is being registered,
 /// so a forwarder sharing a module with the body it enters is registered by
 /// naming its own code range and leaving the tables it has no records in null.
+/// KIND says whether that code stands for the method in a stack trace.
 /// FILTERS maps an IL clause index to the entry of its compiled filter body,
 /// which the published clause hands the runtime's search pass. BP_SWITCH is
 /// the body's soft-debugger breakpoint switch and SEQ_POINTS its sequence-point
@@ -45,6 +58,7 @@ namespace mono {
 llvm::Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
+                   CodeKind kind,
                    const std::vector<std::pair<uint32_t, void *>> &filters = {},
                    MonoLLVMBreakpointSwitch *bp_switch = nullptr,
                    const SeqPointGraph &seq_points = {});

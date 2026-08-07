@@ -1106,7 +1106,8 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		timing::Scope timed (timing::Phase::jinfo);
 
 		return register_jit_info (state.domain, method, cfg->get ()->header,
-		                          *compiled, filters, bp_switch, seq_points);
+		                          *compiled, CodeKind::Body, filters, bp_switch,
+		                          seq_points);
 	}();
 
 	if (!jinfo)
@@ -1124,7 +1125,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	 * from the module's side tables. No dylib either: the body's record
 	 * already owns the one they all share.
 	 */
-	auto register_side_body = [&] (const uint8_t *code, size_t size,
+	auto register_side_body = [&] (const uint8_t *code, size_t size, CodeKind kind,
 	                               std::vector<IlLineRow> lines) -> Error {
 		CompiledMethod side;
 
@@ -1136,7 +1137,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		side.il_lines = std::move (lines);
 
 		Expected<MonoJitInfo *> jinfo =
-			register_jit_info (state.domain, method, nullptr, side);
+			register_jit_info (state.domain, method, nullptr, side, kind);
 
 		if (!jinfo)
 			return jinfo.takeError ();
@@ -1144,11 +1145,13 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		return Error::success ();
 	};
 
-	if (Error err = register_side_body (entry_code, entry_code_size, {}))
+	if (Error err = register_side_body (entry_code, entry_code_size,
+	                                    CodeKind::AbiThunk, {}))
 		return std::move (err);
 
 	if (unbox_code != nullptr) {
-		if (Error err = register_side_body (unbox_code, unbox_code_size, {}))
+		if (Error err = register_side_body (unbox_code, unbox_code_size,
+		                                    CodeKind::AbiThunk, {}))
 			return std::move (err);
 	} else if (!unbox_entry.empty ()) {
 		return createStringError (inconvertibleErrorCode (),
@@ -1169,7 +1172,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 			}
 
 		if (Error err = register_side_body (extent.first, extent.second,
-		                                    std::move (lines)))
+		                                    CodeKind::Body, std::move (lines)))
 			return std::move (err);
 	}
 
@@ -1328,8 +1331,8 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 		if (!compiled)
 			return compiled.takeError ();
 
-		Expected<MonoJitInfo *> jinfo =
-			register_jit_info (state.domain, method, nullptr, *compiled);
+		Expected<MonoJitInfo *> jinfo = register_jit_info (
+			state.domain, method, nullptr, *compiled, CodeKind::Body);
 
 		if (!jinfo)
 			return jinfo.takeError ();
@@ -1401,8 +1404,8 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 	if (!thunk)
 		return thunk.takeError ();
 
-	Expected<MonoJitInfo *> jinfo =
-		register_jit_info (state.domain, method, nullptr, *thunk);
+	Expected<MonoJitInfo *> jinfo = register_jit_info (
+		state.domain, method, nullptr, *thunk, CodeKind::AbiThunk);
 
 	if (!jinfo)
 		return jinfo.takeError ();

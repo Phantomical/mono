@@ -647,6 +647,15 @@ mono_find_jit_info_ext (MonoDomain *domain, MonoJitTlsData *jit_tls,
 	if (!err)
 		return FALSE;
 
+	/*
+	 * An entry thunk holds none of the method's IL - see the llvm_abi_thunk
+	 * comment on MonoJitInfo - so the frame it leaves is the calling
+	 * convention's rather than the method's. Demote it to the frame type
+	 * everything already unwinds through without reporting.
+	 */
+	if (frame->type == FRAME_TYPE_MANAGED && frame->ji && frame->ji->llvm_abi_thunk)
+		frame->type = FRAME_TYPE_TRAMPOLINE;
+
 	gboolean not_i2m = frame->type != FRAME_TYPE_INTERP_TO_MANAGED && frame->type != FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX;
 
 	if (not_i2m && *lmf && ((*lmf) != jit_tls->first_lmf) && ((gpointer)MONO_CONTEXT_GET_SP (new_ctx) >= (gpointer)(*lmf))) {

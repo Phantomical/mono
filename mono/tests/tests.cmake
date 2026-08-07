@@ -321,6 +321,7 @@ set(MONO_TESTS_CS_SRC
   bug-81691.cs
   bug-415577.cs
   filter-stack.cs
+  stack-frames-entry-thunk.cs
   vararg.cs
   vararg2.cs
   vararg4.cs

@@ -531,6 +531,7 @@ publish_debug_info (MonoDomain *domain, MonoMethod *method,
 Expected<MonoJitInfo *>
 register_jit_info (MonoDomain *domain, MonoMethod *method,
                    MonoMethodHeader *header, const CompiledMethod &compiled,
+                   CodeKind kind,
                    const std::vector<std::pair<uint32_t, void *>> &filters,
                    MonoLLVMBreakpointSwitch *bp_switch,
                    const SeqPointGraph &seq_points)
@@ -642,6 +643,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	jinfo->from_llvm = true;
 	/* A null HEADER is how the caller says this is not the method's main body. */
 	jinfo->llvm_side_body = header == nullptr;
+	jinfo->llvm_abi_thunk = kind == CodeKind::AbiThunk;
 	/*
 	 * Reading the classic JIT's mapping instead is not an option: it is keyed by
 	 * MonoMethod, so it would attribute this body's offsets to another body's

@@ -367,6 +367,18 @@ struct _MonoJitInfo {
 	gboolean    llvm_side_body : 1;
 
 	/*
+	 * This code is the method's calling-convention adapter - an entry thunk -
+	 * rather than any stretch of its body. All it does is shuffle arguments
+	 * into the body's convention and call it, so a walk that reported it would
+	 * name the method a second time, in a frame with no IL offset to give. The
+	 * record exists because the thunk does leave a frame whenever the shape of
+	 * the signature kept that call out of tail position, and an exception
+	 * unwinding out of the body has to walk through it - so it is skipped the
+	 * way a trampoline is rather than left out of the table.
+	 */
+	gboolean    llvm_abi_thunk : 1;
+
+	/*
 	 * This body's own native_offset -> il_offset map, present (n_llvm_seq_points > 0)
 	 * only for a tier-1 body whose translation actually recovered one - see
 	 * MonoLLVMSeqPoint above. Allocated out of the same mem_manager as this MonoJitInfo,
