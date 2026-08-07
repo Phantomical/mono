@@ -29,6 +29,7 @@
 #include "stubs.hpp"
 #include "timing.hpp"
 #include "method-to-llvm.hpp"
+#include "verification.hpp"
 
 #include "mini.h"
 #include "mini-llvm.h"
@@ -1989,17 +1990,22 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
  * never run managed code: it is a thread the program has no idea exists, and a
  * static constructor on it can block on anything and take any lock.
  *
- * Everything a compile does is generative except one branch. A method not
+ * Everything a compile does is generative except two branches. A method not
  * implemented in IL is handed to mono_jit_compile_method (), whose cache-hit
  * path takes the class's vtable and calls mono_runtime_class_init_full () -
- * which is a cctor. That is the only such path inside a compile, so declining
- * these is the whole decline list. Translation itself resolves classes and
- * reserves callee stubs and compiles nothing transitively.
+ * which is a cctor. And a body still owed verification reaches the IL verifier,
+ * which asks questions the translator never does: whether one class is
+ * assignable to another is answered by calling into managed code when either
+ * of them is a TypeBuilder that has not been created yet. A method only ever
+ * gets here after a compile on the requesting thread, which is where both of
+ * those happen, so declining them costs the worker nothing. Translation itself
+ * resolves classes and reserves callee stubs and compiles nothing
+ * transitively.
  */
 bool
 compilable_off_thread (MonoMethod *method)
 {
-	return !implemented_outside_il (method);
+	return !implemented_outside_il (method) && !needs_verification (method);
 }
 
 void
@@ -2204,6 +2210,16 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 		if (entered != state.domain)
 			mono_domain_set_internal_with_options (entered, FALSE);
 	};
+
+	/*
+	 * Above the tier split, so that a method gets the same verdict whichever
+	 * tier ends up running it. A body the verifier rejects is a body no tier
+	 * may run, and a body it accepts is one every tier may.
+	 */
+	if (Error invalid = verify_method (method)) {
+		leave ();
+		return std::move (invalid);
+	}
 
 	if (!tier1 && runs_at_tier0 (method)) {
 		ERROR_DECL (interp_error);

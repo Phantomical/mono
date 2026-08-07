@@ -524,6 +524,51 @@ mono_runtime_suite(runtime-internalsvisibleto
         internalsvisibleto-runtimetest-sign2048.exe
         internalsvisibleto-compilertest-sign2048.exe)
 
+# valid-only, because corlib is not verifiable and never has been: it is full of
+# localloc and native pointers, and Roslyn no longer emits the verifiable
+# encodings of the rest. What the check is worth is that none of it is *invalid*.
 mono_runtime_check(runtime-pedump NATIVE
-  COMMAND "${CMAKE_BINARY_DIR}/tools/pedump/pedump" --verify code,metadata
+  COMMAND "${CMAKE_BINARY_DIR}/tools/pedump/pedump" --verify code,metadata,valid-only
           "${_class_dir}/mscorlib.dll")
+
+# The IL verifier, which --security=validil turns on.
+#
+# verification-invalid-il.exe calls a method whose body is invalid but which
+# both engines happily run, and prints "ran 42" or "rejected <exception>". The
+# four arms are the two security settings crossed with the two tiers: the flag
+# is what makes the difference, and the tier is what must not.
+#
+# The tier-0 arms name the invalid method rather than taking every method,
+# because a method the interpreter calls from another interpreted method never
+# reaches the backend at all. Selecting only the callee keeps its caller
+# compiled, so the call goes through the stub the backend published.
+function(_mono_verification_check name expect)
+  cmake_parse_arguments(ARG "" "" "ARGS;REJECT" ${ARGN})
+  foreach(_gc IN LISTS _mono_gcs)
+    _mono_gc_env(_gc_env "${_gc}")
+    add_test(NAME "${name}@${_gc}"
+             COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                     "${_gc_env}" "MONO_LLVM_JIT_TRACE=1"
+                     "${_wrapper}" ${ARG_ARGS} verification-invalid-il.exe
+             WORKING_DIRECTORY "${_bin}")
+    set_tests_properties("${name}@${_gc}" PROPERTIES
+      LABELS runtime TIMEOUT 300
+      PASS_REGULAR_EXPRESSION "${expect}"
+      FAIL_REGULAR_EXPRESSION "${ARG_REJECT}")
+  endforeach()
+endfunction()
+
+_mono_verification_check(runtime-verification-off "ran 42"
+                         REJECT "rejected")
+_mono_verification_check(runtime-verification-validil
+                         "rejected System.InvalidProgramException"
+                         ARGS --security=validil REJECT "ran 42")
+_mono_verification_check(runtime-verification-tier0
+                         "interpreting Probe:Unverifiable"
+                         ARGS --interp-tier0=Probe:Unverifiable REJECT "rejected")
+# Rejecting without ever printing the routing line is the placement itself: the
+# verdict is reached before the tier is chosen.
+_mono_verification_check(runtime-verification-validil-tier0
+                         "rejected System.InvalidProgramException"
+                         ARGS --security=validil --interp-tier0=Probe:Unverifiable
+                         REJECT "ran 42|interpreting Probe:Unverifiable")

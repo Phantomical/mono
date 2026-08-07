@@ -372,6 +372,11 @@ list(APPEND MONO_TESTS_SPECIAL
 # --- misc --------------------------------------------------------------------
 _mono_special(async-exceptions.exe NO_DEFAULT_REFS SOURCES async-exceptions.cs)
 
+# Deliberately invalid IL, so it is kept out of the corpus every suite runs:
+# the runtime-verification tests in runtime-suites.cmake drive it under specific
+# --security= and --interp-tier0 combinations and read what it prints.
+_mono_special(verification-invalid-il.exe IL SOURCES verification-invalid-il.il)
+
 # One tailcall test links two extra IL libraries.
 _mono_special(tailcall/coreclr/JIT/opt/Tailcall/TailcallVerifyWithPrefix.exe IL
   SOURCES tailcall/coreclr/JIT/opt/Tailcall/TailcallVerifyWithPrefix.il
