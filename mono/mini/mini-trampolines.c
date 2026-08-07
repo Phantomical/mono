@@ -1213,7 +1213,9 @@ mono_create_jump_trampoline (MonoDomain *domain, MonoMethod *method, gboolean ad
 
 	error_init (error);
 
-	if (mono_use_interpreter && !mono_aot_only) {
+	/* Only when every method is interpreted; otherwise the method has an entry
+	 * of its own, which is what the rest of this builds. */
+	if (mono_ee_features.force_use_interpreter && !mono_aot_only) {
 		gpointer ret = mini_get_interp_callbacks ()->create_method_pointer (method, FALSE, error);
 		if (!is_ok (error))
 			return NULL;
@@ -1395,7 +1397,13 @@ no_delegate_trampoline (void)
 gpointer
 mono_create_delegate_trampoline (MonoDomain *domain, MonoClass *klass)
 {
-	if (mono_llvm_only || (mono_use_interpreter && !mono_aot_only))
+	/*
+	 * Under the interpreter alone nothing ever calls this: the interpreter
+	 * dispatches a delegate itself. Started alongside the JIT it is called by
+	 * compiled code invoking a delegate, whatever engine runs the target.
+	 */
+	if (mono_llvm_only
+	    || (mono_ee_features.force_use_interpreter && !mono_aot_only))
 		return (gpointer)no_delegate_trampoline;
 
 	return mono_create_delegate_trampoline_info (domain, klass, NULL)->invoke_impl;

@@ -2236,8 +2236,14 @@ compile_special (MonoMethod *method, MonoDomain *target_domain, MonoError *error
 					return mono_get_addr_from_ftnptr (compiled_ptr);
 				}
 
-				/* HACK: missing gsharedvt_out wrappers to do transition to del tramp in interp-only mode */
-				if (mono_use_interpreter)
+				/*
+				 * HACK: missing gsharedvt_out wrappers to do transition to del tramp in interp-only mode.
+				 * Only when the interpreter really is the whole engine: started alongside the JIT, the
+				 * caller answers a NULL here by asking the JIT for the method, which delegates a method
+				 * implemented outside IL straight back to this function - and recurses until the stack
+				 * runs out.
+				 */
+				if (mono_ee_features.force_use_interpreter)
 					return NULL;
 
 				return mono_create_delegate_trampoline (target_domain, method->klass);
