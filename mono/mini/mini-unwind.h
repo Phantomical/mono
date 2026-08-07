@@ -219,6 +219,11 @@ mono_unwind_frame (guint8 *unwind_info, guint32 unwind_info_len,
 				   host_mgreg_t **save_locations, int save_locations_len,
 				   guint8 **out_cfa);
 
+gboolean
+mono_unwind_native_frame (guint8 *ip, mono_unwind_reg_t *regs, int nregs,
+                          host_mgreg_t **save_locations, int save_locations_len,
+                          guint8 **out_cfa);
+
 void mono_unwind_init (void);
 
 void mono_unwind_cleanup (void);

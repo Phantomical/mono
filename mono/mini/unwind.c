@@ -742,17 +742,434 @@ mono_unwind_frame (guint8 *unwind_info, guint32 unwind_info_len,
 	return TRUE;
 }
 
+#if defined (HAVE_DL_ITERATE_PHDR) && defined (HAVE_LINK_H)
+#define HAVE_NATIVE_UNWIND 1
+#endif
+
+#ifdef HAVE_NATIVE_UNWIND
+
+#include <link.h>
+
+/*
+ * Unwinding one frame of a C function the runtime itself is built from.
+ *
+ * Generated code calls into that C directly - the write barrier is the one
+ * that matters, but the TLS getters and the collector's inner helpers are
+ * reached the same way - without leaving an LMF behind. A thread suspended in
+ * one of those has an instruction pointer no MonoJitInfo covers and nothing
+ * standing for the managed frame underneath it, so a walk that starts there
+ * ends there and reports no frames at all. The frame is described, just not by
+ * anything mono wrote: it is in the image's own .eh_frame.
+ *
+ * This has to run against a suspended thread, so nothing here allocates or
+ * takes a lock. The images are snapshotted once, and the CFI program is copied
+ * onto the caller's stack rather than into a buffer someone has to own.
+ *
+ * Whatever this cannot make sense of - an encoding it does not read, an
+ * operation mono_unwind_frame () does not implement - is a FALSE, which leaves
+ * the walk exactly where it was without it.
+ */
+
+typedef struct {
+	guint8 *start, *end;
+	guint8 *eh_frame_hdr;
+} NativeImage;
+
+static NativeImage *native_images;
+static int native_image_count;
+
+/* Largest CFI program this will copy. Prologue descriptions are far smaller. */
+#define NATIVE_CFI_MAX 512
+
+static int
+compare_native_images (const void *a, const void *b)
+{
+	guint8 *sa = ((const NativeImage*)a)->start;
+	guint8 *sb = ((const NativeImage*)b)->start;
+
+	return sa < sb ? -1 : (sa > sb ? 1 : 0);
+}
+
+static int
+collect_native_image (struct dl_phdr_info *info, size_t size, void *data)
+{
+	int *count = (int*)data;
+	guint8 *lo = NULL, *hi = NULL, *hdr = NULL;
+
+	for (int i = 0; i < info->dlpi_phnum; ++i) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr [i];
+		guint8 *addr = (guint8*)(info->dlpi_addr + ph->p_vaddr);
+
+		if (ph->p_type == PT_GNU_EH_FRAME) {
+			hdr = addr;
+		} else if (ph->p_type == PT_LOAD && (ph->p_flags & PF_X)) {
+			if (!lo || addr < lo)
+				lo = addr;
+			if (!hi || addr + ph->p_memsz > hi)
+				hi = addr + ph->p_memsz;
+		}
+	}
+
+	if (!hdr || !lo)
+		return 0;
+
+	if (native_images)
+		native_images [*count] = (NativeImage) { lo, hi, hdr };
+	(*count) ++;
+	return 0;
+}
+
+static void
+native_unwind_init (void)
+{
+	int count = 0;
+
+	dl_iterate_phdr (collect_native_image, &count);
+	if (!count)
+		return;
+
+	native_images = g_new0 (NativeImage, count);
+	count = 0;
+	dl_iterate_phdr (collect_native_image, &count);
+	native_image_count = count;
+
+	qsort (native_images, count, sizeof (NativeImage), compare_native_images);
+}
+
+static void
+native_unwind_cleanup (void)
+{
+	g_free (native_images);
+	native_images = NULL;
+	native_image_count = 0;
+}
+
+static NativeImage*
+find_native_image (guint8 *ip)
+{
+	int lo = 0, hi = native_image_count;
+
+	while (lo < hi) {
+		int mid = (lo + hi) / 2;
+
+		if (native_images [mid].start <= ip)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+
+	if (lo == 0)
+		return NULL;
+
+	NativeImage *image = &native_images [lo - 1];
+
+	return ip < image->end ? image : NULL;
+}
+
+/*
+ * The FDE covering IP, out of IMAGE's .eh_frame_hdr binary search table, or
+ * null when the table is not in the one shape this reads.
+ */
+static guint8*
+find_native_fde (NativeImage *image, guint8 *ip)
+{
+	guint8 *hdr = image->eh_frame_hdr;
+	guint8 *p = hdr;
+	guint8 version = *p ++;
+	guint8 eh_frame_ptr_enc = *p ++;
+	guint8 fde_count_enc = *p ++;
+	guint8 table_enc = *p ++;
+	guint32 fde_count;
+	int lo, hi;
+
+	if (version != 1 || table_enc != (DW_EH_PE_datarel | DW_EH_PE_sdata4))
+		return NULL;
+
+	if (eh_frame_ptr_enc != (DW_EH_PE_pcrel | DW_EH_PE_sdata4))
+		return NULL;
+	p += 4;
+
+	if (fde_count_enc != DW_EH_PE_udata4)
+		return NULL;
+	fde_count = read32 (p);
+	p += 4;
+
+	lo = 0;
+	hi = (int) fde_count;
+	while (lo < hi) {
+		int mid = (lo + hi) / 2;
+
+		if (hdr + (gint32) read32 (p + (mid * 8)) <= ip)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+
+	if (lo == 0)
+		return NULL;
+
+	return hdr + (gint32) read32 (p + ((lo - 1) * 8) + 4);
+}
+
+/*
+ * End of the CFI program starting at P, which runs no further than END, or null
+ * when it holds an operation mono_unwind_frame () would refuse. Trailing
+ * DW_CFA_nop padding is not part of the program - mono_unwind_frame () has no
+ * case for a nop, so the copy has to stop short of it.
+ */
+static guint8*
+scan_cfi_program (guint8 *p, guint8 *end)
+{
+	while (p < end) {
+		guint8 op = *p;
+
+		switch (op & 0xc0) {
+		case DW_CFA_advance_loc:
+			p ++;
+			continue;
+		case DW_CFA_offset:
+			p ++;
+			decode_uleb128 (p, &p);
+			continue;
+		case DW_CFA_restore:
+			return NULL;
+		}
+
+		p ++;
+		switch (op) {
+		case DW_CFA_nop:
+			/* Anything but padding here and the truncation would drop live ops. */
+			for (guint8 *q = p - 1; q < end; ++q) {
+				if (*q != DW_CFA_nop)
+					return NULL;
+			}
+			return p - 1;
+		case DW_CFA_def_cfa:
+			decode_uleb128 (p, &p);
+			decode_uleb128 (p, &p);
+			break;
+		case DW_CFA_def_cfa_offset:
+		case DW_CFA_def_cfa_register:
+		case DW_CFA_same_value:
+			decode_uleb128 (p, &p);
+			break;
+		case DW_CFA_offset_extended:
+			decode_uleb128 (p, &p);
+			decode_uleb128 (p, &p);
+			break;
+		case DW_CFA_offset_extended_sf:
+			decode_uleb128 (p, &p);
+			decode_sleb128 (p, &p);
+			break;
+		case DW_CFA_advance_loc1:
+			p += 1;
+			break;
+		case DW_CFA_advance_loc2:
+			p += 2;
+			break;
+		case DW_CFA_advance_loc4:
+			p += 4;
+			break;
+		case DW_CFA_remember_state:
+		case DW_CFA_restore_state:
+			break;
+		default:
+			return NULL;
+		}
+	}
+
+	return p;
+}
+
+/*
+ * Copy the CFI program FDE and its CIE describe into BUF, and report the extent
+ * of the code it covers. FALSE when anything about the pair is outside what
+ * mono_unwind_frame () can be handed.
+ */
+static gboolean
+decode_native_fde (guint8 *fde, guint8 **out_code, guint32 *out_code_len,
+                   guint8 *buf, guint32 buf_size, guint32 *out_len)
+{
+	guint8 *p, *cie, *cie_end, *fde_end, *cie_cfi, *fde_cfi, *cie_cfi_end, *fde_cfi_end;
+	guint32 fde_len, cie_len, cie_offset, aug_len;
+	gint32 code_align, data_align, return_reg;
+	guint8 fde_ptr_enc = DW_EH_PE_absptr;
+	gboolean has_aug;
+	char *aug_str;
+
+	fde_len = read32 (fde);
+	if (fde_len == 0 || fde_len == 0xffffffff)
+		return FALSE;
+	fde_end = fde + 4 + fde_len;
+
+	p = fde + 4;
+	cie_offset = read32 (p);
+	if (cie_offset == 0)
+		return FALSE;
+	cie = p - cie_offset;
+	p += 4;
+
+	cie_len = read32 (cie);
+	if (cie_len == 0 || cie_len == 0xffffffff)
+		return FALSE;
+	cie_end = cie + 4 + cie_len;
+
+	{
+		guint8 *q = cie + 4;
+
+		if (read32 (q) != 0)
+			return FALSE;
+		q += 4;
+		if (*q ++ != 1)
+			return FALSE;
+
+		aug_str = (char*)q;
+		q += strlen (aug_str) + 1;
+		code_align = decode_uleb128 (q, &q);
+		data_align = decode_sleb128 (q, &q);
+		return_reg = decode_uleb128 (q, &q);
+
+		has_aug = aug_str [0] == 'z';
+		if (has_aug) {
+			guint32 len = decode_uleb128 (q, &q);
+			guint8 *aug = q;
+
+			for (int i = 0; aug_str [i]; ++i) {
+				switch (aug_str [i]) {
+				case 'z':
+				case 'S':
+					break;
+				case 'R':
+					fde_ptr_enc = *aug ++;
+					break;
+				case 'L':
+					aug ++;
+					break;
+				case 'P': {
+					guint8 enc = *aug ++;
+
+					/* Only the width matters; the routine is never called. */
+					switch (enc & 0x0f) {
+					case DW_EH_PE_udata4:
+					case DW_EH_PE_sdata4:
+						aug += 4;
+						break;
+					case DW_EH_PE_sdata8:
+						aug += 8;
+						break;
+					default:
+						return FALSE;
+					}
+					break;
+				}
+				default:
+					return FALSE;
+				}
+			}
+
+			q += len;
+		}
+
+		cie_cfi = q;
+	}
+
+	if (code_align != 1 || data_align != DWARF_DATA_ALIGN || return_reg != DWARF_PC_REG)
+		return FALSE;
+	if (fde_ptr_enc != (DW_EH_PE_pcrel | DW_EH_PE_sdata4))
+		return FALSE;
+
+	*out_code = p + (gint32) read32 (p);
+	p += 4;
+	*out_code_len = read32 (p);
+	p += 4;
+
+	if (has_aug) {
+		aug_len = decode_uleb128 (p, &p);
+		p += aug_len;
+	}
+	fde_cfi = p;
+
+	cie_cfi_end = scan_cfi_program (cie_cfi, cie_end);
+	if (!cie_cfi_end)
+		return FALSE;
+	fde_cfi_end = scan_cfi_program (fde_cfi, fde_end);
+	if (!fde_cfi_end)
+		return FALSE;
+
+	*out_len = (guint32)(cie_cfi_end - cie_cfi) + (guint32)(fde_cfi_end - fde_cfi);
+	if (*out_len > buf_size)
+		return FALSE;
+
+	memcpy (buf, cie_cfi, cie_cfi_end - cie_cfi);
+	memcpy (buf + (cie_cfi_end - cie_cfi), fde_cfi, fde_cfi_end - fde_cfi);
+	return TRUE;
+}
+
+gboolean
+mono_unwind_native_frame (guint8 *ip, mono_unwind_reg_t *regs, int nregs,
+                          host_mgreg_t **save_locations, int save_locations_len,
+                          guint8 **out_cfa)
+{
+	guint8 buf [NATIVE_CFI_MAX];
+	guint8 *fde, *code;
+	guint32 len, code_len;
+	NativeImage *image = find_native_image (ip);
+
+	if (!image)
+		return FALSE;
+
+	fde = find_native_fde (image, ip);
+	if (!fde)
+		return FALSE;
+
+	if (!decode_native_fde (fde, &code, &code_len, buf, sizeof (buf), &len))
+		return FALSE;
+
+	/* The search table hands back the last FDE at or below IP, hole or not. */
+	if (ip < code || ip >= code + code_len)
+		return FALSE;
+
+	return mono_unwind_frame (buf, len, code, code + code_len, ip, NULL, regs, nregs,
+	                          save_locations, save_locations_len, out_cfa);
+}
+
+#else
+
+static void
+native_unwind_init (void)
+{
+}
+
+static void
+native_unwind_cleanup (void)
+{
+}
+
+gboolean
+mono_unwind_native_frame (guint8 *ip, mono_unwind_reg_t *regs, int nregs,
+                          host_mgreg_t **save_locations, int save_locations_len,
+                          guint8 **out_cfa)
+{
+	return FALSE;
+}
+
+#endif /* HAVE_NATIVE_UNWIND */
+
 void
 mono_unwind_init (void)
 {
 	mono_os_mutex_init_recursive (&unwind_mutex);
 
 	mono_counters_register ("Unwind info size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &unwind_info_size);
+
+	native_unwind_init ();
 }
 
 void
 mono_unwind_cleanup (void)
 {
+	native_unwind_cleanup ();
+
 	mono_os_mutex_destroy (&unwind_mutex);
 
 	if (!cached_info)

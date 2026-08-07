@@ -421,6 +421,46 @@ mono_arch_get_throw_corlib_exception (MonoTrampInfo **info, gboolean aot)
 #endif /* !DISABLE_JIT */
 
 /*
+ * Step one frame of the runtime's own C, described by the image's .eh_frame.
+ *
+ * Generated code calls into that C directly and without linking an LMF - the
+ * write barrier is the one that matters, and the collector's inner helpers are
+ * reached the same way - so a thread caught inside it has an instruction
+ * pointer no MonoJitInfo covers and nothing standing for the managed frame
+ * below. Stepping this one frame is what lets a walk start there at all.
+ */
+static gboolean
+unwind_native_frame (MonoContext *ctx, MonoContext *new_ctx,
+                     host_mgreg_t **save_locations, StackFrameInfo *frame)
+{
+	host_mgreg_t regs [MONO_MAX_IREGS + 1];
+	guint8 *cfa;
+	int i;
+
+	for (i = 0; i < AMD64_NREG; ++i)
+		regs [i] = new_ctx->gregs [i];
+
+	if (!mono_unwind_native_frame ((guint8*)MONO_CONTEXT_GET_IP (ctx), regs, MONO_MAX_IREGS + 1,
+	                               save_locations, MONO_MAX_IREGS, &cfa))
+		return FALSE;
+
+	/* A frame that does not shrink the stack would leave the walk turning on the spot. */
+	if ((gsize) cfa <= (gsize) MONO_CONTEXT_GET_SP (ctx))
+		return FALSE;
+
+	for (i = 0; i < AMD64_NREG; ++i)
+		new_ctx->gregs [i] = regs [i];
+
+	new_ctx->gregs [AMD64_RSP] = (host_mgreg_t)(gsize)cfa;
+	new_ctx->gregs [AMD64_RIP] --;
+
+	/* Nothing managed here, so the walk steps over it without reporting it. */
+	frame->ji = NULL;
+	frame->type = FRAME_TYPE_TRAMPOLINE;
+	return TRUE;
+}
+
+/*
  * mono_arch_unwind_frame:
  *
  * This function is used to gather information from @ctx, and store it in @frame_info.
@@ -499,8 +539,8 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 
 			rip = (guint64)MONO_CONTEXT_GET_IP (ext->ctx);
 		} else if ((*lmf)->rsp == 0) {
-			/* Top LMF entry */
-			return FALSE;
+			/* Top LMF entry - nothing above it to hop to, so walk out of the frame. */
+			return unwind_native_frame (ctx, new_ctx, save_locations, frame);
 		} else {
 			/* 
 			 * The rsp field is set just before the call which transitioned to native 
@@ -517,7 +557,7 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 		 */
 		//g_assert (ji);
 		if (!ji)
-			return FALSE;
+			return unwind_native_frame (ctx, new_ctx, save_locations, frame);
 
 		frame->ji = ji;
 		frame->type = FRAME_TYPE_MANAGED_TO_NATIVE;
