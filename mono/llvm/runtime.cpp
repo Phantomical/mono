@@ -22,6 +22,8 @@
 #include "runtime.hpp"
 
 #include "arch/arch.hpp"
+#include "compile-queue.hpp"
+#include "compile-worker.hpp"
 #include "jinfo.hpp"
 #include "jit.hpp"
 #include "stubs.hpp"
@@ -59,10 +61,13 @@ extern "C" {
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/TargetParser/Triple.h>
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <unwind.h>
@@ -290,6 +295,39 @@ recompiling (MonoMethod *method)
 
 	g_free (name);
 	return selected;
+}
+
+/// Whether MONO_LLVM_JIT_ASYNC_RECOMPILE names this method: a substring of its
+/// full name, or `1` for all of them.
+///
+/// It asks for the method to be compiled a second time on the background
+/// worker, its stubs redirected to the result. Semantically inert - the same
+/// method through the same pipeline - which is the point: it puts every compile
+/// the test corpus performs through the asynchronous machine without any
+/// promotion policy having to exist first.
+bool
+async_recompiling (const char *name)
+{
+	static const char *filter = g_getenv ("MONO_LLVM_JIT_ASYNC_RECOMPILE");
+
+	if (filter == nullptr)
+		return false;
+	return std::string_view (filter) == "1" || strstr (name, filter) != nullptr;
+}
+
+/// How long MONO_LLVM_JIT_ASYNC_DELAY asks the worker to sit on each compile
+/// before starting it, in milliseconds. Widens the window a domain unload or a
+/// method free has to race against, which is otherwise too narrow to hit.
+unsigned
+async_delay ()
+{
+	static unsigned ms = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_ASYNC_DELAY");
+
+		return value != nullptr ? (unsigned) atoi (value) : 0u;
+	}();
+
+	return ms;
 }
 
 void
@@ -558,6 +596,15 @@ private:
 		/// fires (AppDomain:InvokeInDomain switches the domain and then calls).
 		MonoDomain *domain;
 		std::unique_ptr<MonoJit> jit;
+		/// This domain's share of the background compile queue.
+		///
+		/// Queued work holds a raw pointer to this state, which is sound
+		/// because closing the channel is what free_domain () does before
+		/// destroying it: after that nothing queued for the domain will run
+		/// and nothing running for it still is. The channel being a member is
+		/// what ties the two together - the state cannot be destroyed without
+		/// it being closed.
+		std::optional<CompileQueue::Channel> queue;
 		/// Methods whose stubs are defined in the linker, so a callee reached
 		/// from several places is only given its stubs once. Defined is all a
 		/// caller's module needs to link.
@@ -650,6 +697,19 @@ private:
 	Expected<void *> interp_body_entry (DomainState &state, MonoMethod *method,
 	                                    void *legacy);
 
+	/// Compile METHOD into STATE's linker and point both of its stubs at what
+	/// comes out, whether or not it has been compiled there already.
+	///
+	/// Recording the result is what makes the new code the answer everything
+	/// downstream gives for the method; the redirects are what make callers
+	/// that were compiled long ago reach it.
+	Expected<Compiled> compile_and_publish (DomainState &state, MonoMethod *method);
+
+	/// Ask for METHOD to be compiled again on the background worker, its stubs
+	/// redirected to the second body when it is done. Returns quietly when the
+	/// work is refused - see CompileQueue on why nothing retries.
+	void enqueue_recompile (DomainState &state, MonoMethod *method);
+
 	/// The legacy entry - the interop thunk - as a compile of its own, with
 	/// no body beside it. It reaches the method through the body's stub, so
 	/// it is domain-neutral and safe to build whichever domain the building
@@ -680,6 +740,10 @@ private:
 
 	std::mutex mutex_;
 	std::unordered_map<MonoDomain *, std::unique_ptr<DomainState>> domains_;
+
+	/// Where compiles that nobody is waiting for run. Declared last so that it
+	/// is torn down first: its worker takes mutex_ and holds domain states.
+	CompileQueue queue_ { std::make_unique<CompileWorker> () };
 };
 
 /// The one Backend, once get () has made it. Kept at file scope so that
@@ -739,6 +803,7 @@ Backend::state_for (MonoDomain *domain)
 
 	fresh->domain = domain;
 	fresh->jit = std::move (*jit);
+	fresh->queue.emplace (&queue_);
 	return (domains_[domain] = std::move (fresh)).get ();
 }
 
@@ -748,6 +813,22 @@ Backend::free_domain (MonoDomain *domain)
 	if (live_backend == nullptr)
 		return;
 
+	/*
+	 * Closing the channel is what makes the rest of this safe. The caller
+	 * proves no managed thread is executing in the domain, but it cannot prove
+	 * anything about the compile worker: a background compile is not
+	 * "executing in the domain" in any sense mono_domain_unload () can see, and
+	 * it holds this state and redirects stubs that are about to be freed.
+	 * Closing refuses further work for the domain, drops what is queued and
+	 * waits for what is running, so by the time the state is destroyed below
+	 * nothing is left holding it.
+	 *
+	 * The drain runs outside mutex_, which the worker takes, and it has to run
+	 * outside the loader lock as well: the compile it is waiting for may be
+	 * blocked on that lock, and there is no way to ask whether this thread
+	 * holds it - mono only tracks that under a debug flag. Domain teardown
+	 * releases it well before here.
+	 */
 	std::unique_ptr<DomainState> state;
 	{
 		std::lock_guard<std::mutex> lock (live_backend->mutex_);
@@ -755,9 +836,18 @@ Backend::free_domain (MonoDomain *domain)
 
 		if (it == live_backend->domains_.end ())
 			return;
+
+		/*
+		 * Unlinked first, so that nothing new finds this state to compile
+		 * into, and only then drained: an enqueue racing the drain either got
+		 * in before it - and is dropped by it - or cannot reach the state at
+		 * all. The unique_ptr holds the state alive for the drain.
+		 */
 		state = std::move (it->second);
 		live_backend->domains_.erase (it);
 	}
+
+	state->queue->close ();
 	/* The linker goes down with the state, releasing the domain's code. */
 }
 
@@ -945,6 +1035,20 @@ Backend::free_method (MonoMethod *method)
 {
 	if (live_backend == nullptr)
 		return;
+
+	/*
+	 * A background compile of this method has to be finished with before any
+	 * of it is taken apart: it redirects the stubs undefined below and it
+	 * reads the MonoMethod, which mono_free_method () is about to hand back to
+	 * the allocator. Before the lock, which the work takes, and - like the
+	 * drain in free_domain () - outside the loader lock, which the compile
+	 * being waited for may be blocked on.
+	 *
+	 * Dropping the tag does not refuse it in future, because the next dynamic
+	 * method to land on this address is a different method that has every
+	 * right to be compiled.
+	 */
+	live_backend->queue_.drop (method);
 
 	/* One domain's share of the release: gathered under the lock, carried out
 	 * after it, because both removals take the ORC session lock. */
@@ -1749,6 +1853,67 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 	return wants_body ? code->entry : *stub;
 }
 
+/*
+ * A compile on the worker has to be purely generative, because the worker must
+ * never run managed code: it is a thread the program has no idea exists, and a
+ * static constructor on it can block on anything and take any lock.
+ *
+ * Everything a compile does is generative except one branch. A method not
+ * implemented in IL is handed to mono_jit_compile_method (), whose cache-hit
+ * path takes the class's vtable and calls mono_runtime_class_init_full () -
+ * which is a cctor. That is the only such path inside a compile, so declining
+ * these is the whole decline list. Translation itself resolves classes and
+ * reserves callee stubs and compiles nothing transitively.
+ */
+bool
+compilable_off_thread (MonoMethod *method)
+{
+	return !implemented_outside_il (method);
+}
+
+void
+Backend::enqueue_recompile (DomainState &state, MonoMethod *method)
+{
+	char *name = mono_method_full_name (method, TRUE);
+	bool wanted = async_recompiling (name) && compilable_off_thread (method);
+
+	g_free (name);
+
+	if (!wanted)
+		return;
+
+	/*
+	 * The state is captured raw: it cannot be destroyed until its channel has
+	 * been closed, and closing waits for this work. See DomainState::queue.
+	 */
+	DomainState *owner = &state;
+
+	state.queue->enqueue (method, [this, owner, method] {
+		if (unsigned ms = async_delay ())
+			std::this_thread::sleep_for (std::chrono::milliseconds (ms));
+
+		Expected<Compiled> code = compile_and_publish (*owner, method);
+
+		if (code)
+			return;
+
+		/*
+		 * Nobody is waiting for this, and the method already has a body that
+		 * works. A background compile that fails leaves the method exactly as
+		 * it was, which is why nothing here retries or raises.
+		 */
+		if (tracing ()) {
+			char *failed = mono_method_full_name (method, TRUE);
+
+			fprintf (stderr, "[llvm-jit] background compile of %s failed: %s\n",
+			         failed, toString (code.takeError ()).c_str ());
+			g_free (failed);
+			return;
+		}
+		consumeError (code.takeError ());
+	});
+}
+
 Expected<Backend::Compiled>
 Backend::ensure_entries (DomainState &state, MonoMethod *method, bool again)
 {
@@ -1765,6 +1930,21 @@ Backend::ensure_entries (DomainState &state, MonoMethod *method, bool again)
 			return interp->second;
 	}
 
+	Expected<Compiled> code = compile_and_publish (state, method);
+
+	/*
+	 * Here rather than in compile_and_publish (), which is also what the
+	 * background compile itself calls: asking for another one from in there
+	 * would queue a compile per compile forever.
+	 */
+	if (code)
+		enqueue_recompile (state, method);
+	return code;
+}
+
+Expected<Backend::Compiled>
+Backend::compile_and_publish (DomainState &state, MonoMethod *method)
+{
 	/*
 	 * Materialize as the domain the code is for. Translation itself is kept
 	 * domain-clean, but what it calls back into is not: the outside-il branch
