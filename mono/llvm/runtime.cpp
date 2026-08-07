@@ -863,10 +863,45 @@ Backend::set_interp_filter (const char *filter)
 	interp_tier0_filter = filter;
 }
 
+/*
+ * --jitdump: name every function a linked object defines in /tmp/jit-<pid>.dump,
+ * so perf resolves a sample in JIT-produced code to a method instead of to a
+ * bare address.
+ *
+ * A method is several executable ranges - the fastcc body, the `$legacy` and
+ * `$entry` thunks, one body per filter clause - and all of them run, so each
+ * gets a record of its own. The names the object carries end in the method
+ * pointer that gives a symbol its identity; a profile wants the readable half,
+ * keeping whatever suffix said which piece of the method this is.
+ */
+void
+dump_object_code (MonoMethod *method, const CompiledMethod &compiled)
+{
+	std::string symbol = symbol_for_body (method);
+	char *full = mono_method_full_name (method, TRUE);
+	std::string pretty = full;
+
+	g_free (full);
+
+	for (const auto &[name, extent] : compiled.functions) {
+		const auto &[code, size] = extent;
+		StringRef suffix (name);
+		std::string display =
+			suffix.consume_front (symbol) ? pretty + suffix.str () : name;
+
+		mono_emit_jit_dump_code (display.c_str (),
+		                         const_cast<uint8_t *> (code),
+		                         (guint32) size, nullptr, 0);
+	}
+}
+
 void
 Backend::remember (DomainState &state, MonoMethod *method,
                    const CompiledMethod &compiled, MonoJitInfo *jinfo)
 {
+	if (mono_jit_dump_is_enabled ())
+		dump_object_code (method, compiled);
+
 	/*
 	 * Every call that leaves this object and could not reach its target with a
 	 * pc-relative branch goes through a stub JITLink planted beside the code,
