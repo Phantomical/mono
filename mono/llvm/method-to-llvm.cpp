@@ -967,7 +967,7 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			 */
 			if (builder.GetInsertBlock ()->getTerminator () == nullptr) {
 				if (auto error = enter_block (builder, ip, spill_stack (builder)))
-					return std::move (error);
+					return error;
 
 				builder.CreateBr (next.block);
 			}
@@ -1023,7 +1023,7 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			emit_seq_point (builder, (uint32_t) offset);
 
 		if (llvm::Error error = emit_instruction (builder))
-			return std::move (error);
+			return error;
 	}
 
 	if (builder.GetInsertBlock ()->getTerminator () == nullptr)
@@ -1314,7 +1314,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_CALLVIRT:
 		if (llvm::Error error = emit_call (builder, static_cast<uint32_t> (operand),
 		                                   opcode == MONO_CEE_CALLVIRT))
-			return std::move (error);
+			return error;
 		emit_after_call_seq_point (builder, /* nests */ true);
 		return llvm::Error::success ();
 	case MONO_CEE_JMP:
@@ -1410,7 +1410,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		return emit_unbox_any (builder, static_cast<uint32_t> (operand));
 	case MONO_CEE_NEWOBJ:
 		if (llvm::Error error = emit_newobj (builder, static_cast<uint32_t> (operand)))
-			return std::move (error);
+			return error;
 		emit_after_call_seq_point (builder, /* nests */ false);
 		return llvm::Error::success ();
 	case MONO_CEE_LDFTN:
