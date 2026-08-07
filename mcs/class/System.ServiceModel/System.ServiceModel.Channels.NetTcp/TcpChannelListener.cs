@@ -67,7 +67,12 @@ namespace System.ServiceModel.Channels.NetTcp
 			info = new TcpChannelInfo (source, MessageEncoder, quotas);
 		}
 		
-		SynchronizedCollection<ManualResetEvent> accept_handles = new SynchronizedCollection<ManualResetEvent> ();
+		// Guards the queue of accepted clients together with the list of waiters on
+		// it.  Looking at the queue and registering a waiter have to be one step: a
+		// client queued in between signals nobody, and the waiter then sleeps out its
+		// whole timeout with a connection already sitting there.
+		object accept_lock = new object ();
+		List<ManualResetEvent> accept_handles = new List<ManualResetEvent> ();
 		Queue<TcpClient> accepted_clients = new Queue<TcpClient> ();
 		SynchronizedCollection<TChannel> accepted_channels = new SynchronizedCollection<TChannel> ();
 
@@ -111,31 +116,47 @@ namespace System.ServiceModel.Channels.NetTcp
 		{
 			DateTime start = DateTime.UtcNow;
 
-			TcpClient client = accepted_clients.Count == 0 ? null : accepted_clients.Dequeue ();
-			if (client == null) {
-				var wait = new ManualResetEvent (false);
-				accept_handles.Add (wait);
-				if (!wait.WaitOne (timeout)) {
-					accept_handles.Remove (wait);
-					return null;
-				}
-				accept_handles.Remove (wait);
-				// recurse with new timeout, or return null if it's either being closed or timed out.
-				timeout -= (DateTime.UtcNow - start);
-				return State == CommunicationState.Opened && timeout > TimeSpan.Zero ? AcceptTcpClient (timeout) : null;
-			}
+			while (true) {
+				TcpClient client = null;
+				ManualResetEvent wait = null;
 
-			// There might be bettwe way to exclude those TCP clients though ...
+				lock (accept_lock) {
+					if (accepted_clients.Count > 0)
+						client = accepted_clients.Dequeue ();
+					else {
+						wait = new ManualResetEvent (false);
+						accept_handles.Add (wait);
+					}
+				}
+
+				if (client == null) {
+					var remaining = timeout - (DateTime.UtcNow - start);
+					bool signaled = remaining > TimeSpan.Zero && wait.WaitOne (remaining);
+					lock (accept_lock)
+						accept_handles.Remove (wait);
+					// timed out, or woken by the listener being closed.
+					if (!signaled || State != CommunicationState.Opened)
+						return null;
+					continue;
+				}
+
+				// There might be better way to exclude those TCP clients though ...
+				if (!IsAlreadyAccepted (client))
+					return client;
+				// ... it is handled in another BeginTryReceive/EndTryReceive loop in ChannelDispatcher.
+			}
+		}
+
+		bool IsAlreadyAccepted (TcpClient client)
+		{
 			foreach (var ch in accepted_channels) {
 				var dch = ch as TcpDuplexSessionChannel;
-				if (dch == null || dch.TcpClient == null && !dch.TcpClient.Connected)
+				if (dch == null || dch.TcpClient == null || !dch.TcpClient.Connected)
 					continue;
 				if (((IPEndPoint) dch.TcpClient.Client.RemoteEndPoint).Equals (client.Client.RemoteEndPoint))
-					// ... then it should be handled in another BeginTryReceive/EndTryReceive loop in ChannelDispatcher.
-					return AcceptTcpClient (timeout - (DateTime.UtcNow - start));
+					return true;
 			}
-
-			return client;
+			return false;
 		}
 
 		[MonoTODO]
@@ -166,9 +187,9 @@ namespace System.ServiceModel.Channels.NetTcp
 				throw new InvalidOperationException ("Current state is " + State);
 			//tcp_listener.Client.Close (Math.Max (50, (int) timeout.TotalMilliseconds));
 			tcp_listener.Stop ();
-			var l = new List<ManualResetEvent> (accept_handles);
-			foreach (var wait in l) // those handles will disappear from accepted_handles
-				wait.Set ();
+			lock (accept_lock)
+				foreach (var wait in accept_handles)
+					wait.Set ();
 			tcp_listener = null;
 		}
 
@@ -197,9 +218,14 @@ namespace System.ServiceModel.Channels.NetTcp
 			try {
 				var client = listener.EndAcceptTcpClient (result);
 				if (client != null) {
-					accepted_clients.Enqueue (client);
-					if (accept_handles.Count > 0)
-						accept_handles [0].Set ();
+					lock (accept_lock) {
+						accepted_clients.Enqueue (client);
+						// Waking every waiter costs a spurious pass around the loop
+						// above, where waking only the first one drops a client
+						// whenever two arrive before that waiter has dequeued.
+						foreach (var wait in accept_handles)
+							wait.Set ();
+					}
 				}
 			} catch (ObjectDisposedException) {
 				/* If an accept fails, just ignore it. Maybe the remote peer disconnected already */
