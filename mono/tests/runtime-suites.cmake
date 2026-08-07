@@ -263,7 +263,8 @@ if(MONO_ENABLE_INTERPRETER)
   # compilation, and there is none -- but this one's cost is domain unloads
   # against a saturated machine, which the interpreter does not make faster.
   mono_runtime_suite(runtime-interp LABEL interp TESTS ${_interp}
-                     RUNTIME_ARGS "--interpreter" GC sgen
+                     RUNTIME_ARGS "--interpreter"
+                     SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                      LONG appdomain-threadpool-unload.exe)
 endif()
 

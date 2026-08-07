@@ -69,6 +69,8 @@ static mono_mutex_t mono_gc_lock;
 static GC_push_other_roots_proc default_push_other_roots;
 static GHashTable *roots;
 
+static MonoGCCallbacks gc_callbacks;
+
 typedef struct ephemeron_node ephemeron_node;
 static ephemeron_node* ephemeron_list;
 
@@ -771,6 +773,53 @@ push_handle_stack (HandleStack* stack)
 	}
 }
 
+/*
+ * A managed local lives in the interpreter's own value stack rather than on the native
+ * stack Boehm knows about, so nothing else here would see it. The interpreter reports
+ * the live part of that stack a slot at a time; Boehm wants ranges, and the slots come
+ * in address order within each region it walks, so runs of them are coalesced and each
+ * run is pushed as a single mark stack entry.
+ */
+typedef struct {
+	gpointer *start;
+	gpointer *end;
+} InterpScanRun;
+
+static void
+flush_interp_run (InterpScanRun *run)
+{
+	if (run->start != run->end)
+		GC_push_all (run->start, run->end);
+	run->start = run->end = NULL;
+}
+
+static void
+push_interp_slot (gpointer *slot, gpointer data)
+{
+	InterpScanRun *run = (InterpScanRun*)data;
+
+	if (run->end != slot)
+		flush_interp_run (run);
+	if (!run->start)
+		run->start = slot;
+	run->end = slot + 1;
+}
+
+/*
+ * Asking the interpreter rather than registering its stack as a root keeps the scan to
+ * what is in use: the value stack is a megabyte-per-thread reservation of which only
+ * the part below the stack pointer means anything, and the frame data spilled alongside
+ * it is a chain of separate allocations that comes and goes.
+ */
+static void
+push_interp_stack (MonoThreadInfo *info)
+{
+	InterpScanRun run = { NULL, NULL };
+
+	gc_callbacks.interp_mark_func (info, push_interp_slot, &run, FALSE);
+	flush_interp_run (&run);
+}
+
 static mse*
 GC_roots_proc (word* addr, mse* mark_stack_ptr,	mse* mark_stack_limit, word env)
 {
@@ -835,6 +884,8 @@ mono_push_other_roots (void)
 		HandleStack* stack = info->handle_stack;
 		if (stack)
 			push_handle_stack (stack);
+		if (gc_callbacks.interp_mark_func)
+			push_interp_stack (info);
 	} FOREACH_THREAD_END
 	GC_push_all (&ephemeron_list, &ephemeron_list + 1);
 	if (default_push_other_roots)
@@ -1543,6 +1594,7 @@ mono_gc_get_bitmap_for_descr (void *descr, int *numbits)
 void
 mono_gc_set_gc_callbacks (MonoGCCallbacks *callbacks)
 {
+	gc_callbacks = *callbacks;
 }
 
 void

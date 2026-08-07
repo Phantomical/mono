@@ -190,14 +190,9 @@ because `ctest -L` is a regex and a `gc-sgen` label would be swept up by `-L sge
 already means the SGen collector matrix. That matrix is the one suite pinned to `GC sgen`:
 `mono-boehm` accepts `--gc=sgen` and `--gc-params`, ignores them, and exits 0.
 
-Boehm is not fully green, and the two halves fail differently. The JIT on Boehm is stable:
-three programs are excluded from the boehm half only, listed in `MONO_TESTS_BOEHM_DISABLED`
-in `tests.cmake` with a note on each. The **interpreter on Boehm is unstable**
-and is therefore not run at all (`GC sgen` on the `runtime-interp` suite) — the failures
-are not a fixed set, so there is nothing to list: two back-to-back runs of the same 481
-tests failed 5 and 4 and agreed on only 2, and a full run failed 76. Each of those passes
-under interp+SGen and under JIT+Boehm, so it is the combination that is broken. Making
-Boehm green means chasing that instability, not ticking off names.
+Three programs are excluded from the boehm half of every suite, listed in
+`MONO_TESTS_BOEHM_DISABLED` in `tests.cmake` with a note on each. Otherwise Boehm runs
+what SGen runs, the interpreter included.
 
 The class-library suites are named per assembly — `bcl-corlib`, `bcl-System.Xml`, and
 `bcl-xunit-<assembly>` for the xunit half — and the largest of them are cut into one test

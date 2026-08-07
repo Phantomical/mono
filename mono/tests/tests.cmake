@@ -477,6 +477,7 @@ set(MONO_TESTS_CS_SRC
   dynamic-method-delegate.cs
   dynamic-method-gc-in-body.cs
   dynamic-method-gc-in-frame.cs
+  interp-stack-gc-root.cs
   verbose.cs
   generic-unmanaged-constraint.cs
   bug-10834.cs
@@ -1302,12 +1303,4 @@ set(MONO_TESTS_BOEHM_DISABLED
   monitor-resurrection.exe
 )
 
-# The interpreter is not run on Boehm at all -- see the `GC sgen` on the
-# runtime-interp suite. It is not a fixed set of failures that could be listed
-# here: two back-to-back runs of the same 481 tests failed 5 and 4 of them and
-# agreed on only 2, and a full run failed 76. The names move, so the collector
-# and the interpreter are miscooperating rather than some tests being
-# unsupported. The JIT on Boehm is stable by comparison -- the four above are
-# the whole of it, and they fail the same way every time.
-#
-# Every one of those failures passes under interp+SGen and under JIT+Boehm.
+# The interpreter runs on Boehm too, and the same three come off that half.
