@@ -217,6 +217,12 @@ namespace System.ServiceModel.Channels.NetTcp
 				client.Close ();
 		}
 		
+		static int ToMilliseconds (TimeSpan timeout)
+		{
+			double ms = timeout.TotalMilliseconds;
+			return ms >= Int32.MaxValue ? Int32.MaxValue : (int) ms;
+		}
+
 		protected override void OnOpen (TimeSpan timeout)
 		{
 			if (! is_service_side) {
@@ -224,6 +230,10 @@ namespace System.ServiceModel.Channels.NetTcp
 				frame = new TcpBinaryFrameManager (TcpBinaryFrameManager.DuplexMode, ns, is_service_side) {
 					Encoder = this.Encoder,
 					Via = this.Via };
+				// The preamble exchange is a plain blocking read, so a peer that
+				// never acks holds the channel open forever unless the timeout we
+				// were handed reaches the socket.
+				client.SendTimeout = client.ReceiveTimeout = ToMilliseconds (timeout);
 				frame.ProcessPreambleInitiator ();
 				frame.ProcessPreambleAckInitiator ();
 				session = new TcpDuplexSession (this); // make sure to shutdown the session once it has initiated one.
