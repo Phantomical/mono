@@ -133,8 +133,16 @@ namespace MonoTests.System.Threading
 		private class C2Test
 		{
 			public int cnt;
-			public bool run = false;
-			
+			/* Read from another thread's spin loop, so it has to be a volatile
+			   read there or the JIT is free to hoist it out and spin forever. */
+			public volatile bool run = false;
+			/* This assembly is built without MONO_FEATURE_THREAD_ABORT, so the
+			   tests below stop this thread with Interrupt (), which a loop that
+			   never waits does not notice.  Without a way out, each test leaves
+			   a foreground thread spinning: they steal CPU from the rest of the
+			   suite and then keep the process alive after it finishes. */
+			public volatile bool stop = false;
+
 			public C2Test()
 			{
 				this.cnt = 0;
@@ -143,7 +151,7 @@ namespace MonoTests.System.Threading
 			public void TestMethod()
 			{
 				run = true;
-				while (true)
+				while (!stop)
 				{
 					if (cnt < 1000)
 						cnt++;
@@ -329,6 +337,7 @@ namespace MonoTests.System.Threading
 			TestThread.Abort();
 #else
 			TestThread.Interrupt ();
+			test1.stop = true;
 #endif
 			try {
 				TestThread.Start();
@@ -348,6 +357,7 @@ namespace MonoTests.System.Threading
 			TestThread.Abort();
 #else
 			TestThread.Interrupt ();
+			test1.stop = true;
 #endif
 		}
 		}
@@ -366,6 +376,7 @@ namespace MonoTests.System.Threading
 			TestThread.Abort();
 #else
 			TestThread.Interrupt ();
+			test1.stop = true;
 #endif
 		}
 
@@ -388,6 +399,7 @@ namespace MonoTests.System.Threading
 				TestThread.Abort();
 #else
 				TestThread.Interrupt ();
+				test1.stop = true;
 #endif
 			}
 		}
@@ -421,6 +433,7 @@ namespace MonoTests.System.Threading
 				TestThread.Abort();
 #else
 				TestThread.Interrupt ();
+				test1.stop = true;
 #endif
 			}
 			Assert.AreEqual (ThreadPriority.Normal, TestThread.Priority, "#44 Incorrect Priority in Aborted thread: ");
@@ -450,6 +463,7 @@ namespace MonoTests.System.Threading
 				TestThread.Abort();
 #else
 				TestThread.Interrupt ();
+				test1.stop = true;
 #endif
 			}
 		}
@@ -481,6 +495,7 @@ namespace MonoTests.System.Threading
 				TestThread.Abort();
 #else
 				TestThread.Interrupt ();
+				test1.stop = true;
 #endif
 			}
 		}
@@ -499,6 +514,7 @@ namespace MonoTests.System.Threading
 				TestThread.Abort();
 #else
 				TestThread.Interrupt ();
+				test1.stop = true;
 #endif
 			}
 			
@@ -530,6 +546,7 @@ namespace MonoTests.System.Threading
 				TestThread.Abort();
 #else
 				TestThread.Interrupt ();
+				test1.stop = true;
 #endif
 			}
 		}
@@ -693,6 +710,7 @@ namespace MonoTests.System.Threading
 				TestThread.Abort();
 #else
 				TestThread.Interrupt ();
+				test1.stop = true;
 #endif
 			}
 			
