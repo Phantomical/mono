@@ -1932,6 +1932,35 @@ buffer_add_string (Buffer *buf, const char *str)
 	}
 }
 
+/*
+ * Burst gets handed these through BurstMonoDebuggerCallbacks, whose members take a
+ * void* because Buffer is private to this file. Calling buffer_add_* through a
+ * differently-typed pointer would be undefined, so hand over these instead.
+ */
+inline static void
+buffer_add_byte_unsafe (void *buf, guint8 val)
+{
+	buffer_add_byte (buf, val);
+}
+
+inline static void
+buffer_add_int_unsafe (void *buf, guint32 val)
+{
+	buffer_add_int (buf, val);
+}
+
+inline static void
+buffer_add_id_unsafe (void *buf, int id)
+{
+	buffer_add_id (buf, id);
+}
+
+inline static void
+buffer_add_string_unsafe (void *buf, const char *str)
+{
+	buffer_add_string (buf, str);
+}
+
 static void
 buffer_add_byte_array (Buffer *buf, guint8 *bytes, guint32 arr_len)
 {
@@ -10635,10 +10664,10 @@ static void burst_mono_install_hooks_imp(BurstMonoDebuggerCallbacks* callbacks,v
 	g_BurstDebugCallbacks.BurstFetchMethodName = callbacks->BurstFetchMethodName;
 
 	// Provide the callee with access to the features it will need
-	callbacks->buffer_add_byte = buffer_add_byte;
-	callbacks->buffer_add_int = buffer_add_int;
-	callbacks->buffer_add_id = buffer_add_id;
-	callbacks->buffer_add_string = buffer_add_string;
+	callbacks->buffer_add_byte = buffer_add_byte_unsafe;
+	callbacks->buffer_add_int = buffer_add_int_unsafe;
+	callbacks->buffer_add_id = buffer_add_id_unsafe;
+	callbacks->buffer_add_string = buffer_add_string_unsafe;
 	callbacks->buffer_add_ptr_id = buffer_add_ptr_id_unsafe;
 	callbacks->mono_burst_shutdown = burst_mono_shutdown;
 
