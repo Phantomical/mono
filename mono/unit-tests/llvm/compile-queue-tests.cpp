@@ -258,6 +258,47 @@ TEST (CompileQueue, AStoppedQueueTakesNothing)
 	EXPECT_FALSE (ran.load ());
 }
 
+/*
+ * The other side of the same rule. Every drain here waits for the worker, so
+ * the worker reaching one waits for itself - and it would do so silently, on a
+ * thread nothing is watching, with whoever eventually notices somewhere else
+ * entirely. So it dies instead, and it has to die in a release build too: this
+ * is the configuration everything is tested and shipped in, and an assert ()
+ * would be compiled out of it.
+ *
+ * The queue is built inside the statement so that the fork happens before there
+ * is a worker thread to fork away from.
+ */
+TEST (CompileQueueDeathTest, DrainingFromTheWorkerDiesRatherThanHanging)
+{
+	GTEST_FLAG_SET (death_test_style, "threadsafe");
+
+	EXPECT_DEATH (
+		{
+			CompileQueue queue;
+			CompileQueue::Channel channel (&queue);
+
+			channel.enqueue (nullptr, [&] { channel.close (); });
+			queue.drain ();
+		},
+		"closing a channel from the compile worker waits for itself");
+}
+
+TEST (CompileQueueDeathTest, StoppingFromTheWorkerDiesRatherThanHanging)
+{
+	GTEST_FLAG_SET (death_test_style, "threadsafe");
+
+	EXPECT_DEATH (
+		{
+			CompileQueue queue;
+			CompileQueue::Channel channel (&queue);
+
+			channel.enqueue (nullptr, [&] { queue.stop (); });
+			queue.drain ();
+		},
+		"stopping the queue from the compile worker waits for itself");
+}
+
 /// A CompileWorker the fixture can see the hooks of.
 class CountingWorker : public CompileWorker {
 public:

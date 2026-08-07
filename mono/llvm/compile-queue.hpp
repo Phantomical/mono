@@ -159,6 +159,20 @@ private:
 	bool enqueue (Channel &channel, void *tag, Work work);
 	void close (Channel &channel);
 
+	/// Die if this is the worker thread, naming WHAT it was asked to wait for.
+	///
+	/// Every wait below is a wait for the worker, so the worker reaching one
+	/// waits for itself. It is a hang rather than a crash, on a thread nothing
+	/// is watching, and the caller that eventually notices is somewhere else
+	/// entirely - so this is worth a loud death even in a release build.
+	/// Called with MUTEX_ held.
+	[[noreturn]] static void self_wait (const char *what);
+	void not_from_the_worker (const char *what) const
+	{
+		if (std::this_thread::get_id () == thread_.get_id ())
+			self_wait (what);
+	}
+
 	/// The worker thread's whole life.
 	void run ();
 

@@ -1,10 +1,19 @@
 #include "compile-queue.hpp"
 
+#include <llvm/Support/ErrorHandling.h>
+#include <llvm/ADT/Twine.h>
+
 #include <algorithm>
-#include <cassert>
 #include <utility>
 
 namespace mono {
+
+void
+CompileQueue::self_wait (const char *what)
+{
+	llvm::report_fatal_error (llvm::Twine (what)
+	                          + " from the compile worker waits for itself");
+}
 
 CompileQueue::CompileQueue (std::unique_ptr<Worker> worker)
 	: worker_ (std::move (worker))
@@ -35,8 +44,7 @@ CompileQueue::close (Channel &channel)
 {
 	std::unique_lock<std::mutex> lock (mutex_);
 
-	assert (std::this_thread::get_id () != thread_.get_id ()
-	        && "a drain from the worker waits for itself");
+	not_from_the_worker ("closing a channel");
 
 	/*
 	 * Closed before the queue is swept, so that a thread racing to enqueue
@@ -64,8 +72,7 @@ CompileQueue::drop (void *tag)
 {
 	std::unique_lock<std::mutex> lock (mutex_);
 
-	assert (std::this_thread::get_id () != thread_.get_id ()
-	        && "a drain from the worker waits for itself");
+	not_from_the_worker ("dropping a tag");
 
 	pending_.erase (std::remove_if (pending_.begin (), pending_.end (),
 	                                [tag] (const Item &item) {
@@ -84,6 +91,8 @@ CompileQueue::drain ()
 {
 	std::unique_lock<std::mutex> lock (mutex_);
 
+	not_from_the_worker ("draining the queue");
+
 	retired_.wait (lock,
 	               [this] { return pending_.empty () && running_.empty (); });
 }
@@ -93,6 +102,8 @@ CompileQueue::stop ()
 {
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
+
+		not_from_the_worker ("stopping the queue");
 
 		stopping_ = true;
 		pending_.clear ();
