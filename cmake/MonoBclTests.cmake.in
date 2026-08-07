@@ -14,6 +14,8 @@ set(_bcl_slow [==[@MONO_BCL_TESTS_SLOW@]==])
 set(_bcl_slow_seen "")
 set(_bcl_procs [==[@MONO_BCL_TESTS_PROCESSORS@]==])
 set(_bcl_procs_seen "")
+set(_bcl_threads [==[@MONO_BCL_TESTS_XUNIT_THREADS@]==])
+set(_bcl_threads_seen "")
 
 # Adds one test.  `suffix` distinguishes its result XML, since the groups run in
 # parallel and would otherwise write over each other; the remaining arguments
@@ -47,9 +49,29 @@ function(_bcl_add name suffix timeout)
       set(_bcl_procs_seen "${_bcl_seen}" PARENT_SCOPE)
     endif()
   endforeach()
+  # How xunit is told to schedule the group, and the reservation that goes with
+  # it.  The two come out of one entry so they cannot drift apart: a suite with
+  # threads and one slot oversubscribes the pool for as long as it runs.
+  set(_parallel "")
+  if(NOT "@_kind@" STREQUAL "nunit")
+    set(_parallel -parallel none)
+    foreach(_bcl_t IN LISTS _bcl_threads)
+      string(REGEX MATCH "^(.*)=([0-9]+)$" _bcl_m "${_bcl_t}")
+      if(_bcl_m AND "${CMAKE_MATCH_1}" STREQUAL "${name}")
+        set(_parallel -parallel collections -maxthreads "${CMAKE_MATCH_2}")
+        if(NOT _procs EQUAL 1)
+          message(WARNING "MONO_BCL_TESTS_PROCESSORS and MONO_BCL_TESTS_XUNIT_THREADS both name ${name}; the thread count wins")
+        endif()
+        set(_procs "${CMAKE_MATCH_2}")
+        set(_bcl_seen ${_bcl_threads_seen})
+        list(APPEND _bcl_seen "${_bcl_t}")
+        set(_bcl_threads_seen "${_bcl_seen}" PARENT_SCOPE)
+      endif()
+    endforeach()
+  endif()
   # CTest reads this file with its own add_test(), which only has the old
   # positional form -- no NAME/COMMAND, and no WORKING_DIRECTORY.
-  add_test("${name}" ${_bcl_command} ${_result} ${ARGN})
+  add_test("${name}" ${_bcl_command} ${_result} ${_parallel} ${ARGN})
   set_tests_properties("${name}" PROPERTIES
     WORKING_DIRECTORY "@_workdir@"
     LABELS "${_labels}"
@@ -99,5 +121,14 @@ foreach(_bcl_p IN LISTS _bcl_procs)
   list(FIND _bcl_procs_seen "${_bcl_p}" _bcl_seen_at)
   if(_bcl_owner STREQUAL "@_testname@" AND _bcl_seen_at EQUAL -1)
     message(WARNING "MONO_BCL_TESTS_PROCESSORS names ${_bcl_p}, which @_testname@ does not register")
+  endif()
+endforeach()
+
+foreach(_bcl_t IN LISTS _bcl_threads)
+  string(REGEX REPLACE "=[0-9]+$" "" _bcl_owner "${_bcl_t}")
+  string(REGEX REPLACE "/.*$" "" _bcl_owner "${_bcl_owner}")
+  list(FIND _bcl_threads_seen "${_bcl_t}" _bcl_seen_at)
+  if(_bcl_owner STREQUAL "@_testname@" AND _bcl_seen_at EQUAL -1)
+    message(WARNING "MONO_BCL_TESTS_XUNIT_THREADS names ${_bcl_t}, which @_testname@ does not register")
   endif()
 endforeach()

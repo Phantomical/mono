@@ -50,8 +50,11 @@ set(MONO_BCL_TESTS_LONG
   # near idle while the run as a whole holds about one core throughout -- more
   # cores would not shorten it, it just needs the wall time.
   bcl-System.Web
-  # System.Linq.Expressions.Tests measured 1631s against the 1800s this
-  # assembly used to get -- 91% of it, which is not headroom.
+  # Its `rest` group is nearly the whole assembly in one console: 733s at four
+  # threads on a quiet machine, against 1631s for the Expressions namespace
+  # alone when every collection ran in turn.  733s would fit the standard 1800s,
+  # but this is the suite whose measurements swing most with load, and a run
+  # that has to share the cores loses the threads before it loses anything else.
   bcl-xunit-System.Core
 )
 
@@ -109,6 +112,39 @@ set(MONO_BCL_TESTS_SPLIT
 set(MONO_BCL_SPLIT_MAX_GROUPS_nunit 0)
 set(MONO_BCL_SPLIT_MAX_GROUPS_xunit 8)
 
+# Namespaces that must not share a console with the rest of their assembly, as
+# `<suite>/<namespace>`.  Naming any changes what splitting that suite means:
+# instead of cutting it into groups by weight, the named namespaces get a
+# process each and everything else runs in one, as their complement.
+# MONO_BCL_SPLIT_MAX_GROUPS no longer applies to it.
+#
+# That is the shape a suite wants once it has an entry in
+# MONO_BCL_TESTS_XUNIT_THREADS.  Splitting exists to buy parallelism the console
+# would not otherwise have, and in-process parallelism is the cheaper way to buy
+# it: one console at four threads runs the same cases as four consoles at one,
+# without paying ~45s of runner JIT four times, and it fills those threads from
+# every class in the assembly rather than from one namespace at a time.
+#
+# The price is the other thing splitting bought.  A wedge in `rest` reports a
+# timeout naming `rest`, which for an assembly with one quarantined namespace is
+# barely narrower than naming the assembly -- so this trades diagnosis for wall
+# clock, and is worth it only where the wall clock is the problem.  Suites
+# without a MONO_BCL_TESTS_XUNIT_THREADS entry should stay split by weight.
+#
+# The complement is the part that has to be right.  A suite cut this way has no
+# catch-all, so `rest` is spelled as `-noclass` over the quarantined classes
+# rather than `-class` over the others: a class the lister missed then runs in
+# `rest` instead of running nowhere.
+set(MONO_BCL_TESTS_XUNIT_SERIAL
+  # PLINQ starts a query's worth of thread-pool work per case, so it is both the
+  # namespace most likely to be disturbed by neighbours and the one most likely
+  # to disturb them.  This is what upstream's assembly-wide CollectionBehavior
+  # was protecting before System.Core_xtest.dll.sources dropped it; giving the
+  # namespace a process keeps the protection without pinning the other 300
+  # classes in the assembly to one thread.
+  bcl-xunit-System.Core/System.Linq.Parallel.Tests
+)
+
 # A group runs under its assembly's budget rather than one of its own, so that
 # splitting a suite can never leave a test with less time than it had when the
 # suite ran whole.  There is deliberately no group timeout variable: the template
@@ -150,13 +186,10 @@ set(MONO_BCL_TESTS_SLOW
   # C# compiler that then runs on the runtime being built -- so this suite reads
   # the JIT's startup cost several hundred times over.
   bcl-System.Xml/MonoTests.System.XmlSerialization
-  # 1631s over 17257 cases.  Unlike the rest of this list its cost is genuinely
-  # spread -- 160 classes, heaviest 5.5%, thirteen to reach half the time -- so
-  # cutting it into four groups of ~400s would work if it ever has to come back
-  # into a sweep.  Splitting a namespace by class is machinery that does not
-  # exist yet; splitting an assembly by namespace is all MONO_BCL_TESTS_SPLIT
-  # does.
-  bcl-xunit-System.Core/System.Linq.Expressions.Tests
+  # 271 classes, and the only test here whose cost is genuinely spread rather
+  # than concentrated in one fixture -- which is what makes it the one that
+  # answers to threads.  See MONO_BCL_TESTS_XUNIT_THREADS.
+  bcl-xunit-System.Core/rest
   # 1854s with the machine to itself, and the most expensive test in the tree.
   # 1912s of CPU against that, so it is one core's worth of work end to end --
   # most of it in the C# compilers it forks, not in the console.
@@ -203,6 +236,40 @@ set(MONO_BCL_TESTS_PROCESSORS
   # 1.49 and 1.53 -- close enough to the 1.5 boundary that either value would
   # be defensible.
   bcl-corlib/MonoTests.System.Threading.Tasks=2
+)
+
+# xunit suites that run their collections concurrently, as `<test name>=<threads>`.
+# Everything not named here runs `-parallel none`, which is what the whole xunit
+# half ran before this list existed.
+#
+# A name here does two things: the console gets
+# `-parallel collections -maxthreads <threads>`, and the test reserves that many
+# slots of CTest's `-j` pool.  They are deliberately the same number and
+# deliberately not a second entry in MONO_BCL_TESTS_PROCESSORS -- a suite handed
+# threads but not slots oversubscribes the machine for its whole run, and two
+# lists would let the next person to add a suite update one and not the other
+# without anything failing to tell them.
+#
+# Whether a suite can take this at all is a property of the assembly, not of the
+# machine.  xunit's default is a collection per class, so an assembly with no
+# [Collection] and no [assembly: CollectionBehavior] presents one schedulable
+# unit per test class; nineteen corefx test directories carry one of those
+# attributes and would run serially however many threads they were given.  Check
+# before adding, because an inert entry here reads as "parallelism was tried and
+# did not help".  Beyond that the cases have to tolerate sharing a process:
+# `-noappdomain -noshadow` are already passed, so there is no appdomain
+# isolation for parallel collections to fall back on and the assembly's statics
+# are shared.
+#
+# The win is bounded by the console's own startup, which stays serial: ~41-49s
+# of JIT before the first case runs.
+set(MONO_BCL_TESTS_XUNIT_THREADS
+  # The whole assembly bar PLINQ -- see MONO_BCL_TESTS_XUNIT_SERIAL for why it
+  # is one group rather than seven.  Four rather than more because the reservation
+  # is charged for the run's full length while the threads are only busy after
+  # the console has started, and because a machine running this is normally also
+  # running the rest of the sweep.
+  bcl-xunit-System.Core/rest=4
 )
 
 # Suites whose source list names a file that is not in the tree.  System's
@@ -751,9 +818,12 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   else()
     set(_testname "bcl-xunit-${_stem}")
     set(_resultbase "${_resultbase}-xunit")
+    # No -parallel here: it is per-test rather than per-assembly, and the CTest
+    # side appends it along with the reservation that has to match it.  See
+    # MONO_BCL_TESTS_XUNIT_THREADS.
     set(_command "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
                  "${MONO_TEST_XUNIT_DIR}/xunit.console.exe" "${_out}"
-                 -noappdomain -noshadow -parallel none)
+                 -noappdomain -noshadow)
     foreach(_t IN LISTS MONO_TEST_XUNIT_NOTRAITS)
       list(APPEND _command -notrait "${_t}")
     endforeach()
@@ -837,6 +907,20 @@ macro(_mono_bcl_register)
   set(_max_groups ${MONO_BCL_SPLIT_MAX_GROUPS_${_kind}})
   set(_split 0)
 
+  # The namespaces this suite has to keep out of its shared console.  A suite
+  # with any is cut for isolation instead of by weight, so _max_groups no longer
+  # applies to it -- see MonoBclDiscover.cmake.
+  set(_quarantine "")
+  foreach(_q IN LISTS MONO_BCL_TESTS_XUNIT_SERIAL)
+    # Matched in its own command rather than inside the if(): CMAKE_MATCH_1 is
+    # expanded when the if()'s arguments are, which is before its own MATCHES
+    # would have set it.
+    string(REGEX MATCH "^(.*)/([^/]+)$" _qm "${_q}")
+    if(_qm AND "${CMAKE_MATCH_1}" STREQUAL "${_testname}")
+      list(APPEND _quarantine "${CMAKE_MATCH_2}")
+    endif()
+  endforeach()
+
   if("${_testname}" IN_LIST MONO_BCL_TESTS_SPLIT)
     set(_split 1)
     set(_discover "${MONO_MANAGED_DEPSDIR}/${_testtarget}.discover.cmake")
@@ -853,6 +937,7 @@ set(BCL_LISTING        [==[@_listing@]==])
 set(BCL_WORKDIR        [==[@_workdir@]==])
 set(BCL_ENVIRONMENT    [==[@_env@]==])
 set(BCL_MAX_GROUPS     [==[@_max_groups@]==])
+set(BCL_QUARANTINE     [==[@_quarantine@]==])
 set(BCL_OUTPUT         [==[@_groupfile@]==])
 ]] @ONLY)
     add_custom_command(
@@ -864,6 +949,10 @@ set(BCL_OUTPUT         [==[@_groupfile@]==])
       VERBATIM)
     add_custom_target(${_testtarget}-groups DEPENDS "${_groupfile}")
     add_dependencies(${_testtarget} ${_testtarget}-groups)
+  endif()
+
+  if(_quarantine AND NOT (_split AND "${_kind}" STREQUAL xunit))
+    message(WARNING "MONO_BCL_TESTS_XUNIT_SERIAL names ${_testname}, which is not a split xunit suite")
   endif()
 
   configure_file("${CMAKE_SOURCE_DIR}/cmake/MonoBclTests.cmake.in"

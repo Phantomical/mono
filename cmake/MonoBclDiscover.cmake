@@ -249,6 +249,68 @@ foreach(_g RANGE ${_glast})
 endforeach()
 
 # ---------------------------------------------------------------------------
+# xunit with a quarantine list: cut for isolation rather than for throughput
+# ---------------------------------------------------------------------------
+# A suite whose collections run concurrently in one console wants the opposite
+# of a split: everything in a single process, since each extra one costs ~45s of
+# runner JIT before a case runs.  What it still cannot do is share that process
+# with a namespace that has to run on its own.
+#
+# So the named namespaces get a process each and everything else runs as their
+# complement -- which is why there is no catch-all here.  `-noclass` covers a
+# class the lister never saw as well, so nothing can fall out of the suite the
+# way it could if the remainder were spelled out class by class.
+#
+# nunit has no counterpart: `-test:` selects, and there is nothing that excludes
+# a fixture by name, so the remainder cannot be expressed.
+if(BCL_QUARANTINE AND BCL_KIND STREQUAL xunit)
+  set(_kept "")
+  set(_excluded "")
+  foreach(_g IN LISTS _live)
+    list(FIND BCL_QUARANTINE "${_gname_${_g}}" _q)
+    if(NOT _q LESS 0)
+      list(APPEND _kept ${_g})
+      list(APPEND _excluded ${_gmembers_${_g}})
+    endif()
+  endforeach()
+
+  # An entry naming a namespace this assembly does not have would otherwise just
+  # stop isolating it, which is indistinguishable from it not needing isolating.
+  foreach(_q IN LISTS BCL_QUARANTINE)
+    list(FIND _gkeys "${_q}" _at)
+    if(_at LESS 0)
+      _bcl_note("quarantine names ${_q}, which no class here is in")
+      message(WARNING "${BCL_TESTNAME}: quarantine names ${_q}, which no class here is in")
+    endif()
+  endforeach()
+
+  set(_out 0)
+  foreach(_g IN LISTS _kept)
+    set(_args "")
+    foreach(_m IN LISTS _gmembers_${_g})
+      list(APPEND _args "-class" "${_m}")
+    endforeach()
+    set(_outname_${_out} "${_gname_${_g}}")
+    set(_outargs_${_out} "${_args}")
+    math(EXPR _out "${_out} + 1")
+  endforeach()
+
+  set(_args "")
+  foreach(_m IN LISTS _excluded)
+    list(APPEND _args "-noclass" "${_m}")
+  endforeach()
+  set(_outname_${_out} "rest")
+  set(_outargs_${_out} "${_args}")
+  math(EXPR _out "${_out} + 1")
+
+  set(_catchall "")
+  list(LENGTH _excluded _nq)
+  _bcl_note("${_items} items, ${_nq} of them quarantined into ${_out} groups")
+  _bcl_emit(${_out})
+  return()
+endif()
+
+# ---------------------------------------------------------------------------
 # Cap the group count
 # ---------------------------------------------------------------------------
 # Each group is a process, and a process is not free: nunit-lite costs about 6s
