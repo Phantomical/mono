@@ -806,6 +806,7 @@ private:
 	llvm::Error emit_sizeof (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ckfinite (MonoIrBuilder &builder);
 	llvm::Error emit_break (MonoIrBuilder &builder);
+	llvm::Error emit_user_break (MonoIrBuilder &builder);
 
 private:
 	/// The next byte of the IL stream, or a refusal if the instruction runs off the

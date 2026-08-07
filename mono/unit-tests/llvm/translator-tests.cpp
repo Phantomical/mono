@@ -1019,9 +1019,15 @@ TEST_F (TranslatorTest, CkfiniteRejectsNanAndInfinity)
 	EXPECT_GE (t.count ("throw_ArithmeticException"), 1u);
 }
 
-TEST_F (TranslatorTest, BreakBecomesADebugTrap)
+// What a break means is the runtime's decision, so it calls the runtime rather
+// than trapping: with a debugger client attached it raises a user-break event.
+TEST_F (TranslatorTest, BreakCallsTheDebuggerAgent)
 {
-	EXPECT_EQ (translate ("misc", "Misc:Breakpoint").count ("llvm.debugtrap"), 1u);
+	const Translation &t = translate ("misc", "Misc:Breakpoint");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("debugger_agent_user_break"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("llvm.debugtrap"), 0u);
 }
 
 // localloc is a dynamic alloca; the localsinit flag decides whether it is zeroed.

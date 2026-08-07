@@ -586,7 +586,35 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 llvm::Error
 MethodLLVMEmitter::emit_break (MonoIrBuilder &builder)
 {
-	builder.CreateIntrinsic (llvm::Intrinsic::debugtrap, llvm::ArrayRef<llvm::Type *> (), {});
+	return emit_user_break (builder);
+}
+
+/*
+ * Announce a break to whoever is debugging this process.
+ *
+ * The runtime decides what that means: with a soft-debugger client attached it
+ * raises a user-break event, with the native-break debug option it traps, and
+ * otherwise it does nothing. So this is a call rather than llvm.debugtrap,
+ * which would only ever be the middle one.
+ *
+ * It goes through the icall wrapper because the callee walks the stack for a
+ * managed frame to report the break against, and asserts that it finds one -
+ * the wrapper's LMF is what leads that walk out of native code and back into
+ * this frame.
+ */
+llvm::Error
+MethodLLVMEmitter::emit_user_break (MonoIrBuilder &builder)
+{
+	llvm::Expected<llvm::Function *> wrapper =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_debugger_agent_user_break);
+
+	if (!wrapper)
+		return wrapper.takeError ();
+
+	emit_protected_call (builder, *wrapper, {}, [] (llvm::CallBase *site) {
+		if (llvm::CallInst *call = llvm::dyn_cast<llvm::CallInst> (site))
+			call->setTailCallKind (llvm::CallInst::TCK_NoTail);
+	});
 	return llvm::Error::success ();
 }
 

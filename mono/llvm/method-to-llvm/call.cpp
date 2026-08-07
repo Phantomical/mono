@@ -26,6 +26,19 @@
 
 namespace mono {
 
+/// Whether TARGET is corlib's System.Diagnostics.Debugger::Break ().
+static bool
+is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
+{
+	MonoClass *klass = target->klass;
+
+	return sig->param_count == 0 && !sig->hasthis
+	       && m_class_get_image (klass) == mono_defaults.corlib
+	       && std::string_view (target->name) == "Break"
+	       && std::string_view (m_class_get_name (klass)) == "Debugger"
+	       && std::string_view (m_class_get_name_space (klass)) == "System.Diagnostics";
+}
+
 /// The method TOKEN names, resolved against this method's generic context.
 llvm::Expected<MonoMethod *>
 MethodLLVMEmitter::resolve_method (uint32_t token)
@@ -1083,6 +1096,17 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (callee_method->klass == mono_defaults.array_class
 	    && std::string_view (callee_method->name) == "UnsafeMov")
 		return emit_unsafe_mov (builder, sig);
+
+	/*
+	 * Debugger.Break () has an empty body and a comment where the code would be:
+	 * the JIT is what gives the call its meaning, and the meaning is the one the
+	 * break instruction has. An embedder can say no through mono_set_break_policy.
+	 */
+	if (is_debugger_break (callee_method, sig)) {
+		if (!mini_should_insert_breakpoint (method))
+			return llvm::Error::success ();
+		return emit_user_break (builder);
+	}
 
 	/*
 	 * The boxed receiver replaces the managed pointer in its stack slot, below the
