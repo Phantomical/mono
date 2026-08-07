@@ -1,5 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
+#include "../passes/class-init.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -170,11 +171,10 @@ MethodLLVMEmitter::field_symbol (MonoClassField *field)
 /// Run KLASS's static constructor if it has not run yet.
 ///
 /// This is a call rather than something settled while compiling: a cctor is arbitrary
-/// managed code and must never run on a compilation thread. mono_generic_class_init is
-/// idempotent and returns once the class is ready, so the only cost of emitting it at
-/// every access is one that a later pass can take back out - and it has to be emitted
-/// every time, because a vtable is not observably initialized even to the thread that
-/// just initialized it.
+/// managed code and must never run on a compilation thread. Nor can the call be
+/// guarded by a flag read off the vtable - a vtable is not observably initialized
+/// even to the thread that just initialized it - so every site the CIL asks for a
+/// check at gets one, and ClassInitPass drops the ones a dominating check covers.
 llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
@@ -186,6 +186,7 @@ MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 	if (!init)
 		return init.takeError ();
 
+	(*init)->addFnAttr (class_init_attribute);
 	emit_protected_call (builder, *init,
 	                     adapt_to_callee (builder, *init,
 	                                      {class_symbol (klass, "mono_vtable_")}));

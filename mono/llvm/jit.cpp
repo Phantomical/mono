@@ -14,6 +14,7 @@
 #include "seq-point-marker.hpp"
 #include "sidetables.hpp"
 #include "passes/array-address.hpp"
+#include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "stubs.hpp"
@@ -152,6 +153,7 @@ bool
 is_mono_pass (StringRef pass)
 {
 	return pass == ArrayAddressPass::name () ||
+	       pass == ClassInitPass::name () ||
 	       pass == LowerBuiltinsPass::name () ||
 	       pass == RestoreTailPositionPass::name () ||
 	       pass == arch::LegacyAbiPass::name ();
@@ -737,6 +739,15 @@ MonoJit::run_tier0_pipeline (Module &m)
 	mpm.addPass (LowerBuiltinsPass ());
 
 	/*
+	 * Once here, so a check the translator emitted for a class an earlier one
+	 * already covers costs the rest of the pipeline nothing, and again after,
+	 * because unrolling and jump threading copy whatever survived: a loop the
+	 * unroller straightens out ends up with one check per copied body, all but
+	 * the first of which the second run drops.
+	 */
+	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
+
+	/*
 	 * The function simplification pipeline rather than the whole O1 module
 	 * pipeline: a module here is a single method, so the module and CGSCC
 	 * layers have nothing to work on - no internal function to specialize, and
@@ -746,6 +757,8 @@ MonoJit::run_tier0_pipeline (Module &m)
 	 */
 	FunctionPassManager fpm = pb.buildFunctionSimplificationPipeline (
 		OptimizationLevel::O1, ThinOrFullLTOPhase::None);
+
+	fpm.addPass (ClassInitPass ());
 
 	/*
 	 * At O1 this is the one pass that only the module pipeline would have run,
