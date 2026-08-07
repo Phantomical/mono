@@ -2250,11 +2250,20 @@ compile_special (MonoMethod *method, MonoDomain *target_domain, MonoError *error
 				}
 
 				/*
-				 * HACK: missing gsharedvt_out wrappers to do transition to del tramp in interp-only mode.
-				 * Only when the interpreter really is the whole engine: started alongside the JIT, the
-				 * caller answers a NULL here by asking the JIT for the method, which delegates a method
-				 * implemented outside IL straight back to this function - and recurses until the stack
-				 * runs out.
+				 * Standing in for the gsharedvt_out wrappers that would have to sit
+				 * between a shared frame and the delegate trampoline, which
+				 * interpreter-only mode does not have.
+				 *
+				 * Nothing reaches it. With the interpreter as the whole engine every
+				 * request for a method is answered by it before compile_special runs,
+				 * and the one caller that insists on the JIT - the interpreter's own
+				 * MINT_JIT_CALL - never carries a delegate's Invoke, because
+				 * interp_transform_call emits MINT_CALL_DELEGATE for one instead. It
+				 * goes live as soon as something routes a runtime-implemented method
+				 * to the JIT in a mostly-interpreted process, and the answer there is
+				 * the trampoline below rather than a NULL: a caller reads a NULL as
+				 * "ask the JIT", and the JIT hands a method implemented outside IL
+				 * straight back to this function.
 				 */
 				if (mono_ee_features.force_use_interpreter)
 					return NULL;
