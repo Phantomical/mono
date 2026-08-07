@@ -281,6 +281,15 @@ MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests
 	if (wants_seq_point_at (ip))
 		return;
 
+	/*
+	 * A method the symbol file names no offsets for has no source of its own -
+	 * a compiler-generated accessor, a state machine's constructor - and gets no
+	 * stops at all. These would be the only ones it had, so a step into such a
+	 * method would land on a call in code the user never wrote.
+	 */
+	if (sym_seq_points && sym_seq_point_offsets.empty ())
+		return;
+
 	if (nests) {
 		if (call_seq_point_run)
 			il_debug_set_instruction_location (
