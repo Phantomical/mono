@@ -275,6 +275,14 @@ if(MONO_ENABLE_INTERPRETER)
   mono_runtime_suite(runtime-interp-entries LABEL interp
                      TESTS interp-entries.exe
                      RUNTIME_ARGS "--interp-tier0=Callee")
+
+  # `--interp=jit=<class>` compiles the named class and interprets the rest,
+  # which is the only way today to get a compiled frame and an interpreted one
+  # into the same process. Values the two engines hand each other -- a method
+  # pointer above all -- only have to agree here.
+  mono_runtime_suite(runtime-interp-jit LABEL interp
+                     TESTS interp-jit-delegate.exe
+                     RUNTIME_ARGS "--interpreter --interp=jit=Creator")
 endif()
 
 # domain-stress runs the appdomain create/unload loop for a fixed iteration
