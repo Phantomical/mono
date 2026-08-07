@@ -223,6 +223,7 @@ set(MONO_TESTS_CS_SRC
   bug-323114.cs
   bug-Xamarin-5278.cs
   interlocked.cs
+  volatile-prefix.cs
   delegate-async-exit.cs
   delegate-delegate-exit.cs
   delegate-exit.cs
@@ -743,6 +744,7 @@ set(MONO_TESTS_IL_SRC
   module-cctor-entrypoint.il
   bug-gh-9706.il
   localloc-noinit.il
+  volatile-prefix-shapes.il
   calli_native.il
 )
 

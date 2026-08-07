@@ -531,6 +531,7 @@ private:
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
 	llvm::Error emit_prefix (int opcode, uint64_t operand);
 	llvm::Align access_alignment (MonoType *location);
+	bool can_access_atomically (llvm::Type *type, llvm::Align align);
 	llvm::Value *emit_memory_load (MonoIrBuilder &builder, llvm::Type *type,
 	                               llvm::Value *address, MonoType *location);
 	void emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,

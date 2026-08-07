@@ -1,9 +1,13 @@
 #include "method-to-llvm.hpp"
+#include "jit.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/opcodes.h"
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Module.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/Support/MathExtras.h>
 
 namespace mono {
 
@@ -202,19 +206,54 @@ MethodLLVMEmitter::access_alignment (MonoType *location)
 	                               : type_alignment (location);
 }
 
+/// Whether one access of TYPE at ALIGN can be an LLVM atomic instruction, so that
+/// the ordering rides the access itself rather than a fence beside it.
+///
+/// LLVM takes an atomic load or store of a scalar - integer, pointer or floating
+/// point - whose size is a whole power-of-two number of bytes, and lowers anything
+/// the machine cannot do in one instruction into a call into the atomic runtime
+/// library that nothing here defines. So the access also has to fit the target's
+/// atomic width and be aligned to at least its own size.
+bool
+MethodLLVMEmitter::can_access_atomically (llvm::Type *type, llvm::Align align)
+{
+	if (!type->isIntegerTy () && !type->isPointerTy () && !type->isFloatingPointTy ())
+		return false;
+
+	llvm::TypeSize size = module->getDataLayout ().getTypeSizeInBits (type);
+
+	if (size.isScalable ())
+		return false;
+
+	uint64_t bits = size.getFixedValue ();
+
+	return bits >= 8 && llvm::isPowerOf2_64 (bits)
+	       && bits <= host_max_atomic_bits (*function) && bits <= align.value () * 8;
+}
+
 /// One load from ADDRESS as TYPE, honoring the volatile. and unaligned. prefixes on
 /// the instruction being emitted.
 llvm::Value *
 MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, llvm::Value *address,
                                      MonoType *location)
 {
-	llvm::LoadInst *value =
-		builder.CreateAlignedLoad (type, address, access_alignment (location));
+	llvm::Align align = access_alignment (location);
+	llvm::LoadInst *value = builder.CreateAlignedLoad (type, address, align);
 
-	/* A volatile read has acquire semantics (I.12.6.7). */
+	/*
+	 * A volatile read has acquire semantics (I.12.6.7). Acquire on the load
+	 * itself orders only that access, which is all III.2.6 asks for; a fence
+	 * would be a barrier at this point in the program and order everything
+	 * around it too. The load stays volatile either way - I.12.6.7 forbids
+	 * removing or coalescing a volatile operation, and atomic does not promise
+	 * that on its own.
+	 */
 	if (prefixes.volatile_) {
 		value->setVolatile (true);
-		builder.CreateFence (llvm::AtomicOrdering::Acquire);
+		if (can_access_atomically (type, align))
+			value->setAtomic (llvm::AtomicOrdering::Acquire);
+		else
+			builder.CreateFence (llvm::AtomicOrdering::Acquire);
 	}
 
 	return value;
@@ -229,8 +268,19 @@ void
 MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
                                       llvm::Value *address, MonoType *location)
 {
+	llvm::Align align = access_alignment (location);
+	/*
+	 * Only a plain scalar store can carry the release itself. A reference goes
+	 * through the write barrier, which does the store inside the call, and a
+	 * value class is a copy rather than one instruction - neither is an access
+	 * an ordering can be attached to, so those order with a fence.
+	 */
+	bool atomic = prefixes.volatile_ && !mini_type_is_reference (location)
+	              && !held_in_memory (location)
+	              && can_access_atomically (value->getType (), align);
+
 	/* A volatile write has release semantics (I.12.6.7). */
-	if (prefixes.volatile_)
+	if (prefixes.volatile_ && !atomic)
 		builder.CreateFence (llvm::AtomicOrdering::Release);
 
 	/*
@@ -257,18 +307,20 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 			                    {address, value, builder.getInt32 (1),
 			                     class_symbol (klass, "mono_class_")});
 		else
-			builder.CreateMemCpy (address, access_alignment (location), value,
+			builder.CreateMemCpy (address, align, value,
 			                      type_alignment (location),
 			                      vtype_size (location, /*native=*/false),
 			                      prefixes.volatile_);
 		return;
 	}
 
-	llvm::StoreInst *store =
-		builder.CreateAlignedStore (value, address, access_alignment (location));
+	llvm::StoreInst *store = builder.CreateAlignedStore (value, address, align);
 
-	if (prefixes.volatile_)
+	if (prefixes.volatile_) {
 		store->setVolatile (true);
+		if (atomic)
+			store->setAtomic (llvm::AtomicOrdering::Release);
+	}
 }
 
 llvm::Expected<llvm::Value *>
@@ -321,7 +373,11 @@ MethodLLVMEmitter::push_from_location (MonoIrBuilder &builder, llvm::Value *addr
 
 	builder.CreateMemCpy (*slot, type_alignment (t, native), address, source,
 	                      vtype_size (t, native), prefixes.volatile_);
-	/* A volatile read has acquire semantics (I.12.6.7). */
+	/*
+	 * A volatile read has acquire semantics (I.12.6.7). A copy is not one access
+	 * an ordering can be attached to, so this one is a fence. I.12.6.7 does not
+	 * promise a value class is read atomically anyway.
+	 */
 	if (prefixes.volatile_)
 		builder.CreateFence (llvm::AtomicOrdering::Acquire);
 

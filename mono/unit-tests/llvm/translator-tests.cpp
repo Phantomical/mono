@@ -181,6 +181,9 @@ const MethodRef translatable[] = {
 	{"prefixed", "Prefixed:VolatileWrite"},
 	{"prefixed", "Prefixed:VolatileStatic"},
 	{"prefixed", "Prefixed:UnalignedRead"},
+	{"prefixed", "Prefixed:VolatileWriteRef"},
+	{"prefixed", "Prefixed:VolatileReadStruct"},
+	{"prefixed", "Prefixed:UnalignedVolatileRead"},
 	{"prefixed", "Prefixed:ConstrainedOnClass"},
 	{"prefixed", "Prefixed:ConstrainedOnStruct"},
 	{"prefixed", "Prefixed:ConstrainedBoxes"},
@@ -1063,24 +1066,54 @@ TEST_F (TranslatorTest, BlockOpsBecomeTheIntrinsics)
 
 /* --------------------------------------------------------------- prefixes */
 
-// A volatile read has acquire semantics and a volatile write release, so the access
-// is marked volatile and paired with the matching fence.
-TEST_F (TranslatorTest, VolatileAccessesCarryTheirFences)
+// A volatile read has acquire semantics and a volatile write release (I.12.6.7).
+// Where the machine can make the access atomically the ordering rides the
+// instruction itself, which is what scopes it to that one access; volatile stays
+// on it because atomic alone does not promise the access survives.
+TEST_F (TranslatorTest, VolatileScalarAccessesCarryTheirOrdering)
 {
 	const Translation &read = translate ("prefixed", "Prefixed:VolatileRead");
 	const Translation &write = translate ("prefixed", "Prefixed:VolatileWrite");
 	const Translation &statics = translate ("prefixed", "Prefixed:VolatileStatic");
 
 	ASSERT_NE (read.function, nullptr) << read.error;
-	EXPECT_EQ (read.count ("load volatile i32"), 1u);
-	EXPECT_EQ (read.count ("fence acquire"), 1u);
+	EXPECT_EQ (read.count ("load atomic volatile i32"), 1u) << read.text ();
+	EXPECT_EQ (read.count ("acquire"), 1u);
+	EXPECT_EQ (read.count ("fence"), 0u);
 
 	ASSERT_NE (write.function, nullptr) << write.error;
-	EXPECT_EQ (write.count ("store volatile i32"), 1u);
-	EXPECT_EQ (write.count ("fence release"), 1u);
+	EXPECT_EQ (write.count ("store atomic volatile i32"), 1u) << write.text ();
+	EXPECT_EQ (write.count ("release"), 1u);
+	EXPECT_EQ (write.count ("fence"), 0u);
 
 	ASSERT_NE (statics.function, nullptr) << statics.error;
-	EXPECT_EQ (statics.count ("load volatile i32"), 1u);
+	EXPECT_EQ (statics.count ("load atomic volatile i32"), 1u) << statics.text ();
+	EXPECT_EQ (statics.count ("fence"), 0u);
+}
+
+// An access no single atomic instruction covers keeps the older shape: a plain
+// volatile access with a fence beside it. A reference is stored inside the write
+// barrier's call, a value class is a copy, and an access the unaligned. prefix
+// gave up the alignment of cannot be atomic at all.
+TEST_F (TranslatorTest, VolatileFallsBackToAFence)
+{
+	const Translation &ref = translate ("prefixed", "Prefixed:VolatileWriteRef");
+	const Translation &vtype = translate ("prefixed", "Prefixed:VolatileReadStruct");
+	const Translation &loose = translate ("prefixed", "Prefixed:UnalignedVolatileRead");
+
+	ASSERT_NE (ref.function, nullptr) << ref.error;
+	EXPECT_EQ (ref.count ("fence release"), 1u) << ref.text ();
+	EXPECT_EQ (ref.count ("wbarrier_generic_store"), 1u);
+
+	ASSERT_NE (vtype.function, nullptr) << vtype.error;
+	EXPECT_EQ (vtype.count ("fence acquire"), 1u) << vtype.text ();
+	EXPECT_GE (vtype.count ("llvm.memcpy"), 1u);
+	EXPECT_EQ (vtype.count ("atomic"), 0u);
+
+	ASSERT_NE (loose.function, nullptr) << loose.error;
+	EXPECT_EQ (loose.count ("load volatile i32"), 1u) << loose.text ();
+	EXPECT_EQ (loose.count ("fence acquire"), 1u);
+	EXPECT_EQ (loose.count ("atomic"), 0u);
 }
 
 TEST_F (TranslatorTest, UnalignedLowersTheAccessAlignment)

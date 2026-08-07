@@ -12,6 +12,8 @@
 .class public auto ansi beforefieldinit Chatty extends [mscorlib]System.Object
 {
 	.field public static int32 Shared
+	.field public static object Ref
+	.field public static valuetype Bare Value
 
 	.method public hidebysig specialname rtspecialname instance void .ctor () cil managed
 	{
@@ -81,6 +83,34 @@
 		ldarg.0
 		unaligned. 1
 		ldind.i8
+		ret
+	}
+
+	.method public static void VolatileWriteRef (object v) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		volatile.
+		stsfld object Chatty::Ref
+		ret
+	}
+
+	.method public static valuetype Bare VolatileReadStruct () cil managed
+	{
+		.maxstack 1
+		ldsflda valuetype Bare Chatty::Value
+		volatile.
+		ldobj valuetype Bare
+		ret
+	}
+
+	.method public static int32 UnalignedVolatileRead (native int p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		unaligned. 1
+		volatile.
+		ldind.i4
 		ret
 	}
 

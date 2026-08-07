@@ -26,6 +26,7 @@
 #include <vector>
 
 namespace llvm {
+class Function;
 class TargetMachine;
 } // namespace llvm
 
@@ -42,6 +43,14 @@ class StubTable;
 /// compiles: building one costs more than compiling a typical method, and a
 /// TargetMachine cannot be shared across threads.
 llvm::TargetMachine &host_target_machine ();
+
+/// The widest access, in bits, this target performs atomically with a single
+/// instruction when compiling F.
+///
+/// An atomic load or store wider than this is legal IR but lowers to a call
+/// into the atomic runtime library, which nothing here provides a definition
+/// for, so an access past this width has to be built some other way.
+unsigned host_max_atomic_bits (const llvm::Function &f);
 
 /// Whether the IR verifier runs over what this backend produces. Set by
 /// MONO_LLVM_JIT_VERIFY: `0`/`off` to turn it off, `each` to check after every

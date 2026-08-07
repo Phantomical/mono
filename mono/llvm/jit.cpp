@@ -20,6 +20,8 @@
 #include "stubs.hpp"
 #include "timing.hpp"
 
+#include <llvm/CodeGen/TargetLowering.h>
+#include <llvm/CodeGen/TargetSubtargetInfo.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
@@ -755,6 +757,15 @@ host_target_machine ()
 	static thread_local std::unique_ptr<TargetMachine> tm =
 		cantFail (host_target_machine_builder ().createTargetMachine ());
 	return *tm;
+}
+
+unsigned
+host_max_atomic_bits (const Function &f)
+{
+	const TargetSubtargetInfo *sti = host_target_machine ().getSubtargetImpl (f);
+	const TargetLowering *tli = sti != nullptr ? sti->getTargetLowering () : nullptr;
+
+	return tli != nullptr ? tli->getMaxAtomicSizeInBitsSupported () : 0;
 }
 
 bool
