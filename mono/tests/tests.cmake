@@ -375,6 +375,11 @@ set(MONO_TESTS_CS_SRC
   bug-29585.cs
   priority.cs
   abort-cctor.cs
+  cctor-init-once.cs
+  cctor-init-throws.cs
+  cctor-init-eh.cs
+  cctor-init-loop.cs
+  cctor-init-race.cs
   abort-try-holes.cs
   abort-tests.cs
   thread-native-exit.cs
