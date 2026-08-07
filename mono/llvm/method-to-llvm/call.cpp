@@ -310,15 +310,16 @@ MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiv
 /// leaves it in the object's invoke_impl field. Reading that field is what keeps
 /// mono_delegate_trampoline to one firing per delegate rather than one per call.
 ///
-/// Under the interpreter the field is not that answer: it still holds the trampoline,
-/// and following it would compile the target and run it as native code behind the
-/// interpreter's back.
+/// The field is a legacy entry for every delegate whatever engine runs its target:
+/// mono_delegate_ctor fills it in with the delegate trampoline before anything else
+/// sees the object, and the interpreter constructs its own delegates through that
+/// same function. What stands behind it once the trampoline has fired is whatever
+/// the runtime would hand out for the target anyway - which for an interpreted
+/// target is the entry into the interpreter, reached through the stub like any
+/// other.
 static bool
 dispatches_through_invoke_impl (MonoMethod *target)
 {
-	if (mono_use_interpreter)
-		return false;
-
 	return m_class_get_parent (target->klass) == mono_defaults.multicastdelegate_class
 	       && std::string_view (target->name) == "Invoke";
 }
