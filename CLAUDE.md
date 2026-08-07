@@ -199,6 +199,32 @@ tests failed 5 and 4 and agreed on only 2, and a full run failed 76. Each of tho
 under interp+SGen and under JIT+Boehm, so it is the combination that is broken. Making
 Boehm green means chasing that instability, not ticking off names.
 
+The class-library suites are named per assembly — `bcl-corlib`, `bcl-System.Xml`, and
+`bcl-xunit-<assembly>` for the xunit half — and the largest of them are cut into one test
+per namespace, `bcl-corlib/MonoTests.System.IO` and so on. A whole assembly under one
+console prints nothing between its banner and its summary, so a suite that wedges reports
+a timeout and nothing else; a group names where it stopped, keeps one bad fixture from
+taking the assembly's other results with it, and lets a suite use more than one core. The
+groups keep the `bcl`/`bcl-xunit` label and the assembly's name, so `ctest -R bcl-corlib`
+still selects the lot. Which suites are cut is `MONO_BCL_TESTS_SPLIT` in
+`cmake/MonoManagedTests.cmake`, and it only pays where a suite is large: every group is
+another console process, and a console costs ~6s (nunit-lite) or ~45s (xunit) of JIT
+before it runs a single case. That startup is why the xunit half is capped at eight groups
+— the heaviest namespaces get one each and the rest share `other` — rather than being cut
+per namespace like the nunit half. `bcl-Mono.Debugger.Soft` cannot be split at all: all
+124 of its cases live in one fixture.
+
+The listing behind that runs at **build** time (`cmake/MonoBclDiscover.cmake`, from a
+custom command on the group file), so it re-runs when the test assembly or the runtime is
+rebuilt rather than on every `ctest`. A listing that fails writes an empty group list and
+the suite registers whole — the build stays green, which matters on a branch where the
+runtime being built is routinely the reason the lister could not get that far. The xunit
+groups also carry an `unlisted` complement, which runs anything the lister missed and
+reports as a skip when it missed nothing. Timeouts follow the split: a whole suite gets
+`MONO_BCL_TEST_TIMEOUT` (1800s), or `MONO_BCL_TEST_LONG_TIMEOUT` (3600s) if it is named in
+`MONO_BCL_TESTS_LONG`, while a group gets `MONO_BCL_GROUP_TIMEOUT` (900s) whichever of
+those its assembly would have had.
+
 `acceptance` additionally needs `-DMONO_ENABLE_ACCEPTANCE_TESTS=ON` and the corpus
 submodules; the `print-versions` target reports which are checked out. See `build.md`.
 
