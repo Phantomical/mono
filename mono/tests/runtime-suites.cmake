@@ -266,6 +266,15 @@ if(MONO_ENABLE_INTERPRETER)
                      RUNTIME_ARGS "--interpreter"
                      SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                      LONG appdomain-threadpool-unload.exe)
+
+  # Both engines in one process, which neither of the suites above covers:
+  # Callee's methods interpret while its caller compiles, so every call in it
+  # crosses the boundary. Argument placement there is settled by the compiler
+  # rather than fixed by an ABI document, and being wrong about it corrupts
+  # values rather than crashing - so it wants a test that reads them back.
+  mono_runtime_suite(runtime-interp-entries LABEL interp
+                     TESTS interp-entries.exe
+                     RUNTIME_ARGS "--interp-tier0=Callee")
 endif()
 
 # domain-stress runs the appdomain create/unload loop for a fixed iteration

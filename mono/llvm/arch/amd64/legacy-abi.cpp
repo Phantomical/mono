@@ -817,4 +817,81 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 	return thunk;
 }
 
+Function *
+create_fastcc_entry_thunk (Module &m, StringRef name, Function *shape,
+                           LegacyFlavor flavor)
+{
+	LLVMContext &ctx = m.getContext ();
+	FunctionType *proto = shape->getFunctionType ();
+	AttributeList proto_attrs = shape->getAttributes ();
+
+	/*
+	 * The key register is not an argument register, so the callee's address
+	 * rides in front of the prototype without moving anything in it.
+	 */
+	SmallVector<Type *, 8> types { PointerType::get (ctx, 0) };
+	SmallVector<AttributeSet, 8> attrs {
+		AttributeSet::get (ctx, AttrBuilder (ctx).addAttribute (Attribute::Nest))
+	};
+
+	for (unsigned i = 0; i < proto->getNumParams (); ++i) {
+		types.push_back (proto->getParamType (i));
+		attrs.push_back (proto_attrs.getParamAttrs (i));
+	}
+
+	Function *thunk =
+		Function::Create (FunctionType::get (proto->getReturnType (), types,
+	                                            proto->isVarArg ()),
+	                      GlobalValue::ExternalLinkage, name, m);
+
+	thunk->setCallingConv (CallingConv::Fast);
+	thunk->setAttributes (AttributeList::get (ctx, AttributeSet (),
+	                                          proto_attrs.getRetAttrs (), attrs));
+	/* Its callee can throw, and mono's unwinder walks back out through here. */
+	thunk->setUWTableKind (UWTableKind::Default);
+
+	BasicBlock *bb = BasicBlock::Create (ctx, "entry", thunk);
+	IRBuilder<> b (bb);
+
+	/*
+	 * The call is made in the signature's own terms and marked; LegacyAbiPass
+	 * is what turns it into the convention, exactly as it does for a call the
+	 * translator emitted.
+	 */
+	Type *hidden = hidden_return_type (shape);
+	unsigned leading = hidden != nullptr ? 1 : 0;
+	FunctionType *natural =
+		hidden != nullptr ? natural_prototype (proto, hidden) : proto;
+
+	SmallVector<Value *, 8> args;
+	SmallVector<AttributeSet, 8> call_attrs;
+
+	for (unsigned i = 0; i < natural->getNumParams (); ++i) {
+		args.push_back (thunk->getArg (i + leading + 1));
+		call_attrs.push_back (proto_attrs.getParamAttrs (i + leading));
+	}
+
+	CallInst *call = b.CreateCall (natural, thunk->getArg (0), args);
+
+	call->setAttributes (AttributeList::get (ctx, AttributeSet (),
+	                                         hidden != nullptr
+	                                                 ? AttributeSet ()
+	                                                 : proto_attrs.getRetAttrs (),
+	                                         call_attrs));
+	call->addFnAttr (Attribute::get (ctx, legacy_cc_attribute,
+	                                 legacy_flavor_value (flavor)));
+
+	if (hidden != nullptr) {
+		/* Claim nothing about the caller's slot but where it is. */
+		b.CreateAlignedStore (call, thunk->getArg (1), Align (1));
+		b.CreateRetVoid ();
+	} else if (proto->getReturnType ()->isVoidTy ()) {
+		b.CreateRetVoid ();
+	} else {
+		b.CreateRet (call);
+	}
+
+	return thunk;
+}
+
 } // namespace mono::arch

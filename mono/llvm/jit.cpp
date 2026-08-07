@@ -1090,6 +1090,12 @@ MonoJit::create_stub (StringRef name, void *target)
 	return Error::success ();
 }
 
+Expected<void *>
+MonoJit::create_keyed_stub (StringRef name, void *target, void *key)
+{
+	return stub_table_->reserve_keyed (name, target, key);
+}
+
 Error
 MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
 {

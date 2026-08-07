@@ -63,6 +63,24 @@ foreach(_t IN LISTS _regtests)
   set_tests_properties("mini-regression/${_stem}" PROPERTIES LABELS regression)
 endforeach()
 
+# The same corpora with both engines in one process: every method the
+# interpreter accepts runs interpreted, and everything else compiles and calls
+# into it. That crossing is where a method's entries have to agree with the
+# convention its callers were compiled against, and nothing else covers it at
+# this scale - the suite above compiles everything, and the interpreter's own
+# harness interprets everything.
+if(MONO_ENABLE_INTERPRETER)
+  foreach(_t IN LISTS _regtests)
+    string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
+    add_test(NAME "mini-regression-interp/${_stem}"
+             COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                     "${_wrapper}" --interp-tier0 --regression ${_t}
+             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties("mini-regression-interp/${_stem}"
+                         PROPERTIES LABELS interp)
+  endforeach()
+endif()
+
 # ---------------------------------------------------------------------------
 # The interpreter whitebox test: a C driver that reaches into the interpreter's
 # internals, so it links libmini rather than running under the mono binary.

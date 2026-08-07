@@ -170,6 +170,17 @@ public:
 	/// nobody links against down to a block and a table entry.
 	llvm::Error create_stub (llvm::StringRef name, void *target);
 
+	/// Publish NAME as a stub that hands KEY to TARGET in the register a
+	/// callee's key travels in, and return the address it was carved at.
+	///
+	/// This is how a body shared by many methods - one written against a
+	/// prototype rather than against a method - is told which of them a call
+	/// came in for. Like create_stub (), the linker is not told about NAME;
+	/// unlike it, a name that already has a stub gets that one back, since two
+	/// threads reaching one method together both ask for it.
+	llvm::Expected<void *> create_keyed_stub (llvm::StringRef name, void *target,
+	                                          void *key);
+
 	/// Publish NAME as a stub that compiles itself the first time it is called.
 	///
 	/// COMPILE runs on the calling thread, in the middle of that first call,

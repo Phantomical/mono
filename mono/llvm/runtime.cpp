@@ -354,12 +354,22 @@ symbol_for_entry (MonoMethod *method)
 }
 
 /// The `$unbox` symbol: the legacy entry that steps a boxed receiver past the
-/// object header before entering the method. Compiled beside the body like
-/// `$entry`, and likewise never stubbed.
+/// object header before entering the method. This is the stub - a value type's
+/// vtable slots are filled from it, so it has to survive a promotion the same
+/// way the ordinary entry does.
 std::string
 symbol_for_unbox (MonoMethod *method)
 {
 	return symbol_for_body (method) + "$unbox";
+}
+
+/// The `$unboxentry` symbol: the unboxing entry compiled beside a method's
+/// body. A definition rather than the stub above, for the same reason `$entry`
+/// is not `$legacy`.
+std::string
+symbol_for_unbox_entry (MonoMethod *method)
+{
+	return symbol_for_body (method) + "$unboxentry";
 }
 
 /// Whether a call can ever reach METHOD with a boxed receiver, so that the
@@ -371,6 +381,85 @@ bool
 wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig)
 {
 	return sig != nullptr && sig->hasthis && m_class_is_valuetype (method->klass);
+}
+
+/// Whether this backend gives METHOD an unboxing entry of its own, and so a
+/// stub to publish it through. A method not implemented in IL is entered
+/// through code this backend did not generate; the runtime wraps those itself.
+bool
+publishes_unbox_entry (MonoMethod *method)
+{
+	return !implemented_outside_il (method)
+	       && wants_unbox_entry (method,
+	                             mono_method_signature_internal (method));
+}
+
+/// Which methods --interp-tier0 selected, or null when it was not given. An
+/// empty filter takes every method that can be interpreted at all; anything
+/// else is matched as a substring of the printed name.
+const char *interp_tier0_filter = nullptr;
+
+/// Whether METHOD is entered by interpreting its bytecode rather than by
+/// compiling it.
+///
+/// The refusals below are the ones that would be wrong rather than merely
+/// slow:
+///
+///  - a method not implemented in IL has no bytecode of its own, and reaching
+///    one goes back through mono_jit_compile_method;
+///  - the allocator and write-barrier wrappers are handed out as raw entries
+///    rather than as stubs, because SGen identifies a thread suspended in one
+///    by resolving the address through the jit-info table. Nothing stands
+///    between them and their callers that a later tier could redirect, so an
+///    interpreted one would stay interpreted for good;
+///  - a wrapper is generated for the runtime to enter natively, and several
+///    kinds of them the interpreter answers for with something that is not a
+///    callable address at all;
+///  - freeing a dynamic method hands its MonoMethod back to the allocator,
+///    while the shims below are shared between methods and outlive any one of
+///    them.
+///
+/// AggressiveInlining goes straight to the compiler because that is what the
+/// attribute asks for, even though nothing is inlined across methods yet.
+bool
+runs_at_tier0 (MonoMethod *method)
+{
+	if (interp_tier0_filter == nullptr || !mono_use_interpreter)
+		return false;
+
+	if (implemented_outside_il (method) || method->dynamic
+	    || method->wrapper_type != MONO_WRAPPER_NONE
+	    || (method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING) != 0)
+		return false;
+
+	if (*interp_tier0_filter == '\0')
+		return true;
+
+	char *name = mono_method_full_name (method, TRUE);
+	bool selected = strstr (name, interp_tier0_filter) != nullptr;
+
+	g_free (name);
+	return selected;
+}
+
+/// A key naming everything about F's prototype that decides how a call to it is
+/// laid out - the types, the attributes that move a value, and which side of the
+/// boundary the callee behind it speaks for. Two methods that agree on this can
+/// share one thunk between them, and nothing narrower is safe to share on.
+std::string
+prototype_key (Function *f, arch::LegacyFlavor flavor)
+{
+	std::string key;
+	raw_string_ostream os (key);
+	AttributeList attrs = f->getAttributes ();
+
+	f->getFunctionType ()->print (os);
+	os << "|cc" << f->getCallingConv () << "|flavor" << (int) flavor << "|ret "
+	   << attrs.getRetAttrs ().getAsString ();
+	for (unsigned i = 0; i < f->getFunctionType ()->getNumParams (); ++i)
+		os << "|p" << i << " " << attrs.getParamAttrs (i).getAsString ();
+	os.flush ();
+	return key;
 }
 
 MonoJitInfo *register_stub_jinfo (MonoDomain *domain, MonoMethod *method,
@@ -423,6 +512,11 @@ public:
 	/// backend did not generate.
 	static void *unbox_entry_of (MonoMethod *method);
 
+	/// Select the methods entered by interpreting them: FILTER is matched as a
+	/// substring of the printed name, and an empty one takes every method that
+	/// can be interpreted at all.
+	static void set_interp_filter (const char *filter);
+
 private:
 	/// Where one method's code ended up: the legacy entry the runtime hands
 	/// out, the fastcc body generated callers reach, and - for an instance
@@ -444,6 +538,9 @@ private:
 		void *stub;
 		MonoJitInfo *entry_jinfo;
 		MonoJitInfo *body_jinfo;
+		MonoJitInfo *unbox_jinfo;
+		/// Whether the method was given an unboxing stub as well.
+		bool unboxed;
 	};
 
 	/// What compiling a method put somewhere it has to be taken back out of.
@@ -480,6 +577,13 @@ private:
 		/// Methods whose body stub was first reached from another domain, and
 		/// the per-call dispatcher each got instead of a direct binding.
 		std::unordered_map<MonoMethod *, void *> dispatchers;
+		/// Methods entered by interpreting them, and the entries their stubs
+		/// were pointed at. Separate from compiled above, which is what
+		/// everything asking where a method's *code* is reads.
+		std::unordered_map<MonoMethod *, Compiled> interpreted;
+		/// The fastcc-to-interpreter shims compiled here, by the prototype
+		/// each serves. One shim stands for every method with that prototype.
+		std::unordered_map<std::string, void *> shims;
 		/// What each dynamic method's compiles produced, for free_method ().
 		std::unordered_map<MonoMethod *, Owned> owned;
 	};
@@ -527,11 +631,24 @@ private:
 	Expected<Compiled> raise_on_call (DomainState &state, MonoMethod *method,
 	                                  Error failure);
 
-	/// METHOD's code in STATE, compiling it if it has none. AGAIN skips the
+	/// Make METHOD reachable through its stubs in STATE, and say where each of
+	/// them now goes. That is a compile for most methods and a set of entries
+	/// into the interpreter for the ones running at tier 0. AGAIN skips the
 	/// cache, so the method is translated into a body of its own however many
 	/// it already has.
-	Expected<Compiled> ensure_compiled (DomainState &state, MonoMethod *method,
-	                                    bool again = false);
+	Expected<Compiled> ensure_entries (DomainState &state, MonoMethod *method,
+	                                   bool again = false);
+
+	/// Point METHOD's stubs at the interpreter, LEGACY being the entry the
+	/// interpreter itself handed out for it.
+	Expected<Compiled> interp_entries (DomainState &state, MonoMethod *method,
+	                                   void *legacy);
+
+	/// The fastcc entry an interpreted METHOD is given: a stub that hands
+	/// LEGACY to the shim compiled for METHOD's prototype, which is where the
+	/// arguments are marshalled across.
+	Expected<void *> interp_body_entry (DomainState &state, MonoMethod *method,
+	                                    void *legacy);
 
 	/// The legacy entry - the interop thunk - as a compile of its own, with
 	/// no body beside it. It reaches the method through the body's stub, so
@@ -713,18 +830,37 @@ Backend::unbox_entry_of (MonoMethod *method)
 		return nullptr;
 	}
 
-	/*
-	 * The caller reached this having just compiled the method, so this is a
-	 * cache lookup wearing ensure_compiled ()'s clothes.
-	 */
-	Expected<Compiled> code = live_backend->ensure_compiled (**state, method);
+	if (!publishes_unbox_entry (method))
+		return nullptr;
 
-	if (!code) {
-		consumeError (code.takeError ());
+	/*
+	 * The stub, not the entry behind it. This address is written straight into
+	 * a value type's vtable slots, so a slot filled now has to reach whatever
+	 * the method's code is later - which is what a stub is for and a raw entry
+	 * cannot be.
+	 */
+	Expected<void *> stub = live_backend->publish (**state, method);
+
+	if (!stub) {
+		consumeError (stub.takeError ());
 		return nullptr;
 	}
 
-	return code->unbox;
+	Expected<void *> unbox =
+		(*state)->jit->stub_address (symbol_for_unbox (method));
+
+	if (!unbox) {
+		consumeError (unbox.takeError ());
+		return nullptr;
+	}
+
+	return *unbox;
+}
+
+void
+Backend::set_interp_filter (const char *filter)
+{
+	interp_tier0_filter = filter;
 }
 
 void
@@ -815,6 +951,9 @@ Backend::free_method (MonoMethod *method)
 			if (state.defined.erase (method) != 0) {
 				release.stubs.push_back (symbol_for_code (method));
 				release.stubs.push_back (symbol_for_body (method));
+				if (publishes_unbox_entry (method))
+					release.stubs.push_back (
+						symbol_for_unbox (method));
 			}
 			state.compiled.erase (method);
 			state.superseded.erase (method);
@@ -845,6 +984,9 @@ Backend::free_method (MonoMethod *method)
 				if (published->second.body_jinfo != nullptr)
 					release.owned.jinfos.push_back (
 						published->second.body_jinfo);
+				if (published->second.unbox_jinfo != nullptr)
+					release.owned.jinfos.push_back (
+						published->second.unbox_jinfo);
 				state.published.erase (published);
 			}
 			releases.push_back (std::move (release));
@@ -1163,7 +1305,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	std::string unbox_entry;
 
 	if (wants_unbox_entry (method, sig)) {
-		unbox_entry = symbol_for_unbox (method);
+		unbox_entry = symbol_for_unbox_entry (method);
 		arch::create_legacy_entry_thunk (*module, unbox_entry, *function,
 		                                 legacy_call_flavor (sig), body_address,
 		                                 MONO_ABI_SIZEOF (MonoObject));
@@ -1562,7 +1704,7 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 	 * raised by the runtime, which knows how to throw from where it stands.
 	 */
 	Expected<Compiled> code =
-		ensure_compiled (**state, method, recompiling (method));
+		ensure_entries (**state, method, recompiling (method));
 	if (!code)
 		return code.takeError ();
 
@@ -1570,7 +1712,7 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 }
 
 Expected<Backend::Compiled>
-Backend::ensure_compiled (DomainState &state, MonoMethod *method, bool again)
+Backend::ensure_entries (DomainState &state, MonoMethod *method, bool again)
 {
 	if (!again) {
 		std::lock_guard<std::mutex> lock (mutex_);
@@ -1578,6 +1720,11 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method, bool again)
 
 		if (it != state.compiled.end ())
 			return it->second;
+
+		auto interp = state.interpreted.find (method);
+
+		if (interp != state.interpreted.end ())
+			return interp->second;
 	}
 
 	/*
@@ -1594,6 +1741,32 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method, bool again)
 	if (entered != state.domain)
 		mono_domain_set_internal_with_options (state.domain, FALSE);
 
+	auto leave = [&] {
+		if (entered != state.domain)
+			mono_domain_set_internal_with_options (entered, FALSE);
+	};
+
+	if (runs_at_tier0 (method)) {
+		ERROR_DECL (interp_error);
+		void *legacy = mini_get_interp_callbacks ()->create_method_pointer (
+			method, TRUE, interp_error);
+
+		/*
+		 * The interpreter refusing a method is an answer, not a failure: it
+		 * gets compiled like anything else. Only what happens after it has
+		 * agreed to run the method is an error worth raising.
+		 */
+		if (legacy == nullptr) {
+			mono_error_cleanup (interp_error);
+		} else {
+			Expected<Compiled> entries =
+				interp_entries (state, method, legacy);
+
+			leave ();
+			return entries;
+		}
+	}
+
 	MonoJitInfo *published = nullptr;
 	Expected<Compiled> code = [&] {
 		timing::Scope timed (timing::Phase::compile);
@@ -1601,8 +1774,7 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method, bool again)
 		return translate_and_compile (state, method, &published);
 	}();
 
-	if (entered != state.domain)
-		mono_domain_set_internal_with_options (entered, FALSE);
+	leave ();
 
 	auto give_up = [&] (Error err) {
 		if (published != nullptr)
@@ -1627,11 +1799,16 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method, bool again)
 		return give_up (std::move (err));
 	if (Error err = state.jit->redirect_stub (symbol_for_body (method), code->body))
 		return give_up (std::move (err));
+	if (publishes_unbox_entry (method)) {
+		if (Error err = state.jit->redirect_stub (symbol_for_unbox (method),
+		                                          code->unbox))
+			return give_up (std::move (err));
+	}
 
 	/*
 	 * Two threads racing here both compile; the loser's code is merely
 	 * unreferenced, and both ends stay coherent because the redirects above
-	 * always point a method's two stubs at one compile's output.
+	 * always point every one of a method's stubs at one compile's output.
 	 * A stub that had already gone to a dispatcher gets rebound to this
 	 * domain's own code here, which is mini's behavior too: a same-domain
 	 * resolve patches the call site.
@@ -1660,6 +1837,160 @@ Backend::ensure_compiled (DomainState &state, MonoMethod *method, bool again)
 		raise_jit_done (jinfo_get_method (published), published);
 
 	return *code;
+}
+
+Expected<Backend::Compiled>
+Backend::interp_entries (DomainState &state, MonoMethod *method, void *legacy)
+{
+	Expected<void *> body = interp_body_entry (state, method, legacy);
+
+	if (!body)
+		return body.takeError ();
+
+	/*
+	 * The receiver a value type's vtable slot arrives with is the boxed object,
+	 * and stepping it past the header is the whole of the difference - so this
+	 * is the runtime's own unboxing trampoline over the interpreter's entry,
+	 * the same one a method whose code the backend did not generate gets.
+	 */
+	Compiled entries { legacy, *body,
+		           publishes_unbox_entry (method)
+		                   ? mono_arch_get_unbox_trampoline (method, legacy)
+		                   : nullptr };
+
+	/*
+	 * Three stores rather than one, so a caller can see a method's stubs
+	 * disagree about which of them has been pointed somewhere yet. That is
+	 * harmless while the alternative to each is the lazy trampoline it
+	 * replaces, and two threads arriving together cannot disagree about more
+	 * than that: whether a method runs here or is compiled is settled by the
+	 * method, so both of them take this branch or neither does.
+	 */
+	if (Error err =
+	            state.jit->redirect_stub (symbol_for_code (method), entries.entry))
+		return std::move (err);
+	if (Error err =
+	            state.jit->redirect_stub (symbol_for_body (method), entries.body))
+		return std::move (err);
+	if (entries.unbox != nullptr) {
+		if (Error err = state.jit->redirect_stub (symbol_for_unbox (method),
+		                                          entries.unbox))
+			return std::move (err);
+	}
+
+	if (tracing ()) {
+		char *name = mono_method_full_name (method, TRUE);
+
+		fprintf (stderr, "[llvm-jit] interpreting %s (for %s)\n", name,
+		         state.domain->friendly_name);
+		g_free (name);
+	}
+
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	return state.interpreted[method] = entries;
+}
+
+Expected<void *>
+Backend::interp_body_entry (DomainState &state, MonoMethod *method, void *legacy)
+{
+	/*
+	 * The shim is written against the prototype rather than against the
+	 * method, so it is built out of a declaration of one and the declaration
+	 * then goes back out of the module - nothing here calls the method by
+	 * name, and leaving it would make the shim's own compile resolve a symbol
+	 * it has no use for.
+	 */
+	ERROR_DECL (metadata_error);
+	MinimalCompile cfg (method, state.domain, metadata_error);
+
+	if (cfg.get ()->header == nullptr)
+		return runtime_error (metadata_error);
+
+	auto context = std::make_unique<LLVMContext> ();
+	auto module = std::make_unique<Module> ("mono.interp.shim", *context);
+
+	std::vector<ExternalSymbol> externals;
+	MethodLLVMEmitter declarer (module.get (), cfg.get (), method, &externals);
+	Expected<Function *> shape = declarer.declare (method);
+
+	if (!shape)
+		return shape.takeError ();
+
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (method->string_ctor)
+		sig = mono_marshal_get_string_ctor_signature (method);
+
+	arch::LegacyFlavor flavor = legacy_call_flavor (sig);
+	std::string key = prototype_key (*shape, flavor);
+	void *shim = nullptr;
+
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		auto it = state.shims.find (key);
+
+		if (it != state.shims.end ())
+			shim = it->second;
+	}
+
+	if (shim == nullptr) {
+		static std::atomic<uint64_t> next { 0 };
+		std::string name = "mono.interp.shim."
+		                   + std::to_string (next.fetch_add (1));
+
+		arch::create_fastcc_entry_thunk (*module, name, *shape, flavor);
+
+		if ((*shape)->use_empty ())
+			(*shape)->eraseFromParent ();
+
+		if (dumping (name.c_str ()))
+			module->print (llvm::errs (), nullptr);
+
+		Expected<CompiledMethod> compiled = state.jit->compile (
+			ThreadSafeModule (std::move (module),
+		                          ThreadSafeContext (std::move (context))),
+			name);
+
+		if (!compiled)
+			return compiled.takeError ();
+
+		/*
+		 * The shim calls, so a thread can be stopped in its frame and an
+		 * exception out of the interpreted method unwinds through it: it needs
+		 * a record like any other frame. The method it is registered under is
+		 * whichever one first wanted this prototype, which is why the record
+		 * says the code holds none of that method's IL - a stack walk reports
+		 * no frame for it either way.
+		 */
+		Expected<MonoJitInfo *> jinfo = register_jit_info (
+			state.domain, method, nullptr, *compiled, CodeKind::AbiThunk);
+
+		if (!jinfo)
+			return jinfo.takeError ();
+
+		std::lock_guard<std::mutex> lock (mutex_);
+		/* Two threads racing on one prototype both compile; both are correct
+		 * code, and every method after them converges on whichever won. */
+		shim = state.shims.emplace (key, compiled->entry).first->second;
+	}
+
+	/*
+	 * Which method the shim was entered for is the one thing it cannot read
+	 * off the prototype, so it arrives in the key register - a stub of the
+	 * method's own is what puts it there. Redirectable like the others, though
+	 * nothing redirects this one: the body stub in front of it is what a later
+	 * tier moves.
+	 */
+	std::string name = symbol_for_body (method) + "$interp";
+	Expected<void *> thunk = state.jit->create_keyed_stub (name, shim, legacy);
+
+	if (!thunk)
+		return thunk;
+
+	register_stub_jinfo (state.domain, method, *thunk, arch::stub_block_size,
+	                     name);
+	return *thunk;
 }
 
 Expected<void *>
@@ -1779,7 +2110,7 @@ Backend::body_for_current_domain (MonoMethod *method)
 				+ toString (state.takeError ()),
 			false);
 
-	Expected<Compiled> code = live_backend->ensure_compiled (**state, method);
+	Expected<Compiled> code = live_backend->ensure_entries (**state, method);
 
 	if (code)
 		return code->body;
@@ -1853,7 +2184,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 			        return *thunk;
 		        }
 
-		        Expected<Compiled> code = ensure_compiled (*owner, method);
+		        Expected<Compiled> code = ensure_entries (*owner, method);
 
 		        if (!code)
 			        return raising (code.takeError (), &Compiled::entry);
@@ -1872,13 +2203,34 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 			        return *call;
 		        }
 
-		        Expected<Compiled> code = ensure_compiled (*owner, method);
+		        Expected<Compiled> code = ensure_entries (*owner, method);
 
 		        if (!code)
 			        return raising (code.takeError (), &Compiled::body);
 		        return code->body;
 	        }))
 		return err;
+
+	/*
+	 * The unboxing entry is a stub too, and for the reason the others are: it
+	 * is what fills a value type's vtable slots, so a slot filled before the
+	 * method had code has to keep working once it does. It gets no dispatcher -
+	 * the runtime only ever asks for one while compiling in the owning domain.
+	 */
+	if (publishes_unbox_entry (method)) {
+		if (Error err = state.jit->create_lazy_stub (
+		        symbol_for_unbox (method),
+		        [this, owner, method, raising] () -> Expected<void *> {
+			        Expected<Compiled> code =
+				        ensure_entries (*owner, method);
+
+			        if (!code)
+				        return raising (code.takeError (),
+				                        &Compiled::unbox);
+			        return code->unbox;
+		        }))
+			return err;
+	}
 
 	state.defined.insert (method);
 	return Error::success ();
@@ -1969,6 +2321,18 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	if (!body)
 		return body;
 
+	bool unboxed = publishes_unbox_entry (method);
+	std::string unbox_name = unboxed ? symbol_for_unbox (method) : std::string ();
+	void *unbox = nullptr;
+
+	if (unboxed) {
+		Expected<void *> reserved = state.jit->stub_address (unbox_name);
+
+		if (!reserved)
+			return reserved;
+		unbox = *reserved;
+	}
+
 	std::lock_guard<std::mutex> lock (mutex_);
 	auto it = state.published.find (method);
 
@@ -1990,8 +2354,13 @@ Backend::publish (DomainState &state, MonoMethod *method)
 		state.domain, method, *stub, arch::stub_block_size, entry_name);
 	MonoJitInfo *body_jinfo = register_stub_jinfo (
 		state.domain, method, *body, arch::stub_block_size, body_name);
+	MonoJitInfo *unbox_jinfo =
+		unboxed ? register_stub_jinfo (state.domain, method, unbox,
+	                                       arch::stub_block_size, unbox_name)
+	                : nullptr;
 
-	state.published[method] = Publication { *stub, entry_jinfo, body_jinfo };
+	state.published[method] =
+		Publication { *stub, entry_jinfo, body_jinfo, unbox_jinfo, unboxed };
 
 	return *stub;
 }
@@ -2075,4 +2444,10 @@ void
 mono_llvm_jit_add_option (const char *opt)
 {
 	mono::MonoJit::add_option (opt);
+}
+
+void
+mono_llvm_jit_interpret_methods (const char *filter)
+{
+	mono::Backend::set_interp_filter (filter);
 }

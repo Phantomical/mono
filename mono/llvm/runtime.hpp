@@ -85,6 +85,9 @@ void mono_llvm_jit_foreach_body (MonoDomain *domain, MonoMethod *method,
 /// Returns NULL for a method this backend generated no such entry for: one not
 /// implemented in IL is entered through code the backend never emitted, and
 /// there is nothing to step the receiver in.
+///
+/// The address is a stub, so a slot filled from it keeps reaching the method
+/// when a later tier replaces what stands behind it.
 void *mono_llvm_jit_unbox_entry (MonoMethod *method);
 
 /// Queue OPT for LLVM's own command-line option registry - the same options
@@ -94,6 +97,15 @@ void *mono_llvm_jit_unbox_entry (MonoMethod *method);
 /// effect when the backend starts, so they have to be set before the first
 /// method is compiled; one LLVM rejects fails the backend's startup.
 void mono_llvm_jit_add_option (const char *opt);
+
+/// Enter the methods FILTER selects by interpreting them rather than by
+/// compiling them: FILTER is matched as a substring of the printed name, and
+/// an empty string takes every method the interpreter will accept. A method it
+/// will not accept is compiled as usual.
+///
+/// This is what `--interp-tier0[=<filter>]` on the command line does. It needs
+/// the interpreter to have been started, which that option also arranges.
+void mono_llvm_jit_interpret_methods (const char *filter);
 
 MONO_END_DECLS
 

@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief The one instruction a redirectable stub is made of.
+ * \brief The instructions a redirectable stub is made of.
  */
 
 #include "arch/arch.hpp"
@@ -26,6 +26,33 @@ write_jump_stub (char *code, const void *slot)
 	int32_t disp = static_cast<int32_t> (static_cast<const char *> (slot) -
 	                                     (code + jump_size));
 	std::memcpy (code + 2, &disp, sizeof (disp));
+}
+
+void
+write_keyed_jump_stub (char *code, const void *slot, const void *key)
+{
+	/* movabsq $key, %r10 - MONO_ARCH_IMT_REG, which is what `nest` pins to. */
+	constexpr size_t load_size = 10;
+	static const uint8_t load[2] = { 0x49, 0xba };
+	constexpr size_t jump_size =
+		sizeof (jitlink::x86_64::PointerJumpStubContent);
+
+	static_assert (load_size + jump_size <= stub_block_size,
+	               "a keyed stub does not fit in a stub block");
+
+	std::memcpy (code, load, sizeof (load));
+	std::memcpy (code + sizeof (load), &key, sizeof (key));
+
+	char *jump = code + load_size;
+
+	std::memcpy (jump, jitlink::x86_64::PointerJumpStubContent, jump_size);
+	std::memset (jump + jump_size, 0xcc,
+	             stub_block_size - load_size - jump_size);
+
+	int32_t disp = static_cast<int32_t> (static_cast<const char *> (slot)
+	                                     - (jump + jump_size));
+
+	std::memcpy (jump + 2, &disp, sizeof (disp));
 }
 
 } // namespace mono::arch

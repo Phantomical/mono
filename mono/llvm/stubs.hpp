@@ -65,6 +65,16 @@ public:
 	/// reach it at. Fails if NAME already has one.
 	llvm::Expected<void *> reserve (llvm::StringRef name, void *target);
 
+	/// Reserve NAME a stub that hands KEY to TARGET in the register a callee's
+	/// key travels in, so that one body can serve many names and still know
+	/// which of them it was entered for. Redirectable like any other stub;
+	/// KEY is fixed when the stub is carved.
+	///
+	/// Unlike reserve (), asking for a name that already has one hands back
+	/// what is there rather than failing.
+	llvm::Expected<void *> reserve_keyed (llvm::StringRef name, void *target,
+	                                      void *key);
+
 	/// The address NAME's stub was reserved at, or null if it has none.
 	void *find (llvm::StringRef name);
 

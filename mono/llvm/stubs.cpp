@@ -52,37 +52,45 @@ public:
 			slabs_->release_writable (batch);
 	}
 
-	/// Carve one stub, jumping to TARGET.
-	Expected<StubTable::Stub> allocate (void *target)
+	/// Carve one stub, jumping to TARGET. KEY, when given, is handed to the
+	/// target in the key register.
+	Expected<StubTable::Stub> allocate (void *target, void *key)
 	{
-		if (!free_.empty ()) {
-			StubTable::Stub stub = free_.back ();
+		StubTable::Stub stub;
 
+		if (!free_.empty ()) {
+			stub = free_.back ();
 			free_.pop_back ();
-			/*
-			 * The jump reads this stub's own slot and always did, so
-			 * there is nothing to rewrite but the destination.
-			 */
-			stub.slot->store (target, std::memory_order_release);
-			return stub;
+		} else {
+			if (next_ == stubs_per_slab)
+				if (Error err = add_slab ())
+					return std::move (err);
+
+			char *base = batches_.back ().base;
+			size_t i = next_++;
+
+			stub.slot = reinterpret_cast<std::atomic<void *> *> (
+				base + i * sizeof (void *));
+			stub.code = base + slot_region_size
+			            + i * arch::stub_block_size;
 		}
 
-		if (next_ == stubs_per_slab)
-			if (Error err = add_slab ())
-				return std::move (err);
+		stub.slot->store (target, std::memory_order_release);
+		/*
+		 * A recycled block was written for whichever shape its last owner
+		 * wanted, so the code is written every time rather than only on a
+		 * fresh carve. The jump reads this stub's own slot either way.
+		 */
+		char *code = static_cast<char *> (stub.code);
 
-		char *base = batches_.back ().base;
-		size_t i = next_++;
+		if (key != nullptr)
+			arch::write_keyed_jump_stub (code, stub.slot, key);
+		else
+			arch::write_jump_stub (code, stub.slot);
+		sys::Memory::InvalidateInstructionCache (code,
+		                                         arch::stub_block_size);
 
-		auto *slot = reinterpret_cast<std::atomic<void *> *> (
-			base + i * sizeof (void *));
-		char *code = base + slot_region_size + i * arch::stub_block_size;
-
-		slot->store (target, std::memory_order_release);
-		arch::write_jump_stub (code, slot);
-		sys::Memory::InvalidateInstructionCache (code, arch::stub_block_size);
-
-		return StubTable::Stub { code, slot };
+		return stub;
 	}
 
 	/// Take STUB back, for a later allocate () to hand out again.
@@ -144,7 +152,31 @@ StubTable::reserve (StringRef name, void *target)
 		                                    + name,
 		                                inconvertibleErrorCode ());
 
-	Expected<Stub> stub = slabs_->allocate (target);
+	Expected<Stub> stub = slabs_->allocate (target, nullptr);
+
+	if (!stub)
+		return stub.takeError ();
+
+	stubs_[name] = Entry { *stub, false };
+	return stub->code;
+}
+
+Expected<void *>
+StubTable::reserve_keyed (StringRef name, void *target, void *key)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+	auto it = stubs_.find (name);
+
+	/*
+	 * Asking twice is not the mistake it is for reserve (). Two threads that
+	 * reach a method together both build its entries, and what a keyed stub
+	 * holds is settled by the method rather than by which of them got there
+	 * first - so the one already here is the one they both wanted.
+	 */
+	if (it != stubs_.end ())
+		return it->second.stub.code;
+
+	Expected<Stub> stub = slabs_->allocate (target, key);
 
 	if (!stub)
 		return stub.takeError ();

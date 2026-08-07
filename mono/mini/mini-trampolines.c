@@ -264,9 +264,12 @@ mini_add_method_trampoline (MonoMethod *m, gpointer compiled_method, gboolean ad
 			addr = mono_aot_get_unbox_trampoline (m, addr);
 		} else {
 			/*
-			 * The backend emits the unboxing entry beside the method's body,
-			 * so a method it compiled costs nothing extra for one. It has no
-			 * such entry for a method whose code it did not generate.
+			 * The backend publishes an unboxing entry of its own for every
+			 * method it generates code for, as a stub - so this address keeps
+			 * reaching the method when what stands behind it is replaced,
+			 * which matters because the value-type vtable slots this fills
+			 * are written once and never revisited. It has no such entry for
+			 * a method whose code it did not generate.
 			 */
 			gpointer unbox = mono_llvm_jit_unbox_entry (m);
 

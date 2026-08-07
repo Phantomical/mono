@@ -63,6 +63,14 @@ void **rethrow_trampoline_slot ();
 /// Write a stub at CODE jumping through SLOT, filling the whole stub block.
 void write_jump_stub (char *code, const void *slot);
 
+/// Write a stub at CODE that loads KEY into the register a callee's key
+/// travels in and then jumps through SLOT, filling the whole stub block.
+///
+/// The register is the one the `nest` attribute pins an argument to, so a
+/// function entered this way reads KEY as its nest parameter. That is how one
+/// body shared by many methods is told which of them it was entered for.
+void write_keyed_jump_stub (char *code, const void *slot, const void *key);
+
 /* -- Unwinding and dispatch ----------------------------------------------- */
 
 /// Can a stack walk rebuild HW_REG for the frame it is looking at?
@@ -144,6 +152,22 @@ llvm::Function *create_legacy_entry_thunk (llvm::Module &m, llvm::StringRef name
                                            LegacyFlavor flavor,
                                            llvm::Value *through = nullptr,
                                            unsigned this_adjust = 0);
+
+/// Create NAME in M: the other direction, a fastcc entry with SHAPE's exact
+/// prototype which passes its arguments on to a legacy-convention callee and
+/// hands back what it returns. This is what generated code calls when the
+/// method it is calling has no compiled body to bind to.
+///
+/// The callee's address is not baked in. It arrives in the key register, as
+/// one leading `nest` parameter, so the thunk depends on nothing but the
+/// prototype and can be shared by every method that has it - write_keyed_jump_stub ()
+/// is what supplies the address per method.
+///
+/// SHAPE is only read; it stays a declaration, and M is free to be a module of
+/// the thunk's own.
+llvm::Function *create_fastcc_entry_thunk (llvm::Module &m, llvm::StringRef name,
+                                           llvm::Function *shape,
+                                           LegacyFlavor flavor);
 
 } // namespace mono::arch
 
