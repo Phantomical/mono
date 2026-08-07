@@ -61,12 +61,6 @@ MethodLLVMEmitter::address_symbol (const std::string &name, void *address)
 llvm::Error
 MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
 {
-	MonoJitICallInfo *info = mono_find_jit_icall_info (
-		mono_get_tls_key_to_jit_icall_id (TLS_KEY_LMF_ADDR));
-
-	if (info == nullptr || info->func == nullptr)
-		return invalid_il ("the LMF thread-local's getter is not registered");
-
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	llvm::Type *i8 = builder.getInt8Ty ();
 	llvm::Align align (TARGET_SIZEOF_VOID_P);
@@ -84,12 +78,24 @@ MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
 	slot->setAlignment (align);
 	lmf_slot = slot;
 
-	lmf_addr = builder.CreateCall (
-		llvm::FunctionCallee (
-			llvm::FunctionType::get (ptr, false),
-			address_symbol (std::string ("mono_icall_") + info->name,
-	                                const_cast<void *> (info->func))),
-		{}, "lmf_addr");
+	lmf_addr = arch::emit_lmf_address (builder);
+
+	if (lmf_addr == nullptr) {
+		MonoJitICallInfo *info = mono_find_jit_icall_info (
+			mono_get_tls_key_to_jit_icall_id (TLS_KEY_LMF_ADDR));
+
+		if (info == nullptr || info->func == nullptr)
+			return invalid_il (
+				"the LMF thread-local's getter is not registered");
+
+		lmf_addr = builder.CreateCall (
+			llvm::FunctionCallee (
+				llvm::FunctionType::get (ptr, false),
+				address_symbol (std::string ("mono_icall_")
+			                            + info->name,
+			                        const_cast<void *> (info->func))),
+			{}, "lmf_addr");
+	}
 
 	llvm::Value *previous = builder.CreateAlignedLoad (ptr, lmf_addr, align);
 

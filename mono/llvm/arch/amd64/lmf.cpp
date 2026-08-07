@@ -24,6 +24,8 @@
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
 
+#include <optional>
+
 namespace mono::arch {
 
 /*
@@ -100,6 +102,59 @@ emit_callee_saved_clobber (llvm::IRBuilderBase &b)
 	b.CreateCall (llvm::InlineAsm::get (
 		llvm::FunctionType::get (b.getVoidTy (), false), "",
 		"~{rbx},~{r12},~{r13},~{r14},~{r15}", /*hasSideEffects=*/true));
+}
+
+/*
+ * The %fs-relative displacement mono_tls_lmf_addr sits at, or nothing when this
+ * build cannot name one.
+ *
+ * mono_tls_offsets holds what the linker resolved for the thread-local, which is
+ * only a displacement from the thread pointer under the initial-exec and
+ * local-exec models; under the dynamic ones the block moves per thread and the
+ * number means nothing. Rather than reason about which model a given build got,
+ * check the answer: walk the displacement from this thread's own thread pointer
+ * and see whether it arrives at the variable.
+ */
+static std::optional<int32_t>
+lmf_address_tls_displacement ()
+{
+#ifdef MONO_KEYWORD_THREAD
+	gint32 offset = mono_tls_offsets[TLS_KEY_LMF_ADDR];
+	uint8_t *thread_pointer;
+
+	asm ("movq %%fs:0, %0" : "=r" (thread_pointer));
+
+	if (thread_pointer + offset != (uint8_t *) &mono_tls_lmf_addr)
+		return std::nullopt;
+	return offset;
+#else
+	return std::nullopt;
+#endif
+}
+
+/*
+ * Address space 257 is what LLVM calls %fs-relative on x86-64, so the load below
+ * is one `mov %fs:disp, reg` - no call, and so nowhere for a thread to be caught
+ * with neither a jit-info record nor an LMF to walk from. That window is the
+ * whole point: a wrapper's prologue reaches this before it has linked anything
+ * onto the chain, and an async stack walk that starts inside it sees no managed
+ * frame at all.
+ */
+llvm::Value *
+emit_lmf_address (llvm::IRBuilderBase &b)
+{
+	std::optional<int32_t> displacement = lmf_address_tls_displacement ();
+
+	if (!displacement)
+		return nullptr;
+
+	llvm::Value *slot = b.CreateIntToPtr (
+		b.getInt64 ((uint64_t) (int64_t) *displacement),
+		llvm::PointerType::get (b.getContext (), 257));
+
+	return b.CreateAlignedLoad (llvm::PointerType::get (b.getContext (), 0),
+	                            slot, llvm::Align (TARGET_SIZEOF_VOID_P),
+	                            "lmf_addr");
 }
 
 /*

@@ -90,6 +90,11 @@ struct CompiledMethod {
 	/// entry, and any filter bodies compiled alongside it.
 	std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
 
+	/// The jump stubs the linker synthesized for this object, as [code, size).
+	/// Executable, nameless, and on the path of the calls that needed them, so
+	/// the runtime has to be able to resolve an address in one.
+	std::vector<std::pair<const uint8_t *, size_t>> linker_stubs;
+
 	/// The entry function's native_offset -> il_offset rows, ascending by
 	/// native offset. Empty when the module carried no line table.
 	std::vector<IlLineRow> il_lines;

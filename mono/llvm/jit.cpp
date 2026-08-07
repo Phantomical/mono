@@ -400,6 +400,31 @@ parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out)
 }
 
 /*
+ * Whether SECTION holds code JITLink made up rather than code the compiler
+ * emitted - the jump stubs it plants when a call cannot reach its target
+ * directly, which today live in a section it calls "$__STUBS".
+ *
+ * Keyed on the shape rather than the name: a synthesized section carries no
+ * named symbol, because nothing in the object refers to a stub by name. A
+ * later LLVM renaming the section would otherwise silently leave its code
+ * unregistered, and code the runtime cannot name is code a stack walk stops
+ * dead in.
+ */
+static bool
+is_linker_stub_section (jitlink::Section &section)
+{
+	if ((section.getMemProt () & orc::MemProt::Exec) == orc::MemProt::None)
+		return false;
+	if (section.blocks ().empty ())
+		return false;
+
+	for (jitlink::Symbol *sym : section.symbols ())
+		if (sym->hasName ())
+			return false;
+	return true;
+}
+
+/*
  * Reads, for every linked object, where the pieces the runtime needs landed:
  * each defined function's extent and the two mono side-table sections. Keyed by
  * the per-compile dylib, whose name is unique, so a method compiled twice never
@@ -422,6 +447,8 @@ public:
 		size_t guard_table_size = 0;
 		const uint8_t *unwind_table = nullptr;
 		size_t unwind_table_size = 0;
+		/// Each executable section the linker synthesized for itself.
+		std::vector<std::pair<const uint8_t *, size_t>> linker_stubs;
 		/// Each defined function's line table, by name.
 		std::map<std::string, std::vector<IlLineRow>> il_lines;
 		/// Each defined function's sequence point markers, by name.
@@ -504,6 +531,11 @@ public:
 						extents.unwind_table =
 							range.getStart ().toPtr<const uint8_t *> ();
 						extents.unwind_table_size = range.getSize ();
+					} else if (is_linker_stub_section (section)) {
+						extents.linker_stubs.emplace_back (
+							range.getStart ()
+								.toPtr<const uint8_t *> (),
+							range.getSize ());
 					}
 				}
 
@@ -1027,6 +1059,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	compiled.guard_table_size = extents->guard_table_size;
 	compiled.unwind_table = extents->unwind_table;
 	compiled.unwind_table_size = extents->unwind_table_size;
+	compiled.linker_stubs = std::move (extents->linker_stubs);
 
 	for (auto &[name, extent] : extents->functions) {
 		if (name == entry) {

@@ -352,6 +352,10 @@ wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig)
 	return sig != nullptr && sig->hasthis && m_class_is_valuetype (method->klass);
 }
 
+MonoJitInfo *register_stub_jinfo (MonoDomain *domain, MonoMethod *method,
+                                  void *stub, size_t size,
+                                  const std::string &name);
+
 /// The engine, and everything it needs that outlives one compile.
 ///
 /// Code is compiled per domain, the way mini kept a jit_code_hash per domain: a
@@ -651,6 +655,31 @@ void
 Backend::remember (DomainState &state, MonoMethod *method,
                    const CompiledMethod &compiled, MonoJitInfo *jinfo)
 {
+	/*
+	 * Every call that leaves this object and could not reach its target with a
+	 * pc-relative branch goes through a stub JITLink planted beside the code,
+	 * so that is where a thread caught mid-call is stopped. An address with no
+	 * record resolves to nothing and an async stack walk starting there sees no
+	 * frame at all - which is how a thread inside a finally gets its abort
+	 * delivered on the spot instead of at the end of the block.
+	 *
+	 * The stubs are bare jumps, so the arch CIE describes them exactly, and
+	 * they belong to the object: they come out with it when the method is
+	 * freed.
+	 */
+	std::vector<MonoJitInfo *> stubs;
+
+	for (size_t i = 0; i < compiled.linker_stubs.size (); ++i) {
+		auto &[code, size] = compiled.linker_stubs[i];
+		std::string name =
+			symbol_for_body (method) + "$linker_stubs" + std::to_string (i);
+		MonoJitInfo *stub_jinfo = register_stub_jinfo (
+			state.domain, method, const_cast<uint8_t *> (code), size, name);
+
+		if (stub_jinfo != nullptr)
+			stubs.push_back (stub_jinfo);
+	}
+
 	if (!method->dynamic)
 		return;
 
@@ -661,6 +690,7 @@ Backend::remember (DomainState &state, MonoMethod *method,
 		owned.dylibs.push_back (compiled.dylib);
 	if (jinfo != nullptr)
 		owned.jinfos.push_back (jinfo);
+	owned.jinfos.insert (owned.jinfos.end (), stubs.begin (), stubs.end ());
 }
 
 void
@@ -1769,14 +1799,14 @@ stub_unwind_info ()
 	return encoded;
 }
 
-/// Register the jit-info record that resolves STUB's address back to METHOD,
-/// under the stub's own symbol NAME.
+/// Register the jit-info record that resolves the SIZE bytes of stub code at
+/// STUB back to METHOD, under the symbol NAME.
 ///
 /// Returns the record when the caller has to take it out again, and null when
 /// it dies with its domain.
 MonoJitInfo *
 register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub,
-                     const std::string &name)
+                     size_t size, const std::string &name)
 {
 	ArrayRef<uint8_t> unwind = stub_unwind_info ();
 	guint8 *uw_info = const_cast<guint8 *> (unwind.data ());
@@ -1791,13 +1821,13 @@ register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub,
 	 */
 	if (method->dynamic)
 		return mono_tramp_info_register_reclaimable (
-			domain, method, stub, (guint32) arch::stub_block_size,
-			name.c_str (), uw_info, uw_info_len);
+			domain, method, stub, (guint32) size, name.c_str (),
+			uw_info, uw_info_len);
 
 	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
 
 	tramp->code = (guint8 *) stub;
-	tramp->code_size = (guint32) arch::stub_block_size;
+	tramp->code_size = (guint32) size;
 	tramp->name = g_strdup (name.c_str ());
 	tramp->method = method;
 	tramp->uw_info = uw_info;
@@ -1848,10 +1878,10 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	 * is far more likely to be caught in. The published check above keeps
 	 * racing threads from registering either twice.
 	 */
-	MonoJitInfo *entry_jinfo =
-		register_stub_jinfo (state.domain, method, *stub, entry_name);
-	MonoJitInfo *body_jinfo =
-		register_stub_jinfo (state.domain, method, *body, body_name);
+	MonoJitInfo *entry_jinfo = register_stub_jinfo (
+		state.domain, method, *stub, arch::stub_block_size, entry_name);
+	MonoJitInfo *body_jinfo = register_stub_jinfo (
+		state.domain, method, *body, arch::stub_block_size, body_name);
 
 	state.published[method] = Publication { *stub, entry_jinfo, body_jinfo };
 

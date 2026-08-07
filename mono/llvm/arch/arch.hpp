@@ -88,6 +88,10 @@ void emit_callee_saved_clobber (llvm::IRBuilderBase &b);
 /// SLOT: the two registers a stack walk resumes from.
 void emit_lmf_capture_registers (llvm::IRBuilderBase &b, llvm::Value *slot);
 
+/// Read the address of this thread's LMF chain head straight out of thread-local
+/// storage, or null when this machine cannot reach it without a call.
+llvm::Value *emit_lmf_address (llvm::IRBuilderBase &b);
+
 /* -- The boundary calling convention -------------------------------------- */
 
 /// The attribute naming a call (or a declaration every call to which) crosses
