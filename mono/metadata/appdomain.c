@@ -3325,8 +3325,21 @@ unload_thread_main (void *arg)
 
 	mono_thread_set_name_constant_ignore_error (mono_thread_internal_current (), "Domain unloader", MonoSetThreadNameFlag_Permanent);
 
-	/* 
-	 * FIXME: Abort our parent thread last, so we can return a failure 
+	/*
+	 * Before anything below touches the domain. The JIT may be compiling into
+	 * it on a thread of its own, and that is not a thread aborting the domain's
+	 * threads can reach or finalization can wait out: it is not running managed
+	 * code and it does not belong to this domain. Everything from here on -
+	 * zeroing the static data, clearing the cached vtables, and the whole of
+	 * mono_domain_free () - assumes nobody is still reading the domain.
+	 *
+	 * No lock is held here on purpose. A compile being waited for can be
+	 * blocked on the loader lock, which this thread takes further down.
+	 */
+	mono_domain_notify_unloading (domain);
+
+	/*
+	 * FIXME: Abort our parent thread last, so we can return a failure
 	 * indication if aborting times out.
 	 */
 	if (!mono_threads_abort_appdomain_threads (domain, -1)) {

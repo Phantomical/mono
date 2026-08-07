@@ -44,6 +44,16 @@ void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domai
 /// long after. Nothing is queued again afterwards.
 void mono_llvm_jit_stop_compiling (void);
 
+/// Stop compiling for DOMAIN and wait for the compile in flight for it, if
+/// there is one.
+///
+/// Called at the very start of an unload, while the domain is still whole.
+/// Freeing it is much too late: by then its static data has been zeroed, its
+/// cached vtables cleared and its assemblies closed, and a compile reading any
+/// of that is reading freed memory. Must be called with no lock held - the
+/// compile being waited for may want the loader lock.
+void mono_llvm_jit_stop_compiling_for_domain (MonoDomain *domain);
+
 /// Release everything the backend holds for DOMAIN: its code, its stubs, the
 /// linker they live in. Called on the domain's way out, after the runtime has
 /// proved nothing can execute in it any more; a domain the backend never

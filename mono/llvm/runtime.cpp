@@ -62,6 +62,7 @@ extern "C" {
 #include <llvm/TargetParser/Triple.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -524,6 +525,11 @@ public:
 	/// running. Nothing is queued after this.
 	static void stop_compiling ();
 
+	/// Refuse further background compiles for DOMAIN and wait for the one in
+	/// flight for it. Runs while the domain is still whole; free_domain () is
+	/// what takes it apart afterwards.
+	static void stop_compiling_for (MonoDomain *domain);
+
 	/// Drop DOMAIN's linker and everything in it. The caller proves the code
 	/// dead: nothing may be executing in, or about to call into, the domain.
 	static void free_domain (MonoDomain *domain);
@@ -759,7 +765,22 @@ Backend::get ()
 {
 	static std::once_flag once;
 
-	std::call_once (once, [] { live_backend = new Backend (); });
+	std::call_once (once, [] {
+		live_backend = new Backend ();
+
+		/*
+		 * The ordered stop is mini_cleanup ()'s, and this is not a substitute
+		 * for it - by the time exit () runs, a domain has long since been torn
+		 * down out from under anything still compiling. It is the backstop for
+		 * a process that never shuts the runtime down at all, which the unit
+		 * test binaries do not and an embedder need not: a worker still
+		 * compiling while the process unwinds reads whatever has already been
+		 * destroyed. Registered here rather than at the first background
+		 * compile so it lands after every static constructor and therefore runs
+		 * before every static destructor.
+		 */
+		atexit ([] { Backend::stop_compiling (); });
+	});
 	return live_backend;
 }
 
@@ -821,14 +842,38 @@ Backend::stop_compiling ()
 	 * Stopping refuses everything from here on, drops what is queued and joins
 	 * the worker - which is the wait for the compile it still has in hand.
 	 *
-	 * Shutdown is the one teardown a per-domain drain cannot cover, because it
-	 * is not a domain that is going away. mono_domain_free () destroys the
-	 * string table a compile interns into and closes the assemblies it reads
-	 * long before it reaches free_domain (), and what runs before that -
-	 * finalization, the thread shutdown - is no safer to be compiling
-	 * alongside.
+	 * Shutdown needs this rather than a per-domain drain because it is not a
+	 * domain that is going away: the root domain is never unloaded, and what
+	 * shutdown tears down around it - the thread pool, finalization, the image
+	 * loader - is no safer to be compiling alongside.
 	 */
 	live_backend->queue_.stop ();
+}
+
+void
+Backend::stop_compiling_for (MonoDomain *domain)
+{
+	if (live_backend == nullptr)
+		return;
+
+	CompileQueue::Channel *channel = nullptr;
+	{
+		std::lock_guard<std::mutex> lock (live_backend->mutex_);
+		auto it = live_backend->domains_.find (domain);
+
+		if (it == live_backend->domains_.end ())
+			return;
+
+		channel = &*it->second->queue;
+	}
+
+	/*
+	 * Outside mutex_, which the worker takes - and the channel outlives the
+	 * unlock because a domain is notified and then freed by the one thread
+	 * unloading it, in that order. Closing is idempotent, so free_domain ()
+	 * closing it again costs nothing.
+	 */
+	channel->close ();
 }
 
 void
@@ -2615,6 +2660,12 @@ void
 mono_llvm_jit_stop_compiling (void)
 {
 	mono::Backend::stop_compiling ();
+}
+
+void
+mono_llvm_jit_stop_compiling_for_domain (MonoDomain *domain)
+{
+	mono::Backend::stop_compiling_for (domain);
 }
 
 void

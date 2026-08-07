@@ -4086,6 +4086,17 @@ free_jit_callee_list (gpointer key, gpointer value, gpointer user_data)
 	g_slist_free ((GSList*)value);
 }
 
+/*
+ * The domain is still whole here - this runs before the unload has taken
+ * anything apart. All it does is get the backend's compile worker out of the
+ * domain; mini_free_jit_domain_info () is what frees anything.
+ */
+static void
+mini_unloading_jit_domain_info (MonoDomain *domain)
+{
+	mono_llvm_jit_stop_compiling_for_domain (domain);
+}
+
 static void
 mini_free_jit_domain_info (MonoDomain *domain)
 {
@@ -4357,6 +4368,7 @@ mini_init (const char *filename, const char *runtime_version)
 
 #ifdef JIT_TRAMPOLINES_WORK
 	mono_install_create_domain_hook (mini_create_jit_domain_info);
+	mono_install_unloading_domain_hook (mini_unloading_jit_domain_info);
 	mono_install_free_domain_hook (mini_free_jit_domain_info);
 #endif
 	mono_install_get_cached_class_info (mono_aot_get_cached_class_info);

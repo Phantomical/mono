@@ -138,6 +138,7 @@ static const MonoRuntimeInfo supported_runtimes[] = {
 /* Callbacks installed by the JIT */
 static MonoCreateDomainFunc create_domain_hook;
 static MonoFreeDomainFunc free_domain_hook;
+static MonoFreeDomainFunc unloading_domain_hook;
 
 /* AOT cache configuration */
 static MonoAotCacheConfig aot_cache_config;
@@ -244,6 +245,31 @@ void
 mono_install_free_domain_hook (MonoFreeDomainFunc func)
 {
 	free_domain_hook = func;
+}
+
+void
+mono_install_unloading_domain_hook (MonoFreeDomainFunc func)
+{
+	unloading_domain_hook = func;
+}
+
+/*
+ * Tell the JIT a domain is on its way out, before any of it is taken apart.
+ *
+ * The free hook is far too late for anything that has to stop rather than be
+ * cleaned up: by then the static data has been zeroed, the cached vtables
+ * cleared and, in mono_domain_free () itself, the string table destroyed and
+ * the assemblies closed. Anything of the JIT's still reading the domain has to
+ * be finished before that starts, which is what this asks for.
+ *
+ * Called with no lock held, and it has to be: what it waits for may want any of
+ * them.
+ */
+void
+mono_domain_notify_unloading (MonoDomain *domain)
+{
+	if (unloading_domain_hook)
+		unloading_domain_hook (domain);
 }
 
 gboolean

@@ -650,6 +650,13 @@ typedef void (*MonoFreeDomainFunc) (MonoDomain *domain);
 void
 mono_install_free_domain_hook (MonoFreeDomainFunc func);
 
+/* Runs at the very start of an unload, while the domain is still whole. */
+void
+mono_install_unloading_domain_hook (MonoFreeDomainFunc func);
+
+void
+mono_domain_notify_unloading (MonoDomain *domain);
+
 void
 mono_runtime_quit_internal (void);
 
