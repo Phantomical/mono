@@ -344,30 +344,35 @@ dump_il (MonoMethod *method, MonoMethodHeader *header)
 	g_free (il);
 }
 
+/// The chunk a symbol carries to make it one method's identity.
+///
+/// The printed name is for reading; the pointer is the identity. No name scheme
+/// is unique on its own - conversion operators overload on their return type,
+/// which no printed signature carries, and the runtime mints wrappers whose
+/// names are only as distinct as what they were generated from - and a symbol is
+/// one method's identity here.
+std::string
+identity_of (MonoMethod *method)
+{
+	char buf[32];
+
+	snprintf (buf, sizeof (buf), "@%p", (void *) method);
+	return buf;
+}
+
 /// The plain symbol: the fastcc body, which is the method's implementation and
 /// what generated callers bind to. Every other symbol a method owns hangs a
 /// suffix off this one.
+///
+/// create_method_decl () names methods the same way; the two must agree or a
+/// caller's reference never finds the stub.
 std::string
 symbol_for_body (MonoMethod *method)
 {
 	char *name = mono_method_full_name (method, TRUE);
-	std::string symbol = name;
-	char suffix[32];
+	std::string symbol = std::string (name) + identity_of (method);
 
 	g_free (name);
-
-	/*
-	 * The printed name is for reading; the pointer is the identity. No name
-	 * scheme is unique on its own - conversion operators overload on their
-	 * return type, which no printed signature carries, and the runtime mints
-	 * wrappers whose names are only as distinct as what they were generated
-	 * from - and a symbol is one method's identity here.
-	 *
-	 * create_method_decl () names methods the same way; the two must agree or
-	 * a caller's reference never finds the stub.
-	 */
-	snprintf (suffix, sizeof (suffix), "@%p", (void *) method);
-	symbol += suffix;
 	return symbol;
 }
 
@@ -409,6 +414,25 @@ std::string
 symbol_for_unbox_entry (MonoMethod *method)
 {
 	return symbol_for_body (method) + "$unboxentry";
+}
+
+/// SYMBOL as a profile or a debugger should print it: the method's readable
+/// name, keeping whatever suffix said which piece of the method this is.
+///
+/// The identity chunk is noise to a reader, and it moves between runs - which
+/// is what stops two profiles of the same program from being compared, or
+/// aggregated.
+std::string
+display_name (MonoMethod *method, StringRef symbol)
+{
+	std::string identity = identity_of (method);
+	size_t at = symbol.rfind (identity);
+
+	if (at == StringRef::npos)
+		return symbol.str ();
+
+	return symbol.take_front (at).str ()
+	       + symbol.drop_front (at + identity.size ()).str ();
 }
 
 /// Whether a call can ever reach METHOD with a boxed receiver, so that the
@@ -1029,24 +1053,14 @@ Backend::set_interp_filter (const char *filter)
  *
  * A method is several executable ranges - the fastcc body, the `$legacy` and
  * `$entry` thunks, one body per filter clause - and all of them run, so each
- * gets a record of its own. The names the object carries end in the method
- * pointer that gives a symbol its identity; a profile wants the readable half,
- * keeping whatever suffix said which piece of the method this is.
+ * gets a record of its own.
  */
 void
 dump_object_code (MonoMethod *method, const CompiledMethod &compiled)
 {
-	std::string symbol = symbol_for_body (method);
-	char *full = mono_method_full_name (method, TRUE);
-	std::string pretty = full;
-
-	g_free (full);
-
 	for (const auto &[name, extent] : compiled.functions) {
 		const auto &[code, size] = extent;
-		StringRef suffix (name);
-		std::string display =
-			suffix.consume_front (symbol) ? pretty + suffix.str () : name;
+		std::string display = display_name (method, name);
 
 		mono_emit_jit_dump_code (display.c_str (),
 		                         const_cast<uint8_t *> (code),
@@ -2547,7 +2561,7 @@ stub_unwind_info ()
 }
 
 /// Register the jit-info record that resolves the SIZE bytes of stub code at
-/// STUB back to METHOD, under the symbol NAME.
+/// STUB back to METHOD, which was published under the symbol NAME.
 ///
 /// Returns the record when the caller has to take it out again, and null when
 /// it dies with its domain.
@@ -2560,6 +2574,21 @@ register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub,
 	guint32 uw_info_len = (guint32) unwind.size ();
 
 	/*
+	 * Everything that reads this record's name only ever prints it - a profile,
+	 * a stack dump, the jit map - and each of them already has the address to
+	 * tell two records apart with, so the name is carried in the form a reader
+	 * wants rather than as the symbol.
+	 *
+	 * The stub over the plain body symbol needs a suffix of its own or it prints
+	 * exactly as the body it jumps to, and the two are worth telling apart: one
+	 * is the method, the other is the sixteen bytes in front of it.
+	 */
+	std::string display = display_name (method, name);
+
+	if (StringRef (name).ends_with (identity_of (method)))
+		display += "$stub";
+
+	/*
 	 * A dynamic method's stub block goes back on the free list when the method
 	 * is freed, so its record has to be taken out again before the next method
 	 * lands there - and mono_jit_info_table_remove () frees what it unregisters,
@@ -2568,14 +2597,14 @@ register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub,
 	 */
 	if (method->dynamic)
 		return mono_tramp_info_register_reclaimable (
-			domain, method, stub, (guint32) size, name.c_str (),
+			domain, method, stub, (guint32) size, display.c_str (),
 			uw_info, uw_info_len);
 
 	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
 
 	tramp->code = (guint8 *) stub;
 	tramp->code_size = (guint32) size;
-	tramp->name = g_strdup (name.c_str ());
+	tramp->name = g_strdup (display.c_str ());
 	tramp->method = method;
 	tramp->uw_info = uw_info;
 	tramp->uw_info_len = uw_info_len;
