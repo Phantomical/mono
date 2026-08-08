@@ -1,14 +1,8 @@
 # The LLVM JIT.
 
-file(GLOB sources CONFIGURE_DEPENDS
+file(GLOB_RECURSE sources CONFIGURE_DEPENDS
     *.cpp
     *.hpp
-    arch/**/*.cpp
-    arch/**/*.hpp
-    method-to-llvm/*.cpp
-    method-to-llvm/*.hpp
-    passes/*.cpp
-    passes/*.hpp
 )
 
 mono_add_object_library(mono-llvm
