@@ -124,7 +124,7 @@ protected:
 		t->module->setModuleIdentifier (dumped ? asm_filter : image);
 
 		std::string entry = t->function->getName ().str ();
-		auto jit = MonoJit::create ();
+		auto jit = test::make_jit ();
 
 		EXPECT_TRUE (bool (jit)) << toString (jit.takeError ());
 		if (!jit)

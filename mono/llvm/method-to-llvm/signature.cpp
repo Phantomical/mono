@@ -858,15 +858,17 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		*type = hidden_return_prototype (*type, hidden);
 	}
 
-	char *printed = mono_method_full_name (method, TRUE);
-
 	/*
-	 * identity_symbol () for the same reason it is used everywhere else, with one
-	 * more of its own: conversion operators overload on their return type, which
-	 * no printed signature carries, and runtime-minted wrappers print alike. This
-	 * name is how a caller's reference finds the method's stub, so
-	 * symbol_for_body () (runtime.cpp) must agree with it.
+	 * A placeholder. The engine reads the marker below and renames this to
+	 * whatever it publishes that entry under, so nothing has to agree with it -
+	 * it only has to be unique, which identity_symbol () makes it, and legible,
+	 * because untranslated IR is read.
+	 *
+	 * Without the signature, which is the expensive half of printing a method
+	 * and buys nothing here: the pointer is what makes the name unique, and a
+	 * dump has the declaration's own type beside it.
 	 */
+	char *printed = mono_method_full_name (method, FALSE);
 	std::string full_name = identity_symbol (printed, method);
 
 	g_free (printed);
@@ -888,6 +890,7 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
 
 	record_external (full_name, ExternalSymbol::Kind::Code, method);
+	mark_method_entry (*function, method, legacy ? mono::Entry::legacy : mono::Entry::body);
 
 	if (legacy)
 		function->addFnAttr (llvm::Attribute::get (

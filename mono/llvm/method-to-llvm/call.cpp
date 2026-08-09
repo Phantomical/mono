@@ -433,12 +433,16 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 	if (implemented_outside_il (target))
 		return create_method_decl (target);
 
-	char *name = mono_method_full_name (target, TRUE);
-	std::string symbol = identity_symbol (name, target) + "$legacy";
+	char *printed = mono_method_full_name (target, FALSE);
+	std::string symbol = identity_symbol (printed, target) + "$legacy";
 
-	g_free (name);
+	g_free (printed);
+
+	llvm::Constant *address = extern_symbol (symbol);
+
 	record_external (symbol, ExternalSymbol::Kind::Code, target);
-	return extern_symbol (symbol);
+	mark_method_entry (llvm::cast<llvm::GlobalValue> (*address), target, mono::Entry::legacy);
+	return address;
 }
 
 /*

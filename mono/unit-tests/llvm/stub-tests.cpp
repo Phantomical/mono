@@ -1,14 +1,20 @@
 /*
- * Tests for the redirectable stubs MonoJit publishes methods as.
+ * Tests for the redirectable stubs a method is published as.
  *
  * Three things have to hold: a call through a stub reaches whatever the stub
  * currently points at; compiled code binds to the stub rather than to the
  * target it happened to have at link time; and a runtime detour written over a
  * stub - what Harmony does to every method it patches - keeps working across a
  * redirect, and lands on the newest target once it is removed.
+ *
+ * The stubs belong to the backend and the names belong to MonoJit, so the two
+ * are driven together through the Engine below, which is what the backend does
+ * around a method minus the method.
  */
 
 #include "arch/arch.hpp"
+#include "callbacks.hpp"
+#include "codemem.hpp"
 #include "jit.hpp"
 #include "stubs.hpp"
 
@@ -65,25 +71,170 @@ stub_detour_target ()
 
 using IntFn = int32_t (*) ();
 
-/*
- * create_stub ()/create_lazy_stub () reserve the stub; the tests want the
- * address it was reserved at too, which is a call of its own.
- */
-static Expected<void *>
-make_stub (MonoJit &jit, const std::string &name, void *target)
+/// Where a lazy stub lands when the compile behind it failed, which no case here
+/// arranges for.
+[[noreturn]] static void
+lazy_failed ()
 {
-	if (Error err = jit.create_stub (name, target))
-		return std::move (err);
-	return jit.stub_address (name);
+	ADD_FAILURE () << "a lazy stub's compile failed";
+	std::abort ();
 }
 
-static Expected<void *>
-make_lazy_stub (MonoJit &jit, const std::string &name,
-                MonoJit::LazyCompileFunction compile)
+/*
+ * A domain's engine: one set of slabs, the linker over them, the stubs carved
+ * out of them and the trampolines an uncompiled one points at.
+ *
+ * Publishing is two steps that always go together - carve the stub, and define
+ * the name at it - and undefining is those two in reverse. That pairing is the
+ * backend's, so it is reproduced here rather than reached for through MonoJit,
+ * which now only ever hears the names.
+ */
+class Engine {
+public:
+	static Expected<std::unique_ptr<Engine>> create ()
+	{
+		auto self = std::unique_ptr<Engine> (new Engine ());
+		auto jit = MonoJit::create (self->slabs_);
+
+		if (!jit)
+			return jit.takeError ();
+		self->jit_ = std::move (*jit);
+
+		auto callbacks = LazyCallbacks::create ((void *) &lazy_failed);
+		if (!callbacks)
+			return callbacks.takeError ();
+		self->callbacks_ = std::move (*callbacks);
+
+		return self;
+	}
+
+	MonoJit &jit () { return *jit_; }
+
+	/// Publish NAME as a stub jumping to TARGET and return the address callers
+	/// reach it at.
+	Expected<void *> publish (StringRef name, void *target)
+	{
+		Expected<void *> code = carve (name);
+
+		if (!code)
+			return code;
+		stubs_.find (name)->redirect (target);
+		return code;
+	}
+
+	/// Publish NAME as a stub that runs COMPILE on its first call and goes
+	/// straight to what that produced from then on - what a method published
+	/// before it is compiled looks like.
+	Expected<void *> publish_lazy (StringRef name,
+	                               unique_function<Expected<void *> ()> compile)
+	{
+		std::string owned = name.str ();
+		Expected<void *> trampoline = callbacks_->reserve (
+			[this, owned, compile = std::move (compile)] () mutable -> void * {
+				Expected<void *> code = compile ();
+
+				if (!code) {
+					ADD_FAILURE ()
+						<< toString (code.takeError ());
+					return (void *) &lazy_failed;
+				}
+
+				stubs_.find (owned)->redirect (*code);
+				return *code;
+			});
+		if (!trampoline)
+			return trampoline.takeError ();
+
+		Expected<void *> code = carve (name);
+
+		if (!code) {
+			callbacks_->release (*trampoline);
+			return code;
+		}
+
+		stubs_.find (name)->redirect (*trampoline);
+		trampolines_[name] = *trampoline;
+		return code;
+	}
+
+	Error redirect (StringRef name, void *target)
+	{
+		std::optional<Stub> stub = stubs_.find (name);
+
+		if (!stub)
+			return createStringError (inconvertibleErrorCode (),
+			                          "no stub was published for %s",
+			                          name.str ().c_str ());
+		stub->redirect (target);
+		return Error::success ();
+	}
+
+	Expected<void *> address (StringRef name)
+	{
+		std::optional<Stub> stub = stubs_.find (name);
+
+		if (!stub)
+			return createStringError (inconvertibleErrorCode (),
+			                          "no stub was published for %s",
+			                          name.str ().c_str ());
+		return stub->code ();
+	}
+
+	Error undefine (ArrayRef<std::string> names)
+	{
+		if (Error err = jit_->undefine_stubs (names))
+			return err;
+
+		for (const std::string &name : names) {
+			auto it = trampolines_.find (name);
+
+			if (it == trampolines_.end ())
+				continue;
+			callbacks_->release (it->second);
+			trampolines_.erase (it);
+		}
+
+		stubs_.remove_all (names);
+		return Error::success ();
+	}
+
+private:
+	Engine () : slabs_ (std::make_shared<CodeSlabs> ()), stubs_ (slabs_.get ()) {}
+
+	/// Carve NAME a stub and tell the linker about it, leaving it pointing
+	/// nowhere useful for the caller to set.
+	Expected<void *> carve (StringRef name)
+	{
+		Expected<Stub> stub = stubs_.create (name);
+
+		if (!stub)
+			return stub.takeError ();
+
+		std::pair<StringRef, void *> def{name, stub->code ()};
+
+		if (Error err = jit_->define_stubs (def))
+			return std::move (err);
+		return stub->code ();
+	}
+
+	std::shared_ptr<CodeSlabs> slabs_;
+	std::unique_ptr<MonoJit> jit_;
+	StubTable stubs_;
+	std::unique_ptr<LazyCallbacks> callbacks_;
+	StringMap<void *> trampolines_;
+};
+
+/// Build an engine, or fail the case that asked for one.
+static std::unique_ptr<Engine>
+make_engine ()
 {
-	if (Error err = jit.create_lazy_stub (name, std::move (compile)))
-		return std::move (err);
-	return jit.stub_address (name);
+	Expected<std::unique_ptr<Engine>> engine = Engine::create ();
+
+	if (!engine) {
+		ADD_FAILURE () << toString (engine.takeError ());
+		return nullptr;
+	}
+	return std::move (*engine);
 }
 
 /*
@@ -226,18 +377,18 @@ write_detour (void *stub, void *target, char (&saved)[detour_size])
 
 TEST (Stubs, CallsInitialTargetAndFollowsRedirects)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	auto stub = make_stub (**jit, "m", (void *) &stub_target_one);
+	auto stub = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 1);
 
-	ASSERT_FALSE (bool ((*jit)->redirect_stub ("m", (void *) &stub_target_two)));
+	ASSERT_FALSE (bool (engine->redirect ("m", (void *) &stub_target_two)));
 	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 2);
 
 	/* The published address never moves - that is the whole point of it. */
-	auto again = (*jit)->stub_address ("m");
+	auto again = engine->address ("m");
 	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
 	EXPECT_EQ (*again, *stub);
 }
@@ -250,34 +401,37 @@ TEST (Stubs, CallsInitialTargetAndFollowsRedirects)
  */
 TEST (Stubs, AnUndefinedNameCanBePublishedAgain)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	auto first = make_stub (**jit, "m", (void *) &stub_target_one);
+	auto first = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (*first) (), 1);
 
-	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
+	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
 
-	auto second = make_stub (**jit, "m", (void *) &stub_target_two);
+	auto second = engine->publish ("m", (void *) &stub_target_two);
 	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (*second) (), 2);
 }
 
 /*
  * The common case for a method that was published and then freed without ever
- * being called or linked against: no module ever named it, so undefining it has
- * no symbol to take back - only the block.
+ * being called or linked against. Its symbol is there like any other - a stub
+ * reaches the linker when it is carved - but nothing has ever looked it up, so
+ * it is still unmaterialized, which is the state undefining has to accept
+ * without first forcing it into existence.
  */
 TEST (Stubs, AnUnmaterializedStubCanBeUndefined)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	ASSERT_FALSE (bool ((*jit)->create_stub ("m", (void *) &stub_target_one)));
-	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
+	auto first = engine->publish ("m", (void *) &stub_target_one);
+	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
+	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
 
-	auto again = make_stub (**jit, "m", (void *) &stub_target_two);
+	auto again = engine->publish ("m", (void *) &stub_target_two);
 	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (*again) (), 2);
 }
@@ -290,16 +444,16 @@ TEST (Stubs, AnUnmaterializedStubCanBeUndefined)
  */
 TEST (Stubs, AnUndefinedStubIsHandedOutAgain)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	auto first = make_stub (**jit, "m", (void *) &stub_target_one);
+	auto first = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
 
-	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
+	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
 
 	/* A different name, so this is the block being reused and not the name. */
-	auto second = make_stub (**jit, "n", (void *) &stub_target_two);
+	auto second = engine->publish ("n", (void *) &stub_target_two);
 	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
 
 	EXPECT_EQ (*first, *second);
@@ -307,26 +461,26 @@ TEST (Stubs, AnUndefinedStubIsHandedOutAgain)
 }
 
 /*
- * The one case where the name reached the linker: a module was compiled against
- * it, so undefining has a symbol to take back as well as a block. The name has
- * to come back clean enough for the next method along to be linked against.
+ * The other half of the case above: a module was compiled against the name, so
+ * its symbol has settled rather than never having been searched for. The name
+ * has to come back clean enough for the next method along to be linked against.
  */
 TEST (Stubs, ANameAModuleLinkedAgainstCanBePublishedAgain)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_one)));
+	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_one)));
 
-	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
-	ASSERT_FALSE (bool ((*jit)->undefine_stubs ({ "m" })));
-	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_two)));
+	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
+	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_two)));
 
 	/* The old caller is calling a stub that has been handed out again. */
-	auto again = (*jit)->compile (build_caller_module ("m"), "caller");
+	auto again = engine->jit ().compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (again->entry) (), 2);
 }
@@ -338,10 +492,10 @@ TEST (Stubs, ANameAModuleLinkedAgainstCanBePublishedAgain)
  */
 TEST (Stubs, UndefiningANameThatWasNeverPublishedFails)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	Error err = (*jit)->undefine_stubs ({ "m" });
+	Error err = engine->undefine ({ "m" });
 
 	ASSERT_TRUE (bool (err));
 	consumeError (std::move (err));
@@ -349,12 +503,12 @@ TEST (Stubs, UndefiningANameThatWasNeverPublishedFails)
 
 TEST (Stubs, CompiledCallersBindToTheStub)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_one)));
+	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_one)));
 
-	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
@@ -363,17 +517,17 @@ TEST (Stubs, CompiledCallersBindToTheStub)
 	 * If it had bound to that address, this would still return 1 - a promotion
 	 * would be invisible to everything already compiled.
 	 */
-	ASSERT_FALSE (bool ((*jit)->redirect_stub ("m", (void *) &stub_target_two)));
+	ASSERT_FALSE (bool (engine->redirect ("m", (void *) &stub_target_two)));
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2);
 }
 
 TEST (Stubs, GeometryLeavesRoomForADetour)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	auto a = make_stub (**jit, "a", (void *) &stub_target_one);
-	auto b = make_stub (**jit, "b", (void *) &stub_target_two);
+	auto a = engine->publish ("a", (void *) &stub_target_one);
+	auto b = engine->publish ("b", (void *) &stub_target_two);
 	ASSERT_TRUE (bool (a)) << toString (a.takeError ());
 	ASSERT_TRUE (bool (b)) << toString (b.takeError ());
 
@@ -403,13 +557,13 @@ TEST (Stubs, GeometryLeavesRoomForADetour)
 
 TEST (Stubs, SurvivesADetourAcrossRedirects)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	auto stub = make_stub (**jit, "m", (void *) &stub_target_one);
+	auto stub = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
-	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
@@ -428,7 +582,7 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
 	 * needs - but the slot still has to track the newest tier.
 	 */
 	ASSERT_FALSE (
-		bool ((*jit)->redirect_stub ("m", (void *) &stub_target_three)));
+		bool (engine->redirect ("m", (void *) &stub_target_three)));
 	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 99);
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 99);
 
@@ -448,13 +602,13 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
  */
 TEST (Stubs, RedirectsWhileThreadsRunThroughIt)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	auto stub = make_stub (**jit, "m", (void *) &stub_target_one);
+	auto stub = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
-	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
@@ -510,7 +664,7 @@ TEST (Stubs, RedirectsWhileThreadsRunThroughIt)
 	int n = 0;
 
 	for (;;) {
-		if (Error err = (*jit)->redirect_stub ("m", targets[n++ % 3])) {
+		if (Error err = engine->redirect ("m", targets[n++ % 3])) {
 			error = toString (std::move (err));
 			break;
 		}
@@ -544,13 +698,13 @@ TEST (Stubs, RedirectsWhileThreadsRunThroughIt)
  */
 TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
 	constexpr int count = 512;
 	std::vector<uintptr_t> addrs;
 	for (int i = 0; i < count; i++) {
-		auto stub = make_stub (**jit, "m" + std::to_string (i),
+		auto stub = engine->publish ("m" + std::to_string (i),
 		                                 (void *) &stub_target_one);
 		ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 		addrs.push_back (reinterpret_cast<uintptr_t> (*stub));
@@ -571,18 +725,17 @@ TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
 }
 
 /*
- * A stub reaches mono.stubs the first time some module names it, and the
- * definition generator that puts it there runs on whichever thread is linking.
- * Several links wanting the same undefined name at once must still produce one
- * definition: two of them defining it would be a duplicate-definition error out
- * of the second, which is a compile failure the runtime raises on.
+ * Several links wanting the same stub at once. They all reach one symbol, and
+ * the first of them to get there materializes it while the rest wait; a link
+ * that came away with anything other than the stub's address would be calling
+ * the target the stub happened to have rather than the stub.
  */
 TEST (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	ASSERT_TRUE (bool (make_stub (**jit, "m", (void *) &stub_target_one)));
+	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_one)));
 
 	constexpr int threads = 16;
 	std::atomic<int> ready {0};
@@ -597,7 +750,7 @@ TEST (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
 			while (!go.load ())
 				std::this_thread::yield ();
 
-			auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+			auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
 			if (!caller) {
 				errors[i] = toString (caller.takeError ());
 				return;
@@ -618,11 +771,11 @@ TEST (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
 }
 
 /*
- * Undefining a name while a link is asking mono.stubs for it. The linker
- * claims a batch of names before it defines any of them, so an undefine landing
- * in the middle can decide the linker knows about a name whose definition has
- * not been written yet - and then find nothing to take back, leave the
- * definition standing, and hand the block to the next method along.
+ * Undefining a name while a link is asking mono.stubs for it. A symbol a link
+ * has just been handed is materializing, and ORC refuses to remove one of those
+ * - so an undefine landing in that window has to wait for the link rather than
+ * come away thinking the name is gone and hand the block to the next method
+ * along.
  *
  * The module names its stubs from a pointer table rather than by calling each
  * one, which makes the lookup set large without making codegen large, so the
@@ -639,21 +792,21 @@ TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
 	for (int i = 0; i < count; i++)
 		names.push_back ("s" + std::to_string (i));
 
-	auto reserve_all = [&] (MonoJit &jit, void *target) {
+	auto publish_all = [&] (Engine &engine, void *target) {
 		for (const std::string &name : names)
-			if (Error err = jit.create_stub (name, target))
+			if (Error err = engine.publish (name, target).takeError ())
 				return toString (std::move (err));
 		return std::string ();
 	};
 
 	int64_t compile_us = 0;
 	{
-		auto jit = MonoJit::create ();
-		ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
-		ASSERT_EQ (reserve_all (**jit, (void *) &stub_target_one), "");
+		std::unique_ptr<Engine> engine = make_engine ();
+		ASSERT_NE (engine, nullptr);
+		ASSERT_EQ (publish_all (*engine, (void *) &stub_target_one), "");
 
 		auto start = std::chrono::steady_clock::now ();
-		auto compiled = (*jit)->compile (build_table_module (names), "entry");
+		auto compiled = engine->jit ().compile (build_table_module (names), "entry");
 		ASSERT_TRUE (bool (compiled)) << toString (compiled.takeError ());
 		compile_us = std::chrono::duration_cast<std::chrono::microseconds> (
 			             std::chrono::steady_clock::now () - start)
@@ -661,9 +814,9 @@ TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
 	}
 
 	for (int round = 0; round < rounds; round++) {
-		auto jit = MonoJit::create ();
-		ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
-		ASSERT_EQ (reserve_all (**jit, (void *) &stub_target_one), "");
+		std::unique_ptr<Engine> engine = make_engine ();
+		ASSERT_NE (engine, nullptr);
+		ASSERT_EQ (publish_all (*engine, (void *) &stub_target_one), "");
 
 		std::atomic<int> ready {0};
 		std::atomic<bool> go {false};
@@ -680,14 +833,14 @@ TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
 			 * which case there is nothing left to link against, or it did not.
 			 */
 			consumeError (
-				(*jit)->compile (build_table_module (names), "entry").takeError ());
+				engine->jit ().compile (build_table_module (names), "entry").takeError ());
 		});
 		std::thread undefiner ([&] {
 			ready++;
 			while (!go.load ())
 				std::this_thread::yield ();
 			std::this_thread::sleep_for (delay);
-			if (Error err = (*jit)->undefine_stubs (names))
+			if (Error err = engine->undefine (names))
 				undef_err = toString (std::move (err));
 		});
 
@@ -705,10 +858,10 @@ TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
 		 * here: publishing the name again and linking against it either finds
 		 * the old stub - which nothing redirects any more - or collides with it.
 		 */
-		ASSERT_EQ (reserve_all (**jit, (void *) &stub_target_two), "")
+		ASSERT_EQ (publish_all (*engine, (void *) &stub_target_two), "")
 			<< "round " << round;
 
-		auto caller = (*jit)->compile (build_caller_module ("s0"), "caller");
+		auto caller = engine->jit ().compile (build_caller_module ("s0"), "caller");
 		ASSERT_TRUE (bool (caller))
 			<< "round " << round << ": " << toString (caller.takeError ());
 		ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2)
@@ -717,16 +870,15 @@ TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
 }
 
 /*
- * The generator runs inside ORC's lookup machinery and defines into mono.stubs
- * from there; undefining goes the other way, taking the session lock while the
- * table is settled. Threads publishing, linking, redirecting and undefining at
- * once are what says those two orders agree - a disagreement hangs rather than
- * fails, so this test failing means it timed out.
+ * Publishing takes the session lock to define a name, linking takes it to look
+ * one up, and undefining takes it to remove one - all against the same dylib.
+ * Threads doing all four at once are what says those orders agree; a
+ * disagreement hangs rather than fails, so this test failing means it timed out.
  */
 TEST (Stubs, PublishRedirectAndUndefineFromManyThreads)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
 	constexpr int threads = 8;
 	constexpr int iterations = 24;
@@ -753,13 +905,15 @@ TEST (Stubs, PublishRedirectAndUndefineFromManyThreads)
 				std::string name =
 					"t" + std::to_string (i) + "." + std::to_string (n);
 
-				if (Error err = (*jit)->create_stub (
-				        name, (void *) &stub_target_one)) {
-					fail (std::move (err));
+				Expected<void *> stub =
+					engine->publish (name, (void *) &stub_target_one);
+
+				if (!stub) {
+					fail (stub.takeError ());
 					return;
 				}
 
-				auto caller = (*jit)->compile (
+				auto caller = engine->jit ().compile (
 					build_caller_module (name.c_str ()), "caller");
 				if (!caller) {
 					fail (caller.takeError ());
@@ -767,14 +921,14 @@ TEST (Stubs, PublishRedirectAndUndefineFromManyThreads)
 				}
 				EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
-				if (Error err = (*jit)->redirect_stub (
+				if (Error err = engine->redirect (
 				        name, (void *) &stub_target_two)) {
 					fail (std::move (err));
 					return;
 				}
 				EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2);
 
-				if (Error err = (*jit)->undefine_stubs ({ name })) {
+				if (Error err = engine->undefine ({ name })) {
 					fail (std::move (err));
 					return;
 				}
@@ -793,13 +947,13 @@ TEST (Stubs, PublishRedirectAndUndefineFromManyThreads)
 
 TEST (LazyStubs, CompileOnceOnTheFirstCall)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
 	int compiles = 0;
-	auto stub = make_lazy_stub (**jit, "m", [&] () -> Expected<void *> {
+	auto stub = engine->publish_lazy ("m", [&] () -> Expected<void *> {
 		compiles++;
-		auto compiled = (*jit)->compile (build_constant_module (7), "constant");
+		auto compiled = engine->jit ().compile (build_constant_module (7), "constant");
 		if (!compiled)
 			return compiled.takeError ();
 		return compiled->entry;
@@ -821,10 +975,10 @@ TEST (LazyStubs, CompileOnceOnTheFirstCall)
  */
 TEST (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
-	auto stub = make_lazy_stub (**jit, 
+	auto stub = engine->publish_lazy (
 		"m", [] () -> Expected<void *> { return (void *) &lazy_many_args; });
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
@@ -838,21 +992,21 @@ TEST (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
 
 TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
 	int compiles = 0;
 	ASSERT_TRUE (
-		bool (make_lazy_stub (**jit, "m", [&] () -> Expected<void *> {
+		bool (engine->publish_lazy ("m", [&] () -> Expected<void *> {
 			compiles++;
-			auto compiled = (*jit)->compile (build_constant_module (7), "constant");
+			auto compiled = engine->jit ().compile (build_constant_module (7), "constant");
 		if (!compiled)
 			return compiled.takeError ();
 		return compiled->entry;
 		})));
 
 	/* Resolves against a method that has no code yet. */
-	auto caller = (*jit)->compile (build_caller_module ("m"), "caller");
+	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	EXPECT_EQ (compiles, 0);
 
@@ -862,13 +1016,13 @@ TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 
 TEST (LazyStubs, RacingFirstCallsCompileOnce)
 {
-	auto jit = MonoJit::create ();
-	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
 
 	std::atomic<int> compiles {0};
-	auto stub = make_lazy_stub (**jit, "m", [&] () -> Expected<void *> {
+	auto stub = engine->publish_lazy ("m", [&] () -> Expected<void *> {
 		compiles++;
-		auto compiled = (*jit)->compile (build_constant_module (7), "constant");
+		auto compiled = engine->jit ().compile (build_constant_module (7), "constant");
 		if (!compiled)
 			return compiled.takeError ();
 		return compiled->entry;

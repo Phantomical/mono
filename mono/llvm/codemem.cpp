@@ -83,8 +83,7 @@ configured_slab_size (size_t page_size)
 			size = size_t (value) * scale;
 	}
 
-	return align_up (std::min (std::max (size, min_slab_size), max_slab_size),
-	                 page_size);
+	return align_up (std::min (std::max (size, min_slab_size), max_slab_size), page_size);
 }
 
 int
@@ -95,8 +94,10 @@ prot_flags (bool writable)
 
 } // namespace
 
+CodeSlabs::CodeSlabs () : CodeSlabs (llvm::sys::Process::getPageSizeEstimate ()) {}
+
 CodeSlabs::CodeSlabs (size_t page_size)
-	: page_size_ (page_size), slab_size_ (configured_slab_size (page_size))
+    : page_size_ (page_size), slab_size_ (configured_slab_size (page_size))
 {
 }
 
@@ -104,16 +105,6 @@ CodeSlabs::~CodeSlabs ()
 {
 	for (auto &slab : slabs_)
 		munmap (slab->base, slab->size);
-}
-
-Expected<std::shared_ptr<CodeSlabs>>
-CodeSlabs::create ()
-{
-	auto page_size = sys::Process::getPageSize ();
-
-	if (!page_size)
-		return page_size.takeError ();
-	return std::shared_ptr<CodeSlabs> (new CodeSlabs (*page_size));
 }
 
 Error
@@ -128,14 +119,13 @@ CodeSlabs::add_slab ()
 	 * first compile rather than on the byte it cannot afford.
 	 */
 	for (;;) {
-		base = mmap (nullptr, want, PROT_NONE,
-		             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+		base = mmap (nullptr, want, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+		             -1, 0);
 		if (base != MAP_FAILED)
 			break;
 		if (want <= min_slab_size)
-			return createStringError (
-				inconvertibleErrorCode (),
-				"cannot reserve %zu bytes for JIT code", want);
+			return createStringError (inconvertibleErrorCode (),
+			                          "cannot reserve %zu bytes for JIT code", want);
 		want /= 2;
 	}
 
@@ -169,7 +159,7 @@ CodeSlabs::carve (Slab &s, size_t index, size_t size, size_t align, Alloc &out)
 		if (length - pad - size != 0)
 			s.free[start + size] = length - pad - size;
 
-		out = Alloc { s.base + start, size, index };
+		out = Alloc{s.base + start, size, index};
 		s.live += size;
 		return true;
 	}
@@ -180,7 +170,7 @@ CodeSlabs::carve (Slab &s, size_t index, size_t size, size_t align, Alloc &out)
 		return false;
 
 	s.bump = start + size;
-	out = Alloc { s.base + start, size, index };
+	out = Alloc{s.base + start, size, index};
 	s.live += size;
 	return true;
 }
@@ -200,8 +190,7 @@ CodeSlabs::uncarve (Slab &s, const Alloc &a)
 }
 
 Expected<bool>
-CodeSlabs::carve_writable (Slab &s, size_t index, size_t size, size_t align,
-                           Alloc &out)
+CodeSlabs::carve_writable (Slab &s, size_t index, size_t size, size_t align, Alloc &out)
 {
 	for (auto it = s.writable_free.begin (); it != s.writable_free.end (); ++it) {
 		size_t start = align_up (it->first, align);
@@ -218,7 +207,7 @@ CodeSlabs::carve_writable (Slab &s, size_t index, size_t size, size_t align,
 		if (length - pad - size != 0)
 			s.writable_free[start + size] = length - pad - size;
 
-		out = Alloc { s.base + start, size, index };
+		out = Alloc{s.base + start, size, index};
 		s.live += size;
 		return true;
 	}
@@ -233,25 +222,24 @@ CodeSlabs::carve_writable (Slab &s, size_t index, size_t size, size_t align,
 		return false;
 
 	if (floor < s.writable_floor) {
-		if (mprotect (s.base + floor * page_size_,
-		              (s.writable_floor - floor) * page_size_,
-		              prot_flags (true)) != 0)
-			return createStringError (
-				std::error_code (errno, std::generic_category ()),
-				"cannot commit writable JIT pages");
+		if (mprotect (s.base + floor * page_size_, (s.writable_floor - floor) * page_size_,
+		              prot_flags (true))
+		    != 0)
+			return createStringError (std::error_code (errno, std::generic_category ()),
+			                          "cannot commit writable JIT pages");
 		s.committed_pages += s.writable_floor - floor;
 		s.writable_floor = floor;
 	}
 
 	s.writable_bump = start;
-	out = Alloc { s.base + start, size, index };
+	out = Alloc{s.base + start, size, index};
 	s.live += size;
 	return true;
 }
 
 Expected<CodeSlabs::Object>
-CodeSlabs::allocate_object (size_t code_size, size_t code_align,
-                            size_t data_size, size_t data_align)
+CodeSlabs::allocate_object (size_t code_size, size_t code_align, size_t data_size,
+                            size_t data_align)
 {
 	if (code_align == 0)
 		code_align = 1;
@@ -269,8 +257,8 @@ CodeSlabs::allocate_object (size_t code_size, size_t code_align,
 				continue;
 
 			if (data_size != 0) {
-				Expected<bool> got = carve_writable (s, i, data_size,
-				                                     data_align, obj.data);
+				Expected<bool> got =
+					carve_writable (s, i, data_size, data_align, obj.data);
 
 				if (!got) {
 					if (code_size != 0)
@@ -378,10 +366,9 @@ CodeSlabs::reprotect (Slab &s, size_t first, size_t last, bool seal)
 		if (run == SIZE_MAX)
 			continue;
 
-		if (mprotect (s.base + run * page_size_, (p - run) * page_size_,
-		              prot_flags (!seal)) != 0)
-			return createStringError (std::error_code (errno,
-			                                           std::generic_category ()),
+		if (mprotect (s.base + run * page_size_, (p - run) * page_size_, prot_flags (!seal))
+		    != 0)
+			return createStringError (std::error_code (errno, std::generic_category ()),
 			                          "cannot protect JIT code pages");
 
 		for (size_t q = run; q < p; q++) {
@@ -462,8 +449,7 @@ CodeSlabs::drop_pages (Slab &s, size_t offset, size_t length)
 	if (last <= first)
 		return;
 
-	madvise (s.base + first * page_size_, (last - first) * page_size_,
-	         MADV_DONTNEED);
+	madvise (s.base + first * page_size_, (last - first) * page_size_, MADV_DONTNEED);
 
 	for (size_t p = first; p < last && p < s.prot.size (); p++)
 		if (s.prot[p] != PageProt::None) {
@@ -548,25 +534,23 @@ CodeSlabs::committed_bytes ()
 	return total;
 }
 
-class SlabMemoryManager::InFlight final
-	: public jitlink::JITLinkMemoryManager::InFlightAlloc {
+class SlabMemoryManager::InFlight final : public jitlink::JITLinkMemoryManager::InFlightAlloc {
 public:
-	InFlight (SlabMemoryManager *owner, jitlink::LinkGraph &g,
-	          CodeSlabs::Object object)
-		: owner_ (owner), graph_ (&g), object_ (object)
+	InFlight (SlabMemoryManager *owner, jitlink::LinkGraph &g, CodeSlabs::Object object)
+	    : owner_ (owner), graph_ (&g), object_ (object)
 	{
 	}
 
 	~InFlight () override
 	{
-		assert (settled_ && "in-flight allocation neither finalized nor "
-		                    "abandoned");
+		assert (settled_
+		        && "in-flight allocation neither finalized nor "
+		           "abandoned");
 	}
 
 	void finalize (OnFinalizedFunction on_finalized) override
 	{
-		std::optional<timing::Scope> timed (std::in_place,
-		                                    timing::Phase::memfin);
+		std::optional<timing::Scope> timed (std::in_place, timing::Phase::memfin);
 
 		settled_ = true;
 
@@ -588,8 +572,7 @@ public:
 			sys::Memory::InvalidateInstructionCache (object_.code.base,
 			                                         object_.code.size);
 
-		FinalizedAlloc finalized = owner_->record (object_,
-		                                           std::move (*dealloc));
+		FinalizedAlloc finalized = owner_->record (object_, std::move (*dealloc));
 
 		timed.reset ();
 		on_finalized (std::move (finalized));
@@ -612,8 +595,7 @@ void
 SlabMemoryManager::allocate (const jitlink::JITLinkDylib *, jitlink::LinkGraph &g,
                              OnAllocatedFunction on_allocated)
 {
-	using Placement = std::vector<
-		std::pair<jitlink::BasicLayout::Segment *, uint64_t>>;
+	using Placement = std::vector<std::pair<jitlink::BasicLayout::Segment *, uint64_t>>;
 
 	jitlink::BasicLayout layout (g);
 	Placement code, data;
@@ -629,8 +611,8 @@ SlabMemoryManager::allocate (const jitlink::JITLinkDylib *, jitlink::LinkGraph &
 				inconvertibleErrorCode ()));
 
 		jitlink::BasicLayout::Segment &seg = kv.second;
-		bool writable = (kv.first.getMemProt () & orc::MemProt::Write)
-		                == orc::MemProt::Write;
+		bool writable =
+			(kv.first.getMemProt () & orc::MemProt::Write) == orc::MemProt::Write;
 		uint64_t &extent = writable ? data_size : code_size;
 		Align &align = writable ? data_align : code_align;
 
@@ -645,7 +627,7 @@ SlabMemoryManager::allocate (const jitlink::JITLinkDylib *, jitlink::LinkGraph &
 	if (!object)
 		return on_allocated (object.takeError ());
 
-	for (bool writable : { false, true }) {
+	for (bool writable : {false, true}) {
 		Placement &placed = writable ? data : code;
 		char *base = writable ? object->data.base : object->code.base;
 
@@ -656,8 +638,7 @@ SlabMemoryManager::allocate (const jitlink::JITLinkDylib *, jitlink::LinkGraph &
 			/* The stock in-process manager zeroes its whole slab up
 			 * front; a shared slab has to be zeroed a segment at a
 			 * time. */
-			memset (seg->WorkingMem + seg->ContentSize, 0,
-			        seg->ZeroFillSize);
+			memset (seg->WorkingMem + seg->ContentSize, 0, seg->ZeroFillSize);
 		}
 	}
 
@@ -677,7 +658,7 @@ SlabMemoryManager::record (CodeSlabs::Object object,
 	std::lock_guard<std::mutex> lock (mutex_);
 	FinalizedInfo *info = infos_.Allocate<FinalizedInfo> ();
 
-	new (info) FinalizedInfo { object, std::move (actions) };
+	new (info) FinalizedInfo{object, std::move (actions)};
 	return FinalizedAlloc (orc::ExecutorAddr::fromPtr (info));
 }
 
@@ -696,8 +677,7 @@ SlabMemoryManager::deallocate (std::vector<FinalizedAlloc> allocs,
 	/* Reverse order, which is the contract the base class states. */
 	for (FinalizedInfo *info : llvm::reverse (infos)) {
 		while (!info->dealloc_actions.empty ()) {
-			if (Error err = info->dealloc_actions.back ()
-			                    .runWithSPSRetErrorMerged ())
+			if (Error err = info->dealloc_actions.back ().runWithSPSRetErrorMerged ())
 				all = joinErrors (std::move (all), std::move (err));
 			info->dealloc_actions.pop_back ();
 		}

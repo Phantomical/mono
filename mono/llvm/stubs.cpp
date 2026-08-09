@@ -17,16 +17,22 @@
 
 #include "stubs.hpp"
 
+#include "arch/amd64/amd64.hpp"
 #include "arch/arch.hpp"
 #include "codemem.hpp"
 
+#include <llvm/Support/raw_ostream.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Memory.h>
 
+#include <mutex>
 #include <utility>
 
 using namespace llvm;
 
 namespace mono {
+
+namespace {
 
 /*
  * How many stubs a batch holds. The slot and stub regions come out of one
@@ -34,234 +40,215 @@ namespace mono {
  * region is a whole number of 16-byte blocks at this count, which keeps the
  * stub region aligned without padding between them.
  */
-namespace {
 constexpr size_t stubs_per_slab = 2048;
 constexpr size_t slot_region_size = stubs_per_slab * sizeof (void *);
 constexpr size_t stub_region_size = stubs_per_slab * arch::stub_block_size;
+
+void
+stub_not_initialized ()
+{
+	llvm::report_fatal_error ("called a stub that has not been initialized with a target");
+}
+
 } // namespace
 
-/// Allocator over batches of (slot region, stub region) pairs carved from the
-/// code slabs: bump within a batch, with a free list of the stubs handed back.
-class StubSlabs {
-public:
-	explicit StubSlabs (CodeSlabs *slabs) : slabs_ (slabs) {}
+StubSlabs::StubSlabs (CodeSlabs *slabs) : slabs_ (slabs), next_ (stubs_per_slab) {}
 
-	~StubSlabs ()
-	{
-		for (const CodeSlabs::Alloc &batch : batches_)
-			slabs_->release_writable (batch);
-	}
-
-	/// Carve one stub, jumping to TARGET. KEY, when given, is handed to the
-	/// target in the key register.
-	Expected<StubTable::Stub> allocate (void *target, void *key)
-	{
-		StubTable::Stub stub;
-
-		if (!free_.empty ()) {
-			stub = free_.back ();
-			free_.pop_back ();
-		} else {
-			if (next_ == stubs_per_slab)
-				if (Error err = add_slab ())
-					return std::move (err);
-
-			char *base = batches_.back ().base;
-			size_t i = next_++;
-
-			stub.slot = reinterpret_cast<std::atomic<void *> *> (
-				base + i * sizeof (void *));
-			stub.code = base + slot_region_size
-			            + i * arch::stub_block_size;
-		}
-
-		stub.slot->store (target, std::memory_order_release);
-		/*
-		 * A recycled block was written for whichever shape its last owner
-		 * wanted, so the code is written every time rather than only on a
-		 * fresh carve. The jump reads this stub's own slot either way.
-		 */
-		char *code = static_cast<char *> (stub.code);
-
-		if (key != nullptr)
-			arch::write_keyed_jump_stub (code, stub.slot, key);
-		else
-			arch::write_jump_stub (code, stub.slot);
-		sys::Memory::InvalidateInstructionCache (code,
-		                                         arch::stub_block_size);
-
-		return stub;
-	}
-
-	/// Take STUB back, for a later allocate () to hand out again.
-	void release (StubTable::Stub stub) { free_.push_back (stub); }
-
-private:
-	/*
-	 * The writable region, so stubs are never flipped to read-execute once
-	 * written: they are carved one at a time out of a page other stubs are
-	 * already running from, so there is no point at which the page is quiet
-	 * enough to reprotect. A detour library mprotects the entry it patches
-	 * anyway.
-	 */
-	Error add_slab ()
-	{
-		Expected<CodeSlabs::Alloc> batch = slabs_->allocate_writable (
-			slot_region_size + stub_region_size, arch::stub_block_size);
-
-		if (!batch)
-			return batch.takeError ();
-
-		batches_.push_back (*batch);
-		next_ = 0;
-		return Error::success ();
-	}
-
-	CodeSlabs *slabs_;
-	std::vector<CodeSlabs::Alloc> batches_;
-	std::vector<StubTable::Stub> free_;
-	size_t next_ = stubs_per_slab;
-};
-
-Expected<std::unique_ptr<StubTable>>
-StubTable::create (const Triple &tt, CodeSlabs &slabs)
+StubSlabs::~StubSlabs ()
 {
-	if (tt.getArch () != arch::target_arch)
-		return make_error<StringError> (
-			"redirectable stubs are not implemented for " + tt.str (),
-			inconvertibleErrorCode ());
-
-	return std::unique_ptr<StubTable> (
-		new StubTable (std::make_unique<StubSlabs> (&slabs)));
+	for (const CodeSlabs::Alloc &batch : batches_)
+		slabs_->release_writable (batch);
 }
 
-StubTable::StubTable (std::unique_ptr<StubSlabs> slabs)
-	: slabs_ (std::move (slabs))
+llvm::Expected<Stub>
+StubSlabs::allocate (void *key)
 {
-}
-
-StubTable::~StubTable () = default;
-
-Expected<void *>
-StubTable::reserve (StringRef name, void *target)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-
-	if (stubs_.count (name))
-		return make_error<StringError> ("a stub is already published for "
-		                                    + name,
-		                                inconvertibleErrorCode ());
-
-	Expected<Stub> stub = slabs_->allocate (target, nullptr);
-
+	auto stub = acquire ();
 	if (!stub)
 		return stub.takeError ();
+	stub->redirect ((void *) stub_not_initialized);
 
-	stubs_[name] = Entry { *stub, false };
-	return stub->code;
-}
+	char *code = static_cast<char *> (stub->code ());
 
-Expected<void *>
-StubTable::reserve_keyed (StringRef name, void *target, void *key)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-	auto it = stubs_.find (name);
+	if (key != nullptr)
+		arch::write_keyed_jump_stub (code, stub->slot_, key);
+	else
+		arch::write_jump_stub (code, stub->slot_);
+	sys::Memory::InvalidateInstructionCache (code, arch::stub_block_size);
 
-	/*
-	 * Asking twice is not the mistake it is for reserve (). Two threads that
-	 * reach a method together both build its entries, and what a keyed stub
-	 * holds is settled by the method rather than by which of them got there
-	 * first - so the one already here is the one they both wanted.
-	 */
-	if (it != stubs_.end ())
-		return it->second.stub.code;
-
-	Expected<Stub> stub = slabs_->allocate (target, key);
-
-	if (!stub)
-		return stub.takeError ();
-
-	stubs_[name] = Entry { *stub, false };
-	return stub->code;
-}
-
-void *
-StubTable::find (StringRef name)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-	auto it = stubs_.find (name);
-
-	return it == stubs_.end () ? nullptr : it->second.stub.code;
-}
-
-Error
-StubTable::redirect (StringRef name, void *target)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-	auto it = stubs_.find (name);
-
-	if (it == stubs_.end ())
-		return make_error<StringError> ("no stub to redirect for " + name,
-		                                inconvertibleErrorCode ());
-
-	/*
-	 * Callers may be running through this stub right now: the store has to
-	 * land whole, and everything the new target reads has to be visible by the
-	 * time it does.
-	 */
-	it->second.stub.slot->store (target, std::memory_order_release);
-	return Error::success ();
-}
-
-void *
-StubTable::claim_for_linker (StringRef name)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-	auto it = stubs_.find (name);
-
-	if (it == stubs_.end () || it->second.defined)
-		return nullptr;
-
-	it->second.defined = true;
-	return it->second.stub.code;
-}
-
-Expected<StubTable::Removed>
-StubTable::remove (ArrayRef<std::string> names)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-	Removed removed;
-
-	/*
-	 * All of them or none: the caller is working from its own record of what
-	 * it published, so a name that was never here means that record is wrong,
-	 * and half a batch removed would leave it wrong in a second way.
-	 */
-	for (const std::string &name : names)
-		if (!stubs_.count (name))
-			return make_error<StringError> ("no stub was published for "
-			                                    + name,
-			                                inconvertibleErrorCode ());
-
-	for (const std::string &name : names) {
-		auto it = stubs_.find (name);
-
-		if (it->second.defined)
-			removed.defined.push_back (name);
-		removed.blocks.push_back (it->second.stub);
-		stubs_.erase (it);
-	}
-
-	return removed;
+	return stub;
 }
 
 void
-StubTable::reclaim (Removed &&removed)
+StubSlabs::release (Stub stub)
+{
+	if (!stub)
+		return;
+
+	stub.redirect ((void *) stub_not_initialized);
+	free_.push_back (stub);
+}
+
+llvm::Expected<Stub>
+StubSlabs::acquire ()
+{
+	if (!free_.empty ()) {
+		auto stub = free_.back ();
+		free_.pop_back ();
+		return stub;
+	}
+
+	if (next_ == stubs_per_slab) {
+		if (auto err = add_slab ())
+			return err;
+	}
+
+	char *base = batches_.back ().base;
+	size_t i = next_++;
+
+	return Stub (base + slot_region_size + i * arch::stub_block_size,
+	             reinterpret_cast<std::atomic<void *> *> (base + i * sizeof (void *)));
+}
+
+llvm::Error
+StubSlabs::add_slab ()
+{
+	llvm::Expected<CodeSlabs::Alloc> batch = slabs_->allocate_writable (
+		slot_region_size + stub_region_size, arch::stub_block_size);
+
+	if (!batch)
+		return batch.takeError ();
+
+	batches_.push_back (*batch);
+	next_ = 0;
+	return llvm::Error::success ();
+}
+
+std::optional<Stub>
+StubTable::find (llvm::StringRef name)
 {
 	std::lock_guard<std::mutex> lock (mutex_);
 
-	for (const Stub &stub : removed.blocks)
-		slabs_->release (stub);
+	auto it = stubs_.find (name);
+	if (it == stubs_.end ())
+		return std::nullopt;
+
+	return it->second;
+}
+
+llvm::Expected<Stub>
+StubTable::create (llvm::StringRef name)
+{
+	return create (name, nullptr);
+}
+
+llvm::Expected<Stub>
+StubTable::create (llvm::StringRef name, void *key)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	auto it = stubs_.find (name);
+	if (it != stubs_.end ())
+		return llvm::make_error<StubExistsError> (name);
+
+	auto stub = slabs_.allocate (key);
+	if (!stub)
+		return stub.takeError ();
+
+	stubs_.insert (std::make_pair (name, *stub));
+	return *stub;
+}
+
+llvm::Expected<Stub>
+StubTable::get_or_create (llvm::StringRef name)
+{
+	return get_or_create (name, nullptr);
+}
+
+llvm::Expected<Stub>
+StubTable::get_or_create (llvm::StringRef name, void *key)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	auto it = stubs_.find (name);
+	if (it != stubs_.end ())
+		return it->second;
+
+	auto stub = slabs_.allocate (key);
+	if (!stub)
+		return stub.takeError ();
+
+	stubs_.insert (std::make_pair (name, *stub));
+	return *stub;
+}
+
+bool
+StubTable::remove (llvm::StringRef name)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+	return remove_locked (name, lock);
+}
+
+bool
+StubTable::remove_locked (llvm::StringRef name, std::lock_guard<std::mutex> &)
+{
+	auto it = stubs_.find (name);
+	if (it == stubs_.end ())
+		return false;
+
+	auto stub = it->second;
+	stubs_.erase (it);
+	slabs_.release (stub);
+	return true;
+}
+
+llvm::Expected<std::vector<void *>>
+create_counter_thunks (CodeSlabs &slabs, uint32_t threshold,
+                       llvm::ArrayRef<std::pair<void *, void *>> entries)
+{
+	/*
+	 * One allocation for the counter and every thunk that touches it. They have
+	 * to share a slab: a thunk reads its counter with a rip-relative
+	 * displacement, and only being carved together bounds how far apart they
+	 * can land.
+	 */
+	size_t head = arch::counter_thunk_alignment;
+	size_t bytes = head + entries.size () * arch::counter_thunk_size;
+	llvm::Expected<CodeSlabs::Alloc> block =
+		slabs.allocate_writable (bytes, arch::counter_thunk_alignment);
+
+	if (!block)
+		return block.takeError ();
+
+	auto *counter = reinterpret_cast<uint32_t *> (block->base);
+	char *thunk = block->base + head;
+	std::vector<void *> entered;
+
+	*counter = 0;
+	for (const std::pair<void *, void *> &entry : entries) {
+		entered.push_back (arch::write_counter_thunk (thunk, counter, threshold,
+		                                              entry.first, entry.second));
+		thunk += arch::counter_thunk_size;
+	}
+
+	sys::Memory::InvalidateInstructionCache (block->base, bytes);
+	return entered;
+}
+
+char StubExistsError::ID = 0;
+
+StubExistsError::StubExistsError (llvm::StringRef name) : name (name) {}
+
+void
+StubExistsError::log (llvm::raw_ostream &OS) const
+{
+	OS << "a stub already exists for " << name;
+}
+
+std::error_code
+StubExistsError::convertToErrorCode () const
+{
+	return std::error_code ();
 }
 
 } // namespace mono

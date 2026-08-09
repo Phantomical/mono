@@ -6,7 +6,6 @@
 #include "jit.hpp"
 
 #include "arch/arch.hpp"
-#include "callbacks.hpp"
 #include "compiler.hpp"
 #include "codemem.hpp"
 #include "gdb-jit.hpp"
@@ -18,7 +17,6 @@
 #include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
-#include "stubs.hpp"
 #include "timing.hpp"
 
 #include <llvm/CodeGen/TargetLowering.h>
@@ -35,7 +33,6 @@
 #include <llvm/Object/StackMapParser.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
-#include <llvm/Support/Memory.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
@@ -57,29 +54,6 @@ using namespace llvm;
 using namespace llvm::orc;
 
 namespace mono {
-
-/*
- * Where a stub lands when the compile behind it failed. The trampoline has
- * already put the call's arguments back and jumped here, so this is running as
- * the method the caller asked for: there is no value it could return and no
- * caller that would know what to do with one.
- */
-[[noreturn]] static void
-lazy_compile_failed ()
-{
-	/*
-	 * Printed and left by hand rather than through report_fatal_error, which
-	 * ends in exit() when it is told not to produce a crash diagnostic. exit()
-	 * runs the static destructors of every C++ library loaded into the
-	 * process, LLVM's own among them, while the threads that are still
-	 * compiling are using what those destructors free.
-	 */
-	static const char msg[] =
-		"LLVM ERROR: a method failed to compile on first call\n";
-	[[maybe_unused]] ssize_t written = write (2, msg, sizeof (msg) - 1);
-	fflush (nullptr);
-	_exit (1);
-}
 
 namespace {
 
@@ -168,9 +142,8 @@ verify_level ()
 [[noreturn]] void
 report_broken_ir (const Module &m, StringRef when, StringRef diagnostics)
 {
-	errs () << "mono: broken IR " << when << ", in " << m.getModuleIdentifier ()
-	        << "\n"
-	        << diagnostics << m << "\n";
+	errs () << "mono: broken IR " << when << ", in " << m.getModuleIdentifier () << "\n"
+		<< diagnostics << m << "\n";
 	report_fatal_error ("mono: IR verification failed", /*GenCrashDiag=*/false);
 }
 
@@ -189,66 +162,14 @@ verify_or_die (const Module &m, StringRef when)
 bool
 is_mono_pass (StringRef pass)
 {
-	return pass == ArrayAddressPass::name () ||
-	       pass == ClassInitPass::name () ||
-	       pass == LowerBuiltinsPass::name () ||
-	       pass == RestoreTailPositionPass::name () ||
-	       pass == arch::LegacyAbiPass::name ();
+	return pass == ArrayAddressPass::name () || pass == ClassInitPass::name ()
+	       || pass == LowerBuiltinsPass::name () || pass == RestoreTailPositionPass::name ()
+	       || pass == arch::LegacyAbiPass::name ();
 }
-
-/// Gives mono.stubs a definition for a published stub the first time a module
-/// names it.
-///
-/// Most published methods are never named by anything: their address goes into
-/// a vtable slot or comes back to the runtime, and a call reaches them through
-/// that rather than through a symbol. Those never cost a symbol at all - and a
-/// module that does name some gets them all in one definition, since a link
-/// asks for everything it is missing at once.
-class StubGenerator : public DefinitionGenerator {
-public:
-	StubGenerator (StubTable &table, std::mutex &defs)
-		: table_ (&table), defs_ (&defs)
-	{
-	}
-
-	Error tryToGenerate (LookupState &, LookupKind, JITDylib &jd,
-	                     JITDylibLookupFlags,
-	                     const SymbolLookupSet &lookup) override
-	{
-		/*
-		 * Claiming and defining have to look like one step to undefine_stubs ():
-		 * a name claimed here is already marked as one the linker knows, so an
-		 * undefine landing in between would go looking for a symbol that does
-		 * not exist yet and then leave this definition standing over a table
-		 * entry that is gone.
-		 */
-		std::lock_guard<std::mutex> lock (*defs_);
-		SymbolMap symbols;
-
-		for (const auto &[name, flags] : lookup) {
-			void *code = table_->claim_for_linker (*name);
-
-			if (code != nullptr)
-				symbols[name] = {
-					ExecutorAddr::fromPtr (code),
-					JITSymbolFlags::Exported | JITSymbolFlags::Callable,
-				};
-		}
-
-		if (symbols.empty ())
-			return Error::success ();
-
-		return jd.define (absoluteSymbols (std::move (symbols)));
-	}
-
-private:
-	StubTable *table_;
-	std::mutex *defs_;
-};
 
 } // namespace
 
-template <typename T>
+template<typename T>
 static T
 read_le (const uint8_t *p)
 {
@@ -283,7 +204,7 @@ parse_line_table (const uint8_t *table, size_t size,
 		if (read_le<uint32_t> (p) != lines_section_magic
 		    || read_le<uint16_t> (p + 4) != lines_section_version) {
 			errs () << "mono: .mono_lines is not in a format this runtime "
-			           "knows\n";
+				   "knows\n";
 			return;
 		}
 
@@ -333,8 +254,7 @@ parse_line_table (const uint8_t *table, size_t size,
 				continue;
 			}
 
-			if (!rows->empty ()
-			    && rows->back ().native_offset == row.native_offset)
+			if (!rows->empty () && rows->back ().native_offset == row.native_offset)
 				rows->back () = row;
 			else
 				rows->push_back (row);
@@ -389,8 +309,7 @@ parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out)
 			return;
 		}
 
-		ArrayRef<uint8_t> bytes ((const uint8_t *) contents->data (),
-		                         contents->size ());
+		ArrayRef<uint8_t> bytes ((const uint8_t *) contents->data (), contents->size ());
 		StackMapParser<llvm::endianness::little> parser (bytes);
 
 		for (const auto &record : parser.records ()) {
@@ -406,14 +325,14 @@ parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out)
 				 * it, so give up on the method's variables entirely.
 				 */
 				if (location.getKind ()
-				    != StackMapParser<llvm::endianness::little>::
-				               LocationKind::Direct) {
+				    != StackMapParser<
+					    llvm::endianness::little>::LocationKind::Direct) {
 					out.clear ();
 					return;
 				}
 
-				out.push_back ({ (int32_t) location.getDwarfRegNum (),
-				                 (int32_t) location.getOffset () });
+				out.push_back ({(int32_t) location.getDwarfRegNum (),
+				                (int32_t) location.getOffset ()});
 			}
 			return;
 		}
@@ -461,8 +380,7 @@ is_linker_stub_section (jitlink::Section &section)
 class MonoJit::ObjectCapturePlugin : public ObjectLinkingLayer::Plugin {
 public:
 	struct Extents {
-		std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>>
-			functions;
+		std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
 		const uint8_t *clause_table = nullptr;
 		size_t clause_table_size = 0;
 		const uint8_t *guard_table = nullptr;
@@ -489,9 +407,8 @@ public:
 	 * capturing object buffers"; there is not one yet, so this is the
 	 * mechanism.
 	 */
-	void notifyMaterializing (MaterializationResponsibility &mr,
-	                          jitlink::LinkGraph &, jitlink::JITLinkContext &,
-	                          MemoryBufferRef input_object) override
+	void notifyMaterializing (MaterializationResponsibility &mr, jitlink::LinkGraph &,
+	                          jitlink::JITLinkContext &, MemoryBufferRef input_object) override
 	{
 		timing::span_end (timing::Phase::lgraph, g_object_handed);
 		g_object_handed = 0;
@@ -528,8 +445,7 @@ public:
 		var_slots_[mr.getTargetJITDylib ().getName ()] = std::move (var_slots);
 	}
 
-	void modifyPassConfig (MaterializationResponsibility &mr,
-	                       jitlink::LinkGraph &g,
+	void modifyPassConfig (MaterializationResponsibility &mr, jitlink::LinkGraph &g,
 	                       jitlink::PassConfiguration &config) override
 	{
 		std::string dylib = mr.getTargetJITDylib ().getName ();
@@ -537,11 +453,10 @@ public:
 		if (timing::fine ()) {
 			auto started = std::make_shared<uint64_t> (0);
 
-			config.PrePrunePasses.push_back (
-				[started] (jitlink::LinkGraph &) -> Error {
-					*started = timing::span_begin (timing::Phase::jlink);
-					return Error::success ();
-				});
+			config.PrePrunePasses.push_back ([started] (jitlink::LinkGraph &) -> Error {
+				*started = timing::span_begin (timing::Phase::jlink);
+				return Error::success ();
+			});
 			config.PostFixupPasses.push_back (
 				[started] (jitlink::LinkGraph &) -> Error {
 					timing::span_end (timing::Phase::jlink, *started);
@@ -557,73 +472,69 @@ public:
 				    && section.getName () != ".mono_lines")
 					continue;
 				for (jitlink::Block *block : section.blocks ())
-					graph.addAnonymousSymbol (*block, 0,
-					                          block->getSize (), false,
+					graph.addAnonymousSymbol (*block, 0, block->getSize (),
+					                          false,
 					                          /*IsLive=*/true);
 			}
 			return Error::success ();
 		});
 
-		config.PostFixupPasses.push_back (
-			[this, dylib] (jitlink::LinkGraph &graph) -> Error {
-				Extents extents;
-				const uint8_t *line_table = nullptr;
-				size_t line_table_size = 0;
+		config.PostFixupPasses.push_back ([this,
+		                                   dylib] (jitlink::LinkGraph &graph) -> Error {
+			Extents extents;
+			const uint8_t *line_table = nullptr;
+			size_t line_table_size = 0;
 
-				for (jitlink::Section &section : graph.sections ()) {
-					jitlink::SectionRange range (section);
+			for (jitlink::Section &section : graph.sections ()) {
+				jitlink::SectionRange range (section);
 
-					if (section.getName () == ".mono_lsda") {
-						extents.clause_table =
-							range.getStart ().toPtr<const uint8_t *> ();
-						extents.clause_table_size = range.getSize ();
-					} else if (section.getName () == ".mono_guards") {
-						extents.guard_table =
-							range.getStart ().toPtr<const uint8_t *> ();
-						extents.guard_table_size = range.getSize ();
-					} else if (section.getName () == ".mono_unwind") {
-						extents.unwind_table =
-							range.getStart ().toPtr<const uint8_t *> ();
-						extents.unwind_table_size = range.getSize ();
-					} else if (section.getName () == ".mono_lines") {
-						line_table =
-							range.getStart ().toPtr<const uint8_t *> ();
-						line_table_size = range.getSize ();
-					} else if (is_linker_stub_section (section)) {
-						extents.linker_stubs.emplace_back (
-							range.getStart ()
-								.toPtr<const uint8_t *> (),
-							range.getSize ());
-					}
+				if (section.getName () == ".mono_lsda") {
+					extents.clause_table =
+						range.getStart ().toPtr<const uint8_t *> ();
+					extents.clause_table_size = range.getSize ();
+				} else if (section.getName () == ".mono_guards") {
+					extents.guard_table =
+						range.getStart ().toPtr<const uint8_t *> ();
+					extents.guard_table_size = range.getSize ();
+				} else if (section.getName () == ".mono_unwind") {
+					extents.unwind_table =
+						range.getStart ().toPtr<const uint8_t *> ();
+					extents.unwind_table_size = range.getSize ();
+				} else if (section.getName () == ".mono_lines") {
+					line_table = range.getStart ().toPtr<const uint8_t *> ();
+					line_table_size = range.getSize ();
+				} else if (is_linker_stub_section (section)) {
+					extents.linker_stubs.emplace_back (
+						range.getStart ().toPtr<const uint8_t *> (),
+						range.getSize ());
 				}
+			}
 
-				std::map<const uint8_t *, std::string> by_address;
+			std::map<const uint8_t *, std::string> by_address;
 
-				for (jitlink::Symbol *sym : graph.defined_symbols ()) {
-					if (!sym->hasName () || !sym->isCallable ())
-						continue;
+			for (jitlink::Symbol *sym : graph.defined_symbols ()) {
+				if (!sym->hasName () || !sym->isCallable ())
+					continue;
 
-					const uint8_t *code =
-						sym->getAddress ().toPtr<const uint8_t *> ();
+				const uint8_t *code = sym->getAddress ().toPtr<const uint8_t *> ();
 
-					extents.functions.emplace_back (
-						std::string (*sym->getName ()),
-						std::make_pair (code, (size_t) sym->getSize ()));
-					by_address[code] = std::string (*sym->getName ());
-				}
+				extents.functions.emplace_back (
+					std::string (*sym->getName ()),
+					std::make_pair (code, (size_t) sym->getSize ()));
+				by_address[code] = std::string (*sym->getName ());
+			}
 
-				if (line_table != nullptr)
-					parse_line_table (line_table, line_table_size,
-					                  by_address, extents.il_lines,
-					                  extents.seq_points);
+			if (line_table != nullptr)
+				parse_line_table (line_table, line_table_size, by_address,
+				                  extents.il_lines, extents.seq_points);
 
-				if (gdbjit::enabled ())
-					extents.debug_object = stamp_debug_object (dylib, graph);
+			if (gdbjit::enabled ())
+				extents.debug_object = stamp_debug_object (dylib, graph);
 
-				std::lock_guard<std::mutex> lock (mutex_);
-				captured_[dylib] = std::move (extents);
-				return Error::success ();
-			});
+			std::lock_guard<std::mutex> lock (mutex_);
+			captured_[dylib] = std::move (extents);
+			return Error::success ();
+		});
 	}
 
 	/// The extents captured for DYLIB's one object, surrendered to the caller.
@@ -651,25 +562,19 @@ public:
 		return extents;
 	}
 
-	Error notifyFailed (MaterializationResponsibility &) override
-	{
-		return Error::success ();
-	}
+	Error notifyFailed (MaterializationResponsibility &) override { return Error::success (); }
 	Error notifyRemovingResources (JITDylib &, ResourceKey) override
 	{
 		return Error::success ();
 	}
-	void notifyTransferringResources (JITDylib &, ResourceKey, ResourceKey) override
-	{
-	}
+	void notifyTransferringResources (JITDylib &, ResourceKey, ResourceKey) override {}
 
 private:
 	/// The object DYLIB's compile produced, with GRAPH's final section
 	/// addresses written into it - what a debugger is handed. Empty when the
 	/// bytes were never taken, which is every compile if gdb registration was
 	/// turned on after this JIT started.
-	std::vector<char> stamp_debug_object (const std::string &dylib,
-	                                      jitlink::LinkGraph &graph)
+	std::vector<char> stamp_debug_object (const std::string &dylib, jitlink::LinkGraph &graph)
 	{
 		std::vector<char> bytes;
 		{
@@ -738,12 +643,11 @@ apply_options ()
 		return Error::success ();
 	applied = true;
 
-	std::vector<const char *> argv {"mono"};
+	std::vector<const char *> argv{"mono"};
 	for (const std::string &opt : g_options)
 		argv.push_back (opt.c_str ());
 
-	if (!cl::ParseCommandLineOptions ((int) argv.size (), argv.data (), "",
-	                                  &errs ()))
+	if (!cl::ParseCommandLineOptions ((int) argv.size (), argv.data (), "", &errs ()))
 		return createStringError (inconvertibleErrorCode (),
 		                          "llvm rejected an option given with --llvm-opt");
 	return Error::success ();
@@ -861,22 +765,19 @@ struct Tier0Pipeline {
 
 Tier0Pipeline::Tier0Pipeline ()
 {
-	pic.registerAfterPassCallback (
-		[] (StringRef pass, Any, const PreservedAnalyses &) {
-			if (g_verify_module == nullptr)
-				return;
-			if (g_verify_level == VerifyLevel::each || is_mono_pass (pass))
-				verify_or_die (*g_verify_module,
-				               ("after pass \"" + pass + "\"").str ());
-		});
+	pic.registerAfterPassCallback ([] (StringRef pass, Any, const PreservedAnalyses &) {
+		if (g_verify_module == nullptr)
+			return;
+		if (g_verify_level == VerifyLevel::each || is_mono_pass (pass))
+			verify_or_die (*g_verify_module, ("after pass \"" + pass + "\"").str ());
+	});
 
 	/*
 	 * A TargetMachine so TargetTransformInfo is real; without one the
 	 * cost-model-driven parts of the pipeline silently no-op.
 	 */
-	pb = std::make_unique<PassBuilder> (&host_target_machine (),
-	                                    PipelineTuningOptions (), std::nullopt,
-	                                    &pic);
+	pb = std::make_unique<PassBuilder> (&host_target_machine (), PipelineTuningOptions (),
+	                                    std::nullopt, &pic);
 	pb->registerModuleAnalyses (mam);
 	pb->registerCGSCCAnalyses (cgam);
 	pb->registerFunctionAnalyses (fam);
@@ -962,8 +863,7 @@ MonoJit::run_tier0_pipeline (Module &m)
 	if (verify != VerifyLevel::off)
 		verify_or_die (m, "as translated");
 
-	std::optional<timing::Scope> timed_setup (std::in_place,
-	                                          timing::Phase::pbsetup);
+	std::optional<timing::Scope> timed_setup (std::in_place, timing::Phase::pbsetup);
 	Tier0Pipeline &pipeline = tier0_pipeline ();
 
 	/*
@@ -983,16 +883,12 @@ MonoJit::run_tier0_pipeline (Module &m)
 }
 
 Expected<std::unique_ptr<MonoJit>>
-MonoJit::create ()
+MonoJit::create (const std::shared_ptr<CodeSlabs> &slabs)
 {
 	ensure_native_target ();
 
 	if (Error err = apply_options ())
 		return std::move (err);
-
-	Expected<std::shared_ptr<CodeSlabs>> slabs = CodeSlabs::create ();
-	if (!slabs)
-		return slabs.takeError ();
 
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());
@@ -1007,9 +903,9 @@ MonoJit::create ()
 	 * own them.
 	 */
 	builder.setObjectLinkingLayerCreator (
-		[&slabs] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
+		[slabs] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
 			return std::make_unique<ObjectLinkingLayer> (
-				es, std::make_unique<SlabMemoryManager> (*slabs));
+				es, std::make_unique<SlabMemoryManager> (slabs));
 		});
 
 	/*
@@ -1026,8 +922,7 @@ MonoJit::create ()
 	if (!jit)
 		return jit.takeError ();
 
-	std::unique_ptr<MonoJit> self (
-		new MonoJit (std::move (*jit), std::move (*slabs)));
+	std::unique_ptr<MonoJit> self (new MonoJit (std::move (*jit)));
 
 	/*
 	 * Without a hook here the module and its LLVMContext are dropped inside
@@ -1055,8 +950,8 @@ MonoJit::create ()
 	 * this runs after any platform rewriting and immediately before codegen.
 	 */
 	self->jit_->getIRTransformLayer ().setTransform (
-		[] (ThreadSafeModule tsm, MaterializationResponsibility &)
-			-> Expected<ThreadSafeModule> {
+		[] (ThreadSafeModule tsm,
+	            MaterializationResponsibility &) -> Expected<ThreadSafeModule> {
 			tsm.withModuleDo ([] (Module &m) { run_tier0_pipeline (m); });
 			return std::move (tsm);
 		});
@@ -1065,25 +960,10 @@ MonoJit::create ()
 	self->helpers_ = &es.createBareJITDylib ("mono.helpers");
 	self->stubs_ = &es.createBareJITDylib ("mono.stubs");
 
-	auto table = StubTable::create (es.getTargetTriple (), *self->slabs_);
-	if (!table)
-		return table.takeError ();
-	self->stub_table_ = std::move (*table);
-	self->stubs_->addGenerator (std::make_unique<StubGenerator> (
-		*self->stub_table_, self->stub_defs_mutex_));
-
-	auto callbacks = LazyCallbacks::create ((void *) &lazy_compile_failed);
-	if (!callbacks)
-		return callbacks.takeError ();
-	self->callbacks_ = std::move (*callbacks);
-
 	return std::move (self);
 }
 
-MonoJit::MonoJit (std::unique_ptr<LLJIT> jit, std::shared_ptr<CodeSlabs> slabs)
-	: slabs_ (std::move (slabs)), jit_ (std::move (jit))
-{
-}
+MonoJit::MonoJit (std::unique_ptr<LLJIT> jit) : jit_ (std::move (jit)) {}
 
 MonoJit::~MonoJit ()
 {
@@ -1138,118 +1018,21 @@ MonoJit::register_symbol (StringRef name, void *addr)
 }
 
 Error
-MonoJit::create_stub (StringRef name, void *target)
+MonoJit::define_stubs (ArrayRef<std::pair<StringRef, void *>> stubs)
 {
-	Expected<void *> stub = stub_table_->reserve (name, target);
+	if (stubs.empty ())
+		return Error::success ();
 
-	if (!stub)
-		return stub.takeError ();
-	return Error::success ();
-}
-
-Expected<void *>
-MonoJit::create_keyed_stub (StringRef name, void *target, void *key)
-{
-	return stub_table_->reserve_keyed (name, target, key);
-}
-
-Error
-MonoJit::create_lazy_stub (StringRef name, LazyCompileFunction compile)
-{
 	ExecutionSession &es = jit_->getExecutionSession ();
-	std::string method = name.str ();
+	SymbolMap symbols;
 
-	Expected<void *> trampoline = callbacks_->reserve (
-		name, [this, &es, method, compile = std::move (compile)] () mutable {
-			Expected<void *> code = compile ();
-			if (!code) {
-				es.reportError (code.takeError ());
-				return (void *) &lazy_compile_failed;
-			}
+	for (const auto &[name, code] : stubs)
+		symbols[es.intern (name)] = {
+			ExecutorAddr::fromPtr (code),
+			JITSymbolFlags::Exported | JITSymbolFlags::Callable,
+		};
 
-			if (Error err = redirect_stub (method, *code)) {
-				es.reportError (std::move (err));
-				return (void *) &lazy_compile_failed;
-			}
-
-			return *code;
-		});
-	if (!trampoline)
-		return trampoline.takeError ();
-
-	if (Error err = create_stub (name, *trampoline)) {
-		callbacks_->release (name);
-		return err;
-	}
-
-	return Error::success ();
-}
-
-Expected<void *>
-MonoJit::create_lazy_entry (StringRef name, LazyCompileFunction compile)
-{
-	ExecutionSession &es = jit_->getExecutionSession ();
-
-	return callbacks_->reserve (
-		name, [&es, compile = std::move (compile)] () mutable {
-			Expected<void *> landing = compile ();
-
-			if (landing)
-				return *landing;
-
-			es.reportError (landing.takeError ());
-			return (void *) &lazy_compile_failed;
-		});
-}
-
-Expected<std::vector<void *>>
-MonoJit::create_counter_thunks (uint32_t threshold,
-                                ArrayRef<std::pair<void *, void *>> entries)
-{
-	/*
-	 * One allocation for the counter and every thunk that touches it. They have
-	 * to share a slab: a thunk reads its counter with a rip-relative
-	 * displacement, and only being carved together bounds how far apart they
-	 * can land.
-	 */
-	size_t head = arch::counter_thunk_alignment;
-	size_t bytes = head + entries.size () * arch::counter_thunk_size;
-	Expected<CodeSlabs::Alloc> block = slabs_->allocate_writable (
-		bytes, arch::counter_thunk_alignment);
-
-	if (!block)
-		return block.takeError ();
-
-	auto *counter = reinterpret_cast<uint32_t *> (block->base);
-	char *thunk = block->base + head;
-	std::vector<void *> entered;
-
-	*counter = 0;
-	for (const std::pair<void *, void *> &entry : entries) {
-		entered.push_back (arch::write_counter_thunk (
-			thunk, counter, threshold, entry.first, entry.second));
-		thunk += arch::counter_thunk_size;
-	}
-
-	sys::Memory::InvalidateInstructionCache (block->base, bytes);
-	return entered;
-}
-
-Error
-MonoJit::redirect_stub (StringRef name, void *target)
-{
-	return stub_table_->redirect (name, target);
-}
-
-Expected<void *>
-MonoJit::stub_address (StringRef name)
-{
-	void *code = stub_table_->find (name);
-
-	if (code == nullptr)
-		return make_error<StringError> ("no stub was published for " + name,
-		                                inconvertibleErrorCode ());
-	return code;
+	return stubs_->define (absoluteSymbols (std::move (symbols)));
 }
 
 Expected<CompiledMethod>
@@ -1271,8 +1054,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	 * stub by name, which is what keeps them correct across promotions. Bare,
 	 * because these modules carry no initializers for the platform to manage.
 	 */
-	std::string jd_name =
-		("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
+	std::string jd_name = ("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
 	/*
 	 * MONO_LLVM_JIT_HOIST=sharedjd puts every module in one dylib instead, to
 	 * price making a fresh one. It is a measurement arm and not a candidate
@@ -1334,15 +1116,13 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 	}
 	compiled.functions = std::move (extents->functions);
 
-	if (auto lines = extents->il_lines.find (entry.str ());
-	    lines != extents->il_lines.end ()) {
+	if (auto lines = extents->il_lines.find (entry.str ()); lines != extents->il_lines.end ()) {
 		compiled.il_lines = std::move (lines->second);
 		extents->il_lines.erase (lines);
 	}
 
 	for (auto &lines : extents->il_lines)
-		compiled.other_il_lines.emplace_back (lines.first,
-		                                      std::move (lines.second));
+		compiled.other_il_lines.emplace_back (lines.first, std::move (lines.second));
 
 	if (auto points = extents->seq_points.find (entry.str ());
 	    points != extents->seq_points.end ())
@@ -1356,8 +1136,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 		                          entry.str ().c_str ());
 
 	if (!extents->debug_object.empty ()) {
-		gdbjit::Registration *reg =
-			gdbjit::publish (std::move (extents->debug_object));
+		gdbjit::Registration *reg = gdbjit::publish (std::move (extents->debug_object));
 
 		if (reg != nullptr) {
 			std::lock_guard<std::mutex> lock (gdb_objects_mutex_);
@@ -1427,45 +1206,33 @@ MonoJit::remove_dylibs (const std::vector<JITDylib *> &dylibs)
 }
 
 Error
-MonoJit::undefine_stubs (const std::vector<std::string> &names)
+MonoJit::undefine_stubs (ArrayRef<std::string> names)
 {
 	if (names.empty ())
 		return Error::success ();
 
 	ExecutionSession &es = jit_->getExecutionSession ();
-	StubTable::Removed removed;
-
-	/*
-	 * Out of the table first: nothing can reach these stubs by name once they
-	 * are gone from it, and no later link can ask for a definition of one. The
-	 * lock is what makes "what the linker knows" a settled question - without
-	 * it a name can be claimed by a link that has not defined it yet.
-	 */
-	{
-		std::lock_guard<std::mutex> lock (stub_defs_mutex_);
-		Expected<StubTable::Removed> taken = stub_table_->remove (names);
-
-		if (!taken)
-			return taken.takeError ();
-		removed = std::move (*taken);
-	}
-
 	SymbolNameSet symbols;
 
-	for (const std::string &name : removed.defined)
+	for (const std::string &name : names)
 		symbols.insert (es.intern (name));
 
 	/*
-	 * Undefine before reclaiming: a stub has to be unreachable by address as
-	 * well as by name before its block can be handed to the next method along.
+	 * A stub no module ever named has never been searched for, and remove ()
+	 * takes one of those as readily as one that has settled - so most of these
+	 * go in one step. It is all-or-nothing, so a failure leaves the dylib as it
+	 * was and the retry below sees the same set.
 	 */
-	if (!symbols.empty ()) {
+	if (Error err = stubs_->remove (symbols)) {
+		if (!err.isA<SymbolsCouldNotBeRemoved> ())
+			return err;
+		consumeError (std::move (err));
+
 		/*
-		 * ORC refuses to remove a symbol that is materializing, and one a link
-		 * has just been handed is exactly that until that link's query
-		 * finishes. Waiting for it is a lookup, so it happens with no lock
-		 * held: a lookup drains materialization inline and what it drains may
-		 * be a link that wants the generator.
+		 * Something is linking against one of these right now. ORC refuses to
+		 * remove a symbol mid-materialization, so wait for the link that has it
+		 * - which is a lookup, and a lookup drains materialization on this
+		 * thread, so it must happen with no lock of ours held.
 		 */
 		Expected<SymbolMap> settled = es.lookup (
 			makeJITDylibSearchOrder (stubs_, JITDylibLookupFlags::MatchAllSymbols),
@@ -1474,13 +1241,9 @@ MonoJit::undefine_stubs (const std::vector<std::string> &names)
 		if (!settled)
 			return settled.takeError ();
 
-		if (Error err = stubs_->remove (symbols))
-			return err;
+		if (Error again = stubs_->remove (symbols))
+			return again;
 	}
-
-	stub_table_->reclaim (std::move (removed));
-	for (const std::string &name : names)
-		callbacks_->release (name);
 
 	/*
 	 * A name stays in the session's pool until somebody asks for the dead
@@ -1493,8 +1256,7 @@ MonoJit::undefine_stubs (const std::vector<std::string> &names)
 
 	symbols.clear ();
 
-	if (dropped != 0
-	    && dropped_names_.fetch_add (dropped) + dropped >= dead_name_sweep) {
+	if (dropped != 0 && dropped_names_.fetch_add (dropped) + dropped >= dead_name_sweep) {
 		dropped_names_.store (0);
 		es.getSymbolStringPool ()->clearDeadEntries ();
 	}

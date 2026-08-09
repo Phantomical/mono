@@ -22,6 +22,8 @@
 #include "runtime.hpp"
 
 #include "arch/arch.hpp"
+#include "callbacks.hpp"
+#include "codemem.hpp"
 #include "compile-queue.hpp"
 #include "compile-worker.hpp"
 #include "jinfo.hpp"
@@ -80,6 +82,216 @@ using namespace llvm::orc;
 
 namespace mono {
 namespace {
+
+/*
+ * Where a stub lands when the compile behind it failed. The trampoline has
+ * already put the call's arguments back and jumped here, so this is running as
+ * the method the caller asked for: there is no value it could return and no
+ * caller that would know what to do with one.
+ *
+ * Printed and left by hand rather than through report_fatal_error, which ends in
+ * exit () when told not to produce a crash diagnostic - and exit () runs the
+ * static destructors of every C++ library in the process while the threads that
+ * are still compiling are using what those destructors free.
+ */
+[[noreturn]] void
+lazy_compile_failed ()
+{
+	static const char msg[] = "LLVM ERROR: a method failed to compile on first call\n";
+	[[maybe_unused]] ssize_t written = write (2, msg, sizeof (msg) - 1);
+	fflush (nullptr);
+	_exit (1);
+}
+
+/*
+ * One domain's stubs, and the names they are published to the linker under.
+ *
+ * This is what MonoBackend does in MethodState, gathered behind the API this
+ * file was written against instead: stubs are a backend concern and MonoJit only
+ * hears the names. It goes when the compile path moves to runtime/backend.cpp
+ * and this file with it.
+ */
+class StubPublisher {
+public:
+	using LazyCompileFunction = unique_function<Expected<void *> ()>;
+
+	StubPublisher (MonoJit &jit, CodeSlabs &slabs)
+	    : jit_ (&jit), slabs_ (&slabs), table_ (&slabs)
+	{
+	}
+
+	static Expected<std::unique_ptr<StubPublisher>> create (MonoJit &jit, CodeSlabs &slabs)
+	{
+		auto self = std::make_unique<StubPublisher> (jit, slabs);
+		auto callbacks = LazyCallbacks::create ((void *) &lazy_compile_failed);
+
+		if (!callbacks)
+			return callbacks.takeError ();
+		self->callbacks_ = std::move (*callbacks);
+		return self;
+	}
+
+	Error create_stub (StringRef name, void *target)
+	{
+		Expected<Stub> stub = carve (name, nullptr);
+
+		if (!stub)
+			return stub.takeError ();
+		stub->redirect (target);
+		return Error::success ();
+	}
+
+	/*
+	 * Unlike the rest, a name that already has one gets that one back - two
+	 * threads reaching one method together both ask for it. Serialized so the
+	 * loser gets a stub that is already pointing somewhere.
+	 */
+	Expected<void *> create_keyed_stub (StringRef name, void *target, void *key)
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+
+		if (std::optional<Stub> existing = table_.find (name))
+			return existing->code ();
+
+		Expected<Stub> stub = carve (name, key);
+
+		if (!stub)
+			return stub.takeError ();
+		stub->redirect (target);
+		return stub->code ();
+	}
+
+	Error create_lazy_stub (StringRef name, LazyCompileFunction compile)
+	{
+		std::string owned = name.str ();
+		Expected<void *> trampoline = reserve (
+			[this, owned, compile = std::move (compile)] () mutable -> void * {
+				Expected<void *> code = compile ();
+
+				if (!code) {
+					logAllUnhandledErrors (code.takeError (), errs (),
+					                       "mono: ");
+					return (void *) &lazy_compile_failed;
+				}
+
+				if (std::optional<Stub> stub = table_.find (owned))
+					stub->redirect (*code);
+				return *code;
+			});
+		if (!trampoline)
+			return trampoline.takeError ();
+
+		Expected<Stub> stub = carve (name, nullptr);
+
+		if (!stub) {
+			callbacks_->release (*trampoline);
+			return stub.takeError ();
+		}
+
+		stub->redirect (*trampoline);
+		std::lock_guard<std::mutex> lock (mutex_);
+		trampolines_[name] = *trampoline;
+		return Error::success ();
+	}
+
+	Expected<void *> create_lazy_entry (StringRef name, LazyCompileFunction compile)
+	{
+		Expected<void *> trampoline =
+			reserve ([this, compile = std::move (compile)] () mutable -> void * {
+				Expected<void *> landing = compile ();
+
+				if (landing)
+					return *landing;
+
+				logAllUnhandledErrors (landing.takeError (), errs (), "mono: ");
+				return (void *) &lazy_compile_failed;
+			});
+		if (!trampoline)
+			return trampoline;
+
+		std::lock_guard<std::mutex> lock (mutex_);
+		trampolines_[name] = *trampoline;
+		return trampoline;
+	}
+
+	Expected<std::vector<void *>>
+	create_counter_thunks (uint32_t threshold, ArrayRef<std::pair<void *, void *>> entries)
+	{
+		return mono::create_counter_thunks (*slabs_, threshold, entries);
+	}
+
+	Error redirect_stub (StringRef name, void *target)
+	{
+		std::optional<Stub> stub = table_.find (name);
+
+		if (!stub)
+			return createStringError (inconvertibleErrorCode (),
+			                          "no stub was published for %s",
+			                          name.str ().c_str ());
+		stub->redirect (target);
+		return Error::success ();
+	}
+
+	Expected<void *> stub_address (StringRef name)
+	{
+		std::optional<Stub> stub = table_.find (name);
+
+		if (!stub)
+			return createStringError (inconvertibleErrorCode (),
+			                          "no stub was published for %s",
+			                          name.str ().c_str ());
+		return stub->code ();
+	}
+
+	Error undefine_stubs (ArrayRef<std::string> names)
+	{
+		if (Error err = jit_->undefine_stubs (names))
+			return err;
+
+		{
+			std::lock_guard<std::mutex> lock (mutex_);
+
+			for (const std::string &name : names) {
+				auto it = trampolines_.find (name);
+
+				if (it == trampolines_.end ())
+					continue;
+				callbacks_->release (it->second);
+				trampolines_.erase (it);
+			}
+		}
+
+		table_.remove_all (names);
+		return Error::success ();
+	}
+
+private:
+	Expected<Stub> carve (StringRef name, void *key)
+	{
+		Expected<Stub> stub = key != nullptr ? table_.create (name, key) : table_.create (name);
+
+		if (!stub)
+			return stub;
+
+		std::pair<StringRef, void *> def{name, stub->code ()};
+
+		if (Error err = jit_->define_stubs (def))
+			return std::move (err);
+		return stub;
+	}
+
+	Expected<void *> reserve (LazyCompile compile)
+	{
+		return callbacks_->reserve (std::move (compile));
+	}
+
+	MonoJit *jit_;
+	CodeSlabs *slabs_;
+	StubTable table_;
+	std::unique_ptr<LazyCallbacks> callbacks_;
+	std::mutex mutex_;
+	StringMap<void *> trampolines_;
+};
 
 /*
  * The runtime entry points generated code calls by name. Everything else it
@@ -443,6 +655,28 @@ symbol_for_unbox_entry (MonoMethod *method)
 	return symbol_for_body (method) + "$unboxentry";
 }
 
+/// Give every declaration in M that names another method's code the symbol this
+/// file publishes that entry under.
+///
+/// The translator marks each such declaration with the MonoMethod and leaves the
+/// naming alone, so this is the only place the two sides meet.
+Error
+bind_symbols (Module &m)
+{
+	return bind_method_symbols (
+		m, [] (MonoMethod *target, Entry entry) -> Expected<std::string> {
+			switch (entry) {
+			case Entry::legacy:
+				return symbol_for_code (target);
+			case Entry::unbox:
+				return symbol_for_unbox (target);
+			case Entry::body:
+				break;
+			}
+			return symbol_for_body (target);
+		});
+}
+
 /// SYMBOL as a profile or a debugger should print it: the method's readable
 /// name, keeping whatever suffix said which piece of the method this is.
 ///
@@ -656,7 +890,11 @@ private:
 		/// thread's current domain, which can point elsewhere while a stub
 		/// fires (AppDomain:InvokeInDomain switches the domain and then calls).
 		MonoDomain *domain;
+		/// The code memory the linker and the stubs both come out of.
+		std::shared_ptr<CodeSlabs> slabs;
 		std::unique_ptr<MonoJit> jit;
+		/// This domain's stubs, and the names the linker knows them by.
+		std::unique_ptr<StubPublisher> stubs;
 		/// This domain's share of the background compile queue.
 		///
 		/// Queued work holds a raw pointer to this state, which is sound
@@ -872,7 +1110,8 @@ Backend::state_for (MonoDomain *domain)
 	if (it != domains_.end ())
 		return it->second.get ();
 
-	Expected<std::unique_ptr<MonoJit>> jit = MonoJit::create ();
+	std::shared_ptr<CodeSlabs> slabs = std::make_shared<CodeSlabs> ();
+	Expected<std::unique_ptr<MonoJit>> jit = MonoJit::create (slabs);
 	if (!jit)
 		return createStringError (
 			inconvertibleErrorCode (),
@@ -900,7 +1139,15 @@ Backend::state_for (MonoDomain *domain)
 	auto fresh = std::make_unique<DomainState> ();
 
 	fresh->domain = domain;
+	fresh->slabs = std::move (slabs);
 	fresh->jit = std::move (*jit);
+
+	Expected<std::unique_ptr<StubPublisher>> stubs =
+		StubPublisher::create (*fresh->jit, *fresh->slabs);
+	if (!stubs)
+		return stubs.takeError ();
+	fresh->stubs = std::move (*stubs);
+
 	fresh->queue.emplace (&queue_);
 	return (domains_[domain] = std::move (fresh)).get ();
 }
@@ -1079,7 +1326,7 @@ Backend::unbox_entry_of (MonoMethod *method)
 	}
 
 	Expected<void *> unbox =
-		(*state)->jit->stub_address (symbol_for_unbox (method));
+		(*state)->stubs->stub_address (symbol_for_unbox (method));
 
 	if (!unbox) {
 		consumeError (unbox.takeError ());
@@ -1187,6 +1434,7 @@ Backend::free_method (MonoMethod *method)
 	struct Release {
 		MonoDomain *domain;
 		MonoJit *jit;
+		StubPublisher *stubs_of;
 		Owned owned;
 		std::vector<std::string> stubs;
 	};
@@ -1208,7 +1456,8 @@ Backend::free_method (MonoMethod *method)
 			    && !state.owned.count (method))
 				continue;
 
-			Release release { state.domain, state.jit.get (), {}, {} };
+			Release release { state.domain, state.jit.get (),
+				          state.stubs.get (), {}, {} };
 
 			/*
 			 * The symbols carry the method's printed name as well as its
@@ -1299,7 +1548,7 @@ Backend::free_method (MonoMethod *method)
 		 */
 		for (MonoJitInfo *jinfo : release.owned.jinfos)
 			mono_jit_info_table_remove (release.domain, jinfo);
-		must (release.jit->undefine_stubs (release.stubs));
+		must (release.stubs_of->undefine_stubs (release.stubs));
 		must (release.jit->remove_dylibs (release.owned.dylibs));
 	}
 }
@@ -1517,6 +1766,10 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	if (!function)
 		return recover (state, method, function.takeError ());
 
+	/* Before the entry name is read: the body's own declaration is one of these. */
+	if (Error err = bind_symbols (*module))
+		return recover (state, method, std::move (err));
+
 	std::string entry = (*function)->getName ().str ();
 
 	if (dumping (entry.c_str ()))
@@ -1547,7 +1800,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	 * and the entry follows it without being rebuilt. Translating the method
 	 * declared it, so resolve () above has published that stub.
 	 */
-	Expected<void *> body_stub = state.jit->stub_address (symbol_for_body (method));
+	Expected<void *> body_stub = state.stubs->stub_address (symbol_for_body (method));
 
 	if (!body_stub)
 		return body_stub.takeError ();
@@ -1856,6 +2109,9 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 		builder.CreateCall (raise, { builder.CreateCall (load, { box }) });
 		builder.CreateUnreachable ();
 
+		if (Error err = bind_symbols (*module))
+			return std::move (err);
+
 		if (dumping (name.c_str ()))
 			module->print (llvm::errs (), nullptr);
 
@@ -1925,6 +2181,9 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 
 	arch::create_legacy_entry_thunk (*thunk_module, thunk_name, *target,
 	                                 legacy_call_flavor (sig));
+
+	if (Error err = bind_symbols (*thunk_module))
+		return std::move (err);
 
 	if (dumping (thunk_name.c_str ()))
 		thunk_module->print (llvm::errs (), nullptr);
@@ -2158,7 +2417,7 @@ Backend::counted_entries (DomainState &state, MonoMethod *method,
 		void *carry_on = entries[i];
 		std::string name = symbol_for_code (method) + "$promote."
 		                   + std::to_string (i);
-		Expected<void *> promote = state.jit->create_lazy_entry (
+		Expected<void *> promote = state.stubs->create_lazy_entry (
 			name, [this, owner, method, carry_on] () -> Expected<void *> {
 				request_promotion (*owner, method);
 				return carry_on;
@@ -2170,7 +2429,7 @@ Backend::counted_entries (DomainState &state, MonoMethod *method,
 	}
 
 	Expected<std::vector<void *>> thunks =
-		state.jit->create_counter_thunks (tier1_threshold (), doors);
+		state.stubs->create_counter_thunks (tier1_threshold (), doors);
 
 	if (!thunks)
 		return thunks;
@@ -2299,12 +2558,12 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 		mini_install_pending_breakpoints (state.domain,
 		                                  jinfo_get_method (published), published);
 
-	if (Error err = state.jit->redirect_stub (symbol_for_code (method), code->entry))
+	if (Error err = state.stubs->redirect_stub (symbol_for_code (method), code->entry))
 		return give_up (std::move (err));
-	if (Error err = state.jit->redirect_stub (symbol_for_body (method), code->body))
+	if (Error err = state.stubs->redirect_stub (symbol_for_body (method), code->body))
 		return give_up (std::move (err));
 	if (publishes_unbox_entry (method)) {
-		if (Error err = state.jit->redirect_stub (symbol_for_unbox (method),
+		if (Error err = state.stubs->redirect_stub (symbol_for_unbox (method),
 		                                          code->unbox))
 			return give_up (std::move (err));
 	}
@@ -2401,13 +2660,13 @@ Backend::interp_entries (DomainState &state, MonoMethod *method, void *legacy)
 	 * method, so both of them take this branch or neither does.
 	 */
 	if (Error err =
-	            state.jit->redirect_stub (symbol_for_code (method), entries.entry))
+	            state.stubs->redirect_stub (symbol_for_code (method), entries.entry))
 		return std::move (err);
 	if (Error err =
-	            state.jit->redirect_stub (symbol_for_body (method), entries.body))
+	            state.stubs->redirect_stub (symbol_for_body (method), entries.body))
 		return std::move (err);
 	if (entries.unbox != nullptr) {
-		if (Error err = state.jit->redirect_stub (symbol_for_unbox (method),
+		if (Error err = state.stubs->redirect_stub (symbol_for_unbox (method),
 		                                          entries.unbox))
 			return std::move (err);
 	}
@@ -2478,6 +2737,9 @@ Backend::interp_body_entry (DomainState &state, MonoMethod *method, void *legacy
 		if ((*shape)->use_empty ())
 			(*shape)->eraseFromParent ();
 
+		if (Error err = bind_symbols (*module))
+			return std::move (err);
+
 		if (dumping (name.c_str ()))
 			module->print (llvm::errs (), nullptr);
 
@@ -2517,7 +2779,7 @@ Backend::interp_body_entry (DomainState &state, MonoMethod *method, void *legacy
 	 * tier moves.
 	 */
 	std::string name = symbol_for_body (method) + "$interp";
-	Expected<void *> thunk = state.jit->create_keyed_stub (name, shim, legacy);
+	Expected<void *> thunk = state.stubs->create_keyed_stub (name, shim, legacy);
 
 	if (!thunk)
 		return thunk;
@@ -2607,6 +2869,9 @@ Backend::dispatcher (DomainState &state, MonoMethod *method)
 		builder.CreateRetVoid ();
 	else
 		builder.CreateRet (forward);
+
+	if (Error err = bind_symbols (*module))
+		return std::move (err);
 
 	Expected<CompiledMethod> compiled = state.jit->compile (
 		ThreadSafeModule (std::move (module),
@@ -2707,7 +2972,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 		return (*thrower).*half;
 	};
 
-	if (Error err = state.jit->create_lazy_stub (
+	if (Error err = state.stubs->create_lazy_stub (
 	        symbol_for_code (method),
 	        [this, owner, method, bindable, raising] () -> Expected<void *> {
 		        if (!bindable ()) {
@@ -2726,7 +2991,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 	        }))
 		return err;
 
-	if (Error err = state.jit->create_lazy_stub (
+	if (Error err = state.stubs->create_lazy_stub (
 	        symbol_for_body (method),
 	        [this, owner, method, bindable, raising] () -> Expected<void *> {
 		        if (!bindable ()) {
@@ -2752,7 +3017,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 	 * the runtime only ever asks for one while compiling in the owning domain.
 	 */
 	if (publishes_unbox_entry (method)) {
-		if (Error err = state.jit->create_lazy_stub (
+		if (Error err = state.stubs->create_lazy_stub (
 		        symbol_for_unbox (method),
 		        [this, owner, method, raising] () -> Expected<void *> {
 			        Expected<Compiled> code =
@@ -2862,11 +3127,11 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	/* Whichever thread reserved them, these are the addresses it reserved. */
 	std::string entry_name = symbol_for_code (method);
 	std::string body_name = symbol_for_body (method);
-	Expected<void *> stub = state.jit->stub_address (entry_name);
+	Expected<void *> stub = state.stubs->stub_address (entry_name);
 	if (!stub)
 		return stub;
 
-	Expected<void *> body = state.jit->stub_address (body_name);
+	Expected<void *> body = state.stubs->stub_address (body_name);
 	if (!body)
 		return body;
 
@@ -2875,7 +3140,7 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	void *unbox = nullptr;
 
 	if (unboxed) {
-		Expected<void *> reserved = state.jit->stub_address (unbox_name);
+		Expected<void *> reserved = state.stubs->stub_address (unbox_name);
 
 		if (!reserved)
 			return reserved;

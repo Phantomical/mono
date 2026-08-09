@@ -8,7 +8,6 @@
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/FunctionExtras.h>
-#include <llvm/ADT/StringMap.h>
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
 #include <llvm/Support/Error.h>
 
@@ -38,6 +37,10 @@ using LazyCompile = llvm::unique_function<void *()>;
 /// Here the compile lives in a map release () erases and the trampoline goes
 /// back on the pool for the next lazy stub - and reaching one is a hash lookup
 /// rather than a symbol lookup through the session.
+///
+/// A trampoline's address is its identity. Whoever reserved it is holding it
+/// anyway - it is what the stub in front of it was pointed at - so there is
+/// nothing for a name to buy here.
 class LazyCallbacks {
 public:
 	/// Build the pool over the host's re-entry ABI. A trampoline that fires
@@ -49,18 +52,17 @@ public:
 	LazyCallbacks (const LazyCallbacks &) = delete;
 	LazyCallbacks &operator= (const LazyCallbacks &) = delete;
 
-	/// Reserve the trampoline NAME's stub points at until it is first called,
-	/// which runs COMPILE and continues into the address it returns. Threads
-	/// arriving together compile once and all land on the same address.
-	llvm::Expected<void *> reserve (llvm::StringRef name, LazyCompile compile);
+	/// Reserve a trampoline that runs COMPILE the first time it is called and
+	/// continues into the address it returns, and hand back its address.
+	/// Threads arriving together compile once and all land on the same address.
+	llvm::Expected<void *> reserve (LazyCompile compile);
 
-	/// Give NAME's trampoline back, for a later reserve () to hand out again,
-	/// and drop the compile behind it. A name that never reserved one is
-	/// ignored.
+	/// Give TRAMPOLINE back, for a later reserve () to hand out again, and drop
+	/// the compile behind it. An address this never handed out is ignored.
 	///
-	/// The caller has proved nothing can reach the stub that pointed at it: the
-	/// next lazy stub to be published may be given the very same trampoline.
-	void release (llvm::StringRef name);
+	/// The caller has proved nothing can reach whatever pointed at it: the next
+	/// stub to be published may be given the very same trampoline.
+	void release (void *trampoline);
 
 private:
 	LazyCallbacks (void *on_error) : on_error_ (on_error) {}
@@ -80,7 +82,6 @@ private:
 
 	std::mutex mutex_;
 	llvm::DenseMap<llvm::orc::ExecutorAddr, std::shared_ptr<Callback>> callbacks_;
-	llvm::StringMap<llvm::orc::ExecutorAddr> trampolines_;
 
 	/*
 	 * Declared last: the pool's resolver closure holds this object, so it has

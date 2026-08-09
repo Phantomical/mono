@@ -37,7 +37,7 @@ LazyCallbacks::create (void *on_error)
 LazyCallbacks::~LazyCallbacks () = default;
 
 Expected<void *>
-LazyCallbacks::reserve (StringRef name, LazyCompile compile)
+LazyCallbacks::reserve (LazyCompile compile)
 {
 	Expected<ExecutorAddr> trampoline = pool_->getTrampoline ();
 
@@ -49,24 +49,20 @@ LazyCallbacks::reserve (StringRef name, LazyCompile compile)
 
 	std::lock_guard<std::mutex> lock (mutex_);
 	callbacks_[*trampoline] = std::move (callback);
-	trampolines_[name] = *trampoline;
 	return trampoline->toPtr<void *> ();
 }
 
 void
-LazyCallbacks::release (StringRef name)
+LazyCallbacks::release (void *trampoline)
 {
-	std::lock_guard<std::mutex> lock (mutex_);
-	auto reserved = trampolines_.find (name);
-
-	if (reserved == trampolines_.end ())
+	if (trampoline == nullptr)
 		return;
 
-	ExecutorAddr trampoline = reserved->second;
+	ExecutorAddr addr = ExecutorAddr::fromPtr (trampoline);
+	std::lock_guard<std::mutex> lock (mutex_);
 
-	trampolines_.erase (reserved);
-	callbacks_.erase (trampoline);
-	pool_->releaseTrampoline (trampoline);
+	if (callbacks_.erase (addr))
+		pool_->releaseTrampoline (addr);
 }
 
 void *

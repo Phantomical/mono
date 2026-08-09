@@ -94,7 +94,7 @@ mono_jit_test_double_it (int64_t x)
 
 TEST (Jit, CompilesAndRunsHandBuiltIr)
 {
-	auto jit = MonoJit::create ();
+	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
 	auto entry = (*jit)->compile (build_add_module ().take (), "add");
@@ -107,7 +107,7 @@ TEST (Jit, CompilesAndRunsHandBuiltIr)
 
 TEST (Jit, ResolvesRegisteredHelpers)
 {
-	auto jit = MonoJit::create ();
+	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
 	ASSERT_FALSE (bool ((*jit)->register_symbol (
@@ -126,7 +126,7 @@ TEST (Jit, ResolvesRegisteredHelpers)
 
 TEST (Jit, UnregisteredHelperFailsTheCompile)
 {
-	auto jit = MonoJit::create ();
+	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
 	/*
@@ -150,7 +150,7 @@ TEST (Jit, UnregisteredHelperFailsTheCompile)
  */
 TEST (Jit, RemovedCodeIsReusedByLaterCompiles)
 {
-	auto jit = MonoJit::create ();
+	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
 	auto first = (*jit)->compile (build_add_module ().take (), "add");
@@ -185,7 +185,7 @@ public:
 	{
 		MONO_SKIP_WITHOUT_CORPUS ();
 		init_runtime ();
-		jit_holder () = cantFail (MonoJit::create ());
+		jit_holder () = cantFail (test::make_jit ());
 	}
 
 	static void TearDownTestSuite () { jit_holder ().reset (); }
@@ -384,7 +384,7 @@ TEST (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 	ASSERT_NE (far, nullptr) << "could not place a far helper";
 	memcpy (far, body, sizeof (body));
 
-	auto jit = MonoJit::create ();
+	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
 	ASSERT_FALSE (bool ((*jit)->register_symbol ("mono_jit_test_far_helper", far)));

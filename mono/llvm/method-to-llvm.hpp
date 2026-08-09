@@ -13,6 +13,7 @@
 #include "arch/arch.hpp"
 
 #include "il-line-table.hpp"
+#include "method-symbols.hpp"
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"

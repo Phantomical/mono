@@ -10,6 +10,8 @@ extern "C" {
 #include <mono/metadata/assembly-internals.h>
 }
 
+#include "codemem.hpp"
+#include "jit.hpp"
 #include "method-to-llvm.hpp"
 
 #include <mono/metadata/debug-helpers.h>
@@ -92,6 +94,16 @@ bool
 have_corpus ()
 {
 	return g_file_test (MONO_LLVM_TESTS_ASSEMBLIES "/mscorlib.dll", G_FILE_TEST_EXISTS);
+}
+
+llvm::Expected<std::unique_ptr<MonoJit>>
+make_jit ()
+{
+	/*
+	 * Dropped here on purpose: the object linking layer's memory manager holds
+	 * the slabs, so they live exactly as long as the engine carved out of them.
+	 */
+	return MonoJit::create (std::make_shared<CodeSlabs> ());
 }
 
 MonoImage *

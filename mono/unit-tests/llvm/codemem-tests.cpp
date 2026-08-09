@@ -32,9 +32,7 @@ namespace {
 std::shared_ptr<CodeSlabs>
 make_slabs ()
 {
-	Expected<std::shared_ptr<CodeSlabs>> slabs = CodeSlabs::create ();
-	EXPECT_TRUE (bool (slabs)) << toString (slabs.takeError ());
-	return slabs ? *slabs : nullptr;
+	return std::make_shared<CodeSlabs> ();
 }
 
 CodeSlabs::Alloc

@@ -12,101 +12,139 @@
 #ifndef MONO_LLVM_STUBS_HPP
 #define MONO_LLVM_STUBS_HPP
 
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
-#include <llvm/TargetParser/Triple.h>
 
 #include <atomic>
-#include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "codemem.hpp"
 
 namespace mono {
 
-class CodeSlabs;
-class StubSlabs;
-
-/// Every stub published so far, by the name it was published under.
-///
-/// A stub costs a block out of the code slabs and an entry here; the linker is
-/// told about one only when a module turns out to name it, which for most
-/// methods never happens. So this is the authority on where a name's stub is
-/// and where it jumps, and the linker holds a copy of the address for the
-/// subset of names some module asked for.
-class StubTable {
+class StubExistsError : public llvm::ErrorInfo<StubExistsError> {
 public:
-	/// A published stub: the block callers enter through, and the slot its
-	/// jump reads.
-	struct Stub {
-		void *code = nullptr;
-		std::atomic<void *> *slot = nullptr;
-	};
+	static char ID;
 
-	/// What remove () took out of the table, held until the caller has
-	/// undefined the names the linker knows.
-	struct Removed {
-		/// The names that reached the linker, which it has to be told to
-		/// forget. The rest were never symbols at all.
-		std::vector<std::string> defined;
-		std::vector<Stub> blocks;
-	};
+	StubExistsError (llvm::StringRef name);
 
-	/// Build the table, carving stubs out of SLABS. Fails on architectures we
-	/// do not emit stubs for.
-	static llvm::Expected<std::unique_ptr<StubTable>>
-	create (const llvm::Triple &tt, CodeSlabs &slabs);
-
-	~StubTable ();
-
-	/// Reserve NAME a stub jumping to TARGET and return the address callers
-	/// reach it at. Fails if NAME already has one.
-	llvm::Expected<void *> reserve (llvm::StringRef name, void *target);
-
-	/// Reserve NAME a stub that hands KEY to TARGET in the register a callee's
-	/// key travels in, so that one body can serve many names and still know
-	/// which of them it was entered for. Redirectable like any other stub;
-	/// KEY is fixed when the stub is carved.
-	///
-	/// Unlike reserve (), asking for a name that already has one hands back
-	/// what is there rather than failing.
-	llvm::Expected<void *> reserve_keyed (llvm::StringRef name, void *target,
-	                                      void *key);
-
-	/// The address NAME's stub was reserved at, or null if it has none.
-	void *find (llvm::StringRef name);
-
-	/// Point NAME's stub at TARGET.
-	llvm::Error redirect (llvm::StringRef name, void *target);
-
-	/// The address to define NAME at in the linker, or null if NAME has no
-	/// stub - or has one that was already handed out to be defined, since a
-	/// name is only ever defined once.
-	void *claim_for_linker (llvm::StringRef name);
-
-	/// Take NAMES out of the table, so nothing can reach their stubs by name
-	/// any more. Every name must have a stub.
-	llvm::Expected<Removed> remove (llvm::ArrayRef<std::string> names);
-
-	/// Hand a removed batch's blocks back for a later reserve () to carve
-	/// again. The caller has undefined its names and proved nothing can reach
-	/// the stubs.
-	void reclaim (Removed &&removed);
+	void log (llvm::raw_ostream &OS) const override;
+	std::error_code convertToErrorCode () const override;
 
 private:
-	explicit StubTable (std::unique_ptr<StubSlabs> slabs);
+	std::string name;
+};
 
-	struct Entry {
-		Stub stub;
-		/// Whether the linker has been given a definition for this name.
-		bool defined = false;
-	};
+/// An individual redirectable stub.
+class Stub {
+private:
+	void *code_ = nullptr;
+	std::atomic<void *> *slot_ = nullptr;
+
+	friend class StubSlabs;
+
+	Stub (void *code, std::atomic<void *> *slot) : code_ (code), slot_ (slot) {}
+
+public:
+	Stub () = default;
+
+	/// Get the pointer that this stub can be called with.
+	void *code () const { return code_; }
+
+	/// Redirect this stub to point to a new target.
+	void redirect (void *target) { slot_->store (target, std::memory_order_release); }
+
+	explicit operator bool () const { return code_ != nullptr; }
+};
+
+/// The blocks stubs are carved out of, and the free list they go back on.
+///
+/// Not thread safe - StubTable is what serialises access to one of these.
+class StubSlabs {
+public:
+	explicit StubSlabs (CodeSlabs *slabs);
+	~StubSlabs ();
+
+	StubSlabs (const StubSlabs &) = delete;
+	StubSlabs &operator= (const StubSlabs &) = delete;
+
+	/// Carve a stub that jumps through its own slot, handing KEY to whatever it
+	/// jumps to when KEY is not null. The stub starts out pointing at a fatal
+	/// error; the caller redirects it to something real.
+	llvm::Expected<Stub> allocate (void *key);
+	void release (Stub stub);
+
+private:
+	llvm::Expected<Stub> acquire ();
+	llvm::Error add_slab ();
+
+	CodeSlabs *slabs_;
+	std::vector<CodeSlabs::Alloc> batches_;
+	std::vector<Stub> free_;
+	size_t next_;
+};
+
+/// Publish a call counter shared by ENTRIES, and in front of each of them a
+/// thunk that maintains it: a call jumps on to the entry it came for, and the
+/// THRESHOLD'th call to any of them goes to that entry's promote address
+/// instead.
+///
+/// ENTRIES is (where a call carries on, where the THRESHOLD'th one goes); the
+/// addresses returned are the thunks, in the same order, which is what a stub in
+/// front of them is pointed at.
+llvm::Expected<std::vector<void *>>
+create_counter_thunks (CodeSlabs &slabs, uint32_t threshold,
+                       llvm::ArrayRef<std::pair<void *, void *>> entries);
+
+/// The stub table.
+///
+/// This tracks which stubs have been created by name.
+class StubTable {
+public:
+	explicit StubTable (CodeSlabs *slabs) : slabs_ (slabs) {}
+
+	/// Find a pre-existing stub, if one exists with the requested name.
+	std::optional<Stub> find (llvm::StringRef name);
+
+	/// Create a stub for the requested name, failing with StubExistsError if one
+	/// already exists.
+	llvm::Expected<Stub> create (llvm::StringRef name);
+
+	/// Create a stub that hands the requested key to whatever it jumps to.
+	/// Fails the same way if the name already has one.
+	llvm::Expected<Stub> create (llvm::StringRef name, void *key);
+
+	/// The same, but handing back the stub that is already there rather than
+	/// failing - for a name two threads can reach at once.
+	llvm::Expected<Stub> get_or_create (llvm::StringRef name);
+	llvm::Expected<Stub> get_or_create (llvm::StringRef name, void *key);
+
+	/// Remove a single named stub.
+	bool remove (llvm::StringRef name);
+
+	/// Remove the all the named stubs.
+	template<typename C>
+	void remove_all (const C &names)
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+
+		for (llvm::StringRef name : names)
+			remove_locked (name, lock);
+	}
+
+private:
+	bool remove_locked (llvm::StringRef name, std::lock_guard<std::mutex> &guard);
 
 	std::mutex mutex_;
-	std::unique_ptr<StubSlabs> slabs_;
-	llvm::StringMap<Entry> stubs_;
+	StubSlabs slabs_;
+	llvm::StringMap<Stub> stubs_;
 };
 
 } // namespace mono

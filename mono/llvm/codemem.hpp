@@ -67,8 +67,8 @@ public:
 		Alloc data;
 	};
 
-	static llvm::Expected<std::shared_ptr<CodeSlabs>> create ();
-
+	CodeSlabs();
+	explicit CodeSlabs (size_t page_size);
 	~CodeSlabs ();
 
 	CodeSlabs (const CodeSlabs &) = delete;
@@ -142,7 +142,6 @@ private:
 		std::map<size_t, size_t> writable_free;
 	};
 
-	explicit CodeSlabs (size_t page_size);
 
 	llvm::Error add_slab ();
 	bool carve (Slab &s, size_t index, size_t size, size_t align, Alloc &out);

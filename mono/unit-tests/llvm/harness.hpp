@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <llvm/Support/Error.h>
 
 typedef struct _MonoImage MonoImage;
 typedef struct _MonoMethod MonoMethod;
@@ -26,10 +27,20 @@ class Module;
 } // namespace llvm
 
 namespace mono {
+
+class MonoJit;
+
 namespace test {
 
 /// Start the runtime, once per process. Safe to call repeatedly.
 void init_runtime ();
+
+/// A MonoJit over code slabs of its own.
+///
+/// The engine is built around a domain's slabs, which outside the tests the
+/// backend owns; nothing here shares one, so each case gets a set that goes
+/// when its engine does.
+llvm::Expected<std::unique_ptr<MonoJit>> make_jit ();
 
 /// Whether this build has the managed corpus these tests run against.
 bool have_corpus ();

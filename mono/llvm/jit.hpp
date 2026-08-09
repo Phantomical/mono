@@ -13,7 +13,6 @@
 #define MONO_LLVM_JIT_HPP
 
 #include <llvm/ADT/ArrayRef.h>
-#include <llvm/ADT/FunctionExtras.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Support/Error.h>
@@ -34,8 +33,6 @@ class TargetMachine;
 namespace mono {
 
 class CodeSlabs;
-class LazyCallbacks;
-class StubTable;
 
 namespace gdbjit {
 struct Registration;
@@ -136,10 +133,6 @@ struct CompiledMethod {
 
 class MonoJit {
 public:
-	/// Produces the entry point of a method's code, called the first time
-	/// something calls that method. Returning an error is fatal to the call.
-	using LazyCompileFunction = llvm::unique_function<llvm::Expected<void *> ()>;
-
 	/// Queue OPT for LLVM's own command-line option registry - the same
 	/// options `opt` and `llc` take, e.g. "-print-after-all" or
 	/// "-x86-asm-syntax=intel". A leading dash is optional.
@@ -151,7 +144,8 @@ public:
 	/// Build the JIT for the host: JITLink object linking, code model
 	/// Small+PIC, FastISel code generation, and the tier-0 IR pipeline
 	/// applied to every added module.
-	static llvm::Expected<std::unique_ptr<MonoJit>> create ();
+	static llvm::Expected<std::unique_ptr<MonoJit>>
+	create (const std::shared_ptr<CodeSlabs> &slabs);
 
 	MonoJit (const MonoJit &) = delete;
 	MonoJit &operator= (const MonoJit &) = delete;
@@ -163,75 +157,21 @@ public:
 	/// same helper.
 	llvm::Error register_symbol (llvm::StringRef name, void *addr);
 
-	/// Publish NAME as a redirectable stub initially jumping to TARGET.
+	/// Make each stub in STUBS reachable by name from compiled code, as a
+	/// callable symbol at the address it was carved at.
 	///
-	/// This is the address handed out for a method: callers bind to it once
-	/// and every tier is reached through it. Compiled code that calls NAME
-	/// resolves to the stub, so a redirect_stub () is seen by callers that were
-	/// compiled long before it.
-	///
-	/// The linker is not told about NAME here. It hears about a stub the first
-	/// time a module names one, which is what keeps publishing a method that
-	/// nobody links against down to a block and a table entry.
-	llvm::Error create_stub (llvm::StringRef name, void *target);
+	/// The stubs themselves belong to whoever carved them; this is only the
+	/// linker's view of them. Batched because one define () is one acquisition
+	/// of the session lock, and a method publishes its stubs together.
+	llvm::Error define_stubs (llvm::ArrayRef<std::pair<llvm::StringRef, void *>> stubs);
 
-	/// Publish NAME as a stub that hands KEY to TARGET in the register a
-	/// callee's key travels in, and return the address it was carved at.
+	/// Undefine NAMES, which must all have been defined by define_stubs (), so
+	/// that no later link can find them and their blocks are free to be handed
+	/// out again.
 	///
-	/// This is how a body shared by many methods - one written against a
-	/// prototype rather than against a method - is told which of them a call
-	/// came in for. Like create_stub (), the linker is not told about NAME;
-	/// unlike it, a name that already has a stub gets that one back, since two
-	/// threads reaching one method together both ask for it.
-	llvm::Expected<void *> create_keyed_stub (llvm::StringRef name, void *target,
-	                                          void *key);
-
-	/// Publish NAME as a stub that compiles itself the first time it is called.
-	///
-	/// COMPILE runs on the calling thread, in the middle of that first call,
-	/// and returns the entry point to continue into; the stub is redirected
-	/// there, so every later call goes straight to the code. Callers can be
-	/// compiled against NAME before it has any code at all, which is what lets
-	/// a method be published without compiling it.
-	///
-	/// Threads racing on that first call compile once and all land on the same
-	/// code.
-	///
-	/// That first call does not always continue into the method: an async
-	/// abort that arrived while the thread was compiling is thrown from the
-	/// caller's frame instead, which is the arch resolver's business.
-	llvm::Error create_lazy_stub (llvm::StringRef name,
-	                              LazyCompileFunction compile);
-
-	/// Reserve the re-entry trampoline of a lazy stub without the stub.
-	///
-	/// COMPILE runs on the first thread to arrive, in the middle of that call,
-	/// and every later arrival continues into the address it returned. Nothing
-	/// is redirected: whatever jumps here goes on jumping here, which is what
-	/// makes this usable from code that is not a stub. NAME is what release ()
-	/// takes and has to be unique like a stub's.
-	llvm::Expected<void *> create_lazy_entry (llvm::StringRef name,
-	                                          LazyCompileFunction compile);
-
-	/// Publish a call counter shared by ENTRIES, and in front of each of them a
-	/// thunk that maintains it: a call jumps on to the entry it came for, and
-	/// the THRESHOLD'th call to any of them goes to that entry's promote
-	/// address instead.
-	///
-	/// ENTRIES is (where a call carries on, where the THRESHOLD'th one goes);
-	/// the addresses returned are the thunks, in the same order, which is what
-	/// a stub in front of them is pointed at.
-	llvm::Expected<std::vector<void *>> create_counter_thunks (
-		uint32_t threshold,
-		llvm::ArrayRef<std::pair<void *, void *>> entries);
-
-	/// Point NAME's stub at TARGET, which every subsequent call through the
-	/// stub reaches. Callers are untouched - nothing is patched but the stub's
-	/// own slot.
-	llvm::Error redirect_stub (llvm::StringRef name, void *target);
-
-	/// The address of the stub published for NAME.
-	llvm::Expected<void *> stub_address (llvm::StringRef name);
+	/// The caller proves nothing can reach the stubs: a later method published
+	/// here may be given the very same block.
+	llvm::Error undefine_stubs (llvm::ArrayRef<std::string> names);
 
 	/// Compile TSM and return where ENTRY and its side tables landed.
 	///
@@ -249,18 +189,6 @@ public:
 	/// The caller proves the code dead - nothing executing in it, nothing about
 	/// to call into it - and must have undefined any stub still pointing at it.
 	llvm::Error remove_dylibs (const std::vector<llvm::orc::JITDylib *> &dylibs);
-
-	/// Undefine NAMES, which must all be stubs this JIT published, so that both
-	/// the names and the stub blocks behind them are free to be handed out
-	/// again.
-	///
-	/// The caller proves nothing can reach the stubs: a later method published
-	/// here may be given the very same block.
-	///
-	/// A compile running concurrently may still be linking against one of
-	/// NAMES; that link either gets its definition or fails to find the name,
-	/// and either way this returns without an error.
-	llvm::Error undefine_stubs (const std::vector<std::string> &names);
 
 	/// The tier-0 IR pipeline, run over M in place: the stock O1 function
 	/// simplification pipeline, whose load-bearing effect is mem2reg over the
@@ -280,22 +208,7 @@ public:
 	const llvm::Triple &triple () const;
 
 private:
-	MonoJit (std::unique_ptr<llvm::orc::LLJIT> jit,
-	         std::shared_ptr<CodeSlabs> slabs);
-
-	/// The code memory this domain's objects are linked into. Declared before
-	/// jit_ so it outlives the LLJIT, and with it the ObjectLinkingLayer whose
-	/// SlabMemoryManager hands memory out of it.
-	std::shared_ptr<CodeSlabs> slabs_;
-
-	/// Every stub this JIT has published. Declared before jit_ so it outlives
-	/// the dylib generator that reads it.
-	std::unique_ptr<StubTable> stub_table_;
-
-	/// Held while a stub is being handed to mono.stubs and while one is being
-	/// taken back out of the table, so a name is never sitting claimed-but-not-
-	/// yet-defined when undefine_stubs () decides what the linker knows about.
-	std::mutex stub_defs_mutex_;
+	MonoJit (std::unique_ptr<llvm::orc::LLJIT> jit);
 
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 
@@ -303,14 +216,10 @@ private:
 	/// every compiled module's dylib links against this and mono.stubs.
 	llvm::orc::JITDylib *helpers_ = nullptr;
 
-	/// The dylib a module's reference to a stub is resolved through. A stub
-	/// reaches it only once some module has named one; stub_table_ holds them
-	/// all either way.
+	/// The dylib a module's reference to a stub is resolved through. Every stub
+	/// is defined here as soon as it is carved, whether or not anything ever
+	/// names it.
 	llvm::orc::JITDylib *stubs_ = nullptr;
-
-	/// Hands out the re-entry trampolines lazy stubs point at until they are
-	/// compiled, and owns the resolver they call through.
-	std::unique_ptr<LazyCallbacks> callbacks_;
 
 	/// What each name handed to register_symbol () stands for, so a repeat
 	/// registration is recognized instead of tripping ORC's duplicate-definition
@@ -319,7 +228,7 @@ private:
 	std::unordered_map<std::string, void *> named_symbols_;
 
 	/// Names the per-module dylibs; atomic because compiles may be concurrent.
-	std::atomic<uint64_t> module_counter_ {0};
+	std::atomic<uint64_t> module_counter_{0};
 
 	/// The one dylib every module goes into under MONO_LLVM_JIT_HOIST=sharedjd,
 	/// and null otherwise.
@@ -330,7 +239,7 @@ private:
 	static constexpr uint64_t dead_name_sweep = 1024;
 
 	/// Names undefined since the last sweep.
-	std::atomic<uint64_t> dropped_names_ {0};
+	std::atomic<uint64_t> dropped_names_{0};
 
 	class ObjectCapturePlugin;
 	/// Captures each linked object's code extent and side tables, keyed by the
@@ -340,8 +249,7 @@ private:
 	/// The objects a debugger has been told about, by the dylib holding the
 	/// code each one describes. Empty unless gdbjit::enabled ().
 	std::mutex gdb_objects_mutex_;
-	std::unordered_map<llvm::orc::JITDylib *, std::vector<gdbjit::Registration *>>
-		gdb_objects_;
+	std::unordered_map<llvm::orc::JITDylib *, std::vector<gdbjit::Registration *>> gdb_objects_;
 
 	/// Take back every object a debugger was told about for DYLIBS.
 	void retract_debug_objects (const std::vector<llvm::orc::JITDylib *> &dylibs);
