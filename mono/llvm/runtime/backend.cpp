@@ -58,9 +58,24 @@ publishes_unbox_entry (MonoMethod *method)
 	       && m_class_is_valuetype (method->klass);
 }
 
+/// Whether METHOD is entered from native code, and so needs a C-convention entry
+/// in front of its body and a stub of its own to publish it through: exactly the
+/// wrappers generated for the other side of the boundary to call, each of which
+/// sets the pinvoke flag on its own signature. A [DllImport] method sets it too,
+/// but it is not a wrapper - what stands behind it is the marshaling wrapper,
+/// which is entered like any other method.
+bool
+publishes_interop_entry (MonoMethod *method)
+{
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	return sig != nullptr && sig->pinvoke != 0
+	       && method->wrapper_type != MONO_WRAPPER_NONE;
+}
+
 /// The suffix ENTRY's symbol carries. The body gets the plain name because it
 /// is the implementation; everything else hanging off a method is a suffix on
-/// it, filter bodies and the legacy entry alike.
+/// it, filter bodies and the interop entry alike.
 llvm::StringRef
 entry_suffix (Entry entry)
 {
@@ -117,11 +132,11 @@ MonoBackend::get ()
 	return instance;
 }
 
-/// Where one method's code ended up: the legacy entry the runtime hands
-/// out, the fastcc body generated callers reach, and - for an instance
-/// method of a value type - the unboxing entry a call off that value
-/// type's vtable comes in through. JINFO is the body's record, and is null
-/// for a method mini compiled instead.
+/// Where one method's code ended up: the body every caller reaches, the C entry
+/// where the method is one native code enters, and - for an instance method of a
+/// value type - the unboxing entry a call off that value type's vtable comes in
+/// through. JINFO is the body's record, and is null for a method mini compiled
+/// instead.
 struct MonoBackend::Compiled {
 	void *entry;
 	void *body;
@@ -129,9 +144,9 @@ struct MonoBackend::Compiled {
 	MonoJitInfo *jinfo = nullptr;
 };
 
-/// What publishing a method handed the rest of the runtime: the legacy
-/// stub's address, and the trampoline jit-info record each of the method's
-/// two stubs was registered under. A record is only held here when it has
+/// What publishing a method handed the rest of the runtime: the
+/// address it was handed, and the trampoline jit-info record each of the
+/// method's stubs was registered under. A record is only held here when it has
 /// to be taken out again by hand - see register_stub_jinfo ().
 struct MonoBackend::Publication {
 	void *stub;
@@ -164,14 +179,13 @@ struct MonoBackend::MethodState {
 	/// what is published here.
 	std::string symbol;
 
-	/// The thunk going to the method itself.
+	/// The method itself: what generated code calls, what a vtable slot holds,
+	/// and what the runtime is handed. Every method has this one.
 	Stub thunk;
 
-	/// The thunk for calls that are using the C calling convention
-	/// (marshal, some builtins, etc).
-	///
-	/// This should forward to the fastcc thunk, and gets generated as part of
-	/// tier1 compilation.
+	/// The C-convention entry, which forwards to the one above. Only a wrapper
+	/// generated for native code to enter - publishes_interop_entry () - has one,
+	/// and for that method it is the address the runtime is handed instead.
 	Stub c_thunk;
 
 	/// The thunk a call off a value type's vtable comes in through. Only a
@@ -221,8 +235,10 @@ struct MonoBackend::MethodState {
 	/// carved.
 	llvm::SmallVector<Entry, 3> entries () const
 	{
-		llvm::SmallVector<Entry, 3> all{Entry::body, Entry::interop};
+		llvm::SmallVector<Entry, 3> all{Entry::body};
 
+		if (publishes_interop_entry (method))
+			all.push_back (Entry::interop);
 		if (publishes_unbox_entry (method))
 			all.push_back (Entry::unbox);
 		return all;
@@ -587,7 +603,10 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	if (!published)
 		return published.takeError ();
 
-	return (*published)->stub (Entry::interop).code ();
+	/* The C door where the method has one, and the method itself otherwise. */
+	return (*published)
+	        ->stub (publishes_interop_entry (method) ? Entry::interop : Entry::body)
+	        .code ();
 }
 
 } // namespace mono
