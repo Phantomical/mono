@@ -16,6 +16,7 @@
 #define MONO_INTERP_CTX_RET_FREGS 0xd0  /* 4 x 16: xmm0 - xmm3           */
 #define MONO_INTERP_CTX_STACK     0x110
 #define MONO_INTERP_CTX_CALLER_FP 0x118
-#define MONO_INTERP_CTX_SIZE      0x120
+#define MONO_INTERP_CTX_SAVED     0x120  /* 5 x 8:  rbx r12 r13 r14 r15    */
+#define MONO_INTERP_CTX_SIZE      0x150
 
 #endif /* MONO_LLVM_ARCH_AMD64_INTERP_ENTRY_OFFSETS_H */

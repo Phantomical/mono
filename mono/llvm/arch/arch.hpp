@@ -57,8 +57,9 @@ void lazy_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp);
 void *lazy_frame_leave (void *frame);
 
 /// Link a frame onto the LMF chain for the length of a call into the
-/// interpreter, standing for the managed frame that made the call.
-void interp_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp);
+/// interpreter, standing for the managed frame that made the call. FRAME is
+/// interp_frame_size bytes.
+void interp_frame_enter (void *frame, const InterpArgContext *args);
 
 /// Unlink a frame linked by interp_frame_enter.
 void interp_frame_leave (void *frame);

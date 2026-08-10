@@ -64,6 +64,18 @@ mono_llvm_interp_entry_thunk_framed:
 	mov	rax, [rbp]
 	mov	[rsp + MONO_INTERP_CTX_CALLER_FP], rax
 
+	/*
+	 * Still the caller's, since nothing above has written them. An exception
+	 * leaving the interpreted method unwinds straight past this frame into the
+	 * caller, so these are the only copy of them that survives: the context
+	 * interp_frame_enter () hands the LMF is built out of them.
+	 */
+	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x00], rbx
+	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x08], r12
+	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x10], r13
+	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x18], r14
+	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x20], r15
+
 	mov	rdi, r10
 	mov	rsi, rsp
 	call	mono_llvm_interp_entry_from_context

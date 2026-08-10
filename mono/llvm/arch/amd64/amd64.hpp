@@ -38,11 +38,16 @@ constexpr uint64_t stub_alignment = 16;
 
 /*
  * Stack to reserve for the LMF standing for a managed-to-native transition -
- * what lazy_frame_enter () and interp_frame_enter () link. lmf.cpp casts it to
- * its own struct and static_asserts it fits; 32 keeps the frame that follows
- * 16-aligned.
+ * what lazy_frame_enter () links. lmf.cpp casts it to its own struct and
+ * static_asserts it fits; 32 keeps the frame that follows 16-aligned.
  */
 constexpr unsigned managed_frame_size = 32;
+
+/*
+ * Stack to reserve for the LMF an interpreter entry links, which is larger
+ * because that one carries a whole MonoContext. lmf.cpp static_asserts the fit.
+ */
+constexpr unsigned interp_frame_size = 512;
 
 /* -- Entering the interpreter --------------------------------------------- */
 
@@ -54,6 +59,7 @@ struct InterpArgContext {
 	alignas (16) uint8_t ret_fregs[4][16]; ///< xmm0 - xmm3
 	uint8_t *stack;                        ///< the caller's outgoing arguments
 	uint64_t caller_fp;                    ///< the caller's frame pointer
+	uint64_t saved[5];                     ///< rbx r12 r13 r14 r15, the caller's
 };
 
 static_assert (offsetof (InterpArgContext, gregs) == MONO_INTERP_CTX_GREGS);
@@ -62,6 +68,7 @@ static_assert (offsetof (InterpArgContext, ret_gregs) == MONO_INTERP_CTX_RET_GRE
 static_assert (offsetof (InterpArgContext, ret_fregs) == MONO_INTERP_CTX_RET_FREGS);
 static_assert (offsetof (InterpArgContext, stack) == MONO_INTERP_CTX_STACK);
 static_assert (offsetof (InterpArgContext, caller_fp) == MONO_INTERP_CTX_CALLER_FP);
+static_assert (offsetof (InterpArgContext, saved) == MONO_INTERP_CTX_SAVED);
 static_assert (sizeof (InterpArgContext) == MONO_INTERP_CTX_SIZE);
 
 /// One move between an InterpArgContext slot and a value's own storage.

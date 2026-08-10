@@ -499,9 +499,9 @@ mono_llvm_interp_entry_from_context (MonoMethod *method, InterpArgContext *ctx)
 		break;
 	}
 
-	alignas (16) uint8_t frame[managed_frame_size];
+	alignas (16) uint8_t frame[interp_frame_size];
 
-	interp_frame_enter (frame, ctx->caller_fp, (uint64_t) ctx->stack);
+	interp_frame_enter (frame, ctx);
 	mini_get_interp_callbacks ()->entry_from_args (entry->imethod, this_arg, res,
 	                                              args.data ());
 	interp_frame_leave (frame);

@@ -24,15 +24,16 @@
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
 
+#include <cstring>
 #include <optional>
 
 namespace mono::arch {
 
 /*
- * What a caller of the enters below reserves stack for. A plain LMF - not one of
- * the MonoLMFExt kinds - because an ordinary managed-to-native transition is
- * what these are: rsp and rbp below are the caller's, and its ip is read back
- * off its own stack from there.
+ * What lazy_frame_enter () reserves stack for. A plain LMF - not one of the
+ * MonoLMFExt kinds - because an ordinary managed-to-native transition is what it
+ * is: rsp and rbp below are the caller's, and its ip is read back off its own
+ * stack from there.
  *
  * Crossing one of these zeroes the rest of the callee-saved registers, which a
  * managed-to-native wrapper makes up for by restoring them from its own frame
@@ -47,6 +48,22 @@ struct TransitionFrame {
 
 static_assert (sizeof (TransitionFrame) <= managed_frame_size,
                "a caller does not reserve enough for a transition frame");
+
+/*
+ * What interp_frame_enter () reserves stack for. The zeroing that TransitionFrame
+ * lives with is not affordable here: an interpreted method can throw anything, so
+ * an exception crossing this frame is ordinary rather than exceptional, and there
+ * is no wrapper above it to put the registers back. A MonoLMFTramp instead, whose
+ * context the unwinder copies out verbatim.
+ */
+struct InterpTransitionFrame {
+	MonoLMFTramp lmf;
+	MonoContext ctx;
+	MonoLMF **addr;
+};
+
+static_assert (sizeof (InterpTransitionFrame) <= interp_frame_size,
+               "a caller does not reserve enough for an interpreter frame");
 
 namespace {
 
@@ -106,9 +123,37 @@ lazy_frame_leave (void *frame)
 }
 
 void
-interp_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp)
+interp_frame_enter (void *frame, const InterpArgContext *args)
 {
-	link_frame (static_cast<TransitionFrame *> (frame), caller_fp, caller_sp);
+	InterpTransitionFrame *entry = static_cast<InterpTransitionFrame *> (frame);
+	uint64_t caller_sp = (uint64_t) args->stack;
+
+	entry->addr = mono_tls_get_lmf_addr ();
+
+	if (!entry->addr)
+		return;
+
+	/*
+	 * The caller as it stood at the call: its return address sits just below
+	 * the arguments it pushed, and the callee-saved registers are the ones the
+	 * thunk spilled before anything here could touch them.
+	 */
+	memset (&entry->ctx, 0, sizeof (entry->ctx));
+	entry->ctx.gregs[AMD64_RIP] = *(uint64_t *) (caller_sp - sizeof (uint64_t));
+	entry->ctx.gregs[AMD64_RSP] = caller_sp;
+	entry->ctx.gregs[AMD64_RBP] = args->caller_fp;
+	entry->ctx.gregs[AMD64_RBX] = args->saved[0];
+	entry->ctx.gregs[AMD64_R12] = args->saved[1];
+	entry->ctx.gregs[AMD64_R13] = args->saved[2];
+	entry->ctx.gregs[AMD64_R14] = args->saved[3];
+	entry->ctx.gregs[AMD64_R15] = args->saved[4];
+
+	entry->lmf.ctx = &entry->ctx;
+	entry->lmf.lmf_addr = entry->addr;
+	entry->lmf.lmf.rsp = caller_sp;
+	/* Bit 2 is what tells the unwinder to read the context rather than rbp. */
+	entry->lmf.lmf.previous_lmf = (gpointer) ((gsize) *entry->addr | 4);
+	*entry->addr = &entry->lmf.lmf;
 }
 
 void
@@ -119,7 +164,10 @@ interp_frame_leave (void *frame)
 	 * polls for interruption itself while it runs the method, so a thread
 	 * getting this far has already been given every chance to take one.
 	 */
-	unlink_frame (static_cast<TransitionFrame *> (frame));
+	InterpTransitionFrame *entry = static_cast<InterpTransitionFrame *> (frame);
+
+	if (entry->addr)
+		*entry->addr = (MonoLMF *) (((gsize) entry->lmf.lmf.previous_lmf) & ~7);
 }
 
 void **
