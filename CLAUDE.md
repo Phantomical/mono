@@ -269,7 +269,9 @@ ExecutionEngineException rather than falling back anywhere. There is no `--llvm`
 `--nollvm` any more — both are gone, and mono rejects them like any other unknown
 option. `--llvm-opt=OPT` is the one LLVM-facing flag left, and it just forwards
 `OPT` to LLVM's own command-line parser (`--llvm-opt=-print-after-all`); repeat it
-to pass more than one. The AOT compiler is out of scope and refuses immediately.
+to pass more than one. `--interp-tier0[=FILTER]` is the other one: it starts the
+interpreter and enters the selected methods by interpreting them — see tier 0 below.
+The AOT compiler is out of scope and refuses immediately.
 
 Backend debugging env vars:
 - `MONO_LLVM_JIT_TRACE=1` (`runtime/options.cpp`) — print every method the backend translates;
@@ -318,6 +320,11 @@ Backend debugging env vars:
   from the cache, so they end up with several live bodies. Nothing else produces one, and
   the code that has to cope — the debugger installing a breakpoint in every body a method
   is executing in — has no other exerciser.
+- `MONO_LLVM_JIT_TIER1_THRESHOLD=<n>` (`runtime/options.cpp`) — how many calls a method
+  entered at tier 0 takes before it is asked for as tier 1, default 10. Zero never
+  promotes, which is what tells a tier-0 entry bug apart from a promotion bug; one
+  promotes on the first call, which is how to put the switch in the middle of a loop.
+  Only does anything under `--interp-tier0`.
 - `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to a debugger
   through gdb's JIT interface, so `info functions` names JIT'd methods and a `bt`
   taken from runtime C code unwinds managed frames with names instead of `??`. What
@@ -392,10 +399,35 @@ offset - what stack traces print and what sequence points are recovered from.
 routine a landing pad names is never actually called: mono's own unwinder re-enters
 frames through the pads.
 
-**There is one tier.** `run_tier0_pipeline ()` is the stock O1 *function* simplification
-pipeline with this backend's own IR passes around it — `array-address` and
-`lower-builtins` before, `restore-tail-position` and the arch's legacy-ABI lowering
-after — and codegen then runs at `CodeGenOptLevel::None`, which selects FastISel. The
+**A method can start in the interpreter.** `--interp-tier0[=FILTER]` starts the
+interpreter alongside the JIT and enters the methods FILTER selects by interpreting them
+rather than compiling them; an empty filter takes every method the interpreter accepts.
+This is tier 0, and it is off unless the option is given. `runs_at_tier0 ()`
+(`runtime/options.cpp`) is what refuses the methods that would be wrong there rather than
+merely slow — no IL of its own, a wrapper, or a body this backend writes itself
+(`is_intrinsic ()`, which is `ByReference<T>`: its IL only throws).
+
+A tier-0 method leaves for tier 1 by being called. The counter is a word on
+`InterpMethod`, armed once and then decremented at the two places a call can arrive —
+the interpreter's `call:` label and `interp_entry ()` — and the call that spends it asks
+the backend to compile the method on the background compile queue. Nothing waits for
+that: a promotion that cannot be taken (a domain on its way out) simply does not happen,
+and the method stays where it is. The counter has to sit where the interpreter can reach
+it rather than in a thunk in front of the method: a thunk only sees calls that arrive
+through a stub, and a call from one interpreted method to another arrives through none.
+
+`MONO_LLVM_JIT_TIER1_THRESHOLD` is the call count, default 10; zero there leaves tier-0
+methods interpreted for good, which is what separates a tier-0 entry bug from a promotion
+bug. Two limits worth knowing before extending this: the interpreter makes a tail call
+only where a method calls itself, so tier 0 costs a program its tail calls; and
+`runs_at_tier0 ()` only decides for methods the backend is *asked* about — a callee the
+interpreter reached for itself never passes through it, so a refusal cannot keep a
+subgraph under an interpreted frame out of the interpreter.
+
+**There is one optimization pipeline.** `run_tier0_pipeline ()` is the stock O1
+*function* simplification pipeline with this backend's own IR passes around it —
+`array-address` and `lower-builtins` before, `restore-tail-position` and the arch's
+legacy-ABI lowering after — and codegen then runs at `CodeGenOptLevel::None`, which selects FastISel. The
 module and CGSCC layers are skipped deliberately: a module holds a single method and
 every call leaves it by symbol, so there is no callee body to inline and nothing to
 specialize, and running them anyway cost a large fraction of compile time. So the JIT
