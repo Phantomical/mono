@@ -6,10 +6,10 @@
 
 using namespace mono;
 
-TEST (Engine, DefaultsToTheLegacyEngine)
+TEST (Engine, DefaultsToTheNewEngine)
 {
 	unsetenv ("MONO_LLVM_JIT_ENGINE");
-	EXPECT_EQ (selected_engine (), EngineKind::legacy);
+	EXPECT_EQ (selected_engine (), EngineKind::backend);
 }
 
 /*
@@ -21,8 +21,8 @@ TEST (Engine, DefaultsToTheLegacyEngine)
  */
 TEST (Engine, ClaimingBothEnginesDies)
 {
-	claim_engine (EngineKind::legacy);
-	claim_engine (EngineKind::legacy);
+	claim_engine (EngineKind::backend);
+	claim_engine (EngineKind::backend);
 
-	EXPECT_DEATH (claim_engine (EngineKind::backend), "both llvm engines");
+	EXPECT_DEATH (claim_engine (EngineKind::legacy), "both llvm engines");
 }

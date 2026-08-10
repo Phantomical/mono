@@ -15,9 +15,9 @@ selected_engine ()
 	static const EngineKind kind = [] {
 		const char *asked = g_getenv ("MONO_LLVM_JIT_ENGINE");
 
-		if (asked != nullptr && llvm::StringRef (asked) == "new")
-			return EngineKind::backend;
-		return EngineKind::legacy;
+		if (asked != nullptr && llvm::StringRef (asked) == "old")
+			return EngineKind::legacy;
+		return EngineKind::backend;
 	}();
 
 	return kind;
