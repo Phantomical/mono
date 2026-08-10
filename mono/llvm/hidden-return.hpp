@@ -9,11 +9,31 @@
  * a jump: handing the frame away would leave the callee writing into dead
  * stack, so the backend quietly drops the tail call.
  *
- * Spelling the pointer out in the IR instead - a void prototype whose leading
- * parameter is `sret` - is what makes the return tail-callable, because a tail
- * site can then forward the caller's *own* incoming pointer, which lives in an
- * ancestor frame and outlives the jump. X86 recognises exactly that shape
+ * Spelling the pointer out in the IR instead - a void prototype with an `sret`
+ * parameter - is what makes the return tail-callable, because a tail site can
+ * then forward the caller's *own* incoming pointer, which lives in an ancestor
+ * frame and outlives the jump. X86 recognises exactly that shape
  * (mayBeSRetTailCallCompatible) and still refuses a forwarded local.
+ *
+ * The pointer sits *behind* the first argument, at parameter 1, and takes
+ * parameter 0 only when the signature has no argument at all. That is what
+ * leaves the receiver in the first argument register, where the runtime's
+ * trampolines insist on finding it - mono_arch_get_this_arg_from_call and the
+ * unbox trampoline both read it straight out of ARG_REG1. Arity is only the
+ * mechanism; the invariant behind it is that every signature something recovers
+ * a receiver from has that receiver as its first argument, and a receiver is
+ * always integer-class.
+ *
+ * Deciding it by arity rather than by whether the signature has a `this` is
+ * what keeps one LLVM prototype from meaning two different things. A static
+ * method taking one pointer and an instance method taking none are both
+ * `void (ptr, ptr)`; if the index came from the signature they would disagree
+ * about which pointer is the return slot, and a tail call between them - which
+ * matching_call_abi () would wave through, since it compares the prototype -
+ * would put it in the wrong register. It also keeps a declaration and the
+ * wrapper standing behind it from disagreeing: a multidimensional array
+ * accessor carries both `pinvoke` and `hasthis` while its wrapper carries only
+ * `hasthis`, so any flavor-derived rule reads the two ends differently.
  *
  * The prototype is derived from the signature, so a declaration and a body
  * always agree on it without either asking the other.
@@ -108,19 +128,53 @@ returns_by_hidden_pointer (llvm::Type *type)
 	return use.exhausted ();
 }
 
+/// Which parameter of a prototype of COUNT parameters is the hidden return
+/// pointer, given that it has one. The one place the position is decided.
+inline unsigned
+hidden_return_index (unsigned count)
+{
+	return count > 1 ? 1 : 0;
+}
+
 /// What F's hidden return pointer points at, or null when F returns its value
 /// the ordinary way.
+///
+/// Only parameters 0 and 1 are asked: `sret` anywhere else is IR the verifier
+/// rejects outright, so a third position would fail loudly rather than read here
+/// as "no hidden return".
 inline llvm::Type *
 hidden_return_type (const llvm::Function *f)
 {
-	return f->getParamStructRetType (0);
+	return f->getParamStructRetType (hidden_return_index (f->arg_size ()));
 }
 
 /// The hidden return pointer F is entered with, or null.
 inline llvm::Argument *
 hidden_return_pointer (llvm::Function *f)
 {
-	return hidden_return_type (f) != nullptr ? f->getArg (0) : nullptr;
+	return hidden_return_type (f) != nullptr
+	               ? f->getArg (hidden_return_index (f->arg_size ()))
+	               : nullptr;
+}
+
+/// Where natural argument I lands in a prototype whose hidden return pointer is
+/// at HIDDEN, which is past the end when there is none.
+///
+/// Not an offset: with the pointer at parameter 1, argument 0 sits in front of
+/// it and everything after it is shifted by one.
+inline unsigned
+natural_parameter_index (unsigned i, unsigned hidden)
+{
+	return i + (i >= hidden ? 1 : 0);
+}
+
+/// Where natural argument I lands in F.
+inline unsigned
+natural_parameter_index (unsigned i, const llvm::Function *f)
+{
+	if (hidden_return_type (f) == nullptr)
+		return i;
+	return natural_parameter_index (i, hidden_return_index (f->arg_size ()));
 }
 
 /// TYPE with its hidden return pointer folded back into the return, which is the
@@ -128,21 +182,21 @@ hidden_return_pointer (llvm::Function *f)
 inline llvm::FunctionType *
 natural_prototype (llvm::FunctionType *type, llvm::Type *hidden)
 {
-	llvm::SmallVector<llvm::Type *, 8> params (type->param_begin () + 1,
-	                                           type->param_end ());
+	llvm::SmallVector<llvm::Type *, 8> params (type->param_begin (), type->param_end ());
 
+	params.erase (params.begin () + hidden_return_index (type->getNumParams ()));
 	return llvm::FunctionType::get (hidden, params, type->isVarArg ());
 }
 
 /// TYPE with the hidden pointer a return of HIDDEN travels through spelled out
-/// as its leading parameter.
+/// as a parameter, behind the first argument.
 inline llvm::FunctionType *
 hidden_return_prototype (llvm::FunctionType *type, llvm::Type *hidden)
 {
-	llvm::SmallVector<llvm::Type *, 8> params;
+	llvm::SmallVector<llvm::Type *, 8> params (type->param_begin (), type->param_end ());
 
-	params.push_back (llvm::PointerType::get (hidden->getContext (), 0));
-	params.append (type->param_begin (), type->param_end ());
+	params.insert (params.begin () + hidden_return_index (params.size () + 1),
+	               llvm::PointerType::get (hidden->getContext (), 0));
 
 	return llvm::FunctionType::get (llvm::Type::getVoidTy (hidden->getContext ()), params,
 	                                type->isVarArg ());

@@ -772,11 +772,15 @@ MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::Function *call
 {
 	llvm::FunctionType *type = callee->getFunctionType ();
 	std::vector<llvm::Value *> adapted (args.begin (), args.end ());
-	/* ARGS are the signature's arguments, which start past any hidden return pointer. */
-	unsigned leading = hidden_return_type (callee) != nullptr ? 1 : 0;
 
-	for (unsigned i = 0; i < adapted.size () && i + leading < type->getNumParams (); ++i) {
-		llvm::Type *want = type->getParamType (i + leading);
+	/* ARGS are the signature's arguments; the hidden return pointer is none of them. */
+	for (unsigned i = 0; i < adapted.size (); ++i) {
+		unsigned at = natural_parameter_index (i, callee);
+
+		if (at >= type->getNumParams ())
+			break;
+
+		llvm::Type *want = type->getParamType (at);
 		llvm::Value *have = adapted[i];
 
 		if (have->getType () == want)
@@ -912,28 +916,29 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		function->addRetAttr (llvm::Attribute::NoAlias);
 
 	/*
-	 * Every parameter index below is an IL argument number shifted past the
+	 * Every parameter index below is an IL argument number moved around the
 	 * hidden return pointer, which is a parameter of this convention's own and
-	 * belongs to none of them.
+	 * belongs to none of them. Around rather than past: the pointer sits behind
+	 * the first argument, so argument 0 comes before it.
 	 */
-	unsigned leading = hidden != nullptr ? 1 : 0;
-
 	if (hidden != nullptr) {
-		function->addParamAttrs (0, llvm::AttrBuilder (
-						    context (),
-						    hidden_return_attributes (context (), hidden)));
-		function->getArg (0)->setName ("ret");
+		unsigned at = hidden_return_index (function->arg_size ());
+
+		function->addParamAttrs (at, llvm::AttrBuilder (
+						     context (),
+						     hidden_return_attributes (context (), hidden)));
+		function->getArg (at)->setName ("ret");
 	}
 
 	if (sig->hasthis)
-		function->getArg (leading)->setName ("this");
+		function->getArg (natural_parameter_index (0, function))->setName ("this");
 
 	std::vector<const char *> names (sig->param_count);
 	if (sig->param_count > 0)
 		mono_method_get_param_names (method, names.data ());
 
 	for (int i = 0; i < sig->param_count; ++i) {
-		unsigned pindex = i + sig->hasthis + leading;
+		unsigned pindex = natural_parameter_index (i + sig->hasthis, function);
 
 		if (names[i] != nullptr && names[i][0] != '\0')
 			function->getArg (pindex)->setName (std::string ("arg_") + names[i]);

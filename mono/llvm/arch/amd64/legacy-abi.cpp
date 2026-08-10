@@ -303,18 +303,12 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 			 *
 			 * Its position is the flavor's business. A C function keeps it
 			 * in front of everything; a managed one puts it behind a
-			 * receiver the trampolines insist on finding first.
+			 * receiver the trampolines insist on finding first. A nest key
+			 * is a trailing parameter and no argument at all, so it never
+			 * comes between them.
 			 */
-			unsigned leading_nest = 0;
-
-			while (leading_nest < type->getNumParams ()
-			       && is_nest (leading_nest))
-				leading_nest++;
-
 			low.ret_by_address = true;
-			low.vret_index =
-				leading_nest
-				+ (flavor == LegacyFlavor::ManagedVret1 ? 1 : 0);
+			low.vret_index = flavor == LegacyFlavor::ManagedVret1 ? 1 : 0;
 			if (gr < param_gregs)
 				gr++;
 		}
@@ -650,10 +644,13 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 	 * happens at the call.
 	 */
 	Type *hidden = hidden_return_type (target);
-	unsigned leading = hidden != nullptr ? 1 : 0;
 	FunctionType *natural = hidden != nullptr
 	                                ? natural_prototype (target->getFunctionType (), hidden)
 	                                : target->getFunctionType ();
+	/* Natural argument I's parameter on the target, which is what carries its attributes. */
+	auto target_param = [&] (unsigned i) {
+		return target_attrs.getParamAttrs (natural_parameter_index (i, target));
+	};
 
 	CallLowering low =
 		compute_lowering (natural, [] (unsigned) { return false; }, flavor,
@@ -668,7 +665,7 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 		switch (p.kind) {
 		case ParamLowering::Direct:
 			types.push_back (natural->getParamType (i));
-			attrs.push_back (target_attrs.getParamAttrs (i + leading));
+			attrs.push_back (target_param (i));
 			break;
 		case ParamLowering::Coerced:
 			types.push_back (p.travel);
@@ -763,11 +760,12 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 	 * the only thing known about the caller's slot is where it is.
 	 */
 	AllocaInst *returned = nullptr;
+	unsigned target_vret = hidden_return_index (args.size () + 1);
 
 	if (hidden != nullptr) {
 		returned = b.CreateAlloca (hidden);
 		returned->setAlignment (Align (8));
-		args.insert (args.begin (), returned);
+		args.insert (args.begin () + target_vret, returned);
 	}
 
 	CallInst *call = b.CreateCall (target->getFunctionType (),
@@ -777,10 +775,11 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 
 	SmallVector<AttributeSet, 8> call_attrs;
 
-	if (hidden != nullptr)
-		call_attrs.push_back (hidden_return_attributes (ctx, hidden));
 	for (unsigned i = 0; i < natural->getNumParams (); ++i)
-		call_attrs.push_back (target_attrs.getParamAttrs (i + leading));
+		call_attrs.push_back (target_param (i));
+	if (hidden != nullptr)
+		call_attrs.insert (call_attrs.begin () + target_vret,
+		                   hidden_return_attributes (ctx, hidden));
 	call->setAttributes (AttributeList::get (ctx, AttributeSet (),
 	                                         target_attrs.getRetAttrs (),
 	                                         call_attrs));
@@ -827,17 +826,19 @@ create_fastcc_entry_thunk (Module &m, StringRef name, Function *shape,
 
 	/*
 	 * The key register is not an argument register, so the callee's address
-	 * rides in front of the prototype without moving anything in it.
+	 * rides behind the prototype without moving anything in it. Behind rather
+	 * than in front because a hidden return pointer is only ever parameter 0 or
+	 * 1, and a leading key would push it out of both.
 	 */
-	SmallVector<Type *, 8> types { PointerType::get (ctx, 0) };
-	SmallVector<AttributeSet, 8> attrs {
-		AttributeSet::get (ctx, AttrBuilder (ctx).addAttribute (Attribute::Nest))
-	};
+	SmallVector<Type *, 8> types;
+	SmallVector<AttributeSet, 8> attrs;
 
 	for (unsigned i = 0; i < proto->getNumParams (); ++i) {
 		types.push_back (proto->getParamType (i));
 		attrs.push_back (proto_attrs.getParamAttrs (i));
 	}
+	types.push_back (PointerType::get (ctx, 0));
+	attrs.push_back (AttributeSet::get (ctx, AttrBuilder (ctx).addAttribute (Attribute::Nest)));
 
 	Function *thunk =
 		Function::Create (FunctionType::get (proto->getReturnType (), types,
@@ -859,7 +860,6 @@ create_fastcc_entry_thunk (Module &m, StringRef name, Function *shape,
 	 * translator emitted.
 	 */
 	Type *hidden = hidden_return_type (shape);
-	unsigned leading = hidden != nullptr ? 1 : 0;
 	FunctionType *natural =
 		hidden != nullptr ? natural_prototype (proto, hidden) : proto;
 
@@ -867,11 +867,13 @@ create_fastcc_entry_thunk (Module &m, StringRef name, Function *shape,
 	SmallVector<AttributeSet, 8> call_attrs;
 
 	for (unsigned i = 0; i < natural->getNumParams (); ++i) {
-		args.push_back (thunk->getArg (i + leading + 1));
-		call_attrs.push_back (proto_attrs.getParamAttrs (i + leading));
+		unsigned at = natural_parameter_index (i, shape);
+
+		args.push_back (thunk->getArg (at));
+		call_attrs.push_back (proto_attrs.getParamAttrs (at));
 	}
 
-	CallInst *call = b.CreateCall (natural, thunk->getArg (0), args);
+	CallInst *call = b.CreateCall (natural, thunk->getArg (thunk->arg_size () - 1), args);
 
 	call->setAttributes (AttributeList::get (ctx, AttributeSet (),
 	                                         hidden != nullptr
@@ -883,7 +885,9 @@ create_fastcc_entry_thunk (Module &m, StringRef name, Function *shape,
 
 	if (hidden != nullptr) {
 		/* Claim nothing about the caller's slot but where it is. */
-		b.CreateAlignedStore (call, thunk->getArg (1), Align (1));
+		b.CreateAlignedStore (
+			call, thunk->getArg (hidden_return_index (shape->arg_size ())),
+			Align (1));
 		b.CreateRetVoid ();
 	} else if (proto->getReturnType ()->isVoidTy ()) {
 		b.CreateRetVoid ();

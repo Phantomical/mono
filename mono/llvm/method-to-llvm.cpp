@@ -750,18 +750,18 @@ MethodLLVMEmitter::emit ()
 	    && std::string_view (m_class_get_name (method->klass)) == "ByReference`1") {
 		llvm::Align align (TARGET_SIZEOF_VOID_P);
 		std::string_view name = method->name;
-		unsigned leading = hidden_return_pointer (function) != nullptr ? 1 : 0;
+		auto argument = [&] (unsigned i) {
+			return function->getArg (natural_parameter_index (i, function));
+		};
 
 		if (name == ".ctor") {
-			builder.CreateAlignedStore (function->getArg (leading + 1),
-			                            function->getArg (leading), align);
+			builder.CreateAlignedStore (argument (1), argument (0), align);
 			builder.CreateRetVoid ();
 			return function;
 		}
 		if (name == "get_Value") {
 			builder.CreateRet (builder.CreateAlignedLoad (
-				llvm::PointerType::get (context (), 0),
-				function->getArg (leading), align));
+				llvm::PointerType::get (context (), 0), argument (0), align));
 			return function;
 		}
 		return unsupported_il ("an unrecognized ByReference member");
@@ -1893,8 +1893,6 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	 * it, past where the managed layout would have ended.
 	 */
 	bool native = native_signature ();
-	/* The hidden return pointer is a parameter of the convention, not an argument. */
-	unsigned leading = hidden_return_pointer (function) != nullptr ? 1 : 0;
 
 	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);
@@ -1906,8 +1904,9 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		auto alloca = builder.CreateAlloca (ltype, nullptr, names[i]);
 
 		alloca->setAlignment (type_alignment (mtype, native));
-		builder.CreateAlignedStore (function->getArg (i + leading), alloca,
-		                            alloca->getAlign ());
+		builder.CreateAlignedStore (
+			function->getArg (natural_parameter_index (i, function)), alloca,
+			alloca->getAlign ());
 
 		args.push_back ({
 			.alloca = alloca,
@@ -1921,9 +1920,12 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	 * which arglist hands straight to ArgIterator. It gets no slot of its own -
 	 * nothing writes to it, and keeping it out of `args` leaves the
 	 * llvm.localescape order a filter recovers from untouched.
+	 *
+	 * It is the last parameter however many precede it, so it is found by
+	 * counting rather than by walking around the hidden return pointer.
 	 */
 	if (sig->call_convention == MONO_CALL_VARARG)
-		sig_cookie = function->getArg (nargs + leading);
+		sig_cookie = function->getArg (function->arg_size () - 1);
 
 	return llvm::Error::success ();
 }

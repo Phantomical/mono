@@ -473,10 +473,11 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 	llvm::Type *hidden = target != nullptr ? hidden_return_type (target) : nullptr;
 	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());
 	llvm::AllocaInst *slot = nullptr;
+	unsigned at = hidden_return_index (operands.size () + 1);
 
 	if (hidden != nullptr) {
 		slot = entry_alloca (hidden, "retslot");
-		operands.insert (operands.begin (), slot);
+		operands.insert (operands.begin () + at, slot);
 	}
 
 	int clause = innermost_try (offset);
@@ -504,9 +505,9 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 	}
 
 	if (hidden != nullptr)
-		call->addParamAttrs (0, llvm::AttrBuilder (
-					       context (),
-					       hidden_return_attributes (context (), hidden)));
+		call->addParamAttrs (at, llvm::AttrBuilder (
+					        context (),
+					        hidden_return_attributes (context (), hidden)));
 	if (describe)
 		describe (call);
 

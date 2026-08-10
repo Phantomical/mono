@@ -712,15 +712,17 @@ MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee 
 	 * would be dead the moment the jump happened, and X86 refuses one.
 	 * should_tail_call () has already agreed the two ends mean the same type by it.
 	 */
+	unsigned at = hidden_return_index (operands.size () + 1);
+
 	if (hidden != nullptr)
-		operands.insert (operands.begin (), hidden_return_pointer (function));
+		operands.insert (operands.begin () + at, hidden_return_pointer (function));
 
 	llvm::CallInst *call = builder.CreateCall (callee, operands);
 
 	if (hidden != nullptr)
-		call->addParamAttrs (0, llvm::AttrBuilder (
-					       context (),
-					       hidden_return_attributes (context (), hidden)));
+		call->addParamAttrs (at, llvm::AttrBuilder (
+					        context (),
+					        hidden_return_attributes (context (), hidden)));
 
 	carry_return_attributes (call, declaration);
 	describe_site (call);
@@ -826,17 +828,19 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	}
 
 	/* The return goes where this method's own caller asked for it. */
+	unsigned at = hidden_return_index (values.size () + 1);
+
 	if (hidden != nullptr)
-		values.insert (values.begin (), hidden_return_pointer (function));
+		values.insert (values.begin () + at, hidden_return_pointer (function));
 
 	emit_profiler_frame_handover (builder, callee_method);
 
 	llvm::CallInst *call = builder.CreateCall (*declaration, values);
 
 	if (hidden != nullptr)
-		call->addParamAttrs (0, llvm::AttrBuilder (
-					       context (),
-					       hidden_return_attributes (context (), hidden)));
+		call->addParamAttrs (at, llvm::AttrBuilder (
+					        context (),
+					        hidden_return_attributes (context (), hidden)));
 
 	/*
 	 * jmp releases this frame by definition, so the jump is the point rather than
@@ -1356,8 +1360,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			 * in a register set aside for it, and the nest attribute is how
 			 * unmodified LLVM is talked into filling it: nest pins an argument to
 			 * %r10, which is exactly MONO_ARCH_IMT_REG on amd64. The key travels
-			 * as one extra leading argument that the target, once reached, never
-			 * looks at.
+			 * as one extra trailing argument that the target, once reached, never
+			 * looks at - trailing because a hidden return pointer is only legal
+			 * at parameter 0 or 1, and a leading key would push it past both.
 			 *
 			 * A virtual generic method dispatches the same way even off a class:
 			 * its slot can never hold one instantiation's code, so what sits
@@ -1373,12 +1378,12 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			std::vector<llvm::Type *> params (slot_type->param_begin (),
 			                                  slot_type->param_end ());
 
-			params.insert (params.begin (), llvm::PointerType::get (context (), 0));
+			params.push_back (llvm::PointerType::get (context (), 0));
 			callee = llvm::FunctionCallee (
 				llvm::FunctionType::get (slot_type->getReturnType (), params,
 			                                 slot_type->isVarArg ()),
 				code);
-			args->insert (args->begin (), method_symbol (callee_method));
+			args->push_back (method_symbol (callee_method));
 			through_slot = true;
 		} else if (overridable && mono_method_get_vtable_index (callee_method) >= 0) {
 			callee = llvm::FunctionCallee (
@@ -1391,7 +1396,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	/* What the site says about its callee, whether or not it becomes a jump. */
 	auto describe_site = [&] (llvm::CallBase *site) {
 		if (keyed)
-			site->addParamAttr (0, llvm::Attribute::Nest);
+			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
 
 		/*
 		 * A dispatched call goes through whatever pointer the runtime left for
