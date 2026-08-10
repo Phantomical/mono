@@ -4,7 +4,6 @@
 #include "compile-queue.hpp"
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
-#include "engine.hpp"
 #include "naming.hpp"
 #include "options.hpp"
 #include <llvm/ADT/StringRef.h>
@@ -69,7 +68,6 @@ MonoBackend::get ()
 	static std::once_flag once;
 
 	std::call_once (once, [] {
-		claim_engine (EngineKind::backend);
 		instance = new MonoBackend ();
 
 		atexit ([] {

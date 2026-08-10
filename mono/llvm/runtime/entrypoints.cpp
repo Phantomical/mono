@@ -1,10 +1,6 @@
 /**
  * \file
  * \brief The whole surface mono's C runtime sees of the LLVM backend.
- *
- * Each entry point picks an engine and forwards. That branch is temporary; when
- * runtime.cpp goes, so does every mention of an engine here and these become
- * plain forwarders.
  */
 
 /*
@@ -16,10 +12,8 @@
 #include "runtime.hpp"
 
 #include "backend.hpp"
-#include "engine.hpp"
 #include "jit.hpp"
 #include "options.hpp"
-#include "runtime-legacy.hpp"
 
 #include <llvm/Support/Error.h>
 
@@ -53,12 +47,6 @@ finish (llvm::Expected<void *> code, MonoError *error)
 	return NULL;
 }
 
-bool
-on_backend ()
-{
-	return mono::selected_engine () == mono::EngineKind::backend;
-}
-
 } // namespace
 
 void *
@@ -67,77 +55,54 @@ mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domain,
 {
 	error_init (error);
 
-	if (on_backend ()) {
-		llvm::Expected<mono::MonoBackend *> backend = mono::MonoBackend::get ();
+	llvm::Expected<mono::MonoBackend *> backend = mono::MonoBackend::get ();
 
-		if (!backend)
-			return finish (backend.takeError (), error);
-		return finish ((*backend)->compile (method, target_domain), error);
-	}
-
-	return finish (mono::legacy::compile (method, target_domain), error);
+	if (!backend)
+		return finish (backend.takeError (), error);
+	return finish ((*backend)->compile (method, target_domain), error);
 }
 
 void
 mono_llvm_jit_stop_compiling (void)
 {
-	if (on_backend ())
-		mono::MonoBackend::stop_compilation ();
-	else
-		mono::legacy::stop_compiling ();
+	mono::MonoBackend::stop_compilation ();
 }
 
 void
 mono_llvm_jit_stop_compiling_for_domain (MonoDomain *domain)
 {
-	if (on_backend ())
-		mono::MonoBackend::stop_compilation (domain);
-	else
-		mono::legacy::stop_compiling_for (domain);
+	mono::MonoBackend::stop_compilation (domain);
 }
 
 void
 mono_llvm_jit_free_domain (MonoDomain *domain)
 {
-	if (on_backend ())
-		mono::MonoBackend::release_domain (domain);
-	else
-		mono::legacy::free_domain (domain);
+	mono::MonoBackend::release_domain (domain);
 }
 
 void
 mono_llvm_jit_free_method (MonoMethod *method)
 {
-	if (on_backend ())
-		mono::MonoBackend::release_method (method);
-	else
-		mono::legacy::free_method (method);
+	mono::MonoBackend::release_method (method);
 }
 
 void *
 mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method)
 {
-	if (on_backend ())
-		return mono::MonoBackend::body_of (domain, method);
-	return mono::legacy::body_of (domain, method);
+	return mono::MonoBackend::body_of (domain, method);
 }
 
 void
 mono_llvm_jit_foreach_body (MonoDomain *domain, MonoMethod *method,
                             void (*visit) (MonoJitInfo *, void *), void *user_data)
 {
-	if (on_backend ())
-		mono::MonoBackend::foreach_body (domain, method, visit, user_data);
-	else
-		mono::legacy::foreach_body (domain, method, visit, user_data);
+	mono::MonoBackend::foreach_body (domain, method, visit, user_data);
 }
 
 void *
 mono_llvm_jit_unbox_entry (MonoMethod *method)
 {
-	if (on_backend ())
-		return mono::MonoBackend::unbox_entry_of (method);
-	return mono::legacy::unbox_entry_of (method);
+	return mono::MonoBackend::unbox_entry_of (method);
 }
 
 void
