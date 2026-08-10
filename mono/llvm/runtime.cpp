@@ -35,6 +35,7 @@
 #include "runtime-legacy.hpp"
 #include "runtime/engine.hpp"
 #include "runtime/externals.hpp"
+#include "runtime/thrower.hpp"
 #include "runtime/translate.hpp"
 #include "runtime/builtins.hpp"
 #include "runtime/minimal-compile.hpp"
@@ -468,11 +469,6 @@ private:
 	/// would not compile, and becomes a stand-in body that raises it; anything
 	/// else is handed straight back, unchanged.
 	Expected<Compiled> recover (DomainState &state, MonoMethod *method, Error failure);
-
-	/// Compile a body for METHOD that raises FAILURE and nothing else. Consumes
-	/// FAILURE.
-	Expected<Compiled> compile_thrower (DomainState &state, MonoMethod *method,
-	                                    MonoError *failure);
 
 	/// Turn FAILURE into a body for METHOD that raises it, whatever the
 	/// failure was: what a call already under way gets instead of an answer.
@@ -1123,6 +1119,16 @@ raise_jit_done (MonoMethod *method, MonoJitInfo *jinfo)
 }
 
 Expected<Backend::Compiled>
+Backend::recover (DomainState &state, MonoMethod *method, Error failure)
+{
+	auto note = [&] (const CompiledMethod &code, MonoJitInfo *jinfo) {
+		remember (state, method, code, jinfo);
+	};
+
+	return mono::recover (*state.jit, state.domain, method, std::move (failure), note);
+}
+
+Expected<Backend::Compiled>
 Backend::translate_and_compile (DomainState &state, MonoMethod *method,
                                 MonoJitInfo **published)
 {
@@ -1145,53 +1151,7 @@ Backend::translate_and_compile (DomainState &state, MonoMethod *method,
 	return mono::translate_and_compile (target, method, published);
 }
 
-/*
- * The metadata failures ECMA-335 raises where the thing is used rather than
- * where it is named: a method calling one that is missing gets to run until the
- * call, and its caller gets to catch what the call throws. Deferring one costs
- * nothing, because the name it could not resolve is only ever consulted by a
- * call.
- *
- * Invalid IL is not in the set. A body's validity is the answer to the question
- * "can this method be compiled", so whoever asked for the compile is entitled to
- * hear it: mini reports it through the MonoError, which is why creating a
- * delegate over a malformed DynamicMethod throws from Delegate.CreateDelegate
- * rather than from the first call through it. A call that arrives at a stub
- * without anyone having asked still gets the deferral it needs - raise_on_call ()
- * defers everything, that being the only answer available there.
- */
-bool
-raised_where_used (uint16_t code)
-{
-	switch (code) {
-	case MONO_ERROR_MISSING_METHOD:
-	case MONO_ERROR_MISSING_FIELD:
-	case MONO_ERROR_TYPE_LOAD:
-	case MONO_ERROR_FILE_NOT_FOUND:
-	case MONO_ERROR_BAD_IMAGE:
-	case MONO_ERROR_MEMBER_ACCESS:
-		return true;
-	default:
-		return false;
-	}
-}
 
-Expected<Backend::Compiled>
-Backend::recover (DomainState &state, MonoMethod *method, Error failure)
-{
-	if (!failure.isA<RuntimeError> ())
-		return std::move (failure);
-
-	ERROR_DECL (metadata_error);
-
-	handleAllErrors (std::move (failure),
-	                 [&] (RuntimeError &runtime) { runtime.move_to (metadata_error); });
-
-	if (!raised_where_used (mono_error_get_error_code (metadata_error)))
-		return runtime_error (metadata_error);
-
-	return compile_thrower (state, method, metadata_error);
-}
 
 /*
  * A stub is the end of the line for a failure. The trampoline behind it has
@@ -1216,7 +1176,11 @@ Backend::raise_on_call (DomainState &state, MonoMethod *method, Error failure)
 		mono_error_set_execution_engine (call_error, "%s",
 		                                 toString (std::move (failure)).c_str ());
 
-	return compile_thrower (state, method, call_error);
+	auto note = [&] (const CompiledMethod &code, MonoJitInfo *jinfo) {
+		remember (state, method, code, jinfo);
+	};
+
+	return compile_thrower (*state.jit, state.domain, method, call_error, note);
 }
 
 /*
@@ -1233,93 +1197,6 @@ Backend::raise_on_call (DomainState &state, MonoMethod *method, Error failure)
  * not convert. A function that never returns leaves its arguments and its return
  * slot untouched, so no caller can tell.
  */
-Expected<Backend::Compiled>
-Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *failure)
-{
-	MonoErrorBoxed *boxed =
-		mono_error_box (failure, m_class_get_image (method->klass));
-
-	if (boxed == nullptr)
-		return runtime_error (failure);
-
-	if (is_jit_trace_enabled ()) {
-		char *name = mono_method_full_name (method, TRUE);
-
-		fprintf (stderr, "[llvm-jit] %s throws on call: %s\n", name,
-		         mono_error_get_message (failure));
-		g_free (name);
-	}
-
-	mono_error_cleanup (failure);
-
-	/*
-	 * The entry and the body are separate symbols the runtime redirects
-	 * independently, and here they stand for the same three instructions - so
-	 * this is that body, built twice under the two names.
-	 */
-	auto build = [&] (const std::string &name) -> Expected<void *> {
-		auto context = std::make_unique<LLVMContext> ();
-		auto module = std::make_unique<Module> (name, *context);
-		LLVMContext &ctx = *context;
-		Type *ptr = PointerType::get (ctx, 0);
-
-		FunctionCallee load = module->getOrInsertFunction (
-			"mono_llvm_load_error_exception",
-			FunctionType::get (ptr, { ptr }, false));
-		FunctionCallee raise = module->getOrInsertFunction (
-			"mono_llvm_throw_exception",
-			FunctionType::get (Type::getVoidTy (ctx), { ptr }, false));
-
-		Function *function =
-			Function::Create (FunctionType::get (Type::getVoidTy (ctx), false),
-			                  GlobalValue::ExternalLinkage, name, module.get ());
-
-		/* Mono walks this frame like any other, from its unwind record. */
-		function->setUWTableKind (UWTableKind::Default);
-
-		IRBuilder<> builder (BasicBlock::Create (ctx, "entry", function));
-		Value *box = builder.CreateIntToPtr (
-			builder.getInt64 ((uint64_t) (uintptr_t) boxed), ptr);
-
-		builder.CreateCall (raise, { builder.CreateCall (load, { box }) });
-		builder.CreateUnreachable ();
-
-		if (Error err = bind_symbols (*module))
-			return std::move (err);
-
-		if (dumping (name.c_str ()))
-			module->print (llvm::errs (), nullptr);
-
-		Expected<CompiledMethod> compiled = state.jit->compile (
-			ThreadSafeModule (std::move (module),
-			                  ThreadSafeContext (std::move (context))),
-			name);
-		if (!compiled)
-			return compiled.takeError ();
-
-		Expected<MonoJitInfo *> jinfo = register_jit_info (
-			state.domain, method, nullptr, *compiled, CodeKind::Body);
-
-		if (!jinfo)
-			return jinfo.takeError ();
-		remember (state, method, *compiled, *jinfo);
-
-		return compiled->entry;
-	};
-
-	Expected<void *> body = build (stub_symbol (method, Entry::body));
-
-	if (!body)
-		return body.takeError ();
-
-	/*
-	 * One body under one name for every door. It takes no arguments it reads
-	 * and never returns, so whichever entry a caller came for - the interop one,
-	 * the unboxing one, the method itself - these three instructions answer for
-	 * it, and publish_defs () points every stub the method has at this.
-	 */
-	return Compiled { *body, *body, *body };
-}
 
 Expected<void *>
 Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)

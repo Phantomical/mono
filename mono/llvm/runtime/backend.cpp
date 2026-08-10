@@ -18,6 +18,8 @@
 #include "util/lock.hpp"
 #include "builtins.hpp"
 #include "stub-jinfo.hpp"
+#include "thrower.hpp"
+#include "verification.hpp"
 #include "translate.hpp"
 #include "arch/arch.hpp"
 #include <optional>
@@ -437,6 +439,15 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 	 * vtables and statics, live until that domain unloads under it.
 	 */
 	DomainScope entered (domain.domain);
+
+	/*
+	 * Before anything is translated, so a method gets the same verdict whichever
+	 * tier ends up running it: a body the verifier rejects is one no tier may
+	 * run, and one it accepts is one every tier may.
+	 */
+	if (llvm::Error invalid = verify_method (method.method))
+		return std::move (invalid);
+
 	MonoJitInfo *published = nullptr;
 
 	/* Named: function_ref does not own what it points at. */
@@ -453,16 +464,13 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 	};
 	/* Nothing is freed yet, so nothing has to be remembered to free it. */
 	auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
-	/*
-	 * No stand-in body to fall back to yet, so a metadata failure is raised as
-	 * itself rather than deferred to the call that would have used it.
-	 */
-	auto keep = [] (llvm::Error failure) -> llvm::Expected<Compiled> {
-		return std::move (failure);
+	auto recover_failure = [&] (llvm::Error failure) -> llvm::Expected<Compiled> {
+		return recover (*domain.jit, domain.domain, method.method,
+		                std::move (failure), note);
 	};
 
 	TranslationTarget target { domain.jit.get (), domain.domain, publish_callee,
-		                   stub_address, note, keep };
+		                   stub_address, note, recover_failure };
 
 	llvm::Expected<Compiled> code =
 		translate_and_compile (target, method.method, &published);
