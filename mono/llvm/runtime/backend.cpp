@@ -533,6 +533,15 @@ MonoBackend::interp_entries (DomainState &domain, MethodState &method)
 	if (!ready)
 		return ready.takeError ();
 
+	/*
+	 * Before the redirects below, which are what make the method reachable, so
+	 * that no call can arrive before its calls are being counted. Safe here
+	 * because arming runs no class initializer - see the ordering note in
+	 * compile_body ().
+	 */
+	mini_get_interp_callbacks ()->arm_tier_counter ((*ready)->imethod,
+	                                                (gint32) tier1_threshold ());
+
 	void *body = arch::interp_entry_thunk ();
 	Compiled entries { body, body,
 		           publishes_unbox_entry (method.method)
@@ -637,6 +646,17 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 			return method.code->at (entry);
 	}
 
+	llvm::Expected<Compiled> code = compile_body (domain, method, /*allow_tier0=*/true);
+
+	if (!code)
+		return code.takeError ();
+
+	return code->at (entry);
+}
+
+llvm::Expected<MonoBackend::Compiled>
+MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_tier0)
+{
 	/*
 	 * Materialize as the domain the code is for, not as whatever the calling
 	 * thread happens to be running as: a stub fires under the thread's current
@@ -662,7 +682,7 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 	 * would then re-enter the trampoline being resolved and deadlock against
 	 * that lock. Publishing first means such a call lands on the entry instead.
 	 */
-	if (runs_at_tier0 (method.method)) {
+	if (allow_tier0 && runs_at_tier0 (method.method)) {
 		llvm::Expected<Compiled> entries = interp_entries (domain, method);
 
 		if (!entries) {
@@ -677,7 +697,7 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 
 			if (mini_get_interp_callbacks ()->transform_method (method.method,
 			                                                    transform_error))
-				return entries->at (entry);
+				return *entries;
 
 			mono_error_cleanup (transform_error);
 		}
@@ -773,7 +793,58 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 	if (mono_use_interpreter)
 		mini_get_interp_callbacks ()->method_compiled (domain.domain, method.method);
 
-	return code->at (entry);
+	return *code;
+}
+
+/*
+ * Runs on a mutator thread, inside the interpreter, on the call that spent a
+ * method's countdown - so it does as little as it can get away with and hands
+ * the rest to the worker. Nothing waits for the result, and there is nobody to
+ * report a failure to: the method simply stays at the tier it is at.
+ */
+void
+MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
+{
+	if (!instance)
+		return;
+
+	llvm::Expected<DomainState *> state = instance->state (domain);
+
+	if (!state) {
+		llvm::consumeError (state.takeError ());
+		return;
+	}
+
+	DomainState *owner = *state;
+	/*
+	 * Held rather than read again on the worker: at exit the engine is unhooked
+	 * from INSTANCE before it is destroyed, and it is the destructor that waits
+	 * for work already in flight.
+	 */
+	MonoBackend *self = instance;
+
+	owner->queue.enqueue (method, [self, owner, method] () {
+		/*
+		 * Published here rather than by the caller: the only thing that ever
+		 * called this method may have been the interpreter, which reaches a
+		 * callee without the backend being asked for it, so there may be no
+		 * state for it yet.
+		 */
+		llvm::Expected<MethodState *> published = self->publish (*owner, method);
+
+		if (!published) {
+			llvm::logAllUnhandledErrors (published.takeError (), llvm::errs (),
+			                             "mono: could not publish a promoted method: ");
+			return;
+		}
+
+		llvm::Expected<Compiled> body =
+			self->compile_body (*owner, **published, /*allow_tier0=*/false);
+
+		if (!body)
+			llvm::logAllUnhandledErrors (body.takeError (), llvm::errs (),
+			                             "mono: could not promote a method: ");
+	});
 }
 
 llvm::Expected<MonoBackend::DomainState *>

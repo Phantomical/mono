@@ -76,6 +76,7 @@
 #include <mono/mini/debugger-agent.h>
 #include <mono/mini/ee.h>
 #include <mono/mini/trace.h>
+#include "../../llvm/runtime.hpp"
 
 #include <mono/metadata/icall-decl.h>
 
@@ -1957,6 +1958,49 @@ typedef struct {
 	gpointer *many_args;
 } InterpEntryData;
 
+/*
+ * Set how many calls IMETHOD may take before it is asked for as tier 1.
+ *
+ * Only from zero, so that a method that has already fired is never armed again
+ * and two threads arriving together agree on one countdown. A method that is
+ * not a candidate is armed to the fired state instead, which costs its callers
+ * one predictable branch and nothing else.
+ */
+static void
+interp_arm_tier_counter (gpointer imethod_ptr, gint32 calls)
+{
+	InterpMethod *imethod = (InterpMethod*)imethod_ptr;
+
+	mono_atomic_cas_i32 (&imethod->tier_countdown, calls > 0 ? calls : -1, 0);
+}
+
+/*
+ * Count one call of IMETHOD, and ask for it as tier 1 on the call that spends
+ * its countdown.
+ *
+ * Exactly one caller sees the decrement return zero, whatever any of them read
+ * beforehand, so the request is made once however many threads are in here.
+ */
+static MONO_NEVER_INLINE void
+interp_tier_call (InterpMethod *imethod)
+{
+	gint32 left;
+
+	/* The atomic is the expensive part, so a spent countdown never reaches it:
+	 * a caller that raced one which has since fired stops here instead. */
+	if (imethod->tier_countdown <= 0)
+		return;
+
+	left = mono_atomic_dec_i32 (&imethod->tier_countdown);
+	if (left != 0)
+		return;
+
+	/* Callers that raced past the load above can drive this below zero; the
+	 * store settles it on the one value arming will not start from. */
+	imethod->tier_countdown = -1;
+	mono_llvm_jit_request_promotion (imethod->method, imethod->domain);
+}
+
 /* Main function for entering the interpreter from compiled code */
 // Do not inline in case order of frame addresses matters.
 static MONO_NEVER_INLINE void
@@ -1980,6 +2024,15 @@ interp_entry (InterpEntryData *data)
 
 	if (rmethod->needs_thread_attach)
 		orig_domain = mono_threads_attach_coop (mono_domain_get (), &attach_cookie);
+
+	/*
+	 * After the attach, so that asking for the method cannot block on a thread
+	 * the collector does not know about. A caller that got here paid a full
+	 * marshal through the entry thunk to do it, which is far more than calling
+	 * the method natively would cost, so these always count.
+	 */
+	if (G_UNLIKELY (rmethod->tier_countdown > 0))
+		interp_tier_call (rmethod);
 
 	context = get_context ();
 	sp_args = sp = (stackval*)context->stack_pointer;
@@ -2461,6 +2514,15 @@ resolve_code_type (InterpMethod *imethod)
 	MonoMethod *method = imethod->method;
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 	InterpMethodCodeType code_type = IMETHOD_CODE_INTERP;
+
+	/*
+	 * The only chance to arm a method nothing ever asked the backend for: its
+	 * callers reached it by interpreting, so no stub was ever published for it
+	 * and nothing else here has seen it. This runs once per method, on the
+	 * first call, which is also when the first call is counted.
+	 */
+	if (imethod->tier_countdown == 0)
+		interp_arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (method));
 
 	if (mono_interp_jit_call_marshallable (method, sig)
 	    && mono_jit_method_is_compiled (imethod->domain, method))
@@ -3865,6 +3927,15 @@ call:
 					}
 				}
 			}
+
+			/*
+			 * The callee is about to be interpreted, so this is the call that
+			 * counts towards compiling it. Nothing else sees these: a call
+			 * between two interpreted methods reaches the callee here and
+			 * touches no stub on the way.
+			 */
+			if (G_UNLIKELY (cmethod->tier_countdown > 0))
+				interp_tier_call (cmethod);
 
 			/*
 			 * Make a non-recursive call by loading the new interpreter state based on child frame,

@@ -116,3 +116,18 @@ mono_llvm_jit_interpret_methods (const char *filter)
 {
 	mono::set_interp_filter (filter);
 }
+
+int32_t
+mono_llvm_jit_tier0_calls (MonoMethod *method)
+{
+	if (!mono::runs_at_tier0 (method))
+		return 0;
+
+	return (int32_t) mono::tier1_threshold ();
+}
+
+void
+mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain)
+{
+	mono::MonoBackend::request_promotion (method, domain);
+}

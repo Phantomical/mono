@@ -54,6 +54,12 @@ public:
 	/// compiled it there.
 	static void *body_of (MonoDomain *domain, MonoMethod *method);
 
+	/// Ask for METHOD to be compiled in DOMAIN, replacing the tier running it.
+	///
+	/// Returns as soon as the work is queued, and returns just the same when it
+	/// could not be - a domain on its way out takes nothing new. Nothing retries.
+	static void request_promotion (MonoMethod *method, MonoDomain *domain);
+
 	/// Call VISIT with the jit info of each live body this engine compiled
 	/// METHOD into in DOMAIN, oldest first.
 	static void foreach_body (MonoDomain *domain, MonoMethod *method,
@@ -104,6 +110,15 @@ private:
 	/// redirected to on the first call through it.
 	llvm::Expected<void *> entry_point (DomainState &domain, MethodState &method,
 	                                    Entry entry);
+
+	/// Give METHOD a body and point its stubs at it, whether or not it already
+	/// has one.
+	///
+	/// With allow_tier0 the interpreter is offered the method first; promotion
+	/// passes false, which is what makes it a compile rather than a second trip
+	/// through the tier the method is already running at.
+	llvm::Expected<Compiled> compile_body (DomainState &domain, MethodState &method,
+	                                       bool allow_tier0);
 
 	void release_domain_impl (MonoDomain *domain);
 	void release_method_impl (MonoMethod *method);

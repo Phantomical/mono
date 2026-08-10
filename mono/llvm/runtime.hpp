@@ -125,6 +125,22 @@ void mono_llvm_jit_add_option (const char *opt);
 /// the interpreter to have been started, which that option also arranges.
 void mono_llvm_jit_interpret_methods (const char *filter);
 
+/// How many calls METHOD may take at tier 0 before it should be asked for as
+/// tier 1, or zero if it is not a candidate for promotion at all.
+///
+/// This is what the interpreter arms its per-method call counter with, so it is
+/// asked once per method rather than per call.
+int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
+
+/// Ask for METHOD to be compiled in DOMAIN, replacing whatever tier is running
+/// it now.
+///
+/// Returns immediately: the compile happens on a thread of its own and there is
+/// no way to wait for it or to ask what became of it. It may also simply not
+/// happen - a domain on its way out refuses the work - and nothing retries, so
+/// the method then stays at the tier it is at.
+void mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain);
+
 MONO_END_DECLS
 
 #endif

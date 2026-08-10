@@ -211,6 +211,12 @@ stub_get_imethod (MonoMethod *method, MonoError *error)
 	return NULL;
 }
 
+/* Not reached: nothing arms a counter on a method the interpreter never ran. */
+static void
+stub_arm_tier_counter (gpointer imethod, gint32 calls)
+{
+}
+
 static void
 stub_to_native_trampoline (gpointer addr, gpointer ccontext)
 {
