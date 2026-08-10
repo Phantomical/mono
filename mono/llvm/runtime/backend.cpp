@@ -4,6 +4,7 @@
 #include "compile-queue.hpp"
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
+#include "naming.hpp"
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -40,54 +41,6 @@ lazy_compile_failed ()
 	[[maybe_unused]] ssize_t written = write (2, msg, sizeof (msg) - 1);
 	fflush (nullptr);
 	_exit (1);
-}
-
-/// Whether a call can ever reach METHOD with a boxed receiver, so that this
-/// backend gives it an unboxing entry beside its ordinary one.
-///
-/// Every such call comes off a value type's vtable or its IMT, which is exactly
-/// where the runtime asks for the unboxing address. A method not implemented in
-/// IL is entered through code this backend did not generate; the runtime wraps
-/// those itself.
-bool
-publishes_unbox_entry (MonoMethod *method)
-{
-	MonoMethodSignature *sig = mono_method_signature_internal (method);
-
-	return !implemented_outside_il (method) && sig != nullptr && sig->hasthis
-	       && m_class_is_valuetype (method->klass);
-}
-
-/// Whether METHOD is entered from native code, and so needs a C-convention entry
-/// in front of its body and a stub of its own to publish it through: exactly the
-/// wrappers generated for the other side of the boundary to call, each of which
-/// sets the pinvoke flag on its own signature. A [DllImport] method sets it too,
-/// but it is not a wrapper - what stands behind it is the marshaling wrapper,
-/// which is entered like any other method.
-bool
-publishes_interop_entry (MonoMethod *method)
-{
-	MonoMethodSignature *sig = mono_method_signature_internal (method);
-
-	return sig != nullptr && sig->pinvoke != 0
-	       && method->wrapper_type != MONO_WRAPPER_NONE;
-}
-
-/// The suffix ENTRY's symbol carries. The body gets the plain name because it
-/// is the implementation; everything else hanging off a method is a suffix on
-/// it, filter bodies and the interop entry alike.
-llvm::StringRef
-entry_suffix (Entry entry)
-{
-	switch (entry) {
-	case Entry::body:
-		return "";
-	case Entry::interop:
-		return "$interop";
-	case Entry::unbox:
-		return "$unbox";
-	}
-	return "";
 }
 
 bool
@@ -203,7 +156,7 @@ struct MonoBackend::MethodState {
 	{
 	}
 
-	std::string name (Entry entry) const { return symbol + entry_suffix (entry).str (); }
+	std::string name (Entry entry) const { return symbol + stub_suffix (entry).str (); }
 
 	Stub &stub (Entry entry)
 	{
@@ -359,14 +312,8 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 	if (it != domain.methods.end ())
 		return it->second.get ();
 
-	char *printed = mono_method_full_name (method, TRUE);
-	char identity[32];
-
-	snprintf (identity, sizeof (identity), "@%p", (void *) method);
-
-	auto state = std::make_unique<MethodState> (method, std::string (printed) + identity);
-
-	g_free (printed);
+	auto state = std::make_unique<MethodState> (method,
+	                                            stub_symbol (method, Entry::body));
 
 	llvm::SmallVector<Entry, 3> entries = state->entries ();
 	llvm::SmallVector<std::pair<llvm::StringRef, void *>, 3> defs;

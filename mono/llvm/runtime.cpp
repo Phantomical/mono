@@ -32,6 +32,7 @@
 #include "stubs.hpp"
 #include "timing.hpp"
 #include "method-to-llvm.hpp"
+#include "runtime/naming.hpp"
 #include "verification.hpp"
 
 #include "mini.h"
@@ -564,153 +565,6 @@ dump_il (MonoMethod *method, MonoMethodHeader *header)
 	char *il = mono_disasm_code (nullptr, method, code, code + size);
 	fprintf (stderr, "%s\n", il);
 	g_free (il);
-}
-
-/// The chunk a symbol carries to make it one method's identity.
-///
-/// The printed name is for reading; the pointer is the identity. No name scheme
-/// is unique on its own - conversion operators overload on their return type,
-/// which no printed signature carries, and the runtime mints wrappers whose
-/// names are only as distinct as what they were generated from - and a symbol is
-/// one method's identity here.
-std::string
-identity_of (MonoMethod *method)
-{
-	char buf[32];
-
-	snprintf (buf, sizeof (buf), "@%p", (void *) method);
-	return buf;
-}
-
-/// The plain symbol: the method's stub, which is what the runtime is handed,
-/// what fills a vtable slot, and what every generated caller binds to. Every
-/// other symbol a method owns hangs a suffix off this one.
-std::string
-symbol_for_body (MonoMethod *method)
-{
-	char *name = mono_method_full_name (method, TRUE);
-	std::string symbol = std::string (name) + identity_of (method);
-
-	g_free (name);
-	return symbol;
-}
-
-/// The `$interop` symbol: the C-convention entry, for a wrapper generated to be
-/// entered from native code. Only a method publishes_interop_entry () selects
-/// has one, and for that method it is the address the runtime hands out.
-std::string
-symbol_for_interop (MonoMethod *method)
-{
-	return symbol_for_body (method) + "$interop";
-}
-
-/// The `$entry` symbol: the interop entry compiled beside a method's body.
-///
-/// This is a definition, not the stub above, and it needs a name of its own
-/// because the two share a module.
-std::string
-symbol_for_entry (MonoMethod *method)
-{
-	return symbol_for_body (method) + "$entry";
-}
-
-/// The `$unbox` symbol: the entry that steps a boxed receiver past the object
-/// header before entering the method. This is the stub - a value type's vtable
-/// slots are filled from it, so it has to survive a promotion the same way the
-/// ordinary entry does.
-std::string
-symbol_for_unbox (MonoMethod *method)
-{
-	return symbol_for_body (method) + "$unbox";
-}
-
-/// The `$unboxentry` symbol: the unboxing entry compiled beside a method's
-/// body. A definition rather than the stub above, for the same reason `$entry`
-/// is not `$interop`.
-std::string
-symbol_for_unbox_entry (MonoMethod *method)
-{
-	return symbol_for_body (method) + "$unboxentry";
-}
-
-/// Give every declaration in M that names another method's code the symbol this
-/// file publishes that entry under.
-///
-/// The translator marks each such declaration with the MonoMethod and leaves the
-/// naming alone, so this is the only place the two sides meet.
-Error
-bind_symbols (Module &m)
-{
-	return bind_method_symbols (
-		m, [] (MonoMethod *target, Entry entry) -> Expected<std::string> {
-			switch (entry) {
-			case Entry::interop:
-				return symbol_for_interop (target);
-			case Entry::unbox:
-				return symbol_for_unbox (target);
-			case Entry::body:
-				break;
-			}
-			return symbol_for_body (target);
-		});
-}
-
-/// SYMBOL as a profile or a debugger should print it: the method's readable
-/// name, keeping whatever suffix said which piece of the method this is.
-///
-/// The identity chunk is noise to a reader, and it moves between runs - which
-/// is what stops two profiles of the same program from being compared, or
-/// aggregated.
-std::string
-display_name (MonoMethod *method, StringRef symbol)
-{
-	std::string identity = identity_of (method);
-	size_t at = symbol.rfind (identity);
-
-	if (at == StringRef::npos)
-		return symbol.str ();
-
-	return symbol.take_front (at).str ()
-	       + symbol.drop_front (at + identity.size ()).str ();
-}
-
-/// Whether a call can ever reach METHOD with a boxed receiver, so that the
-/// method wants an unboxing entry beside its ordinary one.
-///
-/// Every such call comes off a value type's vtable or its IMT, which is
-/// exactly where the runtime asks for the unboxing address.
-bool
-wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig)
-{
-	return sig != nullptr && sig->hasthis && m_class_is_valuetype (method->klass);
-}
-
-/// Whether METHOD is entered from native code, and so needs a C-convention entry
-/// in front of its body and a stub of its own to publish it through.
-///
-/// That is exactly the wrappers generated for the other side of the boundary to
-/// call - runtime-invoke, native-to-managed, the vtfixup and thunk-invoke
-/// entries - each of which sets the pinvoke flag on its own signature. A
-/// [DllImport] method sets it too, but it is not a wrapper: what stands behind
-/// it is the marshaling wrapper, which is entered like any other method.
-bool
-publishes_interop_entry (MonoMethod *method)
-{
-	MonoMethodSignature *sig = mono_method_signature_internal (method);
-
-	return sig != nullptr && sig->pinvoke != 0
-	       && method->wrapper_type != MONO_WRAPPER_NONE;
-}
-
-/// Whether this backend gives METHOD an unboxing entry of its own, and so a
-/// stub to publish it through. A method not implemented in IL is entered
-/// through code this backend did not generate; the runtime wraps those itself.
-bool
-publishes_unbox_entry (MonoMethod *method)
-{
-	return !implemented_outside_il (method)
-	       && wants_unbox_entry (method,
-	                             mono_method_signature_internal (method));
 }
 
 /// Which methods --interp-tier0 selected, or null when it was not given. An
@@ -1350,7 +1204,7 @@ Backend::unbox_entry_of (MonoMethod *method)
 	}
 
 	Expected<void *> unbox =
-		(*state)->stubs->stub_address (symbol_for_unbox (method));
+		(*state)->stubs->stub_address (stub_symbol (method, Entry::unbox));
 
 	if (!unbox) {
 		consumeError (unbox.takeError ());
@@ -1412,7 +1266,7 @@ Backend::remember (DomainState &state, MonoMethod *method,
 	for (size_t i = 0; i < compiled.linker_stubs.size (); ++i) {
 		auto &[code, size] = compiled.linker_stubs[i];
 		std::string name =
-			symbol_for_body (method) + "$linker_stubs" + std::to_string (i);
+			stub_symbol (method, Entry::body) + "$linker_stubs" + std::to_string (i);
 		MonoJitInfo *stub_jinfo = register_stub_jinfo (
 			state.domain, method, const_cast<uint8_t *> (code), size, name);
 
@@ -1493,13 +1347,13 @@ Backend::free_method (MonoMethod *method)
 			 * colliding with this one's.
 			 */
 			if (state.defined.erase (method) != 0) {
-				release.stubs.push_back (symbol_for_body (method));
+				release.stubs.push_back (stub_symbol (method, Entry::body));
 				if (publishes_interop_entry (method))
 					release.stubs.push_back (
-						symbol_for_interop (method));
+						stub_symbol (method, Entry::interop));
 				if (publishes_unbox_entry (method))
 					release.stubs.push_back (
-						symbol_for_unbox (method));
+						stub_symbol (method, Entry::unbox));
 			}
 			state.compiled.erase (method);
 			state.superseded.erase (method);
@@ -1748,7 +1602,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		timing::Scope timed (timing::Phase::ctxnew);
 
 		context = std::make_unique<LLVMContext> ();
-		module = std::make_unique<Module> (symbol_for_body (method), *context);
+		module = std::make_unique<Module> (stub_symbol (method, Entry::body), *context);
 	}
 
 	/*
@@ -1826,7 +1680,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	 * and the entry follows it without being rebuilt. Translating the method
 	 * declared it, so resolve () above has published that stub.
 	 */
-	Expected<void *> body_stub = state.stubs->stub_address (symbol_for_body (method));
+	Expected<void *> body_stub = state.stubs->stub_address (stub_symbol (method, Entry::body));
 
 	if (!body_stub)
 		return body_stub.takeError ();
@@ -1843,7 +1697,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	std::string legacy_entry;
 
 	if (publishes_interop_entry (method)) {
-		legacy_entry = symbol_for_entry (method);
+		legacy_entry = definition_symbol (method, Entry::interop);
 		arch::create_legacy_entry_thunk (*module, legacy_entry, *function,
 		                                 legacy_call_flavor (sig), body_address);
 	}
@@ -1858,7 +1712,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	std::string unbox_entry;
 
 	if (wants_unbox_entry (method, sig)) {
-		unbox_entry = symbol_for_unbox_entry (method);
+		unbox_entry = definition_symbol (method, Entry::unbox);
 		arch::create_unbox_entry (*module, unbox_entry, *function, body_address,
 		                          MONO_ABI_SIZEOF (MonoObject));
 	}
@@ -2161,7 +2015,7 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 		return compiled->entry;
 	};
 
-	Expected<void *> body = build (symbol_for_body (method));
+	Expected<void *> body = build (stub_symbol (method, Entry::body));
 
 	if (!body)
 		return body.takeError ();
@@ -2191,7 +2045,7 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 
 	auto thunk_context = std::make_unique<LLVMContext> ();
 	auto thunk_module =
-		std::make_unique<Module> (symbol_for_interop (method), *thunk_context);
+		std::make_unique<Module> (stub_symbol (method, Entry::interop), *thunk_context);
 
 	std::vector<ExternalSymbol> thunk_externals;
 	MethodLLVMEmitter declarer (thunk_module.get (), cfg.get (), method,
@@ -2206,7 +2060,7 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 	if (method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (method);
 
-	std::string thunk_name = symbol_for_interop (method);
+	std::string thunk_name = stub_symbol (method, Entry::interop);
 
 	arch::create_legacy_entry_thunk (*thunk_module, thunk_name, *target,
 	                                 legacy_call_flavor (sig));
@@ -2446,7 +2300,7 @@ Backend::counted_entries (DomainState &state, MonoMethod *method,
 
 	for (size_t i = 0; i < entries.size (); ++i) {
 		void *carry_on = entries[i];
-		std::string name = symbol_for_body (method) + "$promote."
+		std::string name = stub_symbol (method, Entry::body) + "$promote."
 		                   + std::to_string (i);
 		Expected<void *> promote = state.stubs->create_lazy_entry (
 			name, [this, owner, method, carry_on] () -> Expected<void *> {
@@ -2473,7 +2327,7 @@ Backend::counted_entries (DomainState &state, MonoMethod *method,
 	for (size_t i = 0; i < thunks->size (); ++i)
 		register_stub_jinfo (state.domain, method, (*thunks)[i],
 		                     arch::counter_thunk_code_size,
-		                     symbol_for_body (method) + "$count."
+		                     stub_symbol (method, Entry::body) + "$count."
 		                             + std::to_string (i));
 
 	return thunks;
@@ -2577,15 +2431,15 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 		mini_install_pending_breakpoints (state.domain,
 		                                  jinfo_get_method (published), published);
 
-	if (Error err = state.stubs->redirect_stub (symbol_for_body (method), code->body))
+	if (Error err = state.stubs->redirect_stub (stub_symbol (method, Entry::body), code->body))
 		return give_up (std::move (err));
 	if (publishes_interop_entry (method)) {
-		if (Error err = state.stubs->redirect_stub (symbol_for_interop (method),
+		if (Error err = state.stubs->redirect_stub (stub_symbol (method, Entry::interop),
 		                                            code->entry))
 			return give_up (std::move (err));
 	}
 	if (publishes_unbox_entry (method)) {
-		if (Error err = state.stubs->redirect_stub (symbol_for_unbox (method),
+		if (Error err = state.stubs->redirect_stub (stub_symbol (method, Entry::unbox),
 		                                          code->unbox))
 			return give_up (std::move (err));
 	}
@@ -2678,10 +2532,10 @@ Backend::interp_entries (DomainState &state, MonoMethod *method)
 	 * by the method, so both of them take this branch or neither does.
 	 */
 	if (Error err =
-	            state.stubs->redirect_stub (symbol_for_body (method), entries.body))
+	            state.stubs->redirect_stub (stub_symbol (method, Entry::body), entries.body))
 		return std::move (err);
 	if (entries.unbox != nullptr) {
-		if (Error err = state.stubs->redirect_stub (symbol_for_unbox (method),
+		if (Error err = state.stubs->redirect_stub (stub_symbol (method, Entry::unbox),
 		                                          entries.unbox))
 			return std::move (err);
 	}
@@ -2856,7 +2710,7 @@ Backend::dispatcher (DomainState &state, MonoMethod *method)
 		return runtime_error (metadata_error);
 
 	auto context = std::make_unique<LLVMContext> ();
-	std::string name = symbol_for_body (method) + "$dispatch";
+	std::string name = stub_symbol (method, Entry::body) + "$dispatch";
 	auto module = std::make_unique<Module> (name, *context);
 
 	std::vector<ExternalSymbol> externals;
@@ -3015,7 +2869,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 	 */
 	if (publishes_interop_entry (method)) {
 		if (Error err = state.stubs->create_lazy_stub (
-		        symbol_for_interop (method),
+		        stub_symbol (method, Entry::interop),
 		        [this, owner, method, bindable, raising] () -> Expected<void *> {
 			        if (!bindable ()) {
 				        Expected<void *> thunk =
@@ -3038,7 +2892,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 
 	// Keyed on the method, so one body can stand for many of them.
 	if (Error err = state.stubs->create_lazy_stub (
-	        symbol_for_body (method),
+	        stub_symbol (method, Entry::body),
 	        [this, owner, method, bindable, raising] () -> Expected<void *> {
 		        if (!bindable ()) {
 			        Expected<void *> call = dispatcher (*owner, method);
@@ -3065,7 +2919,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 	 */
 	if (publishes_unbox_entry (method)) {
 		if (Error err = state.stubs->create_lazy_stub (
-		        symbol_for_unbox (method),
+		        stub_symbol (method, Entry::unbox),
 		        [this, owner, method, raising] () -> Expected<void *> {
 			        Expected<Compiled> code =
 				        ensure_entries (*owner, method);
@@ -3174,8 +3028,8 @@ Backend::publish (DomainState &state, MonoMethod *method)
 
 	/* Whichever thread reserved them, these are the addresses it reserved. */
 	bool interop = publishes_interop_entry (method);
-	std::string entry_name = interop ? symbol_for_interop (method) : std::string ();
-	std::string body_name = symbol_for_body (method);
+	std::string entry_name = interop ? stub_symbol (method, Entry::interop) : std::string ();
+	std::string body_name = stub_symbol (method, Entry::body);
 	Expected<void *> body = state.stubs->stub_address (body_name);
 	if (!body)
 		return body;
@@ -3192,7 +3046,7 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	}
 
 	bool unboxed = publishes_unbox_entry (method);
-	std::string unbox_name = unboxed ? symbol_for_unbox (method) : std::string ();
+	std::string unbox_name = unboxed ? stub_symbol (method, Entry::unbox) : std::string ();
 	void *unbox = nullptr;
 
 	if (unboxed) {
