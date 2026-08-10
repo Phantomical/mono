@@ -7,6 +7,7 @@
 #define MONO_LLVM_RUNTIME_TRANSLATE_HPP
 
 #include "jit.hpp"
+#include "method-symbols.hpp"
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/StringRef.h>
@@ -27,6 +28,39 @@ struct Compiled {
 	void *body = nullptr;
 	void *unbox = nullptr;
 	MonoJitInfo *jinfo = nullptr;
+
+	/// Where one of the method's doors leads, or null when it has no such door.
+	void *at (Entry which) const
+	{
+		switch (which) {
+		case Entry::body:
+			return body;
+		case Entry::interop:
+			return entry;
+		case Entry::unbox:
+			return unbox;
+		}
+		return body;
+	}
+};
+
+/// Run as a given domain for as long as this is alive.
+///
+/// Translation resolves everything per-domain against the domain the code will
+/// run as, so the thread has to be that domain while it happens - and the
+/// restore has to survive every way out of the scope, which is why it is a
+/// guard rather than a call on each return path.
+class DomainScope {
+public:
+	explicit DomainScope (MonoDomain *domain);
+	~DomainScope ();
+
+	DomainScope (const DomainScope &) = delete;
+	DomainScope &operator= (const DomainScope &) = delete;
+
+private:
+	MonoDomain *entered_;
+	MonoDomain *wanted_;
 };
 
 /// What an engine has to supply for a method to be translated into it.
@@ -58,6 +92,17 @@ struct TranslationTarget {
 	/// handed back unchanged.
 	llvm::function_ref<llvm::Expected<Compiled> (llvm::Error)> recover;
 };
+
+/// Compile a method, whatever it takes: the marshal wrapper for an array
+/// accessor, mini's own code for a method not implemented in IL, and otherwise a
+/// translation of its IL.
+///
+/// This is where the profiler's compilation of a method begins, so every path
+/// out of it raises exactly one end - a consumer pairing the two would otherwise
+/// carry an open span for the rest of the process.
+llvm::Expected<Compiled> translate_and_compile (const TranslationTarget &target,
+                                                MonoMethod *method,
+                                                MonoJitInfo **published);
 
 /// Translate a method's IL, compile what comes out, and register the jit info
 /// for the body and for every other function the module defines.

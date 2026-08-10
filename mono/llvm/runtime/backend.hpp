@@ -3,6 +3,7 @@
 
 #include "compile-queue.hpp"
 #include "method-symbols.hpp"
+#include "translate.hpp"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
@@ -22,7 +23,7 @@ class MonoBackend {
 private:
 	static MonoBackend *instance;
 
-	struct Compiled;
+	using Compiled = mono::Compiled;
 	struct Publication;
 	struct DomainState;
 	struct MethodState;

@@ -17,6 +17,8 @@
 #include "stubs.hpp"
 #include "util/lock.hpp"
 #include "builtins.hpp"
+#include "translate.hpp"
+#include <optional>
 #include "mono/metadata/appdomain.h"
 
 namespace mono {
@@ -67,18 +69,6 @@ MonoBackend::get ()
 
 	return instance;
 }
-
-/// Where one method's code ended up: the body every caller reaches, the C entry
-/// where the method is one native code enters, and - for an instance method of a
-/// value type - the unboxing entry a call off that value type's vtable comes in
-/// through. JINFO is the body's record, and is null for a method mini compiled
-/// instead.
-struct MonoBackend::Compiled {
-	void *entry;
-	void *body;
-	void *unbox = nullptr;
-	MonoJitInfo *jinfo = nullptr;
-};
 
 /// What publishing a method handed the rest of the runtime: the
 /// address it was handed, and the trampoline jit-info record each of the
@@ -133,6 +123,10 @@ struct MonoBackend::MethodState {
 	void *thunk_tramp = nullptr;
 	void *c_thunk_tramp = nullptr;
 	void *unbox_tramp = nullptr;
+
+	/// Where this method's code ended up, once something has asked for it.
+	/// Guarded by the engine's lock.
+	std::optional<Compiled> code;
 
 	MethodState (MonoMethod *method, std::string symbol)
 	    : method (method), symbol (std::move (symbol))
@@ -385,12 +379,69 @@ MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
 }
 
 llvm::Expected<void *>
-MonoBackend::entry_point (DomainState &, MethodState &method, Entry)
+MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 {
-	return llvm::createStringError (llvm::inconvertibleErrorCode (),
-	                                "the compile path is not implemented yet, so %s "
-	                                "cannot be entered",
-	                                method.symbol.c_str ());
+	MONO_LOCK (mutex_)
+	{
+		if (method.code)
+			return method.code->at (entry);
+	}
+
+	/*
+	 * Materialize as the domain the code is for, not as whatever the calling
+	 * thread happens to be running as: a stub fires under the thread's current
+	 * domain, and AppDomain:InvokeInDomain switches that before calling. An
+	 * address baked in from the wrong domain is a pointer into another domain's
+	 * vtables and statics, live until that domain unloads under it.
+	 */
+	DomainScope entered (domain.domain);
+	MonoJitInfo *published = nullptr;
+
+	/* Named: function_ref does not own what it points at. */
+	auto publish_callee = [&] (MonoMethod *callee) -> llvm::Error {
+		return publish (domain, callee).takeError ();
+	};
+	auto stub_address = [&] (llvm::StringRef name) -> llvm::Expected<void *> {
+		if (std::optional<Stub> stub = domain.stub_table->find (name))
+			return stub->code ();
+
+		return llvm::createStringError (llvm::inconvertibleErrorCode (),
+		                                "no stub is published as %s",
+		                                name.str ().c_str ());
+	};
+	/* Nothing is freed yet, so nothing has to be remembered to free it. */
+	auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
+	/*
+	 * No stand-in body to fall back to yet, so a metadata failure is raised as
+	 * itself rather than deferred to the call that would have used it.
+	 */
+	auto keep = [] (llvm::Error failure) -> llvm::Expected<Compiled> {
+		return std::move (failure);
+	};
+
+	TranslationTarget target { domain.jit.get (), domain.domain, publish_callee,
+		                   stub_address, note, keep };
+
+	llvm::Expected<Compiled> code =
+		translate_and_compile (target, method.method, &published);
+
+	if (!code)
+		return code.takeError ();
+
+	/*
+	 * Every entry, not just the one asked for: the stubs are redirected together
+	 * so that whichever door a caller came in through it lands on this compile.
+	 */
+	for (Entry each : method.entries ())
+		if (void *address = code->at (each))
+			method.stub (each).redirect (address);
+
+	MONO_LOCK (mutex_)
+	{
+		method.code = *code;
+	}
+
+	return code->at (entry);
 }
 
 llvm::Expected<MonoBackend::DomainState *>

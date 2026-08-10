@@ -1126,67 +1126,6 @@ Expected<Backend::Compiled>
 Backend::translate_and_compile (DomainState &state, MonoMethod *method,
                                 MonoJitInfo **published)
 {
-	*published = nullptr;
-
-	/*
-	 * Array Get/Set/Address have no body and no icall - every call site
-	 * lowers them inline. The compilable form, for the runtime paths that
-	 * need the method itself, is the marshal wrapper, whose inner call to
-	 * the accessor lowers the same way.
-	 */
-	if (m_class_get_rank (method->klass) > 0
-	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
-	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
-		method = mono_marshal_get_array_accessor_wrapper (method);
-
-	if (implemented_outside_il (method)) {
-		ERROR_DECL (compile_error);
-		void *code = mono_jit_compile_method (method, compile_error);
-
-		if (code == nullptr)
-			return runtime_error (compile_error);
-
-		/*
-		 * mini's code is the legacy convention; generated code declares such
-		 * a method against the plain symbol and lowers its calls, so nothing
-		 * ever reaches the body stub expecting fastcc. The profiler hears
-		 * about this one from mono_jit_compile_method_with_opt (), which
-		 * reports the declaration against the wrapper it built - and that
-		 * wrapper came back through here and bracketed itself.
-		 */
-		return Compiled { code, code };
-	}
-
-	/*
-	 * This is the one place a method is translated, so it is where the
-	 * profiler's compilation of it begins. Exactly one end follows every
-	 * begin: a consumer pairing the two would otherwise carry an open span for
-	 * the rest of the process. A method whose metadata would not load gets a
-	 * stand-in body that raises instead of a translation, and that is a failed
-	 * compile however it is served. The successful end is raised by the caller,
-	 * once the method can be looked up - PUBLISHED being non-null is what says
-	 * one is owed.
-	 */
-	MONO_PROFILER_RAISE (jit_begin, (method));
-
-	Expected<Compiled> code = translate_body (state, method, published);
-
-	if (!code || *published == nullptr) {
-		*published = nullptr;
-		MONO_PROFILER_RAISE (jit_failed, (method));
-	}
-
-	return code;
-}
-
-Expected<Backend::Compiled>
-Backend::translate_body (DomainState &state, MonoMethod *method,
-                         MonoJitInfo **published)
-{
-	/*
-	 * Named, because function_ref does not own what it points at: built inline
-	 * in the initializer below, each of these would be dead before the call.
-	 */
 	auto publish_callee = [&] (MonoMethod *callee) -> Error {
 		return publish (state, callee).takeError ();
 	};
@@ -1203,7 +1142,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	TranslationTarget target { state.jit.get (), state.domain, publish_callee,
 		                       stub_address, note, recover_failure };
 
-	return mono::translate_body (target, method, published);
+	return mono::translate_and_compile (target, method, published);
 }
 
 /*
