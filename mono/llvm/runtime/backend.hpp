@@ -87,6 +87,14 @@ private:
 	/// been already.
 	llvm::Error bind_externals (DomainState &domain, llvm::Module &m);
 
+	/// The per-call dispatcher METHOD's body stub binds to when its first
+	/// caller arrived from another domain.
+	llvm::Expected<void *> dispatcher (DomainState &domain, MethodState &method);
+
+	/// The runtime helper behind a dispatcher: the current domain's body for
+	/// METHOD, compiling it now if this domain has not yet.
+	static void *body_for_current_domain (MonoMethod *method);
+
 	/// Where ENTRY of METHOD has ended up, compiling the method if it has not
 	/// been compiled yet. This is what the stub in front of that entry is
 	/// redirected to on the first call through it.

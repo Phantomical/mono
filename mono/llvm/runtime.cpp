@@ -34,6 +34,7 @@
 #include "method-to-llvm.hpp"
 #include "runtime-legacy.hpp"
 #include "runtime/engine.hpp"
+#include "runtime/dispatcher.hpp"
 #include "runtime/externals.hpp"
 #include "runtime/thrower.hpp"
 #include "runtime/translate.hpp"
@@ -1838,97 +1839,17 @@ Backend::dispatcher (DomainState &state, MonoMethod *method)
 			return it->second;
 	}
 
-	/*
-	 * The dispatcher borrows the fastcc body's exact type - signature,
-	 * convention, attributes - from a declaration; the accessor substitution
-	 * mirrors translate_and_compile (), whose compiled body is what the helper
-	 * will return. The declaration itself goes back out of the module: the
-	 * forward is through the helper's answer, never through the stub, or the
-	 * dispatcher would bounce off its own binding forever.
-	 */
-	MonoMethod *declared = method;
+	auto note = [&] (const CompiledMethod &code, MonoJitInfo *jinfo) {
+		remember (state, method, code, jinfo);
+	};
+	Expected<void *> built =
+		build_dispatcher (*state.jit, state.domain, method, note);
 
-	if (m_class_get_rank (declared->klass) > 0
-	    && (declared->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
-	    && (declared->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
-		declared = mono_marshal_get_array_accessor_wrapper (declared);
-
-	ERROR_DECL (metadata_error);
-	MinimalCompile cfg (declared, state.domain, metadata_error);
-
-	if (cfg.get ()->header == nullptr)
-		return runtime_error (metadata_error);
-
-	auto context = std::make_unique<LLVMContext> ();
-	std::string name = stub_symbol (method, Entry::body) + "$dispatch";
-	auto module = std::make_unique<Module> (name, *context);
-
-	std::vector<ExternalSymbol> externals;
-	MethodLLVMEmitter declarer (module.get (), cfg.get (), declared, &externals);
-	Expected<Function *> target = declarer.declare (declared);
-
-	if (!target)
-		return target.takeError ();
-
-	FunctionType *type = (*target)->getFunctionType ();
-	CallingConv::ID conv = (*target)->getCallingConv ();
-	AttributeList attrs = (*target)->getAttributes ();
-
-	if ((*target)->use_empty ())
-		(*target)->eraseFromParent ();
-
-	Function *disp =
-		Function::Create (type, Function::ExternalLinkage, name, module.get ());
-
-	disp->setCallingConv (conv);
-	disp->setAttributes (attrs);
-
-	IRBuilder<> builder (BasicBlock::Create (*context, "", disp));
-	PointerType *ptr = PointerType::getUnqual (*context);
-	FunctionCallee helper = module->getOrInsertFunction (
-		"mono_llvm_jit_body_for_current_domain",
-		FunctionType::get (ptr, { ptr }, false));
-	Value *self = builder.CreateIntToPtr (
-		builder.getInt64 ((uint64_t) (uintptr_t) method), ptr);
-	Value *body = builder.CreateCall (helper, { self });
-
-	std::vector<Value *> args;
-
-	for (Argument &arg : disp->args ())
-		args.push_back (&arg);
-
-	CallInst *forward = builder.CreateCall (type, body, args);
-
-	forward->setCallingConv (conv);
-	forward->setAttributes (attrs);
-	forward->setTailCallKind (CallInst::TCK_MustTail);
-
-	if (type->getReturnType ()->isVoidTy ())
-		builder.CreateRetVoid ();
-	else
-		builder.CreateRet (forward);
-
-	if (Error err = bind_symbols (*module))
-		return std::move (err);
-
-	Expected<CompiledMethod> compiled = state.jit->compile (
-		ThreadSafeModule (std::move (module),
-		                  ThreadSafeContext (std::move (context))),
-		name);
-	if (!compiled)
-		return compiled.takeError ();
-
-	remember (state, method, *compiled, nullptr);
-
-	if (is_jit_trace_enabled ())
-		fprintf (stderr,
-		         "[llvm-jit] %s dispatches per call (owner %s, first reached "
-		         "from %s)\n",
-		         name.c_str (), state.domain->friendly_name,
-		         mono_domain_get ()->friendly_name);
+	if (!built)
+		return built;
 
 	std::lock_guard<std::mutex> lock (mutex_);
-	return state.dispatchers[method] = compiled->entry;
+	return state.dispatchers[method] = *built;
 }
 
 void *

@@ -17,6 +17,7 @@
 #include "stubs.hpp"
 #include "util/lock.hpp"
 #include "builtins.hpp"
+#include "dispatcher.hpp"
 #include "stub-jinfo.hpp"
 #include "thrower.hpp"
 #include "verification.hpp"
@@ -143,6 +144,10 @@ struct MonoBackend::MethodState {
 	/// of. Only filled for a dynamic method; nothing else is ever freed.
 	Owned owned;
 
+	/// The per-call dispatcher this method's body stub got instead of a direct
+	/// binding, when its first caller arrived from another domain.
+	void *dispatch = nullptr;
+
 	/*
 	 * The entries this method was actually published under, recorded rather
 	 * than recomputed. entries () reads the method's signature, and by the time
@@ -261,6 +266,15 @@ struct MonoBackend::DomainState {
 				return std::move (err);
 		}
 
+		/*
+		 * Not in the builtins list: its address is a member of this class, which
+		 * a list assembled without reference to the engine cannot name.
+		 */
+		if (auto err = state->jit->register_symbol (
+			    "mono_llvm_jit_body_for_current_domain",
+			    (void *) &MonoBackend::body_for_current_domain))
+			return std::move (err);
+
 		if (is_jit_trace_enabled ()) {
 			llvm::errs () << llvm::format (
 				"[llvm-jit] %zu runtime builtins registered\n", builtins.size ());
@@ -368,6 +382,28 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 	for (Entry entry : entries) {
 		llvm::Expected<void *> trampoline = domain.callbacks->reserve (
 			[this, &domain, raw, entry] () -> void * {
+				/*
+				 * The thread that fires a stub is not necessarily
+				 * running as the domain that owns it, so binding here
+				 * can weld one domain's copy into another's code. The
+				 * body goes to a dispatcher instead; the C entry keeps
+				 * a thunk of its own, because a caller arriving there
+				 * speaks C and a dispatcher forwards in this engine's
+				 * convention.
+				 */
+				if (entry == Entry::body
+				    && !bindable (domain.domain, raw->method)) {
+					llvm::Expected<void *> forward =
+						dispatcher (domain, *raw);
+
+					if (forward) {
+						raw->stub (entry).redirect (*forward);
+						return *forward;
+					}
+					llvm::logAllUnhandledErrors (forward.takeError (),
+					                             llvm::errs (), "mono: ");
+				}
+
 				llvm::Expected<void *> code = entry_point (domain, *raw, entry);
 
 				if (code) {
@@ -469,6 +505,75 @@ MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
 				return state.takeError ();
 			return (*state)->name (entry);
 		});
+}
+
+llvm::Expected<void *>
+MonoBackend::dispatcher (DomainState &domain, MethodState &method)
+{
+	MONO_LOCK (mutex_)
+	{
+		if (method.dispatch != nullptr)
+			return method.dispatch;
+	}
+
+	auto note = [&] (const CompiledMethod &compiled, MonoJitInfo *jinfo) {
+		if (!method.method->dynamic)
+			return;
+
+		MONO_LOCK (mutex_)
+		{
+			if (compiled.dylib != nullptr)
+				method.owned.dylibs.push_back (compiled.dylib);
+			if (jinfo != nullptr)
+				method.owned.jinfos.push_back (jinfo);
+		}
+	};
+
+	llvm::Expected<void *> built =
+		build_dispatcher (*domain.jit, domain.domain, method.method, note);
+
+	if (!built)
+		return built;
+
+	MONO_LOCK (mutex_)
+	{
+		method.dispatch = *built;
+	}
+
+	return *built;
+}
+
+/*
+ * A dispatcher is the only caller, so the engine exists. Having no state for the
+ * domain being called into is not something the program could be told about -
+ * there is no linker to compile the telling.
+ */
+void *
+MonoBackend::body_for_current_domain (MonoMethod *method)
+{
+	llvm::Expected<DomainState *> domain = instance->state ();
+
+	if (!domain)
+		llvm::report_fatal_error (llvm::Twine ("no domain state for a dispatched call: ")
+		                                  + llvm::toString (domain.takeError ()),
+		                          false);
+
+	llvm::Expected<MethodState *> published = instance->publish (**domain, method);
+
+	if (!published)
+		llvm::report_fatal_error (llvm::Twine ("a dispatched method could not be published: ")
+		                                  + llvm::toString (published.takeError ()),
+		                          false);
+
+	llvm::Expected<void *> body =
+		instance->entry_point (**domain, **published, Entry::body);
+
+	if (!body)
+		llvm::report_fatal_error (llvm::Twine ("a dispatched method failed to compile: ")
+		                                  + llvm::toString (body.takeError ()),
+		                          false);
+
+	return *body;
 }
 
 llvm::Expected<void *>
