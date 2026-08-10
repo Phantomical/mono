@@ -424,8 +424,6 @@ private:
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig,
 	                                                               bool native = false);
 	static void mark_legacy_call (llvm::CallBase *call, MonoMethodSignature *sig);
-	static void mark_legacy_entry_call (llvm::CallBase *call, MonoMethod *method,
-	                                    MonoMethodSignature *sig);
 
 	llvm::Expected<llvm::Type *> convert_type (MonoType *t, bool native = false);
 	llvm::Expected<llvm::Type *> convert_vtype (MonoType *t, bool native = false);
@@ -639,10 +637,18 @@ private:
 	llvm::Error emit_dup (MonoIrBuilder &builder);
 	llvm::Error emit_pop ();
 
+	/// Where a call through a pointer returns a value too wide for the registers:
+	/// HIDDEN is what it points at and AT which parameter carries it. Given only
+	/// for a site entered in this backend's own convention, because only the
+	/// emitter knows which those are - one still bound for LegacyAbiPass must
+	/// arrive without the pointer, and says so by leaving HIDDEN null.
+	///
+	/// A direct callee answers for itself and ignores both.
 	llvm::Value *emit_protected_call (
 		MonoIrBuilder &builder, llvm::FunctionCallee callee,
 		llvm::ArrayRef<llvm::Value *> args,
-		llvm::function_ref<void (llvm::CallBase *)> describe_site = {});
+		llvm::function_ref<void (llvm::CallBase *)> describe_site = {},
+		llvm::Type *hidden = nullptr, unsigned at = 0);
 
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
 	llvm::Expected<MonoMethodSignature *> call_site_signature (MonoMethod *target,
@@ -677,7 +683,8 @@ private:
 	                            llvm::ArrayRef<llvm::Value *> args,
 	                            llvm::CallInst::TailCallKind kind, size_t arg_slots,
 	                            llvm::Function *declaration,
-	                            llvm::function_ref<void (llvm::CallBase *)> describe_site);
+	                            llvm::function_ref<void (llvm::CallBase *)> describe_site,
+	                            bool natural = false);
 	llvm::Error emit_call (MonoIrBuilder &builder, uint32_t token, bool is_virtual);
 	llvm::Error emit_ldftn (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token);
@@ -930,17 +937,17 @@ int vararg_fixed_params (MonoMethodSignature *sig);
 /// finding a receiver there.
 arch::LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
 
-/// The flavor of the code the runtime publishes for METHOD, whose signature is
-/// SIG.
+/// Whether the address the runtime publishes for METHOD is a C function this
+/// backend did not generate.
 ///
 /// A method implemented outside IL declares a pinvoke signature - the loader
-/// sets that flag for every icall and every DllImport - but the address behind
-/// its symbol is almost never a C function: it is the marshaling wrapper the
-/// runtime builds around it, a managed method that speaks mini's convention.
+/// sets that flag for every icall and every DllImport - but what stands behind
+/// its symbol is almost always the marshaling wrapper the runtime builds around
+/// it, which is a method this backend compiles and publishes like any other.
 /// The one exception is an icall registered as needing no wrapper at all, whose
 /// published address really is the C function. So the method, not its
 /// signature, is what says which convention its entry speaks.
-arch::LegacyFlavor legacy_entry_flavor (MonoMethod *method, MonoMethodSignature *sig);
+bool entered_in_c (MonoMethod *method);
 
 /// EXTERNALS, when given, collects the symbols the emitted module leaves for the
 /// engine to resolve. BP_SWITCH, when given, receives the body's soft-debugger

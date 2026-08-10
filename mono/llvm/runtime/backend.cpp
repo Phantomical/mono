@@ -67,8 +67,8 @@ entry_suffix (Entry entry)
 	switch (entry) {
 	case Entry::body:
 		return "";
-	case Entry::legacy:
-		return "$legacy";
+	case Entry::interop:
+		return "$interop";
 	case Entry::unbox:
 		return "$unbox";
 	}
@@ -196,7 +196,7 @@ struct MonoBackend::MethodState {
 		switch (entry) {
 		case Entry::body:
 			return thunk;
-		case Entry::legacy:
+		case Entry::interop:
 			return c_thunk;
 		case Entry::unbox:
 			return unbox_thunk;
@@ -209,7 +209,7 @@ struct MonoBackend::MethodState {
 		switch (entry) {
 		case Entry::body:
 			return thunk_tramp;
-		case Entry::legacy:
+		case Entry::interop:
 			return c_thunk_tramp;
 		case Entry::unbox:
 			return unbox_tramp;
@@ -221,7 +221,7 @@ struct MonoBackend::MethodState {
 	/// carved.
 	llvm::SmallVector<Entry, 3> entries () const
 	{
-		llvm::SmallVector<Entry, 3> all{Entry::body, Entry::legacy};
+		llvm::SmallVector<Entry, 3> all{Entry::body, Entry::interop};
 
 		if (publishes_unbox_entry (method))
 			all.push_back (Entry::unbox);
@@ -587,7 +587,7 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	if (!published)
 		return published.takeError ();
 
-	return (*published)->stub (Entry::legacy).code ();
+	return (*published)->stub (Entry::interop).code ();
 }
 
 } // namespace mono

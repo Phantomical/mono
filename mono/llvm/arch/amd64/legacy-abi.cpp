@@ -628,10 +628,58 @@ LegacyAbiPass::run (Module &m, ModuleAnalysisManager &)
 }
 
 Function *
-create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
-                           LegacyFlavor flavor, Value *through,
-                           unsigned this_adjust)
+create_unbox_entry (Module &m, StringRef name, Function *target, Value *through,
+                    unsigned adjust)
 {
+	LLVMContext &ctx = m.getContext ();
+	AttributeList target_attrs = target->getAttributes ();
+	SmallVector<AttributeSet, 8> params;
+
+	for (unsigned i = 0; i < target->arg_size (); ++i)
+		params.push_back (target_attrs.getParamAttrs (i));
+
+	Function *entry = Function::Create (target->getFunctionType (),
+	                                    GlobalValue::ExternalLinkage, name, m);
+
+	/*
+	 * The return and the parameters, and nothing of the function itself: the
+	 * body's own attributes say things about the body that are false here, and
+	 * `mono-has-eh-clauses` is the one that bites - the side channel would then
+	 * carry two records for one method and the LSDA could not be attributed.
+	 */
+	entry->setAttributes (
+		AttributeList::get (ctx, AttributeSet (), target_attrs.getRetAttrs (), params));
+	entry->setUWTableKind (UWTableKind::Default);
+
+	BasicBlock *bb = BasicBlock::Create (ctx, "entry", entry);
+	IRBuilder<> b (bb);
+	SmallVector<Value *, 8> args;
+
+	for (Argument &a : entry->args ())
+		args.push_back (&a);
+
+	/* The receiver is argument 0 of this convention, whatever else it carries. */
+	args[0] = b.CreateConstInBoundsGEP1_64 (b.getInt8Ty (), args[0], adjust);
+
+	CallInst *call = b.CreateCall (target->getFunctionType (), through, args);
+
+	call->setAttributes (
+		AttributeList::get (ctx, AttributeSet (), target_attrs.getRetAttrs (), params));
+	call->setTailCallKind (CallInst::TCK_MustTail);
+
+	if (call->getType ()->isVoidTy ())
+		b.CreateRetVoid ();
+	else
+		b.CreateRet (call);
+
+	return entry;
+}
+
+Function *
+create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
+                           LegacyFlavor flavor, Value *through)
+{
+
 	LLVMContext &ctx = m.getContext ();
 	const DataLayout &dl = m.getDataLayout ();
 	AttributeList target_attrs = target->getAttributes ();
@@ -745,14 +793,6 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 			break;
 		}
 	}
-
-	/*
-	 * Still the natural argument list, so the receiver is argument 0 whatever
-	 * the convention did with the rest of them.
-	 */
-	if (this_adjust != 0)
-		args[0] = b.CreateConstInBoundsGEP1_64 (b.getInt8Ty (), args[0],
-		                                        this_adjust);
 
 	/*
 	 * A slot of the thunk's own rather than whatever pointer this convention was

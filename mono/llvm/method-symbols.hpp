@@ -34,11 +34,12 @@ namespace mono {
 /// when its code changes, so that whichever door a caller came in through it
 /// lands on the current best body.
 enum class Entry {
-	/// The fastcc implementation, which is what generated code calls.
+	/// The method itself: what generated code calls, what the runtime is
+	/// handed, and what an escaped function pointer holds.
 	body,
-	/// The legacy-convention entry the runtime and escaped function pointers
-	/// come in through.
-	legacy,
+	/// The C-convention entry, which only a wrapper generated for native code
+	/// to enter has.
+	interop,
 	/// The entry a call off a value type's vtable or IMT arrives at, which
 	/// unboxes the receiver before continuing into the body.
 	unbox,

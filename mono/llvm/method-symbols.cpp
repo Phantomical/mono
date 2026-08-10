@@ -22,7 +22,7 @@ constexpr StringRef method_attribute = "mono-method";
 constexpr StringRef method_entry_attribute = "mono-method-entry";
 
 constexpr StringRef entry_body = "body";
-constexpr StringRef entry_legacy = "legacy";
+constexpr StringRef entry_interop = "interop";
 constexpr StringRef entry_unbox = "unbox";
 
 StringRef
@@ -31,8 +31,8 @@ word_for (Entry entry)
 	switch (entry) {
 	case Entry::body:
 		return entry_body;
-	case Entry::legacy:
-		return entry_legacy;
+	case Entry::interop:
+		return entry_interop;
 	case Entry::unbox:
 		return entry_unbox;
 	}
@@ -44,8 +44,8 @@ entry_for (StringRef word)
 {
 	if (word == entry_body)
 		return Entry::body;
-	if (word == entry_legacy)
-		return Entry::legacy;
+	if (word == entry_interop)
+		return Entry::interop;
 	if (word == entry_unbox)
 		return Entry::unbox;
 	return std::nullopt;

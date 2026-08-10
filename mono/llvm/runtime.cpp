@@ -599,12 +599,9 @@ identity_of (MonoMethod *method)
 	return buf;
 }
 
-/// The plain symbol: the fastcc body, which is the method's implementation and
-/// what generated callers bind to. Every other symbol a method owns hangs a
-/// suffix off this one.
-///
-/// create_method_decl () names methods the same way; the two must agree or a
-/// caller's reference never finds the stub.
+/// The plain symbol: the method's stub, which is what the runtime is handed,
+/// what fills a vtable slot, and what every generated caller binds to. Every
+/// other symbol a method owns hangs a suffix off this one.
 std::string
 symbol_for_body (MonoMethod *method)
 {
@@ -615,31 +612,29 @@ symbol_for_body (MonoMethod *method)
 	return symbol;
 }
 
-/// The `$legacy` symbol: the legacy-convention entry - the interop thunk - which
-/// is what the runtime, delegates and every escaped function pointer see. It is
-/// the stub every module binds to and the address publish () hands out.
+/// The `$interop` symbol: the C-convention entry, for a wrapper generated to be
+/// entered from native code. Only a method publishes_interop_entry () selects
+/// has one, and for that method it is the address the runtime hands out.
 std::string
-symbol_for_code (MonoMethod *method)
+symbol_for_interop (MonoMethod *method)
 {
-	return symbol_for_body (method) + "$legacy";
+	return symbol_for_body (method) + "$interop";
 }
 
-/// The `$entry` symbol: the legacy entry compiled beside a method's body.
+/// The `$entry` symbol: the interop entry compiled beside a method's body.
 ///
 /// This is a definition, not the stub above, and it needs a name of its own
-/// because the two share a module: a body that takes its own address emits the
-/// `$legacy` symbol and must get the stub, which survives every later recompile,
-/// rather than the copy sitting next to it.
+/// because the two share a module.
 std::string
 symbol_for_entry (MonoMethod *method)
 {
 	return symbol_for_body (method) + "$entry";
 }
 
-/// The `$unbox` symbol: the legacy entry that steps a boxed receiver past the
-/// object header before entering the method. This is the stub - a value type's
-/// vtable slots are filled from it, so it has to survive a promotion the same
-/// way the ordinary entry does.
+/// The `$unbox` symbol: the entry that steps a boxed receiver past the object
+/// header before entering the method. This is the stub - a value type's vtable
+/// slots are filled from it, so it has to survive a promotion the same way the
+/// ordinary entry does.
 std::string
 symbol_for_unbox (MonoMethod *method)
 {
@@ -648,7 +643,7 @@ symbol_for_unbox (MonoMethod *method)
 
 /// The `$unboxentry` symbol: the unboxing entry compiled beside a method's
 /// body. A definition rather than the stub above, for the same reason `$entry`
-/// is not `$legacy`.
+/// is not `$interop`.
 std::string
 symbol_for_unbox_entry (MonoMethod *method)
 {
@@ -666,8 +661,8 @@ bind_symbols (Module &m)
 	return bind_method_symbols (
 		m, [] (MonoMethod *target, Entry entry) -> Expected<std::string> {
 			switch (entry) {
-			case Entry::legacy:
-				return symbol_for_code (target);
+			case Entry::interop:
+				return symbol_for_interop (target);
 			case Entry::unbox:
 				return symbol_for_unbox (target);
 			case Entry::body:
@@ -705,6 +700,23 @@ bool
 wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig)
 {
 	return sig != nullptr && sig->hasthis && m_class_is_valuetype (method->klass);
+}
+
+/// Whether METHOD is entered from native code, and so needs a C-convention entry
+/// in front of its body and a stub of its own to publish it through.
+///
+/// That is exactly the wrappers generated for the other side of the boundary to
+/// call - runtime-invoke, native-to-managed, the vtfixup and thunk-invoke
+/// entries - each of which sets the pinvoke flag on its own signature. A
+/// [DllImport] method sets it too, but it is not a wrapper: what stands behind
+/// it is the marshaling wrapper, which is entered like any other method.
+bool
+publishes_interop_entry (MonoMethod *method)
+{
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	return sig != nullptr && sig->pinvoke != 0
+	       && method->wrapper_type != MONO_WRAPPER_NONE;
 }
 
 /// Whether this backend gives METHOD an unboxing entry of its own, and so a
@@ -1469,8 +1481,10 @@ Backend::free_method (MonoMethod *method)
 			 * colliding with this one's.
 			 */
 			if (state.defined.erase (method) != 0) {
-				release.stubs.push_back (symbol_for_code (method));
 				release.stubs.push_back (symbol_for_body (method));
+				if (publishes_interop_entry (method))
+					release.stubs.push_back (
+						symbol_for_interop (method));
 				if (publishes_unbox_entry (method))
 					release.stubs.push_back (
 						symbol_for_unbox (method));
@@ -1814,10 +1828,13 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		ConstantInt::get (Type::getInt64Ty (*context),
 		                  (uint64_t) (uintptr_t) *body_stub),
 		PointerType::get (*context, 0));
-	std::string legacy_entry = symbol_for_entry (method);
+	std::string legacy_entry;
 
-	arch::create_legacy_entry_thunk (*module, legacy_entry, *function,
-	                                 legacy_call_flavor (sig), body_address);
+	if (publishes_interop_entry (method)) {
+		legacy_entry = symbol_for_entry (method);
+		arch::create_legacy_entry_thunk (*module, legacy_entry, *function,
+		                                 legacy_call_flavor (sig), body_address);
+	}
 
 	/*
 	 * Reached off a value type's vtable, the method arrives with the boxed
@@ -1830,9 +1847,8 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 
 	if (wants_unbox_entry (method, sig)) {
 		unbox_entry = symbol_for_unbox_entry (method);
-		arch::create_legacy_entry_thunk (*module, unbox_entry, *function,
-		                                 legacy_call_flavor (sig), body_address,
-		                                 MONO_ABI_SIZEOF (MonoObject));
+		arch::create_unbox_entry (*module, unbox_entry, *function, body_address,
+		                          MONO_ABI_SIZEOF (MonoObject));
 	}
 
 	if (dumping (entry.c_str ()))
@@ -1882,9 +1898,9 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 			const_cast<uint8_t *> (extent.first));
 	}
 
-	if (entry_code == nullptr)
+	if (entry_code == nullptr && !legacy_entry.empty ())
 		return createStringError (inconvertibleErrorCode (),
-		                          "the linked object for %s defines no legacy "
+		                          "the linked object for %s defines no interop "
 		                          "entry", entry.c_str ());
 
 	Expected<MonoJitInfo *> jinfo = [&] {
@@ -1930,9 +1946,11 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 		return Error::success ();
 	};
 
-	if (Error err = register_side_body (entry_code, entry_code_size,
-	                                    CodeKind::AbiThunk, {}))
-		return std::move (err);
+	if (entry_code != nullptr) {
+		if (Error err = register_side_body (entry_code, entry_code_size,
+		                                    CodeKind::AbiThunk, {}))
+			return std::move (err);
+	}
 
 	if (unbox_code != nullptr) {
 		if (Error err = register_side_body (unbox_code, unbox_code_size,
@@ -1962,9 +1980,8 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	}
 
 	if (tracing ())
-		fprintf (stderr, "[llvm-jit] %s is at %p (enters at %p, for %s)\n",
-		         entry.c_str (), compiled->entry, entry_code,
-		         state.domain->friendly_name);
+		fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", entry.c_str (),
+		         compiled->entry, state.domain->friendly_name);
 
 	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry,
 		              const_cast<uint8_t *> (unbox_code), *jinfo };
@@ -2132,18 +2149,18 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 		return compiled->entry;
 	};
 
-	Expected<void *> entry = build (symbol_for_code (method));
-
-	if (!entry)
-		return entry.takeError ();
-
 	Expected<void *> body = build (symbol_for_body (method));
 
 	if (!body)
 		return body.takeError ();
 
-	/* Whatever a caller does with the receiver, this body never reads it. */
-	return Compiled { *entry, *body, *entry };
+	/*
+	 * One body under one name for every door. It takes no arguments it reads
+	 * and never returns, so whichever entry a caller came for - the interop one,
+	 * the unboxing one, the method itself - these three instructions answer for
+	 * it, and publish_defs () points every stub the method has at this.
+	 */
+	return Compiled { *body, *body, *body };
 }
 
 Expected<void *>
@@ -2162,7 +2179,7 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 
 	auto thunk_context = std::make_unique<LLVMContext> ();
 	auto thunk_module =
-		std::make_unique<Module> (symbol_for_code (method), *thunk_context);
+		std::make_unique<Module> (symbol_for_interop (method), *thunk_context);
 
 	std::vector<ExternalSymbol> thunk_externals;
 	MethodLLVMEmitter declarer (thunk_module.get (), cfg.get (), method,
@@ -2177,7 +2194,7 @@ Backend::compile_entry_thunk (DomainState &state, MonoMethod *method)
 	if (method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (method);
 
-	std::string thunk_name = symbol_for_code (method);
+	std::string thunk_name = symbol_for_interop (method);
 
 	arch::create_legacy_entry_thunk (*thunk_module, thunk_name, *target,
 	                                 legacy_call_flavor (sig));
@@ -2215,9 +2232,11 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 	 * SGen identifies threads suspended inside the managed allocator and the
 	 * write barrier by resolving code addresses through the jit-info table,
 	 * and the runtime asserts the pointer it hands out for those wrappers
-	 * resolves too. The legacy entry carries jit info, so it is what they
-	 * get; everything else gets the stub, which is what keeps callers correct
-	 * across promotions.
+	 * resolves too. The body carries jit info, so it is what they get;
+	 * everything else gets the stub, which is what keeps callers correct across
+	 * promotions. Nothing enters either wrapper through the address itself -
+	 * generated code calls them by symbol - so handing out the body rather than
+	 * the stub costs those two the ability to be promoted and nothing else.
 	 */
 	bool wants_body = method->wrapper_type == MONO_WRAPPER_ALLOC
 	                  || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER;
@@ -2241,7 +2260,7 @@ Backend::compile (MonoMethod *method, MonoDomain *target_domain)
 	if (!code)
 		return code.takeError ();
 
-	return wants_body ? code->entry : *stub;
+	return wants_body ? code->body : *stub;
 }
 
 /*
@@ -2415,7 +2434,7 @@ Backend::counted_entries (DomainState &state, MonoMethod *method,
 
 	for (size_t i = 0; i < entries.size (); ++i) {
 		void *carry_on = entries[i];
-		std::string name = symbol_for_code (method) + "$promote."
+		std::string name = symbol_for_body (method) + "$promote."
 		                   + std::to_string (i);
 		Expected<void *> promote = state.stubs->create_lazy_entry (
 			name, [this, owner, method, carry_on] () -> Expected<void *> {
@@ -2442,7 +2461,7 @@ Backend::counted_entries (DomainState &state, MonoMethod *method,
 	for (size_t i = 0; i < thunks->size (); ++i)
 		register_stub_jinfo (state.domain, method, (*thunks)[i],
 		                     arch::counter_thunk_code_size,
-		                     symbol_for_code (method) + "$count."
+		                     symbol_for_body (method) + "$count."
 		                             + std::to_string (i));
 
 	return thunks;
@@ -2558,10 +2577,13 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 		mini_install_pending_breakpoints (state.domain,
 		                                  jinfo_get_method (published), published);
 
-	if (Error err = state.stubs->redirect_stub (symbol_for_code (method), code->entry))
-		return give_up (std::move (err));
 	if (Error err = state.stubs->redirect_stub (symbol_for_body (method), code->body))
 		return give_up (std::move (err));
+	if (publishes_interop_entry (method)) {
+		if (Error err = state.stubs->redirect_stub (symbol_for_interop (method),
+		                                            code->entry))
+			return give_up (std::move (err));
+	}
 	if (publishes_unbox_entry (method)) {
 		if (Error err = state.stubs->redirect_stub (symbol_for_unbox (method),
 		                                          code->unbox))
@@ -2618,50 +2640,41 @@ Backend::interp_entries (DomainState &state, MonoMethod *method, void *legacy)
 	if (!body)
 		return body.takeError ();
 
-	void *counted_legacy = legacy;
 	void *counted_body = *body;
 
-	/*
-	 * The two doors share one counter, so N is N calls to the method rather
-	 * than N through whichever of them the callers happened to use. The
-	 * unboxing trampoline below is built over the counted legacy entry rather
-	 * than over the bare one, so a call arriving at a value type's vtable slot
-	 * counts like any other.
-	 */
+	/* One door now, so N really is N calls to the method. */
 	if (tier1_threshold () != 0) {
 		Expected<std::vector<void *>> counted =
-			counted_entries (state, method, { legacy, *body });
+			counted_entries (state, method, { *body });
 
 		if (!counted)
 			return counted.takeError ();
 
-		counted_legacy = (*counted)[0];
-		counted_body = (*counted)[1];
+		counted_body = (*counted)[0];
 	}
 
 	/*
 	 * The receiver a value type's vtable slot arrives with is the boxed object,
 	 * and stepping it past the header is the whole of the difference - so this
-	 * is the runtime's own unboxing trampoline over the interpreter's entry,
-	 * the same one a method whose code the backend did not generate gets.
+	 * is the runtime's own unboxing trampoline, the same one a method whose code
+	 * the backend did not generate gets. It goes over the counted shim rather
+	 * than over the interpreter's own entry: the shim is what speaks this
+	 * backend's convention, and it is where mono_arch_get_unbox_trampoline's
+	 * receiver-in-the-first-register assumption holds.
 	 */
-	Compiled entries { counted_legacy, counted_body,
+	Compiled entries { counted_body, counted_body,
 		           publishes_unbox_entry (method)
-		                   ? mono_arch_get_unbox_trampoline (method,
-		                                                     counted_legacy)
+		                   ? mono_arch_get_unbox_trampoline (method, counted_body)
 		                   : nullptr };
 
 	/*
-	 * Three stores rather than one, so a caller can see a method's stubs
-	 * disagree about which of them has been pointed somewhere yet. That is
-	 * harmless while the alternative to each is the lazy trampoline it
-	 * replaces, and two threads arriving together cannot disagree about more
-	 * than that: whether a method runs here or is compiled is settled by the
-	 * method, so both of them take this branch or neither does.
+	 * More than one store where the method has more than one door, so a caller
+	 * can see a method's stubs disagree about which of them has been pointed
+	 * somewhere yet. That is harmless while the alternative to each is the lazy
+	 * trampoline it replaces, and two threads arriving together cannot disagree
+	 * about more than that: whether a method runs here or is compiled is settled
+	 * by the method, so both of them take this branch or neither does.
 	 */
-	if (Error err =
-	            state.stubs->redirect_stub (symbol_for_code (method), entries.entry))
-		return std::move (err);
 	if (Error err =
 	            state.stubs->redirect_stub (symbol_for_body (method), entries.body))
 		return std::move (err);
@@ -2972,24 +2985,35 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 		return (*thrower).*half;
 	};
 
-	if (Error err = state.stubs->create_lazy_stub (
-	        symbol_for_code (method),
-	        [this, owner, method, bindable, raising] () -> Expected<void *> {
-		        if (!bindable ()) {
-			        Expected<void *> thunk = compile_entry_thunk (*owner, method);
+	/*
+	 * The interop entry is a stub of its own only where there is one to publish:
+	 * a wrapper native code enters. It is the one entry a dispatcher cannot
+	 * answer for - a cross-domain caller arrives speaking C, and the dispatcher
+	 * forwards in this backend's convention - so it keeps a thunk of its own,
+	 * which reaches the method through the body stub and is domain-neutral.
+	 */
+	if (publishes_interop_entry (method)) {
+		if (Error err = state.stubs->create_lazy_stub (
+		        symbol_for_interop (method),
+		        [this, owner, method, bindable, raising] () -> Expected<void *> {
+			        if (!bindable ()) {
+				        Expected<void *> thunk =
+					        compile_entry_thunk (*owner, method);
 
-			        if (!thunk)
-				        return raising (thunk.takeError (), &Compiled::entry);
-			        return *thunk;
-		        }
+				        if (!thunk)
+					        return raising (thunk.takeError (),
+					                        &Compiled::entry);
+				        return *thunk;
+			        }
 
-		        Expected<Compiled> code = ensure_entries (*owner, method);
+			        Expected<Compiled> code = ensure_entries (*owner, method);
 
-		        if (!code)
-			        return raising (code.takeError (), &Compiled::entry);
-		        return code->entry;
-	        }))
-		return err;
+			        if (!code)
+				        return raising (code.takeError (), &Compiled::entry);
+			        return code->entry;
+		        }))
+			return err;
+	}
 
 	if (Error err = state.stubs->create_lazy_stub (
 	        symbol_for_body (method),
@@ -3125,15 +3149,23 @@ Backend::publish (DomainState &state, MonoMethod *method)
 		return std::move (err);
 
 	/* Whichever thread reserved them, these are the addresses it reserved. */
-	std::string entry_name = symbol_for_code (method);
+	bool interop = publishes_interop_entry (method);
+	std::string entry_name = interop ? symbol_for_interop (method) : std::string ();
 	std::string body_name = symbol_for_body (method);
-	Expected<void *> stub = state.stubs->stub_address (entry_name);
-	if (!stub)
-		return stub;
-
 	Expected<void *> body = state.stubs->stub_address (body_name);
 	if (!body)
 		return body;
+
+	/* The address the rest of the runtime is handed: the C door where there is one. */
+	void *stub = *body;
+
+	if (interop) {
+		Expected<void *> reserved = state.stubs->stub_address (entry_name);
+
+		if (!reserved)
+			return reserved;
+		stub = *reserved;
+	}
 
 	bool unboxed = publishes_unbox_entry (method);
 	std::string unbox_name = unboxed ? symbol_for_unbox (method) : std::string ();
@@ -3156,16 +3188,16 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	/*
 	 * A stub is the only address the runtime ever sees for the method, so
 	 * anything recovering a method from a code pointer - delegate creation off
-	 * a ldftn most visibly - must find it in the jit-info table. Register both
+	 * a ldftn most visibly - must find it in the jit-info table. Register each
 	 * the way mini registers trampolines: an is_trampoline entry carrying the
 	 * method, in the domain whose linker holds the stub so the two die
-	 * together. The legacy entry is what the runtime calls, but the body stub
-	 * is what every cross-method call jumps through, so it is the one a thread
-	 * is far more likely to be caught in. The published check above keeps
-	 * racing threads from registering either twice.
+	 * together. The published check above keeps racing threads from registering
+	 * any of them twice.
 	 */
-	MonoJitInfo *entry_jinfo = register_stub_jinfo (
-		state.domain, method, *stub, arch::stub_block_size, entry_name);
+	MonoJitInfo *entry_jinfo =
+		interop ? register_stub_jinfo (state.domain, method, stub,
+	                                       arch::stub_block_size, entry_name)
+	                : nullptr;
 	MonoJitInfo *body_jinfo = register_stub_jinfo (
 		state.domain, method, *body, arch::stub_block_size, body_name);
 	MonoJitInfo *unbox_jinfo =
@@ -3174,9 +3206,9 @@ Backend::publish (DomainState &state, MonoMethod *method)
 	                : nullptr;
 
 	state.published[method] =
-		Publication { *stub, entry_jinfo, body_jinfo, unbox_jinfo, unboxed };
+		Publication { stub, entry_jinfo, body_jinfo, unbox_jinfo, unboxed };
 
-	return *stub;
+	return stub;
 }
 
 } // namespace

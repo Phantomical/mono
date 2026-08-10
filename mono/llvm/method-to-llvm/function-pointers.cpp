@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "hidden-return.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -206,12 +207,18 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 	if (!args)
 		return args.takeError ();
 
-	llvm::Value *result =
-		emit_protected_call (builder, llvm::FunctionCallee (*type, wrapper), *args);
+	/* The wrapper is a method this backend published, so its stub is entered like any. */
+	llvm::Type *hidden = nullptr;
+	unsigned at = 0;
 
-	llvm::cast<llvm::CallBase> (result)->addFnAttr (llvm::Attribute::get (
-		context (), arch::legacy_cc_attribute,
-		arch::legacy_flavor_value (arch::managed_call_flavor (sig))));
+	if (returns_by_hidden_pointer ((*type)->getReturnType ())) {
+		hidden = (*type)->getReturnType ();
+		*type = hidden_return_prototype (*type, hidden);
+		at = hidden_return_index ((*type)->getNumParams ());
+	}
+
+	llvm::Value *result = emit_protected_call (
+		builder, llvm::FunctionCallee (*type, wrapper), *args, {}, hidden, at);
 
 	pop_stack (sig->param_count);
 
@@ -395,13 +402,26 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		return args.takeError ();
 
 	/*
-	 * Whatever the pointer came from - ldftn, ldvirtftn, native code - it is a
-	 * published entry, so the call crosses the legacy boundary.
+	 * A native signature really does reach native code, so that call crosses the
+	 * boundary and LegacyAbiPass lowers it. A managed one reaches a method this
+	 * backend published - ldftn and ldvirtftn hand out its stub - so it is an
+	 * ordinary call, and the hidden return pointer the prototype has to spell out
+	 * is this end's business rather than the pass's.
 	 */
-	llvm::Value *result =
-		emit_protected_call (builder, llvm::FunctionCallee (*type, ftn), *args);
+	llvm::Type *hidden = nullptr;
+	unsigned at = 0;
 
-	mark_legacy_call (llvm::cast<llvm::CallBase> (result), sig);
+	if (sig->pinvoke == 0 && returns_by_hidden_pointer ((*type)->getReturnType ())) {
+		hidden = (*type)->getReturnType ();
+		*type = hidden_return_prototype (*type, hidden);
+		at = hidden_return_index ((*type)->getNumParams ());
+	}
+
+	llvm::Value *result = emit_protected_call (
+		builder, llvm::FunctionCallee (*type, ftn), *args, {}, hidden, at);
+
+	if (sig->pinvoke != 0)
+		mark_legacy_call (llvm::cast<llvm::CallBase> (result), sig);
 	consume_save_last_error (builder);
 	pop_stack (sig->param_count + sig->hasthis);
 

@@ -800,11 +800,15 @@ TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 	           0u);
 }
 
-// A dispatched site still hands its frame away: the jump reaches a legacy entry as
-// readily as a call does, and the IMT key rides a register of its own that the jump
-// leaves alone. Left as an ordinary call instead, a tail. callvirt recursing in
-// constant space overflows the stack. The key and the boundary marker have to
-// survive onto the marked site - a jump that lost either dispatches on nothing.
+// A dispatched site still hands its frame away: the jump reaches a stub as readily
+// as a call does, and the IMT key rides a register of its own that the jump leaves
+// alone. Left as an ordinary call instead, a tail. callvirt recursing in constant
+// space overflows the stack. The key has to survive onto the marked site - a jump
+// that lost it dispatches on nothing.
+//
+// And a dispatched site is not a boundary call any more. What a vtable slot holds
+// is the method's stub, entered in this backend's own convention like anything
+// else, so nothing is left for LegacyAbiPass to lower.
 TEST_F (TranslatorTest, ADispatchedTailCallIsMarkedAndKeepsItsKey)
 {
 	/* The marker is an attribute group in the printed text, so it is read here. */
@@ -829,12 +833,12 @@ TEST_F (TranslatorTest, ADispatchedTailCallIsMarkedAndKeepsItsKey)
 	ASSERT_NE (vtable.function, nullptr) << vtable.error;
 	EXPECT_EQ (vtable.count ("tail call"), 1u) << vtable.text ();
 	EXPECT_EQ (vtable.count ("notail"), 0u) << vtable.text ();
-	EXPECT_EQ (legacy_sites (vtable), 1u) << vtable.text ();
+	EXPECT_EQ (legacy_sites (vtable), 0u) << vtable.text ();
 
 	ASSERT_NE (imt.function, nullptr) << imt.error;
 	EXPECT_EQ (imt.count ("tail call"), 1u) << imt.text ();
 	EXPECT_EQ (imt.count ("ptr nest @\"mono_method_"), 1u) << imt.text ();
-	EXPECT_EQ (legacy_sites (imt), 1u) << imt.text ();
+	EXPECT_EQ (legacy_sites (imt), 0u) << imt.text ();
 }
 
 // Where the guarantee cannot be made the prefix is still worth asking for. A

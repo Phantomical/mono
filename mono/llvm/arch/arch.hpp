@@ -161,14 +161,21 @@ public:
 /// then only supplies the shape of the call. That is how an entry emitted
 /// beside the body it enters still reaches it through the body's stub.
 ///
-/// THIS_ADJUST, when nonzero, is added to the first argument before it is
-/// passed on: the unboxing entry a value type's virtual method is reached
-/// through steps its receiver past the object header.
 llvm::Function *create_legacy_entry_thunk (llvm::Module &m, llvm::StringRef name,
                                            llvm::Function *target,
                                            LegacyFlavor flavor,
-                                           llvm::Value *through = nullptr,
-                                           unsigned this_adjust = 0);
+                                           llvm::Value *through = nullptr);
+
+/// Create NAME in M: TARGET's own prototype, with ADJUST added to the receiver
+/// before the call is passed on to THROUGH. This is the entry a call off a value
+/// type's vtable or IMT arrives at, stepping the boxed receiver past the object
+/// header.
+///
+/// Both ends speak the same convention, so the forward is a jump and the entry
+/// leaves no frame of its own behind.
+llvm::Function *create_unbox_entry (llvm::Module &m, llvm::StringRef name,
+                                    llvm::Function *target, llvm::Value *through,
+                                    unsigned adjust);
 
 /// Create NAME in M: the other direction, a fastcc entry with SHAPE's exact
 /// prototype which passes its arguments on to a legacy-convention callee and

@@ -346,26 +346,24 @@ legacy_call_flavor (MonoMethodSignature *sig)
 	return arch::managed_call_flavor (sig);
 }
 
-arch::LegacyFlavor
-legacy_entry_flavor (MonoMethod *method, MonoMethodSignature *sig)
+bool
+entered_in_c (MonoMethod *method)
 {
 	/*
 	 * The address the runtime publishes for a no-wrapper icall is the
 	 * registered C function itself (mono_jit_compile_method_inner), so that
-	 * one entry really is C. Everything else implemented outside IL is
-	 * reached through a wrapper, and a wrapper is a managed method whose own
-	 * signature has the pinvoke flag cleared - the convention to speak to it
-	 * is mini's, not the C ABI its declaration reads like.
+	 * one entry really is C. Everything else implemented outside IL is reached
+	 * through a wrapper, and a wrapper is a method this backend compiles and
+	 * publishes like any other - so a call to it is an ordinary call, whatever
+	 * the declaration reads like.
 	 */
-	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) != 0) {
-		guint32 flags = 0;
+	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) == 0)
+		return false;
 
-		mono_lookup_internal_call_full_with_flags (method, FALSE, &flags);
-		if ((flags & MONO_ICALL_FLAGS_NO_WRAPPER) != 0)
-			return arch::LegacyFlavor::Pinvoke;
-	}
+	guint32 flags = 0;
 
-	return arch::managed_call_flavor (sig);
+	mono_lookup_internal_call_full_with_flags (method, FALSE, &flags);
+	return (flags & MONO_ICALL_FLAGS_NO_WRAPPER) != 0;
 }
 
 void
@@ -374,15 +372,6 @@ MethodLLVMEmitter::mark_legacy_call (llvm::CallBase *call, MonoMethodSignature *
 	call->addFnAttr (llvm::Attribute::get (
 		call->getContext (), arch::legacy_cc_attribute,
 		arch::legacy_flavor_value (legacy_call_flavor (sig))));
-}
-
-void
-MethodLLVMEmitter::mark_legacy_entry_call (llvm::CallBase *call, MonoMethod *method,
-                                           MonoMethodSignature *sig)
-{
-	call->addFnAttr (llvm::Attribute::get (
-		call->getContext (), arch::legacy_cc_attribute,
-		arch::legacy_flavor_value (legacy_entry_flavor (method, sig))));
 }
 
 llvm::Expected<llvm::Type *>
@@ -854,7 +843,7 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	if (!type)
 		return type.takeError ();
 
-	bool legacy = implemented_outside_il (method);
+	bool legacy = entered_in_c (method);
 	llvm::Type *hidden = nullptr;
 
 	if (!legacy && returns_by_hidden_pointer ((*type)->getReturnType ())) {
@@ -877,9 +866,6 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 
 	g_free (printed);
 
-	if (legacy)
-		full_name += "$legacy";
-
 	/*
 	 * The emitter's cache is per instance, but filter bodies share the
 	 * method's module across instances - a name already declared there must
@@ -894,12 +880,12 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
 
 	record_external (full_name, ExternalSymbol::Kind::Code, method);
-	mark_method_entry (*function, method, legacy ? mono::Entry::legacy : mono::Entry::body);
+	mark_method_entry (*function, method, mono::Entry::body);
 
 	if (legacy)
-		function->addFnAttr (llvm::Attribute::get (
-			context (), arch::legacy_cc_attribute,
-			arch::legacy_flavor_value (legacy_entry_flavor (method, sig))));
+		function->addFnAttr (llvm::Attribute::get (context (), arch::legacy_cc_attribute,
+		                                           arch::legacy_flavor_value (
+								   arch::LegacyFlavor::Pinvoke)));
 
 	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);
 	    ext != llvm::Attribute::None)

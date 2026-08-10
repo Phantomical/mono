@@ -416,18 +416,18 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 }
 
 /// The address of TARGET as something other than a direct call target: what
-/// ldftn pushes, what a delegate stores. This is the `$legacy` symbol - the
-/// legacy entry the runtime publishes - because the pointer escapes to callers
-/// that know nothing of this backend's convention; an indirect call through it is
-/// a legacy call.
+/// ldftn pushes, what a delegate stores. It is the method's stub, which every
+/// caller now enters through, so a call made through the pointer is an ordinary
+/// call in this backend's own convention.
 ///
-/// Both branches below name that same symbol. A method whose code mini produces
-/// is declared against it, since create_method_decl () gives the `$legacy`
-/// suffix to exactly the methods that are entered in the legacy convention. Its
-/// declaration is therefore the address, and asking for one here has to produce
-/// it: a name belongs to one object, and LLVM answers a second claim on it by
-/// silently renaming the newcomer, leaving a reference to a symbol the engine
-/// never defines.
+/// The name asked for here is a placeholder like any other - the engine renames
+/// it - but it has to be a placeholder of its own rather than the one
+/// create_method_decl () uses. Within the module compiling TARGET those two
+/// would be the same name, extern_symbol () answers a repeat claim with whatever
+/// already holds it, and the address would silently become the body sitting
+/// beside us rather than the stub in front of it. That body is superseded by
+/// every later recompile, so a delegate built over it would keep calling the
+/// tier it was made in.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
@@ -435,14 +435,14 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 		return create_method_decl (target);
 
 	char *printed = mono_method_full_name (target, FALSE);
-	std::string symbol = identity_symbol (printed, target) + "$legacy";
+	std::string symbol = identity_symbol (printed, target) + "$stub";
 
 	g_free (printed);
 
 	llvm::Constant *address = extern_symbol (symbol);
 
 	record_external (symbol, ExternalSymbol::Kind::Code, target);
-	mark_method_entry (llvm::cast<llvm::GlobalValue> (*address), target, mono::Entry::legacy);
+	mark_method_entry (llvm::cast<llvm::GlobalValue> (*address), target, mono::Entry::body);
 	return address;
 }
 
@@ -702,9 +702,14 @@ MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee 
                                    llvm::ArrayRef<llvm::Value *> args,
                                    llvm::CallInst::TailCallKind kind, size_t arg_slots,
                                    llvm::Function *declaration,
-                                   llvm::function_ref<void (llvm::CallBase *)> describe_site)
+                                   llvm::function_ref<void (llvm::CallBase *)> describe_site,
+                                   bool natural)
 {
 	auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ());
+
+	if (target == nullptr && natural)
+		target = declaration;
+
 	llvm::Type *hidden = target != nullptr ? hidden_return_type (target) : nullptr;
 	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());
 
@@ -714,7 +719,7 @@ MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee 
 	 * would be dead the moment the jump happened, and X86 refuses one.
 	 * should_tail_call () has already agreed the two ends mean the same type by it.
 	 */
-	unsigned at = hidden_return_index (operands.size () + 1);
+	unsigned at = hidden != nullptr ? hidden_return_index (target->arg_size ()) : 0;
 
 	if (hidden != nullptr)
 		operands.insert (operands.begin () + at, hidden_return_pointer (function));
@@ -1315,14 +1320,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	llvm::FunctionCallee callee = *declaration;
 	llvm::Type *hidden = hidden_return_type (*declaration);
 	/*
-	 * A slot always holds a legacy entry, and the legacy convention has a hidden
-	 * return pointer of its own in a place the runtime's trampolines fixed. So a
-	 * dispatched site is built in the signature's own terms and left to
-	 * LegacyAbiPass, which is what puts the pointer where that convention wants it.
+	 * A slot holds the method's stub, which is entered exactly as the declaration
+	 * says - hidden return pointer and all. Nothing lowers the site afterwards, so
+	 * the prototype it is built against is the declaration's own.
 	 */
-	llvm::FunctionType *slot_type =
-		hidden != nullptr ? natural_prototype ((*declaration)->getFunctionType (), hidden)
-	                          : (*declaration)->getFunctionType ();
+	llvm::FunctionType *slot_type = (*declaration)->getFunctionType ();
 	bool keyed = false;
 	bool through_slot = false;
 	/* The delegate an Invoke is dispatched out of; null for every other call. */
@@ -1398,28 +1400,19 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	auto describe_site = [&] (llvm::CallBase *site) {
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
-
-		/*
-		 * A dispatched call goes through whatever pointer the runtime left for
-		 * it, in a vtable slot or in the delegate, and that is always a legacy
-		 * entry - those are shared with every caller that is not generated code.
-		 */
-		if (through_slot)
-			mark_legacy_entry_call (site, callee_method, sig);
 	};
 
-	llvm::CallInst::TailCallKind tail_kind = should_tail_call (
-		sig, callee_method, callee.getFunctionType (), through_slot ? nullptr : hidden);
+	llvm::CallInst::TailCallKind tail_kind =
+		should_tail_call (sig, callee_method, callee.getFunctionType (), hidden);
 
 	/*
 	 * A dispatched site can hand its frame over like any other - the key rides a
-	 * register of its own that a jump leaves alone, and a legacy entry is reached
-	 * by a jump as readily as by a call - but it can never demand one. Its
-	 * arguments are still to be lowered into the legacy convention, and a site
-	 * whose argument area that rebuilds is not one the backend can jump through;
-	 * musttail across the two conventions is not even well-formed IR. So the
-	 * marker stays the permission, which LegacyAbiPass drops again where the
-	 * lowering turns out to need this frame.
+	 * register of its own that a jump leaves alone, and a stub is reached by a jump
+	 * as readily as by a call - but it never demands one. A keyed site cannot: the
+	 * key is an argument this frame's own prototype does not have, and musttail
+	 * insists the two match. A plain vtable site could now, but a musttail the
+	 * backend cannot form aborts the process rather than declining, so widening it
+	 * is a change to make on its own evidence.
 	 */
 	if (through_slot && tail_kind == llvm::CallInst::TCK_MustTail)
 		tail_kind = llvm::CallInst::TCK_Tail;
@@ -1440,10 +1433,12 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		emit_profiler_frame_handover (builder, callee_method);
 		return emit_tail_call (builder, callee, *args, tail_kind,
 		                       sig->param_count + sig->hasthis, *declaration,
-		                       describe_site);
+		                       describe_site, /*natural=*/true);
 	}
 
-	llvm::Value *result = emit_protected_call (builder, callee, *args, describe_site);
+	llvm::Value *result = emit_protected_call (
+		builder, callee, *args, describe_site, hidden,
+		hidden_return_index ((*declaration)->arg_size ()));
 
 	/*
 	 * invoke_impl usually holds an arch stub that puts delegate->target in the

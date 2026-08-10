@@ -467,13 +467,16 @@ MethodLLVMEmitter::emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCa
 llvm::Value *
 MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
                                         llvm::ArrayRef<llvm::Value *> args,
-                                        llvm::function_ref<void (llvm::CallBase *)> describe)
+                                        llvm::function_ref<void (llvm::CallBase *)> describe,
+                                        llvm::Type *hidden, unsigned at)
 {
-	auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ());
-	llvm::Type *hidden = target != nullptr ? hidden_return_type (target) : nullptr;
+	if (auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
+		hidden = hidden_return_type (target);
+		at = hidden_return_index (target->arg_size ());
+	}
+
 	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());
 	llvm::AllocaInst *slot = nullptr;
-	unsigned at = hidden_return_index (operands.size () + 1);
 
 	if (hidden != nullptr) {
 		slot = entry_alloca (hidden, "retslot");
