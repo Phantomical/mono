@@ -27,6 +27,13 @@ llvm::Expected<const arch::InterpEntryPoint *> interp_entry (MonoDomain *domain,
 /// Drop everything recorded for a domain on its way out.
 void forget_interp_entries (MonoDomain *domain);
 
+/// Drop what is recorded for a method on its way out, in every domain.
+///
+/// Every domain rather than the one that compiled it: a call that arrived having
+/// switched domains resolves its entry against the domain it switched to, which
+/// need never have published the method itself.
+void forget_interp_entry (MonoMethod *method);
+
 } // namespace mono
 
 #endif

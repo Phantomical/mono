@@ -925,6 +925,12 @@ MonoBackend::release_domain_impl (MonoDomain *domain)
 	// Draining takes a while so we want to be careful to only do it outside of
 	// the mutex.
 	state->queue.close ();
+
+	/*
+	 * After the drain, so that nothing is left running that could resolve an
+	 * entry for this domain and put it back.
+	 */
+	forget_interp_entries (domain);
 }
 
 void
@@ -942,6 +948,12 @@ MonoBackend::release_method_impl (MonoMethod *method)
 	// No need to compile this anymore. Drop it if still in the queue and
 	// block on it if compilation is still in progress.
 	queue_.drop (method);
+
+	/*
+	 * After the queue is drained, so that a promotion still running cannot
+	 * resolve an entry back into the map behind this.
+	 */
+	forget_interp_entry (method);
 
 	/*
 	 * Every domain, not just the one that compiled it: a body reached across a

@@ -187,4 +187,19 @@ forget_interp_entries (MonoDomain *domain)
 	g_interp_entries.erase (domain);
 }
 
+/*
+ * Freeing a method hands its MonoMethod back to the allocator, and the next one
+ * allocated can land on that address - so an entry left here is one that method
+ * would find and take for its own, pointing at interpreter state that died with
+ * the method before it.
+ */
+void
+forget_interp_entry (MonoMethod *method)
+{
+	std::unique_lock<std::shared_mutex> lock (g_interp_mutex);
+
+	for (auto &domain : g_interp_entries)
+		domain.second.erase (method);
+}
+
 } // namespace mono
