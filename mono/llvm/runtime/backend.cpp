@@ -20,6 +20,8 @@
 #include "dispatcher.hpp"
 #include "tiering.hpp"
 #include "interp.hpp"
+#include "publish-events.hpp"
+#include <vector>
 #include "mini-runtime.h"
 #include <thread>
 #include "stub-jinfo.hpp"
@@ -151,6 +153,14 @@ struct MonoBackend::MethodState {
 	/// The per-call dispatcher this method's body stub got instead of a direct
 	/// binding, when its first caller arrived from another domain.
 	void *dispatch = nullptr;
+
+	/*
+	 * Bodies this method had before the current one, in publication order. The
+	 * stubs no longer name them, but a thread already running in one still is,
+	 * so anything that has to cover every body a method is executing in - the
+	 * debugger arming a breakpoint - has to see these too.
+	 */
+	std::vector<MonoJitInfo *> superseded;
 
 	/*
 	 * The entries this method was actually published under, recorded rather
@@ -667,7 +677,7 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 {
 	MONO_LOCK (mutex_)
 	{
-		if (method.code)
+		if (method.code && !recompiling (method.method))
 			return method.code->at (entry);
 	}
 
@@ -762,17 +772,50 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 		return code.takeError ();
 
 	/*
+	 * Before the redirects below, which are what make the body reachable. A body
+	 * that goes live carrying none of the breakpoints already set on the method
+	 * is a breakpoint that stops being hit the moment the method is compiled
+	 * again, with nothing said about it.
+	 */
+	if (published != nullptr)
+		mini_install_pending_breakpoints (domain.domain,
+		                                  jinfo_get_method (published), published);
+
+	/*
 	 * Every entry, not just the one asked for: the stubs are redirected together
 	 * so that whichever door a caller came in through it lands on this compile.
 	 */
-	for (Entry each : method.entries ())
+	for (Entry each : method.published)
 		if (void *address = code->at (each))
 			method.stub (each).redirect (address);
 
+	/*
+	 * The body being replaced is not dead - a thread can still be running in it
+	 * - so it moves to the superseded list rather than being dropped.
+	 */
 	MONO_LOCK (mutex_)
 	{
+		if (method.code && method.code->jinfo != nullptr
+		    && method.code->jinfo != code->jinfo)
+			method.superseded.push_back (method.code->jinfo);
 		method.code = *code;
 	}
+
+	/*
+	 * Only now, and outside the lock: the debugger agent's handler for this
+	 * parks the compiling thread and lets its own thread look the method up,
+	 * through a door that takes the same lock.
+	 */
+	if (published != nullptr)
+		raise_jit_done (jinfo_get_method (published), published);
+
+	/*
+	 * A method the interpreter is already running calls its callees by
+	 * interpreting them, and has no other way of noticing that one of them has
+	 * since been given code to call instead.
+	 */
+	if (mono_use_interpreter)
+		mini_get_interp_callbacks ()->method_compiled (domain.domain, method.method);
 
 	return code->at (entry);
 }
@@ -945,9 +988,13 @@ MonoBackend::foreach_body (MonoDomain *domain, MonoMethod *method,
 
 		auto it = state->second->methods.find (method);
 
-		if (it == state->second->methods.end () || !it->second->code)
+		if (it == state->second->methods.end ())
 			return;
-		if (it->second->code->jinfo != nullptr)
+
+		/* Oldest first, which is what a breakpoint walk expects. */
+		bodies.assign (it->second->superseded.begin (),
+		               it->second->superseded.end ());
+		if (it->second->code && it->second->code->jinfo != nullptr)
 			bodies.push_back (it->second->code->jinfo);
 	}
 
