@@ -225,6 +225,7 @@ set(MONO_TESTS_CS_SRC
   interlocked.cs
   interp-entries.cs
   interp-calls-compiled.cs
+  interp-tier1-promotion.cs
   volatile-prefix.cs
   delegate-async-exit.cs
   delegate-delegate-exit.cs

@@ -285,6 +285,15 @@ if(MONO_ENABLE_INTERPRETER)
                      TESTS interp-calls-compiled.exe
                      RUNTIME_ARGS "--interp-tier0=Interpreted")
 
+  # Promotion itself, which nothing else reaches: the suites above call each
+  # method too few times to spend its counter, so a method that starts at tier 0
+  # stays there for the whole run. Here every method is called well past the
+  # threshold, so each one is interpreted at the top of its loop and compiled by
+  # the bottom, and the test reads its answers back across the switch.
+  mono_runtime_suite(runtime-interp-promotion LABEL interp
+                     TESTS interp-tier1-promotion.exe
+                     RUNTIME_ARGS "--interp-tier0=")
+
   # `--interp=jit=<class>` compiles the named class and interprets the rest,
   # which is the only way today to get a compiled frame and an interpreted one
   # into the same process. Values the two engines hand each other -- a method
