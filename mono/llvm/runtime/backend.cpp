@@ -17,7 +17,9 @@
 #include "stubs.hpp"
 #include "util/lock.hpp"
 #include "builtins.hpp"
+#include "stub-jinfo.hpp"
 #include "translate.hpp"
+#include "arch/arch.hpp"
 #include <optional>
 #include "mono/metadata/appdomain.h"
 
@@ -128,6 +130,12 @@ struct MonoBackend::MethodState {
 	/// Guarded by the engine's lock.
 	std::optional<Compiled> code;
 
+	/// The jit-info record each stub was registered under, held only when it
+	/// has to be taken out again by hand - see register_stub_jinfo ().
+	MonoJitInfo *thunk_jinfo = nullptr;
+	MonoJitInfo *c_thunk_jinfo = nullptr;
+	MonoJitInfo *unbox_jinfo = nullptr;
+
 	MethodState (MonoMethod *method, std::string symbol)
 	    : method (method), symbol (std::move (symbol))
 	{
@@ -159,6 +167,19 @@ struct MonoBackend::MethodState {
 			return unbox_tramp;
 		}
 		return thunk_tramp;
+	}
+
+	MonoJitInfo *&jinfo (Entry entry)
+	{
+		switch (entry) {
+		case Entry::body:
+			return thunk_jinfo;
+		case Entry::interop:
+			return c_thunk_jinfo;
+		case Entry::unbox:
+			return unbox_jinfo;
+		}
+		return thunk_jinfo;
 	}
 
 	/// The entries this method is published under, in the order they are
@@ -333,7 +354,15 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 
 		names.push_back (state->name (entry));
 
-		llvm::Expected<Stub> stub = domain.stub_table->create (names.back ());
+		/*
+		 * Body and unbox carry the method in the IMT register, which is also
+		 * where a shared generic reads its runtime generic context. The C entry
+		 * does not: native code arrives there having set no such register.
+		 */
+		llvm::Expected<Stub> stub =
+			entry == Entry::interop
+			        ? domain.stub_table->create (names.back ())
+			        : domain.stub_table->create (names.back (), method);
 		if (!stub) {
 			names.pop_back ();
 			domain.callbacks->release (*trampoline);
@@ -360,6 +389,19 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 		unwind ();
 		return std::move (err);
 	}
+
+	/*
+	 * A stub is the only address the runtime ever sees for the method, so
+	 * anything recovering a method from a code pointer - delegate creation off
+	 * an ldftn most visibly - has to find it in the jit-info table. Registered
+	 * the way mini registers trampolines: an entry carrying the method, in the
+	 * domain whose linker holds the stub, so the two die together.
+	 */
+	for (Entry entry : entries)
+		state->jinfo (entry) = register_stub_jinfo (domain.domain, method,
+		                                            state->stub (entry).code (),
+		                                            arch::stub_block_size,
+		                                            state->name (entry));
 
 	domain.methods[method] = std::move (state);
 	return raw;
