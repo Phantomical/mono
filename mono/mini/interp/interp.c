@@ -2694,6 +2694,27 @@ interp_entry_general (gpointer this_arg, gpointer res, gpointer *args, gpointer 
 	interp_entry (&data);
 }
 
+/*
+ * Run a method with arguments a caller has already taken apart, writing the
+ * return value to res. args holds a pointer to each argument's value, or the
+ * value itself where the parameter is byref.
+ */
+static void
+interp_entry_from_args (gpointer imethod, gpointer this_arg, gpointer res, gpointer *args)
+{
+	interp_entry_general (this_arg, res, args, imethod);
+}
+
+/*
+ * The interpreter's record for a method in the current domain, creating one if
+ * it has none. Says who would run the method; does not transform it.
+ */
+static gpointer
+interp_get_imethod (MonoMethod *method, MonoError *error)
+{
+	return mono_interp_get_imethod (mono_domain_get (), method, error);
+}
+
 #ifdef MONO_ARCH_HAVE_INTERP_ENTRY_TRAMPOLINE
 
 // Do not inline in case order of frame addresses matters.

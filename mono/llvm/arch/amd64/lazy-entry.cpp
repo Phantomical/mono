@@ -60,7 +60,7 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 {
 	(void) resolver_addr; /* Nothing here is written relative to itself. */
 
-	static_assert (lazy_frame_size == 0x20,
+	static_assert (managed_frame_size == 0x20,
 	               "the frame reservation is an immediate below");
 
 	const uint8_t resolver_code[] = {

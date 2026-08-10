@@ -5,6 +5,12 @@ file(GLOB_RECURSE sources CONFIGURE_DEPENDS
     *.hpp
 )
 
+# The hand-written thunks, named rather than globbed: a sibling arch/ directory
+# is a different target's and must not be assembled for this one.
+list(APPEND sources
+    arch/amd64/interp-entry-thunk.S
+)
+
 mono_add_object_library(mono-llvm
     SOURCES ${sources}
     INCLUDES

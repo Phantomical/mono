@@ -26,6 +26,7 @@
 #include "codemem.hpp"
 #include "compile-queue.hpp"
 #include "compile-worker.hpp"
+#include "interp-entry.hpp"
 #include "jinfo.hpp"
 #include "jit.hpp"
 #include "stubs.hpp"
@@ -69,6 +70,7 @@ extern "C" {
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -862,6 +864,11 @@ public:
 	/// can be interpreted at all.
 	static void set_interp_filter (const char *filter);
 
+	/// The runtime helper behind the interpreter entry thunk, which is handed
+	/// only the method and has to find the rest for the calling thread's domain.
+	static const arch::InterpEntryPoint *interp_entry_for_current_domain (
+		MonoMethod *method);
+
 private:
 	/// Where one method's code ended up: the legacy entry the runtime hands
 	/// out, the fastcc body generated callers reach, and - for an instance
@@ -943,9 +950,6 @@ private:
 		/// A method has one counter but an entry thunk per door, so this is
 		/// what keeps the request to one however it was reached.
 		std::unordered_set<MonoMethod *> promoting;
-		/// The fastcc-to-interpreter shims compiled here, by the prototype
-		/// each serves. One shim stands for every method with that prototype.
-		std::unordered_map<std::string, void *> shims;
 		/// What each dynamic method's compiles produced, for free_method ().
 		std::unordered_map<MonoMethod *, Owned> owned;
 	};
@@ -1001,16 +1005,26 @@ private:
 	Expected<Compiled> ensure_entries (DomainState &state, MonoMethod *method,
 	                                   bool again = false);
 
-	/// Point METHOD's stubs at the interpreter, LEGACY being the entry the
-	/// interpreter itself handed out for it.
-	Expected<Compiled> interp_entries (DomainState &state, MonoMethod *method,
-	                                   void *legacy);
+	/// Point a method's stubs at the interpreter.
+	Expected<Compiled> interp_entries (DomainState &state, MonoMethod *method);
 
-	/// The fastcc entry an interpreted METHOD is given: a stub that hands
-	/// LEGACY to the shim compiled for METHOD's prototype, which is where the
-	/// arguments are marshalled across.
-	Expected<void *> interp_body_entry (DomainState &state, MonoMethod *method,
-	                                    void *legacy);
+	/// The entry an interpreted method is given: a stub carrying the method's
+	/// own identity into the shared thunk, which is where the arguments are
+	/// read out of the convention.
+	Expected<void *> interp_body_entry (DomainState &state, MonoMethod *method);
+
+	/// How a call to a method is taken apart for the interpreter, worked out on
+	/// first use and then shared with every method of the same prototype.
+	///
+	/// An error means no domain can interpret the method, whatever the routing
+	/// says, and it has to be compiled instead.
+	Expected<const arch::InterpEntryLayout *> interp_layout_for (MonoDomain *domain,
+	                                                             MonoMethod *method);
+
+	/// How a method is entered in a domain, prepared if that domain has not
+	/// entered it before.
+	Expected<const arch::InterpEntryPoint *> interp_entry (MonoDomain *domain,
+	                                                       MonoMethod *method);
 
 	/// Compile METHOD into STATE's linker and point both of its stubs at what
 	/// comes out, whether or not it has been compiled there already.
@@ -1073,6 +1087,22 @@ private:
 
 	std::mutex mutex_;
 	std::unordered_map<MonoDomain *, std::unique_ptr<DomainState>> domains_;
+
+	/*
+	 * The interpreter entries, under a lock of their own because every call
+	 * into an interpreted method reads them and the compiler must never be
+	 * what such a call is waiting behind.
+	 *
+	 * A layout depends only on the prototype, so the layouts are shared across
+	 * domains; an entry pairs one with the interpreter's own record, which is
+	 * per domain. Both maps are node-based, so an entry handed out stays put as
+	 * later ones are added.
+	 */
+	std::shared_mutex interp_mutex_;
+	std::unordered_map<std::string, std::unique_ptr<arch::InterpEntryLayout>> layouts_;
+	std::unordered_map<MonoDomain *,
+	                   std::unordered_map<MonoMethod *, arch::InterpEntryPoint>>
+		interp_entries_;
 
 	/// Where compiles that nobody is waiting for run. Declared last so that it
 	/// is torn down first: its worker takes mutex_ and holds domain states.
@@ -1246,6 +1276,12 @@ Backend::free_domain (MonoDomain *domain)
 		 */
 		state = std::move (it->second);
 		live_backend->domains_.erase (it);
+	}
+
+	{
+		std::unique_lock<std::shared_mutex> lock (live_backend->interp_mutex_);
+
+		live_backend->interp_entries_.erase (domain);
 	}
 
 	state->queue->close ();
@@ -2500,37 +2536,25 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 	}
 
 	if (!tier1 && runs_at_tier0 (method)) {
-		ERROR_DECL (interp_error);
 		/*
-		 * Not asked to transform, which is what makes the order below matter:
-		 * transforming runs the class initializer, and this can be running
-		 * inside a lazy stub's callback, which holds a lock across it. A cctor
-		 * that calls back into this very method would then re-enter the
-		 * trampoline being resolved and deadlock against that lock. So the
-		 * entry is taken without running anything, the stubs are pointed at it,
-		 * and only then is the method transformed - by which point a call
-		 * arriving from the initializer lands on the entry instead.
+		 * The stubs are pointed at the interpreter before the method is
+		 * transformed, and that order matters: transforming runs the class
+		 * initializer, and this can be running inside a lazy stub's callback,
+		 * which holds a lock across it. A cctor that calls back into this very
+		 * method would then re-enter the trampoline being resolved and deadlock
+		 * against that lock. Publishing first means such a call lands on the
+		 * entry instead.
 		 */
-		void *legacy = mini_get_interp_callbacks ()->create_method_pointer (
-			method, FALSE, interp_error);
+		Expected<Compiled> entries = interp_entries (state, method);
 
-		if (legacy == nullptr) {
-			mono_error_cleanup (interp_error);
-		} else {
-			Expected<Compiled> entries =
-				interp_entries (state, method, legacy);
-
-			if (!entries) {
-				leave ();
-				return entries;
-			}
-
+		if (!entries) {
 			/*
-			 * The interpreter refusing a method is an answer, not a failure: it
-			 * gets compiled like anything else, and the stubs published above
-			 * are redirected to the body below. Only what happens after it has
-			 * agreed to run the method is an error worth raising.
+			 * Neither the interpreter refusing the method nor this machine's
+			 * entry being unable to carry the call is a failure: the method
+			 * gets compiled like anything else.
 			 */
+			consumeError (entries.takeError ());
+		} else {
 			ERROR_DECL (transform_error);
 
 			if (mini_get_interp_callbacks ()->transform_method (
@@ -2633,9 +2657,9 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 }
 
 Expected<Backend::Compiled>
-Backend::interp_entries (DomainState &state, MonoMethod *method, void *legacy)
+Backend::interp_entries (DomainState &state, MonoMethod *method)
 {
-	Expected<void *> body = interp_body_entry (state, method, legacy);
+	Expected<void *> body = interp_body_entry (state, method);
 
 	if (!body)
 		return body.takeError ();
@@ -2698,26 +2722,50 @@ Backend::interp_entries (DomainState &state, MonoMethod *method, void *legacy)
 }
 
 Expected<void *>
-Backend::interp_body_entry (DomainState &state, MonoMethod *method, void *legacy)
+Backend::interp_body_entry (DomainState &state, MonoMethod *method)
+{
+	if (Expected<const arch::InterpEntryPoint *> entry =
+	            interp_entry (state.domain, method);
+	    !entry)
+		return entry.takeError ();
+
+	/*
+	 * Which method the thunk was entered for is the one thing it cannot work
+	 * out for itself, so it arrives in the key register - a stub of the
+	 * method's own is what puts it there. Redirectable like the others, though
+	 * nothing redirects this one: the body stub in front of it is what a later
+	 * tier moves.
+	 */
+	std::string name = symbol_for_body (method) + "$interp";
+	Expected<void *> stub =
+		state.stubs->create_keyed_stub (name, arch::interp_entry_thunk (), method);
+
+	if (!stub)
+		return stub;
+
+	register_stub_jinfo (state.domain, method, *stub, arch::stub_block_size, name);
+	return *stub;
+}
+
+Expected<const arch::InterpEntryLayout *>
+Backend::interp_layout_for (MonoDomain *domain, MonoMethod *method)
 {
 	/*
-	 * The shim is written against the prototype rather than against the
-	 * method, so it is built out of a declaration of one and the declaration
-	 * then goes back out of the module - nothing here calls the method by
-	 * name, and leaving it would make the shim's own compile resolve a symbol
-	 * it has no use for.
+	 * The layout is worked out from the prototype rather than from the method,
+	 * so it is built out of a declaration of one - nothing here compiles
+	 * anything, and the module exists only to hold the types.
 	 */
 	ERROR_DECL (metadata_error);
-	MinimalCompile cfg (method, state.domain, metadata_error);
+	MinimalCompile cfg (method, domain, metadata_error);
 
 	if (cfg.get ()->header == nullptr)
 		return runtime_error (metadata_error);
 
-	auto context = std::make_unique<LLVMContext> ();
-	auto module = std::make_unique<Module> ("mono.interp.shim", *context);
+	LLVMContext context;
+	Module module ("mono.interp.entry", context);
 
 	std::vector<ExternalSymbol> externals;
-	MethodLLVMEmitter declarer (module.get (), cfg.get (), method, &externals);
+	MethodLLVMEmitter declarer (&module, cfg.get (), method, &externals);
 	Expected<Function *> shape = declarer.declare (method);
 
 	if (!shape)
@@ -2728,78 +2776,99 @@ Backend::interp_body_entry (DomainState &state, MonoMethod *method, void *legacy
 	if (method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (method);
 
-	arch::LegacyFlavor flavor = legacy_call_flavor (sig);
-	std::string key = prototype_key (*shape, flavor);
-	void *shim = nullptr;
+	/*
+	 * The prototype alone does not settle the layout: a byref parameter hands
+	 * the interpreter the pointer itself where an ordinary reference hands it
+	 * the slot holding one, and the two are the same bare ptr here. Nor does it
+	 * settle where the receiver stops and the arguments start.
+	 */
+	std::string key = prototype_key (*shape, legacy_call_flavor (sig));
+
+	key += sig->hasthis ? "|this" : "|static";
+	for (int i = 0; i < sig->param_count; ++i)
+		key += sig->params[i]->byref ? '&' : '.';
 
 	{
-		std::lock_guard<std::mutex> lock (mutex_);
-		auto it = state.shims.find (key);
+		std::shared_lock<std::shared_mutex> lock (interp_mutex_);
+		auto it = layouts_.find (key);
 
-		if (it != state.shims.end ())
-			shim = it->second;
+		if (it != layouts_.end ())
+			return it->second.get ();
 	}
 
-	if (shim == nullptr) {
-		static std::atomic<uint64_t> next { 0 };
-		std::string name = "mono.interp.shim."
-		                   + std::to_string (next.fetch_add (1));
+	Expected<arch::InterpEntryLayout> planned = arch::plan_interp_entry (*shape, sig);
 
-		arch::create_fastcc_entry_thunk (*module, name, *shape, flavor);
+	if (!planned)
+		return planned.takeError ();
 
-		if ((*shape)->use_empty ())
-			(*shape)->eraseFromParent ();
+	std::unique_lock<std::shared_mutex> lock (interp_mutex_);
+	std::unique_ptr<arch::InterpEntryLayout> &slot = layouts_[key];
 
-		if (Error err = bind_symbols (*module))
-			return std::move (err);
+	/* Two threads racing on one prototype agree, so the loser's is dropped. */
+	if (slot == nullptr)
+		slot = std::make_unique<arch::InterpEntryLayout> (std::move (*planned));
+	return slot.get ();
+}
 
-		if (dumping (name.c_str ()))
-			module->print (llvm::errs (), nullptr);
+Expected<const arch::InterpEntryPoint *>
+Backend::interp_entry (MonoDomain *domain, MonoMethod *method)
+{
+	{
+		std::shared_lock<std::shared_mutex> lock (interp_mutex_);
+		auto domain_entries = interp_entries_.find (domain);
 
-		Expected<CompiledMethod> compiled = state.jit->compile (
-			ThreadSafeModule (std::move (module),
-		                          ThreadSafeContext (std::move (context))),
-			name);
+		if (domain_entries != interp_entries_.end ()) {
+			auto it = domain_entries->second.find (method);
 
-		if (!compiled)
-			return compiled.takeError ();
+			if (it != domain_entries->second.end ())
+				return &it->second;
+		}
+	}
 
-		/*
-		 * The shim calls, so a thread can be stopped in its frame and an
-		 * exception out of the interpreted method unwinds through it: it needs
-		 * a record like any other frame. The method it is registered under is
-		 * whichever one first wanted this prototype, which is why the record
-		 * says the code holds none of that method's IL - a stack walk reports
-		 * no frame for it either way.
-		 */
-		Expected<MonoJitInfo *> jinfo = register_jit_info (
-			state.domain, method, nullptr, *compiled, CodeKind::AbiThunk);
+	Expected<const arch::InterpEntryLayout *> layout =
+		interp_layout_for (domain, method);
 
-		if (!jinfo)
-			return jinfo.takeError ();
+	if (!layout)
+		return layout.takeError ();
 
-		std::lock_guard<std::mutex> lock (mutex_);
-		/* Two threads racing on one prototype both compile; both are correct
-		 * code, and every method after them converges on whichever won. */
-		shim = state.shims.emplace (key, compiled->entry).first->second;
+	ERROR_DECL (interp_error);
+	void *imethod = mini_get_interp_callbacks ()->get_imethod (method, interp_error);
+
+	if (imethod == nullptr)
+		return runtime_error (interp_error);
+
+	std::unique_lock<std::shared_mutex> lock (interp_mutex_);
+	arch::InterpEntryPoint &entry = interp_entries_[domain][method];
+
+	entry.layout = *layout;
+	entry.imethod = imethod;
+	return &entry;
+}
+
+const arch::InterpEntryPoint *
+Backend::interp_entry_for_current_domain (MonoMethod *method)
+{
+	Expected<Backend *> backend = Backend::get ();
+
+	if (!backend) {
+		consumeError (backend.takeError ());
+		return nullptr;
 	}
 
 	/*
-	 * Which method the shim was entered for is the one thing it cannot read
-	 * off the prototype, so it arrives in the key register - a stub of the
-	 * method's own is what puts it there. Redirectable like the others, though
-	 * nothing redirects this one: the body stub in front of it is what a later
-	 * tier moves.
+	 * The thread's own domain, not the one that published the stub: a call that
+	 * arrived here having switched domains has to run the method as the domain
+	 * it switched to, which is the one holding that method's interpreter state.
 	 */
-	std::string name = symbol_for_body (method) + "$interp";
-	Expected<void *> thunk = state.stubs->create_keyed_stub (name, shim, legacy);
+	Expected<const arch::InterpEntryPoint *> entry =
+		(*backend)->interp_entry (mono_domain_get (), method);
 
-	if (!thunk)
-		return thunk;
+	if (!entry) {
+		consumeError (entry.takeError ());
+		return nullptr;
+	}
 
-	register_stub_jinfo (state.domain, method, *thunk, arch::stub_block_size,
-	                     name);
-	return *thunk;
+	return *entry;
 }
 
 Expected<void *>
@@ -3212,6 +3281,12 @@ Backend::publish (DomainState &state, MonoMethod *method)
 }
 
 } // namespace
+
+const arch::InterpEntryPoint *
+interp_entry_for (MonoMethod *method)
+{
+	return Backend::interp_entry_for_current_domain (method);
+}
 
 } // namespace mono
 

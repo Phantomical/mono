@@ -29,7 +29,9 @@
 
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/Support/Error.h>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace llvm {
@@ -53,6 +55,13 @@ void lazy_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp);
 /// Unlink FRAME and take any interruption that arrived while it was linked,
 /// returning the exception to throw or null.
 void *lazy_frame_leave (void *frame);
+
+/// Link a frame onto the LMF chain for the length of a call into the
+/// interpreter, standing for the managed frame that made the call.
+void interp_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp);
+
+/// Unlink a frame linked by interp_frame_enter.
+void interp_frame_leave (void *frame);
 
 /// The slot holding the runtime's rethrow-preserving throw trampoline. Read
 /// through at throw time, so this is callable before the runtime has one.
@@ -177,21 +186,21 @@ llvm::Function *create_unbox_entry (llvm::Module &m, llvm::StringRef name,
                                     llvm::Function *target, llvm::Value *through,
                                     unsigned adjust);
 
-/// Create NAME in M: the other direction, a fastcc entry with SHAPE's exact
-/// prototype which passes its arguments on to a legacy-convention callee and
-/// hands back what it returns. This is what generated code calls when the
-/// method it is calling has no compiled body to bind to.
+/* -- Entering the interpreter --------------------------------------------- */
+
+/// How a call to a method is taken apart into the arguments the interpreter
+/// wants. The shape is a declaration of the method in this backend's own
+/// convention and only its type is read; the signature is the method's.
 ///
-/// The callee's address is not baked in. It arrives in the key register, as
-/// one leading `nest` parameter, so the thunk depends on nothing but the
-/// prototype and can be shared by every method that has it - write_keyed_jump_stub ()
-/// is what supplies the address per method.
-///
-/// SHAPE is only read; it stays a declaration, and M is free to be a module of
-/// the thunk's own.
-llvm::Function *create_fastcc_entry_thunk (llvm::Module &m, llvm::StringRef name,
-                                           llvm::Function *shape,
-                                           LegacyFlavor flavor);
+/// An error says this machine's entry cannot carry a call like that, and the
+/// method has to be compiled rather than interpreted.
+llvm::Expected<InterpEntryLayout> plan_interp_entry (llvm::Function *shape,
+                                                     MonoMethodSignature *sig);
+
+/// The code an interpreted method's stub is pointed at, entered with the
+/// MonoMethod * in the key register. Registered with the runtime on first call
+/// so that a stack walk can cross it.
+void *interp_entry_thunk ();
 
 } // namespace mono::arch
 

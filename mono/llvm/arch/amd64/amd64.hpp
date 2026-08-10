@@ -9,10 +9,14 @@
 #ifndef MONO_LLVM_ARCH_AMD64_AMD64_HPP
 #define MONO_LLVM_ARCH_AMD64_AMD64_HPP
 
+#include "arch/amd64/interp-entry-offsets.h"
+
 #include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
 #include <llvm/TargetParser/Triple.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace mono::arch {
 
@@ -45,11 +49,98 @@ constexpr uint64_t counter_thunk_alignment = 16;
 constexpr uint64_t counter_thunk_code_size = 48;
 
 /*
- * Stack the lazy-entry resolver reserves for its frame. lmf.cpp casts it to
+ * Stack to reserve for the LMF standing for a managed-to-native transition -
+ * what lazy_frame_enter () and interp_frame_enter () link. lmf.cpp casts it to
  * its own struct and static_asserts it fits; 32 keeps the frame that follows
  * 16-aligned.
  */
-constexpr unsigned lazy_frame_size = 32;
+constexpr unsigned managed_frame_size = 32;
+
+/* -- Entering the interpreter --------------------------------------------- */
+
+/// The registers a call arrived in, as interp-entry-thunk.S spilled them.
+struct InterpArgContext {
+	uint64_t gregs[6];                     ///< rdi rsi rdx rcx r8 r9
+	alignas (16) uint8_t fregs[8][16];     ///< xmm0 - xmm7
+	uint64_t ret_gregs[3];                 ///< rax rdx rcx
+	alignas (16) uint8_t ret_fregs[4][16]; ///< xmm0 - xmm3
+	uint8_t *stack;                        ///< the caller's outgoing arguments
+	uint64_t caller_fp;                    ///< the caller's frame pointer
+};
+
+static_assert (offsetof (InterpArgContext, gregs) == MONO_INTERP_CTX_GREGS);
+static_assert (offsetof (InterpArgContext, fregs) == MONO_INTERP_CTX_FREGS);
+static_assert (offsetof (InterpArgContext, ret_gregs) == MONO_INTERP_CTX_RET_GREGS);
+static_assert (offsetof (InterpArgContext, ret_fregs) == MONO_INTERP_CTX_RET_FREGS);
+static_assert (offsetof (InterpArgContext, stack) == MONO_INTERP_CTX_STACK);
+static_assert (offsetof (InterpArgContext, caller_fp) == MONO_INTERP_CTX_CALLER_FP);
+static_assert (sizeof (InterpArgContext) == MONO_INTERP_CTX_SIZE);
+
+/// One move between an InterpArgContext slot and a value's own storage.
+struct ArgPiece {
+	enum class File : uint8_t {
+		Greg,  ///< an integer register, indexed by AT
+		Freg,  ///< an SSE register, indexed by AT
+		Stack, ///< the caller's arguments, at byte offset AT
+	};
+
+	File file = File::Greg;
+	uint8_t width = 0;   ///< how many bytes move
+	uint32_t at = 0;     ///< the register number, or the byte offset
+	uint32_t offset = 0; ///< where they sit within the value
+};
+
+/// Where one of the interpreter's arguments arrived.
+///
+/// The interpreter reads an argument through a pointer, so a value that came in
+/// one piece needs no copy: the context slot it landed in is already storage to
+/// point at. Only a value LLVM spread across several registers has to be
+/// gathered somewhere contiguous first.
+struct ArgPlan {
+	enum class Where : uint8_t { Greg, Freg, Stack, Pieces };
+
+	Where where = Where::Greg;
+	/// The interpreter wants the pointer itself, not the slot holding it.
+	bool byref = false;
+	/// The register number, the byte offset into the caller's arguments, or the
+	/// byte offset into the entry's scratch when Pieces.
+	uint32_t at = 0;
+	uint32_t size = 0; ///< how many bytes the value is
+	/// The half-open range of InterpEntryLayout::pieces to gather from.
+	uint32_t first_piece = 0, piece_count = 0;
+};
+
+/// How a method's return value gets back to its caller.
+struct ReturnPlan {
+	enum class Kind : uint8_t {
+		None,      ///< the method returns nothing
+		Hidden,    ///< written straight into a pointer the caller passed
+		Registers, ///< gathered into scratch and scattered into the registers
+	};
+
+	Kind kind = Kind::None;
+	uint32_t hidden_greg = 0; ///< which register the caller's pointer came in
+	uint32_t size = 0;        ///< how many bytes the value is, when Registers
+	std::vector<ArgPiece> pieces;
+};
+
+/// How a call to one prototype is read out of an InterpArgContext. Shared by
+/// every method that has that prototype.
+struct InterpEntryLayout {
+	bool has_this = false;
+	uint32_t this_greg = 0;    ///< where the receiver arrived, when there is one
+	std::vector<ArgPlan> args; ///< one per signature parameter, the receiver aside
+	std::vector<ArgPiece> pieces;
+	ReturnPlan ret;
+	uint32_t ret_scratch = 0;  ///< where the return is gathered, when Registers
+	uint32_t scratch_size = 0; ///< room a call needs for everything gathered
+};
+
+/// What the thunk resolves a MonoMethod * to.
+struct InterpEntryPoint {
+	const InterpEntryLayout *layout = nullptr;
+	void *imethod = nullptr; ///< InterpMethod *, which nothing here looks into
+};
 
 /// ORC's re-entry ABI, resolving through a mono lazy-entry frame.
 struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {

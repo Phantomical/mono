@@ -199,6 +199,19 @@ stub_entry_from_trampoline (gpointer ccontext, gpointer imethod)
 }
 
 static void
+stub_entry_from_args (gpointer imethod, gpointer this_arg, gpointer res, gpointer *args)
+{
+	g_assert_not_reached ();
+}
+
+static gpointer
+stub_get_imethod (MonoMethod *method, MonoError *error)
+{
+	g_assert_not_reached ();
+	return NULL;
+}
+
+static void
 stub_to_native_trampoline (gpointer addr, gpointer ccontext)
 {
 	g_assert_not_reached ();

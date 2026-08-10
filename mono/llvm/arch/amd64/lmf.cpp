@@ -29,10 +29,10 @@
 namespace mono::arch {
 
 /*
- * What the lazy-entry resolver reserves stack for. A plain LMF - not one of the
- * MonoLMFExt kinds - because an ordinary managed-to-native transition is what
- * this is: rsp and rbp below are the caller's, and its ip is read back off its
- * own stack from there.
+ * What a caller of the enters below reserves stack for. A plain LMF - not one of
+ * the MonoLMFExt kinds - because an ordinary managed-to-native transition is
+ * what these are: rsp and rbp below are the caller's, and its ip is read back
+ * off its own stack from there.
  *
  * Crossing one of these zeroes the rest of the callee-saved registers, which a
  * managed-to-native wrapper makes up for by restoring them from its own frame
@@ -40,45 +40,60 @@ namespace mono::arch {
  * compiler, and an abort does not come out that way: the resolver throws it
  * from the caller's frame, having already unlinked this.
  */
-struct LazyFrame {
+struct TransitionFrame {
 	MonoLMF lmf;
 	MonoLMF **addr;
 };
 
-static_assert (sizeof (LazyFrame) <= lazy_frame_size,
-               "the resolver does not reserve enough for a lazy-entry frame");
+static_assert (sizeof (TransitionFrame) <= managed_frame_size,
+               "a caller does not reserve enough for a transition frame");
+
+namespace {
+
+/// Link a frame onto the chain, or record that there was no chain to link onto.
+void
+link_frame (TransitionFrame *frame, uint64_t caller_fp, uint64_t caller_sp)
+{
+	/*
+	 * No LMF chain means a thread that has not run managed code, which reaches
+	 * a stub only by the runtime calling one directly. There is no managed
+	 * caller for a walk to find, and nothing to deliver an abort to either.
+	 */
+	frame->addr = mono_tls_get_lmf_addr ();
+
+	if (!frame->addr)
+		return;
+
+	frame->lmf.rbp = caller_fp;
+	frame->lmf.rsp = caller_sp;
+	frame->lmf.previous_lmf = *frame->addr;
+	*frame->addr = &frame->lmf;
+}
+
+/// Whether the frame was linked, having taken it back off the chain if it was.
+bool
+unlink_frame (TransitionFrame *frame)
+{
+	if (!frame->addr)
+		return false;
+
+	*frame->addr = (MonoLMF *) (((gsize) frame->lmf.previous_lmf) & ~7);
+	return true;
+}
+
+} // namespace
 
 void
 lazy_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp)
 {
-	LazyFrame *lazy = static_cast<LazyFrame *> (frame);
-
-	/*
-	 * No LMF chain to link onto means a thread that has not run managed code,
-	 * which reaches a stub only by the runtime calling one directly. There is
-	 * no managed caller for the walk to find, and nothing to deliver an abort
-	 * to either.
-	 */
-	lazy->addr = mono_tls_get_lmf_addr ();
-
-	if (!lazy->addr)
-		return;
-
-	lazy->lmf.rbp = caller_fp;
-	lazy->lmf.rsp = caller_sp;
-	lazy->lmf.previous_lmf = *lazy->addr;
-	*lazy->addr = &lazy->lmf;
+	link_frame (static_cast<TransitionFrame *> (frame), caller_fp, caller_sp);
 }
 
 void *
 lazy_frame_leave (void *frame)
 {
-	LazyFrame *lazy = static_cast<LazyFrame *> (frame);
-
-	if (!lazy->addr)
+	if (!unlink_frame (static_cast<TransitionFrame *> (frame)))
 		return nullptr;
-
-	*lazy->addr = (MonoLMF *) (((gsize) lazy->lmf.previous_lmf) & ~7);
 
 	/*
 	 * An abort aimed at a thread inside the compiler is left as a flag rather
@@ -88,6 +103,23 @@ lazy_frame_leave (void *frame)
 	 * called from a protected wrapper.
 	 */
 	return mono_thread_force_interruption_checkpoint_noraise ();
+}
+
+void
+interp_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp)
+{
+	link_frame (static_cast<TransitionFrame *> (frame), caller_fp, caller_sp);
+}
+
+void
+interp_frame_leave (void *frame)
+{
+	/*
+	 * No checkpoint on the way out, unlike the lazy entry: the interpreter
+	 * polls for interruption itself while it runs the method, so a thread
+	 * getting this far has already been given every chance to take one.
+	 */
+	unlink_frame (static_cast<TransitionFrame *> (frame));
 }
 
 void **
