@@ -91,11 +91,6 @@ private:
 	/// Point METHOD's stubs at the interpreter.
 	llvm::Expected<Compiled> interp_entries (DomainState &domain, MethodState &method);
 
-	/// Ask for METHOD to be compiled again on the background worker, its stubs
-	/// redirected to the second body when it is done. Quiet when the work is
-	/// refused - nothing is waiting for it.
-	void enqueue_recompile (DomainState &domain, MethodState &method);
-
 	/// The per-call dispatcher METHOD's body stub binds to when its first
 	/// caller arrived from another domain.
 	llvm::Expected<void *> dispatcher (DomainState &domain, MethodState &method);

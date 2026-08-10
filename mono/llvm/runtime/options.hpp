@@ -41,21 +41,6 @@ void dump_il (MonoMethod *method, MonoMethodHeader *header);
 /// tiering policy.
 bool recompiling (MonoMethod *method);
 
-/// Whether MONO_LLVM_JIT_ASYNC_RECOMPILE names this method: a substring of its
-/// full name, or `1` for all of them.
-///
-/// It asks for the method to be compiled a second time on the background worker,
-/// its stubs redirected to the result. Semantically inert - the same method
-/// through the same pipeline - which is the point: it puts every compile the test
-/// corpus performs through the asynchronous machine without any promotion policy
-/// having to exist first.
-bool async_recompiling (const char *name);
-
-/// How long MONO_LLVM_JIT_ASYNC_DELAY asks the worker to sit on each compile
-/// before starting it, in milliseconds. Widens the window a domain unload or a
-/// method free has to race against, which is otherwise too narrow to hit.
-unsigned async_delay ();
-
 /// How many calls an interpreted method is given before it is compiled.
 ///
 /// Ten, and it is not a tuned number: all a threshold really has to do is keep

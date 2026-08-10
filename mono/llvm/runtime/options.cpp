@@ -77,28 +77,6 @@ recompiling (MonoMethod *method)
 	return selected;
 }
 
-bool
-async_recompiling (const char *name)
-{
-	static const char *filter = g_getenv ("MONO_LLVM_JIT_ASYNC_RECOMPILE");
-
-	if (filter == nullptr)
-		return false;
-	return llvm::StringRef (filter) == "1" || strstr (name, filter) != nullptr;
-}
-
-unsigned
-async_delay ()
-{
-	static unsigned ms = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_ASYNC_DELAY");
-
-		return value != nullptr ? (unsigned) atoi (value) : 0u;
-	}();
-
-	return ms;
-}
-
 uint32_t
 tier1_threshold ()
 {

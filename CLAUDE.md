@@ -272,10 +272,10 @@ option. `--llvm-opt=OPT` is the one LLVM-facing flag left, and it just forwards
 to pass more than one. The AOT compiler is out of scope and refuses immediately.
 
 Backend debugging env vars:
-- `MONO_LLVM_JIT_TRACE=1` (`runtime.cpp`) — print every method the backend translates;
+- `MONO_LLVM_JIT_TRACE=1` (`runtime/options.cpp`) — print every method the backend translates;
   a method reached as a callee is compiled without the runtime ever being asked for
   it, so nothing else says it happened.
-- `MONO_LLVM_JIT_DUMP=<substr>` (`runtime.cpp`) — dump the IL and translated IR of
+- `MONO_LLVM_JIT_DUMP=<substr>` (`runtime/options.cpp`) — dump the IL and translated IR of
   methods whose full name contains the substring.
 - `MONO_LLVM_JIT_ASM=<substr>` (`compiler.cpp`) — print the assembly methods whose
   full name contains the substring compile to, side-table sections included, which
@@ -313,7 +313,7 @@ Backend debugging env vars:
   piece of per-compile work away so it can be priced; none is a candidate
   implementation and `sharedjd` is not even safe under concurrent compiles.
   `sharedjd` puts every module in one JITDylib.
-- `MONO_LLVM_JIT_RECOMPILE=<substr>` (`runtime.cpp`) — methods whose full name contains
+- `MONO_LLVM_JIT_RECOMPILE=<substr>` (`runtime/options.cpp`) — methods whose full name contains
   the substring are translated afresh on every compile request instead of being answered
   from the cache, so they end up with several live bodies. Nothing else produces one, and
   the code that has to cope — the debugger installing a breakpoint in every body a method
@@ -342,14 +342,17 @@ MONO_PATH=build/mcs/class/lib/net_4_x \
 Everything here is **C++**, and every header is a `.hpp` — there are no `.h` files.
 The one header mono's C sources include is `runtime.hpp`, whose declarations sit
 inside `MONO_BEGIN_DECLS`; its whole audience is `mini-runtime.c`,
-`mini-trampolines.c` and `driver.c`, and its whole surface is six functions. Keep
+`mini-trampolines.c` and `driver.c`, and its whole surface is ten functions. Keep
 it that small.
 
-- **`runtime.cpp` / `runtime.hpp`** — the boundary. `mono_llvm_jit_compile_method ()`
-  compiles a method into a domain's linker and hands back the address to call;
-  the rest is freeing a domain or a method, finding a compiled body, and the unbox
-  entry. This is also where the runtime helpers and libcalls generated code may name
-  are registered.
+- **`runtime.hpp` + `runtime/`** — the engine. `runtime/entrypoints.cpp` is the boundary:
+  `mono_llvm_jit_compile_method ()` compiles a method into a domain's linker and hands
+  back the address to call, and the rest is freeing a domain or a method, finding a
+  compiled body, and the unbox entry. `runtime/backend.cpp` holds the state — one
+  `MethodState` per method with its stubs, trampolines and jit infos together — and the
+  rest of the directory is what a compile is made of: `naming`, `translate`, `externals`,
+  `thrower`, `dispatcher`, `interp`, `options`. `runtime/builtins.cpp` registers the
+  runtime helpers and libcalls generated code may name.
 - **`method-to-llvm.cpp` + `method-to-llvm/`** — the CIL→IR front end. One class,
   `MethodLLVMEmitter`, split across `method-to-llvm/` by opcode family: `call.cpp`,
   `casts.cpp`, `exceptions.cpp`, `fields.cpp`, `newobj.cpp`, `signature.cpp` and so on.
