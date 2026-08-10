@@ -48,6 +48,19 @@ public:
 	/// Note that this will prevent any compilations from running again.
 	static void stop_compilation ();
 
+	/// Where METHOD's body starts in DOMAIN, or null when this engine has not
+	/// compiled it there.
+	static void *body_of (MonoDomain *domain, MonoMethod *method);
+
+	/// Call VISIT with the jit info of each live body this engine compiled
+	/// METHOD into in DOMAIN, oldest first.
+	static void foreach_body (MonoDomain *domain, MonoMethod *method,
+	                          void (*visit) (MonoJitInfo *, void *), void *user_data);
+
+	/// Where to enter METHOD when the receiver is still boxed, or null when this
+	/// engine generated no such entry for it.
+	static void *unbox_entry_of (MonoMethod *method);
+
 public:
 	/// Compile a method within a domain. Returns an address which you can use
 	/// to call the method, or an error otherwise.
@@ -59,10 +72,6 @@ private:
 	MonoBackend &operator= (const MonoBackend &) = delete;
 
 	~MonoBackend ();
-
-	/// Get the method body for a method.
-	static void *get_method_body (MonoMethod *method);
-	static void *get_method_body (MonoMethod *method, MonoDomain *domain);
 
 	/// Get the DomainState for a given domain, or the current one otherwise.
 	llvm::Expected<DomainState *> state ();

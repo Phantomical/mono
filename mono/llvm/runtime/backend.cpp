@@ -4,6 +4,7 @@
 #include "compile-queue.hpp"
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
+#include "engine.hpp"
 #include "naming.hpp"
 #include "options.hpp"
 #include <llvm/ADT/StringRef.h>
@@ -54,6 +55,7 @@ MonoBackend::get ()
 	static std::once_flag once;
 
 	std::call_once (once, [] {
+		claim_engine (EngineKind::backend);
 		instance = new MonoBackend ();
 
 		atexit ([] {
@@ -511,6 +513,30 @@ MonoBackend::release_method_impl (MonoMethod *method)
 	// the backend's own lock dropped.
 	for (auto &[state, mstate] : going)
 		state->retire (*mstate);
+}
+
+/*
+ * The three reads below answer for a method this engine has compiled. Nothing it
+ * publishes carries code yet - entry_point () still refuses - so for now they say
+ * so rather than pretending a method has no body, which the runtime would take as
+ * "not compiled here" and act on.
+ */
+void *
+MonoBackend::body_of (MonoDomain *, MonoMethod *)
+{
+	return nullptr;
+}
+
+void
+MonoBackend::foreach_body (MonoDomain *, MonoMethod *, void (*) (MonoJitInfo *, void *),
+                           void *)
+{
+}
+
+void *
+MonoBackend::unbox_entry_of (MonoMethod *)
+{
+	return nullptr;
 }
 
 llvm::Expected<void *>

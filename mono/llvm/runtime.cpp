@@ -32,6 +32,8 @@
 #include "stubs.hpp"
 #include "timing.hpp"
 #include "method-to-llvm.hpp"
+#include "runtime-legacy.hpp"
+#include "runtime/engine.hpp"
 #include "runtime/builtins.hpp"
 #include "runtime/minimal-compile.hpp"
 #include "runtime/naming.hpp"
@@ -603,6 +605,7 @@ Backend::get ()
 	static std::once_flag once;
 
 	std::call_once (once, [] {
+		claim_engine (EngineKind::legacy);
 		live_backend = new Backend ();
 
 		/*
@@ -2665,100 +2668,61 @@ interp_entry_for (MonoMethod *method)
 {
 	return Backend::interp_entry_for_current_domain (method);
 }
+namespace legacy {
+
+llvm::Expected<void *>
+compile (MonoMethod *method, MonoDomain *target_domain)
+{
+	llvm::Expected<Backend *> backend = Backend::get ();
+
+	if (!backend)
+		return backend.takeError ();
+	return (*backend)->compile (method, target_domain);
+}
+
+void
+stop_compiling ()
+{
+	Backend::stop_compiling ();
+}
+
+void
+stop_compiling_for (MonoDomain *domain)
+{
+	Backend::stop_compiling_for (domain);
+}
+
+void
+free_domain (MonoDomain *domain)
+{
+	Backend::free_domain (domain);
+}
+
+void
+free_method (MonoMethod *method)
+{
+	Backend::free_method (method);
+}
+
+void *
+body_of (MonoDomain *domain, MonoMethod *method)
+{
+	return Backend::body_of (domain, method);
+}
+
+void
+foreach_body (MonoDomain *domain, MonoMethod *method,
+              void (*visit) (MonoJitInfo *, void *), void *user_data)
+{
+	Backend::foreach_body (domain, method, visit, user_data);
+}
+
+void *
+unbox_entry_of (MonoMethod *method)
+{
+	return Backend::unbox_entry_of (method);
+}
+
+} // namespace legacy
 
 } // namespace mono
-
-void
-mono_llvm_jit_stop_compiling (void)
-{
-	mono::Backend::stop_compiling ();
-}
-
-void
-mono_llvm_jit_stop_compiling_for_domain (MonoDomain *domain)
-{
-	mono::Backend::stop_compiling_for (domain);
-}
-
-void
-mono_llvm_jit_free_domain (MonoDomain *domain)
-{
-	mono::Backend::free_domain (domain);
-}
-
-void
-mono_llvm_jit_free_method (MonoMethod *method)
-{
-	mono::Backend::free_method (method);
-}
-
-void *
-mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method)
-{
-	return mono::Backend::body_of (domain, method);
-}
-
-void
-mono_llvm_jit_foreach_body (MonoDomain *domain, MonoMethod *method,
-                            void (*visit) (MonoJitInfo *, void *), void *user_data)
-{
-	mono::Backend::foreach_body (domain, method, visit, user_data);
-}
-
-void *
-mono_llvm_jit_unbox_entry (MonoMethod *method)
-{
-	return mono::Backend::unbox_entry_of (method);
-}
-
-void *
-mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domain,
-                              MonoError *error)
-{
-	error_init (error);
-
-	llvm::Expected<mono::Backend *> backend = mono::Backend::get ();
-	if (!backend) {
-		mono_error_set_execution_engine (error, "%s",
-		                                 llvm::toString (backend.takeError ()).c_str ());
-		return NULL;
-	}
-
-	llvm::Expected<void *> code = (*backend)->compile (method, target_domain);
-	if (code)
-		return *code;
-
-	/*
-	 * A refusal the translator raised through a MonoError is handed back as the
-	 * exception it described; anything else is the engine itself failing, which
-	 * managed code sees as an ExecutionEngineException all the same.
-	 */
-	llvm::Error failure = code.takeError ();
-	bool recovered = false;
-
-	llvm::handleAllErrors (
-		std::move (failure),
-		[&] (mono::RuntimeError &runtime) {
-			runtime.move_to (error);
-			recovered = true;
-		},
-		[&] (const llvm::ErrorInfoBase &other) {
-			mono_error_set_execution_engine (error, "%s", other.message ().c_str ());
-			recovered = true;
-		});
-
-	g_assert (recovered);
-	return NULL;
-}
-
-void
-mono_llvm_jit_add_option (const char *opt)
-{
-	mono::MonoJit::add_option (opt);
-}
-
-void
-mono_llvm_jit_interpret_methods (const char *filter)
-{
-	mono::set_interp_filter (filter);
-}
