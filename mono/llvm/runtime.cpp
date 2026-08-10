@@ -33,6 +33,7 @@
 #include "timing.hpp"
 #include "method-to-llvm.hpp"
 #include "runtime/naming.hpp"
+#include "runtime/options.hpp"
 #include "verification.hpp"
 
 #include "mini.h"
@@ -453,168 +454,6 @@ private:
 	MonoCompile cfg;
 };
 
-/// Whether MONO_LLVM_JIT_TRACE asked to see every method this backend translates.
-/// Worth having because a method reached as a callee is compiled without the
-/// runtime ever being asked for it, so nothing else says it happened.
-bool
-tracing ()
-{
-	static bool on = g_getenv ("MONO_LLVM_JIT_TRACE") != NULL;
-
-	return on;
-}
-
-/// Whether MONO_LLVM_JIT_DUMP names this method: a substring of its full name
-/// selects it for having its IL and translated IR printed to stderr.
-bool
-dumping (const char *name)
-{
-	static const char *filter = g_getenv ("MONO_LLVM_JIT_DUMP");
-
-	return filter != nullptr && strstr (name, filter) != nullptr;
-}
-
-/// Whether MONO_LLVM_JIT_RECOMPILE names METHOD: a substring of its full name
-/// selects it for being translated afresh on every compile request rather than
-/// answered from the cache, which is what gives a method more than one live
-/// body. It is a way to exercise the paths that have to cope with that - the
-/// debugger arming a breakpoint everywhere a method is executing - rather than
-/// a tiering policy.
-bool
-recompiling (MonoMethod *method)
-{
-	static const char *filter = g_getenv ("MONO_LLVM_JIT_RECOMPILE");
-
-	if (filter == nullptr)
-		return false;
-
-	char *name = mono_method_full_name (method, TRUE);
-	bool selected = strstr (name, filter) != nullptr;
-
-	g_free (name);
-	return selected;
-}
-
-/// Whether MONO_LLVM_JIT_ASYNC_RECOMPILE names this method: a substring of its
-/// full name, or `1` for all of them.
-///
-/// It asks for the method to be compiled a second time on the background
-/// worker, its stubs redirected to the result. Semantically inert - the same
-/// method through the same pipeline - which is the point: it puts every compile
-/// the test corpus performs through the asynchronous machine without any
-/// promotion policy having to exist first.
-bool
-async_recompiling (const char *name)
-{
-	static const char *filter = g_getenv ("MONO_LLVM_JIT_ASYNC_RECOMPILE");
-
-	if (filter == nullptr)
-		return false;
-	return std::string_view (filter) == "1" || strstr (name, filter) != nullptr;
-}
-
-/// How long MONO_LLVM_JIT_ASYNC_DELAY asks the worker to sit on each compile
-/// before starting it, in milliseconds. Widens the window a domain unload or a
-/// method free has to race against, which is otherwise too narrow to hit.
-unsigned
-async_delay ()
-{
-	static unsigned ms = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_ASYNC_DELAY");
-
-		return value != nullptr ? (unsigned) atoi (value) : 0u;
-	}();
-
-	return ms;
-}
-
-/// How many calls an interpreted method is given before it is compiled.
-///
-/// Ten, and it is not a tuned number: all a threshold really has to do is keep
-/// methods that are called once or twice out of the compiler, and what the
-/// trade is worth past that needs an execution-count distribution measured off
-/// a real workload rather than an argument. MONO_LLVM_JIT_TIER1_THRESHOLD moves
-/// it, which is the point of it being a variable at all; zero there leaves the
-/// selected methods interpreted for good, which is what separates the tier-0
-/// entry path from promotion when one of them misbehaves.
-uint32_t
-tier1_threshold ()
-{
-	static uint32_t calls = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_TIER1_THRESHOLD");
-
-		if (value == nullptr)
-			return 10;
-
-		int set = atoi (value);
-
-		return set > 0 ? set : 0;
-	}();
-
-	return calls;
-}
-
-void
-dump_il (MonoMethod *method, MonoMethodHeader *header)
-{
-	const uint8_t *code = mono_method_header_get_code (header, nullptr, nullptr);
-	uint32_t size;
-
-	mono_method_header_get_code (header, &size, nullptr);
-
-	char *il = mono_disasm_code (nullptr, method, code, code + size);
-	fprintf (stderr, "%s\n", il);
-	g_free (il);
-}
-
-/// Which methods --interp-tier0 selected, or null when it was not given. An
-/// empty filter takes every method that can be interpreted at all; anything
-/// else is matched as a substring of the printed name.
-const char *interp_tier0_filter = nullptr;
-
-/// Whether METHOD is entered by interpreting its bytecode rather than by
-/// compiling it.
-///
-/// The refusals below are the ones that would be wrong rather than merely
-/// slow:
-///
-///  - a method not implemented in IL has no bytecode of its own, and reaching
-///    one goes back through mono_jit_compile_method;
-///  - the allocator and write-barrier wrappers are handed out as raw entries
-///    rather than as stubs, because SGen identifies a thread suspended in one
-///    by resolving the address through the jit-info table. Nothing stands
-///    between them and their callers that a later tier could redirect, so an
-///    interpreted one would stay interpreted for good;
-///  - a wrapper is generated for the runtime to enter natively, and several
-///    kinds of them the interpreter answers for with something that is not a
-///    callable address at all;
-///  - freeing a dynamic method hands its MonoMethod back to the allocator,
-///    while the shims below are shared between methods and outlive any one of
-///    them.
-///
-/// AggressiveInlining goes straight to the compiler because that is what the
-/// attribute asks for, even though nothing is inlined across methods yet.
-bool
-runs_at_tier0 (MonoMethod *method)
-{
-	if (interp_tier0_filter == nullptr || !mono_use_interpreter)
-		return false;
-
-	if (implemented_outside_il (method) || method->dynamic
-	    || method->wrapper_type != MONO_WRAPPER_NONE
-	    || (method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING) != 0)
-		return false;
-
-	if (*interp_tier0_filter == '\0')
-		return true;
-
-	char *name = mono_method_full_name (method, TRUE);
-	bool selected = strstr (name, interp_tier0_filter) != nullptr;
-
-	g_free (name);
-	return selected;
-}
-
 /// A key naming everything about F's prototype that decides how a call to it is
 /// laid out - the types, the attributes that move a value, and which side of the
 /// boundary the callee behind it speaks for. Two methods that agree on this can
@@ -693,11 +532,6 @@ public:
 	/// none - a method not implemented in IL is entered through code this
 	/// backend did not generate.
 	static void *unbox_entry_of (MonoMethod *method);
-
-	/// Select the methods entered by interpreting them: FILTER is matched as a
-	/// substring of the printed name, and an empty one takes every method that
-	/// can be interpreted at all.
-	static void set_interp_filter (const char *filter);
 
 	/// The runtime helper behind the interpreter entry thunk, which is handed
 	/// only the method and has to find the rest for the calling thread's domain.
@@ -999,7 +833,7 @@ Backend::state_for (MonoDomain *domain)
 	for (const Helper &libcall : libcalls)
 		if (Error err = (*jit)->register_symbol (libcall.name, libcall.address))
 			return std::move (err);
-	if (tracing ())
+	if (is_jit_trace_enabled ())
 		fprintf (stderr, "[llvm-jit] %zu runtime libcalls registered\n",
 		         libcalls.size ());
 
@@ -1214,12 +1048,6 @@ Backend::unbox_entry_of (MonoMethod *method)
 	return *unbox;
 }
 
-void
-Backend::set_interp_filter (const char *filter)
-{
-	interp_tier0_filter = filter;
-}
-
 /*
  * --jitdump: name every function a linked object defines in /tmp/jit-<pid>.dump,
  * so perf resolves a sample in JIT-produced code to a method instead of to a
@@ -1394,7 +1222,7 @@ Backend::free_method (MonoMethod *method)
 	}
 
 	for (Release &release : releases) {
-		if (tracing ()) {
+		if (is_jit_trace_enabled ()) {
 			char *name = mono_method_full_name (method, TRUE);
 
 			fprintf (stderr,
@@ -1614,7 +1442,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 	 */
 	g_assert (mono_domain_get () == state.domain);
 
-	if (tracing ()) {
+	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
 		fprintf (stderr, "[llvm-jit] translating %s (for %s)\n", name,
@@ -1845,7 +1673,7 @@ Backend::translate_body (DomainState &state, MonoMethod *method,
 			return std::move (err);
 	}
 
-	if (tracing ())
+	if (is_jit_trace_enabled ())
 		fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", entry.c_str (),
 		         compiled->entry, state.domain->friendly_name);
 
@@ -1950,7 +1778,7 @@ Backend::compile_thrower (DomainState &state, MonoMethod *method, MonoError *fai
 	if (boxed == nullptr)
 		return runtime_error (failure);
 
-	if (tracing ()) {
+	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
 		fprintf (stderr, "[llvm-jit] %s throws on call: %s\n", name,
@@ -2183,7 +2011,7 @@ Backend::enqueue_recompile (DomainState &state, MonoMethod *method)
 		 * works. A background compile that fails leaves the method exactly as
 		 * it was, which is why nothing here retries or raises.
 		 */
-		if (tracing ()) {
+		if (is_jit_trace_enabled ()) {
 			char *failed = mono_method_full_name (method, TRUE);
 
 			fprintf (stderr, "[llvm-jit] background compile of %s failed: %s\n",
@@ -2245,7 +2073,7 @@ Backend::request_promotion (DomainState &state, MonoMethod *method)
 		Expected<Compiled> code = compile_and_publish (*owner, method, true);
 
 		if (code) {
-			if (tracing ()) {
+			if (is_jit_trace_enabled ()) {
 				char *name = mono_method_full_name (method, TRUE);
 
 				fprintf (stderr, "[llvm-jit] promoted %s\n", name);
@@ -2259,7 +2087,7 @@ Backend::request_promotion (DomainState &state, MonoMethod *method)
 		 * which is a correct way to run it. A promotion that fails therefore
 		 * leaves the method exactly as it was rather than raising.
 		 */
-		if (tracing ()) {
+		if (is_jit_trace_enabled ()) {
 			char *name = mono_method_full_name (method, TRUE);
 
 			fprintf (stderr, "[llvm-jit] promoting %s failed: %s\n", name,
@@ -2276,7 +2104,7 @@ Backend::request_promotion (DomainState &state, MonoMethod *method)
 	 * for the rest of its life. That is the direction that cannot be wrong, and
 	 * it is why nothing here retries.
 	 */
-	if (!queued && tracing ()) {
+	if (!queued && is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
 		fprintf (stderr, "[llvm-jit] promotion of %s was refused\n", name);
@@ -2540,7 +2368,7 @@ Backend::interp_entries (DomainState &state, MonoMethod *method)
 			return std::move (err);
 	}
 
-	if (tracing ()) {
+	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
 		fprintf (stderr, "[llvm-jit] interpreting %s (for %s)\n", name,
@@ -2770,7 +2598,7 @@ Backend::dispatcher (DomainState &state, MonoMethod *method)
 
 	remember (state, method, *compiled, nullptr);
 
-	if (tracing ())
+	if (is_jit_trace_enabled ())
 		fprintf (stderr,
 		         "[llvm-jit] %s dispatches per call (owner %s, first reached "
 		         "from %s)\n",
@@ -3191,5 +3019,5 @@ mono_llvm_jit_add_option (const char *opt)
 void
 mono_llvm_jit_interpret_methods (const char *filter)
 {
-	mono::Backend::set_interp_filter (filter);
+	mono::set_interp_filter (filter);
 }

@@ -5,6 +5,7 @@
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
 #include "naming.hpp"
+#include "options.hpp"
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -41,26 +42,6 @@ lazy_compile_failed ()
 	[[maybe_unused]] ssize_t written = write (2, msg, sizeof (msg) - 1);
 	fflush (nullptr);
 	_exit (1);
-}
-
-bool
-is_truthy_env_var (const char *env)
-{
-	if (!env)
-		return false;
-	auto var = llvm::StringRef (env);
-	if (var == "1")
-		return true;
-	if (var.equals_insensitive ("true"))
-		return true;
-	return false;
-}
-
-bool
-is_jit_trace_enabled ()
-{
-	static bool enabled = is_truthy_env_var (getenv ("MONO_LLVM_JIT_TRACE"));
-	return enabled;
 }
 
 } // namespace
