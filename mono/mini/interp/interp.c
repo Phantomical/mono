@@ -2543,6 +2543,33 @@ do_transform_method (InterpFrame *frame, ThreadContext *context)
 }
 
 /*
+ * Transform CMETHOD, which FRAME is about to be handed to by a tail call.
+ *
+ * Unlike the frame do_transform_method () runs under, this one is complete and still
+ * executing the method it is being taken away from, so the walk a class load or a throw
+ * inside the transform can trigger has to find it rather than its parent.
+ */
+static MONO_NEVER_INLINE MonoException*
+do_transform_tail_callee (InterpFrame *frame, InterpMethod *cmethod, ThreadContext *context, const guint16 *ip)
+{
+	MonoLMFExt ext;
+	gboolean push_lmf = frame->parent != NULL;
+	ERROR_DECL (error);
+
+	frame->state.ip = ip;
+	if (push_lmf)
+		interp_push_lmf (&ext, frame);
+
+	mono_interp_transform_method (cmethod, context, error);
+
+	if (push_lmf)
+		interp_pop_lmf (&ext);
+	frame->state.ip = NULL;
+
+	return mono_error_convert_to_exception (error);
+}
+
+/*
  * Fill the buffer ArgIterator walks: the call-site signature in the first word,
  * then the variable arguments behind it.
  *
@@ -3464,6 +3491,7 @@ interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs 
 	const guint16 *ip = NULL;
 	unsigned char *locals = NULL;
 	int call_args_offset;
+	int tail_args_size;
 	MonoMethodSignature *calli_signature;
 
 #if DEBUG_INTERP
@@ -3839,6 +3867,27 @@ calli:
 
 			goto call;
 		}
+		MINT_IN_CASE(MINT_TAILCALLVIRT_FAST) {
+			MonoObject *this_arg;
+			int slot;
+
+			cmethod = (InterpMethod*)frame->imethod->data_items [ip [2]];
+			call_args_offset = ip [1];
+
+			this_arg = LOCAL_VAR (call_args_offset, MonoObject*);
+
+			slot = (gint16)ip [3];
+			tail_args_size = ip [4];
+			ip += 5;
+			cmethod = get_virtual_method_fast (cmethod, this_arg->vtable, slot);
+			if (m_class_is_valuetype (this_arg->vtable->klass) && m_class_is_valuetype (cmethod->method->klass)) {
+				/* unbox */
+				gpointer unboxed = mono_object_unbox_internal (this_arg);
+				LOCAL_VAR (call_args_offset, gpointer) = unboxed;
+			}
+
+			goto tailcall;
+		}
 		MINT_IN_CASE(MINT_CALL_VARARG) {
 			// Same as MINT_CALL, except at ip [3] we have the index for the csignature,
 			// which is required by the called method to set up the arglist.
@@ -3864,6 +3913,94 @@ calli:
 
 			ip += 3;
 			goto call;
+		}
+		MINT_IN_CASE(MINT_TAILCALL) {
+			cmethod = (InterpMethod*)frame->imethod->data_items [ip [2]];
+			call_args_offset = ip [1];
+			tail_args_size = ip [3];
+
+			ip += 4;
+tailcall:
+			/*
+			 * This frame goes to the callee instead of a new one being made for it.
+			 * Everything below can decline and fall into the ordinary call, which
+			 * lands on the MINT_RET the transform left after this instruction - so a
+			 * refusal here is the call and return it replaced, and nothing else.
+			 */
+			{
+				InterpMethodCodeType code_type = cmethod->code_type;
+
+				if (G_UNLIKELY (code_type == IMETHOD_CODE_UNKNOWN))
+					code_type = resolve_code_type (cmethod);
+
+				/*
+				 * do_jit_call () has to return here, so it cannot have this frame.
+				 * Interpreting a callee that has code is what bounds the stack: the
+				 * other way round, a cycle alternating between the two engines pays
+				 * a jit call and an entry thunk per hop and never gets either back.
+				 */
+				if (G_UNLIKELY (code_type != IMETHOD_CODE_INTERP))
+					goto call;
+			}
+
+			if (G_UNLIKELY (mono_atomic_load_i32_relaxed (&cmethod->tier_counter) > 0))
+				interp_check_call_promotion (cmethod);
+
+			/* Before the frame changes hands: alloca_size decides whether it can, and
+			 * a throw from here has to unwind a frame whose method and ip agree. */
+			if (G_UNLIKELY (!cmethod->transformed)) {
+				MonoException *ex = do_transform_tail_callee (frame, cmethod, context, ip);
+
+				if (ex)
+					THROW_EX (ex, ip);
+				EXCEPTION_CHECKPOINT;
+			}
+
+			/* Nothing guards the end of the interpreter stack, and a callee may want a
+			 * wider frame than the caller had. Declining is the ordinary call, which is
+			 * what would have run anyway. */
+			if (G_UNLIKELY ((guchar*)frame->stack + cmethod->alloca_size >
+					context->stack_start + INTERP_STACK_SIZE))
+				goto call;
+
+			if (G_UNLIKELY (frame->imethod->prof_flags & MONO_PROFILER_CALL_INSTRUMENTATION_TAIL_CALL))
+				MONO_PROFILER_RAISE (method_tail_call, (frame->imethod->method, cmethod->method));
+
+			{
+				guchar *new_top = (guchar*)frame->stack + cmethod->alloca_size;
+
+				/*
+				 * The arguments are staged above this frame's locals, so when the
+				 * callee's frame is the narrower one they sit above where the stack
+				 * pointer is about to end up. The GC scans up to that pointer, so it
+				 * has to cover them while they are being moved: grow before, shrink
+				 * after, never the other way round.
+				 */
+				if (new_top > context->stack_pointer) {
+					context->stack_pointer = new_top;
+					mono_compiler_barrier ();
+				}
+
+				memmove (locals, locals + call_args_offset, tail_args_size);
+
+				if (new_top < context->stack_pointer) {
+					mono_compiler_barrier ();
+					context->stack_pointer = new_top;
+				}
+			}
+
+			/* The callee inherits the frame, not what this invocation localloc'd in
+			 * it. The allocator keys its marker on the frame pointer, which is about
+			 * to mean a different method, so this cannot wait for the return. */
+			frame_data_allocator_pop (&context->data_stack, frame);
+
+			frame->imethod = cmethod;
+			frame_root_code_owner (frame);
+
+			/* The callee's prologue is the safepoint this loop polls at. */
+			INIT_INTERP_STATE (frame, NULL);
+
+			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_CALL) {
 			cmethod = (InterpMethod*)frame->imethod->data_items [ip [2]];
@@ -6905,6 +7042,15 @@ call:
 			ip += 3;
 			MINT_IN_BREAK;
 		}
+		/*
+		 * Release what this frame has localloc'd without leaving it, which a tail call
+		 * to the method itself needs: the frame stays, but the invocation that owned
+		 * the memory does not.
+		 */
+		MINT_IN_CASE(MINT_LOCALLOC_UNWIND)
+			frame_data_allocator_pop (&context->data_stack, frame);
+			ip++;
+			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_ENDFILTER)
 			/* top of stack is result of filter */
 			frame->retval->data.i = LOCAL_VAR (ip [1], gint32);

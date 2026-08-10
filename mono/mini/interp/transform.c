@@ -2783,6 +2783,169 @@ interp_get_method (MonoMethod *method, guint32 token, MonoImage *image, MonoGene
 		return (MonoMethod *)mono_method_get_wrapper_data (method, token);
 }
 
+/*
+ * Whether an argument may travel through a call that hands the caller's frame away.
+ *
+ * Both ends of a tail call promise the callee touches nothing of the frame it replaces,
+ * so anything that could point into it has to stay behind. The signature covers the
+ * declared cases; the stack type covers a managed pointer travelling under a signature
+ * that no longer says so, which is unverifiable but cheap to spot here.
+ *
+ * A native int is not refused. It is how the frame-address checks in the tailcall
+ * corpus travel, the value is compared rather than dereferenced, and the compiled
+ * engine passes them through as well.
+ */
+static gboolean
+interp_tail_call_arg_is_safe (MonoType *param, int stack_type)
+{
+	if (param->byref)
+		return FALSE;
+
+	if (param->type == MONO_TYPE_PTR || param->type == MONO_TYPE_FNPTR)
+		return FALSE;
+
+	return stack_type != STACK_TYPE_MP;
+}
+
+/*
+ * Whether the two returns can be folded into one: the tail callee writes its result
+ * where the method being replaced would have written its own, which is a slot the
+ * caller's caller sized from the signature it called.
+ */
+static gboolean
+interp_tail_call_returns_match (MonoType *caller_ret, MonoType *callee_ret)
+{
+	int mt;
+
+	caller_ret = mini_type_get_underlying_type (caller_ret);
+	callee_ret = mini_type_get_underlying_type (callee_ret);
+
+	/* mint_type () has no answer for void, and a method returning nothing can only
+	 * hand its return over to another that returns nothing. */
+	if (caller_ret->type == MONO_TYPE_VOID || callee_ret->type == MONO_TYPE_VOID)
+		return caller_ret->type == callee_ret->type;
+
+	mt = mint_type (caller_ret);
+	if (mt != mint_type (callee_ret))
+		return FALSE;
+
+	/* MINT_RET_VT copies the callee's own size into that slot, so it has to be the
+	 * size the slot was made for. Everything else travels as a whole stackval, which
+	 * makes the narrow integer types interchangeable. */
+	if (mt == MINT_TYPE_VT)
+		return mono_class_value_size (mono_class_from_mono_type_internal (caller_ret), NULL) ==
+			mono_class_value_size (mono_class_from_mono_type_internal (callee_ret), NULL);
+
+	return TRUE;
+}
+
+/*
+ * Whether the tail. prefix at the current call site can be honoured by handing this
+ * frame to the callee rather than making an ordinary call.
+ *
+ * Every shape the LLVM back end honours in should_tail_call () has to be honoured here
+ * too, since a method runs in whichever engine happens to own it and under tier 0 in
+ * both at different times - a guarantee only one of them keeps is not a guarantee. The
+ * reverse does not hold: the compiler declines several shapes for reasons about
+ * prototypes and argument registers that mean nothing to an engine whose calling
+ * convention is a byte image laid out from the call site's signature, and this refuses
+ * them only where the interpreter has a reason of its own.
+ *
+ * td->sp still holds the arguments, so this has to run before they are popped.
+ */
+static const char*
+interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *target_method,
+			  MonoMethodSignature *csignature, gboolean calli, gboolean is_virtual, int op)
+{
+	MonoMethodHeader *header = td->header;
+	int in_offset = td->ip - td->il_code;
+	int nargs = csignature->param_count + !!csignature->hasthis;
+	int i;
+
+	/* An intrinsified call is emitted inline and has no frame to hand over. */
+	if (op != -1)
+		return "the call is intrinsified";
+
+	/*
+	 * A dispatched call is fine: the target is resolved to an InterpMethod at the site,
+	 * before the frame changes hands, and every override reads its arguments from the
+	 * layout the site's signature already produced. An indirect one is not done here -
+	 * nothing needs it yet, and its target may turn out to be a p/invoke.
+	 */
+	if (calli)
+		return "the target is indirect";
+	if (target_method == NULL)
+		return "the target is unknown";
+	/* A marshalbyref target goes through a remoting check that wants a frame. */
+	if (is_virtual && mono_class_is_marshalbyref (target_method->klass))
+		return "the target may be remote";
+
+	/* A frame that is gone has nowhere to stop at, and the method-exit sequence point
+	 * that a step-out lands on is one the folded return never reaches. */
+	if (td->gen_sdb_seq_points)
+		return "the debugger is watching";
+
+	/* Under either of these CEE_RET emits MINT_PROF_EXIT, which does the return
+	 * itself. A tail call would jump past it. */
+	if (td->rtm->prof_flags & MONO_PROFILER_CALL_INSTRUMENTATION_LEAVE)
+		return "the profiler wants the method exit";
+	if (mono_jit_trace_calls != NULL && mono_trace_eval (method))
+		return "the method is traced";
+
+	/* A vararg caller's cookie buffer is allocated in the frame being handed away and
+	 * read for the whole of the callee's execution; a vararg callee's own signature is
+	 * not the one the site pushed. */
+	if (td->rtm->vararg)
+		return "the caller is vararg";
+	if (csignature->call_convention == MONO_CALL_VARARG)
+		return "the callee is vararg";
+
+	/* Neither is entered by running IL: the transition saves state that a jump
+	 * straight into the callee would skip. */
+	if (target_method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)
+		return "the callee is a p/invoke";
+	if (target_method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+		return "the callee is an internal call";
+
+	/*
+	 * III.2.4 forbids the prefix inside a protected block, and a reused frame would
+	 * leave the clause ranges describing a method that is no longer running.
+	 * td->clause_indexes only covers handler bodies, so the try and filter ranges have
+	 * to be looked up here.
+	 */
+	for (i = 0; i < header->num_clauses; i++) {
+		MonoExceptionClause *c = header->clauses + i;
+
+		if (MONO_OFFSET_IN_CLAUSE (c, in_offset) || MONO_OFFSET_IN_HANDLER (c, in_offset))
+			return "the site is inside a protected block";
+		if (c->flags == MONO_EXCEPTION_CLAUSE_FILTER &&
+		    in_offset >= (int)c->data.filter_offset && in_offset < (int)c->handler_offset)
+			return "the site is inside a filter";
+	}
+
+	/* The prefix promises a ret follows at once, which is what lets the two returns
+	 * fold into one, and the arguments must be all the evaluation stack holds. */
+	if (in_offset + 5 >= td->code_size || *(td->ip + 5) != CEE_RET)
+		return "no ret follows the call";
+	if (td->sp - td->stack != nargs)
+		return "the evaluation stack outlives the call";
+
+	if (!interp_tail_call_returns_match (mono_method_signature_internal (method)->ret, csignature->ret))
+		return "the two returns are shaped differently";
+
+	/* A value type's this is a pointer to the value, and the value is usually a local
+	 * of the frame being handed away. */
+	if (csignature->hasthis && m_class_is_valuetype (target_method->klass))
+		return "this is a value type";
+
+	for (i = 0; i < csignature->param_count; i++) {
+		if (!interp_tail_call_arg_is_safe (csignature->params [i], td->sp [i - csignature->param_count].type))
+			return "an argument may point into the frame";
+	}
+
+	return NULL;
+}
+
 /* Return FALSE if error, including inline failure */
 static gboolean
 interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target_method, MonoDomain *domain, MonoGenericContext *generic_context, MonoClass *constrained_class, gboolean readonly, MonoError *error, gboolean check_visibility, gboolean save_last_error, gboolean tailcall)
@@ -2799,6 +2962,7 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 	int need_null_check = is_virtual;
 	int fp_sreg = -1, first_sreg = -1, dreg = -1;
 	gboolean is_delegate_invoke = FALSE;
+	gboolean emit_tailcall = FALSE;
 
 	guint32 token = read32 (td->ip + 1);
 
@@ -2930,14 +3094,30 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 	}
 
 	CHECK_STACK (td, csignature->param_count + csignature->hasthis);
-	if (tailcall && !td->gen_sdb_seq_points && !calli && op == -1 && (!is_virtual || (target_method->flags & METHOD_ATTRIBUTE_VIRTUAL) == 0) &&
-		(target_method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) == 0 && 
-		(target_method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) == 0 &&
-		!(target_method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING)) {
+	if (tailcall) {
+		const char *refusal = interp_tail_call_refusal (td, method, target_method, csignature, calli, is_virtual, op);
+
+		/* A declined tail call is an ordinary call and return, so nothing about it
+		 * shows up in what the program does. This is the only way to tell one from a
+		 * site that took the jump. */
+		if (refusal && td->verbose_level)
+			g_print ("Decline tail call at IL_%04x: %s\n", (int)(td->ip - td->il_code), refusal);
+
+		emit_tailcall = refusal == NULL;
+	}
+
+	if (emit_tailcall) {
 		(void)mono_class_vtable_checked (domain, target_method->klass, error);
 		return_val_if_nok (error, FALSE);
 
-		if (method == target_method && *(td->ip + 5) == CEE_RET && !(csignature->hasthis && m_class_is_valuetype (target_method->klass))) {
+		/*
+		 * A method calling itself needs no call at all: write the arguments back over
+		 * the incoming ones and branch to the top. That skips the argument move and
+		 * the frame bookkeeping a general tail call pays for. It has to be the method
+		 * itself and not merely the one named at the site, so a dispatched call - which
+		 * may land on an override - keeps its resolution.
+		 */
+		if (method == target_method && !is_virtual) {
 			if (td->inlined_method)
 				return FALSE;
 
@@ -2947,12 +3127,20 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 			for (i = csignature->param_count - 1 + !!csignature->hasthis; i >= 0; --i)
 				store_arg (td, i);
 
+			/*
+			 * The next invocation owns none of this one's localloc memory, and the
+			 * branch never reaches a ret to release it. Whether the method locallocs
+			 * at all is not settled until the whole body has been read, so this is
+			 * emitted unconditionally; it costs a load and a predictable branch.
+			 */
+			interp_add_ins (td, MINT_LOCALLOC_UNWIND);
+
 			interp_add_ins (td, MINT_BR_S);
 			// We are branching to the beginning of the method
 			td->last_ins->info.target_bb = td->entry_bb;
 			int in_offset = td->ip - td->il_code;
 			if (interp_ip_in_cbb (td, in_offset + 5))
-				++td->ip; /* gobble the CEE_RET if it isn't branched to */				
+				++td->ip; /* gobble the CEE_RET if it isn't branched to */
 			td->ip += 5;
 			return TRUE;
 		}
@@ -3081,7 +3269,7 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 			td->last_ins->data [1] = get_data_item_index (td, mono_method_signature_internal (target_method));
 		}
 #endif
-	} else if (!calli && !is_delegate_invoke && !is_virtual && mono_interp_jit_call_supported (target_method, csignature)) {
+	} else if (!calli && !is_delegate_invoke && !is_virtual && !emit_tailcall && mono_interp_jit_call_supported (target_method, csignature)) {
 		interp_add_ins (td, MINT_JIT_CALL);
 		interp_ins_set_dreg (td->last_ins, dreg);
 		td->last_ins->data [0] = get_data_item_index (td, (void *)mono_interp_get_imethod (domain, target_method, error));
@@ -3168,19 +3356,24 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 				td->last_ins->data [1] = get_data_item_index (td, (void *)csignature);
 				td->last_ins->data [2] = params_stack_size;
 			} else if (is_virtual && !mono_class_is_marshalbyref (target_method->klass)) {
-				interp_add_ins (td, MINT_CALLVIRT_FAST);
+				interp_add_ins (td, emit_tailcall ? MINT_TAILCALLVIRT_FAST : MINT_CALLVIRT_FAST);
 				if (mono_class_is_interface (target_method->klass))
 					td->last_ins->data [1] = -2 * MONO_IMT_SIZE + mono_method_get_imt_slot (target_method);
 				else
 					td->last_ins->data [1] = mono_method_get_vtable_slot (target_method);
+				/* How much of this frame the callee is handed as its arguments. */
+				if (emit_tailcall)
+					td->last_ins->data [2] = params_stack_size;
 			} else if (is_virtual) {
 				interp_add_ins (td, MINT_CALLVIRT);
+			} else if (emit_tailcall) {
+				interp_add_ins (td, MINT_TAILCALL);
+				td->last_ins->data [1] = params_stack_size;
 			} else {
 				interp_add_ins (td, MINT_CALL);
 			}
 			interp_ins_set_dreg (td->last_ins, dreg);
 			td->last_ins->data [0] = get_data_item_index (td, (void *)imethod);
-
 		}
 	}
 	td->ip += 5;

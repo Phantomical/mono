@@ -418,11 +418,30 @@ through a stub, and a call from one interpreted method to another arrives throug
 
 `MONO_LLVM_JIT_TIER1_THRESHOLD` is the call count, default 10; zero there leaves tier-0
 methods interpreted for good, which is what separates a tier-0 entry bug from a promotion
-bug. Two limits worth knowing before extending this: the interpreter makes a tail call
-only where a method calls itself, so tier 0 costs a program its tail calls; and
-`runs_at_tier0 ()` only decides for methods the backend is *asked* about — a callee the
-interpreter reached for itself never passes through it, so a refusal cannot keep a
-subgraph under an interpreted frame out of the interpreter.
+bug. One limit worth knowing before extending this: `runs_at_tier0 ()` only decides for
+methods the backend is *asked* about — a callee the interpreter reached for itself never
+passes through it, so a refusal cannot keep a subgraph under an interpreted frame out of
+the interpreter. Anything the interpreter cannot do is therefore lost for the whole call
+graph below the first interpreted frame, which is why tail calls had to be taught to it
+rather than refused.
+
+**The interpreter makes real tail calls.** A `tail.` site becomes `MINT_TAILCALL` or
+`MINT_TAILCALLVIRT_FAST`, which hand the frame to the callee instead of making a new one:
+the arguments move down over the caller's locals, `frame->imethod` is swapped and `ip`
+goes to the callee's first instruction. `interp_tail_call_refusal ()`
+(`interp/transform.c`) decides which sites qualify and names the reason it declines, which
+`MONO_VERBOSE_METHOD` prints — a declined site is an ordinary call, so nothing else
+distinguishes the two. Every shape `should_tail_call ()` honours in the compiled engine has
+to be honoured here as well, since a method runs in either engine and under tier 0 in both;
+going further is fine, and dispatched calls are the case where the interpreter does, having
+resolved the target before the frame changes hands.
+
+The one thing a tail site does that an ordinary call does not is refuse `do_jit_call ()`
+and interpret a callee that already has code. Letting it through would grow the native
+stack once per hop in a cycle that alternates between the engines — a jit call in and an
+entry thunk back, neither of which is a jump — and nothing bounds that. The cost is that a
+cycle calling only in tail position stays interpreted even once its methods are promoted;
+there is no OSR to move it.
 
 **There is one optimization pipeline.** `run_tier0_pipeline ()` is the stock O1
 *function* simplification pipeline with this backend's own IR passes around it —

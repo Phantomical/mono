@@ -329,6 +329,7 @@ OPDEF(MINT_STOBJ_VT, "stobj.vt", 4, 0, 2, MintOpClassToken)
 OPDEF(MINT_CPBLK, "cpblk", 4, 0, 3, MintOpNoArgs)
 OPDEF(MINT_INITBLK, "initblk", 4, 0, 3, MintOpNoArgs)
 OPDEF(MINT_LOCALLOC, "localloc", 3, 1, 1, MintOpNoArgs)
+OPDEF(MINT_LOCALLOC_UNWIND, "localloc.unwind", 1, 0, 0, MintOpNoArgs)
 OPDEF(MINT_INITLOCALS, "initlocals", 3, 0, 0, MintOpTwoShorts)
 
 OPDEF(MINT_LDELEM_I, "ldelem.i", 4, 1, 2, MintOpNoArgs)
@@ -612,8 +613,10 @@ OPDEF(MINT_ARRAY_IS_PRIMITIVE, "array_is_primitive", 3, 1, 1, MintOpNoArgs)
 
 /* Calls */
 OPDEF(MINT_CALL, "call", 3, CallArgs, 0, MintOpMethodToken)
+OPDEF(MINT_TAILCALL, "tailcall", 4, CallArgs, 0, MintOpMethodToken)
 OPDEF(MINT_CALLVIRT, "callvirt", 3, CallArgs, 0, MintOpMethodToken)
 OPDEF(MINT_CALLVIRT_FAST, "callvirt.fast", 4, CallArgs, 0, MintOpMethodToken)
+OPDEF(MINT_TAILCALLVIRT_FAST, "tailcallvirt.fast", 5, CallArgs, 0, MintOpMethodToken)
 OPDEF(MINT_CALL_DELEGATE, "call.delegate", 4, CallArgs, 0, MintOpTwoShorts)
 OPDEF(MINT_CALLI, "calli", 5, CallArgs, 1, MintOpMethodToken)
 OPDEF(MINT_CALLI_IMETHOD, "calli.imethod", 4, CallArgs, 1, MintOpMethodToken)
