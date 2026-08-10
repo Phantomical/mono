@@ -3066,9 +3066,14 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 		csignature = ctor_sig;
 	}
 
-	/* Ahead of the intrinsics, which read the arguments where they lie. */
-	for (i = 0; i < csignature->param_count; i++)
-		coerce_fp (td, td->sp + i - csignature->param_count, fp_stack_type (csignature->params [i]));
+	/* Ahead of the intrinsics, which read the arguments where they lie. A
+	 * calli's function pointer is above them, so it is not the last argument. */
+	StackInfo *args = td->sp - csignature->param_count - (calli ? 1 : 0);
+
+	for (i = 0; i < csignature->param_count; i++) {
+		if (args [i].type == STACK_TYPE_R4 || args [i].type == STACK_TYPE_R8)
+			coerce_fp (td, args + i, fp_stack_type (csignature->params [i]));
+	}
 
 	/* Intrinsics */
 	if (target_method && interp_handle_intrinsics (td, target_method, constrained_class, csignature, readonly, &op))

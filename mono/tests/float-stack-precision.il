@@ -90,6 +90,21 @@
     ret
   }
 
+  .method private hidebysig static void arg_both (float64 v, float32 w) cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    ldc.r8     1.5
+    ldstr      "calli arg float64 <- r4"
+    call       void FP::check(float64, float64, string)
+    ldarg.1
+    conv.r8
+    call       float64 FP::narrowed()
+    ldstr      "calli arg float32 <- r8"
+    call       void FP::check(float64, float64, string)
+    ret
+  }
+
   // A float64 return reached with an r4 value, and the reverse.
   .method private hidebysig static float64 ret_r8 () cil managed
   {
@@ -315,6 +330,13 @@
     call       void FP::arg_r8(float64)
     ldc.r8     1.1
     call       void FP::arg_r4(float32)
+
+    // calli, whose function pointer sits above the arguments rather than
+    // being the last of them
+    ldc.r4     1.5
+    ldc.r8     1.1
+    ldftn      void FP::arg_both(float64, float32)
+    calli      void(float64, float32)
 
     // return values
     call       float64 FP::ret_r8()
