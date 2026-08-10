@@ -18,6 +18,8 @@
 #include "util/lock.hpp"
 #include "builtins.hpp"
 #include "dispatcher.hpp"
+#include "tiering.hpp"
+#include <thread>
 #include "stub-jinfo.hpp"
 #include "thrower.hpp"
 #include "verification.hpp"
@@ -507,6 +509,46 @@ MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
 		});
 }
 
+void
+MonoBackend::enqueue_recompile (DomainState &domain, MethodState &method)
+{
+	char *name = mono_method_full_name (method.method, TRUE);
+	bool wanted = async_recompiling (name) && compilable_off_thread (method.method);
+
+	g_free (name);
+
+	if (!wanted)
+		return;
+
+	/*
+	 * Captured raw: the state cannot be destroyed until its channel has been
+	 * closed, and closing waits for this work.
+	 */
+	DomainState *owner = &domain;
+	MethodState *raw = &method;
+
+	domain.queue.enqueue (method.method, [this, owner, raw] {
+		if (unsigned ms = async_delay ())
+			std::this_thread::sleep_for (std::chrono::milliseconds (ms));
+
+		MONO_LOCK (mutex_)
+		{
+			raw->code.reset ();
+		}
+
+		llvm::Expected<void *> code = entry_point (*owner, *raw, Entry::body);
+
+		if (code)
+			return;
+
+		/*
+		 * Nobody is waiting for this, and the method already has a body that
+		 * works - a background compile that fails leaves it exactly as it was.
+		 */
+		llvm::consumeError (code.takeError ());
+	});
+}
+
 llvm::Expected<void *>
 MonoBackend::dispatcher (DomainState &domain, MethodState &method)
 {
@@ -889,6 +931,12 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	 */
 	if (llvm::Error err = entry_point (**state, **published, door).takeError ())
 		return std::move (err);
+
+	/*
+	 * Here rather than inside entry_point (), which the background compile
+	 * itself calls: asking from in there would queue a compile per compile.
+	 */
+	enqueue_recompile (**state, **published);
 
 	return (*published)->stub (door).code ();
 }

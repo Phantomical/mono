@@ -2,6 +2,7 @@
 #define MONO_LLV_RUNTIME_BACKEND_HPP
 
 #include "compile-queue.hpp"
+#include "compile-worker.hpp"
 #include "method-symbols.hpp"
 #include "translate.hpp"
 #include <llvm/ADT/DenseMap.h>
@@ -87,6 +88,11 @@ private:
 	/// been already.
 	llvm::Error bind_externals (DomainState &domain, llvm::Module &m);
 
+	/// Ask for METHOD to be compiled again on the background worker, its stubs
+	/// redirected to the second body when it is done. Quiet when the work is
+	/// refused - nothing is waiting for it.
+	void enqueue_recompile (DomainState &domain, MethodState &method);
+
 	/// The per-call dispatcher METHOD's body stub binds to when its first
 	/// caller arrived from another domain.
 	llvm::Expected<void *> dispatcher (DomainState &domain, MethodState &method);
@@ -111,7 +117,12 @@ private:
 	 * Ahead of domains_, because each domain holds a channel into this and
 	 * closing one - which is what destroying it does - reaches back in here.
 	 */
-	CompileQueue queue_;
+	/*
+	 * With a CompileWorker, which is what attaches the worker thread to the GC.
+	 * A thread that allocates or reads metadata without being attached is a
+	 * thread the collector does not know to suspend.
+	 */
+	CompileQueue queue_ { std::make_unique<CompileWorker> () };
 	llvm::DenseMap<MonoDomain *, std::unique_ptr<DomainState>> domains_;
 };
 
