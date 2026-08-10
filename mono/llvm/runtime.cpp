@@ -32,6 +32,7 @@
 #include "stubs.hpp"
 #include "timing.hpp"
 #include "method-to-llvm.hpp"
+#include "runtime/builtins.hpp"
 #include "runtime/naming.hpp"
 #include "runtime/options.hpp"
 #include "verification.hpp"
@@ -62,8 +63,6 @@ extern "C" {
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/RuntimeLibcalls.h>
-#include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/TargetParser/Triple.h>
 
@@ -78,7 +77,6 @@ extern "C" {
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
-#include <unwind.h>
 #include <vector>
 
 using namespace llvm;
@@ -277,151 +275,6 @@ private:
 	std::mutex mutex_;
 	StringMap<void *> trampolines_;
 };
-
-/*
- * The runtime entry points generated code calls by name. Everything else it
- * refers to is per-method or per-class and is resolved from what the translator
- * recorded; these are fixed, so they are registered once when the engine starts.
- *
- * A name the translator emits that is missing here fails the compile rather than
- * resolving to something arbitrary, which is why the list is explicit.
- */
-struct Helper {
-	const char *name;
-	void *address;
-};
-
-/*
- * Re-create the failure a method's metadata carried as the exception its call
- * site is owed. The box is metadata and lives in the assembly's mempool; the
- * exception is not, so every call through a stand-in body builds its own, which
- * is what mono does everywhere else it raises a boxed class failure.
- */
-/*
- * The personality routine every method with a handler names.
- *
- * mono finds a handler by searching the MonoJitInfo it publishes per method, so
- * nothing on the managed path ever calls this. What does call it is a foreign
- * unwinder walking a JIT'd frame: glibc implements pthread_exit as
- * _Unwind_ForcedUnwind, and libgcc finds the frame through the FDEs ORC
- * registered. A forced unwind runs no managed finally blocks, so there is nothing
- * to do here beyond letting it carry on - and it has to be _URC_CONTINUE_UNWIND
- * rather than _URC_NO_REASON, which phase 2 reads as a fatal error.
- */
-_Unwind_Reason_Code
-jit_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Exception *,
-                 struct _Unwind_Context *)
-{
-	return _URC_CONTINUE_UNWIND;
-}
-
-MonoObject *
-load_error_exception (MonoErrorBoxed *failure)
-{
-	ERROR_DECL (error);
-
-	mono_error_set_from_boxed (error, failure);
-
-	return (MonoObject *) mono_error_convert_to_exception (error);
-}
-
-std::vector<Helper>
-runtime_helpers ()
-{
-	return {
-		{ "mono_domain_get", (void *) &mono_domain_get },
-		{ "mono_marshal_set_last_error", (void *) &mono_marshal_set_last_error },
-		{ "mono_gc_wbarrier_generic_store_internal",
-		  (void *) &mono_gc_wbarrier_generic_store_internal },
-		{ "mono_gc_wbarrier_value_copy_internal",
-		  (void *) &mono_gc_wbarrier_value_copy_internal },
-
-		/*
-		 * The throw path. These are mono's own throw trampolines: they
-		 * capture the register state and enter mono_handle_exception, whose
-		 * two-pass search over the MonoJitInfo published per method is how a
-		 * handler is found - the native unwinder is never involved. The
-		 * corlib variant takes the exception's type-def index and reads the
-		 * throw site out of the return address; resume_unwind is what a
-		 * finally or fault calls when it was entered by unwinding and has
-		 * run out.
-		 */
-		{ "mono_llvm_throw_exception", mono_get_throw_exception () },
-		{ "mono_llvm_rethrow_exception", mono_get_rethrow_exception () },
-		{ "mono_llvm_throw_corlib_exception",
-		  (void *) mono_find_jit_icall_info (
-			  MONO_JIT_ICALL_mono_llvm_throw_corlib_exception_abs_trampoline)
-			  ->func },
-		{ "mono_llvm_resume_unwind",
-		  (void *) mono_find_jit_icall_info (
-			  MONO_JIT_ICALL_mono_llvm_resume_unwind_trampoline)
-			  ->func },
-
-		/*
-		 * What a stand-in body for a method whose metadata would not load
-		 * calls to build the exception it then throws.
-		 */
-		{ "mono_llvm_load_error_exception", (void *) &load_error_exception },
-
-		/*
-		 * The personality routine a landing pad names. Generated code never
-		 * calls it; the unwinder does, on the way through a frame that has a
-		 * handler.
-		 */
-		{ "mono_personality", (void *) &jit_personality },
-
-		/*
-		 * Not a runtime libcall as far as RuntimeLibcallsInfo is concerned -
-		 * amd64 has no MEMCMP libcall - so resolvable_libcalls () does not
-		 * cover it, but MergeICmps builds calls to it at the IR level.
-		 */
-		{ "memcmp", (void *) &memcmp },
-	};
-}
-
-/*
- * The runtime libcalls this process can satisfy: every name codegen is allowed to
- * synthesize for TRIPLE that something already loaded defines, minus whatever
- * TAKEN spells out for itself.
- *
- * The translator never names any of these - codegen invents the calls during
- * lowering, so the first anyone hears of one is a materialization failure. Asking
- * LLVM which names it might invent is the only way to get ahead of that; the list
- * is generated from the same tables lowering picks from, so it tracks the LLVM the
- * backend is built against instead of being maintained by hand.
- *
- * Names that resolve to nothing are dropped rather than diagnosed. Most of what
- * amd64 declares available is soft-float and small-integer arithmetic it has
- * instructions for, or the __atomic_/__sync_ families that live in a libatomic
- * nothing here links, and none of it is reachable in practice.
- */
-std::vector<Helper>
-resolvable_libcalls (const Triple &triple, const std::vector<Helper> &taken)
-{
-	std::unordered_set<std::string> skip;
-	for (const Helper &helper : taken)
-		skip.insert (helper.name);
-
-	/* Without this the search below only sees libraries LLVM itself opened. */
-	sys::DynamicLibrary::LoadLibraryPermanently (nullptr);
-
-	RTLIB::RuntimeLibcallsInfo libcalls (triple);
-	std::vector<Helper> resolved;
-
-	for (RTLIB::LibcallImpl impl : RTLIB::libcall_impls ()) {
-		if (!libcalls.isAvailable (impl))
-			continue;
-
-		StringRef name = RTLIB::RuntimeLibcallsInfo::getLibcallImplName (impl);
-		if (name.empty () || skip.count (name.str ()))
-			continue;
-
-		if (void *addr = sys::DynamicLibrary::SearchForAddressOfSymbol (name.str ()))
-			resolved.push_back ({ name.data (), addr });
-	}
-
-	return resolved;
-}
 
 /*
  * The parts of a MonoCompile the translator reads. The rest belongs to the mini
@@ -824,18 +677,14 @@ Backend::state_for (MonoDomain *domain)
 			"the llvm backend failed to start for this domain: %s",
 			toString (jit.takeError ()).c_str ());
 
-	std::vector<Helper> helpers = runtime_helpers ();
-	for (const Helper &helper : helpers)
-		if (Error err = (*jit)->register_symbol (helper.name, helper.address))
-			return std::move (err);
-
-	std::vector<Helper> libcalls = resolvable_libcalls ((*jit)->triple (), helpers);
-	for (const Helper &libcall : libcalls)
-		if (Error err = (*jit)->register_symbol (libcall.name, libcall.address))
+	std::vector<MonoBuiltin> builtins =
+		MonoBuiltin::get_platform_builtins ((*jit)->triple ());
+	for (const MonoBuiltin &builtin : builtins)
+		if (Error err = (*jit)->register_symbol (builtin.name, builtin.address))
 			return std::move (err);
 	if (is_jit_trace_enabled ())
-		fprintf (stderr, "[llvm-jit] %zu runtime libcalls registered\n",
-		         libcalls.size ());
+		fprintf (stderr, "[llvm-jit] %zu runtime builtins registered\n",
+		         builtins.size ());
 
 	if (Error err = (*jit)->register_symbol (
 	        "mono_llvm_jit_body_for_current_domain",
