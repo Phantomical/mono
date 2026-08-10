@@ -444,3 +444,12 @@ failures through `llvm::Error` and the unwinder needs the tables.
   don't narrate the absence of some other mechanism (e.g. why a different pass doesn't do X,
   or why some hypothetical isn't a problem) unless that absence is itself the nonobvious thing
   a reader needs to know to trust the code.
+- Do not write parameter names in UPPERCASE. Refer to them in ordinary prose, in lower case,
+  the way you would say them out loud.
+- Keep parentheticals out of a summary line. Needing one is a sign the summary is trying to
+  cover more than one thing; split it or narrow it instead.
+- Do not open a summary line with "The one X" or similar. Say what the thing is.
+- A file or method doc comment says what the thing is for. Leave the mechanism to the
+  implementation, which the reader can see.
+- In C++, `//` is the normal comment. Reach for `/* */` when a block genuinely runs to several
+  paragraphs, not for one-line remarks.
