@@ -136,6 +136,10 @@ struct MonoBackend::MethodState {
 	/// Guarded by the engine's lock.
 	std::optional<Compiled> code;
 
+	/// Whether that is the shared interpreter entry rather than a body of this
+	/// method's own. Guarded by the engine's lock.
+	bool interpreted = false;
+
 	/// The jit-info record each stub was registered under, held only when it
 	/// has to be taken out again by hand - see register_stub_jinfo ().
 	MonoJitInfo *thunk_jinfo = nullptr;
@@ -533,12 +537,7 @@ MonoBackend::interp_entries (DomainState &domain, MethodState &method)
 	if (!ready)
 		return ready.takeError ();
 
-	/*
-	 * Before the redirects below, which are what make the method reachable, so
-	 * that no call can arrive before its calls are being counted. Safe here
-	 * because arming runs no class initializer - see the ordering note in
-	 * compile_body ().
-	 */
+	/* Before the redirects below, so no call arrives before it is counted. */
 	mini_get_interp_callbacks ()->arm_tier_counter ((*ready)->imethod,
 	                                                (gint32) tier1_threshold ());
 
@@ -555,6 +554,7 @@ MonoBackend::interp_entries (DomainState &domain, MethodState &method)
 	MONO_LOCK (mutex_)
 	{
 		method.code = entries;
+		method.interpreted = true;
 	}
 
 	if (is_jit_trace_enabled ()) {
@@ -775,6 +775,7 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 		    && method.code->jinfo != code->jinfo)
 			method.superseded.push_back (method.code->jinfo);
 		method.code = *code;
+		method.interpreted = false;
 	}
 
 	/*
@@ -797,10 +798,9 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 }
 
 /*
- * Runs on a mutator thread, inside the interpreter, on the call that spent a
- * method's countdown - so it does as little as it can get away with and hands
- * the rest to the worker. Nothing waits for the result, and there is nobody to
- * report a failure to: the method simply stays at the tier it is at.
+ * Runs on a mutator thread inside the interpreter, so it hands everything it
+ * can to the worker. Nothing waits for the result and there is nobody to report
+ * a failure to: the method stays at the tier it is at.
  */
 void
 MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
@@ -816,20 +816,13 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 	}
 
 	DomainState *owner = *state;
-	/*
-	 * Held rather than read again on the worker: at exit the engine is unhooked
-	 * from INSTANCE before it is destroyed, and it is the destructor that waits
-	 * for work already in flight.
-	 */
+	/* Held rather than read again on the worker: at exit the engine is
+	 * unhooked from instance before the destructor drains the queue. */
 	MonoBackend *self = instance;
 
 	owner->queue.enqueue (method, [self, owner, method] () {
-		/*
-		 * Published here rather than by the caller: the only thing that ever
-		 * called this method may have been the interpreter, which reaches a
-		 * callee without the backend being asked for it, so there may be no
-		 * state for it yet.
-		 */
+		/* The interpreter reaches a callee without the backend being asked
+		 * for it, so there may be no state for this method yet. */
 		llvm::Expected<MethodState *> published = self->publish (*owner, method);
 
 		if (!published) {
@@ -996,7 +989,16 @@ MonoBackend::body_of (MonoDomain *domain, MonoMethod *method)
 
 		auto it = state->second->methods.find (method);
 
-		if (it == state->second->methods.end () || !it->second->code)
+		/*
+		 * An interpreted method is answered for as if it had none. What it has
+		 * is the entry thunk, which every interpreted method shares - so
+		 * handing it back names no method in particular, and callers take it
+		 * for a body: they look its jit info up by address, and the interpreter
+		 * reads it as "this has native code now" and starts calling it through
+		 * the native boundary instead of interpreting it.
+		 */
+		if (it == state->second->methods.end () || !it->second->code
+		    || it->second->interpreted)
 			return nullptr;
 		return it->second->code->body;
 	}
