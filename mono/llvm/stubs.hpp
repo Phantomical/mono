@@ -91,18 +91,6 @@ private:
 	size_t next_;
 };
 
-/// Publish a call counter shared by ENTRIES, and in front of each of them a
-/// thunk that maintains it: a call jumps on to the entry it came for, and the
-/// THRESHOLD'th call to any of them goes to that entry's promote address
-/// instead.
-///
-/// ENTRIES is (where a call carries on, where the THRESHOLD'th one goes); the
-/// addresses returned are the thunks, in the same order, which is what a stub in
-/// front of them is pointed at.
-llvm::Expected<std::vector<void *>>
-create_counter_thunks (CodeSlabs &slabs, uint32_t threshold,
-                       llvm::ArrayRef<std::pair<void *, void *>> entries);
-
 /// The stub table.
 ///
 /// This tracks which stubs have been created by name.

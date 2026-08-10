@@ -202,39 +202,6 @@ StubTable::remove_locked (llvm::StringRef name, std::lock_guard<std::mutex> &)
 	return true;
 }
 
-llvm::Expected<std::vector<void *>>
-create_counter_thunks (CodeSlabs &slabs, uint32_t threshold,
-                       llvm::ArrayRef<std::pair<void *, void *>> entries)
-{
-	/*
-	 * One allocation for the counter and every thunk that touches it. They have
-	 * to share a slab: a thunk reads its counter with a rip-relative
-	 * displacement, and only being carved together bounds how far apart they
-	 * can land.
-	 */
-	size_t head = arch::counter_thunk_alignment;
-	size_t bytes = head + entries.size () * arch::counter_thunk_size;
-	llvm::Expected<CodeSlabs::Alloc> block =
-		slabs.allocate_writable (bytes, arch::counter_thunk_alignment);
-
-	if (!block)
-		return block.takeError ();
-
-	auto *counter = reinterpret_cast<uint32_t *> (block->base);
-	char *thunk = block->base + head;
-	std::vector<void *> entered;
-
-	*counter = 0;
-	for (const std::pair<void *, void *> &entry : entries) {
-		entered.push_back (arch::write_counter_thunk (thunk, counter, threshold,
-		                                              entry.first, entry.second));
-		thunk += arch::counter_thunk_size;
-	}
-
-	sys::Memory::InvalidateInstructionCache (block->base, bytes);
-	return entered;
-}
-
 char StubExistsError::ID = 0;
 
 StubExistsError::StubExistsError (llvm::StringRef name) : name (name) {}

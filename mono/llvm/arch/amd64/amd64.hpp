@@ -37,18 +37,6 @@ constexpr uint64_t stub_block_size = 16;
 constexpr uint64_t stub_alignment = 16;
 
 /*
- * A call-counting thunk is 32 bytes of head - the counter and the two addresses
- * its jumps read - followed by 48 bytes of code. Both jumps are indirect
- * through the head so that neither depends on how far away its destination
- * landed, which is what lets the block be carved anywhere in the slabs.
- */
-constexpr uint64_t counter_thunk_size = 80;
-constexpr uint64_t counter_thunk_alignment = 16;
-
-/// How much of a thunk's block is code, which is all of it after the head.
-constexpr uint64_t counter_thunk_code_size = 48;
-
-/*
  * Stack to reserve for the LMF standing for a managed-to-native transition -
  * what lazy_frame_enter () and interp_frame_enter () link. lmf.cpp casts it to
  * its own struct and static_asserts it fits; 32 keeps the frame that follows

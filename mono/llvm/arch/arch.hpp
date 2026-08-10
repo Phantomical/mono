@@ -85,18 +85,6 @@ void write_keyed_jump_stub (char *code, const void *slot, const void *key);
 /// Lay out a call-counting thunk in BLOCK, COUNTER_THUNK_SIZE bytes at
 /// COUNTER_THUNK_ALIGNMENT, and return the address callers enter it at.
 ///
-/// A call jumps on to TARGET, having counted itself in COUNTER; the THRESHOLD'th
-/// call goes to PROMOTE instead, and no later one ever does. COUNTER does not
-/// have to live in BLOCK - several of a method's entries share one, so that N is
-/// N calls to the method rather than N through whichever door.
-///
-/// Everything but COUNTER is fixed when the thunk is written, so callers reach
-/// TARGET through one predictable branch and a compare. Anything that has to
-/// change afterwards belongs in the redirectable stub in front of this, not
-/// here.
-void *write_counter_thunk (char *block, uint32_t *counter, uint32_t threshold,
-                           const void *target, const void *promote);
-
 /* -- Unwinding and dispatch ----------------------------------------------- */
 
 /// Can a stack walk rebuild HW_REG for the frame it is looking at?
