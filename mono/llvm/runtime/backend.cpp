@@ -309,12 +309,7 @@ struct MonoBackend::DomainState {
 
 MonoBackend::~MonoBackend ()
 {
-	/*
-	 * The worker reads the domains it is compiling for, so it has to be off the
-	 * queue before any of them goes.
-	 */
 	queue_.stop ();
-	domains_.clear ();
 }
 
 /*
