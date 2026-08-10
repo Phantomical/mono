@@ -745,9 +745,7 @@ MethodLLVMEmitter::emit ()
 	 * semantics (mini's required intrinsics). The struct is one interior
 	 * pointer; the ctor stores it, the getter loads it.
 	 */
-	if (m_class_get_image (method->klass) == mono_get_corlib ()
-	    && std::string_view (m_class_get_name_space (method->klass)) == "System"
-	    && std::string_view (m_class_get_name (method->klass)) == "ByReference`1") {
+	if (is_intrinsic (method)) {
 		llvm::Align align (TARGET_SIZEOF_VOID_P);
 		std::string_view name = method->name;
 		auto argument = [&] (unsigned i) {

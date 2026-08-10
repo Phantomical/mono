@@ -908,6 +908,12 @@ llvm::Attribute::AttrKind integer_extension (MonoType *t);
 /// code.
 bool implemented_outside_il (MonoMethod *method);
 
+/// Whether this method is implemented entirely by the backend, with its actual
+/// IL being ignored.
+///
+/// Currently this is only true for System.ByReference`1.
+bool is_intrinsic (MonoMethod *method);
+
 /// The method a direct call to METHOD actually enters, which for an internal
 /// call is the marshalling wrapper the runtime publishes in its place.
 ///

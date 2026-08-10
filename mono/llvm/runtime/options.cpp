@@ -114,7 +114,9 @@ set_interp_filter (const char *filter)
  *    of them the interpreter answers for with something that is not a callable
  *    address at all;
  *  - freeing a dynamic method hands its MonoMethod back to the allocator, while
- *    the interpreter's shared entry machinery outlives any one method.
+ *    the interpreter's shared entry machinery outlives any one method;
+ *  - a method this backend writes the body of has IL that only throws, so any
+ *    tier that runs the IL runs the throw.
  *
  * AggressiveInlining goes straight to the compiler because that is what the
  * attribute asks for, even though nothing is inlined across methods yet.
@@ -125,8 +127,8 @@ runs_at_tier0 (MonoMethod *method)
 	if (interp_tier0_filter == nullptr || !mono_use_interpreter)
 		return false;
 
-	if (implemented_outside_il (method) || method->dynamic
-	    || method->wrapper_type != MONO_WRAPPER_NONE
+	if (implemented_outside_il (method) || is_intrinsic (method)
+	    || method->dynamic || method->wrapper_type != MONO_WRAPPER_NONE
 	    || (method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING) != 0)
 		return false;
 
