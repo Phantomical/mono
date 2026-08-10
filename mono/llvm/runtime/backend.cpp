@@ -24,6 +24,7 @@
 #include "arch/arch.hpp"
 #include <optional>
 #include "mono/metadata/appdomain.h"
+#include "mono/metadata/domain-internals.h"
 
 namespace mono {
 
@@ -137,6 +138,19 @@ struct MonoBackend::MethodState {
 	MonoJitInfo *thunk_jinfo = nullptr;
 	MonoJitInfo *c_thunk_jinfo = nullptr;
 	MonoJitInfo *unbox_jinfo = nullptr;
+
+	/// What this method's compiles put somewhere it has to be taken back out
+	/// of. Only filled for a dynamic method; nothing else is ever freed.
+	Owned owned;
+
+	/*
+	 * The entries this method was actually published under, recorded rather
+	 * than recomputed. entries () reads the method's signature, and by the time
+	 * one is freed its image may be on its way out - a shorter list at retire
+	 * than at publish leaves names claimed and blocks uncarved, and the next
+	 * method to land there inherits them.
+	 */
+	llvm::SmallVector<Entry, 3> published;
 
 	MethodState (MonoMethod *method, std::string symbol)
 	    : method (method), symbol (std::move (symbol))
@@ -285,11 +299,24 @@ must (llvm::Error err)
 void
 MonoBackend::DomainState::retire (MethodState &method)
 {
-	llvm::SmallVector<Entry, 3> entries = method.entries ();
 	llvm::SmallVector<std::string, 3> names;
 
-	for (Entry entry : entries)
+	for (Entry entry : method.published)
 		names.push_back (method.name (entry));
+
+	/*
+	 * The records first. A block on the free list belongs to whichever method
+	 * publishes next, and a lookup must never find a record covering memory a
+	 * later compile has already been handed - a delegate built over that
+	 * method's address would otherwise be bound to this one, by then freed
+	 * metadata. Unreachable by name is not enough; the address is reachable too.
+	 */
+	for (Entry entry : method.published)
+		if (MonoJitInfo *jinfo = method.jinfo (entry))
+			mono_jit_info_table_remove (domain, jinfo);
+
+	for (MonoJitInfo *jinfo : method.owned.jinfos)
+		mono_jit_info_table_remove (domain, jinfo);
 
 	/*
 	 * By name first, then by address: nothing can find the stub through the
@@ -297,10 +324,13 @@ MonoBackend::DomainState::retire (MethodState &method)
 	 */
 	must (jit->undefine_stubs (names));
 
-	for (Entry entry : entries)
+	for (Entry entry : method.published)
 		callbacks->release (method.trampoline (entry));
 
 	stub_table->remove_all (names);
+
+	if (!method.owned.dylibs.empty ())
+		must (jit->remove_dylibs (method.owned.dylibs));
 }
 
 llvm::Expected<MonoBackend::MethodState *>
@@ -423,6 +453,7 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 		                                            arch::stub_block_size,
 		                                            state->name (entry));
 
+	state->published.assign (entries.begin (), entries.end ());
 	domain.methods[method] = std::move (state);
 	return raw;
 }
@@ -480,8 +511,22 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 		                                "no stub is published as %s",
 		                                name.str ().c_str ());
 	};
-	/* Nothing is freed yet, so nothing has to be remembered to free it. */
-	auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
+	/*
+	 * Only a dynamic method is ever freed, and only its own compiles have to be
+	 * taken back out again - everything else dies with the domain.
+	 */
+	auto note = [&] (const CompiledMethod &compiled, MonoJitInfo *jinfo) {
+		if (!method.method->dynamic)
+			return;
+
+		MONO_LOCK (mutex_)
+		{
+			if (compiled.dylib != nullptr)
+				method.owned.dylibs.push_back (compiled.dylib);
+			if (jinfo != nullptr)
+				method.owned.jinfos.push_back (jinfo);
+		}
+	};
 	auto recover_failure = [&] (llvm::Error failure) -> llvm::Expected<Compiled> {
 		return recover (*domain.jit, domain.domain, method.method,
 		                std::move (failure), note);
