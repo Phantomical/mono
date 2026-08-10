@@ -19,6 +19,8 @@
 #include "builtins.hpp"
 #include "dispatcher.hpp"
 #include "tiering.hpp"
+#include "interp.hpp"
+#include "mini-runtime.h"
 #include <thread>
 #include "stub-jinfo.hpp"
 #include "thrower.hpp"
@@ -509,6 +511,48 @@ MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
 		});
 }
 
+/*
+ * The receiver a value type's vtable slot arrives with is the boxed object, and
+ * stepping it past the header is the whole of the difference - so this is the
+ * runtime's own unboxing trampoline, over the shared entry thunk, which is where
+ * mono_arch_get_unbox_trampoline's receiver-in-the-first-register assumption
+ * holds.
+ */
+llvm::Expected<MonoBackend::Compiled>
+MonoBackend::interp_entries (DomainState &domain, MethodState &method)
+{
+	llvm::Expected<const arch::InterpEntryPoint *> ready =
+		interp_entry (domain.domain, method.method);
+
+	if (!ready)
+		return ready.takeError ();
+
+	void *body = arch::interp_entry_thunk ();
+	Compiled entries { body, body,
+		           publishes_unbox_entry (method.method)
+		                   ? mono_arch_get_unbox_trampoline (method.method, body)
+		                   : nullptr };
+
+	for (Entry each : method.published)
+		if (void *address = entries.at (each))
+			method.stub (each).redirect (address);
+
+	MONO_LOCK (mutex_)
+	{
+		method.code = entries;
+	}
+
+	if (is_jit_trace_enabled ()) {
+		char *name = mono_method_full_name (method.method, TRUE);
+
+		fprintf (stderr, "[llvm-jit] interpreting %s (for %s)\n", name,
+		         domain.domain->friendly_name);
+		g_free (name);
+	}
+
+	return entries;
+}
+
 void
 MonoBackend::enqueue_recompile (DomainState &domain, MethodState &method)
 {
@@ -643,6 +687,35 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 	 */
 	if (llvm::Error invalid = verify_method (method.method))
 		return std::move (invalid);
+
+	/*
+	 * The stubs are pointed at the interpreter before the method is
+	 * transformed, and that order matters: transforming runs the class
+	 * initializer, and this can be running inside a lazy stub's callback, which
+	 * holds a lock across it. A cctor that calls back into this very method
+	 * would then re-enter the trampoline being resolved and deadlock against
+	 * that lock. Publishing first means such a call lands on the entry instead.
+	 */
+	if (runs_at_tier0 (method.method)) {
+		llvm::Expected<Compiled> entries = interp_entries (domain, method);
+
+		if (!entries) {
+			/*
+			 * Neither the interpreter refusing the method nor this machine's
+			 * entry being unable to carry the call is a failure: the method
+			 * gets compiled like anything else.
+			 */
+			llvm::consumeError (entries.takeError ());
+		} else {
+			ERROR_DECL (transform_error);
+
+			if (mini_get_interp_callbacks ()->transform_method (method.method,
+			                                                    transform_error))
+				return entries->at (entry);
+
+			mono_error_cleanup (transform_error);
+		}
+	}
 
 	MonoJitInfo *published = nullptr;
 
