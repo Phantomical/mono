@@ -490,6 +490,43 @@ extern void mono_atomic_store_ptr(volatile gpointer *dst, gpointer val);
 #define mono_atomic_fetch_add_word(p,add) mono_atomic_fetch_add_i64 ((volatile gint64*)p, (gint64)add)
 #endif
 
+/*
+ * Atomic, but ordering nothing. mono_atomic_load_i32 () and its store predate
+ * __atomic and are built out of what __sync offered: a lock xadd of zero and a
+ * CAS loop. That is far more than a counter nobody synchronizes through needs,
+ * and more than a hot guard can afford - but a plain access next to one of the
+ * read-modify-writes above is still a data race, so it cannot just be a load.
+ */
+#if defined (__GNUC__) || defined (__clang__)
+
+static inline gint32
+mono_atomic_load_i32_relaxed (volatile gint32 *src)
+{
+	return __atomic_load_n (src, __ATOMIC_RELAXED);
+}
+
+static inline void
+mono_atomic_store_i32_relaxed (volatile gint32 *dst, gint32 val)
+{
+	__atomic_store_n (dst, val, __ATOMIC_RELAXED);
+}
+
+#else
+
+static inline gint32
+mono_atomic_load_i32_relaxed (volatile gint32 *src)
+{
+	return mono_atomic_load_i32 (src);
+}
+
+static inline void
+mono_atomic_store_i32_relaxed (volatile gint32 *dst, gint32 val)
+{
+	mono_atomic_store_i32 (dst, val);
+}
+
+#endif
+
 /* The following functions cannot be found on any platform, and thus they can be declared without further existence checks */
 
 static inline void

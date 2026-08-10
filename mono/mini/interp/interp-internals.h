@@ -144,13 +144,8 @@ struct InterpMethod {
 	unsigned int hasthis; // boolean
 	MonoProfilerCallInstrumentationFlags prof_flags;
 	InterpMethodCodeType code_type;
-	/*
-	 * Calls left before this method is asked for as tier 1. Zero means nothing
-	 * has armed it yet; negative means it has already fired, or that the method
-	 * was never a candidate. Kept out of the bitfield unit below because arming
-	 * runs before transform_method (), which writes that unit.
-	 */
-	volatile gint32 tier_countdown;
+	// How many calls are left before we promote this method to tier1?
+	volatile gint32 tier_counter;
 	unsigned int init_locals : 1;
 	unsigned int vararg : 1;
 	unsigned int needs_thread_attach : 1;
