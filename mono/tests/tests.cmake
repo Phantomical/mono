@@ -508,6 +508,7 @@ set(MONO_TESTS_CS_SRC
 
 # Tests written directly in IL, assembled with ilasm.
 set(MONO_TESTS_IL_SRC
+  float-stack-precision.il
   tailcall/2.il
   tailcall/3.il
   tailcall/4.il
@@ -1049,6 +1050,12 @@ set(MONO_TESTS_DISABLED
 
 # Additionally excluded when running under the interpreter.
 set(MONO_TESTS_INTERP_DISABLED
+  # Asserts that two calls to the same method get the same localloc block back,
+  # which holds for a compiled frame and is not something the interpreter can
+  # promise: 64KB does not fit a frame-data fragment, so each call is a
+  # malloc/free pair and the addresses match only while glibc happens to hand
+  # the same chunk back. MALLOC_PERTURB_ is enough to break it.
+  localloc-noinit.exe
   delegate-async-exception.exe
   bug-348522.2.exe
   bug-459094.exe

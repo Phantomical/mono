@@ -693,6 +693,8 @@ get_mov_for_type (int mt, gboolean needs_sext)
 	g_assert_not_reached ();
 }
 
+static void coerce_fp (TransformData *td, StackInfo *sp, int dtype);
+
 // Should be called when td->cbb branches to newbb and newbb can have a stack state
 static void
 fixup_newbb_stack_locals (TransformData *td, InterpBasicBlock *newbb)
@@ -701,6 +703,13 @@ fixup_newbb_stack_locals (TransformData *td, InterpBasicBlock *newbb)
 		return;
 
 	for (int i = 0; i < newbb->stack_height; i++) {
+		/*
+		 * Whichever predecessor got here first fixed the floating point width
+		 * the block reads its entry stack at, and CIL lets another arrive with
+		 * the other one. Convert rather than move the bytes across.
+		 */
+		coerce_fp (td, td->stack + i, newbb->stack_state [i].type);
+
 		int sloc = td->stack [i].local;
 		int dloc = newbb->stack_state [i].local;
 		if (sloc != dloc) {
@@ -808,7 +817,45 @@ interp_add_conv (TransformData *td, StackInfo *sp, InterpInst *prev_ins, int typ
 	interp_ins_set_dreg (new_inst, sp->local);
 }
 
-static void 
+/*
+ * Give the value at sp the precision a destination of type dtype holds it at.
+ *
+ * CIL has a single floating point stack type, so a value produced as r4 may
+ * legally be stored where an r8 is kept and the other way round. The
+ * interpreter keeps the two apart - an r4 stack slot holds four bytes and an r8
+ * slot eight - so anything moving one into the other has to convert first.
+ * Every other pairing is either already right or a type error, and neither is
+ * this to fix.
+ */
+static void
+coerce_fp (TransformData *td, StackInfo *sp, int dtype)
+{
+	if (dtype == STACK_TYPE_R8 && sp->type == STACK_TYPE_R4)
+		interp_add_conv (td, sp, NULL, STACK_TYPE_R8, MINT_CONV_R8_R4);
+	else if (dtype == STACK_TYPE_R4 && sp->type == STACK_TYPE_R8)
+		interp_add_conv (td, sp, NULL, STACK_TYPE_R4, MINT_CONV_R4_R8);
+}
+
+/*
+ * The stack type a value of this type is held at, for the floating point types
+ * only. Anything else answers -1, which coerce_fp leaves alone.
+ */
+static int
+fp_stack_type (MonoType *type)
+{
+	if (type->byref)
+		return -1;
+
+	type = mini_get_underlying_type (type);
+
+	switch (type->type) {
+	case MONO_TYPE_R4: return STACK_TYPE_R4;
+	case MONO_TYPE_R8: return STACK_TYPE_R8;
+	default: return -1;
+	}
+}
+
+static void
 two_arg_branch(TransformData *td, int mint_op, int offset, int inst_size)
 {
 	int type1 = td->sp [-1].type == STACK_TYPE_O || td->sp [-1].type == STACK_TYPE_MP ? STACK_TYPE_I : td->sp [-1].type;
@@ -1003,6 +1050,7 @@ store_arg(TransformData *td, int n)
 			size = mono_class_value_size (klass, NULL);
 		g_assert (size < G_MAXUINT16);
 	}
+	coerce_fp (td, td->sp - 1, stack_type [mt]);
 	--td->sp;
 	interp_add_ins (td, get_mov_for_type (mt, FALSE));
 	interp_ins_set_sreg (td->last_ins, td->sp [0].local);
@@ -1043,6 +1091,7 @@ store_local (TransformData *td, int local)
 	if (td->sp [-1].type == STACK_TYPE_I4 && stack_type [mt] == STACK_TYPE_I8)
 		interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I8, MINT_CONV_I8_I4);
 #endif
+	coerce_fp (td, td->sp - 1, stack_type [mt]);
 	if (!can_store(td->sp [-1].type, stack_type [mt])) {
 		g_warning("%s.%s: Store local stack type mismatch %d %d", 
 			m_class_get_name (td->method->klass), td->method->name,
@@ -1655,6 +1704,8 @@ static void
 interp_emit_stobj (TransformData *td, MonoClass *klass)
 {
 	int mt = mint_type (m_class_get_byval_arg (klass));
+
+	coerce_fp (td, td->sp - 1, stack_type [mt]);
 
 	if (mt == MINT_TYPE_VT) {
 		interp_add_ins (td, MINT_STOBJ_VT);
@@ -3015,6 +3066,10 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 		csignature = ctor_sig;
 	}
 
+	/* Ahead of the intrinsics, which read the arguments where they lie. */
+	for (i = 0; i < csignature->param_count; i++)
+		coerce_fp (td, td->sp + i - csignature->param_count, fp_stack_type (csignature->params [i]));
+
 	/* Intrinsics */
 	if (target_method && interp_handle_intrinsics (td, target_method, constrained_class, csignature, readonly, &op))
 		return TRUE;
@@ -4018,6 +4073,10 @@ emit_convert (TransformData *td, int stype, MonoType *ftype)
 		}
 		break;
 	}
+	case MONO_TYPE_R4:
+	case MONO_TYPE_R8:
+		coerce_fp (td, td->sp - 1, fp_stack_type (ftype));
+		break;
 	default:
 		break;
 	}
@@ -4199,6 +4258,8 @@ static void
 handle_stind (TransformData *td, int op, gboolean *volatile_)
 {
 	CHECK_STACK (td, 2);
+	if (op == MINT_STIND_R4 || op == MINT_STIND_R8)
+		coerce_fp (td, td->sp - 1, op == MINT_STIND_R4 ? STACK_TYPE_R4 : STACK_TYPE_R8);
 	if (*volatile_) {
 		interp_emit_memory_barrier (td, MONO_MEMORY_BARRIER_REL);
 		*volatile_ = FALSE;
@@ -4227,6 +4288,8 @@ static void
 handle_stelem (TransformData *td, int op)
 {
 	CHECK_STACK (td, 3);
+	if (op == MINT_STELEM_R4 || op == MINT_STELEM_R8)
+		coerce_fp (td, td->sp - 1, op == MINT_STELEM_R4 ? STACK_TYPE_R4 : STACK_TYPE_R8);
 	ENSURE_I4 (td, 2);
 	interp_add_ins (td, op);
 	td->sp -= 3;
@@ -4802,7 +4865,17 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			break;
 		}
 		case CEE_RET: {
+			MonoType *ult = mini_type_get_underlying_type (signature->ret);
+			int vt_size = 0;
+
 			link_bblocks = FALSE;
+
+			/* Before the inlined case leaves, since the value is this method's either way. */
+			if (ult->type != MONO_TYPE_VOID) {
+				CHECK_STACK (td, 1);
+				coerce_fp (td, td->sp - 1, stack_type [mint_type (ult)]);
+			}
+
 			/* Return from inlined method, return value is on top of stack */
 			if (inlining) {
 				td->ip++;
@@ -4814,10 +4887,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 				break;
 			}
 
-			int vt_size = 0;
-			MonoType *ult = mini_type_get_underlying_type (signature->ret);
 			if (ult->type != MONO_TYPE_VOID) {
-				CHECK_STACK (td, 1);
 				--td->sp;
 				if (mint_type (ult) == MINT_TYPE_VT) {
 					MonoClass *klass = mono_class_from_mono_type_internal (ult);
@@ -5968,6 +6038,8 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			mono_class_init_internal (klass);
 			mt = mint_type (ftype);
 
+			coerce_fp (td, td->sp - 1, stack_type [mt]);
+
 			BARRIER_IF_VOLATILE (td, MONO_MEMORY_BARRIER_REL);
 
 #ifndef DISABLE_REMOTING
@@ -6165,10 +6237,10 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 					goto exit;
 				}
 
-				const gboolean vt = mint_type (m_class_get_byval_arg (klass)) == MINT_TYPE_VT;
+				const int boxed_mt = mint_type (m_class_get_byval_arg (klass));
+				const gboolean vt = boxed_mt == MINT_TYPE_VT;
 
-				if (td->sp [-1].type == STACK_TYPE_R8 && m_class_get_byval_arg (klass)->type == MONO_TYPE_R4)
-					interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_R4, MINT_CONV_R4_R8);
+				coerce_fp (td, td->sp - 1, stack_type [boxed_mt]);
 				MonoVTable *vtable = mono_class_vtable_checked (domain, klass, error);
 				goto_if_nok (error, exit);
 
