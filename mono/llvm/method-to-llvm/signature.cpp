@@ -814,13 +814,13 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 
 /// The declaration of METHOD in this module, created on first use and cached.
 ///
-/// A method this backend compiles is declared fastcc against its plain symbol,
-/// which the engine resolves to the fastcc body's stub. One whose code mini
-/// produces instead - an icall, a pinvoke, a runtime-implemented method - is
-/// declared against the `$legacy` symbol in the legacy convention, and every
-/// call to it lowers in LegacyAbiPass.
+/// A method this backend compiles is declared in this backend's own convention
+/// against its plain symbol, which the engine resolves to the body's stub. One
+/// whose code mini produces instead - an icall, a pinvoke, a runtime-implemented
+/// method - is declared against the `$legacy` symbol in the legacy convention,
+/// and every call to it lowers in LegacyAbiPass.
 ///
-/// A fastcc declaration whose return will not fit in the return registers
+/// A natural declaration whose return will not fit in the return registers
 /// carries the hidden pointer it comes back through as its leading parameter -
 /// see hidden-return.hpp. The legacy convention has a hidden pointer of its
 /// own, in a place the runtime's trampolines fixed, so a legacy declaration is
@@ -900,8 +900,6 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		function->addFnAttr (llvm::Attribute::get (
 			context (), arch::legacy_cc_attribute,
 			arch::legacy_flavor_value (legacy_entry_flavor (method, sig))));
-	else
-		function->setCallingConv (llvm::CallingConv::Fast);
 
 	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);
 	    ext != llvm::Attribute::None)

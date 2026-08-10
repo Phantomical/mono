@@ -1133,20 +1133,6 @@ MethodLLVMEmitter::finish_function ()
 	for (auto &entry : blocks)
 		if (entry.second.block->empty ())
 			MonoIrBuilder (entry.second.block).CreateUnreachable ();
-
-	/*
-	 * A call site must repeat its callee's calling convention or the pair is
-	 * undefined; settling it once here covers every emitter without each
-	 * having to remember. Only the direct fastcc calls need it - everything
-	 * else (helpers, intrinsics, legacy boundaries) stays at the C default.
-	 */
-	for (llvm::BasicBlock &bb : *function)
-		for (llvm::Instruction &instruction : bb)
-			if (auto *call = llvm::dyn_cast<llvm::CallBase> (&instruction))
-				if (auto *callee = call->getCalledFunction ();
-				    callee != nullptr
-				    && callee->getCallingConv () == llvm::CallingConv::Fast)
-					call->setCallingConv (llvm::CallingConv::Fast);
 }
 
 /// Translate the instruction at OFFSET, leaving IP on the one after it.

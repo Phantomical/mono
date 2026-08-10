@@ -861,7 +861,7 @@ TEST_F (TranslatorTest, AMustTailCallCarriesTheReturnExtension)
 	const Translation &t = translate ("calls", "Calls:TailNarrow");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("musttail call fastcc zeroext i8"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("musttail call zeroext i8"), 1u) << t.text ();
 }
 
 // Declining a tail. prefix is always legal, and it is how the unsafe cases are

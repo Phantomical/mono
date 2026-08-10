@@ -418,7 +418,8 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 /// The address of TARGET as something other than a direct call target: what
 /// ldftn pushes, what a delegate stores. This is the `$legacy` symbol - the
 /// legacy entry the runtime publishes - because the pointer escapes to callers
-/// that know nothing of fastcc; an indirect call through it is a legacy call.
+/// that know nothing of this backend's convention; an indirect call through it is
+/// a legacy call.
 ///
 /// Both branches below name that same symbol. A method whose code mini produces
 /// is declared against it, since create_method_decl () gives the `$legacy`
@@ -543,9 +544,10 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 		return llvm::CallInst::TCK_None;
 
 	/*
-	 * A tail call keeps the caller's own convention, so only a direct call to
-	 * another fastcc method qualifies: an indirect target or a runtime-implemented
-	 * one is a legacy call, lowered to a different prototype after the fact.
+	 * A tail call keeps the caller's own prototype, so only a direct call to
+	 * another method this backend compiles qualifies: an indirect target or a
+	 * runtime-implemented one is a legacy call, lowered to a different prototype
+	 * after the fact.
 	 */
 	if (callee_method == nullptr || implemented_outside_il (callee_method))
 		return llvm::CallInst::TCK_None;
@@ -854,7 +856,6 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	call->setTailCallKind (returns_in_registers ((*declaration)->getReturnType ())
 	                               ? llvm::CallInst::TCK_MustTail
 	                               : llvm::CallInst::TCK_Tail);
-	call->setCallingConv (llvm::CallingConv::Fast);
 
 	if (call->getType ()->isVoidTy ())
 		builder.CreateRetVoid ();

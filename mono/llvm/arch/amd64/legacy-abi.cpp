@@ -2,10 +2,11 @@
  * \file
  * \brief Lowering calls that cross into code compiled by mini.
  *
- * Generated code speaks fastcc with every value in its natural IR type; only
- * the boundary with the rest of the runtime - code mini compiled, raw C entry
- * points, and every function pointer the runtime hands out - still speaks
- * mini's convention. The translator marks those boundary calls with the
+ * Generated code speaks the C convention with every value in its natural IR
+ * type; only the boundary with the rest of the runtime - code mini compiled,
+ * raw C entry points, and every function pointer the runtime hands out - still
+ * speaks mini's convention, which is a different classification of the same
+ * arguments rather than a different tag. The translator marks those calls with the
  * `mono-legacycc` attribute and emits them naturally; LegacyAbiPass rewrites
  * them into the legacy convention after the optimization pipeline has run, so
  * nothing upstream of it ever sees a lowered call.
@@ -377,9 +378,8 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 /// A Coerced argument is none of that: its spill is loaded before the call and what
 /// crosses is the loaded word, so the alloca is dead by the time the frame goes.
 ///
-/// And only ever as the permission - the lowered site speaks the C convention while
-/// the managed caller speaks fastcc, and the verifier rejects a musttail call across
-/// that.
+/// And only ever as the permission - the lowering rebuilds the argument list, so the
+/// site no longer has the caller's own prototype, and musttail demands exactly that.
 CallInst::TailCallKind
 carried_tail_kind (const CallInst *call, const CallLowering &low)
 {
@@ -845,7 +845,6 @@ create_fastcc_entry_thunk (Module &m, StringRef name, Function *shape,
 	                                            proto->isVarArg ()),
 	                      GlobalValue::ExternalLinkage, name, m);
 
-	thunk->setCallingConv (CallingConv::Fast);
 	thunk->setAttributes (AttributeList::get (ctx, AttributeSet (),
 	                                          proto_attrs.getRetAttrs (), attrs));
 	/* Its callee can throw, and mono's unwinder walks back out through here. */
