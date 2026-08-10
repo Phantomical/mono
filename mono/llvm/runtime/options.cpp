@@ -113,8 +113,6 @@ set_interp_filter (const char *filter)
  *  - a wrapper is generated for the runtime to enter natively, and several kinds
  *    of them the interpreter answers for with something that is not a callable
  *    address at all;
- *  - freeing a dynamic method hands its MonoMethod back to the allocator, while
- *    the interpreter's shared entry machinery outlives any one method;
  *  - a method this backend writes the body of has IL that only throws, so any
  *    tier that runs the IL runs the throw.
  *
@@ -128,7 +126,7 @@ runs_at_tier0 (MonoMethod *method)
 		return false;
 
 	if (implemented_outside_il (method) || is_intrinsic (method)
-	    || method->dynamic || method->wrapper_type != MONO_WRAPPER_NONE
+	    || method->wrapper_type != MONO_WRAPPER_NONE
 	    || (method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING) != 0)
 		return false;
 
