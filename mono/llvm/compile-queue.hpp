@@ -53,8 +53,10 @@ public:
 	public:
 		virtual ~Worker () = default;
 
-		/// On the worker thread, before it takes any work.
-		virtual void start () {}
+		/// On the worker thread, before it takes any work. Answering false
+		/// means this thread can run none, and it exits without taking the
+		/// queue's lock or calling stop ().
+		virtual bool start () { return true; }
 		/// On the worker thread, once it has taken its last.
 		virtual void stop () {}
 
@@ -134,6 +136,10 @@ public:
 
 	/// Stop the worker. Anything queued is dropped, anything running finishes,
 	/// and nothing is taken afterwards.
+	///
+	/// A worker that has not got through Worker::start () yet is left where it
+	/// is rather than waited for: it has taken no work, and start () is
+	/// entitled never to return.
 	void stop ();
 
 	/// How many pieces of work have run to completion.
@@ -204,6 +210,9 @@ private:
 	std::unique_ptr<Worker> worker_;
 	std::thread thread_;
 	bool stopping_ = false;
+	/// Whether the worker got through Worker::start () and reached the loop.
+	/// Until it has, it is not a thread stop () may wait for.
+	bool started_ = false;
 
 	uint64_t next_id_ = 0;
 	uint64_t completed_ = 0;

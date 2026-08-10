@@ -100,6 +100,8 @@ CompileQueue::drain ()
 void
 CompileQueue::stop ()
 {
+	std::thread worker;
+
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
 
@@ -108,10 +110,23 @@ CompileQueue::stop ()
 		stopping_ = true;
 		pending_.clear ();
 		ready_.notify_all ();
+
+		/*
+		 * Only a worker that reached the loop is one to wait for. One that has
+		 * not is still inside Worker::start (), which the runtime is entitled
+		 * never to return from - attaching a thread to a runtime that has begun
+		 * shutting down parks it for the life of the process, and a stop ()
+		 * during shutdown is exactly when that happens. It has taken no work
+		 * and can take none now, so let it go instead.
+		 */
+		if (started_)
+			worker = std::move (thread_);
+		else if (thread_.joinable ())
+			thread_.detach ();
 	}
 
-	if (thread_.joinable ())
-		thread_.join ();
+	if (worker.joinable ())
+		worker.join ();
 }
 
 uint64_t
@@ -134,10 +149,20 @@ CompileQueue::ensure_worker ()
 void
 CompileQueue::run ()
 {
-	if (worker_ != nullptr)
-		worker_->start ();
+	{
+		std::unique_lock<std::mutex> lock (mutex_);
+
+		/* Nothing to attach for, and stop () is no longer waiting for us. */
+		if (stopping_)
+			return;
+	}
+
+	if (worker_ != nullptr && !worker_->start ())
+		return;
 
 	std::unique_lock<std::mutex> lock (mutex_);
+
+	started_ = true;
 
 	for (;;) {
 		if (worker_ != nullptr)

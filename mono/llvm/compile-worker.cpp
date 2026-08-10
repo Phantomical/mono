@@ -4,6 +4,7 @@
 
 #include <glib.h>
 
+#include "mono/metadata/appdomain.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/threads.h"
 #include "mono/metadata/threads-types.h"
@@ -11,9 +12,18 @@
 
 namespace mono {
 
-void
+bool
 CompileWorker::start ()
 {
+	/*
+	 * Attaching once shutdown has begun does not fail, it parks the thread for
+	 * the life of the process - so ask first rather than find out. Nothing is
+	 * lost by refusing: a compile queued this late is for a runtime that is on
+	 * its way out, and nothing waits for one.
+	 */
+	if (mono_runtime_is_shutting_down ())
+		return false;
+
 	thread_ = mono_thread_internal_attach (mono_get_root_domain ());
 
 	MonoInternalThread *internal = mono_thread_internal_current ();
@@ -30,6 +40,8 @@ CompileWorker::start ()
 	 */
 	internal->state |= ThreadState_Background;
 	internal->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
+
+	return true;
 }
 
 void

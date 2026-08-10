@@ -299,16 +299,93 @@ TEST (CompileQueueDeathTest, StoppingFromTheWorkerDiesRatherThanHanging)
 		"stopping the queue from the compile worker waits for itself");
 }
 
+/// A worker whose start () does what the runtime's does once shutdown has
+/// begun: never come back.
+class ParkedWorker : public CompileQueue::Worker {
+public:
+	Gate release;
+	std::atomic<bool> entered {false};
+	std::atomic<bool> done {false};
+
+	bool start () override
+	{
+		entered.store (true);
+		release.wait ();
+		return true;
+	}
+
+	void stop () override { done.store (true); }
+};
+
+/*
+ * mono_thread_internal_attach () parks the caller for the life of the process
+ * when the runtime is shutting down, and that call is inside Worker::start ().
+ * A worker still in there has taken no work, so stop () has nothing to wait for
+ * and must not.
+ */
+TEST (CompileQueue, StoppingDoesNotWaitForAWorkerStillStarting)
+{
+	auto worker = std::make_unique<ParkedWorker> ();
+	ParkedWorker *parked = worker.get ();
+	CompileQueue queue (std::move (worker));
+
+	{
+		CompileQueue::Channel channel (&queue);
+
+		ASSERT_TRUE (channel.enqueue (nullptr, [] {}));
+		wait_for ([&] { return parked->entered.load (); },
+		          "the worker never reached its start hook");
+	}
+
+	/* The point: this returns rather than joining a thread that is not coming. */
+	queue.stop ();
+
+	/* Let it out and see it off, so that nothing outlives the queue. */
+	parked->release.open ();
+	wait_for ([&] { return parked->done.load (); }, "the worker never finished");
+}
+
+/// A worker that refuses the thread it is given.
+class RefusingWorker : public CompileQueue::Worker {
+public:
+	std::atomic<bool> asked {false};
+
+	bool start () override
+	{
+		asked.store (true);
+		return false;
+	}
+};
+
+TEST (CompileQueue, AWorkerThatRefusesItsThreadRunsNothing)
+{
+	auto worker = std::make_unique<RefusingWorker> ();
+	RefusingWorker *refusing = worker.get ();
+
+	CompileQueue queue (std::move (worker));
+	CompileQueue::Channel channel (&queue);
+
+	std::atomic<bool> ran {false};
+
+	ASSERT_TRUE (channel.enqueue (nullptr, [&] { ran.store (true); }));
+	wait_for ([&] { return refusing->asked.load (); }, "the worker never started");
+
+	queue.stop ();
+	EXPECT_FALSE (ran.load ());
+	EXPECT_EQ (queue.completed (), 0u);
+}
+
 /// A CompileWorker the fixture can see the hooks of.
 class CountingWorker : public CompileWorker {
 public:
 	std::atomic<int> starts {0};
 	std::atomic<int> idles {0};
 
-	void start () override
+	bool start () override
 	{
-		CompileWorker::start ();
+		bool ok = CompileWorker::start ();
 		starts++;
+		return ok;
 	}
 
 	void idle (llvm::function_ref<void ()> wake) override

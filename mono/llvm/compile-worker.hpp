@@ -29,7 +29,7 @@ namespace mono {
 /// business, not the thread abort machinery's.
 class CompileWorker : public CompileQueue::Worker {
 public:
-	void start () override;
+	bool start () override;
 	void stop () override;
 	void idle (llvm::function_ref<void ()> wake) override;
 
