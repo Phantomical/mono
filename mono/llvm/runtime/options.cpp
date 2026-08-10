@@ -116,13 +116,17 @@ set_interp_filter (const char *filter)
  *  - a method this backend writes the body of has IL that only throws, so any
  *    tier that runs the IL runs the throw.
  *
+ * force_use_interpreter is the interpreter as the whole engine, where there is
+ * no tier to leave for and nothing should be counting calls towards one.
+ *
  * AggressiveInlining goes straight to the compiler because that is what the
  * attribute asks for, even though nothing is inlined across methods yet.
  */
 bool
 runs_at_tier0 (MonoMethod *method)
 {
-	if (interp_tier0_filter == nullptr || !mono_use_interpreter)
+	if (interp_tier0_filter == nullptr || !mono_use_interpreter
+	    || mono_ee_features.force_use_interpreter)
 		return false;
 
 	if (implemented_outside_il (method) || is_intrinsic (method)
