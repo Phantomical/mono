@@ -161,4 +161,31 @@ recover (MonoJit &jit, MonoDomain *domain, MonoMethod *method, Error failure,
 	return compile_thrower (jit, domain, method, metadata_error, remember);
 }
 
+/*
+ * A stub is the end of the line for a failure. The trampoline behind it has
+ * already put the call's arguments back and there is no caller expecting a
+ * miss, so a failure that gets this far either becomes an exception the program
+ * can see or ends the process. Which means the choice recover () makes - defer
+ * this one, report that one - is not available here: everything is deferred,
+ * and a failure that never went through a MonoError becomes the
+ * ExecutionEngineException managed code sees for an engine that gave up. A
+ * symbol that failed to resolve then costs the one method that named it rather
+ * than every method in the process.
+ */
+Expected<Compiled>
+raise_on_call (MonoJit &jit, MonoDomain *domain, MonoMethod *method, Error failure,
+               RememberFn remember)
+{
+	ERROR_DECL (call_error);
+
+	if (failure.isA<RuntimeError> ())
+		handleAllErrors (std::move (failure),
+		                 [&] (RuntimeError &runtime) { runtime.move_to (call_error); });
+	else
+		mono_error_set_execution_engine (call_error, "%s",
+		                                 toString (std::move (failure)).c_str ());
+
+	return compile_thrower (jit, domain, method, call_error, remember);
+}
+
 } // namespace mono

@@ -52,6 +52,13 @@ llvm::Expected<Compiled> compile_thrower (MonoJit &jit, MonoDomain *domain,
 llvm::Expected<Compiled> recover (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
                                   llvm::Error failure, RememberFn remember);
 
+/// Turn a failure into a body for the method that raises it, whatever the
+/// failure was: what a call already under way gets instead of an answer.
+/// Consumes the failure.
+llvm::Expected<Compiled> raise_on_call (MonoJit &jit, MonoDomain *domain,
+                                        MonoMethod *method, llvm::Error failure,
+                                        RememberFn remember);
+
 } // namespace mono
 
 #endif

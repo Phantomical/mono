@@ -340,14 +340,32 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 			[this, &domain, raw, entry] () -> void * {
 				llvm::Expected<void *> code = entry_point (domain, *raw, entry);
 
-				if (!code) {
-					llvm::logAllUnhandledErrors (code.takeError (),
+				if (code) {
+					raw->stub (entry).redirect (*code);
+					return *code;
+				}
+
+				/*
+				 * A stub is the end of the line for a failure: the
+				 * trampoline behind it has already put the call's
+				 * arguments back, and no caller is expecting a miss.
+				 * So it becomes a body that raises, and costs the one
+				 * method that could not be compiled rather than the
+				 * process.
+				 */
+				auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
+				llvm::Expected<Compiled> raising =
+					raise_on_call (*domain.jit, domain.domain,
+				                       raw->method, code.takeError (), note);
+
+				if (!raising) {
+					llvm::logAllUnhandledErrors (raising.takeError (),
 					                             llvm::errs (), "mono: ");
 					return (void *) &lazy_compile_failed;
 				}
 
-				raw->stub (entry).redirect (*code);
-				return *code;
+				raw->stub (entry).redirect (raising->at (entry));
+				return raising->at (entry);
 			});
 		if (!trampoline) {
 			unwind ();
@@ -616,28 +634,83 @@ MonoBackend::release_method_impl (MonoMethod *method)
 		state->retire (*mstate);
 }
 
-/*
- * The three reads below answer for a method this engine has compiled. Nothing it
- * publishes carries code yet - entry_point () still refuses - so for now they say
- * so rather than pretending a method has no body, which the runtime would take as
- * "not compiled here" and act on.
- */
 void *
-MonoBackend::body_of (MonoDomain *, MonoMethod *)
+MonoBackend::body_of (MonoDomain *domain, MonoMethod *method)
 {
+	if (!instance)
+		return nullptr;
+
+	MONO_LOCK (instance->mutex_)
+	{
+		auto state = instance->domains_.find (domain);
+
+		if (state == instance->domains_.end ())
+			return nullptr;
+
+		auto it = state->second->methods.find (method);
+
+		if (it == state->second->methods.end () || !it->second->code)
+			return nullptr;
+		return it->second->code->body;
+	}
+
 	return nullptr;
 }
 
 void
-MonoBackend::foreach_body (MonoDomain *, MonoMethod *, void (*) (MonoJitInfo *, void *),
-                           void *)
+MonoBackend::foreach_body (MonoDomain *domain, MonoMethod *method,
+                           void (*visit) (MonoJitInfo *, void *), void *user_data)
 {
+	if (!instance)
+		return;
+
+	/*
+	 * Collected under the lock and visited outside it: what the debugger does
+	 * with a body is look the method up again, through a door that takes this
+	 * same lock.
+	 */
+	llvm::SmallVector<MonoJitInfo *, 2> bodies;
+
+	MONO_LOCK (instance->mutex_)
+	{
+		auto state = instance->domains_.find (domain);
+
+		if (state == instance->domains_.end ())
+			return;
+
+		auto it = state->second->methods.find (method);
+
+		if (it == state->second->methods.end () || !it->second->code)
+			return;
+		if (it->second->code->jinfo != nullptr)
+			bodies.push_back (it->second->code->jinfo);
+	}
+
+	for (MonoJitInfo *jinfo : bodies)
+		visit (jinfo, user_data);
 }
 
 void *
-MonoBackend::unbox_entry_of (MonoMethod *)
+MonoBackend::unbox_entry_of (MonoMethod *method)
 {
-	return nullptr;
+	if (!instance || !publishes_unbox_entry (method))
+		return nullptr;
+
+	llvm::Expected<DomainState *> domain = instance->state ();
+
+	if (!domain) {
+		llvm::consumeError (domain.takeError ());
+		return nullptr;
+	}
+
+	llvm::Expected<MethodState *> published = instance->publish (**domain, method);
+
+	if (!published) {
+		llvm::consumeError (published.takeError ());
+		return nullptr;
+	}
+
+	return (*published)->stub (Entry::unbox).code ();
 }
 
 llvm::Expected<void *>
@@ -654,9 +727,20 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 		return published.takeError ();
 
 	/* The C door where the method has one, and the method itself otherwise. */
-	return (*published)
-	        ->stub (publishes_interop_entry (method) ? Entry::interop : Entry::body)
-	        .code ();
+	Entry door = publishes_interop_entry (method) ? Entry::interop : Entry::body;
+
+	/*
+	 * Compiled here rather than on the first call through the stub. Two reasons,
+	 * and the second is not an optimisation: a refusal can come back through
+	 * MonoError and be raised by the runtime, which knows how to throw from
+	 * where it stands; and the caller may hand the address to native code that
+	 * calls it from a thread mono has never seen, where there is no domain to
+	 * compile against and no thread info to read one from.
+	 */
+	if (llvm::Error err = entry_point (**state, **published, door).takeError ())
+		return std::move (err);
+
+	return (*published)->stub (door).code ();
 }
 
 } // namespace mono
