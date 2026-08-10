@@ -143,27 +143,8 @@ public:
 		return Error::success ();
 	}
 
-	/*
-	 * Unlike the rest, a name that already has one gets that one back - two
-	 * threads reaching one method together both ask for it. Serialized so the
-	 * loser gets a stub that is already pointing somewhere.
-	 */
-	Expected<void *> create_keyed_stub (StringRef name, void *target, void *key)
-	{
-		std::lock_guard<std::mutex> lock (mutex_);
-
-		if (std::optional<Stub> existing = table_.find (name))
-			return existing->code ();
-
-		Expected<Stub> stub = carve (name, key);
-
-		if (!stub)
-			return stub.takeError ();
-		stub->redirect (target);
-		return stub->code ();
-	}
-
-	Error create_lazy_stub (StringRef name, LazyCompileFunction compile)
+	Error create_lazy_stub (StringRef name, LazyCompileFunction compile,
+	                        void *key = nullptr)
 	{
 		std::string owned = name.str ();
 		Expected<void *> trampoline = reserve (
@@ -183,7 +164,7 @@ public:
 		if (!trampoline)
 			return trampoline.takeError ();
 
-		Expected<Stub> stub = carve (name, nullptr);
+		Expected<Stub> stub = carve (name, key);
 
 		if (!stub) {
 			callbacks_->release (*trampoline);
@@ -1007,11 +988,6 @@ private:
 
 	/// Point a method's stubs at the interpreter.
 	Expected<Compiled> interp_entries (DomainState &state, MonoMethod *method);
-
-	/// The entry an interpreted method is given: a stub carrying the method's
-	/// own identity into the shared thunk, which is where the arguments are
-	/// read out of the convention.
-	Expected<void *> interp_body_entry (DomainState &state, MonoMethod *method);
 
 	/// How a call to a method is taken apart for the interpreter, worked out on
 	/// first use and then shared with every method of the same prototype.
@@ -2659,17 +2635,19 @@ Backend::compile_and_publish (DomainState &state, MonoMethod *method, bool tier1
 Expected<Backend::Compiled>
 Backend::interp_entries (DomainState &state, MonoMethod *method)
 {
-	Expected<void *> body = interp_body_entry (state, method);
+	Expected<const arch::InterpEntryPoint *> entry =
+		interp_entry (state.domain, method);
 
-	if (!body)
-		return body.takeError ();
+	if (!entry)
+		return entry.takeError ();
 
-	void *counted_body = *body;
+	void *body = arch::interp_entry_thunk ();
+	void *counted_body = body;
 
 	/* One door now, so N really is N calls to the method. */
 	if (tier1_threshold () != 0) {
 		Expected<std::vector<void *>> counted =
-			counted_entries (state, method, { *body });
+			counted_entries (state, method, { body });
 
 		if (!counted)
 			return counted.takeError ();
@@ -2719,32 +2697,6 @@ Backend::interp_entries (DomainState &state, MonoMethod *method)
 	std::lock_guard<std::mutex> lock (mutex_);
 
 	return state.interpreted[method] = entries;
-}
-
-Expected<void *>
-Backend::interp_body_entry (DomainState &state, MonoMethod *method)
-{
-	if (Expected<const arch::InterpEntryPoint *> entry =
-	            interp_entry (state.domain, method);
-	    !entry)
-		return entry.takeError ();
-
-	/*
-	 * Which method the thunk was entered for is the one thing it cannot work
-	 * out for itself, so it arrives in the key register - a stub of the
-	 * method's own is what puts it there. Redirectable like the others, though
-	 * nothing redirects this one: the body stub in front of it is what a later
-	 * tier moves.
-	 */
-	std::string name = symbol_for_body (method) + "$interp";
-	Expected<void *> stub =
-		state.stubs->create_keyed_stub (name, arch::interp_entry_thunk (), method);
-
-	if (!stub)
-		return stub;
-
-	register_stub_jinfo (state.domain, method, *stub, arch::stub_block_size, name);
-	return *stub;
 }
 
 Expected<const arch::InterpEntryLayout *>
@@ -3084,6 +3036,7 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 			return err;
 	}
 
+	// Keyed on the method, so one body can stand for many of them.
 	if (Error err = state.stubs->create_lazy_stub (
 	        symbol_for_body (method),
 	        [this, owner, method, bindable, raising] () -> Expected<void *> {
@@ -3100,7 +3053,8 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 		        if (!code)
 			        return raising (code.takeError (), &Compiled::body);
 		        return code->body;
-	        }))
+	        },
+	        method))
 		return err;
 
 	/*
@@ -3120,7 +3074,8 @@ Backend::publish_defs (DomainState &state, MonoMethod *method)
 				        return raising (code.takeError (),
 				                        &Compiled::unbox);
 			        return code->unbox;
-		        }))
+		        },
+		        method))
 			return err;
 	}
 

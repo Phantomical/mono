@@ -106,11 +106,11 @@ write_counter_thunk (char *block, uint32_t *counter, uint32_t threshold,
 	 * lock xaddl %r11d, counter(%rip)
 	 *
 	 * %r11 is the one register free here: it is call-clobbered and carries no
-	 * argument, and unlike %r10 it is not the register a method's key travels
-	 * in. So the counting costs the thunk's callers a compare and a branch and
-	 * disturbs nothing else - no stack, no saves - which is also why a stack
-	 * walk that catches a thread in here can use the same unwind program as any
-	 * other stub.
+	 * argument, and %r10 has to reach whatever this jumps on to untouched - the
+	 * stub in front loaded the method's key into it. So the counting costs the
+	 * thunk's callers a compare and a branch and disturbs nothing else - no
+	 * stack, no saves - which is also why a stack walk that catches a thread in
+	 * here can use the same unwind program as any other stub.
 	 *
 	 * Relaxed is all this needs. The counter synchronizes nothing; what
 	 * publishes a promoted body is the release store to the stub's slot.

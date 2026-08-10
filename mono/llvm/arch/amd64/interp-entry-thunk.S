@@ -3,9 +3,7 @@
  *
  * A call arrives here exactly as it would have arrived at the method - the
  * backend's own convention, arguments wherever LLVM put them - with %r10
- * carrying the MonoMethod *. That is the register LLVM pins a `nest` parameter
- * to, and the same channel every dispatched call already uses to say which
- * method was asked for.
+ * carrying the MonoMethod *, loaded by the method's own stub.
  *
  * Nothing here knows the prototype, so it spills rather than reads, and the
  * helper takes the arguments out of the context once it has looked the method
