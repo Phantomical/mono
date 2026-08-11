@@ -22,6 +22,17 @@ file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/monodis-wrapper"
      PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
                  WORLD_READ WORLD_EXECUTE)
 
+# The crash handler execs this by an absolute path it builds itself, as
+# `<config dir>/../bin/mono-hang-watchdog`, so an uninstalled runtime only
+# finds one if it is sitting beside the build-tree etc/.  Without it a crash
+# whose dump wedges runs until whoever launched the runtime gives up, instead
+# of being killed after the watchdog's own thirty seconds.
+if(MONO_ENABLE_EXECUTABLES)
+  set(mono_build_root "${CMAKE_BINARY_DIR}")
+  mono_configure_script("${CMAKE_CURRENT_SOURCE_DIR}/bin/mono-hang-watchdog.in"
+                        "${CMAKE_CURRENT_BINARY_DIR}/bin/mono-hang-watchdog")
+endif()
+
 # ---------------------------------------------------------------------------
 # etc/mono in the build tree
 # ---------------------------------------------------------------------------

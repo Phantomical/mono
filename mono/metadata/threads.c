@@ -6734,7 +6734,13 @@ summarizer_supervisor_start (SummarizerSupervisorState *state)
 		const char *const args[] = { hang_watchdog_path, pid_str, NULL };
 		execve (args[0], (char * const*)args, NULL); // run 'mono-hang-watchdog [pid]'
 		g_async_safe_printf ("Could not exec mono-hang-watchdog, expected on path '%s' (errno %d)\n", hang_watchdog_path, errno);
-		exit (1);
+		/*
+		 * _exit rather than exit: this is a fork child of a process that is
+		 * already crashing, and it holds only the thread that forked. Running
+		 * the parent's atexit handlers and static destructors here means
+		 * running teardown that expects threads this child does not have.
+		 */
+		_exit (1);
 	}
 
 	return pid;

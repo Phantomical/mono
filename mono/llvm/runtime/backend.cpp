@@ -77,6 +77,10 @@ lazy_compile_failed ()
 
 MonoBackend *MonoBackend::instance = nullptr;
 
+/// The process that built the backend, and the only one allowed to take it
+/// apart again.
+static pid_t owner_pid;
+
 llvm::Expected<MonoBackend *>
 MonoBackend::get ()
 {
@@ -84,8 +88,22 @@ MonoBackend::get ()
 
 	std::call_once (once, [] {
 		instance = new MonoBackend ();
+		owner_pid = getpid ();
 
 		atexit ([] {
+			/*
+			 * Tearing the backend down closes every domain's compile channel,
+			 * and closing one waits for the compiles already running on the
+			 * worker thread to retire. fork () keeps only the thread that
+			 * called it, so in a child that worker does not exist and a
+			 * ticket left in flight at the fork never retires - the wait
+			 * never ends. The crash handler forks exactly like this, so a
+			 * runtime that faults while a background compile is running would
+			 * otherwise leave a child parked here for good.
+			 */
+			if (getpid () != owner_pid)
+				return;
+
 			auto backend = instance;
 			instance = nullptr;
 			delete backend;
