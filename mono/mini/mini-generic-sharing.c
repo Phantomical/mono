@@ -1174,6 +1174,14 @@ get_wrapper_shared_vtype (MonoType *t)
 	klass = mono_class_from_mono_type_internal (t);
 	if ((mono_class_get_flags (klass) & TYPE_ATTRIBUTE_LAYOUT_MASK) != TYPE_ATTRIBUTE_SEQUENTIAL_LAYOUT)
 		return NULL;
+	/*
+	 * A SIMD class travels in one vector register; the tuple mirroring its
+	 * fields travels in as many registers as it has eightbytes. Sharing the
+	 * two would describe a call one way and compile the callee the other,
+	 * so Vector4 keeps its own wrapper rather than borrowing float x4's.
+	 */
+	if (m_class_is_simd_type (klass))
+		return NULL;
 	mono_class_setup_fields (klass);
 	if (mono_class_has_failure (klass))
 		return NULL;

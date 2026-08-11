@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 /*
@@ -27,6 +28,13 @@ struct Wide {
 
 struct Narrow {
 	public long a, b;
+}
+
+/* Field-for-field what Vector4 is, and deliberately not a SIMD type: the two
+ * travel in different registers, so this is the control that says whether a
+ * failure below is about the crossing or merely about sixteen bytes. */
+struct Quad {
+	public float a, b, c, d;
 }
 
 class Tests
@@ -104,6 +112,48 @@ class Tests
 		for (int i = 0; i < iterations; i++) {
 			Narrow n = narrow_static_noargs ();
 			if (n.a != 11 || n.b != 22)
+				return 1;
+		}
+		return 0;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vector4 simd_roundtrip (Vector4 v) {
+		return v;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Quad quad_roundtrip (Quad q) {
+		return q;
+	}
+
+	/*
+	 * A SIMD class travels in one vector register while a struct of the same
+	 * fields travels in two, so the wrapper the crossing is marshalled through
+	 * cannot be shared between them: sharing describes the call one way and
+	 * compiles the callee the other, and the callee reads half a value.
+	 */
+	public static int test_0_simd_roundtrip () {
+		Vector4 v = new Vector4 (1.0f, 2.0f, 3.0f, 4.0f);
+
+		for (int i = 0; i < iterations; i++) {
+			Vector4 r = simd_roundtrip (v);
+			if (r.X != 1.0f || r.Y != 2.0f || r.Z != 3.0f || r.W != 4.0f)
+				return 1;
+		}
+		return 0;
+	}
+
+	/* The control for the test above: same fields, same width, no vector
+	 * register. It failing too would mean the crossing is broken for every
+	 * sixteen-byte value rather than for SIMD ones. */
+	public static int test_0_quad_roundtrip () {
+		Quad q = new Quad ();
+		q.a = 1.0f; q.b = 2.0f; q.c = 3.0f; q.d = 4.0f;
+
+		for (int i = 0; i < iterations; i++) {
+			Quad r = quad_roundtrip (q);
+			if (r.a != 1.0f || r.b != 2.0f || r.c != 3.0f || r.d != 4.0f)
 				return 1;
 		}
 		return 0;

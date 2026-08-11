@@ -35,7 +35,9 @@ mono_corpus_cs(generics.exe      SOURCES generics.cs
 mono_corpus_cs(unaligned.exe     SOURCES unaligned.cs
                REFS "${_driver}" "${CMAKE_CURRENT_BINARY_DIR}/MemoryIntrinsics.dll")
 mono_corpus_il(iltests.exe iltests.il)
-mono_corpus_cs(tier-seam.exe SOURCES tier-seam.cs REFS "${_driver}")
+mono_corpus_cs(tier-seam.exe SOURCES tier-seam.cs
+               REFS "${_driver}" "${_class_dir}/System.Numerics.dll"
+                    "${_class_dir}/System.Numerics.Vectors.dll")
 mono_corpus_cs(xdomain.exe   SOURCES xdomain.cs)
 
 add_custom_target(mini-corpora ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
@@ -102,7 +104,7 @@ if(MONO_ENABLE_INTERPRETER)
   add_test(NAME "mini-regression/tier-seam"
            COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                    "${CMAKE_COMMAND}"
-                   "-DMONO_TRACE_REQUIRE=Tests:wide_static_noargs;Tests:wide_static_onearg;Tests:wide_instance_noargs;Tests:narrow_static_noargs"
+                   "-DMONO_TRACE_REQUIRE=Tests:wide_static_noargs;Tests:wide_static_onearg;Tests:wide_instance_noargs;Tests:narrow_static_noargs;Tests:simd_roundtrip;Tests:quad_roundtrip"
                    -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunTracedTest.cmake"
                    -- "${_wrapper}" --regression tier-seam.exe
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
