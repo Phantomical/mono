@@ -14,26 +14,24 @@
 #include "backend.hpp"
 #include "jit.hpp"
 #include "options.hpp"
+#include "verification.hpp"
 
 #include <llvm/Support/Error.h>
 
 namespace {
 
-/// Hand a compile's result back the way the runtime expects it.
+/// Set ERROR from a refusal the way the runtime expects it.
 ///
-/// A refusal the translator raised through a MonoError is handed back as the
-/// exception it described; anything else is the engine itself failing, which
-/// managed code sees as an ExecutionEngineException all the same.
-void *
-finish (llvm::Expected<void *> code, MonoError *error)
+/// A refusal raised through a MonoError is handed back as the exception it
+/// described; anything else is the engine itself failing, which managed code
+/// sees as an ExecutionEngineException all the same.
+void
+report (llvm::Error failure, MonoError *error)
 {
-	if (code)
-		return *code;
-
 	bool recovered = false;
 
 	llvm::handleAllErrors (
-		code.takeError (),
+		std::move (failure),
 		[&] (mono::RuntimeError &runtime) {
 			runtime.move_to (error);
 			recovered = true;
@@ -44,6 +42,16 @@ finish (llvm::Expected<void *> code, MonoError *error)
 		});
 
 	g_assert (recovered);
+}
+
+/// Hand a compile's result back the way the runtime expects it.
+void *
+finish (llvm::Expected<void *> code, MonoError *error)
+{
+	if (code)
+		return *code;
+
+	report (code.takeError (), error);
 	return NULL;
 }
 
@@ -130,4 +138,18 @@ void
 mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain)
 {
 	mono::MonoBackend::request_promotion (method, domain);
+}
+
+mono_bool
+mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error)
+{
+	error_init (error);
+
+	llvm::Error invalid = mono::verify_method (method);
+
+	if (!invalid)
+		return TRUE;
+
+	report (std::move (invalid), error);
+	return FALSE;
 }

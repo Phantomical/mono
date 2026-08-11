@@ -381,6 +381,7 @@ _mono_special(tasklets.exe SOURCES tasklets.cs REFS "${_class}/Mono.Tasklets.dll
 # the runtime-verification tests in runtime-suites.cmake drive it under specific
 # --security= and MONO_LLVM_JIT_TIER0 combinations and read what it prints.
 _mono_special(verification-invalid-il.exe IL SOURCES verification-invalid-il.il)
+_mono_special(verification-inlined-il.exe IL SOURCES verification-inlined-il.il)
 
 # One tailcall test links two extra IL libraries.
 _mono_special(tailcall/coreclr/JIT/opt/Tailcall/TailcallVerifyWithPrefix.exe IL

@@ -594,18 +594,23 @@ mono_runtime_check(runtime-pedump NATIVE
 # four arms are the two security settings crossed with the two tiers: the flag
 # is what makes the difference, and the tier is what must not.
 #
-# The tier-0 arms name the invalid method rather than taking every method,
-# because a method the interpreter calls from another interpreted method never
-# reaches the backend at all. Selecting only the callee keeps its caller
-# compiled, so the call goes through the stub the backend published.
+# Some tier-0 arms name the invalid method rather than taking every method. That
+# keeps its caller compiled, so the call goes through the stub the backend
+# published and the backend is what answers for the callee. The unrestricted
+# arms below are the ones that matter more: with nothing named, the caller is
+# interpreted too and reaches its callee without the backend ever being asked,
+# so the verdict has to come from the interpreter's own path.
 function(_mono_verification_check name expect)
-  cmake_parse_arguments(ARG "" "" "ARGS;ENV;REJECT" ${ARGN})
+  cmake_parse_arguments(ARG "" "PROGRAM" "ARGS;ENV;REJECT" ${ARGN})
+  if(NOT ARG_PROGRAM)
+    set(ARG_PROGRAM verification-invalid-il.exe)
+  endif()
   foreach(_gc IN LISTS _mono_gcs)
     _mono_gc_env(_gc_env "${_gc}")
     add_test(NAME "${name}@${_gc}"
              COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                      "${_gc_env}" "MONO_LLVM_JIT_TRACE=1" ${ARG_ENV}
-                     "${_wrapper}" ${ARG_ARGS} verification-invalid-il.exe
+                     "${_wrapper}" ${ARG_ARGS} "${ARG_PROGRAM}"
              WORKING_DIRECTORY "${_bin}")
     set_tests_properties("${name}@${_gc}" PROPERTIES
       LABELS runtime TIMEOUT 300
@@ -631,3 +636,24 @@ _mono_verification_check(runtime-verification-validil-tier0
                          ARGS --security=validil
                          ENV "MONO_LLVM_JIT_TIER0=Probe:Unverifiable"
                          REJECT "ran 42|interpreting Probe:Unverifiable")
+
+# Tier 0 unrestricted, so the caller is interpreted as well and reaches the
+# callee without the backend being asked for it. The verdict has to come from
+# the interpreter transforming the callee.
+_mono_verification_check(runtime-verification-validil-interpreted
+                         "rejected System.InvalidProgramException"
+                         ARGS --security=validil
+                         REJECT "ran 42")
+
+# The same, for a callee small enough to be inlined. An inlined body never gets
+# a transform of its own, so it is checked where the interpreter decides to
+# inline it - a body that does not verify is not inlined, and is then verified
+# as an ordinary callee.
+_mono_verification_check(runtime-verification-inlined
+                         "rejected System.Security.VerificationException"
+                         PROGRAM verification-inlined-il.exe
+                         ARGS --verify-all
+                         REJECT "ran 42")
+_mono_verification_check(runtime-verification-inlined-off "ran 42"
+                         PROGRAM verification-inlined-il.exe
+                         REJECT "rejected")

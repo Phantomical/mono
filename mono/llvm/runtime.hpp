@@ -139,6 +139,19 @@ int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 /// the method then stays at the tier it is at.
 void mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain);
 
+/// Put METHOD's IL through the verifier, if a verifier mode was asked for.
+///
+/// The engine that enters a method first is the one that has to call this. A
+/// method the interpreter reaches on its own is never asked for through
+/// mono_llvm_jit_compile_method (), so nothing else gets the chance to decide
+/// whether its body may run at all. A passing verdict is cached, so a method
+/// both engines enter is verified once.
+///
+/// Returns FALSE with ERROR set to the exception the verdict names -
+/// VerificationException, MethodAccessException and so on. Returns TRUE when no
+/// verifier mode was asked for, which is the default.
+mono_bool mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error);
+
 MONO_END_DECLS
 
 #endif

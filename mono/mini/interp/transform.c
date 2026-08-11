@@ -33,6 +33,8 @@
 #include "interp.h"
 #include "transform.h"
 
+#include "../../llvm/runtime.hpp"
+
 MonoInterpStats mono_interp_stats;
 
 #define DEBUG 0
@@ -2706,6 +2708,21 @@ interp_method_check_inlining (TransformData *td, MonoMethod *method, MonoMethodS
 
 	if (g_list_find (td->dont_inline, method))
 		return FALSE;
+
+	/*
+	 * An inlined body never gets a transform of its own, so this is the last
+	 * point its IL can be put through the verifier. Declining the inline is
+	 * all that is needed: the call stays a real one, and the callee is
+	 * verified when it is transformed.
+	 */
+	{
+		ERROR_DECL (verify_error);
+
+		if (!mono_llvm_jit_verify_method (method, verify_error)) {
+			mono_interp_error_cleanup (verify_error);
+			return FALSE;
+		}
+	}
 
 	return TRUE;
 }
@@ -8798,6 +8815,15 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 		mono_error_set_invalid_operation (error, "%s", "Could not execute the method because the containing type is not fully instantiated.");
 		return;
 	}
+
+	/*
+	 * Here rather than where the backend is asked for a method, because the
+	 * interpreter reaches a callee without asking. Transform runs once per
+	 * method, so a body gets its verdict before its first instruction either
+	 * way, and before the class initializer below runs on its behalf.
+	 */
+	if (!mono_llvm_jit_verify_method (method, error))
+		return;
 
 	// g_printerr ("TRANSFORM(0x%016lx): begin %s::%s\n", mono_thread_current (), method->klass->name, method->name);
 	method_class_vt = mono_class_vtable_checked (domain, imethod->method->klass, error);
