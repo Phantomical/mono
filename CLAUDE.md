@@ -504,8 +504,20 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Do not reference the current plan or current task list. For people reading the code later
   on without access to the plan documents these references are noise that hide what is
   actually going on.
-- Doc comments on methods should just explain _what_ the method does and not _how_ it does it.
-  Users needing to know how a method works can just read its implementation.
+- A doc comment states the contract a method exposes: what it does, and what a caller needs
+  in order to use it correctly and safely. Explain _what_, not _how_ - anyone who needs the
+  mechanism can read the implementation.
+- These are internal doc comments, so scope them as such. They do not need to be exhaustive,
+  because a reader who wants more can open the code. A short introduction plus whatever heads
+  off a non-obvious misuse is enough.
+- What earns its place is the thing a caller cannot see from the signature and would otherwise
+  get wrong: a locking rule, a precondition, what NULL means, an operation that can silently
+  not happen, a lifetime or stability guarantee. Internal ordering, which helper does the work,
+  and why the function exists at all are none of the caller's business - cut them.
+- Before keeping a fact, check that this function is what enforces it. A rule that some caller
+  observes belongs to that caller, and stating it here reads as a guarantee this function makes.
+  `mono_llvm_jit_compile_method ()` compiles into whatever domain it is handed; that icall
+  wrappers get handed the root domain is mini's policy, so it is documented in mini.
 - Comments inside a method should be minimal. If present they should explain _why_ a specific
   thing is being done and only extend to _what_ or _how_ if these are very nonobvious.
 - Do not explain why something is not happening in the code. Justify the code that is there;
@@ -517,7 +529,7 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Keep parentheticals out of a summary line. Needing one is a sign the summary is trying to
   cover more than one thing; split it or narrow it instead.
 - Do not open a summary line with "The one X" or similar. Say what the thing is.
-- A file or method doc comment says what the thing is for. Leave the mechanism to the
-  implementation, which the reader can see.
+- A file doc comment says what the file is for. Leave the mechanism to the implementation,
+  which the reader can see.
 - In C++, `//` is the normal comment. Reach for `/* */` when a block genuinely runs to several
   paragraphs, not for one-line remarks.
