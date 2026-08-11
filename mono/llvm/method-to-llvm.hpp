@@ -321,6 +321,11 @@ private:
 	/// seq_point_offsets as a graph, built once the body has been translated.
 	SeqPointGraph seq_point_graph;
 
+	/// The offset of the statement being translated - the most recent one
+	/// wants_seq_point_at () accepted. This is what the line table records, so
+	/// that an offset read back out of it is a sequence point.
+	size_t statement_offset = 0;
+
 	/// The marker of the sequence point emitted after the most recent call, and
 	/// the IL offset it stands for. Every call in an argument list but the
 	/// outermost one is tagged as a nested call, and which one is outermost only

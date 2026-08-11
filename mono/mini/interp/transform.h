@@ -152,6 +152,15 @@ typedef struct
 	InterpInst *last_ins, *first_ins;
 	int code_size;
 	int *in_offsets;
+	/*
+	 * Which IL offsets start a statement, and the one in effect. The
+	 * line-number table records the statement rather than the instruction: an
+	 * offset read back out of it is handed to a symbol reader, and a reader
+	 * resolves an offset that is not a sequence point to the *next* one, so
+	 * `throw new E ()` would report the line of whatever follows the throw.
+	 */
+	MonoBitSet *statement_locs;
+	int statement_il_offset;
 	int current_il_offset;
 	unsigned short *new_code;
 	unsigned short *new_code_end;

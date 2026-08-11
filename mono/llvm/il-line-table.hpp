@@ -4,8 +4,8 @@
  *
  * A method's native_offset -> il_offset map (stack traces, profiler attribution)
  * rides on debug locations: each OP_IL_SEQ_POINT sets a DILocation whose line is
- * the IL offset, which survives the optimizer and reaches the machine
- * instructions. The printer reads the lines back off them and writes
+ * the IL offset of the statement in effect, which survives the optimizer and
+ * reaches the machine instructions. The printer reads the lines back off them and writes
  * `.mono_lines` (sidetables.hpp); no DWARF is emitted, and the compile unit
  * below says so.
  *

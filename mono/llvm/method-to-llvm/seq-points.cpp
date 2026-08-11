@@ -213,7 +213,7 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 	 * and nothing else with an address of its own is between: an asm block
 	 * cannot be reordered across a call, which is all the ordering this needs.
 	 */
-	uint32_t restore = (uint32_t) offset;
+	uint32_t restore = (uint32_t) statement_offset;
 
 	set_il_location (builder, seq_point_marker_line (encoded_il, flags));
 

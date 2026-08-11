@@ -50,10 +50,12 @@
  *     i32 reg         DWARF register number, or 0 where the op has none
  *     i64 value       the op's offset operand, or 0
  *
- * `.mono_lines` is the IL-offset map: which IL offset was in effect at each
- * code offset, which is what a managed stack trace prints and what the soft
- * debugger's sequence points are recovered from. Same block-per-function shape
- * as `.mono_unwind` and for the same reason.
+ * `.mono_lines` is the IL-offset map: which statement was in effect at each code
+ * offset, which is what a managed stack trace prints and what the soft
+ * debugger's sequence points are recovered from. The offsets are statement
+ * starts rather than instruction starts, because a symbol reader given an
+ * offset that is not a sequence point resolves it to the next one. Same
+ * block-per-function shape as `.mono_unwind` and for the same reason.
  *
  *   Header (20 bytes, little-endian):
  *     u32 magic   = 0x4d4c4e45 ('MLNE')

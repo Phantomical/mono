@@ -1000,23 +1000,23 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 		}
 
 		/*
-		 * Two sets, decided separately.
+		 * wants_seq_point_at () decides where a statement starts: the symbol
+		 * file's offsets when it has any for this method, and otherwise an
+		 * empty evaluation stack, plus a handler's first instruction, where it
+		 * holds only the exception.
 		 *
-		 * Every IL instruction goes in the line table. What reads that back is
-		 * a stack walk asking where a frame is, and a frame below the top sits
-		 * at a call - rarely a statement boundary, and never one in
-		 * `throw new E ()`. Resolving a mid-statement offset to a source line
-		 * still lands on the right statement, since both symbol formats answer
-		 * with the last sequence point at or before the offset they are given.
-		 *
-		 * Where the debugger may stop is the coarser set, and
-		 * wants_seq_point_at () is what decides it: the symbol file's offsets
-		 * when it has any for this method, and otherwise an empty evaluation
-		 * stack (plus a handler's first instruction, where it holds only the
-		 * exception) as a stand-in. Stopping anywhere finer than a statement
-		 * reports the same source line twice over.
+		 * Both the debugger's stops and the line table are placed from it. The
+		 * line table records the statement rather than the instruction because
+		 * an offset read back out of it is handed to a symbol reader, and
+		 * mono-symbolicate resolves an offset that is not a sequence point to
+		 * the *next* one - so `throw new E ()` reports the line of whatever
+		 * follows the throw. Recording the statement is also what the classic
+		 * back end's map holds, so a trace says the same thing either way.
 		 */
-		set_il_location (builder, offset);
+		if (wants_seq_point_at (offset))
+			statement_offset = offset;
+
+		set_il_location (builder, statement_offset);
 		if (wants_seq_point_at (offset))
 			emit_seq_point (builder, (uint32_t) offset);
 
