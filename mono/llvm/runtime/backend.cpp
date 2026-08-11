@@ -34,6 +34,23 @@ namespace mono {
 
 namespace {
 
+/// Holds a domain's lock for a scope.
+class DomainLock {
+public:
+	explicit DomainLock (MonoDomain *domain) : domain_ (domain)
+	{
+		mono_domain_lock (domain_);
+	}
+
+	~DomainLock () { mono_domain_unlock (domain_); }
+
+	DomainLock (const DomainLock &) = delete;
+	DomainLock &operator= (const DomainLock &) = delete;
+
+private:
+	MonoDomain *domain_;
+};
+
 /*
  * Where a stub lands when the compile behind it failed. The trampoline has
  * already put the call's arguments back and jumped here, so this is running as
@@ -364,6 +381,14 @@ MonoBackend::DomainState::retire (MethodState &method)
 llvm::Expected<MonoBackend::MethodState *>
 MonoBackend::publish (DomainState &domain, MonoMethod *method)
 {
+	/*
+	 * The domain lock is the outer one of the two. A mutator can arrive here
+	 * already holding it - mono_class_proxy_vtable compiles a remoting
+	 * trampoline under it - and registering the stubs' jit info below takes it
+	 * as well, so taking them the other way round on the compile worker
+	 * deadlocks against a compile on a mutator thread.
+	 */
+	DomainLock domain_lock (domain.domain);
 	std::lock_guard<std::mutex> lock (mutex_);
 
 	auto it = domain.methods.find (method);
