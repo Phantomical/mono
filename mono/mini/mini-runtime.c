@@ -3818,6 +3818,21 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 #endif
 
 	MONO_HANDLE_SET (delegate, target, target);
+
+	/*
+	 * A delegate whose Invoke names a type that will not load has the method
+	 * and not its signature, and everything below builds the invoke path out of
+	 * that signature. This is where the caller can still be told.
+	 */
+	{
+		MonoMethod *invoke = mono_get_delegate_invoke_internal (mono_handle_class (MONO_HANDLE_CAST (MonoObject, delegate)));
+
+		if (invoke) {
+			mono_method_signature_checked (invoke, error);
+			return_if_nok (error);
+		}
+	}
+
 	MONO_HANDLE_SETVAL (delegate, invoke_impl, gpointer, mono_create_delegate_trampoline (domain, mono_handle_class (delegate)));
 
 	if (mono_use_interpreter) {
