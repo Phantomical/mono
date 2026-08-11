@@ -3952,21 +3952,18 @@ tailcall:
 			 * lands on the MINT_RET the transform left after this instruction - so a
 			 * refusal here is the call and return it replaced, and nothing else.
 			 */
-			{
-				InterpMethodCodeType code_type = cmethod->code_type;
-
-				if (G_UNLIKELY (code_type == IMETHOD_CODE_UNKNOWN))
-					code_type = resolve_code_type (cmethod);
-
-				/*
-				 * do_jit_call () has to return here, so it cannot have this frame.
-				 * Interpreting a callee that has code is what bounds the stack: the
-				 * other way round, a cycle alternating between the two engines pays
-				 * a jit call and an entry thunk per hop and never gets either back.
-				 */
-				if (G_UNLIKELY (code_type != IMETHOD_CODE_INTERP))
-					goto call;
-			}
+			/*
+			 * Resolving arms the callee's tier counter the first time anything
+			 * asks, but what it says about native code is deliberately not acted
+			 * on. A tail call interprets a callee that has code: do_jit_call ()
+			 * has to return here, so it cannot have this frame, and a cycle
+			 * alternating between the two engines pays a jit call in and an entry
+			 * thunk back on every hop and gets neither of them back. That grows
+			 * the native stack without bound in a cycle whose whole point is to
+			 * run in constant space.
+			 */
+			if (G_UNLIKELY (cmethod->code_type == IMETHOD_CODE_UNKNOWN))
+				resolve_code_type (cmethod);
 
 			if (G_UNLIKELY (mono_atomic_load_i32_relaxed (&cmethod->tier_counter) > 0))
 				interp_check_call_promotion (cmethod);
