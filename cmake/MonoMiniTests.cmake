@@ -36,6 +36,7 @@ mono_corpus_cs(unaligned.exe     SOURCES unaligned.cs
                REFS "${_driver}" "${CMAKE_CURRENT_BINARY_DIR}/MemoryIntrinsics.dll")
 mono_corpus_il(iltests.exe iltests.il)
 mono_corpus_cs(tier-seam.exe SOURCES tier-seam.cs REFS "${_driver}")
+mono_corpus_cs(xdomain.exe   SOURCES xdomain.cs)
 
 add_custom_target(mini-corpora ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
 
@@ -116,6 +117,29 @@ add_test(NAME "mini-regression/tier-seam-compiled"
                  "${_wrapper}" --regression tier-seam.exe
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("mini-regression/tier-seam-compiled" PROPERTIES LABELS regression)
+
+# Cross-domain calls, for the frame the interpreter builds with no InterpMethod
+# behind it. The crossing happens on the first call rather than after a compile,
+# so this pair needs nothing to show it got far enough.
+#
+# The corpus directory joins MONO_PATH because the child domain resolves the
+# program by assembly name rather than by the path it was started from.
+if(MONO_ENABLE_INTERPRETER)
+  add_test(NAME "mini-regression/xdomain"
+           COMMAND "${CMAKE_COMMAND}" -E env
+                   "MONO_PATH=${_class_dir}:${CMAKE_CURRENT_BINARY_DIR}"
+                   "${_wrapper}" xdomain.exe
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties("mini-regression/xdomain" PROPERTIES LABELS regression)
+endif()
+
+add_test(NAME "mini-regression/xdomain-compiled"
+         COMMAND "${CMAKE_COMMAND}" -E env
+                 "MONO_PATH=${_class_dir}:${CMAKE_CURRENT_BINARY_DIR}"
+                 "MONO_LLVM_JIT_TIER0=0"
+                 "${_wrapper}" xdomain.exe
+         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties("mini-regression/xdomain-compiled" PROPERTIES LABELS regression)
 
 # ---------------------------------------------------------------------------
 # The interpreter whitebox test: a C driver that reaches into the interpreter's

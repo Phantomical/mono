@@ -1572,7 +1572,11 @@ ves_pinvoke_method (
 	frame.parent = parent_frame;
 	frame.imethod = imethod;
 	frame.stack = sp;
-	frame_root_code_owner (&frame);
+	/* A pinvoke reached by calli from outside a managed-to-native wrapper has
+	 * no method behind it -- the xdomain-invoke wrappers do this -- and the
+	 * frame then has nothing whose code it could root. */
+	if (imethod)
+		frame_root_code_owner (&frame);
 
 	MonoLMFExt ext;
 	gpointer args;
