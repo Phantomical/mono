@@ -1082,17 +1082,6 @@ set(MONO_TESTS_INTERP_DISABLED
 # and is compiled underneath its callers once it is hot. Each of these passes
 # with either engine alone, so what they name is the seam between the two.
 set(MONO_TESTS_TIER0_DISABLED
-  # A thread abort that arrives while a class initializer is running is held
-  # back until it finishes, and is then dropped rather than raised when the
-  # thread's outermost managed frame is interpreted. Test 5.
-  abort-cctor.exe
-  # Parks forever: the joined thread re-enters Monitor.Wait and the abort that
-  # should break it out never arrives. 0.15s of CPU in 25s of wall.
-  bug-561239.exe
-  # Spins rather than parks - 26s of CPU in 26s of wall, inside
-  # mono_get_hazardous_pointer under jit_info_table_find. A stack walk that does
-  # not terminate, not an abort that does not arrive.
-  async-exc-compilation.exe
   # Reads the stack trace a dynamic method appears in. Promoting a method
   # changes what the trace says about it, and the test pins the compiled answer.
   dynamic-method-stack-traces.exe

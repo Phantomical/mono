@@ -1534,6 +1534,22 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 
 	unwinder_init (&unwinder);
 
+	/*
+	 * A thread stopped inside the interpreter has interpreted frames that nothing on
+	 * the LMF chain describes - the chain only records where the interpreter last
+	 * called out, which is below them, and may be gone entirely. Start the iterator
+	 * from the frame the interpreter published rather than beginning the walk in
+	 * whatever native code the runtime happens to be running on its behalf.
+	 */
+	if (jit_tls->interp_context) {
+		gpointer stopped_frame = mini_get_interp_callbacks ()->get_stopped_frame (jit_tls);
+
+		if (stopped_frame) {
+			unwinder.in_interp = TRUE;
+			mini_get_interp_callbacks ()->frame_iter_init (&unwinder.interp_iter, stopped_frame);
+		}
+	}
+
 	while (MONO_CONTEXT_GET_SP (&ctx) < jit_tls->end_of_stack) {
 		frame.lmf = lmf;
 		res = unwinder_unwind_frame (&unwinder, domain, jit_tls, NULL, &ctx, &new_ctx, NULL, &lmf, get_reg_locations ? new_reg_locations : NULL, &frame);

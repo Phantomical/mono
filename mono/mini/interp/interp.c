@@ -1075,10 +1075,25 @@ interp_throw (ThreadContext *context, MonoException *ex, InterpFrame *frame, con
 		THROW_EX (mono_get_exception_null_reference (), ip); \
 	} while (0)
 
+/*
+ * Deciding whether to raise an abort here means walking this thread's stack, and
+ * the frames it has to see are ours - the LMF chain says nothing about them once
+ * the icall that got us here has popped its own. Publish the frame for the length
+ * of the call, the same way a safepoint does.
+ */
+#define EXCEPTION_CHECKPOINT_CALL(exc)	\
+	do {										\
+		InterpFrame *prev_stopped_frame = context->safepoint_frame;		\
+		context->safepoint_frame = frame;					\
+		(exc) = mono_thread_interruption_checkpoint ();				\
+		context->safepoint_frame = prev_stopped_frame;				\
+	} while (0)
+
 #define EXCEPTION_CHECKPOINT	\
 	do {										\
 		if (mono_thread_interruption_request_flag && !mono_threads_is_critical_method (frame->imethod->method)) { \
-			MonoException *exc = mono_thread_interruption_checkpoint ();	\
+			MonoException *exc;						\
+			EXCEPTION_CHECKPOINT_CALL (exc);				\
 			if (exc)							\
 				THROW_EX (exc, ip);					\
 		}									\
@@ -1088,7 +1103,8 @@ interp_throw (ThreadContext *context, MonoException *ex, InterpFrame *frame, con
 #define EXCEPTION_CHECKPOINT_GC_UNSAFE	\
 	do {										\
 		if (mono_thread_interruption_request_flag && !mono_threads_is_critical_method (frame->imethod->method) && mono_thread_is_gc_unsafe_mode ()) { \
-			MonoException *exc = mono_thread_interruption_checkpoint ();	\
+			MonoException *exc;						\
+			EXCEPTION_CHECKPOINT_CALL (exc);				\
 			if (exc)							\
 				THROW_EX (exc, ip);					\
 		}									\
@@ -2044,12 +2060,21 @@ interp_entry (InterpEntryData *data)
 
 	context->stack_pointer = (guchar*)sp_args;
 
+	/*
+	 * Building the exception a checkpoint decided to raise can call back in here,
+	 * and this activation's frames are reachable through the LMF the entry pushed.
+	 * The frame the outer one published is not ours to report while we run.
+	 */
+	InterpFrame *outer_stopped_frame = context->safepoint_frame;
+	context->safepoint_frame = NULL;
+
 	interp_exec_method (&frame, context, NULL);
 
 	context->stack_pointer = (guchar*)sp;
 
 	g_assert (!context->has_resume_state);
 	g_assert (!context->safepoint_frame);
+	context->safepoint_frame = outer_stopped_frame;
 
 	if (rmethod->needs_thread_attach)
 		mono_threads_detach_coop (orig_domain, &attach_cookie);
@@ -7488,6 +7513,21 @@ interp_frame_get_ip (MonoInterpFrameHandle frame)
 	 * this subtraction that we are doing here.
 	 */
 	return (gpointer)(iframe->state.ip - 1);
+}
+
+/*
+ * interp_get_stopped_frame:
+ *
+ *   Return the frame a thread stopped at inside the interpreter, or NULL if it did
+ * not stop there. A stack walk starts an interpreted frame iterator from this.
+ */
+static gpointer
+interp_get_stopped_frame (const MonoJitTlsData *jit_tls)
+{
+	g_assert (jit_tls);
+	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
+
+	return context ? context->safepoint_frame : NULL;
 }
 
 /*

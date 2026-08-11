@@ -238,9 +238,11 @@ typedef struct {
 	guchar *stack_pointer;
 	/* Used for allocation of localloc regions */
 	FrameDataAllocator data_stack;
-	/* Used when a thread self-suspends at a safepoint in the interpreter, points to the
-	 * currently executing frame. (If a thread self-suspends somewhere else in the runtime, this
-	 * is NULL - the LMF will point to the InterpFrame before the thread exited the interpreter)
+	/* Points to the currently executing frame while the thread is stopped inside the
+	 * interpreter and something is about to look at its stack - a self-suspend at a
+	 * safepoint, or an interruption checkpoint. (If a thread stops somewhere else in
+	 * the runtime this is NULL - the LMF will point to the InterpFrame before the
+	 * thread exited the interpreter)
 	 */
 	InterpFrame *safepoint_frame;
 } ThreadContext;
