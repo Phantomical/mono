@@ -46,7 +46,13 @@ class Driver
 		var action = cd.NewDelegateWithoutTarget ();
 		var ares = action.BeginInvoke (Callback, null);
 
-		Thread.Sleep (5000);
+		/* Nothing here can be waited on: the throw happens inside the callback, and
+		 * ares is signalled before that callback runs. So this is a backstop rather
+		 * than a synchronisation point - reaching Exit means the runtime never
+		 * treated the exception as unhandled. Sized to lose to nothing but a real
+		 * bug, since the first pass through a cross-domain BeginInvoke has a lot to
+		 * compile and five seconds did not always cover it on a loaded machine. */
+		Thread.Sleep (30000);
 
 		Environment.Exit (1);
 	}

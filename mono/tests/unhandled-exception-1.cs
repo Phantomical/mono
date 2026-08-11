@@ -23,9 +23,13 @@ class Driver
 		if (!mre.WaitOne (5000))
 			Environment.Exit (2);
 
-		/* Give a chance to the thread to finish executing the exception unwinding
-		 * after the finally, before we exit with status 0 on the current thread */
-		Thread.Sleep (1000);
+		/* The finally that set mre runs while the exception is still propagating, so
+		 * the thread has not reached the unhandled handler yet and mre says nothing
+		 * about whether the runtime has dealt with it. Join () is the wait that does:
+		 * the thread is not finished until the unhandled handler on it has run, and
+		 * on a correct runtime that takes the process down and this never returns.
+		 * Reaching Exit (0) therefore means the exception went unnoticed. */
+		t.Join ();
 
 		Environment.Exit (0);
 	}

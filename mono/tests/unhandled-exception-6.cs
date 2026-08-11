@@ -19,7 +19,13 @@ class Driver
 		var action = new Action (Delegate);
 		var ares = action.BeginInvoke (Callback, null);
 
-		Thread.Sleep (5000);
+		/* Nothing here can be waited on: the throw happens inside the callback, and
+		 * ares is signalled before that callback runs. So this is a backstop rather
+		 * than a synchronisation point - reaching Exit means the runtime never
+		 * treated the exception as unhandled. Sized to lose to nothing but a real
+		 * bug: this is the same shape as unhandled-exception-7, which did lose its
+		 * five seconds under load. */
+		Thread.Sleep (30000);
 
 		Environment.Exit (1);
 	}

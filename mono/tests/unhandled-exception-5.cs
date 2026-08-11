@@ -37,9 +37,13 @@ class Driver
 		if (!mre.WaitOne (5000))
 			Environment.Exit (2);
 
-		/* Give a chance to the finalizer thread to finish executing the exception unwinding
-		 * after the finally, before we exit with status 0 on the current thread */
-		Thread.Sleep (1000);
+		/* A correct runtime never gets here at all: the finalizer's exception is
+		 * fatal while WaitForPendingFinalizers () above is still running, about
+		 * half a second in, so the process is gone before mre is even waited on.
+		 * This is only the backstop for a runtime that lets main carry on, and it
+		 * is long for the same reason as the rest of the family - a budget that a
+		 * loaded machine can outrun is how these tests came to fail at random. */
+		Thread.Sleep (30000);
 
 		Environment.Exit (0);
 	}

@@ -22,9 +22,13 @@ class Driver
 		if (!mre.WaitOne (5000))
 			Environment.Exit (2);
 
-		/* Give a chance to the threadpool thread to finish executing the exception unwinding
-		 * after the finally, before we exit with status 0 on the current thread */
-		Thread.Sleep (1000);
+		/* The finally that set mre runs while the exception is still propagating, so
+		 * the threadpool thread has not reached the unhandled handler yet. A correct
+		 * runtime takes the process down in the time it takes to unwind one frame;
+		 * this is only the backstop that turns "it never happened" into a failure,
+		 * so it is sized to lose to nothing but a real bug. A second was short
+		 * enough that a loaded machine reached Exit (0) first. */
+		Thread.Sleep (30000);
 
 		Environment.Exit (0);
 	}
