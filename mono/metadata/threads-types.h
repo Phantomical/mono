@@ -320,7 +320,7 @@ void mono_thread_internal_unhandled_exception (MonoObject* exc);
 void mono_alloc_special_static_data_free (GHashTable *special_static_fields);
 gboolean mono_thread_current_check_pending_interrupt (void);
 
-void mono_thread_set_state (MonoInternalThread *thread, MonoThreadState state);
+MONO_EXTERN_C void mono_thread_set_state (MonoInternalThread *thread, MonoThreadState state);
 void mono_thread_clr_state (MonoInternalThread *thread, MonoThreadState state);
 MONO_EXTERN_C gboolean mono_thread_test_state (MonoInternalThread *thread, MonoThreadState test);
 gboolean mono_thread_test_and_set_state (MonoInternalThread *thread, MonoThreadState test, MonoThreadState set);

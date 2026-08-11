@@ -38,9 +38,16 @@ CompileWorker::start ()
 	 * or suspend it on its own account - Environment.Exit () suspends every
 	 * other thread, and a compile stopped halfway leaves the linker holding a
 	 * half-linked object.
+	 *
+	 * The attach above publishes the thread, so shutdown can already have
+	 * taken a list of threads to wait for with this one on it. Going
+	 * background through mono_thread_set_state () is what tells it to build
+	 * that list again; assigning the bit here would leave it waiting on a
+	 * thread that exits only when the queue stops, which by then it never
+	 * will. Flags first, so the rebuilt list sees both.
 	 */
-	internal->state |= ThreadState_Background;
 	internal->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
+	mono_thread_set_state (internal, ThreadState_Background);
 
 	return true;
 }
