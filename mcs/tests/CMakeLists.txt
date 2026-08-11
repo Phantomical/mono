@@ -102,11 +102,19 @@ add_dependencies(mcs-compiler-tests mcs-net_4_x-mcs mcs-net_4_x-compiler-tester)
 
 # -issues lists the cases already known to fail, so only a new regression makes
 # the run fail.
+#
+# Deliberately not --verify-all.  That verifies every assembly the process
+# loads, which here is the harness itself -- compiler-tester.exe, mcs.exe,
+# Mono.CompilerServices.SymbolWriter -- and demands verifiability rather than
+# validity of it.  Nothing compiler-emitted can meet that: `ldflda` against a
+# readonly field is ordinary C# and unverifiable IL, and the harness has
+# several.  The verifier is covered deliberately elsewhere, by the
+# runtime-verification-* arms in mono/tests/runtime-suites.cmake.
 math(EXPR _last "${_shards} - 1")
 foreach(_i RANGE ${_last})
   string(REGEX REPLACE "^(.)$" "0\\1" _nn "${_i}")
   add_test(NAME compiler-tests/${_nn}
-           COMMAND "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug --verify-all
+           COMMAND "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
                    "${_pdir}/compiler-tester.exe"
                    -mode:pos -files:v4
                    "-compiler:${_pdir}/mcs.exe"
