@@ -269,9 +269,7 @@ ExecutionEngineException rather than falling back anywhere. There is no `--llvm`
 `--nollvm` any more — both are gone, and mono rejects them like any other unknown
 option. `--llvm-opt=OPT` is the one LLVM-facing flag left, and it just forwards
 `OPT` to LLVM's own command-line parser (`--llvm-opt=-print-after-all`); repeat it
-to pass more than one. `--interp-tier0[=FILTER]` is the other one: it starts the
-interpreter and enters the selected methods by interpreting them — see tier 0 below.
-The AOT compiler is out of scope and refuses immediately.
+to pass more than one. The AOT compiler is out of scope and refuses immediately.
 
 Backend debugging env vars:
 - `MONO_LLVM_JIT_TRACE=1` (`runtime/options.cpp`) — print every method the backend translates;
@@ -324,7 +322,12 @@ Backend debugging env vars:
   entered at tier 0 takes before it is asked for as tier 1, default 10. Zero never
   promotes, which is what tells a tier-0 entry bug apart from a promotion bug; one
   promotes on the first call, which is how to put the switch in the middle of a loop.
-  Only does anything under `--interp-tier0`.
+- `MONO_LLVM_JIT_TIER0=<substr|0>` (`runtime/options.cpp`) — narrow tier 0, which is
+  otherwise every method the interpreter accepts. A false value (`0`, `false`, empty)
+  compiles everything, which is how to tell a tier-0 bug from a backend one; anything
+  else is a substring of the printed name, which is how to get a compiled caller and an
+  interpreted callee into one process — no threshold produces that, since a callee is
+  called at least as often as its caller.
 - `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to a debugger
   through gdb's JIT interface, so `info functions` names JIT'd methods and a `bt`
   taken from runtime C code unwinds managed frames with names instead of `??`. What
@@ -399,13 +402,14 @@ offset - what stack traces print and what sequence points are recovered from.
 routine a landing pad names is never actually called: mono's own unwinder re-enters
 frames through the pads.
 
-**A method can start in the interpreter.** `--interp-tier0[=FILTER]` starts the
-interpreter alongside the JIT and enters the methods FILTER selects by interpreting them
-rather than compiling them; an empty filter takes every method the interpreter accepts.
-This is tier 0, and it is off unless the option is given. `runs_at_tier0 ()`
+**A method starts in the interpreter.** Tier 0 is the entry tier: the interpreter is
+started beside the JIT in `mini_init ()`, and every method it accepts is entered by
+interpreting its bytecode rather than by compiling it. `runs_at_tier0 ()`
 (`runtime/options.cpp`) is what refuses the methods that would be wrong there rather than
 merely slow — no IL of its own, a wrapper, or a body this backend writes itself
-(`is_intrinsic ()`, which is `ByReference<T>`: its IL only throws).
+(`is_intrinsic ()`, which is `ByReference<T>`: its IL only throws). `--interpreter` is a
+different thing and still means the interpreter as the whole engine, with no tier to
+leave for.
 
 A tier-0 method leaves for tier 1 by being called. The counter is a word on
 `InterpMethod`, armed once and then decremented at the two places a call can arrive —
