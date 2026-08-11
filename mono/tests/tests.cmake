@@ -1085,19 +1085,6 @@ set(MONO_TESTS_TIER0_DISABLED
   # Reads the stack trace a dynamic method appears in. Promoting a method
   # changes what the trace says about it, and the test pins the compiled answer.
   dynamic-method-stack-traces.exe
-  # One bug, three programs: each unloads domains with threads still running in
-  # them. Once a method is promoted its interpreted callers reach it through
-  # do_jit_call, which caches the address in the InterpMethod, and a thread
-  # still inside such a frame when the domain goes jumps into memory the domain
-  # took with it.
-  #
-  # Promotion is what they need rather than tier 0 -- with
-  # MONO_LLVM_JIT_TIER1_THRESHOLD=0 all three pass every run, and at the default
-  # tier they abort intermittently: one run in three, two in three on Boehm, and
-  # two in six respectively.
-  appdomain-threadpool-unload.exe
-  appdomain-unload.exe
-  unload-appdomain-on-shutdown.exe
 )
 
 # Not tests: source files that another tailcall test links against.

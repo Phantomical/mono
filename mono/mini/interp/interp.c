@@ -4042,7 +4042,18 @@ call:
 					if (code_type == IMETHOD_CODE_UNKNOWN)
 						code_type = resolve_code_type (cmethod);
 
-					if (code_type == IMETHOD_CODE_COMPILED) {
+					/*
+					 * The body belongs to the callee's own domain, and so does
+					 * everything do_jit_call () caches about it on this
+					 * InterpMethod. Entering it from another domain would run that
+					 * domain's code, and would leave its address behind on an
+					 * InterpMethod that outlives it - a method shared across
+					 * domains has one InterpMethod, in the root domain, which every
+					 * domain reaches and which nothing frees when theirs go.
+					 * Interpreting is always available and is right in any domain.
+					 */
+					if (code_type == IMETHOD_CODE_COMPILED
+					    && cmethod->domain == mono_domain_get ()) {
 						/* for calls, have ip pointing at the start of next instruction */
 						frame->state.ip = ip;
 						error_init_reuse (error);
