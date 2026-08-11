@@ -4243,6 +4243,11 @@ mini_init (const char *filename, const char *runtime_version)
 #endif
 
 	mono_interp_stub_init ();
+#if !defined (DISABLE_INTERPRETER) && defined (MONO_ARCH_INTERPRETER_SUPPORTED) && !defined (MONO_CROSS_COMPILE)
+	/* Tier 0 is the entry tier, so the interpreter runs beside the JIT. */
+	if (mono_llvm_jit_tier0_enabled ())
+		mono_use_interpreter = TRUE;
+#endif
 #ifndef DISABLE_INTERPRETER
 	if (mono_use_interpreter)
 		mono_ee_interp_init (mono_interp_opts_string);

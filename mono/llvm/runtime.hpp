@@ -116,14 +116,12 @@ void *mono_llvm_jit_unbox_entry (MonoMethod *method);
 /// method is compiled; one LLVM rejects fails the backend's startup.
 void mono_llvm_jit_add_option (const char *opt);
 
-/// Enter the methods FILTER selects by interpreting them rather than by
-/// compiling them: FILTER is matched as a substring of the printed name, and
-/// an empty string takes every method the interpreter will accept. A method it
-/// will not accept is compiled as usual.
+/// Whether any method is entered by interpreting it rather than by compiling
+/// it, which is what decides whether the interpreter is started at all.
 ///
-/// This is what `--interp-tier0[=<filter>]` on the command line does. It needs
-/// the interpreter to have been started, which that option also arranges.
-void mono_llvm_jit_interpret_methods (const char *filter);
+/// MONO_LLVM_JIT_TIER0 is what turns tier 0 off, and with it off the runtime
+/// runs as it did before there was a tier below the compiler.
+mono_bool mono_llvm_jit_tier0_enabled (void);
 
 /// How many calls METHOD may take at tier 0 before it should be asked for as
 /// tier 1, or zero if it is not a candidate for promotion at all.

@@ -52,15 +52,18 @@ bool recompiling (MonoMethod *method);
 /// entry path from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
 
-/// Record which methods --interp-tier0 selected. Null means the option was not
-/// given; an empty filter takes every method that can be interpreted at all, and
-/// anything else is matched as a substring of the printed name.
+/// Whether any method at all is entered by interpreting it.
 ///
-/// The string is borrowed from the command line and is never copied.
-void set_interp_filter (const char *filter);
+/// Answers before there is a method to ask about, which is what the decision to
+/// start the interpreter needs.
+bool tier0_enabled ();
 
 /// Whether a method is entered by interpreting its bytecode rather than by
 /// compiling it.
+///
+/// Every method the interpreter can run starts there. MONO_LLVM_JIT_TIER0
+/// narrows that for debugging: a false value keeps every method out of tier 0,
+/// and anything else is matched as a substring of the printed name.
 bool runs_at_tier0 (MonoMethod *method);
 
 } // namespace mono

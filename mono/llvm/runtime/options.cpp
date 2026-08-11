@@ -17,9 +17,6 @@ namespace mono {
 
 namespace {
 
-/// Which methods --interp-tier0 selected, or null when it was not given.
-const char *interp_tier0_filter = nullptr;
-
 bool
 is_truthy_env_var (const char *value)
 {
@@ -29,6 +26,33 @@ is_truthy_env_var (const char *value)
 	llvm::StringRef set (value);
 
 	return !set.empty () && set != "0" && !set.equals_insensitive ("false");
+}
+
+/// What MONO_LLVM_JIT_TIER0 narrows tier 0 to.
+struct Tier0Setting {
+	/// Whether any method at all is entered by interpreting it.
+	bool enabled = true;
+	/// A substring of the printed name a method has to match, or null when
+	/// every method that can start at tier 0 does.
+	const char *substring = nullptr;
+};
+
+const Tier0Setting &
+tier0_setting ()
+{
+	static Tier0Setting setting = [] () -> Tier0Setting {
+		const char *value = g_getenv ("MONO_LLVM_JIT_TIER0");
+
+		if (value == nullptr)
+			return {};
+
+		if (!is_truthy_env_var (value))
+			return { false, nullptr };
+
+		return { true, value };
+	} ();
+
+	return setting;
 }
 
 } // namespace
@@ -94,10 +118,10 @@ tier1_threshold ()
 	return calls;
 }
 
-void
-set_interp_filter (const char *filter)
+bool
+tier0_enabled ()
 {
-	interp_tier0_filter = filter;
+	return tier0_setting ().enabled;
 }
 
 /*
@@ -118,27 +142,25 @@ set_interp_filter (const char *filter)
  *
  * force_use_interpreter is the interpreter as the whole engine, where there is
  * no tier to leave for and nothing should be counting calls towards one.
- *
- * AggressiveInlining goes straight to the compiler because that is what the
- * attribute asks for, even though nothing is inlined across methods yet.
  */
 bool
 runs_at_tier0 (MonoMethod *method)
 {
-	if (interp_tier0_filter == nullptr || !mono_use_interpreter
+	const Tier0Setting &setting = tier0_setting ();
+
+	if (!setting.enabled || !mono_use_interpreter
 	    || mono_ee_features.force_use_interpreter)
 		return false;
 
 	if (implemented_outside_il (method) || is_intrinsic (method)
-	    || method->wrapper_type != MONO_WRAPPER_NONE
-	    || (method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING) != 0)
+	    || method->wrapper_type != MONO_WRAPPER_NONE)
 		return false;
 
-	if (*interp_tier0_filter == '\0')
+	if (setting.substring == nullptr)
 		return true;
 
 	char *name = mono_method_full_name (method, TRUE);
-	bool selected = strstr (name, interp_tier0_filter) != nullptr;
+	bool selected = strstr (name, setting.substring) != nullptr;
 
 	g_free (name);
 	return selected;

@@ -1282,10 +1282,6 @@ mini_usage_jitdeveloper (void)
 		 "    --llvm-opt=OPT         Pass OPT to LLVM as one of its own command line\n"
 		 "                           options, e.g. --llvm-opt=-print-after-all. Repeat\n"
 		 "                           the flag to pass more than one.\n"
-		 "    --interp-tier0[=FILTER] Enter methods by interpreting them instead of\n"
-		 "                           compiling them. FILTER selects them by a substring\n"
-		 "                           of the printed name; without one, every method the\n"
-		 "                           interpreter accepts.\n"
 		 "    --agent=ASSEMBLY[:ARG] Loads the specific agent assembly and executes its Main method with the given argument before loading the main assembly.\n"
 		 "    --no-x86-stack-align   Don't align stack on x86\n"
 		 "\n"
@@ -2119,16 +2115,6 @@ mono_main (int argc, char* argv[])
 			mono_llvm_jit_add_option (argv [i] + 11);
 		} else if (strcmp (argv [i], "--ffast-math") == 0){
 			mono_use_fast_math = TRUE;
-		} else if (strncmp (argv [i], "--interp-tier0", 14) == 0
-			   && (argv [i] [14] == '\0' || argv [i] [14] == '=')) {
-			/*
-			 * The interpreter is started but not made the whole engine:
-			 * which methods it runs is settled per method, by the backend,
-			 * as each one is first entered.
-			 */
-			mono_check_interp_supported ();
-			mono_use_interpreter = TRUE;
-			mono_llvm_jit_interpret_methods (argv [i] [14] == '=' ? argv [i] + 15 : "");
 		} else if ((strcmp (argv [i], "--interpreter") == 0) || !strcmp (argv [i], "--interp")) {
 			mono_runtime_set_execution_mode (MONO_EE_MODE_INTERP);
 		} else if (strncmp (argv [i], "--interp=", 9) == 0) {

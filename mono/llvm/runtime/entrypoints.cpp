@@ -111,10 +111,10 @@ mono_llvm_jit_add_option (const char *opt)
 	mono::MonoJit::add_option (opt);
 }
 
-void
-mono_llvm_jit_interpret_methods (const char *filter)
+mono_bool
+mono_llvm_jit_tier0_enabled (void)
 {
-	mono::set_interp_filter (filter);
+	return mono::tier0_enabled ();
 }
 
 int32_t
