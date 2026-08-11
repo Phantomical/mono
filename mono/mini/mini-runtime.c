@@ -3796,16 +3796,24 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 		MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, addr);
 
 #ifndef DISABLE_REMOTING
+	/*
+	 * Either engine can invoke the delegate, and each reads a field of its own:
+	 * the interpreter runs interp_method and compiled code calls method_ptr. So
+	 * both have to name the remoting wrapper rather than the method behind it.
+	 */
 	if (!MONO_HANDLE_IS_NULL (target) && mono_class_is_transparent_proxy (mono_handle_class (target))) {
+		g_assert (method);
 		if (mono_use_interpreter) {
-			MONO_HANDLE_SETVAL (delegate, interp_method, gpointer, mini_get_interp_callbacks ()->get_remoting_invoke (method, addr, error));
-		} else {
-			g_assert (method);
-			method = mono_marshal_get_remoting_invoke (method, error);
+			MONO_HANDLE_SETVAL (delegate, interp_method, gpointer,
+					    mini_get_interp_callbacks ()->get_remoting_invoke (method, NULL, error));
 			return_if_nok (error);
-			MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, mono_compile_method_checked (method, error));
 		}
-		return_if_nok (error);
+		if (!mono_ee_features.force_use_interpreter) {
+			MonoMethod *invoke = mono_marshal_get_remoting_invoke (method, error);
+			return_if_nok (error);
+			MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, mono_compile_method_checked (invoke, error));
+			return_if_nok (error);
+		}
 	}
 #endif
 
