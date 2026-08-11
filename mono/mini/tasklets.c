@@ -21,13 +21,34 @@ static mono_mutex_t tasklets_mutex;
 #define tasklets_lock() mono_os_mutex_lock(&tasklets_mutex)
 #define tasklets_unlock() mono_os_mutex_unlock(&tasklets_mutex)
 
-/* LOCKING: tasklets_mutex is assumed to e taken */
-static void
-internal_init (void)
+/*
+ * Whether a continuation marked here could ever be restored, and the reason it
+ * could not.
+ *
+ * A continuation is a copy of the native stack between Store () and the frame
+ * that called Mark (), put back verbatim and jumped into. That needs every
+ * frame in between to have a native frame of its own, and it needs the copy to
+ * live somewhere the collector will not move it or reclaim it.
+ */
+static const char*
+continuations_unsupported (void)
 {
+	/*
+	 * An interpreted frame keeps its locals on the interpreter's own execution
+	 * stack, which is a separate mapping that Store () does not copy and
+	 * Restore () could not rewind. Whether any particular frame is interpreted
+	 * is the tiering's business rather than the program's, so it is the
+	 * interpreter running at all that decides this.
+	 */
+	if (mono_use_interpreter)
+		return "Continuations do not work while the interpreter is running";
+
+	/* mono_gc_alloc_fixed () hands back GC memory under Boehm, so the saved
+	 * stack would need a keepalive this does not have. */
 	if (!mono_gc_is_moving ())
-		/* Boehm requires the keepalive stacks to be kept in a hash since mono_gc_alloc_fixed () returns GC memory */
-		g_assert_not_reached ();
+		return "Continuations are not supported by this collector";
+
+	return NULL;
 }
 
 static void*
@@ -53,9 +74,14 @@ continuation_mark_frame (MonoContinuation *cont)
 	MonoContext ctx, new_ctx;
 	MonoJitInfo *ji, rji;
 	int endloop = FALSE;
+	const char *unsupported;
 
 	if (cont->domain)
 		return mono_get_exception_argument ("cont", "Already marked");
+
+	unsupported = continuations_unsupported ();
+	if (unsupported)
+		return mono_get_exception_not_supported (unsupported);
 
 	jit_tls = (MonoJitTlsData *)mono_tls_get_jit_tls ();
 	lmf = mono_get_lmf();
@@ -114,7 +140,6 @@ continuation_store (MonoContinuation *cont, int state, MonoException **e)
 		cont->stack_used_size = num_bytes;
 	} else {
 		tasklets_lock ();
-		internal_init ();
 		if (cont->saved_stack)
 			mono_gc_free_fixed (cont->saved_stack);
 		cont->stack_used_size = num_bytes;

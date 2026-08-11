@@ -270,6 +270,15 @@ mono_runtime_suite(runtime-tailcall TESTS ${_tailcall}
 
 mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 
+# Continuations, whose two outcomes want naming rather than accepting either.
+# With everything compiled and a collector that keeps the saved stack out of the
+# heap they work; Boehm is the collector that does not, and the tier-0 arm
+# further down is the engine that does not.
+mono_runtime_suite(runtime-tasklets TESTS tasklets.exe GC sgen
+                   ENV "MONO_LLVM_JIT_TIER0=0" "MONO_TEST_TASKLETS=run")
+mono_runtime_suite(runtime-tasklets-boehm TESTS tasklets.exe GC boehm
+                   ENV "MONO_LLVM_JIT_TIER0=0" "MONO_TEST_TASKLETS=refuse")
+
 if(MONO_ENABLE_INTERPRETER)
   set(_interp ${_regular})
   list(REMOVE_ITEM _interp ${MONO_TESTS_INTERP_DISABLED})
@@ -325,6 +334,12 @@ if(MONO_ENABLE_INTERPRETER)
   mono_runtime_suite(runtime-interp-calls-compiled LABEL interp
                      TESTS interp-calls-compiled.exe
                      ENV "MONO_LLVM_JIT_TIER0=Interpreted")
+
+  # Continuations at the default tier, where the frame that marked one is
+  # interpreted and so has no native stack for Store () to copy. Mark () has to
+  # say so rather than walk a stack it cannot describe.
+  mono_runtime_suite(runtime-tasklets-tier0 LABEL interp TESTS tasklets.exe
+                     ENV "MONO_TEST_TASKLETS=refuse")
 
   # `--interp=jit=<class>` compiles the named class and interprets the rest,
   # which is the only way today to get a compiled frame and an interpreted one

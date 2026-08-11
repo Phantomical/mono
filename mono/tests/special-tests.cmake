@@ -372,6 +372,11 @@ list(APPEND MONO_TESTS_SPECIAL
 # --- misc --------------------------------------------------------------------
 _mono_special(async-exceptions.exe NO_DEFAULT_REFS SOURCES async-exceptions.cs)
 
+# Continuations live in an assembly of their own, and the suites in
+# runtime-suites.cmake run this one under named configurations rather than
+# alongside the rest of the corpus.
+_mono_special(tasklets.exe SOURCES tasklets.cs REFS "${_class}/Mono.Tasklets.dll")
+
 # Deliberately invalid IL, so it is kept out of the corpus every suite runs:
 # the runtime-verification tests in runtime-suites.cmake drive it under specific
 # --security= and MONO_LLVM_JIT_TIER0 combinations and read what it prints.

@@ -13,8 +13,15 @@ namespace MonoTests.System
         {
             try {
                 var temp = new Continuation ();
+                // Marking is where the runtime says whether a continuation
+                // could ever be restored here: it is a copy of native stack,
+                // and neither an interpreted frame nor a collector that keeps
+                // the copy in the heap can give it one.
+                temp.Mark ();
             } catch (NotImplementedException) {
                 Assert.Ignore ("This platform doesn't support Tasklets.");
+            } catch (NotSupportedException e) {
+                Assert.Ignore (e.Message);
             }
         }
 
