@@ -8,6 +8,7 @@
 #include <mono/metadata/domain-internals.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/debug-internals.h>
+#include <mono/metadata/handle.h>
 #include "interp.h"
 
 #define MINT_TYPE_I1 0
@@ -234,6 +235,17 @@ struct InterpFrame {
 
 #define frame_locals(frame) ((guchar*)(frame)->stack)
 
+/*
+ * The handle stack mark one interp_exec_method () invocation took, and the
+ * address of the frame that took it. A frame the EH resumes past never runs
+ * its own HANDLE_FUNCTION_RETURN, so the mark has to live somewhere the dead
+ * frame is not - see interp_release_abandoned_handles ().
+ */
+typedef struct {
+	HandleStackMark mark;
+	gpointer frame;
+} InterpHandleMark;
+
 typedef struct {
 	/* Lets interpreter know it has to resume execution after EH */
 	gboolean has_resume_state;
@@ -263,6 +275,10 @@ typedef struct {
 	 * thread exited the interpreter)
 	 */
 	InterpFrame *safepoint_frame;
+	/* One entry per interp_exec_method () invocation on this thread, outermost first. */
+	InterpHandleMark *handle_marks;
+	int handle_mark_count;
+	int handle_mark_capacity;
 } ThreadContext;
 
 typedef struct {

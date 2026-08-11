@@ -426,6 +426,30 @@ get_context (void)
 	return context;
 }
 
+/*
+ * interp_push_handle_mark:
+ *
+ *   Record the handle stack mark an interp_exec_method () frame took, and return
+ * the depth to truncate back to when it leaves.
+ */
+static int
+interp_push_handle_mark (ThreadContext *context, HandleStackMark *mark)
+{
+	int depth = context->handle_mark_count;
+
+	if (G_UNLIKELY (depth == context->handle_mark_capacity)) {
+		context->handle_mark_capacity = context->handle_mark_capacity ? context->handle_mark_capacity * 2 : 32;
+		context->handle_marks = g_renew (InterpHandleMark, context->handle_marks, context->handle_mark_capacity);
+	}
+
+	context->handle_marks [depth].mark = *mark;
+	/* Compared against the stack pointer a resume restores, so it has to be in the frame. */
+	context->handle_marks [depth].frame = (gpointer)mark;
+	context->handle_mark_count = depth + 1;
+
+	return depth;
+}
+
 static void
 interp_free_context (gpointer ctx)
 {
@@ -446,6 +470,7 @@ interp_free_context (gpointer ctx)
 	context->stack_start = NULL;
 	mono_compiler_barrier ();
 	frame_data_allocator_free (&context->data_stack);
+	g_free (context->handle_marks);
 	g_free (context);
 }
 
@@ -3534,6 +3559,10 @@ interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs 
 #endif
 
 	HANDLE_FUNCTION_ENTER ();
+
+	/* Recorded where a resume past this frame can still find it. */
+	int handle_mark_depth = interp_push_handle_mark (context, &__mark);
+
 	/*
 	 * GC SAFETY:
 	 *
@@ -7360,6 +7389,13 @@ exit_clause:
 
 	DEBUG_LEAVE ();
 
+	/*
+	 * Truncating rather than decrementing is what makes this self-healing: an
+	 * entry above ours belongs to a frame that is already gone, and this is
+	 * where it stops being remembered.
+	 */
+	context->handle_mark_count = handle_mark_depth;
+
 	HANDLE_FUNCTION_RETURN ();
 }
 
@@ -7389,6 +7425,38 @@ interp_parse_options (const char *options)
 			mono_interp_opt &= ~INTERP_OPT_BBLOCKS;
 		else if (strncmp (arg, "-all", 4) == 0)
 			mono_interp_opt = INTERP_OPT_NONE;
+	}
+}
+
+/*
+ * interp_release_abandoned_handles:
+ *
+ *   Give back the handles held by the interpreter frames an exception resume is
+ * about to skip.
+ */
+static void
+interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
+{
+	g_assert (jit_tls);
+	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
+	if (!context)
+		return;
+
+	/*
+	 * Resuming restores the stack pointer over every frame below the one it
+	 * resumes into, so those interp_exec_method () invocations never reach
+	 * their own HANDLE_FUNCTION_RETURN. Entries are in stack order, so the
+	 * ones being skipped are a suffix, and restoring the outermost of them
+	 * hands back every handle above it at once.
+	 */
+	int first = context->handle_mark_count;
+
+	while (first > 0 && context->handle_marks [first - 1].frame < resume_sp)
+		first--;
+
+	if (first < context->handle_mark_count) {
+		mono_stack_mark_pop (mono_thread_info_current (), &context->handle_marks [first].mark);
+		context->handle_mark_count = first;
 	}
 }
 

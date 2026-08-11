@@ -546,6 +546,16 @@ _mono_unhandled_suite(255 ON  ${_unhandled_255})
 _mono_exe_list(_forced_unwind ${MONO_TESTS_FORCED_UNWIND_SRC})
 mono_runtime_suite(runtime-forced-unwind TESTS ${_forced_unwind} EXPECT 42)
 
+# A shape no threshold produces: an exception caught in a compiled frame with
+# two interpreted frames under it, and a compiled one between them. Promotion
+# would eventually compile all four, so the two that are to stay interpreted are
+# named instead -- MONO_LLVM_JIT_TIER0 takes a substring of the printed name.
+if(MONO_ENABLE_INTERPRETER)
+  _mono_exe_list(_tier_pinned ${MONO_TESTS_TIER_PINNED_SRC})
+  mono_runtime_suite(runtime-tier-pinned LABEL interp TESTS ${_tier_pinned}
+                     ENV "MONO_LLVM_JIT_TIER0=InterpMe")
+endif()
+
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
   _mono_gc_env(_gc_env "${_gc}")

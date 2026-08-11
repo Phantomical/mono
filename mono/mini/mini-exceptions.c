@@ -3409,6 +3409,15 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 					} else {
 						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
 					}
+					/*
+					 * Resuming into a native frame skips every frame below it,
+					 * so the interpreter frames among them have to give their
+					 * handles back here - they will not reach their own exit.
+					 * ip == 0 means the resume stays inside the interpreter
+					 * frame that is already running, which skips nothing.
+					 */
+					if (MONO_CONTEXT_GET_IP (ctx) != 0)
+						mini_get_interp_callbacks ()->release_abandoned_handles (jit_tls, MONO_CONTEXT_GET_SP (ctx));
 					mono_set_lmf (lmf);
 #ifndef DISABLE_PERFCOUNTERS
 					mono_atomic_fetch_add_i32 (&mono_perfcounters->exceptions_depth, frame_count);

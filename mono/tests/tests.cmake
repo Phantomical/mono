@@ -235,6 +235,7 @@ set(MONO_TESTS_CS_SRC
   finalizer-exception.cs
   finalizer-exit.cs
   finalizer-thread.cs
+  handle-stack-abort.cs
   main-exit.cs
   main-returns-abort-resetabort.cs
   main-returns-background-abort-resetabort.cs
@@ -915,6 +916,13 @@ set(MONO_TESTS_UNHANDLED_EXCEPTION_255_SRC
 # says the process got to the end rather than aborting in a personality routine.
 set(MONO_TESTS_FORCED_UNWIND_SRC
   thread-forced-unwind.cs
+)
+
+# An exception caught above two interpreted frames rather than one. Which
+# methods are interpreted has to be pinned rather than left to promotion, so
+# this runs in a suite of its own with MONO_LLVM_JIT_TIER0 naming them.
+set(MONO_TESTS_TIER_PINNED_SRC
+  handle-stack-tiers.cs
 )
 
 # The tailcall suite, including the corpus imported from coreclr.

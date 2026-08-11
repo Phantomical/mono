@@ -126,6 +126,12 @@ stub_get_stopped_frame (const MonoJitTlsData *jit_tls)
 	return NULL;
 }
 
+/* Likewise: every exception resume asks, interpreter or not. */
+static void
+stub_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
+{
+}
+
 /* Likewise: a trace over compiled frames alone still asks. */
 static int
 stub_il_offset_from_native_offset (MonoDomain *domain, MonoMethod *method, int native_offset)
