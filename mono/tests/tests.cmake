@@ -1091,8 +1091,10 @@ set(MONO_TESTS_TIER0_DISABLED
   # the ambiguity is meant to raise.
   dim-diamondshape.exe
   # Overflows a thread's stack on purpose and wants a StackOverflowException
-  # back. An interpreted frame spends native stack on the interpreter's own
-  # recursion, so the fault lands in unmanaged code and aborts instead.
+  # back. The interpreter does not recurse for a managed call, but it allocas
+  # an InterpFrame for every new depth, so the native stack runs out anyway and
+  # the fault lands in unmanaged code where it cannot become a managed
+  # exception. Not the engine-alternation path: identical with tier 1 disabled.
   bug-60862.exe
 )
 
