@@ -127,6 +127,18 @@ struct InterpMethod {
 	MonoJitInfo *jinfo;
 	MonoDomain *domain;
 	/*
+	 * Maps an offset into this method's bytecode back to the IL offset it came
+	 * from, so a stack trace reports an IL offset for an interpreted frame the
+	 * way it does for a compiled one - which answers from llvm_seq_points.
+	 *
+	 * Every method carries one of these, so the encoding matters: pairs of
+	 * deltas as varints, ascending by bytecode offset, which is about a quarter
+	 * of what the entries cost as two words each. Read it with
+	 * interp_il_offset_from_native_offset ().
+	 */
+	guint8 *line_numbers;
+	guint32 line_numbers_size;
+	/*
 	 * Weak handle on the object whose death frees this method's code, or NULL when
 	 * nothing manages it. A frame executing the method resolves it and holds the
 	 * result for as long as it runs.
@@ -248,6 +260,7 @@ typedef struct {
 } ThreadContext;
 
 typedef struct {
+	gint32 line_numbers_size;
 	gint64 transform_time;
 	gint64 methods_transformed;
 	gint64 cprop_time;

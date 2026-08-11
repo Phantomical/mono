@@ -7508,6 +7508,94 @@ typedef struct {
 	InterpFrame *current;
 } StackIter;
 
+static const guint8*
+decode_uleb128 (const guint8 *p, guint32 *out)
+{
+	guint32 value = 0;
+	int shift = 0;
+
+	while (TRUE) {
+		guint8 b = *p++;
+
+		value |= (guint32) (b & 0x7f) << shift;
+		if (!(b & 0x80))
+			break;
+		shift += 7;
+	}
+
+	*out = value;
+	return p;
+}
+
+/*
+ * imethod_il_offset:
+ *
+ *   Return the IL offset in effect at an offset into a method's bytecode, or -1
+ * if it is not known. A compiled body answers the same question from its own
+ * per-body map, so a stack trace reads the same either side of a promotion.
+ */
+static int
+imethod_il_offset (InterpMethod *imethod, int native_offset)
+{
+	if (!imethod || !imethod->line_numbers || native_offset < 0)
+		return -1;
+
+	const guint8 *p = imethod->line_numbers;
+	const guint8 *end = p + imethod->line_numbers_size;
+	guint32 native = 0;
+	gint32 il = 0;
+	int result = -1;
+
+	/*
+	 * The entries ascend by bytecode offset, so the one in effect is the last
+	 * starting at or before the offset asked about. Walking them is fine: this
+	 * runs only while a stack trace is being built.
+	 */
+	while (p < end) {
+		guint32 native_delta, il_delta;
+
+		p = decode_uleb128 (p, &native_delta);
+		p = decode_uleb128 (p, &il_delta);
+
+		native += native_delta;
+		il += (gint32) (il_delta >> 1) ^ -(gint32) (il_delta & 1);
+
+		if ((int) native > native_offset)
+			break;
+
+		result = il;
+	}
+
+	return result;
+}
+
+/*
+ * interp_il_offset_from_native_offset:
+ *
+ *   Return the IL offset in effect at an offset into a method's bytecode, for a
+ * method named rather than held. Finding it means the per-domain table, so this
+ * is for callers that can take a lock.
+ */
+static int
+interp_il_offset_from_native_offset (MonoDomain *domain, MonoMethod *method, int native_offset)
+{
+	return imethod_il_offset (lookup_imethod (domain, method), native_offset);
+}
+
+/*
+ * interp_frame_il_offset:
+ *
+ *   Return the IL offset in effect in a frame. A frame holds its own method, so
+ * this reaches the map without a lock and a signal handler can ask.
+ */
+static int
+interp_frame_il_offset (MonoInterpFrameHandle frame, int native_offset)
+{
+	InterpFrame *iframe = (InterpFrame*)frame;
+
+	return imethod_il_offset (iframe ? iframe->imethod : NULL, native_offset);
+}
+
 static gpointer
 interp_frame_get_ip (MonoInterpFrameHandle frame)
 {
@@ -7920,6 +8008,7 @@ register_interp_stats (void)
 	mono_counters_init ();
 	mono_counters_register ("Total transform time", MONO_COUNTER_INTERP | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_interp_stats.transform_time);
 	mono_counters_register ("Methods transformed", MONO_COUNTER_INTERP | MONO_COUNTER_LONG, &mono_interp_stats.methods_transformed);
+	mono_counters_register ("Line number table size", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.line_numbers_size);
 	mono_counters_register ("Total cprop time", MONO_COUNTER_INTERP | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_interp_stats.cprop_time);
 	mono_counters_register ("Total super instructions time", MONO_COUNTER_INTERP | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_interp_stats.super_instructions_time);
 	mono_counters_register ("STLOC_NP count", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.stloc_nps);

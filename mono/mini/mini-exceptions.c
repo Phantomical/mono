@@ -1317,10 +1317,18 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 				il_offset = inlined [j].il_offset;
 			else if (ji->from_llvm)
 				il_offset = ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, native_offset);
+			else if (ji->is_interp)
+				/*
+				 * native_offset is an offset into the interpreter IR here, and the
+				 * interpreter keeps its own map. Without this a frame would report no
+				 * IL offset at all, so a method promoted mid-run would change what a
+				 * trace says about it.
+				 */
+				il_offset = mini_get_interp_callbacks ()->il_offset_from_native_offset (domain, jinfo_get_method (ji), native_offset);
 			else
 				il_offset = -1;
 
-			if (is_inlined || ji->from_llvm) {
+			if (is_inlined || ji->from_llvm || ji->is_interp) {
 				location = il_offset == -1 ? NULL : mono_debug_lookup_source_location_by_il (method, il_offset, domain);
 				sf->il_offset = il_offset;
 			} else {
@@ -1573,6 +1581,14 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 				 * only an IL offset.
 				 */
 				il_offset = mono_jit_info_llvm_il_offset (frame.ji, frame.native_offset);
+			} else if (frame.type == FRAME_TYPE_INTERP) {
+				/*
+				 * An offset into the interpreter IR, which only the interpreter's own
+				 * map describes. Asked of the frame rather than of the domain, so that
+				 * a crash context reaches the map without the jit code hash lock the
+				 * crashing thread may be holding.
+				 */
+				il_offset = mini_get_interp_callbacks ()->frame_il_offset (frame.interp_frame, frame.native_offset);
 			} else {
 				// Don't do this when we can be in a signal handler
 				if (!crash_context)

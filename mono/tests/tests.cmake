@@ -1079,13 +1079,9 @@ set(MONO_TESTS_INTERP_DISABLED
 )
 
 # Additionally excluded at the default tier, where a method starts interpreted
-# and is compiled underneath its callers once it is hot. Each of these passes
-# with either engine alone, so what they name is the seam between the two.
-set(MONO_TESTS_TIER0_DISABLED
-  # Reads the stack trace a dynamic method appears in. Promoting a method
-  # changes what the trace says about it, and the test pins the compiled answer.
-  dynamic-method-stack-traces.exe
-)
+# and is compiled underneath its callers once it is hot. Nothing is excluded
+# there at present; the list stays for the next test that has to come off it.
+set(MONO_TESTS_TIER0_DISABLED)
 
 # Not tests: source files that another tailcall test links against.
 set(MONO_TESTS_TAILCALL_DISABLED_COMPILE

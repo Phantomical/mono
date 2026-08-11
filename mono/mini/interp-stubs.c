@@ -126,6 +126,19 @@ stub_get_stopped_frame (const MonoJitTlsData *jit_tls)
 	return NULL;
 }
 
+/* Likewise: a trace over compiled frames alone still asks. */
+static int
+stub_il_offset_from_native_offset (MonoDomain *domain, MonoMethod *method, int native_offset)
+{
+	return -1;
+}
+
+static int
+stub_frame_il_offset (MonoInterpFrameHandle frame, int native_offset)
+{
+	return -1;
+}
+
 static void
 stub_frame_iter_init (MonoInterpStackIter *iter, gpointer interp_exit_data)
 {

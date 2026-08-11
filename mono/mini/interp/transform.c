@@ -3596,6 +3596,59 @@ get_basic_blocks (TransformData *td, MonoMethodHeader *header, gboolean make_lis
                 td->basic_blocks = g_list_reverse (td->basic_blocks);
 }
 
+static guint8*
+encode_uleb128 (guint32 value, guint8 *p)
+{
+	do {
+		guint8 b = value & 0x7f;
+
+		value >>= 7;
+		if (value)
+			b |= 0x80;
+		*p++ = b;
+	} while (value);
+
+	return p;
+}
+
+/*
+ * interp_save_line_numbers:
+ *
+ *   Keep the bytecode offset -> IL offset map the transform built, so a stack
+ * trace can report an IL offset for a frame of this method.
+ */
+static void
+interp_save_line_numbers (InterpMethod *rtm, TransformData *td, GArray *line_numbers)
+{
+	if (!line_numbers->len)
+		return;
+
+	/* Two varints an entry, each at most five bytes. */
+	guint8 *buf = (guint8*) g_malloc (line_numbers->len * 10);
+	guint8 *p = buf;
+	guint32 prev_native = 0;
+	gint32 prev_il = 0;
+
+	for (guint i = 0; i < line_numbers->len; i++) {
+		MonoDebugLineNumberEntry lne = g_array_index (line_numbers, MonoDebugLineNumberEntry, i);
+		gint32 il_delta = (gint32) lne.il_offset - prev_il;
+
+		p = encode_uleb128 (lne.native_offset - prev_native, p);
+		/* Zigzag: emission order is the bytecode's, so the IL offset can step back. */
+		p = encode_uleb128 ((guint32) ((il_delta << 1) ^ (il_delta >> 31)), p);
+
+		prev_native = lne.native_offset;
+		prev_il = (gint32) lne.il_offset;
+	}
+
+	rtm->line_numbers_size = (guint32) (p - buf);
+	rtm->line_numbers = (guint8*) mono_mem_manager_alloc0 (td->mem_manager, rtm->line_numbers_size);
+	memcpy (rtm->line_numbers, buf, rtm->line_numbers_size);
+	g_free (buf);
+
+	mono_atomic_fetch_add_i32 (&mono_interp_stats.line_numbers_size, (gint32) rtm->line_numbers_size);
+}
+
 static void
 interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header, TransformData *td, GArray *line_numbers)
 {
@@ -8658,6 +8711,8 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 	rtm->alloca_size = ALIGN_TO (rtm->total_locals_size + rtm->stack_size, 8);
 	rtm->data_items = (gpointer*)mono_mem_manager_alloc0 (td->mem_manager, td->n_data_items * sizeof (td->data_items [0]));
 	memcpy (rtm->data_items, td->data_items, td->n_data_items * sizeof (td->data_items [0]));
+
+	interp_save_line_numbers (rtm, td, td->line_numbers);
 
 	/* Save debug info */
 	interp_save_debug_info (rtm, header, td, td->line_numbers);
