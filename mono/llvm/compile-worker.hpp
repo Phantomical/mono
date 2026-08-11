@@ -8,8 +8,6 @@
 
 #include "compile-queue.hpp"
 
-typedef struct _MonoThread MonoThread;
-
 namespace mono {
 
 /// A compile queue's worker as the runtime needs it: attached to the runtime
@@ -34,7 +32,7 @@ public:
 	void idle (llvm::function_ref<void ()> wake) override;
 
 private:
-	MonoThread *thread_ = nullptr;
+	bool attached_ = false;
 };
 
 } // namespace mono

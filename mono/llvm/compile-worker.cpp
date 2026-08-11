@@ -24,7 +24,8 @@ CompileWorker::start ()
 	if (mono_runtime_is_shutting_down ())
 		return false;
 
-	thread_ = mono_thread_internal_attach (mono_get_root_domain ());
+	mono_thread_internal_attach (mono_get_root_domain ());
+	attached_ = true;
 
 	MonoInternalThread *internal = mono_thread_internal_current ();
 
@@ -47,11 +48,18 @@ CompileWorker::start ()
 void
 CompileWorker::stop ()
 {
-	if (thread_ == nullptr)
+	if (!attached_)
 		return;
 
-	mono_thread_internal_detach (thread_);
-	thread_ = nullptr;
+	/*
+	 * Ask for the thread object again rather than keep the one the attach
+	 * returned. That object is managed, and this thread spends most of its
+	 * life in GC Safe mode, so a collection can move it out from under a
+	 * pointer held here. The stale read gives a garbage internal thread and
+	 * the detach faults on it.
+	 */
+	mono_thread_internal_detach (mono_thread_current ());
+	attached_ = false;
 }
 
 void
