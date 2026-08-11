@@ -20,6 +20,13 @@
 set(_class_dir "${_class}")
 set(_run_test "${CMAKE_SOURCE_DIR}/cmake/MonoRunTest.cmake")
 
+# Where the per-test temporary directories go. Under /tmp rather than the build
+# tree so that TMPDIR still means what the corpus expects of it, and keyed by
+# the build directory so two worktrees running the suite at once get their own.
+string(SHA256 _tmp_key "${CMAKE_BINARY_DIR}")
+string(SUBSTRING "${_tmp_key}" 0 12 _tmp_key)
+set(_tmp_root "/tmp/mono-tests-${_tmp_key}")
+
 # Which collector each suite runs on. The corpus is collector-agnostic, so it
 # runs on every runtime that was built -- mono-wrapper picks the binary out of
 # MONO_EXECUTABLE, so this costs an environment variable and a name suffix.
@@ -164,6 +171,8 @@ function(mono_runtime_suite name)
           set(_oarg "-O=${_opt}")
         endif()
         set(_gname "${_tname}@${_gc}")
+        string(REGEX REPLACE "[^A-Za-z0-9._-]" "_" _tmpdir "${_gname}")
+        set(_tmpdir "${_tmp_root}/${_tmpdir}")
         add_test(NAME "${_gname}"
                  COMMAND "${CMAKE_COMMAND}" -E env
                          "MONO_PATH=${_class_dir}"
@@ -174,6 +183,7 @@ function(mono_runtime_suite name)
                          "${CMAKE_COMMAND}"
                          "-DMONO_TEST_EXPECT=${ARG_EXPECT}"
                          "-DMONO_TEST_TIMEOUT=${_timeout}"
+                         "-DMONO_TEST_TMPDIR=${_tmpdir}"
                          -P "${_run_test}" --
                          "${_wrapper}" ${_oarg} ${_rt_args} "${_test}"
                  WORKING_DIRECTORY "${ARG_WORKDIR}")

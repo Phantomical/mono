@@ -1,6 +1,7 @@
 # Runs one program from the runtime corpus as a single CTest test.
 #
 #   cmake -DMONO_TEST_EXPECT=<code> [-DMONO_TEST_TIMEOUT=<seconds>]
+#         [-DMONO_TEST_TMPDIR=<dir>]
 #         -P MonoRunTest.cmake -- <runtime> <args...> <test.exe>
 #
 # CTest can already run a command and check that it exited 0, so this exists
@@ -48,7 +49,28 @@ if(MONO_TEST_TIMEOUT)
   endif()
 endif()
 
+# A temporary directory of the test's own, so that programs writing fixed names
+# under Path.GetTempPath () do not collide. Several of them do -- bug-349190.2
+# saves an assembly to res.exe and then loads it back -- and every such name is
+# shared by the two collector arms, by any other worktree running the suite, and
+# by whatever else on the machine writes to /tmp. What that costs is worse than
+# a lost file: the loader maps an assembly, so a second process rewriting one
+# out from under the mapping faults the reader with SIGBUS on a page past the
+# new end of file, which is not an error any managed code can catch.
+#
+# Kept on failure, since a test that writes temporary files is a test whose
+# temporary files are worth reading afterwards.
+if(MONO_TEST_TMPDIR)
+  file(REMOVE_RECURSE "${MONO_TEST_TMPDIR}")
+  file(MAKE_DIRECTORY "${MONO_TEST_TMPDIR}")
+  set(ENV{TMPDIR} "${MONO_TEST_TMPDIR}")
+endif()
+
 execute_process(COMMAND ${_cmd} RESULT_VARIABLE _rc)
+
+if(MONO_TEST_TMPDIR AND _rc EQUAL MONO_TEST_EXPECT)
+  file(REMOVE_RECURSE "${MONO_TEST_TMPDIR}")
+endif()
 
 if(NOT _rc EQUAL MONO_TEST_EXPECT)
   string(STRIP "${_pretty}" _pretty)

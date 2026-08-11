@@ -206,6 +206,16 @@ failure names the program and the collector configuration that broke. That is wh
 lists a few thousand tests. `test-runner.exe` still exists for running a list by hand
 without a configure step, but nothing in the build drives it any more.
 
+Each of those tests runs with a `TMPDIR` of its own, `/tmp/mono-tests-<key>/<test>`, where
+the key is a hash of the build directory — so the two collector arms, and two worktrees
+running the suite at once, do not share temporary files. Several programs write fixed names
+under `Path.GetTempPath ()`, and one of them saves an assembly and loads it back; sharing
+that path across processes is not merely a lost file, because the loader *maps* an assembly
+and a concurrent rewrite faults the reader with SIGBUS on a page past the new end of file.
+`MonoRunTest.cmake` creates the directory and removes it after a passing run, keeping it
+when the test fails. Running a corpus program by hand gets no such isolation. The
+class-library suites do not have this yet.
+
 Everything runs on **both collectors**, `@sgen` and `@boehm`, selected through
 `MONO_EXECUTABLE`. Pick one with `ctest -R '@boehm$'` — it is a name suffix, not a label,
 because `ctest -L` is a regex and a `gc-sgen` label would be swept up by `-L sgen`, which
