@@ -4,7 +4,7 @@
  * The convention being restated is LLVM's own, so what these assert is where
  * LLVM would have put each argument - which register file, which register,
  * which stack slot - for prototypes shaped the way the translator emits them.
- * The corpus under --interp-tier0 is what proves the two agree; this is what
+ * The corpus running at tier 0 is what proves the two agree; this is what
  * says which answer was meant, and what fails loudly if an LLVM upgrade moves
  * one.
  *

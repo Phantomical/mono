@@ -54,27 +54,32 @@ set(_regtests
 
 # One test per corpus, so a failure names the corpus and --rerun-failed re-runs
 # only what broke.
+#
+# Tier 0 is off here. --regression calls each test method once, so nothing ever
+# spends its call counter and the whole corpus would run interpreted -- which is
+# what the suite below is for.
 foreach(_t IN LISTS _regtests)
   string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
   add_test(NAME "mini-regression/${_stem}"
            COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                   "MONO_LLVM_JIT_TIER0=0"
                    "${_wrapper}" --regression ${_t}
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties("mini-regression/${_stem}" PROPERTIES LABELS regression)
 endforeach()
 
-# The same corpora with both engines in one process: every method the
-# interpreter accepts runs interpreted, and everything else compiles and calls
-# into it. That crossing is where a method's entries have to agree with the
-# convention its callers were compiled against, and nothing else covers it at
-# this scale - the suite above compiles everything, and the interpreter's own
-# harness interprets everything.
+# The same corpora at the default tier: every method the interpreter accepts
+# runs interpreted, and everything else compiles and calls into it. That
+# crossing is where a method's entries have to agree with the convention its
+# callers were compiled against, and nothing else covers it at this scale - the
+# suite above compiles everything, and the interpreter's own harness interprets
+# everything.
 if(MONO_ENABLE_INTERPRETER)
   foreach(_t IN LISTS _regtests)
     string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
     add_test(NAME "mini-regression-interp/${_stem}"
              COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                     "${_wrapper}" --interp-tier0 --regression ${_t}
+                     "${_wrapper}" --regression ${_t}
              WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
     set_tests_properties("mini-regression-interp/${_stem}"
                          PROPERTIES LABELS interp)

@@ -240,7 +240,13 @@ list(REMOVE_ITEM _tailcall
 #     finalizers and a 10s BeginInvoke still in flight, so most of its time is
 #     spent waiting rather than running -- 171s to 247s measured, which is not
 #     margin enough to leave at 300s.
+#
+# Tier 0 is off, so every method here is compiled. Most of these programs run
+# their body once, which is too few calls to spend a counter, so at the default
+# tier they would test the interpreter instead of the backend -- the tier-0 arm
+# below is where that configuration is covered.
 mono_runtime_suite(runtime TESTS ${_regular}
+                   ENV "MONO_LLVM_JIT_TIER0=0"
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                    LONG dynamic-method-churn.exe
                         appdomain-unload.exe
@@ -249,7 +255,8 @@ mono_runtime_suite(runtime TESTS ${_regular}
 # CoreCLR's tailcall corpus, run like any other program: several of these
 # recurse deeply enough that a missed tail call is a stack overflow rather than
 # a subtle difference, so running them is the check.
-mono_runtime_suite(runtime-tailcall TESTS ${_tailcall})
+mono_runtime_suite(runtime-tailcall TESTS ${_tailcall}
+                   ENV "MONO_LLVM_JIT_TIER0=0")
 
 mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 
@@ -267,6 +274,24 @@ if(MONO_ENABLE_INTERPRETER)
                      SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                      LONG appdomain-threadpool-unload.exe)
 
+  # The same programs at the default tier, which is neither of the two above:
+  # each method starts interpreted and the hot ones are compiled underneath it,
+  # so the two engines are in one process and a method can change engine while
+  # its callers are running.
+  set(_tier0 ${_interp})
+  list(REMOVE_ITEM _tier0 ${MONO_TESTS_TIER0_DISABLED})
+  mono_runtime_suite(runtime-tier0 LABEL interp TESTS ${_tier0}
+                     SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
+                     LONG appdomain-threadpool-unload.exe
+                          dynamic-method-churn.exe
+                          appdomain-unload.exe)
+
+  # The tailcall corpus at the default tier, where a tail site is the
+  # interpreter's rather than the backend's. Both engines have to honour the
+  # same shapes, and a program that alternates between them has to hop without
+  # growing the stack.
+  mono_runtime_suite(runtime-tailcall-tier0 LABEL interp TESTS ${_tailcall})
+
   # Both engines in one process, which neither of the suites above covers:
   # Callee's methods interpret while its caller compiles, so every call in it
   # crosses the boundary. Argument placement there is settled by the compiler
@@ -274,25 +299,16 @@ if(MONO_ENABLE_INTERPRETER)
   # values rather than crashing - so it wants a test that reads them back.
   mono_runtime_suite(runtime-interp-entries LABEL interp
                      TESTS interp-entries.exe
-                     RUNTIME_ARGS "--interp-tier0=Callee")
+                     ENV "MONO_LLVM_JIT_TIER0=Callee")
 
   # The other direction: Interpreted's methods run in the interpreter while
   # their callees compile, so every call in Run () leaves the interpreter for
   # native code. Nothing else covers that crossing -- the suites above either
-  # compile everything or interpret everything, and under a bare --interp-tier0
-  # every callee is interpreted too.
+  # compile everything or interpret everything, and by default every callee is
+  # interpreted too.
   mono_runtime_suite(runtime-interp-calls-compiled LABEL interp
                      TESTS interp-calls-compiled.exe
-                     RUNTIME_ARGS "--interp-tier0=Interpreted")
-
-  # Promotion itself, which nothing else reaches: the suites above call each
-  # method too few times to spend its counter, so a method that starts at tier 0
-  # stays there for the whole run. Here every method is called well past the
-  # threshold, so each one is interpreted at the top of its loop and compiled by
-  # the bottom, and the test reads its answers back across the switch.
-  mono_runtime_suite(runtime-interp-promotion LABEL interp
-                     TESTS interp-tier1-promotion.exe
-                     RUNTIME_ARGS "--interp-tier0=")
+                     ENV "MONO_LLVM_JIT_TIER0=Interpreted")
 
   # `--interp=jit=<class>` compiles the named class and interprets the rest,
   # which is the only way today to get a compiled frame and an interpreted one
@@ -552,12 +568,12 @@ mono_runtime_check(runtime-pedump NATIVE
 # reaches the backend at all. Selecting only the callee keeps its caller
 # compiled, so the call goes through the stub the backend published.
 function(_mono_verification_check name expect)
-  cmake_parse_arguments(ARG "" "" "ARGS;REJECT" ${ARGN})
+  cmake_parse_arguments(ARG "" "" "ARGS;ENV;REJECT" ${ARGN})
   foreach(_gc IN LISTS _mono_gcs)
     _mono_gc_env(_gc_env "${_gc}")
     add_test(NAME "${name}@${_gc}"
              COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                     "${_gc_env}" "MONO_LLVM_JIT_TRACE=1"
+                     "${_gc_env}" "MONO_LLVM_JIT_TRACE=1" ${ARG_ENV}
                      "${_wrapper}" ${ARG_ARGS} verification-invalid-il.exe
              WORKING_DIRECTORY "${_bin}")
     set_tests_properties("${name}@${_gc}" PROPERTIES
@@ -568,16 +584,19 @@ function(_mono_verification_check name expect)
 endfunction()
 
 _mono_verification_check(runtime-verification-off "ran 42"
-                         REJECT "rejected")
+                         ENV "MONO_LLVM_JIT_TIER0=0" REJECT "rejected")
 _mono_verification_check(runtime-verification-validil
                          "rejected System.InvalidProgramException"
-                         ARGS --security=validil REJECT "ran 42")
+                         ARGS --security=validil
+                         ENV "MONO_LLVM_JIT_TIER0=0" REJECT "ran 42")
 _mono_verification_check(runtime-verification-tier0
                          "interpreting Probe:Unverifiable"
-                         ARGS --interp-tier0=Probe:Unverifiable REJECT "rejected")
+                         ENV "MONO_LLVM_JIT_TIER0=Probe:Unverifiable"
+                         REJECT "rejected")
 # Rejecting without ever printing the routing line is the placement itself: the
 # verdict is reached before the tier is chosen.
 _mono_verification_check(runtime-verification-validil-tier0
                          "rejected System.InvalidProgramException"
-                         ARGS --security=validil --interp-tier0=Probe:Unverifiable
+                         ARGS --security=validil
+                         ENV "MONO_LLVM_JIT_TIER0=Probe:Unverifiable"
                          REJECT "ran 42|interpreting Probe:Unverifiable")
