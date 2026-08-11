@@ -162,7 +162,11 @@ namespace DbLinqTest {
         public void Ctor_FileOrServerOrConnectionIsFilename()
         {
             MappingSource mapping = new AttributeMappingSource();
-            string fileOrServerOrConnection = typeof(DataContextTest).Assembly.Location;
+            // Only a .mdf reaches the filename branch -- anything else is taken
+            // for a server name, which is held to the 128-char limit a hostname
+            // has and which a deep enough checkout exceeds on its own.
+            string fileOrServerOrConnection = Path.ChangeExtension(
+                typeof(DataContextTest).Assembly.Location, ".mdf");
             new DataContext(fileOrServerOrConnection, mapping);
         }
 
