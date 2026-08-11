@@ -1073,9 +1073,28 @@ set(MONO_TESTS_INTERP_DISABLED
 )
 
 # Additionally excluded at the default tier, where a method starts interpreted
-# and is compiled underneath its callers once it is hot. Nothing is excluded
-# there at present; the list stays for the next test that has to come off it.
-set(MONO_TESTS_TIER0_DISABLED)
+# and is compiled underneath its callers once it is hot.
+#
+# Each of these passes with everything compiled and fails both here and under
+# --interpreter, so what they are missing is something the interpreter does not
+# do rather than anything about the tier seam. Say which, per entry: the point
+# of this list being separate from MONO_TESTS_INTERP_DISABLED is that "tier 0
+# cannot do this" and "the pure interpreter could not" are different claims.
+set(MONO_TESTS_TIER0_DISABLED
+  # A COM-visible call reaches Object::Equals through a remoting-invoke wrapper,
+  # which answers "The method or operation is not implemented".
+  cominterop.exe
+  # calli does not check the signature it is handed. The test wants the
+  # mismatched call to throw and gets a return.
+  calli_sig_check.exe
+  # A default-interface diamond resolves to one of the implementations where
+  # the ambiguity is meant to raise.
+  dim-diamondshape.exe
+  # Overflows a thread's stack on purpose and wants a StackOverflowException
+  # back. An interpreted frame spends native stack on the interpreter's own
+  # recursion, so the fault lands in unmanaged code and aborts instead.
+  bug-60862.exe
+)
 
 # Not tests: source files that another tailcall test links against.
 set(MONO_TESTS_TAILCALL_DISABLED_COMPILE

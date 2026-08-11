@@ -284,11 +284,17 @@ if(MONO_ENABLE_INTERPRETER)
                      SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                      LONG appdomain-threadpool-unload.exe)
 
-  # The same programs at the default tier, which is neither of the two above:
+  # The whole corpus at the default tier, which is neither of the two above:
   # each method starts interpreted and the hot ones are compiled underneath it,
   # so the two engines are in one process and a method can change engine while
   # its callers are running.
-  set(_tier0 ${_interp})
+  #
+  # Built from the full corpus rather than from the interpreter's set, because a
+  # program the pure interpreter cannot run may be perfectly fine once its hot
+  # methods compile -- and this is the tier real users get, so it is the one that
+  # can least afford to inherit somebody else's refusals. Anything that genuinely
+  # cannot run here belongs in MONO_TESTS_TIER0_DISABLED, with the reason.
+  set(_tier0 ${_regular})
   list(REMOVE_ITEM _tier0 ${MONO_TESTS_TIER0_DISABLED})
   mono_runtime_suite(runtime-tier0 LABEL interp TESTS ${_tier0}
                      SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
