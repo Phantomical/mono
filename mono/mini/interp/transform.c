@@ -306,9 +306,19 @@ interp_prev_ins (InterpInst *ins)
 		} \
 	} while (0)
 
+/*
+ * A token naming a type that will not load resolves to no class at all, and a
+ * class that is merely broken resolves to one carrying the reason. Only the
+ * second has a failure to report; asking the first for one dereferences null.
+ */
 #define CHECK_TYPELOAD(klass) \
 	do { \
-		if (!(klass) || mono_class_has_failure (klass)) { \
+		if (!(klass)) { \
+			mono_error_set_type_load_name (error, NULL, NULL, \
+			                               "Could not load type from token 0x%08x", token); \
+			goto exit; \
+		} \
+		if (mono_class_has_failure (klass)) { \
 			mono_error_set_for_class_failure (error, klass); \
 			goto exit; \
 		} \
