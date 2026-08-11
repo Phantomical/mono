@@ -4102,6 +4102,18 @@ call:
 				EXCEPTION_CHECKPOINT;
 			}
 
+			/*
+			 * Nothing guards the end of the interpreter stack, so the frame that
+			 * would run off it has to be refused here rather than found out when
+			 * its locals are zeroed - which is a write into whatever follows the
+			 * mapping. The callee has to be transformed first for its size to be
+			 * known, which is why this sits below method_entry rather than beside
+			 * the frame allocation.
+			 */
+			if (G_UNLIKELY ((guchar*)frame->stack + cmethod->alloca_size >
+					context->stack_start + INTERP_STACK_SIZE - INTERP_STACK_RESERVE))
+				THROW_EX (mono_get_exception_stack_overflow (), NULL);
+
 			context->stack_pointer = (guchar*)frame->stack + cmethod->alloca_size;
 			/* Make sure the stack pointer is bumped before we store any references on the stack */
 			mono_compiler_barrier ();

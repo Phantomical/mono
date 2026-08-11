@@ -29,6 +29,12 @@
 #define MINT_STACK_SLOT_SIZE (sizeof (stackval))
 
 #define INTERP_STACK_SIZE (1024*1024)
+/*
+ * Held back from frames so that overflowing the stack above has somewhere to be
+ * reported from: raising the exception runs handlers in interpreted frames, and
+ * those want stack of their own.
+ */
+#define INTERP_STACK_RESERVE (16*1024)
 
 enum {
 	VAL_I32     = 0,
