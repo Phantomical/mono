@@ -347,12 +347,25 @@ mono_memory_barrier_process_wide (void)
 {
 	int status;
 
+	// This lock has the same shape of hazard the page allocation below had: the
+	// collector reaches this function with the world stopped, so a thread
+	// suspended here while holding the lock would wedge it. Reaching it needs
+	// managed code calling Interlocked.MemoryBarrierProcessWide (), which
+	// nothing in the class libraries does, so it is left alone.
 	status = pthread_mutex_lock (&memory_barrier_process_wide_mutex);
 	g_assert (status == 0);
 
 	if (memory_barrier_process_wide_helper_page == NULL) {
-		status = posix_memalign (&memory_barrier_process_wide_helper_page, mono_pagesize (), mono_pagesize ());
-		g_assert (status == 0);
+		// The collector calls this with the world already stopped, and a thread
+		// can be suspended anywhere - including inside malloc, holding the C
+		// allocator's lock. Taking that lock here would then wait for a thread
+		// that cannot run until the collection it is blocking finishes. mmap is
+		// safe where malloc is not: a suspend signal is only delivered on the
+		// way back out to userspace, so no thread is stopped holding what the
+		// kernel needs to serve it.
+		memory_barrier_process_wide_helper_page = mono_valloc (NULL, mono_pagesize (),
+			MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_OTHER);
+		g_assert (memory_barrier_process_wide_helper_page);
 	}
 
 	// Changing a helper memory page protection from read / write to no access
