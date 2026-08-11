@@ -156,8 +156,19 @@ TEST (CompileQueue, ClosingAChannelDropsWhatIsQueued)
 	for (int i = 0; i < 4; i++)
 		ASSERT_TRUE (channel.enqueue (nullptr, [&] { ran++; }));
 
-	gate.open ();
+	/*
+	 * The gate has to stay shut until close () holds the queue's lock. Opening
+	 * it first only makes the worker runnable, and it then races close () for
+	 * that lock - when it wins it takes the four queued items before the sweep
+	 * can drop them, which is the test failing rather than the queue misbehaving.
+	 */
+	std::thread opener ([&] {
+		std::this_thread::sleep_for (50ms);
+		gate.open ();
+	});
+
 	channel.close ();
+	opener.join ();
 	EXPECT_EQ (ran.load (), 0) << "a queued compile ran after its channel closed";
 }
 
