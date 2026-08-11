@@ -26,6 +26,8 @@
 #include "mono-threads-debug.h"
 #include "mono-threads-coop.h"
 
+#include <mono/metadata/gc-internals.h>
+
 gint
 mono_threads_suspend_search_alternative_signal (void)
 {
@@ -242,6 +244,23 @@ mono_threads_suspend_init_signals (void)
 
 	sigfillset (&suspend_signal_mask);
 	sigdelset (&suspend_signal_mask, restart_signal_num);
+
+	/*
+	 * A collector that stops the world by itself has to be able to reach a thread we
+	 * have suspended. Boehm signals every thread and waits for each to answer, and a
+	 * thread parked below with that signal blocked never does - so a collection while
+	 * any thread is suspended here hangs, which is what shutdown does after
+	 * mono_thread_suspend_all_other_threads (). Leaving it deliverable lets the
+	 * collector's handler run nested and answer; the loop below ignores it, since only
+	 * the restart signal ends the suspension.
+	 *
+	 * SGen suspends through this same machinery and names this very signal, so there
+	 * is nothing to let through in that case.
+	 */
+	int gc_suspend_signal_num = mono_gc_get_suspend_signal ();
+
+	if (gc_suspend_signal_num != -1 && gc_suspend_signal_num != suspend_signal_num)
+		sigdelset (&suspend_signal_mask, gc_suspend_signal_num);
 
 	sigemptyset (&suspend_ack_signal_mask);
 	sigaddset (&suspend_ack_signal_mask, restart_signal_num);
