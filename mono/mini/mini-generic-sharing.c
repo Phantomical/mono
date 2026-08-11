@@ -1609,17 +1609,21 @@ mini_get_gsharedvt_out_sig_wrapper (MonoMethodSignature *sig)
 		}
 		pindex ++;
 	}
-	/* Rgctx arg */
+	/* Where the caller puts the descriptor naming the method to call. */
 	csig->params [pindex] = mono_get_int_type ();
 	param_names [pindex] = g_strdup ("ftndesc");
 	pindex  ++;
 	csig->param_count = pindex;
 
-	/* Create the signature for the normal callconv */
+	/*
+	 * The call goes to the method's own entry point, so it is made under the
+	 * method's own signature. Describing it with anything else is not merely
+	 * an unread argument: a hidden return pointer sits behind the first
+	 * argument, so an extra one moves it into a register the callee never
+	 * reads.
+	 */
 	normal_sig = g_malloc0 (MONO_SIZEOF_METHOD_SIGNATURE + ((sig->param_count + 2) * sizeof (MonoType*)));
 	memcpy (normal_sig, sig, mono_metadata_signature_size (sig));
-	normal_sig->param_count ++;
-	normal_sig->params [sig->param_count] = mono_get_int_type ();
 
 	// FIXME: Use shared signatures
 	mb = mono_mb_new (mono_defaults.object_class, "gsharedvt_out_sig", MONO_WRAPPER_OTHER);
@@ -1649,11 +1653,6 @@ mini_get_gsharedvt_out_sig_wrapper (MonoMethodSignature *sig)
 				mono_mb_emit_byte (mb, ldind_op);
 		}
 	}
-	/* Rgctx arg */
-	mono_mb_emit_ldarg (mb, args_start + sig->param_count);
-	mono_mb_emit_icon (mb, TARGET_SIZEOF_VOID_P);
-	mono_mb_emit_byte (mb, CEE_ADD);
-	mono_mb_emit_byte (mb, CEE_LDIND_I);
 	/* Method to call */
 	mono_mb_emit_ldarg (mb, args_start + sig->param_count);
 	mono_mb_emit_byte (mb, CEE_LDIND_I);

@@ -35,6 +35,7 @@ mono_corpus_cs(generics.exe      SOURCES generics.cs
 mono_corpus_cs(unaligned.exe     SOURCES unaligned.cs
                REFS "${_driver}" "${CMAKE_CURRENT_BINARY_DIR}/MemoryIntrinsics.dll")
 mono_corpus_il(iltests.exe iltests.il)
+mono_corpus_cs(tier-seam.exe SOURCES tier-seam.cs REFS "${_driver}")
 
 add_custom_target(mini-corpora ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
 
@@ -85,6 +86,36 @@ if(MONO_ENABLE_INTERPRETER)
                          PROPERTIES LABELS interp)
   endforeach()
 endif()
+
+# The interpreted-caller/compiled-callee crossing, which neither suite above
+# reaches: `mini-regression` compiles everything, and `mini-regression-interp`
+# runs at the default tier but carries the `interp` label, which `check` drops.
+# This one keeps `regression` so the crossing is covered by the fast set -- it
+# is where a callee's prototype has to agree with what its caller was compiled
+# against, and getting that wrong is a wrong register rather than a diagnostic.
+#
+# The corpus loops until its callees are compiled underneath it, so the run has
+# to prove it got that far; MonoRunTracedTest fails it if any callee was never
+# compiled, which is what a loop that finished too early looks like.
+if(MONO_ENABLE_INTERPRETER)
+  add_test(NAME "mini-regression/tier-seam"
+           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                   "${CMAKE_COMMAND}"
+                   "-DMONO_TRACE_REQUIRE=Tests:wide_static_noargs;Tests:wide_static_onearg;Tests:wide_instance_noargs;Tests:narrow_static_noargs"
+                   -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunTracedTest.cmake"
+                   -- "${_wrapper}" --regression tier-seam.exe
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties("mini-regression/tier-seam" PROPERTIES LABELS regression)
+endif()
+
+# The same corpus with the interpreter out of the way, so a failure above says
+# whether the crossing broke it or the code generated for it is simply wrong.
+add_test(NAME "mini-regression/tier-seam-compiled"
+         COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                 "MONO_LLVM_JIT_TIER0=0"
+                 "${_wrapper}" --regression tier-seam.exe
+         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties("mini-regression/tier-seam-compiled" PROPERTIES LABELS regression)
 
 # ---------------------------------------------------------------------------
 # The interpreter whitebox test: a C driver that reaches into the interpreter's
