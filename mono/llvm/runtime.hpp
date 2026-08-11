@@ -1,10 +1,9 @@
 /**
  * \file
- * \brief The entry point mono's C runtime compiles methods through.
+ * \brief The interface mono's C runtime compiles methods through.
  *
- * This is the whole surface the rest of mono sees of the LLVM-only backend: the
- * runtime asks for a method's code and gets back an address to call. Everything
- * behind it - translation, the ORC engine, stubs - stays on the C++ side.
+ * This is the whole surface the rest of mono sees of the LLVM-only backend.
+ * The runtime asks for a method's code and gets back an address to call.
  */
 
 #ifndef MONO_LLVM_RUNTIME_HPP
@@ -19,124 +18,93 @@ typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoJitInfo MonoJitInfo;
 
-/// Compile METHOD for TARGET_DOMAIN and return the address to call it at.
+/// Compiles a method and returns the address to call it at.
 ///
-/// The address is the method's stub, which is stable for the life of the process
-/// however many times the method is later recompiled.
+/// The code goes into the given domain's linker. The address is a stub, and
+/// it stays the same for the life of the process however often the method is
+/// recompiled. Callers can cache it.
 ///
-/// TARGET_DOMAIN is the domain whose linker the code goes into - the caller's
-/// choice, because it carries mini's sharing policy: an icall wrapper compiles
-/// for the root domain, since global caches hold its address for the life of
-/// the process, and everything else for the domain that asked.
-///
-/// Returns NULL with ERROR set when the method cannot be compiled - IL this
-/// backend has no translation for reports an ExecutionEngineException, and
-/// malformed IL an InvalidProgramException, exactly as the caller would get from
-/// any other failing compile.
-void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domain,
-                                    MonoError *error);
+/// Returns NULL and sets the error if the method cannot be compiled.
+void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *domain, MonoError *error);
 
-/// Stop compiling in the background, waiting for whatever is already under way.
+/// Stops background compiling and waits for whatever is already running.
 ///
-/// Called at the top of runtime shutdown, and it has to be: a background
-/// compile reads metadata and allocates, and everything it touches is torn down
-/// from there on - the domain's string table goes first, its assemblies not
-/// long after. Nothing is queued again afterwards.
+/// Call this at the top of runtime shutdown. A background compile reads
+/// metadata that shutdown then frees. Nothing queues after this returns.
 void mono_llvm_jit_stop_compiling (void);
 
-/// Stop compiling for DOMAIN and wait for the compile in flight for it, if
-/// there is one.
+/// Stops background compiling for one domain and waits for its in-flight
+/// compile.
 ///
-/// Called at the very start of an unload, while the domain is still whole.
-/// Freeing it is much too late: by then its static data has been zeroed, its
-/// cached vtables cleared and its assemblies closed, and a compile reading any
-/// of that is reading freed memory. Must be called with no lock held - the
-/// compile being waited for may want the loader lock.
+/// Call this at the start of an unload, while the domain is still whole. By
+/// the time the runtime frees it, a compile reading it reads freed memory.
+///
+/// Call this with no lock held. The compile it waits for can take the loader
+/// lock.
 void mono_llvm_jit_stop_compiling_for_domain (MonoDomain *domain);
 
-/// Release everything the backend holds for DOMAIN: its code, its stubs, the
-/// linker they live in. Called on the domain's way out, after the runtime has
-/// proved nothing can execute in it any more; a domain the backend never
-/// compiled for is a quiet no-op.
+/// Releases everything the backend holds for a domain.
+///
+/// Call this once the runtime has proved that nothing can execute in the
+/// domain any more. A domain the backend never compiled for is a no-op.
 void mono_llvm_jit_free_domain (MonoDomain *domain);
 
-/// Release everything the backend holds for METHOD: its code in every domain it
-/// was compiled into, the jit-info records covering that code, and the caches
-/// keyed by it.
+/// Releases everything the backend holds for a method, in every domain it was
+/// compiled into.
 ///
-/// Called when the runtime frees a dynamic method - the only kind it ever frees
-/// - after it has proved nothing can be executing in the method any more. A
-/// method this backend never compiled is a quiet no-op.
+/// Call this when the runtime frees a dynamic method, once it has proved that
+/// nothing can execute in the method any more. A method the backend never
+/// compiled is a no-op.
 ///
-/// Freeing the method hands its MonoMethod back to the allocator, so this is
-/// what keeps the next method to land on that address from being handed this
-/// one's code.
+/// Freeing a method returns its MonoMethod to the allocator, so skipping this
+/// hands the next method at that address this one's code.
 void mono_llvm_jit_free_method (MonoMethod *method);
 
-/// Where METHOD's body starts in DOMAIN, or NULL when this backend has not
-/// compiled it there.
+/// Returns where a method's body starts in a domain, or NULL if the backend
+/// did not compile it there.
 ///
-/// This is the address the method's own jit info covers - not the stub the
-/// runtime calls it through, and not the interop thunk in front of it - so it
-/// is what to hand mono_jit_info_table_find () to get back at that record. The
-/// runtime has no method-keyed map of its own to answer this from: a method
-/// reached as a callee is compiled without the runtime ever asking for it.
+/// This is the address the method's own jit info covers, not the stub the
+/// runtime calls through and not the interop thunk in front of it. Pass it to
+/// mono_jit_info_table_find () to get that record.
 void *mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method);
 
-/// Call VISIT with the jit info of each live body this backend compiled METHOD
-/// into in DOMAIN, oldest first.
+/// Calls visit with the jit info of every live body of a method, oldest
+/// first.
 ///
-/// A method keeps every body it has ever been compiled into: recompiling
-/// redirects the stubs at the new one, which is what every later call reaches,
-/// but a thread already running in an older body carries on there. Anything
-/// that has to hold for the method wherever it is executing - a breakpoint - has
-/// to be applied to all of them.
+/// A method keeps the bodies it was compiled into before, and a thread can
+/// still be running in one of them. Anything that has to hold wherever the
+/// method executes, such as a breakpoint, belongs on all of them.
 void mono_llvm_jit_foreach_body (MonoDomain *domain, MonoMethod *method,
-                                 void (*visit) (MonoJitInfo *ji, void *user_data),
-                                 void *user_data);
+                                 void (*visit) (MonoJitInfo *ji, void *user_data), void *user_data);
 
-/// Where to enter METHOD when the receiver is still boxed - the address a call
-/// off a value type's vtable or IMT is given, which steps the receiver past the
-/// object header and carries on into the method exactly as its ordinary entry
-/// would.
+/// Returns where to enter a method with a boxed receiver, or NULL if the
+/// backend generated no such entry.
 ///
-/// Returns NULL for a method this backend generated no such entry for: one not
-/// implemented in IL is entered through code the backend never emitted, and
-/// there is nothing to step the receiver in.
-///
-/// The address is a stub, so a slot filled from it keeps reaching the method
-/// when a later tier replaces what stands behind it.
+/// This is what a call off a value type's vtable or IMT needs: it steps the
+/// receiver past the object header before running the method. The address is
+/// a stub, so a slot filled from it survives a later tier.
 void *mono_llvm_jit_unbox_entry (MonoMethod *method);
 
-/// Queue OPT for LLVM's own command-line option registry - the same options
-/// `opt` and `llc` take, e.g. "-print-after-all". A leading dash is optional.
+/// Queues an option for LLVM's own command-line registry, the same options
+/// `opt` and `llc` take. A leading dash is optional.
 ///
-/// This is what `--llvm-opt=<opt>` on the command line does. The options take
-/// effect when the backend starts, so they have to be set before the first
-/// method is compiled; one LLVM rejects fails the backend's startup.
+/// Set these before the first compile. An option LLVM rejects fails the
+/// backend's startup.
 void mono_llvm_jit_add_option (const char *opt);
 
-/// Whether any method is entered by interpreting it rather than by compiling
-/// it, which is what decides whether the interpreter is started at all.
-///
-/// MONO_LLVM_JIT_TIER0 is what turns tier 0 off, and with it off the runtime
-/// runs as it did before there was a tier below the compiler.
+/// Whether any method runs at tier 0, which is what decides whether the
+/// interpreter starts at all.
 mono_bool mono_llvm_jit_tier0_enabled (void);
 
-/// How many calls METHOD may take at tier 0 before it should be asked for as
-/// tier 1, or zero if it is not a candidate for promotion at all.
-///
-/// This is what the interpreter arms its per-method call counter with, so it is
-/// asked once per method rather than per call.
+/// How many calls a method takes at tier 0 before it should be asked for as
+/// tier 1, or zero if it never promotes.
 int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 
-/// Ask for METHOD to be compiled in DOMAIN, replacing whatever tier is running
-/// it now.
+/// Asks for a method to be compiled, replacing whatever tier runs it now.
 ///
-/// Returns immediately: the compile happens on a thread of its own and there is
-/// no way to wait for it or to ask what became of it. It may also simply not
-/// happen - a domain on its way out refuses the work - and nothing retries, so
-/// the method then stays at the tier it is at.
+/// Returns immediately. There is no way to wait for the compile or to ask
+/// what became of it, and it can simply not happen: a domain on its way out
+/// refuses the work and nothing retries it.
 void mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain);
 
 /// Put METHOD's IL through the verifier, if a verifier mode was asked for.
