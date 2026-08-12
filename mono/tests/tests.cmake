@@ -19,6 +19,7 @@ set(MONO_TESTS_CS_SRC
   arraylist.cs
   assembly-load-remap.cs
   assembly-load-bytes.cs
+  assembly-load-stress.cs
   assembly-loadfile.cs
   assembly-loadfrom.cs
   assembly-load-bytes-bindingredirect.cs
@@ -840,7 +841,6 @@ set(MONO_TESTS_STRESS_SRC
   exit-stress.cs
   process-stress.cs
   spinlock-stress.cs
-  assembly-load-stress.cs
 )
 
 # Process-creation stress; slow enough to need its own timeout.
