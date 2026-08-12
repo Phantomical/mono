@@ -34,16 +34,8 @@ MethodLLVMEmitter::object_new_decl ()
 	return wrapper;
 }
 
-/// Allocate an instance of klass and return the reference.
-///
-/// The same call handles a plain object and the box a value of klass goes
-/// into. If the collector offers a class-specific allocator, that is what a
-/// newobj costs. The allocator is managed code that bumps the thread's
-/// allocation pointer and calls the runtime only when the region is empty.
-/// The collector decides which classes get one, not this function. Boehm
-/// never offers one. SGen declines a class that is finalizable, remotable,
-/// too large, or that has weak fields, and those fall back on the runtime's
-/// allocator.
+/// Allocate an instance of klass and return the reference. Set for_box when
+/// the instance is the box a value of klass goes into.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
