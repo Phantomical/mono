@@ -68,6 +68,7 @@ set(MONO_TESTS_CS_SRC
   exception-invokes.cs
   merp-json-valid.cs
   merp-crash-test.cs
+  dump-state-json-valid.cs
   exception19.cs
   exception20.cs
   exception21.cs

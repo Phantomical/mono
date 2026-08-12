@@ -193,6 +193,12 @@ create_dump_reason_breadcrumb (const char *dump_reason)
 void
 mono_create_crash_hash_breadcrumb (MonoThreadSummary *thread)
 {
+	/* The other two breadcrumbs are written from paths that have already
+	 * checked this; a summarize reaches here whether or not a timeline
+	 * directory was ever configured. */
+	if (!mlog.directory)
+		return;
+
 	char out_file [200];
 	file_for_hash_breadcrumb (mlog.directory, thread->hashes, out_file, sizeof(out_file));
 	create_breadcrumb (out_file);
@@ -1163,9 +1169,8 @@ mono_summarize_native_state_end (MonoStateWriter *writer)
 void
 mono_summarize_native_state_add_thread (MonoStateWriter *writer, MonoThreadSummary *thread, MonoContext *ctx, gboolean crashing_thread)
 {
-	static gboolean not_first_thread = FALSE;
-	mono_native_state_add_thread (writer, thread, ctx, !not_first_thread, crashing_thread);
-	not_first_thread = TRUE;
+	mono_native_state_add_thread (writer, thread, ctx, !writer->any_thread_added, crashing_thread);
+	writer->any_thread_added = TRUE;
 }
 
 void

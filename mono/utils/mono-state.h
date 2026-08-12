@@ -41,6 +41,10 @@ typedef struct {
 	int len;
 	int allocated_len;
 	int indent;
+	/* Whether the threads array already has an entry, and so wants a separator
+	 * before the next one. Per-writer because a process can dump more than
+	 * once. */
+	gboolean any_thread_added;
 } MonoStateWriter;
 
 typedef struct {
