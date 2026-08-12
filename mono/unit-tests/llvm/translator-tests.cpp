@@ -1299,9 +1299,9 @@ TEST_F (TranslatorTest, ValueTypeNewobjConstructsInATemp)
 }
 
 // A string cannot be allocated before its length is known, so nothing is allocated
-// here: the constructor is a creator, and newobj asks the builtin for the object it
-// built. The creator it stands for is the wrapper the runtime publishes for a string
-// constructor, which this backend compiles. How the creator is reached - the null this
+// here: newobj asks the builtin for the object the constructor built. The method it
+// stands for is the wrapper the runtime publishes for a string constructor, which this
+// backend compiles. How that wrapper is reached - the null this
 // it never reads - is settled in LowerBuiltinsPass, and nothing about it is spelled here.
 TEST_F (TranslatorTest, StringNewobjAsksTheBuiltinForTheObject)
 {
@@ -1309,13 +1309,13 @@ TEST_F (TranslatorTest, StringNewobjAsksTheBuiltinForTheObject)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
-	EXPECT_EQ (t.count ("call ptr @\"mono.builtin.creator."
+	EXPECT_EQ (t.count ("call ptr @\"mono.builtin.string_constructor."
 	                    "(wrapper managed-to-managed) string:.ctor"),
 	           1u)
 		<< t.text ();
 	EXPECT_EQ (t.count ("(ptr null"), 0u);
 
-	/* The creator's result is fresh, and its declaration says so. */
+	/* The result is fresh, and the declaration says so. */
 	for (const llvm::Function &decl : t.module->functions ())
 		if (decl.getName ().contains ("string:.ctor")
 		    && !decl.getName ().starts_with ("mono.builtin.")) {
@@ -1323,15 +1323,15 @@ TEST_F (TranslatorTest, StringNewobjAsksTheBuiltinForTheObject)
 		}
 }
 
-// A plain call to a creator is the runtime-invoke wrapper's shape, and it leaves the
-// string behind for the instruction after it: the placeholder this the caller pushed
-// goes no further, and the object is what lands in the local.
+// A plain call to a string constructor is the runtime-invoke wrapper's shape, and it
+// leaves the string behind for the instruction after it: the placeholder this the
+// caller pushed goes no further, and the object is what lands in the local.
 TEST_F (TranslatorTest, StringCtorCalledDirectlyLeavesTheString)
 {
 	const Translation &t = translate ("objects", "Objects:CallStringCtor");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("call ptr @\"mono.builtin.creator."
+	EXPECT_EQ (t.count ("call ptr @\"mono.builtin.string_constructor."
 	                    "(wrapper managed-to-managed) string:.ctor"),
 	           1u)
 		<< t.text ();

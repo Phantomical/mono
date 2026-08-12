@@ -261,15 +261,15 @@ TEST_F (JitExecution, Tier0PipelinePromotesAllocasToSsa)
 	EXPECT_GT (t->count ("add"), 0u);
 }
 
-// The creator's call shape belongs to the pass. What the translator emitted names no
-// this at all; what survives the lowering is the constructor's wrapper - the method
-// the runtime publishes for a string constructor - called with the null this it never
+// The call shape belongs to the pass. What the translator emitted names no this at
+// all. What survives the lowering is the constructor's wrapper - the method the
+// runtime publishes for a string constructor - called with the null this it never
 // reads, and nothing of the builtin left over.
-TEST_F (JitExecution, LowerBuiltinsGivesTheCreatorItsNullThis)
+TEST_F (JitExecution, LowerBuiltinsGivesTheStringConstructorItsNullThis)
 {
 	std::unique_ptr<Translation> t = translate_method ("objects", "Objects:MakeString");
 	ASSERT_NE (t->function, nullptr) << t->error;
-	ASSERT_EQ (t->count ("mono.builtin.creator."), 1u) << t->text ();
+	ASSERT_EQ (t->count ("mono.builtin.string_constructor."), 1u) << t->text ();
 
 	PassBuilder pb;
 	ModuleAnalysisManager mam;

@@ -1106,9 +1106,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (is_virtual && sig->generic_param_count != 0 && !callee_method->is_inflated)
 		return invalid_il ("callvirt on an open generic method");
 
-	// A creator hands back what it built rather than filling in a this.
+	// A string constructor returns what it built rather than filling in a this.
 	if (callee_method->string_ctor)
-		return emit_creator_call (builder, callee_method, sig);
+		return emit_string_constructor_call (builder, callee_method, sig);
 
 	if (m_class_get_rank (callee_method->klass) > 0
 	    && (callee_method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)

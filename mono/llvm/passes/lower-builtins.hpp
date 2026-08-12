@@ -8,11 +8,11 @@
  * one into the real call before the optimizer runs. Keeping the shape here is
  * what stops every opcode that can reach such a method from having to know it.
  *
- * The one builtin so far is the creator. A string constructor has no instance
- * to fill in - a string's length is not known until the arguments have been
+ * The one builtin so far is the string constructor. It has no instance to
+ * fill in - a string's length is not known until the arguments have been
  * read - so the runtime compiles it as a method that builds the string and
- * returns it, taking a this it never looks at. The translator asks only for
- * the object; the null this belongs to the lowering.
+ * returns it, taking a this it never reads. The translator asks only for the
+ * object. The null this belongs to the lowering.
  */
 
 #ifndef MONO_LLVM_PASSES_LOWER_BUILTINS_HPP
@@ -33,7 +33,7 @@ constexpr llvm::StringRef builtin_target_attribute = "mono-builtin-target";
 /// A constructor that returns what it built instead of filling in an instance
 /// the caller allocated. Its builtin takes the constructor's arguments without
 /// the this and yields the object.
-constexpr llvm::StringRef builtin_creator = "creator";
+constexpr llvm::StringRef builtin_string_constructor = "string_constructor";
 
 /// Rewrites every call to a `mono.builtin.*` declaration into the call it
 /// stands for, and erases the declaration. Runs before the optimization

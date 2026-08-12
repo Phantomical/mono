@@ -1,12 +1,12 @@
 /**
  * \file
- * \brief Emitting `mono.builtin.creator` calls for a string constructor.
+ * \brief Emitting `mono.builtin.string_constructor` calls.
  *
  * A string constructor returns the string it builds instead of filling in an
- * instance. `passes/lower-builtins.hpp` says what the `creator` builtin means
- * and how the pass lowers it. This file emits that call. `newobj` reaches it
- * once allocation is skipped. A direct `call` reaches it from the
- * runtime-invoke wrapper.
+ * instance. `passes/lower-builtins.hpp` says what the builtin means and how
+ * the pass lowers it. This file emits that call. `newobj` reaches it once
+ * allocation is skipped. A direct `call` reaches it from the runtime-invoke
+ * wrapper.
  */
 
 #include "method-to-llvm.hpp"
@@ -35,8 +35,8 @@ namespace mono {
 /// known before the constructor reads its arguments. Asking for the object
 /// here keeps that shape out of the opcode that calls it.
 llvm::Expected<llvm::Value *>
-MethodLLVMEmitter::emit_creator (MonoIrBuilder &builder, MonoMethod *ctor,
-                                 llvm::ArrayRef<llvm::Value *> args)
+MethodLLVMEmitter::emit_string_constructor (MonoIrBuilder &builder, MonoMethod *ctor,
+                                            llvm::ArrayRef<llvm::Value *> args)
 {
 	// Callers do not agree on whether ctor already names its wrapper, so ask
 	// again here.
@@ -45,7 +45,7 @@ MethodLLVMEmitter::emit_creator (MonoIrBuilder &builder, MonoMethod *ctor,
 	if (!target)
 		return target.takeError ();
 
-	// A creator hands back an object nothing else holds.
+	// A string constructor returns an object nothing else holds.
 	(*target)->addRetAttr (llvm::Attribute::NoAlias);
 
 	llvm::FunctionType *shape = (*target)->getFunctionType ();
@@ -53,12 +53,12 @@ MethodLLVMEmitter::emit_creator (MonoIrBuilder &builder, MonoMethod *ctor,
 	if (shape->getNumParams () != args.size () + 1)
 		return invalid_il ("wrong number of arguments to a constructor");
 
-	// One declaration per creator name in the module. A filter body gets
+	// One declaration per builtin name in the module. A filter body gets
 	// its own MethodLLVMEmitter, but it shares this module with the method
-	// body. If that other emitter already declared the creator, this
-	// lookup finds it here.
+	// body. If that other emitter already declared this one, the lookup
+	// finds it here.
 	std::string name =
-		(llvm::Twine (builtin_prefix) + builtin_creator + "." + (*target)->getName ())
+		(llvm::Twine (builtin_prefix) + builtin_string_constructor + "." + (*target)->getName ())
 			.str ();
 	llvm::Function *decl = module->getFunction (name);
 
@@ -71,7 +71,7 @@ MethodLLVMEmitter::emit_creator (MonoIrBuilder &builder, MonoMethod *ctor,
 		                                 shape->isVarArg ()),
 			llvm::GlobalValue::ExternalLinkage, name, module);
 		decl->addFnAttr (llvm::Attribute::get (context (), builtin_attribute,
-		                                       builtin_creator));
+		                                       builtin_string_constructor));
 		decl->addFnAttr (llvm::Attribute::get (context (), builtin_target_attribute,
 		                                       (*target)->getName ()));
 	}
@@ -79,23 +79,24 @@ MethodLLVMEmitter::emit_creator (MonoIrBuilder &builder, MonoMethod *ctor,
 	return emit_protected_call (builder, decl, args);
 }
 
-/// A plain call to a creator leaves the object it built on the stack.
+/// A plain call to a string constructor leaves the object it built on the stack.
 ///
 /// Ordinary IL reaches a constructor through newobj. Only the runtime-invoke
 /// wrapper calls a constructor directly, since reflection has no instance to
 /// hand over either. It pushes a placeholder this, calls the constructor, and
 /// stores what comes back.
 llvm::Error
-MethodLLVMEmitter::emit_creator_call (MonoIrBuilder &builder, MonoMethod *ctor,
-                                      MonoMethodSignature *sig)
+MethodLLVMEmitter::emit_string_constructor_call (MonoIrBuilder &builder, MonoMethod *ctor,
+                                                 MonoMethodSignature *sig)
 {
 	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
 	if (!args)
 		return args.takeError ();
 
-	// The placeholder goes no further. The creator's own this comes from the pass.
+	// The placeholder goes no further. The null this comes from the pass.
 	llvm::Expected<llvm::Value *> created =
-		emit_creator (builder, ctor, llvm::ArrayRef (*args).drop_front (sig->hasthis));
+		emit_string_constructor (builder, ctor,
+		                         llvm::ArrayRef (*args).drop_front (sig->hasthis));
 
 	if (!created)
 		return created.takeError ();

@@ -157,8 +157,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	 * The runtime answers some constructors with a marshalling wrapper: every
 	 * string constructor, and a handful of other internal-call ones. This
 	 * backend enters the constructor at that wrapper and compiles it like any
-	 * other method. The creator path below asks for the same retarget on its
-	 * own.
+	 * other method. The string-constructor path below asks for the same
+	 * retarget on its own.
 	 */
 	ctor = icall_wrapper_target (ctor);
 
@@ -192,13 +192,13 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 	/*
 	 * A string's length is not known before its constructor runs, so nothing
-	 * can allocate it in advance. Its constructor is a creator: it builds the
-	 * string instead of filling in an instance. There is nothing to allocate
+	 * can allocate it in advance. Its constructor builds the string instead of
+	 * filling in an instance. There is nothing to allocate
 	 * here. The object arrives from the call.
 	 */
 	if ((*target)->string_ctor) {
 		llvm::Expected<llvm::Value *> created =
-			emit_creator (builder, ctor, llvm::ArrayRef (args).drop_front ());
+			emit_string_constructor (builder, ctor, llvm::ArrayRef (args).drop_front ());
 
 		if (!created)
 			return created.takeError ();

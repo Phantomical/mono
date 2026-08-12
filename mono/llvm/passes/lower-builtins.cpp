@@ -25,11 +25,11 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// The creator keeps the this every instance method's signature has - the
-/// runtime hands it a null and its body never reads it - so the call it stands
-/// for is the same call with that null in front.
+/// A string constructor keeps the this every instance method's signature has -
+/// the runtime gives it a null and its body never reads it - so the call it
+/// stands for is the same call with that null in front.
 void
-lower_creator (CallBase *site, Function *target)
+lower_string_constructor (CallBase *site, Function *target)
 {
 	IRBuilder<> b (site);
 	SmallVector<Value *, 8> args;
@@ -88,14 +88,14 @@ LowerBuiltinsPass::run (Module &m, ModuleAnalysisManager &)
 			if (auto *site = dyn_cast<CallBase> (user))
 				sites.push_back (site);
 
-		if (kind == builtin_creator) {
+		if (kind == builtin_string_constructor) {
 			if (target->arg_size () != decl->arg_size () + 1)
-				report_fatal_error (Twine ("creator ") + name
+				report_fatal_error (Twine ("string constructor ") + name
 				                    + " does not take a this and the arguments of "
 				                    + decl->getName ());
 
 			for (CallBase *site : sites)
-				lower_creator (site, target);
+				lower_string_constructor (site, target);
 		} else {
 			report_fatal_error (Twine ("unknown ") + builtin_attribute + " kind '"
 			                    + kind + "' on " + decl->getName ());
