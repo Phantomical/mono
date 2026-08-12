@@ -7774,10 +7774,11 @@ interp_frame_get_ip (MonoInterpFrameHandle frame)
  *   Return the frame a thread stopped at inside the interpreter, or NULL if it did
  * not stop there. A stack walk starts an interpreted frame iterator from this.
  *
- * The lmf is the head of the chain the walk itself will follow.
+ * The lmf is the head of the chain the walk itself will follow, and sp is the stack
+ * pointer the walk starts from. Both must describe the thread being walked.
  */
 static gpointer
-interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf)
+interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf, gpointer sp)
 {
 	g_assert (jit_tls);
 	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
@@ -7798,7 +7799,8 @@ interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf)
 	/*
 	 * The interpreter publishes a frame for as long as it runs one, so the frame alone
 	 * does not say whether the loop is the innermost thing on this thread. Ask the LMF
-	 * chain, and ask it by address rather than by kind.
+	 * chain, and ask it by address. The kind will not do: native code called from the
+	 * interpreter pushes its own plain MonoLMF over the interp-exit marker.
 	 *
 	 * The stack grows down, so a more recent frame has a lower address. A callout from
 	 * the loop - a jit call, an icall, the debugger tramp - puts its MonoLMFExt in a
@@ -7806,11 +7808,12 @@ interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf)
 	 * invocation, because those are alloca'd in interp_exec_method itself. An entry that
 	 * the chain already held belongs to an outer frame and is above all of them.
 	 *
-	 * Both addresses come from the same stack, so the comparison is meaningful. An lmf
-	 * below the frame means the interpreter called out, and the interp-exit marker on
-	 * the chain describes the frames from here on.
+	 * Only an lmf on the walked thread's stack can be compared this way. Under
+	 * --interpreter the head of the chain is off that stack and far below it, and reads
+	 * as a callout that did not happen. The stack pointer is the bound: nothing live on
+	 * this stack sits below it.
 	 */
-	if (lmf && (gsize)lmf < (gsize)frame)
+	if (lmf && (gsize)sp <= (gsize)lmf && (gsize)lmf < (gsize)frame)
 		return NULL;
 
 	return frame;

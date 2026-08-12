@@ -1082,10 +1082,6 @@ set(MONO_TESTS_INTERP_DISABLED
   ccw-class-iface.exe
   bug-60862.exe
   bug-48015.exe
-  # Under --interpreter a thread suspended inside interpreted code is walked as
-  # no frames at all, so this test has nothing to look at there. It measures the
-  # offsets of those frames, which the other two engines do report.
-  interp-frame-native-offset.exe
 )
 
 # Additionally excluded at the default tier, where a method starts interpreted

@@ -121,7 +121,7 @@ stub_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_index, gpo
 
 /* Reached on any stack walk, so it answers rather than asserting. */
 static gpointer
-stub_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf)
+stub_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf, gpointer sp)
 {
 	return NULL;
 }

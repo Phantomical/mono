@@ -15,7 +15,7 @@
 #ifndef __MONO_EE_H__
 #define __MONO_EE_H__
 
-#define MONO_EE_API_VERSION 0x15
+#define MONO_EE_API_VERSION 0x16
 
 typedef struct _MonoInterpStackIter MonoInterpStackIter;
 
@@ -45,7 +45,7 @@ typedef gpointer MonoInterpFrameHandle;
 	MONO_EE_CALLBACK (void, get_resume_state, (const MonoJitTlsData *jit_tls, gboolean *has_resume_state, MonoInterpFrameHandle *interp_frame, gpointer *handler_ip)) \
 	MONO_EE_CALLBACK (gboolean, run_finally, (StackFrameInfo *frame, int clause_index, gpointer handler_ip, gpointer handler_ip_end)) \
 	MONO_EE_CALLBACK (gboolean, run_filter, (StackFrameInfo *frame, MonoException *ex, int clause_index, gpointer handler_ip, gpointer handler_ip_end)) \
-	MONO_EE_CALLBACK (gpointer, get_stopped_frame, (const MonoJitTlsData *jit_tls, MonoLMF *lmf)) \
+	MONO_EE_CALLBACK (gpointer, get_stopped_frame, (const MonoJitTlsData *jit_tls, MonoLMF *lmf, gpointer sp)) \
 	MONO_EE_CALLBACK (void, release_abandoned_handles, (MonoJitTlsData *jit_tls, gpointer resume_sp)) \
 	MONO_EE_CALLBACK (int, il_offset_from_native_offset, (MonoDomain *domain, MonoMethod *method, int native_offset)) \
 	MONO_EE_CALLBACK (int, frame_il_offset, (MonoInterpFrameHandle frame, int native_offset)) \
