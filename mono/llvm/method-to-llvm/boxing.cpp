@@ -1,5 +1,4 @@
 #include "method-to-llvm.hpp"
-#include "mono/metadata/object-forward.h"
 #include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
@@ -17,6 +16,7 @@ extern "C" {
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
+#include <llvm/Support/ErrorHandling.h>
 
 namespace mono {
 
@@ -45,12 +45,13 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	int32_t size = mono_class_instance_size (klass);
 	MonoMethod *allocator = nullptr;
 
-	// strings should have been handled by the caller
+	// The caller handles a string constructor before it gets here.
 	if (m_class_get_byval_arg (klass)->type == MONO_TYPE_STRING)
 		llvm::reportFatalInternalError ("emit_object_alloc does not support strings");
 
-	if (size != 0 && size < MONO_ABI_SIZEOF(MonoObject))
-		llvm::reportFatalInternalError("object size was smaller than sizeof(MonoObject)");
+	if (size != 0 && size < MONO_ABI_SIZEOF (MonoObject))
+		llvm::reportFatalInternalError (
+			"instance size is smaller than MonoObject");
 
 	// size == 0 means that the class has no known layout. Managed allocators
 	// need an actual size so we skip in that case.
