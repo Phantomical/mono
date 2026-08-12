@@ -5244,19 +5244,28 @@ mono_debugger_agent_send_crash (char *json_dump, MonoStackHash *hashes, int paus
 	array.pdata = pdata;
 	array.len = 1;
 
-	mono_loader_lock ();
-	events = create_event_list (EVENT_KIND_CRASH, &array, NULL, NULL, &suspend_policy);
-	mono_loader_unlock ();
+	/*
+	 * A thread that faults holding the domain lock arrives here still holding
+	 * it, and the debugger thread takes the loader lock before the domain lock.
+	 * Waiting for the loader lock closes that cycle and hangs the process. The
+	 * dump is already written, so give up the crash event rather than the exit.
+	 */
+	if (mono_loader_trylock ()) {
+		events = create_event_list (EVENT_KIND_CRASH, &array, NULL, NULL, &suspend_policy);
+		mono_loader_unlock ();
 
-	ei.dump = json_dump;
-	ei.hashes = hashes;
+		ei.dump = json_dump;
+		ei.hashes = hashes;
 
-	g_assert (events != NULL);
+		g_assert (events != NULL);
 
-	process_event (EVENT_KIND_CRASH, &ei, 0, NULL, events, suspend_policy);
+		process_event (EVENT_KIND_CRASH, &ei, 0, NULL, events, suspend_policy);
 
-	// Don't die before it is sent.
-	sleep (4);
+		// Don't die before it is sent.
+		sleep (4);
+	} else {
+		g_async_safe_printf ("Cannot tell the debugger about the crash: the loader lock is not free.\n");
+	}
 #endif
 	MONO_EXIT_GC_UNSAFE;
 }

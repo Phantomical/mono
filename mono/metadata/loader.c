@@ -149,6 +149,26 @@ mono_loader_lock (void)
 }
 
 /**
+ * mono_loader_trylock:
+ *
+ * Takes the loader lock if it is free, and returns TRUE when this thread now
+ * holds it. This is for a caller that cannot afford to wait: a thread that
+ * already holds another runtime lock can complete a cycle here and hang the
+ * process.
+ */
+gboolean
+mono_loader_trylock (void)
+{
+	if (mono_coop_mutex_trylock (&loader_mutex) != 0)
+		return FALSE;
+	mono_locks_lock_acquired (LoaderLock, &loader_mutex);
+	if (G_UNLIKELY (loader_lock_track_ownership)) {
+		mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) + 1));
+	}
+	return TRUE;
+}
+
+/**
  * mono_loader_unlock:
  */
 void

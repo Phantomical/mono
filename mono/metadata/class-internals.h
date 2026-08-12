@@ -1131,6 +1131,9 @@ mono_loader_cleanup        (void);
 void
 mono_loader_lock           (void);
 
+gboolean
+mono_loader_trylock        (void);
+
 void
 mono_loader_unlock         (void);
 
