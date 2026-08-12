@@ -8616,6 +8616,67 @@ mono_test_ccw_query_interface (IUnknown *iface)
 	return 0;
 }
 
+/*
+ * A HandleRef argument is two words as the managed type and one word once the
+ * marshalling wrapper has extracted the handle. Anything that walks the
+ * argument list has to step by the marshalled size, or every argument after
+ * the HandleRef arrives shifted by a word.
+ *
+ * These take a distinctive value in each parameter and return a bitmask of the
+ * ones that did not arrive, so a failure names the first bad argument instead
+ * of faulting on whatever the shifted value happens to point at.
+ */
+
+#define CHECK_ARG(n, got, want) do { if ((got) != (want)) bad |= 1 << (n); } while (0)
+
+LIBTEST_API int STDCALL
+mono_test_handleref_7 (void *a, void *b, void *c, void *d, void *e, void *f, void *g)
+{
+	int bad = 0;
+	CHECK_ARG (0, a, (void*)0xa1); CHECK_ARG (1, b, (void*)0xb2);
+	CHECK_ARG (2, c, (void*)0xc3); CHECK_ARG (3, d, (void*)0xd4);
+	CHECK_ARG (4, e, (void*)0xe5); CHECK_ARG (5, f, (void*)0xf6);
+	CHECK_ARG (6, g, (void*)0x97);
+	return bad;
+}
+
+LIBTEST_API int STDCALL
+mono_test_handleref_6 (void *a, void *b, void *c, void *d, void *e, void *f)
+{
+	int bad = 0;
+	CHECK_ARG (0, a, (void*)0xa1); CHECK_ARG (1, b, (void*)0xb2);
+	CHECK_ARG (2, c, (void*)0xc3); CHECK_ARG (3, d, (void*)0xd4);
+	CHECK_ARG (4, e, (void*)0xe5); CHECK_ARG (5, f, (void*)0xf6);
+	return bad;
+}
+
+LIBTEST_API int STDCALL
+mono_test_handleref_float (void *a, void *b, int c, float d, void **out)
+{
+	int bad = 0;
+	CHECK_ARG (0, a, (void*)0xa1); CHECK_ARG (1, b, (void*)0xb2);
+	CHECK_ARG (2, c, 7); CHECK_ARG (3, d, 1.0f);
+	if (!out)
+		bad |= 1 << 4;
+	else if (bad == 0)
+		/* Only once the earlier arguments line up is this a pointer we own
+		 * rather than whatever the argument list shifted into place. */
+		*out = (void*)0x5150;
+	return bad;
+}
+
+LIBTEST_API int STDCALL
+mono_test_handleref_mid (void *a, void *b, void *c, int d, float e)
+{
+	int bad = 0;
+	CHECK_ARG (0, a, (void*)0xa1); CHECK_ARG (1, b, (void*)0xb2);
+	CHECK_ARG (2, c, (void*)0xc3); CHECK_ARG (3, d, 7);
+	CHECK_ARG (4, e, 1.0f);
+	return bad;
+}
+
+#undef CHECK_ARG
+
 #ifdef __cplusplus
 } // extern C
 #endif

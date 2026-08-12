@@ -1290,12 +1290,19 @@ get_arg_offset_fast (InterpMethod *imethod, int index)
 static guint32
 get_arg_offset (InterpMethod *imethod, MonoMethodSignature *sig, int index)
 {
-	if (imethod) {
+	/*
+	 * A managed-to-native wrapper is entered with one signature and calls out
+	 * with another, and at the native call the frame holds the marshalled
+	 * values, laid out under the second. The cached offsets describe the first
+	 * only, so they answer for the signature they were built from and nothing
+	 * else. HandleRef is where the difference shows: two words as the managed
+	 * type, one word once the wrapper has extracted the handle.
+	 */
+	if (imethod && sig == mono_method_signature_internal (imethod->method))
 		return get_arg_offset_fast (imethod, index);
-	} else {
-		g_assert (!sig->hasthis);
-		return compute_arg_offset (sig, index, -1);
-	}
+
+	g_assert (!sig->hasthis);
+	return compute_arg_offset (sig, index, -1);
 }
 
 #ifdef MONO_ARCH_HAVE_INTERP_ENTRY_TRAMPOLINE

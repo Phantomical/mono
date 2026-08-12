@@ -77,6 +77,7 @@ set(MONO_TESTS_CS_SRC
   static-constructor.cs
   pinvoke.cs
   pinvoke-utf8.cs
+  pinvoke-handleref.cs
   pinvoke3.cs
   pinvoke11.cs
   pinvoke13.cs
