@@ -532,4 +532,47 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - A file doc comment says what the file is for. Leave the mechanism to the implementation,
   which the reader can see.
 - In C++, `//` is the normal comment. Reach for `/* */` when a block genuinely runs to several
-  paragraphs, not for one-line remarks.
+  paragraphs, not for one-line remarks. Doc comments use `///`, or `/** */` when they run long.
+- Do not say who includes a file or who calls a function. That goes stale the first time
+  someone adds a caller, and a reader who wants the list can grep for it.
+- Do not restate what the reader already has. The file extension says it is C++, the
+  signature says what the parameters are, and a name that reads as what it does needs no
+  gloss.
+- Do not repeat a fact that is documented where it lives. Two copies disagree eventually,
+  and the copy a reader finds first is the one they believe. Point at the home, or say
+  nothing.
+
+### A comment is a claim
+
+Treat every comment that names something — an identifier, a file, a section, a pass, an
+environment variable — as an assertion to be checked, and grep it before you keep it. Across
+the first ten files of the `mono/llvm/` comment sweep this was by a wide margin the most
+productive check. It removed twelve false claims, and the worst of them named things that
+do not exist: a type with no definition anywhere, a class name that was never written, a
+function attributed to a file that has never been in the tree. None of them cost the code
+anything and each cost every future reader a failed grep. The same applies when writing:
+assert a mechanism only
+after observing it, because where a cheap observation exists it beats reasoning about what
+the code probably does.
+
+### Register
+
+Comments here follow ASD-STE100 Simplified Technical English, descriptive register. It is
+not a style preference — the constraints happen to strip out exactly the padding that makes
+a comment take three reads.
+
+- Twenty-five words a sentence, maximum. Split anything longer.
+- Active voice. Passive only when the actor is genuinely unknown.
+- The only modals are can, will and must. Never should, would, may, might or could. A
+  requirement is "must" and a possibility is "can".
+- No semicolons. Write two sentences.
+- Put a condition before its consequence. "If the class is not loaded, the translator
+  declines", not the other way round.
+- No Latin abbreviations. Write "for example" and "that is", and name the items rather than
+  trailing off into "etc.".
+- No `-ing` form as a verb. The pass rewrites the call, it is not rewriting it.
+- One term for one thing, throughout a file.
+- Cut filler on sight: simply, just, note that, it is worth noting, essentially, basically,
+  actually, of course, obviously.
+- Do not buy brevity by dropping words. Keep the articles and keep "that" — terse and
+  simple are different things, and only one of them is the goal.
