@@ -5602,11 +5602,20 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_CHECKPOINT)
+			/*
+			 * The runtime stops this thread here and walks its stack, so the frame
+			 * has to say which instruction it is on. The +1 offsets the subtraction
+			 * interp_frame_get_ip does for call sites.
+			 */
+			frame->state.ip = ip + 1;
 			/* Do synchronous checking of abort requests */
 			EXCEPTION_CHECKPOINT;
+			frame->state.ip = NULL;
 			++ip;
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_SAFEPOINT)
+			/* Publish the ip for the poll, as MINT_CHECKPOINT does. */
+			frame->state.ip = ip + 1;
 			/* Do synchronous checking of abort requests */
 			EXCEPTION_CHECKPOINT;
 			if (G_UNLIKELY (mono_polling_required)) {
@@ -5615,6 +5624,7 @@ call:
 				mono_threads_safepoint ();
 				context_clear_safepoint_frame (context);
 			}
+			frame->state.ip = NULL;
 			++ip;
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_LDFLDA_UNSAFE) {
@@ -7732,6 +7742,14 @@ interp_frame_get_ip (MonoInterpFrameHandle frame)
 
 	g_assert (iframe->imethod);
 	/*
+	 * The interpreter keeps the ip of a running frame in a local variable, and writes
+	 * state.ip only where the frame stops. A running frame therefore has no ip to
+	 * report, and the subtraction below turns a NULL into an address that looks correct.
+	 */
+	if (!iframe->state.ip)
+		return NULL;
+
+	/*
 	 * For calls, state.ip points to the instruction following the call, so we need to subtract
 	 * in order to get inside the call instruction range. Other instructions that set the IP for
 	 * the rest of the runtime to see, like throws and sdb breakpoints, will need to account for
@@ -7829,8 +7847,9 @@ interp_frame_iter_next (MonoInterpStackIter *iter, StackFrameInfo *frame)
 		frame->type = FRAME_TYPE_MANAGED_TO_NATIVE;
 	} else {
 		frame->type = FRAME_TYPE_INTERP;
-		/* This is the offset in the interpreter IR. */
-		frame->native_offset = (guint8*)interp_frame_get_ip (iframe) - (guint8*)iframe->imethod->code;
+		/* The offset in the interpreter IR. It is -1 if the frame has no ip. */
+		gpointer ip = interp_frame_get_ip (iframe);
+		frame->native_offset = ip ? (int)((guint8*)ip - (guint8*)iframe->imethod->code) : -1;
 		if (!method->wrapper_type || method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD)
 			frame->managed = TRUE;
 	}
