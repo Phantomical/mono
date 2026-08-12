@@ -962,15 +962,17 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 		// an empty evaluation stack, plus a handler's first instruction, where
 		// the stack holds only the exception.
 		//
-		// Both the debugger's stops and the line table are placed from it. The
-		// line table records the statement rather than the instruction. A reader
-		// hands an offset it reads back to mono-symbolicate. mono-symbolicate
-		// resolves an offset that is not a sequence point to the next one after
-		// it. So `throw new E ()` reports the line of whatever follows the throw.
+		// The debugger's stops go at those statement starts. The line table
+		// instead records each instruction's own offset, because a frame's IL
+		// offset is read from it: a frame below the top names the call or the
+		// throw that gave up control, not the statement that contains it.
+		// mono_debug_symfile_lookup_location () keeps the last statement at or
+		// before an offset, so a source line is still correct for an offset
+		// that starts no statement.
 		if (wants_seq_point_at (offset))
 			statement_offset = offset;
 
-		set_il_location (builder, statement_offset);
+		set_il_location (builder, offset);
 		if (wants_seq_point_at (offset))
 			emit_seq_point (builder, (uint32_t) offset);
 

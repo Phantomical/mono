@@ -4383,22 +4383,6 @@ handle_stelem (TransformData *td, int op)
 	++td->ip;
 }
 
-/// Whether OFFSET is where a catch, filter or finally body begins.
-static gboolean
-interp_is_handler_start (MonoMethodHeader *header, int offset)
-{
-	for (guint i = 0; i < header->num_clauses; i++) {
-		MonoExceptionClause *c = &header->clauses [i];
-
-		if ((int) c->handler_offset == offset)
-			return TRUE;
-		if (c->flags == MONO_EXCEPTION_CLAUSE_FILTER && (int) c->data.filter_offset == offset)
-			return TRUE;
-	}
-
-	return FALSE;
-}
-
 static gboolean
 generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, MonoGenericContext *generic_context, MonoError *error)
 {
@@ -4638,17 +4622,6 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 		}
 		td->offset_to_bb [in_offset] = td->cbb;
 		td->in_start = td->ip;
-
-		/*
-		 * A statement starts where the symbol file says one does, and where it
-		 * has nothing to say, where the evaluation stack is empty - plus the
-		 * first instruction of a handler, which holds only the exception.
-		 */
-		if (!inlining
-		    && (sym_seq_points
-		        ? mono_bitset_test_fast (seq_point_locs, in_offset)
-		        : (td->sp == td->stack || interp_is_handler_start (header, in_offset))))
-			mono_bitset_set_fast (td->statement_locs, in_offset);
 
 		if (in_offset == bb->end)
 			bb = bb->next;
@@ -7705,17 +7678,6 @@ get_inst_length (InterpInst *ins)
 }
 
 
-/// The offset of the statement OFFSET belongs to.
-static int
-statement_for_il_offset (TransformData *td, int offset)
-{
-	for (int i = offset; i >= 0; i--)
-		if (mono_bitset_test_fast (td->statement_locs, i))
-			return i;
-
-	return offset;
-}
-
 static guint16*
 emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpInst *ins)
 {
@@ -7730,7 +7692,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpInst *in
 
 		MonoDebugLineNumberEntry lne;
 		lne.native_offset = (guint8*)start_ip - (guint8*)td->new_code;
-		lne.il_offset = statement_for_il_offset (td, ins->il_offset);
+		lne.il_offset = ins->il_offset;
 		g_array_append_val (td->line_numbers, lne);
 	}
 
@@ -8665,9 +8627,6 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 	td->in_offsets = (int*)g_malloc0((header->code_size + 1) * sizeof(int));
 	td->clause_indexes = (int*)g_malloc (header->code_size * sizeof (int));
 	td->mempool = mono_mempool_new ();
-	td->statement_locs = mono_bitset_mem_new (
-		mono_mempool_alloc0 (td->mempool, mono_bitset_alloc_size (header->code_size, 0)),
-		header->code_size, 0);
 	td->mem_manager = m_method_get_mem_manager (rtm->domain, method);
 	td->n_data_items = 0;
 	td->max_data_items = 0;
