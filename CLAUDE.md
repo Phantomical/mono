@@ -360,10 +360,13 @@ MONO_PATH=build/mcs/class/lib/net_4_x \
 ## Architecture of the backend (`mono/llvm/`)
 
 Everything here is **C++**, and a header that only C++ includes is a `.hpp`. The
-extension is the rule: a `.h` here is reachable from mono's C sources, so its
-declarations sit inside `MONO_BEGIN_DECLS` and can only name types C can see.
-`runtime.h` is the interface the C runtime compiles methods through, and its whole
-surface is thirteen functions. Keep it that small.
+extension is the rule: a `.h` is reachable from something that is not C++, so it
+holds only what that other language can read. There are two of them. `runtime.h`
+is the interface the C runtime compiles methods through. Its declarations sit
+inside `MONO_BEGIN_DECLS` and can only name types C can see, and its whole surface
+is thirteen functions. Keep it that small. `arch/amd64/interp-entry-offsets.h` is
+read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing but
+`#define`s.
 
 - **`runtime.h` + `runtime/`** — the engine. `runtime/entrypoints.cpp` is the boundary:
   `mono_llvm_jit_compile_method ()` compiles a method into a domain's linker and hands
