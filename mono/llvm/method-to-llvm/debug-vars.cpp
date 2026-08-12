@@ -1,24 +1,26 @@
 /**
  * \file
- * \brief Giving every argument and local one frame home, for the debugger.
+ * \brief Pins arguments and locals to frame slots so a debugger can find them.
  *
- * A MonoDebugVarInfo names exactly one place a variable lives, for the whole
- * method. That is not a description an optimized body can be given honestly - a
- * value moves between registers and is dead over the stretches where nothing
- * needs it - so the only way to answer the question truthfully is to make the
- * answer true: keep each argument and local in the entry-block alloca it starts
- * out in, and hand the debugger that slot.
+ * A MonoDebugVarInfo names one place where a variable lives, for the whole
+ * method. An optimized body cannot answer that question honestly. A value
+ * moves between registers, and it is dead over the stretches where nothing
+ * needs it. So this file makes the answer true instead. It keeps each
+ * argument and local in the entry-block alloca it starts in, and it hands
+ * that slot to the debugger.
  *
- * The stackmap emitted here does both halves at once. It is a use of the alloca
- * that is neither a load nor a store, so mem2reg and SROA leave the slot alone
- * and every ldloc/stloc stays a real access of it; and its operand is resolved
- * against the laid-out frame during codegen, so the record LLVM writes into
- * `.llvm_stackmaps` says which register each slot is addressed off and at what
- * displacement - which is exactly what a MONO_DEBUG_VAR_ADDRESS_MODE_REGOFFSET
- * variable is. jinfo.cpp reads the record back and publishes it.
+ * One stackmap intrinsic call does both halves of the job. The intrinsic
+ * uses the alloca directly. It is neither a load nor a store, so mem2reg and
+ * SROA leave the slot alone. Every ldloc or stloc on that variable stays a
+ * real memory access. LLVM also resolves the intrinsic's operand against the
+ * laid-out frame during codegen. The `.llvm_stackmaps` record it writes says
+ * which register each slot sits at, and at what displacement. That is
+ * exactly what a MONO_DEBUG_VAR_ADDRESS_MODE_REGOFFSET variable needs.
+ * jinfo.cpp reads that record and publishes it.
  *
- * This costs real code quality, so it only happens when something is going to
- * read it: a debugger is attached, or a profiler asked for call contexts.
+ * This costs code quality, so it happens only when something will read the
+ * result. That is true when a debugger is attached, or when a profiler
+ * asked for call contexts.
  */
 
 #include "method-to-llvm.hpp"
@@ -30,22 +32,22 @@
 
 namespace mono {
 
-/// Whether this method's arguments and locals should be pinned to frame slots.
+/// Reports whether this method must pin its arguments and locals to frame
+/// slots for a debugger or profiler to read.
 bool
 MethodLLVMEmitter::debug_var_slots_wanted () const
 {
 	/*
-	 * A filter body reaches the parent frame's slots through llvm.localrecover
-	 * rather than holding any of its own, and a wrapper with a native signature
-	 * spills its arguments in the marshalled layout - neither is a frame the
-	 * debugger's picture of the method describes.
+	 * A filter body has no allocas of its own. It reaches the parent frame's
+	 * slots through llvm.localrecover. A wrapper with a native signature
+	 * spills its arguments in the marshalled layout instead. Neither shape
+	 * matches the frame the debugger's picture of the method describes.
 	 */
 	if (filter_mode || native_signature ())
 		return false;
 
 	/*
-	 * mdb_optimizations is what the runtime turns on when a debugger attaches;
-	 * it is the same switch mini's own variable info hangs off. The profiler
+	 * mdb_optimizations turns on once the debugger agent starts. The profiler
 	 * flags are the other reader: a call-context callback asks for a frame's
 	 * locals through the same MonoDebugMethodJitInfo.
 	 */
@@ -55,12 +57,11 @@ MethodLLVMEmitter::debug_var_slots_wanted () const
 	                  != 0;
 }
 
-/// Pin this frame's arguments and locals and record where they landed, and say
-/// whether anything was pinned.
+/// Emits one stackmap marker naming every pinned argument and local slot in
+/// this frame, and returns whether it emitted one.
 ///
-/// One marker for the whole frame, arguments first and then locals, which is the
-/// order the reader joins its locations back against the method's signature and
-/// header.
+/// Arguments come first, then locals, in the order jinfo.cpp joins each slot
+/// back against the method's signature and header.
 bool
 MethodLLVMEmitter::emit_debug_var_marker (MonoIrBuilder &builder)
 {

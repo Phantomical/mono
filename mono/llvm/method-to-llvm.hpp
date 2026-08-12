@@ -2,9 +2,9 @@
  * \file
  * \brief Conversion between CIL and LLVM IR.
  *
- * This file implements the lowering of CIL to LLVM IR. The implementation
- * details are within the MethodLLVMEmitter class, which is implemented across
- * a number of different source files in the method-to-llvm directory.
+ * MethodLLVMEmitter translates one method's IL into LLVM IR. Its
+ * implementation spans multiple files in the method-to-llvm directory, split
+ * by opcode family.
  */
 
 #ifndef MONO_LLVM_METHOD_TO_LLVM_HPP
@@ -44,9 +44,10 @@ namespace mono {
 /// graph it steps over.
 using SeqPointGraph = std::map<uint32_t, std::vector<uint32_t>>;
 
-/// The instructions that take two operands from one of the tables in ECMA-335 III.1.5,
-/// grouped by the table that says what each one accepts: Table III.2 binary numeric,
-/// Table III.5 integer, Table III.6 shift, Table III.7 overflow arithmetic.
+/// CIL instructions that take two operands from a table in ECMA-335 III.1.5.
+/// Table III.2 covers binary numeric operations, Table III.5 integer
+/// operations, Table III.6 shift operations, and Table III.7 overflow
+/// arithmetic.
 enum class BinaryOp {
 	Add,
 	Div,
@@ -83,11 +84,12 @@ enum class BinaryOp {
 	SubOvfUn,
 };
 
-/// The six types the CLI tracks on the evaluation stack (ECMA-335 III.1.5), and a
-/// seventh for everything that cannot appear as an operand of one.
+/// The six types the CLI tracks on the evaluation stack, listed in ECMA-335
+/// III.1.5. A seventh, Invalid, covers everything that cannot appear as an
+/// operand of one.
 ///
-/// This is the axis every operand table in III.1.5 is indexed by, so the arithmetic and
-/// conversion tables are both laid out along it.
+/// This is the axis every operand table in III.1.5 indexes by, so the
+/// arithmetic and conversion tables are both laid out along it.
 enum StackType { Int32, Int64, NativeInt, Float, ManagedPtr, ObjectRef, Invalid };
 
 constexpr size_t STACK_TYPE_COUNT = ObjectRef + 1;
@@ -114,13 +116,13 @@ struct MonoLLVMMethod {
 	llvm::Function *function;
 };
 
-/// A symbol the emitted module leaves for the engine to resolve, and the runtime
-/// object behind it.
+/// A symbol the emitted module leaves for the engine to resolve, and the
+/// runtime object behind it.
 ///
-/// The names are built out of metadata (a class's full name, a method's signature),
-/// and taking one apart again to find what it was built from is neither cheap nor
-/// reliable. So the translator says what it meant as it goes, and the engine looks
-/// nothing up by name.
+/// The names are built from metadata, such as a class's full name or a
+/// method's signature. It is neither cheap nor reliable to parse a name back
+/// into what built it, so the translator states what it meant as it goes. The
+/// engine never looks anything up by name.
 struct ExternalSymbol {
 	enum class Kind {
 		Class,   ///< `object` is the MonoClass this names
@@ -149,15 +151,15 @@ private:
 
 	/// A value on the evaluation stack, with the type the CLI tracks it as.
 	///
-	/// LLVM's own type is not enough to decide what an instruction may do with it:
-	/// i64 covers both int64 and native int, and a pointer covers both a managed
-	/// pointer and an object reference, which are the distinctions the operand
-	/// tables in ECMA-335 III.1.5 turn on.
+	/// LLVM's own type does not say what an instruction can do with a value.
+	/// An i64 covers both int64 and native int, and a pointer covers both a
+	/// managed pointer and an object reference. Those are the distinctions
+	/// the operand tables in ECMA-335 III.1.5 turn on.
 	///
-	/// A value class is not here at all: `value` is the address of the frame slot
-	/// holding it - see held_in_memory (). `native` says that slot is in the
-	/// marshalled layout rather than the managed one, which the MonoType alone
-	/// cannot say.
+	/// A value class is not here at all. `value` is the address of the frame
+	/// slot that holds it - see held_in_memory (). `native` says that slot is
+	/// in the marshalled layout rather than the managed one, which the
+	/// MonoType alone cannot say.
 	struct StackValue {
 		llvm::Value *value;
 		MonoType *type;
@@ -181,24 +183,25 @@ private:
 	/*
 	 * A block the IL branches to, and the evaluation stack it is entered holding.
 	 *
-	 * Values that are live across a branch go through memory rather than through phis
-	 * this translator builds itself: the arguments and the locals already work that
-	 * way, so mem2reg is already what turns this function's stores into SSA, and
-	 * spilling needs to know only how deep the stack is at a join - never what is on
-	 * it. Building phis directly would need the types up front, which is a whole
-	 * dataflow pass over the method before a single instruction could be emitted.
+	 * Values that are live across a branch go through memory, not through phis
+	 * this translator builds itself. The arguments and the locals already work
+	 * this way, so mem2reg already turns this function's stores into SSA.
+	 * Spilling needs to know only how deep the stack is at a join, never what
+	 * value sits on it. Building phis directly needs the types up front. That
+	 * needs a whole dataflow pass over the method before the translator emits
+	 * a single instruction.
 	 */
 	struct Block {
 		llvm::BasicBlock *block = nullptr;
 		std::vector<Slot> entry;
 		bool entry_known = false;
-		/// Whether control can actually get here. A block nothing reaches has
+		/// Whether control can reach this block. A block nothing reaches has
 		/// no entry stack, so its body is never translated.
 		bool reachable = false;
 	};
 
-	/// Where control can go from a single instruction: the offset just past it, and
-	/// every branch target it names.
+	/// Where control can go from a single instruction: the offset immediately
+	/// past it, and every branch target it names.
 	struct Flow {
 		MonoOpcodeEnum opcode = MonoOpcodeEnum_Invalid;
 		size_t next = 0;
@@ -215,8 +218,8 @@ private:
 	MonoCompile *cfg;
 	MonoMethod *method;
 
-	/// Where the symbols this method leaves unresolved are reported, or null when
-	/// nothing is collecting them.
+	/// Where this emitter reports the symbols it leaves unresolved, or null
+	/// when nothing collects them.
 	std::vector<ExternalSymbol> *externals = nullptr;
 
 	llvm::DenseMap<MonoMethod *, llvm::Function *> declarations;
@@ -227,14 +230,16 @@ private:
 	/*
 	 * What an exception clause needs on the LLVM side.
 	 *
-	 * A finally block is entered from several places and has to carry on differently
-	 * for each, so which one is in progress is written to `resume_at` before it is
-	 * entered and switched on by its endfinally. Index 0 means the block was entered
-	 * by unwinding, where carrying on means resuming the unwind rather than going
-	 * anywhere in this method.
+	 * A finally block is entered from several places and must carry on
+	 * differently for each. Which one is in progress is written to
+	 * `resume_at` before entry, and each endfinally in the block reads it
+	 * back through its own switch. Index 0 means the block was entered by
+	 * unwinding. There, the finally must resume the unwind rather than jump
+	 * anywhere else in this method.
 	 *
-	 * A handler may have more than one endfinally, and any of them can be the one
-	 * reached, so each gets its own switch and they all get the same set of cases.
+	 * A handler can have more than one endfinally, and any of them can be
+	 * the one reached. So each gets its own switch, and every switch gets
+	 * the same set of cases.
 	 */
 	struct Clause {
 		llvm::BasicBlock *pad = nullptr;
@@ -251,8 +256,8 @@ private:
 		/*
 		 * The exception a catch or filter handler was entered with, as loaded at
 		 * the handler's entry. rethrow reaches for it long after the body has
-		 * taken the stack apart, and a handler is only enterable at its start, so
-		 * the entry value dominates every use.
+		 * taken the stack apart. A handler is only enterable at its start, so the
+		 * entry value dominates every use.
 		 */
 		llvm::Value *caught = nullptr;
 	};
@@ -269,14 +274,18 @@ private:
 	std::vector<Entry> locals;
 	std::vector<StackValue> stack;
 
-	/// This frame's LMF and where the thread's chain head lives, when the
-	/// method keeps one (a save_lmf wrapper); null everywhere else.
+	/// This frame's LMF and where the thread's chain head lives.
+	///
+	/// The method keeps these only when it is a save_lmf wrapper. Both are
+	/// null everywhere else.
 	llvm::Value *lmf_slot = nullptr;
 	llvm::Value *lmf_addr = nullptr;
 
-	/// The prefixes seen since the last real instruction. They apply to the next
-	/// instruction only and are cleared once it has been emitted, whether or not it
-	/// was one the prefix means anything to.
+	/// The prefixes seen since the last real instruction.
+	///
+	/// They apply only to the next instruction. The translator clears them
+	/// once it emits that instruction, whether or not the prefix means
+	/// anything to it.
 	struct Prefixes {
 		bool volatile_ = false;
 		bool readonly_ = false;
@@ -287,18 +296,21 @@ private:
 
 	Prefixes prefixes;
 
-	/// Set by mono_save_last_error, consumed by the next call emitted: unlike a
-	/// prefix an address push may sit between the two.
+	/// Set by mono_save_last_error, consumed by the next call emitted:
+	/// unlike a prefix, an address push can sit between the two.
 	bool pending_save_last_error = false;
 
-	/// Translating a filter body into a function of its own: locals and
-	/// arguments resolve into the parent frame through llvm.localrecover, and
-	/// nothing in the range is protected.
+	/// Whether this emitter translates a filter body as a function of
+	/// its own.
+	///
+	/// Locals and arguments resolve into the parent frame through
+	/// llvm.localrecover, and nothing in the range is protected.
 	bool filter_mode = false;
 
-	/// Which of enter, leave and tail call a profiler asked to be told about for
-	/// this method. NONE - the answer whenever no profiler is attached - is what
-	/// keeps the instrumentation out of every ordinary compile.
+	/// Which of enter, leave and tail call a profiler asked to be told
+	/// about for this method. MONO_PROFILER_CALL_INSTRUMENTATION_NONE, the
+	/// default when no profiler is attached, keeps the instrumentation out
+	/// of every ordinary compile.
 	MonoProfilerCallInstrumentationFlags prof_flags =
 		MONO_PROFILER_CALL_INSTRUMENTATION_NONE;
 
@@ -313,9 +325,9 @@ private:
 	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
 
 	/// The IL offsets this body emitted a sequence point at, in code order.
-	/// The two synthetic ones - method entry and exit - are left out: they are
-	/// not places the IL can branch to or from, and the debugger's stepper
-	/// leaves them out of its graph for the same reason.
+	/// This list leaves out the two synthetic ones, method entry and exit.
+	/// Neither is a place the IL can branch to or from, and the debugger's
+	/// stepper leaves them out of its graph for the same reason.
 	std::vector<uint32_t> seq_point_offsets;
 
 	/// seq_point_offsets as a graph, built once the body has been translated.
@@ -327,10 +339,11 @@ private:
 	size_t statement_offset = 0;
 
 	/// The marker of the sequence point emitted after the most recent call, and
-	/// the IL offset it stands for. Every call in an argument list but the
-	/// outermost one is tagged as a nested call, and which one is outermost only
-	/// becomes known when the next call turns up - so the tag goes on after the
-	/// fact, through this.
+	/// the IL offset it stands for.
+	///
+	/// The translator tags every call in an argument list except the outermost
+	/// as a nested call. It only learns which call is outermost once the next
+	/// call appears, so it applies the tag retroactively, through this marker.
 	llvm::Instruction *call_seq_point_marker = nullptr;
 	uint32_t call_seq_point_offset = 0;
 
@@ -340,7 +353,7 @@ private:
 
 	/// The IL offsets the symbol file names as sequence points, and whether it
 	/// had anything to say about this method at all. When it did, these are the
-	/// only places an ordinary sequence point goes: a stop that is not the start
+	/// only places an ordinary sequence point goes. A stop that is not the start
 	/// of a statement reports the same source line twice.
 	llvm::DenseSet<uint32_t> sym_seq_point_offsets;
 	bool sym_seq_points = false;
@@ -348,9 +361,8 @@ private:
 	/// The method's IL, the offset of the instruction being emitted, and how far into
 	/// that instruction its operands have been read.
 	///
-	/// `offset` stays at the start of the instruction while `ip` walks its operands,
-	/// so that a refusal names the instruction that caused it rather than the one
-	/// after it.
+	/// `offset` stays at the start of the instruction while `ip` walks its operands.
+	/// A refusal then names the instruction that caused it, not the one after it.
 	const unsigned char *code = nullptr;
 	size_t code_size = 0;
 	size_t offset = 0;
@@ -358,18 +370,18 @@ private:
 
 	/// The compile's debug info, and this function's scope within it. The map a
 	/// stack trace reads back is built from the locations these stamp on the
-	/// emitted instructions; both are null when the caller wants none.
+	/// emitted instructions. Both are null when the caller wants none.
 	IlDebugModule *il_debug = nullptr;
 	IlDebugScope *il_scope = nullptr;
 
 	/// Attribute everything emitted from here on to the IL instruction at
-	/// OFFSET.
+	/// offset.
 	void set_il_location (llvm::IRBuilder<> &builder, size_t offset)
 	{
 		il_debug_set_location (il_scope, &builder, (uint32_t) offset);
 	}
 
-	/// Whether OFFSET is where a catch, filter or finally body begins.
+	/// Whether offset is where a catch, filter or finally body begins.
 	bool is_handler_start (size_t offset) const
 	{
 		for (uint32_t i = 0; i < num_clauses; ++i)
@@ -399,8 +411,8 @@ public:
 	llvm::Expected<llvm::Function *> emit_filter (llvm::Function *parent,
 	                                              uint32_t clause_index);
 
-	/// The declaration of METHOD in this emitter's module, for callers outside
-	/// the translation itself (the runtime builds interop thunks against it).
+	/// The declaration of method in this emitter's module, for callers outside
+	/// the translation itself. The runtime builds interop thunks against it.
 	llvm::Expected<llvm::Function *> declare (MonoMethod *method)
 	{
 		return create_method_decl (method);
@@ -435,9 +447,9 @@ private:
 	llvm::Expected<llvm::Type *> convert_native_vtype (MonoClass *klass);
 	llvm::Expected<llvm::Type *> native_field_type (MonoType *t, MonoMarshalSpec *mspec,
 	                                                int size);
-	/// Whether this method is itself the native face of something - a
-	/// native-to-managed wrapper - so that its arguments arrive marshalled and
-	/// its return value has to leave the same way.
+	/// Whether this method is itself a native-to-managed wrapper, so its
+	/// arguments arrive marshalled and its return value must leave the same
+	/// way.
 	bool native_signature () const;
 
 	llvm::Align type_alignment (MonoType *t, bool native = false);
@@ -446,16 +458,16 @@ private:
 	/// metadata, which changes what its operands mean - see wrapper_data ().
 	bool in_wrapper () const;
 
-	/// Whether INDEX names a slot the wrapper filled in - which says nothing
-	/// about what the slot holds, since a wrapper may bake in a null.
+	/// Whether index names a slot the wrapper filled in - which says nothing
+	/// about what the slot holds, since a wrapper can bake in a null.
 	bool has_wrapper_data (uint32_t index) const;
 
 	/// What a generated body's operand refers to.
 	///
 	/// A wrapper's IL carries indices into a table the runtime filled in while
 	/// building it, not metadata tokens: there is no metadata to point at.
-	/// Returns null if INDEX is not one the wrapper filled in - so a caller
-	/// that would accept a null has to ask has_wrapper_data () instead.
+	/// Returns null if index is not one the wrapper filled in, so a caller
+	/// that accepts a null must ask has_wrapper_data () instead.
 	void *wrapper_data (uint32_t index) const;
 
 	llvm::Error invalid_il (const llvm::Twine &reason);
@@ -466,7 +478,7 @@ private:
 	llvm::Error unsupported_il (const llvm::Twine &what);
 	llvm::Error emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignature *sig);
 
-	/// Whether the CLI's accessibility rules bind what this body may reach.
+	/// Whether the CLI's accessibility rules bind what this body can reach.
 	bool checks_accessibility () const;
 	llvm::Error field_access_failure (MonoClassField *field);
 	llvm::Error emit_method_access_failure (MonoIrBuilder &builder, MonoMethod *callee);
@@ -479,29 +491,29 @@ private:
 	                                    MonoType *t);
 	static MonoType *stack_slot_type (MonoType *t);
 
-	/// Whether a value of T rides the evaluation stack as the address of its
-	/// storage rather than as an SSA value.
+	/// Whether a value of type t rides the evaluation stack as the address of
+	/// its storage rather than as an SSA value.
 	bool held_in_memory (MonoType *t);
 
-	/// A slot of this frame to hold one value of T.
+	/// A slot of this frame to hold one value of type t.
 	llvm::Expected<llvm::Value *> vtype_slot (MonoType *t, bool native = false);
 
-	/// How many bytes one value of T occupies.
+	/// How many bytes one value of type t occupies.
 	unsigned vtype_size (MonoType *t, bool native);
 
-	/// Copy the value of type T at SOURCE into the frame slot DESTINATION.
+	/// Copy the value of type t at source into the frame slot destination.
 	void copy_vtype (MonoIrBuilder &builder, llvm::Value *destination,
 	                 llvm::Value *source, MonoType *t, bool native);
 
-	/// Push what a location of type T holds at ADDRESS, as the CLI tracks it.
+	/// Push what a location of type t holds at address, as the CLI tracks it.
 	llvm::Error push_from_location (MonoIrBuilder &builder, llvm::Value *address,
 	                                MonoType *t, bool native = false);
 
-	/// Push VALUE, which was produced in T's own LLVM type, as the CLI tracks it.
+	/// Push value, which was produced in t's own LLVM type, as the CLI tracks it.
 	llvm::Error push_produced (MonoIrBuilder &builder, llvm::Value *value, MonoType *t,
 	                           bool native = false);
 
-	/// What coerce_to_location produced for a location of type T, as an SSA value
+	/// What coerce_to_location produced for a location of type t, as an SSA value
 	/// of that location's own LLVM type.
 	llvm::Expected<llvm::Value *> materialize (MonoIrBuilder &builder, llvm::Value *value,
 	                                           MonoType *t, bool native = false);
@@ -642,11 +654,14 @@ private:
 	llvm::Error emit_dup (MonoIrBuilder &builder);
 	llvm::Error emit_pop ();
 
-	/// Where a call through a pointer returns a value too wide for the registers:
-	/// HIDDEN is what it points at and AT which parameter carries it. Given only
-	/// for a site entered in this backend's own convention, because only the
-	/// emitter knows which those are - one still bound for LegacyAbiPass must
-	/// arrive without the pointer, and says so by leaving HIDDEN null.
+	/// Where a call through a pointer returns a value too wide for the
+	/// registers, hidden is the type behind that pointer. at is which
+	/// argument carries it.
+	///
+	/// Both are given only for a site entered in this backend's own
+	/// convention, since only the emitter knows which sites those are. A
+	/// call still bound for LegacyAbiPass must arrive without the pointer,
+	/// and signals that by leaving hidden null.
 	///
 	/// A direct callee answers for itself and ignores both.
 	llvm::Value *emit_protected_call (
@@ -902,69 +917,73 @@ private:
 	}
 };
 
-/// Convert an IL method definition to the corresponding LLVM method.
-/// How a narrow integer argument or return value is widened to fill its register,
-/// as an SExt/ZExt attribute, or None for everything else.
+/// The SExt/ZExt attribute a narrow integer argument or return value needs
+/// to fill its register, or None for everything else.
 llvm::Attribute::AttrKind integer_extension (MonoType *t);
 
-/// Whether METHOD's code comes from somewhere other than IL - an icall, a
-/// pinvoke, or a method the runtime implements itself - so what stands behind
-/// its symbol is whatever mini compiles for it, never this backend's fastcc
-/// code.
+/// Whether method's code comes from somewhere other than IL - an icall, a
+/// pinvoke, or a method the runtime implements itself. What stands behind
+/// its symbol is then whatever mini compiles for it, never this backend's
+/// fastcc code.
 bool implemented_outside_il (MonoMethod *method);
 
-/// Whether this method is implemented entirely by the backend, with its actual
-/// IL being ignored.
+/// Whether this method is implemented entirely by the backend, with its
+/// actual IL ignored.
 ///
-/// Currently this is only true for System.ByReference`1.
+/// This is true only for System.ByReference`1.
 bool is_intrinsic (MonoMethod *method);
 
-/// The method a direct call to METHOD actually enters, which for an internal
-/// call is the marshalling wrapper the runtime publishes in its place.
+/// The method a direct call to method enters, which for an internal call is
+/// the marshalling wrapper the runtime publishes in its place.
 ///
-/// An icall has no body of its own, so mini answers a request to compile one
+/// An icall has no body of its own. mini answers a request to compile one
 /// with the wrapper it builds around the registered C function
-/// (compile_special, mini-runtime.c) - and that wrapper is a method this
-/// backend compiles like any other. Naming it here is what lets a call site
-/// reach the same code in fastcc rather than through the legacy entry.
+/// (compile_special, mini-runtime.c). That wrapper is a method this backend
+/// compiles like any other. Naming it here lets a call site reach the same
+/// code in fastcc rather than through the legacy entry.
 ///
-/// Anything else comes back unchanged, including the two kinds of icall that
-/// have no such wrapper: one registered as needing none, whose published
-/// address really is the C function, and an array accessor, which every call
-/// site lowers inline instead.
+/// Anything else comes back unchanged, including the two kinds of icall
+/// that have no such wrapper. One is registered as needing none, so its
+/// published address really is the C function. The other is an array
+/// accessor, which every call site lowers inline instead.
 MonoMethod *icall_wrapper_target (MonoMethod *method);
 
-/// The number of SIG's parameters that are ordinary ones, which for a vararg
+/// The number of sig's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.
 ///
-/// A vararg method's own signature carries its sentinel past the last
-/// parameter, so a declaration and every call site that names it agree on this
-/// count - which is what lets both convert to one function type.
+/// A vararg method's signature carries its sentinel past the last parameter,
+/// so a declaration and every call site that names it agree on this count.
+/// That agreement is what lets both convert to one function type.
 int vararg_fixed_params (MonoMethodSignature *sig);
 
-/// The legacy-boundary flavor of a call through SIG: native signatures keep
-/// the C classification, managed ones mini's, with the hidden return pointer
+/// The legacy-boundary flavor of a call through sig. Native signatures keep
+/// the C classification, managed ones mini's. The hidden return pointer sits
 /// behind the first argument whenever the runtime's trampolines insist on
 /// finding a receiver there.
 arch::LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
 
-/// Whether the address the runtime publishes for METHOD is a C function this
-/// backend did not generate.
+/// Whether the address the runtime publishes for method is a C function
+/// this backend did not generate.
 ///
-/// A method implemented outside IL declares a pinvoke signature - the loader
-/// sets that flag for every icall and every DllImport - but what stands behind
-/// its symbol is almost always the marshaling wrapper the runtime builds around
-/// it, which is a method this backend compiles and publishes like any other.
-/// The one exception is an icall registered as needing no wrapper at all, whose
+/// A method implemented outside IL declares a pinvoke signature. The loader
+/// sets that flag for every icall and every DllImport. But what stands
+/// behind its symbol is almost always the marshaling wrapper the runtime
+/// builds around it. That wrapper is a method this backend compiles and
+/// publishes like any other.
+///
+/// One exception is an icall registered as needing no wrapper at all, whose
 /// published address really is the C function. So the method, not its
-/// signature, is what says which convention its entry speaks.
+/// signature, says which convention its entry speaks.
 bool entered_in_c (MonoMethod *method);
 
-/// EXTERNALS, when given, collects the symbols the emitted module leaves for the
-/// engine to resolve. BP_SWITCH, when given, receives the body's soft-debugger
-/// breakpoint switch, which is null unless sequence points were emitted.
-/// SEQ_POINTS, when given, receives the body's sequence-point graph, which is
-/// empty for the same reason.
+/// Translates method's IL into the corresponding LLVM function, within
+/// module.
+///
+/// externals, when given, collects the symbols the emitted module leaves
+/// for the engine to resolve. bp_switch, when given, receives the body's
+/// soft-debugger breakpoint switch, which is null unless the body emitted
+/// sequence points. seq_points, when given, receives the body's
+/// sequence-point graph, empty for the same reason.
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
                                                  MonoMethod *method,
                                                  std::vector<ExternalSymbol> *externals

@@ -8,18 +8,20 @@ namespace mono {
 
 namespace {
 
-/// SHIFT_AMOUNT at TYPE's width, reduced modulo it.
+/// Returns the shift amount, resized to type's width and masked into its range.
 ///
-/// Both operands of an LLVM shift have to be the same type, and Table III.6 pairs an
-/// int32 or native int amount with any of the three value types, so one of them has to
-/// move regardless.
+/// An LLVM shift needs both operands in one type. Table III.6 pairs an int32 or native
+/// int amount with any of the three shiftable value types. One operand always changes
+/// width to match the other.
 ///
-/// The masking is what keeps the result defined. The spec leaves it unspecified once
-/// the amount reaches the width of what is being shifted, and LLVM makes that poison,
-/// which is stronger than unspecified and does not stay where it was made. Masking
-/// costs nothing to say so: x86 already reduces the count in hardware, so the backend
-/// drops the `and` again, and what is left agrees with what the classic JIT computes
-/// rather than merely being allowed by the spec.
+/// The mask keeps the result defined. If the shift amount reaches the operand's width,
+/// the spec leaves the result unspecified. LLVM treats that case as poison instead, and
+/// poison can affect code far from where it happened.
+///
+/// The mask costs an extra instruction at run time. Codegen runs through FastISel,
+/// since this backend always compiles at `CodeGenOptLevel::None`, and FastISel does not
+/// fold the mask into the shift instruction. What is left also matches what the classic
+/// JIT computes for the same shift.
 llvm::Value *
 shift_amount (llvm::IRBuilder<> &builder, llvm::Value *amount, llvm::Type *type)
 {
@@ -209,7 +211,8 @@ MethodLLVMEmitter::emit_not (MonoIrBuilder &builder)
 	StackType type = stack_type (value.type);
 	MonoType *result;
 
-	/* Table III.5 read with one operand is its diagonal: the three integer types. */
+	// Table III.5 has one operand on each axis. With only one operand, `not` reads
+	// its diagonal: int32, int64 and native int, each paired with itself.
 	switch (type) {
 	case Int32:
 		result = mono_get_int32_type ();

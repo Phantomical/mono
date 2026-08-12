@@ -1,17 +1,17 @@
 /**
  * \file
- * \brief The instructions only a generated body can contain.
+ * \brief The instructions that only a generated wrapper body can contain.
  *
- * Wrappers are written by the runtime rather than by a compiler, and say things
- * CIL has no way to say: call this icall, push this MonoClass, read the flag
- * that says a thread has been asked to stop. They live in an opcode space of
- * mono's own behind MONO_CUSTOM_PREFIX.
+ * A wrapper is IL the runtime writes, not IL a compiler emits from source. It
+ * says things ordinary CIL cannot say: call this icall, push this MonoClass,
+ * read the flag that says a thread has been asked to stop. These opcodes
+ * live in mono's own opcode space behind MONO_CUSTOM_PREFIX.
  *
- * Being JIT-only makes most of them straightforward. Where mini has to describe
- * a runtime address as a patch that some later stage fills in, here the address
- * is simply known while translating, and travels as a symbol the engine
- * resolves - which keeps it out of the IR, the same way every other runtime
- * address the translator emits does.
+ * This backend is JIT-only, so most of these opcodes are simple to translate.
+ * Mini has to record a runtime address as a patch for a later stage to fill
+ * in. Here the address is already known while translating. It travels as a
+ * symbol the engine resolves, which keeps it out of the IR. Every other
+ * runtime address the translator emits works the same way.
  */
 
 #include "method-to-llvm.hpp"
@@ -37,11 +37,11 @@
 
 namespace mono {
 
-/// The external global called NAME, standing for ADDRESS.
+/// Returns the external global that stands for a runtime address.
 ///
-/// For the runtime addresses that are not a class, a method or a field - an
-/// icall's entry point, a global the runtime keeps - where the name exists only
-/// so that the engine has something to resolve.
+/// Use this for an address that is not a class, a method, or a field.
+/// Examples are an icall's entry point or a global the runtime keeps. The
+/// name exists only so the engine has something to resolve.
 llvm::Constant *
 MethodLLVMEmitter::address_symbol (const std::string &name, void *address)
 {
@@ -50,13 +50,14 @@ MethodLLVMEmitter::address_symbol (const std::string &name, void *address)
 }
 
 /*
- * A save_lmf wrapper links a frame onto the thread's LMF chain, which is how a
- * stack walk that starts in native code finds its way back to managed frames:
- * the walker reads the caller ip off the stack the LMF points at and carries
- * on from this frame's own unwind info (mono_arch_unwind_frame).
+ * A save_lmf wrapper links its frame onto the thread's LMF chain. This chain
+ * is how a stack walk that starts in native code finds its way back to
+ * managed frames. The walker reads the caller ip off the stack the LMF
+ * points at. Then it continues from this frame's own unwind info
+ * (mono_arch_unwind_frame).
  *
- * Only the linking and the frame's two register values are emitted here,
- * exactly what mini's lmf_ir mode records.
+ * This emits only the linking and the frame's two register values, rbp and
+ * rsp.
  */
 llvm::Error
 MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
@@ -66,9 +67,9 @@ MethodLLVMEmitter::emit_push_lmf (MonoIrBuilder &builder)
 	llvm::Align align (TARGET_SIZEOF_VOID_P);
 
 	/*
-	 * Unwinding through the LMF hop zeroes every callee-saved register and
-	 * rebuilds them from this frame's own unwind info, so the prologue has to
-	 * save all of them, the way mini's save_lmf prologues do.
+	 * Unwinding through the LMF hop zeroes every callee-saved register, then
+	 * rebuilds them from this frame's own unwind info. The prologue must save
+	 * all of them before that can happen.
 	 */
 	arch::emit_callee_saved_clobber (builder);
 
@@ -128,20 +129,19 @@ MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
 /*
  * III.F0.00  mono_icall - call one of the runtime's own entry points
  *
- * The operand is a MonoJitICallId rather than a token: the runtime knows the
- * signature and the address, and nothing about either is in any metadata.
+ * The operand is a MonoJitICallId, not a token. The runtime already knows
+ * the signature and the address, so no metadata describes either one.
  *
- * Through the wrapper rather than straight to the C function: an entry point
- * that fails leaves a pending
- * exception behind and returns normally, and the wrapper's checkpoint is what
- * turns that into a throw at the call site. Calling the raw address instead
- * leaves the exception pending until some unrelated later checkpoint - by
- * which time the frames that would have caught it are gone.
+ * This calls through the wrapper instead of the raw C function. An entry
+ * point that fails leaves a pending exception behind and returns normally.
+ * The wrapper's checkpoint is what turns that into a throw at the call site.
+ * A raw call leaves the exception pending until some later, unrelated
+ * checkpoint. By then, the frames able to catch it no longer exist.
  *
- * Registration decides which ones are the exception: an icall registered to
- * avoid a wrapper had `wrapper` filled in with `func`, and there is no wrapper
- * to call. Those have to be called raw - mono_threads_attach_coop runs on a
- * thread that cannot execute managed code at all yet.
+ * Registration decides which icalls are the exception. An icall registered
+ * to avoid a wrapper has `wrapper` set to `func`, so there is no wrapper to
+ * call. Those icalls must be called raw: mono_threads_attach_coop, for
+ * example, runs on a thread that cannot execute managed code yet.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
@@ -172,7 +172,7 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 		result = emit_protected_call (builder, llvm::FunctionCallee (*type, target),
 		                              *args);
 
-		/* The icall is a C function; its signature says so. */
+		// The icall is a C function. Its signature says so.
 		mark_legacy_call (llvm::cast<llvm::CallBase> (result), info->sig);
 	} else {
 		llvm::Expected<llvm::Function *> wrapper =
@@ -195,9 +195,9 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 /*
  * III.F0.02  mono_ldptr - push a runtime address the wrapper was built with
  *
- * Anything the runtime chose to bake in: a function to call, a structure to
- * read. Only the wrapper's own data says what it is, so it is pushed as a
- * native int and whatever follows decides.
+ * The wrapper can bake in anything: a function to call, a structure to read.
+ * Only the wrapper's own data says what the address is. This opcode pushes
+ * it as a native int, and whatever follows decides what it means.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
@@ -209,11 +209,11 @@ MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
 	void *pointer = wrapper_data (token);
 
 	/*
-	 * A null is a value the wrapper meant, not a slot it left empty: a COM
-	 * interface argument's conversion opens by storing one into the local that
-	 * will hold the interface pointer (mono_cominterop_emit_marshal_com_interface,
-	 * cominterop.c). There is nothing to name, so it is pushed as the constant
-	 * it is.
+	 * A null here is a value the wrapper meant, not a slot it left empty. For
+	 * example, a COM interface argument's conversion starts by storing a null
+	 * into the local that will hold the interface pointer
+	 * (mono_cominterop_emit_marshal_com_interface, cominterop.c). There is
+	 * nothing to name, so this pushes the constant directly.
 	 */
 	if (pointer == nullptr) {
 		push_stack (llvm::ConstantPointerNull::get (
@@ -222,7 +222,7 @@ MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
 		return llvm::Error::success ();
 	}
 
-	/* Named after the slot it came from, within the wrapper that owns it. */
+	// The symbol name comes from this slot and the wrapper that owns it.
 	char *owner = mono_method_full_name (method, TRUE);
 	std::string name = identity_symbol (
 		std::string ("mono_wrapper_ptr_") + owner + "_" + std::to_string (token), method);
@@ -236,19 +236,19 @@ MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
 /*
  * III.F0.19  mono_lddomain - push the domain the wrapper was built for
  *
- * A native-to-managed wrapper opens by attaching the thread it was entered on,
- * and has to say which domain to attach it to. It cannot ask the thread: an
- * unattached one has no answer to give, which is the whole reason the wrapper
- * is attaching it. The domain is settled when the wrapper is compiled, so it
- * is baked in here - the same constant mini folds in.
+ * A native-to-managed wrapper attaches the thread it runs on, so it must say
+ * which domain to attach the thread to. It cannot ask the thread: an
+ * unattached thread has no answer to give, which is why the wrapper attaches
+ * it in the first place. The domain is fixed once the wrapper compiles, so
+ * this bakes in the same constant mini folds in.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_lddomain (MonoIrBuilder &builder)
 {
 	/*
-	 * One name for every domain: a linker belongs to a single domain and
-	 * resolves the symbol to that domain, so two domains' copies of the same
-	 * wrapper never share a binding for it.
+	 * One name serves every domain. A linker belongs to a single domain. It
+	 * resolves the symbol only within that domain, so two domains never
+	 * share a binding for the same wrapper's copy of it.
 	 */
 	push_stack (address_symbol ("mono_domain", cfg->domain),
 	            m_class_get_byval_arg (mono_defaults.int_class));
@@ -256,13 +256,14 @@ MethodLLVMEmitter::emit_mono_lddomain (MonoIrBuilder &builder)
 }
 
 /*
- * III.F0.29  mono_get_sp - push a marker for where this frame's stack is
+ * III.F0.20  mono_get_sp - push a marker for where this frame's stack is
  *
- * The GC-safe transition helpers take a `gpointer *stackdata` that they only ever
- * read as an approximation of the stack pointer at the call - a checked build
- * measures the frame against it, and nothing else looks at it. So any address in
- * this frame will do, and a pointer-sized slot of its own is the cheapest one to
- * hand out. Mini creates a local and pushes its address the same way.
+ * The GC-safe transition helpers take a `gpointer *stackdata`. They read it
+ * only as an approximation of the stack pointer at the call. The runtime
+ * measures the frame against it. If the size does not add up, it aborts.
+ * Nothing else looks at the value. Any address in this frame will do, so a
+ * pointer-sized slot of its own is the cheapest one to hand out. Mini
+ * creates a local and pushes its address the same way.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_get_sp (MonoIrBuilder &builder)
@@ -280,8 +281,8 @@ MethodLLVMEmitter::emit_mono_get_sp (MonoIrBuilder &builder)
  * III.F0.01  mono_objaddr - take an object reference as a managed pointer
  *
  * A reference already is the object's address, so this only changes what the
- * evaluation stack calls it - enough to let the instructions that want a
- * managed pointer accept it.
+ * evaluation stack calls it. That is enough for instructions that want a
+ * managed pointer to accept it.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_objaddr (MonoIrBuilder &builder)
@@ -293,9 +294,9 @@ MethodLLVMEmitter::emit_mono_objaddr (MonoIrBuilder &builder)
 	StackType type = stack_type (object.type);
 
 	/*
-	 * Anything address-shaped is admitted, not just a reference: an alloc
-	 * wrapper builds its object out of raw pointer arithmetic, so what it
-	 * relabels here has been a native int the whole way.
+	 * Anything address-shaped is admitted, not only an object reference. A
+	 * generated wrapper's value can already be a native int by the time it
+	 * reaches this opcode.
 	 */
 	if (type != ObjectRef && type != NativeInt && type != ManagedPtr)
 		return invalid_il (llvm::Twine ("mono_objaddr wants an address, not ")
@@ -315,13 +316,14 @@ MethodLLVMEmitter::emit_mono_objaddr (MonoIrBuilder &builder)
 /*
  * III.F0.04  mono_newobj - allocate an instance without running a constructor
  *
- * Marshalling builds the managed side of a struct by allocating the object and
- * then storing the converted fields into it, so there is no constructor to run
- * and no arguments to pass - only the allocation.
+ * Marshalling builds the managed side of a struct by allocating the object,
+ * then storing the converted fields into it. There is no constructor to run
+ * and no arguments to pass, only the allocation.
  *
  * The vtable is the compiling domain's, the same constant every other
- * allocation here resolves; mini reaches the same one by handing the domain and
- * the class to ves_icall_object_new, which looks it up again at run time.
+ * allocation here resolves. Mini reaches the same vtable by handing the
+ * domain and the class to ves_icall_object_new, which looks it up again at
+ * run time.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_newobj (MonoIrBuilder &builder, uint32_t token)
@@ -344,11 +346,11 @@ MethodLLVMEmitter::emit_mono_newobj (MonoIrBuilder &builder, uint32_t token)
 /*
  * III.F0.06  mono_ldnativeobj - load a value type in its marshalled layout
  *
- * Pops an address and pushes the value type at it, read as the layout
- * marshalling gave it rather than the managed one - the ldobj a native callee
- * is fed with. The wrapper has just filled that buffer field by field
- * (emit_struct_conv), and the callee's parameter is in the same terms, so the
- * value goes straight into the call.
+ * This pops an address and pushes the value type stored there. It reads the
+ * value in the layout marshalling gave it, not the managed layout - the same
+ * layout a native callee's ldobj expects. The wrapper already filled that
+ * buffer field by field (emit_struct_conv). The callee's parameter uses the
+ * same layout, so the value goes straight into the call.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_ldnativeobj (MonoIrBuilder &builder, uint32_t token)
@@ -364,7 +366,7 @@ MethodLLVMEmitter::emit_mono_ldnativeobj (MonoIrBuilder &builder, uint32_t token
 	MonoType *type = m_class_get_byval_arg (klass);
 	llvm::Value *address = get_stack (0).value;
 
-	/* The buffer is a localloc the wrapper stored into a native int local. */
+	// The buffer is a localloc that the wrapper stored into a native int local.
 	if (!address->getType ()->isPointerTy ())
 		address = builder.CreateIntToPtr (address,
 		                                  llvm::PointerType::get (context (), 0));
@@ -376,11 +378,11 @@ MethodLLVMEmitter::emit_mono_ldnativeobj (MonoIrBuilder &builder, uint32_t token
 /*
  * III.F0.05  mono_retobj - return a value type in its marshalled layout
  *
- * Like ret, but the value is at an address rather than on the stack, and it is
- * already in the layout the caller reads - the wrapper marshalled it into a
- * buffer of its own and hands the whole thing back. The signature is a pinvoke
- * one, so the function's return type is that same layout and the load is
- * exactly as wide as the caller's.
+ * This behaves like ret, but the value sits at an address instead of on the
+ * stack, already in the layout the caller reads. The wrapper marshalled the
+ * value into a buffer of its own and hands the whole buffer back. The
+ * signature is a pinvoke one, so the function's return type is that same
+ * layout, and the load is exactly as wide as the caller's.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_retobj (MonoIrBuilder &builder, uint32_t token)
@@ -424,7 +426,8 @@ MethodLLVMEmitter::emit_mono_retobj (MonoIrBuilder &builder, uint32_t token)
  * III.F0.03  mono_vtaddr - take the address of a value type on the stack
  *
  * The stack holds the value itself, so there is nothing to point at until it
- * has somewhere to live: it goes to a temporary whose address is pushed.
+ * has somewhere to live. This spills it to a temporary and pushes that
+ * temporary's address.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_vtaddr (MonoIrBuilder &builder)
@@ -443,9 +446,9 @@ MethodLLVMEmitter::emit_mono_vtaddr (MonoIrBuilder &builder)
 /*
  * III.F0.1E  mono_ld_delegate_method_ptr - load a delegate's bound entry point
  *
- * Pops a delegate reference and pushes its method_ptr, the entry the runtime
- * published into the delegate when it was bound. The invoke wrapper feeds it
- * straight into a calli.
+ * This pops a delegate reference and pushes its method_ptr, the entry point
+ * the runtime published into the delegate when it was bound. The invoke
+ * wrapper feeds it straight into a calli.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_ld_delegate_method_ptr (MonoIrBuilder &builder)
@@ -483,10 +486,10 @@ MethodLLVMEmitter::emit_mono_classconst (MonoIrBuilder &builder, uint32_t token)
 }
 
 /*
- * III.F0.14  mono_jit_icall_addr - push a runtime entry point's address
+ * III.F0.13  mono_jit_icall_addr - push a runtime entry point's address
  *
- * The operand is a MonoJitICallId, as in mono_icall; this pushes the entry
- * point where that calls it.
+ * The operand is a MonoJitICallId, as in mono_icall. This pushes the entry
+ * point that icall calls.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_jit_icall_addr (MonoIrBuilder &builder, uint32_t id)
@@ -504,10 +507,10 @@ MethodLLVMEmitter::emit_mono_jit_icall_addr (MonoIrBuilder &builder, uint32_t id
 }
 
 /*
- * III.F0.08  mono_icall_addr - push an internal call's native entry point
+ * III.F0.0E  mono_icall_addr - push an internal call's native entry point
  *
- * The operand names a MonoMethod in the wrapper's data; what gets pushed is the
- * C function the runtime registered as that method's implementation.
+ * The operand names a MonoMethod in the wrapper's data. What gets pushed is
+ * the C function the runtime registered as that method's implementation.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_icall_addr (MonoIrBuilder &builder, uint32_t token)
@@ -539,11 +542,11 @@ MethodLLVMEmitter::emit_mono_icall_addr (MonoIrBuilder &builder, uint32_t token)
 }
 
 /*
- * III.F0.16  mono_tls - push one of the runtime's per-thread variables
+ * III.F0.0D  mono_tls - push one of the runtime's per-thread variables
  *
- * The operand is a MonoTlsKey. The runtime registers a getter for each as a
- * jit icall, so the value comes from a call rather than from reproducing the
- * thread-local access sequence here.
+ * The operand is a MonoTlsKey. The runtime registers a getter for each key
+ * as a jit icall. The value comes from that call instead of from a
+ * thread-local access sequence written here.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_tls (MonoIrBuilder &builder, uint32_t key)
@@ -568,10 +571,11 @@ MethodLLVMEmitter::emit_mono_tls (MonoIrBuilder &builder, uint32_t key)
 }
 
 /*
- * III.F0.17  mono_atomic_store_i4 - store an int32 with ordering
+ * III.F0.1A  mono_atomic_store_i4 - store an int32 with ordering
  *
- * The operand is a MonoMemoryBarrierKind saying how strongly the store orders
- * against its neighbors. The stack carries the address below the value.
+ * The operand is one of the MONO_MEMORY_BARRIER_* constants
+ * (mono-memory-model.h). It says how strongly the store orders against its
+ * neighbors. The stack carries the address below the value.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_atomic_store_i4 (MonoIrBuilder &builder, uint32_t barrier)

@@ -61,7 +61,7 @@ throw_corlib_exception_decl (llvm::Module *module)
 		                             llvm::Type::getInt32Ty (ctx));
 
 	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
-		/* Unwinding is not returning, so this stays free to throw. */
+		// Unwinding does not return, so this stays free to throw.
 		function->setDoesNotReturn ();
 		function->addFnAttr (llvm::Attribute::Cold);
 	}
@@ -76,10 +76,8 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
                 std::vector<ExternalSymbol> *externals,
                 MonoLLVMBreakpointSwitch **bp_switch, SeqPointGraph *seq_points)
 {
-	/*
-	 * Shared by the method and its filter bodies: they are separate functions
-	 * but one module, and debug info is per module.
-	 */
+	// Shared by the method and its filter bodies. They are separate functions
+	// but one module, and debug info belongs to the module.
 	IlDebugModule il_debug (module);
 	llvm::scope_exit finish_debug ([&] { il_debug.finish (); });
 
@@ -94,7 +92,7 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 	if (seq_points != nullptr)
 		*seq_points = emitter.sequence_points ();
 
-	/* Each filter body rides along as a function of its own. */
+	// Each filter body rides along as a function of its own.
 	for (uint32_t i = 0; i < cfg->header->num_clauses; ++i) {
 		if (cfg->header->clauses[i].flags != MONO_EXCEPTION_CLAUSE_FILTER)
 			continue;
@@ -109,7 +107,7 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 	return function;
 }
 
-/// How the CLI categorizes T on the evaluation stack.
+/// How the CLI categorizes `t` on the evaluation stack.
 StackType
 MethodLLVMEmitter::stack_type (MonoType *t)
 {
@@ -119,7 +117,7 @@ MethodLLVMEmitter::stack_type (MonoType *t)
 	t = mini_get_underlying_type (t);
 
 	switch (t->type) {
-	/* Anything narrower than four bytes is tracked as int32 once it is pushed. */
+	// Anything narrower than four bytes is tracked as int32 once it is pushed.
 	case MONO_TYPE_BOOLEAN:
 	case MONO_TYPE_CHAR:
 	case MONO_TYPE_I1:
@@ -145,7 +143,7 @@ MethodLLVMEmitter::stack_type (MonoType *t)
 	case MONO_TYPE_OBJECT:
 	case MONO_TYPE_ARRAY:
 	case MONO_TYPE_SZARRAY:
-	/* Generic sharing hands us these as references. */
+	// Generic sharing hands these to the translator as references.
 	case MONO_TYPE_VAR:
 	case MONO_TYPE_MVAR:
 		return ObjectRef;
@@ -156,11 +154,11 @@ MethodLLVMEmitter::stack_type (MonoType *t)
 	}
 }
 
-/// VALUE as an operand of TYPE, widening it if the two operands of a binary operation
-/// did not arrive as the same thing.
+/// `value` as an operand of `type`, widened if the two operands of a binary operation
+/// did not arrive as the same type.
 ///
-/// Only ever a widening: no operand table in III.1.5 pairs an operand with a result
-/// narrower than itself.
+/// This is always a widening. No operand table in ECMA-335 III.1.5 pairs an operand
+/// with a narrower result.
 llvm::Value *
 MethodLLVMEmitter::coerce (MonoIrBuilder &builder, llvm::Value *value, llvm::Type *type)
 {
@@ -170,18 +168,19 @@ MethodLLVMEmitter::coerce (MonoIrBuilder &builder, llvm::Value *value, llvm::Typ
 		return value;
 	if (type->isFloatingPointTy ())
 		return builder.CreateFPExt (value, type);
-	/* An unmanaged pointer is tracked as native int but travels as a pointer. */
+	// An unmanaged pointer is tracked as native int but travels as a pointer.
 	if (from->isPointerTy ())
 		return builder.CreatePtrToInt (value, type);
-	/* int32 paired with native int is sign-extended, never zero-extended. */
+	// int32 paired with native int is sign-extended, never zero-extended.
 	return builder.CreateSExt (value, type);
 }
 
-/// VALUE, freshly loaded out of a location of type T, as the CLI tracks it on the stack.
+/// `value`, freshly loaded out of a location of type `t`, as the CLI tracks it on the
+/// stack.
 ///
-/// I.8.7: a location narrower than four bytes reaches the stack as int32, and it is the
-/// location's own signedness - not the value's - that decides how the bits it gains get
-/// filled.
+/// ECMA-335 I.12.1.2: a location narrower than four bytes reaches the stack as int32.
+/// The location's own signedness decides how the extra bits are filled, not the
+/// value's.
 llvm::Value *
 MethodLLVMEmitter::widen_to_stack (MonoIrBuilder &builder, llvm::Value *value, MonoType *t)
 {
@@ -202,7 +201,7 @@ MethodLLVMEmitter::widen_to_stack (MonoIrBuilder &builder, llvm::Value *value, M
 	}
 }
 
-/// The type a value loaded out of a location of type T is tracked as once it is pushed.
+/// The type a value loaded out of a location of type `t` is tracked as once it is pushed.
 MonoType *
 MethodLLVMEmitter::stack_slot_type (MonoType *t)
 {
@@ -222,7 +221,7 @@ MethodLLVMEmitter::stack_slot_type (MonoType *t)
 	}
 }
 
-/// The CLI's name for T's category, or T's own name when it has none.
+/// The CLI's name for `t`'s category, or `t`'s own name when it has none.
 std::string
 MethodLLVMEmitter::describe (MonoType *t, StackType type)
 {
@@ -252,8 +251,8 @@ MethodLLVMEmitter::describe (MonoType *t, StackType type)
 
 namespace {
 
-/// How many bytes of operand OPCODE carries, or none for a switch, whose length is in
-/// its own operand.
+/// How many bytes of operand `opcode` carries, or none for a switch, whose length is
+/// in its own operand.
 std::optional<size_t>
 operand_size (MonoOpcodeEnum opcode)
 {
@@ -286,7 +285,7 @@ operand_size (MonoOpcodeEnum opcode)
 
 } // namespace
 
-/// Decode the instruction at AT far enough to say where control goes from it.
+/// Decode the instruction at `at` far enough to say where control goes from it.
 llvm::Expected<MethodLLVMEmitter::Flow>
 MethodLLVMEmitter::decode_flow (size_t at)
 {
@@ -306,7 +305,7 @@ MethodLLVMEmitter::decode_flow (size_t at)
 	if (size) {
 		flow.next = operand + *size;
 	} else {
-		/* switch: a count, then that many four-byte displacements. */
+		// A switch carries a count, then that many four-byte displacements.
 		if (code_size - operand < 4) {
 			offset = at;
 			return truncated_il (4);
@@ -323,10 +322,8 @@ MethodLLVMEmitter::decode_flow (size_t at)
 		return truncated_il (flow.next - code_size);
 	}
 
-	/*
-	 * Displacements are relative to the instruction after the branch, which is why
-	 * the targets are worked out from `next` rather than from `at`.
-	 */
+	// Displacements are relative to the instruction after the branch, which is why the
+	// targets are worked out from `next` rather than from `at`.
 	if (mono_opcodes[flow.opcode].argument == MonoShortInlineBrTarget)
 		flow.targets.push_back (flow.next + static_cast<int8_t> (code[operand]));
 	else if (mono_opcodes[flow.opcode].argument == MonoInlineBrTarget)
@@ -349,11 +346,9 @@ MethodLLVMEmitter::decode_flow (size_t at)
 bool
 MethodLLVMEmitter::Flow::falls_through () const
 {
-	/*
-	 * mono's flow types are not quite an oracle for this: `break` is filed under
-	 * ERROR though a debugger breakpoint comes back, and mono_ldnativeobj under
-	 * RETURN though all it does is push a value.
-	 */
+	// mono's flow types are not a perfect guide here. `break` is filed under ERROR,
+	// though a debugger breakpoint returns control. `mono_ldnativeobj` is filed under
+	// RETURN, though all it does is push a value.
 	if (opcode == MONO_CEE_BREAK || opcode == MONO_CEE_MONO_LDNATIVEOBJ)
 		return true;
 
@@ -363,7 +358,7 @@ MethodLLVMEmitter::Flow::falls_through () const
 	case MONO_FLOW_ERROR:
 		return false;
 	case MONO_FLOW_CALL:
-		/* jmp is the one call control never comes back from. */
+		// jmp is the only call opcode that does not return control.
 		return opcode != MONO_CEE_JMP;
 	default:
 		return true;
@@ -372,10 +367,10 @@ MethodLLVMEmitter::Flow::falls_through () const
 
 /// Find every offset a block starts at and give each one an empty LLVM block.
 ///
-/// A block starts where something branches to it and after anything that does not fall
-/// through, which is all this needs to know: what is on the evaluation stack when a
-/// block is entered is settled while emitting, by whichever predecessor gets there
-/// first.
+/// A block starts where something branches to it, and after anything that does not
+/// fall through. That is all this function needs to know. What is on the evaluation
+/// stack when a block is entered is settled later, during translation, by whichever
+/// predecessor reaches it first.
 llvm::Error
 MethodLLVMEmitter::find_block_leaders ()
 {
@@ -398,11 +393,9 @@ MethodLLVMEmitter::find_block_leaders ()
 		at = flow->next;
 	}
 
-	/*
-	 * A protected region and each of its handlers are entered from outside the IL's
-	 * own control flow, so their boundaries start blocks whether or not anything
-	 * branches to them.
-	 */
+	// A protected region and each of its handlers are entered from outside the IL's
+	// own control flow. Their boundaries start blocks whether or not anything
+	// branches to them.
 	for (uint32_t i = 0; i < num_clauses; ++i) {
 		MonoExceptionClause *clause = &clauses[i];
 
@@ -423,7 +416,7 @@ MethodLLVMEmitter::find_block_leaders ()
 			                   + " is outside the method body");
 		}
 
-		/* The leader one past the end is the fallthrough of a trailing ret. */
+		// The leader one past the end is the fallthrough of a trailing ret.
 		if (leader == code_size)
 			continue;
 
@@ -441,13 +434,15 @@ MethodLLVMEmitter::find_block_leaders ()
 	return llvm::Error::success ();
 }
 
-/// Flag the blocks control can actually get to.
+/// Flag the blocks control can get to.
 ///
-/// Unreachable IL is legal and compilers emit it - a `br` after a `leave`, the tail of a
-/// protected region after every path out of it has branched. It has no entry stack for
-/// the same reason nothing reaches it, so translating it means inventing one, which both
-/// mistypes its own body and, through its fallthrough edge, can settle the entry stack of
-/// the live block it runs into.
+/// Unreachable IL is legal, and compilers emit it. Examples are a `br` after a `leave`,
+/// and the tail of a protected region once every path out of it has branched away.
+///
+/// An unreached block has no entry stack, for the same reason nothing reaches it.
+/// Translating it means inventing an entry stack. That mistypes the block's own body.
+/// Through the block's fallthrough edge, an invented stack can also wrongly settle the
+/// entry stack of the live block it runs into.
 void
 MethodLLVMEmitter::mark_reachable_blocks ()
 {
@@ -465,11 +460,9 @@ MethodLLVMEmitter::mark_reachable_blocks ()
 
 	reach (0);
 
-	/*
-	 * A protected region and its handlers are entered by the runtime rather than by
-	 * anything in the IL. The `+ len` boundaries are not roots: they are block starts
-	 * only because a region has to end somewhere, and nobody enters them.
-	 */
+	// A protected region and its handlers are entered by the runtime rather than by
+	// anything in the IL. The `+ len` boundaries are not roots. They are block starts
+	// only because a region has to end somewhere, and nobody enters them.
 	for (uint32_t i = 0; i < num_clauses; ++i) {
 		reach (clauses[i].try_offset);
 		reach (clauses[i].handler_offset);
@@ -482,12 +475,12 @@ MethodLLVMEmitter::mark_reachable_blocks ()
 		size_t at = worklist.back ();
 		worklist.pop_back ();
 
-		/* Walk the block's instructions to find where it can go from here. */
+		// Walk the block's instructions to find where it can go from here.
 		while (at < code_size) {
 			llvm::Expected<Flow> flow = decode_flow (at);
 
 			if (!flow) {
-				/* find_block_leaders already reported anything malformed. */
+				// find_block_leaders () already reported anything malformed.
 				llvm::consumeError (flow.takeError ());
 				break;
 			}
@@ -500,7 +493,7 @@ MethodLLVMEmitter::mark_reachable_blocks ()
 
 			at = flow->next;
 
-			/* The next block is a successor; the rest of this one is not. */
+			// The next block is a successor. The rest of this one is not.
 			if (blocks.count (at) != 0) {
 				reach (at);
 				break;
@@ -523,7 +516,7 @@ MethodLLVMEmitter::branch_target (int32_t displacement)
 	return target;
 }
 
-/// A slot of this frame's for a value of TYPE, placed where the frame is laid out
+/// A slot in this frame for a value of `type`, placed where the frame is laid out
 /// rather than where the translation happens to be.
 llvm::AllocaInst *
 MethodLLVMEmitter::entry_alloca (llvm::Type *type, const llvm::Twine &name)
@@ -531,20 +524,18 @@ MethodLLVMEmitter::entry_alloca (llvm::Type *type, const llvm::Twine &name)
 	MonoIrBuilder entry (entry_block, entry_block->begin ());
 	llvm::AllocaInst *slot = entry.CreateAlloca (type, nullptr, name);
 
-	/*
-	 * Nothing the runtime hands out promises more than a word, and a value type
-	 * whose alignment is spelled in its metadata is asking for no more than that.
-	 */
+	// Nothing the runtime hands out promises more than a word. A value type whose
+	// alignment is spelled in its metadata asks for no more than that either.
 	slot->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
 	return slot;
 }
 
-/// The memory a value of TYPE at DEPTH lives in while a branch is taken.
+/// The memory a value of `type` at `depth` lives in while a branch is taken.
 ///
 /// Slots are shared by everything that spills the same type at the same depth, so a
 /// conditional branch writes once for both of its edges. Sharing is safe because every
-/// edge into a block stores before it jumps, so a reload always sees the store from the
-/// predecessor it actually came from.
+/// edge into a block stores before it jumps. A reload always sees the store the
+/// predecessor left there.
 llvm::AllocaInst *
 MethodLLVMEmitter::spill_slot (size_t depth, llvm::Type *type)
 {
@@ -582,18 +573,19 @@ MethodLLVMEmitter::spill_stack (MonoIrBuilder &builder)
 	return slots;
 }
 
-/// Record that TARGET is entered holding SLOTS, which is also where the two edges of a
-/// conditional branch are checked against each other: they spill once and enter twice.
+/// Record that `target` is entered holding `slots`.
+///
+/// A conditional branch's two edges spill the same stack once, then each calls this
+/// function separately to enter its target. That second call is what checks the two
+/// edges against each other.
 llvm::Error
 MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
                                 const std::vector<Slot> &slots)
 {
 	Block &block = blocks[target];
 
-	/*
-	 * The fallthrough edge of a conditional branch is not checked by branch_target,
-	 * so this is where a branch as the last instruction of the method is caught.
-	 */
+	// branch_target () does not check the fallthrough edge of a conditional branch.
+	// This is where a branch as the last instruction of the method gets caught instead.
 	if (block.block == nullptr)
 		return invalid_il ("control falls off the end of the method body");
 
@@ -610,12 +602,10 @@ MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
 		                   + llvm::Twine (block.entry.size ()));
 
 	for (size_t depth = 0; depth < slots.size (); ++depth) {
-		/*
-		 * A value class travels through the same pointer slot every other
-		 * address does, so two paths landing in one slot is no evidence that
-		 * they agree on what is behind it. That agreement is checked here
-		 * rather than falling out of the coercion below.
-		 */
+		// A value class travels through the same pointer slot every other address
+		// does. So two paths landing in one slot are no evidence that they agree
+		// on what is behind it. This function checks that agreement directly,
+		// rather than letting it fall out of the coercion below.
 		if (held_in_memory (slots[depth].type)
 		    || held_in_memory (block.entry[depth].type)) {
 			llvm::Expected<llvm::Type *> source =
@@ -641,14 +631,10 @@ MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
 		if (block.entry[depth].alloca == slots[depth].alloca)
 			continue;
 
-		/*
-		 * The paths disagree on the representation at this depth. The slot
-		 * keeps the type the first path gave it and this edge converts on the
-		 * way in - the same direction mini merges, whose interface variables
-		 * are typed by the first-reaching path and later edges convert_value
-		 * into them. Anything the coercion cannot express - a struct meeting
-		 * an integer, say - is a merge the spec does not define either.
-		 */
+		// The paths disagree on the representation at this depth. The slot keeps
+		// the type the first path gave it, and each later edge converts on the
+		// way in. Anything the coercion cannot express, such as a struct meeting
+		// an integer, is a merge the CIL spec does not define either.
 		llvm::Value *current = builder.CreateLoad (
 			slots[depth].alloca->getAllocatedType (), slots[depth].alloca);
 		llvm::Expected<llvm::Value *> converted = coerce_to_location (
@@ -698,12 +684,10 @@ MethodLLVMEmitter::emit ()
 	clause_state.resize (num_clauses);
 	collect_sym_seq_points ();
 
-	/*
-	 * Every frame needs a description mono's unwinder can walk through,
-	 * clauses or not - an exception below it unwinds through it, and so does
-	 * a stack scan - so codegen must describe this function even where LLVM
-	 * proves it cannot itself unwind.
-	 */
+	// Every frame needs a description mono's unwinder can walk through, whether or not
+	// it has clauses. An exception below it unwinds through it, and so does a stack
+	// scan. Codegen must describe this function even where LLVM proves it cannot
+	// itself unwind.
 	function->setUWTableKind (llvm::UWTableKind::Default);
 
 	if (il_debug) {
@@ -712,12 +696,10 @@ MethodLLVMEmitter::emit ()
 		il_scope = il_debug->add_function (function, name.c_str ());
 	}
 
-	/*
-	 * An invoke is only well formed on a function with a personality, and mono's is
-	 * the hook its own unwinder recognises. Nothing calls it on the managed path -
-	 * mono_handle_exception does the search - but LLVM will not emit the LSDA the
-	 * unwinder reads without one named here.
-	 */
+	// An invoke is only well formed on a function with a personality, and mono's is
+	// the hook its own unwinder recognises. Nothing calls it on the managed path.
+	// mono_handle_exception () does the search instead, but LLVM will not emit the
+	// LSDA the unwinder reads without a personality named here.
 	if (num_clauses > 0) {
 		function->setPersonalityFn (llvm::cast<llvm::Constant> (
 			module->getOrInsertFunction (
@@ -725,10 +707,8 @@ MethodLLVMEmitter::emit ()
 				       llvm::FunctionType::get (
 					       llvm::Type::getInt32Ty (context ()), true))
 				.getCallee ()));
-		/*
-		 * What lets the clause gather tell "every protected call optimized
-		 * away" - an empty record, published - from "never had clauses".
-		 */
+		// This attribute is what MonoEHGatherPass reads to tell a method whose
+		// clauses all got optimized away from a method that never had any.
 		function->addFnAttr ("mono-has-eh-clauses");
 	}
 
@@ -739,12 +719,9 @@ MethodLLVMEmitter::emit ()
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
 	builder.SetInsertPoint (entry_block);
 
-	/*
-	 * ByReference<T> is a contract with the JIT rather than code: its IL
-	 * bodies just throw, and every JIT is required to substitute the real
-	 * semantics (mini's required intrinsics). The struct is one interior
-	 * pointer; the ctor stores it, the getter loads it.
-	 */
+	// ByReference<T> is a contract with the JIT, not code. Its IL bodies only throw,
+	// and the JIT must substitute the real semantics itself. The struct is one
+	// interior pointer. The constructor stores it, and the getter loads it.
 	if (is_intrinsic (method)) {
 		llvm::Align align (TARGET_SIZEOF_VOID_P);
 		std::string_view name = method->name;
@@ -765,10 +742,8 @@ MethodLLVMEmitter::emit ()
 		return unsupported_il ("an unrecognized ByReference member");
 	}
 
-	/*
-	 * Before anything that can call out: a stack walk entered below this
-	 * frame has to find the chain already linked.
-	 */
+	// This runs before anything that can call out. A stack walk entered below this
+	// frame must find the chain already linked.
 	if (method->save_lmf)
 		if (auto error = emit_push_lmf (builder))
 			return std::move (error);
@@ -778,13 +753,10 @@ MethodLLVMEmitter::emit ()
 	if (auto error = emit_local_allocas (builder))
 		return std::move (error);
 
-	/*
-	 * A filter body runs as a function of its own against this frame, and
-	 * llvm.localrecover is how it reaches the arguments and locals: escaping
-	 * them here is what pins each to a frame offset the filter can recompute
-	 * from the frame pointer. Order is the recovery index: arguments first,
-	 * then locals.
-	 */
+	// A filter body runs as a function of its own against this frame. llvm.localrecover
+	// is how it reaches the arguments and locals. Escaping them here is what pins each
+	// to a frame offset the filter can recompute from the frame pointer. The order is
+	// the recovery index: arguments first, then locals.
 	bool has_filters = false;
 	bool has_finally = false;
 
@@ -795,17 +767,19 @@ MethodLLVMEmitter::emit ()
 
 	bool pinned_vars = emit_debug_var_marker (builder);
 
-	/*
-	 * Both of the ways this frame is described to something outside it - the
-	 * localescape below, and the stackmap a finally marker carries - name a stack
-	 * object as a single frame-pointer-relative offset, with nowhere to say which
-	 * register it is relative to. A realigned frame addresses its non-fixed objects
-	 * off RSP instead, so X86 asserts on the stackmap ("Expected the FP as base
-	 * register") and quietly emits the wrong offset for LOCAL_ESCAPE. Nothing here
-	 * asks for more than 16-byte alignment, so the only thing that ever realigns
-	 * these frames is a vector spill slot regalloc invented; declining the
-	 * realignment clamps that slot instead, which costs an unaligned move.
-	 */
+	// This frame is described to something outside it in two ways: the localescape
+	// below, and the stackmap a finally marker carries. Both name a stack object as
+	// a single frame-pointer-relative offset, with no way to say which register
+	// that offset is relative to.
+	//
+	// A realigned frame addresses its non-fixed objects off RSP instead. X86 then
+	// asserts on the stackmap ("Expected the FP as base register") and quietly
+	// emits the wrong offset for LOCAL_ESCAPE.
+	//
+	// Nothing here asks for more than 16-byte alignment. So the only thing that ever
+	// realigns these frames is a vector spill slot the register allocator invented.
+	// Declining the realignment clamps that slot instead, at the cost of an unaligned
+	// move.
 	if (has_filters || has_finally || pinned_vars)
 		function->addFnAttr ("no-realign-stack");
 
@@ -823,11 +797,9 @@ MethodLLVMEmitter::emit ()
 	if (auto error = find_block_leaders ())
 		return std::move (error);
 
-	/*
-	 * A finally is entered from its own leaves as well as by unwinding, so it needs
-	 * somewhere to record which is in progress before it is jumped to, and a byte for
-	 * a thread abort that arrives while it is running to be held in until it is done.
-	 */
+	// A finally can be entered by falling into it or by unwinding through it. Before
+	// it jumps there, it needs a slot to record which one happened. It also needs a
+	// byte that holds off a thread abort until the finally body finishes.
 	for (uint32_t i = 0; i < num_clauses; ++i) {
 		if (clauses[i].flags != MONO_EXCEPTION_CLAUSE_FINALLY)
 			continue;
@@ -840,11 +812,9 @@ MethodLLVMEmitter::emit ()
 			                      llvm::Twine ("abort_guard") + llvm::Twine (i));
 	}
 
-	/*
-	 * A handler is entered by the runtime rather than by anything in the IL, so what
-	 * it starts holding is settled here rather than by a predecessor: a catch or a
-	 * filter is handed the exception, a finally or a fault nothing at all.
-	 */
+	// A handler is entered by the runtime rather than by anything in the IL. So what
+	// it starts holding is settled here, not by a predecessor. A catch or a filter
+	// is handed the exception. A finally or a fault gets nothing at all.
 	for (uint32_t i = 0; i < num_clauses; ++i) {
 		MonoExceptionClause *clause = &clauses[i];
 		std::vector<Slot> entry;
@@ -860,20 +830,19 @@ MethodLLVMEmitter::emit ()
 
 	emit_profiler_enter (builder);
 
-	/*
-	 * The type initializer runs before the first entry into any of the class's
-	 * methods (ECMA-335 II.10.5.3), and the method's own entry is the one
-	 * point every way of reaching it funnels through - stubs, vtable slots,
-	 * delegates, calli - so the check lives here rather than at call sites.
-	 *
-	 * A native-to-managed wrapper is the exception. It is entered from C on a
-	 * thread that may not be attached yet, and attaching it is the first thing
-	 * its body does; anything running before that - the class initializer's own
-	 * icall included - reads a null LMF address off a thread that has none. The
-	 * wrapper is not one of the class's methods anyway, only glue in front of
-	 * one, and the method it goes on to call runs the initializer at its own
-	 * entry, by which point the thread is attached.
-	 */
+	// The type initializer runs before the first entry into any of the class's
+	// methods (ECMA-335 II.10.5.3). Every way of reaching the method, such as a
+	// stub, a vtable slot, a delegate, or calli, funnels through the method's own
+	// entry. So the check lives here rather than at call sites.
+	//
+	// A native-to-managed wrapper is the exception. It is entered from C, on a
+	// thread that can still be unattached, and attaching it is the first thing its
+	// body does. Anything that runs before that point, including the class
+	// initializer's own icall, reads a null LMF address off a thread that has none.
+	//
+	// The wrapper is not one of the class's methods anyway. It is only glue in
+	// front of one. The method it goes on to call runs the initializer at its own
+	// entry, and by then the thread is attached.
 	if (method->wrapper_type != MONO_WRAPPER_NATIVE_TO_MANAGED
 	    && mono_class_needs_cctor_run (method->klass, method))
 		if (auto error = emit_class_init (builder, method->klass))
@@ -886,12 +855,10 @@ MethodLLVMEmitter::emit ()
 	blocks[0].entry_known = true;
 	builder.SetInsertPoint (blocks[0].block);
 
-	/*
-	 * The method-entry sequence point, which is what a METHOD_ENTRY event and a
-	 * step into this method stop on. It goes at the top of the first IL block
-	 * rather than in the entry block so that everything the prologue set up -
-	 * the LMF above all - is already in place when the debugger stops here.
-	 */
+	// This is the method-entry sequence point. A METHOD_ENTRY event and a step into
+	// this method both stop on it. It goes at the top of the first IL block rather
+	// than in the entry block. By then, everything the prologue set up, the LMF
+	// above all, is already in place when the debugger stops here.
 	emit_seq_point (builder, SEQ_POINT_ENCODED_ENTRY);
 
 	if (auto error = translate_range (builder, 0, code_size))
@@ -903,7 +870,7 @@ MethodLLVMEmitter::emit ()
 	return function;
 }
 
-/// Translate the IL in [BEGIN, END), leaving the builder wherever the last
+/// Translate the IL in [`begin`, `end`), leaving the builder wherever the last
 /// instruction did.
 llvm::Error
 MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t end)
@@ -911,10 +878,8 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 	ip = begin;
 
 	while (ip < end) {
-		/*
-		 * A filter body belongs to a function of its own; nothing in this
-		 * one reaches it, so its range is not translated here.
-		 */
+		// A filter body belongs to a function of its own. Nothing in this one
+		// reaches it, so its range is not translated here.
 		if (!filter_mode) {
 			bool skipped = false;
 
@@ -934,13 +899,12 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 		if (auto found = blocks.find (ip); found != blocks.end () && ip != begin) {
 			Block &next = found->second;
 
-			/*
-			 * Nothing gets here, so there is no entry stack to translate the
-			 * body against - skip to the next block something does reach and
-			 * let finish_function leave this one as `unreachable`. Whatever
-			 * came before cannot have fallen in, or this block would be
-			 * reachable, so no edge is being dropped.
-			 */
+			// Nothing reaches this block, so it has no entry stack to translate
+			// the body against. This skips ahead to the next block something
+			// does reach, and lets finish_function () mark this one
+			// `unreachable`. mark_reachable_blocks () flags anything with a
+			// live predecessor. An unreached block never had a fallthrough edge
+			// into it, so this skip drops nothing.
 			if (!next.reachable) {
 				while (ip < end) {
 					llvm::Expected<Flow> flow = decode_flow (ip);
@@ -958,11 +922,9 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 				continue;
 			}
 
-			/*
-			 * Falling into a block is an edge like any other, so the stack goes
-			 * through memory here too rather than staying in the values the
-			 * previous block happened to leave behind.
-			 */
+			// Falling into a block is an edge like any other. So the stack goes
+			// through memory here too, rather than staying in the values the
+			// previous block happened to leave behind.
 			if (builder.GetInsertBlock ()->getTerminator () == nullptr) {
 				if (auto error = enter_block (builder, ip, spill_stack (builder)))
 					return error;
@@ -974,11 +936,9 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			builder.SetInsertPoint (next.block);
 			reload_stack (builder, next);
 
-			/*
-			 * Entering a catch or filter handler is the one moment the caught
-			 * exception is reliably in hand, so it is remembered here for the
-			 * rethrow that may want it after the body has emptied the stack.
-			 */
+			// Entering a catch or filter handler is the only moment the caught
+			// exception is reliably in hand. It is remembered here for the
+			// rethrow, which can need it after the body has emptied the stack.
 			for (uint32_t i = 0; i < num_clauses; ++i) {
 				if (clauses[i].handler_offset != ip)
 					continue;
@@ -988,10 +948,8 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 				        || clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER))
 					clause_state[i].caught = stack.front ().value;
 
-				/*
-				 * Every way into a finally lands here, so this is where its
-				 * body starts as far as a thread abort is concerned.
-				 */
+				// Every way into a finally lands here, so this is where its
+				// body starts as far as a thread abort is concerned.
 				if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
 					emit_finally_body_marker (builder, i, /* opening */ true);
 			}
@@ -999,20 +957,16 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			return invalid_il ("unreachable instruction is not the start of a block");
 		}
 
-		/*
-		 * wants_seq_point_at () decides where a statement starts: the symbol
-		 * file's offsets when it has any for this method, and otherwise an
-		 * empty evaluation stack, plus a handler's first instruction, where it
-		 * holds only the exception.
-		 *
-		 * Both the debugger's stops and the line table are placed from it. The
-		 * line table records the statement rather than the instruction because
-		 * an offset read back out of it is handed to a symbol reader, and
-		 * mono-symbolicate resolves an offset that is not a sequence point to
-		 * the *next* one - so `throw new E ()` reports the line of whatever
-		 * follows the throw. Recording the statement is also what the classic
-		 * back end's map holds, so a trace says the same thing either way.
-		 */
+		// wants_seq_point_at () decides where a statement starts. That is the
+		// symbol file's offsets when it has any for this method. Otherwise it is
+		// an empty evaluation stack, plus a handler's first instruction, where
+		// the stack holds only the exception.
+		//
+		// Both the debugger's stops and the line table are placed from it. The
+		// line table records the statement rather than the instruction. A reader
+		// hands an offset it reads back to mono-symbolicate. mono-symbolicate
+		// resolves an offset that is not a sequence point to the next one after
+		// it. So `throw new E ()` reports the line of whatever follows the throw.
 		if (wants_seq_point_at (offset))
 			statement_offset = offset;
 
@@ -1030,14 +984,15 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 	return llvm::Error::success ();
 }
 
-/// The filter body of PARENT's clause CLAUSE_INDEX, as a function of its own.
+/// The filter body of `parent`'s clause `clause_index`, as a function of its own.
 ///
-/// The runtime's search pass calls it through call_filter with the parent
-/// frame's registers restored: the exception arrives in RAX, the chained frame
-/// pointer is the parent's frame, and the answer - match or keep searching -
-/// is returned like any int. The parent escaped its arguments and locals
-/// (llvm.localescape, same order as here), so llvm.localrecover turns the
-/// parent frame pointer back into their addresses.
+/// The runtime's search pass calls it through call_filter with the parent frame's
+/// registers restored. The exception arrives in RAX, and the chained frame pointer is
+/// the parent's frame. The answer, match or keep searching, is returned like any int.
+///
+/// The parent escaped its arguments and locals through llvm.localescape, in the same
+/// order as here. So llvm.localrecover turns the parent frame pointer back into their
+/// addresses.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 {
@@ -1055,13 +1010,11 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 		llvm::FunctionType::get (llvm::Type::getInt32Ty (context ()), false),
 		llvm::GlobalValue::ExternalLinkage,
 		parent->getName () + "$filter" + llvm::Twine (clause_index), module);
-	/* The chained frame pointer is how the parent frame is found. */
+	// The chained frame pointer is how the parent frame is found.
 	function->addFnAttr ("frame-pointer", "all");
-	/*
-	 * call_filter enters with the stack 16-aligned - the opposite parity from
-	 * a SysV call - so the frame realigns itself or every callee inherits the
-	 * wrong parity.
-	 */
+	// call_filter enters with the stack 16-aligned, the opposite parity from a SysV
+	// call. So the frame must realign itself, or every callee inherits the wrong
+	// parity.
 	function->addFnAttr ("stackrealign");
 
 	if (il_debug) {
@@ -1099,7 +1052,7 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	if (auto error = find_block_leaders ())
 		return std::move (error);
 
-	/* Entered like a handler: the exception is the whole evaluation stack. */
+	// Entered like a handler. The exception is the whole evaluation stack.
 	llvm::AllocaInst *exc_slot = spill_slot (0, ptr);
 
 	builder.CreateAlignedStore (exc, exc_slot, exc_slot->getAlign ());
@@ -1124,16 +1077,14 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 void
 MethodLLVMEmitter::finish_function ()
 {
-	/*
-	 * A block nothing reached still has to be well formed for the verifier, and the
-	 * only honest thing to put in one is that control never gets here.
-	 */
+	// A block nothing reached still has to be well formed for the verifier. The only
+	// honest thing to put in one is that control never gets here.
 	for (auto &entry : blocks)
 		if (entry.second.block->empty ())
 			MonoIrBuilder (entry.second.block).CreateUnreachable ();
 }
 
-/// Translate the instruction at OFFSET, leaving IP on the one after it.
+/// Translate the instruction at `ip`, leaving `ip` on the one after it.
 llvm::Error
 MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 {
@@ -1143,16 +1094,15 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	if (opcode == MonoOpcodeEnum_Invalid)
 		return invalid_il ("unrecognized opcode");
 
-	/* mono_opcode_value leaves the cursor on the opcode's last byte, not past it. */
+	// mono_opcode_value () leaves the cursor on the opcode's last byte, not past it.
 	ip = static_cast<size_t> (cursor - code) + 1;
 
-	/*
-	 * The operand is decoded here rather than in the emitters: mono's opcode table
-	 * says how wide it is, and an instruction that takes one takes nothing else. It
-	 * stays raw little-endian bits until a case below says what they mean - an index,
-	 * a signed constant, an IEC 60559 float. Instructions that carry their operand in
-	 * the opcode itself read nothing and pass their own constant.
-	 */
+	// The operand is decoded here rather than in the emitters. mono's opcode table
+	// says how wide it is, and an instruction that takes one operand takes nothing
+	// else. It stays raw little-endian bits until a case below says what they mean,
+	// such as an index, a signed constant, or an IEC 60559 float. Instructions that
+	// carry their operand in the opcode itself read nothing, and pass their own
+	// constant instead.
 	uint64_t operand = 0;
 
 	switch (mono_opcodes[opcode].argument) {
@@ -1207,15 +1157,13 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 		break;
 	}
 
-	/*
-	 * A branch displacement is signed and is counted from the instruction after the
-	 * branch, which `ip` now points at. Only the branch cases below read this.
-	 */
+	// A branch displacement is signed and is counted from the instruction after the
+	// branch, which `ip` now points at. Only the branch cases below read this.
 	int32_t displacement = mono_opcodes[opcode].argument == MonoShortInlineBrTarget
 	                               ? static_cast<int8_t> (operand)
 	                               : static_cast<int32_t> (operand);
 
-	/* Prefixes accumulate; anything else consumes whatever is pending and clears it. */
+	// Prefixes accumulate. Anything else consumes whatever is pending and clears it.
 	switch (opcode) {
 	case MONO_CEE_VOLATILE_:
 	case MONO_CEE_UNALIGNED_:
@@ -1232,10 +1180,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	switch (opcode) {
 	case MONO_CEE_NOP:
-		/*
-		 * A C# compiler puts one of these between statements, which is where a
-		 * run of nested calls ends as far as the debugger's stepper cares.
-		 */
+		// A C# compiler puts one of these between statements, which is where a
+		// run of nested calls ends as far as the debugger's stepper cares.
 		call_seq_point_run = false;
 		return llvm::Error::success ();
 	case MONO_CEE_BREAK:
@@ -1251,7 +1197,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 
 	case MONO_CEE_LDC_I4:
 		return emit_ldc_i4 (builder, static_cast<int32_t> (operand));
-	/* The short form is signed, so -128..-1 arrive as 0x80..0xFF. */
+	// The short form is signed, so -128..-1 arrive as 0x80..0xFF.
 	case MONO_CEE_LDC_I4_S:
 		return emit_ldc_i4 (builder, static_cast<int8_t> (operand));
 	case MONO_CEE_LDC_I4_M1:
@@ -1656,10 +1602,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_CONV_OVF_U_UN:
 		return emit_conv_ovf (builder, ConvType::U, true);
 
-	/*
-	 * The runtime's own opcodes, which only ever appear in a body it generated.
-	 * A method loaded from metadata carrying one is not IL at all.
-	 */
+	// The runtime's own opcodes, which only ever appear in a body it generated.
+	// A method loaded from metadata carrying one is not IL at all.
 	case MONO_CEE_MONO_ICALL:
 	case MONO_CEE_MONO_LDPTR:
 	case MONO_CEE_MONO_LDDOMAIN:
@@ -1728,44 +1672,36 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_calli_extra_arg (builder,
 			                                  static_cast<uint32_t> (operand));
 
-		/*
-		 * A sticky flag rather than a prefix: an address push may sit
-		 * between it and the call whose errno it asks for, so it rides
-		 * until the next call consumes it.
-		 */
+		// A sticky flag rather than a prefix. An address push can sit between it
+		// and the call whose errno it asks for, so it rides until the next call
+		// consumes it.
 		case MONO_CEE_MONO_SAVE_LAST_ERROR:
 			pending_save_last_error = true;
 			return llvm::Error::success ();
 
-		/* A hint that the branch it precedes is the unlikely one. */
+		// A hint that the branch it precedes is the unlikely one.
 		case MONO_CEE_MONO_NOT_TAKEN:
 			return llvm::Error::success ();
 
-		/*
-		 * Bracketing marks around a call out to native code. Every wrapper that
-		 * emits them is a save_lmf wrapper, so the chain is already linked for
-		 * the whole body and unlinked on every exit; there is nothing narrower
-		 * to do here.
-		 */
+		// Bracketing marks around a call out to native code. Every wrapper that
+		// emits them is a save_lmf wrapper, so the chain is already linked for
+		// the whole body and unlinked on every exit. There is nothing narrower
+		// to do here.
 		case MONO_CEE_MONO_SAVE_LMF:
 		case MONO_CEE_MONO_RESTORE_LMF:
 			return llvm::Error::success ();
 
-		/*
-		 * The flag a thread polls to notice it has been asked to stop. Its
-		 * address, not its value - an ldind follows.
-		 */
+		// The flag a thread polls to notice it has been asked to stop. This
+		// pushes its address, not its value. An ldind follows.
 		case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
 			push_stack (address_symbol ("mono_thread_interruption_request_flag",
 			                            &mono_thread_interruption_request_flag),
 			            m_class_get_byval_arg (mono_defaults.int_class));
 			return llvm::Error::success ();
 
-		/*
-		 * How many profilers asked to hear about allocations. The managed
-		 * allocator reads it to decide whether to raise the event; its
-		 * address, an ldind follows.
-		 */
+		// How many profilers asked to hear about allocations. The managed
+		// allocator reads it to decide whether to raise the event. This pushes
+		// its address, and an ldind follows.
 		case MONO_CEE_MONO_LDPTR_PROFILER_ALLOCATION_COUNT:
 			push_stack (address_symbol (
 					    "mono_profiler_gc_allocation_count",
@@ -1784,9 +1720,9 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	}
 }
 
-/// The errno capture a pending mono_save_last_error asked for, right after the
-/// call it decorated. Nothing may come between: any other runtime call can
-/// clobber the value.
+/// The errno capture a pending `mono_save_last_error` asked for, right after the call
+/// it decorated. Nothing must come between them. Any other runtime call can clobber
+/// the value.
 void
 MethodLLVMEmitter::consume_save_last_error (MonoIrBuilder &builder)
 {
@@ -1802,8 +1738,8 @@ MethodLLVMEmitter::consume_save_last_error (MonoIrBuilder &builder)
 	builder.CreateCall (decl);
 }
 
-/// Throw the corlib exception NAME - "DivideByZeroException" and friends, from
-/// System - and end the block. Nothing after the call is reachable.
+/// Throw the corlib exception `name`, such as "DivideByZeroException" from System, and
+/// end the block. Nothing after the call is reachable.
 void
 MethodLLVMEmitter::emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name)
 {
@@ -1814,8 +1750,8 @@ MethodLLVMEmitter::emit_throw_corlib_exception (MonoIrBuilder &builder, const ch
 	                     { builder.getInt32 (token) });
 }
 
-/// Throw the corlib exception NAME when CONDITION holds, and go on emitting into the
-/// block where it did not.
+/// Throw the corlib exception `name` when `condition` holds, and go on emitting into
+/// the block where it did not.
 llvm::BranchInst *
 MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
                                         const char *name)
@@ -1825,11 +1761,9 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 	llvm::BasicBlock *next_bb = llvm::BasicBlock::Create (context (), "no_throw", function);
 	llvm::BranchInst *branch = builder.CreateCondBr (condition, throw_bb, next_bb);
 
-	/*
-	 * These guards sit in the fallthrough path of ordinary arithmetic, so say which
-	 * way they go: otherwise the throw is as likely as the work it protects, and the
-	 * block layout interleaves the two.
-	 */
+	// These guards sit in the fallthrough path of ordinary arithmetic, so this states
+	// which way they go. Otherwise the throw looks as likely as the work it protects,
+	// and the block layout interleaves the two.
 	llvm::MDBuilder md (context ());
 	branch->setMetadata (llvm::LLVMContext::MD_prof, md.createBranchWeights (1, 1000));
 
@@ -1840,15 +1774,18 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 	return branch;
 }
 
-/// Throw NullReferenceException if POINTER is null, and go on emitting where it was not.
+/// Throw NullReferenceException when `pointer` is null, and go on emitting where it was
+/// not.
 ///
-/// The branch is tagged !make.implicit, which is what lets LLVM's ImplicitNullChecks
-/// pass delete it again: it folds the test into whichever faulting memory operation
-/// follows in the not-taken block and records the fault address in a fault map, so the
-/// check costs nothing until it fires. That only works in the shape emitted here - the
-/// dereference in the not-taken arm, on the pointer that was tested - and the pass
-/// declines and leaves the branch alone when the field offset is too far into the page
-/// for the hardware to trap on it.
+/// The branch carries the !make.implicit tag LLVM's ImplicitNullChecks pass looks for.
+/// That pass is off by default in this JIT. `--llvm-opt=-enable-implicit-null-checks`
+/// turns it on. When it runs, it folds the test into whichever faulting memory
+/// operation follows in the not-taken block. It also records the fault address in a
+/// fault map, so the check costs nothing until it fires.
+///
+/// That fold only works in the shape emitted here: a dereference in the not-taken arm,
+/// on the pointer that was tested. The pass declines and leaves the branch alone when
+/// the field offset is too far into the page for the hardware to trap on it.
 void
 MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer)
 {
@@ -1870,12 +1807,10 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	if (sig->hasthis)
 		names[0] = "this";
 
-	/*
-	 * A wrapper that is itself a native entry is called with its value types
-	 * already marshalled, so the slot an argument is spilled to has to be that
-	 * shape and that size - the body reads the native fields straight out of
-	 * it, past where the managed layout would have ended.
-	 */
+	// A wrapper that is itself a native entry is called with its value types already
+	// marshalled. So the slot an argument is spilled to must have that shape and that
+	// size. The body reads the native fields straight out of it, beyond where the
+	// managed layout ends.
 	bool native = native_signature ();
 
 	for (unsigned i = 0; i < nargs; ++i) {
@@ -1899,15 +1834,13 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		});
 	}
 
-	/*
-	 * The trailing parameter of a vararg method is the caller's cookie buffer,
-	 * which arglist hands straight to ArgIterator. It gets no slot of its own -
-	 * nothing writes to it, and keeping it out of `args` leaves the
-	 * llvm.localescape order a filter recovers from untouched.
-	 *
-	 * It is the last parameter however many precede it, so it is found by
-	 * counting rather than by walking around the hidden return pointer.
-	 */
+	// The trailing parameter of a vararg method is the caller's cookie buffer, which
+	// `arglist` hands straight to ArgIterator. It gets no slot of its own. Nothing
+	// writes to it, and keeping it out of `args` leaves the llvm.localescape order a
+	// filter recovers from untouched.
+	//
+	// It is the last parameter however many precede it, so it is found by counting
+	// rather than by walking around the hidden return pointer.
 	if (sig->call_convention == MONO_CALL_VARARG)
 		sig_cookie = function->getArg (function->arg_size () - 1);
 

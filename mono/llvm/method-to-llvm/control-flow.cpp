@@ -56,11 +56,9 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 {
 	MonoType *ret = mono_method_signature_internal (method)->ret;
 
-	/*
-	 * The method-exit sequence point, which is where a METHOD_EXIT event and a
-	 * step out of this method stop. Ahead of the return value's coercion so
-	 * that a debugger stopped here still sees the frame the IL described.
-	 */
+	// The method-exit sequence point, where a METHOD_EXIT event and a step out
+	// of this method stop. It comes before the return value's coercion, so a
+	// debugger stopped here still sees the frame the IL described.
 	emit_seq_point (builder, SEQ_POINT_ENCODED_EXIT);
 
 	if (ret->type == MONO_TYPE_VOID && !ret->byref) {
@@ -77,7 +75,7 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 	if (stack.size () != 1)
 		return unbalanced_stack (1);
 
-	/* The return slot is a location like any other, so it narrows the same way. */
+	// The return slot is a location like any other, so it narrows the same way.
 	llvm::Expected<llvm::Value *> value =
 		coerce_to_location (builder, get_stack (0), ret, native_signature ());
 	if (!value)
@@ -110,7 +108,7 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 
 namespace {
 
-/// How OP compares two integers.
+/// How op compares two integers.
 llvm::CmpInst::Predicate
 integer_predicate (BinaryOp op)
 {
@@ -140,10 +138,10 @@ integer_predicate (BinaryOp op)
 	}
 }
 
-/// How OP compares two floats.
+/// How op compares two floats.
 ///
-/// The .un forms are the unordered ones, which is what makes a NaN operand branch: the
-/// CLI spells "unsigned or unordered" with one suffix, and on F it means the second.
+/// The .un forms are the unordered predicates. CIL spells "unsigned or unordered" with one
+/// suffix, and on F that suffix means unordered. A NaN operand then takes the .un branch.
 llvm::CmpInst::Predicate
 float_predicate (BinaryOp op)
 {
@@ -175,11 +173,11 @@ float_predicate (BinaryOp op)
 
 } // namespace
 
-/// Pop the two operands Table III.4 allows for OP and compare them, leaving the i1.
+/// Pop the two operands Table III.4 allows for op, compare them, and leave the i1 result.
 ///
-/// The table's cell says what the two are compared as rather than what is left behind:
-/// an int32 against a native int is settled at native int width, and two managed
-/// pointers as addresses.
+/// The table's cell says what the two are compared as, not what type is left behind.
+/// An int32 against a native int compares at native int width. Two managed pointers
+/// compare as addresses.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_comparison (MonoIrBuilder &builder, BinaryOp op)
 {
@@ -324,7 +322,7 @@ MethodLLVMEmitter::emit_brcond (MonoIrBuilder &builder, int32_t displacement, bo
 	StackValue value = get_stack (0);
 	StackType type = stack_type (value.type);
 
-	/* Everything the two sections list, which is everything but F. */
+	// Everything the two sections list, which is everything but F.
 	if (type == Float || type == Invalid)
 		return invalid_il (llvm::Twine (branch_if_true ? "brtrue" : "brfalse")
 		                   + " is not defined for operand type "
@@ -334,7 +332,7 @@ MethodLLVMEmitter::emit_brcond (MonoIrBuilder &builder, int32_t displacement, bo
 	if (!target)
 		return target.takeError ();
 
-	/* The tested value is gone by the time either edge is taken. */
+	// The tested value is gone by the time either edge is taken.
 	pop_stack (1);
 
 	std::vector<Slot> slots = spill_stack (builder);
@@ -496,7 +494,7 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 		displacements.push_back (static_cast<int32_t> (*displacement));
 	}
 
-	/* Every displacement is relative to here, which is why they are all read first. */
+	// Every displacement is relative to here. That is why the code reads them all first.
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
@@ -520,11 +518,9 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 	if (llvm::Error error = enter_block (builder, ip, slots))
 		return error;
 
-	/*
-	 * Every target is entered before the switch is created: entering a block can
-	 * emit conversion stores when the paths into it disagree on a slot's
-	 * representation, and those have to land ahead of the terminator.
-	 */
+	// The code enters every target before it builds the switch instruction.
+	// Entering a block can emit a conversion store when the paths into it disagree
+	// on a slot's representation. That store must land ahead of the terminator.
 	std::vector<size_t> targets (*count);
 
 	for (uint32_t i = 0; i < *count; ++i) {
@@ -537,12 +533,10 @@ MethodLLVMEmitter::emit_switch (MonoIrBuilder &builder)
 		targets[i] = *target;
 	}
 
-	/*
-	 * Switching at the index's own width rather than truncating to int32 is what makes
-	 * "compares it, as an unsigned integer, to n" come out right for a native int: a
-	 * value that matches no case falls through, and no wide index can alias a case by
-	 * losing its high half.
-	 */
+	// The switch compares at the index's own width rather than truncating it to int32.
+	// That width is what keeps the spec's rule true for a native int: it "compares it,
+	// as an unsigned integer, to n." A value that matches no case falls through, and a
+	// wide index cannot alias a case by losing its high half.
 	llvm::SwitchInst *jump = builder.CreateSwitch (index, blocks[ip].block, *count);
 
 	for (uint32_t i = 0; i < *count; ++i)
@@ -589,18 +583,18 @@ MethodLLVMEmitter::emit_break (MonoIrBuilder &builder)
 	return emit_user_break (builder);
 }
 
-/*
- * Announce a break to whoever is debugging this process.
+/**
+ * Announce a break to whoever debugs this process.
  *
- * The runtime decides what that means: with a soft-debugger client attached it
- * raises a user-break event, with the native-break debug option it traps, and
- * otherwise it does nothing. So this is a call rather than llvm.debugtrap,
- * which would only ever be the middle one.
+ * The runtime decides what a break means here. With a soft debugger attached, it
+ * raises a user-break event. With the native-debugger-break debug option set, it
+ * traps. Otherwise, it does nothing. This is why the code emits a call instead of
+ * the llvm.debugtrap intrinsic, which only ever traps.
  *
- * It goes through the icall wrapper because the callee walks the stack for a
- * managed frame to report the break against, and asserts that it finds one -
- * the wrapper's LMF is what leads that walk out of native code and back into
- * this frame.
+ * The call goes through the icall wrapper. The callee walks the stack to find a
+ * managed frame to report the break against, and it asserts that it finds one.
+ * The wrapper's LMF is what lets that walk cross from native code back into this
+ * frame.
  */
 llvm::Error
 MethodLLVMEmitter::emit_user_break (MonoIrBuilder &builder)

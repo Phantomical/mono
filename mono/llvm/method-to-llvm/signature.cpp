@@ -25,11 +25,12 @@ namespace mono {
 
 namespace {
 
-/// An error describing something the converter could not express in LLVM IR.
+/// An error for a signature or a type this converter cannot express in LLVM IR.
 ///
-/// An ExecutionEngineException, like the refusals in invalid-il.cpp: a signature
-/// or a type this engine cannot express is a limit of the engine, not of the
-/// program, and nothing else is going to compile the method instead.
+/// This becomes an ExecutionEngineException, the same as the refusals in
+/// invalid-il.cpp. A type this engine cannot express is a limit of the
+/// engine, not of the program, and no other engine compiles the method
+/// instead.
 inline llvm::Error
 conversion_error (const llvm::Twine &reason)
 {
@@ -82,18 +83,18 @@ primitive_type_to_llvm_type (llvm::LLVMContext &ctx, MonoTypeEnum type)
 	}
 }
 
-/// The vector type a SIMD class travels in, or null if this is not a shape we know
-/// how to lower.
+/// The vector type a SIMD class travels in, or null if this is not a shape
+/// this converter can lower.
 ///
-/// These have to be vectors rather than a struct of their elements: the calling
-/// conventions hand them over in an SSE register, and a struct here would put them
-/// somewhere else.
+/// The type must be a vector, not a struct of its elements. The calling
+/// convention places a SIMD value in an SSE register, and a struct does not
+/// get that placement.
 llvm::Type *
 simd_class_to_llvm_type (llvm::LLVMContext &ctx, MonoClass *klass)
 {
 	/*
-	 * Vector<T> and Vector64/128/256/512<T> all describe themselves: the element is
-	 * the type argument, and how many of them there are is the class's own size.
+	 * Vector<T> describes itself: the element is the type argument, and how
+	 * many of them there are is the class's own size.
 	 */
 	if (mono_class_is_ginst (klass)) {
 		MonoType *etype =
@@ -124,19 +125,23 @@ simd_class_to_llvm_type (llvm::LLVMContext &ctx, MonoClass *klass)
 		return llvm::FixedVectorType::get (llvm::Type::getInt16Ty (ctx), 8);
 	if (name == "Vector16sb" || name == "Vector16b")
 		return llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx), 16);
-	/* The short System.Numerics vectors still occupy a whole 4 x float register. */
+	/*
+	 * Vector4f is a Mono.Simd type. Vector2, Vector3 and Vector4 are
+	 * System.Numerics types. All four fit in one 128-bit, four-float register.
+	 */
 	if (name == "Vector4f" || name == "Vector2" || name == "Vector3" || name == "Vector4")
 		return llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx), 4);
 
 	return nullptr;
 }
 
-/// Whether marshalling hands KLASS across a native boundary byte for byte, so
-/// that its native layout is the managed one convert_vtype already builds.
+/// Whether marshalling hands klass across a native boundary byte for byte, so
+/// its native layout is the managed one that convert_vtype already builds.
 ///
-/// The same three cases marshal-ilgen skips conversion for
-/// (emit_marshal_vtype_ilgen): everything else is copied field by field into a
-/// buffer that can be a different size, with the fields somewhere else in it.
+/// These are the same three cases marshal-ilgen skips conversion for, in
+/// emit_marshal_vtype_ilgen. Marshalling copies every other value type field
+/// by field into a buffer that can be a different size, with fields at
+/// different offsets.
 bool
 marshals_unchanged (MonoClass *klass)
 {
@@ -144,15 +149,17 @@ marshals_unchanged (MonoClass *klass)
 	       || m_class_is_enumtype (klass);
 }
 
-/// Whether METHOD is entered with SIG's value types already marshalled.
+/// Whether method is entered with sig's value types already marshalled.
 ///
-/// A pinvoke signature describes native code, but that is not enough on its own
-/// to say that a caller holds marshalled values. A [DllImport] method carries
-/// one too, and a managed call to it enters at the marshalling wrapper the
-/// runtime built - the marshalled layout only begins inside that wrapper, past
-/// where its arguments were converted. What does speak it is a method whose own
-/// body is native-facing: the wrapper a delegate is handed out to native code
-/// as, whose signature is the native one because it is the native entry.
+/// A pinvoke signature by itself does not prove that a caller holds
+/// marshalled values. A [DllImport] method carries a pinvoke signature too,
+/// but a managed caller enters it through the wrapper the runtime built. The
+/// marshalled layout begins only inside that wrapper, after it converts its
+/// arguments.
+///
+/// A wrapper whose own body faces native code is different. The wrapper a
+/// delegate hands to native code as its entry point uses the native
+/// signature, because it is that native entry point.
 bool
 speaks_marshalled_layout (MonoMethod *method, MonoMethodSignature *sig)
 {
@@ -167,22 +174,23 @@ struct LayoutField {
 };
 
 /*
- * The bytes from AT to SIZE, appended to BODY as the continuation of LAST.
+ * The bytes from at to size, appended to body as the continuation of last.
  *
  * A gap at the end of a value type is not padding. A C# `fixed` buffer is a
- * single field of the element type inside a class sized for the whole array,
- * so everything past the first element has no metadata field to be found
- * under; a .pack directive leaves the same shape. Those bytes are live data,
- * and the classification only ever sees fields, so the last field has to be
- * carried out to the end of the type - which is what mini does too, in
- * collect_field_info_nested (mini-amd64.c, "This can happen with .pack
- * directives eg. 'fixed' arrays").
+ * single field of the element type, inside a class sized for the whole
+ * array. Metadata has no field for anything past the first element, and a
+ * .pack directive leaves the same shape. Those bytes are live data, but the
+ * classification only ever sees fields, so the last field must extend to
+ * the end of the type. mini does the same thing in collect_field_info_nested
+ * (arch-amd64.c): "This can happen with .pack directives eg. 'fixed'
+ * arrays".
  *
- * Repeating a primitive is what keeps the register file right: the tail of a
- * `fixed float` buffer rides the SSE file, which bytes would not say. Anything
- * else - a pointer, an inlined array, a marshalled string - classifies as
- * integer whatever width it is given, which is what plain bytes say as well,
- * and is what mini widens rather than replicates for the same reason.
+ * Repeating a primitive keeps the register file correct. The tail of a
+ * `fixed float` buffer rides the SSE file, and plain bytes do not say that.
+ * Anything else - a pointer, an inlined array, a marshalled string - becomes
+ * integer data at whatever width it is given. Plain bytes say the same
+ * thing, and mini widens the field's size instead of repeating it, for the
+ * same reason.
  */
 void
 fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
@@ -190,7 +198,7 @@ fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
 {
 	int gap = static_cast<int> (size) - at;
 
-	/* A type with no field at all is all padding, and stays that way. */
+	// A type with no field at all is all padding, and stays that way.
 	if (last == nullptr) {
 		body.push_back (padding_type (ctx, gap));
 		return;
@@ -212,13 +220,16 @@ fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
 }
 
 /*
- * FIELDS laid into TYPE's body as a packed struct spelling out the real layout:
- * each field at the offset it was laid out at, with the gaps between them
- * filled in by padding_type (). Real layout so LLVM can reason about the
- * fields; packed so the offsets are exactly the runtime's rather than whatever
- * the DataLayout would infer; padding spelled as a shape no field ever takes,
- * which is what lets LegacyAbiPass tell data from padding when it classifies
- * (a float sharing an eightbyte with padding is still a float to the C ABI).
+ * Lays fields into type's body as a packed struct that spells out the real
+ * layout. Each field sits at the offset it was laid out at, and
+ * padding_type () fills the gaps between them.
+ *
+ * The layout is real, so LLVM can reason about the fields. The struct is
+ * packed, so the offsets match the runtime's layout instead of whatever
+ * DataLayout infers on its own. Padding takes a shape no real field ever
+ * takes, which lets LegacyAbiPass tell data from padding when it classifies
+ * a value. A float that shares an eightbyte with padding is still a float
+ * to the C ABI.
  */
 void
 set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
@@ -230,10 +241,10 @@ set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
 	           });
 
 	/*
-	 * An explicit layout can overlap fields, which a struct cannot express;
-	 * whichever comes first keeps its slot and the rest of the union becomes
-	 * padding. What that loses is only the overlapped fields' say in the
-	 * native classification - the bytes are all still there.
+	 * An explicit layout can overlap fields, and a struct cannot express an
+	 * overlap. Whichever field comes first keeps its slot, and the rest of
+	 * the union becomes padding. This only loses the overlapped fields' say
+	 * in the native classification - the bytes are all still there.
 	 */
 	std::vector<llvm::Type *> body;
 	const LayoutField *last = nullptr;
@@ -261,16 +272,16 @@ set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
 		return;
 	}
 
-	/* A layout the walk cannot restate keeps the right size, opaquely. */
+	// A layout the walk cannot restate keeps the right size, opaquely.
 	type->setBody (llvm::ArrayType::get (llvm::Type::getInt8Ty (ctx), size),
 	               /*isPacked=*/true);
 }
 
 } // namespace
 
-/// The C ABI leaves a narrow integer's high bits undefined, so which way they get
-/// filled is part of the signature rather than something the two ends can each
-/// decide.
+/// The C ABI leaves a narrow integer's high bits undefined. The signature
+/// must say which way to fill them, because the caller and the callee
+/// cannot each decide on their own.
 llvm::Attribute::AttrKind
 integer_extension (MonoType *t)
 {
@@ -303,9 +314,9 @@ bool
 implemented_outside_il (MonoMethod *method)
 {
 	/*
-	 * A wrapper is translated however the method it wraps is marked: the
-	 * wrapper the runtime builds around a pinvoke keeps the flags of the
-	 * method it wraps, and the wrapper is exactly the part that is IL.
+	 * A wrapper carries its own IL body, whatever native code or icall it
+	 * wraps. Checking wrapper_type first stops a marshalling wrapper from
+	 * counting as implemented outside IL.
 	 */
 	if (method->wrapper_type != MONO_WRAPPER_NONE)
 		return false;
@@ -324,13 +335,13 @@ icall_wrapper_target (MonoMethod *method)
 		return method;
 	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) == 0)
 		return method;
-	/* Array Get/Set/Address: no icall stands behind them at all. */
+	// Array Get/Set/Address: no icall stands behind them at all.
 	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE) != 0)
 		return method;
 	/*
-	 * A COM class's wrapper is the interop one, which is compiled out of some
-	 * builds; the loader's flag is what mono_marshal_get_native_wrapper ()
-	 * branches on before it asserts.
+	 * A COM class's wrapper is the interop one, and that code is compiled
+	 * out of some builds. MONO_CLASS_IS_IMPORT is the flag
+	 * mono_marshal_get_native_wrapper () branches on before it asserts.
 	 */
 	if (MONO_CLASS_IS_IMPORT (method->klass))
 		return method;
@@ -359,11 +370,11 @@ entered_in_c (MonoMethod *method)
 {
 	/*
 	 * The address the runtime publishes for a no-wrapper icall is the
-	 * registered C function itself (mono_jit_compile_method_inner), so that
-	 * one entry really is C. Everything else implemented outside IL is reached
-	 * through a wrapper, and a wrapper is a method this backend compiles and
-	 * publishes like any other - so a call to it is an ordinary call, whatever
-	 * the declaration reads like.
+	 * registered C function itself, so that one entry really is C.
+	 * Everything else implemented outside IL is reached through a wrapper,
+	 * and a wrapper is a method this backend compiles and publishes like any
+	 * other. A call to it is an ordinary call, whatever the declaration
+	 * reads like.
 	 */
 	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) == 0)
 		return false;
@@ -404,14 +415,14 @@ MethodLLVMEmitter::convert_type (MonoType *t, bool native)
 	case MONO_TYPE_SZARRAY:
 	case MONO_TYPE_PTR:
 	case MONO_TYPE_FNPTR:
-	/* Generic sharing hands us these as references. */
+	// Generic sharing hands these over as references.
 	case MONO_TYPE_VAR:
 	case MONO_TYPE_MVAR:
 		return pointer_type (context ());
 	case MONO_TYPE_GENERICINST:
 		if (!mono_type_generic_inst_is_valuetype (t))
 			return pointer_type (context ());
-		/* Fall through */
+		// Fall through
 	case MONO_TYPE_VALUETYPE:
 	case MONO_TYPE_TYPEDBYREF:
 		return convert_vtype (t, native);
@@ -426,28 +437,30 @@ MethodLLVMEmitter::convert_type (MonoType *t, bool native)
 }
 
 /*
- * Whether a value of T rides the evaluation stack as the address of a frame slot
- * holding it, rather than as an SSA value.
+ * Whether a value of type t rides the evaluation stack as the address of a
+ * frame slot holding it, instead of as an SSA value.
  *
- * Exactly the types convert_type () gives a struct: a value class laid out field
- * by field. LLVM does not keep a struct whole - SROA and InstCombine take every
- * load of one apart into its fields and put it back together at every store - so
- * a front end that moves them around as SSA values spends the pipeline's time
- * undoing its own work. A memcpy between slots says the same thing in one
- * instruction, and mem2reg still promotes the slot where the fields turn out to
- * be all that is wanted.
+ * This is true exactly for the types convert_type () turns into a struct: a
+ * value class laid out field by field. LLVM does not keep a struct whole.
+ * SROA and InstCombine take every load of one apart into its fields, and
+ * put it back together at every store. A front end that moves a struct
+ * around as an SSA value spends the pipeline's time undoing its own work. A
+ * memcpy between slots says the same thing in one instruction. mem2reg
+ * still promotes the slot when the fields turn out to be all that is
+ * wanted.
  *
- * A SIMD class and an enum are not here. convert_type gives them a vector and a
- * scalar, which genuinely do belong in a register.
+ * A SIMD class and an enum are not held in memory. convert_type turns them
+ * into a vector and a scalar, and both belong in a register.
  */
 bool
 MethodLLVMEmitter::held_in_memory (MonoType *t)
 {
 	/*
-	 * Asked of convert_type rather than worked out again from the metadata: the
-	 * two have to agree about SIMD and enums, and the only way to be sure of
-	 * that is to let it answer. A type it cannot convert has no representation
-	 * to pick either - whichever caller needed one is about to fail on it.
+	 * This asks convert_type instead of working it out again from the
+	 * metadata. The two must agree about SIMD types and enums, and letting
+	 * convert_type answer is the only way to guarantee that. A type
+	 * convert_type cannot convert has no representation to pick either -
+	 * whichever caller wanted one is about to fail on it.
 	 */
 	llvm::Expected<llvm::Type *> type = convert_type (t);
 
@@ -470,15 +483,15 @@ MethodLLVMEmitter::vtype_size (MonoType *t, bool native)
 }
 
 /*
- * A value type converts to a packed struct spelling out its real layout - see
- * set_packed_body (), which is where that shape is described.
+ * A value type converts to a packed struct that spells out its real layout
+ * - see set_packed_body (), which describes that shape.
  *
- * NATIVE asks for the layout marshalling gives the class instead, which is a
- * different struct whenever it moves a field or changes its width. Only a
- * pinvoke signature is in those terms, and only for the classes marshalling
- * actually rewrites: for the rest the two layouts are the same bytes, and
- * sharing one type keeps a value crossing between the two worlds from needing
- * a conversion that would be the identity.
+ * native asks for the layout marshalling gives the class instead. That
+ * layout is a different struct whenever marshalling moves a field or
+ * changes its width. Only a pinvoke signature speaks in those terms, and
+ * only for classes marshalling actually rewrites. For every other class, the
+ * two layouts are the same bytes. Sharing one type lets a value cross
+ * between the two worlds without a conversion that changes nothing.
  */
 llvm::Expected<llvm::Type *>
 MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
@@ -486,12 +499,17 @@ MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 	MonoClass *klass = mono_class_from_mono_type_internal (t);
 
 	/*
-	 * Laying the class out is what discovers a bad layout - an unaligned
-	 * reference field, say - and a class that cannot be laid out has no
-	 * layout to convert. Surface its own failure rather than reading the
-	 * offsets it never got: the caller turns that into the TypeLoadException
-	 * the program is owed. This settles metadata only, and is not the class
-	 * initializer, which must never run here.
+	 * A class's layout step is what finds a bad layout, for example an
+	 * unaligned reference field. A class that fails layout has no layout to
+	 * convert.
+	 *
+	 * If the class fails to lay out, this function reports that failure
+	 * directly, instead of reading offsets a failed class never received.
+	 * The caller turns the error into the TypeLoadException the program is
+	 * owed.
+	 *
+	 * mono_class_init_checked only settles metadata here. It is not the
+	 * class initializer, and the initializer must never run on this path.
 	 */
 	ERROR_DECL (metadata_error);
 
@@ -550,15 +568,16 @@ MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 	return type;
 }
 
-/// The LLVM type for one field of a native layout, of SIZE bytes.
+/// The LLVM type for one field of a native layout, of size bytes.
 ///
-/// Only two things about a native field reach LegacyAbiPass: how many bytes it
-/// covers, and whether those bytes ride in an SSE register. A field marshalling
-/// passes through keeps its own type so the classifier still sees the float or
-/// recurses into the nested struct; everything marshalling rewrites - a bool
-/// widened to a Win32 BOOL, a string turned into a pointer, an array inlined -
-/// becomes opaque data of the right width, which classifies as integer whatever
-/// it started as.
+/// Only two facts about a native field reach LegacyAbiPass: how many bytes
+/// it covers, and whether those bytes ride in an SSE register. A field that
+/// marshalling passes through unchanged keeps its own type, so the
+/// classifier still sees the float, or recurses into the nested struct.
+/// Everything marshalling rewrites becomes opaque data of the right width.
+/// This covers a bool widened to a Win32 BOOL, a string turned into a
+/// pointer, and an array inlined. That data classifies as integer, whatever
+/// type it started as.
 llvm::Expected<llvm::Type *>
 MethodLLVMEmitter::native_field_type (MonoType *t, MonoMarshalSpec *mspec, int size)
 {
@@ -585,9 +604,11 @@ MethodLLVMEmitter::native_field_type (MonoType *t, MonoMarshalSpec *mspec, int s
 	return llvm::ArrayType::get (llvm::Type::getInt8Ty (context ()), size);
 }
 
-/// KLASS in the layout marshalling copies it into: the offsets and widths
-/// mono_marshal_load_type_info () worked out, which is what the C on the other
-/// side of the boundary was compiled against.
+/// klass in the layout marshalling copies it into.
+///
+/// mono_marshal_load_type_info () works out the offsets and widths of that
+/// layout. That is the layout the C code on the other side of the boundary
+/// was compiled against.
 llvm::Expected<llvm::Type *>
 MethodLLVMEmitter::convert_native_vtype (MonoClass *klass)
 {
@@ -640,11 +661,11 @@ MethodLLVMEmitter::native_signature () const
 	return speaks_marshalled_layout (method, mono_method_signature_internal (method));
 }
 
-/// The alignment a location holding a T needs.
+/// The alignment a location needs to hold a value of type t.
 ///
-/// The struct convert_vtype builds is packed, which the data layout reads as
-/// 1-aligned, so every alloca of one has to be told what the runtime decided
-/// instead.
+/// convert_vtype builds a packed struct, and the data layout reads a packed
+/// struct as 1-aligned. Every alloca of one must be told the alignment the
+/// runtime decided on instead.
 llvm::Align
 MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 {
@@ -652,14 +673,16 @@ MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 		return llvm::Align (TARGET_SIZEOF_VOID_P);
 
 	/*
-	 * A reference is one pointer wide and the runtime puts every slot holding
-	 * one on a pointer boundary: mono_class_layout_fields force-aligns a
-	 * reference-bearing field to TARGET_SIZEOF_VOID_P whatever Pack asked for,
-	 * and an explicit layout that lands one off a boundary is a type load
-	 * failure - the collector marks in words and could not find the reference
-	 * otherwise. Resolving to a class below would answer with the alignment of
-	 * the object pointed at, which says nothing about the slot; an access that
-	 * really does name an unaligned one still has the unaligned. prefix.
+	 * A reference is one pointer wide, and the runtime puts every slot that
+	 * holds one on a pointer boundary. mono_class_layout_fields force-aligns
+	 * a reference-bearing field to TARGET_SIZEOF_VOID_P, whatever Pack asked
+	 * for. An explicit layout that puts one off that boundary is a type load
+	 * failure. The collector marks in words and cannot find the reference
+	 * otherwise.
+	 *
+	 * Resolving to a class below gives the alignment of the object pointed
+	 * at, and that says nothing about the slot itself. An access that names
+	 * an unaligned slot still carries the `unaligned.` prefix.
 	 */
 	if (mini_type_is_reference (t))
 		return llvm::Align (TARGET_SIZEOF_VOID_P);
@@ -668,8 +691,8 @@ MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 	unsigned align = mono_class_min_align (klass);
 
 	/*
-	 * A marshalled layout widens fields the managed one packs tightly, so it
-	 * is the marshalling code's own alignment that a buffer of it needs.
+	 * A marshalled layout widens fields that the managed layout packs
+	 * tightly. A buffer of it needs the marshalling code's own alignment.
 	 */
 	if (native && m_class_is_valuetype (klass) && !marshals_unchanged (klass)) {
 		guint32 native_align = 0;
@@ -680,39 +703,42 @@ MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 	}
 
 	/*
-	 * A vector's natural alignment is its size, but nothing the runtime hands
-	 * out promises more than 8 - the GC allocates on words, so a vector inside
-	 * an array or an object is only word-aligned. Claiming 8 keeps every
-	 * vector access an unaligned instruction; LLVM raises it back where it can
-	 * prove more, which is exactly the allocas.
+	 * A vector's natural alignment equals its size, but nothing the runtime
+	 * hands out promises more than 8 bytes. The GC allocates on word
+	 * boundaries, so a vector inside an array or an object is only
+	 * word-aligned. Claiming 8 keeps every vector access an unaligned
+	 * instruction. LLVM raises the alignment back up where it can prove
+	 * more, which happens exactly for allocas.
 	 */
 	if (MONO_CLASS_IS_SIMD (cfg, klass))
 		align = std::min (8, mono_class_value_size (klass, NULL));
 
 	/*
-	 * A packed layout can ask for an alignment that is not a power of two, and
-	 * a class whose metadata failed to load has no alignment at all.
+	 * A packed layout can ask for an alignment that is not a power of two.
+	 * A class whose metadata failed to load has no alignment at all.
 	 */
 	return llvm::Align (llvm::PowerOf2Ceil (std::max (align, 1u)));
 }
 
-/// The LLVM function type for SIG, in this backend's own convention: every
-/// value in its natural type, value types by value as their struct, aggregate
-/// returns returned as aggregates. Only LegacyAbiPass ever lowers any of it.
+/// The LLVM function type for sig, built in this backend's own convention.
+/// Every value keeps its natural type. A value type travels by value, as
+/// its struct, and an aggregate return comes back as an aggregate. Only
+/// LegacyAbiPass lowers any of this.
 ///
-/// NATIVE says the operands are in the layout marshalling produced rather than
-/// the managed one, which is what a signature the C side was compiled against
-/// describes. Whether a given pinvoke signature is being used that way is the
-/// caller's to know: an indirect call through one really does reach native
-/// code, while a [DllImport] method's own signature is a description of the
-/// native function and not of the wrapper every managed caller enters.
+/// native means the operands use the layout marshalling produced, instead
+/// of the managed layout. That is the layout a signature describes when the
+/// C side was compiled against it. The caller must know whether a given
+/// pinvoke signature is used that way. An indirect call through a pinvoke
+/// signature does reach native code. A [DllImport] method's own signature
+/// describes the native function, not the wrapper every managed caller
+/// enters.
 llvm::Expected<llvm::FunctionType *>
 MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool native)
 {
 	/*
-	 * A vararg signature that is also a native one is C varargs, a different
-	 * convention entirely from the runtime's cookie one, and nothing here
-	 * speaks it.
+	 * A vararg signature that is also a native signature is C varargs, a
+	 * different convention from the runtime's cookie convention. Nothing
+	 * here expresses it.
 	 */
 	if (sig->call_convention == MONO_CALL_VARARG && native)
 		return conversion_error ("a native vararg signature is C varargs");
@@ -735,19 +761,20 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 		params.push_back (*converted);
 	}
 
-	/* The cookie buffer the variable part travels in - see build_sig_cookie (). */
+	// The variable part of a vararg call travels in the cookie buffer that
+	// build_sig_cookie () builds.
 	if (sig->call_convention == MONO_CALL_VARARG)
 		params.push_back (pointer_type (context ()));
 
 	return llvm::FunctionType::get (*ret, params, false);
 }
 
-/// The number of SIG's parameters that are ordinary ones, which for a vararg
-/// signature means the fixed part ahead of the sentinel.
+/// The number of sig's ordinary parameters. For a vararg signature, this is
+/// the fixed part ahead of the sentinel.
 ///
-/// A vararg method's own signature carries its sentinel past the last
-/// parameter, so a declaration and every call site that names it agree on this
-/// count - which is what lets both convert to one function type.
+/// A vararg method's own signature carries its sentinel past the last fixed
+/// parameter. A declaration and every call site that names the method agree
+/// on this count, which lets both convert to one function type.
 int
 vararg_fixed_params (MonoMethodSignature *sig)
 {
@@ -758,11 +785,11 @@ vararg_fixed_params (MonoMethodSignature *sig)
 	                 static_cast<int> (sig->param_count));
 }
 
-/// ARGS shaped to CALLEE's declared parameter types.
+/// args, reshaped to match callee's declared parameter types.
 ///
-/// The icall signatures spell runtime addresses as native int while the
-/// translator holds them as pointers, and a call has to say exactly what the
-/// declaration says.
+/// An icall signature spells a runtime address as native int, while the
+/// translator holds the same value as a pointer. A call must match exactly
+/// what the declaration says.
 std::vector<llvm::Value *>
 MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::Function *callee,
                                     llvm::ArrayRef<llvm::Value *> args)
@@ -770,7 +797,7 @@ MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::Function *call
 	llvm::FunctionType *type = callee->getFunctionType ();
 	std::vector<llvm::Value *> adapted (args.begin (), args.end ());
 
-	/* ARGS are the signature's arguments; the hidden return pointer is none of them. */
+	// args are the signature's arguments. The hidden return pointer is not one of them.
 	for (unsigned i = 0; i < adapted.size (); ++i) {
 		unsigned at = natural_parameter_index (i, callee);
 
@@ -791,37 +818,37 @@ MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::Function *call
 	return adapted;
 }
 
-/// The declaration of the managed wrapper around jit icall ID.
+/// The declaration of the managed wrapper around jit icall id.
 ///
 /// The runtime's own entry points report failure by leaving a pending
-/// exception, which nothing would ever look at again if the raw C function
-/// were called directly; the wrapper follows the call with the check that
-/// turns it into a throw. Any entry point that can fail has to be called
-/// this way.
+/// exception. Calling the raw C function directly leaves that exception
+/// unchecked, so the wrapper follows the call with the check that turns it
+/// into a throw. Any entry point that can fail must be called this way.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 {
 	MonoJitICallInfo *info = mono_find_jit_icall_info (id);
 
-	/* The checkpoint icall is that check, so wrapping it in one would recurse. */
+	// The checkpoint icall is that check, so wrapping it in one recurses.
 	bool check = id != MONO_JIT_ICALL_mono_thread_interruption_checkpoint;
 
 	return create_method_decl (mono_marshal_get_icall_wrapper (info, check));
 }
 
-/// The declaration of METHOD in this module, created on first use and cached.
+/// The declaration of method in this module, created on first use and cached.
 ///
-/// A method this backend compiles is declared in this backend's own convention
-/// against its plain symbol, which the engine resolves to the body's stub. One
-/// whose code mini produces instead - an icall, a pinvoke, a runtime-implemented
-/// method - is declared against the `$legacy` symbol in the legacy convention,
-/// and every call to it lowers in LegacyAbiPass.
+/// A method this backend translates is declared in this backend's own
+/// convention. The engine resolves that declaration to the stub the
+/// method's body is published under. A method implemented outside IL - an
+/// icall, a pinvoke, a runtime-implemented method - is declared in the
+/// legacy convention instead. It is marked with the `mono-legacycc`
+/// function attribute, and every call to it lowers in LegacyAbiPass.
 ///
-/// A natural declaration whose return will not fit in the return registers
-/// carries the hidden pointer it comes back through as its leading parameter -
-/// see hidden-return.hpp. The legacy convention has a hidden pointer of its
-/// own, in a place the runtime's trampolines fixed, so a legacy declaration is
-/// left in the signature's own terms for LegacyAbiPass to lower.
+/// A natural declaration whose return does not fit in the return registers
+/// carries the hidden return pointer as its leading parameter - see
+/// hidden-return.hpp. The legacy convention places its own hidden pointer at
+/// a position the runtime's trampolines fixed. A legacy declaration stays
+/// in the signature's own terms, and LegacyAbiPass lowers it.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 {
@@ -839,9 +866,9 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	}
 
 	/*
-	 * A string constructor compiles against a signature returning the string it
-	 * creates - there is no preallocated this to fill in - and every caller has
-	 * to see that shape.
+	 * A string constructor compiles against a signature that returns the
+	 * string it creates. There is no preallocated this to fill in, and every
+	 * caller must see that shape.
 	 */
 	if (method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (method);
@@ -860,14 +887,16 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	}
 
 	/*
-	 * A placeholder. The engine reads the marker below and renames this to
-	 * whatever it publishes that entry under, so nothing has to agree with it -
-	 * it only has to be unique, which identity_symbol () makes it, and legible,
-	 * because untranslated IR is read.
+	 * A placeholder name. The engine reads the marker below and renames the
+	 * declaration to whatever it publishes the entry under. Nothing needs
+	 * to agree with it in advance. It only needs to be unique, which
+	 * identity_symbol () gives it, and legible, because a dump reads the
+	 * untranslated IR directly.
 	 *
-	 * Without the signature, which is the expensive half of printing a method
-	 * and buys nothing here: the pointer is what makes the name unique, and a
-	 * dump has the declaration's own type beside it.
+	 * The name skips the signature, the expensive half of printing a
+	 * method, because the signature buys nothing here. The pointer inside
+	 * identity_symbol () already makes the name unique, and a dump shows
+	 * the declaration's own type right beside it.
 	 */
 	char *printed = mono_method_full_name (method, FALSE);
 	std::string full_name = identity_symbol (printed, method);
@@ -875,9 +904,9 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	g_free (printed);
 
 	/*
-	 * The emitter's cache is per instance, but filter bodies share the
-	 * method's module across instances - a name already declared there must
-	 * be reused or LLVM quietly uniques it into a symbol nothing resolves.
+	 * The emitter's own cache is per instance, but filter bodies share their
+	 * method's module across instances. A name already declared there must
+	 * be reused, or LLVM quietly uniques it into a symbol nothing resolves.
 	 */
 	if (llvm::Function *existing = module->getFunction (full_name)) {
 		declarations[method] = existing;
@@ -900,18 +929,19 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		function->addRetAttr (ext);
 
 	/*
-	 * The creator's string is fresh, aliasing nothing older than the call. Nothing
-	 * stronger: the body is arbitrary managed code, so the allocator attributes'
-	 * zeroed and elidable claims are not made for it.
+	 * The string a constructor creates is fresh, and it aliases nothing
+	 * older than the call. Nothing stronger holds here: the body is
+	 * arbitrary managed code, so this declaration skips the zeroed and
+	 * elidable claims an allocator attribute makes.
 	 */
 	if (method->string_ctor)
 		function->addRetAttr (llvm::Attribute::NoAlias);
 
 	/*
-	 * Every parameter index below is an IL argument number moved around the
-	 * hidden return pointer, which is a parameter of this convention's own and
-	 * belongs to none of them. Around rather than past: the pointer sits behind
-	 * the first argument, so argument 0 comes before it.
+	 * Every parameter index below is an IL argument number, shifted around
+	 * the hidden return pointer. The pointer belongs to this convention
+	 * alone, not to any IL argument. "Around" and not "past": the pointer
+	 * sits behind the first argument, so argument 0 still comes before it.
 	 */
 	if (hidden != nullptr) {
 		unsigned at = hidden_return_index (function->arg_size ());

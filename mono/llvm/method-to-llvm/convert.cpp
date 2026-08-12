@@ -13,12 +13,12 @@ namespace mono {
 
 namespace {
 
-/// What Table III.8 says a conversion does.
+/// A cell of Table III.8, the ECMA-335 conversion-operations table.
 ///
-/// Its four integer-to-integer cells - Nop, Truncate, Sign extend, Zero extend - come
-/// out as one here. Which of them applies is decided by the two widths and by how the
-/// target type fills, both of which the descriptor below already carries. X is the
-/// table's invalid box.
+/// Table III.8 gives integer-to-integer conversions four separate cells: Nop, Truncate,
+/// Sign extend and Zero extend. This enum merges them into one value, IntToInt. The two
+/// widths and the target's own sign, both carried by the descriptor below, decide which
+/// of the four applies. X marks a cell the table calls invalid.
 enum Action {
 	X,
 	IntToInt,
@@ -28,8 +28,11 @@ enum Action {
 	FloatToFloat
 };
 
-/// The rows of Table III.8. The signed and unsigned target of a width share one, since
-/// the table gives them the same cells.
+/// A row of Table III.8, one row per target width.
+///
+/// A signed and an unsigned target of the same width share a row even where the table
+/// gives them different cells. Sign extend and Zero extend both collapse to the action
+/// IntToInt. adjust () supplies the fill direction separately, from target.is_signed.
 enum TargetRow {
 	NarrowIntRow,
 	Int32Row,
@@ -39,14 +42,13 @@ enum TargetRow {
 	TARGET_ROW_COUNT
 };
 
-/*
- * ECMA-335 III.1.5, Table III.8: Conversion Operations. Indexed [target][source].
- *
- * The two pointer columns are the spec's "Stop GC tracking": once an object reference
- * or a managed pointer has become a number the collector no longer updates it, which
- * is why only the 64-bit and native-int rows accept one and why the table shades those
- * cells as unverifiable.
- */
+// ECMA-335 III.1.5, Table III.8: Conversion Operations. The first index is the target
+// row (Convert-To). The second is the source column (Input from the evaluation stack).
+//
+// The & and O columns are the table's "Stop GC tracking" cells. Only the 64-bit and
+// native-int rows accept them. Once a reference or a managed pointer becomes a number,
+// the collector stops updating it. The table shades those cells: they are valid CIL
+// but not verifiable.
 constexpr Action CONVERSIONS[TARGET_ROW_COUNT][STACK_TYPE_COUNT] = {
 	/*              int32       int64       native int  F             &         O */
 	/* int8/16 */ {IntToInt, IntToInt, IntToInt, FloatToInt, X, X},
@@ -82,7 +84,10 @@ row_of (ConvType type)
 	llvm::report_fatal_error ("row_of: unknown conversion target");
 }
 
-/// The target type itself, as against the wider slot the result is pushed in.
+/// The target type of a conversion: its width, sign and whether it is floating-point.
+///
+/// The evaluation stack can hold the result at a wider width. stack_bits () gives that
+/// width.
 struct Target {
 	unsigned bits;
 	bool is_signed;
@@ -124,15 +129,17 @@ target_of (ConvType type)
 	llvm::report_fatal_error ("target_of: unknown conversion target");
 }
 
-/// How wide the result sits on the evaluation stack, which the spec fixes at a minimum
-/// of four bytes however narrow the target type is.
+/// The width the result occupies on the evaluation stack.
+///
+/// The evaluation stack never stores a value narrower than 4 bytes, whatever the target
+/// type's own width is.
 unsigned
 stack_bits (Target target)
 {
 	return std::max (target.bits, 32u);
 }
 
-/// The name Table III.8 gives this target, for the refusal message.
+/// A readable name for this target type, for the conversion-refusal message.
 const char *
 target_name (ConvType type)
 {
@@ -172,7 +179,10 @@ native_int_type (llvm::IRBuilder<> &builder)
 	return builder.getIntNTy (NATIVE_BITS);
 }
 
-/// VALUE at BITS wide, filled the way IS_SIGNED says when it has to grow.
+/// value resized to bits wide.
+///
+/// If value is wider than bits, it truncates. If value is narrower, is_signed decides
+/// whether it sign-extends or zero-extends.
 llvm::Value *
 adjust (llvm::IRBuilder<> &builder, llvm::Value *value, unsigned bits, bool is_signed)
 {
@@ -193,11 +203,12 @@ struct FloatBound {
 	llvm::CmpInst::Predicate pred;
 };
 
-/// BOUND in FP, and the predicate that still means what EXCLUSIVE meant of BOUND itself.
+/// bound converted to fp, with the predicate adjusted so the comparison still means what
+/// exclusive meant against the exact integer bound.
 ///
-/// Rounding toward zero lands on the nearest float on the range's side of BOUND, so when
-/// BOUND is not representable there is nothing between the two for the comparison to
-/// misplace and it only has to take the endpoint in.
+/// Round-to-zero picks the representable float closest to bound on the range's own side. If
+/// bound is not exactly representable, no float sits between the rounded value and the true
+/// bound. Switching to inclusive at the rounded value then keeps the comparison exact.
 FloatBound
 float_bound (llvm::Type *fp, const llvm::APInt &bound, llvm::CmpInst::Predicate exclusive,
              llvm::CmpInst::Predicate inclusive)
@@ -209,11 +220,11 @@ float_bound (llvm::Type *fp, const llvm::APInt &bound, llvm::CmpInst::Predicate 
 	return {llvm::ConstantFP::get (fp, value), exact ? exclusive : inclusive};
 }
 
-/// The operand as a number.
+/// value as an integer, converting it from a pointer if it is one.
 ///
-/// Table III.8's pointer columns and MONO_TYPE_PTR both reach the integer paths this
-/// way; the difference between them is one of GC tracking, which the table has already
-/// ruled on by the time this runs.
+/// Table III.8's & and O columns and MONO_TYPE_PTR both reach the integer paths through
+/// here. Only the GC tracking differs between them. check_conversion () has already ruled
+/// on that before this runs.
 llvm::Value *
 as_integer (llvm::IRBuilder<> &builder, llvm::Value *value)
 {
@@ -223,10 +234,11 @@ as_integer (llvm::IRBuilder<> &builder, llvm::Value *value)
 	return value;
 }
 
-/// VALUE narrowed or widened to TARGET's own width and then back out to the stack's.
+/// value narrowed or widened to target's own width, then widened back out to the
+/// stack's width.
 ///
-/// That round trip is what leaves conv.u1 of 0x1234ABCD as 205 and conv.i1 of it as
-/// -51: both truncate to 0xCD, and only the fill differs.
+/// That round trip is why conv.u1 of 0x1234ABCD gives 205 and conv.i1 of it gives -51.
+/// Both truncate to 0xCD first. Only the fill on the way back out differs.
 llvm::Value *
 int_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 {
@@ -235,16 +247,16 @@ int_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 	return adjust (builder, narrowed, stack_bits (target), target.is_signed);
 }
 
-/// VALUE truncated toward zero into TARGET, saturating if it does not fit.
+/// value truncated toward zero into target, saturating if it does not fit.
 ///
-/// The spec leaves the out-of-range result unspecified, so any answer is legal - but it
-/// has to be the *same* answer however the operand was reached. fptosi/fptoui are poison
-/// out of range, and poison is not a value: LLVM folds it to zero wherever it can see the
-/// operand, while a value only known at run time gets whatever the hardware conversion
-/// leaves behind. One method would then convert -1.0f to ushort as 65535 and the next,
-/// differing only in that the constant had reached the conversion, as 0.
+/// The spec leaves the out-of-range result unspecified. Any answer is legal, but every
+/// path to that answer must reach the same one. Plain fptosi and fptoui are poison out of
+/// range. Poison is not a value. LLVM folds a poison result to zero wherever it can see
+/// the operand. A value only known at run time keeps whatever the hardware conversion
+/// leaves behind. One call path can convert -1.0f to ushort as 65535. Another path,
+/// differing only in that the constant reached the conversion, converts it as 0.
 ///
-/// Saturating is the cheapest way to have a defined answer at all, and it is the one the
+/// Saturating gives a defined answer at the lowest cost. It is the same answer the
 /// checked conversions already give.
 llvm::Value *
 float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
@@ -255,11 +267,11 @@ float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 	llvm::Value *converted =
 		builder.CreateIntrinsic (convert, {to, value->getType ()}, {value});
 
-	/* Convert at the stack width and narrow after, the way the classic JIT does. */
+	// int_to_int () applies the same truncation conv already uses for oversized integers.
 	return int_to_int (builder, converted, target);
 }
 
-/// The type the result is tracked as once it is pushed.
+/// The MonoType push_stack () records for this conversion's result.
 MonoType *
 result_type (ConvType type)
 {
@@ -282,7 +294,7 @@ result_type (ConvType type)
 
 } // namespace
 
-/// Refuse the conversions Table III.8 leaves blank.
+/// Return an error for any conversion Table III.8 calls invalid.
 llvm::Error
 MethodLLVMEmitter::check_conversion (ConvType type, MonoType *source)
 {
@@ -377,7 +389,8 @@ MethodLLVMEmitter::emit_conv (MonoIrBuilder &builder, ConvType type)
 	if (target.is_float) {
 		llvm::Type *to = target.bits == 32 ? builder.getFloatTy () : builder.getDoubleTy ();
 
-		/* conv.r4 and conv.r8 read the integer as signed; conv.r.un is the other one. */
+		// conv.r4 and conv.r8 read the integer as signed. conv.r.un has its own emitter,
+		// emit_conv_r_un (), for the unsigned case below.
 		result = from_float ? builder.CreateFPCast (value.value, to)
 		                    : builder.CreateSIToFP (as_integer (builder, value.value), to);
 	} else if (from_float) {
@@ -391,7 +404,7 @@ MethodLLVMEmitter::emit_conv (MonoIrBuilder &builder, ConvType type)
 	return llvm::Error::success ();
 }
 
-/// conv.r.un, which is the one conv that reads its integer operand as unsigned.
+/// conv.r.un reads its integer operand as unsigned. No other conv opcode does that.
 llvm::Error
 MethodLLVMEmitter::emit_conv_r_un (MonoIrBuilder &builder)
 {
@@ -413,15 +426,15 @@ MethodLLVMEmitter::emit_conv_r_un (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/// VALUE converted to TARGET, throwing OverflowException if it does not fit.
+/// value converted to target, throwing OverflowException if it does not fit.
 ///
-/// The round trip is the check: widen to something that holds both the source's range
-/// and the target's, narrow to the target, then widen back the way the target fills.
-/// A value that does not come back unchanged did not fit.
+/// The round trip is the check. Widen to a width that holds both the source's range and
+/// the target's, narrow to the target, then widen back the way the target fills. A value
+/// that does not come back unchanged did not fit.
 ///
-/// The extra bit is what makes that work when the two widths are equal but their signs
-/// disagree - conv.ovf.u8 of int32 -1 has to throw, and at 64 bits the narrowing step
-/// is a no-op that would otherwise hide it.
+/// The extra bit matters when the two widths are equal but the signs disagree. conv.ovf.u8
+/// of int32 -1 must throw. Dropping the extra bit turns the 64-to-64 narrowing step into a
+/// no-op. A no-op narrowing step catches nothing.
 llvm::Value *
 MethodLLVMEmitter::emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *value, ConvType type,
                                           bool source_unsigned)
@@ -437,18 +450,19 @@ MethodLLVMEmitter::emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *v
 	return adjust (builder, narrowed, stack_bits (target), target.is_signed);
 }
 
-/// VALUE truncated toward zero into TARGET, throwing OverflowException if it does not
+/// value truncated toward zero into target, throwing OverflowException if it does not
 /// fit.
 ///
-/// The check is made on the operand rather than on the result: the values that survive
-/// truncation are exactly those in the open interval (lo-1, hi+1), since anything in
-/// (lo-1, lo] or [hi, hi+1) loses its fraction and lands back inside. Both ends of that
-/// interval are one past the target's range, which is what leaves them representable
-/// where lo and hi themselves are not - 2^(n-1) is a power of two, and only 2^(n-1)-1
-/// needs a mantissa the source may not have.
+/// The check runs on the operand, not on the result. The values that survive truncation
+/// are exactly those in the open interval (lo-1, hi+1). Anything in (lo-1, lo] or [hi,
+/// hi+1) loses its fraction and lands back inside the target's range. Both ends of that
+/// interval sit one past the range, which is what makes them representable where lo and
+/// hi are not. 2^(n-1) is a power of two, but 2^(n-1)-1 needs more mantissa bits than the
+/// source type can carry.
 ///
-/// The comparisons are ordered, so a NaN is on neither side and overflows, and the
-/// conversion saturates so that it is defined even on the path that goes on to throw.
+/// The comparisons are ordered, so a NaN lands on neither side and overflows. The
+/// conversion still saturates, so the value is defined even on the path that goes on to
+/// throw.
 llvm::Value *
 MethodLLVMEmitter::emit_checked_float_conv (MonoIrBuilder &builder, llvm::Value *value,
                                             ConvType type)
@@ -606,11 +620,9 @@ MethodLLVMEmitter::emit_conv_ovf (MonoIrBuilder &builder, ConvType type, bool so
 
 	llvm::Value *result;
 
-	/*
-	 * There is no conv.ovf.r, so the target is always integral. Reading the operand as
-	 * unsigned is what .un asks for and only means anything for an integer, so a float
-	 * operand converts the same either way.
-	 */
+	// conv.ovf.r does not exist, so the target here is always an integer.
+	// Reading the operand as unsigned is what .un asks for, and that only matters for an
+	// integer operand. A float operand converts the same way whether or not .un is set.
 	if (stack_type (value.type) == Float)
 		result = emit_checked_float_conv (builder, value.value, type);
 	else

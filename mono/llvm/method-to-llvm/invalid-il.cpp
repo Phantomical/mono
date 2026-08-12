@@ -13,8 +13,9 @@ namespace mono {
 
 namespace {
 
-/// The instruction at IL_OFFSET as mono's disassembler prints it - "IL_0012: add"
-/// - or an empty string if the body cannot be read.
+/// Returns the instruction at il_offset, in the format mono's disassembler
+/// prints: "IL_0012: add". If the method body cannot be read, this returns
+/// an empty string.
 std::string
 disassemble_one (MonoMethod *method, size_t il_offset)
 {
@@ -33,7 +34,7 @@ disassemble_one (MonoMethod *method, size_t il_offset)
 		text = one;
 		g_free (one);
 
-		/* The disassembler ends every instruction with a newline. */
+		// The disassembler ends every instruction with a newline.
 		while (!text.empty () && g_ascii_isspace (text.back ()))
 			text.pop_back ();
 	}
@@ -42,7 +43,8 @@ disassemble_one (MonoMethod *method, size_t il_offset)
 	return text;
 }
 
-/// How many locals METHOD declares, or 0 if its body cannot be read.
+/// If the method's body cannot be read, this returns 0. Otherwise it returns
+/// how many locals the method declares.
 uint32_t
 local_count (MonoMethod *method)
 {
@@ -68,12 +70,10 @@ MethodLLVMEmitter::in_wrapper () const
 	return method->wrapper_type != MONO_WRAPPER_NONE;
 }
 
-/*
- * Slot 0 of the table holds how many entries follow it, so an index past that -
- * or slot 0 itself, which is the count and not an entry - is one the wrapper
- * never filled in: a malformed body rather than something to read off the end
- * of the array. mono_mb_add_data () hands out indices from 1 upwards.
- */
+// Slot 0 of the table holds the entry count, not an entry. An index of 0, or
+// an index past the count, is one the wrapper never filled in. Treat it as a
+// malformed body, not as data to read past the end of the array.
+// mono_mb_add_data () hands out indices starting at 1.
 bool
 MethodLLVMEmitter::has_wrapper_data (uint32_t index) const
 {
@@ -91,9 +91,10 @@ MethodLLVMEmitter::wrapper_data (uint32_t index) const
 	return static_cast<void **> (((MonoMethodWrapper *) method)->method_data)[index];
 }
 
-/// Refuse the method the way mini refuses IL it cannot translate: an
-/// InvalidProgramException naming the method and the offending instruction, so
-/// that which JIT was asked to compile it does not change what the caller sees.
+/// Refuse the method with an InvalidProgramException that names the method and
+/// the offending instruction. The interpreter raises the same exception for
+/// invalid IL, so managed code sees one behavior regardless of the engine that
+/// finds the problem.
 llvm::Error
 MethodLLVMEmitter::invalid_il (const llvm::Twine &reason)
 {
@@ -113,8 +114,8 @@ MethodLLVMEmitter::invalid_il (const llvm::Twine &reason)
 	return runtime_error (error);
 }
 
-/// The current instruction wants NEEDED values that the evaluation stack is not
-/// holding.
+/// The current instruction expects needed values on the evaluation stack, but
+/// the stack does not hold exactly that many.
 llvm::Error
 MethodLLVMEmitter::unbalanced_stack (size_t needed)
 {
@@ -140,7 +141,7 @@ MethodLLVMEmitter::invalid_argument (uint32_t index)
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 	uint32_t count = sig->param_count + sig->hasthis;
 
-	/* Argument 0 of an instance method is the receiver, which is not in the signature. */
+	// Argument 0 of an instance method is the receiver. The signature does not list it.
 	return invalid_il (llvm::Twine ("argument index ") + llvm::Twine (index)
 	                   + " out of range, the method takes " + llvm::Twine (count)
 	                   + (sig->hasthis ? " arguments including this" : " arguments"));
@@ -148,10 +149,10 @@ MethodLLVMEmitter::invalid_argument (uint32_t index)
 
 /// Give up on a method the backend cannot translate yet.
 ///
-/// An ExecutionEngineException rather than the InvalidProgramException above: the
-/// IL is well formed, and what went wrong is that this engine has no translation
-/// for it. There is no other JIT to hand the method to, so the refusal is what
-/// managed code sees when it calls the method.
+/// This raises an ExecutionEngineException, not the InvalidProgramException
+/// above. The IL is valid. This engine has no translation for it yet. No other
+/// JIT exists to hand the method to, so this refusal is what managed code sees
+/// when it calls the method.
 llvm::Error
 MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 {
@@ -173,14 +174,17 @@ MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 	return runtime_error (error);
 }
 
-/*
- * Three kinds of body are exempt. One that asked to skip visibility got the
- * permission from whoever emitted it - Reflection.Emit hands that out, and the
- * runtime's own marshalling builders take it. A wrapper's body is the runtime's,
- * not an image author's, and reaches whatever the thing it wraps is made of.
- * And corlib-internal assemblies are the runtime's own halves of corlib, which
- * are written against each other's privates on purpose.
- */
+// Three kinds of methods skip the accessibility check.
+//
+// A method marked skip_visibility got that permission from whoever emitted it.
+// Reflection.Emit hands it out, and the runtime's own marshalling builders take
+// it for themselves.
+//
+// A wrapper's body belongs to the runtime, not to an image author, so it can
+// reach whatever the thing it wraps is made of.
+//
+// A corlib-internal assembly is one of the runtime's own halves of corlib, and
+// those are written against each other's private members on purpose.
 bool
 MethodLLVMEmitter::checks_accessibility () const
 {
@@ -192,11 +196,10 @@ MethodLLVMEmitter::checks_accessibility () const
 	return image->assembly == nullptr || !image->assembly->corlib_internal;
 }
 
-/// Refuse a field this method may not reach.
+/// Refuse a field this method cannot reach.
 ///
-/// The refusal is the whole method's rather than the instruction's: a body that
-/// names a field it cannot see never compiles, and the FieldAccessException comes
-/// out of it when something calls it.
+/// The whole method fails to translate, not just this instruction. The
+/// FieldAccessException appears only when something calls the method.
 llvm::Error
 MethodLLVMEmitter::field_access_failure (MonoClassField *field)
 {
@@ -213,12 +216,11 @@ MethodLLVMEmitter::field_access_failure (MonoClassField *field)
 	return runtime_error (error);
 }
 
-/// Refuse a method this one may not reach, with a throw where the access would
-/// have been.
+/// Refuse a method this one cannot reach. Emit a throw in place of the call.
 ///
-/// Unlike a field, the instruction alone is refused: emission carries on into a
-/// block nothing branches to, so the stack keeps its shape and a path through
-/// the body that never reaches this instruction still runs.
+/// Unlike a field, only the instruction is refused. Emission continues into a
+/// block nothing branches to, so the stack keeps its shape. A path through the
+/// body that never reaches this instruction still runs.
 llvm::Error
 MethodLLVMEmitter::emit_method_access_failure (MonoIrBuilder &builder, MonoMethod *callee)
 {
@@ -236,8 +238,8 @@ MethodLLVMEmitter::emit_method_access_failure (MonoIrBuilder &builder, MonoMetho
 	return llvm::Error::success ();
 }
 
-/// The current instruction wants NEEDED more operand bytes than the method body has
-/// left to give.
+/// The current instruction wants needed more operand bytes than remain in
+/// the method body.
 llvm::Error
 MethodLLVMEmitter::truncated_il (size_t needed)
 {

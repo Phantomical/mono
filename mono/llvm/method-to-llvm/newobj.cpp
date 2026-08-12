@@ -98,11 +98,11 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = (*target)->klass;
 
 	/*
-	 * A delegate's constructor is implemented by the runtime, which builds an
-	 * invoke trampoline out of the Invoke signature and has nowhere to report
-	 * one that will not load - it takes the null and crashes on it. A delegate
-	 * whose Invoke names a type that is not there is a type load, so the
-	 * refusal belongs here, where it becomes a TypeLoadException at the call.
+	 * The runtime implements a delegate's constructor. It builds an invoke
+	 * trampoline from the Invoke signature and has no way to report one that
+	 * will not load. It crashes on a null signature instead. A delegate
+	 * whose Invoke method names a missing type fails to load. That refusal
+	 * belongs here, so the call raises a TypeLoadException instead of crashing.
 	 */
 	if (m_class_get_parent (klass) == mono_defaults.multicastdelegate_class) {
 		ERROR_DECL (invoke_error);
@@ -122,7 +122,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 			return runtime_error (invoke_error);
 	}
 
-	/* Multi-dimensional and non-zero-based arrays construct through newobj. */
+	// Multi-dimensional arrays and non-zero-based arrays use newobj, not newarr.
 	if (m_class_get_rank (klass) != 0)
 		return emit_array_newobj (builder, *target, sig);
 
@@ -130,13 +130,14 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 #ifndef DISABLE_REMOTING
 	/*
-	 * Allocating a context-bound class hands back a transparent proxy, and the
-	 * construction has to be remoted through it - that is what activates the
-	 * object and gives the proxy its identity; running the constructor's body
-	 * directly on the proxy would just scribble on it. The with-check wrapper
-	 * remotes exactly the proxy case, and on the real object every other
-	 * MarshalByRefObject-derived class allocates, it falls through to the
-	 * plain constructor call.
+	 * Allocating a MarshalByRefObject-derived class can return a transparent
+	 * proxy instead of a plain instance. The construction must go through
+	 * that proxy, because that step activates the object and gives the proxy
+	 * its identity. Calling the constructor directly on the proxy scribbles
+	 * on it instead of activating it. The with-check wrapper remotes exactly
+	 * that proxy case. For every other MarshalByRefObject-derived class,
+	 * allocation returns the real object, and the wrapper falls through to
+	 * the plain constructor call.
 	 */
 	if (!m_class_is_valuetype (klass) && mono_class_is_marshalbyref (klass)) {
 		ERROR_DECL (wrap_error);
@@ -149,14 +150,15 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	}
 #endif
 
-	/* A synchronized constructor holds its lock over the body, not the allocation. */
+	// A synchronized constructor holds its lock over the body, not the allocation.
 	ctor = synchronized_target (ctor);
 
 	/*
-	 * A constructor the runtime answers with a marshalling wrapper - every
-	 * string constructor, and the handful of other internal-call ones - is
-	 * entered at that wrapper, which this backend compiles like any other
-	 * method. The creator path below picks the retarget up again on its own.
+	 * The runtime answers some constructors with a marshalling wrapper: every
+	 * string constructor, and a handful of other internal-call ones. This
+	 * backend enters the constructor at that wrapper and compiles it like any
+	 * other method. The creator path below asks for the same retarget on its
+	 * own.
 	 */
 	ctor = icall_wrapper_target (ctor);
 
@@ -169,10 +171,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	if (stack.size () < count)
 		return unbalanced_stack (count);
 
-	/*
-	 * The constructor sees the fresh instance as argument 0 and the operands
-	 * follow, so the stack unwinds into positions 1..N.
-	 */
+	// The constructor sees the fresh instance as argument 0. The stack's
+	// operands unwind into positions 1 through count.
 	std::vector<llvm::Value *> args (count + 1);
 
 	for (size_t i = 0; i < count; ++i) {
@@ -191,9 +191,10 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	llvm::Align align = type_alignment (pushed);
 
 	/*
-	 * A string cannot be allocated before its length is known, so its constructor
-	 * is a creator: it builds the string rather than filling one in. There is
-	 * nothing to allocate here - the object arrives from the call.
+	 * A string's length is not known before its constructor runs, so nothing
+	 * can allocate it in advance. Its constructor is a creator: it builds the
+	 * string instead of filling in an instance. There is nothing to allocate
+	 * here. The object arrives from the call.
 	 */
 	if ((*target)->string_ctor) {
 		llvm::Expected<llvm::Value *> created =
@@ -208,10 +209,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	}
 
 	if (m_class_is_valuetype (klass)) {
-		/*
-		 * A value type constructs in place, so the instance is a zeroed slot
-		 * and what gets pushed afterwards is the value read back out of it.
-		 */
+		// A value type constructs in place: the instance is a zeroed slot. The
+		// code pushes back the value it reads out of that slot afterward.
 		llvm::Expected<llvm::Type *> type = convert_type (pushed);
 		if (!type)
 			return type.takeError ();
@@ -225,10 +224,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		                      mono_class_value_size (klass, NULL), align);
 		args[0] = temp;
 	} else {
-		/*
-		 * An abstract class has no instances, and neither the allocator nor the
-		 * constructor it would run refuses one, so the refusal has to be here.
-		 */
+		// An abstract class has no instances. Neither the allocator nor the
+		// constructor it runs refuses one, so the refusal must happen here.
 		if (mono_class_get_flags (klass) & TYPE_ATTRIBUTE_ABSTRACT) {
 			char *name = mono_type_get_full_name (klass);
 			ERROR_DECL (error);
@@ -240,14 +237,15 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		}
 
 		/*
-		 * The constructor runs the type initializer at its own entry, but the
-		 * allocation happens first, and for a finalizable class that is already
-		 * too late: the object is registered for finalization before the cctor
-		 * gets a chance to throw. The constructor then unwinds, nothing ever
-		 * holds the instance, and at shutdown mono_gc_run_finalize re-runs the
-		 * failed initializer on the finalizer thread, where the
-		 * TypeInitializationException has nobody to catch it. Initializing
-		 * before we allocate keeps the orphan from existing at all.
+		 * The constructor runs the type initializer at its own entry, but
+		 * allocation happens first. For a finalizable class that is too late:
+		 * the allocator registers the object for finalization before the cctor
+		 * gets a chance to throw. The constructor then unwinds, and nothing
+		 * ever holds the instance. At shutdown, mono_gc_run_finalize reruns the
+		 * class-init check on the finalizer thread. That check rethrows the
+		 * cached TypeInitializationException, and the finalizer thread has
+		 * nobody to catch it. Running class init before allocation keeps that
+		 * orphan from existing at all.
 		 */
 		if (mono_class_needs_cctor_run (klass, method))
 			if (llvm::Error error = emit_class_init (builder, klass))
@@ -278,11 +276,12 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 namespace {
 
-/// Mark CALLEE as the GC allocation it is, with the same reasoning
-/// mono_array_new_specific's declaration documents: NoAlias and nothing more -
-/// an allockind would let LLVM delete an unused allocation whose failure is
-/// still a catchable OutOfMemoryException, and a Zeroed claim would fold loads
-/// of the initialized header to zero. Deliberately not nounwind.
+/// Marks callee as the GC allocation it is: NoAlias, and nothing more.
+/// emit_newarr's array allocator documents the same reasoning. An allockind
+/// attribute can let LLVM delete an unused allocation, but a failed mono
+/// allocation still throws a catchable OutOfMemoryException. A Zeroed claim
+/// can fold loads of the initialized header to zero. The call stays
+/// unwindable, because it can throw.
 llvm::FunctionCallee
 mark_gc_allocator (llvm::FunctionCallee callee)
 {
@@ -294,9 +293,10 @@ mark_gc_allocator (llvm::FunctionCallee callee)
 
 } // namespace
 
-/// The array shapes of newobj: rank above one, or explicit lower bounds. The
-/// metadata constructor has no body - the runtime's array-new icalls implement it,
-/// keyed by the constructor's method so they can recover the array class.
+/// Handles the array shapes that construct through newobj instead of newarr:
+/// rank above one, or explicit lower bounds. The metadata constructor has no
+/// body. The runtime's array-new icalls implement it, keyed by the
+/// constructor's method so they can recover the array class.
 llvm::Error
 MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
                                       MonoMethodSignature *sig)
@@ -330,7 +330,8 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 	llvm::Value *result;
 
 	if (count == rank && count <= 4 && int32_lengths) {
-		/* One int32 length per dimension, few enough of them: the direct icalls. */
+		// With one int32 length per dimension and four dimensions at most,
+		// this takes the direct icalls.
 		constexpr MonoJitICallId by_rank[] = {
 			MONO_JIT_ICALL_mono_array_new_1,
 			MONO_JIT_ICALL_mono_array_new_2,
@@ -353,8 +354,9 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 	} else {
 		/*
 		 * mono_array_new_n_icall wants the lower bounds first and the lengths
-		 * after, while the constructor interleaves them per dimension - so a
-		 * (bound, length) list deinterleaves on the way into the buffer.
+		 * after it. The constructor interleaves them per dimension instead, as
+		 * a (bound, length) pair. This loop deinterleaves that list on its way
+		 * into the buffer.
 		 */
 		MonoIrBuilder entry (entry_block, entry_block->begin ());
 		llvm::Type *buffer_type = llvm::ArrayType::get (word, count);
@@ -367,7 +369,7 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 			size_t slot = count == 2 * rank ? (is_bound ? i / 2 : rank + i / 2)
 			                                : i;
 
-			/* Bounds are signed; lengths are not. */
+			// Bounds are signed. Lengths are not.
 			builder.CreateAlignedStore (
 				builder.CreateIntCast (operands[i], word, is_bound),
 				builder.CreateConstGEP2_32 (buffer_type, buffer, 0,

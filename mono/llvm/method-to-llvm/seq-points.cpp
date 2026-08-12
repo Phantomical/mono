@@ -2,18 +2,18 @@
  * \file
  * \brief Soft-debugger sequence points.
  *
- * A sequence point is where the soft debugger is allowed to stop, and the way
- * it stops is that the code asks, at every one of them, whether anybody wants
- * it to: one word says whether single stepping is on, another whether this body
- * has a breakpoint in it, and either one being set calls the matching sdb
- * trampoline. The trampoline builds a MonoContext out of the frame it was
- * called from, hands it to the debugger and restores it on the way back, so
- * everything the debugger does with the stopped thread it does from there.
+ * A sequence point is a place where the soft debugger can stop a thread. At
+ * every sequence point the emitted code checks two words. One says whether
+ * single stepping is on. The other says whether this body has a breakpoint.
+ * If either word is set, the code calls the matching sdb trampoline. The
+ * trampoline builds a MonoContext from the calling frame and hands it to the
+ * debugger. It restores the context before it returns, so the debugger does
+ * all its work with the stopped thread through that context.
  *
- * mini gets the same effect by patching the instruction stream, which needs an
- * encoding the code generator promises; nothing promises that here, so the
- * breakpoint arm is a store into a word the code loads instead
- * (MonoLLVMBreakpointSwitch).
+ * mini patches the instruction stream to get the same effect. That needs an
+ * encoding the code generator promises. This backend makes no such promise.
+ * Instead the breakpoint arm stores into a word (MonoLLVMBreakpointSwitch)
+ * that the emitted code loads.
  *
  * The construct is
  *
@@ -26,12 +26,13 @@
  *     call %bp_or_nop ()
  *     br label %cont
  *
- * Both calls sit in the one block, ahead of which is the marked nop, because
- * what maps a trampoline's return address back to a sequence point is
- * mono_find_prev_seq_point_for_native_offset (): the nearest recorded offset at
- * or before it. Two calls in two blocks could be laid out either side of
- * another sequence point's marker and resolve to it instead. Calling through a
- * do-nothing function is what lets the arm that is not set stay in the block.
+ * Both calls sit in the trap block, after the marked nop.
+ * mono_find_prev_seq_point_for_native_offset () maps a trampoline's return
+ * address back to a sequence point. It finds the nearest recorded offset at
+ * or before that address. Two calls split across two blocks can land on
+ * either side of another sequence point's marker and resolve to the wrong
+ * one. Each call targets a do-nothing function when its own arm is not set,
+ * so both calls can stay in the one block.
  */
 
 #include "method-to-llvm.hpp"
@@ -57,29 +58,31 @@
 
 namespace mono {
 
-/*
- * Called where neither the debugger nor the stepper wants this sequence point,
- * which is what keeps both arms of the construct inside one basic block.
- */
+/// Does nothing. emit_seq_point () calls this in place of a trampoline when
+/// that trampoline's arm is not armed, so the trap block always makes both
+/// calls.
 extern "C" void
 mono_llvm_seq_point_nop (void)
 {
 }
 
 /*
- * Read the symbol file's idea of where this method's statements begin.
+ * Read the symbol file's sequence-point offsets for this method.
  *
- * A sequence point is meant to name a source construct, and the symbol file is
- * what knows where those start; the evaluation stack being empty is only a
- * stand-in for that, and a coarse one - `return 0;` compiles to a store, a
- * branch and a load, with an empty stack in the middle of all three. Stopping
- * there reports the same source line more than once, which a step over then
- * has to be spent on.
+ * A sequence point marks where a source statement begins, and the symbol
+ * file is what records that. An empty evaluation stack is only a rough
+ * stand-in for that idea. `return 0;` compiles to a store, a branch, and a
+ * load, with an empty stack after each one. If the code stops at all three,
+ * it reports the same source line more than once. A step over must then
+ * pass over the extra stops.
  *
- * A method the symbol file mentions gets exactly the offsets it names, plus the
- * two an await turns into. One it does not mention gets none at all, so long as
- * its image carries symbols - that is what a compiler-generated accessor with
- * no source of its own looks like. Everything else falls back on the stack.
+ * If the symbol file names this method, it gets exactly the offsets the
+ * symbol file lists, plus the two offsets an await expression adds. If the
+ * symbol file does not name this method but its image carries debug
+ * information, the method gets no offsets at all. That is what a
+ * compiler-generated accessor with no source of its own looks like. A method
+ * whose image carries no debug information falls back to the empty-stack
+ * rule instead.
  */
 void
 MethodLLVMEmitter::collect_sym_seq_points ()
@@ -108,9 +111,9 @@ MethodLLVMEmitter::collect_sym_seq_points ()
 	g_free (points);
 
 	/*
-	 * The stepper matches a yield or resume offset against the sequence point it
-	 * stopped at to recognise an await, so those have to be stops even though no
-	 * statement starts there.
+	 * The stepper matches a yield or resume offset against the sequence point
+	 * where it stopped to recognize an await. These offsets must be stops
+	 * even though no statement begins there.
 	 */
 	if (MonoDebugMethodAsyncInfo *async =
 	            mono_debug_lookup_method_async_debug_info (method)) {
@@ -122,7 +125,7 @@ MethodLLVMEmitter::collect_sym_seq_points ()
 	}
 }
 
-/// Whether an ordinary sequence point belongs at OFFSET.
+/// Whether an ordinary sequence point belongs at this offset.
 bool
 MethodLLVMEmitter::wants_seq_point_at (size_t offset) const
 {
@@ -132,19 +135,21 @@ MethodLLVMEmitter::wants_seq_point_at (size_t offset) const
 	return stack.empty () || is_handler_start (offset);
 }
 
-/// Emit the check that lets the soft debugger stop at ENCODED_IL, which is an
-/// IL offset in the encoding seq-point-marker.hpp describes, carrying FLAGS.
-/// Hands back the marker whose address the runtime records for this stop, or
-/// null when the method is being translated without sequence points.
+/// Emit the check that lets the soft debugger stop at encoded_il, an IL
+/// offset in the encoding that seq-point-marker.hpp describes. The flags
+/// parameter holds the MONO_SEQ_POINT_FLAG_* bits to record for this stop.
+///
+/// Returns the marker instruction whose address the runtime records for this
+/// stop. Returns null when sequence points are off, in a filter body, or when
+/// there is no debug scope to attach the stop to.
 llvm::Instruction *
 MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
                                    uint8_t flags)
 {
 	/*
 	 * A filter body is a helper the runtime calls over the parent frame during
-	 * the search pass; a breakpoint in one would stop the thread in the middle
-	 * of dispatching an exception, which is not a place the debugger's frame
-	 * model knows about.
+	 * the search pass. A breakpoint there stops the thread while it dispatches
+	 * an exception, a place the debugger's frame model does not know about.
 	 */
 	if (!mini_get_debug_options ()->gen_sdb_seq_points || filter_mode)
 		return nullptr;
@@ -156,12 +161,12 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 			cfg->domain, sizeof (MonoLLVMBreakpointSwitch));
 
 	/*
-	 * The entry and exit markers name places the debugger can put a breakpoint
-	 * on to ask for a METHOD_ENTRY or METHOD_EXIT event; they are not places
-	 * execution can be said to be at. A stepper that stopped at one would
-	 * report the frame twice - once at the marker and once at the first real
-	 * sequence point, which is the same source construct - so they get the
-	 * breakpoint arm only.
+	 * The entry and exit markers name places where the debugger can set a
+	 * breakpoint for a METHOD_ENTRY or METHOD_EXIT event. They are not places
+	 * execution can be said to be at. A stepper stopped at one reports the
+	 * frame twice. It stops once at the marker, and once at the first real
+	 * sequence point, which names the same source construct. So a marker
+	 * gets the breakpoint arm only, with no single-step check.
 	 */
 	bool marker = encoded_il >= SEQ_POINT_ENCODED_ENTRY;
 
@@ -181,10 +186,10 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 		"mono_llvm_seq_point_nop", (void *) mono_llvm_seq_point_nop);
 
 	/*
-	 * Both words are written by other threads - the stepper's from the debugger
-	 * thread, the switch from whichever thread set the breakpoint - so neither
-	 * load may be hoisted out of a loop or folded with the one at the previous
-	 * sequence point.
+	 * Other threads write both words: the debugger thread writes the
+	 * stepper's word, and whichever thread sets the breakpoint writes the
+	 * switch. Each load stays volatile so the optimizer cannot hoist it out
+	 * of a loop or fold it with the load at the previous sequence point.
 	 */
 	llvm::Value *ss = marker
 		? nullptr
@@ -208,10 +213,12 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 
 	/*
 	 * The nop's address is what the runtime records for this sequence point.
-	 * It is ahead of both calls so that either trampoline's return address
-	 * resolves back here through mono_find_prev_seq_point_for_native_offset (),
-	 * and nothing else with an address of its own is between: an asm block
-	 * cannot be reordered across a call, which is all the ordering this needs.
+	 * It sits ahead of both calls, so either trampoline's return address
+	 * resolves back to it through
+	 * mono_find_prev_seq_point_for_native_offset (). Nothing else with an
+	 * address of its own sits between the nop and the calls. An inline asm
+	 * block with side effects cannot be reordered across a call, and that is
+	 * all the ordering this needs.
 	 */
 	uint32_t restore = (uint32_t) statement_offset;
 
@@ -223,11 +230,11 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 	set_il_location (builder, restore);
 
 	/*
-	 * Both words are read again here rather than reusing what the test above
-	 * loaded, so that the block depends on nothing its predecessor computed:
-	 * CMD_THREAD_SET_IP moves a stopped thread to the address recorded for a
-	 * sequence point, which is the nop, and everything after it has to hold up
-	 * from there.
+	 * Both words are read again here, not reused from the test above, so the
+	 * trap block depends on nothing its predecessor computed.
+	 * CMD_THREAD_SET_IP moves a stopped thread straight to the recorded
+	 * address, the nop, and everything after it must still hold up when
+	 * execution resumes there.
 	 */
 	llvm::Value *ss_here = marker
 		? nullptr
@@ -244,8 +251,9 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 	                                    nop));
 
 	/*
-	 * A trampoline reads the frame it was called from and the debugger walks
-	 * out of it, so neither call may become a jump.
+	 * A trampoline reads the frame it was called from, and the debugger walks
+	 * out of it. Both calls carry TCK_NoTail, so neither can turn into a
+	 * jump that skips that frame.
 	 */
 	if (ss_call != nullptr)
 		ss_call->setTailCallKind (llvm::CallInst::TCK_NoTail);
@@ -257,19 +265,20 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 }
 
 /*
- * Whether this method's after-call sequence points take part in the nested-call
- * tagging below, which is a question the other engines answer like this:
+ * Whether this method's after-call sequence points take part in the
+ * nested-call tagging below. The interpreter answers the same question with:
  *
  *	if (!(method->flags & METHOD_IMPL_ATTRIBUTE_NATIVE))
  *
- * METHOD_IMPL_ATTRIBUTE_NATIVE is 0x0001 and belongs to iflags, so read off
- * flags it is bit 0 of the accessibility nibble - set for private, assembly and
- * famorassem, clear for everything else. Nothing about a method being native
- * comes into it.
+ * METHOD_IMPL_ATTRIBUTE_NATIVE is 0x0001 and belongs to iflags, but this test
+ * reads it off flags instead. There it lands on bit 0 of the accessibility
+ * nibble, set for private, assembly, and famorassem, and clear for everything
+ * else. Whether a method is native plays no part in it.
  *
- * It has to be matched rather than repaired. A compiler-generated state machine
- * is private, so neither other engine tags anything in one, and a step over
- * walking out of an async MoveNext gets the stops it gets because of that.
+ * This backend matches that test. It does not correct it. A
+ * compiler-generated state machine is private, so the interpreter tags
+ * nothing inside one. A step over that exits an async MoveNext gets whatever
+ * stops this test happens to produce.
  */
 static bool
 tags_nested_calls (MonoMethod *method)
@@ -281,22 +290,24 @@ tags_nested_calls (MonoMethod *method)
  * Emit the sequence point that belongs after the call just translated, if the
  * offset it lands on does not already get one.
  *
- * The pdb has no sequence point between the calls of `f (g (), h ())`, so
- * without these a step over out of `g ()` has nowhere in the caller to stop and
- * runs on past `h ()`. NONEMPTY_STACK on all of them is what makes a step over
- * pass over one, and NESTED_CALL on every call of an argument list but the
- * outermost is what exempts the ones it has to stop at. mono_de_ss_update ()
- * reads both.
+ * The pdb has no sequence point between the calls in `f (g (), h ())`.
+ * Without this, a step over out of `g ()` finds nowhere to stop in the
+ * caller and runs on past `h ()`. MONO_SEQ_POINT_FLAG_NONEMPTY_STACK on
+ * every one of these points is what makes a step over pass over it.
+ * MONO_SEQ_POINT_FLAG_NESTED_CALL on every call in an argument list but the
+ * outermost is what exempts the ones a step over must still stop at.
+ * mono_de_ss_update () reads both flags.
  *
- * NESTS says whether this call takes part in that run - a newobj gets a point
- * of its own but does not open or extend one, matching mini.
+ * nests says whether this call takes part in that run. A newobj gets a point
+ * of its own but does not open or extend a run. The interpreter treats
+ * newobj the same way.
  */
 void
 MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests)
 {
 	/*
-	 * Nothing follows a call the body ended on, and an offset that is a stop in
-	 * its own right gets its point from the ordinary rule instead.
+	 * Nothing follows a call the body ended on. An offset that is already a
+	 * stop in its own right gets its point from the ordinary rule instead.
 	 */
 	if (ip >= code_size || builder.GetInsertBlock ()->getTerminator () != nullptr)
 		return;
@@ -304,10 +315,11 @@ MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests
 		return;
 
 	/*
-	 * A method the symbol file names no offsets for has no source of its own -
-	 * a compiler-generated accessor, a state machine's constructor - and gets no
-	 * stops at all. These would be the only ones it had, so a step into such a
-	 * method would land on a call in code the user never wrote.
+	 * If the symbol file names this method but lists no offsets, that is what
+	 * a compiler-generated accessor or a state machine's constructor looks
+	 * like. An after-call point is the only stop such a method can get. If
+	 * one is added here, a step into the method lands on a call in code the
+	 * user never wrote.
 	 */
 	if (sym_seq_points && sym_seq_point_offsets.empty ())
 		return;
@@ -330,19 +342,23 @@ MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests
 }
 
 /*
- * Work out which sequence points can execute next after each of this body's.
+ * Work out which sequence points can execute immediately after each sequence
+ * point in this body.
  *
- * This is what the debugger single-steps with: a step places a breakpoint at
- * every successor of the point the thread is stopped at, and if a body offers
- * none the stepper falls back to trapping every method entry in the process and
- * stops wherever that first lands. The graph is over the CIL rather than over
- * the code that came out, because an IL offset is how the debugger names a
- * place - and mono_seq_point_init_next () reads the entries back as indices
- * into the published table, which jinfo.cpp turns these offsets into.
+ * The debugger uses this graph to single-step. A step places a breakpoint at
+ * every successor of the point where the thread is stopped. If a body offers
+ * no successors, the stepper turns on global single stepping instead. Every
+ * sequence point in the process then traps, and step filtering picks which
+ * one to stop at.
  *
- * Edges are the ones the IL itself draws, plus the two an exception clause adds:
- * a `leave` reaches the finallys it unwinds through on its way to its target,
- * and their endfinallys reach that target back again.
+ * The graph is over the CIL rather than over the emitted code, because an IL
+ * offset is how the debugger names a place. mono_seq_point_init_next () reads
+ * the graph's entries back as indices into the published table. jinfo.cpp is
+ * what builds that table from these IL offsets.
+ *
+ * Edges are the ones the IL itself draws, plus two more that an exception
+ * clause adds. A `leave` reaches the finallys it unwinds through on its way
+ * to its target, and their endfinallys reach that target again afterward.
  */
 void
 MethodLLVMEmitter::build_seq_point_graph ()
@@ -365,9 +381,9 @@ MethodLLVMEmitter::build_seq_point_graph ()
 	};
 
 	/*
-	 * Which target an endfinally carries on to depends on which leave entered
-	 * the handler, so the leaves are what say where its handler's endfinallys
-	 * can go.
+	 * Which target an endfinally continues to depends on which leave entered
+	 * its handler. The leaves are therefore what say where that handler's
+	 * endfinallys can go.
 	 */
 	std::vector<std::vector<uint32_t>> leave_targets (num_clauses);
 	std::vector<uint32_t> endfinallys;
@@ -376,7 +392,8 @@ MethodLLVMEmitter::build_seq_point_graph ()
 		llvm::Expected<Flow> flow = decode_flow (at);
 
 		if (!flow) {
-			/* The body translated, so nothing here fails to decode. */
+			// The method already translated without error, so decode_flow ()
+			// cannot fail here.
 			llvm::consumeError (flow.takeError ());
 			return;
 		}
@@ -452,7 +469,8 @@ MethodLLVMEmitter::build_seq_point_graph ()
 					push (next);
 		}
 
-		/* The order a worklist happens to visit in is nobody's business. */
+		// A worklist can visit successors in any order, so sort them for a
+		// stable result.
 		std::sort (entry->second.begin (), entry->second.end ());
 	}
 }

@@ -6,30 +6,26 @@
 
 namespace mono {
 
-/*
- * A profiler that installs a call-instrumentation filter is asking to be told
- * when a method is entered and when it is left, and it is told by code emitted
- * into the method itself: mono_profiler_raise_method_enter at the top, and
- * mono_profiler_raise_method_leave in front of each ret.
- *
- * The exceptional exit is not one of these. A method left by an exception is
- * left by the unwinder rather than by anything in its body, and
- * mono_handle_exception_internal raises method_exception_leave as it walks each
- * frame off - so what the front end owes is the enter that pairs with it.
- * That is why the enter goes ahead of the class initializer: a type
- * initializer that throws unwinds this frame like any other.
- */
+// A profiler that installs a call-instrumentation filter wants to know when a
+// method starts and when it exits. The method's own body tells it. A call to
+// mono_profiler_raise_method_enter sits at the top. A call to
+// mono_profiler_raise_method_leave sits in front of each ret.
+//
+// An exception exit is different. The unwinder leaves the frame, not the
+// method's own code, and mono_handle_exception_internal raises
+// method_exception_leave as it walks the frame off. So the front end only
+// owes the enter event that pairs with it. That is why the enter comes
+// before the class initializer. A type initializer that throws still unwinds
+// this frame.
 
 /// Ask the profilers what they want instrumented in this method.
 void
 MethodLLVMEmitter::resolve_call_instrumentation ()
 {
-	/*
-	 * A native-to-managed wrapper is entered from C on a thread the runtime may
-	 * never have seen, and attaching it is the first thing its body does. A
-	 * profiler callback ahead of that runs against a thread that does not exist
-	 * yet, which is worse than the events it would have produced.
-	 */
+	// A native-to-managed wrapper enters from C, on a thread that can still
+	// be unattached. Attaching the thread is the first thing the wrapper's
+	// body does. A profiler callback before that point runs on a thread
+	// that does not exist yet, which is worse than skipping the event.
 	if (method->wrapper_type == MONO_WRAPPER_NATIVE_TO_MANAGED)
 		return;
 
@@ -39,12 +35,12 @@ MethodLLVMEmitter::resolve_call_instrumentation ()
 bool
 MethodLLVMEmitter::instrumented (MonoProfilerCallInstrumentationFlags flag) const
 {
-	/* A filter body is a helper over this frame, not an entry into the method. */
+	// A filter body is a helper over this frame, not a new entry into the method.
 	return !filter_mode && (prof_flags & flag) != 0;
 }
 
-/// Call one of the runtime's mono_profiler_raise_* entry points, whose arguments
-/// are all pointers.
+/// Call one of the runtime's mono_profiler_raise_* entry points. Every
+/// argument is a pointer.
 void
 MethodLLVMEmitter::emit_profiler_event (MonoIrBuilder &builder, const char *raise,
                                         void *address, llvm::ArrayRef<llvm::Value *> args)
@@ -57,11 +53,9 @@ MethodLLVMEmitter::emit_profiler_event (MonoIrBuilder &builder, const char *rais
 			address_symbol (raise, address)),
 		args);
 
-	/*
-	 * A callback is free to walk the stack, and the frame it wants to see is
-	 * this one - so the leave in front of a void ret has to stay a call rather
-	 * than become the jump tail-call elimination would make of it.
-	 */
+	// A callback can walk the stack and expects to find this frame still
+	// there. The call stays an ordinary call, not a tail call, so tail-call
+	// elimination cannot turn it into a jump that skips over this frame.
 	call->setTailCallKind (llvm::CallInst::TCK_NoTail);
 }
 
@@ -91,13 +85,14 @@ MethodLLVMEmitter::emit_profiler_leave (MonoIrBuilder &builder)
 	          llvm::ConstantPointerNull::get (llvm::PointerType::get (context (), 0)) });
 }
 
-/// Report a site that gives this method's frame away to TARGET - an honored
-/// tail. call, or a jmp - as the method's exit.
+/// Report an honored tail. call, or a jmp, as the method's exit. The site
+/// hands this method's frame to target.
 ///
-/// The report goes in front of the site rather than after it, since control does
-/// not come back. A profiler that asked only about ordinary exits gets one here:
-/// the frame is gone either way, and a leave it never heard about would leave its
-/// idea of the stack one deep forever.
+/// Control does not come back after the site runs. So the report must go in
+/// front of it, not after. A profiler that did not ask for tail-call events
+/// still needs a leave report here. The frame is gone either way, and
+/// without a leave, the profiler's idea of the stack stays one frame too
+/// deep.
 void
 MethodLLVMEmitter::emit_profiler_frame_handover (MonoIrBuilder &builder, MonoMethod *target)
 {

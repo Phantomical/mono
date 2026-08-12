@@ -63,13 +63,11 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 			return error;
 	}
 
-	/*
-	 * The pushed value is the method's published entry point - the legacy one,
-	 * because this pointer escapes: a delegate stores it, native code may be
-	 * handed it, and any calli through it dispatches as a legacy call. For a
-	 * synchronized method that entry has to be the locking wrapper's: whoever
-	 * ends up calling through the pointer has no other chance to take the lock.
-	 */
+	// The pushed value is the method's published stub, because this pointer
+	// can escape: a delegate can store it, and native code can receive it. A
+	// call through it is an ordinary call in this backend's convention. For a
+	// synchronized method, that entry must be the locking wrapper's. Whoever
+	// calls through the pointer has no other chance to take the lock.
 	llvm::Expected<llvm::Constant *> address =
 		code_address_symbol (synchronized_target (*target));
 	if (!address)
@@ -131,11 +129,9 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 		return invalid_il (llvm::Twine ("ldvirtftn is not defined for operand type ")
 		                   + describe (obj.type, obj_type));
 
-	/*
-	 * Which slot the method lands in - vtable, IMT, a generic virtual resolver -
-	 * is the runtime's business, so the lookup is its helper rather than a slot
-	 * load spelled out here.
-	 */
+	// The lookup can resolve to a vtable slot, an IMT slot, or a generic
+	// virtual resolver. That choice is the runtime's business, so this call
+	// uses its helper instead of a slot load written out here.
 	emit_null_check (builder, obj.value);
 
 	llvm::Expected<llvm::Function *> lookup =
@@ -153,16 +149,18 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// Call the native target on the stack from a dynamic method, through the
+/// Calls the native target on the stack from a dynamic method, through the
 /// managed-to-native wrapper the runtime builds for it.
 ///
-/// The wrapper cache the direct path uses is keyed on the signature, and a
-/// dynamic method's signature is memory its disposal frees - a later method
-/// whose signature landed at the same address would be handed this one's
-/// wrapper. So the wrapper is built where the signature is still known to be
-/// alive, at the point of the call: mono_get_native_calli_wrapper () takes the
-/// image, the signature and the target and returns the address of a compiled
-/// wrapper for exactly that target, which is then an ordinary managed call.
+/// A dynamic method's signature is memory that its disposal frees. An
+/// ordinary method's signature instead lives in its image for as long as the
+/// image does. The runtime's general wrapper cache needs that lifetime to
+/// hold a signature-keyed entry safely. This function does not use that
+/// cache. It builds the wrapper on the spot instead, while the signature is
+/// still known to be alive. mono_get_native_calli_wrapper () takes the
+/// image, the signature and the target. It returns the address of a
+/// compiled wrapper for exactly that target. The call that follows is then
+/// an ordinary managed call.
 llvm::Error
 MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
                                               MonoMethodSignature *sig)
@@ -172,7 +170,7 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 	if (!build)
 		return build.takeError ();
 
-	/* The wrapper is a managed method, whatever the signature it wraps says. */
+	// The wrapper itself is a managed method, whatever the signature it wraps says.
 	llvm::Expected<llvm::FunctionType *> type =
 		convert_method_signature (sig, /*native=*/false);
 	if (!type)
@@ -199,7 +197,7 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 		builder, *build,
 		adapt_to_callee (builder, *build, { image, signature, target }));
 
-	/* The icall hands the address back as a native int; a call target is a pointer. */
+	// The icall returns the address as a native int. A call target must be a pointer.
 	if (!wrapper->getType ()->isPointerTy ())
 		wrapper = builder.CreateIntToPtr (wrapper, ptr);
 
@@ -207,7 +205,7 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 	if (!args)
 		return args.takeError ();
 
-	/* The wrapper is a method this backend published, so its stub is entered like any. */
+	// The wrapper is a method this backend published, so callers enter its stub like any other.
 	llvm::Type *hidden = nullptr;
 	unsigned at = 0;
 
@@ -313,32 +311,32 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 			return runtime_error (metadata_error);
 	}
 
-	/*
-	 * A vararg callee wants its variable arguments packed into a cookie buffer,
-	 * which only the direct call path builds; the pointer here would be handed
-	 * the raw list instead.
-	 */
+	// A vararg callee wants its variable arguments packed into a cookie buffer.
+	// Only the direct call path builds one. A calli through a pointer hands
+	// the callee the raw argument list instead.
 	if (sig->call_convention == MONO_CALL_VARARG)
 		return unsupported_il ("calli through a vararg signature");
 
 	/*
-	 * An unmanaged target needs a managed-to-native transition, and the runtime's
-	 * indirect native-func wrapper is that transition: a managed method built for
-	 * this signature that takes the function pointer as its leading argument,
-	 * flips the GC state, marshals, and makes the native call. What gets emitted
-	 * here is then an ordinary call to the wrapper. A signature that suppresses
-	 * the transition asked for the raw call instead, and takes the plain indirect
-	 * path below.
+	 * An unmanaged target needs a managed-to-native transition. The runtime's
+	 * indirect native-func wrapper is that transition. It is a managed
+	 * method, built for this signature, that takes the function pointer as
+	 * its leading argument. It flips the GC state, marshals the arguments
+	 * and makes the native call. This function then emits an ordinary call
+	 * to that wrapper. A signature that suppresses the transition asks for
+	 * the raw call instead, and takes the plain indirect path below.
 	 *
-	 * Inside a wrapper the calli is the other side of that arrangement: it is the
-	 * native call the wrapper exists to make, and the wrapper's own body already
-	 * says everything the transition needs. Wrapping it again would ask the cache
-	 * for this signature's wrapper - which is the method being translated - and
-	 * emit a call to it from inside itself. A dynamic method is the exception:
-	 * its body is the program's own IL and was never built to make a native
-	 * call, so it needs the transition like any other method - it is a wrapper
-	 * only because that is how the runtime gives an emitted body somewhere to
-	 * keep its token references.
+	 * Inside a wrapper, a calli is the other side of that same arrangement.
+	 * It is the native call the wrapper exists to make. The wrapper's own
+	 * body already does everything the transition needs. If the call wraps
+	 * the target again, the cache returns this signature's wrapper. That
+	 * wrapper is the method this function translates right now, so the call
+	 * enters itself.
+	 *
+	 * A dynamic method is the exception. Its body is the program's own IL,
+	 * never built to make a native call, so it needs the transition like any
+	 * other method. It counts as a wrapper only because that is how the
+	 * runtime gives an emitted body somewhere to keep its token references.
 	 */
 	bool dynamic_method = method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD;
 
@@ -401,13 +399,11 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	if (!args)
 		return args.takeError ();
 
-	/*
-	 * A native signature really does reach native code, so that call crosses the
-	 * boundary and LegacyAbiPass lowers it. A managed one reaches a method this
-	 * backend published - ldftn and ldvirtftn hand out its stub - so it is an
-	 * ordinary call, and the hidden return pointer the prototype has to spell out
-	 * is this end's business rather than the pass's.
-	 */
+	// A native signature really does reach native code. That call crosses the
+	// boundary, and LegacyAbiPass lowers it. A managed signature instead reaches
+	// a method this backend published - ldftn and ldvirtftn hand out its stub -
+	// so it is an ordinary call. Spelling out the hidden return pointer in the
+	// prototype is then this function's job, not the pass's.
 	llvm::Type *hidden = nullptr;
 	unsigned at = 0;
 
@@ -435,9 +431,9 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
  * III.F0.18  mono_calli_extra_arg - calli carrying a hidden context argument
  *
  * The delegate invoke wrapper calls the bound method through its published
- * method_ptr and stacks the delegate's extra_arg on the way, right under the
- * function pointer. Only llvmonly ever fills extra_arg in, so here it is
- * always null: drop it and what remains is an ordinary calli.
+ * method_ptr. It stacks the delegate's extra_arg on the way, right under the
+ * function pointer. Only llvmonly ever fills extra_arg in, so it is always
+ * null here. This function drops it, and what remains is an ordinary calli.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_calli_extra_arg (MonoIrBuilder &builder, uint32_t token)

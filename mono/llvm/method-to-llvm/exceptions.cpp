@@ -14,8 +14,9 @@ namespace mono {
 
 namespace {
 
-/// The runtime call that throws an object already on the stack, or throws the one a
-/// catch handler is holding a second time without disturbing its trace.
+/// Declares one of mono's throw entry points by name: mono_llvm_throw_exception for
+/// a new throw, or mono_llvm_rethrow_exception for a rethrow that keeps the original
+/// trace.
 llvm::FunctionCallee
 throw_decl (llvm::Module *module, const char *name)
 {
@@ -31,8 +32,8 @@ throw_decl (llvm::Module *module, const char *name)
 	return callee;
 }
 
-/// The runtime call a finally or fault makes when it was entered by unwinding and
-/// has run out: hand control back to the unwinder, which knows where it was.
+/// Declares mono_llvm_resume_unwind, the call a finally or fault makes when it was
+/// entered by unwinding and control must return to the unwinder.
 llvm::FunctionCallee
 resume_unwind_decl (llvm::Module *module)
 {
@@ -48,20 +49,21 @@ resume_unwind_decl (llvm::Module *module)
 
 } // namespace
 
-/// The innermost clause whose try region covers AT, or -1 if nothing protects it.
+/// The innermost clause whose try region covers at, or -1 if nothing protects it.
 ///
-/// Clauses arrive innermost-first for a nest, but overlapping regions from separate
-/// nests do not order themselves, so the shortest try wins rather than the first.
+/// Clauses arrive innermost-first within one nest. Overlapping regions from separate
+/// nests do not order themselves, so the shortest try region wins instead of the
+/// first.
 int
 MethodLLVMEmitter::innermost_try (size_t at) const
 {
 	int found = -1;
 
 	/*
-	 * A filter body runs during the search pass, before anything has been
-	 * unwound; an exception it fails to contain makes the filter answer no,
-	 * it is never dispatched into this frame's clauses. So nothing in a
-	 * filter function is protected and its calls stay plain calls.
+	 * A filter body runs during the search pass, before anything has unwound.
+	 * If it fails to contain the exception, it answers no and the runtime
+	 * never dispatches into this frame's clauses. So nothing in a filter
+	 * function is protected, and its calls stay plain calls.
 	 */
 	if (filter_mode)
 		return -1;
@@ -78,7 +80,7 @@ MethodLLVMEmitter::innermost_try (size_t at) const
 	return found;
 }
 
-/// The clause whose handler or filter covers AT, or -1 if AT is not in one.
+/// The clause whose handler or filter covers at, or -1 if no clause does.
 int
 MethodLLVMEmitter::innermost_handler (size_t at) const
 {
@@ -96,11 +98,11 @@ MethodLLVMEmitter::innermost_handler (size_t at) const
 	return found;
 }
 
-/// Whether clause J's try region strictly encloses clause C's.
+/// Whether clause j's try region strictly encloses clause c's.
 ///
-/// The test is on the try regions' own extents; handler placement says nothing
-/// about nesting. Siblings - identical try regions - are excluded: they share one
-/// pad and are routed as a group, not by nesting.
+/// The test looks only at the try regions' own extents. Handler placement says
+/// nothing about nesting. Siblings, which share an identical try region, are
+/// excluded: they share one pad and route as a group, not by nesting.
 static bool
 clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
 {
@@ -111,12 +113,15 @@ clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
 	              <= (uint64_t) j->try_offset + j->try_len;
 }
 
-/// Every clause CLAUSE's pad can be asked to dispatch, in the order the runtime
-/// tries them: the clause's own sibling group first - a catch shares its pad with
-/// every catch over the identical try region, in declaration order, so the more
-/// derived type is tried first; a finally or fault owns its pad alone - then each
-/// enclosing clause outward. Ascending clause index is innermost first for the
-/// enclosers: ECMA-335 puts a nested clause before the clauses that enclose it.
+/// Every clause that the clause's pad can dispatch to, in the order the runtime
+/// tries them.
+///
+/// The clause's own sibling group comes first. A catch shares its pad with every
+/// catch over the identical try region, tried in declaration order so the more
+/// derived type comes first. A finally or fault owns its pad alone.
+///
+/// Enclosing clauses come next, ascending clause index, which is innermost first:
+/// ECMA-335 lists a nested clause before the clauses that enclose it.
 std::vector<uint32_t>
 MethodLLVMEmitter::covering_chain (uint32_t clause) const
 {
@@ -150,13 +155,12 @@ MethodLLVMEmitter::covering_chain (uint32_t clause) const
 	return chain;
 }
 
-/// The global that stands for clause CLAUSE in the exception tables.
+/// The global that stands for the clause in the exception tables.
 ///
-/// A landing pad's catch operands travel into the object's type table, and that is
-/// the one channel through which a clause's identity survives codegen: the table
-/// entry points at this global, whose two words are the clause index and the
-/// clause's kind. The runtime side reads them back when it builds the method's
-/// MonoJitInfo.
+/// A landing pad's catch operands point into the object's type table, which is the
+/// one channel through which a clause's identity survives codegen. The table entry
+/// names this global, whose two words are the clause index and the clause's kind.
+/// The runtime reads them back to build the method's MonoJitInfo.
 llvm::Constant *
 MethodLLVMEmitter::clause_marker (uint32_t clause)
 {
@@ -175,11 +179,12 @@ MethodLLVMEmitter::clause_marker (uint32_t clause)
 	                                 llvm::GlobalValue::PrivateLinkage, value, name);
 }
 
-/// The global that marks CLAUSE's resume pad in the exception tables.
+/// The global that marks the clause's resume pad in the exception tables.
 ///
-/// Same channel as clause_marker, different meaning: the kind word says the pad is
-/// where control sits once CLAUSE's cleanup has run, so the runtime dispatches the
-/// enclosing clauses through it from then on rather than through the try's own pad.
+/// This uses the same channel as clause_marker, but with a different meaning. The
+/// kind word marks the pad as where control sits once the clause's cleanup has
+/// run. From then on, the runtime dispatches the enclosing clauses through this
+/// pad instead of through the try's own pad.
 llvm::Constant *
 MethodLLVMEmitter::resume_marker (uint32_t clause)
 {
@@ -198,8 +203,9 @@ MethodLLVMEmitter::resume_marker (uint32_t clause)
 	                                 llvm::GlobalValue::PrivateLinkage, value, name);
 }
 
-/// A block that enters clause CLAUSE's handler the way the runtime expects it to be
-/// entered: a finally is told it was entered by unwinding, a catch is handed EXC.
+/// A block that enters the clause's handler the way the runtime expects.
+///
+/// A finally is told it was entered by unwinding, and a catch is handed exc.
 llvm::BasicBlock *
 MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 {
@@ -222,24 +228,26 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 	return enter;
 }
 
-/// Where a throw inside CLAUSE's try region lands.
+/// Where a throw inside the clause's try region lands.
 ///
 /// The pad is what every invoke in the region unwinds to. Mono's own unwinder does
-/// the two-pass search out of MonoJitInfo, picks the clause, and resumes here - at
-/// the innermost pad of the throw site - with the exception and the chosen clause's
-/// index in the two registers a landing pad reads. The switch is what routes that
-/// entry to the chosen clause, which need not be the innermost: a catch the
-/// innermost clause does not satisfy hands dispatch to an encloser through this
-/// same pad - until a cleanup has run, after which the enclosers are reached
-/// through that cleanup's own resume pad (emit_resume_exit).
+/// the two-pass search out of MonoJitInfo, picks a clause, and resumes at the
+/// innermost pad of the throw site. It hands the pad the exception and the chosen
+/// clause's index, in the two registers a landing pad reads.
+///
+/// The switch routes that entry to the chosen clause, which need not be the
+/// innermost clause. If the innermost clause's catch cannot take the exception,
+/// dispatch passes to an encloser through this same pad. Once a cleanup has run,
+/// the runtime instead reaches the enclosers through that cleanup's own resume pad
+/// (emit_resume_exit).
 ///
 /// The catch operands name every clause the switch can route to, so the object's
-/// exception table carries the whole chain for each call site - which is also what
-/// keeps every handler reachable and alive through optimization.
+/// exception table carries the whole chain for each call site. That also keeps
+/// every handler reachable and alive through optimization.
 ///
 /// A handler is entered holding what the runtime puts there: a catch gets the
-/// exception, a finally or fault nothing. Those entry stacks are recorded up front
-/// in emit (), so this only has to fill the slot in.
+/// exception, and a finally or fault gets nothing. emit () records those entry
+/// stacks up front, so this only fills the slot in.
 llvm::BasicBlock *
 MethodLLVMEmitter::landing_pad (uint32_t clause)
 {
@@ -265,8 +273,8 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 	llvm::Value *selector = pad.CreateExtractValue (caught, 1);
 
 	/*
-	 * The runtime only ever enters with one of the chain's indices; anything else
-	 * is a table we built wrongly, and there is nowhere sensible to go.
+	 * The runtime only ever enters with one of the chain's indices. Anything else
+	 * means we built the table wrongly, and there is nowhere sensible to go.
 	 */
 	llvm::BasicBlock *impossible =
 		llvm::BasicBlock::Create (context (),
@@ -285,12 +293,13 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 
 /// Hand control back to the unwinder at the end of a cleanup it entered.
 ///
-/// With nothing enclosing the clause the frame is done and a plain call suffices.
-/// An enclosing clause makes it an invoke landing on a pad of this cleanup's own:
-/// the runtime dispatches the enclosers through that pad from then on, and the pad
-/// being reachable only from here is what hands their handlers the values the
-/// cleanup just wrote - through the try's own pad they would get the state the
-/// throw site had, as though the cleanup had never run.
+/// If nothing encloses the clause, the frame is done and a plain call suffices. If a
+/// clause encloses it, this becomes an invoke landing on a pad of this cleanup's
+/// own. From then on, the runtime dispatches the enclosers through that pad.
+///
+/// That pad is reachable only from here, which is what hands the enclosing handlers
+/// the values the cleanup wrote. Through the try's own pad, they instead get the
+/// state the throw site had, as though the cleanup never ran.
 void
 MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 {
@@ -337,12 +346,14 @@ MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 		dispatch->addCase (pad.getInt32 (j), handler_entry (j, exc));
 }
 
-/// Record on the way in how CLAUSE's handler is being entered.
+/// Record how the clause's handler is entered, before jumping to it.
 ///
-/// CONTINUATION is the id its endfinally switches on: 0 for an entry by unwinding,
-/// which carries on by resuming that unwind. The abort guard is cleared here rather
-/// than at the top of the body, because from the body's first instruction on the byte
-/// belongs to the runtime - another thread writes it while this one is in there.
+/// The id continuation is what its endfinally switches on. Zero means an entry by
+/// unwinding, which carries on by resuming that unwind.
+///
+/// The abort guard is cleared here rather than at the top of the body. From the
+/// body's first instruction on, the byte belongs to the runtime, and another thread
+/// can write it while this one runs there.
 void
 MethodLLVMEmitter::enter_finally (MonoIrBuilder &builder, uint32_t clause,
                                   uint32_t continuation)
@@ -353,14 +364,18 @@ MethodLLVMEmitter::enter_finally (MonoIrBuilder &builder, uint32_t clause,
 	builder.CreateStore (builder.getInt8 (0), state.abort_guard);
 }
 
-/// Mark where CLAUSE's handler body begins or ends.
+/// Mark where the clause's handler body begins or ends.
 ///
-/// The pair is what MonoFinallyRangePass reads back after codegen to work out which
-/// PCs the body occupies - the question find_last_handler_block () asks of a frame it
-/// is about to guard. A stackmap answers it because it is an instruction: it is moved,
-/// cloned and merged along with the code around it, where a block loses its identity
-/// to the first merge that touches it. The opening one also names the guard byte, so
-/// that its frame home can be recovered once the frame has been laid out.
+/// MonoFinallyRangePass reads the pair back after codegen to work out which PCs the
+/// body occupies. That is the question find_last_handler_block () asks of a frame it
+/// is about to guard.
+///
+/// A stackmap answers it because it is an instruction, so it moves, clones and
+/// merges along with the surrounding code. A basic block has no such guarantee: the
+/// first merge that touches it erases its identity.
+///
+/// The opening marker also names the guard byte, so its frame home can be recovered
+/// once the frame is laid out.
 void
 MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t clause,
                                              bool opening)
@@ -380,18 +395,20 @@ MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t cl
 	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, args);
 }
 
-/// Deliver an abort that arrived while CLAUSE's handler was running, now that it has.
+/// Deliver an abort that arrived while the clause's handler was running, now that
+/// the handler has finished.
 ///
-/// A thread aborted inside a finally has to finish it first, so the request does not
-/// raise anything: it sets a byte in this frame (install_handler_block_guard) and
-/// leaves the delivery to the handler's own exit. The icall hands the abort to its
-/// wrapper's interruption checkpoint, which raises it here - past the body, but still
-/// inside whatever protects the handler, so it reaches the catch it would have reached
-/// had it been raised on time.
+/// A thread aborted inside a finally must finish the finally first, so the abort
+/// request does not raise anything there. It sets a byte in this frame
+/// (install_handler_block_guard) and leaves delivery to the handler's own exit. The
+/// icall hands the abort to its wrapper's interruption checkpoint. That checkpoint
+/// raises it here, past the body but still inside whatever protects the handler.
+/// It reaches the same catch a timely abort reaches.
 ///
-/// Only on the way out through a leave. WHICH is the continuation the endfinally is
-/// about to take, and 0 says the handler was entered by unwinding: an exception is
-/// already on its way out of the frame and the runtime delivers the abort behind it.
+/// This only checks on the way out through a leave: which names the continuation
+/// the endfinally is about to take. Zero means the handler was entered by unwinding,
+/// and an exception is already leaving the frame, so the runtime delivers the abort
+/// behind it.
 llvm::Error
 MethodLLVMEmitter::emit_finally_abort_check (MonoIrBuilder &builder, uint32_t clause,
                                              llvm::Value *which)
@@ -429,12 +446,13 @@ MethodLLVMEmitter::emit_finally_abort_check (MonoIrBuilder &builder, uint32_t cl
 	return llvm::Error::success ();
 }
 
-/// Emit a call that unwinds, as an invoke when a clause in this method protects the
-/// instruction being translated.
+/// Emit a call that unwinds. It becomes an invoke when a clause in this method
+/// protects the current instruction.
 ///
-/// This is the whole of "am I inside a try": a call inside a protected region has to be
-/// an invoke or LLVM records the range as nounwind and the unwinder has nothing to
-/// match. The invoke's normal edge is dead - none of these callees return.
+/// This is the whole test for "am I inside a try". A call inside a protected
+/// region must be an invoke, or LLVM marks the range nounwind and the unwinder
+/// has nothing to match. The invoke's normal edge is dead, because none of these
+/// callees return.
 void
 MethodLLVMEmitter::emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
                                         llvm::ArrayRef<llvm::Value *> args)
@@ -454,16 +472,17 @@ MethodLLVMEmitter::emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCa
 	builder.CreateUnreachable ();
 }
 
-/// Emit a call that returns but may unwind, as an invoke when a clause protects it.
+/// Emit a call that returns but can unwind. It becomes an invoke when a clause
+/// protects it.
 ///
-/// The same decision emit_unwinding_call makes, for the callees that come back: the
-/// normal edge carries on with the translation instead of being dead. DESCRIBE says
-/// the rest of what the site is, on the call instruction itself, which is not always
-/// what comes back from here.
+/// This makes the same decision as emit_unwinding_call, but for callees that come
+/// back: the normal edge is live, and translation continues along it. The describe
+/// callback adds the rest of what the call site needs, on the call instruction
+/// itself. What it records is not always what this function returns.
 ///
-/// ARGS are the callee's declared arguments. A callee whose return travels through a
-/// hidden pointer is handed a slot of this frame's to fill in, and what comes back is
-/// what it left there.
+/// The args are the callee's declared arguments. A callee whose return travels
+/// through a hidden pointer is handed a slot of this frame to fill in. What
+/// comes back is what it left there.
 llvm::Value *
 MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
                                         llvm::ArrayRef<llvm::Value *> args,
@@ -490,11 +509,12 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 		llvm::CallInst *plain = builder.CreateCall (callee, operands);
 
 		/*
-		 * A managed frame is observable - stack traces, StackFrame, the
-		 * runtime's own stack walks - so a call in tail position still has to
-		 * be a call. Left unmarked, tailcallelim marks it `tail`, which either
-		 * rewrites self-recursion into a loop or lets codegen hand this frame
-		 * to the callee. Either way the frame stops existing.
+		 * A managed frame is observable: stack traces, StackFrame, and the
+		 * runtime's own stack walks all read it. So a call in tail position
+		 * still has to be a call. Left unmarked, TailCallElimPass marks it
+		 * `tail`, which either rewrites self-recursion into a loop or lets
+		 * codegen hand this frame to the callee. Either way, the frame
+		 * stops existing.
 		 */
 		plain->setTailCallKind (llvm::CallInst::TCK_NoTail);
 		call = plain;
@@ -611,7 +631,7 @@ MethodLLVMEmitter::emit_rethrow (MonoIrBuilder &builder)
 		return invalid_il ("rethrow is only valid inside a catch handler");
 
 	/*
-	 * The exception is not a stack operand - the handler was handed it on entry,
+	 * The exception is not a stack operand. The handler was handed it on entry,
 	 * and by here the body has usually stored it away or discarded it. The value
 	 * remembered at the handler's entry is the one the runtime put there.
 	 */
@@ -657,12 +677,14 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 		return target.takeError ();
 
 	/*
-	 * Leaving a catch handler asks the runtime whether an undeniable exception
-	 * is pending and rethrows it: a thread abort raised for an appdomain unload
-	 * survives ResetAbort, and rethrowing it at every catch exit is what stops
-	 * a handler from swallowing it and keeping the thread in the dying domain.
-	 * Not in runtime-invoke wrappers, whose native callers expect the wrapper
-	 * to catch everything.
+	 * When a leave exits a catch handler, it asks the runtime whether an
+	 * undeniable exception is pending, and rethrows it if so. A thread abort
+	 * raised for an appdomain unload survives ResetAbort. A rethrow at every
+	 * catch exit stops a handler from swallowing it and keeping the thread in
+	 * the dying domain.
+	 *
+	 * This does not happen in runtime-invoke wrappers, whose native callers
+	 * expect the wrapper to catch everything.
 	 */
 	bool leaving_catch = false;
 
@@ -679,9 +701,10 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 
 	if (leaving_catch && method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE) {
 		/*
-		 * Through the icall wrapper, not as a bare call: the runtime answers by
-		 * walking the stack from the last LMF, and the wrapper's is what makes
-		 * the walk start here rather than at whichever frame saved one last.
+		 * This goes through the icall wrapper rather than a bare call. The
+		 * runtime answers by walking the stack from the last LMF. The
+		 * wrapper's own LMF is what starts that walk here, instead of at
+		 * whichever frame saved one last.
 		 */
 		llvm::Expected<llvm::Function *> undeniable = icall_wrapper_decl (
 			MONO_JIT_ICALL_mono_thread_get_undeniable_exception);
@@ -706,9 +729,9 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 	}
 
 	/*
-	 * Every finally whose try region we are inside but the target is not, innermost
-	 * first. A fault is not in the chain: it runs only when something went wrong, and
-	 * a leave is an ordinary exit.
+	 * The chain collects every finally whose try region we are inside but the
+	 * target is not, innermost first. A fault does not belong in the chain: it
+	 * runs only when something went wrong, and a leave is an ordinary exit.
 	 */
 	std::vector<uint32_t> chain;
 
@@ -728,7 +751,7 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 		return clauses[a].try_len < clauses[b].try_len;
 	});
 
-	/* leave empties the stack, so nothing has to reach either the finally or target. */
+	/* leave empties the stack, so nothing must reach either the finally or the target. */
 	pop_stack (stack.size ());
 
 	if (llvm::Error error = enter_block (builder, *target, {}))
@@ -737,9 +760,9 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 	llvm::BasicBlock *next = blocks[*target].block;
 
 	/*
-	 * Walk the chain backwards, building each step's continuation before the step that
-	 * jumps to it: the last finally carries on to the target, and every earlier one
-	 * carries on to the next finally.
+	 * Walk the chain backwards. Build each step's continuation before the step
+	 * that jumps to it. The last finally carries on to the target, and every
+	 * earlier one carries on to the next finally.
 	 */
 	for (size_t i = chain.size (); i-- > 0;) {
 		Clause &state = clause_state[chain[i]];
@@ -796,9 +819,9 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 	pop_stack (stack.size ());
 
 	/*
-	 * A fault has only ever been entered by unwinding, so there is nothing to switch
-	 * on: carrying on means handing control back to the unwinder, which saved where
-	 * it was before entering the handler.
+	 * A fault is only ever entered by unwinding, so there is nothing to switch on.
+	 * Carrying on means handing control back to the unwinder, which saved where it
+	 * was before entering the handler.
 	 */
 	if (clauses[clause].flags == MONO_EXCEPTION_CLAUSE_FAULT) {
 		emit_resume_exit (builder, static_cast<uint32_t> (clause));
@@ -817,7 +840,7 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 
 	/*
 	 * The body is over from here, so a thread stopped past this point is no longer
-	 * in it - which is what lets the abort check below raise rather than defer.
+	 * in it. That is what lets the abort check below raise rather than defer.
 	 */
 	emit_finally_body_marker (builder, static_cast<uint32_t> (clause), /* opening */ false);
 
@@ -825,7 +848,10 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 	            emit_finally_abort_check (builder, static_cast<uint32_t> (clause), which))
 		return error;
 
-	/* The cases are filled in once every leave that reaches this block has been seen. */
+	/*
+	 * resolve_finally_switches fills in the cases, once every leave that reaches
+	 * this block is translated.
+	 */
 	state.resume.push_back (builder.CreateSwitch (which, unwinding));
 	return llvm::Error::success ();
 }
@@ -865,21 +891,21 @@ MethodLLVMEmitter::emit_endfilter (MonoIrBuilder &builder)
 		                   + describe (value.type, type));
 
 	/*
-	 * A filter runs during the search pass, before anything has been unwound, so it
-	 * hands its answer back to the runtime by returning it rather than by branching
-	 * anywhere in this method.
+	 * A filter runs during the search pass, before anything has unwound. It hands
+	 * its answer back to the runtime by returning it, not by branching anywhere in
+	 * this method.
 	 */
 	pop_stack (stack.size ());
 	builder.CreateRet (value.value);
 	return llvm::Error::success ();
 }
 
-/// Fill in each finally's endfinally switches, now that every leave that runs it has been
-/// translated and knows which id it used.
+/// Fill in each finally's endfinally switches, once translation has visited every
+/// leave that runs it and each one has recorded the id it used.
 ///
-/// A handler whose every path throws or loops has no endfinally at all, and so no switch
-/// to fill in: the leave's continuation is simply never resumed. That is legal IL, and
-/// what C# emits for `finally { throw ...; }`.
+/// A handler whose every path throws or loops has no endfinally at all, and so no
+/// switch to fill in. The leave's continuation is never resumed. That is legal IL,
+/// and it is what C# emits for `finally { throw ...; }`.
 void
 MethodLLVMEmitter::resolve_finally_switches ()
 {

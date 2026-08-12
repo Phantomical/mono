@@ -32,11 +32,9 @@ MethodLLVMEmitter::emit_dup (MonoIrBuilder &builder)
 
 	StackValue value = get_stack (0);
 
-	/*
-	 * The two copies have to be independent: whatever the program does with one
-	 * of them - hand its address to a callee, run a constructor over it - the
-	 * other still holds what was duplicated.
-	 */
+	// Each copy must be independent. The program can do anything with one
+	// copy, such as hand its address to a callee or run a constructor over
+	// it. The other copy must still hold the value that was duplicated.
 	if (held_in_memory (value.type)) {
 		llvm::Expected<llvm::Value *> slot = vtype_slot (value.type, value.native);
 

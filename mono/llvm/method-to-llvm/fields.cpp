@@ -16,9 +16,9 @@
 
 namespace mono {
 
-/// The collector's hook for storing a reference through a pointer it does not otherwise
-/// know about, which is the general form that also covers a field reached through the
-/// interior of an object and an element reached through an array.
+/// The declaration for the generic write barrier, the collector's hook for a store
+/// through a pointer it does not already track. The same barrier covers a field inside
+/// an object and an element inside an array.
 llvm::FunctionCallee
 MethodLLVMEmitter::wbarrier_decl ()
 {
@@ -29,12 +29,12 @@ MethodLLVMEmitter::wbarrier_decl ()
 	                                    llvm::Type::getVoidTy (ctx), ptr, ptr);
 }
 
-/// The field TOKEN names, with its declaring class laid out so that its offset can be
-/// asked for.
+/// Resolves the field that token names and lays out its declaring class, so callers can
+/// read the field's offset.
 ///
-/// The instance opcodes accept a static field - the object is popped and discarded -
-/// so their callers pass IS_STATIC and reroute; the static opcodes refuse an instance
-/// field outright.
+/// An instance opcode passes out_is_static. If the field turns out static, the caller
+/// pops the object and reroutes to the static opcode instead. A static opcode always
+/// refuses an instance field.
 llvm::Expected<MonoClassField *>
 MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is_static)
 {
@@ -61,8 +61,8 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is
 		return field_access_failure (field);
 
 	/*
-	 * Laying the class out is what makes the offset readable; it settles metadata
-	 * only, and is not the class initializer, which must never run here.
+	 * Laying the class out is what makes the offset readable. It settles metadata
+	 * only, and it is not the class initializer, which must never run here.
 	 */
 	mono_class_init_checked (field->parent, metadata_error);
 	if (!is_ok (metadata_error))
@@ -88,12 +88,11 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is
 	return field;
 }
 
-/// The external global called NAME, whose address the engine resolves against the
+/// The external global named name, whose address the engine resolves against the
 /// runtime, created on first use.
 ///
-/// Whatever already answers to the name is that address, declaration of a function
-/// included - the engine defines one symbol per name, so anything else in the module
-/// claiming it would be renamed out of reach of the definition rather than share it.
+/// A second call under the same name returns the first declaration instead of creating
+/// another one, whether that first declaration is this global or an unrelated function.
 llvm::Constant *
 MethodLLVMEmitter::extern_symbol (const std::string &name)
 {
@@ -104,8 +103,8 @@ MethodLLVMEmitter::extern_symbol (const std::string &name)
 	                                 llvm::GlobalValue::ExternalLinkage, nullptr, name);
 }
 
-/// Note that NAME stands for OBJECT, so that the engine can resolve it without
-/// reading the metadata back out of the name.
+/// Records that name stands for object, so the engine can resolve it without reading
+/// the metadata back out of the name.
 void
 MethodLLVMEmitter::record_external (const std::string &name, ExternalSymbol::Kind kind,
                                     void *object)
@@ -114,16 +113,15 @@ MethodLLVMEmitter::record_external (const std::string &name, ExternalSymbol::Kin
 		externals->push_back ({ name, kind, object });
 }
 
-/// A symbol name standing for OBJECT: NAME is what makes it readable, the pointer
-/// is what makes it unique.
+/// Builds a symbol name for object: name makes it readable, the pointer's own address
+/// makes it unique.
 ///
-/// No printed name is unique on its own. Two assemblies loaded from different
-/// bytes can carry the same assembly name and define classes, methods and fields
-/// that print identically - Assembly.Load (byte[]) over two builds of the same
-/// source is the ordinary way to get there. The engine resolves a symbol by name
-/// and keeps the first definition it is given, so without the pointer the second
-/// assembly's code would link against the first's MonoClass, vtable, statics and
-/// string literals.
+/// A printed name alone is not unique. Two assemblies loaded from different bytes can
+/// share an assembly name and define classes, methods and fields that print identically.
+/// Assembly.Load (byte[]) on two builds of one source is the ordinary way this happens.
+/// The engine resolves a symbol by name and keeps the first definition it gets. The
+/// pointer keeps the two assemblies apart: each gets its own symbol for its own
+/// MonoClass, vtable, statics and string literals.
 std::string
 MethodLLVMEmitter::identity_symbol (const std::string &name, const void *object)
 {
@@ -133,12 +131,12 @@ MethodLLVMEmitter::identity_symbol (const std::string &name, const void *object)
 	return name + suffix;
 }
 
-/// The address the engine has to resolve for a per-class run-time structure.
+/// The address the engine must resolve for a per-class run-time structure.
 ///
-/// A class contributes three: mono_statics_<class>, the block its static fields live
-/// in, mono_vtable_<class>, its MonoVTable, and mono_class_<class>, the MonoClass
-/// itself. One relocation per class rather than per field, so every static of a class
-/// shares a symbol and differs only in the offset the GEP adds.
+/// A class contributes three symbols: mono_statics_<class> for the block that holds its
+/// static fields, mono_vtable_<class> for its MonoVTable, and mono_class_<class> for the
+/// MonoClass itself. Each class gets one relocation instead of one per field. Every
+/// static of a class shares a symbol and differs only in the GEP offset.
 llvm::Constant *
 MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 {
@@ -156,7 +154,7 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 	return extern_symbol (symbol);
 }
 
-/// The address the engine has to resolve for FIELD's own MonoClassField.
+/// The address the engine must resolve for field's own MonoClassField.
 llvm::Constant *
 MethodLLVMEmitter::field_symbol (MonoClassField *field)
 {
@@ -168,18 +166,18 @@ MethodLLVMEmitter::field_symbol (MonoClassField *field)
 	return extern_symbol (symbol);
 }
 
-/// Run KLASS's static constructor if it has not run yet.
+/// Runs klass's static constructor if it has not run yet.
 ///
-/// This is a call rather than something settled while compiling: a cctor is arbitrary
-/// managed code and must never run on a compilation thread. Nor can the call be
-/// guarded by a flag read off the vtable - a vtable is not observably initialized
-/// even to the thread that just initialized it - so every site the CIL asks for a
-/// check at gets one, and ClassInitPass drops the ones a dominating check covers.
+/// This emits a call rather than deciding it while compiling: a cctor is arbitrary
+/// managed code, and it must never run on a compilation thread. The call cannot be
+/// guarded by a flag read off the vtable either. A vtable is not observably initialized,
+/// even to the thread that just initialized it. Every site the CIL asks for a check
+/// emits one, and ClassInitPass deletes the ones a dominating check already covers.
 llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
-	/* Through the wrapper: a cctor can throw, and the failure is pending until
-	 * the wrapper's check turns it into a real one. */
+	// Goes through the wrapper because a cctor can throw. The failure stays pending
+	// until the wrapper's check turns it into a real exception.
 	llvm::Expected<llvm::Function *> init =
 		icall_wrapper_decl (MONO_JIT_ICALL_mono_generic_class_init);
 
@@ -193,17 +191,16 @@ MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 	return llvm::Error::success ();
 }
 
-/// Whether an instance access to FIELD through RECEIVER can land on a
-/// transparent proxy, in which case the field's bytes are not at their offset -
-/// they are in the real object the proxy stands for, possibly in another
-/// context or domain - and the access has to go through the runtime's remoting
-/// field wrappers.
+/// Whether an instance access to field through receiver can land on a transparent proxy.
 ///
-/// A receiver that is this method's own `this` is usually proof of a real
-/// object, but not on ContextBoundObject and not on MarshalByRefObject itself:
-/// the runtime runs those bodies with `this` still the proxy (the same-context
-/// shortcut in mono_remoting_wrapper does exactly that), so their fields check
-/// every time.
+/// If it can, the field's bytes are not at their offset. They live in the real object
+/// the proxy stands for, possibly in another context or domain. The access must go
+/// through the runtime's remoting field wrappers instead.
+///
+/// A receiver that is this method's own `this` usually proves a real object, but not on
+/// ContextBoundObject and not on MarshalByRefObject itself. The same-context shortcut in
+/// mono_remoting_wrapper runs those bodies with `this` still the proxy, so their fields
+/// check on every access.
 bool
 MethodLLVMEmitter::remote_field_access (StackValue receiver, MonoClassField *field)
 {
@@ -221,10 +218,9 @@ MethodLLVMEmitter::remote_field_access (StackValue receiver, MonoClassField *fie
 #endif
 }
 
-/// The constant operands every remoting field wrapper takes after the object:
-/// the declaring MonoClass, the MonoClassField, and the field's offset, pushed
-/// in that order so a wrapper call can be collected off the stack like any
-/// other.
+/// Pushes the operands every remoting field wrapper needs after the object: the
+/// declaring MonoClass, the MonoClassField, and the field's offset, in that order. A
+/// wrapper call then collects its arguments off the stack like any other call.
 void
 MethodLLVMEmitter::push_field_wrapper_operands (MonoIrBuilder &builder,
                                                 MonoClassField *field)
@@ -236,7 +232,7 @@ MethodLLVMEmitter::push_field_wrapper_operands (MonoIrBuilder &builder,
 	push_stack (builder.getInt64 (m_field_get_offset (field)), nint);
 }
 
-/// Where FIELD lives inside the object on top of the stack.
+/// Where field lives inside the object on top of the stack.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
                                   MonoClassField *field, bool null_check)
@@ -249,7 +245,7 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 
 	llvm::Value *base = object.value;
 
-	/* A native int receiver is only a number until something dereferences it. */
+	// A native int receiver is only a number until something dereferences it.
 	if (!base->getType ()->isPointerTy ())
 		base = builder.CreateIntToPtr (base, llvm::PointerType::get (context (), 0));
 
@@ -257,9 +253,9 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 		emit_null_check (builder, base);
 
 	/*
-	 * A field's recorded offset counts from the start of the MonoObject, so a value
-	 * type - which is reached through its own address and carries no header - needs
-	 * that header taken back off.
+	 * A field's recorded offset counts from the start of the MonoObject. A value type
+	 * is reached through its own address and carries no header, so this offset must
+	 * have that header removed.
 	 */
 	int32_t offset = static_cast<int32_t> (m_field_get_offset (field));
 
@@ -269,12 +265,11 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 	return builder.CreateGEP (builder.getInt8Ty (), base, builder.getInt32 (offset));
 }
 
-/// Where FIELD lives in its class's statics block.
+/// Where field lives in its class's statics block.
 ///
-/// An RVA field also lives there: creating the vtable copies the image data into the
-/// block at the field's offset. A thread- or context-local static does not - the
-/// offset it records is a per-thread lookup cookie - so its address has to come from
-/// the runtime, on every access.
+/// An RVA field lives there too: creating the vtable copies the image data into the
+/// block at the field's offset. A thread- or context-local static does not get a fixed
+/// offset into that block, so its address must come from the runtime on every access.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField *field)
 {
@@ -293,13 +288,13 @@ MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField 
 			builder, *lookup,
 			adapt_to_callee (builder, *lookup, {domain, symbol}));
 
-		/* The signature says native int; every user here wants the pointer. */
+		// The signature says native int. Every caller here wants a pointer.
 		if (!address->getType ()->isPointerTy ())
 			address = builder.CreateIntToPtr (address, ptr);
 		return address;
 	}
 
-	/* A static's offset is into the block itself, so there is no header to discount. */
+	// A static's offset is into the block itself, so there is no header to discount.
 	return builder.CreateGEP (builder.getInt8Ty (),
 	                          class_symbol (field->parent, "mono_statics_"),
 	                          builder.getInt32 (m_field_get_offset (field)));
@@ -391,13 +386,15 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 #endif
 
 	/*
-	 * The object may also be an instance of a value type (III.4.10), which is
-	 * not something to dereference: a value class is already the slot holding
-	 * it, and a SIMD one has to be given a slot before its field has an address
-	 * at all. No null check either way - a value is never null. Decided off the
-	 * raw type, not the underlying one: a magic nint rides the stack as its
-	 * scalar, and reading its field through the underlying native int would
-	 * dereference the value.
+	 * object can also be an instance of a value type (III.4.10). A value type is
+	 * not something to dereference: a value class is already the slot that holds
+	 * it, and a SIMD value must get a slot before its field even has an address.
+	 * Neither case needs a null check, because a value is never null.
+	 *
+	 * This branch decides on the raw type, not the underlying one. A magic nint
+	 * rides the stack as its scalar underlying type. Reading through that
+	 * underlying type would treat the struct's own bits as a pointer instead of
+	 * a value to address.
 	 */
 	if (!object.type->byref && MONO_TYPE_ISSTRUCT (object.type)
 	    && (held_in_memory (object.type)
@@ -516,9 +513,9 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 #endif
 
 	/*
-	 * Taking the address dereferences nothing, so only an object-reference
-	 * receiver is checked - through a native pointer even null just computes,
-	 * and the fault waits for whatever dereferences the result.
+	 * Taking an address dereferences nothing, so this checks only an
+	 * object-reference receiver. A native pointer can be null and still compute
+	 * an address. The fault waits for whatever dereferences the result later.
 	 */
 	llvm::Expected<llvm::Value *> address =
 		field_address (builder, object, *field,
@@ -527,8 +524,8 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	/*
-	 * The address of a field of something the GC does not know about is not something
-	 * it should start tracking, so an unmanaged receiver keeps its kind.
+	 * The address of a field inside something the collector does not track must not
+	 * start being tracked either, so an unmanaged receiver keeps its own kind.
 	 */
 	MonoType *ftype = mono_field_get_type_internal (*field);
 	MonoType *pushed =
@@ -611,8 +608,8 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 		if (!decl)
 			return decl.takeError ();
 
-		/* The wrapper wants the value after the constants, so it comes off
-		 * and goes back on top of them. */
+		// The wrapper wants the value after the constants, so it comes off the
+		// stack and goes back on top of them.
 		StackValue stored = get_stack (0);
 
 		pop_stack (1);
@@ -751,8 +748,8 @@ MethodLLVMEmitter::emit_ldsflda (MonoIrBuilder &builder, uint32_t token)
 		return field.takeError ();
 
 	/*
-	 * Whoever takes the address is about to touch the field, so the class has to be
-	 * as initialized here as it would be for the load itself.
+	 * Taking the address means the field is about to be touched, so the class must
+	 * be initialized here exactly as it is for a direct load.
 	 */
 	if (llvm::Error error = emit_class_init (builder, (*field)->parent))
 		return error;

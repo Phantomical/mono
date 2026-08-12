@@ -7,7 +7,8 @@
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 
-/* The collector's interface is C, and its header does not say so itself. */
+// gc-internals.h declares C functions but does not mark them extern "C"
+// itself, so this include must supply the wrap.
 extern "C" {
 #include "mono/metadata/gc-internals.h"
 }
@@ -18,14 +19,17 @@ extern "C" {
 
 namespace mono {
 
-/// The runtime's allocator for a plain object of a known class, by its vtable -
-/// through its wrapper, whose check turns a pending OutOfMemoryException into a
-/// throw.
+/// The declaration of the runtime's allocator for a plain instance of a
+/// known class, called with its vtable.
 ///
-/// The allocation attributes: NoAlias and nothing more - an allockind would
-/// let LLVM delete an unused allocation whose failure is still a catchable
-/// OutOfMemoryException, and a Zeroed claim would fold loads of the
-/// initialized header to zero. Deliberately not nounwind - it throws.
+/// The declaration adds only the NoAlias return attribute.
+///
+/// It cannot carry an allockind attribute: that marks a call as removable
+/// once its result goes unused. A failed allocation must still throw
+/// OutOfMemoryException through icall_wrapper_decl's check. It cannot carry
+/// a Zeroed claim either: that lets the optimizer fold a load of the freshly
+/// allocated header to zero. It is not nounwind, because the call can
+/// throw.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
 {
@@ -39,15 +43,16 @@ MethodLLVMEmitter::object_new_decl ()
 	return wrapper;
 }
 
-/// Allocate an instance of KLASS - as an object in its own right, or as the box
-/// a value of it goes into - and return the reference.
+/// Allocate an instance of klass and return the reference.
 ///
-/// Where the collector offers a class-specific allocator, that is what a newobj
-/// costs: managed code that bumps the thread's allocation pointer inline and
-/// only calls out when the region runs dry. Which classes get one is the
-/// collector's answer, not ours: Boehm never offers one, SGen declines for
-/// anything finalizable, remotable, oversized or with weak fields, and those
-/// all fall back on the runtime entry point.
+/// The same call handles a plain object and the box a value of klass goes
+/// into. If the collector offers a class-specific allocator, that is what a
+/// newobj costs. The allocator is managed code that bumps the thread's
+/// allocation pointer and calls the runtime only when the region is empty.
+/// The collector decides which classes get one, not this function. Boehm
+/// never offers one. SGen declines a class that is finalizable, remotable,
+/// too large, or that has weak fields, and those fall back on the runtime's
+/// allocator.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
@@ -55,12 +60,10 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	int32_t size = mono_class_instance_size (klass);
 	MonoMethod *allocator = nullptr;
 
-	/*
-	 * The allocator is handed the instance size, so a class whose size does not
-	 * even cover the object header is not one to hand it. A string's allocator
-	 * is a different shape again - a length in, a string out - and does not fit
-	 * this call at all.
-	 */
+	// The allocator takes the instance size, so a class whose size is smaller
+	// than the object header does not qualify. A string's allocator takes a
+	// length and returns a string, not an object, so this call cannot use it
+	// either.
 	if (size >= static_cast<int32_t> (MONO_ABI_SIZEOF (MonoObject))
 	    && m_class_get_byval_arg (klass)->type != MONO_TYPE_STRING)
 		allocator = mono_gc_get_managed_allocator (klass, for_box, TRUE);
@@ -88,13 +91,15 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	                            adapt_to_callee (builder, *slow, {vtable}));
 }
 
-/// The address of the value held inside OBJ, after throwing InvalidCastException
-/// unless OBJ is a boxed KLASS.
+/// The address of the value held inside obj. Throws InvalidCastException
+/// when obj is not a boxed klass.
 ///
-/// The test mirrors mini's. The object must not be an array - an int[]'s element class
-/// is int, so the rank byte is what tells an array of T from a boxed T - and its
-/// class's element class must be KLASS's. Element class rather than the class itself
-/// so that a boxed enum unboxes as its underlying type and the other way around.
+/// The check mirrors MINT_UNBOX in the interpreter. obj must not be an
+/// array. An int[] has element class int, so the rank byte is what tells an
+/// array of T apart from a boxed T. Its class's element class must equal
+/// klass's element class, not klass itself. Using element class instead of
+/// klass itself lets a boxed enum unbox as its underlying type, and a boxed
+/// underlying value unbox as the enum.
 llvm::Value *
 MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, MonoClass *klass)
 {
@@ -137,11 +142,11 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 	                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 }
 
-/// The corlib helper that unboxes an object into a Nullable<T>.
+/// The name of the corlib helper that unboxes an object into a Nullable<T>.
 ///
-/// UnboxExact when T is an enum: Unbox's (T) cast also accepts a boxed underlying
-/// type - enum and underlying interconvert under unbox.any - and a Nullable<enum>
-/// must only accept a boxed enum.
+/// UnboxExact applies when T is an enum. Unbox's cast to T also accepts a
+/// boxed underlying type, because enum and underlying type interconvert
+/// under unbox.any. A Nullable<enum> must accept only a boxed enum.
 static const char *
 nullable_unbox_helper (MonoClass *klass)
 {
@@ -149,11 +154,13 @@ nullable_unbox_helper (MonoClass *klass)
 	return exact ? "UnboxExact" : "Unbox";
 }
 
-/// Emit a call to the one-argument Nullable<T> helper NAME - Box, Unbox or
-/// UnboxExact - consuming its argument from the stack and pushing its result.
+/// Emit a call to the one-argument Nullable<T> helper called name, one of
+/// Box, Unbox, or UnboxExact. Pop its argument off the stack and push the
+/// result.
 ///
-/// Boxing and unboxing a nullable branch on HasValue against a null reference, and
-/// the corlib helpers are that branch, written once as ordinary IL.
+/// Boxing and unboxing a nullable both branch on HasValue against a null
+/// reference. The corlib helpers are that branch, written once as ordinary
+/// IL.
 llvm::Error
 MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
                                          const char *name)
@@ -182,13 +189,14 @@ MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klas
 	return push_produced (builder, result, sig->ret);
 }
 
-/// Box VALUE, a Nullable<T>, into null or a boxed T.
+/// Box value, a Nullable<T>, into null or a boxed T.
 ///
-/// Unlike every other value type, the boxed form of a Nullable<T> is not a boxed
-/// Nullable<T>: it is a boxed T, or a null reference when the value has none
-/// (III.4.1). Nullable<T>:Box is that branch, written once as ordinary IL, and
-/// every site that boxes a nullable has to go through it - the plain allocate-and-copy
-/// would manufacture an object whose type the program can observe and never expects.
+/// Unlike every other value type, the boxed form of a Nullable<T> is not a
+/// boxed Nullable<T>. It is a boxed T, or a null reference when the value
+/// has none (III.4.1). Nullable<T>.Box is that branch, written once as
+/// ordinary IL, and every site that boxes a nullable must call it. A plain
+/// allocate-and-copy produces an object whose type the program can observe
+/// and does not expect.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_nullable (MonoIrBuilder &builder, MonoClass *klass, StackValue value)
 {
@@ -290,7 +298,7 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 		return llvm::Error::success ();
 	}
 
-	/* A reference type's boxed form is itself, so there is nothing to do. */
+	// A reference type's boxed form is itself, so there is nothing to do.
 	if (!m_class_is_valuetype (klass))
 		return llvm::Error::success ();
 
@@ -308,18 +316,17 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// Allocate KLASS's box and copy VALUE - what coerce_to_location () produced for a
-/// location of TYPE - into the payload, returning the new object.
+/// Allocate klass's box, copy value into the payload, and return the new
+/// object. value is what coerce_to_location produced for a location of
+/// type.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
                               llvm::Value *value)
 {
-	/*
-	 * A byreflike value may hold managed pointers into a stack frame, so a box
-	 * of one would outlive what it points at. Metadata refuses the type as a
-	 * generic argument; the box opcode is the remaining way to smuggle one onto
-	 * the heap, and it is refused here.
-	 */
+	// A byreflike value can hold managed pointers into a stack frame, so a box
+	// of one can outlive what it points at. Metadata already refuses byreflike
+	// as a generic argument. The box opcode is the remaining way to put one on
+	// the heap, and this refuses it too.
 	if (m_class_is_byreflike (klass)) {
 		ERROR_DECL (error);
 
@@ -338,7 +345,8 @@ MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType
 	llvm::Value *payload = builder.CreateGEP (builder.getInt8Ty (), obj,
 	                                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 
-	/* The same copy stobj makes: through the collector if references are inside. */
+	// This matches the copy stobj makes: through the collector when klass has
+	// reference fields, and a plain copy otherwise.
 	if (!held_in_memory (type))
 		builder.CreateAlignedStore (value, payload, type_alignment (type));
 	else if (m_class_has_references (klass))
@@ -414,11 +422,10 @@ MethodLLVMEmitter::emit_unbox (MonoIrBuilder &builder, uint32_t token)
 
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
-	/*
-	 * A nullable has no interior pointer to hand out - the boxed form is a plain T
-	 * or null - so the Nullable<T> the helper manufactures is spilled and the
-	 * pointer pushed is to the spill.
-	 */
+	// A nullable has no interior pointer to hand out: its boxed form is a
+	// plain T or null, not a Nullable<T> with a payload. The helper builds a
+	// Nullable<T> value, spill_to_temporary spills it, and the pushed pointer
+	// is to that spill.
 	if (mono_class_is_nullable (klass)) {
 		if (llvm::Error error = call_nullable_helper (builder, klass,
 		                                              nullable_unbox_helper (klass)))
@@ -500,7 +507,7 @@ MethodLLVMEmitter::emit_unbox_any (MonoIrBuilder &builder, uint32_t token)
 
 	if (mono_class_is_nullable (klass))
 		return call_nullable_helper (builder, klass, nullable_unbox_helper (klass));
-	/* The spec's reading for a reference type: this instruction is castclass. */
+	// For a reference type, the spec treats this instruction as castclass.
 	if (!m_class_is_valuetype (klass))
 		return emit_castclass (builder, token);
 	if (stack.empty ())
@@ -515,7 +522,8 @@ MethodLLVMEmitter::emit_unbox_any (MonoIrBuilder &builder, uint32_t token)
 
 	llvm::Value *payload = unbox_payload (builder, obj.value, klass);
 
-	/* The spec's own reading: unbox, then load through the pointer it pushed. */
+	// The spec defines this as unbox, followed by a load through the pointer
+	// unbox pushed.
 	pop_stack (1);
 	push_stack (payload, m_class_get_this_arg (klass));
 	return emit_ldind (builder, *type);

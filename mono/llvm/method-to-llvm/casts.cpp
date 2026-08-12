@@ -124,13 +124,11 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 		*module, ptr, false, llvm::GlobalValue::InternalLinkage,
 		llvm::ConstantPointerNull::get (llvm::cast<llvm::PointerType> (ptr)), "cast_cache");
 
-	/*
-	 * The runtime's cast test, through its wrapper: both forms take a
-	 * per-call-site cache slot they fill with the last vtable that answered,
-	 * so a monomorphic site settles into one comparison. The castclass form
-	 * reports a failed cast as a pending InvalidCastException, which only the
-	 * wrapper's check turns into a throw.
-	 */
+	// Both cast forms call through a wrapper around the runtime's test.
+	// Each call site owns a cache slot that holds the last vtable that
+	// answered, so a monomorphic site settles into one comparison.
+	// Castclass reports a failed cast as a pending InvalidCastException.
+	// Only the wrapper's check after the call turns that into a throw.
 	llvm::Expected<llvm::Function *> test = icall_wrapper_decl (
 		throw_on_fail ? MONO_JIT_ICALL_mono_object_castclass_with_cache
 	                      : MONO_JIT_ICALL_mono_object_isinst_with_cache);
@@ -143,10 +141,8 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 		adapt_to_callee (builder, *test,
 	                         {obj.value, class_symbol (klass, "mono_class_"), cache}));
 
-	/*
-	 * A value-type token means the boxed form, so what comes back is still an
-	 * object reference rather than anything the token's own type would suggest.
-	 */
+	// A value-type token means the boxed form. What comes back is still an
+	// object reference, not the token's own type.
 	pop_stack (1);
 	push_stack (result, m_class_is_valuetype (klass) ? mono_get_object_type ()
 	                                                 : m_class_get_byval_arg (klass));

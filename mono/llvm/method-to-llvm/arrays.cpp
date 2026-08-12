@@ -74,7 +74,7 @@ MethodLLVMEmitter::builtin_element_type (int opcode)
 	}
 }
 
-/// The class TOKEN names, resolved against this method's generic context.
+/// The class the token names, resolved against this method's generic context.
 llvm::Expected<MonoClass *>
 MethodLLVMEmitter::resolve_class (uint32_t token)
 {
@@ -100,10 +100,10 @@ MethodLLVMEmitter::resolve_class (uint32_t token)
 			m_class_get_image (method->klass), token, context, metadata_error);
 
 		/*
-		 * A token that names a type which is not there is a defect in the
-		 * program's environment, not in its encoding, so the failure the
-		 * loader recorded travels on rather than becoming invalid IL. It
-		 * already carries the assembly and type names that went missing.
+		 * A token that names a missing type is a defect in the program's
+		 * environment, not in its encoding. The failure travels on as the
+		 * loader recorded it, instead of becoming invalid IL, and it
+		 * already names the missing assembly and type.
 		 */
 		if (klass == nullptr)
 			return runtime_error (metadata_error);
@@ -114,7 +114,7 @@ MethodLLVMEmitter::resolve_class (uint32_t token)
 	return klass;
 }
 
-/// The element type TOKEN names, for the two forms that carry one.
+/// The element type the token names.
 llvm::Expected<MonoType *>
 MethodLLVMEmitter::element_type_from_token (uint32_t token)
 {
@@ -126,10 +126,11 @@ MethodLLVMEmitter::element_type_from_token (uint32_t token)
 	MonoClass *klass = *resolved;
 
 	/*
-	 * A class the runtime has already given up on still resolves - the failure is
-	 * recorded on it rather than in place of it - so naming one in IL has to be
-	 * refused here. The failure is a type load, which recover () turns into a
-	 * method that raises TypeLoadException when it is called.
+	 * A class the runtime already gave up on still resolves. The failure is
+	 * recorded on the class instead of replacing it, so naming that class in
+	 * IL must be refused here. The failure is a type load, and recover ()
+	 * turns it into a method that raises TypeLoadException when the method
+	 * runs.
 	 */
 	if (mono_class_has_failure (klass)) {
 		ERROR_DECL (load_error);
@@ -143,8 +144,8 @@ MethodLLVMEmitter::element_type_from_token (uint32_t token)
 
 /// The number of elements in the array on top of the stack.
 ///
-/// A length is read as a native unsigned int, which is what ldlen pushes and what the
-/// bounds check below compares against.
+/// The length is read as a native unsigned int. ldlen pushes that width, and
+/// the bounds check below compares against it.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 {
@@ -158,17 +159,17 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 		builder.CreateGEP (builder.getInt8Ty (), array.value,
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, max_length)));
 
-	/* A scalar typedef, so its own size is the layout - no ABI table involved. */
+	/* This is a scalar typedef, so its size alone is the layout. No ABI table is involved. */
 	constexpr unsigned bytes = sizeof (mono_array_size_t);
 
 	return builder.CreateAlignedLoad (builder.getIntNTy (bytes * 8), slot, llvm::Align (bytes));
 }
 
-/// Where element INDEX of ARRAY lives, having established that it is there.
+/// Where element index of array lives, after checking that the element exists.
 ///
-/// The bounds test is a single unsigned comparison: a negative index read as unsigned
-/// is enormous, so one `uge` rejects both ends at once, which is why the index is
-/// zero-extended here rather than sign-extended.
+/// The bounds test is a single unsigned comparison. A negative index read as
+/// unsigned becomes enormous, so one `uge` check rejects both ends at once.
+/// That is why the index is zero-extended here instead of sign-extended.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, StackValue index,
                                     MonoType *element)
@@ -204,11 +205,12 @@ MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, St
 	                          builder.CreateMul (at, llvm::ConstantInt::get (native, size)));
 }
 
-/// Throw ArrayTypeMismatchException unless ARRAY is exactly an ARRAY_CLASS instance.
+/// Throw ArrayTypeMismatchException unless array is exactly an instance of array_class.
 ///
-/// The exact-vtable compare mini emits: covariance lets a string[] arrive where an
-/// object[] is expected, and an address into it typed at the wrong element must be
-/// refused before anything writes through it.
+/// The check compares vtables for exact equality, not by assignability.
+/// Covariance lets a string[] arrive where an object[] is expected. An
+/// address into it, typed at the wrong element, must be refused before
+/// anything writes through it.
 void
 MethodLLVMEmitter::emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
                                           MonoClass *array_class)
@@ -310,8 +312,8 @@ MethodLLVMEmitter::emit_ldelema (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = mono_class_from_mono_type_internal (*element);
 
 	/*
-	 * Wrappers are deliberately lax about the element type they name, so the
-	 * exactness question is only asked for ordinary IL - mini's rule.
+	 * Wrappers are deliberately lax about the element type they name. Mini's
+	 * rule limits this exactness check to ordinary IL.
 	 */
 	if (!m_class_is_valuetype (klass) && method->wrapper_type == MONO_WRAPPER_NONE
 	    && !prefixes.readonly_)
@@ -458,10 +460,11 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 		return value.takeError ();
 
 	/*
-	 * The element type is the opcode's, but what the array actually holds is only
-	 * known at run time, so storing a reference has to ask before it writes - that
-	 * is the ArrayTypeMismatchException the spec lists. The check leaves it
-	 * pending, so it goes through the wrapper whose check throws it.
+	 * The element type here is the opcode's, but what the array holds is
+	 * known only at run time. Storing a reference must ask before
+	 * it writes - that check is the ArrayTypeMismatchException the spec
+	 * lists. The check leaves the exception pending, and the wrapper call
+	 * that follows is what throws it.
 	 */
 	if (mini_type_is_reference (element)) {
 		llvm::Expected<llvm::Function *> check =
@@ -484,10 +487,12 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 	return llvm::Error::success ();
 }
 
-/// The symbolic element-address call ArrayAddressPass expands: (array, idx...) to a
-/// pointer at the element, throwing IndexOutOfRangeException when an index misses
-/// its dimension. Everything the expansion needs travels on the declaration, which
-/// is what keeps mono's layouts out of the pass.
+/// The symbolic element-address call that ArrayAddressPass expands.
+///
+/// The expansion turns (array, idx...) into a pointer at the element, and
+/// throws IndexOutOfRangeException when an index misses its dimension. Every
+/// number the expansion needs travels on the declaration's attribute, which
+/// keeps mono's layouts out of the pass.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::array_accessor_address (MonoIrBuilder &builder, MonoClass *klass,
                                            llvm::Value *array,
@@ -542,10 +547,12 @@ MethodLLVMEmitter::array_accessor_address (MonoIrBuilder &builder, MonoClass *kl
 	return emit_protected_call (builder, decl, args);
 }
 
-/// A call to Get, Set or Address on an array class. These have no IL body - the
-/// runtime resolves them per call site, and the marshal wrapper it offers instead
-/// just calls the accessor again - so the site lowers here: the address as the
-/// symbolic call above, the load or store around it shaped like ldelem/stelem.
+/// A call to Get, Set or Address on an array class.
+///
+/// These accessors have no IL body. The runtime resolves them per call site,
+/// and the marshal wrapper it offers instead calls the accessor again, so
+/// the site lowers here. The address comes from the symbolic call above,
+/// and the load or store around it is shaped like ldelem or stelem.
 llvm::Error
 MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod *accessor,
                                              MonoMethodSignature *sig)
@@ -635,9 +642,9 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 	return llvm::Error::success ();
 }
 
-/// Whether mini's UnsafeMov intrinsic reinterprets FROM as TO
-/// (is_unsafe_mov_compatible): both references, or blittable value types of
-/// equal size - or scalars that both fit the same register class.
+/// Whether UnsafeMov can reinterpret from as to. Both must be reference
+/// types, blittable value types of equal size, or scalars in the same
+/// register class.
 static bool
 unsafe_mov_compatible (MonoClass *from, MonoClass *to)
 {
@@ -665,9 +672,10 @@ unsafe_mov_compatible (MonoClass *from, MonoClass *to)
 }
 
 /// R Array.UnsafeMov<S,R> (S): the reinterpret mini performs as a plain move.
-/// Running the body instead would box S and unbox it as R, which the unbox
-/// type check rightly refuses for pairs like an enum and its unsigned
-/// underlying type - the whole point of the helper is to skip that question.
+///
+/// The IL body boxes S and unboxes it as R. The unbox type
+/// check rightly refuses that for pairs like an enum and its unsigned
+/// underlying type. The helper exists to skip that check.
 llvm::Error
 MethodLLVMEmitter::emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig)
 {
@@ -688,8 +696,9 @@ MethodLLVMEmitter::emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature 
 	llvm::Value *raw = value.value;
 
 	/*
-	 * The two are the same bytes by the compatibility check above, so a result
-	 * that lives in memory is those bytes copied into a slot of its own type.
+	 * The two types are the same bytes, by the compatibility check above. A
+	 * result that lives in memory is those bytes copied into a slot of its
+	 * own type.
 	 */
 	if (held_in_memory (sig->ret)) {
 		llvm::Value *home = spill_to_temporary (builder, value.type);
@@ -760,7 +769,7 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	StackValue count = get_stack (0);
 	StackType count_type = stack_type (count.type);
 
-	/* int64 is mini's 64-bit leniency; the narrowing below checks it fits. */
+	/* int64 is mini's 64-bit leniency. The narrowing below checks that it fits. */
 	if (count_type != Int32 && count_type != NativeInt && count_type != Int64)
 		return invalid_il (llvm::Twine ("an array length cannot be operand type ")
 		                   + describe (count.type, count_type));
@@ -772,10 +781,12 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 		length = builder.CreatePtrToInt (length, native);
 
 	/*
-	 * The allocator's count is unsigned, so a negative length would reach it as an
-	 * enormous one and come back as OutOfMemory. The spec asks for OverflowException,
-	 * which means asking before the sign is lost - and the allocator takes an int32,
-	 * so a native-int length that does not survive the narrowing overflowed too.
+	 * The allocator's count is unsigned. Without this check, a negative
+	 * length reaches it as an enormous one and comes back as OutOfMemory.
+	 * The spec asks for
+	 * OverflowException instead, so the check must run before the sign is
+	 * lost. The allocator also takes an int32, so a native-int length that
+	 * does not survive the narrowing overflowed too.
 	 */
 	emit_cond_exception (
 		builder,
@@ -797,15 +808,22 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 		mono_class_create_array (mono_class_from_mono_type_internal (*element), 1);
 
 	/*
-	 * Through the allocator's wrapper: it reports a failed allocation as a
-	 * pending OutOfMemoryException, which only the wrapper's check throws.
-	 * NoAlias is the whole claim - the result aliases nothing older than the
-	 * call. No allockind: it would let LLVM delete an unused allocation, and a
-	 * mono allocation that fails throws a catchable OutOfMemoryException, so
-	 * even a dead one is observable. Not AllocFnKind::Zeroed either - the
-	 * claim covers the whole allocation, and the header (vtable, length)
-	 * comes back initialized, so LLVM would fold those loads to zero.
-	 * Deliberately not nounwind.
+	 * This call goes through the allocator's wrapper. A failed allocation
+	 * reports a pending OutOfMemoryException, and only the wrapper's check
+	 * throws it.
+	 *
+	 * NoAlias is the whole claim on the return value: the result aliases
+	 * nothing older than the call. There is no allockind attribute, because
+	 * that attribute lets LLVM delete an unused allocation, and a mono
+	 * allocation that fails throws a catchable OutOfMemoryException. Even a
+	 * dead allocation is observable.
+	 *
+	 * The attribute is not AllocFnKind::Zeroed either. That claim covers the
+	 * whole allocation, and it lets LLVM fold any load from the allocation to
+	 * zero. The header - vtable and length - comes back already initialized,
+	 * so LLVM must not treat it as zero.
+	 *
+	 * The call is deliberately not marked nounwind.
 	 */
 	llvm::Expected<llvm::Function *> allocate =
 		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);

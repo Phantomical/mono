@@ -26,7 +26,7 @@
 
 namespace mono {
 
-/// Whether TARGET is corlib's System.Diagnostics.Debugger::Break ().
+/// Whether target is corlib's System.Diagnostics.Debugger::Break ().
 static bool
 is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 {
@@ -39,7 +39,7 @@ is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 	       && std::string_view (m_class_get_name_space (klass)) == "System.Diagnostics";
 }
 
-/// The method TOKEN names, resolved against this method's generic context.
+/// The method token names, resolved against this method's generic context.
 llvm::Expected<MonoMethod *>
 MethodLLVMEmitter::resolve_method (uint32_t token)
 {
@@ -74,18 +74,17 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 	return target;
 }
 
-/// The signature TARGET is being called with here, which for a vararg callee
-/// names the types the caller chose for the variable part as well as the fixed
-/// parameters the callee declared.
+/// The signature a call to target uses at this call site.
+///
+/// A vararg callee's call-site signature also names the types the caller chose
+/// for the variable arguments, not only the fixed parameters the callee declared.
 llvm::Expected<MonoMethodSignature *>
 MethodLLVMEmitter::call_site_signature (MonoMethod *target, uint32_t token)
 {
-	/*
-	 * A wrapper's call carries wrapper data where a token would be, so there is
-	 * no memberref to read. What it gets is the signature as declared, whose
-	 * sentinel sits past the last parameter and so names no variable part -
-	 * which is right, since the IL a wrapper is built from cannot spell one.
-	 */
+	// A wrapper's call carries wrapper data where a token sits in ordinary IL, so
+	// there is no memberref to read. It gets the signature as declared instead.
+	// That signature's sentinel sits past the last parameter, so it names no
+	// variable part. That is right: the IL a wrapper is built from cannot spell one.
 	if (in_wrapper ())
 		return mono_method_signature_internal (target);
 
@@ -100,15 +99,15 @@ MethodLLVMEmitter::call_site_signature (MonoMethod *target, uint32_t token)
 	return sig;
 }
 
-/// The buffer a vararg call's variable arguments cross in, filled from ARGS,
+/// The buffer a vararg call's variable arguments cross in, filled from args,
 /// whose entries are the call-site signature's parameters in order.
 ///
-/// ves_icall_System_ArgIterator_Setup () reads the signature out of the first
-/// word and starts the walk at the second, and IntGetNextArg () advances by
-/// mono_type_stack_size () with no realignment of its own, so the offsets here
-/// are that running sum and nothing else. A float taking four bytes rather than
-/// a whole slot is part of that, and getting it wrong would not be caught by
-/// the argument that follows arriving as garbage.
+/// ves_icall_System_ArgIterator_Setup () reads the signature out of the buffer's
+/// first word and starts its walk at the second word. IntGetNextArg () then
+/// advances by mono_type_stack_size () with no realignment of its own, so the
+/// offsets here are that running sum and nothing else. A float takes four bytes
+/// rather than a whole slot, so a wrong offset here does not fail loudly: the
+/// next argument reads as garbage.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature *sig,
                                      llvm::ArrayRef<llvm::Value *> args)
@@ -123,11 +122,9 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 		llvm::Type *stored = args[i + sig->hasthis]->getType ();
 
 		offsets.push_back (cursor);
-		/*
-		 * The stride is the stack size the iterator will advance by, but the
-		 * buffer still has to be big enough for what actually gets written
-		 * into the last slot.
-		 */
+		// The stride is the stack size the iterator advances by, but the
+		// buffer must still be big enough for what gets written into the
+		// last slot.
 		size = std::max (size, cursor + layout.getTypeStoreSize (stored));
 		cursor += static_cast<uint64_t> (mono_type_stack_size (sig->params[i], nullptr));
 		size = std::max (size, cursor);
@@ -139,10 +136,8 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 
 	buffer->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	/*
-	 * ArgIterator names the variable part by index into this signature, so it
-	 * has to be the call-site one; the declaration knows only the fixed part.
-	 */
+	// ArgIterator names the variable part by index into this signature, so it
+	// must be the call-site one. The declaration knows only the fixed part.
 	builder.CreateAlignedStore (
 		address_symbol (identity_symbol ("mono_sig_", sig), sig), buffer,
 		buffer->getAlign ());
@@ -161,13 +156,13 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 	return buffer;
 }
 
-/// VALUE as something that can be passed where a call signature asks for DESTINATION.
+/// value as something that can go where a call signature asks for destination.
 ///
-/// Call arguments accept one mismatch that a store refuses: an int32 (or a pointer)
-/// where the parameter is int64. Mini permits it on 64-bit only at call sites -
-/// check_call_signature takes it, target_type_is_incompatible does not - and the
-/// value rides over in the full register, so a constant arrives sign-extended.
-/// The eval stack's int32 is signed, so sign-extension is the reading kept here.
+/// A call argument accepts a mismatch that coerce_to_location () refuses for a
+/// store: an int32, or a pointer, where the parameter is int64. This backend
+/// widens it only for a call, and only on 64-bit targets. The value then rides
+/// in the full register, so a constant arrives sign-extended. The eval stack's
+/// int32 is signed, so this reading sign-extends it.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
                                        MonoType *destination, bool native)
@@ -181,7 +176,7 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 	if (from->isIntegerTy () && (*type)->isIntegerTy ()
 	    && (*type)->getIntegerBitWidth () > from->getIntegerBitWidth ())
 		return builder.CreateSExt (value.value, *type);
-	/* An int32 meeting a pointer-typed parameter widens the same way before the cast. */
+	// An int32 meeting a pointer-typed parameter widens the same way before the cast.
 	if (from->isIntegerTy () && (*type)->isPointerTy ()
 	    && from->getIntegerBitWidth () < TARGET_SIZEOF_VOID_P * 8)
 		value.value = builder.CreateSExt (value.value,
@@ -193,16 +188,17 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 	if (!coerced)
 		return coerced.takeError ();
 
-	/* Every signature this backend converts takes a value class by value. */
+	// Every signature this backend converts takes a value class by value.
 	return materialize (builder, *coerced, destination, native);
 }
 
-/// VALUE as the receiver of an instance call.
+/// value as the receiver of an instance call.
 ///
-/// A `this` is a pointer in every signature this backend converts, but the eval stack
-/// hands one over as a native int often enough to matter: pointer arithmetic, `ldind.i`
-/// and the marshalling wrappers' own `ldarg; ldind.i; call instance` all leave a number
-/// where the callee declared an address.
+/// A `this` is a pointer in every signature this backend converts. The eval stack
+/// can still hand one over as a native int. Pointer arithmetic and `ldind.i` both
+/// produce one, and so does the marshalling wrappers' own `ldarg`, `ldind.i`,
+/// `call instance` sequence. All three leave a number where the callee declared an
+/// address.
 llvm::Value *
 MethodLLVMEmitter::coerce_to_receiver (MonoIrBuilder &builder, llvm::Value *value)
 {
@@ -215,12 +211,12 @@ MethodLLVMEmitter::coerce_to_receiver (MonoIrBuilder &builder, llvm::Value *valu
 	return builder.CreateIntToPtr (value, llvm::PointerType::get (context (), 0));
 }
 
-/// Take a call's arguments off the evaluation stack, converted to what the signature
+/// Takes a call's arguments off the evaluation stack, converted to what the signature
 /// asks for.
 ///
-/// The receiver of an instance method is argument zero and is not in the parameter list,
-/// so it is converted against the pointer every instance signature declares rather than
-/// against a MonoType.
+/// The receiver of an instance method is argument zero, and it is not in the parameter
+/// list. It converts against the pointer every instance signature declares, not against
+/// a MonoType.
 llvm::Expected<std::vector<llvm::Value *>>
 MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
                                        bool native)
@@ -232,7 +228,7 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 
 	std::vector<llvm::Value *> args (count);
 
-	/* The last parameter is on top, so the stack unwinds into the list backwards. */
+	// The last parameter is on top, so the stack unwinds into the list backwards.
 	for (size_t i = count; i-- > 0;) {
 		StackValue value = get_stack (count - 1 - i);
 
@@ -253,7 +249,7 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 	return args;
 }
 
-/// The pointer stored OFFSET bytes into the vtable of the object RECEIVER points at.
+/// The pointer stored offset bytes into the vtable of the object receiver points at.
 llvm::Value *
 MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, int32_t offset)
 {
@@ -269,11 +265,11 @@ MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, 
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 }
 
-/// The address of TARGET's entry in the vtable of the object RECEIVER points at.
+/// The address of target's entry in the vtable of the object receiver points at.
 ///
-/// A virtual call reads the callee out of the receiver rather than knowing it: the
-/// object's vtable pointer, indexed by the slot the method was assigned when its class
-/// was laid out.
+/// A virtual call reads the callee out of the receiver instead of knowing it in
+/// advance. It indexes the object's vtable pointer by the slot the method was
+/// assigned when its class was laid out.
 llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                    MonoMethod *target)
@@ -284,13 +280,12 @@ MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver
 	                                       * TARGET_SIZEOF_VOID_P);
 }
 
-/// The address of TARGET's entry in the IMT of the object RECEIVER points at.
+/// The address of target's entry in the IMT of the object receiver points at.
 ///
-/// An interface method has no fixed vtable slot - where an implementation lands depends
-/// on the class implementing it - so dispatch goes through the interface method table
-/// instead, a small hash table the runtime lays out in the words immediately before
-/// each MonoVTable. Its slots are therefore reached at negative offsets from the same
-/// base the ordinary slots are.
+/// An interface method has no fixed vtable slot: where an implementation lands depends
+/// on the class that implements it. Dispatch goes instead through the interface method
+/// table, a small hash table the runtime lays out in the words immediately before each
+/// MonoVTable. Its slots sit at negative offsets from that same base.
 llvm::Value *
 MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                      MonoMethod *target)
@@ -300,23 +295,24 @@ MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiv
 	return vtable_entry (builder, receiver, slot * TARGET_SIZEOF_VOID_P);
 }
 
-/// Whether a call to TARGET has to be dispatched out of the delegate it is made on
-/// rather than out of a vtable slot.
+/// Whether a call to target must dispatch through the delegate it is made on,
+/// instead of through a vtable slot.
 ///
-/// A delegate's Invoke has no body anyone compiles. The runtime picks an implementation
-/// per delegate object - an arch stub that shuffles the receiver and jumps through
-/// method_ptr for a single-target delegate, the compiled delegate-invoke wrapper for a
-/// multicast or open-instance one, which is the shape method_ptr cannot express - and
-/// leaves it in the object's invoke_impl field. Reading that field is what keeps
-/// mono_delegate_trampoline to one firing per delegate rather than one per call.
+/// A delegate's Invoke has no body for anyone to compile. The runtime picks an
+/// implementation for each delegate object instead of a vtable slot. A single-target
+/// delegate gets an arch stub that shuffles the receiver and jumps through
+/// method_ptr. A multicast or open-instance delegate gets the compiled
+/// delegate-invoke wrapper instead, because method_ptr cannot express that shape.
+/// The runtime stores the choice in the object's invoke_impl field. Reading that
+/// field is what limits mono_delegate_trampoline to one firing per delegate, not
+/// one per call.
 ///
-/// The field is a legacy entry for every delegate whatever engine runs its target:
-/// mono_delegate_ctor fills it in with the delegate trampoline before anything else
-/// sees the object, and the interpreter constructs its own delegates through that
-/// same function. What stands behind it once the trampoline has fired is whatever
-/// the runtime would hand out for the target anyway - which for an interpreted
-/// target is the entry into the interpreter, reached through the stub like any
-/// other.
+/// Every delegate carries this field, whatever engine runs its target.
+/// mono_delegate_ctor () fills it in with the delegate trampoline before anything
+/// else can see the object. The interpreter builds its own delegates through that
+/// same function. Once the trampoline has fired, invoke_impl holds whatever the
+/// runtime hands out for the target. For an interpreted target, that is the entry
+/// into the interpreter, reached through the stub like any other.
 static bool
 dispatches_through_invoke_impl (MonoMethod *target)
 {
@@ -324,12 +320,13 @@ dispatches_through_invoke_impl (MonoMethod *target)
 	       && std::string_view (target->name) == "Invoke";
 }
 
-/// The implementation the runtime settled on for RECEIVER, a delegate, or TARGET's
-/// vtable slot for as long as it has none.
+/// The implementation the runtime settled on for receiver, a delegate, or target's
+/// vtable slot until it has one.
 ///
-/// That slot holds the same delegate trampoline that fills invoke_impl in, so a
-/// delegate whose field is still unset dispatches correctly through it - which is what
-/// makes the field safe to read without knowing whether anything has written it.
+/// That slot holds the same delegate trampoline that fills invoke_impl in. A
+/// delegate whose field is still unset therefore dispatches correctly through it.
+/// That is what makes the field safe to read without knowing whether anything has
+/// written it.
 llvm::Value *
 MethodLLVMEmitter::delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                            MonoMethod *target)
@@ -345,11 +342,11 @@ MethodLLVMEmitter::delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *
 	                             virtual_callee (builder, receiver, target), impl);
 }
 
-/// Emit something that reads VALUE, so that it is still live here.
+/// Emits something that reads value, so it stays live here.
 ///
-/// An empty asm with a register constraint is the cheapest way to say it: it emits
-/// nothing, and it leaves the value wherever the allocator can still reach it - a
-/// callee-saved register or a spill slot, both of which the collector scans.
+/// An empty asm with a register constraint is the cheapest way to do this. It
+/// emits no code, and it leaves the value wherever the allocator can still reach
+/// it: a callee-saved register or a spill slot, both of which the collector scans.
 static void
 keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 {
@@ -360,8 +357,8 @@ keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 		{ value });
 }
 
-/// The address the engine has to resolve for TARGET's own MonoMethod - the runtime's
-/// description of the method, as opposed to its code.
+/// The address the engine must resolve for target's own MonoMethod, the runtime's
+/// description of the method rather than its code.
 llvm::Constant *
 MethodLLVMEmitter::method_symbol (MonoMethod *target)
 {
@@ -373,18 +370,18 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 	return extern_symbol (symbol);
 }
 
-/// TARGET, or the wrapper that takes and releases its lock if TARGET is
+/// target, or the wrapper that takes and releases its lock when target carries
 /// [MethodImpl(Synchronized)].
 ///
-/// A synchronized method's monitor is not in its body: the runtime builds a
-/// wrapper that enters the monitor, calls the body and exits from a finally, and
-/// the flagged method itself is only ever the body. Every reference this front
-/// end resolves while it compiles - a direct callee, an escaping code address -
-/// therefore has to name the wrapper, because nothing between here and the code
-/// will substitute one later.
+/// A synchronized method's monitor is not in its body. The runtime builds a
+/// wrapper that enters the monitor, calls the body, and exits through a finally.
+/// The flagged method itself is always the body. Every reference this front end
+/// resolves while it compiles must name the wrapper. That includes a direct
+/// callee and an escaping code address. Nothing between here and the code will
+/// substitute the wrapper later.
 ///
-/// A dispatched site must not ask: what the receiver's vtable slot holds is
-/// already the wrapper, put there by the runtime, and the IMT key has to stay the
+/// A dispatched call site must not ask this. The receiver's vtable slot already
+/// holds the wrapper, put there by the runtime, and the IMT key must stay the
 /// method the caller named.
 MonoMethod *
 MethodLLVMEmitter::synchronized_target (MonoMethod *target)
@@ -392,17 +389,20 @@ MethodLLVMEmitter::synchronized_target (MonoMethod *target)
 	if (!(target->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED))
 		return target;
 
-	/* The wrapper's own call to the body it locks, which would call itself. */
+	// This is the wrapper's own call to the body it locks. Without this
+	// exemption, wrapping target again here makes the wrapper call itself.
 	if (method->wrapper_type == MONO_WRAPPER_SYNCHRONIZED)
 		return target;
 
 	return mono_marshal_get_synchronized_wrapper (target);
 }
 
-/// Whether VALUE is this method's own `this`, straight out of its slot. Used
-/// to skip transparent-proxy checks: a body only ever executes on the real
-/// object, so its own `this` can never be a proxy. A value that went through a
-/// spill on its way here is missed, which costs a check, never correctness.
+/// Whether value is this method's own `this`, read straight out of its slot.
+///
+/// A caller uses this to skip a transparent-proxy check. A body only ever runs
+/// on the real object, so its own `this` can never be a proxy. Missing a value
+/// that passed through a spill on its way here only costs an extra check, never
+/// correctness.
 bool
 MethodLLVMEmitter::is_own_this (llvm::Value *value)
 {
@@ -415,19 +415,20 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 	return load != nullptr && load->getPointerOperand () == args[0].alloca;
 }
 
-/// The address of TARGET as something other than a direct call target: what
-/// ldftn pushes, what a delegate stores. It is the method's stub, which every
-/// caller now enters through, so a call made through the pointer is an ordinary
-/// call in this backend's own convention.
+/// The address of target as something other than a direct call target: what
+/// ldftn pushes, or what a delegate stores.
 ///
-/// The name asked for here is a placeholder like any other - the engine renames
-/// it - but it has to be a placeholder of its own rather than the one
-/// create_method_decl () uses. Within the module compiling TARGET those two
-/// would be the same name, extern_symbol () answers a repeat claim with whatever
-/// already holds it, and the address would silently become the body sitting
-/// beside us rather than the stub in front of it. That body is superseded by
-/// every later recompile, so a delegate built over it would keep calling the
-/// tier it was made in.
+/// This returns the method's stub, which every caller now enters through. A
+/// call made through this pointer is therefore an ordinary call in this
+/// backend's own convention.
+///
+/// The name asked for here is a placeholder like any other, and the engine
+/// renames it later. It must still be a placeholder of its own, not the one
+/// create_method_decl () uses for the same method. Reusing that name here makes
+/// extern_symbol () answer the repeat claim with whatever already holds it.
+/// The address then silently becomes the body sitting beside us, not the stub
+/// in front of it. That body is superseded by every later recompile, so a
+/// delegate built over it keeps calling the tier it was made in.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
@@ -475,23 +476,26 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
  *   marked synchronized.
  */
 
-/// Whether a value of TYPE certainly comes back in the return registers rather than
-/// through a pointer the caller passes in.
+/// Whether a value of type certainly comes back in the return registers, rather
+/// than through a pointer the caller passes in.
 ///
-/// A prototype that spells the hidden pointer out (hidden-return.hpp) returns void
-/// and so answers yes, which is the point of spelling it: the forwarded pointer is
-/// the caller's own and the jump is one the backend can always make.
+/// A prototype that spells the hidden pointer out (hidden-return.hpp) returns
+/// void, so this answers yes. That is the point of spelling it out: the
+/// forwarded pointer is the caller's own, and the jump is one the backend can
+/// always make.
 ///
-/// What is left to be careful about is the aggregate that stayed an aggregate.
-/// Whether such a return is demoted anyway is CanLowerReturn's answer, taken far
-/// below the IR, and a musttail site cannot survive being wrong about it: the
-/// backend aborts the process with "failed to perform tail call elimination on a
-/// call site marked musttail" rather than break the guarantee. A plain tail site
-/// can - it quietly becomes the ordinary call it would otherwise have been.
+/// What still needs care is the aggregate that stayed an aggregate. Whether
+/// such a return gets demoted anyway is CanLowerReturn's answer, taken far
+/// below the IR, and a musttail site cannot survive being wrong about it. The
+/// backend then aborts the process with "failed to perform tail call
+/// elimination on a call site marked musttail", instead of breaking the
+/// guarantee. A plain tail site can be wrong about it: the backend then
+/// quietly compiles it as the ordinary call the site was always allowed to be.
 ///
-/// So this admits only what is already a single leaf, and leaves every aggregate to
-/// the weaker marker. Being wrong in that direction costs a tail call the prefix
-/// only ever permitted; being wrong in the other costs the process.
+/// So this admits only what is already a single leaf, and leaves every
+/// aggregate to the weaker marker. Being wrong in that direction only costs a
+/// tail call the prefix ever permitted. Being wrong in the other direction
+/// costs the process.
 static bool
 returns_in_registers (llvm::Type *type)
 {
@@ -502,18 +506,18 @@ returns_in_registers (llvm::Type *type)
 	return type->isFloatTy () || type->isDoubleTy ();
 }
 
-/// Copy TARGET's return attributes onto CALL, which is about to be marked as a tail
-/// call.
+/// Copies target's return attributes onto call, which is about to be marked as a
+/// tail call.
 ///
 /// Tail-call eligibility compares the caller's return attributes against the call
-/// site's own attribute list (attributesPermitTailCall), and that comparison has no
-/// fallback to the called function - unlike the argument attributes, which do fall
+/// site's own attribute list (attributesPermitTailCall). That comparison has no
+/// fallback to the called function, unlike the argument attributes, which do fall
 /// back. So a caller returning `zeroext i8` whose site says plain `i8` reads as a
-/// mismatched ABI. LLVM then drops the tail call silently rather than failing, and
-/// the frame the prefix promised to hand away stays on the stack: a deep recursion
-/// that should run in constant space overflows instead. The site describes the
-/// callee, so saying what the callee actually returns is right either way; where
-/// matching_call_abi has proved the two extensions agree, it is what makes the
+/// mismatched ABI. LLVM then drops the tail call silently instead of failing, and
+/// the frame the prefix promised to hand away stays on the stack. A deep recursion
+/// that must run in constant space overflows instead. The site describes the
+/// callee, so saying what the callee returns is right either way. Where
+/// matching_call_abi has proved the two extensions agree, this is what makes the
 /// instruction say so.
 static void
 carry_return_attributes (llvm::CallInst *call, llvm::Function *target)
@@ -524,17 +528,18 @@ carry_return_attributes (llvm::CallInst *call, llvm::Function *target)
 	call->addRetAttrs (ret_attrs);
 }
 
-/// How a tail.-prefixed call at this site may be marked: not at all, as a plain tail
-/// call, or as a musttail one.
+/// How a tail.-prefixed call at this site can be marked: not at all, as a plain
+/// tail call, or as a musttail one.
 ///
 /// The two markers differ in what happens when the backend cannot form the jump.
-/// musttail is a demand, and an unmet one aborts the process; tail is a permission,
-/// and an unmet one is silently the ordinary call the site would have been. So the
-/// tests below split in two. Everything up to the last pair is a question of whether
-/// a jump is *correct* here at all, and answering no means leaving the site alone.
-/// The last pair only decides which of the two markers a correct site may carry -
-/// getting that wrong in the weaker direction costs a tail call the prefix never
-/// obliged us to make, which is what declining would have cost anyway.
+/// musttail is a demand, and an unmet one aborts the process. tail is a
+/// permission, and an unmet one is silently the ordinary call the site
+/// otherwise compiles as. So the tests below split in two. Everything up to the
+/// last pair asks whether a jump is *correct* here at all, and a no means
+/// leaving the site alone. The last pair only decides which of the two markers
+/// a correct site can carry. Getting that wrong in the weaker direction only
+/// costs a tail call the prefix never obliged us to make, the same cost as
+/// declining outright.
 llvm::CallInst::TailCallKind
 MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod *callee_method,
                                      llvm::FunctionType *callee_type,
@@ -543,39 +548,31 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	if (!prefixes.tail)
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * A tail call keeps the caller's own prototype, so only a direct call to
-	 * another method this backend compiles qualifies: an indirect target or a
-	 * runtime-implemented one is a legacy call, lowered to a different prototype
-	 * after the fact.
-	 */
+	// A tail call keeps the caller's own prototype, so only a direct call to
+	// another method this backend compiles qualifies. An indirect target or a
+	// runtime-implemented one is a legacy call, lowered to a different
+	// prototype after the fact.
 	if (callee_method == nullptr || implemented_outside_il (callee_method))
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * A filter body is a function of its own over the parent's frame. Returning
-	 * from it answers the filter, not the method, so there is no frame here to
-	 * hand away.
-	 */
+	// A filter body is a function of its own over the parent's frame. Returning
+	// from it answers the filter, not the method, so there is no frame here to
+	// hand away.
 	if (filter_mode)
 		return llvm::CallInst::TCK_None;
 
-	/* This frame owes an LMF pop on the way out, so it cannot be discarded. */
+	// This frame owes an LMF pop on the way out, so it cannot be discarded.
 	if (method->save_lmf || lmf_slot != nullptr)
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * A vararg call hands the callee a cookie buffer allocated in this frame,
-	 * which the callee walks for the whole of its own execution.
-	 */
+	// A vararg call hands the callee a cookie buffer allocated in this frame,
+	// which the callee walks for the whole of its own execution.
 	if (callee_sig->call_convention == MONO_CALL_VARARG)
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * The ret the prefix promises has to follow at once so it can be folded into
-	 * this instruction, must not be a branch target with an entry state of its own,
-	 * and the arguments must be all the evaluation stack holds.
-	 */
+	// The ret the prefix promises must follow at once, so it can be folded into
+	// this instruction. It must not be a branch target with an entry state of
+	// its own, and the arguments must be all the evaluation stack holds.
 	const unsigned char *cursor = code + ip;
 
 	if (ip >= code_size || mono_opcode_value (&cursor, code + code_size) != MONO_CEE_RET)
@@ -585,36 +582,30 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	if (stack.size () != static_cast<size_t> (callee_sig->param_count) + callee_sig->hasthis)
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * That ret is this method's own, so the two returns have to be the same LLVM
-	 * type. An ordinary call would have widened its result onto the evaluation
-	 * stack and let the ret narrow it back on the way out; folding the two together
-	 * leaves nowhere for that to happen. Where the return travels through a hidden
-	 * pointer the type is in the pointer's attribute rather than the prototype, and
-	 * agreeing on it is what says the pointer this frame was entered with is one
-	 * the callee may fill in.
-	 */
+	// That ret is this method's own, so the two returns must be the same LLVM
+	// type. An ordinary call widens its result onto the evaluation stack and lets
+	// the ret narrow it back on the way out. Folding the two together leaves
+	// nowhere for that to happen. Where the return travels through a hidden
+	// pointer, the type sits in the pointer's attribute rather than in the
+	// prototype. Agreeing on it says the pointer this frame was entered with is
+	// one the callee can fill in.
 	if (callee_type->getReturnType () != function->getReturnType ()
 	    || callee_hidden != hidden_return_type (function))
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * A protected call has to be an invoke, which cannot be a tail call - and
-	 * III.2.4 forbids tail. inside a protected region anyway.
-	 */
+	// A protected call must be an invoke, which cannot be a tail call, and
+	// III.2.4 forbids tail. inside a protected region anyway.
 	if (innermost_try (offset) >= 0)
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * Both markers carry the same promise: the callee touches nothing of this
-	 * frame, which is what lets the frame go before the callee runs. So nothing
-	 * that could point into it may travel in an argument - a value type's this,
-	 * managed pointers, unmanaged pointers, function pointers. An indirect
-	 * target's this is a pointer to nobody-knows-what, so it gets the same
-	 * treatment a value type's would. Aggregates need no test: on this convention
-	 * they pass as first-class values, and only the legacy ABI ever hands over a
-	 * pointer to one.
-	 */
+	// Both markers carry the same promise: the callee touches nothing of this
+	// frame, which is what lets the frame go before the callee runs. So no
+	// argument can carry anything that can point into it: a value type's this,
+	// managed pointers, unmanaged pointers, function pointers. An indirect
+	// target's this is a pointer to nobody-knows-what, so it gets the same
+	// treatment as a value type's this. Aggregates need no test: on this
+	// convention they pass as first-class values, and only the legacy ABI ever
+	// hands over a pointer to one.
 	if (callee_sig->hasthis
 	    && (callee_method == nullptr || m_class_is_valuetype (callee_method->klass)))
 		return llvm::CallInst::TCK_None;
@@ -626,24 +617,23 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 			return llvm::CallInst::TCK_None;
 	}
 
-	/* The transition into native code saves state a tail call would skip. */
+	// The transition into native code saves state that a tail call skips.
 	if (callee_sig->pinvoke
 	    || (callee_method != nullptr && (callee_method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)))
 		return llvm::CallInst::TCK_None;
 
-	/*
-	 * A guarantee is only worth demanding where the backend can always keep it:
-	 * where the jump changes nothing about the frame's argument area - identical
-	 * prototypes, down to the extension attributes that say how narrow integers
-	 * fill their registers - and where the return does not arrive through a pointer
-	 * this frame invented, which switches tail-call elimination off outright.
-	 *
-	 * That set is the one III.2.4 makes mandatory, so demanding it is what turns
-	 * the spec's obligation into something that fails loudly rather than quietly.
-	 * Outside it the prefix is still worth marking: an argument area that has to be
-	 * rebuilt is one the backend will often still rebuild in place, and where it
-	 * will not, the site is exactly the ordinary call declining would have left.
-	 */
+	// A guarantee is only worth demanding where the backend can always keep it.
+	// That means the jump changes nothing about the frame's argument area:
+	// identical prototypes, down to the extension attributes that say how narrow
+	// integers fill their registers. It also means the return does not arrive
+	// through a pointer this frame invented, which switches tail-call
+	// elimination off outright.
+	//
+	// That set is the one III.2.4 makes mandatory, so demanding it turns the
+	// spec's obligation into something that fails loudly instead of quietly.
+	// Outside that set, the prefix is still worth marking. An argument area that
+	// must be rebuilt is often one the backend rebuilds in place anyway. Where it
+	// does not, the site becomes the ordinary call that declining also leaves behind.
 	if (returns_in_registers (callee_type->getReturnType ())
 	    && matching_call_abi (callee_sig, callee_type, callee_hidden))
 		return llvm::CallInst::TCK_MustTail;
@@ -651,10 +641,11 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	return llvm::CallInst::TCK_Tail;
 }
 
-/// Whether a call to CALLEE_SIG could replace this method's own frame: the same
-/// LLVM prototype, down to the extension attributes that say how narrow integers
-/// fill their registers and the type a hidden return pointer points at - compared
-/// positionally, because a this is just a leading pointer to the ABI.
+/// Whether a call to callee_sig can replace this method's own frame.
+/// The two must share the same LLVM prototype. That includes matching
+/// extension attributes for narrow integers, and the same type for a hidden
+/// return pointer. The comparison is positional, because a this is a leading
+/// pointer to the ABI.
 bool
 MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
                                       llvm::FunctionType *callee_type,
@@ -682,21 +673,21 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 	return extensions (caller_sig) == extensions (callee_sig);
 }
 
-/// The honored form of a tail. call: a marked call feeding a ret directly, which is
-/// the shape LLVM turns into a jump. The IL ret that should_tail_call verified comes
-/// next is consumed here, since this ret is its translation.
+/// Emits the honored form of a tail. call: a marked call feeding a ret directly,
+/// which is the shape LLVM turns into a jump. The IL ret that should_tail_call
+/// verified comes next is consumed here, since this ret is its translation.
 ///
-/// DECLARATION is the callee's own declaration, which is where the site's return
-/// attributes come from even when the call goes through a pointer rather than to it.
-/// DESCRIBE_SITE says the rest of what the site is; a dispatched call has to say the
-/// same things here that it would on the ordinary path, since a jump that lost its
-/// key would dispatch on nothing.
+/// declaration is the callee's own declaration, which is where the site's return
+/// attributes come from even when the call goes through a pointer rather than to
+/// it. describe_site says the rest of what the site is. A dispatched call must
+/// say the same things here that it says on the ordinary path, because a jump
+/// that lost its key dispatches on nothing.
 ///
-/// The marker is what the jump is made of, not a hint about one. The backend never
-/// turns an *unmarked* call in tail position into a sibling call, at any
-/// optimization level, so a site left plain is a site that keeps its frame. That is
-/// why KIND is worth setting even when it is only the weaker of the two: the
-/// alternative is not a jump that might happen anyway, it is no jump at all.
+/// The marker is what the jump is made of, not a hint about one. The backend
+/// never turns an *unmarked* call in tail position into a sibling call, at any
+/// optimization level, so a site left plain keeps its frame. That is why kind
+/// is worth setting even when it is only the weaker of the two markers: the
+/// alternative is not a jump that can happen anyway. It is no jump at all.
 llvm::Error
 MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
                                    llvm::ArrayRef<llvm::Value *> args,
@@ -713,12 +704,10 @@ MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee 
 	llvm::Type *hidden = target != nullptr ? hidden_return_type (target) : nullptr;
 	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());
 
-	/*
-	 * The pointer this frame was entered with, not a slot of its own: it points
-	 * into an ancestor frame, so it is still there once this one is gone. A local
-	 * would be dead the moment the jump happened, and X86 refuses one.
-	 * should_tail_call () has already agreed the two ends mean the same type by it.
-	 */
+	// The pointer this frame was entered with, not a slot of its own: it points
+	// into an ancestor frame, so it is still there once this one is gone. A
+	// local dies the moment the jump happens, and X86 refuses one.
+	// should_tail_call () has already confirmed the two ends agree on its type.
 	unsigned at = hidden != nullptr ? hidden_return_index (target->arg_size ()) : 0;
 
 	if (hidden != nullptr)
@@ -794,7 +783,7 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		return unbalanced_stack (0);
 	if (innermost_try (offset) >= 0)
 		return invalid_il ("jmp cannot transfer control out of a protected block");
-	/* A legacy target's call lowers to a different prototype than this method's. */
+	// A legacy target's call lowers to a different prototype than this method's.
 	if (implemented_outside_il (callee_method))
 		return unsupported_il ("jmp to a runtime-implemented method");
 	if (method->save_lmf)
@@ -808,7 +797,7 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 
 	if (sig == nullptr)
 		return invalid_il ("the jmp target has no signature");
-	/* Neither end has an arglist to forward: the cookie is not in `args`. */
+	// Neither end has an arglist to forward: the cookie is not in `args`.
 	if (sig->call_convention == MONO_CALL_VARARG
 	    || mono_method_signature_internal (method)->call_convention == MONO_CALL_VARARG)
 		return unsupported_il ("jmp across a vararg signature");
@@ -817,11 +806,9 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	if (!matching_call_abi (sig, (*declaration)->getFunctionType (), hidden))
 		return invalid_il ("the jmp target's signature does not match this method's");
 
-	/*
-	 * The arguments transfer as they currently are - anything starg wrote goes
-	 * with them - so they reload from their slots rather than from the incoming
-	 * parameter values.
-	 */
+	// The arguments transfer as they currently are, so anything starg wrote goes
+	// with them. They reload from their slots, not from the incoming parameter
+	// values.
 	std::vector<llvm::Value *> values;
 
 	for (size_t i = 0; i < args.size (); ++i) {
@@ -834,7 +821,7 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		                                             type_alignment (argument.type)));
 	}
 
-	/* The return goes where this method's own caller asked for it. */
+	// The return goes where this method's own caller asked for it.
 	unsigned at = hidden_return_index (values.size () + 1);
 
 	if (hidden != nullptr)
@@ -849,14 +836,13 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 					        context (),
 					        hidden_return_attributes (context (), hidden)));
 
-	/*
-	 * jmp releases this frame by definition, so the jump is the point rather than
-	 * an optimization - but musttail is still only demandable where the backend can
-	 * always keep it. matching_call_abi has settled the prototype above, so all that
-	 * is left to ask is whether the return is an aggregate this convention still
-	 * hands back by value. Where it is the site weakens to a plain tail call, which
-	 * the backend jumps through where it can and quietly does not where it cannot.
-	 */
+	// jmp releases this frame by definition, so the jump is the point, not an
+	// optimization. musttail is still only demandable where the backend can
+	// always keep it, though. matching_call_abi has settled the prototype
+	// above, so the one thing left to ask is whether the return is an
+	// aggregate this convention still hands back by value. Where it is, the
+	// site weakens to a plain tail call, which the backend jumps through where
+	// it can, and otherwise quietly does not.
 	carry_return_attributes (call, *declaration);
 	call->setTailCallKind (returns_in_registers ((*declaration)->getReturnType ())
 	                               ? llvm::CallInst::TCK_MustTail
@@ -870,13 +856,13 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// Refuse a call the image should never have contained, the way mini refuses it:
-/// not by failing the translation, but by compiling the method with a throw where
-/// the call would have been, so that a body reached some other way still runs.
+/// Refuses a call the image must never have contained. It does not fail the
+/// translation. Instead it compiles the method with a throw in the call's place,
+/// so a body reached some other way still runs.
 ///
-/// The call site is left holding a result nothing can read - control does not come
-/// back from the throw - and the instructions after it are translated into a block
-/// nothing branches to.
+/// The call site is left holding a result nothing can read, since control does
+/// not come back from the throw, and the instructions after it are translated
+/// into a block nothing branches to.
 llvm::Error
 MethodLLVMEmitter::emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignature *sig)
 {
@@ -913,13 +899,13 @@ MethodLLVMEmitter::emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignat
 	return llvm::Error::success ();
 }
 
-/// String.Length, read straight out of the object the way mini and the
-/// interpreter both read it.
+/// Reads String.Length straight out of the object, the same way the
+/// interpreter reads it.
 ///
-/// The accessor's body would be a field load either way, so this is worth
-/// little on its own. What it is for is the debugger: a step into `s.Length`
-/// that enters a one-line corlib property is a stop in code the user never
-/// wrote, and one the other engines do not offer.
+/// The accessor's body is a field load either way, so this saves little on its
+/// own. It exists for the debugger: a step into `s.Length` that enters a
+/// one-line corlib property is a stop in code the user never wrote, one the
+/// interpreter does not have to make either.
 llvm::Error
 MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
 {
@@ -1018,12 +1004,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (!target)
 		return target.takeError ();
 
-	/*
-	 * The subject is the callee the token names, taken before a constrained.
-	 * prefix resolves it to an override below: naming a method you cannot see is
-	 * the thing being refused, and which implementation the receiver would have
-	 * dispatched to does not change that.
-	 */
+	// The subject is the callee the token names, taken before a constrained.
+	// prefix resolves it to an override below. Naming a method you cannot see
+	// is the thing being refused, and it makes no difference which
+	// implementation the receiver dispatches to.
 	if (checks_accessibility () && !mono_method_can_access_method (method, *target)) {
 		if (llvm::Error error = emit_method_access_failure (builder, *target))
 			return error;
@@ -1035,11 +1019,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	bool box_receiver = false;
 
 	if (prefixes.constrained != 0) {
-		/*
-		 * The prefix is only defined ahead of callvirt (III.2.1). The one
-		 * later use of constrained. call - static virtual interface members -
-		 * cannot appear in metadata this runtime accepts.
-		 */
+		// The prefix is only defined ahead of callvirt (III.2.1). Its one other
+		// use, ahead of a plain call to a static virtual interface member,
+		// cannot appear in metadata this runtime accepts.
 		if (!is_virtual)
 			return invalid_il ("constrained. on a plain call");
 
@@ -1048,23 +1030,20 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			return ctype.takeError ();
 		constrained = mono_class_from_mono_type_internal (*ctype);
 
-		/*
-		 * A value type that implements the method takes the call directly, with
-		 * the managed pointer as this. One that does not - the method lives on
-		 * Object, ValueType or Enum - would have its receiver boxed first.
-		 */
+		// A value type that implements the method takes the call directly, with
+		// the managed pointer as this. One that does not implement it, because
+		// the method lives on Object, ValueType, or Enum, gets its receiver
+		// boxed first.
 		if (m_class_is_valuetype (constrained)) {
 			ERROR_DECL (resolve_error);
 
-			/*
-			 * mono_class_get_virtual_method () lays the vtable out and then
-			 * indexes it without looking at whether that worked, so a class
-			 * whose vtable cannot be built - one that leaves an inherited
-			 * abstract method unimplemented, say - reaches vtable[slot] with
-			 * vtable NULL, and reports nothing through the MonoError either.
-			 * Build it here instead and surface the failure as the type load
-			 * the program is owed.
-			 */
+			// mono_class_get_virtual_method () lays the vtable out and then
+			// indexes it without checking whether that worked. A class whose
+			// vtable cannot be built, one that leaves an inherited abstract
+			// method unimplemented, for example, reaches vtable[slot] with
+			// vtable NULL, and reports nothing through the MonoError either.
+			// Build it here instead, and surface the failure as the type load
+			// the program is owed.
 			mono_class_setup_vtable (constrained);
 			if (mono_class_has_failure (constrained)) {
 				mono_error_set_for_class_failure (resolve_error, constrained);
@@ -1080,11 +1059,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				callee_method = impl;
 				direct_this = true;
 			} else {
-				/*
-				 * The value type does not override the method - it lives
-				 * on Object, ValueType or Enum - so the receiver is boxed
-				 * and the call dispatches on the box.
-				 */
+				// The value type does not override the method, because it
+				// lives on Object, ValueType, or Enum. So the receiver is
+				// boxed, and the call dispatches on the box.
 				box_receiver = true;
 			}
 		}
@@ -1095,13 +1072,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (sig == nullptr)
 		return invalid_il ("the called method has no signature");
 
-	/*
-	 * A vararg call site brings its own signature, and it is that one the
-	 * arguments on the evaluation stack were pushed against: the callee's fixed
-	 * parameters, a sentinel, then whatever types the caller chose. The
-	 * declaration knows nothing of the variable part, so everything below that
-	 * counts arguments has to work from this instead.
-	 */
+	// A vararg call site brings its own signature. The arguments on the
+	// evaluation stack were pushed against that signature: the callee's fixed
+	// parameters, a sentinel, then whatever types the caller chose. The
+	// declaration knows nothing of the variable part, so everything below that
+	// counts arguments must work from this signature instead.
 	bool vararg = sig->call_convention == MONO_CALL_VARARG;
 
 	if (vararg) {
@@ -1113,12 +1088,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		sig = *site;
 	}
 
-	/*
-	 * An abstract method has no body for a plain call to enter. A default interface
-	 * method reaching another member of its own interface is the one place that
-	 * spelling is legal - it dispatches on the receiver the way callvirt would -
-	 * and anywhere else the image is bad.
-	 */
+	// An abstract method has no body for a plain call to enter. A default
+	// interface method reaching another member of its own interface is the one
+	// place that spelling is legal: it dispatches on the receiver the way
+	// callvirt does. Anywhere else, the image is bad.
 	if (!is_virtual && (callee_method->flags & METHOD_ATTRIBUTE_ABSTRACT)) {
 		if (!mono_class_is_interface (method->klass))
 			return emit_bad_image_call (builder, sig);
@@ -1131,7 +1104,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (is_virtual && sig->generic_param_count != 0 && !callee_method->is_inflated)
 		return invalid_il ("callvirt on an open generic method");
 
-	/* A creator hands back what it built rather than filling in a this. */
+	// A creator hands back what it built rather than filling in a this.
 	if (callee_method->string_ctor)
 		return emit_creator_call (builder, callee_method, sig);
 
@@ -1149,21 +1122,17 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	    && sig->hasthis && sig->param_count == 0)
 		return emit_string_length (builder);
 
-	/*
-	 * Debugger.Break () has an empty body and a comment where the code would be:
-	 * the JIT is what gives the call its meaning, and the meaning is the one the
-	 * break instruction has. An embedder can say no through mono_set_break_policy.
-	 */
+	// Debugger.Break () has an empty body and a comment where the code goes: the
+	// JIT gives the call its meaning, and that meaning is the one the break
+	// instruction has. An embedder can say no through mono_set_break_policy.
 	if (is_debugger_break (callee_method, sig)) {
 		if (!mini_should_insert_breakpoint (method))
 			return llvm::Error::success ();
 		return emit_user_break (builder);
 	}
 
-	/*
-	 * The boxed receiver replaces the managed pointer in its stack slot, below the
-	 * explicit arguments, before the arguments are collected.
-	 */
+	// The boxed receiver replaces the managed pointer in its stack slot, below
+	// the explicit arguments, before the arguments are collected.
 	if (box_receiver) {
 		size_t depth = sig->param_count;
 
@@ -1172,8 +1141,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 		MonoType *vtype = m_class_get_byval_arg (constrained);
 		StackValue &receiver = stack[stack.size () - 1 - depth];
-		/* The receiver is the managed pointer the prefix promises, which is
-		 * already what a value class is boxed from. */
+		// The receiver is the managed pointer the prefix promises, which is
+		// already what a value class is boxed from.
 		llvm::Value *value = receiver.value;
 
 		if (!held_in_memory (vtype)) {
@@ -1185,9 +1154,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			                                   type_alignment (vtype));
 		}
 
-		/* Boxing a nullable yields a boxed T, or null - the box opcode's rule
-		 * holds here too, and it is what makes the receiver's type observable
-		 * as T and a receiver without a value throw. */
+		// Boxing a nullable yields a boxed T, or null: the box opcode's rule
+		// holds here too. It is what makes the receiver's type observable as
+		// T, and a receiver without a value throw.
 		llvm::Expected<llvm::Value *> boxed =
 			mono_class_is_nullable (constrained)
 				? box_nullable (builder, constrained, { value, vtype })
@@ -1200,32 +1169,29 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		receiver.type = mono_get_object_type ();
 	}
 
-	/*
-	 * Whether the callee is settled here rather than looked up off the receiver.
-	 * Everything below that names a different method than the IL did depends on
-	 * it: a site that still dispatches gets whatever the runtime put in the slot.
-	 */
+	// Whether the callee is settled here rather than looked up off the
+	// receiver. Everything below that names a different method than the IL did
+	// depends on it: a site that still dispatches gets whatever the runtime
+	// put in the slot.
 	bool devirtualized = !is_virtual
 	                     || direct_this
 	                     || !(callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 	                     || (callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 
 #ifndef DISABLE_REMOTING
-	/*
-	 * A receiver of a MarshalByRefObject-derived class - or of Object itself,
-	 * whose non-virtual methods a proxy also answers - may be a transparent
-	 * proxy, and calling the body directly would run it locally, in the wrong
-	 * domain or context. A direct call to such a method therefore goes through
-	 * the with-check wrapper, which runs the body only after proving the
-	 * receiver real, and remotes the call otherwise. Dispatched calls need
-	 * none of this: a proxy's vtable already routes every slot to remoting.
-	 *
-	 * A receiver that is this method's own `this` is exempt - a body only ever
-	 * executes on the real object. So are the remoting wrappers themselves:
-	 * their calls are made after the check has already decided locality, and
-	 * re-wrapping the with-check wrapper's own direct call would make the
-	 * wrapper call itself.
-	 */
+	// A receiver of a MarshalByRefObject-derived class, or of Object itself,
+	// whose non-virtual methods a proxy also answers, can be a transparent
+	// proxy. Calling the body directly then runs it locally, in the wrong
+	// domain or context. A direct call to such a method therefore goes through
+	// the with-check wrapper, which runs the body only after proving the
+	// receiver real, and remotes the call otherwise. Dispatched calls need
+	// none of this: a proxy's vtable already routes every slot to remoting.
+	//
+	// A receiver that is this method's own `this` is exempt: a body only ever
+	// runs on the real object. So are the remoting wrappers themselves. Their
+	// calls happen after the check has already decided locality, and
+	// re-wrapping the with-check wrapper's own direct call makes the wrapper
+	// call itself.
 	bool in_remoting_wrapper =
 		method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE
 		|| method->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK
@@ -1239,7 +1205,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	        || callee_method->klass == mono_defaults.object_class)
 	    && stack.size () > sig->param_count
 	    && !is_own_this (stack[stack.size () - 1 - sig->param_count].value)) {
-		/* The wrapper forwards a fixed argument list, which loses the arglist. */
+		// The wrapper forwards a fixed argument list, which loses the arglist.
 		if (vararg)
 			return unsupported_il ("a vararg call that may reach a proxy");
 
@@ -1254,16 +1220,14 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	}
 #endif
 
-	/*
-	 * Asked after the remoting check, so that a synchronized method on a
-	 * remotable class locks inside the with-check wrapper rather than around it:
-	 * the wrapper's own call to the body is where the lock belongs.
-	 */
+	// Asked after the remoting check, so a synchronized method on a
+	// remotable class locks inside the with-check wrapper, not around it. The
+	// wrapper's own call to the body is where the lock belongs.
 	if (devirtualized) {
 		MonoMethod *locked = synchronized_target (callee_method);
 
 		if (locked != callee_method) {
-			/* The wrapper forwards a fixed argument list, losing the arglist. */
+			// The wrapper forwards a fixed argument list, losing the arglist.
 			if (vararg)
 				return unsupported_il ("a vararg call to a synchronized method");
 
@@ -1272,13 +1236,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		}
 	}
 
-	/*
-	 * An internal call is published as the marshalling wrapper the runtime
-	 * builds around it, so naming that wrapper here reaches the same code
-	 * without crossing the legacy boundary to get there. A site that still
-	 * dispatches has to keep the method the IL named: the slot index and the
-	 * IMT key are computed from it.
-	 */
+	// An internal call is published as the marshalling wrapper the runtime
+	// builds around it, so naming that wrapper here reaches the same code
+	// without crossing the legacy boundary to get there. A site that still
+	// dispatches must keep the method the IL named: the slot index and the
+	// IMT key are computed from it.
 	if (devirtualized && !vararg) {
 		MonoMethod *wrapped = icall_wrapper_target (callee_method);
 
@@ -1296,17 +1258,15 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (!args)
 		return args.takeError ();
 
-	/* A reference-typed constrained receiver arrives as a pointer to the reference. */
+	// A reference-typed constrained receiver arrives as a pointer to the reference.
 	if (constrained != nullptr && !direct_this && !box_receiver)
 		(*args)[0] =
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	/*
-	 * The variable arguments leave the argument list for the cookie buffer, whose
-	 * address takes their place as the one trailing parameter every vararg
-	 * declaration carries.
-	 */
+	// The variable arguments leave the argument list for the cookie buffer,
+	// whose address takes their place as the one trailing parameter every
+	// vararg declaration carries.
 	if (vararg) {
 		llvm::Expected<llvm::Value *> cookie = build_sig_cookie (builder, sig, *args);
 
@@ -1319,30 +1279,25 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 	llvm::FunctionCallee callee = *declaration;
 	llvm::Type *hidden = hidden_return_type (*declaration);
-	/*
-	 * A slot holds the method's stub, which is entered exactly as the declaration
-	 * says - hidden return pointer and all. Nothing lowers the site afterwards, so
-	 * the prototype it is built against is the declaration's own.
-	 */
+	// A slot holds the method's stub, which is entered exactly as the
+	// declaration says, hidden return pointer and all. Nothing lowers the
+	// site afterwards, so the prototype it is built against is the
+	// declaration's own.
 	llvm::FunctionType *slot_type = (*declaration)->getFunctionType ();
 	bool keyed = false;
 	bool through_slot = false;
-	/* The delegate an Invoke is dispatched out of; null for every other call. */
+	// The delegate an Invoke is dispatched out of. Null for every other call.
 	llvm::Value *delegate = nullptr;
 
 	if (is_virtual) {
-		/*
-		 * The receiver has to be there whether or not the callee is reached through
-		 * it - an instance call on null throws before it dispatches.
-		 */
+		// The receiver must be there whether or not the callee is reached
+		// through it: an instance call on null throws before it dispatches.
 		emit_null_check (builder, (*args)[0]);
 
-		/*
-		 * Only a method that can still be overridden has to be looked up. A final or
-		 * non-virtual one is already the answer, and a callvirt on it is a null check
-		 * with a direct call behind it - as is one a constrained. prefix already
-		 * resolved to the value type's own implementation.
-		 */
+		// Only a method that can still be overridden needs a lookup. A final
+		// or non-virtual one is already the answer, and a callvirt on it is a
+		// null check with a direct call behind it, as is one a constrained.
+		// prefix already resolved to the value type's own implementation.
 		bool overridable = !direct_this && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 		                   && !(callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 
@@ -1356,22 +1311,21 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				delegate_invoke_callee (builder, delegate, callee_method));
 			through_slot = true;
 		} else if (overridable && (is_interface || generic_virtual)) {
-			/*
-			 * Several interface methods can hash to the same IMT slot, in which
-			 * case what the slot holds is a thunk that picks the real target by
-			 * looking at which method was asked for. The caller supplies that key
-			 * in a register set aside for it, and the nest attribute is how
-			 * unmodified LLVM is talked into filling it: nest pins an argument to
-			 * %r10, which is exactly MONO_ARCH_IMT_REG on amd64. The key travels
-			 * as one extra trailing argument that the target, once reached, never
-			 * looks at - trailing because a hidden return pointer is only legal
-			 * at parameter 0 or 1, and a leading key would push it past both.
-			 *
-			 * A virtual generic method dispatches the same way even off a class:
-			 * its slot can never hold one instantiation's code, so what sits
-			 * there is a trampoline that reads the asked-for inflated method out
-			 * of that same register to pick the instantiation.
-			 */
+			// Several interface methods can hash to the same IMT slot. When
+			// that happens, the slot holds a thunk that picks the real target
+			// by looking at which method was asked for. The caller supplies
+			// that key in a register set aside for it, and the nest attribute
+			// is how unmodified LLVM fills it: nest pins an argument to %r10,
+			// exactly MONO_ARCH_IMT_REG on amd64. The key travels as one extra
+			// trailing argument that the target, once reached, never reads.
+			// It trails because a hidden return pointer is only legal at
+			// parameter 0 or 1, and a leading key pushes it past both.
+			//
+			// A virtual generic method dispatches the same way even off a
+			// class: its slot can never hold one instantiation's code. What
+			// sits there instead is a trampoline that reads the asked-for
+			// inflated method out of that same register to pick the
+			// instantiation.
 			keyed = true;
 
 			llvm::Value *code =
@@ -1396,7 +1350,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		}
 	}
 
-	/* What the site says about its callee, whether or not it becomes a jump. */
+	// What the site says about its callee, whether or not it becomes a jump.
 	auto describe_site = [&] (llvm::CallBase *site) {
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
@@ -1405,25 +1359,23 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	llvm::CallInst::TailCallKind tail_kind =
 		should_tail_call (sig, callee_method, callee.getFunctionType (), hidden);
 
-	/*
-	 * A dispatched site can hand its frame over like any other - the key rides a
-	 * register of its own that a jump leaves alone, and a stub is reached by a jump
-	 * as readily as by a call - but it never demands one. A keyed site cannot: the
-	 * key is an argument this frame's own prototype does not have, and musttail
-	 * insists the two match. A plain vtable site could now, but a musttail the
-	 * backend cannot form aborts the process rather than declining, so widening it
-	 * is a change to make on its own evidence.
-	 */
+	// A dispatched site can hand its frame over like any other. The key rides
+	// a register of its own, which a jump leaves alone. A stub is reached
+	// by a jump as readily as by a call. But it never demands one. A keyed
+	// site cannot demand one: the key is an argument this frame's own
+	// prototype does not have, and musttail insists the two match. A plain
+	// vtable site has no such key, so demanding one is possible in principle,
+	// but this code downgrades it the same way. Widening that needs its own
+	// evidence, since a musttail the backend cannot form aborts the process
+	// instead of declining.
 	if (through_slot && tail_kind == llvm::CallInst::TCK_MustTail)
 		tail_kind = llvm::CallInst::TCK_Tail;
 
-	/*
-	 * An instrumented method has to report its exit in front of a site the frame
-	 * does not come back from, so it can only honour the marker that is a
-	 * guarantee. Under the weaker one the backend is free to leave an ordinary
-	 * call, and the report would then land before the callee's own entry instead
-	 * of after its exit.
-	 */
+	// An instrumented method must report its exit in front of a site the
+	// frame does not come back from, so it can only honour the marker that is
+	// a guarantee. Under the weaker one, the backend is free to leave an
+	// ordinary call, and the report then lands before the callee's own entry
+	// instead of after its exit.
 	if (tail_kind == llvm::CallInst::TCK_Tail
 	    && (instrumented (MONO_PROFILER_CALL_INSTRUMENTATION_LEAVE)
 	        || instrumented (MONO_PROFILER_CALL_INSTRUMENTATION_TAIL_CALL)))
@@ -1440,13 +1392,12 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		builder, callee, *args, describe_site, hidden,
 		hidden_return_index ((*declaration)->arg_size ()));
 
-	/*
-	 * invoke_impl usually holds an arch stub that puts delegate->target in the
-	 * receiver's place on its way through, so this activation stops rooting the
-	 * delegate the moment the call is entered. Were that the last reference to a
-	 * delegate over a dynamic method, the code running underneath could be
-	 * collected. Holding it past the call is what keeps it there.
-	 */
+	// invoke_impl usually holds an arch stub that puts delegate->target in the
+	// receiver's place on its way through, so this activation stops rooting
+	// the delegate the moment the call is entered. If that is the last
+	// reference to a delegate over a dynamic method, the collector can
+	// reclaim the code running underneath. Holding it past the call is what
+	// keeps it there.
 	if (delegate != nullptr)
 		keep_alive (builder, delegate);
 

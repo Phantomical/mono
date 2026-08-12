@@ -138,8 +138,8 @@ MethodLLVMEmitter::emit_compare (MonoIrBuilder &builder, BinaryOp op)
 	 * footnote: "cgt.un is allowed and verifiable on ObjectRefs (O). This is
 	 * commonly used when comparing an ObjectRef with null (there is no
 	 * 'compare-not-equal' instruction, which would otherwise be a more obvious
-	 * solution)." The footnote names only the compare, not bgt.un, so it is handled
-	 * here rather than in the shared table.
+	 * solution)." The footnote names only the compare, not bgt.un. This function
+	 * checks for that case itself. The shared table does not.
 	 */
 	llvm::Value *result;
 

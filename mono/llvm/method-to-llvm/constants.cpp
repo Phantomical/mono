@@ -85,15 +85,13 @@ MethodLLVMEmitter::emit_ldc_i8 (MonoIrBuilder &builder, int64_t value)
 	return llvm::Error::success ();
 }
 
-/*
- * The float constants arrive as the bit patterns the IL stream holds rather than as
- * host floats: an IL float32 is IEC 60559 whatever the machine that reads it does, and
- * an APFloat built from the bits says so without a type pun in between.
- *
- * Both keep the width they were written at. The CLI has one float type, F, but nothing
- * is gained by widening every ldc.r4 to double here - the operand tables already pick
- * the wider of the two when an R4 and an R8 meet.
- */
+// The bit patterns handed to emit_ldc_r4 and emit_ldc_r8 are the IL stream's IEC 60559
+// encoding, not a host float value. An APFloat built directly from those bits carries
+// the exact value across, with no type pun in between.
+//
+// Each constant keeps the width it was written at. The CLI has one float type, F, but
+// nothing here needs to widen ldc.r4 to double. binary-numeric.cpp already widens to
+// double when an R4 value and an R8 value meet in an operation.
 llvm::Error
 MethodLLVMEmitter::emit_ldc_r4 (MonoIrBuilder &builder, uint32_t bits)
 {
@@ -191,11 +189,11 @@ MethodLLVMEmitter::emit_ldnull (MonoIrBuilder &builder)
 llvm::Error
 MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 {
-	/*
-	 * A wrapper has no string heap to point into, so what it carries is a plain
-	 * C string that the runtime turns into a managed one at the point of use.
-	 * A dynamic method is the exception: its operand is already the MonoString.
-	 */
+	// A wrapper has no string heap to point into. It carries a plain C string
+	// instead, and the runtime turns that into a managed string when the
+	// wrapper runs.
+	//
+	// A dynamic method is the exception. Its operand is already the MonoString.
 	if (in_wrapper ()) {
 		void *data = wrapper_data (token);
 
@@ -228,14 +226,18 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	if ((token & 0xff000000) != MONO_TOKEN_STRING)
 		return invalid_il ("ldstr needs a string literal token");
 
-	/*
-	 * The interned string is a runtime object, so like a vtable it travels as a
-	 * symbol the engine resolves. Interning here rather than at run time is what
-	 * mini does at this same point, and rests on the same guarantee: an interned
-	 * string is rooted and never moves, so its address can outlive the compile.
-	 * Interned into the domain the code is compiled for, not the thread's
-	 * current one - the root only holds while that domain holds the code.
-	 */
+	// The interned string is a runtime object. Like a vtable, it travels as a
+	// symbol the engine resolves.
+	//
+	// The compiler interns it here, rather than at run time, to match what the
+	// interpreter does for the same instruction. interp/transform.c also calls
+	// mono_ldstr_checked () at this point, when it transforms a non-wrapper
+	// method. Both rest on the same guarantee. An interned string is rooted and
+	// never moves, so its address can outlive the compile.
+	//
+	// The runtime interns the string into the domain the code compiles for, not
+	// into the thread's current domain. The root holds only while that domain
+	// holds the code.
 	MonoImage *image = m_class_get_image (method->klass);
 	ERROR_DECL (intern_error);
 	MonoString *interned = mono_ldstr_checked (cfg->domain, image,
@@ -297,11 +299,9 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	gpointer handle = nullptr;
 
 	if (in_wrapper ()) {
-		/*
-		 * Two consecutive slots: the handle, and the class saying which of the
-		 * three kinds it is. Only the wrappers that can carry a token at all
-		 * fill these in.
-		 */
+		// wrapper_data () holds the handle at token and the class that names
+		// its kind at token + 1. Only the wrapper types that can carry a token
+		// fill in these two slots.
 		if (method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD &&
 		    method->wrapper_type != MONO_WRAPPER_SYNCHRONIZED)
 			return unsupported_il ("ldtoken in this kind of wrapper");
@@ -317,13 +317,13 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 			MonoClass *klass = static_cast<MonoClass *> (handle);
 			MonoGenericContext *ctx = mono_method_get_context (method);
 
-			/*
-			 * A synchronized wrapper is built once, over the generic
-			 * definition, and inflated per instantiation - so its class
-			 * token names Gen<T> and the instantiation has to be put back
-			 * in here. Without it every Gen<X> would lock typeof (Gen<>),
-			 * and so lock each other out.
-			 */
+			// mono_marshal_get_synchronized_wrapper () builds a synchronized
+			// wrapper once, over the generic definition, then inflates it per
+			// instantiation. Its class token still names Gen<T>, so this code
+			// must put the real instantiation back.
+			//
+			// Without that step, every Gen<X> locks typeof (Gen<>) and locks
+			// each other out.
 			if (ctx != nullptr && mono_class_is_gtd (klass)) {
 				klass = mono_class_inflate_generic_class_checked (klass, ctx,
 				                                                  metadata_error);
@@ -343,23 +343,23 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 			return runtime_error (metadata_error);
 	}
 
-	/*
-	 * The handle is a runtime address - a MonoType, MonoMethod or MonoClassField -
-	 * so each kind rides on the matching symbol family. A type's MonoType lives
-	 * inside its MonoClass, hence the offset from the class symbol.
-	 */
+	// The handle is a runtime address: a MonoType, a MonoMethod or a
+	// MonoClassField. Each kind rides on its matching symbol family.
+	//
+	// A MonoType lives inside its MonoClass, so a type handle reads as an
+	// offset from the class symbol.
 	llvm::Value *address;
 
 	if (handle_class == mono_defaults.typehandle_class) {
 		MonoType *type = static_cast<MonoType *> (handle);
 		MonoClass *klass = mono_class_from_mono_type_internal (type);
 
-		/*
-		 * mono_class_from_mono_type_internal switches on type->type alone, so a
-		 * typespec's byref-ness does not survive the round trip through the class.
-		 * Every class keeps both spellings of itself, though - this_arg is byval_arg
-		 * with byref set - so pick the one the token actually named.
-		 */
+		// mono_class_from_mono_type_internal () switches on type->type alone,
+		// so a typespec's byref flag does not survive the round trip through
+		// the class.
+		//
+		// Every class keeps both spellings of itself: this_arg is byval_arg
+		// with byref set. Pick the one the token named.
 		size_t offset = type->byref ? m_class_offsetof_this_arg ()
 		                            : m_class_offsetof_byval_arg ();
 
@@ -371,11 +371,10 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	} else if (handle_class == mono_defaults.fieldhandle_class) {
 		address = field_symbol (static_cast<MonoClassField *> (handle));
 	} else {
-		/*
-		 * mono_ldtoken_checked hands back exactly the three handle kinds above
-		 * and reports anything else as a bad image before getting here, so this
-		 * arm is only reachable if the runtime grows a new kind.
-		 */
+		// mono_ldtoken_checked () only ever returns one of the three handle
+		// kinds above. It reports anything else as a bad image before this
+		// code runs, so this arm is unreachable unless the runtime adds a new
+		// kind.
 		return invalid_il ("ldtoken produced an unknown handle kind");
 	}
 
@@ -387,8 +386,8 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	if (!htype)
 		return htype.takeError ();
 
-	/* The handle is one pointer wide, so building it is that pointer stored
-	 * over the slot it rides the stack in. */
+	// The handle is one pointer wide. The code below stores that pointer into
+	// the slot it occupies on the stack.
 	llvm::Align align = type_alignment (wrapper);
 	MonoIrBuilder entry (entry_block, entry_block->begin ());
 	llvm::AllocaInst *temp = entry.CreateAlloca (*htype);

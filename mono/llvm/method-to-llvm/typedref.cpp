@@ -9,9 +9,9 @@
 
 namespace mono {
 
-/// The address of the value on top of the evaluation stack, so that its fields can
-/// be reached. A value class is already there; anything else is put in a slot of
-/// its own first.
+/// Returns the address of the value on top of the evaluation stack, so its fields
+/// can be reached. A value class already has an address there. Anything else gets
+/// a new slot first.
 llvm::Value *
 MethodLLVMEmitter::spill_to_temporary (MonoIrBuilder &builder, MonoType *type)
 {
@@ -70,18 +70,16 @@ llvm::Error
 MethodLLVMEmitter::emit_arglist (MonoIrBuilder &builder)
 {
 	if (sig_cookie == nullptr) {
-		/* A filter runs as its own function and is not handed the cookie. */
+		// A filter runs as its own function and is not handed the cookie.
 		if (filter_mode)
 			return unsupported_il ("arglist in a filter clause of a vararg method");
 
 		return invalid_il ("arglist outside a vararg method");
 	}
 
-	/*
-	 * A RuntimeArgumentHandle is a struct wrapping the buffer address, and what
-	 * ArgIterator's constructor takes is the struct, so the pointer goes back
-	 * through memory to come out in whatever shape the field converted to.
-	 */
+	// RuntimeArgumentHandle is a struct that wraps the buffer address.
+	// ArgIterator's constructor takes that struct, not a raw pointer.
+	// Storing the pointer through memory lets it come back out in the struct's shape.
 	MonoType *handle = m_class_get_byval_arg (mono_defaults.argumenthandle_class);
 	llvm::Expected<llvm::Type *> slot = convert_type (handle);
 	if (!slot)
@@ -159,11 +157,9 @@ MethodLLVMEmitter::emit_mkrefany (MonoIrBuilder &builder, uint32_t token)
 
 	temp->setAlignment (type_alignment (tref));
 
-	/*
-	 * The descriptor is the class, a pointer to the class's own MonoType - which
-	 * lives inside the MonoClass, so it is the same symbol at an offset - and the
-	 * address being described.
-	 */
+	// The typed reference stores three things: the class, a pointer to the class's
+	// own MonoType, and the address being described. The MonoType pointer is the
+	// class symbol plus an offset, because the MonoType lives inside the MonoClass.
 	llvm::Constant *cls = class_symbol (klass, "mono_class_");
 	llvm::Align align (TARGET_SIZEOF_VOID_P);
 	auto field = [&] (size_t offset) {
@@ -293,10 +289,8 @@ MethodLLVMEmitter::emit_refanytype (MonoIrBuilder &builder)
 	MonoType *tref = m_class_get_byval_arg (mono_defaults.typed_reference_class);
 	llvm::Value *temp = spill_to_temporary (builder, tref);
 
-	/*
-	 * What gets pushed is a RuntimeTypeHandle, a struct wrapping the MonoType
-	 * pointer, so the field reads back out as that struct.
-	 */
+	// The pushed value is a RuntimeTypeHandle, a struct that wraps a MonoType
+	// pointer. The field reads back out in that shape.
 	MonoType *handle = m_class_get_byval_arg (mono_defaults.typehandle_class);
 	llvm::Expected<llvm::Type *> slot = convert_type (handle);
 	if (!slot)

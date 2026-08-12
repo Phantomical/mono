@@ -6,11 +6,11 @@
 
 namespace mono {
 
-/// The address on top of the stack as an LLVM pointer, null-checked.
+/// Returns the address on top of the stack as an LLVM pointer, after a null check.
 ///
-/// An indirect access reads its location off the stack, where it may be a managed
-/// pointer or a bare native int; an object reference is not an address something may
-/// dereference directly, so it is refused rather than reinterpreted.
+/// The stack slot can hold a managed pointer or a native int. An object reference
+/// is not a dereferenceable address. If the stack holds one, this function refuses
+/// it instead of reinterpreting it as a pointer.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 {
@@ -22,7 +22,7 @@ MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 
 	llvm::Value *pointer = address.value;
 
-	/* A native int address is only a number until something dereferences it. */
+	// A native int is only a number until code dereferences it.
 	if (!pointer->getType ()->isPointerTy ())
 		pointer = builder.CreateIntToPtr (pointer, llvm::PointerType::get (context (), 0));
 
@@ -204,9 +204,10 @@ MethodLLVMEmitter::emit_stind (MonoIrBuilder &builder, MonoType *element)
 	return llvm::Error::success ();
 }
 
-/// The collector's hook for copying a value type that has reference fields inside it:
-/// it moves the bytes and marks the cards in one step, given the class so it knows
-/// where the references sit.
+/// Declares the collector's copy barrier for a value type that holds references.
+///
+/// The barrier copies the bytes and marks the cards for the references it copies,
+/// in one call. The class argument tells it where those reference fields sit.
 llvm::FunctionCallee
 MethodLLVMEmitter::value_copy_decl ()
 {
@@ -400,7 +401,8 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
 	if (mini_type_is_reference (*type)) {
-		/* The reference itself moves, which is the ldind.ref/stind.ref pair. */
+		// Here the reference itself moves. This has the same effect as
+		// ldind.ref followed by stind.ref.
 		llvm::Value *value =
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0), *src,
 		                                   llvm::Align (TARGET_SIZEOF_VOID_P));
@@ -473,10 +475,8 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 
 	pop_stack (1);
 
-	/*
-	 * Zeroing never creates a reference the collector could miss, so both shapes
-	 * store plainly: null for a reference, cleared bytes for a value type.
-	 */
+	// Zeroing never creates a reference for the collector to miss. Both shapes
+	// store directly: null for a reference, zero bytes for a value type.
 	if (mini_type_is_reference (*type)) {
 		llvm::PointerType *ptr = llvm::PointerType::get (context (), 0);
 
@@ -493,7 +493,8 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// The byte count of a block operation, off the stack and widened to the machine.
+/// Returns a block operation's byte count, taken off the stack and widened to the
+/// machine's pointer width. If the operand is not int32 or native int, this fails.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::block_size (MonoIrBuilder &builder, StackValue size)
 {
@@ -509,7 +510,7 @@ MethodLLVMEmitter::block_size (MonoIrBuilder &builder, StackValue size)
 	if (value->getType ()->isPointerTy ())
 		value = builder.CreatePtrToInt (value, native);
 
-	/* The size is unsigned int32, so a 4-byte count widens without a sign. */
+	// The size is unsigned int32, so it zero-extends instead of sign-extends.
 	return builder.CreateZExtOrTrunc (value, native);
 }
 
@@ -576,10 +577,8 @@ MethodLLVMEmitter::emit_cpblk (MonoIrBuilder &builder)
 	llvm::Align align = prefixes.unaligned != 0 ? llvm::Align (prefixes.unaligned)
 	                                            : llvm::Align (TARGET_SIZEOF_VOID_P);
 
-	/*
-	 * A block copy is a load and a store at once, so a volatile one is fenced on
-	 * both sides rather than picking an ordering to be half of.
-	 */
+	// A block copy is a load and a store together. A volatile one fences both
+	// sides, because ordering only one side leaves the other unordered.
 	if (prefixes.volatile_)
 		builder.CreateFence (llvm::AtomicOrdering::SequentiallyConsistent);
 	builder.CreateMemCpy (*dest, align, *src, align, *size, prefixes.volatile_);
@@ -659,7 +658,7 @@ MethodLLVMEmitter::emit_initblk (MonoIrBuilder &builder)
 		fill = builder.CreatePtrToInt (fill, builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
 	fill = builder.CreateZExtOrTrunc (fill, builder.getInt8Ty ());
 
-	/* A volatile fill is a store, so the fence precedes it. */
+	// A volatile fill is only a store, so the fence goes before it.
 	if (prefixes.volatile_)
 		builder.CreateFence (llvm::AtomicOrdering::Release);
 	builder.CreateMemSet (*dest, fill, *size, align, prefixes.volatile_);

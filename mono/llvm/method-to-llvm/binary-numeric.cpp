@@ -50,7 +50,7 @@ constexpr uint32_t BLE_UN = bit (BinaryOp::BleUn);
 constexpr uint32_t BLT_UN = bit (BinaryOp::BltUn);
 constexpr uint32_t COMPARE_ALL =
 	BEQ | BGE | BGT | BLE | BLT | BNE_UN | BGE_UN | BGT_UN | BLE_UN | BLT_UN;
-/* The cells the table spells out by name rather than accepting wholesale. */
+// The cells the table spells out by name rather than accepting wholesale.
 constexpr uint32_t COMPARE_EQ = BEQ | BNE_UN;
 
 constexpr uint32_t ADD_OVF = bit (BinaryOp::AddOvf);
@@ -62,12 +62,12 @@ constexpr uint32_t SUB_OVF_UN = bit (BinaryOp::SubOvfUn);
 constexpr uint32_t OVERFLOW_ALL =
 	ADD_OVF | ADD_OVF_UN | MUL_OVF | MUL_OVF_UN | SUB_OVF | SUB_OVF_UN;
 
-/// One cell of an operand table: what A op B leaves on the stack, and which of that
+/// One cell of an operand table: what a op b leaves on the stack, and which of that
 /// table's instructions the cell holds for. X is the table's invalid box.
 ///
-/// A pairing can push different things for different instructions - adding an address
-/// to a number gives an address, subtracting one gives the distance between them - so a
-/// cell may name a second result covering a subset of its own ops.
+/// A pairing can push different things for different instructions, so a cell can name a
+/// second result that covers a subset of its own ops. For example, add on a pointer and
+/// a number gives a pointer, but sub on two pointers gives the distance between them.
 struct Cell {
 	StackType result = Invalid;
 	uint32_t ops = 0;
@@ -88,22 +88,21 @@ constexpr Cell MP_ADD_NI_SUB = {ManagedPtr, ADD | SUB, SUB, NativeInt};
 constexpr Cell MP_ADD_SUB = {ManagedPtr, ADD | SUB};
 
 /*
- * ECMA-335 III.1.5, Table III.2: Binary Numeric Operations. Indexed [A's type][B's
- * type], as are the two below.
+ * ECMA-335 III.1.5, Table III.2: Binary Numeric Operations. Indexed [a's type][b's
+ * type], as are the two tables below.
  *
- * The managed-pointer cells are the ones the spec shades as unverifiable; the JIT is
- * not a verifier, so they are accepted like any other.
+ * The spec shades the managed-pointer cells as unverifiable. This JIT is not a
+ * verifier, so it accepts them like any other cell.
  *
- * The int64 column and row carry cells the spec leaves empty: mini's 64-bit tables
- * accept int64 mixed with int32 or native int (this one, the integer table, and the
- * overflow table alike), the narrower operand riding sign-extended in the full
- * register. Same leniency here, with the extension made explicit by coerce ().
+ * The int64 column and row carry cells the spec leaves empty. This table accepts
+ * int64 mixed with int32 or native int, and so do the integer table and the overflow
+ * table below. coerce () sign-extends the narrower operand into the full register.
  *
- * So does `number - &`, which the spec has no cell for at all. A C# compiler reaches it
- * whenever a pointer difference has a `fixed` local on the right, since that local is a
- * managed pointer while the other operand is a plain unmanaged one - and every C#
- * compiler emits it, so refusing would be refusing ordinary code. The distance between
- * two addresses is a number, not an address, hence the native-int result.
+ * The spec also has no cell for `number - &`. A C# compiler reaches it whenever a
+ * pointer difference has a `fixed` local on the right. That local is a managed
+ * pointer, and the other operand is a plain unmanaged one. Every C# compiler emits
+ * this pattern, so a JIT that refuses it refuses ordinary code. The distance between
+ * two addresses is a number, not an address, so the result type is native int.
  */
 constexpr OperandTable BINARY_NUMERIC = {
 	/*              int32       int64    native int     F        &      O */
@@ -119,10 +118,8 @@ constexpr Cell I4_INT = {Int32, INTEGER_ALL};
 constexpr Cell I8_INT = {Int64, INTEGER_ALL};
 constexpr Cell NI_INT = {NativeInt, INTEGER_ALL};
 
-/*
- * Table III.5: Integer Operations. Every box here is verifiable - neither float nor
- * anything the GC tracks has a bitwise operation or an unsigned division.
- */
+// Table III.5: Integer Operations. Every box here is verifiable - neither float nor
+// anything the GC tracks has a bitwise operation or an unsigned division.
 constexpr OperandTable INTEGER = {
 	/*            int32    int64   native int   F   &   O */
 	/* int32 */ {I4_INT, I8_INT, NI_INT, X, X, X},
@@ -137,13 +134,11 @@ constexpr Cell I4_SHIFT = {Int32, SHIFT_ALL};
 constexpr Cell I8_SHIFT = {Int64, SHIFT_ALL};
 constexpr Cell NI_SHIFT = {NativeInt, SHIFT_ALL};
 
-/*
- * Table III.6: Shift Operations, indexed [value to be shifted][shift amount].
- *
- * The one table here that is not symmetric, and the one whose result does not depend on
- * both operands: a shift does not promote what it is shifting, so every cell of a row
- * carries that row's own type. An int64 shift amount is not accepted at all.
- */
+// Table III.6: Shift Operations, indexed [value to be shifted][shift amount].
+//
+// A shift does not change what it shifts. The result type follows only the left
+// operand, so every cell in a row carries that row's own type. This table refuses an
+// int64 shift amount.
 constexpr OperandTable SHIFT = {
 	/*             int32     int64  native int   F   &   O */
 	/* int32 */ {I4_SHIFT, X, I4_SHIFT, X, X, X},
@@ -164,19 +159,21 @@ constexpr Cell O_EQ = {ObjectRef, COMPARE_EQ};
 /*
  * Table III.4: Binary Comparison or Branch Operations.
  *
- * The object-reference cell carries a list rather than a tick because the spec
- * restricts it to beq/bne.un (and ceq): comparing two object references is only
- * meaningful for equality. & against & takes the whole row, with a footnote that
- * anything other than equality is only meaningful when both point into the same array -
- * which the CLI does not check and neither does this.
+ * The object-reference cell names beq, bne.un, and ceq specifically, instead of
+ * accepting every predicate in the table. The spec restricts it that way because
+ * comparing two object references only makes sense as an equality check.
  *
- * int64 against native int is mini's 64-bit leniency again; int64 against int32 is
- * not - mini refuses that pairing even for comparisons.
+ * & against & takes every predicate in the row. The spec's footnote limits anything
+ * other than equality to two pointers into the same array, a rule neither the CLI nor
+ * this JIT checks.
  *
- * Native int against & takes the whole row rather than the spec's beq/bne.un, for the
- * same reason `number - &` is in Table III.2 above: order-comparing a `fixed` local
- * against a plain pointer is ordinary C#, the two are the same address either way, and
- * mini's table accepts every predicate for the pairing.
+ * int64 against native int is accepted, the same 64-bit leniency as the tables above.
+ * This table refuses int64 against int32, even for comparisons.
+ *
+ * Native int against & also takes every predicate in the row, not just the spec's beq
+ * and bne.un. The reason matches `number - &` in Table III.2 above. Order comparisons
+ * on a `fixed` local against a plain pointer are ordinary C#, and the two operands are
+ * the same address either way.
  */
 constexpr OperandTable COMPARISON = {
 	/*            int32   int64   native int   F      &       O */
@@ -195,10 +192,8 @@ constexpr Cell NI_SUB_UN = {NativeInt, SUB_OVF_UN};
 constexpr Cell MP_ADD_NI_SUB_UN = {ManagedPtr, ADD_OVF_UN | SUB_OVF_UN, SUB_OVF_UN, NativeInt};
 constexpr Cell MP_ADD_SUB_UN = {ManagedPtr, ADD_OVF_UN | SUB_OVF_UN};
 
-/*
- * Table III.7: Overflow Arithmetic Operations. The same shape as Table III.2, except
- * that only the unsigned forms may touch a pointer - `number - &` included.
- */
+// Table III.7: Overflow Arithmetic Operations. The same shape as Table III.2, except
+// that only the unsigned forms can touch a pointer - `number - &` included.
 constexpr OperandTable OVERFLOW_ARITHMETIC = {
 	/*                int32          int64   native int      F      &        O */
 	/* int32 */ {I4_OVF, I8_OVF, NI_OVF, X, MP_ADD_NI_SUB_UN, X},
@@ -209,7 +204,7 @@ constexpr OperandTable OVERFLOW_ARITHMETIC = {
 	/* O     */ {X, X, X, X, X, X},
 };
 
-/// The operand table ECMA-335 gives for OP.
+/// The operand table ECMA-335 gives for op.
 const OperandTable &
 table_for (BinaryOp op)
 {
@@ -334,8 +329,8 @@ native_int_type (llvm::IRBuilder<> &builder)
 
 } // namespace
 
-/// The type A op B leaves on the evaluation stack, per whichever of the ECMA-335
-/// III.1.5 operand tables governs OP, or an InvalidProgramException for the
+/// The type a op b leaves on the evaluation stack, per whichever of the ECMA-335
+/// III.1.5 operand tables governs op, or an InvalidProgramException for the
 /// combinations that table rules out.
 llvm::Expected<MonoType *>
 MethodLLVMEmitter::binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs)
@@ -356,23 +351,24 @@ MethodLLVMEmitter::binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs)
 	case NativeInt:
 		return mono_get_int_type ();
 	case Float:
-		/* The CLI tracks a single float type, so keep the wider of the two. */
+		// The CLI tracks a single float type, so keep the wider of the two.
 		return is_r8 (lhs) || is_r8 (rhs)
 		               ? m_class_get_byval_arg (mono_defaults.double_class)
 		               : m_class_get_byval_arg (mono_defaults.single_class);
 	case ManagedPtr:
-		/* Pointer arithmetic keeps pointing at whatever the pointer operand did. */
+		// Pointer arithmetic keeps pointing at whatever the pointer operand did.
 		return a == ManagedPtr ? lhs : rhs;
 	case ObjectRef:
-		/* Only Table III.4 has these, where the two are compared as addresses. */
+		// Only Table III.4 has these, where the two are compared as addresses.
 		return lhs;
 	default:
 		llvm::report_fatal_error ("binary_result: unreachable result type");
 	}
 }
 
-/// Take OP's two operands off the evaluation stack, along with the type it will push
-/// back, or fail the way Table III.2 says to if the stack cannot supply a valid pair.
+/// Take op's two operands off the evaluation stack, with the result type from
+/// whichever ECMA-335 III.1.5 table governs op. Fail if the stack cannot supply a
+/// valid pair.
 llvm::Expected<MethodLLVMEmitter::BinaryOperands>
 MethodLLVMEmitter::pop_binary_operands (BinaryOp op)
 {
@@ -390,32 +386,8 @@ MethodLLVMEmitter::pop_binary_operands (BinaryOp op)
 	return BinaryOperands{value1, value2, *result};
 }
 
-/*
- * III.3.1  add - add numeric values
- *
- *   Format   Assembly Format   Description
- *   58       add               Add two values, returning a new value.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The add instruction adds value2 to value1 and pushes the result on the stack.
- *   Overflow is not detected for integral operations (but see add.ovf);
- *   floating-point overflow returns +inf or -inf. The acceptable operand types and
- *   their corresponding result data type are encapsulated in Table 2: Binary Numeric
- *   Operations.
- *
- * Exceptions:
- *
- *   None.
- *
- * Correctness and Verifiability:
- *
- *   See Table 2: Binary Numeric Operations.
- */
+/// III.3.1 add - adds value2 to value1, per Table III.2 above. Integer overflow wraps
+/// silently, and floating-point overflow produces +/-infinity. add never throws.
 llvm::Error
 MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 {
@@ -427,11 +399,9 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 	llvm::Value *sum;
 
 	if (result->byref) {
-		/*
-		 * A managed pointer plus an integer stays a managed pointer, so index the
-		 * pointer rather than doing the arithmetic on it - that keeps the result
-		 * something the GC can still recognize as pointing into its object.
-		 */
+		// A managed pointer plus an integer stays a managed pointer, so this indexes
+		// the pointer instead of doing the arithmetic on it. That keeps the result
+		// something the GC can still recognize as pointing into its object.
 		bool value1_is_pointer = value1.type->byref;
 		llvm::Value *base = value1_is_pointer ? value1.value : value2.value;
 		llvm::Value *index = value1_is_pointer ? value2.value : value1.value;
@@ -454,33 +424,9 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.64  sub - subtract numeric values
- *
- *   Format   Assembly Format   Description
- *   59       sub               Subtract value2 from value1, returning a new value.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The sub instruction subtracts value2 from value1 and pushes the result on the
- *   stack. Overflow is not detected for the integral operations (see sub.ovf); for
- *   floating-point operands, sub returns +inf on positive overflow, -inf on negative
- *   overflow, and zero on floating-point underflow. The acceptable operand types and
- *   their corresponding result data type are encapsulated in Table III.2: Binary
- *   Numeric Operations.
- *
- * Exceptions:
- *
- *   None.
- *
- * Correctness and Verifiability:
- *
- *   See Table 2: Binary Numeric Operations.
- */
+/// III.3.64 sub - subtracts value2 from value1, per Table III.2 above. Integer
+/// overflow wraps silently. Floating-point overflow produces +/-infinity, and
+/// underflow produces zero. sub never throws.
 llvm::Error
 MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 {
@@ -492,10 +438,9 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 	llvm::Value *difference;
 
 	if (result->byref) {
-		/*
-		 * Only & - int gets a managed pointer back, so value1 is the pointer -
-		 * int - & is a number. Index it the way add does, backwards.
-		 */
+		// When the result is a managed pointer, value1 is always that pointer. Only
+		// `& - int` produces one, per the table above. `int - &` produces a number
+		// instead. This indexes the pointer the same way add does, backwards.
 		llvm::Value *index = coerce (builder, value2.value, native_int_type (builder));
 
 		difference = builder.CreateGEP (builder.getInt8Ty (), value1.value,
@@ -505,7 +450,7 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 		if (!type)
 			return type.takeError ();
 
-		/* & - & and int - & land here: coerce turns a pointer into its address. */
+		// `& - &` and `int - &` land here: coerce turns a pointer into its address.
 		llvm::Value *lhs = coerce (builder, value1.value, *type);
 		llvm::Value *rhs = coerce (builder, value2.value, *type);
 
@@ -517,32 +462,8 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.48  mul - multiply values
- *
- *   Format   Assembly Format   Description
- *   5A       mul               Multiply values.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The mul instruction multiplies value1 by value2 and pushes the result on the
- *   stack. Integral operations silently truncate the upper bits on overflow (see
- *   mul.ovf). For floating-point types, 0 x infinity = NaN. The acceptable operand
- *   types and their corresponding result data types are encapsulated in Table III.2:
- *   Binary Numeric Operations.
- *
- * Exceptions:
- *
- *   None.
- *
- * Correctness and Verifiability:
- *
- *   See Table 2: Binary Numeric Operations.
- */
+/// III.3.48 mul - multiplies value1 by value2, per Table III.2 above. Integer
+/// overflow truncates the high bits silently. mul never throws.
 llvm::Error
 MethodLLVMEmitter::emit_mul (MonoIrBuilder &builder)
 {
@@ -564,10 +485,13 @@ MethodLLVMEmitter::emit_mul (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/// Branch around the divisors an integer division has no answer for.
+/// Branch around the divisor values an integer division has no answer for. Zero always
+/// applies. When is_signed is true, the smallest negative number divided by -1 applies
+/// too.
 ///
-/// LLVM leaves those poison rather than trapping, so nothing downstream would raise
-/// the exception the CIL spec asks for if they were left to the hardware.
+/// LLVM's own division instructions treat those divisors as undefined behavior, not a
+/// defined trap. This function raises the exception ECMA-335 requires before the
+/// division runs.
 void
 MethodLLVMEmitter::emit_division_guards (MonoIrBuilder &builder, llvm::Value *lhs, llvm::Value *rhs,
                                          bool is_signed)
@@ -580,7 +504,8 @@ MethodLLVMEmitter::emit_division_guards (MonoIrBuilder &builder, llvm::Value *lh
 	if (!is_signed)
 		return;
 
-	/* The one quotient with nowhere to go: -2^(n-1) / -1 is 2^(n-1). */
+	// The division -2^(n-1) / -1 has no valid quotient: the true answer, 2^(n-1), is
+	// one more than the type can hold.
 	llvm::Value *minus_one = llvm::ConstantInt::getSigned (type, -1);
 	llvm::Value *smallest = llvm::ConstantInt::get (
 		type, llvm::APInt::getSignedMinValue (type->getIntegerBitWidth ()));
@@ -590,8 +515,8 @@ MethodLLVMEmitter::emit_division_guards (MonoIrBuilder &builder, llvm::Value *lh
 	emit_cond_exception (builder, overflow, "OverflowException");
 }
 
-/// LHS op RHS under the given `llvm.*.with.overflow` intrinsic, throwing
-/// OverflowException if the answer did not fit.
+/// lhs op rhs under the given `llvm.*.with.overflow` intrinsic. If the result does not
+/// fit, this throws OverflowException.
 llvm::Value *
 MethodLLVMEmitter::emit_checked (MonoIrBuilder &builder, llvm::Intrinsic::ID intrinsic,
                                  llvm::Value *lhs, llvm::Value *rhs)
@@ -603,13 +528,13 @@ MethodLLVMEmitter::emit_checked (MonoIrBuilder &builder, llvm::Intrinsic::ID int
 	return value;
 }
 
-/// BASE moved INDEX bytes, forwards or backwards, with the address arithmetic
-/// checked for wraparound.
+/// base moved index bytes, forwards or backwards, with the address arithmetic checked
+/// for wraparound.
 ///
-/// The check runs on the address, but the result comes back out of a GEP: handing the
-/// intrinsic's integer to inttoptr would leave the GC a pointer it can no longer tie
-/// to the object it points into. Only the unsigned forms have a pointer cell in
-/// Table III.7, so the check is unsigned too.
+/// The check runs on the address, but the result comes from a GEP, not from the
+/// checked integer. If code passed that integer to inttoptr, the GC cannot tie the
+/// pointer back to the object it points into. Only the unsigned forms have a pointer
+/// cell in Table III.7, so the check is unsigned too.
 llvm::Value *
 MethodLLVMEmitter::emit_checked_pointer_offset (MonoIrBuilder &builder, llvm::Value *base,
                                                 llvm::Value *index, bool subtract)
@@ -625,61 +550,11 @@ MethodLLVMEmitter::emit_checked_pointer_offset (MonoIrBuilder &builder, llvm::Va
 	                          subtract ? builder.CreateNeg (index) : index);
 }
 
-/*
- * III.3.31  div - divide values
- *
- *   Format   Assembly Format   Description
- *   5B       div               Divide two values to return a quotient or
- *                              floating-point result.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   result = value1 div value2 satisfies the following conditions:
- *
- *     |result| = |value1| / |value2|, and
- *     sign(result) = +, if sign(value1) = sign(value2), or
- *                    -, if sign(value1) ~= sign(value2)
- *
- *   The div instruction computes result and pushes it on the stack.
- *
- *   Integer division truncates towards zero.
- *
- *   Floating-point division is per IEC 60559:1989. In particular, division of a
- *   finite number by 0 produces the correctly signed infinite value and
- *
- *     0 / 0 = NaN
- *     infinity / infinity = NaN.
- *     X / infinity = 0
- *
- *   The acceptable operand types and their corresponding result data type are
- *   encapsulated in Table 2: Binary Numeric Operations.
- *
- * Exceptions:
- *
- *   Integral operations throw System.ArithmeticException if the result cannot be
- *   represented in the result type. (This can happen if value1 is the smallest
- *   representable integer value, and value2 is -1.)
- *
- *   Integral operations throw DivideByZeroException if value2 is zero.
- *
- *   Floating-point operations never throw an exception (they produce NaNs or
- *   infinities instead, see Partition I).
- *
- * Example:
- *
- *   +14 div +3  is 4
- *   +14 div -3  is -4
- *   -14 div +3  is -4
- *   -14 div -3  is 4
- *
- * Correctness and Verifiability:
- *
- *   See Table 2: Binary Numeric Operations.
- */
+/// III.3.31 div - divides value1 by value2, per Table III.2 above. Integer division
+/// truncates toward zero. Floating-point division follows IEEE 754 and never throws.
+///
+/// If value2 is zero, this throws DivideByZeroException. If value1 is the smallest
+/// representable integer and value2 is -1, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_div (MonoIrBuilder &builder)
 {
@@ -699,7 +574,7 @@ MethodLLVMEmitter::emit_div (MonoIrBuilder &builder)
 	if ((*type)->isFloatingPointTy ()) {
 		quotient = builder.CreateFDiv (lhs, rhs);
 	} else {
-		/* sdiv, not udiv: div.un is a separate instruction with its own table. */
+		// sdiv, not udiv: div.un is a separate instruction with its own table.
 		emit_division_guards (builder, lhs, rhs, true);
 		quotient = builder.CreateSDiv (lhs, rhs);
 	}
@@ -708,60 +583,11 @@ MethodLLVMEmitter::emit_div (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.55  rem - compute remainder
- *
- *   Format   Assembly Format   Description
- *   5D       rem               Remainder when dividing one value by another.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The rem instruction divides value1 by value2 and pushes the remainder result on
- *   the stack. The acceptable operand types and their corresponding result data type
- *   are encapsulated in Table 2: Binary Numeric Operations.
- *
- *   For integer operands
- *
- *     result = value1 rem value2 satisfies the following conditions:
- *
- *       result = value1 - value2 x (value1 div value2), and
- *       0 <= |result| < |value2|, and
- *       sign(result) = sign(value1),
- *
- *     where div is the division instruction, which truncates towards zero.
- *
- *   For floating-point operands
- *
- *     rem is defined similarly as for integer operands, except that, if value2 is
- *     zero or value1 is infinity, result is NaN. If value2 is infinity, result is
- *     value1. This definition is different from the one for floating-point remainder
- *     in the IEC 60559:1989 Standard. That Standard specifies that value1 div value2
- *     is the nearest integer instead of truncating towards zero.
- *     System.Math.IEEERemainder (see Partition IV) provides the IEC 60559:1989
- *     behavior.
- *
- * Exceptions:
- *
- *   Integral operations throw System.DivideByZeroException if value2 is zero.
- *
- *   Integral operations can throw System.ArithmeticException if value1 is the
- *   smallest representable integer value and value2 is -1.
- *
- * Example:
- *
- *   +10 rem +6  is 4  (+10 div +6 = 1)
- *   +10 rem -6  is 4  (+10 div -6 = -1)
- *   -10 rem +6  is -4 (-10 div +6 = -1)
- *   -10 rem -6  is -4 (-10 div -6 = 1)
- *
- * Correctness and Verifiability:
- *
- *   See Table 2: Binary Numeric Operations.
- */
+/// III.3.55 rem - computes value1 rem value2, per Table III.2 above: the remainder
+/// after integer division truncated toward zero, or fmod for floating-point operands.
+///
+/// If value2 is zero, this throws DivideByZeroException. If value1 is the smallest
+/// representable integer and value2 is -1, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_rem (MonoIrBuilder &builder)
 {
@@ -779,7 +605,7 @@ MethodLLVMEmitter::emit_rem (MonoIrBuilder &builder)
 	llvm::Value *remainder;
 
 	if ((*type)->isFloatingPointTy ()) {
-		/* frem is fmod, which truncates towards zero - not IEEERemainder. */
+		// frem is fmod, which truncates toward zero - not IEEERemainder.
 		remainder = builder.CreateFRem (lhs, rhs);
 	} else {
 		emit_division_guards (builder, lhs, rhs, true);
@@ -790,38 +616,10 @@ MethodLLVMEmitter::emit_rem (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.32  div.un - divide integer values, unsigned
- *
- *   Format   Assembly Format   Description
- *   5C       div.un            Divide two values, unsigned, returning a quotient.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The div.un instruction computes value1 divided by value2, both taken as unsigned
- *   integers, and pushes the result on the stack. The acceptable operand types and
- *   their corresponding result data type are encapsulated in Table 5: Integer
- *   Operations.
- *
- * Exceptions:
- *
- *   System.DivideByZeroException is thrown if value2 is zero.
- *
- * Example:
- *
- *   +5 div.un +3  is 1
- *   +5 div.un -3  is 0
- *   -5 div.un +3  is 1431655763 or 0x55555553
- *   -5 div.un -3  is 0
- *
- * Correctness and Verifiability:
- *
- *   See Table 5: Integer Operations.
- */
+/// III.3.32 div.un - divides value1 by value2 as unsigned integers, per Table III.5
+/// above.
+///
+/// If value2 is zero, this throws DivideByZeroException.
 llvm::Error
 MethodLLVMEmitter::emit_div_un (MonoIrBuilder &builder)
 {
@@ -837,53 +635,17 @@ MethodLLVMEmitter::emit_div_un (MonoIrBuilder &builder)
 	llvm::Value *lhs = coerce (builder, value1.value, *type);
 	llvm::Value *rhs = coerce (builder, value2.value, *type);
 
-	/* No overflow case to guard: only signed division has a quotient that cannot fit. */
+	// No overflow case to guard: only signed division has a quotient that cannot fit.
 	emit_division_guards (builder, lhs, rhs, false);
 
 	push_stack (builder.CreateUDiv (lhs, rhs), result);
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.56  rem.un - compute integer remainder, unsigned
- *
- *   Format   Assembly Format   Description
- *   5E       rem.un            Remainder when dividing one unsigned value by another.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The rem.un instruction divides value1 by value2 and pushes the remainder result
- *   on the stack. (rem.un treats its arguments as unsigned integers, while rem treats
- *   them as signed integers.)
- *
- *   result = value1 rem.un value2 satisfies the following conditions:
- *
- *     result = value1 - value2 x (value1 div.un value2), and
- *     0 <= result < value2,
- *
- *   where div.un is the unsigned division instruction. rem.un is unspecified for
- *   floating-point numbers. The acceptable operand types and their corresponding
- *   result data type are encapsulated in Table 5: Integer Operations.
- *
- * Exceptions:
- *
- *   Integral operations throw System.DivideByZeroException if value2 is zero.
- *
- * Example:
- *
- *   +5 rem.un +3  is 2  (+5 div.un +3 = 1)
- *   +5 rem.un -3  is 5  (+5 div.un -3 = 0)
- *   -5 rem.un +3  is 2  (-5 div.un +3 = 1431655763 or 0x55555553)
- *   -5 rem.un -3  is -5 or 0xfffffffb  (-5 div.un -3 = 0)
- *
- * Correctness and Verifiability:
- *
- *   See Table 5: Integer Operations.
- */
+/// III.3.56 rem.un - computes the unsigned integer remainder of value1 divided by
+/// value2, per Table III.5 above.
+///
+/// If value2 is zero, this throws DivideByZeroException.
 llvm::Error
 MethodLLVMEmitter::emit_rem_un (MonoIrBuilder &builder)
 {
@@ -905,32 +667,8 @@ MethodLLVMEmitter::emit_rem_un (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.2  add.ovf.<signed> - add integer values with overflow check
- *
- *   Format   Assembly Format   Description
- *   D6       add.ovf           Add signed integer values with overflow check.
- *   D7       add.ovf.un        Add unsigned integer values with overflow check.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The add.ovf instruction adds value1 and value2 and pushes the result on the
- *   stack. The acceptable operand types and their corresponding result data type are
- *   encapsulated in Table 7: Overflow Arithmetic Operations.
- *
- * Exceptions:
- *
- *   System.OverflowException is thrown if the result cannot be represented in the
- *   result type.
- *
- * Correctness and Verifiability:
- *
- *   See Table 7: Overflow Arithmetic Operations.
- */
+/// III.3.2 add.ovf / add.ovf.un - adds value2 to value1, per Table III.7 above. If the
+/// result does not fit in the result type, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
 {
@@ -965,36 +703,8 @@ MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.65  sub.ovf.<type> - subtract integer values, checking for overflow
- *
- *   Format   Assembly Format   Description
- *   DA       sub.ovf           Subtract native int from a native int. Signed result
- *                              shall fit in same size.
- *   DB       sub.ovf.un        Subtract native unsigned int from a native unsigned
- *                              int. Unsigned result shall fit in same size.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The sub.ovf instruction subtracts value2 from value1 and pushes the result on the
- *   stack. The type of the values and the return type are specified by the
- *   instruction. An exception is thrown if the result does not fit in the result type.
- *   The acceptable operand types and their corresponding result data type is
- *   encapsulated in Table 7: Overflow Arithmetic Operations.
- *
- * Exceptions:
- *
- *   System.OverflowException is thrown if the result can not be represented in the
- *   result type.
- *
- * Correctness and Verifiability:
- *
- *   See Table 7: Overflow Arithmetic Operations.
- */
+/// III.3.65 sub.ovf / sub.ovf.un - subtracts value2 from value1, per Table III.7
+/// above. If the result does not fit in the result type, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 {
@@ -1007,7 +717,7 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	llvm::Value *difference;
 
 	if (result->byref) {
-		/* As with sub, only & - int gets a pointer back, so value1 is the pointer. */
+		// As with sub, only `& - int` gives back a pointer, so value1 is the pointer.
 		difference = emit_checked_pointer_offset (
 			builder, value1.value,
 			coerce (builder, value2.value, native_int_type (builder)), true);
@@ -1016,7 +726,7 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 		if (!type)
 			return type.takeError ();
 
-		/* & - & and int - & land here: coerce turns a pointer into its address. */
+		// `& - &` and `int - &` land here: coerce turns a pointer into its address.
 		difference = emit_checked (builder,
 		                           is_unsigned ? llvm::Intrinsic::usub_with_overflow
 		                                       : llvm::Intrinsic::ssub_with_overflow,
@@ -1028,35 +738,8 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.49  mul.ovf.<type> - multiply integer values with overflow check
- *
- *   Format   Assembly Format   Description
- *   D8       mul.ovf           Multiply signed integer values. Signed result shall
- *                              fit in same size.
- *   D9       mul.ovf.un        Multiply unsigned integer values. Unsigned result
- *                              shall fit in same size.
- *
- * Stack Transition:
- *
- *   ..., value1, value2 -> ..., result
- *
- * Description:
- *
- *   The mul.ovf instruction multiplies integers, value1 and value2, and pushes the
- *   result on the stack. An exception is thrown if the result will not fit in the
- *   result type. The acceptable operand types and their corresponding result data
- *   types are encapsulated in Table 7: Overflow Arithmetic Operations.
- *
- * Exceptions:
- *
- *   System.OverflowException is thrown if the result can not be represented in the
- *   result type.
- *
- * Correctness and Verifiability:
- *
- *   See Table 8: Conversion Operations.
- */
+/// III.3.49 mul.ovf / mul.ovf.un - multiplies value1 by value2, per Table III.7
+/// above. If the result does not fit in the result type, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned)
 {
@@ -1065,7 +748,7 @@ MethodLLVMEmitter::emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	if (!operands)
 		return operands.takeError ();
 
-	/* Table III.7 gives mul.ovf no pointer cell, so there is only the scalar case. */
+	// Table III.7 gives mul.ovf no pointer cell, so there is only the scalar case.
 	auto [value1, value2, result] = *operands;
 	llvm::Expected<llvm::Type *> type = convert_type (result);
 	if (!type)
@@ -1081,39 +764,10 @@ MethodLLVMEmitter::emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.50  neg - negate
- *
- *   Format   Assembly Format   Description
- *   65       neg               Negate value.
- *
- * Stack Transition:
- *
- *   ..., value -> ..., result
- *
- * Description:
- *
- *   The neg instruction negates value and pushes the result on top of the stack. The
- *   return type is the same as the operand type.
- *
- *   Negation of integral values is standard twos-complement negation. In particular,
- *   negating the most negative number (which does not have a positive counterpart)
- *   yields the most negative number. To detect this overflow use the sub.ovf
- *   instruction instead (i.e., subtract from 0).
- *
- *   Negating a floating-point number cannot overflow; negating NaN returns NaN.
- *
- *   The acceptable operand types and their corresponding result data types are
- *   encapsulated in Table 3: Unary Numeric Operations.
- *
- * Exceptions:
- *
- *   None.
- *
- * Correctness and Verifiability:
- *
- *   See Table 3: Unary Numeric Operations.
- */
+/// III.3.50 neg - negates value, per Table III.3 below. Twos-complement negation wraps
+/// the smallest representable integer to itself instead of overflowing. sub.ovf from 0
+/// detects that overflow when code needs it. Negating a float never overflows, and
+/// negating NaN returns NaN.
 llvm::Error
 MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 {
@@ -1124,7 +778,7 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 	StackType type = stack_type (value.type);
 	MonoType *result;
 
-	/* Table III.3: Unary Numeric Operations - each numeric type to itself. */
+	// Table III.3: Unary Numeric Operations - each numeric type maps to itself.
 	switch (type) {
 	case Int32:
 		result = mono_get_int32_type ();
@@ -1136,7 +790,7 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 		result = mono_get_int_type ();
 		break;
 	case Float:
-		/* F keeps the width it already has, r4 or r8. */
+		// F keeps the width it already has, r4 or r8.
 		result = value.type;
 		break;
 	default:
@@ -1157,36 +811,8 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/*
- * III.3.24  ckfinite - check for a finite real number
- *
- *   Format   Assembly Format   Description
- *   C3       ckfinite          Throw ArithmeticException if value is not a finite
- *                              number.
- *
- * Stack Transition:
- *
- *   ..., value -> ..., value
- *
- * Description:
- *
- *   The ckfinite instruction throws ArithmeticException if value (a floating-point
- *   number) is either a "not a number" value (NaN) or +/- infinity value. ckfinite
- *   leaves the value on the stack if no exception is thrown. Execution behavior is
- *   unspecified if value is not a floating-point number.
- *
- * Exceptions:
- *
- *   System.ArithmeticException is thrown if value is a NaN or an infinity.
- *
- * Correctness:
- *
- *   Correct CIL guarantees that value is a floating-point number.
- *
- * Verifiability:
- *
- *   There are no additional verification requirements.
- */
+/// III.3.24 ckfinite - checks value for validity. If value is NaN or an infinity, this
+/// throws ArithmeticException. Otherwise it leaves value on the stack unchanged.
 llvm::Error
 MethodLLVMEmitter::emit_ckfinite (MonoIrBuilder &builder)
 {
@@ -1199,11 +825,10 @@ MethodLLVMEmitter::emit_ckfinite (MonoIrBuilder &builder)
 		return invalid_il (llvm::Twine ("ckfinite is not defined for operand type ")
 		                   + describe (value.type, stack_type (value.type)));
 
-	/*
-	 * |x| compared unordered-or-equal against infinity says yes for exactly the
-	 * three values this must reject: NaN by being unordered, either infinity by
-	 * being equal.
-	 */
+	// UEQ (unordered or equal) against infinity is true for exactly the values
+	// ckfinite must reject. NaN triggers it because any comparison with NaN is
+	// unordered. Either infinity triggers it because its magnitude equals positive
+	// infinity.
 	llvm::Type *ftype = value.value->getType ();
 	llvm::Value *magnitude = builder.CreateUnaryIntrinsic (llvm::Intrinsic::fabs, value.value);
 
