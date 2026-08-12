@@ -1001,6 +1001,7 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	clauses = cfg->header->clauses;
 	num_clauses = cfg->header->num_clauses;
 	clause_state.resize (num_clauses);
+	collect_sym_seq_points ();
 	filter_mode = true;
 
 	size_t begin = clauses[clause_index].data.filter_offset;
