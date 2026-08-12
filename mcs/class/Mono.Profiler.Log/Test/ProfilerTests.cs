@@ -213,10 +213,17 @@ namespace MonoTests.Mono.Profiler.Log {
 
 				Assert.NotNull (alloc);
 				AssertExtensions.GreaterThanOrEqualTo (alloc.Backtrace.Count, 6);
-				Assert.Equal (jitOne.MethodPointer, alloc.Backtrace [alloc.Backtrace.Count - 6]);
-				Assert.Equal (jitTwo.MethodPointer, alloc.Backtrace [alloc.Backtrace.Count - 5]);
-				Assert.Equal (jitThree.MethodPointer, alloc.Backtrace [alloc.Backtrace.Count - 4]);
-				Assert.Equal (jitFour.MethodPointer, alloc.Backtrace [alloc.Backtrace.Count - 3]);
+
+				// The frames above Four () are the engine's, not the test's. A compiled
+				// Four () allocates through two wrapper frames, and an interpreted one
+				// allocates in the runtime and adds no managed frame at all. So find where
+				// the test methods start instead of counting back from the innermost frame.
+				var allocFirst = alloc.Backtrace.ToList ().IndexOf (jitOne.MethodPointer);
+
+				AssertExtensions.GreaterThanOrEqualTo (allocFirst, 0);
+				Assert.Equal (jitTwo.MethodPointer, alloc.Backtrace [allocFirst + 1]);
+				Assert.Equal (jitThree.MethodPointer, alloc.Backtrace [allocFirst + 2]);
+				Assert.Equal (jitFour.MethodPointer, alloc.Backtrace [allocFirst + 3]);
 
 				var raise = events.OfType<ThrowEvent> ().SingleOrDefault (ev =>
 					ev.ObjectPointer == alloc.ObjectPointer);
