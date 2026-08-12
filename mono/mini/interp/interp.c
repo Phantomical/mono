@@ -7622,11 +7622,26 @@ interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_index, g
 	FrameClauseArgs clause_args;
 
 	/*
+	 * A filter runs before the stack unwinds. Every frame between the throw site
+	 * and the clause owner is therefore still live, and a walk taken inside the
+	 * filter has to report them. Hang the clause off the innermost frame, which
+	 * reaches the owner through those frames instead of over them.
+	 *
+	 * The innermost frame does not always reach the owner, because the
+	 * interpreter did not make every throw. Fall back to the owner then.
+	 */
+	InterpFrame *innermost = context->current_frame;
+	InterpFrame *f;
+
+	for (f = innermost; f && f != iframe; f = f->parent)
+		;
+
+	/*
 	 * Have to run the clause in a new frame which is a copy of IFRAME, since
 	 * during debugging, there are two copies of the frame on the stack.
 	 */
 	InterpFrame child_frame = {0};
-	child_frame.parent = iframe;
+	child_frame.parent = f ? innermost : iframe;
 	child_frame.imethod = iframe->imethod;
 	child_frame.stack = (stackval*)context->stack_pointer;
 	child_frame.retval = &retval;
