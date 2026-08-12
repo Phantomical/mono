@@ -11,6 +11,18 @@ public class Tests
 	static int nloops = 1;
 	static int nthreads = 10;
 
+	// Where the runtime loaded corlib from, which is the profile directory of
+	// whatever build is under test. Asking corlib rather than naming a path
+	// keeps this off an installed prefix: with one hardcoded, a machine with no
+	// install fails before loading anything, and a machine with one stresses
+	// the *installed* assemblies instead of the ones just built.
+	static string AssemblyDir ()
+	{
+		string dir = Path.GetDirectoryName (typeof (object).Assembly.Location);
+
+		return string.IsNullOrEmpty (dir) ? AppDomain.CurrentDomain.BaseDirectory : dir;
+	}
+
 	public static void Main (String[] args) {
 		if (args.Length > 0)
 			nloops = int.Parse (args [0]);
@@ -21,7 +33,7 @@ public class Tests
 			Thread[] threads = new Thread [nthreads];
 			for (int i = 0; i < nthreads; ++i) {
 				threads [i] = new Thread (delegate () {
-						foreach (string s in Directory.GetFiles ("/usr/local/lib/mono/4.5", "*.dll")) {
+						foreach (string s in Directory.GetFiles (AssemblyDir (), "*.dll")) {
 							AssemblyName.GetAssemblyName (s);
 						}
 					});
