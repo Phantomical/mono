@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -21,9 +22,12 @@ class Driver
 			AssemblyName assemblyName = new AssemblyName ();
 			assemblyName.Name = ASSEMBLY_NAME;
 
+			// Save into the temp directory rather than the working directory, which every
+			// arm of this test shares. The assembly is loaded back below, so the reader has
+			// it mapped while another arm's Save is unlinking and rewriting the same path.
 			assembly =
 				Thread.GetDomain ().DefineDynamicAssembly (
-					assemblyName, AssemblyBuilderAccess.RunAndSave, ".");
+					assemblyName, AssemblyBuilderAccess.RunAndSave, Path.GetTempPath ());
 
 			module = assembly.DefineDynamicModule ("repro", "bug-462592-result.exe");
 		}
@@ -58,7 +62,7 @@ class Driver
 
 			assembly.Save ("bug-462592-result.exe");
 
-			Assembly res = Assembly.LoadFrom ("bug-462592-result.exe");
+			Assembly res = Assembly.LoadFrom (Path.Combine (Path.GetTempPath (), "bug-462592-result.exe"));
 			res.EntryPoint.Invoke (null, new object[0]);
 			return 0;
 		}
