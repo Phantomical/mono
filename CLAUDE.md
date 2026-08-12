@@ -504,6 +504,12 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Do not include archeology. Comments referencing deleted/legacy code are generally not
   useful since it is likely that the code will evolve more, at which point those comments
   are obsolete.
+- Text quoted from a standard is never rewritten. Several files carry the ECMA-335
+  Partition III passage for the opcode they emit, verbatim, and that is deliberate: it is
+  the normative text the code has to satisfy, and it belongs next to the code that
+  satisfies it. Summarising one turns the thing you check against into a paraphrase that
+  nothing checks. The style rules govern what we write about the code, not the quote. If a
+  block is genuinely in the wrong file, move it - do not shorten it.
 - Do not reference the current plan or current task list. For people reading the code later
   on without access to the plan documents these references are noise that hide what is
   actually going on.
