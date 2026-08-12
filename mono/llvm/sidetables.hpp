@@ -1,7 +1,7 @@
 /**
  * \file
  * \brief The wire format of the side tables the compiler writes into a method's
- * object, shared between the writer (compiler.cpp) and the reader (jinfo.cpp).
+ * object, and the reader that takes one back apart.
  *
  * Three sections, all target-neutral and code-relative:
  *
@@ -88,6 +88,8 @@
 #define MONO_LLVM_SIDETABLES_HPP
 
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 namespace mono {
 
@@ -125,6 +127,73 @@ enum MonoUnwindWireOp : uint8_t {
 	MONO_UNWIND_OP_RESTORE = 7,        /* reg reverts to its entry rule */
 	MONO_UNWIND_OP_SAME_VALUE = 8,     /* reg is not saved after all */
 };
+
+/// One `.mono_unwind` record in the form its readers work in.
+struct UnwindRecord {
+	uint32_t offset;
+	uint8_t op;
+	int32_t reg;
+	int64_t value;
+};
+
+/// One field of a side table. The tables are packed and little-endian whatever
+/// the host is, so an aligned load of a field is not available.
+template <typename T>
+T
+read_le (const uint8_t *p)
+{
+	T value;
+
+	memcpy (&value, p, sizeof (T));
+	return value;
+}
+
+/// The records of the `.mono_unwind` block that describes the function linked
+/// at code, or false when the section holds no such block.
+inline bool
+parse_unwind_records (const uint8_t *section, size_t size, const uint8_t *code,
+                      std::vector<UnwindRecord> &out)
+{
+	if (section == nullptr)
+		return false;
+
+	const uint8_t *end = section + size;
+
+	for (const uint8_t *block = section; (size_t) (end - block) >= unwind_header_size;) {
+		if (read_le<uint32_t> (block) != unwind_section_magic)
+			return false;
+		if (read_le<uint16_t> (block + 4) != unwind_section_version)
+			return false;
+
+		uint32_t count = read_le<uint32_t> (block + 8);
+		const uint8_t *function =
+			(const uint8_t *) (uintptr_t) read_le<uint64_t> (block + 12);
+		const uint8_t *p = block + unwind_header_size;
+		size_t records = (size_t) count * unwind_record_size;
+
+		if ((size_t) (end - p) < records)
+			return false;
+		if (function != code) {
+			block = p + records;
+			continue;
+		}
+
+		out.reserve (count);
+		for (uint32_t i = 0; i < count; ++i, p += unwind_record_size) {
+			UnwindRecord r;
+
+			r.offset = read_le<uint32_t> (p);
+			r.op = p[4];
+			r.reg = read_le<int32_t> (p + 5);
+			r.value = read_le<int64_t> (p + 9);
+			out.push_back (r);
+		}
+
+		return true;
+	}
+
+	return false;
+}
 
 } // namespace mono
 

@@ -35,6 +35,8 @@ ipch/
 obj/
 [Bb]in
 [Dd]ebug*/
+# Source, not a Visual Studio output directory the rule above is aimed at.
+!mono/llvm/debugging/
 [Rr]elease*/
 Ankh.NoLoad
 *.gpState

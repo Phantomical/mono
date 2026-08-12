@@ -3,6 +3,7 @@
 #include "translate.hpp"
 
 #include "arch/arch.hpp"
+#include "debugging/perf/dump-method.hpp"
 #include "externals.hpp"
 #include "jinfo.hpp"
 #include "method-to-llvm.hpp"
@@ -241,6 +242,8 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	}();
 	if (!compiled)
 		return compiled.takeError ();
+
+	perf::dump_method (method, *compiled);
 
 	/*
 	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`;

@@ -46,70 +46,6 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-struct WireRecord {
-	uint32_t offset;
-	uint8_t op;
-	int32_t reg;
-	int64_t value;
-};
-
-template <typename T>
-T
-read_le (const uint8_t *p)
-{
-	T value;
-
-	memcpy (&value, p, sizeof (T));
-	return value;
-}
-
-/// The records of the block describing the function linked at CODE, or false
-/// when the section holds no such block.
-bool
-parse_unwind_records (const uint8_t *section, size_t size, const uint8_t *code,
-                      std::vector<WireRecord> &out)
-{
-	if (section == nullptr)
-		return false;
-
-	const uint8_t *end = section + size;
-
-	for (const uint8_t *block = section; (size_t) (end - block) >= unwind_header_size;) {
-		if (read_le<uint32_t> (block) != unwind_section_magic)
-			return false;
-		if (read_le<uint16_t> (block + 4) != unwind_section_version)
-			return false;
-
-		uint32_t count = read_le<uint32_t> (block + 8);
-		const uint8_t *function =
-			(const uint8_t *) (uintptr_t) read_le<uint64_t> (block + 12);
-		const uint8_t *p = block + unwind_header_size;
-		size_t records = (size_t) count * unwind_record_size;
-
-		if ((size_t) (end - p) < records)
-			return false;
-		if (function != code) {
-			block = p + records;
-			continue;
-		}
-
-		out.reserve (count);
-		for (uint32_t i = 0; i < count; ++i, p += unwind_record_size) {
-			WireRecord r;
-
-			r.offset = read_le<uint32_t> (p);
-			r.op = p[4];
-			r.reg = read_le<int32_t> (p + 5);
-			r.value = read_le<int64_t> (p + 9);
-			out.push_back (r);
-		}
-
-		return true;
-	}
-
-	return false;
-}
-
 /// The finally guard records, or an error if the section is malformed or names a
 /// slot a stack walk could not reach.
 ///
@@ -193,7 +129,7 @@ parse_guards (const uint8_t *section, size_t size, uint32_t code_size)
 /// the entry state is the leading run of offset-zero records - which is an
 /// offset where the entry saved the register and same_value where it did not.
 Expected<GSList *>
-transcode_unwind (const std::vector<WireRecord> &records)
+transcode_unwind (const std::vector<UnwindRecord> &records)
 {
 	GSList *ops = nullptr;
 	int remember_depth = 0;
@@ -223,7 +159,7 @@ transcode_unwind (const std::vector<WireRecord> &records)
 	std::vector<std::pair<int32_t, int64_t>> entry_offsets;
 	bool in_entry_state = true;
 
-	for (const WireRecord &r : records) {
+	for (const UnwindRecord &r : records) {
 		if (r.offset != 0)
 			in_entry_state = false;
 
@@ -545,7 +481,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	guint8 *code = (guint8 *) compiled.code;
 	guint32 code_size = (guint32) compiled.code_size;
 
-	std::vector<WireRecord> records;
+	std::vector<UnwindRecord> records;
 	if (!parse_unwind_records (compiled.unwind_table, compiled.unwind_table_size,
 	                           compiled.code, records))
 		return createStringError (inconvertibleErrorCode (),

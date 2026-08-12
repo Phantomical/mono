@@ -5,6 +5,7 @@
 
 #include "codemem.hpp"
 
+#include "debugging/perf/jitdump.hpp"
 #include "timing.hpp"
 
 #include <llvm/ADT/STLExtras.h>
@@ -245,6 +246,11 @@ CodeSlabs::allocate_object (size_t code_size, size_t code_align, size_t data_siz
 		code_align = 1;
 	if (data_align == 0)
 		data_align = 1;
+
+	// Nothing reads these bytes. They keep the next object out of the range a
+	// perf dump gives this one's frame descriptions.
+	if (code_size != 0)
+		code_size += perf::code_slack ();
 
 	std::lock_guard<std::mutex> lock (mutex_);
 

@@ -109,6 +109,7 @@ G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
 	uint64_t c, struct _Unwind_Exception *d, struct _Unwind_Context *e);
 #endif
 #include "../llvm/runtime.h"
+#include "../llvm/debugging/perf/perf.h"
 #include "mono/metadata/icall-signatures.h"
 #include "mono/utils/mono-tls-inline.h"
 
@@ -429,6 +430,10 @@ void *(mono_global_codeman_reserve) (int size)
 	if (mono_aot_only)
 		g_error ("Attempting to allocate from the global code manager while running in aot-only mode.\n");
 
+	/* Nothing reads these bytes. They keep the next trampoline out of the range
+	 * a perf dump gives this one's frame description. */
+	size += mono_llvm_perf_code_slack ();
+
 	if (!global_codeman) {
 		/* This can happen during startup */
 		global_codeman = mono_code_manager_new ();
@@ -620,16 +625,6 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 	copy->name = g_strdup (info->name);
 	copy->method = info->method;
 
-	/*
-	 * Every stub and thunk the runtime plants comes through here, and they sit
-	 * on the call path of the code around them, so a profile that cannot name
-	 * them has unattributed gaps in exactly the hot places. Code in an AOT
-	 * image is already named by the image's own symbol table.
-	 */
-	if (!aot && copy->code && copy->code_size && mono_jit_dump_is_enabled ())
-		mono_emit_jit_dump_code (copy->name ? copy->name : "trampoline",
-					 copy->code, copy->code_size, NULL, 0);
-
 	if (info->unwind_ops) {
 		copy->uw_info = mono_unwind_ops_encode (info->unwind_ops, &copy->uw_info_len);
 		copy->owns_uw_info = TRUE;
@@ -645,6 +640,18 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 		copy->uw_info = info->uw_info;
 		copy->uw_info_len = info->uw_info_len;
 	}
+
+	/*
+	 * Every stub and thunk the runtime plants comes through here, and each sits
+	 * on the call path of the code around it. So a profile that cannot name them
+	 * has unattributed gaps in exactly the hot places, and one that cannot unwind
+	 * out of them loses every managed frame above. Code in an AOT image is
+	 * already named by the image's own symbol table.
+	 */
+	if (!aot && copy->code && copy->code_size)
+		mono_llvm_perf_dump_stub (copy->name ? copy->name : "trampoline",
+					  copy->code, copy->code_size, copy->uw_info,
+					  copy->uw_info_len);
 
 	mono_lldb_save_trampoline_info (info);
 	mixed_callstack_plugin_save_trampoline_info (info, domain);

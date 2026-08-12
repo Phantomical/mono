@@ -2,6 +2,7 @@
 
 #include "dispatcher.hpp"
 
+#include "debugging/perf/dump-method.hpp"
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
 #include "minimal-compile.hpp"
@@ -115,6 +116,7 @@ build_dispatcher (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 	if (!compiled)
 		return compiled.takeError ();
 
+	perf::dump_method (method, *compiled);
 	remember (*compiled, nullptr);
 
 	if (is_jit_trace_enabled ())

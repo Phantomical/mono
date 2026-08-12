@@ -20,6 +20,7 @@
 #include "arch/amd64/amd64.hpp"
 #include "arch/arch.hpp"
 #include "codemem.hpp"
+#include "debugging/perf/jitdump.hpp"
 
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/ADT/StringRef.h>
@@ -42,7 +43,6 @@ namespace {
  */
 constexpr size_t stubs_per_slab = 2048;
 constexpr size_t slot_region_size = stubs_per_slab * sizeof (void *);
-constexpr size_t stub_region_size = stubs_per_slab * arch::stub_block_size;
 
 void
 stub_not_initialized ()
@@ -52,7 +52,17 @@ stub_not_initialized ()
 
 } // namespace
 
-StubSlabs::StubSlabs (CodeSlabs *slabs) : slabs_ (slabs), next_ (stubs_per_slab) {}
+/*
+ * A stub is a jump and never fills its block. The rest of the block is the room
+ * a perf dump's record for one stub keeps its frame description in, and a second
+ * stub inside that room would take it. The slack is a multiple of 16, so a wider
+ * block leaves every stub as aligned as a bare one.
+ */
+StubSlabs::StubSlabs (CodeSlabs *slabs)
+	: slabs_ (slabs), next_ (stubs_per_slab),
+	  stride_ (arch::stub_block_size + perf::code_slack ())
+{
+}
 
 StubSlabs::~StubSlabs ()
 {
@@ -106,7 +116,7 @@ StubSlabs::acquire ()
 	char *base = batches_.back ().base;
 	size_t i = next_++;
 
-	return Stub (base + slot_region_size + i * arch::stub_block_size,
+	return Stub (base + slot_region_size + i * stride_,
 	             reinterpret_cast<std::atomic<void *> *> (base + i * sizeof (void *)));
 }
 
@@ -114,7 +124,7 @@ llvm::Error
 StubSlabs::add_slab ()
 {
 	llvm::Expected<CodeSlabs::Alloc> batch = slabs_->allocate_writable (
-		slot_region_size + stub_region_size, arch::stub_block_size);
+		slot_region_size + stubs_per_slab * stride_, arch::stub_block_size);
 
 	if (!batch)
 		return batch.takeError ();

@@ -24,6 +24,19 @@ namespace mono::arch {
 constexpr llvm::Triple::ArchType target_arch = llvm::Triple::x86_64;
 
 /*
+ * What a DWARF CIE for this target says: which column holds the return address,
+ * and the factors a CFI program's operands are scaled by.
+ *
+ * The alignment factors are what make the common operands fit in one LEB byte.
+ * Every instruction boundary is a legal code offset here, and a saved register
+ * always lands on an 8-byte boundary below the CFA.
+ */
+constexpr unsigned dwarf_return_address_reg = 16; /* RIP */
+constexpr unsigned dwarf_stack_pointer_reg = 7;   /* RSP */
+constexpr int dwarf_code_alignment_factor = 1;
+constexpr int dwarf_data_alignment_factor = -8;
+
+/*
  * A stub is the 6 bytes of `jmpq *slot(%rip)` padded with int3 out to 16.
  *
  * Stock JITLink stubs are those 6 bytes at alignment 1, so they pack tightly

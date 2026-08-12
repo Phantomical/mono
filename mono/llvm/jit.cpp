@@ -163,16 +163,6 @@ is_mono_pass (StringRef pass)
 
 } // namespace
 
-template<typename T>
-static T
-read_le (const uint8_t *p)
-{
-	T value;
-
-	std::memcpy (&value, p, sizeof (T));
-	return value;
-}
-
 /*
  * Turns the linked `.mono_lines` into per-function rows. Each row gives the IL
  * offset in effect at an offset into a function. Sequence-point markers ride the

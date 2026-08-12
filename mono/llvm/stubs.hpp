@@ -89,6 +89,9 @@ private:
 	std::vector<CodeSlabs::Alloc> batches_;
 	std::vector<Stub> free_;
 	size_t next_;
+	/// How far apart two stubs sit, which is the block size and whatever a perf
+	/// dump needs behind it.
+	size_t stride_;
 };
 
 /// The stub table.

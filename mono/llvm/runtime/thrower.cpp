@@ -2,6 +2,7 @@
 
 #include "thrower.hpp"
 
+#include "debugging/perf/dump-method.hpp"
 #include "jinfo.hpp"
 #include "jit.hpp"
 #include "naming.hpp"
@@ -87,6 +88,8 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 			name);
 		if (!compiled)
 			return compiled.takeError ();
+
+		perf::dump_method (method, *compiled);
 
 		Expected<MonoJitInfo *> jinfo = register_jit_info (
 			domain, method, nullptr, *compiled, CodeKind::Body);
