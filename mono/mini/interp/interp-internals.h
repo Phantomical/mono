@@ -275,6 +275,18 @@ typedef struct {
 	 * thread exited the interpreter)
 	 */
 	InterpFrame *safepoint_frame;
+	/* The frame that the interpreter loop runs. The loop writes this field when it enters
+	 * or leaves a frame. A thread that stops inside the loop has no other record of its
+	 * interpreted frames. The LMF chain only shows where the interpreter last called out,
+	 * and that point is below all of them.
+	 *
+	 * Volatile for the sampling signal, which runs its handler on this same thread and is
+	 * therefore a reader the compiler cannot see. The loop can run a long time between
+	 * two writes of this field without making a call, and a write held in a register over
+	 * that window is a walk that reports the wrong frame. A walk from another thread reads
+	 * this only while this one is suspended, which orders it already.
+	 */
+	InterpFrame *volatile current_frame;
 	/* One entry per interp_exec_method () invocation on this thread, outermost first. */
 	InterpHandleMark *handle_marks;
 	int handle_mark_count;

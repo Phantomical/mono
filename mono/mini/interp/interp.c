@@ -487,6 +487,21 @@ context_clear_safepoint_frame (ThreadContext *context)
 	context->safepoint_frame = NULL;
 }
 
+/*
+ * Record the frame that the interpreter loop runs, so that a walk of this thread's stack
+ * can find its interpreted frames.
+ *
+ * A call publishes the callee only after the callee is ready to run. A return publishes
+ * the caller before anything retires the callee. Both orders name a frame that is live.
+ * A walk that arrives in one of those windows reports one frame less than the truth, and
+ * that is the safe direction to be wrong in.
+ */
+static void
+context_set_current_frame (ThreadContext *context, InterpFrame *frame)
+{
+	context->current_frame = frame;
+}
+
 void
 mono_interp_error_cleanup (MonoError* error)
 {
@@ -3571,6 +3586,13 @@ interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs 
 	int handle_mark_depth = interp_push_handle_mark (context, &__mark);
 
 	/*
+	 * Native code can call back into the interpreter, so this invocation is not always the
+	 * outermost one. The frames of the outer invocation stay live below ours, and they
+	 * become current again when we return.
+	 */
+	InterpFrame *outer_current_frame = context->current_frame;
+
+	/*
 	 * GC SAFETY:
 	 *
 	 *  The interpreter executes in gc unsafe (non-preempt) mode. On wasm, we cannot rely on
@@ -3604,6 +3626,7 @@ interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs 
 	}
 
 	INIT_INTERP_STATE (frame, clause_args);
+	context_set_current_frame (context, frame);
 
 	if (clause_args && clause_args->filter_exception) {
 		// Write the exception on to the first slot on the excecution stack
@@ -4159,6 +4182,7 @@ call:
 			mono_compiler_barrier ();
 
 			INIT_INTERP_STATE (frame, NULL);
+			context_set_current_frame (context, frame);
 
 			MINT_IN_BREAK;
 		}
@@ -7355,6 +7379,8 @@ resume:
 			LOCAL_VAR (frame->imethod->total_locals_size, MonoObject*) = mono_gchandle_get_target_internal (context->exc_gchandle);
 
 			clear_resume_state (context);
+			/* The resume site cleared the marker if it skipped frames, so put it back. */
+			context_set_current_frame (context, frame);
 			// goto main_loop instead of MINT_IN_DISPATCH helps the compiler and therefore conserves stack.
 			// This is a slow/rare path and conserving stack is preferred over its performance otherwise.
 			goto main_loop;
@@ -7379,6 +7405,7 @@ exit_frame:
 		//printf ("R: %s -> %s %p\n", mono_method_get_full_name (frame->imethod->method), mono_method_get_full_name (frame->parent->imethod->method), frame->parent->state.ip);
 		g_assert_checked (frame->stack);
 		frame = frame->parent;
+		context_set_current_frame (context, frame);
 		/*
 		 * FIXME We should be able to avoid dereferencing imethod here, if we will have
 		 * a param_area and all calls would inherit the same sp, or if we are full coop.
@@ -7393,6 +7420,9 @@ exit_frame:
 exit_clause:
 	if (!clause_args)
 		context->stack_pointer = (guchar*)frame->stack;
+
+	/* Our frames go away with this invocation, so hand the marker back to the one below. */
+	context_set_current_frame (context, outer_current_frame);
 
 	DEBUG_LEAVE ();
 
@@ -7465,6 +7495,14 @@ interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
 		mono_stack_mark_pop (mono_thread_info_current (), &context->handle_marks [first].mark);
 		context->handle_mark_count = first;
 	}
+
+	/*
+	 * The skipped invocations do not restore the marker either, and their frames are
+	 * alloca'd in stack the resume is about to give back. Nothing here knows which frame
+	 * of the invocation below is current, so say nothing rather than name a dead one.
+	 */
+	if ((gpointer)context->current_frame < resume_sp)
+		context_set_current_frame (context, NULL);
 }
 
 /*
@@ -7707,14 +7745,47 @@ interp_frame_get_ip (MonoInterpFrameHandle frame)
  *
  *   Return the frame a thread stopped at inside the interpreter, or NULL if it did
  * not stop there. A stack walk starts an interpreted frame iterator from this.
+ *
+ * The lmf is the head of the chain the walk itself will follow.
  */
 static gpointer
-interp_get_stopped_frame (const MonoJitTlsData *jit_tls)
+interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf)
 {
 	g_assert (jit_tls);
 	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
 
-	return context ? context->safepoint_frame : NULL;
+	if (!context)
+		return NULL;
+
+	/* A safepoint names the frame exactly, so it wins. */
+	if (context->safepoint_frame)
+		return context->safepoint_frame;
+
+	/* Read once. A sampling signal can arrive between two reads of this field. */
+	InterpFrame *frame = context->current_frame;
+
+	if (!frame)
+		return NULL;
+
+	/*
+	 * The interpreter publishes a frame for as long as it runs one, so the frame alone
+	 * does not say whether the loop is the innermost thing on this thread. Ask the LMF
+	 * chain, and ask it by address rather than by kind.
+	 *
+	 * The stack grows down, so a more recent frame has a lower address. A callout from
+	 * the loop - a jit call, an icall, the debugger tramp - puts its MonoLMFExt in a
+	 * function that interp_exec_method called, which is below every InterpFrame of that
+	 * invocation, because those are alloca'd in interp_exec_method itself. An entry that
+	 * the chain already held belongs to an outer frame and is above all of them.
+	 *
+	 * Both addresses come from the same stack, so the comparison is meaningful. An lmf
+	 * below the frame means the interpreter called out, and the interp-exit marker on
+	 * the chain describes the frames from here on.
+	 */
+	if (lmf && (gsize)lmf < (gsize)frame)
+		return NULL;
+
+	return frame;
 }
 
 /*

@@ -1550,7 +1550,7 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 	 * whatever native code the runtime happens to be running on its behalf.
 	 */
 	if (jit_tls->interp_context) {
-		gpointer stopped_frame = mini_get_interp_callbacks ()->get_stopped_frame (jit_tls);
+		gpointer stopped_frame = mini_get_interp_callbacks ()->get_stopped_frame (jit_tls, lmf);
 
 		if (stopped_frame) {
 			unwinder.in_interp = TRUE;
