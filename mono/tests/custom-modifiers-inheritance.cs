@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
 
@@ -96,7 +97,11 @@ public class Tests {
 	{
 		string name = "CustomModifiersOverride";
 		AssemblyName asmName = new AssemblyName(name);
-		AssemblyBuilder ab = AppDomain.CurrentDomain.DefineDynamicAssembly(asmName, AssemblyBuilderAccess.RunAndSave);
+		// Save into the temp directory rather than the working directory, which every
+		// collector arm of this test shares. ModuleBuilder.Save unlinks the target
+		// before writing it, so two arms on one path leave each other's Save looking
+		// at a file that has just been deleted.
+		AssemblyBuilder ab = AppDomain.CurrentDomain.DefineDynamicAssembly(asmName, AssemblyBuilderAccess.RunAndSave, Path.GetTempPath());
 		ModuleBuilder mb = ab.DefineDynamicModule(name, name + ".dll");
 
 		// Create class hierarchy:
@@ -183,7 +188,8 @@ public class Tests {
 		// The expected behavior can be near impossible to reproduce using this .exe on
 		// another CLR because many SRE implementations do not correctly use modifiers. To
 		// compare results with another runtime, get the dll saved by the above ab.Save()
-		// line, manually copy it over, and run it with the other CLR. 
+		// line -- it lands in the temp directory -- manually copy it over, and run it
+		// with the other CLR.
 		var tester = new Tests ();
 		tester.TestModSufficient ();
 		tester.TestModNecessary ();
