@@ -363,7 +363,7 @@ Everything here is **C++**, and a header that only C++ includes is a `.hpp`. The
 extension is the rule: a `.h` here is reachable from mono's C sources, so its
 declarations sit inside `MONO_BEGIN_DECLS` and can only name types C can see.
 `runtime.h` is the interface the C runtime compiles methods through, and its whole
-surface is eleven functions. Keep it that small.
+surface is thirteen functions. Keep it that small.
 
 - **`runtime.h` + `runtime/`** — the engine. `runtime/entrypoints.cpp` is the boundary:
   `mono_llvm_jit_compile_method ()` compiles a method into a domain's linker and hands
