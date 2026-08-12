@@ -36,7 +36,7 @@ MethodLLVMEmitter::object_new_decl ()
 
 /// Allocate an instance of klass and return the reference.
 ///
-/// \param for_box  whether the instance is the box a value of klass goes into.
+/// \param for_box  whether this allocation is for a boxed value type.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
