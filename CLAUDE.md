@@ -510,6 +510,10 @@ failures through `llvm::Error` and the unwinder needs the tables.
   satisfies it. Summarising one turns the thing you check against into a paraphrase that
   nothing checks. The style rules govern what we write about the code, not the quote. If a
   block is genuinely in the wrong file, move it - do not shorten it.
+- Where a quoted block documents the function, it is the whole doc comment. Do not add a
+  summary above an emitter saying what the passage below already says. Add a comment only
+  for what the standard does not cover: what this backend does with the instruction, which
+  local table governs it, or why it departs from the text.
 - Do not reference the current plan or current task list. For people reading the code later
   on without access to the plan documents these references are noise that hide what is
   actually going on.
