@@ -1,38 +1,30 @@
 /*
- * mono_lsda.cpp: the load-time `.mono_lsda` publish/validate core (custom-emit
- * EH, plan 12 slice C4).
+ * mono_lsda.cpp: reads back the `.mono_lsda` clause table a compiled method's
+ * object carries. It joins that table against the method's IL clauses to build
+ * the runtime's MonoJitExceptionInfo array.
  *
- * MonoLSDAStreamer (engine.cpp, slice C3) emits, into a method's own object, a
- * target-neutral, versioned, code-relative `.mono_lsda` section:
+ * The section is little-endian, versioned and target-neutral. Every offset in
+ * it is relative to the start of the method's code.
  *
- *   Header (8 bytes, little-endian):
+ *   Header (8 bytes):
  *     u32 magic   = 0x4d4c5344 ('MLSD')
  *     u16 version = 2
- *     u16 count                      one entry PER INVOKE RANGE (plan 12 2)
- *   Entry[count] (20 bytes each, little-endian):
- *     u32 try_start_off              try covers [code+try_start_off, +try_len)
+ *     u16 count            number of entries
+ *   Entry[count] (20 bytes each):
+ *     u32 try_start_off    one invoke range, [code+try_start_off, +try_len)
  *     u32 try_len
- *     u32 handler_off                native handler entry = code + handler_off
- *     u32 clause_index               IL clause index (the join key)
- *     u32 kind                       clause flags (MonoExceptionEnum: 0=catch,
- *                                    2=FINALLY, 4=FAULT); self-describing v2
+ *     u32 handler_off      landing pad = code + handler_off
+ *     u32 clause_index     IL clause index, the join key
+ *     u32 kind             MonoExceptionEnum: 0=NONE(catch), 1=FILTER,
+ *                          2=FINALLY, 4=FAULT. Any other value is a marker
+ *                          kind from mono_lsda_format.hpp.
  *
- * This TU is pure C++ with no LLVM dependency: it consumes the emitted BYTES,
- * not any LLVM type.
+ * One protected region contributes one entry per clause in its chain. A marker
+ * entry describes something other than a protected region.
  *
- * CAP-EH-0 (plan 12 6): declining (returning false) is reserved for genuine
- * uncertainty about UNSUPPORTED INPUT - right now that is only a filter
- * clause, caught upstream by MonoEHGatherPass (engine.cpp) before any section
- * reaches here - because the dispatcher cannot detect a wrong clause array
- * (doc 11 11.4), so a plausible-but-wrong table is never produced. The
- * build_ex_info () checks that instead validate our own round-trip of data we
- * ourselves wrote (a clause_index/kind read back from the SAME immutable
- * header we wrote it from) assert: if those ever disagree, it is our own
- * bug, not the input. parse_mono_lsda ()'s own bounds/format checks (magic,
- * version, exact size, offsets within code_len) are still declines - not yet
- * audited for the same split, so left as originally written. None of the Itanium
- * ttype/DW_EH_PE machinery is needed here - this format carries only
- * code-relative offsets and IL indices, so there is no encoding to chase.
+ * Nothing here depends on LLVM, and native_code is only ever used for address
+ * arithmetic. That is what lets the unit tests drive this against a made-up
+ * base address.
  */
 
 #include "config.h"
@@ -49,21 +41,17 @@ namespace mono {
 
 namespace {
 
-/* Header constants (little-endian on the wire; the section is target-neutral). */
 constexpr std::uint32_t MONO_LSDA_MAGIC = 0x4d4c5344u; /* 'MLSD' */
 constexpr std::uint16_t MONO_LSDA_VERSION = 2;
 constexpr std::size_t   MONO_LSDA_HEADER_SIZE = 8;
 constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 20;
 
-/*
- * A bounds-checked, little-endian cursor over [start, end). The buffer is
- * private, every accessor reserves its bytes through has() first, and a
- * failed read latches ok() to false so a whole structure can be decoded then
- * tested once. Reads are decoded byte-by-byte in little-endian order so the
- * result is independent of host endianness (the section is written
- * little-endian by the x86-64 object writer and stays target-neutral for a
- * future big-endian host).
- */
+// A bounds-checked little-endian cursor over [start, end). A failed read
+// latches ok () to false, so a whole structure can be decoded and then tested
+// once rather than after every field.
+//
+// The bytes are assembled one at a time, so the decode does not depend on host
+// endianness.
 class Reader {
 public:
 	Reader (const std::uint8_t *start, const std::uint8_t *end)
@@ -112,8 +100,7 @@ private:
 	bool ok_;
 };
 
-/* Half-open [a_start, a_end) overlaps [b_start, b_end)? (a_end/b_end are 64-bit,
- * already bounds-checked <= code_len, so no wrap.) */
+// Do the half-open ranges [a_start, a_end) and [b_start, b_end) overlap?
 bool
 ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
                 std::uint64_t b_start, std::uint64_t b_end)
@@ -139,22 +126,16 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 	std::uint16_t version = r.u16 ();
 	std::uint16_t count = r.u16 ();
 	if (!r.ok ())
-		return false; /* truncated header */
+		return false; // truncated header
 	if (magic != MONO_LSDA_MAGIC)
-		return false; /* bad magic - a format/version mismatch, loudly */
+		return false;
 	if (version != MONO_LSDA_VERSION)
-		return false; /* unknown version (incl. v1) - decline rather than misread */
+		return false; // decline rather than misread an unknown version
 
-	/*
-	 * EXACT-SIZE validation (plan 12 3 / C4). The section MUST be exactly one
-	 * header plus its declared entries - not merely long enough. C3 guarantees
-	 * one method record per module (one-method-per-module invariant, enforced
-	 * with report_fatal_error in the streamer), so a section that is LONGER than
-	 * 8 + count*20 means that invariant broke and a second record was
-	 * concatenated. Reading only the first record would misattribute one
-	 * method's clause geometry to another (a CAP-EH-0 silent mis-catch), so a
-	 * size mismatch declines here. count is a u16 so count*20 cannot overflow.
-	 */
+	// The section must be exactly one header plus its declared entries, not
+	// merely long enough. It names no function, so a wrong length is the only
+	// sign that these bytes are not this method's record. count is a u16, so
+	// count * 20 cannot overflow.
 	if (size != MONO_LSDA_HEADER_SIZE +
 	            static_cast<std::size_t> (count) * MONO_LSDA_ENTRY_SIZE)
 		return false;
@@ -169,7 +150,7 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 		e.clause_index = r.u32 ();
 		e.kind = r.u32 ();
 		if (!r.ok ())
-			return false; /* unreachable given exact-size, but bounds-honest */
+			return false; // unreachable once the size check above passed
 		out.push_back (e);
 	}
 
@@ -177,24 +158,19 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 }
 
 /*
- * Append one entry per recovered finally body range, carrying the two things the
- * runtime's thread-abort guard reads about a running finally: the PC range that
- * says a frame is inside the body (find_last_handler_block) and the frame byte
- * to flag the abort through (install_handler_block_guard writes a 1 at
- * exvar_base_reg + exvar_offset; the shared IR reads it once the finally
- * returns).
+ * Appends one inert entry per finally body range. Each carries that range and
+ * the exvar the runtime's thread-abort guard writes into.
  *
- * These are DELIBERATELY entries of their own rather than fields on the FINALLY
- * entries built above. A finally whose protected region has no call that can
- * unwind gets no dispatch entry at all - exactly the shape that left the guard
- * uninstallable - so there would be nothing to attach to. And the partitions
- * differ anyway: one guard entry per clause against one dispatch entry per
- * invoke range.
+ * These are separate entries rather than fields on the FINALLY entries
+ * build_ex_info_entries () builds. A finally whose protected region has no call
+ * that can unwind gets no dispatch entry to hang them on. The two sets are also
+ * different sizes: one guard per recorded body range against one dispatch entry
+ * per clause in each invoke range.
  *
- * They are inert for dispatch: an EMPTY try range makes is_address_protected ()
- * false for every PC, so neither exception delivery nor mono_handle_finally_block
- * can reach them, and they cannot make a handler run twice. Appending them last
- * also keeps the base/enclosing slot ordering the pass-2 resume walk depends on.
+ * A guard entry's try range is empty, so is_address_protected () is false for
+ * every PC and no dispatch walk can reach it. Without that, a handler can run
+ * twice. They go last so that the array order the pass-2 resume walk depends on
+ * is unchanged.
  */
 static void
 append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
@@ -203,12 +179,9 @@ append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
                        std::vector<MonoJitExceptionInfo> &out)
 {
 	for (const MonoFinallyGuard &g : guards) {
-		/*
-		 * The caller keyed these off the same cfg->header, and both bounds are
-		 * label differences inside this method's own code. A body that runs to
-		 * the end of the function ends at exactly code_len, which is where its
-		 * closing label sits, not an overrun.
-		 */
+		// Both bounds are label differences inside this method's own code. A
+		// body that runs to the end of the function ends at exactly code_len,
+		// where its closing label sits. So the bound is <= and not <.
 		g_assert (static_cast<int> (g.clause_index) < num_clauses);
 		g_assert (clauses[g.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
 		g_assert (g.handler_start_off < g.handler_end_off);
@@ -237,46 +210,20 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 {
 	out.clear ();
 
-	/*
-	 * A clause-bearing method that produced NO entries - every protected call
-	 * optimised to a nounwind `call`, so the gather pass found nothing to
-	 * publish - is safe to publish as an EMPTY clause array, not a reason to
-	 * decline: this function is reached only via a successfully parsed
-	 * `.mono_lsda` section, and MonoEHGatherPass/MonoLSDAStreamer (engine.cpp)
-	 * only ever publish a section - even a zero-entry one - for a method
-	 * explicitly marked mono-has-eh-clauses that the gather did NOT decline.
-	 * A genuinely uncertain method (the gather declined it, or nothing was
-	 * ever marked) never reaches here: its section is absent, so
-	 * parse_mono_lsda () already failed and the caller declined before this
-	 * runs. So num_clauses > 0 && entries.empty () here just means "confirmed
-	 * nothing in this method can throw" - return success with out left empty.
-	 */
+	// An empty list here means every protected call was optimized to one that
+	// cannot unwind, not that the section is missing. A method whose gather
+	// declined carries no usable section and already failed in parse_mono_lsda ().
 	if (entries.empty ())
 		return true;
 
-	/*
-	 * Keep one landing pad's entries for one invoke range together, in the order
-	 * the pad named them. That order IS the nesting chain - innermost clause
-	 * first, then outwards through the enclosers - because the translator emits a
-	 * pad's covering clauses in it (add_covering_clauses, translator-call.cpp) and
-	 * the gather pass undoes LLVM's reversal on the way out (eh-gather.cpp).
-	 *
-	 * Taking the chain from the pad rather than re-deriving it from IL try offsets
-	 * is what lets a chain span methods: an inlined body's offsets mean nothing in
-	 * the caller, but its pads are right there in the caller's IR, already extended
-	 * by LLVM's inliner with the call site's own chain.
-	 *
-	 * Order is load-bearing twice over. Sibling catches - try { } catch(A) catch(B)
-	 * - share a range and a pad, and the runtime takes the FIRST isinst match in
-	 * array order (mini-exceptions.c is_address_protected + the catch loop), so the
-	 * earlier-declared catch must come first, or `catch(Derived) catch(Base)` lets
-	 * Base swallow a Derived throw. And enclosers must come innermost-first so an
-	 * intervening finally runs before an enclosing catch is entered.
-	 *
-	 * Sorting on (try_start_off, try_len, handler_off) groups a pad's entries for
-	 * one range without disturbing them, since a stable sort leaves equal keys put.
-	 * Disjoint ranges never share a PC, so their relative order is immaterial.
-	 */
+	// entries already lists each landing pad's clauses in nesting order,
+	// innermost first. covering_chain () (method-to-llvm/exceptions.cpp) builds
+	// that order per pad, eh-gather.cpp preserves it, and compiler.cpp writes it
+	// into the section.
+	//
+	// So the sort is stable and keys only on the range and the pad. It groups
+	// one pad's entries for one range and leaves equal keys where they were.
+	// Disjoint ranges never share a PC, so their relative order does not matter.
 	std::vector<MonoLsdaEntry> ordered (entries);
 	std::stable_sort (ordered.begin (), ordered.end (),
 	                  [] (const MonoLsdaEntry &a, const MonoLsdaEntry &b) {
@@ -287,31 +234,18 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		return a.handler_off < b.handler_off;
 	});
 
-	/*
-	 * The RESUME pad of each finally/fault clause that has one - the landing pad
-	 * its resume-trampoline invoke unwinds to, reached only once the cleanup has
-	 * run (emit_resume_unwind). The chaining below sends everything that comes
-	 * after a cleanup through it, so the block the runtime re-enters is the block
-	 * the IR shows control reaching, carrying the state the cleanup left behind.
-	 * Recognised by its MONO_LSDA_KIND_RESUME_PAD marker and consumed only that
-	 * way: a resume pad is not itself a protected region.
-	 */
+	// Per clause, the pad its resume trampoline unwinds to once the cleanup has
+	// run. The chaining below routes the rest of a chain through it, so the
+	// runtime re-enters carrying the state the cleanup left behind.
 	std::vector<gpointer> resume_pad (num_clauses > 0 ? num_clauses : 0, nullptr);
 
-	/*
-	 * The entries that describe a real protected region, in chain order. The rest
-	 * of the section is markers - resume pads and finally body extents - which
-	 * describe where code sits rather than what it protects.
-	 */
+	// The entries that describe a real protected region, in chain order. The
+	// markers drop out here: they say where code sits, not what it protects.
 	std::vector<MonoLsdaEntry> dispatch;
 	dispatch.reserve (ordered.size ());
 
 	for (const MonoLsdaEntry &e : ordered) {
-		/*
-		 * Offsets in range. 64-bit intermediates so try_start_off + try_len
-		 * cannot wrap a 32-bit add (the check the fork deferred to the loader,
-		 * which now has code_len in hand). handler_off is the landing-pad entry.
-		 */
+		// try_start_off + try_len is summed in 64 bits so it cannot wrap.
 		if (e.try_start_off >= code_len)
 			return false;
 		if (static_cast<std::uint64_t> (e.try_start_off) + e.try_len > code_len)
@@ -319,34 +253,20 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		if (e.handler_off >= code_len)
 			return false;
 
-		/*
-		 * Join key in range. clause_index was itself read out of
-		 * cfg->header->clauses[] at emission time (add_covering_clauses,
-		 * translator-call.cpp) - the SAME immutable cfg->header this call is
-		 * given num_clauses from, for the same compile. It cannot legitimately
-		 * come back out of range; if it does, our own object round-trip (or our
-		 * own indexing) is wrong, not the IL.
-		 */
+		// clause_index came from cfg->header->clauses[] in the same compile that
+		// num_clauses comes from. Out of range means our own object round-trip
+		// broke, not that the IL is bad.
 		g_assert (num_clauses > 0 && e.clause_index < static_cast<std::uint32_t> (num_clauses));
 
-		/*
-		 * A cleanup's resume pad. It describes where to continue AFTER
-		 * clause_index's handler has run, not a protected region of its own, so
-		 * record it for the chaining below and publish nothing for it. Its own
-		 * range only ever covers the resume trampoline's call site, which cannot
-		 * throw back into this frame.
-		 */
+		// A cleanup's resume pad. Record it for the chaining below and publish
+		// nothing: its range only covers the resume trampoline's call site,
+		// which cannot throw back into this frame.
 		if (e.kind == MONO_LSDA_KIND_RESUME_PAD) {
 			const MonoExceptionClause &rc = clauses[e.clause_index];
 
-			/*
-			 * Only a cleanup resumes, so only a cleanup can own one of these.
-			 * emit_resume_unwind only ever runs for the clause it is itself
-			 * emitting the resume pad for (translator-call.cpp), which is only
-			 * reachable for a FINALLY/FAULT handler body - so rc.flags here is
-			 * the same cfg->header entry emit_handler_start already required
-			 * to be FINALLY/FAULT before building this clause's handler at all.
-			 */
+			// Only a cleanup resumes. emit_endfinally () is the only caller of
+			// emit_resume_exit () (method-to-llvm/exceptions.cpp), so rc.flags
+			// can only be FINALLY or FAULT.
 			g_assert (rc.flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
 			         rc.flags == MONO_EXCEPTION_CLAUSE_FAULT);
 
@@ -354,33 +274,20 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 			continue;
 		}
 
-		/*
-		 * A finally handler body's PC range. It describes where the handler's own
-		 * code sits, not a region the handler protects, and is consumed only by
-		 * the thread-abort guard - the caller has already turned these into
-		 * MonoFinallyGuards and passes them in as GUARDS, joined with the frame
-		 * slot the stackmap named. Nothing to publish for it here.
-		 */
+		// A finally handler body's PC range. Nothing writes this kind today, and
+		// the abort guard is built from the separate .mono_guards section
+		// instead. Publish nothing for it.
 		if (e.kind == MONO_LSDA_KIND_FINALLY_BODY) {
 			g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
 			continue;
 		}
 
-		/*
-		 * v2 self-describing cross-check. The section carries the clause's kind,
-		 * smuggled through the gather pass from the SAME cfg->header->clauses[]
-		 * this call reads cl.flags from (clause_type_info_global writes both from
-		 * one clauses[i].flags read, translator-call.cpp). Same immutable header,
-		 * same compile - a mismatch is our own round-trip breaking, not the IL
-		 * disagreeing with itself. (For a catch clause both are NONE.)
-		 */
+		// The section's kind column was written from the same clauses[i].flags
+		// this reads back, in the same compile. A mismatch means our own
+		// round-trip broke. A catch clause has kind and flags both NONE.
 		g_assert (e.kind == static_cast<std::uint32_t> (clauses[e.clause_index].flags));
 
-		/*
-		 * Catch (NONE), FILTER, FINALLY and FAULT are the publishable kinds;
-		 * anything else here is the emitter's own invariant breaking, not new
-		 * information about the IL.
-		 */
+		// Catch (NONE), FILTER, FINALLY and FAULT are the publishable kinds.
 		g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_NONE ||
 		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FILTER ||
 		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
@@ -389,39 +296,29 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		dispatch.push_back (e);
 	}
 
-	/*
-	 * Nothing left that describes a protected region. Either the section was all
-	 * markers - a nested finally/fault whose OWN protected try-body had every call
-	 * optimized to a nounwind call still emits its resume-pad invoke whenever it
-	 * has an encloser (emit_resume_unwind, translator-call.cpp) - or the method's
-	 * protected calls all optimized away. Both are the same confirmed-safe "nothing
-	 * in this method can throw" case as an empty section, so publish zero clauses.
-	 */
+	// dispatch can be empty even though entries was not. A nested finally or
+	// fault emits its resume-pad invoke whenever it has an encloser. So a method
+	// whose calls all became nounwind still has a section, holding only markers.
+	// That is the same case as an empty section, so publish nothing.
 	if (dispatch.empty ())
 		return true;
 
-	/*
-	 * Per published entry, its [start, end) native invoke range in offsets, so the
-	 * equal-or-disjoint invariant (below) can be validated over the FINAL array.
-	 * Every entry of one chain copies that chain's range, so the array stays
-	 * equal-or-disjoint.
-	 */
+	// Each published entry's [start, end) invoke range, so the equal-or-disjoint
+	// check below can run over the final array.
 	struct RangeOff { std::uint64_t start; std::uint64_t end; };
 	std::vector<RangeOff> ranges;
 
 	out.reserve (dispatch.size ());
 	ranges.reserve (dispatch.size ());
 
-	/*
-	 * ORDERING (load-bearing). A chain is published innermost-first, so for any
-	 * faulting PC the runtime's flat first-match walk sees the innermost clause
-	 * first and its enclosers after - an intervening finally runs before an
-	 * enclosing catch is entered, and pass-2 resume (which continues at the running
-	 * clause's ARRAY slot + 1) reaches the enclosers in innermost-first order. For a
-	 * depth-3 try/finally C in B in A the published array is [C, B, A] and pass-2
-	 * runs finallys C, B, A - slot-for-slot what the classic JIT produces, which
-	 * emits jinfo->clauses in the same inner-first IL clause order.
-	 */
+	// Ordering is load-bearing. A chain publishes innermost-first, so the
+	// runtime's flat first-match walk sees the innermost clause before its
+	// enclosers. An intervening finally then runs before an enclosing catch is
+	// entered. Sibling catches share a range and a pad, so the earlier-declared
+	// catch must come first, or catch(Base) takes a throw meant for
+	// catch(Derived). Pass-2 resume continues at the running clause's slot plus
+	// one, so it reaches the enclosers innermost-first too. For try/finally C
+	// inside B inside A the published array is [C, B, A], and pass-2 runs C, B, A.
 	for (std::size_t i = 0; i < dispatch.size (); ) {
 		/* One landing pad's entries for one invoke range: a single nesting chain. */
 		std::size_t end = i;
@@ -431,15 +328,12 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		       dispatch[end].handler_off == dispatch[i].handler_off)
 			++end;
 
-		/*
-		 * HANDLER CHAINING. A chain's clauses are reached through whichever pad
-		 * control is in by the time the runtime gets to them, and that pad's
-		 * selector switch routes each one on to its handler body. It only MOVES
-		 * when a cleanup runs: a finally/fault ends in an invoke of the resume
-		 * trampoline that unwinds to a pad of its own, so from there on the rest
-		 * of the chain is dispatched through that resume pad. A catch that did not
-		 * match ran nothing, so it leaves the pad where it was.
-		 */
+		// A chain's clauses are reached through whichever pad control is in when
+		// the runtime gets to them. That pad's selector switch routes each clause
+		// to its handler body. The pad only moves when a cleanup runs. A finally
+		// or fault ends by invoking the resume trampoline, which unwinds to a pad
+		// of its own. A catch that did not match ran nothing, so it leaves the
+		// pad where it was.
 		gpointer cur_handler = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + dispatch[i].handler_off);
 
 		for (std::size_t k = i; k < end; ++k) {
@@ -447,19 +341,21 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 			const MonoExceptionClause &cl = clauses[e.clause_index];
 
 			/*
-			 * Build the published ei (CAP-EH-1). flags is joined from the IL
-			 * header - the section never carries it. handler_start is
-			 * FTNPTR-encoded at publish (never in the section). The
-			 * try_offset/try_len/handler_offset/handler_len fields stay 0
-			 * (memset): only the llvmonly match path reads them, and catch
-			 * delivery is via RAX for from_llvm (doc 11 6.4).
+			 * ei.flags is joined from the method's own IL header, and the
+			 * section's kind column carries the same value. handler_start is
+			 * FTNPTR-encoded here, since the section only carries a raw offset.
 			 *
-			 * The `data` union and `exvar_offset` are kind-dependent:
+			 * try_offset, try_len, handler_offset and handler_len stay 0 from
+			 * the memset. They are IL offsets. Only mono_llvm_match_exception ()
+			 * reads any of them, and this backend never calls it.
+			 *
+			 * The data union and exvar_offset are kind-dependent:
 			 *   - CATCH (NONE): data.catch_class is joined from the IL header.
-			 *   - FINALLY: the abort-guard fields data.handler_end and
-			 *     exvar_offset are left 0 here and supplied by the guard entries
-			 *     append_finally_guards () adds.
-			 *   - FAULT: the runtime reads neither field, so 0 is simply correct.
+			 *   - FILTER: data.filter stays null. jinfo.cpp joins the compiled
+			 *     filter body once the object is linked.
+			 *   - FINALLY: data.handler_end and exvar_offset stay 0.
+			 *     append_finally_guards () appends entries carrying them.
+			 *   - FAULT: the runtime reads neither field, so 0 is correct.
 			 */
 			MonoJitExceptionInfo ei;
 			memset (&ei, 0, sizeof (ei));
@@ -483,31 +379,28 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 	}
 
 	/*
-	 * EQUAL-OR-DISJOINT invariant over the FINAL published array (doc 21 2.2 / 4
-	 * step 5), the CAP-EH-0 backstop:
-	 *   - SIBLING catches - try { } catch(A) catch(B) - are ONE landing pad
-	 *     carrying one clause per catch over the shared invoke range, so they
-	 *     publish several entries with IDENTICAL try_start_off/try_len and
-	 *     DIFFERENT clause_index. mono consumes this natively: is_address_protected
-	 *     matches the shared PC range for every entry, then
-	 *     mono_object_isinst_checked on each catch_class picks the type, RDX =
-	 *     ei->clause_index as the selector. Exactly-equal ranges are legitimate.
-	 *   - A try with N protected calls yields N DISJOINT ranges (one per call).
-	 *   - An enclosing entry shares its chain's EXACT range, so it is always EQUAL
-	 *     to the entries beside it. Nesting is thus encoded purely by same-range
-	 *     entries + array order, never by a nested native extent.
-	 * Only a PARTIAL overlap or STRICT nesting ([0x10,0x40) containing [0x20,0x30))
-	 * is illegal - it implies a genuine crossing (malformed IL / a producer bug),
-	 * making is_address_protected's first-match ambiguous. Such ranges are never
-	 * exactly equal, so they still decline; the missed-nesting attack stays
-	 * covered. O(n^2) over the handful of ranges a method has.
+	 * Equal-or-disjoint invariant over the published array. Ranges can repeat
+	 * exactly, and they can be disjoint. Anything in between is illegal.
+	 *
+	 *   - Sibling catches share one pad over one invoke range, so they publish
+	 *     several entries with identical try_start_off and try_len. The runtime
+	 *     matches the shared PC range for each, then picks by catch_class.
+	 *   - A try with N protected calls yields N disjoint ranges, one per call.
+	 *   - An enclosing entry copies its chain's exact range. Nesting is encoded
+	 *     by same-range entries plus array order, never by a nested extent.
+	 *
+	 * So a partial overlap, or strict nesting like [0x10,0x40) containing
+	 * [0x20,0x30), means a genuine crossing from malformed IL or a producer bug.
+	 * It leaves the runtime's first match ambiguous. Such ranges are never
+	 * exactly equal, so this check declines them. The cost is O(n^2) over the
+	 * handful of ranges a method has.
 	 */
 	for (std::size_t i = 0; i < ranges.size (); ++i) {
 		for (std::size_t j = 0; j < i; ++j) {
 			if (ranges_overlap (ranges[i].start, ranges[i].end,
 			                    ranges[j].start, ranges[j].end) &&
 			    !(ranges[i].start == ranges[j].start &&
-			      ranges[i].end == ranges[j].end)) /* equal ranges (siblings / enclosers) ok */
+			      ranges[i].end == ranges[j].end)) /* equal ranges are fine: siblings or enclosers */
 				return false;
 		}
 	}
