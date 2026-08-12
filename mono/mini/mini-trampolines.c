@@ -24,7 +24,7 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 #include "mixed_callstack_plugin.h"
-#include "../llvm/runtime.hpp"
+#include "../llvm/runtime.h"
 
 #include "interp/interp.h"
 

@@ -4,12 +4,12 @@
  */
 
 /*
- * Before runtime.hpp, so that MonoError is the internal struct the rest of the
+ * Before runtime.h, so that MonoError is the internal struct the rest of the
  * runtime passes around rather than the opaque public one.
  */
 #include "runtime-error.hpp"
 
-#include "runtime.hpp"
+#include "runtime.h"
 
 #include "backend.hpp"
 #include "jit.hpp"

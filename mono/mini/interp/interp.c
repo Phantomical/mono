@@ -76,7 +76,7 @@
 #include <mono/mini/debugger-agent.h>
 #include <mono/mini/ee.h>
 #include <mono/mini/trace.h>
-#include "../../llvm/runtime.hpp"
+#include "../../llvm/runtime.h"
 
 #include <mono/metadata/icall-decl.h>
 

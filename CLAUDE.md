@@ -359,13 +359,13 @@ MONO_PATH=build/mcs/class/lib/net_4_x \
 
 ## Architecture of the backend (`mono/llvm/`)
 
-Everything here is **C++**, and every header is a `.hpp` — there are no `.h` files.
-The one header mono's C sources include is `runtime.hpp`, whose declarations sit
-inside `MONO_BEGIN_DECLS`; its whole audience is `mini-runtime.c`,
-`mini-trampolines.c` and `driver.c`, and its whole surface is ten functions. Keep
-it that small.
+Everything here is **C++**, and a header that only C++ includes is a `.hpp`. The
+extension is the rule: a `.h` here is reachable from mono's C sources, so its
+declarations sit inside `MONO_BEGIN_DECLS` and can only name types C can see.
+`runtime.h` is the interface the C runtime compiles methods through, and its whole
+surface is eleven functions. Keep it that small.
 
-- **`runtime.hpp` + `runtime/`** — the engine. `runtime/entrypoints.cpp` is the boundary:
+- **`runtime.h` + `runtime/`** — the engine. `runtime/entrypoints.cpp` is the boundary:
   `mono_llvm_jit_compile_method ()` compiles a method into a domain's linker and hands
   back the address to call, and the rest is freeing a domain or a method, finding a
   compiled body, and the unbox entry. `runtime/backend.cpp` holds the state — one

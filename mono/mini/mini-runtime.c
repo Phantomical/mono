@@ -108,7 +108,7 @@
 G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
 	uint64_t c, struct _Unwind_Exception *d, struct _Unwind_Context *e);
 #endif
-#include "../llvm/runtime.hpp"
+#include "../llvm/runtime.h"
 #include "mono/metadata/icall-signatures.h"
 #include "mono/utils/mono-tls-inline.h"
 

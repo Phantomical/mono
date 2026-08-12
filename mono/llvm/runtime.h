@@ -6,8 +6,8 @@
  * The runtime asks for a method's code and gets back an address to call.
  */
 
-#ifndef MONO_LLVM_RUNTIME_HPP
-#define MONO_LLVM_RUNTIME_HPP
+#ifndef MONO_LLVM_RUNTIME_H
+#define MONO_LLVM_RUNTIME_H
 
 #include <mono/utils/mono-publib.h>
 #include <mono/utils/mono-error.h>

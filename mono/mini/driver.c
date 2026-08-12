@@ -63,7 +63,7 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 #include "interp/interp.h"
-#include "../llvm/runtime.hpp"
+#include "../llvm/runtime.h"
 
 #include <string.h>
 #include <ctype.h>
