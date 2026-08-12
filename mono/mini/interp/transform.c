@@ -8917,12 +8917,31 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 
 	/* Copy changes back */
 	imethod = real_imethod;
+	/*
+	 * A thread that reads transformed runs the bytecode immediately, so any
+	 * breakpoint the debugger already asked for must be in that bytecode before
+	 * the flag goes up. The jit_done event below is too late: the method is
+	 * reachable by then, and a thread that enters in between runs the method to
+	 * the end without stopping.
+	 *
+	 * The loader lock is outside calc_section because installing a breakpoint
+	 * takes it. It is recursive, so a caller that holds it already is safe.
+	 *
+	 * Only a body that carries its own sequence points is offered. Without them
+	 * the installer looks for the method's table, which takes the domain lock -
+	 * and the domain lock is outer to calc_section, so asking for it here
+	 * inverts the order. That table also describes some other body than this
+	 * one, so there is nothing here to install from.
+	 */
+	mono_loader_lock ();
 	mono_os_mutex_lock (&calc_section);
 	if (!imethod->transformed) {
 		// Ignore the first two fields which are unchanged. next_jit_code_hash shouldn't
 		// be modified because it is racy with internal hash table insert.
 		const int start_offset = 2 * sizeof (gpointer);
 		memcpy ((char*)imethod + start_offset, (char*)&tmp_imethod + start_offset, sizeof (InterpMethod) - start_offset);
+		if (imethod->jinfo->seq_points)
+			mini_install_pending_breakpoints (domain, method, imethod->jinfo);
 		mono_memory_barrier ();
 		imethod->transformed = TRUE;
 		mono_interp_stats.methods_transformed++;
@@ -8930,6 +8949,7 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 
 	}
 	mono_os_mutex_unlock (&calc_section);
+	mono_loader_unlock ();
 
 	mono_domain_lock (domain);
 	if (mono_stats_method_desc && mono_method_desc_full_match (mono_stats_method_desc, imethod->method)) {
