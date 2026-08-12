@@ -8977,8 +8977,15 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 		g_printf ("Printing runtime stats at method: %s\n", mono_method_get_full_name (imethod->method));
 		mono_runtime_print_stats ();
 	}
-	if (!g_hash_table_lookup (domain_jit_info (domain)->seq_points, imethod->method))
-		g_hash_table_insert (domain_jit_info (domain)->seq_points, imethod->method, imethod->jinfo->seq_points);
+	/*
+	 * A method's entry here is the list of tables its bodies published, and the
+	 * domain frees it as a list. So this publishes a node, not the table. The
+	 * same method appends its compiled body's table to this list when it is
+	 * promoted out of the interpreter.
+	 */
+	if (imethod->jinfo->seq_points && !g_hash_table_lookup (domain_jit_info (domain)->seq_points, imethod->method))
+		g_hash_table_insert (domain_jit_info (domain)->seq_points, imethod->method,
+				     g_slist_append (NULL, imethod->jinfo->seq_points));
 	mono_domain_unlock (domain);
 
 	// FIXME: Add a different callback ?
