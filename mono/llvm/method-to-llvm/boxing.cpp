@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "mono/metadata/object-forward.h"
 #include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
@@ -44,12 +45,16 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	int32_t size = mono_class_instance_size (klass);
 	MonoMethod *allocator = nullptr;
 
-	// The allocator takes the instance size, so a class whose size is smaller
-	// than the object header does not qualify. A string's allocator takes a
-	// length and returns a string, not an object, so this call cannot use it
-	// either.
-	if (size >= static_cast<int32_t> (MONO_ABI_SIZEOF (MonoObject))
-	    && m_class_get_byval_arg (klass)->type != MONO_TYPE_STRING)
+	// strings should have been handled by the caller
+	if (m_class_get_byval_arg (klass)->type == MONO_TYPE_STRING)
+		llvm::reportFatalInternalError ("emit_object_alloc does not support strings");
+
+	if (size != 0 && size < MONO_ABI_SIZEOF(MonoObject))
+		llvm::reportFatalInternalError("object size was smaller than sizeof(MonoObject)");
+
+	// size == 0 means that the class has no known layout. Managed allocators
+	// need an actual size so we skip in that case.
+	if (size != 0)
 		allocator = mono_gc_get_managed_allocator (klass, for_box, TRUE);
 
 	if (allocator != nullptr) {
@@ -61,9 +66,9 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
 		return emit_protected_call (
 			builder, *fast,
-			adapt_to_callee (builder, *fast,
-		                         {vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8,
-		                                                   size)}));
+			adapt_to_callee (
+				builder, *fast,
+				{vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, size)}));
 	}
 
 	llvm::Expected<llvm::Function *> slow = object_new_decl ();
@@ -71,19 +76,14 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	if (!slow)
 		return slow.takeError ();
 
-	return emit_protected_call (builder, *slow,
-	                            adapt_to_callee (builder, *slow, {vtable}));
+	return emit_protected_call (builder, *slow, adapt_to_callee (builder, *slow, {vtable}));
 }
 
 /// The address of the value held inside obj. Throws InvalidCastException
 /// when obj is not a boxed klass.
 ///
-/// The check mirrors MINT_UNBOX in the interpreter. obj must not be an
-/// array. An int[] has element class int, so the rank byte is what tells an
-/// array of T apart from a boxed T. Its class's element class must equal
-/// klass's element class, not klass itself. Using element class instead of
-/// klass itself lets a boxed enum unbox as its underlying type, and a boxed
-/// underlying value unbox as the enum.
+/// A boxed enum unboxes as its underlying type, and a boxed underlying value
+/// unboxes as the enum.
 llvm::Value *
 MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, MonoClass *klass)
 {
@@ -96,6 +96,8 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 		builder.CreateGEP (builder.getInt8Ty (), obj,
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
+	// An array of T and a boxed T have the same element class, so the rank is
+	// what tells them apart.
 	llvm::Value *rank = builder.CreateLoad (
 		builder.getInt8Ty (),
 		builder.CreateGEP (builder.getInt8Ty (), vtable,
@@ -146,8 +148,7 @@ nullable_unbox_helper (MonoClass *klass)
 /// reference. The corlib helpers are that branch, written once as ordinary
 /// IL.
 llvm::Error
-MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
-                                         const char *name)
+MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass, const char *name)
 {
 	ERROR_DECL (find_error);
 	MonoMethod *helper =
@@ -176,11 +177,7 @@ MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klas
 /// Box value, a Nullable<T>, into null or a boxed T.
 ///
 /// Unlike every other value type, the boxed form of a Nullable<T> is not a
-/// boxed Nullable<T>. It is a boxed T, or a null reference when the value
-/// has none (III.4.1). Nullable<T>.Box is that branch, written once as
-/// ordinary IL, and every site that boxes a nullable must call it. A plain
-/// allocate-and-copy produces an object whose type the program can observe
-/// and does not expect.
+/// boxed Nullable<T> (III.4.1).
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_nullable (MonoIrBuilder &builder, MonoClass *klass, StackValue value)
 {
@@ -407,13 +404,14 @@ MethodLLVMEmitter::emit_unbox (MonoIrBuilder &builder, uint32_t token)
 
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
-	// A nullable has no interior pointer to hand out: its boxed form is a
-	// plain T or null, not a Nullable<T> with a payload. The helper builds a
-	// Nullable<T> value, spill_to_temporary spills it, and the pushed pointer
-	// is to that spill.
+	// A boxed nullable is a plain T, or null, so there is no Nullable<T>
+	// inside the object whose address this can compute. The helper builds the
+	// value instead. A value class on the evaluation stack is already the
+	// address of a frame slot, so the pointer pushed here is that slot.
+	// III.4.32 does not require unbox to point into the object.
 	if (mono_class_is_nullable (klass)) {
-		if (llvm::Error error = call_nullable_helper (builder, klass,
-		                                              nullable_unbox_helper (klass)))
+		if (llvm::Error error =
+		            call_nullable_helper (builder, klass, nullable_unbox_helper (klass)))
 			return error;
 
 		llvm::Value *home = spill_to_temporary (builder, *type);
