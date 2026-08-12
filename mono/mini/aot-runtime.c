@@ -23,7 +23,23 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 
+#ifdef HOST_WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 static gint32 warned_about_aot_image;
+
+static gboolean
+stderr_is_terminal (void)
+{
+#ifdef HOST_WIN32
+	return _isatty (_fileno (stderr));
+#else
+	return isatty (STDERR_FILENO);
+#endif
+}
 
 /*
  * An AOT image sitting next to an assembly used to be picked up and used. It no
@@ -44,7 +60,7 @@ report_ignored_aot_image (MonoAssemblyLoadContext *alc, MonoAssembly *assembly, 
 		mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_AOT, "AOT: ignoring '%s'.", aot_name);
 
 		/* g_warning () would land on stdout here, which programs and tests read. */
-		if (mono_atomic_cas_i32 (&warned_about_aot_image, 1, 0) == 0)
+		if (stderr_is_terminal () && mono_atomic_cas_i32 (&warned_about_aot_image, 1, 0) == 0)
 			g_printerr ("This runtime does not support ahead-of-time compilation: '%s' will be ignored and the assembly JIT compiled.\n"
 					    "Any other AOT images are ignored too; set MONO_LOG_LEVEL=debug MONO_LOG_MASK=aot to list them.\n", aot_name);
 	}
