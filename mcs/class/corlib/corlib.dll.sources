@@ -132,7 +132,7 @@ System/TermInfoReader.cs
 System/TermInfoStrings.cs
 corefx/TimeZone.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/TimeZone.cs
-../../../external/corefx/src/Common/src/CoreLib/System/CurrentSystemTimeZone.cs
+../../../external/corefx-bugfix/src/Common/src/CoreLib/System/CurrentSystemTimeZone.cs
 corefx/CurrentSystemTimeZone.cs
 corefx/TimeZoneInfo.cs
 System/TimeZoneInfo.cs

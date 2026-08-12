@@ -288,6 +288,7 @@ public class TimeZoneTest {
 			TimeZoneInfo tzInfo = TimeZoneInfo.CreateCustomTimeZone("MY Standard Time", TimeSpan.Zero, "MST", "MST", "MDT", adjustments);
 
 			TimeZoneInfoTest.SetLocal(tzInfo);
+			try {
 
 			DateTime st = new DateTime(2016, 3, 27, 1, 0, 0, DateTimeKind.Local);
 			Assert.IsTrue (!tzInfo.IsDaylightSavingTime(st));	
@@ -307,10 +308,16 @@ public class TimeZoneTest {
 			Assert.IsTrue (!tzInfo.IsAmbiguousTime(st));
 			Assert.IsTrue ((TimeZoneInfo.ConvertTimeToUtc(st).Hour == 3));
 			st = new DateTime(2016, 10, 30, 4, 0, 0, DateTimeKind.Local);
-			Assert.IsTrue (!tzInfo.IsDaylightSavingTime(st));	
+			Assert.IsTrue (!tzInfo.IsDaylightSavingTime(st));
 			Assert.IsTrue (!tzInfo.IsAmbiguousTime(st));
 			Assert.IsTrue ((TimeZoneInfo.ConvertTimeToUtc(st).Hour == 4));
 #endif
+			} finally {
+				// SetLocal () writes TimeZoneInfo's private cache, so without
+				// this every later test in the assembly runs in "MY Standard
+				// Time" at UTC+0 rather than the machine's zone.
+				TimeZoneInfo.ClearCachedData ();
+			}
 		}
 
 		[Test]
