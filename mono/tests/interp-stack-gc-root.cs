@@ -75,6 +75,33 @@ class InterpStackGcRoot
 		watched = new WeakReference (staged);
 	}
 
+	struct W8 { public long a, b, c, d, e, f, g, h; }
+	struct Block { public W8 a, b, c, d, e, f, g, h; }
+
+	/*
+	 * Zero the stack that the WeakReference constructor and its callees left. After
+	 * Drop () returns, those frames still hold words that name the dropped payload.
+	 * Both stacks get a conservative scan, so one such word keeps the payload alive,
+	 * and the phase then reports a run that it cannot measure. The locals below are
+	 * 1024 words, which is more than that subtree uses.
+	 *
+	 * Scrub () cannot do this. Scrub () gets enough calls to reach tier 1, and a
+	 * compiled Scrub () writes the native stack, but the words to clear are on the
+	 * interpreter stack. Wipe () gets one call for each Drop () call, so the two
+	 * methods stay in the same engine and write the same stack.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static long Wipe ()
+	{
+		Block b0 = default, b1 = default, b2 = default, b3 = default;
+		Block b4 = default, b5 = default, b6 = default, b7 = default;
+		Block b8 = default, b9 = default, ba = default, bb = default;
+		Block bc = default, bd = default, be = default, bf = default;
+
+		return b0.a.a + b1.b.b + b2.c.c + b3.d.d + b4.e.e + b5.f.f + b6.g.g + b7.h.h
+		     + b8.a.b + b9.b.c + ba.c.d + bb.d.e + bc.e.f + bd.f.g + be.g.h + bf.h.a;
+	}
+
 	/* Mint one of the same shape in a frame that is popped before anything collects. */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static void Drop ()
@@ -83,6 +110,7 @@ class InterpStackGcRoot
 
 		dropped = new WeakReference (p);
 		p = null;
+		Wipe ();
 	}
 
 	static int Check (Payload live)
