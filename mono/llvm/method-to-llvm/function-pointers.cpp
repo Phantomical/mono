@@ -63,11 +63,8 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 			return error;
 	}
 
-	// The pushed value is the method's published stub, because this pointer
-	// can escape: a delegate can store it, and native code can receive it. A
-	// call through it is an ordinary call in this backend's convention. For a
-	// synchronized method, that entry must be the locking wrapper's. Whoever
-	// calls through the pointer has no other chance to take the lock.
+	// A synchronized method hands out the locking wrapper's entry. Whoever
+	// calls through this pointer has no other chance to take the lock.
 	llvm::Expected<llvm::Constant *> address =
 		code_address_symbol (synchronized_target (*target));
 	if (!address)

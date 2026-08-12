@@ -428,20 +428,12 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 	return load != nullptr && load->getPointerOperand () == args[0].alloca;
 }
 
-/// Names the address of target as something other than a direct call target:
-/// what ldftn pushes, or what a delegate stores.
+/// Names target's entry as a value: an address to push or to store, rather than
+/// a call target in this module.
 ///
-/// This returns the method's stub, which every caller now enters through. A
-/// call made through this pointer is therefore an ordinary call in this
-/// backend's own convention.
-///
-/// The name asked for here is a placeholder like any other, and the engine
-/// renames it later. It must still be a placeholder of its own, not the one
-/// create_method_decl () uses for the same method. Reusing that name here makes
-/// extern_symbol () answer the repeat claim with whatever already holds it.
-/// The address then silently becomes the body sitting beside us, not the stub
-/// in front of it. That body is superseded by every later recompile, so a
-/// delegate built over it keeps calling the tier it was made in.
+/// The address is the method's published entry, which is the one every caller
+/// reaches. A pointer taken here stays correct when a later compile replaces
+/// the body.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
@@ -449,6 +441,12 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 		return create_method_decl (target);
 
 	char *printed = mono_method_full_name (target, FALSE);
+	// This needs a placeholder name of its own, not the one create_method_decl ()
+	// uses. bind_symbols () renames both to the method's stub symbol, but it
+	// leaves a definition alone. So a method taking its own address would find
+	// its own body under that other name and push that, not the stub in front of
+	// it. Every later compile supersedes that body, and a delegate built over it
+	// stays on the tier it was made in.
 	std::string symbol = identity_symbol (printed, target) + "$stub";
 
 	g_free (printed);
