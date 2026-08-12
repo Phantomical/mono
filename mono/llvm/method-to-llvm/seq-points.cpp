@@ -90,6 +90,17 @@ MethodLLVMEmitter::collect_sym_seq_points ()
 	if (!mini_get_debug_options ()->gen_sdb_seq_points)
 		return;
 
+	/*
+	 * A dynamic method is built at run time, so no symbol file names it. It
+	 * still gets a MonoDebugMethodInfo, and that record lists no offsets - which
+	 * reads as "the symbol file says this body has no statements" and leaves the
+	 * body with no sequence points at all. Its line table then keeps only the
+	 * entry row, so every address in it resolves to IL offset 0. Take the
+	 * empty-stack rule instead, which is what a body with no symbols wants.
+	 */
+	if (method->dynamic)
+		return;
+
 	MonoDebugMethodInfo *minfo = mono_debug_lookup_method (method);
 
 	if (minfo == nullptr) {
