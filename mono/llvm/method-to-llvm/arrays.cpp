@@ -807,15 +807,6 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *array =
 		mono_class_create_array (mono_class_from_mono_type_internal (*element), 1);
 
-	/*
-	 * This call goes through the allocator's wrapper. A failed allocation
-	 * reports a pending OutOfMemoryException, and only the wrapper's check
-	 * throws it, so the call unwinds like any other.
-	 *
-	 * NoAlias is the whole claim on the return value: the result aliases
-	 * nothing older than the call. The header - vtable and length - comes
-	 * back already initialized rather than zeroed.
-	 */
 	llvm::Expected<llvm::Function *> allocate =
 		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
 

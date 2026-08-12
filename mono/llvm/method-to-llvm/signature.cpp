@@ -928,11 +928,7 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	    ext != llvm::Attribute::None)
 		function->addRetAttr (ext);
 
-	/*
-	 * The string a constructor creates is fresh, and it aliases nothing
-	 * older than the call. That is the whole claim: the body is arbitrary
-	 * managed code, so nothing stronger holds.
-	 */
+	// A string constructor returns the string it creates, and that string is new.
 	if (method->string_ctor)
 		function->addRetAttr (llvm::Attribute::NoAlias);
 

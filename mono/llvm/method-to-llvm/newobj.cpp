@@ -277,10 +277,6 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 namespace {
 
 /// Marks callee as the GC allocation it is.
-///
-/// NoAlias is the whole claim on the return value: the array aliases nothing
-/// older than the call. The allocation can fail, and the wrapper's check throws
-/// OutOfMemoryException, so the call unwinds like any other.
 llvm::FunctionCallee
 mark_gc_allocator (llvm::FunctionCallee callee)
 {

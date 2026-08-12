@@ -21,10 +21,6 @@ namespace mono {
 
 /// The declaration of the runtime's allocator for a plain instance of a
 /// known class, called with its vtable.
-///
-/// NoAlias is the whole claim on the return value: the result aliases nothing
-/// older than the call. The allocation can fail, and the wrapper's check throws
-/// OutOfMemoryException, so the call unwinds like any other.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
 {
