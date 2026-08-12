@@ -2,11 +2,9 @@
  * \file
  * \brief The ORCv2 JIT the LLVM-only backend compiles through.
  *
- * This is the execution-engine half of the new backend: it owns the LLJIT
- * stack (JITLink object layer, the tier pipeline, symbol resolution) and
- * turns method_to_llvm () modules into executable code. It deliberately knows
- * nothing about mono - no metadata, no MonoMethod, no runtime headers - so it
- * can be driven directly by unit tests; the runtime integration layers on top.
+ * MonoJit owns the LLJIT stack and turns translated modules into executable
+ * code. It knows nothing about mono metadata, so unit tests can drive it
+ * directly.
  */
 
 #ifndef MONO_LLVM_JIT_HPP
@@ -38,25 +36,24 @@ namespace gdbjit {
 struct Registration;
 }
 
-/// The host TargetMachine every compile runs against - code model Small+PIC and
-/// FastISel code generation.
+/// The host TargetMachine every compile runs against.
 ///
 /// One instance per calling thread, reused for every module that thread
-/// compiles: building one costs more than compiling a typical method, and a
-/// TargetMachine cannot be shared across threads.
+/// compiles. A TargetMachine cannot be shared across threads, and building one
+/// costs more than compiling a typical method.
 llvm::TargetMachine &host_target_machine ();
 
 /// The widest access, in bits, this target performs atomically with a single
-/// instruction when compiling F.
+/// instruction when compiling a function.
 ///
-/// An atomic load or store wider than this is legal IR but lowers to a call
-/// into the atomic runtime library, which nothing here provides a definition
-/// for, so an access past this width has to be built some other way.
+/// An atomic load or store wider than this is legal IR, but it lowers to a call
+/// into the atomic runtime library. Nothing here defines that library, so a
+/// wider access has to be built some other way.
 unsigned host_max_atomic_bits (const llvm::Function &f);
 
-/// Whether the IR verifier runs over what this backend produces. Set by
-/// MONO_LLVM_JIT_VERIFY: `0`/`off` to turn it off, `each` to check after every
-/// pass in the pipeline rather than only the ones written here.
+/// Whether the IR verifier runs over what this backend produces.
+///
+/// MONO_LLVM_JIT_VERIFY sets the level.
 bool ir_verification_enabled ();
 
 /// One row of a compiled function's line table: an offset from the start of the
@@ -66,12 +63,13 @@ bool ir_verification_enabled ();
 struct IlLineRow {
 	uint32_t native_offset;
 	uint32_t il_offset;
-	/// MonoSeqPointFlags, on a sequence point row and zero on any other.
+	/// The MONO_SEQ_POINT_FLAG_* bits on a sequence point row, zero on any
+	/// other.
 	uint8_t flags = 0;
 };
 
-/// One frame slot, as the address of a register plus a displacement - the shape
-/// a MonoDebugVarInfo names a variable's home in.
+/// One frame slot, as a register number and a displacement whose sum is the
+/// slot's address - the shape MonoDebugVarInfo names a variable's home in.
 struct VarSlot {
 	int32_t dwarf_reg;
 	int32_t offset;
@@ -85,15 +83,15 @@ struct CompiledMethod {
 	const uint8_t *code = nullptr;
 	size_t code_size = 0;
 
-	/// The `.mono_lsda` clause table; null when the method has no clauses.
+	/// The `.mono_lsda` clause table. Null when the method has no clauses.
 	const uint8_t *clause_table = nullptr;
 	size_t clause_table_size = 0;
-	/// The `.mono_guards` finally-guard table; null when the method has no
+	/// The `.mono_guards` finally-guard table. Null when the method has no
 	/// finally body left to guard.
 	const uint8_t *guard_table = nullptr;
 	size_t guard_table_size = 0;
 
-	/// The `.mono_unwind` frame description; never null for a method.
+	/// The `.mono_unwind` frame description.
 	const uint8_t *unwind_table = nullptr;
 	size_t unwind_table_size = 0;
 
@@ -101,18 +99,18 @@ struct CompiledMethod {
 	/// entry, and any filter bodies compiled alongside it.
 	std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
 
-	/// The jump stubs the linker synthesized for this object, as [code, size).
-	/// Executable, nameless, and on the path of the calls that needed them, so
-	/// the runtime has to be able to resolve an address in one.
+	/// The executable sections the linker synthesized for this object, as
+	/// [code, size). They are nameless, and they sit on the path of the calls
+	/// that needed them. So the runtime has to resolve an address in one.
 	std::vector<std::pair<const uint8_t *, size_t>> linker_stubs;
 
 	/// The entry function's native_offset -> il_offset rows, ascending by
 	/// native offset. Empty when the module carried no line table.
 	std::vector<IlLineRow> il_lines;
 
-	/// The same rows for every other function the object defines, by name -
-	/// the filter bodies, each of which is a frame of its own and needs a map
-	/// of its own to say where in the method's IL it is.
+	/// The same rows for every other function the object defines, by name.
+	/// Each filter body is a frame of its own. So each needs a map of its own
+	/// to say where in the method's IL it is.
 	std::vector<std::pair<std::string, std::vector<IlLineRow>>> other_il_lines;
 
 	/// The entry function's sequence points, ascending by native offset: where
@@ -133,17 +131,16 @@ struct CompiledMethod {
 
 class MonoJit {
 public:
-	/// Queue OPT for LLVM's own command-line option registry - the same
-	/// options `opt` and `llc` take, e.g. "-print-after-all" or
-	/// "-x86-asm-syntax=intel". A leading dash is optional.
+	/// Queue an option for LLVM's own command-line registry, the same options
+	/// `opt` and `llc` take. A leading dash is optional.
 	///
-	/// The options are applied when create () builds the JIT, so everything
-	/// queued has to be in before then; create () fails if LLVM rejects one.
+	/// create () applies the queued options, so queue them before it runs. It
+	/// fails if LLVM rejects one.
 	static void add_option (llvm::StringRef opt);
 
-	/// Build the JIT for the host: JITLink object linking, code model
-	/// Small+PIC, FastISel code generation, and the tier-0 IR pipeline
-	/// applied to every added module.
+	/// Build the JIT for the host, carving its code out of the given slabs.
+	///
+	/// Every module added to it goes through the tier-0 IR pipeline.
 	static llvm::Expected<std::unique_ptr<MonoJit>>
 	create (const std::shared_ptr<CodeSlabs> &slabs);
 
@@ -151,53 +148,47 @@ public:
 	MonoJit &operator= (const MonoJit &) = delete;
 	~MonoJit ();
 
-	/// Make a runtime entry point (icall target, helper, libc routine) visible
-	/// to JIT'd code under NAME. Idempotent: registering a name again is a
-	/// no-op and the first address wins, since many call sites resolve the
-	/// same helper.
+	/// Make a runtime entry point visible to JIT'd code under a name.
+	///
+	/// Registering the same name and address again is a no-op, since many call
+	/// sites resolve the same helper. A second address under one name is an
+	/// error.
 	llvm::Error register_symbol (llvm::StringRef name, void *addr);
 
-	/// Make each stub in STUBS reachable by name from compiled code, as a
-	/// callable symbol at the address it was carved at.
+	/// Make each stub reachable by name from compiled code, as a callable symbol
+	/// at the address it was carved at.
 	///
-	/// The stubs themselves belong to whoever carved them; this is only the
-	/// linker's view of them. Batched because one define () is one acquisition
-	/// of the session lock, and a method publishes its stubs together.
+	/// The stubs themselves belong to whoever carved them. This is only the
+	/// linker's view of them.
 	llvm::Error define_stubs (llvm::ArrayRef<std::pair<llvm::StringRef, void *>> stubs);
 
-	/// Undefine NAMES, which must all have been defined by define_stubs (), so
-	/// that no later link can find them and their blocks are free to be handed
-	/// out again.
+	/// Undefine the given names, which must all have been defined by
+	/// define_stubs (). No later link can then find them, and their blocks are
+	/// free to be handed out again.
 	///
-	/// The caller proves nothing can reach the stubs: a later method published
-	/// here may be given the very same block.
+	/// The caller proves nothing can reach the stubs. A later method published
+	/// here can be given the very same block.
 	llvm::Error undefine_stubs (llvm::ArrayRef<std::string> names);
 
-	/// Compile TSM and return where ENTRY and its side tables landed.
+	/// Compile a module and return where its entry point and side tables landed.
 	///
-	/// The module gets the tier-0 treatment (run_tier0_pipeline + FastISel)
-	/// and lands in a JITDylib of its own that resolves external symbols
-	/// through register_symbol () and the published stubs, and nothing else -
-	/// a lookup never falls back to the process, so an unregistered helper
+	/// The module lands in a JITDylib of its own. That dylib resolves external
+	/// symbols through register_symbol () and the published stubs, and nothing
+	/// else. A lookup never falls back to the process, so an unregistered helper
 	/// fails the compile loudly.
 	llvm::Expected<CompiledMethod> compile (llvm::orc::ThreadSafeModule tsm,
 	                                        llvm::StringRef entry);
 
-	/// Release DYLIBS: their code, their side tables, and the memory both were
-	/// linked into, which later compiles may then reuse.
+	/// Release the dylibs: their code, their side tables, and the memory both
+	/// were linked into. Later compiles can reuse that memory.
 	///
 	/// The caller proves the code dead - nothing executing in it, nothing about
-	/// to call into it - and must have undefined any stub still pointing at it.
+	/// to call into it. Any stub still pointing at it must already be undefined.
 	llvm::Error remove_dylibs (const std::vector<llvm::orc::JITDylib *> &dylibs);
 
-	/// The tier-0 IR pipeline, run over M in place: the stock O1 function
-	/// simplification pipeline, whose load-bearing effect is mem2reg over the
-	/// allocas the translator routes every argument, local and spill slot
-	/// through.
+	/// Run the tier-0 IR pipeline over a module in place.
 	///
-	/// Static and public so tests can assert what it does to translator
-	/// output; compile () applies it to every module through the LLJIT
-	/// transform layer.
+	/// Static and public so tests can assert what it does to translator output.
 	static void run_tier0_pipeline (llvm::Module &m);
 
 	/// The DataLayout modules compiled here must carry. compile () stamps it
@@ -212,26 +203,22 @@ private:
 
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 
-	/// Dedicated dylib holding the explicitly-registered runtime helpers;
-	/// every compiled module's dylib links against this and mono.stubs.
+	/// Dedicated dylib holding the explicitly-registered runtime helpers. Every
+	/// compiled module's dylib links against this and mono.stubs.
 	llvm::orc::JITDylib *helpers_ = nullptr;
 
-	/// The dylib a module's reference to a stub is resolved through. Every stub
-	/// is defined here as soon as it is carved, whether or not anything ever
-	/// names it.
+	/// The dylib a module's reference to a stub is resolved through.
 	llvm::orc::JITDylib *stubs_ = nullptr;
 
-	/// What each name handed to register_symbol () stands for, so a repeat
-	/// registration is recognized instead of tripping ORC's duplicate-definition
-	/// error - and so a name given two different addresses is caught.
+	/// What each name handed to register_symbol () stands for.
 	std::mutex named_symbols_mutex_;
 	std::unordered_map<std::string, void *> named_symbols_;
 
-	/// Names the per-module dylibs; atomic because compiles may be concurrent.
+	/// Names the per-module dylibs.
 	std::atomic<uint64_t> module_counter_{0};
 
-	/// The one dylib every module goes into under MONO_LLVM_JIT_HOIST=sharedjd,
-	/// and null otherwise.
+	/// The dylib every module goes into under MONO_LLVM_JIT_HOIST=sharedjd, and
+	/// null otherwise.
 	llvm::orc::JITDylib *shared_jd_ = nullptr;
 
 	/// How many undefined names it takes to be worth sweeping the session's
@@ -243,7 +230,7 @@ private:
 
 	class ObjectCapturePlugin;
 	/// Captures each linked object's code extent and side tables, keyed by the
-	/// per-compile dylib; compile () collects its own entry after the lookup.
+	/// dylib's name. compile () collects its own entry after the lookup.
 	std::shared_ptr<ObjectCapturePlugin> capture_;
 
 	/// The objects a debugger has been told about, by the dylib holding the
@@ -251,7 +238,7 @@ private:
 	std::mutex gdb_objects_mutex_;
 	std::unordered_map<llvm::orc::JITDylib *, std::vector<gdbjit::Registration *>> gdb_objects_;
 
-	/// Take back every object a debugger was told about for DYLIBS.
+	/// Take back every object a debugger was told about for the given dylibs.
 	void retract_debug_objects (const std::vector<llvm::orc::JITDylib *> &dylibs);
 
 	/// Take back every object a debugger was told about, whichever dylib it
