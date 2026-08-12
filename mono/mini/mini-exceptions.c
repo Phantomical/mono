@@ -3902,6 +3902,22 @@ mono_handle_native_crash (const char *signal, MonoContext *mctx, MONO_SIG_HANDLE
 {
 	MonoJitTlsData *jit_tls = mono_tls_get_jit_tls ();
 
+	/*
+	 * The dump below walks a stack that holds JIT frames, and it can fault. A
+	 * second fault arrives here on the same altstack, so it carries the same
+	 * MonoContext address and its registers replace the ones the report is
+	 * being written from. Say so and stop, rather than describe the handler's
+	 * own fault as if it were the crash.
+	 */
+	static volatile gint32 in_handler = 0;
+
+	if (mono_atomic_cas_i32 (&in_handler, 1, 0) != 0) {
+		g_async_safe_printf ("\nGot a %s inside the crash handler. What is above is "
+				     "all of the report there is, and the fault context now "
+				     "describes this signal rather than the first one.\n", signal);
+		abort ();
+	}
+
 #ifdef MONO_ARCH_USE_SIGACTION
 	struct sigaction sa;
 	sa.sa_handler = SIG_DFL;
@@ -3943,6 +3959,15 @@ mono_handle_native_crash (const char *signal, MonoContext *mctx, MONO_SIG_HANDLE
 	g_async_safe_printf("Got a %s while executing native code. This usually indicates\n", signal);
 	g_async_safe_printf("a fatal error in the mono runtime or one of the native libraries \n");
 	g_async_safe_printf("used by your application.\n");
+
+	/*
+	 * Before anything that can fault, so that a handler which dies still leaves
+	 * the one fact worth having.
+	 */
+	if (mctx)
+		g_async_safe_printf ("Fault at ip=%p sp=%p\n",
+				     MONO_CONTEXT_GET_IP (mctx), MONO_CONTEXT_GET_SP (mctx));
+
 	g_async_safe_printf("=================================================================\n");
 	mono_dump_native_crash_info (signal, mctx, info);
 
