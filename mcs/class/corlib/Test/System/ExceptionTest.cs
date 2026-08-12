@@ -11,6 +11,7 @@
 
 using System;
 using System.Collections;
+using System.IO;
 using System.Runtime.Serialization;
 
 using System.Reflection;
@@ -497,11 +498,21 @@ namespace MonoTests.System
 			Assert.IsTrue (dump.Length > 0, "#3");
 		}
 
+		// Directory for the crash breadcrumbs the runtime writes. Each test instance
+		// gets its own directory and removes it after the test. CheckCrashReportLog
+		// erases the stage files only, and the hash and reason files stay.
+		readonly string dumpLogDir = Path.Combine (Path.GetTempPath (),
+			"mono-exception-test-" + Path.GetRandomFileName ());
+
 		void DumpLogSet ()
 		{
+			// The runtime makes the parent of the path it gets, and not the path
+			// itself, so the directory must be here before the breadcrumbs are.
+			Directory.CreateDirectory (dumpLogDir);
+
 			var monoType = Type.GetType ("Mono.Runtime", false);
 			var convert = monoType.GetMethod("EnableCrashReportLog", BindingFlags.NonPublic | BindingFlags.Static);
-			convert.Invoke(null, new object[] { "./" });
+			convert.Invoke(null, new object[] { dumpLogDir });
 		}
 
 		void DumpLogUnset ()
@@ -515,20 +526,30 @@ namespace MonoTests.System
 		{
 			var monoType = Type.GetType ("Mono.Runtime", false);
 			var convert = monoType.GetMethod("CheckCrashReportLog", BindingFlags.NonPublic | BindingFlags.Static);
-			var result = convert.Invoke(null, new object[] { "./", true });
+			var result = convert.Invoke(null, new object[] { dumpLogDir, true });
 			var enumType = monoType.Assembly.GetType("Mono.Runtime+CrashReportLogLevel");
 			var doneEnum = Enum.Parse(enumType, "MonoSummaryDone");
 			Assert.AreEqual (doneEnum, result, "#DLC1");
+		}
+
+		void DumpLogClean ()
+		{
+			if (Directory.Exists (dumpLogDir))
+				Directory.Delete (dumpLogDir, true);
 		}
 
 		[Test]
 		[Category("NotOnWindows")]
 		public void DumpICallTotalLogged ()
 		{
-			DumpLogSet ();
-			DumpTotal ();
-			DumpLogUnset ();
-			DumpLogCheck ();
+			try {
+				DumpLogSet ();
+				DumpTotal ();
+				DumpLogUnset ();
+				DumpLogCheck ();
+			} finally {
+				DumpLogClean ();
+			}
 		}
 
 		[Test]
