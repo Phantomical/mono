@@ -40,11 +40,11 @@ CompileWorker::start ()
 	 * half-linked object.
 	 *
 	 * The attach above publishes the thread, so shutdown can already have
-	 * taken a list of threads to wait for with this one on it. Going
-	 * background through mono_thread_set_state () is what tells it to build
-	 * that list again; assigning the bit here would leave it waiting on a
-	 * thread that exits only when the queue stops, which by then it never
-	 * will. Flags first, so the rebuilt list sees both.
+	 * taken a list of threads to wait for with this one on it. Only
+	 * mono_thread_set_state () fires the notification that tells shutdown to
+	 * build that list again. Assigning the bit instead leaves shutdown
+	 * waiting on a thread that exits once the queue stops, which is after
+	 * that wait. Flags first, so the rebuilt list sees both.
 	 */
 	internal->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
 	mono_thread_set_state (internal, ThreadState_Background);

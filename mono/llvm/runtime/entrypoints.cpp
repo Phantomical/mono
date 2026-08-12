@@ -20,11 +20,11 @@
 
 namespace {
 
-/// Set ERROR from a refusal the way the runtime expects it.
+/// Sets the error from a refusal the way the runtime expects it.
 ///
-/// A refusal raised through a MonoError is handed back as the exception it
-/// described; anything else is the engine itself failing, which managed code
-/// sees as an ExecutionEngineException all the same.
+/// A refusal raised through a MonoError becomes the exception it described.
+/// Anything else is the engine itself failing, which managed code sees as an
+/// ExecutionEngineException all the same.
 void
 report (llvm::Error failure, MonoError *error)
 {
@@ -44,7 +44,7 @@ report (llvm::Error failure, MonoError *error)
 	g_assert (recovered);
 }
 
-/// Hand a compile's result back the way the runtime expects it.
+/// Hands a compile's result back the way the runtime expects it.
 void *
 finish (llvm::Expected<void *> code, MonoError *error)
 {
