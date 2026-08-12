@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
 
@@ -8,6 +9,12 @@ class Bla<T> {
 }
 public class Entry
 {
+    // The tier and collector arms of this test share a working directory, and
+    // Save () unlinks its target before writing it - so a fixed name in "."
+    // means one arm's save can pull the file out from under another's. Every
+    // test has a TMPDIR of its own, which does separate them.
+    static readonly string SavedAssembly = Path.Combine (Path.GetTempPath (), "Instance.exe");
+
     public static int Main()
     {
 		Bla<int> d = new Bla<int>();	
@@ -16,7 +23,7 @@ public class Entry
 
 		AppDomain domain = AppDomain.CreateDomain ("test");
 		try {
-			domain.ExecuteAssembly ("Instance.exe");
+			domain.ExecuteAssembly (SavedAssembly);
 		} catch (Exception e) {
 			Console.WriteLine ("assembly has thrown "+e);
 			return 1;
@@ -27,7 +34,7 @@ public class Entry
     public static void Instance()
     {
         AssemblyName name = new AssemblyName("Instance");
-        AssemblyBuilder asmbuild = System.Threading.Thread.GetDomain().DefineDynamicAssembly(name, AssemblyBuilderAccess.RunAndSave);
+        AssemblyBuilder asmbuild = System.Threading.Thread.GetDomain().DefineDynamicAssembly(name, AssemblyBuilderAccess.RunAndSave, Path.GetTempPath ());
         ModuleBuilder mod = asmbuild.DefineDynamicModule("Instance.exe");
 
         TypeBuilder G = mod.DefineType("G", TypeAttributes.Public);
