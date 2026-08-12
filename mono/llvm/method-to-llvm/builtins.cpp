@@ -74,8 +74,8 @@ MethodLLVMEmitter::emit_string_constructor (MonoIrBuilder &builder, MonoMethod *
 	return emit_protected_call (builder, decl, args);
 }
 
-/// A call opcode whose target is the string constructor ctor. The arguments
-/// come off the stack, and the string it built goes on.
+/// Compiles a call opcode whose target is the string constructor ctor. The
+/// arguments come off the stack, and the string it built goes on.
 llvm::Error
 MethodLLVMEmitter::emit_string_constructor_call (MonoIrBuilder &builder, MonoMethod *ctor,
                                                  MonoMethodSignature *sig)

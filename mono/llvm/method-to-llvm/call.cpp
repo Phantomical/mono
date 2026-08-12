@@ -39,7 +39,7 @@ is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 	       && std::string_view (m_class_get_name_space (klass)) == "System.Diagnostics";
 }
 
-/// The method token names, resolved against this method's generic context.
+/// Resolves token to the method it names, against this method's generic context.
 llvm::Expected<MonoMethod *>
 MethodLLVMEmitter::resolve_method (uint32_t token)
 {
@@ -74,7 +74,7 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 	return target;
 }
 
-/// The signature a call to target uses at this call site.
+/// Returns the signature a call to target uses at this call site.
 ///
 /// This differs from the declaration only at a vararg call site, where it also
 /// names the types the caller chose for the variable arguments.
@@ -92,15 +92,16 @@ MethodLLVMEmitter::call_site_signature (MonoMethod *target, uint32_t token)
 	return sig;
 }
 
-/// The buffer a vararg call's variable arguments cross in, filled from args,
-/// whose entries are the call-site signature's parameters in order.
+/// Builds the buffer a vararg call passes its variable arguments in.
 ///
-/// ves_icall_System_ArgIterator_Setup () reads the signature out of the buffer's
-/// first word and starts its walk at the second word. IntGetNextArg () then
-/// advances by mono_type_stack_size () with no realignment of its own, so the
-/// offsets here are that running sum and nothing else. A float takes four bytes
-/// rather than a whole slot, so a wrong offset here does not fail loudly: the
-/// next argument reads as garbage.
+/// \param args  the call's arguments in order, the this included.
+///
+/// The first word holds the signature. Each variable argument follows at the
+/// running sum of mono_type_stack_size () over the ones before it. That is what
+/// System.ArgIterator reads: Setup starts its walk at the second word, and
+/// IntGetNextArg advances by that same size without realigning. Sizes are not
+/// uniform - a float takes four bytes, not a whole slot - so an offset that
+/// disagrees does not fault. The next argument reads as garbage.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature *sig,
                                      llvm::ArrayRef<llvm::Value *> args)
@@ -149,7 +150,8 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 	return buffer;
 }
 
-/// value as something that can go where a call signature asks for destination.
+/// Coerces value to something that can go where a call signature asks for
+/// destination.
 ///
 /// A call argument accepts a mismatch that coerce_to_location () refuses for a
 /// store: an int32, or a pointer, where the parameter is int64. This backend
@@ -185,7 +187,7 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 	return materialize (builder, *coerced, destination, native);
 }
 
-/// value as the receiver of an instance call.
+/// Coerces value to the receiver of an instance call.
 ///
 /// A `this` is a pointer in every signature this backend converts. The eval stack
 /// can still hand one over as a native int. Pointer arithmetic and `ldind.i` both
@@ -242,7 +244,8 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 	return args;
 }
 
-/// The pointer stored offset bytes into the vtable of the object receiver points at.
+/// Loads the pointer stored offset bytes into the vtable of the object receiver
+/// points at.
 llvm::Value *
 MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, int32_t offset)
 {
@@ -258,7 +261,7 @@ MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, 
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 }
 
-/// The address of target's entry in the vtable of the object receiver points at.
+/// Loads the callee out of target's vtable slot in the object receiver points at.
 ///
 /// A virtual call reads the callee out of the receiver instead of knowing it in
 /// advance. It indexes the object's vtable pointer by the slot the method was
@@ -273,7 +276,7 @@ MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver
 	                                       * TARGET_SIZEOF_VOID_P);
 }
 
-/// The address of target's entry in the IMT of the object receiver points at.
+/// Loads the callee out of target's IMT slot in the object receiver points at.
 ///
 /// An interface method has no fixed vtable slot: where an implementation lands depends
 /// on the class that implements it. Dispatch goes instead through the interface method
@@ -313,8 +316,8 @@ dispatches_through_invoke_impl (MonoMethod *target)
 	       && std::string_view (target->name) == "Invoke";
 }
 
-/// The implementation the runtime settled on for receiver, a delegate, or target's
-/// vtable slot until it has one.
+/// Loads the implementation the runtime settled on for receiver, a delegate, or
+/// target's vtable slot until it has one.
 ///
 /// That slot holds the same delegate trampoline that fills invoke_impl in. A
 /// delegate whose field is still unset therefore dispatches correctly through it.
@@ -350,8 +353,8 @@ keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 		{ value });
 }
 
-/// The address the engine must resolve for target's own MonoMethod, the runtime's
-/// description of the method rather than its code.
+/// Names the address the engine must resolve for target's own MonoMethod, the
+/// runtime's description of the method rather than its code.
 llvm::Constant *
 MethodLLVMEmitter::method_symbol (MonoMethod *target)
 {
@@ -363,8 +366,8 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 	return extern_symbol (symbol);
 }
 
-/// target, or the wrapper that takes and releases its lock when target carries
-/// [MethodImpl(Synchronized)].
+/// Returns target, or the wrapper that takes and releases its lock when target
+/// carries [MethodImpl(Synchronized)].
 ///
 /// A synchronized method's monitor is not in its body. The runtime builds a
 /// wrapper that enters the monitor, calls the body, and exits through a finally.
@@ -408,8 +411,8 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 	return load != nullptr && load->getPointerOperand () == args[0].alloca;
 }
 
-/// The address of target as something other than a direct call target: what
-/// ldftn pushes, or what a delegate stores.
+/// Names the address of target as something other than a direct call target:
+/// what ldftn pushes, or what a delegate stores.
 ///
 /// This returns the method's stub, which every caller now enters through. A
 /// call made through this pointer is therefore an ordinary call in this

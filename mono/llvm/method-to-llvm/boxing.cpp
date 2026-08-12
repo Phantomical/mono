@@ -20,8 +20,8 @@ extern "C" {
 
 namespace mono {
 
-/// The declaration of the runtime's allocator for a plain instance of a
-/// known class, called with its vtable.
+/// Declares the runtime's allocator for a plain instance of a known class,
+/// called with its vtable.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
 {
@@ -80,8 +80,8 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	return emit_protected_call (builder, *slow, adapt_to_callee (builder, *slow, {vtable}));
 }
 
-/// The address of the value held inside obj. Throws InvalidCastException
-/// when obj is not a boxed klass.
+/// Returns the address of the value held inside obj. Throws
+/// InvalidCastException when obj is not a boxed klass.
 ///
 /// A boxed enum unboxes as its underlying type, and a boxed underlying value
 /// unboxes as the enum.
@@ -129,7 +129,7 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 	                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 }
 
-/// The name of the corlib helper that unboxes an object into a Nullable<T>.
+/// Names the corlib helper that unboxes an object into a Nullable<T>.
 ///
 /// UnboxExact applies when T is an enum. Unbox's cast to T also accepts a
 /// boxed underlying type, because enum and underlying type interconvert
