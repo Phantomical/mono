@@ -5324,6 +5324,11 @@ public class DebuggerTests
 				if ((e.Thread.GetFrames ()[0].Location.LineNumber == firstLineFound + 1 && (e.Thread.Name.Equals("Thread_0") || e.Thread.Name.Equals("Thread_1"))) || l.LineNumber == firstLineFound + 2) {
 					vm.Resume ();
 					e = GetNextEvent ();
+					// A VMDeathEvent carries no thread, so letting one through
+					// here reports a dead debuggee as a null dereference at the
+					// top of the loop. Break instead and let the counters below
+					// say what was missed.
+					Assert.IsTrue (e is StepEvent || e is BreakpointEvent, "unexpected event " + e.EventType);
 				}
 				else
 					e = step_over_or_breakpoint ();
