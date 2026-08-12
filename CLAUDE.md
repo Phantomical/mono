@@ -557,22 +557,7 @@ the code probably does.
 
 ### Register
 
-Comments here follow ASD-STE100 Simplified Technical English, descriptive register. It is
-not a style preference — the constraints happen to strip out exactly the padding that makes
-a comment take three reads.
-
-- Twenty-five words a sentence, maximum. Split anything longer.
-- Active voice. Passive only when the actor is genuinely unknown.
-- The only modals are can, will and must. Never should, would, may, might or could. A
-  requirement is "must" and a possibility is "can".
-- No semicolons. Write two sentences.
-- Put a condition before its consequence. "If the class is not loaded, the translator
-  declines", not the other way round.
-- No Latin abbreviations. Write "for example" and "that is", and name the items rather than
-  trailing off into "etc.".
-- No `-ing` form as a verb. The pass rewrites the call, it is not rewriting it.
-- One term for one thing, throughout a file.
-- Cut filler on sight: simply, just, note that, it is worth noting, essentially, basically,
-  actually, of course, obviously.
-- Do not buy brevity by dropping words. Keep the articles and keep "that" — terse and
-  simple are different things, and only one of them is the goal.
+Comments here are written in ASD-STE100 Simplified Technical English, descriptive register.
+The `simple-english` skill carries the rules — invoke it before writing or reviewing
+comments rather than working from memory of them. It is not a style preference. The
+constraints strip out exactly the padding that makes a comment take three reads.
