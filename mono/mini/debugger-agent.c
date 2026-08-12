@@ -3284,7 +3284,8 @@ no_seq_points_found (MonoMethod *method, int offset)
 }
 
 static int
-calc_il_offset (MonoDomain *domain, MonoJitInfo *ji, MonoMethod *method, int native_offset, gboolean is_top_frame)
+calc_il_offset (MonoDomain *domain, MonoJitInfo *ji, MonoMethod *method, int native_offset, gboolean is_top_frame,
+		MonoInterpFrameHandle interp_frame)
 {
 	int ret = -1;
 
@@ -3304,8 +3305,19 @@ calc_il_offset (MonoDomain *domain, MonoJitInfo *ji, MonoMethod *method, int nat
 		if (mono_find_prev_seq_point_for_native_offset (domain, ji, native_offset, NULL, &sp))
 			ret = sp.il_offset;
 	}
-	if (ret == -1)
-		ret = mono_debug_il_offset_from_address (method, domain, native_offset);
+	if (ret == -1) {
+		/*
+		 * mono_debug_il_offset_from_address () is keyed by method. A method that
+		 * runs in both engines registers a line table from each, and one
+		 * replaces the other. An interpreted frame's native offset is an offset
+		 * into bytecode, so the compiled body's table answers it with an
+		 * unrelated IL offset. Ask the engine that owns the frame.
+		 */
+		if (interp_frame)
+			ret = mini_get_interp_callbacks ()->frame_il_offset (interp_frame, native_offset);
+		else
+			ret = mono_debug_il_offset_from_address (method, domain, native_offset);
+	}
 	return ret;
 }
 
@@ -3381,7 +3393,8 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 	}
 
 	if (info->il_offset == -1) {
-		info->il_offset = calc_il_offset (info->domain, info->ji, method, info->native_offset, ud->frames == NULL);
+		info->il_offset = calc_il_offset (info->domain, info->ji, method, info->native_offset, ud->frames == NULL,
+						  info->interp_frame);
 	}
 
 	PRINT_DEBUG_MSG (1, "\tFrame: %s:[il=0x%x, native=0x%x] %d\n", mono_method_full_name (method, TRUE), info->il_offset, info->native_offset, info->managed);
@@ -3628,7 +3641,8 @@ compute_frame_info (MonoInternalThread *thread, DebuggerTlsData *tls, gboolean f
 			StackFrame *top_frame = tls->frames [0];
 			if (interp_resume_frame == top_frame->interp_frame) {
 				int native_offset = (int) ((uintptr_t) interp_resume_ip - (uintptr_t) top_frame->de.ji->code_start);
-				top_frame->il_offset = calc_il_offset (top_frame->de.domain, top_frame->de.ji, top_frame->de.method, native_offset, TRUE);
+				top_frame->il_offset = calc_il_offset (top_frame->de.domain, top_frame->de.ji, top_frame->de.method, native_offset, TRUE,
+								      top_frame->interp_frame);
 			}
 		}
 	}
