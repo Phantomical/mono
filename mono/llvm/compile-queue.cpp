@@ -105,24 +105,22 @@ CompileQueue::stop ()
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
 
-		not_from_the_worker ("stopping the queue");
-
 		stopping_ = true;
 		pending_.clear ();
 		ready_.notify_all ();
 
 		/*
-		 * Only a worker that reached the loop is one to wait for. One that has
-		 * not is still inside Worker::start (), which the runtime is entitled
-		 * never to return from - attaching a thread to a runtime that has begun
-		 * shutting down parks it for the life of the process, and a stop ()
-		 * during shutdown is exactly when that happens. It has taken no work
-		 * and can take none now, so let it go instead.
+		 * A worker without started_ set is still inside Worker::start (): it has
+		 * taken no work and can take none, so there is nothing to wait for even
+		 * when it is the caller. One that reached the loop and calls this is a
+		 * compile tearing down the runtime under itself.
 		 */
-		if (started_)
+		if (started_) {
+			not_from_the_worker ("stopping the queue");
 			worker = std::move (thread_);
-		else if (thread_.joinable ())
+		} else if (thread_.joinable ()) {
 			thread_.detach ();
+		}
 	}
 
 	if (worker.joinable ())
