@@ -17,11 +17,6 @@ namespace {
 /// The mask keeps the result defined. If the shift amount reaches the operand's width,
 /// the spec leaves the result unspecified. LLVM treats that case as poison instead, and
 /// poison can affect code far from where it happened.
-///
-/// The mask costs an extra instruction at run time. Codegen runs through FastISel,
-/// since this backend always compiles at `CodeGenOptLevel::None`, and FastISel does not
-/// fold the mask into the shift instruction. What is left also matches what the classic
-/// JIT computes for the same shift.
 llvm::Value *
 shift_amount (llvm::IRBuilder<> &builder, llvm::Value *amount, llvm::Type *type)
 {
