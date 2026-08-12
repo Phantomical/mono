@@ -734,6 +734,8 @@ typedef struct {
 	gboolean in_interp;
 	MonoInterpStackIter interp_iter;
 	gpointer last_frame_addr;
+	/* The outermost interpreted frame the walk has reported. */
+	gpointer outermost_interp_frame;
 } Unwinder;
 
 static void
@@ -772,6 +774,8 @@ unwinder_unwind_frame (Unwinder *unwinder,
 		}
 
 		unwinder->in_interp = mini_get_interp_callbacks ()->frame_iter_next (&unwinder->interp_iter, frame);
+		if (unwinder->in_interp)
+			unwinder->outermost_interp_frame = frame->interp_frame;
 		if (frame->type == FRAME_TYPE_INTERP) {
 			const gpointer parent = mini_get_interp_callbacks ()->frame_get_parent (frame->interp_frame);
 			unwinder->last_frame_addr = parent;
@@ -786,8 +790,19 @@ unwinder_unwind_frame (Unwinder *unwinder,
 		if (!res)
 			return FALSE;
 		if (frame->type == FRAME_TYPE_INTERP_TO_MANAGED || frame->type == FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX) {
-			unwinder->in_interp = TRUE;
-			mini_get_interp_callbacks ()->frame_iter_init (&unwinder->interp_iter, frame->interp_exit_data);
+			/*
+			 * A walk only goes outward, so an exit whose frames start below one
+			 * already reported describes stack this walk has been through. A
+			 * filter is what produces that: it runs in a copy of the frame that
+			 * owns the clause, the walk reaches the original through the copy's
+			 * parent, and the throw's own exit then offers the frames between
+			 * the throw site and the clause a second time.
+			 */
+			if (!unwinder->outermost_interp_frame ||
+			    (gsize)frame->interp_exit_data > (gsize)unwinder->outermost_interp_frame) {
+				unwinder->in_interp = TRUE;
+				mini_get_interp_callbacks ()->frame_iter_init (&unwinder->interp_iter, frame->interp_exit_data);
+			}
 		}
 		unwinder->last_frame_addr = frame->frame_addr;
 		return TRUE;
