@@ -520,6 +520,10 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - A doc comment states the contract a method exposes: what it does, and what a caller needs
   in order to use it correctly and safely. Explain _what_, not _how_ - anyone who needs the
   mechanism can read the implementation.
+- Rationale belongs beside the line it justifies. A doc comment that argues why the code
+  takes one approach is holding text the body wants: move it down to the line, do not
+  delete it. The doc then keeps the contract and the body keeps the argument. Moving it
+  usually also sharpens it, because next to the code you can say which case it is about.
 - These are internal doc comments, so scope them as such. They do not need to be exhaustive,
   because a reader who wants more can open the code. A short introduction plus whatever heads
   off a non-obvious misuse is enough.
@@ -542,6 +546,9 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Keep parentheticals out of a summary line. Needing one is a sign the summary is trying to
   cover more than one thing; split it or narrow it instead.
 - Do not open a summary line with "The one X" or similar. Say what the thing is.
+- Start a function's summary with a verb - "Builds the buffer a vararg call passes its
+  variable arguments in." The name already gives the noun, so a summary that opens with the
+  noun spends its first words repeating the signature.
 - A file doc comment says what the file is for. Leave the mechanism to the implementation,
   which the reader can see.
 - In C++, `//` is the normal comment. Reach for `/* */` when a block genuinely runs to several
@@ -554,6 +561,11 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Do not repeat a fact that is documented where it lives. Two copies disagree eventually,
   and the copy a reader finds first is the one they believe. Point at the home, or say
   nothing.
+- One convention that several functions obey gets one home, and that home is a block above
+  the code that builds it rather than a piece in each doc comment. The mono vararg cookie
+  was spelled out in five places, each carrying the part its own function needed, and no
+  one of them said what the buffer looks like. Hoist the mechanism, then cut every
+  restatement; a comment that points at the home stays.
 
 ### A comment is a claim
 
@@ -567,6 +579,14 @@ anything and each cost every future reader a failed grep. The same applies when 
 assert a mechanism only
 after observing it, because where a cheap observation exists it beats reasoning about what
 the code probably does.
+
+Check a claim against every path the function takes, not the one the name suggests.
+`code_address_symbol ()` promised that a call through the pointer it hands back is an
+ordinary call in this backend's convention. That holds for a method this backend compiles.
+It fails on the early return above it: a no-wrapper icall's published address is the
+registered C function, and a call to that one is C. A sentence that is true for the main
+path and false for an early return is a false sentence, and it is worse than a missing one,
+because it reads as a guarantee.
 
 ### Register
 
