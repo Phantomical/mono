@@ -34,8 +34,9 @@ MethodLLVMEmitter::object_new_decl ()
 	return wrapper;
 }
 
-/// Allocate an instance of klass and return the reference. Set for_box when
-/// the instance is the box a value of klass goes into.
+/// Allocate an instance of klass and return the reference.
+///
+/// \param for_box  whether the instance is the box a value of klass goes into.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
@@ -300,8 +301,9 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 }
 
 /// Allocate klass's box, copy value into the payload, and return the new
-/// object. value is what coerce_to_location produced for a location of
-/// type.
+/// object.
+///
+/// \param value  what coerce_to_location produced for a location of type.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
                               llvm::Value *value)

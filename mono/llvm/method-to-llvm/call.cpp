@@ -677,11 +677,13 @@ MethodLLVMEmitter::matching_call_abi (MonoMethodSignature *callee_sig,
 /// which is the shape LLVM turns into a jump. The IL ret that should_tail_call
 /// verified comes next is consumed here, since this ret is its translation.
 ///
-/// declaration is the callee's own declaration, which is where the site's return
-/// attributes come from even when the call goes through a pointer rather than to
-/// it. describe_site says the rest of what the site is. A dispatched call must
-/// say the same things here that it says on the ordinary path, because a jump
-/// that lost its key dispatches on nothing.
+/// \param declaration    the callee's own declaration, which is where the site's
+///                       return attributes come from even when the call goes
+///                       through a pointer rather than to it.
+/// \param describe_site  says the rest of what the site is. A dispatched call
+///                       must say the same things here that it says on the
+///                       ordinary path, because a jump that lost its key
+///                       dispatches on nothing.
 ///
 /// The marker is what the jump is made of, not a hint about one. The backend
 /// never turns an *unmarked* call in tail position into a sibling call, at any

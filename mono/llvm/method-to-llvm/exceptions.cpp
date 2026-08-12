@@ -398,6 +398,10 @@ MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t cl
 /// Deliver an abort that arrived while the clause's handler was running, now that
 /// the handler has finished.
 ///
+/// \param which  the continuation the endfinally is about to take. Zero means the
+///               handler was entered by unwinding, and an exception is already
+///               leaving the frame, so the runtime delivers the abort behind it.
+///
 /// A thread aborted inside a finally must finish the finally first, so the abort
 /// request does not raise anything there. It sets a byte in this frame
 /// (install_handler_block_guard) and leaves delivery to the handler's own exit. The
@@ -405,10 +409,7 @@ MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t cl
 /// raises it here, past the body but still inside whatever protects the handler.
 /// It reaches the same catch a timely abort reaches.
 ///
-/// This only checks on the way out through a leave: which names the continuation
-/// the endfinally is about to take. Zero means the handler was entered by unwinding,
-/// and an exception is already leaving the frame, so the runtime delivers the abort
-/// behind it.
+/// This only checks on the way out through a leave.
 llvm::Error
 MethodLLVMEmitter::emit_finally_abort_check (MonoIrBuilder &builder, uint32_t clause,
                                              llvm::Value *which)

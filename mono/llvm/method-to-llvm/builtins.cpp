@@ -26,8 +26,11 @@
 
 namespace mono {
 
-/// ctor is a creator, so it returns the object it builds instead of filling
-/// in an instance. args are its constructor arguments without the this.
+/// Calls a constructor that returns the object it builds instead of filling in
+/// an instance.
+///
+/// \param ctor  a creator constructor.
+/// \param args  the constructor arguments, without the this.
 ///
 /// A string constructor cannot fill in an instance because its length is not
 /// known before the constructor reads its arguments. Asking for the object
