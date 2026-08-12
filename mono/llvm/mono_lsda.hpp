@@ -28,7 +28,7 @@
 #include <mono/metadata/metadata.h>
 #include <mono/mini/mini.h>
 
-/* The non-ECMA `kind` marker values. */
+// The non-ECMA `kind` marker values.
 #include "mono_lsda_format.hpp"
 
 namespace mono {

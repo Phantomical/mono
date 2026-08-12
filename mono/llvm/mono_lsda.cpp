@@ -121,7 +121,7 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 
 	Reader r (sec, sec + size);
 
-	/* --- header --- */
+	// --- header ---
 	std::uint32_t magic = r.u32 ();
 	std::uint16_t version = r.u16 ();
 	std::uint16_t count = r.u16 ();
@@ -140,7 +140,7 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 	            static_cast<std::size_t> (count) * MONO_LSDA_ENTRY_SIZE)
 		return false;
 
-	/* --- entries --- */
+	// --- entries ---
 	out.reserve (count);
 	for (unsigned i = 0; i < count; ++i) {
 		MonoLsdaEntry e;
@@ -320,7 +320,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 	// one, so it reaches the enclosers innermost-first too. For try/finally C
 	// inside B inside A the published array is [C, B, A], and pass-2 runs C, B, A.
 	for (std::size_t i = 0; i < dispatch.size (); ) {
-		/* One landing pad's entries for one invoke range: a single nesting chain. */
+		// One landing pad's entries for one invoke range: a single nesting chain.
 		std::size_t end = i;
 		while (end < dispatch.size () &&
 		       dispatch[end].try_start_off == dispatch[i].try_start_off &&
