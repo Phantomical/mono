@@ -69,10 +69,6 @@ namespace mono {
  *   Verification (§III.1.8) tracks the type of the value loaded onto the stack as the
  *   intermediate type (§I.8.7) of the local variable.
  */
-
-/// Pushes local variable `index` onto the evaluation stack, which is what ECMA-335
-/// III.3.43 calls ldloc. The pushed value has the local's intermediate type, not its
-/// declared type.
 llvm::Error
 MethodLLVMEmitter::emit_ldloc (MonoIrBuilder &builder, uint32_t index)
 {
@@ -132,9 +128,6 @@ MethodLLVMEmitter::emit_ldloc (MonoIrBuilder &builder, uint32_t index)
  *   by having set the localsinit bit for the method, or by previous instructions
  *   (where the CLI performs definite-assignment analysis)
  */
-
-/// Pushes the address of local variable `index` onto the stack as a managed
-/// pointer, which is what ECMA-335 III.3.44 calls ldloca.
 llvm::Error
 MethodLLVMEmitter::emit_ldloca (MonoIrBuilder &builder, uint32_t index)
 {
@@ -268,9 +261,6 @@ MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
  *   Verification also checks that the type of value is verifier-assignable-to the type
  *   of the local, as specified in the current method's locals signature.
  */
-
-/// Pops a value off the stack and stores it into local variable `index`, which is
-/// what ECMA-335 III.3.63 calls stloc.
 llvm::Error
 MethodLLVMEmitter::emit_stloc (MonoIrBuilder &builder, uint32_t index)
 {
@@ -336,10 +326,6 @@ MethodLLVMEmitter::emit_stloc (MonoIrBuilder &builder, uint32_t index)
  *
  *   This instruction is never verifiable.
  */
-
-/// Pops a byte count off the stack, allocates that many bytes from the frame, and
-/// pushes the address, which is what ECMA-335 III.3.47 calls localloc. If the
-/// method header's init_locals flag is set, the allocated bytes start zeroed.
 llvm::Error
 MethodLLVMEmitter::emit_localloc (MonoIrBuilder &builder)
 {

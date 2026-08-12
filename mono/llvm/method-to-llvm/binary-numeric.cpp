@@ -412,9 +412,6 @@ MethodLLVMEmitter::pop_binary_operands (BinaryOp op)
  *
  *   See Table 2: Binary Numeric Operations.
  */
-
-/// III.3.1 add - adds value2 to value1, per Table III.2 above. Integer overflow wraps
-/// silently, and floating-point overflow produces +/-infinity. add never throws.
 llvm::Error
 MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 {
@@ -478,10 +475,6 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
  *
  *   See Table 2: Binary Numeric Operations.
  */
-
-/// III.3.64 sub - subtracts value2 from value1, per Table III.2 above. Integer
-/// overflow wraps silently. Floating-point overflow produces +/-infinity, and
-/// underflow produces zero. sub never throws.
 llvm::Error
 MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 {
@@ -543,9 +536,6 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
  *
  *   See Table 2: Binary Numeric Operations.
  */
-
-/// III.3.48 mul - multiplies value1 by value2, per Table III.2 above. Integer
-/// overflow truncates the high bits silently. mul never throws.
 llvm::Error
 MethodLLVMEmitter::emit_mul (MonoIrBuilder &builder)
 {
@@ -687,12 +677,6 @@ MethodLLVMEmitter::emit_checked_pointer_offset (MonoIrBuilder &builder, llvm::Va
  *
  *   See Table 2: Binary Numeric Operations.
  */
-
-/// III.3.31 div - divides value1 by value2, per Table III.2 above. Integer division
-/// truncates toward zero. Floating-point division follows IEEE 754 and never throws.
-///
-/// If value2 is zero, this throws DivideByZeroException. If value1 is the smallest
-/// representable integer and value2 is -1, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_div (MonoIrBuilder &builder)
 {
@@ -775,12 +759,6 @@ MethodLLVMEmitter::emit_div (MonoIrBuilder &builder)
  *
  *   See Table 2: Binary Numeric Operations.
  */
-
-/// III.3.55 rem - computes value1 rem value2, per Table III.2 above: the remainder
-/// after integer division truncated toward zero, or fmod for floating-point operands.
-///
-/// If value2 is zero, this throws DivideByZeroException. If value1 is the smallest
-/// representable integer and value2 is -1, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_rem (MonoIrBuilder &builder)
 {
@@ -841,11 +819,6 @@ MethodLLVMEmitter::emit_rem (MonoIrBuilder &builder)
  *
  *   See Table 5: Integer Operations.
  */
-
-/// III.3.32 div.un - divides value1 by value2 as unsigned integers, per Table III.5
-/// above.
-///
-/// If value2 is zero, this throws DivideByZeroException.
 llvm::Error
 MethodLLVMEmitter::emit_div_un (MonoIrBuilder &builder)
 {
@@ -908,11 +881,6 @@ MethodLLVMEmitter::emit_div_un (MonoIrBuilder &builder)
  *
  *   See Table 5: Integer Operations.
  */
-
-/// III.3.56 rem.un - computes the unsigned integer remainder of value1 divided by
-/// value2, per Table III.5 above.
-///
-/// If value2 is zero, this throws DivideByZeroException.
 llvm::Error
 MethodLLVMEmitter::emit_rem_un (MonoIrBuilder &builder)
 {
@@ -960,9 +928,6 @@ MethodLLVMEmitter::emit_rem_un (MonoIrBuilder &builder)
  *
  *   See Table 7: Overflow Arithmetic Operations.
  */
-
-/// III.3.2 add.ovf / add.ovf.un - adds value2 to value1, per Table III.7 above. If the
-/// result does not fit in the result type, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
 {
@@ -1027,9 +992,6 @@ MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
  *
  *   See Table 7: Overflow Arithmetic Operations.
  */
-
-/// III.3.65 sub.ovf / sub.ovf.un - subtracts value2 from value1, per Table III.7
-/// above. If the result does not fit in the result type, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 {
@@ -1092,9 +1054,6 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
  *
  *   See Table 8: Conversion Operations.
  */
-
-/// III.3.49 mul.ovf / mul.ovf.un - multiplies value1 by value2, per Table III.7
-/// above. If the result does not fit in the result type, this throws OverflowException.
 llvm::Error
 MethodLLVMEmitter::emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned)
 {
@@ -1152,11 +1111,6 @@ MethodLLVMEmitter::emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned)
  *
  *   See Table 3: Unary Numeric Operations.
  */
-
-/// III.3.50 neg - negates value, per Table III.3 below. Twos-complement negation wraps
-/// the smallest representable integer to itself instead of overflowing. sub.ovf from 0
-/// detects that overflow when code needs it. Negating a float never overflows, and
-/// negating NaN returns NaN.
 llvm::Error
 MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 {
@@ -1230,9 +1184,6 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
  *
  *   There are no additional verification requirements.
  */
-
-/// III.3.24 ckfinite - checks value for validity. If value is NaN or an infinity, this
-/// throws ArithmeticException. Otherwise it leaves value on the stack unchanged.
 llvm::Error
 MethodLLVMEmitter::emit_ckfinite (MonoIrBuilder &builder)
 {

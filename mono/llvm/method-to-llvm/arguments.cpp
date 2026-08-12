@@ -54,10 +54,6 @@ namespace mono {
  *   Verification (§III.1.8) tracks the type of the value loaded onto the stack as the
  *   intermediate type (§I.8.7) of the argument.
  */
-
-/// Pushes argument `index` onto the evaluation stack, which is what ECMA-335
-/// III.3.38 calls ldarg. The pushed value has the argument's intermediate
-/// type, not its declared type.
 llvm::Error
 MethodLLVMEmitter::emit_ldarg (MonoIrBuilder &builder, uint32_t index)
 {
@@ -109,9 +105,6 @@ MethodLLVMEmitter::emit_ldarg (MonoIrBuilder &builder, uint32_t index)
  *   Verification (§III.1.8) tracks the type of the value loaded onto the stack as a
  *   managed pointer to the verification type (§I.8.7) of the argument.
  */
-
-/// Pushes the address of argument `index` onto the stack as a managed
-/// pointer, which is what ECMA-335 III.3.39 calls ldarga.
 llvm::Error
 MethodLLVMEmitter::emit_ldarga (MonoIrBuilder &builder, uint32_t index)
 {
@@ -164,9 +157,6 @@ MethodLLVMEmitter::emit_ldarga (MonoIrBuilder &builder, uint32_t index)
  *
  *   Correct CIL requires that num is a valid argument slot.
  */
-
-/// Pops a value off the stack and stores it into argument slot `index`,
-/// which is what ECMA-335 III.3.61 calls starg.
 llvm::Error
 MethodLLVMEmitter::emit_starg (MonoIrBuilder &builder, uint32_t index)
 {
