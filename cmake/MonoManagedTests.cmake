@@ -37,6 +37,10 @@ if(NOT MONO_ENABLE_NETWORK_TESTS)
   list(APPEND MONO_TEST_NUNIT_EXCLUDES InetAccess)
 endif()
 
+# Likewise for a display. Kept separate from the network option because a
+# machine can easily have one and not the other.
+option(MONO_ENABLE_GUI_TESTS "Run tests that need an X display" OFF)
+
 # What one suite gets to run for.  A suite is a whole assembly's worth of cases
 # driven by one console, so the budget is per-assembly and generous by the
 # standards of the rest of the tree.
@@ -883,6 +887,13 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   # An integration suite against a broker on localhost: 61 of its 87 cases need
   # one, so there is no useful remainder to keep. See MONO_ENABLE_NETWORK_TESTS.
   if(_testname STREQUAL "bcl-System.Messaging" AND NOT MONO_ENABLE_NETWORK_TESTS)
+    return()
+  endif()
+
+  # Winforms opens a display before it runs a case, so with none it dies in
+  # libX11's IO error handler rather than failing a test. See
+  # MONO_ENABLE_GUI_TESTS.
+  if(_testname STREQUAL "bcl-System.Windows.Forms" AND NOT MONO_ENABLE_GUI_TESTS)
     return()
   endif()
 
