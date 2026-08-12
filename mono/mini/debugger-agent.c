@@ -3472,7 +3472,7 @@ process_filter_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data
 static StackFrame**
 compute_frame_info_from (MonoInternalThread *thread, DebuggerTlsData *tls, MonoThreadUnwindState *state, int *out_nframes)
 {
-	ComputeFramesUserData user_data;
+	ComputeFramesUserData user_data = { 0 };
 	MonoUnwindOptions opts = (MonoUnwindOptions)(MONO_UNWIND_DEFAULT | MONO_UNWIND_REG_LOCATIONS);
 	StackFrame **res;
 	int i, nframes;
@@ -3498,7 +3498,7 @@ compute_frame_info_from (MonoInternalThread *thread, DebuggerTlsData *tls, MonoT
 static void
 compute_frame_info (MonoInternalThread *thread, DebuggerTlsData *tls, gboolean force_update)
 {
-	ComputeFramesUserData user_data;
+	ComputeFramesUserData user_data = { 0 };
 	GSList *tmp;
 	int i, findex, new_frame_count;
 	StackFrame **new_frames, *f;
