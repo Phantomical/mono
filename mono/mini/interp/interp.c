@@ -903,6 +903,13 @@ stackval_from_data (MonoType *type, stackval *result, const void *data, gboolean
 	case MONO_TYPE_ARRAY:
 		result->data.p = *(gpointer*)data;
 		return MINT_STACK_SLOT_SIZE;
+	case MONO_TYPE_TYPEDBYREF:
+		/*
+		 * The transform pushes a TypedReference as a value of this size, so a plain
+		 * copy is what the interpreter stack expects on either side of the boundary.
+		 */
+		memcpy (result, data, sizeof (MonoTypedRef));
+		return ALIGN_TO (sizeof (MonoTypedRef), MINT_STACK_SLOT_SIZE);
 	case MONO_TYPE_VALUETYPE:
 		if (m_class_is_enumtype (type->data.klass)) {
 			return stackval_from_data (mono_class_enum_basetype_internal (type->data.klass), result, data, pinvoke);
@@ -1012,6 +1019,9 @@ stackval_to_data (MonoType *type, stackval *val, void *data, gboolean pinvoke)
 		*p = val->data.p;
 		return MINT_STACK_SLOT_SIZE;
 	}
+	case MONO_TYPE_TYPEDBYREF:
+		memcpy (data, val, sizeof (MonoTypedRef));
+		return ALIGN_TO (sizeof (MonoTypedRef), MINT_STACK_SLOT_SIZE);
 	case MONO_TYPE_VALUETYPE:
 		if (m_class_is_enumtype (type->data.klass)) {
 			return stackval_to_data (mono_class_enum_basetype_internal (type->data.klass), val, data, pinvoke);

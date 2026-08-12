@@ -926,6 +926,7 @@ set(MONO_TESTS_FORCED_UNWIND_SRC
 # this runs in a suite of its own with MONO_LLVM_JIT_TIER0 naming them.
 set(MONO_TESTS_TIER_PINNED_SRC
   handle-stack-tiers.cs
+  typedbyref-tier-entry.cs
 )
 
 # The tailcall suite, including the corpus imported from coreclr.
