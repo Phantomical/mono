@@ -1636,7 +1636,11 @@ namespace System.Drawing
 		[DllImport (GdiPlus)]
 		internal static extern Status GdipSetStringFormatTabStops(IntPtr format, float firstTabOffset, int count, float [] tabStops);
 		[DllImport (GdiPlus)]
-		internal static extern Status GdipGetStringFormatDigitSubstitution(IntPtr format, int language, out StringDigitSubstitute substitute);
+		// language is an out LANGID*, and NULL means "don't report it". Declaring
+		// it as an int passed a value the callee writes through, which only ever
+		// worked because the value was always zero and the upper half of the
+		// register happened to be clear.
+		internal static extern Status GdipGetStringFormatDigitSubstitution(IntPtr format, IntPtr language, out StringDigitSubstitute substitute);
 		[DllImport (GdiPlus)]
 		internal static extern Status GdipSetStringFormatDigitSubstitution(IntPtr format, int language, StringDigitSubstitute substitute);
 		[DllImport (GdiPlus)]

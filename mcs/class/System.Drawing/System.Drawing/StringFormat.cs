@@ -211,7 +211,7 @@ namespace System.Drawing {
 			get {
                                 StringDigitSubstitute substitute;
                                 
-                                Status status = GDIPlus.GdipGetStringFormatDigitSubstitution(nativeStrFmt, language, out substitute);
+                                Status status = GDIPlus.GdipGetStringFormatDigitSubstitution(nativeStrFmt, IntPtr.Zero, out substitute);
 				GDIPlus.CheckStatus (status);
 
                                 return substitute;     

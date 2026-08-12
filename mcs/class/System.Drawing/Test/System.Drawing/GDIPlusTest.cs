@@ -1267,8 +1267,8 @@ namespace MonoTests.System.Drawing {
 			Assert.AreEqual (expected_trimmings, trimming, "StringTrimming");
 
 			StringDigitSubstitute sub = StringDigitSubstitute.Traditional;
-			Assert.AreEqual (Status.InvalidParameter, GDIPlus.GdipGetStringFormatDigitSubstitution (IntPtr.Zero, 0, out sub), "GdipGetStringFormatDigitSubstitution-null");
-			Assert.AreEqual (Status.Ok, GDIPlus.GdipGetStringFormatDigitSubstitution (sf, 0, out sub), "GdipGetStringFormatDigitSubstitution");
+			Assert.AreEqual (Status.InvalidParameter, GDIPlus.GdipGetStringFormatDigitSubstitution (IntPtr.Zero, IntPtr.Zero, out sub), "GdipGetStringFormatDigitSubstitution-null");
+			Assert.AreEqual (Status.Ok, GDIPlus.GdipGetStringFormatDigitSubstitution (sf, IntPtr.Zero, out sub), "GdipGetStringFormatDigitSubstitution");
 			Assert.AreEqual (StringDigitSubstitute.User, sub, "StringDigitSubstitute");
 
 			int count;
