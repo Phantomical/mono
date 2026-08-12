@@ -76,18 +76,11 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 
 /// The signature a call to target uses at this call site.
 ///
-/// A vararg callee's call-site signature also names the types the caller chose
-/// for the variable arguments, not only the fixed parameters the callee declared.
+/// This differs from the declaration only at a vararg call site, where it also
+/// names the types the caller chose for the variable arguments.
 llvm::Expected<MonoMethodSignature *>
 MethodLLVMEmitter::call_site_signature (MonoMethod *target, uint32_t token)
 {
-	// A wrapper's call carries wrapper data where a token sits in ordinary IL, so
-	// there is no memberref to read. It gets the signature as declared instead.
-	// That signature's sentinel sits past the last parameter, so it names no
-	// variable part. That is right: the IL a wrapper is built from cannot spell one.
-	if (in_wrapper ())
-		return mono_method_signature_internal (target);
-
 	ERROR_DECL (metadata_error);
 	MonoMethodSignature *sig = mono_method_get_signature_checked (
 		target, m_class_get_image (method->klass), token,
