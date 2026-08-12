@@ -115,6 +115,12 @@ mono_image_open_a_lot_parameterized (MonoLoadedImages *li, MonoAssemblyLoadConte
 /* Maps string keys to MonoImageStorage values.
  *
  * The MonoImageStorage in the hash owns the key.
+ *
+ * The hash holds no reference of its own, so an entry being present says nothing
+ * about whether it is still alive: a storage whose last reference has gone stays
+ * findable until its destructor reaches mono_image_storage_unpublish. Every lookup
+ * that means to keep what it finds has to go through mono_refcount_tryinc and treat
+ * a refusal as a miss.
  */
 static GHashTable *images_storage_hash;
 
@@ -1596,12 +1602,17 @@ mono_image_storage_trypublish (MonoImageStorage *candidate, MonoImageStorage **o
 	gboolean result;
 	mono_images_storage_lock ();
 	MonoImageStorage *val = (MonoImageStorage *)g_hash_table_lookup (images_storage_hash, candidate->key);
-	if (val) {
-		mono_refcount_inc (val);
+	if (val && mono_refcount_tryinc (val)) {
 		*out_storage = val;
 		result = FALSE;
 	} else {
-		g_hash_table_insert (images_storage_hash, candidate->key, candidate);
+		/*
+		 * A val we cannot addref has already run its count down to zero and is on
+		 * its way through mono_image_storage_unpublish, so the candidate takes its
+		 * place. Replace rather than insert: on a key that is already present
+		 * insert keeps the slot's existing key, which the dying storage frees.
+		 */
+		g_hash_table_replace (images_storage_hash, candidate->key, candidate);
 		result = TRUE;
 	}
 	mono_images_storage_unlock ();
@@ -1614,6 +1625,9 @@ mono_image_storage_unpublish (MonoImageStorage *storage)
 	mono_images_storage_lock ();
 	g_assert (storage->ref.ref == 0);
 
+	/* Another thread can have found this storage un-addref-able and published its
+	 * own in the same slot while we were waiting for the lock. Only remove the
+	 * entry if it is still ours. */
 	MonoImageStorage *published = (MonoImageStorage *)g_hash_table_lookup (images_storage_hash, storage->key);
 	if (published == storage) {
 		g_hash_table_remove (images_storage_hash, storage->key);
@@ -1628,8 +1642,7 @@ mono_image_storage_tryaddref (const char *key, MonoImageStorage **found)
 	gboolean result = FALSE;
 	mono_images_storage_lock ();
 	MonoImageStorage *val = (MonoImageStorage *)g_hash_table_lookup (images_storage_hash, key);
-	if (val) {
-		mono_refcount_inc (val);
+	if (val && mono_refcount_tryinc (val)) {
 		*found = val;
 		result = TRUE;
 	}
