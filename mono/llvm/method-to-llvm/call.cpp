@@ -92,16 +92,33 @@ MethodLLVMEmitter::call_site_signature (MonoMethod *target, uint32_t token)
 	return sig;
 }
 
+/*
+ * How a vararg call passes its variable arguments.
+ *
+ * A vararg signature converts to a function type holding the fixed parameters
+ * and one trailing pointer. The variable arguments are not in it. They travel
+ * in a buffer in the caller's frame, and that trailing pointer is the address
+ * of the buffer:
+ *
+ *     +0                MonoMethodSignature *   the call-site signature
+ *     +sizeof (void *)  the first variable argument
+ *     ...
+ *
+ * Each variable argument follows at the running sum of mono_type_stack_size ()
+ * over the ones before it. System.ArgIterator is what reads that. Setup starts
+ * its walk at the second word, and IntGetNextArg advances by that same stack
+ * size without realigning. The sizes are not uniform - a float takes four
+ * bytes, not a whole slot - so an offset that disagrees does not fault. The
+ * next argument reads as garbage.
+ *
+ * The callee reaches the buffer through arglist, which wraps the address in a
+ * RuntimeArgumentHandle. The buffer stays in the caller's frame for the whole
+ * call.
+ */
+
 /// Builds the buffer a vararg call passes its variable arguments in.
 ///
 /// \param args  the call's arguments in order, the this included.
-///
-/// The first word holds the signature. Each variable argument follows at the
-/// running sum of mono_type_stack_size () over the ones before it. That is what
-/// System.ArgIterator reads: Setup starts its walk at the second word, and
-/// IntGetNextArg advances by that same size without realigning. Sizes are not
-/// uniform - a float takes four bytes, not a whole slot - so an offset that
-/// disagrees does not fault. The next argument reads as garbage.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature *sig,
                                      llvm::ArrayRef<llvm::Value *> args)
@@ -561,8 +578,8 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	if (method->save_lmf || lmf_slot != nullptr)
 		return llvm::CallInst::TCK_None;
 
-	// A vararg call hands the callee a cookie buffer allocated in this frame,
-	// which the callee walks for the whole of its own execution.
+	// The cookie buffer a vararg call passes sits in this frame, and the callee
+	// reads it for the whole call.
 	if (callee_sig->call_convention == MONO_CALL_VARARG)
 		return llvm::CallInst::TCK_None;
 
@@ -1262,9 +1279,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	// The variable arguments leave the argument list for the cookie buffer,
-	// whose address takes their place as the one trailing parameter every
-	// vararg declaration carries.
+	// The variable arguments leave the argument list for the cookie buffer.
 	if (vararg) {
 		llvm::Expected<llvm::Value *> cookie = build_sig_cookie (builder, sig, *args);
 
