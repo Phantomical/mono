@@ -810,20 +810,11 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	/*
 	 * This call goes through the allocator's wrapper. A failed allocation
 	 * reports a pending OutOfMemoryException, and only the wrapper's check
-	 * throws it.
+	 * throws it, so the call unwinds like any other.
 	 *
 	 * NoAlias is the whole claim on the return value: the result aliases
-	 * nothing older than the call. There is no allockind attribute, because
-	 * that attribute lets LLVM delete an unused allocation, and a mono
-	 * allocation that fails throws a catchable OutOfMemoryException. Even a
-	 * dead allocation is observable.
-	 *
-	 * The attribute is not AllocFnKind::Zeroed either. That claim covers the
-	 * whole allocation, and it lets LLVM fold any load from the allocation to
-	 * zero. The header - vtable and length - comes back already initialized,
-	 * so LLVM must not treat it as zero.
-	 *
-	 * The call is deliberately not marked nounwind.
+	 * nothing older than the call. The header - vtable and length - comes
+	 * back already initialized rather than zeroed.
 	 */
 	llvm::Expected<llvm::Function *> allocate =
 		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);

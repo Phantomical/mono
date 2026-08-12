@@ -930,9 +930,8 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 
 	/*
 	 * The string a constructor creates is fresh, and it aliases nothing
-	 * older than the call. Nothing stronger holds here: the body is
-	 * arbitrary managed code, so this declaration skips the zeroed and
-	 * elidable claims an allocator attribute makes.
+	 * older than the call. That is the whole claim: the body is arbitrary
+	 * managed code, so nothing stronger holds.
 	 */
 	if (method->string_ctor)
 		function->addRetAttr (llvm::Attribute::NoAlias);

@@ -22,14 +22,9 @@ namespace mono {
 /// The declaration of the runtime's allocator for a plain instance of a
 /// known class, called with its vtable.
 ///
-/// The declaration adds only the NoAlias return attribute.
-///
-/// It cannot carry an allockind attribute: that marks a call as removable
-/// once its result goes unused. A failed allocation must still throw
-/// OutOfMemoryException through icall_wrapper_decl's check. It cannot carry
-/// a Zeroed claim either: that lets the optimizer fold a load of the freshly
-/// allocated header to zero. It is not nounwind, because the call can
-/// throw.
+/// NoAlias is the whole claim on the return value: the result aliases nothing
+/// older than the call. The allocation can fail, and the wrapper's check throws
+/// OutOfMemoryException, so the call unwinds like any other.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
 {

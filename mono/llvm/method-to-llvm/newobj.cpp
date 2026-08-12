@@ -276,12 +276,11 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 namespace {
 
-/// Marks callee as the GC allocation it is: NoAlias, and nothing more.
-/// emit_newarr's array allocator documents the same reasoning. An allockind
-/// attribute can let LLVM delete an unused allocation, but a failed mono
-/// allocation still throws a catchable OutOfMemoryException. A Zeroed claim
-/// can fold loads of the initialized header to zero. The call stays
-/// unwindable, because it can throw.
+/// Marks callee as the GC allocation it is.
+///
+/// NoAlias is the whole claim on the return value: the array aliases nothing
+/// older than the call. The allocation can fail, and the wrapper's check throws
+/// OutOfMemoryException, so the call unwinds like any other.
 llvm::FunctionCallee
 mark_gc_allocator (llvm::FunctionCallee callee)
 {
