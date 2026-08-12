@@ -25,6 +25,18 @@ set(MONO_TEST_XUNIT_NOTRAITS
 # suite, which this runtime does not implement.
 set(MONO_TEST_NUNIT_EXCLUDES NotWorking CAS)
 
+# Tests that reach a service outside the machine: `InetAccess` for the ones that
+# resolve a hostname and connect, and the whole of System.Messaging, which is an
+# integration suite against a broker on localhost.  Off by default, because on a
+# box without them these do not report a runtime defect - they report the
+# network - and a permanently red suite is one nobody reads.
+#
+# Turning it on runs them; there is nothing here that deletes them.
+option(MONO_ENABLE_NETWORK_TESTS "Run tests that need an external network or message broker" OFF)
+if(NOT MONO_ENABLE_NETWORK_TESTS)
+  list(APPEND MONO_TEST_NUNIT_EXCLUDES InetAccess)
+endif()
+
 # What one suite gets to run for.  A suite is a whole assembly's worth of cases
 # driven by one console, so the budget is per-assembly and generous by the
 # standards of the rest of the tree.
@@ -866,6 +878,12 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   set(_timeout ${MONO_BCL_TEST_TIMEOUT})
   if(_testname IN_LIST MONO_BCL_TESTS_LONG)
     set(_timeout ${MONO_BCL_TEST_LONG_TIMEOUT})
+  endif()
+
+  # An integration suite against a broker on localhost: 61 of its 87 cases need
+  # one, so there is no useful remainder to keep. See MONO_ENABLE_NETWORK_TESTS.
+  if(_testname STREQUAL "bcl-System.Messaging" AND NOT MONO_ENABLE_NETWORK_TESTS)
+    return()
   endif()
 
   # LD_LIBRARY_PATH is for the profiler suite, which re-execs the runtime with

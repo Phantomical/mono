@@ -27,6 +27,7 @@ namespace MonoTests.System.Net.Sockets
 #else
 		[ExpectedException(typeof(IOException))]
 #endif
+		[Category ("InetAccess")]
 		public void NetworkStreamConnection ()
 		{
 			IPEndPoint ipe = new IPEndPoint(Dns.GetHostEntry ("www.example.com").AddressList [0], 80);

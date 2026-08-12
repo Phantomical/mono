@@ -3222,6 +3222,7 @@ namespace MonoTests.System.Net
 		[ExpectedException (typeof (PlatformNotSupportedException))]
 #endif
 		[Category ("MobileNotWorking")] // https://github.com/xamarin/xamarin-macios/issues/3827
+		[Category ("InetAccess")]
 		// Bug6737
 		// This test is supposed to fail prior to .NET 4.0
 		public void Post_EmptyRequestStream ()
