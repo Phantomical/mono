@@ -260,7 +260,8 @@ mono_runtime_suite(runtime TESTS ${_regular}
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                    LONG dynamic-method-churn.exe
                         appdomain-unload.exe
-                        appdomain-threadpool-unload.exe)
+                        appdomain-threadpool-unload.exe
+                        bug-18026.exe)
 
 # CoreCLR's tailcall corpus, run like any other program: several of these
 # recurse deeply enough that a missed tail call is a stack overflow rather than
@@ -291,7 +292,8 @@ if(MONO_ENABLE_INTERPRETER)
   mono_runtime_suite(runtime-interp LABEL interp TESTS ${_interp}
                      RUNTIME_ARGS "--interpreter"
                      SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
-                     LONG appdomain-threadpool-unload.exe)
+                     LONG appdomain-threadpool-unload.exe
+                          bug-18026.exe)
 
   # The whole corpus at the default tier, which is neither of the two above:
   # each method starts interpreted and the hot ones are compiled underneath it,
@@ -309,7 +311,8 @@ if(MONO_ENABLE_INTERPRETER)
                      SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                      LONG appdomain-threadpool-unload.exe
                           dynamic-method-churn.exe
-                          appdomain-unload.exe)
+                          appdomain-unload.exe
+                          bug-18026.exe)
 
   # The tailcall corpus at the default tier, where a tail site is the
   # interpreter's rather than the backend's. Both engines have to honour the
