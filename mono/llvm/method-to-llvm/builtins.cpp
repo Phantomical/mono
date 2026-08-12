@@ -26,14 +26,9 @@
 
 namespace mono {
 
-/// Calls a constructor that returns the object it builds instead of filling in
-/// an instance.
+/// Calls the string constructor ctor and returns the string it built.
 ///
 /// \param args  the constructor arguments, without the this.
-///
-/// A string constructor cannot fill in an instance because its length is not
-/// known before the constructor reads its arguments. Asking for the object
-/// here keeps that shape out of the opcode that calls it.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_string_constructor (MonoIrBuilder &builder, MonoMethod *ctor,
                                             llvm::ArrayRef<llvm::Value *> args)
@@ -79,12 +74,8 @@ MethodLLVMEmitter::emit_string_constructor (MonoIrBuilder &builder, MonoMethod *
 	return emit_protected_call (builder, decl, args);
 }
 
-/// A plain call to a string constructor leaves the object it built on the stack.
-///
-/// Ordinary IL reaches a constructor through newobj. Only the runtime-invoke
-/// wrapper calls a constructor directly, since reflection has no instance to
-/// hand over either. It pushes a placeholder this, calls the constructor, and
-/// stores what comes back.
+/// A call opcode whose target is the string constructor ctor. The arguments
+/// come off the stack, and the string it built goes on.
 llvm::Error
 MethodLLVMEmitter::emit_string_constructor_call (MonoIrBuilder &builder, MonoMethod *ctor,
                                                  MonoMethodSignature *sig)
