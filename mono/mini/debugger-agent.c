@@ -3313,7 +3313,29 @@ typedef struct {
 	DebuggerTlsData *tls;
 	GSList *frames;
 	gboolean set_debugger_flag;
+	/* Whether this walk is the one resuming from a filter's throw site. */
+	gboolean filter_resume;
 } ComputeFramesUserData;
+
+/*
+ * Whether this walk already reported the interpreted frame INFO describes.
+ *
+ * Only the filter resume walk asks. An InterpFrame is not unique over time -
+ * a tail call hands one to the callee - but both walks read the same suspended
+ * thread, so within one pair identity is identity.
+ */
+static gboolean
+already_reported (ComputeFramesUserData *ud, StackFrameInfo *info)
+{
+	if (info->interp_frame == NULL)
+		return FALSE;
+
+	for (GSList *l = ud->frames; l; l = l->next)
+		if (((StackFrame *) l->data)->interp_frame == info->interp_frame)
+			return TRUE;
+
+	return FALSE;
+}
 
 static gboolean
 process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
@@ -3344,6 +3366,11 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 	api_method = method;
 
 	if (!method) {
+		mono_loader_unlock ();
+		return FALSE;
+	}
+
+	if (ud->filter_resume && already_reported (ud, info)) {
 		mono_loader_unlock ();
 		return FALSE;
 	}
@@ -3542,9 +3569,16 @@ compute_frame_info (MonoInternalThread *thread, DebuggerTlsData *tls, gboolean f
 			PRINT_DEBUG_MSG (1, "\tFrame: <call filter>\n");
 		}
 		/*
-		 * After that, we resume unwinding from the location where the exception has been thrown.
+		 * After that, we resume unwinding from the location where the exception
+		 * has been thrown. A compiled frame starts there; an interpreted one
+		 * starts at the innermost interp frame instead, since the interpreter's
+		 * iterator is seeded from the thread rather than from the context handed
+		 * to it - so this walk repeats the filter's frames before it reaches the
+		 * throw site. filter_resume is what discounts them.
 		 */
+		user_data.filter_resume = TRUE;
 		mono_walk_stack_with_state (process_frame, &tls->filter_state, opts, &user_data);
+		user_data.filter_resume = FALSE;
 	} else if (tls->context.valid) {
 		mono_walk_stack_with_state (process_frame, &tls->context, opts, &user_data);
 	} else {
