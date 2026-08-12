@@ -386,6 +386,33 @@ MethodLLVMEmitter::pop_binary_operands (BinaryOp op)
 	return BinaryOperands{value1, value2, *result};
 }
 
+/*
+ * III.3.1  add - add numeric values
+ *
+ *   Format   Assembly Format   Description
+ *   58       add               Add two values, returning a new value.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The add instruction adds value2 to value1 and pushes the result on the stack.
+ *   Overflow is not detected for integral operations (but see add.ovf);
+ *   floating-point overflow returns +inf or -inf. The acceptable operand types and
+ *   their corresponding result data type are encapsulated in Table 2: Binary Numeric
+ *   Operations.
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 2: Binary Numeric Operations.
+ */
+
 /// III.3.1 add - adds value2 to value1, per Table III.2 above. Integer overflow wraps
 /// silently, and floating-point overflow produces +/-infinity. add never throws.
 llvm::Error
@@ -424,6 +451,34 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.64  sub - subtract numeric values
+ *
+ *   Format   Assembly Format   Description
+ *   59       sub               Subtract value2 from value1, returning a new value.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The sub instruction subtracts value2 from value1 and pushes the result on the
+ *   stack. Overflow is not detected for the integral operations (see sub.ovf); for
+ *   floating-point operands, sub returns +inf on positive overflow, -inf on negative
+ *   overflow, and zero on floating-point underflow. The acceptable operand types and
+ *   their corresponding result data type are encapsulated in Table III.2: Binary
+ *   Numeric Operations.
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 2: Binary Numeric Operations.
+ */
+
 /// III.3.64 sub - subtracts value2 from value1, per Table III.2 above. Integer
 /// overflow wraps silently. Floating-point overflow produces +/-infinity, and
 /// underflow produces zero. sub never throws.
@@ -461,6 +516,33 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 	push_stack (difference, result);
 	return llvm::Error::success ();
 }
+
+/*
+ * III.3.48  mul - multiply values
+ *
+ *   Format   Assembly Format   Description
+ *   5A       mul               Multiply values.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The mul instruction multiplies value1 by value2 and pushes the result on the
+ *   stack. Integral operations silently truncate the upper bits on overflow (see
+ *   mul.ovf). For floating-point types, 0 x infinity = NaN. The acceptable operand
+ *   types and their corresponding result data types are encapsulated in Table III.2:
+ *   Binary Numeric Operations.
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 2: Binary Numeric Operations.
+ */
 
 /// III.3.48 mul - multiplies value1 by value2, per Table III.2 above. Integer
 /// overflow truncates the high bits silently. mul never throws.
@@ -550,6 +632,62 @@ MethodLLVMEmitter::emit_checked_pointer_offset (MonoIrBuilder &builder, llvm::Va
 	                          subtract ? builder.CreateNeg (index) : index);
 }
 
+/*
+ * III.3.31  div - divide values
+ *
+ *   Format   Assembly Format   Description
+ *   5B       div               Divide two values to return a quotient or
+ *                              floating-point result.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   result = value1 div value2 satisfies the following conditions:
+ *
+ *     |result| = |value1| / |value2|, and
+ *     sign(result) = +, if sign(value1) = sign(value2), or
+ *                    -, if sign(value1) ~= sign(value2)
+ *
+ *   The div instruction computes result and pushes it on the stack.
+ *
+ *   Integer division truncates towards zero.
+ *
+ *   Floating-point division is per IEC 60559:1989. In particular, division of a
+ *   finite number by 0 produces the correctly signed infinite value and
+ *
+ *     0 / 0 = NaN
+ *     infinity / infinity = NaN.
+ *     X / infinity = 0
+ *
+ *   The acceptable operand types and their corresponding result data type are
+ *   encapsulated in Table 2: Binary Numeric Operations.
+ *
+ * Exceptions:
+ *
+ *   Integral operations throw System.ArithmeticException if the result cannot be
+ *   represented in the result type. (This can happen if value1 is the smallest
+ *   representable integer value, and value2 is -1.)
+ *
+ *   Integral operations throw DivideByZeroException if value2 is zero.
+ *
+ *   Floating-point operations never throw an exception (they produce NaNs or
+ *   infinities instead, see Partition I).
+ *
+ * Example:
+ *
+ *   +14 div +3  is 4
+ *   +14 div -3  is -4
+ *   -14 div +3  is -4
+ *   -14 div -3  is 4
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 2: Binary Numeric Operations.
+ */
+
 /// III.3.31 div - divides value1 by value2, per Table III.2 above. Integer division
 /// truncates toward zero. Floating-point division follows IEEE 754 and never throws.
 ///
@@ -582,6 +720,61 @@ MethodLLVMEmitter::emit_div (MonoIrBuilder &builder)
 	push_stack (quotient, result);
 	return llvm::Error::success ();
 }
+
+/*
+ * III.3.55  rem - compute remainder
+ *
+ *   Format   Assembly Format   Description
+ *   5D       rem               Remainder when dividing one value by another.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The rem instruction divides value1 by value2 and pushes the remainder result on
+ *   the stack. The acceptable operand types and their corresponding result data type
+ *   are encapsulated in Table 2: Binary Numeric Operations.
+ *
+ *   For integer operands
+ *
+ *     result = value1 rem value2 satisfies the following conditions:
+ *
+ *       result = value1 - value2 x (value1 div value2), and
+ *       0 <= |result| < |value2|, and
+ *       sign(result) = sign(value1),
+ *
+ *     where div is the division instruction, which truncates towards zero.
+ *
+ *   For floating-point operands
+ *
+ *     rem is defined similarly as for integer operands, except that, if value2 is
+ *     zero or value1 is infinity, result is NaN. If value2 is infinity, result is
+ *     value1. This definition is different from the one for floating-point remainder
+ *     in the IEC 60559:1989 Standard. That Standard specifies that value1 div value2
+ *     is the nearest integer instead of truncating towards zero.
+ *     System.Math.IEEERemainder (see Partition IV) provides the IEC 60559:1989
+ *     behavior.
+ *
+ * Exceptions:
+ *
+ *   Integral operations throw System.DivideByZeroException if value2 is zero.
+ *
+ *   Integral operations can throw System.ArithmeticException if value1 is the
+ *   smallest representable integer value and value2 is -1.
+ *
+ * Example:
+ *
+ *   +10 rem +6  is 4  (+10 div +6 = 1)
+ *   +10 rem -6  is 4  (+10 div -6 = -1)
+ *   -10 rem +6  is -4 (-10 div +6 = -1)
+ *   -10 rem -6  is -4 (-10 div -6 = 1)
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 2: Binary Numeric Operations.
+ */
 
 /// III.3.55 rem - computes value1 rem value2, per Table III.2 above: the remainder
 /// after integer division truncated toward zero, or fmod for floating-point operands.
@@ -616,6 +809,39 @@ MethodLLVMEmitter::emit_rem (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.32  div.un - divide integer values, unsigned
+ *
+ *   Format   Assembly Format   Description
+ *   5C       div.un            Divide two values, unsigned, returning a quotient.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The div.un instruction computes value1 divided by value2, both taken as unsigned
+ *   integers, and pushes the result on the stack. The acceptable operand types and
+ *   their corresponding result data type are encapsulated in Table 5: Integer
+ *   Operations.
+ *
+ * Exceptions:
+ *
+ *   System.DivideByZeroException is thrown if value2 is zero.
+ *
+ * Example:
+ *
+ *   +5 div.un +3  is 1
+ *   +5 div.un -3  is 0
+ *   -5 div.un +3  is 1431655763 or 0x55555553
+ *   -5 div.un -3  is 0
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 5: Integer Operations.
+ */
+
 /// III.3.32 div.un - divides value1 by value2 as unsigned integers, per Table III.5
 /// above.
 ///
@@ -642,6 +868,47 @@ MethodLLVMEmitter::emit_div_un (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.56  rem.un - compute integer remainder, unsigned
+ *
+ *   Format   Assembly Format   Description
+ *   5E       rem.un            Remainder when dividing one unsigned value by another.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The rem.un instruction divides value1 by value2 and pushes the remainder result
+ *   on the stack. (rem.un treats its arguments as unsigned integers, while rem treats
+ *   them as signed integers.)
+ *
+ *   result = value1 rem.un value2 satisfies the following conditions:
+ *
+ *     result = value1 - value2 x (value1 div.un value2), and
+ *     0 <= result < value2,
+ *
+ *   where div.un is the unsigned division instruction. rem.un is unspecified for
+ *   floating-point numbers. The acceptable operand types and their corresponding
+ *   result data type are encapsulated in Table 5: Integer Operations.
+ *
+ * Exceptions:
+ *
+ *   Integral operations throw System.DivideByZeroException if value2 is zero.
+ *
+ * Example:
+ *
+ *   +5 rem.un +3  is 2  (+5 div.un +3 = 1)
+ *   +5 rem.un -3  is 5  (+5 div.un -3 = 0)
+ *   -5 rem.un +3  is 2  (-5 div.un +3 = 1431655763 or 0x55555553)
+ *   -5 rem.un -3  is -5 or 0xfffffffb  (-5 div.un -3 = 0)
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 5: Integer Operations.
+ */
+
 /// III.3.56 rem.un - computes the unsigned integer remainder of value1 divided by
 /// value2, per Table III.5 above.
 ///
@@ -666,6 +933,33 @@ MethodLLVMEmitter::emit_rem_un (MonoIrBuilder &builder)
 	push_stack (builder.CreateURem (lhs, rhs), result);
 	return llvm::Error::success ();
 }
+
+/*
+ * III.3.2  add.ovf.<signed> - add integer values with overflow check
+ *
+ *   Format   Assembly Format   Description
+ *   D6       add.ovf           Add signed integer values with overflow check.
+ *   D7       add.ovf.un        Add unsigned integer values with overflow check.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The add.ovf instruction adds value1 and value2 and pushes the result on the
+ *   stack. The acceptable operand types and their corresponding result data type are
+ *   encapsulated in Table 7: Overflow Arithmetic Operations.
+ *
+ * Exceptions:
+ *
+ *   System.OverflowException is thrown if the result cannot be represented in the
+ *   result type.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 7: Overflow Arithmetic Operations.
+ */
 
 /// III.3.2 add.ovf / add.ovf.un - adds value2 to value1, per Table III.7 above. If the
 /// result does not fit in the result type, this throws OverflowException.
@@ -703,6 +997,37 @@ MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.65  sub.ovf.<type> - subtract integer values, checking for overflow
+ *
+ *   Format   Assembly Format   Description
+ *   DA       sub.ovf           Subtract native int from a native int. Signed result
+ *                              shall fit in same size.
+ *   DB       sub.ovf.un        Subtract native unsigned int from a native unsigned
+ *                              int. Unsigned result shall fit in same size.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The sub.ovf instruction subtracts value2 from value1 and pushes the result on the
+ *   stack. The type of the values and the return type are specified by the
+ *   instruction. An exception is thrown if the result does not fit in the result type.
+ *   The acceptable operand types and their corresponding result data type is
+ *   encapsulated in Table 7: Overflow Arithmetic Operations.
+ *
+ * Exceptions:
+ *
+ *   System.OverflowException is thrown if the result can not be represented in the
+ *   result type.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 7: Overflow Arithmetic Operations.
+ */
+
 /// III.3.65 sub.ovf / sub.ovf.un - subtracts value2 from value1, per Table III.7
 /// above. If the result does not fit in the result type, this throws OverflowException.
 llvm::Error
@@ -738,6 +1063,36 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	return llvm::Error::success ();
 }
 
+/*
+ * III.3.49  mul.ovf.<type> - multiply integer values with overflow check
+ *
+ *   Format   Assembly Format   Description
+ *   D8       mul.ovf           Multiply signed integer values. Signed result shall
+ *                              fit in same size.
+ *   D9       mul.ovf.un        Multiply unsigned integer values. Unsigned result
+ *                              shall fit in same size.
+ *
+ * Stack Transition:
+ *
+ *   ..., value1, value2 -> ..., result
+ *
+ * Description:
+ *
+ *   The mul.ovf instruction multiplies integers, value1 and value2, and pushes the
+ *   result on the stack. An exception is thrown if the result will not fit in the
+ *   result type. The acceptable operand types and their corresponding result data
+ *   types are encapsulated in Table 7: Overflow Arithmetic Operations.
+ *
+ * Exceptions:
+ *
+ *   System.OverflowException is thrown if the result can not be represented in the
+ *   result type.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 8: Conversion Operations.
+ */
+
 /// III.3.49 mul.ovf / mul.ovf.un - multiplies value1 by value2, per Table III.7
 /// above. If the result does not fit in the result type, this throws OverflowException.
 llvm::Error
@@ -763,6 +1118,40 @@ MethodLLVMEmitter::emit_mul_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	push_stack (product, result);
 	return llvm::Error::success ();
 }
+
+/*
+ * III.3.50  neg - negate
+ *
+ *   Format   Assembly Format   Description
+ *   65       neg               Negate value.
+ *
+ * Stack Transition:
+ *
+ *   ..., value -> ..., result
+ *
+ * Description:
+ *
+ *   The neg instruction negates value and pushes the result on top of the stack. The
+ *   return type is the same as the operand type.
+ *
+ *   Negation of integral values is standard twos-complement negation. In particular,
+ *   negating the most negative number (which does not have a positive counterpart)
+ *   yields the most negative number. To detect this overflow use the sub.ovf
+ *   instruction instead (i.e., subtract from 0).
+ *
+ *   Negating a floating-point number cannot overflow; negating NaN returns NaN.
+ *
+ *   The acceptable operand types and their corresponding result data types are
+ *   encapsulated in Table 3: Unary Numeric Operations.
+ *
+ * Exceptions:
+ *
+ *   None.
+ *
+ * Correctness and Verifiability:
+ *
+ *   See Table 3: Unary Numeric Operations.
+ */
 
 /// III.3.50 neg - negates value, per Table III.3 below. Twos-complement negation wraps
 /// the smallest representable integer to itself instead of overflowing. sub.ovf from 0
@@ -810,6 +1199,37 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 	push_stack (negated, result);
 	return llvm::Error::success ();
 }
+
+/*
+ * III.3.24  ckfinite - check for a finite real number
+ *
+ *   Format   Assembly Format   Description
+ *   C3       ckfinite          Throw ArithmeticException if value is not a finite
+ *                              number.
+ *
+ * Stack Transition:
+ *
+ *   ..., value -> ..., value
+ *
+ * Description:
+ *
+ *   The ckfinite instruction throws ArithmeticException if value (a floating-point
+ *   number) is either a "not a number" value (NaN) or +/- infinity value. ckfinite
+ *   leaves the value on the stack if no exception is thrown. Execution behavior is
+ *   unspecified if value is not a floating-point number.
+ *
+ * Exceptions:
+ *
+ *   System.ArithmeticException is thrown if value is a NaN or an infinity.
+ *
+ * Correctness:
+ *
+ *   Correct CIL guarantees that value is a floating-point number.
+ *
+ * Verifiability:
+ *
+ *   There are no additional verification requirements.
+ */
 
 /// III.3.24 ckfinite - checks value for validity. If value is NaN or an infinity, this
 /// throws ArithmeticException. Otherwise it leaves value on the stack unchanged.
