@@ -1045,7 +1045,7 @@ mono_exception_stackframe_obj_walk (MonoStackFrame *captured_frame, MonoExceptio
 		return FALSE;
 	MonoMethod *method = jinfo_get_method (ji);
 
-	gboolean r = func (method, (gpointer) captured_frame->method_address, captured_frame->native_offset, TRUE, user_data);
+	gboolean r = func (method, ji, (gpointer) captured_frame->method_address, captured_frame->native_offset, TRUE, user_data);
 	if (r)
 		return TRUE;
 
@@ -1103,13 +1103,13 @@ mono_exception_walk_trace_internal (MonoException *ex, MonoExceptionFrameWalk fu
 		if (ji == NULL) {
 			gboolean r;
 			MONO_ENTER_GC_SAFE;
-			r = func (NULL, ip, 0, FALSE, user_data);
+			r = func (NULL, NULL, ip, 0, FALSE, user_data);
 			MONO_EXIT_GC_SAFE;
 			if (r)
 				break;
 		} else {
 			MonoMethod *method = get_method_from_stack_frame (ji, generic_info);
-			if (func (method, ji->code_start, (char *) ip - (char *) ji->code_start, TRUE, user_data))
+			if (func (method, ji, ji->code_start, (char *) ip - (char *) ji->code_start, TRUE, user_data))
 				break;
 		}
 	}
@@ -1942,17 +1942,15 @@ summarize_frame_internal (MonoMethod *method, gpointer ip, size_t native_offset,
 }
 
 static gboolean
-summarize_frame_managed_walk (MonoMethod *method, gpointer ip, size_t frame_native_offset, gboolean managed, gpointer user_data)
+summarize_frame_managed_walk (MonoMethod *method, MonoJitInfo *ji, gpointer ip, size_t frame_native_offset, gboolean managed, gpointer user_data)
 {
 	int il_offset = -1;
 
-	if (managed && method) {
-		MonoDebugSourceLocation *location = mono_debug_lookup_source_location (method, frame_native_offset, mono_domain_get ());
-		if (location) {
-			il_offset = location->il_offset;
-			mono_debug_free_source_location (location);
-		}
-	}
+	/* This walk reads a captured trace. No frame of it is live any more, so the
+	 * jit info of the body that produced the offset is the only thing that can
+	 * place it. */
+	if (managed && method && ji)
+		il_offset = mono_jinfo_get_il_offset (mono_domain_get (), ji, (guint32) frame_native_offset);
 
 	intptr_t portable_ip = 0;
 	gint32 offset = 0;
@@ -3824,7 +3822,9 @@ print_overflow_stack_frame (StackFrameInfo *frame, MonoContext *ctx, gpointer da
 		if (method == user_data->omethod)
 			return FALSE;
 
-		location = mono_debug_print_stack_frame (method, frame->native_offset, mono_domain_get ());
+		location = mono_debug_print_stack_frame_at_il (method,
+			jinfo_il_offset_for_frame (mono_domain_get (), frame->ji, frame->interp_frame, frame->native_offset),
+			frame->native_offset, mono_domain_get ());
 		mono_runtime_printf_err ("  %s", location);
 		g_free (location);
 

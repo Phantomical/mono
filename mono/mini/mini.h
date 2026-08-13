@@ -711,7 +711,7 @@ G_EXTERN_C void mono_resume_unwind              (MonoContext *ctx);
 MonoJitInfo * mono_find_jit_info                (MonoDomain *domain, MonoJitTlsData *jit_tls, MonoJitInfo *res, MonoJitInfo *prev_ji, MonoContext *ctx, MonoContext *new_ctx, char **trace, MonoLMF **lmf, int *native_offset, gboolean *managed);
 int      mono_jit_info_llvm_il_offset           (MonoJitInfo *ji, guint32 native_offset);
 
-typedef gboolean (*MonoExceptionFrameWalk)      (MonoMethod *method, gpointer ip, size_t native_offset, gboolean managed, gpointer user_data);
+typedef gboolean (*MonoExceptionFrameWalk)      (MonoMethod *method, MonoJitInfo *ji, gpointer ip, size_t native_offset, gboolean managed, gpointer user_data);
 MONO_API gboolean mono_exception_walk_trace     (MonoException *ex, MonoExceptionFrameWalk func, gpointer user_data);
 void mono_restore_context                       (MonoContext *ctx);
 guint8* mono_jinfo_get_unwind_info              (MonoJitInfo *ji, guint32 *unwind_info_len);

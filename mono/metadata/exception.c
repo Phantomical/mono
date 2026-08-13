@@ -23,6 +23,7 @@
 #include <mono/metadata/appdomain.h>
 #include <mono/metadata/domain-internals.h>
 #include <mono/metadata/mono-debug.h>
+#include <mono/metadata/debug-internals.h>
 #include <mono/utils/mono-error-internals.h>
 #include <mono/utils/mono-logger-internals.h>
 #include <stdio.h>
@@ -1124,7 +1125,7 @@ typedef struct {
 } AppendFrameData;
 
 static gboolean
-append_frame_and_continue (MonoMethod *method, gpointer ip, size_t native_offset, gboolean managed, gpointer user_data)
+append_frame_and_continue (MonoMethod *method, MonoJitInfo *ji, gpointer ip, size_t native_offset, gboolean managed, gpointer user_data)
 {
 	MONO_ENTER_GC_UNSAFE;
 	MonoDomain *domain = mono_domain_get ();
@@ -1133,7 +1134,10 @@ append_frame_and_continue (MonoMethod *method, gpointer ip, size_t native_offset
 	if (data->prefix)
 		g_string_append (data->text, data->prefix);
 	if (method) {
-		char *msg = mono_debug_print_stack_frame (method, native_offset, domain);
+		/* A captured trace has no live frame left. Only the jit info of the
+		 * body that produced the offset can place it. */
+		char *msg = mono_debug_print_stack_frame_at_il (method,
+			mono_debug_il_offset_from_jinfo (ji, NULL, domain, native_offset), native_offset, domain);
 		g_string_append_printf (data->text, "%s\n", msg);
 		g_free (msg);
 	} else {

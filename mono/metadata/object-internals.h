@@ -856,7 +856,7 @@ typedef struct {
 } MonoRuntimeCallbacks;
 
 typedef gboolean (*MonoInternalStackWalk) (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data);
-typedef gboolean (*MonoInternalExceptionFrameWalk) (MonoMethod *method, gpointer ip, size_t native_offset, gboolean managed, gpointer user_data);
+typedef gboolean (*MonoInternalExceptionFrameWalk) (MonoMethod *method, MonoJitInfo *ji, gpointer ip, size_t native_offset, gboolean managed, gpointer user_data);
 
 typedef struct {
 	void (*mono_walk_stack_with_ctx) (MonoInternalStackWalk func, MonoContext *ctx, MonoUnwindOptions options, void *user_data);
