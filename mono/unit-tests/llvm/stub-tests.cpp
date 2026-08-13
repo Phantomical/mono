@@ -1014,7 +1014,12 @@ TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 	EXPECT_EQ (compiles, 1);
 }
 
-TEST (LazyStubs, RacingFirstCallsCompileOnce)
+/*
+ * Racing first calls do not compile only once, and must not: nothing of the
+ * callback's is held across the compile, so threads that arrive together each
+ * run it. What they owe the caller is one answer, not one compile.
+ */
+TEST (LazyStubs, RacingFirstCallsAgreeOnOneAnswer)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -1049,9 +1054,62 @@ TEST (LazyStubs, RacingFirstCallsCompileOnce)
 	for (std::thread &t : workers)
 		t.join ();
 
-	EXPECT_EQ (compiles.load (), 1);
+	EXPECT_GE (compiles.load (), 1);
+	EXPECT_LE (compiles.load (), threads);
 	for (int i = 0; i < threads; i++)
 		EXPECT_EQ (results[i], 7) << "thread " << i;
+}
+
+/*
+ * A compile takes the runtime's locks - the loader lock, for a corlib class an
+ * emitted null check names - and a thread that already holds one of those can
+ * enter a lazy stub. If anything of the callback's were held across compile (),
+ * those two threads would close a cycle and neither would move again. The
+ * recursive mutex below stands for the loader lock, which is recursive too.
+ *
+ * A regression does not fail this test, it stops it finishing, because that is
+ * what the defect does. CTest reports it as a timeout naming this case.
+ */
+TEST (LazyStubs, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
+{
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
+
+	std::recursive_mutex runtime_lock;
+	std::atomic<bool> compiling {false};
+	std::atomic<bool> holder_has_lock {false};
+
+	auto stub = engine->publish_lazy ("m", [&] () -> Expected<void *> {
+		compiling = true;
+
+		/* Give the other thread the lock and the stub, in that order. */
+		while (!holder_has_lock.load ())
+			std::this_thread::yield ();
+		std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+		std::lock_guard<std::recursive_mutex> lock (runtime_lock);
+		auto compiled = engine->jit ().compile (build_constant_module (7), "constant");
+		if (!compiled)
+			return compiled.takeError ();
+		return compiled->entry;
+	});
+	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+
+	std::thread first ([&] { reinterpret_cast<IntFn> (*stub) (); });
+
+	while (!compiling.load ())
+		std::this_thread::yield ();
+
+	int32_t held = 0;
+	std::thread holder ([&] {
+		std::lock_guard<std::recursive_mutex> lock (runtime_lock);
+		holder_has_lock = true;
+		held = reinterpret_cast<IntFn> (*stub) ();
+	});
+
+	first.join ();
+	holder.join ();
+	EXPECT_EQ (held, 7);
 }
 
 } // namespace

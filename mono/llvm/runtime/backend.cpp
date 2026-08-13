@@ -720,10 +720,10 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 	/*
 	 * The stubs are pointed at the interpreter before the method is
 	 * transformed, and that order matters: transforming runs the class
-	 * initializer, and this can be running inside a lazy stub's callback, which
-	 * holds a lock across it. A cctor that calls back into this very method
-	 * would then re-enter the trampoline being resolved and deadlock against
-	 * that lock. Publishing first means such a call lands on the entry instead.
+	 * initializer, and this can be running inside a lazy stub's callback. A
+	 * cctor that calls back into this very method would re-enter the trampoline
+	 * being resolved and start its compile again below itself, with nothing to
+	 * stop it. Publishing first means such a call lands on the entry instead.
 	 */
 	if (allow_tier0 && runs_at_tier0 (method.method)) {
 		llvm::Expected<Compiled> entries = interp_entries (domain, method);

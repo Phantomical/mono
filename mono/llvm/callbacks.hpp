@@ -11,6 +11,7 @@
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
 #include <llvm/Support/Error.h>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -52,9 +53,12 @@ public:
 	LazyCallbacks (const LazyCallbacks &) = delete;
 	LazyCallbacks &operator= (const LazyCallbacks &) = delete;
 
-	/// Reserve a trampoline that runs COMPILE the first time it is called and
-	/// continues into the address it returns, and hand back its address.
-	/// Threads arriving together compile once and all land on the same address.
+	/// Reserve a trampoline that runs COMPILE on its first call and continues
+	/// into the address it returns, and hand back its address.
+	///
+	/// Threads that arrive together all land on the same address. Each of them
+	/// can run COMPILE to get there, so COMPILE must be safe to run again and
+	/// to run on more than one thread at once.
 	llvm::Expected<void *> reserve (LazyCompile compile);
 
 	/// Give TRAMPOLINE back, for a later reserve () to hand out again, and drop
@@ -69,9 +73,8 @@ private:
 
 	/// One reserved trampoline's compile, and where it landed.
 	struct Callback {
-		std::mutex mutex;
 		LazyCompile compile;
-		void *landing = nullptr;
+		std::atomic<void *> landing { nullptr };
 	};
 
 	/// Run the compile TRAMPOLINE stands for. Called on whichever thread
