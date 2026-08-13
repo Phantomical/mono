@@ -780,9 +780,22 @@ Tier0Pipeline::forget_analyses ()
 Tier0Pipeline &
 tier0_pipeline ()
 {
-	static thread_local Tier0Pipeline pipeline;
+	// The machine first. Both are thread_local and are therefore destroyed in
+	// reverse order of registration, and the pipeline's PassBuilder points at
+	// the machine.
+	host_target_machine ();
 
-	return pipeline;
+	// On the heap, because the object is ~1.9K. A thread_local that large puts
+	// the runtime's TLS block over the surplus glibc keeps for dlopen'd
+	// modules, and the mono_tls_* variables are initial-exec, so the whole
+	// module has to fit in that surplus. An embedder that dlopens the runtime
+	// gets "cannot allocate memory in static TLS block" and no runtime at all.
+	static thread_local std::unique_ptr<Tier0Pipeline> pipeline;
+
+	if (!pipeline)
+		pipeline = std::make_unique<Tier0Pipeline> ();
+
+	return *pipeline;
 }
 
 } // namespace
