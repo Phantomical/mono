@@ -359,16 +359,11 @@ int mono_interp_traceopt = 0;
 
 #if USE_COMPUTED_GOTO
 
-static __thread const guint16 *interp_prev_ip;
-static __thread guint32 interp_prev_op;
-
 static void
 interp_bad_opcode (InterpFrame *frame, const guint16 *ip, guint32 op)
 {
 	InterpMethod *imethod = frame->imethod;
 	const guint16 *start = imethod->code;
-	g_printerr ("[interp] previous dispatch: offset %ld opcode %u\n",
-		    interp_prev_ip ? (long)(interp_prev_ip - imethod->code) : -1L, interp_prev_op);
 	g_printerr ("[interp] opcode %u (%#x) out of range at bytecode offset %ld in %s\n",
 		    op, op, (long)(ip - start),
 		    mono_method_full_name (imethod->method, TRUE));
@@ -386,7 +381,6 @@ interp_bad_opcode (InterpFrame *frame, const guint16 *ip, guint32 op)
 		opcode = (MintOpcode)(op); \
 		if (G_UNLIKELY ((guint32)opcode >= MINT_LASTOP)) \
 			interp_bad_opcode (frame, ip, (guint32)opcode); \
-		interp_prev_ip = ip; interp_prev_op = (guint32)opcode; \
 		goto *in_labels [opcode]; \
 	} while (0)
 #define MINT_IN_SWITCH(op)   MINT_IN_DISPATCH (op);
@@ -4647,25 +4641,11 @@ call:
 			MINT_IN_BREAK;
 		}
 
-#define BRELOP_S_CAST(datatype, op) \
-	if (LOCAL_VAR (ip [1], datatype) op LOCAL_VAR (ip [2], datatype)) { \
-		gint16 br_offset = (gint16) ip [3]; \
-		ip += br_offset; \
-	} else \
-		ip += 4;
-
-#define BRELOP_CAST(datatype, op) \
-	if (LOCAL_VAR (ip [1], datatype) op LOCAL_VAR (ip [2], datatype)) { \
-		gint32 br_offset = (gint32) ip [1]; \
-		ip += br_offset; \
-	} else \
-		ip += 5;
-
 		MINT_IN_CASE(MINT_BGE_UN_I4_S)
-			BRELOP_S_CAST(guint32, >=);
+			BRELOP_S(guint32, >=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGE_UN_I8_S)
-			BRELOP_S_CAST(guint64, >=);
+			BRELOP_S(guint64, >=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGE_UN_R4_S) {
 			float f1 = LOCAL_VAR (ip [1], float);
@@ -4680,10 +4660,10 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BGE_UN_I4)
-			BRELOP_CAST(guint32, >=);
+			BRELOP(guint32, >=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGE_UN_I8)
-			BRELOP_CAST(guint64, >=);
+			BRELOP(guint64, >=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGE_UN_R4) {
 			float f1 = LOCAL_VAR (ip [1], float);
@@ -4698,10 +4678,10 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BGT_UN_I4_S)
-			BRELOP_S_CAST(guint32, >);
+			BRELOP_S(guint32, >);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGT_UN_I8_S)
-			BRELOP_S_CAST(guint64, >);
+			BRELOP_S(guint64, >);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGT_UN_R4_S) {
 			float f1 = LOCAL_VAR (ip [1], float);
@@ -4716,10 +4696,10 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BGT_UN_I4)
-			BRELOP_CAST(guint32, >);
+			BRELOP(guint32, >);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGT_UN_I8)
-			BRELOP_CAST(guint64, >);
+			BRELOP(guint64, >);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BGT_UN_R4) {
 			float f1 = LOCAL_VAR (ip [1], float);
@@ -4734,10 +4714,10 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BLE_UN_I4_S)
-			BRELOP_S_CAST(guint32, <=);
+			BRELOP_S(guint32, <=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLE_UN_I8_S)
-			BRELOP_S_CAST(guint64, <=);
+			BRELOP_S(guint64, <=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLE_UN_R4_S) {
 			float f1 = LOCAL_VAR (ip [1], float);
@@ -4752,10 +4732,10 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BLE_UN_I4)
-			BRELOP_CAST(guint32, <=);
+			BRELOP(guint32, <=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLE_UN_I8)
-			BRELOP_CAST(guint64, <=);
+			BRELOP(guint64, <=);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLE_UN_R4) {
 			float f1 = LOCAL_VAR (ip [1], float);
@@ -4770,10 +4750,10 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BLT_UN_I4_S)
-			BRELOP_S_CAST(guint32, <);
+			BRELOP_S(guint32, <);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLT_UN_I8_S)
-			BRELOP_S_CAST(guint64, <);
+			BRELOP_S(guint64, <);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLT_UN_R4_S) {
 			float f1 = LOCAL_VAR (ip [1], float);
@@ -4788,10 +4768,10 @@ call:
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_BLT_UN_I4)
-			BRELOP_CAST(guint32, <);
+			BRELOP(guint32, <);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLT_UN_I8)
-			BRELOP_CAST(guint64, <);
+			BRELOP(guint64, <);
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_BLT_UN_R4) {
 			float f1 = LOCAL_VAR (ip [1], float);

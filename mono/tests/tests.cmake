@@ -509,6 +509,7 @@ set(MONO_TESTS_CS_SRC
   finally-gc-move.cs
   finally-nested-resume.cs
   bug-60862.cs
+  bug-unity-1.cs
 )
 
 # Tests written directly in IL, assembled with ilasm.
