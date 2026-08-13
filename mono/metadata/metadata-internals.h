@@ -229,6 +229,8 @@ struct _MonoAssembly {
 	MonoImage *image;
 	GSList *friend_assembly_names; /* Computed by mono_assembly_load_friends () */
 	guint8 friend_assembly_names_inited;
+	GSList *ignores_access_checks_to; /* Computed by mono_assembly_load_ignores_access_checks () */
+	guint8 ignores_access_checks_to_inited;
 	guint8 in_gac;
 	guint8 dynamic;
 	guint8 corlib_internal;
@@ -1106,6 +1108,7 @@ mono_metadata_generic_param_equal (MonoGenericParam *p1, MonoGenericParam *p2);
 
 void mono_dynamic_stream_reset  (MonoDynamicStream* stream);
 void mono_assembly_load_friends (MonoAssembly* ass);
+void mono_assembly_load_ignores_access_checks (MonoAssembly* ass);
 gboolean mono_assembly_has_skip_verification (MonoAssembly* ass);
 
 MONO_API gint32 

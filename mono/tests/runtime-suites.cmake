@@ -593,6 +593,9 @@ mono_runtime_suite(runtime-internalsvisibleto
         internalsvisibleto-runtimetest-sign2048.exe
         internalsvisibleto-compilertest-sign2048.exe)
 
+mono_runtime_suite(runtime-ignoresaccesschecks
+  TESTS ignoresaccesschecks-test.exe)
+
 # valid-only, because corlib is not verifiable and never has been: it is full of
 # localloc and native pointers, and Roslyn no longer emits the verifiable
 # encodings of the rest. What the check is worth is that none of it is *invalid*.

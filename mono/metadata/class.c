@@ -61,6 +61,7 @@ extern gint32 mono_inflated_methods_size;
 static MonoGetClassFromName get_class_from_name = NULL;
 
 static gboolean can_access_type (MonoClass *access_klass, MonoClass *member_klass);
+static gboolean can_access_member (MonoClass *access_klass, MonoClass *member_klass, MonoClass* context_klass, int access_level);
 
 static char* mono_assembly_name_from_token (MonoImage *image, guint32 type_token);
 static guint32 mono_field_resolve_flags (MonoClassField *field);
@@ -5907,6 +5908,33 @@ is_valid_family_access (MonoClass *access_klass, MonoClass *member_klass, MonoCl
 	return TRUE;
 }
 
+/*
+ * IgnoresAccessChecksTo is the compiler's "let me reach into that assembly"
+ * switch, emitted for a build that passes /ignoreAccessChecksTo. It grants more
+ * than InternalsVisibleTo does and in the other direction: the accessing
+ * assembly names its target, and every member of that target then reads as
+ * public, private ones included.
+ */
+static gboolean
+access_checks_waived (MonoClass *access_klass, MonoClass *member_klass)
+{
+	MonoAssembly *accessing = m_class_get_image (access_klass)->assembly;
+	MonoAssembly *accessed = m_class_get_image (member_klass)->assembly;
+	GSList *tmp;
+
+	if (!accessing || !accessed || accessing == accessed)
+		return FALSE;
+
+	mono_assembly_load_ignores_access_checks (accessing);
+	for (tmp = accessing->ignores_access_checks_to; tmp; tmp = tmp->next) {
+		MonoAssemblyName *target = (MonoAssemblyName *)tmp->data;
+		/* The name alone, because the attribute carries nothing else to check. */
+		if (target->name && !g_ascii_strcasecmp (accessed->aname.name, target->name))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 static gboolean
 can_access_internals (MonoAssembly *accessing, MonoAssembly* accessed)
 {
@@ -5991,7 +6019,7 @@ can_access_instantiation (MonoClass *access_klass, MonoGenericInst *ginst)
 }
 
 static gboolean
-can_access_type (MonoClass *access_klass, MonoClass *member_klass)
+can_access_type_inner (MonoClass *access_klass, MonoClass *member_klass)
 {
 	int access_level;
 
@@ -6060,9 +6088,21 @@ can_access_type (MonoClass *access_klass, MonoClass *member_klass)
 	return FALSE;
 }
 
+/*
+ * Both checks end here rather than at their own returns, so a waiver costs
+ * nothing until an access is about to be refused. An assembly that carries no
+ * IgnoresAccessChecksTo never has its custom attributes decoded at all.
+ */
+static gboolean
+can_access_type (MonoClass *access_klass, MonoClass *member_klass)
+{
+	return can_access_type_inner (access_klass, member_klass)
+	       || access_checks_waived (access_klass, member_klass);
+}
+
 /* FIXME: check visibility of type, too */
 static gboolean
-can_access_member (MonoClass *access_klass, MonoClass *member_klass, MonoClass* context_klass, int access_level)
+can_access_member_inner (MonoClass *access_klass, MonoClass *member_klass, MonoClass* context_klass, int access_level)
 {
 	MonoClass *member_generic_def;
 	MonoAssembly *access_klass_assembly = m_class_get_image (access_klass)->assembly;
@@ -6112,6 +6152,13 @@ can_access_member (MonoClass *access_klass, MonoClass *member_klass, MonoClass* 
 		return TRUE;
 	}
 	return FALSE;
+}
+
+static gboolean
+can_access_member (MonoClass *access_klass, MonoClass *member_klass, MonoClass* context_klass, int access_level)
+{
+	return can_access_member_inner (access_klass, member_klass, context_klass, access_level)
+	       || access_checks_waived (access_klass, member_klass);
 }
 
 /**

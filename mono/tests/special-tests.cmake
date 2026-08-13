@@ -369,6 +369,32 @@ list(APPEND MONO_TESTS_SPECIAL
   internalsvisibleto-runtimetest.exe internalsvisibleto-compilertest.exe
   internalsvisibleto-runtimetest-sign2048.exe internalsvisibleto-compilertest-sign2048.exe)
 
+# --- IgnoresAccessChecksTo ---------------------------------------------------
+# Same shape as the InternalsVisibleTo cases above: both libraries are built
+# permissively so the test compiles against members it has no right to, then
+# rebuilt strictly so the run-time check has something to reject. Only the
+# granted one is named by the attribute in the test.
+add_custom_command(
+  OUTPUT "${_bin}/ignoresaccesschecks-test.exe"
+  COMMAND ${_csc} -d:GRANTED -d:PERMISSIVE -t:library
+          "-out:${_bin}/ignoresaccesschecks-granted.dll" "${_src}/ignoresaccesschecks-library.cs"
+  COMMAND ${_csc} -d:PERMISSIVE -t:library
+          "-out:${_bin}/ignoresaccesschecks-ungranted.dll" "${_src}/ignoresaccesschecks-library.cs"
+  COMMAND ${_csc} -warn:0 "-r:${_bin}/ignoresaccesschecks-granted.dll"
+          "-r:${_bin}/ignoresaccesschecks-ungranted.dll"
+          "-out:${_bin}/ignoresaccesschecks-test.exe" "${_src}/ignoresaccesschecks-test.cs"
+  COMMAND ${_csc} -d:GRANTED -t:library
+          "-out:${_bin}/ignoresaccesschecks-granted.dll" "${_src}/ignoresaccesschecks-library.cs"
+  COMMAND ${_csc} -t:library
+          "-out:${_bin}/ignoresaccesschecks-ungranted.dll" "${_src}/ignoresaccesschecks-library.cs"
+  DEPENDS "${_src}/ignoresaccesschecks-test.cs" "${_src}/ignoresaccesschecks-library.cs"
+          mono-test-toolchain
+  WORKING_DIRECTORY "${_bin}"
+  COMMENT "CSC ignoresaccesschecks-test.exe"
+  VERBATIM)
+list(APPEND _all_assemblies "${_bin}/ignoresaccesschecks-test.exe")
+list(APPEND MONO_TESTS_SPECIAL ignoresaccesschecks-test.exe)
+
 # --- misc --------------------------------------------------------------------
 _mono_special(async-exceptions.exe NO_DEFAULT_REFS SOURCES async-exceptions.cs)
 
