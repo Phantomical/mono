@@ -230,6 +230,9 @@ set(MONO_TESTS_CS_SRC
   interp-entries.cs
   interp-calls-compiled.cs
   interp-tier1-promotion.cs
+  interp-float-to-int.cs
+  interp-threadstatic-cctor.cs
+  interp-array-set-typecheck.cs
   volatile-prefix.cs
   delegate-async-exit.cs
   delegate-delegate-exit.cs
@@ -1069,6 +1072,12 @@ set(MONO_TESTS_DISABLED
 
 # Additionally excluded when running under the interpreter.
 set(MONO_TESTS_INTERP_DISABLED
+  # The three below are the same interpreter defects MONO_TESTS_TIER0_DISABLED
+  # names, and the reasons are written there. They fail here for the same
+  # reason: the engine is the interpreter either way.
+  interp-float-to-int.exe
+  interp-threadstatic-cctor.exe
+  interp-array-set-typecheck.exe
   delegate-async-exception.exe
   bug-348522.2.exe
   bug-459094.exe
@@ -1109,6 +1118,20 @@ set(MONO_TESTS_TIER0_DISABLED
   # A default-interface diamond resolves to one of the implementations where
   # the ambiguity is meant to raise.
   dim-diamondshape.exe
+  # An unchecked float-to-integer conversion that does not fit. float_to_int ()
+  # settles the answer for this runtime -- ECMA-335 leaves it unspecified, so
+  # every path has to reach the same one, and the compiled tier saturates. The
+  # interpreter casts in C, so a method answers one way before it is promoted
+  # and another after.
+  interp-float-to-int.exe
+  # Reading a thread-static does not run the class initializer. The
+  # special-static path carries the field's offset and no vtable, so nothing on
+  # it can run one. ECMA-335 II.10.5.3.
+  interp-threadstatic-cctor.exe
+  # Storing into a multidimensional array checks the call site's static element
+  # type rather than the value, so a Derived is refused by a Derived[,] that is
+  # held in a Base[,] variable.
+  interp-array-set-typecheck.exe
   # Overflows a thread's stack on purpose and wants a StackOverflowException
   # back. The interpreter does not recurse for a managed call, but it allocas
   # an InterpFrame for every new depth, so the native stack runs out anyway and
