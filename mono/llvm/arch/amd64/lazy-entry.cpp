@@ -24,12 +24,58 @@
 
 #include "arch/arch.hpp"
 
+#include "debugging/perf/jitdump.hpp"
+
 #include <cstring>
+#include <vector>
 
 using namespace llvm;
 using namespace llvm::orc;
 
 namespace mono::arch {
+
+/*
+ * The trampoline between the caller and here is what the CFA is picked to skip.
+ * It is one `call` instruction and it gets no description, so a walk that steps
+ * into it stops. A CFA of 0x18(%rbp) puts the return address a reader takes
+ * from CFA-8 on the caller's, at 0x10(%rbp), and the trampoline is passed over.
+ *
+ * The offsets below are the ones in the code that follows. Move an instruction
+ * and these move with it: a rule at the wrong offset unwinds to a wrong answer
+ * rather than to none.
+ */
+std::vector<UnwindRecord>
+lazy_resolver_frame ()
+{
+	const int32_t fp = dwarf_frame_pointer_reg;
+	const int32_t sp = dwarf_stack_pointer_reg;
+
+	return {
+		/* Entry. The trampoline's call sits above the caller's. */
+		{ 0x00, MONO_UNWIND_OP_DEF_CFA, sp, 0x10 },
+
+		/* pushq %rbp */
+		{ 0x01, MONO_UNWIND_OP_DEF_CFA_OFFSET, 0, 0x18 },
+		{ 0x01, MONO_UNWIND_OP_OFFSET, fp, -0x18 },
+
+		/* movq %rsp, %rbp - the rest of the body stands on this. */
+		{ 0x04, MONO_UNWIND_OP_DEF_CFA_REGISTER, fp, 0 },
+
+		/* popq %rbp, so %rbp is the caller's again and the CFA moves back. */
+		{ 0xa4, MONO_UNWIND_OP_DEF_CFA, sp, 0x10 },
+		{ 0xa4, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
+
+		/* The throw path. A jump arrives here, so it needs the body's rules
+		 * again rather than the ones the line above leaves. */
+		{ 0xa5, MONO_UNWIND_OP_DEF_CFA, fp, 0x18 },
+		{ 0xa5, MONO_UNWIND_OP_OFFSET, fp, -0x18 },
+
+		/* The stack is cut back to the caller's return address, and %rbp is
+		 * the caller's. */
+		{ 0xb3, MONO_UNWIND_OP_DEF_CFA, sp, 0x08 },
+		{ 0xb3, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
+	};
+}
 
 /*
  * ORC's OrcX86_64_SysV::writeResolverCode () with the lazy-entry frame added:
@@ -58,8 +104,6 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
                                  ExecutorAddr reentry_fn,
                                  ExecutorAddr reentry_ctx)
 {
-	(void) resolver_addr; /* Nothing here is written relative to itself. */
-
 	static_assert (managed_frame_size == 0x20,
 	               "the frame reservation is an immediate below");
 
@@ -177,6 +221,20 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 	std::memcpy (resolver_mem + leave_fn_offset, &leave_fn, sizeof (leave_fn));
 	std::memcpy (resolver_mem + rethrow_slot_offset, &rethrow_slot,
 	             sizeof (rethrow_slot));
+
+	perf::FrameFunction fn;
+	fn.size = ResolverCodeSize;
+	fn.records = lazy_resolver_frame ();
+
+	std::vector<perf::FrameFunction> functions;
+	functions.push_back (std::move (fn));
+
+	/* The pool gives the resolver a mapping of its own, so the room behind it
+	 * is the rest of a page. */
+	perf::publish ("mono_lazy_entry_resolver",
+	               { resolver_addr.toPtr<const uint8_t *> (), ResolverCodeSize,
+	                 ResolverCodeSize + perf::code_slack () },
+	               std::move (functions));
 }
 
 } // namespace mono::arch

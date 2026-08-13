@@ -10,6 +10,7 @@
 #define MONO_LLVM_ARCH_AMD64_AMD64_HPP
 
 #include "arch/amd64/interp-entry-offsets.h"
+#include "sidetables.hpp"
 
 #include <llvm/ExecutionEngine/Orc/OrcABISupport.h>
 #include <llvm/TargetParser/Triple.h>
@@ -33,6 +34,7 @@ constexpr llvm::Triple::ArchType target_arch = llvm::Triple::x86_64;
  */
 constexpr unsigned dwarf_return_address_reg = 16; /* RIP */
 constexpr unsigned dwarf_stack_pointer_reg = 7;   /* RSP */
+constexpr unsigned dwarf_frame_pointer_reg = 6;   /* RBP */
 constexpr int dwarf_code_alignment_factor = 1;
 constexpr int dwarf_data_alignment_factor = -8;
 
@@ -159,6 +161,14 @@ struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
 	                               llvm::orc::ExecutorAddr reentry_fn,
 	                               llvm::orc::ExecutorAddr reentry_ctx);
 };
+
+/// The frame the re-entry resolver runs on, as a CFI program.
+///
+/// The frame it declares is the managed caller's rather than the resolver's
+/// own, so a walk that arrives during a compile goes on to the code that made
+/// the call. The rules are tied to the instruction offsets in the resolver, so
+/// the two only stay true together.
+std::vector<UnwindRecord> lazy_resolver_frame ();
 
 } // namespace mono::arch
 
