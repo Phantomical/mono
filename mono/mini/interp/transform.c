@@ -6596,15 +6596,22 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			}
 			td->ip += 4;
 			break;
-		case CEE_CKFINITE:
+		case CEE_CKFINITE: {
 			CHECK_STACK (td, 1);
-			interp_add_ins (td, MINT_CKFINITE);
+			// ckfinite hands its operand back, so the value keeps the width it
+			// arrived with. Reading a single as a double gets four bytes of
+			// whatever follows it.
+			int float_type = td->sp [-1].type == STACK_TYPE_R4 ? STACK_TYPE_R4
+			                                                   : STACK_TYPE_R8;
+			interp_add_ins (td, float_type == STACK_TYPE_R4 ? MINT_CKFINITE_R4
+			                                                : MINT_CKFINITE);
 			td->sp--;
 			interp_ins_set_sreg (td->last_ins, td->sp [0].local);
-			push_simple_type (td, STACK_TYPE_R8);
+			push_simple_type (td, float_type);
 			interp_ins_set_dreg (td->last_ins, td->sp [-1].local);
 			++td->ip;
 			break;
+		}
 		case CEE_MKREFANY:
 			CHECK_STACK (td, 1);
 

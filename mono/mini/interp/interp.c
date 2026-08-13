@@ -6549,6 +6549,7 @@ call:
 			if (val < 0 || val > G_MAXINT16 || isnan (val))
 				THROW_EX (mono_get_exception_overflow (), ip);
 			LOCAL_VAR (ip [1], gint32) = (gint16) val;
+			ip += 3;
 			MINT_IN_BREAK;
 		}
 		MINT_IN_CASE(MINT_CONV_OVF_U2_I4) {
@@ -6682,6 +6683,14 @@ call:
 				LOCAL_VAR (ip [1], gint32) = (guint8)val;
 			else
 				THROW_EX (mono_get_exception_overflow (), ip);
+			ip += 3;
+			MINT_IN_BREAK;
+		}
+		MINT_IN_CASE(MINT_CKFINITE_R4) {
+			float val = LOCAL_VAR (ip [2], float);
+			if (!mono_isfinite (val))
+				THROW_EX (mono_get_exception_arithmetic (), ip);
+			LOCAL_VAR (ip [1], float) = val;
 			ip += 3;
 			MINT_IN_BREAK;
 		}

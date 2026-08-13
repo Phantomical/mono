@@ -598,6 +598,7 @@ OPDEF(MINT_CONV_OVF_U8_R8, "conv.ovf.u8.r8", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_CEQ0_I4, "ceq0.i4", 3, 1, 1, MintOpNoArgs)
 /* unops end */
 
+OPDEF(MINT_CKFINITE_R4, "ckfinite.r4", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_CKFINITE, "ckfinite", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_MKREFANY, "mkrefany", 4, 1, 1, MintOpClassToken)
 OPDEF(MINT_REFANYTYPE, "refanytype", 3, 1, 1, MintOpNoArgs)
