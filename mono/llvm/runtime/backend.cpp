@@ -28,6 +28,7 @@
 #include "arch/arch.hpp"
 #include <optional>
 #include "mono/metadata/appdomain.h"
+#include "mono/metadata/class-internals.h"
 #include "mono/metadata/domain-internals.h"
 
 namespace mono {
@@ -399,6 +400,18 @@ MonoBackend::DomainState::retire (MethodState &method)
 llvm::Expected<MonoBackend::MethodState *>
 MonoBackend::publish (DomainState &domain, MonoMethod *method)
 {
+	/*
+	 * Naming the method reads its signature, and a signature that is not
+	 * cached yet is parsed from metadata - which loads the classes it names,
+	 * and takes the loader lock to do it. Ask for the signature here, above
+	 * the locks, so that stub_symbol () and entries () below find it cached.
+	 *
+	 * A backend lock held across the loader lock deadlocks: a thread in class
+	 * init holds the loader lock and then takes the domain lock to build a
+	 * vtable, which is the cycle.
+	 */
+	mono_method_signature_internal (method);
+
 	/*
 	 * The domain lock is the outer one of the two. A mutator can arrive here
 	 * already holding it - mono_class_proxy_vtable compiles a remoting
