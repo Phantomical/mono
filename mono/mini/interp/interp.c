@@ -791,6 +791,28 @@ alloc_method_table (MonoVTable *vtable, int offset)
 	return table;
 }
 
+/*
+ * Says whether the receiver's vtable has a slot for this offset.
+ *
+ * Both tables are indexed without a bound of their own, and the interface one
+ * is indexed below the vtable pointer, so a receiver of the wrong class does
+ * not read a wrong method - it reads, and then writes, outside the allocation.
+ * One such receiver therefore becomes a corruptor of whatever the domain
+ * allocated before the vtable, and the fault appears later somewhere else.
+ *
+ * A class with no interfaces gets imt_table_bytes = 0 in mono_class_create_runtime_vtable (),
+ * so for it there is no region below the vtable at all.
+ */
+static gboolean
+method_table_holds_offset (MonoVTable *vtable, int offset)
+{
+	if (offset < 0)
+		return offset >= -2 * MONO_IMT_SIZE
+			&& m_class_get_interface_offsets_count (vtable->klass) != 0;
+
+	return offset < m_class_get_vtable_size (vtable->klass);
+}
+
 static InterpMethod* // Inlining causes additional stack use in caller.
 get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 {
@@ -802,6 +824,11 @@ get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 	if (mono_class_is_transparent_proxy (vtable->klass))
 		return get_virtual_method (imethod, vtable);
 #endif
+
+	g_assertf (method_table_holds_offset (vtable, offset),
+		   "receiver of class %s.%s has no method table slot %d, called from %s:%s",
+		   m_class_get_name_space (vtable->klass), m_class_get_name (vtable->klass),
+		   offset, m_class_get_name (imethod->method->klass), imethod->method->name);
 
 	table = get_method_table (vtable, offset);
 
