@@ -8,6 +8,20 @@
 # The bodies are gtest, and gtest_discover_tests turns each case into its own
 # ctest test running in its own process -- so a crash still names one check.
 
+# Ahead of the SGen gate below, because this one is about the shared library
+# rather than about the runtime it starts, and it wants whichever collectors
+# were built. It links nothing: the point is to load the runtime the way an
+# embedder does.
+add_executable(test-dlopen-runtime test-dlopen-runtime.c)
+target_link_libraries(test-dlopen-runtime PRIVATE ${CMAKE_DL_LIBS})
+
+foreach(_runtime monosgen-2.0 monoboehm-2.0)
+  if(TARGET ${_runtime})
+    add_test(NAME dlopen-${_runtime}
+             COMMAND test-dlopen-runtime "$<TARGET_FILE:${_runtime}>")
+  endif()
+endforeach()
+
 if(NOT MONO_ENABLE_SGEN)
   # The tests link the SGen runtime.
   return()
