@@ -18,6 +18,16 @@ typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoJitInfo MonoJitInfo;
 
+/// Starts the backend.
+///
+/// Call this from runtime startup, before any method can be entered. The
+/// engine is otherwise built by whichever thread asks for the first compile or
+/// promotion, which can be a mutator inside the interpreter.
+///
+/// The domains and their linkers are still built on demand, so this does not
+/// consume the options queued by mono_llvm_jit_add_option ().
+void mono_llvm_jit_init (void);
+
 /// Compiles a method and returns the address to call it at.
 ///
 /// The code goes into the given domain's linker. The address is a stub, and
@@ -106,9 +116,9 @@ int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 /// became of it.
 ///
 /// Returns FALSE when the request was refused, which a domain on its way out
-/// and a backend that has not been asked for anything yet both do. Nothing
-/// retries a refused request, so a caller that spent a call count on it has to
-/// start counting again or the method stays where it is for good.
+/// and a runtime in shutdown both do. Nothing retries a refused request, so a
+/// caller that spent a call count on it has to start counting again or the
+/// method stays where it is for good.
 mono_bool mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain);
 
 /// Puts a method's IL through the verifier.

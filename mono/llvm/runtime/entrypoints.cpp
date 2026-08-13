@@ -17,6 +17,7 @@
 #include "verification.hpp"
 
 #include <llvm/Support/Error.h>
+#include <llvm/Support/raw_ostream.h>
 
 namespace {
 
@@ -56,6 +57,17 @@ finish (llvm::Expected<void *> code, MonoError *error)
 }
 
 } // namespace
+
+void
+mono_llvm_jit_init (void)
+{
+	llvm::Expected<mono::MonoBackend *> backend = mono::MonoBackend::get ();
+
+	/* The first compile asks again and reports this through its MonoError. */
+	if (!backend)
+		llvm::logAllUnhandledErrors (backend.takeError (), llvm::errs (),
+		                             "mono: could not start the LLVM backend: ");
+}
 
 void *
 mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *target_domain,

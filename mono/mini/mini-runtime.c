@@ -4264,6 +4264,8 @@ mini_init (const char *filename, const char *runtime_version)
 	}
 #endif
 
+	mono_llvm_jit_init ();
+
 	mono_interp_stub_init ();
 #if !defined (DISABLE_INTERPRETER) && defined (MONO_ARCH_INTERPRETER_SUPPORTED) && !defined (MONO_CROSS_COMPILE)
 	/* Tier 0 is the entry tier, so the interpreter runs beside the JIT. */

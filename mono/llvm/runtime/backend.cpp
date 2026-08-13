@@ -844,18 +844,26 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
  * Runs on a mutator thread inside the interpreter, so it hands everything it
  * can to the worker. Nothing waits for the result, and a compile that fails
  * once it is running leaves the method at the tier it is at.
- *
- * The engine is not created here. Nothing has asked it for a method yet, and a
- * promotion is not the request that should pay for building it - the caller
- * counts again instead.
  */
 bool
 MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 {
-	if (!instance)
+	llvm::Expected<MonoBackend *> backend = get ();
+
+	if (!backend) {
+		llvm::consumeError (backend.takeError ());
+		return false;
+	}
+
+	/* Held rather than read again on the worker: at exit the engine is
+	 * unhooked from instance before the destructor drains the queue. */
+	MonoBackend *self = *backend;
+
+	/* Null once the engine has been taken apart, which get () does not undo. */
+	if (!self)
 		return false;
 
-	llvm::Expected<DomainState *> state = instance->state (domain);
+	llvm::Expected<DomainState *> state = self->state (domain);
 
 	if (!state) {
 		llvm::consumeError (state.takeError ());
@@ -863,9 +871,6 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 	}
 
 	DomainState *owner = *state;
-	/* Held rather than read again on the worker: at exit the engine is
-	 * unhooked from instance before the destructor drains the queue. */
-	MonoBackend *self = instance;
 
 	return owner->queue.enqueue (method, [self, owner, method] () {
 		/* The interpreter reaches a callee without the backend being asked
