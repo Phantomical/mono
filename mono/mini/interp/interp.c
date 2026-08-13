@@ -5966,7 +5966,21 @@ call:
 		MINT_IN_CASE(MINT_STSFLD_I8) STSFLD(gint64, gint64); MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_STSFLD_R4) STSFLD(float, float); MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_STSFLD_R8) STSFLD(double, double); MINT_IN_BREAK;
-		MINT_IN_CASE(MINT_STSFLD_O) STSFLD(gpointer, gpointer); MINT_IN_BREAK;
+		/*
+		 * A reference goes through the barrier rather than the macro above. The
+		 * static area is a root the collector already knows about, but under
+		 * manual dirty bits it only rescans a page that something marked, and a
+		 * plain store marks nothing - the object stays unreachable to the
+		 * collector while a live root holds it.
+		 */
+		MINT_IN_CASE(MINT_STSFLD_O) {
+			MonoVTable *vtable = (MonoVTable*) frame->imethod->data_items [ip [2]];
+			INIT_VTABLE (vtable);
+			mono_gc_wbarrier_generic_store_internal (frame->imethod->data_items [ip [3]],
+								 LOCAL_VAR (ip [1], MonoObject*));
+			ip += 4;
+			MINT_IN_BREAK;
+		}
 
 		MINT_IN_CASE(MINT_STSFLD_VT) {
 			MonoVTable *vtable = (MonoVTable*) frame->imethod->data_items [ip [2]];
@@ -5993,7 +6007,15 @@ call:
 		MINT_IN_CASE(MINT_STTSFLD_I8) STTSFLD(gint64, gint64); MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_STTSFLD_R4) STTSFLD(float, float); MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_STTSFLD_R8) STTSFLD(double, double); MINT_IN_BREAK;
-		MINT_IN_CASE(MINT_STTSFLD_O) STTSFLD(gpointer, gpointer); MINT_IN_BREAK;
+		/* A thread-static reference needs the barrier for the same reason. */
+		MINT_IN_CASE(MINT_STTSFLD_O) {
+			MonoInternalThread *thread = mono_thread_internal_current ();
+			guint32 offset = READ32 (ip + 2);
+			gpointer addr = ((char*)thread->static_data [offset & 0x3f]) + (offset >> 6);
+			mono_gc_wbarrier_generic_store_internal (addr, LOCAL_VAR (ip [1], MonoObject*));
+			ip += 4;
+			MINT_IN_BREAK;
+		}
 
 		MINT_IN_CASE(MINT_STSSFLD) {
 			guint32 offset = READ32(ip + 3);
