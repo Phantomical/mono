@@ -359,7 +359,36 @@ int mono_interp_traceopt = 0;
 
 #if USE_COMPUTED_GOTO
 
-#define MINT_IN_DISPATCH(op) goto *in_labels [opcode = (MintOpcode)(op)]
+static __thread const guint16 *interp_prev_ip;
+static __thread guint32 interp_prev_op;
+
+static void
+interp_bad_opcode (InterpFrame *frame, const guint16 *ip, guint32 op)
+{
+	InterpMethod *imethod = frame->imethod;
+	const guint16 *start = imethod->code;
+	g_printerr ("[interp] previous dispatch: offset %ld opcode %u\n",
+		    interp_prev_ip ? (long)(interp_prev_ip - imethod->code) : -1L, interp_prev_op);
+	g_printerr ("[interp] opcode %u (%#x) out of range at bytecode offset %ld in %s\n",
+		    op, op, (long)(ip - start),
+		    mono_method_full_name (imethod->method, TRUE));
+	g_printerr ("[interp]   words from offset %ld:", (long)(ip - start) - 12);
+	for (const guint16 *p = ip - 12; p < ip + 4; p++) {
+		if (p < start)
+			continue;
+		g_printerr (" %s%04x%s", p == ip ? "[" : "", *p, p == ip ? "]" : "");
+	}
+	g_printerr ("\n");
+	g_assert_not_reached ();
+}
+
+#define MINT_IN_DISPATCH(op) do { \
+		opcode = (MintOpcode)(op); \
+		if (G_UNLIKELY ((guint32)opcode >= MINT_LASTOP)) \
+			interp_bad_opcode (frame, ip, (guint32)opcode); \
+		interp_prev_ip = ip; interp_prev_op = (guint32)opcode; \
+		goto *in_labels [opcode]; \
+	} while (0)
 #define MINT_IN_SWITCH(op)   MINT_IN_DISPATCH (op);
 #define MINT_IN_BREAK        MINT_IN_DISPATCH (*ip)
 #define MINT_IN_CASE(x)      LAB_ ## x:
