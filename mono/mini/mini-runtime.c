@@ -279,7 +279,7 @@ mono_get_method_from_ip (void *ip)
 
 	method = jinfo_get_method (ji);
 	method_name = mono_method_get_name_full (method, TRUE, FALSE, MONO_TYPE_NAME_FORMAT_IL);
-	location = mono_debug_lookup_source_location (method, (guint32)((guint8*)ip - (guint8*)ji->code_start), domain);
+	location = mono_jinfo_lookup_source_location (domain, ji, (guint32)((guint8*)ip - (guint8*)ji->code_start));
 
 	char *file_loc = NULL;
 	if (location)
@@ -366,7 +366,7 @@ mono_print_method_from_ip (void *ip)
 		return;
 	}
 	method = mono_method_full_name (jinfo_get_method (ji), TRUE);
-	source = mono_debug_lookup_source_location (jinfo_get_method (ji), (guint32)((guint8*)ip - (guint8*)ji->code_start), target_domain);
+	source = mono_jinfo_lookup_source_location (target_domain, ji, (guint32)((guint8*)ip - (guint8*)ji->code_start));
 
 	gsctx = mono_jit_info_get_generic_sharing_context (ji);
 	shared_type = "";

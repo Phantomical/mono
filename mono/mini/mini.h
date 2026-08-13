@@ -733,6 +733,12 @@ mono_find_jit_info_ext (MonoDomain *domain, MonoJitTlsData *jit_tls,
 						host_mgreg_t **save_locations,
 						StackFrameInfo *frame);
 
+int
+mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset);
+
+struct _MonoDebugSourceLocation *
+mono_jinfo_lookup_source_location (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset);
+
 gpointer mono_get_throw_exception               (void);
 gpointer mono_get_rethrow_exception             (void);
 gpointer mono_get_rethrow_preserve_exception             (void);

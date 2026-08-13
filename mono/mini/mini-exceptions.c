@@ -213,6 +213,49 @@ mono_get_seq_point_for_native_offset (MonoDomain *domain, MonoMethod *method, gi
 	return -1;
 }
 
+/*
+ * The debug tables are keyed by (method, domain), not by body. A method that has
+ * run in both engines registers a table from each, and the last one replaces the
+ * other. So a lookup that knows only a method and a native offset can answer from
+ * a body that did not produce the offset: a tier-1 body measures machine code, an
+ * interpreted one measures bytecode, and the two share no scale.
+ *
+ * The jit info is what says which engine owns the frame, so every native-offset
+ * lookup starts at the two functions below. An IL offset is body-independent,
+ * which is what makes the lookup by IL safe once one of these has produced it.
+ */
+
+/*
+ * Places a frame's native offset in the IL. Returns -1 when the body has no
+ * IL-offset map.
+ */
+int
+mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset)
+{
+	if (ji->from_llvm)
+		return ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, native_offset);
+
+	if (ji->is_interp)
+		return mini_get_interp_callbacks ()->il_offset_from_native_offset (domain, jinfo_get_method (ji), native_offset);
+
+	return -1;
+}
+
+/*
+ * Finds the source file and line a frame's native offset is in. Returns NULL when
+ * the body has no IL-offset map, or when the method has no line information.
+ */
+MonoDebugSourceLocation *
+mono_jinfo_lookup_source_location (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset)
+{
+	int il_offset = mono_jinfo_get_il_offset (domain, ji, native_offset);
+
+	if (il_offset == -1)
+		return NULL;
+
+	return mono_debug_lookup_source_location_by_il (jinfo_get_method (ji), il_offset, domain);
+}
+
 void
 mono_exceptions_init (void)
 {
@@ -1312,52 +1355,21 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 			sf->native_offset = native_offset;
 
 			/*
-			 * mono_debug_lookup_source_location() returns both the file / line number information
-			 * and the IL offset.  Note that computing the IL offset is already an expensive
-			 * operation, so we shouldn't call this method twice.
+			 * An inlined frame has no body of its own, so its IL offset comes from
+			 * the table the body it was folded into carries. Everything else asks
+			 * the engine that owns the frame.
 			 *
-			 * Both lookups are keyed by MonoMethod and answer for whichever body was
-			 * compiled first, so for a body that isn't described by them (ji->no_il_offsets)
-			 * they would return an offset read off a different code layout. Report the frame
-			 * as having no IL offset instead - the caller then prints it in the
-			 * '<code_start + native_offset>' form, which is at least true.
-			 *
-			 * A tier-1 frame (ji->from_llvm) is never described by either of those
-			 * mappings, no matter what no_il_offsets says - it has its own per-body
-			 * map instead (MonoJitInfo::llvm_seq_points). Once that has produced an IL
-			 * offset the file / line lookup can go by (method, IL offset), which is
-			 * keyed on nothing this body's layout affects.
+			 * A frame with no IL offset is reported as having none, and the caller
+			 * then prints it in the '<code_start + native_offset>' form, which is at
+			 * least true.
 			 */
 			if (is_inlined)
 				il_offset = inlined [j].il_offset;
-			else if (ji->from_llvm)
-				il_offset = ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, native_offset);
-			else if (ji->is_interp)
-				/*
-				 * native_offset is an offset into the interpreter IR here, and the
-				 * interpreter keeps its own map. Without this a frame would report no
-				 * IL offset at all, so a method promoted mid-run would change what a
-				 * trace says about it.
-				 */
-				il_offset = mini_get_interp_callbacks ()->il_offset_from_native_offset (domain, jinfo_get_method (ji), native_offset);
 			else
-				il_offset = -1;
+				il_offset = mono_jinfo_get_il_offset (domain, ji, native_offset);
 
-			if (is_inlined || ji->from_llvm || ji->is_interp) {
-				location = il_offset == -1 ? NULL : mono_debug_lookup_source_location_by_il (method, il_offset, domain);
-				sf->il_offset = il_offset;
-			} else {
-				location = ji->no_il_offsets ? NULL : mono_debug_lookup_source_location (jinfo_get_method (ji), native_offset, domain);
-				if (location) {
-					sf->il_offset = location->il_offset;
-				} else {
-					SeqPoint sp;
-					if (!ji->no_il_offsets && mono_find_prev_seq_point_for_native_offset (domain, ji, native_offset, NULL, &sp))
-						sf->il_offset = sp.il_offset;
-					else
-						sf->il_offset = -1;
-				}
-			}
+			location = il_offset == -1 ? NULL : mono_debug_lookup_source_location_by_il (method, il_offset, domain);
+			sf->il_offset = il_offset;
 
 			if (need_file_info) {
 				if (location && location->source_file) {
@@ -2210,12 +2222,10 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 
 	if (il_offset != -1) {
 		location = mono_debug_lookup_source_location_by_il (jmethod, il_offset, domain);
-	} else if (ji && (ji->no_il_offsets || ji->from_llvm)) {
-		/* The line table is registered per method and describes a different body
-		 * than this frame's - see ves_icall_get_trace (). A tier-1 frame has its
-		 * own IL-offset map (MonoJitInfo::llvm_seq_points); when that came up empty
-		 * there is nothing left to key a file/line lookup on. */
-		location = NULL;
+	} else if (ji) {
+		int frame_il_offset = mono_jinfo_get_il_offset (domain, ji, *native_offset);
+
+		location = frame_il_offset == -1 ? NULL : mono_debug_lookup_source_location_by_il (jmethod, frame_il_offset, domain);
 	} else {
 		location = mono_debug_lookup_source_location (jmethod, *native_offset, domain);
 	}
