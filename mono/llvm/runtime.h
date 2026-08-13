@@ -102,10 +102,14 @@ int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 
 /// Asks for a method to be compiled, replacing whatever tier runs it now.
 ///
-/// Returns immediately. There is no way to wait for the compile or to ask
-/// what became of it, and it can simply not happen: a domain on its way out
-/// refuses the work and nothing retries it.
-void mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain);
+/// Returns immediately. There is no way to wait for the compile or to ask what
+/// became of it.
+///
+/// Returns FALSE when the request was refused, which a domain on its way out
+/// and a backend that has not been asked for anything yet both do. Nothing
+/// retries a refused request, so a caller that spent a call count on it has to
+/// start counting again or the method stays where it is for good.
+mono_bool mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain);
 
 /// Puts a method's IL through the verifier.
 ///

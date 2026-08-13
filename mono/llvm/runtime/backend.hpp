@@ -56,9 +56,11 @@ public:
 
 	/// Ask for METHOD to be compiled in DOMAIN, replacing the tier running it.
 	///
-	/// Returns as soon as the work is queued, and returns just the same when it
-	/// could not be - a domain on its way out takes nothing new. Nothing retries.
-	static void request_promotion (MonoMethod *method, MonoDomain *domain);
+	/// Returns as soon as the work is queued, never once it is done. Answering
+	/// false means the work was refused and nothing retries it: a domain on its
+	/// way out takes nothing new, and neither does an engine that does not exist
+	/// yet. A caller that counts calls towards a promotion has to count again.
+	static bool request_promotion (MonoMethod *method, MonoDomain *domain);
 
 	/// Call VISIT with the jit info of each live body this engine compiled
 	/// METHOD into in DOMAIN, oldest first.

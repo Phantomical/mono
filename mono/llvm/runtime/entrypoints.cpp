@@ -134,10 +134,10 @@ mono_llvm_jit_tier0_calls (MonoMethod *method)
 	return (int32_t) mono::tier1_threshold ();
 }
 
-void
+mono_bool
 mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain)
 {
-	mono::MonoBackend::request_promotion (method, domain);
+	return mono::MonoBackend::request_promotion (method, domain);
 }
 
 mono_bool

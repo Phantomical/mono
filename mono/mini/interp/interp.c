@@ -2063,8 +2063,16 @@ interp_check_call_promotion (InterpMethod *imethod)
 	left = mono_atomic_dec_i32 (&imethod->tier_counter);
 	if (left != 0)
 		return;
-	
-	mono_llvm_jit_request_promotion (imethod->method, imethod->domain);
+
+	/*
+	 * A refused request is the counter spent for nothing, and nothing else
+	 * arms it again: interp_arm_tier_counter () is reached once per method,
+	 * from whichever of resolve_code_type () and the backend's entry sees it
+	 * first. Arming it here is what makes the loss cost this method another
+	 * threshold of calls rather than the rest of the process.
+	 */
+	if (!mono_llvm_jit_request_promotion (imethod->method, imethod->domain))
+		interp_arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (imethod->method));
 }
 
 /* Main function for entering the interpreter from compiled code */

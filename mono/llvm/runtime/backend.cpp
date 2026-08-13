@@ -842,20 +842,24 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 
 /*
  * Runs on a mutator thread inside the interpreter, so it hands everything it
- * can to the worker. Nothing waits for the result and there is nobody to report
- * a failure to: the method stays at the tier it is at.
+ * can to the worker. Nothing waits for the result, and a compile that fails
+ * once it is running leaves the method at the tier it is at.
+ *
+ * The engine is not created here. Nothing has asked it for a method yet, and a
+ * promotion is not the request that should pay for building it - the caller
+ * counts again instead.
  */
-void
+bool
 MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 {
 	if (!instance)
-		return;
+		return false;
 
 	llvm::Expected<DomainState *> state = instance->state (domain);
 
 	if (!state) {
 		llvm::consumeError (state.takeError ());
-		return;
+		return false;
 	}
 
 	DomainState *owner = *state;
@@ -863,7 +867,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 	 * unhooked from instance before the destructor drains the queue. */
 	MonoBackend *self = instance;
 
-	owner->queue.enqueue (method, [self, owner, method] () {
+	return owner->queue.enqueue (method, [self, owner, method] () {
 		/* The interpreter reaches a callee without the backend being asked
 		 * for it, so there may be no state for this method yet. */
 		llvm::Expected<MethodState *> published = self->publish (*owner, method);
