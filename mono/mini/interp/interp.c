@@ -3086,10 +3086,22 @@ imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
 	MonoJitInfo *ji = mono_jit_info_table_find_internal (
 		domain, mono_get_addr_from_ftnptr (MINI_FTNPTR_TO_ADDR (addr)), TRUE, TRUE);
 
-	if (!ji || ji->is_trampoline)
+	if (!ji)
 		return NULL;
 
-	return mono_interp_get_imethod (domain, mono_jit_info_get_method (ji), error);
+	/*
+	 * A method's published address is its stub, and a stub is registered as a
+	 * trampoline. The record still says which method it stands for, so a
+	 * trampoline is an answer rather than a refusal. Some trampolines belong to
+	 * no method, and those are the ones with nothing to return.
+	 */
+	MonoMethod *method = ji->is_trampoline ? ji->d.tramp_info->method
+	                                       : mono_jit_info_get_method (ji);
+
+	if (!method)
+		return NULL;
+
+	return mono_interp_get_imethod (domain, method, error);
 }
 
 #ifndef MONO_ARCH_HAVE_INTERP_NATIVE_TO_MANAGED

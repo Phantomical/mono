@@ -285,7 +285,8 @@ set(_seen ${MONO_TESTS_SPECIAL} ${MONO_TESTS_DISABLED})
 
 # IL first: fourteen entries appear in both lists, naming the same .exe, and
 # only the .il exists -- automake resolved them through its %.exe: %.il rule.
-foreach(_s IN LISTS MONO_TESTS_IL_SRC MONO_TESTS_TAILCALL_IL_SRC)
+foreach(_s IN LISTS MONO_TESTS_IL_SRC MONO_TESTS_TAILCALL_IL_SRC
+                    MONO_TESTS_TIER_PINNED_IL_SRC)
   string(REGEX REPLACE "\\.il$" ".exe" _exe "${_s}")
   if(_exe IN_LIST _seen)
     continue()

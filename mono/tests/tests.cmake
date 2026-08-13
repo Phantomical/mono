@@ -930,6 +930,11 @@ set(MONO_TESTS_TIER_PINNED_SRC
   typedbyref-tier-entry.cs
 )
 
+# The same pinning, for a test whose calli has to be written by hand.
+set(MONO_TESTS_TIER_PINNED_IL_SRC
+  bug-unity-2.il
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs
