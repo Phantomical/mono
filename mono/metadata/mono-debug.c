@@ -949,6 +949,50 @@ mono_install_get_seq_point (MonoGetSeqPointFunc func)
 	get_seq_point = func;
 }
 
+static int (*get_il_offset_from_jinfo) (MonoDomain *domain, MonoJitInfo *ji, gpointer interp_frame, guint32 native_offset);
+
+void
+mono_install_get_il_offset_from_jinfo (MonoGetILOffsetFromJinfoFunc func)
+{
+	get_il_offset_from_jinfo = func;
+}
+
+/*
+ * A frame prints as a source file and line when there is one, as an IL offset in
+ * the assembly when the method has no line information, and as a native offset
+ * when nothing places it in the IL at all.
+ */
+static gchar *
+format_stack_frame (MonoMethod *method, MonoDebugSourceLocation *location, int il_offset, guint32 native_offset)
+{
+	gchar *fname, *ptr, *res;
+
+	fname = mono_method_full_name (method, TRUE);
+	for (ptr = fname; *ptr; ptr++) {
+		if (*ptr == ':') *ptr = '.';
+	}
+
+	if (location) {
+		res = g_strdup_printf ("at %s [0x%05x] in %s:%d", fname, location->il_offset,
+				       location->source_file, location->row);
+	} else if (il_offset < 0) {
+		res = g_strdup_printf ("at %s <0x%05x>", fname, native_offset);
+	} else {
+		char *mvid = mono_guid_to_string_minimal ((uint8_t*)m_class_get_image (method->klass)->heap_guid.data);
+		char *aotid = mono_runtime_get_aotid ();
+		if (aotid)
+			res = g_strdup_printf ("at %s [0x%05x] in <%s#%s>:0" , fname, il_offset, mvid, aotid);
+		else
+			res = g_strdup_printf ("at %s [0x%05x] in <%s>:0" , fname, il_offset, mvid);
+
+		g_free (aotid);
+		g_free (mvid);
+	}
+
+	g_free (fname);
+	return res;
+}
+
 /**
  * mono_debug_print_stack_frame:
  * \param native_offset Native offset within the \p method's machine code.
@@ -959,13 +1003,8 @@ gchar *
 mono_debug_print_stack_frame (MonoMethod *method, guint32 native_offset, MonoDomain *domain)
 {
 	MonoDebugSourceLocation *location;
-	gchar *fname, *ptr, *res;
-	int offset;
-
-	fname = mono_method_full_name (method, TRUE);
-	for (ptr = fname; *ptr; ptr++) {
-		if (*ptr == ':') *ptr = '.';
-	}
+	gchar *res;
+	int offset = -1;
 
 	location = mono_debug_lookup_source_location (method, native_offset, domain);
 
@@ -974,35 +1013,57 @@ mono_debug_print_stack_frame (MonoMethod *method, guint32 native_offset, MonoDom
 			mono_debugger_lock ();
 			offset = il_offset_from_address (method, domain, native_offset);
 			mono_debugger_unlock ();
-		} else {
-			offset = -1;
 		}
 
 		if (offset < 0 && get_seq_point)
 			offset = get_seq_point (domain, method, native_offset);
-
-		if (offset < 0)
-			res = g_strdup_printf ("at %s <0x%05x>", fname, native_offset);
-		else {
-			char *mvid = mono_guid_to_string_minimal ((uint8_t*)m_class_get_image (method->klass)->heap_guid.data);
-			char *aotid = mono_runtime_get_aotid ();
-			if (aotid)
-				res = g_strdup_printf ("at %s [0x%05x] in <%s#%s>:0" , fname, offset, mvid, aotid);
-			else
-				res = g_strdup_printf ("at %s [0x%05x] in <%s>:0" , fname, offset, mvid);
-
-			g_free (aotid);
-			g_free (mvid);
-		}
-		g_free (fname);
-		return res;
 	}
 
-	res = g_strdup_printf ("at %s [0x%05x] in %s:%d", fname, location->il_offset,
-			       location->source_file, location->row);
+	res = format_stack_frame (method, location, offset, native_offset);
 
-	g_free (fname);
-	mono_debug_free_source_location (location);
+	if (location)
+		mono_debug_free_source_location (location);
+	return res;
+}
+
+/**
+ * mono_debug_il_offset_from_jinfo:
+ * \param interp_frame The live interpreter frame, or NULL for a captured trace.
+ * Places a frame's native offset in the IL, asking the body the offset came from
+ * rather than the per-method tables, which a method that has run in more than one
+ * engine has only one of. Returns -1 when the body has no IL-offset map.
+ *
+ * A caller that cannot take the domain's jit code hash lock must pass the frame.
+ */
+int
+mono_debug_il_offset_from_jinfo (MonoJitInfo *ji, gpointer interp_frame, MonoDomain *domain, guint32 native_offset)
+{
+	if (!ji || !get_il_offset_from_jinfo)
+		return -1;
+
+	return get_il_offset_from_jinfo (domain, ji, interp_frame, native_offset);
+}
+
+/**
+ * mono_debug_print_stack_frame_at_il:
+ * \param il_offset IL offset the frame is at, or -1 if nothing placed it.
+ * Same as \c mono_debug_print_stack_frame for a caller that has already placed the
+ * frame in the IL. A caller that cannot resolve where it prints - because the frame
+ * it would ask is gone by then - resolves early and prints through this.
+ */
+gchar *
+mono_debug_print_stack_frame_at_il (MonoMethod *method, int il_offset, guint32 native_offset, MonoDomain *domain)
+{
+	MonoDebugSourceLocation *location = NULL;
+	gchar *res;
+
+	if (il_offset >= 0)
+		location = mono_debug_lookup_source_location_by_il (method, il_offset, domain);
+
+	res = format_stack_frame (method, location, il_offset, native_offset);
+
+	if (location)
+		mono_debug_free_source_location (location);
 	return res;
 }
 

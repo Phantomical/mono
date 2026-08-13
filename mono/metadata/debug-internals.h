@@ -113,6 +113,12 @@ mono_debug_image_has_debug_info (MonoImage *image);
 char*
 mono_debug_image_get_sourcelink (MonoImage *image);
 
+int
+mono_debug_il_offset_from_jinfo (MonoJitInfo *ji, gpointer interp_frame, MonoDomain *domain, guint32 native_offset);
+
+char *
+mono_debug_print_stack_frame_at_il (MonoMethod *method, int il_offset, guint32 native_offset, MonoDomain *domain);
+
 G_END_DECLS
 
 #endif /* __DEBUG_INTERNALS_H__ */

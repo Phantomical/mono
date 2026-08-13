@@ -4145,6 +4145,12 @@ void mono_thread_suspend_all_other_threads (void)
 typedef struct {
 	MonoInternalThread *thread;
 	MonoStackFrameInfo *frames;
+	/*
+	 * The IL offset of each frame, taken while the thread is still suspended.
+	 * An interpreted frame is the only thing that describes its own body, and it
+	 * lives on a stack that resumes as soon as the walk ends.
+	 */
+	int *il_offsets;
 	int nframes, max_frames;
 	int nthreads, max_threads;
 	MonoInternalThread **threads;
@@ -4160,6 +4166,9 @@ collect_frame (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data)
 
 	if (ud->nframes < ud->max_frames) {
 		memcpy (&ud->frames [ud->nframes], frame, sizeof (MonoStackFrameInfo));
+		ud->il_offsets [ud->nframes] = frame->ji
+			? mono_debug_il_offset_from_jinfo (frame->ji, frame->interp_frame, frame->domain, frame->native_offset)
+			: -1;
 		ud->nframes ++;
 	}
 
@@ -4361,11 +4370,11 @@ dump_thread (MonoInternalThread *thread, ThreadDumpUserData *ud, FILE* output_fi
 		MonoStackFrameInfo *frame = &ud->frames [i];
 		MonoMethod *method = NULL;
 
-		if (frame->type == FRAME_TYPE_MANAGED)
+		if (frame->type == FRAME_TYPE_MANAGED || frame->type == FRAME_TYPE_INTERP)
 			method = mono_jit_info_get_method (frame->ji);
 
 		if (method) {
-			gchar *location = mono_debug_print_stack_frame (method, frame->native_offset, frame->domain);
+			gchar *location = mono_debug_print_stack_frame_at_il (method, ud->il_offsets [i], frame->native_offset, frame->domain);
 			g_string_append_printf (text, "  %s\n", location);
 			g_free (location);
 		} else {
@@ -4444,6 +4453,7 @@ mono_threads_perform_thread_dump (void)
 
 	memset (&ud, 0, sizeof (ud));
 	ud.frames = g_new0 (MonoStackFrameInfo, 256);
+	ud.il_offsets = g_new0 (int, 256);
 	ud.max_frames = 256;
 
 	for (tindex = 0; tindex < nthreads; ++tindex) {
@@ -4457,6 +4467,7 @@ mono_threads_perform_thread_dump (void)
 		fclose (output_file);
 	}
 	g_free (ud.frames);
+	g_free (ud.il_offsets);
 
 	thread_dump_requested = FALSE;
 }
@@ -4493,6 +4504,7 @@ ves_icall_System_Threading_Thread_GetStackTraces (MonoArrayHandleOut out_threads
 
 	memset (&ud, 0, sizeof (ud));
 	ud.frames = g_new0 (MonoStackFrameInfo, 256);
+	ud.il_offsets = g_new0 (int, 256);
 	ud.max_frames = 256;
 
 	out_threads = mono_array_new_checked (domain, mono_defaults.thread_class, nthreads, error);
@@ -4537,10 +4549,12 @@ ves_icall_System_Threading_Thread_GetStackTraces (MonoArrayHandleOut out_threads
 
 			sf->native_offset = frame->native_offset;
 
-			if (frame->type == FRAME_TYPE_MANAGED)
+			if (frame->type == FRAME_TYPE_MANAGED || frame->type == FRAME_TYPE_INTERP)
 				method = mono_jit_info_get_method (frame->ji);
 
 			if (method) {
+				int il_offset = ud.il_offsets [i];
+
 				sf->method_address = (gsize) frame->ji->code_start;
 
 				MonoReflectionMethod *rm = mono_method_get_object_checked (domain, method, NULL, error);
@@ -4548,7 +4562,7 @@ ves_icall_System_Threading_Thread_GetStackTraces (MonoArrayHandleOut out_threads
 				goto_if_nok (error, leave);
 				MONO_OBJECT_SETREF_INTERNAL (sf, method, rm);
 
-				location = mono_debug_lookup_source_location (method, frame->native_offset, domain);
+				location = il_offset < 0 ? NULL : mono_debug_lookup_source_location_by_il (method, il_offset, domain);
 				if (location) {
 					sf->il_offset = location->il_offset;
 
@@ -4575,6 +4589,7 @@ ves_icall_System_Threading_Thread_GetStackTraces (MonoArrayHandleOut out_threads
 leave:
 	mono_gchandle_free_internal (handle);
 	g_free (ud.frames);
+	g_free (ud.il_offsets);
 }
 #endif
 
@@ -4778,6 +4793,7 @@ mono_threads_abort_appdomain_threads (MonoDomain *domain, int timeout)
 				ThreadDumpUserData ud;
 				memset (&ud, 0, sizeof (ud));
 				ud.frames = g_new0 (MonoStackFrameInfo, 256);
+				ud.il_offsets = g_new0 (int, 256);
 				ud.max_frames = 256;
 				for (int x = 0; x < user_data.wait.num; x++)
 				{
@@ -4790,6 +4806,7 @@ mono_threads_abort_appdomain_threads (MonoDomain *domain, int timeout)
 					dump_thread (user_data.wait.threads[x], &ud, NULL, TRUE);
 				}
 				g_free (ud.frames);
+				g_free (ud.il_offsets);
 			}
 
 			/*

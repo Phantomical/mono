@@ -242,6 +242,25 @@ mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_of
 }
 
 /*
+ * Places a live frame's native offset in the IL.
+ *
+ * An interpreted frame holds its own method, so it answers without the domain's
+ * jit code hash lock that mono_jinfo_get_il_offset () reaches through. A thread
+ * dump, a crash context and a domain teardown all run where that lock cannot be
+ * taken and where the domain's jit info may already be gone, so any of them must
+ * come through here. Pass NULL for interp_frame only when the frame is gone, as
+ * for a captured trace.
+ */
+static int
+jinfo_il_offset_for_frame (MonoDomain *domain, MonoJitInfo *ji, gpointer interp_frame, guint32 native_offset)
+{
+	if (ji->is_interp && interp_frame)
+		return mini_get_interp_callbacks ()->frame_il_offset (interp_frame, native_offset);
+
+	return mono_jinfo_get_il_offset (domain, ji, native_offset);
+}
+
+/*
  * Finds the source file and line a frame's native offset is in. Returns NULL when
  * the body has no IL-offset map, or when the method has no line information.
  */
@@ -307,6 +326,7 @@ mono_exceptions_init (void)
 	cbs.mono_above_abort_threshold = mini_above_abort_threshold;
 	mono_install_eh_callbacks (&cbs);
 	mono_install_get_seq_point (mono_get_seq_point_for_native_offset);
+	mono_install_get_il_offset_from_jinfo (jinfo_il_offset_for_frame);
 }
 
 gpointer
