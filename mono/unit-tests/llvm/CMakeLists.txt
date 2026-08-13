@@ -17,7 +17,8 @@ endif()
 set(MONO_LLVM_TEST_SOURCES
     stub-tests.cpp codemem-tests.cpp mono-lsda-tests.cpp gdb-jit-tests.cpp
     harness.cpp translator-tests.cpp jit-tests.cpp compiler-tests.cpp
-    compile-queue-tests.cpp interp-entry-tests.cpp perf-eh-frame-tests.cpp)
+    compile-queue-tests.cpp interp-entry-tests.cpp perf-eh-frame-tests.cpp
+    unwind-records-tests.cpp)
 
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current
