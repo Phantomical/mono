@@ -2014,17 +2014,27 @@ interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObject 
 
 	interp_exec_method (&frame, context, NULL);
 
-	context->stack_pointer = (guchar*)sp;
-
 	if (context->has_resume_state) {
 		/*
 		 * This can happen on wasm where native frames cannot be skipped during EH.
 		 * EH processing will continue when control returns to the interpreter.
 		 */
+		context->stack_pointer = (guchar*)sp;
 		return NULL;
 	}
+
 	// The return value is at the bottom of the stack
-	return frame.stack->data.o;
+	MonoObject *result = frame.stack->data.o;
+
+	/*
+	 * A C local is covered by the conservative thread stack scan, so reading the value
+	 * out first hands it to a scanner that keeps it before the interpreter one stops
+	 * covering it. The barrier is what keeps the compiler from doing these two in the
+	 * other order.
+	 */
+	mono_compiler_barrier ();
+	context->stack_pointer = (guchar*)sp;
+	return result;
 }
 
 typedef struct {
@@ -2131,18 +2141,22 @@ interp_entry (InterpEntryData *data)
 
 	interp_exec_method (&frame, context, NULL);
 
-	context->stack_pointer = (guchar*)sp;
-
 	g_assert (!context->has_resume_state);
 	g_assert (!context->safepoint_frame);
 	context->safepoint_frame = outer_stopped_frame;
 
+	/*
+	 * The detach below is a GC transition and can wait out a whole collection, so the
+	 * return value has to stay inside the scanned range until it has been copied out.
+	 */
 	if (rmethod->needs_thread_attach)
 		mono_threads_detach_coop (orig_domain, &attach_cookie);
 
 	if (mono_llvm_only) {
-		if (context->has_resume_state)
+		if (context->has_resume_state) {
+			context->stack_pointer = (guchar*)sp;
 			mono_llvm_reraise_exception ((MonoException*)mono_gchandle_get_target_internal (context->exc_gchandle));
+		}
 	} else {
 		g_assert (!context->has_resume_state);
 	}
@@ -2151,6 +2165,8 @@ interp_entry (InterpEntryData *data)
 	type = rmethod->rtype;
 	if (type->type != MONO_TYPE_VOID)
 		stackval_to_data (type, frame.stack, data->res, FALSE);
+
+	context->stack_pointer = (guchar*)sp;
 }
 
 static void
@@ -2924,15 +2940,20 @@ interp_entry_from_trampoline (gpointer ccontext_untyped, gpointer rmethod_untype
 
 	interp_exec_method (&frame, context, NULL);
 
-	context->stack_pointer = (guchar*)sp;
 	g_assert (!context->has_resume_state);
 
+	/*
+	 * The detach below is a GC transition and can wait out a whole collection, so the
+	 * return value has to stay inside the scanned range until it has been copied out.
+	 */
 	if (rmethod->needs_thread_attach)
 		mono_threads_detach_coop (orig_domain, &attach_cookie);
 
 	/* Write back the return value */
 	/* 'frame' is still valid */
 	mono_arch_set_native_call_context_ret (ccontext, &frame, sig, retp);
+
+	context->stack_pointer = (guchar*)sp;
 }
 
 #else
@@ -7438,8 +7459,14 @@ exit_frame:
 		goto main_loop;
 	}
 exit_clause:
+	/*
+	 * Keep the return value inside the range interp_mark_stack () scans. This frame is
+	 * gone and the caller is native, so anything below stack_pointer has no root at all
+	 * - not this stack, and not the thread stack, whose frame for this call has just
+	 * been left. The caller lowers this once it has taken the value.
+	 */
 	if (!clause_args)
-		context->stack_pointer = (guchar*)frame->stack;
+		context->stack_pointer = (guchar*)frame->stack + frame->imethod->alloca_size;
 
 	/* Our frames go away with this invocation, so hand the marker back to the one below. */
 	context_set_current_frame (context, outer_current_frame);
