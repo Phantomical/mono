@@ -115,10 +115,12 @@ mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
 # statics by including the file, and only the archive semantics of the RUNTIME
 # link let the linker leave the library's own copy of those symbols out.
 mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
-  harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp)
+  harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp
+  test-function-pointer.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
 mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
 mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
+mono_unit_test_cases(test-mono-runtime test-function-pointer "FunctionPointer.*")
 
 # One case each, and there could not be a second: the samples they are built out
 # of run a domain to completion and call mono_jit_cleanup, and nothing in the
