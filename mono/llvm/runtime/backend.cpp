@@ -1161,4 +1161,23 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	return (*published)->stub (door).code ();
 }
 
+llvm::Expected<void *>
+MonoBackend::stub_for (MonoMethod *method, MonoDomain *domain)
+{
+	llvm::Expected<DomainState *> state = this->state (domain);
+
+	if (!state)
+		return state.takeError ();
+
+	llvm::Expected<MethodState *> published = publish (**state, method);
+
+	if (!published)
+		return published.takeError ();
+
+	/* The same door compile () answers with, so the two addresses agree. */
+	Entry door = publishes_interop_entry (method) ? Entry::interop : Entry::body;
+
+	return (*published)->stub (door).code ();
+}
+
 } // namespace mono

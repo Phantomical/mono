@@ -230,6 +230,7 @@ set(MONO_TESTS_CS_SRC
   interp-entries.cs
   interp-calls-compiled.cs
   interp-tier1-promotion.cs
+  interp-native-detour.cs
   callvirt-static.cs
   interp-float-to-int.cs
   interp-threadstatic-cctor.cs
@@ -1079,6 +1080,10 @@ set(MONO_TESTS_INTERP_DISABLED
   interp-float-to-int.exe
   interp-threadstatic-cctor.exe
   interp-array-set-typecheck.exe
+  # With the interpreter as the whole engine there is no compiled tier, so the
+  # address handed out is the interpreter's own entry and no jit call can be made
+  # to go through it. A patch written over that address cannot take effect.
+  interp-native-detour.exe
   delegate-async-exception.exe
   bug-348522.2.exe
   bug-459094.exe

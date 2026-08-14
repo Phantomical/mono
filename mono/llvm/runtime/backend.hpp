@@ -76,6 +76,13 @@ public:
 	/// to call the method, or an error otherwise.
 	llvm::Expected<void *> compile (MonoMethod *method, MonoDomain *domain);
 
+	/// The address METHOD is called at in DOMAIN, without compiling it.
+	///
+	/// The stub is the same one compile () hands back, so the two agree on the
+	/// address whichever asked for it first. The body behind it is compiled by
+	/// the first call that arrives.
+	llvm::Expected<void *> stub_for (MonoMethod *method, MonoDomain *domain);
+
 private:
 	MonoBackend () = default;
 	MonoBackend (const MonoBackend &) = delete;

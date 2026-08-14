@@ -37,6 +37,19 @@ void mono_llvm_jit_init (void);
 /// Returns NULL and sets the error if the method cannot be compiled.
 void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *domain, MonoError *error);
 
+/// Returns the address to call a method at, without compiling it.
+///
+/// This is the same stub mono_llvm_jit_compile_method () returns, so the two
+/// agree whichever asked first. The body behind the stub is compiled by the
+/// first call that arrives through it.
+///
+/// A caller that only wants the address gets it at the price of a symbol and a
+/// stub. A caller that needs the code to exist, or that needs a refusal to
+/// come back as an error it can raise, has to compile instead.
+///
+/// Returns NULL and sets the error if the method cannot be published.
+void *mono_llvm_jit_stub_for (MonoMethod *method, MonoDomain *domain, MonoError *error);
+
 /// Stops background compiling and waits for whatever is already running.
 ///
 /// Call this at the top of runtime shutdown. A background compile reads

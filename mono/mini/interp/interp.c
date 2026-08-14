@@ -2635,9 +2635,9 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 }
 
 /*
- * Settle how calls to IMETHOD are made and record the answer on it: natively,
- * through do_jit_call (), when the method already has code, and by interpreting
- * it otherwise.
+ * Settle how calls to imethod are made and record the answer on it. A call goes
+ * natively, through do_jit_call (), when the method already has code or when its
+ * entry address is in native hands. The method is interpreted otherwise.
  *
  * IMETHOD_CODE_COMPILED is a permanent answer - a body is never taken back and
  * the address it is entered at is fixed - while IMETHOD_CODE_INTERP is only true
@@ -2649,14 +2649,37 @@ resolve_code_type (InterpMethod *imethod)
 	MonoMethod *method = imethod->method;
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 	InterpMethodCodeType code_type = IMETHOD_CODE_INTERP;
+	gboolean marshallable = mono_interp_jit_call_marshallable (method, sig);
 
-	/* The only chance to arm a method nothing ever asked the backend for: its
-	 * callers reached it by interpreting, so it has no stub. */
-	if (mono_atomic_load_i32_relaxed (&imethod->tier_counter) == 0)
+	/*
+	 * A patcher turns inlining off before it writes over an entry address,
+	 * because an inlined call site keeps a copy of the original body and the
+	 * jump never reaches it. The two facts together tell a patched method from
+	 * one whose address was only passed on.
+	 */
+	gboolean patched = method->native_entry_escaped
+	                   && (method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0;
+
+	if (patched && !marshallable) {
+		char *name = mono_method_full_name (method, TRUE);
+
+		g_printerr ("[interp] the entry address of %s is in native hands, but no "
+		            "jit call fits its signature. A patch written over that "
+		            "address does not take effect.\n", name);
+		g_free (name);
+	}
+
+	/*
+	 * The only chance to arm a method nothing ever asked the backend for: its
+	 * callers reached it by interpreting, so it has no stub. A patched method
+	 * stays unarmed, because a promotion redirects the stub and the redirect
+	 * writes over the patch.
+	 */
+	if (!patched && mono_atomic_load_i32_relaxed (&imethod->tier_counter) == 0)
 		interp_arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (method));
 
-	if (mono_interp_jit_call_marshallable (method, sig)
-	    && mono_jit_method_is_compiled (imethod->domain, method))
+	if (marshallable
+	    && (patched || mono_jit_method_is_compiled (imethod->domain, method)))
 		code_type = IMETHOD_CODE_COMPILED;
 
 	/*
@@ -3051,6 +3074,29 @@ entry_for_imethod (InterpMethod *imethod, MonoError *error)
 }
 
 /*
+ * Returns the address that stands for imethod outside this engine, and records
+ * that the address is now in native hands.
+ *
+ * A patcher writes a jump over the address it is given, so a method must have one
+ * address and not one per engine. A compiled ldftn names the backend's stub, and
+ * this gives an interpreted one the same stub. No compile happens here: the stub
+ * is minted on its own, which is what a compiled caller's ldftn does as well.
+ *
+ * With the interpreter as the whole engine there is no backend to ask, and its own
+ * entry is the only address there is.
+ */
+static gpointer
+escaping_entry_for_imethod (InterpMethod *imethod, MonoError *error)
+{
+	mono_method_entry_escaped (imethod->method);
+
+	if (mono_ee_features.force_use_interpreter)
+		return entry_for_imethod (imethod, error);
+
+	return mono_llvm_jit_stub_for (imethod->method, imethod->domain, error);
+}
+
+/*
  * The method an entry point stands for, or NULL if this domain published no such
  * entry.
  *
@@ -3418,6 +3464,24 @@ interp_method_compiled (MonoDomain *domain, MonoMethod *method)
 
 	if (mono_interp_jit_call_marshallable (method, mono_method_signature_internal (method)))
 		imethod->code_type = IMETHOD_CODE_COMPILED;
+}
+
+/*
+ * Takes back the answer resolve_code_type () settled for this method, because the
+ * address it is entered at is now in native hands. Native code can write a jump
+ * over that address, and an answer taken before that did not know calls have to
+ * go through it.
+ */
+static void
+interp_entry_escaped (MonoDomain *domain, MonoMethod *method)
+{
+	InterpMethod *imethod = lookup_imethod (domain, method);
+
+	if (imethod == NULL)
+		return;
+
+	mono_atomic_cas_i32 ((gint32*)&imethod->code_type, IMETHOD_CODE_UNKNOWN,
+	                     IMETHOD_CODE_INTERP);
 }
 
 #if COUNT_OPS
@@ -7178,7 +7242,7 @@ call:
 			error_init_reuse (error);
 			InterpMethod *m = mono_interp_get_imethod (mono_domain_get (), LOCAL_VAR (ip [2], MonoMethod*), error);
 			mono_error_assert_ok (error);
-			LOCAL_VAR (ip [1], gpointer) = entry_for_imethod (m, error);
+			LOCAL_VAR (ip [1], gpointer) = escaping_entry_for_imethod (m, error);
 			mono_error_assert_ok (error);
 			ip += 3;
 			MINT_IN_BREAK;

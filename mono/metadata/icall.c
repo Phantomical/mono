@@ -8444,6 +8444,9 @@ ves_icall_RuntimeMethodHandle_GetFunctionPointer (MonoMethod *method, MonoError 
 		method = mono_marshal_get_managed_wrapper(method, NULL, (MonoGCHandle)0, error);
 		return_val_if_nok(error, NULL);
 	}
+
+	mono_method_entry_escaped (method);
+
 	return mono_compile_method_checked (method, error);
 }
 
