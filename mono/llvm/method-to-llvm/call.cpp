@@ -1112,8 +1112,14 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		is_virtual = true;
 	}
 
+	// A method with no this has no receiver to dispatch on, so the site can only
+	// be an ordinary call. The stack transition above says the same: without a
+	// this there is no obj under the arguments. Code generators emit this shape,
+	// and Harmony and MonoMod write patch bodies with it, so a refusal rejects
+	// assemblies mini runs.
 	if (is_virtual && !sig->hasthis)
-		return invalid_il ("callvirt needs an instance method");
+		is_virtual = false;
+
 	if (is_virtual && sig->generic_param_count != 0 && !callee_method->is_inflated)
 		return invalid_il ("callvirt on an open generic method");
 

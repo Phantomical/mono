@@ -3239,7 +3239,11 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 	if (csignature->call_convention == MONO_CALL_VARARG)
 		csignature = mono_method_get_signature_checked (target_method, image, token, generic_context, error);
 
-	if (need_null_check) {
+	/* A null check tests the receiver, so a signature with no this has nothing to
+	 * test. A callvirt that names a static method arrives here: the block above
+	 * degrades it to a plain call, and the slot under the arguments then belongs
+	 * to the caller instead of to this call. */
+	if (need_null_check && csignature->hasthis) {
 		StackInfo *sp = td->sp - 1 - csignature->param_count;
 		interp_add_ins (td, MINT_CKNULL);
 		interp_ins_set_sreg (td->last_ins, sp->local);

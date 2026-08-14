@@ -230,6 +230,7 @@ set(MONO_TESTS_CS_SRC
   interp-entries.cs
   interp-calls-compiled.cs
   interp-tier1-promotion.cs
+  callvirt-static.cs
   interp-float-to-int.cs
   interp-threadstatic-cctor.cs
   interp-array-set-typecheck.cs
