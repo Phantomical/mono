@@ -167,6 +167,10 @@ struct InterpMethod {
 	unsigned int init_locals : 1;
 	unsigned int vararg : 1;
 	unsigned int needs_thread_attach : 1;
+#ifdef ENABLE_INTERP_TRACE
+	/* Whether MONO_INTERP_TRACE names this method. */
+	unsigned int tracing : 1;
+#endif
 };
 
 /* Used for localloc memory allocation */
@@ -336,6 +340,10 @@ typedef struct {
 	InterpHandleMark *handle_marks;
 	int handle_mark_count;
 	int handle_mark_capacity;
+#ifdef ENABLE_INTERP_TRACE
+	/* How far the execution trace is indented on this thread. */
+	int trace_depth;
+#endif
 } ThreadContext;
 
 typedef struct {
@@ -370,6 +378,10 @@ void mono_interp_transform_init (void);
 InterpMethod *mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error);
 
 void mono_interp_print_code (InterpMethod *imethod);
+
+/* Prints one instruction of a transformed method, at ip, whose code starts at
+ * start. The offset it prints is relative to start. */
+void mono_interp_dis_mintop (const guint16 *ip, const guint16 *start);
 
 gboolean mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig);
 

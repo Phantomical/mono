@@ -1448,8 +1448,8 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 	return g_string_free (str, FALSE);
 }
 
-static void
-dump_interp_compacted_ins (const guint16 *ip, const guint16 *start)
+void
+mono_interp_dis_mintop (const guint16 *ip, const guint16 *start)
 {
 	int opcode = *ip;
 	int ins_offset = ip - start;
@@ -1481,7 +1481,7 @@ dump_interp_code (const guint16 *start, const guint16* end)
 {
 	const guint16 *p = start;
 	while (p < end) {
-		dump_interp_compacted_ins (p, start);
+		mono_interp_dis_mintop (p, start);
 		p = mono_interp_dis_mintop_len (p);
 	}
 }

@@ -8,6 +8,7 @@
 
 #include "interp-internals.h"
 #include "interp-lmf.hpp"
+#include "interp-trace.hpp"
 
 #include <mono/llvm/runtime.h>
 #include <mono/metadata/appdomain.h>
@@ -59,12 +60,6 @@ do_transform_method (InterpFrame *frame, ThreadContext *context)
 	gboolean push_lmf = frame->parent != NULL;
 	ERROR_DECL (error);
 
-#if DEBUG_INTERP
-	char *mn = mono_method_full_name (frame->imethod->method, TRUE);
-	g_print ("(%p) Transforming %s\n", mono_thread_internal_current (), mn);
-	g_free (mn);
-#endif
-
 	if (push_lmf)
 		interp_push_lmf (&ext, frame->parent);
 
@@ -84,17 +79,11 @@ do_transform_method (InterpFrame *frame, ThreadContext *context)
  * checkpoint. Both are rare, which is what keeps them out of the fast path.
  */
 inline MONO_ALWAYS_INLINE gboolean
-method_entry (ThreadContext *context, InterpFrame *frame,
-#if DEBUG_INTERP
-              int *out_tracing,
-#endif
-              MonoException **out_ex)
+method_entry (ThreadContext *context, InterpFrame *frame, MonoException **out_ex)
 {
 	gboolean slow = FALSE;
 
-#if DEBUG_INTERP
-	debug_enter (frame, out_tracing);
-#endif
+	MONO_INTERP_TRACE_ENTER (context, frame);
 
 	*out_ex = NULL;
 	if (!G_UNLIKELY (frame->imethod->transformed)) {

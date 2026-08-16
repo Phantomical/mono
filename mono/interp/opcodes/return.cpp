@@ -10,6 +10,7 @@
 #include "mono/interp/interp-internals.h"
 #include "mono/interp/interp-method.hpp"
 #include "mono/interp/interp-stackval.hpp"
+#include "mono/interp/interp-trace.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/profiler.h"
@@ -23,6 +24,8 @@ MONO_ALWAYS_INLINE InterpState::OpFunc
 InterpState::exit_frame ()
 {
 	g_assert_checked (frame->imethod);
+
+	MONO_INTERP_TRACE_LEAVE (context, frame);
 
 	if (frame->parent && frame->parent->state.ip) {
 		// return to the main loop after a non-recursive interpreter call

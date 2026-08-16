@@ -1,6 +1,7 @@
 #ifndef __MONO_INTERP_INTERP_HPP__
 #define __MONO_INTERP_INTERP_HPP__
 
+#include "config.h"
 #include "glib.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
@@ -102,6 +103,21 @@ public:
 	// Execute the method that has been set up for this interpreter.
 	void exec () { exec_method (this); }
 
+#ifdef ENABLE_INTERP_TRACE
+	void trace_op_if_wanted ()
+	{
+		if (G_UNLIKELY (frame->imethod->tracing))
+			trace_op ();
+	}
+
+private:
+	MONO_NEVER_INLINE void trace_op ();
+
+public:
+#else
+	void trace_op_if_wanted () {}
+#endif
+
 private:
 	class LMFGuard {
 	private:
@@ -183,6 +199,7 @@ private:
 #define MONO_INTERP_OP_IMPL(opcode)                       \
 	void InterpState::entry_##opcode (InterpState *state) \
 	{                                                     \
+		state->trace_op_if_wanted ();                     \
 		OpFunc next = state->exec_##opcode (opcode);      \
 		MONO_MUSTTAIL return next (state);                \
 	}                                                     \

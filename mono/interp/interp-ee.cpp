@@ -58,6 +58,8 @@ interp_parse_options (const char *options)
 			mono_interp_opt &= ~INTERP_OPT_BBLOCKS;
 		else if (strncmp (arg, "-all", 4) == 0)
 			mono_interp_opt = INTERP_OPT_NONE;
+		else if (strncmp (arg, "verbose=", 8) == 0)
+			mono_interp_traceopt = atoi (arg + 8);
 	}
 }
 

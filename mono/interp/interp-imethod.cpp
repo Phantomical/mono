@@ -8,6 +8,7 @@
 #include "interp-callbacks.hpp"
 #include "interp-internals.h"
 #include "interp-method.hpp"
+#include "interp-trace.hpp"
 #include "interp-entry.hpp"
 #include "interp-imethod.hpp"
 
@@ -281,6 +282,9 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 	mono_domain_jit_code_hash_unlock (domain);
 
 	imethod->prof_flags = mono_profiler_get_call_instrumentation_flags (imethod->method);
+#ifdef ENABLE_INTERP_TRACE
+	imethod->tracing = trace_wants_method (method);
+#endif
 
 	return imethod;
 }

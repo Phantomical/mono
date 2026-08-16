@@ -134,9 +134,6 @@ retry:
 		case MONO_TYPE_U8:
 #endif
 			margs->iargs [int_i] = sp_arg->data.p;
-#if DEBUG_INTERP
-			g_print ("build_args_from_sig: margs->iargs [%d]: %p (frame @ %d)\n", int_i, margs->iargs [int_i], i);
-#endif
 			int_i++;
 			break;
 		case MONO_TYPE_VALUETYPE:
@@ -145,9 +142,6 @@ retry:
 				goto retry;
 			}
 			margs->iargs [int_i] = sp_arg;
-#if DEBUG_INTERP
-			g_print ("build_args_from_sig: margs->iargs [%d]: %p (vt) (frame @ %d)\n", int_i, margs->iargs [int_i], i);
-#endif
 			int_i++;
 			break;
 		case MONO_TYPE_GENERICINST: {
@@ -166,9 +160,6 @@ retry:
 			margs->iargs [int_i] = (gpointer) sp_arg->data.pair.lo;
 			int_i++;
 			margs->iargs [int_i] = (gpointer) sp_arg->data.pair.hi;
-#if DEBUG_INTERP
-			g_print ("build_args_from_sig: margs->iargs [%d/%d]: 0x%016" PRIx64 ", hi=0x%08x lo=0x%08x (frame @ %d)\n", int_i - 1, int_i, *((guint64 *) &margs->iargs [int_i - 1]), sp_arg->data.pair.hi, sp_arg->data.pair.lo, i);
-#endif
 			int_i++;
 			break;
 		}
@@ -179,9 +170,6 @@ retry:
 				* (float *) &(margs->fargs [int_f]) = sp_arg->data.f_r4;
 			else
 				margs->fargs [int_f] = sp_arg->data.f;
-#if DEBUG_INTERP
-			g_print ("build_args_from_sig: margs->fargs [%d]: %p (%f) (frame @ %d)\n", int_f, margs->fargs [int_f], margs->fargs [int_f], i);
-#endif
 			int_f ++;
 			break;
 		default:

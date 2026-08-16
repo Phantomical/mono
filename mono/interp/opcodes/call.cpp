@@ -187,11 +187,7 @@ InterpState::call ()
 	}
 
 	MonoException *ex;
-	if (method_entry (context, frame,
-#if DEBUG_INTERP
-	                  &tracing,
-#endif
-	                  &ex)) {
+	if (method_entry (context, frame, &ex)) {
 		if (ex)
 			THROW_EX (ex, NULL);
 		EXCEPTION_CHECKPOINT;

@@ -313,8 +313,10 @@ main (int argc, char *argv [])
 	 * Nothing that prints may be on while listing: the caller reads the method
 	 * names off stdout, and the transform's tracing goes to the same place.
 	 */
-	if (listing)
+	if (listing) {
 		g_unsetenv ("MONO_VERBOSE_METHOD");
+		g_unsetenv ("MONO_INTERP_TRACE");
+	}
 
 	/*
 	 * `mono` takes --trace= on its command line and an embedded start has no

@@ -1,22 +1,23 @@
-/**
- * \file
- * \brief Printing what a frame was entered with and what it returned.
- */
-
 #include "config.h"
 
+/**
+ * \file
+ * \brief Printing a method's frames and opcodes as it executes.
+ */
+
 #include "interp-internals.h"
+#include "interp-trace.hpp"
+#include "interp.hpp"
 
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/object-internals.h>
 #include <mono/utils/mono-threads.h>
 
+#ifdef ENABLE_INTERP_TRACE
+
 namespace mono::interp {
 
-#define DEBUG_INTERP 0
-
-#if DEBUG_INTERP
 static void
 dump_stackval (GString *str, stackval *s, MonoType *type)
 {
@@ -98,54 +99,70 @@ dump_args (InterpFrame *inv)
 
 	return g_string_free (str, FALSE);
 }
-#endif
-
-#if DEBUG_INTERP
-static int debug_indent_level = 0;
-static char* dump_args (InterpFrame *inv);
 
 static void
-output_indent (void)
+print_indent (ThreadContext *context)
 {
-	int h;
-
-	for (h = 0; h < debug_indent_level; h++)
+	for (int i = 0; i < context->trace_depth; i++)
 		g_print ("  ");
 }
 
-static void
-debug_enter (InterpFrame *frame, int *tracing)
+gboolean
+trace_wants_method (MonoMethod *method)
 {
-	if (*tracing) {
-		MonoMethod *method = frame->imethod->method;
-		char *mn, *args = dump_args (frame);
-		debug_indent_level++;
-		output_indent ();
-		mn = mono_method_full_name (method, FALSE);
-		g_print ("(%p) Entering %s (", mono_thread_internal_current (), mn);
-		g_free (mn);
-		g_print  ("%s)\n", args);
-		g_free (args);
+	static const char *pattern;
+	static gboolean asked;
+
+	if (!asked) {
+		pattern = g_getenv ("MONO_INTERP_TRACE");
+		asked = TRUE;
 	}
+
+	if (!pattern)
+		return FALSE;
+
+	char *name = mono_method_full_name (method, TRUE);
+	gboolean wanted = strstr (name, pattern) != NULL;
+	g_free (name);
+	return wanted;
 }
 
-#define DEBUG_LEAVE()	\
-	if (tracing) {	\
-		char *mn, *args;	\
-		args = dump_retval (frame);	\
-		output_indent ();	\
-		mn = mono_method_full_name (frame->imethod->method, FALSE); \
-		g_print  ("(%p) Leaving %s", mono_thread_internal_current (),  mn);	\
-		g_free (mn); \
-		g_print  (" => %s\n", args);	\
-		g_free (args);	\
-		debug_indent_level--;	\
-	}
+void
+trace_enter (ThreadContext *context, InterpFrame *frame)
+{
+	char *name = mono_method_full_name (frame->imethod->method, FALSE);
+	char *args = dump_args (frame);
 
-#else
+	print_indent (context);
+	g_print ("(%p) enter %s (%s)\n", mono_thread_internal_current (), name, args);
+	context->trace_depth++;
 
-#define DEBUG_LEAVE()
+	g_free (args);
+	g_free (name);
+}
 
-#endif
+void
+trace_leave (ThreadContext *context, InterpFrame *frame)
+{
+	char *name = mono_method_full_name (frame->imethod->method, FALSE);
+	char *retval = dump_retval (frame);
+
+	if (context->trace_depth > 0)
+		context->trace_depth--;
+	print_indent (context);
+	g_print ("(%p) leave %s => %s\n", mono_thread_internal_current (), name, retval);
+
+	g_free (retval);
+	g_free (name);
+}
+
+MONO_NEVER_INLINE void
+InterpState::trace_op ()
+{
+	print_indent (context);
+	mono_interp_dis_mintop (ip, frame->imethod->code);
+}
 
 } // namespace mono::interp
+
+#endif /* ENABLE_INTERP_TRACE */
