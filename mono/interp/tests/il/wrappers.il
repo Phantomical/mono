@@ -6,8 +6,8 @@
 // makes the runtime hand every method of a class to the interpreter, wrappers
 // included, and the `wrappers/` arm passes it for this assembly.
 //
-// The bodies are small on purpose: what is under test is the wrapper the
-// runtime builds around each signature, not the native function.
+// The callees are the runner's own, in native.cpp. What is under test is the
+// wrapper the runtime builds around each signature, not the native function.
 
 .assembly extern mscorlib { }
 .assembly 'wrappers' { }
@@ -20,25 +20,25 @@
 
 .class public auto ansi WrappersIL extends [mscorlib]System.Object
 {
-	.method public static pinvokeimpl("libc.so.6" cdecl)
+	.method public static pinvokeimpl("__Internal" as "interp_test_abs" cdecl)
 	        int32 abs (int32 n) cil managed preservesig { }
 
-	.method public static pinvokeimpl("libc.so.6" cdecl)
+	.method public static pinvokeimpl("__Internal" as "interp_test_labs" cdecl)
 	        int64 llabs (int64 n) cil managed preservesig { }
 
-	.method public static pinvokeimpl("libc.so.6" cdecl)
+	.method public static pinvokeimpl("__Internal" as "interp_test_atof" cdecl)
 	        float64 atof (string text) cil managed preservesig { }
 
-	.method public static pinvokeimpl("libc.so.6" cdecl)
+	.method public static pinvokeimpl("__Internal" as "interp_test_strlen" cdecl)
 	        native int strlen (string text) cil managed preservesig { }
 
-	.method public static pinvokeimpl("libc.so.6" as "div" cdecl)
+	.method public static pinvokeimpl("__Internal" as "interp_test_div" cdecl)
 	        valuetype WrappersPair divide (int32 numerator, int32 denominator) cil managed preservesig { }
 
-	.method public static pinvokeimpl("libc.so.6" cdecl)
+	.method public static pinvokeimpl("__Internal" as "interp_test_memcmp" cdecl)
 	        int32 memcmp (int8[] first, int8[] second, native int count) cil managed preservesig { }
 
-	.method public static pinvokeimpl("libc.so.6" cdecl)
+	.method public static pinvokeimpl("__Internal" as "interp_test_free" cdecl)
 	        void free (native int address) cil managed preservesig { }
 
 	.method public static int32 test_7_native_int_argument () cil managed

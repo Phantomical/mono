@@ -8,10 +8,12 @@
 // native call, which builds a calling-convention context first. Each test here
 // names one prototype, or one reason a signature is refused.
 //
-// A cdecl callee ignores arguments it does not declare, so one libc function
+// A cdecl callee ignores arguments it does not declare, so one native function
 // stands for several arities. The interpreter reads the declared signature. A
 // memcmp declaration with three padding arguments is therefore a six-argument
 // native call.
+//
+// The callees are the runner's own, in native.cpp.
 //
 // pinvoke.cs covers marshalling and the callback direction. These are about
 // the dispatch.
@@ -24,87 +26,87 @@ public class Calls3 {
 
 	// The fourteen prototypes. Arity first, then void against non-void.
 
-	[DllImport ("libc.so.6", EntryPoint = "endgrent")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_nothing")]
 	static extern void Calls3Void0 ();
 
-	[DllImport ("libc.so.6", EntryPoint = "getpagesize")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_pagesize")]
 	static extern int Calls3PageSize ();
 
-	[DllImport ("libc.so.6", EntryPoint = "srand")]
-	static extern void Calls3Srand (int seed);
+	[DllImport ("__Internal", EntryPoint = "interp_test_note")]
+	static extern void Calls3Note (int value);
 
-	[DllImport ("libc.so.6", EntryPoint = "toupper")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_toupper")]
 	static extern int Calls3Upper (int c);
 
-	[DllImport ("libc.so.6", EntryPoint = "bzero")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_bzero")]
 	static extern void Calls3Bzero (byte [] target, IntPtr count);
 
-	[DllImport ("libc.so.6", EntryPoint = "access")]
-	static extern int Calls3Access (string path, int mode);
+	[DllImport ("__Internal", EntryPoint = "interp_test_lookup")]
+	static extern int Calls3Lookup (string name, int mode);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcpy")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcpy")]
 	static extern void Calls3Copy3 (byte [] target, byte [] source, IntPtr count);
 
-	[DllImport ("libc.so.6", EntryPoint = "strncmp")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_strncmp")]
 	static extern int Calls3Ncmp (string a, string b, IntPtr count);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcpy")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcpy")]
 	static extern void Calls3Copy4 (byte [] target, byte [] source, IntPtr count, int pad1);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcmp")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcmp")]
 	static extern int Calls3Cmp4 (byte [] a, byte [] b, IntPtr count, int pad1);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcpy")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcpy")]
 	static extern void Calls3Copy5 (byte [] target, byte [] source, IntPtr count,
 	                                int pad1, int pad2);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcmp")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcmp")]
 	static extern int Calls3Cmp5 (byte [] a, byte [] b, IntPtr count, int pad1, int pad2);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcpy")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcpy")]
 	static extern void Calls3Copy6 (byte [] target, byte [] source, IntPtr count,
 	                                int pad1, int pad2, int pad3);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcmp")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcmp")]
 	static extern int Calls3Cmp6 (byte [] a, byte [] b, IntPtr count,
 	                              int pad1, int pad2, int pad3);
 
 	// The rest of what the fast path handles: a bool result, an enum argument
 	// over either width, and a last error the caller reads afterwards.
 
-	[DllImport ("libc.so.6", EntryPoint = "access")]
-	static extern bool Calls3AccessFails (string path, int mode);
+	[DllImport ("__Internal", EntryPoint = "interp_test_lookup")]
+	static extern bool Calls3LookupFails (string name, int mode);
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern int Calls3AbsEnum (Calls3Mode value);
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern int Calls3AbsWide (Calls3Wide value);
 
-	[DllImport ("libc.so.6", EntryPoint = "access", SetLastError = true)]
-	static extern int Calls3AccessErrno (string path, int mode);
+	[DllImport ("__Internal", EntryPoint = "interp_test_lookup", SetLastError = true)]
+	static extern int Calls3LookupErrno (string name, int mode);
 
 	// Shapes the fast path refuses. Each still has to call.
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern byte Calls3AbsByte (int value);
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern short Calls3AbsShort (int value);
 
-	[DllImport ("libc.so.6", EntryPoint = "endgrent")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_nothing")]
 	static extern void Calls3Void1 (double ignored);
 
-	[DllImport ("libc.so.6", EntryPoint = "endgrent")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_nothing")]
 	static extern void Calls3Void2 (double a, double b);
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern int Calls3AbsThen (int value, double ignored);
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern int Calls3AbsLast6 (int value, int p1, int p2, int p3, int p4, double last);
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern int Calls3AbsPair (Calls3Pair pair);
 
 	public enum Calls3Mode { Zero = 0, MinusSeven = -7 }
@@ -136,8 +138,8 @@ public class Calls3 {
 		return Id (1);
 	}
 
-	// A page is 4096 bytes on amd64 Linux, so the result itself is the answer
-	// and a slot the callee did not write cannot pass.
+	// The callee answers 4096, so the result is the answer and a slot it did
+	// not write cannot pass.
 
 	public static int test_4096_no_arguments_with_result ()
 	{
@@ -146,19 +148,19 @@ public class Calls3 {
 
 	public static int test_1_one_argument_no_result ()
 	{
-		Calls3Srand (Id (12345));
+		Calls3Note (Id (12345));
 		return Id (1);
 	}
 
-	// toupper ('a') is 'A', which is 65.
+	// Upper case 'a' is 'A', which is 65.
 
 	public static int test_65_one_argument_with_result ()
 	{
 		return Calls3Upper (Id ('a'));
 	}
 
-	// bzero writes through the array it is given, so the buffer is what the
-	// test reads.
+	// The callee writes through the array it is given, so the buffer is what
+	// the test reads.
 
 	public static int test_1_two_arguments_no_result ()
 	{
@@ -172,8 +174,8 @@ public class Calls3 {
 
 	public static int test_1_two_arguments_with_result ()
 	{
-		return Calls3Access (IdS ("/"), Id (0)) == 0
-			&& Calls3Access (IdS ("/calls3/no/such/path"), Id (0)) == -1 ? 1 : 0;
+		return Calls3Lookup (IdS ("abs"), Id (0)) == 0
+			&& Calls3Lookup (IdS ("no_such_function"), Id (0)) == -1 ? 1 : 0;
 	}
 
 	public static int test_1_three_arguments_no_result ()
@@ -245,13 +247,13 @@ public class Calls3 {
 	// The remaining types the fast path takes beside int: a bool result and an
 	// enum argument over either width.
 
-	// access returns -1 for a failure and 0 for success. The interpreter reads
-	// a bool result from the low byte of what the callee returned.
+	// The callee returns -1 for a failure and 0 for success. The interpreter
+	// reads a bool result from the low byte of what it returned.
 
 	public static int test_1_bool_result ()
 	{
-		return Calls3AccessFails (IdS ("/calls3/no/such/path"), Id (0))
-			&& !Calls3AccessFails (IdS ("/"), Id (0)) ? 1 : 0;
+		return Calls3LookupFails (IdS ("no_such_function"), Id (0))
+			&& !Calls3LookupFails (IdS ("abs"), Id (0)) ? 1 : 0;
 	}
 
 	public static int test_7_enum_argument ()
@@ -260,8 +262,8 @@ public class Calls3 {
 		return Calls3AbsEnum (mode);
 	}
 
-	// abs reads the low half of the register it is given, so an enum over long
-	// gets the same answer as one over int.
+	// The callee reads the low half of the register it is given, so an enum
+	// over long gets the same answer as one over int.
 
 	public static int test_7_long_enum_argument ()
 	{
@@ -270,11 +272,11 @@ public class Calls3 {
 	}
 
 	// The caller reads the last error after the call comes back, so the fast
-	// path has to keep it. ENOENT is 2 on Linux.
+	// path has to keep it. The callee sets ENOENT, which is 2.
 
 	public static int test_2_last_error_is_kept ()
 	{
-		if (Calls3AccessErrno (IdS ("/calls3/no/such/path"), Id (0)) != -1)
+		if (Calls3LookupErrno (IdS ("no_such_function"), Id (0)) != -1)
 			return 0;
 		return Marshal.GetLastWin32Error ();
 	}

@@ -247,17 +247,15 @@
 	// calli with an unmanaged signature, which is a different opcode from the
 	// managed one and takes the interpreter through a native wrapper it builds
 	// on the spot.
-	.method public static pinvokeimpl("libc.so.6" cdecl)
-	        native int dlsym (native int handle, string name) cil managed preservesig { }
+	.method public static pinvokeimpl("__Internal" as "interp_test_symbol" cdecl)
+	        native int symbol (string name) cil managed preservesig { }
 
 	.method public static int32 test_7_calli_native () cil managed
 	{
 		.maxstack 4
 		.locals init (native int fn)
-		ldc.i4.0
-		conv.i
 		ldstr "abs"
-		call native int CallsIL::dlsym (native int, string)
+		call native int CallsIL::symbol (string)
 		stloc.0
 		ldloc.0
 		brfalse IL_missing

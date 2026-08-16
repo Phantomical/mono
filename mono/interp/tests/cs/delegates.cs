@@ -122,9 +122,7 @@ public class Delegates {
 	static int ArityTwo (int a, int b) { return a + b * 2; }
 	static int ArityThree (int a, int b, int c) { return a + b * 2 + c * 4; }
 
-	// The bare name libc has no dllmap in this build, so the soname is spelled
-	// out. A platform with another C library needs a different name here.
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern int NativeAbs (int value);
 
 	public static int test_7_static_target ()

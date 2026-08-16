@@ -6,10 +6,10 @@
 // with an int-to-int signature, so what is left is how the delegate gets bound,
 // and the entry cache on InterpMethod.
 //
-// The rest of the file is a two-int struct that div () returns in a register
-// pair. Six routes reach that one native call. Four give both words back; the
-// two that go through reflection lose the remainder. Both engines lose it, so
-// that is a marshalling defect rather than a tier seam.
+// The rest of the file is a two-int struct the native callee returns in a
+// register pair. Six routes reach that one native call. Four give both words
+// back; the two that go through reflection lose the remainder. Both engines
+// lose it, so that is a marshalling defect rather than a tier seam.
 //
 // A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands go through the NoInlining Id helper, so the transform cannot fold a
@@ -20,7 +20,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-// div_t, which libc's div () returns by value. Two ints, so the result comes
+// The pair interp_test_div () returns by value. Two ints, so the result comes
 // back in one register rather than through a return buffer. objcopy.cs uses the
 // same struct for the direct call.
 [StructLayout (LayoutKind.Sequential)]
@@ -31,13 +31,13 @@ public struct EntryTailDiv {
 
 public class EntryTail {
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	public static extern int NativeAbs (int value);
 
-	[DllImport ("libc.so.6", EntryPoint = "div")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_div")]
 	public static extern EntryTailDiv NativeDiv (int numerator, int denominator);
 
-	[DllImport ("libc.so.6", EntryPoint = "mono_no_such_native_function")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_no_such_function")]
 	public static extern int NativeMissing (int value);
 
 	delegate int EntryTailAbsFunc (int value);
@@ -48,7 +48,7 @@ public class EntryTail {
 
 	static int PlusSix (int x) { return x + 6; }
 
-	// The same arithmetic as div (), from a managed body.
+	// The same arithmetic, from a managed body.
 	public static EntryTailDiv ManagedDiv (int numerator, int denominator)
 	{
 		return new EntryTailDiv {

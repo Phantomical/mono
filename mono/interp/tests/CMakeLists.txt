@@ -1,6 +1,6 @@
 # The interpreter's managed tests.
 #
-# Each `.cs` here compiles to an assembly of static int methods named
+# Each `.cs` under cs/ compiles to an assembly of static int methods named
 # test_<n>_<what>, the convention mono/mini's --regression harness reads, and
 # each of those methods becomes its own ctest test run in its own process by
 # runner.cpp.  A failure therefore names the method and the engine it ran on,
@@ -22,7 +22,10 @@ endif()
 # ---------------------------------------------------------------------------
 # The runner
 # ---------------------------------------------------------------------------
-add_executable(interp-test-runner runner.cpp)
+# native.cpp holds what the P/Invoke tests call.  ENABLE_EXPORTS puts its names
+# in the dynamic symbol table, which is where DllImport ("__Internal") looks.
+add_executable(interp-test-runner runner.cpp native.cpp)
+set_target_properties(interp-test-runner PROPERTIES ENABLE_EXPORTS TRUE)
 
 target_include_directories(interp-test-runner PRIVATE
   "${CMAKE_BINARY_DIR}"
@@ -126,11 +129,11 @@ endfunction()
 # ---------------------------------------------------------------------------
 # The suites
 # ---------------------------------------------------------------------------
-# One assembly out of every `.cs` here.  The class a method sits in is what
+# One assembly out of every `.cs` in cs/.  The class a method sits in is what
 # groups it, so a file per subject costs nothing and helpers can be shared
 # between them.
 set(MONO_CORPUS_OUTPUTS "")
-file(GLOB _sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" *.cs)
+file(GLOB _sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" cs/*.cs)
 mono_corpus_cs(interp-tests.dll LIBRARY SOURCES ${_sources})
 
 # IL shapes C# does not emit -- a merge point whose predecessors leave different

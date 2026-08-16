@@ -11,28 +11,28 @@ using System.Text;
 
 public class PInvoke {
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]
 	static extern int NativeAbs (int value);
 
-	[DllImport ("libc.so.6", EntryPoint = "labs")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_labs")]
 	static extern long NativeLabs (long value);
 
-	[DllImport ("libc.so.6", EntryPoint = "strlen")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_strlen")]
 	static extern IntPtr NativeStrlen (string s);
 
-	[DllImport ("libc.so.6", EntryPoint = "memcmp")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memcmp")]
 	static extern int NativeMemcmp (byte [] a, byte [] b, IntPtr count);
 
-	[DllImport ("libc.so.6", EntryPoint = "memset")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memset")]
 	static extern IntPtr NativeMemset (byte [] target, int value, IntPtr count);
 
-	[DllImport ("libc.so.6", EntryPoint = "atof")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_atof")]
 	static extern double NativeAtof (string s);
 
-	[DllImport ("libc.so.6", EntryPoint = "getpid")]
-	static extern int NativeGetpid ();
+	[DllImport ("__Internal", EntryPoint = "interp_test_next_id")]
+	static extern int NativeNextId ();
 
-	[DllImport ("libc.so.6", EntryPoint = "snprintf")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_format")]
 	static extern int NativeSnprintf (StringBuilder buffer, IntPtr size, string format, int a);
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }
@@ -54,8 +54,8 @@ public class PInvoke {
 
 	public static int test_0_pinvoke_no_arguments ()
 	{
-		// The pid is not predictable, so the test is that the call returns at all.
-		return NativeGetpid () > 0 ? 0 : 1;
+		// The id counts up, so the test is that the call returns at all.
+		return NativeNextId () > 0 ? 0 : 1;
 	}
 
 	public static int test_1_pinvoke_double_return ()
@@ -88,7 +88,7 @@ public class PInvoke {
 
 	// A missing entry point is reported when the call is made, not when the
 	// method is transformed.
-	[DllImport ("libc.so.6", EntryPoint = "mono_no_such_native_function")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_no_such_function")]
 	static extern int NativeMissing ();
 
 	public static int test_1_missing_entry_point_throws ()
@@ -135,7 +135,7 @@ public class PInvoke {
 
 	delegate int PInvokeCompare (IntPtr a, IntPtr b);
 
-	[DllImport ("libc.so.6", EntryPoint = "qsort")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_sort")]
 	static extern void NativeQsort (int [] items, IntPtr count, IntPtr size,
 	                                PInvokeCompare compare);
 

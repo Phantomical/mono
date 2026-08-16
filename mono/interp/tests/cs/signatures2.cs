@@ -5,7 +5,7 @@
 // and is the only one that ever sees the pinvoke flag set:
 // interp_frame_arg_to_data () lays the arguments out for the native frame and
 // interp_data_to_frame_arg () takes the return value back. The widths below are
-// therefore declared on a libc function rather than driven through reflection.
+// therefore declared on a native function rather than driven through reflection.
 //
 // The copy in interp-internals.hpp serves the opcodes and the entry from the
 // runtime. Reflection already drives its ordinary cases, and a context static is
@@ -16,7 +16,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-// div_t, as div () fills it in, behind a generic parameter.
+// The pair interp_test_div () returns, behind a generic parameter.
 public struct Sig2DivOf<T> {
 	public T Quot;
 	public T Rem;
@@ -40,18 +40,18 @@ public class Signatures2 {
 	[MethodImpl (MethodImplOptions.NoInlining)] static double IdD (double x) { return x; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static string IdS (string s) { return s; }
 
-	// A native call's return value, converted with the pinvoke flag on. libc
-	// returns an int whatever the declaration says. A result whose low bytes
-	// differ from the whole int separates a read of the declared width from a
-	// read of four.
+	// A native call's return value, converted with the pinvoke flag on. The
+	// callee returns an int whatever the declaration says. A result whose low
+	// bytes differ from the whole int separates a read of the declared width
+	// from a read of four.
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")] static extern sbyte AbsAsI1 (int v);
-	[DllImport ("libc.so.6", EntryPoint = "abs")] static extern short AbsAsI2 (int v);
-	[DllImport ("libc.so.6", EntryPoint = "abs")] static extern ushort AbsAsU2 (int v);
-	[DllImport ("libc.so.6", EntryPoint = "toupper")] static extern char ToUpperAsChar (int c);
-	[DllImport ("libc.so.6", EntryPoint = "strtoul")] static extern uint StrtoulAsU4 (string s, IntPtr end, int radix);
-	[DllImport ("libc.so.6", EntryPoint = "strlen")] static extern UIntPtr StrlenAsNative (string s);
-	[DllImport ("libc.so.6", EntryPoint = "div")] static extern Sig2DivOf<int> NativeDivOf (int a, int b);
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")] static extern sbyte AbsAsI1 (int v);
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")] static extern short AbsAsI2 (int v);
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")] static extern ushort AbsAsU2 (int v);
+	[DllImport ("__Internal", EntryPoint = "interp_test_toupper")] static extern char ToUpperAsChar (int c);
+	[DllImport ("__Internal", EntryPoint = "interp_test_strtoul")] static extern uint StrtoulAsU4 (string s, IntPtr end, int radix);
+	[DllImport ("__Internal", EntryPoint = "interp_test_strlen")] static extern UIntPtr StrlenAsNative (string s);
+	[DllImport ("__Internal", EntryPoint = "interp_test_div")] static extern Sig2DivOf<int> NativeDivOf (int a, int b);
 
 	public static int test_1_pinvoke_sbyte_return ()
 	{
@@ -101,9 +101,9 @@ public class Signatures2 {
 	// The same conversion the other way, for the argument shapes that reach the
 	// pinvoke branch of a case rather than the managed one.
 
-	[DllImport ("libc.so.6", EntryPoint = "abs")] static extern int AbsFromStruct (Sig2Word v);
-	[DllImport ("libc.so.6", EntryPoint = "abs")] static extern int AbsFromBox (Sig2Box<int> v);
-	[DllImport ("libc.so.6", EntryPoint = "frexp")] static extern double NativeFrexp (double v, out int exponent);
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")] static extern int AbsFromStruct (Sig2Word v);
+	[DllImport ("__Internal", EntryPoint = "interp_test_abs")] static extern int AbsFromBox (Sig2Box<int> v);
+	[DllImport ("__Internal", EntryPoint = "interp_test_frexp")] static extern double NativeFrexp (double v, out int exponent);
 
 	// A one-word struct goes in a register, so abs () reads the field.
 	public static int test_11_pinvoke_struct_argument ()

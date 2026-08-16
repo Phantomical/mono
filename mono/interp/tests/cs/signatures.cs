@@ -507,7 +507,7 @@ public class Signatures {
 
 	// A native call that hands back a raw address: the return is converted as a
 	// pointer rather than as a native integer, by the interp.c copy again.
-	[DllImport ("libc.so.6", EntryPoint = "strchr")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_strchr")]
 	static unsafe extern byte* NativeStrchr (byte *s, int c);
 
 	public static unsafe int test_1_pinvoke_pointer_return ()

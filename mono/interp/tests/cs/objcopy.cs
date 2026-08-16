@@ -94,10 +94,10 @@ public class ObjCopy {
 		[MarshalAs (UnmanagedType.Bool)] public bool RemSet;
 	}
 
-	[DllImport ("libc.so.6", EntryPoint = "div")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_div")]
 	static extern ObjDiv ObjNativeDiv (int n, int d);
 
-	[DllImport ("libc.so.6", EntryPoint = "div")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_div")]
 	static extern ObjDivBool ObjNativeDivBool (int n, int d);
 
 	public static int test_3_pinvoke_blittable_struct_return ()

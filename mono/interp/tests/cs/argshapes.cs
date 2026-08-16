@@ -602,9 +602,9 @@ public class ArgShapes {
 	// -------------------------------------------------------- across a wrapper
 
 	// A caller puts the address a large value type comes back at in the first
-	// argument register. memset () writes through that same register, so the
+	// argument register. The callee writes through that same register, so the
 	// result of this call is 24 bytes of the fill value.
-	[DllImport ("libc.so.6", EntryPoint = "memset")]
+	[DllImport ("__Internal", EntryPoint = "interp_test_memset")]
 	static extern ASBig24 NativeFillBig24 (int fill, IntPtr count);
 
 	public static int test_1_a_large_struct_returned_through_a_pointer ()
