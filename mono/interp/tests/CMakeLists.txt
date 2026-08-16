@@ -1,8 +1,7 @@
 # The interpreter's managed tests.
 #
 # Each test method in the built assemblies becomes its own ctest test, run in
-# its own process by runner.cpp, so a failure names the method and the engine it
-# ran on, and --rerun-failed re-runs only what broke.
+# its own process by runner.cpp.
 #
 # discover.cmake lists those methods when ctest starts rather than at configure
 # time, so writing a new test means editing a source and building, with no cmake
