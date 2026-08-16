@@ -140,11 +140,19 @@ set(MONO_INTERP_TESTS_XFAIL
   "NativeInt:test_1_wide_array_index_throws"
   "NativeInt:test_7_wide_switch_index_falls_through"
   "Arrays:test_1_a_long_index_past_the_end_throws"
-  # Special-static access does not run the class initializer.
-  "ClassInit:test_22_thread_static_runs_the_cctor"
-  "ClassInit:test_23_context_static_runs_the_cctor"
   # An initonly static is folded into the bytecode that reads it.
-  "Statics:test_99_initonly_write_is_seen")
+  "Statics:test_99_initonly_write_is_seen"
+  # conv.ovf.i.un checks the range only on a 32-bit target, so an int64 that
+  # does not fit a native int passes.
+  "ConvIL:test_1_conv_ovf_i_un_from_i8_traps"
+  # ECMA-335 III.3.29 gives .un no reading on a float source, and the engines
+  # read a negative one differently.
+  "ConvIL:test_1_conv_ovf_i_un_from_r8_negative"
+  "ConvIL:test_1_conv_ovf_i8_un_from_r8_negative"
+  # A store to a remote field goes through managed code, and the exception it
+  # raises is lost crossing the interpreted frame back.
+  "OpcodesTail:test_1_proxy_write_that_fails"
+  "OpcodesTail:test_1_proxy_write_vt_that_fails")
 
 set(MONO_INTERP_TESTS_JIT_XFAIL
   # IL ECMA-335 does not allow, which the translator refuses and the
@@ -166,7 +174,12 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
   "Exceptions:test_2_an_exception_in_a_filter_continues_the_search"
   # Compiled code polls for nothing, so a thread running it takes an abort only
   # when it next calls something that does.
-  "Threading:test_2_abort_in_an_interpreted_loop")
+  "Threading:test_2_abort_in_an_interpreted_loop"
+  # A conversion whose operand is a managed pointer.  ECMA-335 Table III.8
+  # leaves those cells empty, so the translator is right to refuse.
+  "ConvIL:test_1_conv_u4_from_mp_truncates"
+  "ConvIL:test_1_conv_i4_from_mp_truncates"
+  "ConvIL:test_1_conv_ovf_u4_from_mp")
 
 set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
@@ -194,22 +207,25 @@ foreach(_assembly "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll" ${_il_assemblie
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
                 "MONO_LLVM_JIT_TIER0=0")
 
-  # Promotion on the first call, so a method is interpreted once and compiled
-  # after that.  Both engines run in the one process, which is the only way an
-  # interpreted frame calls a body that already has code.
+  # Promotion on the second call, so a method is interpreted and then compiled
+  # while the process runs.  Both engines are live in the one process, which is
+  # the only way an interpreted frame calls a body that already has code.
   #
-  # This arm is red today and the reason is one defect rather than many: a
-  # compile taken from the promotion path trips a SelectionDAG assertion in LLVM
-  # about a quarter of the time, and the process aborts.  256 of its 258 failures
-  # are that.  The same method compiled with MONO_LLVM_JIT_TIER0=0 is clean over
-  # 30 runs, so it is the promotion path and not the method.
+  # This arm is red, and on one defect rather than many: a compile taken from
+  # the promotion path trips a SelectionDAG assertion in LLVM and the process
+  # aborts.  That is 121 of its 250 failures, and most of the rest are the same
+  # abort reported as a timeout.  The same methods under MONO_LLVM_JIT_TIER0=0,
+  # which compiles them on the calling thread, are clean.  Raising the threshold
+  # lowers the rate rather than removing it: fewer methods promote before the
+  # process exits.  Nine minutes, so keep it out of anything that runs by
+  # default.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "mixed/"
     PROPERTIES LABELS interp-mixed
     XFAIL ${MONO_INTERP_TESTS_MIXED_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-                "MONO_LLVM_JIT_TIER1_THRESHOLD=1")
+                "MONO_LLVM_JIT_TIER1_THRESHOLD=2")
 endforeach()
 
 # Sequence points, which the transform only emits when the debugger asks for

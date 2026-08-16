@@ -4078,6 +4078,7 @@ interp_emit_ldsflda (TransformData *td, MonoClassField *field, MonoError *error)
 		interp_add_ins (td, MINT_LDSSFLDA);
 		interp_ins_set_dreg (td->last_ins, td->sp [-1].local);
 		WRITE32_INS(td->last_ins, 0, &offset);
+		td->last_ins->data [2] = get_data_item_index (td, vtable);
 	} else {
 		interp_add_ins (td, MINT_LDSFLDA);
 		interp_ins_set_dreg (td->last_ins, td->sp [-1].local);
@@ -4187,6 +4188,15 @@ interp_emit_sfld_access (TransformData *td, MonoClassField *field, MonoClass *fi
 		mono_domain_unlock (domain);
 		g_assert (offset);
 
+		/*
+		 * The vtable rides along in the last operand. The offset says where the
+		 * storage is and nothing about which class owns it, so the handler has
+		 * nothing else to run the class initializer from -- and the first touch
+		 * of one of these from outside its own class is exactly when it has to
+		 * run.
+		 */
+		int vtable_index = get_data_item_index (td, vtable);
+
 		// Offset is SpecialStaticOffset
 		if ((offset & 0x80000000) == 0 && mt != MINT_TYPE_VT) {
 			// This field is thread static
@@ -4201,6 +4211,7 @@ interp_emit_sfld_access (TransformData *td, MonoClassField *field, MonoClass *fi
 				td->sp--;
 				interp_ins_set_sreg (td->last_ins, td->sp [0].local);
 			}
+			td->last_ins->data [2] = vtable_index;
 		} else {
 			if (mt == MINT_TYPE_VT) {
 				int size = mono_class_value_size (field_class, NULL);
@@ -4216,6 +4227,7 @@ interp_emit_sfld_access (TransformData *td, MonoClassField *field, MonoClass *fi
 				}
 				WRITE32_INS(td->last_ins, 0, &offset);
 				td->last_ins->data [2] = size;
+				td->last_ins->data [3] = vtable_index;
 			} else {
 				if (is_load) {
 					interp_add_ins (td, MINT_LDSSFLD);
@@ -4228,6 +4240,7 @@ interp_emit_sfld_access (TransformData *td, MonoClassField *field, MonoClass *fi
 				}
 				td->last_ins->data [0] = get_data_item_index (td, field);
 				WRITE32_INS(td->last_ins, 1, &offset);
+				td->last_ins->data [3] = vtable_index;
 			}
 		}
 	} else {

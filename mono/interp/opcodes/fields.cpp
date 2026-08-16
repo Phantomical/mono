@@ -303,9 +303,19 @@ thread_static_address (guint32 offset)
 	return (char *) thread->static_data[offset & 0x3f] + (offset >> 6);
 }
 
+/*
+ * A special static carries the declaring class's vtable in its last operand, the
+ * same way an ordinary static does. The offset alone says nothing about which
+ * class the field belongs to, so without it the first touch of one from outside
+ * its own class would read the field before the class initializer had written
+ * it.
+ */
+#define VTABLE_AT(index) ((MonoVTable *) frame->imethod->data_items[(index)])
+
 #define IMPL_LDTSFLD(opcode, datatype, fieldtype)                \
 	MONO_INTERP_OP_IMPL (opcode)                                 \
 	{                                                            \
+		INIT_VTABLE (VTABLE_AT (ip[4]));                         \
 		gpointer addr = thread_static_address (READ32 (ip + 2)); \
 		LOCAL_VAR (ip[1], datatype) = *(fieldtype *) addr;       \
                                                                  \
@@ -326,6 +336,7 @@ IMPL_LDTSFLD (MINT_LDTSFLD_O, gpointer, gpointer);
 #define IMPL_STTSFLD(opcode, datatype, fieldtype)                \
 	MONO_INTERP_OP_IMPL (opcode)                                 \
 	{                                                            \
+		INIT_VTABLE (VTABLE_AT (ip[4]));                         \
 		gpointer addr = thread_static_address (READ32 (ip + 2)); \
 		*(fieldtype *) addr = LOCAL_VAR (ip[1], datatype);       \
                                                                  \
@@ -346,6 +357,7 @@ IMPL_STTSFLD (MINT_STTSFLD_R8, double, double);
 // does.
 MONO_INTERP_OP_IMPL (MINT_STTSFLD_O)
 {
+	INIT_VTABLE (VTABLE_AT (ip[4]));
 	gpointer addr = thread_static_address (READ32 (ip + 2));
 	mono_gc_wbarrier_generic_store_internal (addr, LOCAL_VAR (ip[1], MonoObject *));
 
@@ -361,6 +373,7 @@ MONO_INTERP_OP_IMPL (MINT_STTSFLD_O)
 
 MONO_INTERP_OP_IMPL (MINT_LDSSFLDA)
 {
+	INIT_VTABLE (VTABLE_AT (ip[4]));
 	LOCAL_VAR (ip[1], gpointer) = mono_get_special_static_data (READ32 (ip + 2));
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -369,6 +382,7 @@ MONO_INTERP_OP_IMPL (MINT_LDSSFLDA)
 
 MONO_INTERP_OP_IMPL (MINT_LDSSFLD)
 {
+	INIT_VTABLE (VTABLE_AT (ip[5]));
 	gpointer addr = mono_get_special_static_data (READ32 (ip + 3));
 	auto field = (MonoClassField *) frame->imethod->data_items[ip[2]];
 	stackval_from_data (field->type, &LOCAL_VAR (ip[1], stackval), addr, FALSE);
@@ -379,6 +393,7 @@ MONO_INTERP_OP_IMPL (MINT_LDSSFLD)
 
 MONO_INTERP_OP_IMPL (MINT_STSSFLD)
 {
+	INIT_VTABLE (VTABLE_AT (ip[5]));
 	gpointer addr = mono_get_special_static_data (READ32 (ip + 3));
 	auto field = (MonoClassField *) frame->imethod->data_items[ip[2]];
 	stackval_to_data (field->type, &LOCAL_VAR (ip[1], stackval), addr, FALSE);
@@ -389,6 +404,7 @@ MONO_INTERP_OP_IMPL (MINT_STSSFLD)
 
 MONO_INTERP_OP_IMPL (MINT_LDSSFLD_VT)
 {
+	INIT_VTABLE (VTABLE_AT (ip[5]));
 	gpointer addr = mono_get_special_static_data (READ32 (ip + 2));
 	std::memcpy (locals + ip[1], addr, ip[4]);
 
@@ -398,6 +414,7 @@ MONO_INTERP_OP_IMPL (MINT_LDSSFLD_VT)
 
 MONO_INTERP_OP_IMPL (MINT_STSSFLD_VT)
 {
+	INIT_VTABLE (VTABLE_AT (ip[5]));
 	gpointer addr = mono_get_special_static_data (READ32 (ip + 2));
 	std::memcpy (addr, locals + ip[1], ip[4]);
 
