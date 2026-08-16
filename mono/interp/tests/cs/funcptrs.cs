@@ -1,6 +1,5 @@
 // ldftn and ldvirtftn: the method pointer a delegate is built from.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands go through the NoInlining Id helpers, so the transform cannot fold a
 // test into its answer.
 //
@@ -167,12 +166,9 @@ public class FuncPtrs {
 		return d ();
 	}
 
-	// The transform replaces the method with its synchronized wrapper before it
-	// emits the ldvirtftn. A wrapper is neither virtual nor in a vtable slot, so
-	// get_virtual_method () hands it straight back and the receiver selects
-	// nothing. The base body runs whatever the receiver is. The interpreter
-	// answers 30 to all three of these, which is right only for the first. The
-	// JIT is right for all three.
+	// ldvirtftn over a synchronized method. The transform puts the synchronized
+	// wrapper in front of the target, and the receiver still selects which method
+	// that wrapper stands for.
 	public static int test_30_synchronized_virtual_target ()
 	{
 		FpBase b = new FpBase ();
@@ -197,7 +193,7 @@ public class FuncPtrs {
 	}
 
 	// The call site keeps the method virtual and wraps whatever the vtable
-	// answers with, so this one is right on both engines.
+	// answers with.
 	public static int test_31_synchronized_sealed_override_call ()
 	{
 		FpSealed s = (FpSealed) IdO (new FpSealed ());

@@ -1,7 +1,6 @@
 // box, unbox, unbox.any, initobj, ldobj, stobj and the value type copies
 // between them.
 //
-// A method named test_<n>_<what> is a test. It passes when it returns <n>.
 // A NoInlining helper carries each operand to the opcode, so the transform
 // cannot fold the answer and leave the opcode untested. An object that a test
 // unboxes goes through VTIdO first. The transform drops a box that comes
@@ -167,7 +166,7 @@ public class ValueTypes {
 		VTEmpty e = default;
 		object o = VTIdO (e);
 		VTEmpty back = (VTEmpty) o;
-		// A zero sized value has nothing to compare. The second box is what puts the
+		// A zero sized value has nothing to compare. The second box puts the
 		// unboxed copy into the answer.
 		object again = VTIdO (back);
 		return o.GetType () == typeof (VTEmpty) && again.GetType () == typeof (VTEmpty) ? 1 : 0;

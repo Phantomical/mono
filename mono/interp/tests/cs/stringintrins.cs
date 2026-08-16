@@ -9,15 +9,14 @@
 // Only Marvin and SpanHelpers exist in the net_4_x corlib this assembly
 // compiles against.  Utf16Utility and ASCIIUtility are absent, and this
 // Number.UInt32ToDecStr takes two arguments where transform.c wants one, so
-// four of the six opcodes cannot run here.  Those tests hold the answers the
-// managed bodies give, which is what an opcode standing in for one of them has
-// to match.
+// four of the six opcodes cannot run here.  Those tests record the answers the
+// managed bodies give, which an opcode that stands in for one of them has to
+// match.
 //
 // A test that only asks two answers to agree is not empty.  The mixed arm
 // promotes a corlib body after its first call, so one of the two answers can
 // come from the interpreter and the other from compiled code.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Every operand comes from a NoInlining helper or from a char array built at
 // run time.  csc folds a literal expression, and a folded operand removes the
 // work under test.
@@ -91,8 +90,8 @@ public class StringIntrins {
 	}
 
 	// Marvin.Block, through string.GetHashCode.  The seed is drawn once per
-	// process, so only agreement and disagreement inside one process can be
-	// checked, never a fixed hash value.
+	// process, so a test can only compare two hashes taken in the same process,
+	// never a hash against a fixed value.
 
 	public static int test_1_hash_agrees_for_equal_long_strings ()
 	{
@@ -168,7 +167,7 @@ public class StringIntrins {
 
 	// Ordinal ignore-case comparison.  A block compare of ASCII masks the case
 	// bit only where the unit is a letter, so the characters next to 'A' and 'a'
-	// in the table are what tells a correct mask from a blanket one.
+	// in the table separate a correct mask from a blanket one.
 
 	public static int test_1_ignore_case_equals_long_ascii ()
 	{
@@ -314,7 +313,7 @@ public class StringIntrins {
 
 	// Invariant casing.  A block conversion takes two units at a time and masks
 	// only the ASCII letters in the pair, so an odd length and a non-letter
-	// beside a letter are the cases that separate it from a blanket mask.
+	// beside a letter separate it from a blanket mask.
 
 	public static int test_1_toupper_invariant_long_ascii ()
 	{
@@ -379,7 +378,7 @@ public class StringIntrins {
 
 	// Encoding.ASCII.  GetString widens the bytes to UTF-16 up to the first byte
 	// with the high bit set, and the fallback then writes a question mark for it.
-	// The offset of that byte is what decides how much of a block widening runs.
+	// The offset of that byte decides how much of a block widening runs.
 
 	public static int test_1_ascii_getstring_all_ascii ()
 	{

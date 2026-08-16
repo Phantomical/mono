@@ -86,8 +86,8 @@ public class Threading {
 		return result;
 	}
 
-	// The lock is released by the finally the lock statement emits, so the
-	// exception has to pass through it.
+	// The finally the lock statement emits releases the lock, so the exception
+	// has to pass through it.
 	public static int test_1_monitor_released_on_exception ()
 	{
 		object gate = new object ();
@@ -127,7 +127,7 @@ public class Threading {
 		return total;
 	}
 
-	// An interrupt is delivered at the wait, which is one of the points the
+	// The interrupt arrives at the wait, which is one of the points the
 	// interpreter checks for a pending request.
 	public static int test_1_thread_interrupt ()
 	{

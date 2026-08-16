@@ -1,5 +1,5 @@
 // Merge points whose predecessors leave different things at the same stack
-// depth.  A C# compiler does not emit these; the interpreter assigns one local
+// depth.  A C# compiler does not emit these.  The interpreter assigns one local
 // per stack slot, so the width the merge is written with and the width it is
 // read with can disagree.
 
@@ -36,9 +36,9 @@
 	// The int64 predecessor comes first, so the merge slot is eight bytes wide,
 	// and the int32 predecessor then writes four bytes into it. ECMA-335
 	// I.12.3.2.1 does not allow the merge, so what the compare below reads is
-	// undefined and the test says nothing about it. What it does say is that the
-	// interpreter reaches the end: constant folding used to assert on the width
-	// it did not expect and take the process with it.
+	// undefined and the test says nothing about it. It says only that the
+	// interpreter reaches the end rather than asserting on a width it did not
+	// expect.
 	.method public static int32 test_1_merge_i4_into_i8 () cil managed
 	{
 		.maxstack 4
@@ -64,8 +64,8 @@
 	}
 
 	// A branch whose two operands have different stack types. The transform has
-	// a path for this that warns and picks one width; what the test says is that
-	// it reaches the end rather than asserting.
+	// a path for this that warns and picks one width. The test says only that it
+	// reaches the end rather than asserting.
 	.method public static int32 test_1_branch_type_mismatch () cil managed
 	{
 		.maxstack 4

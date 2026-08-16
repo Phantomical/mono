@@ -1,7 +1,6 @@
 // The non-math intrinsics: the calls transform.c answers with an opcode of its
 // own, and the span and array opcodes beside them.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Indexes and enum values come through NoInlining helpers.  The transform folds
 // constants and inlines small callees, and a folded operand leaves the opcode
 // untested.
@@ -67,15 +66,15 @@ public class IntrinsicsSuite {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static IntrinsicsI8 IdI8 (IntrinsicsI8 x) { return x; }
 
-	// Enum.HasFlag.  A flag written as a literal is what puts the box/ldc/box
-	// shape in front of the call that MINT_INTRINS_ENUM_HASFLAG replaces.  A flag
+	// Enum.HasFlag.  A flag written as a literal puts the box/ldc/box shape in
+	// front of the call that MINT_INTRINS_ENUM_HASFLAG replaces.  A flag
 	// held in a local leaves an ordinary call to Enum.HasFlag, which is the other
 	// half of the pair.
 	//
 	// One test for each width the enum can carry, because the opcode reads the
 	// operands through the underlying type.  Each test asks a true question and a
 	// false one.  A read at the wrong width still answers true when the flag bits
-	// sit inside the value, so the false question is what pins the width down.
+	// sit inside the value, so the false question pins the width down.
 
 	public static int test_1_hasflag_u1_high_bit ()
 	{
@@ -338,9 +337,9 @@ public class IntrinsicsSuite {
 		return span[Id (1)];
 	}
 
-	// Span over a pointer.  The span the intrinsic builds has to be left on the
+	// Span over a pointer.  The span the intrinsic builds has to stay on the
 	// stack: a construction that goes straight into a local is a call to the
-	// constructor, and the opcode is only reached through newobj.
+	// constructor, and only newobj reaches the opcode.
 
 	public unsafe static int test_6_span_over_a_pointer ()
 	{

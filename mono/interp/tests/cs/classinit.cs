@@ -60,7 +60,7 @@ public class ClassInit {
 	}
 
 	// The declaring class is touched for the first time from here, and its
-	// initializer is what puts a value in the field.
+	// initializer puts the value in the field.
 	public static int test_22_thread_static_runs_the_cctor ()
 	{
 		return ClassInitThreadStatic.Value;

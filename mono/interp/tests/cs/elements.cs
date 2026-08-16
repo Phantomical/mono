@@ -29,8 +29,8 @@ public class Elements {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static object IdO (object x) { return x; }
 
-	// The element operations, each in a generic method, which is what makes the
-	// opcode take a type token.
+	// The element operations, each in a generic method, so the opcode takes a
+	// type token.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static T ElGet<T> (T[] a, int i) { return a[i]; }
 
@@ -40,8 +40,7 @@ public class Elements {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static ref T ElRef<T> (T[] a, int i) { return ref a[i]; }
 
-	// A ref readonly return is what makes C# put a readonly. prefix on the
-	// ldelema.
+	// A ref readonly return makes C# put a readonly. prefix on the ldelema.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static ref readonly T ElPeek<T> (T[] a, int i) { return ref a[i]; }
 

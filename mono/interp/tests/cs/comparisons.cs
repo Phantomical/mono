@@ -10,7 +10,7 @@
 // false answer of its opcode. An opcode stuck at one answer fails, and so does
 // one that reads > as >=.
 //
-// NaN is what separates the two families of float compare. An unordered compare
+// NaN separates the two families of float compare. An unordered compare
 // is false for cgt, clt, bgt and blt, and true for their .un forms.
 
 using System;
@@ -116,7 +116,7 @@ public class Comparisons {
 	// cgt and clt
 	// ------------------------------------------------------------------
 	// The second and third case of each test are an equal pair and the pair
-	// the other way round, which is what a strict compare must answer false.
+	// the other way round. A strict compare answers false to both.
 
 	public static int test_1_cgt_i4 ()
 	{

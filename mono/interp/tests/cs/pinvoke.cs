@@ -86,8 +86,8 @@ public class PInvoke {
 		return sb.ToString () == "42" ? 2 : 0;
 	}
 
-	// A missing entry point is reported when the call is made, not when the
-	// method is transformed.
+	// A missing entry point shows up when the call runs, not when the transform
+	// reads the method.
 	[DllImport ("__Internal", EntryPoint = "interp_test_no_such_function")]
 	static extern int NativeMissing ();
 

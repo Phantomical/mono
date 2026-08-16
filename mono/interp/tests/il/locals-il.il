@@ -78,8 +78,8 @@
 		ret
 	}
 
-	// A struct wider than a register pair, so its address is what the callee
-	// works through rather than a copy in a slot.
+	// A struct wider than a register pair, so the callee works through its
+	// address rather than through a copy in a slot.
 	.method public static int32 test_10_ldarga_of_a_wide_struct () cil managed
 	{
 		.maxstack 3

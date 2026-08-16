@@ -98,7 +98,7 @@ public class MagicTypes {
 	}
 
 	// A pointer built from an int32 whose sign bit is set.  IntPtr sign-extends
-	// it; UIntPtr does not.
+	// it and UIntPtr does not.
 	public static int test_1_sign_differs_between_the_two ()
 	{
 		long signed = (long) new IntPtr (MagicI4 (-2));

@@ -100,8 +100,8 @@ public class SpecialStatics {
 		return SpecialStaticHolder.I4 == 12 ? 1 : 0;
 	}
 
-	// The address of a value-type special static, taken so a field can be written
-	// through it.
+	// The address of a value-type special static, taken so the test can write a
+	// field through it.
 	public static int test_1_thread_static_value_type_field_write ()
 	{
 		SpecialStaticHolder.Value = default;

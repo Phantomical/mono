@@ -149,8 +149,8 @@
 		ret
 	}
 
-	// A bool element is one byte wide. The neighbour stays zero, which is what a
-	// store of the whole four bytes would break.
+	// A bool element is one byte wide. The neighbour stays zero, which a store
+	// of the whole four bytes would break.
 	.method public static int32 test_1_bool_token () cil managed
 	{
 		.maxstack 4

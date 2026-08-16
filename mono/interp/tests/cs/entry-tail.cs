@@ -8,10 +8,9 @@
 //
 // The rest of the file is a two-int struct the native callee returns in a
 // register pair. Six routes reach that one native call. Four give both words
-// back; the two that go through reflection lose the remainder. Both engines
-// lose it, so that is a marshalling defect rather than a tier seam.
+// back. The two that go through reflection lose the remainder, which is a
+// marshalling defect rather than a tier seam.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands go through the NoInlining Id helper, so the transform cannot fold a
 // test into its answer.
 
@@ -136,7 +135,7 @@ public class EntryTail {
 	}
 
 	// The same struct and the same reflection call, over a managed body.
-	// runtimeentry.cs invokes a 16-byte struct this way; this one is 8 bytes and
+	// runtimeentry.cs invokes a 16-byte struct this way. This one is 8 bytes and
 	// comes back in a single register.
 	public static int test_4_reflection_invoke_of_managed_struct_return ()
 	{
@@ -145,8 +144,8 @@ public class EntryTail {
 		return d.Quotient + d.Remainder;
 	}
 
-	// A defect both engines share, so it is not a tier seam: the remainder half
-	// of the struct is lost. Calling the same P/Invoke directly gives 4.
+	// The remainder half of the struct is lost on the way back. Calling the same
+	// P/Invoke directly gives 4.
 	public static int test_4_reflection_invoke_of_pinvoke_struct_return ()
 	{
 		MethodInfo mi = typeof (EntryTail).GetMethod ("NativeDiv");
@@ -163,7 +162,7 @@ public class EntryTail {
 		return d.Quotient + d.Remainder;
 	}
 
-	// The same two routes with a return that fits a word, which both give.
+	// The same two routes with a return that fits a word. Both give it.
 
 	public static int test_7_reflection_invoke_of_pinvoke ()
 	{

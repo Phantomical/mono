@@ -22,7 +22,6 @@
 // UNSAFE_ADD_BYTE_OFFSET, UNSAFE_BYTE_OFFSET and
 // RUNTIMEHELPERS_OBJECT_HAS_COMPONENT_SIZE.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands come through NoInlining helpers.  The transform folds constants and
 // inlines small callees, and a folded operand leaves the arm untested.
 

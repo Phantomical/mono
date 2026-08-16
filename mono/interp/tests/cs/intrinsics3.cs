@@ -14,7 +14,6 @@
 // Enum.HasFlag needs hand-written IL, because csc emits no constrained. prefix
 // in front of a call to a method that is not virtual.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands come through NoInlining helpers.  The transform folds constants and
 // inlines small callees, and a folded operand leaves the arm untested.
 
@@ -116,8 +115,8 @@ public class Intrinsics3 {
 	public static int test_3_math_log_with_a_base ()
 	{
 		// Two doubles, so the names the arm asks for are Atan2 and Pow.  Log is a
-		// name the one-parameter arm above answers, which is what makes this the
-		// near miss on the count.
+		// name the one-parameter arm above answers, which makes this the near miss
+		// on the count.
 		return (int) Math.Round (Math.Log (D (8.0), D (2.0)));
 	}
 

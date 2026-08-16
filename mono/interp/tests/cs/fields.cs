@@ -2,7 +2,6 @@
 // the interpreter has an opcode for, and on the static, thread-static and
 // remoted forms of a field.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Values come out of the Id helpers and objects out of the Make helpers, all of
 // them NoInlining, so the transform cannot fold a field access into a constant.
 
@@ -290,8 +289,7 @@ public class Fields {
 		return c.I8 == -0x100000000L ? 1 : 0;
 	}
 
-	// The r4 field has to narrow the value, so a double that no float holds
-	// exactly must not come back out of it.
+	// The r4 field narrows the value, so 0.1 must not come back as 0.1.
 	public static int test_1_stfld_r4_r8 ()
 	{
 		Fields_Cell c = NewCell ();
@@ -318,8 +316,8 @@ public class Fields {
 		return p.X + p.Y;
 	}
 
-	// A value type that holds a reference is stored through the write barrier
-	// instead of with a plain copy.
+	// A value type that holds a reference goes through the write barrier instead
+	// of a plain copy.
 	public static int test_6_stfld_vt_with_reference ()
 	{
 		Fields_Cell c = NewCell ();
@@ -382,8 +380,8 @@ public class Fields {
 		return c.I4;
 	}
 
-	// The receiver is a managed pointer rather than an object, which is the case
-	// the transform emits without a null check.
+	// The receiver is a managed pointer rather than an object, so the transform
+	// emits no null check.
 	public static int test_9_ldflda_unsafe ()
 	{
 		Fields_Point p = MakePoint (Id (2), 0);
@@ -508,16 +506,15 @@ public class Fields {
 		return (Fields_Const.O.Length == 5 && p.X == 3 && p.Y == 4) ? 1 : 0;
 	}
 
-	// Reading Marker initializes the class, so ReadReadonlyScalars is transformed
-	// against an initialized vtable and its reads fold into constants.
+	// Reading Marker initializes the class. The transform then sees an initialized
+	// vtable and folds the reads in ReadReadonlyScalars into constants.
 	public static int test_1_static_readonly_folds ()
 	{
 		return Fields_Const.Marker == 1 ? ReadReadonlyScalars () : 0;
 	}
 
 	// A reference and a value type have no constant to fold to, so
-	// ReadReadonlyWide has to fall back on a load. It is the negative control
-	// for the test above.
+	// ReadReadonlyWide loads them. It is the negative control for the test above.
 	public static int test_1_static_readonly_wide ()
 	{
 		return Fields_Const.Marker == 1 ? ReadReadonlyWide () : 0;
@@ -620,8 +617,8 @@ public class Fields {
 		return tsI4;
 	}
 
-	// A thread static is read before anything writes it, so the thread's storage
-	// block has to exist already.
+	// This reads a thread static before anything writes it, so the thread's
+	// storage block has to exist already.
 	public static int test_1_threadstatic_starts_at_zero ()
 	{
 		return (tsFreshI4 == 0 && tsFreshI8 == 0 && tsFreshO == null) ? 1 : 0;
@@ -644,7 +641,7 @@ public class Fields {
 	}
 
 	// CS0197 warns that the address of a marshal-by-reference field can fault.
-	// The ldflda wrapper this shape goes through is what the test is for.
+	// The test is for the ldflda wrapper this shape goes through.
 #pragma warning disable 197
 	public static int test_9_marshalbyref_ldflda ()
 	{

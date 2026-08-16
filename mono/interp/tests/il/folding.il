@@ -15,9 +15,9 @@
 // MINT_ADD1_I8, MINT_SUB1_I8, MINT_CNE_I8, MINT_CGE_I8, MINT_CGE_UN_I8,
 // MINT_CLE_I8 and MINT_CLE_UN_I8 have no other way in.  They come from the nint
 // and nuint operators, which interp_handle_magic_type_intrinsics () replaces
-// with those opcodes.  il/magic-conv.il documents what makes a type magic.  What
-// this file needs from that rule is one of the assembly names in
-// mono_class_is_magic_assembly () and the two exact type names below.  The
+// with those opcodes.  il/magic-conv.il documents what makes a type magic.  This
+// file needs two things from that rule: one of the assembly names in
+// mono_class_is_magic_assembly (), and the two exact type names below.  The
 // types hold the members these tests call and nothing more.
 //
 // The I4 form of cne, cge, cle, cge.un and cle.un never appears on a 64-bit
@@ -222,9 +222,8 @@
 
 	// -------------------------------------------------------------------
 	// interp_fold_unop_cond_br.  Each method takes the branch once and
-	// declines it once, which is both arms of the row.  0x100000000 is what
-	// separates the I8 row from the I4 one.  It is true as an int64 and
-	// false in its low word.
+	// declines it once, which is both arms of the row.  0x100000000 separates
+	// the I8 row from the I4 one: true as an int64, false in its low word.
 	// -------------------------------------------------------------------
 	.method public static int32 test_1_brfalse_i8 () cil managed
 	{
@@ -297,7 +296,7 @@
 
 	// INTERP_FOLD_SHIFTOP reads the count as an int32 whatever width the
 	// value has, so all three shift tests push an int32 count.  A count past
-	// 32 is what separates this row from the I4 one.
+	// 32 separates this row from the I4 one.
 	.method public static int32 test_1_shl_i8 () cil managed
 	{
 		.maxstack 2

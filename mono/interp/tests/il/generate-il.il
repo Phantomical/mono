@@ -394,7 +394,7 @@
 		ret
 	}
 
-	// Nullable.Unbox gives an empty value instead of an exception, which is what
+	// Nullable.Unbox gives an empty value instead of an exception, which
 	// separates unbox over Nullable from unbox over any other type.
 	.method public static int32 test_1_unbox_nullable_null () cil managed
 	{

@@ -5,8 +5,6 @@
 // ldarga, ldflda), an object reference, and a float under an opcode that names
 // a native int. Each test here puts one of those on the stack.
 //
-// A method named test_<n>_<what> is a test. It passes when it returns <n>.
-//
 // An address is not a constant. A test on a managed pointer therefore states a
 // relation: the address goes through the conversion under test and through a
 // path that other tests already cover, and the two answers must agree.
@@ -15,11 +13,7 @@
 // empty cell in the & column, so conv.i4, conv.u4 and conv.ovf.u4 on a managed
 // pointer are invalid. The interpreter takes them, and the three generate_code ()
 // arms for them have no other input. The LLVM backend refuses the method with
-// InvalidProgramException, so these three fail on the compiled arm:
-//
-//	test_1_conv_u4_from_mp_truncates
-//	test_1_conv_i4_from_mp_truncates
-//	test_1_conv_ovf_u4_from_mp
+// InvalidProgramException.
 
 .assembly extern mscorlib { }
 .module extern 'interp-tests-cs.netmodule'
@@ -221,8 +215,8 @@
 		ret
 	}
 
-	// Above int64 max the result wraps into the sign bit, which is what
-	// makes this the unsigned conversion.
+	// Above int64 max the result wraps into the sign bit. That is what makes
+	// the conversion unsigned.
 	.method public static int32 test_1_conv_u_from_r8_above_int64 () cil managed
 	{
 		.maxstack 3
@@ -312,7 +306,7 @@
 		ret
 	}
 
-	// The float32 source of the same conversion, which had no arm at all.
+	// The same conversion from a float32 source, which is an arm of its own.
 	.method public static int32 test_1_conv_ovf_i_un_from_r4_negative () cil managed
 	{
 		.maxstack 3

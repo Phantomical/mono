@@ -3,7 +3,6 @@
 // decisions about the receiver -- null check, unbox or box -- and about
 // inlining.
 //
-// A method named test_<n>_<what> is a test. It passes when it returns <n>.
 // Outside the inlining group every callee is NoInlining, so the transform
 // cannot fold a site into its answer.
 //
@@ -528,7 +527,8 @@ public class Calls {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool EqOf<T> (T a, object b) { return a.Equals (b); }
 
-	// CallsPlainStruct does not override Equals, so the receiver has to be boxed.
+	// CallsPlainStruct does not override Equals, so the transform boxes the
+	// receiver.
 	public static int test_1_constrained_call_boxes_when_not_overridden ()
 	{
 		CallsPlainStruct p, same, other;

@@ -1,7 +1,6 @@
 // Dispatch: which method a virtual, interface or delegate call site resolves
 // to, and which one a delegate binds when it is made.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Every target is NoInlining and returns a value of its own, so the answer says
 // which method ran. Where a test makes more than one call, the results are
 // folded into one number, so two targets that exchange places give a different
@@ -401,7 +400,7 @@ public class DispatchSuite {
 
 	// Roslyn emits the token of the least overridden method, so a sealed override
 	// still reaches the site as the base's virtual method. A new method that
-	// hides the base one is what puts a non-virtual method at a virtual site.
+	// hides the base one puts a non-virtual method at a virtual site.
 	public static int test_9_synchronized_hiding_method_on_a_marshalbyref_class ()
 	{
 		DispatchRemoteHider h = new DispatchRemoteHider ();
@@ -463,8 +462,6 @@ public class DispatchSuite {
 
 	// A call site binds the override, so a delegate over the same method must
 	// bind it too. The lock the target takes does not change which target it is.
-	// This is a live divergence: the interpreter binds the base method and gives
-	// 5, and the JIT binds the override and gives 8.
 	public static int test_8_delegate_over_a_synchronized_virtual_method ()
 	{
 		DispatchSyncBase b = new DispatchSyncChild ();
@@ -472,8 +469,8 @@ public class DispatchSuite {
 		return f ();
 	}
 
-	// The interface declares Weight without Synchronized, so the transform has no
-	// wrapper to put in front of the ldvirtftn and the vtable is still read.
+	// The interface declares Weight without Synchronized, so the transform puts
+	// no wrapper in front of the ldvirtftn and the vtable read stands.
 	public static int test_6_delegate_over_a_synchronized_interface_method ()
 	{
 		IDispatchWeight w = new DispatchSyncImpl ();

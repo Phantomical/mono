@@ -7,7 +7,6 @@
 // conv.i4 of an in-range source can give int.MinValue, which is also what x86
 // gives for a conversion it refuses.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Every operand comes through a NoInlining helper, so the transform cannot fold
 // the conversion away and leave the opcode untested.
 
@@ -47,8 +46,8 @@ public class ConvSources {
 	}
 
 	// x86 gives int.MinValue for a conversion it refuses, so the low end alone
-	// passes even when the conversion is wrong. The high end is what separates
-	// the two. 2^31 - 128 is the largest float an int holds.
+	// passes even when the conversion is wrong. The high end separates the two.
+	// 2^31 - 128 is the largest float an int holds.
 	public static int test_1_i4_from_r4_at_the_ends_of_the_range ()
 	{
 		return (int) IdR4 (-2147483648f) == int.MinValue &&

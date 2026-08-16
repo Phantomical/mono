@@ -2,7 +2,6 @@
 // clauses, and the exceptions the engine raises by itself.  C# has no `fault`
 // clause, so that fourth kind is not reachable from here.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands go through the Id helpers, which the transform cannot inline, so a
 // check an opcode makes cannot be folded away before the opcode runs.
 //
@@ -558,12 +557,8 @@ public class Exceptions {
 	// returned." The search therefore passes the filtered clause, and the plain
 	// clause behind it answers, which is 2.
 	//
-	// Both engines fail this, each in its own way. The interpreter reads the
-	// throwing filter as a yes and runs the first handler, so it answers 1 --
-	// mono_interp_run_filter () leaves its `retval` uninitialized, and only
-	// MINT_ENDFILTER writes it. The compiled engine loses ExcAlpha past the
-	// catch below, which never runs, and the process dies. The 4 tells that
-	// second defect from the first.
+	// The 4 separates an engine that loses ExcAlpha on the way out from one that
+	// simply runs the wrong handler.
 	public static int test_2_an_exception_in_a_filter_continues_the_search ()
 	{
 		try {

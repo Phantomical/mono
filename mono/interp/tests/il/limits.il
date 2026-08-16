@@ -2,7 +2,7 @@
 //
 // A method's locals are packed into one region addressed by a 16-bit offset, so
 // a body whose locals reach 64 KB cannot be run. `.size` gives a value type a
-// size without fields, which is what makes the case small enough to read.
+// size without fields, which makes the case small enough to read.
 
 .assembly extern mscorlib { }
 .module extern 'interp-tests-cs.netmodule'

@@ -1,6 +1,6 @@
 // Native-int operands.  A C# compiler widens an int32 before it reaches a
-// native-int location; IL does not have to, and the interpreter and the
-// translator disagree about what happens when it does not.
+// native-int location.  IL does not have to, and each test here writes one
+// that was never widened.
 
 .assembly extern mscorlib { }
 .module extern 'interp-tests-cs.netmodule'

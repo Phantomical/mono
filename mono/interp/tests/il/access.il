@@ -117,8 +117,9 @@
 		}
 	}
 
-	// The access is in a method of its own: the refusal is raised while that
-	// method is prepared, which is too early for a try around the site itself.
+	// The access is in a method of its own: the transform raises the refusal
+	// while that method is prepared, which is too early for a try around the site
+	// itself.
 	.method public static int32 ReadsHiddenField () cil managed noinlining
 	{
 		.maxstack 1

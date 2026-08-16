@@ -1,6 +1,4 @@
-// IL the interpreter runs and the LLVM translator declines.  Under `check-interp`
-// these pass; under `check-interp-jit`, where there is no interpreter to fall
-// back to, a refusal is what the test reports.
+// IL the interpreter runs and the LLVM translator declines.
 
 .assembly extern mscorlib { }
 
@@ -20,7 +18,7 @@
 .class public auto ansi Refusals extends [mscorlib]System.Object
 {
 	// constrained. in front of a plain call rather than a callvirt.  ECMA-335
-	// III.2.1 puts the prefix on callvirt; the interpreter honours it here too.
+	// III.2.1 puts the prefix on callvirt.  The interpreter honours it here too.
 	.method public static int32 test_5_constrained_on_call () cil managed
 	{
 		.maxstack 3

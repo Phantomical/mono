@@ -1,12 +1,11 @@
 // Value type copies that the interpreter makes through an address, and the
 // pinvoke return that takes the address of a marshalled value type.
 //
-// A method named test_<n>_<what> is a test. It passes when it returns <n>.
 // A NoInlining helper carries each operand to the opcode, so the transform
 // cannot fold the answer and leave the opcode untested.
 //
 // valuetypes.cs holds the ldobj and stobj widths, and the value type copies
-// between locals. What is here is what that file does not reach.
+// between locals. This file holds what it does not reach.
 
 using System;
 using System.Runtime.CompilerServices;
@@ -69,8 +68,8 @@ public class ObjCopy {
 		return r;
 	}
 
-	// An empty value type has nothing to compare. The guard local is what the
-	// test reads back, so a copy that disturbs the frame gives the wrong answer.
+	// An empty value type has nothing to compare, so the test reads the guard
+	// local back instead. A copy that disturbs the frame gives the wrong answer.
 	public static int test_1_move_empty_struct ()
 	{
 		ObjEmpty a = default (ObjEmpty), b = default (ObjEmpty);

@@ -4,8 +4,8 @@
 // The transform folds an initonly scalar into the bytecode of whatever method
 // reads it. That is sound once the value is final, since ECMA-335 II.16.1 lets
 // nothing but the initializer write one. It is not sound before: Read () below
-// is built while the .cctor runs, and the one body it gets is what every later
-// call to it runs.
+// is built while the .cctor runs, and every later call to it runs the one body
+// it got.
 
 .assembly extern mscorlib { }
 .module extern 'interp-tests-cs.netmodule'

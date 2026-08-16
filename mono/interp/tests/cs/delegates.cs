@@ -1,6 +1,5 @@
 // ldftn, ldvirtftn and the delegate call path.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands go through the NoInlining Id helpers, so the transform cannot fold a
 // test into its answer.
 

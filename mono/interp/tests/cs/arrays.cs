@@ -359,8 +359,8 @@ public class Arrays {
 		}
 	}
 
-	// The value comes out of a local rather than out of `new`, which is what
-	// makes this a stelem instead of an ldelema and an initobj.
+	// The value comes out of a local rather than out of `new`, which makes this
+	// a stelem instead of an ldelema and an initobj.
 	public static int test_1_stelem_vt_on_null_throws ()
 	{
 		ArrPoint[] a = (ArrPoint[]) IdO (null);

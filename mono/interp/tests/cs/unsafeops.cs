@@ -1,7 +1,6 @@
 // The pointer opcodes: ldind and stind in every width, ldloca and ldarga,
 // localloc, cpblk, initblk, ldobj and stobj, sizeof, and pointer arithmetic.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands go through a NoInlining helper, so the transform cannot fold the
 // answer and leave the opcode untested.
 //
@@ -354,8 +353,8 @@ public class UnsafeOps {
 
 	public static int test_100_localloc_is_released_on_return ()
 	{
-		// Every call gets the same address back, which is what says the frame
-		// gave the memory up when it returned.
+		// Every call gets the same address back, which says the frame gave the
+		// memory up when it returned.
 		long first = LocallocLeaf (IdI4 (512));
 		int total = 0;
 		for (int i = 0; i < 100; i++)

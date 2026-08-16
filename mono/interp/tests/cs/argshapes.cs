@@ -2,7 +2,6 @@
 // width, value types passed by value at several sizes, byrefs among by-value
 // arguments, and the same shape called with and without a receiver.
 //
-// A method named test_<n>_<what> is a test. It passes when it returns <n>.
 // A callee with more than a few arguments counts the arguments that hold the
 // value the caller sent, and returns that count. A wrong answer then says how
 // many slots arrived correctly. No two arguments carry the same value: a
@@ -95,8 +94,8 @@ public class ArgShapes {
 		n += c == -3 ? 1 : 0;
 		n += d == 4 ? 1 : 0;
 		n += e == (char) 5 ? 1 : 0;
-		// The false one fails on any wide value that lands here; the true one in
-		// ASEight fails on a slot that arrives zeroed.
+		// A false catches any wide value in the slot. The true one in ASEight
+		// catches a slot that arrives zeroed.
 		n += !f ? 1 : 0;
 		n += g == -7 ? 1 : 0;
 		n += h == 8 ? 1 : 0;
@@ -151,9 +150,8 @@ public class ArgShapes {
 		return hits;
 	}
 
-	// Sixteen arguments of one width give the same stride at every index. These
-	// alternate, so an index computed from the first argument's width is wrong
-	// from the second one on.
+	// Sixteen arguments alternating int and long, so the stride changes at every
+	// index.
 	public static int test_16_sixteen_arguments_alternate_width ()
 	{
 		return ASSixteen (ASId (1), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
@@ -414,7 +412,7 @@ public class ArgShapes {
 	}
 
 	// A byref is one slot whatever it points at, so the width of the target does
-	// not change where the argument behind it goes.
+	// not move the argument behind it.
 	public static int test_8_byref_of_every_width ()
 	{
 		sbyte a = (sbyte) ASId (-1);
@@ -435,8 +433,8 @@ public class ArgShapes {
 		return b.A == 1 && b.E == 5 ? 1 : 0;
 	}
 
-	// The by-value copy is taken at the call site, so the write through the byref
-	// must not reach it.
+	// The call site takes the by-value copy, so the write through the byref must
+	// not reach it.
 	public static int test_2_a_struct_by_reference_and_the_same_by_value ()
 	{
 		ASBig40 s = MakeBig40 (ASIdL (1), 2, 3, 4, 5);
@@ -543,8 +541,8 @@ public class ArgShapes {
 		}
 	}
 
-	// The receiver of a value type is a byref, so it is one slot however wide
-	// the value is, and a write through it reaches the caller's copy.
+	// The receiver of a value type is a byref. It takes one slot whatever the
+	// value's width, and a write through it reaches the caller's copy.
 	public static int test_5_a_value_type_receiver ()
 	{
 		ASCounter c;
@@ -556,10 +554,10 @@ public class ArgShapes {
 
 	// ------------------------------------------------------------- the hot set
 	//
-	// The four shapes here are what the jit-call offset table is built from: a
-	// single argument, arguments of mixed width, an argument wider than a slot,
-	// and a receiver. The count buys the wall time a background compile needs.
-	// A round is a few hundred nanoseconds, so a loop is tens of milliseconds.
+	// Four shapes the jit-call offset table has to get right: a single argument,
+	// arguments of mixed width, an argument wider than a slot, and a receiver.
+	// The round count gives a background compile time to finish -- a round is a
+	// few hundred nanoseconds, so a loop is tens of milliseconds.
 
 	const int HotRounds = 100000;
 
@@ -601,9 +599,9 @@ public class ArgShapes {
 
 	// -------------------------------------------------------- across a wrapper
 
-	// A caller puts the address a large value type comes back at in the first
-	// argument register. The callee writes through that same register, so the
-	// result of this call is 24 bytes of the fill value.
+	// A large value type comes back through a hidden pointer in the first argument
+	// register, which is where memset takes its destination. So this call fills
+	// its own return buffer.
 	[DllImport ("__Internal", EntryPoint = "interp_test_memset")]
 	static extern ASBig24 NativeFillBig24 (int fill, IntPtr count);
 

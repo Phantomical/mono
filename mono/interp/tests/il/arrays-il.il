@@ -49,8 +49,7 @@
 		ret
 	}
 
-	// The Address method of a rank-2 array, which is what ldelema turns into
-	// there.
+	// The Address method of a rank-2 array, which ldelema turns into there.
 	.method public static int32 test_6_rank_two_address () cil managed
 	{
 		.maxstack 4

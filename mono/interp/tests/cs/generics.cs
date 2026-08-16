@@ -474,8 +474,9 @@ public class Generics {
 	public static int test_3_cctor_runs_per_instantiation ()
 	{
 		// The two reference instantiations are the interesting pair: they must
-		// still get a static of their own. The values are compared rather than
-		// summed, because beforefieldinit leaves the order of the three free.
+		// still get a static of their own. The test compares the values rather
+		// than summing them, because beforefieldinit leaves the order of the
+		// three free.
 		int a = GenCctor<int>.Value, b = GenCctor<string>.Value, c = GenCctor<object>.Value;
 
 		return a != b && b != c && a != c ? gen_cctor_order : 0;
@@ -489,8 +490,8 @@ public class Generics {
 
 	public static int test_1_default_comparer_over_a_value_type ()
 	{
-		// A comparer that answers true for everything must not pass, so the
-		// unequal pair is subtracted rather than left out.
+		// A comparer that answers true for everything must not pass, so the test
+		// subtracts the unequal pair rather than leaving it out.
 		return GenEqual<int> (Id (4), Id (4)) - GenEqual<int> (Id (4), Id (5));
 	}
 

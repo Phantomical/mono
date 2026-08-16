@@ -1,7 +1,7 @@
 // tail. sites, one per shape interp_tail_call_refusal decides on.
 //
 // A declined tail call is an ordinary call, so nothing a program can see tells
-// the two apart. What these check is that the answer is right either way.
+// the two apart. These check that the answer is right either way.
 
 .assembly extern mscorlib { }
 .module extern 'interp-tests-cs.netmodule'

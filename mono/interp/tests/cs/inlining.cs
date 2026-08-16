@@ -1,10 +1,10 @@
 // Which callees the transform inlines, and what an inlined body has to keep
 // doing correctly.
 //
-// The decision is made in interp_method_check_inlining, and it turns on the
-// callee's IL size, its flags, its clauses and its class. Each test here calls
-// a callee of one shape and checks the answer, so a wrong inline shows up as a
-// wrong number rather than as a missing optimization.
+// interp_method_check_inlining makes the decision, and it turns on the callee's
+// IL size, its flags, its clauses and its class. Each test here calls a callee
+// of one shape and checks the answer, so a wrong inline shows up as a wrong
+// number rather than as a missing optimization.
 
 using System;
 using System.Runtime.CompilerServices;
@@ -24,7 +24,7 @@ public class Inlining {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }
 
-	// Under the size limit and with no clauses: the body is inlined.
+	// Under the size limit and with no clauses, so the transform inlines it.
 	static int Tiny (int x) { return x + 1; }
 
 	public static int test_4_tiny_callee ()

@@ -2,7 +2,6 @@
 // MINT_DIV_UN_I8, MINT_REM_I8, MINT_REM_UN_I4 and MINT_REM_UN_I8.  Each one gets
 // its in-range cases, its sign edges, and the exceptions it throws.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // A test that makes more than one check returns the number of checks that hold,
 // so a failure says how many of them were good.
 //
@@ -191,8 +190,8 @@ public class MathRest {
 		     + Ok (minus_five % minus_three == 0xfffffffbU);
 	}
 
-	// The same bits under rem give -2, so the sign of the dividend is what tells
-	// the two opcodes apart.
+	// The same bits under rem give -2, so the sign of the dividend tells the two
+	// opcodes apart.
 	public static int test_2_rem_un_i4_differs_from_signed ()
 	{
 		int signed_a = MrI (-100), signed_b = MrI (7);

@@ -273,9 +273,9 @@ public class Signatures {
 		return r.A == 3 && r.B == 4 ? 1 : 0;
 	}
 
-	// Arguments of different sizes in one signature: each one moves the write
-	// position by the size the conversion reports, so a sub-slot value in the
-	// middle is what misreads the ones behind it.
+	// Arguments of different sizes in one signature: each moves the write
+	// position by the size the conversion reports, so a wrong size in the middle
+	// displaces every argument behind it.
 	public static int test_1_invoke_mixed_value_types ()
 	{
 		SignaturesS4 a = new SignaturesS4 { A = 1 };
@@ -284,9 +284,9 @@ public class Signatures {
 		return r == 1 + 0x100000001L + 3 + 2 + 5 ? 1 : 0;
 	}
 
-	// The receiver of an instance method on a value type is boxed at the call
-	// and unboxed before the entry, which therefore takes it as a plain address
-	// and converts nothing.
+	// The call boxes the receiver of an instance method on a value type, and the
+	// unbox happens before the entry. The entry takes a plain address and
+	// converts nothing.
 	public static int test_8_invoke_struct_instance_method ()
 	{
 		object boxed = new SignaturesS8 { A = IdLong (7) };
@@ -373,10 +373,10 @@ public class Signatures {
 
 	static string Shout (string s) { return s + "!"; }
 
-	// A vararg call site: the variable arguments are laid out for an ArgIterator
-	// by the copy of the conversion in interp.c, with the types the caller wrote
-	// rather than the ones the callee declares. That is what makes a vararg site
-	// the place to put the width coverage for that copy.
+	// A vararg call site: the interp.c copy of the conversion lays the variable
+	// arguments out for an ArgIterator, with the types the caller wrote rather
+	// than the ones the callee declares. So a vararg site is where the width
+	// coverage for that copy goes.
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static long ArgSumIntegers (__arglist)
@@ -523,8 +523,8 @@ public class Signatures {
 	// localloc. It keeps the fragment behind the current one for reuse, and a
 	// later request the spare cannot hold releases it -- the only way a fragment
 	// goes back before the thread ends. The first request fills the initial
-	// fragment, the second makes the spare, and the larger third one is what the
-	// spare cannot hold.
+	// fragment, the second makes the spare, and the larger third one does not
+	// fit the spare.
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static unsafe int Touch (byte *p, int n)

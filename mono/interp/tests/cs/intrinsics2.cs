@@ -2,7 +2,6 @@
 // Debugger.Break, the three-argument arm of the Math table, the element store a
 // rectangular array's Set turns into, and the two memory barriers.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands come through NoInlining helpers.  The transform folds constants and
 // inlines small callees, and a folded operand leaves the opcode untested.
 
@@ -38,8 +37,8 @@ public class Intrinsics2 {
 		return Debugger.IsAttached ? 1 : 0;
 	}
 
-	// Math.Clamp is the only three-double method in Math here, so it is what
-	// reaches the arm that looks for FusedMultiplyAdd.  Neither name resolves to
+	// Math.Clamp is the only three-double method in Math here, so it is the only
+	// call that reaches the arm that looks for FusedMultiplyAdd.  Neither name resolves to
 	// an opcode, so both calls stay ordinary calls.
 
 	public static int test_2_math_clamp_double_below_the_minimum ()
@@ -102,8 +101,8 @@ public class Intrinsics2 {
 	{
 		long[,] a = new long[2, 2];
 
-		// A four byte store keeps the low word only, so the high word is what
-		// says the store was eight bytes wide.
+		// A four byte store keeps the low word only, so the high word says the
+		// store was eight bytes wide.
 		a[Id (0), Id (1)] = Keep (0x300000007L);
 		return a[0, 1] == 0x300000007L ? 7 : 0;
 	}

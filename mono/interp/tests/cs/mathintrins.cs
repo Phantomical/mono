@@ -2,7 +2,6 @@
 // MINT_ABS and its family are the double form, MINT_ABSF and its family the
 // float form.  Round, Min and Max stay ordinary calls.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Each test returns the number of checks that hold, so a failure says how many
 // of them were good.
 //

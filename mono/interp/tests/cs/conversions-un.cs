@@ -2,10 +2,9 @@
 // destination, an unsigned source at each destination width, and a source the
 // transform already knows the value of.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Most operands come through a NoInlining helper, so the transform cannot fold
 // them. The tests at the end of the file want the opposite. They take the
-// operand from a plain local, because the fold table is what they exercise.
+// operand from a plain local, because they exercise the fold table.
 
 using System;
 using System.Runtime.CompilerServices;
@@ -23,7 +22,7 @@ public class ConversionsUn {
 	static ulong usink;
 	unsafe static void *psink;
 
-	// A cast to a pointer type is what reaches conv.u from C#. The destination
+	// A cast to a pointer type is how C# reaches conv.u. The destination
 	// is 64 bit here, so a 64 bit source keeps every bit and the sign with it.
 	public unsafe static int test_1_conv_native_from_i8_and_u8 ()
 	{
@@ -225,8 +224,8 @@ public class ConversionsUn {
 		}
 	}
 
-	// A constant the destination cannot hold is left for the opcode to reject
-	// at run time, so the trap happens rather than the compile failing.
+	// The fold leaves a constant the destination cannot hold for the opcode to
+	// reject at run time, so the trap happens rather than the compile failing.
 	public static int test_3_fold_declines_out_of_range_constants ()
 	{
 		int a = 300;

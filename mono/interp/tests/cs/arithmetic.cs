@@ -1,6 +1,5 @@
 // Integer and floating point opcodes, one method per behaviour.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Locals rather than constants on both sides of an operator, so the transform
 // cannot fold the answer and leave the opcode untested.
 

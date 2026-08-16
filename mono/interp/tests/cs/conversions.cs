@@ -1,7 +1,6 @@
 // The conv.* family: every source and destination width pair, the unsigned
 // forms, the overflow-checking forms, and conv.r.un.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Every operand comes through a NoInlining helper, so the transform cannot fold
 // the conversion away and leave the opcode untested.
 
@@ -160,8 +159,8 @@ public class Conversions {
 		return (double) IdU8 (18446744073709551615UL) == 18446744073709551616.0 ? 1 : 0;
 	}
 
-	// conv.i and conv.u, which are 64-bit on this target. The sign is what
-	// separates them, for the same reason as the two tests above.
+	// conv.i and conv.u, which are 64-bit on this target. The sign separates
+	// them, for the same reason as the two tests above.
 	public unsafe static int test_1_conv_i_sign_extends_conv_u_zero_extends ()
 	{
 		byte *from_signed = (byte *) IdI4 (-1);

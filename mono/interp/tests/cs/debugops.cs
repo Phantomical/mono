@@ -2,7 +2,7 @@
 //
 // System.Diagnostics.Debugger.Break () becomes MINT_BREAK, which asks the
 // debugger callbacks for a user break. Without an agent that is a no-op, and
-// what these tests say is that the opcode returns rather than stopping.
+// these tests say the opcode returns rather than stopping.
 
 using System;
 using System.Diagnostics;

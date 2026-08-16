@@ -7,7 +7,6 @@
 // compiled body: at tier 0 the escaped address is the entry thunk of an
 // interpreted one, and the call is marshalled all the same.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Every target is NoInlining and returns a value of its own, so the answer says
 // which body ran and with which arguments.
 
@@ -138,7 +137,7 @@ public class Dispatch2 {
 	}
 
 	// A jit call marshals at most six parameters. The seventh puts this method
-	// out of reach of one, so the escaped address is never used and the call is
+	// out of reach of one, so nothing uses the escaped address and the call stays
 	// interpreted. resolve_code_type () prints a line about that address.
 	public static int test_28_seven_arguments_is_past_the_jit_call_limit ()
 	{
@@ -313,9 +312,9 @@ public class Dispatch2 {
 		public int Weigh () { return 5; }
 	}
 
-	// The three sites below name their target at run time, so the jit call is
-	// settled on the method the vtable, the interface table or the delegate
-	// gives back rather than on the one the token names.
+	// The three sites below name their target at run time, so the jit call goes
+	// to the method the vtable, the interface table or the delegate gives back
+	// rather than to the one the token names.
 	public static int test_7_virtual_site_whose_override_takes_a_jit_call ()
 	{
 		EscapeEntry (typeof (D2RankChild), "Rank");

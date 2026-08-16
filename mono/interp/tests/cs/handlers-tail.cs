@@ -13,13 +13,12 @@
 // are the other way round.
 //
 // newobj puts the new object in two places. One is the call arguments, where it
-// is the constructor's this. The other is one slot below, where the value newobj
-// produces is read from. The arguments the transform staged sit where those two
-// copies go, so newobj moves them up first. These tests are the argument shapes
+// is the constructor's this. The other is one slot below, which holds the value
+// newobj produces. The arguments the transform staged sit where those two copies
+// go, so newobj moves them up first. These tests are the argument shapes
 // that move has to carry. opcodes-tail.cs holds the arms where the allocation
 // itself is the subject.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // A test that makes more than one check returns the number of checks that hold,
 // so a failure says how many of them were good.
 

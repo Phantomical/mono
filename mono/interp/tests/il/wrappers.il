@@ -6,8 +6,8 @@
 // makes the runtime hand every method of a class to the interpreter, wrappers
 // included, and the `wrappers/` arm passes it for this assembly.
 //
-// The callees are the runner's own, in native.cpp. What is under test is the
-// wrapper the runtime builds around each signature, not the native function.
+// The callees are the runner's own, in native.cpp. The wrapper the runtime
+// builds around each signature is under test, not the native function.
 
 .assembly extern mscorlib { }
 

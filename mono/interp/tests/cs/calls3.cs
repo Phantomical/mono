@@ -1,7 +1,5 @@
 // The interpreter's fast path for a native call.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
-//
 // A native signature whose arguments and result each fit one pointer-sized
 // slot goes through one of fourteen fixed prototypes. The argument count and
 // the return type pick the prototype. Everything else goes through the general
@@ -138,8 +136,7 @@ public class Calls3 {
 		return Id (1);
 	}
 
-	// The callee answers 4096, so the result is the answer and a slot it did
-	// not write cannot pass.
+	// The callee answers 4096, so a slot it did not write cannot pass.
 
 	public static int test_4096_no_arguments_with_result ()
 	{
@@ -159,8 +156,8 @@ public class Calls3 {
 		return Calls3Upper (Id ('a'));
 	}
 
-	// The callee writes through the array it is given, so the buffer is what
-	// the test reads.
+	// The callee writes through the array it is given, so the test reads the
+	// buffer.
 
 	public static int test_1_two_arguments_no_result ()
 	{
@@ -169,8 +166,8 @@ public class Calls3 {
 		return buffer [0] == 0 && buffer [2] == 0 && buffer [3] == 9 ? 1 : 0;
 	}
 
-	// Both answers are asked for. A zero on its own is also what an untouched
-	// result slot holds.
+	// The test asks for both answers. A zero on its own is also what an
+	// untouched result slot holds.
 
 	public static int test_1_two_arguments_with_result ()
 	{

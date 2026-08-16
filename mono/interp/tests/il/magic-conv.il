@@ -958,8 +958,8 @@
 	}
 
 	// An int64 argument is already the pointer width, so the .ctor stores it
-	// with no conversion.  Reading the value back as an int64 is what shows
-	// that all 64 bits landed.
+	// with no conversion.  Reading the value back as an int64 shows that all
+	// 64 bits landed.
 	.method public hidebysig static int32 test_1_nint_ctor_from_i8_keeps_the_high_word () cil managed
 	{
 		.locals init (valuetype System.nint x)
@@ -983,7 +983,7 @@
 		ret
 	}
 
-	// The widening conversion nint picks is signed; the nuint one below is not.
+	// The widening conversion nint picks is signed.  The nuint one below is not.
 	.method public hidebysig static int32 test_1_nint_explicit_from_i4_sign_extends () cil managed
 	{
 		ldc.i4.m1
@@ -995,7 +995,7 @@
 		ret
 	}
 
-	// The high word is dropped by the narrowing conversion out of nint.
+	// The narrowing conversion out of nint drops the high word.
 	.method public hidebysig static int32 test_5_nint_explicit_to_i4_truncates () cil managed
 	{
 		ldc.i8 4294967301
@@ -1307,7 +1307,7 @@
 	}
 
 	// CompareTo and Equals take the value through a local and its address,
-	// which is what the managed body of a magic type expects.
+	// which the managed body of a magic type expects.
 	.method public hidebysig static int32 test_1_nint_compare_to () cil managed
 	{
 		.locals init (valuetype System.nint a, valuetype System.nint b)

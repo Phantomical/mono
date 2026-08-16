@@ -15,11 +15,9 @@
 // remoted field opcodes. The transform picks them from the declaring class, so
 // a field on a marshal-by-reference class becomes one of them whether or not
 // the reference is a proxy. Each has two arms: a plain offset in this object,
-// or a message to the remote object. fields.cs holds the first arm. A
-// transparent proxy, which is what RealProxy.GetTransparentProxy returns, is
-// what takes the second.
+// or a message to the remote object. fields.cs holds the first arm. The second
+// needs a transparent proxy, which RealProxy.GetTransparentProxy returns.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // A test that makes more than one check returns the number of checks that hold,
 // so a failure says how many of them were good.
 
@@ -59,8 +57,8 @@ public interface IOpcodesTailAdder {
 }
 
 // The class initializer throws, so the allocation never happens and newobj
-// raises TypeInitializationException instead. The finalizer is what keeps the
-// class off MINT_NEWOBJ_FAST, whose failure arm is a different piece of code.
+// raises TypeInitializationException instead. The finalizer keeps the class off
+// MINT_NEWOBJ_FAST, whose failure arm is a different piece of code.
 class OpcodesTailAngryCctor {
 	static OpcodesTailAngryCctor ()
 	{
@@ -123,8 +121,8 @@ class OpcodesTailForwarder : RealProxy {
 	}
 }
 
-// Answers every message with an exception, which is how the remoted field
-// opcodes are made to take their error arm.
+// Answers every message with an exception, which puts the remoted field opcodes
+// on their error arm.
 class OpcodesTailRefuser : RealProxy {
 	public OpcodesTailRefuser () : base (typeof (OpcodesTailRemote)) { }
 
@@ -195,8 +193,8 @@ public class OpcodesTail {
 		return Ok (RemotingServices.IsTransparentProxy (b));
 	}
 
-	// The constructor call has to go to the remoting invoke wrapper newobj put
-	// in place of it, so a field the constructor wrote reads back.
+	// newobj swapped the constructor for a remoting invoke wrapper, so a field
+	// the constructor wrote has to read back.
 	public static int test_4_newobj_contextbound_ran_its_ctor ()
 	{
 		OpcodesTailBound b = new OpcodesTailBound (I (4));
@@ -379,13 +377,12 @@ public class OpcodesTail {
 		}
 	}
 
-	// The next two are a live divergence, and both fail on the interpreted arm.
 	// A read raises out of the opcode's own MonoError, so it lands in the catch
 	// here. A store instead reaches the managed TransparentProxy.StoreRemoteField
 	// through mono_runtime_invoke_checked (), and that unwind passes the
 	// interpreted frame. The catch never runs, and neither does a finally put in
-	// its place. Until this is fixed the exception is gone before MINT_STRMFLD
-	// and MINT_STRMFLD_VT can see an error, so their THROW_EX stays uncovered.
+	// its place. The exception is therefore gone before MINT_STRMFLD and
+	// MINT_STRMFLD_VT can see an error, so their THROW_EX stays uncovered.
 
 	public static int test_1_proxy_write_that_fails ()
 	{
