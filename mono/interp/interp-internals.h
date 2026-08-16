@@ -1,5 +1,5 @@
-#ifndef __MONO_MINI_INTERPRETER_INTERNALS_H__
-#define __MONO_MINI_INTERPRETER_INTERNALS_H__
+#ifndef __MONO_INTERP_INTERNALS_H__
+#define __MONO_INTERP_INTERNALS_H__
 
 #include <setjmp.h>
 #include <glib.h>
@@ -578,4 +578,4 @@ enum_type:
 
 MONO_END_DECLS
 
-#endif /* __MONO_MINI_INTERPRETER_INTERNALS_H__ */
+#endif /* __MONO_INTERP_INTERNALS_H__ */

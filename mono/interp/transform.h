@@ -1,5 +1,5 @@
-#ifndef __MONO_MINI_INTERP_TRANSFORM_H__
-#define __MONO_MINI_INTERP_TRANSFORM_H__
+#ifndef __MONO_INTERP_TRANSFORM_H__
+#define __MONO_INTERP_TRANSFORM_H__
 #include <mono/mini/mini-runtime.h>
 #include <mono/metadata/seq-points-data.h>
 #include "interp-internals.h"
@@ -217,4 +217,4 @@ mono_test_interp_method_compute_offsets (TransformData *td, InterpMethod *imetho
 void
 mono_interp_print_td_code (TransformData *td);
 
-#endif /* __MONO_MINI_INTERP_TRANSFORM_H__ */
+#endif /* __MONO_INTERP_TRANSFORM_H__ */

@@ -1,5 +1,5 @@
-#ifndef MONO_MINI_INTERP_FRAME_DATA_HPP
-#define MONO_MINI_INTERP_FRAME_DATA_HPP
+#ifndef MONO_INTERP_FRAME_DATA_HPP
+#define MONO_INTERP_FRAME_DATA_HPP
 
 #include "interp-internals.h"
 

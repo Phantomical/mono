@@ -1,5 +1,5 @@
-#ifndef MONO_MINI_INTERP_INTERP_INTERNALS_HPP
-#define MONO_MINI_INTERP_INTERP_INTERNALS_HPP
+#ifndef MONO_INTERP_INTERP_INTERNALS_HPP
+#define MONO_INTERP_INTERP_INTERNALS_HPP
 
 #include "interp.hpp"
 #include "mono/llvm/runtime.h"

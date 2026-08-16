@@ -1,5 +1,5 @@
-#ifndef __MONO_MINI_INTERP_INTRINSICS_H__
-#define __MONO_MINI_INTERP_INTRINSICS_H__
+#ifndef __MONO_INTERP_INTRINSICS_H__
+#define __MONO_INTERP_INTRINSICS_H__
 
 #include <glib.h>
 #include <mono/metadata/object.h>
@@ -28,4 +28,4 @@ interp_intrins_widen_ascii_to_utf16 (guint8 *pAsciiBuffer, mono_unichar2 *pUtf16
 
 MONO_END_DECLS
 
-#endif /* __MONO_MINI_INTERP_INTRINSICS_H__ */
+#endif /* __MONO_INTERP_INTRINSICS_H__ */

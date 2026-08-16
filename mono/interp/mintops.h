@@ -2,8 +2,8 @@
  * \file
  */
 
-#ifndef __INTERPRETER_MINTOPS_H
-#define __INTERPRETER_MINTOPS_H
+#ifndef __MONO_INTERP_MINTOPS_H__
+#define __MONO_INTERP_MINTOPS_H__
 
 #include <glib.h>
 

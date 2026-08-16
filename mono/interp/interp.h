@@ -2,8 +2,8 @@
  * \file
  */
 
-#ifndef __MONO_MINI_INTERPRETER_H__
-#define __MONO_MINI_INTERPRETER_H__
+#ifndef __MONO_INTERP_H__
+#define __MONO_INTERP_H__
 #include <mono/mini/mini-runtime.h>
 
 #ifdef TARGET_WASM
@@ -55,4 +55,4 @@ mono_wasm_get_native_to_interp_trampoline (MonoMethod *method, gpointer extra_ar
 
 #endif
 
-#endif /* __MONO_MINI_INTERPRETER_H__ */
+#endif /* __MONO_INTERP_H__ */
