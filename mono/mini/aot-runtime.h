@@ -10,6 +10,8 @@
 
 #include "mini.h"
 
+MONO_BEGIN_DECLS
+
 /* Version number of the AOT file format */
 #define MONO_AOT_FILE_VERSION 181
 
@@ -276,5 +278,7 @@ MonoAotMethodFlags mono_aot_get_method_flags (guint8 *code);
 #ifdef MONO_ARCH_CODE_EXEC_ONLY
 typedef guint32 (*MonoAotResolvePltInfoOffset)(gpointer amodule, guint32 plt_entry_index);
 #endif
+
+MONO_END_DECLS
 
 #endif /* __MONO_AOT_RUNTIME_H__ */

@@ -6,6 +6,8 @@
 #define __MONO_INTERP_H__
 #include <mono/mini/mini-runtime.h>
 
+MONO_BEGIN_DECLS
+
 #ifdef TARGET_WASM
 #define INTERP_ICALL_TRAMP_IARGS 12
 #define INTERP_ICALL_TRAMP_FARGS 12
@@ -54,5 +56,7 @@ gpointer
 mono_wasm_get_native_to_interp_trampoline (MonoMethod *method, gpointer extra_arg);
 
 #endif
+
+MONO_END_DECLS
 
 #endif /* __MONO_INTERP_H__ */
