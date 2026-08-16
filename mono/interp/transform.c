@@ -7709,7 +7709,8 @@ get_inst_length (InterpInst *ins)
 
 
 static guint16*
-emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpInst *ins)
+emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlock *bb,
+                            InterpInst *ins)
 {
 	guint16 opcode = ins->opcode;
 	guint16 *ip = start_ip;
@@ -7791,18 +7792,14 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpInst *in
 			*ip++ = ins->data [2];
 	} else if (opcode == MINT_SDB_SEQ_POINT) {
 		SeqPoint *seqp = (SeqPoint*)mono_mempool_alloc0 (td->mempool, sizeof (SeqPoint));
-		InterpBasicBlock *cbb;
 
-		if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY) {
+		if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY)
 			seqp->il_offset = METHOD_ENTRY_IL_OFFSET;
-			cbb = td->offset_to_bb [0];
-		} else {
-			if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_METHOD_EXIT)
-				seqp->il_offset = METHOD_EXIT_IL_OFFSET;
-			else
-				seqp->il_offset = ins->il_offset;
-			cbb = td->offset_to_bb [ins->il_offset];
-		}
+		else if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_METHOD_EXIT)
+			seqp->il_offset = METHOD_EXIT_IL_OFFSET;
+		else
+			seqp->il_offset = ins->il_offset;
+
 		seqp->native_offset = (guint8*)start_ip - (guint8*)td->new_code;
 		if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_NONEMPTY_STACK)
 			seqp->flags |= MONO_SEQ_POINT_FLAG_NONEMPTY_STACK;
@@ -7810,8 +7807,14 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpInst *in
 			seqp->flags |= MONO_SEQ_POINT_FLAG_NESTED_CALL;
 		g_ptr_array_add (td->seq_points, seqp);
 
-		cbb->seq_points = g_slist_prepend_mempool (td->mempool, cbb->seq_points, seqp);
-		cbb->last_seq_point = seqp;
+		/*
+		 * The block the instruction sits in, rather than the one that starts at
+		 * its IL offset. A sequence point comes from the symbol file and lands
+		 * wherever the line does, which is usually not a block boundary, and
+		 * offset_to_bb holds an entry only where a block begins.
+		 */
+		bb->seq_points = g_slist_prepend_mempool (td->mempool, bb->seq_points, seqp);
+		bb->last_seq_point = seqp;
 	} else {
 		if (mono_interp_op_dregs [opcode])
 			*ip++ = get_interp_local_offset (td, ins->dreg, TRUE);
@@ -7875,7 +7878,7 @@ generate_compacted_code (TransformData *td)
 		InterpInst *ins = bb->first_ins;
 		bb->native_offset = ip - td->new_code;
 		while (ins) {
-			ip = emit_compacted_instruction (td, ip, ins);
+			ip = emit_compacted_instruction (td, ip, bb, ins);
 			ins = ins->next;
 		}
 	}

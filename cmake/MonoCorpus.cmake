@@ -93,12 +93,19 @@ endfunction()
 
 # The same for an IL corpus.
 #
-#   mono_corpus_il(<out> <source.il> [LIBRARY])
+#   mono_corpus_il(<out> <source.il> [LIBRARY] [DEBUG])
+#
+# DEBUG writes an .mdb beside the assembly, which is what lets the runtime turn
+# an IL offset back into a line and therefore what the transform needs before it
+# will emit a sequence point.
 function(mono_corpus_il out source)
-  cmake_parse_arguments(ARG "LIBRARY" "" "" ${ARGN})
+  cmake_parse_arguments(ARG "LIBRARY;DEBUG" "" "" ${ARGN})
   set(_extra "")
   if(ARG_LIBRARY)
     set(_extra -dll)
+  endif()
+  if(ARG_DEBUG)
+    list(APPEND _extra -debug)
   endif()
   get_filename_component(_outdir "${CMAKE_CURRENT_BINARY_DIR}/${out}" DIRECTORY)
   add_custom_command(

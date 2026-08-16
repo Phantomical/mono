@@ -24,6 +24,7 @@
 #include <mono/metadata/domain-internals.h>
 #include <mono/metadata/exception.h>
 #include <mono/metadata/loader.h>
+#include <mono/metadata/mono-debug.h>
 #include <mono/metadata/object-internals.h>
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
@@ -184,6 +185,13 @@ main (int argc, char *argv [])
 	}
 
 	mono_set_assemblies_path (MONO_INTERP_TESTS_ASSEMBLIES);
+	/*
+	 * Symbols, so that a suite run with MONO_DEBUG=gen-seq-points gets sequence
+	 * points: the transform emits them only for a method the debug subsystem can
+	 * find line numbers for. `mono` does this when it is given --debug, and
+	 * nothing in an embedded start does it.
+	 */
+	mono_debug_init (MONO_DEBUG_FORMAT_MONO);
 	mono_jit_init_version_for_test_only ("mono-interp-tests", "v4.0.30319");
 
 	MonoImage *image = open_assembly (argv [first]);

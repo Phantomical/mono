@@ -125,7 +125,7 @@ file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" i
 set(_il_assemblies "")
 foreach(_il IN LISTS _il_sources)
   cmake_path(GET _il STEM _stem)
-  mono_corpus_il("${_stem}.dll" "${_il}" LIBRARY)
+  mono_corpus_il("${_stem}.dll" "${_il}" LIBRARY DEBUG)
   list(APPEND _il_assemblies "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.dll")
 endforeach()
 
@@ -245,8 +245,9 @@ foreach(_assembly IN LISTS _il_assemblies)
                 "MONO_DEBUG=gen-seq-points"
                 # The transform's tracing decodes each opcode's operands from a
                 # table it keeps apart from the handlers, so it is worth running
-                # even where nothing reads what it prints.  One method's worth:
-                # every method would be megabytes.
+                # even where nothing reads what it prints.  One method: the name
+                # is matched whole, and tracing every method a process reaches
+                # would be megabytes.
                 "MONO_VERBOSE_METHOD=Countdown")
 endforeach()
 
