@@ -27,7 +27,7 @@ if(MONO_CORPUS_ENABLED)
   mono_tools_runtime_depends(test-interp-data)
 endif()
 
-add_executable(test-interp harness.cpp transform-tests.cpp)
+add_executable(test-interp harness.cpp transform-tests.cpp intrins-tests.cpp)
 
 target_include_directories(test-interp PRIVATE
   "${CMAKE_BINARY_DIR}"

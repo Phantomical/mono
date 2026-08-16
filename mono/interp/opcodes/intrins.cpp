@@ -102,7 +102,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_CLEAR_WITH_REFERENCES)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_MARVIN_BLOCK)
 {
-	interp_intrins_marvin_block (LOCAL_VAR (ip[1], guint32 *), LOCAL_VAR (ip[2], guint32 *));
+	marvin_block (LOCAL_VAR (ip[1], guint32 *), LOCAL_VAR (ip[2], guint32 *));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -111,7 +111,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_MARVIN_BLOCK)
 MONO_INTERP_OP_IMPL (MINT_INTRINS_ASCII_CHARS_TO_UPPERCASE)
 {
 	LOCAL_VAR (ip[1], gint32) =
-		interp_intrins_ascii_chars_to_uppercase (LOCAL_VAR (ip[2], guint32));
+		ascii_chars_to_uppercase (LOCAL_VAR (ip[2], guint32));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -129,7 +129,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_MEMORYMARSHAL_GETARRAYDATAREF)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_ORDINAL_IGNORE_CASE_ASCII)
 {
-	LOCAL_VAR (ip[1], gint32) = interp_intrins_ordinal_ignore_case_ascii (
+	LOCAL_VAR (ip[1], gint32) = ordinal_ignore_case_ascii (
 		LOCAL_VAR (ip[2], guint32), LOCAL_VAR (ip[3], guint32));
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -138,7 +138,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_ORDINAL_IGNORE_CASE_ASCII)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_64ORDINAL_IGNORE_CASE_ASCII)
 {
-	LOCAL_VAR (ip[1], gint32) = interp_intrins_64ordinal_ignore_case_ascii (
+	LOCAL_VAR (ip[1], gint32) = ordinal_ignore_case_ascii (
 		LOCAL_VAR (ip[2], guint64), LOCAL_VAR (ip[3], guint64));
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -149,7 +149,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_U32_TO_DECSTR)
 {
 	auto cache_addr = (MonoArray **) frame->imethod->data_items[ip[3]];
 	auto string_vtable = (MonoVTable *) frame->imethod->data_items[ip[4]];
-	LOCAL_VAR (ip[1], MonoObject *) = (MonoObject *) interp_intrins_u32_to_decstr (
+	LOCAL_VAR (ip[1], MonoObject *) = (MonoObject *) u32_to_decstr (
 		LOCAL_VAR (ip[2], guint32), *cache_addr, string_vtable);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -158,7 +158,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_U32_TO_DECSTR)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_WIDEN_ASCII_TO_UTF16)
 {
-	LOCAL_VAR (ip[1], mono_u) = interp_intrins_widen_ascii_to_utf16 (
+	LOCAL_VAR (ip[1], mono_u) = widen_ascii_to_utf16 (
 		LOCAL_VAR (ip[2], guint8 *), LOCAL_VAR (ip[3], mono_unichar2 *), LOCAL_VAR (ip[4], mono_u));
 
 	MONO_INTERP_OP_ADVANCE ();
