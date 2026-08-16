@@ -44,9 +44,8 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
-# Registers one ctest test per method of an assembly.  Registering the same
-# assembly again under another name prefix and environment is what runs those
-# methods on a second engine.
+# Registers one ctest test per method of an assembly.  Use the name prefix and
+# the environment to tell apart different runs of the same tests.
 #
 #   ASSEMBLY     the .dll whose test methods to register.
 #   NAME_PREFIX  and NAME_SUFFIX go around "Class:method" in the ctest name.
