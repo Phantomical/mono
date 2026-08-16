@@ -133,10 +133,7 @@ list(APPEND _modules "${CMAKE_CURRENT_BINARY_DIR}/interp-tests-cs.netmodule")
 # IL shapes C# does not emit.
 file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" il/*.il)
 
-# Mono recognizes a magic type by its assembly's name, so these two cannot be
-# modules: a module carries no Assembly row, and a type in one is never magic.
-# Merging them leaves interp_handle_magic_type_intrinsics () unreached and every
-# test still passing, since the managed bodies are real implementations.
+# These set their own assembly names, so they cannot be merged with the others.
 set(_own_assembly il/folding.il il/magic-conv.il)
 set(_assemblies "")
 
