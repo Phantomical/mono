@@ -23,7 +23,8 @@
 // A test that makes more than one check returns the number of checks that hold,
 // so a failure says how many of them were good.
 
-#pragma warning disable CS1390
+// We are intentionally doing this, so the warnings are just noise.
+#pragma warning disable CS1690
 
 using System;
 using System.Collections.Generic;
