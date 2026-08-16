@@ -230,7 +230,7 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	// symbol the engine resolves.
 	//
 	// The compiler interns it here, rather than at run time, to match what the
-	// interpreter does for the same instruction. interp/transform.c also calls
+	// interpreter does for the same instruction. mono/interp/transform.c also calls
 	// mono_ldstr_checked () at this point, when it transforms a non-wrapper
 	// method. Both rest on the same guarantee. An interned string is rooted and
 	// never moves, so its address can outlive the compile.

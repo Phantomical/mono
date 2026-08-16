@@ -33,7 +33,7 @@
 #include "interp.h"
 #include "transform.h"
 
-#include "../../llvm/runtime.h"
+#include "mono/llvm/runtime.h"
 
 MonoInterpStats mono_interp_stats;
 

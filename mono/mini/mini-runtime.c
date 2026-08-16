@@ -99,7 +99,7 @@
 #include "debugger-engine.h"
 #include "lldb.h"
 #include "mini-runtime.h"
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 #include "mixed_callstack_plugin.h"
 
 #if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)

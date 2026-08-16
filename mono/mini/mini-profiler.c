@@ -8,7 +8,7 @@
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/mono-debug.h>
 
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 #include "mini.h"
 #include "trace.h"
 

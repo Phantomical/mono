@@ -26,7 +26,7 @@
 #include "mixed_callstack_plugin.h"
 #include "../llvm/runtime.h"
 
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 
 /*
  * Address of the trampoline code.  This is used by the debugger to check

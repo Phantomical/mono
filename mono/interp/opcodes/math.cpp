@@ -1,7 +1,7 @@
 #include "glib.h"
 #include "mintops.h"
 #include "mono/metadata/exception.h"
-#include "mono/mini/interp/interp.hpp"
+#include "mono/interp/interp.hpp"
 #include <cmath>
 #include <limits>
 #include <type_traits>

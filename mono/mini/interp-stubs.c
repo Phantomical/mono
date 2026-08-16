@@ -1,6 +1,6 @@
 #include <config.h>
 
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 
 /* interpreter callback stubs */
 

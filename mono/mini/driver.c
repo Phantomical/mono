@@ -62,7 +62,7 @@
 #include "jit.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 #include "../llvm/runtime.h"
 
 #include <string.h>

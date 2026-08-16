@@ -3,7 +3,7 @@
 #include "mono/metadata/exception.h"
 #include "mono/metadata/icall-decl.h"
 #include "mono/metadata/object-internals.h"
-#include "mono/mini/interp/interp.hpp"
+#include "mono/interp/interp.hpp"
 
 namespace mono::interp {
 

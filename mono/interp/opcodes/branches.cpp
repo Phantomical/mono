@@ -1,6 +1,6 @@
 #include "glib.h"
 #include "mintops.h"
-#include "mono/mini/interp/interp.hpp"
+#include "mono/interp/interp.hpp"
 #include <cmath>
 
 namespace mono::interp {

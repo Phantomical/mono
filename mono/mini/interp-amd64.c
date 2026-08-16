@@ -19,7 +19,7 @@
 #include "mini.h"
 #include <string.h>
 
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 
 #include "mini-amd64.h"
 #include "mini-runtime.h"

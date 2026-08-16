@@ -32,7 +32,7 @@
 #include "debugger-agent.h"
 
 #ifndef DISABLE_INTERPRETER
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 #endif
 #include "mono/utils/mono-tls-inline.h"
 

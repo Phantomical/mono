@@ -5,8 +5,8 @@
 #include "mono/metadata/exception.h"
 #include "mono/metadata/object-forward.h"
 #include "mono/metadata/object-internals.h"
-#include "mono/mini/interp/interp.hpp"
-#include "mono/mini/interp/interp-internals.hpp"
+#include "mono/interp/interp.hpp"
+#include "mono/interp/interp-internals.hpp"
 #include "mono/utils/mono-error-internals.h"
 
 namespace mono::interp {

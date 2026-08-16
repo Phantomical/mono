@@ -446,7 +446,7 @@ rather than refused.
 `MINT_TAILCALLVIRT_FAST`, which hand the frame to the callee instead of making a new one:
 the arguments move down over the caller's locals, `frame->imethod` is swapped and `ip`
 goes to the callee's first instruction. `interp_tail_call_refusal ()`
-(`interp/transform.c`) decides which sites qualify and names the reason it declines, which
+(`mono/interp/transform.c`) decides which sites qualify and names the reason it declines, which
 `MONO_VERBOSE_METHOD` prints — a declined site is an ordinary call, so nothing else
 distinguishes the two. Every shape `should_tail_call ()` honours in the compiled engine has
 to be honoured here as well, since a method runs in either engine and under tier 0 in both;

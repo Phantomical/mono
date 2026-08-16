@@ -78,14 +78,10 @@ add_dependencies(mini mono-version)
 target_compile_options(mini PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wswitch>)
 
 # ---------------------------------------------------------------------------
-# The interpreter and the debugger agent: separate object libraries because
-# they can each be built as a loadable module in configurations that disable
-# them from the runtime proper.
+# The debugger agent: its own object library because it can be built as a
+# loadable module in configurations that disable it from the runtime proper.
+# The interpreter is the same shape and lives in mono/interp.
 # ---------------------------------------------------------------------------
-if(MONO_ENABLE_INTERPRETER)
-  add_subdirectory(interp)
-endif()
-
 if(MONO_ENABLE_DEBUGGER_AGENT)
   mono_add_object_library(mono_dbg
     SOURCES

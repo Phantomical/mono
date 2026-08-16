@@ -105,7 +105,7 @@
 /mono/mini/*riscv* @alexrp @lewurm
 /mono/mini/*type-check* @lambdageek
 /mono/mini/*llvm* @vargaz @imhameed
-/mono/mini/interp/* @BrzVlad
+/mono/interp/* @BrzVlad
 /mono/mini/*profiler* @BrzVlad @lambdageek
 /mono/mini/debugger-agent.c @vargaz @thaystg @DavidKarlas @lambdageek
 

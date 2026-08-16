@@ -80,7 +80,7 @@
 #include "mini-llvm.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
-#include "interp/interp.h"
+#include "mono/interp/interp.h"
 
 #ifndef MONO_ARCH_CONTEXT_DEF
 #define MONO_ARCH_CONTEXT_DEF

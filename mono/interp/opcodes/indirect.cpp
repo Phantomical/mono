@@ -1,8 +1,8 @@
 #include "mintops.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
-#include "mono/mini/interp/interp-internals.hpp"
-#include "mono/mini/interp/interp.hpp"
+#include "mono/interp/interp-internals.hpp"
+#include "mono/interp/interp.hpp"
 #include <cstring>
 
 namespace mono::interp {
