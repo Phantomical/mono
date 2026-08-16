@@ -293,4 +293,16 @@ foreach(_assembly IN LISTS _il_assemblies)
                 "MONO_INTERP_TESTS_OPTS=-all")
 endforeach()
 
+# A wrapper is compiled whatever tier its target runs in, so the opcodes only a
+# wrapper carries never reach the transform.  `interp-only=<class>` hands every
+# method of a class to the interpreter, wrappers included.  One assembly, whose
+# methods are all P/Invokes chosen for the signatures the wrappers come out of.
+mono_add_test_methods(
+  ASSEMBLY "${CMAKE_CURRENT_BINARY_DIR}/wrappers.dll"
+  NAME_PREFIX "wrappers/"
+  PROPERTIES LABELS interp-unit
+  ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
+              "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+              "MONO_INTERP_TESTS_OPTS=interp-only=WrappersIL")
+
 mono_corpus_target(interp-test-suites DEPENDS interp-test-runner)
