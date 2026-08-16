@@ -151,8 +151,7 @@ endforeach()
 mono_corpus_link(interp-tests.dll MODULES ${_modules})
 list(APPEND _assemblies "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll")
 
-# Methods each engine answers wrongly, with the defect named against each.  A
-# fix turns the test red, which is why they are listed rather than deleted.
+# Expected failures
 set(MONO_INTERP_TESTS_XFAIL
   # A store to a remote field goes through managed code, and the exception it
   # raises is lost crossing the interpreted frame back.
@@ -206,8 +205,7 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
 set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
 foreach(_assembly IN LISTS _assemblies)
-  # A threshold of zero never promotes, so a method entered at tier 0 is still
-  # interpreted however many times a test calls it.
+  # These run purely on the interpreter.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "interp/"
@@ -216,25 +214,18 @@ foreach(_assembly IN LISTS _assemblies)
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
                 "MONO_LLVM_JIT_TIER1_THRESHOLD=0")
 
-  # The same methods with no interpreter under them, so each is compiled at tier
-  # 1 on the synchronous path.  A method that answers differently here than it
-  # does above says the engines disagree about its IL.
+  # These run purely on the tier1 jit
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
-    NAME_PREFIX "jit/"
+    NAME_PREFIX "interp-jit/"
     PROPERTIES LABELS interp-jit
     XFAIL ${MONO_INTERP_TESTS_JIT_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
                 "MONO_LLVM_JIT_TIER0=0")
 
-  # Promotion on the second call, so a method is interpreted and then compiled
-  # while the process runs.  Both engines are live in the one process, which is
-  # the only way an interpreted frame calls a body that already has code.
+  # First call on the interpreter, which promotes immediately.
   #
-  # This arm is red, and on one defect rather than many: a compile taken from
-  # the promotion path trips a SelectionDAG assertion in LLVM and the process
-  # aborts.  The same methods under MONO_LLVM_JIT_TIER0=0, which compiles them
-  # on the calling thread, are clean.
+  # This has some test failures and so is not included by default.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "mixed/"
@@ -244,17 +235,8 @@ foreach(_assembly IN LISTS _assemblies)
                 "MONO_LLVM_JIT_TIER1_THRESHOLD=2")
 endforeach()
 
-# The two arms below change what the transform emits rather than which engine
-# runs it, so both ask one question of a whole suite: does the program still
-# answer the same.  A class answers that question only where the thing the arm
-# varies could reach it, so each takes the classes marked with its attribute --
-# cs/arms.cs holds both and says what marking one means.
-#
-# The instrumented arm turns on everything that instruments the interpreter,
-# which nothing else here does.  Sequence points and the transform's tracing
-# splice instructions into the stream, which moves every code offset an EH
-# clause and a branch are written in terms of.
 foreach(_assembly IN LISTS _assemblies)
+  # Test with all debug instrumenting enabled.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "instrumented/"
@@ -273,8 +255,7 @@ foreach(_assembly IN LISTS _assemblies)
                 "MONO_INTERP_TESTS_TRACE=all"
                 "MONO_INTERP_TESTS_COVERAGE=1")
 
-  # The interpreter with its own optimizations turned off, so the transform
-  # emits what it read rather than what it worked out.
+  # Run with interpreter optimizations disabled.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "noopt/"
@@ -286,10 +267,7 @@ foreach(_assembly IN LISTS _assemblies)
                 "MONO_INTERP_TESTS_OPTS=-all")
 endforeach()
 
-# A wrapper is compiled whatever tier its target runs in, so the opcodes only a
-# wrapper carries never reach the transform.  `interp-only=<class>` hands every
-# method of a class to the interpreter, wrappers included, and it names one
-# class -- so this arm runs the methods of that class and nothing else.
+# Special handling for wrapper tests.
 mono_add_test_methods(
   ASSEMBLY "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll"
   NAME_PREFIX "wrappers/"
