@@ -6,7 +6,7 @@
 #include "config.h"
 
 #include "interp-callbacks.hpp"
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-frame.hpp"
 #include "interp-context.hpp"
 
@@ -134,8 +134,7 @@ interp_context_init (void)
 
 } // namespace mono::interp
 
-/* Outside the namespace: interp-internals.h declares these for C, so the
- * definitions have to match the C linkage that gives them. */
+/* Outside the namespace, because interp-internals.hpp declares them there. */
 
 using namespace mono::interp;
 

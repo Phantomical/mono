@@ -6,8 +6,8 @@
 #include "config.h"
 
 #include "interp-callbacks.hpp"
-#include "interp-internals.h"
-#include "mintops.h"
+#include "interp-internals.hpp"
+#include "mintops.hpp"
 #include "interp-frame.hpp"
 #include "interp-stackval.hpp"
 #include "interp-array.hpp"
@@ -220,8 +220,7 @@ init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *
 
 } // namespace mono::interp
 
-/* Outside the namespace: interp-internals.h declares these for C, so the
- * definitions have to match the C linkage that gives them. */
+/* Outside the namespace, because interp-internals.hpp declares them there. */
 
 using namespace mono::interp;
 

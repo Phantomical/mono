@@ -1,6 +1,6 @@
 #include "config.h"
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/interp/interp.hpp"
 
 namespace mono::interp {

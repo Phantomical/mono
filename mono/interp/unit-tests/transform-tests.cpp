@@ -9,7 +9,7 @@
 
 #include "harness.hpp"
 
-#include "mono/interp/mintops.h"
+#include "mono/interp/mintops.hpp"
 
 using namespace mono::test;
 

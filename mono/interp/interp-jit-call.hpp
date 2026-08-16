@@ -6,7 +6,7 @@
  * \brief Calling a method body the compiled tier has already built.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "mono/utils/mono-error-internals.h"
 
 namespace mono::interp {

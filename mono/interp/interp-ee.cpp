@@ -7,7 +7,7 @@
 #include "config.h"
 
 #include "interp-callbacks.hpp"
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-context.hpp"
 
 #include <mono/metadata/mono-debug.h>
@@ -118,8 +118,7 @@ static const MonoEECallbacks mono_interp_callbacks = {
 
 } // namespace mono::interp
 
-/* Outside the namespace: interp-internals.h declares these for C, so the
- * definitions have to match the C linkage that gives them. */
+/* Outside the namespace, because interp-internals.hpp declares them there. */
 
 using namespace mono::interp;
 

@@ -6,7 +6,7 @@
 #include "config.h"
 
 #include "interp-callbacks.hpp"
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-context.hpp"
 
 #include <mono/mini/mini-runtime.h>

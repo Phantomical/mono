@@ -5,10 +5,10 @@
  * \brief Calling what the runtime implements in C rather than in IL.
  */
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/interp/interp-frame.hpp"
 #include "mono/interp/interp-icall.hpp"
-#include "mono/interp/interp-internals.h"
+#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp-stackval.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/metadata/object-internals.h"

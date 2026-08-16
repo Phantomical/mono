@@ -1,6 +1,6 @@
 #include "config.h"
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/exception.h"
 #include "mono/metadata/icall-decl.h"

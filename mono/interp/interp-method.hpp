@@ -6,7 +6,7 @@
  * \brief Getting a method ready to run, and counting its way to tier 1.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-lmf.hpp"
 #include "interp-trace.hpp"
 

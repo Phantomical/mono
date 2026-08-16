@@ -1,7 +1,7 @@
 #ifndef __MONO_INTERP_FRAME_DATA_HPP__
 #define __MONO_INTERP_FRAME_DATA_HPP__
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 
 namespace mono::interp {
 

@@ -2,9 +2,7 @@
 #define __MONO_INTERP_TRANSFORM_H__
 #include <mono/mini/mini-runtime.h>
 #include <mono/metadata/seq-points-data.h>
-#include "interp-internals.h"
-
-MONO_BEGIN_DECLS
+#include "interp-internals.hpp"
 
 #define INTERP_INST_FLAG_SEQ_POINT_NONEMPTY_STACK 1
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY 2
@@ -218,7 +216,5 @@ mono_test_interp_method_compute_offsets (TransformData *td, InterpMethod *imetho
 /* debugging aid */
 void
 mono_interp_print_td_code (TransformData *td);
-
-MONO_END_DECLS
 
 #endif /* __MONO_INTERP_TRANSFORM_H__ */

@@ -6,7 +6,7 @@
 #include "config.h"
 
 #include "interp-callbacks.hpp"
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-method.hpp"
 #include "interp-trace.hpp"
 #include "interp-entry.hpp"
@@ -236,8 +236,7 @@ interp_invalidate_transformed (MonoDomain *domain)
 
 } // namespace mono::interp
 
-/* Outside the namespace: interp-internals.h declares these for C, so the
- * definitions have to match the C linkage that gives them. */
+/* Outside the namespace, because interp-internals.hpp declares them there. */
 
 using namespace mono::interp;
 

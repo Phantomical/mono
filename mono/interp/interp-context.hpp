@@ -6,7 +6,7 @@
  * \brief The per-thread state the engine runs on.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 
 namespace mono::interp {
 

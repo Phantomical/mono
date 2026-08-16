@@ -5,9 +5,9 @@
  * \brief Leaving a frame: the return opcodes and the tail-position jmp.
  */
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/interp/interp-frame.hpp"
-#include "mono/interp/interp-internals.h"
+#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp-method.hpp"
 #include "mono/interp/interp-stackval.hpp"
 #include "mono/interp/interp-trace.hpp"

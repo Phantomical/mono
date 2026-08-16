@@ -11,8 +11,6 @@
 #include <mono/metadata/handle.h>
 #include "interp.h"
 
-MONO_BEGIN_DECLS
-
 #define MINT_TYPE_I1 0
 #define MINT_TYPE_U1 1
 #define MINT_TYPE_I2 2
@@ -532,7 +530,5 @@ enum_type:
 	}
 	return -1;
 }
-
-MONO_END_DECLS
 
 #endif /* __MONO_INTERP_INTERNALS_H__ */

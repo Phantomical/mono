@@ -6,7 +6,7 @@
  */
 
 #include "interp-call.hpp"
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-jit-call.hpp"
 #include "interp-lmf.hpp"
 #include "interp-stackval.hpp"

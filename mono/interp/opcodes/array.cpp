@@ -1,7 +1,7 @@
 #include "config.h"
 #include "mono/interp/interp-object.hpp"
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/class.h"

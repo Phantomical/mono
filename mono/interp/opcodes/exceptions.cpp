@@ -1,9 +1,9 @@
 #include "config.h"
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/metadata/exception.h"
 #include "mono/metadata/object-internals.h"
-#include "mono/interp/interp-internals.h"
+#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp-entry.hpp"
 #include "mono/interp/interp-icall.hpp"
 #include "mono/interp/interp-pinvoke.hpp"

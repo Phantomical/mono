@@ -4,7 +4,7 @@
  * heavy performance impact.
  */
 
-#include "interp-intrins.h"
+#include "interp-intrins.hpp"
 
 #include <mono/metadata/object-internals.h>
 #include <mono/metadata/gc-internals.h>

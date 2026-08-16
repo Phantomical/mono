@@ -6,7 +6,7 @@
  * \brief Declares the answers this engine gives to mini's execution-engine hooks.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "mono/mini/ee.h"
 
 namespace mono::interp {

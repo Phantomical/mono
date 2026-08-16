@@ -1,7 +1,7 @@
 #include "config.h"
 #include "mono/interp/interp-frame.hpp"
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/exception.h"
 #include "mono/interp/interp.hpp"

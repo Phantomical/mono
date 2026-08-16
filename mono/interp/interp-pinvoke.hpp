@@ -6,7 +6,7 @@
  * \brief Calling out of the interpreter into native code.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 
 namespace mono::interp {
 

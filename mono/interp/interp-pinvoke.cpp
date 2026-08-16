@@ -6,7 +6,7 @@
 #include "config.h"
 
 #include "interp-callbacks.hpp"
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-frame.hpp"
 #include "interp-stackval.hpp"
 #include "interp-call.hpp"

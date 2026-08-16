@@ -4,9 +4,7 @@
 #include <glib.h>
 #include <mono/metadata/object.h>
 
-#include "interp-internals.h"
-
-MONO_BEGIN_DECLS
+#include "interp-internals.hpp"
 
 void
 interp_intrins_marvin_block (guint32 *pp0, guint32 *pp1);
@@ -25,7 +23,5 @@ interp_intrins_u32_to_decstr (guint32 value, MonoArray *cache, MonoVTable *vtabl
 
 mono_u
 interp_intrins_widen_ascii_to_utf16 (guint8 *pAsciiBuffer, mono_unichar2 *pUtf16Buffer, mono_u elementCount);
-
-MONO_END_DECLS
 
 #endif /* __MONO_INTERP_INTRINSICS_H__ */

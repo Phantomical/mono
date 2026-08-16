@@ -1,7 +1,7 @@
 #include "config.h"
 
 #include "mono/metadata/profiler-private.h"
-#include "mono/interp/interp-internals.h"
+#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp-frame.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/mini/jit-icalls.h"

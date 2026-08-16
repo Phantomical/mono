@@ -5,8 +5,8 @@
  * \brief The opcodes that hand a call to the compiled tier.
  */
 
-#include "mintops.h"
-#include "mono/interp/interp-internals.h"
+#include "mintops.hpp"
+#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp-jit-call.hpp"
 #include "mono/interp/interp-stackval.hpp"
 #include "mono/interp/interp.hpp"

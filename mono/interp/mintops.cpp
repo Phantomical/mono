@@ -8,7 +8,7 @@
  */
 #include <glib.h>
 #include <stdio.h>
-#include "mintops.h"
+#include "mintops.hpp"
 
 // This, instead of an array of pointers, to optimize away a pointer and a relocation per string.
 struct MonoInterpOpnameCharacters {

@@ -2,7 +2,7 @@
 #include "mono/interp/interp-method.hpp"
 #include "mono/interp/interp-stackval.hpp"
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/class.h"
 #include "mono/metadata/object-forward.h"

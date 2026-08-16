@@ -5,7 +5,7 @@
  * \brief Printing a method's frames and opcodes as it executes.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-trace.hpp"
 #include "interp.hpp"
 

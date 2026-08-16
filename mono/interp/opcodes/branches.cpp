@@ -1,7 +1,7 @@
 #include "config.h"
 
 #include "glib.h"
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/interp/interp.hpp"
 #include <cmath>
 

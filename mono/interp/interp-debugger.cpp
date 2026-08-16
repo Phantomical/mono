@@ -6,11 +6,11 @@
 #include "config.h"
 
 #include "interp-callbacks.hpp"
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-stackval.hpp"
 #include "interp-call.hpp"
 #include "interp-imethod.hpp"
-#include "mintops.h"
+#include "mintops.hpp"
 
 #include <mono/metadata/debug-internals.h>
 #include <mono/metadata/mono-debug.h>

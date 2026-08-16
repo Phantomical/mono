@@ -3,7 +3,7 @@
 #include "config.h"
 #include <glib.h>
 
-#include "mono/interp/mintops.h"
+#include "mono/interp/mintops.hpp"
 
 #include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/class-inlines.h>

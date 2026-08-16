@@ -5,8 +5,8 @@
  * \brief Moving values between the interpreter's locals, and taking their address.
  */
 
-#include "mintops.h"
-#include "mono/interp/interp-internals.h"
+#include "mintops.hpp"
+#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp.hpp"
 
 #include <cstring>

@@ -6,7 +6,7 @@
  * \brief Questions the opcodes ask about an object or an enum value.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "interp-stackval.hpp"
 
 #include <mono/metadata/class-internals.h>

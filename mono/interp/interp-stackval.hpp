@@ -6,7 +6,7 @@
  * \brief Moving a value between the interpreter stack and memory.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/object-internals.h>

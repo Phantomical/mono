@@ -6,7 +6,7 @@
  * \brief What a call site works out before it hands over a frame.
  */
 
-#include "interp-internals.h"
+#include "interp-internals.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/marshal.h"
 #include "mono/metadata/object-internals.h"

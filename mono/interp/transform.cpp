@@ -28,10 +28,10 @@
 #include <mono/mini/mini.h>
 #include <mono/mini/mini-runtime.h>
 
-#include "mintops.h"
-#include "interp-internals.h"
+#include "mintops.hpp"
+#include "interp-internals.hpp"
 #include "interp.h"
-#include "transform.h"
+#include "transform.hpp"
 
 #include "mono/llvm/runtime.h"
 

@@ -1,7 +1,7 @@
 #include "config.h"
 #include "mono/interp/interp-stackval.hpp"
 
-#include "mintops.h"
+#include "mintops.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/interp/interp.hpp"
