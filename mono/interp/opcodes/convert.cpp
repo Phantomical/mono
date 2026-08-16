@@ -191,8 +191,6 @@ IMPL_CONV_OVF (MINT_CONV_OVF_I4_R4, gint32, float, !(val >= -2147483648.0f && va
                (gint32) val);
 IMPL_CONV_OVF (MINT_CONV_OVF_I4_R8, gint32, double,
                outside (val, (double) G_MININT32 - 1, (double) G_MAXINT32 + 1), (gint32) val);
-IMPL_CONV_OVF (MINT_CONV_OVF_I4_UN_R8, gint32, double, (val < 0) || (val > G_MAXINT32),
-               (gint32) val);
 
 IMPL_CONV_OVF (MINT_CONV_OVF_U4_I4, gint32, gint32, val < 0, val);
 IMPL_CONV_OVF (MINT_CONV_OVF_U4_I8, gint32, gint64, (val < 0) || (val > G_MAXUINT32),
@@ -203,10 +201,6 @@ IMPL_CONV_OVF (MINT_CONV_OVF_U4_R8, gint32, double, outside (val, -1.0, (double)
                (guint32) val);
 
 IMPL_CONV_OVF (MINT_CONV_OVF_I8_U8, gint64, guint64, val > G_MAXINT64, val);
-IMPL_CONV_OVF (MINT_CONV_OVF_I8_UN_R4, gint64, float,
-               (val < 0) || std::isnan (val) || std::trunc (val) != (gint64) val, (gint64) val);
-IMPL_CONV_OVF (MINT_CONV_OVF_I8_UN_R8, gint64, double,
-               (val < 0) || std::isnan (val) || std::trunc (val) != (gint64) val, (gint64) val);
 
 IMPL_CONV_OVF (MINT_CONV_OVF_U8_I4, guint64, gint32, val < 0, val);
 IMPL_CONV_OVF (MINT_CONV_OVF_U8_I8, guint64, gint64, val < 0, val);

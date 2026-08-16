@@ -20,13 +20,6 @@
 //	test_1_conv_u4_from_mp_truncates
 //	test_1_conv_i4_from_mp_truncates
 //	test_1_conv_ovf_u4_from_mp
-//
-// Three more tests disagree between the engines on correct CIL. The interpreter
-// is wrong in all three, and the comment on each says why:
-//
-//	test_1_conv_ovf_i_un_from_i8_traps
-//	test_1_conv_ovf_i_un_from_r8_negative
-//	test_1_conv_ovf_i8_un_from_r8_negative
 
 .assembly extern mscorlib { }
 .assembly 'conv-il' { }
@@ -305,13 +298,25 @@
 	}
 
 	// A float has no unsigned reading, so .un changes nothing here: -1.0
-	// truncates to -1, which a native int holds. The interpreter reads .un as
-	// a demand that the source be positive and throws instead.
+	// truncates to -1, which a native int holds.
 	.method public static int32 test_1_conv_ovf_i_un_from_r8_negative () cil managed
 	{
 		.maxstack 3
 		ldc.r8 -1.0
 		call float64 ConvIL::IdR8 (float64)
+		conv.ovf.i.un
+		conv.i8
+		ldc.i8 -1
+		ceq
+		ret
+	}
+
+	// The float32 source of the same conversion, which had no arm at all.
+	.method public static int32 test_1_conv_ovf_i_un_from_r4_negative () cil managed
+	{
+		.maxstack 3
+		ldc.r4 -1.0
+		call float32 ConvIL::IdR4 (float32)
 		conv.ovf.i.un
 		conv.i8
 		ldc.i8 -1
@@ -358,8 +363,7 @@
 	}
 
 	// Read as unsigned the source is 2^64-1, which a signed native int cannot
-	// hold. The interpreter emits a check for this only where a native int is
-	// four bytes wide, so on amd64 the conversion passes the value through.
+	// hold.
 	.method public static int32 test_1_conv_ovf_i_un_from_i8_traps () cil managed
 	{
 		.maxstack 3
@@ -396,8 +400,7 @@
 		ret
 	}
 
-	// The float reading of .un again: -1.0 truncates to -1, which an int64
-	// holds. The interpreter throws.
+	// The float reading of .un again: -1.0 truncates to -1, which an int64 holds.
 	.method public static int32 test_1_conv_ovf_i8_un_from_r8_negative () cil managed
 	{
 		.maxstack 3
@@ -405,6 +408,40 @@
 		call float64 ConvIL::IdR8 (float64)
 		conv.ovf.i8.un
 		ldc.i8 -1
+		ceq
+		ret
+	}
+
+	// The same source under the unsigned destination, which -1 does not fit.
+	.method public static int32 test_1_conv_ovf_u8_un_from_r8_negative_throws () cil managed
+	{
+		.maxstack 3
+		.locals init (int32 result)
+		.try {
+			ldc.r8 -1.0
+			call float64 ConvIL::IdR8 (float64)
+			conv.ovf.u8.un
+			pop
+			leave IL_done
+		} catch [mscorlib]System.OverflowException {
+			pop
+			ldc.i4.1
+			stloc.0
+			leave IL_done
+		}
+	IL_done:
+		ldloc.0
+		ret
+	}
+
+	// A value past int64 max that an unsigned destination still holds.
+	.method public static int32 test_1_conv_ovf_u8_un_from_large_r8 () cil managed
+	{
+		.maxstack 3
+		ldc.r8 1e19
+		call float64 ConvIL::IdR8 (float64)
+		conv.ovf.u8.un
+		ldc.i8 0x8AC7230489E80000
 		ceq
 		ret
 	}

@@ -825,15 +825,19 @@ interp_add_conv (TransformData *td, StackInfo *sp, InterpInst *prev_ins, int typ
  * Gives an int32 on the stack the width an eight-byte destination reads it at.
  *
  * The int32 wrote four bytes of the stack slot and the store takes all eight, so
- * the value needs a sign extension first. ECMA-335 Table III.9 names the
- * extension for a call argument, and the other assignments follow it. A C#
- * compiler converts first, so only hand-written IL gets here.
+ * the value needs an extension first. ECMA-335 Table III.9 names it for a call
+ * argument, and the other assignments follow: a native unsigned int is filled
+ * with zeroes and everything else with the sign. A C# compiler converts first,
+ * so only hand-written IL gets here.
  */
 static void
-widen_i4_to_i8 (TransformData *td, StackInfo *sp, int mt)
+widen_i4_to_i8 (TransformData *td, StackInfo *sp, MonoType *type)
 {
-	if (mt == MINT_TYPE_I8 && sp->type == STACK_TYPE_I4)
-		interp_add_conv (td, sp, NULL, STACK_TYPE_I8, MINT_CONV_I8_I4);
+	if (sp->type != STACK_TYPE_I4 || mint_type (type) != MINT_TYPE_I8)
+		return;
+
+	int op = mini_get_underlying_type (type)->type == MONO_TYPE_U ? MINT_CONV_I8_U4 : MINT_CONV_I8_I4;
+	interp_add_conv (td, sp, NULL, STACK_TYPE_I8, op);
 }
 
 /*
@@ -3302,7 +3306,7 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 
 	/* The callee reads each argument at the width its parameter is declared at. */
 	for (i = 0; i < csignature->param_count; i++)
-		widen_i4_to_i8 (td, td->sp - csignature->param_count + i, mint_type (csignature->params [i]));
+		widen_i4_to_i8 (td, td->sp - csignature->param_count + i, csignature->params [i]);
 
 	guint32 tos_offset = get_tos_offset (td);
 	td->sp -= csignature->param_count + !!csignature->hasthis;
@@ -4177,7 +4181,7 @@ emit_convert (TransformData *td, MonoType *ftype)
 		coerce_fp (td, td->sp - 1, fp_stack_type (ftype));
 		break;
 	default:
-		widen_i4_to_i8 (td, td->sp - 1, mint_type (ftype));
+		widen_i4_to_i8 (td, td->sp - 1, ftype);
 		break;
 	}
 }
@@ -4373,9 +4377,9 @@ handle_stind (TransformData *td, int op, gboolean *volatile_)
 	if (op == MINT_STIND_R4 || op == MINT_STIND_R8)
 		coerce_fp (td, td->sp - 1, op == MINT_STIND_R4 ? STACK_TYPE_R4 : STACK_TYPE_R8);
 	if (op == MINT_STIND_I)
-		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I);
+		widen_i4_to_i8 (td, td->sp - 1, mono_get_int_type ());
 	if (op == MINT_STIND_I8)
-		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I8);
+		widen_i4_to_i8 (td, td->sp - 1, m_class_get_byval_arg (mono_defaults.int64_class));
 	if (*volatile_) {
 		interp_emit_memory_barrier (td, MONO_MEMORY_BARRIER_REL);
 		*volatile_ = FALSE;
@@ -4407,9 +4411,9 @@ handle_stelem (TransformData *td, int op)
 	if (op == MINT_STELEM_R4 || op == MINT_STELEM_R8)
 		coerce_fp (td, td->sp - 1, op == MINT_STELEM_R4 ? STACK_TYPE_R4 : STACK_TYPE_R8);
 	if (op == MINT_STELEM_I)
-		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I);
+		widen_i4_to_i8 (td, td->sp - 1, mono_get_int_type ());
 	if (op == MINT_STELEM_I8)
-		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I8);
+		widen_i4_to_i8 (td, td->sp - 1, m_class_get_byval_arg (mono_defaults.int64_class));
 	narrow_index (td, td->sp - 2);
 	interp_add_ins (td, op);
 	td->sp -= 3;
@@ -6282,58 +6286,88 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			break;
 		}
 		case CEE_CONV_OVF_I_UN:
-		case CEE_CONV_OVF_U_UN:
+		case CEE_CONV_OVF_U_UN: {
 			CHECK_STACK (td, 1);
+			gboolean to_signed = *td->ip == CEE_CONV_OVF_I_UN;
+			int op = -1;
+
 			switch (td->sp [-1].type) {
-			case STACK_TYPE_R8:
-#if SIZEOF_VOID_P == 8
-				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I, MINT_CONV_OVF_I8_UN_R8);
-#else
-				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I, MINT_CONV_OVF_I4_UN_R8);
-#endif
-				break;
-			case STACK_TYPE_I8:
-#if SIZEOF_VOID_P == 4
-				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I, MINT_CONV_OVF_I4_U8);
-#endif
-				break;
-			case STACK_TYPE_I4:
-#if SIZEOF_VOID_P == 8
-				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I, MINT_CONV_I8_U4);
-#elif SIZEOF_VOID_P == 4
-				if (*td->ip == CEE_CONV_OVF_I_UN)
-					interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I, MINT_CONV_OVF_I4_U4);
-#endif
-				break;
-			default:
-				g_assert_not_reached ();
-				break;
-			}
-			++td->ip;
-			break;
-		case CEE_CONV_OVF_I8_UN:
-		case CEE_CONV_OVF_U8_UN:
-			CHECK_STACK (td, 1);
-			switch (td->sp [-1].type) {
-			case STACK_TYPE_R8:
-				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I8, MINT_CONV_OVF_I8_UN_R8);
-				break;
-			case STACK_TYPE_I8:
-				if (*td->ip == CEE_CONV_OVF_I8_UN)
-					interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I8, MINT_CONV_OVF_I8_U8);
-				break;
-			case STACK_TYPE_I4:
-				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I8, MINT_CONV_I8_U4);
-				break;
+			/*
+			 * ECMA-335 III.3.29 gives .un no reading on a float source, so these
+			 * check the destination's own range, as the form without .un does.
+			 */
 			case STACK_TYPE_R4:
-				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I8, MINT_CONV_OVF_I8_UN_R4);
+#if SIZEOF_VOID_P == 8
+				op = to_signed ? MINT_CONV_OVF_I8_R4 : MINT_CONV_OVF_U8_R4;
+#else
+				op = to_signed ? MINT_CONV_OVF_I4_R4 : MINT_CONV_OVF_U4_R4;
+#endif
+				break;
+			case STACK_TYPE_R8:
+#if SIZEOF_VOID_P == 8
+				op = to_signed ? MINT_CONV_OVF_I8_R8 : MINT_CONV_OVF_U8_R8;
+#else
+				op = to_signed ? MINT_CONV_OVF_I4_R8 : MINT_CONV_OVF_U4_R8;
+#endif
+				break;
+			case STACK_TYPE_I8:
+#if SIZEOF_VOID_P == 8
+				/* Read unsigned, an int64 reaches past what a signed native int holds. */
+				if (to_signed)
+					op = MINT_CONV_OVF_I8_U8;
+#else
+				op = MINT_CONV_OVF_I4_U8;
+#endif
+				break;
+			case STACK_TYPE_I4:
+#if SIZEOF_VOID_P == 8
+				op = MINT_CONV_I8_U4;
+#else
+				if (to_signed)
+					op = MINT_CONV_OVF_I4_U4;
+#endif
 				break;
 			default:
 				g_assert_not_reached ();
 				break;
 			}
+
+			if (op != -1)
+				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I, op);
 			++td->ip;
 			break;
+		}
+		case CEE_CONV_OVF_I8_UN:
+		case CEE_CONV_OVF_U8_UN: {
+			CHECK_STACK (td, 1);
+			gboolean to_signed = *td->ip == CEE_CONV_OVF_I8_UN;
+			int op = -1;
+
+			switch (td->sp [-1].type) {
+			/* The float source reads the same way it does for the native int forms. */
+			case STACK_TYPE_R4:
+				op = to_signed ? MINT_CONV_OVF_I8_R4 : MINT_CONV_OVF_U8_R4;
+				break;
+			case STACK_TYPE_R8:
+				op = to_signed ? MINT_CONV_OVF_I8_R8 : MINT_CONV_OVF_U8_R8;
+				break;
+			case STACK_TYPE_I8:
+				if (to_signed)
+					op = MINT_CONV_OVF_I8_U8;
+				break;
+			case STACK_TYPE_I4:
+				op = MINT_CONV_I8_U4;
+				break;
+			default:
+				g_assert_not_reached ();
+				break;
+			}
+
+			if (op != -1)
+				interp_add_conv (td, td->sp - 1, NULL, STACK_TYPE_I8, op);
+			++td->ip;
+			break;
+		}
 		case CEE_BOX: {
 			CHECK_STACK (td, 1);
 			token = read32 (td->ip + 1);

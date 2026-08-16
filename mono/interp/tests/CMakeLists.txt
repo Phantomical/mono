@@ -150,15 +150,6 @@ endforeach()
 # Methods each engine answers wrongly, with the defect named against each.  A
 # fix turns the test red, which is why they are listed rather than deleted.
 set(MONO_INTERP_TESTS_XFAIL
-  # An initonly static is folded into the bytecode that reads it.
-  "Statics:test_99_initonly_write_is_seen"
-  # conv.ovf.i.un checks the range only on a 32-bit target, so an int64 that
-  # does not fit a native int passes.
-  "ConvIL:test_1_conv_ovf_i_un_from_i8_traps"
-  # ECMA-335 III.3.29 gives .un no reading on a float source, and the engines
-  # read a negative one differently.
-  "ConvIL:test_1_conv_ovf_i_un_from_r8_negative"
-  "ConvIL:test_1_conv_ovf_i8_un_from_r8_negative"
   # A store to a remote field goes through managed code, and the exception it
   # raises is lost crossing the interpreted frame back.
   "OpcodesTail:test_1_proxy_write_that_fails"
@@ -169,6 +160,11 @@ set(MONO_INTERP_TESTS_XFAIL
   "EntryTail:test_4_dynamic_invoke_over_pinvoke_struct_return")
 
 set(MONO_INTERP_TESTS_JIT_XFAIL
+  # ECMA-335 Table III.9 fills a native unsigned int with zeroes, where the
+  # backend sign extends as it does for a native int.
+  "NativeInt:test_1_stsfld_zero_extends"
+  "NativeInt:test_1_call_argument_zero_extends"
+  "NativeInt:test_1_ret_zero_extends"
   # IL ECMA-335 does not allow, which the translator refuses and the
   # interpreter runs anyway.
   "Refusals:test_5_constrained_on_call"

@@ -8,6 +8,7 @@
 .class public auto ansi NativeInt extends [mscorlib]System.Object
 {
 	.field public static native int slot
+	.field public static native unsigned int uslot
 	.field public native int held
 
 	.method public specialname rtspecialname instance void .ctor () cil managed
@@ -279,6 +280,56 @@
 		}
 	IL_done:
 		ldloc.0
+		ret
+	}
+
+	// A native unsigned int location takes zeroes rather than the sign, so -1
+	// reaches it as 0xFFFFFFFF.  ECMA-335 Table III.9 splits the two.
+
+	.method public static int32 test_1_stsfld_zero_extends () cil managed
+	{
+		.maxstack 2
+		ldc.i4.m1
+		stsfld native unsigned int NativeInt::uslot
+		ldsfld native unsigned int NativeInt::uslot
+		conv.i8
+		ldc.i8 0xFFFFFFFF
+		ceq
+		ret
+	}
+
+	.method public static int32 TakesNativeUnsigned (native unsigned int given) cil managed noinlining
+	{
+		.maxstack 3
+		ldarg.0
+		conv.i8
+		ldc.i8 0xFFFFFFFF
+		ceq
+		ret
+	}
+
+	.method public static int32 test_1_call_argument_zero_extends () cil managed
+	{
+		.maxstack 1
+		ldc.i4.m1
+		call int32 NativeInt::TakesNativeUnsigned (native unsigned int)
+		ret
+	}
+
+	.method public static native unsigned int NarrowUnsignedReturn () cil managed noinlining
+	{
+		.maxstack 1
+		ldc.i4.m1
+		ret
+	}
+
+	.method public static int32 test_1_ret_zero_extends () cil managed
+	{
+		.maxstack 3
+		call native unsigned int NativeInt::NarrowUnsignedReturn ()
+		conv.i8
+		ldc.i8 0xFFFFFFFF
+		ceq
 		ret
 	}
 
