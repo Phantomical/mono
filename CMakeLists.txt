@@ -74,6 +74,13 @@ include(MonoToolsRuntime)
 include(MonoManaged)
 include(MonoCorpus)
 
+# Coverage instrumentation, applied after the configure checks so that none of
+# them is compiled with it.
+if(MONO_ENABLE_COVERAGE)
+  add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+  add_link_options(-fprofile-instr-generate)
+endif()
+
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.h.in"
                "${CMAKE_CURRENT_BINARY_DIR}/config.h")
 
@@ -165,7 +172,9 @@ endif()
 #   check        the fast set -- unit tests, eglib, mini regression, the LLVM
 #                tier, and the runtime one-offs. Seconds, not minutes.
 #   check-all    everything except the stress suites and the minutes-long ones.
-#   check-interp the interpreter's own tests under mono/interp/unit-tests.
+#   check-interp the interpreter's own tests under mono/interp.
+#   check-interp-jit the same managed programs with the interpreter turned off,
+#                which is how a tier seam divergence shows up as a test.
 #
 # The heavy labels (runtime, gshared, sgen, interp, slow, stress, acceptance)
 # are opt-in:
@@ -201,6 +210,15 @@ if(BUILD_TESTING)
   add_custom_target(check-interp
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
             -L interp-unit
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+
+  # A test that answers differently here than under `check-interp` is the two
+  # engines disagreeing about the same IL.
+  add_custom_target(check-interp-jit
+    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+            -L interp-jit
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)

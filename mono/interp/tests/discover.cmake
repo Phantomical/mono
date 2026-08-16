@@ -19,14 +19,15 @@ cmake_minimum_required(VERSION 3.16)
 # mono_discover_test_methods_impl(
 #     CMAKE_EXE <cmake> RUNNER <exe> ASSEMBLY <dll> CTEST_FILE <out>
 #     NAME_PREFIX <str> NAME_SUFFIX <str> WORKING_DIR <dir> TIMEOUT <seconds>
-#     [PROPERTIES <prop>;<value>...] [ENVIRONMENT <VAR=value>...])
+#     [PROPERTIES <prop>;<value>...] [ENVIRONMENT <VAR=value>...]
+#     [XFAIL <Class:method>...])
 #
 # cmake is named rather than taken from CMAKE_COMMAND, which ctest leaves unset
 # in the context this runs in.
 function(mono_discover_test_methods_impl)
   cmake_parse_arguments(ARG ""
     "CMAKE_EXE;RUNNER;ASSEMBLY;CTEST_FILE;NAME_PREFIX;NAME_SUFFIX;WORKING_DIR;TIMEOUT"
-    "PROPERTIES;ENVIRONMENT" ${ARGN})
+    "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
 
   # Every generated token is bracket-quoted, so a property value with spaces in
   # it -- SKIP_REGULAR_EXPRESSION, mostly -- survives being written out and read
@@ -78,11 +79,15 @@ function(mono_discover_test_methods_impl)
     endif()
 
     set(_name "${ARG_NAME_PREFIX}${_test}${ARG_NAME_SUFFIX}")
+    set(_xfail "")
+    if("${_test}" IN_LIST ARG_XFAIL)
+      set(_xfail " WILL_FAIL [==[TRUE]==]")
+    endif()
     string(APPEND _text
       "add_test([==[${_name}]==]${_env} [==[${ARG_RUNNER}]==]"
       " [==[${ARG_ASSEMBLY}]==] [==[${_test}]==])\n"
       "set_tests_properties([==[${_name}]==] PROPERTIES"
-      " WORKING_DIRECTORY [==[${ARG_WORKING_DIR}]==]${_props})\n")
+      " WORKING_DIRECTORY [==[${ARG_WORKING_DIR}]==]${_props}${_xfail})\n")
   endforeach()
 
   file(WRITE "${ARG_CTEST_FILE}" "${_text}")

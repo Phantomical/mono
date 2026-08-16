@@ -47,26 +47,33 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # ---------------------------------------------------------------------------
 # mono_add_test_methods(
 #     ASSEMBLY <path> NAME_PREFIX <str> [NAME_SUFFIX <str>] [TIMEOUT <seconds>]
-#     [PROPERTIES <prop> <value>...] [ENVIRONMENT <VAR=value>...])
+#     [PROPERTIES <prop> <value>...] [ENVIRONMENT <VAR=value>...]
+#     [XFAIL <Class:method>...])
 #
 # The name parts and the environment go together: registering one assembly twice
 # under two of each is what would run the same methods on a second engine.
+#
+# A method named in XFAIL is registered with WILL_FAIL, so it reports as passing
+# while it returns the wrong answer and starts failing the day it is fixed.  The
+# list is per registration: a divergence is usually wrong on one engine only.
 function(mono_add_test_methods)
   cmake_parse_arguments(ARG ""
-    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT" "PROPERTIES;ENVIRONMENT" ${ARGN})
+    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
 
   if(NOT ARG_TIMEOUT)
     set(ARG_TIMEOUT 60)
   endif()
 
-  # The generated files are named after the arm, which keeps a second
-  # registration of the same assembly from overwriting the first.
-  string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _key "${ARG_NAME_PREFIX}${ARG_NAME_SUFFIX}")
+  # The generated files are named after the assembly and the arm together, so
+  # neither a second assembly nor a second engine overwrites the first.
+  cmake_path(GET ARG_ASSEMBLY STEM _stem)
+  string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _key
+         "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}")
   set(_include "${CMAKE_CURRENT_BINARY_DIR}/${_key}_include.cmake")
   set(_tests   "${CMAKE_CURRENT_BINARY_DIR}/${_key}_tests.cmake")
 
   set(_args "")
-  foreach(_a PROPERTIES ENVIRONMENT)
+  foreach(_a PROPERTIES ENVIRONMENT XFAIL)
     if(ARG_${_a})
       string(APPEND _args "      ${_a} [==[${ARG_${_a}}]==]\n")
     endif()
@@ -111,13 +118,45 @@ set(MONO_CORPUS_OUTPUTS "")
 file(GLOB _sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" *.cs)
 mono_corpus_cs(interp-tests.dll LIBRARY SOURCES ${_sources})
 
-# A threshold of zero never promotes, so a method entered at tier 0 is still
-# interpreted however many times a test calls it.
-mono_add_test_methods(
-  ASSEMBLY "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll"
-  NAME_PREFIX "interp-tests/"
-  PROPERTIES LABELS interp-unit
-  ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-              "MONO_LLVM_JIT_TIER1_THRESHOLD=0")
+# IL shapes C# does not emit -- a merge point whose predecessors leave different
+# widths, `jmp`, an explicit `tail.`, the type-unsafe prefixes.  ilasm takes one
+# source at a time, so each of these is an assembly of its own.
+file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" il/*.il)
+set(_il_assemblies "")
+foreach(_il IN LISTS _il_sources)
+  cmake_path(GET _il STEM _stem)
+  mono_corpus_il("${_stem}.dll" "${_il}" LIBRARY)
+  list(APPEND _il_assemblies "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.dll")
+endforeach()
+
+# Methods each engine answers wrongly, with the defect named against each.  A
+# fix turns the test red, which is why they are listed rather than deleted.
+set(MONO_INTERP_TESTS_XFAIL "")
+set(MONO_INTERP_TESTS_JIT_XFAIL "")
+
+foreach(_assembly "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll" ${_il_assemblies})
+  # A threshold of zero never promotes, so a method entered at tier 0 is still
+  # interpreted however many times a test calls it.
+  mono_add_test_methods(
+    ASSEMBLY "${_assembly}"
+    NAME_PREFIX "interp/"
+    PROPERTIES LABELS interp-unit
+    XFAIL ${MONO_INTERP_TESTS_XFAIL}
+    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
+                "MONO_LLVM_JIT_TIER1_THRESHOLD=0")
+
+  # The same methods with no interpreter under them, so each is compiled at tier
+  # 1 on the synchronous path.  A method that answers differently here than it
+  # does above says the engines disagree about its IL.  This arm is a second
+  # opinion on the same programs rather than more coverage of the interpreter,
+  # so `check-interp` leaves it out.
+  mono_add_test_methods(
+    ASSEMBLY "${_assembly}"
+    NAME_PREFIX "jit/"
+    PROPERTIES LABELS interp-jit
+    XFAIL ${MONO_INTERP_TESTS_JIT_XFAIL}
+    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
+                "MONO_LLVM_JIT_TIER0=0")
+endforeach()
 
 mono_corpus_target(interp-test-suites DEPENDS interp-test-runner)

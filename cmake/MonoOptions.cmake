@@ -30,6 +30,9 @@ option(MONO_STATIC_MONO           "Link libmini into the mono binaries staticall
 option(MONO_ENABLE_CRASH_REPORTING "Build the structured crash reporter"    ON)
 option(MONO_CRASH_PRIVACY         "Scrub private data from crash dumps"     ON)
 
+# --- instrumentation --------------------------------------------------------
+option(MONO_ENABLE_COVERAGE "Instrument the whole native build for llvm-cov" OFF)
+
 # --- helper libraries -------------------------------------------------------
 option(MONO_ENABLE_MONO_NATIVE  "Build libmono-native (System.Native)"      ON)
 option(MONO_ENABLE_SUPPORT      "Build libMonoPosixHelper / libMonoSupportW" ON)
