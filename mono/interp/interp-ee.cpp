@@ -16,6 +16,7 @@
 #include <mono/utils/mono-counters.h>
 #include <mono/utils/mono-tls-inline.h>
 
+/* Read from transform.c, so these stay where its extern declarations put them. */
 /*
  * List of classes whose methods will be executed by transitioning to JITted code.
  * Used for testing.
@@ -27,6 +28,8 @@ int mono_interp_opt = INTERP_OPT_DEFAULT;
 gboolean mono_interp_ss_enabled;
 /* The transform's default verbose level. */
 int mono_interp_traceopt = 0;
+
+namespace mono::interp {
 
 static gboolean interp_init_done = FALSE;
 
@@ -112,6 +115,13 @@ static const MonoEECallbacks mono_interp_callbacks = {
 	MONO_EE_CALLBACKS
 };
 
+} // namespace mono::interp
+
+/* Outside the namespace: interp-internals.h declares these for C, so the
+ * definitions have to match the C linkage that gives them. */
+
+using namespace mono::interp;
+
 void
 mono_ee_interp_init (const char *opts)
 {
@@ -131,3 +141,4 @@ mono_ee_interp_init (const char *opts)
 
 	register_interp_stats ();
 }
+

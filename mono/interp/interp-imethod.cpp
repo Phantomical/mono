@@ -17,7 +17,7 @@
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-threads.h>
 
-using mono::interp::lookup_method_pointer;
+namespace mono::interp {
 
 InterpMethod *
 lookup_imethod (MonoDomain *domain, MonoMethod *method)
@@ -55,51 +55,6 @@ interp_get_remoting_invoke (MonoMethod *method, gpointer addr, MonoError *error)
 	g_assert_not_reached ();
 	return NULL;
 #endif
-}
-
-InterpMethod*
-mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error)
-{
-	InterpMethod *imethod;
-	MonoJitDomainInfo *info;
-	MonoMethodSignature *sig;
-	int i;
-
-	error_init (error);
-
-	info = domain_jit_info (domain);
-	mono_domain_jit_code_hash_lock (domain);
-	imethod = (InterpMethod*)mono_internal_hash_table_lookup (&info->interp_code_hash, method);
-	mono_domain_jit_code_hash_unlock (domain);
-	if (imethod)
-		return imethod;
-
-	sig = mono_method_signature_internal (method);
-
-	imethod = (InterpMethod*)m_method_alloc0 (domain, method, sizeof (InterpMethod));
-	imethod->method = method;
-	imethod->domain = domain;
-	imethod->param_count = sig->param_count;
-	imethod->hasthis = sig->hasthis;
-	imethod->vararg = sig->call_convention == MONO_CALL_VARARG;
-	imethod->code_type = IMETHOD_CODE_UNKNOWN;
-	if (imethod->method->string_ctor)
-		imethod->rtype = m_class_get_byval_arg (mono_defaults.string_class);
-	else
-		imethod->rtype = mini_get_underlying_type (sig->ret);
-	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
-	imethod->param_types = (MonoType**)m_method_alloc0 (domain, method, sizeof (MonoType*) * sig->param_count);
-	for (i = 0; i < sig->param_count; ++i)
-		imethod->param_types [i] = mini_get_underlying_type (sig->params [i]);
-
-	mono_domain_jit_code_hash_lock (domain);
-	if (!mono_internal_hash_table_lookup (&info->interp_code_hash, method))
-		mono_internal_hash_table_insert (&info->interp_code_hash, method, imethod);
-	mono_domain_jit_code_hash_unlock (domain);
-
-	imethod->prof_flags = mono_profiler_get_call_instrumentation_flags (imethod->method);
-
-	return imethod;
 }
 
 /*
@@ -276,4 +231,56 @@ interp_invalidate_transformed (MonoDomain *domain)
 
 	if (need_stw_restart)
 		mono_gc_restart_world ();
+}
+
+} // namespace mono::interp
+
+/* Outside the namespace: interp-internals.h declares these for C, so the
+ * definitions have to match the C linkage that gives them. */
+
+using namespace mono::interp;
+
+InterpMethod*
+mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error)
+{
+	InterpMethod *imethod;
+	MonoJitDomainInfo *info;
+	MonoMethodSignature *sig;
+	int i;
+
+	error_init (error);
+
+	info = domain_jit_info (domain);
+	mono_domain_jit_code_hash_lock (domain);
+	imethod = (InterpMethod*)mono_internal_hash_table_lookup (&info->interp_code_hash, method);
+	mono_domain_jit_code_hash_unlock (domain);
+	if (imethod)
+		return imethod;
+
+	sig = mono_method_signature_internal (method);
+
+	imethod = (InterpMethod*)m_method_alloc0 (domain, method, sizeof (InterpMethod));
+	imethod->method = method;
+	imethod->domain = domain;
+	imethod->param_count = sig->param_count;
+	imethod->hasthis = sig->hasthis;
+	imethod->vararg = sig->call_convention == MONO_CALL_VARARG;
+	imethod->code_type = IMETHOD_CODE_UNKNOWN;
+	if (imethod->method->string_ctor)
+		imethod->rtype = m_class_get_byval_arg (mono_defaults.string_class);
+	else
+		imethod->rtype = mini_get_underlying_type (sig->ret);
+	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
+	imethod->param_types = (MonoType**)m_method_alloc0 (domain, method, sizeof (MonoType*) * sig->param_count);
+	for (i = 0; i < sig->param_count; ++i)
+		imethod->param_types [i] = mini_get_underlying_type (sig->params [i]);
+
+	mono_domain_jit_code_hash_lock (domain);
+	if (!mono_internal_hash_table_lookup (&info->interp_code_hash, method))
+		mono_internal_hash_table_insert (&info->interp_code_hash, method, imethod);
+	mono_domain_jit_code_hash_unlock (domain);
+
+	imethod->prof_flags = mono_profiler_get_call_instrumentation_flags (imethod->method);
+
+	return imethod;
 }

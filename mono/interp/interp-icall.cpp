@@ -17,11 +17,7 @@
 #include <mono/mini/jit-icalls.h>
 #include <mono/mini/mini-runtime.h>
 
-using mono::interp::frame_stamp_ordinal;
-using mono::interp::interp_pop_lmf;
-using mono::interp::stackval_from_data;
-using mono::interp::stackval_to_data;
-using mono::interp::ves_array_calculate_index;
+namespace mono::interp {
 
 static MonoException*
 ves_array_get (InterpFrame *frame, stackval *sp, stackval *retval, MonoMethodSignature *sig, gboolean safe)
@@ -220,6 +216,13 @@ init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *
 		sp = STACK_ADD_BYTES (sp, sv_size);
 	}
 }
+
+} // namespace mono::interp
+
+/* Outside the namespace: interp-internals.h declares these for C, so the
+ * definitions have to match the C linkage that gives them. */
+
+using namespace mono::interp;
 
 // Do not inline in case order of frame addresses matters.
 MONO_NEVER_INLINE MonoException*

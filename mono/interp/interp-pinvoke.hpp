@@ -8,6 +8,8 @@
 
 #include "interp-internals.h"
 
+namespace mono::interp {
+
 /*
  * Calls the native function addr with the arguments in sp, marshalled the way sig
  * describes, and writes the result back over sp. imethod is the pinvoke method the
@@ -22,5 +24,7 @@
 gpointer ves_pinvoke_method (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV addr,
                              ThreadContext *context, InterpFrame *parent_frame, stackval *sp,
                              gboolean save_last_error, gpointer *cache);
+
+} // namespace mono::interp
 
 #endif

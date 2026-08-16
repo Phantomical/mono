@@ -12,18 +12,11 @@
 
 #include <mono/mini/mini-runtime.h>
 
+namespace mono::interp {
+
 typedef struct {
 	InterpFrame *current;
 } StackIter;
-
-gpointer
-mono_interp_invocation_anchor (ThreadContext *context)
-{
-	if (!context->handle_mark_count)
-		return NULL;
-
-	return context->handle_marks [context->handle_mark_count - 1].frame;
-}
 
 gpointer
 interp_frame_get_ip (MonoInterpFrameHandle frame)
@@ -169,4 +162,20 @@ interp_frame_iter_next (MonoInterpStackIter *iter, StackFrameInfo *frame)
 	stack_iter->current = iframe->parent;
 
 	return TRUE;
+}
+
+} // namespace mono::interp
+
+/* Outside the namespace: interp-internals.h declares these for C, so the
+ * definitions have to match the C linkage that gives them. */
+
+using namespace mono::interp;
+
+gpointer
+mono_interp_invocation_anchor (ThreadContext *context)
+{
+	if (!context->handle_mark_count)
+		return NULL;
+
+	return context->handle_marks [context->handle_mark_count - 1].frame;
 }

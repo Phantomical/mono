@@ -18,9 +18,7 @@
 #include <mono/mini/mini-runtime.h>
 #include <mono/utils/mono-logger-internals.h>
 
-using mono::interp::get_virtual_method;
-using mono::interp::imethod_for_entry;
-using mono::interp::lookup_method_pointer;
+namespace mono::interp {
 
 #ifdef MONO_ARCH_HAVE_INTERP_ENTRY_TRAMPOLINE
 static MonoFuncV mono_native_to_interp_trampoline = NULL;
@@ -546,3 +544,5 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 
 	return addr;
 }
+
+} // namespace mono::interp

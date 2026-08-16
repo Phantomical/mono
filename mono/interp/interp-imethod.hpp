@@ -8,8 +8,12 @@
 
 #include "interp-internals.h"
 
+namespace mono::interp {
+
 /* Answers only for a method the engine already knows; mono_interp_get_imethod ()
  * is the one that makes an entry. */
 InterpMethod *lookup_imethod (MonoDomain *domain, MonoMethod *method);
+
+} // namespace mono::interp
 
 #endif

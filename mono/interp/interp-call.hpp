@@ -118,7 +118,6 @@ compute_arg_offset (MonoMethodSignature *sig, int index, int prev_offset)
 	}
 }
 
-
 inline guint32 *
 initialize_arg_offsets (InterpMethod *imethod)
 {
@@ -147,7 +146,6 @@ initialize_arg_offsets (InterpMethod *imethod)
 	return imethod->arg_offsets;
 }
 
-
 inline guint32
 get_arg_offset_fast (InterpMethod *imethod, int index)
 {
@@ -159,7 +157,6 @@ get_arg_offset_fast (InterpMethod *imethod, int index)
 	g_assert (arg_offsets);
 	return arg_offsets[index];
 }
-
 
 inline guint32
 get_arg_offset (InterpMethod *imethod, MonoMethodSignature *sig, int index)

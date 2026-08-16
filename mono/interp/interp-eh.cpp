@@ -12,6 +12,8 @@
 
 #include <mono/mini/mini-runtime.h>
 
+namespace mono::interp {
+
 /*
  * interp_release_abandoned_handles:
  *
@@ -103,3 +105,5 @@ interp_get_resume_state (const MonoJitTlsData *jit_tls, gboolean *has_resume_sta
 	*interp_frame = context->handler_frame;
 	*handler_ip = (gpointer)context->handler_ip;
 }
+
+} // namespace mono::interp

@@ -9,6 +9,8 @@
 #include "interp-internals.h"
 #include "mono/utils/mono-error-internals.h"
 
+namespace mono::interp {
+
 /* The address that stands for imethod, minted if this is the first ask. */
 gpointer entry_for_imethod (InterpMethod *imethod, MonoError *error);
 
@@ -18,5 +20,7 @@ gpointer entry_for_imethod (InterpMethod *imethod, MonoError *error);
  * so both engines have to name the same address for a method.
  */
 gpointer escaping_entry_for_imethod (InterpMethod *imethod, MonoError *error);
+
+} // namespace mono::interp
 
 #endif

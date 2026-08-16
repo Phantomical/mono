@@ -17,11 +17,7 @@
 #include <mono/mini/aot-runtime.h>
 #include <mono/mini/mini-runtime.h>
 
-using mono::interp::frame_root_code_owner;
-using mono::interp::frame_stamp_ordinal;
-using mono::interp::interp_pop_lmf;
-using mono::interp::stackval_from_data;
-using mono::interp::stackval_to_data;
+namespace mono::interp {
 
 #ifndef MONO_ARCH_HAVE_INTERP_PINVOKE_TRAMP
 static InterpMethodArguments*
@@ -99,7 +95,6 @@ build_args_from_sig (MonoMethodSignature *sig, InterpFrame *frame)
 
 	if (margs->flen > INTERP_ICALL_TRAMP_FARGS)
 		g_error ("build_args_from_sig: TODO, allocate fregs: %d\n", margs->flen);
-
 
 	size_t int_i = 0;
 	size_t int_f = 0;
@@ -364,3 +359,5 @@ ves_pinvoke_method (
 exit_pinvoke:
 	return NULL;
 }
+
+} // namespace mono::interp

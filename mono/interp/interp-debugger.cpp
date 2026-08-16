@@ -16,15 +16,7 @@
 #include <mono/metadata/mono-debug.h>
 #include <mono/mini/mini-runtime.h>
 
-using mono::interp::get_arg_offset;
-using mono::interp::get_arg_offset_fast;
-using mono::interp::stackval_from_data;
-using mono::interp::stackval_to_data;
-
-using mono::interp::get_arg_offset;
-using mono::interp::get_arg_offset_fast;
-using mono::interp::stackval_from_data;
-using mono::interp::stackval_to_data;
+namespace mono::interp {
 
 void
 interp_frame_arg_to_data (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index, gpointer data)
@@ -242,3 +234,5 @@ interp_stop_single_stepping (void)
 {
 	mono_interp_ss_enabled = FALSE;
 }
+
+} // namespace mono::interp

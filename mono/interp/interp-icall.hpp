@@ -8,6 +8,8 @@
 
 #include "interp-internals.h"
 
+namespace mono::interp {
+
 /*
  * Calls the native function ptr with the arguments in sp, and writes the result
  * back over sp [0]. op is the MINT_ICALL_* opcode naming its arity and return
@@ -33,5 +35,7 @@ MonoException *ves_imethod (InterpFrame *frame, MonoMethod *method, MonoMethodSi
  * arglist must have room for the whole variable part plus its cookie.
  */
 void init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *arglist);
+
+} // namespace mono::interp
 
 #endif

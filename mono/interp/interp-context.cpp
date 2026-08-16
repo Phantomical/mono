@@ -15,8 +15,7 @@
 #include <mono/mini/mini-runtime.h>
 #include <mono/utils/mono-tls-inline.h>
 
-using mono::interp::frame_data_allocator_free;
-using mono::interp::frame_data_allocator_init;
+namespace mono::interp {
 
 static MonoNativeTlsKey thread_context_id;
 
@@ -33,46 +32,6 @@ set_context (ThreadContext *context)
 
 	/* jit_tls assumes ownership of 'context' */
 	jit_tls->interp_context = context;
-}
-
-ThreadContext *
-mono_interp_get_context (void)
-{
-	ThreadContext *context = (ThreadContext *) mono_native_tls_get_value (thread_context_id);
-	if (context == NULL) {
-		context = g_new0 (ThreadContext, 1);
-		context->stack_start = (guchar*)mono_valloc (0, INTERP_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
-		context->stack_pointer = context->stack_start;
-
-		context->frame_stack_start = (guchar*)mono_valloc (0, INTERP_FRAME_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
-		context->frame_stack_pointer = context->frame_stack_start;
-
-		frame_data_allocator_init (&context->data_stack, 8192);
-		/* Make sure all data is initialized before publishing the context */
-		mono_compiler_barrier ();
-		set_context (context);
-	}
-	return context;
-}
-
-int
-mono_interp_push_handle_mark (ThreadContext *context, HandleStackMark *mark, InterpFrame *frame)
-{
-	int depth = context->handle_mark_count;
-
-	if (G_UNLIKELY (depth == context->handle_mark_capacity)) {
-		context->handle_mark_capacity = context->handle_mark_capacity ? context->handle_mark_capacity * 2 : 32;
-		context->handle_marks = g_renew (InterpHandleMark, context->handle_marks, context->handle_mark_capacity);
-	}
-
-	context->handle_marks [depth].mark = *mark;
-	/* Compared against the stack pointer a resume restores, so it has to be in the frame. */
-	context->handle_marks [depth].frame = (gpointer)mark;
-	context->handle_marks [depth].frame_watermark = context->frame_stack_pointer;
-	context->handle_marks [depth].first_ordinal = frame->ordinal;
-	context->handle_mark_count = depth + 1;
-
-	return depth;
 }
 
 void
@@ -114,13 +73,6 @@ void
 context_set_current_frame (ThreadContext *context, InterpFrame *frame)
 {
 	context->current_frame = frame;
-}
-
-void
-mono_interp_error_cleanup (MonoError* error)
-{
-	mono_error_cleanup (error); /* FIXME: don't swallow the error */
-	error_init_reuse (error); // one instruction, so this function is good inline candidate
 }
 
 void
@@ -179,4 +131,58 @@ interp_context_init (void)
 {
 	mono_native_tls_alloc (&thread_context_id, NULL);
 	set_context (NULL);
+}
+
+} // namespace mono::interp
+
+/* Outside the namespace: interp-internals.h declares these for C, so the
+ * definitions have to match the C linkage that gives them. */
+
+using namespace mono::interp;
+
+ThreadContext *
+mono_interp_get_context (void)
+{
+	ThreadContext *context = (ThreadContext *) mono_native_tls_get_value (thread_context_id);
+	if (context == NULL) {
+		context = g_new0 (ThreadContext, 1);
+		context->stack_start = (guchar*)mono_valloc (0, INTERP_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
+		context->stack_pointer = context->stack_start;
+
+		context->frame_stack_start = (guchar*)mono_valloc (0, INTERP_FRAME_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
+		context->frame_stack_pointer = context->frame_stack_start;
+
+		frame_data_allocator_init (&context->data_stack, 8192);
+		/* Make sure all data is initialized before publishing the context */
+		mono_compiler_barrier ();
+		set_context (context);
+	}
+	return context;
+}
+
+int
+mono_interp_push_handle_mark (ThreadContext *context, HandleStackMark *mark, InterpFrame *frame)
+{
+	int depth = context->handle_mark_count;
+
+	if (G_UNLIKELY (depth == context->handle_mark_capacity)) {
+		context->handle_mark_capacity = context->handle_mark_capacity ? context->handle_mark_capacity * 2 : 32;
+		context->handle_marks = g_renew (InterpHandleMark, context->handle_marks, context->handle_mark_capacity);
+	}
+
+	context->handle_marks [depth].mark = *mark;
+	/* Compared against the stack pointer a resume restores, so it has to be in the frame. */
+	context->handle_marks [depth].frame = (gpointer)mark;
+	context->handle_marks [depth].frame_watermark = context->frame_stack_pointer;
+	context->handle_marks [depth].first_ordinal = frame->ordinal;
+	context->handle_mark_count = depth + 1;
+
+	return depth;
+}
+
+void
+mono_interp_error_cleanup (MonoError* error)
+{
+	mono_error_cleanup (error); /* FIXME: don't swallow the error */
+	error_init_reuse (error); // one instruction, so this function is good inline candidate
 }

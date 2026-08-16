@@ -12,6 +12,8 @@
 #include <mono/metadata/object-internals.h>
 #include <mono/utils/mono-threads.h>
 
+namespace mono::interp {
+
 #define DEBUG_INTERP 0
 
 #if DEBUG_INTERP
@@ -145,3 +147,5 @@ debug_enter (InterpFrame *frame, int *tracing)
 #define DEBUG_LEAVE()
 
 #endif
+
+} // namespace mono::interp

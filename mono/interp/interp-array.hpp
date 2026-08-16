@@ -12,7 +12,6 @@
 
 namespace mono::interp {
 
-
 inline gint32
 ves_array_calculate_index (MonoArray *ao, stackval *sp, gboolean safe)
 {
