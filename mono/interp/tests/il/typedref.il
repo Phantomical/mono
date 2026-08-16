@@ -1,7 +1,6 @@
 // Typed references and the memory prefixes.  C# reaches none of these.
 
 .assembly extern mscorlib { }
-.assembly 'typedref' { }
 
 .class public sequential ansi TypedRefPair extends [mscorlib]System.ValueType
 {

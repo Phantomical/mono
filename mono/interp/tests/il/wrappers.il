@@ -10,7 +10,6 @@
 // wrapper the runtime builds around each signature, not the native function.
 
 .assembly extern mscorlib { }
-.assembly 'wrappers' { }
 
 .class public sequential ansi sealed WrappersPair extends [mscorlib]System.ValueType
 {

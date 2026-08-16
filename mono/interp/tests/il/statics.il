@@ -8,7 +8,6 @@
 // call to it runs.
 
 .assembly extern mscorlib { }
-.assembly 'statics' { }
 
 .class public auto ansi Statics extends [mscorlib]System.Object
 {

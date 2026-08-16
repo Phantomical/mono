@@ -4,7 +4,6 @@
 // read with can disagree.
 
 .assembly extern mscorlib { }
-.assembly 'merge' { }
 
 .class public auto ansi Merge extends [mscorlib]System.Object
 {

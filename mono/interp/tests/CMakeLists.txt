@@ -1,13 +1,16 @@
 # The interpreter's managed tests.
 #
-# Each `.cs` under cs/ compiles to an assembly of static int methods named
-# test_<n>_<what>, the convention mono/mini's --regression harness reads, and
-# each of those methods becomes its own ctest test run in its own process by
-# runner.cpp.  A failure therefore names the method and the engine it ran on,
-# and --rerun-failed re-runs only what broke.
+# A static int method named test_<n>_<what> -- the convention mono/mini's
+# --regression harness reads -- becomes its own ctest test, run in its own
+# process by runner.cpp.  A failure therefore names the method and the engine it
+# ran on, and --rerun-failed re-runs only what broke.
+#
+# Every source under cs/ and il/ compiles to a netmodule, and the netmodules are
+# linked into one assembly.  A test can call a helper written in the other
+# language, and each arm is one discovery rather than one per file.
 #
 # Which methods exist is decided when ctest starts rather than at configure time
-# -- see discover.cmake -- so writing a new test means editing a `.cs` and
+# -- see discover.cmake -- so writing a new test means editing a source and
 # building, with no cmake step in between.
 
 if(NOT MONO_CORPUS_ENABLED)
@@ -50,7 +53,7 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # ---------------------------------------------------------------------------
 # mono_add_test_methods(
 #     ASSEMBLY <path> NAME_PREFIX <str> [NAME_SUFFIX <str>] [TIMEOUT <seconds>]
-#     [PROPERTIES <prop> <value>...] [ENVIRONMENT <VAR=value>...]
+#     [ONLY <regex>] [PROPERTIES <prop> <value>...] [ENVIRONMENT <VAR=value>...]
 #     [XFAIL <Class:method>...])
 #
 # The name parts and the environment go together: registering one assembly twice
@@ -65,7 +68,7 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # under whatever ran it.
 function(mono_add_test_methods)
   cmake_parse_arguments(ARG ""
-    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
+    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT;ONLY" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
 
   if(NOT ARG_TIMEOUT)
     set(ARG_TIMEOUT 60)
@@ -75,14 +78,14 @@ function(mono_add_test_methods)
   # neither a second assembly nor a second engine overwrites the first.
   cmake_path(GET ARG_ASSEMBLY STEM _stem)
   string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _key
-         "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}")
+         "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}${ARG_ONLY}")
   set(_include "${CMAKE_CURRENT_BINARY_DIR}/${_key}_include.cmake")
   set(_tests   "${CMAKE_CURRENT_BINARY_DIR}/${_key}_tests.cmake")
   # One per assembly, not per arm: this is the file the runtime start pays for.
   set(_list    "${CMAKE_CURRENT_BINARY_DIR}/${_stem}_methods.txt")
 
   set(_args "")
-  foreach(_a PROPERTIES ENVIRONMENT XFAIL)
+  foreach(_a PROPERTIES ENVIRONMENT XFAIL ONLY)
     if(ARG_${_a})
       string(APPEND _args "      ${_a} [==[${ARG_${_a}}]==]\n")
     endif()
@@ -129,23 +132,44 @@ endfunction()
 # ---------------------------------------------------------------------------
 # The suites
 # ---------------------------------------------------------------------------
-# One assembly out of every `.cs` in cs/.  The class a method sits in is what
-# groups it, so a file per subject costs nothing and helpers can be shared
-# between them.
+# One assembly, linked out of a netmodule per source: all of cs/ through csc,
+# and each `.il` through ilasm, which takes one source at a time.  A test can
+# then call a helper written in the other language, and a whole suite is one
+# discovery rather than one per file.
+#
+# The modules sit beside the assembly and are loaded from there.
 set(MONO_CORPUS_OUTPUTS "")
+set(_modules "")
+
 file(GLOB _sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" cs/*.cs)
-mono_corpus_cs(interp-tests.dll LIBRARY SOURCES ${_sources})
+mono_corpus_cs(interp-tests-cs.netmodule MODULE DEBUG SOURCES ${_sources})
+list(APPEND _modules "${CMAKE_CURRENT_BINARY_DIR}/interp-tests-cs.netmodule")
 
 # IL shapes C# does not emit -- a merge point whose predecessors leave different
-# widths, `jmp`, an explicit `tail.`, the type-unsafe prefixes.  ilasm takes one
-# source at a time, so each of these is an assembly of its own.
+# widths, `jmp`, an explicit `tail.`, the type-unsafe prefixes.
 file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" il/*.il)
-set(_il_assemblies "")
+
+# A magic type is one mono recognizes by its assembly's name, so these two
+# cannot be modules: a module carries no Assembly row, and a type in one is
+# never magic.  Merging them would leave every test passing -- the managed
+# bodies are real implementations -- with
+# interp_handle_magic_type_intrinsics () no longer reached at all.
+set(_own_assembly il/folding.il il/magic-conv.il)
+set(_assemblies "")
+
 foreach(_il IN LISTS _il_sources)
   cmake_path(GET _il STEM _stem)
-  mono_corpus_il("${_stem}.dll" "${_il}" LIBRARY DEBUG)
-  list(APPEND _il_assemblies "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.dll")
+  if("${_il}" IN_LIST _own_assembly)
+    mono_corpus_il("${_stem}.dll" "${_il}" LIBRARY DEBUG)
+    list(APPEND _assemblies "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.dll")
+  else()
+    mono_corpus_il("${_stem}.netmodule" "${_il}" MODULE DEBUG)
+    list(APPEND _modules "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.netmodule")
+  endif()
 endforeach()
+
+mono_corpus_link(interp-tests.dll MODULES ${_modules})
+list(APPEND _assemblies "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll")
 
 # Methods each engine answers wrongly, with the defect named against each.  A
 # fix turns the test red, which is why they are listed rather than deleted.
@@ -201,7 +225,7 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
 
 set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
-foreach(_assembly "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll" ${_il_assemblies})
+foreach(_assembly IN LISTS _assemblies)
   # A threshold of zero never promotes, so a method entered at tier 0 is still
   # interpreted however many times a test calls it.
   mono_add_test_methods(
@@ -248,12 +272,11 @@ endforeach()
 
 # Everything that instruments the interpreter, which nothing else here turns on:
 # sequence points, the transform's tracing, the tracing the interpreter emits
-# around a call, and the coverage instrumentation it emits per basic block.  The IL suites alone -- this is about a configuration rather
-# than about the programs, and the C# suite is ten times the size for the same
-# paths.  Same label as the ordinary interpreted arm, since it is more of the
+# around a call, and the coverage instrumentation it emits per basic block.
+# Same label as the ordinary interpreted arm, since it is more of the
 # interpreter rather than a second opinion on it; `ctest -R ^instrumented/`
 # selects it on its own.
-foreach(_assembly IN LISTS _il_assemblies)
+foreach(_assembly IN LISTS _assemblies)
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "instrumented/"
@@ -287,11 +310,12 @@ endforeach()
 
 # A wrapper is compiled whatever tier its target runs in, so the opcodes only a
 # wrapper carries never reach the transform.  `interp-only=<class>` hands every
-# method of a class to the interpreter, wrappers included.  One assembly, whose
-# methods are all P/Invokes chosen for the signatures the wrappers come out of.
+# method of a class to the interpreter, wrappers included.  That option names one
+# class, so this arm runs the methods of that class and nothing else.
 mono_add_test_methods(
-  ASSEMBLY "${CMAKE_CURRENT_BINARY_DIR}/wrappers.dll"
+  ASSEMBLY "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll"
   NAME_PREFIX "wrappers/"
+  ONLY "^WrappersIL:"
   PROPERTIES LABELS interp-unit
   ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
               "MONO_LLVM_JIT_TIER1_THRESHOLD=0"

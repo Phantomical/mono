@@ -15,7 +15,6 @@
 // fold them away.
 
 .assembly extern mscorlib { }
-.assembly 'elements-il' { }
 
 .class public sequential ansi ElementsILPair extends [mscorlib]System.ValueType
 {

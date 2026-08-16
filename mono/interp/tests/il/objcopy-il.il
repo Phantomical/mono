@@ -2,7 +2,6 @@
 // to choose.
 
 .assembly extern mscorlib { }
-.assembly 'objcopy-il' { }
 
 .class public sequential ansi sealed ObjCopyOne extends [mscorlib]System.ValueType
 {

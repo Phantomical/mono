@@ -1,7 +1,6 @@
 // Argument and local addresses, and the return forms that go with a localloc.
 
 .assembly extern mscorlib { }
-.assembly 'locals-il' { }
 
 .class public sequential ansi sealed LocalsPair extends [mscorlib]System.ValueType
 {

@@ -2,7 +2,6 @@
 // reason to emit.
 
 .assembly extern mscorlib { }
-.assembly 'misc-il' { }
 
 .class public sequential ansi MiscPoint extends [mscorlib]System.ValueType
 {

@@ -2,7 +2,6 @@
 // multi-dimensional Get/Set/Address methods spelled out.
 
 .assembly extern mscorlib { }
-.assembly 'arrays-il' { }
 
 .class public auto ansi ArraysIL extends [mscorlib]System.Object
 {

@@ -3,7 +3,6 @@
 // back to, a refusal is what the test reports.
 
 .assembly extern mscorlib { }
-.assembly 'refusals' { }
 
 .class public sequential ansi sealed RefusalCounter extends [mscorlib]System.ValueType
 {

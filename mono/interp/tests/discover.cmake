@@ -68,11 +68,14 @@ endfunction()
 # mono_discover_test_methods_impl(
 #     CMAKE_EXE <cmake> RUNNER <exe> ASSEMBLY <dll> LIST_FILE <in>
 #     CTEST_FILE <out> NAME_PREFIX <str> NAME_SUFFIX <str> WORKING_DIR <dir>
-#     [PROPERTIES <prop>;<value>...] [ENVIRONMENT <VAR=value>...]
+#     [ONLY <regex>] [PROPERTIES <prop>;<value>...] [ENVIRONMENT <VAR=value>...]
 #     [XFAIL <Class:method>...])
+#
+# ONLY keeps the methods whose "Class:name" matches it.  One assembly holds every
+# suite, so this is what scopes an arm that is about a few of them.
 function(mono_discover_test_methods_impl)
   cmake_parse_arguments(ARG ""
-    "CMAKE_EXE;RUNNER;ASSEMBLY;LIST_FILE;CTEST_FILE;NAME_PREFIX;NAME_SUFFIX;WORKING_DIR"
+    "CMAKE_EXE;RUNNER;ASSEMBLY;LIST_FILE;CTEST_FILE;NAME_PREFIX;NAME_SUFFIX;WORKING_DIR;ONLY"
     "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
 
   # Every generated token is bracket-quoted, so a property value with spaces in
@@ -110,6 +113,9 @@ function(mono_discover_test_methods_impl)
   foreach(_line IN LISTS _lines)
     string(STRIP "${_line}" _test)
     if(_test STREQUAL "")
+      continue()
+    endif()
+    if(ARG_ONLY AND NOT "${_test}" MATCHES "${ARG_ONLY}")
       continue()
     endif()
 

@@ -5,7 +5,6 @@
 // size without fields, which is what makes the case small enough to read.
 
 .assembly extern mscorlib { }
-.assembly 'limits' { }
 
 .class public sequential ansi sealed LimitsBlock extends [mscorlib]System.ValueType
 {

@@ -9,6 +9,8 @@
 #include <mono/metadata/image.h>
 #include <mono/metadata/loader-internals.h>
 
+MONO_BEGIN_DECLS
+
 char *
 mono_image_get_name_with_culture_if_needed (MonoImage *image);
 
@@ -29,5 +31,7 @@ mono_is_problematic_image (MonoImage *image);
 
 gboolean
 mono_is_problematic_file (const char *fname);
+
+MONO_END_DECLS
 
 #endif /* __MONO_METADATA_IMAGE_INTERNALS_H__ */

@@ -47,21 +47,33 @@ set(MONO_CORPUS_ILASM ${_host} "${MONO_CORPUS_BUILD_DIR}/ilasm.exe" -quiet)
 # Compile one C# corpus into the calling directory's binary dir, appending it to
 # MONO_CORPUS_OUTPUTS in the caller's scope.
 #
-#   mono_corpus_cs(<out> [LIBRARY] [DEBUG] SOURCES <src>... [REFS <dll>...])
+#   mono_corpus_cs(<out> [LIBRARY|MODULE] [DEBUG] SOURCES <src>... [REFS <dll>...])
 #
 # DEBUG emits a portable PDB next to the assembly, which is what lets the
 # runtime turn an IL offset back into a source line.
+#
+# MODULE compiles to a netmodule, which mono_corpus_link () puts into an
+# assembly.
 function(mono_corpus_cs out)
-  cmake_parse_arguments(ARG "LIBRARY;DEBUG" "" "SOURCES;REFS" ${ARGN})
+  cmake_parse_arguments(ARG "LIBRARY;MODULE;DEBUG" "" "SOURCES;REFS" ${ARGN})
   set(_extra "")
   set(_outputs "${CMAKE_CURRENT_BINARY_DIR}/${out}")
   if(ARG_LIBRARY)
     set(_extra -target:library)
   endif()
+  if(ARG_MODULE)
+    set(_extra -target:module)
+  endif()
   if(ARG_DEBUG)
-    list(APPEND _extra -debug:portable)
+    # mono derives the pdb name from the image by dropping a `.exe` or a `.dll`
+    # and nothing else, so a netmodule wants its extension kept.
     cmake_path(GET out STEM _stem)
-    list(APPEND _outputs "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.pdb")
+    set(_pdb "${CMAKE_CURRENT_BINARY_DIR}/${_stem}.pdb")
+    if(ARG_MODULE)
+      set(_pdb "${CMAKE_CURRENT_BINARY_DIR}/${out}.pdb")
+    endif()
+    list(APPEND _extra -debug:portable "-pdb:${_pdb}")
+    list(APPEND _outputs "${_pdb}")
   endif()
   set(_srcs "")
   foreach(_s IN LISTS ARG_SOURCES)
@@ -93,16 +105,31 @@ endfunction()
 
 # The same for an IL corpus.
 #
-#   mono_corpus_il(<out> <source.il> [LIBRARY] [DEBUG])
+#   mono_corpus_il(<out> <source.il> [LIBRARY|MODULE] [DEBUG])
 #
 # DEBUG writes an .mdb beside the assembly, which is what lets the runtime turn
 # an IL offset back into a line and therefore what the transform needs before it
 # will emit a sequence point.
+#
+# ilasm has no switch for a netmodule: what it writes is decided by the source,
+# which gets an Assembly row only where it carries a `.assembly` directive.
+# MODULE therefore says what the source already does, so that a caller naming a
+# `.netmodule` and a source declaring an assembly is a configure-time error
+# rather than a link that fails much later.
 function(mono_corpus_il out source)
-  cmake_parse_arguments(ARG "LIBRARY;DEBUG" "" "" ${ARGN})
+  cmake_parse_arguments(ARG "LIBRARY;MODULE;DEBUG" "" "" ${ARGN})
   set(_extra "")
   if(ARG_LIBRARY)
     set(_extra -dll)
+  endif()
+  if(ARG_MODULE)
+    set(_extra -dll)
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/${source}" _manifest
+         REGEX "^[ \t]*\\.assembly[ \t]+[^e]")
+    if(_manifest)
+      message(FATAL_ERROR
+        "${source} declares an assembly, so ilasm cannot make a module of it: ${_manifest}")
+    endif()
   endif()
   if(ARG_DEBUG)
     list(APPEND _extra -debug)
@@ -116,6 +143,32 @@ function(mono_corpus_il out source)
             "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}" mcs
     COMMENT "ILASM ${out}"
+    VERBATIM)
+  set(MONO_CORPUS_OUTPUTS
+      "${MONO_CORPUS_OUTPUTS};${CMAKE_CURRENT_BINARY_DIR}/${out}" PARENT_SCOPE)
+endfunction()
+
+# Link netmodules into one assembly.
+#
+#   mono_corpus_link(<out> MODULES <mod>...)
+#
+# csc takes the assembly's name from the output file and its content from the
+# modules, so no source is compiled here. The modules stay on disk beside the
+# assembly and the runtime reads them from there, which is why they are outputs
+# of this directory rather than of a temporary one.
+#
+# A type defined in a module is not in the assembly's own image. Anything keyed
+# on the assembly name -- mono_class_is_magic_assembly () is the one that bites --
+# does not see it, so a suite that needs its own name stays its own assembly.
+function(mono_corpus_link out)
+  cmake_parse_arguments(ARG "" "" "MODULES" ${ARGN})
+  string(REPLACE ";" "," _addmodule "${ARG_MODULES}")
+  add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${out}"
+    COMMAND ${MONO_CORPUS_CSC} -target:library ${MONO_CORPUS_CSFLAGS}
+            "-out:${CMAKE_CURRENT_BINARY_DIR}/${out}" "-addmodule:${_addmodule}"
+    DEPENDS ${ARG_MODULES} mcs
+    COMMENT "LINK ${out}"
     VERBATIM)
   set(MONO_CORPUS_OUTPUTS
       "${MONO_CORPUS_OUTPUTS};${CMAKE_CURRENT_BINARY_DIR}/${out}" PARENT_SCOPE)

@@ -3,7 +3,6 @@
 // translator disagree about what happens when it does not.
 
 .assembly extern mscorlib { }
-.assembly 'nativeint' { }
 
 .class public auto ansi NativeInt extends [mscorlib]System.Object
 {

@@ -3,7 +3,6 @@
 // protected blocks.
 
 .assembly extern mscorlib { }
-.assembly 'eh-il' { }
 
 .class public auto ansi EhIL extends [mscorlib]System.Object
 {

@@ -23,6 +23,7 @@
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/domain-internals.h>
 #include <mono/metadata/exception.h>
+#include <mono/metadata/image-internals.h>
 #include <mono/metadata/loader.h>
 #include <mono/metadata/mono-debug.h>
 #include <mono/metadata/profiler.h>
@@ -36,6 +37,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -104,33 +106,75 @@ open_assembly (const char *path)
 	return mono_assembly_get_image_internal (assembly);
 }
 
-int
-list_tests (MonoImage *image)
+/// Every image a test method can be in: the one carrying the manifest, then one
+/// per row of its File table.
+///
+/// An assembly linked out of netmodules keeps its manifest in a module of its
+/// own, whose MethodDef table is empty. A module that will not load is left out
+/// rather than reported, since a test in it simply does not appear.
+std::vector<MonoImage *>
+assembly_images (MonoImage *manifest)
 {
-	int rows = mono_image_get_table_rows (image, MONO_TABLE_METHOD);
+	std::vector<MonoImage *> images { manifest };
+	int files = mono_image_get_table_rows (manifest, MONO_TABLE_FILE);
 
-	for (int i = 0; i < rows; i++) {
+	for (int i = 1; i <= files; i++) {
 		ERROR_DECL (error);
-		MonoMethod *method =
-			mono_get_method_checked (image, MONO_TOKEN_METHOD_DEF | (i + 1), NULL, NULL, error);
+		MonoImage *module = mono_image_load_file_for_image_checked (manifest, i, error);
 
-		if (method == nullptr) {
+		if (module == nullptr) {
 			mono_error_cleanup (error);
 			continue;
 		}
 
-		if (is_test_method (method))
-			printf ("%s\n", qualified_name (method).c_str ());
+		/*
+		 * The assembly load hook opens symbols for the image carrying the
+		 * manifest and for no other, so a module's .mdb is never read. Without
+		 * it the transform emits no sequence point, and a suite run with
+		 * MONO_DEBUG=gen-seq-points passes while testing nothing.
+		 */
+		mono_debug_open_image_from_memory (module, NULL, 0);
+		images.push_back (module);
+	}
+
+	return images;
+}
+
+int
+list_tests (MonoImage *manifest)
+{
+	for (MonoImage *image : assembly_images (manifest)) {
+		int rows = mono_image_get_table_rows (image, MONO_TABLE_METHOD);
+
+		for (int i = 0; i < rows; i++) {
+			ERROR_DECL (error);
+			MonoMethod *method =
+				mono_get_method_checked (image, MONO_TOKEN_METHOD_DEF | (i + 1), NULL, NULL, error);
+
+			if (method == nullptr) {
+				mono_error_cleanup (error);
+				continue;
+			}
+
+			if (is_test_method (method))
+				printf ("%s\n", qualified_name (method).c_str ());
+		}
 	}
 
 	return 0;
 }
 
 int
-run_test (MonoImage *image, const char *name)
+run_test (MonoImage *manifest, const char *name)
 {
 	MonoMethodDesc *desc = mono_method_desc_new (name, TRUE);
-	MonoMethod *method = mono_method_desc_search_in_image (desc, image);
+	MonoMethod *method = nullptr;
+
+	for (MonoImage *image : assembly_images (manifest)) {
+		method = mono_method_desc_search_in_image (desc, image);
+		if (method != nullptr)
+			break;
+	}
 
 	mono_method_desc_free (desc);
 

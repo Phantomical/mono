@@ -12,7 +12,6 @@
 // A wrong index then gives a wrong answer, rather than two errors that cancel.
 
 .assembly extern mscorlib { }
-.assembly 'generate-il' { }
 
 .class public sequential ansi GenerateILPair extends [mscorlib]System.ValueType
 {

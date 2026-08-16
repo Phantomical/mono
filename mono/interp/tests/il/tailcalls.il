@@ -4,7 +4,6 @@
 // the two apart. What these check is that the answer is right either way.
 
 .assembly extern mscorlib { }
-.assembly 'tailcalls' { }
 
 .class public auto ansi TailCalls extends [mscorlib]System.Object
 {

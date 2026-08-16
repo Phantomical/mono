@@ -3,7 +3,6 @@
 // branch reached from an empty block.
 
 .assembly extern mscorlib { }
-.assembly 'bblocks' { }
 
 .class public auto ansi BBlocks extends [mscorlib]System.Object
 {

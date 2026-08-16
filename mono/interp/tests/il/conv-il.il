@@ -22,7 +22,6 @@
 //	test_1_conv_ovf_u4_from_mp
 
 .assembly extern mscorlib { }
-.assembly 'conv-il' { }
 
 .class public auto ansi ConvIL extends [mscorlib]System.Object
 {

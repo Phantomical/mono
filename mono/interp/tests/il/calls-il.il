@@ -2,7 +2,6 @@
 // calli through a function pointer, and a vararg call with its arglist.
 
 .assembly extern mscorlib { }
-.assembly 'calls-il' { }
 
 .class public auto ansi CallsIL extends [mscorlib]System.Object
 {

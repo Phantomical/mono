@@ -7,10 +7,10 @@
 //
 // A type is magic only when its class is System.nint, System.nuint or
 // System.nfloat and the assembly that holds it has one of the names in
-// mono_class_is_magic_assembly ().  That name is the Assembly metadata row,
-// which csc takes from the output file.  Every `.cs` here compiles into
-// interp-tests.dll, so only an IL suite can get a magic name: ilasm takes it
-// from the `.assembly` directive below.
+// mono_class_is_magic_assembly ().  That name is the Assembly metadata row, and
+// a netmodule has none.  This file is therefore one of the two here that ilasm
+// builds into an assembly of its own, named by the `.assembly` directive below,
+// rather than into a module of interp-tests.dll.
 //
 // The managed bodies are real implementations.  The LLVM backend does not
 // replace these calls, so the jit arm runs every body the interpreter skips.  A
