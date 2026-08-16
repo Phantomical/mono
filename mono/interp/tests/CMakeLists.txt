@@ -251,6 +251,18 @@ foreach(_assembly IN LISTS _il_assemblies)
                 # would be megabytes.
                 "MONO_VERBOSE_METHOD=Countdown"
                 "MONO_INTERP_TESTS_TRACE=all")
+
+  # The interpreter with its own optimizations turned off, so the transform
+  # emits what it read rather than what it worked out.  The answers have to be
+  # the same either way, which is what this asks.
+  mono_add_test_methods(
+    ASSEMBLY "${_assembly}"
+    NAME_PREFIX "noopt/"
+    PROPERTIES LABELS interp-unit
+    XFAIL ${MONO_INTERP_TESTS_XFAIL}
+    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
+                "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+                "MONO_INTERP_TESTS_OPTS=-all")
 endforeach()
 
 mono_corpus_target(interp-test-suites DEPENDS interp-test-runner)

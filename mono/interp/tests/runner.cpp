@@ -29,6 +29,7 @@
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
 #include <mono/mini/jit.h>
+#include <mono/mini/mini-runtime.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -203,6 +204,15 @@ main (int argc, char *argv [])
 	 */
 	if (const char *trace = listing ? nullptr : g_getenv ("MONO_INTERP_TESTS_TRACE"))
 		mono_jit_set_trace_options (trace);
+
+	/*
+	 * The same for the interpreter's own options, which `mono` takes as
+	 * --interp=<opts>. "-all" turns off inlining, constant propagation, the
+	 * super instructions and the basic block merging, so the transform emits
+	 * what it read rather than what it worked out.
+	 */
+	if (const char *opts = g_getenv ("MONO_INTERP_TESTS_OPTS"))
+		mono_interp_opts_string = opts;
 
 	mono_jit_init_version_for_test_only ("mono-interp-tests", "v4.0.30319");
 
