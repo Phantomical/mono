@@ -123,10 +123,6 @@ endfunction()
 # ---------------------------------------------------------------------------
 # The suites
 # ---------------------------------------------------------------------------
-# One assembly, linked out of a netmodule per source: all of cs/ through csc,
-# and each `.il` through ilasm, which takes one source at a time.  A test can
-# then call a helper written in the other language, and a whole suite is one
-# discovery rather than one per file.
 set(MONO_CORPUS_OUTPUTS "")
 set(_modules "")
 
