@@ -414,9 +414,6 @@ method_entry (ThreadContext *context, InterpFrame *frame,
 #if DEBUG_INTERP
 	debug_enter (frame, out_tracing);
 #endif
-#if PROFILE_INTERP
-	frame->imethod->calls++;
-#endif
 
 	*out_ex = NULL;
 	if (!G_UNLIKELY (frame->imethod->transformed)) {

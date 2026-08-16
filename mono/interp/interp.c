@@ -172,23 +172,14 @@ static gpointer interp_create_method_pointer (MonoMethod *method, gboolean compi
 
 static InterpMethod* imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error);
 
-typedef void (*ICallMethod) (InterpFrame *frame);
-
 static MonoNativeTlsKey thread_context_id;
 
 #define DEBUG_INTERP 0
-#define COUNT_OPS 0
+
+int mono_interp_traceopt = 0;
 
 #if DEBUG_INTERP
-int mono_interp_traceopt = 2;
-/* If true, then we output the opcodes as we interpret them */
-static int global_tracing = 2;
-
 static int debug_indent_level = 0;
-
-static int break_on_method = 0;
-static int nested_trace = 0;
-static GList *db_methods = NULL;
 static char* dump_args (InterpFrame *inv);
 
 static void
@@ -201,24 +192,8 @@ output_indent (void)
 }
 
 static void
-db_match_method (gpointer data, gpointer user_data)
-{
-	MonoMethod *m = (MonoMethod*)user_data;
-	MonoMethodDesc *desc = (MonoMethodDesc*)data;
-
-	if (mono_method_desc_full_match (desc, m))
-		break_on_method = 1;
-}
-
-static void
 debug_enter (InterpFrame *frame, int *tracing)
 {
-	if (db_methods) {
-		g_list_foreach (db_methods, db_match_method, (gpointer)frame->imethod->method);
-		if (break_on_method)
-			*tracing = nested_trace ? (global_tracing = 2, 3) : 2;
-		break_on_method = 0;
-	}
 	if (*tracing) {
 		MonoMethod *method = frame->imethod->method;
 		char *mn, *args = dump_args (frame);
@@ -243,12 +218,10 @@ debug_enter (InterpFrame *frame, int *tracing)
 		g_print  (" => %s\n", args);	\
 		g_free (args);	\
 		debug_indent_level--;	\
-		if (tracing == 3) global_tracing = 0; \
 	}
 
 #else
 
-int mono_interp_traceopt = 0;
 #define DEBUG_LEAVE()
 
 #endif
@@ -556,11 +529,6 @@ get_virtual_method (InterpMethod *imethod, MonoVTable *vtable)
 	mono_error_cleanup (error); /* FIXME: don't swallow the error */
 	return virtual_imethod;
 }
-
-typedef struct {
-	InterpMethod *imethod;
-	InterpMethod *target_imethod;
-} InterpVTableEntry;
 
 // Returns the size it uses on the interpreter stack
 static int
@@ -1631,37 +1599,6 @@ mono_interp_invocation_anchor (ThreadContext *context)
 	return context->handle_marks [context->handle_mark_count - 1].frame;
 }
 
-typedef struct {
-	int pindex;
-	gpointer jit_wrapper;
-	gpointer *args;
-	MonoFtnDesc ftndesc;
-} JitCallCbData;
-
-enum {
-	/* Pass stackval->data.p */
-	JIT_ARG_BYVAL,
-	/* Pass &stackval->data.p */
-	JIT_ARG_BYREF
-};
-
-enum {
-       JIT_RET_VOID,
-       JIT_RET_SCALAR,
-       JIT_RET_VTYPE
-};
-
-typedef struct _JitCallInfo JitCallInfo;
-struct _JitCallInfo {
-	gpointer addr;
-	gpointer extra_arg;
-	gpointer wrapper;
-	MonoMethodSignature *sig;
-	guint8 *arginfo;
-	gint32 res_size;
-	int ret_mt;
-};
-
 /*
  * Fill the buffer ArgIterator walks: the call-site signature in the first word,
  * then the variable arguments behind it.
@@ -2286,28 +2223,6 @@ interp_entry_escaped (MonoDomain *domain, MonoMethod *method)
 	                     IMETHOD_CODE_INTERP);
 }
 
-#if COUNT_OPS
-static long opcode_counts[MINT_LASTOP];
-
-#define COUNT_OP(op) opcode_counts[op]++
-#else
-#define COUNT_OP(op) 
-#endif
-
-#if DEBUG_INTERP
-#define DUMP_INSTR() \
-	if (tracing > 1) { \
-		output_indent (); \
-		char *mn = mono_method_full_name (frame->imethod->method, FALSE); \
-		char *disasm = mono_interp_dis_mintop ((gint32)(ip - frame->imethod->code), TRUE, ip + 1, *ip); \
-		g_print ("(%p) %s -> %s\n", mono_thread_internal_current (), mn, disasm); \
-		g_free (mn); \
-		g_free (disasm); \
-	}
-#else
-#define DUMP_INSTR()
-#endif
-
 // Do not inline in case order of frame addresses matters.
 MONO_NEVER_INLINE MonoException*
 mono_interp_leave (InterpFrame* parent_frame)
@@ -2326,19 +2241,6 @@ mono_interp_leave (InterpFrame* parent_frame)
 
 	return (MonoException*)tmp_sp.data.p;
 }
-
-// varargs in wasm consumes extra linear stack per call-site.
-// These g_warning/g_error wrappers fix that. It is not the
-// small wasm stack, but conserving it is still desirable.
-static void
-g_warning_d (const char *format, int d)
-{
-	g_warning (format, d);
-}
-
-#if PROFILE_INTERP
-static long total_executed_opcodes;
-#endif
 
 static void
 interp_parse_options (const char *options)
@@ -2867,85 +2769,6 @@ interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboo
 	}
 }
 
-#if COUNT_OPS
-
-static int
-opcode_count_comparer (const void * pa, const void * pb)
-{
-	long counta = opcode_counts [*(int*)pa];
-	long countb = opcode_counts [*(int*)pb];
-
-	if (counta < countb)
-		return 1;
-	else if (counta > countb)
-		return -1;
-	else
-		return 0;
-}
-
-static void
-interp_print_op_count (void)
-{
-	int ordered_ops [MINT_LASTOP];
-	int i;
-	long total_ops = 0;
-
-	for (i = 0; i < MINT_LASTOP; i++) {
-		ordered_ops [i] = i;
-		total_ops += opcode_counts [i];
-	}
-	qsort (ordered_ops, MINT_LASTOP, sizeof (int), opcode_count_comparer);
-
-	g_print ("total ops %ld\n", total_ops);
-	for (i = 0; i < MINT_LASTOP; i++) {
-		long count = opcode_counts [ordered_ops [i]];
-		g_print ("%s : %ld (%.2lf%%)\n", mono_interp_opname (ordered_ops [i]), count, (double)count / total_ops * 100);
-	}
-}
-#endif
-
-#if PROFILE_INTERP
-
-static InterpMethod **imethods;
-static int num_methods;
-const int opcount_threshold = 100000;
-
-static void
-interp_add_imethod (gpointer method)
-{
-	InterpMethod *imethod = (InterpMethod*) method;
-	if (imethod->opcounts > opcount_threshold)
-		imethods [num_methods++] = imethod;
-}
-
-static int
-imethod_opcount_comparer (gconstpointer m1, gconstpointer m2)
-{
-	return (*(InterpMethod**)m2)->opcounts - (*(InterpMethod**)m1)->opcounts;
-}
-
-static void
-interp_print_method_counts (void)
-{
-	MonoDomain *domain = mono_get_root_domain ();
-	MonoJitDomainInfo *info = domain_jit_info (domain);
-
-	mono_domain_jit_code_hash_lock (domain);
-	imethods = (InterpMethod**) malloc (info->interp_code_hash.num_entries * sizeof (InterpMethod*));
-	mono_internal_hash_table_apply (&info->interp_code_hash, interp_add_imethod);
-	mono_domain_jit_code_hash_unlock (domain);
-
-	qsort (imethods, num_methods, sizeof (InterpMethod*), imethod_opcount_comparer);
-
-	printf ("Total executed opcodes %ld\n", total_executed_opcodes);
-	long cumulative_executed_opcodes = 0;
-	for (int i = 0; i < num_methods; i++) {
-		cumulative_executed_opcodes += imethods [i]->opcounts;
-		printf ("%d%% Opcounts %ld, calls %ld, Method %s, imethod ptr %p\n", (int)(cumulative_executed_opcodes * 100 / total_executed_opcodes), imethods [i]->opcounts, imethods [i]->calls, mono_method_full_name (imethods [i]->method, TRUE), imethods [i]);
-	}
-}
-#endif
-
 static void
 interp_set_optimizations (guint32 opts)
 {
@@ -3045,15 +2868,11 @@ interp_invalidate_transformed (MonoDomain *domain)
 		mono_gc_restart_world ();
 }
 
+/* Nothing to give back. The engine's state is per thread, and interp_free_context ()
+ * has already run for each of them. */
 static void
 interp_cleanup (void)
 {
-#if COUNT_OPS
-	interp_print_op_count ();
-#endif
-#if PROFILE_INTERP
-	interp_print_method_counts ();
-#endif
 }
 
 static void
