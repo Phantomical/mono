@@ -240,12 +240,18 @@ struct InterpFrame {
 	InterpFrame *next_free;
 	/*
 	 * What keeps the code this frame is executing from being freed underneath it -
-	 * imethod->code_owner resolved, or NULL when nothing manages the code. Frames
-	 * are allocated on the native stack, which both collectors scan conservatively,
-	 * so holding it here roots it for exactly as long as the frame lives, however
-	 * the frame ends.
+	 * imethod->code_owner resolved, or NULL when nothing manages the code. A root
+	 * frame is a local of the entry point that built it and is rooted by the
+	 * conservative scan of the native stack; the frames a call makes live in the
+	 * thread's frame stack, which interp_mark_stack () scans for this field.
 	 */
 	MonoObject *code_owner;
+	/*
+	 * When this frame was entered, counted per thread. A larger value is the more
+	 * recent frame, which is the only ordering the runtime asks for and the only
+	 * one that survives frames living somewhere other than the native stack.
+	 */
+	gsize ordinal;
 	/* State saved before calls */
 	/* This is valid if state.ip != NULL */
 	InterpState state;
@@ -262,14 +268,18 @@ struct InterpFrame {
 #define INTERP_FRAME_STACK_SIZE (INTERP_MAX_FRAME_DEPTH * sizeof (InterpFrame))
 
 /*
- * The handle stack mark one interp_exec_method () invocation took, and the
- * address of the frame that took it. A frame the EH resumes past never runs
- * its own HANDLE_FUNCTION_RETURN, so the mark has to live somewhere the dead
- * frame is not - see interp_release_abandoned_handles ().
+ * What one interpreter invocation has to give back, held where the invocation is
+ * not: a frame the EH resumes past never runs its own epilogue, so nothing on that
+ * frame can be trusted to restore anything - see interp_release_abandoned_handles ().
  */
 typedef struct {
 	HandleStackMark mark;
+	/* The native frame that took the mark, for ordering against a resume's sp. */
 	gpointer frame;
+	/* context->frame_stack_pointer on entry. */
+	guchar *frame_watermark;
+	/* Ordinal of the first frame this invocation made. */
+	gsize first_ordinal;
 } InterpHandleMark;
 
 typedef struct {
@@ -306,6 +316,9 @@ typedef struct {
 	 */
 	guchar *frame_stack_start;
 	guchar *frame_stack_pointer;
+	/* Stamped onto each frame as it is entered. Never reset, so it orders frames
+	 * across nested invocations as well as within one. */
+	gsize next_frame_ordinal;
 	/* Points to the currently executing frame while the thread is stopped inside the
 	 * interpreter and something is about to look at its stack - a self-suspend at a
 	 * safepoint, or an interruption checkpoint. (If a thread stops somewhere else in
@@ -426,6 +439,85 @@ void mono_interp_init_arglist (InterpFrame *frame, MonoMethodSignature *sig, sta
                                char *arglist);
 
 MONO_NEVER_INLINE MonoException *mono_interp_leave (InterpFrame *parent_frame);
+
+/*
+ * The native frame running the innermost interpreter invocation, or NULL when the
+ * thread is in none. This is what orders an interpreter invocation against anything
+ * else on the stack, since the frames it runs are not on the stack themselves.
+ */
+gpointer mono_interp_invocation_anchor (ThreadContext *context);
+
+/* The interpreter state of the calling thread, made on the first ask. */
+ThreadContext *mono_interp_get_context (void);
+
+/*
+ * Record what one interpreter invocation has to give back, and return the depth to
+ * truncate to when it leaves. mark must be a local of the native frame that runs the
+ * invocation, and frame the first frame the invocation runs.
+ */
+int mono_interp_push_handle_mark (ThreadContext *context, HandleStackMark *mark,
+                                  InterpFrame *frame);
+
+/*
+ * Runs frame until it returns or an exception unwinds past it. A non-NULL clause_args
+ * enters an already running frame at a handler instead, which is how the EH re-enters
+ * the interpreter.
+ *
+ * frame is only valid until the next call this makes.
+ */
+void mono_interp_exec_method (InterpFrame *frame, ThreadContext *context,
+                              FrameClauseArgs *clause_args);
+
+/*
+ * One call from compiled code into the interpreter, taken apart. args holds a
+ * pointer to each argument, or the value itself where the parameter is byref, and
+ * spills into many_args past the sixteen it has room for. The low bit of rmethod
+ * asks for this_arg to be unboxed first.
+ */
+typedef struct {
+	InterpMethod *rmethod;
+	gpointer this_arg;
+	gpointer res;
+	gpointer args [16];
+	gpointer *many_args;
+} InterpEntryData;
+
+/* Runs the method data names, writing its return value to data->res. */
+void mono_interp_entry (InterpEntryData *data);
+
+/* mono_interp_entry () with the arguments spread out, for a caller with no room to
+ * build the record. */
+void mono_interp_entry_general (gpointer this_arg, gpointer res, gpointer *args,
+                                gpointer rmethod);
+void mono_interp_entry_from_args (gpointer imethod, gpointer this_arg, gpointer res,
+                                  gpointer *args);
+
+/*
+ * Runs method through its runtime-invoke wrapper and returns what it returned, boxed.
+ * exc may be NULL, and a method that throws with a non-NULL exc returns NULL and
+ * writes the exception there.
+ */
+MonoObject *mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params,
+                                        MonoObject **exc, MonoError *error);
+
+/*
+ * Runs the method a native-to-interp trampoline was entered for, taking its arguments
+ * out of the CallContext the trampoline spilled and writing the return value back into
+ * it.
+ */
+void mono_interp_entry_from_ccontext (gpointer ccontext, gpointer rmethod);
+
+/*
+ * Runs one clause of a frame that is already executing, which is how the EH re-enters
+ * the interpreter. Both name the clause by the bytecode range it covers.
+ *
+ * mono_interp_run_finally () returns whether the handler threw, and
+ * mono_interp_run_filter () what the filter decided.
+ */
+gboolean mono_interp_run_finally (StackFrameInfo *frame, int clause_index,
+                                  gpointer handler_ip, gpointer handler_ip_end);
+gboolean mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_index,
+                                 gpointer handler_ip, gpointer handler_ip_end);
 
 static inline int
 mint_type (MonoType *type_)

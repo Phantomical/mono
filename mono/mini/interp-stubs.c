@@ -145,6 +145,13 @@ stub_frame_il_offset (MonoInterpFrameHandle frame, int native_offset)
 	return -1;
 }
 
+static gsize
+stub_frame_ordinal (gpointer interp_frame)
+{
+	g_assert_not_reached ();
+	return 0;
+}
+
 static void
 stub_frame_iter_init (MonoInterpStackIter *iter, gpointer interp_exit_data)
 {

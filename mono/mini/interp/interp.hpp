@@ -45,14 +45,62 @@ public:
 	 * cleared. If we will need to have more objects pinned simultaneously, additional handles
 	 * can be reserved here.
 	 */
-	MonoObjectHandle tmp_handle = MONO_HANDLE_NEW (MonoObject, NULL);
-	
+	MonoObjectHandle tmp_handle;
+
 	/*
 	 * Native code can call back into the interpreter, so this invocation is not always the
 	 * outermost one. The frames of the outer invocation stay live below ours, and they
 	 * become current again when we return.
 	 */
-	InterpFrame *outer_current_frame = context->current_frame;
+	InterpFrame *outer_current_frame;
+
+	/*
+	 * Where this invocation's frames start. exit () gives them back, and a resume
+	 * that jumps over this invocation gives them back through the record
+	 * interp_push_handle_mark () keeps, because nothing here runs again.
+	 */
+	guchar *frame_watermark;
+
+	/* What context->handle_mark_count goes back to. */
+	int handle_mark_depth;
+
+	/*
+	 * Sets up one invocation, the way interp_exec_method () sets up its locals.
+	 *
+	 * The caller owns three things this cannot, because each has to outlive every
+	 * handler and no handler frame does: the handle frame (HANDLE_FUNCTION_ENTER,
+	 * whose mono_thread_info_current_var is the parameter of that name, and
+	 * HANDLE_FUNCTION_RETURN after exit () has run), the MonoError, and the record
+	 * interp_push_handle_mark () takes of both.
+	 *
+	 * Everything the first opcode needs beyond this is what interp_exec_method ()
+	 * does between method_entry () and main_loop, and that can throw, so it does not
+	 * belong in a constructor.
+	 */
+	InterpState (InterpFrame *frame, ThreadContext *context, FrameClauseArgs *clause_args,
+	             MonoError *error, MonoThreadInfo *mono_thread_info_current_var,
+	             int handle_mark_depth)
+		: cmethod (nullptr),
+		  error (error),
+		  frame (frame),
+		  context (context),
+		  clause_args (clause_args),
+		  ip (nullptr),
+		  locals (nullptr),
+		  // interp.c leaves these three to whichever call site sets them. Zeroing costs
+		  // nothing and makes a site that forgets deterministic rather than random.
+		  call_args_offset (0),
+		  tail_args_size (0),
+		  calli_signature (nullptr),
+		  tmp_handle (MONO_HANDLE_NEW (MonoObject, NULL)),
+		  outer_current_frame (context->current_frame),
+		  frame_watermark (context->frame_stack_pointer),
+		  handle_mark_depth (handle_mark_depth)
+	{
+	}
+
+	// Execute the method that has been set up for this interpreter.
+	void exec () { exec_method (this); }
 
 private:
 	class LMFGuard {
@@ -95,20 +143,22 @@ private:
 	static void exec_exit (InterpState *state);
 	static void exec_exit_frame (InterpState *state);
 	static void exec_resume (InterpState *state);
-	static void exec_call(InterpState* state);
-	static void exec_calli(InterpState* state);
-	static void exec_tailcall(InterpState* state);
+	static void exec_call (InterpState *state);
+	static void exec_calli (InterpState *state);
+	static void exec_tailcall (InterpState *state);
+	static void exec_method (InterpState *state);
 
 	// Throw an exception from the interpreter
 	void interp_throw (MonoException *ex, const guint16 *ip, bool rethrow);
 
 	// Don't call these directly, return an exec_* function pointer from your op impl instead.
 	inline OpFunc exit_frame ();
-	inline OpFunc call();
-	inline OpFunc calli();
-	inline OpFunc tailcall();
-	inline OpFunc resume();
-	inline OpFunc exit();
+	inline OpFunc call ();
+	inline OpFunc calli ();
+	inline OpFunc tailcall ();
+	inline OpFunc resume ();
+	inline OpFunc exit ();
+	inline OpFunc start ();
 
 	static const OpFunc optable[MINT_LASTOP];
 
@@ -261,5 +311,7 @@ private:
 	} while (0)
 
 } // namespace mono::interp
+
+
 
 #endif

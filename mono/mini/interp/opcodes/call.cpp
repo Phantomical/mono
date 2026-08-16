@@ -208,36 +208,6 @@ interp_get_native_func_wrapper (InterpMethod *imethod, MonoMethodSignature *csig
 	return cmethod;
 }
 
-// Initialize the tiering counter, if it hasn't already been initialized.
-static void
-interp_arm_tier_counter (gpointer imethod_ptr, gint32 calls)
-{
-	InterpMethod *imethod = (InterpMethod *) imethod_ptr;
-
-	mono_atomic_cas_i32 (&imethod->tier_counter, calls > 0 ? calls : -1, 0);
-}
-
-// Check whether we should start a background compilation of this method to tier1.
-static MONO_NEVER_INLINE void
-interp_check_call_promotion (InterpMethod *imethod)
-{
-	gint32 left;
-
-	left = mono_atomic_dec_i32 (&imethod->tier_counter);
-	if (left != 0)
-		return;
-
-	/*
-	 * A refused request is the counter spent for nothing, and nothing else
-	 * arms it again: interp_arm_tier_counter () is reached once per method,
-	 * from whichever of resolve_code_type () and the backend's entry sees it
-	 * first. Arming it here is what makes the loss cost this method another
-	 * threshold of calls rather than the rest of the process.
-	 */
-	if (!mono_llvm_jit_request_promotion (imethod->method, imethod->domain))
-		interp_arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (imethod->method));
-}
-
 /*
  * Settle how calls to imethod are made and record the answer on it. A call goes
  * natively, through do_jit_call (), when the method already has code or when its
@@ -292,32 +262,6 @@ resolve_code_type (InterpMethod *imethod)
 	 */
 	mono_atomic_cas_i32 ((gint32 *) &imethod->code_type, code_type, IMETHOD_CODE_UNKNOWN);
 	return imethod->code_type;
-}
-
-static MonoException *
-do_transform_method (InterpFrame *frame, ThreadContext *context)
-{
-	MonoLMFExt ext;
-	/* Don't push lmf if we have no interp data */
-	gboolean push_lmf = frame->parent != NULL;
-	ERROR_DECL (error);
-
-#if DEBUG_INTERP
-	char *mn = mono_method_full_name (frame->imethod->method, TRUE);
-	g_print ("(%p) Transforming %s\n", mono_thread_internal_current (), mn);
-	g_free (mn);
-#endif
-
-	/* Use the parent frame as the current frame is not complete yet */
-	if (push_lmf)
-		interp_push_lmf (&ext, frame->parent);
-
-	mono_interp_transform_method (frame->imethod, context, error);
-
-	if (push_lmf)
-		interp_pop_lmf (&ext);
-
-	return mono_error_convert_to_exception (error);
 }
 
 /*
@@ -703,40 +647,6 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 	}
 }
 
-static MONO_ALWAYS_INLINE gboolean
-method_entry (ThreadContext *context, InterpFrame *frame,
-#if DEBUG_INTERP
-              int *out_tracing,
-#endif
-              MonoException **out_ex)
-{
-	gboolean slow = FALSE;
-
-#if DEBUG_INTERP
-	debug_enter (frame, out_tracing);
-#endif
-#if PROFILE_INTERP
-	frame->imethod->calls++;
-#endif
-
-	*out_ex = NULL;
-	if (!G_UNLIKELY (frame->imethod->transformed)) {
-		slow = TRUE;
-		MonoException *ex = do_transform_method (frame, context);
-		if (ex) {
-			*out_ex = ex;
-			/*
-			 * Initialize the stack base pointer here, in the uncommon branch, so we don't
-			 * need to check for it everytime when exitting a frame.
-			 */
-			frame->stack = (stackval *) context->stack_pointer;
-			return slow;
-		}
-	}
-
-	return slow;
-}
-
 MONO_INTERP_ENTRY (exec_call, call);
 MONO_INTERP_ENTRY (exec_calli, calli);
 MONO_INTERP_ENTRY (exec_tailcall, tailcall);
@@ -782,7 +692,7 @@ InterpState::call ()
 		 * to cover it before that reference is stored. */
 		mono_compiler_barrier ();
 
-		reinit_frame (child_frame, frame, cmethod, locals + call_args_offset);
+		reinit_frame (child_frame, context, frame, cmethod, locals + call_args_offset);
 		frame = child_frame;
 	}
 

@@ -141,17 +141,30 @@ frame_root_code_owner (InterpFrame *frame)
 }
 
 /*
+ * Record when this frame was entered. Ordering interpreter frames is what the
+ * unwinder, a stack walk and the resume path all ask for, and an address cannot
+ * answer it: a frame lives on the native stack or in the thread's frame stack
+ * depending on which of them made it, and the two grow in opposite directions.
+ */
+inline void
+frame_stamp_ordinal (ThreadContext *context, InterpFrame *frame)
+{
+	frame->ordinal = ++context->next_frame_ordinal;
+}
+
+/*
  * reinit_frame:
  *
  *   Reinitialize a frame.
  */
 inline void
-reinit_frame (InterpFrame *frame, InterpFrame *parent, InterpMethod *imethod, gpointer stack)
+reinit_frame (InterpFrame *frame, ThreadContext *context, InterpFrame *parent, InterpMethod *imethod, gpointer stack)
 {
 	frame->parent = parent;
 	frame->imethod = imethod;
 	frame->stack = (stackval *) stack;
 	frame->state.ip = NULL;
+	frame_stamp_ordinal (context, frame);
 	frame_root_code_owner (frame);
 }
 
