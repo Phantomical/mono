@@ -9,7 +9,7 @@
 #include <mono/metadata/seq-points-data.h>
 #include <mono/mini/debugger-state-machine.h>
 #include <mono/metadata/mono-debug.h>
-#include <mono/interp/interp-internals.h>
+#include <mono/mini/ee.h>
 
 /*
 FIXME:
