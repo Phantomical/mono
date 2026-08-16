@@ -8523,12 +8523,6 @@ retry:
 
 
 static void
-interp_super_instructions (TransformData *td)
-{
-	// Add some actual super instructions
-}
-
-static void
 interp_optimize_code (TransformData *td)
 {
 	if (mono_interp_opt & INTERP_OPT_BBLOCKS)
@@ -8536,9 +8530,6 @@ interp_optimize_code (TransformData *td)
 
 	if (mono_interp_opt & INTERP_OPT_CPROP)
 		MONO_TIME_TRACK (mono_interp_stats.cprop_time, interp_cprop (td));
-
-	if (mono_interp_opt & INTERP_OPT_SUPER_INSTRUCTIONS)
-		MONO_TIME_TRACK (mono_interp_stats.super_instructions_time, interp_super_instructions (td));
 }
 
 /*
