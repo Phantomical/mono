@@ -13,8 +13,8 @@
  * diagnostic, so a clean build there is not a guarantee.
  */
 
-#ifndef MONO_INTERP_MUSTTAIL_HPP
-#define MONO_INTERP_MUSTTAIL_HPP
+#ifndef __MONO_INTERP_MUSTTAIL_HPP__
+#define __MONO_INTERP_MUSTTAIL_HPP__
 
 /* Ask the compiler which spelling it knows rather than deriving it from the
  * compiler and its version. GCC has the attribute from 15 and MSVC from 14.50,
@@ -35,4 +35,4 @@
 #error "this compiler has no musttail attribute: use clang 13, GCC 15, MSVC 14.50 or later"
 #endif
 
-#endif /* MONO_INTERP_MUSTTAIL_HPP */
+#endif /* __MONO_INTERP_MUSTTAIL_HPP__ */

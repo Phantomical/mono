@@ -1,5 +1,5 @@
-#ifndef MONO_INTERP_INTERP_HPP
-#define MONO_INTERP_INTERP_HPP
+#ifndef __MONO_INTERP_INTERP_HPP__
+#define __MONO_INTERP_INTERP_HPP__
 
 #include "glib.h"
 #include "mono/metadata/class-internals.h"
