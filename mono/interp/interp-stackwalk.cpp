@@ -13,9 +13,9 @@
 
 namespace mono::interp {
 
-typedef struct {
+struct StackIter {
 	InterpFrame *current;
-} StackIter;
+};
 
 gpointer
 interp_frame_get_ip (MonoInterpFrameHandle frame)

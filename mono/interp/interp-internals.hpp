@@ -78,7 +78,7 @@ enum class MintType : std::uint8_t {
  * Value types are represented on the eval stack as pointers to the
  * actual storage. A value type cannot be larger than 16 MB.
  */
-typedef struct {
+struct stackval {
 	union {
 		gint32 i;
 		gint64 l;
@@ -99,24 +99,23 @@ typedef struct {
 		mono_u nati;
 		gpointer vt;
 	} data;
-} stackval;
+};
 
-typedef struct InterpFrame InterpFrame;
+struct InterpFrame;
 
 typedef void (*MonoFuncV) (void);
 typedef void (*MonoPIFunc) (void *callme, void *margs);
 
-typedef enum {
+enum InterpMethodCodeType {
 	IMETHOD_CODE_INTERP,
 	IMETHOD_CODE_COMPILED,
 	IMETHOD_CODE_UNKNOWN
-} InterpMethodCodeType;
+};
 
 /*
  * Structure representing a method transformed for the interpreter 
  * This is domain specific
  */
-typedef struct InterpMethod InterpMethod;
 struct InterpMethod {
 	/* NOTE: These first two elements (method and
 	   next_jit_code_hash) must be in the same order and at the
@@ -183,10 +182,9 @@ struct InterpMethod {
 };
 
 /* Used for localloc memory allocation */
-typedef struct _FrameDataFragment FrameDataFragment;
-struct _FrameDataFragment {
+struct FrameDataFragment {
 	guint8 *pos, *end;
-	struct _FrameDataFragment *next;
+	FrameDataFragment *next;
 #if SIZEOF_VOID_P == 4
 	/* Align data field to MINT_VT_ALIGNMENT */
 	gint32 pad;
@@ -194,7 +192,7 @@ struct _FrameDataFragment {
 	double data[MONO_ZERO_LEN_ARRAY];
 };
 
-typedef struct {
+struct FrameDataInfo {
 	InterpFrame *frame;
 	/*
 	 * frag and pos hold the current allocation position when the stored frame
@@ -203,15 +201,15 @@ typedef struct {
 	 */
 	FrameDataFragment *frag;
 	guint8 *pos;
-} FrameDataInfo;
+};
 
-typedef struct {
+struct FrameDataAllocator {
 	FrameDataFragment *first, *current;
 	FrameDataInfo *infos;
 	int infos_len, infos_capacity;
 	/* For GC sync */
 	int inited;
-} FrameDataAllocator;
+};
 
 /* Arguments that are passed when invoking only a finally/filter clause from the frame */
 struct FrameClauseArgs {
@@ -231,13 +229,10 @@ struct FrameClauseArgs {
 	InterpFrame *exec_frame;
 };
 
-/* Arguments that are passed when invoking only a finally/filter clause from the frame */
-typedef struct FrameClauseArgs FrameClauseArgs;
-
 /* What a frame keeps of the interpreter loop while a call it made runs. */
-typedef struct {
+struct InterpSavedState {
 	const unsigned short *ip;
-} InterpSavedState;
+};
 
 struct InterpFrame {
 	InterpFrame *parent;   /* parent */
@@ -279,7 +274,7 @@ struct InterpFrame {
  * not: a frame the EH resumes past never runs its own epilogue, so nothing on that
  * frame can be trusted to restore anything - see interp_release_abandoned_handles ().
  */
-typedef struct {
+struct InterpHandleMark {
 	HandleStackMark mark;
 	/* The native frame that took the mark, for ordering against a resume's sp. */
 	gpointer frame;
@@ -287,9 +282,9 @@ typedef struct {
 	guchar *frame_watermark;
 	/* Ordinal of the first frame this invocation made. */
 	gsize first_ordinal;
-} InterpHandleMark;
+};
 
-typedef struct {
+struct ThreadContext {
 	/* Lets interpreter know it has to resume execution after EH */
 	gboolean has_resume_state;
 	/* Frame to resume execution at */
@@ -353,9 +348,9 @@ typedef struct {
 	/* How far the execution trace is indented on this thread. */
 	int trace_depth;
 #endif
-} ThreadContext;
+};
 
-typedef struct {
+struct MonoInterpStats {
 	gint32 line_numbers_size;
 	gint64 transform_time;
 	gint64 methods_transformed;
@@ -370,7 +365,7 @@ typedef struct {
 	gint32 added_pop_count;
 	gint32 inlined_methods;
 	gint32 inline_failures;
-} MonoInterpStats;
+};
 
 extern MonoInterpStats mono_interp_stats;
 
@@ -438,13 +433,13 @@ void mono_interp_exec_method (InterpFrame *frame, ThreadContext *context,
  * spills into many_args past the sixteen it has room for. The low bit of rmethod
  * asks for this_arg to be unboxed first.
  */
-typedef struct {
+struct InterpEntryData {
 	InterpMethod *rmethod;
 	gpointer this_arg;
 	gpointer res;
 	gpointer args [16];
 	gpointer *many_args;
-} InterpEntryData;
+};
 
 /* Runs the method data names, writing its return value to data->res. */
 void mono_interp_entry (InterpEntryData *data);

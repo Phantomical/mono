@@ -143,10 +143,10 @@ namespace mono::interp {
 #define MINT_MOV_P MINT_MOV_4
 #endif
 
-typedef struct {
+struct MagicIntrinsic {
 	const gchar *op_name;
 	guint16 insn [3];
-} MagicIntrinsic;
+};
 
 // static const MagicIntrinsic int_binop[] = {
 

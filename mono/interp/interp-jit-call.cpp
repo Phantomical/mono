@@ -38,12 +38,12 @@ enum {
 	JIT_RET_VTYPE
 };
 
-typedef struct {
+struct JitCallCbData {
 	int pindex;
 	gpointer jit_wrapper;
 	gpointer *args;
 	MonoFtnDesc ftndesc;
-} JitCallCbData;
+};
 
 /* Callback called by mono_llvm_cpp_catch_exception () */
 static void
@@ -127,8 +127,7 @@ jit_call_cb (gpointer arg)
 	}
 }
 
-typedef struct _JitCallInfo JitCallInfo;
-struct _JitCallInfo {
+struct JitCallInfo {
 	gpointer addr = nullptr;
 	gpointer extra_arg = nullptr;
 	gpointer wrapper = nullptr;

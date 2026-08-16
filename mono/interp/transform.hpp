@@ -15,8 +15,8 @@
 #define INTERP_LOCAL_FLAG_EXECUTION_STACK 2
 #define INTERP_LOCAL_FLAG_CALL_ARGS 4
 
-typedef struct _InterpInst InterpInst;
-typedef struct _InterpBasicBlock InterpBasicBlock;
+struct InterpInst;
+struct InterpBasicBlock;
 
 /// What the evaluation stack holds a value as. Wider than MintType, which says
 /// how a value is stored: everything shorter than four bytes is on the stack as
@@ -62,8 +62,7 @@ mint_type_of_op (int base, int op)
 	return (MintType) (op - base);
 }
 
-typedef struct
-{
+struct StackInfo {
 	MonoClass *klass;
 	StackType type;
 	unsigned char flags;
@@ -76,7 +75,7 @@ typedef struct
 	int offset;
 	/* Saves how much stack this is using. It is a multiple of MINT_VT_ALIGNMENT */
 	int size;
-} StackInfo;
+};
 
 #define LOCAL_VALUE_NONE 0
 #define LOCAL_VALUE_LOCAL 1
@@ -85,7 +84,7 @@ typedef struct
 
 // LocalValue contains data to construct an InterpInst that is equivalent with the contents
 // of the stack slot / local / argument.
-typedef struct {
+struct LocalValue {
 	// Indicates the type of the stored information. It can be another local or a constant
 	int type;
 	// Holds the local index or the actual constant value
@@ -97,9 +96,9 @@ typedef struct {
 	// The instruction that writes this local.
 	InterpInst *ins;
 	int def_index;
-} LocalValue;
+};
 
-struct _InterpInst {
+struct InterpInst {
 	guint16 opcode;
 	InterpInst *next, *prev;
 	// If this is -1, this instruction is not logically associated with an IL offset, it is
@@ -124,7 +123,7 @@ struct _InterpInst {
 	guint16 data [MONO_ZERO_LEN_ARRAY];
 };
 
-struct _InterpBasicBlock {
+struct InterpBasicBlock {
 	guint8 *ip;
 	GSList *seq_points;
 	SeqPoint *last_seq_point;
@@ -158,22 +157,22 @@ struct _InterpBasicBlock {
 	bool dead : 1;
 };
 
-typedef enum {
+enum RelocType {
 	RELOC_SHORT_BRANCH,
 	RELOC_LONG_BRANCH,
 	RELOC_SWITCH
-} RelocType;
+};
 
-typedef struct {
+struct Reloc {
 	RelocType type;
 	/* For branch relocation, how many sreg slots to skip */
 	int skip;
 	/* In the interpreter IR */
 	int offset;
 	InterpBasicBlock *target_bb;
-} Reloc;
+};
 
-typedef struct {
+struct InterpLocal {
 	MonoType *type;
 	MintType mt;
 	int flags;
@@ -184,10 +183,9 @@ typedef struct {
 		// the offset from the start of the execution stack locals space
 		int stack_offset;
 	};
-} InterpLocal;
+};
 
-typedef struct
-{
+struct TransformData {
 	MonoMethod *method;
 	MonoMethod *inlined_method;
 	MonoMethodHeader *header;
@@ -234,7 +232,7 @@ typedef struct
 	GList *dont_inline;
 	int inline_depth;
 	bool has_localloc : 1;
-} TransformData;
+};
 
 
 /* test exports for white box testing */
