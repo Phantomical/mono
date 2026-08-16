@@ -24,6 +24,11 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # carries the bear/citnames wrappers the automake build needed for it.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Keep the build tree from showing up in git, whatever it is called.
+if(NOT CMAKE_BINARY_DIR STREQUAL CMAKE_SOURCE_DIR)
+  file(WRITE "${CMAKE_BINARY_DIR}/.gitignore" "*\n")
+endif()
+
 include(GNUInstallDirs)
 
 # What a test gets when it names no budget of its own.  CTest's own default is
