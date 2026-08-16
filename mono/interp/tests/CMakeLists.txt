@@ -19,8 +19,7 @@ endif()
 # ---------------------------------------------------------------------------
 # The runner
 # ---------------------------------------------------------------------------
-# native.cpp holds what the P/Invoke tests call.  ENABLE_EXPORTS puts its names
-# in the dynamic symbol table, which is where DllImport ("__Internal") looks.
+# Native methods for the P/Invoke tests.
 add_executable(interp-test-runner runner.cpp native.cpp)
 set_target_properties(interp-test-runner PROPERTIES ENABLE_EXPORTS TRUE)
 
@@ -64,8 +63,8 @@ function(mono_add_test_methods)
     set(ARG_TIMEOUT 60)
   endif()
 
-  # The generated files are named after the assembly and the arm together, so
-  # neither a second assembly nor a second engine overwrites the first.
+  # A second assembly or a second engine must not overwrite the first's
+  # generated files, so the key carries every part that tells them apart.
   cmake_path(GET ARG_ASSEMBLY STEM _stem)
   string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _key
          "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}${ARG_ONLY}${ARG_ARM}")
