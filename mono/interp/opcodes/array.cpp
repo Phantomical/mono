@@ -6,6 +6,7 @@
 #include "mono/metadata/object-forward.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/interp/interp.hpp"
+#include "mono/interp/interp-array.hpp"
 #include "mono/interp/interp-internals.hpp"
 #include "mono/utils/mono-error-internals.h"
 
@@ -36,29 +37,6 @@ ves_array_create (MonoDomain *domain, MonoClass *klass, int param_count, stackva
 		}
 	}
 	return (MonoObject *) mono_array_new_full_checked (domain, klass, lengths, lower_bounds, error);
-}
-
-static gint32
-ves_array_calculate_index (MonoArray *ao, stackval *sp, gboolean safe)
-{
-	MonoClass *ac = ((MonoObject *) ao)->vtable->klass;
-
-	guint32 pos = 0;
-	if (ao->bounds) {
-		for (gint32 i = 0; i < m_class_get_rank (ac); i++) {
-			gint32 idx = sp[i].data.i;
-			gint32 lower = ao->bounds[i].lower_bound;
-			guint32 len = ao->bounds[i].length;
-			if (safe && (idx < lower || (guint32) (idx - lower) >= len))
-				return -1;
-			pos = (pos * len) + (guint32) (idx - lower);
-		}
-	} else {
-		pos = sp[0].data.i;
-		if (safe && pos >= ao->max_length)
-			return -1;
-	}
-	return pos;
 }
 
 static MonoException *
