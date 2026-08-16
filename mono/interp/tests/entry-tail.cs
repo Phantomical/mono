@@ -7,9 +7,9 @@
 // and the entry cache on InterpMethod.
 //
 // The rest of the file is a two-int struct that div () returns in a register
-// pair. Six routes reach that one native call. Four give both words back. Two
-// lose the remainder, the same way on both engines, and those two are the
-// divergences here.
+// pair. Six routes reach that one native call. Four give both words back; the
+// two that go through reflection lose the remainder. Both engines lose it, so
+// that is a marshalling defect rather than a tier seam.
 //
 // A method named test_<n>_<what> is a test, and it passes when it returns <n>.
 // Operands go through the NoInlining Id helper, so the transform cannot fold a
