@@ -161,6 +161,7 @@ mono_gc_alloc_array (MonoVTable *vtable, size_t size, uintptr_t max_length, uint
 MonoArrayHandle
 mono_gc_alloc_handle_array (MonoVTable *vtable, gsize size, gsize max_length, gsize bounds_size);
 
+G_EXTERN_C
 MonoString*
 mono_gc_alloc_string (MonoVTable *vtable, size_t size, gint32 len);
 

@@ -1,6 +1,5 @@
 
 file(GLOB sources CONFIGURE_DEPENDS
-  *.c
   *.cpp
   opcodes/*.cpp
 )
