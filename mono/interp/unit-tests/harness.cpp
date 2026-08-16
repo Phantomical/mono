@@ -165,7 +165,7 @@ Code::Code (Transform &transform)
 				continue;
 
 			instructions.push_back (ins);
-			names.push_back (mono_interp_opname (ins->opcode));
+			names.push_back (mono::interp::opname (ins->opcode));
 		}
 	}
 }

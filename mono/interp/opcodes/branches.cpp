@@ -18,10 +18,10 @@ namespace mono::interp {
 	MONO_INTERP_OP_IMPL (opcode)                                               \
 	{                                                                          \
 		if (cond) {                                                            \
-			size_t broffset = InterpState::opinfos[opcode].num_sregs;          \
-			if (InterpState::opinfos[opcode].optype == MintOpBranch)           \
+			size_t broffset = opinfos[opcode].num_sregs;          \
+			if (opinfos[opcode].optype == MintOpBranch)           \
 				this->ip += (gint32) READ32 (&ip[broffset + 1]);               \
-			else if (InterpState::opinfos[opcode].optype == MintOpShortBranch) \
+			else if (opinfos[opcode].optype == MintOpShortBranch) \
 				this->ip += (gint16) ip[broffset + 1];                         \
 			else                                                               \
 				g_assert_not_reached ();                                       \

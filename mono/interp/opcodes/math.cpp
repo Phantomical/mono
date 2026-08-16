@@ -19,7 +19,7 @@ namespace mono::interp {
 #define IMPL_TRIOP(opcode, type, expr)                                         \
 	MONO_INTERP_OP_IMPL (opcode)                                               \
 	{                                                                          \
-		static_assert (InterpState::opinfos[opcode].num_sregs == 3,            \
+		static_assert (opinfos[opcode].num_sregs == 3,            \
 		               "opcode " #opcode " does not have 3 source registers"); \
 		auto a = LOCAL_VAR (ip[2], type);                                      \
 		auto b = LOCAL_VAR (ip[3], type);                                      \
@@ -33,7 +33,7 @@ namespace mono::interp {
 #define IMPL_BINOP(opcode, type, expr)                                         \
 	MONO_INTERP_OP_IMPL (opcode)                                               \
 	{                                                                          \
-		static_assert (InterpState::opinfos[opcode].num_sregs == 2,            \
+		static_assert (opinfos[opcode].num_sregs == 2,            \
 		               "opcode " #opcode " does not have 2 source registers"); \
 		auto a = LOCAL_VAR (ip[2], type);                                      \
 		auto b = LOCAL_VAR (ip[3], type);                                      \
@@ -63,7 +63,7 @@ namespace mono::interp {
 #define IMPL_UNOP(opcode, type, expr)                                         \
 	MONO_INTERP_OP_IMPL (opcode)                                              \
 	{                                                                         \
-		static_assert (InterpState::opinfos[opcode].num_sregs == 1,           \
+		static_assert (opinfos[opcode].num_sregs == 1,           \
 		               "opcode " #opcode " does not have 1 source register"); \
 		auto x = LOCAL_VAR (ip[2], type);                                     \
 		LOCAL_VAR (ip[1], type) = (expr);                                     \

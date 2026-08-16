@@ -242,13 +242,13 @@ interp_add_ins_explicit (TransformData *td, guint16 opcode, int len)
 static InterpInst*
 interp_add_ins (TransformData *td, guint16 opcode)
 {
-	return interp_add_ins_explicit (td, opcode, mono_interp_oplen [opcode]);
+	return interp_add_ins_explicit (td, opcode, oplen (opcode));
 }
 
 static InterpInst*
 interp_insert_ins_bb (TransformData *td, InterpBasicBlock *bb, InterpInst *prev_ins, guint16 opcode)
 {
-	InterpInst *new_inst = interp_new_ins (td, opcode, mono_interp_oplen [opcode]);
+	InterpInst *new_inst = interp_new_ins (td, opcode, oplen (opcode));
 
 	new_inst->prev = prev_ins;
 
@@ -974,7 +974,7 @@ binary_arith_op(TransformData *td, int mint_op)
 	if (type1 != type2) {
 		g_warning("%s.%s: %04x arith type mismatch %s %d %d", 
 			m_class_get_name (td->method->klass), td->method->name,
-			td->ip - td->il_code, mono_interp_opname (mint_op), type1, type2);
+			td->ip - td->il_code, opname (mint_op), type1, type2);
 	}
 	op = mint_op + type1 - STACK_TYPE_I4;
 	CHECK_STACK(td, 2);
@@ -1315,7 +1315,7 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 	guint32 token;
 	int target;
 
-	switch (mono_interp_opargtype [opcode]) {
+	switch (opargtype (opcode)) {
 	case MintOpNoArgs:
 		break;
 	case MintOpUShortInt:
@@ -1401,7 +1401,7 @@ dump_interp_code (const guint16 *start, const guint16* end)
 	const guint16 *p = start;
 	while (p < end) {
 		mono_interp_dis_mintop (p, start);
-		p = mono_interp_dis_mintop_len (p);
+		p = dis_mintop_len (p);
 	}
 }
 
@@ -1409,17 +1409,17 @@ static void
 dump_interp_inst_no_newline (InterpInst *ins)
 {
 	int opcode = ins->opcode;
-	g_print ("IL_%04x: %-14s", ins->il_offset, mono_interp_opname (opcode));
+	g_print ("IL_%04x: %-14s", ins->il_offset, opname (opcode));
 
-        if (mono_interp_op_dregs [opcode] == MINT_CALL_ARGS)
+        if (num_dregs (opcode) == MINT_CALL_ARGS)
                 g_print (" [call_args %d <-", ins->dreg);
-        else if (mono_interp_op_dregs [opcode] > 0)
+        else if (num_dregs (opcode) > 0)
                 g_print (" [%d <-", ins->dreg);
         else
                 g_print (" [nil <-");
 
-        if (mono_interp_op_sregs [opcode] > 0) {
-                for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
+        if (num_sregs (opcode) > 0) {
+                for (int i = 0; i < num_sregs (opcode); i++)
                         g_print (" %d", ins->sregs [i]);
                 g_print ("],");
         } else {
@@ -1539,12 +1539,12 @@ interp_get_ldc_i4_from_const (TransformData *td, InterpInst *ins, gint32 ct, int
 		break;
 	}
 
-	int new_size = mono_interp_oplen [opcode];
+	int new_size = oplen (opcode);
 
 	if (ins == NULL)
 		ins = interp_add_ins (td, opcode);
 
-	int ins_size = mono_interp_oplen [ins->opcode];
+	int ins_size = oplen (ins->opcode);
 	if (ins_size < new_size) {
 		// We can't replace the passed instruction, discard it and emit a new one
 		ins = interp_insert_ins (td, ins, opcode);
@@ -1565,7 +1565,7 @@ interp_get_ldc_i4_from_const (TransformData *td, InterpInst *ins, gint32 ct, int
 static InterpInst*
 interp_inst_replace_with_i8_const (TransformData *td, InterpInst *ins, gint64 ct)
 {
-	int size = mono_interp_oplen [ins->opcode];
+	int size = oplen (ins->opcode);
 	int dreg = ins->dreg;
 
 	if (size < 5) {
@@ -3199,7 +3199,7 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 	td->sp -= csignature->param_count + !!csignature->hasthis;
 	guint32 params_stack_size = tos_offset - get_tos_offset (td);
 
-	if (op == -1 || mono_interp_op_dregs [op] == MINT_CALL_ARGS) {
+	if (op == -1 || num_dregs (op) == MINT_CALL_ARGS) {
 		// We must not optimize out these locals, storing to them is part of the interp call convention
 		// unless we already intrinsified this call
 		for (int i = 0; i < (csignature->param_count + !!csignature->hasthis); i++)
@@ -3231,7 +3231,7 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 			res_size = MINT_STACK_SLOT_SIZE;
 		}
 		dreg = td->sp [-1].local;
-		if (op == -1 || mono_interp_op_dregs [op] == MINT_CALL_ARGS) {
+		if (op == -1 || num_dregs (op) == MINT_CALL_ARGS) {
 			// This dreg needs to be at the same offset as the call args
 			td->locals [dreg].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 		}
@@ -3246,16 +3246,16 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 	if (op >= 0) {
 		interp_add_ins (td, op);
 
-		int has_dreg = mono_interp_op_dregs [op];
-		int num_sregs = mono_interp_op_sregs [op];
+		int has_dreg = num_dregs (op);
+		int sregs_count = num_sregs (op);
 		if (has_dreg)
 			interp_ins_set_dreg (td->last_ins, dreg);
-		if (num_sregs > 0) {
-			if (num_sregs == 1)
+		if (sregs_count > 0) {
+			if (sregs_count == 1)
 				interp_ins_set_sreg (td->last_ins, first_sreg);
-			else if (num_sregs == 2)
+			else if (sregs_count == 2)
 				interp_ins_set_sregs2 (td->last_ins, first_sreg, td->sp [!has_dreg].local);
-			else if (num_sregs == 3)
+			else if (sregs_count == 3)
 				interp_ins_set_sregs3 (td->last_ins, first_sreg, td->sp [!has_dreg].local, td->sp [!has_dreg + 1].local);
 			else
 				g_error ("Unsupported opcode");
@@ -7639,7 +7639,7 @@ get_inst_length (InterpInst *ins)
 	if (ins->opcode == MINT_SWITCH)
 		return MINT_SWITCH_LEN (READ32 (&ins->data [0]));
 	else
-		return mono_interp_oplen [ins->opcode];
+		return oplen (ins->opcode);
 }
 
 
@@ -7686,7 +7686,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			(opcode >= MINT_BEQ_I4_S && opcode <= MINT_BLT_UN_R8_S) ||
 			opcode == MINT_BR_S || opcode == MINT_LEAVE_S || opcode == MINT_LEAVE_S_CHECK || opcode == MINT_CALL_HANDLER_S) {
 		const int br_offset = start_ip - td->new_code;
-		for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
+		for (int i = 0; i < num_sregs (opcode); i++)
 			*ip++ = get_interp_local_offset (td, ins->sregs [i], TRUE);
 		if (ins->info.target_bb->native_offset >= 0) {
 			// Backwards branch. We can already patch it.
@@ -7695,7 +7695,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			// We don't know the in_offset of the target, add a reloc
 			Reloc *reloc = (Reloc*)mono_mempool_alloc0 (td->mempool, sizeof (Reloc));
 			reloc->type = RELOC_SHORT_BRANCH;
-			reloc->skip = mono_interp_op_sregs [opcode];
+			reloc->skip = num_sregs (opcode);
 			reloc->offset = br_offset;
 			reloc->target_bb = ins->info.target_bb;
 			g_ptr_array_add (td->relocs, reloc);
@@ -7707,7 +7707,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			(opcode >= MINT_BEQ_I4 && opcode <= MINT_BLT_UN_R8) ||
 			opcode == MINT_BR || opcode == MINT_LEAVE || opcode == MINT_LEAVE_CHECK || opcode == MINT_CALL_HANDLER) {
 		const int br_offset = start_ip - td->new_code;
-		for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
+		for (int i = 0; i < num_sregs (opcode); i++)
 			*ip++ = get_interp_local_offset (td, ins->sregs [i], TRUE);
 		if (ins->info.target_bb->native_offset >= 0) {
 			// Backwards branch. We can already patch it
@@ -7716,7 +7716,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 		} else {
 			Reloc *reloc = (Reloc*)mono_mempool_alloc0 (td->mempool, sizeof (Reloc));
 			reloc->type = RELOC_LONG_BRANCH;
-			reloc->skip = mono_interp_op_sregs [opcode];
+			reloc->skip = num_sregs (opcode);
 			reloc->offset = br_offset;
 			reloc->target_bb = ins->info.target_bb;
 			g_ptr_array_add (td->relocs, reloc);
@@ -7751,11 +7751,11 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 		bb->seq_points = g_slist_prepend_mempool (td->mempool, bb->seq_points, seqp);
 		bb->last_seq_point = seqp;
 	} else {
-		if (mono_interp_op_dregs [opcode])
+		if (num_dregs (opcode))
 			*ip++ = get_interp_local_offset (td, ins->dreg, TRUE);
 
-		if (mono_interp_op_sregs [opcode]) {
-			for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
+		if (num_sregs (opcode)) {
+			for (int i = 0; i < num_sregs (opcode); i++)
 				*ip++ = get_interp_local_offset (td, ins->sregs [i], TRUE);
 		} else if (opcode == MINT_LDLOCA_S) {
 			// This opcode receives a local but it is not viewed as a sreg since we don't load the value
@@ -7775,15 +7775,15 @@ static void
 alloc_ins_locals (TransformData *td, InterpInst *ins)
 {
 	int opcode = ins->opcode;
-	if (mono_interp_op_sregs [opcode]) {
-		for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
+	if (num_sregs (opcode)) {
+		for (int i = 0; i < num_sregs (opcode); i++)
 			get_interp_local_offset (td, ins->sregs [i], FALSE);
 	} else if (opcode == MINT_LDLOCA_S) {
 		// This opcode receives a local but it is not viewed as a sreg since we don't load the value
 		get_interp_local_offset (td, ins->sregs [0], FALSE);
 	}
 
-	if (mono_interp_op_dregs [opcode])
+	if (num_dregs (opcode))
 		get_interp_local_offset (td, ins->dreg, FALSE);
 }
 
@@ -8323,15 +8323,15 @@ retry:
 			if (opcode == MINT_NOP)
 				continue;
 
-			int num_sregs = mono_interp_op_sregs [opcode];
-			int num_dregs = mono_interp_op_dregs [opcode];
+			int sregs_count = num_sregs (opcode);
+			int dregs_count = num_dregs (opcode);
 			gint32 *sregs = &ins->sregs [0];
 			gint32 dreg = ins->dreg;
 
 			if (td->verbose_level && ins->opcode != MINT_NOP)
 				dump_interp_inst (ins);
 
-			for (int i = 0; i < num_sregs; i++) {
+			for (int i = 0; i < sregs_count; i++) {
 				// FIXME MINT_PROF_EXIT when void
 				if (sregs [i] == -1)
 					continue;
@@ -8359,7 +8359,7 @@ retry:
 				}
 			}
 
-			if (num_dregs) {
+			if (dregs_count) {
 				local_defs [dreg].type = LOCAL_VALUE_NONE;
 				local_defs [dreg].ins = ins;
 				local_defs [dreg].def_index = ins_index;
@@ -8823,18 +8823,18 @@ mono_interp_dis_mintop (const guint16 *ip, const guint16 *start)
 	int opcode = *ip;
 	int ins_offset = ip - start;
 
-	g_print ("IR_%04x: %-14s", ins_offset, mono_interp_opname (opcode));
+	g_print ("IR_%04x: %-14s", ins_offset, opname (opcode));
 	ip++;
 
-        if (mono_interp_op_dregs [opcode] == MINT_CALL_ARGS)
+        if (num_dregs (opcode) == MINT_CALL_ARGS)
                 g_print (" [call_args %d <-", *ip++);
-        else if (mono_interp_op_dregs [opcode] > 0)
+        else if (num_dregs (opcode) > 0)
                 g_print (" [%d <-", *ip++);
         else
                 g_print (" [nil <-");
 
-        if (mono_interp_op_sregs [opcode] > 0) {
-                for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
+        if (num_sregs (opcode) > 0) {
+                for (int i = 0; i < num_sregs (opcode); i++)
                         g_print (" %d", *ip++);
                 g_print ("],");
         } else {

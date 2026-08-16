@@ -177,23 +177,6 @@ private:
 	inline OpFunc start ();
 
 	static const OpFunc optable[MINT_LASTOP];
-
-	struct OpInfo {
-		const char *opstring;
-		std::uint8_t oplength;
-		std::optional<uint8_t> num_dregs;
-		std::uint8_t num_sregs;
-		MintOpArgType optype;
-	};
-
-	static constexpr OpInfo opinfos[MINT_LASTOP] = {
-#define CallArgs std::nullopt
-#define OPDEF(opsymbol, opstring, oplength, num_dregs, num_sregs, optype) \
-	OpInfo{opstring, oplength, num_dregs, num_sregs, optype},
-#include "mintops.def"
-#undef OPDEF
-#undef CallArgs
-	};
 };
 
 #define MONO_INTERP_OP_IMPL(opcode)                       \

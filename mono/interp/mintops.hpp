@@ -7,6 +7,10 @@
 
 #include <glib.h>
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+
 typedef enum
 {
 	MintOpNoArgs,
@@ -69,18 +73,87 @@ typedef enum {
 
 #define MINT_CALL_ARGS 2
 
-extern unsigned char const mono_interp_oplen[];
-extern int const mono_interp_op_dregs [];
-extern int const mono_interp_op_sregs [];
-extern MintOpArgType const mono_interp_opargtype[];
-extern const guint16* mono_interp_dis_mintop_len (const guint16 *ip);
+namespace mono::interp {
 
-// This, instead of an array of pointers, to optimize away a pointer and a relocation per string.
-extern const guint16 mono_interp_opname_offsets [ ];
-typedef struct MonoInterpOpnameCharacters MonoInterpOpnameCharacters;
-extern const MonoInterpOpnameCharacters mono_interp_opname_characters;
+// Every opcode name in one object. A table entry then costs an offset into it
+// rather than a pointer and a relocation.
+struct OpNames {
+#define OPDEF(a, b, c, d, e, f) char a[sizeof (b)];
+#include "mintops.def"
+#undef OPDEF
+};
 
-const char *
-mono_interp_opname (int op);
+inline constexpr OpNames opnames = {
+#define OPDEF(a, b, c, d, e, f) b,
+#include "mintops.def"
+#undef OPDEF
+};
+
+/// What one opcode is made of: its name, how long it is, and the registers it
+/// names.
+struct OpInfo {
+	std::uint16_t name_offset;
+	/// In guint16 units. Zero at MINT_SWITCH, whose length is its operand.
+	std::uint8_t oplength;
+	/// Empty at the call opcodes, which write the call argument area rather
+	/// than one register.
+	std::optional<std::uint8_t> num_dregs;
+	std::uint8_t num_sregs;
+	MintOpArgType optype;
+};
+
+inline constexpr OpInfo opinfos[MINT_LASTOP] = {
+#define CallArgs std::nullopt
+#define OPDEF(a, b, c, d, e, f) OpInfo{offsetof (OpNames, a), c, d, e, f},
+#include "mintops.def"
+#undef OPDEF
+#undef CallArgs
+};
+
+inline const char *
+opname (int op)
+{
+	return reinterpret_cast<const char *> (&opnames) + opinfos[op].name_offset;
+}
+
+inline int
+oplen (int op)
+{
+	return opinfos[op].oplength;
+}
+
+/// How many destination registers, with a call reported as MINT_CALL_ARGS the
+/// way the instruction stream encodes one.
+inline int
+num_dregs (int op)
+{
+	return opinfos[op].num_dregs.value_or (MINT_CALL_ARGS);
+}
+
+inline int
+num_sregs (int op)
+{
+	return opinfos[op].num_sregs;
+}
+
+inline MintOpArgType
+opargtype (int op)
+{
+	return opinfos[op].optype;
+}
+
+/// Where the instruction at ip ends.
+inline const guint16 *
+dis_mintop_len (const guint16 *ip)
+{
+	int len = oplen (*ip);
+
+	if (len == 0) /* SWITCH */
+		len = MINT_SWITCH_LEN (READ32 (ip + 2));
+
+	return ip + len;
+}
+
+} // namespace mono::interp
 
 #endif
