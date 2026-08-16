@@ -63,8 +63,7 @@ function(mono_add_test_methods)
     set(ARG_TIMEOUT 60)
   endif()
 
-  # A second assembly or a second engine must not overwrite the first's
-  # generated files, so the key carries every part that tells them apart.
+  # Distinguishes the same assembly under different conditions.
   cmake_path(GET ARG_ASSEMBLY STEM _stem)
   string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _key
          "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}${ARG_ONLY}${ARG_ARM}")
