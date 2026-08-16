@@ -4,6 +4,8 @@
 #include <mono/metadata/seq-points-data.h>
 #include "interp-internals.hpp"
 
+#include <cstdint>
+
 #define INTERP_INST_FLAG_SEQ_POINT_NONEMPTY_STACK 1
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY 2
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_EXIT 4
@@ -16,10 +18,39 @@
 typedef struct _InterpInst InterpInst;
 typedef struct _InterpBasicBlock InterpBasicBlock;
 
+/// What the evaluation stack holds a value as. Wider than MintType, which says
+/// how a value is stored: everything shorter than four bytes is on the stack as
+/// I4.
+enum class StackType : std::uint8_t {
+	I4 = 0,
+	I8 = 1,
+	R4 = 2,
+	R8 = 3,
+	O = 4,
+	VT = 5,
+	MP = 6,
+	F = 7,
+
+	/// A native int, and so an alias for whichever of I4 and I8 that is.
+#if SIZEOF_VOID_P == 8
+	I = I8,
+#else
+	I = I4,
+#endif
+};
+
+/// The member of an opcode family whose entries run I4, I8, R4, R8 in the order
+/// StackType names them. base is the I4 member.
+constexpr int
+op_for_stack_type (int base, StackType type)
+{
+	return base + (int) type - (int) StackType::I4;
+}
+
 typedef struct
 {
 	MonoClass *klass;
-	unsigned char type;
+	StackType type;
 	unsigned char flags;
 	/*
 	 * The local associated with the value of this stack entry. Every time we push on
@@ -190,20 +221,6 @@ typedef struct
 	bool has_localloc : 1;
 } TransformData;
 
-#define STACK_TYPE_I4 0
-#define STACK_TYPE_I8 1
-#define STACK_TYPE_R4 2
-#define STACK_TYPE_R8 3
-#define STACK_TYPE_O  4
-#define STACK_TYPE_VT 5
-#define STACK_TYPE_MP 6
-#define STACK_TYPE_F  7
-
-#if SIZEOF_VOID_P == 8
-#define STACK_TYPE_I STACK_TYPE_I8
-#else
-#define STACK_TYPE_I STACK_TYPE_I4
-#endif
 
 /* test exports for white box testing */
 void
