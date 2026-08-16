@@ -9,6 +9,11 @@
 #include "interp-internals.hpp"
 #include "mono/utils/mono-error-internals.h"
 
+#ifdef TARGET_WASM
+G_EXTERN_C gpointer
+mono_wasm_get_native_to_interp_trampoline (MonoMethod *method, gpointer extra_arg);
+#endif
+
 namespace mono::interp {
 
 /* The address that stands for imethod, minted if this is the first ask. */

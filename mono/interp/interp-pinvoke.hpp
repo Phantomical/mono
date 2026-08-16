@@ -8,7 +8,34 @@
 
 #include "interp-internals.hpp"
 
+#ifdef TARGET_WASM
+#define INTERP_ICALL_TRAMP_IARGS 12
+#define INTERP_ICALL_TRAMP_FARGS 12
+#else
+#define INTERP_ICALL_TRAMP_IARGS 12
+#define INTERP_ICALL_TRAMP_FARGS 4
+#endif
+
+#ifdef TARGET_WASM
+G_EXTERN_C gpointer
+mono_wasm_get_interp_to_native_trampoline (MonoMethodSignature *sig);
+#endif
+
 namespace mono::interp {
+
+// What a native call is handed: the integer arguments, the float arguments and
+// where the result goes. INTERP_ICALL_TRAMP_*ARGS bound the two counts.
+struct InterpMethodArguments {
+	size_t ilen;
+	gpointer *iargs;
+	size_t flen;
+	double *fargs;
+	gpointer *retval;
+	size_t is_float_ret;
+#ifdef TARGET_WASM // FIXME HOST
+	MonoMethodSignature *sig;
+#endif
+};
 
 /*
  * Calls the native function addr with the arguments in sp, marshalled the way sig
