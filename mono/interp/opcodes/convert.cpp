@@ -64,6 +64,22 @@ IMPL_CONV (MINT_CONV_U4_R4, gint32, float, (guint32) val);
 IMPL_CONV (MINT_CONV_U4_R8, gint32, double, (guint32) val);
 #endif
 
+/*
+ * Narrows a native int index to the int32 that the indexing opcodes read.
+ *
+ * Each of those tests its index against a bound with an unsigned compare, and
+ * neither an array nor a switch table gets near 2^32 entries. So -1 fails every
+ * one of those tests, which is what an index outside the int32 range has to do.
+ */
+MONO_INTERP_OP_IMPL (MINT_CONV_INDEX_I8)
+{
+	guint64 index = LOCAL_VAR (ip[2], guint64);
+	LOCAL_VAR (ip[1], gint32) = index <= G_MAXINT32 ? (gint32) index : -1;
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 IMPL_CONV (MINT_CONV_I8_I4, gint64, gint32, val);
 IMPL_CONV (MINT_CONV_I8_U4, gint64, gint32, (guint32) val);
 IMPL_CONV (MINT_CONV_I8_R4, gint64, float, (gint64) val);

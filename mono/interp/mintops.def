@@ -524,6 +524,8 @@ OPDEF(MINT_CONV_U4_I8, "conv.u4.i8", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_CONV_U4_R4, "conv.u4.r4", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_CONV_U4_R8, "conv.u4.r8", 3, 1, 1, MintOpNoArgs)
 
+OPDEF(MINT_CONV_INDEX_I8, "conv.index.i8", 3, 1, 1, MintOpNoArgs)
+
 OPDEF(MINT_CONV_I8_I4, "conv.i8.i4", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_CONV_I8_U4, "conv.i8.u4", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_CONV_I8_R4, "conv.i8.r4", 3, 1, 1, MintOpNoArgs)

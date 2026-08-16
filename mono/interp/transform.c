@@ -300,14 +300,6 @@ interp_prev_ins (InterpInst *ins)
 				stack_size, n, (td)->ip - (td)->il_code); \
 	} while (0)
 
-#define ENSURE_I4(td, sp_off) \
-	do { \
-		if ((td)->sp [-sp_off].type == STACK_TYPE_I8) { \
-			/* Same representation in memory, nothing to do */ \
-			(td)->sp [-sp_off].type = STACK_TYPE_I4; \
-		} \
-	} while (0)
-
 /*
  * A token naming a type that will not load resolves to no class at all, and a
  * class that is merely broken resolves to one carrying the reason. Only the
@@ -827,6 +819,36 @@ interp_add_conv (TransformData *td, StackInfo *sp, InterpInst *prev_ins, int typ
 	interp_ins_set_sreg (new_inst, sp->local);
 	set_simple_type_and_local (td, sp, type);
 	interp_ins_set_dreg (new_inst, sp->local);
+}
+
+/*
+ * Gives an int32 on the stack the width an eight-byte destination reads it at.
+ *
+ * The int32 wrote four bytes of the stack slot and the store takes all eight, so
+ * the value needs a sign extension first. ECMA-335 Table III.9 names the
+ * extension for a call argument, and the other assignments follow it. A C#
+ * compiler converts first, so only hand-written IL gets here.
+ */
+static void
+widen_i4_to_i8 (TransformData *td, StackInfo *sp, int mt)
+{
+	if (mt == MINT_TYPE_I8 && sp->type == STACK_TYPE_I4)
+		interp_add_conv (td, sp, NULL, STACK_TYPE_I8, MINT_CONV_I8_I4);
+}
+
+/*
+ * Gives a native int index the int32 form the indexing opcodes read.
+ *
+ * ECMA-335 III.4.8 lets an array index be an int32 or a native int, and switch
+ * compares its operand as an unsigned integer. Both opcodes read four bytes, so
+ * a wider index truncated there would select an element rather than fail the
+ * bound test.
+ */
+static void
+narrow_index (TransformData *td, StackInfo *sp)
+{
+	if (sp->type == STACK_TYPE_I8)
+		interp_add_conv (td, sp, NULL, STACK_TYPE_I4, MINT_CONV_INDEX_I8);
 }
 
 /*
@@ -3278,6 +3300,10 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 		td->locals [fp_sreg].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 	}
 
+	/* The callee reads each argument at the width its parameter is declared at. */
+	for (i = 0; i < csignature->param_count; i++)
+		widen_i4_to_i8 (td, td->sp - csignature->param_count + i, mint_type (csignature->params [i]));
+
 	guint32 tos_offset = get_tos_offset (td);
 	td->sp -= csignature->param_count + !!csignature->hasthis;
 	guint32 params_stack_size = tos_offset - get_tos_offset (td);
@@ -4137,36 +4163,21 @@ interp_emit_load_const (TransformData *td, gpointer field_addr, int mt)
 }
 
 /*
- * emit_convert:
- *
- *   Emit some implicit conversions which are not part of the .net spec, but are allowed by MS.NET.
+ * Converts the value on top of the stack to what a destination of type ftype
+ * holds it at, where the two differ only in width.
  */
 static void
-emit_convert (TransformData *td, int stype, MonoType *ftype)
+emit_convert (TransformData *td, MonoType *ftype)
 {
 	ftype = mini_get_underlying_type (ftype);
 
-	// FIXME: Add more
 	switch (ftype->type) {
-	case MONO_TYPE_I8: {
-		switch (stype) {
-		case STACK_TYPE_I4:
-			td->sp--;
-			interp_add_ins (td, MINT_CONV_I8_I4);
-			interp_ins_set_sreg (td->last_ins, td->sp [0].local);
-			push_simple_type (td, STACK_TYPE_I8);
-			interp_ins_set_dreg (td->last_ins, td->sp [-1].local);
-			break;
-		default:
-			break;
-		}
-		break;
-	}
 	case MONO_TYPE_R4:
 	case MONO_TYPE_R8:
 		coerce_fp (td, td->sp - 1, fp_stack_type (ftype));
 		break;
 	default:
+		widen_i4_to_i8 (td, td->sp - 1, mint_type (ftype));
 		break;
 	}
 }
@@ -4361,6 +4372,10 @@ handle_stind (TransformData *td, int op, gboolean *volatile_)
 	CHECK_STACK (td, 2);
 	if (op == MINT_STIND_R4 || op == MINT_STIND_R8)
 		coerce_fp (td, td->sp - 1, op == MINT_STIND_R4 ? STACK_TYPE_R4 : STACK_TYPE_R8);
+	if (op == MINT_STIND_I)
+		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I);
+	if (op == MINT_STIND_I8)
+		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I8);
 	if (*volatile_) {
 		interp_emit_memory_barrier (td, MONO_MEMORY_BARRIER_REL);
 		*volatile_ = FALSE;
@@ -4376,7 +4391,7 @@ static void
 handle_ldelem (TransformData *td, int op, int type)
 {
 	CHECK_STACK (td, 2);
-	ENSURE_I4 (td, 1);
+	narrow_index (td, td->sp - 1);
 	interp_add_ins (td, op);
 	td->sp -= 2;
 	interp_ins_set_sregs2 (td->last_ins, td->sp [0].local, td->sp [1].local);
@@ -4391,7 +4406,11 @@ handle_stelem (TransformData *td, int op)
 	CHECK_STACK (td, 3);
 	if (op == MINT_STELEM_R4 || op == MINT_STELEM_R8)
 		coerce_fp (td, td->sp - 1, op == MINT_STELEM_R4 ? STACK_TYPE_R4 : STACK_TYPE_R8);
-	ENSURE_I4 (td, 2);
+	if (op == MINT_STELEM_I)
+		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I);
+	if (op == MINT_STELEM_I8)
+		widen_i4_to_i8 (td, td->sp - 1, MINT_TYPE_I8);
+	narrow_index (td, td->sp - 2);
 	interp_add_ins (td, op);
 	td->sp -= 3;
 	interp_ins_set_sregs3 (td->last_ins, td->sp [0].local, td->sp [1].local, td->sp [2].local);
@@ -4974,7 +4993,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			/* Before the inlined case leaves, since the value is this method's either way. */
 			if (ult->type != MONO_TYPE_VOID) {
 				CHECK_STACK (td, 1);
-				coerce_fp (td, td->sp - 1, stack_type [mint_type (ult)]);
+				emit_convert (td, ult);
 			}
 
 			/* Return from inlined method, return value is on top of stack */
@@ -5159,6 +5178,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			const unsigned char *next_ip;
 			++td->ip;
 			n = read32 (td->ip);
+			narrow_index (td, td->sp - 1);
 			interp_add_ins_explicit (td, MINT_SWITCH, MINT_SWITCH_LEN (n));
 			WRITE32_INS (td->last_ins, 0, &n);
 			td->ip += 4;
@@ -6139,7 +6159,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			mono_class_init_internal (klass);
 			mt = mint_type (ftype);
 
-			coerce_fp (td, td->sp - 1, stack_type [mt]);
+			emit_convert (td, ftype);
 
 			BARRIER_IF_VOLATILE (td, MONO_MEMORY_BARRIER_REL);
 
@@ -6232,7 +6252,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			MonoType *ftype = mono_field_get_type_internal (field);
 			mt = mint_type (ftype);
 
-			emit_convert (td, td->sp [-1].type, ftype);
+			emit_convert (td, ftype);
 
 			/* the vtable of the field might not be initialized at this point */
 			MonoClass *fld_klass = mono_class_from_mono_type_internal (ftype);
@@ -6403,7 +6423,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 		case CEE_LDELEMA: {
 			gint32 size;
 			CHECK_STACK (td, 2);
-			ENSURE_I4 (td, 1);
+			narrow_index (td, td->sp - 1);
 			token = read32 (td->ip + 1);
 
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
@@ -6514,7 +6534,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 					g_assert (size < G_MAXUINT16);
 
 					CHECK_STACK (td, 2);
-					ENSURE_I4 (td, 1);
+					narrow_index (td, td->sp - 1);
 					interp_add_ins (td, MINT_LDELEM_VT);
 					td->sp -= 2;
 					interp_ins_set_sregs2 (td->last_ins, td->sp [0].local, td->sp [1].local);
@@ -8049,6 +8069,9 @@ interp_fold_unop (TransformData *td, LocalValue *local_defs, int *local_ref_coun
 
 		INTERP_FOLD_CONV (MINT_CONV_I4_I8, LOCAL_VALUE_I4, i, LOCAL_VALUE_I8, l, gint32);
 		INTERP_FOLD_CONV (MINT_CONV_U4_I8, LOCAL_VALUE_I4, i, LOCAL_VALUE_I8, l, gint32);
+
+		/* An index that does not fit keeps its instruction, which is what fails the bound test. */
+		INTERP_FOLD_CONV_FULL (MINT_CONV_INDEX_I8, LOCAL_VALUE_I4, i, LOCAL_VALUE_I8, l, gint32, (guint64) val->l <= G_MAXINT32);
 
 		INTERP_FOLD_CONV (MINT_CONV_I8_I4, LOCAL_VALUE_I8, l, LOCAL_VALUE_I4, i, gint32);
 		INTERP_FOLD_CONV (MINT_CONV_I8_U4, LOCAL_VALUE_I8, l, LOCAL_VALUE_I4, i, guint32);

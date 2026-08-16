@@ -150,14 +150,6 @@ endforeach()
 # Methods each engine answers wrongly, with the defect named against each.  A
 # fix turns the test red, which is why they are listed rather than deleted.
 set(MONO_INTERP_TESTS_XFAIL
-  # An int32 is never widened into a native-int location.
-  "NativeInt:test_5_stsfld_widens"
-  "NativeInt:test_5_stind_i_widens"
-  "NativeInt:test_1_stind_i_sign_extends"
-  # A native-int operand is read 32 bits wide.
-  "NativeInt:test_1_wide_array_index_throws"
-  "NativeInt:test_7_wide_switch_index_falls_through"
-  "Arrays:test_1_a_long_index_past_the_end_throws"
   # An initonly static is folded into the bytecode that reads it.
   "Statics:test_99_initonly_write_is_seen"
   # conv.ovf.i.un checks the range only on a 32-bit target, so an int64 that
