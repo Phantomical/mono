@@ -167,15 +167,19 @@ endif()
 # ---------------------------------------------------------------------------
 # `ctest` is serial unless told otherwise, and every suite here is either
 # internally parallel or tiny, so a bare `ctest` is much slower than the work
-# requires. These two targets run it with the machine's core count.
+# requires. These targets run it with the machine's core count.
 #
 #   check        the fast set -- unit tests, eglib, mini regression, the LLVM
 #                tier, and the runtime one-offs. Seconds, not minutes.
-#   check-all    everything except the stress suites and the minutes-long ones.
-#   check-interp the interpreter's own tests under mono/interp.
+#   check-all    everything except the stress suites, the minutes-long ones and
+#                check-interp-mixed.
+#   check-interp the interpreter's own tests under mono/interp, on three
+#                configurations of the interpreter. Twenty seconds.
 #   check-interp-jit the same managed programs with the interpreter turned off,
-#                and check-interp-mixed with promotion on the first call. Either
-#                one disagreeing with check-interp is a tier seam divergence.
+#                and check-interp-mixed with promotion in the middle of the run.
+#                Either one disagreeing with check-interp is a tier seam
+#                divergence. The mixed arm is nine minutes and is red on a
+#                backend defect it exists to report.
 #
 # The heavy labels (runtime, gshared, sgen, interp, slow, stress, acceptance)
 # are opt-in:
