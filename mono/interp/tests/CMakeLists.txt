@@ -48,13 +48,18 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # assembly again under another name prefix and environment is what runs those
 # methods on a second engine.
 #
-# A method named in XFAIL is registered with WILL_FAIL, so it reports as passing
-# while it returns the wrong answer and starts failing the day it is fixed.  The
-# list is per registration: a divergence is usually wrong on one engine only.
+#   ASSEMBLY     the .dll whose test methods to register.
+#   NAME_PREFIX  and NAME_SUFFIX go around "Class:method" in the ctest name.
+#   TIMEOUT      seconds the enumeration gets, not the tests.  A test takes its
+#                own through PROPERTIES.
+#   ONLY         takes only the methods whose "Class:method" matches this regex.
+#   ARM          takes only the classes carrying that arm's attribute.
+#   PROPERTIES   set on every test this call registers.
+#   ENVIRONMENT  VAR=value, for the tests and for the enumeration.
+#   XFAIL        "Class:method" entries to register with WILL_FAIL.  Per
+#                registration: a divergence is usually wrong on one engine only.
 #
-# A suite whose assembly is not on disk registers one failing test carrying the
-# same properties, so an unbuilt suite reports under its own label rather than
-# under whatever ran it.
+# discover.cmake does the enumeration and says what ONLY and ARM select from.
 function(mono_add_test_methods)
   cmake_parse_arguments(ARG ""
     "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT;ONLY;ARM" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
