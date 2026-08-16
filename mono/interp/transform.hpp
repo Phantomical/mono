@@ -47,6 +47,21 @@ op_for_stack_type (int base, StackType type)
 	return base + (int) type - (int) StackType::I4;
 }
 
+/// The member of an opcode family whose entries run I1, U1, I2, U2, I4, I8, R4,
+/// R8, O, VT in the order MintType names them. base is the I1 member.
+constexpr int
+op_for_mint_type (int base, MintType type)
+{
+	return base + (int) type;
+}
+
+/// Which member of such a family op is. base is the I1 member.
+constexpr MintType
+mint_type_of_op (int base, int op)
+{
+	return (MintType) (op - base);
+}
+
 typedef struct
 {
 	MonoClass *klass;
@@ -160,7 +175,7 @@ typedef struct {
 
 typedef struct {
 	MonoType *type;
-	int mt;
+	MintType mt;
 	int flags;
 	int indirects;
 	int offset;

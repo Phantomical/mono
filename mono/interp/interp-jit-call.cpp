@@ -21,6 +21,7 @@
 #include <mono/utils/mono-error-internals.h>
 
 #include <cstring>
+#include <optional>
 
 namespace mono::interp {
 
@@ -128,13 +129,14 @@ jit_call_cb (gpointer arg)
 
 typedef struct _JitCallInfo JitCallInfo;
 struct _JitCallInfo {
-	gpointer addr;
-	gpointer extra_arg;
-	gpointer wrapper;
-	MonoMethodSignature *sig;
-	guint8 *arginfo;
-	gint32 res_size;
-	int ret_mt;
+	gpointer addr = nullptr;
+	gpointer extra_arg = nullptr;
+	gpointer wrapper = nullptr;
+	MonoMethodSignature *sig = nullptr;
+	guint8 *arginfo = nullptr;
+	gint32 res_size = 0;
+	/// Empty when the call returns void, and so writes nothing back to sp.
+	std::optional<MintType> ret_mt;
 };
 
 static MONO_NEVER_INLINE void
@@ -148,7 +150,7 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 	MonoMethod *method = rmethod->method;
 
 	// FIXME: Memory management
-	cinfo = g_new0 (JitCallInfo, 1);
+	cinfo = new JitCallInfo{};
 
 	sig = mono_method_signature_internal (method);
 	g_assert (sig);
@@ -172,8 +174,8 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 	cinfo->wrapper = jit_wrapper;
 
 	if (sig->ret->type != MONO_TYPE_VOID) {
-		int mt = mint_type (sig->ret);
-		if (mt == MINT_TYPE_VT) {
+		MintType mt = mint_type (sig->ret);
+		if (mt == MintType::VT) {
 			MonoClass *klass = mono_class_from_mono_type_internal (sig->ret);
 			/*
 			 * We cache this size here, instead of the instruction stream of the
@@ -187,7 +189,7 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 		}
 		cinfo->ret_mt = mt;
 	} else {
-		cinfo->ret_mt = -1;
+		cinfo->ret_mt = std::nullopt;
 	}
 
 	if (sig->param_count) {
@@ -195,10 +197,10 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 
 		for (int i = 0; i < rmethod->param_count; ++i) {
 			MonoType *t = rmethod->param_types[i];
-			int mt = mint_type (t);
+			MintType mt = mint_type (t);
 			if (sig->params[i]->byref) {
 				cinfo->arginfo[i] = JIT_ARG_BYVAL;
-			} else if (mt == MINT_TYPE_O) {
+			} else if (mt == MintType::O) {
 				cinfo->arginfo[i] = JIT_ARG_BYREF;
 			} else {
 				/* stackval->data is an union */
@@ -240,7 +242,7 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 		stack_index++;
 	}
 	/* return address */
-	if (cinfo->ret_mt != -1)
+	if (cinfo->ret_mt)
 		args[pindex++] = sp;
 	for (int i = 0; i < rmethod->param_count; ++i) {
 		stackval *sval = STACK_ADD_BYTES (sp, get_arg_offset_fast (rmethod, stack_index + i));
@@ -276,27 +278,27 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 		mono_error_set_exception_instance (error, (MonoException *) obj);
 		return;
 	}
-	if (cinfo->ret_mt != -1) {
+	if (cinfo->ret_mt) {
 		//  Sign/zero extend if necessary
-		switch (cinfo->ret_mt) {
-		case MINT_TYPE_I1:
+		switch (*cinfo->ret_mt) {
+		case MintType::I1:
 			sp->data.i = *(gint8 *) sp;
 			break;
-		case MINT_TYPE_U1:
+		case MintType::U1:
 			sp->data.i = *(guint8 *) sp;
 			break;
-		case MINT_TYPE_I2:
+		case MintType::I2:
 			sp->data.i = *(gint16 *) sp;
 			break;
-		case MINT_TYPE_U2:
+		case MintType::U2:
 			sp->data.i = *(guint16 *) sp;
 			break;
-		case MINT_TYPE_I4:
-		case MINT_TYPE_I8:
-		case MINT_TYPE_R4:
-		case MINT_TYPE_R8:
-		case MINT_TYPE_VT:
-		case MINT_TYPE_O:
+		case MintType::I4:
+		case MintType::I8:
+		case MintType::R4:
+		case MintType::R8:
+		case MintType::VT:
+		case MintType::O:
 			/* The result was written to sp */
 			break;
 		default:

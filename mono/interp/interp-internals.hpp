@@ -11,16 +11,7 @@
 #include <mono/metadata/handle.h>
 #include "interp.h"
 
-#define MINT_TYPE_I1 0
-#define MINT_TYPE_U1 1
-#define MINT_TYPE_I2 2
-#define MINT_TYPE_U2 3
-#define MINT_TYPE_I4 4
-#define MINT_TYPE_I8 5
-#define MINT_TYPE_R4 6
-#define MINT_TYPE_R8 7
-#define MINT_TYPE_O 8
-#define MINT_TYPE_VT 9
+#include <cstdint>
 
 #define INLINED_METHOD_FLAG 0xffff
 #define TRACING_FLAG 0x1
@@ -52,12 +43,32 @@ enum {
 #if SIZEOF_VOID_P == 4
 typedef guint32 mono_u;
 typedef gint32 mono_i;
-#define MINT_TYPE_I MINT_TYPE_I4
 #elif SIZEOF_VOID_P == 8
 typedef guint64 mono_u;
 typedef gint64 mono_i;
-#define MINT_TYPE_I MINT_TYPE_I8
 #endif
+
+/// How a value is held in memory: the width and the signedness a local, a field
+/// or an argument is loaded and stored at.
+enum class MintType : std::uint8_t {
+	I1 = 0,
+	U1 = 1,
+	I2 = 2,
+	U2 = 3,
+	I4 = 4,
+	I8 = 5,
+	R4 = 6,
+	R8 = 7,
+	O = 8,
+	VT = 9,
+
+	/// A native int, and so an alias for whichever of I4 and I8 that is.
+#if SIZEOF_VOID_P == 8
+	I = I8,
+#else
+	I = I4,
+#endif
+};
 
 #ifdef TARGET_WASM
 #define INTERP_NO_STACK_SCAN 1
@@ -472,53 +483,53 @@ gboolean mono_interp_run_finally (StackFrameInfo *frame, int clause_index,
 gboolean mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_index,
                                  gpointer handler_ip, gpointer handler_ip_end);
 
-static inline int
+static inline MintType
 mint_type (MonoType *type_)
 {
 	MonoType *type = mini_native_type_replace_type (type_);
 	if (type->byref)
-		return MINT_TYPE_I;
+		return MintType::I;
 enum_type:
 	switch (type->type) {
 	case MONO_TYPE_I1:
-		return MINT_TYPE_I1;
+		return MintType::I1;
 	case MONO_TYPE_U1:
 	case MONO_TYPE_BOOLEAN:
-		return MINT_TYPE_U1;
+		return MintType::U1;
 	case MONO_TYPE_I2:
-		return MINT_TYPE_I2;
+		return MintType::I2;
 	case MONO_TYPE_U2:
 	case MONO_TYPE_CHAR:
-		return MINT_TYPE_U2;
+		return MintType::U2;
 	case MONO_TYPE_I4:
 	case MONO_TYPE_U4:
-		return MINT_TYPE_I4;
+		return MintType::I4;
 	case MONO_TYPE_I:
 	case MONO_TYPE_U:
 	case MONO_TYPE_PTR:
 	case MONO_TYPE_FNPTR:
-		return MINT_TYPE_I;
+		return MintType::I;
 	case MONO_TYPE_R4:
-		return MINT_TYPE_R4;
+		return MintType::R4;
 	case MONO_TYPE_I8:
 	case MONO_TYPE_U8:
-		return MINT_TYPE_I8;
+		return MintType::I8;
 	case MONO_TYPE_R8:
-		return MINT_TYPE_R8;
+		return MintType::R8;
 	case MONO_TYPE_STRING:
 	case MONO_TYPE_SZARRAY:
 	case MONO_TYPE_CLASS:
 	case MONO_TYPE_OBJECT:
 	case MONO_TYPE_ARRAY:
-		return MINT_TYPE_O;
+		return MintType::O;
 	case MONO_TYPE_VALUETYPE:
 		if (m_class_is_enumtype (type->data.klass)) {
 			type = mono_class_enum_basetype_internal (type->data.klass);
 			goto enum_type;
 		} else
-			return MINT_TYPE_VT;
+			return MintType::VT;
 	case MONO_TYPE_TYPEDBYREF:
-		return MINT_TYPE_VT;
+		return MintType::VT;
 	case MONO_TYPE_GENERICINST:
 		type = m_class_get_byval_arg (type->data.generic_class->container_class);
 		goto enum_type;
@@ -526,7 +537,6 @@ enum_type:
 		g_warning ("got type 0x%02x", type->type);
 		g_assert_not_reached ();
 	}
-	return -1;
 }
 
 #endif /* __MONO_INTERP_INTERNALS_H__ */
