@@ -1,8 +1,10 @@
 
-file(GLOB_RECURSE sources CONFIGURE_DEPENDS
-    *.c
-    *.cpp
+file(GLOB sources CONFIGURE_DEPENDS
+  *.c
+  *.cpp
+  opcodes/*.cpp
 )
+
 # The whitebox driver is a test program with its own main, built separately by
 # MonoInterpTests.cmake.  Linking it here gives every mono binary a second main.
 list(REMOVE_ITEM sources "${CMAKE_CURRENT_SOURCE_DIR}/whitebox.c")
