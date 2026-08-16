@@ -35,7 +35,10 @@
 
 #include "mono/llvm/runtime.h"
 
+/* Outside the namespace, because interp-internals.hpp declares it there. */
 MonoInterpStats mono_interp_stats;
+
+namespace mono::interp {
 
 #define DEBUG 0
 
@@ -1175,63 +1178,6 @@ get_data_item_index_nonshared (TransformData *td, void *ptr)
 	return index;
 }
 
-/*
- * Whether do_jit_call () can marshal a call to METHOD at all. These are limits
- * of that marshalling - what the gsharedvt_out wrapper can be built for and what
- * the interpreter's stack can be handed across - rather than a policy about when
- * calling natively is worth it. A method that fails here stays interpreted
- * however thoroughly it has been compiled.
- */
-gboolean
-mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig)
-{
-	if (sig->param_count > 6)
-		return FALSE;
-	/* The callee's own signature says nothing about the arguments a vararg
-	 * call site actually pushed, so the wrapper cannot be built for one. */
-	if (sig->call_convention == MONO_CALL_VARARG)
-		return FALSE;
-	if (sig->pinvoke)
-		return FALSE;
-	if (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)
-		return FALSE;
-	if (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
-		return FALSE;
-	if (method->is_inflated)
-		return FALSE;
-	if (method->string_ctor)
-		return FALSE;
-	if (method->wrapper_type != MONO_WRAPPER_NONE)
-		return FALSE;
-
-	return TRUE;
-}
-
-gboolean
-mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
-{
-	GSList *l;
-
-	if (!mono_interp_jit_call_marshallable (method, sig))
-		return FALSE;
-
-	if (mono_aot_only && m_class_get_image (method->klass)->aot_module && !(method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)) {
-		ERROR_DECL (error);
-		gpointer addr = mono_jit_compile_method_jit_only (method, error);
-		if (addr && is_ok (error))
-			return TRUE;
-	}
-
-	for (l = mono_interp_jit_classes; l; l = l->next) {
-		const char *class_name = (const char*)l->data;
-		// FIXME: Namespaces
-		if (!strcmp (m_class_get_name (method->klass), class_name))
-			return TRUE;
-	}
-
-	//return TRUE;
-	return FALSE;
-}
 
 static int mono_class_get_magic_index (MonoClass *k)
 {
@@ -1448,33 +1394,6 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 	return g_string_free (str, FALSE);
 }
 
-void
-mono_interp_dis_mintop (const guint16 *ip, const guint16 *start)
-{
-	int opcode = *ip;
-	int ins_offset = ip - start;
-
-	g_print ("IR_%04x: %-14s", ins_offset, mono_interp_opname (opcode));
-	ip++;
-
-        if (mono_interp_op_dregs [opcode] == MINT_CALL_ARGS)
-                g_print (" [call_args %d <-", *ip++);
-        else if (mono_interp_op_dregs [opcode] > 0)
-                g_print (" [%d <-", *ip++);
-        else
-                g_print (" [nil <-");
-
-        if (mono_interp_op_sregs [opcode] > 0) {
-                for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
-                        g_print (" %d", *ip++);
-                g_print ("],");
-        } else {
-                g_print (" nil],");
-        }
-	char *ins = dump_interp_ins_data (NULL, ins_offset, ip, opcode);
-	g_print ("%s\n", ins);
-	g_free (ins);
-}
 
 static void
 dump_interp_code (const guint16 *start, const guint16* end)
@@ -1530,38 +1449,6 @@ dump_interp_bb (InterpBasicBlock *bb)
 	g_print ("BB%d:\n", bb->index);
 	for (InterpInst *ins = bb->first_ins; ins != NULL; ins = ins->next)
 		dump_interp_inst (ins);
-}
-
-
-/* For debug use */
-void
-mono_interp_print_code (InterpMethod *imethod)
-{
-	MonoJitInfo *jinfo = imethod->jinfo;
-	const guint8 *start;
-
-	if (!jinfo)
-		return;
-
-	char *name = mono_method_full_name (imethod->method, 1);
-	g_print ("Method : %s\n", name);
-	g_free (name);
-
-	start = (guint8*) jinfo->code_start;
-	dump_interp_code ((const guint16*)start, (const guint16*)(start + jinfo->code_size));
-}
-
-/* For debug use */
-void
-mono_interp_print_td_code (TransformData *td)
-{
-	char *name = mono_method_full_name (td->method, TRUE);
-	g_print ("IR for \"%s\"\n", name);
-	g_free (name);
-
-	for (InterpBasicBlock *bb = td->entry_bb; bb != NULL; bb = bb->next_bb)
-		for (InterpInst *ins = bb->first_ins; ins != NULL; ins = ins->next)
-			dump_interp_inst (ins);
 }
 
 
@@ -4020,12 +3907,6 @@ interp_method_compute_offsets (TransformData *td, InterpMethod *imethod, MonoMet
 	td->total_locals_size = offset;
 }
 
-void
-mono_test_interp_method_compute_offsets (TransformData *td, InterpMethod *imethod, MonoMethodSignature *signature, MonoMethodHeader *header)
-{
-	ERROR_DECL (error);
-	interp_method_compute_offsets (td, imethod, signature, header, error);
-}
 
 static gboolean
 type_has_references (MonoType *type)
@@ -8640,11 +8521,6 @@ retry:
 	g_free (local_ref_count);
 }
 
-void
-mono_test_interp_cprop (TransformData *td)
-{
-	interp_cprop (td);
-}
 
 static void
 interp_super_instructions (TransformData *td)
@@ -8873,15 +8749,151 @@ exit:
 	mono_mempool_destroy (td->mempool);
 }
 
+
+static mono_mutex_t calc_section;
+
+} // namespace mono::interp
+
+/* Outside the namespace, because interp-internals.hpp and transform.hpp
+ * declare them there. */
+
+using namespace mono::interp;
+
+/*
+ * Whether do_jit_call () can marshal a call to METHOD at all. These are limits
+ * of that marshalling - what the gsharedvt_out wrapper can be built for and what
+ * the interpreter's stack can be handed across - rather than a policy about when
+ * calling natively is worth it. A method that fails here stays interpreted
+ * however thoroughly it has been compiled.
+ */
+gboolean
+mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig)
+{
+	if (sig->param_count > 6)
+		return FALSE;
+	/* The callee's own signature says nothing about the arguments a vararg
+	 * call site actually pushed, so the wrapper cannot be built for one. */
+	if (sig->call_convention == MONO_CALL_VARARG)
+		return FALSE;
+	if (sig->pinvoke)
+		return FALSE;
+	if (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)
+		return FALSE;
+	if (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+		return FALSE;
+	if (method->is_inflated)
+		return FALSE;
+	if (method->string_ctor)
+		return FALSE;
+	if (method->wrapper_type != MONO_WRAPPER_NONE)
+		return FALSE;
+
+	return TRUE;
+}
+
+gboolean
+mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
+{
+	GSList *l;
+
+	if (!mono_interp_jit_call_marshallable (method, sig))
+		return FALSE;
+
+	if (mono_aot_only && m_class_get_image (method->klass)->aot_module && !(method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)) {
+		ERROR_DECL (error);
+		gpointer addr = mono_jit_compile_method_jit_only (method, error);
+		if (addr && is_ok (error))
+			return TRUE;
+	}
+
+	for (l = mono_interp_jit_classes; l; l = l->next) {
+		const char *class_name = (const char*)l->data;
+		// FIXME: Namespaces
+		if (!strcmp (m_class_get_name (method->klass), class_name))
+			return TRUE;
+	}
+
+	//return TRUE;
+	return FALSE;
+}
+
+void
+mono_interp_dis_mintop (const guint16 *ip, const guint16 *start)
+{
+	int opcode = *ip;
+	int ins_offset = ip - start;
+
+	g_print ("IR_%04x: %-14s", ins_offset, mono_interp_opname (opcode));
+	ip++;
+
+        if (mono_interp_op_dregs [opcode] == MINT_CALL_ARGS)
+                g_print (" [call_args %d <-", *ip++);
+        else if (mono_interp_op_dregs [opcode] > 0)
+                g_print (" [%d <-", *ip++);
+        else
+                g_print (" [nil <-");
+
+        if (mono_interp_op_sregs [opcode] > 0) {
+                for (int i = 0; i < mono_interp_op_sregs [opcode]; i++)
+                        g_print (" %d", *ip++);
+                g_print ("],");
+        } else {
+                g_print (" nil],");
+        }
+	char *ins = dump_interp_ins_data (NULL, ins_offset, ip, opcode);
+	g_print ("%s\n", ins);
+	g_free (ins);
+}
+
+/* For debug use */
+void
+mono_interp_print_code (InterpMethod *imethod)
+{
+	MonoJitInfo *jinfo = imethod->jinfo;
+	const guint8 *start;
+
+	if (!jinfo)
+		return;
+
+	char *name = mono_method_full_name (imethod->method, 1);
+	g_print ("Method : %s\n", name);
+	g_free (name);
+
+	start = (guint8*) jinfo->code_start;
+	dump_interp_code ((const guint16*)start, (const guint16*)(start + jinfo->code_size));
+}
+
+/* For debug use */
+void
+mono_interp_print_td_code (TransformData *td)
+{
+	char *name = mono_method_full_name (td->method, TRUE);
+	g_print ("IR for \"%s\"\n", name);
+	g_free (name);
+
+	for (InterpBasicBlock *bb = td->entry_bb; bb != NULL; bb = bb->next_bb)
+		for (InterpInst *ins = bb->first_ins; ins != NULL; ins = ins->next)
+			dump_interp_inst (ins);
+}
+
+void
+mono_test_interp_method_compute_offsets (TransformData *td, InterpMethod *imethod, MonoMethodSignature *signature, MonoMethodHeader *header)
+{
+	ERROR_DECL (error);
+	interp_method_compute_offsets (td, imethod, signature, header, error);
+}
+
+void
+mono_test_interp_cprop (TransformData *td)
+{
+	interp_cprop (td);
+}
+
 gboolean
 mono_test_interp_generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, MonoGenericContext *generic_context, MonoError *error)
 {
 	return generate_code (td, method, header, generic_context, error);
 }
-
-static mono_mutex_t calc_section;
-
-
 
 void 
 mono_interp_transform_init (void)
@@ -9066,4 +9078,3 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 	// FIXME: Add a different callback ?
 	MONO_PROFILER_RAISE (jit_done, (method, imethod->jinfo));
 }
-
