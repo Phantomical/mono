@@ -7,6 +7,13 @@
 
 namespace mono::interp {
 
+/*
+ * The branch opcodes, most of them pasted together from a base name and a type
+ * suffix: MINT_BEQ_I4 and MINT_BEQ_I4_S come from IMPL_INT_CONDBR (MINT_BEQ, ...),
+ * so grepping for the full name of one finds nothing. The _S form is the same
+ * branch with a short displacement.
+ */
+
 #define IMPL_BRANCH_CORE(opcode, cond)                                         \
 	MONO_INTERP_OP_IMPL (opcode)                                               \
 	{                                                                          \
