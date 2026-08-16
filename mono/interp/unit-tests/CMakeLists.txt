@@ -50,13 +50,6 @@ if(ZLIB_FOUND)
 endif()
 set_target_properties(test-interp PROPERTIES LINKER_LANGUAGE CXX)
 
-# A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest says
-# so only in its output -- the process still exits 0.
-#
-# One label, not two: gtest_discover_tests writes TEST_PROPERTIES out unquoted,
-# so a second label would be read back as a property name. `ctest -L` matches a
-# regex, so `-L interp` still selects these along with the tiered arms, and
-# `-L interp-unit` is what asks for them on their own.
 gtest_discover_tests(test-interp
   TEST_PREFIX test-interp/
   DISCOVERY_MODE PRE_TEST

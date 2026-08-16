@@ -231,6 +231,10 @@ if(BUILD_TESTING)
   # it has to rebuild what it is about to test.
   if(MONO_ENABLE_INTERPRETER AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
     add_dependencies(check-interp test-interp)
+    if(MONO_CORPUS_ENABLED)
+      # interp-test-suites carries the runner as well as the assemblies.
+      add_dependencies(check-interp interp-test-suites)
+    endif()
   endif()
 
   if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_SGEN)

@@ -1,17 +1,11 @@
 #include "harness.hpp"
 
-/*
- * assembly-internals.h has no linkage guard of its own, so it has to be pulled in
- * before anything else reaches it and given one here.
- */
 #include "config.h"
 #include <glib.h>
-extern "C" {
-#include <mono/metadata/assembly-internals.h>
-}
 
 #include "mono/interp/mintops.h"
 
+#include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/class-inlines.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/debug-helpers.h>

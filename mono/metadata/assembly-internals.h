@@ -11,6 +11,8 @@
 #include <mono/metadata/assembly.h>
 #include <mono/metadata/metadata-internals.h>
 
+MONO_BEGIN_DECLS
+
 #ifndef ENABLE_NETCORE
 #define MONO_ASSEMBLY_CORLIB_NAME "mscorlib"
 #else
@@ -155,5 +157,7 @@ mono_assembly_get_image_internal (MonoAssembly *assembly);
 
 void
 mono_set_assemblies_path_direct (char **path);
+
+MONO_END_DECLS
 
 #endif /* __MONO_METADATA_ASSEMBLY_INTERNALS_H__ */
