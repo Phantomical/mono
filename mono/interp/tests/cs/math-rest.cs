@@ -2,8 +2,7 @@
 // MINT_DIV_UN_I8, MINT_REM_I8, MINT_REM_UN_I4 and MINT_REM_UN_I8.  Each one gets
 // its in-range cases, its sign edges, and the exceptions it throws.
 //
-// A test that makes more than one check returns the number of checks that hold,
-// so a failure says how many of them were good.
+// A test that makes more than one check returns the number of checks that hold.
 //
 // Operands come through NoInlining identity helpers.  A literal operand lets the
 // transform fold the operation away, and then the opcode never runs.

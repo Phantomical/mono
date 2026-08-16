@@ -19,8 +19,7 @@
 // that move has to carry. opcodes-tail.cs holds the arms where the allocation
 // itself is the subject.
 //
-// A test that makes more than one check returns the number of checks that hold,
-// so a failure says how many of them were good.
+// A test that makes more than one check returns the number of checks that hold.
 
 using System;
 using System.Runtime.CompilerServices;

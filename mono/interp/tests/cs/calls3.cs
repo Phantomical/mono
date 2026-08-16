@@ -136,8 +136,6 @@ public class Calls3 {
 		return Id (1);
 	}
 
-	// The callee answers 4096, so a slot it did not write cannot pass.
-
 	public static int test_4096_no_arguments_with_result ()
 	{
 		return Calls3PageSize ();

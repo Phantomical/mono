@@ -3,9 +3,8 @@
 // arguments, and the same shape called with and without a receiver.
 //
 // A callee with more than a few arguments counts the arguments that hold the
-// value the caller sent, and returns that count. A wrong answer then says how
-// many slots arrived correctly. No two arguments carry the same value: a
-// checksum that two exchanged slots agree on tests nothing.
+// value the caller sent, and returns that count. No two arguments carry the
+// same value, so the count covers which slot each one landed in.
 //
 // The hot group calls one callee often enough for a promotion to land while the
 // caller keeps interpreting. The calls after that leave the interpreter through
@@ -150,8 +149,7 @@ public class ArgShapes {
 		return hits;
 	}
 
-	// Sixteen arguments alternating int and long, so the stride changes at every
-	// index.
+	// Sixteen arguments alternating int and long.
 	public static int test_16_sixteen_arguments_alternate_width ()
 	{
 		return ASSixteen (ASId (1), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);

@@ -2,8 +2,7 @@
 // MINT_ABS and its family are the double form, MINT_ABSF and its family the
 // float form.  Round, Min and Max stay ordinary calls.
 //
-// Each test returns the number of checks that hold, so a failure says how many
-// of them were good.
+// Each test returns the number of checks that hold.
 //
 // Operands come through NoInlining identity helpers.  A literal operand lets
 // the transform fold the call away, and then the opcode never runs.

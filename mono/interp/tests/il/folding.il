@@ -3,8 +3,8 @@
 //
 // A row in those tables runs only when cprop already knows the operands as
 // constants, so every operand here is a literal.  A value test returns what the
-// folder computed.  A branch test runs the other path and returns 0 when the
-// folder branches the wrong way.
+// folder computed.  A branch test runs the other path, so its answer says which
+// way the folder branched.
 //
 // The int64 tests compare the whole result instead of truncating it with
 // conv.i4, and each operand pair is chosen so that 32-bit arithmetic answers

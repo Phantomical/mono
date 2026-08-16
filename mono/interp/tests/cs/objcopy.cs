@@ -69,7 +69,7 @@ public class ObjCopy {
 	}
 
 	// An empty value type has nothing to compare, so the test reads the guard
-	// local back instead. A copy that disturbs the frame gives the wrong answer.
+	// local back instead.
 	public static int test_1_move_empty_struct ()
 	{
 		ObjEmpty a = default (ObjEmpty), b = default (ObjEmpty);

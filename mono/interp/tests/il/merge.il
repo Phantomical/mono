@@ -37,8 +37,7 @@
 	// and the int32 predecessor then writes four bytes into it. ECMA-335
 	// I.12.3.2.1 does not allow the merge, so what the compare below reads is
 	// undefined and the test says nothing about it. It says only that the
-	// interpreter reaches the end rather than asserting on a width it did not
-	// expect.
+	// interpreter reaches the end.
 	.method public static int32 test_1_merge_i4_into_i8 () cil managed
 	{
 		.maxstack 4
@@ -65,7 +64,7 @@
 
 	// A branch whose two operands have different stack types. The transform has
 	// a path for this that warns and picks one width. The test says only that it
-	// reaches the end rather than asserting.
+	// reaches the end.
 	.method public static int32 test_1_branch_type_mismatch () cil managed
 	{
 		.maxstack 4

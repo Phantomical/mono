@@ -1455,7 +1455,8 @@
 		ret
 	}
 
-	// A signed division would give a negative result for this operand.
+	// The dividend has its high bit set, which is where signed and unsigned
+	// division part.
 	.method public hidebysig static int32 test_1_nuint_division_is_unsigned () cil managed
 	{
 		ldc.i8 0x8000000000000000

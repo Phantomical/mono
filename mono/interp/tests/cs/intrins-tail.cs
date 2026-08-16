@@ -12,9 +12,9 @@
 // is one test for each opcode interp_get_ldind_for_mt returns here.  uint goes
 // with int and ulong with long, because mint_type puts each pair on one type.
 //
-// A read at the wrong width shows in the answer for the four-byte and the
-// eight-byte case only.  A narrower flag reaches enum_hasflag through a
-// stackval that truncates it again, so those tests hold the opcode alone.
+// Only the four-byte and the eight-byte case put the width into the answer.  A
+// narrower flag reaches enum_hasflag through a stackval that truncates it
+// again, so those tests cover the opcode alone.
 //
 // mono/interp/opcodes/intrins.cpp holds handlers this build cannot reach.
 // intrinsics3.cs names the corlib methods that are absent.  Three more sit
@@ -189,9 +189,9 @@ public class IntrinsTail {
 	public static int test_1_constrained_hasflag_other_class_throws ()
 	{
 		// The flag and the constrained class are different enums, which is the one
-		// condition no other shape of the call can fail.  The opcode reads both
-		// operands through one class, so a rewrite here answers instead of
-		// throwing.
+		// condition no other shape of the call can fail.  Only the managed
+		// Enum.HasFlag throws on that pair, so the ArgumentException says the arm
+		// declined.
 		try {
 			return AI4 (Keep (IntrinsTailOther.A)) ? 2 : 3;
 		} catch (ArgumentException) {

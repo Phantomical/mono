@@ -18,8 +18,7 @@
 // or a message to the remote object. fields.cs holds the first arm. The second
 // needs a transparent proxy, which RealProxy.GetTransparentProxy returns.
 //
-// A test that makes more than one check returns the number of checks that hold,
-// so a failure says how many of them were good.
+// A test that makes more than one check returns the number of checks that hold.
 
 // We are intentionally doing this, so the warnings are just noise.
 #pragma warning disable CS1690

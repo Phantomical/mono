@@ -482,8 +482,8 @@ public class Fields {
 		return fromStatic.Name.Length + fromThread.N;
 	}
 
-	// sBump starts at a value of its own, so an address that names the wrong
-	// field gives 7 instead of 9.
+	// sBump starts at a value of its own, so the answer names the field the
+	// address reached.
 	public static int test_9_ldsflda ()
 	{
 		sBump = Id (2);
@@ -568,8 +568,8 @@ public class Fields {
 	[ThreadStatic] static Fields_Point tsPoint;
 	[ThreadStatic] static Fields_Tagged tsTagged;
 
-	// Nothing writes these three. They are the storage test_1_threadstatic_starts_at_zero
-	// reads, and a field another test wrote would answer it for free.
+	// Nothing writes these three. test_1_threadstatic_starts_at_zero reads them,
+	// so they have to be storage no other test has touched.
 	[ThreadStatic] static int tsFreshI4;
 	[ThreadStatic] static long tsFreshI8;
 	[ThreadStatic] static string tsFreshO;

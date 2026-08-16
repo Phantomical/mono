@@ -393,8 +393,8 @@ public class UnsafeOps {
 		byte* src = stackalloc byte[16];
 		byte* dst = stackalloc byte[16];
 
-		// If the two buffers shared memory, the fill would put 0xff into src as
-		// well and the total would not be 45.
+		// Each buffer gets a fill of its own, so the sum at the end covers whether
+		// the two allocations overlap.
 		for (int i = 0; i < 10; i++) {
 			src[i] = (byte) i;
 			dst[i] = 0xff;

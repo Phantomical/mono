@@ -55,9 +55,8 @@ public class Intrinsics2 {
 
 	// A rectangular array's Set becomes element address arithmetic and a store,
 	// and the store opcode comes from the element type.  One test per width.
-	// The neighbouring element goes in first and is read back after, because a
-	// store of the wrong width writes over it and still leaves the element under
-	// test correct.
+	// Each test writes the neighbouring element first and reads it back after,
+	// so the width of the store is under test as well as its value.
 
 	public static int test_9_array2d_set_u1 ()
 	{

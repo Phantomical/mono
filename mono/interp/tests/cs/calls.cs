@@ -7,8 +7,7 @@
 // cannot fold a site into its answer.
 //
 // Where a test makes more than one call, each call carries a different weight
-// into the answer. A sum gives the same total when two slots or two fields
-// exchange places, and a test of layout that cannot see that tests nothing.
+// into the answer, so the answer covers which slot each result came from.
 
 using System;
 using System.Runtime.CompilerServices;

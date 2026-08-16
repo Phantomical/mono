@@ -8,8 +8,8 @@
 // opcodes gets two tests: one through a helper marked noinlining, and one
 // through a helper small enough to inline.
 //
-// A helper mixes the long form under test with the short form of its sibling.
-// A wrong index then gives a wrong answer, rather than two errors that cancel.
+// A helper mixes the long form under test with the short form of its sibling,
+// so the answer covers the index each of the two used.
 
 .assembly extern mscorlib { }
 

@@ -73,8 +73,7 @@ public class IntrinsicsSuite {
 	//
 	// One test for each width the enum can carry, because the opcode reads the
 	// operands through the underlying type.  Each test asks a true question and a
-	// false one.  A read at the wrong width still answers true when the flag bits
-	// sit inside the value, so the false question pins the width down.
+	// false one, and the false one is what covers the width.
 
 	public static int test_1_hasflag_u1_high_bit ()
 	{

@@ -152,8 +152,8 @@ public class Elements {
 		return ElGet<long> (a, Id (1)) == 0x1122334455667788L ? 1 : 0;
 	}
 
-	// 0.1 has no exact float. An element that still equals the double would show
-	// that the store kept eight bytes.
+	// 0.1 has no exact float, so the element compares equal to the single and
+	// not to the double.
 	public static int test_1_generic_element_float ()
 	{
 		float[] a = new float[Id (2)];

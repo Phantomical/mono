@@ -3,8 +3,8 @@
 //
 // interp_method_check_inlining makes the decision, and it turns on the callee's
 // IL size, its flags, its clauses and its class. Each test here calls a callee
-// of one shape and checks the answer, so a wrong inline shows up as a wrong
-// number rather than as a missing optimization.
+// of one shape and checks the answer, so what is under test is the behaviour of
+// the body rather than whether the inline happened.
 
 using System;
 using System.Runtime.CompilerServices;

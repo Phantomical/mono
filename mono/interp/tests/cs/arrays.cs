@@ -21,9 +21,8 @@ public class Arrays {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static object IdO (object x) { return x; }
 
-	// A test that expects an allocation to throw stores it here. If it
-	// returned the length instead, an engine that made a one-element array
-	// would give the answer the test wants.
+	// A test that expects an allocation to throw stores it here, so its answer
+	// never comes from the allocation.
 	static Array ArrSink;
 
 	struct ArrPoint {

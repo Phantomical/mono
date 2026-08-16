@@ -90,8 +90,8 @@ public class Signatures2 {
 	}
 
 	// A generic instance asks the native layout for its size, which is the branch
-	// a plain value type does not take. Both fields are read, so a size taken
-	// from the wrong layout leaves the second one wrong.
+	// a plain value type does not take. The test reads both fields, so the size
+	// that branch computes is under test as well as the first field.
 	public static int test_1_pinvoke_generic_struct_return ()
 	{
 		Sig2DivOf<int> d = NativeDivOf (Id (17), Id (5));

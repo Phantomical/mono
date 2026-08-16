@@ -104,8 +104,7 @@
 	// One integer width per test, signed and unsigned
 	// ------------------------------------------------------------------
 
-	// The element holds one byte and the load sign-extends it, so an unsigned
-	// load would give 255 here.
+	// The element holds one byte and the load sign-extends it.
 	.method public static int32 test_1_int8_token () cil managed
 	{
 		.maxstack 4
@@ -149,8 +148,8 @@
 		ret
 	}
 
-	// A bool element is one byte wide. The neighbour stays zero, which a store
-	// of the whole four bytes would break.
+	// A bool element is one byte wide, so the store has to leave the neighbour
+	// at zero.
 	.method public static int32 test_1_bool_token () cil managed
 	{
 		.maxstack 4

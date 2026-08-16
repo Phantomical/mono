@@ -228,8 +228,8 @@ public class StringIntrins {
 		string a = Build (Id (16), Id (0)) + StrId ("[\\]^_`");
 		string b = Build (Id (16), Id (0)) + StrId ("{|}~\u007f@");
 
-		// The same six characters after an upper-case head still fold, so a
-		// compare stuck on "not equal" cannot pass this.
+		// The same six characters after an upper-case head still fold, so this
+		// asks the comparison for a true answer as well as a false one.
 		if (!string.Equals (a, BuildUpper (Id (16), Id (0)) + StrId ("[\\]^_`"),
 				    StringComparison.OrdinalIgnoreCase))
 			return 0;

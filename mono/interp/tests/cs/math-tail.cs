@@ -6,8 +6,7 @@
 // and a subnormal pick no arm, because each libm handler is one expression.
 // They check the answer the handler gives rather than the path it takes.
 //
-// A test that makes more than one check returns the number of checks that hold,
-// so a failure says how many of them were good.
+// A test that makes more than one check returns the number of checks that hold.
 //
 // Operands come through NoInlining identity helpers.  A literal operand lets the
 // transform fold the operation away, and then the opcode never runs.

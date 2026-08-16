@@ -209,8 +209,7 @@ public class Generics {
 
 	public static int test_11_generic_method_over_i8_and_r8 ()
 	{
-		// The high word and the fraction both have to survive, so a value that a
-		// narrowed slot would truncate gives the wrong answer.
+		// The high word and the fraction both have to survive the generic slot.
 		long l = GenIdT<long> (IdL (0x100000005L));
 		double d = GenIdT<double> (IdD (2.5));
 

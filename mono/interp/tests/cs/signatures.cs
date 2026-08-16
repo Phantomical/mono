@@ -274,8 +274,8 @@ public class Signatures {
 	}
 
 	// Arguments of different sizes in one signature: each moves the write
-	// position by the size the conversion reports, so a wrong size in the middle
-	// displaces every argument behind it.
+	// position by the size the conversion reports, so the sub-slot value in the
+	// middle covers that arithmetic.
 	public static int test_1_invoke_mixed_value_types ()
 	{
 		SignaturesS4 a = new SignaturesS4 { A = 1 };

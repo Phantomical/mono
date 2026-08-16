@@ -1,9 +1,8 @@
 // The decisions inside interp_handle_intrinsics that intrinsics.cs,
 // intrinsics2.cs, mathintrins.cs and arrays.cs leave alone.  Most of these are
 // near misses: a call that reaches an arm of that function, fails one of the
-// conditions there, and has to leave as an ordinary call.  A near miss answers
-// correctly when the arm refuses it and answers wrongly, or throws nothing,
-// when the arm takes it.
+// conditions there, and has to leave as an ordinary call.  A near miss is right
+// only when the arm refuses it, so the answer says which way the arm went.
 //
 // The arms this file cannot reach need a corlib method this tree does not
 // build.  System.Text.Unicode.Utf16Utility, System.Text.ASCIIUtility,
@@ -61,8 +60,8 @@ public class Intrinsics3 {
 	public static int test_1_hasflag_of_two_enum_types_throws ()
 	{
 		// All three instructions of the shape are here, and the two boxed classes
-		// differ.  The opcode reads both operands through the class of the
-		// receiver, so a rewrite here answers 1 instead of throwing.
+		// differ.  Only the managed Enum.HasFlag throws on that pair, so the
+		// ArgumentException says the arm declined.
 		try {
 			return Keep (Intrinsics3Bits.A).HasFlag (Intrinsics3Wide.A) ? 2 : 3;
 		} catch (ArgumentException) {

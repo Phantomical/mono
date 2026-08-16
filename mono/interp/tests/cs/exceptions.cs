@@ -556,9 +556,6 @@ public class Exceptions {
 	// block, it is intercepted and a value of exception_continue_search is
 	// returned." The search therefore passes the filtered clause, and the plain
 	// clause behind it answers, which is 2.
-	//
-	// The 4 separates an engine that loses ExcAlpha on the way out from one that
-	// simply runs the wrong handler.
 	public static int test_2_an_exception_in_a_filter_continues_the_search ()
 	{
 		try {

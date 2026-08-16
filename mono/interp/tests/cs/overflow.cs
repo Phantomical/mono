@@ -3,7 +3,7 @@
 //
 // A test usually gives the widest value that stays in range, and the nearest
 // value that does not, on both signs where the type has two. Each case sets one
-// bit of the returned number, so a failure names the case that broke.
+// bit of the returned number.
 
 using System;
 using System.Runtime.CompilerServices;
@@ -11,8 +11,8 @@ using System.Runtime.CompilerServices;
 [NoOpt]
 public class Overflow {
 
-	// The transform folds constants and inlines a short callee, so an operand
-	// that comes straight from a literal tests nothing.
+	// The transform folds constants and inlines a short callee, so every operand
+	// reaches its opcode through one of these.
 	[MethodImpl (MethodImplOptions.NoInlining)] static int IdI4 (int x) { return x; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static uint IdU4 (uint x) { return x; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static long IdI8 (long x) { return x; }
@@ -199,7 +199,7 @@ public class Overflow {
 		if (checked ((sbyte) IdI8 (-128)) == -128) r |= 2;
 		try { SinkI4 = checked ((sbyte) IdI8 (128)); } catch (OverflowException) { r |= 4; }
 		try { SinkI4 = checked ((sbyte) IdI8 (-129)); } catch (OverflowException) { r |= 8; }
-		// The range test reads all 64 bits, not the byte that would survive.
+		// The range test reads all 64 bits of the source.
 		try { SinkI4 = checked ((sbyte) IdI8 (0x100000001L)); } catch (OverflowException) { r |= 16; }
 		return r;
 	}

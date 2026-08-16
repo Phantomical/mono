@@ -7,8 +7,7 @@
 // immediately before an unbox.any of the same type, and the call keeps that
 // pair apart.
 //
-// Where one test covers several widths it returns one bit for each of them, so
-// a wrong answer names the width that broke.
+// Where one test covers several widths it returns one bit for each of them.
 
 using System;
 using System.Runtime.CompilerServices;
@@ -89,7 +88,7 @@ public class ValueTypes {
 		if ((byte) VTIdO (VTIdU1 (200)) == 200) r |= 2;
 		if ((short) VTIdO (VTIdI2 (-30000)) == -30000) r |= 4;
 		if ((ushort) VTIdO (VTIdU2 (60000)) == 60000) r |= 8;
-		// The char is above 0xff, so a box that keeps one byte of it is a miss.
+		// The char is above 0xff, so this row covers both bytes of it.
 		if ((char) VTIdO (VTIdC ('\u20ac')) == '\u20ac') r |= 16;
 		if ((bool) VTIdO (VTIdBool (true))) r |= 32;
 		return r;

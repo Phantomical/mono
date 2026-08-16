@@ -52,8 +52,8 @@
 		ret
 	}
 
-	// Deep enough that a tail call that made a frame would be visible as stack
-	// growth rather than as an answer.
+	// Deep enough that the tail call has to reuse the frame rather than make a
+	// new one.
 	.method public static int32 TailCount (int32 n, int32 acc) cil managed
 	{
 		.maxstack 3

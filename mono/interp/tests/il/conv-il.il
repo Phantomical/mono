@@ -190,7 +190,7 @@
 		ret
 	}
 
-	// A value too wide for four bytes, so a 32 bit conversion would lose it.
+	// The source is too wide for four bytes.
 	.method public static int32 test_1_conv_i_from_r8_is_64_bit () cil managed
 	{
 		.maxstack 3
