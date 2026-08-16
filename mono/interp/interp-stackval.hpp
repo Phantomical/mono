@@ -1,30 +1,19 @@
-#ifndef __MONO_INTERP_INTERP_INTERNALS_HPP__
-#define __MONO_INTERP_INTERP_INTERNALS_HPP__
+#ifndef __MONO_INTERP_INTERP_STACKVAL_HPP__
+#define __MONO_INTERP_INTERP_STACKVAL_HPP__
 
-#include "interp.hpp"
-#include "mono/llvm/runtime.h"
-#include "mono/metadata/appdomain.h"
-#include "mono/mini/mini.h"
-#include "mono/utils/atomic.h"
+/**
+ * \file
+ * \brief Moving a value between the interpreter stack and memory.
+ */
+
+#include "interp-internals.h"
+
+#include <mono/metadata/class-internals.h>
+#include <mono/metadata/object-internals.h>
+#include <mono/mini/mini.h>
+#include <cstring>
 
 namespace mono::interp {
-namespace {
-
-inline bool
-isinst (MonoObject *object, MonoClass *klass, MonoError *error)
-{
-	MonoClass *obj_class = mono_object_class (object);
-
-	// mono_class_is_assignable_from_checked can't handle remoting casts
-	if (G_UNLIKELY (mono_class_is_transparent_proxy (obj_class)))
-		return mono_object_isinst_checked (object, klass, error);
-
-	gboolean isinst = false;
-	mono_class_is_assignable_from_checked (klass, obj_class, &isinst, error);
-	return isinst;
-}
-
-} // namespace
 
 /*
  * Moving a value between the interpreter stack and memory laid out the way the
@@ -250,223 +239,11 @@ stackval_to_data (MonoType *type, stackval *val, void *data, gboolean pinvoke)
 		g_error ("got type %x", type->type);
 	}
 }
-
-inline gint32
-enum_hasflag (stackval *sp1, stackval *sp2, MonoClass *klass)
-{
-	guint64 a_val = 0, b_val = 0;
-
-	stackval_to_data (m_class_get_byval_arg (klass), sp1, &a_val, FALSE);
-	stackval_to_data (m_class_get_byval_arg (klass), sp2, &b_val, FALSE);
-	return (a_val & b_val) == b_val;
-}
-
-inline InterpMethod *
-lookup_method_pointer (MonoDomain *domain, gpointer addr)
-{
-	MonoJitDomainInfo *info = domain_jit_info (domain);
-	InterpMethod *res = NULL;
-
-	mono_domain_lock (domain);
-	if (info->interp_method_pointer_hash)
-		res = (InterpMethod *) g_hash_table_lookup (info->interp_method_pointer_hash, addr);
-	mono_domain_unlock (domain);
-
-	return res;
-}
-
-/// Get the InterpMethod* that corresponds to entry point address addr.
-///
-/// \returns the method, if known, and null otherwise.
-inline InterpMethod *
-imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
-{
-	if (InterpMethod *imethod = lookup_method_pointer (domain, addr))
-		return imethod;
-
-	/*
-	 * A compiled entry: the method is the one whose code that address falls in.
-	 * Executing it here rather than jumping to the code keeps a single engine in
-	 * charge of the frame.
-	 */
-	MonoJitInfo *ji = mono_jit_info_table_find_internal (
-		domain, mono_get_addr_from_ftnptr (MINI_FTNPTR_TO_ADDR (addr)), TRUE, TRUE);
-
-	if (!ji)
-		return nullptr;
-
-	/*
-	 * A method's published address is its stub, and a stub is registered as a
-	 * trampoline. The record still says which method it stands for, so a
-	 * trampoline is an answer rather than a refusal. Some trampolines belong to
-	 * no method, and those are the ones with nothing to return.
-	 */
-	MonoMethod *method = ji->is_trampoline ? ji->d.tramp_info->method
-	                                       : mono_jit_info_get_method (ji);
-
-	if (!method)
-		return nullptr;
-
-	return mono_interp_get_imethod (domain, method, error);
-}
-
-/*
- * interp_push_lmf:
- *
- * Push an LMF frame on the LMF stack
- * to mark the transition to native code.
- * This is needed for the native code to
- * be able to do stack walks.
- */
-inline void
-interp_push_lmf (MonoLMFExt *ext, InterpFrame *frame)
-{
-	/*
-	 * Only these two fields and lmf.previous_lmf, which mono_push_lmf ()
-	 * writes, are ever read back: the rest of the MonoLMF is documented as
-	 * invalid once its second lowest bit marks the entry as an ext, and ctx
-	 * belongs to the WITH_CTX kind. Zeroing the whole thing instead would
-	 * clear a MonoContext, which is most of the ~450 bytes here and costs
-	 * around a fifth of a jit call.
-	 */
-	ext->kind = MONO_LMFEXT_INTERP_EXIT;
-	ext->interp_exit_data = frame;
-
-	mono_push_lmf (ext);
-}
-
-inline void
-interp_pop_lmf (MonoLMFExt *ext)
-{
-	mono_pop_lmf (&ext->lmf);
-}
-
-// Initialize the tiering counter, if it hasn't already been initialized.
-inline void
-arm_tier_counter (gpointer imethod_ptr, gint32 calls)
-{
-	InterpMethod *imethod = (InterpMethod *) imethod_ptr;
-
-	mono_atomic_cas_i32 (&imethod->tier_counter, calls > 0 ? calls : -1, 0);
-}
-
-// Check whether we should start a background compilation of this method to tier1.
-inline MONO_NEVER_INLINE void
-interp_check_call_promotion (InterpMethod *imethod)
-{
-	gint32 left;
-
-	left = mono_atomic_dec_i32 (&imethod->tier_counter);
-	if (left != 0)
-		return;
-
-	/*
-	 * A refused request is the counter spent for nothing, and nothing else
-	 * arms it again: arm_tier_counter () is reached once per method,
-	 * from whichever of resolve_code_type () and the backend's entry sees it
-	 * first. Arming it here is what makes the loss cost this method another
-	 * threshold of calls rather than the rest of the process.
-	 */
-	if (!mono_llvm_jit_request_promotion (imethod->method, imethod->domain))
-		arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (imethod->method));
-}
-
-/*
- * Transforms the method frame is about to run, and returns what that threw or null.
- *
- * A frame whose imethod is not transformed yet is incomplete, so the transform runs
- * under the parent instead. A root frame has no parent and no walk to satisfy.
- */
-inline MonoException *
-do_transform_method (InterpFrame *frame, ThreadContext *context)
-{
-	MonoLMFExt ext;
-	gboolean push_lmf = frame->parent != NULL;
-	ERROR_DECL (error);
-
-#if DEBUG_INTERP
-	char *mn = mono_method_full_name (frame->imethod->method, TRUE);
-	g_print ("(%p) Transforming %s\n", mono_thread_internal_current (), mn);
-	g_free (mn);
-#endif
-
-	if (push_lmf)
-		interp_push_lmf (&ext, frame->parent);
-
-	mono_interp_transform_method (frame->imethod, context, error);
-
-	if (push_lmf)
-		interp_pop_lmf (&ext);
-
-	return mono_error_convert_to_exception (error);
-}
-
-/*
- * Makes frame ready to run, and returns whether it took the slow path. out_ex holds
- * what the transform threw, and is null when nothing did.
- *
- * A caller that took the slow path has to check out_ex and run an interruption
- * checkpoint. Both are rare, which is what keeps them out of the fast path.
- */
-inline MONO_ALWAYS_INLINE gboolean
-method_entry (ThreadContext *context, InterpFrame *frame,
-#if DEBUG_INTERP
-              int *out_tracing,
-#endif
-              MonoException **out_ex)
-{
-	gboolean slow = FALSE;
-
-#if DEBUG_INTERP
-	debug_enter (frame, out_tracing);
-#endif
-
-	*out_ex = NULL;
-	if (!G_UNLIKELY (frame->imethod->transformed)) {
-		slow = TRUE;
-		MonoException *ex = do_transform_method (frame, context);
-		if (ex) {
-			*out_ex = ex;
-			/*
-			 * Initialize the stack base pointer here, in the uncommon branch, so we don't
-			 * need to check for it everytime when exitting a frame.
-			 */
-			frame->stack = (stackval *) context->stack_pointer;
-			return slow;
-		}
-	}
-
-	return slow;
-}
-
-/// Runs a class initializer, and returns what it threw or null.
-inline MONO_NEVER_INLINE MonoException *
-init_vtable (MonoVTable *vtable)
-{
-	ERROR_DECL (error);
-
-	mono_runtime_class_init_full (vtable, error);
-	if (!is_ok (error))
-		return mono_error_convert_to_exception (error);
-	return nullptr;
-}
-
-} // namespace mono::interp
-
-// The class init runs here, not at transform time, so that cctors run in
-// program order.
-#define INIT_VTABLE(vtable)                        \
-	do {                                           \
-		MonoVTable *__vtable = (vtable);           \
-		if (G_UNLIKELY (!__vtable->initialized)) { \
-			if (auto ex = init_vtable (__vtable))  \
-				THROW_EX (ex, ip);                 \
-		}                                          \
-	} while (0)
-
 #define STACK_ADD_BYTES(sp, bytes) \
 	((stackval *) ((char *) (sp) + ALIGN_TO (bytes, MINT_STACK_SLOT_SIZE)))
 #define STACK_SUB_BYTES(sp, bytes) \
 	((stackval *) ((char *) (sp) - ALIGN_TO (bytes, MINT_STACK_SLOT_SIZE)))
+
+} // namespace mono::interp
 
 #endif

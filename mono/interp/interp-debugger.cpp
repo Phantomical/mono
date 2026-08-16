@@ -7,7 +7,7 @@
 
 #include "interp-callbacks.hpp"
 #include "interp-internals.h"
-#include "interp-internals.hpp"
+#include "interp-stackval.hpp"
 #include "interp-call.hpp"
 #include "interp-imethod.hpp"
 #include "mintops.h"

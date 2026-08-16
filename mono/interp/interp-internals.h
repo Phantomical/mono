@@ -221,10 +221,10 @@ struct FrameClauseArgs {
 /* Arguments that are passed when invoking only a finally/filter clause from the frame */
 typedef struct FrameClauseArgs FrameClauseArgs;
 
-/* State of the interpreter main loop */
+/* What a frame keeps of the interpreter loop while a call it made runs. */
 typedef struct {
 	const unsigned short *ip;
-} InterpState;
+} InterpSavedState;
 
 struct InterpFrame {
 	InterpFrame *parent;   /* parent */
@@ -248,7 +248,7 @@ struct InterpFrame {
 	gsize ordinal;
 	/* State saved before calls */
 	/* This is valid if state.ip != NULL */
-	InterpState state;
+	InterpSavedState state;
 };
 
 #define frame_locals(frame) ((guchar *) (frame)->stack)

@@ -1,11 +1,12 @@
 #include "config.h"
+#include "interp-frame.hpp"
+#include "interp-method.hpp"
+#include "interp-stackval.hpp"
 
 #include "mono/interp/interp.hpp"
-#include "frame-data.hpp"
 #include "mono/metadata/handle.h"
 #include "mono/metadata/marshal.h"
 #include "mono/metadata/object-internals.h"
-#include "mono/interp/interp-internals.hpp"
 #include "mono/mini/llvm-runtime.h"
 #include "mono/mini/mini.h"
 #include "mono/utils/mono-compiler.h"
@@ -215,11 +216,7 @@ InterpState::exit ()
  * roots the code it names.
  */
 
-using mono::interp::frame_root_code_owner;
-using mono::interp::frame_stamp_ordinal;
-using mono::interp::interp_check_call_promotion;
-using mono::interp::stackval_from_data;
-using mono::interp::stackval_to_data;
+using namespace mono::interp;
 
 void
 mono_interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClauseArgs *clause_args)
@@ -236,9 +233,8 @@ mono_interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClause
 	/* Recorded where a resume past this frame can still find it. */
 	int handle_mark_depth = mono_interp_push_handle_mark (context, &__mark, frame);
 
-	// Qualified because InterpFrame::state names a different type with this name.
-	mono::interp::InterpState state (frame, context, clause_args, error,
-	                                 mono_thread_info_current_var, handle_mark_depth);
+	InterpState state (frame, context, clause_args, error, mono_thread_info_current_var,
+	                   handle_mark_depth);
 	state.exec ();
 
 	HANDLE_FUNCTION_RETURN ();

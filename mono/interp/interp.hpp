@@ -176,6 +176,7 @@ private:
 	OpInfo{opstring, oplength, num_dregs, num_sregs, optype},
 #include "mintops.def"
 #undef OPDEF
+#undef CallArgs
 	};
 };
 
@@ -212,9 +213,6 @@ private:
 		OpFunc next = state->inner ();           \
 		MONO_MUSTTAIL return next (state);       \
 	}
-
-// Used when implementing a custom entry point
-#define MONO_INTERP_CONTINUE(next)
 
 #define LOCAL_VAR(offset, type) (*(type *) (locals + (offset)))
 

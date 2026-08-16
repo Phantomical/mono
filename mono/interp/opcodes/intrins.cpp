@@ -1,11 +1,11 @@
 #include "config.h"
+#include "mono/interp/interp-object.hpp"
 
 #include "mintops.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/exception.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/object.h"
-#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp-intrins.h"
 #include "mono/interp/interp.hpp"
 #include "mono/utils/memfuncs.h"

@@ -7,8 +7,7 @@
 
 #include "interp-callbacks.hpp"
 #include "interp-internals.h"
-#include "interp-internals.hpp"
-#include "frame-data.hpp"
+#include "interp-frame.hpp"
 #include "interp-context.hpp"
 
 #include <mono/metadata/gc-internals.h>

@@ -7,12 +7,12 @@
 
 #include "interp-callbacks.hpp"
 #include "interp-internals.h"
-#include "interp-internals.hpp"
 #include "interp-call.hpp"
 #include "interp-entry.hpp"
 #include "interp-imethod.hpp"
 
 #include <mono/metadata/marshal.h>
+#include <mono/llvm/runtime.h>
 #include <mono/mini/aot-runtime.h>
 #include <mono/mini/llvmonly-runtime.h>
 #include <mono/mini/mini-runtime.h>

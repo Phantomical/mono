@@ -1,4 +1,6 @@
 #include "config.h"
+#include "mono/interp/interp-object.hpp"
+#include "mono/interp/interp-stackval.hpp"
 
 #include "mintops.h"
 #include "mono/metadata/class-internals.h"
@@ -7,7 +9,6 @@
 #include "mono/metadata/gc-internals.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/object.h"
-#include "mono/interp/interp-internals.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/utils/mono-error-internals.h"
 

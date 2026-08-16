@@ -7,7 +7,7 @@
 
 #include "interp-callbacks.hpp"
 #include "interp-internals.h"
-#include "interp-internals.hpp"
+#include "interp-method.hpp"
 #include "interp-entry.hpp"
 #include "interp-imethod.hpp"
 

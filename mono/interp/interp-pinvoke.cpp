@@ -7,8 +7,8 @@
 
 #include "interp-callbacks.hpp"
 #include "interp-internals.h"
-#include "frame-data.hpp"
-#include "interp-internals.hpp"
+#include "interp-frame.hpp"
+#include "interp-stackval.hpp"
 #include "interp-call.hpp"
 #include "interp-lmf.hpp"
 #include "interp-pinvoke.hpp"

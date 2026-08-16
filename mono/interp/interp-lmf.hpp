@@ -55,4 +55,40 @@
 	INTERP_PUSH_LMF_WITH_CTX_BODY ((ext), exit_label); \
 	mono_push_lmf (&(ext));
 
+
+namespace mono::interp {
+
+/*
+ * interp_push_lmf:
+ *
+ * Push an LMF frame on the LMF stack
+ * to mark the transition to native code.
+ * This is needed for the native code to
+ * be able to do stack walks.
+ */
+inline void
+interp_push_lmf (MonoLMFExt *ext, InterpFrame *frame)
+{
+	/*
+	 * Only these two fields and lmf.previous_lmf, which mono_push_lmf ()
+	 * writes, are ever read back: the rest of the MonoLMF is documented as
+	 * invalid once its second lowest bit marks the entry as an ext, and ctx
+	 * belongs to the WITH_CTX kind. Zeroing the whole thing instead would
+	 * clear a MonoContext, which is most of the ~450 bytes here and costs
+	 * around a fifth of a jit call.
+	 */
+	ext->kind = MONO_LMFEXT_INTERP_EXIT;
+	ext->interp_exit_data = frame;
+
+	mono_push_lmf (ext);
+}
+
+inline void
+interp_pop_lmf (MonoLMFExt *ext)
+{
+	mono_pop_lmf (&ext->lmf);
+}
+
+} // namespace mono::interp
+
 #endif

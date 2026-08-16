@@ -1,9 +1,9 @@
 #include "config.h"
+#include "mono/interp/interp-frame.hpp"
 
 #include "mintops.h"
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/exception.h"
-#include "mono/interp/frame-data.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/utils/atomic.h"
 #include "mono/utils/mono-threads.h"
