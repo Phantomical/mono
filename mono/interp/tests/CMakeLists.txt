@@ -228,16 +228,17 @@ foreach(_assembly "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll" ${_il_assemblie
                 "MONO_LLVM_JIT_TIER1_THRESHOLD=2")
 endforeach()
 
-# Sequence points, which the transform only emits when the debugger asks for
-# them, and which nothing else here reaches.  The IL suites alone: this is about
-# a configuration rather than about the programs, and the C# suite is a hundred
-# times the size for the same paths.  These carry the same label as the ordinary
-# interpreted arm, since they are more of the interpreter rather than a second
-# opinion on it; `ctest -R ^seqpoints/` selects them on their own.
+# Everything that instruments the interpreter, which nothing else here turns on:
+# sequence points, the transform's tracing, and the tracing the interpreter emits
+# around a call.  The IL suites alone -- this is about a configuration rather
+# than about the programs, and the C# suite is ten times the size for the same
+# paths.  Same label as the ordinary interpreted arm, since it is more of the
+# interpreter rather than a second opinion on it; `ctest -R ^instrumented/`
+# selects it on its own.
 foreach(_assembly IN LISTS _il_assemblies)
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
-    NAME_PREFIX "seqpoints/"
+    NAME_PREFIX "instrumented/"
     PROPERTIES LABELS interp-unit
     XFAIL ${MONO_INTERP_TESTS_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
@@ -248,7 +249,8 @@ foreach(_assembly IN LISTS _il_assemblies)
                 # even where nothing reads what it prints.  One method: the name
                 # is matched whole, and tracing every method a process reaches
                 # would be megabytes.
-                "MONO_VERBOSE_METHOD=Countdown")
+                "MONO_VERBOSE_METHOD=Countdown"
+                "MONO_INTERP_TESTS_TRACE=all")
 endforeach()
 
 mono_corpus_target(interp-test-suites DEPENDS interp-test-runner)

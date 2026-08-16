@@ -192,6 +192,18 @@ main (int argc, char *argv [])
 	 * nothing in an embedded start does it.
 	 */
 	mono_debug_init (MONO_DEBUG_FORMAT_MONO);
+
+	/*
+	 * `mono` takes --trace= on its command line and an embedded start has no
+	 * command line, so the tracing the interpreter emits around a call has no
+	 * other way to be turned on.
+	 *
+	 * Not while listing: the trace goes to stdout, which is what the caller
+	 * reads the method names off.
+	 */
+	if (const char *trace = listing ? nullptr : g_getenv ("MONO_INTERP_TESTS_TRACE"))
+		mono_jit_set_trace_options (trace);
+
 	mono_jit_init_version_for_test_only ("mono-interp-tests", "v4.0.30319");
 
 	MonoImage *image = open_assembly (argv [first]);
