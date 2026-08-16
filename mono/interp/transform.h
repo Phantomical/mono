@@ -110,8 +110,8 @@ struct _InterpBasicBlock {
 	guint num_pred_seq_points;
 
 	// This block has special semantics and it shouldn't be optimized away
-	int eh_block : 1;
-	int dead: 1;
+	bool eh_block : 1;
+	bool dead : 1;
 };
 
 typedef enum {
@@ -189,7 +189,7 @@ typedef struct
 	MonoProfilerCoverageInfo *coverage_info;
 	GList *dont_inline;
 	int inline_depth;
-	int has_localloc : 1;
+	bool has_localloc : 1;
 } TransformData;
 
 #define STACK_TYPE_I4 0
