@@ -195,12 +195,16 @@ main (int argc, char *argv [])
 	mono_debug_init (MONO_DEBUG_FORMAT_MONO);
 
 	/*
+	 * Nothing that prints may be on while listing: the caller reads the method
+	 * names off stdout, and the transform's tracing goes to the same place.
+	 */
+	if (listing)
+		g_unsetenv ("MONO_VERBOSE_METHOD");
+
+	/*
 	 * `mono` takes --trace= on its command line and an embedded start has no
 	 * command line, so the tracing the interpreter emits around a call has no
 	 * other way to be turned on.
-	 *
-	 * Not while listing: the trace goes to stdout, which is what the caller
-	 * reads the method names off.
 	 */
 	if (const char *trace = listing ? nullptr : g_getenv ("MONO_INTERP_TESTS_TRACE"))
 		mono_jit_set_trace_options (trace);

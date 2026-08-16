@@ -56,6 +56,10 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # A method named in XFAIL is registered with WILL_FAIL, so it reports as passing
 # while it returns the wrong answer and starts failing the day it is fixed.  The
 # list is per registration: a divergence is usually wrong on one engine only.
+#
+# A suite whose assembly is not on disk registers one failing test carrying the
+# same properties, so an unbuilt suite reports under its own label rather than
+# under whatever ran it.
 function(mono_add_test_methods)
   cmake_parse_arguments(ARG ""
     "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
@@ -71,6 +75,8 @@ function(mono_add_test_methods)
          "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}")
   set(_include "${CMAKE_CURRENT_BINARY_DIR}/${_key}_include.cmake")
   set(_tests   "${CMAKE_CURRENT_BINARY_DIR}/${_key}_tests.cmake")
+  # One per assembly, not per arm: this is the file the runtime start pays for.
+  set(_list    "${CMAKE_CURRENT_BINARY_DIR}/${_stem}_methods.txt")
 
   set(_args "")
   foreach(_a PROPERTIES ENVIRONMENT XFAIL)
@@ -82,26 +88,35 @@ function(mono_add_test_methods)
   # Listed again when the runner or the assembly is newer than the last listing.
   file(GENERATE OUTPUT "${_include}" CONTENT
 "if(EXISTS \"$<TARGET_FILE:interp-test-runner>\" AND EXISTS \"${ARG_ASSEMBLY}\")
+  include(\"${CMAKE_CURRENT_SOURCE_DIR}/discover.cmake\")
+  mono_list_test_methods_impl(
+    CMAKE_EXE [==[${CMAKE_COMMAND}]==]
+    RUNNER [==[$<TARGET_FILE:interp-test-runner>]==]
+    ASSEMBLY [==[${ARG_ASSEMBLY}]==]
+    LIST_FILE [==[${_list}]==]
+    WORKING_DIR [==[${CMAKE_CURRENT_BINARY_DIR}]==]
+    TIMEOUT [==[${ARG_TIMEOUT}]==]
+    ENVIRONMENT [==[${ARG_ENVIRONMENT}]==])
   if(NOT EXISTS \"${_tests}\"
-     OR NOT \"${_tests}\" IS_NEWER_THAN \"$<TARGET_FILE:interp-test-runner>\"
-     OR NOT \"${_tests}\" IS_NEWER_THAN \"${ARG_ASSEMBLY}\"
+     OR NOT \"${_tests}\" IS_NEWER_THAN \"${_list}\"
      OR NOT \"${_tests}\" IS_NEWER_THAN \"\${CMAKE_CURRENT_LIST_FILE}\")
-    include(\"${CMAKE_CURRENT_SOURCE_DIR}/discover.cmake\")
     mono_discover_test_methods_impl(
       CMAKE_EXE [==[${CMAKE_COMMAND}]==]
       RUNNER [==[$<TARGET_FILE:interp-test-runner>]==]
       ASSEMBLY [==[${ARG_ASSEMBLY}]==]
+      LIST_FILE [==[${_list}]==]
       CTEST_FILE [==[${_tests}]==]
       NAME_PREFIX [==[${ARG_NAME_PREFIX}]==]
       NAME_SUFFIX [==[${ARG_NAME_SUFFIX}]==]
       WORKING_DIR [==[${CMAKE_CURRENT_BINARY_DIR}]==]
-      TIMEOUT [==[${ARG_TIMEOUT}]==]
 ${_args}    )
   endif()
   include(\"${_tests}\")
 else()
-  add_test([==[${ARG_NAME_PREFIX}!not-built${ARG_NAME_SUFFIX}]==]
+  add_test([==[${ARG_NAME_PREFIX}!not-built:${_stem}${ARG_NAME_SUFFIX}]==]
            [==[${CMAKE_COMMAND}]==] [==[-E]==] [==[false]==])
+  set_tests_properties([==[${ARG_NAME_PREFIX}!not-built:${_stem}${ARG_NAME_SUFFIX}]==]
+                       PROPERTIES ${ARG_PROPERTIES})
 endif()
 ")
 
@@ -246,10 +261,11 @@ foreach(_assembly IN LISTS _il_assemblies)
                 "MONO_DEBUG=gen-seq-points"
                 # The transform's tracing decodes each opcode's operands from a
                 # table it keeps apart from the handlers, so it is worth running
-                # even where nothing reads what it prints.  One method: the name
-                # is matched whole, and tracing every method a process reaches
-                # would be megabytes.
-                "MONO_VERBOSE_METHOD=Countdown"
+                # even where nothing reads what it prints.  A bare name matches
+                # the method's own name whatever class it is in, and the
+                # constructors a process transforms use most of the operand
+                # kinds the printer has an arm for.
+                "MONO_VERBOSE_METHOD=.ctor"
                 "MONO_INTERP_TESTS_TRACE=all")
 
   # The interpreter with its own optimizations turned off, so the transform

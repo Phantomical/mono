@@ -1,32 +1,78 @@
 # Turns the test methods in a managed assembly into ctest tests.
 #
-# CMakeLists.txt in this directory generates an _include.cmake per suite that
-# includes this file and calls the function below, which runs the runner's
-# --list and writes add_test() calls out to CTEST_FILE.  That happens when ctest
-# starts rather than at configure time, so a method added to a .cs file is a new
-# test after a build, with no cmake step in between.
+# CMakeLists.txt in this directory generates an _include.cmake per arm.  Each
+# one asks for the assembly's method list and then writes add_test() calls out
+# to its own CTEST_FILE.  That happens when ctest starts rather than at
+# configure time, so a method added to a .cs file is a new test after a build,
+# with no cmake step in between.
+#
+# The list is written once per assembly and read by every arm.  Enumerating an
+# assembly means starting a runtime, and there are five arms over eighteen
+# assemblies; doing it per arm is most of what a cold `ctest` costs.
 #
 # It is a file of its own because ctest reads it long after the configure that
 # wrote the caller.
 #
 # Listing needs a working runtime, which here is the thing under test.  A run
-# that fails registers one failing test carrying the error instead of stopping
-# ctest: a suite that cannot enumerate itself has to stay visible, and it must
-# not take the suites that would have passed down with it.
+# that fails leaves an error in the list file rather than stopping ctest: a
+# suite that cannot enumerate itself has to stay visible, and it must not take
+# the suites that would have passed down with it.
 
 cmake_minimum_required(VERSION 3.16)
 
-# mono_discover_test_methods_impl(
-#     CMAKE_EXE <cmake> RUNNER <exe> ASSEMBLY <dll> CTEST_FILE <out>
-#     NAME_PREFIX <str> NAME_SUFFIX <str> WORKING_DIR <dir> TIMEOUT <seconds>
-#     [PROPERTIES <prop>;<value>...] [ENVIRONMENT <VAR=value>...]
-#     [XFAIL <Class:method>...])
+# mono_list_test_methods_impl(
+#     CMAKE_EXE <cmake> RUNNER <exe> ASSEMBLY <dll> LIST_FILE <out>
+#     WORKING_DIR <dir> TIMEOUT <seconds> [ENVIRONMENT <VAR=value>...])
+#
+# Writes one "Class:name" a line, or a single "!" line carrying the error.  Does
+# nothing when the file is newer than both the runner and the assembly.
 #
 # cmake is named rather than taken from CMAKE_COMMAND, which ctest leaves unset
 # in the context this runs in.
+function(mono_list_test_methods_impl)
+  cmake_parse_arguments(ARG ""
+    "CMAKE_EXE;RUNNER;ASSEMBLY;LIST_FILE;WORKING_DIR;TIMEOUT" "ENVIRONMENT" ${ARGN})
+
+  if(EXISTS "${ARG_LIST_FILE}"
+     AND "${ARG_LIST_FILE}" IS_NEWER_THAN "${ARG_RUNNER}"
+     AND "${ARG_LIST_FILE}" IS_NEWER_THAN "${ARG_ASSEMBLY}")
+    return()
+  endif()
+
+  set(_prefix "")
+  if(ARG_ENVIRONMENT)
+    set(_prefix "${ARG_CMAKE_EXE}" -E env ${ARG_ENVIRONMENT})
+  endif()
+
+  # In the environment of whichever arm asked first.  Which methods an assembly
+  # holds does not depend on the engine, and the runtime still has to start for
+  # the enumeration to happen at all.
+  execute_process(
+    COMMAND ${_prefix} "${ARG_RUNNER}" --list "${ARG_ASSEMBLY}"
+    WORKING_DIRECTORY "${ARG_WORKING_DIR}"
+    TIMEOUT ${ARG_TIMEOUT}
+    OUTPUT_VARIABLE _listing
+    ERROR_VARIABLE _errors
+    RESULT_VARIABLE _result)
+
+  if(NOT _result EQUAL 0)
+    string(REGEX REPLACE "[\r\n]+" " " _why "${_result}: ${_errors}")
+    file(WRITE "${ARG_LIST_FILE}" "!${_why}\n")
+    message(WARNING "cannot list ${ARG_ASSEMBLY}: ${_why}")
+    return()
+  endif()
+
+  file(WRITE "${ARG_LIST_FILE}" "${_listing}")
+endfunction()
+
+# mono_discover_test_methods_impl(
+#     CMAKE_EXE <cmake> RUNNER <exe> ASSEMBLY <dll> LIST_FILE <in>
+#     CTEST_FILE <out> NAME_PREFIX <str> NAME_SUFFIX <str> WORKING_DIR <dir>
+#     [PROPERTIES <prop>;<value>...] [ENVIRONMENT <VAR=value>...]
+#     [XFAIL <Class:method>...])
 function(mono_discover_test_methods_impl)
   cmake_parse_arguments(ARG ""
-    "CMAKE_EXE;RUNNER;ASSEMBLY;CTEST_FILE;NAME_PREFIX;NAME_SUFFIX;WORKING_DIR;TIMEOUT"
+    "CMAKE_EXE;RUNNER;ASSEMBLY;LIST_FILE;CTEST_FILE;NAME_PREFIX;NAME_SUFFIX;WORKING_DIR"
     "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
 
   # Every generated token is bracket-quoted, so a property value with spaces in
@@ -37,37 +83,26 @@ function(mono_discover_test_methods_impl)
     string(APPEND _props " [==[${_p}]==]")
   endforeach()
 
-  set(_prefix "")
   set(_env "")
   if(ARG_ENVIRONMENT)
-    set(_prefix "${ARG_CMAKE_EXE}" -E env ${ARG_ENVIRONMENT})
     set(_env " [==[${ARG_CMAKE_EXE}]==] [==[-E]==] [==[env]==]")
     foreach(_e IN LISTS ARG_ENVIRONMENT)
       string(APPEND _env " [==[${_e}]==]")
     endforeach()
   endif()
 
-  # The listing runs in the environment the cases get, so it sees the runtime
-  # they will.
-  execute_process(
-    COMMAND ${_prefix} "${ARG_RUNNER}" --list "${ARG_ASSEMBLY}"
-    WORKING_DIRECTORY "${ARG_WORKING_DIR}"
-    TIMEOUT ${ARG_TIMEOUT}
-    OUTPUT_VARIABLE _listing
-    ERROR_VARIABLE _errors
-    RESULT_VARIABLE _result)
-
+  file(READ "${ARG_LIST_FILE}" _listing)
   set(_text "# Generated by mono/interp/tests/discover.cmake -- do not edit.\n")
 
-  if(NOT _result EQUAL 0)
+  if(_listing MATCHES "^!")
     set(_name "${ARG_NAME_PREFIX}!listing${ARG_NAME_SUFFIX}")
-    string(REGEX REPLACE "[\r\n]+" " " _why "${_result}: ${_errors}")
+    string(SUBSTRING "${_listing}" 1 -1 _why)
+    string(STRIP "${_why}" _why)
     string(APPEND _text
       "add_test([==[${_name}]==] [==[${ARG_CMAKE_EXE}]==] [==[-E]==] [==[false]==])\n"
       "set_tests_properties([==[${_name}]==] PROPERTIES${_props})\n"
       "# ${ARG_ASSEMBLY}: ${_why}\n")
     file(WRITE "${ARG_CTEST_FILE}" "${_text}")
-    message(WARNING "cannot list ${ARG_ASSEMBLY}: ${_why}")
     return()
   endif()
 

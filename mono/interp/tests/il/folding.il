@@ -1,21 +1,28 @@
 // The constant folder: interp_fold_unop (), interp_fold_binop () and the two
 // conditional branch folders in transform.c.
 //
-// A row in those tables runs only when cprop already knows both operands as
-// constants, so these tests put literals on both sides.  That is the opposite
-// of what the other suites do.  Each method returns what the folder computed,
-// so a row that folds to the wrong constant fails its test.
+// A row in those tables runs only when cprop already knows the operands as
+// constants, so every operand here is a literal.  A value test returns what the
+// folder computed.  A branch test runs the other path and returns 0 when the
+// folder branches the wrong way.
 //
-// Some rows have no other way in.  MINT_ADD1_I8, MINT_SUB1_I8, MINT_CNE_I8,
-// MINT_CGE_I8, MINT_CLE_I8 and the two unsigned forms come from the nint and
-// nuint operators, which the transform replaces with those opcodes.  A type is
-// magic only when it is System.nint or System.nuint and the assembly holding it
-// has one of the names in mono_class_is_magic_assembly (), which is why this
-// assembly is called builtin-types and why the two types below keep their exact
-// names.  They hold the members these tests call and nothing more.
+// The int64 tests compare the whole result instead of truncating it with
+// conv.i4, and each operand pair is chosen so that 32-bit arithmetic answers
+// differently.  A row that names the I4 field of the union computes the low
+// word and leaves the high word alone.  A truncating test with narrow operands
+// sees neither half of that.
 //
-// The I4 forms of cne, cge, cle, cge.un and cle.un stay uncovered: their table
-// rows name MINT_*_P, which is the I8 opcode on a 64-bit target.
+// MINT_ADD1_I8, MINT_SUB1_I8, MINT_CNE_I8, MINT_CGE_I8, MINT_CGE_UN_I8,
+// MINT_CLE_I8 and MINT_CLE_UN_I8 have no other way in.  They come from the nint
+// and nuint operators, which interp_handle_magic_type_intrinsics () replaces
+// with those opcodes.  il/magic-conv.il documents what makes a type magic.  What
+// this file needs from that rule is one of the assembly names in
+// mono_class_is_magic_assembly () and the two exact type names below.  The
+// types hold the members these tests call and nothing more.
+//
+// The I4 form of cne, cge, cle, cge.un and cle.un never appears on a 64-bit
+// target.  Their only producer is the int_cmpop table, which names MINT_*_P,
+// and that macro is the I8 opcode when a pointer is eight bytes wide.
 
 .assembly extern mscorlib { }
 .assembly 'builtin-types' { }
@@ -41,11 +48,10 @@
 		ret
 	}
 
-	.method public hidebysig specialname static int32 op_Explicit (valuetype System.nint x) cil managed
+	.method public hidebysig specialname static int64 op_Implicit (valuetype System.nint x) cil managed
 	{
 		ldarga.s 0
 		ldfld int64 System.nint::v
-		conv.i4
 		ret
 	}
 
@@ -165,14 +171,16 @@
 .class public auto ansi Folding extends [mscorlib]System.Object
 {
 	// -------------------------------------------------------------------
-	// interp_fold_unop
+	// interp_fold_unop.  0xFFFFFFFEFFFFFFF9 is -0x100000007, which has a
+	// bit set in each half.
 	// -------------------------------------------------------------------
-	.method public static int32 test_7_neg_i8 () cil managed
+	.method public static int32 test_1_neg_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 -7
+		ldc.i8 0xFFFFFFFEFFFFFFF9
 		neg
-		conv.i4
+		ldc.i8 0x100000007
+		ceq
 		ret
 	}
 
@@ -184,18 +192,21 @@
 		ret
 	}
 
-	.method public static int32 test_5_not_i8 () cil managed
+	.method public static int32 test_1_not_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 -6
+		ldc.i8 0xFFFFFFFEFFFFFFF9
 		not
-		conv.i4
+		ldc.i8 0x100000006
+		ceq
 		ret
 	}
 
 	// -------------------------------------------------------------------
 	// interp_fold_unop_cond_br.  Each method takes the branch once and
-	// declines it once, which is both arms of the row.
+	// declines it once, which is both arms of the row.  0x100000000 is what
+	// separates the I8 row from the I4 one.  It is true as an int64 and
+	// false in its low word.
 	// -------------------------------------------------------------------
 	.method public static int32 test_1_brfalse_i8 () cil managed
 	{
@@ -205,7 +216,7 @@
 		ldc.i4.0
 		ret
 	TAKEN:
-		ldc.i8 7
+		ldc.i8 0x100000000
 		brfalse.s FAIL
 		ldc.i4.1
 		ret
@@ -217,7 +228,7 @@
 	.method public static int32 test_1_brtrue_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 7
+		ldc.i8 0x100000000
 		brtrue.s TAKEN
 		ldc.i4.0
 		ret
@@ -234,70 +245,79 @@
 	// -------------------------------------------------------------------
 	// interp_fold_binop: arithmetic, bitwise and shifts
 	// -------------------------------------------------------------------
-	.method public static int32 test_2_sub_i8 () cil managed
+	.method public static int32 test_1_sub_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 9
-		ldc.i8 7
+		ldc.i8 0x30000000B
+		ldc.i8 0x100000009
 		sub
-		conv.i4
-		ret
-	}
-
-	// 8 + 14 + 6.  A wrong answer from any of the three moves the sum.
-	.method public static int32 test_28_bitwise_i8 () cil managed
-	{
-		.maxstack 4
-		ldc.i8 12
-		ldc.i8 10
-		and
-		ldc.i8 12
-		ldc.i8 10
-		or
-		add
-		ldc.i8 12
-		ldc.i8 10
-		xor
-		add
-		conv.i4
-		ret
-	}
-
-	.method public static int32 test_40_shl_i8 () cil managed
-	{
-		.maxstack 2
-		ldc.i8 5
-		ldc.i4.3
-		shl
-		conv.i4
-		ret
-	}
-
-	// The shift count is an int32 while the value is an int64, which is what
-	// INTERP_FOLD_SHIFTOP reads.
-	.method public static int32 test_1_shr_i8_is_arithmetic () cil managed
-	{
-		.maxstack 2
-		ldc.i8 -40
-		ldc.i4.3
-		shr
-		ldc.i8 -5
+		ldc.i8 0x200000002
 		ceq
 		ret
 	}
 
-	.method public static int32 test_15_shr_un_i8 () cil managed
+	// 8 + 14 + 6 in the low word and 1 + 3 + 2 in the high one.  A wrong
+	// answer from any of the three moves the sum.
+	.method public static int32 test_1_bitwise_i8 () cil managed
+	{
+		.maxstack 4
+		ldc.i8 0x30000000C
+		ldc.i8 0x10000000A
+		and
+		ldc.i8 0x30000000C
+		ldc.i8 0x10000000A
+		or
+		add
+		ldc.i8 0x30000000C
+		ldc.i8 0x10000000A
+		xor
+		add
+		ldc.i8 0x60000001C
+		ceq
+		ret
+	}
+
+	// INTERP_FOLD_SHIFTOP reads the count as an int32 whatever width the
+	// value has, so all three shift tests push an int32 count.  A count past
+	// 32 is what separates this row from the I4 one.
+	.method public static int32 test_1_shl_i8 () cil managed
+	{
+		.maxstack 2
+		ldc.i8 5
+		ldc.i4.s 35
+		shl
+		ldc.i8 0x2800000000
+		ceq
+		ret
+	}
+
+	// -40 >> 3 is -5, done a word up so the sign fills the high half.
+	.method public static int32 test_1_shr_i8_is_arithmetic () cil managed
+	{
+		.maxstack 2
+		ldc.i8 0xFFFFFFD800000000
+		ldc.i4.3
+		shr
+		ldc.i8 0xFFFFFFFB00000000
+		ceq
+		ret
+	}
+
+	.method public static int32 test_1_shr_un_i8 () cil managed
 	{
 		.maxstack 2
 		ldc.i8 -1
-		ldc.i4.s 60
+		ldc.i4.4
 		shr.un
-		conv.i4
+		ldc.i8 0x0FFFFFFFFFFFFFFF
+		ceq
 		ret
 	}
 
 	// -------------------------------------------------------------------
-	// interp_fold_binop: relops.  Each is a true case less a false case.
+	// interp_fold_binop: relops.  Each is a true case less a false case,
+	// for the I4 row and then the I8 row.  Each int64 pair orders one way
+	// over 64 bits and the other way over its low words.
 	// -------------------------------------------------------------------
 	.method public static int32 test_1_ceq_i4 () cil managed
 	{
@@ -322,18 +342,19 @@
 		ldc.i4.5
 		cgt
 		sub
-		ldc.i8 5
-		ldc.i8 3
+		ldc.i8 0x100000000
+		ldc.i8 1
 		cgt
 		add
-		ldc.i8 3
-		ldc.i8 5
+		ldc.i8 1
+		ldc.i8 0x100000000
 		cgt
 		sub
 		ret
 	}
 
-	// -1 is the larger operand read unsigned, so a signed fold answers -2.
+	// -1 and 0x8000000000000001 are the larger operand read unsigned, so a
+	// signed fold answers -2.
 	.method public static int32 test_2_cgt_un () cil managed
 	{
 		.maxstack 4
@@ -344,12 +365,12 @@
 		ldc.i4.m1
 		cgt.un
 		sub
-		ldc.i8 -1
-		ldc.i8 3
+		ldc.i8 0x8000000000000001
+		ldc.i8 2
 		cgt.un
 		add
-		ldc.i8 3
-		ldc.i8 -1
+		ldc.i8 2
+		ldc.i8 0x8000000000000001
 		cgt.un
 		sub
 		ret
@@ -365,12 +386,12 @@
 		ldc.i4.m1
 		clt
 		sub
-		ldc.i8 -1
-		ldc.i8 3
+		ldc.i8 1
+		ldc.i8 0x100000000
 		clt
 		add
-		ldc.i8 3
-		ldc.i8 -1
+		ldc.i8 0x100000000
+		ldc.i8 1
 		clt
 		sub
 		ret
@@ -386,12 +407,12 @@
 		ldc.i4.3
 		clt.un
 		sub
-		ldc.i8 3
-		ldc.i8 -1
+		ldc.i8 2
+		ldc.i8 0x8000000000000001
 		clt.un
 		add
-		ldc.i8 -1
-		ldc.i8 3
+		ldc.i8 0x8000000000000001
+		ldc.i8 2
 		clt.un
 		sub
 		ret
@@ -420,13 +441,14 @@
 		ret
 	}
 
-	.method public static int32 test_2_rem_i8 () cil managed
+	.method public static int32 test_1_rem_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 17
-		ldc.i8 5
+		ldc.i8 0x500000011
+		ldc.i8 0x200000000
 		rem
-		conv.i4
+		ldc.i8 0x100000011
+		ceq
 		ret
 	}
 
@@ -439,19 +461,22 @@
 		ret
 	}
 
-	.method public static int32 test_3_rem_un_i8 () cil managed
+	// A divisor of 7 answers 1 over 64 bits, 3 over the low word and -1 read
+	// signed.  This pair therefore separates the row from both of the rows
+	// beside it.
+	.method public static int32 test_1_rem_un_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 -3
-		ldc.i8 10
+		ldc.i8 -1
+		ldc.i8 7
 		rem.un
-		conv.i4
+		ldc.i8 1
+		ceq
 		ret
 	}
 
 	// A divisor of zero fails the condition on the fold, so the opcode stays
-	// and runs.  The local keeps the quotient live, or deadce would drop the
-	// instruction that throws.
+	// and throws when it runs.
 	.method public static int32 test_1_div_un_i4_by_zero_throws () cil managed
 	{
 		.maxstack 2
@@ -502,19 +527,20 @@
 
 	// -------------------------------------------------------------------
 	// interp_fold_binop_cond_br.  Each method takes its branch once and
-	// declines it once.
+	// declines it once.  The signed int64 pairs are 0x100000000 against 1.
+	// Those two order the other way over their low words.
 	// -------------------------------------------------------------------
 	.method public static int32 test_1_bge_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 5
-		ldc.i8 5
+		ldc.i8 0x100000000
+		ldc.i8 1
 		bge.s TAKEN
 		ldc.i4.0
 		ret
 	TAKEN:
-		ldc.i8 4
-		ldc.i8 5
+		ldc.i8 1
+		ldc.i8 0x100000000
 		bge.s FAIL
 		ldc.i4.1
 		ret
@@ -526,14 +552,14 @@
 	.method public static int32 test_1_bgt_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 6
-		ldc.i8 5
+		ldc.i8 0x100000000
+		ldc.i8 1
 		bgt.s TAKEN
 		ldc.i4.0
 		ret
 	TAKEN:
-		ldc.i8 5
-		ldc.i8 5
+		ldc.i8 1
+		ldc.i8 0x100000000
 		bgt.s FAIL
 		ldc.i4.1
 		ret
@@ -545,14 +571,14 @@
 	.method public static int32 test_1_ble_i8 () cil managed
 	{
 		.maxstack 2
-		ldc.i8 5
-		ldc.i8 5
+		ldc.i8 1
+		ldc.i8 0x100000000
 		ble.s TAKEN
 		ldc.i4.0
 		ret
 	TAKEN:
-		ldc.i8 6
-		ldc.i8 5
+		ldc.i8 0x100000000
+		ldc.i8 1
 		ble.s FAIL
 		ldc.i4.1
 		ret
@@ -573,14 +599,14 @@
 		ldc.i4.5
 		ldc.i4.3
 		blt.s FAIL
-		ldc.i8 3
-		ldc.i8 5
+		ldc.i8 1
+		ldc.i8 0x100000000
 		blt.s EIGHT
 		ldc.i4.0
 		ret
 	EIGHT:
-		ldc.i8 5
-		ldc.i8 3
+		ldc.i8 0x100000000
+		ldc.i8 1
 		blt.s FAIL
 		ldc.i4.1
 		ret
@@ -589,8 +615,9 @@
 		ret
 	}
 
-	// The unsigned branches take -1 as the larger operand.  A signed fold
-	// answers 0 on every one of these.
+	// The unsigned branches take -1 and 0x8000000000000001 as the larger
+	// operand.  A signed fold answers 0 on every one of these.  So does a
+	// fold that reads the int64 pair 32 bits wide.
 	.method public static int32 test_1_bge_un () cil managed
 	{
 		.maxstack 2
@@ -603,14 +630,14 @@
 		ldc.i4.3
 		ldc.i4.m1
 		bge.un.s FAIL
-		ldc.i8 -1
-		ldc.i8 3
+		ldc.i8 0x8000000000000001
+		ldc.i8 2
 		bge.un.s EIGHT
 		ldc.i4.0
 		ret
 	EIGHT:
-		ldc.i8 3
-		ldc.i8 -1
+		ldc.i8 2
+		ldc.i8 0x8000000000000001
 		bge.un.s FAIL
 		ldc.i4.1
 		ret
@@ -631,14 +658,14 @@
 		ldc.i4.3
 		ldc.i4.m1
 		bgt.un.s FAIL
-		ldc.i8 -1
-		ldc.i8 3
+		ldc.i8 0x8000000000000001
+		ldc.i8 2
 		bgt.un.s EIGHT
 		ldc.i4.0
 		ret
 	EIGHT:
-		ldc.i8 3
-		ldc.i8 -1
+		ldc.i8 2
+		ldc.i8 0x8000000000000001
 		bgt.un.s FAIL
 		ldc.i4.1
 		ret
@@ -659,14 +686,14 @@
 		ldc.i4.m1
 		ldc.i4.3
 		ble.un.s FAIL
-		ldc.i8 3
-		ldc.i8 -1
+		ldc.i8 2
+		ldc.i8 0x8000000000000001
 		ble.un.s EIGHT
 		ldc.i4.0
 		ret
 	EIGHT:
-		ldc.i8 -1
-		ldc.i8 3
+		ldc.i8 0x8000000000000001
+		ldc.i8 2
 		ble.un.s FAIL
 		ldc.i4.1
 		ret
@@ -687,14 +714,14 @@
 		ldc.i4.m1
 		ldc.i4.3
 		blt.un.s FAIL
-		ldc.i8 3
-		ldc.i8 -1
+		ldc.i8 2
+		ldc.i8 0x8000000000000001
 		blt.un.s EIGHT
 		ldc.i4.0
 		ret
 	EIGHT:
-		ldc.i8 -1
-		ldc.i8 3
+		ldc.i8 0x8000000000000001
+		ldc.i8 2
 		blt.un.s FAIL
 		ldc.i4.1
 		ret
@@ -704,41 +731,46 @@
 	}
 
 	// -------------------------------------------------------------------
-	// The rows the nint and nuint operators reach.  op_Explicit between two
-	// widths of eight emits nothing, so the literal reaches the operator as
-	// a constant the folder knows.
+	// The rows the nint and nuint operators reach.  op_Explicit and
+	// op_Implicit emit no instruction when the source and the target are
+	// both eight bytes wide.  The literal therefore reaches the operator as
+	// a constant the folder knows, and comes back out as one.
 	// -------------------------------------------------------------------
-	.method public static int32 test_43_nint_increment () cil managed
+	.method public static int32 test_1_nint_increment () cil managed
 	{
 		.maxstack 2
-		ldc.i8 42
+		ldc.i8 0x1000000FF
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call valuetype System.nint System.nint::op_Increment(valuetype System.nint)
-		call int32 System.nint::op_Explicit(valuetype System.nint)
+		call int64 System.nint::op_Implicit(valuetype System.nint)
+		ldc.i8 0x100000100
+		ceq
 		ret
 	}
 
-	.method public static int32 test_41_nint_decrement () cil managed
+	.method public static int32 test_1_nint_decrement () cil managed
 	{
 		.maxstack 2
-		ldc.i8 42
+		ldc.i8 0x100000100
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call valuetype System.nint System.nint::op_Decrement(valuetype System.nint)
-		call int32 System.nint::op_Explicit(valuetype System.nint)
+		call int64 System.nint::op_Implicit(valuetype System.nint)
+		ldc.i8 0x1000000FF
+		ceq
 		ret
 	}
 
 	.method public static int32 test_1_nint_inequality () cil managed
 	{
 		.maxstack 4
-		ldc.i8 4
+		ldc.i8 0x100000000
 		call valuetype System.nint System.nint::op_Explicit(int64)
-		ldc.i8 5
+		ldc.i8 0
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call bool System.nint::op_Inequality(valuetype System.nint, valuetype System.nint)
-		ldc.i8 4
+		ldc.i8 0x100000000
 		call valuetype System.nint System.nint::op_Explicit(int64)
-		ldc.i8 4
+		ldc.i8 0x100000000
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call bool System.nint::op_Inequality(valuetype System.nint, valuetype System.nint)
 		sub
@@ -748,14 +780,14 @@
 	.method public static int32 test_1_nint_greater_than_or_equal () cil managed
 	{
 		.maxstack 4
-		ldc.i8 5
+		ldc.i8 0x100000000
 		call valuetype System.nint System.nint::op_Explicit(int64)
-		ldc.i8 5
+		ldc.i8 1
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call bool System.nint::op_GreaterThanOrEqual(valuetype System.nint, valuetype System.nint)
-		ldc.i8 4
+		ldc.i8 1
 		call valuetype System.nint System.nint::op_Explicit(int64)
-		ldc.i8 5
+		ldc.i8 0x100000000
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call bool System.nint::op_GreaterThanOrEqual(valuetype System.nint, valuetype System.nint)
 		sub
@@ -765,14 +797,14 @@
 	.method public static int32 test_1_nint_less_than_or_equal () cil managed
 	{
 		.maxstack 4
-		ldc.i8 5
+		ldc.i8 1
 		call valuetype System.nint System.nint::op_Explicit(int64)
-		ldc.i8 5
+		ldc.i8 0x100000000
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call bool System.nint::op_LessThanOrEqual(valuetype System.nint, valuetype System.nint)
-		ldc.i8 6
+		ldc.i8 0x100000000
 		call valuetype System.nint System.nint::op_Explicit(int64)
-		ldc.i8 5
+		ldc.i8 1
 		call valuetype System.nint System.nint::op_Explicit(int64)
 		call bool System.nint::op_LessThanOrEqual(valuetype System.nint, valuetype System.nint)
 		sub
@@ -780,7 +812,8 @@
 	}
 
 	// The nuint operators pick the unsigned opcode, so the high bit makes the
-	// larger operand.
+	// larger operand.  0x8000000000000000 is zero in its low word, so a fold
+	// that reads 32 bits also orders these the other way.
 	.method public static int32 test_1_nuint_greater_than_or_equal () cil managed
 	{
 		.maxstack 4

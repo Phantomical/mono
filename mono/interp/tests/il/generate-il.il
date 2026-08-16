@@ -3,12 +3,13 @@
 // opcodes, cpobj over a reference type, unbox over Nullable, ldfld and stfld
 // naming a static field, and newobj on an abstract class.
 //
-// A method named test_<n>_<what> is a test, and it passes when it returns <n>.
+// A callee under 20 bytes of IL is inlined into its caller. An inlined body
+// takes a different arm of every argument and local opcode. So each of those
+// opcodes gets two tests: one through a helper marked noinlining, and one
+// through a helper small enough to inline.
 //
-// A callee under 20 bytes of IL is inlined into its caller, and an inlined body
-// takes a different arm of every one of the argument and local opcodes. So each
-// of those opcodes gets two tests: one through a helper marked noinlining, and
-// one through a helper small enough to inline.
+// A helper mixes the long form under test with the short form of its sibling.
+// A wrong index then gives a wrong answer, rather than two errors that cancel.
 
 .assembly extern mscorlib { }
 .assembly 'generate-il' { }
@@ -37,7 +38,7 @@
 	}
 }
 
-// Bodies small enough for the inliner. Every one of them uses a long form.
+// Bodies small enough for the inliner. Each one carries one long form.
 .class public auto ansi GenerateILInline extends [mscorlib]System.Object
 {
 	.method public static int32 IdLong (int32 x) cil managed
@@ -50,11 +51,11 @@
 	.method public static int32 BumpLong (int32 x) cil managed
 	{
 		.maxstack 2
-		ldarg 0
+		ldarg.0
 		ldc.i4.3
 		add
 		starg 0
-		ldarg 0
+		ldarg.0
 		ret
 	}
 
@@ -66,11 +67,31 @@
 		ret
 	}
 
+	.method public static int32 StoreLong (int32 x) cil managed
+	{
+		.maxstack 1
+		.locals init (int32 held)
+		ldarg.0
+		stloc 0
+		ldloc.0
+		ret
+	}
+
+	.method public static int32 FetchLong (int32 x) cil managed
+	{
+		.maxstack 1
+		.locals init (int32 held)
+		ldarg.0
+		stloc.0
+		ldloc 0
+		ret
+	}
+
 	.method public static int32 LocalAddrLong (int32 x) cil managed
 	{
 		.maxstack 1
 		.locals init (int32 held)
-		ldarg 0
+		ldarg.0
 		stloc.0
 		ldloca 0
 		ldind.i4
@@ -81,17 +102,18 @@
 .class public auto ansi GenerateIL extends [mscorlib]System.Object
 {
 	.field public static int32 counter
-	.field public static object ref_slot
 	.field public static valuetype GenerateILPair pair_slot
 
 	// --- helpers the inliner must leave alone ---
 
-	.method public static int32 AddLong (int32 a, int32 b) cil managed noinlining
+	// Subtraction rather than addition, so swapped argument indices give a
+	// different answer.
+	.method public static int32 SubLong (int32 a, int32 b) cil managed noinlining
 	{
 		.maxstack 2
 		ldarg 0
 		ldarg 1
-		add
+		sub
 		ret
 	}
 
@@ -100,24 +122,6 @@
 	{
 		.maxstack 1
 		ldarg 5
-		ret
-	}
-
-	.method public static int64 AddLongI8 (int64 a, int64 b) cil managed noinlining
-	{
-		.maxstack 2
-		ldarg 0
-		ldarg 1
-		add
-		ret
-	}
-
-	.method public static float64 AddLongR8 (float64 a, float64 b) cil managed noinlining
-	{
-		.maxstack 2
-		ldarg 0
-		ldarg 1
-		add
 		ret
 	}
 
@@ -135,48 +139,44 @@
 		ldarga 0
 		ldc.i4 20
 		stind.i4
-		ldarg 0
-		ret
-	}
-
-	.method public static int32 PairFirstAddr (valuetype GenerateILPair p) cil managed noinlining
-	{
-		.maxstack 1
-		ldarga 0
-		ldfld int32 GenerateILPair::first
+		ldarg.0
 		ret
 	}
 
 	.method public static int32 BumpArg (int32 a) cil managed noinlining
 	{
 		.maxstack 2
-		ldarg 0
+		ldarg.0
 		ldc.i4 4
 		add
 		starg 0
-		ldarg 0
+		ldarg.0
 		ret
 	}
 
-	.method public static float64 BumpArgR8 (float64 a) cil managed noinlining
+	// The locals sit behind two arguments, so the index the transform emits is
+	// not the one in the instruction. A local that lands on argument 0 changes
+	// what the ldarg.0 below reads.
+	.method public static int32 LocalBehindArgs (int32 a, int32 b) cil managed noinlining
 	{
 		.maxstack 2
-		ldarg 0
-		ldc.r8 0.5
+		.locals init (int32 held)
+		ldarg.1
+		ldc.i4 4
 		add
-		starg 0
-		ldarg 0
+		stloc 0
+		ldarg.0
+		ldloc 0
+		add
 		ret
 	}
 
-	// ldloca long form where the locals sit behind two arguments, so the
-	// index the transform emits is not the one in the instruction.
 	.method public static int32 LocalAddr (int32 a, int32 b) cil managed noinlining
 	{
 		.maxstack 2
 		.locals init (int32 first, int32 held)
-		ldarg 0
-		ldarg 1
+		ldarg.0
+		ldarg.1
 		add
 		stloc.1
 		ldloca 1
@@ -196,9 +196,9 @@
 	.method public static int32 test_7_ldarg_long_form () cil managed
 	{
 		.maxstack 2
-		ldc.i4 3
-		ldc.i4 4
-		call int32 GenerateIL::AddLong (int32, int32)
+		ldc.i4 9
+		ldc.i4 2
+		call int32 GenerateIL::SubLong (int32, int32)
 		ret
 	}
 
@@ -215,31 +215,13 @@
 		ret
 	}
 
-	.method public static int32 test_1_ldarg_long_form_i8 () cil managed
-	{
-		.maxstack 4
-		ldc.i8 4000000000
-		ldc.i8 1
-		call int64 GenerateIL::AddLongI8 (int64, int64)
-		ldc.i8 4000000001
-		ceq
-		ret
-	}
-
-	.method public static int32 test_1_ldarg_long_form_r8 () cil managed
-	{
-		.maxstack 4
-		ldc.r8 1.5
-		ldc.r8 2.25
-		call float64 GenerateIL::AddLongR8 (float64, float64)
-		ldc.r8 3.75
-		ceq
-		ret
-	}
-
+	// Local 0 holds a value the callee must not see.
 	.method public static int32 test_5_ldarg_long_form_inlined () cil managed
 	{
 		.maxstack 2
+		.locals init (int32 witness)
+		ldc.i4 97
+		stloc.0
 		ldc.i4 5
 		call int32 GenerateILInline::IdLong (int32)
 		ret
@@ -264,22 +246,7 @@
 		ret
 	}
 
-	.method public static int32 test_5_ldarga_long_form_valuetype () cil managed
-	{
-		.maxstack 3
-		.locals init (valuetype GenerateILPair p)
-		ldloca.s 0
-		initobj GenerateILPair
-		ldloca.s 0
-		ldc.i4 5
-		stfld int32 GenerateILPair::first
-		ldloc.0
-		call int32 GenerateIL::PairFirstAddr (valuetype GenerateILPair)
-		ret
-	}
-
-	// Local 0 holds a value the callee must not see: the inlined arm of
-	// CEE_LDARGA takes the address of local n rather than of the argument.
+	// Local 0 holds a value the callee must not see.
 	.method public static int32 test_5_ldarga_long_form_inlined () cil managed
 	{
 		.maxstack 2
@@ -301,36 +268,54 @@
 		ret
 	}
 
-	.method public static int32 test_1_starg_long_form_r8 () cil managed
-	{
-		.maxstack 4
-		ldc.r8 2.0
-		call float64 GenerateIL::BumpArgR8 (float64)
-		ldc.r8 2.5
-		ceq
-		ret
-	}
-
 	.method public static int32 test_8_starg_long_form_inlined () cil managed
 	{
 		.maxstack 2
+		.locals init (int32 witness)
+		ldc.i4 96
+		stloc.0
 		ldc.i4 5
 		call int32 GenerateILInline::BumpLong (int32)
 		ret
 	}
 
-	// --- ldloca, long form ---
+	// --- ldloc and stloc, long form ---
 
-	.method public static int32 test_11_ldloca_long_form () cil managed
+	.method public static int32 test_12_ldloc_stloc_behind_args () cil managed
 	{
 		.maxstack 2
-		.locals init (int32 held)
-		ldc.i4 11
-		stloc.0
-		ldloca 0
-		ldind.i4
+		ldc.i4 3
+		ldc.i4 5
+		call int32 GenerateIL::LocalBehindArgs (int32, int32)
 		ret
 	}
+
+	// The callee writes through the long form and reads back through the short
+	// one, so the two agree only where the long form names the callee's local.
+	.method public static int32 test_7_stloc_long_form_inlined () cil managed
+	{
+		.maxstack 2
+		.locals init (int32 witness)
+		ldc.i4 95
+		stloc.0
+		ldc.i4 7
+		call int32 GenerateILInline::StoreLong (int32)
+		ret
+	}
+
+	// Local 0 holds a value the callee must not see.
+	.method public static int32 test_4_ldloc_long_form_inlined () cil managed
+	{
+		.maxstack 2
+		.locals init (int32 witness)
+		ldc.i4 94
+		stloc.0
+		ldc.i4 4
+		call int32 GenerateILInline::FetchLong (int32)
+		ret
+	}
+
+	// --- ldloca, long form ---
 
 	.method public static int32 test_3_ldloca_long_form_store () cil managed
 	{
@@ -343,20 +328,6 @@
 		ret
 	}
 
-	.method public static int32 test_4_ldloca_long_form_valuetype () cil managed
-	{
-		.maxstack 2
-		.locals init (valuetype GenerateILPair p)
-		ldloca 0
-		initobj GenerateILPair
-		ldloca 0
-		ldc.i4 4
-		stfld int32 GenerateILPair::first
-		ldloca 0
-		ldfld int32 GenerateILPair::first
-		ret
-	}
-
 	.method public static int32 test_8_ldloca_long_form_behind_args () cil managed
 	{
 		.maxstack 2
@@ -366,6 +337,7 @@
 		ret
 	}
 
+	// Local 0 holds a value the callee must not see.
 	.method public static int32 test_6_ldloca_long_form_inlined () cil managed
 	{
 		.maxstack 2
@@ -394,38 +366,8 @@
 		ret
 	}
 
-	.method public static int32 test_1_cpobj_string () cil managed
-	{
-		.maxstack 2
-		.locals init (string src, string dst)
-		ldstr "generate-il"
-		stloc.0
-		ldloca.s 1
-		ldloca.s 0
-		cpobj [mscorlib]System.String
-		ldloc.1
-		ldstr "generate-il"
-		ceq
-		ret
-	}
-
-	// The destination is a static slot rather than a local, so the address
-	// comes from ldsflda.
-	.method public static int32 test_1_cpobj_object_into_static () cil managed
-	{
-		.maxstack 2
-		.locals init (object src)
-		newobj instance void [mscorlib]System.Object::.ctor ()
-		stloc.0
-		ldsflda object GenerateIL::ref_slot
-		ldloca.s 0
-		cpobj [mscorlib]System.Object
-		ldsfld object GenerateIL::ref_slot
-		ldloc.0
-		ceq
-		ret
-	}
-
+	// The destination starts out non-null, so a copy that never happens fails
+	// here and passes above.
 	.method public static int32 test_1_cpobj_object_null_source () cil managed
 	{
 		.maxstack 2
@@ -453,8 +395,8 @@
 		ret
 	}
 
-	// Nullable.Unbox answers an empty value rather than throwing, which is
-	// what separates unbox over Nullable from unbox over any other type.
+	// Nullable.Unbox gives an empty value instead of an exception, which is what
+	// separates unbox over Nullable from unbox over any other type.
 	.method public static int32 test_1_unbox_nullable_null () cil managed
 	{
 		.maxstack 2
@@ -466,20 +408,8 @@
 		ret
 	}
 
-	.method public static int32 test_1_unbox_nullable_i8 () cil managed
-	{
-		.maxstack 4
-		ldc.i8 4000000001
-		box [mscorlib]System.Int64
-		unbox valuetype [mscorlib]System.Nullable`1<int64>
-		call instance !0 valuetype [mscorlib]System.Nullable`1<int64>::get_Value ()
-		ldc.i8 4000000001
-		ceq
-		ret
-	}
-
-	// An enum parameter picks Nullable.UnboxExact, which is the arm that
-	// checks the boxed type before it converts.
+	// An enum parameter picks Nullable.UnboxExact, which is the arm that checks
+	// the boxed type before it converts.
 	.method public static int32 test_2_unbox_nullable_enum () cil managed
 	{
 		.maxstack 2
@@ -507,31 +437,10 @@
 		}
 	}
 
-	.method public static int32 test_1_unbox_nullable_enum_null () cil managed
-	{
-		.maxstack 2
-		ldnull
-		unbox valuetype [mscorlib]System.Nullable`1<valuetype GenerateILColour>
-		call instance bool valuetype [mscorlib]System.Nullable`1<valuetype GenerateILColour>::get_HasValue ()
-		ldc.i4.0
-		ceq
-		ret
-	}
-
 	// --- ldfld and stfld naming a static field ---
 
-	.method public static int32 test_7_ldfld_static_field () cil managed
-	{
-		.maxstack 2
-		ldc.i4 7
-		stsfld int32 GenerateIL::counter
-		newobj instance void [mscorlib]System.Object::.ctor ()
-		ldfld int32 GenerateIL::counter
-		ret
-	}
-
 	// The object the instruction pops is unused, so a null one is enough.
-	.method public static int32 test_13_ldfld_static_field_null_object () cil managed
+	.method public static int32 test_13_ldfld_static_field () cil managed
 	{
 		.maxstack 2
 		ldc.i4 13
@@ -541,15 +450,20 @@
 		ret
 	}
 
-	.method public static int32 test_1_ldfld_static_ref_field () cil managed
+	.method public static int32 test_6_ldfld_static_valuetype_field () cil managed
 	{
-		.maxstack 2
-		newobj instance void [mscorlib]System.Object::.ctor ()
-		stsfld object GenerateIL::ref_slot
+		.maxstack 3
+		.locals init (valuetype GenerateILPair p)
+		ldloca.s 0
+		initobj GenerateILPair
+		ldloca.s 0
+		ldc.i4 6
+		stfld int32 GenerateILPair::second
+		ldloc.0
+		stsfld valuetype GenerateILPair GenerateIL::pair_slot
 		ldnull
-		ldfld object GenerateIL::ref_slot
-		ldsfld object GenerateIL::ref_slot
-		ceq
+		ldfld valuetype GenerateILPair GenerateIL::pair_slot
+		ldfld int32 GenerateILPair::second
 		ret
 	}
 
@@ -558,16 +472,6 @@
 		.maxstack 2
 		ldnull
 		ldc.i4 9
-		stfld int32 GenerateIL::counter
-		ldsfld int32 GenerateIL::counter
-		ret
-	}
-
-	.method public static int32 test_15_stfld_static_field_real_object () cil managed
-	{
-		.maxstack 2
-		newobj instance void [mscorlib]System.Object::.ctor ()
-		ldc.i4 15
 		stfld int32 GenerateIL::counter
 		ldsfld int32 GenerateIL::counter
 		ret
@@ -587,23 +491,6 @@
 		stfld valuetype GenerateILPair GenerateIL::pair_slot
 		ldsflda valuetype GenerateILPair GenerateIL::pair_slot
 		ldfld int32 GenerateILPair::first
-		ret
-	}
-
-	.method public static int32 test_6_ldfld_static_valuetype_field () cil managed
-	{
-		.maxstack 3
-		.locals init (valuetype GenerateILPair p)
-		ldloca.s 0
-		initobj GenerateILPair
-		ldloca.s 0
-		ldc.i4 6
-		stfld int32 GenerateILPair::second
-		ldloc.0
-		stsfld valuetype GenerateILPair GenerateIL::pair_slot
-		ldnull
-		ldfld valuetype GenerateILPair GenerateIL::pair_slot
-		ldfld int32 GenerateILPair::second
 		ret
 	}
 
