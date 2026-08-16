@@ -256,8 +256,8 @@ foreach(_assembly "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll" ${_il_assemblie
 endforeach()
 
 # Everything that instruments the interpreter, which nothing else here turns on:
-# sequence points, the transform's tracing, and the tracing the interpreter emits
-# around a call.  The IL suites alone -- this is about a configuration rather
+# sequence points, the transform's tracing, the tracing the interpreter emits
+# around a call, and the coverage instrumentation it emits per basic block.  The IL suites alone -- this is about a configuration rather
 # than about the programs, and the C# suite is ten times the size for the same
 # paths.  Same label as the ordinary interpreted arm, since it is more of the
 # interpreter rather than a second opinion on it; `ctest -R ^instrumented/`
@@ -278,7 +278,8 @@ foreach(_assembly IN LISTS _il_assemblies)
                 # constructors a process transforms use most of the operand
                 # kinds the printer has an arm for.
                 "MONO_VERBOSE_METHOD=.ctor"
-                "MONO_INTERP_TESTS_TRACE=all")
+                "MONO_INTERP_TESTS_TRACE=all"
+                "MONO_INTERP_TESTS_COVERAGE=1")
 
   # The interpreter with its own optimizations turned off, so the transform
   # emits what it read rather than what it worked out.  The answers have to be

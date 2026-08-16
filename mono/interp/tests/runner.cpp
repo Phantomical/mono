@@ -25,6 +25,7 @@
 #include <mono/metadata/exception.h>
 #include <mono/metadata/loader.h>
 #include <mono/metadata/mono-debug.h>
+#include <mono/metadata/profiler.h>
 #include <mono/metadata/object-internals.h>
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
@@ -217,6 +218,19 @@ main (int argc, char *argv [])
 	 */
 	if (const char *opts = g_getenv ("MONO_INTERP_TESTS_OPTS"))
 		mono_interp_opts_string = opts;
+
+	/*
+	 * Coverage instrumentation, which the transform emits per basic block and
+	 * which otherwise needs a profiler module. The filter says yes to
+	 * everything: what is under test is the instrumentation, not a report.
+	 */
+	if (!listing && g_getenv ("MONO_INTERP_TESTS_COVERAGE") &&
+	    mono_profiler_enable_coverage ()) {
+		MonoProfilerHandle handle = mono_profiler_create (nullptr);
+
+		mono_profiler_set_coverage_filter_callback (
+			handle, [] (MonoProfiler *, MonoMethod *) -> mono_bool { return TRUE; });
+	}
 
 	mono_jit_init_version_for_test_only ("mono-interp-tests", "v4.0.30319");
 
