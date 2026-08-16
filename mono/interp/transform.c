@@ -7954,23 +7954,30 @@ interp_local_deadce (TransformData *td, int *local_ref_count)
 	return needs_cprop;
 }
 
+/*
+ * The folding macros below all start by checking that the constant they found
+ * has the type the opcode reads.  It does not always: invalid IL can merge an
+ * int32 and an int64 into one stack slot, and the opcode then names a width the
+ * constant does not have.  Declining to fold leaves the instruction to run, so
+ * a bad program gets whatever the handler computes rather than an abort.
+ */
 #define INTERP_FOLD_UNOP(opcode,val_type,field,op) \
 	case opcode: \
-		g_assert (val->type == val_type); \
+		if (val->type != val_type) return ins; \
 		result.type = val_type; \
 		result.field = op val->field; \
 		break;
 
 #define INTERP_FOLD_CONV(opcode,val_type_dst,field_dst,val_type_src,field_src,cast_type) \
 	case opcode: \
-		g_assert (val->type == val_type_src); \
+		if (val->type != val_type_src) return ins; \
 		result.type = val_type_dst; \
 		result.field_dst = (cast_type)val->field_src; \
 		break;
 
 #define INTERP_FOLD_CONV_FULL(opcode,val_type_dst,field_dst,val_type_src,field_src,cast_type,cond) \
 	case opcode: \
-		g_assert (val->type == val_type_src); \
+		if (val->type != val_type_src) return ins; \
 		if (!(cond)) return ins; \
 		result.type = val_type_dst; \
 		result.field_dst = (cast_type)val->field_src; \
@@ -8075,7 +8082,7 @@ interp_fold_unop (TransformData *td, LocalValue *local_defs, int *local_ref_coun
 
 #define INTERP_FOLD_UNOP_BR(_opcode,_local_type,_cond) \
 	case _opcode: \
-		g_assert (val->type == _local_type); \
+		if (val->type != _local_type) return ins; \
 		if (_cond) { \
 			ins->opcode = MINT_BR_S; \
 			if (cbb->next_bb != ins->info.target_bb) \
@@ -8121,14 +8128,14 @@ interp_fold_unop_cond_br (TransformData *td, InterpBasicBlock *cbb, LocalValue *
 
 #define INTERP_FOLD_BINOP(opcode,local_type,field,op) \
 	case opcode: \
-		g_assert (val1->type == local_type && val2->type == local_type); \
+		if (val1->type != local_type || val2->type != local_type) return ins; \
 		result.type = local_type; \
 		result.field = val1->field op val2->field; \
 		break;
 
 #define INTERP_FOLD_BINOP_FULL(opcode,local_type,field,op,cast_type,cond) \
 	case opcode: \
-		g_assert (val1->type == local_type && val2->type == local_type); \
+		if (val1->type != local_type || val2->type != local_type) return ins; \
 		if (!(cond)) return ins; \
 		result.type = local_type; \
 		result.field = (cast_type)val1->field op (cast_type)val2->field; \
@@ -8136,14 +8143,14 @@ interp_fold_unop_cond_br (TransformData *td, InterpBasicBlock *cbb, LocalValue *
 
 #define INTERP_FOLD_SHIFTOP(opcode,local_type,field,shift_op,cast_type) \
 	case opcode: \
-		g_assert (val2->type == LOCAL_VALUE_I4); \
+		if (val2->type != LOCAL_VALUE_I4) return ins; \
 		result.type = local_type; \
 		result.field = (cast_type)val1->field shift_op val2->i; \
 		break;
 
 #define INTERP_FOLD_RELOP(opcode,local_type,field,relop,cast_type) \
 	case opcode: \
-		g_assert (val1->type == local_type && val2->type == local_type); \
+		if (val1->type != local_type || val2->type != local_type) return ins; \
 		result.type = LOCAL_VALUE_I4; \
 		result.i = (cast_type) val1->field relop (cast_type) val2->field; \
 		break;
@@ -8256,8 +8263,7 @@ interp_fold_binop (TransformData *td, LocalValue *local_defs, int *local_ref_cou
 // merging quickly find the MINT_BR_S opcode.
 #define INTERP_FOLD_BINOP_BR(_opcode,_local_type,_cond) \
 	case _opcode: \
-		g_assert (val1->type == _local_type); \
-		g_assert (val2->type == _local_type); \
+		if (val1->type != _local_type || val2->type != _local_type) return ins; \
 		if (_cond) { \
 			ins->opcode = MINT_BR_S; \
 			if (cbb->next_bb != ins->info.target_bb) \

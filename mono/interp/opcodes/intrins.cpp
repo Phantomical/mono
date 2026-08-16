@@ -42,8 +42,10 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_SPAN_CTOR)
 {
 	gpointer ptr = LOCAL_VAR (ip[2], gpointer);
 	int len = LOCAL_VAR (ip[3], gint32);
+	// The constructor this stands in for goes through ThrowHelper, which names
+	// no argument.
 	if (G_UNLIKELY (len < 0))
-		THROW_EX (mono_get_exception_argument_out_of_range ("length"), ip);
+		THROW_EX (mono_get_exception_argument_out_of_range (NULL), ip);
 
 	gpointer span = locals + ip[1];
 	*(gpointer *) span = ptr;

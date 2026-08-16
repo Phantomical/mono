@@ -69,9 +69,18 @@ IMPL_STIND (MINT_STIND_R4, float);
 IMPL_STIND (MINT_STIND_R8, double);
 IMPL_STIND (MINT_STIND_I, mono_i);
 
+/*
+ * The value-type forms below check their pointers the same way IMPL_STIND does.
+ * A fault inside memcpy is not at a managed address, so the signal handler
+ * cannot turn it back into a NullReferenceException and the process dies
+ * instead.
+ */
+
 MONO_INTERP_OP_IMPL (MINT_LDOBJ_VT)
 {
-	std::memcpy (locals + ip[1], LOCAL_VAR (ip[2], gpointer), ip[3]);
+	gpointer source = LOCAL_VAR (ip[2], gpointer);
+	NULL_CHECK (source);
+	std::memcpy (locals + ip[1], source, ip[3]);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -80,8 +89,10 @@ MONO_INTERP_OP_IMPL (MINT_LDOBJ_VT)
 MONO_INTERP_OP_IMPL (MINT_STOBJ_VT)
 {
 	auto c = (MonoClass *) frame->imethod->data_items[ip[3]];
+	gpointer destination = LOCAL_VAR (ip[1], gpointer);
 
-	mono_value_copy_internal (LOCAL_VAR (ip[1], gpointer), locals + ip[2], c);
+	NULL_CHECK (destination);
+	mono_value_copy_internal (destination, locals + ip[2], c);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -90,13 +101,16 @@ MONO_INTERP_OP_IMPL (MINT_STOBJ_VT)
 MONO_INTERP_OP_IMPL (MINT_CPOBJ)
 {
 	auto c = (MonoClass *) frame->imethod->data_items[ip[3]];
+	gpointer destination = LOCAL_VAR (ip[1], gpointer);
+	gpointer source = LOCAL_VAR (ip[2], gpointer);
 
 	g_assert (m_class_is_valuetype (c));
 	/* if this assertion fails, we need to add a write barrier */
 	g_assert (!MONO_TYPE_IS_REFERENCE (m_class_get_byval_arg (c)));
 
-	stackval_from_data (m_class_get_byval_arg (c), (stackval *) LOCAL_VAR (ip[1], gpointer),
-	                    LOCAL_VAR (ip[2], gpointer), FALSE);
+	NULL_CHECK (destination);
+	NULL_CHECK (source);
+	stackval_from_data (m_class_get_byval_arg (c), (stackval *) destination, source, FALSE);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -105,8 +119,12 @@ MONO_INTERP_OP_IMPL (MINT_CPOBJ)
 MONO_INTERP_OP_IMPL (MINT_CPOBJ_VT)
 {
 	auto c = (MonoClass *) frame->imethod->data_items[ip[3]];
+	gpointer destination = LOCAL_VAR (ip[1], gpointer);
+	gpointer source = LOCAL_VAR (ip[2], gpointer);
 
-	mono_value_copy_internal (LOCAL_VAR (ip[1], gpointer), LOCAL_VAR (ip[2], gpointer), c);
+	NULL_CHECK (destination);
+	NULL_CHECK (source);
+	mono_value_copy_internal (destination, source, c);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

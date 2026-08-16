@@ -46,7 +46,10 @@ MONO_INTERP_OP_IMPL (MINT_INITBLK)
 
 MONO_INTERP_OP_IMPL (MINT_INITOBJ)
 {
-	std::memset (LOCAL_VAR (ip[1], gpointer), 0, ip[2]);
+	gpointer destination = LOCAL_VAR (ip[1], gpointer);
+
+	NULL_CHECK (destination);
+	std::memset (destination, 0, ip[2]);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

@@ -546,7 +546,12 @@ mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_ind
 {
 	InterpFrame *iframe = (InterpFrame *) frame->interp_frame;
 	ThreadContext *context = mono_interp_get_context ();
-	stackval retval;
+	/*
+	 * Only MINT_ENDFILTER writes this, and an exception raised inside the filter
+	 * never reaches it. ECMA-335 III.3.34 makes that case continue the search,
+	 * which is what zero says here.
+	 */
+	stackval retval = {};
 	FrameClauseArgs clause_args;
 
 	/*
