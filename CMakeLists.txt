@@ -174,7 +174,8 @@ endif()
 #   check-all    everything except the stress suites and the minutes-long ones.
 #   check-interp the interpreter's own tests under mono/interp.
 #   check-interp-jit the same managed programs with the interpreter turned off,
-#                which is how a tier seam divergence shows up as a test.
+#                and check-interp-mixed with promotion on the first call. Either
+#                one disagreeing with check-interp is a tier seam divergence.
 #
 # The heavy labels (runtime, gshared, sgen, interp, slow, stress, acceptance)
 # are opt-in:
@@ -219,6 +220,15 @@ if(BUILD_TESTING)
   add_custom_target(check-interp-jit
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
             -L interp-jit
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+
+  # Promotion on the first call, so the two engines run in one process and every
+  # test crosses the tier seam.
+  add_custom_target(check-interp-mixed
+    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+            -L interp-mixed
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)

@@ -148,3 +148,7 @@ external/buildscripts/build.gen.*
 /bearcc
 /bearcxx
 /.bear-events/
+
+# llvm-cov profiles, from a build configured with MONO_ENABLE_COVERAGE.
+*.profraw
+*.profdata

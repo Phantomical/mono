@@ -91,7 +91,8 @@ have_corpus ()
  * in step: the transform reads several of these before anything sets them, so a
  * field left out here is a null dereference rather than a compile error.
  */
-Transform::Transform (const std::string &image, const std::string &method_name)
+Transform::Transform (const std::string &image, const std::string &method_name,
+                      int verbose_level)
 {
 	ERROR_DECL (error);
 	MonoMethod *method = find_method (image, method_name);
@@ -117,7 +118,7 @@ Transform::Transform (const std::string &image, const std::string &method_name)
 	td.data_hash = g_hash_table_new (NULL, NULL);
 	td.gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
 	td.seq_points = g_ptr_array_new ();
-	td.verbose_level = mono_interp_traceopt;
+	td.verbose_level = verbose_level ? verbose_level : mono_interp_traceopt;
 	td.prof_coverage = mono_profiler_coverage_instrumentation_enabled (method);
 
 	mono_test_interp_method_compute_offsets (&td, &rtm,

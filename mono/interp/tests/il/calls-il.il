@@ -136,4 +136,137 @@
 		call vararg int32 CallsIL::SumVarargs (int32, ..., int32, int32, int32)
 		ret
 	}
+
+	// A vararg call whose variable part is not all one type, so the cookie the
+	// caller builds has to describe each argument separately.
+	.method public static vararg int32 MixedVarargs (int32 count) cil managed
+	{
+		.maxstack 4
+		.locals init (valuetype [mscorlib]System.ArgIterator it,
+		              int32 total, class [mscorlib]System.TypedReference dummy)
+		ldloca.s 0
+		arglist
+		call instance void [mscorlib]System.ArgIterator::.ctor (valuetype [mscorlib]System.RuntimeArgumentHandle)
+		ldloca.s 0
+		call instance typedref [mscorlib]System.ArgIterator::GetNextArg ()
+		refanyval [mscorlib]System.Int32
+		ldind.i4
+		stloc.1
+		ldloc.1
+		ldloca.s 0
+		call instance typedref [mscorlib]System.ArgIterator::GetNextArg ()
+		refanyval [mscorlib]System.Double
+		ldind.r8
+		conv.i4
+		add
+		stloc.1
+		ldloc.1
+		ldloca.s 0
+		call instance typedref [mscorlib]System.ArgIterator::GetNextArg ()
+		refanyval [mscorlib]System.String
+		ldind.ref
+		callvirt instance int32 [mscorlib]System.String::get_Length ()
+		add
+		ret
+	}
+
+	.method public static int32 test_9_vararg_mixed_types () cil managed
+	{
+		.maxstack 5
+		ldc.i4.3
+		ldc.i4.2
+		ldc.r8 3.5
+		ldstr "abcd"
+		call vararg int32 CallsIL::MixedVarargs (int32, ..., int32, float64, string)
+		ret
+	}
+
+	// A vararg method calling itself.  Each frame holds a cookie of its own for
+	// as long as it runs, so the allocator those come out of has to grow past
+	// its first fragment.
+	.method public static vararg int32 DeepVarargs (int32 depth) cil managed
+	{
+		.maxstack 5
+		.locals init (valuetype [mscorlib]System.ArgIterator it, int32 taken)
+		ldloca.s 0
+		arglist
+		call instance void [mscorlib]System.ArgIterator::.ctor (valuetype [mscorlib]System.RuntimeArgumentHandle)
+		ldloca.s 0
+		call instance typedref [mscorlib]System.ArgIterator::GetNextArg ()
+		refanyval [mscorlib]System.Int32
+		ldind.i4
+		stloc.1
+		ldarg.0
+		brfalse IL_done
+		ldarg.0
+		ldc.i4.1
+		sub
+		ldloc.1
+		call vararg int32 CallsIL::DeepVarargs (int32, ..., int32)
+		ldloc.1
+		add
+		ret
+	IL_done:
+		ldloc.1
+		ret
+	}
+
+	.method public static int32 test_201_vararg_recursion () cil managed
+	{
+		.maxstack 4
+		ldc.i4 200
+		ldc.i4.1
+		call vararg int32 CallsIL::DeepVarargs (int32, ..., int32)
+		ret
+	}
+
+	// A vararg call with no variable arguments at all: arglist still has to
+	// produce an iterator that reports none.
+	.method public static vararg int32 EmptyVarargs (int32 seed) cil managed
+	{
+		.maxstack 3
+		.locals init (valuetype [mscorlib]System.ArgIterator it)
+		ldloca.s 0
+		arglist
+		call instance void [mscorlib]System.ArgIterator::.ctor (valuetype [mscorlib]System.RuntimeArgumentHandle)
+		ldarg.0
+		ldloca.s 0
+		call instance int32 [mscorlib]System.ArgIterator::GetRemainingCount ()
+		add
+		ret
+	}
+
+	.method public static int32 test_4_vararg_with_no_variable_part () cil managed
+	{
+		.maxstack 2
+		ldc.i4.4
+		call vararg int32 CallsIL::EmptyVarargs (int32)
+		ret
+	}
+
+	// calli with an unmanaged signature, which is a different opcode from the
+	// managed one and takes the interpreter through a native wrapper it builds
+	// on the spot.
+	.method public static pinvokeimpl("libc.so.6" cdecl)
+	        native int dlsym (native int handle, string name) cil managed preservesig { }
+
+	.method public static int32 test_7_calli_native () cil managed
+	{
+		.maxstack 4
+		.locals init (native int fn)
+		ldc.i4.0
+		conv.i
+		ldstr "abs"
+		call native int CallsIL::dlsym (native int, string)
+		stloc.0
+		ldloc.0
+		brfalse IL_missing
+		ldc.i4.s -7
+		ldloc.0
+		calli unmanaged cdecl int32 (int32)
+		ret
+	IL_missing:
+		ldc.i4.7
+		ret
+	}
 }

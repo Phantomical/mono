@@ -167,6 +167,41 @@ public class Threading {
 		return caught;
 	}
 
+	static volatile bool started;
+	static volatile bool stop;
+	static long sink;
+
+	// An abort delivered to a thread that is running IL rather than waiting.
+	// The interpreter takes it at one of the checkpoints it polls between
+	// instructions, which is a different path from the one a wait uses.
+	public static int test_2_abort_in_an_interpreted_loop ()
+	{
+		int caught = 0;
+		Thread t = new Thread (() => {
+			try {
+				started = true;
+				long acc = 0;
+				for (long i = 0; i < 20000000 && !stop; i++)
+					acc += i;
+				sink = acc;
+			} catch (ThreadAbortException) {
+				caught = 2;
+				Thread.ResetAbort ();
+			}
+		});
+		t.Start ();
+		while (!started)
+			Thread.Sleep (1);
+		t.Abort ();
+		// The loop reads `stop` so that a request that never lands ends the test
+		// instead of running it to the bound.
+		if (!t.Join (1000)) {
+			stop = true;
+			t.Join ();
+		}
+		return caught;
+	}
+
 	public static int test_1_thread_local_storage ()
 	{
 		ThreadLocal<int> local = new ThreadLocal<int> (() => 11);

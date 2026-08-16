@@ -47,7 +47,11 @@ class Transform {
 public:
 	/// Transforms `method` of il/<image>.il. The method is named the way
 	/// mono_method_desc_new () spells one: "Class:name".
-	Transform (const std::string &image, const std::string &method);
+	///
+	/// A non-zero `verbose_level` makes the transform print what it does, the
+	/// same way MONO_VERBOSE_METHOD does for a whole run.
+	Transform (const std::string &image, const std::string &method,
+	           int verbose_level = 0);
 	~Transform ();
 
 	Transform (const Transform &) = delete;

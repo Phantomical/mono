@@ -7300,7 +7300,15 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 				if (!mono_method_can_access_method (method, m))
 					interp_generate_mae_throw (td, method, m);
 
-				if (method->wrapper_type == MONO_WRAPPER_NONE && m->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
+				/*
+				 * Only ldftn takes the wrapper here. ldvirtftn resolves the
+				 * override at run time and get_virtual_method () wraps what it
+				 * found; handing it the wrapper instead gives it a method that is
+				 * not virtual and not in any vtable, so the receiver selects
+				 * nothing and the base body is what comes back.
+				 */
+				if (*td->ip == CEE_LDFTN && method->wrapper_type == MONO_WRAPPER_NONE &&
+				    m->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
 					m = mono_marshal_get_synchronized_wrapper (m);
 
 				if (G_UNLIKELY (*td->ip == CEE_LDFTN &&

@@ -62,4 +62,25 @@ TEST_F (Cprop, ForwardsALocalLoadedTwice)
 	EXPECT_EQ (add->sregs [1], store->dreg);
 }
 
+/*
+ * The transform's own tracing, which MONO_VERBOSE_METHOD turns on for a run.  It
+ * prints every instruction it rewrites, and the printer decodes each opcode's
+ * operands from a table it keeps separately from the handlers.  A table that
+ * disagrees with an opcode reads past the instruction, so the printer is worth
+ * running even where nothing reads what it wrote.
+ */
+TEST_F (Cprop, PrintsWhatItRewrites)
+{
+	Transform transform ("snippets", "Snippets:test_cprop_ldloc_stloc", 4);
+
+	testing::internal::CaptureStdout ();
+	mono_interp_print_td_code (transform.get ());
+	transform.cprop ();
+	mono_interp_print_td_code (transform.get ());
+	std::string printed = testing::internal::GetCapturedStdout ();
+
+	EXPECT_NE (printed.find ("test_cprop_ldloc_stloc"), std::string::npos);
+	EXPECT_NE (printed.find ("add.i4"), std::string::npos);
+}
+
 } // namespace

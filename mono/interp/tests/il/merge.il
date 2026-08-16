@@ -61,4 +61,38 @@
 		ldc.i4.1
 		ret
 	}
+
+	// A branch whose two operands have different stack types. The transform has
+	// a path for this that warns and picks one width; what the test says is that
+	// it reaches the end rather than asserting.
+	.method public static int32 test_1_branch_type_mismatch () cil managed
+	{
+		.maxstack 4
+		.locals init (int32 narrow, int64 wide)
+		call int32 Merge::Opaque4 ()
+		stloc.0
+		call int64 Merge::Opaque8 ()
+		stloc.1
+
+		ldloc.0
+		ldloc.1
+		beq IL_either
+	IL_either:
+		ldc.i4.1
+		ret
+	}
+
+	.method public static int32 Opaque4 () cil managed noinlining
+	{
+		.maxstack 1
+		ldc.i4.5
+		ret
+	}
+
+	.method public static int64 Opaque8 () cil managed noinlining
+	{
+		.maxstack 1
+		ldc.i8 5
+		ret
+	}
 }

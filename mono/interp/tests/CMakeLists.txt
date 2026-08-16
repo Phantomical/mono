@@ -153,6 +153,7 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
   "Refusals:test_9_localloc_with_stack"
   "Refusals:test_7_unaligned_three"
   "Merge:test_1_merge_i4_into_i8"
+  "Merge:test_1_branch_type_mismatch"
   # An unchecked float to integer conversion whose source is out of range.
   # ECMA-335 III.3.27 leaves the result unspecified: the interpreter reproduces
   # cvttsd2si and the backend saturates.
@@ -162,7 +163,12 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
   "Conversions:test_1_u4_from_negative_r8_wraps"
   "Conversions:test_1_i8_from_out_of_range_r8_is_long_min"
   # The backend loses an exception raised inside a filter.
-  "Exceptions:test_2_an_exception_in_a_filter_continues_the_search")
+  "Exceptions:test_2_an_exception_in_a_filter_continues_the_search"
+  # Compiled code polls for nothing, so a thread running it takes an abort only
+  # when it next calls something that does.
+  "Threading:test_2_abort_in_an_interpreted_loop")
+
+set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
 foreach(_assembly "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll" ${_il_assemblies})
   # A threshold of zero never promotes, so a method entered at tier 0 is still
@@ -187,6 +193,45 @@ foreach(_assembly "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll" ${_il_assemblie
     XFAIL ${MONO_INTERP_TESTS_JIT_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
                 "MONO_LLVM_JIT_TIER0=0")
+
+  # Promotion on the first call, so a method is interpreted once and compiled
+  # after that.  Both engines run in the one process, which is the only way an
+  # interpreted frame calls a body that already has code.
+  #
+  # This arm is red today and the reason is one defect rather than many: a
+  # compile taken from the promotion path trips a SelectionDAG assertion in LLVM
+  # about a quarter of the time, and the process aborts.  256 of its 258 failures
+  # are that.  The same method compiled with MONO_LLVM_JIT_TIER0=0 is clean over
+  # 30 runs, so it is the promotion path and not the method.
+  mono_add_test_methods(
+    ASSEMBLY "${_assembly}"
+    NAME_PREFIX "mixed/"
+    PROPERTIES LABELS interp-mixed
+    XFAIL ${MONO_INTERP_TESTS_MIXED_XFAIL}
+    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
+                "MONO_LLVM_JIT_TIER1_THRESHOLD=1")
+endforeach()
+
+# Sequence points, which the transform only emits when the debugger asks for
+# them, and which nothing else here reaches.  The IL suites alone: this is about
+# a configuration rather than about the programs, and the C# suite is a hundred
+# times the size for the same paths.  These carry the same label as the ordinary
+# interpreted arm, since they are more of the interpreter rather than a second
+# opinion on it; `ctest -R ^seqpoints/` selects them on their own.
+foreach(_assembly IN LISTS _il_assemblies)
+  mono_add_test_methods(
+    ASSEMBLY "${_assembly}"
+    NAME_PREFIX "seqpoints/"
+    PROPERTIES LABELS interp-unit
+    XFAIL ${MONO_INTERP_TESTS_XFAIL}
+    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
+                "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+                "MONO_DEBUG=gen-seq-points"
+                # The transform's tracing decodes each opcode's operands from a
+                # table it keeps apart from the handlers, so it is worth running
+                # even where nothing reads what it prints.  One method's worth:
+                # every method would be megabytes.
+                "MONO_VERBOSE_METHOD=Countdown")
 endforeach()
 
 mono_corpus_target(interp-test-suites DEPENDS interp-test-runner)
