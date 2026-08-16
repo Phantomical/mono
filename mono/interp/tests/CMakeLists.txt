@@ -202,7 +202,11 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
   # Reflection over a P/Invoke that returns a struct loses half of it. Both
   # engines do, so it is a marshalling defect rather than a tier seam.
   "EntryTail:test_4_reflection_invoke_of_pinvoke_struct_return"
-  "EntryTail:test_4_dynamic_invoke_over_pinvoke_struct_return")
+  "EntryTail:test_4_dynamic_invoke_over_pinvoke_struct_return"
+  # The interpreter addresses a local with 16 bits and refuses a body whose
+  # locals reach 64 KB. Compiled code has no such limit, and in the default
+  # configuration the refusal is what sends the method to be compiled.
+  "Limits:test_1_locals_size_too_big")
 
 set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
