@@ -252,19 +252,11 @@
 
 	.method public static int32 test_7_calli_native () cil managed
 	{
-		.maxstack 4
-		.locals init (native int fn)
+		.maxstack 2
+		ldc.i4.s -7
 		ldstr "abs"
 		call native int CallsIL::symbol (string)
-		stloc.0
-		ldloc.0
-		brfalse IL_missing
-		ldc.i4.s -7
-		ldloc.0
 		calli unmanaged cdecl int32 (int32)
-		ret
-	IL_missing:
-		ldc.i4.7
 		ret
 	}
 }
