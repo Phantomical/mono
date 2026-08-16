@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "glib.h"
 #include "mintops.h"
 #include "mono/metadata/exception.h"

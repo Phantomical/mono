@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "glib.h"
 #include "mintops.h"
 #include "mono/llvm/runtime.h"
@@ -11,6 +13,9 @@
 #include "mono/metadata/tabledefs.h"
 #include "mono/interp/interp-internals.h"
 #include "mono/interp/interp-internals.hpp"
+#include "mono/interp/interp-entry.hpp"
+#include "mono/interp/interp-icall.hpp"
+#include "mono/interp/interp-pinvoke.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/interp/interp-call.hpp"
 #include "mono/interp/frame-data.hpp"
@@ -179,7 +184,7 @@ resolve_code_type (InterpMethod *imethod)
 	 * writes over the patch.
 	 */
 	if (!patched && mono_atomic_load_i32_relaxed (&imethod->tier_counter) == 0)
-		interp_arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (method));
+		arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (method));
 
 	if (marshallable && (patched || mono_jit_method_is_compiled (imethod->domain, method)))
 		code_type = IMETHOD_CODE_COMPILED;
@@ -788,7 +793,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI_NAT_FAST)
 	// for calls, have ip pointing at the start of next instruction
 	frame->state.ip = ip + 5;
 
-	mono_interp_do_icall (frame, csignature, opcode, args, target_ip, save_last_error);
+	do_icall_wrapper (frame, csignature, opcode, args, target_ip, save_last_error);
 	EXCEPTION_CHECKPOINT_GC_UNSAFE;
 	CHECK_RESUME_STATE (context);
 
@@ -822,7 +827,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI_NAT)
 
 	/* for calls, have ip pointing at the start of next instruction */
 	frame->state.ip = ip + 7;
-	mono_interp_do_pinvoke (imethod, csignature, (MonoFuncV) code, context, frame,
+	ves_pinvoke_method (imethod, csignature, (MonoFuncV) code, context, frame,
 	                        &LOCAL_VAR (ip[1], stackval), save_last_error, cache);
 
 	EXCEPTION_CHECKPOINT_GC_UNSAFE;
@@ -1074,7 +1079,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLRUN)
 	auto sig = (MonoMethodSignature *) frame->imethod->data_items[ip[3]];
 
 	if (MonoException *ex =
-	        mono_interp_ves_imethod (frame, target_method, sig, (stackval *) (locals + ip[1])))
+	        ves_imethod (frame, target_method, sig, (stackval *) (locals + ip[1])))
 		THROW_EX (ex, ip);
 #else
 	g_assert_not_reached ();
@@ -1124,7 +1129,7 @@ MONO_INTERP_OP_IMPL (MINT_INIT_ARGLIST)
 	gpointer arglist = frame_data_allocator_alloc (&context->data_stack, frame,
 	                                               params_stack_size + MINT_STACK_SLOT_SIZE);
 
-	mono_interp_init_arglist (frame, sig, STACK_ADD_BYTES (frame->stack, ip[2]), (char *) arglist);
+	init_arglist (frame, sig, STACK_ADD_BYTES (frame->stack, ip[2]), (char *) arglist);
 
 	// save the arglist for future access with MINT_ARGLIST
 	LOCAL_VAR (ip[1], gpointer) = arglist;
@@ -1142,7 +1147,7 @@ MONO_INTERP_OP_IMPL (MINT_INIT_ARGLIST)
 	{                                                                                  \
 		/* for calls, have ip pointing at the start of next instruction */             \
 		frame->state.ip = ip + 3;                                                      \
-		mono_interp_do_icall (frame, nullptr, opcode, (stackval *) (locals + ip[1]),   \
+		do_icall_wrapper (frame, nullptr, opcode, (stackval *) (locals + ip[1]),   \
 		                      frame->imethod->data_items[ip[2]], FALSE);               \
 		EXCEPTION_CHECKPOINT_GC_UNSAFE;                                                \
 		CHECK_RESUME_STATE (context);                                                  \
@@ -1179,7 +1184,7 @@ MONO_INTERP_OP_IMPL (MINT_MONO_RETOBJ)
 MONO_INTERP_OP_IMPL (MINT_LDFTN)
 {
 	error_init_reuse (error);
-	LOCAL_VAR (ip[1], gpointer) = mono_interp_entry_for_imethod (
+	LOCAL_VAR (ip[1], gpointer) = entry_for_imethod (
 		(InterpMethod *) frame->imethod->data_items[ip[2]], error);
 	mono_error_assert_ok (error);
 
@@ -1196,7 +1201,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 		mono_interp_get_imethod (mono_domain_get (), LOCAL_VAR (ip[2], MonoMethod *), error);
 	mono_error_assert_ok (error);
 
-	LOCAL_VAR (ip[1], gpointer) = mono_interp_escaping_entry_for_imethod (m, error);
+	LOCAL_VAR (ip[1], gpointer) = escaping_entry_for_imethod (m, error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -1211,7 +1216,7 @@ MONO_INTERP_OP_IMPL (MINT_LDVIRTFTN)
 
 	error_init_reuse (error);
 	LOCAL_VAR (ip[1], gpointer) =
-		mono_interp_entry_for_imethod (get_virtual_method (m, o->vtable), error);
+		entry_for_imethod (get_virtual_method (m, o->vtable), error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();

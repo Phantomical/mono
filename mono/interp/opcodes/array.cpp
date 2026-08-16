@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "mintops.h"
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"

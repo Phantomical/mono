@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "mono/interp/interp.hpp"
 
 namespace mono::interp {

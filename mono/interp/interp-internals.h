@@ -377,60 +377,11 @@ gboolean mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature
 
 void mono_interp_error_cleanup (MonoError *error);
 
-/*
- * Calls the native function ptr with the arguments in sp, and writes the result
- * back over sp [0]. op is the MINT_ICALL_* opcode naming its arity and return
- * kind. A non-NULL sig converts the result from the native representation to the
- * interpreter one.
- *
- * An exception from native code returns through here rather than unwinding past
- * it. A caller whose target can throw therefore sets frame->state.ip before the
- * call and checks the resume state after.
- */
-void mono_interp_do_icall (InterpFrame *frame, MonoMethodSignature *sig, int op, stackval *sp,
-                           gpointer ptr, gboolean save_last_error);
-
-/*
- * Calls the native function addr with the arguments in sp, marshalled the way sig
- * describes, and writes the result back over sp. imethod is the pinvoke method the
- * wrapper making this call stands for, and NULL at a calli that is not inside a
- * managed-to-native wrapper. cache must be stable per-call-site storage, because
- * the wasm build caches the entry trampoline in it.
- *
- * An exception from native code returns through here rather than unwinding past
- * it. A caller whose target can throw therefore sets parent_frame->state.ip before
- * the call and checks the resume state after.
- */
-void mono_interp_do_pinvoke (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV addr,
-                             ThreadContext *context, InterpFrame *parent_frame, stackval *sp,
-                             gboolean save_last_error, gpointer *cache);
 
 /* Whether the debugger wants a single step trampoline at every step location. */
 extern gboolean mono_interp_ss_enabled;
 
-/* The address that stands for imethod, minted if this is the first ask. */
-gpointer mono_interp_entry_for_imethod (InterpMethod *imethod, MonoError *error);
 
-/*
- * The address that stands for imethod outside this engine, recording that the
- * address is now in native hands. A patcher writes a jump over what it is given,
- * so both engines have to name the same address for a method.
- */
-gpointer mono_interp_escaping_entry_for_imethod (InterpMethod *imethod, MonoError *error);
-
-/*
- * Runs one of the handful of methods the runtime implements itself rather than in
- * IL, writing the result over sp. Returns what it threw, or NULL.
- */
-MonoException *mono_interp_ves_imethod (InterpFrame *frame, MonoMethod *method,
-                                        MonoMethodSignature *sig, stackval *sp);
-
-/*
- * Builds the buffer a vararg call's arglist reads, from the arguments at sp.
- * arglist must have room for the whole variable part plus its cookie.
- */
-void mono_interp_init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp,
-                               char *arglist);
 
 MONO_NEVER_INLINE MonoException *mono_interp_leave (InterpFrame *parent_frame);
 

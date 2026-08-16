@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "mintops.h"
 #include "mono/interp/interp.hpp"
 

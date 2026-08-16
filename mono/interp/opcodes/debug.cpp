@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "mono/metadata/profiler-private.h"
 #include "mono/interp/frame-data.hpp"
 #include "mono/interp/interp-internals.h"

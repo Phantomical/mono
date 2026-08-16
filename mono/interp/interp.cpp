@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "mono/interp/interp.hpp"
 #include "frame-data.hpp"
 #include "mono/metadata/handle.h"
