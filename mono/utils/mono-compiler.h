@@ -111,6 +111,12 @@ typedef ptrdiff_t ssize_t;
 #define MONO_NO_OPTIMIZATION /* nothing */
 #endif
 
+#if defined (__clang__) || defined(__GNUC__) || defined(_MSC_VER)
+#define MONO_RESTRICT __restrict
+#else
+#define MONO_RESTRICT
+#endif
+
 #if defined (__GNUC__) && defined (__GNUC_MINOR__) && defined (__GNUC_PATCHLEVEL__)
 #define MONO_GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #endif

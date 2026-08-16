@@ -83,19 +83,7 @@ target_compile_options(mini PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wswitch>)
 # them from the runtime proper.
 # ---------------------------------------------------------------------------
 if(MONO_ENABLE_INTERPRETER)
-  mono_add_object_library(mono_ee_interp
-    SOURCES
-      interp/interp.c
-      interp/interp-intrins.c
-      interp/mintops.c
-      interp/transform.c
-    INCLUDES
-      "${CMAKE_CURRENT_SOURCE_DIR}"
-      "${CMAKE_CURRENT_BINARY_DIR}"
-      "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
-      "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
-    DEPENDS mono::hidden mono::eglib_headers mono::llvm)
-  add_dependencies(mono_ee_interp mono-version)
+  add_subdirectory(interp)
 endif()
 
 if(MONO_ENABLE_DEBUGGER_AGENT)

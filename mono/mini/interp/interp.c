@@ -80,24 +80,6 @@
 
 #include <mono/metadata/icall-decl.h>
 
-/* Arguments that are passed when invoking only a finally/filter clause from the frame */
-struct FrameClauseArgs {
-	/* Where we start the frame execution from */
-	const guint16 *start_with_ip;
-	/*
-	 * End ip of the exit_clause. We need it so we know whether the resume
-	 * state is for this frame (which is called from EH) or for the original
-	 * frame further down the stack.
-	 */
-	const guint16 *end_at_ip;
-	/* When exiting this clause we also exit the frame */
-	int exit_clause;
-	/* Exception that we are filtering */
-	MonoException *filter_exception;
-	/* Frame that is executing this clause */
-	InterpFrame *exec_frame;
-};
-
 /*
  * This code synchronizes with interp_mark_stack () using compiler memory barriers.
  */
@@ -257,7 +239,7 @@ GSList *mono_interp_jit_classes;
 /* Optimizations enabled with interpreter */
 int mono_interp_opt = INTERP_OPT_DEFAULT;
 /* If TRUE, interpreted code will be interrupted at function entry/backward branches */
-static gboolean ss_enabled;
+gboolean mono_interp_ss_enabled;
 
 static gboolean interp_init_done = FALSE;
 
@@ -441,6 +423,9 @@ get_context (void)
 		context->stack_start = (guchar*)mono_valloc (0, INTERP_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
 		context->stack_pointer = context->stack_start;
 
+		context->frame_stack_start = (guchar*)mono_valloc (0, INTERP_FRAME_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
+		context->frame_stack_pointer = context->frame_stack_start;
+
 		frame_data_allocator_init (&context->data_stack, 8192);
 		/* Make sure all data is initialized before publishing the context */
 		mono_compiler_barrier ();
@@ -489,8 +474,10 @@ interp_free_context (gpointer ctx)
 	context->safepoint_frame = NULL;
 
 	mono_vfree (context->stack_start, INTERP_STACK_SIZE, MONO_MEM_ACCOUNT_INTERP_STACK);
+	mono_vfree (context->frame_stack_start, INTERP_FRAME_STACK_SIZE, MONO_MEM_ACCOUNT_INTERP_STACK);
 	/* Prevent interp_mark_stack from trying to scan the data_stack, before freeing it */
 	context->stack_start = NULL;
+	context->frame_stack_start = NULL;
 	mono_compiler_barrier ();
 	frame_data_allocator_free (&context->data_stack);
 	g_free (context->handle_marks);
@@ -1773,6 +1760,14 @@ exit_pinvoke:
 #pragma optimize ("", on)
 #endif
 
+void
+mono_interp_do_pinvoke (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV addr,
+		ThreadContext *context, InterpFrame *parent_frame, stackval *sp,
+		gboolean save_last_error, gpointer *cache)
+{
+	ves_pinvoke_method (imethod, sig, addr, context, parent_frame, sp, save_last_error, cache);
+}
+
 /*
  * interp_init_delegate:
  *
@@ -2355,6 +2350,13 @@ exit_icall:
 #ifdef _MSC_VER
 #pragma optimize ("", on)
 #endif
+
+void
+mono_interp_do_icall (InterpFrame *frame, MonoMethodSignature *sig, int op, stackval *sp,
+		gpointer ptr, gboolean save_last_error)
+{
+	do_icall_wrapper (frame, sig, op, sp, ptr, save_last_error);
+}
 
 typedef struct {
 	int pindex;
@@ -3614,7 +3616,7 @@ mono_interp_get_native_func_wrapper (InterpMethod* imethod, MonoMethodSignature*
 }
 
 // Do not inline in case order of frame addresses matters.
-static MONO_NEVER_INLINE MonoException*
+MONO_NEVER_INLINE MonoException*
 mono_interp_leave (InterpFrame* parent_frame)
 {
 	InterpFrame frame = {parent_frame};
@@ -7031,7 +7033,7 @@ call:
 			ip += 2;
 			MINT_IN_BREAK;
 		MINT_IN_CASE(MINT_SDB_INTR_LOC)
-			if (G_UNLIKELY (ss_enabled)) {
+			if (G_UNLIKELY (mono_interp_ss_enabled)) {
 				typedef void (*T) (void);
 				static T ss_tramp;
 
@@ -8145,13 +8147,13 @@ interp_frame_get_parent (MonoInterpFrameHandle frame)
 static void
 interp_start_single_stepping (void)
 {
-	ss_enabled = TRUE;
+	mono_interp_ss_enabled = TRUE;
 }
 
 static void
 interp_stop_single_stepping (void)
 {
-	ss_enabled = FALSE;
+	mono_interp_ss_enabled = FALSE;
 }
 
 /*
@@ -8160,6 +8162,32 @@ interp_stop_single_stepping (void)
  *   Mark the interpreter stack frames for a thread.
  *
  */
+gpointer
+mono_interp_entry_for_imethod (InterpMethod *imethod, MonoError *error)
+{
+	return entry_for_imethod (imethod, error);
+}
+
+gpointer
+mono_interp_escaping_entry_for_imethod (InterpMethod *imethod, MonoError *error)
+{
+	return escaping_entry_for_imethod (imethod, error);
+}
+
+#ifndef ENABLE_NETCORE
+MonoException *
+mono_interp_ves_imethod (InterpFrame *frame, MonoMethod *method, MonoMethodSignature *sig, stackval *sp)
+{
+	return ves_imethod (frame, method, sig, sp);
+}
+#endif
+
+void
+mono_interp_init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *arglist)
+{
+	init_arglist (frame, sig, sp, arglist);
+}
+
 static void
 interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboolean precise)
 {
@@ -8189,6 +8217,15 @@ interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboo
 	// FIXME: Scan the whole area with 1 call
 	for (gpointer *p = (gpointer*)context->stack_start; p < (gpointer*)context->stack_pointer; p++)
 		func (p, gc_data);
+
+	/*
+	 * Frames the interpreter made for its own calls. The rest live on the native
+	 * stack, which is scanned conservatively already.
+	 */
+	if (context->frame_stack_start) {
+		for (gpointer *p = (gpointer*)context->frame_stack_start; p < (gpointer*)context->frame_stack_pointer; p++)
+			func (p, gc_data);
+	}
 
 	FrameDataFragment *frag;
 	for (frag = context->data_stack.first; frag; frag = frag->next) {

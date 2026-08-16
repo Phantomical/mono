@@ -71,16 +71,16 @@ ICALL_EXTERN_C gpointer mono_ldtoken_wrapper (MonoImage *image, int token, MonoG
 ICALL_EXTERN_C gpointer mono_ldtoken_wrapper_generic_shared (MonoImage *image, int token, MonoMethod *method);
 
 ICALL_EXTERN_C guint64 mono_fconv_u8 (double v);
-ICALL_EXTERN_C guint64 mono_fconv_u8_2 (double v);
+G_EXTERN_C guint64 mono_fconv_u8_2 (double v);
 
-ICALL_EXTERN_C guint64 mono_rconv_u8 (float v);
+G_EXTERN_C guint64 mono_rconv_u8 (float v);
 
 ICALL_EXTERN_C gint64 mono_fconv_i8 (double v);
 
 ICALL_EXTERN_C guint32 mono_fconv_u4 (double v);
-ICALL_EXTERN_C guint32 mono_fconv_u4_2 (double v);
+G_EXTERN_C guint32 mono_fconv_u4_2 (double v);
 
-ICALL_EXTERN_C guint32 mono_rconv_u4 (float v);
+G_EXTERN_C guint32 mono_rconv_u4 (float v);
 
 ICALL_EXTERN_C gint64 mono_fconv_ovf_i8 (double v);
 
@@ -174,7 +174,7 @@ ICALL_EXTERN_C guint32  mono_fload_r4_arg (double val);
 
 ICALL_EXTERN_C double mono_fmod (double a, double b);
 
-ICALL_EXTERN_C void     mono_break (void);
+G_EXTERN_C void     mono_break (void);
 
 ICALL_EXTERN_C MonoException *mono_create_corlib_exception_0 (guint32 token);
 

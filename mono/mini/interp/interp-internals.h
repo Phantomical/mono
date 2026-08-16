@@ -11,6 +11,8 @@
 #include <mono/metadata/handle.h>
 #include "interp.h"
 
+MONO_BEGIN_DECLS
+
 #define MINT_TYPE_I1 0
 #define MINT_TYPE_U1 1
 #define MINT_TYPE_I2 2
@@ -19,7 +21,7 @@
 #define MINT_TYPE_I8 5
 #define MINT_TYPE_R4 6
 #define MINT_TYPE_R8 7
-#define MINT_TYPE_O  8
+#define MINT_TYPE_O 8
 #define MINT_TYPE_VT 9
 
 #define INLINED_METHOD_FLAG 0xffff
@@ -29,33 +31,33 @@
 #define MINT_VT_ALIGNMENT 8
 #define MINT_STACK_SLOT_SIZE (sizeof (stackval))
 
-#define INTERP_STACK_SIZE (1024*1024)
+#define INTERP_STACK_SIZE (1024 * 1024)
 /*
  * Held back from frames so that overflowing the stack above has somewhere to be
  * reported from: raising the exception runs handlers in interpreted frames, and
  * those want stack of their own.
  */
-#define INTERP_STACK_RESERVE (16*1024)
+#define INTERP_STACK_RESERVE (16 * 1024)
 
 enum {
-	VAL_I32     = 0,
-	VAL_DOUBLE  = 1,
-	VAL_I64     = 2,
-	VAL_VALUET  = 3,
+	VAL_I32 = 0,
+	VAL_DOUBLE = 1,
+	VAL_I64 = 2,
+	VAL_VALUET = 3,
 	VAL_POINTER = 4,
-	VAL_NATI    = 0 + VAL_POINTER,
-	VAL_MP      = 1 + VAL_POINTER,
-	VAL_TP      = 2 + VAL_POINTER,
-	VAL_OBJ     = 3 + VAL_POINTER
+	VAL_NATI = 0 + VAL_POINTER,
+	VAL_MP = 1 + VAL_POINTER,
+	VAL_TP = 2 + VAL_POINTER,
+	VAL_OBJ = 3 + VAL_POINTER
 };
 
 #if SIZEOF_VOID_P == 4
 typedef guint32 mono_u;
-typedef gint32  mono_i;
+typedef gint32 mono_i;
 #define MINT_TYPE_I MINT_TYPE_I4
 #elif SIZEOF_VOID_P == 8
 typedef guint64 mono_u;
-typedef gint64  mono_i;
+typedef gint64 mono_i;
 #define MINT_TYPE_I MINT_TYPE_I8
 #endif
 
@@ -79,7 +81,7 @@ typedef struct {
 		double f;
 #ifdef INTERP_NO_STACK_SCAN
 		/* Ensure objref is always flushed to interp stack */
-		MonoObject * volatile o;
+		MonoObject *volatile o;
 #else
 		MonoObject *o;
 #endif
@@ -94,7 +96,6 @@ typedef struct InterpFrame InterpFrame;
 
 typedef void (*MonoFuncV) (void);
 typedef void (*MonoPIFunc) (void *callme, void *margs);
-
 
 typedef enum {
 	IMETHOD_CODE_INTERP,
@@ -183,7 +184,7 @@ struct _FrameDataFragment {
 	/* Align data field to MINT_VT_ALIGNMENT */
 	gint32 pad;
 #endif
-	double data [MONO_ZERO_LEN_ARRAY];
+	double data[MONO_ZERO_LEN_ARRAY];
 };
 
 typedef struct {
@@ -205,21 +206,38 @@ typedef struct {
 	int inited;
 } FrameDataAllocator;
 
+/* Arguments that are passed when invoking only a finally/filter clause from the frame */
+struct FrameClauseArgs {
+	/* Where we start the frame execution from */
+	const guint16 *start_with_ip;
+	/*
+	 * End ip of the exit_clause. We need it so we know whether the resume
+	 * state is for this frame (which is called from EH) or for the original
+	 * frame further down the stack.
+	 */
+	const guint16 *end_at_ip;
+	/* When exiting this clause we also exit the frame */
+	int exit_clause;
+	/* Exception that we are filtering */
+	MonoException *filter_exception;
+	/* Frame that is executing this clause */
+	InterpFrame *exec_frame;
+};
 
 /* Arguments that are passed when invoking only a finally/filter clause from the frame */
 typedef struct FrameClauseArgs FrameClauseArgs;
 
 /* State of the interpreter main loop */
 typedef struct {
-	const unsigned short  *ip;
+	const unsigned short *ip;
 } InterpState;
 
 struct InterpFrame {
-	InterpFrame *parent; /* parent */
-	InterpMethod  *imethod; /* parent */
-	stackval       *retval; /* parent */
-	stackval       *stack;
-	InterpFrame    *next_free;
+	InterpFrame *parent;   /* parent */
+	InterpMethod *imethod; /* parent */
+	stackval *retval;      /* parent */
+	stackval *stack;
+	InterpFrame *next_free;
 	/*
 	 * What keeps the code this frame is executing from being freed underneath it -
 	 * imethod->code_owner resolved, or NULL when nothing manages the code. Frames
@@ -227,13 +245,21 @@ struct InterpFrame {
 	 * so holding it here roots it for exactly as long as the frame lives, however
 	 * the frame ends.
 	 */
-	MonoObject     *code_owner;
+	MonoObject *code_owner;
 	/* State saved before calls */
 	/* This is valid if state.ip != NULL */
 	InterpState state;
 };
 
-#define frame_locals(frame) ((guchar*)(frame)->stack)
+#define frame_locals(frame) ((guchar *) (frame)->stack)
+
+/*
+ * How deep the interpreter can nest calls. A frame that runs out of value stack is
+ * refused before this bound is reached, so it only decides the answer for methods
+ * whose locals are small enough to outlast INTERP_STACK_SIZE.
+ */
+#define INTERP_MAX_FRAME_DEPTH (64 * 1024)
+#define INTERP_FRAME_STACK_SIZE (INTERP_MAX_FRAME_DEPTH * sizeof (InterpFrame))
 
 /*
  * The handle stack mark one interp_exec_method () invocation took, and the
@@ -268,6 +294,18 @@ typedef struct {
 	guchar *stack_pointer;
 	/* Used for allocation of localloc regions */
 	FrameDataAllocator data_stack;
+	/*
+	 * Storage for the frames a call makes. A frame outlives the code that made it -
+	 * the caller resumes from its own frame long afterwards - so it cannot live on
+	 * the native stack of whatever ran the call. Frames are pushed and popped in
+	 * step with the calls they belong to, which makes the region below
+	 * frame_stack_pointer exactly the live chain.
+	 *
+	 * interp_mark_stack () scans it: InterpFrame::code_owner is a managed reference
+	 * and this is the only thing holding it.
+	 */
+	guchar *frame_stack_start;
+	guchar *frame_stack_pointer;
 	/* Points to the currently executing frame while the thread is stopped inside the
 	 * interpreter and something is about to look at its stack - a self-suspend at a
 	 * safepoint, or an interruption checkpoint. (If a thread stops somewhere else in
@@ -318,29 +356,79 @@ extern int mono_interp_traceopt;
 extern int mono_interp_opt;
 extern GSList *mono_interp_jit_classes;
 
-void
-mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, MonoError *error);
+void mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, MonoError *error);
 
-void
-mono_interp_transform_init (void);
+void mono_interp_transform_init (void);
 
-InterpMethod *
-mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error);
+InterpMethod *mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error);
 
-void
-mono_interp_print_code (InterpMethod *imethod);
+void mono_interp_print_code (InterpMethod *imethod);
 
-gboolean
-mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig);
+gboolean mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig);
 
-gboolean
-mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig);
+gboolean mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig);
 
-void
-mono_interp_error_cleanup (MonoError *error);
+void mono_interp_error_cleanup (MonoError *error);
+
+/*
+ * Calls the native function ptr with the arguments in sp, and writes the result
+ * back over sp [0]. op is the MINT_ICALL_* opcode naming its arity and return
+ * kind. A non-NULL sig converts the result from the native representation to the
+ * interpreter one.
+ *
+ * An exception from native code returns through here rather than unwinding past
+ * it. A caller whose target can throw therefore sets frame->state.ip before the
+ * call and checks the resume state after.
+ */
+void mono_interp_do_icall (InterpFrame *frame, MonoMethodSignature *sig, int op, stackval *sp,
+                           gpointer ptr, gboolean save_last_error);
+
+/*
+ * Calls the native function addr with the arguments in sp, marshalled the way sig
+ * describes, and writes the result back over sp. imethod is the pinvoke method the
+ * wrapper making this call stands for, and NULL at a calli that is not inside a
+ * managed-to-native wrapper. cache must be stable per-call-site storage, because
+ * the wasm build caches the entry trampoline in it.
+ *
+ * An exception from native code returns through here rather than unwinding past
+ * it. A caller whose target can throw therefore sets parent_frame->state.ip before
+ * the call and checks the resume state after.
+ */
+void mono_interp_do_pinvoke (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV addr,
+                             ThreadContext *context, InterpFrame *parent_frame, stackval *sp,
+                             gboolean save_last_error, gpointer *cache);
+
+/* Whether the debugger wants a single step trampoline at every step location. */
+extern gboolean mono_interp_ss_enabled;
+
+/* The address that stands for imethod, minted if this is the first ask. */
+gpointer mono_interp_entry_for_imethod (InterpMethod *imethod, MonoError *error);
+
+/*
+ * The address that stands for imethod outside this engine, recording that the
+ * address is now in native hands. A patcher writes a jump over what it is given,
+ * so both engines have to name the same address for a method.
+ */
+gpointer mono_interp_escaping_entry_for_imethod (InterpMethod *imethod, MonoError *error);
+
+/*
+ * Runs one of the handful of methods the runtime implements itself rather than in
+ * IL, writing the result over sp. Returns what it threw, or NULL.
+ */
+MonoException *mono_interp_ves_imethod (InterpFrame *frame, MonoMethod *method,
+                                        MonoMethodSignature *sig, stackval *sp);
+
+/*
+ * Builds the buffer a vararg call's arglist reads, from the arguments at sp.
+ * arglist must have room for the whole variable part plus its cookie.
+ */
+void mono_interp_init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp,
+                               char *arglist);
+
+MONO_NEVER_INLINE MonoException *mono_interp_leave (InterpFrame *parent_frame);
 
 static inline int
-mint_type(MonoType *type_)
+mint_type (MonoType *type_)
 {
 	MonoType *type = mini_native_type_replace_type (type_);
 	if (type->byref)
@@ -395,5 +483,7 @@ enum_type:
 	}
 	return -1;
 }
+
+MONO_END_DECLS
 
 #endif /* __MONO_MINI_INTERPRETER_INTERNALS_H__ */

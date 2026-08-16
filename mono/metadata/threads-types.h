@@ -383,7 +383,7 @@ gboolean mono_thread_has_appdomain_ref (MonoThread *thread, MonoDomain *domain);
 
 gboolean mono_thread_interruption_requested (void);
 
-ICALL_EXTERN_C
+G_EXTERN_C
 MonoException*
 mono_thread_interruption_checkpoint (void);
 
@@ -414,7 +414,7 @@ extern gint32 mono_thread_interruption_request_flag;
 
 uint32_t mono_alloc_special_static_data (uint32_t static_type, uint32_t size, uint32_t align, uintptr_t *bitmap, int numbits);
 
-ICALL_EXTERN_C
+G_EXTERN_C
 void*    mono_get_special_static_data   (uint32_t offset);
 
 gpointer mono_get_special_static_data_for_thread (MonoInternalThread *thread, guint32 offset);
@@ -463,8 +463,8 @@ mono_threads_attach_coop_internal (MonoDomain *domain, gpointer *cookie, MonoSta
 void
 mono_threads_detach_coop_internal (MonoDomain *orig_domain, gpointer cookie, MonoStackData *stackdata);
 
-void mono_threads_begin_abort_protected_block (void);
-gboolean mono_threads_end_abort_protected_block (void);
+G_EXTERN_C void mono_threads_begin_abort_protected_block (void);
+G_EXTERN_C gboolean mono_threads_end_abort_protected_block (void);
 
 gboolean
 mono_thread_internal_current_is_attached (void);
@@ -478,7 +478,7 @@ mono_thread_internal_is_current (MonoInternalThread *internal);
 gboolean
 mono_threads_is_current_thread_in_protected_block (void);
 
-gboolean
+G_EXTERN_C gboolean
 mono_threads_is_critical_method (MonoMethod *method);
 
 gpointer

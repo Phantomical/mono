@@ -24,8 +24,9 @@ extern volatile size_t mono_polling_required;
 
 /* Internal API */
 
-ICALL_EXTERN_C
-void
+/* G_EXTERN_C: the interpreter polls from C++, and the definition is in C
+ * whether or not the icalls are exported. */
+G_EXTERN_C void
 mono_threads_state_poll (void);
 
 // 0 also used internally for uninitialized

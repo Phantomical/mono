@@ -11,6 +11,8 @@
 #include "mini-runtime.h"
 #include "aot-runtime.h"
 
+MONO_BEGIN_DECLS
+
 MonoFtnDesc* mini_llvmonly_load_method_ftndesc (MonoMethod *method, gboolean caller_gsharedvt, gboolean need_unbox, MonoError *error);
 gpointer  mini_llvmonly_load_method_delegate (MonoMethod *method, gboolean caller_gsharedvt, gboolean need_unbox, gpointer *out_arg, MonoError *error);
 gpointer  mini_llvmonly_add_method_wrappers (MonoMethod *m, gpointer compiled_method, gboolean caller_gsharedvt, gboolean add_unbox_tramp, gpointer *out_arg);
@@ -36,5 +38,7 @@ G_EXTERN_C void mini_llvmonly_throw_aot_failed_exception (const char *name);
 G_EXTERN_C void mini_llvmonly_pop_lmf (MonoLMF *lmf);
 
 G_EXTERN_C gpointer mini_llvmonly_get_interp_entry (MonoMethod *method);
+
+MONO_END_DECLS
 
 #endif

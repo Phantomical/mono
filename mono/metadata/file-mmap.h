@@ -19,6 +19,8 @@
 #include <mono/utils/mono-compiler.h>
 #include <mono/metadata/icalls.h>
 
+MONO_BEGIN_DECLS
+
 ICALL_EXPORT
 void
 mono_mmap_close (void *mmap_handle, MonoError *error);
@@ -47,5 +49,7 @@ mono_mmap_map (void *handle, gint64 offset, gint64 *size, int access, void **mma
 ICALL_EXPORT
 MonoBoolean
 mono_mmap_unmap (void *base_address, MonoError *error);
+
+MONO_END_DECLS
 
 #endif /* _MONO_METADATA_FILE_MMAP_H_ */

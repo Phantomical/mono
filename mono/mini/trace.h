@@ -8,12 +8,14 @@
 #include "mono/utils/mono-compiler.h"
 #include "mono/metadata/icalls.h"
 
-ICALL_EXTERN_C
+/* G_EXTERN_C: the interpreter raises these from C++, and the definitions are in
+ * C whether or not the icalls are exported. */
+G_EXTERN_C
 void
 mono_trace_enter_method (MonoMethod *method, MonoJitInfo *ji, MonoProfilerCallContext *ctx);
 
-ICALL_EXTERN_C
-void 
+G_EXTERN_C
+void
 mono_trace_leave_method (MonoMethod *method, MonoJitInfo *ji, MonoProfilerCallContext *ctx);
 
 ICALL_EXTERN_C

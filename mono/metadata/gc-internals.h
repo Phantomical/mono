@@ -138,6 +138,8 @@ mono_gc_alloc_pinned_obj (MonoVTable *vtable, size_t size);
 MonoObjectHandle
 mono_gc_alloc_handle_pinned_obj (MonoVTable *vtable, gsize size);
 
+/* G_EXTERN_C: the interpreter boxes from C++. */
+G_EXTERN_C
 MonoObject*
 mono_gc_alloc_obj (MonoVTable *vtable, size_t size);
 
