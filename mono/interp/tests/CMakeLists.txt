@@ -1,17 +1,12 @@
 # The interpreter's managed tests.
 #
-# A static int method named test_<n>_<what> -- the convention mono/mini's
-# --regression harness reads -- becomes its own ctest test, run in its own
-# process by runner.cpp.  A failure therefore names the method and the engine it
+# Each test method in the built assemblies becomes its own ctest test, run in
+# its own process by runner.cpp, so a failure names the method and the engine it
 # ran on, and --rerun-failed re-runs only what broke.
 #
-# Every source under cs/ and il/ compiles to a netmodule, and the netmodules are
-# linked into one assembly.  A test can call a helper written in the other
-# language, and each arm is one discovery rather than one per file.
-#
-# Which methods exist is decided when ctest starts rather than at configure time
-# -- see discover.cmake -- so writing a new test means editing a source and
-# building, with no cmake step in between.
+# discover.cmake lists those methods when ctest starts rather than at configure
+# time, so writing a new test means editing a source and building, with no cmake
+# step in between.
 
 if(NOT MONO_CORPUS_ENABLED)
   # No class-library toolchain, so nothing to compile the suites with.
@@ -51,13 +46,9 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
-# mono_add_test_methods(
-#     ASSEMBLY <path> NAME_PREFIX <str> [NAME_SUFFIX <str>] [TIMEOUT <seconds>]
-#     [ONLY <regex>] [ARM <name>] [PROPERTIES <prop> <value>...]
-#     [ENVIRONMENT <VAR=value>...] [XFAIL <Class:method>...])
-#
-# The name parts and the environment go together: registering one assembly twice
-# under two of each is what would run the same methods on a second engine.
+# Registers one ctest test per method of an assembly.  Registering the same
+# assembly again under another name prefix and environment is what runs those
+# methods on a second engine.
 #
 # A method named in XFAIL is registered with WILL_FAIL, so it reports as passing
 # while it returns the wrong answer and starts failing the day it is fixed.  The
@@ -91,7 +82,6 @@ function(mono_add_test_methods)
     endif()
   endforeach()
 
-  # Listed again when the runner or the assembly is newer than the last listing.
   file(GENERATE OUTPUT "${_include}" CONTENT
 "if(EXISTS \"$<TARGET_FILE:interp-test-runner>\" AND EXISTS \"${ARG_ASSEMBLY}\")
   include(\"${CMAKE_CURRENT_SOURCE_DIR}/discover.cmake\")
@@ -136,8 +126,6 @@ endfunction()
 # and each `.il` through ilasm, which takes one source at a time.  A test can
 # then call a helper written in the other language, and a whole suite is one
 # discovery rather than one per file.
-#
-# The modules sit beside the assembly and are loaded from there.
 set(MONO_CORPUS_OUTPUTS "")
 set(_modules "")
 
@@ -145,15 +133,13 @@ file(GLOB _sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" cs/*
 mono_corpus_cs(interp-tests-cs.netmodule MODULE DEBUG SOURCES ${_sources})
 list(APPEND _modules "${CMAKE_CURRENT_BINARY_DIR}/interp-tests-cs.netmodule")
 
-# IL shapes C# does not emit -- a merge point whose predecessors leave different
-# widths, `jmp`, an explicit `tail.`, the type-unsafe prefixes.
+# IL shapes C# does not emit.
 file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" il/*.il)
 
-# A magic type is one mono recognizes by its assembly's name, so these two
-# cannot be modules: a module carries no Assembly row, and a type in one is
-# never magic.  Merging them would leave every test passing -- the managed
-# bodies are real implementations -- with
-# interp_handle_magic_type_intrinsics () no longer reached at all.
+# Mono recognizes a magic type by its assembly's name, so these two cannot be
+# modules: a module carries no Assembly row, and a type in one is never magic.
+# Merging them leaves interp_handle_magic_type_intrinsics () unreached and every
+# test still passing, since the managed bodies are real implementations.
 set(_own_assembly il/folding.il il/magic-conv.il)
 set(_assemblies "")
 
@@ -238,9 +224,7 @@ foreach(_assembly IN LISTS _assemblies)
 
   # The same methods with no interpreter under them, so each is compiled at tier
   # 1 on the synchronous path.  A method that answers differently here than it
-  # does above says the engines disagree about its IL.  This arm is a second
-  # opinion on the same programs rather than more coverage of the interpreter,
-  # so `check-interp` leaves it out.
+  # does above says the engines disagree about its IL.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "jit/"
@@ -255,12 +239,8 @@ foreach(_assembly IN LISTS _assemblies)
   #
   # This arm is red, and on one defect rather than many: a compile taken from
   # the promotion path trips a SelectionDAG assertion in LLVM and the process
-  # aborts.  That is 121 of its 250 failures, and most of the rest are the same
-  # abort reported as a timeout.  The same methods under MONO_LLVM_JIT_TIER0=0,
-  # which compiles them on the calling thread, are clean.  Raising the threshold
-  # lowers the rate rather than removing it: fewer methods promote before the
-  # process exits.  Nine minutes, so keep it out of anything that runs by
-  # default.
+  # aborts.  The same methods under MONO_LLVM_JIT_TIER0=0, which compiles them
+  # on the calling thread, are clean.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "mixed/"
@@ -276,15 +256,10 @@ endforeach()
 # varies could reach it, so each takes the classes marked with its attribute --
 # cs/arms.cs holds both and says what marking one means.
 #
-# Everything that instruments the interpreter, which nothing else here turns on:
-# sequence points, the transform's tracing, the tracing the interpreter emits
-# around a call, and the coverage instrumentation it emits per basic block.  The
-# first two of those splice instructions into the stream, which moves every code
-# offset an EH clause and a branch are written in terms of.
-#
-# Same label as the ordinary interpreted arm, since it is more of the
-# interpreter rather than a second opinion on it; `ctest -R ^instrumented/`
-# selects it on its own.
+# The instrumented arm turns on everything that instruments the interpreter,
+# which nothing else here does.  Sequence points and the transform's tracing
+# splice instructions into the stream, which moves every code offset an EH
+# clause and a branch are written in terms of.
 foreach(_assembly IN LISTS _assemblies)
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
@@ -298,16 +273,14 @@ foreach(_assembly IN LISTS _assemblies)
                 # The transform's tracing decodes each opcode's operands from a
                 # table it keeps apart from the handlers, so it is worth running
                 # even where nothing reads what it prints.  A bare name matches
-                # the method's own name whatever class it is in, and the
-                # constructors a process transforms use most of the operand
-                # kinds the printer has an arm for.
+                # that method in every class, and the constructors a process
+                # transforms cover most of the operand kinds.
                 "MONO_VERBOSE_METHOD=.ctor"
                 "MONO_INTERP_TESTS_TRACE=all"
                 "MONO_INTERP_TESTS_COVERAGE=1")
 
   # The interpreter with its own optimizations turned off, so the transform
-  # emits what it read rather than what it worked out.  The answers have to be
-  # the same either way, which is what this asks.
+  # emits what it read rather than what it worked out.
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "noopt/"
@@ -321,8 +294,8 @@ endforeach()
 
 # A wrapper is compiled whatever tier its target runs in, so the opcodes only a
 # wrapper carries never reach the transform.  `interp-only=<class>` hands every
-# method of a class to the interpreter, wrappers included.  That option names one
-# class, so this arm runs the methods of that class and nothing else.
+# method of a class to the interpreter, wrappers included, and it names one
+# class -- so this arm runs the methods of that class and nothing else.
 mono_add_test_methods(
   ASSEMBLY "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll"
   NAME_PREFIX "wrappers/"
