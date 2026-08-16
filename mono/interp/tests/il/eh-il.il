@@ -3,9 +3,11 @@
 // protected blocks.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi EhIL extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']InstrumentedAttribute::.ctor() = ( 01 00 00 00 )
 	.field public static int32 marks
 
 	// A fault handler runs when an exception leaves the try and not otherwise.

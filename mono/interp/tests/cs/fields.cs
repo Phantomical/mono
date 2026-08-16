@@ -138,6 +138,7 @@ struct Fields_Packed {
 	public long Value;
 }
 
+[NoOpt]
 public class Fields {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }

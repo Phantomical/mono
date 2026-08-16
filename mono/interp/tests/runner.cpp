@@ -8,6 +8,9 @@
  *   runner --list <assembly>              every test in it, one "Class:name" a line
  *   runner <assembly> <Class:name>        run that one
  *
+ * A listing line carries the arms the test's class opted into after a space,
+ * and the first line names every arm this runner knows.
+ *
  * One method per process, which is what lets a test that takes the runtime down
  * name itself. Which engine runs the method is the caller's business: the
  * MONO_LLVM_JIT_TIER* variables decide it, and the suites pass them in.
@@ -28,6 +31,7 @@
 #include <mono/metadata/mono-debug.h>
 #include <mono/metadata/profiler.h>
 #include <mono/metadata/object-internals.h>
+#include <mono/metadata/reflection-internals.h>
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
 #include <mono/mini/jit.h>
@@ -37,6 +41,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -67,6 +72,54 @@ is_test_method (MonoMethod *method)
 
 	return signature != nullptr && signature->param_count == 0 &&
 	       signature->ret->type == MONO_TYPE_I4;
+}
+
+/// What each attribute opts a class into, spelled as the suites spell the arm.
+///
+/// The match is on the attribute's name alone, so a suite that has to be an
+/// assembly of its own defines the attribute again rather than referencing the
+/// one in cs/arms.cs.
+const struct {
+	std::string_view attribute;
+	const char *arm;
+} arm_attributes [] = {
+	{ "NoOptAttribute",        "noopt" },
+	{ "InstrumentedAttribute", "instrumented" },
+};
+
+/// The arms a class opted into, comma separated, or empty for none.
+std::string
+class_arms (MonoClass *klass)
+{
+	ERROR_DECL (error);
+	MonoCustomAttrInfo *attributes = mono_custom_attrs_from_class_checked (klass, error);
+	std::string arms;
+
+	// A class whose attributes will not load opts into nothing, and stays in the
+	// arms that take every test.
+	mono_error_cleanup (error);
+
+	if (attributes == nullptr)
+		return arms;
+
+	for (int i = 0; i < attributes->num_attrs; i++) {
+		MonoMethod *ctor = attributes->attrs [i].ctor;
+
+		if (ctor == nullptr)
+			continue;
+
+		for (const auto &known : arm_attributes) {
+			if (known.attribute != m_class_get_name (ctor->klass))
+				continue;
+
+			if (!arms.empty ())
+				arms += ',';
+			arms += known.arm;
+		}
+	}
+
+	mono_custom_attrs_free (attributes);
+	return arms;
 }
 
 /// How mono_method_desc_new () spells this method: "Namespace.Class:name".
@@ -143,6 +196,18 @@ assembly_images (MonoImage *manifest)
 int
 list_tests (MonoImage *manifest)
 {
+	// Named so that an arm asking for something no attribute produces is a
+	// failure rather than an arm that quietly holds no tests.
+	std::string known;
+
+	for (const auto &arm : arm_attributes) {
+		if (!known.empty ())
+			known += ',';
+		known += arm.arm;
+	}
+
+	printf ("#arms %s\n", known.c_str ());
+
 	for (MonoImage *image : assembly_images (manifest)) {
 		int rows = mono_image_get_table_rows (image, MONO_TABLE_METHOD);
 
@@ -156,8 +221,13 @@ list_tests (MonoImage *manifest)
 				continue;
 			}
 
-			if (is_test_method (method))
-				printf ("%s\n", qualified_name (method).c_str ());
+			if (!is_test_method (method))
+				continue;
+
+			std::string arms = class_arms (method->klass);
+
+			printf ("%s%s%s\n", qualified_name (method).c_str (),
+			        arms.empty () ? "" : " ", arms.c_str ());
 		}
 	}
 

@@ -4,9 +4,11 @@
 // read with can disagree.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi Merge extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	// Both predecessors leave an int64, so the read gets all eight bytes.
 	.method public static int32 test_1_merge_i8_i8 () cil managed
 	{

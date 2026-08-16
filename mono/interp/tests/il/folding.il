@@ -165,11 +165,29 @@
 
 } // .namespace System
 
+// The attribute cs/arms.cs holds.  This file is an assembly of its own, and the
+// runner matches an arm attribute by name, so it carries its own definition
+// rather than referencing that one.
+.class public auto ansi sealed NoOptAttribute extends [mscorlib]System.Attribute
+{
+	.method public specialname rtspecialname instance void .ctor () cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		call instance void [mscorlib]System.Attribute::.ctor ()
+		ret
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The tests
 // ---------------------------------------------------------------------------
 .class public auto ansi Folding extends [mscorlib]System.Object
 {
+	// Every operand here is a literal, so the arm that turns the folder off
+	// runs each of these rows through the opcode it folds to instead.
+	.custom instance void NoOptAttribute::.ctor() = ( 01 00 00 00 )
+
 	// -------------------------------------------------------------------
 	// interp_fold_unop.  0xFFFFFFFEFFFFFFF9 is -0x100000007, which has a
 	// bit set in each half.

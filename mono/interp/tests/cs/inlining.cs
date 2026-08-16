@@ -19,6 +19,7 @@ public class InliningLateInit {
 	public static int Small () { return Seed; }
 }
 
+[NoOpt, Instrumented]
 public class Inlining {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }

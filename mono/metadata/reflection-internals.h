@@ -13,6 +13,8 @@
 #include <mono/utils/mono-compiler.h>
 #include <mono/utils/mono-error.h>
 
+MONO_BEGIN_DECLS
+
 /* Safely access System.Reflection.Assembly from native code */
 TYPED_HANDLE_DECL (MonoReflectionAssembly)
 
@@ -143,5 +145,7 @@ mono_runtime_get_caller_from_stack_mark (MonoStackCrawlMark *stack_mark);
 
 void
 mono_reflection_get_param_info_member_and_pos (MonoReflectionParameterHandle p, MonoObjectHandle member_impl, int *out_position);
+
+MONO_END_DECLS
 
 #endif /* __MONO_METADATA_REFLECTION_INTERNALS_H__ */

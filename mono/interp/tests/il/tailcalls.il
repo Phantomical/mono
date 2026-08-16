@@ -4,9 +4,11 @@
 // the two apart. What these check is that the answer is right either way.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi TailCalls extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']InstrumentedAttribute::.ctor() = ( 01 00 00 00 )
 	.field public static int32 depth
 
 	.method public static int32 Add (int32 a, int32 b) cil managed

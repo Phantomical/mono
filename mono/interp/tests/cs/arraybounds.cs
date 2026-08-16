@@ -5,6 +5,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class ArrayBounds {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }

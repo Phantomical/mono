@@ -53,8 +53,8 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # ---------------------------------------------------------------------------
 # mono_add_test_methods(
 #     ASSEMBLY <path> NAME_PREFIX <str> [NAME_SUFFIX <str>] [TIMEOUT <seconds>]
-#     [ONLY <regex>] [PROPERTIES <prop> <value>...] [ENVIRONMENT <VAR=value>...]
-#     [XFAIL <Class:method>...])
+#     [ONLY <regex>] [ARM <name>] [PROPERTIES <prop> <value>...]
+#     [ENVIRONMENT <VAR=value>...] [XFAIL <Class:method>...])
 #
 # The name parts and the environment go together: registering one assembly twice
 # under two of each is what would run the same methods on a second engine.
@@ -68,7 +68,7 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # under whatever ran it.
 function(mono_add_test_methods)
   cmake_parse_arguments(ARG ""
-    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT;ONLY" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
+    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT;ONLY;ARM" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
 
   if(NOT ARG_TIMEOUT)
     set(ARG_TIMEOUT 60)
@@ -78,14 +78,14 @@ function(mono_add_test_methods)
   # neither a second assembly nor a second engine overwrites the first.
   cmake_path(GET ARG_ASSEMBLY STEM _stem)
   string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _key
-         "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}${ARG_ONLY}")
+         "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}${ARG_ONLY}${ARG_ARM}")
   set(_include "${CMAKE_CURRENT_BINARY_DIR}/${_key}_include.cmake")
   set(_tests   "${CMAKE_CURRENT_BINARY_DIR}/${_key}_tests.cmake")
   # One per assembly, not per arm: this is the file the runtime start pays for.
   set(_list    "${CMAKE_CURRENT_BINARY_DIR}/${_stem}_methods.txt")
 
   set(_args "")
-  foreach(_a PROPERTIES ENVIRONMENT XFAIL ONLY)
+  foreach(_a PROPERTIES ENVIRONMENT XFAIL ONLY ARM)
     if(ARG_${_a})
       string(APPEND _args "      ${_a} [==[${ARG_${_a}}]==]\n")
     endif()
@@ -270,9 +270,18 @@ foreach(_assembly IN LISTS _assemblies)
                 "MONO_LLVM_JIT_TIER1_THRESHOLD=2")
 endforeach()
 
+# The two arms below change what the transform emits rather than which engine
+# runs it, so both ask one question of a whole suite: does the program still
+# answer the same.  A class answers that question only where the thing the arm
+# varies could reach it, so each takes the classes marked with its attribute --
+# cs/arms.cs holds both and says what marking one means.
+#
 # Everything that instruments the interpreter, which nothing else here turns on:
 # sequence points, the transform's tracing, the tracing the interpreter emits
-# around a call, and the coverage instrumentation it emits per basic block.
+# around a call, and the coverage instrumentation it emits per basic block.  The
+# first two of those splice instructions into the stream, which moves every code
+# offset an EH clause and a branch are written in terms of.
+#
 # Same label as the ordinary interpreted arm, since it is more of the
 # interpreter rather than a second opinion on it; `ctest -R ^instrumented/`
 # selects it on its own.
@@ -280,6 +289,7 @@ foreach(_assembly IN LISTS _assemblies)
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "instrumented/"
+    ARM instrumented
     PROPERTIES LABELS interp-unit
     XFAIL ${MONO_INTERP_TESTS_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
@@ -301,6 +311,7 @@ foreach(_assembly IN LISTS _assemblies)
   mono_add_test_methods(
     ASSEMBLY "${_assembly}"
     NAME_PREFIX "noopt/"
+    ARM noopt
     PROPERTIES LABELS interp-unit
     XFAIL ${MONO_INTERP_TESTS_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"

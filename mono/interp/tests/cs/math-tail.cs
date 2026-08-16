@@ -16,6 +16,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[Instrumented]
 public class MathTail {
 
 	[MethodImpl (MethodImplOptions.NoInlining)]

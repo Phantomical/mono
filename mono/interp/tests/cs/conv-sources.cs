@@ -14,6 +14,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class ConvSources {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static float IdR4 (float x) { return x; }

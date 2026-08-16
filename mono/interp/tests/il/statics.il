@@ -8,9 +8,11 @@
 // call to it runs.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi Statics extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	.field public static initonly int32 frozen
 	.field public static int32 ordinary
 	// What Read () answered from inside the initializer.

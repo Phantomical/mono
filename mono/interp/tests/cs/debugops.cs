@@ -8,6 +8,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
+[Instrumented]
 public class DebugOps {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int DbgId (int x) { return x; }

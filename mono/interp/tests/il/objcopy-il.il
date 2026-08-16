@@ -2,6 +2,7 @@
 // to choose.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public sequential ansi sealed ObjCopyOne extends [mscorlib]System.ValueType
 {
@@ -28,6 +29,7 @@
 
 .class public auto ansi ObjCopyIL extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	.method public static int32 test_7_cpobj_one_byte () cil managed
 	{
 		.maxstack 3

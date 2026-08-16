@@ -3,9 +3,11 @@
 // translator disagree about what happens when it does not.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi NativeInt extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	.field public static native int slot
 	.field public static native unsigned int uslot
 	.field public native int held

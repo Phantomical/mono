@@ -24,7 +24,8 @@ cmake_minimum_required(VERSION 3.16)
 #     CMAKE_EXE <cmake> RUNNER <exe> ASSEMBLY <dll> LIST_FILE <out>
 #     WORKING_DIR <dir> TIMEOUT <seconds> [ENVIRONMENT <VAR=value>...])
 #
-# Writes one "Class:name" a line, or a single "!" line carrying the error.  Does
+# Writes a "#arms" line naming every arm the runner knows and then one
+# "Class:name [arms]" a line, or a single "!" line carrying the error.  Does
 # nothing when the file is newer than both the runner and the assembly.
 #
 # cmake is named rather than taken from CMAKE_COMMAND, which ctest leaves unset
@@ -68,14 +69,20 @@ endfunction()
 # mono_discover_test_methods_impl(
 #     CMAKE_EXE <cmake> RUNNER <exe> ASSEMBLY <dll> LIST_FILE <in>
 #     CTEST_FILE <out> NAME_PREFIX <str> NAME_SUFFIX <str> WORKING_DIR <dir>
-#     [ONLY <regex>] [PROPERTIES <prop>;<value>...] [ENVIRONMENT <VAR=value>...]
-#     [XFAIL <Class:method>...])
+#     [ONLY <regex>] [ARM <name>] [PROPERTIES <prop>;<value>...]
+#     [ENVIRONMENT <VAR=value>...] [XFAIL <Class:method>...])
 #
 # ONLY keeps the methods whose "Class:name" matches it.  One assembly holds every
 # suite, so this is what scopes an arm that is about a few of them.
+#
+# ARM keeps the methods whose class carries the attribute for that arm, which is
+# how an arm that asks the same question of every program in it takes only the
+# programs that can answer it differently.  An arm the runner does not know
+# registers a failing test: the arm would otherwise hold nothing and read as a
+# suite that passes.
 function(mono_discover_test_methods_impl)
   cmake_parse_arguments(ARG ""
-    "CMAKE_EXE;RUNNER;ASSEMBLY;LIST_FILE;CTEST_FILE;NAME_PREFIX;NAME_SUFFIX;WORKING_DIR;ONLY"
+    "CMAKE_EXE;RUNNER;ASSEMBLY;LIST_FILE;CTEST_FILE;NAME_PREFIX;NAME_SUFFIX;WORKING_DIR;ONLY;ARM"
     "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
 
   # Every generated token is bracket-quoted, so a property value with spaces in
@@ -110,12 +117,44 @@ function(mono_discover_test_methods_impl)
   endif()
 
   string(REPLACE "\n" ";" _lines "${_listing}")
+
+  # The runner opens the listing with the arms it knows.
+  set(_known "")
+  foreach(_line IN LISTS _lines)
+    if("${_line}" MATCHES "^#arms +(.*)$")
+      set(_known ",${CMAKE_MATCH_1},")
+      break()
+    endif()
+  endforeach()
+
+  if(ARG_ARM AND NOT "${_known}" MATCHES ",${ARG_ARM},")
+    set(_name "${ARG_NAME_PREFIX}!unknown-arm${ARG_NAME_SUFFIX}")
+    string(REGEX REPLACE "^,|,$" "" _names "${_known}")
+    string(APPEND _text
+      "add_test([==[${_name}]==] [==[${ARG_CMAKE_EXE}]==] [==[-E]==] [==[false]==])\n"
+      "set_tests_properties([==[${_name}]==] PROPERTIES${_props})\n"
+      "# no attribute puts a class into ${ARG_ARM}; the runner knows ${_names}\n")
+    file(WRITE "${ARG_CTEST_FILE}" "${_text}")
+    return()
+  endif()
+
   foreach(_line IN LISTS _lines)
     string(STRIP "${_line}" _test)
-    if(_test STREQUAL "")
+    if(_test STREQUAL "" OR _test MATCHES "^#")
       continue()
     endif()
+
+    # "Class:name" on its own, or followed by the arms the class opted into.
+    set(_arms "")
+    if("${_test}" MATCHES "^([^ ]+) +(.+)$")
+      set(_test "${CMAKE_MATCH_1}")
+      set(_arms ",${CMAKE_MATCH_2},")
+    endif()
+
     if(ARG_ONLY AND NOT "${_test}" MATCHES "${ARG_ONLY}")
+      continue()
+    endif()
+    if(ARG_ARM AND NOT "${_arms}" MATCHES ",${ARG_ARM},")
       continue()
     endif()
 

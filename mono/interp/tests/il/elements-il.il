@@ -15,6 +15,7 @@
 // fold them away.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public sequential ansi ElementsILPair extends [mscorlib]System.ValueType
 {
@@ -77,6 +78,7 @@
 
 .class public auto ansi ElementsIL extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	.method public static int32 Id (int32 x) cil managed noinlining
 	{
 		.maxstack 1

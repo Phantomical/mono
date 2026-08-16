@@ -6,6 +6,7 @@
 
 using System;
 
+[NoOpt]
 public class Arithmetic {
 
 	static int Id (int x) { return x; }

@@ -10,6 +10,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class ConversionsUn {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int IdI4 (int x) { return x; }

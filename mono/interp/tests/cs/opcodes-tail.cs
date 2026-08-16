@@ -146,6 +146,7 @@ public class OpcodesTailBound : ContextBoundObject {
 	public virtual int Get () { return V; }
 }
 
+[Instrumented]
 public class OpcodesTail {
 
 	[MethodImpl (MethodImplOptions.NoInlining)]

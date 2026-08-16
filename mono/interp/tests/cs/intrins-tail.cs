@@ -29,6 +29,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[Instrumented]
 public class IntrinsTail {
 
 	[Flags] enum IntrinsTailI1 : sbyte  { None = 0, A = 1, B = 2, High = unchecked ((sbyte) 0x80) }

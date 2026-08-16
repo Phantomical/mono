@@ -80,6 +80,7 @@ public class HandlersTailWide {
 class HandlersTailStop : Exception {
 }
 
+[Instrumented]
 public class HandlersTail {
 
 	[MethodImpl (MethodImplOptions.NoInlining)]

@@ -12,6 +12,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+[NoOpt]
 public class ObjCopy {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int ObjId (int x) { return x; }

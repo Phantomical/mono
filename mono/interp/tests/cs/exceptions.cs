@@ -13,6 +13,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[Instrumented]
 public class Exceptions {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }

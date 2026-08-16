@@ -3,9 +3,12 @@
 // branch reached from an empty block.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi BBlocks extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
+	.custom instance void [.module 'interp-tests-cs.netmodule']InstrumentedAttribute::.ctor() = ( 01 00 00 00 )
 	// Every arm targets the instruction after the switch, so the block has one
 	// successor and merges with what follows it.
 	.method public static int32 test_6_switch_arms_all_fall_through () cil managed

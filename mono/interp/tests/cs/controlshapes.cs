@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class ControlShapes {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }

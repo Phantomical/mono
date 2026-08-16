@@ -5,6 +5,7 @@
 // size without fields, which is what makes the case small enough to read.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public sequential ansi sealed LimitsBlock extends [mscorlib]System.ValueType
 {
@@ -13,6 +14,7 @@
 
 .class public auto ansi Limits extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']InstrumentedAttribute::.ctor() = ( 01 00 00 00 )
 	// Three of them, so the locals region passes 64 KB whatever else the
 	// transform adds.
 	.method public static int32 TooManyLocals () cil managed noinlining

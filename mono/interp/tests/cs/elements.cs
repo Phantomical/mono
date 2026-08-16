@@ -14,6 +14,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class Elements {
 
 	[MethodImpl (MethodImplOptions.NoInlining)]

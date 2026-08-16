@@ -1,6 +1,7 @@
 // Argument and local addresses, and the return forms that go with a localloc.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public sequential ansi sealed LocalsPair extends [mscorlib]System.ValueType
 {
@@ -18,6 +19,7 @@
 
 .class public auto ansi LocalsIL extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	.method public static int32 ReadThrough (int32& p) cil managed noinlining
 	{
 		.maxstack 1

@@ -2,6 +2,7 @@
 
 using System;
 
+[NoOpt, Instrumented]
 public class ControlFlow {
 
 	static int Id (int x) { return x; }

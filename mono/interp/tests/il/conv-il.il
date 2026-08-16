@@ -22,9 +22,11 @@
 //	test_1_conv_ovf_u4_from_mp
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi ConvIL extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	// The transform folds an operation on a constant. An operand that must
 	// reach the opcode at run time comes through one of these first.
 	.method public static int32 Id4 (int32 x) cil managed noinlining

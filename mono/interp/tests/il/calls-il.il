@@ -2,9 +2,11 @@
 // calli through a function pointer, and a vararg call with its arglist.
 
 .assembly extern mscorlib { }
+.module extern 'interp-tests-cs.netmodule'
 
 .class public auto ansi CallsIL extends [mscorlib]System.Object
 {
+	.custom instance void [.module 'interp-tests-cs.netmodule']NoOptAttribute::.ctor() = ( 01 00 00 00 )
 	.method public static int32 Target (int32 a, int32 b) cil managed
 	{
 		.maxstack 2

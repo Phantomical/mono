@@ -8,6 +8,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class Conversions {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int IdI4 (int x) { return x; }

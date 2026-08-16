@@ -29,6 +29,7 @@ public struct EntryTailDiv {
 	public int Remainder;
 }
 
+[Instrumented]
 public class EntryTail {
 
 	[DllImport ("__Internal", EntryPoint = "interp_test_abs")]

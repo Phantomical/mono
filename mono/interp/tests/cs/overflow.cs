@@ -8,6 +8,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class Overflow {
 
 	// The transform folds constants and inlines a short callee, so an operand

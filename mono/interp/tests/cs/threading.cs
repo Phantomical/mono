@@ -6,6 +6,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
+[Instrumented]
 public class Threading {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int Id (int x) { return x; }

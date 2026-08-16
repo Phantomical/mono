@@ -16,6 +16,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
+[NoOpt]
 public class Comparisons {
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static int I4 (int x) { return x; }
