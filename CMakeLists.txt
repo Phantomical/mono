@@ -162,9 +162,10 @@ endif()
 # internally parallel or tiny, so a bare `ctest` is much slower than the work
 # requires. These two targets run it with the machine's core count.
 #
-#   check      the fast set -- unit tests, eglib, mini regression, the LLVM
-#              tier, and the runtime one-offs. Seconds, not minutes.
-#   check-all  everything except the stress suites and the minutes-long ones.
+#   check        the fast set -- unit tests, eglib, mini regression, the LLVM
+#                tier, and the runtime one-offs. Seconds, not minutes.
+#   check-all    everything except the stress suites and the minutes-long ones.
+#   check-interp the interpreter's own tests under mono/interp/unit-tests.
 #
 # The heavy labels (runtime, gshared, sgen, interp, slow, stress, acceptance)
 # are opt-in:
@@ -194,6 +195,16 @@ if(BUILD_TESTING)
     USES_TERMINAL
     VERBATIM)
 
+  # The interpreter's own tests, under mono/interp/unit-tests. Seconds. The rest
+  # of the `interp` label is thousands of managed programs run interpreted, which
+  # is a different question and `ctest -L interp` is how to ask it.
+  add_custom_target(check-interp
+    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+            -L interp-unit
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+
   # The test inputs.  Every one of these is an ALL target, so an ordinary build
   # already leaves them on disk; naming them here is what makes `--target check`
   # work on its own.
@@ -210,7 +221,18 @@ if(BUILD_TESTING)
       add_dependencies(check     test-llvm-data)
       add_dependencies(check-all test-llvm-data)
     endif()
+    if(MONO_ENABLE_INTERPRETER AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
+      add_dependencies(check-interp test-interp-data)
+    endif()
   endif()
+
+  # check-interp names the binary as well as its inputs, which the two above
+  # leave to ALL: it is the target to reach for after editing the interpreter, so
+  # it has to rebuild what it is about to test.
+  if(MONO_ENABLE_INTERPRETER AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
+    add_dependencies(check-interp test-interp)
+  endif()
+
   if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_SGEN)
     add_dependencies(check     unit-test-assemblies)
     add_dependencies(check-all unit-test-assemblies)

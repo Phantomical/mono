@@ -1529,15 +1529,13 @@ mono_interp_print_code (InterpMethod *imethod)
 void
 mono_interp_print_td_code (TransformData *td)
 {
-	InterpInst *ins = td->first_ins;
-
 	char *name = mono_method_full_name (td->method, TRUE);
 	g_print ("IR for \"%s\"\n", name);
 	g_free (name);
-	while (ins) {
-		dump_interp_inst (ins);
-		ins = ins->next;
-	}
+
+	for (InterpBasicBlock *bb = td->entry_bb; bb != NULL; bb = bb->next_bb)
+		for (InterpInst *ins = bb->first_ins; ins != NULL; ins = ins->next)
+			dump_interp_inst (ins);
 }
 
 

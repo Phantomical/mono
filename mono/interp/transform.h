@@ -4,6 +4,8 @@
 #include <mono/metadata/seq-points-data.h>
 #include "interp-internals.h"
 
+MONO_BEGIN_DECLS
+
 #define INTERP_INST_FLAG_SEQ_POINT_NONEMPTY_STACK 1
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY 2
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_EXIT 4
@@ -149,7 +151,7 @@ typedef struct
 	const unsigned char *il_code;
 	const unsigned char *ip;
 	const unsigned char *in_start;
-	InterpInst *last_ins, *first_ins;
+	InterpInst *last_ins;
 	int code_size;
 	int *in_offsets;
 	int current_il_offset;
@@ -216,5 +218,7 @@ mono_test_interp_method_compute_offsets (TransformData *td, InterpMethod *imetho
 /* debugging aid */
 void
 mono_interp_print_td_code (TransformData *td);
+
+MONO_END_DECLS
 
 #endif /* __MONO_INTERP_TRANSFORM_H__ */
