@@ -1727,4 +1727,27 @@
 		call int32 System.nfloat::op_Explicit(valuetype System.nfloat)
 		ret
 	}
+
+	// newobj on a magic type, which the transform rewrites the same way it
+	// rewrites the call form of the constructor. Every other test here builds
+	// its value with `ldloca` and a call, so this is the only site that takes
+	// the newobj arm.
+	.method public hidebysig static int32 test_9_nint_newobj () cil managed
+	{
+		ldc.i4.s 9
+		call int32 MagicConv::Id4(int32)
+		newobj instance void System.nint::.ctor(int32)
+		call int32 System.nint::op_Explicit(valuetype System.nint)
+		ret
+	}
+
+	.method public hidebysig static int32 test_5_nuint_newobj () cil managed
+	{
+		ldc.i4.5
+		call uint32 MagicConv::IdU4(uint32)
+		newobj instance void System.nuint::.ctor(uint32)
+		call uint32 System.nuint::op_Explicit(valuetype System.nuint)
+		conv.i4
+		ret
+	}
 }

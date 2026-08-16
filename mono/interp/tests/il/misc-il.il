@@ -185,6 +185,30 @@
 		ret
 	}
 
+	// The no. prefix, which tells the runtime it may skip a check. ilasm has no
+	// mnemonic for it, so the three bytes are written out: 0xFE 0x19 and the
+	// operand that says which checks. The transform steps over it, so the
+	// element load below happens either way.
+	.method public static int32 test_5_no_prefix () cil managed
+	{
+		.maxstack 3
+		.locals init (int32[] a)
+		ldc.i4.2
+		newarr [mscorlib]System.Int32
+		stloc.0
+		ldloc.0
+		ldc.i4.0
+		ldc.i4.5
+		stelem.i4
+		ldloc.0
+		ldc.i4.0
+		.emitbyte 0xFE
+		.emitbyte 0x19
+		.emitbyte 0x02
+		ldelem.i4
+		ret
+	}
+
 	// An exception filter that selects its handler, written out rather than
 	// through C#'s `when`.
 	.method public static int32 test_3_endfilter_selects () cil managed
