@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "mono/interp/transform.hpp"
+#include "mono/interp/transform/transform.hpp"
 
 namespace mono {
 namespace test {

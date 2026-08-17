@@ -2,6 +2,7 @@
 file(GLOB sources CONFIGURE_DEPENDS
   *.cpp
   opcodes/*.cpp
+  transform/*.cpp
 )
 
 mono_add_object_library(mono_ee_interp

@@ -21,7 +21,7 @@
 #include "interp-internals.hpp"
 #include "interp.h"
 #include "transform.hpp"
-#include "transform-internal.hpp"
+#include "internal.hpp"
 
 #if SIZEOF_VOID_P == 8
 #define MINT_NEG_P MINT_NEG_I8

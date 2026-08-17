@@ -18,7 +18,7 @@
 #include "mintops.hpp"
 #include "interp-internals.hpp"
 #include "transform.hpp"
-#include "transform-internal.hpp"
+#include "internal.hpp"
 
 namespace mono::interp {
 

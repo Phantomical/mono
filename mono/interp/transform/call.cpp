@@ -27,7 +27,7 @@
 #include "interp-internals.hpp"
 #include "interp.h"
 #include "transform.hpp"
-#include "transform-internal.hpp"
+#include "internal.hpp"
 
 #include "mono/llvm/runtime.h"
 

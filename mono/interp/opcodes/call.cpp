@@ -22,7 +22,7 @@
 #include "mono/interp/interp.hpp"
 #include "mono/interp/interp-call.hpp"
 #include "mono/interp/interp-jit-call.hpp"
-#include "mono/interp/transform.hpp"
+#include "mono/interp/transform/transform.hpp"
 #include "mono/mini/llvm-runtime.h"
 #include "mono/mini/llvmonly-runtime.h"
 #include "mono/utils/atomic.h"
