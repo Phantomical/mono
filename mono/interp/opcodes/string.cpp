@@ -24,10 +24,10 @@ MONO_INTERP_OP_IMPL (MINT_LDSTR_TOKEN)
 
 	MonoString *s = NULL;
 	if (method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD) {
-		s = (MonoString *) mono_method_get_wrapper_data (method, strtoken);
+		s = static_cast<MonoString *> (mono_method_get_wrapper_data (method, strtoken));
 	} else if (method->wrapper_type != MONO_WRAPPER_NONE) {
 		s = mono_string_new_wrapper_internal (
-			(const char *) mono_method_get_wrapper_data (method, strtoken));
+			static_cast<const char *> (mono_method_get_wrapper_data (method, strtoken)));
 	} else {
 		g_assert_not_reached ();
 	}

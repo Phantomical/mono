@@ -15,7 +15,7 @@ namespace mono::interp {
 inline gint32
 ves_array_calculate_index (MonoArray *ao, stackval *sp, gboolean safe)
 {
-	MonoClass *ac = ((MonoObject *) ao)->vtable->klass;
+	MonoClass *ac = (reinterpret_cast<MonoObject *> (ao))->vtable->klass;
 
 	guint32 pos = 0;
 	if (ao->bounds) {

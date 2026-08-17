@@ -12,10 +12,10 @@ namespace mono::interp {
 inline FrameDataFragment *
 frame_data_frag_new (int size)
 {
-	FrameDataFragment *frag = (FrameDataFragment *) g_malloc (size);
+	FrameDataFragment *frag = static_cast<FrameDataFragment *> (g_malloc (size));
 
-	frag->pos = (guint8 *) &frag->data;
-	frag->end = (guint8 *) frag + size;
+	frag->pos = reinterpret_cast<guint8 *> (&frag->data);
+	frag->end = reinterpret_cast<guint8 *> (frag) + size;
 	frag->next = NULL;
 	return frag;
 }
@@ -38,7 +38,7 @@ frame_data_allocator_init (FrameDataAllocator *stack, int size)
 	frag = frame_data_frag_new (size);
 	stack->first = stack->current = frag;
 	stack->infos_capacity = 4;
-	stack->infos = (FrameDataInfo *) g_malloc (stack->infos_capacity * sizeof (FrameDataInfo));
+	stack->infos = static_cast<FrameDataInfo *> (g_malloc (stack->infos_capacity * sizeof (FrameDataInfo)));
 }
 
 inline void
@@ -46,7 +46,7 @@ frame_data_allocator_free (FrameDataAllocator *stack)
 {
 	/* Assert to catch leaks */
 	g_assert_checked (stack->current == stack->first
-	                  && stack->current->pos == (guint8 *) &stack->current->data);
+	                  && stack->current->pos == static_cast<guint8 *> (&stack->current->data));
 	frame_data_frag_free (stack->first);
 }
 
@@ -78,8 +78,8 @@ frame_data_allocator_alloc (FrameDataAllocator *stack, InterpFrame *frame, int s
 		/* First allocation by this frame. Save the markers for restore */
 		if (infos_len == stack->infos_capacity) {
 			stack->infos_capacity = infos_len * 2;
-			stack->infos = (FrameDataInfo *) g_realloc (stack->infos, stack->infos_capacity
-			                                                              * sizeof (FrameDataInfo));
+			stack->infos = static_cast<FrameDataInfo *> (g_realloc (stack->infos, stack->infos_capacity
+			                                                              * sizeof (FrameDataInfo)));
 		}
 		stack->infos[infos_len].frame = frame;
 		stack->infos[infos_len].frag = current;
@@ -93,7 +93,7 @@ frame_data_allocator_alloc (FrameDataAllocator *stack, InterpFrame *frame, int s
 	} else {
 		if (current->next && current->next->pos + size <= current->next->end) {
 			current = stack->current = current->next;
-			current->pos = (guint8 *) &current->data;
+			current->pos = reinterpret_cast<guint8 *> (&current->data);
 		} else {
 			FrameDataFragment *tmp = current->next;
 			/* avoid linking to be freed fragments, so the GC can't trip over it */
@@ -162,7 +162,7 @@ reinit_frame (InterpFrame *frame, ThreadContext *context, InterpFrame *parent, I
 {
 	frame->parent = parent;
 	frame->imethod = imethod;
-	frame->stack = (stackval *) stack;
+	frame->stack = static_cast<stackval *> (stack);
 	frame->state.ip = NULL;
 	frame_stamp_ordinal (context, frame);
 	frame_root_code_owner (frame);

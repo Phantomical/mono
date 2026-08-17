@@ -30,7 +30,7 @@ ves_array_create (MonoDomain *domain, MonoClass *klass, int param_count, stackva
 			}
 		}
 		/* lower bounds are first. */
-		lower_bounds = (intptr_t *) lengths;
+		lower_bounds = reinterpret_cast<intptr_t *> (lengths);
 		lengths += rank;
 	} else {
 		/* Only lengths provided. */
@@ -38,14 +38,14 @@ ves_array_create (MonoDomain *domain, MonoClass *klass, int param_count, stackva
 			lengths[i] = values[i].data.i;
 		}
 	}
-	return (MonoObject *) mono_array_new_full_checked (domain, klass, lengths, lower_bounds, error);
+	return reinterpret_cast<MonoObject *> (mono_array_new_full_checked (domain, klass, lengths, lower_bounds, error));
 }
 
 static MonoException *
 ves_array_element_address (InterpFrame *frame, MonoClass *required_type, MonoArray *ao,
                            stackval *sp, gboolean needs_typecheck)
 {
-	MonoClass *ac = ((MonoObject *) ao)->vtable->klass;
+	MonoClass *ac = (reinterpret_cast<MonoObject *> (ao))->vtable->klass;
 
 	g_assert (m_class_get_rank (ac) >= 1);
 
@@ -56,7 +56,7 @@ ves_array_element_address (InterpFrame *frame, MonoClass *required_type, MonoArr
 	if (G_UNLIKELY (
 			needs_typecheck
 			&& !mono_class_is_assignable_from_internal (
-				m_class_get_element_class (mono_object_class ((MonoObject *) ao)), required_type)))
+				m_class_get_element_class (mono_object_class (reinterpret_cast<MonoObject *> (ao))), required_type)))
 		return mono_get_exception_array_type_mismatch ();
 	gint32 esize = mono_array_element_size (ac);
 	sp[-1].data.p = mono_array_addr_with_size_fast (ao, esize, pos);
@@ -162,7 +162,7 @@ MONO_INTERP_OP_IMPL (MINT_STELEM_VT)
 
 	guint16 size = ip[5];
 	char *dst = mono_array_addr_with_size_fast (array, size, index);
-	MonoClass *vt = (MonoClass *) frame->imethod->data_items[ip[4]];
+	MonoClass *vt = static_cast<MonoClass *> (frame->imethod->data_items[ip[4]]);
 	mono_value_copy_internal (dst, &LOCAL_VAR (ip[3], char), vt);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -174,7 +174,7 @@ MONO_INTERP_OP_IMPL (MINT_LDELEMA)
 	guint16 rank = ip[2];
 	guint16 esize = ip[3];
 	stackval *sp = &LOCAL_VAR (ip[1], stackval);
-	MonoArray *array = (MonoArray *) sp[0].data.o;
+	MonoArray *array = reinterpret_cast<MonoArray *> (sp[0].data.o);
 	NULL_CHECK (array);
 
 	g_assert (array->bounds);
@@ -213,11 +213,11 @@ MONO_INTERP_OP_IMPL (MINT_LDELEMA1)
 MONO_INTERP_OP_IMPL (MINT_LDELEMA_TC)
 {
 	stackval *sp = &LOCAL_VAR (ip[1], stackval);
-	MonoObject *obj = (MonoObject *) sp[0].data.o;
+	MonoObject *obj = static_cast<MonoObject *> (sp[0].data.o);
 	NULL_CHECK (obj);
 
-	MonoClass *klass = (MonoClass *) frame->imethod->data_items[ip[2]];
-	if (auto ex = ves_array_element_address (frame, klass, (MonoArray *) obj, sp + 1, true))
+	MonoClass *klass = static_cast<MonoClass *> (frame->imethod->data_items[ip[2]]);
+	if (auto ex = ves_array_element_address (frame, klass, reinterpret_cast<MonoArray *> (obj), sp + 1, true))
 		THROW_EX (ex, ip);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -240,7 +240,7 @@ MONO_INTERP_OP_IMPL (MINT_LDLEN_SPAN)
 	auto obj = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (obj);
 	gsize offset_length = (gsize) (gint16) ip[3];
-	LOCAL_VAR (ip[1], mono_u) = *(gint32 *) ((guint8 *) obj + offset_length);
+	LOCAL_VAR (ip[1], mono_u) = *reinterpret_cast<gint32 *> ((reinterpret_cast<guint8 *> (obj) + offset_length));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -249,10 +249,10 @@ MONO_INTERP_OP_IMPL (MINT_LDLEN_SPAN)
 MONO_INTERP_OP_IMPL (MINT_NEWARR)
 {
 	ERROR_DECL (error);
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[3]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[3]]);
 	gint32 length = LOCAL_VAR (ip[2], gint32);
 	LOCAL_VAR (ip[1], MonoObject *) =
-		(MonoObject *) mono_array_new_specific_checked (vtable, length, error);
+		reinterpret_cast<MonoObject *> (mono_array_new_specific_checked (vtable, length, error));
 	if (G_UNLIKELY (!is_ok (error)))
 		THROW_EX (mono_error_convert_to_exception (error), ip);
 
@@ -265,7 +265,7 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_ARRAY)
 	guint16 token = ip[2];
 	guint16 param_count = ip[3];
 	stackval *params = &LOCAL_VAR (ip[1], stackval);
-	MonoClass *klass = (MonoClass *) frame->imethod->data_items[token];
+	MonoClass *klass = static_cast<MonoClass *> (frame->imethod->data_items[token]);
 
 	ERROR_DECL (error);
 	LOCAL_VAR (ip[1], MonoObject *) =
@@ -315,15 +315,15 @@ MONO_INTERP_OP_IMPL (MINT_GETITEM_SPAN)
 	NULL_CHECK (span);
 
 	gsize offset_length = (gsize) (gint16) ip[5];
-	gint32 length = *(gint32 *) (span + offset_length);
+	gint32 length = *reinterpret_cast<gint32 *> ((span + offset_length));
 	if (G_UNLIKELY (index < 0 || index >= length))
 		THROW_EX (mono_get_exception_index_out_of_range (), ip);
 
 	gsize element_size = (gsize) (gint16) ip[4];
 	gsize offset_pointer = (gsize) (gint16) ip[6];
 
-	const gpointer pointer = *(gpointer *) (span + offset_pointer);
-	LOCAL_VAR (ip[1], gpointer) = (guint8 *) pointer + index * element_size;
+	const gpointer pointer = *reinterpret_cast<gpointer *> ((span + offset_pointer));
+	LOCAL_VAR (ip[1], gpointer) = static_cast<guint8 *> (pointer) + index * element_size;
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

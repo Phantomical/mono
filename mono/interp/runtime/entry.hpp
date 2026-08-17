@@ -52,7 +52,7 @@ lookup_method_pointer (MonoDomain *domain, gpointer addr)
 	if (!info->interp_method_pointer_hash)
 		return nullptr;
 
-	return (InterpMethod *) g_hash_table_lookup (info->interp_method_pointer_hash, addr);
+	return static_cast<InterpMethod *> (g_hash_table_lookup (info->interp_method_pointer_hash, addr));
 }
 
 /// Records that addr is the address outside this engine for imethod, so that a

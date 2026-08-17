@@ -105,7 +105,7 @@ resolve_code_type (InterpMethod *imethod)
 	 * A compile that finished while the queries above were running has already
 	 * written COMPILED, and that answer is the later one, so leave it alone.
 	 */
-	mono_atomic_cas_i32 ((gint32 *) &imethod->code_type, code_type, IMETHOD_CODE_UNKNOWN);
+	mono_atomic_cas_i32 (reinterpret_cast<gint32 *> (&imethod->code_type), code_type, IMETHOD_CODE_UNKNOWN);
 	return imethod->code_type;
 }
 
@@ -154,7 +154,7 @@ InterpState::call ()
 			/* for calls, have ip pointing at the start of next instruction */
 			frame->state.ip = ip;
 			error_init_reuse (error);
-			do_jit_call ((stackval *) (locals + call_args_offset), frame, cmethod, error);
+			do_jit_call (reinterpret_cast<stackval *> ((locals + call_args_offset)), frame, cmethod, error);
 			if (!is_ok (error))
 				THROW_EX (mono_error_convert_to_exception (error), ip);
 
@@ -171,13 +171,13 @@ InterpState::call ()
 	// Allocate the child frame. exit_frame () gives it back, so the two have to
 	// stay paired: a frame reached with its parent suspended came from here.
 	{
-		auto child_frame = (InterpFrame *) context->frame_stack_pointer;
+		auto child_frame = reinterpret_cast<InterpFrame *> (context->frame_stack_pointer);
 
-		if (G_UNLIKELY ((guchar *) (child_frame + 1)
+		if (G_UNLIKELY (reinterpret_cast<guchar *> ((child_frame + 1))
 		                > context->frame_stack_start + INTERP_FRAME_STACK_SIZE))
 			THROW_EX (mono_get_exception_stack_overflow (), ip);
 
-		context->frame_stack_pointer = (guchar *) (child_frame + 1);
+		context->frame_stack_pointer = reinterpret_cast<guchar *> ((child_frame + 1));
 		/* reinit_frame () roots the callee's code in the frame, so the pointer has
 		 * to cover it before that reference is stored. */
 		mono_compiler_barrier ();
@@ -194,11 +194,11 @@ InterpState::call ()
 	}
 
 	// check for stack overflow
-	if (G_UNLIKELY ((guchar *) frame->stack + cmethod->alloca_size
+	if (G_UNLIKELY (reinterpret_cast<guchar *> (frame->stack) + cmethod->alloca_size
 	                > context->stack_start + INTERP_STACK_SIZE - INTERP_STACK_RESERVE))
 		THROW_EX (mono_get_exception_stack_overflow (), NULL);
 
-	context->stack_pointer = (guchar *) frame->stack + cmethod->alloca_size;
+	context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + cmethod->alloca_size;
 	/* Make sure the stack pointer is bumped before we store any references on the stack */
 	mono_compiler_barrier ();
 
@@ -261,14 +261,14 @@ InterpState::tailcall ()
 	}
 
 	// if the tailcall would overflow the stack then switch to a regular call
-	if (G_UNLIKELY ((guchar *) frame->stack + cmethod->alloca_size
+	if (G_UNLIKELY (reinterpret_cast<guchar *> (frame->stack) + cmethod->alloca_size
 	                > context->stack_start + INTERP_STACK_SIZE))
 		return &exec_call;
 
 	if (G_UNLIKELY (frame->imethod->prof_flags & MONO_PROFILER_CALL_INSTRUMENTATION_TAIL_CALL))
 		MONO_PROFILER_RAISE (method_tail_call, (frame->imethod->method, cmethod->method));
 
-	guchar *new_top = (guchar *) frame->stack + cmethod->alloca_size;
+	guchar *new_top = reinterpret_cast<guchar *> (frame->stack) + cmethod->alloca_size;
 
 	// Need the compiler barriers so that the GC never sees the stack top write reordered around the memmove.
 	// We also need stack_pointer to cover all the relevant data while copying.
@@ -296,12 +296,12 @@ InterpState::tailcall ()
 
 MONO_INTERP_OP_IMPL (MINT_CALL_DELEGATE)
 {
-	auto csignature = (MonoMethodSignature *) frame->imethod->data_items[ip[3]];
+	auto csignature = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[3]]);
 	guint16 param_count = csignature->param_count;
 	call_args_offset = ip[1];
 	auto del = LOCAL_VAR (call_args_offset, MonoDelegate *);
 	bool is_multicast = del->method == nullptr;
-	auto del_imethod = (InterpMethod *) del->interp_invoke_impl;
+	auto del_imethod = static_cast<InterpMethod *> (del->interp_invoke_impl);
 
 	if (G_UNLIKELY (!del_imethod)) {
 		if (is_multicast) {
@@ -320,7 +320,7 @@ MONO_INTERP_OP_IMPL (MINT_CALL_DELEGATE)
 			del->interp_invoke_impl = del_imethod;
 			mono_error_assert_ok (error);
 		} else {
-			del_imethod = (InterpMethod *) del->interp_method;
+			del_imethod = static_cast<InterpMethod *> (del->interp_method);
 
 			if (del_imethod->method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) {
 				error_init_reuse (error);
@@ -375,7 +375,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI)
 	gpointer ftn = LOCAL_VAR (ip[2], gpointer);
 
 	// We cache the InterpMethod* used for a calli in data_items.
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[4]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[4]]);
 
 	if (G_UNLIKELY (!cmethod || cmethod->jit_entry != ftn)) {
 		error_init_reuse (error);
@@ -392,7 +392,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI)
 			frame->imethod->data_items[ip[4]] = cmethod;
 	}
 
-	calli_signature = (MonoMethodSignature *) frame->imethod->data_items[ip[3]];
+	calli_signature = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[3]]);
 	call_args_offset = ip[1];
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -402,7 +402,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI)
 MONO_INTERP_OP_IMPL (MINT_CALLI_IMETHOD)
 {
 	cmethod = LOCAL_VAR (ip[2], InterpMethod *);
-	calli_signature = (MonoMethodSignature *) frame->imethod->data_items[ip[3]];
+	calli_signature = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[3]]);
 	call_args_offset = ip[1];
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -411,7 +411,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI_IMETHOD)
 
 MONO_INTERP_OP_IMPL (MINT_CALLI_NAT_FAST)
 {
-	auto csignature = (MonoMethodSignature *) frame->imethod->data_items[ip[2]];
+	auto csignature = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[2]]);
 	guint16 opcode = ip[3];
 	bool save_last_error = ip[4];
 	auto args = &LOCAL_VAR (ip[1], stackval);
@@ -430,7 +430,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI_NAT_FAST)
 
 MONO_INTERP_OP_IMPL (MINT_CALLI_NAT_DYNAMIC)
 {
-	auto csignature = (MonoMethodSignature *) frame->imethod->data_items[ip[3]];
+	auto csignature = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[3]]);
 
 	call_args_offset = ip[1];
 	guchar *code = LOCAL_VAR (ip[2], guchar *);
@@ -446,11 +446,11 @@ MONO_INTERP_OP_IMPL (MINT_CALLI_NAT_DYNAMIC)
 
 MONO_INTERP_OP_IMPL (MINT_CALLI_NAT)
 {
-	auto csignature = (MonoMethodSignature *) frame->imethod->data_items[ip[3]];
-	auto imethod = (InterpMethod *) frame->imethod->data_items[ip[4]];
+	auto csignature = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[3]]);
+	auto imethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[4]]);
 	auto code = LOCAL_VAR (ip[2], guchar *);
 	bool save_last_error = ip[5];
-	auto cache = (gpointer *) &frame->imethod->data_items[ip[6]];
+	auto cache = static_cast<gpointer *> (&frame->imethod->data_items[ip[6]]);
 
 	/* for calls, have ip pointing at the start of next instruction */
 	frame->state.ip = ip + 7;
@@ -477,8 +477,8 @@ append_imethod (MonoMemoryManager *memory_manager, GSList *list, InterpMethod *i
 	GSList *ret;
 	InterpVTableEntry *entry;
 
-	entry = (InterpVTableEntry *) mono_mem_manager_alloc_nolock (memory_manager,
-	                                                             sizeof (InterpVTableEntry));
+	entry = static_cast<InterpVTableEntry *> (mono_mem_manager_alloc_nolock (memory_manager,
+	                                                             sizeof (InterpVTableEntry)));
 	entry->imethod = imethod;
 	entry->target_imethod = target_imethod;
 	ret = g_slist_append_mempool (memory_manager->mp, list, entry);
@@ -490,7 +490,7 @@ static InterpMethod *
 get_target_imethod (GSList *list, InterpMethod *imethod)
 {
 	while (list != NULL) {
-		InterpVTableEntry *entry = (InterpVTableEntry *) list->data;
+		InterpVTableEntry *entry = static_cast<InterpVTableEntry *> (list->data);
 		if (entry->imethod == imethod)
 			return entry->target_imethod;
 		list = list->next;
@@ -504,7 +504,7 @@ get_method_table (MonoVTable *vtable, int offset)
 	if (offset >= 0)
 		return vtable->interp_vtable;
 	else
-		return (gpointer *) vtable;
+		return reinterpret_cast<gpointer *> (vtable);
 }
 
 static gpointer *
@@ -513,12 +513,12 @@ alloc_method_table (MonoVTable *vtable, int offset)
 	gpointer *table;
 
 	if (offset >= 0) {
-		table = (gpointer *) m_class_alloc0 (vtable->domain, vtable->klass,
+		table = static_cast<gpointer *> (m_class_alloc0 (vtable->domain, vtable->klass,
 		                                     m_class_get_vtable_size (vtable->klass)
-		                                         * sizeof (gpointer));
+		                                         * sizeof (gpointer)));
 		vtable->interp_vtable = table;
 	} else {
-		table = (gpointer *) vtable;
+		table = reinterpret_cast<gpointer *> (vtable);
 	}
 
 	return table;
@@ -589,16 +589,16 @@ get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 
 	if ((gsize) table[offset] & 0x1) {
 		/* Non generic virtual call. Only one method in slot */
-		return (InterpMethod *) ((gsize) table[offset] & ~0x1);
+		return reinterpret_cast<InterpMethod *> ((gsize) table[offset] & ~0x1);
 	} else {
 		/* Virtual generic or interface call. Multiple methods in slot */
-		InterpMethod *target_imethod = get_target_imethod ((GSList *) table[offset], imethod);
+		InterpMethod *target_imethod = get_target_imethod (static_cast<GSList *> (table[offset]), imethod);
 
 		if (!target_imethod) {
 			target_imethod = get_virtual_method (imethod, vtable);
 			mono_mem_manager_lock (memory_manager);
-			if (!get_target_imethod ((GSList *) table[offset], imethod))
-				table[offset] = append_imethod (memory_manager, (GSList *) table[offset], imethod,
+			if (!get_target_imethod (static_cast<GSList *> (table[offset]), imethod))
+				table[offset] = append_imethod (memory_manager, static_cast<GSList *> (table[offset]), imethod,
 				                                target_imethod);
 			mono_mem_manager_unlock (memory_manager);
 		}
@@ -608,7 +608,7 @@ get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 
 MONO_INTERP_OP_IMPL (MINT_CALLVIRT_FAST)
 {
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 	auto this_arg = LOCAL_VAR (call_args_offset, MonoObject *);
 	auto slot = (gint16) ip[3];
@@ -628,7 +628,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLVIRT_FAST)
 
 MONO_INTERP_OP_IMPL (MINT_TAILCALLVIRT_FAST)
 {
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 	auto this_arg = LOCAL_VAR (call_args_offset, MonoObject *);
 	auto slot = (gint16) ip[3];
@@ -651,7 +651,7 @@ MONO_INTERP_OP_IMPL (MINT_CALL_VARARG)
 {
 	// Same as MINT_CALL, except at ip [3] we have the index for the csignature,
 	// which is required by the called method to set up the arglist.
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -661,7 +661,7 @@ MONO_INTERP_OP_IMPL (MINT_CALL_VARARG)
 MONO_INTERP_OP_IMPL (MINT_CALLVIRT)
 {
 	// FIXME CALLVIRT opcodes are not used on netcore. We should kill them.
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 
 	MonoObject *this_arg = LOCAL_VAR (call_args_offset, MonoObject *);
@@ -680,7 +680,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLVIRT)
 
 MONO_INTERP_OP_IMPL (MINT_TAILCALL)
 {
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 	tail_args_size = ip[3];
 
@@ -690,7 +690,7 @@ MONO_INTERP_OP_IMPL (MINT_TAILCALL)
 
 MONO_INTERP_OP_IMPL (MINT_CALL)
 {
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -704,7 +704,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN)
 {
 	error_init_reuse (error);
 	LOCAL_VAR (ip[1], gpointer) = entry_for_imethod (
-		(InterpMethod *) frame->imethod->data_items[ip[2]], error);
+		static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]), error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -729,7 +729,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 
 MONO_INTERP_OP_IMPL (MINT_LDVIRTFTN)
 {
-	auto m = (InterpMethod *) frame->imethod->data_items[ip[3]];
+	auto m = static_cast<InterpMethod *> (frame->imethod->data_items[ip[3]]);
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
 

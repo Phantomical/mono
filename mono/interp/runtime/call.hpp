@@ -146,7 +146,7 @@ initialize_arg_offsets (InterpMethod *imethod)
 	/* Two threads can reach this for the same method. The winner hands its table
 	 * to the method, which holds it for as long as the domain lives and never
 	 * gives it back; the loser still owns the one it built, and drops it here. */
-	if (mono_atomic_cas_ptr ((gpointer *) &imethod->arg_offsets, arg_offsets.get (), NULL) == NULL)
+	if (mono_atomic_cas_ptr (reinterpret_cast<gpointer *> (&imethod->arg_offsets), arg_offsets.get (), NULL) == NULL)
 		arg_offsets.release ();
 	return imethod->arg_offsets;
 }

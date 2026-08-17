@@ -20,11 +20,11 @@ namespace mono::interp {
  */
 MONO_INTERP_OP_IMPL (MINT_BOX)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[3]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[3]]);
 
 	MonoObject *o = mono_gc_alloc_obj (vtable, m_class_get_instance_size (vtable->klass));
 	MONO_HANDLE_ASSIGN_RAW (tmp_handle, o);
-	stackval_to_data (m_class_get_byval_arg (vtable->klass), (stackval *) (locals + ip[2]),
+	stackval_to_data (m_class_get_byval_arg (vtable->klass), reinterpret_cast<stackval *> ((locals + ip[2])),
 	                  mono_object_get_data (o), FALSE);
 	MONO_HANDLE_ASSIGN_RAW (tmp_handle, NULL);
 
@@ -36,7 +36,7 @@ MONO_INTERP_OP_IMPL (MINT_BOX)
 
 MONO_INTERP_OP_IMPL (MINT_BOX_VT)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[3]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[3]]);
 	MonoClass *c = vtable->klass;
 
 	MonoObject *o = mono_gc_alloc_obj (vtable, m_class_get_instance_size (c));
@@ -52,7 +52,7 @@ MONO_INTERP_OP_IMPL (MINT_BOX_VT)
 
 MONO_INTERP_OP_IMPL (MINT_BOX_PTR)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[3]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[3]]);
 	MonoClass *c = vtable->klass;
 
 	MonoObject *o = mono_gc_alloc_obj (vtable, m_class_get_instance_size (c));
@@ -68,7 +68,7 @@ MONO_INTERP_OP_IMPL (MINT_BOX_PTR)
 
 MONO_INTERP_OP_IMPL (MINT_BOX_NULLABLE_PTR)
 {
-	auto c = (MonoClass *) frame->imethod->data_items[ip[3]];
+	auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);
 
 	error_init_reuse (error);
 	LOCAL_VAR (ip[1], MonoObject *) = mono_nullable_box (LOCAL_VAR (ip[2], gpointer), c, error);
@@ -82,7 +82,7 @@ MONO_INTERP_OP_IMPL (MINT_UNBOX)
 {
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
-	auto c = (MonoClass *) frame->imethod->data_items[ip[3]];
+	auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);
 
 	if (!(m_class_get_rank (o->vtable->klass) == 0
 	      && m_class_get_element_class (o->vtable->klass) == m_class_get_element_class (c)))
@@ -105,7 +105,7 @@ MONO_INTERP_OP_IMPL (MINT_UNBOX)
 		auto o = LOCAL_VAR (ip[2], MonoObject *);                        \
                                                                          \
 		if (o) {                                                         \
-			auto c = (MonoClass *) frame->imethod->data_items[ip[3]];    \
+			auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);    \
                                                                          \
 			if (!(answer)) {                                             \
 				if (throwing)                                            \
@@ -161,10 +161,10 @@ IMPL_CAST (MINT_ISINST_INTERFACE, false, CAST_INTERFACE);
 
 MONO_INTERP_OP_IMPL (MINT_MKREFANY)
 {
-	auto c = (MonoClass *) frame->imethod->data_items[ip[3]];
+	auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);
 	gpointer addr = LOCAL_VAR (ip[2], gpointer);
 
-	auto tref = (MonoTypedRef *) (locals + ip[1]);
+	auto tref = reinterpret_cast<MonoTypedRef *> ((locals + ip[1]));
 	tref->klass = c;
 	tref->type = m_class_get_byval_arg (c);
 	tref->value = addr;
@@ -175,7 +175,7 @@ MONO_INTERP_OP_IMPL (MINT_MKREFANY)
 
 MONO_INTERP_OP_IMPL (MINT_REFANYTYPE)
 {
-	auto tref = (MonoTypedRef *) (locals + ip[2]);
+	auto tref = reinterpret_cast<MonoTypedRef *> ((locals + ip[2]));
 
 	LOCAL_VAR (ip[1], gpointer) = tref->type;
 
@@ -185,8 +185,8 @@ MONO_INTERP_OP_IMPL (MINT_REFANYTYPE)
 
 MONO_INTERP_OP_IMPL (MINT_REFANYVAL)
 {
-	auto tref = (MonoTypedRef *) (locals + ip[2]);
-	auto c = (MonoClass *) frame->imethod->data_items[ip[3]];
+	auto tref = reinterpret_cast<MonoTypedRef *> ((locals + ip[2]));
+	auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);
 
 	if (c != tref->klass)
 		THROW_EX (mono_get_exception_invalid_cast (), ip);

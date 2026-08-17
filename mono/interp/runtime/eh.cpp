@@ -87,7 +87,7 @@ interp_set_resume_state (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExcepti
 	context->exc_gchandle = mono_gchandle_new_internal (static_cast<MonoObject *> (ex), FALSE);
 	/* Ditto */
 	if (ei)
-		*(MonoObject**)(frame_locals (context->handler_frame) + ei->exvar_offset) = ex;
+		*reinterpret_cast<MonoObject **> ((frame_locals (context->handler_frame) + ei->exvar_offset)) = ex;
 	context->handler_ip = static_cast<const guint16 *> (handler_ip);
 }
 

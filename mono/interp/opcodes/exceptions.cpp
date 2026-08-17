@@ -24,7 +24,7 @@ MONO_INTERP_OP_IMPL (MINT_THROW)
 // A rethrow keeps the stack trace the exception was caught with.
 MONO_INTERP_OP_IMPL (MINT_RETHROW)
 {
-	THROW_EX_GENERAL (*(MonoException **) (frame_locals (frame) + ip[1]), ip, TRUE);
+	THROW_EX_GENERAL (*reinterpret_cast<MonoException **> ((frame_locals (frame) + ip[1])), ip, TRUE);
 }
 
 /*
@@ -82,7 +82,7 @@ IMPL_LEAVE (MINT_LEAVE_S_CHECK, true, true);
 		const guint16 *ret_ip = short_offset ? (ip + 3) : (ip + 4);                        \
 		guint16 clause_index = *(ret_ip - 1);                                              \
                                                                                            \
-		*(const guint16 **) (locals + frame->imethod->clause_data_offsets[clause_index]) = \
+		*reinterpret_cast<const guint16 **> (locals + frame->imethod->clause_data_offsets[clause_index]) = \
 			ret_ip;                                                                        \
                                                                                            \
 		ip += short_offset ? (gint16) *(ip + 1) : (gint32) READ32 (ip + 1);                \
@@ -98,7 +98,7 @@ MONO_INTERP_OP_IMPL (MINT_ENDFINALLY)
 	mono_threads_end_abort_protected_block ();
 
 	guint16 clause_index = ip[1];
-	auto ret_ip = *(guint16 **) (locals + frame->imethod->clause_data_offsets[clause_index]);
+	auto ret_ip = *reinterpret_cast<guint16 **> ((locals + frame->imethod->clause_data_offsets[clause_index]));
 
 	if (!ret_ip) {
 		// this clause was called from EH, return to eh

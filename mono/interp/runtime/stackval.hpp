@@ -29,39 +29,39 @@ stackval_from_data (MonoType *type, stackval *result, const void *data, gboolean
 {
 	type = mini_native_type_replace_type (type);
 	if (type->byref) {
-		result->data.p = *(gpointer *) data;
+		result->data.p = *reinterpret_cast<const gpointer *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	}
 	switch (type->type) {
 	case MONO_TYPE_VOID:
 		return 0;
 	case MONO_TYPE_I1:
-		result->data.i = *(gint8 *) data;
+		result->data.i = *reinterpret_cast<const gint8 *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_U1:
 	case MONO_TYPE_BOOLEAN:
-		result->data.i = *(guint8 *) data;
+		result->data.i = *reinterpret_cast<const guint8 *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_I2:
-		result->data.i = *(gint16 *) data;
+		result->data.i = *reinterpret_cast<const gint16 *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_U2:
 	case MONO_TYPE_CHAR:
-		result->data.i = *(guint16 *) data;
+		result->data.i = *reinterpret_cast<const guint16 *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_I4:
-		result->data.i = *(gint32 *) data;
+		result->data.i = *reinterpret_cast<const gint32 *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_U:
 	case MONO_TYPE_I:
-		result->data.nati = *(mono_i *) data;
+		result->data.nati = *reinterpret_cast<const mono_i *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_PTR:
 	case MONO_TYPE_FNPTR:
-		result->data.p = *(gpointer *) data;
+		result->data.p = *reinterpret_cast<const gpointer *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_U4:
-		result->data.i = *(guint32 *) data;
+		result->data.i = *reinterpret_cast<const guint32 *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_R4:
 		/* memmove handles unaligned case */
@@ -79,7 +79,7 @@ stackval_from_data (MonoType *type, stackval *result, const void *data, gboolean
 	case MONO_TYPE_CLASS:
 	case MONO_TYPE_OBJECT:
 	case MONO_TYPE_ARRAY:
-		result->data.p = *(gpointer *) data;
+		result->data.p = *reinterpret_cast<const gpointer *> (data);
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_TYPEDBYREF:
 		/*
@@ -126,31 +126,31 @@ stackval_to_data (MonoType *type, stackval *val, void *data, gboolean pinvoke)
 {
 	type = mini_native_type_replace_type (type);
 	if (type->byref) {
-		gpointer *p = (gpointer *) data;
+		gpointer *p = static_cast<gpointer *> (data);
 		*p = val->data.p;
 		return MINT_STACK_SLOT_SIZE;
 	}
 	switch (type->type) {
 	case MONO_TYPE_I1:
 	case MONO_TYPE_U1: {
-		guint8 *p = (guint8 *) data;
+		guint8 *p = static_cast<guint8 *> (data);
 		*p = val->data.i;
 		return MINT_STACK_SLOT_SIZE;
 	}
 	case MONO_TYPE_BOOLEAN: {
-		guint8 *p = (guint8 *) data;
+		guint8 *p = static_cast<guint8 *> (data);
 		*p = (val->data.i != 0);
 		return MINT_STACK_SLOT_SIZE;
 	}
 	case MONO_TYPE_I2:
 	case MONO_TYPE_U2:
 	case MONO_TYPE_CHAR: {
-		guint16 *p = (guint16 *) data;
+		guint16 *p = static_cast<guint16 *> (data);
 		*p = val->data.i;
 		return MINT_STACK_SLOT_SIZE;
 	}
 	case MONO_TYPE_I: {
-		mono_i *p = (mono_i *) data;
+		mono_i *p = static_cast<mono_i *> (data);
 		/* In theory the value used by stloc should match the local var type
 	 	   but in practice it sometimes doesn't (a int32 gets dup'd and stloc'd into
 		   a native int - both by csc and mcs). Not sure what to do about sign extension
@@ -159,14 +159,14 @@ stackval_to_data (MonoType *type, stackval *val, void *data, gboolean pinvoke)
 		return MINT_STACK_SLOT_SIZE;
 	}
 	case MONO_TYPE_U: {
-		mono_u *p = (mono_u *) data;
+		mono_u *p = static_cast<mono_u *> (data);
 		/* see above. */
 		*p = (mono_u) val->data.nati;
 		return MINT_STACK_SLOT_SIZE;
 	}
 	case MONO_TYPE_I4:
 	case MONO_TYPE_U4: {
-		gint32 *p = (gint32 *) data;
+		gint32 *p = static_cast<gint32 *> (data);
 		*p = val->data.i;
 		return MINT_STACK_SLOT_SIZE;
 	}
@@ -189,13 +189,13 @@ stackval_to_data (MonoType *type, stackval *val, void *data, gboolean pinvoke)
 	case MONO_TYPE_CLASS:
 	case MONO_TYPE_OBJECT:
 	case MONO_TYPE_ARRAY: {
-		gpointer *p = (gpointer *) data;
+		gpointer *p = static_cast<gpointer *> (data);
 		mono_gc_wbarrier_generic_store_internal (p, val->data.o);
 		return MINT_STACK_SLOT_SIZE;
 	}
 	case MONO_TYPE_PTR:
 	case MONO_TYPE_FNPTR: {
-		gpointer *p = (gpointer *) data;
+		gpointer *p = static_cast<gpointer *> (data);
 		*p = val->data.p;
 		return MINT_STACK_SLOT_SIZE;
 	}
@@ -240,9 +240,9 @@ stackval_to_data (MonoType *type, stackval *val, void *data, gboolean pinvoke)
 	}
 }
 #define STACK_ADD_BYTES(sp, bytes) \
-	((stackval *) ((char *) (sp) + ALIGN_TO (bytes, MINT_STACK_SLOT_SIZE)))
+	(reinterpret_cast<stackval *> (((char *) (sp) + ALIGN_TO (bytes, MINT_STACK_SLOT_SIZE))))
 #define STACK_SUB_BYTES(sp, bytes) \
-	((stackval *) ((char *) (sp) - ALIGN_TO (bytes, MINT_STACK_SLOT_SIZE)))
+	(reinterpret_cast<stackval *> (((char *) (sp) - ALIGN_TO (bytes, MINT_STACK_SLOT_SIZE))))
 
 } // namespace mono::interp
 

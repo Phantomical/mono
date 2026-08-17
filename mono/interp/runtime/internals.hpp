@@ -261,7 +261,7 @@ struct InterpFrame {
 	InterpSavedState state;
 };
 
-#define frame_locals(frame) ((guchar *) (frame)->stack)
+#define frame_locals(frame) (reinterpret_cast<guchar *> ((frame)->stack))
 
 /*
  * How deep the interpreter can nest calls. A frame that runs out of value stack is

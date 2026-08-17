@@ -154,7 +154,7 @@ invalidate_transform (gpointer imethod_)
 static void
 copy_imethod_for_frame (MonoDomain *domain, InterpFrame *frame)
 {
-	InterpMethod *copy = (InterpMethod *) mono_domain_alloc0 (domain, sizeof (InterpMethod));
+	InterpMethod *copy = static_cast<InterpMethod *> (mono_domain_alloc0 (domain, sizeof (InterpMethod)));
 	memcpy (copy, frame->imethod, sizeof (InterpMethod));
 	copy->next_jit_code_hash = NULL; /* we don't want that in our copy */
 	frame->imethod = copy;
@@ -259,7 +259,7 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 
 	sig = mono_method_signature_internal (method);
 
-	imethod = (InterpMethod*)m_method_alloc0 (domain, method, sizeof (InterpMethod));
+	imethod = static_cast<InterpMethod *> (m_method_alloc0 (domain, method, sizeof (InterpMethod)));
 	imethod->method = method;
 	imethod->domain = domain;
 	imethod->param_count = sig->param_count;
@@ -271,7 +271,7 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 	else
 		imethod->rtype = mini_get_underlying_type (sig->ret);
 	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
-	imethod->param_types = (MonoType**)m_method_alloc0 (domain, method, sizeof (MonoType*) * sig->param_count);
+	imethod->param_types = static_cast<MonoType **> (m_method_alloc0 (domain, method, sizeof (MonoType*) * sig->param_count));
 	for (i = 0; i < sig->param_count; ++i)
 		imethod->param_types [i] = mini_get_underlying_type (sig->params [i]);
 

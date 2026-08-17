@@ -14,9 +14,9 @@ namespace mono::interp {
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_ENUM_HASFLAG)
 {
-	auto klass = (MonoClass *) frame->imethod->data_items[ip[4]];
+	auto klass = static_cast<MonoClass *> (frame->imethod->data_items[ip[4]]);
 	LOCAL_VAR (ip[1], gint32) =
-		enum_hasflag ((stackval *) (locals + ip[2]), (stackval *) (locals + ip[3]), klass);
+		enum_hasflag (reinterpret_cast<stackval *> ((locals + ip[2])), reinterpret_cast<stackval *> ((locals + ip[3])), klass);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -34,7 +34,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_GET_TYPE)
 {
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
-	LOCAL_VAR (ip[1], MonoObject *) = (MonoObject *) o->vtable->type;
+	LOCAL_VAR (ip[1], MonoObject *) = static_cast<MonoObject *> (o->vtable->type);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -50,8 +50,8 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_SPAN_CTOR)
 		THROW_EX (mono_get_exception_argument_out_of_range (NULL), ip);
 
 	gpointer span = locals + ip[1];
-	*(gpointer *) span = ptr;
-	*(gint32 *) ((gpointer *) span + 1) = len;
+	*static_cast<gpointer *> (span) = ptr;
+	*reinterpret_cast<gint32 *> ((static_cast<gpointer *> (span) + 1)) = len;
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -121,7 +121,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_MEMORYMARSHAL_GETARRAYDATAREF)
 {
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
-	LOCAL_VAR (ip[1], gpointer) = (guint8 *) o + MONO_STRUCT_OFFSET (MonoArray, vector);
+	LOCAL_VAR (ip[1], gpointer) = reinterpret_cast<guint8 *> (o) + MONO_STRUCT_OFFSET (MonoArray, vector);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -147,10 +147,10 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_64ORDINAL_IGNORE_CASE_ASCII)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_U32_TO_DECSTR)
 {
-	auto cache_addr = (MonoArray **) frame->imethod->data_items[ip[3]];
-	auto string_vtable = (MonoVTable *) frame->imethod->data_items[ip[4]];
-	LOCAL_VAR (ip[1], MonoObject *) = (MonoObject *) u32_to_decstr (
-		LOCAL_VAR (ip[2], guint32), *cache_addr, string_vtable);
+	auto cache_addr = static_cast<MonoArray **> (frame->imethod->data_items[ip[3]]);
+	auto string_vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[4]]);
+	LOCAL_VAR (ip[1], MonoObject *) = reinterpret_cast<MonoObject *> (u32_to_decstr (
+		LOCAL_VAR (ip[2], guint32), *cache_addr, string_vtable));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

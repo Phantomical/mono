@@ -238,7 +238,7 @@ private:
 
 #define MONO_INTERP_EXIT return &InterpState::exec_exit
 
-#define LOCAL_VAR(offset, type) (*(type *) (locals + (offset)))
+#define LOCAL_VAR(offset, type) (*reinterpret_cast<type *> ((locals + (offset))))
 
 // We conservatively pin exception object here to avoid tweaking the
 // numerous call sites of this macro, even though, in a few cases,
@@ -246,9 +246,9 @@ private:
 #define THROW_EX_GENERAL(exception, ex_ip, rethrow)                     \
 	do {                                                                \
 		MonoException *__ex = (exception);                              \
-		MONO_HANDLE_ASSIGN_RAW (this->tmp_handle, (MonoObject *) __ex); \
+		MONO_HANDLE_ASSIGN_RAW (this->tmp_handle, reinterpret_cast<MonoObject *> (__ex)); \
 		this->interp_throw (__ex, (ex_ip), (rethrow));                  \
-		MONO_HANDLE_ASSIGN_RAW (this->tmp_handle, (MonoObject *) NULL); \
+		MONO_HANDLE_ASSIGN_RAW (this->tmp_handle, nullptr); \
 		return &InterpState::exec_resume;                               \
 	} while (0)
 
@@ -315,7 +315,7 @@ private:
 /* Initialize interpreter state for executing FRAME */
 #define INIT_INTERP_STATE(frame, _clause_args)                                \
 	do {                                                                      \
-		ip = _clause_args ? ((FrameClauseArgs *) _clause_args)->start_with_ip \
+		ip = _clause_args ? (static_cast<FrameClauseArgs *> (_clause_args))->start_with_ip \
 		                  : (frame)->imethod->code;                           \
 		locals = (unsigned char *) (frame)->stack;                            \
 	} while (0)

@@ -77,7 +77,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFLD_VT_VT)
 	{                                                                      \
 		auto o = LOCAL_VAR (ip[2], MonoObject *);                          \
 		NULL_CHECK (o);                                                    \
-		LOCAL_VAR (ip[1], datatype) = *(fieldtype *) ((char *) o + ip[3]); \
+		LOCAL_VAR (ip[1], datatype) = *reinterpret_cast<fieldtype *> (reinterpret_cast<char *> (o) + ip[3]); \
                                                                            \
 		MONO_INTERP_OP_ADVANCE ();                                         \
 		MONO_INTERP_DISPATCH ();                                           \
@@ -98,7 +98,7 @@ IMPL_LDFLD (MINT_LDFLD_O, gpointer, gpointer);
 	{                                                                         \
 		auto o = LOCAL_VAR (ip[2], MonoObject *);                             \
 		NULL_CHECK (o);                                                       \
-		std::memcpy (locals + ip[1], (char *) o + ip[3], sizeof (fieldtype)); \
+		std::memcpy (locals + ip[1], reinterpret_cast<char *> (o) + ip[3], sizeof (fieldtype)); \
                                                                               \
 		MONO_INTERP_OP_ADVANCE ();                                            \
 		MONO_INTERP_DISPATCH ();                                              \
@@ -111,7 +111,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFLD_VT)
 {
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
-	std::memcpy (locals + ip[1], (char *) o + ip[3], ip[4]);
+	std::memcpy (locals + ip[1], reinterpret_cast<char *> (o) + ip[3], ip[4]);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -122,7 +122,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFLD_VT)
 	{                                                                      \
 		auto o = LOCAL_VAR (ip[1], MonoObject *);                          \
 		NULL_CHECK (o);                                                    \
-		*(fieldtype *) ((char *) o + ip[3]) = LOCAL_VAR (ip[2], datatype); \
+		*reinterpret_cast<fieldtype *> (reinterpret_cast<char *> (o) + ip[3]) = LOCAL_VAR (ip[2], datatype); \
                                                                            \
 		MONO_INTERP_OP_ADVANCE ();                                         \
 		MONO_INTERP_DISPATCH ();                                           \
@@ -142,7 +142,7 @@ IMPL_STFLD (MINT_STFLD_R8, double, double);
 	{                                                                         \
 		auto o = LOCAL_VAR (ip[1], MonoObject *);                             \
 		NULL_CHECK (o);                                                       \
-		std::memcpy ((char *) o + ip[3], locals + ip[2], sizeof (fieldtype)); \
+		std::memcpy (reinterpret_cast<char *> (o) + ip[3], locals + ip[2], sizeof (fieldtype)); \
                                                                               \
 		MONO_INTERP_OP_ADVANCE ();                                            \
 		MONO_INTERP_DISPATCH ();                                              \
@@ -155,7 +155,7 @@ MONO_INTERP_OP_IMPL (MINT_STFLD_O)
 {
 	auto o = LOCAL_VAR (ip[1], MonoObject *);
 	NULL_CHECK (o);
-	mono_gc_wbarrier_set_field_internal (o, (char *) o + ip[3], LOCAL_VAR (ip[2], MonoObject *));
+	mono_gc_wbarrier_set_field_internal (o, reinterpret_cast<char *> (o) + ip[3], LOCAL_VAR (ip[2], MonoObject *));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -166,7 +166,7 @@ MONO_INTERP_OP_IMPL (MINT_STFLD_VT_NOREF)
 {
 	auto o = LOCAL_VAR (ip[1], MonoObject *);
 	NULL_CHECK (o);
-	std::memcpy ((char *) o + ip[3], locals + ip[2], ip[4]);
+	std::memcpy (reinterpret_cast<char *> (o) + ip[3], locals + ip[2], ip[4]);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -176,8 +176,8 @@ MONO_INTERP_OP_IMPL (MINT_STFLD_VT)
 {
 	auto o = LOCAL_VAR (ip[1], MonoObject *);
 	NULL_CHECK (o);
-	auto klass = (MonoClass *) frame->imethod->data_items[ip[4]];
-	mono_value_copy_internal ((char *) o + ip[3], locals + ip[2], klass);
+	auto klass = static_cast<MonoClass *> (frame->imethod->data_items[ip[4]]);
+	mono_value_copy_internal (reinterpret_cast<char *> (o) + ip[3], locals + ip[2], klass);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -186,9 +186,9 @@ MONO_INTERP_OP_IMPL (MINT_STFLD_VT)
 #define IMPL_LDSFLD(opcode, datatype, fieldtype)                                          \
 	MONO_INTERP_OP_IMPL (opcode)                                                          \
 	{                                                                                     \
-		auto vtable = (MonoVTable *) frame->imethod->data_items[ip[2]];                   \
+		auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[2]]);                   \
 		INIT_VTABLE (vtable);                                                             \
-		LOCAL_VAR (ip[1], datatype) = *(fieldtype *) (frame->imethod->data_items[ip[3]]); \
+		LOCAL_VAR (ip[1], datatype) = *static_cast<fieldtype *> ((frame->imethod->data_items[ip[3]])); \
                                                                                           \
 		MONO_INTERP_OP_ADVANCE ();                                                        \
 		MONO_INTERP_DISPATCH ();                                                          \
@@ -206,7 +206,7 @@ IMPL_LDSFLD (MINT_LDSFLD_O, gpointer, gpointer);
 
 MONO_INTERP_OP_IMPL (MINT_LDSFLD_VT)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[2]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[2]]);
 	INIT_VTABLE (vtable);
 
 	gpointer addr = frame->imethod->data_items[ip[3]];
@@ -219,9 +219,9 @@ MONO_INTERP_OP_IMPL (MINT_LDSFLD_VT)
 #define IMPL_STSFLD(opcode, datatype, fieldtype)                                          \
 	MONO_INTERP_OP_IMPL (opcode)                                                          \
 	{                                                                                     \
-		auto vtable = (MonoVTable *) frame->imethod->data_items[ip[2]];                   \
+		auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[2]]);                   \
 		INIT_VTABLE (vtable);                                                             \
-		*(fieldtype *) (frame->imethod->data_items[ip[3]]) = LOCAL_VAR (ip[1], datatype); \
+		*static_cast<fieldtype *> ((frame->imethod->data_items[ip[3]])) = LOCAL_VAR (ip[1], datatype); \
                                                                                           \
 		MONO_INTERP_OP_ADVANCE ();                                                        \
 		MONO_INTERP_DISPATCH ();                                                          \
@@ -238,7 +238,7 @@ IMPL_STSFLD (MINT_STSFLD_R8, double, double);
 
 MONO_INTERP_OP_IMPL (MINT_STSFLD_O)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[2]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[2]]);
 	INIT_VTABLE (vtable);
 	mono_gc_wbarrier_generic_store_internal (frame->imethod->data_items[ip[3]],
 	                                         LOCAL_VAR (ip[1], MonoObject *));
@@ -249,7 +249,7 @@ MONO_INTERP_OP_IMPL (MINT_STSFLD_O)
 
 MONO_INTERP_OP_IMPL (MINT_STSFLD_VT)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[2]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[2]]);
 	INIT_VTABLE (vtable);
 
 	gpointer addr = frame->imethod->data_items[ip[3]];
@@ -268,7 +268,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFLDA)
 {
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
-	LOCAL_VAR (ip[1], gpointer) = (char *) o + ip[3];
+	LOCAL_VAR (ip[1], gpointer) = reinterpret_cast<char *> (o) + ip[3];
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -277,7 +277,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFLDA)
 // The transform emits this where it knows the receiver cannot be null.
 MONO_INTERP_OP_IMPL (MINT_LDFLDA_UNSAFE)
 {
-	LOCAL_VAR (ip[1], gpointer) = (char *) LOCAL_VAR (ip[2], gpointer) + ip[3];
+	LOCAL_VAR (ip[1], gpointer) = static_cast<char *> (LOCAL_VAR (ip[2], gpointer)) + ip[3];
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -285,7 +285,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFLDA_UNSAFE)
 
 MONO_INTERP_OP_IMPL (MINT_LDSFLDA)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[2]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[2]]);
 	INIT_VTABLE (vtable);
 	LOCAL_VAR (ip[1], gpointer) = frame->imethod->data_items[ip[3]];
 
@@ -303,7 +303,7 @@ static inline gpointer
 thread_static_address (guint32 offset)
 {
 	MonoInternalThread *thread = mono_thread_internal_current ();
-	return (char *) thread->static_data[offset & 0x3f] + (offset >> 6);
+	return static_cast<char *> (thread->static_data[offset & 0x3f]) + (offset >> 6);
 }
 
 /*
@@ -313,14 +313,14 @@ thread_static_address (guint32 offset)
  * its own class would read the field before the class initializer had written
  * it.
  */
-#define VTABLE_AT(index) ((MonoVTable *) frame->imethod->data_items[(index)])
+#define VTABLE_AT(index) (static_cast<MonoVTable *> (frame->imethod->data_items[(index)]))
 
 #define IMPL_LDTSFLD(opcode, datatype, fieldtype)                \
 	MONO_INTERP_OP_IMPL (opcode)                                 \
 	{                                                            \
 		INIT_VTABLE (VTABLE_AT (ip[4]));                         \
 		gpointer addr = thread_static_address (READ32 (ip + 2)); \
-		LOCAL_VAR (ip[1], datatype) = *(fieldtype *) addr;       \
+		LOCAL_VAR (ip[1], datatype) = *static_cast<fieldtype *> (addr);       \
                                                                  \
 		MONO_INTERP_OP_ADVANCE ();                               \
 		MONO_INTERP_DISPATCH ();                                 \
@@ -341,7 +341,7 @@ IMPL_LDTSFLD (MINT_LDTSFLD_O, gpointer, gpointer);
 	{                                                            \
 		INIT_VTABLE (VTABLE_AT (ip[4]));                         \
 		gpointer addr = thread_static_address (READ32 (ip + 2)); \
-		*(fieldtype *) addr = LOCAL_VAR (ip[1], datatype);       \
+		*static_cast<fieldtype *> (addr) = LOCAL_VAR (ip[1], datatype);       \
                                                                  \
 		MONO_INTERP_OP_ADVANCE ();                               \
 		MONO_INTERP_DISPATCH ();                                 \
@@ -387,7 +387,7 @@ MONO_INTERP_OP_IMPL (MINT_LDSSFLD)
 {
 	INIT_VTABLE (VTABLE_AT (ip[5]));
 	gpointer addr = mono_get_special_static_data (READ32 (ip + 3));
-	auto field = (MonoClassField *) frame->imethod->data_items[ip[2]];
+	auto field = static_cast<MonoClassField *> (frame->imethod->data_items[ip[2]]);
 	stackval_from_data (field->type, &LOCAL_VAR (ip[1], stackval), addr, FALSE);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -398,7 +398,7 @@ MONO_INTERP_OP_IMPL (MINT_STSSFLD)
 {
 	INIT_VTABLE (VTABLE_AT (ip[5]));
 	gpointer addr = mono_get_special_static_data (READ32 (ip + 3));
-	auto field = (MonoClassField *) frame->imethod->data_items[ip[2]];
+	auto field = static_cast<MonoClassField *> (frame->imethod->data_items[ip[2]]);
 	stackval_to_data (field->type, &LOCAL_VAR (ip[1], stackval), addr, FALSE);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -436,20 +436,20 @@ MONO_INTERP_OP_IMPL (MINT_LDRMFLD)
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
 
-	auto field = (MonoClassField *) frame->imethod->data_items[ip[3]];
+	auto field = static_cast<MonoClassField *> (frame->imethod->data_items[ip[3]]);
 
 	gpointer addr;
 #ifndef DISABLE_REMOTING
 	gpointer tmp;
 	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
 		ERROR_DECL (error);
-		MonoClass *klass = ((MonoTransparentProxy *) o)->remote_class->proxy_class;
+		MonoClass *klass = (reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
 		addr = mono_load_remote_field_checked (o, klass, field, &tmp, error);
 		if (G_UNLIKELY (!is_ok (error)))
 			THROW_EX (mono_error_convert_to_exception (error), ip);
 	} else
 #endif
-		addr = (char *) o + field->offset;
+		addr = reinterpret_cast<char *> (o) + field->offset;
 
 	stackval_from_data (field->type, &LOCAL_VAR (ip[1], stackval), addr, FALSE);
 
@@ -462,7 +462,7 @@ MONO_INTERP_OP_IMPL (MINT_LDRMFLD_VT)
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
 
-	auto field = (MonoClassField *) frame->imethod->data_items[ip[3]];
+	auto field = static_cast<MonoClassField *> (frame->imethod->data_items[ip[3]]);
 	MonoClass *klass = mono_class_from_mono_type_internal (field->type);
 	int size = mono_class_value_size (klass, NULL);
 
@@ -471,13 +471,13 @@ MONO_INTERP_OP_IMPL (MINT_LDRMFLD_VT)
 	gpointer tmp;
 	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
 		ERROR_DECL (error);
-		klass = ((MonoTransparentProxy *) o)->remote_class->proxy_class;
+		klass = (reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
 		addr = mono_load_remote_field_checked (o, klass, field, &tmp, error);
 		if (G_UNLIKELY (!is_ok (error)))
 			THROW_EX (mono_error_convert_to_exception (error), ip);
 	} else
 #endif
-		addr = (char *) o + field->offset;
+		addr = reinterpret_cast<char *> (o) + field->offset;
 
 	std::memcpy (locals + ip[1], addr, size);
 
@@ -490,18 +490,18 @@ MONO_INTERP_OP_IMPL (MINT_STRMFLD)
 	auto o = LOCAL_VAR (ip[1], MonoObject *);
 	NULL_CHECK (o);
 
-	auto field = (MonoClassField *) frame->imethod->data_items[ip[3]];
+	auto field = static_cast<MonoClassField *> (frame->imethod->data_items[ip[3]]);
 
 #ifndef DISABLE_REMOTING
 	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
 		ERROR_DECL (error);
-		MonoClass *klass = ((MonoTransparentProxy *) o)->remote_class->proxy_class;
+		MonoClass *klass = (reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
 		mono_store_remote_field_checked (o, klass, field, locals + ip[2], error);
 		if (G_UNLIKELY (!is_ok (error)))
 			THROW_EX (mono_error_convert_to_exception (error), ip);
 	} else
 #endif
-		stackval_to_data (field->type, &LOCAL_VAR (ip[2], stackval), (char *) o + field->offset,
+		stackval_to_data (field->type, &LOCAL_VAR (ip[2], stackval), reinterpret_cast<char *> (o) + field->offset,
 		                  FALSE);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -513,19 +513,19 @@ MONO_INTERP_OP_IMPL (MINT_STRMFLD_VT)
 	auto o = LOCAL_VAR (ip[1], MonoObject *);
 	NULL_CHECK (o);
 
-	auto field = (MonoClassField *) frame->imethod->data_items[ip[3]];
+	auto field = static_cast<MonoClassField *> (frame->imethod->data_items[ip[3]]);
 	MonoClass *klass = mono_class_from_mono_type_internal (field->type);
 
 #ifndef DISABLE_REMOTING
 	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
 		ERROR_DECL (error);
-		MonoClass *proxy_class = ((MonoTransparentProxy *) o)->remote_class->proxy_class;
+		MonoClass *proxy_class = (reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
 		mono_store_remote_field_checked (o, proxy_class, field, locals + ip[2], error);
 		if (G_UNLIKELY (!is_ok (error)))
 			THROW_EX (mono_error_convert_to_exception (error), ip);
 	} else
 #endif
-		mono_value_copy_internal ((char *) o + field->offset, locals + ip[2], klass);
+		mono_value_copy_internal (reinterpret_cast<char *> (o) + field->offset, locals + ip[2], klass);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

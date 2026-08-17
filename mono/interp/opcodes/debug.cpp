@@ -162,7 +162,7 @@ MONO_INTERP_OP_IMPL (MINT_PROF_EXIT)
 
 MONO_INTERP_OP_IMPL (MINT_PROF_COVERAGE_STORE)
 {
-	auto p = (guint32 *) GINT_TO_POINTER (READ64 (ip + 1));
+	auto p = static_cast<guint32 *> (GINT_TO_POINTER (READ64 (ip + 1)));
 	*p = 1;
 
 	MONO_INTERP_OP_ADVANCE ();

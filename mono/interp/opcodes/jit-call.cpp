@@ -17,12 +17,12 @@ namespace mono::interp {
 
 MONO_INTERP_OP_IMPL (MINT_JIT_CALL)
 {
-	auto rmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	auto rmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 
 	error_init_reuse (error);
 	/* for calls, have ip pointing at the start of next instruction */
 	frame->state.ip = ip + 3;
-	do_jit_call ((stackval *) (locals + ip[1]), frame, rmethod, error);
+	do_jit_call (reinterpret_cast<stackval *> ((locals + ip[1])), frame, rmethod, error);
 	if (!is_ok (error))
 		THROW_EX (mono_error_convert_to_exception (error), ip);
 

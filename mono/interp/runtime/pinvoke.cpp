@@ -167,7 +167,7 @@ retry:
 		case MONO_TYPE_R4:
 		case MONO_TYPE_R8:
 			if (ptype == MONO_TYPE_R4)
-				* (float *) &(margs->fargs [int_f]) = sp_arg->data.f_r4;
+				* static_cast<float *> (&(margs->fargs [int_f])) = sp_arg->data.f_r4;
 			else
 				margs->fargs [int_f] = sp_arg->data.f;
 			int_f ++;

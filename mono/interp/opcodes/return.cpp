@@ -32,12 +32,12 @@ InterpState::exit_frame ()
 		g_assert_checked (frame->stack);
 		// A suspended parent means call () made this frame, so it is the top of the
 		// frame stack and nothing above it is live.
-		g_assert_checked ((guchar *) frame >= context->frame_stack_start
-		                  && (guchar *) (frame + 1) <= context->frame_stack_pointer);
-		context->frame_stack_pointer = (guchar *) frame;
+		g_assert_checked (static_cast<guchar *> (frame) >= context->frame_stack_start
+		                  && static_cast<guchar *> ((frame + 1)) <= context->frame_stack_pointer);
+		context->frame_stack_pointer = reinterpret_cast<guchar *> (frame);
 		frame = frame->parent;
 		context->current_frame = frame;
-		context->stack_pointer = (guchar *) frame->stack + frame->imethod->alloca_size;
+		context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
 		LOAD_INTERP_STATE (frame);
 		CHECK_RESUME_STATE (context);
 
@@ -86,7 +86,7 @@ MONO_INTERP_OP_IMPL (MINT_RET_VT_LOCALLOC)
 
 MONO_INTERP_OP_IMPL (MINT_JMP)
 {
-	auto new_method = (InterpMethod *) frame->imethod->data_items[ip[1]];
+	auto new_method = static_cast<InterpMethod *> (frame->imethod->data_items[ip[1]]);
 
 	if (frame->imethod->prof_flags & MONO_PROFILER_CALL_INSTRUMENTATION_TAIL_CALL)
 		MONO_PROFILER_RAISE (method_tail_call, (frame->imethod->method, new_method->method));
@@ -103,7 +103,7 @@ MONO_INTERP_OP_IMPL (MINT_JMP)
 
 	// It's possible for the caller stack frame to be smaller than the callee stack frame
 	// (at the interp level).
-	context->stack_pointer = (guchar *) frame->stack + new_method->alloca_size;
+	context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + new_method->alloca_size;
 	frame->imethod = new_method;
 	frame_root_code_owner (frame);
 	ip = frame->imethod->code;

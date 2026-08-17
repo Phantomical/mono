@@ -21,7 +21,7 @@ namespace mono::interp {
 inline void
 arm_tier_counter (gpointer imethod_ptr, gint32 calls)
 {
-	InterpMethod *imethod = (InterpMethod *) imethod_ptr;
+	InterpMethod *imethod = static_cast<InterpMethod *> (imethod_ptr);
 
 	mono_atomic_cas_i32 (&imethod->tier_counter, calls > 0 ? calls : -1, 0);
 }
@@ -95,7 +95,7 @@ method_entry (ThreadContext *context, InterpFrame *frame, MonoException **out_ex
 			 * Initialize the stack base pointer here, in the uncommon branch, so we don't
 			 * need to check for it everytime when exitting a frame.
 			 */
-			frame->stack = (stackval *) context->stack_pointer;
+			frame->stack = reinterpret_cast<stackval *> (context->stack_pointer);
 			return slow;
 		}
 	}

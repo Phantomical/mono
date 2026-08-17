@@ -19,10 +19,10 @@ namespace mono::interp {
 MONO_INTERP_OP_IMPL (MINT_CALLRUN)
 {
 #ifndef ENABLE_NETCORE
-	auto target_method = (MonoMethod *) frame->imethod->data_items[ip[2]];
-	auto sig = (MonoMethodSignature *) frame->imethod->data_items[ip[3]];
+	auto target_method = static_cast<MonoMethod *> (frame->imethod->data_items[ip[2]]);
+	auto sig = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[3]]);
 
-	if (MonoException *ex = ves_imethod (frame, target_method, sig, (stackval *) (locals + ip[1])))
+	if (MonoException *ex = ves_imethod (frame, target_method, sig, reinterpret_cast<stackval *> ((locals + ip[1]))))
 		THROW_EX (ex, ip);
 #else
 	g_assert_not_reached ();
@@ -44,13 +44,13 @@ MONO_INTERP_OP_IMPL (MINT_INIT_ARGLIST)
 	g_assert_checked (*call_ip == MINT_CALL_VARARG);
 
 	int params_stack_size = call_ip[4];
-	auto sig = (MonoMethodSignature *) frame->parent->imethod->data_items[call_ip[3]];
+	auto sig = static_cast<MonoMethodSignature *> (frame->parent->imethod->data_items[call_ip[3]]);
 
 	// we are being overly conservative with the size here, for simplicity
 	gpointer arglist = frame_data_allocator_alloc (&context->data_stack, frame,
 	                                               params_stack_size + MINT_STACK_SLOT_SIZE);
 
-	init_arglist (frame, sig, STACK_ADD_BYTES (frame->stack, ip[2]), (char *) arglist);
+	init_arglist (frame, sig, STACK_ADD_BYTES (frame->stack, ip[2]), static_cast<char *> (arglist));
 
 	// save the arglist for future access with MINT_ARGLIST
 	LOCAL_VAR (ip[1], gpointer) = arglist;
@@ -68,7 +68,7 @@ MONO_INTERP_OP_IMPL (MINT_INIT_ARGLIST)
 	{                                                                            \
 		/* for calls, have ip pointing at the start of next instruction */       \
 		frame->state.ip = ip + 3;                                                \
-		do_icall_wrapper (frame, nullptr, opcode, (stackval *) (locals + ip[1]), \
+		do_icall_wrapper (frame, nullptr, opcode, reinterpret_cast<stackval *> (locals + ip[1]), \
 		                  frame->imethod->data_items[ip[2]], FALSE);             \
 		EXCEPTION_CHECKPOINT_GC_UNSAFE;                                          \
 		CHECK_RESUME_STATE (context);                                            \

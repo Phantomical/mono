@@ -28,7 +28,7 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ)
 	guint16 param_size = ip[3];
 	call_args_offset = ip[1];
 
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 
 	if (param_size)
 		std::memmove (locals + call_args_offset + 2 * MINT_STACK_SLOT_SIZE,
@@ -73,7 +73,7 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ)
 
 MONO_INTERP_OP_IMPL (MINT_NEWOBJ_FAST)
 {
-	auto vtable = (MonoVTable *) frame->imethod->data_items[ip[3]];
+	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[3]]);
 	INIT_VTABLE (vtable);
 
 	guint16 imethod_index = ip[2];
@@ -105,7 +105,7 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_FAST)
 	if (is_inlined)
 		MONO_INTERP_DISPATCH ();
 
-	cmethod = (InterpMethod *) frame->imethod->data_items[imethod_index];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[imethod_index]);
 	return &exec_call;
 }
 
@@ -133,13 +133,13 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_VT_FAST)
 	if (is_inlined)
 		MONO_INTERP_DISPATCH ();
 
-	cmethod = (InterpMethod *) frame->imethod->data_items[imethod_index];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[imethod_index]);
 	return &exec_call;
 }
 
 MONO_INTERP_OP_IMPL (MINT_NEWOBJ_STRING)
 {
-	cmethod = (InterpMethod *) frame->imethod->data_items[ip[2]];
+	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 
 	int param_size = ip[3];
@@ -157,7 +157,7 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_STRING)
 
 MONO_INTERP_OP_IMPL (MINT_MONO_NEWOBJ)
 {
-	auto klass = (MonoClass *) frame->imethod->data_items[ip[2]];
+	auto klass = static_cast<MonoClass *> (frame->imethod->data_items[ip[2]]);
 
 	error_init_reuse (error);
 	LOCAL_VAR (ip[1], MonoObject *) =

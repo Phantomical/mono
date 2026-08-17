@@ -39,7 +39,7 @@ InterpState::start ()
 	// A clause_args entry runs a handler of a frame that is already executing, and the
 	// allocation that frame was given still stands.
 	if (!clause_args) {
-		context->stack_pointer = (guchar *) frame->stack + frame->imethod->alloca_size;
+		context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
 		/* Make sure the stack pointer is bumped before we store any references on the stack */
 		mono_compiler_barrier ();
 	}
@@ -82,7 +82,7 @@ InterpState::interp_throw (MonoException *ex, const guint16 *ip, bool rethrow)
 		// we don't end up in the previous instruction.
 		frame->state.ip = ip + 1;
 
-		if (mono_object_isinst_checked ((MonoObject *) ex, mono_defaults.exception_class, error)) {
+		if (mono_object_isinst_checked (reinterpret_cast<MonoObject *> (ex), mono_defaults.exception_class, error)) {
 			MonoException *mono_ex = ex;
 			if (!rethrow) {
 				mono_ex->stack_trace = nullptr;
@@ -105,7 +105,7 @@ InterpState::interp_throw (MonoException *ex, const guint16 *ip, bool rethrow)
 		// mono_interp_set_resume_state/run_finally/run_filter.
 		// Since ctx.ip is 0, this will start unwinding from the LMF frame pushed above,
 		// which points to our frames.
-		mono_handle_exception (&ctx, (MonoObject *) ex);
+		mono_handle_exception (&ctx, reinterpret_cast<MonoObject *> (ex));
 		if (MONO_CONTEXT_GET_IP (&ctx) != 0) {
 			/* We need to unwind into non-interpreter code */
 			mono_restore_context (&ctx);
@@ -148,7 +148,7 @@ InterpState::resume ()
 		/* Set the current execution state to the resume state in context */
 		ip = context->handler_ip;
 		/* spec says stack should be empty at endfinally so it should be at the start too */
-		locals = (guchar *) frame->stack;
+		locals = reinterpret_cast<guchar *> (frame->stack);
 		g_assert (context->exc_gchandle);
 		// Write the exception on to the first slot on the excecution stack
 		LOCAL_VAR (frame->imethod->total_locals_size, MonoObject *) =
@@ -187,7 +187,7 @@ InterpState::exit ()
 {
 	// Make sure the return value stays below the stack pointer
 	if (!clause_args)
-		context->stack_pointer = (guchar *) frame->stack + frame->imethod->alloca_size;
+		context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
 
 	/* Our frames go away with this invocation, so hand the marker back to the one below. */
 	context->current_frame = outer_current_frame;
@@ -242,7 +242,7 @@ mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoOb
 {
 	ThreadContext *context = mono_interp_get_context ();
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
-	stackval *sp = (stackval *) context->stack_pointer;
+	stackval *sp = reinterpret_cast<stackval *> (context->stack_pointer);
 	MonoMethod *target_method = method;
 
 	error_init (error);
@@ -279,7 +279,7 @@ mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoOb
 	// will not attempt to use the space that we used to push the args for this method.
 	// The real top of stack for this method will be set in mono_interp_exec_method once the
 	// method is transformed.
-	context->stack_pointer = (guchar *) (sp + 4);
+	context->stack_pointer = reinterpret_cast<guchar *> ((sp + 4));
 
 	mono_interp_exec_method (&frame, context, NULL);
 
@@ -288,7 +288,7 @@ mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoOb
 		 * This can happen on wasm where native frames cannot be skipped during EH.
 		 * EH processing will continue when control returns to the interpreter.
 		 */
-		context->stack_pointer = (guchar *) sp;
+		context->stack_pointer = reinterpret_cast<guchar *> (sp);
 		return NULL;
 	}
 
@@ -302,7 +302,7 @@ mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoOb
 	 * other order.
 	 */
 	mono_compiler_barrier ();
-	context->stack_pointer = (guchar *) sp;
+	context->stack_pointer = reinterpret_cast<guchar *> (sp);
 	return result;
 }
 
@@ -313,8 +313,8 @@ mono_interp_entry (InterpEntryData *data)
 
 	if ((gsize) data->rmethod & 1) {
 		/* Unbox */
-		data->this_arg = mono_object_unbox_internal ((MonoObject *) data->this_arg);
-		data->rmethod = (InterpMethod *) (gpointer) ((gsize) data->rmethod & ~1);
+		data->this_arg = mono_object_unbox_internal (static_cast<MonoObject *> (data->this_arg));
+		data->rmethod = static_cast<InterpMethod *> ((gpointer) ((gsize) data->rmethod & ~1));
 	}
 	InterpMethod *rmethod = data->rmethod;
 
@@ -328,7 +328,7 @@ mono_interp_entry (InterpEntryData *data)
 
 	ThreadContext *context = mono_interp_get_context ();
 	stackval *sp_args, *sp;
-	sp_args = sp = (stackval *) context->stack_pointer;
+	sp_args = sp = reinterpret_cast<stackval *> (context->stack_pointer);
 
 	MonoMethod *method = rmethod->method;
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
@@ -357,7 +357,7 @@ mono_interp_entry (InterpEntryData *data)
 	frame_stamp_ordinal (context, &frame);
 	frame_root_code_owner (&frame);
 
-	context->stack_pointer = (guchar *) sp_args;
+	context->stack_pointer = reinterpret_cast<guchar *> (sp_args);
 
 	/*
 	 * Building the exception a checkpoint decided to raise can call back in here,
@@ -382,9 +382,9 @@ mono_interp_entry (InterpEntryData *data)
 
 	if (mono_llvm_only) {
 		if (context->has_resume_state) {
-			context->stack_pointer = (guchar *) sp;
-			mono_llvm_reraise_exception ((MonoException *) mono_gchandle_get_target_internal (
-				context->exc_gchandle));
+			context->stack_pointer = reinterpret_cast<guchar *> (sp);
+			mono_llvm_reraise_exception (reinterpret_cast<MonoException *> (mono_gchandle_get_target_internal (
+				context->exc_gchandle)));
 		}
 	} else {
 		g_assert (!context->has_resume_state);
@@ -395,7 +395,7 @@ mono_interp_entry (InterpEntryData *data)
 	if (type->type != MONO_TYPE_VOID)
 		stackval_to_data (type, frame.stack, data->res, FALSE);
 
-	context->stack_pointer = (guchar *) sp;
+	context->stack_pointer = reinterpret_cast<guchar *> (sp);
 }
 
 void
@@ -403,7 +403,7 @@ mono_interp_entry_general (gpointer this_arg, gpointer res, gpointer *args, gpoi
 {
 	InterpEntryData data;
 
-	data.rmethod = (InterpMethod *) rmethod;
+	data.rmethod = static_cast<InterpMethod *> (rmethod);
 	data.res = res;
 	data.this_arg = this_arg;
 	data.many_args = args;
@@ -422,15 +422,15 @@ mono_interp_entry_from_args (gpointer imethod, gpointer this_arg, gpointer res, 
 void
 mono_interp_entry_from_ccontext (gpointer ccontext_untyped, gpointer rmethod_untyped)
 {
-	CallContext *ccontext = (CallContext *) ccontext_untyped;
-	InterpMethod *rmethod = (InterpMethod *) rmethod_untyped;
+	CallContext *ccontext = static_cast<CallContext *> (ccontext_untyped);
+	InterpMethod *rmethod = static_cast<InterpMethod *> (rmethod_untyped);
 	gpointer orig_domain = NULL, attach_cookie;
 
 	if (rmethod->needs_thread_attach)
 		orig_domain = mono_threads_attach_coop (mono_domain_get (), &attach_cookie);
 
 	ThreadContext *context = mono_interp_get_context ();
-	stackval *sp = (stackval *) context->stack_pointer;
+	stackval *sp = reinterpret_cast<stackval *> (context->stack_pointer);
 
 	MonoMethod *method = rmethod->method;
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
@@ -472,7 +472,7 @@ mono_interp_entry_from_ccontext (gpointer ccontext_untyped, gpointer rmethod_unt
 		}
 		newsp = STACK_ADD_BYTES (newsp, size);
 	}
-	context->stack_pointer = (guchar *) newsp;
+	context->stack_pointer = reinterpret_cast<guchar *> (newsp);
 
 	mono_interp_exec_method (&frame, context, NULL);
 
@@ -489,7 +489,7 @@ mono_interp_entry_from_ccontext (gpointer ccontext_untyped, gpointer rmethod_unt
 	/* 'frame' is still valid */
 	mono_arch_set_native_call_context_ret (ccontext, &frame, sig, retp);
 
-	context->stack_pointer = (guchar *) sp;
+	context->stack_pointer = reinterpret_cast<guchar *> (sp);
 }
 
 #else
@@ -506,13 +506,13 @@ gboolean
 mono_interp_run_finally (StackFrameInfo *frame, int clause_index, gpointer handler_ip,
                          gpointer handler_ip_end)
 {
-	InterpFrame *iframe = (InterpFrame *) frame->interp_frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame->interp_frame);
 	ThreadContext *context = mono_interp_get_context ();
 	FrameClauseArgs clause_args;
 
 	std::memset (&clause_args, 0, sizeof (FrameClauseArgs));
-	clause_args.start_with_ip = (const guint16 *) handler_ip;
-	clause_args.end_at_ip = (const guint16 *) handler_ip_end;
+	clause_args.start_with_ip = static_cast<const guint16 *> (handler_ip);
+	clause_args.end_at_ip = static_cast<const guint16 *> (handler_ip_end);
 	clause_args.exit_clause = clause_index;
 	clause_args.exec_frame = iframe;
 
@@ -523,7 +523,7 @@ mono_interp_run_finally (StackFrameInfo *frame, int clause_index, gpointer handl
 	iframe->next_free = NULL;
 
 	// this informs MINT_ENDFINALLY to return to EH
-	*(guint16 **) (frame_locals (iframe) + iframe->imethod->clause_data_offsets[clause_index]) =
+	*reinterpret_cast<guint16 **> ((frame_locals (iframe) + iframe->imethod->clause_data_offsets[clause_index])) =
 		NULL;
 
 	mono_interp_exec_method (iframe, context, &clause_args);
@@ -538,7 +538,7 @@ gboolean
 mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_index,
                         gpointer handler_ip, gpointer handler_ip_end)
 {
-	InterpFrame *iframe = (InterpFrame *) frame->interp_frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame->interp_frame);
 	ThreadContext *context = mono_interp_get_context ();
 	/*
 	 * Only MINT_ENDFILTER writes this, and an exception raised inside the filter
@@ -570,7 +570,7 @@ mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_ind
 	InterpFrame child_frame = {};
 	child_frame.parent = f ? innermost : iframe;
 	child_frame.imethod = iframe->imethod;
-	child_frame.stack = (stackval *) context->stack_pointer;
+	child_frame.stack = reinterpret_cast<stackval *> (context->stack_pointer);
 	child_frame.retval = &retval;
 	child_frame.code_owner = iframe->code_owner;
 	frame_stamp_ordinal (context, &child_frame);
@@ -580,8 +580,8 @@ mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_ind
 	context->stack_pointer += iframe->imethod->alloca_size;
 
 	std::memset (&clause_args, 0, sizeof (FrameClauseArgs));
-	clause_args.start_with_ip = (const guint16 *) handler_ip;
-	clause_args.end_at_ip = (const guint16 *) handler_ip_end;
+	clause_args.start_with_ip = static_cast<const guint16 *> (handler_ip);
+	clause_args.end_at_ip = static_cast<const guint16 *> (handler_ip_end);
 	clause_args.filter_exception = ex;
 	clause_args.exec_frame = &child_frame;
 
@@ -590,7 +590,7 @@ mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_ind
 	/* Copy back the updated frame */
 	std::memcpy (iframe->stack, child_frame.stack, iframe->imethod->total_locals_size);
 
-	context->stack_pointer = (guchar *) child_frame.stack;
+	context->stack_pointer = reinterpret_cast<guchar *> (child_frame.stack);
 
 	/* ENDFILTER stores the result into child_frame->retval */
 	return retval.data.i ? TRUE : FALSE;
