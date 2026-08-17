@@ -108,6 +108,11 @@ mono_add_object_library(monoutils
 # llvm-config for --mono-api-version, which unmodified LLVM does not implement.
 target_compile_definitions(monoutils PRIVATE LLVM_API_VERSION=0)
 
+# dlmalloc is Doug Lea's, kept close to upstream; mono's warning set is not its
+# problem.
+set_source_files_properties(dlmalloc.c PROPERTIES
+  COMPILE_OPTIONS "-Wno-gnu-null-pointer-arithmetic")
+
 target_include_directories(monoutils PUBLIC "${CMAKE_SOURCE_DIR}/mono")
 target_link_libraries(monoutils PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
 

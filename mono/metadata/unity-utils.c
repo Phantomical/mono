@@ -591,6 +591,9 @@ static void get_type_hashes(MonoType *type, GList *hashes, gboolean inflate)
 		case MONO_TYPE_OBJECT:
 			klass = mono_defaults.object_class;
 			break;
+		default:
+			// klass stays NULL, so the type contributes no hash of its own.
+			break;
 		}
 
 		if (klass)
@@ -949,9 +952,9 @@ mono_unity_get_unitytls_interface()
 // gc
 MONO_API void mono_unity_gc_set_mode(MonoGCMode mode)
 {
+#if HAVE_BOEHM_GC
 	switch (mode)
 	{
-#if HAVE_BOEHM_GC
 		case MONO_GC_MODE_ENABLED:
 			if (GC_is_disabled())
 				GC_enable();
@@ -968,10 +971,10 @@ MONO_API void mono_unity_gc_set_mode(MonoGCMode mode)
 				GC_enable();
 			GC_set_disable_automatic_collection(TRUE);
 			break;
-#else
-		g_assert_not_reached();
-#endif
 	}
+#else
+	g_assert_not_reached();
+#endif
 }
 
 // Deprecated. Remove when Unity has switched to mono_unity_gc_set_mode

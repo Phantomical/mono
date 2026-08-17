@@ -5,6 +5,8 @@
 # mono/native both replace the warning set wholesale, exactly as they did
 # under automake.
 
+include(CheckCCompilerFlag)
+
 # --- mono::warnings ---------------------------------------------------------
 # --enable-compile-warnings: applied to C and C++ alike.
 add_library(mono_warnings INTERFACE)
@@ -12,14 +14,18 @@ add_library(mono::warnings ALIAS mono_warnings)
 if(MONO_ENABLE_COMPILE_WARNINGS)
   target_compile_options(mono_warnings INTERFACE
     -Wall -Wunused -Wmissing-declarations -Wpointer-arith
-    -Wno-cast-qual -Wwrite-strings -Wno-switch -Wno-switch-enum
+    -Wno-cast-qual -Wwrite-strings -Wno-switch-enum
     -Wno-unused-value -Wno-attributes)
-  # C-only additions.  Two members of configure.ac's set are deliberately not
-  # here: -Wstrict-prototypes, which objects to `foo ()` for `foo (void)` in a
-  # codebase that spells it that way roughly 3500 times, and -Wc++-compat,
-  # which guards a build that compiles these sources as C++ -- something no
-  # configuration here does.  Between them they were 90% of the build's warning
-  # output, enough to bury the ones worth reading.
+
+  # Clang spellings, so each one has to be asked for.
+  foreach(_w string-concatenation null-pointer-subtraction gnu-null-pointer-arithmetic)
+    string(MAKE_C_IDENTIFIER "MONO_HAS_W_${_w}" _mono_w_var)
+    check_c_compiler_flag("-W${_w}" ${_mono_w_var})
+    if(${_mono_w_var})
+      target_compile_options(mono_warnings INTERFACE "-W${_w}")
+    endif()
+  endforeach()
+  # C-only additions.
   target_compile_options(mono_warnings INTERFACE
     $<$<COMPILE_LANGUAGE:C>:-Wmissing-prototypes>
     $<$<COMPILE_LANGUAGE:C>:-Wnested-externs>

@@ -5602,6 +5602,10 @@ buffer_add_fixed_array (Buffer *buf, MonoType *t, void *addr, MonoDomain *domain
 					buffer_add_typeid (buf, domain, mono_class_from_mono_type_internal (t));
 				break;
 			}
+			default:
+				// A fixed buffer only holds the primitive types above, so
+				// the caller filters the element type before it gets here.
+				break;
 		}
 	}
 }
@@ -10205,10 +10209,12 @@ static const char* vm_cmds_str [] = {
 	"INVOKE_METHOD",
 	"SET_PROTOCOL_VERSION",
 	"ABORT_INVOKE",
-	"SET_KEEPALIVE"
+	"SET_KEEPALIVE",
 	"GET_TYPES_FOR_SOURCE_FILE",
 	"GET_TYPES",
-	"INVOKE_METHODS"
+	"INVOKE_METHODS",
+	"START_BUFFERING",
+	"STOP_BUFFERING"
 };
 
 static const char* thread_cmds_str[] = {

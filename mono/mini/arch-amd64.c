@@ -2268,8 +2268,14 @@ mono_arch_get_cie_program (void)
 {
 	GSList *l = NULL;
 
-	mono_add_unwind_op_def_cfa (l, (guint8*)NULL, (guint8*)NULL, AMD64_RSP, 8);
-	mono_add_unwind_op_offset (l, (guint8*)NULL, (guint8*)NULL, AMD64_RIP, -8);
+	/* The CIE describes the state before the first instruction, so both ops
+	 * sit at code offset 0.  The macros take a code pointer and a buffer base
+	 * and subtract them, so pass the same real address twice; subtracting two
+	 * null pointers is undefined even though the difference would be 0. */
+	guint8 *base = (guint8*) &l;
+
+	mono_add_unwind_op_def_cfa (l, base, base, AMD64_RSP, 8);
+	mono_add_unwind_op_offset (l, base, base, AMD64_RIP, -8);
 
 	return l;
 }

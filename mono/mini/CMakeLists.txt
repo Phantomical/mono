@@ -73,10 +73,6 @@ mono_add_object_library(mini
   DEPENDS mono::hidden mono::eglib_headers mono::llvm)
 add_dependencies(mini mono-version)
 
-# The C sources of the tree are not ready for -Wswitch (configure puts
-# -Wno-switch in the global flags), but the C++ ones are.
-target_compile_options(mini PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wswitch>)
-
 # ---------------------------------------------------------------------------
 # The debugger agent: its own object library because it can be built as a
 # loadable module in configurations that disable it from the runtime proper.

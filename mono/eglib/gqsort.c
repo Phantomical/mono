@@ -63,7 +63,10 @@ typedef struct _QSortStack {
 /* check if we can swap by longs rather than bytes by making sure that
  * memory is properly aligned and that the element size is a multiple
  * of sizeof (long) */
-#define SWAP_INIT() swaplong = (((char *) base) - ((char *) 0)) % sizeof (long) == 0 && (size % sizeof (long)) == 0
+/* Whether base and the element size are both long-aligned, so the swap can
+ * move longs instead of bytes.  Cast to an integer rather than subtracting
+ * (char *) 0, which is a pointer subtraction with a null operand. */
+#define SWAP_INIT() swaplong = ((gsize) (base)) % sizeof (long) == 0 && (size % sizeof (long)) == 0
 
 void
 g_qsort_with_data (gpointer base, size_t nmemb, size_t size, GCompareDataFunc compare, gpointer user_data)
