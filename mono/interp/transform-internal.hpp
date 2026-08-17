@@ -42,6 +42,19 @@
 		(s)->klass = k;                                                                    \
 	} while (0)
 
+#define BARRIER_IF_VOLATILE(kind) \
+	do { \
+		if (volatile_) { \
+			interp_emit_memory_barrier (kind); \
+			volatile_ = FALSE; \
+		} \
+	} while (0)
+#define INLINE_FAILURE \
+	do { \
+		if (inlining) \
+			goto exit; \
+	} while (0)
+
 /*
  * A guard on the eval stack depth, for use inside a TransformData member. It
  * warns rather than refusing: a short stack here means the IL was already bad.
@@ -188,6 +201,9 @@ MonoMethodHeader *interp_method_get_header (MonoMethod *method, MonoError *error
 /// R4 or R8 for a floating-point type. Empty for anything else, which
 /// coerce_fp () leaves alone.
 std::optional<StackType> fp_stack_type (MonoType *type);
+
+/// Whether a value type holds any reference the GC has to see.
+gboolean type_has_references (MonoType *type);
 
 /// Turns an instruction into a MINT_NOP in place. It stays linked, so a walk
 /// standing on it can still advance.
