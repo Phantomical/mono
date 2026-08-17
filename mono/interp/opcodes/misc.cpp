@@ -1,5 +1,5 @@
 #include "config.h"
-#include "mono/interp/interp-frame.hpp"
+#include "mono/interp/runtime/frame.hpp"
 
 #include "mintops.hpp"
 #include "mono/metadata/appdomain.h"

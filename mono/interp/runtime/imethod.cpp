@@ -5,12 +5,12 @@
 
 #include "config.h"
 
-#include "interp-callbacks.hpp"
-#include "interp-internals.hpp"
-#include "interp-method.hpp"
-#include "interp-trace.hpp"
-#include "interp-entry.hpp"
-#include "interp-imethod.hpp"
+#include "callbacks.hpp"
+#include "internals.hpp"
+#include "method.hpp"
+#include "trace.hpp"
+#include "entry.hpp"
+#include "imethod.hpp"
 
 #include <mono/metadata/marshal.h>
 #include <mono/metadata/metadata-update.h>

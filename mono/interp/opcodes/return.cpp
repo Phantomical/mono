@@ -6,11 +6,11 @@
  */
 
 #include "mintops.hpp"
-#include "mono/interp/interp-frame.hpp"
-#include "mono/interp/interp-internals.hpp"
-#include "mono/interp/interp-method.hpp"
-#include "mono/interp/interp-stackval.hpp"
-#include "mono/interp/interp-trace.hpp"
+#include "mono/interp/runtime/frame.hpp"
+#include "mono/interp/runtime/internals.hpp"
+#include "mono/interp/runtime/method.hpp"
+#include "mono/interp/runtime/stackval.hpp"
+#include "mono/interp/runtime/trace.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/profiler.h"

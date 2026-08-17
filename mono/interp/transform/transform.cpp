@@ -29,7 +29,7 @@
 #include <mono/mini/mini-runtime.h>
 
 #include "mintops.hpp"
-#include "interp-internals.hpp"
+#include "runtime/internals.hpp"
 #include "interp.h"
 #include "transform.hpp"
 #include "internal.hpp"

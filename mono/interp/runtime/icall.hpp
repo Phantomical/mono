@@ -6,7 +6,7 @@
  * \brief Calling the runtime's own C functions from interpreted code.
  */
 
-#include "interp-internals.hpp"
+#include "internals.hpp"
 
 namespace mono::interp {
 

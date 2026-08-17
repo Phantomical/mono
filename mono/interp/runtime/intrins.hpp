@@ -12,7 +12,7 @@
 #include <mono/metadata/gc-internals.h>
 #include <mono/metadata/object-internals.h>
 
-#include "interp-internals.hpp"
+#include "internals.hpp"
 
 namespace mono::interp {
 

@@ -6,9 +6,9 @@
  * \brief Getting a method ready to run, and counting its way to tier 1.
  */
 
-#include "interp-internals.hpp"
-#include "interp-lmf.hpp"
-#include "interp-trace.hpp"
+#include "internals.hpp"
+#include "lmf.hpp"
+#include "trace.hpp"
 
 #include <mono/llvm/runtime.h>
 #include <mono/metadata/appdomain.h>

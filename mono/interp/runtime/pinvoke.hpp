@@ -6,7 +6,7 @@
  * \brief Calling out of the interpreter into native code.
  */
 
-#include "interp-internals.hpp"
+#include "internals.hpp"
 
 #ifdef TARGET_WASM
 #define INTERP_ICALL_TRAMP_IARGS 12

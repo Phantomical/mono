@@ -5,13 +5,13 @@
 
 #include "config.h"
 
-#include "interp-callbacks.hpp"
-#include "interp-internals.hpp"
-#include "interp-frame.hpp"
-#include "interp-stackval.hpp"
-#include "interp-call.hpp"
-#include "interp-lmf.hpp"
-#include "interp-pinvoke.hpp"
+#include "callbacks.hpp"
+#include "internals.hpp"
+#include "frame.hpp"
+#include "stackval.hpp"
+#include "call.hpp"
+#include "lmf.hpp"
+#include "pinvoke.hpp"
 
 #include <mono/metadata/marshal.h>
 #include <mono/mini/aot-runtime.h>

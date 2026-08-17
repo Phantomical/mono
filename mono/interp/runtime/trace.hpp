@@ -7,7 +7,7 @@
  */
 
 #include "config.h"
-#include "interp-internals.hpp"
+#include "internals.hpp"
 
 namespace mono::interp {
 

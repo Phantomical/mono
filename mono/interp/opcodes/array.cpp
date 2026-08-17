@@ -1,5 +1,5 @@
 #include "config.h"
-#include "mono/interp/interp-object.hpp"
+#include "mono/interp/runtime/object.hpp"
 
 #include "mintops.hpp"
 #include "mono/metadata/class-inlines.h"
@@ -9,7 +9,7 @@
 #include "mono/metadata/object-forward.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/interp/interp.hpp"
-#include "mono/interp/interp-array.hpp"
+#include "mono/interp/runtime/array.hpp"
 #include "mono/utils/mono-error-internals.h"
 
 namespace mono::interp {

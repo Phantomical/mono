@@ -2,8 +2,8 @@
 #define __MONO_INTERP_TRANSFORM_H__
 #include <mono/mini/mini-runtime.h>
 #include <mono/metadata/seq-points-data.h>
-#include "interp-arena.hpp"
-#include "interp-internals.hpp"
+#include "arena.hpp"
+#include "runtime/internals.hpp"
 
 #include <cstddef>
 #include <cstdint>

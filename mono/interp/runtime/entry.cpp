@@ -5,11 +5,11 @@
 
 #include "config.h"
 
-#include "interp-callbacks.hpp"
-#include "interp-internals.hpp"
-#include "interp-call.hpp"
-#include "interp-entry.hpp"
-#include "interp-imethod.hpp"
+#include "callbacks.hpp"
+#include "internals.hpp"
+#include "call.hpp"
+#include "entry.hpp"
+#include "imethod.hpp"
 
 #include <mono/metadata/marshal.h>
 #include <mono/llvm/runtime.h>

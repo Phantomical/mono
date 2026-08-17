@@ -1,7 +1,7 @@
 #include "config.h"
-#include "interp-frame.hpp"
-#include "interp-method.hpp"
-#include "interp-stackval.hpp"
+#include "runtime/frame.hpp"
+#include "runtime/method.hpp"
+#include "runtime/stackval.hpp"
 
 #include "mono/interp/interp.hpp"
 #include "mono/metadata/handle.h"

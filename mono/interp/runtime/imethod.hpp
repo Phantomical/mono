@@ -6,7 +6,7 @@
  * \brief The per-domain table of methods this engine has seen.
  */
 
-#include "interp-internals.hpp"
+#include "internals.hpp"
 
 namespace mono::interp {
 

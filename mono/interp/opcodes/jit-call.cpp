@@ -6,9 +6,9 @@
  */
 
 #include "mintops.hpp"
-#include "mono/interp/interp-internals.hpp"
-#include "mono/interp/interp-jit-call.hpp"
-#include "mono/interp/interp-stackval.hpp"
+#include "mono/interp/runtime/internals.hpp"
+#include "mono/interp/runtime/jit-call.hpp"
+#include "mono/interp/runtime/stackval.hpp"
 #include "mono/interp/interp.hpp"
 #include "mono/metadata/object-internals.h"
 #include "mono/utils/mono-error-internals.h"

@@ -6,9 +6,9 @@
 
 #include "config.h"
 
-#include "interp-callbacks.hpp"
-#include "interp-internals.hpp"
-#include "interp-context.hpp"
+#include "callbacks.hpp"
+#include "internals.hpp"
+#include "context.hpp"
 
 #include <mono/metadata/mono-debug.h>
 #include <mono/mini/mini-runtime.h>

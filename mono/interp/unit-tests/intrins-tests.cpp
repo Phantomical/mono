@@ -14,7 +14,7 @@
 #include <gtest/gtest.h>
 
 #include "harness.hpp"
-#include "mono/interp/interp-intrins.hpp"
+#include "mono/interp/runtime/intrins.hpp"
 
 using namespace mono::interp;
 

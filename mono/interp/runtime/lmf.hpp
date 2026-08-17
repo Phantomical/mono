@@ -6,7 +6,7 @@
  * \brief Publishing an interpreter frame to the runtime's LMF chain.
  */
 
-#include "interp-internals.hpp"
+#include "internals.hpp"
 
 #include <mono/mini/mini-runtime.h>
 #include <mono/utils/mono-context.h>

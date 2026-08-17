@@ -6,7 +6,7 @@
  * \brief Array access shared by the array opcodes and Array's runtime methods.
  */
 
-#include "interp-internals.hpp"
+#include "internals.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
 

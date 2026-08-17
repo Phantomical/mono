@@ -2,6 +2,7 @@
 file(GLOB sources CONFIGURE_DEPENDS
   *.cpp
   opcodes/*.cpp
+  runtime/*.cpp
   transform/*.cpp
 )
 

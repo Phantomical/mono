@@ -5,14 +5,14 @@
 
 #include "config.h"
 
-#include "interp-callbacks.hpp"
-#include "interp-internals.hpp"
+#include "callbacks.hpp"
+#include "internals.hpp"
 #include "mintops.hpp"
-#include "interp-frame.hpp"
-#include "interp-stackval.hpp"
-#include "interp-array.hpp"
-#include "interp-icall.hpp"
-#include "interp-lmf.hpp"
+#include "frame.hpp"
+#include "stackval.hpp"
+#include "array.hpp"
+#include "icall.hpp"
+#include "lmf.hpp"
 
 #include <mono/metadata/exception.h>
 #include <mono/mini/jit-icalls.h>

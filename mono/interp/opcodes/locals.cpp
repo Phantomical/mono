@@ -6,7 +6,7 @@
  */
 
 #include "mintops.hpp"
-#include "mono/interp/interp-internals.hpp"
+#include "mono/interp/runtime/internals.hpp"
 #include "mono/interp/interp.hpp"
 
 #include <cstring>

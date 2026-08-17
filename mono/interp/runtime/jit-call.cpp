@@ -5,11 +5,11 @@
  * \brief Calling a method body the compiled tier has already built.
  */
 
-#include "interp-call.hpp"
-#include "interp-internals.hpp"
-#include "interp-jit-call.hpp"
-#include "interp-lmf.hpp"
-#include "interp-stackval.hpp"
+#include "call.hpp"
+#include "internals.hpp"
+#include "jit-call.hpp"
+#include "lmf.hpp"
+#include "stackval.hpp"
 
 #include <mono/llvm/runtime.h>
 #include <mono/metadata/class-internals.h>

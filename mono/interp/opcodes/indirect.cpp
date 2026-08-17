@@ -1,5 +1,5 @@
 #include "config.h"
-#include "mono/interp/interp-stackval.hpp"
+#include "mono/interp/runtime/stackval.hpp"
 
 #include "mintops.hpp"
 #include "mono/metadata/class-internals.h"

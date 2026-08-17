@@ -6,7 +6,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/interp/musttail.hpp"
-#include "mono/interp/interp-internals.hpp"
+#include "mono/interp/runtime/internals.hpp"
 #include "mono/interp/mintops.hpp"
 #include "mono/metadata/metadata.h"
 #include "mono/mini/mini-runtime.h"

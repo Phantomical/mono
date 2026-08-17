@@ -6,7 +6,7 @@
  * \brief The address a caller outside this engine uses to reach a method.
  */
 
-#include "interp-internals.hpp"
+#include "internals.hpp"
 #include "mono/utils/mono-error-internals.h"
 
 #ifdef TARGET_WASM
