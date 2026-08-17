@@ -313,7 +313,6 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 	gpointer addr, entry_func, entry_wrapper;
 	MonoMethodSignature *sig;
 	MonoMethod *wrapper;
-	MonoJitDomainInfo *info;
 	InterpMethod *imethod;
 
 	imethod = mono_interp_get_imethod (domain, method, error);
@@ -371,12 +370,7 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 
 	addr = mini_llvmonly_create_ftndesc (mono_domain_get (), entry_wrapper, entry_ftndesc);
 
-	info = domain_jit_info (domain);
-	mono_domain_lock (domain);
-	if (!info->interp_method_pointer_hash)
-		info->interp_method_pointer_hash = g_hash_table_new (NULL, NULL);
-	g_hash_table_insert (info->interp_method_pointer_hash, addr, imethod);
-	mono_domain_unlock (domain);
+	register_method_pointer (domain, addr, imethod);
 
 	mono_memory_barrier ();
 	if (unbox)
@@ -398,7 +392,6 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 {
 	gpointer addr, entry_func, entry_wrapper = NULL;
 	MonoDomain *domain = mono_domain_get ();
-	MonoJitDomainInfo *info;
 	InterpMethod *imethod = mono_interp_get_imethod (domain, method, error);
 
 	if (imethod->jit_entry)
@@ -532,12 +525,7 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 
 	addr = mono_create_ftnptr_arg_trampoline (ftndesc, entry_wrapper);
 
-	info = domain_jit_info (domain);
-	mono_domain_lock (domain);
-	if (!info->interp_method_pointer_hash)
-		info->interp_method_pointer_hash = g_hash_table_new (NULL, NULL);
-	g_hash_table_insert (info->interp_method_pointer_hash, addr, imethod);
-	mono_domain_unlock (domain);
+	register_method_pointer (domain, addr, imethod);
 
 	mono_memory_barrier ();
 	imethod->jit_entry = addr;

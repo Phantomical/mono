@@ -16,6 +16,23 @@ mono_wasm_get_native_to_interp_trampoline (MonoMethod *method, gpointer extra_ar
 
 namespace mono::interp {
 
+/// Holds a domain's lock for a scope.
+///
+/// Only for a scope the thread runs out of. An exception resume unwinds
+/// interpreted frames by restoring the stack pointer over them, so a guard
+/// below the resumed frame never runs its destructor and the lock stays held.
+class DomainLock {
+public:
+	explicit DomainLock (MonoDomain *domain) : domain_ (domain) { mono_domain_lock (domain_); }
+	~DomainLock () { mono_domain_unlock (domain_); }
+
+	DomainLock (const DomainLock &) = delete;
+	DomainLock &operator= (const DomainLock &) = delete;
+
+private:
+	MonoDomain *domain_;
+};
+
 /* The address that stands for imethod, minted if this is the first ask. */
 gpointer entry_for_imethod (InterpMethod *imethod, MonoError *error);
 
@@ -30,14 +47,26 @@ inline InterpMethod *
 lookup_method_pointer (MonoDomain *domain, gpointer addr)
 {
 	MonoJitDomainInfo *info = domain_jit_info (domain);
-	InterpMethod *res = NULL;
+	DomainLock lock (domain);
 
-	mono_domain_lock (domain);
-	if (info->interp_method_pointer_hash)
-		res = (InterpMethod *) g_hash_table_lookup (info->interp_method_pointer_hash, addr);
-	mono_domain_unlock (domain);
+	if (!info->interp_method_pointer_hash)
+		return nullptr;
 
-	return res;
+	return (InterpMethod *) g_hash_table_lookup (info->interp_method_pointer_hash, addr);
+}
+
+/// Records that addr is the address outside this engine for imethod, so that a
+/// later arrival at addr can find the method again.
+inline void
+register_method_pointer (MonoDomain *domain, gpointer addr, InterpMethod *imethod)
+{
+	MonoJitDomainInfo *info = domain_jit_info (domain);
+	DomainLock lock (domain);
+
+	if (!info->interp_method_pointer_hash)
+		info->interp_method_pointer_hash = g_hash_table_new (NULL, NULL);
+
+	g_hash_table_insert (info->interp_method_pointer_hash, addr, imethod);
 }
 
 /// Get the InterpMethod* that corresponds to entry point address addr.
