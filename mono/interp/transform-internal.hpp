@@ -12,6 +12,8 @@
 
 #include "transform.hpp"
 
+#include <optional>
+
 #if SIZEOF_VOID_P == 8
 #define MINT_MOV_P MINT_MOV_8
 #else
@@ -38,6 +40,19 @@
 		(s)->type = (ty);                                                                  \
 		(s)->flags = 0;                                                                    \
 		(s)->klass = k;                                                                    \
+	} while (0)
+
+/*
+ * A guard on the eval stack depth, for use inside a TransformData member. It
+ * warns rather than refusing: a short stack here means the IL was already bad.
+ */
+#define CHECK_STACK(n) \
+	do { \
+		int stack_size = sp - stack; \
+		if (stack_size < (n)) \
+			g_warning ("%s.%s: not enough values (%d < %d) on stack at %04x", \
+				m_class_get_name (method->klass), method->name, \
+				stack_size, n, ip - il_code); \
 	} while (0)
 
 /*
@@ -158,6 +173,21 @@ int interp_get_ldind_for_mt (MintType mt);
 
 /// The MINT_ICALL that matches this signature's shape, or MINT_NIY.
 int interp_icall_op_for_sig (MonoMethodSignature *sig);
+
+/// The method a token names, with the generic context applied.
+MonoMethod *interp_get_method (MonoMethod *method, guint32 token, MonoImage *image,
+                               MonoGenericContext *generic_context, MonoError *error);
+
+/// The field a token names, and the class that declares it.
+MonoClassField *interp_field_from_token (MonoMethod *method, guint32 token, MonoClass **klass,
+                                         MonoGenericContext *generic_context, MonoError *error);
+
+/// The header of a method the transform may inline, or null when it has none.
+MonoMethodHeader *interp_method_get_header (MonoMethod *method, MonoError *error);
+
+/// R4 or R8 for a floating-point type. Empty for anything else, which
+/// coerce_fp () leaves alone.
+std::optional<StackType> fp_stack_type (MonoType *type);
 
 /// Turns an instruction into a MINT_NOP in place. It stays linked, so a walk
 /// standing on it can still advance.
