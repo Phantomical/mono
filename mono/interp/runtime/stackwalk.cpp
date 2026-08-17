@@ -20,7 +20,7 @@ struct StackIter {
 gpointer
 interp_frame_get_ip (MonoInterpFrameHandle frame)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 
 	g_assert (iframe->imethod);
 	/*
@@ -53,7 +53,7 @@ gpointer
 interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf, gpointer sp)
 {
 	g_assert (jit_tls);
-	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
+	ThreadContext *context = static_cast<ThreadContext *> (jit_tls->interp_context);
 
 	if (!context)
 		return NULL;
@@ -105,7 +105,7 @@ interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf, gpointer 
 gsize
 interp_frame_ordinal (gpointer interp_frame)
 {
-	return ((InterpFrame*)interp_frame)->ordinal;
+	return (static_cast<InterpFrame *> (interp_frame))->ordinal;
 }
 
 /*
@@ -116,9 +116,9 @@ interp_frame_ordinal (gpointer interp_frame)
 void
 interp_frame_iter_init (MonoInterpStackIter *iter, gpointer interp_exit_data)
 {
-	StackIter *stack_iter = (StackIter*)iter;
+	StackIter *stack_iter = reinterpret_cast<StackIter *> (iter);
 
-	stack_iter->current = (InterpFrame*)interp_exit_data;
+	stack_iter->current = static_cast<InterpFrame *> (interp_exit_data);
 }
 
 /*
@@ -129,7 +129,7 @@ interp_frame_iter_init (MonoInterpStackIter *iter, gpointer interp_exit_data)
 gboolean
 interp_frame_iter_next (MonoInterpStackIter *iter, StackFrameInfo *frame)
 {
-	StackIter *stack_iter = (StackIter*)iter;
+	StackIter *stack_iter = reinterpret_cast<StackIter *> (iter);
 	InterpFrame *iframe = stack_iter->current;
 
 	memset (frame, 0, sizeof (StackFrameInfo));
@@ -151,7 +151,7 @@ interp_frame_iter_next (MonoInterpStackIter *iter, StackFrameInfo *frame)
 		frame->type = FRAME_TYPE_INTERP;
 		/* The offset in the interpreter IR. It is -1 if the frame has no ip. */
 		gpointer ip = interp_frame_get_ip (iframe);
-		frame->native_offset = ip ? (int)((guint8*)ip - (guint8*)iframe->imethod->code) : -1;
+		frame->native_offset = ip ? (int)(static_cast<guint8 *> (ip) - reinterpret_cast<guint8 *> (iframe->imethod->code)) : -1;
 		if (!method->wrapper_type || method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD)
 			frame->managed = TRUE;
 	}

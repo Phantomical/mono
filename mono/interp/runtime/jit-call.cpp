@@ -49,7 +49,7 @@ struct JitCallCbData {
 static void
 jit_call_cb (gpointer arg)
 {
-	JitCallCbData *cb_data = (JitCallCbData *) arg;
+	JitCallCbData *cb_data = static_cast<JitCallCbData *> (arg);
 	gpointer jit_wrapper = cb_data->jit_wrapper;
 	int pindex = cb_data->pindex;
 	gpointer *args = cb_data->args;
@@ -228,7 +228,7 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 		init_jit_call_info (rmethod, error);
 		mono_error_assert_ok (error);
 	}
-	cinfo = (JitCallInfo *) rmethod->jit_call_info;
+	cinfo = static_cast<JitCallInfo *> (rmethod->jit_call_info);
 
 	/*
 	 * Convert the arguments on the interpeter stack to the format expected by the gsharedvt_out wrapper.
@@ -274,23 +274,23 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 	if (thrown) {
 		MonoObject *obj = mono_llvm_load_exception ();
 		g_assert (obj);
-		mono_error_set_exception_instance (error, (MonoException *) obj);
+		mono_error_set_exception_instance (error, reinterpret_cast<MonoException *> (obj));
 		return;
 	}
 	if (cinfo->ret_mt) {
 		//  Sign/zero extend if necessary
 		switch (*cinfo->ret_mt) {
 		case MintType::I1:
-			sp->data.i = *(gint8 *) sp;
+			sp->data.i = *reinterpret_cast<gint8 *> (sp);
 			break;
 		case MintType::U1:
-			sp->data.i = *(guint8 *) sp;
+			sp->data.i = *reinterpret_cast<guint8 *> (sp);
 			break;
 		case MintType::I2:
-			sp->data.i = *(gint16 *) sp;
+			sp->data.i = *reinterpret_cast<gint16 *> (sp);
 			break;
 		case MintType::U2:
-			sp->data.i = *(guint16 *) sp;
+			sp->data.i = *reinterpret_cast<guint16 *> (sp);
 			break;
 		case MintType::I4:
 		case MintType::I8:

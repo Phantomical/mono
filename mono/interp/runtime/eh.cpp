@@ -23,7 +23,7 @@ void
 interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
 {
 	g_assert (jit_tls);
-	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
+	ThreadContext *context = static_cast<ThreadContext *> (jit_tls->interp_context);
 	if (!context)
 		return;
 
@@ -76,26 +76,26 @@ interp_set_resume_state (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExcepti
 	ThreadContext *context;
 
 	g_assert (jit_tls);
-	context = (ThreadContext*)jit_tls->interp_context;
+	context = static_cast<ThreadContext *> (jit_tls->interp_context);
 	g_assert (context);
 
 	context->has_resume_state = TRUE;
-	context->handler_frame = (InterpFrame*)interp_frame;
+	context->handler_frame = static_cast<InterpFrame *> (interp_frame);
 	context->handler_ei = ei;
 	if (context->exc_gchandle)
 		mono_gchandle_free_internal (context->exc_gchandle);
-	context->exc_gchandle = mono_gchandle_new_internal ((MonoObject*)ex, FALSE);
+	context->exc_gchandle = mono_gchandle_new_internal (static_cast<MonoObject *> (ex), FALSE);
 	/* Ditto */
 	if (ei)
 		*(MonoObject**)(frame_locals (context->handler_frame) + ei->exvar_offset) = ex;
-	context->handler_ip = (const guint16*)handler_ip;
+	context->handler_ip = static_cast<const guint16 *> (handler_ip);
 }
 
 void
 interp_get_resume_state (const MonoJitTlsData *jit_tls, gboolean *has_resume_state, MonoInterpFrameHandle *interp_frame, gpointer *handler_ip)
 {
 	g_assert (jit_tls);
-	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
+	ThreadContext *context = static_cast<ThreadContext *> (jit_tls->interp_context);
 
 	*has_resume_state = context ? context->has_resume_state : FALSE;
 	if (!*has_resume_state)

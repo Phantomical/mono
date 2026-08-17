@@ -24,7 +24,7 @@ static MonoException*
 ves_array_get (InterpFrame *frame, stackval *sp, stackval *retval, MonoMethodSignature *sig, gboolean safe)
 {
 	MonoObject *o = sp->data.o;
-	MonoArray *ao = (MonoArray *) o;
+	MonoArray *ao = reinterpret_cast<MonoArray *> (o);
 	MonoClass *ac = o->vtable->klass;
 
 	g_assert (m_class_get_rank (ac) >= 1);
@@ -51,7 +51,7 @@ ves_imethod (InterpFrame *frame, MonoMethod *method, MonoMethodSignature *sig, s
 	if (method->klass == mono_defaults.array_class) {
 		if (!strcmp (name, "UnsafeMov")) {
 			/* TODO: layout checks */
-			stackval_from_data (sig->ret, sp, (char*) sp, FALSE);
+			stackval_from_data (sig->ret, sp, reinterpret_cast<char *> (sp), FALSE);
 			return NULL;
 		}
 		if (!strcmp (name, "UnsafeLoad"))
@@ -166,7 +166,7 @@ do_icall (MonoMethodSignature *sig, int op, stackval *sp, gpointer ptr, gboolean
 
 	/* convert the native representation to the stackval representation */
 	if (sig)
-		stackval_from_data (sig->ret, &sp [0], (char*) &sp [0].data.p, sig->pinvoke);
+		stackval_from_data (sig->ret, &sp [0], reinterpret_cast<char *> (&sp [0].data.p), sig->pinvoke);
 }
 
 // Do not inline in case order of frame addresses matters, and maybe other reasons.
@@ -198,7 +198,7 @@ exit_icall:
 void
 init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *arglist)
 {
-	*(gpointer*)arglist = sig;
+	*reinterpret_cast<gpointer *> (arglist) = sig;
 	arglist += sizeof (gpointer);
 
 	for (int i = sig->sentinelpos; i < sig->param_count; i++) {
@@ -207,7 +207,7 @@ init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *
 		int align;
 
 		arg_size = mono_type_stack_size (sig->params [i], &align);
-		arglist = (char*)ALIGN_PTR_TO (arglist, align);
+		arglist = static_cast<char *> (ALIGN_PTR_TO (arglist, align));
 #else
 		arg_size = mono_type_stack_size (sig->params [i], NULL);
 #endif
@@ -240,5 +240,5 @@ mono_interp_leave (InterpFrame* parent_frame)
 	 */
 	do_icall_wrapper (&frame, NULL, MINT_ICALL_V_P, &tmp_sp, (gpointer)mono_thread_get_undeniable_exception, FALSE);
 
-	return (MonoException*)tmp_sp.data.p;
+	return static_cast<MonoException *> (tmp_sp.data.p);
 }

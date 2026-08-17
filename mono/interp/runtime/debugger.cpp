@@ -21,14 +21,14 @@ namespace mono::interp {
 void
 interp_frame_arg_to_data (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index, gpointer data)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 	InterpMethod *imethod = iframe->imethod;
 
 	// If index == -1, we finished executing an InterpFrame and the result is at the bottom of the stack.
 	if (index == -1)
 		stackval_to_data (sig->ret, iframe->stack, data, TRUE);
 	else if (sig->hasthis && index == 0)
-		*(gpointer*)data = iframe->stack->data.p;
+		*static_cast<gpointer *> (data) = iframe->stack->data.p;
 	else
 		stackval_to_data (sig->params [index - sig->hasthis], STACK_ADD_BYTES (iframe->stack, get_arg_offset (imethod, sig, index)), data, sig->pinvoke);
 }
@@ -36,14 +36,14 @@ interp_frame_arg_to_data (MonoInterpFrameHandle frame, MonoMethodSignature *sig,
 void
 interp_data_to_frame_arg (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index, gconstpointer data)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 	InterpMethod *imethod = iframe->imethod;
 
 	// Get result from pinvoke call, put it directly on top of execution stack in the caller frame
 	if (index == -1)
 		stackval_from_data (sig->ret, iframe->stack, data, TRUE);
 	else if (sig->hasthis && index == 0)
-		iframe->stack->data.p = *(gpointer*)data;
+		iframe->stack->data.p = *static_cast<gpointer const *> (data);
 	else
 		stackval_from_data (sig->params [index - sig->hasthis], STACK_ADD_BYTES (iframe->stack, get_arg_offset (imethod, sig, index)), data, sig->pinvoke);
 }
@@ -51,7 +51,7 @@ interp_data_to_frame_arg (MonoInterpFrameHandle frame, MonoMethodSignature *sig,
 gpointer
 interp_frame_arg_to_storage (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 	InterpMethod *imethod = iframe->imethod;
 
 	if (index == -1)
@@ -143,7 +143,7 @@ interp_il_offset_from_native_offset (MonoDomain *domain, MonoMethod *method, int
 int
 interp_frame_il_offset (MonoInterpFrameHandle frame, int native_offset)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 
 	return imethod_il_offset (iframe ? iframe->imethod : NULL, native_offset);
 }
@@ -163,7 +163,7 @@ interp_find_jit_info (MonoDomain *domain, MonoMethod *method)
 void
 interp_set_breakpoint (MonoJitInfo *jinfo, gpointer ip)
 {
-	guint16 *code = (guint16*)ip;
+	guint16 *code = static_cast<guint16 *> (ip);
 	g_assert (*code == MINT_SDB_SEQ_POINT);
 	*code = MINT_SDB_BREAKPOINT;
 }
@@ -171,7 +171,7 @@ interp_set_breakpoint (MonoJitInfo *jinfo, gpointer ip)
 void
 interp_clear_breakpoint (MonoJitInfo *jinfo, gpointer ip)
 {
-	guint16 *code = (guint16*)ip;
+	guint16 *code = static_cast<guint16 *> (ip);
 	g_assert (*code == MINT_SDB_BREAKPOINT);
 	*code = MINT_SDB_SEQ_POINT;
 }
@@ -179,7 +179,7 @@ interp_clear_breakpoint (MonoJitInfo *jinfo, gpointer ip)
 MonoJitInfo*
 interp_frame_get_jit_info (MonoInterpFrameHandle frame)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 
 	g_assert (iframe->imethod);
 	return iframe->imethod->jinfo;
@@ -188,17 +188,17 @@ interp_frame_get_jit_info (MonoInterpFrameHandle frame)
 gpointer
 interp_frame_get_arg (MonoInterpFrameHandle frame, int pos)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 
 	g_assert (iframe->imethod);
 
-	return (char*)iframe->stack + get_arg_offset_fast (iframe->imethod, pos + iframe->imethod->hasthis);
+	return reinterpret_cast<char *> (iframe->stack) + get_arg_offset_fast (iframe->imethod, pos + iframe->imethod->hasthis);
 }
 
 gpointer
 interp_frame_get_local (MonoInterpFrameHandle frame, int pos)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 
 	g_assert (iframe->imethod);
 
@@ -208,7 +208,7 @@ interp_frame_get_local (MonoInterpFrameHandle frame, int pos)
 gpointer
 interp_frame_get_this (MonoInterpFrameHandle frame)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 
 	g_assert (iframe->imethod);
 	g_assert (iframe->imethod->hasthis);
@@ -218,7 +218,7 @@ interp_frame_get_this (MonoInterpFrameHandle frame)
 MonoInterpFrameHandle
 interp_frame_get_parent (MonoInterpFrameHandle frame)
 {
-	InterpFrame *iframe = (InterpFrame*)frame;
+	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 
 	return iframe->parent;
 }

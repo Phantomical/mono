@@ -28,7 +28,7 @@ lookup_imethod (MonoDomain *domain, MonoMethod *method)
 
 	info = domain_jit_info (domain);
 	mono_domain_jit_code_hash_lock (domain);
-	imethod = (InterpMethod*)mono_internal_hash_table_lookup (&info->interp_code_hash, method);
+	imethod = static_cast<InterpMethod *> (mono_internal_hash_table_lookup (&info->interp_code_hash, method));
 	mono_domain_jit_code_hash_unlock (domain);
 	return imethod;
 }
@@ -140,14 +140,14 @@ interp_entry_escaped (MonoDomain *domain, MonoMethod *method)
 	if (imethod == NULL)
 		return;
 
-	mono_atomic_cas_i32 ((gint32*)&imethod->code_type, IMETHOD_CODE_UNKNOWN,
+	mono_atomic_cas_i32 (reinterpret_cast<gint32 *> (&imethod->code_type), IMETHOD_CODE_UNKNOWN,
 	                     IMETHOD_CODE_INTERP);
 }
 
 static void
 invalidate_transform (gpointer imethod_)
 {
-	InterpMethod *imethod = (InterpMethod *) imethod_;
+	InterpMethod *imethod = static_cast<InterpMethod *> (imethod_);
 	imethod->transformed = FALSE;
 }
 
@@ -190,7 +190,7 @@ metadata_update_prepare_to_invalidate (MonoDomain *domain)
 		if (!info || !info->jit_data)
 			continue;
 
-		ThreadContext *context = (ThreadContext*)info->jit_data->interp_context;
+		ThreadContext *context = static_cast<ThreadContext *> (info->jit_data->interp_context);
 
 		/* If the thread was in the interpreter and hit a safepoint
 		 * opcode and suspended, backup the frames since the last lmf.
@@ -203,9 +203,9 @@ metadata_update_prepare_to_invalidate (MonoDomain *domain)
 		MonoLMF *lmf = info->jit_data->lmf;
 		while (lmf) {
 			if (((gsize) lmf->previous_lmf) & 2) {
-				MonoLMFExt *ext = (MonoLMFExt *) lmf;
+				MonoLMFExt *ext = reinterpret_cast<MonoLMFExt *> (lmf);
 				if (ext->kind == MONO_LMFEXT_INTERP_EXIT || ext->kind == MONO_LMFEXT_INTERP_EXIT_WITH_CTX) {
-					InterpFrame *frame = (InterpFrame *) ext->interp_exit_data;
+					InterpFrame *frame = static_cast<InterpFrame *> (ext->interp_exit_data);
 					metadata_update_backup_frames (domain, info, frame);
 				}
 			}
@@ -252,7 +252,7 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 
 	info = domain_jit_info (domain);
 	mono_domain_jit_code_hash_lock (domain);
-	imethod = (InterpMethod*)mono_internal_hash_table_lookup (&info->interp_code_hash, method);
+	imethod = static_cast<InterpMethod *> (mono_internal_hash_table_lookup (&info->interp_code_hash, method));
 	mono_domain_jit_code_hash_unlock (domain);
 	if (imethod)
 		return imethod;

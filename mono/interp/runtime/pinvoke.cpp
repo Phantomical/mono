@@ -337,7 +337,7 @@ ves_pinvoke_method (
 #else
 	// Only the vt address has been returned, we need to copy the entire content on interp stack
 	if (!context->has_resume_state && MONO_TYPE_ISSTRUCT (sig->ret))
-		stackval_from_data (sig->ret, frame.stack, (char*)frame.stack->data.p, sig->pinvoke);
+		stackval_from_data (sig->ret, frame.stack, static_cast<char *> (frame.stack->data.p), sig->pinvoke);
 
 	g_free (margs->iargs);
 	g_free (margs->fargs);

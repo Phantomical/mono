@@ -36,9 +36,9 @@ set_context (ThreadContext *context)
 void
 interp_free_context (gpointer ctx)
 {
-	ThreadContext *context = (ThreadContext*)ctx;
+	ThreadContext *context = static_cast<ThreadContext *> (ctx);
 
-	ThreadContext *current_context = (ThreadContext *) mono_native_tls_get_value (thread_context_id);
+	ThreadContext *current_context = static_cast<ThreadContext *> (mono_native_tls_get_value (thread_context_id));
 	/* at thread exit, we can be called from the JIT TLS key destructor with current_context == NULL */
 	if (current_context != NULL) {
 		/* check that the context we're freeing is the current one before overwriting TLS */
@@ -77,7 +77,7 @@ context_set_current_frame (ThreadContext *context, InterpFrame *frame)
 void
 interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboolean precise)
 {
-	MonoThreadInfo *info = (MonoThreadInfo*)thread_data;
+	MonoThreadInfo *info = static_cast<MonoThreadInfo *> (thread_data);
 
 	if (!mono_use_interpreter)
 		return;
@@ -92,16 +92,16 @@ interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboo
 	 * in sgen-mono.c already did a mono_memory_barrier_process_wide () so we can
 	 * process these data structures normally.
 	 */
-	MonoJitTlsData *jit_tls = (MonoJitTlsData *)info->tls [TLS_KEY_JIT_TLS];
+	MonoJitTlsData *jit_tls = static_cast<MonoJitTlsData *> (info->tls [TLS_KEY_JIT_TLS]);
 	if (!jit_tls)
 		return;
 
-	ThreadContext *context = (ThreadContext*)jit_tls->interp_context;
+	ThreadContext *context = static_cast<ThreadContext *> (jit_tls->interp_context);
 	if (!context || !context->stack_start)
 		return;
 
 	// FIXME: Scan the whole area with 1 call
-	for (gpointer *p = (gpointer*)context->stack_start; p < (gpointer*)context->stack_pointer; p++)
+	for (gpointer *p = reinterpret_cast<gpointer *> (context->stack_start); p < reinterpret_cast<gpointer *> (context->stack_pointer); p++)
 		func (p, gc_data);
 
 	/*
@@ -109,14 +109,14 @@ interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboo
 	 * stack, which is scanned conservatively already.
 	 */
 	if (context->frame_stack_start) {
-		for (gpointer *p = (gpointer*)context->frame_stack_start; p < (gpointer*)context->frame_stack_pointer; p++)
+		for (gpointer *p = reinterpret_cast<gpointer *> (context->frame_stack_start); p < reinterpret_cast<gpointer *> (context->frame_stack_pointer); p++)
 			func (p, gc_data);
 	}
 
 	FrameDataFragment *frag;
 	for (frag = context->data_stack.first; frag; frag = frag->next) {
 		// FIXME: Scan the whole area with 1 call
-		for (gpointer *p = (gpointer*)&frag->data; p < (gpointer*)frag->pos; ++p)
+		for (gpointer *p = reinterpret_cast<gpointer *> (&frag->data); p < reinterpret_cast<gpointer *> (frag->pos); ++p)
 			func (p, gc_data);
 		if (frag == context->data_stack.current)
 			break;
@@ -141,13 +141,13 @@ using namespace mono::interp;
 ThreadContext *
 mono_interp_get_context (void)
 {
-	ThreadContext *context = (ThreadContext *) mono_native_tls_get_value (thread_context_id);
+	ThreadContext *context = static_cast<ThreadContext *> (mono_native_tls_get_value (thread_context_id));
 	if (context == NULL) {
 		context = g_new0 (ThreadContext, 1);
-		context->stack_start = (guchar*)mono_valloc (0, INTERP_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
+		context->stack_start = static_cast<guchar *> (mono_valloc (0, INTERP_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK));
 		context->stack_pointer = context->stack_start;
 
-		context->frame_stack_start = (guchar*)mono_valloc (0, INTERP_FRAME_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK);
+		context->frame_stack_start = static_cast<guchar *> (mono_valloc (0, INTERP_FRAME_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK));
 		context->frame_stack_pointer = context->frame_stack_start;
 
 		frame_data_allocator_init (&context->data_stack, 8192);

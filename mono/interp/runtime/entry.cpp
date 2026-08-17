@@ -163,10 +163,10 @@ static void interp_entry_instance_ret_8 (gpointer this_arg, gpointer res, ARGLIS
 
 #define INTERP_ENTRY_FUNCLIST(type) (gpointer)interp_entry_ ## type ## _0, (gpointer)interp_entry_ ## type ## _1, (gpointer)interp_entry_ ## type ## _2, (gpointer)interp_entry_ ## type ## _3, (gpointer)interp_entry_ ## type ## _4, (gpointer)interp_entry_ ## type ## _5, (gpointer)interp_entry_ ## type ## _6, (gpointer)interp_entry_ ## type ## _7, (gpointer)interp_entry_ ## type ## _8
 
-static gpointer entry_funcs_static [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (static) };
-static gpointer entry_funcs_static_ret [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (static_ret) };
-static gpointer entry_funcs_instance [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (instance) };
-static gpointer entry_funcs_instance_ret [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (instance_ret) };
+static gpointer const entry_funcs_static [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (static) };
+static gpointer const entry_funcs_static_ret [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (static_ret) };
+static gpointer const entry_funcs_instance [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (instance) };
+static gpointer const entry_funcs_instance_ret [MAX_INTERP_ENTRY_ARGS + 1] = { INTERP_ENTRY_FUNCLIST (instance_ret) };
 
 /*
  * interp_init_delegate:
@@ -181,7 +181,7 @@ interp_init_delegate (MonoDelegate *del, MonoError *error)
 
 	if (del->interp_method) {
 		/* A remoting invoke, already resolved by mini_init_delegate (). */
-		del->method = ((InterpMethod *)del->interp_method)->method;
+		del->method = (static_cast<InterpMethod *> (del->interp_method))->method;
 	} else if (del->method) {
 		del->interp_method = mono_interp_get_imethod (domain, del->method, error);
 		return_if_nok (error);
@@ -194,20 +194,20 @@ interp_init_delegate (MonoDelegate *del, MonoError *error)
 		del->interp_method = imethod_for_entry (domain, del->method_ptr, error);
 		return_if_nok (error);
 		g_assert (del->interp_method);
-		del->method = ((InterpMethod *)del->interp_method)->method;
+		del->method = (static_cast<InterpMethod *> (del->interp_method))->method;
 	} else {
 		g_assert_not_reached ();
 	}
 
-	method = ((InterpMethod*)del->interp_method)->method;
+	method = (static_cast<InterpMethod *> (del->interp_method))->method;
 	if (del->target &&
 			method &&
 			method->flags & METHOD_ATTRIBUTE_VIRTUAL &&
 			method->flags & METHOD_ATTRIBUTE_ABSTRACT &&
 			mono_class_is_abstract (method->klass))
-		del->interp_method = get_virtual_method ((InterpMethod*)del->interp_method, del->target->vtable);
+		del->interp_method = get_virtual_method (static_cast<InterpMethod *> (del->interp_method), del->target->vtable);
 
-	method = ((InterpMethod*)del->interp_method)->method;
+	method = (static_cast<InterpMethod *> (del->interp_method))->method;
 	if (method && m_class_get_parent (method->klass) == mono_defaults.multicastdelegate_class) {
 		const char *name = method->name;
 		if (*name == 'I' && (strcmp (name, "Invoke") == 0)) {
@@ -223,9 +223,9 @@ interp_init_delegate (MonoDelegate *del, MonoError *error)
 		}
 	}
 
-	if (!((InterpMethod *) del->interp_method)->transformed && method_is_dynamic (method)) {
+	if (!(static_cast<InterpMethod *> (del->interp_method))->transformed && method_is_dynamic (method)) {
 		/* Return any errors from method compilation */
-		mono_interp_transform_method ((InterpMethod *) del->interp_method, mono_interp_get_context (), error);
+		mono_interp_transform_method (static_cast<InterpMethod *> (del->interp_method), mono_interp_get_context (), error);
 		return_if_nok (error);
 	}
 }
@@ -320,10 +320,10 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 
 	if (unbox) {
 		if (imethod->llvmonly_unbox_entry)
-			return (MonoFtnDesc*)imethod->llvmonly_unbox_entry;
+			return static_cast<MonoFtnDesc *> (imethod->llvmonly_unbox_entry);
 	} else {
 		if (imethod->jit_entry)
-			return (MonoFtnDesc*)imethod->jit_entry;
+			return static_cast<MonoFtnDesc *> (imethod->jit_entry);
 	}
 
 	sig = mono_method_signature_internal (method);
@@ -378,7 +378,7 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 	else
 		imethod->jit_entry = addr;
 
-	return (MonoFtnDesc*)addr;
+	return static_cast<MonoFtnDesc *> (addr);
 }
 
 /*
