@@ -924,6 +924,13 @@ mono_push_lmf (MonoLMFExt *ext)
 void
 mono_pop_lmf (MonoLMF *lmf)
 {
+	/* pthread_exit () unwinds the stack, and mono_thread_exit () detaches the
+	 * thread before it calls that, so a cleanup in a frame the unwinder passes
+	 * runs with no jit_tls left to pop into. There is no LMF stack any more,
+	 * so there is nothing to do. */
+	if (!mono_get_lmf_addr ())
+		return;
+
 	mono_set_lmf ((MonoLMF *)(((gssize)lmf->previous_lmf) & ~3));
 }
 
@@ -1124,13 +1131,17 @@ mini_thread_cleanup (MonoNativeThreadId tid)
 		jit_tls = info->jit_data;
 		info->jit_data = NULL;
 
-		mono_set_jit_tls (NULL);
-
-		/* If we attach a thread but never call into managed land, we might never get an lmf.*/
-		if (mono_get_lmf ()) {
+		/* The LMF address points into jit_tls, which free_jit_tls_data ()
+		 * releases below, so clear it while it is still there to clear. Test
+		 * the address, not the LMF: a thread that attached and never called
+		 * into managed land has neither, and mono_get_lmf () reads through the
+		 * jit_tls this used to drop first, so it answered NULL either way. */
+		if (mono_get_lmf_addr ()) {
 			mono_set_lmf (NULL);
 			mono_set_lmf_addr (NULL);
 		}
+
+		mono_set_jit_tls (NULL);
 	} else {
 		info = mono_thread_info_lookup (tid);
 		if (info) {
