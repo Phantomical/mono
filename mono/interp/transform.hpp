@@ -5,7 +5,9 @@
 #include "interp-arena.hpp"
 #include "interp-internals.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <unordered_map>
 #include <vector>
 
@@ -103,6 +105,50 @@ struct LocalValue {
 	int def_index;
 };
 
+/// A range over an intrusive list, linked through the `Next` member.
+///
+/// The iterator reads that member when it advances, so a walk may retire the
+/// node it is on - an instruction turned into a MINT_NOP stays linked - but
+/// may not unlink or relink one.
+template <class T, T *T::*Next>
+class IntrusiveList {
+public:
+	class iterator {
+	public:
+		using iterator_category = std::forward_iterator_tag;
+		using value_type = T *;
+		using difference_type = std::ptrdiff_t;
+		using pointer = T **;
+		using reference = T *&;
+
+		iterator () = default;
+		explicit iterator (T *node) : node_ (node) {}
+
+		T *operator* () const { return node_; }
+
+		iterator &
+		operator++ ()
+		{
+			node_ = node_->*Next;
+			return *this;
+		}
+
+		bool operator== (const iterator &other) const { return node_ == other.node_; }
+		bool operator!= (const iterator &other) const { return node_ != other.node_; }
+
+	private:
+		T *node_ = nullptr;
+	};
+
+	explicit IntrusiveList (T *head) : head_ (head) {}
+
+	iterator begin () const { return iterator (head_); }
+	iterator end () const { return iterator (nullptr); }
+
+private:
+	T *head_;
+};
+
 struct InterpInst {
 	guint16 opcode;
 	InterpInst *next, *prev;
@@ -160,7 +206,32 @@ struct InterpBasicBlock {
 	// This block has special semantics and it shouldn't be optimized away
 	bool eh_block : 1;
 	bool dead : 1;
+
+	/// The instructions in this block, in order.
+	IntrusiveList<InterpInst, &InterpInst::next>::iterator begin () const
+	{
+		return IntrusiveList<InterpInst, &InterpInst::next>::iterator (first_ins);
+	}
+
+	IntrusiveList<InterpInst, &InterpInst::next>::iterator end () const
+	{
+		return IntrusiveList<InterpInst, &InterpInst::next>::iterator (nullptr);
+	}
 };
+
+/// The basic blocks from bb onwards, in IL order.
+inline IntrusiveList<InterpBasicBlock, &InterpBasicBlock::next_bb>
+blocks_from (InterpBasicBlock *bb)
+{
+	return IntrusiveList<InterpBasicBlock, &InterpBasicBlock::next_bb> (bb);
+}
+
+/// The instructions from ins onwards, to the end of its block.
+inline IntrusiveList<InterpInst, &InterpInst::next>
+instructions_from (InterpInst *ins)
+{
+	return IntrusiveList<InterpInst, &InterpInst::next> (ins);
+}
 
 enum RelocType {
 	RELOC_SHORT_BRANCH,

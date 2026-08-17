@@ -1500,7 +1500,7 @@ static G_GNUC_UNUSED void
 dump_interp_bb (InterpBasicBlock *bb)
 {
 	g_print ("BB%d:\n", bb->index);
-	for (InterpInst *ins = bb->first_ins; ins != NULL; ins = ins->next)
+	for (InterpInst *ins : *bb)
 		dump_interp_inst (ins);
 }
 
@@ -7639,7 +7639,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 	}
 
 	if (sym_seq_points) {
-		for (InterpBasicBlock *bb = td->entry_bb->next_bb; bb != NULL; bb = bb->next_bb) {
+		for (InterpBasicBlock *bb : blocks_from (td->entry_bb->next_bb)) {
 			if (bb->first_ins && bb->in_count > 1 && bb->first_ins->opcode == MINT_SDB_SEQ_POINT)
 				interp_insert_ins_bb (td, bb, NULL, MINT_SDB_INTR_LOC);
 		}
@@ -7851,28 +7851,22 @@ generate_compacted_code (TransformData *td)
 {
 	guint16 *ip;
 	int size = 0;
-	InterpBasicBlock *bb;
 
 	// Iterate once for preliminary computations
-	for (bb = td->entry_bb; bb != NULL; bb = bb->next_bb) {
-		InterpInst *ins = bb->first_ins;
-		while (ins) {
+	for (InterpBasicBlock *bb : blocks_from (td->entry_bb)) {
+		for (InterpInst *ins : *bb) {
 			size += get_inst_length (ins);
 			alloc_ins_locals (td, ins);
-			ins = ins->next;
 		}
 	}
 
 	// Generate the compacted stream of instructions
 	td->new_code = ip = (guint16*)mono_mem_manager_alloc0 (td->mem_manager, size * sizeof (guint16));
 
-	for (bb = td->entry_bb; bb != NULL; bb = bb->next_bb) {
-		InterpInst *ins = bb->first_ins;
+	for (InterpBasicBlock *bb : blocks_from (td->entry_bb)) {
 		bb->native_offset = ip - td->new_code;
-		while (ins) {
+		for (InterpInst *ins : *bb)
 			ip = emit_compacted_instruction (td, ip, bb, ins);
-			ins = ins->next;
-		}
 	}
 	td->new_code_end = ip;
 	td->in_offsets [td->header->code_size] = td->new_code_end - td->new_code;
@@ -7935,8 +7929,8 @@ interp_local_deadce (TransformData *td, int *local_ref_count)
 		return FALSE;
 
 	// Kill instructions that don't use stack and are storing into dead locals
-	for (InterpBasicBlock *bb = td->entry_bb; bb != NULL; bb = bb->next_bb) {
-		for (InterpInst *ins = bb->first_ins; ins != NULL; ins = ins->next) {
+	for (InterpBasicBlock *bb : blocks_from (td->entry_bb)) {
+		for (InterpInst *ins : *bb) {
 			if (MINT_IS_MOV (ins->opcode) ||
 					MINT_IS_LDC_I4 (ins->opcode) ||
 					ins->opcode == MINT_LDC_I8 ||
@@ -8104,7 +8098,7 @@ interp_fold_unop (TransformData *td, LocalValue *local_defs, int *local_ref_coun
 			ins->opcode = MINT_BR_S; \
 			if (cbb->next_bb != ins->info.target_bb) \
 				interp_unlink_bblocks (cbb, cbb->next_bb); \
-			for (InterpInst *it = ins->next; it != NULL; it = it->next) \
+			for (InterpInst *it : instructions_from (ins->next)) \
 				interp_clear_ins (it); \
 		} else { \
 			interp_clear_ins (ins); \
@@ -8285,7 +8279,7 @@ interp_fold_binop (TransformData *td, LocalValue *local_defs, int *local_ref_cou
 			ins->opcode = MINT_BR_S; \
 			if (cbb->next_bb != ins->info.target_bb) \
 				interp_unlink_bblocks (cbb, cbb->next_bb); \
-			for (InterpInst *it = ins->next; it != NULL; it = it->next) \
+			for (InterpInst *it : instructions_from (ins->next)) \
 				interp_clear_ins (it); \
 		} else { \
 			interp_clear_ins (ins); \
@@ -8596,12 +8590,10 @@ static void
 interp_fix_localloc_ret (TransformData *td)
 {
 	g_assert (td->has_localloc);
-	for (InterpBasicBlock *bb = td->entry_bb; bb != NULL; bb = bb->next_bb) {
-		InterpInst *ins = bb->first_ins;
-		while (ins) {   
+	for (InterpBasicBlock *bb : blocks_from (td->entry_bb)) {
+		for (InterpInst *ins : *bb) {
 			if (ins->opcode >= MINT_RET && ins->opcode <= MINT_RET_VT)
 				ins->opcode += MINT_RET_LOCALLOC - MINT_RET;
-			ins = ins->next;
 		}
 	}
 }
@@ -8904,8 +8896,8 @@ mono_interp_print_td_code (TransformData *td)
 	g_print ("IR for \"%s\"\n", name);
 	g_free (name);
 
-	for (InterpBasicBlock *bb = td->entry_bb; bb != NULL; bb = bb->next_bb)
-		for (InterpInst *ins = bb->first_ins; ins != NULL; ins = ins->next)
+	for (InterpBasicBlock *bb : blocks_from (td->entry_bb))
+		for (InterpInst *ins : *bb)
 			dump_interp_inst (ins);
 }
 
