@@ -103,16 +103,14 @@ MONO_INTERP_OP_IMPL (MINT_PROF_ENTER)
 	    || ((flag & PROFILING_FLAG) && MONO_PROFILER_ENABLED (method_enter)
 	        && (frame->imethod->prof_flags
 	            & MONO_PROFILER_CALL_INSTRUMENTATION_ENTER_CONTEXT))) {
-		MonoProfilerCallContext *prof_ctx = g_new0 (MonoProfilerCallContext, 1);
-		prof_ctx->interp_frame = frame;
-		prof_ctx->method = frame->imethod->method;
+		MonoProfilerCallContext prof_ctx = {};
+		prof_ctx.interp_frame = frame;
+		prof_ctx.method = frame->imethod->method;
 
 		if (flag & TRACING_FLAG)
-			mono_trace_enter_method (frame->imethod->method, frame->imethod->jinfo, prof_ctx);
+			mono_trace_enter_method (frame->imethod->method, frame->imethod->jinfo, &prof_ctx);
 		if (flag & PROFILING_FLAG)
-			MONO_PROFILER_RAISE (method_enter, (frame->imethod->method, prof_ctx));
-
-		g_free (prof_ctx);
+			MONO_PROFILER_RAISE (method_enter, (frame->imethod->method, &prof_ctx));
 	} else if ((flag & PROFILING_FLAG) && MONO_PROFILER_ENABLED (method_enter)) {
 		MONO_PROFILER_RAISE (method_enter, (frame->imethod->method, NULL));
 	}
@@ -139,18 +137,16 @@ MONO_INTERP_OP_IMPL (MINT_PROF_EXIT)
 	    || ((flag & PROFILING_FLAG) && MONO_PROFILER_ENABLED (method_leave)
 	        && (frame->imethod->prof_flags
 	            & MONO_PROFILER_CALL_INSTRUMENTATION_LEAVE_CONTEXT))) {
-		MonoProfilerCallContext *prof_ctx = g_new0 (MonoProfilerCallContext, 1);
-		prof_ctx->interp_frame = frame;
-		prof_ctx->method = frame->imethod->method;
+		MonoProfilerCallContext prof_ctx = {};
+		prof_ctx.interp_frame = frame;
+		prof_ctx.method = frame->imethod->method;
 		if (i32 != -1)
-			prof_ctx->return_value = frame->stack;
+			prof_ctx.return_value = frame->stack;
 
 		if (flag & TRACING_FLAG)
-			mono_trace_leave_method (frame->imethod->method, frame->imethod->jinfo, prof_ctx);
+			mono_trace_leave_method (frame->imethod->method, frame->imethod->jinfo, &prof_ctx);
 		if (flag & PROFILING_FLAG)
-			MONO_PROFILER_RAISE (method_leave, (frame->imethod->method, prof_ctx));
-
-		g_free (prof_ctx);
+			MONO_PROFILER_RAISE (method_leave, (frame->imethod->method, &prof_ctx));
 	} else if ((flag & PROFILING_FLAG) && MONO_PROFILER_ENABLED (method_enter)) {
 		MONO_PROFILER_RAISE (method_leave, (frame->imethod->method, NULL));
 	}
