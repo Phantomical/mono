@@ -339,7 +339,7 @@ oop_jit_info_table_find(
     // read the entire chunk
     read_memory(&chunk, read_pointer(chunkListPtr + chunk_pos), sizeof(MonoJitInfoTableChunk));
 
-    pos = oop_jit_info_table_chunk_index((const MonoJitInfo**)chunk.data, chunk.num_elements, addr);
+    pos = oop_jit_info_table_chunk_index((const MonoJitInfo**)chunk.data, chunk.num_elements, (const gint8*)addr);
     if (pos > chunk.num_elements)
         return NULL;
 

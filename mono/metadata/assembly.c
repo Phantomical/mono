@@ -520,7 +520,7 @@ mono_set_assemblies_path_null_separated(const char* path)
     char **dest;
 
     int numPaths = 0;
-    char* path_count_ptr = path;
+    const char* path_count_ptr = path;
     while (*path_count_ptr)
     {
         path_count_ptr += strlen(path_count_ptr) + 1;
@@ -531,7 +531,7 @@ mono_set_assemblies_path_null_separated(const char* path)
     if (assemblies_path)
         g_strfreev(assemblies_path);
     assemblies_path = dest;
-    char* current_path = path;
+    const char* current_path = path;
     while (*current_path)
     {
         *dest++ = mono_path_canonicalize(current_path);
@@ -4874,17 +4874,16 @@ mono_assembly_load_corlib (const MonoRuntimeInfo *runtime, MonoImageOpenStatus *
 	}
 
 	/* Slightly abnormal case: Unity needs to load mscorlib out of a platform specific dir*/
-	char* fVersion = runtime->framework_version;
-#if defined(HOST_WIN32) || defined(HOST_DARWIN) || defined(__linux__)
-	if (strcmp("4.5", runtime->framework_version) == 0)
+	const char* fVersion = runtime->framework_version;
+	if (strcmp("4.5", runtime->framework_version) == 0) {
 #if defined(HOST_WIN32)
-	fVersion = "net_4_x-win32";
+		fVersion = "net_4_x-win32";
 #elif defined(HOST_DARWIN)
-	fVersion = "net_4_x-macos";
+		fVersion = "net_4_x-macos";
 #elif defined(__linux__)
-	fVersion = "net_4_x-linux";
+		fVersion = "net_4_x-linux";
 #endif
-#endif
+	}
 
 
 	/* Normal case: Load corlib from mono/<version> */

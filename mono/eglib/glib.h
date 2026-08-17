@@ -823,7 +823,7 @@ typedef void (*GPrintFunc) (const gchar *string);
 typedef void (*GAbortFunc) (void);
 
 void       g_assertion_disable_global   (GAbortFunc func);
-void       g_assert_abort               (void);
+void       g_assert_abort               (void) G_GNUC_NORETURN;
 void       g_log_default_handler     (const gchar *log_domain, GLogLevelFlags log_level, const gchar *message, gpointer unused_data);
 GLogFunc   g_log_set_default_handler (GLogFunc log_func, gpointer user_data);
 GPrintFunc g_set_print_handler       (GPrintFunc func);

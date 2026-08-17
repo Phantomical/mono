@@ -193,7 +193,7 @@ MonoBoolean
 ves_icall_System_IO_MonoIO_CreateDirectory (const gunichar2 *path, gint32 *error)
 {
 	gboolean ret;
-	const gunichar2 *path_remapped;
+	gunichar2 *path_remapped;
 	
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -214,7 +214,7 @@ MonoBoolean
 ves_icall_System_IO_MonoIO_RemoveDirectory (const gunichar2 *path, gint32 *error)
 {
 	gboolean ret;
-	const gunichar2 *path_remapped;
+	gunichar2 *path_remapped;
 
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -236,7 +236,7 @@ ves_icall_System_IO_MonoIO_FindFirstFile (const gunichar2 *path_with_pattern, Mo
 {
 	HANDLE hnd;
 	WIN32_FIND_DATA data;
-	const gunichar2 *path_with_pattern_remapped;
+	gunichar2 *path_with_pattern_remapped;
 
 	if (path_with_pattern_remapped = mono_unity_remap_path_utf16 (path_with_pattern))
 		path_with_pattern = path_with_pattern_remapped;
@@ -336,7 +336,7 @@ ves_icall_System_IO_MonoIO_SetCurrentDirectory (const gunichar2 *path,
 						gint32 *error)
 {
 	gboolean ret;
-	const gunichar2 *path_remapped;
+	gunichar2 *path_remapped;
 
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -357,8 +357,8 @@ MonoBoolean
 ves_icall_System_IO_MonoIO_MoveFile (const gunichar2 *path, const gunichar2 *dest, gint32 *error)
 {
 	gboolean ret;
-	const gunichar2 *path_remapped;
-	const gunichar2 *dest_remapped;
+	gunichar2 *path_remapped;
+	gunichar2 *dest_remapped;
 
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -382,9 +382,9 @@ ves_icall_System_IO_MonoIO_ReplaceFile (const gunichar2 *source_file_name, const
 	gboolean ret;
 	guint32 replace_flags = REPLACEFILE_WRITE_THROUGH;
 
-	const gunichar2 *source_file_name_remapped;
-	const gunichar2 *destination_file_name_remapped;
-	const gunichar2 *destination_backup_file_name_remapped;
+	gunichar2 *source_file_name_remapped;
+	gunichar2 *destination_file_name_remapped;
+	gunichar2 *destination_backup_file_name_remapped;
 	if (source_file_name_remapped = mono_unity_remap_path_utf16 (source_file_name))
 		source_file_name = source_file_name_remapped;
 	if (destination_file_name_remapped = mono_unity_remap_path_utf16 (destination_file_name))
@@ -412,8 +412,8 @@ ves_icall_System_IO_MonoIO_CopyFile (const gunichar2 *path, const gunichar2 *des
 				     MonoBoolean overwrite, gint32 *error)
 {
 	gboolean ret;
-	const gunichar2 *path_remapped;
-	const gunichar2 *dest_remapped;
+	gunichar2 *path_remapped;
+	gunichar2 *dest_remapped;
 
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -433,7 +433,7 @@ MonoBoolean
 ves_icall_System_IO_MonoIO_DeleteFile (const gunichar2 *path, gint32 *error)
 {
 	gboolean ret;
-	const gunichar2 *path_remapped;
+	gunichar2 *path_remapped;
 
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -454,7 +454,7 @@ gint32
 ves_icall_System_IO_MonoIO_GetFileAttributes (const gunichar2 *path, gint32 *error)
 {
 	gint32 ret;
-	const gunichar2 *path_remapped;
+	gunichar2 *path_remapped;
 
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -516,7 +516,7 @@ MonoBoolean
 ves_icall_System_IO_MonoIO_GetFileStat (const gunichar2 *path, MonoIOStat *stat, gint32 *error)
 {
 	gboolean result;
-	const gunichar2 *path_remapped;
+	gunichar2 *path_remapped;
 
 	if (path_remapped = mono_unity_remap_path_utf16 (path))
 		path = path_remapped;
@@ -542,7 +542,7 @@ ves_icall_System_IO_MonoIO_Open (const gunichar2 *filename, gint32 mode,
 {
 	HANDLE ret;
 	int attributes, attrs;
-	const gunichar2 *filename_remapped;
+	gunichar2 *filename_remapped;
 
 	if (filename_remapped = mono_unity_remap_path_utf16 (filename))
 		filename = filename_remapped;

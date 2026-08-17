@@ -121,7 +121,9 @@ read_entry (EntryStream *stream, void *data, unsigned char *windex)
 
 #include <mono/sgen/sgen-protocol-def.h>
 
-	default: assert (0);
+	// assert() disappears under NDEBUG.  `size` is then read uninitialized
+	// for an entry type that this build of the tool does not know.
+	default: g_assert_not_reached ();
 	}
 
 	if (size) {

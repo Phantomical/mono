@@ -1340,7 +1340,7 @@ ves_icall_System_Runtime_CompilerServices_RuntimeHelpers_SufficientExecutionStac
     if (!thread->stack_start_limit || !thread->stack_end)
         return TRUE;
 
-    void *limit = ((uint8_t *)thread->stack_start_limit) + ALIGN_TO ((thread->stack_end - thread->stack_start_limit) / 2, ((gssize)mono_pagesize ()));
+    void *limit = ((uint8_t *)thread->stack_start_limit) + ALIGN_TO ((((uint8_t *)thread->stack_end - (uint8_t *)thread->stack_start_limit)) / 2, ((gssize)mono_pagesize ()));
 
     if (current < limit)
         return FALSE;

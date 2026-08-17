@@ -296,7 +296,7 @@ MONO_API void mono_validate_object_pointer (MonoObject *object)
 	if (object) {
 		MonoVTable *vtable = NULL;
 		MonoClass *klass = NULL;
-		char *name = NULL;
+		const char *name = NULL;
 
 		vtable = object->vtable;
 		klass = vtable->klass;
@@ -318,7 +318,7 @@ static gboolean mono_add_and_validate_object(MonoObject *object, LivenessState *
 	if (object) {
 		MonoVTable *vtable = NULL;
 		MonoClass *klass = NULL;
-		char *name = NULL;
+		const char *name = NULL;
 		vtable = GET_VTABLE(object);
 		klass = vtable->klass;
 		name = klass->name;

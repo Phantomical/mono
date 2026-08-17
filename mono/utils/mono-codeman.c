@@ -97,8 +97,8 @@ struct _MonoCodeManager {
 	CodeChunk *current;
 	CodeChunk *full;
 	CodeChunk *last;
-	int dynamic : 1;
-	int read_only : 1;
+	guint dynamic : 1;
+	guint read_only : 1;
 };
 
 #define ALIGN_INT(val,alignment) (((val) + (alignment - 1)) & ~(alignment - 1))

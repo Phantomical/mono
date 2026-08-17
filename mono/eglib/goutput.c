@@ -56,10 +56,13 @@ g_assertion_disable_global (GAbortFunc abort_func)
 void
 g_assert_abort (void)
 {
+	// mini-posix.c installs a function that writes native crash info and
+	// then returns.  The abort must follow it, because g_assertion_message ()
+	// is noreturn and the compiler removes the code after a call to it.
 	if (internal_abort_func)
 		internal_abort_func ();
-	else
-		abort ();
+
+	abort ();
 }
 
 gint

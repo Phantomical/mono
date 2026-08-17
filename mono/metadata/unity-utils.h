@@ -242,10 +242,12 @@ MONO_API MonoArray* mono_unity_custom_attrs_construct (MonoCustomAttrInfo *cinfo
 typedef size_t (*RemapPathFunction)(const char* path, char* buffer, size_t buffer_len);
 MONO_API void mono_unity_register_path_remapper (RemapPathFunction func);
 
-const char*
+/// Both return a buffer that the caller must g_free ().  The result is NULL
+/// when no remapper is installed, or when the remapper declines the path.
+char*
 mono_unity_remap_path (const char* path);
 
-const gunichar2*
+gunichar2*
 mono_unity_remap_path_utf16 (const gunichar2* path);
 
 MonoBoolean

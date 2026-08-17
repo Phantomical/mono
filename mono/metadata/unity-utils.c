@@ -455,12 +455,15 @@ const char* mono_unity_method_get_name(const MonoMethod *method)
 
 
 //must match the hash in il2cpp code generation
-static guint32 hash_string_djb2(guchar *str)
+static guint32 hash_string_djb2(const char *str)
 {
+	// The bytes hash as unsigned.  Plain char is signed here, so a byte
+	// larger than 0x7f sign-extends into the accumulator.
+	const guchar *p = (const guchar *)str;
 	guint32 hash = 5381;
 	int c;
 
-	while (c = *str++)
+	while ((c = *p++))
 		hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
 
 	return hash;
@@ -1401,7 +1404,7 @@ MonoBoolean
 ves_icall_System_IO_MonoIO_RemapPath  (MonoString *path, MonoString **new_path)
 {
 	MonoError error;
-	const gunichar2* path_remapped;
+	gunichar2* path_remapped;
 
 	if (!g_RemapPathFunc)
 		return 0;
@@ -1420,7 +1423,7 @@ ves_icall_System_IO_MonoIO_RemapPath  (MonoString *path, MonoString **new_path)
 	return TRUE;
 }
 
-const char*
+char*
 mono_unity_remap_path (const char* path)
 {
 	char* path_remap = NULL;
@@ -1429,10 +1432,10 @@ mono_unity_remap_path (const char* path)
 	return path_remap;
 }
 
-const gunichar2*
+gunichar2*
 mono_unity_remap_path_utf16 (const gunichar2* path)
 {
-	const gunichar2* path_remap = NULL;
+	gunichar2* path_remap = NULL;
 	char * utf8_path;
 	char * buf;
 	char * path_end;
@@ -1625,6 +1628,16 @@ flush_name_buffer(char *buffer, GFunc callback, void *userData)
 	return buffer;
 }
 
+// mono_unity_type_get_name_full_chunked () takes a GFunc, so a chunk reaches
+// the caller as an untyped gpointer.  Most chunks are read-only text: a class
+// name space, a generic parameter name, a literal separator.  This function
+// removes the const once, instead of a cast at each report site.
+static inline void
+report_name_chunk(GFunc nameChunkReport, const char *chunk, void *userData)
+{
+	nameChunkReport((gpointer)chunk, userData);
+}
+
 static void
 mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_recursed, MonoTypeNameFormat format, GFunc nameChunkReport, void *userData)
 {
@@ -1665,13 +1678,13 @@ mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_
 			*bufferIter++ = '&';
 		}
 
-		nameChunkReport(bufferPtr, userData);
+		report_name_chunk(nameChunkReport, bufferPtr, userData);
 
 		if (format == MONO_TYPE_NAME_FORMAT_ASSEMBLY_QUALIFIED) {
 			MonoClass *klass = mono_class_from_mono_type(type);
 			MonoImage *klassImg = mono_class_get_image(klass);
-			char *imgName = mono_image_get_name(klassImg);
-			nameChunkReport(imgName, userData);
+			const char *imgName = mono_image_get_name(klassImg);
+			report_name_chunk(nameChunkReport, imgName, userData);
 		}
 		break;
 	}
@@ -1688,13 +1701,13 @@ mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_
 		if (type->byref)
 			*bufferIter++ = '&';
 
-		nameChunkReport(bufferPtr, userData);
+		report_name_chunk(nameChunkReport, bufferPtr, userData);
 
 		if (format == MONO_TYPE_NAME_FORMAT_ASSEMBLY_QUALIFIED) {
 			MonoClass *klass = mono_class_from_mono_type(type);
 			MonoImage *klassImg = mono_class_get_image(klass);
-			char *imgName = mono_image_get_name(klassImg);
-			nameChunkReport(imgName, userData);
+			const char *imgName = mono_image_get_name(klassImg);
+			report_name_chunk(nameChunkReport, imgName, userData);
 		}
 		break;
 	}
@@ -1709,13 +1722,13 @@ mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_
 		if (type->byref)
 			*bufferIter++ = '&';
 
-		nameChunkReport(bufferPtr, userData);
+		report_name_chunk(nameChunkReport, bufferPtr, userData);
 
 		if (format == MONO_TYPE_NAME_FORMAT_ASSEMBLY_QUALIFIED) {
 			MonoClass *klass = mono_class_from_mono_type(type);
 			MonoImage *klassImg = mono_class_get_image(klass);
-			char *imgName = mono_image_get_name(klassImg);
-			nameChunkReport(imgName, userData);
+			const char *imgName = mono_image_get_name(klassImg);
+			report_name_chunk(nameChunkReport, imgName, userData);
 		}
 		break;
 	}
@@ -1733,12 +1746,12 @@ mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_
 			sprintf(bufferIter, "%d", type->data.generic_param->num);
 		}
 		else
-			nameChunkReport(mono_generic_param_name(type->data.generic_param), userData);
+			report_name_chunk(nameChunkReport, mono_generic_param_name(type->data.generic_param), userData);
 
 		if (type->byref)
 			*bufferIter++ = '&';
 
-		nameChunkReport(bufferPtr, userData);
+		report_name_chunk(nameChunkReport, bufferPtr, userData);
 		break;
 	default:
 		klass = mono_class_from_mono_type(type);
@@ -1751,7 +1764,7 @@ mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_
 		}
 		else if (*klass->name_space) {
 			if (format == MONO_TYPE_NAME_FORMAT_IL)
-				nameChunkReport(klass->name_space, userData);
+				report_name_chunk(nameChunkReport, klass->name_space, userData);
 			else
 				bufferIter = mono_identifier_escape_type_append(bufferIter, klass->name_space);
 
@@ -1832,8 +1845,8 @@ mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_
 
 				for (i = 0; i < mono_class_get_generic_container(klass)->type_argc; i++) {
 					if (i)
-						nameChunkReport(",", userData);
-					nameChunkReport(mono_generic_container_get_param_info(mono_class_get_generic_container(klass), i)->name, userData);
+						report_name_chunk(nameChunkReport, ",", userData);
+					report_name_chunk(nameChunkReport, mono_generic_container_get_param_info(mono_class_get_generic_container(klass), i)->name, userData);
 				}
 				if (format == MONO_TYPE_NAME_FORMAT_IL)
 					*bufferIter++ = '>';
@@ -1846,13 +1859,13 @@ mono_unity_type_get_name_foreach_name_chunk_recurse(MonoType *type, gboolean is_
 		}
 
 		if (bufferPtr != bufferIter)
-			nameChunkReport(bufferPtr, userData);
+			report_name_chunk(nameChunkReport, bufferPtr, userData);
 
 		if ((format == MONO_TYPE_NAME_FORMAT_ASSEMBLY_QUALIFIED) &&
 			(type->type != MONO_TYPE_VAR) && (type->type != MONO_TYPE_MVAR)) {
 			MonoImage *klassImg = mono_class_get_image(klass);
-			char *imgName = mono_image_get_name(klassImg);
-			nameChunkReport(imgName, userData);
+			const char *imgName = mono_image_get_name(klassImg);
+			report_name_chunk(nameChunkReport, imgName, userData);
 		}
 		break;
 	}
