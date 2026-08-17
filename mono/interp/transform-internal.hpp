@@ -211,6 +211,14 @@ gint32 interp_get_const_from_ldc_i4 (InterpInst *ins);
 /// Prints one instruction, for the transform's own tracing.
 void dump_interp_inst (InterpInst *ins);
 
+/// Prints a run of emitted bytecode.
+void dump_interp_code (const guint16 *start, const guint16 *end);
+
+/// The operands of one instruction, as a string the caller frees. `ins` may be
+/// null, which means the data belongs to an instruction already emitted.
+char *dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data,
+                            guint16 opcode);
+
 } // namespace mono::interp
 
 #endif /* __MONO_INTERP_TRANSFORM_INTERNAL_HPP__ */
