@@ -286,7 +286,7 @@ interp_new_ins (TransformData *td, guint16 opcode, int len)
 {
 	InterpInst *new_inst;
 	// Size of data region of instruction is length of instruction minus 1 (the opcode slot)
-	new_inst = (InterpInst*)mono_mempool_alloc0 (td->mempool, sizeof (InterpInst) + sizeof (guint16) * ((len > 0) ? (len - 1) : 0));
+	new_inst = td->arena.create_flexible<InterpInst> (sizeof (guint16) * ((len > 0) ? (len - 1) : 0));
 	new_inst->opcode = opcode;
 	new_inst->il_offset = td->current_il_offset;
 	return new_inst;
@@ -714,7 +714,7 @@ interp_link_bblocks (TransformData *td, InterpBasicBlock *from, InterpBasicBlock
 		}
 	}
 	if (!found) {
-		InterpBasicBlock **newa = (InterpBasicBlock**)mono_mempool_alloc (td->mempool, sizeof (InterpBasicBlock*) * (from->out_count + 1));
+		InterpBasicBlock **newa = td->arena.create_array<InterpBasicBlock *> (from->out_count + 1);
 		for (i = 0; i < from->out_count; ++i)
 			newa [i] = from->out_bb [i];
 		newa [i] = to;
@@ -730,7 +730,7 @@ interp_link_bblocks (TransformData *td, InterpBasicBlock *from, InterpBasicBlock
 		}
 	}
 	if (!found) {
-		InterpBasicBlock **newa = (InterpBasicBlock**)mono_mempool_alloc (td->mempool, sizeof (InterpBasicBlock*) * (to->in_count + 1));
+		InterpBasicBlock **newa = td->arena.create_array<InterpBasicBlock *> (to->in_count + 1);
 		for (i = 0; i < to->in_count; ++i)
 			newa [i] = to->in_bb [i];
 		newa [i] = from;
@@ -819,7 +819,7 @@ init_bb_stack_state (TransformData *td, InterpBasicBlock *bb)
 	bb->stack_height = td->sp - td->stack;
 	if (bb->stack_height > 0) {
 		int size = bb->stack_height * sizeof (td->stack [0]);
-		bb->stack_state = (StackInfo*)mono_mempool_alloc (td->mempool, size);
+		bb->stack_state = (StackInfo *) td->arena.alloc (size, alignof (StackInfo));
 		memcpy (bb->stack_state, td->stack, size);
 	}
 }
@@ -3068,7 +3068,7 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target
 
 	if (target_method && target_method->string_ctor) {
 		/* Create the real signature */
-		MonoMethodSignature *ctor_sig = mono_metadata_signature_dup_mempool (td->mempool, csignature);
+		MonoMethodSignature *ctor_sig = mono_metadata_signature_dup_mempool (td->arena.pool (), csignature);
 		ctor_sig->ret = m_class_get_byval_arg (mono_defaults.string_class);
 
 		csignature = ctor_sig;
@@ -3490,7 +3490,7 @@ get_bb (TransformData *td, unsigned char *ip, gboolean make_list)
 	InterpBasicBlock *bb = td->offset_to_bb [offset];
 
 	if (!bb) {
-		bb = (InterpBasicBlock*)mono_mempool_alloc0 (td->mempool, sizeof (InterpBasicBlock));
+		bb = td->arena.create<InterpBasicBlock> ();
 		bb->ip = ip;
 		bb->native_offset = -1;
 		bb->stack_height = -1;
@@ -3499,7 +3499,7 @@ get_bb (TransformData *td, unsigned char *ip, gboolean make_list)
 
                 /* Add the blocks in reverse order */
                 if (make_list)
-                        td->basic_blocks = g_list_prepend_mempool (td->mempool, td->basic_blocks, bb);
+                        td->basic_blocks = g_list_prepend_mempool (td->arena.pool (), td->basic_blocks, bb);
 	}
 
 	return bb;
@@ -3521,7 +3521,7 @@ get_basic_blocks (TransformData *td, MonoMethodHeader *header, gboolean make_lis
 	guint cli_addr;
 	const MonoOpcode *opcode;
 
-	td->offset_to_bb = (InterpBasicBlock**)mono_mempool_alloc0 (td->mempool, sizeof (InterpBasicBlock*) * (end - start + 1));
+	td->offset_to_bb = td->arena.create_array<InterpBasicBlock *> (end - start + 1);
 	get_bb (td, start, make_list);
 
 	for (i = 0; i < header->num_clauses; i++) {
@@ -3758,7 +3758,7 @@ recursively_make_pred_seq_points (TransformData *td, InterpBasicBlock *bb)
 	g_hash_table_destroy (seen);
 
 	if (predecessors->len != 0) {
-		bb->pred_seq_points = (SeqPoint**)mono_mempool_alloc0 (td->mempool, sizeof (SeqPoint *) * predecessors->len);
+		bb->pred_seq_points = td->arena.create_array<SeqPoint *> (predecessors->len);
 		bb->num_pred_seq_points = predecessors->len;
 
 		for (int newer = 0; newer < bb->num_pred_seq_points; newer++) {
@@ -3804,7 +3804,7 @@ save_seq_points (TransformData *td, MonoJitInfo *jinfo)
 		/* Store the seq point index here temporarily */
 		sp->next_offset = i;
 	}
-	next = (GSList**)mono_mempool_alloc0 (td->mempool, sizeof (GList*) * td->seq_points->len);
+	next = td->arena.create_array<GSList *> (td->seq_points->len);
 	for (bblist = td->basic_blocks; bblist; bblist = bblist->next) {
 		InterpBasicBlock *bb = (InterpBasicBlock*)bblist->data;
 
@@ -3819,7 +3819,7 @@ save_seq_points (TransformData *td, MonoJitInfo *jinfo)
 
 			if (last != NULL) {
 				/* Link with the previous seq point in the same bb */
-				next [last->next_offset] = g_slist_append_mempool (td->mempool, next [last->next_offset], GINT_TO_POINTER (sp->next_offset));
+				next [last->next_offset] = g_slist_append_mempool (td->arena.pool (), next [last->next_offset], GINT_TO_POINTER (sp->next_offset));
 			} else {
 				/* Link with the last bb in the previous bblocks */
 				collect_pred_seq_points (td, bb, sp, next);
@@ -4272,7 +4272,7 @@ initialize_clause_bblocks (TransformData *td)
 			bb->stack_height = 0;
 		} else {
 			bb->stack_height = 1;
-			bb->stack_state = (StackInfo*) mono_mempool_alloc0 (td->mempool, sizeof (StackInfo));
+			bb->stack_state = td->arena.create<StackInfo> ();
 			bb->stack_state [0].type = StackType::O;
 			bb->stack_state [0].klass = NULL; /*FIX*/
 			bb->stack_state [0].size = MINT_STACK_SLOT_SIZE;
@@ -4285,7 +4285,7 @@ initialize_clause_bblocks (TransformData *td)
 			g_assert (bb);
 			bb->eh_block = TRUE;
 			bb->stack_height = 1;
-			bb->stack_state = (StackInfo*) mono_mempool_alloc0 (td->mempool, sizeof (StackInfo));
+			bb->stack_state = td->arena.create<StackInfo> ();
 			bb->stack_state [0].type = StackType::O;
 			bb->stack_state [0].klass = NULL; /*FIX*/
 			bb->stack_state [0].size = MINT_STACK_SLOT_SIZE;
@@ -4413,13 +4413,13 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 	td->in_start = td->ip = header->code;
 	end = td->ip + header->code_size;
 
-	td->cbb = td->entry_bb = (InterpBasicBlock*)mono_mempool_alloc0 (td->mempool, sizeof (InterpBasicBlock));
+	td->cbb = td->entry_bb = td->arena.create<InterpBasicBlock> ();
 	td->cbb->index = td->bb_count++;
 	td->cbb->native_offset = -1;
 	td->cbb->stack_height = td->sp - td->stack;
 
 	if (inlining) {
-		exit_bb = (InterpBasicBlock*)mono_mempool_alloc0 (td->mempool, sizeof (InterpBasicBlock));
+		exit_bb = td->arena.create<InterpBasicBlock> ();
 		exit_bb->index = td->bb_count++;
 		exit_bb->native_offset = -1;
 		exit_bb->stack_height = -1;
@@ -4441,7 +4441,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 
 			mono_debug_get_seq_points (minfo, NULL, NULL, NULL, &sps, &n_il_offsets);
 			// FIXME: Free
-			seq_point_locs = mono_bitset_mem_new (mono_mempool_alloc0 (td->mempool, mono_bitset_alloc_size (header->code_size, 0)), header->code_size, 0);
+			seq_point_locs = mono_bitset_mem_new (td->arena.alloc0 (mono_bitset_alloc_size (header->code_size, 0), alignof (gsize)), header->code_size, 0);
 			sym_seq_points = TRUE;
 
 			for (i = 0; i < n_il_offsets; ++i) {
@@ -5140,7 +5140,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			next_ip = td->ip + n * 4;
 			--td->sp;
 			interp_ins_set_sreg (td->last_ins, td->sp [0].local);
-			InterpBasicBlock **target_bb_table = (InterpBasicBlock**)mono_mempool_alloc0 (td->mempool, sizeof (InterpBasicBlock*) * n);
+			InterpBasicBlock **target_bb_table = td->arena.create_array<InterpBasicBlock *> (n);
 			for (i = 0; i < n; i++) {
 				offset = read32 (td->ip);
 				target = next_ip - td->il_code + offset;
@@ -5799,7 +5799,7 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 
 						// Add local mapping information for cprop to use, in case we inline
 						int param_count = csignature->param_count;
-						int *newobj_reg_map = (int*)mono_mempool_alloc (td->mempool, sizeof (int) * param_count * 2);
+						int *newobj_reg_map = td->arena.create_array<int> (param_count * 2);
 						for (int i = 0; i < param_count; i++) {
 							newobj_reg_map [2 * i] = sp_params [i].local;
 							newobj_reg_map [2 * i + 1] = td->sp [-param_count + i].local;
@@ -7744,7 +7744,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 		*ip++ = ins->data [1];
 		// Add relocation for each label
 		for (int i = 0; i < labels; i++) {
-			Reloc *reloc = (Reloc*)mono_mempool_alloc0 (td->mempool, sizeof (Reloc));
+			Reloc *reloc = td->arena.create<Reloc> ();
 			reloc->type = RELOC_SWITCH;
 			reloc->offset = ip - td->new_code;
 			reloc->target_bb = ins->info.target_bb_table [i];
@@ -7763,7 +7763,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			*ip++ = ins->info.target_bb->native_offset - br_offset;
 		} else {
 			// We don't know the in_offset of the target, add a reloc
-			Reloc *reloc = (Reloc*)mono_mempool_alloc0 (td->mempool, sizeof (Reloc));
+			Reloc *reloc = td->arena.create<Reloc> ();
 			reloc->type = RELOC_SHORT_BRANCH;
 			reloc->skip = num_sregs (opcode);
 			reloc->offset = br_offset;
@@ -7784,7 +7784,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			int target_offset = ins->info.target_bb->native_offset - br_offset;
 			WRITE32 (ip, &target_offset);
 		} else {
-			Reloc *reloc = (Reloc*)mono_mempool_alloc0 (td->mempool, sizeof (Reloc));
+			Reloc *reloc = td->arena.create<Reloc> ();
 			reloc->type = RELOC_LONG_BRANCH;
 			reloc->skip = num_sregs (opcode);
 			reloc->offset = br_offset;
@@ -7796,7 +7796,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 		if (opcode == MINT_CALL_HANDLER)
 			*ip++ = ins->data [2];
 	} else if (opcode == MINT_SDB_SEQ_POINT) {
-		SeqPoint *seqp = (SeqPoint*)mono_mempool_alloc0 (td->mempool, sizeof (SeqPoint));
+		SeqPoint *seqp = td->arena.create<SeqPoint> ();
 
 		if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY)
 			seqp->il_offset = METHOD_ENTRY_IL_OFFSET;
@@ -7818,7 +7818,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 		 * wherever the line does, which is usually not a block boundary, and
 		 * offset_to_bb holds an entry only where a block begins.
 		 */
-		bb->seq_points = g_slist_prepend_mempool (td->mempool, bb->seq_points, seqp);
+		bb->seq_points = g_slist_prepend_mempool (td->arena.pool (), bb->seq_points, seqp);
 		bb->last_seq_point = seqp;
 	} else {
 		if (num_dregs (opcode))
@@ -8635,12 +8635,48 @@ get_native_offset (TransformData *td, int il_offset)
 	}
 }
 
+TransformData::TransformData (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm)
+	: method (method), header (header), rtm (rtm), has_localloc (false)
+{
+	code_size = header->code_size;
+	max_code_size = code_size;
+
+	in_offsets = g_new0 (int, header->code_size + 1);
+	clause_indexes = g_new (int, header->code_size);
+	mem_manager = m_method_get_mem_manager (rtm->domain, method);
+	data_hash = g_hash_table_new (NULL, NULL);
+	gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
+	seq_points = g_ptr_array_new ();
+	verbose_level = mono_interp_traceopt;
+	prof_coverage = mono_profiler_coverage_instrumentation_enabled (method);
+
+	if (prof_coverage)
+		coverage_info = mono_profiler_coverage_alloc (rtm->domain, method, header->code_size);
+
+	stack = g_new0 (StackInfo, header->max_stack + 1);
+	stack_capacity = header->max_stack + 1;
+	sp = stack;
+	line_numbers = g_array_new (FALSE, TRUE, sizeof (MonoDebugLineNumberEntry));
+}
+
+TransformData::~TransformData ()
+{
+	g_free (in_offsets);
+	g_free (clause_indexes);
+	g_free (data_items);
+	g_free (stack);
+	g_free (locals);
+	g_hash_table_destroy (data_hash);
+	g_ptr_array_free (seq_points, TRUE);
+	g_array_free (line_numbers, TRUE);
+}
+
 static void
 generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoGenericContext *generic_context, MonoError *error)
 {
 	int i;
-	TransformData transform_data;
-	TransformData *td;
+	TransformData transform_data (method, header, rtm);
+	TransformData *td = &transform_data;
 	static gboolean verbose_method_inited;
 	static char* verbose_method_name;
 
@@ -8649,33 +8685,10 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 		verbose_method_inited = TRUE;
 	}
 
-	memset (&transform_data, 0, sizeof(transform_data));
-	td = &transform_data;
-
-	td->method = method;
-	td->rtm = rtm;
-	td->code_size = header->code_size;
-	td->header = header;
-	td->max_code_size = td->code_size;
-	td->in_offsets = (int*)g_malloc0((header->code_size + 1) * sizeof(int));
-	td->clause_indexes = (int*)g_malloc (header->code_size * sizeof (int));
-	td->mempool = mono_mempool_new ();
-	td->mem_manager = m_method_get_mem_manager (rtm->domain, method);
-	td->n_data_items = 0;
-	td->max_data_items = 0;
-	td->data_items = NULL;
-	td->data_hash = g_hash_table_new (NULL, NULL);
-	td->gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
-	td->seq_points = g_ptr_array_new ();
-	td->verbose_level = mono_interp_traceopt;
-	td->prof_coverage = mono_profiler_coverage_instrumentation_enabled (method);
 	rtm->data_items = td->data_items;
 
-	if (td->prof_coverage)
-		td->coverage_info = mono_profiler_coverage_alloc (rtm->domain, method, header->code_size);
-
 	interp_method_compute_offsets (td, rtm, mono_method_signature_internal (method), header, error);
-	goto_if_nok (error, exit);
+	return_if_nok (error);
 
 	if (verbose_method_name) {
 		const char *name = verbose_method_name;
@@ -8694,15 +8707,8 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 		}
 	}
 
-	td->stack = (StackInfo*)g_malloc0 ((header->max_stack + 1) * sizeof (td->stack [0]));
-	td->stack_capacity = header->max_stack + 1;
-	td->sp = td->stack;
-	td->max_stack_height = 0;
-	td->line_numbers = g_array_new (FALSE, TRUE, sizeof (MonoDebugLineNumberEntry));
-	td->current_il_offset = -1;
-
 	generate_code (td, method, header, generic_context, error);
-	goto_if_nok (error, exit);
+	return_if_nok (error);
 
 	g_assert (td->inline_depth == 0);
 
@@ -8719,7 +8725,7 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 		g_free (name);
 		mono_error_set_generic_error (error, "System", "InvalidProgramException", "%s", msg);
 		g_free (msg);
-		goto exit;
+		return;
 	}
 
 	if (td->verbose_level) {
@@ -8796,18 +8802,6 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 	}
 
 	save_seq_points (td, jinfo);
-
-exit:
-	g_free (td->in_offsets);
-	g_free (td->clause_indexes);
-	g_free (td->data_items);
-	g_free (td->stack);
-	g_free (td->locals);
-	g_hash_table_destroy (td->data_hash);
-	g_ptr_array_free (td->seq_points, TRUE);
-	if (td->line_numbers)
-		g_array_free (td->line_numbers, TRUE);
-	mono_mempool_destroy (td->mempool);
 }
 
 

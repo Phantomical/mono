@@ -2,6 +2,7 @@
 #define __MONO_INTERP_TRANSFORM_H__
 #include <mono/mini/mini-runtime.h>
 #include <mono/metadata/seq-points-data.h>
+#include "interp-arena.hpp"
 #include "interp-internals.hpp"
 
 #include <cstdint>
@@ -187,52 +188,63 @@ struct InterpLocal {
 	};
 };
 
+/// One method's trip through the transform, and everything that trip allocates.
+///
+/// Nothing here outlives the transform except what it copies into the
+/// InterpMethod, so construction and destruction are the whole memory
+/// discipline: the arena and the members below go together.
 struct TransformData {
-	MonoMethod *method;
-	MonoMethod *inlined_method;
-	MonoMethodHeader *header;
-	InterpMethod *rtm;
-	const unsigned char *il_code;
-	const unsigned char *ip;
-	const unsigned char *in_start;
-	InterpInst *last_ins;
-	int code_size;
-	int *in_offsets;
-	int current_il_offset;
-	unsigned short *new_code;
-	unsigned short *new_code_end;
-	unsigned int max_code_size;
-	StackInfo *stack;
-	StackInfo *sp;
-	unsigned int max_stack_height;
-	unsigned int stack_capacity;
-	unsigned int max_stack_size;
-	unsigned int total_locals_size;
-	InterpLocal *locals;
-	unsigned int il_locals_offset;
-	unsigned int il_locals_size;
-	unsigned int locals_size;
-	unsigned int locals_capacity;
-	int n_data_items;
-	int max_data_items;
-	void **data_items;
-	GHashTable *data_hash;
-	int *clause_indexes;
-	gboolean gen_sdb_seq_points;
-	GPtrArray *seq_points;
-	InterpBasicBlock **offset_to_bb;
-	InterpBasicBlock *entry_bb, *cbb;
-	int bb_count;
-	MonoMemPool     *mempool;
-	MonoMemoryManager *mem_manager;
-	GList *basic_blocks;
-	GPtrArray *relocs;
-	gboolean verbose_level;
-	GArray *line_numbers;
-	gboolean prof_coverage;
-	MonoProfilerCoverageInfo *coverage_info;
-	GList *dont_inline;
-	int inline_depth;
+	TransformData (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm);
+	~TransformData ();
+
+	TransformData (const TransformData &) = delete;
+	TransformData &operator= (const TransformData &) = delete;
+
+	MonoMethod *method = nullptr;
+	MonoMethod *inlined_method = nullptr;
+	MonoMethodHeader *header = nullptr;
+	InterpMethod *rtm = nullptr;
+	const unsigned char *il_code = nullptr;
+	const unsigned char *ip = nullptr;
+	const unsigned char *in_start = nullptr;
+	InterpInst *last_ins = nullptr;
+	int code_size = 0;
+	int *in_offsets = nullptr;
+	int current_il_offset = -1;
+	unsigned short *new_code = nullptr;
+	unsigned short *new_code_end = nullptr;
+	unsigned int max_code_size = 0;
+	StackInfo *stack = nullptr;
+	StackInfo *sp = nullptr;
+	unsigned int max_stack_height = 0;
+	unsigned int stack_capacity = 0;
+	unsigned int max_stack_size = 0;
+	unsigned int total_locals_size = 0;
+	InterpLocal *locals = nullptr;
+	unsigned int il_locals_offset = 0;
+	unsigned int il_locals_size = 0;
+	unsigned int locals_size = 0;
+	unsigned int locals_capacity = 0;
+	int n_data_items = 0;
+	int max_data_items = 0;
+	void **data_items = nullptr;
+	GHashTable *data_hash = nullptr;
+	int *clause_indexes = nullptr;
+	gboolean gen_sdb_seq_points = FALSE;
+	GPtrArray *seq_points = nullptr;
+	InterpBasicBlock **offset_to_bb = nullptr;
+	InterpBasicBlock *entry_bb = nullptr, *cbb = nullptr;
+	int bb_count = 0;
+	Arena arena;
+	MonoMemoryManager *mem_manager = nullptr;
+	GList *basic_blocks = nullptr;
+	GPtrArray *relocs = nullptr;
+	gboolean verbose_level = 0;
+	GArray *line_numbers = nullptr;
+	gboolean prof_coverage = FALSE;
+	MonoProfilerCoverageInfo *coverage_info = nullptr;
+	GList *dont_inline = nullptr;
+	int inline_depth = 0;
 	bool has_localloc : 1;
 };
 

@@ -60,6 +60,31 @@ find_method (const std::string &image, const std::string &name)
 	return method;
 }
 
+MonoMethodHeader *
+read_header (MonoMethod *method)
+{
+	ERROR_DECL (error);
+	MonoMethodHeader *header = mono_method_get_header_checked (method, error);
+
+	mono_error_assert_ok (error);
+	return header;
+}
+
+/*
+ * The transform reads rtm->domain while it is being constructed, so the
+ * InterpMethod has to be complete before it. A member initializer cannot fill
+ * one in field by field, hence a whole one by value.
+ */
+InterpMethod
+make_rtm (MonoMethod *method)
+{
+	InterpMethod rtm{};
+
+	rtm.method = method;
+	rtm.domain = mono_domain_get ();
+	return rtm;
+}
+
 } // namespace
 
 void
@@ -86,50 +111,19 @@ have_corpus ()
 	return g_file_test (MONO_INTERP_TESTS_ASSEMBLIES "/mscorlib.dll", G_FILE_TEST_EXISTS);
 }
 
-/*
- * The setup below is generate () in transform.c, field for field. Keep the two
- * in step: the transform reads several of these before anything sets them, so a
- * field left out here is a null dereference rather than a compile error.
- */
-Transform::Transform (const std::string &image, const std::string &method_name,
-                      int verbose_level)
+Transform::Transform (const std::string &image, const std::string &method_name, int verbose_level)
+	: method (find_method (image, method_name)),
+	  header (read_header (method)),
+	  rtm (make_rtm (method)),
+	  td (method, header, &rtm)
 {
 	ERROR_DECL (error);
-	MonoMethod *method = find_method (image, method_name);
 
-	header = mono_method_get_header_checked (method, error);
-	mono_error_assert_ok (error);
-
-	memset (&rtm, 0, sizeof (rtm));
-	rtm.method = method;
-	rtm.domain = mono_domain_get ();
-
-	memset (&td, 0, sizeof (td));
-	td.method = method;
-	td.rtm = &rtm;
-	td.code_size = header->code_size;
-	td.header = header;
-	td.max_code_size = td.code_size;
-	td.in_offsets = (int *) g_malloc0 ((header->code_size + 1) * sizeof (int));
-	td.clause_indexes = (int *) g_malloc (header->code_size * sizeof (int));
-	td.mempool = mono_mempool_new ();
-	td.mem_manager = m_method_get_mem_manager (rtm.domain, method);
-	td.data_items = NULL;
-	td.data_hash = g_hash_table_new (NULL, NULL);
-	td.gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
-	td.seq_points = g_ptr_array_new ();
-	td.verbose_level = verbose_level ? verbose_level : mono_interp_traceopt;
-	td.prof_coverage = mono_profiler_coverage_instrumentation_enabled (method);
+	if (verbose_level)
+		td.verbose_level = verbose_level;
 
 	mono_test_interp_method_compute_offsets (&td, &rtm,
 	                                         mono_method_signature_internal (method), header);
-
-	td.stack = (interp::StackInfo *) g_malloc0 ((header->max_stack + 1) * sizeof (td.stack [0]));
-	td.stack_capacity = header->max_stack + 1;
-	td.sp = td.stack;
-	td.max_stack_height = 0;
-	td.line_numbers = g_array_new (FALSE, TRUE, sizeof (MonoDebugLineNumberEntry));
-	td.current_il_offset = -1;
 
 	mono_test_interp_generate_code (&td, method, header, NULL, error);
 	mono_error_assert_ok (error);
@@ -137,16 +131,6 @@ Transform::Transform (const std::string &image, const std::string &method_name,
 
 Transform::~Transform ()
 {
-	g_free (td.in_offsets);
-	g_free (td.clause_indexes);
-	g_free (td.data_items);
-	g_free (td.stack);
-	g_free (td.locals);
-	g_hash_table_destroy (td.data_hash);
-	g_ptr_array_free (td.seq_points, TRUE);
-	if (td.line_numbers)
-		g_array_free (td.line_numbers, TRUE);
-	mono_mempool_destroy (td.mempool);
 	mono_metadata_free_mh (header);
 }
 

@@ -41,7 +41,7 @@ bool have_corpus ();
 
 /// The transform's output for one method, and the arena it sits in.
 ///
-/// Everything read out of it - a Code, an InterpInst * - points into a mempool
+/// Everything read out of it - a Code, an InterpInst * - points into an arena
 /// this owns, so it has to outlive them.
 class Transform {
 public:
@@ -63,9 +63,11 @@ public:
 	void cprop ();
 
 private:
-	interp::TransformData td;
-	InterpMethod rtm;
+	// In this order: TransformData reads the other three as it is built.
+	MonoMethod *method;
 	MonoMethodHeader *header;
+	InterpMethod rtm;
+	interp::TransformData td;
 };
 
 /// A transform's instructions in order, with the MINT_NOPs dropped.
