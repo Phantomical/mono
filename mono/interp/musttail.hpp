@@ -16,11 +16,6 @@
 #ifndef __MONO_INTERP_MUSTTAIL_HPP__
 #define __MONO_INTERP_MUSTTAIL_HPP__
 
-/* Ask the compiler which spelling it knows rather than deriving it from the
- * compiler and its version. GCC has the attribute from 15 and MSVC from 14.50,
- * and both accepted the surrounding code long before that, so a version test
- * has to carry the numbers and a bare __GNUC__ test picks an attribute GCC 14
- * rejects.  */
 #ifdef __has_cpp_attribute
 #if __has_cpp_attribute(clang::musttail)
 #define MONO_MUSTTAIL [[clang::musttail]]
@@ -31,8 +26,10 @@
 #endif
 #endif
 
-#ifndef MONO_MUSTTAIL
-#error "this compiler has no musttail attribute: use clang 13, GCC 15, MSVC 14.50 or later"
+#ifdef MONO_MUSTTAIL
+#define MONO_HAVE_MUSTTAIL 1
+#else
+#define MONO_HAVE_MUSTTAIL 0
 #endif
 
 #endif /* __MONO_INTERP_MUSTTAIL_HPP__ */

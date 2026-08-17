@@ -11,8 +11,7 @@
 #include <cstdint>
 #include <optional>
 
-typedef enum
-{
+enum MintOpArgType : std::uint8_t {
 	MintOpNoArgs,
 	MintOpShortInt,
 	MintOpUShortInt,
@@ -28,32 +27,30 @@ typedef enum
 	MintOpClassToken,
 	MintOpTwoShorts,
 	MintOpShortAndInt
-} MintOpArgType;
+};
 
-#define OPDEF(a,b,c,d,e,f) a,
-typedef enum {
+#define OPDEF(a, b, c, d, e, f) a,
+enum MintOpcode : std::uint16_t {
 #include "mintops.def"
 	MINT_LASTOP
-} MintOpcode;
+};
 #undef OPDEF
 
 #if NO_UNALIGNED_ACCESS
-#  if G_BYTE_ORDER == G_LITTLE_ENDIAN
-#define READ32(x) (((guint16 *)(x)) [0] | ((guint16 *)(x)) [1] << 16)
-#define READ64(x) ((guint64)((guint16 *)(x)) [0] | \
-                   (guint64)((guint16 *)(x)) [1] << 16 | \
-                   (guint64)((guint16 *)(x)) [2] << 32 | \
-                   (guint64)((guint16 *)(x)) [3] << 48)
-#  else
-#define READ32(x) (((guint16 *)(x)) [0] << 16 | ((guint16 *)(x)) [1])
-#define READ64(x) ((guint64)((guint16 *)(x)) [0] << 48 | \
-                   (guint64)((guint16 *)(x)) [1] << 32 | \
-                   (guint64)((guint16 *)(x)) [2] << 16 | \
-                   (guint64)((guint16 *)(x)) [3])
-#  endif
+#if G_BYTE_ORDER == G_LITTLE_ENDIAN
+#define READ32(x) (((guint16 *) (x))[0] | ((guint16 *) (x))[1] << 16)
+#define READ64(x)                                                          \
+	((guint64) ((guint16 *) (x))[0] | (guint64) ((guint16 *) (x))[1] << 16 \
+	 | (guint64) ((guint16 *) (x))[2] << 32 | (guint64) ((guint16 *) (x))[3] << 48)
+#else
+#define READ32(x) (((guint16 *) (x))[0] << 16 | ((guint16 *) (x))[1])
+#define READ64(x)                                                                \
+	((guint64) ((guint16 *) (x))[0] << 48 | (guint64) ((guint16 *) (x))[1] << 32 \
+	 | (guint64) ((guint16 *) (x))[2] << 16 | (guint64) ((guint16 *) (x))[3])
+#endif
 #else /* unaligned access OK */
-#define READ32(x) (*(guint32 *)(x))
-#define READ64(x) (*(guint64 *)(x))
+#define READ32(x) (*(guint32 *) (x))
+#define READ64(x) (*(guint64 *) (x))
 #endif
 
 #define MINT_SWITCH_LEN(n) (4 + (n) * 2)
@@ -95,16 +92,21 @@ struct OpInfo {
 	std::uint16_t name_offset;
 	/// In guint16 units. Zero at MINT_SWITCH, whose length is its operand.
 	std::uint8_t oplength;
+	std::uint8_t num_sregs;
 	/// Empty at the call opcodes, which write the call argument area rather
 	/// than one register.
 	std::optional<std::uint8_t> num_dregs;
-	std::uint8_t num_sregs;
 	MintOpArgType optype;
 };
 
 inline constexpr OpInfo opinfos[MINT_LASTOP] = {
 #define CallArgs std::nullopt
-#define OPDEF(a, b, c, d, e, f) OpInfo{offsetof (OpNames, a), c, d, e, f},
+#define OPDEF(a, b, c, d, e, f)                  \
+	OpInfo{.name_offset = offsetof (OpNames, a), \
+	       .oplength = c,                        \
+	       .num_dregs = d,                       \
+	       .num_sregs = e,                       \
+	       .optype = f},
 #include "mintops.def"
 #undef OPDEF
 #undef CallArgs

@@ -144,25 +144,34 @@ private:
 	}
 
 private:
+#if MONO_HAVE_MUSTTAIL
+#define MONO_INTERP_EXEC_DEF(name) static void name (InterpState *state)
+
 	using OpFunc = void (*) (InterpState *);
 
+#else
+#define MONO_INTERP_EXEC_DEF(name) static OpFunc name (InterpState *state);
+
+	using OpFunc = OpFunc (*) (InterpState *);
+#endif
+
 #define OPDEF(name, b, c, d, e, f)                                                 \
-	static void entry_##name (InterpState *state);                                 \
+	MONO_INTERP_EXEC_DEF (entry_##name);                                           \
 	/* this should only be called by entry_, otherwise you'll get linker errors */ \
-	MONO_ALWAYS_INLINE inline OpFunc exec_##name (MintOpcode opcode);
+	inline OpFunc exec_##name (MintOpcode opcode);
 #include "mintops.def"
 #undef OPDEF
 
 	static void exec_invalid_opcode (InterpState *state);
 
 	// Used by MONO_INTERP_EXIT as the exit method
-	static void exec_exit (InterpState *state);
-	static void exec_exit_frame (InterpState *state);
-	static void exec_resume (InterpState *state);
-	static void exec_call (InterpState *state);
-	static void exec_calli (InterpState *state);
-	static void exec_tailcall (InterpState *state);
-	static void exec_method (InterpState *state);
+	MONO_INTERP_EXEC_DEF (exec_exit);
+	MONO_INTERP_EXEC_DEF (exec_exit_frame);
+	MONO_INTERP_EXEC_DEF (exec_resume);
+	MONO_INTERP_EXEC_DEF (exec_call);
+	MONO_INTERP_EXEC_DEF (exec_calli);
+	MONO_INTERP_EXEC_DEF (exec_tailcall);
+	MONO_INTERP_EXEC_DEF (exec_method);
 
 	// Throw an exception from the interpreter
 	void interp_throw (MonoException *ex, const guint16 *ip, bool rethrow);
@@ -179,6 +188,7 @@ private:
 	static const OpFunc optable[MINT_LASTOP];
 };
 
+#if MONO_HAVE_MUSTTAIL
 #define MONO_INTERP_OP_IMPL(opcode)                       \
 	void InterpState::entry_##opcode (InterpState *state) \
 	{                                                     \
@@ -186,7 +196,31 @@ private:
 		OpFunc next = state->exec_##opcode (opcode);      \
 		MONO_MUSTTAIL return next (state);                \
 	}                                                     \
-	InterpState::OpFunc InterpState::exec_##opcode (MintOpcode _opcode)
+	MONO_ALWAYS_INLINE InterpState::OpFunc InterpState::exec_##opcode (MintOpcode _opcode)
+
+// Define an entry point that calls an inner function.
+//
+// The inner function must return a OpFunc which is the next state to jump to.
+#define MONO_INTERP_ENTRY(entry, inner)          \
+	void InterpState::entry (InterpState *state) \
+	{                                            \
+		OpFunc next = state->inner ();           \
+		MONO_MUSTTAIL return next (state);       \
+	}
+#else
+#define MONO_INTERP_OP_IMPL(opcode)                                      \
+	InterpState::OpFunc InterpState::entry_##opcode (InterpState *state) \
+	{                                                                    \
+		state->trace_op_if_wanted ();                                    \
+		return state->exec_##opcode (opcode);                            \
+	}
+
+#define MONO_INTERP_ENTRY(entry, inner)                         \
+	InterpState::OpFunc InterpState::entry (InterpState *state) \
+	{                                                           \
+		return state->inner ();                                 \
+	}
+#endif
 
 #define MONO_INTERP_OP_ADVANCE()               \
 	do {                                       \
@@ -203,16 +237,6 @@ private:
 	} while (0)
 
 #define MONO_INTERP_EXIT return &InterpState::exec_exit
-
-// Define an entry point that calls an inner function.
-//
-// The inner function must return a OpFunc which is the next state to jump to.
-#define MONO_INTERP_ENTRY(entry, inner)          \
-	void InterpState::entry (InterpState *state) \
-	{                                            \
-		OpFunc next = state->inner ();           \
-		MONO_MUSTTAIL return next (state);       \
-	}
 
 #define LOCAL_VAR(offset, type) (*(type *) (locals + (offset)))
 
@@ -309,7 +333,5 @@ private:
 	} while (0)
 
 } // namespace mono::interp
-
-
 
 #endif
