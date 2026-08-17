@@ -12,6 +12,8 @@
 #include "interp.h"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #define INLINED_METHOD_FLAG 0xffff
 #define TRACING_FLAG 0x1
@@ -371,7 +373,9 @@ extern MonoInterpStats mono_interp_stats;
 
 extern int mono_interp_traceopt;
 extern int mono_interp_opt;
-extern GSList *mono_interp_jit_classes;
+/* Class names whose methods run as compiled code rather than interpreted, from
+ * the "jit=" option. For testing. */
+extern std::vector<std::string> mono_interp_jit_classes;
 
 void mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, MonoError *error);
 

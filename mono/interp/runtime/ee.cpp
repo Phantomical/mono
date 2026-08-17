@@ -15,12 +15,12 @@
 #include <mono/utils/mono-counters.h>
 #include <mono/utils/mono-tls-inline.h>
 
-/* Read from transform.c, so these stay where its extern declarations put them. */
-/*
- * List of classes whose methods will be executed by transitioning to JITted code.
- * Used for testing.
- */
-GSList *mono_interp_jit_classes;
+#include <string>
+#include <string_view>
+#include <vector>
+
+/* Declared at global scope in internals.hpp, so defined there too. */
+std::vector<std::string> mono_interp_jit_classes;
 /* Optimizations enabled with interpreter */
 int mono_interp_opt = INTERP_OPT_DEFAULT;
 /* If TRUE, interpreted code will be interrupted at function entry/backward branches */
@@ -32,33 +32,49 @@ namespace mono::interp {
 
 static gboolean interp_init_done = FALSE;
 
+/// Whether arg starts with prefix, and if it does, what follows it.
+static bool
+takes_value (std::string_view arg, std::string_view prefix, std::string_view *value)
+{
+	if (arg.substr (0, prefix.size ()) != prefix)
+		return false;
+
+	*value = arg.substr (prefix.size ());
+	return true;
+}
+
 static void
 interp_parse_options (const char *options)
 {
-	char **args, **ptr;
-
 	if (!options)
 		return;
 
-	args = g_strsplit (options, ",", -1);
-	for (ptr = args; ptr && *ptr; ptr ++) {
-		char *arg = *ptr;
+	char **args = g_strsplit (options, ",", -1);
 
-		if (strncmp (arg, "jit=", 4) == 0)
-			mono_interp_jit_classes = g_slist_prepend (mono_interp_jit_classes, arg + 4);
-		else if (strncmp (arg, "interp-only=", strlen ("interp-only=")) == 0)
-			mono_interp_only_classes = g_slist_prepend (mono_interp_only_classes, arg + strlen ("interp-only="));
-		else if (strncmp (arg, "-inline", 7) == 0)
+	for (char **ptr = args; ptr && *ptr; ptr++) {
+		std::string_view arg = *ptr;
+		std::string_view value;
+
+		if (takes_value (arg, "jit=", &value))
+			mono_interp_jit_classes.emplace_back (value);
+		else if (takes_value (arg, "interp-only=", &value))
+			/* mini owns this list and never frees it, so it gets a copy of
+			 * its own rather than a pointer into the split below. */
+			mono_interp_only_classes = g_slist_prepend (
+				mono_interp_only_classes, g_strndup (value.data (), value.size ()));
+		else if (arg == "-inline")
 			mono_interp_opt &= ~INTERP_OPT_INLINE;
-		else if (strncmp (arg, "-cprop", 6) == 0)
+		else if (arg == "-cprop")
 			mono_interp_opt &= ~INTERP_OPT_CPROP;
-		else if (strncmp (arg, "-bblocks", 8) == 0)
+		else if (arg == "-bblocks")
 			mono_interp_opt &= ~INTERP_OPT_BBLOCKS;
-		else if (strncmp (arg, "-all", 4) == 0)
+		else if (arg == "-all")
 			mono_interp_opt = INTERP_OPT_NONE;
-		else if (strncmp (arg, "verbose=", 8) == 0)
-			mono_interp_traceopt = atoi (arg + 8);
+		else if (takes_value (arg, "verbose=", &value))
+			mono_interp_traceopt = atoi (std::string (value).c_str ());
 	}
+
+	g_strfreev (args);
 }
 
 void

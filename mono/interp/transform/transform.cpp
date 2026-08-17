@@ -3672,8 +3672,6 @@ mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig)
 gboolean
 mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
 {
-	GSList *l;
-
 	if (!mono_interp_jit_call_marshallable (method, sig))
 		return FALSE;
 
@@ -3684,10 +3682,9 @@ mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
 			return TRUE;
 	}
 
-	for (l = mono_interp_jit_classes; l; l = l->next) {
-		const char *class_name = (const char*)l->data;
-		// FIXME: Namespaces
-		if (!strcmp (m_class_get_name (method->klass), class_name))
+	// FIXME: Namespaces
+	for (const std::string &class_name : mono_interp_jit_classes) {
+		if (class_name == m_class_get_name (method->klass))
 			return TRUE;
 	}
 

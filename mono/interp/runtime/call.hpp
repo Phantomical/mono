@@ -14,6 +14,8 @@
 #include "mono/utils/mono-error-internals.h"
 #include "mono/utils/mono-memory-model.h"
 
+#include <memory>
+
 namespace mono::interp {
 
 inline InterpMethod *
@@ -127,7 +129,7 @@ initialize_arg_offsets (InterpMethod *imethod)
 	MonoMethodSignature *sig = mono_method_signature_internal (imethod->method);
 	int arg_count = sig->hasthis + sig->param_count;
 	g_assert (arg_count);
-	guint32 *arg_offsets = (guint32 *) g_malloc ((sig->hasthis + sig->param_count) * sizeof (int));
+	auto arg_offsets = std::make_unique<guint32[]> (arg_count);
 	int index = 0, offset_addend = 0, prev_offset = 0;
 
 	if (sig->hasthis) {
@@ -141,8 +143,11 @@ initialize_arg_offsets (InterpMethod *imethod)
 	}
 
 	mono_memory_write_barrier ();
-	if (mono_atomic_cas_ptr ((gpointer *) &imethod->arg_offsets, arg_offsets, NULL) != NULL)
-		g_free (arg_offsets);
+	/* Two threads can reach this for the same method. The winner hands its table
+	 * to the method, which holds it for as long as the domain lives and never
+	 * gives it back; the loser still owns the one it built, and drops it here. */
+	if (mono_atomic_cas_ptr ((gpointer *) &imethod->arg_offsets, arg_offsets.get (), NULL) == NULL)
+		arg_offsets.release ();
 	return imethod->arg_offsets;
 }
 
