@@ -35,7 +35,9 @@
 #include "internal.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <optional>
+#include <vector>
 
 #include "mono/llvm/runtime.h"
 
@@ -128,14 +130,21 @@ static_assert (MINT_MOV_U1 == op_for_mint_type (MINT_MOV_I1, MintType::U1)
 		if (!(klass)) { \
 			mono_error_set_type_load_name (error, NULL, NULL, \
 			                               "Could not load type from token 0x%08x", token); \
-			goto exit; \
+			return FALSE; \
 		} \
 		if (mono_class_has_failure (klass)) { \
 			mono_error_set_for_class_failure (error, klass); \
-			goto exit; \
+			return FALSE; \
 		} \
 	} while (0)
 
+
+/// Owns the basic block list mono_basic_block_split () builds.
+struct BasicBlockListDeleter {
+	void operator() (MonoSimpleBasicBlock *bb) const { mono_basic_block_free (bb); }
+};
+
+using BasicBlockList = std::unique_ptr<MonoSimpleBasicBlock, BasicBlockListDeleter>;
 
 /// Keeps a method off the inline candidates for as long as the scope lives,
 /// which is what stops a method being inlined into itself.
@@ -164,7 +173,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 	guint32 token;
 	int in_offset;
 	const unsigned char *end;
-	MonoSimpleBasicBlock *bb = NULL, *original_bb = NULL;
+	MonoSimpleBasicBlock *bb = NULL;
 	gboolean sym_seq_points = FALSE;
 	MonoBitSet *seq_point_locs = NULL;
 	gboolean readonly = FALSE;
@@ -179,10 +188,9 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 	MonoMethodSignature *signature = mono_method_signature_internal (method);
 	int num_args = signature->hasthis + signature->param_count;
 	int arglist_local = -1;
-	gboolean ret = TRUE;
 	gboolean emitted_funccall_seq_point = FALSE;
-	guint32 *arg_locals = NULL;
-	guint32 *local_locals = NULL;
+	std::vector<guint32> arg_locals;
+	std::vector<guint32> local_locals;
 	InterpInst *last_seq_point = NULL;
 	gboolean save_last_error = FALSE;
 	gboolean link_bblocks = TRUE;
@@ -191,8 +199,9 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 	DontInlineScope dont_inline (this, method);
 
-	original_bb = bb = mono_basic_block_split (method, error, header);
-	goto_if_nok (error, exit);
+	BasicBlockList original_bb (mono_basic_block_split (method, error, header));
+	return_val_if_nok (error, FALSE);
+	bb = original_bb.get ();
 	g_assert (bb);
 
 	il_code = header->code;
@@ -226,7 +235,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			int i, n_il_offsets;
 
 			mono_debug_get_seq_points (minfo, NULL, NULL, NULL, &sps, &n_il_offsets);
-			// FIXME: Free
 			seq_point_locs = mono_bitset_mem_new (arena.alloc0 (mono_bitset_alloc_size (header->code_size, 0), alignof (gsize)), header->code_size, 0);
 			sym_seq_points = TRUE;
 
@@ -246,7 +254,9 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			}
 		} else if (!method->wrapper_type && !method->dynamic && mono_debug_image_has_debug_info (m_class_get_image (method->klass))) {
 			/* Methods without line number info like auto-generated property accessors */
-			seq_point_locs = mono_bitset_new (header->code_size, 0);
+			seq_point_locs = mono_bitset_mem_new (
+				arena.alloc0 (mono_bitset_alloc_size (header->code_size, 0), alignof (gsize)),
+				header->code_size, 0);
 			sym_seq_points = TRUE;
 		}
 	}
@@ -324,7 +334,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 #endif
 	} else {
 		int local;
-		arg_locals = (guint32*) g_malloc ((!!signature->hasthis + signature->param_count) * sizeof (guint32));
+		arg_locals.resize (!!signature->hasthis + signature->param_count);
 		/* Allocate locals to store inlined method args from stack */
 		for (i = signature->param_count - 1; i >= 0; i--) {
 			local = create_interp_local (signature->params [i]);
@@ -347,7 +357,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			store_local (local);
 		}
 
-		local_locals = (guint32*) g_malloc (header->num_locals * sizeof (guint32));
+		local_locals.resize (header->num_locals);
 		/* Allocate locals to store inlined method args from stack */
 		for (i = 0; i < header->num_locals; i++)
 			local_locals [i] = create_interp_local (header->locals [i]);
@@ -684,10 +694,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				g_warning ("CEE_JMP: stack must be empty");
 			token = read32 (ip + 1);
 			m = mono_get_method_checked (image, token, NULL, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			interp_add_ins (MINT_JMP);
 			last_ins->data [0] = get_data_item_index (mono_interp_get_imethod (domain, m, error));
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			ip += 5;
 			break;
 		}
@@ -700,7 +710,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				need_seq_point = TRUE;
 
 			if (!interp_transform_call (method, NULL, domain, generic_context, constrained_class, readonly, error, TRUE, save_last_error, tailcall))
-				goto exit;
+				return FALSE;
 
 			if (need_seq_point) {
 				//check is is a nested call and remove the MONO_INST_NONEMPTY_STACK of the last breakpoint, only for non native methods
@@ -756,7 +766,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			}
 			if (sp > stack) {
 				mono_error_set_generic_error (error, "System", "InvalidProgramException", "");
-				goto exit;
+				return FALSE;
 			}
 
 			if (sym_seq_points) {
@@ -1372,7 +1382,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 			token = read32 (ip + 1);
 			klass = mono_class_get_and_inflate_typespec_checked (image, token, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 
 			if (m_class_is_valuetype (klass)) {
 				MintType mt = mint_type (m_class_get_byval_arg (klass));
@@ -1403,7 +1413,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				klass = (MonoClass *)mono_method_get_wrapper_data (method, token);
 			else {
 				klass = mono_class_get_and_inflate_typespec_checked (image, token, generic_context, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 			}
 
 			interp_emit_ldobj (klass);
@@ -1417,7 +1427,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			push_type (StackType::O, mono_defaults.string_class);
 			if (method->wrapper_type == MONO_WRAPPER_NONE) {
 				MonoString *s = mono_ldstr_checked (domain, image, token, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 				/* GC won't scan code stream, but reference is held by metadata
 				 * machinery so we are good here */
 				interp_add_ins (MINT_LDSTR);
@@ -1441,21 +1451,21 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			ip += 4;
 
 			m = interp_get_method (method, token, image, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 
 			csignature = mono_method_signature_internal (m);
 			klass = m->klass;
 
 			if (!mono_class_init_internal (klass)) {
 				mono_error_set_for_class_failure (error, klass);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 			}
 
 			if (mono_class_get_flags (klass) & TYPE_ATTRIBUTE_ABSTRACT) {
 				char* full_name = mono_type_get_full_name (klass);
 				mono_error_set_member_access (error, "Cannot create an abstract class: %s", full_name);
 				g_free (full_name);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 			}
 
 			MintType ret_mt = mint_type (m_class_get_byval_arg (klass));
@@ -1569,7 +1579,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 						newobj_fast->data [1] = ALIGN_TO (vtsize, MINT_STACK_SLOT_SIZE);
 					} else {
 						MonoVTable *vtable = mono_class_vtable_checked (domain, klass, error);
-						goto_if_nok (error, exit);
+						return_val_if_nok (error, FALSE);
 						newobj_fast = interp_add_ins (MINT_NEWOBJ_FAST);
 						interp_ins_set_dreg (newobj_fast, dreg);
 						newobj_fast->data [1] = get_data_item_index (vtable);
@@ -1580,7 +1590,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 					if ((mono_interp_opt & INTERP_OPT_INLINE) && interp_method_check_inlining (m, csignature)) {
 						MonoMethodHeader *mheader = interp_method_get_header (m, error);
-						goto_if_nok (error, exit);
+						return_val_if_nok (error, FALSE);
 
 						// Add local mapping information for cprop to use, in case we inline
 						int param_count = csignature->param_count;
@@ -1607,7 +1617,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 					last_ins->data [0] = get_data_item_index (mono_interp_get_imethod (domain, m, error));
 					last_ins->data [1] = params_stack_size;
 				}
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 				// Parameters and this pointer are popped of the stack. The return value remains
 				sp -= csignature->param_count + 1;
 			}
@@ -1646,7 +1656,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				klass = (MonoClass *)mono_method_get_wrapper_data (method, token);
 			else {
 				klass = mono_class_get_and_inflate_typespec_checked (image, token, generic_context, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 			}
 
 			if (mono_class_is_nullable (klass)) {
@@ -1655,10 +1665,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 					target_method = mono_class_get_method_from_name_checked (klass, "UnboxExact", 1, 0, error);
 				else
 					target_method = mono_class_get_method_from_name_checked (klass, "Unbox", 1, 0, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 				/* ip is incremented by interp_transform_call */
 				if (!interp_transform_call (method, target_method, domain, generic_context, NULL, FALSE, error, FALSE, FALSE, FALSE))
-					goto exit;
+					return FALSE;
 				/*
 				 * CEE_UNBOX needs to push address of vtype while Nullable.Unbox returns the value type
 				 * We create a local variable in the frame so that we can fetch its address.
@@ -1716,10 +1726,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 					target_method = mono_class_get_method_from_name_checked (klass, "UnboxExact", 1, 0, error);
 				else
 					target_method = mono_class_get_method_from_name_checked (klass, "Unbox", 1, 0, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 				/* ip is incremented by interp_transform_call */
 				if (!interp_transform_call (method, target_method, domain, generic_context, NULL, FALSE, error, FALSE, FALSE, FALSE))
-					goto exit;
+					return FALSE;
 			} else {
 				interp_add_ins (MINT_UNBOX);
 				sp--;
@@ -1747,7 +1757,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 			field = interp_field_from_token (method, token, &klass, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
@@ -1777,14 +1787,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				MonoMethod *wrapper = mono_marshal_get_ldflda_wrapper (field->type);
 				/* ip is incremented by interp_transform_call */
 				if (!interp_transform_call (method, wrapper, domain, generic_context, NULL, FALSE, error, FALSE, FALSE, FALSE))
-					goto exit;
+					return FALSE;
 			} else
 #endif
 			{
 				if (is_static) {
 					sp--;
 					interp_emit_ldsflda (field, error);
-					goto_if_nok (error, exit);
+					return_val_if_nok (error, FALSE);
 				} else {
 					sp--;
 					if (sp->type == StackType::O) {
@@ -1807,7 +1817,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 			field = interp_field_from_token (method, token, &klass, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
@@ -1838,7 +1848,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				if (is_static) {
 					sp--;
 					interp_emit_sfld_access (field, field_klass, mt, TRUE, error);
-					goto_if_nok (error, exit);
+					return_val_if_nok (error, FALSE);
 				} else if (sp [-1].type == StackType::VT) {
 					/* First we pop the vt object from the stack. Then we push the field */
 					int opcode = op_for_mint_type (MINT_LDFLD_VT_I1, mt);
@@ -1892,7 +1902,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			CHECK_STACK (2);
 			token = read32 (ip + 1);
 			field = interp_field_from_token (method, token, &klass, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			MonoClass *field_klass = mono_class_from_mono_type_internal (ftype);
@@ -1915,14 +1925,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			{
 				if (is_static) {
 					interp_emit_sfld_access (field, field_klass, mt, FALSE, error);
-					goto_if_nok (error, exit);
+					return_val_if_nok (error, FALSE);
 
 					/* pop the unused object reference */
 					sp--;
 
 					/* the vtable of the field might not be initialized at this point */
 					mono_class_vtable_checked (domain, field_klass, error);
-					goto_if_nok (error, exit);
+					return_val_if_nok (error, FALSE);
 				} else {
 					int opcode = op_for_mint_type (MINT_STFLD_I1, mt);
 #ifdef NO_UNALIGNED_ACCESS
@@ -1936,7 +1946,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 					if (mt == MintType::VT) {
 						/* the vtable of the field might not be initialized at this point */
 						mono_class_vtable_checked (domain, field_klass, error);
-						goto_if_nok (error, exit);
+						return_val_if_nok (error, FALSE);
 						if (m_class_has_references (field_klass)) {
 							last_ins->data [1] = get_data_item_index (field_klass);
 						} else {
@@ -1952,16 +1962,16 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 		case CEE_LDSFLDA: {
 			token = read32 (ip + 1);
 			field = interp_field_from_token (method, token, &klass, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			interp_emit_ldsflda (field, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			ip += 5;
 			break;
 		}
 		case CEE_LDSFLD: {
 			token = read32 (ip + 1);
 			field = interp_field_from_token (method, token, &klass, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			MonoType *ftype = mono_field_get_type_internal (field);
 			mt = mint_type (ftype);
 			klass = mono_class_from_mono_type_internal (ftype);
@@ -1979,7 +1989,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			}
 
 			interp_emit_sfld_access (field, klass, mt, TRUE, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 
 			ip += 5;
 			break;
@@ -1988,7 +1998,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 			field = interp_field_from_token (method, token, &klass, generic_context, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 			MonoType *ftype = mono_field_get_type_internal (field);
 			mt = mint_type (ftype);
 
@@ -1997,10 +2007,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 			/* the vtable of the field might not be initialized at this point */
 			MonoClass *fld_klass = mono_class_from_mono_type_internal (ftype);
 			mono_class_vtable_checked (domain, fld_klass, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 
 			interp_emit_sfld_access (field, fld_klass, mt, FALSE, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 
 			ip += 5;
 			break;
@@ -2115,17 +2125,17 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 			if (mono_class_is_nullable (klass)) {
 				MonoMethod *target_method = mono_class_get_method_from_name_checked (klass, "Box", 1, 0, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 				/* ip is incremented by interp_transform_call */
 				if (!interp_transform_call (method, target_method, domain, generic_context, NULL, FALSE, error, FALSE, FALSE, FALSE))
-					goto exit;
+					return FALSE;
 			} else if (!m_class_is_valuetype (klass)) {
 				/* already boxed, do nothing. */
 				ip += 5;
 			} else {
 				if (G_UNLIKELY (m_class_is_byreflike (klass))) {
 					mono_error_set_bad_image (error, image, "Cannot box IsByRefLike type '%s.%s'", m_class_get_name_space (klass), m_class_get_name (klass));
-					goto exit;
+					return FALSE;
 				}
 
 				const MintType boxed_mt = mint_type (m_class_get_byval_arg (klass));
@@ -2133,7 +2143,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 				coerce_fp (sp - 1, stack_type_of (boxed_mt));
 				MonoVTable *vtable = mono_class_vtable_checked (domain, klass, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 
 				sp--;
 				interp_add_ins (vt ? MINT_BOX_VT : MINT_BOX);
@@ -2158,7 +2168,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 			MonoClass *array_class = mono_class_create_array (klass, 1);
 			MonoVTable *vtable = mono_class_vtable_checked (domain, array_class, error);
-			goto_if_nok (error, exit);
+			return_val_if_nok (error, FALSE);
 
 			StackType lentype = (sp - 1)->type;
 			if (lentype == StackType::I8) {
@@ -2651,11 +2661,11 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 				if (generic_context) {
 					handle = mono_class_inflate_generic_type_checked ((MonoType*)handle, generic_context, error);
-					goto_if_nok (error, exit);
+					return_val_if_nok (error, FALSE);
 				}
 			} else {
 				handle = mono_ldtoken_checked (image, token, &klass, generic_context, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 			}
 			mono_class_init_internal (klass);
 			mt = mint_type (m_class_get_byval_arg (klass));
@@ -2694,7 +2704,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 
 				interp_add_ins (MINT_MONO_LDPTR);
 				gpointer systype = mono_type_get_object_checked (domain, (MonoType*)handle, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 				push_simple_type (StackType::MP);
 				interp_ins_set_dreg (last_ins, sp [-1].local);
 				last_ins->data [0] = get_data_item_index (systype);
@@ -2814,7 +2824,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 					locals [saved_local].stack_offset = sp [-1].offset;
 
 					if (!interp_transform_call (method, NULL, domain, generic_context, NULL, FALSE, error, FALSE, FALSE, FALSE))
-						goto exit;
+						return FALSE;
 					break;
 				}
 				case CEE_MONO_JIT_ICALL_ADDR: {
@@ -3098,7 +3108,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				MonoMethod *m;
 				token = read32 (ip + 1);
 				m = interp_get_method (method, token, image, generic_context, error);
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 
 				if (!mono_method_can_access_method (method, m))
 					interp_generate_mae_throw (method, m);
@@ -3141,7 +3151,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 					    m_class_get_parent (ctor_method->klass) == mono_defaults.multicastdelegate_class &&
 					    !strcmp (ctor_method->name, ".ctor")) {
 						mono_error_set_not_supported (error, "Cannot create delegate from method with UnmanagedCallersOnlyAttribute");
-						goto exit;
+						return FALSE;
 					}
 
 					MonoClass *delegate_klass = NULL;
@@ -3182,7 +3192,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				 * program never reaches would be worse than the load.
 				 */
 				int index = get_data_item_index (mono_interp_get_imethod (domain, m, error));
-				goto_if_nok (error, exit);
+				return_val_if_nok (error, FALSE);
 				if (*ip == CEE_LDVIRTFTN) {
 					CHECK_STACK (1);
 					--sp;
@@ -3378,7 +3388,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 				if (mono_metadata_token_table (token) == MONO_TABLE_TYPESPEC && !image_is_dynamic (m_class_get_image (method->klass)) && !generic_context) {
 					int align;
 					MonoType *type = mono_type_create_from_typespec_checked (image, token, error);
-					goto_if_nok (error, exit);
+					return_val_if_nok (error, FALSE);
 					size = mono_type_size (type, &align);
 				} else {
 					int align;
@@ -3440,15 +3450,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header, Mono
 		}
 	}
 
-exit_ret:
-	g_free (arg_locals);
-	g_free (local_locals);
-	mono_basic_block_free (original_bb);
-
-	return ret;
-exit:
-	ret = FALSE;
-	goto exit_ret;
+	return TRUE;
 }
 
 int

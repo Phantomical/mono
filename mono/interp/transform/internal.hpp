@@ -52,7 +52,7 @@
 #define INLINE_FAILURE \
 	do { \
 		if (inlining) \
-			goto exit; \
+			return FALSE; \
 	} while (0)
 
 /*
