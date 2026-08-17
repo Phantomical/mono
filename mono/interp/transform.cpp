@@ -33,6 +33,7 @@
 #include "interp.h"
 #include "transform.hpp"
 
+#include <algorithm>
 #include <optional>
 
 #include "mono/llvm/runtime.h"
@@ -2669,7 +2670,8 @@ interp_method_check_inlining (TransformData *td, MonoMethod *method, MonoMethodS
 	if (td->prof_coverage)
 		return FALSE;
 
-	if (g_list_find (td->dont_inline, method))
+	if (std::find (td->dont_inline.begin (), td->dont_inline.end (), method)
+	    != td->dont_inline.end ())
 		return FALSE;
 
 	/*
@@ -3479,9 +3481,8 @@ get_bb (TransformData *td, unsigned char *ip, gboolean make_list)
 		bb->index = td->bb_count++;
 		td->offset_to_bb [offset] = bb;
 
-                /* Add the blocks in reverse order */
-                if (make_list)
-                        td->basic_blocks = g_list_prepend_mempool (td->arena.pool (), td->basic_blocks, bb);
+		if (make_list)
+			td->basic_blocks.push_back (bb);
 	}
 
 	return bb;
@@ -3578,10 +3579,6 @@ get_basic_blocks (TransformData *td, MonoMethodHeader *header, gboolean make_lis
 		if (i == CEE_THROW || i == CEE_ENDFINALLY || i == CEE_RETHROW)
 			get_bb (td, ip, make_list);
 	}
-
-        /* get_bb added blocks in reverse order, unreverse now */
-        if (make_list)
-                td->basic_blocks = g_list_reverse (td->basic_blocks);
 }
 
 static guint8*
@@ -3606,19 +3603,19 @@ encode_uleb128 (guint32 value, guint8 *p)
  * trace can report an IL offset for a frame of this method.
  */
 static void
-interp_save_line_numbers (InterpMethod *rtm, TransformData *td, GArray *line_numbers)
+interp_save_line_numbers (InterpMethod *rtm, TransformData *td,
+                          const std::vector<MonoDebugLineNumberEntry> &line_numbers)
 {
-	if (!line_numbers->len)
+	if (line_numbers.empty ())
 		return;
 
 	/* Two varints an entry, each at most five bytes. */
-	guint8 *buf = (guint8*) g_malloc (line_numbers->len * 10);
+	guint8 *buf = g_new (guint8, line_numbers.size () * 10);
 	guint8 *p = buf;
 	guint32 prev_native = 0;
 	gint32 prev_il = 0;
 
-	for (guint i = 0; i < line_numbers->len; i++) {
-		MonoDebugLineNumberEntry lne = g_array_index (line_numbers, MonoDebugLineNumberEntry, i);
+	for (const MonoDebugLineNumberEntry &lne : line_numbers) {
 		gint32 il_delta = (gint32) lne.il_offset - prev_il;
 
 		p = encode_uleb128 (lne.native_offset - prev_native, p);
@@ -3638,7 +3635,8 @@ interp_save_line_numbers (InterpMethod *rtm, TransformData *td, GArray *line_num
 }
 
 static void
-interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header, TransformData *td, GArray *line_numbers)
+interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header, TransformData *td,
+                        const std::vector<MonoDebugLineNumberEntry> &line_numbers)
 {
 	MonoDebugMethodJitInfo *dinfo;
 	int i;
@@ -3659,7 +3657,7 @@ interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header, TransformDa
 	dinfo->code_size = td->new_code_end - td->new_code;
 	dinfo->epilogue_begin = 0;
 	dinfo->has_var_info = TRUE;
-	dinfo->num_line_numbers = line_numbers->len;
+	dinfo->num_line_numbers = (int) line_numbers.size ();
 	dinfo->line_numbers = g_new0 (MonoDebugLineNumberEntry, dinfo->num_line_numbers);
 
 	for (i = 0; i < dinfo->num_params; i++) {
@@ -3671,8 +3669,7 @@ interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header, TransformDa
 		var->type = mono_metadata_type_dup (NULL, header->locals [i]);
 	}
 
-	for (i = 0; i < dinfo->num_line_numbers; i++)
-		dinfo->line_numbers [i] = g_array_index (line_numbers, MonoDebugLineNumberEntry, i);
+	std::copy (line_numbers.begin (), line_numbers.end (), dinfo->line_numbers);
 	mono_debug_add_method (rtm->method, dinfo, rtm->domain);
 
 	mono_debug_free_method_jit_info (dinfo);
@@ -3768,10 +3765,9 @@ static void
 save_seq_points (TransformData *td, MonoJitInfo *jinfo)
 {
 	GByteArray *array;
-	int i, seq_info_size;
+	int seq_info_size;
 	MonoSeqPointInfo *info;
 	GSList **next = NULL;
-	GList *bblist;
 
 	if (!td->gen_sdb_seq_points)
 		return;
@@ -3780,16 +3776,12 @@ save_seq_points (TransformData *td, MonoJitInfo *jinfo)
 	 * For each sequence point, compute the list of sequence points immediately
 	 * following it, this is needed to implement 'step over' in the debugger agent.
 	 */
-	for (i = 0; i < td->seq_points->len; ++i) {
-		SeqPoint *sp = (SeqPoint*)g_ptr_array_index (td->seq_points, i);
-
+	for (size_t i = 0; i < td->seq_points.size (); ++i)
 		/* Store the seq point index here temporarily */
-		sp->next_offset = i;
-	}
-	next = td->arena.create_array<GSList *> (td->seq_points->len);
-	for (bblist = td->basic_blocks; bblist; bblist = bblist->next) {
-		InterpBasicBlock *bb = (InterpBasicBlock*)bblist->data;
+		td->seq_points[i]->next_offset = (int) i;
 
+	next = td->arena.create_array<GSList *> (td->seq_points.size ());
+	for (InterpBasicBlock *bb : td->basic_blocks) {
 		GSList *bb_seq_points = g_slist_reverse (bb->seq_points);
 		SeqPoint *last = NULL;
 		for (GSList *l = bb_seq_points; l; l = l->next) {
@@ -3814,28 +3806,27 @@ save_seq_points (TransformData *td, MonoJitInfo *jinfo)
 	array = g_byte_array_new ();
 	SeqPoint zero_seq_point = {0};
 	SeqPoint* last_seq_point = &zero_seq_point;
-	for (i = 0; i < td->seq_points->len; ++i) {
-		SeqPoint *sp = (SeqPoint*)g_ptr_array_index (td->seq_points, i);
+	for (size_t i = 0; i < td->seq_points.size (); ++i) {
+		SeqPoint *sp = td->seq_points[i];
 
 		sp->next_offset = 0;
-		if (mono_seq_point_info_add_seq_point (array, sp, last_seq_point, next [i], TRUE))
+		if (mono_seq_point_info_add_seq_point (array, sp, last_seq_point, next[i], TRUE))
 			last_seq_point = sp;
 	}
 
 	if (td->verbose_level) {
 		g_print ("\nSEQ POINT MAP FOR %s: \n", td->method->name);
 
-		for (i = 0; i < td->seq_points->len; ++i) {
-			SeqPoint *sp = (SeqPoint*)g_ptr_array_index (td->seq_points, i);
-			GSList *l;
+		for (size_t i = 0; i < td->seq_points.size (); ++i) {
+			SeqPoint *sp = td->seq_points[i];
 
-			if (!next [i])
+			if (!next[i])
 				continue;
 
 			g_print ("\tIL0x%x[0x%0x] ->", sp->il_offset, sp->native_offset);
-			for (l = next [i]; l; l = l->next) {
-				int next_index = GPOINTER_TO_UINT (l->data);
-				g_print (" IL0x%x", ((SeqPoint*)g_ptr_array_index (td->seq_points, next_index))->il_offset);
+			for (GSList *l = next[i]; l; l = l->next) {
+				guint next_index = GPOINTER_TO_UINT (l->data);
+				g_print (" IL0x%x", td->seq_points[next_index]->il_offset);
 			}
 			g_print ("\n");
 		}
@@ -4351,6 +4342,24 @@ handle_stelem (TransformData *td, int op)
 	++td->ip;
 }
 
+/// Keeps a method off the inline candidates for as long as the scope lives,
+/// which is what stops a method being inlined into itself.
+class DontInlineScope {
+public:
+	DontInlineScope (TransformData *td, MonoMethod *method) : td_ (td)
+	{
+		td_->dont_inline.push_back (method);
+	}
+
+	~DontInlineScope () { td_->dont_inline.pop_back (); }
+
+	DontInlineScope (const DontInlineScope &) = delete;
+	DontInlineScope &operator= (const DontInlineScope &) = delete;
+
+private:
+	TransformData *td_;
+};
+
 static gboolean
 generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, MonoGenericContext *generic_context, MonoError *error)
 {
@@ -4384,6 +4393,8 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 	gboolean link_bblocks = TRUE;
 	gboolean inlining = td->method != method;
 	InterpBasicBlock *exit_bb = NULL;
+
+	DontInlineScope dont_inline (td, method);
 
 	original_bb = bb = mono_basic_block_split (method, error, header);
 	goto_if_nok (error, exit);
@@ -4547,7 +4558,6 @@ generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, 
 			local_locals [i] = create_interp_local (td, header->locals [i]);
 	}
 
-	td->dont_inline = g_list_prepend (td->dont_inline, method);
 	while (td->ip < end) {
 		g_assert (td->sp >= td->stack);
 		in_offset = td->ip - header->code;
@@ -7639,7 +7649,6 @@ exit_ret:
 	g_free (arg_locals);
 	g_free (local_locals);
 	mono_basic_block_free (original_bb);
-	td->dont_inline = g_list_remove (td->dont_inline, method);
 
 	return ret;
 exit:
@@ -7651,8 +7660,7 @@ static void
 handle_relocations (TransformData *td)
 {
 	// Handle relocations
-	for (int i = 0; i < td->relocs->len; ++i) {
-		Reloc *reloc = (Reloc*)g_ptr_array_index (td->relocs, i);
+	for (Reloc *reloc : td->relocs) {
 		int offset = reloc->target_bb->native_offset - reloc->offset;
 
 		switch (reloc->type) {
@@ -7709,7 +7717,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 		MonoDebugLineNumberEntry lne;
 		lne.native_offset = (guint8*)start_ip - (guint8*)td->new_code;
 		lne.il_offset = ins->il_offset;
-		g_array_append_val (td->line_numbers, lne);
+		td->line_numbers.push_back (lne);
 	}
 
 	if (opcode == MINT_NOP)
@@ -7728,7 +7736,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			reloc->type = RELOC_SWITCH;
 			reloc->offset = ip - td->new_code;
 			reloc->target_bb = ins->info.target_bb_table [i];
-			g_ptr_array_add (td->relocs, reloc);
+			td->relocs.push_back (reloc);
 			*ip++ = 0xdead;
 			*ip++ = 0xbeef;
 		}
@@ -7748,7 +7756,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			reloc->skip = num_sregs (opcode);
 			reloc->offset = br_offset;
 			reloc->target_bb = ins->info.target_bb;
-			g_ptr_array_add (td->relocs, reloc);
+			td->relocs.push_back (reloc);
 			*ip++ = 0xdead;
 		}
 		if (opcode == MINT_CALL_HANDLER_S)
@@ -7769,7 +7777,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			reloc->skip = num_sregs (opcode);
 			reloc->offset = br_offset;
 			reloc->target_bb = ins->info.target_bb;
-			g_ptr_array_add (td->relocs, reloc);
+			td->relocs.push_back (reloc);
 			*ip++ = 0xdead;
 			*ip++ = 0xbeef;
 		}
@@ -7790,7 +7798,7 @@ emit_compacted_instruction (TransformData *td, guint16* start_ip, InterpBasicBlo
 			seqp->flags |= MONO_SEQ_POINT_FLAG_NONEMPTY_STACK;
 		if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_NESTED_CALL)
 			seqp->flags |= MONO_SEQ_POINT_FLAG_NESTED_CALL;
-		g_ptr_array_add (td->seq_points, seqp);
+		td->seq_points.push_back (seqp);
 
 		/*
 		 * The block the instruction sits in, rather than the one that starts at
@@ -7843,7 +7851,6 @@ generate_compacted_code (TransformData *td)
 {
 	guint16 *ip;
 	int size = 0;
-	td->relocs = g_ptr_array_new ();
 	InterpBasicBlock *bb;
 
 	// Iterate once for preliminary computations
@@ -7873,8 +7880,6 @@ generate_compacted_code (TransformData *td)
 	// Patch all branches. This might be useless since we iterate once anyway to compute the size
 	// of the generated code. We could compute the native offset of each basic block then.
 	handle_relocations (td);
-
-	g_ptr_array_free (td->relocs, TRUE);
 }
 
 // Traverse the list of basic blocks and merge adjacent blocks
@@ -8625,7 +8630,6 @@ TransformData::TransformData (MonoMethod *method, MonoMethodHeader *header, Inte
 	clause_indexes = g_new (int, header->code_size);
 	mem_manager = m_method_get_mem_manager (rtm->domain, method);
 	gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
-	seq_points = g_ptr_array_new ();
 	verbose_level = mono_interp_traceopt;
 	prof_coverage = mono_profiler_coverage_instrumentation_enabled (method);
 
@@ -8635,7 +8639,6 @@ TransformData::TransformData (MonoMethod *method, MonoMethodHeader *header, Inte
 	stack = g_new0 (StackInfo, header->max_stack + 1);
 	stack_capacity = header->max_stack + 1;
 	sp = stack;
-	line_numbers = g_array_new (FALSE, TRUE, sizeof (MonoDebugLineNumberEntry));
 }
 
 TransformData::~TransformData ()
@@ -8643,8 +8646,6 @@ TransformData::~TransformData ()
 	g_free (in_offsets);
 	g_free (clause_indexes);
 	g_free (stack);
-	g_ptr_array_free (seq_points, TRUE);
-	g_array_free (line_numbers, TRUE);
 }
 
 static void

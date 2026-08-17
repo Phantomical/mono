@@ -231,19 +231,21 @@ struct TransformData {
 	std::unordered_map<gpointer, guint16> data_hash;
 	int *clause_indexes = nullptr;
 	gboolean gen_sdb_seq_points = FALSE;
-	GPtrArray *seq_points = nullptr;
+	std::vector<SeqPoint *> seq_points;
 	InterpBasicBlock **offset_to_bb = nullptr;
 	InterpBasicBlock *entry_bb = nullptr, *cbb = nullptr;
 	int bb_count = 0;
 	Arena arena;
 	MonoMemoryManager *mem_manager = nullptr;
-	GList *basic_blocks = nullptr;
-	GPtrArray *relocs = nullptr;
+	std::vector<InterpBasicBlock *> basic_blocks;
+	std::vector<Reloc *> relocs;
 	gboolean verbose_level = 0;
-	GArray *line_numbers = nullptr;
+	std::vector<MonoDebugLineNumberEntry> line_numbers;
 	gboolean prof_coverage = FALSE;
 	MonoProfilerCoverageInfo *coverage_info = nullptr;
-	GList *dont_inline = nullptr;
+	/// The methods on the inlining path right now, innermost last. A method
+	/// already here is not an inline candidate.
+	std::vector<MonoMethod *> dont_inline;
 	int inline_depth = 0;
 	bool has_localloc : 1;
 };
