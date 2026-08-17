@@ -11,6 +11,7 @@
 
 #include "mono/interp/mintops.hpp"
 
+using namespace mono::interp;
 using namespace mono::test;
 
 namespace {

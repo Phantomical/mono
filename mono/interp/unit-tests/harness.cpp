@@ -124,7 +124,7 @@ Transform::Transform (const std::string &image, const std::string &method_name,
 	mono_test_interp_method_compute_offsets (&td, &rtm,
 	                                         mono_method_signature_internal (method), header);
 
-	td.stack = (StackInfo *) g_malloc0 ((header->max_stack + 1) * sizeof (td.stack [0]));
+	td.stack = (interp::StackInfo *) g_malloc0 ((header->max_stack + 1) * sizeof (td.stack [0]));
 	td.stack_capacity = header->max_stack + 1;
 	td.sp = td.stack;
 	td.max_stack_height = 0;
@@ -159,8 +159,8 @@ Transform::cprop ()
 Code::Code (Transform &transform)
 {
 	// The instructions hang off the basic blocks, in IL order along next_bb.
-	for (InterpBasicBlock *bb = transform.get ()->entry_bb; bb != nullptr; bb = bb->next_bb) {
-		for (InterpInst *ins = bb->first_ins; ins != nullptr; ins = ins->next) {
+	for (interp::InterpBasicBlock *bb = transform.get ()->entry_bb; bb != nullptr; bb = bb->next_bb) {
+		for (interp::InterpInst *ins = bb->first_ins; ins != nullptr; ins = ins->next) {
 			if (ins->opcode == MINT_NOP)
 				continue;
 
@@ -170,7 +170,7 @@ Code::Code (Transform &transform)
 	}
 }
 
-InterpInst *
+interp::InterpInst *
 Code::at (size_t index) const
 {
 	return index < instructions.size () ? instructions [index] : nullptr;

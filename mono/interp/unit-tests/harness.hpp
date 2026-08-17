@@ -57,13 +57,13 @@ public:
 	Transform (const Transform &) = delete;
 	Transform &operator= (const Transform &) = delete;
 
-	TransformData *get () { return &td; }
+	interp::TransformData *get () { return &td; }
 
 	/// Runs constant propagation over what the transform emitted.
 	void cprop ();
 
 private:
-	TransformData td;
+	interp::TransformData td;
 	InterpMethod rtm;
 	MonoMethodHeader *header;
 };
@@ -78,10 +78,10 @@ public:
 	const std::vector<std::string> &opcodes () const { return names; }
 
 	/// The instruction at `index`, or null past the end.
-	InterpInst *at (size_t index) const;
+	interp::InterpInst *at (size_t index) const;
 
 private:
-	std::vector<InterpInst *> instructions;
+	std::vector<interp::InterpInst *> instructions;
 	std::vector<std::string> names;
 };
 

@@ -15,6 +15,8 @@
 #define INTERP_LOCAL_FLAG_EXECUTION_STACK 2
 #define INTERP_LOCAL_FLAG_CALL_ARGS 4
 
+namespace mono::interp {
+
 struct InterpInst;
 struct InterpBasicBlock;
 
@@ -234,17 +236,18 @@ struct TransformData {
 	bool has_localloc : 1;
 };
 
+} // namespace mono::interp
 
 /* test exports for white box testing */
 void
-mono_test_interp_cprop (TransformData *td);
+mono_test_interp_cprop (mono::interp::TransformData *td);
 gboolean
-mono_test_interp_generate_code (TransformData *td, MonoMethod *method, MonoMethodHeader *header, MonoGenericContext *generic_context, MonoError *error);
+mono_test_interp_generate_code (mono::interp::TransformData *td, MonoMethod *method, MonoMethodHeader *header, MonoGenericContext *generic_context, MonoError *error);
 void
-mono_test_interp_method_compute_offsets (TransformData *td, InterpMethod *imethod, MonoMethodSignature *signature, MonoMethodHeader *header);
+mono_test_interp_method_compute_offsets (mono::interp::TransformData *td, InterpMethod *imethod, MonoMethodSignature *signature, MonoMethodHeader *header);
 
 /* debugging aid */
 void
-mono_interp_print_td_code (TransformData *td);
+mono_interp_print_td_code (mono::interp::TransformData *td);
 
 #endif /* __MONO_INTERP_TRANSFORM_H__ */
