@@ -117,6 +117,16 @@ typedef ptrdiff_t ssize_t;
 #define MONO_RESTRICT
 #endif
 
+#if defined(__has_cpp_attribute)
+#if __has_cpp_attribute(clang::musttail)
+#define MONO_MUSTTAIL [[clang::musttail]]
+#elif __has_cpp_attribute(gnu::musttail)
+#define MONO_MUSTTAIL [[gnu::musttail]]
+#elif __has_cpp_attribute(msvc::musttail)
+#define MONO_MUSTTAIL [[msvc::musttail]]
+#endif
+#endif
+
 #if defined (__GNUC__) && defined (__GNUC_MINOR__) && defined (__GNUC_PATCHLEVEL__)
 #define MONO_GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #endif

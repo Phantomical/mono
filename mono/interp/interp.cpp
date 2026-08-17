@@ -61,7 +61,11 @@ InterpState::start ()
 	MONO_INTERP_DISPATCH ();
 }
 
+#ifdef MONO_MUSTTAIL
 void
+#else
+void *
+#endif
 InterpState::exec_invalid_opcode (InterpState *state)
 {
 	std::string message;
@@ -179,10 +183,12 @@ InterpState::resume ()
 
 MONO_INTERP_ENTRY (exec_exit, exit);
 
+#ifdef MONO_MUSTTAIL
 static void
 real_exit (InterpState *state)
 {
 }
+#endif
 
 InterpState::OpFunc MONO_ALWAYS_INLINE
 InterpState::exit ()
@@ -203,7 +209,11 @@ InterpState::exit ()
 	 */
 	context->handle_mark_count = handle_mark_depth;
 
+#ifdef MONO_MUSTTAIL
 	return &real_exit;
+#else
+	return nullptr;
+#endif
 }
 
 } // namespace mono::interp

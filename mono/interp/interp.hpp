@@ -5,12 +5,12 @@
 #include "glib.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
-#include "mono/interp/musttail.hpp"
 #include "mono/interp/runtime/internals.hpp"
 #include "mono/interp/mintops.hpp"
 #include "mono/metadata/metadata.h"
 #include "mono/mini/mini-runtime.h"
 #include "mono/utils/mono-error.h"
+#include "mono/utils/mono-compiler.h"
 #include <cstdint>
 #include <optional>
 #include <cstring>
@@ -100,8 +100,16 @@ public:
 	{
 	}
 
-	// Execute the method that has been set up for this interpreter.
+#ifdef MONO_MUSTTAIL
 	void exec () { exec_method (this); }
+#else
+	void exec ()
+	{
+		OpFunc next = &exec_method;
+		while (next)
+			next = (OpFunc) next (this);
+	}
+#endif
 
 #ifdef ENABLE_INTERP_TRACE
 	void trace_op_if_wanted ()
@@ -144,15 +152,18 @@ private:
 	}
 
 private:
-#if MONO_HAVE_MUSTTAIL
+#ifdef MONO_MUSTTAIL
 #define MONO_INTERP_EXEC_DEF(name) static void name (InterpState *state)
 
 	using OpFunc = void (*) (InterpState *);
 
+	static void exec_invalid_opcode (InterpState *state);
 #else
-#define MONO_INTERP_EXEC_DEF(name) static OpFunc name (InterpState *state);
+#define MONO_INTERP_EXEC_DEF(name) static void *name (InterpState *state)
 
-	using OpFunc = OpFunc (*) (InterpState *);
+	using OpFunc = void *(*) (InterpState *);
+
+	static void *exec_invalid_opcode (InterpState *state);
 #endif
 
 #define OPDEF(name, b, c, d, e, f)                                                 \
@@ -161,8 +172,6 @@ private:
 	inline OpFunc exec_##name (MintOpcode opcode);
 #include "mintops.def"
 #undef OPDEF
-
-	static void exec_invalid_opcode (InterpState *state);
 
 	// Used by MONO_INTERP_EXIT as the exit method
 	MONO_INTERP_EXEC_DEF (exec_exit);
@@ -188,7 +197,7 @@ private:
 	static const OpFunc optable[MINT_LASTOP];
 };
 
-#if MONO_HAVE_MUSTTAIL
+#ifdef MONO_MUSTTAIL
 #define MONO_INTERP_OP_IMPL(opcode)                       \
 	void InterpState::entry_##opcode (InterpState *state) \
 	{                                                     \
@@ -208,17 +217,20 @@ private:
 		MONO_MUSTTAIL return next (state);       \
 	}
 #else
-#define MONO_INTERP_OP_IMPL(opcode)                                      \
-	InterpState::OpFunc InterpState::entry_##opcode (InterpState *state) \
-	{                                                                    \
-		state->trace_op_if_wanted ();                                    \
-		return state->exec_##opcode (opcode);                            \
-	}
+#define MONO_INTERP_OP_IMPL(opcode)                        \
+	void *InterpState::entry_##opcode (InterpState *state) \
+	{                                                      \
+		state->trace_op_if_wanted ();                      \
+		OpFunc next = state->exec_##opcode (opcode);       \
+		return (void *) next;                              \
+	}                                                      \
+	MONO_ALWAYS_INLINE InterpState::OpFunc InterpState::exec_##opcode (MintOpcode _opcode)
 
-#define MONO_INTERP_ENTRY(entry, inner)                         \
-	InterpState::OpFunc InterpState::entry (InterpState *state) \
-	{                                                           \
-		return state->inner ();                                 \
+#define MONO_INTERP_ENTRY(entry, inner)           \
+	void *InterpState::entry (InterpState *state) \
+	{                                             \
+		OpFunc next = state->inner ();            \
+		return (void *) next;                     \
 	}
 #endif
 
