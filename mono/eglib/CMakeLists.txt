@@ -78,3 +78,7 @@ target_link_libraries(eglib PUBLIC m)
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/eglib-config.h"
         DESTINATION "${MONO_DATA_SUBDIR}/mono/eglib")
+
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()
