@@ -14,12 +14,44 @@
 #include <mono/metadata/object-internals.h>
 #include <mono/utils/mono-threads.h>
 
+#include <cstdarg>
+#include <cstdio>
+#include <string>
+
 #ifdef ENABLE_INTERP_TRACE
 
 namespace mono::interp {
 
-static void
-dump_stackval (GString *str, stackval *s, MonoType *type)
+namespace {
+
+/// Appends a printf-formatted piece. Every caller formats one stack slot, so a
+/// fixed buffer covers it; the one unbounded piece is appended directly.
+void
+append_format (std::string &out, const char *fmt, ...)
+{
+	char buf [128];
+	va_list args;
+
+	va_start (args, fmt);
+	vsnprintf (buf, sizeof (buf), fmt, args);
+	va_end (args);
+
+	out += buf;
+}
+
+/// The name mono_method_full_name () builds, as a string that frees itself.
+std::string
+full_name (MonoMethod *method, gboolean with_signature)
+{
+	char *name = mono_method_full_name (method, with_signature);
+	std::string owned = name;
+
+	g_free (name);
+	return owned;
+}
+
+void
+dump_stackval (std::string &out, stackval *s, MonoType *type)
 {
 	switch (type->type) {
 	case MONO_TYPE_I1:
@@ -30,7 +62,7 @@ dump_stackval (GString *str, stackval *s, MonoType *type)
 	case MONO_TYPE_U4:
 	case MONO_TYPE_CHAR:
 	case MONO_TYPE_BOOLEAN:
-		g_string_append_printf (str, "[%d] ", s->data.i);
+		append_format (out, "[%d] ", s->data.i);
 		break;
 	case MONO_TYPE_STRING:
 	case MONO_TYPE_SZARRAY:
@@ -41,71 +73,77 @@ dump_stackval (GString *str, stackval *s, MonoType *type)
 	case MONO_TYPE_FNPTR:
 	case MONO_TYPE_I:
 	case MONO_TYPE_U:
-		g_string_append_printf (str, "[%p] ", s->data.p);
+		append_format (out, "[%p] ", s->data.p);
 		break;
 	case MONO_TYPE_VALUETYPE:
 		if (m_class_is_enumtype (type->data.klass))
-			g_string_append_printf (str, "[%d] ", s->data.i);
+			append_format (out, "[%d] ", s->data.i);
 		else
-			g_string_append_printf (str, "[vt:%p] ", s->data.p);
+			append_format (out, "[vt:%p] ", s->data.p);
 		break;
 	case MONO_TYPE_R4:
-		g_string_append_printf (str, "[%g] ", s->data.f_r4);
+		append_format (out, "[%g] ", s->data.f_r4);
 		break;
 	case MONO_TYPE_R8:
-		g_string_append_printf (str, "[%g] ", s->data.f);
+		append_format (out, "[%g] ", s->data.f);
 		break;
 	case MONO_TYPE_I8:
 	case MONO_TYPE_U8:
 	default: {
-		GString *res = g_string_new ("");
-		mono_type_get_desc (res, type, TRUE);
-		g_string_append_printf (str, "[{%s} %" PRId64 "/0x%0" PRIx64 "] ", res->str, (gint64)s->data.l, (guint64)s->data.l);
-		g_string_free (res, TRUE);
+		// mono_type_get_desc () writes into a GString, and what it writes has no
+		// length this side can assume, so it is appended rather than formatted.
+		GString *desc = g_string_new ("");
+
+		mono_type_get_desc (desc, type, TRUE);
+		out += "[{";
+		out += desc->str;
+		out += "} ";
+		g_string_free (desc, TRUE);
+
+		append_format (out, "%" PRId64 "/0x%0" PRIx64 "] ", (gint64) s->data.l,
+		               (guint64) s->data.l);
 		break;
 	}
 	}
 }
 
-static char*
+std::string
 dump_retval (InterpFrame *inv)
 {
-	GString *str = g_string_new ("");
+	std::string out;
 	MonoType *ret = mono_method_signature_internal (inv->imethod->method)->ret;
 
 	if (ret->type != MONO_TYPE_VOID)
-		dump_stackval (str, inv->stack, ret);
+		dump_stackval (out, inv->stack, ret);
 
-	return g_string_free (str, FALSE);
+	return out;
 }
 
-static char*
+std::string
 dump_args (InterpFrame *inv)
 {
-	GString *str = g_string_new ("");
-	int i;
+	std::string out;
 	MonoMethodSignature *signature = mono_method_signature_internal (inv->imethod->method);
-	
-	if (signature->param_count == 0 && !signature->hasthis)
-		return g_string_free (str, FALSE);
 
 	if (signature->hasthis) {
 		MonoMethod *method = inv->imethod->method;
-		dump_stackval (str, inv->stack, m_class_get_byval_arg (method->klass));
+		dump_stackval (out, inv->stack, m_class_get_byval_arg (method->klass));
 	}
 
-	for (i = 0; i < signature->param_count; ++i)
-		dump_stackval (str, inv->stack + (!!signature->hasthis) + i, signature->params [i]);
+	for (int i = 0; i < signature->param_count; ++i)
+		dump_stackval (out, inv->stack + (!!signature->hasthis) + i, signature->params [i]);
 
-	return g_string_free (str, FALSE);
+	return out;
 }
 
-static void
+void
 print_indent (ThreadContext *context)
 {
 	for (int i = 0; i < context->trace_depth; i++)
 		g_print ("  ");
 }
+
+} // namespace
 
 gboolean
 trace_wants_method (MonoMethod *method)
@@ -121,39 +159,32 @@ trace_wants_method (MonoMethod *method)
 	if (!pattern)
 		return FALSE;
 
-	char *name = mono_method_full_name (method, TRUE);
-	gboolean wanted = strstr (name, pattern) != NULL;
-	g_free (name);
-	return wanted;
+	return full_name (method, TRUE).find (pattern) != std::string::npos;
 }
 
 void
 trace_enter (ThreadContext *context, InterpFrame *frame)
 {
-	char *name = mono_method_full_name (frame->imethod->method, FALSE);
-	char *args = dump_args (frame);
+	std::string name = full_name (frame->imethod->method, FALSE);
+	std::string args = dump_args (frame);
 
 	print_indent (context);
-	g_print ("(%p) enter %s (%s)\n", mono_thread_internal_current (), name, args);
+	g_print ("(%p) enter %s (%s)\n", mono_thread_internal_current (), name.c_str (),
+	         args.c_str ());
 	context->trace_depth++;
-
-	g_free (args);
-	g_free (name);
 }
 
 void
 trace_leave (ThreadContext *context, InterpFrame *frame)
 {
-	char *name = mono_method_full_name (frame->imethod->method, FALSE);
-	char *retval = dump_retval (frame);
+	std::string name = full_name (frame->imethod->method, FALSE);
+	std::string retval = dump_retval (frame);
 
 	if (context->trace_depth > 0)
 		context->trace_depth--;
 	print_indent (context);
-	g_print ("(%p) leave %s => %s\n", mono_thread_internal_current (), name, retval);
-
-	g_free (retval);
-	g_free (name);
+	g_print ("(%p) leave %s => %s\n", mono_thread_internal_current (), name.c_str (),
+	         retval.c_str ());
 }
 
 MONO_NEVER_INLINE void
