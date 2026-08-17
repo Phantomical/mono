@@ -6,6 +6,8 @@
 #include "interp-internals.hpp"
 
 #include <cstdint>
+#include <unordered_map>
+#include <vector>
 
 #define INTERP_INST_FLAG_SEQ_POINT_NONEMPTY_STACK 1
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY 2
@@ -220,15 +222,13 @@ struct TransformData {
 	unsigned int stack_capacity = 0;
 	unsigned int max_stack_size = 0;
 	unsigned int total_locals_size = 0;
-	InterpLocal *locals = nullptr;
+	std::vector<InterpLocal> locals;
 	unsigned int il_locals_offset = 0;
 	unsigned int il_locals_size = 0;
-	unsigned int locals_size = 0;
-	unsigned int locals_capacity = 0;
-	int n_data_items = 0;
-	int max_data_items = 0;
-	void **data_items = nullptr;
-	GHashTable *data_hash = nullptr;
+	std::vector<gpointer> data_items;
+	/// Where a pointer already in data_items sits, so that a second reference
+	/// to it reuses the slot.
+	std::unordered_map<gpointer, guint16> data_hash;
 	int *clause_indexes = nullptr;
 	gboolean gen_sdb_seq_points = FALSE;
 	GPtrArray *seq_points = nullptr;

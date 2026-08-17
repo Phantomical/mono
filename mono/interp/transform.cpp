@@ -487,21 +487,15 @@ get_type_from_stack (StackType type, MonoClass *klass)
 static int
 create_interp_local_explicit (TransformData *td, MonoType *type, int size)
 {
-	if (td->locals_size == td->locals_capacity) {
-		td->locals_capacity *= 2;
-		if (td->locals_capacity == 0)
-			td->locals_capacity = 2;
-		td->locals = (InterpLocal*) g_realloc (td->locals, td->locals_capacity * sizeof (InterpLocal));
-	}
-	td->locals [td->locals_size].type = type;
-	td->locals [td->locals_size].mt = mint_type (type);
-	td->locals [td->locals_size].flags = 0;
-	td->locals [td->locals_size].indirects = 0;
-	td->locals [td->locals_size].offset = -1;
-	td->locals [td->locals_size].size = size;
-	td->locals_size++;
-	return td->locals_size - 1;
+	InterpLocal local{};
 
+	local.type = type;
+	local.mt = mint_type (type);
+	local.offset = -1;
+	local.size = size;
+
+	td->locals.push_back (local);
+	return (int) td->locals.size () - 1;
 }
 
 static int
@@ -1216,34 +1210,23 @@ store_local (TransformData *td, int local)
 }
 
 static guint16
-get_data_item_index (TransformData *td, void *ptr)
+get_data_item_index_nonshared (TransformData *td, void *ptr)
 {
-	gpointer p = g_hash_table_lookup (td->data_hash, ptr);
-	guint index;
-	if (p != NULL)
-		return GPOINTER_TO_UINT (p) - 1;
-	if (td->max_data_items == td->n_data_items) {
-		td->max_data_items = td->n_data_items == 0 ? 16 : 2 * td->max_data_items;
-		td->data_items = (gpointer*)g_realloc (td->data_items, td->max_data_items * sizeof(td->data_items [0]));
-	}
-	index = td->n_data_items;
-	td->data_items [index] = ptr;
-	++td->n_data_items;
-	g_hash_table_insert (td->data_hash, ptr, GUINT_TO_POINTER (index + 1));
-	return index;
+	td->data_items.push_back (ptr);
+	return (guint16) (td->data_items.size () - 1);
 }
 
 static guint16
-get_data_item_index_nonshared (TransformData *td, void *ptr)
+get_data_item_index (TransformData *td, void *ptr)
 {
-	guint index;
-	if (td->max_data_items == td->n_data_items) {
-		td->max_data_items = td->n_data_items == 0 ? 16 : 2 * td->max_data_items;
-		td->data_items = (gpointer*)g_realloc (td->data_items, td->max_data_items * sizeof(td->data_items [0]));
-	}
-	index = td->n_data_items;
-	td->data_items [index] = ptr;
-	++td->n_data_items;
+	auto known = td->data_hash.find (ptr);
+
+	if (known != td->data_hash.end ())
+		return known->second;
+
+	guint16 index = get_data_item_index_nonshared (td, ptr);
+
+	td->data_hash[ptr] = index;
 	return index;
 }
 
@@ -2714,7 +2697,7 @@ interp_inline_method (TransformData *td, MonoMethod *target_method, MonoMethodHe
 	int *prev_in_offsets;
 	gboolean ret;
 	unsigned int prev_max_stack_height, prev_locals_size;
-	int prev_n_data_items;
+	size_t prev_n_data_items;
 	int i; 
 	int prev_sp_offset;
 	MonoGenericContext *generic_context = NULL;
@@ -2746,9 +2729,9 @@ interp_inline_method (TransformData *td, MonoMethod *target_method, MonoMethodHe
 	td->inlined_method = target_method;
 
 	prev_max_stack_height = td->max_stack_height;
-	prev_locals_size = td->locals_size;
+	prev_locals_size = td->locals.size ();
 
-	prev_n_data_items = td->n_data_items;
+	prev_n_data_items = td->data_items.size ();
 	prev_in_offsets = td->in_offsets;
 	td->in_offsets = (int*)g_malloc0((header->code_size + 1) * sizeof(int));
 
@@ -2774,13 +2757,12 @@ interp_inline_method (TransformData *td, MonoMethod *target_method, MonoMethodHe
 		if (td->verbose_level)
 			g_print ("Inline aborted method %s.%s\n", m_class_get_name (target_method->klass), target_method->name);
 		td->max_stack_height = prev_max_stack_height;
-		td->locals_size = prev_locals_size;
+		td->locals.resize (prev_locals_size);
 
 		/* Remove any newly added items */
-		for (i = prev_n_data_items; i < td->n_data_items; i++) {
-			g_hash_table_remove (td->data_hash, td->data_items [i]);
-		}
-		td->n_data_items = prev_n_data_items;
+		for (size_t item = prev_n_data_items; item < td->data_items.size (); item++)
+			td->data_hash.erase (td->data_items[item]);
+		td->data_items.resize (prev_n_data_items);
 		td->sp = td->stack + prev_sp_offset;
 		memcpy (&td->sp [-nargs], prev_param_area, nargs * sizeof (StackInfo));
 		td->last_ins = prev_last_ins;
@@ -3903,9 +3885,7 @@ interp_method_compute_offsets (TransformData *td, InterpMethod *imethod, MonoMet
 	int num_locals = num_args + num_il_locals;
 
 	imethod->local_offsets = (guint32*)g_malloc (num_il_locals * sizeof(guint32));
-	td->locals = (InterpLocal*)g_malloc (num_locals * sizeof (InterpLocal));
-	td->locals_size = num_locals;
-	td->locals_capacity = td->locals_size;
+	td->locals.resize (num_locals);
 	offset = 0;
 
 	g_assert (MINT_STACK_SLOT_SIZE == MINT_VT_ALIGNMENT);
@@ -7933,7 +7913,7 @@ interp_local_deadce (TransformData *td, int *local_ref_count)
 	gboolean needs_dce = FALSE;
 	gboolean needs_cprop = FALSE;
 
-	for (int i = 0; i < td->locals_size; i++) {
+	for (size_t i = 0; i < td->locals.size (); i++) {
 		g_assert (local_ref_count [i] >= 0);
 		g_assert (td->locals [i].indirects >= 0);
 		if (!local_ref_count [i] &&
@@ -8362,14 +8342,14 @@ interp_fold_binop_cond_br (TransformData *td, InterpBasicBlock *cbb, LocalValue 
 static void
 interp_cprop (TransformData *td)
 {
-	LocalValue *local_defs = (LocalValue*) g_malloc (td->locals_size * sizeof (LocalValue));
-	int *local_ref_count = (int*) g_malloc (td->locals_size * sizeof (int));
+	LocalValue *local_defs = g_new (LocalValue, td->locals.size ());
+	int *local_ref_count = g_new (int, td->locals.size ());
 	InterpBasicBlock *bb;
 	gboolean needs_retry;
 	int ins_index;
 
 retry:
-	memset (local_ref_count, 0, td->locals_size * sizeof (int));
+	memset (local_ref_count, 0, td->locals.size () * sizeof (int));
 
 	if (td->verbose_level)
 		g_print ("\ncprop iteration\n");
@@ -8382,7 +8362,7 @@ retry:
 		td->cbb = bb;
 
 		// FIXME This is excessive. Remove this once we have SSA
-		memset (local_defs, 0, td->locals_size * sizeof (LocalValue));
+		memset (local_defs, 0, td->locals.size () * sizeof (LocalValue));
 
 		if (td->verbose_level)
 			g_print ("BB%d\n", bb->index);
@@ -8644,7 +8624,6 @@ TransformData::TransformData (MonoMethod *method, MonoMethodHeader *header, Inte
 	in_offsets = g_new0 (int, header->code_size + 1);
 	clause_indexes = g_new (int, header->code_size);
 	mem_manager = m_method_get_mem_manager (rtm->domain, method);
-	data_hash = g_hash_table_new (NULL, NULL);
 	gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
 	seq_points = g_ptr_array_new ();
 	verbose_level = mono_interp_traceopt;
@@ -8663,10 +8642,7 @@ TransformData::~TransformData ()
 {
 	g_free (in_offsets);
 	g_free (clause_indexes);
-	g_free (data_items);
 	g_free (stack);
-	g_free (locals);
-	g_hash_table_destroy (data_hash);
 	g_ptr_array_free (seq_points, TRUE);
 	g_array_free (line_numbers, TRUE);
 }
@@ -8685,7 +8661,7 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 		verbose_method_inited = TRUE;
 	}
 
-	rtm->data_items = td->data_items;
+	rtm->data_items = NULL;
 
 	interp_method_compute_offsets (td, rtm, mono_method_signature_internal (method), header, error);
 	return_if_nok (error);
@@ -8766,8 +8742,9 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm, MonoG
 	rtm->stack_size += 2 * MINT_STACK_SLOT_SIZE; /* + 1 for returns of called functions  + 1 for 0-ing in trace*/
 	rtm->total_locals_size = ALIGN_TO (td->total_locals_size, MINT_VT_ALIGNMENT);
 	rtm->alloca_size = ALIGN_TO (rtm->total_locals_size + rtm->stack_size, 8);
-	rtm->data_items = (gpointer*)mono_mem_manager_alloc0 (td->mem_manager, td->n_data_items * sizeof (td->data_items [0]));
-	memcpy (rtm->data_items, td->data_items, td->n_data_items * sizeof (td->data_items [0]));
+	size_t data_items_size = td->data_items.size () * sizeof (td->data_items[0]);
+	rtm->data_items = (gpointer *) mono_mem_manager_alloc0 (td->mem_manager, data_items_size);
+	memcpy (rtm->data_items, td->data_items.data (), data_items_size);
 
 	interp_save_line_numbers (rtm, td, td->line_numbers);
 
