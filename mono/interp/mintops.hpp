@@ -104,8 +104,8 @@ inline constexpr OpInfo opinfos[MINT_LASTOP] = {
 #define OPDEF(a, b, c, d, e, f)                  \
 	OpInfo{.name_offset = offsetof (OpNames, a), \
 	       .oplength = c,                        \
-	       .num_dregs = d,                       \
 	       .num_sregs = e,                       \
+	       .num_dregs = d,                       \
 	       .optype = f},
 #include "mintops.def"
 #undef OPDEF

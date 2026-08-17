@@ -10,6 +10,7 @@
 #include <iterator>
 #include <unordered_map>
 #include <vector>
+#include <optional>
 
 #define INTERP_INST_FLAG_SEQ_POINT_NONEMPTY_STACK 1
 #define INTERP_INST_FLAG_SEQ_POINT_METHOD_ENTRY 2

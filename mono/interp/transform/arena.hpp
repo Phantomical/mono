@@ -6,6 +6,7 @@
  * \brief Storage that is released in one step rather than object by object.
  */
 
+#include "glib.h"
 #include <mono/metadata/mempool.h>
 
 #include <cstddef>
@@ -18,9 +19,8 @@ namespace mono::interp {
 
 /// A bump allocator over a MonoMemPool.
 ///
-/// The arena runs no destructor for what it holds, so it accepts only
-/// trivially destructible types. In exchange nothing allocated from it needs a
-/// matching free: it all goes when the arena does.
+/// The arena doesn't run destructors so contained values must be trivially
+/// destructible. The arena will take care of freeing the associated memory.
 class Arena {
 public:
 	Arena () : pool_ (mono_mempool_new ()) {}
