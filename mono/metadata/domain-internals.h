@@ -322,29 +322,29 @@ struct _MonoJitInfo {
 	int         code_size;
 	guint32     num_clauses:15;
 	/* Whenever the code is domain neutral or 'shared' */
-	gboolean    domain_neutral:1;
-	gboolean    has_generic_jit_info:1;
-	gboolean    has_try_block_holes:1;
-	gboolean    has_arch_eh_info:1;
-	gboolean    has_thunk_info:1;
-	gboolean    has_unwind_info:1;
-	gboolean    from_aot:1;
-	gboolean    from_llvm:1;
-	gboolean    dbg_attrs_inited:1;
-	gboolean    dbg_hidden:1;
+	guint32    domain_neutral:1;
+	guint32    has_generic_jit_info:1;
+	guint32    has_try_block_holes:1;
+	guint32    has_arch_eh_info:1;
+	guint32    has_thunk_info:1;
+	guint32    has_unwind_info:1;
+	guint32    from_aot:1;
+	guint32    from_llvm:1;
+	guint32    dbg_attrs_inited:1;
+	guint32    dbg_hidden:1;
 	/* Whenever this jit info was loaded in async context */
-	gboolean    async:1;
-	gboolean    dbg_step_through:1;
-	gboolean    dbg_non_user_code:1;
+	guint32    async:1;
+	guint32    dbg_step_through:1;
+	guint32    dbg_non_user_code:1;
 	/*
 	 * Whenever this jit info refers to a trampoline.
 	 * d.tramp_info contains additional data in this case.
 	 */
-	gboolean    is_trampoline:1;
+	guint32    is_trampoline:1;
 	/* Whenever this jit info refers to an interpreter method */
-	gboolean    is_interp:1;
+	guint32    is_interp:1;
 
-	gboolean    dbg_ignore : 1;
+	guint32    dbg_ignore : 1;
 
 	/*
 	 * This body has no native-offset -> IL-offset mapping of its own. Both of
@@ -355,7 +355,7 @@ struct _MonoJitInfo {
 	 * belonging to a completely different code layout, so the honest answer for
 	 * such a body is "no IL offset" - see mini-exceptions.c.
 	 */
-	gboolean    no_il_offsets : 1;
+	guint32    no_il_offsets : 1;
 
 	/*
 	 * This code was compiled for the method without being a translation of its
@@ -364,7 +364,7 @@ struct _MonoJitInfo {
 	 * registered against the MonoMethod describes the body, so llvm_seq_points
 	 * below is the only thing that can place such a frame in the IL.
 	 */
-	gboolean    llvm_side_body : 1;
+	guint32    llvm_side_body : 1;
 
 	/*
 	 * This code is the method's calling-convention adapter - an entry thunk -
@@ -376,7 +376,7 @@ struct _MonoJitInfo {
 	 * unwinding out of the body has to walk through it - so it is skipped the
 	 * way a trampoline is rather than left out of the table.
 	 */
-	gboolean    llvm_abi_thunk : 1;
+	guint32    llvm_abi_thunk : 1;
 
 	/*
 	 * This body's own native_offset -> il_offset map, present (n_llvm_seq_points > 0)
