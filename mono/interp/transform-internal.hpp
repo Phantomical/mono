@@ -41,6 +41,62 @@
 	} while (0)
 
 /*
+ * Writing a wide immediate into the instruction stream, which is an array of
+ * guint16 and so does not line a 32- or 64-bit value up on its own.
+ */
+#if NO_UNALIGNED_ACCESS
+#define WRITE32(ip, v) \
+	do { \
+		* (ip) = * (guint16 *)(v); \
+		* ((ip) + 1) = * ((guint16 *)(v) + 1); \
+		(ip) += 2; \
+	} while (0)
+
+#define WRITE32_INS(ins, index, v) \
+	do { \
+		(ins)->data [index] = * (guint16 *)(v); \
+		(ins)->data [index + 1] = * ((guint16 *)(v) + 1); \
+	} while (0)
+
+#define WRITE64(ins, v) \
+	do { \
+		*((ins) + 0) = * ((guint16 *)(v) + 0); \
+		*((ins) + 1) = * ((guint16 *)(v) + 1); \
+		*((ins) + 2) = * ((guint16 *)(v) + 2); \
+		*((ins) + 3) = * ((guint16 *)(v) + 3); \
+	} while (0)
+
+#define WRITE64_INS(ins, index, v) \
+	do { \
+		(ins)->data [index] = * (guint16 *)(v); \
+		(ins)->data [index + 1] = * ((guint16 *)(v) + 1); \
+		(ins)->data [index + 2] = * ((guint16 *)(v) + 2); \
+		(ins)->data [index + 3] = * ((guint16 *)(v) + 3); \
+	} while (0)
+#else
+#define WRITE32(ip, v) \
+	do { \
+		* (guint32*)(ip) = * (guint32 *)(v); \
+		(ip) += 2; \
+	} while (0)
+#define WRITE32_INS(ins, index, v) \
+	do { \
+		* (guint32 *)(&(ins)->data [index]) = * (guint32 *)(v); \
+	} while (0)
+
+#define WRITE64(ip, v) \
+	do { \
+		* (guint64*)(ip) = * (guint64 *)(v); \
+		(ip) += 4; \
+	} while (0)
+#define WRITE64_INS(ins, index, v) \
+	do { \
+		* (guint64 *)(&(ins)->data [index]) = * (guint64 *)(v); \
+	} while (0)
+
+#endif
+
+/*
  * An instruction's registers, written through a macro so a site that sets one
  * cannot quietly set the wrong number of them.
  */
