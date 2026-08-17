@@ -13,13 +13,13 @@
 
 namespace mono::interp {
 
-#define IMPL_MOV(opcode, dsttype, srctype)                     \
-	MONO_INTERP_OP_IMPL (opcode)                               \
-	{                                                          \
+#define IMPL_MOV(opcode, dsttype, srctype)                       \
+	MONO_INTERP_OP_IMPL (opcode)                                 \
+	{                                                            \
 		LOCAL_VAR (ip[1], dsttype) = LOCAL_VAR (ip[2], srctype); \
-                                                               \
-		MONO_INTERP_OP_ADVANCE ();                             \
-		MONO_INTERP_DISPATCH ();                               \
+                                                                 \
+		MONO_INTERP_OP_ADVANCE ();                               \
+		MONO_INTERP_DISPATCH ();                                 \
 	}
 
 // Loading from a local may need a sign or zero extension to 4 bytes, which is the

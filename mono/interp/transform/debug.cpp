@@ -41,37 +41,37 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 	case MintOpNoArgs:
 		break;
 	case MintOpUShortInt:
-		g_string_append_printf (str, " %u", *(guint16*)data);
+		g_string_append_printf (str, " %u", *(guint16 *) data);
 		break;
 	case MintOpTwoShorts:
-		g_string_append_printf (str, " %u,%u", *(guint16*)data, *(guint16 *)(data + 1));
+		g_string_append_printf (str, " %u,%u", *(guint16 *) data, *(guint16 *) (data + 1));
 		break;
 	case MintOpShortAndInt:
-		g_string_append_printf (str, " %u,%u", *(guint16*)data, (guint32)READ32(data + 1));
+		g_string_append_printf (str, " %u,%u", *(guint16 *) data, (guint32) READ32 (data + 1));
 		break;
 	case MintOpShortInt:
-		g_string_append_printf (str, " %d", *(gint16*)data);
+		g_string_append_printf (str, " %d", *(gint16 *) data);
 		break;
 	case MintOpClassToken:
 	case MintOpMethodToken:
 	case MintOpFieldToken:
-		token = * (guint16 *) data;
+		token = *(guint16 *) data;
 		g_string_append_printf (str, " %u", token);
 		break;
 	case MintOpInt:
-		g_string_append_printf (str, " %d", (gint32)READ32 (data));
+		g_string_append_printf (str, " %d", (gint32) READ32 (data));
 		break;
 	case MintOpLongInt:
-		g_string_append_printf (str, " %" PRId64, (gint64)READ64 (data));
+		g_string_append_printf (str, " %" PRId64, (gint64) READ64 (data));
 		break;
 	case MintOpFloat: {
 		gint32 tmp = READ32 (data);
-		g_string_append_printf (str, " %g", * (float *)&tmp);
+		g_string_append_printf (str, " %g", *(float *) &tmp);
 		break;
 	}
 	case MintOpDouble: {
 		gint64 tmp = READ64 (data);
-		g_string_append_printf (str, " %g", * (double *)&tmp);
+		g_string_append_printf (str, " %g", *(double *) &tmp);
 		break;
 	}
 	case MintOpShortBranch:
@@ -79,7 +79,7 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 			/* the target IL is already embedded in the instruction */
 			g_string_append_printf (str, " BB%d", ins->info.target_bb->index);
 		} else {
-			target = ins_offset + *(gint16*)data;
+			target = ins_offset + *(gint16 *) data;
 			g_string_append_printf (str, " IR_%04x", target);
 		}
 		break;
@@ -87,12 +87,12 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 		if (ins) {
 			g_string_append_printf (str, " BB%d", ins->info.target_bb->index);
 		} else {
-			target = ins_offset + (gint32)READ32 (data);
+			target = ins_offset + (gint32) READ32 (data);
 			g_string_append_printf (str, " IR_%04x", target);
 		}
 		break;
 	case MintOpSwitch: {
-		int sval = (gint32)READ32 (data);
+		int sval = (gint32) READ32 (data);
 		int i;
 		g_string_append_printf (str, "(");
 		gint32 p = 2;
@@ -100,9 +100,9 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 			if (i > 0)
 				g_string_append_printf (str, ", ");
 			if (ins) {
-				g_string_append_printf (str, "BB%d", ins->info.target_bb_table [i]->index);
+				g_string_append_printf (str, "BB%d", ins->info.target_bb_table[i]->index);
 			} else {
-				g_string_append_printf (str, "IR_%04x", (gint32)READ32 (data + p));
+				g_string_append_printf (str, "IR_%04x", (gint32) READ32 (data + p));
 			}
 			p += 2;
 		}
@@ -116,9 +116,8 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 	return g_string_free (str, FALSE);
 }
 
-
 void
-dump_interp_code (const guint16 *start, const guint16* end)
+dump_interp_code (const guint16 *start, const guint16 *end)
 {
 	const guint16 *p = start;
 	while (p < end) {
@@ -133,26 +132,26 @@ dump_interp_inst_no_newline (InterpInst *ins)
 	int opcode = ins->opcode;
 	g_print ("IL_%04x: %-14s", ins->il_offset, opname (opcode));
 
-        if (num_dregs (opcode) == MINT_CALL_ARGS)
-                g_print (" [call_args %d <-", ins->dreg);
-        else if (num_dregs (opcode) > 0)
-                g_print (" [%d <-", ins->dreg);
-        else
-                g_print (" [nil <-");
+	if (num_dregs (opcode) == MINT_CALL_ARGS)
+		g_print (" [call_args %d <-", ins->dreg);
+	else if (num_dregs (opcode) > 0)
+		g_print (" [%d <-", ins->dreg);
+	else
+		g_print (" [nil <-");
 
-        if (num_sregs (opcode) > 0) {
-                for (int i = 0; i < num_sregs (opcode); i++)
-                        g_print (" %d", ins->sregs [i]);
-                g_print ("],");
-        } else {
-                g_print (" nil],");
-        }
+	if (num_sregs (opcode) > 0) {
+		for (int i = 0; i < num_sregs (opcode); i++)
+			g_print (" %d", ins->sregs[i]);
+		g_print ("],");
+	} else {
+		g_print (" nil],");
+	}
 
 	if (opcode == MINT_LDLOCA_S) {
 		// LDLOCA has special semantics, it has data in sregs [0], but it doesn't have any sregs
-		g_print (" %d", ins->sregs [0]);
+		g_print (" %d", ins->sregs[0]);
 	} else {
-		char *descr = dump_interp_ins_data (ins, ins->il_offset, &ins->data [0], ins->opcode);
+		char *descr = dump_interp_ins_data (ins, ins->il_offset, &ins->data[0], ins->opcode);
 		g_print ("%s", descr);
 		g_free (descr);
 	}
@@ -173,7 +172,7 @@ dump_interp_bb (InterpBasicBlock *bb)
 		dump_interp_inst (ins);
 }
 
-static guint8*
+static guint8 *
 encode_uleb128 (guint32 value, guint8 *p)
 {
 	do {
@@ -195,7 +194,8 @@ encode_uleb128 (guint32 value, guint8 *p)
  * trace can report an IL offset for a frame of this method.
  */
 void
-TransformData::interp_save_line_numbers (InterpMethod *rtm, const std::vector<MonoDebugLineNumberEntry> &line_numbers)
+TransformData::interp_save_line_numbers (InterpMethod *rtm,
+                                         const std::vector<MonoDebugLineNumberEntry> &line_numbers)
 {
 	if (line_numbers.empty ())
 		return;
@@ -218,15 +218,17 @@ TransformData::interp_save_line_numbers (InterpMethod *rtm, const std::vector<Mo
 	}
 
 	rtm->line_numbers_size = (guint32) (p - buf);
-	rtm->line_numbers = (guint8*) mono_mem_manager_alloc0 (mem_manager, rtm->line_numbers_size);
+	rtm->line_numbers = (guint8 *) mono_mem_manager_alloc0 (mem_manager, rtm->line_numbers_size);
 	memcpy (rtm->line_numbers, buf, rtm->line_numbers_size);
 	g_free (buf);
 
-	mono_atomic_fetch_add_i32 (&mono_interp_stats.line_numbers_size, (gint32) rtm->line_numbers_size);
+	mono_atomic_fetch_add_i32 (&mono_interp_stats.line_numbers_size,
+	                           (gint32) rtm->line_numbers_size);
 }
 
 void
-TransformData::interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header, const std::vector<MonoDebugLineNumberEntry> &line_numbers)
+TransformData::interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header,
+                                       const std::vector<MonoDebugLineNumberEntry> &line_numbers)
 {
 	MonoDebugMethodJitInfo *dinfo;
 	int i;
@@ -243,7 +245,7 @@ TransformData::interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *head
 	dinfo->params = g_new0 (MonoDebugVarInfo, dinfo->num_params);
 	dinfo->num_locals = header->num_locals;
 	dinfo->locals = g_new0 (MonoDebugVarInfo, header->num_locals);
-	dinfo->code_start = (guint8*)rtm->code;
+	dinfo->code_start = (guint8 *) rtm->code;
 	dinfo->code_size = new_code_end - new_code;
 	dinfo->epilogue_begin = 0;
 	dinfo->has_var_info = TRUE;
@@ -251,12 +253,12 @@ TransformData::interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *head
 	dinfo->line_numbers = g_new0 (MonoDebugLineNumberEntry, dinfo->num_line_numbers);
 
 	for (i = 0; i < dinfo->num_params; i++) {
-		MonoDebugVarInfo *var = &dinfo->params [i];
-		var->type = rtm->param_types [i];
+		MonoDebugVarInfo *var = &dinfo->params[i];
+		var->type = rtm->param_types[i];
 	}
 	for (i = 0; i < dinfo->num_locals; i++) {
-		MonoDebugVarInfo *var = &dinfo->locals [i];
-		var->type = mono_metadata_type_dup (NULL, header->locals [i]);
+		MonoDebugVarInfo *var = &dinfo->locals[i];
+		var->type = mono_metadata_type_dup (NULL, header->locals[i]);
 	}
 
 	std::copy (line_numbers.begin (), line_numbers.end (), dinfo->line_numbers);
@@ -274,17 +276,17 @@ insert_pred_seq_point (SeqPoint *last_sp, SeqPoint *sp, GSList **next)
 	int dst_index = sp->next_offset;
 
 	/* bb->in_bb might contain duplicates */
-	for (l = next [src_index]; l; l = l->next)
+	for (l = next[src_index]; l; l = l->next)
 		if (GPOINTER_TO_UINT (l->data) == dst_index)
 			break;
 	if (!l)
-		next [src_index] = g_slist_append (next [src_index], GUINT_TO_POINTER (dst_index));
+		next[src_index] = g_slist_append (next[src_index], GUINT_TO_POINTER (dst_index));
 }
 
 void
 TransformData::recursively_make_pred_seq_points (InterpBasicBlock *bb)
 {
-	SeqPoint ** const MONO_SEQ_SEEN_LOOP = (SeqPoint**)GINT_TO_POINTER(-1);
+	SeqPoint **const MONO_SEQ_SEEN_LOOP = (SeqPoint **) GINT_TO_POINTER (-1);
 
 	GArray *predecessors = g_array_new (FALSE, TRUE, sizeof (gpointer));
 	GHashTable *seen = g_hash_table_new_full (g_direct_hash, NULL, NULL, NULL);
@@ -293,7 +295,7 @@ TransformData::recursively_make_pred_seq_points (InterpBasicBlock *bb)
 	bb->pred_seq_points = MONO_SEQ_SEEN_LOOP;
 
 	for (int i = 0; i < bb->in_count; ++i) {
-		InterpBasicBlock *in_bb = bb->in_bb [i];
+		InterpBasicBlock *in_bb = bb->in_bb[i];
 
 		// This bb has the last seq point, append it and continue
 		if (in_bb->last_seq_point != NULL) {
@@ -315,10 +317,11 @@ TransformData::recursively_make_pred_seq_points (InterpBasicBlock *bb)
 			recursively_make_pred_seq_points (in_bb);
 
 		// Union sequence points with incoming bb's
-		for (int i=0; i < in_bb->num_pred_seq_points; i++) {
-			if (!g_hash_table_lookup (seen, in_bb->pred_seq_points [i])) {
-				g_array_append_val (predecessors, in_bb->pred_seq_points [i]);
-				g_hash_table_insert (seen, in_bb->pred_seq_points [i], (gpointer)&MONO_SEQ_SEEN_LOOP);
+		for (int i = 0; i < in_bb->num_pred_seq_points; i++) {
+			if (!g_hash_table_lookup (seen, in_bb->pred_seq_points[i])) {
+				g_array_append_val (predecessors, in_bb->pred_seq_points[i]);
+				g_hash_table_insert (seen, in_bb->pred_seq_points[i],
+				                     (gpointer) &MONO_SEQ_SEEN_LOOP);
 			}
 		}
 		// predecessors = g_array_append_vals (predecessors, in_bb->pred_seq_points, in_bb->num_pred_seq_points);
@@ -331,7 +334,7 @@ TransformData::recursively_make_pred_seq_points (InterpBasicBlock *bb)
 		bb->num_pred_seq_points = predecessors->len;
 
 		for (int newer = 0; newer < bb->num_pred_seq_points; newer++) {
-			bb->pred_seq_points [newer] = (SeqPoint*)g_array_index (predecessors, gpointer, newer);
+			bb->pred_seq_points[newer] = (SeqPoint *) g_array_index (predecessors, gpointer, newer);
 		}
 	}
 
@@ -346,7 +349,7 @@ TransformData::collect_pred_seq_points (InterpBasicBlock *bb, SeqPoint *seqp, GS
 		recursively_make_pred_seq_points (bb);
 
 	for (int i = 0; i < bb->num_pred_seq_points; i++)
-		insert_pred_seq_point (bb->pred_seq_points [i], seqp, next);
+		insert_pred_seq_point (bb->pred_seq_points[i], seqp, next);
 
 	return;
 }
@@ -375,7 +378,7 @@ TransformData::save_seq_points (MonoJitInfo *jinfo)
 		GSList *bb_seq_points = g_slist_reverse (bb->seq_points);
 		SeqPoint *last = NULL;
 		for (GSList *l = bb_seq_points; l; l = l->next) {
-			SeqPoint *sp = (SeqPoint*)l->data;
+			SeqPoint *sp = (SeqPoint *) l->data;
 
 			if (sp->il_offset == METHOD_ENTRY_IL_OFFSET || sp->il_offset == METHOD_EXIT_IL_OFFSET)
 				/* Used to implement method entry/exit events */
@@ -383,7 +386,8 @@ TransformData::save_seq_points (MonoJitInfo *jinfo)
 
 			if (last != NULL) {
 				/* Link with the previous seq point in the same bb */
-				next [last->next_offset] = g_slist_append_mempool (arena.pool (), next [last->next_offset], GINT_TO_POINTER (sp->next_offset));
+				next[last->next_offset] = g_slist_append_mempool (
+					arena.pool (), next[last->next_offset], GINT_TO_POINTER (sp->next_offset));
 			} else {
 				/* Link with the last bb in the previous bblocks */
 				collect_pred_seq_points (bb, sp, next);
@@ -395,7 +399,7 @@ TransformData::save_seq_points (MonoJitInfo *jinfo)
 	/* Serialize the seq points into a byte array */
 	array = g_byte_array_new ();
 	SeqPoint zero_seq_point = {0};
-	SeqPoint* last_seq_point = &zero_seq_point;
+	SeqPoint *last_seq_point = &zero_seq_point;
 	for (size_t i = 0; i < seq_points.size (); ++i) {
 		SeqPoint *sp = seq_points[i];
 

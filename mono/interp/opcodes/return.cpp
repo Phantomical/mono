@@ -37,7 +37,8 @@ InterpState::exit_frame ()
 		context->frame_stack_pointer = reinterpret_cast<guchar *> (frame);
 		frame = frame->parent;
 		context->current_frame = frame;
-		context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
+		context->stack_pointer =
+			reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
 		LOAD_INTERP_STATE (frame);
 		CHECK_RESUME_STATE (context);
 

@@ -105,7 +105,8 @@ resolve_code_type (InterpMethod *imethod)
 	 * A compile that finished while the queries above were running has already
 	 * written COMPILED, and that answer is the later one, so leave it alone.
 	 */
-	mono_atomic_cas_i32 (reinterpret_cast<gint32 *> (&imethod->code_type), code_type, IMETHOD_CODE_UNKNOWN);
+	mono_atomic_cas_i32 (reinterpret_cast<gint32 *> (&imethod->code_type), code_type,
+	                     IMETHOD_CODE_UNKNOWN);
 	return imethod->code_type;
 }
 
@@ -154,7 +155,8 @@ InterpState::call ()
 			/* for calls, have ip pointing at the start of next instruction */
 			frame->state.ip = ip;
 			error_init_reuse (error);
-			do_jit_call (reinterpret_cast<stackval *> ((locals + call_args_offset)), frame, cmethod, error);
+			do_jit_call (reinterpret_cast<stackval *> ((locals + call_args_offset)), frame, cmethod,
+			             error);
 			if (!is_ok (error))
 				THROW_EX (mono_error_convert_to_exception (error), ip);
 
@@ -249,7 +251,7 @@ InterpState::tailcall ()
 
 	// The one exception to sticking in the interpreter is self-calls. If we are
 	// compiled then we can turn that into a regular call and the compiled method
-    // will (usually) be able to tailcall internally.
+	// will (usually) be able to tailcall internally.
 	if (code_type == IMETHOD_CODE_COMPILED && cmethod == frame->imethod
 	    && cmethod->domain == mono_domain_get ())
 		return &exec_call;
@@ -455,7 +457,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI_NAT)
 	/* for calls, have ip pointing at the start of next instruction */
 	frame->state.ip = ip + 7;
 	ves_pinvoke_method (imethod, csignature, (MonoFuncV) code, context, frame,
-	                        &LOCAL_VAR (ip[1], stackval), save_last_error, cache);
+	                    &LOCAL_VAR (ip[1], stackval), save_last_error, cache);
 
 	EXCEPTION_CHECKPOINT_GC_UNSAFE;
 	CHECK_RESUME_STATE (context);
@@ -477,8 +479,8 @@ append_imethod (MonoMemoryManager *memory_manager, GSList *list, InterpMethod *i
 	GSList *ret;
 	InterpVTableEntry *entry;
 
-	entry = static_cast<InterpVTableEntry *> (mono_mem_manager_alloc_nolock (memory_manager,
-	                                                             sizeof (InterpVTableEntry)));
+	entry = static_cast<InterpVTableEntry *> (
+		mono_mem_manager_alloc_nolock (memory_manager, sizeof (InterpVTableEntry)));
 	entry->imethod = imethod;
 	entry->target_imethod = target_imethod;
 	ret = g_slist_append_mempool (memory_manager->mp, list, entry);
@@ -513,9 +515,9 @@ alloc_method_table (MonoVTable *vtable, int offset)
 	gpointer *table;
 
 	if (offset >= 0) {
-		table = static_cast<gpointer *> (m_class_alloc0 (vtable->domain, vtable->klass,
-		                                     m_class_get_vtable_size (vtable->klass)
-		                                         * sizeof (gpointer)));
+		table = static_cast<gpointer *> (
+			m_class_alloc0 (vtable->domain, vtable->klass,
+		                    m_class_get_vtable_size (vtable->klass) * sizeof (gpointer)));
 		vtable->interp_vtable = table;
 	} else {
 		table = reinterpret_cast<gpointer *> (vtable);
@@ -592,14 +594,15 @@ get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 		return reinterpret_cast<InterpMethod *> ((gsize) table[offset] & ~0x1);
 	} else {
 		/* Virtual generic or interface call. Multiple methods in slot */
-		InterpMethod *target_imethod = get_target_imethod (static_cast<GSList *> (table[offset]), imethod);
+		InterpMethod *target_imethod =
+			get_target_imethod (static_cast<GSList *> (table[offset]), imethod);
 
 		if (!target_imethod) {
 			target_imethod = get_virtual_method (imethod, vtable);
 			mono_mem_manager_lock (memory_manager);
 			if (!get_target_imethod (static_cast<GSList *> (table[offset]), imethod))
-				table[offset] = append_imethod (memory_manager, static_cast<GSList *> (table[offset]), imethod,
-				                                target_imethod);
+				table[offset] = append_imethod (
+					memory_manager, static_cast<GSList *> (table[offset]), imethod, target_imethod);
 			mono_mem_manager_unlock (memory_manager);
 		}
 		return target_imethod;
@@ -703,8 +706,8 @@ MONO_INTERP_OP_IMPL (MINT_CALL)
 MONO_INTERP_OP_IMPL (MINT_LDFTN)
 {
 	error_init_reuse (error);
-	LOCAL_VAR (ip[1], gpointer) = entry_for_imethod (
-		static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]), error);
+	LOCAL_VAR (ip[1], gpointer) =
+		entry_for_imethod (static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]), error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -734,8 +737,7 @@ MONO_INTERP_OP_IMPL (MINT_LDVIRTFTN)
 	NULL_CHECK (o);
 
 	error_init_reuse (error);
-	LOCAL_VAR (ip[1], gpointer) =
-		entry_for_imethod (get_virtual_method (m, o->vtable), error);
+	LOCAL_VAR (ip[1], gpointer) = entry_for_imethod (get_virtual_method (m, o->vtable), error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();

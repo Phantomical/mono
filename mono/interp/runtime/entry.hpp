@@ -10,8 +10,8 @@
 #include "mono/utils/mono-error-internals.h"
 
 #ifdef TARGET_WASM
-G_EXTERN_C gpointer
-mono_wasm_get_native_to_interp_trampoline (MonoMethod *method, gpointer extra_arg);
+G_EXTERN_C gpointer mono_wasm_get_native_to_interp_trampoline (MonoMethod *method,
+                                                               gpointer extra_arg);
 #endif
 
 namespace mono::interp {
@@ -52,7 +52,8 @@ lookup_method_pointer (MonoDomain *domain, gpointer addr)
 	if (!info->interp_method_pointer_hash)
 		return nullptr;
 
-	return static_cast<InterpMethod *> (g_hash_table_lookup (info->interp_method_pointer_hash, addr));
+	return static_cast<InterpMethod *> (
+		g_hash_table_lookup (info->interp_method_pointer_hash, addr));
 }
 
 /// Records that addr is the address outside this engine for imethod, so that a
@@ -95,8 +96,8 @@ imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
 	 * trampoline is an answer rather than a refusal. Some trampolines belong to
 	 * no method, and those are the ones with nothing to return.
 	 */
-	MonoMethod *method = ji->is_trampoline ? ji->d.tramp_info->method
-	                                       : mono_jit_info_get_method (ji);
+	MonoMethod *method =
+		ji->is_trampoline ? ji->d.tramp_info->method : mono_jit_info_get_method (ji);
 
 	if (!method)
 		return nullptr;

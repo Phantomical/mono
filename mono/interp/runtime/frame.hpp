@@ -38,7 +38,8 @@ frame_data_allocator_init (FrameDataAllocator *stack, int size)
 	frag = frame_data_frag_new (size);
 	stack->first = stack->current = frag;
 	stack->infos_capacity = 4;
-	stack->infos = static_cast<FrameDataInfo *> (g_malloc (stack->infos_capacity * sizeof (FrameDataInfo)));
+	stack->infos =
+		static_cast<FrameDataInfo *> (g_malloc (stack->infos_capacity * sizeof (FrameDataInfo)));
 }
 
 inline void
@@ -78,8 +79,8 @@ frame_data_allocator_alloc (FrameDataAllocator *stack, InterpFrame *frame, int s
 		/* First allocation by this frame. Save the markers for restore */
 		if (infos_len == stack->infos_capacity) {
 			stack->infos_capacity = infos_len * 2;
-			stack->infos = static_cast<FrameDataInfo *> (g_realloc (stack->infos, stack->infos_capacity
-			                                                              * sizeof (FrameDataInfo)));
+			stack->infos = static_cast<FrameDataInfo *> (
+				g_realloc (stack->infos, stack->infos_capacity * sizeof (FrameDataInfo)));
 		}
 		stack->infos[infos_len].frame = frame;
 		stack->infos[infos_len].frag = current;
@@ -158,7 +159,8 @@ frame_stamp_ordinal (ThreadContext *context, InterpFrame *frame)
  *   Reinitialize a frame.
  */
 inline void
-reinit_frame (InterpFrame *frame, ThreadContext *context, InterpFrame *parent, InterpMethod *imethod, gpointer stack)
+reinit_frame (InterpFrame *frame, ThreadContext *context, InterpFrame *parent,
+              InterpMethod *imethod, gpointer stack)
 {
 	frame->parent = parent;
 	frame->imethod = imethod;

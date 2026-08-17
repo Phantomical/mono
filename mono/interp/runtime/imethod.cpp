@@ -28,7 +28,8 @@ lookup_imethod (MonoDomain *domain, MonoMethod *method)
 
 	info = domain_jit_info (domain);
 	mono_domain_jit_code_hash_lock (domain);
-	imethod = static_cast<InterpMethod *> (mono_internal_hash_table_lookup (&info->interp_code_hash, method));
+	imethod = static_cast<InterpMethod *> (
+		mono_internal_hash_table_lookup (&info->interp_code_hash, method));
 	mono_domain_jit_code_hash_unlock (domain);
 	return imethod;
 }
@@ -154,7 +155,8 @@ invalidate_transform (gpointer imethod_)
 static void
 copy_imethod_for_frame (MonoDomain *domain, InterpFrame *frame)
 {
-	InterpMethod *copy = static_cast<InterpMethod *> (mono_domain_alloc0 (domain, sizeof (InterpMethod)));
+	InterpMethod *copy =
+		static_cast<InterpMethod *> (mono_domain_alloc0 (domain, sizeof (InterpMethod)));
 	memcpy (copy, frame->imethod, sizeof (InterpMethod));
 	copy->next_jit_code_hash = NULL; /* we don't want that in our copy */
 	frame->imethod = copy;
@@ -167,14 +169,17 @@ void
 interp_metadata_update_init (MonoError *error)
 {
 	if ((mono_interp_opt & INTERP_OPT_INLINE) != 0)
-		mono_error_set_execution_engine (error, "Interpreter inlining must be turned off for metadata updates");
+		mono_error_set_execution_engine (
+			error, "Interpreter inlining must be turned off for metadata updates");
 }
 
 static void
 metadata_update_backup_frames (MonoDomain *domain, MonoThreadInfo *info, InterpFrame *frame)
 {
 	while (frame) {
-		mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_METADATA_UPDATE, "threadinfo=%p, copy imethod for method=%s", info, mono_method_full_name (frame->imethod->method, 1));
+		mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_METADATA_UPDATE,
+		            "threadinfo=%p, copy imethod for method=%s", info,
+		            mono_method_full_name (frame->imethod->method, 1));
 		copy_imethod_for_frame (domain, frame);
 		frame = frame->parent;
 	}
@@ -186,7 +191,8 @@ metadata_update_prepare_to_invalidate (MonoDomain *domain)
 	/* (1) make a copy of imethod for every interpframe that is on the stack,
 	 * so we do not invalidate currently running methods */
 
-	FOREACH_THREAD_EXCLUDE (info, MONO_THREAD_INFO_FLAGS_NO_GC) {
+	FOREACH_THREAD_EXCLUDE (info, MONO_THREAD_INFO_FLAGS_NO_GC)
+	{
 		if (!info || !info->jit_data)
 			continue;
 
@@ -196,7 +202,8 @@ metadata_update_prepare_to_invalidate (MonoDomain *domain)
 		 * opcode and suspended, backup the frames since the last lmf.
 		 */
 		if (context && context->safepoint_frame) {
-			mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_METADATA_UPDATE, "threadinfo=%p, has safepoint frame %p", info, context->safepoint_frame);
+			mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_METADATA_UPDATE,
+			            "threadinfo=%p, has safepoint frame %p", info, context->safepoint_frame);
 			metadata_update_backup_frames (domain, info, context->safepoint_frame);
 		}
 
@@ -204,14 +211,16 @@ metadata_update_prepare_to_invalidate (MonoDomain *domain)
 		while (lmf) {
 			if (((gsize) lmf->previous_lmf) & 2) {
 				MonoLMFExt *ext = reinterpret_cast<MonoLMFExt *> (lmf);
-				if (ext->kind == MONO_LMFEXT_INTERP_EXIT || ext->kind == MONO_LMFEXT_INTERP_EXIT_WITH_CTX) {
+				if (ext->kind == MONO_LMFEXT_INTERP_EXIT
+				    || ext->kind == MONO_LMFEXT_INTERP_EXIT_WITH_CTX) {
 					InterpFrame *frame = static_cast<InterpFrame *> (ext->interp_exit_data);
 					metadata_update_backup_frames (domain, info, frame);
 				}
 			}
-			lmf = (MonoLMF *)(((gsize) lmf->previous_lmf) & ~3);
+			lmf = (MonoLMF *) (((gsize) lmf->previous_lmf) & ~3);
 		}
-	} FOREACH_THREAD_END
+	}
+	FOREACH_THREAD_END
 
 	/* (2) invalidate all the registered imethods */
 }
@@ -240,7 +249,7 @@ interp_invalidate_transformed (MonoDomain *domain)
 
 using namespace mono::interp;
 
-InterpMethod*
+InterpMethod *
 mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error)
 {
 	InterpMethod *imethod;
@@ -252,7 +261,8 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 
 	info = domain_jit_info (domain);
 	mono_domain_jit_code_hash_lock (domain);
-	imethod = static_cast<InterpMethod *> (mono_internal_hash_table_lookup (&info->interp_code_hash, method));
+	imethod = static_cast<InterpMethod *> (
+		mono_internal_hash_table_lookup (&info->interp_code_hash, method));
 	mono_domain_jit_code_hash_unlock (domain);
 	if (imethod)
 		return imethod;
@@ -271,9 +281,10 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 	else
 		imethod->rtype = mini_get_underlying_type (sig->ret);
 	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
-	imethod->param_types = static_cast<MonoType **> (m_method_alloc0 (domain, method, sizeof (MonoType*) * sig->param_count));
+	imethod->param_types = static_cast<MonoType **> (
+		m_method_alloc0 (domain, method, sizeof (MonoType *) * sig->param_count));
 	for (i = 0; i < sig->param_count; ++i)
-		imethod->param_types [i] = mini_get_underlying_type (sig->params [i]);
+		imethod->param_types[i] = mini_get_underlying_type (sig->params[i]);
 
 	mono_domain_jit_code_hash_lock (domain);
 	if (!mono_internal_hash_table_lookup (&info->interp_code_hash, method))

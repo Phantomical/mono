@@ -14,21 +14,21 @@ namespace mono::interp {
  * branch with a short displacement.
  */
 
-#define IMPL_BRANCH_CORE(opcode, cond)                                         \
-	MONO_INTERP_OP_IMPL (opcode)                                               \
-	{                                                                          \
-		if (cond) {                                                            \
+#define IMPL_BRANCH_CORE(opcode, cond)                            \
+	MONO_INTERP_OP_IMPL (opcode)                                  \
+	{                                                             \
+		if (cond) {                                               \
 			size_t broffset = opinfos[opcode].num_sregs;          \
 			if (opinfos[opcode].optype == MintOpBranch)           \
-				this->ip += (gint32) READ32 (&ip[broffset + 1]);               \
+				this->ip += (gint32) READ32 (&ip[broffset + 1]);  \
 			else if (opinfos[opcode].optype == MintOpShortBranch) \
-				this->ip += (gint16) ip[broffset + 1];                         \
-			else                                                               \
-				g_assert_not_reached ();                                       \
-		} else {                                                               \
-			MONO_INTERP_OP_ADVANCE ();                                         \
-		}                                                                      \
-		MONO_INTERP_DISPATCH ();                                               \
+				this->ip += (gint16) ip[broffset + 1];            \
+			else                                                  \
+				g_assert_not_reached ();                          \
+		} else {                                                  \
+			MONO_INTERP_OP_ADVANCE ();                            \
+		}                                                         \
+		MONO_INTERP_DISPATCH ();                                  \
 	}
 
 // IMPL_BRANCH_CORE can handle both _S and non-_S versions of the opcode transparently,
@@ -37,7 +37,7 @@ namespace mono::interp {
 	IMPL_BRANCH_CORE (opcode, cond) \
 	IMPL_BRANCH_CORE (opcode##_S, cond)
 
-IMPL_BRANCH(MINT_BR, true);
+IMPL_BRANCH (MINT_BR, true);
 
 #define IMPL_BRZERO(opcode, type, op) IMPL_BRANCH (opcode, LOCAL_VAR (ip[1], type) op 0)
 

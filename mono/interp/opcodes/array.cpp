@@ -38,7 +38,8 @@ ves_array_create (MonoDomain *domain, MonoClass *klass, int param_count, stackva
 			lengths[i] = values[i].data.i;
 		}
 	}
-	return reinterpret_cast<MonoObject *> (mono_array_new_full_checked (domain, klass, lengths, lower_bounds, error));
+	return reinterpret_cast<MonoObject *> (
+		mono_array_new_full_checked (domain, klass, lengths, lower_bounds, error));
 }
 
 static MonoException *
@@ -56,7 +57,8 @@ ves_array_element_address (InterpFrame *frame, MonoClass *required_type, MonoArr
 	if (G_UNLIKELY (
 			needs_typecheck
 			&& !mono_class_is_assignable_from_internal (
-				m_class_get_element_class (mono_object_class (reinterpret_cast<MonoObject *> (ao))), required_type)))
+				m_class_get_element_class (mono_object_class (reinterpret_cast<MonoObject *> (ao))),
+				required_type)))
 		return mono_get_exception_array_type_mismatch ();
 	gint32 esize = mono_array_element_size (ac);
 	sp[-1].data.p = mono_array_addr_with_size_fast (ao, esize, pos);
@@ -217,7 +219,8 @@ MONO_INTERP_OP_IMPL (MINT_LDELEMA_TC)
 	NULL_CHECK (obj);
 
 	MonoClass *klass = static_cast<MonoClass *> (frame->imethod->data_items[ip[2]]);
-	if (auto ex = ves_array_element_address (frame, klass, reinterpret_cast<MonoArray *> (obj), sp + 1, true))
+	if (auto ex = ves_array_element_address (frame, klass, reinterpret_cast<MonoArray *> (obj),
+	                                         sp + 1, true))
 		THROW_EX (ex, ip);
 
 	MONO_INTERP_OP_ADVANCE ();
@@ -240,7 +243,8 @@ MONO_INTERP_OP_IMPL (MINT_LDLEN_SPAN)
 	auto obj = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (obj);
 	gsize offset_length = (gsize) (gint16) ip[3];
-	LOCAL_VAR (ip[1], mono_u) = *reinterpret_cast<gint32 *> ((reinterpret_cast<guint8 *> (obj) + offset_length));
+	LOCAL_VAR (ip[1], mono_u) =
+		*reinterpret_cast<gint32 *> ((reinterpret_cast<guint8 *> (obj) + offset_length));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

@@ -33,9 +33,9 @@ bool have_corpus ();
  * il/ image to load, and a case that cannot run has to say so as a skip rather
  * than vanish from the list.
  */
-#define MONO_SKIP_WITHOUT_CORPUS()					\
-	do {								\
-		if (!mono::test::have_corpus ())			\
+#define MONO_SKIP_WITHOUT_CORPUS()                              \
+	do {                                                        \
+		if (!mono::test::have_corpus ())                        \
 			GTEST_SKIP () << "no managed corpus in this build"; \
 	} while (0)
 
@@ -50,8 +50,7 @@ public:
 	///
 	/// A non-zero `verbose_level` makes the transform print what it does, the
 	/// same way MONO_VERBOSE_METHOD does for a whole run.
-	Transform (const std::string &image, const std::string &method,
-	           int verbose_level = 0);
+	Transform (const std::string &image, const std::string &method, int verbose_level = 0);
 	~Transform ();
 
 	Transform (const Transform &) = delete;

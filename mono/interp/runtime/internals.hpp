@@ -395,11 +395,8 @@ gboolean mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature
 
 void mono_interp_error_cleanup (MonoError *error);
 
-
 /* Whether the debugger wants a single step trampoline at every step location. */
 extern gboolean mono_interp_ss_enabled;
-
-
 
 MONO_NEVER_INLINE MonoException *mono_interp_leave (InterpFrame *parent_frame);
 
@@ -441,7 +438,7 @@ struct InterpEntryData {
 	InterpMethod *rmethod;
 	gpointer this_arg;
 	gpointer res;
-	gpointer args [16];
+	gpointer args[16];
 	gpointer *many_args;
 };
 
@@ -450,8 +447,7 @@ void mono_interp_entry (InterpEntryData *data);
 
 /* mono_interp_entry () with the arguments spread out, for a caller with no room to
  * build the record. */
-void mono_interp_entry_general (gpointer this_arg, gpointer res, gpointer *args,
-                                gpointer rmethod);
+void mono_interp_entry_general (gpointer this_arg, gpointer res, gpointer *args, gpointer rmethod);
 void mono_interp_entry_from_args (gpointer imethod, gpointer this_arg, gpointer res,
                                   gpointer *args);
 
@@ -477,8 +473,8 @@ void mono_interp_entry_from_ccontext (gpointer ccontext, gpointer rmethod);
  * mono_interp_run_finally () returns whether the handler threw, and
  * mono_interp_run_filter () what the filter decided.
  */
-gboolean mono_interp_run_finally (StackFrameInfo *frame, int clause_index,
-                                  gpointer handler_ip, gpointer handler_ip_end);
+gboolean mono_interp_run_finally (StackFrameInfo *frame, int clause_index, gpointer handler_ip,
+                                  gpointer handler_ip_end);
 gboolean mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_index,
                                  gpointer handler_ip, gpointer handler_ip_end);
 

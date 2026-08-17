@@ -22,7 +22,7 @@
 
 namespace mono::interp {
 
-InterpInst*
+InterpInst *
 TransformData::interp_new_ins (guint16 opcode, int len)
 {
 	InterpInst *new_inst;
@@ -34,7 +34,7 @@ TransformData::interp_new_ins (guint16 opcode, int len)
 }
 
 // This version need to be used with switch opcode, which doesn't have constant length
-InterpInst*
+InterpInst *
 TransformData::interp_add_ins_explicit (guint16 opcode, int len)
 {
 	InterpInst *new_inst = interp_new_ins (opcode, len);
@@ -49,13 +49,13 @@ TransformData::interp_add_ins_explicit (guint16 opcode, int len)
 	return new_inst;
 }
 
-InterpInst*
+InterpInst *
 TransformData::interp_add_ins (guint16 opcode)
 {
 	return interp_add_ins_explicit (opcode, oplen (opcode));
 }
 
-InterpInst*
+InterpInst *
 TransformData::interp_insert_ins_bb (InterpBasicBlock *bb, InterpInst *prev_ins, guint16 opcode)
 {
 	InterpInst *new_inst = interp_new_ins (opcode, oplen (opcode));
@@ -79,7 +79,7 @@ TransformData::interp_insert_ins_bb (InterpBasicBlock *bb, InterpInst *prev_ins,
 }
 
 /* Inserts a new instruction after prev_ins. prev_ins must be in cbb */
-InterpInst*
+InterpInst *
 TransformData::interp_insert_ins (InterpInst *prev_ins, guint16 opcode)
 {
 	return interp_insert_ins_bb (cbb, prev_ins, opcode);
@@ -95,7 +95,7 @@ interp_clear_ins (InterpInst *ins)
 	ins->opcode = MINT_NOP;
 }
 
-InterpInst*
+InterpInst *
 interp_prev_ins (InterpInst *ins)
 {
 	ins = ins->prev;
@@ -115,15 +115,15 @@ TransformData::mark_bb_as_dead (InterpBasicBlock *bb)
 		// To avoid scanning the entire offset_to_bb array, we scan only in the vicinity
 		// of the IL offset of bb. We can stop search when we encounter a different bblock.
 		for (int il_offset = bb->ip - il_code; il_offset >= 0; il_offset--) {
-			if (offset_to_bb [il_offset] == bb)
-				offset_to_bb [il_offset] = bb->next_bb;
-			else if (offset_to_bb [il_offset])
+			if (offset_to_bb[il_offset] == bb)
+				offset_to_bb[il_offset] = bb->next_bb;
+			else if (offset_to_bb[il_offset])
 				break;
 		}
 		for (int il_offset = bb->ip - il_code + 1; il_offset < header->code_size; il_offset++) {
-			if (offset_to_bb [il_offset] == bb)
-				offset_to_bb [il_offset] = bb->next_bb;
-			else if (offset_to_bb [il_offset])
+			if (offset_to_bb[il_offset] == bb)
+				offset_to_bb[il_offset] = bb->next_bb;
+			else if (offset_to_bb[il_offset])
 				break;
 		}
 	}
@@ -136,12 +136,13 @@ TransformData::mark_bb_as_dead (InterpBasicBlock *bb)
 void
 TransformData::interp_merge_bblocks (InterpBasicBlock *bb, InterpBasicBlock *bbadd)
 {
-	g_assert (bbadd->in_count == 1 && bbadd->in_bb [0] == bb);
+	g_assert (bbadd->in_count == 1 && bbadd->in_bb[0] == bb);
 	g_assert (bb->next_bb == bbadd);
 
 	// Remove the branch instruction to the invalid bblock
 	if (bb->last_ins) {
-		InterpInst *last_ins = (bb->last_ins->opcode != MINT_NOP) ? bb->last_ins : interp_prev_ins (bb->last_ins);
+		InterpInst *last_ins =
+			(bb->last_ins->opcode != MINT_NOP) ? bb->last_ins : interp_prev_ins (bb->last_ins);
 		if (last_ins) {
 			if (last_ins->opcode == MINT_BR || last_ins->opcode == MINT_BR_S) {
 				g_assert (last_ins->info.target_bb == bbadd);
@@ -170,9 +171,9 @@ TransformData::interp_merge_bblocks (InterpBasicBlock *bb, InterpBasicBlock *bba
 	bb->out_count = bbadd->out_count;
 	bb->out_bb = bbadd->out_bb;
 	for (int i = 0; i < bbadd->out_count; i++) {
-		for (int j = 0; j < bbadd->out_bb [i]->in_count; j++) {
-			if (bbadd->out_bb [i]->in_bb [j] == bbadd)
-				bbadd->out_bb [i]->in_bb [j] = bb;
+		for (int j = 0; j < bbadd->out_bb[i]->in_count; j++) {
+			if (bbadd->out_bb[i]->in_bb[j] == bbadd)
+				bbadd->out_bb[i]->in_bb[j] = bb;
 		}
 	}
 
@@ -184,11 +185,11 @@ static void
 remove_bblock_ref (InterpBasicBlock **array, InterpBasicBlock *ref, int len)
 {
 	int i = 0;
-	while (array [i] != ref)
+	while (array[i] != ref)
 		i++;
 	i++;
 	while (i < len) {
-		array [i - 1] = array [i];
+		array[i - 1] = array[i];
 		i++;
 	}
 }
@@ -207,7 +208,7 @@ TransformData::interp_remove_bblock (InterpBasicBlock *bb, InterpBasicBlock *pre
 {
 	g_assert (!bb->in_count);
 	while (bb->out_count)
-		interp_unlink_bblocks (bb, bb->out_bb [0]);
+		interp_unlink_bblocks (bb, bb->out_bb[0]);
 	prev_bb->next_bb = bb->next_bb;
 	mark_bb_as_dead (bb);
 }
@@ -219,7 +220,7 @@ TransformData::interp_link_bblocks (InterpBasicBlock *from, InterpBasicBlock *to
 	gboolean found = FALSE;
 
 	for (i = 0; i < from->out_count; ++i) {
-		if (to == from->out_bb [i]) {
+		if (to == from->out_bb[i]) {
 			found = TRUE;
 			break;
 		}
@@ -227,15 +228,15 @@ TransformData::interp_link_bblocks (InterpBasicBlock *from, InterpBasicBlock *to
 	if (!found) {
 		InterpBasicBlock **newa = arena.create_array<InterpBasicBlock *> (from->out_count + 1);
 		for (i = 0; i < from->out_count; ++i)
-			newa [i] = from->out_bb [i];
-		newa [i] = to;
+			newa[i] = from->out_bb[i];
+		newa[i] = to;
 		from->out_count++;
 		from->out_bb = newa;
 	}
 
 	found = FALSE;
 	for (i = 0; i < to->in_count; ++i) {
-		if (from == to->in_bb [i]) {
+		if (from == to->in_bb[i]) {
 			found = TRUE;
 			break;
 		}
@@ -243,18 +244,18 @@ TransformData::interp_link_bblocks (InterpBasicBlock *from, InterpBasicBlock *to
 	if (!found) {
 		InterpBasicBlock **newa = arena.create_array<InterpBasicBlock *> (to->in_count + 1);
 		for (i = 0; i < to->in_count; ++i)
-			newa [i] = to->in_bb [i];
-		newa [i] = from;
+			newa[i] = to->in_bb[i];
+		newa[i] = from;
 		to->in_count++;
 		to->in_bb = newa;
 	}
 }
 
-InterpBasicBlock*
+InterpBasicBlock *
 TransformData::get_bb (unsigned char *ip, gboolean make_list)
 {
 	int offset = ip - il_code;
-	InterpBasicBlock *bb = offset_to_bb [offset];
+	InterpBasicBlock *bb = offset_to_bb[offset];
 
 	if (!bb) {
 		bb = arena.create<InterpBasicBlock> ();
@@ -262,7 +263,7 @@ TransformData::get_bb (unsigned char *ip, gboolean make_list)
 		bb->native_offset = -1;
 		bb->stack_height = -1;
 		bb->index = bb_count++;
-		offset_to_bb [offset] = bb;
+		offset_to_bb[offset] = bb;
 
 		if (make_list)
 			basic_blocks.push_back (bb);
@@ -279,8 +280,8 @@ TransformData::get_bb (unsigned char *ip, gboolean make_list)
 void
 TransformData::get_basic_blocks (MonoMethodHeader *header, gboolean make_list)
 {
-	guint8 *start = (guint8*)il_code;
-	guint8 *end = (guint8*)il_code + code_size;
+	guint8 *start = (guint8 *) il_code;
+	guint8 *end = (guint8 *) il_code + code_size;
 	guint8 *ip = start;
 	unsigned char *target;
 	int i;
@@ -300,8 +301,8 @@ TransformData::get_basic_blocks (MonoMethodHeader *header, gboolean make_list)
 
 	while (ip < end) {
 		cli_addr = ip - start;
-		i = mono_opcode_value ((const guint8 **)&ip, end);
-		opcode = &mono_opcodes [i];
+		i = mono_opcode_value ((const guint8 **) &ip, end);
+		opcode = &mono_opcodes[i];
 		switch (opcode->argument) {
 		case MonoInlineNone:
 			ip++;
@@ -324,13 +325,13 @@ TransformData::get_basic_blocks (MonoMethodHeader *header, gboolean make_list)
 			ip += 2;
 			break;
 		case MonoShortInlineBrTarget:
-			target = start + cli_addr + 2 + (signed char)ip [1];
+			target = start + cli_addr + 2 + (signed char) ip[1];
 			get_bb (target, make_list);
 			ip += 2;
 			get_bb (ip, make_list);
 			break;
 		case MonoInlineBrTarget:
-			target = start + cli_addr + 5 + (gint32)read32 (ip + 1);
+			target = start + cli_addr + 5 + (gint32) read32 (ip + 1);
 			get_bb (target, make_list);
 			ip += 5;
 			get_bb (ip, make_list);
@@ -344,7 +345,7 @@ TransformData::get_basic_blocks (MonoMethodHeader *header, gboolean make_list)
 			get_bb (target, make_list);
 
 			for (j = 0; j < n; ++j) {
-				target = start + cli_addr + (gint32)read32 (ip);
+				target = start + cli_addr + (gint32) read32 (ip);
 				get_bb (target, make_list);
 				ip += 4;
 			}

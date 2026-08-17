@@ -37,7 +37,7 @@ interp_frame_get_ip (MonoInterpFrameHandle frame)
 	 * the rest of the runtime to see, like throws and sdb breakpoints, will need to account for
 	 * this subtraction that we are doing here.
 	 */
-	return (gpointer)(iframe->state.ip - 1);
+	return (gpointer) (iframe->state.ip - 1);
 }
 
 /*
@@ -91,9 +91,9 @@ interp_get_stopped_frame (const MonoJitTlsData *jit_tls, MonoLMF *lmf, gpointer 
 	if (!context->handle_mark_count)
 		return NULL;
 
-	gpointer anchor = context->handle_marks [context->handle_mark_count - 1].frame;
+	gpointer anchor = context->handle_marks[context->handle_mark_count - 1].frame;
 
-	if (lmf && (gsize)sp <= (gsize)lmf && (gsize)lmf < (gsize)anchor)
+	if (lmf && (gsize) sp <= (gsize) lmf && (gsize) lmf < (gsize) anchor)
 		return NULL;
 
 	return frame;
@@ -144,14 +144,19 @@ interp_frame_iter_next (MonoInterpStackIter *iter, StackFrameInfo *frame)
 	frame->interp_frame = iframe;
 	frame->method = method;
 	frame->actual_method = method;
-	if (method && ((method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) || (method->iflags & (METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL | METHOD_IMPL_ATTRIBUTE_RUNTIME)))) {
+	if (method
+	    && ((method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)
+	        || (method->iflags
+	            & (METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL | METHOD_IMPL_ATTRIBUTE_RUNTIME)))) {
 		frame->native_offset = -1;
 		frame->type = FRAME_TYPE_MANAGED_TO_NATIVE;
 	} else {
 		frame->type = FRAME_TYPE_INTERP;
 		/* The offset in the interpreter IR. It is -1 if the frame has no ip. */
 		gpointer ip = interp_frame_get_ip (iframe);
-		frame->native_offset = ip ? (int)(static_cast<guint8 *> (ip) - reinterpret_cast<guint8 *> (iframe->imethod->code)) : -1;
+		frame->native_offset = ip ? (int) (static_cast<guint8 *> (ip)
+		                                   - reinterpret_cast<guint8 *> (iframe->imethod->code))
+		                          : -1;
 		if (!method->wrapper_type || method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD)
 			frame->managed = TRUE;
 	}
@@ -175,5 +180,5 @@ mono_interp_invocation_anchor (ThreadContext *context)
 	if (!context->handle_mark_count)
 		return NULL;
 
-	return context->handle_marks [context->handle_mark_count - 1].frame;
+	return context->handle_marks[context->handle_mark_count - 1].frame;
 }

@@ -22,16 +22,16 @@ gboolean trace_wants_method (MonoMethod *method);
 void trace_enter (ThreadContext *context, InterpFrame *frame);
 void trace_leave (ThreadContext *context, InterpFrame *frame);
 
-#define MONO_INTERP_TRACE_ENTER(context, frame)         \
-	do {                                                \
-		if (G_UNLIKELY ((frame)->imethod->tracing))     \
-			trace_enter ((context), (frame));           \
+#define MONO_INTERP_TRACE_ENTER(context, frame)     \
+	do {                                            \
+		if (G_UNLIKELY ((frame)->imethod->tracing)) \
+			trace_enter ((context), (frame));       \
 	} while (0)
 
-#define MONO_INTERP_TRACE_LEAVE(context, frame)         \
-	do {                                                \
-		if (G_UNLIKELY ((frame)->imethod->tracing))     \
-			trace_leave ((context), (frame));           \
+#define MONO_INTERP_TRACE_LEAVE(context, frame)     \
+	do {                                            \
+		if (G_UNLIKELY ((frame)->imethod->tracing)) \
+			trace_leave ((context), (frame));       \
 	} while (0)
 
 #else

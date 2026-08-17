@@ -60,8 +60,8 @@ interp_parse_options (const char *options)
 		else if (takes_value (arg, "interp-only=", &value))
 			/* mini owns this list and never frees it, so it gets a copy of
 			 * its own rather than a pointer into the split below. */
-			mono_interp_only_classes = g_slist_prepend (
-				mono_interp_only_classes, g_strndup (value.data (), value.size ()));
+			mono_interp_only_classes = g_slist_prepend (mono_interp_only_classes,
+			                                            g_strndup (value.data (), value.size ()));
 		else if (arg == "-inline")
 			mono_interp_opt &= ~INTERP_OPT_INLINE;
 		else if (arg == "-cprop")
@@ -94,20 +94,36 @@ static void
 register_interp_stats (void)
 {
 	mono_counters_init ();
-	mono_counters_register ("Total transform time", MONO_COUNTER_INTERP | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_interp_stats.transform_time);
-	mono_counters_register ("Methods transformed", MONO_COUNTER_INTERP | MONO_COUNTER_LONG, &mono_interp_stats.methods_transformed);
-	mono_counters_register ("Line number table size", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.line_numbers_size);
-	mono_counters_register ("Total cprop time", MONO_COUNTER_INTERP | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_interp_stats.cprop_time);
-	mono_counters_register ("STLOC_NP count", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.stloc_nps);
-	mono_counters_register ("MOVLOC count", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.movlocs);
-	mono_counters_register ("Copy propagations", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.copy_propagations);
-	mono_counters_register ("Added pop count", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.added_pop_count);
-	mono_counters_register ("Constant folds", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.constant_folds);
-	mono_counters_register ("Ldlocas removed", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.ldlocas_removed);
-	mono_counters_register ("Killed instructions", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.killed_instructions);
-	mono_counters_register ("Emitted instructions", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.emitted_instructions);
-	mono_counters_register ("Methods inlined", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.inlined_methods);
-	mono_counters_register ("Inline failures", MONO_COUNTER_INTERP | MONO_COUNTER_INT, &mono_interp_stats.inline_failures);
+	mono_counters_register ("Total transform time",
+	                        MONO_COUNTER_INTERP | MONO_COUNTER_LONG | MONO_COUNTER_TIME,
+	                        &mono_interp_stats.transform_time);
+	mono_counters_register ("Methods transformed", MONO_COUNTER_INTERP | MONO_COUNTER_LONG,
+	                        &mono_interp_stats.methods_transformed);
+	mono_counters_register ("Line number table size", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.line_numbers_size);
+	mono_counters_register ("Total cprop time",
+	                        MONO_COUNTER_INTERP | MONO_COUNTER_LONG | MONO_COUNTER_TIME,
+	                        &mono_interp_stats.cprop_time);
+	mono_counters_register ("STLOC_NP count", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.stloc_nps);
+	mono_counters_register ("MOVLOC count", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.movlocs);
+	mono_counters_register ("Copy propagations", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.copy_propagations);
+	mono_counters_register ("Added pop count", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.added_pop_count);
+	mono_counters_register ("Constant folds", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.constant_folds);
+	mono_counters_register ("Ldlocas removed", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.ldlocas_removed);
+	mono_counters_register ("Killed instructions", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.killed_instructions);
+	mono_counters_register ("Emitted instructions", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.emitted_instructions);
+	mono_counters_register ("Methods inlined", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.inlined_methods);
+	mono_counters_register ("Inline failures", MONO_COUNTER_INTERP | MONO_COUNTER_INT,
+	                        &mono_interp_stats.inline_failures);
 }
 
 /*
@@ -116,17 +132,15 @@ register_interp_stats (void)
  * ee.h stays a compile error until something answers it.
  */
 #define interp_entry_from_trampoline mono_interp_entry_from_ccontext
-#define interp_entry_from_args       mono_interp_entry_from_args
-#define interp_runtime_invoke        mono_interp_runtime_invoke
-#define interp_run_finally           mono_interp_run_finally
-#define interp_run_filter            mono_interp_run_filter
+#define interp_entry_from_args mono_interp_entry_from_args
+#define interp_runtime_invoke mono_interp_runtime_invoke
+#define interp_run_finally mono_interp_run_finally
+#define interp_run_filter mono_interp_run_filter
 
 #undef MONO_EE_CALLBACK
-#define MONO_EE_CALLBACK(ret, name, sig) interp_ ## name,
+#define MONO_EE_CALLBACK(ret, name, sig) interp_##name,
 
-static const MonoEECallbacks mono_interp_callbacks = {
-	MONO_EE_CALLBACKS
-};
+static const MonoEECallbacks mono_interp_callbacks = {MONO_EE_CALLBACKS};
 
 } // namespace mono::interp
 
@@ -153,4 +167,3 @@ mono_ee_interp_init (const char *opts)
 
 	register_interp_stats ();
 }
-

@@ -29,8 +29,7 @@ public:
 
 	Arena (Arena &&other) noexcept : pool_ (other.pool_) { other.pool_ = nullptr; }
 
-	Arena &
-	operator= (Arena &&other) noexcept
+	Arena &operator= (Arena &&other) noexcept
 	{
 		std::swap (pool_, other.pool_);
 		return *this;
@@ -46,8 +45,7 @@ public:
 	}
 
 	/// Raw storage, with whatever the pool last left in it.
-	void *
-	alloc (std::size_t size, std::size_t align)
+	void *alloc (std::size_t size, std::size_t align)
 	{
 		if (align <= pool_alignment)
 			return mono_mempool_alloc (pool_, (unsigned int) size);
@@ -57,8 +55,7 @@ public:
 	}
 
 	/// Raw storage, filled with zero.
-	void *
-	alloc0 (std::size_t size, std::size_t align)
+	void *alloc0 (std::size_t size, std::size_t align)
 	{
 		if (align <= pool_alignment)
 			return mono_mempool_alloc0 (pool_, (unsigned int) size);
@@ -69,9 +66,8 @@ public:
 
 	/// One object. With no arguments the object is value initialized, which
 	/// zero fills an aggregate.
-	template <class T, class... Args>
-	T *
-	create (Args &&...args)
+	template<class T, class... Args>
+	T *create (Args &&...args)
 	{
 		static_assert (std::is_trivially_destructible_v<T>, "an arena runs no destructors");
 
@@ -79,9 +75,8 @@ public:
 	}
 
 	/// An array of count objects, filled with zero.
-	template <class T>
-	T *
-	create_array (std::size_t count)
+	template<class T>
+	T *create_array (std::size_t count)
 	{
 		static_assert (std::is_trivially_destructible_v<T>, "an arena runs no destructors");
 		static_assert (std::is_trivially_default_constructible_v<T>,
@@ -92,9 +87,8 @@ public:
 
 	/// One object whose last member is a variable length array, with room for
 	/// extra bytes past the end of the struct. Filled with zero.
-	template <class T>
-	T *
-	create_flexible (std::size_t extra)
+	template<class T>
+	T *create_flexible (std::size_t extra)
 	{
 		static_assert (std::is_trivially_destructible_v<T>, "an arena runs no destructors");
 		static_assert (std::is_trivially_default_constructible_v<T>,
@@ -111,8 +105,7 @@ private:
 	// mempool.c. A stricter request is met by hand, above.
 	static constexpr std::size_t pool_alignment = 8;
 
-	static void *
-	align_up (void *mem, std::size_t align)
+	static void *align_up (void *mem, std::size_t align)
 	{
 		std::uintptr_t addr = (std::uintptr_t) mem;
 

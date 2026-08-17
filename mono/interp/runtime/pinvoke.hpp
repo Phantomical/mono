@@ -17,8 +17,7 @@
 #endif
 
 #ifdef TARGET_WASM
-G_EXTERN_C gpointer
-mono_wasm_get_interp_to_native_trampoline (MonoMethodSignature *sig);
+G_EXTERN_C gpointer mono_wasm_get_interp_to_native_trampoline (MonoMethodSignature *sig);
 #endif
 
 namespace mono::interp {

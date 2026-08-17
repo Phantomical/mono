@@ -29,7 +29,7 @@ namespace {
 void
 append_format (std::string &out, const char *fmt, ...)
 {
-	char buf [128];
+	char buf[128];
 	va_list args;
 
 	va_start (args, fmt);
@@ -131,7 +131,7 @@ dump_args (InterpFrame *inv)
 	}
 
 	for (int i = 0; i < signature->param_count; ++i)
-		dump_stackval (out, inv->stack + (!!signature->hasthis) + i, signature->params [i]);
+		dump_stackval (out, inv->stack + (!!signature->hasthis) + i, signature->params[i]);
 
 	return out;
 }
@@ -169,8 +169,7 @@ trace_enter (ThreadContext *context, InterpFrame *frame)
 	std::string args = dump_args (frame);
 
 	print_indent (context);
-	g_print ("(%p) enter %s (%s)\n", mono_thread_internal_current (), name.c_str (),
-	         args.c_str ());
+	g_print ("(%p) enter %s (%s)\n", mono_thread_internal_current (), name.c_str (), args.c_str ());
 	context->trace_depth++;
 }
 

@@ -118,16 +118,16 @@ u32_to_decstr (guint32 value, MonoArray *cache, MonoVTable *vtable)
 	int bufferLength = count_digits (value);
 
 	if (bufferLength == 1)
-		return mono_array_get_fast (cache, MonoString*, value);
+		return mono_array_get_fast (cache, MonoString *, value);
 
-	int size = (G_STRUCT_OFFSET (MonoString, chars) + (((size_t)bufferLength + 1) * 2));
-	MonoString* result = mono_gc_alloc_string (vtable, size, bufferLength);
-	mono_unichar2 *buffer = &result->chars [0];
+	int size = (G_STRUCT_OFFSET (MonoString, chars) + (((size_t) bufferLength + 1) * 2));
+	MonoString *result = mono_gc_alloc_string (vtable, size, bufferLength);
+	mono_unichar2 *buffer = &result->chars[0];
 	mono_unichar2 *p = buffer + bufferLength;
 	do {
 		guint32 remainder;
 		value = math_divrem (value, 10, &remainder);
-		*(--p) = (mono_unichar2)(remainder + '0');
+		*(--p) = (mono_unichar2) (remainder + '0');
 	} while (value != 0);
 	return result;
 }
@@ -139,11 +139,11 @@ widen_ascii_to_utf16 (guint8 *pAsciiBuffer, mono_unichar2 *pUtf16Buffer, mono_u 
 	mono_u currentOffset = 0;
 
 	while (currentOffset < elementCount) {
-		guint16 asciiData = pAsciiBuffer [currentOffset];
+		guint16 asciiData = pAsciiBuffer[currentOffset];
 		if ((asciiData & 0x80) != 0)
 			return currentOffset;
 
-		pUtf16Buffer [currentOffset] = (mono_unichar2)asciiData;
+		pUtf16Buffer[currentOffset] = (mono_unichar2) asciiData;
 		currentOffset++;
 	}
 	return currentOffset;

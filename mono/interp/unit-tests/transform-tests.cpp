@@ -34,8 +34,8 @@ TEST_F (Cprop, FoldsAddOfTwoConstants)
 
 	Code code (transform);
 
-	ASSERT_EQ (code.opcodes (), (std::vector<std::string> {"ldc.i4", "ret"}));
-	EXPECT_EQ (READ32 (&code.at (0)->data [0]), 0x1122u + 0x3344u);
+	ASSERT_EQ (code.opcodes (), (std::vector<std::string>{"ldc.i4", "ret"}));
+	EXPECT_EQ (READ32 (&code.at (0)->data[0]), 0x1122u + 0x3344u);
 }
 
 TEST_F (Cprop, ForwardsALocalLoadedTwice)
@@ -45,8 +45,8 @@ TEST_F (Cprop, ForwardsALocalLoadedTwice)
 
 	Code code (transform);
 
-	ASSERT_EQ (code.opcodes (), (std::vector<std::string> {
-		"initlocals", "call", "mov.4", "add.i4", "ret"}));
+	ASSERT_EQ (code.opcodes (),
+	           (std::vector<std::string>{"initlocals", "call", "mov.4", "add.i4", "ret"}));
 
 	/*
 	 * Both loads are gone: the add reads the local the call's result was stored
@@ -59,8 +59,8 @@ TEST_F (Cprop, ForwardsALocalLoadedTwice)
 	InterpInst *store = code.at (2);
 	InterpInst *add = code.at (3);
 
-	EXPECT_EQ (add->sregs [0], store->dreg);
-	EXPECT_EQ (add->sregs [1], store->dreg);
+	EXPECT_EQ (add->sregs[0], store->dreg);
+	EXPECT_EQ (add->sregs[1], store->dreg);
 }
 
 /*

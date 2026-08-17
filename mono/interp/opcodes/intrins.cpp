@@ -16,7 +16,8 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_ENUM_HASFLAG)
 {
 	auto klass = static_cast<MonoClass *> (frame->imethod->data_items[ip[4]]);
 	LOCAL_VAR (ip[1], gint32) =
-		enum_hasflag (reinterpret_cast<stackval *> ((locals + ip[2])), reinterpret_cast<stackval *> ((locals + ip[3])), klass);
+		enum_hasflag (reinterpret_cast<stackval *> ((locals + ip[2])),
+	                  reinterpret_cast<stackval *> ((locals + ip[3])), klass);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -110,8 +111,7 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_MARVIN_BLOCK)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_ASCII_CHARS_TO_UPPERCASE)
 {
-	LOCAL_VAR (ip[1], gint32) =
-		ascii_chars_to_uppercase (LOCAL_VAR (ip[2], guint32));
+	LOCAL_VAR (ip[1], gint32) = ascii_chars_to_uppercase (LOCAL_VAR (ip[2], guint32));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -121,7 +121,8 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_MEMORYMARSHAL_GETARRAYDATAREF)
 {
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
-	LOCAL_VAR (ip[1], gpointer) = reinterpret_cast<guint8 *> (o) + MONO_STRUCT_OFFSET (MonoArray, vector);
+	LOCAL_VAR (ip[1], gpointer) =
+		reinterpret_cast<guint8 *> (o) + MONO_STRUCT_OFFSET (MonoArray, vector);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -129,8 +130,8 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_MEMORYMARSHAL_GETARRAYDATAREF)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_ORDINAL_IGNORE_CASE_ASCII)
 {
-	LOCAL_VAR (ip[1], gint32) = ordinal_ignore_case_ascii (
-		LOCAL_VAR (ip[2], guint32), LOCAL_VAR (ip[3], guint32));
+	LOCAL_VAR (ip[1], gint32) =
+		ordinal_ignore_case_ascii (LOCAL_VAR (ip[2], guint32), LOCAL_VAR (ip[3], guint32));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -138,8 +139,8 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_ORDINAL_IGNORE_CASE_ASCII)
 
 MONO_INTERP_OP_IMPL (MINT_INTRINS_64ORDINAL_IGNORE_CASE_ASCII)
 {
-	LOCAL_VAR (ip[1], gint32) = ordinal_ignore_case_ascii (
-		LOCAL_VAR (ip[2], guint64), LOCAL_VAR (ip[3], guint64));
+	LOCAL_VAR (ip[1], gint32) =
+		ordinal_ignore_case_ascii (LOCAL_VAR (ip[2], guint64), LOCAL_VAR (ip[3], guint64));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
@@ -149,8 +150,8 @@ MONO_INTERP_OP_IMPL (MINT_INTRINS_U32_TO_DECSTR)
 {
 	auto cache_addr = static_cast<MonoArray **> (frame->imethod->data_items[ip[3]]);
 	auto string_vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[4]]);
-	LOCAL_VAR (ip[1], MonoObject *) = reinterpret_cast<MonoObject *> (u32_to_decstr (
-		LOCAL_VAR (ip[2], guint32), *cache_addr, string_vtable));
+	LOCAL_VAR (ip[1], MonoObject *) = reinterpret_cast<MonoObject *> (
+		u32_to_decstr (LOCAL_VAR (ip[2], guint32), *cache_addr, string_vtable));
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

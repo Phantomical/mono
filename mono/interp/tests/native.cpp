@@ -194,11 +194,11 @@ interp_test_next_id (void)
 static const struct {
 	const char *name;
 	void *address;
-} interp_test_symbols [] = {
-	{ "abs",     (void *) interp_test_abs },
-	{ "labs",    (void *) interp_test_labs },
-	{ "toupper", (void *) interp_test_toupper },
-	{ "strlen",  (void *) interp_test_strlen },
+} interp_test_symbols[] = {
+	{"abs", (void *) interp_test_abs},
+	{"labs", (void *) interp_test_labs},
+	{"toupper", (void *) interp_test_toupper},
+	{"strlen", (void *) interp_test_strlen},
 };
 
 /// Hands back the address of one of the functions in the table, or null.  An IL
@@ -224,5 +224,4 @@ interp_test_lookup (const char *name, int mode)
 	errno = ENOENT;
 	return -1;
 }
-
 }

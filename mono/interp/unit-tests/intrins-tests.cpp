@@ -93,14 +93,13 @@ TEST (Intrins, AsciiCharsToUppercaseUppercasesBothHalves)
 TEST (Intrins, AsciiCharsToUppercaseLeavesNonLettersAlone)
 {
 	for (char16_t c : {u'`', u'{', u'@', u'[', u'0', u'9', u' ', u'\x7f'}) {
-		EXPECT_EQ (ascii_chars_to_uppercase (pack2 (c, c)), pack2 (c, c))
-			<< "c=" << (int) c;
+		EXPECT_EQ (ascii_chars_to_uppercase (pack2 (c, c)), pack2 (c, c)) << "c=" << (int) c;
 	}
 }
 
 TEST (Intrins, OrdinalIgnoreCaseAscii32MatchesPerCharacter)
 {
-	static const char16_t interesting[] = {u'a', u'z', u'A', u'Z', u'`',  u'{',
+	static const char16_t interesting[] = {u'a', u'z', u'A', u'Z', u'`', u'{',
 	                                       u'@', u'[', u'0', u'9', u'_'};
 
 	for (char16_t a : interesting) {
@@ -203,9 +202,9 @@ TEST (Intrins, U32ToDecStrMatchesToString)
 	ASSERT_TRUE (is_ok (error));
 	ASSERT_NE (vtable, nullptr);
 
-	static const guint32 values[] = {10u,      11u,        99u,        100u,       999u,
-	                                 1000u,    9999u,      10000u,     99999u,     100000u,
-	                                 999999u,  1000000u,   99999999u,  100000000u, 999999999u,
+	static const guint32 values[] = {10u,         11u,         99u,        100u,       999u,
+	                                 1000u,       9999u,       10000u,     99999u,     100000u,
+	                                 999999u,     1000000u,    99999999u,  100000000u, 999999999u,
 	                                 1000000000u, 4294967294u, 4294967295u};
 
 	for (guint32 v : values) {

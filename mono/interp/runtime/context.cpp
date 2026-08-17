@@ -38,7 +38,8 @@ interp_free_context (gpointer ctx)
 {
 	ThreadContext *context = static_cast<ThreadContext *> (ctx);
 
-	ThreadContext *current_context = static_cast<ThreadContext *> (mono_native_tls_get_value (thread_context_id));
+	ThreadContext *current_context =
+		static_cast<ThreadContext *> (mono_native_tls_get_value (thread_context_id));
 	/* at thread exit, we can be called from the JIT TLS key destructor with current_context == NULL */
 	if (current_context != NULL) {
 		/* check that the context we're freeing is the current one before overwriting TLS */
@@ -92,7 +93,7 @@ interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboo
 	 * in sgen-mono.c already did a mono_memory_barrier_process_wide () so we can
 	 * process these data structures normally.
 	 */
-	MonoJitTlsData *jit_tls = static_cast<MonoJitTlsData *> (info->tls [TLS_KEY_JIT_TLS]);
+	MonoJitTlsData *jit_tls = static_cast<MonoJitTlsData *> (info->tls[TLS_KEY_JIT_TLS]);
 	if (!jit_tls)
 		return;
 
@@ -101,7 +102,8 @@ interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboo
 		return;
 
 	// FIXME: Scan the whole area with 1 call
-	for (gpointer *p = reinterpret_cast<gpointer *> (context->stack_start); p < reinterpret_cast<gpointer *> (context->stack_pointer); p++)
+	for (gpointer *p = reinterpret_cast<gpointer *> (context->stack_start);
+	     p < reinterpret_cast<gpointer *> (context->stack_pointer); p++)
 		func (p, gc_data);
 
 	/*
@@ -109,14 +111,16 @@ interp_mark_stack (gpointer thread_data, GcScanFunc func, gpointer gc_data, gboo
 	 * stack, which is scanned conservatively already.
 	 */
 	if (context->frame_stack_start) {
-		for (gpointer *p = reinterpret_cast<gpointer *> (context->frame_stack_start); p < reinterpret_cast<gpointer *> (context->frame_stack_pointer); p++)
+		for (gpointer *p = reinterpret_cast<gpointer *> (context->frame_stack_start);
+		     p < reinterpret_cast<gpointer *> (context->frame_stack_pointer); p++)
 			func (p, gc_data);
 	}
 
 	FrameDataFragment *frag;
 	for (frag = context->data_stack.first; frag; frag = frag->next) {
 		// FIXME: Scan the whole area with 1 call
-		for (gpointer *p = reinterpret_cast<gpointer *> (&frag->data); p < reinterpret_cast<gpointer *> (frag->pos); ++p)
+		for (gpointer *p = reinterpret_cast<gpointer *> (&frag->data);
+		     p < reinterpret_cast<gpointer *> (frag->pos); ++p)
 			func (p, gc_data);
 		if (frag == context->data_stack.current)
 			break;
@@ -141,13 +145,17 @@ using namespace mono::interp;
 ThreadContext *
 mono_interp_get_context (void)
 {
-	ThreadContext *context = static_cast<ThreadContext *> (mono_native_tls_get_value (thread_context_id));
+	ThreadContext *context =
+		static_cast<ThreadContext *> (mono_native_tls_get_value (thread_context_id));
 	if (context == NULL) {
 		context = g_new0 (ThreadContext, 1);
-		context->stack_start = static_cast<guchar *> (mono_valloc (0, INTERP_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK));
+		context->stack_start = static_cast<guchar *> (mono_valloc (
+			0, INTERP_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK));
 		context->stack_pointer = context->stack_start;
 
-		context->frame_stack_start = static_cast<guchar *> (mono_valloc (0, INTERP_FRAME_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_INTERP_STACK));
+		context->frame_stack_start = static_cast<guchar *> (
+			mono_valloc (0, INTERP_FRAME_STACK_SIZE, MONO_MMAP_READ | MONO_MMAP_WRITE,
+		                 MONO_MEM_ACCOUNT_INTERP_STACK));
 		context->frame_stack_pointer = context->frame_stack_start;
 
 		frame_data_allocator_init (&context->data_stack, 8192);
@@ -164,23 +172,25 @@ mono_interp_push_handle_mark (ThreadContext *context, HandleStackMark *mark, Int
 	int depth = context->handle_mark_count;
 
 	if (G_UNLIKELY (depth == context->handle_mark_capacity)) {
-		context->handle_mark_capacity = context->handle_mark_capacity ? context->handle_mark_capacity * 2 : 32;
-		context->handle_marks = g_renew (InterpHandleMark, context->handle_marks, context->handle_mark_capacity);
+		context->handle_mark_capacity =
+			context->handle_mark_capacity ? context->handle_mark_capacity * 2 : 32;
+		context->handle_marks =
+			g_renew (InterpHandleMark, context->handle_marks, context->handle_mark_capacity);
 	}
 
-	context->handle_marks [depth].mark = *mark;
+	context->handle_marks[depth].mark = *mark;
 	/* Compared against the stack pointer a resume restores, so it has to be in the frame. */
-	context->handle_marks [depth].frame = (gpointer)mark;
-	context->handle_marks [depth].frame_watermark = context->frame_stack_pointer;
-	context->handle_marks [depth].first_ordinal = frame->ordinal;
+	context->handle_marks[depth].frame = (gpointer) mark;
+	context->handle_marks[depth].frame_watermark = context->frame_stack_pointer;
+	context->handle_marks[depth].first_ordinal = frame->ordinal;
 	context->handle_mark_count = depth + 1;
 
 	return depth;
 }
 
 void
-mono_interp_error_cleanup (MonoError* error)
+mono_interp_error_cleanup (MonoError *error)
 {
 	mono_error_cleanup (error); /* FIXME: don't swallow the error */
-	error_init_reuse (error); // one instruction, so this function is good inline candidate
+	error_init_reuse (error);   // one instruction, so this function is good inline candidate
 }

@@ -144,8 +144,8 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_STRING)
 
 	int param_size = ip[3];
 	if (param_size)
-		std::memmove (locals + call_args_offset + MINT_STACK_SLOT_SIZE,
-		              locals + call_args_offset, param_size);
+		std::memmove (locals + call_args_offset + MINT_STACK_SLOT_SIZE, locals + call_args_offset,
+		              param_size);
 
 	// `this` is implicit null. The created string will be returned
 	// by the call, even though the call has void return (?!).

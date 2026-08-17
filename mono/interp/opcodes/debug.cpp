@@ -101,8 +101,7 @@ MONO_INTERP_OP_IMPL (MINT_PROF_ENTER)
 
 	if ((flag & TRACING_FLAG)
 	    || ((flag & PROFILING_FLAG) && MONO_PROFILER_ENABLED (method_enter)
-	        && (frame->imethod->prof_flags
-	            & MONO_PROFILER_CALL_INSTRUMENTATION_ENTER_CONTEXT))) {
+	        && (frame->imethod->prof_flags & MONO_PROFILER_CALL_INSTRUMENTATION_ENTER_CONTEXT))) {
 		MonoProfilerCallContext prof_ctx = {};
 		prof_ctx.interp_frame = frame;
 		prof_ctx.method = frame->imethod->method;
@@ -135,8 +134,7 @@ MONO_INTERP_OP_IMPL (MINT_PROF_EXIT)
 
 	if ((flag & TRACING_FLAG)
 	    || ((flag & PROFILING_FLAG) && MONO_PROFILER_ENABLED (method_leave)
-	        && (frame->imethod->prof_flags
-	            & MONO_PROFILER_CALL_INSTRUMENTATION_LEAVE_CONTEXT))) {
+	        && (frame->imethod->prof_flags & MONO_PROFILER_CALL_INSTRUMENTATION_LEAVE_CONTEXT))) {
 		MonoProfilerCallContext prof_ctx = {};
 		prof_ctx.interp_frame = frame;
 		prof_ctx.method = frame->imethod->method;

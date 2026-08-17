@@ -111,7 +111,7 @@ struct LocalValue {
 /// The iterator reads that member when it advances, so a walk may retire the
 /// node it is on - an instruction turned into a MINT_NOP stays linked - but
 /// may not unlink or relink one.
-template <class T, T *T::*Next>
+template<class T, T *T::*Next>
 class IntrusiveList {
 public:
 	class iterator {
@@ -127,8 +127,7 @@ public:
 
 		T *operator* () const { return node_; }
 
-		iterator &
-		operator++ ()
+		iterator &operator++ ()
 		{
 			node_ = node_->*Next;
 			return *this;
@@ -158,7 +157,7 @@ struct InterpInst {
 	int il_offset;
 	guint32 flags;
 	gint32 dreg;
-	gint32 sregs [3]; // Currently all instructions have at most 3 sregs
+	gint32 sregs[3]; // Currently all instructions have at most 3 sregs
 	// This union serves the same purpose as the data array. The difference is that
 	// the data array maps exactly to the final representation of the instruction.
 	// FIXME We should consider using a separate higher level IR, that is also easier
@@ -172,7 +171,7 @@ struct InterpInst {
 	} info;
 	// Variable data immediately following the dreg/sreg information. This is represented exactly
 	// in the final code stream as in this array.
-	guint16 data [MONO_ZERO_LEN_ARRAY];
+	guint16 data[MONO_ZERO_LEN_ARRAY];
 };
 
 struct InterpBasicBlock {
@@ -274,7 +273,6 @@ struct TransformData {
 	TransformData (const TransformData &) = delete;
 	TransformData &operator= (const TransformData &) = delete;
 
-
 	// The transform, defined in transform.cpp.
 	void alloc_ins_locals (InterpInst *ins);
 	void binary_arith_op (int mint_op);
@@ -283,16 +281,16 @@ struct TransformData {
 	int create_interp_local (MonoType *type);
 	int create_interp_local_explicit (MonoType *type, int size);
 	int create_interp_stack_local (StackType type, MonoClass *k, int type_size, int offset);
-	guint16*emit_compacted_instruction (guint16* start_ip, InterpBasicBlock *bb,
-                            InterpInst *ins);
+	guint16 *emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *bb, InterpInst *ins);
 	void emit_convert (MonoType *ftype);
 	void emit_store_value_as_local (MonoType *src);
 	void fixup_newbb_stack_locals (InterpBasicBlock *newbb);
-	gboolean generate_code (MonoMethod *method, MonoMethodHeader *header, MonoGenericContext *generic_context, MonoError *error);
+	gboolean generate_code (MonoMethod *method, MonoMethodHeader *header,
+	                        MonoGenericContext *generic_context, MonoError *error);
 	void generate_compacted_code ();
-	MonoType*get_arg_type_exact (int n, MintType *mt);
+	MonoType *get_arg_type_exact (int n, MintType *mt);
 	void get_basic_blocks (MonoMethodHeader *header, gboolean make_list);
-	InterpBasicBlock*get_bb (unsigned char *ip, gboolean make_list);
+	InterpBasicBlock *get_bb (unsigned char *ip, gboolean make_list);
 	guint16 get_data_item_index (void *ptr);
 	guint16 get_data_item_index_nonshared (void *ptr);
 	int get_interp_local_offset (int local, gboolean resolve_stack_locals);
@@ -307,47 +305,61 @@ struct TransformData {
 	void init_bb_stack_state (InterpBasicBlock *bb);
 	void initialize_clause_bblocks ();
 	void interp_add_conv (StackInfo *sp, InterpInst *prev_ins, StackType type, int conv_op);
-	InterpInst*interp_add_ins (guint16 opcode);
-	InterpInst*interp_add_ins_explicit (guint16 opcode, int len);
-	void interp_constrained_box (MonoDomain *domain, MonoClass *constrained_class, MonoMethodSignature *csignature, MonoError *error);
+	InterpInst *interp_add_ins (guint16 opcode);
+	InterpInst *interp_add_ins_explicit (guint16 opcode, int len);
+	void interp_constrained_box (MonoDomain *domain, MonoClass *constrained_class,
+	                             MonoMethodSignature *csignature, MonoError *error);
 	void interp_cprop ();
 	void interp_emit_ldelema (MonoClass *array_class, MonoClass *check_class);
 	void interp_emit_ldobj (MonoClass *klass);
 	void interp_emit_ldsflda (MonoClassField *field, MonoError *error);
 	gboolean interp_emit_load_const (gpointer field_addr, MintType mt);
 	void interp_emit_memory_barrier (int kind);
-	void interp_emit_sfld_access (MonoClassField *field, MonoClass *field_class, MintType mt, gboolean is_load, MonoError *error);
+	void interp_emit_sfld_access (MonoClassField *field, MonoClass *field_class, MintType mt,
+	                              gboolean is_load, MonoError *error);
 	void interp_emit_stobj (MonoClass *klass);
 	void interp_fix_localloc_ret ();
-	InterpInst*interp_fold_binop (LocalValue *local_defs, int *local_ref_count, InterpInst *ins);
-	InterpInst*interp_fold_binop_cond_br (InterpBasicBlock *cbb, LocalValue *local_defs, int *local_ref_count, InterpInst *ins);
-	InterpInst*interp_fold_unop (LocalValue *local_defs, int *local_ref_count, InterpInst *ins);
-	InterpInst*interp_fold_unop_cond_br (InterpBasicBlock *cbb, LocalValue *local_defs, int *local_ref_count, InterpInst *ins);
+	InterpInst *interp_fold_binop (LocalValue *local_defs, int *local_ref_count, InterpInst *ins);
+	InterpInst *interp_fold_binop_cond_br (InterpBasicBlock *cbb, LocalValue *local_defs,
+	                                       int *local_ref_count, InterpInst *ins);
+	InterpInst *interp_fold_unop (LocalValue *local_defs, int *local_ref_count, InterpInst *ins);
+	InterpInst *interp_fold_unop_cond_br (InterpBasicBlock *cbb, LocalValue *local_defs,
+	                                      int *local_ref_count, InterpInst *ins);
 	void interp_generate_bie_throw ();
 	void interp_generate_ipe_throw_with_msg (MonoError *error_msg);
 	void interp_generate_mae_throw (MonoMethod *method, MonoMethod *target_method);
 	void interp_generate_not_supported_throw ();
-	InterpInst*interp_get_ldc_i4_from_const (InterpInst *ins, gint32 ct, int dreg);
-	gboolean interp_handle_intrinsics (MonoMethod *target_method, MonoClass *constrained_class, MonoMethodSignature *csignature, gboolean readonly, int *op);
+	InterpInst *interp_get_ldc_i4_from_const (InterpInst *ins, gint32 ct, int dreg);
+	gboolean interp_handle_intrinsics (MonoMethod *target_method, MonoClass *constrained_class,
+	                                   MonoMethodSignature *csignature, gboolean readonly, int *op);
 	void interp_handle_isinst (MonoClass *klass, gboolean isinst_instr);
-	gboolean interp_handle_magic_type_intrinsics (MonoMethod *target_method, MonoMethodSignature *csignature, int type_index);
-	gboolean interp_inline_method (MonoMethod *target_method, MonoMethodHeader *header, MonoError *error);
-	InterpInst*interp_insert_ins (InterpInst *prev_ins, guint16 opcode);
-	InterpInst*interp_insert_ins_bb (InterpBasicBlock *bb, InterpInst *prev_ins, guint16 opcode);
-	InterpInst*interp_inst_replace_with_i8_const (InterpInst *ins, gint64 ct);
+	gboolean interp_handle_magic_type_intrinsics (MonoMethod *target_method,
+	                                              MonoMethodSignature *csignature, int type_index);
+	gboolean interp_inline_method (MonoMethod *target_method, MonoMethodHeader *header,
+	                               MonoError *error);
+	InterpInst *interp_insert_ins (InterpInst *prev_ins, guint16 opcode);
+	InterpInst *interp_insert_ins_bb (InterpBasicBlock *bb, InterpInst *prev_ins, guint16 opcode);
+	InterpInst *interp_inst_replace_with_i8_const (InterpInst *ins, gint64 ct);
 	gboolean interp_ip_in_cbb (int il_offset);
 	void interp_link_bblocks (InterpBasicBlock *from, InterpBasicBlock *to);
 	gboolean interp_local_deadce (int *local_ref_count);
 	void interp_merge_bblocks (InterpBasicBlock *bb, InterpBasicBlock *bbadd);
 	gboolean interp_method_check_inlining (MonoMethod *method, MonoMethodSignature *csignature);
-	void interp_method_compute_offsets (InterpMethod *imethod, MonoMethodSignature *sig, MonoMethodHeader *header, MonoError *error);
-	InterpInst*interp_new_ins (guint16 opcode, int len);
+	void interp_method_compute_offsets (InterpMethod *imethod, MonoMethodSignature *sig,
+	                                    MonoMethodHeader *header, MonoError *error);
+	InterpInst *interp_new_ins (guint16 opcode, int len);
 	gboolean interp_optimize_bblocks ();
 	void interp_optimize_code ();
 	void interp_remove_bblock (InterpBasicBlock *bb, InterpBasicBlock *prev_bb);
-	void interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header, const std::vector<MonoDebugLineNumberEntry> &line_numbers);
-	void interp_save_line_numbers (InterpMethod *rtm, const std::vector<MonoDebugLineNumberEntry> &line_numbers);
-	gboolean interp_transform_call (MonoMethod *method, MonoMethod *target_method, MonoDomain *domain, MonoGenericContext *generic_context, MonoClass *constrained_class, gboolean readonly, MonoError *error, gboolean check_visibility, gboolean save_last_error, gboolean tailcall);
+	void interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *header,
+	                             const std::vector<MonoDebugLineNumberEntry> &line_numbers);
+	void interp_save_line_numbers (InterpMethod *rtm,
+	                               const std::vector<MonoDebugLineNumberEntry> &line_numbers);
+	gboolean interp_transform_call (MonoMethod *method, MonoMethod *target_method,
+	                                MonoDomain *domain, MonoGenericContext *generic_context,
+	                                MonoClass *constrained_class, gboolean readonly,
+	                                MonoError *error, gboolean check_visibility,
+	                                gboolean save_last_error, gboolean tailcall);
 	void load_arg (int n);
 	void load_local (int local);
 	void mark_bb_as_dead (InterpBasicBlock *bb);
@@ -421,15 +433,15 @@ struct TransformData {
 } // namespace mono::interp
 
 /* test exports for white box testing */
-void
-mono_test_interp_cprop (mono::interp::TransformData *td);
-gboolean
-mono_test_interp_generate_code (mono::interp::TransformData *td, MonoMethod *method, MonoMethodHeader *header, MonoGenericContext *generic_context, MonoError *error);
-void
-mono_test_interp_method_compute_offsets (mono::interp::TransformData *td, InterpMethod *imethod, MonoMethodSignature *signature, MonoMethodHeader *header);
+void mono_test_interp_cprop (mono::interp::TransformData *td);
+gboolean mono_test_interp_generate_code (mono::interp::TransformData *td, MonoMethod *method,
+                                         MonoMethodHeader *header,
+                                         MonoGenericContext *generic_context, MonoError *error);
+void mono_test_interp_method_compute_offsets (mono::interp::TransformData *td,
+                                              InterpMethod *imethod, MonoMethodSignature *signature,
+                                              MonoMethodHeader *header);
 
 /* debugging aid */
-void
-mono_interp_print_td_code (mono::interp::TransformData *td);
+void mono_interp_print_td_code (mono::interp::TransformData *td);
 
 #endif /* __MONO_INTERP_TRANSFORM_H__ */

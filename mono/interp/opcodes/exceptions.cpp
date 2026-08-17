@@ -24,7 +24,8 @@ MONO_INTERP_OP_IMPL (MINT_THROW)
 // A rethrow keeps the stack trace the exception was caught with.
 MONO_INTERP_OP_IMPL (MINT_RETHROW)
 {
-	THROW_EX_GENERAL (*reinterpret_cast<MonoException **> ((frame_locals (frame) + ip[1])), ip, TRUE);
+	THROW_EX_GENERAL (*reinterpret_cast<MonoException **> ((frame_locals (frame) + ip[1])), ip,
+	                  TRUE);
 }
 
 /*
@@ -50,21 +51,20 @@ MONO_INTERP_OP_IMPL (MINT_MONO_RETHROW)
  * branch, since a pending abort has to be raised while the handlers are still in
  * scope; the plain forms ask afterwards.
  */
-#define IMPL_LEAVE(opcode, check, short_offset)                                       \
-	MONO_INTERP_OP_IMPL (opcode)                                                      \
-	{                                                                                 \
-		if (check                                                                     \
-		    && frame->imethod->method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE) { \
-			if (MonoException *abort_exc = mono_interp_leave (frame))                 \
-				THROW_EX (abort_exc, ip);                                             \
-		}                                                                             \
-                                                                                      \
-		ip += short_offset ? (gint16) *(ip + 1) : (gint32) READ32 (ip + 1);            \
-                                                                                      \
-		if (!check)                                                                   \
-			EXCEPTION_CHECKPOINT;                                                     \
-                                                                                      \
-		MONO_INTERP_DISPATCH ();                                                      \
+#define IMPL_LEAVE(opcode, check, short_offset)                                             \
+	MONO_INTERP_OP_IMPL (opcode)                                                            \
+	{                                                                                       \
+		if (check && frame->imethod->method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE) { \
+			if (MonoException *abort_exc = mono_interp_leave (frame))                       \
+				THROW_EX (abort_exc, ip);                                                   \
+		}                                                                                   \
+                                                                                            \
+		ip += short_offset ? (gint16) * (ip + 1) : (gint32) READ32 (ip + 1);                \
+                                                                                            \
+		if (!check)                                                                         \
+			EXCEPTION_CHECKPOINT;                                                           \
+                                                                                            \
+		MONO_INTERP_DISPATCH ();                                                            \
 	}
 
 IMPL_LEAVE (MINT_LEAVE, false, false);
@@ -76,18 +76,18 @@ IMPL_LEAVE (MINT_LEAVE_S_CHECK, true, true);
  * Calls a finally body without leaving this frame. The address to come back to is
  * kept in the clause's own slot, which MINT_ENDFINALLY reads.
  */
-#define IMPL_CALL_HANDLER(opcode, short_offset)                                            \
-	MONO_INTERP_OP_IMPL (opcode)                                                           \
-	{                                                                                      \
-		const guint16 *ret_ip = short_offset ? (ip + 3) : (ip + 4);                        \
-		guint16 clause_index = *(ret_ip - 1);                                              \
-                                                                                           \
-		*reinterpret_cast<const guint16 **> (locals + frame->imethod->clause_data_offsets[clause_index]) = \
-			ret_ip;                                                                        \
-                                                                                           \
-		ip += short_offset ? (gint16) *(ip + 1) : (gint32) READ32 (ip + 1);                \
-                                                                                           \
-		MONO_INTERP_DISPATCH ();                                                           \
+#define IMPL_CALL_HANDLER(opcode, short_offset)                                   \
+	MONO_INTERP_OP_IMPL (opcode)                                                  \
+	{                                                                             \
+		const guint16 *ret_ip = short_offset ? (ip + 3) : (ip + 4);               \
+		guint16 clause_index = *(ret_ip - 1);                                     \
+                                                                                  \
+		*reinterpret_cast<const guint16 **> (                                     \
+			locals + frame->imethod->clause_data_offsets[clause_index]) = ret_ip; \
+                                                                                  \
+		ip += short_offset ? (gint16) * (ip + 1) : (gint32) READ32 (ip + 1);      \
+                                                                                  \
+		MONO_INTERP_DISPATCH ();                                                  \
 	}
 
 IMPL_CALL_HANDLER (MINT_CALL_HANDLER, false);
@@ -98,7 +98,8 @@ MONO_INTERP_OP_IMPL (MINT_ENDFINALLY)
 	mono_threads_end_abort_protected_block ();
 
 	guint16 clause_index = ip[1];
-	auto ret_ip = *reinterpret_cast<guint16 **> ((locals + frame->imethod->clause_data_offsets[clause_index]));
+	auto ret_ip = *reinterpret_cast<guint16 **> (
+		(locals + frame->imethod->clause_data_offsets[clause_index]));
 
 	if (!ret_ip) {
 		// this clause was called from EH, return to eh

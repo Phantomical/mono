@@ -25,7 +25,7 @@ namespace mono::interp {
 		    && (size_t) ptr % sizeof (void *) != 0)                     \
 			std::memcpy (&LOCAL_VAR (ip[1], char), ptr, sizeof (ldty)); \
 		else                                                            \
-			LOCAL_VAR (ip[1], slotty) = *static_cast<ldty *> (ptr);                  \
+			LOCAL_VAR (ip[1], slotty) = *static_cast<ldty *> (ptr);     \
                                                                         \
 		MONO_INTERP_OP_ADVANCE ();                                      \
 		MONO_INTERP_DISPATCH ();                                        \
@@ -56,7 +56,7 @@ IMPL_LDIND (MINT_LDIND_REF_CHECK, gpointer, gpointer, true);
 		         && (size_t) ptr % sizeof (void *) != 0)                                        \
 			std::memcpy (ptr, &LOCAL_VAR (ip[2], char), sizeof (type));                         \
 		else                                                                                    \
-			*static_cast<type *> (ptr) = LOCAL_VAR (ip[2], type);                                            \
+			*static_cast<type *> (ptr) = LOCAL_VAR (ip[2], type);                               \
                                                                                                 \
 		MONO_INTERP_OP_ADVANCE ();                                                              \
 		MONO_INTERP_DISPATCH ();                                                                \
@@ -112,7 +112,8 @@ MONO_INTERP_OP_IMPL (MINT_CPOBJ)
 
 	NULL_CHECK (destination);
 	NULL_CHECK (source);
-	stackval_from_data (m_class_get_byval_arg (c), static_cast<stackval *> (destination), source, FALSE);
+	stackval_from_data (m_class_get_byval_arg (c), static_cast<stackval *> (destination), source,
+	                    FALSE);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();

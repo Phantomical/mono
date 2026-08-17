@@ -122,8 +122,8 @@ Transform::Transform (const std::string &image, const std::string &method_name, 
 	if (verbose_level)
 		td.verbose_level = verbose_level;
 
-	mono_test_interp_method_compute_offsets (&td, &rtm,
-	                                         mono_method_signature_internal (method), header);
+	mono_test_interp_method_compute_offsets (&td, &rtm, mono_method_signature_internal (method),
+	                                         header);
 
 	mono_test_interp_generate_code (&td, method, header, NULL, error);
 	mono_error_assert_ok (error);
@@ -143,7 +143,8 @@ Transform::cprop ()
 Code::Code (Transform &transform)
 {
 	// The instructions hang off the basic blocks, in IL order along next_bb.
-	for (interp::InterpBasicBlock *bb = transform.get ()->entry_bb; bb != nullptr; bb = bb->next_bb) {
+	for (interp::InterpBasicBlock *bb = transform.get ()->entry_bb; bb != nullptr;
+	     bb = bb->next_bb) {
 		for (interp::InterpInst *ins = bb->first_ins; ins != nullptr; ins = ins->next) {
 			if (ins->opcode == MINT_NOP)
 				continue;
@@ -157,7 +158,7 @@ Code::Code (Transform &transform)
 interp::InterpInst *
 Code::at (size_t index) const
 {
-	return index < instructions.size () ? instructions [index] : nullptr;
+	return index < instructions.size () ? instructions[index] : nullptr;
 }
 
 } // namespace test

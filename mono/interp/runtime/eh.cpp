@@ -36,7 +36,7 @@ interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
 	 */
 	int first = context->handle_mark_count;
 
-	while (first > 0 && context->handle_marks [first - 1].frame < resume_sp)
+	while (first > 0 && context->handle_marks[first - 1].frame < resume_sp)
 		first--;
 
 	gboolean dropped = first < context->handle_mark_count;
@@ -44,10 +44,10 @@ interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
 	gsize first_ordinal = 0;
 
 	if (dropped) {
-		watermark = context->handle_marks [first].frame_watermark;
-		first_ordinal = context->handle_marks [first].first_ordinal;
+		watermark = context->handle_marks[first].frame_watermark;
+		first_ordinal = context->handle_marks[first].first_ordinal;
 
-		mono_stack_mark_pop (mono_thread_info_current (), &context->handle_marks [first].mark);
+		mono_stack_mark_pop (mono_thread_info_current (), &context->handle_marks[first].mark);
 		context->handle_mark_count = first;
 	}
 
@@ -71,7 +71,8 @@ interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
  *   Set the state the interpeter will continue to execute from after execution returns to the interpreter.
  */
 void
-interp_set_resume_state (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExceptionInfo *ei, MonoInterpFrameHandle interp_frame, gpointer handler_ip)
+interp_set_resume_state (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExceptionInfo *ei,
+                         MonoInterpFrameHandle interp_frame, gpointer handler_ip)
 {
 	ThreadContext *context;
 
@@ -87,12 +88,14 @@ interp_set_resume_state (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExcepti
 	context->exc_gchandle = mono_gchandle_new_internal (static_cast<MonoObject *> (ex), FALSE);
 	/* Ditto */
 	if (ei)
-		*reinterpret_cast<MonoObject **> ((frame_locals (context->handler_frame) + ei->exvar_offset)) = ex;
+		*reinterpret_cast<MonoObject **> (
+			(frame_locals (context->handler_frame) + ei->exvar_offset)) = ex;
 	context->handler_ip = static_cast<const guint16 *> (handler_ip);
 }
 
 void
-interp_get_resume_state (const MonoJitTlsData *jit_tls, gboolean *has_resume_state, MonoInterpFrameHandle *interp_frame, gpointer *handler_ip)
+interp_get_resume_state (const MonoJitTlsData *jit_tls, gboolean *has_resume_state,
+                         MonoInterpFrameHandle *interp_frame, gpointer *handler_ip)
 {
 	g_assert (jit_tls);
 	ThreadContext *context = static_cast<ThreadContext *> (jit_tls->interp_context);
@@ -102,7 +105,7 @@ interp_get_resume_state (const MonoJitTlsData *jit_tls, gboolean *has_resume_sta
 		return;
 
 	*interp_frame = context->handler_frame;
-	*handler_ip = (gpointer)context->handler_ip;
+	*handler_ip = (gpointer) context->handler_ip;
 }
 
 } // namespace mono::interp

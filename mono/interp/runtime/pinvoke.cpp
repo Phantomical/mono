@@ -20,7 +20,7 @@
 namespace mono::interp {
 
 #ifndef MONO_ARCH_HAVE_INTERP_PINVOKE_TRAMP
-static InterpMethodArguments*
+static InterpMethodArguments *
 build_args_from_sig (MonoMethodSignature *sig, InterpFrame *frame)
 {
 	InterpMethodArguments *margs = g_malloc0 (sizeof (InterpMethodArguments));
@@ -38,7 +38,7 @@ build_args_from_sig (MonoMethodSignature *sig, InterpFrame *frame)
 		margs->ilen++;
 
 	for (int i = 0; i < sig->param_count; i++) {
-		guint32 ptype = sig->params [i]->byref ? MONO_TYPE_PTR : sig->params [i]->type;
+		guint32 ptype = sig->params[i]->byref ? MONO_TYPE_PTR : sig->params[i]->type;
 		switch (ptype) {
 		case MONO_TYPE_BOOLEAN:
 		case MONO_TYPE_CHAR:
@@ -100,7 +100,7 @@ build_args_from_sig (MonoMethodSignature *sig, InterpFrame *frame)
 	size_t int_f = 0;
 
 	if (sig->hasthis) {
-		margs->iargs [0] = frame->stack [0].data.p;
+		margs->iargs[0] = frame->stack[0].data.p;
 		int_i++;
 		g_error ("FIXME if hasthis, we incorrectly access the args below");
 	}
@@ -108,7 +108,7 @@ build_args_from_sig (MonoMethodSignature *sig, InterpFrame *frame)
 	for (int i = 0; i < sig->param_count; i++) {
 		guint32 offset = get_arg_offset (frame->imethod, sig, i);
 		stackval *sp_arg = STACK_ADD_BYTES (frame->stack, offset);
-		MonoType *type = sig->params [i];
+		MonoType *type = sig->params[i];
 		guint32 ptype;
 retry:
 		ptype = type->byref ? MONO_TYPE_PTR : type->type;
@@ -133,7 +133,7 @@ retry:
 		case MONO_TYPE_I8:
 		case MONO_TYPE_U8:
 #endif
-			margs->iargs [int_i] = sp_arg->data.p;
+			margs->iargs[int_i] = sp_arg->data.p;
 			int_i++;
 			break;
 		case MONO_TYPE_VALUETYPE:
@@ -141,7 +141,7 @@ retry:
 				type = mono_class_enum_basetype_internal (type->data.klass);
 				goto retry;
 			}
-			margs->iargs [int_i] = sp_arg;
+			margs->iargs[int_i] = sp_arg;
 			int_i++;
 			break;
 		case MONO_TYPE_GENERICINST: {
@@ -157,9 +157,9 @@ retry:
 			if (i8_align == 8 && int_i & 1)
 				int_i++;
 #endif
-			margs->iargs [int_i] = (gpointer) sp_arg->data.pair.lo;
+			margs->iargs[int_i] = (gpointer) sp_arg->data.pair.lo;
 			int_i++;
-			margs->iargs [int_i] = (gpointer) sp_arg->data.pair.hi;
+			margs->iargs[int_i] = (gpointer) sp_arg->data.pair.hi;
 			int_i++;
 			break;
 		}
@@ -167,10 +167,10 @@ retry:
 		case MONO_TYPE_R4:
 		case MONO_TYPE_R8:
 			if (ptype == MONO_TYPE_R4)
-				* static_cast<float *> (&(margs->fargs [int_f])) = sp_arg->data.f_r4;
+				*static_cast<float *> (&(margs->fargs[int_f])) = sp_arg->data.f_r4;
 			else
-				margs->fargs [int_f] = sp_arg->data.f;
-			int_f ++;
+				margs->fargs[int_f] = sp_arg->data.f;
+			int_f++;
 			break;
 		default:
 			g_error ("build_args_from_sig: not implemented yet (2): 0x%x\n", ptype);
@@ -178,39 +178,39 @@ retry:
 	}
 
 	switch (sig->ret->type) {
-		case MONO_TYPE_BOOLEAN:
-		case MONO_TYPE_CHAR:
-		case MONO_TYPE_I1:
-		case MONO_TYPE_U1:
-		case MONO_TYPE_I2:
-		case MONO_TYPE_U2:
-		case MONO_TYPE_I4:
-		case MONO_TYPE_U4:
-		case MONO_TYPE_I:
-		case MONO_TYPE_U:
-		case MONO_TYPE_PTR:
-		case MONO_TYPE_FNPTR:
-		case MONO_TYPE_SZARRAY:
-		case MONO_TYPE_CLASS:
-		case MONO_TYPE_OBJECT:
-		case MONO_TYPE_STRING:
-		case MONO_TYPE_I8:
-		case MONO_TYPE_U8:
-		case MONO_TYPE_VALUETYPE:
-		case MONO_TYPE_GENERICINST:
-			margs->retval = &frame->stack->data.p;
-			margs->is_float_ret = 0;
-			break;
-		case MONO_TYPE_R4:
-		case MONO_TYPE_R8:
-			margs->retval = &frame->stack->data.p;
-			margs->is_float_ret = 1;
-			break;
-		case MONO_TYPE_VOID:
-			margs->retval = NULL;
-			break;
-		default:
-			g_error ("build_args_from_sig: ret type not implemented yet: 0x%x\n", sig->ret->type);
+	case MONO_TYPE_BOOLEAN:
+	case MONO_TYPE_CHAR:
+	case MONO_TYPE_I1:
+	case MONO_TYPE_U1:
+	case MONO_TYPE_I2:
+	case MONO_TYPE_U2:
+	case MONO_TYPE_I4:
+	case MONO_TYPE_U4:
+	case MONO_TYPE_I:
+	case MONO_TYPE_U:
+	case MONO_TYPE_PTR:
+	case MONO_TYPE_FNPTR:
+	case MONO_TYPE_SZARRAY:
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_OBJECT:
+	case MONO_TYPE_STRING:
+	case MONO_TYPE_I8:
+	case MONO_TYPE_U8:
+	case MONO_TYPE_VALUETYPE:
+	case MONO_TYPE_GENERICINST:
+		margs->retval = &frame->stack->data.p;
+		margs->is_float_ret = 0;
+		break;
+	case MONO_TYPE_R4:
+	case MONO_TYPE_R8:
+		margs->retval = &frame->stack->data.p;
+		margs->is_float_ret = 1;
+		break;
+	case MONO_TYPE_VOID:
+		margs->retval = NULL;
+		break;
+	default:
+		g_error ("build_args_from_sig: ret type not implemented yet: 0x%x\n", sig->ret->type);
 	}
 
 	return margs;
@@ -242,15 +242,9 @@ interp_to_native_trampoline (gpointer addr, gpointer ccontext)
 }
 
 MONO_NO_OPTIMIZATION MONO_NEVER_INLINE gpointer
-ves_pinvoke_method (
-	InterpMethod *imethod,
-	MonoMethodSignature *sig,
-	MonoFuncV addr,
-	ThreadContext *context,
-	InterpFrame *parent_frame,
-	stackval *sp,
-	gboolean save_last_error,
-	gpointer *cache)
+ves_pinvoke_method (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV addr,
+                    ThreadContext *context, InterpFrame *parent_frame, stackval *sp,
+                    gboolean save_last_error, gpointer *cache)
 {
 	InterpFrame frame = {0};
 	frame.parent = parent_frame;
@@ -283,7 +277,7 @@ ves_pinvoke_method (
 	 */
 	MonoPIFunc entry_func = *cache;
 	if (!entry_func) {
-		entry_func = (MonoPIFunc)mono_wasm_get_interp_to_native_trampoline (sig);
+		entry_func = (MonoPIFunc) mono_wasm_get_interp_to_native_trampoline (sig);
 		mono_memory_barrier ();
 		*cache = entry_func;
 	}
@@ -293,7 +287,10 @@ ves_pinvoke_method (
 		MONO_ENTER_GC_UNSAFE;
 #ifdef MONO_ARCH_HAS_NO_PROPER_MONOCTX
 		ERROR_DECL (error);
-		entry_func = (MonoPIFunc) mono_jit_compile_method_jit_only (mini_get_interp_lmf_wrapper ("mono_interp_to_native_trampoline", (gpointer) mono_interp_to_native_trampoline), error);
+		entry_func = (MonoPIFunc) mono_jit_compile_method_jit_only (
+			mini_get_interp_lmf_wrapper ("mono_interp_to_native_trampoline",
+		                                 (gpointer) mono_interp_to_native_trampoline),
+			error);
 		mono_error_assert_ok (error);
 #else
 		entry_func = get_interp_to_native_trampoline ();
@@ -337,7 +334,8 @@ ves_pinvoke_method (
 #else
 	// Only the vt address has been returned, we need to copy the entire content on interp stack
 	if (!context->has_resume_state && MONO_TYPE_ISSTRUCT (sig->ret))
-		stackval_from_data (sig->ret, frame.stack, static_cast<char *> (frame.stack->data.p), sig->pinvoke);
+		stackval_from_data (sig->ret, frame.stack, static_cast<char *> (frame.stack->data.p),
+		                    sig->pinvoke);
 
 	g_free (margs->iargs);
 	g_free (margs->fargs);

@@ -19,7 +19,7 @@ namespace mono::interp {
 #define IMPL_TRIOP(opcode, type, expr)                                         \
 	MONO_INTERP_OP_IMPL (opcode)                                               \
 	{                                                                          \
-		static_assert (opinfos[opcode].num_sregs == 3,            \
+		static_assert (opinfos[opcode].num_sregs == 3,                         \
 		               "opcode " #opcode " does not have 3 source registers"); \
 		auto a = LOCAL_VAR (ip[2], type);                                      \
 		auto b = LOCAL_VAR (ip[3], type);                                      \
@@ -33,7 +33,7 @@ namespace mono::interp {
 #define IMPL_BINOP(opcode, type, expr)                                         \
 	MONO_INTERP_OP_IMPL (opcode)                                               \
 	{                                                                          \
-		static_assert (opinfos[opcode].num_sregs == 2,            \
+		static_assert (opinfos[opcode].num_sregs == 2,                         \
 		               "opcode " #opcode " does not have 2 source registers"); \
 		auto a = LOCAL_VAR (ip[2], type);                                      \
 		auto b = LOCAL_VAR (ip[3], type);                                      \
@@ -63,7 +63,7 @@ namespace mono::interp {
 #define IMPL_UNOP(opcode, type, expr)                                         \
 	MONO_INTERP_OP_IMPL (opcode)                                              \
 	{                                                                         \
-		static_assert (opinfos[opcode].num_sregs == 1,           \
+		static_assert (opinfos[opcode].num_sregs == 1,                        \
 		               "opcode " #opcode " does not have 1 source register"); \
 		auto x = LOCAL_VAR (ip[2], type);                                     \
 		LOCAL_VAR (ip[1], type) = (expr);                                     \
@@ -456,7 +456,7 @@ IMPL_UNOP (MINT_ASINHF, float, std::asinh (x));
 IMPL_UNOP (MINT_ACOSF, float, std::acos (x));
 IMPL_UNOP (MINT_ACOSHF, float, std::acosh (x));
 IMPL_UNOP (MINT_ATANF, float, std::atan (x));
-IMPL_UNOP (MINT_ATANHF, float, std::atanh(x));
+IMPL_UNOP (MINT_ATANHF, float, std::atanh (x));
 IMPL_UNOP (MINT_CEILINGF, float, std::ceil (x));
 IMPL_UNOP (MINT_COSF, float, std::cos (x));
 IMPL_UNOP (MINT_CBRTF, float, std::cbrt (x));
@@ -502,17 +502,17 @@ MONO_INTERP_OP_IMPL (MINT_ILOGBF)
 	MONO_INTERP_DISPATCH ();
 }
 
-#define IMPL_CKFINITE(opcode, type)                                \
-	MONO_INTERP_OP_IMPL (opcode)                                   \
-	{                                                              \
-		type val = LOCAL_VAR (ip[2], type);                        \
-                                                                   \
-		if (!std::isfinite (val))                                  \
-			THROW_EX (mono_get_exception_arithmetic (), ip);       \
-		LOCAL_VAR (ip[1], type) = val;                             \
-                                                                   \
-		MONO_INTERP_OP_ADVANCE ();                                 \
-		MONO_INTERP_DISPATCH ();                                   \
+#define IMPL_CKFINITE(opcode, type)                          \
+	MONO_INTERP_OP_IMPL (opcode)                             \
+	{                                                        \
+		type val = LOCAL_VAR (ip[2], type);                  \
+                                                             \
+		if (!std::isfinite (val))                            \
+			THROW_EX (mono_get_exception_arithmetic (), ip); \
+		LOCAL_VAR (ip[1], type) = val;                       \
+                                                             \
+		MONO_INTERP_OP_ADVANCE ();                           \
+		MONO_INTERP_DISPATCH ();                             \
 	}
 
 IMPL_CKFINITE (MINT_CKFINITE, double);

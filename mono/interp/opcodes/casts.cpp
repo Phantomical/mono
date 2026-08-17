@@ -24,8 +24,9 @@ MONO_INTERP_OP_IMPL (MINT_BOX)
 
 	MonoObject *o = mono_gc_alloc_obj (vtable, m_class_get_instance_size (vtable->klass));
 	MONO_HANDLE_ASSIGN_RAW (tmp_handle, o);
-	stackval_to_data (m_class_get_byval_arg (vtable->klass), reinterpret_cast<stackval *> ((locals + ip[2])),
-	                  mono_object_get_data (o), FALSE);
+	stackval_to_data (m_class_get_byval_arg (vtable->klass),
+	                  reinterpret_cast<stackval *> ((locals + ip[2])), mono_object_get_data (o),
+	                  FALSE);
 	MONO_HANDLE_ASSIGN_RAW (tmp_handle, NULL);
 
 	LOCAL_VAR (ip[1], MonoObject *) = o;
@@ -99,33 +100,33 @@ MONO_INTERP_OP_IMPL (MINT_UNBOX)
  * castclass throws where isinst writes null. The three pairs below differ in how
  * the question is answered, which is what the transform picked the opcode for.
  */
-#define IMPL_CAST(opcode, throwing, answer)                              \
-	MONO_INTERP_OP_IMPL (opcode)                                         \
-	{                                                                    \
-		auto o = LOCAL_VAR (ip[2], MonoObject *);                        \
-                                                                         \
-		if (o) {                                                         \
-			auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);    \
-                                                                         \
-			if (!(answer)) {                                             \
-				if (throwing)                                            \
-					THROW_EX (mono_get_exception_invalid_cast (), ip);   \
-				else                                                     \
-					LOCAL_VAR (ip[1], MonoObject *) = nullptr;           \
-			} else {                                                     \
-				LOCAL_VAR (ip[1], MonoObject *) = o;                     \
-			}                                                            \
-		} else {                                                         \
-			LOCAL_VAR (ip[1], MonoObject *) = nullptr;                   \
-		}                                                                \
-                                                                         \
-		MONO_INTERP_OP_ADVANCE ();                                       \
-		MONO_INTERP_DISPATCH ();                                         \
+#define IMPL_CAST(opcode, throwing, answer)                                        \
+	MONO_INTERP_OP_IMPL (opcode)                                                   \
+	{                                                                              \
+		auto o = LOCAL_VAR (ip[2], MonoObject *);                                  \
+                                                                                   \
+		if (o) {                                                                   \
+			auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]); \
+                                                                                   \
+			if (!(answer)) {                                                       \
+				if (throwing)                                                      \
+					THROW_EX (mono_get_exception_invalid_cast (), ip);             \
+				else                                                               \
+					LOCAL_VAR (ip[1], MonoObject *) = nullptr;                     \
+			} else {                                                               \
+				LOCAL_VAR (ip[1], MonoObject *) = o;                               \
+			}                                                                      \
+		} else {                                                                   \
+			LOCAL_VAR (ip[1], MonoObject *) = nullptr;                             \
+		}                                                                          \
+                                                                                   \
+		MONO_INTERP_OP_ADVANCE ();                                                 \
+		MONO_INTERP_DISPATCH ();                                                   \
 	}
 
 // FIXME: do not swallow the error
-#define CAST_GENERAL   interp_isinst (o, c)
-#define CAST_COMMON    mono_class_has_parent_fast (o->vtable->klass, c)
+#define CAST_GENERAL interp_isinst (o, c)
+#define CAST_COMMON mono_class_has_parent_fast (o->vtable->klass, c)
 #define CAST_INTERFACE interp_isinst_interface (o, c)
 
 static gboolean

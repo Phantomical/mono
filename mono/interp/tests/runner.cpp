@@ -54,7 +54,7 @@ namespace {
 int
 expected_result (const char *name)
 {
-	if (strncmp (name, "test_", 5) != 0 || !g_ascii_isdigit (name [5]))
+	if (strncmp (name, "test_", 5) != 0 || !g_ascii_isdigit (name[5]))
 		return -1;
 
 	return atoi (name + 5);
@@ -70,8 +70,8 @@ is_test_method (MonoMethod *method)
 
 	MonoMethodSignature *signature = mono_method_signature_internal (method);
 
-	return signature != nullptr && signature->param_count == 0 &&
-	       signature->ret->type == MONO_TYPE_I4;
+	return signature != nullptr && signature->param_count == 0
+	       && signature->ret->type == MONO_TYPE_I4;
 }
 
 /// What each attribute opts a class into, spelled as the suites spell the arm.
@@ -82,9 +82,9 @@ is_test_method (MonoMethod *method)
 const struct {
 	std::string_view attribute;
 	const char *arm;
-} arm_attributes [] = {
-	{ "NoOptAttribute",        "noopt" },
-	{ "InstrumentedAttribute", "instrumented" },
+} arm_attributes[] = {
+	{"NoOptAttribute", "noopt"},
+	{"InstrumentedAttribute", "instrumented"},
 };
 
 /// The arms a class opted into, comma separated, or empty for none.
@@ -103,7 +103,7 @@ class_arms (MonoClass *klass)
 		return arms;
 
 	for (int i = 0; i < attributes->num_attrs; i++) {
-		MonoMethod *ctor = attributes->attrs [i].ctor;
+		MonoMethod *ctor = attributes->attrs[i].ctor;
 
 		if (ctor == nullptr)
 			continue;
@@ -129,7 +129,7 @@ qualified_name (MonoMethod *method)
 	const char *space = m_class_get_name_space (method->klass);
 	std::string name;
 
-	if (space != nullptr && space [0] != '\0') {
+	if (space != nullptr && space[0] != '\0') {
 		name += space;
 		name += '.';
 	}
@@ -168,7 +168,7 @@ open_assembly (const char *path)
 std::vector<MonoImage *>
 assembly_images (MonoImage *manifest)
 {
-	std::vector<MonoImage *> images { manifest };
+	std::vector<MonoImage *> images{manifest};
 	int files = mono_image_get_table_rows (manifest, MONO_TABLE_FILE);
 
 	for (int i = 1; i <= files; i++) {
@@ -226,8 +226,8 @@ list_tests (MonoImage *manifest)
 
 			std::string arms = class_arms (method->klass);
 
-			printf ("%s%s%s\n", qualified_name (method).c_str (),
-			        arms.empty () ? "" : " ", arms.c_str ());
+			printf ("%s%s%s\n", qualified_name (method).c_str (), arms.empty () ? "" : " ",
+			        arms.c_str ());
 		}
 	}
 
@@ -268,8 +268,7 @@ run_test (MonoImage *manifest, const char *name)
 		char *text = message ? mono_string_to_utf8_checked_internal (message, error) : NULL;
 
 		fprintf (stderr, "%s threw %s: %s\n", name,
-		         m_class_get_name (mono_object_class (exception)),
-		         text ? text : "(no message)");
+		         m_class_get_name (mono_object_class (exception)), text ? text : "(no message)");
 		mono_error_cleanup (error);
 		g_free (text);
 		return 1;
@@ -289,14 +288,14 @@ run_test (MonoImage *manifest, const char *name)
 } // namespace
 
 int
-main (int argc, char *argv [])
+main (int argc, char *argv[])
 {
-	bool listing = argc > 1 && strcmp (argv [1], "--list") == 0;
+	bool listing = argc > 1 && strcmp (argv[1], "--list") == 0;
 	int first = listing ? 2 : 1;
 
 	if (argc < first + 1 || (!listing && argc < 3)) {
 		fprintf (stderr, "usage: %s --list <assembly>\n       %s <assembly> <Class:name>\n",
-		         argv [0], argv [0]);
+		         argv[0], argv[0]);
 		return 2;
 	}
 
@@ -340,8 +339,7 @@ main (int argc, char *argv [])
 	 * which otherwise needs a profiler module. The filter says yes to
 	 * everything: what is under test is the instrumentation, not a report.
 	 */
-	if (!listing && g_getenv ("MONO_INTERP_TESTS_COVERAGE") &&
-	    mono_profiler_enable_coverage ()) {
+	if (!listing && g_getenv ("MONO_INTERP_TESTS_COVERAGE") && mono_profiler_enable_coverage ()) {
 		MonoProfilerHandle handle = mono_profiler_create (nullptr);
 
 		mono_profiler_set_coverage_filter_callback (
@@ -350,10 +348,10 @@ main (int argc, char *argv [])
 
 	mono_jit_init_version_for_test_only ("mono-interp-tests", "v4.0.30319");
 
-	MonoImage *image = open_assembly (argv [first]);
+	MonoImage *image = open_assembly (argv[first]);
 
 	if (image == nullptr)
 		return 2;
 
-	return listing ? list_tests (image) : run_test (image, argv [first + 1]);
+	return listing ? list_tests (image) : run_test (image, argv[first + 1]);
 }

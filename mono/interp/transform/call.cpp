@@ -53,16 +53,16 @@ TransformData::interp_method_check_inlining (MonoMethod *method, MonoMethodSigna
 		return FALSE;
 
 	/*runtime, icall and pinvoke are checked by summary call*/
-	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) ||
-	    (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED) ||
-	    (mono_class_is_marshalbyref (method->klass)) ||
-	    header.has_clauses)
+	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING)
+	    || (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
+	    || (mono_class_is_marshalbyref (method->klass)) || header.has_clauses)
 		return FALSE;
 
 	if (inline_depth > INLINE_DEPTH_LIMIT)
 		return FALSE;
 
-	if (header.code_size >= INLINE_LENGTH_LIMIT && !(method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING))
+	if (header.code_size >= INLINE_LENGTH_LIMIT
+	    && !(method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING))
 		return FALSE;
 
 	if (mono_class_needs_cctor_run (method->klass, NULL)) {
@@ -92,8 +92,7 @@ TransformData::interp_method_check_inlining (MonoMethod *method, MonoMethodSigna
 	if (prof_coverage)
 		return FALSE;
 
-	if (std::find (dont_inline.begin (), dont_inline.end (), method)
-	    != dont_inline.end ())
+	if (std::find (dont_inline.begin (), dont_inline.end (), method) != dont_inline.end ())
 		return FALSE;
 
 	/*
@@ -115,14 +114,15 @@ TransformData::interp_method_check_inlining (MonoMethod *method, MonoMethodSigna
 }
 
 gboolean
-TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader *header, MonoError *error)
+TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader *header,
+                                     MonoError *error)
 {
 	const unsigned char *prev_ip, *prev_il_code, *prev_in_start;
 	int *prev_in_offsets;
 	gboolean ret;
 	unsigned int prev_max_stack_height, prev_locals_size;
 	size_t prev_n_data_items;
-	int i; 
+	int i;
 	int prev_sp_offset;
 	MonoGenericContext *generic_context = NULL;
 	StackInfo *prev_param_area;
@@ -157,18 +157,18 @@ TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader
 
 	prev_n_data_items = data_items.size ();
 	prev_in_offsets = in_offsets;
-	in_offsets = (int*)g_malloc0((header->code_size + 1) * sizeof(int));
-
+	in_offsets = (int *) g_malloc0 ((header->code_size + 1) * sizeof (int));
 
 	/* Inlining pops the arguments, restore the stack */
-	prev_param_area = (StackInfo*)g_malloc (nargs * sizeof (StackInfo));
-	memcpy (prev_param_area, &sp [-nargs], nargs * sizeof (StackInfo));
+	prev_param_area = (StackInfo *) g_malloc (nargs * sizeof (StackInfo));
+	memcpy (prev_param_area, &sp[-nargs], nargs * sizeof (StackInfo));
 
 	int const prev_code_size = code_size;
 	code_size = header->code_size;
 
 	if (verbose_level)
-		g_print ("Inline start method %s.%s\n", m_class_get_name (target_method->klass), target_method->name);
+		g_print ("Inline start method %s.%s\n", m_class_get_name (target_method->klass),
+		         target_method->name);
 
 	inline_depth++;
 	ret = generate_code (target_method, header, generic_context, error);
@@ -179,7 +179,8 @@ TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader
 			mono_interp_error_cleanup (error);
 
 		if (verbose_level)
-			g_print ("Inline aborted method %s.%s\n", m_class_get_name (target_method->klass), target_method->name);
+			g_print ("Inline aborted method %s.%s\n", m_class_get_name (target_method->klass),
+			         target_method->name);
 		max_stack_height = prev_max_stack_height;
 		locals.resize (prev_locals_size);
 
@@ -188,7 +189,7 @@ TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader
 			data_hash.erase (data_items[item]);
 		data_items.resize (prev_n_data_items);
 		sp = stack + prev_sp_offset;
-		memcpy (&sp [-nargs], prev_param_area, nargs * sizeof (StackInfo));
+		memcpy (&sp[-nargs], prev_param_area, nargs * sizeof (StackInfo));
 		last_ins = prev_last_ins;
 		cbb = prev_cbb;
 		if (last_ins)
@@ -196,7 +197,8 @@ TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader
 		UnlockedIncrement (&mono_interp_stats.inline_failures);
 	} else {
 		if (verbose_level)
-			g_print ("Inline end method %s.%s\n", m_class_get_name (target_method->klass), target_method->name);
+			g_print ("Inline end method %s.%s\n", m_class_get_name (target_method->klass),
+			         target_method->name);
 		UnlockedIncrement (&mono_interp_stats.inlined_methods);
 
 		interp_link_bblocks (prev_cbb, entry_bb);
@@ -219,20 +221,21 @@ TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader
 }
 
 void
-TransformData::interp_constrained_box (MonoDomain *domain, MonoClass *constrained_class, MonoMethodSignature *csignature, MonoError *error)
+TransformData::interp_constrained_box (MonoDomain *domain, MonoClass *constrained_class,
+                                       MonoMethodSignature *csignature, MonoError *error)
 {
 	MintType mt = mint_type (m_class_get_byval_arg (constrained_class));
 	StackInfo *sp = this->sp - 1 - csignature->param_count;
 	if (mono_class_is_nullable (constrained_class)) {
 		g_assert (mt == MintType::VT);
 		interp_add_ins (MINT_BOX_NULLABLE_PTR);
-		last_ins->data [0] = get_data_item_index (constrained_class);
+		last_ins->data[0] = get_data_item_index (constrained_class);
 	} else {
 		MonoVTable *vtable = mono_class_vtable_checked (domain, constrained_class, error);
 		return_if_nok (error);
 
 		interp_add_ins (MINT_BOX_PTR);
-		last_ins->data [0] = get_data_item_index (vtable);
+		last_ins->data[0] = get_data_item_index (vtable);
 	}
 	interp_ins_set_sreg (last_ins, sp->local);
 	set_simple_type_and_local (sp, StackType::O);
@@ -240,12 +243,13 @@ TransformData::interp_constrained_box (MonoDomain *domain, MonoClass *constraine
 }
 
 MonoMethod *
-interp_get_method (MonoMethod *method, guint32 token, MonoImage *image, MonoGenericContext *generic_context, MonoError *error)
+interp_get_method (MonoMethod *method, guint32 token, MonoImage *image,
+                   MonoGenericContext *generic_context, MonoError *error)
 {
 	if (method->wrapper_type == MONO_WRAPPER_NONE)
 		return mono_get_method_checked (image, token, NULL, generic_context, error);
 	else
-		return (MonoMethod *)mono_method_get_wrapper_data (method, token);
+		return (MonoMethod *) mono_method_get_wrapper_data (method, token);
 }
 
 /*
@@ -298,8 +302,8 @@ interp_tail_call_returns_match (MonoType *caller_ret, MonoType *callee_ret)
 	 * size the slot was made for. Everything else travels as a whole stackval, which
 	 * makes the narrow integer types interchangeable. */
 	if (mt == MintType::VT)
-		return mono_class_value_size (mono_class_from_mono_type_internal (caller_ret), NULL) ==
-			mono_class_value_size (mono_class_from_mono_type_internal (callee_ret), NULL);
+		return mono_class_value_size (mono_class_from_mono_type_internal (caller_ret), NULL)
+		       == mono_class_value_size (mono_class_from_mono_type_internal (callee_ret), NULL);
 
 	return TRUE;
 }
@@ -318,9 +322,10 @@ interp_tail_call_returns_match (MonoType *caller_ret, MonoType *callee_ret)
  *
  * td->sp still holds the arguments, so this has to run before they are popped.
  */
-static const char*
+static const char *
 interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *target_method,
-			  MonoMethodSignature *csignature, gboolean calli, gboolean is_virtual, int op)
+                          MonoMethodSignature *csignature, gboolean calli, gboolean is_virtual,
+                          int op)
 {
 	MonoMethodHeader *header = td->header;
 	int in_offset = td->ip - td->il_code;
@@ -383,8 +388,8 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 
 		if (MONO_OFFSET_IN_CLAUSE (c, in_offset) || MONO_OFFSET_IN_HANDLER (c, in_offset))
 			return "the site is inside a protected block";
-		if (c->flags == MONO_EXCEPTION_CLAUSE_FILTER &&
-		    in_offset >= (int)c->data.filter_offset && in_offset < (int)c->handler_offset)
+		if (c->flags == MONO_EXCEPTION_CLAUSE_FILTER && in_offset >= (int) c->data.filter_offset
+		    && in_offset < (int) c->handler_offset)
 			return "the site is inside a filter";
 	}
 
@@ -395,7 +400,8 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 	if (td->sp - td->stack != nargs)
 		return "the evaluation stack outlives the call";
 
-	if (!interp_tail_call_returns_match (mono_method_signature_internal (method)->ret, csignature->ret))
+	if (!interp_tail_call_returns_match (mono_method_signature_internal (method)->ret,
+	                                     csignature->ret))
 		return "the two returns are shaped differently";
 
 	/* A value type's this is a pointer to the value, and the value is usually a local
@@ -404,7 +410,8 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 		return "this is a value type";
 
 	for (i = 0; i < csignature->param_count; i++) {
-		if (!interp_tail_call_arg_is_safe (csignature->params [i], td->sp [i - csignature->param_count].type))
+		if (!interp_tail_call_arg_is_safe (csignature->params[i],
+		                                   td->sp[i - csignature->param_count].type))
 			return "an argument may point into the frame";
 	}
 
@@ -413,7 +420,11 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 
 /* Return FALSE if error, including inline failure */
 gboolean
-TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_method, MonoDomain *domain, MonoGenericContext *generic_context, MonoClass *constrained_class, gboolean readonly, MonoError *error, gboolean check_visibility, gboolean save_last_error, gboolean tailcall)
+TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_method,
+                                      MonoDomain *domain, MonoGenericContext *generic_context,
+                                      MonoClass *constrained_class, gboolean readonly,
+                                      MonoError *error, gboolean check_visibility,
+                                      gboolean save_last_error, gboolean tailcall)
 {
 	MonoImage *image = m_class_get_image (method->klass);
 	MonoMethodSignature *csignature;
@@ -435,7 +446,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		if (calli) {
 			CHECK_STACK (1);
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
-				csignature = (MonoMethodSignature *)mono_method_get_wrapper_data (method, token);
+				csignature = (MonoMethodSignature *) mono_method_get_wrapper_data (method, token);
 			else {
 				csignature = mono_metadata_parse_signature_checked (image, token, error);
 				return_val_if_nok (error, FALSE);
@@ -461,7 +472,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			if (generic_context) {
 				csignature = mono_inflate_generic_signature (csignature, generic_context, error);
 				return_val_if_nok (error, FALSE);
-				target_method = mono_class_inflate_generic_method_checked (target_method, generic_context, error);
+				target_method = mono_class_inflate_generic_method_checked (target_method,
+				                                                           generic_context, error);
 				return_val_if_nok (error, FALSE);
 			}
 		}
@@ -474,7 +486,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 
 	if (target_method && target_method->string_ctor) {
 		/* Create the real signature */
-		MonoMethodSignature *ctor_sig = mono_metadata_signature_dup_mempool (arena.pool (), csignature);
+		MonoMethodSignature *ctor_sig =
+			mono_metadata_signature_dup_mempool (arena.pool (), csignature);
 		ctor_sig->ret = m_class_get_byval_arg (mono_defaults.string_class);
 
 		csignature = ctor_sig;
@@ -485,21 +498,24 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	StackInfo *args = this->sp - csignature->param_count - (calli ? 1 : 0);
 
 	for (i = 0; i < csignature->param_count; i++) {
-		if (args [i].type == StackType::R4 || args [i].type == StackType::R8)
-			coerce_fp (args + i, fp_stack_type (csignature->params [i]));
+		if (args[i].type == StackType::R4 || args[i].type == StackType::R8)
+			coerce_fp (args + i, fp_stack_type (csignature->params[i]));
 	}
 
 	/* Intrinsics */
-	if (target_method && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly, &op))
+	if (target_method
+	    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly, &op))
 		return TRUE;
 
 	if (constrained_class) {
-		if (m_class_is_enumtype (constrained_class) && !strcmp (target_method->name, "GetHashCode")) {
+		if (m_class_is_enumtype (constrained_class)
+		    && !strcmp (target_method->name, "GetHashCode")) {
 			/* Use the corresponding method from the base type to avoid boxing */
 			MonoType *base_type = mono_class_enum_basetype_internal (constrained_class);
 			g_assert (base_type);
 			constrained_class = mono_class_from_mono_type_internal (base_type);
-			target_method = mono_class_get_method_from_name_checked (constrained_class, target_method->name, 0, 0, error);
+			target_method = mono_class_get_method_from_name_checked (
+				constrained_class, target_method->name, 0, 0, error);
 			mono_error_assert_ok (error);
 			g_assert (target_method);
 		}
@@ -512,14 +528,21 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			return FALSE;
 		}
 #if DEBUG_INTERP
-		g_print ("CONSTRAINED.CALLVIRT: %s::%s.  %s (%p) ->\n", target_method->klass->name, target_method->name, mono_signature_full_name (target_method->signature), target_method);
+		g_print ("CONSTRAINED.CALLVIRT: %s::%s.  %s (%p) ->\n", target_method->klass->name,
+		         target_method->name, mono_signature_full_name (target_method->signature),
+		         target_method);
 #endif
-		target_method = mono_get_method_constrained_with_method (image, target_method, constrained_class, generic_context, error);
+		target_method = mono_get_method_constrained_with_method (
+			image, target_method, constrained_class, generic_context, error);
 #if DEBUG_INTERP
-		g_print ("                    : %s::%s.  %s (%p)\n", target_method->klass->name, target_method->name, mono_signature_full_name (target_method->signature), target_method);
+		g_print ("                    : %s::%s.  %s (%p)\n", target_method->klass->name,
+		         target_method->name, mono_signature_full_name (target_method->signature),
+		         target_method);
 #endif
 		/* Intrinsics: Try again, it could be that `mono_get_method_constrained_with_method` resolves to a method that we can substitute */
-		if (target_method && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly, &op))
+		if (target_method
+		    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly,
+		                                 &op))
 			return TRUE;
 
 		return_val_if_nok (error, FALSE);
@@ -558,10 +581,11 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			is_virtual = TRUE;
 	}
 
-	if (is_virtual && target_method && (!(target_method->flags & METHOD_ATTRIBUTE_VIRTUAL) ||
-		(MONO_METHOD_IS_FINAL (target_method) &&
-		 target_method->wrapper_type != MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK)) &&
-		!(mono_class_is_marshalbyref (target_method->klass))) {
+	if (is_virtual && target_method
+	    && (!(target_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
+	        || (MONO_METHOD_IS_FINAL (target_method)
+	            && target_method->wrapper_type != MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK))
+	    && !(mono_class_is_marshalbyref (target_method->klass))) {
 		/* Not really virtual, just needs a null check */
 		is_virtual = FALSE;
 		need_null_check = TRUE;
@@ -569,19 +593,20 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 
 	CHECK_STACK (csignature->param_count + csignature->hasthis);
 	if (tailcall) {
-		const char *refusal = interp_tail_call_refusal (this, method, target_method, csignature, calli, is_virtual, op);
+		const char *refusal = interp_tail_call_refusal (this, method, target_method, csignature,
+		                                                calli, is_virtual, op);
 
 		/* A declined tail call is an ordinary call and return, so nothing about it
 		 * shows up in what the program does. This is the only way to tell one from a
 		 * site that took the jump. */
 		if (refusal && verbose_level)
-			g_print ("Decline tail call at IL_%04x: %s\n", (int)(ip - il_code), refusal);
+			g_print ("Decline tail call at IL_%04x: %s\n", (int) (ip - il_code), refusal);
 
 		emit_tailcall = refusal == NULL;
 	}
 
 	if (emit_tailcall) {
-		(void)mono_class_vtable_checked (domain, target_method->klass, error);
+		(void) mono_class_vtable_checked (domain, target_method->klass, error);
 		return_val_if_nok (error, FALSE);
 
 		/*
@@ -596,7 +621,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 				return FALSE;
 
 			if (verbose_level)
-				g_print ("Optimize tail call of %s.%s\n", m_class_get_name (target_method->klass), target_method->name);
+				g_print ("Optimize tail call of %s.%s\n", m_class_get_name (target_method->klass),
+				         target_method->name);
 
 			for (i = csignature->param_count - 1 + !!csignature->hasthis; i >= 0; --i)
 				store_arg (i);
@@ -623,7 +649,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	target_method = interp_transform_internal_calls (method, target_method, csignature, is_virtual);
 
 	if (csignature->call_convention == MONO_CALL_VARARG)
-		csignature = mono_method_get_signature_checked (target_method, image, token, generic_context, error);
+		csignature =
+			mono_method_get_signature_checked (target_method, image, token, generic_context, error);
 
 	/* A null check tests the receiver, so a signature with no this has nothing to
 	 * test. A callvirt that names a static method arrives here: the block above
@@ -638,7 +665,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	}
 
 	g_assert (csignature->call_convention != MONO_CALL_FASTCALL);
-	if ((mono_interp_opt & INTERP_OPT_INLINE) && op == -1 && !is_virtual && target_method && interp_method_check_inlining (target_method, csignature)) {
+	if ((mono_interp_opt & INTERP_OPT_INLINE) && op == -1 && !is_virtual && target_method
+	    && interp_method_check_inlining (target_method, csignature)) {
 		MonoMethodHeader *mheader = interp_method_get_header (target_method, error);
 		return_val_if_nok (error, FALSE);
 
@@ -653,7 +681,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		return FALSE;
 
 	/* We need to convert delegate invoke to a indirect call on the interp_invoke_impl field */
-	if (target_method && m_class_get_parent (target_method->klass) == mono_defaults.multicastdelegate_class) {
+	if (target_method
+	    && m_class_get_parent (target_method->klass) == mono_defaults.multicastdelegate_class) {
 		const char *name = target_method->name;
 		if (*name == 'I' && (strcmp (name, "Invoke") == 0))
 			is_delegate_invoke = TRUE;
@@ -662,13 +691,13 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	/* Pop the function pointer */
 	if (calli) {
 		--this->sp;
-		fp_sreg = this->sp [0].local;
-		locals [fp_sreg].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+		fp_sreg = this->sp[0].local;
+		locals[fp_sreg].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 	}
 
 	/* The callee reads each argument at the width its parameter is declared at. */
 	for (i = 0; i < csignature->param_count; i++)
-		widen_i4_to_i8 (this->sp - csignature->param_count + i, csignature->params [i]);
+		widen_i4_to_i8 (this->sp - csignature->param_count + i, csignature->params[i]);
 
 	guint32 tos_offset = get_tos_offset ();
 	this->sp -= csignature->param_count + !!csignature->hasthis;
@@ -678,16 +707,16 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		// We must not optimize out these locals, storing to them is part of the interp call convention
 		// unless we already intrinsified this call
 		for (int i = 0; i < (csignature->param_count + !!csignature->hasthis); i++)
-			locals [this->sp [i].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+			locals[this->sp[i].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 	}
 
 	// We overwrite it with the return local, save it for future use
 	if (csignature->param_count || csignature->hasthis)
-		first_sreg = this->sp [0].local;
+		first_sreg = this->sp[0].local;
 
 	/* need to handle typedbyref ... */
 	if (csignature->ret->type != MONO_TYPE_VOID) {
-		MintType mt = mint_type(csignature->ret);
+		MintType mt = mint_type (csignature->ret);
 		MonoClass *klass = mono_class_from_mono_type_internal (csignature->ret);
 
 		if (mt == MintType::VT) {
@@ -705,17 +734,17 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			push_type (stack_type_of (mt), klass);
 			res_size = MINT_STACK_SLOT_SIZE;
 		}
-		dreg = this->sp [-1].local;
+		dreg = this->sp[-1].local;
 		if (op == -1 || num_dregs (op) == MINT_CALL_ARGS) {
 			// This dreg needs to be at the same offset as the call args
-			locals [dreg].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+			locals[dreg].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 		}
 	} else {
 		// Create a new dummy local to serve as the dreg of the call
 		// This dreg is only used to resolve the call args offset
 		push_simple_type (StackType::I4);
 		this->sp--;
-		dreg = this->sp [0].local;
+		dreg = this->sp[0].local;
 	}
 
 	if (op >= 0) {
@@ -729,13 +758,14 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			if (sregs_count == 1)
 				interp_ins_set_sreg (last_ins, first_sreg);
 			else if (sregs_count == 2)
-				interp_ins_set_sregs2 (last_ins, first_sreg, this->sp [!has_dreg].local);
+				interp_ins_set_sregs2 (last_ins, first_sreg, this->sp[!has_dreg].local);
 			else if (sregs_count == 3)
-				interp_ins_set_sregs3 (last_ins, first_sreg, this->sp [!has_dreg].local, this->sp [!has_dreg + 1].local);
+				interp_ins_set_sregs3 (last_ins, first_sreg, this->sp[!has_dreg].local,
+				                       this->sp[!has_dreg + 1].local);
 			else
 				g_error ("Unsupported opcode");
 		}
-		
+
 		if (op == MINT_LDLEN) {
 #ifdef MONO_BIG_ARRAYS
 			SET_SIMPLE_TYPE (this->sp - 1, StackType::I8);
@@ -747,21 +777,24 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 #ifndef ENABLE_NETCORE
 		if (op == MINT_CALLRUN) {
 			interp_ins_set_dreg (last_ins, dreg);
-			last_ins->data [0] = get_data_item_index (target_method);
-			last_ins->data [1] = get_data_item_index (mono_method_signature_internal (target_method));
+			last_ins->data[0] = get_data_item_index (target_method);
+			last_ins->data[1] =
+				get_data_item_index (mono_method_signature_internal (target_method));
 		}
 #endif
-	} else if (!calli && !is_delegate_invoke && !is_virtual && !emit_tailcall && mono_interp_jit_call_supported (target_method, csignature)) {
+	} else if (!calli && !is_delegate_invoke && !is_virtual && !emit_tailcall
+	           && mono_interp_jit_call_supported (target_method, csignature)) {
 		interp_add_ins (MINT_JIT_CALL);
 		interp_ins_set_dreg (last_ins, dreg);
-		last_ins->data [0] = get_data_item_index ((void *)mono_interp_get_imethod (domain, target_method, error));
+		last_ins->data[0] =
+			get_data_item_index ((void *) mono_interp_get_imethod (domain, target_method, error));
 		mono_error_assert_ok (error);
 	} else {
 		if (is_delegate_invoke) {
 			interp_add_ins (MINT_CALL_DELEGATE);
 			interp_ins_set_dreg (last_ins, dreg);
-			last_ins->data [0] = params_stack_size;
-			last_ins->data [1] = get_data_item_index ((void *)csignature);
+			last_ins->data[0] = params_stack_size;
+			last_ins->data[1] = get_data_item_index ((void *) csignature);
 		} else if (calli) {
 #ifndef MONO_ARCH_HAS_NO_PROPER_MONOCTX
 			/* Try using fast icall path for simple signatures */
@@ -774,19 +807,21 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			if (op != -1) {
 				interp_add_ins (MINT_CALLI_NAT_FAST);
 				interp_ins_set_dreg (last_ins, dreg);
-				last_ins->data [0] = get_data_item_index ((void *)csignature);
-				last_ins->data [1] = op;
-				last_ins->data [2] = save_last_error;
+				last_ins->data[0] = get_data_item_index ((void *) csignature);
+				last_ins->data[1] = op;
+				last_ins->data[2] = save_last_error;
 			} else if (native && method->dynamic && csignature->pinvoke) {
 				interp_add_ins (MINT_CALLI_NAT_DYNAMIC);
 				interp_ins_set_dreg (last_ins, dreg);
 				interp_ins_set_sreg (last_ins, fp_sreg);
-				last_ins->data [0] = get_data_item_index ((void *)csignature);
+				last_ins->data[0] = get_data_item_index ((void *) csignature);
 			} else if (native) {
 				interp_add_ins (MINT_CALLI_NAT);
 #ifdef TARGET_X86
 				/* Windows not tested/supported yet */
-				g_assertf (csignature->call_convention == MONO_CALL_DEFAULT || csignature->call_convention == MONO_CALL_C, "Interpreter supports only cdecl pinvoke on x86");
+				g_assertf (csignature->call_convention == MONO_CALL_DEFAULT
+				               || csignature->call_convention == MONO_CALL_C,
+				           "Interpreter supports only cdecl pinvoke on x86");
 #endif
 
 				InterpMethod *imethod = NULL;
@@ -806,11 +841,11 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 
 				interp_ins_set_dreg (last_ins, dreg);
 				interp_ins_set_sreg (last_ins, fp_sreg);
-				last_ins->data [0] = get_data_item_index (csignature);
-				last_ins->data [1] = get_data_item_index (imethod);
-				last_ins->data [2] = save_last_error;
+				last_ins->data[0] = get_data_item_index (csignature);
+				last_ins->data[1] = get_data_item_index (imethod);
+				last_ins->data[2] = save_last_error;
 				/* Cache slot */
-				last_ins->data [3] = get_data_item_index_nonshared (NULL);
+				last_ins->data[3] = get_data_item_index_nonshared (NULL);
 			} else if (calli_extra_arg) {
 				/*
 				 * Only a delegate-invoke wrapper emits this, and only over what
@@ -820,14 +855,14 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 				interp_add_ins (MINT_CALLI_IMETHOD);
 				interp_ins_set_dreg (last_ins, dreg);
 				interp_ins_set_sreg (last_ins, fp_sreg);
-				last_ins->data [0] = get_data_item_index ((void *)csignature);
+				last_ins->data[0] = get_data_item_index ((void *) csignature);
 			} else {
 				interp_add_ins (MINT_CALLI);
 				interp_ins_set_dreg (last_ins, dreg);
 				interp_ins_set_sreg (last_ins, fp_sreg);
-				last_ins->data [0] = get_data_item_index ((void *)csignature);
+				last_ins->data[0] = get_data_item_index ((void *) csignature);
 				/* Cache slot for the entry point this site last resolved */
-				last_ins->data [1] = get_data_item_index_nonshared (NULL);
+				last_ins->data[1] = get_data_item_index_nonshared (NULL);
 			}
 		} else {
 			InterpMethod *imethod = mono_interp_get_imethod (domain, target_method, error);
@@ -835,27 +870,28 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 
 			if (csignature->call_convention == MONO_CALL_VARARG) {
 				interp_add_ins (MINT_CALL_VARARG);
-				last_ins->data [1] = get_data_item_index ((void *)csignature);
-				last_ins->data [2] = params_stack_size;
+				last_ins->data[1] = get_data_item_index ((void *) csignature);
+				last_ins->data[2] = params_stack_size;
 			} else if (is_virtual && !mono_class_is_marshalbyref (target_method->klass)) {
 				interp_add_ins (emit_tailcall ? MINT_TAILCALLVIRT_FAST : MINT_CALLVIRT_FAST);
 				if (mono_class_is_interface (target_method->klass))
-					last_ins->data [1] = -2 * MONO_IMT_SIZE + mono_method_get_imt_slot (target_method);
+					last_ins->data[1] =
+						-2 * MONO_IMT_SIZE + mono_method_get_imt_slot (target_method);
 				else
-					last_ins->data [1] = mono_method_get_vtable_slot (target_method);
+					last_ins->data[1] = mono_method_get_vtable_slot (target_method);
 				/* How much of this frame the callee is handed as its arguments. */
 				if (emit_tailcall)
-					last_ins->data [2] = params_stack_size;
+					last_ins->data[2] = params_stack_size;
 			} else if (is_virtual) {
 				interp_add_ins (MINT_CALLVIRT);
 			} else if (emit_tailcall) {
 				interp_add_ins (MINT_TAILCALL);
-				last_ins->data [1] = params_stack_size;
+				last_ins->data[1] = params_stack_size;
 			} else {
 				interp_add_ins (MINT_CALL);
 			}
 			interp_ins_set_dreg (last_ins, dreg);
-			last_ins->data [0] = get_data_item_index ((void *)imethod);
+			last_ins->data[0] = get_data_item_index ((void *) imethod);
 		}
 	}
 	ip += 5;
@@ -864,7 +900,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 }
 
 MonoClassField *
-interp_field_from_token (MonoMethod *method, guint32 token, MonoClass **klass, MonoGenericContext *generic_context, MonoError *error)
+interp_field_from_token (MonoMethod *method, guint32 token, MonoClass **klass,
+                         MonoGenericContext *generic_context, MonoError *error)
 {
 	MonoClassField *field = NULL;
 	if (method->wrapper_type != MONO_WRAPPER_NONE) {
@@ -873,14 +910,17 @@ interp_field_from_token (MonoMethod *method, guint32 token, MonoClass **klass, M
 
 		mono_class_setup_fields (field->parent);
 	} else {
-		field = mono_field_from_token_checked (m_class_get_image (method->klass), token, klass, generic_context, error);
+		field = mono_field_from_token_checked (m_class_get_image (method->klass), token, klass,
+		                                       generic_context, error);
 		return_val_if_nok (error, NULL);
 	}
 
 	if (!method->skip_visibility && !mono_method_can_access_field (method, field)) {
 		char *method_fname = mono_method_full_name (method, TRUE);
 		char *field_fname = mono_field_full_name (field);
-		mono_error_set_generic_error (error, "System", "FieldAccessException", "Field `%s' is inaccessible from method `%s'\n", field_fname, method_fname);
+		mono_error_set_generic_error (error, "System", "FieldAccessException",
+		                              "Field `%s' is inaccessible from method `%s'\n", field_fname,
+		                              method_fname);
 		g_free (method_fname);
 		g_free (field_fname);
 		return NULL;

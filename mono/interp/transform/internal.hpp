@@ -24,34 +24,34 @@
  * A stack slot's type, set together with the flags and class that go with it so
  * a site cannot set one and forget the others.
  */
-#define SET_SIMPLE_TYPE(s, ty)                                                                     \
-	do {                                                                                       \
-		g_assert (ty != StackType::VT);                                                    \
-		g_assert ((s)->type != StackType::VT);                                             \
-		(s)->type = (ty);                                                                  \
-		(s)->flags = 0;                                                                    \
-		(s)->klass = NULL;                                                                 \
+#define SET_SIMPLE_TYPE(s, ty)                 \
+	do {                                       \
+		g_assert (ty != StackType::VT);        \
+		g_assert ((s)->type != StackType::VT); \
+		(s)->type = (ty);                      \
+		(s)->flags = 0;                        \
+		(s)->klass = NULL;                     \
 	} while (0)
 
-#define SET_TYPE(s, ty, k)                                                                         \
-	do {                                                                                       \
-		g_assert (ty != StackType::VT);                                                    \
-		g_assert ((s)->type != StackType::VT);                                             \
-		(s)->type = (ty);                                                                  \
-		(s)->flags = 0;                                                                    \
-		(s)->klass = k;                                                                    \
+#define SET_TYPE(s, ty, k)                     \
+	do {                                       \
+		g_assert (ty != StackType::VT);        \
+		g_assert ((s)->type != StackType::VT); \
+		(s)->type = (ty);                      \
+		(s)->flags = 0;                        \
+		(s)->klass = k;                        \
 	} while (0)
 
-#define BARRIER_IF_VOLATILE(kind) \
-	do { \
-		if (volatile_) { \
+#define BARRIER_IF_VOLATILE(kind)              \
+	do {                                       \
+		if (volatile_) {                       \
 			interp_emit_memory_barrier (kind); \
-			volatile_ = FALSE; \
-		} \
+			volatile_ = FALSE;                 \
+		}                                      \
 	} while (0)
-#define INLINE_FAILURE \
-	do { \
-		if (inlining) \
+#define INLINE_FAILURE    \
+	do {                  \
+		if (inlining)     \
 			return FALSE; \
 	} while (0)
 
@@ -59,13 +59,13 @@
  * A guard on the eval stack depth, for use inside a TransformData member. It
  * warns rather than refusing: a short stack here means the IL was already bad.
  */
-#define CHECK_STACK(n) \
-	do { \
-		int stack_size = sp - stack; \
-		if (stack_size < (n)) \
-			g_warning ("%s.%s: not enough values (%d < %d) on stack at %04x", \
-				m_class_get_name (method->klass), method->name, \
-				stack_size, n, ip - il_code); \
+#define CHECK_STACK(n)                                                                \
+	do {                                                                              \
+		int stack_size = sp - stack;                                                  \
+		if (stack_size < (n))                                                         \
+			g_warning ("%s.%s: not enough values (%d < %d) on stack at %04x",         \
+			           m_class_get_name (method->klass), method->name, stack_size, n, \
+			           ip - il_code);                                                 \
 	} while (0)
 
 /*
@@ -73,53 +73,53 @@
  * guint16 and so does not line a 32- or 64-bit value up on its own.
  */
 #if NO_UNALIGNED_ACCESS
-#define WRITE32(ip, v) \
-	do { \
-		* (ip) = * (guint16 *)(v); \
-		* ((ip) + 1) = * ((guint16 *)(v) + 1); \
-		(ip) += 2; \
+#define WRITE32(ip, v)                        \
+	do {                                      \
+		*(ip) = *(guint16 *) (v);             \
+		*((ip) + 1) = *((guint16 *) (v) + 1); \
+		(ip) += 2;                            \
 	} while (0)
 
-#define WRITE32_INS(ins, index, v) \
-	do { \
-		(ins)->data [index] = * (guint16 *)(v); \
-		(ins)->data [index + 1] = * ((guint16 *)(v) + 1); \
+#define WRITE32_INS(ins, index, v)                       \
+	do {                                                 \
+		(ins)->data[index] = *(guint16 *) (v);           \
+		(ins)->data[index + 1] = *((guint16 *) (v) + 1); \
 	} while (0)
 
-#define WRITE64(ins, v) \
-	do { \
-		*((ins) + 0) = * ((guint16 *)(v) + 0); \
-		*((ins) + 1) = * ((guint16 *)(v) + 1); \
-		*((ins) + 2) = * ((guint16 *)(v) + 2); \
-		*((ins) + 3) = * ((guint16 *)(v) + 3); \
+#define WRITE64(ins, v)                        \
+	do {                                       \
+		*((ins) + 0) = *((guint16 *) (v) + 0); \
+		*((ins) + 1) = *((guint16 *) (v) + 1); \
+		*((ins) + 2) = *((guint16 *) (v) + 2); \
+		*((ins) + 3) = *((guint16 *) (v) + 3); \
 	} while (0)
 
-#define WRITE64_INS(ins, index, v) \
-	do { \
-		(ins)->data [index] = * (guint16 *)(v); \
-		(ins)->data [index + 1] = * ((guint16 *)(v) + 1); \
-		(ins)->data [index + 2] = * ((guint16 *)(v) + 2); \
-		(ins)->data [index + 3] = * ((guint16 *)(v) + 3); \
+#define WRITE64_INS(ins, index, v)                       \
+	do {                                                 \
+		(ins)->data[index] = *(guint16 *) (v);           \
+		(ins)->data[index + 1] = *((guint16 *) (v) + 1); \
+		(ins)->data[index + 2] = *((guint16 *) (v) + 2); \
+		(ins)->data[index + 3] = *((guint16 *) (v) + 3); \
 	} while (0)
 #else
-#define WRITE32(ip, v) \
-	do { \
-		* (guint32*)(ip) = * (guint32 *)(v); \
-		(ip) += 2; \
+#define WRITE32(ip, v)                        \
+	do {                                      \
+		*(guint32 *) (ip) = *(guint32 *) (v); \
+		(ip) += 2;                            \
 	} while (0)
-#define WRITE32_INS(ins, index, v) \
-	do { \
-		* (guint32 *)(&(ins)->data [index]) = * (guint32 *)(v); \
+#define WRITE32_INS(ins, index, v)                             \
+	do {                                                       \
+		*(guint32 *) (&(ins)->data[index]) = *(guint32 *) (v); \
 	} while (0)
 
-#define WRITE64(ip, v) \
-	do { \
-		* (guint64*)(ip) = * (guint64 *)(v); \
-		(ip) += 4; \
+#define WRITE64(ip, v)                        \
+	do {                                      \
+		*(guint64 *) (ip) = *(guint64 *) (v); \
+		(ip) += 4;                            \
 	} while (0)
-#define WRITE64_INS(ins, index, v) \
-	do { \
-		* (guint64 *)(&(ins)->data [index]) = * (guint64 *)(v); \
+#define WRITE64_INS(ins, index, v)                             \
+	do {                                                       \
+		*(guint64 *) (&(ins)->data[index]) = *(guint64 *) (v); \
 	} while (0)
 
 #endif
@@ -128,27 +128,27 @@
  * An instruction's registers, written through a macro so a site that sets one
  * cannot quietly set the wrong number of them.
  */
-#define interp_ins_set_dreg(ins, dr)                                                               \
-	do {                                                                                       \
-		ins->dreg = dr;                                                                    \
+#define interp_ins_set_dreg(ins, dr) \
+	do {                             \
+		ins->dreg = dr;              \
 	} while (0)
 
-#define interp_ins_set_sreg(ins, s1)                                                               \
-	do {                                                                                       \
-		ins->sregs [0] = s1;                                                               \
+#define interp_ins_set_sreg(ins, s1) \
+	do {                             \
+		ins->sregs[0] = s1;          \
 	} while (0)
 
-#define interp_ins_set_sregs2(ins, s1, s2)                                                         \
-	do {                                                                                       \
-		ins->sregs [0] = s1;                                                               \
-		ins->sregs [1] = s2;                                                               \
+#define interp_ins_set_sregs2(ins, s1, s2) \
+	do {                                   \
+		ins->sregs[0] = s1;                \
+		ins->sregs[1] = s2;                \
 	} while (0)
 
-#define interp_ins_set_sregs3(ins, s1, s2, s3)                                                     \
-	do {                                                                                       \
-		ins->sregs [0] = s1;                                                               \
-		ins->sregs [1] = s2;                                                               \
-		ins->sregs [2] = s3;                                                               \
+#define interp_ins_set_sregs3(ins, s1, s2, s3) \
+	do {                                       \
+		ins->sregs[0] = s1;                    \
+		ins->sregs[1] = s2;                    \
+		ins->sregs[2] = s3;                    \
 	} while (0)
 
 namespace mono::interp {
@@ -176,7 +176,7 @@ stack_type_of (MintType mt)
 /// The method an InternalCall or a JIT-intrinsic attribute redirects a call to,
 /// or the target unchanged.
 MonoMethod *interp_transform_internal_calls (MonoMethod *method, MonoMethod *target_method,
-                                            MonoMethodSignature *csignature, gboolean is_virtual);
+                                             MonoMethodSignature *csignature, gboolean is_virtual);
 
 /// Which of the magic-int families (nint, nuint, nfloat) this class is, or -1.
 int mono_class_get_magic_index (MonoClass *k);

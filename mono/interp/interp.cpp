@@ -39,7 +39,8 @@ InterpState::start ()
 	// A clause_args entry runs a handler of a frame that is already executing, and the
 	// allocation that frame was given still stands.
 	if (!clause_args) {
-		context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
+		context->stack_pointer =
+			reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
 		/* Make sure the stack pointer is bumped before we store any references on the stack */
 		mono_compiler_barrier ();
 	}
@@ -82,7 +83,8 @@ InterpState::interp_throw (MonoException *ex, const guint16 *ip, bool rethrow)
 		// we don't end up in the previous instruction.
 		frame->state.ip = ip + 1;
 
-		if (mono_object_isinst_checked (reinterpret_cast<MonoObject *> (ex), mono_defaults.exception_class, error)) {
+		if (mono_object_isinst_checked (reinterpret_cast<MonoObject *> (ex),
+		                                mono_defaults.exception_class, error)) {
 			MonoException *mono_ex = ex;
 			if (!rethrow) {
 				mono_ex->stack_trace = nullptr;
@@ -187,7 +189,8 @@ InterpState::exit ()
 {
 	// Make sure the return value stays below the stack pointer
 	if (!clause_args)
-		context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
+		context->stack_pointer =
+			reinterpret_cast<guchar *> (frame->stack) + frame->imethod->alloca_size;
 
 	/* Our frames go away with this invocation, so hand the marker back to the one below. */
 	context->current_frame = outer_current_frame;
@@ -383,8 +386,8 @@ mono_interp_entry (InterpEntryData *data)
 	if (mono_llvm_only) {
 		if (context->has_resume_state) {
 			context->stack_pointer = reinterpret_cast<guchar *> (sp);
-			mono_llvm_reraise_exception (reinterpret_cast<MonoException *> (mono_gchandle_get_target_internal (
-				context->exc_gchandle)));
+			mono_llvm_reraise_exception (reinterpret_cast<MonoException *> (
+				mono_gchandle_get_target_internal (context->exc_gchandle)));
 		}
 	} else {
 		g_assert (!context->has_resume_state);
@@ -523,8 +526,8 @@ mono_interp_run_finally (StackFrameInfo *frame, int clause_index, gpointer handl
 	iframe->next_free = NULL;
 
 	// this informs MINT_ENDFINALLY to return to EH
-	*reinterpret_cast<guint16 **> ((frame_locals (iframe) + iframe->imethod->clause_data_offsets[clause_index])) =
-		NULL;
+	*reinterpret_cast<guint16 **> (
+		(frame_locals (iframe) + iframe->imethod->clause_data_offsets[clause_index])) = NULL;
 
 	mono_interp_exec_method (iframe, context, &clause_args);
 

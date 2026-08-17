@@ -28,7 +28,7 @@ TransformData::realloc_stack ()
 	int sppos = sp - stack;
 
 	stack_capacity *= 2;
-	stack = (StackInfo*) g_realloc (stack, stack_capacity * sizeof (stack [0]));
+	stack = (StackInfo *) g_realloc (stack, stack_capacity * sizeof (stack[0]));
 	sp = stack + sppos;
 }
 
@@ -38,24 +38,32 @@ TransformData::get_tos_offset ()
 	if (sp == stack)
 		return 0;
 	else
-		return sp [-1].offset + sp [-1].size;
+		return sp[-1].offset + sp[-1].size;
 }
 
-static MonoType*
+static MonoType *
 get_type_from_stack (StackType type, MonoClass *klass)
 {
 	switch (type) {
-		case StackType::I4: return m_class_get_byval_arg (mono_defaults.int32_class);
-		case StackType::I8: return m_class_get_byval_arg (mono_defaults.int64_class);
-		case StackType::R4: return m_class_get_byval_arg (mono_defaults.single_class);
-		case StackType::R8: return m_class_get_byval_arg (mono_defaults.double_class);
-		case StackType::O: return (klass && !m_class_is_valuetype (klass)) ? m_class_get_byval_arg (klass) : m_class_get_byval_arg (mono_defaults.object_class);
-		case StackType::VT: return m_class_get_byval_arg (klass);
-		case StackType::MP:
-		case StackType::F:
-			return m_class_get_byval_arg (mono_defaults.int_class);
-		default:
-			g_assert_not_reached ();
+	case StackType::I4:
+		return m_class_get_byval_arg (mono_defaults.int32_class);
+	case StackType::I8:
+		return m_class_get_byval_arg (mono_defaults.int64_class);
+	case StackType::R4:
+		return m_class_get_byval_arg (mono_defaults.single_class);
+	case StackType::R8:
+		return m_class_get_byval_arg (mono_defaults.double_class);
+	case StackType::O:
+		return (klass && !m_class_is_valuetype (klass))
+		           ? m_class_get_byval_arg (klass)
+		           : m_class_get_byval_arg (mono_defaults.object_class);
+	case StackType::VT:
+		return m_class_get_byval_arg (klass);
+	case StackType::MP:
+	case StackType::F:
+		return m_class_get_byval_arg (mono_defaults.int_class);
+	default:
+		g_assert_not_reached ();
 	}
 }
 
@@ -83,8 +91,8 @@ TransformData::create_interp_stack_local (StackType type, MonoClass *k, int type
 {
 	int local = create_interp_local_explicit (get_type_from_stack (type, k), type_size);
 
-	locals [local].flags |= INTERP_LOCAL_FLAG_EXECUTION_STACK;
-	locals [local].stack_offset = offset;
+	locals[local].flags |= INTERP_LOCAL_FLAG_EXECUTION_STACK;
+	locals[local].stack_offset = offset;
 	return local;
 }
 
@@ -146,7 +154,7 @@ void
 TransformData::push_types (StackInfo *types, int count)
 {
 	for (int i = 0; i < count; i++)
-		push_type_explicit (types [i].type, types [i].klass, types [i].size);
+		push_type_explicit (types[i].type, types[i].klass, types[i].size);
 }
 
 static int
@@ -159,7 +167,7 @@ can_store (StackType st_value, StackType vt_value)
 	return st_value == vt_value;
 }
 
-MonoType*
+MonoType *
 TransformData::get_arg_type_exact (int n, MintType *mt)
 {
 	MonoType *type;
@@ -168,7 +176,7 @@ TransformData::get_arg_type_exact (int n, MintType *mt)
 	if (hasthis && n == 0)
 		type = m_class_get_byval_arg (method->klass);
 	else
-		type = mono_method_signature_internal (method)->params [n - !!hasthis];
+		type = mono_method_signature_internal (method)->params[n - !!hasthis];
 
 	if (mt)
 		*mt = mint_type (type);
@@ -215,9 +223,9 @@ TransformData::load_arg (int n)
 	}
 	interp_add_ins (get_mov_for_type (mt, TRUE));
 	interp_ins_set_sreg (last_ins, n);
-	interp_ins_set_dreg (last_ins, sp [-1].local); 
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 	if (mt == MintType::VT)
-		last_ins->data [0] = size;
+		last_ins->data[0] = size;
 }
 
 void
@@ -241,18 +249,18 @@ TransformData::store_arg (int n)
 	coerce_fp (sp - 1, stack_type_of (mt));
 	--sp;
 	interp_add_ins (get_mov_for_type (mt, FALSE));
-	interp_ins_set_sreg (last_ins, sp [0].local);
+	interp_ins_set_sreg (last_ins, sp[0].local);
 	interp_ins_set_dreg (last_ins, n);
 	if (mt == MintType::VT)
-		last_ins->data [0] = size;
+		last_ins->data[0] = size;
 }
 
 void
 TransformData::load_local (int local)
 {
-	MintType mt = locals [local].mt;
-	gint32 size = locals [local].size;
-	MonoType *type = locals [local].type;
+	MintType mt = locals[local].mt;
+	gint32 size = locals[local].size;
+	MonoType *type = locals[local].type;
 
 	if (mt == MintType::VT) {
 		MonoClass *klass = mono_class_from_mono_type_internal (type);
@@ -265,32 +273,31 @@ TransformData::load_local (int local)
 	}
 	interp_add_ins (get_mov_for_type (mt, TRUE));
 	interp_ins_set_sreg (last_ins, local);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 	if (mt == MintType::VT)
-		last_ins->data [0] = size;
+		last_ins->data[0] = size;
 }
 
 void
 TransformData::store_local (int local)
 {
-	MintType mt = locals [local].mt;
+	MintType mt = locals[local].mt;
 	CHECK_STACK (1);
 #if SIZEOF_VOID_P == 8
-	if (sp [-1].type == StackType::I4 && stack_type_of (mt) == StackType::I8)
+	if (sp[-1].type == StackType::I4 && stack_type_of (mt) == StackType::I8)
 		interp_add_conv (sp - 1, NULL, StackType::I8, MINT_CONV_I8_I4);
 #endif
 	coerce_fp (sp - 1, stack_type_of (mt));
-	if (!can_store(sp [-1].type, stack_type_of (mt))) {
-		g_warning("%s.%s: Store local stack type mismatch %d %d", 
-			m_class_get_name (method->klass), method->name,
-			(int) stack_type_of (mt), (int) sp [-1].type);
+	if (!can_store (sp[-1].type, stack_type_of (mt))) {
+		g_warning ("%s.%s: Store local stack type mismatch %d %d", m_class_get_name (method->klass),
+		           method->name, (int) stack_type_of (mt), (int) sp[-1].type);
 	}
 	--sp;
 	interp_add_ins (get_mov_for_type (mt, FALSE));
-	interp_ins_set_sreg (last_ins, sp [0].local);
+	interp_ins_set_sreg (last_ins, sp[0].local);
 	interp_ins_set_dreg (last_ins, local);
 	if (mt == MintType::VT)
-		last_ins->data [0] = locals [local].size;
+		last_ins->data[0] = locals[local].size;
 }
 
 guint16
@@ -314,8 +321,8 @@ TransformData::get_data_item_index (void *ptr)
 	return index;
 }
 
-
-int mono_class_get_magic_index (MonoClass *k)
+int
+mono_class_get_magic_index (MonoClass *k)
 {
 	if (mono_class_is_magic_int (k))
 		return !strcmp ("nint", m_class_get_name (k)) ? 0 : 1;
@@ -344,39 +351,40 @@ TransformData::get_interp_local_offset (int local, gboolean resolve_stack_locals
 	if (local == -1)
 		return -1;
 
-	if ((locals [local].flags & INTERP_LOCAL_FLAG_EXECUTION_STACK) && !resolve_stack_locals)
+	if ((locals[local].flags & INTERP_LOCAL_FLAG_EXECUTION_STACK) && !resolve_stack_locals)
 		return -1;
 
-	if (locals [local].offset != -1)
-		return locals [local].offset;
+	if (locals[local].offset != -1)
+		return locals[local].offset;
 
-	if (locals [local].flags & INTERP_LOCAL_FLAG_EXECUTION_STACK) {
-		locals [local].offset = total_locals_size + locals [local].stack_offset;
+	if (locals[local].flags & INTERP_LOCAL_FLAG_EXECUTION_STACK) {
+		locals[local].offset = total_locals_size + locals[local].stack_offset;
 	} else {
 		int size, offset;
 
 		offset = total_locals_size;
-		size = locals [local].size;
+		size = locals[local].size;
 
-		locals [local].offset = offset;
+		locals[local].offset = offset;
 
 		total_locals_size = ALIGN_TO (offset + size, MINT_STACK_SLOT_SIZE);
 	}
 
 	//g_assert (total_locals_size < G_MAXUINT16);
 
-	return locals [local].offset;
+	return locals[local].offset;
 }
 
 void
-TransformData::interp_method_compute_offsets (InterpMethod *imethod, MonoMethodSignature *sig, MonoMethodHeader *header, MonoError *error)
+TransformData::interp_method_compute_offsets (InterpMethod *imethod, MonoMethodSignature *sig,
+                                              MonoMethodHeader *header, MonoError *error)
 {
 	int i, offset, size, align;
 	int num_args = sig->hasthis + sig->param_count;
 	int num_il_locals = header->num_locals;
 	int num_locals = num_args + num_il_locals;
 
-	imethod->local_offsets = (guint32*)g_malloc (num_il_locals * sizeof(guint32));
+	imethod->local_offsets = (guint32 *) g_malloc (num_il_locals * sizeof (guint32));
 	locals.resize (num_locals);
 	offset = 0;
 
@@ -392,19 +400,19 @@ TransformData::interp_method_compute_offsets (InterpMethod *imethod, MonoMethodS
 		if (sig->hasthis && i == 0)
 			type = m_class_get_byval_arg (method->klass);
 		else
-			type = mono_method_signature_internal (method)->params [i - sig->hasthis];
+			type = mono_method_signature_internal (method)->params[i - sig->hasthis];
 		MintType mt = mint_type (type);
-		locals [i].type = type;
-		locals [i].offset = offset;
-		locals [i].flags = 0;
-		locals [i].indirects = 0;
-		locals [i].mt = mt;
+		locals[i].type = type;
+		locals[i].offset = offset;
+		locals[i].flags = 0;
+		locals[i].indirects = 0;
+		locals[i].mt = mt;
 		if (mt == MintType::VT && (!sig->hasthis || i != 0)) {
 			size = mono_type_size (type, &align);
-			locals [i].size = size;
+			locals[i].size = size;
 			offset += ALIGN_TO (size, MINT_STACK_SLOT_SIZE);
 		} else {
-			locals [i].size = MINT_STACK_SLOT_SIZE; // not really
+			locals[i].size = MINT_STACK_SLOT_SIZE; // not really
 			offset += MINT_STACK_SLOT_SIZE;
 		}
 	}
@@ -412,35 +420,35 @@ TransformData::interp_method_compute_offsets (InterpMethod *imethod, MonoMethodS
 	il_locals_offset = offset;
 	for (i = 0; i < num_il_locals; ++i) {
 		int index = num_args + i;
-		size = mono_type_size (header->locals [i], &align);
-		if (header->locals [i]->type == MONO_TYPE_VALUETYPE) {
-			if (mono_class_has_failure (header->locals [i]->data.klass)) {
-				mono_error_set_for_class_failure (error, header->locals [i]->data.klass);
+		size = mono_type_size (header->locals[i], &align);
+		if (header->locals[i]->type == MONO_TYPE_VALUETYPE) {
+			if (mono_class_has_failure (header->locals[i]->data.klass)) {
+				mono_error_set_for_class_failure (error, header->locals[i]->data.klass);
 				return;
 			}
 		}
 		offset += align - 1;
 		offset &= ~(align - 1);
-		imethod->local_offsets [i] = offset;
-		locals [index].type = header->locals [i];
-		locals [index].offset = offset;
-		locals [index].flags = 0;
-		locals [index].indirects = 0;
-		locals [index].mt = mint_type (header->locals [i]);
-		if (locals [index].mt == MintType::VT)
-			locals [index].size = size;
+		imethod->local_offsets[i] = offset;
+		locals[index].type = header->locals[i];
+		locals[index].offset = offset;
+		locals[index].flags = 0;
+		locals[index].indirects = 0;
+		locals[index].mt = mint_type (header->locals[i]);
+		if (locals[index].mt == MintType::VT)
+			locals[index].size = size;
 		else
-			locals [index].size = MINT_STACK_SLOT_SIZE; // not really
+			locals[index].size = MINT_STACK_SLOT_SIZE; // not really
 		// Every local takes a MINT_STACK_SLOT_SIZE so IL locals have same behavior as execution locals
 		offset += ALIGN_TO (size, MINT_STACK_SLOT_SIZE);
 	}
 	offset = ALIGN_TO (offset, MINT_VT_ALIGNMENT);
 	il_locals_size = offset - il_locals_offset;
 
-	imethod->clause_data_offsets = (guint32*)g_malloc (header->num_clauses * sizeof (guint32));
+	imethod->clause_data_offsets = (guint32 *) g_malloc (header->num_clauses * sizeof (guint32));
 	for (i = 0; i < header->num_clauses; i++) {
-		imethod->clause_data_offsets [i] = offset;
-		offset += sizeof (MonoObject*);
+		imethod->clause_data_offsets[i] = offset;
+		offset += sizeof (MonoObject *);
 	}
 	offset = ALIGN_TO (offset, MINT_VT_ALIGNMENT);
 

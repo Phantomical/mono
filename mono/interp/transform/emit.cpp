@@ -59,7 +59,6 @@ get_mov_for_type (MintType mt, gboolean needs_sext)
 	g_assert_not_reached ();
 }
 
-
 // Should be called when td->cbb branches to newbb and newbb can have a stack state
 void
 TransformData::fixup_newbb_stack_locals (InterpBasicBlock *newbb)
@@ -73,24 +72,24 @@ TransformData::fixup_newbb_stack_locals (InterpBasicBlock *newbb)
 		 * the block reads its entry stack at, and CIL lets another arrive with
 		 * the other one. Convert rather than move the bytes across.
 		 */
-		coerce_fp (stack + i, newbb->stack_state [i].type);
+		coerce_fp (stack + i, newbb->stack_state[i].type);
 
-		int sloc = stack [i].local;
-		int dloc = newbb->stack_state [i].local;
+		int sloc = stack[i].local;
+		int dloc = newbb->stack_state[i].local;
 		if (sloc != dloc) {
-			MintType mt = locals [sloc].mt;
+			MintType mt = locals[sloc].mt;
 			int mov_op = get_mov_for_type (mt, FALSE);
 
 			// FIXME can be hit in some IL cases. Should we merge the stack states ? (b41002.il)
 			// g_assert (mov_op == get_mov_for_type (locals [dloc].mt, FALSE));
 
 			interp_add_ins (mov_op);
-			interp_ins_set_sreg (last_ins, stack [i].local);
-			interp_ins_set_dreg (last_ins, newbb->stack_state [i].local);
+			interp_ins_set_sreg (last_ins, stack[i].local);
+			interp_ins_set_dreg (last_ins, newbb->stack_state[i].local);
 
 			if (mt == MintType::VT) {
-				g_assert (locals [sloc].size == locals [dloc].size);
-				last_ins->data [0] = locals [sloc].size;
+				g_assert (locals[sloc].size == locals[dloc].size);
+				last_ins->data[0] = locals[sloc].size;
 			}
 		}
 	}
@@ -107,7 +106,7 @@ TransformData::init_bb_stack_state (InterpBasicBlock *bb)
 
 	bb->stack_height = sp - stack;
 	if (bb->stack_height > 0) {
-		int size = bb->stack_height * sizeof (stack [0]);
+		int size = bb->stack_height * sizeof (stack[0]);
 		bb->stack_state = (StackInfo *) arena.alloc (size, alignof (StackInfo));
 		memcpy (bb->stack_state, stack, size);
 	}
@@ -128,7 +127,7 @@ TransformData::handle_branch (int short_op, int long_op, int offset)
 			interp_add_ins (MINT_CHECKPOINT);
 	}
 
-	InterpBasicBlock *target_bb = offset_to_bb [target];
+	InterpBasicBlock *target_bb = offset_to_bb[target];
 	g_assert (target_bb);
 
 	if (short_op == MINT_LEAVE_S || short_op == MINT_LEAVE_S_CHECK)
@@ -155,7 +154,8 @@ TransformData::handle_branch (int short_op, int long_op, int offset)
 void
 TransformData::one_arg_branch (int mint_op, int offset, int inst_size)
 {
-	StackType type = sp [-1].type == StackType::O || sp [-1].type == StackType::MP ? StackType::I : sp [-1].type;
+	StackType type =
+		sp[-1].type == StackType::O || sp[-1].type == StackType::MP ? StackType::I : sp[-1].type;
 	int long_op = op_for_stack_type (mint_op, type);
 	int short_op = long_op + MINT_BRFALSE_I4_S - MINT_BRFALSE_I4;
 	CHECK_STACK (1);
@@ -197,7 +197,8 @@ TransformData::widen_i4_to_i8 (StackInfo *sp, MonoType *type)
 	if (sp->type != StackType::I4 || mint_type (type) != MintType::I8)
 		return;
 
-	int op = mini_get_underlying_type (type)->type == MONO_TYPE_U ? MINT_CONV_I8_U4 : MINT_CONV_I8_I4;
+	int op =
+		mini_get_underlying_type (type)->type == MONO_TYPE_U ? MINT_CONV_I8_U4 : MINT_CONV_I8_I4;
 	interp_add_conv (sp, NULL, StackType::I8, op);
 }
 
@@ -248,17 +249,22 @@ fp_stack_type (MonoType *type)
 	type = mini_get_underlying_type (type);
 
 	switch (type->type) {
-	case MONO_TYPE_R4: return StackType::R4;
-	case MONO_TYPE_R8: return StackType::R8;
-	default: return std::nullopt;
+	case MONO_TYPE_R4:
+		return StackType::R4;
+	case MONO_TYPE_R8:
+		return StackType::R8;
+	default:
+		return std::nullopt;
 	}
 }
 
 void
 TransformData::two_arg_branch (int mint_op, int offset, int inst_size)
 {
-	StackType type1 = sp [-1].type == StackType::O || sp [-1].type == StackType::MP ? StackType::I : sp [-1].type;
-	StackType type2 = sp [-2].type == StackType::O || sp [-2].type == StackType::MP ? StackType::I : sp [-2].type;
+	StackType type1 =
+		sp[-1].type == StackType::O || sp[-1].type == StackType::MP ? StackType::I : sp[-1].type;
+	StackType type2 =
+		sp[-2].type == StackType::O || sp[-2].type == StackType::MP ? StackType::I : sp[-2].type;
 	CHECK_STACK (2);
 
 	if (type1 == StackType::I4 && type2 == StackType::I8) {
@@ -273,9 +279,8 @@ TransformData::two_arg_branch (int mint_op, int offset, int inst_size)
 	} else if (type1 == StackType::R8 && type2 == StackType::R4) {
 		interp_add_conv (sp - 2, last_ins, StackType::R8, MINT_CONV_R8_R4);
 	} else if (type1 != type2) {
-		g_warning("%s.%s: branch type mismatch %d %d", 
-			m_class_get_name (method->klass), method->name,
-			(int) sp [-1].type, (int) sp [-2].type);
+		g_warning ("%s.%s: branch type mismatch %d %d", m_class_get_name (method->klass),
+		           method->name, (int) sp[-1].type, (int) sp[-2].type);
 	}
 
 	int long_op = op_for_stack_type (mint_op, type1);
@@ -283,7 +288,7 @@ TransformData::two_arg_branch (int mint_op, int offset, int inst_size)
 	sp -= 2;
 	if (offset) {
 		handle_branch (short_op, long_op, offset + inst_size);
-		interp_ins_set_sregs2 (last_ins, sp [0].local, sp [1].local);
+		interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
 	} else {
 		interp_add_ins (MINT_NOP);
 	}
@@ -292,20 +297,20 @@ TransformData::two_arg_branch (int mint_op, int offset, int inst_size)
 void
 TransformData::unary_arith_op (int mint_op)
 {
-	int op = op_for_stack_type (mint_op, sp [-1].type);
+	int op = op_for_stack_type (mint_op, sp[-1].type);
 	CHECK_STACK (1);
 	sp--;
 	interp_add_ins (op);
-	interp_ins_set_sreg (last_ins, sp [0].local);
-	push_simple_type (sp [0].type);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_sreg (last_ins, sp[0].local);
+	push_simple_type (sp[0].type);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 }
 
 void
 TransformData::binary_arith_op (int mint_op)
 {
-	StackType type1 = sp [-2].type;
-	StackType type2 = sp [-1].type;
+	StackType type1 = sp[-2].type;
+	StackType type2 = sp[-1].type;
 	int op;
 #if SIZEOF_VOID_P == 8
 	if ((type1 == StackType::MP || type1 == StackType::I8) && type2 == StackType::I4) {
@@ -330,34 +335,32 @@ TransformData::binary_arith_op (int mint_op)
 	if (type2 == StackType::MP)
 		type2 = StackType::I;
 	if (type1 != type2) {
-		g_warning("%s.%s: %04x arith type mismatch %s %d %d", 
-			m_class_get_name (method->klass), method->name,
-			ip - il_code, opname (mint_op), type1, type2);
+		g_warning ("%s.%s: %04x arith type mismatch %s %d %d", m_class_get_name (method->klass),
+		           method->name, ip - il_code, opname (mint_op), type1, type2);
 	}
 	op = op_for_stack_type (mint_op, type1);
 	CHECK_STACK (2);
 	sp -= 2;
 	interp_add_ins (op);
-	interp_ins_set_sregs2 (last_ins, sp [0].local, sp [1].local);
+	interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
 	push_simple_type (type1);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 }
 
 void
 TransformData::shift_op (int mint_op)
 {
-	int op = op_for_stack_type (mint_op, sp [-2].type);
+	int op = op_for_stack_type (mint_op, sp[-2].type);
 	CHECK_STACK (2);
-	if (sp [-1].type != StackType::I4) {
-		g_warning("%s.%s: shift type mismatch %d", 
-			m_class_get_name (method->klass), method->name,
-			sp [-2].type);
+	if (sp[-1].type != StackType::I4) {
+		g_warning ("%s.%s: shift type mismatch %d", m_class_get_name (method->klass), method->name,
+		           sp[-2].type);
 	}
 	sp -= 2;
 	interp_add_ins (op);
-	interp_ins_set_sregs2 (last_ins, sp [0].local, sp [1].local);
-	push_simple_type (sp [0].type);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
+	push_simple_type (sp[0].type);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 }
 
 void
@@ -368,21 +371,20 @@ TransformData::interp_generate_mae_throw (MonoMethod *method, MonoMethod *target
 	/* Inject code throwing MethodAccessException */
 	interp_add_ins (MINT_MONO_LDPTR);
 	push_simple_type (StackType::I);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
-	last_ins->data [0] = get_data_item_index (method);
-	locals [sp [-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+	interp_ins_set_dreg (last_ins, sp[-1].local);
+	last_ins->data[0] = get_data_item_index (method);
+	locals[sp[-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 
 	interp_add_ins (MINT_MONO_LDPTR);
 	push_simple_type (StackType::I);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
-	last_ins->data [0] = get_data_item_index (target_method);
-	locals [sp [-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+	interp_ins_set_dreg (last_ins, sp[-1].local);
+	last_ins->data[0] = get_data_item_index (target_method);
+	locals[sp[-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 
 	sp -= 2;
 	interp_add_ins (MINT_ICALL_PP_V);
-	interp_ins_set_dreg (last_ins, sp [0].local);
-	last_ins->data [0] = get_data_item_index ((gpointer)info->func);
-
+	interp_ins_set_dreg (last_ins, sp[0].local);
+	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
 }
 
 void
@@ -394,8 +396,8 @@ TransformData::interp_generate_bie_throw ()
 	// Allocate a dummy local to serve as dreg for this instruction
 	push_simple_type (StackType::I4);
 	sp--;
-	interp_ins_set_dreg (last_ins, sp [0].local);
-	last_ins->data [0] = get_data_item_index ((gpointer)info->func);
+	interp_ins_set_dreg (last_ins, sp[0].local);
+	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
 }
 
 void
@@ -407,8 +409,8 @@ TransformData::interp_generate_not_supported_throw ()
 	// Allocate a dummy local to serve as dreg for this instruction
 	push_simple_type (StackType::I4);
 	sp--;
-	interp_ins_set_dreg (last_ins, sp [0].local);
-	last_ins->data [0] = get_data_item_index ((gpointer)info->func);
+	interp_ins_set_dreg (last_ins, sp[0].local);
+	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
 }
 
 void
@@ -420,18 +422,18 @@ TransformData::interp_generate_ipe_throw_with_msg (MonoError *error_msg)
 
 	interp_add_ins (MINT_MONO_LDPTR);
 	push_simple_type (StackType::I);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
-	locals [sp [-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
-	last_ins->data [0] = get_data_item_index (msg);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
+	locals[sp[-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+	last_ins->data[0] = get_data_item_index (msg);
 
 	sp -= 1;
 	interp_add_ins (MINT_ICALL_P_V);
-	interp_ins_set_dreg (last_ins, sp [0].local);
-	last_ins->data [0] = get_data_item_index ((gpointer)info->func);
+	interp_ins_set_dreg (last_ins, sp[0].local);
+	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
 }
 
 MonoMethodHeader *
-interp_method_get_header (MonoMethod* method, MonoError *error)
+interp_method_get_header (MonoMethod *method, MonoError *error)
 {
 	/* An explanation: mono_method_get_header_internal returns an error if
 	 * called on a method with no body (e.g. an abstract method, or an
@@ -453,15 +455,15 @@ TransformData::emit_store_value_as_local (MonoType *src)
 
 	interp_add_ins (MINT_LDLOCA_S);
 	push_simple_type (StackType::MP);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 	interp_ins_set_sreg (last_ins, local);
-	locals [local].indirects++;
+	locals[local].indirects++;
 }
 
 gboolean
 TransformData::interp_ip_in_cbb (int il_offset)
 {
-	InterpBasicBlock *bb = offset_to_bb [il_offset];
+	InterpBasicBlock *bb = offset_to_bb[il_offset];
 
 	return bb == NULL || bb == cbb;
 }
@@ -476,39 +478,71 @@ gint32
 interp_get_const_from_ldc_i4 (InterpInst *ins)
 {
 	switch (ins->opcode) {
-	case MINT_LDC_I4_M1: return -1;
-	case MINT_LDC_I4_0: return 0;
-	case MINT_LDC_I4_1: return 1;
-	case MINT_LDC_I4_2: return 2;
-	case MINT_LDC_I4_3: return 3;
-	case MINT_LDC_I4_4: return 4;
-	case MINT_LDC_I4_5: return 5;
-	case MINT_LDC_I4_6: return 6;
-	case MINT_LDC_I4_7: return 7;
-	case MINT_LDC_I4_8: return 8;
-	case MINT_LDC_I4_S: return (gint32)(gint8)ins->data [0];
-	case MINT_LDC_I4: return READ32 (&ins->data [0]);
+	case MINT_LDC_I4_M1:
+		return -1;
+	case MINT_LDC_I4_0:
+		return 0;
+	case MINT_LDC_I4_1:
+		return 1;
+	case MINT_LDC_I4_2:
+		return 2;
+	case MINT_LDC_I4_3:
+		return 3;
+	case MINT_LDC_I4_4:
+		return 4;
+	case MINT_LDC_I4_5:
+		return 5;
+	case MINT_LDC_I4_6:
+		return 6;
+	case MINT_LDC_I4_7:
+		return 7;
+	case MINT_LDC_I4_8:
+		return 8;
+	case MINT_LDC_I4_S:
+		return (gint32) (gint8) ins->data[0];
+	case MINT_LDC_I4:
+		return READ32 (&ins->data[0]);
 	default:
 		g_assert_not_reached ();
 	}
 }
 
 /* If ins is not null, it will replace it with the ldc */
-InterpInst*
+InterpInst *
 TransformData::interp_get_ldc_i4_from_const (InterpInst *ins, gint32 ct, int dreg)
 {
 	int opcode;
 	switch (ct) {
-	case -1: opcode = MINT_LDC_I4_M1; break;
-	case 0: opcode = MINT_LDC_I4_0; break;
-	case 1: opcode = MINT_LDC_I4_1; break;
-	case 2: opcode = MINT_LDC_I4_2; break;
-	case 3: opcode = MINT_LDC_I4_3; break;
-	case 4: opcode = MINT_LDC_I4_4; break;
-	case 5: opcode = MINT_LDC_I4_5; break;
-	case 6: opcode = MINT_LDC_I4_6; break;
-	case 7: opcode = MINT_LDC_I4_7; break;
-	case 8: opcode = MINT_LDC_I4_8; break;
+	case -1:
+		opcode = MINT_LDC_I4_M1;
+		break;
+	case 0:
+		opcode = MINT_LDC_I4_0;
+		break;
+	case 1:
+		opcode = MINT_LDC_I4_1;
+		break;
+	case 2:
+		opcode = MINT_LDC_I4_2;
+		break;
+	case 3:
+		opcode = MINT_LDC_I4_3;
+		break;
+	case 4:
+		opcode = MINT_LDC_I4_4;
+		break;
+	case 5:
+		opcode = MINT_LDC_I4_5;
+		break;
+	case 6:
+		opcode = MINT_LDC_I4_6;
+		break;
+	case 7:
+		opcode = MINT_LDC_I4_7;
+		break;
+	case 8:
+		opcode = MINT_LDC_I4_8;
+		break;
 	default:
 		if (ct >= -128 && ct <= 127)
 			opcode = MINT_LDC_I4_S;
@@ -533,14 +567,14 @@ TransformData::interp_get_ldc_i4_from_const (InterpInst *ins, gint32 ct, int dre
 	interp_ins_set_dreg (ins, dreg);
 
 	if (new_size == 3)
-		ins->data [0] = (gint8)ct;
+		ins->data[0] = (gint8) ct;
 	else if (new_size == 4)
 		WRITE32_INS (ins, 0, &ct);
 
 	return ins;
 }
 
-InterpInst*
+InterpInst *
 TransformData::interp_inst_replace_with_i8_const (InterpInst *ins, gint64 ct)
 {
 	int size = oplen (ins->opcode);
@@ -562,17 +596,26 @@ int
 interp_get_ldind_for_mt (MintType mt)
 {
 	switch (mt) {
-		case MintType::I1: return MINT_LDIND_I1_CHECK;
-		case MintType::U1: return MINT_LDIND_U1_CHECK;
-		case MintType::I2: return MINT_LDIND_I2_CHECK;
-		case MintType::U2: return MINT_LDIND_U2_CHECK;
-		case MintType::I4: return MINT_LDIND_I4_CHECK;
-		case MintType::I8: return MINT_LDIND_I8_CHECK;
-		case MintType::R4: return MINT_LDIND_R4_CHECK;
-		case MintType::R8: return MINT_LDIND_R8_CHECK;
-		case MintType::O: return MINT_LDIND_REF;
-		default:
-			g_assert_not_reached ();
+	case MintType::I1:
+		return MINT_LDIND_I1_CHECK;
+	case MintType::U1:
+		return MINT_LDIND_U1_CHECK;
+	case MintType::I2:
+		return MINT_LDIND_I2_CHECK;
+	case MintType::U2:
+		return MINT_LDIND_U2_CHECK;
+	case MintType::I4:
+		return MINT_LDIND_I4_CHECK;
+	case MintType::I8:
+		return MINT_LDIND_I8_CHECK;
+	case MintType::R4:
+		return MINT_LDIND_R4_CHECK;
+	case MintType::R8:
+		return MINT_LDIND_R8_CHECK;
+	case MintType::O:
+		return MINT_LDIND_REF;
+	default:
+		g_assert_not_reached ();
 	}
 	return -1;
 }
@@ -588,17 +631,17 @@ TransformData::interp_emit_ldobj (MonoClass *klass)
 		interp_add_ins (MINT_LDOBJ_VT);
 		size = mono_class_value_size (klass, NULL);
 		g_assert (size < G_MAXUINT16);
-		interp_ins_set_sreg (last_ins, sp [0].local);
+		interp_ins_set_sreg (last_ins, sp[0].local);
 		push_type_vt (klass, size);
 	} else {
 		int opcode = interp_get_ldind_for_mt (mt);
 		interp_add_ins (opcode);
-		interp_ins_set_sreg (last_ins, sp [0].local);
+		interp_ins_set_sreg (last_ins, sp[0].local);
 		push_type (stack_type_of (mt), klass);
 	}
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 	if (mt == MintType::VT)
-		last_ins->data [0] = size;
+		last_ins->data[0] = size;
 }
 
 void
@@ -610,39 +653,41 @@ TransformData::interp_emit_stobj (MonoClass *klass)
 
 	if (mt == MintType::VT) {
 		interp_add_ins (MINT_STOBJ_VT);
-		last_ins->data [0] = get_data_item_index (klass);
+		last_ins->data[0] = get_data_item_index (klass);
 	} else {
 		int opcode;
 		switch (mt) {
-			case MintType::I1:
-			case MintType::U1:
-				opcode = MINT_STIND_I1;
-				break;
-			case MintType::I2:
-			case MintType::U2:
-				opcode = MINT_STIND_I2;
-				break;
-			case MintType::I4:
-				opcode = MINT_STIND_I4;
-				break;
-			case MintType::I8:
-				opcode = MINT_STIND_I8;
-				break;
-			case MintType::R4:
-				opcode = MINT_STIND_R4;
-				break;
-			case MintType::R8:
-				opcode = MINT_STIND_R8;
-				break;
-			case MintType::O:
-				opcode = MINT_STIND_REF;
-				break;
-			default: g_assert_not_reached (); break;
+		case MintType::I1:
+		case MintType::U1:
+			opcode = MINT_STIND_I1;
+			break;
+		case MintType::I2:
+		case MintType::U2:
+			opcode = MINT_STIND_I2;
+			break;
+		case MintType::I4:
+			opcode = MINT_STIND_I4;
+			break;
+		case MintType::I8:
+			opcode = MINT_STIND_I8;
+			break;
+		case MintType::R4:
+			opcode = MINT_STIND_R4;
+			break;
+		case MintType::R8:
+			opcode = MINT_STIND_R8;
+			break;
+		case MintType::O:
+			opcode = MINT_STIND_REF;
+			break;
+		default:
+			g_assert_not_reached ();
+			break;
 		}
 		interp_add_ins (opcode);
 	}
 	sp -= 2;
-	interp_ins_set_sregs2 (last_ins, sp [0].local, sp [1].local);
+	interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
 }
 
 void
@@ -653,39 +698,40 @@ TransformData::interp_emit_ldelema (MonoClass *array_class, MonoClass *check_cla
 	int size = mono_class_array_element_size (element_class);
 	gboolean call_args = FALSE;
 
-	gboolean bounded = m_class_get_byval_arg (array_class) ? m_class_get_byval_arg (array_class)->type == MONO_TYPE_ARRAY : FALSE;
+	gboolean bounded = m_class_get_byval_arg (array_class)
+	                       ? m_class_get_byval_arg (array_class)->type == MONO_TYPE_ARRAY
+	                       : FALSE;
 
 	sp -= rank + 1;
 	// We only need type checks when writing to array of references
 	if (!check_class || m_class_is_valuetype (element_class)) {
 		if (rank == 1 && !bounded) {
 			interp_add_ins (MINT_LDELEMA1);
-			interp_ins_set_sregs2 (last_ins, sp [0].local, sp [1].local);
+			interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
 			g_assert (size < G_MAXUINT16);
-			last_ins->data [0] = size;
+			last_ins->data[0] = size;
 		} else {
 			interp_add_ins (MINT_LDELEMA);
 			for (int i = 0; i < rank + 1; i++)
-				locals [sp [i].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
-			last_ins->data [0] = rank;
+				locals[sp[i].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+			last_ins->data[0] = rank;
 			g_assert (size < G_MAXUINT16);
-			last_ins->data [1] = size;
+			last_ins->data[1] = size;
 			call_args = TRUE;
 		}
 	} else {
 		interp_add_ins (MINT_LDELEMA_TC);
 		for (int i = 0; i < rank + 1; i++)
-			locals [sp [i].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
-		last_ins->data [0] = get_data_item_index (check_class);
+			locals[sp[i].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+		last_ins->data[0] = get_data_item_index (check_class);
 		call_args = TRUE;
 	}
 
 	push_simple_type (StackType::MP);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 	if (call_args)
-		locals [sp [-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
+		locals[sp[-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 }
-
 
 void
 TransformData::interp_emit_memory_barrier (int kind)
@@ -699,8 +745,6 @@ TransformData::interp_emit_memory_barrier (int kind)
 	interp_add_ins (MINT_MONO_MEMORY_BARRIER);
 #endif
 }
-
-
 
 gboolean
 type_has_references (MonoType *type)
@@ -721,16 +765,16 @@ static int
 get_unaligned_opcode (int opcode)
 {
 	switch (opcode) {
-		case MINT_LDFLD_I8:
-			return MINT_LDFLD_I8_UNALIGNED;
-		case MINT_LDFLD_R8:
-			return MINT_LDFLD_R8_UNALIGNED;
-		case MINT_STFLD_I8:
-			return MINT_STFLD_I8_UNALIGNED;
-		case MINT_STFLD_R8:
-			return MINT_STFLD_R8_UNALIGNED;
-		default:
-			g_assert_not_reached ();
+	case MINT_LDFLD_I8:
+		return MINT_LDFLD_I8_UNALIGNED;
+	case MINT_LDFLD_R8:
+		return MINT_LDFLD_R8_UNALIGNED;
+	case MINT_STFLD_I8:
+		return MINT_STFLD_I8_UNALIGNED;
+	case MINT_STFLD_R8:
+		return MINT_STFLD_R8_UNALIGNED;
+	default:
+		g_assert_not_reached ();
 	}
 	return -1;
 }
@@ -743,7 +787,8 @@ TransformData::interp_handle_isinst (MonoClass *klass, gboolean isinst_instr)
 	if (!mono_class_has_variant_generic_params (klass)) {
 		if (mono_class_is_interface (klass))
 			interp_add_ins (isinst_instr ? MINT_ISINST_INTERFACE : MINT_CASTCLASS_INTERFACE);
-		else if (!mono_class_is_marshalbyref (klass) && m_class_get_rank (klass) == 0 && !mono_class_is_nullable (klass))
+		else if (!mono_class_is_marshalbyref (klass) && m_class_get_rank (klass) == 0
+		         && !mono_class_is_nullable (klass))
 			interp_add_ins (isinst_instr ? MINT_ISINST_COMMON : MINT_CASTCLASS_COMMON);
 		else
 			interp_add_ins (isinst_instr ? MINT_ISINST : MINT_CASTCLASS);
@@ -751,13 +796,13 @@ TransformData::interp_handle_isinst (MonoClass *klass, gboolean isinst_instr)
 		interp_add_ins (isinst_instr ? MINT_ISINST : MINT_CASTCLASS);
 	}
 	sp--;
-	interp_ins_set_sreg (last_ins, sp [0].local);
+	interp_ins_set_sreg (last_ins, sp[0].local);
 	if (isinst_instr)
-		push_type (sp [0].type, sp [0].klass);
+		push_type (sp[0].type, sp[0].klass);
 	else
 		push_type (StackType::O, klass);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
-	last_ins->data [0] = get_data_item_index (klass);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
+	last_ins->data[0] = get_data_item_index (klass);
 
 	ip += 5;
 }
@@ -781,14 +826,15 @@ TransformData::interp_emit_ldsflda (MonoClassField *field, MonoError *error)
 		g_assert (offset);
 
 		interp_add_ins (MINT_LDSSFLDA);
-		interp_ins_set_dreg (last_ins, sp [-1].local);
-		WRITE32_INS(last_ins, 0, &offset);
-		last_ins->data [2] = get_data_item_index (vtable);
+		interp_ins_set_dreg (last_ins, sp[-1].local);
+		WRITE32_INS (last_ins, 0, &offset);
+		last_ins->data[2] = get_data_item_index (vtable);
 	} else {
 		interp_add_ins (MINT_LDSFLDA);
-		interp_ins_set_dreg (last_ins, sp [-1].local);
-		last_ins->data [0] = get_data_item_index (vtable);
-		last_ins->data [1] = get_data_item_index ((char*)mono_vtable_get_static_field_data (vtable) + field->offset);
+		interp_ins_set_dreg (last_ins, sp[-1].local);
+		last_ins->data[0] = get_data_item_index (vtable);
+		last_ins->data[1] = get_data_item_index ((char *) mono_vtable_get_static_field_data (vtable)
+		                                         + field->offset);
 	}
 }
 
@@ -803,35 +849,35 @@ TransformData::interp_emit_load_const (gpointer field_addr, MintType mt)
 		gint32 val;
 		switch (mt) {
 		case MintType::I1:
-			val = *(gint8*)field_addr;
+			val = *(gint8 *) field_addr;
 			break;
 		case MintType::U1:
-			val = *(guint8*)field_addr;
+			val = *(guint8 *) field_addr;
 			break;
 		case MintType::I2:
-			val = *(gint16*)field_addr;
+			val = *(gint16 *) field_addr;
 			break;
 		case MintType::U2:
-			val = *(guint16*)field_addr;
+			val = *(guint16 *) field_addr;
 			break;
 		default:
-			val = *(gint32*)field_addr;
+			val = *(gint32 *) field_addr;
 		}
-		interp_get_ldc_i4_from_const (NULL, val, sp [-1].local);
+		interp_get_ldc_i4_from_const (NULL, val, sp[-1].local);
 	} else if (mt == MintType::I8) {
-		gint64 val = *(gint64*)field_addr;
+		gint64 val = *(gint64 *) field_addr;
 		interp_add_ins (MINT_LDC_I8);
-		interp_ins_set_dreg (last_ins, sp [-1].local);
+		interp_ins_set_dreg (last_ins, sp[-1].local);
 		WRITE64_INS (last_ins, 0, &val);
 	} else if (mt == MintType::R4) {
-		float val = *(float*)field_addr;
+		float val = *(float *) field_addr;
 		interp_add_ins (MINT_LDC_R4);
-		interp_ins_set_dreg (last_ins, sp [-1].local);
+		interp_ins_set_dreg (last_ins, sp[-1].local);
 		WRITE32_INS (last_ins, 0, &val);
 	} else if (mt == MintType::R8) {
-		double val = *(double*)field_addr;
+		double val = *(double *) field_addr;
 		interp_add_ins (MINT_LDC_R8);
-		interp_ins_set_dreg (last_ins, sp [-1].local);
+		interp_ins_set_dreg (last_ins, sp[-1].local);
 		WRITE64_INS (last_ins, 0, &val);
 	} else {
 		// Revert stack
@@ -862,7 +908,8 @@ TransformData::emit_convert (MonoType *ftype)
 }
 
 void
-TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_class, MintType mt, gboolean is_load, MonoError *error)
+TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_class, MintType mt,
+                                        gboolean is_load, MonoError *error)
 {
 	MonoDomain *domain = rtm->domain;
 	// Initialize the offset for the field
@@ -892,16 +939,16 @@ TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_
 			// This field is thread static
 			if (is_load) {
 				interp_add_ins (op_for_mint_type (MINT_LDTSFLD_I1, mt));
-				WRITE32_INS(last_ins, 0, &offset);
+				WRITE32_INS (last_ins, 0, &offset);
 				push_type (stack_type_of (mt), field_class);
-				interp_ins_set_dreg (last_ins, sp [-1].local);
+				interp_ins_set_dreg (last_ins, sp[-1].local);
 			} else {
 				interp_add_ins (op_for_mint_type (MINT_STTSFLD_I1, mt));
-				WRITE32_INS(last_ins, 0, &offset);
+				WRITE32_INS (last_ins, 0, &offset);
 				sp--;
-				interp_ins_set_sreg (last_ins, sp [0].local);
+				interp_ins_set_sreg (last_ins, sp[0].local);
 			}
-			last_ins->data [2] = vtable_index;
+			last_ins->data[2] = vtable_index;
 		} else {
 			if (mt == MintType::VT) {
 				int size = mono_class_value_size (field_class, NULL);
@@ -909,32 +956,32 @@ TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_
 				if (is_load) {
 					interp_add_ins (MINT_LDSSFLD_VT);
 					push_type_vt (field_class, size);
-					interp_ins_set_dreg (last_ins, sp [-1].local);
+					interp_ins_set_dreg (last_ins, sp[-1].local);
 				} else {
 					interp_add_ins (MINT_STSSFLD_VT);
 					sp--;
-					interp_ins_set_sreg (last_ins, sp [0].local);
+					interp_ins_set_sreg (last_ins, sp[0].local);
 				}
-				WRITE32_INS(last_ins, 0, &offset);
-				last_ins->data [2] = size;
-				last_ins->data [3] = vtable_index;
+				WRITE32_INS (last_ins, 0, &offset);
+				last_ins->data[2] = size;
+				last_ins->data[3] = vtable_index;
 			} else {
 				if (is_load) {
 					interp_add_ins (MINT_LDSSFLD);
 					push_type (stack_type_of (mt), field_class);
-					interp_ins_set_dreg (last_ins, sp [-1].local);
+					interp_ins_set_dreg (last_ins, sp[-1].local);
 				} else {
 					interp_add_ins (MINT_STSSFLD);
 					sp--;
-					interp_ins_set_sreg (last_ins, sp [0].local);
+					interp_ins_set_sreg (last_ins, sp[0].local);
 				}
-				last_ins->data [0] = get_data_item_index (field);
-				WRITE32_INS(last_ins, 1, &offset);
-				last_ins->data [3] = vtable_index;
+				last_ins->data[0] = get_data_item_index (field);
+				WRITE32_INS (last_ins, 1, &offset);
+				last_ins->data[3] = vtable_index;
 			}
 		}
 	} else {
-		gpointer field_addr = (char*)mono_vtable_get_static_field_data (vtable) + field->offset;
+		gpointer field_addr = (char *) mono_vtable_get_static_field_data (vtable) + field->offset;
 		int size = 0;
 		if (mt == MintType::VT)
 			size = mono_class_value_size (field_class, NULL);
@@ -951,18 +998,18 @@ TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_
 				interp_add_ins (op_for_mint_type (MINT_LDSFLD_I1, mt));
 				push_type (stack_type_of (mt), field_class);
 			}
-			interp_ins_set_dreg (last_ins, sp [-1].local);
+			interp_ins_set_dreg (last_ins, sp[-1].local);
 		} else {
-			interp_add_ins ((mt == MintType::VT) ? MINT_STSFLD_VT : op_for_mint_type (MINT_STSFLD_I1, mt));
+			interp_add_ins ((mt == MintType::VT) ? MINT_STSFLD_VT
+			                                     : op_for_mint_type (MINT_STSFLD_I1, mt));
 			sp--;
-			interp_ins_set_sreg (last_ins, sp [0].local);
+			interp_ins_set_sreg (last_ins, sp[0].local);
 		}
 
-		last_ins->data [0] = get_data_item_index (vtable);
-		last_ins->data [1] = get_data_item_index ((char*)field_addr);
+		last_ins->data[0] = get_data_item_index (vtable);
+		last_ins->data[1] = get_data_item_index ((char *) field_addr);
 		if (mt == MintType::VT)
-			last_ins->data [2] = size;
-
+			last_ins->data[2] = size;
 	}
 }
 
@@ -973,23 +1020,23 @@ TransformData::initialize_clause_bblocks ()
 	int i;
 
 	for (i = 0; i < header->code_size; i++)
-		clause_indexes [i] = -1;
+		clause_indexes[i] = -1;
 
 	for (i = 0; i < header->num_clauses; i++) {
 		MonoExceptionClause *c = header->clauses + i;
 		InterpBasicBlock *bb;
 
 		for (int j = c->handler_offset; j < c->handler_offset + c->handler_len; j++) {
-			if (clause_indexes [j] == -1)
-				clause_indexes [j] = i;
+			if (clause_indexes[j] == -1)
+				clause_indexes[j] = i;
 		}
 
-		bb = offset_to_bb [c->try_offset];
+		bb = offset_to_bb[c->try_offset];
 		g_assert (bb);
 		bb->eh_block = TRUE;
 
 		/* We never inline methods with clauses, so we can hard code stack heights */
-		bb = offset_to_bb [c->handler_offset];
+		bb = offset_to_bb[c->handler_offset];
 		g_assert (bb);
 		bb->eh_block = TRUE;
 
@@ -998,24 +1045,26 @@ TransformData::initialize_clause_bblocks ()
 		} else {
 			bb->stack_height = 1;
 			bb->stack_state = arena.create<StackInfo> ();
-			bb->stack_state [0].type = StackType::O;
-			bb->stack_state [0].klass = NULL; /*FIX*/
-			bb->stack_state [0].size = MINT_STACK_SLOT_SIZE;
-			bb->stack_state [0].offset = 0;
-			bb->stack_state [0].local = create_interp_stack_local (StackType::O, NULL, MINT_STACK_SLOT_SIZE, 0);
+			bb->stack_state[0].type = StackType::O;
+			bb->stack_state[0].klass = NULL; /*FIX*/
+			bb->stack_state[0].size = MINT_STACK_SLOT_SIZE;
+			bb->stack_state[0].offset = 0;
+			bb->stack_state[0].local =
+				create_interp_stack_local (StackType::O, NULL, MINT_STACK_SLOT_SIZE, 0);
 		}
 
 		if (c->flags == MONO_EXCEPTION_CLAUSE_FILTER) {
-			bb = offset_to_bb [c->data.filter_offset];
+			bb = offset_to_bb[c->data.filter_offset];
 			g_assert (bb);
 			bb->eh_block = TRUE;
 			bb->stack_height = 1;
 			bb->stack_state = arena.create<StackInfo> ();
-			bb->stack_state [0].type = StackType::O;
-			bb->stack_state [0].klass = NULL; /*FIX*/
-			bb->stack_state [0].size = MINT_STACK_SLOT_SIZE;
-			bb->stack_state [0].offset = 0;
-			bb->stack_state [0].local = create_interp_stack_local (StackType::O, NULL, MINT_STACK_SLOT_SIZE, 0);
+			bb->stack_state[0].type = StackType::O;
+			bb->stack_state[0].klass = NULL; /*FIX*/
+			bb->stack_state[0].size = MINT_STACK_SLOT_SIZE;
+			bb->stack_state[0].offset = 0;
+			bb->stack_state[0].local =
+				create_interp_stack_local (StackType::O, NULL, MINT_STACK_SLOT_SIZE, 0);
 		} else if (c->flags == MONO_EXCEPTION_CLAUSE_NONE) {
 			/*
 			 * JIT doesn't emit sdb seq intr point at the start of catch clause, probably
@@ -1025,7 +1074,6 @@ TransformData::initialize_clause_bblocks ()
 			interp_insert_ins_bb (bb, NULL, MINT_NOP);
 		}
 	}
-
 }
 
 void
@@ -1034,9 +1082,9 @@ TransformData::handle_ldind (int op, StackType type, gboolean *volatile_)
 	CHECK_STACK (1);
 	interp_add_ins (op);
 	sp--;
-	interp_ins_set_sreg (last_ins, sp [0].local);
+	interp_ins_set_sreg (last_ins, sp[0].local);
 	push_simple_type (type);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 
 	if (*volatile_) {
 		interp_emit_memory_barrier (MONO_MEMORY_BARRIER_ACQ);
@@ -1061,7 +1109,7 @@ TransformData::handle_stind (int op, gboolean *volatile_)
 	}
 	interp_add_ins (op);
 	sp -= 2;
-	interp_ins_set_sregs2 (last_ins, sp [0].local, sp [1].local);
+	interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
 
 	++ip;
 }
@@ -1073,9 +1121,9 @@ TransformData::handle_ldelem (int op, StackType type)
 	narrow_index (sp - 1);
 	interp_add_ins (op);
 	sp -= 2;
-	interp_ins_set_sregs2 (last_ins, sp [0].local, sp [1].local);
+	interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
 	push_simple_type (type);
-	interp_ins_set_dreg (last_ins, sp [-1].local);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
 	++ip;
 }
 
@@ -1092,7 +1140,7 @@ TransformData::handle_stelem (int op)
 	narrow_index (sp - 2);
 	interp_add_ins (op);
 	sp -= 3;
-	interp_ins_set_sregs3 (last_ins, sp [0].local, sp [1].local, sp [2].local);
+	interp_ins_set_sregs3 (last_ins, sp[0].local, sp[1].local, sp[2].local);
 	++ip;
 }
 

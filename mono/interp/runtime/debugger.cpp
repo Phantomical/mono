@@ -19,7 +19,8 @@
 namespace mono::interp {
 
 void
-interp_frame_arg_to_data (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index, gpointer data)
+interp_frame_arg_to_data (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index,
+                          gpointer data)
 {
 	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 	InterpMethod *imethod = iframe->imethod;
@@ -30,11 +31,14 @@ interp_frame_arg_to_data (MonoInterpFrameHandle frame, MonoMethodSignature *sig,
 	else if (sig->hasthis && index == 0)
 		*static_cast<gpointer *> (data) = iframe->stack->data.p;
 	else
-		stackval_to_data (sig->params [index - sig->hasthis], STACK_ADD_BYTES (iframe->stack, get_arg_offset (imethod, sig, index)), data, sig->pinvoke);
+		stackval_to_data (sig->params[index - sig->hasthis],
+		                  STACK_ADD_BYTES (iframe->stack, get_arg_offset (imethod, sig, index)),
+		                  data, sig->pinvoke);
 }
 
 void
-interp_data_to_frame_arg (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index, gconstpointer data)
+interp_data_to_frame_arg (MonoInterpFrameHandle frame, MonoMethodSignature *sig, int index,
+                          gconstpointer data)
 {
 	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 	InterpMethod *imethod = iframe->imethod;
@@ -45,7 +49,9 @@ interp_data_to_frame_arg (MonoInterpFrameHandle frame, MonoMethodSignature *sig,
 	else if (sig->hasthis && index == 0)
 		iframe->stack->data.p = *static_cast<gpointer const *> (data);
 	else
-		stackval_from_data (sig->params [index - sig->hasthis], STACK_ADD_BYTES (iframe->stack, get_arg_offset (imethod, sig, index)), data, sig->pinvoke);
+		stackval_from_data (sig->params[index - sig->hasthis],
+		                    STACK_ADD_BYTES (iframe->stack, get_arg_offset (imethod, sig, index)),
+		                    data, sig->pinvoke);
 }
 
 gpointer
@@ -60,7 +66,7 @@ interp_frame_arg_to_storage (MonoInterpFrameHandle frame, MonoMethodSignature *s
 		return STACK_ADD_BYTES (iframe->stack, get_arg_offset (imethod, sig, index));
 }
 
-static const guint8*
+static const guint8 *
 decode_uleb128 (const guint8 *p, guint32 *out)
 {
 	guint32 value = 0;
@@ -148,10 +154,10 @@ interp_frame_il_offset (MonoInterpFrameHandle frame, int native_offset)
 	return imethod_il_offset (iframe ? iframe->imethod : NULL, native_offset);
 }
 
-MonoJitInfo*
+MonoJitInfo *
 interp_find_jit_info (MonoDomain *domain, MonoMethod *method)
 {
-	InterpMethod* imethod;
+	InterpMethod *imethod;
 
 	imethod = lookup_imethod (domain, method);
 	if (imethod)
@@ -176,7 +182,7 @@ interp_clear_breakpoint (MonoJitInfo *jinfo, gpointer ip)
 	*code = MINT_SDB_SEQ_POINT;
 }
 
-MonoJitInfo*
+MonoJitInfo *
 interp_frame_get_jit_info (MonoInterpFrameHandle frame)
 {
 	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
@@ -192,7 +198,8 @@ interp_frame_get_arg (MonoInterpFrameHandle frame, int pos)
 
 	g_assert (iframe->imethod);
 
-	return reinterpret_cast<char *> (iframe->stack) + get_arg_offset_fast (iframe->imethod, pos + iframe->imethod->hasthis);
+	return reinterpret_cast<char *> (iframe->stack)
+	       + get_arg_offset_fast (iframe->imethod, pos + iframe->imethod->hasthis);
 }
 
 gpointer
@@ -202,7 +209,7 @@ interp_frame_get_local (MonoInterpFrameHandle frame, int pos)
 
 	g_assert (iframe->imethod);
 
-	return frame_locals (iframe) + iframe->imethod->local_offsets [pos];
+	return frame_locals (iframe) + iframe->imethod->local_offsets[pos];
 }
 
 gpointer

@@ -30,23 +30,23 @@ TransformData::handle_relocations ()
 
 		switch (reloc->type) {
 		case RELOC_SHORT_BRANCH:
-			g_assert (new_code [reloc->offset + reloc->skip + 1] == 0xdead);
-			new_code [reloc->offset + reloc->skip + 1] = offset;
+			g_assert (new_code[reloc->offset + reloc->skip + 1] == 0xdead);
+			new_code[reloc->offset + reloc->skip + 1] = offset;
 			break;
 		case RELOC_LONG_BRANCH: {
 			guint16 *v = (guint16 *) &offset;
-			g_assert (new_code [reloc->offset + reloc->skip + 1] == 0xdead);
-			g_assert (new_code [reloc->offset + reloc->skip + 2] == 0xbeef);
-			new_code [reloc->offset + reloc->skip + 1] = *(guint16 *) v;
-			new_code [reloc->offset + reloc->skip + 2] = *(guint16 *) (v + 1);
+			g_assert (new_code[reloc->offset + reloc->skip + 1] == 0xdead);
+			g_assert (new_code[reloc->offset + reloc->skip + 2] == 0xbeef);
+			new_code[reloc->offset + reloc->skip + 1] = *(guint16 *) v;
+			new_code[reloc->offset + reloc->skip + 2] = *(guint16 *) (v + 1);
 			break;
 		}
 		case RELOC_SWITCH: {
-			guint16 *v = (guint16*)&offset;
-			g_assert (new_code [reloc->offset] == 0xdead);
-			g_assert (new_code [reloc->offset + 1] == 0xbeef);
-			new_code [reloc->offset] = *(guint16*)v;
-			new_code [reloc->offset + 1] = *(guint16*)(v + 1);
+			guint16 *v = (guint16 *) &offset;
+			g_assert (new_code[reloc->offset] == 0xdead);
+			g_assert (new_code[reloc->offset + 1] == 0xbeef);
+			new_code[reloc->offset] = *(guint16 *) v;
+			new_code[reloc->offset + 1] = *(guint16 *) (v + 1);
 			break;
 		}
 		default:
@@ -60,27 +60,25 @@ static int
 get_inst_length (InterpInst *ins)
 {
 	if (ins->opcode == MINT_SWITCH)
-		return MINT_SWITCH_LEN (READ32 (&ins->data [0]));
+		return MINT_SWITCH_LEN (READ32 (&ins->data[0]));
 	else
 		return oplen (ins->opcode);
 }
 
-
-guint16*
-TransformData::emit_compacted_instruction (guint16* start_ip, InterpBasicBlock *bb,
-                            InterpInst *ins)
+guint16 *
+TransformData::emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *bb, InterpInst *ins)
 {
 	guint16 opcode = ins->opcode;
 	guint16 *ip = start_ip;
 
 	// We know what IL offset this instruction was created for. We can now map the IL offset
 	// to the IR offset. We use this array to resolve the relocations, which reference the IL.
-	if (ins->il_offset != -1 && !in_offsets [ins->il_offset]) {
+	if (ins->il_offset != -1 && !in_offsets[ins->il_offset]) {
 		g_assert (ins->il_offset >= 0 && ins->il_offset < header->code_size);
-		in_offsets [ins->il_offset] = start_ip - new_code + 1;
+		in_offsets[ins->il_offset] = start_ip - new_code + 1;
 
 		MonoDebugLineNumberEntry lne;
-		lne.native_offset = (guint8*)start_ip - (guint8*)new_code;
+		lne.native_offset = (guint8 *) start_ip - (guint8 *) new_code;
 		lne.il_offset = ins->il_offset;
 		line_numbers.push_back (lne);
 	}
@@ -90,27 +88,28 @@ TransformData::emit_compacted_instruction (guint16* start_ip, InterpBasicBlock *
 
 	*ip++ = opcode;
 	if (opcode == MINT_SWITCH) {
-		int labels = READ32 (&ins->data [0]);
-		*ip++ = get_interp_local_offset (ins->sregs [0], TRUE);
+		int labels = READ32 (&ins->data[0]);
+		*ip++ = get_interp_local_offset (ins->sregs[0], TRUE);
 		// Write number of switch labels
-		*ip++ = ins->data [0];
-		*ip++ = ins->data [1];
+		*ip++ = ins->data[0];
+		*ip++ = ins->data[1];
 		// Add relocation for each label
 		for (int i = 0; i < labels; i++) {
 			Reloc *reloc = arena.create<Reloc> ();
 			reloc->type = RELOC_SWITCH;
 			reloc->offset = ip - new_code;
-			reloc->target_bb = ins->info.target_bb_table [i];
+			reloc->target_bb = ins->info.target_bb_table[i];
 			relocs.push_back (reloc);
 			*ip++ = 0xdead;
 			*ip++ = 0xbeef;
 		}
-	} else if ((opcode >= MINT_BRFALSE_I4_S && opcode <= MINT_BRTRUE_R8_S) ||
-			(opcode >= MINT_BEQ_I4_S && opcode <= MINT_BLT_UN_R8_S) ||
-			opcode == MINT_BR_S || opcode == MINT_LEAVE_S || opcode == MINT_LEAVE_S_CHECK || opcode == MINT_CALL_HANDLER_S) {
+	} else if ((opcode >= MINT_BRFALSE_I4_S && opcode <= MINT_BRTRUE_R8_S)
+	           || (opcode >= MINT_BEQ_I4_S && opcode <= MINT_BLT_UN_R8_S) || opcode == MINT_BR_S
+	           || opcode == MINT_LEAVE_S || opcode == MINT_LEAVE_S_CHECK
+	           || opcode == MINT_CALL_HANDLER_S) {
 		const int br_offset = start_ip - new_code;
 		for (int i = 0; i < num_sregs (opcode); i++)
-			*ip++ = get_interp_local_offset (ins->sregs [i], TRUE);
+			*ip++ = get_interp_local_offset (ins->sregs[i], TRUE);
 		if (ins->info.target_bb->native_offset >= 0) {
 			// Backwards branch. We can already patch it.
 			*ip++ = ins->info.target_bb->native_offset - br_offset;
@@ -125,13 +124,14 @@ TransformData::emit_compacted_instruction (guint16* start_ip, InterpBasicBlock *
 			*ip++ = 0xdead;
 		}
 		if (opcode == MINT_CALL_HANDLER_S)
-			*ip++ = ins->data [1];
-	} else if ((opcode >= MINT_BRFALSE_I4 && opcode <= MINT_BRTRUE_R8) ||
-			(opcode >= MINT_BEQ_I4 && opcode <= MINT_BLT_UN_R8) ||
-			opcode == MINT_BR || opcode == MINT_LEAVE || opcode == MINT_LEAVE_CHECK || opcode == MINT_CALL_HANDLER) {
+			*ip++ = ins->data[1];
+	} else if ((opcode >= MINT_BRFALSE_I4 && opcode <= MINT_BRTRUE_R8)
+	           || (opcode >= MINT_BEQ_I4 && opcode <= MINT_BLT_UN_R8) || opcode == MINT_BR
+	           || opcode == MINT_LEAVE || opcode == MINT_LEAVE_CHECK
+	           || opcode == MINT_CALL_HANDLER) {
 		const int br_offset = start_ip - new_code;
 		for (int i = 0; i < num_sregs (opcode); i++)
-			*ip++ = get_interp_local_offset (ins->sregs [i], TRUE);
+			*ip++ = get_interp_local_offset (ins->sregs[i], TRUE);
 		if (ins->info.target_bb->native_offset >= 0) {
 			// Backwards branch. We can already patch it
 			int target_offset = ins->info.target_bb->native_offset - br_offset;
@@ -147,7 +147,7 @@ TransformData::emit_compacted_instruction (guint16* start_ip, InterpBasicBlock *
 			*ip++ = 0xbeef;
 		}
 		if (opcode == MINT_CALL_HANDLER)
-			*ip++ = ins->data [2];
+			*ip++ = ins->data[2];
 	} else if (opcode == MINT_SDB_SEQ_POINT) {
 		SeqPoint *seqp = arena.create<SeqPoint> ();
 
@@ -158,7 +158,7 @@ TransformData::emit_compacted_instruction (guint16* start_ip, InterpBasicBlock *
 		else
 			seqp->il_offset = ins->il_offset;
 
-		seqp->native_offset = (guint8*)start_ip - (guint8*)new_code;
+		seqp->native_offset = (guint8 *) start_ip - (guint8 *) new_code;
 		if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_NONEMPTY_STACK)
 			seqp->flags |= MONO_SEQ_POINT_FLAG_NONEMPTY_STACK;
 		if (ins->flags & INTERP_INST_FLAG_SEQ_POINT_NESTED_CALL)
@@ -179,16 +179,16 @@ TransformData::emit_compacted_instruction (guint16* start_ip, InterpBasicBlock *
 
 		if (num_sregs (opcode)) {
 			for (int i = 0; i < num_sregs (opcode); i++)
-				*ip++ = get_interp_local_offset (ins->sregs [i], TRUE);
+				*ip++ = get_interp_local_offset (ins->sregs[i], TRUE);
 		} else if (opcode == MINT_LDLOCA_S) {
 			// This opcode receives a local but it is not viewed as a sreg since we don't load the value
-			*ip++ = get_interp_local_offset (ins->sregs [0], TRUE);
+			*ip++ = get_interp_local_offset (ins->sregs[0], TRUE);
 		}
 
 		int left = get_inst_length (ins) - (ip - start_ip);
 		// Emit the rest of the data
 		for (int i = 0; i < left; i++)
-			*ip++ = ins->data [i];
+			*ip++ = ins->data[i];
 	}
 	mono_interp_stats.emitted_instructions++;
 	return ip;
@@ -200,10 +200,10 @@ TransformData::alloc_ins_locals (InterpInst *ins)
 	int opcode = ins->opcode;
 	if (num_sregs (opcode)) {
 		for (int i = 0; i < num_sregs (opcode); i++)
-			get_interp_local_offset (ins->sregs [i], FALSE);
+			get_interp_local_offset (ins->sregs[i], FALSE);
 	} else if (opcode == MINT_LDLOCA_S) {
 		// This opcode receives a local but it is not viewed as a sreg since we don't load the value
-		get_interp_local_offset (ins->sregs [0], FALSE);
+		get_interp_local_offset (ins->sregs[0], FALSE);
 	}
 
 	if (num_dregs (opcode))
@@ -226,7 +226,7 @@ TransformData::generate_compacted_code ()
 	}
 
 	// Generate the compacted stream of instructions
-	new_code = ip = (guint16*)mono_mem_manager_alloc0 (mem_manager, size * sizeof (guint16));
+	new_code = ip = (guint16 *) mono_mem_manager_alloc0 (mem_manager, size * sizeof (guint16));
 
 	for (InterpBasicBlock *bb : blocks_from (entry_bb)) {
 		bb->native_offset = ip - new_code;
@@ -234,7 +234,7 @@ TransformData::generate_compacted_code ()
 			ip = emit_compacted_instruction (ip, bb, ins);
 	}
 	new_code_end = ip;
-	in_offsets [header->code_size] = new_code_end - new_code;
+	in_offsets[header->code_size] = new_code_end - new_code;
 
 	// Patch all branches. This might be useless since we iterate once anyway to compute the size
 	// of the generated code. We could compute the native offset of each basic block then.

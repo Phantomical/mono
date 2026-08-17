@@ -22,7 +22,8 @@ MONO_INTERP_OP_IMPL (MINT_CALLRUN)
 	auto target_method = static_cast<MonoMethod *> (frame->imethod->data_items[ip[2]]);
 	auto sig = static_cast<MonoMethodSignature *> (frame->imethod->data_items[ip[3]]);
 
-	if (MonoException *ex = ves_imethod (frame, target_method, sig, reinterpret_cast<stackval *> ((locals + ip[1]))))
+	if (MonoException *ex = ves_imethod (frame, target_method, sig,
+	                                     reinterpret_cast<stackval *> ((locals + ip[1]))))
 		THROW_EX (ex, ip);
 #else
 	g_assert_not_reached ();
@@ -63,18 +64,18 @@ MONO_INTERP_OP_IMPL (MINT_INIT_ARGLIST)
  * An icall with no wrapper. The opcode names the arity and whether a value comes
  * back, which is what picks the prototype the target is called through.
  */
-#define IMPL_ICALL(opcode)                                                       \
-	MONO_INTERP_OP_IMPL (opcode)                                                 \
-	{                                                                            \
-		/* for calls, have ip pointing at the start of next instruction */       \
-		frame->state.ip = ip + 3;                                                \
+#define IMPL_ICALL(opcode)                                                                       \
+	MONO_INTERP_OP_IMPL (opcode)                                                                 \
+	{                                                                                            \
+		/* for calls, have ip pointing at the start of next instruction */                       \
+		frame->state.ip = ip + 3;                                                                \
 		do_icall_wrapper (frame, nullptr, opcode, reinterpret_cast<stackval *> (locals + ip[1]), \
-		                  frame->imethod->data_items[ip[2]], FALSE);             \
-		EXCEPTION_CHECKPOINT_GC_UNSAFE;                                          \
-		CHECK_RESUME_STATE (context);                                            \
-                                                                                 \
-		MONO_INTERP_OP_ADVANCE ();                                               \
-		MONO_INTERP_DISPATCH ();                                                 \
+		                  frame->imethod->data_items[ip[2]], FALSE);                             \
+		EXCEPTION_CHECKPOINT_GC_UNSAFE;                                                          \
+		CHECK_RESUME_STATE (context);                                                            \
+                                                                                                 \
+		MONO_INTERP_OP_ADVANCE ();                                                               \
+		MONO_INTERP_DISPATCH ();                                                                 \
 	}
 
 IMPL_ICALL (MINT_ICALL_V_V);

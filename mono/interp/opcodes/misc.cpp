@@ -70,8 +70,8 @@ MONO_INTERP_OP_IMPL (MINT_CKNULL)
 MONO_INTERP_OP_IMPL (MINT_LOCALLOC)
 {
 	int len = LOCAL_VAR (ip[2], gint32);
-	gpointer mem = frame_data_allocator_alloc (&context->data_stack, frame,
-	                                           ALIGN_TO (len, MINT_VT_ALIGNMENT));
+	gpointer mem =
+		frame_data_allocator_alloc (&context->data_stack, frame, ALIGN_TO (len, MINT_VT_ALIGNMENT));
 
 	if (frame->imethod->init_locals)
 		std::memset (mem, 0, len);

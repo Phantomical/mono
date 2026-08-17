@@ -20,8 +20,9 @@
 
 namespace mono::interp {
 
-static MonoException*
-ves_array_get (InterpFrame *frame, stackval *sp, stackval *retval, MonoMethodSignature *sig, gboolean safe)
+static MonoException *
+ves_array_get (InterpFrame *frame, stackval *sp, stackval *retval, MonoMethodSignature *sig,
+               gboolean safe)
 {
 	MonoObject *o = sp->data.o;
 	MonoArray *ao = reinterpret_cast<MonoArray *> (o);
@@ -42,7 +43,7 @@ ves_array_get (InterpFrame *frame, stackval *sp, stackval *retval, MonoMethodSig
 }
 
 #ifndef ENABLE_NETCORE
-MONO_NEVER_INLINE MonoException*
+MONO_NEVER_INLINE MonoException *
 ves_imethod (InterpFrame *frame, MonoMethod *method, MonoMethodSignature *sig, stackval *sp)
 {
 	const char *name = method->name;
@@ -57,10 +58,10 @@ ves_imethod (InterpFrame *frame, MonoMethod *method, MonoMethodSignature *sig, s
 		if (!strcmp (name, "UnsafeLoad"))
 			return ves_array_get (frame, sp, sp, sig, FALSE);
 	}
-	
-	g_error ("Don't know how to exec runtime method %s.%s::%s", 
-			m_class_get_name_space (method->klass), m_class_get_name (method->klass),
-			method->name);
+
+	g_error ("Don't know how to exec runtime method %s.%s::%s",
+	         m_class_get_name_space (method->klass), m_class_get_name (method->klass),
+	         method->name);
 }
 #endif
 
@@ -74,87 +75,88 @@ do_icall (MonoMethodSignature *sig, int op, stackval *sp, gpointer ptr, gboolean
 
 	switch (op) {
 	case MINT_ICALL_V_V: {
-		typedef void (*T)(void);
-		T func = (T)ptr;
-        	func ();
+		typedef void (*T) (void);
+		T func = (T) ptr;
+		func ();
 		break;
 	}
 	case MINT_ICALL_V_P: {
-		typedef gpointer (*T)(void);
-		T func = (T)ptr;
-		sp [0].data.p = func ();
+		typedef gpointer (*T) (void);
+		T func = (T) ptr;
+		sp[0].data.p = func ();
 		break;
 	}
 	case MINT_ICALL_P_V: {
-		typedef void (*T)(gpointer);
-		T func = (T)ptr;
-		func (sp [0].data.p);
+		typedef void (*T) (gpointer);
+		T func = (T) ptr;
+		func (sp[0].data.p);
 		break;
 	}
 	case MINT_ICALL_P_P: {
-		typedef gpointer (*T)(gpointer);
-		T func = (T)ptr;
-		sp [0].data.p = func (sp [0].data.p);
+		typedef gpointer (*T) (gpointer);
+		T func = (T) ptr;
+		sp[0].data.p = func (sp[0].data.p);
 		break;
 	}
 	case MINT_ICALL_PP_V: {
-		typedef void (*T)(gpointer,gpointer);
-		T func = (T)ptr;
-		func (sp [0].data.p, sp [1].data.p);
+		typedef void (*T) (gpointer, gpointer);
+		T func = (T) ptr;
+		func (sp[0].data.p, sp[1].data.p);
 		break;
 	}
 	case MINT_ICALL_PP_P: {
-		typedef gpointer (*T)(gpointer,gpointer);
-		T func = (T)ptr;
-		sp [0].data.p = func (sp [0].data.p, sp [1].data.p);
+		typedef gpointer (*T) (gpointer, gpointer);
+		T func = (T) ptr;
+		sp[0].data.p = func (sp[0].data.p, sp[1].data.p);
 		break;
 	}
 	case MINT_ICALL_PPP_V: {
-		typedef void (*T)(gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		func (sp [0].data.p, sp [1].data.p, sp [2].data.p);
+		typedef void (*T) (gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		func (sp[0].data.p, sp[1].data.p, sp[2].data.p);
 		break;
 	}
 	case MINT_ICALL_PPP_P: {
-		typedef gpointer (*T)(gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		sp [0].data.p = func (sp [0].data.p, sp [1].data.p, sp [2].data.p);
+		typedef gpointer (*T) (gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		sp[0].data.p = func (sp[0].data.p, sp[1].data.p, sp[2].data.p);
 		break;
 	}
 	case MINT_ICALL_PPPP_V: {
-		typedef void (*T)(gpointer,gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		func (sp [0].data.p, sp [1].data.p, sp [2].data.p, sp [3].data.p);
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		func (sp[0].data.p, sp[1].data.p, sp[2].data.p, sp[3].data.p);
 		break;
 	}
 	case MINT_ICALL_PPPP_P: {
-		typedef gpointer (*T)(gpointer,gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		sp [0].data.p = func (sp [0].data.p, sp [1].data.p, sp [2].data.p, sp [3].data.p);
+		typedef gpointer (*T) (gpointer, gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		sp[0].data.p = func (sp[0].data.p, sp[1].data.p, sp[2].data.p, sp[3].data.p);
 		break;
 	}
 	case MINT_ICALL_PPPPP_V: {
-		typedef void (*T)(gpointer,gpointer,gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		func (sp [0].data.p, sp [1].data.p, sp [2].data.p, sp [3].data.p, sp [4].data.p);
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		func (sp[0].data.p, sp[1].data.p, sp[2].data.p, sp[3].data.p, sp[4].data.p);
 		break;
 	}
 	case MINT_ICALL_PPPPP_P: {
-		typedef gpointer (*T)(gpointer,gpointer,gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		sp [0].data.p = func (sp [0].data.p, sp [1].data.p, sp [2].data.p, sp [3].data.p, sp [4].data.p);
+		typedef gpointer (*T) (gpointer, gpointer, gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		sp[0].data.p = func (sp[0].data.p, sp[1].data.p, sp[2].data.p, sp[3].data.p, sp[4].data.p);
 		break;
 	}
 	case MINT_ICALL_PPPPPP_V: {
-		typedef void (*T)(gpointer,gpointer,gpointer,gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		func (sp [0].data.p, sp [1].data.p, sp [2].data.p, sp [3].data.p, sp [4].data.p, sp [5].data.p);
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		func (sp[0].data.p, sp[1].data.p, sp[2].data.p, sp[3].data.p, sp[4].data.p, sp[5].data.p);
 		break;
 	}
 	case MINT_ICALL_PPPPPP_P: {
-		typedef gpointer (*T)(gpointer,gpointer,gpointer,gpointer,gpointer,gpointer);
-		T func = (T)ptr;
-		sp [0].data.p = func (sp [0].data.p, sp [1].data.p, sp [2].data.p, sp [3].data.p, sp [4].data.p, sp [5].data.p);
+		typedef gpointer (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer);
+		T func = (T) ptr;
+		sp[0].data.p = func (sp[0].data.p, sp[1].data.p, sp[2].data.p, sp[3].data.p, sp[4].data.p,
+		                     sp[5].data.p);
 		break;
 	}
 	default:
@@ -166,12 +168,14 @@ do_icall (MonoMethodSignature *sig, int op, stackval *sp, gpointer ptr, gboolean
 
 	/* convert the native representation to the stackval representation */
 	if (sig)
-		stackval_from_data (sig->ret, &sp [0], reinterpret_cast<char *> (&sp [0].data.p), sig->pinvoke);
+		stackval_from_data (sig->ret, &sp[0], reinterpret_cast<char *> (&sp[0].data.p),
+		                    sig->pinvoke);
 }
 
 // Do not inline in case order of frame addresses matters, and maybe other reasons.
 MONO_NO_OPTIMIZATION MONO_NEVER_INLINE gpointer
-do_icall_wrapper (InterpFrame *frame, MonoMethodSignature *sig, int op, stackval *sp, gpointer ptr, gboolean save_last_error)
+do_icall_wrapper (InterpFrame *frame, MonoMethodSignature *sig, int op, stackval *sp, gpointer ptr,
+                  gboolean save_last_error)
 {
 	MonoLMFExt ext;
 	INTERP_PUSH_LMF_WITH_CTX (frame, ext, exit_icall);
@@ -181,7 +185,7 @@ do_icall_wrapper (InterpFrame *frame, MonoMethodSignature *sig, int op, stackval
 	interp_pop_lmf (&ext);
 
 	goto exit_icall; // prevent unused label warning in some configurations
-	/* If an exception is thrown from native code, execution will continue here */
+					 /* If an exception is thrown from native code, execution will continue here */
 exit_icall:
 	return NULL;
 }
@@ -206,13 +210,13 @@ init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *
 #if defined(__arm__) || defined(__mips__)
 		int align;
 
-		arg_size = mono_type_stack_size (sig->params [i], &align);
+		arg_size = mono_type_stack_size (sig->params[i], &align);
 		arglist = static_cast<char *> (ALIGN_PTR_TO (arglist, align));
 #else
-		arg_size = mono_type_stack_size (sig->params [i], NULL);
+		arg_size = mono_type_stack_size (sig->params[i], NULL);
 #endif
 
-		sv_size = stackval_to_data (sig->params [i], sp, arglist, FALSE);
+		sv_size = stackval_to_data (sig->params[i], sp, arglist, FALSE);
 		arglist += arg_size;
 		sp = STACK_ADD_BYTES (sp, sv_size);
 	}
@@ -225,8 +229,8 @@ init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *
 using namespace mono::interp;
 
 // Do not inline in case order of frame addresses matters.
-MONO_NEVER_INLINE MonoException*
-mono_interp_leave (InterpFrame* parent_frame)
+MONO_NEVER_INLINE MonoException *
+mono_interp_leave (InterpFrame *parent_frame)
 {
 	InterpFrame frame = {parent_frame};
 
@@ -238,7 +242,8 @@ mono_interp_leave (InterpFrame* parent_frame)
 	 * to check the abort threshold. For this to work we use frame as a
 	 * dummy frame that is stored in the lmf and serves as the transition frame
 	 */
-	do_icall_wrapper (&frame, NULL, MINT_ICALL_V_P, &tmp_sp, (gpointer)mono_thread_get_undeniable_exception, FALSE);
+	do_icall_wrapper (&frame, NULL, MINT_ICALL_V_P, &tmp_sp,
+	                  (gpointer) mono_thread_get_undeniable_exception, FALSE);
 
 	return static_cast<MonoException *> (tmp_sp.data.p);
 }
