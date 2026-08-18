@@ -807,26 +807,6 @@ mono_compile_method_checked (MonoMethod *method, MonoError *error)
 	return res;
 }
 
-/**
- * mono_method_entry_escaped:
- * \param method the method whose entry address has been given to native code.
- *
- * Records that native code holds the address \p method is entered at. Native
- * code can write a jump over that address, so from here on a call has to go
- * through it. Call this before handing the address out.
- */
-void
-mono_method_entry_escaped (MonoMethod *method)
-{
-	MONO_REQ_GC_NEUTRAL_MODE
-
-	method->native_entry_escaped = 1;
-
-	/* An engine that settled how to call this method decided without knowing. */
-	if (callbacks.method_entry_escaped)
-		callbacks.method_entry_escaped (method);
-}
-
 gpointer
 mono_runtime_create_delegate_trampoline (MonoClass *klass)
 {

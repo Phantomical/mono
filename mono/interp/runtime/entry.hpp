@@ -37,11 +37,11 @@ private:
 gpointer entry_for_imethod (InterpMethod *imethod, MonoError *error);
 
 /*
- * The address that stands for imethod outside this engine, recording that the
- * address is now in native hands. A patcher writes a jump over what it is given,
- * so both engines have to name the same address for a method.
+ * The address that stands for imethod outside this engine. A patcher writes a jump
+ * over what it is given, so both engines have to name the same address for a
+ * method.
  */
-gpointer escaping_entry_for_imethod (InterpMethod *imethod, MonoError *error);
+gpointer native_entry_for_imethod (InterpMethod *imethod, MonoError *error);
 
 inline InterpMethod *
 lookup_method_pointer (MonoDomain *domain, gpointer addr)

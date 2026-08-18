@@ -192,12 +192,6 @@ stub_method_compiled (MonoDomain *domain, MonoMethod *method)
 {
 }
 
-/* Also a notification. */
-static void
-stub_entry_escaped (MonoDomain *domain, MonoMethod *method)
-{
-}
-
 static MonoObject*
 stub_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObject **exc, MonoError *error)
 {

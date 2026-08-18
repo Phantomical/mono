@@ -446,6 +446,18 @@ the interpreter. Anything the interpreter cannot do is therefore lost for the wh
 graph below the first interpreted frame, which is why tail calls had to be taught to it
 rather than refused.
 
+**A detour is asked for, not detected.** `mono_install_method_detour ()`
+(`mono/mini/domain-method.h`) points a method's entry at native code for good: nothing
+outranks `MonoTier::detoured`, so the method never promotes again and a compile already
+running for it does not take the entry when it lands. It always succeeds — a patcher told
+no has nothing to fall back on. A patcher that instead writes a jump over the address
+`GetFunctionPointer` handed it still reaches every compiled caller, since that address is
+the stub, but nothing tells the interpreter, so interpreted callers keep interpreting the
+method. An interpreted caller sees a detour that went through the API, because
+`resolve_code_type ()` reads the tier and makes a jit call to the entry instead — unless
+the interpreter has already copied the callee's body into it. `mono/unit-tests/detour.cs`
+and `test-detour.cpp` hold both arms.
+
 **The interpreter makes real tail calls.** A `tail.` site becomes `MINT_TAILCALL` or
 `MINT_TAILCALLVIRT_FAST`, which hand the frame to the callee instead of making a new one:
 the arguments move down over the caller's locals, `frame->imethod` is swapped and `ip`

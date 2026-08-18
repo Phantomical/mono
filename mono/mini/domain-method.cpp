@@ -123,6 +123,15 @@ MonoDomainMethod::install_detour (void *target)
 	 */
 	publish (MonoTier::detoured,
 	         [target] (Entry entry) { return entry == Entry::body ? target : nullptr; });
+
+	/*
+	 * The interpreter settles once whether it calls a method or interprets it,
+	 * and an answer taken before this did not know the entry is native. Outside
+	 * publish (), which holds the record lock: this reads the domain's table,
+	 * and the table's lock is the outer one.
+	 */
+	if (mono_use_interpreter)
+		mini_get_interp_callbacks ()->method_compiled (domain_, method_);
 }
 
 MonoDomainMethod *
@@ -221,6 +230,20 @@ void
 mono_domain_method_table_init (MonoDomain *domain)
 {
 	domain_jit_info (domain)->domain_methods = new mono::DomainMethodTable ();
+}
+
+void
+mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *target)
+{
+	llvm::Expected<mono::MonoDomainMethod *> dm = mono::domain_method_get (domain, method);
+
+	if (!dm) {
+		/* No record means no published entry, so nothing holds one to detour. */
+		llvm::consumeError (dm.takeError ());
+		return;
+	}
+
+	(*dm)->install_detour (target);
 }
 
 mono_bool

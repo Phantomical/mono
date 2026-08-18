@@ -26,6 +26,16 @@ typedef struct _MonoMethod MonoMethod;
 /// which is the caller's signal to count another threshold of calls.
 mono_bool mono_promote_method (MonoMethod *method, MonoDomain *domain);
 
+/// Hands the address a method is entered at to native code at \p target.
+///
+/// Every caller that goes through the entry reaches \p target from here on, and
+/// nothing takes that back: the method never promotes again, and a compile
+/// already running for it does not take the entry when it lands.
+///
+/// There is no failure to report. A patcher that is told no has nothing to fall
+/// back on, and a method with no record has no entry for one to hold.
+void mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *target);
+
 /// Builds the table of records a domain keeps.
 ///
 /// Call this while the domain's jit info is being set up. The domain has no

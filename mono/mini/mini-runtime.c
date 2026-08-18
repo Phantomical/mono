@@ -4254,19 +4254,6 @@ mini_is_interpreter_enabled (void)
 	return mono_use_interpreter;
 }
 
-/*
- * Tells the interpreter that the address this method is entered at is now in
- * native hands. It settles how it calls a method once and keeps the answer, and
- * an answer taken before this did not know that a call has to go through the
- * address.
- */
-static void
-mini_method_entry_escaped (MonoMethod *method)
-{
-	if (mono_use_interpreter)
-		mini_get_interp_callbacks ()->entry_escaped (mono_domain_get (), method);
-}
-
 static const char*
 mono_get_runtime_build_version (void);
 
@@ -4360,7 +4347,6 @@ mini_init (const char *filename, const char *runtime_version)
 #define JIT_TRAMPOLINES_WORK
 #ifdef JIT_TRAMPOLINES_WORK
 	callbacks.compile_method = mono_jit_compile_method;
-	callbacks.method_entry_escaped = mini_method_entry_escaped;
 	callbacks.create_jit_trampoline = mono_create_jit_trampoline;
 	callbacks.create_delegate_trampoline = mono_create_delegate_trampoline;
 	callbacks.free_method = mono_jit_free_method;

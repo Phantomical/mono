@@ -142,24 +142,6 @@ interp_method_compiled (MonoDomain *domain, MonoMethod *method)
 		imethod->code_type = IMETHOD_CODE_COMPILED;
 }
 
-/*
- * Takes back the answer resolve_code_type () settled for this method, because the
- * address it is entered at is now in native hands. Native code can write a jump
- * over that address, and an answer taken before that did not know calls have to
- * go through it.
- */
-void
-interp_entry_escaped (MonoDomain *domain, MonoMethod *method)
-{
-	InterpMethod *imethod = lookup_imethod (domain, method);
-
-	if (imethod == NULL)
-		return;
-
-	mono_atomic_cas_i32 (reinterpret_cast<gint32 *> (&imethod->code_type), IMETHOD_CODE_UNKNOWN,
-	                     IMETHOD_CODE_INTERP);
-}
-
 static void
 copy_imethod_for_frame (MonoDomain *domain, InterpFrame *frame)
 {

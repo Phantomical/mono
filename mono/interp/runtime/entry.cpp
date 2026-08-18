@@ -338,8 +338,7 @@ entry_for_imethod (InterpMethod *imethod, MonoError *error)
 }
 
 /*
- * Returns the address that stands for imethod outside this engine, and records
- * that the address is now in native hands.
+ * Returns the address that stands for imethod outside this engine.
  *
  * A patcher writes a jump over the address it is given, so a method must have one
  * address and not one per engine. A compiled ldftn names the backend's stub, and
@@ -350,10 +349,8 @@ entry_for_imethod (InterpMethod *imethod, MonoError *error)
  * entry is the only address there is.
  */
 gpointer
-escaping_entry_for_imethod (InterpMethod *imethod, MonoError *error)
+native_entry_for_imethod (InterpMethod *imethod, MonoError *error)
 {
-	mono_method_entry_escaped (imethod->method);
-
 	if (mono_ee_features.force_use_interpreter)
 		return entry_for_imethod (imethod, error);
 

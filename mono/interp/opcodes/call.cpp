@@ -23,6 +23,7 @@
 #include "mono/interp/runtime/call.hpp"
 #include "mono/interp/runtime/jit-call.hpp"
 #include "mono/interp/transform/transform.hpp"
+#include "mono/mini/domain-method.hpp"
 #include "mono/mini/llvm-runtime.h"
 #include "mono/mini/llvmonly-runtime.h"
 #include "mono/utils/atomic.h"
@@ -68,28 +69,13 @@ resolve_code_type (InterpMethod *imethod)
 	MonoMethod *method = imethod->method;
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 	InterpMethodCodeType code_type = IMETHOD_CODE_INTERP;
-	gboolean marshallable = mono_interp_jit_call_marshallable (method, sig);
+	MonoDomainMethod *dm = domain_method_find (imethod->domain, method);
 
-	/*
-	 * A patcher turns inlining off before it writes over an entry address,
-	 * because an inlined call site keeps a copy of the original body and the
-	 * jump never reaches it. The two facts together tell a patched method from
-	 * one whose address was only passed on.
-	 */
-	gboolean patched =
-		method->native_entry_escaped && (method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0;
+	/* A detour is native code at the entry, and there is no body to find. */
+	gboolean native = (dm != NULL && dm->tier () == MonoTier::detoured)
+	                  || mono_jit_method_is_compiled (imethod->domain, method);
 
-	if (patched && !marshallable) {
-		char *name = mono_method_full_name (method, TRUE);
-
-		g_printerr ("[interp] the entry address of %s is in native hands, but no "
-		            "jit call fits its signature. A patch written over that "
-		            "address does not take effect.\n",
-		            name);
-		g_free (name);
-	}
-
-	if (marshallable && (patched || mono_jit_method_is_compiled (imethod->domain, method)))
+	if (native && mono_interp_jit_call_marshallable (method, sig))
 		code_type = IMETHOD_CODE_COMPILED;
 
 	/*
@@ -714,7 +700,7 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 		mono_interp_get_imethod (mono_domain_get (), LOCAL_VAR (ip[2], MonoMethod *), error);
 	mono_error_assert_ok (error);
 
-	LOCAL_VAR (ip[1], gpointer) = escaping_entry_for_imethod (m, error);
+	LOCAL_VAR (ip[1], gpointer) = native_entry_for_imethod (m, error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();

@@ -95,11 +95,7 @@ struct _MonoMethod {
 	unsigned int is_generic:1; /* whenever this is a generic method definition */
 	unsigned int is_inflated:1; /* whether we're a MonoMethodInflated */
 	unsigned int skip_visibility:1; /* whenever to skip JIT visibility checks */
-	/* Whether the address this method is entered at has been given to native
-	 * code. Native code can write a jump over that address, so a call has to go
-	 * through it and must not reach the method behind it. */
-	unsigned int native_entry_escaped:1;
-	unsigned int _unused : 1; /* unused */
+	unsigned int _unused : 2; /* unused */
 	signed int slot : 16;
 
 	/*
