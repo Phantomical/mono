@@ -495,8 +495,6 @@ void        mini_profiler_context_free_buffer (gpointer buffer);
 
 /* helper methods */
 
-MonoJitInfo* mini_lookup_method             (MonoDomain *domain, MonoMethod *method, MonoMethod *shared);
-
 gboolean  mini_should_insert_breakpoint (MonoMethod *method);
 int mono_target_pagesize (void);
 

@@ -1593,59 +1593,6 @@ mini_init_gsctx (MonoDomain *domain, MonoMemPool *mp, MonoGenericContext *contex
 	}
 }
 
-/*
- * LOCKING: Acquires the jit code hash lock.
- */
-MonoJitInfo*
-mini_lookup_method (MonoDomain *domain, MonoMethod *method, MonoMethod *shared)
-{
-	MonoJitInfo *ji;
-	static gboolean inited = FALSE;
-	static int lookups = 0;
-	static int failed_lookups = 0;
-
-	mono_domain_jit_code_hash_lock (domain);
-	ji = (MonoJitInfo *)mono_internal_hash_table_lookup (&domain->jit_code_hash, method);
-	if (!ji && shared) {
-		/* Try generic sharing */
-		ji = (MonoJitInfo *)mono_internal_hash_table_lookup (&domain->jit_code_hash, shared);
-		if (ji && !ji->has_generic_jit_info)
-			ji = NULL;
-		if (!inited) {
-			mono_counters_register ("Shared generic lookups", MONO_COUNTER_INT|MONO_COUNTER_GENERICS, &lookups);
-			mono_counters_register ("Failed shared generic lookups", MONO_COUNTER_INT|MONO_COUNTER_GENERICS, &failed_lookups);
-			inited = TRUE;
-		}
-
-		++lookups;
-		if (!ji)
-			++failed_lookups;
-	}
-	mono_domain_jit_code_hash_unlock (domain);
-
-	return ji;
-}
-
-static MonoJitInfo*
-lookup_method (MonoDomain *domain, MonoMethod *method)
-{
-	ERROR_DECL (error);
-	MonoJitInfo *ji;
-	MonoMethod *shared;
-
-	ji = mini_lookup_method (domain, method, NULL);
-
-	if (!ji) {
-		if (!mono_method_is_generic_sharable (method, FALSE))
-			return NULL;
-		shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, error);
-		mono_error_assert_ok (error);
-		ji = mini_lookup_method (domain, method, shared);
-	}
-
-	return ji;
-}
-
 MonoClass*
 mini_get_class (MonoMethod *method, guint32 token, MonoGenericContext *context)
 {
@@ -2315,7 +2262,6 @@ static gpointer
 mono_jit_compile_method_with_opt (MonoMethod *method, guint32 opt, gboolean jit_only, MonoError *error)
 {
 	MonoDomain *target_domain, *domain = mono_domain_get ();
-	MonoJitInfo *info;
 	gpointer code = NULL, p;
 	MonoJitICallInfo *callinfo = NULL;
 	WrapperInfo *winfo = NULL;
@@ -2378,25 +2324,8 @@ mono_jit_compile_method_with_opt (MonoMethod *method, guint32 opt, gboolean jit_
 		}
 	}
 
+/* Where a thread that waited out another thread's compile starts again. */
 lookup_start:
-	info = lookup_method (target_domain, method);
-	if (info) {
-		/* We can't use a domain specific method in another domain */
-		if (! ((domain != target_domain) && !info->domain_neutral)) {
-			MonoVTable *vtable;
-
-			mono_atomic_inc_i32 (&mono_jit_stats.methods_lookups);
-			vtable = mono_class_vtable_checked (domain, method->klass, error);
-			if (!is_ok (error))
-				return NULL;
-			g_assert (vtable);
-			if (!mono_runtime_class_init_full (vtable, error))
-				return NULL;
-
-			code = MINI_ADDR_TO_FTNPTR (info->code_start);
-			return mono_create_ftnptr (target_domain, code);
-		}
-	}
 
 #ifdef MONO_USE_AOT_COMPILER
 	if (opt & MONO_OPT_AOT) {
@@ -2584,20 +2513,13 @@ gpointer
 mono_jit_search_all_backends_for_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **out_ji)
 {
 	gpointer code;
-	MonoJitInfo *ji;
+	MonoJitInfo *ji = NULL;
 
-	code = mono_jit_find_compiled_method_with_jit_info (domain, method, &ji);
-	if (!code) {
-		/*
-		 * Might be JITted. The LLVM backend compiles a method reached as a
-		 * callee without the runtime ever asking for it, so nothing put the
-		 * body in this domain's jit_code_hash and the lookup above cannot see
-		 * it - the backend's own map is the only place it is recorded.
-		 */
-		code = mono_llvm_jit_find_body (domain, method);
-		if (code)
-			ji = mono_jit_info_table_find (domain, code);
-	}
+	/* Might be JITted. The backend's own map is the only place a body is recorded. */
+	code = mono_llvm_jit_find_body (domain, method);
+	if (code)
+		ji = mono_jit_info_table_find (domain, code);
+
 	if (!code) {
 		ERROR_DECL (oerror);
 
@@ -2648,12 +2570,7 @@ add_body (MonoJitInfo *ji, void *user_data)
 void
 mono_jit_search_all_backends_for_all_jit_infos (MonoDomain *domain, MonoMethod *method, GPtrArray *bodies)
 {
-	MonoJitInfo *ji;
 	gpointer code;
-
-	code = mono_jit_find_compiled_method_with_jit_info (domain, method, &ji);
-	if (code)
-		add_body (ji, bodies);
 
 	mono_llvm_jit_foreach_body (domain, method, add_body, bodies);
 
@@ -2693,33 +2610,6 @@ mini_install_pending_breakpoints (MonoDomain *domain, MonoMethod *method, MonoJi
 #ifndef DISABLE_SDB
 	mono_de_add_pending_breakpoints (domain, method, ji);
 #endif
-}
-
-gpointer
-mono_jit_find_compiled_method_with_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji)
-{
-	MonoDomain *target_domain;
-	MonoJitInfo *info;
-
-	if (default_opt & MONO_OPT_SHARED)
-		target_domain = mono_get_root_domain ();
-	else
-		target_domain = domain;
-
-	info = lookup_method (target_domain, method);
-	if (info) {
-		/* We can't use a domain specific method in another domain */
-		if (! ((domain != target_domain) && !info->domain_neutral)) {
-			mono_atomic_inc_i32 (&mono_jit_stats.methods_lookups);
-			if (ji)
-				*ji = info;
-			return MINI_ADDR_TO_FTNPTR (info->code_start);
-		}
-	}
-
-	if (ji)
-		*ji = NULL;
-	return NULL;
 }
 
 static guint32 bisect_opt = 0;
@@ -2780,12 +2670,6 @@ mono_get_optimizations_for_method (MonoMethod *method, guint32 opt)
 	if (method == mono_current_single_method)
 		return mono_single_method_regression_opt;
 	return opt;
-}
-
-gpointer
-mono_jit_find_compiled_method (MonoDomain *domain, MonoMethod *method)
-{
-	return mono_jit_find_compiled_method_with_jit_info (domain, method, NULL);
 }
 
 /*

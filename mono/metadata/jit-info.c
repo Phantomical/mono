@@ -925,31 +925,6 @@ mono_jit_info_get_method (MonoJitInfo* ji)
 	return ji->d.method;
 }
 
-static gpointer
-jit_info_key_extract (gpointer value)
-{
-	MonoJitInfo *info = (MonoJitInfo*)value;
-
-	return info->d.method;
-}
-
-static gpointer*
-jit_info_next_value (gpointer value)
-{
-	MonoJitInfo *info = (MonoJitInfo*)value;
-
-	return (gpointer*)&info->n.next_jit_code_hash;
-}
-
-void
-mono_jit_code_hash_init (MonoInternalHashTable *jit_code_hash)
-{
-	mono_internal_hash_table_init (jit_code_hash,
-				       mono_aligned_addr_hash,
-				       jit_info_key_extract,
-				       jit_info_next_value);
-}
-
 MonoGenericJitInfo*
 mono_jit_info_get_generic_jit_info (MonoJitInfo *ji)
 {

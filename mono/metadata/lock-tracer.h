@@ -17,7 +17,6 @@ typedef enum {
 	ImageDataLock,
 	DomainLock,
 	DomainAssembliesLock,
-	DomainJitCodeHashLock,
 	IcallLock,
 	AssemblyBindingLock,
 	MarshalLock,

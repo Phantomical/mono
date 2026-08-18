@@ -303,10 +303,6 @@ typedef struct _MonoLLVMBreakpointSwitch {
 } MonoLLVMBreakpointSwitch;
 
 struct _MonoJitInfo {
-	/* NOTE: These first two elements (method and
-	   next_jit_code_hash) must be in the same order and at the
-	   same offset as in RuntimeMethod, because of the jit_code_hash
-	   internal hash table in MonoDomain. */
 	union {
 		MonoMethod *method;
 		MonoImage *image;
@@ -314,7 +310,6 @@ struct _MonoJitInfo {
 		MonoTrampInfo *tramp_info;
 	} d;
 	union {
-		MonoJitInfo *next_jit_code_hash;
 		MonoJitInfo *next_tombstone;
 	} n;
 	gpointer    code_start;
@@ -517,9 +512,6 @@ struct _MonoDomain {
 	char               *friendly_name;
 	/* maps remote class key -> MonoRemoteClass */
 	GHashTable         *proxy_vtable_hash;
-	/* Protected by 'jit_code_hash_lock' */
-	MonoInternalHashTable jit_code_hash;
-	mono_mutex_t    jit_code_hash_lock;
 	int		    num_jit_info_table_duplicates;
 	MonoJitInfoTable * 
 	  volatile          jit_info_table;
@@ -626,8 +618,6 @@ mono_domain_assemblies_unlock (MonoDomain *domain)
 	mono_locks_coop_release (&domain->assemblies_lock, DomainAssembliesLock);
 }
 
-#define mono_domain_jit_code_hash_lock(domain) mono_locks_os_acquire(&(domain)->jit_code_hash_lock, DomainJitCodeHashLock)
-#define mono_domain_jit_code_hash_unlock(domain) mono_locks_os_release(&(domain)->jit_code_hash_lock, DomainJitCodeHashLock)
 
 typedef MonoDomain* (*MonoLoadFunc) (const char *filename, const char *runtime_version);
 
@@ -751,9 +741,6 @@ mono_jit_info_get_unwind_info (MonoJitInfo *ji);
  */
 typedef MonoJitInfo *(*MonoJitInfoFindInAot)         (MonoDomain *domain, MonoImage *image, gpointer addr);
 void          mono_install_jit_info_find_in_aot (MonoJitInfoFindInAot func);
-
-void
-mono_jit_code_hash_init (MonoInternalHashTable *jit_code_hash);
 
 MonoAssembly *
 mono_assembly_load_corlib (const MonoRuntimeInfo *runtime, MonoImageOpenStatus *status);

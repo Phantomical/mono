@@ -490,7 +490,6 @@ mono_domain_create (void)
 	domain->assembly_bindings = NULL;
 	domain->assembly_bindings_parsed = FALSE;
 	domain->proxy_vtable_hash = g_hash_table_new ((GHashFunc)mono_ptrarray_hash, (GCompareFunc)mono_ptrarray_equal);
-	mono_jit_code_hash_init (&domain->jit_code_hash);
 	domain->ldstr_table = mono_g_hash_table_new_type_internal ((GHashFunc)mono_string_hash_internal, (GCompareFunc)mono_string_equal_internal, MONO_HASH_KEY_VALUE_GC, MONO_ROOT_SOURCE_DOMAIN, domain, "Domain String Pool Table");
 	domain->num_jit_info_table_duplicates = 0;
 	domain->jit_info_table = mono_jit_info_table_new (domain);
@@ -501,7 +500,6 @@ mono_domain_create (void)
 	mono_coop_mutex_init_recursive (&domain->lock);
 
 	mono_coop_mutex_init_recursive (&domain->assemblies_lock);
-	mono_os_mutex_init_recursive (&domain->jit_code_hash_lock);
 	mono_os_mutex_init_recursive (&domain->finalizable_objects_hash_lock);
 
 #ifdef ENABLE_NETCORE
@@ -1305,7 +1303,6 @@ mono_domain_free (MonoDomain *domain, gboolean force)
 	domain->friendly_name = NULL;
 	g_hash_table_destroy (domain->proxy_vtable_hash);
 	domain->proxy_vtable_hash = NULL;
-	mono_internal_hash_table_destroy (&domain->jit_code_hash);
 
 	/*
 	 * There might still be jit info tables of this domain which
@@ -1349,7 +1346,6 @@ mono_domain_free (MonoDomain *domain, gboolean force)
 
 	mono_os_mutex_destroy (&domain->finalizable_objects_hash_lock);
 	mono_coop_mutex_destroy (&domain->assemblies_lock);
-	mono_os_mutex_destroy (&domain->jit_code_hash_lock);
 
 	mono_coop_mutex_destroy (&domain->lock);
 

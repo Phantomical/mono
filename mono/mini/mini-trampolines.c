@@ -1203,16 +1203,6 @@ mono_create_jump_trampoline (MonoDomain *domain, MonoMethod *method, gboolean ad
 		return ret;
 	}
 
-	code = mono_jit_find_compiled_method_with_jit_info (domain, method, &ji);
-	/*
-	 * We cannot recover the correct type of a shared generic
-	 * method from its native code address, so we use the
-	 * trampoline instead.
-	 * For synchronized methods, the trampoline adds the wrapper.
-	 */
-	if (code && !ji->has_generic_jit_info && !(method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED))
-		return code;
-
 	if (mono_llvm_only) {
 		code = mono_jit_compile_method (method, error);
 		if (!is_ok (error))
@@ -1265,17 +1255,12 @@ mono_create_jit_trampoline (MonoDomain *domain, MonoMethod *method, MonoError *e
 		if (mono_llvm_only && method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
 			method = mono_marshal_get_synchronized_wrapper (method);
 
-		/* Avoid creating trampolines if possible */
-		gpointer code = mono_jit_find_compiled_method (domain, method);
-		
-		if (code)
-			return code;
 		if (mono_llvm_only) {
 			if (method->wrapper_type == MONO_WRAPPER_PROXY_ISINST)
 				/* These wrappers are not generated */
 				return (gpointer)method_not_found;
 			/* Methods are lazily initialized on first call, so this can't lead recursion */
-			code = mono_jit_compile_method (method, error);
+			gpointer code = mono_jit_compile_method (method, error);
 			if (!is_ok (error))
 				return NULL;
 			return code;
