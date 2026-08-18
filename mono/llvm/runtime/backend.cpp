@@ -398,19 +398,6 @@ attach_interop_entry (MonoDomainMethod &dm)
 	return MonoBackend::attach_interop (dm);
 }
 
-llvm::Error
-MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
-{
-	return bind_method_symbols (
-		m, [&] (MonoMethod *method) -> llvm::Expected<std::string> {
-			llvm::Expected<MonoDomainMethod *> published = publish (domain, method);
-
-			if (!published)
-				return published.takeError ();
-			return (*published)->name ();
-		});
-}
-
 /*
  * The receiver a value type's vtable slot arrives with is the boxed object, and
  * stepping it past the header is the whole of the difference. So this forwards

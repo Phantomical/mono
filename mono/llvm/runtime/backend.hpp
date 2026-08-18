@@ -114,11 +114,6 @@ private:
 	/// Carves \p dm's stub and gives it the state behind it.
 	llvm::Error attach_entry (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Give every declaration in M that names a method the symbol this backend
-	/// publishes that method's entry under, publishing the method if it has not
-	/// been already.
-	llvm::Error bind_externals (DomainState &domain, llvm::Module &m);
-
 	/// Point \p dm's stub at the interpreter.
 	llvm::Expected<Compiled> interp_entries (DomainState &domain, MonoDomainMethod &dm);
 
