@@ -4144,4 +4144,51 @@ L3:
 		ldloc.0
 		ret
 	}
+
+	.method public static default void ldftn_target () cil managed noinlining
+	{
+		.maxstack 0
+		ret
+	}
+
+	// ldftn's product is the address the method is published at, whichever
+	// engine ran the frame that asked. This one is pinned to tier 0 by the
+	// mini-regression/iltests-interp-ldftn arm, so it answers from an
+	// interpreted frame there and from a compiled one everywhere else.
+	.method public static default native int tier0_ldftn_pointer () cil managed noinlining
+	{
+		.maxstack 1
+
+		ldftn void Tests::ldftn_target ()
+		ret
+	}
+
+	// The same address by a route with no engine in it: the icall behind
+	// GetFunctionPointer () compiles the method and hands back its entry.
+	.method public static default native int ldftn_handle_pointer () cil managed noinlining
+	{
+		.maxstack 2
+		.locals init (valuetype [mscorlib]System.RuntimeMethodHandle h)
+
+		ldtoken method void Tests::ldftn_target ()
+		stloc.0
+		ldloca.s 0
+		call instance native int [mscorlib]System.RuntimeMethodHandle::GetFunctionPointer()
+		ret
+	}
+
+	.method public static default int32 test_0_ldftn_is_the_published_entry () cil managed
+	{
+		.maxstack 2
+
+		call native int Tests::tier0_ldftn_pointer ()
+		call native int Tests::ldftn_handle_pointer ()
+		beq.s OK
+		ldc.i4.1
+		ret
+	OK:
+		ldc.i4.0
+		ret
+	}
+
 }

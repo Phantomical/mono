@@ -120,6 +120,23 @@ add_test(NAME "mini-regression/tier-seam-compiled"
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("mini-regression/tier-seam-compiled" PROPERTIES LABELS regression)
 
+# ldftn has to name the address the method is published at, not an entry of
+# whichever engine ran the frame that asked. Only this arm proves it: the helper
+# is compiled before its first call under every other setting, and then both
+# routes the corpus compares agree by construction. Pinning tier 0 to that one
+# method is what puts the ldftn in an interpreted frame, and a threshold of zero
+# is what keeps it there.
+if(MONO_ENABLE_INTERPRETER)
+  add_test(NAME "mini-regression/iltests-interp-ldftn"
+           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
+                   "MONO_LLVM_JIT_TIER0=tier0_ldftn_pointer"
+                   "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+                   "${_wrapper}" --regression iltests.exe
+           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties("mini-regression/iltests-interp-ldftn"
+                       PROPERTIES LABELS regression)
+endif()
+
 # Cross-domain calls, for the frame the interpreter builds with no InterpMethod
 # behind it. The crossing happens on the first call rather than after a compile,
 # so this pair needs nothing to show it got far enough.

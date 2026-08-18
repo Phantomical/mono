@@ -356,7 +356,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLI)
 	// We cache the InterpMethod* used for a calli in data_items.
 	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[4]]);
 
-	if (G_UNLIKELY (!cmethod || cmethod->jit_entry != ftn)) {
+	if (G_UNLIKELY (!cmethod || !imethod_published_at (cmethod, ftn))) {
 		error_init_reuse (error);
 		cmethod = imethod_for_entry (frame->imethod->domain, ftn, error);
 		if (G_UNLIKELY (!is_ok (error)))
@@ -367,7 +367,10 @@ MONO_INTERP_OP_IMPL (MINT_CALLI)
 					"mono's interpreter does not support MINT_CALLI with a function pointer that does not map to a known MonoMethod*"),
 				ip);
 
-		if (cmethod->jit_entry == ftn)
+		/* Only when the pointer is one the method answers to. A site can be
+		 * handed an address inside a body, and that one has to be resolved
+		 * again rather than remembered as this method's. */
+		if (imethod_published_at (cmethod, ftn))
 			frame->imethod->data_items[ip[4]] = cmethod;
 	}
 
@@ -683,16 +686,14 @@ MONO_INTERP_OP_IMPL (MINT_CALL)
 MONO_INTERP_OP_IMPL (MINT_LDFTN)
 {
 	error_init_reuse (error);
-	LOCAL_VAR (ip[1], gpointer) =
-		entry_for_imethod (static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]), error);
+	LOCAL_VAR (ip[1], gpointer) = native_entry_for_imethod (
+		static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]), error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();
 	MONO_INTERP_DISPATCH ();
 }
 
-// The address this produces is handed to native code, so it has to be the one a
-// patcher would write over rather than an entry of this engine's own.
 MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 {
 	error_init_reuse (error);
@@ -714,7 +715,8 @@ MONO_INTERP_OP_IMPL (MINT_LDVIRTFTN)
 	NULL_CHECK (o);
 
 	error_init_reuse (error);
-	LOCAL_VAR (ip[1], gpointer) = entry_for_imethod (get_virtual_method (m, o->vtable), error);
+	LOCAL_VAR (ip[1], gpointer) =
+		native_entry_for_imethod (get_virtual_method (m, o->vtable), error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();

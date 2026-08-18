@@ -132,6 +132,13 @@ struct InterpMethod {
 	guint32 *clause_data_offsets;
 	gpointer jit_call_info;
 	gpointer jit_entry;
+	/*
+	 * The address this method is published at outside the interpreter - the
+	 * backend's stub - once something has asked for it. Held so that a calli
+	 * site can tell whether the pointer on its stack stands for this method
+	 * without going back to the jit-info table on every call.
+	 */
+	gpointer native_entry;
 	gpointer llvmonly_unbox_entry;
 	MonoType *rtype;
 	MonoType **param_types;

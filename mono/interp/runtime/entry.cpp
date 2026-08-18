@@ -325,10 +325,8 @@ interp_get_imethod (MonoMethod *method, MonoError *error)
 	return mono_interp_get_imethod (mono_domain_get (), method, error);
 }
 
-/*
- * The entry point standing for IMETHOD, creating one if it has none yet.
- */
-gpointer
+/* The interpreter's own entry for imethod, minted if this is the first ask. */
+static gpointer
 entry_for_imethod (InterpMethod *imethod, MonoError *error)
 {
 	if (imethod->jit_entry)
@@ -343,7 +341,8 @@ entry_for_imethod (InterpMethod *imethod, MonoError *error)
  * A patcher writes a jump over the address it is given, so a method must have one
  * address and not one per engine. A compiled ldftn names the backend's stub, and
  * this gives an interpreted one the same stub. No compile happens here: the stub
- * is minted on its own, which is what a compiled caller's ldftn does as well.
+ * is minted on its own, which is what a compiled caller's ldftn does as well, and
+ * a call arriving at it lands on whichever tier owns the method.
  *
  * With the interpreter as the whole engine there is no backend to ask, and its own
  * entry is the only address there is.
@@ -354,7 +353,19 @@ native_entry_for_imethod (InterpMethod *imethod, MonoError *error)
 	if (mono_ee_features.force_use_interpreter)
 		return entry_for_imethod (imethod, error);
 
-	return mono_llvm_jit_stub_for (imethod->method, imethod->domain, error);
+	if (imethod->native_entry)
+		return imethod->native_entry;
+
+	gpointer addr = mono_llvm_jit_stub_for (imethod->method, imethod->domain, error);
+
+	if (addr == nullptr)
+		return nullptr;
+
+	/* Two threads asking at once get the one stub the record holds. */
+	mono_memory_barrier ();
+	imethod->native_entry = addr;
+
+	return addr;
 }
 
 /*

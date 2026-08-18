@@ -33,15 +33,27 @@ private:
 	MonoDomain *domain_;
 };
 
-/* The address that stands for imethod, minted if this is the first ask. */
-gpointer entry_for_imethod (InterpMethod *imethod, MonoError *error);
-
 /*
  * The address that stands for imethod outside this engine. A patcher writes a jump
  * over what it is given, so both engines have to name the same address for a
  * method.
  */
 gpointer native_entry_for_imethod (InterpMethod *imethod, MonoError *error);
+
+/// Whether addr is an address imethod is published at.
+///
+/// A method has one such address per engine that has handed one out: the
+/// backend's stub, and - where the interpreter is the whole engine, or the
+/// method is entered from native code - an entry of the interpreter's own.
+inline gboolean
+imethod_published_at (InterpMethod *imethod, gpointer addr)
+{
+	/* A null addr answers no whatever is unset, so that a calli through a null
+	 * function pointer is resolved again - and refused - rather than taken for
+	 * the address an engine has not handed out yet. */
+	return addr != nullptr
+	       && (imethod->native_entry == addr || imethod->jit_entry == addr);
+}
 
 inline InterpMethod *
 lookup_method_pointer (MonoDomain *domain, gpointer addr)
@@ -102,7 +114,18 @@ imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
 	if (!method)
 		return nullptr;
 
-	return mono_interp_get_imethod (domain, method, error);
+	InterpMethod *imethod = mono_interp_get_imethod (domain, method, error);
+
+	/*
+	 * A trampoline record covers the stub and nothing else, so addr is where the
+	 * method is published rather than somewhere inside a body. Remembering it
+	 * here is what lets a calli site recognise the pointer next time: the
+	 * address can arrive from a frame that never asked this engine for it.
+	 */
+	if (imethod != nullptr && ji->is_trampoline)
+		imethod->native_entry = addr;
+
+	return imethod;
 }
 
 } // namespace mono::interp
