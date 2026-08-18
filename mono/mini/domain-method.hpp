@@ -16,12 +16,14 @@
 #include <mono/llvm/stubs.hpp>
 
 #include <llvm/ADT/STLFunctionalExtras.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Error.h>
 
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 typedef struct _MonoDomain MonoDomain;
@@ -49,6 +51,27 @@ enum class MonoTier : uint8_t {
 	/// Native code owns the entry. Nothing outranks this, and nothing takes it
 	/// back.
 	detoured = 0xFF,
+};
+
+/// How far a body has got from being the one the entry names.
+enum class BodyState : uint8_t {
+	current,
+	/// A later compile took the entry. A thread already running in this code
+	/// still is, so it stays allocated and its jit info stays in the table.
+	superseded,
+};
+
+/// One compile of a method: where the code is, and the record something walking
+/// the stack reads to name a frame in it.
+///
+/// A body at tier 0 is the shared interpreter entry, and its record is null:
+/// every interpreted method enters through that code, so no frame in it belongs
+/// to this method rather than another.
+struct MonoMethodBody {
+	MonoTier tier = MonoTier::none;
+	BodyState state = BodyState::current;
+	void *code = nullptr;
+	MonoJitInfo *jinfo = nullptr;
 };
 
 /// How far a promotion request for this method has got.
@@ -155,6 +178,26 @@ public:
 	/// The jit-info record the stub was registered under.
 	MonoJitInfo *&jinfo () { return jinfo_; }
 
+	/* -- The bodies ------------------------------------------------------ */
+
+	/// Records \p code as the body the entry names.
+	///
+	/// Whatever it replaces becomes superseded, unless nothing can name a frame
+	/// in it - which is what a body with no jit info means - in which case it
+	/// goes.
+	void attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo);
+
+	/// The body the entry names, or nothing while none has been compiled.
+	///
+	/// Answered by value. A compile on another thread can supersede the body
+	/// between the read and the use, and the caller wants what was current when
+	/// it asked.
+	std::optional<MonoMethodBody> body () const;
+
+	/// Calls \p visit with every body the method has, oldest first, with the
+	/// record locked.
+	void foreach_body (llvm::function_ref<void (const MonoMethodBody &)> visit) const;
+
 	/* -- Engine state ---------------------------------------------------- */
 
 	/// What the compiling engine hung on this record.
@@ -212,6 +255,8 @@ private:
 
 	std::atomic<void *> interop_entry_ { nullptr };
 
+	llvm::SmallVector<MonoMethodBody, 2> bodies_;
+
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	std::atomic<int32_t> tier_calls_ { 0 };
 	/* Promotion::idle / queued / settled; an integer because it is CAS'd. */
@@ -222,7 +267,7 @@ private:
 	std::atomic<InterpMethod *> interp_method_ { nullptr };
 	std::atomic<const arch::InterpEntryLayout *> interp_layout_ { nullptr };
 
-	std::mutex lock_;
+	mutable std::mutex lock_;
 };
 
 /// Gives \p dm the stub it is called through, and whatever state the engine

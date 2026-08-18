@@ -98,6 +98,40 @@ MonoDomainMethod::promote ()
 	return true;
 }
 
+void
+MonoDomainMethod::attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo)
+{
+	std::lock_guard<std::mutex> held (lock_);
+
+	if (!bodies_.empty ()) {
+		if (bodies_.back ().jinfo != nullptr)
+			bodies_.back ().state = BodyState::superseded;
+		else
+			bodies_.pop_back ();
+	}
+
+	bodies_.push_back (MonoMethodBody { tier, BodyState::current, code, jinfo });
+}
+
+std::optional<MonoMethodBody>
+MonoDomainMethod::body () const
+{
+	std::lock_guard<std::mutex> held (lock_);
+
+	if (bodies_.empty ())
+		return std::nullopt;
+	return bodies_.back ();
+}
+
+void
+MonoDomainMethod::foreach_body (llvm::function_ref<void (const MonoMethodBody &)> visit) const
+{
+	std::lock_guard<std::mutex> held (lock_);
+
+	for (const MonoMethodBody &body : bodies_)
+		visit (body);
+}
+
 InterpMethod *
 MonoDomainMethod::set_interp_method (InterpMethod *imethod)
 {

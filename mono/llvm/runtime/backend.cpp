@@ -105,32 +105,16 @@ struct Owned {
 };
 
 /// What this engine keeps for one method in one domain, hung off that method's
-/// MonoDomainMethod record. The record owns the stubs, the names and the tier;
-/// this is the compile behind them.
+/// MonoDomainMethod record. The record owns the stub, the name, the tier and the
+/// bodies; this is what the engine needs beside them.
 struct MonoBackend::MethodState {
-	/// Where this method's code ended up, once something has asked for it.
-	/// Guarded by the engine's lock.
-	std::optional<Compiled> code;
-
-	/// Whether that is the shared interpreter entry rather than a body of this
-	/// method's own. Guarded by the engine's lock.
-	bool interpreted = false;
-
 	/// What this method's compiles put somewhere it has to be taken back out
 	/// of.
 	Owned owned;
 
-	/// The per-call dispatcher this method's body stub got instead of a direct
+	/// The per-call dispatcher this method's stub got instead of a direct
 	/// binding, when its first caller arrived from another domain.
 	void *dispatch = nullptr;
-
-	/*
-	 * Bodies this method had before the current one, in publication order. The
-	 * stubs no longer name them, but a thread already running in one still is,
-	 * so anything that has to cover every body a method is executing in - the
-	 * debugger arming a breakpoint - has to see these too.
-	 */
-	std::vector<MonoJitInfo *> superseded;
 };
 
 struct MonoBackend::DomainState {
@@ -535,14 +519,7 @@ MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 	Compiled entries { body };
 
 	dm.publish (MonoTier::interp, body);
-
-	MONO_LOCK (mutex_)
-	{
-		MethodState &engine = engine_state (dm);
-
-		engine.code = entries;
-		engine.interpreted = true;
-	}
+	dm.attach_body (MonoTier::interp, body, nullptr);
 
 	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
@@ -628,13 +605,9 @@ MonoBackend::body_for_current_domain (MonoMethod *method)
 llvm::Expected<void *>
 MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm)
 {
-	MONO_LOCK (mutex_)
-	{
-		MethodState &engine = engine_state (dm);
-
-		if (engine.code && !recompiling (dm.method ()))
-			return engine.code->body;
-	}
+	if (std::optional<MonoMethodBody> ready = dm.body ();
+	    ready && !recompiling (dm.method ()))
+		return ready->code;
 
 	llvm::Expected<Compiled> code = compile_body (domain, dm, /*allow_tier0=*/true);
 
@@ -750,19 +723,7 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 		                                  jinfo_get_method (published), published);
 
 	dm.publish (MonoTier::tier1, code->body);
-
-	/*
-	 * The body being replaced is not dead - a thread can still be running in it
-	 * - so it moves to the superseded list rather than being dropped.
-	 */
-	MONO_LOCK (mutex_)
-	{
-		if (engine.code && engine.code->jinfo != nullptr
-		    && engine.code->jinfo != code->jinfo)
-			engine.superseded.push_back (engine.code->jinfo);
-		engine.code = *code;
-		engine.interpreted = false;
-	}
+	dm.attach_body (MonoTier::tier1, code->body, code->jinfo);
 
 	/*
 	 * Only now, and outside the lock: the debugger agent's handler for this
@@ -971,24 +932,19 @@ MonoBackend::body_of (MonoDomain *domain, MonoMethod *method)
 	if (dm == nullptr)
 		return nullptr;
 
-	MONO_LOCK (instance->mutex_)
-	{
-		MethodState &engine = engine_state (*dm);
+	std::optional<MonoMethodBody> body = dm->body ();
 
-		/*
-		 * An interpreted method is answered for as if it had none. What it has
-		 * is the entry thunk, which every interpreted method shares - so
-		 * handing it back names no method in particular, and callers take it
-		 * for a body: they look its jit info up by address, and the interpreter
-		 * reads it as "this has native code now" and starts calling it through
-		 * the native boundary instead of interpreting it.
-		 */
-		if (!engine.code || engine.interpreted)
-			return nullptr;
-		return engine.code->body;
-	}
-
-	return nullptr;
+	/*
+	 * An interpreted method is answered for as if it had none. What it has is
+	 * the entry thunk, which every interpreted method shares - so handing it
+	 * back names no method in particular, and callers take it for a body: they
+	 * look its jit info up by address, and the interpreter reads it as "this
+	 * has native code now" and starts calling it through the native boundary
+	 * instead of interpreting it.
+	 */
+	if (!body || body->tier == MonoTier::interp)
+		return nullptr;
+	return body->code;
 }
 
 void
@@ -999,9 +955,9 @@ MonoBackend::foreach_body (MonoDomain *domain, MonoMethod *method,
 		return;
 
 	/*
-	 * Collected under the lock and visited outside it: what the debugger does
-	 * with a body is look the method up again, through a door that takes this
-	 * same lock.
+	 * Collected under the record's lock and visited outside it: what the
+	 * debugger does with a body is look the method up again, through a door
+	 * that takes that same lock.
 	 */
 	llvm::SmallVector<MonoJitInfo *, 2> bodies;
 	MonoDomainMethod *dm = domain_method_find (domain, method);
@@ -1009,15 +965,11 @@ MonoBackend::foreach_body (MonoDomain *domain, MonoMethod *method,
 	if (dm == nullptr)
 		return;
 
-	MONO_LOCK (instance->mutex_)
-	{
-		MethodState &engine = engine_state (*dm);
-
-		/* Oldest first, which is what a breakpoint walk expects. */
-		bodies.assign (engine.superseded.begin (), engine.superseded.end ());
-		if (engine.code && engine.code->jinfo != nullptr)
-			bodies.push_back (engine.code->jinfo);
-	}
+	/* Oldest first, which is what a breakpoint walk expects. */
+	dm->foreach_body ([&] (const MonoMethodBody &body) {
+		if (body.jinfo != nullptr)
+			bodies.push_back (body.jinfo);
+	});
 
 	for (MonoJitInfo *jinfo : bodies)
 		visit (jinfo, user_data);
