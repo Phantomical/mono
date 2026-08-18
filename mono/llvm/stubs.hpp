@@ -42,6 +42,10 @@ private:
 	std::string name;
 };
 
+/// What one stub costs in code memory: the slot it jumps through, the unbox
+/// prologue in front of it and the block itself.
+extern const size_t stub_group_size;
+
 /// An individual redirectable stub.
 class Stub {
 private:
@@ -57,6 +61,14 @@ public:
 
 	/// Get the pointer that this stub can be called with.
 	void *code () const { return code_; }
+
+	/// Where a call off a value type's vtable or IMT arrives: it steps the
+	/// receiver past the object header, then enters the method.
+	///
+	/// Every stub has one. Only a method publishes_unbox_entry () accepts can be
+	/// entered here - any other receiver is stepped past bytes that are not
+	/// there.
+	void *unbox_entry () const;
 
 	/// Redirect this stub to point to a new target.
 	void redirect (void *target) { slot_->store (target, std::memory_order_release); }
@@ -79,14 +91,6 @@ public:
 	/// error; the caller redirects it to something real.
 	llvm::Expected<Stub> allocate (void *key);
 
-	/// Carve a stub that steps its receiver past ADJUST bytes and then forwards
-	/// to TARGET, which is another stub rather than a body.
-	///
-	/// Forwarding through a stub is what makes this correct at every tier
-	/// without being rewritten: whatever redirects the method redirects this
-	/// too.
-	llvm::Expected<Stub> allocate_unbox (void *target, unsigned adjust);
-
 	void release (Stub stub);
 
 private:
@@ -99,8 +103,8 @@ private:
 	char *batch_ = nullptr;
 	std::vector<Stub> free_;
 	size_t next_;
-	/// How far apart two stubs sit, which is the block size and whatever a perf
-	/// dump needs behind it.
+	/// How far apart two groups sit, which is a group and whatever a perf dump
+	/// needs behind it.
 	size_t stride_;
 };
 
@@ -121,21 +125,6 @@ public:
 	/// Create a stub that hands the requested key to whatever it jumps to.
 	/// Fails the same way if the name already has one.
 	llvm::Expected<Stub> create (llvm::StringRef name, void *key);
-
-	/// The same, but handing back the stub that is already there rather than
-	/// failing - for a name two threads can reach at once.
-	llvm::Expected<Stub> get_or_create (llvm::StringRef name);
-	llvm::Expected<Stub> get_or_create (llvm::StringRef name, void *key);
-
-	/// Carve a stub that steps its receiver past ADJUST bytes and then forwards
-	/// to TARGET, which is another stub rather than a body.
-	///
-	/// Nameless: nothing links against it and nothing can find it here, so the
-	/// caller holds the only handle and has to give it back.
-	llvm::Expected<Stub> create_unbox (void *target, unsigned adjust);
-
-	/// Give back a stub this table carved but never named.
-	void release (Stub stub);
 
 	/// Remove a single named stub.
 	bool remove (llvm::StringRef name);

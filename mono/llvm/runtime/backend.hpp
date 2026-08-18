@@ -36,10 +36,6 @@ public:
 	/// this is the first thing to ask for either.
 	static llvm::Error attach (MonoDomainMethod &dm);
 
-	/// Gives \p dm the entry a call off a value type's vtable arrives at, or
-	/// leaves it with none when the method has no such entry.
-	static llvm::Error attach_unbox (MonoDomainMethod &dm);
-
 	/// Gives \p dm the C-convention entry native code enters it through, or
 	/// leaves it with none when nothing native enters the method.
 	static llvm::Error attach_interop (MonoDomainMethod &dm);

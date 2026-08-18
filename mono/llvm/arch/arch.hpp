@@ -81,14 +81,14 @@ void write_jump_stub (char *code, const void *slot);
 /// body shared by many methods is told which of them it was entered for.
 void write_keyed_jump_stub (char *code, const void *slot, const void *key);
 
-/// Write a stub at CODE that adds ADJUST to the receiver and then jumps through
-/// SLOT, filling the whole stub block.
+/// Write the prologue at CODE that adds ADJUST to the receiver, filling the
+/// whole of unbox_prologue_size.
 ///
 /// This is the entry a call off a value type's vtable or IMT arrives at: the
 /// receiver is the boxed object, and stepping it past the header is the whole of
-/// the difference. Both ends speak the same convention, so the forward is a jump
-/// and the stub leaves no frame of its own behind.
-void write_unbox_stub (char *code, const void *slot, unsigned adjust);
+/// the difference. It runs into whatever follows it, so the caller must put a
+/// stub immediately behind it.
+void write_unbox_prologue (char *code, unsigned adjust);
 
 /* -- Call counting -------------------------------------------------------- */
 

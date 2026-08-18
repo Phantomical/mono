@@ -133,21 +133,14 @@ public:
 
 	/* -- The stubs ------------------------------------------------------- */
 
-	/// The entry a call off a value type's vtable or IMT arrives at, carved on
-	/// first ask. Null for a method that has no such entry.
+	/// The entry a call off a value type's vtable or IMT arrives at.
 	///
-	/// It steps the receiver past the object header and forwards through the
-	/// body entry, so whatever redirects the method redirects this too and no
-	/// tier ever has to rewrite it.
-	llvm::Expected<void *> unbox_entry ();
-
-	/// What unbox_entry () filled in, for the teardown that has to give it back.
-	Stub unbox_stub;
-	MonoJitInfo *unbox_jinfo = nullptr;
-	void set_unbox_entry (void *code)
-	{
-		unbox_entry_.store (code, std::memory_order_release);
-	}
+	/// It steps the receiver past the object header and runs into the body
+	/// entry, so whatever redirects the method redirects this too and no tier
+	/// ever has to rewrite it. Every method has one, used or not. Hand it out
+	/// only for a method the engine accepts: a receiver with no object header in
+	/// front of it is stepped past bytes that are not there.
+	void *unbox_entry () const { return stub ? stub.unbox_entry () : nullptr; }
 
 	/// The C-convention entry native code enters the method through, compiled
 	/// on first ask. Null for a method nothing native enters.
@@ -218,8 +211,6 @@ public:
 	std::atomic<const arch::InterpEntryLayout *> interp_layout{nullptr};
 
 private:
-	std::atomic<void *> unbox_entry_ { nullptr };
-
 	std::atomic<void *> interop_entry_ { nullptr };
 
 	llvm::SmallVector<MonoMethodBody, 2> bodies_;
@@ -239,13 +230,6 @@ private:
 /// The compiling engine defines this, and each record goes through it once. A
 /// failure leaves the record unpublished, and nothing keeps it.
 llvm::Error attach_method_entries (MonoDomainMethod &dm);
-
-/// Gives \p dm the entry a call off a value type's vtable arrives at.
-///
-/// The compiling engine defines this. Called with \p dm's lock held, and with
-/// the domain's, since registering the jit info takes it. A method that has no
-/// such entry is left with none and is not an error.
-llvm::Error attach_unbox_entry (MonoDomainMethod &dm);
 
 /// Gives \p dm the entry native code enters the method through.
 ///

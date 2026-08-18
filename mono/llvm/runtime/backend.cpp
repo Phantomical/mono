@@ -221,9 +221,6 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 	if (MonoJitInfo *jinfo = dm.jinfo)
 		mono_jit_info_table_remove (domain, jinfo);
 
-	if (MonoJitInfo *jinfo = dm.unbox_jinfo)
-		mono_jit_info_table_remove (domain, jinfo);
-
 	for (MonoJitInfo *jinfo : engine.owned.jinfos)
 		mono_jit_info_table_remove (domain, jinfo);
 
@@ -234,7 +231,6 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 	must (jit->undefine_stubs (names));
 	callbacks->release (dm.trampoline);
 	stub_table->remove_all (names);
-	stub_table->release (dm.unbox_stub);
 
 	if (!engine.owned.dylibs.empty ())
 		must (jit->remove_dylibs (engine.owned.dylibs));
@@ -374,9 +370,14 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	 * an ldftn most visibly - has to find it in the jit-info table. Registered
 	 * the way mini registers trampolines: an entry carrying the method, in the
 	 * domain whose linker holds the stub, so the two die together.
+	 *
+	 * It covers the unbox prologue as well as the stub. Both are the method, and
+	 * a walk that catches a thread on either has the same frame to step off. So
+	 * one record answers for the two.
 	 */
-	dm.jinfo =
-		register_stub_jinfo (domain.domain, method, stub->code (), arch::stub_block_size, dm.name);
+	dm.jinfo = register_stub_jinfo (domain.domain, method, stub->unbox_entry (),
+	                                arch::unbox_prologue_size + arch::stub_block_size,
+	                                dm.name);
 	return llvm::Error::success ();
 }
 
@@ -387,59 +388,9 @@ attach_method_entries (MonoDomainMethod &dm)
 }
 
 llvm::Error
-attach_unbox_entry (MonoDomainMethod &dm)
-{
-	return MonoBackend::attach_unbox (dm);
-}
-
-llvm::Error
 attach_interop_entry (MonoDomainMethod &dm)
 {
 	return MonoBackend::attach_interop (dm);
-}
-
-/*
- * The receiver a value type's vtable slot arrives with is the boxed object, and
- * stepping it past the header is the whole of the difference. So this forwards
- * through the method's body stub rather than to any one body: it is right at
- * every tier, and a promotion that redirects the stub redirects this with it.
- */
-llvm::Error
-MonoBackend::attach_unbox (MonoDomainMethod &dm)
-{
-	MonoMethod *method = dm.method;
-
-	if (!publishes_unbox_entry (method))
-		return llvm::Error::success ();
-
-	llvm::Expected<MonoBackend *> backend = get ();
-
-	if (!backend)
-		return backend.takeError ();
-	if (*backend == nullptr)
-		return llvm::createStringError (llvm::inconvertibleErrorCode (),
-		                                "the engine has been taken apart");
-
-	llvm::Expected<DomainState *> domain = (*backend)->state (dm.domain);
-
-	if (!domain)
-		return domain.takeError ();
-
-	llvm::Expected<Stub> stub =
-		(*domain)->stub_table->create_unbox (dm.stub.code (), MONO_ABI_SIZEOF (MonoObject));
-
-	if (!stub)
-		return stub.takeError ();
-
-	/*
-	 * Nameless, so nothing finds it through the linker, but its address is
-	 * reachable: a stack walk that lands here has to name the method.
-	 */
-	dm.unbox_jinfo = register_stub_jinfo ((*domain)->domain, method, stub->code (),
-	                                      arch::stub_block_size, dm.name);
-	dm.unbox_stub = *stub;
-	dm.set_unbox_entry (stub->code ());
-	return llvm::Error::success ();
 }
 
 /*
@@ -978,14 +929,7 @@ MonoBackend::unbox_entry_of (MonoMethod *method)
 		return nullptr;
 	}
 
-	llvm::Expected<void *> entry = (*published)->unbox_entry ();
-
-	if (!entry) {
-		llvm::consumeError (entry.takeError ());
-		return nullptr;
-	}
-
-	return *entry;
+	return (*published)->unbox_entry ();
 }
 
 llvm::Expected<void *>

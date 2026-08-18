@@ -145,9 +145,9 @@ MonoDomainMethod::set_interp_method (InterpMethod *imethod)
 }
 
 llvm::Expected<void *>
-MonoDomainMethod::unbox_entry ()
+MonoDomainMethod::interop_entry ()
 {
-	if (void *ready = unbox_entry_.load (std::memory_order_acquire))
+	if (void *ready = interop_entry_.load (std::memory_order_acquire))
 		return ready;
 
 	/*
@@ -155,25 +155,6 @@ MonoDomainMethod::unbox_entry ()
 	 * info and that takes it. It is recursive, so a mutator already holding it
 	 * - mono_class_proxy_vtable is one - arrives here safely.
 	 */
-	DomainLock domain_lock (domain);
-	std::lock_guard<std::mutex> held (lock_);
-
-	if (void *ready = unbox_entry_.load (std::memory_order_relaxed))
-		return ready;
-
-	if (llvm::Error err = attach_unbox_entry (*this))
-		return std::move (err);
-
-	return unbox_entry_.load (std::memory_order_relaxed);
-}
-
-llvm::Expected<void *>
-MonoDomainMethod::interop_entry ()
-{
-	if (void *ready = interop_entry_.load (std::memory_order_acquire))
-		return ready;
-
-	/* The same order unbox_entry () takes, and for the same reason. */
 	DomainLock domain_lock (domain);
 	std::lock_guard<std::mutex> held (lock_);
 

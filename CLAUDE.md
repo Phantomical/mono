@@ -382,15 +382,18 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
   a seat between the machine passes and the AsmPrinter and the side tables can be
   written while the streamer is still open, with code offsets as label differences.
 - **`stubs.cpp`, `jitlink-memory.cpp`** — the redirectable stub every method is published
-  as, and the code memory both it and the compiled bodies are carved out of. A value type's methods get one
-  more block, carved on first ask: the entry a call off its vtable or IMT arrives at,
-  which steps the receiver past the object header and jumps to the body stub. It
-  forwards through that stub rather than to a body, so it is right at every tier and a
-  promotion redirects it along with everything else. It carries no symbol — generated
-  code only ever names the method's own — so nothing links against it and the record
-  holds the only handle. A wrapper native code enters gets a second such extra, and
-  that one is compiled rather than carved: it is a module of its own holding the
-  thunk that takes a C call apart, and it forwards through the stub the same way.
+  as, and the code memory both it and the compiled bodies are carved out of. A stub is
+  carved as a group of three, in one reservation: the slot it jumps through, the unbox
+  prologue, and the block itself, in that order. The prologue is the entry a call off a
+  value type's vtable or IMT arrives at. It steps the receiver past the object header
+  and then runs into the stub behind it, so it needs no target of its own and is right
+  at every tier. Every group has one, whether or not the method is a value type's.
+  `publishes_unbox_entry ()` (`runtime/naming.cpp`) decides who can be entered there,
+  and `mono_llvm_jit_unbox_entry ()` is the only place that hands the address out. The
+  prologue carries no symbol, and one jit info covers it and the stub together. A
+  wrapper native code enters gets an extra of its own, and that one is compiled rather
+  than carved: it is a module holding the thunk that takes a C call apart, and it
+  forwards through the stub the same way.
 - **`jinfo.cpp`** — turns a compiled object's side tables back into the `MonoJitInfo`
   the runtime's unwinder and stack walks read.
 - **`arch/`** — everything that names a register, encodes an instruction or restates the

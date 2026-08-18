@@ -19,7 +19,9 @@
 #include "jit.hpp"
 #include "stubs.hpp"
 
+#include <mono/metadata/abi-details.h>
 #include <mono/metadata/domain-internals.h>
+#include <mono/metadata/object.h>
 
 #include <gtest/gtest.h>
 
@@ -72,7 +74,22 @@ stub_detour_target ()
 	return 99;
 }
 
+/* The two below stand in for a value type's method. They report the receiver
+ * they were entered with, which is what the unbox entry acted on. */
+extern "C" uint8_t *
+stub_receiver_target_one (uint8_t *receiver)
+{
+	return receiver;
+}
+
+extern "C" uint8_t *
+stub_receiver_target_two (uint8_t *receiver)
+{
+	return receiver + 1;
+}
+
 using IntFn = int32_t (*) ();
+using ReceiverFn = uint8_t *(*) (uint8_t *);
 
 /// Where a lazy stub lands when the compile behind it failed, which no case here
 /// arranges for.
@@ -413,6 +430,35 @@ TEST_F (Stubs, CallsInitialTargetAndFollowsRedirects)
 }
 
 /*
+ * The entry a call off a value type's vtable or IMT arrives at. It sits in front
+ * of the stub and runs into it, so it needs no target of its own. Whatever the
+ * stub points at is where the receiver arrives, one object header on.
+ *
+ * Driven off the table rather than the Engine. Nothing links against this
+ * entry: the method's own name is the only symbol either of them has.
+ */
+TEST_F (Stubs, TheUnboxEntryStepsTheReceiverPastTheObjectHeader)
+{
+	CodeArena arena;
+	StubTable stubs (&arena);
+
+	Expected<Stub> stub = stubs.create ("m");
+	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+
+	stub->redirect ((void *) &stub_receiver_target_one);
+
+	auto unbox = reinterpret_cast<ReceiverFn> (stub->unbox_entry ());
+	uint8_t boxed[64] = {};
+
+	EXPECT_EQ (unbox (boxed), boxed + MONO_ABI_SIZEOF (MonoObject));
+
+	/* The fall-through is what makes this right at every tier. Nothing
+	 * rewrites the entry, and a redirect of the stub moves it too. */
+	stub->redirect ((void *) &stub_receiver_target_two);
+	EXPECT_EQ (unbox (boxed), boxed + MONO_ABI_SIZEOF (MonoObject) + 1);
+}
+
+/*
  * A method is published under a name built from its printed name and its
  * MonoMethod address, and a freed method hands that address straight back to the
  * allocator - so the next method along can want the very same name. That only
@@ -735,7 +781,7 @@ TEST_F (Stubs, PackTightlyWhenPublishedOneAtATime)
 			<< "stubs " << i - 1 << " and " << i << " overlap";
 
 	uintptr_t span = addrs.back () - addrs.front ();
-	EXPECT_LE (span, count * arch::stub_block_size)
+	EXPECT_LE (span, count * stub_group_size)
 		<< "stubs are spread over " << span / count << " bytes each";
 
 	/* Every one of them still works. */

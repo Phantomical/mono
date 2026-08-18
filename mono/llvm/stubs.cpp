@@ -10,10 +10,10 @@
  * one of data: 8K a method, which is most of a gigabyte over a game's worth of
  * them. Redirecting likewise goes through a full symbol lookup.
  *
- * So we carve stubs out of one batch of code memory instead. A stub costs 24
- * bytes plus an entry in this table, publishing one is a bump-allocate (or a pop
- * off the free list) plus a few stores, and a redirect is a single atomic store
- * to the slot.
+ * So we carve stubs out of one batch of code memory instead. A stub costs
+ * stub_group_size bytes plus an entry in this table, publishing one is a
+ * bump-allocate (or a pop off the free list) plus a few stores, and a redirect
+ * is a single atomic store to the slot.
  */
 
 #include "stubs.hpp"
@@ -23,10 +23,14 @@
 #include "jitlink-memory.hpp"
 #include "debugging/perf/jitdump.hpp"
 
+#include "mono/metadata/abi-details.h"
+#include "mono/metadata/object.h"
+
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Memory.h>
 
+#include <cstring>
 #include <mutex>
 #include <utility>
 
@@ -37,13 +41,32 @@ namespace mono {
 namespace {
 
 /*
- * How many stubs a batch holds. The slot and stub regions come out of one
- * allocation so the jump's rel32 displacement always reaches, and the slot
- * region is a whole number of 16-byte blocks at this count, which keeps the
- * stub region aligned without padding between them.
+ * One stub's group: the slot it jumps through, the unbox prologue that runs into
+ * it, and the block itself.
+ *
+ *      +0  slot                    the jump's target, and the group's base
+ *      +8  int3 padding            unreachable
+ *     +12  addq $16, %rdi          the unbox entry
+ *     +16  the stub block
+ *
+ * The slot leads, so a Stub finds its group again from the slot alone and the
+ * free list needs nothing else. stub_alignment decides where the block sits, and
+ * the padding is whatever that leaves in front of the prologue. One allocation
+ * holds all three, so the jump's rel32 displacement to its own slot always
+ * reaches.
  */
+constexpr size_t slot_size = sizeof (void *);
+constexpr size_t stub_offset =
+	(slot_size + arch::unbox_prologue_size + arch::stub_alignment - 1)
+	& ~(arch::stub_alignment - 1);
+constexpr size_t prologue_padding = stub_offset - slot_size - arch::unbox_prologue_size;
+constexpr size_t group_size = stub_offset + arch::stub_block_size;
+
+static_assert (group_size % arch::stub_alignment == 0,
+               "a group has to leave the group behind it aligned");
+
+/// How many groups a batch holds.
 constexpr size_t stubs_per_slab = 2048;
-constexpr size_t slot_region_size = stubs_per_slab * sizeof (void *);
 
 void
 stub_not_initialized ()
@@ -53,15 +76,23 @@ stub_not_initialized ()
 
 } // namespace
 
+const size_t stub_group_size = group_size;
+
+void *
+Stub::unbox_entry () const
+{
+	return static_cast<char *> (code_) - arch::unbox_prologue_size;
+}
+
 /*
- * A stub is a jump and never fills its block. The rest of the block is the room
- * a perf dump's record for one stub keeps its frame description in, and a second
- * stub inside that room would take it. The slack is a multiple of 16, so a wider
- * block leaves every stub as aligned as a bare one.
+ * A perf dump's record keeps its frame description in the room past the code it
+ * names. A second record inside that room takes it, so the slack separates the
+ * groups while a dump is open. The slack is a multiple of 16, so a wider stride
+ * leaves every group as aligned as a tight one.
  */
 StubSlabs::StubSlabs (CodeArena *arena)
 	: arena_ (arena), next_ (stubs_per_slab),
-	  stride_ (arch::stub_block_size + perf::code_slack ())
+	  stride_ (group_size + perf::code_slack ())
 {
 }
 
@@ -74,28 +105,20 @@ StubSlabs::allocate (void *key)
 	stub->redirect ((void *) stub_not_initialized);
 
 	char *code = static_cast<char *> (stub->code ());
+	char *prologue = static_cast<char *> (stub->unbox_entry ());
+
+	/* Nothing reaches the bytes between the slot and the prologue, so they
+	 * trap rather than continue into it. */
+	std::memset (prologue - prologue_padding, 0xcc, prologue_padding);
+	arch::write_unbox_prologue (prologue, MONO_ABI_SIZEOF (MonoObject));
 
 	if (key != nullptr)
 		arch::write_keyed_jump_stub (code, stub->slot_, key);
 	else
 		arch::write_jump_stub (code, stub->slot_);
-	sys::Memory::InvalidateInstructionCache (code, arch::stub_block_size);
 
-	return stub;
-}
-
-llvm::Expected<Stub>
-StubSlabs::allocate_unbox (void *target, unsigned adjust)
-{
-	auto stub = acquire ();
-	if (!stub)
-		return stub.takeError ();
-	stub->redirect (target);
-
-	char *code = static_cast<char *> (stub->code ());
-
-	arch::write_unbox_stub (code, stub->slot_, adjust);
-	sys::Memory::InvalidateInstructionCache (code, arch::stub_block_size);
+	sys::Memory::InvalidateInstructionCache (
+		prologue, arch::unbox_prologue_size + arch::stub_block_size);
 
 	return stub;
 }
@@ -124,18 +147,17 @@ StubSlabs::acquire ()
 			return err;
 	}
 
-	char *base = batch_;
-	size_t i = next_++;
+	char *group = batch_ + (next_++) * stride_;
 
-	return Stub (base + slot_region_size + i * stride_,
-	             reinterpret_cast<std::atomic<void *> *> (base + i * sizeof (void *)));
+	return Stub (group + stub_offset,
+	             reinterpret_cast<std::atomic<void *> *> (group));
 }
 
 llvm::Error
 StubSlabs::add_slab ()
 {
-	llvm::Expected<char *> batch = arena_->reserve (
-		slot_region_size + stubs_per_slab * stride_, arch::stub_block_size);
+	llvm::Expected<char *> batch =
+		arena_->reserve (stubs_per_slab * stride_, arch::stub_alignment);
 
 	if (!batch)
 		return batch.takeError ();
@@ -178,45 +200,6 @@ StubTable::create (llvm::StringRef name, void *key)
 
 	stubs_.insert (std::make_pair (name, *stub));
 	return *stub;
-}
-
-llvm::Expected<Stub>
-StubTable::get_or_create (llvm::StringRef name)
-{
-	return get_or_create (name, nullptr);
-}
-
-llvm::Expected<Stub>
-StubTable::get_or_create (llvm::StringRef name, void *key)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-
-	auto it = stubs_.find (name);
-	if (it != stubs_.end ())
-		return it->second;
-
-	auto stub = slabs_.allocate (key);
-	if (!stub)
-		return stub.takeError ();
-
-	stubs_.insert (std::make_pair (name, *stub));
-	return *stub;
-}
-
-llvm::Expected<Stub>
-StubTable::create_unbox (void *target, unsigned adjust)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-
-	return slabs_.allocate_unbox (target, adjust);
-}
-
-void
-StubTable::release (Stub stub)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-
-	slabs_.release (stub);
 }
 
 bool

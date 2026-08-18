@@ -52,6 +52,13 @@ constexpr uint64_t stub_block_size = 16;
 constexpr uint64_t stub_alignment = 16;
 
 /*
+ * The prologue in front of a stub that a call off a value type's vtable arrives
+ * at. It runs into the stub behind it and needs no jump of its own, so
+ * `addq $imm8, %rdi` is the whole of it.
+ */
+constexpr uint64_t unbox_prologue_size = 4;
+
+/*
  * Stack to reserve for the LMF standing for a managed-to-native transition -
  * what lazy_frame_enter () links. lmf.cpp casts it to its own struct and
  * static_asserts it fits; 32 keeps the frame that follows 16-aligned.
