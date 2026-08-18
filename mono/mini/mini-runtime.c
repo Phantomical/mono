@@ -806,18 +806,6 @@ mono_icall_get_wrapper (MonoJitICallInfo* callinfo)
 	return mono_icall_get_wrapper_full (callinfo, FALSE);
 }
 
-static MonoJitDynamicMethodInfo*
-mono_dynamic_code_hash_lookup (MonoDomain *domain, MonoMethod *method)
-{
-	MonoJitDynamicMethodInfo *res;
-
-	if (domain_jit_info (domain)->dynamic_code_hash)
-		res = (MonoJitDynamicMethodInfo *)g_hash_table_lookup (domain_jit_info (domain)->dynamic_code_hash, method);
-	else
-		res = NULL;
-	return res;
-}
-
 /*
  * For JIT icalls implemented in C.
  * NAME should be the same as the name of the C function whose address is FUNC.
@@ -1573,26 +1561,6 @@ mini_patch_jump_sites (MonoDomain *domain, MonoMethod *method, gpointer addr)
 #endif
 
 		mono_codeman_disable_write ();
-	}
-}
-
-/*
- * mini_patch_llvm_jit_callees:
- *
- *   Patch function address slots used by llvm JITed code.
- */
-void
-mini_patch_llvm_jit_callees (MonoDomain *domain, MonoMethod *method, gpointer addr)
-{
-	if (!domain_jit_info (domain)->llvm_jit_callees)
-		return;
-	GSList *callees = (GSList*)g_hash_table_lookup (domain_jit_info (domain)->llvm_jit_callees, method);
-	GSList *l;
-
-	for (l = callees; l; l = l->next) {
-		gpointer *slot = (gpointer*)l->data;
-
-		*slot = addr;
 	}
 }
 
@@ -2581,16 +2549,6 @@ mono_jit_compile_method_jit_only (MonoMethod *method, MonoError *error)
 	return code;
 }
 
-#ifdef MONO_ARCH_HAVE_INVALIDATE_METHOD
-static void
-invalidated_delegate_trampoline (char *desc)
-{
-	g_error ("Unmanaged code called delegate of type %s which was already garbage collected.\n"
-		 "See http://www.mono-project.com/Diagnostic:Delegate for an explanation and ways to fix this.",
-		 desc);
-}
-#endif
-
 /*
  * mono_jit_free_method:
  *
@@ -2599,10 +2557,6 @@ invalidated_delegate_trampoline (char *desc)
 static void
 mono_jit_free_method (MonoDomain *domain, MonoMethod *method)
 {
-	MonoJitDynamicMethodInfo *ji;
-	gboolean destroy = TRUE, removed;
-	GHashTableIter iter;
-	MonoJumpList *jlist;
 	MonoJitDomainInfo *info = domain_jit_info (domain);
 
 	g_assert (method->dynamic);
@@ -2623,67 +2577,7 @@ mono_jit_free_method (MonoDomain *domain, MonoMethod *method)
 	g_hash_table_remove (info->seq_points, method);
 	/* requires the domain lock - took above */
 	mono_conc_hashtable_remove (info->runtime_invoke_hash, method);
-	ji = mono_dynamic_code_hash_lookup (domain, method);
 	mono_domain_unlock (domain);
-
-	if (!ji)
-		return;
-
-	mono_lldb_remove_method (domain, method, ji);
-
-	mono_domain_lock (domain);
-	g_hash_table_remove (info->dynamic_code_hash, method);
-	mono_domain_jit_code_hash_lock (domain);
-	removed = mono_internal_hash_table_remove (&domain->jit_code_hash, method);
-	g_assert (removed);
-	mono_domain_jit_code_hash_unlock (domain);
-
-	ji->ji->seq_points = NULL;
-
-	/* Remove jump targets in this method */
-	g_hash_table_iter_init (&iter, info->jump_target_hash);
-	while (g_hash_table_iter_next (&iter, NULL, (void**)&jlist)) {
-		GSList *tmp, *remove;
-
-		remove = NULL;
-		for (tmp = jlist->list; tmp; tmp = tmp->next) {
-			guint8 *ip = (guint8 *)tmp->data;
-
-			if (ip >= (guint8*)ji->ji->code_start && ip < (guint8*)ji->ji->code_start + ji->ji->code_size)
-				remove = g_slist_prepend (remove, tmp);
-		}
-		for (tmp = remove; tmp; tmp = tmp->next) {
-			jlist->list = g_slist_delete_link ((GSList *)jlist->list, (GSList *)tmp->data);
-		}
-		g_slist_free (remove);
-	}
-	mono_domain_unlock (domain);
-
-#ifdef MONO_ARCH_HAVE_INVALIDATE_METHOD
-	if (mini_debug_options.keep_delegates && method->wrapper_type == MONO_WRAPPER_NATIVE_TO_MANAGED) {
-		/*
-		 * Instead of freeing the code, change it to call an error routine
-		 * so people can fix their code.
-		 */
-		char *type = mono_type_full_name (m_class_get_byval_arg (method->klass));
-		char *type_and_method = g_strdup_printf ("%s.%s", type, method->name);
-
-		g_free (type);
-		mono_arch_invalidate_method (ji->ji, (gpointer)invalidated_delegate_trampoline, (gpointer)type_and_method);
-		destroy = FALSE;
-	}
-#endif
-
-	/*
-	 * This needs to be done before freeing code_mp, since the code address is the
-	 * key in the table, so if we free the code_mp first, another thread can grab the
-	 * same code address and replace our entry in the table.
-	 */
-	mono_jit_info_table_remove (domain, ji->ji);
-
-	if (destroy)
-		mono_code_manager_destroy (ji->code_mp);
-	g_free (ji);
 }
 
 gpointer
@@ -4089,7 +3983,6 @@ mini_create_jit_domain_info (MonoDomain *domain)
 	info->jump_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->jit_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->delegate_trampoline_hash = g_hash_table_new (class_method_pair_hash, class_method_pair_equal);
-	info->llvm_vcall_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->runtime_invoke_hash = mono_conc_hashtable_new_full (mono_aligned_addr_hash, NULL, NULL, runtime_invoke_info_free);
 	info->seq_points = g_hash_table_new_full (mono_aligned_addr_hash, NULL, NULL, free_seq_point_list);
 	info->arch_seq_points = g_hash_table_new (mono_aligned_addr_hash, NULL);
@@ -4109,21 +4002,6 @@ delete_jump_list (gpointer key, gpointer value, gpointer user_data)
 }
 
 static void
-delete_got_slot_list (gpointer key, gpointer value, gpointer user_data)
-{
-	GSList *list = (GSList *)value;
-	g_slist_free (list);
-}
-
-static void
-dynamic_method_info_free (gpointer key, gpointer value, gpointer user_data)
-{
-	MonoJitDynamicMethodInfo *di = (MonoJitDynamicMethodInfo *)value;
-	mono_code_manager_destroy (di->code_mp);
-	g_free (di);
-}
-
-static void
 runtime_invoke_info_free (gpointer value)
 {
 	RuntimeInvokeInfo *info = (RuntimeInvokeInfo*)value;
@@ -4133,12 +4011,6 @@ runtime_invoke_info_free (gpointer value)
 		mono_arch_dyn_call_free (info->dyn_call_info);
 #endif
 	g_free (info);
-}
-
-static void
-free_jit_callee_list (gpointer key, gpointer value, gpointer user_data)
-{
-	g_slist_free ((GSList*)value);
 }
 
 /*
@@ -4159,32 +4031,18 @@ mini_free_jit_domain_info (MonoDomain *domain)
 
 	g_hash_table_foreach (info->jump_target_hash, delete_jump_list, NULL);
 	g_hash_table_destroy (info->jump_target_hash);
-	if (info->jump_target_got_slot_hash) {
-		g_hash_table_foreach (info->jump_target_got_slot_hash, delete_got_slot_list, NULL);
-		g_hash_table_destroy (info->jump_target_got_slot_hash);
-	}
-	if (info->dynamic_code_hash) {
-		g_hash_table_foreach (info->dynamic_code_hash, dynamic_method_info_free, NULL);
-		g_hash_table_destroy (info->dynamic_code_hash);
-	}
-	g_hash_table_destroy (info->method_code_hash);
 	g_hash_table_destroy (info->jump_trampoline_hash);
 	g_hash_table_destroy (info->jit_trampoline_hash);
 	g_hash_table_destroy (info->delegate_trampoline_hash);
 	g_hash_table_destroy (info->mrgctx_hash);
 	g_hash_table_destroy (info->method_rgctx_hash);
 	g_hash_table_destroy (info->interp_method_pointer_hash);
-	g_hash_table_destroy (info->llvm_vcall_trampoline_hash);
 	mono_conc_hashtable_destroy (info->runtime_invoke_hash);
 	g_hash_table_destroy (info->seq_points);
 	g_hash_table_destroy (info->arch_seq_points);
 	if (info->agent_info)
 		mini_get_dbg_callbacks ()->free_domain_info (domain);
 	g_hash_table_destroy (info->gsharedvt_arg_tramp_hash);
-	if (info->llvm_jit_callees) {
-		g_hash_table_foreach (info->llvm_jit_callees, free_jit_callee_list, NULL);
-		g_hash_table_destroy (info->llvm_jit_callees);
-	}
 
 	/*
 	 * Before the engine's state for the domain goes: a record names stubs

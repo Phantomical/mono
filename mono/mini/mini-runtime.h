@@ -21,17 +21,11 @@ G_BEGIN_DECLS
 /* Per-domain information maintained by the JIT */
 typedef struct
 {
-	/* Maps MonoMethod's to a GSList of GOT slot addresses pointing to its code */
-	GHashTable *jump_target_got_slot_hash;
 	GHashTable *jump_target_hash;
 	/* Maps methods/klasses to the address of the given type of trampoline */
 	GHashTable *jump_trampoline_hash;
 	GHashTable *jit_trampoline_hash;
 	GHashTable *delegate_trampoline_hash;
-	GHashTable *llvm_vcall_trampoline_hash;
-	/* maps MonoMethod -> MonoJitDynamicMethodInfo */
-	GHashTable *dynamic_code_hash;
-	GHashTable *method_code_hash;
 	/* Maps methods to a RuntimeInvokeInfo structure, protected by the associated MonoDomain lock */
 	MonoConcurrentHashTable *runtime_invoke_hash;
 	/* Maps MonoMethod to a GPtrArray containing sequence point locations */
@@ -46,8 +40,6 @@ typedef struct
 	/* memcpy/bzero methods specialized for small constant sizes */
 	gpointer *memcpy_addr [17];
 	gpointer *bzero_addr [17];
-	/* Maps MonoMethod -> GSlist of addresses */
-	GHashTable *llvm_jit_callees;
 	/* Maps MonoMethod -> 	MonoMethodRuntimeGenericContext */
 	GHashTable *mrgctx_hash;
 	GHashTable *method_rgctx_hash;
@@ -520,7 +512,6 @@ MonoJumpInfoToken* mono_jump_info_token_new (MonoMemPool *mp, MonoImage *image, 
 MonoJumpInfoToken* mono_jump_info_token_new2 (MonoMemPool *mp, MonoImage *image, guint32 token, MonoGenericContext *context);
 void mini_register_jump_site                (MonoDomain *domain, MonoMethod *method, gpointer ip);
 void mini_patch_jump_sites                  (MonoDomain *domain, MonoMethod *method, gpointer addr);
-void mini_patch_llvm_jit_callees            (MonoDomain *domain, MonoMethod *method, gpointer addr);
 gpointer  mono_jit_search_all_backends_for_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji);
 void      mono_jit_search_all_backends_for_all_jit_infos (MonoDomain *domain, MonoMethod *method, GPtrArray *bodies);
 void      mini_install_pending_breakpoints  (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji);

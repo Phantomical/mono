@@ -117,11 +117,6 @@ typedef struct
 	gboolean is_virtual;
 } MonoDelegateClassMethodPair;
 
-typedef struct {
-	MonoJitInfo *ji;
-	MonoCodeManager *code_mp;
-} MonoJitDynamicMethodInfo;
-
 /* An extension of MonoGenericParamFull used in generic sharing */
 typedef struct {
 	MonoGenericParamFull param;
@@ -640,7 +635,6 @@ host_mgreg_t mono_arch_context_get_int_reg      (MonoContext *ctx, int reg);
 void     mono_arch_context_set_int_reg		(MonoContext *ctx, int reg, host_mgreg_t val);
 void     mono_arch_flush_register_windows       (void);
 gboolean mono_arch_is_int_overflow              (void *sigctx, void *info);
-void     mono_arch_invalidate_method            (MonoJitInfo *ji, void *func, gpointer func_arg);
 void     mono_arch_register_lowlevel_calls      (void);
 gpointer mono_arch_get_unbox_trampoline         (MonoMethod *m, gpointer addr);
 gpointer mono_arch_get_static_rgctx_trampoline  (MonoMemoryManager *mem_manager, gpointer arg, gpointer addr);

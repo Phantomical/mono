@@ -317,7 +317,6 @@ common_call_trampoline (host_mgreg_t *regs, guint8 *code, MonoMethod *m, MonoVTa
 	gpointer *orig_vtable_slot, *vtable_slot_to_patch = NULL;
 	MonoJitInfo *ji = NULL;
 	MonoDomain *domain = mono_domain_get ();
-	MonoMethod *orig_method = m;
 
 	error_init (error);
 
@@ -537,25 +536,6 @@ common_call_trampoline (host_mgreg_t *regs, guint8 *code, MonoMethod *m, MonoVTa
 	if (!code) {
 		mini_patch_jump_sites (domain, m, mono_get_addr_from_ftnptr (addr));
 
-		/* Patch the got entries pointing to this method */
-		if (domain_jit_info (domain)->jump_target_got_slot_hash) {
-			GSList *list, *tmp;
-			MonoMethod *shared_method = mini_method_to_shared (m);
-			m = shared_method ? shared_method : m;
-
-			mono_domain_lock (domain);
-			list = (GSList *)g_hash_table_lookup (domain_jit_info (domain)->jump_target_got_slot_hash, m);
-			if (list) {
-				for (tmp = list; tmp; tmp = tmp->next) {
-					gpointer *got_slot = (gpointer *)tmp->data;
-					*got_slot = addr;
-				}
-				g_hash_table_remove (domain_jit_info (domain)->jump_target_got_slot_hash, m);
-				g_slist_free (list);
-			}
-			mono_domain_unlock (domain);
-		}
-
 #ifdef MONO_ARCH_HAVE_PATCH_JUMP_TRAMPOLINE
 		if (!mono_aot_only) {
 			mono_domain_lock(domain);
@@ -621,8 +601,6 @@ common_call_trampoline (host_mgreg_t *regs, guint8 *code, MonoMethod *m, MonoVTa
 				 */
 				no_patch = TRUE;
 			}
-			if (!no_patch)
-				mini_patch_llvm_jit_callees (domain, orig_method, addr);
 			/* LLVM code doesn't make direct calls */
 			if (ji && ji->from_llvm)
 				no_patch = TRUE;

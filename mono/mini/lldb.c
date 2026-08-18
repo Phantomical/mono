@@ -118,7 +118,6 @@ static int id_generator;
 static GHashTable *codegen_regions;
 static DebugEntry *last_entry;
 static mono_mutex_t mutex;
-static GHashTable *dyn_codegen_regions;
 static gint64 register_time;
 static int num_entries;
 
@@ -393,36 +392,6 @@ mono_lldb_init (const char *options)
 }
 
 void
-mono_lldb_remove_method (MonoDomain *domain, MonoMethod *method, MonoJitDynamicMethodInfo *info)
-{
-	int region_id;
-	UnloadCodeRegionEntry *entry;
-	Buffer tmpbuf;
-	Buffer *buf = &tmpbuf;
-
-	if (!enabled)
-		return;
-
-	g_assert (method->dynamic);
-
-	lldb_lock ();
-	region_id = GPOINTER_TO_INT (g_hash_table_lookup (dyn_codegen_regions, method));
-	g_hash_table_remove (dyn_codegen_regions, method);
-	lldb_unlock ();
-
-	buffer_init (buf, 256);
-
-	entry = (UnloadCodeRegionEntry*)buf->p;
-	buf->p += sizeof (UnloadCodeRegionEntry);
-	entry->id = region_id;
-
-	add_entry (ENTRY_UNLOAD_CODE_REGION, buf);
-	buffer_free (buf);
-
-	/* The method is associated with the code region, so it doesn't have to be unloaded */
-}
-
-void
 mono_lldb_save_trampoline_info (MonoTrampInfo *info)
 {
 	TrampolineEntry *entry;
@@ -539,11 +508,6 @@ mono_lldb_init (const char *options)
 
 void
 mono_lldb_save_trampoline_info (MonoTrampInfo *info)
-{
-}
-
-void
-mono_lldb_remove_method (MonoDomain *domain, MonoMethod *method, MonoJitDynamicMethodInfo *info)
 {
 }
 

@@ -826,18 +826,6 @@ mono_arch_create_general_rgctx_lazy_fetch_trampoline (MonoTrampInfo **info, gboo
 	return buf;
 }
 
-void
-mono_arch_invalidate_method (MonoJitInfo *ji, void *func, gpointer func_arg)
-{
-	/* FIXME: This is not thread safe */
-	guint8 *code = (guint8 *)ji->code_start;
-
-	amd64_mov_reg_imm (code, AMD64_ARG_REG1, func_arg);
-	amd64_mov_reg_imm (code, AMD64_R11, func);
-
-	x86_push_imm (code, (guint64)func_arg);
-	amd64_call_reg (code, AMD64_R11);
-}
 #endif /* !DISABLE_JIT */
 
 /*
@@ -1321,13 +1309,6 @@ mono_arch_create_general_rgctx_lazy_fetch_trampoline (MonoTrampInfo **info, gboo
 {
 	g_assert_not_reached ();
 	return NULL;
-}
-
-void
-mono_arch_invalidate_method (MonoJitInfo *ji, void *func, gpointer func_arg)
-{
-	g_assert_not_reached ();
-	return;
 }
 
 guint8*
