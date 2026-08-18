@@ -36,6 +36,10 @@ public:
 	/// this is the first thing to ask for either.
 	static llvm::Error attach (MonoDomainMethod &dm);
 
+	/// Gives \p dm the entry a call off a value type's vtable arrives at, or
+	/// leaves it with none when the method has no such entry.
+	static llvm::Error attach_unbox (MonoDomainMethod &dm);
+
 	/// Stop all compilation for a specific domain. Blocks until any in-progress
 	/// work is completed.
 	static void stop_compilation (MonoDomain *domain);

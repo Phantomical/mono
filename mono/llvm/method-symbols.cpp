@@ -23,7 +23,6 @@ constexpr StringRef method_entry_attribute = "mono-method-entry";
 
 constexpr StringRef entry_body = "body";
 constexpr StringRef entry_interop = "interop";
-constexpr StringRef entry_unbox = "unbox";
 
 StringRef
 word_for (Entry entry)
@@ -33,8 +32,6 @@ word_for (Entry entry)
 		return entry_body;
 	case Entry::interop:
 		return entry_interop;
-	case Entry::unbox:
-		return entry_unbox;
 	}
 	return entry_body;
 }
@@ -46,8 +43,6 @@ entry_for (StringRef word)
 		return Entry::body;
 	if (word == entry_interop)
 		return Entry::interop;
-	if (word == entry_unbox)
-		return Entry::unbox;
 	return std::nullopt;
 }
 

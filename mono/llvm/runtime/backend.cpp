@@ -136,15 +136,13 @@ struct MonoBackend::MethodState {
 namespace {
 
 /// The entries a method is published under, in the order they are carved.
-llvm::SmallVector<Entry, 3>
+llvm::SmallVector<Entry, 2>
 entries_for (MonoMethod *method)
 {
-	llvm::SmallVector<Entry, 3> all { Entry::body };
+	llvm::SmallVector<Entry, 2> all { Entry::body };
 
 	if (publishes_interop_entry (method))
 		all.push_back (Entry::interop);
-	if (publishes_unbox_entry (method))
-		all.push_back (Entry::unbox);
 	return all;
 }
 
@@ -257,6 +255,9 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 		if (MonoJitInfo *jinfo = dm.jinfo (entry))
 			mono_jit_info_table_remove (domain, jinfo);
 
+	if (MonoJitInfo *jinfo = dm.unbox_jinfo ())
+		mono_jit_info_table_remove (domain, jinfo);
+
 	for (MonoJitInfo *jinfo : engine.owned.jinfos)
 		mono_jit_info_table_remove (domain, jinfo);
 
@@ -270,6 +271,7 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 		callbacks->release (dm.trampoline (entry));
 
 	stub_table->remove_all (names);
+	stub_table->release (dm.unbox_stub ());
 
 	if (!engine.owned.dylibs.empty ())
 		must (jit->remove_dylibs (engine.owned.dylibs));
@@ -462,6 +464,12 @@ attach_method_entries (MonoDomainMethod &dm)
 }
 
 llvm::Error
+attach_unbox_entry (MonoDomainMethod &dm)
+{
+	return MonoBackend::attach_unbox (dm);
+}
+
+llvm::Error
 MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
 {
 	return bind_method_symbols (
@@ -476,11 +484,49 @@ MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
 
 /*
  * The receiver a value type's vtable slot arrives with is the boxed object, and
- * stepping it past the header is the whole of the difference - so this is the
- * runtime's own unboxing trampoline, over the shared entry thunk, which is where
- * mono_arch_get_unbox_trampoline's receiver-in-the-first-register assumption
- * holds.
+ * stepping it past the header is the whole of the difference. So this forwards
+ * through the method's body stub rather than to any one body: it is right at
+ * every tier, and a promotion that redirects the stub redirects this with it.
  */
+llvm::Error
+MonoBackend::attach_unbox (MonoDomainMethod &dm)
+{
+	MonoMethod *method = dm.method ();
+
+	if (!publishes_unbox_entry (method))
+		return llvm::Error::success ();
+
+	llvm::Expected<MonoBackend *> backend = get ();
+
+	if (!backend)
+		return backend.takeError ();
+	if (*backend == nullptr)
+		return llvm::createStringError (llvm::inconvertibleErrorCode (),
+		                                "the engine has been taken apart");
+
+	llvm::Expected<DomainState *> domain = (*backend)->state (dm.domain ());
+
+	if (!domain)
+		return domain.takeError ();
+
+	llvm::Expected<Stub> stub = (*domain)->stub_table->create_unbox (
+		dm.stub (Entry::body).code (), MONO_ABI_SIZEOF (MonoObject));
+
+	if (!stub)
+		return stub.takeError ();
+
+	/*
+	 * Nameless, so nothing finds it through the linker, but its address is
+	 * reachable: a stack walk that lands here has to name the method.
+	 */
+	dm.unbox_jinfo () = register_stub_jinfo ((*domain)->domain, method,
+	                                         stub->code (), arch::stub_block_size,
+	                                         dm.name (Entry::body));
+	dm.unbox_stub () = *stub;
+	dm.set_unbox_entry (stub->code ());
+	return llvm::Error::success ();
+}
+
 llvm::Expected<MonoBackend::Compiled>
 MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 {
@@ -491,10 +537,7 @@ MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 		return ready.takeError ();
 
 	void *body = arch::interp_entry_thunk ();
-	Compiled entries { body, body,
-		           publishes_unbox_entry (method)
-		                   ? mono_arch_get_unbox_trampoline (method, body)
-		                   : nullptr };
+	Compiled entries { body, body };
 
 	dm.publish (MonoTier::interp, [&] (Entry each) { return entries.at (each); });
 
@@ -1010,7 +1053,14 @@ MonoBackend::unbox_entry_of (MonoMethod *method)
 		return nullptr;
 	}
 
-	return (*published)->stub (Entry::unbox).code ();
+	llvm::Expected<void *> entry = (*published)->unbox_entry ();
+
+	if (!entry) {
+		llvm::consumeError (entry.takeError ());
+		return nullptr;
+	}
+
+	return *entry;
 }
 
 llvm::Expected<void *>

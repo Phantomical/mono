@@ -40,9 +40,6 @@ enum class Entry {
 	/// The C-convention entry, which only a wrapper generated for native code
 	/// to enter has.
 	interop,
-	/// The entry a call off a value type's vtable or IMT arrives at, which
-	/// unboxes the receiver before continuing into the body.
-	unbox,
 };
 
 /// Mark VALUE as standing for ENTRY of METHOD.

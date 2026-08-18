@@ -216,21 +216,6 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		                               body_address);
 	}
 
-	/*
-	 * Reached off a value type's vtable, the method arrives with the boxed
-	 * object as its receiver instead of the value. That is a second entry
-	 * rather than a branch inside the first: which one a caller wants is
-	 * settled when the address is handed out, and the ordinary entry must not
-	 * pay for the question.
-	 */
-	std::string unbox_entry;
-
-	if (wants_unbox_entry (method, sig)) {
-		unbox_entry = definition_symbol (method, Entry::unbox);
-		arch::create_unbox_entry (*module, unbox_entry, *function, body_address,
-		                          MONO_ABI_SIZEOF (MonoObject));
-	}
-
 	if (dumping (entry.c_str ()))
 		module->print (llvm::errs (), nullptr);
 
@@ -255,19 +240,11 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	std::vector<std::pair<uint32_t, void *>> filters;
 	const uint8_t *entry_code = nullptr;
 	size_t entry_code_size = 0;
-	const uint8_t *unbox_code = nullptr;
-	size_t unbox_code_size = 0;
 
 	for (const auto &[name, extent] : compiled->functions) {
 		if (name == interop_entry) {
 			entry_code = extent.first;
 			entry_code_size = extent.second;
-			continue;
-		}
-
-		if (!unbox_entry.empty () && name == unbox_entry) {
-			unbox_code = extent.first;
-			unbox_code_size = extent.second;
 			continue;
 		}
 
@@ -334,16 +311,6 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 			return std::move (err);
 	}
 
-	if (unbox_code != nullptr) {
-		if (Error err = register_side_body (unbox_code, unbox_code_size,
-		                                    CodeKind::AbiThunk, {}))
-			return std::move (err);
-	} else if (!unbox_entry.empty ()) {
-		return createStringError (inconvertibleErrorCode (),
-		                          "the linked object for %s defines no unboxing "
-		                          "entry", entry.c_str ());
-	}
-
 	for (const auto &[name, extent] : compiled->functions) {
 		if (name.find ("$filter") == std::string::npos)
 			continue;
@@ -365,8 +332,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", entry.c_str (),
 		         compiled->entry, target.domain->friendly_name);
 
-	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry,
-		              const_cast<uint8_t *> (unbox_code), *jinfo };
+	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry, *jinfo };
 }
 
 } // namespace mono

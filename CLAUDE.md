@@ -386,7 +386,13 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
   a seat between the machine passes and the AsmPrinter and the side tables can be
   written while the streamer is still open, with code offsets as label differences.
 - **`stubs.cpp`, `codemem.cpp`** — the redirectable stub every method is published as,
-  and the slabs both it and the code are carved out of.
+  and the slabs both it and the code are carved out of. A value type's methods get one
+  more block, carved on first ask: the entry a call off its vtable or IMT arrives at,
+  which steps the receiver past the object header and jumps to the body stub. It
+  forwards through that stub rather than to a body, so it is right at every tier and a
+  promotion redirects it along with everything else. It carries no symbol — generated
+  code only ever names `Entry::body` — so nothing links against it and the record holds
+  the only handle.
 - **`jinfo.cpp`** — turns a compiled object's side tables back into the `MonoJitInfo`
   the runtime's unwinder and stack walks read.
 - **`arch/`** — everything that names a register, encodes an instruction or restates the

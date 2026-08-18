@@ -81,6 +81,15 @@ void write_jump_stub (char *code, const void *slot);
 /// body shared by many methods is told which of them it was entered for.
 void write_keyed_jump_stub (char *code, const void *slot, const void *key);
 
+/// Write a stub at CODE that adds ADJUST to the receiver and then jumps through
+/// SLOT, filling the whole stub block.
+///
+/// This is the entry a call off a value type's vtable or IMT arrives at: the
+/// receiver is the boxed object, and stepping it past the header is the whole of
+/// the difference. Both ends speak the same convention, so the forward is a jump
+/// and the stub leaves no frame of its own behind.
+void write_unbox_stub (char *code, const void *slot, unsigned adjust);
+
 /* -- Call counting -------------------------------------------------------- */
 
 /// Lay out a call-counting thunk in BLOCK, COUNTER_THUNK_SIZE bytes at
@@ -141,17 +150,6 @@ public:
 llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
                                          llvm::Function *target,
                                          llvm::Value *through = nullptr);
-
-/// Create NAME in M: TARGET's own prototype, with ADJUST added to the receiver
-/// before the call is passed on to THROUGH. This is the entry a call off a value
-/// type's vtable or IMT arrives at, stepping the boxed receiver past the object
-/// header.
-///
-/// Both ends speak the same convention, so the forward is a jump and the entry
-/// leaves no frame of its own behind.
-llvm::Function *create_unbox_entry (llvm::Module &m, llvm::StringRef name,
-                                    llvm::Function *target, llvm::Value *through,
-                                    unsigned adjust);
 
 /* -- Entering the interpreter --------------------------------------------- */
 

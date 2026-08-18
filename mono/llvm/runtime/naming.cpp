@@ -27,8 +27,6 @@ stub_suffix (Entry entry)
 		return "";
 	case Entry::interop:
 		return "$interop";
-	case Entry::unbox:
-		return "$unbox";
 	}
 	return "";
 }
@@ -52,9 +50,6 @@ definition_symbol (MonoMethod *method, Entry entry)
 	switch (entry) {
 	case Entry::interop:
 		suffix = "$entry";
-		break;
-	case Entry::unbox:
-		suffix = "$unboxentry";
 		break;
 	case Entry::body:
 		g_assert_not_reached ();

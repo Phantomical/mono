@@ -89,6 +89,22 @@ StubSlabs::allocate (void *key)
 	return stub;
 }
 
+llvm::Expected<Stub>
+StubSlabs::allocate_unbox (void *target, unsigned adjust)
+{
+	auto stub = acquire ();
+	if (!stub)
+		return stub.takeError ();
+	stub->redirect (target);
+
+	char *code = static_cast<char *> (stub->code ());
+
+	arch::write_unbox_stub (code, stub->slot_, adjust);
+	sys::Memory::InvalidateInstructionCache (code, arch::stub_block_size);
+
+	return stub;
+}
+
 void
 StubSlabs::release (Stub stub)
 {
@@ -190,6 +206,22 @@ StubTable::get_or_create (llvm::StringRef name, void *key)
 
 	stubs_.insert (std::make_pair (name, *stub));
 	return *stub;
+}
+
+llvm::Expected<Stub>
+StubTable::create_unbox (void *target, unsigned adjust)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	return slabs_.allocate_unbox (target, adjust);
+}
+
+void
+StubTable::release (Stub stub)
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	slabs_.release (stub);
 }
 
 bool

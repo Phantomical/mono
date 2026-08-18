@@ -79,6 +79,15 @@ public:
 	/// jumps to when KEY is not null. The stub starts out pointing at a fatal
 	/// error; the caller redirects it to something real.
 	llvm::Expected<Stub> allocate (void *key);
+
+	/// Carve a stub that steps its receiver past ADJUST bytes and then forwards
+	/// to TARGET, which is another stub rather than a body.
+	///
+	/// Forwarding through a stub is what makes this correct at every tier
+	/// without being rewritten: whatever redirects the method redirects this
+	/// too.
+	llvm::Expected<Stub> allocate_unbox (void *target, unsigned adjust);
+
 	void release (Stub stub);
 
 private:
@@ -116,6 +125,16 @@ public:
 	/// failing - for a name two threads can reach at once.
 	llvm::Expected<Stub> get_or_create (llvm::StringRef name);
 	llvm::Expected<Stub> get_or_create (llvm::StringRef name, void *key);
+
+	/// Carve a stub that steps its receiver past ADJUST bytes and then forwards
+	/// to TARGET, which is another stub rather than a body.
+	///
+	/// Nameless: nothing links against it and nothing can find it here, so the
+	/// caller holds the only handle and has to give it back.
+	llvm::Expected<Stub> create_unbox (void *target, unsigned adjust);
+
+	/// Give back a stub this table carved but never named.
+	void release (Stub stub);
 
 	/// Remove a single named stub.
 	bool remove (llvm::StringRef name);

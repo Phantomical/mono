@@ -108,11 +108,11 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 
 	/*
 	 * One body under one name for every door. It takes no arguments it reads
-	 * and never returns, so whichever entry a caller came for - the interop one,
-	 * the unboxing one, the method itself - these three instructions answer for
-	 * it, and publish_defs () points every stub the method has at this.
+	 * and never returns, so whichever entry a caller came for - the interop one
+	 * or the method itself - these three instructions answer for it, and
+	 * publish_defs () points every stub the method has at this.
 	 */
-	return Compiled { *body, *body, *body };
+	return Compiled { *body, *body };
 }
 
 /*

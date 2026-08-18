@@ -474,6 +474,36 @@ class Tests {
 		return o.GetHashCode ();
 	}
 
+	/* Five doubles is memory class, so Spread () hands its result back through a
+	 * hidden pointer. The pointer takes the second argument register and the
+	 * receiver keeps the first, which is the one the unboxing entry steps past
+	 * the object header. A receiver read from the wrong register lands on the
+	 * caller's result buffer. */
+	struct Spread5 {
+		public double a, b, c, d, e;
+	}
+
+	interface ISpreader {
+		Spread5 Spread ();
+	}
+
+	struct SpreadingStruct : ISpreader {
+		public int i;
+
+		public Spread5 Spread () {
+			return new Spread5 () { a = i, b = i + 1, c = i + 2, d = i + 3, e = i + 4 };
+		}
+	}
+
+	public static int test_0_unbox_entry_with_a_hidden_return () {
+		ISpreader boxed = new SpreadingStruct () { i = 7 };
+		Spread5 got = boxed.Spread ();
+
+		if (got.a != 7 || got.b != 8 || got.c != 9 || got.d != 10 || got.e != 11)
+			return 1;
+		return 0;
+	}
+
 	public static int test_0_unbox_trampoline2 () {
 		int i = 12;
 		object o = i;

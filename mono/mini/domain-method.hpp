@@ -127,6 +127,22 @@ public:
 
 	/* -- The stubs ------------------------------------------------------- */
 
+	/// The entry a call off a value type's vtable or IMT arrives at, carved on
+	/// first ask. Null for a method that has no such entry.
+	///
+	/// It steps the receiver past the object header and forwards through the
+	/// body entry, so whatever redirects the method redirects this too and no
+	/// tier ever has to rewrite it.
+	llvm::Expected<void *> unbox_entry ();
+
+	/// What unbox_entry () filled in, for the teardown that has to give it back.
+	Stub &unbox_stub () { return unbox_; }
+	MonoJitInfo *&unbox_jinfo () { return unbox_jinfo_; }
+	void set_unbox_entry (void *code)
+	{
+		unbox_entry_.store (code, std::memory_order_release);
+	}
+
 	Stub &stub (Entry entry) { return stubs_[(unsigned) entry]; }
 	const Stub &stub (Entry entry) const { return stubs_[(unsigned) entry]; }
 
@@ -194,11 +210,15 @@ private:
 	MonoMethod *method_;
 	MonoDomain *domain_;
 
-	std::string names_[3];
-	Stub stubs_[3];
-	void *trampolines_[3] = { nullptr, nullptr, nullptr };
-	MonoJitInfo *jinfos_[3] = { nullptr, nullptr, nullptr };
-	llvm::SmallVector<Entry, 3> published_;
+	std::string names_[2];
+	Stub stubs_[2];
+	void *trampolines_[2] = { nullptr, nullptr };
+	MonoJitInfo *jinfos_[2] = { nullptr, nullptr };
+	llvm::SmallVector<Entry, 2> published_;
+
+	std::atomic<void *> unbox_entry_ { nullptr };
+	Stub unbox_;
+	MonoJitInfo *unbox_jinfo_ = nullptr;
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	std::atomic<int32_t> tier_calls_ { 0 };
@@ -219,6 +239,13 @@ private:
 /// The compiling engine defines this, and each record goes through it once. A
 /// failure leaves the record unpublished, and nothing keeps it.
 llvm::Error attach_method_entries (MonoDomainMethod &dm);
+
+/// Gives \p dm the entry a call off a value type's vtable arrives at.
+///
+/// The compiling engine defines this. Called with \p dm's lock held, and with
+/// the domain's, since registering the jit info takes it. A method that has no
+/// such entry is left with none and is not an error.
+llvm::Error attach_unbox_entry (MonoDomainMethod &dm);
 
 /// The record for \p method in \p domain, or null when nothing has asked for it
 /// yet.

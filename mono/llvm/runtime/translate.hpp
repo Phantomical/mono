@@ -26,7 +26,6 @@ namespace mono {
 struct Compiled {
 	void *entry = nullptr;
 	void *body = nullptr;
-	void *unbox = nullptr;
 	MonoJitInfo *jinfo = nullptr;
 
 	/// Where one of the method's doors leads, or null when it has no such door.
@@ -37,8 +36,6 @@ struct Compiled {
 			return body;
 		case Entry::interop:
 			return entry;
-		case Entry::unbox:
-			return unbox;
 		}
 		return body;
 	}
