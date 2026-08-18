@@ -175,11 +175,12 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	 * fails here rather than in the translation above. It is the same failure
 	 * and it is raised the same way - at the call, not at the declaration.
 	 */
+	std::vector<std::pair<StringRef, void *>> module_symbols;
 	Error resolved = [&] {
 		timing::Scope timed (timing::Phase::resolve);
 
 		return resolve_externals (*target.jit, target.domain, externals,
-		                          target.publish_callee);
+		                          target.publish_callee, module_symbols);
 	}();
 
 	if (resolved)
@@ -194,7 +195,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return target.jit->compile (
 			ThreadSafeModule (std::move (module),
 		                      ThreadSafeContext (std::move (context))),
-			entry);
+			entry, module_symbols);
 	}();
 	if (!compiled)
 		return compiled.takeError ();

@@ -155,29 +155,17 @@ public:
 	/// error.
 	llvm::Error register_symbol (llvm::StringRef name, void *addr);
 
-	/// Make each stub reachable by name from compiled code, as a callable symbol
-	/// at the address it was carved at.
-	///
-	/// The stubs themselves belong to whoever carved them. This is only the
-	/// linker's view of them.
-	llvm::Error define_stubs (llvm::ArrayRef<std::pair<llvm::StringRef, void *>> stubs);
-
-	/// Undefine the given names, which must all have been defined by
-	/// define_stubs (). No later link can then find them, and their blocks are
-	/// free to be handed out again.
-	///
-	/// The caller proves nothing can reach the stubs. A later method published
-	/// here can be given the very same block.
-	llvm::Error undefine_stubs (llvm::ArrayRef<std::string> names);
-
 	/// Compile a module and return where its entry point and side tables landed.
 	///
-	/// The module lands in a JITDylib of its own. That dylib resolves external
-	/// symbols through register_symbol () and the published stubs, and nothing
-	/// else. A lookup never falls back to the process, so an unregistered helper
-	/// fails the compile loudly.
-	llvm::Expected<CompiledMethod> compile (llvm::orc::ThreadSafeModule tsm,
-	                                        llvm::StringRef entry);
+	/// The module lands in a JITDylib of its own. module_symbols is defined
+	/// there directly, ahead of the module itself - the caller's own resolved
+	/// callee addresses, private to this compile and never shared. Beyond that,
+	/// the dylib resolves external symbols through register_symbol () and
+	/// nothing else. A lookup never falls back to the process, so an
+	/// unregistered helper fails the compile loudly.
+	llvm::Expected<CompiledMethod>
+	compile (llvm::orc::ThreadSafeModule tsm, llvm::StringRef entry,
+	        llvm::ArrayRef<std::pair<llvm::StringRef, void *>> module_symbols = {});
 
 	/// Release the dylibs: their code, their side tables, and the memory both
 	/// were linked into. Later compiles can reuse that memory.
@@ -204,11 +192,8 @@ private:
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 
 	/// Dedicated dylib holding the explicitly-registered runtime helpers. Every
-	/// compiled module's dylib links against this and mono.stubs.
+	/// compiled module's dylib links against this.
 	llvm::orc::JITDylib *helpers_ = nullptr;
-
-	/// The dylib a module's reference to a stub is resolved through.
-	llvm::orc::JITDylib *stubs_ = nullptr;
 
 	/// What each name handed to register_symbol () stands for.
 	std::mutex named_symbols_mutex_;
@@ -216,17 +201,6 @@ private:
 
 	/// Names the per-module dylibs.
 	std::atomic<uint64_t> module_counter_{0};
-
-	/// The dylib every module goes into under MONO_LLVM_JIT_HOIST=sharedjd, and
-	/// null otherwise.
-	llvm::orc::JITDylib *shared_jd_ = nullptr;
-
-	/// How many undefined names it takes to be worth sweeping the session's
-	/// symbol-string pool for the entries they left dead.
-	static constexpr uint64_t dead_name_sweep = 1024;
-
-	/// Names undefined since the last sweep.
-	std::atomic<uint64_t> dropped_names_{0};
 
 	class ObjectCapturePlugin;
 	/// Captures each linked object's code extent and side tables, keyed by the

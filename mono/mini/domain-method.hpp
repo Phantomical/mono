@@ -157,6 +157,20 @@ public:
 	/// The one entry every caller reaches the method at.
 	Stub stub;
 
+	/// The stub's address, read under the record's own lock.
+	///
+	/// A caller that publishes a fresh reference to this method - resolving a
+	/// call target against this record, say - reads this while the record is
+	/// still the one answering for the method. take_stub () takes the same
+	/// lock at retire, so the two can never interleave: whichever runs first is
+	/// what the other sees, rather than a read landing between a release and
+	/// the carve that hands the same memory to an unrelated method.
+	void *stub_address () const;
+
+	/// Hands back the record's stub, under the same lock stub_address () reads
+	/// under, for the caller to release. Called once, at retire.
+	Stub take_stub ();
+
 	/// The re-entry trampoline the stub was published pointing at, held so it
 	/// can be given back once nothing can reach the stub.
 	void *trampoline = nullptr;

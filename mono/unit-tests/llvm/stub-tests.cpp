@@ -7,9 +7,13 @@
  * stub - what Harmony does to every method it patches - keeps working across a
  * redirect, and lands on the newest target once it is removed.
  *
- * The stubs belong to the backend and the names belong to MonoJit, so the two
- * are driven together through the Engine below, which is what the backend does
- * around a method minus the method.
+ * MonoJit resolves a module's callee references per-compile now, from
+ * addresses the caller already has rather than from anything published under a
+ * name it keeps itself - see MonoJit::compile ()'s module_symbols parameter.
+ * The Engine below stands in for that caller: it carves stubs the same way the
+ * backend does, and keeps its own local name -> Stub map so a test can carve
+ * once and reference the same stub from several compiles, the way the
+ * backend's MonoDomainMethod table does.
  */
 
 #include "arch/arch.hpp"
@@ -25,6 +29,7 @@
 
 #include <gtest/gtest.h>
 
+#include <llvm/ADT/StringMap.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -39,6 +44,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -104,10 +110,11 @@ lazy_failed ()
  * A domain's engine: the domain's code manager, the linker over it, the stubs
  * carved out of it and the trampolines an uncompiled one points at.
  *
- * Publishing is two steps that always go together - carve the stub, and define
- * the name at it - and undefining is those two in reverse. That pairing is the
- * backend's, so it is reproduced here rather than reached for through MonoJit,
- * which now only ever hears the names.
+ * A published stub is not named anywhere MonoJit can see. The map here is
+ * this Engine's own bookkeeping - the equivalent of a backend's
+ * MonoDomainMethod table - so a test can carve a stub once under a name and
+ * reference it from several compiles, the way a caller's module resolves a
+ * callee it already has the record for.
  */
 class Engine {
 public:
@@ -134,12 +141,16 @@ public:
 	/// reach it at.
 	Expected<void *> publish (StringRef name, void *target)
 	{
-		Expected<void *> code = carve (name);
+		Expected<Stub> stub = stubs_.allocate (nullptr);
 
-		if (!code)
-			return code;
-		stubs_.find (name)->redirect (target);
-		return code;
+		if (!stub)
+			return stub.takeError ();
+
+		stub->redirect (target);
+
+		std::lock_guard<std::mutex> lock (published_mutex_);
+		published_[name] = *stub;
+		return stub->code ();
 	}
 
 	/// Publish NAME as a stub that runs COMPILE on its first call and goes
@@ -159,89 +170,110 @@ public:
 					return (void *) &lazy_failed;
 				}
 
-				stubs_.find (owned)->redirect (*code);
+				std::lock_guard<std::mutex> lock (published_mutex_);
+				published_[owned].redirect (*code);
 				return *code;
 			});
 		if (!trampoline)
 			return trampoline.takeError ();
 
-		Expected<void *> code = carve (name);
+		Expected<Stub> stub = stubs_.allocate (nullptr);
 
-		if (!code) {
+		if (!stub) {
 			callbacks_->release (*trampoline);
-			return code;
+			return stub.takeError ();
 		}
 
-		stubs_.find (name)->redirect (*trampoline);
+		stub->redirect (*trampoline);
+
+		std::lock_guard<std::mutex> lock (published_mutex_);
+		published_[name] = *stub;
 		trampolines_[name] = *trampoline;
-		return code;
+		return stub->code ();
 	}
 
 	Error redirect (StringRef name, void *target)
 	{
-		std::optional<Stub> stub = stubs_.find (name);
+		std::lock_guard<std::mutex> lock (published_mutex_);
+		auto it = published_.find (name);
 
-		if (!stub)
+		if (it == published_.end ())
 			return createStringError (inconvertibleErrorCode (),
 			                          "no stub was published for %s",
 			                          name.str ().c_str ());
-		stub->redirect (target);
+		it->second.redirect (target);
 		return Error::success ();
 	}
 
 	Expected<void *> address (StringRef name)
 	{
-		std::optional<Stub> stub = stubs_.find (name);
+		std::lock_guard<std::mutex> lock (published_mutex_);
+		auto it = published_.find (name);
 
-		if (!stub)
+		if (it == published_.end ())
 			return createStringError (inconvertibleErrorCode (),
 			                          "no stub was published for %s",
 			                          name.str ().c_str ());
-		return stub->code ();
+		return it->second.code ();
 	}
 
-	Error undefine (ArrayRef<std::string> names)
+	/// Give NAMES' trampolines back and release their stubs' memory - what the
+	/// backend does to a method's stub when it is freed.
+	Error retire (ArrayRef<std::string> names)
 	{
-		if (Error err = jit_->undefine_stubs (names))
-			return err;
-
 		for (const std::string &name : names) {
-			auto it = trampolines_.find (name);
+			std::lock_guard<std::mutex> lock (published_mutex_);
+			auto it = published_.find (name);
 
-			if (it == trampolines_.end ())
-				continue;
-			callbacks_->release (it->second);
-			trampolines_.erase (it);
+			if (it == published_.end ())
+				return createStringError (inconvertibleErrorCode (),
+				                          "no stub was published for %s",
+				                          name.c_str ());
+
+			auto trampoline = trampolines_.find (name);
+			if (trampoline != trampolines_.end ()) {
+				callbacks_->release (trampoline->second);
+				trampolines_.erase (trampoline);
+			}
+
+			stubs_.release (it->second);
+			published_.erase (it);
+		}
+		return Error::success ();
+	}
+
+	/// Compile a module whose undefined references name published stubs,
+	/// resolving NAMES against what this engine has for them - the same
+	/// per-module binding resolve_externals ()/MonoJit::compile () use in the
+	/// backend, in place of a shared table a link would otherwise search.
+	Expected<CompiledMethod> compile_against (ThreadSafeModule tsm, StringRef entry,
+	                                          ArrayRef<StringRef> names)
+	{
+		std::vector<std::pair<StringRef, void *>> symbols;
+
+		for (StringRef name : names) {
+			Expected<void *> addr = address (name);
+
+			if (!addr)
+				return addr.takeError ();
+			symbols.emplace_back (name, *addr);
 		}
 
-		stubs_.remove_all (names);
-		return Error::success ();
+		return jit_->compile (std::move (tsm), entry, symbols);
 	}
 
 private:
 	Engine () : stubs_ (&arena_) {}
 
-	/// Carve NAME a stub and tell the linker about it, leaving it pointing
-	/// nowhere useful for the caller to set.
-	Expected<void *> carve (StringRef name)
-	{
-		Expected<Stub> stub = stubs_.create (name);
-
-		if (!stub)
-			return stub.takeError ();
-
-		std::pair<StringRef, void *> def{name, stub->code ()};
-
-		if (Error err = jit_->define_stubs (def))
-			return std::move (err);
-		return stub->code ();
-	}
-
 	/// Declared first, so it outlives everything carved out of it.
 	CodeArena arena_;
 	std::unique_ptr<MonoJit> jit_;
-	StubTable stubs_;
+	/// Thread safe on its own - see its doc comment. published_/trampolines_
+	/// below are this Engine's own bookkeeping and need their own lock.
+	StubSlabs stubs_;
 	std::unique_ptr<LazyCallbacks> callbacks_;
+	std::mutex published_mutex_;
+	StringMap<Stub> published_;
 	StringMap<void *> trampolines_;
 };
 
@@ -324,7 +356,7 @@ build_constant_module (int32_t value)
 }
 
 /// i32 caller() { return callee(); } with callee external, so it can only be
-/// satisfied by a published stub.
+/// satisfied by module_symbols naming it.
 static ThreadSafeModule
 build_caller_module (const char *callee_name)
 {
@@ -339,39 +371,6 @@ build_caller_module (const char *callee_name)
 	b.CreateRet (b.CreateCall (callee));
 
 	EXPECT_FALSE (verifyFunction (*fn, &errs ()));
-	return ThreadSafeModule (std::move (module),
-	                         ThreadSafeContext (std::move (context)));
-}
-
-/*
- * i32 entry() { return 0; } plus an external global holding a pointer to every
- * one of NAMES, so linking the module asks mono.stubs for all of them in one
- * lookup without codegen having to emit a call to each.
- */
-static ThreadSafeModule
-build_table_module (const std::vector<std::string> &names)
-{
-	auto context = std::make_unique<LLVMContext> ();
-	auto module = std::make_unique<Module> ("stub.table", *context);
-
-	FunctionType *fty = FunctionType::get (Type::getInt32Ty (*context), false);
-	PointerType *pty = PointerType::get (*context, 0);
-
-	std::vector<Constant *> entries;
-	entries.reserve (names.size ());
-	for (const std::string &name : names)
-		entries.push_back (
-			cast<Constant> (module->getOrInsertFunction (name, fty).getCallee ()));
-
-	ArrayType *aty = ArrayType::get (pty, entries.size ());
-	new GlobalVariable (*module, aty, true, GlobalValue::ExternalLinkage,
-	                    ConstantArray::get (aty, entries), "table");
-
-	Function *fn = Function::Create (fty, Function::ExternalLinkage, "entry",
-	                                 module.get ());
-	IRBuilder<> b (BasicBlock::Create (*context, "entry", fn));
-	b.CreateRet (b.getInt32 (0));
-
 	return ThreadSafeModule (std::move (module),
 	                         ThreadSafeContext (std::move (context)));
 }
@@ -434,15 +433,15 @@ TEST_F (Stubs, CallsInitialTargetAndFollowsRedirects)
  * of the stub and runs into it, so it needs no target of its own. Whatever the
  * stub points at is where the receiver arrives, one object header on.
  *
- * Driven off the table rather than the Engine. Nothing links against this
- * entry: the method's own name is the only symbol either of them has.
+ * Driven off StubSlabs rather than the Engine: nothing here names the stub at
+ * all.
  */
 TEST_F (Stubs, TheUnboxEntryStepsTheReceiverPastTheObjectHeader)
 {
 	CodeArena arena;
-	StubTable stubs (&arena);
+	StubSlabs stubs (&arena);
 
-	Expected<Stub> stub = stubs.create ("m");
+	Expected<Stub> stub = stubs.allocate (nullptr);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
 	stub->redirect ((void *) &stub_receiver_target_one);
@@ -459,53 +458,10 @@ TEST_F (Stubs, TheUnboxEntryStepsTheReceiverPastTheObjectHeader)
 }
 
 /*
- * A method is published under a name built from its printed name and its
- * MonoMethod address, and a freed method hands that address straight back to the
- * allocator - so the next method along can want the very same name. That only
- * works if undefining releases the name.
- */
-TEST_F (Stubs, AnUndefinedNameCanBePublishedAgain)
-{
-	std::unique_ptr<Engine> engine = make_engine ();
-	ASSERT_NE (engine, nullptr);
-
-	auto first = engine->publish ("m", (void *) &stub_target_one);
-	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
-	EXPECT_EQ (reinterpret_cast<IntFn> (*first) (), 1);
-
-	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
-
-	auto second = engine->publish ("m", (void *) &stub_target_two);
-	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
-	EXPECT_EQ (reinterpret_cast<IntFn> (*second) (), 2);
-}
-
-/*
- * The common case for a method that was published and then freed without ever
- * being called or linked against. Its symbol is there like any other - a stub
- * reaches the linker when it is carved - but nothing has ever looked it up, so
- * it is still unmaterialized, which is the state undefining has to accept
- * without first forcing it into existence.
- */
-TEST_F (Stubs, AnUnmaterializedStubCanBeUndefined)
-{
-	std::unique_ptr<Engine> engine = make_engine ();
-	ASSERT_NE (engine, nullptr);
-
-	auto first = engine->publish ("m", (void *) &stub_target_one);
-	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
-	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
-
-	auto again = engine->publish ("m", (void *) &stub_target_two);
-	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
-	EXPECT_EQ (reinterpret_cast<IntFn> (*again) (), 2);
-}
-
-/*
  * A stub is 24 bytes of the low-memory pool, which is one gigabyte for the
  * whole process. A program that mints DynamicMethods forever - what a compiler
- * emitting lambdas does - would walk through it if freeing a method only ever
- * gave the name back.
+ * emitting lambdas does - would walk through it if freeing a method never gave
+ * the block back.
  */
 TEST_F (Stubs, AnUndefinedStubIsHandedOutAgain)
 {
@@ -515,55 +471,14 @@ TEST_F (Stubs, AnUndefinedStubIsHandedOutAgain)
 	auto first = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
 
-	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
+	ASSERT_FALSE (bool (engine->retire ({ "m" })));
 
-	/* A different name, so this is the block being reused and not the name. */
+	/* A different name, so this is the block being reused. */
 	auto second = engine->publish ("n", (void *) &stub_target_two);
 	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
 
 	EXPECT_EQ (*first, *second);
 	EXPECT_EQ (reinterpret_cast<IntFn> (*second) (), 2);
-}
-
-/*
- * The other half of the case above: a module was compiled against the name, so
- * its symbol has settled rather than never having been searched for. The name
- * has to come back clean enough for the next method along to be linked against.
- */
-TEST_F (Stubs, ANameAModuleLinkedAgainstCanBePublishedAgain)
-{
-	std::unique_ptr<Engine> engine = make_engine ();
-	ASSERT_NE (engine, nullptr);
-
-	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_one)));
-
-	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
-	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
-	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
-
-	ASSERT_FALSE (bool (engine->undefine ({ "m" })));
-	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_two)));
-
-	/* The old caller is calling a stub that has been handed out again. */
-	auto again = engine->jit ().compile (build_caller_module ("m"), "caller");
-	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
-	EXPECT_EQ (reinterpret_cast<IntFn> (again->entry) (), 2);
-}
-
-/*
- * Undefining is driven by the backend's own record of what it published, so a
- * name that was never published means that record is wrong. Saying so is what
- * keeps it from becoming a stub silently pointing at released code.
- */
-TEST_F (Stubs, UndefiningANameThatWasNeverPublishedFails)
-{
-	std::unique_ptr<Engine> engine = make_engine ();
-	ASSERT_NE (engine, nullptr);
-
-	Error err = engine->undefine ({ "m" });
-
-	ASSERT_TRUE (bool (err));
-	consumeError (std::move (err));
 }
 
 TEST_F (Stubs, CompiledCallersBindToTheStub)
@@ -573,7 +488,7 @@ TEST_F (Stubs, CompiledCallersBindToTheStub)
 
 	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_one)));
 
-	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
+	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
@@ -628,7 +543,7 @@ TEST_F (Stubs, SurvivesADetourAcrossRedirects)
 	auto stub = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
-	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
+	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
@@ -673,7 +588,7 @@ TEST_F (Stubs, RedirectsWhileThreadsRunThroughIt)
 	auto stub = engine->publish ("m", (void *) &stub_target_one);
 	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
 
-	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
+	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
@@ -790,157 +705,13 @@ TEST_F (Stubs, PackTightlyWhenPublishedOneAtATime)
 }
 
 /*
- * Several links wanting the same stub at once. They all reach one symbol, and
- * the first of them to get there materializes it while the rest wait; a link
- * that came away with anything other than the stub's address would be calling
- * the target the stub happened to have rather than the stub.
+ * StubSlabs used to be serialized entirely by StubTable's lock; now it has to
+ * hold that line itself. Many threads publishing, compiling a caller against
+ * what they published, redirecting it and retiring it - all at once - is what
+ * says allocate () and release () agree on the free list and the batch offset
+ * under real contention rather than only when called one at a time.
  */
-TEST_F (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
-{
-	std::unique_ptr<Engine> engine = make_engine ();
-	ASSERT_NE (engine, nullptr);
-
-	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_one)));
-
-	constexpr int threads = 16;
-	std::atomic<int> ready {0};
-	std::atomic<bool> go {false};
-	std::vector<std::string> errors (threads);
-	std::vector<int32_t> results (threads, 0);
-
-	std::vector<std::thread> workers;
-	for (int i = 0; i < threads; i++)
-		workers.emplace_back ([&, i] {
-			ready++;
-			while (!go.load ())
-				std::this_thread::yield ();
-
-			auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
-			if (!caller) {
-				errors[i] = toString (caller.takeError ());
-				return;
-			}
-			results[i] = reinterpret_cast<IntFn> (caller->entry) ();
-		});
-
-	while (ready.load () != threads)
-		std::this_thread::yield ();
-	go.store (true);
-	for (std::thread &t : workers)
-		t.join ();
-
-	for (int i = 0; i < threads; i++) {
-		EXPECT_EQ (errors[i], "") << "thread " << i;
-		EXPECT_EQ (results[i], 1) << "thread " << i;
-	}
-}
-
-/*
- * Undefining a name while a link is asking mono.stubs for it. A symbol a link
- * has just been handed is materializing, and ORC refuses to remove one of those
- * - so an undefine landing in that window has to wait for the link rather than
- * come away thinking the name is gone and hand the block to the next method
- * along.
- *
- * The module names its stubs from a pointer table rather than by calling each
- * one, which makes the lookup set large without making codegen large, so the
- * window this is aiming at is wide enough to hit. Where in a compile the link
- * happens is a property of the machine, so one compile is timed first and the
- * undefines are spread across it rather than fired at a guessed delay.
- */
-TEST_F (Stubs, UndefiningRacesALinkNamingTheSameStubs)
-{
-	constexpr int count = 4000;
-	constexpr int rounds = 16;
-
-	std::vector<std::string> names;
-	for (int i = 0; i < count; i++)
-		names.push_back ("s" + std::to_string (i));
-
-	auto publish_all = [&] (Engine &engine, void *target) {
-		for (const std::string &name : names)
-			if (Error err = engine.publish (name, target).takeError ())
-				return toString (std::move (err));
-		return std::string ();
-	};
-
-	int64_t compile_us = 0;
-	{
-		std::unique_ptr<Engine> engine = make_engine ();
-		ASSERT_NE (engine, nullptr);
-		ASSERT_EQ (publish_all (*engine, (void *) &stub_target_one), "");
-
-		auto start = std::chrono::steady_clock::now ();
-		auto compiled = engine->jit ().compile (build_table_module (names), "entry");
-		ASSERT_TRUE (bool (compiled)) << toString (compiled.takeError ());
-		compile_us = std::chrono::duration_cast<std::chrono::microseconds> (
-			             std::chrono::steady_clock::now () - start)
-		                     .count ();
-	}
-
-	for (int round = 0; round < rounds; round++) {
-		std::unique_ptr<Engine> engine = make_engine ();
-		ASSERT_NE (engine, nullptr);
-		ASSERT_EQ (publish_all (*engine, (void *) &stub_target_one), "");
-
-		std::atomic<int> ready {0};
-		std::atomic<bool> go {false};
-		std::string undef_err;
-		auto delay = std::chrono::microseconds (compile_us * (round + 4) /
-		                                        (rounds + 5));
-
-		std::thread linker ([&] {
-			ready++;
-			while (!go.load ())
-				std::this_thread::yield ();
-			/*
-			 * Either outcome is fine: the undefine either got there first, in
-			 * which case there is nothing left to link against, or it did not.
-			 */
-			consumeError (
-				engine->jit ().compile (build_table_module (names), "entry").takeError ());
-		});
-		std::thread undefiner ([&] {
-			ready++;
-			while (!go.load ())
-				std::this_thread::yield ();
-			std::this_thread::sleep_for (delay);
-			if (Error err = engine->undefine (names))
-				undef_err = toString (std::move (err));
-		});
-
-		while (ready.load () != 2)
-			std::this_thread::yield ();
-		go.store (true);
-		linker.join ();
-		undefiner.join ();
-
-		ASSERT_EQ (undef_err, "") << "round " << round;
-
-		/*
-		 * Whatever the linker managed to do, every name has to have come back
-		 * clean. A definition left standing over a removed table entry shows up
-		 * here: publishing the name again and linking against it either finds
-		 * the old stub - which nothing redirects any more - or collides with it.
-		 */
-		ASSERT_EQ (publish_all (*engine, (void *) &stub_target_two), "")
-			<< "round " << round;
-
-		auto caller = engine->jit ().compile (build_caller_module ("s0"), "caller");
-		ASSERT_TRUE (bool (caller))
-			<< "round " << round << ": " << toString (caller.takeError ());
-		ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2)
-			<< "round " << round;
-	}
-}
-
-/*
- * Publishing takes the session lock to define a name, linking takes it to look
- * one up, and undefining takes it to remove one - all against the same dylib.
- * Threads doing all four at once are what says those orders agree; a
- * disagreement hangs rather than fails, so this test failing means it timed out.
- */
-TEST_F (Stubs, PublishRedirectAndUndefineFromManyThreads)
+TEST_F (Stubs, PublishCompileRedirectAndRetireFromManyThreads)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -965,7 +736,7 @@ TEST_F (Stubs, PublishRedirectAndUndefineFromManyThreads)
 			while (!go.load ())
 				std::this_thread::yield ();
 
-			/* Each thread owns its names, so the contention is all in ORC. */
+			/* Each thread owns its names, so the contention is all in StubSlabs. */
 			for (int n = 0; n < iterations; n++) {
 				std::string name =
 					"t" + std::to_string (i) + "." + std::to_string (n);
@@ -978,8 +749,8 @@ TEST_F (Stubs, PublishRedirectAndUndefineFromManyThreads)
 					return;
 				}
 
-				auto caller = engine->jit ().compile (
-					build_caller_module (name.c_str ()), "caller");
+				auto caller = engine->compile_against (
+					build_caller_module (name.c_str ()), "caller", { name });
 				if (!caller) {
 					fail (caller.takeError ());
 					return;
@@ -993,7 +764,7 @@ TEST_F (Stubs, PublishRedirectAndUndefineFromManyThreads)
 				}
 				EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2);
 
-				if (Error err = engine->undefine ({ name })) {
+				if (Error err = engine->retire ({ name })) {
 					fail (std::move (err));
 					return;
 				}
@@ -1070,8 +841,10 @@ TEST_F (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 		return compiled->entry;
 		})));
 
-	/* Resolves against a method that has no code yet. */
-	auto caller = engine->jit ().compile (build_caller_module ("m"), "caller");
+	/* Resolves against the stub's own address - not the trampoline's,
+	 * though that is all it points at right now - the same address a caller
+	 * would keep once the lazy compile fires and redirects it. */
+	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	EXPECT_EQ (compiles, 0);
 

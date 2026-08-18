@@ -130,7 +130,7 @@ struct MonoBackend::DomainState {
 	std::unique_ptr<MonoJit> jit;
 
 	/// Allocator for thunks.
-	std::unique_ptr<StubTable> stub_table;
+	std::unique_ptr<StubSlabs> stub_slabs;
 
 	/// The re-entry trampolines a published-but-uncompiled stub points at.
 	std::unique_ptr<LazyCallbacks> callbacks;
@@ -143,7 +143,7 @@ struct MonoBackend::DomainState {
 	                                                            CompileQueue &queue)
 	{
 		auto state = std::make_unique<DomainState> (domain, queue);
-		state->stub_table = std::make_unique<StubTable> (&state->code);
+		state->stub_slabs = std::make_unique<StubSlabs> (&state->code);
 
 		auto jit = MonoJit::create (&state->code);
 		if (!jit)
@@ -209,14 +209,13 @@ void
 MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 {
 	MethodState &engine = MonoBackend::engine_state (dm);
-	llvm::SmallVector<std::string, 1> names{dm.name};
 
 	/*
 	 * The records first. A block on the free list belongs to whichever method
 	 * publishes next, and a lookup must never find a record covering memory a
 	 * later compile has already been handed - a delegate built over that
 	 * method's address would otherwise be bound to this one, by then freed
-	 * metadata. Unreachable by name is not enough; the address is reachable too.
+	 * metadata.
 	 */
 	if (MonoJitInfo *jinfo = dm.jinfo)
 		mono_jit_info_table_remove (domain, jinfo);
@@ -225,12 +224,15 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 		mono_jit_info_table_remove (domain, jinfo);
 
 	/*
-	 * By name first, then by address: nothing can find the stub through the
-	 * linker any more, and only then is the block free to be carved again.
+	 * take_stub () is under the record's own lock, the same one stub_address ()
+	 * reads under - see its doc comment. Nothing publishes this method's stub
+	 * by name any more for a lookup to find it through, so the record itself
+	 * is what a concurrent reference to this method resolves against, and
+	 * that lock is what keeps such a read from landing after the block is
+	 * back on the free list.
 	 */
-	must (jit->undefine_stubs (names));
 	callbacks->release (dm.trampoline);
-	stub_table->remove_all (names);
+	stub_slabs->release (dm.take_stub ());
 
 	if (!engine.owned.dylibs.empty ())
 		must (jit->remove_dylibs (engine.owned.dylibs));
@@ -334,9 +336,11 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 
 	/*
 	 * The stub carries the method in the IMT register, which is also where a
-	 * shared generic reads its runtime generic context.
+	 * shared generic reads its runtime generic context. attach_entry () runs
+	 * exactly once per record - domain_method_get ()'s get-or-create sees to
+	 * that - so there is no existing stub to collide with.
 	 */
-	llvm::Expected<Stub> stub = domain.stub_table->create (dm.name, method);
+	llvm::Expected<Stub> stub = domain.stub_slabs->allocate (method);
 
 	if (!stub) {
 		domain.callbacks->release (*trampoline);
@@ -346,23 +350,6 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	stub->redirect (*trampoline);
 	dm.stub = *stub;
 	dm.trampoline = *trampoline;
-
-	/*
-	 * The stub reaches the linker as soon as it is carved, whether or not
-	 * anything ever names it, so that releasing it is unconditional rather than
-	 * a question of whether some module happened to ask for it.
-	 *
-	 * Under the domain's table lock, which is safe because defining takes the
-	 * session lock and gives it back: it materializes nothing, so nothing it
-	 * runs can come back here for that lock.
-	 */
-	std::pair<llvm::StringRef, void *> def{dm.name, stub->code ()};
-
-	if (llvm::Error err = domain.jit->define_stubs (def)) {
-		domain.stub_table->remove (dm.name);
-		domain.callbacks->release (*trampoline);
-		return err;
-	}
 
 	/*
 	 * A stub is the only address the runtime ever sees for the method, so
@@ -606,16 +593,8 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 	MonoJitInfo *published = nullptr;
 
 	/* Named: function_ref does not own what it points at. */
-	auto publish_callee = [&] (MonoMethod *callee) -> llvm::Error {
-		return publish (domain, callee).takeError ();
-	};
-	auto stub_address = [&] (llvm::StringRef name) -> llvm::Expected<void *> {
-		if (std::optional<Stub> stub = domain.stub_table->find (name))
-			return stub->code ();
-
-		return llvm::createStringError (llvm::inconvertibleErrorCode (),
-		                                "no stub is published as %s",
-		                                name.str ().c_str ());
+	auto publish_callee = [&] (MonoMethod *callee) -> llvm::Expected<MonoDomainMethod *> {
+		return publish (domain, callee);
 	};
 	/*
 	 * Only a dynamic method is ever freed, and only its own compiles have to be
@@ -638,7 +617,7 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 	};
 
 	TranslationTarget target { domain.jit.get (), domain.domain, publish_callee,
-		                   stub_address, note, recover_failure };
+		                   note, recover_failure };
 
 	llvm::Expected<Compiled> code =
 		translate_and_compile (target, method, &published);

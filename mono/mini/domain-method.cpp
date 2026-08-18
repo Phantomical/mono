@@ -98,6 +98,22 @@ MonoDomainMethod::promote ()
 	return true;
 }
 
+void *
+MonoDomainMethod::stub_address () const
+{
+	std::lock_guard<std::mutex> held (lock_);
+
+	return stub.code ();
+}
+
+Stub
+MonoDomainMethod::take_stub ()
+{
+	std::lock_guard<std::mutex> held (lock_);
+
+	return stub;
+}
+
 void
 MonoDomainMethod::attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo)
 {

@@ -319,10 +319,6 @@ Backend debugging env vars:
   made of — the machine passes and their construction, the object write and the
   read back, the LLVMContext, the analysis managers — and costs ~21 µs a compile
   with `cpu` and ~2 µs without.
-- `MONO_LLVM_JIT_HOIST=<word>[,<word>]` (`jit.cpp`) — measurement arms that take one
-  piece of per-compile work away so it can be priced; none is a candidate
-  implementation and `sharedjd` is not even safe under concurrent compiles.
-  `sharedjd` puts every module in one JITDylib.
 - `MONO_LLVM_JIT_RECOMPILE=<substr>` (`runtime/options.cpp`) — methods whose full name contains
   the substring are translated afresh on every compile request instead of being answered
   from the cache, so they end up with several live bodies. Nothing else produces one, and

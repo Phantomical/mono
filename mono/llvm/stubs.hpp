@@ -12,35 +12,15 @@
 #ifndef MONO_LLVM_STUBS_HPP
 #define MONO_LLVM_STUBS_HPP
 
-#include <llvm/Support/raw_ostream.h>
-#include <llvm/ADT/ArrayRef.h>
-#include <llvm/ADT/StringMap.h>
-#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
 
 #include <atomic>
 #include <mutex>
-#include <optional>
-#include <string>
-#include <utility>
 #include <vector>
 
 #include "jitlink-memory.hpp"
 
 namespace mono {
-
-class StubExistsError : public llvm::ErrorInfo<StubExistsError> {
-public:
-	static char ID;
-
-	StubExistsError (llvm::StringRef name);
-
-	void log (llvm::raw_ostream &OS) const override;
-	std::error_code convertToErrorCode () const override;
-
-private:
-	std::string name;
-};
 
 /// What one stub costs in code memory: the slot it jumps through, the unbox
 /// prologue in front of it and the block itself.
@@ -78,7 +58,9 @@ public:
 
 /// The blocks stubs are carved out of, and the free list they go back on.
 ///
-/// Not thread safe - StubTable is what serialises access to one of these.
+/// Thread safe: allocate () and release () each take an internal lock, since a
+/// carve for one method and a release from retiring another can run
+/// concurrently.
 class StubSlabs {
 public:
 	explicit StubSlabs (CodeArena *arena);
@@ -97,6 +79,7 @@ private:
 	llvm::Expected<Stub> acquire ();
 	llvm::Error add_slab ();
 
+	std::mutex mutex_;
 	CodeArena *arena_;
 	/// The batch stubs come out of. Earlier batches are full, and nothing needs
 	/// to name them again, because code memory is never given back.
@@ -106,45 +89,6 @@ private:
 	/// How far apart two groups sit, which is a group and whatever a perf dump
 	/// needs behind it.
 	size_t stride_;
-};
-
-/// The stub table.
-///
-/// This tracks which stubs have been created by name.
-class StubTable {
-public:
-	explicit StubTable (CodeArena *arena) : slabs_ (arena) {}
-
-	/// Find a pre-existing stub, if one exists with the requested name.
-	std::optional<Stub> find (llvm::StringRef name);
-
-	/// Create a stub for the requested name, failing with StubExistsError if one
-	/// already exists.
-	llvm::Expected<Stub> create (llvm::StringRef name);
-
-	/// Create a stub that hands the requested key to whatever it jumps to.
-	/// Fails the same way if the name already has one.
-	llvm::Expected<Stub> create (llvm::StringRef name, void *key);
-
-	/// Remove a single named stub.
-	bool remove (llvm::StringRef name);
-
-	/// Remove the all the named stubs.
-	template<typename C>
-	void remove_all (const C &names)
-	{
-		std::lock_guard<std::mutex> lock (mutex_);
-
-		for (llvm::StringRef name : names)
-			remove_locked (name, lock);
-	}
-
-private:
-	bool remove_locked (llvm::StringRef name, std::lock_guard<std::mutex> &guard);
-
-	std::mutex mutex_;
-	StubSlabs slabs_;
-	llvm::StringMap<Stub> stubs_;
 };
 
 } // namespace mono

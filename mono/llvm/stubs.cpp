@@ -1,7 +1,6 @@
 /**
  * \file
- * \brief A slab-allocated table of the redirectable stubs methods are published
- * as.
+ * \brief A slab allocator for the redirectable stubs methods are published as.
  *
  * ORC ships redirectable symbols of its own (JITLinkRedirectableSymbolManager),
  * but it builds and links a LinkGraph per batch of stubs, and the runtime
@@ -11,9 +10,9 @@
  * them. Redirecting likewise goes through a full symbol lookup.
  *
  * So we carve stubs out of one batch of code memory instead. A stub costs
- * stub_group_size bytes plus an entry in this table, publishing one is a
- * bump-allocate (or a pop off the free list) plus a few stores, and a redirect
- * is a single atomic store to the slot.
+ * stub_group_size bytes, publishing one is a bump-allocate (or a pop off the
+ * free list) plus a few stores, and a redirect is a single atomic store to the
+ * slot.
  */
 
 #include "stubs.hpp"
@@ -27,12 +26,9 @@
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/object.h"
 
-#include <llvm/Support/raw_ostream.h>
-#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Memory.h>
 
 #include <mutex>
-#include <utility>
 
 using namespace llvm;
 
@@ -111,6 +107,8 @@ StubSlabs::StubSlabs (CodeArena *arena)
 llvm::Expected<Stub>
 StubSlabs::allocate (void *key)
 {
+	std::lock_guard<std::mutex> lock (mutex_);
+
 	auto stub = acquire ();
 	if (!stub)
 		return stub.takeError ();
@@ -136,10 +134,13 @@ StubSlabs::release (Stub stub)
 	if (!stub)
 		return;
 
+	std::lock_guard<std::mutex> lock (mutex_);
+
 	stub.redirect ((void *) stub_not_initialized);
 	free_.push_back (stub);
 }
 
+/* Called with mutex_ held. */
 llvm::Expected<Stub>
 StubSlabs::acquire ()
 {
@@ -160,6 +161,7 @@ StubSlabs::acquire ()
 	             reinterpret_cast<std::atomic<void *> *> (group));
 }
 
+/* Called with mutex_ held. */
 llvm::Error
 StubSlabs::add_slab ()
 {
@@ -172,77 +174,6 @@ StubSlabs::add_slab ()
 	batch_ = *batch;
 	next_ = 0;
 	return llvm::Error::success ();
-}
-
-std::optional<Stub>
-StubTable::find (llvm::StringRef name)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-
-	auto it = stubs_.find (name);
-	if (it == stubs_.end ())
-		return std::nullopt;
-
-	return it->second;
-}
-
-llvm::Expected<Stub>
-StubTable::create (llvm::StringRef name)
-{
-	return create (name, nullptr);
-}
-
-llvm::Expected<Stub>
-StubTable::create (llvm::StringRef name, void *key)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-
-	auto it = stubs_.find (name);
-	if (it != stubs_.end ())
-		return llvm::make_error<StubExistsError> (name);
-
-	auto stub = slabs_.allocate (key);
-	if (!stub)
-		return stub.takeError ();
-
-	stubs_.insert (std::make_pair (name, *stub));
-	return *stub;
-}
-
-bool
-StubTable::remove (llvm::StringRef name)
-{
-	std::lock_guard<std::mutex> lock (mutex_);
-	return remove_locked (name, lock);
-}
-
-bool
-StubTable::remove_locked (llvm::StringRef name, std::lock_guard<std::mutex> &)
-{
-	auto it = stubs_.find (name);
-	if (it == stubs_.end ())
-		return false;
-
-	auto stub = it->second;
-	stubs_.erase (it);
-	slabs_.release (stub);
-	return true;
-}
-
-char StubExistsError::ID = 0;
-
-StubExistsError::StubExistsError (llvm::StringRef name) : name (name) {}
-
-void
-StubExistsError::log (llvm::raw_ostream &OS) const
-{
-	OS << "a stub already exists for " << name;
-}
-
-std::error_code
-StubExistsError::convertToErrorCode () const
-{
-	return std::error_code ();
 }
 
 } // namespace mono

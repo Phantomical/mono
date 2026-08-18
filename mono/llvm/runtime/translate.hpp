@@ -19,6 +19,8 @@ typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
+class MonoDomainMethod;
+
 /// Where one method's code ended up. The jit-info record is null for a stand-in
 /// that only raises.
 struct Compiled {
@@ -61,11 +63,8 @@ struct TranslationTarget {
 	/// thread's current one.
 	MonoDomain *domain;
 
-	/// Publish a callee and define its symbol in this linker.
-	llvm::function_ref<llvm::Error (MonoMethod *)> publish_callee;
-
-	/// The address a published stub was carved at.
-	llvm::function_ref<llvm::Expected<void *> (llvm::StringRef)> stub_address;
+	/// Publish a callee and answer the record its stub was carved on.
+	llvm::function_ref<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee;
 
 	/// Note that a piece of code, and the record registered for it, belong to
 	/// this method. Every compile passes through here, or freeing the method

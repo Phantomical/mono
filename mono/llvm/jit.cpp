@@ -63,28 +63,6 @@ namespace {
 /// neither side has a hook inside that. It stays zero unless fine timing is on.
 thread_local uint64_t g_object_handed = 0;
 
-/// Whether MONO_LLVM_JIT_HOIST, a comma-separated list, names the given
-/// measurement arm.
-bool
-hoisting (StringRef what)
-{
-	static const char *setting = std::getenv ("MONO_LLVM_JIT_HOIST");
-
-	if (setting == nullptr)
-		return false;
-
-	StringRef all (setting);
-
-	while (!all.empty ()) {
-		auto [head, rest] = all.split (',');
-
-		if (head == what)
-			return true;
-		all = rest;
-	}
-	return false;
-}
-
 /// How much of what this backend produces the IR verifier gets to see.
 enum class VerifyLevel {
 	/// Nothing is checked.
@@ -892,7 +870,6 @@ MonoJit::create (CodeArena *arena)
 
 	ExecutionSession &es = self->jit_->getExecutionSession ();
 	self->helpers_ = &es.createBareJITDylib ("mono.helpers");
-	self->stubs_ = &es.createBareJITDylib ("mono.stubs");
 
 	return std::move (self);
 }
@@ -949,26 +926,9 @@ MonoJit::register_symbol (StringRef name, void *addr)
 	return Error::success ();
 }
 
-Error
-MonoJit::define_stubs (ArrayRef<std::pair<StringRef, void *>> stubs)
-{
-	if (stubs.empty ())
-		return Error::success ();
-
-	ExecutionSession &es = jit_->getExecutionSession ();
-	SymbolMap symbols;
-
-	for (const auto &[name, code] : stubs)
-		symbols[es.intern (name)] = {
-			ExecutorAddr::fromPtr (code),
-			JITSymbolFlags::Exported | JITSymbolFlags::Callable,
-		};
-
-	return stubs_->define (absoluteSymbols (std::move (symbols)));
-}
-
 Expected<CompiledMethod>
-MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
+MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
+                  ArrayRef<std::pair<StringRef, void *>> module_symbols)
 {
 	// An assertions-on LLVM refuses to codegen a module whose layout disagrees
 	// with the target. A fresh module has no layout at all.
@@ -977,32 +937,35 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry)
 			m.setDataLayout (jit_->getDataLayout ());
 	});
 
-	// A dylib per module, linked against mono.helpers and mono.stubs. It is
-	// bare because these modules carry no initializers for the platform to
-	// manage.
+	// A dylib per module, linked against mono.helpers. It is bare because
+	// these modules carry no initializers for the platform to manage.
 	std::string jd_name = ("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
-	// MONO_LLVM_JIT_HOIST=sharedjd puts every module in one dylib instead, to
-	// price making a fresh one. It is a measurement arm, not a candidate
-	// implementation. The capture below is keyed by the dylib's name, so two
-	// concurrent compiles take each other's object. No method can be freed on
-	// its own.
-	if (hoisting ("sharedjd"))
-		jd_name = "jd.shared";
 
 	JITDylib &jd = [&] () -> JITDylib & {
 		timing::Scope timed (timing::Phase::dylib);
 
-		if (shared_jd_ != nullptr)
-			return *shared_jd_;
-
 		JITDylib &made = jit_->getExecutionSession ().createBareJITDylib (jd_name);
 
 		made.addToLinkOrder (*helpers_);
-		made.addToLinkOrder (*stubs_);
-		if (hoisting ("sharedjd"))
-			shared_jd_ = &made;
 		return made;
 	}();
+
+	// The caller's own resolved callee addresses, defined directly into this
+	// module's dylib rather than a table shared across compiles - nothing but
+	// this one link ever asks for these names again.
+	if (!module_symbols.empty ()) {
+		ExecutionSession &es = jit_->getExecutionSession ();
+		SymbolMap symbols;
+
+		for (const auto &[name, addr] : module_symbols)
+			symbols[es.intern (name)] = {
+				ExecutorAddr::fromPtr (addr),
+				JITSymbolFlags::Exported | JITSymbolFlags::Callable,
+			};
+
+		if (Error err = jd.define (absoluteSymbols (std::move (symbols))))
+			return std::move (err);
+	}
 
 	{
 		timing::Scope timed (timing::Phase::addir);
@@ -1124,59 +1087,6 @@ MonoJit::remove_dylibs (const std::vector<JITDylib *> &dylibs)
 	std::vector<JITDylibSP> owned (dylibs.begin (), dylibs.end ());
 
 	return jit_->getExecutionSession ().removeJITDylibs (std::move (owned));
-}
-
-Error
-MonoJit::undefine_stubs (ArrayRef<std::string> names)
-{
-	if (names.empty ())
-		return Error::success ();
-
-	ExecutionSession &es = jit_->getExecutionSession ();
-	SymbolNameSet symbols;
-
-	for (const std::string &name : names)
-		symbols.insert (es.intern (name));
-
-	// A stub no module ever named has never been searched for, and remove ()
-	// takes one of those as readily as one that has settled. Most of these go
-	// in one step. It is all-or-nothing, so a failure leaves the dylib as it
-	// was, and the retry below sees the same set.
-	if (Error err = stubs_->remove (symbols)) {
-		if (!err.isA<SymbolsCouldNotBeRemoved> ())
-			return err;
-		consumeError (std::move (err));
-
-		// Something is linking against one of these right now. ORC refuses to
-		// remove a symbol mid-materialization, so wait for the link that has
-		// it. Waiting is a lookup, and a lookup drains materialization on this
-		// thread, so it must happen with no lock of ours held.
-		Expected<SymbolMap> settled = es.lookup (
-			makeJITDylibSearchOrder (stubs_, JITDylibLookupFlags::MatchAllSymbols),
-			SymbolLookupSet (symbols), LookupKind::Static, SymbolState::Ready);
-
-		if (!settled)
-			return settled.takeError ();
-
-		if (Error again = stubs_->remove (symbols))
-			return again;
-	}
-
-	// A name stays in the session's pool until somebody asks for the dead
-	// entries back. The sweep walks the whole pool, so it runs once a batch's
-	// worth of names have gone dead rather than once per method. The cost of
-	// that is a backlog of at most that many. Dropping the set first is what
-	// puts this batch's own names in the sweep rather than the next one's.
-	size_t dropped = symbols.size ();
-
-	symbols.clear ();
-
-	if (dropped != 0 && dropped_names_.fetch_add (dropped) + dropped >= dead_name_sweep) {
-		dropped_names_.store (0);
-		es.getSymbolStringPool ()->clearDeadEntries ();
-	}
-
-	return Error::success ();
 }
 
 } // namespace mono
