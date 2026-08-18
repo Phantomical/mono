@@ -103,9 +103,11 @@ set(_mcs ${_tools_runtime} "${MONO_CSC}" -nologo -noconfig "-lib:${_class}"
 # printed either way.
 set(_ilasm ${_tools_runtime} "${_buildcls}/ilasm.exe" -quiet)
 
-# ms-test-suite drives the suites' own Makefiles; runtime/ has already found
-# this, but naming it here keeps the directory independent of that ordering.
-find_program(MONO_GNU_MAKE NAMES gmake make REQUIRED)
+if(NOT MONO_GNU_MAKE)
+  message(FATAL_ERROR
+    "The acceptance tests need GNU make: ms-test-suite drives the corpora's "
+    "own Makefiles")
+endif()
 
 # What every compile below has to wait for: the class libraries the -lib:/-r:
 # references resolve against, and (without MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS)

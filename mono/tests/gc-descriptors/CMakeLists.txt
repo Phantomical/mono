@@ -2,8 +2,6 @@
 # a few thousand field layouts, which is why it is generated rather than
 # written out.
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
 set(_gcd_bin "${CMAKE_CURRENT_BINARY_DIR}")
 set(_gcd_src "${CMAKE_CURRENT_SOURCE_DIR}")
 

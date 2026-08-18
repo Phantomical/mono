@@ -38,8 +38,6 @@ set(mono_build_root "${CMAKE_BINARY_DIR}")
 mono_configure_script("${_src}/microbench-perf.sh.in"
                       "${_bin}/microbench-perf.sh")
 
-find_program(MONO_PERF_BINARY perf DOC "perf(1), for the profiled microbenchmarks")
-
 set(_mb_all "")
 foreach(_entry IN LISTS _microbenchmarks)
   string(REGEX REPLACE "\\|.*$" "" _name  "${_entry}")

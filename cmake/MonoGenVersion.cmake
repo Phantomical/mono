@@ -1,13 +1,14 @@
 # Writes mono/mini/version.h.  Run as a script (cmake -P) at build time so the
 # recorded revision follows the checkout rather than the last configure.
 #
-# Expects SRC_DIR and OUT on the command line.
+# Expects SRC_DIR, OUT and GIT_EXECUTABLE on the command line.  git is searched
+# for at configure time, with everything else the build needs from outside the
+# tree; an empty GIT_EXECUTABLE means it was not found.
 
 set(_full "tarball")
 
 if(EXISTS "${SRC_DIR}/.git")
-  find_package(Git QUIET)
-  if(GIT_FOUND)
+  if(GIT_EXECUTABLE)
     if(DEFINED ENV{ghprbPullId} AND NOT "$ENV{ghprbPullId}" STREQUAL "")
       set(_branch "pull-request-$ENV{ghprbPullId}")
     else()

@@ -149,7 +149,6 @@ endif()
 set(DISABLED_FEATURES "\"none\"")
 
 # zlib: the runtime prefers the system copy and falls back to the bundled one.
-find_package(ZLIB)
 if(ZLIB_FOUND)
   set(HAVE_SYS_ZLIB 1)
 endif()

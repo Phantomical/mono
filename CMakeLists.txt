@@ -37,19 +37,100 @@ set(DART_TESTING_TIMEOUT "${MONO_CTEST_TIMEOUT}" CACHE STRING
 
 include(CTest)
 
+include(MonoOptions)
+include(MonoCompilerFlags)
+
+# ---------------------------------------------------------------------------
+# What the build looks for outside the tree
+# ---------------------------------------------------------------------------
+# Every package, program and library the build does not produce itself is
+# searched for here.  A machine that is missing one is then told at configure
+# time instead of part-way through a build, and this is the one file to read to
+# see what mono needs.  What a directory does with a result stays with the
+# directory: the error that stops a documentation build without perl belongs to
+# docs/, not here.
+#
+# mono/btls is the exception.  BoringSSL is a sub-build with a CMake project of
+# its own -- see cmake/MonoBtls.cmake -- so what it looks for is its own
+# business.
+
 # googletest is a build prerequisite of the test suites, not something they
-# work around.  Found here rather than per-directory so that the answer is the
-# same for every suite, and so that a machine without it is told once, at
-# configure time, instead of quietly producing a smaller `ctest -N`.  The way
-# to build without it is -DBUILD_TESTING=OFF, which drops every test rather
-# than an arbitrary subset.
+# work around.  A machine without it is told once, here, instead of quietly
+# getting a smaller `ctest -N`.  The way to build without it is
+# -DBUILD_TESTING=OFF, which drops every test rather than an arbitrary subset.
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)
   include(GoogleTest)
 endif()
 
-include(MonoOptions)
-include(MonoCompilerFlags)
+find_package(Threads REQUIRED)
+
+# The runtime prefers the system zlib and falls back to the bundled copy in
+# mono/zlib, which supplies ZLIB::ZLIB itself when this search finds nothing.
+find_package(ZLIB)
+
+# Reports which submodules are checked out, and stamps the build with the
+# revision it was made from.
+find_package(Git QUIET)
+
+# The per-pass checks and one generated corpus are Python, and both are part of
+# the managed test inputs.
+if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+endif()
+
+# The LLVM install the tier-1 backend builds against.  MonoLLVM.cmake asks this
+# llvm-config for the include path, the libraries and the assertion mode; there
+# is no find_package(LLVM) because LLVM's own CMake package exports that
+# project's warning and optimization flags along with the include paths.
+if(MONO_ENABLE_LLVM)
+  find_program(MONO_LLVM_CONFIG
+               NAMES llvm-config
+               HINTS "${MONO_LLVM_PREFIX}/bin"
+               NO_DEFAULT_PATH
+               DOC "llvm-config of the LLVM install to build against")
+endif()
+
+# The mono that bootstraps the class libraries.  It produces the first
+# mscorlib, so it can never be the runtime being built.
+find_program(MONO_BOOTSTRAP_RUNTIME NAMES mono mono-sgen
+             DOC "An installed mono that already works, to bootstrap mcs with")
+
+# The mono that hosts the C# compiler under MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS.
+# mono-sgen before mono: the latter is a launcher script on some distributions,
+# and one more process per compile is not free when there are five thousand of
+# them.
+find_program(MONO_SYSTEM_RUNTIME_EXECUTABLE NAMES mono-sgen mono
+             DOC "An installed mono to host the C# compiler on")
+
+# perl drives the CIL opcode-table generator and exdoc.  The opcode table is
+# checked in and regenerated on demand, so a documentation build is the one
+# thing that stops without perl.
+find_program(MONO_PERL perl DOC "perl, for the opcode tables and exdoc")
+
+find_program(MONO_DOXYGEN doxygen DOC "doxygen, for the runtime source docs")
+
+if(MONO_ENABLE_NLS)
+  find_program(MONO_MSGFMT msgfmt DOC "msgfmt(1), to compile the gettext catalogues")
+  find_program(MONO_XGETTEXT xgettext DOC "xgettext(1), to regenerate the mcs template")
+endif()
+
+# nm reads each linked binary to find eglib symbols that were not remapped.
+find_program(MONO_NM nm DOC "nm(1), for the eglib symbol-remap test")
+
+# timeout(1) caps a corpus program.  Found here rather than in
+# MonoRunTest.cmake, which runs once per test: a few thousand PATH searches at
+# test time buy nothing that one search at configure time does not.
+find_program(MONO_TIMEOUT_BINARY timeout DOC "timeout(1), the cap on a corpus program")
+
+# ms-test-suite drives the corpora's own Makefiles.
+find_program(MONO_GNU_MAKE NAMES gmake make DOC "GNU make, for the ms-test-suite corpus")
+
+find_program(MONO_PERF_BINARY perf DOC "perf(1), for the profiled microbenchmarks")
+
+# glibc has the xattr calls in libc; elsewhere they come from libattr.
+find_library(MONO_XATTR_LIB attr)
+
 include(MonoConfigureChecks)
 include(MonoConfigureFixed)
 include(MonoLLVM)

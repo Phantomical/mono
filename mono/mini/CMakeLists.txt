@@ -13,6 +13,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND}
           -DSRC_DIR=${CMAKE_SOURCE_DIR}
           -DOUT=${CMAKE_CURRENT_BINARY_DIR}/version.h
+          -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
           -P "${CMAKE_SOURCE_DIR}/cmake/MonoGenVersion.cmake"
   COMMENT "Generating version.h"
   VERBATIM)

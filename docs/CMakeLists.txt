@@ -17,7 +17,11 @@ if(NOT MONO_ENABLE_MCS_BUILD OR NOT MONO_ENABLE_EXECUTABLES)
     "assembled by mdoc.exe running on the runtime this build produces")
 endif()
 
-find_program(MONO_PERL perl REQUIRED)
+if(NOT MONO_PERL)
+  message(FATAL_ERROR
+    "MONO_ENABLE_DOCS needs perl: exdoc turns the in-source API comments into "
+    "the monodoc XML the trees are assembled from")
+endif()
 
 set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
@@ -135,7 +139,6 @@ install(FILES
 
 # doxygen over the runtime sources; unrelated to monodoc, and only useful if
 # you have doxygen. Never part of `all`.
-find_program(MONO_DOXYGEN doxygen)
 if(MONO_DOXYGEN)
   add_custom_target(doxygen
     COMMAND "${MONO_DOXYGEN}" "${_src}/doxyfile"

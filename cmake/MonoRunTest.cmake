@@ -1,7 +1,7 @@
 # Runs one program from the runtime corpus as a single CTest test.
 #
 #   cmake -DMONO_TEST_EXPECT=<code> [-DMONO_TEST_TIMEOUT=<seconds>]
-#         [-DMONO_TEST_TMPDIR=<dir>]
+#         [-DMONO_TIMEOUT_BINARY=<path to timeout(1)>] [-DMONO_TEST_TMPDIR=<dir>]
 #         -P MonoRunTest.cmake -- <runtime> <args...> <test.exe>
 #
 # CTest can already run a command and check that it exited 0, so this exists
@@ -42,11 +42,8 @@ endif()
 
 # --kill-after gives the runtime a window to finish writing the dump before
 # SIGKILL lands.
-if(MONO_TEST_TIMEOUT)
-  find_program(_timeout timeout)
-  if(_timeout)
-    list(PREPEND _cmd "${_timeout}" -s QUIT --kill-after=10 "${MONO_TEST_TIMEOUT}")
-  endif()
+if(MONO_TEST_TIMEOUT AND MONO_TIMEOUT_BINARY)
+  list(PREPEND _cmd "${MONO_TIMEOUT_BINARY}" -s QUIT --kill-after=10 "${MONO_TEST_TIMEOUT}")
 endif()
 
 # A temporary directory of the test's own, so that programs writing fixed names

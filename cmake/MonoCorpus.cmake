@@ -15,10 +15,6 @@ if(NOT MONO_ENABLE_MCS_BUILD OR NOT MONO_ENABLE_EXECUTABLES)
 endif()
 set(MONO_CORPUS_ENABLED TRUE)
 
-# The per-pass checks are Python; find the interpreter once, here, rather than
-# in each directory that registers one.
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
 set(MONO_CORPUS_CLASS_DIR "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(MONO_CORPUS_BUILD_DIR "${MONO_MCS_LIBDIR}/build")
 set(MONO_CORPUS_WRAPPER   "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")

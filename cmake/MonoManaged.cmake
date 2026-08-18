@@ -51,7 +51,6 @@ file(GLOB_RECURSE MONO_MANAGED_ODD_SOURCES "${MONO_MCS_TOPDIR}/class/*`*.cs")
 # resolved through PATH -- it is what produces the first mscorlib, so it cannot
 # be the runtime being built.  This is independent of
 # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS, which only moves the *later* profiles.
-find_program(MONO_BOOTSTRAP_RUNTIME NAMES mono mono-sgen)
 if(NOT MONO_BOOTSTRAP_RUNTIME)
   message(FATAL_ERROR
     "No `mono` found on PATH.  The class libraries are bootstrapped by a mono "

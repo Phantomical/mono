@@ -4,7 +4,6 @@
 install(FILES opcode.def DESTINATION "${MONO_INCLUDE_SUBDIR}/mono/cil")
 install(FILES cil-opcodes.xml DESTINATION "${MONO_DATA_SUBDIR}/mono/cil")
 
-find_program(MONO_PERL perl)
 if(MONO_PERL)
   add_custom_target(regen-opcode-def
     COMMAND "${MONO_PERL}" "${CMAKE_CURRENT_SOURCE_DIR}/make-opcodes-def.pl"

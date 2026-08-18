@@ -55,7 +55,6 @@ if(ZLIB_FOUND)
 endif()
 # glibc has the xattr calls in libc; elsewhere they come from libattr.
 if(NOT HAVE_LSETXATTR)
-  find_library(MONO_XATTR_LIB attr)
   if(MONO_XATTR_LIB)
     target_link_libraries(MonoPosixHelper PRIVATE "${MONO_XATTR_LIB}")
   endif()

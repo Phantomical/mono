@@ -46,10 +46,6 @@ if(MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS)
     endif()
     set(_tools_mono "${MONO_SYSTEM_RUNTIME}")
   else()
-    # mono-sgen before mono: the latter is a launcher script on some
-    # distributions, and one more process per compile is not free when there
-    # are five thousand of them.
-    find_program(MONO_SYSTEM_RUNTIME_EXECUTABLE NAMES mono-sgen mono)
     if(NOT MONO_SYSTEM_RUNTIME_EXECUTABLE)
       message(FATAL_ERROR
         "MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS is on but no mono-sgen or mono was "

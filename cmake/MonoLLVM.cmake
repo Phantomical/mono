@@ -2,10 +2,8 @@
 # llvm/build_llvm_config.sh + llvm/llvm_config.mk.
 #
 # LLVM must be an unmodified upstream install supplied through
-# MONO_LLVM_PREFIX; there is no in-tree LLVM any more.  We deliberately do not
-# use LLVM's own CMake package: it exports the project's warning and
-# optimization flags along with the include paths, and the backend does not
-# want them.
+# MONO_LLVM_PREFIX; there is no in-tree LLVM any more.  Everything here comes
+# out of the MONO_LLVM_CONFIG the top-level CMakeLists.txt found.
 
 add_library(mono_llvm INTERFACE)
 add_library(mono::llvm ALIAS mono_llvm)
@@ -14,11 +12,6 @@ if(NOT MONO_ENABLE_LLVM)
   return()
 endif()
 
-find_program(MONO_LLVM_CONFIG
-             NAMES llvm-config
-             HINTS "${MONO_LLVM_PREFIX}/bin"
-             NO_DEFAULT_PATH
-             DOC "llvm-config of the LLVM install to build against")
 if(NOT MONO_LLVM_CONFIG)
   message(FATAL_ERROR "No llvm-config under ${MONO_LLVM_PREFIX}/bin; set MONO_LLVM_PREFIX to an LLVM install")
 endif()

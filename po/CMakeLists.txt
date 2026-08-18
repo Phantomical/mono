@@ -11,7 +11,6 @@ if(NOT MONO_ENABLE_NLS)
   return()
 endif()
 
-find_program(MONO_MSGFMT msgfmt)
 if(NOT MONO_MSGFMT)
   message(STATUS "msgfmt not found; the gettext catalogues will not be built")
   return()
@@ -47,7 +46,6 @@ add_custom_target(mcs-catalogues ALL DEPENDS ${_catalogues})
 # Regenerating the template. Maintainer-only, and off `all` because it rewrites
 # a checked-in file. The keyword list is the one from po/mcs/Makevars: mcs
 # reports diagnostics through Report.Error/Report.Warning rather than _().
-find_program(MONO_XGETTEXT xgettext)
 if(MONO_XGETTEXT)
   add_custom_target(update-mcs-pot
     COMMAND "${MONO_XGETTEXT}"

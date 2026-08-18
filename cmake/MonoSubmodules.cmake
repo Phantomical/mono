@@ -7,8 +7,6 @@
 # Nothing here fetches.  Getting sources is the user's job; this only detects
 # and reports, and a missing checkout skips the tests that need it.
 
-find_package(Git QUIET)
-
 # ---------------------------------------------------------------------------
 # mono_submodule_status(<path> <slug>)
 #

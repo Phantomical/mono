@@ -183,6 +183,7 @@ function(mono_runtime_suite name)
                          "${CMAKE_COMMAND}"
                          "-DMONO_TEST_EXPECT=${ARG_EXPECT}"
                          "-DMONO_TEST_TIMEOUT=${_timeout}"
+                         "-DMONO_TIMEOUT_BINARY=${MONO_TIMEOUT_BINARY}"
                          "-DMONO_TEST_TMPDIR=${_tmpdir}"
                          -P "${_run_test}" --
                          "${_wrapper}" ${_oarg} ${_rt_args} "${_test}"
@@ -579,7 +580,6 @@ endforeach()
 # that already has glib does not collide with it. Anything still exported as a
 # bare g_* is a missed entry in eglib-remap.h.
 # It is a property of each binary that was linked, so check each of them.
-find_program(MONO_NM nm)
 if(MONO_NM)
   foreach(_gc IN LISTS _mono_gcs)
     add_test(NAME "runtime-eglib-remap@${_gc}"
