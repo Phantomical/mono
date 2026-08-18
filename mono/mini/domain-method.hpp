@@ -88,32 +88,25 @@ enum class Promotion : int32_t {
 /// domain lock and the table's, and outside an engine's own.
 class MonoDomainMethod {
 public:
-	MonoDomainMethod (MonoMethod *method, MonoDomain *domain)
-	    : method_ (method), domain_ (domain)
-	{
-	}
+	MonoDomainMethod (MonoMethod *method, MonoDomain *domain) : method (method), domain (domain) {}
 
 	MonoDomainMethod (const MonoDomainMethod &) = delete;
 	MonoDomainMethod &operator= (const MonoDomainMethod &) = delete;
 
-	MonoMethod *method () const { return method_; }
-	MonoDomain *domain () const { return domain_; }
+	/// What the record is for. Fixed when it is built.
+	MonoMethod *const method;
+	MonoDomain *const domain;
 
 	/// The symbol the method's stub is published under. Empty until the engine
 	/// has attached, since the mangling is the engine's and nothing else has one.
-	const std::string &name () const { return name_; }
-	void set_name (std::string name) { name_ = std::move (name); }
+	std::string name;
 
 	/// The tier that owns the entry now.
 	MonoTier tier () const { return tier_.load (std::memory_order_acquire); }
 
 	/// How many calls this method takes at its entry tier before it should be
 	/// asked for as the next one. Zero means it never promotes.
-	int32_t tier_calls () const { return tier_calls_.load (std::memory_order_relaxed); }
-	void set_tier_calls (int32_t calls)
-	{
-		tier_calls_.store (calls, std::memory_order_relaxed);
-	}
+	std::atomic<int32_t> tier_calls{0};
 
 	/// Redirects the method's entry at \p code, but only when \p tier outranks
 	/// the tier already published. Answers whether it did.
@@ -149,8 +142,8 @@ public:
 	llvm::Expected<void *> unbox_entry ();
 
 	/// What unbox_entry () filled in, for the teardown that has to give it back.
-	Stub &unbox_stub () { return unbox_; }
-	MonoJitInfo *&unbox_jinfo () { return unbox_jinfo_; }
+	Stub unbox_stub;
+	MonoJitInfo *unbox_jinfo = nullptr;
 	void set_unbox_entry (void *code)
 	{
 		unbox_entry_.store (code, std::memory_order_release);
@@ -168,15 +161,15 @@ public:
 		interop_entry_.store (code, std::memory_order_release);
 	}
 
-	Stub &stub () { return stub_; }
-	const Stub &stub () const { return stub_; }
+	/// The one entry every caller reaches the method at.
+	Stub stub;
 
 	/// The re-entry trampoline the stub was published pointing at, held so it
 	/// can be given back once nothing can reach the stub.
-	void *&trampoline () { return trampoline_; }
+	void *trampoline = nullptr;
 
 	/// The jit-info record the stub was registered under.
-	MonoJitInfo *&jinfo () { return jinfo_; }
+	MonoJitInfo *jinfo = nullptr;
 
 	/* -- The bodies ------------------------------------------------------ */
 
@@ -200,14 +193,8 @@ public:
 
 	/* -- Engine state ---------------------------------------------------- */
 
-	/// What the compiling engine hung on this record.
-	void *engine_data () const { return engine_data_.get (); }
-
-	/// Hands \p data to the record, which frees it with \p free when it goes.
-	void set_engine_data (void *data, void (*free) (void *))
-	{
-		engine_data_ = { data, free };
-	}
+	/// What the compiling engine hung on this record, freed with the record.
+	std::unique_ptr<void, void (*) (void *)> engine_data{nullptr, nullptr};
 
 	/* -- The interpreter ------------------------------------------------- */
 
@@ -228,44 +215,20 @@ public:
 	/// How a call from outside the interpreter is taken apart for it, or null
 	/// while nothing has asked. One layout serves every method with the same
 	/// prototype, so the record names one rather than owning it.
-	const arch::InterpEntryLayout *interp_layout () const
-	{
-		return interp_layout_.load (std::memory_order_acquire);
-	}
-
-	void set_interp_layout (const arch::InterpEntryLayout *layout)
-	{
-		interp_layout_.store (layout, std::memory_order_release);
-	}
-
-	std::mutex &lock () { return lock_; }
+	std::atomic<const arch::InterpEntryLayout *> interp_layout{nullptr};
 
 private:
-	MonoMethod *method_;
-	MonoDomain *domain_;
-
-	std::string name_;
-	Stub stub_;
-	void *trampoline_ = nullptr;
-	MonoJitInfo *jinfo_ = nullptr;
-
 	std::atomic<void *> unbox_entry_ { nullptr };
-	Stub unbox_;
-	MonoJitInfo *unbox_jinfo_ = nullptr;
 
 	std::atomic<void *> interop_entry_ { nullptr };
 
 	llvm::SmallVector<MonoMethodBody, 2> bodies_;
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
-	std::atomic<int32_t> tier_calls_ { 0 };
 	/* Promotion::idle / queued / settled; an integer because it is CAS'd. */
 	std::atomic<int32_t> promotion_ { (int32_t) Promotion::idle };
 
-	std::unique_ptr<void, void (*) (void *)> engine_data_ { nullptr, nullptr };
-
 	std::atomic<InterpMethod *> interp_method_ { nullptr };
-	std::atomic<const arch::InterpEntryLayout *> interp_layout_ { nullptr };
 
 	mutable std::mutex lock_;
 };

@@ -127,17 +127,16 @@ layout_for (MonoDomain *domain, MonoMethod *method)
 Expected<arch::InterpEntryPoint>
 interp_entry (MonoDomainMethod &dm)
 {
-	const arch::InterpEntryLayout *layout = dm.interp_layout ();
+	const arch::InterpEntryLayout *layout = dm.interp_layout.load (std::memory_order_acquire);
 
 	if (layout == nullptr) {
-		Expected<const arch::InterpEntryLayout *> planned =
-			layout_for (dm.domain (), dm.method ());
+		Expected<const arch::InterpEntryLayout *> planned = layout_for (dm.domain, dm.method);
 
 		if (!planned)
 			return planned.takeError ();
 
 		layout = *planned;
-		dm.set_interp_layout (layout);
+		dm.interp_layout.store (layout, std::memory_order_release);
 	}
 
 	void *imethod = dm.interp_method ();
@@ -145,7 +144,7 @@ interp_entry (MonoDomainMethod &dm)
 	if (imethod == nullptr) {
 		ERROR_DECL (interp_error);
 
-		imethod = mini_get_interp_callbacks ()->get_imethod (dm.method (), interp_error);
+		imethod = mini_get_interp_callbacks ()->get_imethod (dm.method, interp_error);
 
 		if (imethod == nullptr)
 			return runtime_error (interp_error);

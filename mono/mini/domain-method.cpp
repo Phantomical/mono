@@ -65,7 +65,7 @@ MonoDomainMethod::publish (MonoTier tier, void *code)
 	if (tier < tier_.load (std::memory_order_relaxed))
 		return false;
 
-	stub_.redirect (code);
+	stub.redirect (code);
 	tier_.store (tier, std::memory_order_release);
 	return true;
 }
@@ -89,7 +89,7 @@ MonoDomainMethod::promote ()
 	                                         std::memory_order_acquire))
 		return true;
 
-	if (!mono_llvm_jit_request_promotion (method_, domain_)) {
+	if (!mono_llvm_jit_request_promotion (method, domain)) {
 		promotion_.store ((int32_t) Promotion::idle, std::memory_order_release);
 		return false;
 	}
@@ -155,7 +155,7 @@ MonoDomainMethod::unbox_entry ()
 	 * info and that takes it. It is recursive, so a mutator already holding it
 	 * - mono_class_proxy_vtable is one - arrives here safely.
 	 */
-	DomainLock domain_lock (domain_);
+	DomainLock domain_lock (domain);
 	std::lock_guard<std::mutex> held (lock_);
 
 	if (void *ready = unbox_entry_.load (std::memory_order_relaxed))
@@ -174,7 +174,7 @@ MonoDomainMethod::interop_entry ()
 		return ready;
 
 	/* The same order unbox_entry () takes, and for the same reason. */
-	DomainLock domain_lock (domain_);
+	DomainLock domain_lock (domain);
 	std::lock_guard<std::mutex> held (lock_);
 
 	if (void *ready = interop_entry_.load (std::memory_order_relaxed))
@@ -204,7 +204,7 @@ MonoDomainMethod::install_detour (void *target)
 	 * and the table's lock is the outer one.
 	 */
 	if (mono_use_interpreter)
-		mini_get_interp_callbacks ()->method_compiled (domain_, method_);
+		mini_get_interp_callbacks ()->method_compiled (domain, method);
 }
 
 MonoDomainMethod *

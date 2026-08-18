@@ -121,7 +121,7 @@ interp_check_call_promotion (InterpMethod *imethod)
 	 * threshold of calls rather than the rest of the process.
 	 */
 	if (MonoDomainMethod *dm = domain_method_find (imethod->domain, imethod->method))
-		arm_tier_counter (imethod, dm->tier_calls ());
+		arm_tier_counter (imethod, dm->tier_calls.load (std::memory_order_relaxed));
 }
 
 /*
@@ -275,7 +275,7 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 	else
 		imethod->rtype = mini_get_underlying_type (sig->ret);
 	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
-	arm_tier_counter (imethod, (*dm)->tier_calls ());
+	arm_tier_counter (imethod, (*dm)->tier_calls.load (std::memory_order_relaxed));
 	imethod->param_types = static_cast<MonoType **> (
 		m_method_alloc0 (domain, method, sizeof (MonoType *) * sig->param_count));
 	for (i = 0; i < sig->param_count; ++i)
