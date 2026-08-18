@@ -41,18 +41,18 @@ std::unordered_map<MonoDomain *, std::unordered_map<MonoMethod *, arch::InterpEn
 	g_interp_entries;
 
 /// A key naming everything about a prototype that decides how a call to it is
-/// laid out - the types, the attributes that move a value, and which side of the
-/// boundary the callee behind it speaks for. Two methods that agree on this can
-/// share one thunk between them, and nothing narrower is safe to share on.
+/// laid out - the types and the attributes that move a value. Two methods that
+/// agree on this can share one thunk between them, and nothing narrower is safe
+/// to share on.
 std::string
-prototype_key (Function *f, arch::LegacyFlavor flavor)
+prototype_key (Function *f)
 {
 	std::string key;
 	raw_string_ostream os (key);
 	AttributeList attrs = f->getAttributes ();
 
 	f->getFunctionType ()->print (os);
-	os << "|cc" << f->getCallingConv () << "|flavor" << (int) flavor << "|ret "
+	os << "|cc" << f->getCallingConv () << "|ret "
 	   << attrs.getRetAttrs ().getAsString ();
 	for (unsigned i = 0; i < f->getFunctionType ()->getNumParams (); ++i)
 		os << "|p" << i << " " << attrs.getParamAttrs (i).getAsString ();
@@ -95,7 +95,7 @@ layout_for (MonoDomain *domain, MonoMethod *method)
 	 * the slot holding one, and the two are the same bare ptr here. Nor does it
 	 * settle where the receiver stops and the arguments start.
 	 */
-	std::string key = prototype_key (*shape, legacy_call_flavor (sig));
+	std::string key = prototype_key (*shape);
 
 	key += sig->hasthis ? "|this" : "|static";
 	for (int i = 0; i < sig->param_count; ++i)

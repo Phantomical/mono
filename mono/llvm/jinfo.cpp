@@ -625,7 +625,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 		publish_seq_points (domain, method, jinfo, compiled.seq_points,
 		                    seq_points);
 	/*
-	 * Only the method's own body. The legacy entry is registered against the
+	 * Only the method's own body. An entry thunk is registered against the
 	 * same MonoMethod and the table is keyed by method, so publishing a line
 	 * table for it would replace the body's - and it has no IL of its own to
 	 * put there anyway.

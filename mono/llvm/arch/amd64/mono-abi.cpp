@@ -1,37 +1,30 @@
 /**
  * \file
- * \brief Lowering calls that cross into code compiled by mini.
+ * \brief Lowering calls that cross into C.
  *
- * Generated code speaks the C convention with every value in its natural IR
- * type; only the boundary with the rest of the runtime - code mini compiled,
- * raw C entry points, and every function pointer the runtime hands out - still
- * speaks mini's convention, which is a different classification of the same
- * arguments rather than a different tag. The translator marks those calls with the
- * `mono-legacycc` attribute and emits them naturally; LegacyAbiPass rewrites
- * them into the legacy convention after the optimization pipeline has run, so
- * nothing upstream of it ever sees a lowered call.
+ * Generated code carries every value in its natural IR type. A call that
+ * crosses into C has to classify those values the way the psABI does instead.
+ * Three kinds of site do: a raw entry point, a `calli` through a native
+ * signature, and a wrapper that native code enters.
  *
- * The convention restated here is mini's (get_call_info / add_valuetype,
- * mini-amd64.c), classified from IR types and the DataLayout:
+ * The translator marks such a call with the `monocc` attribute and emits it
+ * naturally. MonoAbiPass rewrites it after the optimization pipeline has run,
+ * so nothing upstream of it ever sees a lowered call.
  *
- *   - a managed value type of up to 16 bytes travels as one or two integer
- *     register words (never float registers, unlike the C ABI);
- *   - one whose fields straddle an 8-byte boundary, or that is bigger than 16
- *     bytes, or that arrives after the integer argument registers have run
- *     out, is copied onto the stack instead - a byval pointer here;
- *   - a managed return of up to 8 bytes comes back in RAX; anything bigger
- *     travels through a pointer the caller passes, whose position is the
- *     flavor's business - a hidden argument LLVM inserted on its own would sit
- *     in front of `this`, which the runtime's trampolines insist on finding in
- *     the first register;
- *   - a native (pinvoke) signature classifies each word as integer or float
- *     the way the C ABI does, since the other side is C.
+ * The classification is done from IR types and the DataLayout:
  *
- * The classification recurses to leaf fields exactly as mini's
- * collect_field_info_nested does, which is why it agrees with mini despite
- * never seeing the metadata: the translator emits the same layout mini reads,
- * with padding spelled the one way (layout.hpp) that keeps it distinguishable
- * from data.
+ *   - a value type of up to 16 bytes travels as one or two register words,
+ *     each in the integer or the float file;
+ *   - one bigger than 16 bytes, or one that arrives after the argument
+ *     registers have run out, is copied onto the stack - a byval pointer here;
+ *   - a return that does not fit the return registers travels through a
+ *     pointer the caller passes as the first argument.
+ *
+ * The walk recurses to leaf fields the way collect_field_info_nested does
+ * (mono/mini/arch-amd64.c), and agrees with it without ever seeing the
+ * metadata. What makes that hold is the layout: the translator emits the same
+ * shape mini reads, with padding spelled the one way (layout.hpp) that keeps
+ * it distinguishable from data.
  */
 
 #include "arch/arch.hpp"
@@ -59,33 +52,7 @@ using namespace llvm;
 
 namespace mono::arch {
 
-StringRef
-legacy_flavor_value (LegacyFlavor flavor)
-{
-	switch (flavor) {
-	case LegacyFlavor::Managed:
-		return "managed";
-	case LegacyFlavor::ManagedVret1:
-		return "managed-vret1";
-	case LegacyFlavor::Pinvoke:
-		return "pinvoke";
-	}
-	llvm_unreachable ("unhandled flavor");
-}
-
 namespace {
-
-LegacyFlavor
-parse_flavor (StringRef value)
-{
-	if (value == "managed")
-		return LegacyFlavor::Managed;
-	if (value == "managed-vret1")
-		return LegacyFlavor::ManagedVret1;
-	if (value == "pinvoke")
-		return LegacyFlavor::Pinvoke;
-	report_fatal_error ("mono: unrecognized mono-legacycc flavor '" + value + "'");
-}
 
 /// One eightbyte of a value type, classified as the register file it rides in.
 enum class Quad { None, Integer, Sse };
@@ -146,7 +113,7 @@ pow2_width (uint64_t n)
 }
 
 AggShape
-classify_aggregate (Type *t, const DataLayout &dl, bool pinvoke, bool is_return)
+classify_aggregate (Type *t, const DataLayout &dl)
 {
 	AggShape shape;
 	uint64_t size = dl.getTypeAllocSize (t);
@@ -155,10 +122,7 @@ classify_aggregate (Type *t, const DataLayout &dl, bool pinvoke, bool is_return)
 	if (size == 0)
 		return shape;
 
-	bool in_registers = pinvoke ? size <= 16
-	                            : (is_return ? aligned == 8 : aligned <= 16);
-
-	if (!in_registers) {
+	if (size > 16) {
 		shape.memory = true;
 		return shape;
 	}
@@ -169,53 +133,39 @@ classify_aggregate (Type *t, const DataLayout &dl, bool pinvoke, bool is_return)
 	for (const Leaf &leaf : leaves)
 		if (leaf.offset < 8 && leaf.offset + leaf.size > 8) {
 			/*
-			 * mini refuses to marshal a native straddling field
-			 * (NOT_IMPLEMENTED in add_valuetype), so no call like this has
-			 * two working ends to agree with.
+			 * mini refuses to marshal a straddling field (NOT_IMPLEMENTED in
+			 * add_valuetype), so no call like this has two working ends to
+			 * agree with.
 			 */
-			if (pinvoke)
-				report_fatal_error ("mono: a field of a native by-value "
-				                    "struct straddles an eightbyte, which "
-				                    "the runtime does not marshal");
-			shape.memory = true;
-			return shape;
+			report_fatal_error ("mono: a field of a native by-value struct "
+			                    "straddles an eightbyte, which the runtime "
+			                    "does not marshal");
 		}
 
-	/* A native type whose bytes are all padding travels as nothing at all. */
-	if (pinvoke && leaves.empty ())
+	/* A type whose bytes are all padding travels as nothing at all. */
+	if (leaves.empty ())
 		return shape;
 
 	shape.nquads = aligned > 8 ? 2 : 1;
 
-	if (!pinvoke) {
-		/* Managed data always rides the integer file, floats included. */
-		shape.cls[0] = Quad::Integer;
-		shape.qsize[0] = pow2_width (size > 8 ? 8 : size);
-		if (shape.nquads == 2) {
-			shape.cls[1] = Quad::Integer;
-			shape.qsize[1] = 8;
+	for (unsigned quad = 0; quad < shape.nquads; ++quad) {
+		for (const Leaf &leaf : leaves) {
+			if (quad == 0 && leaf.offset >= 8)
+				continue;
+			if (quad == 1 && leaf.offset < 8)
+				continue;
+
+			shape.qsize[quad] = (unsigned) (leaf.offset + leaf.size - quad * 8);
+
+			Quad cls = leaf.sse ? Quad::Sse : Quad::Integer;
+			if (shape.cls[quad] == Quad::None)
+				shape.cls[quad] = cls;
+			else if (shape.cls[quad] != cls)
+				shape.cls[quad] = Quad::Integer;
 		}
-	} else {
-		for (unsigned quad = 0; quad < shape.nquads; ++quad) {
-			for (const Leaf &leaf : leaves) {
-				if (quad == 0 && leaf.offset >= 8)
-					continue;
-				if (quad == 1 && leaf.offset < 8)
-					continue;
 
-				shape.qsize[quad] =
-					(unsigned) (leaf.offset + leaf.size - quad * 8);
-
-				Quad cls = leaf.sse ? Quad::Sse : Quad::Integer;
-				if (shape.cls[quad] == Quad::None)
-					shape.cls[quad] = cls;
-				else if (shape.cls[quad] != cls)
-					shape.cls[quad] = Quad::Integer;
-			}
-
-			shape.qsize[quad] = pow2_width (shape.qsize[quad]);
-			assert (shape.qsize[quad] <= 8);
-		}
+		shape.qsize[quad] = pow2_width (shape.qsize[quad]);
+		assert (shape.qsize[quad] <= 8);
 	}
 
 	return shape;
@@ -261,13 +211,12 @@ struct ParamLowering {
 	Type *travel = nullptr; ///< the lowered parameter type when Coerced
 };
 
-/// A whole call's lowering against mini's convention.
+/// A whole call's lowering against the C convention.
 struct CallLowering {
 	SmallVector<ParamLowering, 8> params; ///< one per natural parameter
 	/// A value-type return travelling in registers travels as this.
 	Type *ret_travel = nullptr;
 	bool ret_by_address = false;
-	unsigned vret_index = 0; ///< the hidden pointer's lowered position
 };
 
 bool
@@ -278,38 +227,30 @@ is_aggregate (Type *t)
 
 CallLowering
 compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
-                  LegacyFlavor flavor, const DataLayout &dl, LLVMContext &ctx)
+                  const DataLayout &dl, LLVMContext &ctx)
 {
 	constexpr unsigned param_gregs = 6, param_fregs = 8;
 
-	bool pinvoke = flavor == LegacyFlavor::Pinvoke;
 	CallLowering low;
 	unsigned gr = 0, fr = 0;
 
 	Type *ret = type->getReturnType ();
 
 	if (is_aggregate (ret)) {
-		AggShape shape = classify_aggregate (ret, dl, pinvoke, true);
+		AggShape shape = classify_aggregate (ret, dl);
 
 		if (!shape.memory) {
 			low.ret_travel = travel_type (ctx, shape);
 		} else {
 			/*
-			 * The hidden pointer is spelled out rather than left to LLVM,
-			 * for native returns as much as managed ones. Left alone LLVM
-			 * does not demote a memory-class aggregate at all: three
-			 * doubles come back in XMM0, XMM1 and ST0, which no C callee
-			 * writes, and the argument that should have followed the
-			 * pointer takes the register the pointer was owed.
-			 *
-			 * Its position is the flavor's business. A C function keeps it
-			 * in front of everything; a managed one puts it behind a
-			 * receiver the trampolines insist on finding first. A nest key
-			 * is a trailing parameter and no argument at all, so it never
-			 * comes between them.
+			 * The hidden pointer is spelled out, in front of everything,
+			 * rather than left to LLVM. Left alone LLVM does not demote a
+			 * memory-class aggregate at all: three doubles come back in
+			 * XMM0, XMM1 and ST0, which no C callee writes, and the
+			 * argument that should have followed the pointer takes the
+			 * register the pointer was owed.
 			 */
 			low.ret_by_address = true;
-			low.vret_index = flavor == LegacyFlavor::ManagedVret1 ? 1 : 0;
 			if (gr < param_gregs)
 				gr++;
 		}
@@ -326,7 +267,7 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 		}
 
 		if (is_aggregate (t)) {
-			AggShape shape = classify_aggregate (t, dl, pinvoke, false);
+			AggShape shape = classify_aggregate (t, dl);
 			unsigned need_gr = 0, need_fr = 0;
 
 			for (unsigned quad = 0; quad < shape.nquads; ++quad) {
@@ -421,7 +362,7 @@ split_normal_edge (InvokeInst *invoke)
 }
 
 void
-rewrite_call (CallBase *call, LegacyFlavor flavor)
+rewrite_call (CallBase *call)
 {
 	Function *fn = call->getFunction ();
 	Module *m = fn->getParent ();
@@ -430,18 +371,18 @@ rewrite_call (CallBase *call, LegacyFlavor flavor)
 	FunctionType *old_type = call->getFunctionType ();
 
 	/*
-	 * This convention's own hidden return pointer goes in a place the runtime's
-	 * trampolines fixed, so a site reaching here has to still be in the
-	 * signature's terms for the lowering below to put it there.
+	 * The lowering below puts the hidden return pointer in first. A site that
+	 * arrives with one already spelled out has been lowered once, and doing it
+	 * twice gives the callee a pointer to a pointer.
 	 */
 	if (call->hasStructRetAttr ())
-		report_fatal_error ("mono: a call marked for the legacy convention already "
+		report_fatal_error ("mono: a call marked for the C convention already "
 		                    "carries a hidden return pointer");
 
 	CallLowering low = compute_lowering (
 		old_type,
-		[&] (unsigned i) { return call->paramHasAttr (i, Attribute::Nest); },
-		flavor, dl, ctx);
+		[&] (unsigned i) { return call->paramHasAttr (i, Attribute::Nest); }, dl,
+		ctx);
 
 	IRBuilder<> entry (&fn->getEntryBlock (), fn->getEntryBlock ().begin ());
 	IRBuilder<> b (call);
@@ -515,10 +456,9 @@ rewrite_call (CallBase *call, LegacyFlavor flavor)
 	if (low.ret_by_address) {
 		ret_slot = entry.CreateAlloca (ret_type);
 		ret_slot->setAlignment (Align (8));
-		args.insert (args.begin () + low.vret_index, ret_slot);
-		types.insert (types.begin () + low.vret_index,
-		              PointerType::get (ctx, 0));
-		attrs.insert (attrs.begin () + low.vret_index, AttributeSet ());
+		args.insert (args.begin (), ret_slot);
+		types.insert (types.begin (), PointerType::get (ctx, 0));
+		attrs.insert (attrs.begin (), AttributeSet ());
 		ret_type = Type::getVoidTy (ctx);
 	} else if (low.ret_travel != nullptr) {
 		ret_type = low.ret_travel;
@@ -529,7 +469,7 @@ rewrite_call (CallBase *call, LegacyFlavor flavor)
 
 	AttrBuilder fn_attrs (ctx, old_attrs.getFnAttrs ());
 
-	fn_attrs.removeAttribute (legacy_cc_attribute);
+	fn_attrs.removeAttribute (mono_cc_attribute);
 
 	AttributeList new_attrs = AttributeList::get (
 		ctx, AttributeSet::get (ctx, fn_attrs),
@@ -597,9 +537,9 @@ rewrite_call (CallBase *call, LegacyFlavor flavor)
 } // namespace
 
 PreservedAnalyses
-LegacyAbiPass::run (Module &m, ModuleAnalysisManager &)
+MonoAbiPass::run (Module &m, ModuleAnalysisManager &)
 {
-	SmallVector<std::pair<CallBase *, LegacyFlavor>, 8> marked;
+	SmallVector<CallBase *, 8> marked;
 
 	for (Function &f : m)
 		for (BasicBlock &bb : f)
@@ -610,19 +550,15 @@ LegacyAbiPass::run (Module &m, ModuleAnalysisManager &)
 					continue;
 
 				/* Reads the call site, then the callee's declaration. */
-				Attribute attr = call->getFnAttr (legacy_cc_attribute);
-
-				if (!attr.isValid ())
-					continue;
-				marked.push_back (
-					{ call, parse_flavor (attr.getValueAsString ()) });
+				if (call->getFnAttr (mono_cc_attribute).isValid ())
+					marked.push_back (call);
 			}
 
 	if (marked.empty ())
 		return PreservedAnalyses::all ();
 
-	for (auto &[call, flavor] : marked)
-		rewrite_call (call, flavor);
+	for (CallBase *call : marked)
+		rewrite_call (call);
 
 	return PreservedAnalyses::none ();
 }
@@ -676,20 +612,17 @@ create_unbox_entry (Module &m, StringRef name, Function *target, Value *through,
 }
 
 Function *
-create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
-                           LegacyFlavor flavor, Value *through)
+create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *through)
 {
-
 	LLVMContext &ctx = m.getContext ();
 	const DataLayout &dl = m.getDataLayout ();
 	AttributeList target_attrs = target->getAttributes ();
 
 	/*
-	 * The two conventions each have their own answer for a return too wide for the
-	 * registers, and they do not agree - this one puts the pointer where the
-	 * runtime's trampolines expect it, the target's puts it first. So the lowering
-	 * is computed from the signature both ends were derived from, and the bridging
-	 * happens at the call.
+	 * The two conventions spell a return too wide for the registers differently:
+	 * the target names the pointer as an explicit parameter, C leaves it to the
+	 * `sret` lowering. So the lowering is computed from the signature both ends
+	 * were derived from, and the bridging happens at the call.
 	 */
 	Type *hidden = hidden_return_type (target);
 	FunctionType *natural = hidden != nullptr
@@ -701,8 +634,7 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 	};
 
 	CallLowering low =
-		compute_lowering (natural, [] (unsigned) { return false; }, flavor,
-		                  dl, ctx);
+		compute_lowering (natural, [] (unsigned) { return false; }, dl, ctx);
 
 	SmallVector<Type *, 8> types;
 	SmallVector<AttributeSet, 8> attrs;
@@ -734,9 +666,8 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 	Type *ret_type = natural->getReturnType ();
 
 	if (low.ret_by_address) {
-		types.insert (types.begin () + low.vret_index,
-		              PointerType::get (ctx, 0));
-		attrs.insert (attrs.begin () + low.vret_index, AttributeSet ());
+		types.insert (types.begin (), PointerType::get (ctx, 0));
+		attrs.insert (attrs.begin (), AttributeSet ());
 		ret_type = Type::getVoidTy (ctx);
 	} else if (low.ret_travel != nullptr) {
 		ret_type = low.ret_travel;
@@ -764,7 +695,7 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 	SmallVector<Value *, 8> args;
 
 	for (unsigned i = 0, at = 0; i < natural->getNumParams (); ++i, ++at) {
-		if (low.ret_by_address && at == low.vret_index)
+		if (low.ret_by_address && at == 0)
 			++at;
 
 		Argument *incoming = thunk->getArg (at);
@@ -834,7 +765,7 @@ create_legacy_entry_thunk (Module &m, StringRef name, Function *target,
 		 * The caller's slot is only as aligned as the value type itself
 		 * asks; claim nothing stronger.
 		 */
-		b.CreateAlignedStore (result, thunk->getArg (low.vret_index), Align (1));
+		b.CreateAlignedStore (result, thunk->getArg (0), Align (1));
 		b.CreateRetVoid ();
 	} else if (low.ret_travel != nullptr) {
 		if (dl.getTypeStoreSize (low.ret_travel) == 0) {

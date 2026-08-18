@@ -789,7 +789,7 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 // call - a guaranteed jump, which is the only form that fails loudly rather than
 // quietly, and so the only one worth using where III.2.4 makes the jump
 // mandatory. A dispatched or indirect target is a legacy-boundary call whose
-// prototype LegacyAbiPass may yet change, so the guarantee cannot be demanded of
+// prototype MonoAbiPass may yet change, so the guarantee cannot be demanded of
 // one - and musttail across the two conventions is not even well-formed IR.
 TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 {
@@ -808,7 +808,7 @@ TEST_F (TranslatorTest, AMatchingTailCallIsHonoredAsMustTail)
 //
 // And a dispatched site is not a boundary call any more. What a vtable slot holds
 // is the method's stub, entered in this backend's own convention like anything
-// else, so nothing is left for LegacyAbiPass to lower.
+// else, so nothing is left for MonoAbiPass to lower.
 TEST_F (TranslatorTest, ADispatchedTailCallIsMarkedAndKeepsItsKey)
 {
 	/* The marker is an attribute group in the printed text, so it is read here. */
@@ -821,7 +821,7 @@ TEST_F (TranslatorTest, ADispatchedTailCallIsMarkedAndKeepsItsKey)
 					llvm::dyn_cast<llvm::CallBase> (&instruction);
 
 				if (call != nullptr
-				    && call->getFnAttr ("mono-legacycc").isValid ())
+				    && call->getFnAttr ("monocc").isValid ())
 					n++;
 			}
 		return n;

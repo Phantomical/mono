@@ -227,7 +227,7 @@ fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
  * The layout is real, so LLVM can reason about the fields. The struct is
  * packed, so the offsets match the runtime's layout instead of whatever
  * DataLayout infers on its own. Padding takes a shape no real field ever
- * takes, which lets LegacyAbiPass tell data from padding when it classifies
+ * takes, which lets MonoAbiPass tell data from padding when it classifies
  * a value. A float that shares an eightbyte with padding is still a float
  * to the C ABI.
  */
@@ -357,14 +357,6 @@ icall_wrapper_target (MonoMethod *method)
 	return mono_marshal_get_native_wrapper (method, TRUE, mono_aot_only);
 }
 
-arch::LegacyFlavor
-legacy_call_flavor (MonoMethodSignature *sig)
-{
-	if (sig->pinvoke)
-		return arch::LegacyFlavor::Pinvoke;
-	return arch::managed_call_flavor (sig);
-}
-
 bool
 entered_in_c (MonoMethod *method)
 {
@@ -386,11 +378,9 @@ entered_in_c (MonoMethod *method)
 }
 
 void
-MethodLLVMEmitter::mark_legacy_call (llvm::CallBase *call, MonoMethodSignature *sig)
+MethodLLVMEmitter::mark_mono_call (llvm::CallBase *call)
 {
-	call->addFnAttr (llvm::Attribute::get (
-		call->getContext (), arch::legacy_cc_attribute,
-		arch::legacy_flavor_value (legacy_call_flavor (sig))));
+	call->addFnAttr (llvm::Attribute::get (call->getContext (), arch::mono_cc_attribute));
 }
 
 llvm::Expected<llvm::Type *>
@@ -570,7 +560,7 @@ MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 
 /// The LLVM type for one field of a native layout, of size bytes.
 ///
-/// Only two facts about a native field reach LegacyAbiPass: how many bytes
+/// Only two facts about a native field reach MonoAbiPass: how many bytes
 /// it covers, and whether those bytes ride in an SSE register. A field that
 /// marshalling passes through unchanged keeps its own type, so the
 /// classifier still sees the float, or recurses into the nested struct.
@@ -723,7 +713,7 @@ MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 /// The LLVM function type for sig, built in this backend's own convention.
 /// Every value keeps its natural type. A value type travels by value, as
 /// its struct, and an aggregate return comes back as an aggregate. Only
-/// LegacyAbiPass lowers any of this.
+/// MonoAbiPass lowers any of this.
 ///
 /// native means the operands use the layout marshalling produced, instead
 /// of the managed layout. That is the layout a signature describes when the
@@ -840,15 +830,14 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 /// A method this backend translates is declared in this backend's own
 /// convention. The engine resolves that declaration to the stub the
 /// method's body is published under. A method implemented outside IL - an
-/// icall, a pinvoke, a runtime-implemented method - is declared in the
-/// legacy convention instead. It is marked with the `mono-legacycc`
-/// function attribute, and every call to it lowers in LegacyAbiPass.
+/// icall, a pinvoke, a runtime-implemented method - is declared in the C
+/// convention instead. It is marked with the `monocc` function attribute,
+/// and every call to it lowers in MonoAbiPass.
 ///
 /// A natural declaration whose return does not fit in the return registers
-/// carries the hidden return pointer as its leading parameter - see
-/// hidden-return.hpp. The legacy convention places its own hidden pointer at
-/// a position the runtime's trampolines fixed. A legacy declaration stays
-/// in the signature's own terms, and LegacyAbiPass lowers it.
+/// carries the hidden return pointer as a parameter of its own - see
+/// hidden-return.hpp. A C declaration stays in the signature's own terms,
+/// and MonoAbiPass lowers it.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 {
@@ -878,10 +867,10 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	if (!type)
 		return type.takeError ();
 
-	bool legacy = entered_in_c (method);
+	bool in_c = entered_in_c (method);
 	llvm::Type *hidden = nullptr;
 
-	if (!legacy && returns_by_hidden_pointer ((*type)->getReturnType ())) {
+	if (!in_c && returns_by_hidden_pointer ((*type)->getReturnType ())) {
 		hidden = (*type)->getReturnType ();
 		*type = hidden_return_prototype (*type, hidden);
 	}
@@ -919,10 +908,9 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 	record_external (full_name, ExternalSymbol::Kind::Code, method);
 	mark_method_entry (*function, method, mono::Entry::body);
 
-	if (legacy)
-		function->addFnAttr (llvm::Attribute::get (context (), arch::legacy_cc_attribute,
-		                                           arch::legacy_flavor_value (
-								   arch::LegacyFlavor::Pinvoke)));
+	if (in_c)
+		function->addFnAttr (
+			llvm::Attribute::get (context (), arch::mono_cc_attribute));
 
 	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);
 	    ext != llvm::Attribute::None)

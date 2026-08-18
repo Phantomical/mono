@@ -158,7 +158,7 @@ is_mono_pass (StringRef pass)
 {
 	return pass == ArrayAddressPass::name () || pass == ClassInitPass::name ()
 	       || pass == LowerBuiltinsPass::name () || pass == RestoreTailPositionPass::name ()
-	       || pass == arch::LegacyAbiPass::name ();
+	       || pass == arch::MonoAbiPass::name ();
 }
 
 } // namespace
@@ -764,8 +764,8 @@ Tier0Pipeline::Tier0Pipeline ()
 	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
 
 	// After the pipeline, so the lowering works over natural-typed calls and
-	// only what survives reaches the legacy boundary convention.
-	mpm.addPass (arch::LegacyAbiPass ());
+	// only what survives reaches the C convention.
+	mpm.addPass (arch::MonoAbiPass ());
 }
 
 void

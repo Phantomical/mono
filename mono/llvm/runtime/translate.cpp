@@ -70,12 +70,14 @@ translate_and_compile (const TranslationTarget &target, MonoMethod *method,
 			return runtime_error (compile_error);
 
 		/*
-		 * mini's code is the legacy convention; generated code declares such
-		 * a method against the plain symbol and lowers its calls, so nothing
-		 * ever reaches the body stub expecting fastcc. The profiler hears
-		 * about this one from mono_jit_compile_method_with_opt (), which
-		 * reports the declaration against the wrapper it built - and that
-		 * wrapper came back through here and bracketed itself.
+		 * What stands behind the symbol is C. Generated code declares such a
+		 * method against the plain symbol and lowers its calls, so nothing
+		 * ever reaches the body stub expecting the natural convention.
+		 *
+		 * The profiler hears about this one from
+		 * mono_jit_compile_method_with_opt (), which reports the declaration
+		 * against the wrapper it built - and that wrapper came back through
+		 * here and bracketed itself.
 		 */
 		return Compiled { code, code };
 	}
@@ -183,7 +185,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return target.recover (std::move (resolved));
 
 	/*
-	 * The legacy entry rides along in the body's module. It is a handful of
+	 * The interop entry rides along in the body's module. It is a handful of
 	 * instructions, and a module of its own would cost a whole second pass
 	 * pipeline, codegen and link to hold them.
 	 *
@@ -206,12 +208,12 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		ConstantInt::get (Type::getInt64Ty (*context),
 		                  (uint64_t) (uintptr_t) *body_stub),
 		PointerType::get (*context, 0));
-	std::string legacy_entry;
+	std::string interop_entry;
 
 	if (publishes_interop_entry (method)) {
-		legacy_entry = definition_symbol (method, Entry::interop);
-		arch::create_legacy_entry_thunk (*module, legacy_entry, *function,
-		                                 legacy_call_flavor (sig), body_address);
+		interop_entry = definition_symbol (method, Entry::interop);
+		arch::create_mono_entry_thunk (*module, interop_entry, *function,
+		                               body_address);
 	}
 
 	/*
@@ -247,7 +249,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	/*
 	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`;
-	 * their entries go into the published clauses. The legacy entry rode along
+	 * their entries go into the published clauses. The interop entry rode along
 	 * too, and is what the runtime is handed for the method.
 	 */
 	std::vector<std::pair<uint32_t, void *>> filters;
@@ -257,7 +259,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	size_t unbox_code_size = 0;
 
 	for (const auto &[name, extent] : compiled->functions) {
-		if (name == legacy_entry) {
+		if (name == interop_entry) {
 			entry_code = extent.first;
 			entry_code_size = extent.second;
 			continue;
@@ -278,7 +280,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 			const_cast<uint8_t *> (extent.first));
 	}
 
-	if (entry_code == nullptr && !legacy_entry.empty ())
+	if (entry_code == nullptr && !interop_entry.empty ())
 		return createStringError (inconvertibleErrorCode (),
 		                          "the linked object for %s defines no interop "
 		                          "entry", entry.c_str ());

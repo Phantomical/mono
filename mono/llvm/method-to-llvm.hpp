@@ -440,7 +440,7 @@ private:
 	                                            llvm::ArrayRef<llvm::Value *> args);
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig,
 	                                                               bool native = false);
-	static void mark_legacy_call (llvm::CallBase *call, MonoMethodSignature *sig);
+	static void mark_mono_call (llvm::CallBase *call);
 
 	llvm::Expected<llvm::Type *> convert_type (MonoType *t, bool native = false);
 	llvm::Expected<llvm::Type *> convert_vtype (MonoType *t, bool native = false);
@@ -660,7 +660,7 @@ private:
 	///
 	/// Both are given only for a site entered in this backend's own
 	/// convention, since only the emitter knows which sites those are. A
-	/// call still bound for LegacyAbiPass must arrive without the pointer,
+	/// call still bound for MonoAbiPass must arrive without the pointer,
 	/// and signals that by leaving hidden null.
 	///
 	/// A direct callee answers for itself and ignores both.
@@ -941,7 +941,7 @@ bool is_intrinsic (MonoMethod *method);
 /// with the wrapper it builds around the registered C function
 /// (compile_special, mini-runtime.c). That wrapper is a method this backend
 /// compiles like any other. Naming it here lets a call site reach the same
-/// code in fastcc rather than through the legacy entry.
+/// code naturally rather than through a C-convention entry.
 ///
 /// Anything else comes back unchanged, including the two kinds of icall
 /// that have no such wrapper. One is registered as needing none, so its
@@ -956,12 +956,6 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 /// so a declaration and every call site that names it agree on this count.
 /// That agreement is what lets both convert to one function type.
 int vararg_fixed_params (MonoMethodSignature *sig);
-
-/// The legacy-boundary flavor of a call through sig. Native signatures keep
-/// the C classification, managed ones mini's. The hidden return pointer sits
-/// behind the first argument whenever the runtime's trampolines insist on
-/// finding a receiver there.
-arch::LegacyFlavor legacy_call_flavor (MonoMethodSignature *sig);
 
 /// Whether the address the runtime publishes for method is a C function
 /// this backend did not generate.

@@ -34,7 +34,7 @@
  * `.mono_unwind` is the frame description: the CFI program LLVM tracked for the
  * function, recorded at the MC layer before any target encoding exists. One
  * block per function the object defines, concatenated - a module holds the
- * method's body, its filter bodies and its legacy entry, and each of those is a
+ * method's body, its filter bodies and its entry thunks, and each of those is a
  * frame something may be suspended in - so the block names the function it
  * describes rather than leaving attribution to position.
  *

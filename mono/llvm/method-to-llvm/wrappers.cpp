@@ -173,7 +173,7 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 		                              *args);
 
 		// The icall is a C function. Its signature says so.
-		mark_legacy_call (llvm::cast<llvm::CallBase> (result), info->sig);
+		mark_mono_call (llvm::cast<llvm::CallBase> (result));
 	} else {
 		llvm::Expected<llvm::Function *> wrapper =
 			icall_wrapper_decl (static_cast<MonoJitICallId> (id));

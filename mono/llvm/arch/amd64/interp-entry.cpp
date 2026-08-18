@@ -4,7 +4,7 @@
  *
  * The convention restated here is LLVM's own lowering of the backend's ccc
  * declarations - CC_X86_64_C and RetCC_X86_64_C in X86CallingConv.td - and not
- * the SysV classification that legacy-abi.cpp restates for mini. The two differ
+ * the SysV classification that mono-abi.cpp restates. The two differ
  * where it matters most: LLVM flattens an aggregate argument into its scalar
  * leaves and assigns each leaf a register of its own, so
  *

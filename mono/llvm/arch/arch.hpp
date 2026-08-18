@@ -115,54 +115,32 @@ void emit_lmf_capture_registers (llvm::IRBuilderBase &b, llvm::Value *slot);
 /// storage, or null when this machine cannot reach it without a call.
 llvm::Value *emit_lmf_address (llvm::IRBuilderBase &b);
 
-/* -- The boundary calling convention -------------------------------------- */
+/* -- Crossing into C ------------------------------------------------------ */
 
 /// The attribute naming a call (or a declaration every call to which) crosses
-/// the legacy boundary. Its value is one of the flavor strings below.
-constexpr llvm::StringRef legacy_cc_attribute = "mono-legacycc";
+/// into C. It is a marker and carries no value.
+constexpr llvm::StringRef mono_cc_attribute = "monocc";
 
-/// Which side of the boundary the callee is, and where the runtime's
-/// convention puts a hidden return pointer if the return needs one.
-enum class LegacyFlavor {
-	/// Code compiled by mini for a managed signature: value types ride the
-	/// integer file, a big return travels through a pointer at argument 0.
-	Managed,
-	/// Managed, but the hidden return pointer sits at argument 1: the first
-	/// argument is a this (or a reference the trampolines treat as one) that
-	/// the runtime insists on finding in the first register.
-	ManagedVret1,
-	/// A native C function: the C classification, floats in the float file.
-	Pinvoke,
-};
-
-llvm::StringRef legacy_flavor_value (LegacyFlavor flavor);
-
-/// Which of the two managed flavors a call through SIG is. Whether the
-/// signature is managed at all is the caller's question.
-LegacyFlavor managed_call_flavor (MonoMethodSignature *sig);
-
-/// Rewrites every `mono-legacycc` call into the runtime's convention. Runs
-/// after the optimization pipeline; the marked calls are opaque to it either
-/// way, but the natural-typed IR is what it should be optimizing.
-class LegacyAbiPass : public llvm::PassInfoMixin<LegacyAbiPass> {
+/// Rewrites every `monocc` call into the C convention. Runs after the
+/// optimization pipeline; the marked calls are opaque to it either way, but the
+/// natural-typed IR is what it should be optimizing.
+class MonoAbiPass : public llvm::PassInfoMixin<MonoAbiPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m,
 	                             llvm::ModuleAnalysisManager &mam);
 };
 
-/// Create NAME in M: a legacy-convention entry point that unpacks its
-/// arguments out of the convention into natural values and calls TARGET (a
-/// fastcc function in M) with them. This is what the runtime publishes for a
-/// method - every caller that is not generated code enters through it.
+/// Create \p name in \p m: a C-convention entry point that unpacks its
+/// arguments out of the convention into natural values and calls \p target (a
+/// function in \p m) with them. This is what a wrapper generated for native
+/// code to enter is published as.
 ///
-/// THROUGH, when given, is the address the call is actually made to; TARGET
-/// then only supplies the shape of the call. That is how an entry emitted
-/// beside the body it enters still reaches it through the body's stub.
-///
-llvm::Function *create_legacy_entry_thunk (llvm::Module &m, llvm::StringRef name,
-                                           llvm::Function *target,
-                                           LegacyFlavor flavor,
-                                           llvm::Value *through = nullptr);
+/// \p through, when given, is the address the call is actually made to, and
+/// \p target then only supplies the shape of the call. That is how an entry
+/// emitted beside the body it enters still reaches it through the body's stub.
+llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
+                                         llvm::Function *target,
+                                         llvm::Value *through = nullptr);
 
 /// Create NAME in M: TARGET's own prototype, with ADJUST added to the receiver
 /// before the call is passed on to THROUGH. This is the entry a call off a value

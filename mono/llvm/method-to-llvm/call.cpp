@@ -561,7 +561,7 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 
 	// A tail call keeps the caller's own prototype, so only a direct call to
 	// another method this backend compiles qualifies. An indirect target or a
-	// runtime-implemented one is a legacy call, lowered to a different
+	// runtime-implemented one crosses into C, and is lowered to a different
 	// prototype after the fact.
 	if (callee_method == nullptr || implemented_outside_il (callee_method))
 		return llvm::CallInst::TCK_None;
@@ -615,7 +615,7 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	// managed pointers, unmanaged pointers, function pointers. An indirect
 	// target's this is a pointer to nobody-knows-what, so it gets the same
 	// treatment as a value type's this. Aggregates need no test: on this
-	// convention they pass as first-class values, and only the legacy ABI ever
+	// convention they pass as first-class values, and only the C lowering ever
 	// hands over a pointer to one.
 	if (callee_sig->hasthis
 	    && (callee_method == nullptr || m_class_is_valuetype (callee_method->klass)))
@@ -796,7 +796,7 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 		return unbalanced_stack (0);
 	if (innermost_try (offset) >= 0)
 		return invalid_il ("jmp cannot transfer control out of a protected block");
-	// A legacy target's call lowers to a different prototype than this method's.
+	// A call into C lowers to a different prototype than this method's.
 	if (implemented_outside_il (callee_method))
 		return unsupported_il ("jmp to a runtime-implemented method");
 	if (method->save_lmf)
@@ -1257,7 +1257,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 	// An internal call is published as the marshalling wrapper the runtime
 	// builds around it, so naming that wrapper here reaches the same code
-	// without crossing the legacy boundary to get there. A site that still
+	// without crossing into C to get there. A site that still
 	// dispatches must keep the method the IL named: the slot index and the
 	// IMT key are computed from it.
 	if (devirtualized && !vararg) {

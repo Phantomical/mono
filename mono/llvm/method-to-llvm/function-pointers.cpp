@@ -396,11 +396,11 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 	if (!args)
 		return args.takeError ();
 
-	// A native signature really does reach native code. That call crosses the
-	// boundary, and LegacyAbiPass lowers it. A managed signature instead reaches
-	// a method this backend published - ldftn and ldvirtftn hand out its stub -
-	// so it is an ordinary call. Spelling out the hidden return pointer in the
-	// prototype is then this function's job, not the pass's.
+	// A native signature really does reach native code. That call crosses into
+	// C, and MonoAbiPass lowers it. A managed signature instead reaches a method
+	// this backend published - ldftn and ldvirtftn hand out its stub - so it is
+	// an ordinary call. Spelling out the hidden return pointer in the prototype
+	// is then this function's job, not the pass's.
 	llvm::Type *hidden = nullptr;
 	unsigned at = 0;
 
@@ -414,7 +414,7 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		builder, llvm::FunctionCallee (*type, ftn), *args, {}, hidden, at);
 
 	if (sig->pinvoke != 0)
-		mark_legacy_call (llvm::cast<llvm::CallBase> (result), sig);
+		mark_mono_call (llvm::cast<llvm::CallBase> (result));
 	consume_save_last_error (builder);
 	pop_stack (sig->param_count + sig->hasthis);
 
