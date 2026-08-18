@@ -23,6 +23,7 @@
 #include "jitlink-memory.hpp"
 #include "debugging/perf/jitdump.hpp"
 
+#include <mono/arch/amd64/amd64-thunk.hpp>
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/object.h"
 
@@ -30,7 +31,6 @@
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Memory.h>
 
-#include <cstring>
 #include <mutex>
 #include <utility>
 
@@ -59,11 +59,23 @@ constexpr size_t slot_size = sizeof (void *);
 constexpr size_t stub_offset =
 	(slot_size + arch::unbox_prologue_size + arch::stub_alignment - 1)
 	& ~(arch::stub_alignment - 1);
-constexpr size_t prologue_padding = stub_offset - slot_size - arch::unbox_prologue_size;
 constexpr size_t group_size = stub_offset + arch::stub_block_size;
 
 static_assert (group_size % arch::stub_alignment == 0,
                "a group has to leave the group behind it aligned");
+
+/* amd64-thunk.hpp bakes this layout as constant bytes rather than assembling
+ * it at runtime; these tie the two together so the baked bytes cannot
+ * silently drift out of step with the geometry carved here. */
+static_assert (arch::thunk_entry_offset == stub_offset,
+               "the baked stub bytes assume a different group layout");
+static_assert (arch::thunk_size == group_size,
+               "the baked stub bytes assume a different group size");
+
+/* The baked unbox prologue adds a fixed 0x10; MonoObject's layout is what has
+ * to hold still for that to keep stepping past exactly the header. */
+static_assert (MONO_ABI_SIZEOF (MonoObject) == 0x10,
+               "the baked unbox prologue assumes a different MonoObject size");
 
 /// How many groups a batch holds.
 constexpr size_t stubs_per_slab = 2048;
@@ -102,20 +114,15 @@ StubSlabs::allocate (void *key)
 	auto stub = acquire ();
 	if (!stub)
 		return stub.takeError ();
-	stub->redirect ((void *) stub_not_initialized);
 
-	char *code = static_cast<char *> (stub->code ());
+	char *group = static_cast<char *> (stub->code ()) - stub_offset;
 	char *prologue = static_cast<char *> (stub->unbox_entry ());
 
-	/* Nothing reaches the bytes between the slot and the prologue, so they
-	 * trap rather than continue into it. */
-	std::memset (prologue - prologue_padding, 0xcc, prologue_padding);
-	arch::write_unbox_prologue (prologue, MONO_ABI_SIZEOF (MonoObject));
-
-	if (key != nullptr)
-		arch::write_keyed_jump_stub (code, stub->slot_, key);
-	else
-		arch::write_jump_stub (code, stub->slot_);
+	/* Fills the whole group, slot included; the group is either fresh or
+	 * already retired to the free list, so nothing can be reading the slot
+	 * this leaves null. The redirect below is what makes it live. */
+	arch::write_thunk (group, key);
+	stub->redirect ((void *) stub_not_initialized);
 
 	sys::Memory::InvalidateInstructionCache (
 		prologue, arch::unbox_prologue_size + arch::stub_block_size);

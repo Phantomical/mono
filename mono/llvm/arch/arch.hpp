@@ -68,28 +68,6 @@ void interp_frame_leave (void *frame);
 /// through at throw time, so this is callable before the runtime has one.
 void **rethrow_trampoline_slot ();
 
-/* -- Redirectable stubs --------------------------------------------------- */
-
-/// Write a stub at CODE jumping through SLOT, filling the whole stub block.
-void write_jump_stub (char *code, const void *slot);
-
-/// Write a stub at CODE that loads KEY into the register a callee's key
-/// travels in and then jumps through SLOT, filling the whole stub block.
-///
-/// The register is the one the `nest` attribute pins an argument to, so a
-/// function entered this way reads KEY as its nest parameter. That is how one
-/// body shared by many methods is told which of them it was entered for.
-void write_keyed_jump_stub (char *code, const void *slot, const void *key);
-
-/// Write the prologue at CODE that adds ADJUST to the receiver, filling the
-/// whole of unbox_prologue_size.
-///
-/// This is the entry a call off a value type's vtable or IMT arrives at: the
-/// receiver is the boxed object, and stepping it past the header is the whole of
-/// the difference. It runs into whatever follows it, so the caller must put a
-/// stub immediately behind it.
-void write_unbox_prologue (char *code, unsigned adjust);
-
 /* -- Call counting -------------------------------------------------------- */
 
 /// Lay out a call-counting thunk in BLOCK, COUNTER_THUNK_SIZE bytes at
