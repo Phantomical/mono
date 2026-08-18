@@ -44,75 +44,56 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 
 	mono_error_cleanup (failure);
 
-	/*
-	 * The entry and the body are separate symbols the runtime redirects
-	 * independently, and here they stand for the same three instructions - so
-	 * this is that body, built twice under the two names.
-	 */
-	auto build = [&] (const std::string &name) -> Expected<void *> {
-		auto context = std::make_unique<LLVMContext> ();
-		auto module = std::make_unique<Module> (name, *context);
-		LLVMContext &ctx = *context;
-		Type *ptr = PointerType::get (ctx, 0);
+	std::string name = stub_symbol (method);
+	auto context = std::make_unique<LLVMContext> ();
+	auto module = std::make_unique<Module> (name, *context);
+	LLVMContext &ctx = *context;
+	Type *ptr = PointerType::get (ctx, 0);
 
-		FunctionCallee load = module->getOrInsertFunction (
-			"mono_llvm_load_error_exception",
-			FunctionType::get (ptr, { ptr }, false));
-		FunctionCallee raise = module->getOrInsertFunction (
-			"mono_llvm_throw_exception",
-			FunctionType::get (Type::getVoidTy (ctx), { ptr }, false));
+	FunctionCallee load = module->getOrInsertFunction (
+		"mono_llvm_load_error_exception", FunctionType::get (ptr, { ptr }, false));
+	FunctionCallee raise = module->getOrInsertFunction (
+		"mono_llvm_throw_exception",
+		FunctionType::get (Type::getVoidTy (ctx), { ptr }, false));
 
-		Function *function =
-			Function::Create (FunctionType::get (Type::getVoidTy (ctx), false),
-			                  GlobalValue::ExternalLinkage, name, module.get ());
+	Function *function =
+		Function::Create (FunctionType::get (Type::getVoidTy (ctx), false),
+	                          GlobalValue::ExternalLinkage, name, module.get ());
 
-		/* Mono walks this frame like any other, from its unwind record. */
-		function->setUWTableKind (UWTableKind::Default);
+	/* Mono walks this frame like any other, from its unwind record. */
+	function->setUWTableKind (UWTableKind::Default);
 
-		IRBuilder<> builder (BasicBlock::Create (ctx, "entry", function));
-		Value *box = builder.CreateIntToPtr (
-			builder.getInt64 ((uint64_t) (uintptr_t) boxed), ptr);
+	IRBuilder<> builder (BasicBlock::Create (ctx, "entry", function));
+	Value *box =
+		builder.CreateIntToPtr (builder.getInt64 ((uint64_t) (uintptr_t) boxed), ptr);
 
-		builder.CreateCall (raise, { builder.CreateCall (load, { box }) });
-		builder.CreateUnreachable ();
+	builder.CreateCall (raise, { builder.CreateCall (load, { box }) });
+	builder.CreateUnreachable ();
 
-		if (Error err = bind_symbols (*module))
-			return std::move (err);
+	if (Error err = bind_symbols (*module))
+		return std::move (err);
 
-		if (dumping (name.c_str ()))
-			module->print (llvm::errs (), nullptr);
+	if (dumping (name.c_str ()))
+		module->print (llvm::errs (), nullptr);
 
-		Expected<CompiledMethod> compiled = jit.compile (
-			ThreadSafeModule (std::move (module),
-			                  ThreadSafeContext (std::move (context))),
-			name);
-		if (!compiled)
-			return compiled.takeError ();
+	Expected<CompiledMethod> compiled =
+		jit.compile (ThreadSafeModule (std::move (module),
+	                                       ThreadSafeContext (std::move (context))),
+	                     name);
 
-		perf::dump_method (method, *compiled);
+	if (!compiled)
+		return compiled.takeError ();
 
-		Expected<MonoJitInfo *> jinfo = register_jit_info (
-			domain, method, nullptr, *compiled, CodeKind::Body);
+	perf::dump_method (method, *compiled);
 
-		if (!jinfo)
-			return jinfo.takeError ();
-		remember (*compiled, *jinfo);
+	Expected<MonoJitInfo *> jinfo =
+		register_jit_info (domain, method, nullptr, *compiled, CodeKind::Body);
 
-		return compiled->entry;
-	};
+	if (!jinfo)
+		return jinfo.takeError ();
+	remember (*compiled, *jinfo);
 
-	Expected<void *> body = build (stub_symbol (method, Entry::body));
-
-	if (!body)
-		return body.takeError ();
-
-	/*
-	 * One body under one name for every door. It takes no arguments it reads
-	 * and never returns, so whichever entry a caller came for - the interop one
-	 * or the method itself - these three instructions answer for it, and
-	 * publish_defs () points every stub the method has at this.
-	 */
-	return Compiled { *body, *body };
+	return Compiled { compiled->entry };
 }
 
 /*

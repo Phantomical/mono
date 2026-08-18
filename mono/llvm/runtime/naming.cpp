@@ -19,53 +19,29 @@ identity_of (MonoMethod *method)
 	return buf;
 }
 
-llvm::StringRef
-stub_suffix (Entry entry)
-{
-	switch (entry) {
-	case Entry::body:
-		return "";
-	case Entry::interop:
-		return "$interop";
-	}
-	return "";
-}
-
 std::string
-stub_symbol (MonoMethod *method, Entry entry)
+stub_symbol (MonoMethod *method)
 {
 	char *name = mono_method_full_name (method, TRUE);
-	std::string symbol =
-		std::string (name) + identity_of (method) + stub_suffix (entry).str ();
+	std::string symbol = std::string (name) + identity_of (method);
 
 	g_free (name);
 	return symbol;
 }
 
 std::string
-definition_symbol (MonoMethod *method, Entry entry)
+interop_symbol (MonoMethod *method)
 {
-	llvm::StringRef suffix;
-
-	switch (entry) {
-	case Entry::interop:
-		suffix = "$entry";
-		break;
-	case Entry::body:
-		g_assert_not_reached ();
-		break;
-	}
-
-	return stub_symbol (method, Entry::body) + suffix.str ();
+	return stub_symbol (method) + "$entry";
 }
 
 llvm::Error
 bind_symbols (llvm::Module &m)
 {
-	return bind_method_symbols (
-		m, [] (MonoMethod *target, Entry entry) -> llvm::Expected<std::string> {
-			return stub_symbol (target, entry);
-		});
+	return bind_method_symbols (m,
+	                            [] (MonoMethod *target) -> llvm::Expected<std::string> {
+		                            return stub_symbol (target);
+	                            });
 }
 
 std::string

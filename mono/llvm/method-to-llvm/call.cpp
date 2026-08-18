@@ -454,7 +454,7 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 	llvm::Constant *address = extern_symbol (symbol);
 
 	record_external (symbol, ExternalSymbol::Kind::Code, target);
-	mark_method_entry (llvm::cast<llvm::GlobalValue> (*address), target, mono::Entry::body);
+	mark_method_reference (llvm::cast<llvm::GlobalValue> (*address), target);
 	return address;
 }
 

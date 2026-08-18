@@ -16,6 +16,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -79,7 +80,7 @@ translate_and_compile (const TranslationTarget &target, MonoMethod *method,
 		 * against the wrapper it built - and that wrapper came back through
 		 * here and bracketed itself.
 		 */
-		return Compiled { code, code };
+		return Compiled { code };
 	}
 
 	/*
@@ -115,7 +116,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		timing::Scope timed (timing::Phase::ctxnew);
 
 		context = std::make_unique<LLVMContext> ();
-		module = std::make_unique<Module> (stub_symbol (method, Entry::body), *context);
+		module = std::make_unique<Module> (stub_symbol (method), *context);
 	}
 
 	/*
@@ -184,38 +185,6 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (resolved)
 		return target.recover (std::move (resolved));
 
-	/*
-	 * The interop entry rides along in the body's module. It is a handful of
-	 * instructions, and a module of its own would cost a whole second pass
-	 * pipeline, codegen and link to hold them.
-	 *
-	 * It calls the body's stub rather than the definition beside it, which is
-	 * what keeps it correct across a later recompile - the stub is redirected
-	 * and the entry follows it without being rebuilt. Translating the method
-	 * declared it, so resolve () above has published that stub.
-	 */
-	Expected<void *> body_stub = target.stub_address (stub_symbol (method, Entry::body));
-
-	if (!body_stub)
-		return body_stub.takeError ();
-
-	MonoMethodSignature *sig = mono_method_signature_internal (method);
-
-	if (method->string_ctor)
-		sig = mono_marshal_get_string_ctor_signature (method);
-
-	Constant *body_address = ConstantExpr::getIntToPtr (
-		ConstantInt::get (Type::getInt64Ty (*context),
-		                  (uint64_t) (uintptr_t) *body_stub),
-		PointerType::get (*context, 0));
-	std::string interop_entry;
-
-	if (publishes_interop_entry (method)) {
-		interop_entry = definition_symbol (method, Entry::interop);
-		arch::create_mono_entry_thunk (*module, interop_entry, *function,
-		                               body_address);
-	}
-
 	if (dumping (entry.c_str ()))
 		module->print (llvm::errs (), nullptr);
 
@@ -234,20 +203,11 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	/*
 	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`;
-	 * their entries go into the published clauses. The interop entry rode along
-	 * too, and is what the runtime is handed for the method.
+	 * their entries go into the published clauses.
 	 */
 	std::vector<std::pair<uint32_t, void *>> filters;
-	const uint8_t *entry_code = nullptr;
-	size_t entry_code_size = 0;
 
 	for (const auto &[name, extent] : compiled->functions) {
-		if (name == interop_entry) {
-			entry_code = extent.first;
-			entry_code_size = extent.second;
-			continue;
-		}
-
 		size_t at = name.rfind ("$filter");
 
 		if (at == std::string::npos)
@@ -256,11 +216,6 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 			(uint32_t) std::stoul (name.substr (at + 7)),
 			const_cast<uint8_t *> (extent.first));
 	}
-
-	if (entry_code == nullptr && !interop_entry.empty ())
-		return createStringError (inconvertibleErrorCode (),
-		                          "the linked object for %s defines no interop "
-		                          "entry", entry.c_str ());
 
 	Expected<MonoJitInfo *> jinfo = [&] {
 		timing::Scope timed (timing::Phase::jinfo);
@@ -276,14 +231,12 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	*published = *jinfo;
 
 	/*
-	 * A record of its own for each of the module's other functions: an
-	 * exception unwinding out of the body passes back through the entries, a
-	 * suspended thread can be stopped in any of them, and a filter body is a
-	 * frame something walking the stack has to be able to name. They carry no
-	 * clauses, so their frame description - and, for a filter, the IL-offset
-	 * map that says where in the method's IL its frame is - is all they take
-	 * from the module's side tables. No dylib either: the body's record
-	 * already owns the one they all share.
+	 * A record of its own for each filter body the module holds: a suspended
+	 * thread can be stopped in one, and it is a frame something walking the
+	 * stack has to be able to name. A filter carries no clauses, so its frame
+	 * description and the IL-offset map that says where in the method's IL its
+	 * frame is are all it takes from the module's side tables. No dylib either:
+	 * the body's record already owns the one they both share.
 	 */
 	auto register_side_body = [&] (const uint8_t *code, size_t size, CodeKind kind,
 	                               std::vector<IlLineRow> lines) -> Error {
@@ -304,12 +257,6 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		target.remember (side, *jinfo);
 		return Error::success ();
 	};
-
-	if (entry_code != nullptr) {
-		if (Error err = register_side_body (entry_code, entry_code_size,
-		                                    CodeKind::AbiThunk, {}))
-			return std::move (err);
-	}
 
 	for (const auto &[name, extent] : compiled->functions) {
 		if (name.find ("$filter") == std::string::npos)
@@ -332,7 +279,64 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", entry.c_str (),
 		         compiled->entry, target.domain->friendly_name);
 
-	return Compiled { const_cast<uint8_t *> (entry_code), compiled->entry, *jinfo };
+	return Compiled { compiled->entry, *jinfo };
+}
+
+Expected<void *>
+compile_interop_entry (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
+                       void *body, RememberFn remember)
+{
+	ERROR_DECL (metadata_error);
+	MinimalCompile cfg (method, domain, metadata_error);
+
+	if (cfg.get ()->header == nullptr)
+		return runtime_error (metadata_error);
+
+	auto context = std::make_unique<LLVMContext> ();
+	std::string name = interop_symbol (method);
+	auto module = std::make_unique<Module> (name, *context);
+
+	/*
+	 * A declaration is enough: the thunk reads the prototype to know how to
+	 * take a C call apart, and calls the address rather than the function.
+	 */
+	std::vector<ExternalSymbol> externals;
+	MethodLLVMEmitter declarer (module.get (), cfg.get (), method, &externals);
+	Expected<Function *> shape = declarer.declare (method);
+
+	if (!shape)
+		return shape.takeError ();
+
+	Constant *address = ConstantExpr::getIntToPtr (
+		ConstantInt::get (Type::getInt64Ty (*context), (uint64_t) (uintptr_t) body),
+		PointerType::get (*context, 0));
+
+	arch::create_mono_entry_thunk (*module, name, *shape, address);
+
+	/* Nothing names it now, and leaving it would ask the linker for a symbol. */
+	(*shape)->eraseFromParent ();
+
+	if (dumping (name.c_str ()))
+		module->print (llvm::errs (), nullptr);
+
+	Expected<CompiledMethod> compiled =
+		jit.compile (ThreadSafeModule (std::move (module),
+	                                       ThreadSafeContext (std::move (context))),
+	                     name);
+
+	if (!compiled)
+		return compiled.takeError ();
+
+	perf::dump_method (method, *compiled);
+
+	Expected<MonoJitInfo *> jinfo =
+		register_jit_info (domain, method, nullptr, *compiled, CodeKind::AbiThunk);
+
+	if (!jinfo)
+		return jinfo.takeError ();
+	remember (*compiled, *jinfo);
+
+	return compiled->entry;
 }
 
 } // namespace mono

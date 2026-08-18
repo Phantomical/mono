@@ -58,7 +58,7 @@ build_dispatcher (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 		return runtime_error (metadata_error);
 
 	auto context = std::make_unique<LLVMContext> ();
-	std::string name = stub_symbol (method, Entry::body) + "$dispatch";
+	std::string name = stub_symbol (method) + "$dispatch";
 	auto module = std::make_unique<Module> (name, *context);
 
 	std::vector<ExternalSymbol> externals;

@@ -18,79 +18,45 @@ namespace {
 
 /// The MonoMethod a marked declaration stands for, as `%p`.
 constexpr StringRef method_attribute = "mono-method";
-/// Which of that method's entries it wants, as one of the words below.
-constexpr StringRef method_entry_attribute = "mono-method-entry";
-
-constexpr StringRef entry_body = "body";
-constexpr StringRef entry_interop = "interop";
-
-StringRef
-word_for (Entry entry)
-{
-	switch (entry) {
-	case Entry::body:
-		return entry_body;
-	case Entry::interop:
-		return entry_interop;
-	}
-	return entry_body;
-}
-
-std::optional<Entry>
-entry_for (StringRef word)
-{
-	if (word == entry_body)
-		return Entry::body;
-	if (word == entry_interop)
-		return Entry::interop;
-	return std::nullopt;
-}
 
 /// The marker on VALUE, or nothing if it carries none.
-std::optional<std::pair<MonoMethod *, Entry>>
+std::optional<MonoMethod *>
 marker_of (GlobalValue &value)
 {
 	StringRef pointer;
-	StringRef word;
 
 	if (auto *fn = dyn_cast<Function> (&value)) {
 		if (!fn->hasFnAttribute (method_attribute))
 			return std::nullopt;
 		pointer = fn->getFnAttribute (method_attribute).getValueAsString ();
-		word = fn->getFnAttribute (method_entry_attribute).getValueAsString ();
 	} else if (auto *global = dyn_cast<GlobalVariable> (&value)) {
 		if (!global->hasAttribute (method_attribute))
 			return std::nullopt;
 		pointer = global->getAttribute (method_attribute).getValueAsString ();
-		word = global->getAttribute (method_entry_attribute).getValueAsString ();
 	} else {
 		return std::nullopt;
 	}
 
 	uintptr_t address = 0;
-	std::optional<Entry> entry = entry_for (word);
 
-	if (pointer.getAsInteger (0, address) || address == 0 || !entry)
+	if (pointer.getAsInteger (0, address) || address == 0)
 		return std::nullopt;
-	return std::make_pair (reinterpret_cast<MonoMethod *> (address), *entry);
+	return reinterpret_cast<MonoMethod *> (address);
 }
 
 } // namespace
 
 void
-mark_method_entry (GlobalValue &value, MonoMethod *method, Entry entry)
+mark_method_reference (GlobalValue &value, MonoMethod *method)
 {
 	char printed[32];
 
 	snprintf (printed, sizeof (printed), "%p", (void *) method);
 
-	if (auto *fn = dyn_cast<Function> (&value)) {
+	if (auto *fn = dyn_cast<Function> (&value))
 		fn->addFnAttr (method_attribute, printed);
-		fn->addFnAttr (method_entry_attribute, word_for (entry));
-	} else if (auto *global = dyn_cast<GlobalVariable> (&value)) {
+	else if (auto *global = dyn_cast<GlobalVariable> (&value))
 		global->addAttribute (method_attribute, printed);
-		global->addAttribute (method_entry_attribute, word_for (entry));
-	}
 }
 
 /*
@@ -128,7 +94,7 @@ follow_renames (Module &m, const StringMap<std::string> &renames)
 
 Error
 bind_method_symbols (Module &m,
-                     function_ref<Expected<std::string> (MonoMethod *, Entry)> name_of)
+                     function_ref<Expected<std::string> (MonoMethod *)> name_of)
 {
 	SmallVector<GlobalValue *, 16> marked;
 
@@ -151,12 +117,12 @@ bind_method_symbols (Module &m,
 		if (!value->isDeclaration ())
 			continue;
 
-		std::optional<std::pair<MonoMethod *, Entry>> marker = marker_of (*value);
+		std::optional<MonoMethod *> marker = marker_of (*value);
 
 		if (!marker)
 			continue;
 
-		Expected<std::string> name = name_of (marker->first, marker->second);
+		Expected<std::string> name = name_of (*marker);
 
 		if (!name)
 			return name.takeError ();
@@ -168,7 +134,7 @@ bind_method_symbols (Module &m,
 		/*
 		 * setName () uniques against whatever already answers to the name
 		 * rather than failing, which would leave a reference to a symbol
-		 * nothing defines. Two references to one entry have to become the
+		 * nothing defines. Two references to one method have to become the
 		 * same value instead.
 		 */
 		if (GlobalValue *existing = m.getNamedValue (*name)) {

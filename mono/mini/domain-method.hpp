@@ -13,12 +13,9 @@
 #ifndef MONO_MINI_DOMAIN_METHOD_HPP
 #define MONO_MINI_DOMAIN_METHOD_HPP
 
-#include <mono/llvm/method-symbols.hpp>
 #include <mono/llvm/stubs.hpp>
 
-#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/STLFunctionalExtras.h>
-#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Error.h>
 
 #include <atomic>
@@ -79,13 +76,10 @@ public:
 	MonoMethod *method () const { return method_; }
 	MonoDomain *domain () const { return domain_; }
 
-	/// The symbol \p entry is published under. Empty until the engine has
-	/// attached, since the mangling is the engine's and nothing else has one.
-	const std::string &name (Entry entry) const { return names_[(unsigned) entry]; }
-	void set_name (Entry entry, std::string name)
-	{
-		names_[(unsigned) entry] = std::move (name);
-	}
+	/// The symbol the method's stub is published under. Empty until the engine
+	/// has attached, since the mangling is the engine's and nothing else has one.
+	const std::string &name () const { return name_; }
+	void set_name (std::string name) { name_ = std::move (name); }
 
 	/// The tier that owns the entry now.
 	MonoTier tier () const { return tier_.load (std::memory_order_acquire); }
@@ -98,18 +92,14 @@ public:
 		tier_calls_.store (calls, std::memory_order_relaxed);
 	}
 
-	/// Redirects every published entry at the address \p code gives for it, but
-	/// only when \p tier outranks the tier already published. Answers whether it
-	/// did.
+	/// Redirects the method's entry at \p code, but only when \p tier outranks
+	/// the tier already published. Answers whether it did.
 	///
 	/// This one comparison is what makes promotion monotone and idempotent. It
 	/// is also what keeps a compile that finishes late from taking an entry a
 	/// higher tier - or a detour - already owns. A refused publication leaves
-	/// every entry as it was, so a caller must not redirect anything itself.
-	///
-	/// \p code answers null for an entry it has no address for, which is left
-	/// alone.
-	bool publish (MonoTier tier, llvm::function_ref<void *(Entry)> code);
+	/// the entry as it was, so a caller must not redirect anything itself.
+	bool publish (MonoTier tier, void *code);
 
 	/// Asks for the method to be run by the next tier up.
 	///
@@ -143,26 +133,27 @@ public:
 		unbox_entry_.store (code, std::memory_order_release);
 	}
 
-	Stub &stub (Entry entry) { return stubs_[(unsigned) entry]; }
-	const Stub &stub (Entry entry) const { return stubs_[(unsigned) entry]; }
+	/// The C-convention entry native code enters the method through, compiled
+	/// on first ask. Null for a method nothing native enters.
+	///
+	/// It calls through the method's stub, so whatever redirects the method
+	/// redirects this too and no tier ever has to rebuild it.
+	llvm::Expected<void *> interop_entry ();
 
-	/// The re-entry trampoline \p entry was published pointing at, held so it
-	/// can be given back once nothing can reach the stub.
-	void *&trampoline (Entry entry) { return trampolines_[(unsigned) entry]; }
-
-	/// The jit-info record \p entry's stub was registered under.
-	MonoJitInfo *&jinfo (Entry entry) { return jinfos_[(unsigned) entry]; }
-
-	/// The entries this method was actually published under, recorded rather
-	/// than recomputed. Working them out again reads the method's signature, and
-	/// by the time one is freed its image may be on its way out: a shorter list
-	/// at retire than at publish leaves names claimed and blocks uncarved, and
-	/// the next method to land there inherits them.
-	llvm::ArrayRef<Entry> published () const { return published_; }
-	void set_published (llvm::ArrayRef<Entry> entries)
+	void set_interop_entry (void *code)
 	{
-		published_.assign (entries.begin (), entries.end ());
+		interop_entry_.store (code, std::memory_order_release);
 	}
+
+	Stub &stub () { return stub_; }
+	const Stub &stub () const { return stub_; }
+
+	/// The re-entry trampoline the stub was published pointing at, held so it
+	/// can be given back once nothing can reach the stub.
+	void *&trampoline () { return trampoline_; }
+
+	/// The jit-info record the stub was registered under.
+	MonoJitInfo *&jinfo () { return jinfo_; }
 
 	/* -- Engine state ---------------------------------------------------- */
 
@@ -210,15 +201,16 @@ private:
 	MonoMethod *method_;
 	MonoDomain *domain_;
 
-	std::string names_[2];
-	Stub stubs_[2];
-	void *trampolines_[2] = { nullptr, nullptr };
-	MonoJitInfo *jinfos_[2] = { nullptr, nullptr };
-	llvm::SmallVector<Entry, 2> published_;
+	std::string name_;
+	Stub stub_;
+	void *trampoline_ = nullptr;
+	MonoJitInfo *jinfo_ = nullptr;
 
 	std::atomic<void *> unbox_entry_ { nullptr };
 	Stub unbox_;
 	MonoJitInfo *unbox_jinfo_ = nullptr;
+
+	std::atomic<void *> interop_entry_ { nullptr };
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	std::atomic<int32_t> tier_calls_ { 0 };
@@ -233,8 +225,8 @@ private:
 	std::mutex lock_;
 };
 
-/// Gives \p dm the stubs it is called through, and whatever state the engine
-/// keeps behind them.
+/// Gives \p dm the stub it is called through, and whatever state the engine
+/// keeps behind it.
 ///
 /// The compiling engine defines this, and each record goes through it once. A
 /// failure leaves the record unpublished, and nothing keeps it.
@@ -246,6 +238,13 @@ llvm::Error attach_method_entries (MonoDomainMethod &dm);
 /// the domain's, since registering the jit info takes it. A method that has no
 /// such entry is left with none and is not an error.
 llvm::Error attach_unbox_entry (MonoDomainMethod &dm);
+
+/// Gives \p dm the entry native code enters the method through.
+///
+/// The compiling engine defines this. Called with \p dm's lock held, and with
+/// the domain's, since registering the jit info takes it. A method nothing
+/// native enters is left with none and is not an error.
+llvm::Error attach_interop_entry (MonoDomainMethod &dm);
 
 /// The record for \p method in \p domain, or null when nothing has asked for it
 /// yet.

@@ -1,19 +1,7 @@
 /**
  * \file
- * \brief The symbols a method's code is published under, and which of its
- * entries a method has at all.
- *
- * A method owns two disjoint families of name. Its *stubs* are what the rest of
- * the process binds to - the address the runtime is handed, a vtable slot, a
- * generated caller's call target - and they are what the engine publishes. Its
- * *definitions* are the thunks compiled beside its body, inside the body's own
- * module, and they exist only because a definition and the stub in front of it
- * cannot share a name while they share a module.
- *
- * The two are separate functions here rather than one with a flag, because
- * confusing them is silent: a definition given a stub's name makes the module
- * define a symbol the stubs already own, and the post-link scan that goes
- * looking for the thunk by name then does not find it.
+ * \brief The symbols a method's code is published under, and which entries a
+ * method has at all.
  */
 
 #ifndef MONO_LLVM_RUNTIME_NAMING_HPP
@@ -43,25 +31,18 @@ namespace mono {
 /// names are only as distinct as what they were generated from.
 std::string identity_of (MonoMethod *method);
 
-/// The symbol the stub for one of a method's entries is published under.
-std::string stub_symbol (MonoMethod *method, Entry entry);
+/// The symbol a method's stub is published under.
+std::string stub_symbol (MonoMethod *method);
 
-/// What stub_symbol () hangs off a method's base symbol for a given entry, so
-/// that a caller holding the base already does not have to print the method
-/// again to reach the rest of its names.
-llvm::StringRef stub_suffix (Entry entry);
-
-/// The symbol the thunk for an entry is defined under inside the body's module.
+/// The symbol the C-convention entry is compiled under.
 ///
-/// Only the interop and unbox entries have one. The body is named by the
-/// translator, which builds it, and that name deliberately differs from the
-/// body stub's: one prints the signature and the other does not, so a
-/// self-reference inside the module resolves to the stub rather than to the
-/// definition beside it, and survives a later recompile.
-std::string definition_symbol (MonoMethod *method, Entry entry);
+/// A suffix on the stub's symbol, because the stub already answers to the
+/// method's own. Still a name of the method's rather than an anonymous one, so
+/// that a dump, a profile and a stack trace all say which method it belongs to.
+std::string interop_symbol (MonoMethod *method);
 
 /// Give every declaration in a module that names another method's code the
-/// symbol this engine publishes that entry under.
+/// symbol this engine publishes that method under.
 ///
 /// The translator marks each such declaration with the MonoMethod and leaves
 /// the naming alone, so this is the only place the two sides meet.
@@ -83,7 +64,7 @@ std::string display_name (MonoMethod *method, llvm::StringRef symbol);
 bool wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig);
 
 /// Whether a method is entered from native code, and so needs a C-convention
-/// entry in front of its body and a stub of its own to publish it through.
+/// entry in front of its body.
 ///
 /// That is exactly the wrappers generated for the other side of the boundary to
 /// call - runtime-invoke, native-to-managed, the vtfixup and thunk-invoke

@@ -372,7 +372,7 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
   `mono_llvm_jit_compile_method ()` compiles a method into a domain's linker and hands
   back the address to call, and the rest is freeing a domain or a method, finding a
   compiled body, and the unbox entry. `runtime/backend.cpp` holds the state — one
-  `MethodState` per method with its stubs, trampolines and jit infos together — and the
+  `MethodState` per method with its stub, trampoline and jit infos together — and the
   rest of the directory is what a compile is made of: `naming`, `translate`, `externals`,
   `thrower`, `dispatcher`, `interp`, `options`. `runtime/builtins.cpp` registers the
   runtime helpers and libcalls generated code may name.
@@ -391,8 +391,10 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
   which steps the receiver past the object header and jumps to the body stub. It
   forwards through that stub rather than to a body, so it is right at every tier and a
   promotion redirects it along with everything else. It carries no symbol — generated
-  code only ever names `Entry::body` — so nothing links against it and the record holds
-  the only handle.
+  code only ever names the method's own — so nothing links against it and the record
+  holds the only handle. A wrapper native code enters gets a second such extra, and
+  that one is compiled rather than carved: it is a module of its own holding the
+  thunk that takes a C call apart, and it forwards through the stub the same way.
 - **`jinfo.cpp`** — turns a compiled object's side tables back into the `MonoJitInfo`
   the runtime's unwinder and stack walks read.
 - **`arch/`** — everything that names a register, encodes an instruction or restates the

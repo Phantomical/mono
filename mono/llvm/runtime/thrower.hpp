@@ -23,10 +23,6 @@ namespace mono {
 
 class MonoJit;
 
-/// Note that a piece of code, and the record registered for it, belong to a
-/// method - see TranslationTarget::remember.
-using RememberFn = llvm::function_ref<void (const CompiledMethod &, MonoJitInfo *)>;
-
 /// Whether a metadata failure is one ECMA-335 raises where the thing is used
 /// rather than where it is named.
 ///
@@ -37,10 +33,6 @@ bool raised_where_used (uint16_t code);
 
 /// Compile a body for a method that raises the given failure and nothing else.
 /// Consumes the failure.
-///
-/// One body answers for every one of the method's doors: it reads no argument
-/// and never returns, so whichever entry a caller came for, these few
-/// instructions answer for it.
 llvm::Expected<Compiled> compile_thrower (MonoJit &jit, MonoDomain *domain,
                                           MonoMethod *method, MonoError *failure,
                                           RememberFn remember);

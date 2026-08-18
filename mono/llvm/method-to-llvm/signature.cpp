@@ -906,7 +906,7 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method)
 		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
 
 	record_external (full_name, ExternalSymbol::Kind::Code, method);
-	mark_method_entry (*function, method, mono::Entry::body);
+	mark_method_reference (*function, method);
 
 	if (in_c)
 		function->addFnAttr (

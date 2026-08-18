@@ -40,6 +40,10 @@ public:
 	/// leaves it with none when the method has no such entry.
 	static llvm::Error attach_unbox (MonoDomainMethod &dm);
 
+	/// Gives \p dm the C-convention entry native code enters it through, or
+	/// leaves it with none when nothing native enters the method.
+	static llvm::Error attach_interop (MonoDomainMethod &dm);
+
 	/// Stop all compilation for a specific domain. Blocks until any in-progress
 	/// work is completed.
 	static void stop_compilation (MonoDomain *domain);
@@ -86,9 +90,9 @@ public:
 
 	/// The address METHOD is called at in DOMAIN, without compiling it.
 	///
-	/// The stub is the same one compile () hands back, so the two agree on the
-	/// address whichever asked for it first. The body behind it is compiled by
-	/// the first call that arrives.
+	/// The body behind the stub is compiled by the first call that arrives.
+	/// A method native code enters has an address of its own that compile ()
+	/// hands back instead; nothing that asks here holds such a method.
 	llvm::Expected<void *> stub_for (MonoMethod *method, MonoDomain *domain);
 
 private:
@@ -107,15 +111,15 @@ private:
 	static llvm::Expected<MonoDomainMethod *> publish (DomainState &domain,
 	                                                   MonoMethod *method);
 
-	/// Carves \p dm's stubs and gives it the state behind them.
-	llvm::Error attach_entries (DomainState &domain, MonoDomainMethod &dm);
+	/// Carves \p dm's stub and gives it the state behind it.
+	llvm::Error attach_entry (DomainState &domain, MonoDomainMethod &dm);
 
 	/// Give every declaration in M that names a method the symbol this backend
 	/// publishes that method's entry under, publishing the method if it has not
 	/// been already.
 	llvm::Error bind_externals (DomainState &domain, llvm::Module &m);
 
-	/// Point \p dm's stubs at the interpreter.
+	/// Point \p dm's stub at the interpreter.
 	llvm::Expected<Compiled> interp_entries (DomainState &domain, MonoDomainMethod &dm);
 
 	/// The per-call dispatcher \p dm's body stub binds to when its first
@@ -126,13 +130,12 @@ private:
 	/// METHOD, compiling it now if this domain has not yet.
 	static void *body_for_current_domain (MonoMethod *method);
 
-	/// Where \p entry of \p dm has ended up, compiling the method if it has not
-	/// been compiled yet. This is what the stub in front of that entry is
-	/// redirected to on the first call through it.
-	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm,
-	                                    Entry entry);
+	/// Where \p dm's body has ended up, compiling the method if it has not been
+	/// compiled yet. This is what the stub in front of it is redirected to on
+	/// the first call through it.
+	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Give METHOD a body and point its stubs at it, whether or not it already
+	/// Give METHOD a body and point its stub at it, whether or not it already
 	/// has one.
 	///
 	/// With allow_tier0 the interpreter is offered the method first; promotion

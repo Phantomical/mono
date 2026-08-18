@@ -19,27 +19,16 @@ typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
-/// Where one method's code ended up: the body every caller reaches, the C entry
-/// for a method native code enters, and - for an instance method of a value type
-/// - the unboxing entry a call off that value type's vtable arrives at. The
-/// jit-info record is the body's, and is null for a stand-in that only raises.
+/// Where one method's code ended up. The jit-info record is null for a stand-in
+/// that only raises.
 struct Compiled {
-	void *entry = nullptr;
 	void *body = nullptr;
 	MonoJitInfo *jinfo = nullptr;
-
-	/// Where one of the method's doors leads, or null when it has no such door.
-	void *at (Entry which) const
-	{
-		switch (which) {
-		case Entry::body:
-			return body;
-		case Entry::interop:
-			return entry;
-		}
-		return body;
-	}
 };
+
+/// Note that a piece of code, and the record registered for it, belong to a
+/// method - see TranslationTarget::remember.
+using RememberFn = llvm::function_ref<void (const CompiledMethod &, MonoJitInfo *)>;
 
 /// Run as a given domain for as long as this is alive.
 ///
@@ -81,7 +70,7 @@ struct TranslationTarget {
 	/// Note that a piece of code, and the record registered for it, belong to
 	/// this method. Every compile passes through here, or freeing the method
 	/// leaves that compile's code and record behind for good.
-	llvm::function_ref<void (const CompiledMethod &, MonoJitInfo *)> remember;
+	RememberFn remember;
 
 	/// Decide what a failed translation means. A metadata failure is something
 	/// the program is owed as an exception rather than a method that would not
@@ -108,6 +97,15 @@ llvm::Expected<Compiled> translate_and_compile (const TranslationTarget &target,
 /// failure was turned into a stand-in body instead of a real one.
 llvm::Expected<Compiled> translate_body (const TranslationTarget &target,
                                          MonoMethod *method, MonoJitInfo **published);
+
+/// Compile the C-convention entry native code enters \p method through.
+///
+/// The entry is a module of its own rather than a rider on the body's, so that
+/// its address is the method's for good: it calls \p body, the method's stub, so
+/// every later compile is reached through the redirect the stub already gets.
+llvm::Expected<void *> compile_interop_entry (MonoJit &jit, MonoDomain *domain,
+                                              MonoMethod *method, void *body,
+                                              RememberFn remember);
 
 } // namespace mono
 

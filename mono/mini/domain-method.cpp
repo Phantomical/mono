@@ -58,17 +58,14 @@ table_of (MonoDomain *domain)
 } // namespace
 
 bool
-MonoDomainMethod::publish (MonoTier tier, llvm::function_ref<void *(Entry)> code)
+MonoDomainMethod::publish (MonoTier tier, void *code)
 {
 	std::lock_guard<std::mutex> held (lock_);
 
 	if (tier < tier_.load (std::memory_order_relaxed))
 		return false;
 
-	for (Entry entry : published_)
-		if (void *address = code (entry))
-			stub (entry).redirect (address);
-
+	stub_.redirect (code);
 	tier_.store (tier, std::memory_order_release);
 	return true;
 }
@@ -136,16 +133,35 @@ MonoDomainMethod::unbox_entry ()
 	return unbox_entry_.load (std::memory_order_relaxed);
 }
 
+llvm::Expected<void *>
+MonoDomainMethod::interop_entry ()
+{
+	if (void *ready = interop_entry_.load (std::memory_order_acquire))
+		return ready;
+
+	/* The same order unbox_entry () takes, and for the same reason. */
+	DomainLock domain_lock (domain_);
+	std::lock_guard<std::mutex> held (lock_);
+
+	if (void *ready = interop_entry_.load (std::memory_order_relaxed))
+		return ready;
+
+	if (llvm::Error err = attach_interop_entry (*this))
+		return std::move (err);
+
+	return interop_entry_.load (std::memory_order_relaxed);
+}
+
 void
 MonoDomainMethod::install_detour (void *target)
 {
 	/*
-	 * The body entry only. The unbox entry steps the receiver past the object
-	 * header and then forwards through the body stub. Pointing it at the target
-	 * would take that step away.
+	 * The stub only. The unbox and interop entries reach the method through it,
+	 * each having done something first - stepping the receiver past the object
+	 * header, taking a C call apart - that pointing them at the target would
+	 * take away.
 	 */
-	publish (MonoTier::detoured,
-	         [target] (Entry entry) { return entry == Entry::body ? target : nullptr; });
+	publish (MonoTier::detoured, target);
 
 	/*
 	 * The interpreter settles once whether it calls a method or interprets it,
