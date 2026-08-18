@@ -152,10 +152,7 @@ mono_llvm_jit_tier0_enabled (void)
 int32_t
 mono_llvm_jit_tier0_calls (MonoMethod *method)
 {
-	if (!mono::runs_at_tier0 (method))
-		return 0;
-
-	return (int32_t) mono::tier1_threshold ();
+	return mono::tier0_calls (method);
 }
 
 mono_bool

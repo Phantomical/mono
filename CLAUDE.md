@@ -425,13 +425,17 @@ different thing and still means the interpreter as the whole engine, with no tie
 leave for.
 
 A tier-0 method leaves for tier 1 by being called. The counter is a word on
-`InterpMethod`, armed once and then decremented at the two places a call can arrive —
-the interpreter's `call:` label and `interp_entry ()` — and the call that spends it asks
-the backend to compile the method on the background compile queue. Nothing waits for
-that: a promotion that cannot be taken (a domain on its way out) simply does not happen,
-and the method stays where it is. The counter has to sit where the interpreter can reach
-it rather than in a thunk in front of the method: a thunk only sees calls that arrive
-through a stub, and a call from one interpreted method to another arrives through none.
+`InterpMethod`, set from the method's record when the `InterpMethod` is built and then
+decremented at the three places a call can arrive — the interpreter's `call:` and
+`tailcall:` labels and `interp_entry ()`. A count that has run out calls
+`mono_promote_method ()`, which is engine-neutral: it takes the decision on the
+`MonoDomainMethod`, so however many counters run out at once only one request goes to the
+backend's compile queue. Nothing waits for that: a promotion that cannot be taken (a
+domain on its way out) simply does not happen, and the method stays where it is — the
+caller that was refused counts another threshold of calls. The counter has to sit where
+the interpreter can reach it rather than in a thunk in front of the method: a thunk only
+sees calls that arrive through a stub, and a call from one interpreted method to another
+arrives through none.
 
 `MONO_LLVM_JIT_TIER1_THRESHOLD` is the call count, default 10; zero there leaves tier-0
 methods interpreted for good, which is what separates a tier-0 entry bug from a promotion

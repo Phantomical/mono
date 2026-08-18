@@ -89,15 +89,6 @@ resolve_code_type (InterpMethod *imethod)
 		g_free (name);
 	}
 
-	/*
-	 * The only chance to arm a method nothing ever asked the backend for: its
-	 * callers reached it by interpreting, so it has no stub. A patched method
-	 * stays unarmed, because a promotion redirects the stub and the redirect
-	 * writes over the patch.
-	 */
-	if (!patched && mono_atomic_load_i32_relaxed (&imethod->tier_counter) == 0)
-		arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (method));
-
 	if (marshallable && (patched || mono_jit_method_is_compiled (imethod->domain, method)))
 		code_type = IMETHOD_CODE_COMPILED;
 

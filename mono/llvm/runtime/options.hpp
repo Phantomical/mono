@@ -52,6 +52,12 @@ bool recompiling (MonoMethod *method);
 /// entry path from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
 
+/// How many calls a method takes at tier 0 before it is asked for as tier 1.
+///
+/// Zero for a method that does not run at tier 0 at all, which is also how a
+/// caller is told that counting its calls would settle nothing.
+int32_t tier0_calls (MonoMethod *method);
+
 /// Whether any method at all is entered by interpreting it.
 ///
 /// Answers before there is a method to ask about, which is what the decision to

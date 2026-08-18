@@ -27,6 +27,7 @@
 
 #include "metadata/class-internals.h"
 #include "metadata/object-internals.h"
+#include "mini/domain-method.h"
 #include "mini/jit.h"
 
 #include "llvm/runtime.h"
@@ -155,7 +156,7 @@ TEST_F (FunctionPointer, SurvivesPromotion)
 
 	/* No body yet is what makes this a promotion rather than a second look. */
 	ASSERT_EQ (nullptr, mono_llvm_jit_find_body (domain, method));
-	ASSERT_TRUE (mono_llvm_jit_request_promotion (method, domain));
+	ASSERT_TRUE (mono_promote_method (method, domain));
 
 	/* The request returns before the compile does, so wait for the body. */
 	void *body = nullptr;

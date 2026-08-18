@@ -118,6 +118,15 @@ tier1_threshold ()
 	return calls;
 }
 
+int32_t
+tier0_calls (MonoMethod *method)
+{
+	if (!runs_at_tier0 (method))
+		return 0;
+
+	return (int32_t) tier1_threshold ();
+}
+
 bool
 tier0_enabled ()
 {

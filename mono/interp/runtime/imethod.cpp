@@ -1,6 +1,7 @@
 /**
  * \file
- * \brief What the interpreter keeps for a method, and how it is invalidated.
+ * \brief What the interpreter keeps for a method, how it is invalidated, and
+ * how the method counts its way to tier 1.
  */
 
 #include "config.h"
@@ -14,12 +15,27 @@
 
 #include <mono/metadata/marshal.h>
 #include <mono/metadata/metadata-update.h>
+#include <mono/mini/domain-method.h>
 #include <mono/mini/domain-method.hpp>
 #include <mono/mini/mini-runtime.h>
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-threads.h>
 
 namespace mono::interp {
+
+namespace {
+
+/// Sets how many calls imethod takes before it is asked for as tier 1.
+///
+/// A count of zero or less means the method never promotes. The call sites test
+/// tier_counter for a positive value, which is what enforces that.
+void
+arm_tier_counter (InterpMethod *imethod, gint32 calls)
+{
+	mono_atomic_store_i32 (&imethod->tier_counter, calls > 0 ? calls : -1);
+}
+
+} // namespace
 
 InterpMethod *
 lookup_imethod (MonoDomain *domain, MonoMethod *method)
@@ -54,12 +70,6 @@ interp_get_remoting_invoke (MonoMethod *method, gpointer addr, MonoError *error)
 #endif
 }
 
-void
-interp_arm_tier_counter (gpointer imethod, gint32 calls)
-{
-	mono::interp::arm_tier_counter (imethod, calls);
-}
-
 /*
  * interp_transform_method:
  *
@@ -86,6 +96,32 @@ interp_transform_method (MonoMethod *method, MonoError *error)
 
 	mono_interp_transform_method (imethod, mono_interp_get_context (), error);
 	return is_ok (error);
+}
+
+/*
+ * Counts one call against imethod's way to tier 1, and asks for the method once
+ * the count has run out.
+ *
+ * The test is for a count that has run out rather than for the call that ended
+ * it: several threads can be inside here at once, and the one that lands exactly
+ * on zero is not necessarily the last to arrive.
+ */
+void
+interp_check_call_promotion (InterpMethod *imethod)
+{
+	if (mono_atomic_dec_i32 (&imethod->tier_counter) > 0)
+		return;
+
+	if (mono_promote_method (imethod->method, imethod->domain))
+		return;
+
+	/*
+	 * A refused request is the count spent for nothing, and nothing else arms
+	 * it again. Arming it here is what makes the loss cost this method another
+	 * threshold of calls rather than the rest of the process.
+	 */
+	if (MonoDomainMethod *dm = domain_method_find (imethod->domain, imethod->method))
+		arm_tier_counter (imethod, dm->tier_calls ());
 }
 
 /*
@@ -257,6 +293,7 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 	else
 		imethod->rtype = mini_get_underlying_type (sig->ret);
 	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
+	arm_tier_counter (imethod, (*dm)->tier_calls ());
 	imethod->param_types = static_cast<MonoType **> (
 		m_method_alloc0 (domain, method, sizeof (MonoType *) * sig->param_count));
 	for (i = 0; i < sig->param_count; ++i)

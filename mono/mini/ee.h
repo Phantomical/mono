@@ -30,7 +30,6 @@ typedef gpointer MonoInterpFrameHandle;
 	MONO_EE_CALLBACK (void, entry_from_trampoline, (gpointer ccontext, gpointer imethod)) \
 	MONO_EE_CALLBACK (void, entry_from_args, (gpointer imethod, gpointer this_arg, gpointer res, gpointer *args)) \
 	MONO_EE_CALLBACK (gpointer, get_imethod, (MonoMethod *method, MonoError *error)) \
-	MONO_EE_CALLBACK (void, arm_tier_counter, (gpointer imethod, gint32 calls)) \
 	MONO_EE_CALLBACK (void, to_native_trampoline, (gpointer addr, gpointer ccontext)) \
 	MONO_EE_CALLBACK (gpointer, create_method_pointer, (MonoMethod *method, gboolean compile, MonoError *error)) \
 	MONO_EE_CALLBACK (gboolean, transform_method, (MonoMethod *method, MonoError *error)) \

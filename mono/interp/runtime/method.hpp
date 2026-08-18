@@ -10,42 +10,15 @@
 #include "lmf.hpp"
 #include "trace.hpp"
 
-#include <mono/llvm/runtime.h>
 #include <mono/metadata/appdomain.h>
 #include <mono/mini/mini.h>
 #include <mono/utils/atomic.h>
 
 namespace mono::interp {
 
-// Initialize the tiering counter, if it hasn't already been initialized.
-inline void
-arm_tier_counter (gpointer imethod_ptr, gint32 calls)
-{
-	InterpMethod *imethod = static_cast<InterpMethod *> (imethod_ptr);
-
-	mono_atomic_cas_i32 (&imethod->tier_counter, calls > 0 ? calls : -1, 0);
-}
-
-// Check whether we should start a background compilation of this method to tier1.
-inline MONO_NEVER_INLINE void
-interp_check_call_promotion (InterpMethod *imethod)
-{
-	gint32 left;
-
-	left = mono_atomic_dec_i32 (&imethod->tier_counter);
-	if (left != 0)
-		return;
-
-	/*
-	 * A refused request is the counter spent for nothing, and nothing else
-	 * arms it again: arm_tier_counter () is reached once per method,
-	 * from whichever of resolve_code_type () and the backend's entry sees it
-	 * first. Arming it here is what makes the loss cost this method another
-	 * threshold of calls rather than the rest of the process.
-	 */
-	if (!mono_llvm_jit_request_promotion (imethod->method, imethod->domain))
-		arm_tier_counter (imethod, mono_llvm_jit_tier0_calls (imethod->method));
-}
+/// Counts one call against imethod's way to tier 1, and asks for the method
+/// once the count has run out.
+void interp_check_call_promotion (InterpMethod *imethod);
 
 /*
  * Transforms the method frame is about to run, and returns what that threw or null.

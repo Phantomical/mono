@@ -14,6 +14,17 @@
 MONO_BEGIN_DECLS
 
 typedef struct _MonoDomain MonoDomain;
+typedef struct _MonoMethod MonoMethod;
+
+/// Asks for a method to be run by the next tier up.
+///
+/// Whichever engine's call count ran out calls this, and only one request goes
+/// out however many of them run out at once. It returns as soon as the work is
+/// queued, never once it is done.
+///
+/// Answers FALSE only when the request was refused and nothing will retry it,
+/// which is the caller's signal to count another threshold of calls.
+mono_bool mono_promote_method (MonoMethod *method, MonoDomain *domain);
 
 /// Builds the table of records a domain keeps.
 ///

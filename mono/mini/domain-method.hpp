@@ -111,6 +111,14 @@ public:
 	/// alone.
 	bool publish (MonoTier tier, llvm::function_ref<void *(Entry)> code);
 
+	/// Asks for the method to be run by the next tier up.
+	///
+	/// Answers false only when the request was refused and nothing will retry
+	/// it, which is the caller's signal to count another threshold of calls. A
+	/// method already on its way, and one that native code owns, both answer
+	/// true: there is nothing left for the caller to do either way.
+	bool promote ();
+
 	/// Hands the entry to native code at \p target, for good.
 	///
 	/// This always succeeds. A patcher that is told no has nothing to fall back

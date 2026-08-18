@@ -320,6 +320,9 @@ MonoBackend::attach_entries (DomainState &domain, MonoDomainMethod &dm)
 	dm.set_engine_data (engine.release (),
 	                    [] (void *data) { delete static_cast<MethodState *> (data); });
 
+	/* Tier policy is this engine's, so the record is told rather than asked. */
+	dm.set_tier_calls (tier0_calls (method));
+
 	/* The definitions below point into these, so they must not move. */
 	names.reserve (entries.size ());
 
@@ -486,10 +489,6 @@ MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 
 	if (!ready)
 		return ready.takeError ();
-
-	/* Before the redirects below, so no call arrives before it is counted. */
-	mini_get_interp_callbacks ()->arm_tier_counter (ready->imethod,
-	                                                (gint32) tier1_threshold ());
 
 	void *body = arch::interp_entry_thunk ();
 	Compiled entries { body, body,

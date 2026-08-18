@@ -8,6 +8,7 @@
 
 #include "mini-runtime.h"
 
+#include <mono/llvm/runtime.h>
 #include <mono/metadata/domain-internals.h>
 
 #include <llvm/ADT/DenseMap.h>
@@ -69,6 +70,34 @@ MonoDomainMethod::publish (MonoTier tier, llvm::function_ref<void *(Entry)> code
 			stub (entry).redirect (address);
 
 	tier_.store (tier, std::memory_order_release);
+	return true;
+}
+
+bool
+MonoDomainMethod::promote ()
+{
+	/* Native code owns the entry for good, so there is no tier to move to. */
+	if (tier_.load (std::memory_order_acquire) == MonoTier::detoured)
+		return true;
+
+	int32_t idle = (int32_t) Promotion::idle;
+
+	/*
+	 * Whoever wins this is the one that asks. Several counters can run out at
+	 * once - one per engine, and more than one thread inside an engine - and an
+	 * engine asked twice compiles the method twice.
+	 */
+	if (!promotion_.compare_exchange_strong (idle, (int32_t) Promotion::queued,
+	                                         std::memory_order_acq_rel,
+	                                         std::memory_order_acquire))
+		return true;
+
+	if (!mono_llvm_jit_request_promotion (method_, domain_)) {
+		promotion_.store ((int32_t) Promotion::idle, std::memory_order_release);
+		return false;
+	}
+
+	promotion_.store ((int32_t) Promotion::settled, std::memory_order_release);
 	return true;
 }
 
@@ -192,6 +221,14 @@ void
 mono_domain_method_table_init (MonoDomain *domain)
 {
 	domain_jit_info (domain)->domain_methods = new mono::DomainMethodTable ();
+}
+
+mono_bool
+mono_promote_method (MonoMethod *method, MonoDomain *domain)
+{
+	mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method);
+
+	return dm != nullptr && dm->promote ();
 }
 
 void
