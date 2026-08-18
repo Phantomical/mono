@@ -67,11 +67,8 @@ if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
 endif()
 
 if(MONO_ENABLE_LLVM)
-  find_program(MONO_LLVM_CONFIG
-               NAMES llvm-config
-               HINTS "${MONO_LLVM_PREFIX}/bin"
-               NO_DEFAULT_PATH
-               DOC "llvm-config of the LLVM install to build against")
+  # We check the actual version in MonoLLVM.cmake
+  find_package(LLVM CONFIG QUIET PATHS "${MONO_LLVM_PREFIX}" NO_DEFAULT_PATH)
 endif()
 
 find_program(MONO_BOOTSTRAP_RUNTIME NAMES mono mono-sgen)
