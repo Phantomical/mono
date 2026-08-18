@@ -381,8 +381,8 @@ oop_jit_info_table_find(
     return NULL;
 }
 
+/* A copy of the declaration in mono/metadata/mono-debug.c. Change both. */
 typedef struct {
-	MonoMemPool* mp;
 	GHashTable* method_hash;
 } DebugDomainInfo;
 

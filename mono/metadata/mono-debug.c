@@ -40,9 +40,13 @@
 	val = (*(type *)(addr))
 #endif
 
-/* This contains per-domain info */
+/*
+ * This contains per-domain info.
+ *
+ * mono/metadata/oop.c reads this out of process, from its own copy of the
+ * declaration, so the layout is a wire format. Change the two together.
+ */
 typedef struct {
-	MonoMemPool *mp;
 	GHashTable *method_hash;
 } DebugDomainInfo;
 
@@ -151,8 +155,12 @@ mono_debug_domain_create (MonoDomain *domain)
 		return;
 
 	info = g_new0 (DebugDomainInfo, 1);
-	info->mp = mono_mempool_new ();
-	info->method_hash = g_hash_table_new (NULL, NULL);
+	/*
+	 * A method registers once per body, so a promoted method registers twice -
+	 * the interpreter's line table and then the compiled one. The table holds
+	 * the newest, and the destroy function is what frees the one it replaces.
+	 */
+	info->method_hash = g_hash_table_new_full (NULL, NULL, NULL, g_free);
 
 	domain->debug_info = info;
 }
@@ -165,7 +173,6 @@ mono_debug_domain_unload (MonoDomain *domain)
 	if (!info)
 		return;
 
-	mono_mempool_destroy (info->mp);
 	g_hash_table_destroy (info->method_hash);
 
 	g_free (info);
@@ -403,6 +410,9 @@ write_variable (MonoDebugVarInfo *var, guint8 *ptr, guint8 **rptr)
 
 /**
  * mono_debug_add_method:
+ *
+ * The record belongs to the domain. Registering the method again frees it, so
+ * the caller must not hold it across another compile of the same method.
  */
 MonoDebugMethodAddress *
 mono_debug_add_method (MonoMethod *method, MonoDebugMethodJitInfo *jit, MonoDomain *domain)
@@ -475,12 +485,7 @@ mono_debug_add_method (MonoMethod *method, MonoDebugMethodJitInfo *jit, MonoDoma
 
 	mono_debugger_lock ();
 
-	if (method_is_dynamic (method)) {
-		address = (MonoDebugMethodAddress *)g_malloc0 (total_size);
-	} else {
-		address = (MonoDebugMethodAddress *)mono_mempool_alloc (info->mp, total_size);
-	}
-
+	address = (MonoDebugMethodAddress *)g_malloc0 (total_size);
 	address->code_start = jit->code_start;
 	address->code_size = jit->code_size;
 
@@ -498,7 +503,6 @@ void
 mono_debug_remove_method (MonoMethod *method, MonoDomain *domain)
 {
 	DebugDomainInfo *info;
-	MonoDebugMethodAddress *address;
 
 	if (!mono_debug_initialized)
 		return;
@@ -508,10 +512,6 @@ mono_debug_remove_method (MonoMethod *method, MonoDomain *domain)
 	info = get_domain_info (domain);
 
 	mono_debugger_lock ();
-
-	address = (MonoDebugMethodAddress *)g_hash_table_lookup (info->method_hash, method);
-	if (address)
-		g_free (address);
 
 	g_hash_table_remove (info->method_hash, method);
 
