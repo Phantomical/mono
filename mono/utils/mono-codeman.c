@@ -146,6 +146,13 @@ codechunk_vfree (void *ptr, guint32 size)
 {
 	GSList *freelist;
 
+	/* A code manager can outlive mono_code_manager_cleanup (), which takes the
+	 * freelist with it. Give the pages straight back in that case. */
+	if (!valloc_freelists) {
+		mono_vfree (ptr, size, MONO_MEM_ACCOUNT_CODE);
+		return;
+	}
+
 	mono_os_mutex_lock (&valloc_mutex);
 	freelist = (GSList *) g_hash_table_lookup (valloc_freelists, GUINT_TO_POINTER (size));
 	if (!freelist || g_slist_length (freelist) < VALLOC_FREELIST_SIZE) {
@@ -176,6 +183,7 @@ codechunk_cleanup (void)
 		g_slist_free (freelist);
 	}
 	g_hash_table_destroy (valloc_freelists);
+	valloc_freelists = NULL;
 }
 
 void
