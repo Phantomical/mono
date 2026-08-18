@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "codemem.hpp"
+#include "jitlink-memory.hpp"
 
 namespace mono {
 
@@ -69,8 +69,7 @@ public:
 /// Not thread safe - StubTable is what serialises access to one of these.
 class StubSlabs {
 public:
-	explicit StubSlabs (CodeSlabs *slabs);
-	~StubSlabs ();
+	explicit StubSlabs (CodeArena *arena);
 
 	StubSlabs (const StubSlabs &) = delete;
 	StubSlabs &operator= (const StubSlabs &) = delete;
@@ -94,8 +93,10 @@ private:
 	llvm::Expected<Stub> acquire ();
 	llvm::Error add_slab ();
 
-	CodeSlabs *slabs_;
-	std::vector<CodeSlabs::Alloc> batches_;
+	CodeArena *arena_;
+	/// The batch stubs come out of. Earlier batches are full, and nothing needs
+	/// to name them again, because code memory is never given back.
+	char *batch_ = nullptr;
 	std::vector<Stub> free_;
 	size_t next_;
 	/// How far apart two stubs sit, which is the block size and whatever a perf
@@ -108,7 +109,7 @@ private:
 /// This tracks which stubs have been created by name.
 class StubTable {
 public:
-	explicit StubTable (CodeSlabs *slabs) : slabs_ (slabs) {}
+	explicit StubTable (CodeArena *arena) : slabs_ (arena) {}
 
 	/// Find a pre-existing stub, if one exists with the requested name.
 	std::optional<Stub> find (llvm::StringRef name);

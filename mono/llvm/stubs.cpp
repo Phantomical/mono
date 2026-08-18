@@ -10,16 +10,17 @@
  * one of data: 8K a method, which is most of a gigabyte over a game's worth of
  * them. Redirecting likewise goes through a full symbol lookup.
  *
- * So we carve stubs out of a slab instead. A stub costs 24 bytes plus an entry
- * in this table, publishing one is a bump-allocate (or a pop off the free list)
- * plus a few stores, and a redirect is a single atomic store to the slot.
+ * So we carve stubs out of one batch of code memory instead. A stub costs 24
+ * bytes plus an entry in this table, publishing one is a bump-allocate (or a pop
+ * off the free list) plus a few stores, and a redirect is a single atomic store
+ * to the slot.
  */
 
 #include "stubs.hpp"
 
 #include "arch/amd64/amd64.hpp"
 #include "arch/arch.hpp"
-#include "codemem.hpp"
+#include "jitlink-memory.hpp"
 #include "debugging/perf/jitdump.hpp"
 
 #include <llvm/Support/raw_ostream.h>
@@ -58,16 +59,10 @@ stub_not_initialized ()
  * stub inside that room would take it. The slack is a multiple of 16, so a wider
  * block leaves every stub as aligned as a bare one.
  */
-StubSlabs::StubSlabs (CodeSlabs *slabs)
-	: slabs_ (slabs), next_ (stubs_per_slab),
+StubSlabs::StubSlabs (CodeArena *arena)
+	: arena_ (arena), next_ (stubs_per_slab),
 	  stride_ (arch::stub_block_size + perf::code_slack ())
 {
-}
-
-StubSlabs::~StubSlabs ()
-{
-	for (const CodeSlabs::Alloc &batch : batches_)
-		slabs_->release_writable (batch);
 }
 
 llvm::Expected<Stub>
@@ -129,7 +124,7 @@ StubSlabs::acquire ()
 			return err;
 	}
 
-	char *base = batches_.back ().base;
+	char *base = batch_;
 	size_t i = next_++;
 
 	return Stub (base + slot_region_size + i * stride_,
@@ -139,13 +134,13 @@ StubSlabs::acquire ()
 llvm::Error
 StubSlabs::add_slab ()
 {
-	llvm::Expected<CodeSlabs::Alloc> batch = slabs_->allocate_writable (
+	llvm::Expected<char *> batch = arena_->reserve (
 		slot_region_size + stubs_per_slab * stride_, arch::stub_block_size);
 
 	if (!batch)
 		return batch.takeError ();
 
-	batches_.push_back (*batch);
+	batch_ = *batch;
 	next_ = 0;
 	return llvm::Error::success ();
 }

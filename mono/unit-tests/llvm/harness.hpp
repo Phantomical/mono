@@ -35,11 +35,11 @@ namespace test {
 /// Start the runtime, once per process. Safe to call repeatedly.
 void init_runtime ();
 
-/// A MonoJit over code slabs of its own.
+/// A MonoJit over one code arena this binary shares.
 ///
-/// The engine is built around a domain's slabs, which outside the tests the
-/// backend owns; nothing here shares one, so each case gets a set that goes
-/// when its engine does.
+/// Needs a runtime, so call init_runtime () first. The arena is never destroyed
+/// and code is never given back, which is what lets a case hold an engine or an
+/// address past the end of its own body.
 llvm::Expected<std::unique_ptr<MonoJit>> make_jit ();
 
 /// Whether this build has the managed corpus these tests run against.

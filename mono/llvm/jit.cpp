@@ -8,7 +8,7 @@
 
 #include "arch/arch.hpp"
 #include "compiler.hpp"
-#include "codemem.hpp"
+#include "jitlink-memory.hpp"
 #include "gdb-jit.hpp"
 
 #include "il-line-table.hpp"
@@ -615,8 +615,8 @@ apply_options ()
  *
  * Code model Small with Reloc::PIC_ rather than the JIT default, Large.
  * JITLink stubs a call it cannot reach, but a method reaching its own data has
- * no such fallback. The slab allocator is what keeps every reference inside
- * PCRel32 range - see codemem.hpp.
+ * no such fallback. Where the code lands is what keeps every reference inside
+ * PCRel32 range - see jitlink-memory.cpp.
  *
  * CodeGenOptLevel::None is the tier-0 choice on purpose. It selects FastISel,
  * which is the cheap instruction selection this tier wants. The easy wins come
@@ -827,7 +827,7 @@ MonoJit::run_tier0_pipeline (Module &m)
 }
 
 Expected<std::unique_ptr<MonoJit>>
-MonoJit::create (const std::shared_ptr<CodeSlabs> &slabs)
+MonoJit::create (CodeArena *arena)
 {
 	ensure_native_target ();
 
@@ -843,12 +843,12 @@ MonoJit::create (const std::shared_ptr<CodeSlabs> &slabs)
 	 * plugin to this layer on its own.
 	 *
 	 * The memory manager is built inside builder.create (), before there is a
-	 * MonoJit to hold it, so the lambda captures the slabs instead.
+	 * MonoJit to hold it, so the lambda carries what it needs instead.
 	 */
 	builder.setObjectLinkingLayerCreator (
-		[slabs] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
+		[arena] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
 			return std::make_unique<ObjectLinkingLayer> (
-				es, std::make_unique<SlabMemoryManager> (slabs));
+				es, std::make_unique<CodeMemoryManager> (arena));
 		});
 
 	builder.setCompileFunctionCreator (

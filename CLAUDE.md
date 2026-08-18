@@ -346,10 +346,6 @@ Backend debugging env vars:
   in managed code, only symbols and unwinding. An object is retracted when the code
   it describes goes — a freed dynamic method or an unloaded domain. Off by default:
   it keeps a copy of every object alive for as long as the method is.
-- `MONO_LLVM_SLAB_SIZE=<n>[kKmMgG]` (`codemem.cpp`) — the size of the reservations code
-  is bump-allocated out of. Capped at 2GB whatever you ask for, because a slab's code
-  and its mutable data reference each other with a PCRel32 and nothing stubs that.
-
 Running a single corpus directly against the freshly built runtime:
 
 ```bash
@@ -385,8 +381,8 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
 - **`compiler.cpp`** — `TargetMachine::addPassesToEmitMC` restated, so the EH passes get
   a seat between the machine passes and the AsmPrinter and the side tables can be
   written while the streamer is still open, with code offsets as label differences.
-- **`stubs.cpp`, `codemem.cpp`** — the redirectable stub every method is published as,
-  and the slabs both it and the code are carved out of. A value type's methods get one
+- **`stubs.cpp`, `jitlink-memory.cpp`** — the redirectable stub every method is published
+  as, and the code memory both it and the compiled bodies are carved out of. A value type's methods get one
   more block, carved on first ask: the entry a call off its vtable or IMT arrives at,
   which steps the receiver past the object header and jumps to the body stub. It
   forwards through that stub rather than to a body, so it is right at every tier and a
@@ -411,6 +407,28 @@ declaration whose *name* says what the site means (`mono.array.address.*`,
 `mono.builtin.*`) and whose attributes carry the numbers, and the pass rewrites it into
 real IR before the optimizer runs. Encode the fact in the declaration rather than
 reverse-engineering it from the emitted arithmetic.
+
+**Code memory is a `MonoCodeManager`.** A domain's `CodeArena` (`jitlink-memory.hpp`) is
+mono's own code manager plus a mutex. Everything the backend allocates comes out of it —
+a linked object's code, its read-only data and its mutable globals alike, and the stub
+batches — and all of it is read-write-execute for its whole life. Two things follow.
+
+There is **no per-object free**. A code manager frees only whole, so a retired method
+keeps its bytes until the arena goes with the domain, and
+`CodeMemoryManager::deallocate` only runs the object's dealloc actions.
+
+And **reach is a property of where the memory lands**. Chunks are mapped `MAP_32BIT`
+(`ARCH_MAP_FLAGS`, `mono/utils/mono-codeman.c`), so every address is below 2GB and any
+two are inside a PCRel32. The backend needs that, because `CodeModel::Small` with PIC
+relocations makes a method reaching its own `.rodata` or a mutable global a PCRel32, and
+JITLink hard-errors on one that does not reach rather than stubbing it. A failed
+`MAP_32BIT` returns NULL rather than an address somewhere else, so exhaustion is a clean
+compile failure rather than a wrong one.
+
+The arena holds a code manager of its own rather than the domain memory manager's
+`code_mp`. `mono_mem_manager_code_reserve ()` takes the **domain lock** —
+`mono_mem_manager_lock ()` is `mono_domain_lock ()` — and code is reserved with linker
+locks held that a mutator can arrive at while it already holds the domain lock.
 
 **Exception handling does not ride `.eh_frame`.** The compiler writes three of its own
 sections next to the code, all target-neutral and code-relative: `.mono_lsda` (the

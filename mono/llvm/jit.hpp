@@ -30,7 +30,7 @@ class TargetMachine;
 
 namespace mono {
 
-class CodeSlabs;
+class CodeArena;
 
 namespace gdbjit {
 struct Registration;
@@ -138,11 +138,11 @@ public:
 	/// fails if LLVM rejects one.
 	static void add_option (llvm::StringRef opt);
 
-	/// Build the JIT for the host, carving its code out of the given slabs.
+	/// Build the JIT for the host, carving its code out of the given arena.
 	///
 	/// Every module added to it goes through the tier-0 IR pipeline.
 	static llvm::Expected<std::unique_ptr<MonoJit>>
-	create (const std::shared_ptr<CodeSlabs> &slabs);
+	create (CodeArena *arena);
 
 	MonoJit (const MonoJit &) = delete;
 	MonoJit &operator= (const MonoJit &) = delete;

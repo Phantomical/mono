@@ -14,9 +14,12 @@
 
 #include "arch/arch.hpp"
 #include "callbacks.hpp"
-#include "codemem.hpp"
+#include "harness.hpp"
+#include "jitlink-memory.hpp"
 #include "jit.hpp"
 #include "stubs.hpp"
+
+#include <mono/metadata/domain-internals.h>
 
 #include <gtest/gtest.h>
 
@@ -81,8 +84,8 @@ lazy_failed ()
 }
 
 /*
- * A domain's engine: one set of slabs, the linker over them, the stubs carved
- * out of them and the trampolines an uncompiled one points at.
+ * A domain's engine: the domain's code manager, the linker over it, the stubs
+ * carved out of it and the trampolines an uncompiled one points at.
  *
  * Publishing is two steps that always go together - carve the stub, and define
  * the name at it - and undefining is those two in reverse. That pairing is the
@@ -94,7 +97,7 @@ public:
 	static Expected<std::unique_ptr<Engine>> create ()
 	{
 		auto self = std::unique_ptr<Engine> (new Engine ());
-		auto jit = MonoJit::create (self->slabs_);
+		auto jit = MonoJit::create (&self->arena_);
 
 		if (!jit)
 			return jit.takeError ();
@@ -199,7 +202,7 @@ public:
 	}
 
 private:
-	Engine () : slabs_ (std::make_shared<CodeSlabs> ()), stubs_ (slabs_.get ()) {}
+	Engine () : stubs_ (&arena_) {}
 
 	/// Carve NAME a stub and tell the linker about it, leaving it pointing
 	/// nowhere useful for the caller to set.
@@ -217,12 +220,28 @@ private:
 		return stub->code ();
 	}
 
-	std::shared_ptr<CodeSlabs> slabs_;
+	/// Declared first, so it outlives everything carved out of it.
+	CodeArena arena_;
 	std::unique_ptr<MonoJit> jit_;
 	StubTable stubs_;
 	std::unique_ptr<LazyCallbacks> callbacks_;
 	StringMap<void *> trampolines_;
 };
+
+/*
+ * Stubs come out of the root domain's code manager, so these need a runtime -
+ * which needs a class library to boot on.
+ */
+class Stubs : public ::testing::Test {
+public:
+	static void SetUpTestSuite ()
+	{
+		MONO_SKIP_WITHOUT_CORPUS ();
+		init_runtime ();
+	}
+};
+
+class LazyStubs : public Stubs {};
 
 /// Build an engine, or fail the case that asked for one.
 static std::unique_ptr<Engine>
@@ -375,7 +394,7 @@ write_detour (void *stub, void *target, char (&saved)[detour_size])
 	std::memcpy (stub, patch, detour_size);
 }
 
-TEST (Stubs, CallsInitialTargetAndFollowsRedirects)
+TEST_F (Stubs, CallsInitialTargetAndFollowsRedirects)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -399,7 +418,7 @@ TEST (Stubs, CallsInitialTargetAndFollowsRedirects)
  * allocator - so the next method along can want the very same name. That only
  * works if undefining releases the name.
  */
-TEST (Stubs, AnUndefinedNameCanBePublishedAgain)
+TEST_F (Stubs, AnUndefinedNameCanBePublishedAgain)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -422,7 +441,7 @@ TEST (Stubs, AnUndefinedNameCanBePublishedAgain)
  * it is still unmaterialized, which is the state undefining has to accept
  * without first forcing it into existence.
  */
-TEST (Stubs, AnUnmaterializedStubCanBeUndefined)
+TEST_F (Stubs, AnUnmaterializedStubCanBeUndefined)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -442,7 +461,7 @@ TEST (Stubs, AnUnmaterializedStubCanBeUndefined)
  * emitting lambdas does - would walk through it if freeing a method only ever
  * gave the name back.
  */
-TEST (Stubs, AnUndefinedStubIsHandedOutAgain)
+TEST_F (Stubs, AnUndefinedStubIsHandedOutAgain)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -465,7 +484,7 @@ TEST (Stubs, AnUndefinedStubIsHandedOutAgain)
  * its symbol has settled rather than never having been searched for. The name
  * has to come back clean enough for the next method along to be linked against.
  */
-TEST (Stubs, ANameAModuleLinkedAgainstCanBePublishedAgain)
+TEST_F (Stubs, ANameAModuleLinkedAgainstCanBePublishedAgain)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -490,7 +509,7 @@ TEST (Stubs, ANameAModuleLinkedAgainstCanBePublishedAgain)
  * name that was never published means that record is wrong. Saying so is what
  * keeps it from becoming a stub silently pointing at released code.
  */
-TEST (Stubs, UndefiningANameThatWasNeverPublishedFails)
+TEST_F (Stubs, UndefiningANameThatWasNeverPublishedFails)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -501,7 +520,7 @@ TEST (Stubs, UndefiningANameThatWasNeverPublishedFails)
 	consumeError (std::move (err));
 }
 
-TEST (Stubs, CompiledCallersBindToTheStub)
+TEST_F (Stubs, CompiledCallersBindToTheStub)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -521,7 +540,7 @@ TEST (Stubs, CompiledCallersBindToTheStub)
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2);
 }
 
-TEST (Stubs, GeometryLeavesRoomForADetour)
+TEST_F (Stubs, GeometryLeavesRoomForADetour)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -555,7 +574,7 @@ TEST (Stubs, GeometryLeavesRoomForADetour)
 		<< "stubs overlap: patching one would clobber the other";
 }
 
-TEST (Stubs, SurvivesADetourAcrossRedirects)
+TEST_F (Stubs, SurvivesADetourAcrossRedirects)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -600,7 +619,7 @@ TEST (Stubs, SurvivesADetourAcrossRedirects)
  * nothing - and calls made after a redirect have to see it, so the redirects
  * are not simply lost.
  */
-TEST (Stubs, RedirectsWhileThreadsRunThroughIt)
+TEST_F (Stubs, RedirectsWhileThreadsRunThroughIt)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -696,7 +715,7 @@ TEST (Stubs, RedirectsWhileThreadsRunThroughIt)
  * aesthetic one. Stubs published one at a time still have to pack: the version
  * of this that built a LinkGraph per stub spent two pages on each.
  */
-TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
+TEST_F (Stubs, PackTightlyWhenPublishedOneAtATime)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -730,7 +749,7 @@ TEST (Stubs, PackTightlyWhenPublishedOneAtATime)
  * that came away with anything other than the stub's address would be calling
  * the target the stub happened to have rather than the stub.
  */
-TEST (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
+TEST_F (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -783,7 +802,7 @@ TEST (Stubs, ConcurrentLinksAgainstOneStubDefineItOnce)
  * happens is a property of the machine, so one compile is timed first and the
  * undefines are spread across it rather than fired at a guessed delay.
  */
-TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
+TEST_F (Stubs, UndefiningRacesALinkNamingTheSameStubs)
 {
 	constexpr int count = 4000;
 	constexpr int rounds = 16;
@@ -875,7 +894,7 @@ TEST (Stubs, UndefiningRacesALinkNamingTheSameStubs)
  * Threads doing all four at once are what says those orders agree; a
  * disagreement hangs rather than fails, so this test failing means it timed out.
  */
-TEST (Stubs, PublishRedirectAndUndefineFromManyThreads)
+TEST_F (Stubs, PublishRedirectAndUndefineFromManyThreads)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -945,7 +964,7 @@ TEST (Stubs, PublishRedirectAndUndefineFromManyThreads)
 		EXPECT_EQ (errors[i], "") << "thread " << i;
 }
 
-TEST (LazyStubs, CompileOnceOnTheFirstCall)
+TEST_F (LazyStubs, CompileOnceOnTheFirstCall)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -973,7 +992,7 @@ TEST (LazyStubs, CompileOnceOnTheFirstCall)
  * trampoline has to hand every argument back untouched before continuing into
  * the code it just produced.
  */
-TEST (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
+TEST_F (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -990,7 +1009,7 @@ TEST (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
 	EXPECT_EQ (call_many_args (reinterpret_cast<ManyArgsFn> (*stub)), expected);
 }
 
-TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
+TEST_F (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -1019,7 +1038,7 @@ TEST (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
  * callback's is held across the compile, so threads that arrive together each
  * run it. What they owe the caller is one answer, not one compile.
  */
-TEST (LazyStubs, RacingFirstCallsAgreeOnOneAnswer)
+TEST_F (LazyStubs, RacingFirstCallsAgreeOnOneAnswer)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -1070,7 +1089,7 @@ TEST (LazyStubs, RacingFirstCallsAgreeOnOneAnswer)
  * A regression does not fail this test, it stops it finishing, because that is
  * what the defect does. CTest reports it as a timeout naming this case.
  */
-TEST (LazyStubs, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
+TEST_F (LazyStubs, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);

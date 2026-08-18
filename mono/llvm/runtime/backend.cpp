@@ -1,6 +1,6 @@
 #include "backend.hpp"
 #include "callbacks.hpp"
-#include "codemem.hpp"
+#include "jitlink-memory.hpp"
 #include "compile-queue.hpp"
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
@@ -121,8 +121,10 @@ struct MonoBackend::DomainState {
 	/// The actual domain we are tracking.
 	MonoDomain *domain;
 
-	/// Memory slabs that we allocate the actual functions out of.
-	std::shared_ptr<CodeSlabs> slabs;
+	/// The code memory we allocate the actual functions and stubs out of. It is
+	/// declared before everything that carves out of it, so it is destroyed
+	/// after them.
+	CodeArena code;
 
 	/// The MonoJit that is used to compile methods.
 	std::unique_ptr<MonoJit> jit;
@@ -141,10 +143,9 @@ struct MonoBackend::DomainState {
 	                                                            CompileQueue &queue)
 	{
 		auto state = std::make_unique<DomainState> (domain, queue);
-		state->slabs = std::make_shared<CodeSlabs> ();
-		state->stub_table = std::make_unique<StubTable> (state->slabs.get ());
+		state->stub_table = std::make_unique<StubTable> (&state->code);
 
-		auto jit = MonoJit::create (state->slabs);
+		auto jit = MonoJit::create (&state->code);
 		if (!jit)
 			return jit.takeError ();
 		state->jit = std::move (*jit);

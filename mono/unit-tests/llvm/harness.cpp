@@ -5,7 +5,7 @@
 
 #include <mono/metadata/assembly-internals.h>
 
-#include "codemem.hpp"
+#include "jitlink-memory.hpp"
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
 
@@ -95,10 +95,13 @@ llvm::Expected<std::unique_ptr<MonoJit>>
 make_jit ()
 {
 	/*
-	 * Dropped here on purpose: the object linking layer's memory manager holds
-	 * the slabs, so they live exactly as long as the engine carved out of them.
+	 * One arena for the whole binary, deliberately leaked: an engine holds
+	 * pointers into it and a case is free to keep one past the end of its own
+	 * body. Nothing here gives code back either way.
 	 */
-	return MonoJit::create (std::make_shared<CodeSlabs> ());
+	static CodeArena *arena = new CodeArena ();
+
+	return MonoJit::create (arena);
 }
 
 MonoImage *

@@ -1,10 +1,11 @@
 /*
  * Tests for MonoJit, the ORCv2 execution engine.
  *
- * Two layers: pure-LLVM tests that hand-build IR and never touch the runtime,
- * and end-to-end tests that boot the runtime, translate methods from the il/
- * corpus with method_to_llvm (), compile them through the jit and execute the
- * result. The end-to-end ones are the point: translator output actually runs.
+ * Two layers: pure-LLVM tests that hand-build IR and never translate a method,
+ * and end-to-end tests that translate methods from the il/ corpus with
+ * method_to_llvm (), compile them through the jit and execute the result. The
+ * end-to-end ones are the point: translator output actually runs. Both boot a
+ * runtime, since code memory comes out of mono's code manager.
  */
 
 #include "harness.hpp"
@@ -92,7 +93,20 @@ mono_jit_test_double_it (int64_t x)
 	return x * 2;
 }
 
-TEST (Jit, CompilesAndRunsHandBuiltIr)
+/*
+ * These hand-build their IR and never translate a method, but code memory comes
+ * out of mono's code manager, so they still need a runtime under them.
+ */
+class Jit : public ::testing::Test {
+public:
+	static void SetUpTestSuite ()
+	{
+		MONO_SKIP_WITHOUT_CORPUS ();
+		init_runtime ();
+	}
+};
+
+TEST_F (Jit, CompilesAndRunsHandBuiltIr)
 {
 	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
@@ -105,7 +119,7 @@ TEST (Jit, CompilesAndRunsHandBuiltIr)
 	EXPECT_EQ (add (-7, 3), -4);
 }
 
-TEST (Jit, ResolvesRegisteredHelpers)
+TEST_F (Jit, ResolvesRegisteredHelpers)
 {
 	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
@@ -124,7 +138,7 @@ TEST (Jit, ResolvesRegisteredHelpers)
 	EXPECT_EQ (fn (20), 41);
 }
 
-TEST (Jit, UnregisteredHelperFailsTheCompile)
+TEST_F (Jit, UnregisteredHelperFailsTheCompile)
 {
 	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
@@ -143,12 +157,14 @@ TEST (Jit, UnregisteredHelperFailsTheCompile)
 }
 
 /*
- * Removal is how a freed method's code is given back. What has to hold is that
- * the memory returns to the pool the linker allocates out of - otherwise a
- * process that churns dynamic methods grows without bound - and that the JIT is
- * still usable afterwards.
+ * Removal takes a freed method's names and side tables out. It does not take the
+ * memory back: a code manager frees only whole, so a retired body keeps its bytes
+ * until the arena goes. What has to hold is that the removal succeeds, that the
+ * JIT is still usable after one, and that a later compile is given somewhere
+ * else - the same address would mean the bytes were handed out while something
+ * could still be reading them.
  */
-TEST (Jit, RemovedCodeIsReusedByLaterCompiles)
+TEST_F (Jit, RemovalLeavesTheJitUsable)
 {
 	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
@@ -162,14 +178,9 @@ TEST (Jit, RemovedCodeIsReusedByLaterCompiles)
 
 	ASSERT_FALSE (bool ((*jit)->remove_dylibs ({ dylib })));
 
-	/*
-	 * Same module, so the same size request: the allocator has nothing else to
-	 * satisfy it from, which is what makes the address a real check that the
-	 * first one's memory came back rather than a coincidence.
-	 */
 	auto second = (*jit)->compile (build_add_module ().take (), "add");
 	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
-	EXPECT_EQ (second->code, was);
+	EXPECT_NE (second->code, was);
 
 	auto add = reinterpret_cast<int32_t (*) (int32_t, int32_t)> (second->entry);
 	EXPECT_EQ (add (2, 40), 42);
@@ -360,7 +371,7 @@ TEST_F (JitExecution, EveryMergedTailCallGetsItsReturnBack)
  * So put a helper far enough away that the direct form cannot encode, and call
  * it.
  */
-TEST (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
+TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 {
 	/* mov rax, rdi; add rax, rax; ret - mono_jit_test_double_it by hand,
 	 * because what has to move is the callee's address. */
