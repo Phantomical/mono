@@ -186,12 +186,6 @@ stub_create_method_pointer_llvmonly (MonoMethod *method, gboolean compile, MonoE
 	return NULL;
 }
 
-static void
-stub_free_method (MonoDomain *domain, MonoMethod *method)
-{
-	g_assert_not_reached ();
-}
-
 /* A notification rather than a request, so there is nothing to refuse. */
 static void
 stub_method_compiled (MonoDomain *domain, MonoMethod *method)

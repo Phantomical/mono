@@ -119,12 +119,7 @@ enum InterpMethodCodeType {
  * This is domain specific
  */
 struct InterpMethod {
-	/* NOTE: These first two elements (method and
-	   next_jit_code_hash) must be in the same order and at the
-	   same offset as in MonoJitInfo, because of the jit_code_hash
-	   internal hash table in MonoDomain. */
 	MonoMethod *method;
-	InterpMethod *next_jit_code_hash;
 
 	// Sort pointers ahead of integers to minimize padding for alignment.
 

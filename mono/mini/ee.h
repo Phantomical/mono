@@ -35,7 +35,6 @@ typedef gpointer MonoInterpFrameHandle;
 	MONO_EE_CALLBACK (gpointer, create_method_pointer, (MonoMethod *method, gboolean compile, MonoError *error)) \
 	MONO_EE_CALLBACK (gboolean, transform_method, (MonoMethod *method, MonoError *error)) \
 	MONO_EE_CALLBACK (MonoFtnDesc*, create_method_pointer_llvmonly, (MonoMethod *method, gboolean unbox, MonoError *error)) \
-	MONO_EE_CALLBACK (void, free_method, (MonoDomain *domain, MonoMethod *method)) \
 	MONO_EE_CALLBACK (void, method_compiled, (MonoDomain *domain, MonoMethod *method)) \
 	MONO_EE_CALLBACK (void, entry_escaped, (MonoDomain *domain, MonoMethod *method)) \
 	MONO_EE_CALLBACK (MonoObject*, runtime_invoke, (MonoMethod *method, void *obj, void **params, MonoObject **exc, MonoError *error)) \

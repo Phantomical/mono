@@ -3,7 +3,7 @@
 
 /**
  * \file
- * \brief The per-domain table of methods this engine has seen.
+ * \brief How to reach what this engine keeps for a method.
  */
 
 #include "internals.hpp"
@@ -11,7 +11,7 @@
 namespace mono::interp {
 
 /* Answers only for a method the engine already knows; mono_interp_get_imethod ()
- * is the one that makes an entry. */
+ * is the one that makes the record. */
 InterpMethod *lookup_imethod (MonoDomain *domain, MonoMethod *method);
 
 } // namespace mono::interp

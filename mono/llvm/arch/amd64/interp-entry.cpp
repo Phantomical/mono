@@ -444,15 +444,15 @@ using namespace mono::arch;
 extern "C" void
 mono_llvm_interp_entry_from_context (MonoMethod *method, InterpArgContext *ctx)
 {
-	const InterpEntryPoint *entry = interp_entry_for (method);
+	InterpEntryPoint entry = interp_entry_for (method);
 
-	if (entry == nullptr) {
+	if (entry.layout == nullptr) {
 		char *name = mono_method_full_name (method, TRUE);
 
 		g_error ("no interpreter entry for %s in this domain", name);
 	}
 
-	const InterpEntryLayout &layout = *entry->layout;
+	const InterpEntryLayout &layout = *entry.layout;
 	SmallVector<void *, 16> args (layout.args.size ());
 	SmallVector<uint8_t, 256> scratch (layout.scratch_size);
 
@@ -502,7 +502,7 @@ mono_llvm_interp_entry_from_context (MonoMethod *method, InterpArgContext *ctx)
 	alignas (16) uint8_t frame[interp_frame_size];
 
 	interp_frame_enter (frame, ctx);
-	mini_get_interp_callbacks ()->entry_from_args (entry->imethod, this_arg, res,
+	mini_get_interp_callbacks ()->entry_from_args (entry.imethod, this_arg, res,
 	                                              args.data ());
 	interp_frame_leave (frame);
 

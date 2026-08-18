@@ -482,14 +482,13 @@ llvm::Expected<MonoBackend::Compiled>
 MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 {
 	MonoMethod *method = dm.method ();
-	llvm::Expected<const arch::InterpEntryPoint *> ready =
-		interp_entry (domain.domain, method);
+	llvm::Expected<arch::InterpEntryPoint> ready = interp_entry (dm);
 
 	if (!ready)
 		return ready.takeError ();
 
 	/* Before the redirects below, so no call arrives before it is counted. */
-	mini_get_interp_callbacks ()->arm_tier_counter ((*ready)->imethod,
+	mini_get_interp_callbacks ()->arm_tier_counter (ready->imethod,
 	                                                (gint32) tier1_threshold ());
 
 	void *body = arch::interp_entry_thunk ();
@@ -882,12 +881,6 @@ MonoBackend::release_domain_impl (MonoDomain *domain)
 	// Draining takes a while so we want to be careful to only do it outside of
 	// the mutex.
 	state->queue.close ();
-
-	/*
-	 * After the drain, so that nothing is left running that could resolve an
-	 * entry for this domain and put it back.
-	 */
-	forget_interp_entries (domain);
 }
 
 void
@@ -905,12 +898,6 @@ MonoBackend::release_method_impl (MonoMethod *method)
 	// No need to compile this anymore. Drop it if still in the queue and
 	// block on it if compilation is still in progress.
 	queue_.drop (method);
-
-	/*
-	 * After the queue is drained, so that a promotion still running cannot
-	 * resolve an entry back into the map behind this.
-	 */
-	forget_interp_entry (method);
 
 	/*
 	 * Every domain, not just the one that compiled it: a body reached across a

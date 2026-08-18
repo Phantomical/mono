@@ -19,6 +19,7 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/Error.h>
 
 #include <atomic>
 #include <cstdint>
@@ -30,7 +31,14 @@ typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoJitInfo MonoJitInfo;
 typedef struct _MonoMethod MonoMethod;
 
+/* The interpreter's own record for a method. Only mono/interp reads it. */
+struct InterpMethod;
+
 namespace mono {
+
+namespace arch {
+struct InterpEntryLayout;
+}
 
 /// Which engine owns the address a method is entered at.
 ///
@@ -55,9 +63,9 @@ enum class Promotion : int32_t {
 
 /// Everything the runtime knows about one method in one domain.
 ///
-/// Reads of tier () and tier_calls () take no lock. Everything else takes the
-/// record's lock. That lock is inside the domain lock and the table's, and
-/// outside an engine's own.
+/// The atomic reads - the tier, the call count and the interpreter's two slots -
+/// take no lock. Everything else takes the record's lock, which is inside the
+/// domain lock and the table's, and outside an engine's own.
 class MonoDomainMethod {
 public:
 	MonoDomainMethod (MonoMethod *method, MonoDomain *domain)
@@ -143,6 +151,35 @@ public:
 		engine_data_ = { data, free };
 	}
 
+	/* -- The interpreter ------------------------------------------------- */
+
+	/// What the interpreter keeps for this method, or null while the
+	/// interpreter has not seen it. The record does not own it: an InterpMethod
+	/// comes out of the method's own memory and goes when the method does.
+	InterpMethod *interp_method () const
+	{
+		return interp_method_.load (std::memory_order_acquire);
+	}
+
+	/// Gives the record \p imethod and answers what the record holds.
+	///
+	/// The first caller wins. A later one gets that first record back and must
+	/// drop its own, so that every thread names the same one.
+	InterpMethod *set_interp_method (InterpMethod *imethod);
+
+	/// How a call from outside the interpreter is taken apart for it, or null
+	/// while nothing has asked. One layout serves every method with the same
+	/// prototype, so the record names one rather than owning it.
+	const arch::InterpEntryLayout *interp_layout () const
+	{
+		return interp_layout_.load (std::memory_order_acquire);
+	}
+
+	void set_interp_layout (const arch::InterpEntryLayout *layout)
+	{
+		interp_layout_.store (layout, std::memory_order_release);
+	}
+
 	std::mutex &lock () { return lock_; }
 
 private:
@@ -161,6 +198,9 @@ private:
 	std::atomic<int32_t> promotion_ { (int32_t) Promotion::idle };
 
 	std::unique_ptr<void, void (*) (void *)> engine_data_ { nullptr, nullptr };
+
+	std::atomic<InterpMethod *> interp_method_ { nullptr };
+	std::atomic<const arch::InterpEntryLayout *> interp_layout_ { nullptr };
 
 	std::mutex lock_;
 };
@@ -183,6 +223,13 @@ MonoDomainMethod *domain_method_find (MonoDomain *domain, MonoMethod *method);
 /// record.
 llvm::Expected<MonoDomainMethod *> domain_method_get (MonoDomain *domain,
                                                      MonoMethod *method);
+
+/// Calls \p visit with every record \p domain holds.
+///
+/// The table stays locked for the walk, so \p visit must not ask this domain
+/// for another record.
+void domain_method_foreach (MonoDomain *domain,
+                            llvm::function_ref<void (MonoDomainMethod &)> visit);
 
 /// Takes \p method's record out of \p domain and hands it over.
 ///

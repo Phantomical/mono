@@ -2607,15 +2607,12 @@ mono_jit_free_method (MonoDomain *domain, MonoMethod *method)
 
 	g_assert (method->dynamic);
 
-	if (mono_use_interpreter) {
-		mini_get_interp_callbacks ()->free_method (domain, method);
-	}
-
 	/*
 	 * mono_free_method () hands METHOD straight back to the allocator, so
 	 * everything keyed by it has to go now whether or not the classic back end
 	 * ever compiled it: an entry left behind is one the next method to land on
-	 * this address finds and takes for its own.
+	 * this address finds and takes for its own. This drops the record, and with
+	 * it whatever the interpreter kept for the method.
 	 */
 	mono_llvm_jit_free_method (method);
 
@@ -4097,7 +4094,6 @@ mini_create_jit_domain_info (MonoDomain *domain)
 	info->seq_points = g_hash_table_new_full (mono_aligned_addr_hash, NULL, NULL, free_seq_point_list);
 	info->arch_seq_points = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->jump_target_hash = g_hash_table_new (NULL, NULL);
-	mono_jit_code_hash_init (&info->interp_code_hash);
 
 	domain->runtime_info = info;
 
@@ -4189,7 +4185,6 @@ mini_free_jit_domain_info (MonoDomain *domain)
 		g_hash_table_foreach (info->llvm_jit_callees, free_jit_callee_list, NULL);
 		g_hash_table_destroy (info->llvm_jit_callees);
 	}
-	mono_internal_hash_table_destroy (&info->interp_code_hash);
 
 	/*
 	 * Before the engine's state for the domain goes: a record names stubs

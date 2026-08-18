@@ -13,6 +13,7 @@
 #include <llvm/ADT/DenseMap.h>
 
 #include <mutex>
+#include <shared_mutex>
 
 namespace mono {
 
@@ -35,8 +36,12 @@ private:
 	MonoDomain *domain_;
 };
 
+/*
+ * A lookup takes the lock shared. Every interpreted call that has to name a
+ * method reads this table, and those reads must not queue behind each other.
+ */
 struct DomainMethodTable {
-	std::mutex lock;
+	std::shared_mutex lock;
 	llvm::DenseMap<MonoMethod *, std::unique_ptr<MonoDomainMethod>> methods;
 };
 
@@ -67,6 +72,18 @@ MonoDomainMethod::publish (MonoTier tier, llvm::function_ref<void *(Entry)> code
 	return true;
 }
 
+InterpMethod *
+MonoDomainMethod::set_interp_method (InterpMethod *imethod)
+{
+	InterpMethod *held = nullptr;
+
+	if (interp_method_.compare_exchange_strong (held, imethod, std::memory_order_acq_rel,
+	                                            std::memory_order_acquire))
+		return imethod;
+
+	return held;
+}
+
 void
 MonoDomainMethod::install_detour (void *target)
 {
@@ -87,7 +104,7 @@ domain_method_find (MonoDomain *domain, MonoMethod *method)
 	if (table == nullptr)
 		return nullptr;
 
-	std::lock_guard<std::mutex> held (table->lock);
+	std::shared_lock<std::shared_mutex> held (table->lock);
 	auto it = table->methods.find (method);
 
 	return it != table->methods.end () ? it->second.get () : nullptr;
@@ -118,7 +135,7 @@ domain_method_get (MonoDomain *domain, MonoMethod *method)
 	 * well.
 	 */
 	DomainLock domain_lock (domain);
-	std::lock_guard<std::mutex> held (table->lock);
+	std::unique_lock<std::shared_mutex> held (table->lock);
 
 	auto it = table->methods.find (method);
 	if (it != table->methods.end ())
@@ -135,6 +152,20 @@ domain_method_get (MonoDomain *domain, MonoMethod *method)
 	return raw;
 }
 
+void
+domain_method_foreach (MonoDomain *domain, llvm::function_ref<void (MonoDomainMethod &)> visit)
+{
+	DomainMethodTable *table = table_of (domain);
+
+	if (table == nullptr)
+		return;
+
+	std::shared_lock<std::shared_mutex> held (table->lock);
+
+	for (const auto &entry : table->methods)
+		visit (*entry.second);
+}
+
 std::unique_ptr<MonoDomainMethod>
 domain_method_take (MonoDomain *domain, MonoMethod *method)
 {
@@ -143,7 +174,7 @@ domain_method_take (MonoDomain *domain, MonoMethod *method)
 	if (table == nullptr)
 		return nullptr;
 
-	std::lock_guard<std::mutex> held (table->lock);
+	std::unique_lock<std::shared_mutex> held (table->lock);
 	auto it = table->methods.find (method);
 
 	if (it == table->methods.end ())

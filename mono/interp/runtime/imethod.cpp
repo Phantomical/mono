@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief The per-domain table of transformed methods, and its invalidation.
+ * \brief What the interpreter keeps for a method, and how it is invalidated.
  */
 
 #include "config.h"
@@ -14,6 +14,7 @@
 
 #include <mono/metadata/marshal.h>
 #include <mono/metadata/metadata-update.h>
+#include <mono/mini/domain-method.hpp>
 #include <mono/mini/mini-runtime.h>
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-threads.h>
@@ -23,15 +24,9 @@ namespace mono::interp {
 InterpMethod *
 lookup_imethod (MonoDomain *domain, MonoMethod *method)
 {
-	InterpMethod *imethod;
-	MonoJitDomainInfo *info;
+	MonoDomainMethod *dm = domain_method_find (domain, method);
 
-	info = domain_jit_info (domain);
-	mono_domain_jit_code_hash_lock (domain);
-	imethod = static_cast<InterpMethod *> (
-		mono_internal_hash_table_lookup (&info->interp_code_hash, method));
-	mono_domain_jit_code_hash_unlock (domain);
-	return imethod;
+	return dm != nullptr ? dm->interp_method () : nullptr;
 }
 
 gpointer
@@ -59,10 +54,6 @@ interp_get_remoting_invoke (MonoMethod *method, gpointer addr, MonoError *error)
 #endif
 }
 
-/*
- * The interpreter's record for a method in the current domain, creating one if
- * it has none. Says who would run the method; does not transform it.
- */
 void
 interp_arm_tier_counter (gpointer imethod, gint32 calls)
 {
@@ -95,18 +86,6 @@ interp_transform_method (MonoMethod *method, MonoError *error)
 
 	mono_interp_transform_method (imethod, mono_interp_get_context (), error);
 	return is_ok (error);
-}
-
-void
-interp_free_method (MonoDomain *domain, MonoMethod *method)
-{
-	MonoJitDomainInfo *info = domain_jit_info (domain);
-
-	mono_domain_jit_code_hash_lock (domain);
-	/* InterpMethod is allocated in the domain mempool. We might haven't
-	 * allocated an InterpMethod for this instance yet */
-	mono_internal_hash_table_remove (&info->interp_code_hash, method);
-	mono_domain_jit_code_hash_unlock (domain);
 }
 
 /*
@@ -146,19 +125,11 @@ interp_entry_escaped (MonoDomain *domain, MonoMethod *method)
 }
 
 static void
-invalidate_transform (gpointer imethod_)
-{
-	InterpMethod *imethod = static_cast<InterpMethod *> (imethod_);
-	imethod->transformed = FALSE;
-}
-
-static void
 copy_imethod_for_frame (MonoDomain *domain, InterpFrame *frame)
 {
 	InterpMethod *copy =
 		static_cast<InterpMethod *> (mono_domain_alloc0 (domain, sizeof (InterpMethod)));
 	memcpy (copy, frame->imethod, sizeof (InterpMethod));
-	copy->next_jit_code_hash = NULL; /* we don't want that in our copy */
 	frame->imethod = copy;
 	/* Note: The copy will be around until the domain is unloading. Ideally we
 	 * would reclaim its memory when the corresponding InterpFrame is popped.
@@ -234,10 +205,10 @@ interp_invalidate_transformed (MonoDomain *domain)
 	mono_gc_stop_world ();
 	metadata_update_prepare_to_invalidate (domain);
 #endif
-	MonoJitDomainInfo *info = domain_jit_info (domain);
-	mono_domain_jit_code_hash_lock (domain);
-	mono_internal_hash_table_apply (&info->interp_code_hash, invalidate_transform);
-	mono_domain_jit_code_hash_unlock (domain);
+	domain_method_foreach (domain, [] (MonoDomainMethod &dm) {
+		if (InterpMethod *imethod = dm.interp_method ())
+			imethod->transformed = FALSE;
+	});
 
 	if (need_stw_restart)
 		mono_gc_restart_world ();
@@ -253,19 +224,24 @@ InterpMethod *
 mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error)
 {
 	InterpMethod *imethod;
-	MonoJitDomainInfo *info;
 	MonoMethodSignature *sig;
 	int i;
 
 	error_init (error);
 
-	info = domain_jit_info (domain);
-	mono_domain_jit_code_hash_lock (domain);
-	imethod = static_cast<InterpMethod *> (
-		mono_internal_hash_table_lookup (&info->interp_code_hash, method));
-	mono_domain_jit_code_hash_unlock (domain);
-	if (imethod)
-		return imethod;
+	if (InterpMethod *known = lookup_imethod (domain, method))
+		return known;
+
+	llvm::Expected<mono::MonoDomainMethod *> dm = mono::domain_method_get (domain, method);
+
+	if (!dm) {
+		mono_error_set_execution_engine (error, "%s",
+		                                 llvm::toString (dm.takeError ()).c_str ());
+		return NULL;
+	}
+
+	if (InterpMethod *known = (*dm)->interp_method ())
+		return known;
 
 	sig = mono_method_signature_internal (method);
 
@@ -286,15 +262,11 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 	for (i = 0; i < sig->param_count; ++i)
 		imethod->param_types[i] = mini_get_underlying_type (sig->params[i]);
 
-	mono_domain_jit_code_hash_lock (domain);
-	if (!mono_internal_hash_table_lookup (&info->interp_code_hash, method))
-		mono_internal_hash_table_insert (&info->interp_code_hash, method, imethod);
-	mono_domain_jit_code_hash_unlock (domain);
-
 	imethod->prof_flags = mono_profiler_get_call_instrumentation_flags (imethod->method);
 #ifdef ENABLE_INTERP_TRACE
 	imethod->tracing = trace_wants_method (method);
 #endif
 
-	return imethod;
+	/* Published last, so no other thread can find one that is not filled in. */
+	return (*dm)->set_interp_method (imethod);
 }

@@ -3987,9 +3987,8 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 	mono_loader_lock ();
 	mono_os_mutex_lock (&calc_section);
 	if (!imethod->transformed) {
-		// Ignore the first two fields which are unchanged. next_jit_code_hash shouldn't
-		// be modified because it is racy with internal hash table insert.
-		const int start_offset = 2 * sizeof (gpointer);
+		// The method is the same one, so the copy starts after it.
+		const int start_offset = sizeof (gpointer);
 		memcpy ((char *) imethod + start_offset, (char *) &tmp_imethod + start_offset,
 		        sizeof (InterpMethod) - start_offset);
 		if (imethod->jinfo->seq_points)

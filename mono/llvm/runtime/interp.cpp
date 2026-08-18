@@ -7,6 +7,8 @@
 #include "minimal-compile.hpp"
 #include "naming.hpp"
 
+#include <mono/mini/domain-method.hpp>
+
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/raw_ostream.h>
@@ -30,15 +32,12 @@ namespace mono {
 namespace {
 
 /*
- * One layout per prototype, shared by every method with that prototype, and one
- * entry per method per domain. Behind a lock of their own rather than an
- * engine's: an interpreted call reads these on every invocation and must never
- * queue behind a compile.
+ * One layout per prototype, shared by every method with that prototype. Behind a
+ * lock of its own rather than an engine's: an interpreted call reads this on
+ * every invocation and must never queue behind a compile.
  */
 std::shared_mutex g_interp_mutex;
 std::unordered_map<std::string, std::unique_ptr<arch::InterpEntryLayout>> g_layouts;
-std::unordered_map<MonoDomain *, std::unordered_map<MonoMethod *, arch::InterpEntryPoint>>
-	g_interp_entries;
 
 /// A key naming everything about a prototype that decides how a call to it is
 /// laid out - the types and the attributes that move a value. Two methods that
@@ -125,39 +124,34 @@ layout_for (MonoDomain *domain, MonoMethod *method)
 
 } // namespace
 
-Expected<const arch::InterpEntryPoint *>
-interp_entry (MonoDomain *domain, MonoMethod *method)
+Expected<arch::InterpEntryPoint>
+interp_entry (MonoDomainMethod &dm)
 {
-	{
-		std::shared_lock<std::shared_mutex> lock (g_interp_mutex);
-		auto domain_entries = g_interp_entries.find (domain);
+	const arch::InterpEntryLayout *layout = dm.interp_layout ();
 
-		if (domain_entries != g_interp_entries.end ()) {
-			auto it = domain_entries->second.find (method);
+	if (layout == nullptr) {
+		Expected<const arch::InterpEntryLayout *> planned =
+			layout_for (dm.domain (), dm.method ());
 
-			if (it != domain_entries->second.end ())
-				return &it->second;
-		}
+		if (!planned)
+			return planned.takeError ();
+
+		layout = *planned;
+		dm.set_interp_layout (layout);
 	}
 
-	Expected<const arch::InterpEntryLayout *> layout =
-		layout_for (domain, method);
+	void *imethod = dm.interp_method ();
 
-	if (!layout)
-		return layout.takeError ();
+	if (imethod == nullptr) {
+		ERROR_DECL (interp_error);
 
-	ERROR_DECL (interp_error);
-	void *imethod = mini_get_interp_callbacks ()->get_imethod (method, interp_error);
+		imethod = mini_get_interp_callbacks ()->get_imethod (dm.method (), interp_error);
 
-	if (imethod == nullptr)
-		return runtime_error (interp_error);
+		if (imethod == nullptr)
+			return runtime_error (interp_error);
+	}
 
-	std::unique_lock<std::shared_mutex> lock (g_interp_mutex);
-	arch::InterpEntryPoint &entry = g_interp_entries[domain][method];
-
-	entry.layout = *layout;
-	entry.imethod = imethod;
-	return &entry;
+	return arch::InterpEntryPoint { layout, imethod };
 }
 
 /*
@@ -165,41 +159,22 @@ interp_entry (MonoDomain *domain, MonoMethod *method)
  * arrived here having switched domains has to run the method as the domain it
  * switched to, which is the one holding that method's interpreter state.
  */
-const arch::InterpEntryPoint *
+arch::InterpEntryPoint
 interp_entry_for (MonoMethod *method)
 {
-	Expected<const arch::InterpEntryPoint *> entry =
-		interp_entry (mono_domain_get (), method);
+	MonoDomainMethod *dm = domain_method_find (mono_domain_get (), method);
+
+	if (dm == nullptr)
+		return {};
+
+	Expected<arch::InterpEntryPoint> entry = interp_entry (*dm);
 
 	if (!entry) {
 		consumeError (entry.takeError ());
-		return nullptr;
+		return {};
 	}
 
 	return *entry;
-}
-
-void
-forget_interp_entries (MonoDomain *domain)
-{
-	std::unique_lock<std::shared_mutex> lock (g_interp_mutex);
-
-	g_interp_entries.erase (domain);
-}
-
-/*
- * Freeing a method hands its MonoMethod back to the allocator, and the next one
- * allocated can land on that address - so an entry left here is one that method
- * would find and take for its own, pointing at interpreter state that died with
- * the method before it.
- */
-void
-forget_interp_entry (MonoMethod *method)
-{
-	std::unique_lock<std::shared_mutex> lock (g_interp_mutex);
-
-	for (auto &domain : g_interp_entries)
-		domain.second.erase (method);
 }
 
 } // namespace mono
