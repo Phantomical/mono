@@ -109,6 +109,7 @@ G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
 	uint64_t c, struct _Unwind_Exception *d, struct _Unwind_Context *e);
 #endif
 #include "../llvm/runtime.h"
+#include "domain-method.h"
 #include "../llvm/debugging/perf/perf.h"
 #include "mono/metadata/icall-signatures.h"
 #include "mono/utils/mono-tls-inline.h"
@@ -4099,6 +4100,9 @@ mini_create_jit_domain_info (MonoDomain *domain)
 	mono_jit_code_hash_init (&info->interp_code_hash);
 
 	domain->runtime_info = info;
+
+	/* After runtime_info is set: the table hangs off it. */
+	mono_domain_method_table_init (domain);
 }
 
 static void
@@ -4186,6 +4190,12 @@ mini_free_jit_domain_info (MonoDomain *domain)
 		g_hash_table_destroy (info->llvm_jit_callees);
 	}
 	mono_internal_hash_table_destroy (&info->interp_code_hash);
+
+	/*
+	 * Before the engine's state for the domain goes: a record names stubs
+	 * carved out of that state.
+	 */
+	mono_domain_method_table_free (domain);
 	mono_llvm_jit_free_domain (domain);
 
 	g_free (domain->runtime_info);

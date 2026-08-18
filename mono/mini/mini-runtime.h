@@ -55,6 +55,8 @@ typedef struct
 	GHashTable *method_rgctx_hash;
 	/* Maps gpointer -> InterpMethod */
 	GHashTable *interp_method_pointer_hash;
+	/* The MonoDomainMethod record of every method this domain has published */
+	gpointer domain_methods;
 } MonoJitDomainInfo;
 
 #define domain_jit_info(domain) ((MonoJitDomainInfo*)((domain)->runtime_info))

@@ -3,6 +3,7 @@
 
 #include "compile-queue.hpp"
 #include "compile-worker.hpp"
+#include "domain-method.hpp"
 #include "method-symbols.hpp"
 #include "translate.hpp"
 #include <llvm/ADT/DenseMap.h>
@@ -25,12 +26,15 @@ private:
 	static MonoBackend *instance;
 
 	using Compiled = mono::Compiled;
-	struct Publication;
 	struct DomainState;
 	struct MethodState;
 
 public:
 	static llvm::Expected<MonoBackend *> get ();
+
+	/// Gives \p dm its stubs, standing up the engine and the domain's state if
+	/// this is the first thing to ask for either.
+	static llvm::Error attach (MonoDomainMethod &dm);
 
 	/// Stop all compilation for a specific domain. Blocks until any in-progress
 	/// work is completed.
@@ -94,30 +98,34 @@ private:
 	llvm::Expected<DomainState *> state ();
 	llvm::Expected<DomainState *> state (MonoDomain *domain);
 
-	/// The state for METHOD in DOMAIN, publishing its stubs if this is the first
-	/// time anything has asked for it.
-	llvm::Expected<MethodState *> publish (DomainState &domain, MonoMethod *method);
+	/// The record for \p method in \p domain, publishing its stubs if this is
+	/// the first time anything has asked for it.
+	static llvm::Expected<MonoDomainMethod *> publish (DomainState &domain,
+	                                                   MonoMethod *method);
+
+	/// Carves \p dm's stubs and gives it the state behind them.
+	llvm::Error attach_entries (DomainState &domain, MonoDomainMethod &dm);
 
 	/// Give every declaration in M that names a method the symbol this backend
 	/// publishes that method's entry under, publishing the method if it has not
 	/// been already.
 	llvm::Error bind_externals (DomainState &domain, llvm::Module &m);
 
-	/// Point METHOD's stubs at the interpreter.
-	llvm::Expected<Compiled> interp_entries (DomainState &domain, MethodState &method);
+	/// Point \p dm's stubs at the interpreter.
+	llvm::Expected<Compiled> interp_entries (DomainState &domain, MonoDomainMethod &dm);
 
-	/// The per-call dispatcher METHOD's body stub binds to when its first
+	/// The per-call dispatcher \p dm's body stub binds to when its first
 	/// caller arrived from another domain.
-	llvm::Expected<void *> dispatcher (DomainState &domain, MethodState &method);
+	llvm::Expected<void *> dispatcher (DomainState &domain, MonoDomainMethod &dm);
 
 	/// The runtime helper behind a dispatcher: the current domain's body for
 	/// METHOD, compiling it now if this domain has not yet.
 	static void *body_for_current_domain (MonoMethod *method);
 
-	/// Where ENTRY of METHOD has ended up, compiling the method if it has not
+	/// Where \p entry of \p dm has ended up, compiling the method if it has not
 	/// been compiled yet. This is what the stub in front of that entry is
 	/// redirected to on the first call through it.
-	llvm::Expected<void *> entry_point (DomainState &domain, MethodState &method,
+	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm,
 	                                    Entry entry);
 
 	/// Give METHOD a body and point its stubs at it, whether or not it already
@@ -126,8 +134,12 @@ private:
 	/// With allow_tier0 the interpreter is offered the method first; promotion
 	/// passes false, which is what makes it a compile rather than a second trip
 	/// through the tier the method is already running at.
-	llvm::Expected<Compiled> compile_body (DomainState &domain, MethodState &method,
+	llvm::Expected<Compiled> compile_body (DomainState &domain, MonoDomainMethod &dm,
 	                                       bool allow_tier0);
+
+	/// This engine's own state for \p dm, which it attached when the record was
+	/// built.
+	static MethodState &engine_state (MonoDomainMethod &dm);
 
 	void release_domain_impl (MonoDomain *domain);
 	void release_method_impl (MonoMethod *method);

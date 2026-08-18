@@ -35,23 +35,6 @@ namespace mono {
 
 namespace {
 
-/// Holds a domain's lock for a scope.
-class DomainLock {
-public:
-	explicit DomainLock (MonoDomain *domain) : domain_ (domain)
-	{
-		mono_domain_lock (domain_);
-	}
-
-	~DomainLock () { mono_domain_unlock (domain_); }
-
-	DomainLock (const DomainLock &) = delete;
-	DomainLock &operator= (const DomainLock &) = delete;
-
-private:
-	MonoDomain *domain_;
-};
-
 /*
  * Where a stub lands when the compile behind it failed. The trampoline has
  * already put the call's arguments back and jumped here, so this is running as
@@ -114,19 +97,6 @@ MonoBackend::get ()
 	return instance;
 }
 
-/// What publishing a method handed the rest of the runtime: the
-/// address it was handed, and the trampoline jit-info record each of the
-/// method's stubs was registered under. A record is only held here when it has
-/// to be taken out again by hand - see register_stub_jinfo ().
-struct MonoBackend::Publication {
-	void *stub;
-	MonoJitInfo *entry_jinfo;
-	MonoJitInfo *body_jinfo;
-	MonoJitInfo *unbox_jinfo;
-	/// Whether the method was given an unboxing stub as well.
-	bool unboxed;
-};
-
 /// What compiling a method put somewhere it has to be taken back out of.
 /// Only tracked for dynamic methods; nothing else is ever freed.
 struct Owned {
@@ -134,40 +104,10 @@ struct Owned {
 	std::vector<MonoJitInfo *> jinfos;
 };
 
-/// Everything one method owns in one domain.
-///
-/// Per-method state lives here and nowhere else: a method reached through a
-/// different door, or running at a different tier, is still one entry in one
-/// map, which is what keeps freeing it a matter of dropping this struct rather
-/// than of remembering every table it was written into.
+/// What this engine keeps for one method in one domain, hung off that method's
+/// MonoDomainMethod record. The record owns the stubs, the names and the tier;
+/// this is the compile behind them.
 struct MonoBackend::MethodState {
-	MonoMethod *method;
-
-	/// `<printed name>@<pointer>`. Every symbol this method owns is this plus a
-	/// suffix, and this is the only place the name is built - a declaration
-	/// naming the method arrives with the MonoMethod on it and is renamed to
-	/// what is published here.
-	std::string symbol;
-
-	/// The method itself: what generated code calls, what a vtable slot holds,
-	/// and what the runtime is handed. Every method has this one.
-	Stub thunk;
-
-	/// The C-convention entry, which forwards to the one above. Only a wrapper
-	/// generated for native code to enter - publishes_interop_entry () - has one,
-	/// and for that method it is the address the runtime is handed instead.
-	Stub c_thunk;
-
-	/// The thunk a call off a value type's vtable comes in through. Only a
-	/// method publishes_unbox_entry () selects has one.
-	Stub unbox_thunk;
-
-	/// The re-entry trampoline each stub was pointed at when it was published,
-	/// held so it can be given back once nothing can reach the stub.
-	void *thunk_tramp = nullptr;
-	void *c_thunk_tramp = nullptr;
-	void *unbox_tramp = nullptr;
-
 	/// Where this method's code ended up, once something has asked for it.
 	/// Guarded by the engine's lock.
 	std::optional<Compiled> code;
@@ -175,12 +115,6 @@ struct MonoBackend::MethodState {
 	/// Whether that is the shared interpreter entry rather than a body of this
 	/// method's own. Guarded by the engine's lock.
 	bool interpreted = false;
-
-	/// The jit-info record each stub was registered under, held only when it
-	/// has to be taken out again by hand - see register_stub_jinfo ().
-	MonoJitInfo *thunk_jinfo = nullptr;
-	MonoJitInfo *c_thunk_jinfo = nullptr;
-	MonoJitInfo *unbox_jinfo = nullptr;
 
 	/// What this method's compiles put somewhere it has to be taken back out
 	/// of. Only filled for a dynamic method; nothing else is ever freed.
@@ -197,75 +131,24 @@ struct MonoBackend::MethodState {
 	 * debugger arming a breakpoint - has to see these too.
 	 */
 	std::vector<MonoJitInfo *> superseded;
-
-	/*
-	 * The entries this method was actually published under, recorded rather
-	 * than recomputed. entries () reads the method's signature, and by the time
-	 * one is freed its image may be on its way out - a shorter list at retire
-	 * than at publish leaves names claimed and blocks uncarved, and the next
-	 * method to land there inherits them.
-	 */
-	llvm::SmallVector<Entry, 3> published;
-
-	MethodState (MonoMethod *method, std::string symbol)
-	    : method (method), symbol (std::move (symbol))
-	{
-	}
-
-	std::string name (Entry entry) const { return symbol + stub_suffix (entry).str (); }
-
-	Stub &stub (Entry entry)
-	{
-		switch (entry) {
-		case Entry::body:
-			return thunk;
-		case Entry::interop:
-			return c_thunk;
-		case Entry::unbox:
-			return unbox_thunk;
-		}
-		return thunk;
-	}
-
-	void *&trampoline (Entry entry)
-	{
-		switch (entry) {
-		case Entry::body:
-			return thunk_tramp;
-		case Entry::interop:
-			return c_thunk_tramp;
-		case Entry::unbox:
-			return unbox_tramp;
-		}
-		return thunk_tramp;
-	}
-
-	MonoJitInfo *&jinfo (Entry entry)
-	{
-		switch (entry) {
-		case Entry::body:
-			return thunk_jinfo;
-		case Entry::interop:
-			return c_thunk_jinfo;
-		case Entry::unbox:
-			return unbox_jinfo;
-		}
-		return thunk_jinfo;
-	}
-
-	/// The entries this method is published under, in the order they are
-	/// carved.
-	llvm::SmallVector<Entry, 3> entries () const
-	{
-		llvm::SmallVector<Entry, 3> all{Entry::body};
-
-		if (publishes_interop_entry (method))
-			all.push_back (Entry::interop);
-		if (publishes_unbox_entry (method))
-			all.push_back (Entry::unbox);
-		return all;
-	}
 };
+
+namespace {
+
+/// The entries a method is published under, in the order they are carved.
+llvm::SmallVector<Entry, 3>
+entries_for (MonoMethod *method)
+{
+	llvm::SmallVector<Entry, 3> all { Entry::body };
+
+	if (publishes_interop_entry (method))
+		all.push_back (Entry::interop);
+	if (publishes_unbox_entry (method))
+		all.push_back (Entry::unbox);
+	return all;
+}
+
+} // namespace
 
 struct MonoBackend::DomainState {
 	/// The actual domain we are tracking.
@@ -284,12 +167,6 @@ struct MonoBackend::DomainState {
 	std::unique_ptr<LazyCallbacks> callbacks;
 
 	CompileQueue::Channel queue;
-
-	/*
-	 * Last, so every MethodState is destroyed before the table its stubs were
-	 * carved from and the linker they were defined in.
-	 */
-	llvm::DenseMap<MonoMethod *, std::unique_ptr<MethodState>> methods;
 
 	DomainState (MonoDomain *domain, CompileQueue &queue) : domain (domain), queue (&queue) {}
 
@@ -333,9 +210,9 @@ struct MonoBackend::DomainState {
 		return state;
 	}
 
-	/// Undefine everything METHOD was published as and hand its blocks and
+	/// Undefine everything \p dm was published as and hand its blocks and
 	/// trampolines back.
-	void retire (MethodState &method);
+	void retire (MonoDomainMethod &dm);
 };
 
 MonoBackend::~MonoBackend ()
@@ -361,12 +238,13 @@ must (llvm::Error err)
 }
 
 void
-MonoBackend::DomainState::retire (MethodState &method)
+MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 {
+	MethodState &engine = MonoBackend::engine_state (dm);
 	llvm::SmallVector<std::string, 3> names;
 
-	for (Entry entry : method.published)
-		names.push_back (method.name (entry));
+	for (Entry entry : dm.published ())
+		names.push_back (dm.name (entry));
 
 	/*
 	 * The records first. A block on the free list belongs to whichever method
@@ -375,11 +253,11 @@ MonoBackend::DomainState::retire (MethodState &method)
 	 * method's address would otherwise be bound to this one, by then freed
 	 * metadata. Unreachable by name is not enough; the address is reachable too.
 	 */
-	for (Entry entry : method.published)
-		if (MonoJitInfo *jinfo = method.jinfo (entry))
+	for (Entry entry : dm.published ())
+		if (MonoJitInfo *jinfo = dm.jinfo (entry))
 			mono_jit_info_table_remove (domain, jinfo);
 
-	for (MonoJitInfo *jinfo : method.owned.jinfos)
+	for (MonoJitInfo *jinfo : engine.owned.jinfos)
 		mono_jit_info_table_remove (domain, jinfo);
 
 	/*
@@ -388,51 +266,59 @@ MonoBackend::DomainState::retire (MethodState &method)
 	 */
 	must (jit->undefine_stubs (names));
 
-	for (Entry entry : method.published)
-		callbacks->release (method.trampoline (entry));
+	for (Entry entry : dm.published ())
+		callbacks->release (dm.trampoline (entry));
 
 	stub_table->remove_all (names);
 
-	if (!method.owned.dylibs.empty ())
-		must (jit->remove_dylibs (method.owned.dylibs));
+	if (!engine.owned.dylibs.empty ())
+		must (jit->remove_dylibs (engine.owned.dylibs));
 }
 
-llvm::Expected<MonoBackend::MethodState *>
+MonoBackend::MethodState &
+MonoBackend::engine_state (MonoDomainMethod &dm)
+{
+	return *static_cast<MethodState *> (dm.engine_data ());
+}
+
+llvm::Expected<MonoDomainMethod *>
 MonoBackend::publish (DomainState &domain, MonoMethod *method)
 {
-	/*
-	 * Naming the method reads its signature, and a signature that is not
-	 * cached yet is parsed from metadata - which loads the classes it names,
-	 * and takes the loader lock to do it. Ask for the signature here, above
-	 * the locks, so that stub_symbol () and entries () below find it cached.
-	 *
-	 * A backend lock held across the loader lock deadlocks: a thread in class
-	 * init holds the loader lock and then takes the domain lock to build a
-	 * vtable, which is the cycle.
-	 */
-	mono_method_signature_internal (method);
+	return domain_method_get (domain.domain, method);
+}
 
-	/*
-	 * The domain lock is the outer one of the two. A mutator can arrive here
-	 * already holding it - mono_class_proxy_vtable compiles a remoting
-	 * trampoline under it - and registering the stubs' jit info below takes it
-	 * as well, so taking them the other way round on the compile worker
-	 * deadlocks against a compile on a mutator thread.
-	 */
-	DomainLock domain_lock (domain.domain);
-	std::lock_guard<std::mutex> lock (mutex_);
+llvm::Error
+MonoBackend::attach (MonoDomainMethod &dm)
+{
+	llvm::Expected<MonoBackend *> backend = get ();
 
-	auto it = domain.methods.find (method);
-	if (it != domain.methods.end ())
-		return it->second.get ();
+	if (!backend)
+		return backend.takeError ();
+	if (*backend == nullptr)
+		return llvm::createStringError (llvm::inconvertibleErrorCode (),
+		                                "the engine has been taken apart");
 
-	auto state = std::make_unique<MethodState> (method,
-	                                            stub_symbol (method, Entry::body));
+	MonoBackend *self = *backend;
+	llvm::Expected<DomainState *> state = self->state (dm.domain ());
 
-	llvm::SmallVector<Entry, 3> entries = state->entries ();
+	if (!state)
+		return state.takeError ();
+
+	return self->attach_entries (**state, dm);
+}
+
+llvm::Error
+MonoBackend::attach_entries (DomainState &domain, MonoDomainMethod &dm)
+{
+	MonoMethod *method = dm.method ();
+	auto engine = std::make_unique<MethodState> ();
+	llvm::SmallVector<Entry, 3> entries = entries_for (method);
 	llvm::SmallVector<std::pair<llvm::StringRef, void *>, 3> defs;
 	llvm::SmallVector<std::string, 3> names;
-	MethodState *raw = state.get ();
+	std::string symbol = stub_symbol (method, Entry::body);
+
+	dm.set_engine_data (engine.release (),
+	                    [] (void *data) { delete static_cast<MethodState *> (data); });
 
 	/* The definitions below point into these, so they must not move. */
 	names.reserve (entries.size ());
@@ -440,18 +326,27 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 	/*
 	 * Nothing published so far is reachable, so a failure part-way has to put
 	 * the pieces back rather than leave a name claimed for a method that is not
-	 * in the map - the next thread to ask for the method would collide with it.
+	 * in the table - the next thread to ask for the method would collide with
+	 * it.
 	 */
 	auto unwind = [&] {
 		for (const std::string &name : names)
 			domain.stub_table->remove (name);
 		for (Entry entry : entries)
-			domain.callbacks->release (state->trampoline (entry));
+			domain.callbacks->release (dm.trampoline (entry));
 	};
 
 	for (Entry entry : entries) {
 		llvm::Expected<void *> trampoline = domain.callbacks->reserve (
-			[this, &domain, raw, entry] () -> void * {
+			[this, &domain, &dm, entry] () -> void * {
+				/* The stub follows, so the next call skips the trampoline. */
+				auto answer = [&] (void *code) {
+					dm.publish (MonoTier::none, [&] (Entry each) {
+						return each == entry ? code : nullptr;
+					});
+					return code;
+				};
+
 				/*
 				 * The thread that fires a stub is not necessarily
 				 * running as the domain that owns it, so binding here
@@ -462,24 +357,19 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 				 * convention.
 				 */
 				if (entry == Entry::body
-				    && !bindable (domain.domain, raw->method)) {
-					llvm::Expected<void *> forward =
-						dispatcher (domain, *raw);
+				    && !bindable (domain.domain, dm.method ())) {
+					llvm::Expected<void *> forward = dispatcher (domain, dm);
 
-					if (forward) {
-						raw->stub (entry).redirect (*forward);
-						return *forward;
-					}
+					if (forward)
+						return answer (*forward);
 					llvm::logAllUnhandledErrors (forward.takeError (),
 					                             llvm::errs (), "mono: ");
 				}
 
-				llvm::Expected<void *> code = entry_point (domain, *raw, entry);
+				llvm::Expected<void *> code = entry_point (domain, dm, entry);
 
-				if (code) {
-					raw->stub (entry).redirect (*code);
-					return *code;
-				}
+				if (code)
+					return answer (*code);
 
 				/*
 				 * A stub is the end of the line for a failure: the
@@ -491,8 +381,8 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 				 */
 				auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
 				llvm::Expected<Compiled> raising =
-					raise_on_call (*domain.jit, domain.domain,
-				                       raw->method, code.takeError (), note);
+					raise_on_call (*domain.jit, domain.domain, dm.method (),
+				                       code.takeError (), note);
 
 				if (!raising) {
 					llvm::logAllUnhandledErrors (raising.takeError (),
@@ -500,15 +390,15 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 					return (void *) &lazy_compile_failed;
 				}
 
-				raw->stub (entry).redirect (raising->at (entry));
-				return raising->at (entry);
+				return answer (raising->at (entry));
 			});
 		if (!trampoline) {
 			unwind ();
 			return trampoline.takeError ();
 		}
 
-		names.push_back (state->name (entry));
+		dm.set_name (entry, symbol + stub_suffix (entry).str ());
+		names.push_back (dm.name (entry));
 
 		/*
 		 * Body and unbox carry the method in the IMT register, which is also
@@ -527,8 +417,8 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 		}
 
 		stub->redirect (*trampoline);
-		state->stub (entry) = *stub;
-		state->trampoline (entry) = *trampoline;
+		dm.stub (entry) = *stub;
+		dm.trampoline (entry) = *trampoline;
 		defs.emplace_back (names.back (), stub->code ());
 	}
 
@@ -537,13 +427,13 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 	 * anything ever names it, so that releasing one is unconditional rather
 	 * than a question of whether some module happened to ask for it.
 	 *
-	 * Under mutex_, which is safe because defining takes the session lock and
-	 * gives it back: it materializes nothing, so nothing it runs can come back
-	 * here for this lock.
+	 * Under the domain's table lock, which is safe because defining takes the
+	 * session lock and gives it back: it materializes nothing, so nothing it
+	 * runs can come back here for that lock.
 	 */
 	if (llvm::Error err = domain.jit->define_stubs (defs)) {
 		unwind ();
-		return std::move (err);
+		return err;
 	}
 
 	/*
@@ -554,14 +444,18 @@ MonoBackend::publish (DomainState &domain, MonoMethod *method)
 	 * domain whose linker holds the stub, so the two die together.
 	 */
 	for (Entry entry : entries)
-		state->jinfo (entry) = register_stub_jinfo (domain.domain, method,
-		                                            state->stub (entry).code (),
-		                                            arch::stub_block_size,
-		                                            state->name (entry));
+		dm.jinfo (entry) = register_stub_jinfo (domain.domain, method,
+		                                        dm.stub (entry).code (),
+		                                        arch::stub_block_size, dm.name (entry));
 
-	state->published.assign (entries.begin (), entries.end ());
-	domain.methods[method] = std::move (state);
-	return raw;
+	dm.set_published (entries);
+	return llvm::Error::success ();
+}
+
+llvm::Error
+attach_method_entries (MonoDomainMethod &dm)
+{
+	return MonoBackend::attach (dm);
 }
 
 llvm::Error
@@ -569,11 +463,11 @@ MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
 {
 	return bind_method_symbols (
 		m, [&] (MonoMethod *method, Entry entry) -> llvm::Expected<std::string> {
-			llvm::Expected<MethodState *> state = publish (domain, method);
+			llvm::Expected<MonoDomainMethod *> published = publish (domain, method);
 
-			if (!state)
-				return state.takeError ();
-			return (*state)->name (entry);
+			if (!published)
+				return published.takeError ();
+			return (*published)->name (entry);
 		});
 }
 
@@ -585,10 +479,11 @@ MonoBackend::bind_externals (DomainState &domain, llvm::Module &m)
  * holds.
  */
 llvm::Expected<MonoBackend::Compiled>
-MonoBackend::interp_entries (DomainState &domain, MethodState &method)
+MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 {
+	MonoMethod *method = dm.method ();
 	llvm::Expected<const arch::InterpEntryPoint *> ready =
-		interp_entry (domain.domain, method.method);
+		interp_entry (domain.domain, method);
 
 	if (!ready)
 		return ready.takeError ();
@@ -599,22 +494,22 @@ MonoBackend::interp_entries (DomainState &domain, MethodState &method)
 
 	void *body = arch::interp_entry_thunk ();
 	Compiled entries { body, body,
-		           publishes_unbox_entry (method.method)
-		                   ? mono_arch_get_unbox_trampoline (method.method, body)
+		           publishes_unbox_entry (method)
+		                   ? mono_arch_get_unbox_trampoline (method, body)
 		                   : nullptr };
 
-	for (Entry each : method.published)
-		if (void *address = entries.at (each))
-			method.stub (each).redirect (address);
+	dm.publish (MonoTier::interp, [&] (Entry each) { return entries.at (each); });
 
 	MONO_LOCK (mutex_)
 	{
-		method.code = entries;
-		method.interpreted = true;
+		MethodState &engine = engine_state (dm);
+
+		engine.code = entries;
+		engine.interpreted = true;
 	}
 
 	if (is_jit_trace_enabled ()) {
-		char *name = mono_method_full_name (method.method, TRUE);
+		char *name = mono_method_full_name (method, TRUE);
 
 		fprintf (stderr, "[llvm-jit] interpreting %s (for %s)\n", name,
 		         domain.domain->friendly_name);
@@ -625,36 +520,38 @@ MonoBackend::interp_entries (DomainState &domain, MethodState &method)
 }
 
 llvm::Expected<void *>
-MonoBackend::dispatcher (DomainState &domain, MethodState &method)
+MonoBackend::dispatcher (DomainState &domain, MonoDomainMethod &dm)
 {
+	MethodState &engine = engine_state (dm);
+
 	MONO_LOCK (mutex_)
 	{
-		if (method.dispatch != nullptr)
-			return method.dispatch;
+		if (engine.dispatch != nullptr)
+			return engine.dispatch;
 	}
 
 	auto note = [&] (const CompiledMethod &compiled, MonoJitInfo *jinfo) {
-		if (!method.method->dynamic)
+		if (!dm.method ()->dynamic)
 			return;
 
 		MONO_LOCK (mutex_)
 		{
 			if (compiled.dylib != nullptr)
-				method.owned.dylibs.push_back (compiled.dylib);
+				engine.owned.dylibs.push_back (compiled.dylib);
 			if (jinfo != nullptr)
-				method.owned.jinfos.push_back (jinfo);
+				engine.owned.jinfos.push_back (jinfo);
 		}
 	};
 
 	llvm::Expected<void *> built =
-		build_dispatcher (*domain.jit, domain.domain, method.method, note);
+		build_dispatcher (*domain.jit, domain.domain, dm.method (), note);
 
 	if (!built)
 		return built;
 
 	MONO_LOCK (mutex_)
 	{
-		method.dispatch = *built;
+		engine.dispatch = *built;
 	}
 
 	return *built;
@@ -675,7 +572,7 @@ MonoBackend::body_for_current_domain (MonoMethod *method)
 		                                  + llvm::toString (domain.takeError ()),
 		                          false);
 
-	llvm::Expected<MethodState *> published = instance->publish (**domain, method);
+	llvm::Expected<MonoDomainMethod *> published = publish (**domain, method);
 
 	if (!published)
 		llvm::report_fatal_error (llvm::Twine ("a dispatched method could not be published: ")
@@ -694,15 +591,17 @@ MonoBackend::body_for_current_domain (MonoMethod *method)
 }
 
 llvm::Expected<void *>
-MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
+MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm, Entry entry)
 {
 	MONO_LOCK (mutex_)
 	{
-		if (method.code && !recompiling (method.method))
-			return method.code->at (entry);
+		MethodState &engine = engine_state (dm);
+
+		if (engine.code && !recompiling (dm.method ()))
+			return engine.code->at (entry);
 	}
 
-	llvm::Expected<Compiled> code = compile_body (domain, method, /*allow_tier0=*/true);
+	llvm::Expected<Compiled> code = compile_body (domain, dm, /*allow_tier0=*/true);
 
 	if (!code)
 		return code.takeError ();
@@ -711,8 +610,11 @@ MonoBackend::entry_point (DomainState &domain, MethodState &method, Entry entry)
 }
 
 llvm::Expected<MonoBackend::Compiled>
-MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_tier0)
+MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow_tier0)
 {
+	MonoMethod *method = dm.method ();
+	MethodState &engine = engine_state (dm);
+
 	/*
 	 * Materialize as the domain the code is for, not as whatever the calling
 	 * thread happens to be running as: a stub fires under the thread's current
@@ -727,7 +629,7 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 	 * tier ends up running it: a body the verifier rejects is one no tier may
 	 * run, and one it accepts is one every tier may.
 	 */
-	if (llvm::Error invalid = verify_method (method.method))
+	if (llvm::Error invalid = verify_method (method))
 		return std::move (invalid);
 
 	/*
@@ -738,8 +640,8 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 	 * being resolved and start its compile again below itself, with nothing to
 	 * stop it. Publishing first means such a call lands on the entry instead.
 	 */
-	if (allow_tier0 && runs_at_tier0 (method.method)) {
-		llvm::Expected<Compiled> entries = interp_entries (domain, method);
+	if (allow_tier0 && runs_at_tier0 (method)) {
+		llvm::Expected<Compiled> entries = interp_entries (domain, dm);
 
 		if (!entries) {
 			/*
@@ -751,7 +653,7 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 		} else {
 			ERROR_DECL (transform_error);
 
-			if (mini_get_interp_callbacks ()->transform_method (method.method,
+			if (mini_get_interp_callbacks ()->transform_method (method,
 			                                                    transform_error))
 				return *entries;
 
@@ -778,27 +680,26 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 	 * taken back out again - everything else dies with the domain.
 	 */
 	auto note = [&] (const CompiledMethod &compiled, MonoJitInfo *jinfo) {
-		if (!method.method->dynamic)
+		if (!method->dynamic)
 			return;
 
 		MONO_LOCK (mutex_)
 		{
 			if (compiled.dylib != nullptr)
-				method.owned.dylibs.push_back (compiled.dylib);
+				engine.owned.dylibs.push_back (compiled.dylib);
 			if (jinfo != nullptr)
-				method.owned.jinfos.push_back (jinfo);
+				engine.owned.jinfos.push_back (jinfo);
 		}
 	};
 	auto recover_failure = [&] (llvm::Error failure) -> llvm::Expected<Compiled> {
-		return recover (*domain.jit, domain.domain, method.method,
-		                std::move (failure), note);
+		return recover (*domain.jit, domain.domain, method, std::move (failure), note);
 	};
 
 	TranslationTarget target { domain.jit.get (), domain.domain, publish_callee,
 		                   stub_address, note, recover_failure };
 
 	llvm::Expected<Compiled> code =
-		translate_and_compile (target, method.method, &published);
+		translate_and_compile (target, method, &published);
 
 	if (!code)
 		return code.takeError ();
@@ -817,9 +718,7 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 	 * Every entry, not just the one asked for: the stubs are redirected together
 	 * so that whichever door a caller came in through it lands on this compile.
 	 */
-	for (Entry each : method.published)
-		if (void *address = code->at (each))
-			method.stub (each).redirect (address);
+	dm.publish (MonoTier::tier1, [&] (Entry each) { return code->at (each); });
 
 	/*
 	 * The body being replaced is not dead - a thread can still be running in it
@@ -827,11 +726,11 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 	 */
 	MONO_LOCK (mutex_)
 	{
-		if (method.code && method.code->jinfo != nullptr
-		    && method.code->jinfo != code->jinfo)
-			method.superseded.push_back (method.code->jinfo);
-		method.code = *code;
-		method.interpreted = false;
+		if (engine.code && engine.code->jinfo != nullptr
+		    && engine.code->jinfo != code->jinfo)
+			engine.superseded.push_back (engine.code->jinfo);
+		engine.code = *code;
+		engine.interpreted = false;
 	}
 
 	/*
@@ -848,7 +747,7 @@ MonoBackend::compile_body (DomainState &domain, MethodState &method, bool allow_
 	 * since been given code to call instead.
 	 */
 	if (mono_use_interpreter)
-		mini_get_interp_callbacks ()->method_compiled (domain.domain, method.method);
+		mini_get_interp_callbacks ()->method_compiled (domain.domain, method);
 
 	return *code;
 }
@@ -888,7 +787,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 	return owner->queue.enqueue (method, [self, owner, method] () {
 		/* The interpreter reaches a callee without the backend being asked
 		 * for it, so there may be no state for this method yet. */
-		llvm::Expected<MethodState *> published = self->publish (*owner, method);
+		llvm::Expected<MonoDomainMethod *> published = publish (*owner, method);
 
 		if (!published) {
 			llvm::logAllUnhandledErrors (published.takeError (), llvm::errs (),
@@ -1017,26 +916,29 @@ MonoBackend::release_method_impl (MonoMethod *method)
 	 * Every domain, not just the one that compiled it: a body reached across a
 	 * domain boundary is published in the calling domain's linker too.
 	 */
-	llvm::SmallVector<std::pair<DomainState *, std::unique_ptr<MethodState>>, 2> going;
+	llvm::SmallVector<DomainState *, 2> states;
+	llvm::SmallVector<std::pair<DomainState *, std::unique_ptr<MonoDomainMethod>>, 2> going;
 
+	/*
+	 * The domains under this lock and the records outside it. Taking a record
+	 * takes its domain's table lock, and the order everywhere else is the table
+	 * lock first.
+	 */
 	MONO_LOCK (mutex_)
 	{
-		for (const auto &entry : domains_) {
-			DomainState *state = entry.second.get ();
-
-			auto it = state->methods.find (method);
-			if (it == state->methods.end ())
-				continue;
-
-			going.emplace_back (state, std::move (it->second));
-			state->methods.erase (it);
-		}
+		for (const auto &entry : domains_)
+			states.push_back (entry.second.get ());
 	}
+
+	for (DomainState *state : states)
+		if (std::unique_ptr<MonoDomainMethod> dm =
+			    domain_method_take (state->domain, method))
+			going.emplace_back (state, std::move (dm));
 
 	// Undefining a stub waits on any link that is using it, so it happens with
 	// the backend's own lock dropped.
-	for (auto &[state, mstate] : going)
-		state->retire (*mstate);
+	for (auto &[state, dm] : going)
+		state->retire (*dm);
 }
 
 void *
@@ -1045,14 +947,14 @@ MonoBackend::body_of (MonoDomain *domain, MonoMethod *method)
 	if (!instance)
 		return nullptr;
 
+	MonoDomainMethod *dm = domain_method_find (domain, method);
+
+	if (dm == nullptr)
+		return nullptr;
+
 	MONO_LOCK (instance->mutex_)
 	{
-		auto state = instance->domains_.find (domain);
-
-		if (state == instance->domains_.end ())
-			return nullptr;
-
-		auto it = state->second->methods.find (method);
+		MethodState &engine = engine_state (*dm);
 
 		/*
 		 * An interpreted method is answered for as if it had none. What it has
@@ -1062,10 +964,9 @@ MonoBackend::body_of (MonoDomain *domain, MonoMethod *method)
 		 * reads it as "this has native code now" and starts calling it through
 		 * the native boundary instead of interpreting it.
 		 */
-		if (it == state->second->methods.end () || !it->second->code
-		    || it->second->interpreted)
+		if (!engine.code || engine.interpreted)
 			return nullptr;
-		return it->second->code->body;
+		return engine.code->body;
 	}
 
 	return nullptr;
@@ -1084,24 +985,19 @@ MonoBackend::foreach_body (MonoDomain *domain, MonoMethod *method,
 	 * same lock.
 	 */
 	llvm::SmallVector<MonoJitInfo *, 2> bodies;
+	MonoDomainMethod *dm = domain_method_find (domain, method);
+
+	if (dm == nullptr)
+		return;
 
 	MONO_LOCK (instance->mutex_)
 	{
-		auto state = instance->domains_.find (domain);
-
-		if (state == instance->domains_.end ())
-			return;
-
-		auto it = state->second->methods.find (method);
-
-		if (it == state->second->methods.end ())
-			return;
+		MethodState &engine = engine_state (*dm);
 
 		/* Oldest first, which is what a breakpoint walk expects. */
-		bodies.assign (it->second->superseded.begin (),
-		               it->second->superseded.end ());
-		if (it->second->code && it->second->code->jinfo != nullptr)
-			bodies.push_back (it->second->code->jinfo);
+		bodies.assign (engine.superseded.begin (), engine.superseded.end ());
+		if (engine.code && engine.code->jinfo != nullptr)
+			bodies.push_back (engine.code->jinfo);
 	}
 
 	for (MonoJitInfo *jinfo : bodies)
@@ -1121,7 +1017,7 @@ MonoBackend::unbox_entry_of (MonoMethod *method)
 		return nullptr;
 	}
 
-	llvm::Expected<MethodState *> published = instance->publish (**domain, method);
+	llvm::Expected<MonoDomainMethod *> published = publish (**domain, method);
 
 	if (!published) {
 		llvm::consumeError (published.takeError ());
@@ -1139,7 +1035,7 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	if (!state)
 		return state.takeError ();
 
-	llvm::Expected<MethodState *> published = publish (**state, method);
+	llvm::Expected<MonoDomainMethod *> published = publish (**state, method);
 
 	if (!published)
 		return published.takeError ();
@@ -1169,7 +1065,7 @@ MonoBackend::stub_for (MonoMethod *method, MonoDomain *domain)
 	if (!state)
 		return state.takeError ();
 
-	llvm::Expected<MethodState *> published = publish (**state, method);
+	llvm::Expected<MonoDomainMethod *> published = publish (**state, method);
 
 	if (!published)
 		return published.takeError ();

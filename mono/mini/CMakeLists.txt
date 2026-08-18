@@ -61,7 +61,7 @@ set(mini_sources
   "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
 if(MONO_ENABLE_LLVM)
-  list(APPEND mini_sources llvm-runtime.cpp)
+  list(APPEND mini_sources llvm-runtime.cpp domain-method.cpp)
 endif()
 
 mono_add_object_library(mini
