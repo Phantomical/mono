@@ -14,7 +14,7 @@ namespace mono::arch {
 
 // clang-format off
 static constexpr std::uint8_t thunk_code[32] = {
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // +0  slot: null until Stub::redirect () sets it
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // +0  slot: null until Thunk::redirect () sets it
 	0xCC, 0xCC, 0xCC, 0xCC,                         // +8  int3 padding
 
 	// +12 unbox: add rdi, sizeof(MonoObject)
@@ -27,7 +27,7 @@ static constexpr std::uint8_t thunk_code[32] = {
 };
 
 static constexpr std::uint8_t thunk_keyed_code[32] = {
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // +0  slot: null until Stub::redirect () sets it
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // +0  slot: null until Thunk::redirect () sets it
 	0xCC, 0xCC, 0xCC, 0xCC,                         // +8  int3 padding
 
 	// +12 unbox: add rdi, sizeof(MonoObject)
@@ -45,6 +45,13 @@ static constexpr size_t thunk_unbox_offset = 12;
 static constexpr size_t thunk_entry_offset = 16;
 static constexpr size_t thunk_key_offset = 18;
 static constexpr size_t thunk_size = 32;
+
+/// The jump block alone, entry_offset through the end of the group: what a
+/// runtime detour (Harmony, MonoMod) has to fit inside.
+static constexpr size_t thunk_block_size = thunk_size - thunk_entry_offset;
+
+/// What the whole group has to be aligned to.
+static constexpr size_t thunk_alignment = 16;
 
 /// Write a thunk at group, thunk_size bytes: the slot, the unbox prologue
 /// and the block. key, when given, is patched into the block's key

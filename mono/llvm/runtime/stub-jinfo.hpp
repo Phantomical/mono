@@ -22,11 +22,12 @@ namespace mono {
 /// function pointer does not become a delegate, and a stack walk that lands in
 /// the sixteen bytes in front of a body finds no frame.
 ///
-/// Returns the record when the caller has to take it out again, and null when it
-/// dies with its domain. A dynamic method's stub block goes back on the free list
-/// when the method is freed, so its record has to be removed before the next
-/// method lands there; every other method lives exactly as long as its domain,
-/// and so does its record.
+/// Returns the record when the caller has to take it out again, and null when
+/// it dies with its domain. A freed dynamic method returns its MonoMethod to
+/// the allocator. If the record stayed, it would still name the old
+/// MonoMethod, and a lookup could misattribute whatever lands at that address
+/// next - so the record has to come out first. Every other method lives
+/// exactly as long as its domain, and so does its record.
 MonoJitInfo *register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub,
                                   size_t size, const std::string &name);
 

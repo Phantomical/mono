@@ -53,7 +53,7 @@ resolve_externals (MonoJit &jit, MonoDomain *domain,
 			 * the same (name, address) pair twice - harmless, compile ()'s
 			 * SymbolMap collapses duplicate identical definitions.
 			 */
-			module_symbols.emplace_back ((*callee)->name, (*callee)->stub_address ());
+			module_symbols.emplace_back ((*callee)->name, (*callee)->thunk_address ());
 			continue;
 		}
 		}

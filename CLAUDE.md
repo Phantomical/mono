@@ -364,7 +364,7 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
   `mono_llvm_jit_compile_method ()` compiles a method into a domain's linker and hands
   back the address to call, and the rest is freeing a domain or a method, finding a
   compiled body, and the unbox entry. `runtime/backend.cpp` holds the state — one
-  `MethodState` per method with its stub, trampoline and jit infos together — and the
+  `MethodState` per method with its thunk, trampoline and jit infos together — and the
   rest of the directory is what a compile is made of: `naming`, `translate`, `externals`,
   `thrower`, `dispatcher`, `interp`, `options`. `runtime/builtins.cpp` registers the
   runtime helpers and libcalls generated code may name.
@@ -377,19 +377,21 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
 - **`compiler.cpp`** — `TargetMachine::addPassesToEmitMC` restated, so the EH passes get
   a seat between the machine passes and the AsmPrinter and the side tables can be
   written while the streamer is still open, with code offsets as label differences.
-- **`stubs.cpp`, `jitlink-memory.cpp`** — the redirectable stub every method is published
-  as, and the code memory both it and the compiled bodies are carved out of. A stub is
-  carved as a group of three, in one reservation: the slot it jumps through, the unbox
-  prologue, and the block itself, in that order. The prologue is the entry a call off a
-  value type's vtable or IMT arrives at. It steps the receiver past the object header
-  and then runs into the stub behind it, so it needs no target of its own and is right
-  at every tier. Every group has one, whether or not the method is a value type's.
-  `publishes_unbox_entry ()` (`runtime/naming.cpp`) decides who can be entered there,
-  and `mono_llvm_jit_unbox_entry ()` is the only place that hands the address out. The
-  prologue carries no symbol, and one jit info covers it and the stub together. A
-  wrapper native code enters gets an extra of its own, and that one is compiled rather
-  than carved: it is a module holding the thunk that takes a C call apart, and it
-  forwards through the stub the same way.
+- **`jitlink-memory.cpp`** — the code memory a domain's compiled bodies and thunks are
+  carved out of. The thunk itself — the redirectable jump every method is published as
+  — lives in `mono/mini/thunk.hpp`/`thunk.cpp` rather than here, engine-neutral like the
+  `MonoDomainMethod` record that owns it: publishing one is a single carve, with no
+  batching or reuse. A thunk is a group of three, in one reservation: the slot it jumps
+  through, the unbox prologue, and the block itself, in that order. The prologue is the
+  entry a call off a value type's vtable or IMT arrives at. It steps the receiver past
+  the object header and then runs into the thunk behind it, so it needs no target of its
+  own and is right at every tier. Every group has one, whether or not the method is a
+  value type's. `publishes_unbox_entry ()` (`runtime/naming.cpp`) decides who can be
+  entered there, and `mono_llvm_jit_unbox_entry ()` is the only place that hands the
+  address out. The prologue carries no symbol, and one jit info covers it and the thunk
+  together. A wrapper native code enters gets an extra of its own, and that one is
+  compiled rather than carved: it is a module holding the code that takes a C call
+  apart, and it forwards through the thunk the same way.
 - **`jinfo.cpp`** — turns a compiled object's side tables back into the `MonoJitInfo`
   the runtime's unwinder and stack walks read.
 - **`arch/`** — everything that names a register, encodes an instruction or restates the
@@ -409,8 +411,8 @@ reverse-engineering it from the emitted arithmetic.
 
 **Code memory is a `MonoCodeManager`.** A domain's `CodeArena` (`jitlink-memory.hpp`) is
 mono's own code manager plus a mutex. Everything the backend allocates comes out of it —
-a linked object's code, its read-only data and its mutable globals alike, and the stub
-batches — and all of it is read-write-execute for its whole life. Two things follow.
+a linked object's code, its read-only data and its mutable globals alike, and the
+thunks — and all of it is read-write-execute for its whole life. Two things follow.
 
 There is **no per-object free**. A code manager frees only whole, so a retired method
 keeps its bytes until the arena goes with the domain, and
@@ -458,9 +460,9 @@ decremented at the three places a call can arrive — the interpreter's `call:` 
 backend's compile queue. Nothing waits for that: a promotion that cannot be taken (a
 domain on its way out) simply does not happen, and the method stays where it is — the
 caller that was refused counts another threshold of calls. The counter has to sit where
-the interpreter can reach it rather than in a thunk in front of the method: a thunk only
-sees calls that arrive through a stub, and a call from one interpreted method to another
-arrives through none.
+the interpreter can reach it rather than in a wrapper in front of the method: such a
+wrapper only sees calls that arrive through the method's redirect thunk, and a call from
+one interpreted method to another arrives through none.
 
 `MONO_LLVM_JIT_TIER1_THRESHOLD` is the call count, default 10; zero there leaves tier-0
 methods interpreted for good, which is what separates a tier-0 entry bug from a promotion
@@ -477,7 +479,7 @@ outranks `MonoTier::detoured`, so the method never promotes again and a compile 
 running for it does not take the entry when it lands. It always succeeds — a patcher told
 no has nothing to fall back on. A patcher that instead writes a jump over the address
 `GetFunctionPointer` handed it still reaches every compiled caller, since that address is
-the stub, but nothing tells the interpreter, so interpreted callers keep interpreting the
+the thunk, but nothing tells the interpreter, so interpreted callers keep interpreting the
 method. An interpreted caller sees a detour that went through the API, because
 `resolve_code_type ()` reads the tier and makes a jit call to the entry instead — unless
 the interpreter has already copied the callee's body into it. `mono/unit-tests/detour.cs`

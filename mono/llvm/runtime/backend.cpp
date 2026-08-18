@@ -13,7 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <unistd.h>
-#include "stubs.hpp"
+#include <mono/mini/thunk.hpp>
 #include "util/lock.hpp"
 #include "builtins.hpp"
 #include "dispatcher.hpp"
@@ -36,7 +36,7 @@ namespace mono {
 namespace {
 
 /*
- * Where a stub lands when the compile behind it failed. The trampoline has
+ * Where a thunk lands when the compile behind it failed. The trampoline has
  * already put the call's arguments back and jumped here, so this is running as
  * the method the caller asked for: there is no value it could return and no
  * caller that would know what to do with one.
@@ -105,14 +105,14 @@ struct Owned {
 };
 
 /// What this engine keeps for one method in one domain, hung off that method's
-/// MonoDomainMethod record. The record owns the stub, the name, the tier and the
-/// bodies; this is what the engine needs beside them.
+/// MonoDomainMethod record. The record owns the thunk, the name, the tier and
+/// the bodies; this is what the engine needs beside them.
 struct MonoBackend::MethodState {
 	/// What this method's compiles put somewhere it has to be taken back out
 	/// of.
 	Owned owned;
 
-	/// The per-call dispatcher this method's stub got instead of a direct
+	/// The per-call dispatcher this method's thunk got instead of a direct
 	/// binding, when its first caller arrived from another domain.
 	void *dispatch = nullptr;
 };
@@ -121,18 +121,15 @@ struct MonoBackend::DomainState {
 	/// The actual domain we are tracking.
 	MonoDomain *domain;
 
-	/// The code memory we allocate the actual functions and stubs out of. It is
-	/// declared before everything that carves out of it, so it is destroyed
+	/// The code memory we allocate the actual functions and thunks out of. It
+	/// is declared before everything that carves out of it, so it is destroyed
 	/// after them.
 	CodeArena code;
 
 	/// The MonoJit that is used to compile methods.
 	std::unique_ptr<MonoJit> jit;
 
-	/// Allocator for thunks.
-	std::unique_ptr<StubSlabs> stub_slabs;
-
-	/// The re-entry trampolines a published-but-uncompiled stub points at.
+	/// The re-entry trampolines a published-but-uncompiled thunk points at.
 	std::unique_ptr<LazyCallbacks> callbacks;
 
 	CompileQueue::Channel queue;
@@ -143,7 +140,6 @@ struct MonoBackend::DomainState {
 	                                                            CompileQueue &queue)
 	{
 		auto state = std::make_unique<DomainState> (domain, queue);
-		state->stub_slabs = std::make_unique<StubSlabs> (&state->code);
 
 		auto jit = MonoJit::create (&state->code);
 		if (!jit)
@@ -189,10 +185,10 @@ MonoBackend::~MonoBackend ()
 }
 
 /*
- * A failure here means the method being freed is still reachable - a stub the
+ * A failure here means the method being freed is still reachable - a thunk the
  * linker will not give up, a block the table does not know about. There is
- * nothing to fall back to and continuing hands the next method a stub something
- * is still calling, so say what broke and stop.
+ * nothing to fall back to and continuing hands the next method a thunk
+ * something is still calling, so say what broke and stop.
  */
 static void
 must (llvm::Error err)
@@ -201,7 +197,7 @@ must (llvm::Error err)
 		return;
 
 	llvm::logAllUnhandledErrors (std::move (err), llvm::errs (), "mono: ");
-	llvm::report_fatal_error ("mono: could not release a method's stubs",
+	llvm::report_fatal_error ("mono: could not release a method's thunks",
 	                          /*GenCrashDiag=*/false);
 }
 
@@ -211,11 +207,11 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 	MethodState &engine = MonoBackend::engine_state (dm);
 
 	/*
-	 * The records first. A block on the free list belongs to whichever method
-	 * publishes next, and a lookup must never find a record covering memory a
-	 * later compile has already been handed - a delegate built over that
-	 * method's address would otherwise be bound to this one, by then freed
-	 * metadata.
+	 * The records first. Nothing publishes this method's thunk by name any more
+	 * for a lookup to find it through, so the jit-info table is what a
+	 * concurrent reference to this method resolves against. A lookup must never
+	 * find an entry for a method whose thunk has already gone into its fatal
+	 * trap.
 	 */
 	if (MonoJitInfo *jinfo = dm.jinfo)
 		mono_jit_info_table_remove (domain, jinfo);
@@ -224,15 +220,14 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 		mono_jit_info_table_remove (domain, jinfo);
 
 	/*
-	 * take_stub () is under the record's own lock, the same one stub_address ()
-	 * reads under - see its doc comment. Nothing publishes this method's stub
-	 * by name any more for a lookup to find it through, so the record itself
-	 * is what a concurrent reference to this method resolves against, and
-	 * that lock is what keeps such a read from landing after the block is
-	 * back on the free list.
+	 * take_thunk () is under the record's own lock, the same one thunk_address ()
+	 * reads under - see its doc comment - so a concurrent thunk_address () always
+	 * sees a fully-published thunk, never a torn read of the record. What follows
+	 * is a single atomic store in Thunk::redirect (): any caller going through the
+	 * address it returned lands on the live target or the trap, never in between.
 	 */
 	callbacks->release (dm.trampoline);
-	stub_slabs->release (dm.take_stub ());
+	dm.take_thunk ().quarantine ();
 
 	if (!engine.owned.dylibs.empty ())
 		must (jit->remove_dylibs (engine.owned.dylibs));
@@ -284,14 +279,14 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 
 	llvm::Expected<void *> trampoline = domain.callbacks->reserve (
 		[this, &domain, &dm] () -> void * {
-			/* The stub follows, so the next call skips the trampoline. */
+			/* The thunk follows, so the next call skips the trampoline. */
 			auto answer = [&] (void *code) {
 				dm.publish (MonoTier::none, code);
 				return code;
 			};
 
 			/*
-			 * The thread that fires a stub is not necessarily running as
+			 * The thread that fires a thunk is not necessarily running as
 			 * the domain that owns it, so binding here can weld one
 			 * domain's copy into another's code. It goes to a dispatcher
 			 * instead, which picks the body out per call.
@@ -311,7 +306,7 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 				return answer (*code);
 
 			/*
-			 * A stub is the end of the line for a failure: the trampoline
+			 * A thunk is the end of the line for a failure: the trampoline
 			 * behind it has already put the call's arguments back, and no
 			 * caller is expecting a miss. So it becomes a body that
 			 * raises, and costs the one method that could not be compiled
@@ -335,36 +330,35 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	dm.name = stub_symbol (method);
 
 	/*
-	 * The stub carries the method in the IMT register, which is also where a
+	 * The thunk carries the method in the IMT register, which is also where a
 	 * shared generic reads its runtime generic context. attach_entry () runs
 	 * exactly once per record - domain_method_get ()'s get-or-create sees to
-	 * that - so there is no existing stub to collide with.
+	 * that - so there is no existing thunk to collide with.
 	 */
-	llvm::Expected<Stub> stub = domain.stub_slabs->allocate (method);
+	llvm::Expected<Thunk> thunk = allocate_thunk (&domain.code, method);
 
-	if (!stub) {
+	if (!thunk) {
 		domain.callbacks->release (*trampoline);
-		return stub.takeError ();
+		return thunk.takeError ();
 	}
 
-	stub->redirect (*trampoline);
-	dm.stub = *stub;
+	thunk->redirect (*trampoline);
+	dm.thunk = *thunk;
 	dm.trampoline = *trampoline;
 
 	/*
-	 * A stub is the only address the runtime ever sees for the method, so
+	 * A thunk is the only address the runtime ever sees for the method, so
 	 * anything recovering a method from a code pointer - delegate creation off
 	 * an ldftn most visibly - has to find it in the jit-info table. Registered
 	 * the way mini registers trampolines: an entry carrying the method, in the
-	 * domain whose linker holds the stub, so the two die together.
+	 * domain whose linker holds the thunk, so the two die together.
 	 *
-	 * It covers the unbox prologue as well as the stub. Both are the method, and
-	 * a walk that catches a thread on either has the same frame to step off. So
-	 * one record answers for the two.
+	 * It covers the unbox prologue as well as the thunk. Both are the method,
+	 * and a walk that catches a thread on either has the same frame to step
+	 * off. So one record answers for the two.
 	 */
-	dm.jinfo = register_stub_jinfo (domain.domain, method, stub->unbox_entry (),
-	                                arch::unbox_prologue_size + arch::stub_block_size,
-	                                dm.name);
+	dm.jinfo = register_stub_jinfo (domain.domain, method, thunk->unbox_entry (),
+	                                thunk_unbox_span, dm.name);
 	return llvm::Error::success ();
 }
 
@@ -383,7 +377,7 @@ attach_interop_entry (MonoDomainMethod &dm)
 /*
  * A caller arriving here speaks C, so the entry is real code rather than a
  * carved block: it takes the call apart into the values this engine's
- * convention wants. It calls the method's stub rather than any one body, so it
+ * convention wants. It calls the method's thunk rather than any one body, so it
  * is right at every tier and a promotion redirects it with everything else.
  */
 llvm::Error
@@ -420,7 +414,7 @@ MonoBackend::attach_interop (MonoDomainMethod &dm)
 	};
 
 	llvm::Expected<void *> code =
-		compile_interop_entry (*(*domain)->jit, (*domain)->domain, method, dm.stub.code (), note);
+		compile_interop_entry (*(*domain)->jit, (*domain)->domain, method, dm.thunk.code (), note);
 
 	if (!code)
 		return code.takeError ();
@@ -546,7 +540,7 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 
 	/*
 	 * Materialize as the domain the code is for, not as whatever the calling
-	 * thread happens to be running as: a stub fires under the thread's current
+	 * thread happens to be running as: a thunk fires under the thread's current
 	 * domain, and AppDomain:InvokeInDomain switches that before calling. An
 	 * address baked in from the wrong domain is a pointer into another domain's
 	 * vtables and statics, live until that domain unloads under it.
@@ -562,9 +556,9 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 		return std::move (invalid);
 
 	/*
-	 * The stubs are pointed at the interpreter before the method is
+	 * The thunks are pointed at the interpreter before the method is
 	 * transformed, and that order matters: transforming runs the class
-	 * initializer, and this can be running inside a lazy stub's callback. A
+	 * initializer, and this can be running inside a lazy thunk's callback. A
 	 * cctor that calls back into this very method would re-enter the trampoline
 	 * being resolved and start its compile again below itself, with nothing to
 	 * stop it. Publishing first means such a call lands on the entry instead.
@@ -828,8 +822,8 @@ MonoBackend::release_method_impl (MonoMethod *method)
 			    domain_method_take (state->domain, method))
 			going.emplace_back (state, std::move (dm));
 
-	// Undefining a stub waits on any link that is using it, so it happens with
-	// the backend's own lock dropped.
+	// Removing a dylib waits on any link that is still using symbols in it, so
+	// retire () happens with the backend's own lock dropped.
 	for (auto &[state, dm] : going)
 		state->retire (*dm);
 }
@@ -925,7 +919,7 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 		return published.takeError ();
 
 	/*
-	 * Compiled here rather than on the first call through the stub. Two reasons,
+	 * Compiled here rather than on the first call through the thunk. Two reasons,
 	 * and the second is not an optimisation: a refusal can come back through
 	 * MonoError and be raised by the runtime, which knows how to throw from
 	 * where it stands; and the caller may hand the address to native code that
@@ -935,11 +929,11 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	if (llvm::Error err = entry_point (**state, **published).takeError ())
 		return std::move (err);
 
-	/* The C door where the method has one, and the stub itself otherwise. */
+	/* The C door where the method has one, and the thunk itself otherwise. */
 	if (publishes_interop_entry (method))
 		return (*published)->interop_entry ();
 
-	return (*published)->stub.code ();
+	return (*published)->thunk.code ();
 }
 
 llvm::Expected<void *>
@@ -955,7 +949,7 @@ MonoBackend::stub_for (MonoMethod *method, MonoDomain *domain)
 	if (!published)
 		return published.takeError ();
 
-	return (*published)->stub.code ();
+	return (*published)->thunk.code ();
 }
 
 } // namespace mono

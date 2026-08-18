@@ -65,7 +65,7 @@ MonoDomainMethod::publish (MonoTier tier, void *code)
 	if (tier < tier_.load (std::memory_order_relaxed))
 		return false;
 
-	stub.redirect (code);
+	thunk.redirect (code);
 	tier_.store (tier, std::memory_order_release);
 	return true;
 }
@@ -99,19 +99,19 @@ MonoDomainMethod::promote ()
 }
 
 void *
-MonoDomainMethod::stub_address () const
+MonoDomainMethod::thunk_address () const
 {
 	std::lock_guard<std::mutex> held (lock_);
 
-	return stub.code ();
+	return thunk.code ();
 }
 
-Stub
-MonoDomainMethod::take_stub ()
+Thunk
+MonoDomainMethod::take_thunk ()
 {
 	std::lock_guard<std::mutex> held (lock_);
 
-	return stub;
+	return thunk;
 }
 
 void
@@ -187,7 +187,7 @@ void
 MonoDomainMethod::install_detour (void *target)
 {
 	/*
-	 * The stub only. The unbox and interop entries reach the method through it,
+	 * The thunk only. The unbox and interop entries reach the method through it,
 	 * each having done something first - stepping the receiver past the object
 	 * header, taking a C call apart - that pointing them at the target would
 	 * take away.

@@ -10,10 +10,10 @@
  * LLVM's own ELFDebugObjectPlugin does the same job and does it correctly right
  * up to the point where code goes away: it registers through an alloc action
  * with no matching deallocation action, and its notifyRemovingResources frees
- * the object it registered without telling the debugger. Code addresses here are
- * recycled - a freed dynamic method's stub block and slab bytes go straight back
- * on the free list - so an entry left standing points a debugger at whatever
- * landed there next. Hence retract () below.
+ * the debug object's own backing memory without telling the debugger - a
+ * separate allocation from the compiled code, which this backend never frees
+ * per method. An entry left standing past that point is a dangling pointer.
+ * Hence retract () below.
  */
 
 #ifndef MONO_LLVM_GDB_JIT_HPP

@@ -13,7 +13,7 @@
 #ifndef MONO_MINI_DOMAIN_METHOD_HPP
 #define MONO_MINI_DOMAIN_METHOD_HPP
 
-#include <mono/llvm/stubs.hpp>
+#include "thunk.hpp"
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
@@ -44,7 +44,7 @@ struct InterpEntryLayout;
 /// The order is the ranking publish () compares, so a tier added later goes
 /// between tier1 and detoured rather than at the end.
 enum class MonoTier : uint8_t {
-	/// Published, with no code yet: the stub points at the lazy resolver.
+	/// Published, with no code yet: the thunk points at the lazy resolver.
 	none = 0,
 	interp = 1,
 	tier1 = 2,
@@ -97,7 +97,7 @@ public:
 	MonoMethod *const method;
 	MonoDomain *const domain;
 
-	/// The symbol the method's stub is published under. Empty until the engine
+	/// The symbol the method's thunk is published under. Empty until the engine
 	/// has attached, since the mangling is the engine's and nothing else has one.
 	std::string name;
 
@@ -131,7 +131,7 @@ public:
 	/// on. A detour that is installed works for every compiled caller.
 	void install_detour (void *target);
 
-	/* -- The stubs ------------------------------------------------------- */
+	/* -- The thunks -------------------------------------------------------- */
 
 	/// The entry a call off a value type's vtable or IMT arrives at.
 	///
@@ -140,12 +140,12 @@ public:
 	/// ever has to rewrite it. Every method has one, used or not. Hand it out
 	/// only for a method the engine accepts: a receiver with no object header in
 	/// front of it is stepped past bytes that are not there.
-	void *unbox_entry () const { return stub ? stub.unbox_entry () : nullptr; }
+	void *unbox_entry () const { return thunk ? thunk.unbox_entry () : nullptr; }
 
 	/// The C-convention entry native code enters the method through, compiled
 	/// on first ask. Null for a method nothing native enters.
 	///
-	/// It calls through the method's stub, so whatever redirects the method
+	/// It calls through the method's thunk, so whatever redirects the method
 	/// redirects this too and no tier ever has to rebuild it.
 	llvm::Expected<void *> interop_entry ();
 
@@ -155,27 +155,26 @@ public:
 	}
 
 	/// The one entry every caller reaches the method at.
-	Stub stub;
+	Thunk thunk;
 
-	/// The stub's address, read under the record's own lock.
+	/// The thunk's address, read under the record's own lock.
 	///
 	/// A caller that publishes a fresh reference to this method - resolving a
 	/// call target against this record, say - reads this while the record is
-	/// still the one answering for the method. take_stub () takes the same
+	/// still the one answering for the method. take_thunk () takes the same
 	/// lock at retire, so the two can never interleave: whichever runs first is
-	/// what the other sees, rather than a read landing between a release and
-	/// the carve that hands the same memory to an unrelated method.
-	void *stub_address () const;
+	/// what the other sees.
+	void *thunk_address () const;
 
-	/// Hands back the record's stub, under the same lock stub_address () reads
-	/// under, for the caller to release. Called once, at retire.
-	Stub take_stub ();
+	/// Hands back the record's thunk, under the same lock thunk_address ()
+	/// reads under, for the caller to quarantine. Called once, at retire.
+	Thunk take_thunk ();
 
-	/// The re-entry trampoline the stub was published pointing at, held so it
-	/// can be given back once nothing can reach the stub.
+	/// The re-entry trampoline the thunk was published pointing at, held so it
+	/// can be given back once nothing can reach the thunk.
 	void *trampoline = nullptr;
 
-	/// The jit-info record the stub was registered under.
+	/// The jit-info record the thunk was registered under.
 	MonoJitInfo *jinfo = nullptr;
 
 	/* -- The bodies ------------------------------------------------------ */
@@ -238,7 +237,7 @@ private:
 	mutable std::mutex lock_;
 };
 
-/// Gives \p dm the stub it is called through, and whatever state the engine
+/// Gives \p dm the thunk it is called through, and whatever state the engine
 /// keeps behind it.
 ///
 /// The compiling engine defines this, and each record goes through it once. A
@@ -258,7 +257,7 @@ MonoDomainMethod *domain_method_find (MonoDomain *domain, MonoMethod *method);
 
 /// The record for \p method in \p domain, built and published on first ask.
 ///
-/// Building one carves the stub the method is called through, so this fails for
+/// Building one carves the thunk the method is called through, so this fails for
 /// the same reasons publishing does. Two threads asking at once get the same
 /// record.
 llvm::Expected<MonoDomainMethod *> domain_method_get (MonoDomain *domain,
@@ -273,7 +272,7 @@ void domain_method_foreach (MonoDomain *domain,
 
 /// Takes \p method's record out of \p domain and hands it over.
 ///
-/// The caller has to retire what the record holds - stubs, symbols, jit infos -
+/// The caller has to retire what the record holds - thunks, symbols, jit infos -
 /// before dropping it. Answers null when the domain has no record for it.
 std::unique_ptr<MonoDomainMethod> domain_method_take (MonoDomain *domain,
                                                       MonoMethod *method);

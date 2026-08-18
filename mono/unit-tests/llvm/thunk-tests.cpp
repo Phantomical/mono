@@ -1,19 +1,20 @@
 /*
- * Tests for the redirectable stubs a method is published as.
+ * Tests for the redirectable thunks a method is published as.
  *
- * Three things have to hold: a call through a stub reaches whatever the stub
- * currently points at; compiled code binds to the stub rather than to the
- * target it happened to have at link time; and a runtime detour written over a
- * stub - what Harmony does to every method it patches - keeps working across a
- * redirect, and lands on the newest target once it is removed.
+ * Three things have to hold: a call through a thunk reaches whatever the
+ * thunk currently points at; compiled code binds to the thunk rather than to
+ * the target it happened to have at link time; and a runtime detour written
+ * over a thunk - what Harmony does to every method it patches - keeps
+ * working across a redirect, and lands on the newest target once it is
+ * removed.
  *
  * MonoJit resolves a module's callee references per-compile now, from
- * addresses the caller already has rather than from anything published under a
- * name it keeps itself - see MonoJit::compile ()'s module_symbols parameter.
- * The Engine below stands in for that caller: it carves stubs the same way the
- * backend does, and keeps its own local name -> Stub map so a test can carve
- * once and reference the same stub from several compiles, the way the
- * backend's MonoDomainMethod table does.
+ * addresses the caller already has rather than from anything published under
+ * a name it keeps itself - see MonoJit::compile ()'s module_symbols
+ * parameter. The Engine below stands in for that caller: it carves thunks the
+ * same way the backend does, and keeps its own local name -> Thunk map so a
+ * test can carve once and reference the same thunk from several compiles,
+ * the way the backend's MonoDomainMethod table does.
  */
 
 #include "arch/arch.hpp"
@@ -21,8 +22,10 @@
 #include "harness.hpp"
 #include "jitlink-memory.hpp"
 #include "jit.hpp"
-#include "stubs.hpp"
 
+#include <mono/mini/thunk.hpp>
+
+#include <mono/arch/amd64/amd64-thunk.hpp>
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/domain-internals.h>
 #include <mono/metadata/object.h>
@@ -57,25 +60,25 @@ namespace test {
 namespace {
 
 extern "C" int32_t
-stub_target_one ()
+thunk_target_one ()
 {
 	return 1;
 }
 
 extern "C" int32_t
-stub_target_two ()
+thunk_target_two ()
 {
 	return 2;
 }
 
 extern "C" int32_t
-stub_target_three ()
+thunk_target_three ()
 {
 	return 3;
 }
 
 extern "C" int32_t
-stub_detour_target ()
+thunk_detour_target ()
 {
 	return 99;
 }
@@ -83,13 +86,13 @@ stub_detour_target ()
 /* The two below stand in for a value type's method. They report the receiver
  * they were entered with, which is what the unbox entry acted on. */
 extern "C" uint8_t *
-stub_receiver_target_one (uint8_t *receiver)
+thunk_receiver_target_one (uint8_t *receiver)
 {
 	return receiver;
 }
 
 extern "C" uint8_t *
-stub_receiver_target_two (uint8_t *receiver)
+thunk_receiver_target_two (uint8_t *receiver)
 {
 	return receiver + 1;
 }
@@ -97,22 +100,22 @@ stub_receiver_target_two (uint8_t *receiver)
 using IntFn = int32_t (*) ();
 using ReceiverFn = uint8_t *(*) (uint8_t *);
 
-/// Where a lazy stub lands when the compile behind it failed, which no case here
-/// arranges for.
+/// Where a lazy thunk lands when the compile behind it failed, which no case
+/// here arranges for.
 [[noreturn]] static void
 lazy_failed ()
 {
-	ADD_FAILURE () << "a lazy stub's compile failed";
+	ADD_FAILURE () << "a lazy thunk's compile failed";
 	std::abort ();
 }
 
 /*
- * A domain's engine: the domain's code manager, the linker over it, the stubs
- * carved out of it and the trampolines an uncompiled one points at.
+ * A domain's engine: the domain's code manager, the linker over it, the
+ * thunks carved out of it and the trampolines an uncompiled one points at.
  *
- * A published stub is not named anywhere MonoJit can see. The map here is
+ * A published thunk is not named anywhere MonoJit can see. The map here is
  * this Engine's own bookkeeping - the equivalent of a backend's
- * MonoDomainMethod table - so a test can carve a stub once under a name and
+ * MonoDomainMethod table - so a test can carve a thunk once under a name and
  * reference it from several compiles, the way a caller's module resolves a
  * callee it already has the record for.
  */
@@ -137,23 +140,23 @@ public:
 
 	MonoJit &jit () { return *jit_; }
 
-	/// Publish NAME as a stub jumping to TARGET and return the address callers
-	/// reach it at.
+	/// Publish NAME as a thunk jumping to TARGET and return the address
+	/// callers reach it at.
 	Expected<void *> publish (StringRef name, void *target)
 	{
-		Expected<Stub> stub = stubs_.allocate (nullptr);
+		Expected<Thunk> thunk = allocate_thunk (&arena_, nullptr);
 
-		if (!stub)
-			return stub.takeError ();
+		if (!thunk)
+			return thunk.takeError ();
 
-		stub->redirect (target);
+		thunk->redirect (target);
 
 		std::lock_guard<std::mutex> lock (published_mutex_);
-		published_[name] = *stub;
-		return stub->code ();
+		published_[name] = *thunk;
+		return thunk->code ();
 	}
 
-	/// Publish NAME as a stub that runs COMPILE on its first call and goes
+	/// Publish NAME as a thunk that runs COMPILE on its first call and goes
 	/// straight to what that produced from then on - what a method published
 	/// before it is compiled looks like.
 	Expected<void *> publish_lazy (StringRef name,
@@ -177,19 +180,19 @@ public:
 		if (!trampoline)
 			return trampoline.takeError ();
 
-		Expected<Stub> stub = stubs_.allocate (nullptr);
+		Expected<Thunk> thunk = allocate_thunk (&arena_, nullptr);
 
-		if (!stub) {
+		if (!thunk) {
 			callbacks_->release (*trampoline);
-			return stub.takeError ();
+			return thunk.takeError ();
 		}
 
-		stub->redirect (*trampoline);
+		thunk->redirect (*trampoline);
 
 		std::lock_guard<std::mutex> lock (published_mutex_);
-		published_[name] = *stub;
+		published_[name] = *thunk;
 		trampolines_[name] = *trampoline;
-		return stub->code ();
+		return thunk->code ();
 	}
 
 	Error redirect (StringRef name, void *target)
@@ -199,7 +202,7 @@ public:
 
 		if (it == published_.end ())
 			return createStringError (inconvertibleErrorCode (),
-			                          "no stub was published for %s",
+			                          "no thunk was published for %s",
 			                          name.str ().c_str ());
 		it->second.redirect (target);
 		return Error::success ();
@@ -212,13 +215,13 @@ public:
 
 		if (it == published_.end ())
 			return createStringError (inconvertibleErrorCode (),
-			                          "no stub was published for %s",
+			                          "no thunk was published for %s",
 			                          name.str ().c_str ());
 		return it->second.code ();
 	}
 
-	/// Give NAMES' trampolines back and release their stubs' memory - what the
-	/// backend does to a method's stub when it is freed.
+	/// Give NAMES' trampolines back and quarantine their thunks - what the
+	/// backend does to a method's thunk when it is freed.
 	Error retire (ArrayRef<std::string> names)
 	{
 		for (const std::string &name : names) {
@@ -227,7 +230,7 @@ public:
 
 			if (it == published_.end ())
 				return createStringError (inconvertibleErrorCode (),
-				                          "no stub was published for %s",
+				                          "no thunk was published for %s",
 				                          name.c_str ());
 
 			auto trampoline = trampolines_.find (name);
@@ -236,13 +239,13 @@ public:
 				trampolines_.erase (trampoline);
 			}
 
-			stubs_.release (it->second);
+			it->second.quarantine ();
 			published_.erase (it);
 		}
 		return Error::success ();
 	}
 
-	/// Compile a module whose undefined references name published stubs,
+	/// Compile a module whose undefined references name published thunks,
 	/// resolving NAMES against what this engine has for them - the same
 	/// per-module binding resolve_externals ()/MonoJit::compile () use in the
 	/// backend, in place of a shared table a link would otherwise search.
@@ -263,25 +266,25 @@ public:
 	}
 
 private:
-	Engine () : stubs_ (&arena_) {}
+	Engine () = default;
 
 	/// Declared first, so it outlives everything carved out of it.
 	CodeArena arena_;
 	std::unique_ptr<MonoJit> jit_;
-	/// Thread safe on its own - see its doc comment. published_/trampolines_
-	/// below are this Engine's own bookkeeping and need their own lock.
-	StubSlabs stubs_;
 	std::unique_ptr<LazyCallbacks> callbacks_;
+	/// published_/trampolines_ are this Engine's own bookkeeping and need
+	/// their own lock; allocate_thunk () itself has no shared state beyond
+	/// CodeArena::reserve ()'s, which is already thread safe on its own.
 	std::mutex published_mutex_;
-	StringMap<Stub> published_;
+	StringMap<Thunk> published_;
 	StringMap<void *> trampolines_;
 };
 
 /*
- * Stubs come out of the root domain's code manager, so these need a runtime -
- * which needs a class library to boot on.
+ * Thunks come out of the root domain's code manager, so these need a runtime
+ * - which needs a class library to boot on.
  */
-class Stubs : public ::testing::Test {
+class Thunks : public ::testing::Test {
 public:
 	static void SetUpTestSuite ()
 	{
@@ -290,7 +293,7 @@ public:
 	}
 };
 
-class LazyStubs : public Stubs {};
+class LazyThunks : public Thunks {};
 
 /// Build an engine, or fail the case that asked for one.
 static std::unique_ptr<Engine>
@@ -342,7 +345,7 @@ static ThreadSafeModule
 build_constant_module (int32_t value)
 {
 	auto context = std::make_unique<LLVMContext> ();
-	auto module = std::make_unique<Module> ("stub.constant", *context);
+	auto module = std::make_unique<Module> ("thunk.constant", *context);
 
 	FunctionType *fty = FunctionType::get (Type::getInt32Ty (*context), false);
 	Function *fn = Function::Create (fty, Function::ExternalLinkage, "constant",
@@ -361,7 +364,7 @@ static ThreadSafeModule
 build_caller_module (const char *callee_name)
 {
 	auto context = std::make_unique<LLVMContext> ();
-	auto module = std::make_unique<Module> ("stub.caller", *context);
+	auto module = std::make_unique<Module> ("thunk.caller", *context);
 
 	FunctionType *fty = FunctionType::get (Type::getInt32Ty (*context), false);
 	FunctionCallee callee = module->getOrInsertFunction (callee_name, fty);
@@ -396,122 +399,98 @@ make_writable (void *addr, size_t len)
  */
 constexpr size_t detour_size = 14;
 
-static_assert (detour_size <= arch::stub_block_size,
-               "a detour has to fit inside the stub it patches");
+static_assert (detour_size <= arch::thunk_block_size,
+               "a detour has to fit inside the thunk it patches");
 
 static void
-write_detour (void *stub, void *target, char (&saved)[detour_size])
+write_detour (void *thunk, void *target, char (&saved)[detour_size])
 {
-	make_writable (stub, detour_size);
-	std::memcpy (saved, stub, detour_size);
+	make_writable (thunk, detour_size);
+	std::memcpy (saved, thunk, detour_size);
 
 	char patch[detour_size] = { '\xff', '\x25', 0, 0, 0, 0 };
 	std::memcpy (patch + 6, &target, sizeof (target));
-	std::memcpy (stub, patch, detour_size);
+	std::memcpy (thunk, patch, detour_size);
 }
 
-TEST_F (Stubs, CallsInitialTargetAndFollowsRedirects)
+TEST_F (Thunks, CallsInitialTargetAndFollowsRedirects)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
-	auto stub = engine->publish ("m", (void *) &stub_target_one);
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
-	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 1);
+	auto thunk = engine->publish ("m", (void *) &thunk_target_one);
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
+	EXPECT_EQ (reinterpret_cast<IntFn> (*thunk) (), 1);
 
-	ASSERT_FALSE (bool (engine->redirect ("m", (void *) &stub_target_two)));
-	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 2);
+	ASSERT_FALSE (bool (engine->redirect ("m", (void *) &thunk_target_two)));
+	EXPECT_EQ (reinterpret_cast<IntFn> (*thunk) (), 2);
 
 	/* The published address never moves - that is the whole point of it. */
 	auto again = engine->address ("m");
 	ASSERT_TRUE (bool (again)) << toString (again.takeError ());
-	EXPECT_EQ (*again, *stub);
+	EXPECT_EQ (*again, *thunk);
 }
 
 /*
- * The entry a call off a value type's vtable or IMT arrives at. It sits in front
- * of the stub and runs into it, so it needs no target of its own. Whatever the
- * stub points at is where the receiver arrives, one object header on.
+ * The entry a call off a value type's vtable or IMT arrives at. It sits in
+ * front of the thunk and runs into it, so it needs no target of its own.
+ * Whatever the thunk points at is where the receiver arrives, one object
+ * header on.
  *
- * Driven off StubSlabs rather than the Engine: nothing here names the stub at
- * all.
+ * Driven off allocate_thunk () directly rather than the Engine: nothing here
+ * needs a name for the thunk at all.
  */
-TEST_F (Stubs, TheUnboxEntryStepsTheReceiverPastTheObjectHeader)
+TEST_F (Thunks, TheUnboxEntryStepsTheReceiverPastTheObjectHeader)
 {
 	CodeArena arena;
-	StubSlabs stubs (&arena);
 
-	Expected<Stub> stub = stubs.allocate (nullptr);
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+	Expected<Thunk> thunk = allocate_thunk (&arena, nullptr);
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
-	stub->redirect ((void *) &stub_receiver_target_one);
+	thunk->redirect ((void *) &thunk_receiver_target_one);
 
-	auto unbox = reinterpret_cast<ReceiverFn> (stub->unbox_entry ());
+	auto unbox = reinterpret_cast<ReceiverFn> (thunk->unbox_entry ());
 	uint8_t boxed[64] = {};
 
 	EXPECT_EQ (unbox (boxed), boxed + MONO_ABI_SIZEOF (MonoObject));
 
 	/* The fall-through is what makes this right at every tier. Nothing
-	 * rewrites the entry, and a redirect of the stub moves it too. */
-	stub->redirect ((void *) &stub_receiver_target_two);
+	 * rewrites the entry, and a redirect of the thunk moves it too. */
+	thunk->redirect ((void *) &thunk_receiver_target_two);
 	EXPECT_EQ (unbox (boxed), boxed + MONO_ABI_SIZEOF (MonoObject) + 1);
 }
 
-/*
- * A stub is 24 bytes of the low-memory pool, which is one gigabyte for the
- * whole process. A program that mints DynamicMethods forever - what a compiler
- * emitting lambdas does - would walk through it if freeing a method never gave
- * the block back.
- */
-TEST_F (Stubs, AnUndefinedStubIsHandedOutAgain)
+TEST_F (Thunks, CompiledCallersBindToTheThunk)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
-	auto first = engine->publish ("m", (void *) &stub_target_one);
-	ASSERT_TRUE (bool (first)) << toString (first.takeError ());
-
-	ASSERT_FALSE (bool (engine->retire ({ "m" })));
-
-	/* A different name, so this is the block being reused. */
-	auto second = engine->publish ("n", (void *) &stub_target_two);
-	ASSERT_TRUE (bool (second)) << toString (second.takeError ());
-
-	EXPECT_EQ (*first, *second);
-	EXPECT_EQ (reinterpret_cast<IntFn> (*second) (), 2);
-}
-
-TEST_F (Stubs, CompiledCallersBindToTheStub)
-{
-	std::unique_ptr<Engine> engine = make_engine ();
-	ASSERT_NE (engine, nullptr);
-
-	ASSERT_TRUE (bool (engine->publish ("m", (void *) &stub_target_one)));
+	ASSERT_TRUE (bool (engine->publish ("m", (void *) &thunk_target_one)));
 
 	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
 	/*
-	 * The caller was compiled and linked while the stub pointed at target one.
-	 * If it had bound to that address, this would still return 1 - a promotion
-	 * would be invisible to everything already compiled.
+	 * The caller was compiled and linked while the thunk pointed at target
+	 * one. If it had bound to that address, this would still return 1 - a
+	 * promotion would be invisible to everything already compiled.
 	 */
-	ASSERT_FALSE (bool (engine->redirect ("m", (void *) &stub_target_two)));
+	ASSERT_FALSE (bool (engine->redirect ("m", (void *) &thunk_target_two)));
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 2);
 }
 
-TEST_F (Stubs, GeometryLeavesRoomForADetour)
+TEST_F (Thunks, GeometryLeavesRoomForADetour)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
-	auto a = engine->publish ("a", (void *) &stub_target_one);
-	auto b = engine->publish ("b", (void *) &stub_target_two);
+	auto a = engine->publish ("a", (void *) &thunk_target_one);
+	auto b = engine->publish ("b", (void *) &thunk_target_two);
 	ASSERT_TRUE (bool (a)) << toString (a.takeError ());
 	ASSERT_TRUE (bool (b)) << toString (b.takeError ());
 
-	char bytes[arch::stub_block_size];
+	char bytes[arch::thunk_block_size];
 	std::memcpy (bytes, *a, sizeof (bytes));
 
 	/* jmpq *ptr(%rip) ... */
@@ -519,11 +498,11 @@ TEST_F (Stubs, GeometryLeavesRoomForADetour)
 	EXPECT_EQ (static_cast<unsigned char> (bytes[1]), 0x25);
 
 	/* ... and the rest of the block is ours, so a 14-byte patch fits. */
-	for (size_t i = 6; i < arch::stub_block_size; i++)
+	for (size_t i = 6; i < arch::thunk_block_size; i++)
 		EXPECT_EQ (static_cast<unsigned char> (bytes[i]), 0xcc)
-			<< "stub byte " << i << " is not padding";
+			<< "thunk byte " << i << " is not padding";
 
-	EXPECT_EQ (reinterpret_cast<uintptr_t> (*a) % arch::stub_alignment, 0u);
+	EXPECT_EQ (reinterpret_cast<uintptr_t> (*a) % arch::thunk_alignment, 0u);
 
 	uintptr_t delta = reinterpret_cast<uintptr_t> (*a) >
 	                          reinterpret_cast<uintptr_t> (*b)
@@ -531,29 +510,29 @@ TEST_F (Stubs, GeometryLeavesRoomForADetour)
 	                            reinterpret_cast<uintptr_t> (*b)
 	                      : reinterpret_cast<uintptr_t> (*b) -
 	                            reinterpret_cast<uintptr_t> (*a);
-	EXPECT_GE (delta, arch::stub_block_size)
-		<< "stubs overlap: patching one would clobber the other";
+	EXPECT_GE (delta, arch::thunk_block_size)
+		<< "thunks overlap: patching one would clobber the other";
 }
 
-TEST_F (Stubs, SurvivesADetourAcrossRedirects)
+TEST_F (Thunks, SurvivesADetourAcrossRedirects)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
-	auto stub = engine->publish ("m", (void *) &stub_target_one);
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+	auto thunk = engine->publish ("m", (void *) &thunk_target_one);
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
 	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
 	char saved[detour_size];
-	write_detour (*stub, (void *) &stub_detour_target, saved);
+	write_detour (*thunk, (void *) &thunk_detour_target, saved);
 	if (::testing::Test::HasFatalFailure ())
 		return;
 
 	/* Both the direct call and the compiled caller now divert. */
-	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 99);
+	EXPECT_EQ (reinterpret_cast<IntFn> (*thunk) (), 99);
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 99);
 
 	/*
@@ -562,39 +541,39 @@ TEST_F (Stubs, SurvivesADetourAcrossRedirects)
 	 * needs - but the slot still has to track the newest tier.
 	 */
 	ASSERT_FALSE (
-		bool (engine->redirect ("m", (void *) &stub_target_three)));
-	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 99);
+		bool (engine->redirect ("m", (void *) &thunk_target_three)));
+	EXPECT_EQ (reinterpret_cast<IntFn> (*thunk) (), 99);
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 99);
 
 	/* Unpatching restores the jump, which lands on the newest tier. */
-	std::memcpy (*stub, saved, detour_size);
-	EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 3);
+	std::memcpy (*thunk, saved, detour_size);
+	EXPECT_EQ (reinterpret_cast<IntFn> (*thunk) (), 3);
 	EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 3);
 }
 
 /*
- * Promotion is a redirect performed under running code: the slot is rewritten
- * while other threads are calling through the stub and while compiled callers
- * hold its address. Every call has to come back with one of the targets the
- * stub has actually had - a torn slot would return something else, or jump into
- * nothing - and calls made after a redirect have to see it, so the redirects
- * are not simply lost.
+ * Promotion is a redirect performed under running code: the slot is
+ * rewritten while other threads are calling through the thunk and while
+ * compiled callers hold its address. Every call has to come back with one of
+ * the targets the thunk has actually had - a torn slot would return
+ * something else, or jump into nothing - and calls made after a redirect
+ * have to see it, so the redirects are not simply lost.
  */
-TEST_F (Stubs, RedirectsWhileThreadsRunThroughIt)
+TEST_F (Thunks, RedirectsWhileThreadsRunThroughIt)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
-	auto stub = engine->publish ("m", (void *) &stub_target_one);
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+	auto thunk = engine->publish ("m", (void *) &thunk_target_one);
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
 	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
 	ASSERT_TRUE (bool (caller)) << toString (caller.takeError ());
 	ASSERT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
-	void *const targets[] = { (void *) &stub_target_one,
-		                      (void *) &stub_target_two,
-		                      (void *) &stub_target_three };
+	void *const targets[] = { (void *) &thunk_target_one,
+		                      (void *) &thunk_target_two,
+		                      (void *) &thunk_target_three };
 
 	constexpr int readers = 8;
 	constexpr int all_three = 0b111;
@@ -613,7 +592,7 @@ TEST_F (Stubs, RedirectsWhileThreadsRunThroughIt)
 	std::vector<std::thread> workers;
 	for (int i = 0; i < readers; i++)
 		workers.emplace_back ([&, i] {
-			IntFn direct = reinterpret_cast<IntFn> (*stub);
+			IntFn direct = reinterpret_cast<IntFn> (*thunk);
 			IntFn compiled = reinterpret_cast<IntFn> (caller->entry);
 
 			ready++;
@@ -664,19 +643,19 @@ TEST_F (Stubs, RedirectsWhileThreadsRunThroughIt)
 	EXPECT_EQ (error, "");
 	for (int i = 0; i < readers; i++) {
 		EXPECT_EQ (bad[i].load (), 0)
-			<< "reader " << i << " reached a target the stub never had";
+			<< "reader " << i << " reached a target the thunk never had";
 		EXPECT_EQ (seen[i].load (), all_three)
 			<< "reader " << i << " never saw all three targets";
 	}
 }
 
 /*
- * One stub per method means a Unity-sized game publishes six figures of them,
- * so what a stub costs in address space is a real number rather than an
- * aesthetic one. Stubs published one at a time still have to pack: the version
- * of this that built a LinkGraph per stub spent two pages on each.
+ * One thunk per method means a Unity-sized game publishes six figures of
+ * them, so what a thunk costs in address space is a real number rather than
+ * an aesthetic one. Thunks published one at a time still have to pack: the
+ * version of this that built a LinkGraph per thunk spent two pages on each.
  */
-TEST_F (Stubs, PackTightlyWhenPublishedOneAtATime)
+TEST_F (Thunks, PackTightlyWhenPublishedOneAtATime)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -684,20 +663,20 @@ TEST_F (Stubs, PackTightlyWhenPublishedOneAtATime)
 	constexpr int count = 512;
 	std::vector<uintptr_t> addrs;
 	for (int i = 0; i < count; i++) {
-		auto stub = engine->publish ("m" + std::to_string (i),
-		                                 (void *) &stub_target_one);
-		ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
-		addrs.push_back (reinterpret_cast<uintptr_t> (*stub));
+		auto thunk = engine->publish ("m" + std::to_string (i),
+		                                 (void *) &thunk_target_one);
+		ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
+		addrs.push_back (reinterpret_cast<uintptr_t> (*thunk));
 	}
 
 	std::sort (addrs.begin (), addrs.end ());
 	for (size_t i = 1; i < addrs.size (); i++)
-		ASSERT_GE (addrs[i] - addrs[i - 1], arch::stub_block_size)
-			<< "stubs " << i - 1 << " and " << i << " overlap";
+		ASSERT_GE (addrs[i] - addrs[i - 1], arch::thunk_block_size)
+			<< "thunks " << i - 1 << " and " << i << " overlap";
 
 	uintptr_t span = addrs.back () - addrs.front ();
-	EXPECT_LE (span, count * stub_group_size)
-		<< "stubs are spread over " << span / count << " bytes each";
+	EXPECT_LE (span, count * thunk_group_size)
+		<< "thunks are spread over " << span / count << " bytes each";
 
 	/* Every one of them still works. */
 	EXPECT_EQ (reinterpret_cast<IntFn> (addrs.front ()) (), 1);
@@ -705,13 +684,15 @@ TEST_F (Stubs, PackTightlyWhenPublishedOneAtATime)
 }
 
 /*
- * StubSlabs used to be serialized entirely by StubTable's lock; now it has to
- * hold that line itself. Many threads publishing, compiling a caller against
- * what they published, redirecting it and retiring it - all at once - is what
- * says allocate () and release () agree on the free list and the batch offset
- * under real contention rather than only when called one at a time.
+ * allocate_thunk () carves out of CodeArena::reserve (), which is already its
+ * own lock; there is no free list or batch offset here any more for
+ * concurrent carves to disagree about. What this proves now is the wider
+ * claim: many threads publishing, compiling a caller against what they
+ * published, redirecting it and retiring it - all at once - land on
+ * consistent answers rather than a corrupted thunk or a caller bound to the
+ * wrong address.
  */
-TEST_F (Stubs, PublishCompileRedirectAndRetireFromManyThreads)
+TEST_F (Thunks, PublishCompileRedirectAndRetireFromManyThreads)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -736,16 +717,18 @@ TEST_F (Stubs, PublishCompileRedirectAndRetireFromManyThreads)
 			while (!go.load ())
 				std::this_thread::yield ();
 
-			/* Each thread owns its names, so the contention is all in StubSlabs. */
+			/* Each thread owns its names, so the contention is all in
+			 * CodeArena::reserve () and MonoJit::compile ()'s dylib
+			 * bookkeeping. */
 			for (int n = 0; n < iterations; n++) {
 				std::string name =
 					"t" + std::to_string (i) + "." + std::to_string (n);
 
-				Expected<void *> stub =
-					engine->publish (name, (void *) &stub_target_one);
+				Expected<void *> thunk =
+					engine->publish (name, (void *) &thunk_target_one);
 
-				if (!stub) {
-					fail (stub.takeError ());
+				if (!thunk) {
+					fail (thunk.takeError ());
 					return;
 				}
 
@@ -758,7 +741,7 @@ TEST_F (Stubs, PublishCompileRedirectAndRetireFromManyThreads)
 				EXPECT_EQ (reinterpret_cast<IntFn> (caller->entry) (), 1);
 
 				if (Error err = engine->redirect (
-				        name, (void *) &stub_target_two)) {
+				        name, (void *) &thunk_target_two)) {
 					fail (std::move (err));
 					return;
 				}
@@ -781,52 +764,52 @@ TEST_F (Stubs, PublishCompileRedirectAndRetireFromManyThreads)
 		EXPECT_EQ (errors[i], "") << "thread " << i;
 }
 
-TEST_F (LazyStubs, CompileOnceOnTheFirstCall)
+TEST_F (LazyThunks, CompileOnceOnTheFirstCall)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
 	int compiles = 0;
-	auto stub = engine->publish_lazy ("m", [&] () -> Expected<void *> {
+	auto thunk = engine->publish_lazy ("m", [&] () -> Expected<void *> {
 		compiles++;
 		auto compiled = engine->jit ().compile (build_constant_module (7), "constant");
 		if (!compiled)
 			return compiled.takeError ();
 		return compiled->entry;
 	});
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
 	/* Publishing it compiles nothing. */
 	EXPECT_EQ (compiles, 0);
 
 	for (int i = 0; i < 3; i++)
-		EXPECT_EQ (reinterpret_cast<IntFn> (*stub) (), 7) << "call " << i;
+		EXPECT_EQ (reinterpret_cast<IntFn> (*thunk) (), 7) << "call " << i;
 	EXPECT_EQ (compiles, 1);
 }
 
 /*
  * The compile happens in the middle of the call it was triggered by, so the
- * trampoline has to hand every argument back untouched before continuing into
- * the code it just produced.
+ * trampoline has to hand every argument back untouched before continuing
+ * into the code it just produced.
  */
-TEST_F (LazyStubs, ArgumentsSurviveTheCompileTheyTriggered)
+TEST_F (LazyThunks, ArgumentsSurviveTheCompileTheyTriggered)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
-	auto stub = engine->publish_lazy (
+	auto thunk = engine->publish_lazy (
 		"m", [] () -> Expected<void *> { return (void *) &lazy_many_args; });
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
 	int64_t expected = call_many_args (&lazy_many_args);
 
 	/* Through the trampoline ... */
-	EXPECT_EQ (call_many_args (reinterpret_cast<ManyArgsFn> (*stub)), expected);
-	/* ... and again now that the stub points straight at the code. */
-	EXPECT_EQ (call_many_args (reinterpret_cast<ManyArgsFn> (*stub)), expected);
+	EXPECT_EQ (call_many_args (reinterpret_cast<ManyArgsFn> (*thunk)), expected);
+	/* ... and again now that the thunk points straight at the code. */
+	EXPECT_EQ (call_many_args (reinterpret_cast<ManyArgsFn> (*thunk)), expected);
 }
 
-TEST_F (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
+TEST_F (LazyThunks, CallersCanBeCompiledBeforeTheCodeExists)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -841,7 +824,7 @@ TEST_F (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
 		return compiled->entry;
 		})));
 
-	/* Resolves against the stub's own address - not the trampoline's,
+	/* Resolves against the thunk's own address - not the trampoline's,
 	 * though that is all it points at right now - the same address a caller
 	 * would keep once the lazy compile fires and redirects it. */
 	auto caller = engine->compile_against (build_caller_module ("m"), "caller", { "m" });
@@ -857,20 +840,20 @@ TEST_F (LazyStubs, CallersCanBeCompiledBeforeTheCodeExists)
  * callback's is held across the compile, so threads that arrive together each
  * run it. What they owe the caller is one answer, not one compile.
  */
-TEST_F (LazyStubs, RacingFirstCallsAgreeOnOneAnswer)
+TEST_F (LazyThunks, RacingFirstCallsAgreeOnOneAnswer)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
 
 	std::atomic<int> compiles {0};
-	auto stub = engine->publish_lazy ("m", [&] () -> Expected<void *> {
+	auto thunk = engine->publish_lazy ("m", [&] () -> Expected<void *> {
 		compiles++;
 		auto compiled = engine->jit ().compile (build_constant_module (7), "constant");
 		if (!compiled)
 			return compiled.takeError ();
 		return compiled->entry;
 	});
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
 	constexpr int threads = 8;
 	std::atomic<int> ready {0};
@@ -883,7 +866,7 @@ TEST_F (LazyStubs, RacingFirstCallsAgreeOnOneAnswer)
 			ready++;
 			while (!go.load ())
 				std::this_thread::yield ();
-			results[i] = reinterpret_cast<IntFn> (*stub) ();
+			results[i] = reinterpret_cast<IntFn> (*thunk) ();
 		});
 
 	while (ready.load () != threads)
@@ -899,16 +882,17 @@ TEST_F (LazyStubs, RacingFirstCallsAgreeOnOneAnswer)
 }
 
 /*
- * A compile takes the runtime's locks - the loader lock, for a corlib class an
- * emitted null check names - and a thread that already holds one of those can
- * enter a lazy stub. If anything of the callback's were held across compile (),
- * those two threads would close a cycle and neither would move again. The
- * recursive mutex below stands for the loader lock, which is recursive too.
+ * A compile takes the runtime's locks - the loader lock, for a corlib class
+ * an emitted null check names - and a thread that already holds one of those
+ * can enter a lazy thunk. If anything of the callback's were held across
+ * compile (), those two threads would close a cycle and neither would move
+ * again. The recursive mutex below stands for the loader lock, which is
+ * recursive too.
  *
- * A regression does not fail this test, it stops it finishing, because that is
- * what the defect does. CTest reports it as a timeout naming this case.
+ * A regression does not fail this test, it stops it finishing, because that
+ * is what the defect does. CTest reports it as a timeout naming this case.
  */
-TEST_F (LazyStubs, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
+TEST_F (LazyThunks, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
 {
 	std::unique_ptr<Engine> engine = make_engine ();
 	ASSERT_NE (engine, nullptr);
@@ -917,10 +901,10 @@ TEST_F (LazyStubs, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
 	std::atomic<bool> compiling {false};
 	std::atomic<bool> holder_has_lock {false};
 
-	auto stub = engine->publish_lazy ("m", [&] () -> Expected<void *> {
+	auto thunk = engine->publish_lazy ("m", [&] () -> Expected<void *> {
 		compiling = true;
 
-		/* Give the other thread the lock and the stub, in that order. */
+		/* Give the other thread the lock and the thunk, in that order. */
 		while (!holder_has_lock.load ())
 			std::this_thread::yield ();
 		std::this_thread::sleep_for (std::chrono::milliseconds (50));
@@ -931,9 +915,9 @@ TEST_F (LazyStubs, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
 			return compiled.takeError ();
 		return compiled->entry;
 	});
-	ASSERT_TRUE (bool (stub)) << toString (stub.takeError ());
+	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
-	std::thread first ([&] { reinterpret_cast<IntFn> (*stub) (); });
+	std::thread first ([&] { reinterpret_cast<IntFn> (*thunk) (); });
 
 	while (!compiling.load ())
 		std::this_thread::yield ();
@@ -942,7 +926,7 @@ TEST_F (LazyStubs, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
 	std::thread holder ([&] {
 		std::lock_guard<std::recursive_mutex> lock (runtime_lock);
 		holder_has_lock = true;
-		held = reinterpret_cast<IntFn> (*stub) ();
+		held = reinterpret_cast<IntFn> (*thunk) ();
 	});
 
 	first.join ();
