@@ -9,12 +9,9 @@
 namespace mono {
 namespace test {
 
-/*
- * Where the class libraries are, relative to the working directory the tests are
- * given, which mono/unit-tests/CMakeLists.txt pins for the same reason
- * callspec.exe is opened by bare name.
- */
-#define CLASS_LIBRARY_DIR "../../mcs/class/lib/net_4_x"
+// Where the class libraries are.  The build says, because a test binary can be
+// started from anywhere.
+#define CLASS_LIBRARY_DIR MONO_UNIT_TESTS_ASSEMBLIES
 
 /*
  * Every suite in the binary shares this one runtime, so which of them gets here

@@ -205,7 +205,7 @@ if(BUILD_TESTING)
     USES_TERMINAL
     VERBATIM)
 
-  # The interpreter's own tests, under mono/interp/unit-tests. Seconds. The rest
+  # The interpreter's own tests, under mono/unit-tests/gtest/interp. Seconds. The rest
   # of the `interp` label is thousands of managed programs run interpreted, which
   # is a different question and `ctest -L interp` is how to ask it.
   add_custom_target(check-interp

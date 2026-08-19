@@ -18,6 +18,5 @@ mono_add_object_library(mono_ee_interp
 add_dependencies(mono_ee_interp mono-version)
 
 if(BUILD_TESTING)
-  add_subdirectory(unit-tests)
   add_subdirectory(tests)
 endif()

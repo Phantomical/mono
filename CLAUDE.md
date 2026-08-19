@@ -482,7 +482,7 @@ no has nothing to fall back on. A patcher that instead writes a jump over the ad
 the thunk, but nothing tells the interpreter, so interpreted callers keep interpreting the
 method. An interpreted caller sees a detour that went through the API, because
 `resolve_code_type ()` reads the tier and makes a jit call to the entry instead — unless
-the interpreter has already copied the callee's body into it. `mono/unit-tests/detour.cs`
+the interpreter has already copied the callee's body into it. `mono/unit-tests/gtest/runtime/detour.cs`
 and `test-detour.cpp` hold both arms.
 
 **The interpreter makes real tail calls.** A `tail.` site becomes `MINT_TAILCALL` or
