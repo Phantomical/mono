@@ -180,8 +180,9 @@ directly.
 
 `-D MONO_MERGED_TESTS=ON` gives the gtest suites and the managed method suites
 one test each instead of one per case, which takes `check` from 444 tests to 43.
-The cases then share a process and three of the managed arms change result;
-`build.md` names them.
+The cases then share a process, so a test that ends the process takes every test
+behind it. `MONO_INTERP_TESTS_JIT_UNMERGEABLE` names those and a merged run
+skips them; `build.md` has the rest.
 
 A run whose output you intend to read afterwards has to capture that output
 itself:

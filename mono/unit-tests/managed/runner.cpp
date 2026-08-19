@@ -19,6 +19,10 @@
  * names a test that has to fail. Which engine runs the method is the caller's
  * business: the MONO_LLVM_JIT_TIER* variables decide it, and the suites pass
  * them in.
+ *
+ * --skip <Class:name> drops a test that ends the process rather than answering,
+ * which one process per test survives and a shared one does not. Each one is
+ * printed and counted, so the run says what it did not cover.
  */
 
 #include "config.h"
@@ -332,12 +336,13 @@ run_test (MonoImage *manifest, const char *name)
 /// something other than what the caller expects.
 ///
 /// only takes the tests whose "Class:name" it matches, arm takes the tests whose
-/// class opted into it, and xfail names the tests that have to fail. Selecting
-/// nothing is not an error: an arm no class in this assembly opted into reports
-/// zero tests and passes.
+/// class opted into it, xfail names the tests that have to fail, and skip names
+/// the tests that do not run at all. Selecting nothing is not an error: an arm no
+/// class in this assembly opted into reports zero tests and passes.
 int
 run_all (MonoImage *manifest, const char *only, const char *arm,
-         const std::vector<std::string> &xfail)
+         const std::vector<std::string> &xfail,
+         const std::vector<std::string> &skip)
 {
 	if (arm != nullptr && !in_arm (known_arms (), arm)) {
 		fprintf (stderr, "no arm named %s; this runner knows %s\n", arm,
@@ -358,12 +363,19 @@ run_all (MonoImage *manifest, const char *only, const char *arm,
 
 	int ran = 0;
 	int wrong = 0;
+	int skipped = 0;
 
 	for (const TestMethod &test : collect_tests (manifest)) {
 		if (only != nullptr && !std::regex_search (test.name, pattern))
 			continue;
 		if (arm != nullptr && !in_arm (test.arms, arm))
 			continue;
+
+		if (std::find (skip.begin (), skip.end (), test.name) != skip.end ()) {
+			printf ("%s ... skipped\n", test.name.c_str ());
+			skipped++;
+			continue;
+		}
 
 		// The name goes out before the test runs, so a test that takes the
 		// process down leaves its own name as the last line of the output.
@@ -384,7 +396,7 @@ run_all (MonoImage *manifest, const char *only, const char *arm,
 		fflush (stdout);
 	}
 
-	printf ("%d tests, %d of them wrong\n", ran, wrong);
+	printf ("%d tests, %d of them wrong, %d skipped\n", ran, wrong, skipped);
 	return wrong == 0 ? 0 : 1;
 }
 
@@ -398,6 +410,7 @@ main (int argc, char *argv[])
 	const char *only = nullptr;
 	const char *arm = nullptr;
 	std::vector<std::string> xfail;
+	std::vector<std::string> skip;
 	bool listing = false;
 	bool all = false;
 	int i = 1;
@@ -422,6 +435,8 @@ main (int argc, char *argv[])
 			arm = argv[++i];
 		else if (all && value != nullptr && strcmp (argv[i], "--xfail") == 0)
 			xfail.push_back (argv[++i]);
+		else if (all && value != nullptr && strcmp (argv[i], "--skip") == 0)
+			skip.push_back (argv[++i]);
 		else if (!all && !listing && test == nullptr)
 			test = argv[i];
 		else
@@ -433,7 +448,7 @@ main (int argc, char *argv[])
 		         "usage: %s --list <assembly>\n"
 		         "       %s <assembly> <Class:name>\n"
 		         "       %s --all <assembly> [--only <regex>] [--arm <name>]"
-		         " [--xfail <Class:name>]...\n",
+		         " [--xfail <Class:name>]... [--skip <Class:name>]...\n",
 		         argv[0], argv[0], argv[0]);
 		return 2;
 	}
@@ -495,7 +510,7 @@ main (int argc, char *argv[])
 	if (listing)
 		return list_tests (image);
 	if (all)
-		return run_all (image, only, arm, xfail);
+		return run_all (image, only, arm, xfail, skip);
 
 	return run_test (image, test);
 }

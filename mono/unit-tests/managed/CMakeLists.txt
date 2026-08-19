@@ -62,11 +62,15 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 #   ENVIRONMENT  VAR=value, for the tests and for the enumeration.
 #   XFAIL        "Class:method" entries to register with WILL_FAIL.  Per
 #                registration: a divergence is usually wrong on one engine only.
+#   UNMERGEABLE  "Class:method" entries that end the process instead of
+#                answering.  A merged call drops them, and a split call runs
+#                them like any other test.
 #
 # discover.cmake does the enumeration and says what ONLY and ARM select from.
 function(mono_add_test_methods)
   cmake_parse_arguments(ARG ""
-    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT;ONLY;ARM" "PROPERTIES;ENVIRONMENT;XFAIL" ${ARGN})
+    "ASSEMBLY;NAME_PREFIX;NAME_SUFFIX;TIMEOUT;ONLY;ARM"
+    "PROPERTIES;ENVIRONMENT;XFAIL;UNMERGEABLE" ${ARGN})
 
   if(NOT ARG_TIMEOUT)
     set(ARG_TIMEOUT 60)
@@ -78,6 +82,7 @@ function(mono_add_test_methods)
   # Under MONO_MERGED_TESTS the runner takes over what discover.cmake does with
   # the listing: it applies ONLY and ARM itself, and XFAIL becomes --xfail
   # rather than WILL_FAIL, because one ctest test now covers every method.
+  # UNMERGEABLE only means anything here, where the process is shared.
   if(MONO_MERGED_TESTS)
     set(_name "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}")
     set(_filters "")
@@ -89,6 +94,9 @@ function(mono_add_test_methods)
     endif()
     foreach(_x IN LISTS ARG_XFAIL)
       list(APPEND _filters --xfail "${_x}")
+    endforeach()
+    foreach(_u IN LISTS ARG_UNMERGEABLE)
+      list(APPEND _filters --skip "${_u}")
     endforeach()
 
     set(_env "")
@@ -230,6 +238,14 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
 
 set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
+# Tests that end the process instead of answering. One process per test survives
+# that and reports the failure; a merged run loses every test behind it, so a
+# merged run skips these and says so.
+set(MONO_INTERP_TESTS_JIT_UNMERGEABLE
+  # The exception the filter raises reaches no managed catch at all, so it goes
+  # out of the runner as a fatal unhandled exception.
+  "Exceptions:test_2_an_exception_in_a_filter_continues_the_search")
+
 foreach(_assembly IN LISTS _assemblies)
   # These run purely on the interpreter.
   mono_add_test_methods(
@@ -246,6 +262,7 @@ foreach(_assembly IN LISTS _assemblies)
     NAME_PREFIX "interp-jit/"
     PROPERTIES LABELS interp-jit
     XFAIL ${MONO_INTERP_TESTS_JIT_XFAIL}
+    UNMERGEABLE ${MONO_INTERP_TESTS_JIT_UNMERGEABLE}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
                 "MONO_LLVM_JIT_TIER0=0")
 

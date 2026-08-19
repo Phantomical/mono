@@ -307,17 +307,17 @@ tests summing to 1.9s, and the target goes from 23.0s to 0.9s. `check` goes from
 what is left of it, and they are one process per corpus either way.
 
 What it costs is what the split was buying. A failure names the suite, and the
-output is the only place that names the case. The cases also share a process,
-and three of the managed arms show it:
+output is the only place that names the case.
 
-- `GCInterop:test_1_weak_reference_clears` fails, because an earlier case leaves
-  the object reachable.
-- `EntryTail:test_4_reflection_invoke_of_pinvoke_struct_return` and its
-  `dynamic_invoke` twin pass, where each of them fails on its own.
-- `OpcodesTail:test_1_proxy_write_that_fails` and its `_vt_` twin take a
-  translator refusal under `interp-jit`, which neither takes on its own.
+The cases also share a process. A test that ends the process instead of
+answering therefore takes every test behind it, and the run reports one failure
+over a suite it only partly covered. `MONO_INTERP_TESTS_JIT_UNMERGEABLE` in
+`mono/unit-tests/managed/CMakeLists.txt` names those tests. A merged run drops
+each one and prints its name, and a split run treats it as an ordinary test.
 
-Re-run a merged failure on its own before you believe it.
+Re-run a merged failure on its own before you believe it. A shared process can
+still change a result, and a case that only passes beside its neighbours is a
+defect somewhere.
 
 ### Per-test timeouts
 
