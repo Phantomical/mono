@@ -38,8 +38,7 @@ target_compile_options(test-eglib PRIVATE -Wall)
 # path/find_program_in_path_cwd blanks $PATH and then looks for the test binary
 # itself in ".", so the tests have to run from the directory they were linked
 # into.
-gtest_discover_tests(test-eglib
-  TEST_PREFIX eglib/
-  DISCOVERY_MODE PRE_TEST
+mono_gtest_tests(test-eglib
+  PREFIX eglib
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   PROPERTIES LABELS eglib)

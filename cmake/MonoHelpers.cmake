@@ -31,6 +31,63 @@ function(mono_add_object_library name)
   endif()
 endfunction()
 
+# Registers the cases of a gtest binary as ctest tests.
+#
+#   mono_gtest_tests(<target>
+#     PREFIX            <name>    what the case names hang off
+#     FILTER            <filter>  the cases to take, as --gtest_filter spells it
+#     WORKING_DIRECTORY <dir>     where a case runs, default the build directory
+#     SKIP_REGEX        <regex>   output that means the case skipped itself
+#     PROPERTIES        <prop> <value>...)
+#
+# A case gets the name <prefix>/<suite>.<case>.  Under MONO_MERGED_TESTS the
+# call instead adds one test called <prefix>, which runs its cases in one
+# process -- so a binary that takes several calls keeps that many tests.
+function(mono_gtest_tests target)
+  cmake_parse_arguments(ARG "" "PREFIX;FILTER;WORKING_DIRECTORY;SKIP_REGEX" "PROPERTIES" ${ARGN})
+
+  set(_workdir "")
+  if(ARG_WORKING_DIRECTORY)
+    set(_workdir WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
+  endif()
+
+  if(NOT MONO_MERGED_TESTS)
+    set(_filter "")
+    if(ARG_FILTER)
+      set(_filter TEST_FILTER "${ARG_FILTER}")
+    endif()
+
+    # A GTEST_SKIP () has to reach ctest as a skip rather than as a pass, and
+    # gtest says so in its output alone -- the process still exits 0.
+    set(_skip "")
+    if(ARG_SKIP_REGEX)
+      set(_skip SKIP_REGULAR_EXPRESSION "${ARG_SKIP_REGEX}")
+    endif()
+
+    # PRE_TEST runs the discovery where the cases run.  test-mono-callspec.cpp
+    # opens callspec.exe by bare name, so the discovery run needs the same
+    # working directory the cases get.
+    gtest_discover_tests(${target}
+      TEST_PREFIX "${ARG_PREFIX}/"
+      ${_filter}
+      DISCOVERY_MODE PRE_TEST
+      ${_workdir}
+      PROPERTIES ${_skip} ${ARG_PROPERTIES})
+    return()
+  endif()
+
+  set(_filter "")
+  if(ARG_FILTER)
+    set(_filter "--gtest_filter=${ARG_FILTER}")
+  endif()
+
+  add_test(NAME "${ARG_PREFIX}" COMMAND "$<TARGET_FILE:${target}>" ${_filter})
+
+  # A merged test drops SKIP_REGEX.  Over a whole suite's output the regex would
+  # call the suite skipped when one case skipped itself and another failed.
+  set_tests_properties("${ARG_PREFIX}" PROPERTIES ${_workdir} ${ARG_PROPERTIES})
+endfunction()
+
 # `configure_file`-style generation of the little shell wrappers under
 # scripts/ and runtime/, which are @VAR@ templates in the autotools build too.
 function(mono_configure_script input output)

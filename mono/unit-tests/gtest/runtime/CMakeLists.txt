@@ -33,28 +33,18 @@ function(mono_add_unit_test name)
       MONO_UNIT_TESTS_ASSEMBLIES="${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 endfunction()
 
-# Registers the cases of target that match filter as ctest tests named
-# <prefix>/<suite>.<case>.
+# Registers the cases of target that match filter as ctest tests under prefix.
 #
 # A binary carrying several files' worth of cases gets one call per file, so the
 # ctest names stay tied to the source the case lives in rather than to whichever
-# binary it was linked into.  The filter only narrows discovery: each case still
-# runs on its own with --gtest_filter=<suite>.<case>.
+# binary it was linked into.
 function(mono_unit_test_cases target prefix filter)
-  # PRE_TEST because discovery has to happen where the tests run, and the
-  # working directory is load-bearing: test-mono-callspec.cpp opens callspec.exe
-  # by bare name.
-  #
-  # A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest
-  # says so only in its output -- the process still exits 0.
-  gtest_discover_tests(${target}
-    TEST_PREFIX ${prefix}/
-    TEST_FILTER ${filter}
-    DISCOVERY_MODE PRE_TEST
+  mono_gtest_tests(${target}
+    PREFIX ${prefix}
+    FILTER ${filter}
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-    PROPERTIES
-      SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
-      ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
+    SKIP_REGEX "\\[  SKIPPED \\]"
+    PROPERTIES ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/build")
 endfunction()
 
 # The tests that need neither a runtime nor the thread-info subsystem, plus the

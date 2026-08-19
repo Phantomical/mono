@@ -33,6 +33,17 @@ option(MONO_CRASH_PRIVACY         "Scrub private data from crash dumps"     ON)
 # --- instrumentation --------------------------------------------------------
 option(MONO_ENABLE_COVERAGE "Instrument the whole native build for llvm-cov" OFF)
 
+# --- test registration ------------------------------------------------------
+# The gtest suites and the managed method suites hold many cases in one binary.
+# Each lists its cases when ctest starts and registers one ctest test per case,
+# so a case runs in a process of its own.  That is what makes a failure name
+# the case, and it is what lets ctest run the cases in parallel.
+#
+# This drops the listing and registers one test per suite, which runs the whole
+# suite in one process.  A failure then names the suite, and a case that takes
+# the process down takes the suite's remaining cases with it.
+option(MONO_MERGED_TESTS "Run each test suite as one ctest test rather than one per case" OFF)
+
 # --- helper libraries -------------------------------------------------------
 option(MONO_ENABLE_MONO_NATIVE  "Build libmono-native (System.Native)"      ON)
 option(MONO_ENABLE_SUPPORT      "Build libMonoPosixHelper / libMonoSupportW" ON)

@@ -42,12 +42,9 @@ mono_gtest_binary(test-llvm
     MONO_LLVM_TESTS_DIR="${CMAKE_CURRENT_BINARY_DIR}"
     MONO_LLVM_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}")
 
-# A GTEST_SKIP () has to reach ctest as a skip rather than a pass, and gtest says
-# so only in its output -- the process still exits 0.
-gtest_discover_tests(test-llvm
-  TEST_PREFIX test-llvm/
-  DISCOVERY_MODE PRE_TEST
+mono_gtest_tests(test-llvm
+  PREFIX test-llvm
+  SKIP_REGEX "\\[  SKIPPED \\]"
   PROPERTIES
     LABELS llvm
-    SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc")

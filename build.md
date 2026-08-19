@@ -268,8 +268,8 @@ version that was linked in.)
 The suites are registered with CTest:
 
 ```bash
-cmake --build build --target check       # the inner loop: unit tests, eglib,
-                                         # mini regression, the LLVM tier (~20s)
+cmake --build build --target check       # the inner loop: unit tests, mini
+                                         # regression, the LLVM tier (~20s)
 cmake --build build --target check-all   # everything but the slow/stress sets
 ```
 
@@ -288,6 +288,36 @@ ctest --test-dir build -j16 -L stress    # long-running
 
 The managed test assemblies are built by the regular build (`cmake --build
 build`), so run that first; `ctest` itself never builds anything.
+
+### One test per suite
+
+The gtest suites and the managed method suites hold many cases in one binary,
+and each case gets a CTest test of its own -- about 6,200 of them, each a
+process. `MONO_MERGED_TESTS` gives each suite one test that runs its cases in a
+single process:
+
+```bash
+cmake -S . -B build -D MONO_MERGED_TESTS=ON
+```
+
+That takes the whole listing from 11,706 tests to 5,518. `check-interp` shows
+the saving at its sharpest: 2,375 tests summing to 359s of test time become 11
+tests summing to 1.9s, and the target goes from 23.0s to 0.9s. `check` goes from
+444 tests and 12.3s to 43 tests and 9.2s -- the mini regression corpora dominate
+what is left of it, and they are one process per corpus either way.
+
+What it costs is what the split was buying. A failure names the suite, and the
+output is the only place that names the case. The cases also share a process,
+and three of the managed arms show it:
+
+- `GCInterop:test_1_weak_reference_clears` fails, because an earlier case leaves
+  the object reachable.
+- `EntryTail:test_4_reflection_invoke_of_pinvoke_struct_return` and its
+  `dynamic_invoke` twin pass, where each of them fails on its own.
+- `OpcodesTail:test_1_proxy_write_that_fails` and its `_vt_` twin take a
+  translator refusal under `interp-jit`, which neither takes on its own.
+
+Re-run a merged failure on its own before you believe it.
 
 ### Per-test timeouts
 

@@ -162,8 +162,8 @@ endif()
 # internally parallel or tiny, so a bare `ctest` is much slower than the work
 # requires. These targets run it with the machine's core count.
 #
-#   check        the fast set -- unit tests, eglib, mini regression, the LLVM
-#                tier, and the runtime one-offs. Seconds, not minutes.
+#   check        the fast set -- unit tests, mini regression, the LLVM tier, and
+#                the runtime one-offs. Seconds, not minutes.
 #   check-all    everything except the stress suites, the minutes-long ones and
 #                check-interp-mixed.
 #   check-interp the interpreter's own tests under mono/interp, on three
@@ -190,7 +190,7 @@ endif()
 if(BUILD_TESTING)
   add_custom_target(check
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -LE "runtime|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|slow|stress|acceptance"
+            -LE "runtime|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|eglib|slow|stress|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)

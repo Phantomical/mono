@@ -2,7 +2,8 @@
 # Main of their own, so that many of them share one assembly.
 #
 # Each method becomes its own ctest test, run in its own process by runner.cpp,
-# once per engine arm.
+# once per engine arm.  MONO_MERGED_TESTS makes an arm one ctest test instead,
+# and runner.cpp runs that arm's methods in one process.
 #
 # discover.cmake lists those methods when ctest starts rather than at configure
 # time, so writing a new test means editing a source and building, with no cmake
@@ -45,13 +46,16 @@ set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
-# Registers one ctest test per method of an assembly.  Use the name prefix and
-# the environment to tell apart different runs of the same tests.
+# Registers the test methods of an assembly as ctest tests, one per method --
+# or one per call under MONO_MERGED_TESTS.  Use the name prefix and the
+# environment to tell apart different runs of the same tests.
 #
 #   ASSEMBLY     the .dll whose test methods to register.
 #   NAME_PREFIX  and NAME_SUFFIX go around "Class:method" in the ctest name.
+#                A merged call puts the assembly's own name between them.
 #   TIMEOUT      seconds the enumeration gets, not the tests.  A test takes its
-#                own through PROPERTIES.
+#                own through PROPERTIES.  A merged call enumerates nothing and
+#                ignores this.
 #   ONLY         takes only the methods whose "Class:method" matches this regex.
 #   ARM          takes only the classes carrying that arm's attribute.
 #   PROPERTIES   set on every test this call registers.
@@ -70,6 +74,35 @@ function(mono_add_test_methods)
 
   # Distinguishes the same assembly under different conditions.
   cmake_path(GET ARG_ASSEMBLY STEM _stem)
+
+  # Under MONO_MERGED_TESTS the runner takes over what discover.cmake does with
+  # the listing: it applies ONLY and ARM itself, and XFAIL becomes --xfail
+  # rather than WILL_FAIL, because one ctest test now covers every method.
+  if(MONO_MERGED_TESTS)
+    set(_name "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}")
+    set(_filters "")
+    if(ARG_ONLY)
+      list(APPEND _filters --only "${ARG_ONLY}")
+    endif()
+    if(ARG_ARM)
+      list(APPEND _filters --arm "${ARG_ARM}")
+    endif()
+    foreach(_x IN LISTS ARG_XFAIL)
+      list(APPEND _filters --xfail "${_x}")
+    endforeach()
+
+    set(_env "")
+    if(ARG_ENVIRONMENT)
+      set(_env "${CMAKE_COMMAND}" -E env ${ARG_ENVIRONMENT} --)
+    endif()
+
+    add_test(NAME "${_name}" COMMAND ${_env}
+             "$<TARGET_FILE:interp-test-runner>" --all "${ARG_ASSEMBLY}" ${_filters})
+    set_tests_properties("${_name}" PROPERTIES
+                         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}" ${ARG_PROPERTIES})
+    return()
+  endif()
+
   string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _key
          "${ARG_NAME_PREFIX}${_stem}${ARG_NAME_SUFFIX}${ARG_ONLY}${ARG_ARM}")
   set(_include "${CMAKE_CURRENT_BINARY_DIR}/${_key}_include.cmake")

@@ -158,7 +158,7 @@ Everything runs through **CTest**, selected by label rather than by directory. A
 targets below pass `-j` for you.
 
 ```bash
-cmake --build build --target check       # the fast set: unit tests, eglib, mini
+cmake --build build --target check       # the fast set: unit tests, mini
                                          # regression, runtime one-offs
 cmake --build build --target check-all   # everything except the slow/stress suites
 
@@ -177,6 +177,11 @@ everything else — a few hundred tests, seconds. `check-all` drops only `slow`,
 is not the target to reach for while iterating. Corpora are built by the regular
 build (`cmake --build build`), not by ctest, so build before running `ctest`
 directly.
+
+`-D MONO_MERGED_TESTS=ON` gives the gtest suites and the managed method suites
+one test each instead of one per case, which takes `check` from 444 tests to 43.
+The cases then share a process and three of the managed arms change result;
+`build.md` names them.
 
 A run whose output you intend to read afterwards has to capture that output
 itself:
@@ -589,6 +594,10 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Keep parentheticals out of a summary line. Needing one is a sign the summary is trying to
   cover more than one thing; split it or narrow it instead.
 - Do not open a summary line with "The one X" or similar. Say what the thing is.
+- Write in the active voice, and name the actor. "A merged test drops SKIP_REGEX" says who
+  does it; "SKIP_REGEX is dropped" leaves the reader to work that out.
+- Do not call anything "load-bearing". It asserts that something matters without saying what
+  breaks without it. Say what breaks.
 - Start a function's summary with a verb - "Builds the buffer a vararg call passes its
   variable arguments in." The name already gives the noun, so a summary that opens with the
   noun spends its first words repeating the signature.

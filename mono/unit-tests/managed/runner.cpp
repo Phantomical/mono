@@ -7,13 +7,18 @@
  *
  *   runner --list <assembly>              every test in it, one "Class:name" a line
  *   runner <assembly> <Class:name>        run that one
+ *   runner --all <assembly> [filters]     run every test it selects, in turn
  *
  * A listing line carries the arms the test's class opted into after a space,
  * and the first line names every arm this runner knows.
  *
  * One method per process, which is what lets a test that takes the runtime down
- * name itself. Which engine runs the method is the caller's business: the
- * MONO_LLVM_JIT_TIER* variables decide it, and the suites pass them in.
+ * name itself. --all gives that up to start the runtime once for a whole
+ * assembly, and takes over the selection the caller does with the listing:
+ * --only <regex> and --arm <name> narrow what runs, and --xfail <Class:name>
+ * names a test that has to fail. Which engine runs the method is the caller's
+ * business: the MONO_LLVM_JIT_TIER* variables decide it, and the suites pass
+ * them in.
  */
 
 #include "config.h"
@@ -37,9 +42,11 @@
 #include <mono/mini/jit.h>
 #include <mono/mini/mini-runtime.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <regex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -193,20 +200,17 @@ assembly_images (MonoImage *manifest)
 	return images;
 }
 
-int
-list_tests (MonoImage *manifest)
+struct TestMethod {
+	MonoMethod *method;
+	std::string name;
+	std::string arms;
+};
+
+/// Every test method in the assembly, manifest first and then module by module.
+std::vector<TestMethod>
+collect_tests (MonoImage *manifest)
 {
-	// Named so that an arm asking for something no attribute produces is a
-	// failure rather than an arm that quietly holds no tests.
-	std::string known;
-
-	for (const auto &arm : arm_attributes) {
-		if (!known.empty ())
-			known += ',';
-		known += arm.arm;
-	}
-
-	printf ("#arms %s\n", known.c_str ());
+	std::vector<TestMethod> tests;
 
 	for (MonoImage *image : assembly_images (manifest)) {
 		int rows = mono_image_get_table_rows (image, MONO_TABLE_METHOD);
@@ -224,35 +228,52 @@ list_tests (MonoImage *manifest)
 			if (!is_test_method (method))
 				continue;
 
-			std::string arms = class_arms (method->klass);
-
-			printf ("%s%s%s\n", qualified_name (method).c_str (), arms.empty () ? "" : " ",
-			        arms.c_str ());
+			tests.push_back ({method, qualified_name (method), class_arms (method->klass)});
 		}
+	}
+
+	return tests;
+}
+
+/// The arms this runner knows, comma separated.
+std::string
+known_arms ()
+{
+	std::string known;
+
+	for (const auto &arm : arm_attributes) {
+		if (!known.empty ())
+			known += ',';
+		known += arm.arm;
+	}
+
+	return known;
+}
+
+bool
+in_arm (const std::string &arms, const char *arm)
+{
+	return ("," + arms + ",").find ("," + std::string (arm) + ",") != std::string::npos;
+}
+
+int
+list_tests (MonoImage *manifest)
+{
+	// Named so that an arm asking for something no attribute produces is a
+	// failure rather than an arm that quietly holds no tests.
+	printf ("#arms %s\n", known_arms ().c_str ());
+
+	for (const TestMethod &test : collect_tests (manifest)) {
+		printf ("%s%s%s\n", test.name.c_str (), test.arms.empty () ? "" : " ",
+		        test.arms.c_str ());
 	}
 
 	return 0;
 }
 
 int
-run_test (MonoImage *manifest, const char *name)
+invoke_test (MonoMethod *method, const char *name)
 {
-	MonoMethodDesc *desc = mono_method_desc_new (name, TRUE);
-	MonoMethod *method = nullptr;
-
-	for (MonoImage *image : assembly_images (manifest)) {
-		method = mono_method_desc_search_in_image (desc, image);
-		if (method != nullptr)
-			break;
-	}
-
-	mono_method_desc_free (desc);
-
-	if (method == nullptr || !is_test_method (method)) {
-		fprintf (stderr, "no test named %s\n", name);
-		return 2;
-	}
-
 	ERROR_DECL (error);
 	MonoObject *exception = nullptr;
 	MonoObject *result = mono_runtime_try_invoke (method, NULL, NULL, &exception, error);
@@ -285,17 +306,135 @@ run_test (MonoImage *manifest, const char *name)
 	return 0;
 }
 
+int
+run_test (MonoImage *manifest, const char *name)
+{
+	MonoMethodDesc *desc = mono_method_desc_new (name, TRUE);
+	MonoMethod *method = nullptr;
+
+	for (MonoImage *image : assembly_images (manifest)) {
+		method = mono_method_desc_search_in_image (desc, image);
+		if (method != nullptr)
+			break;
+	}
+
+	mono_method_desc_free (desc);
+
+	if (method == nullptr || !is_test_method (method)) {
+		fprintf (stderr, "no test named %s\n", name);
+		return 2;
+	}
+
+	return invoke_test (method, name);
+}
+
+/// Runs every test the filters select, and answers non-zero if any of them did
+/// something other than what the caller expects.
+///
+/// only takes the tests whose "Class:name" it matches, arm takes the tests whose
+/// class opted into it, and xfail names the tests that have to fail. Selecting
+/// nothing is not an error: an arm no class in this assembly opted into reports
+/// zero tests and passes.
+int
+run_all (MonoImage *manifest, const char *only, const char *arm,
+         const std::vector<std::string> &xfail)
+{
+	if (arm != nullptr && !in_arm (known_arms (), arm)) {
+		fprintf (stderr, "no arm named %s; this runner knows %s\n", arm,
+		         known_arms ().c_str ());
+		return 2;
+	}
+
+	std::regex pattern;
+
+	if (only != nullptr) {
+		try {
+			pattern.assign (only);
+		} catch (const std::regex_error &bad) {
+			fprintf (stderr, "cannot read %s as a regex: %s\n", only, bad.what ());
+			return 2;
+		}
+	}
+
+	int ran = 0;
+	int wrong = 0;
+
+	for (const TestMethod &test : collect_tests (manifest)) {
+		if (only != nullptr && !std::regex_search (test.name, pattern))
+			continue;
+		if (arm != nullptr && !in_arm (test.arms, arm))
+			continue;
+
+		// The name goes out before the test runs, so a test that takes the
+		// process down leaves its own name as the last line of the output.
+		printf ("%s ... ", test.name.c_str ());
+		fflush (stdout);
+
+		bool passed = invoke_test (test.method, test.name.c_str ()) == 0;
+		bool wanted = std::find (xfail.begin (), xfail.end (), test.name) == xfail.end ();
+
+		ran++;
+		if (passed != wanted)
+			wrong++;
+
+		if (passed)
+			printf ("%s\n", wanted ? "ok" : "passed, and is expected to fail");
+		else
+			printf ("%s\n", wanted ? "FAILED" : "failed as expected");
+		fflush (stdout);
+	}
+
+	printf ("%d tests, %d of them wrong\n", ran, wrong);
+	return wrong == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int
 main (int argc, char *argv[])
 {
-	bool listing = argc > 1 && strcmp (argv[1], "--list") == 0;
-	int first = listing ? 2 : 1;
+	const char *assembly = nullptr;
+	const char *test = nullptr;
+	const char *only = nullptr;
+	const char *arm = nullptr;
+	std::vector<std::string> xfail;
+	bool listing = false;
+	bool all = false;
+	int i = 1;
 
-	if (argc < first + 1 || (!listing && argc < 3)) {
-		fprintf (stderr, "usage: %s --list <assembly>\n       %s <assembly> <Class:name>\n",
-		         argv[0], argv[0]);
+	if (i < argc && strcmp (argv[i], "--list") == 0) {
+		listing = true;
+		i++;
+	} else if (i < argc && strcmp (argv[i], "--all") == 0) {
+		all = true;
+		i++;
+	}
+
+	if (i < argc)
+		assembly = argv[i++];
+
+	for (; i < argc; i++) {
+		const char *value = i + 1 < argc ? argv[i + 1] : nullptr;
+
+		if (all && value != nullptr && strcmp (argv[i], "--only") == 0)
+			only = argv[++i];
+		else if (all && value != nullptr && strcmp (argv[i], "--arm") == 0)
+			arm = argv[++i];
+		else if (all && value != nullptr && strcmp (argv[i], "--xfail") == 0)
+			xfail.push_back (argv[++i]);
+		else if (!all && !listing && test == nullptr)
+			test = argv[i];
+		else
+			break;
+	}
+
+	if (assembly == nullptr || i != argc || (!listing && !all && test == nullptr)) {
+		fprintf (stderr,
+		         "usage: %s --list <assembly>\n"
+		         "       %s <assembly> <Class:name>\n"
+		         "       %s --all <assembly> [--only <regex>] [--arm <name>]"
+		         " [--xfail <Class:name>]...\n",
+		         argv[0], argv[0], argv[0]);
 		return 2;
 	}
 
@@ -348,10 +487,15 @@ main (int argc, char *argv[])
 
 	mono_jit_init_version_for_test_only ("mono-interp-tests", "v4.0.30319");
 
-	MonoImage *image = open_assembly (argv[first]);
+	MonoImage *image = open_assembly (assembly);
 
 	if (image == nullptr)
 		return 2;
 
-	return listing ? list_tests (image) : run_test (image, argv[first + 1]);
+	if (listing)
+		return list_tests (image);
+	if (all)
+		return run_all (image, only, arm, xfail);
+
+	return run_test (image, test);
 }
