@@ -369,6 +369,26 @@ native_entry_for_imethod (InterpMethod *imethod, MonoError *error)
 }
 
 /*
+ * Returns the address that stands for method outside this engine.
+ *
+ * Named rather than resolved: an overridden method answers its own entry, which
+ * is the address its callers already hold and which the override redirected.
+ * Going through the InterpMethod would answer the replacement's, and the two
+ * engines would then hand out different addresses for one method.
+ */
+gpointer
+native_entry_for_method (MonoMethod *method, MonoDomain *domain, MonoError *error)
+{
+	if (!mono_ee_features.force_use_interpreter)
+		return mono_llvm_jit_stub_for (method, domain, error);
+
+	InterpMethod *imethod = mono_interp_imethod_named (domain, method, error);
+
+	return_val_if_nok (error, nullptr);
+	return entry_for_imethod (imethod, error);
+}
+
+/*
  * The method an entry point stands for, or NULL if this domain published no such
  * entry.
  *

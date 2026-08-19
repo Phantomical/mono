@@ -40,6 +40,13 @@ private:
  */
 gpointer native_entry_for_imethod (InterpMethod *imethod, MonoError *error);
 
+/*
+ * The address that stands for method outside this engine, named rather than
+ * resolved: an overridden method answers its own entry rather than the
+ * replacement's.
+ */
+gpointer native_entry_for_method (MonoMethod *method, MonoDomain *domain, MonoError *error);
+
 /// Whether addr is an address imethod is published at.
 ///
 /// A method has one such address per engine that has handed one out: the

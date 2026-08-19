@@ -385,6 +385,12 @@ void mono_interp_transform_init (void);
 
 InterpMethod *mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *error);
 
+/* mono_interp_get_imethod () for the method named rather than the one that runs:
+ * an overridden method answers its own record. Only what hands out an address
+ * wants this; a call site wants the body that replaced it. */
+InterpMethod *mono_interp_imethod_named (MonoDomain *domain, MonoMethod *method,
+                                         MonoError *error);
+
 void mono_interp_print_code (InterpMethod *imethod);
 
 /* Prints one instruction of a transformed method, at ip, whose code starts at

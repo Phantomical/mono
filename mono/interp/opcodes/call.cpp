@@ -697,11 +697,16 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN)
 MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 {
 	error_init_reuse (error);
-	InterpMethod *m =
-		mono_interp_get_imethod (mono_domain_get (), LOCAL_VAR (ip[2], MonoMethod *), error);
-	mono_error_assert_ok (error);
 
-	LOCAL_VAR (ip[1], gpointer) = native_entry_for_imethod (m, error);
+	/*
+	 * The method named, not the one that runs. This is what answers
+	 * RuntimeMethodHandle.GetFunctionPointer (), and a method that has been
+	 * overridden still has to answer its own entry there - the icall does, and
+	 * a patcher handed the replacement's address would write over the wrong
+	 * method.
+	 */
+	LOCAL_VAR (ip[1], gpointer) = native_entry_for_method (
+		LOCAL_VAR (ip[2], MonoMethod *), mono_domain_get (), error);
 	mono_error_assert_ok (error);
 
 	MONO_INTERP_OP_ADVANCE ();
