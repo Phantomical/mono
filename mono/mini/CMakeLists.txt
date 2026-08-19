@@ -270,6 +270,25 @@ endif()
 install(FILES jit.h mono-private-unstable.h
         DESTINATION "${MONO_INCLUDE_SUBDIR}/mono/jit")
 
+# The override assembly, which the runtime reads out of the directory it was
+# loaded from - so it is built here, beside the runtime libraries, rather than
+# under mcs/ with the class libraries.
+if(MONO_ENABLE_MCS_BUILD)
+  set(_overrides "${CMAKE_CURRENT_BINARY_DIR}/mono-overrides.dll")
+  mono_tools_runtime(_overrides_host MONO_PATH "${MONO_MCS_LIBDIR}/build")
+  add_custom_command(
+    OUTPUT "${_overrides}"
+    COMMAND ${_overrides_host} "${MONO_CSC}" -debug:portable -noconfig -nologo
+            -target:library "-out:${_overrides}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/mono-overrides.cs"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/mono-overrides.cs" mcs
+    COMMENT "CSC mono-overrides.dll"
+    VERBATIM)
+  add_custom_target(mono-overrides ALL DEPENDS "${_overrides}")
+  mono_tools_runtime_depends(mono-overrides)
+  install(FILES "${_overrides}" DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+endif()
+
 if(BUILD_TESTING)
   include(MonoMiniTests)
 endif()
