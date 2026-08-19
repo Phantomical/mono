@@ -299,6 +299,16 @@ Backend debugging env vars:
   labels only an object streamer plants, so the frame description appears as the
   `.cfi_*` directives instead. Costs a second codegen over a clone of the module,
   which leaves the code that actually gets published untouched.
+- `MONO_LLVM_JIT_ASM_DIR=<dir>` (`compiler.cpp`) — send each dump to `<dir>/<method>.s`
+  instead of to stderr, one file for each compiled method, creating the directory if
+  it is absent. On its own it takes every method that reaches codegen, which is what
+  to reach for under a player whose stderr is a log everything else also writes to;
+  `MONO_LLVM_JIT_ASM` still narrows it when both are set. A file name is the method's
+  name with the characters a path cannot carry folded to underscores, so it carries
+  the `MonoMethod` address the module identifier ends with and changes between runs.
+  Two methods that want one name get `.1`, `.2` and so on before the extension, which
+  is what a generic instantiation and `MONO_LLVM_JIT_RECOMPILE` both produce. Loading
+  KSP to its main menu writes ~9300 files and 194M.
 - `MONO_LLVM_JIT_VERIFY=<0|off|each|all>` (`jit.cpp`) — how much of the IR the verifier
   sees. On by default when LLVM was built with assertions (the configuration this
   project uses), and then it checks the translator's output, the module after each pass

@@ -60,12 +60,16 @@
 #include <llvm/MC/MCStreamer.h>
 #include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/FormattedStream.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/SmallVectorMemoryBuffer.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 
+#include <cctype>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -763,19 +767,103 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	return Error::success ();
 }
 
-/// Whether MONO_LLVM_JIT_ASM names this module: a substring of its identifier,
-/// which is the full name of the one method it holds.
+/// The directory MONO_LLVM_JIT_ASM_DIR names, or an empty string if it names
+/// none. A dump goes to one file for each method there instead of to stderr.
+StringRef
+asm_dump_directory ()
+{
+	static const char *dir = std::getenv ("MONO_LLVM_JIT_ASM_DIR");
+
+	return dir != nullptr ? StringRef (dir) : StringRef ();
+}
+
+/// Whether to dump this module, whose identifier is the full name of the one
+/// method it holds. MONO_LLVM_JIT_ASM keeps the methods whose name contains it.
+/// A directory with no filter beside it takes every method that reaches codegen.
 bool
 dumping_asm (StringRef module_name)
 {
 	static const char *filter = std::getenv ("MONO_LLVM_JIT_ASM");
 
-	return filter != nullptr && module_name.contains (filter);
+	if (filter == nullptr)
+		return !asm_dump_directory ().empty ();
+
+	return module_name.contains (filter);
 }
 
 /*
- * Print the assembly M compiles to - side-table sections included, which is the
- * half no offline llc run can reproduce - to stderr.
+ * A method name holds characters a path cannot carry - `/` in a generic
+ * argument, and the spaces of a signature - so each run of them becomes one
+ * underscore. Long names are cut to leave room for the extension and for the
+ * uniquing suffix, since a file name has 255 bytes on the file systems this
+ * runs on.
+ */
+std::string
+asm_file_stem (StringRef module_name)
+{
+	constexpr size_t max_stem = 200;
+	std::string stem;
+	bool last_was_separator = false;
+
+	for (char c : module_name.take_front (max_stem)) {
+		if (isalnum (static_cast<unsigned char> (c)) || c == '.' || c == '-') {
+			stem.push_back (c);
+			last_was_separator = false;
+		} else if (!last_was_separator) {
+			stem.push_back ('_');
+			last_was_separator = true;
+		}
+	}
+
+	return stem.empty () ? std::string ("method") : stem;
+}
+
+/*
+ * Open the file a method's assembly goes to, under the directory
+ * MONO_LLVM_JIT_ASM_DIR names.
+ *
+ * Two methods can want one name: a generic instantiation differs from another
+ * only in characters the stem drops, and MONO_LLVM_JIT_RECOMPILE gives one
+ * method several compiles. So this counts up a suffix until a name is free.
+ * CD_CreateNew is what makes that safe while several compile threads run - the
+ * loser of a race gets EEXIST and takes the next number, rather than the two
+ * writing over one file.
+ */
+Expected<std::unique_ptr<raw_fd_ostream>>
+open_asm_file (StringRef module_name)
+{
+	StringRef dir = asm_dump_directory ();
+	std::string stem = asm_file_stem (module_name);
+
+	if (std::error_code ec = sys::fs::create_directories (dir))
+		return createStringError (ec, "cannot create %s", dir.str ().c_str ());
+
+	for (unsigned attempt = 0; attempt < 10000; attempt++) {
+		SmallString<256> path (dir);
+		std::string name = attempt == 0
+		                 ? stem + ".s"
+		                 : stem + "." + std::to_string (attempt) + ".s";
+		int fd = -1;
+
+		sys::path::append (path, name);
+
+		std::error_code ec = sys::fs::openFileForWrite (
+			path, fd, sys::fs::CD_CreateNew, sys::fs::OF_Text);
+		if (!ec)
+			return std::make_unique<raw_fd_ostream> (fd, /*shouldClose=*/true);
+		if (ec != std::errc::file_exists)
+			return createStringError (ec, "cannot write %s", path.c_str ());
+	}
+
+	return createStringError (std::make_error_code (std::errc::file_exists),
+	                          "%s already holds 10000 files named for %s",
+	                          dir.str ().c_str (), stem.c_str ());
+}
+
+/*
+ * Write the assembly M compiles to - side-table sections included, which is the
+ * half no offline llc run can reproduce. It goes to a file of its own under
+ * MONO_LLVM_JIT_ASM_DIR, or to stderr when that variable names no directory.
  *
  * Codegen consumes the module it is given, and the MCContext, the MMI and the
  * streamer are entangled with the single run they were built for, so this
@@ -789,9 +877,20 @@ dump_assembly (TargetMachine &tm, const Module &m)
 {
 	std::unique_ptr<Module> copy = CloneModule (m);
 	MonoEHSideChannel side_channel;
+	std::unique_ptr<raw_fd_ostream> file;
+	raw_pwrite_stream *out = &errs ();
 
-	errs () << "*** assembly for " << m.getModuleIdentifier () << " ***\n";
-	return emit_object (tm, *copy, errs (), side_channel, OutputKind::assembly);
+	if (!asm_dump_directory ().empty ()) {
+		Expected<std::unique_ptr<raw_fd_ostream>> opened
+			= open_asm_file (m.getModuleIdentifier ());
+		if (!opened)
+			return opened.takeError ();
+		file = std::move (*opened);
+		out = file.get ();
+	}
+
+	*out << "*** assembly for " << m.getModuleIdentifier () << " ***\n";
+	return emit_object (tm, *copy, *out, side_channel, OutputKind::assembly);
 }
 
 } // namespace
