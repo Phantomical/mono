@@ -52,6 +52,13 @@ bool recompiling (MonoMethod *method);
 /// entry path from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
 
+/// How many calls a tier-1 body takes before it asks to be compiled again.
+///
+/// Zero, which turns the whole tier-2 path off: no counter is emitted and the
+/// tier-1 output carries no profiling instrumentation.
+/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it.
+uint32_t tier2_threshold ();
+
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.
 ///
 /// Zero for a method that does not run at tier 0 at all, which is also how a

@@ -1,5 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
+#include "passes/tier-counter.hpp"
+#include "runtime/options.hpp"
 #include "runtime-error.hpp"
 #include "seq-point-marker.hpp"
 #include "mono/metadata/class-inlines.h"
@@ -810,6 +812,17 @@ MethodLLVMEmitter::emit ()
 		clause_state[i].abort_guard =
 			builder.CreateAlloca (builder.getInt8Ty (), nullptr,
 			                      llvm::Twine ("abort_guard") + llvm::Twine (i));
+	}
+
+	// Only marked here: TierCounterPass writes the counter, behind the profile
+	// instrumentation - see passes/tier-counter.hpp.
+	if (uint32_t threshold = tier2_threshold ()) {
+		std::string handle =
+			"mono_tier_method_" + std::to_string ((uintptr_t) method);
+
+		address_symbol (handle, method);
+		function->addFnAttr (tier_counter_attribute, std::to_string (threshold));
+		function->addFnAttr (tier_handle_attribute, handle);
 	}
 
 	// A handler is entered by the runtime rather than by anything in the IL. So what

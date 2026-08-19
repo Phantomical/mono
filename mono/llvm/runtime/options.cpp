@@ -118,6 +118,23 @@ tier1_threshold ()
 	return calls;
 }
 
+uint32_t
+tier2_threshold ()
+{
+	static uint32_t calls = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD");
+
+		if (value == nullptr)
+			return 0;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 0;
+	}();
+
+	return calls;
+}
+
 int32_t
 tier0_calls (MonoMethod *method)
 {

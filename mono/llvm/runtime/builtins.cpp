@@ -1,4 +1,5 @@
 #include "builtins.hpp"
+#include "domain-method.h"
 #include "mini.h"
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/marshal.h"
@@ -34,6 +35,15 @@ jit_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Ex
 	return _URC_CONTINUE_UNWIND;
 }
 
+// What a body's entry counter calls when it runs out. The domain is the
+// thread's rather than the code's, which is wrong once InvokeInDomain has
+// switched it.
+void
+mono_llvm_jit_tier2_promote (MonoMethod *method)
+{
+	mono_promote_method (method, mono_domain_get ());
+}
+
 MonoObject *
 mono_llvm_load_error_exception (MonoErrorBoxed *failure)
 {
@@ -47,6 +57,7 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 {
 	std::initializer_list<MonoBuiltin> array = {
 		{"mono_domain_get", (void *) &mono_domain_get},
+		{"mono_llvm_jit_tier2_promote", (void *) &mono_llvm_jit_tier2_promote},
 		{"mono_marshal_set_last_error", (void *) &mono_marshal_set_last_error},
 		{"mono_gc_wbarrier_generic_store_internal",
 	         (void *) &mono_gc_wbarrier_generic_store_internal},

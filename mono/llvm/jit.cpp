@@ -18,6 +18,7 @@
 #include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/restore-tail-position.hpp"
+#include "passes/tier-counter.hpp"
 #include "timing.hpp"
 
 #include <llvm/CodeGen/TargetLowering.h>
@@ -34,6 +35,8 @@
 #include <llvm/Object/StackMapParser.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Transforms/Instrumentation/InstrProfiling.h>
+#include <llvm/Transforms/Instrumentation/PGOInstrumentation.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
@@ -588,6 +591,20 @@ apply_options ()
 	return Error::success ();
 }
 
+// Read here rather than through runtime/options.hpp, which would put mono's
+// headers in this file.
+static bool
+tier2_enabled ()
+{
+	static const bool on = [] {
+		const char *value = ::getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD");
+
+		return value != nullptr && ::atoi (value) > 0;
+	}();
+
+	return on;
+}
+
 /*
  * The host target configuration every compile uses, detected once.
  *
@@ -711,6 +728,27 @@ Tier0Pipeline::Tier0Pipeline ()
 	// never sees a builtin.
 	mpm.addPass (ArrayAddressPass ());
 	mpm.addPass (LowerBuiltinsPass ());
+
+	// TierCounterPass runs behind the instrumentation, never in front - see
+	// passes/tier-counter.hpp.
+	if (tier2_enabled ()) {
+		InstrProfOptions counters;
+
+		// Value profiling is the one piece that calls into compiler-rt, which
+		// nothing here links. It feeds indirect-call promotion, and that is a
+		// guarded devirtualization this backend does not do.
+		if (cl::Option *vp = cl::getRegisteredOptions ().lookup ("disable-vp"))
+			static_cast<cl::opt<bool> *> (vp)->setValue (true);
+
+		// Threads share a body's counters, and the reader rejects edge counts
+		// that disagree with each other as a corrupt profile.
+		counters.Atomic = true;
+		counters.DoCounterPromotion = true;
+
+		mpm.addPass (PGOInstrumentationGen (PGOInstrumentationType::FDO));
+		mpm.addPass (InstrProfilingLoweringPass (counters));
+		mpm.addPass (TierCounterPass ());
+	}
 
 	// Here, so that a check for a class an earlier check already covers costs
 	// the rest of the pipeline nothing. It runs again after the pipeline,
