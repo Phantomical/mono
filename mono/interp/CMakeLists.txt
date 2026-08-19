@@ -16,7 +16,3 @@ mono_add_object_library(mono_ee_interp
     DEPENDS mono::hidden mono::eglib_headers mono::llvm)
 
 add_dependencies(mono_ee_interp mono-version)
-
-if(BUILD_TESTING)
-  add_subdirectory(tests)
-endif()

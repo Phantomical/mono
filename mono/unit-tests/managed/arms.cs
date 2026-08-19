@@ -7,7 +7,7 @@
 // rather than another copy of everything.
 //
 // Mark a class where a defect in what the arm varies would change an answer.
-// CMakeLists.txt in the directory above says what each arm turns on.
+// CMakeLists.txt says what each arm turns on.
 //
 // A class written in IL is marked the same way, through `.module extern`. An
 // assembly of its own carries its own copy of the attribute, since the runner

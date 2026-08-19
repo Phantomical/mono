@@ -78,7 +78,7 @@ is_test_method (MonoMethod *method)
 ///
 /// The match is on the attribute's name alone, so a suite that has to be an
 /// assembly of its own defines the attribute again rather than referencing the
-/// one in cs/arms.cs.
+/// one in arms.cs.
 const struct {
 	std::string_view attribute;
 	const char *arm;

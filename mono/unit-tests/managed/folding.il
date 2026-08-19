@@ -15,7 +15,7 @@
 // MINT_ADD1_I8, MINT_SUB1_I8, MINT_CNE_I8, MINT_CGE_I8, MINT_CGE_UN_I8,
 // MINT_CLE_I8 and MINT_CLE_UN_I8 have no other way in.  They come from the nint
 // and nuint operators, which interp_handle_magic_type_intrinsics () replaces
-// with those opcodes.  il/magic-conv.il documents what makes a type magic.  This
+// with those opcodes.  magic-conv.il documents what makes a type magic.  This
 // file needs two things from that rule: one of the assembly names in
 // mono_class_is_magic_assembly (), and the two exact type names below.  The
 // types hold the members these tests call and nothing more.
@@ -165,7 +165,7 @@
 
 } // .namespace System
 
-// The attribute cs/arms.cs holds.  This file is an assembly of its own, and the
+// The attribute arms.cs holds.  This file is an assembly of its own, and the
 // runner matches an arm attribute by name, so it carries its own definition
 // rather than referencing that one.
 .class public auto ansi sealed NoOptAttribute extends [mscorlib]System.Attribute

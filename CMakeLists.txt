@@ -205,9 +205,9 @@ if(BUILD_TESTING)
     USES_TERMINAL
     VERBATIM)
 
-  # The interpreter's own tests, under mono/unit-tests/gtest/interp. Seconds. The rest
-  # of the `interp` label is thousands of managed programs run interpreted, which
-  # is a different question and `ctest -L interp` is how to ask it.
+  # The interpreter's own tests, under mono/unit-tests. Seconds. The `interp`
+  # label is a different question -- thousands of managed programs from
+  # mono/tests run interpreted -- and `ctest -L interp` is how to ask it.
   add_custom_target(check-interp
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
             -L interp-unit

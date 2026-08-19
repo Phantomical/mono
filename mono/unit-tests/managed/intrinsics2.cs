@@ -1,4 +1,4 @@
-// The intrinsic sites that mono/interp/tests/intrinsics.cs leaves alone:
+// The intrinsic sites that intrinsics.cs leaves alone:
 // Debugger.Break, the three-argument arm of the Math table, the element store a
 // rectangular array's Set turns into, and the two memory barriers.
 //

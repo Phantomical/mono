@@ -1,7 +1,8 @@
-# The interpreter's managed tests.
+# Managed tests written as test_N_<name> methods rather than as programs with a
+# Main of their own, so that many of them share one assembly.
 #
-# Each test method in the built assemblies becomes its own ctest test, run in
-# its own process by runner.cpp.
+# Each method becomes its own ctest test, run in its own process by runner.cpp,
+# once per engine arm.
 #
 # discover.cmake lists those methods when ctest starts rather than at configure
 # time, so writing a new test means editing a source and building, with no cmake
@@ -11,8 +12,8 @@ if(NOT MONO_CORPUS_ENABLED)
   # No class-library toolchain, so nothing to compile the suites with.
   return()
 endif()
-if(NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRARIES)
-  # No monosgen-static for the runner to link.
+if(NOT MONO_ENABLE_INTERPRETER OR NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRARIES)
+  # No interpreter to run the arms on, or no monosgen-static for the runner.
   return()
 endif()
 
@@ -126,15 +127,15 @@ endfunction()
 set(MONO_CORPUS_OUTPUTS "")
 set(_modules "")
 
-file(GLOB _sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" cs/*.cs)
+file(GLOB _sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" *.cs)
 mono_corpus_cs(interp-tests-cs.netmodule MODULE DEBUG SOURCES ${_sources})
 list(APPEND _modules "${CMAKE_CURRENT_BINARY_DIR}/interp-tests-cs.netmodule")
 
 # IL shapes C# does not emit.
-file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" il/*.il)
+file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" *.il)
 
 # These set their own assembly names, so they cannot be merged with the others.
-set(_own_assembly il/folding.il il/magic-conv.il)
+set(_own_assembly folding.il magic-conv.il)
 set(_assemblies "")
 
 foreach(_il IN LISTS _il_sources)
