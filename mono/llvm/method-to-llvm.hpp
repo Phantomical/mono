@@ -270,6 +270,10 @@ private:
 	llvm::DenseMap<size_t, Block> blocks;
 	llvm::DenseMap<std::pair<size_t, llvm::Type *>, llvm::AllocaInst *> spills;
 	llvm::BasicBlock *entry_block = nullptr;
+
+	/// The blocks create_cold_block () made, in the order it made them.
+	std::vector<llvm::BasicBlock *> cold_blocks;
+
 	std::vector<Entry> args;
 	std::vector<Entry> locals;
 	std::vector<StackValue> stack;
@@ -559,6 +563,7 @@ private:
 	llvm::Expected<size_t> branch_target (int32_t displacement);
 	llvm::Error translate_range (MonoIrBuilder &builder, size_t begin, size_t end);
 	void finish_function ();
+	llvm::BasicBlock *create_cold_block (const llvm::Twine &name);
 	llvm::AllocaInst *entry_alloca (llvm::Type *type, const llvm::Twine &name);
 	llvm::AllocaInst *spill_slot (size_t depth, llvm::Type *type);
 	std::vector<Slot> spill_stack (MonoIrBuilder &builder);

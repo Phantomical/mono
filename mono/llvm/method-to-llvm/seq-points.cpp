@@ -214,6 +214,11 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 	llvm::Value *armed = builder.CreateICmpNE (
 		any, llvm::ConstantInt::get (i64, 0), "sp.armed");
 
+	// The trap block is cold, but it stays where it is emitted rather than going
+	// to the end with create_cold_block (). The runtime answers for an address
+	// with the sequence point recorded at or before it, so a marker that moves
+	// away from the code it belongs to answers for a statement somewhere else.
+	// The stepper then reports the wrong method.
 	llvm::BasicBlock *trap =
 		llvm::BasicBlock::Create (context (), "sp.trap", function);
 	llvm::BasicBlock *cont =

@@ -233,8 +233,7 @@ MethodLLVMEmitter::emit_method_access_failure (MonoIrBuilder &builder, MonoMetho
 	emit_unwinding_call (builder, *raise,
 	                     adapt_to_callee (builder, *raise,
 	                                      { method_symbol (method), method_symbol (callee) }));
-	builder.SetInsertPoint (
-		llvm::BasicBlock::Create (context (), "method_access", function));
+	builder.SetInsertPoint (create_cold_block ("method_access"));
 	return llvm::Error::success ();
 }
 

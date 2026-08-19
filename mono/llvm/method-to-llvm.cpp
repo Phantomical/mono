@@ -1085,6 +1085,30 @@ MethodLLVMEmitter::finish_function ()
 	for (auto &entry : blocks)
 		if (entry.second.block->empty ())
 			MonoIrBuilder (entry.second.block).CreateUnreachable ();
+
+	/*
+	 * Codegen lays the blocks out in this order, and block placement does not
+	 * run at CodeGenOptLevel::None. Left where it was made, a throw block or a
+	 * landing pad sits among the blocks of the hot path, which then jumps over
+	 * it. Moved here, the hot path stays together and the cold code goes past
+	 * the end of it.
+	 */
+	for (llvm::BasicBlock *block : cold_blocks)
+		if (block != &function->back ())
+			block->moveAfter (&function->back ());
+}
+
+/// Creates a block for a path that runs only when something goes wrong.
+///
+/// The block is not laid out where it is made. finish_function () moves these
+/// past everything else, keeping the order they were made in.
+llvm::BasicBlock *
+MethodLLVMEmitter::create_cold_block (const llvm::Twine &name)
+{
+	llvm::BasicBlock *block = llvm::BasicBlock::Create (context (), name, function);
+
+	cold_blocks.push_back (block);
+	return block;
 }
 
 /// Translate the instruction at `ip`, leaving `ip` on the one after it.
@@ -1759,14 +1783,12 @@ llvm::BranchInst *
 MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
                                         const char *name)
 {
-	llvm::BasicBlock *throw_bb =
-		llvm::BasicBlock::Create (context (), llvm::Twine ("throw_") + name, function);
+	llvm::BasicBlock *throw_bb = create_cold_block (llvm::Twine ("throw_") + name);
 	llvm::BasicBlock *next_bb = llvm::BasicBlock::Create (context (), "no_throw", function);
 	llvm::BranchInst *branch = builder.CreateCondBr (condition, throw_bb, next_bb);
 
 	// These guards sit in the fallthrough path of ordinary arithmetic, so this states
-	// which way they go. Otherwise the throw looks as likely as the work it protects,
-	// and the block layout interleaves the two.
+	// which way they go. Otherwise the throw looks as likely as the work it protects.
 	llvm::MDBuilder md (context ());
 	branch->setMetadata (llvm::LLVMContext::MD_prof, md.createBranchWeights (1, 1000));
 

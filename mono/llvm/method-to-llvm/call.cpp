@@ -886,7 +886,7 @@ MethodLLVMEmitter::emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignat
 
 	pop_stack (operands);
 	emit_throw_corlib_exception (builder, "BadImageFormatException");
-	builder.SetInsertPoint (llvm::BasicBlock::Create (context (), "bad_image", function));
+	builder.SetInsertPoint (create_cold_block ("bad_image"));
 
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();

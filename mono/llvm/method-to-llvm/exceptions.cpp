@@ -211,8 +211,8 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 {
 	MonoExceptionClause *info = &clauses[clause];
 	Block &handler = blocks[info->handler_offset];
-	llvm::BasicBlock *enter = llvm::BasicBlock::Create (
-		context (), llvm::Twine ("enter_clause") + llvm::Twine (clause), function);
+	llvm::BasicBlock *enter =
+		create_cold_block (llvm::Twine ("enter_clause") + llvm::Twine (clause));
 	MonoIrBuilder prep (enter);
 
 	if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
@@ -256,8 +256,7 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 	if (state.pad != nullptr)
 		return state.pad;
 
-	state.pad = llvm::BasicBlock::Create (context (),
-	                                      llvm::Twine ("pad") + llvm::Twine (clause), function);
+	state.pad = create_cold_block (llvm::Twine ("pad") + llvm::Twine (clause));
 
 	MonoIrBuilder pad (state.pad);
 	llvm::Type *exception = llvm::PointerType::get (context (), 0);
@@ -277,9 +276,7 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 	 * means we built the table wrongly, and there is nowhere sensible to go.
 	 */
 	llvm::BasicBlock *impossible =
-		llvm::BasicBlock::Create (context (),
-		                          llvm::Twine ("pad") + llvm::Twine (clause) + "_bad",
-		                          function);
+		create_cold_block (llvm::Twine ("pad") + llvm::Twine (clause) + "_bad");
 	MonoIrBuilder (impossible).CreateUnreachable ();
 
 	llvm::SwitchInst *dispatch = pad.CreateSwitch (selector, impossible,
@@ -315,10 +312,9 @@ MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 		return;
 	}
 
-	llvm::BasicBlock *cont =
-		llvm::BasicBlock::Create (context (), "resume_cont", function);
-	llvm::BasicBlock *pad_block = llvm::BasicBlock::Create (
-		context (), llvm::Twine ("resume_pad") + llvm::Twine (clause), function);
+	llvm::BasicBlock *cont = create_cold_block ("resume_cont");
+	llvm::BasicBlock *pad_block =
+		create_cold_block (llvm::Twine ("resume_pad") + llvm::Twine (clause));
 
 	builder.CreateInvoke (resume_unwind_decl (module), cont, pad_block);
 	MonoIrBuilder (cont).CreateUnreachable ();
@@ -334,9 +330,8 @@ MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 	llvm::Value *exc = pad.CreateExtractValue (caught, 0);
 	llvm::Value *selector = pad.CreateExtractValue (caught, 1);
 
-	llvm::BasicBlock *impossible = llvm::BasicBlock::Create (
-		context (),
-		llvm::Twine ("resume_pad") + llvm::Twine (clause) + "_bad", function);
+	llvm::BasicBlock *impossible =
+		create_cold_block (llvm::Twine ("resume_pad") + llvm::Twine (clause) + "_bad");
 	MonoIrBuilder (impossible).CreateUnreachable ();
 
 	llvm::SwitchInst *dispatch = pad.CreateSwitch (
@@ -425,8 +420,7 @@ MethodLLVMEmitter::emit_finally_abort_check (MonoIrBuilder &builder, uint32_t cl
 
 	llvm::BasicBlock *test =
 		llvm::BasicBlock::Create (context (), "abort_guard", function);
-	llvm::BasicBlock *deliver =
-		llvm::BasicBlock::Create (context (), "deliver_abort", function);
+	llvm::BasicBlock *deliver = create_cold_block ("deliver_abort");
 	llvm::BasicBlock *leaving =
 		llvm::BasicBlock::Create (context (), "finally_left", function);
 
@@ -461,8 +455,7 @@ MethodLLVMEmitter::emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCa
 	int clause = innermost_try (offset);
 
 	if (clause >= 0) {
-		llvm::BasicBlock *unwound =
-			llvm::BasicBlock::Create (context (), "unwound", function);
+		llvm::BasicBlock *unwound = create_cold_block ("unwound");
 
 		builder.CreateInvoke (callee, unwound, landing_pad (clause), args);
 		builder.SetInsertPoint (unwound);
@@ -716,8 +709,7 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 		llvm::Value *pending = emit_protected_call (
 			builder, *undeniable, adapt_to_callee (builder, *undeniable, {}));
 
-		llvm::BasicBlock *rethrow = llvm::BasicBlock::Create (
-			context (), "rethrow_undeniable", function);
+		llvm::BasicBlock *rethrow = create_cold_block ("rethrow_undeniable");
 		llvm::BasicBlock *carry_on = llvm::BasicBlock::Create (
 			context (), "no_undeniable", function);
 
@@ -829,8 +821,7 @@ MethodLLVMEmitter::emit_endfinally (MonoIrBuilder &builder)
 		return llvm::Error::success ();
 	}
 
-	llvm::BasicBlock *unwinding =
-		llvm::BasicBlock::Create (context (), "resume_unwind", function);
+	llvm::BasicBlock *unwinding = create_cold_block ("resume_unwind");
 	MonoIrBuilder resume (unwinding);
 
 	emit_resume_exit (resume, static_cast<uint32_t> (clause));
