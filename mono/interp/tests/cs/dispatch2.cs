@@ -1,11 +1,11 @@
 // Calls that leave the interpreter through do_jit_call (), the path that
 // marshals the interpreter's stack into a call made at a native entry address.
 //
-// The lever is MethodHandle.GetFunctionPointer (). It marks the entry address of
-// a method as escaped, and resolve_code_type () answers IMETHOD_CODE_COMPILED
-// for an escaped method that carries NoInlining. The target does not need a
-// compiled body: at tier 0 the escaped address is the entry thunk of an
-// interpreted one, and the call is marshalled all the same.
+// The lever is MethodHandle.GetFunctionPointer (). It compiles the method it is
+// asked about, which gives it a body, and resolve_code_type () then answers
+// IMETHOD_CODE_COMPILED for a method that has one. The body need not be
+// compiled code: at tier 0 it is the shared interpreter entry, reached through
+// the method's own thunk, and the call is marshalled into it all the same.
 //
 // Every target is NoInlining and returns a value of its own, so the answer says
 // which body ran and with which arguments.
@@ -20,8 +20,8 @@ public class Dispatch2 {
 	[MethodImpl (MethodImplOptions.NoInlining)] static double IdD (double x) { return x; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static object IdO (object x) { return x; }
 
-	// Gives the entry address of a method out, which marks it as escaped. Every
-	// later call to that method from interpreted code goes through do_jit_call ().
+	// Asks for the entry address of a method, which compiles it. Every later
+	// call to that method from interpreted code goes through do_jit_call ().
 	static void EscapeEntry (Type type, string name)
 	{
 		type.GetMethod (name).MethodHandle.GetFunctionPointer ();
