@@ -46,9 +46,9 @@ void mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *t
 /// covers the second where the signature can be marshalled into a call, which
 /// rules out generics and more than six parameters.
 ///
-/// \p method is marked as not to be inlined, so that a caller transformed after
-/// this call does not copy the body being replaced. A caller transformed before
-/// it keeps whatever it copied.
+/// A caller the interpreter transformed before this call keeps whatever it
+/// copied of \p method's body. One transformed after it names \p replacement,
+/// inlined or not.
 ///
 /// A later override replaces this one. There is no failure to report.
 void mono_install_method_override (MonoMethod *method, MonoDomain *domain,

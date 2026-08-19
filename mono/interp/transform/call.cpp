@@ -21,6 +21,7 @@
 #include <mono/utils/unlocked.h>
 
 #include <mono/mini/mini.h>
+#include <mono/mini/domain-method.hpp>
 #include <mono/mini/mini-runtime.h>
 
 #include "mintops.hpp"
@@ -647,6 +648,23 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	}
 
 	target_method = interp_transform_internal_calls (method, target_method, csignature, is_virtual);
+
+	/*
+	 * A replaced method is called as its replacement from here on, so a site
+	 * that copies the callee's body into itself copies the replacement's. A
+	 * dispatched site is left alone: it settles its callee at run time, and
+	 * mono_interp_get_imethod () substitutes there.
+	 *
+	 * The site keeps its own signature. An override is static where the method
+	 * it replaces is not, and takes the receiver as its first argument, so the
+	 * two occupy the same stack slots either way.
+	 */
+	if (!is_virtual && target_method != NULL) {
+		MonoMethod *replacement = mono::method_override_for (domain, target_method);
+
+		if (replacement != NULL)
+			target_method = replacement;
+	}
 
 	if (csignature->call_convention == MONO_CALL_VARARG)
 		csignature =

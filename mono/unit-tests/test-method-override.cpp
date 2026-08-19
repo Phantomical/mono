@@ -225,12 +225,12 @@ TEST_F (MethodOverride, ReachesAWideSignature)
 }
 
 /*
- * A callee small enough to be copied into its caller is reached anyway, because
- * overriding it marks it NoInlining and the interpreter reads that while it
- * transforms each caller. A caller transformed before the override keeps what
- * it copied, which is why this one is not called first.
+ * A callee small enough to be copied into its caller is reached anyway: the
+ * interpreter settles each site's callee through the override table, so what it
+ * copies is the replacement's body. A caller transformed before the override
+ * keeps what it copied, which is why this one is not called first.
  */
-TEST_F (MethodOverride, IsNotInlinedAway)
+TEST_F (MethodOverride, InlinesTheReplacement)
 {
 	MonoMethod *target = method_named ("Small", 1);
 	MonoMethod *caller = method_named ("CallSmall", 1);

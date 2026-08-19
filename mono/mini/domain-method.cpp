@@ -12,7 +12,6 @@
 #include <mono/llvm/runtime.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/domain-internals.h>
-#include <mono/metadata/tabledefs.h>
 
 #include <llvm/ADT/DenseMap.h>
 
@@ -225,19 +224,18 @@ method_override_for (MonoDomain *domain, MonoMethod *method)
 	if (!any_method_overridden () && !method_overrides_registered ())
 		return nullptr;
 
+	/* An override installed through the API is recorded on the method. */
+	if (MonoDomainMethod *dm = domain_method_find (domain, method))
+		if (MonoMethod *replacement = dm->override_method ())
+			return replacement;
+
 	/*
-	 * Built rather than looked up. Building the record is what installs an
-	 * override the table names, and the first thing to ask about a method can
-	 * be this call.
+	 * One the override assembly names is installed when the method's entry is
+	 * first asked for, which nothing may have done yet. Answering from the
+	 * table rather than building the record keeps a caller that only wants to
+	 * name its callee from carving a thunk for every call site it reads.
 	 */
-	llvm::Expected<MonoDomainMethod *> dm = domain_method_get (domain, method);
-
-	if (!dm) {
-		llvm::consumeError (dm.takeError ());
-		return nullptr;
-	}
-
-	return (*dm)->override_method ();
+	return registered_override_for (method);
 }
 
 void
@@ -409,16 +407,6 @@ mono_install_method_override (MonoMethod *method, MonoDomain *domain, MonoMethod
 		llvm::consumeError (dm.takeError ());
 		return;
 	}
-
-	/*
-	 * The interpreter reads iflags live while it transforms each caller, so this
-	 * keeps every caller transformed from here on out of the inlined case. An
-	 * instantiation carries its own copy of the bit, so the definition is marked
-	 * as well - otherwise the sibling instantiations stay inlinable.
-	 */
-	method->iflags |= METHOD_IMPL_ATTRIBUTE_NOINLINING;
-	if (method->is_inflated)
-		((MonoMethodInflated *) method)->declaring->iflags |= METHOD_IMPL_ATTRIBUTE_NOINLINING;
 
 	(*dm)->install_override (replacement, (*stand_in)->thunk_address ());
 }

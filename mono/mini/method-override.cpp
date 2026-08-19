@@ -21,7 +21,6 @@
 #include <mono/metadata/object-internals.h>
 #include <mono/metadata/reflection.h>
 #include <mono/metadata/reflection-internals.h>
-#include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
 #include <mono/utils/mono-error-internals.h>
 
@@ -224,15 +223,6 @@ void match_image (MonoImage *image)
 
 		if (target == nullptr || !signature_matches (target, entry.replacement))
 			continue;
-
-		/*
-		 * Here rather than where the override is installed, which is too
-		 * late: the interpreter reads iflags to decide whether to copy a
-		 * callee's body into its caller, and it decides that before it asks
-		 * for the callee at all. Nothing has been transformed yet at image
-		 * load, so every caller sees the bit.
-		 */
-		target->iflags |= METHOD_IMPL_ATTRIBUTE_NOINLINING;
 
 		std::lock_guard<std::mutex> held (g_lock);
 

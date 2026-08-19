@@ -145,11 +145,11 @@ TEST_F (MethodOverrideRegistry, ReplacesEveryLoadedCopy)
 }
 
 /*
- * A caller small enough to copy the target's body into itself reaches the
- * replacement anyway: a matched target is marked NoInlining as the image loads,
- * which is before anything is transformed.
+ * A caller that copies its callee's body into itself copies the replacement's,
+ * because the interpreter settles each site's callee through the override table
+ * before it decides to inline.
  */
-TEST_F (MethodOverrideRegistry, IsNotInlinedAway)
+TEST_F (MethodOverrideRegistry, InlinesTheReplacement)
 {
 	MonoMethod *caller = method_named (g_a, "CallValue", 1);
 
@@ -183,8 +183,7 @@ TEST_F (MethodOverrideRegistry, ReachesAWideSignature)
  * Mono.Overrides.MonoOverride::Install, which is how an override assembly
  * replaces a method it could not name in an attribute - Harmony hands the
  * runtime a MethodBase it was given at run time. The caller is transformed
- * after the install, so the marking done there is what keeps the small target
- * out of it.
+ * after the install, so its site names the replacement.
  */
 TEST_F (MethodOverrideRegistry, IsReachableThroughTheIcall)
 {
