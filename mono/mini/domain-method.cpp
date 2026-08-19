@@ -6,14 +6,13 @@
 #include "domain-method.hpp"
 #include "domain-method.h"
 
+#include "method-override.hpp"
 #include "mini-runtime.h"
 
 #include <mono/llvm/runtime.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/domain-internals.h>
-#include <mono/metadata/object.h>
 #include <mono/metadata/tabledefs.h>
-#include <mono/utils/mono-error-internals.h>
 
 #include <llvm/ADT/DenseMap.h>
 
@@ -223,12 +222,22 @@ any_method_overridden ()
 MonoMethod *
 method_override_for (MonoDomain *domain, MonoMethod *method)
 {
-	if (!any_method_overridden ())
+	if (!any_method_overridden () && !method_overrides_registered ())
 		return nullptr;
 
-	MonoDomainMethod *dm = domain_method_find (domain, method);
+	/*
+	 * Built rather than looked up. Building the record is what installs an
+	 * override the table names, and the first thing to ask about a method can
+	 * be this call.
+	 */
+	llvm::Expected<MonoDomainMethod *> dm = domain_method_get (domain, method);
 
-	return dm != nullptr ? dm->override_method () : nullptr;
+	if (!dm) {
+		llvm::consumeError (dm.takeError ());
+		return nullptr;
+	}
+
+	return (*dm)->override_method ();
 }
 
 void
@@ -258,8 +267,10 @@ domain_method_find (MonoDomain *domain, MonoMethod *method)
 	return it != table->methods.end () ? it->second.get () : nullptr;
 }
 
-llvm::Expected<MonoDomainMethod *>
-domain_method_get (MonoDomain *domain, MonoMethod *method)
+/// domain_method_get () without the override check, which cannot run under the
+/// table's lock.
+static llvm::Expected<MonoDomainMethod *>
+domain_method_intern (MonoDomain *domain, MonoMethod *method)
 {
 	DomainMethodTable *table = table_of (domain);
 
@@ -298,6 +309,23 @@ domain_method_get (MonoDomain *domain, MonoMethod *method)
 
 	table->methods[method] = std::move (record);
 	return raw;
+}
+
+llvm::Expected<MonoDomainMethod *>
+domain_method_get (MonoDomain *domain, MonoMethod *method)
+{
+	llvm::Expected<MonoDomainMethod *> dm = domain_method_intern (domain, method);
+
+	/*
+	 * Outside the table's lock and once per record. Installing compiles the
+	 * replacement, which comes back through here, and then tells the
+	 * interpreter, which reads the table too.
+	 */
+	if (dm && method_overrides_registered () && (*dm)->claim_override_check ())
+		if (MonoMethod *replacement = registered_override_for (method))
+			mono_install_method_override (method, domain, replacement);
+
+	return dm;
 }
 
 void
@@ -359,12 +387,18 @@ mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *target
 void
 mono_install_method_override (MonoMethod *method, MonoDomain *domain, MonoMethod *replacement)
 {
-	ERROR_DECL (error);
-	void *target = mono_compile_method_checked (replacement, error);
+	/*
+	 * The replacement's entry rather than its code. Compiling it here would run
+	 * mini's compile path wherever this is called from, and one of those places
+	 * is the compile worker resolving a callee. The entry compiles itself on the
+	 * first call, which is always on a mutator.
+	 */
+	llvm::Expected<mono::MonoDomainMethod *> stand_in =
+		mono::domain_method_get (domain, replacement);
 
-	if (!is_ok (error)) {
+	if (!stand_in) {
 		/* The replacement has no entry, so there is nothing to point at. */
-		mono_error_cleanup (error);
+		llvm::consumeError (stand_in.takeError ());
 		return;
 	}
 
@@ -386,7 +420,7 @@ mono_install_method_override (MonoMethod *method, MonoDomain *domain, MonoMethod
 	if (method->is_inflated)
 		((MonoMethodInflated *) method)->declaring->iflags |= METHOD_IMPL_ATTRIBUTE_NOINLINING;
 
-	(*dm)->install_override (replacement, target);
+	(*dm)->install_override (replacement, (*stand_in)->thunk_address ());
 }
 
 mono_bool

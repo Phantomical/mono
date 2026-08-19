@@ -110,6 +110,7 @@ G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
 #endif
 #include "../llvm/runtime.h"
 #include "domain-method.h"
+#include "method-override.h"
 #include "../llvm/debugging/perf/perf.h"
 #include "mono/metadata/icall-signatures.h"
 #include "mono/utils/mono-tls-inline.h"
@@ -4300,6 +4301,13 @@ mini_init (const char *filename, const char *runtime_version)
 		mono_runtime_setup_stat_profiler ();
 
 	MONO_PROFILER_RAISE (runtime_initialized, ());
+
+	/*
+	 * Last, because reading the override assembly loads assemblies and reads
+	 * their custom attributes, and because an override may name a method in any
+	 * of them - so nothing the overrides could target must have run yet.
+	 */
+	mono_method_overrides_init ();
 
 	MONO_VES_INIT_END ();
 

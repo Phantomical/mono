@@ -147,6 +147,15 @@ public:
 		return override_.load (std::memory_order_acquire);
 	}
 
+	/// Takes the right to ask the override table about this method.
+	///
+	/// Answers true to the first caller and false to every other, so the table
+	/// is read once per record however many threads arrive at it.
+	bool claim_override_check ()
+	{
+		return !override_checked_.exchange (true, std::memory_order_acq_rel);
+	}
+
 	/* -- The thunks -------------------------------------------------------- */
 
 	/// The entry a call off a value type's vtable or IMT arrives at.
@@ -245,6 +254,7 @@ private:
 	llvm::SmallVector<MonoMethodBody, 2> bodies_;
 
 	std::atomic<MonoMethod *> override_ { nullptr };
+	std::atomic<bool> override_checked_ { false };
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	/* Promotion::idle / queued / settled; an integer because it is CAS'd. */
@@ -281,8 +291,9 @@ bool any_method_overridden ();
 
 /// The method standing in for \p method in \p domain, or null when none does.
 ///
-/// One hop: where the replacement is itself overridden, this still answers the
-/// replacement.
+/// Builds \p method's record where an override could name it, since that is what
+/// installs one. One hop: where the replacement is itself overridden, this still
+/// answers the replacement.
 MonoMethod *method_override_for (MonoDomain *domain, MonoMethod *method);
 
 /// The record for \p method in \p domain, built and published on first ask.
