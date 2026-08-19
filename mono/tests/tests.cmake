@@ -231,6 +231,11 @@ set(MONO_TESTS_CS_SRC
   interp-calls-compiled.cs
   interp-tier1-promotion.cs
   interp-native-detour.cs
+  override-basic.cs
+  override-generic.cs
+  override-declared.cs
+  override-icall.cs
+  override-copies.cs
   callvirt-static.cs
   interp-float-to-int.cs
   interp-threadstatic-cctor.cs

@@ -21,9 +21,7 @@ set(_buildcls "${MONO_MCS_LIBDIR}/build")
 set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 
 # csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected,
-# against the build profile of the class libraries.  These compiles do not pass
-# -nostdlib, so with a system runtime they see its mscorlib rather than this
-# tree's; see MonoToolsRuntime.cmake.
+# against the build profile of the class libraries; see MonoToolsRuntime.cmake.
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 set(_csc ${_host} "${MONO_CSC}"
          -debug:portable -noconfig -nologo
@@ -37,7 +35,16 @@ set(_ilasm ${_host} "${_buildcls}/ilasm.exe" /quiet)
 
 # The reference set an ordinary test gets. Mono.Posix is what TestDriver uses
 # to hard-kill a test that hangs past its timeout.
+#
+# -nostdlib names this tree's mscorlib rather than the compiler host's. The rest
+# of this set is already this tree's, so without it a test compiles against a
+# System.dll built here and an mscorlib from the machine's mono, and a type this
+# tree adds to corlib is invisible to the corpus. It sits here rather than in
+# _csc so that NO_DEFAULT_REFS still means what it says: bug-3903 targets the
+# v2.0 reference assemblies and brings its own.
 set(_default_refs
+  -nostdlib
+  "-r:${_class}/mscorlib.dll"
   "-r:${_class}/System.dll"
   "-r:${_class}/System.Xml.dll"
   "-r:${_class}/System.Core.dll"
@@ -321,6 +328,13 @@ foreach(_s IN LISTS MONO_TESTS_CS_SRC MONO_TESTS_BENCH_SRC MONO_TESTS_GSHARED_SR
     mono_test_assembly("${_exe}" SOURCES "${_s}")
   endif()
 endforeach()
+
+# One source, two assembly names: override-copies.cs loads both and expects the
+# override to have replaced the target in each.  A target is matched by name in
+# every loaded image rather than by type identity, and this is what tells that
+# apart from a table keyed on the first class it saw.
+mono_test_assembly(override-copy-a.dll LIBRARY SOURCES override-copy.cs)
+mono_test_assembly(override-copy-b.dll LIBRARY SOURCES override-copy.cs)
 
 add_custom_target(runtime-corpora ALL DEPENDS ${_all_assemblies})
 add_dependencies(runtime-corpora mono-test-toolchain)

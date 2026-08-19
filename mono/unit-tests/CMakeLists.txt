@@ -116,15 +116,12 @@ mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
 # link let the linker leave the library's own copy of those symbols out.
 mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp
-  test-function-pointer.cpp test-detour.cpp test-method-override.cpp
-  test-method-override-registry.cpp)
+  test-function-pointer.cpp test-detour.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
 mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
 mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
 mono_unit_test_cases(test-mono-runtime test-function-pointer "FunctionPointer.*")
 mono_unit_test_cases(test-mono-runtime test-detour        "MethodDetour.*")
-mono_unit_test_cases(test-mono-runtime test-method-override "MethodOverride.*")
-mono_unit_test_cases(test-mono-runtime test-method-override-registry "MethodOverrideRegistry.*")
 
 # One case each, and there could not be a second: the samples they are built out
 # of run a domain to completion and call mono_jit_cleanup, and nothing in the
@@ -160,31 +157,12 @@ if(MONO_ENABLE_MCS_BUILD)
 
   _mono_test_assembly(callspec.exe "${CMAKE_CURRENT_SOURCE_DIR}/callspec.cs")
   _mono_test_assembly(detour.exe "${CMAKE_CURRENT_SOURCE_DIR}/detour.cs")
-  _mono_test_assembly(method-override.exe "${CMAKE_CURRENT_SOURCE_DIR}/method-override.cs")
-  # -nostdlib because this one takes MonoOverrideAssemblyAttribute out of this
-  # tree's corlib.  override-target.cs deliberately does not, declaring its own.
-  add_custom_command(
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/override-registry.exe"
-    COMMAND ${_mcs} "-out:${CMAKE_CURRENT_BINARY_DIR}/override-registry.exe"
-            -nostdlib "-r:${_class_dir}/mscorlib.dll"
-            "${CMAKE_CURRENT_SOURCE_DIR}/override-registry.cs"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/override-registry.cs" mcs
-    COMMENT "CSC override-registry.exe"
-    VERBATIM)
-  # Twice, under two assembly names: the registry has to replace every loaded
-  # copy of a target, not the first one it finds.
-  _mono_test_assembly(override-target-a.exe "${CMAKE_CURRENT_SOURCE_DIR}/override-target.cs")
-  _mono_test_assembly(override-target-b.exe "${CMAKE_CURRENT_SOURCE_DIR}/override-target.cs")
   _mono_test_assembly(test-embed.exe "${CMAKE_SOURCE_DIR}/samples/embed/test.cs")
   _mono_test_assembly(test-embed-invoke-cs.exe "${CMAKE_SOURCE_DIR}/samples/embed/invoke.cs")
 
   add_custom_target(unit-test-assemblies ALL DEPENDS
     "${CMAKE_CURRENT_BINARY_DIR}/callspec.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/detour.exe"
-    "${CMAKE_CURRENT_BINARY_DIR}/method-override.exe"
-    "${CMAKE_CURRENT_BINARY_DIR}/override-registry.exe"
-    "${CMAKE_CURRENT_BINARY_DIR}/override-target-a.exe"
-    "${CMAKE_CURRENT_BINARY_DIR}/override-target-b.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed-invoke-cs.exe")
   mono_tools_runtime_depends(unit-test-assemblies)
