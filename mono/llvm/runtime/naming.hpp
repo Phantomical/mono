@@ -7,7 +7,7 @@
 #ifndef MONO_LLVM_RUNTIME_NAMING_HPP
 #define MONO_LLVM_RUNTIME_NAMING_HPP
 
-#include "method-symbols.hpp"
+#include "mono/llvm/method-symbols.hpp"
 
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>

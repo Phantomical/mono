@@ -140,7 +140,7 @@ public:
 	/// ever has to rewrite it. Every method has one, used or not. Hand it out
 	/// only for a method the engine accepts: a receiver with no object header in
 	/// front of it is stepped past bytes that are not there.
-	void *unbox_entry () const { return thunk ? thunk.unbox_entry () : nullptr; }
+	void *unbox_entry () const { return thunk ? thunk.unbox () : nullptr; }
 
 	/// The C-convention entry native code enters the method through, compiled
 	/// on first ask. Null for a method nothing native enters.

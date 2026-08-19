@@ -329,13 +329,7 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 
 	dm.name = stub_symbol (method);
 
-	/*
-	 * The thunk carries the method in the IMT register, which is also where a
-	 * shared generic reads its runtime generic context. attach_entry () runs
-	 * exactly once per record - domain_method_get ()'s get-or-create sees to
-	 * that - so there is no existing thunk to collide with.
-	 */
-	llvm::Expected<Thunk> thunk = allocate_thunk (&domain.code, method);
+	llvm::Expected<Thunk> thunk = Thunk::allocate (&domain.code, method);
 
 	if (!thunk) {
 		domain.callbacks->release (*trampoline);
@@ -346,19 +340,8 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	dm.thunk = *thunk;
 	dm.trampoline = *trampoline;
 
-	/*
-	 * A thunk is the only address the runtime ever sees for the method, so
-	 * anything recovering a method from a code pointer - delegate creation off
-	 * an ldftn most visibly - has to find it in the jit-info table. Registered
-	 * the way mini registers trampolines: an entry carrying the method, in the
-	 * domain whose linker holds the thunk, so the two die together.
-	 *
-	 * It covers the unbox prologue as well as the thunk. Both are the method,
-	 * and a walk that catches a thread on either has the same frame to step
-	 * off. So one record answers for the two.
-	 */
-	dm.jinfo = register_stub_jinfo (domain.domain, method, thunk->unbox_entry (),
-	                                thunk_unbox_span, dm.name);
+	dm.jinfo = thunk->register_jinfo(dm.name, domain.domain, method);
+
 	return llvm::Error::success ();
 }
 

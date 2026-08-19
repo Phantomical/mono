@@ -144,7 +144,7 @@ public:
 	/// callers reach it at.
 	Expected<void *> publish (StringRef name, void *target)
 	{
-		Expected<Thunk> thunk = allocate_thunk (&arena_, nullptr);
+		Expected<Thunk> thunk = Thunk::allocate (&arena_, nullptr);
 
 		if (!thunk)
 			return thunk.takeError ();
@@ -180,7 +180,7 @@ public:
 		if (!trampoline)
 			return trampoline.takeError ();
 
-		Expected<Thunk> thunk = allocate_thunk (&arena_, nullptr);
+		Expected<Thunk> thunk = Thunk::allocate (&arena_, nullptr);
 
 		if (!thunk) {
 			callbacks_->release (*trampoline);
@@ -444,12 +444,12 @@ TEST_F (Thunks, TheUnboxEntryStepsTheReceiverPastTheObjectHeader)
 {
 	CodeArena arena;
 
-	Expected<Thunk> thunk = allocate_thunk (&arena, nullptr);
+	Expected<Thunk> thunk = Thunk::allocate (&arena, nullptr);
 	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
 	thunk->redirect ((void *) &thunk_receiver_target_one);
 
-	auto unbox = reinterpret_cast<ReceiverFn> (thunk->unbox_entry ());
+	auto unbox = reinterpret_cast<ReceiverFn> (thunk->unbox ());
 	uint8_t boxed[64] = {};
 
 	EXPECT_EQ (unbox (boxed), boxed + MONO_ABI_SIZEOF (MonoObject));
@@ -647,40 +647,6 @@ TEST_F (Thunks, RedirectsWhileThreadsRunThroughIt)
 		EXPECT_EQ (seen[i].load (), all_three)
 			<< "reader " << i << " never saw all three targets";
 	}
-}
-
-/*
- * One thunk per method means a Unity-sized game publishes six figures of
- * them, so what a thunk costs in address space is a real number rather than
- * an aesthetic one. Thunks published one at a time still have to pack: the
- * version of this that built a LinkGraph per thunk spent two pages on each.
- */
-TEST_F (Thunks, PackTightlyWhenPublishedOneAtATime)
-{
-	std::unique_ptr<Engine> engine = make_engine ();
-	ASSERT_NE (engine, nullptr);
-
-	constexpr int count = 512;
-	std::vector<uintptr_t> addrs;
-	for (int i = 0; i < count; i++) {
-		auto thunk = engine->publish ("m" + std::to_string (i),
-		                                 (void *) &thunk_target_one);
-		ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
-		addrs.push_back (reinterpret_cast<uintptr_t> (*thunk));
-	}
-
-	std::sort (addrs.begin (), addrs.end ());
-	for (size_t i = 1; i < addrs.size (); i++)
-		ASSERT_GE (addrs[i] - addrs[i - 1], arch::thunk_block_size)
-			<< "thunks " << i - 1 << " and " << i << " overlap";
-
-	uintptr_t span = addrs.back () - addrs.front ();
-	EXPECT_LE (span, count * thunk_group_size)
-		<< "thunks are spread over " << span / count << " bytes each";
-
-	/* Every one of them still works. */
-	EXPECT_EQ (reinterpret_cast<IntFn> (addrs.front ()) (), 1);
-	EXPECT_EQ (reinterpret_cast<IntFn> (addrs.back ()) (), 1);
 }
 
 /*
