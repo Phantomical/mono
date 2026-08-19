@@ -78,9 +78,17 @@ public class GCInterop {
 		return (int) boxed;
 	}
 
+	// Allocate () runs on a thread of its own, and this joins it before the
+	// collection. Both stacks are scanned conservatively, so a stale word left
+	// where the node pointer was pins the node and holds the weak reference
+	// alive. A joined thread has no stack left to scan, and every predecessor
+	// then gives the same answer.
 	public static int test_1_weak_reference_clears ()
 	{
-		WeakReference w = Allocate ();
+		WeakReference w = null;
+		Thread t = new Thread (() => { w = Allocate (); });
+		t.Start ();
+		t.Join ();
 		Collect ();
 		return w.IsAlive ? 0 : 1;
 	}
