@@ -230,8 +230,8 @@ method_override_for (MonoDomain *domain, MonoMethod *method)
 			return replacement;
 
 	/*
-	 * One the override assembly names is installed when the method's entry is
-	 * first asked for, which nothing may have done yet. Answering from the
+	 * An override that the assembly names is installed when the method's entry
+	 * is first asked for, which can come later than this. Answering from the
 	 * table rather than building the record keeps a caller that only wants to
 	 * name its callee from carving a thunk for every call site it reads.
 	 */
@@ -386,10 +386,10 @@ void
 mono_install_method_override (MonoMethod *method, MonoDomain *domain, MonoMethod *replacement)
 {
 	/*
-	 * The replacement's entry rather than its code. Compiling it here would run
+	 * The replacement's entry rather than its code. Compiling it here runs
 	 * mini's compile path wherever this is called from, and one of those places
-	 * is the compile worker resolving a callee. The entry compiles itself on the
-	 * first call, which is always on a mutator.
+	 * is the compile worker that resolves a callee. The entry compiles itself
+	 * on the first call, which is always on a mutator.
 	 */
 	llvm::Expected<mono::MonoDomainMethod *> stand_in =
 		mono::domain_method_get (domain, replacement);

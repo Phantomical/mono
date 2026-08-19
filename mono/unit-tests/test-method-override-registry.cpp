@@ -3,7 +3,7 @@
  *
  * The registry reads a fixed assembly beside the runtime and replaces the
  * methods its attributes name, in whatever image they turn out to live in. The
- * cases below cover the two things a plain table lookup would get wrong: a
+ * cases below cover the two things a plain table lookup gets wrong: a
  * target loaded twice under two assembly names, which is what a process full of
  * Harmony repacks looks like, and a generic target, whose instantiations do not
  * exist when the assembly is read.
@@ -49,7 +49,7 @@ public:
 
 		/*
 		 * Before the targets, the way the runtime reads it - at the end of
-		 * mini_init (), when nothing an override could name has run.
+		 * mini_init (), when nothing an override can name has run.
 		 */
 		ASSERT_TRUE (mono::method_overrides_load (REGISTRY))
 			<< "failed reading " REGISTRY;
@@ -181,7 +181,7 @@ TEST_F (MethodOverrideRegistry, ReachesAWideSignature)
 
 /*
  * Mono.Overrides.MonoOverride::Install, which is how an override assembly
- * replaces a method it could not name in an attribute - Harmony hands the
+ * replaces a method it cannot name in an attribute - Harmony hands the
  * runtime a MethodBase it was given at run time. The caller is transformed
  * after the install, so its site names the replacement.
  */

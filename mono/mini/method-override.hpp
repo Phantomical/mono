@@ -25,8 +25,8 @@ void method_overrides_init ();
 /// Reads \p path as an override assembly, and answers whether it was read.
 ///
 /// What it names is matched against every image already loaded and against each
-/// one that loads later. Call it before the targets are loaded where you can:
-/// a caller the interpreter has already transformed keeps the body it copied.
+/// one that loads later. Call it before the targets load where you can: a caller
+/// the interpreter has already transformed keeps the body it copied.
 bool method_overrides_load (const char *path);
 
 /// Whether the override assembly named anything.

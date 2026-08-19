@@ -291,8 +291,8 @@ bool any_method_overridden ();
 
 /// The method standing in for \p method in \p domain, or null when none does.
 ///
-/// Builds \p method's record where an override could name it, since that is what
-/// installs one. One hop: where the replacement is itself overridden, this still
+/// Carves no thunk and builds no record, so it is cheap enough to ask at every
+/// call site. One hop: where the replacement is itself overridden, this still
 /// answers the replacement.
 MonoMethod *method_override_for (MonoDomain *domain, MonoMethod *method);
 

@@ -67,8 +67,8 @@ std::mutex g_lock;
 
 /*
  * Read without the lock on every method both engines ask for, so it has to be
- * free. It only ever rises, and a reader that is one image behind simply
- * misses an override it would have found a moment later.
+ * free. It only ever rises, and a reader that is one image behind misses an
+ * override it finds a moment later.
  */
 std::atomic<bool> g_registered { false };
 
@@ -289,7 +289,7 @@ void collect_overrides (MonoImage *image, MonoClass *attribute)
 }
 
 /// Mono.Overrides.MonoOverride::Install, which an override assembly calls to
-/// replace a method it could not name in an attribute.
+/// replace a method it cannot name in an attribute.
 ///
 /// The two handles are MonoMethod pointers, which is what
 /// RuntimeMethodHandle.Value holds. Nothing checks them: the only caller is the

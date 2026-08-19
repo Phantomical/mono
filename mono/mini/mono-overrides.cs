@@ -20,7 +20,7 @@ using System.Runtime.CompilerServices;
 
 namespace Mono.Overrides {
 
-/// Names the method the method it is written on replaces.
+/// Names the method that the method carrying this attribute replaces.
 ///
 /// The syntax is mono's own method description: "[namespace.]class:method",
 /// with '/' between a nested class and the one holding it, '`n' on a generic

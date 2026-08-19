@@ -656,8 +656,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	 * mono_interp_get_imethod () substitutes there.
 	 *
 	 * The site keeps its own signature. An override is static where the method
-	 * it replaces is not, and takes the receiver as its first argument, so the
-	 * two occupy the same stack slots either way.
+	 * it replaces is not, and takes the receiver as its first argument. The two
+	 * occupy the same stack slots either way.
 	 */
 	if (!is_virtual && target_method != NULL) {
 		MonoMethod *replacement = mono::method_override_for (domain, target_method);
