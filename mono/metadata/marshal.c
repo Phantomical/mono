@@ -2521,6 +2521,17 @@ mono_marshal_get_runtime_invoke_sig (MonoMethodSignature *sig)
 	for (i = 0; i < res->param_count; ++i)
 		res->params [i] = get_runtime_invoke_type (sig->params [i], FALSE);
 
+	/* The wrapper reaches its target with a calli over this signature, through
+	 * the code pointer the runtime hands it. That entry is managed even for a
+	 * P/Invoke, because the runtime compiles the managed-to-native wrapper and
+	 * passes that. A signature with pinvoke = 1 puts the C convention on the
+	 * calli against a managed callee. The bit also has to go because signature
+	 * equality ignores it: the cache below shares one wrapper between a
+	 * P/Invoke target and a managed one, and whichever comes first then
+	 * decides the convention for both. */
+	res->pinvoke = 0;
+	res->call_convention = MONO_CALL_DEFAULT;
+
 	return res;
 }
 

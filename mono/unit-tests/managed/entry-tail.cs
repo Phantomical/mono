@@ -101,20 +101,16 @@ public class EntryTail {
 	}
 
 	/*
-	 * Six routes to div (7, 2), whose quotient is 3 and whose remainder is 1.
-	 * Each test adds the two fields, so a lost remainder reads as 3.
+	 * Five routes to div (7, 2), whose quotient is 3 and whose remainder is 1.
+	 * Each test adds the two fields, so a lost remainder reads as 3. objcopy.cs
+	 * holds the sixth route, the direct call.
 	 *
-	 *   through a delegate                              4
-	 *   MethodInfo.Invoke of the delegate's Invoke       4
-	 *   MethodInfo.Invoke of a managed method            4
-	 *   MethodInfo.Invoke of the P/Invoke method         3
-	 *   DynamicInvoke of the delegate                    3
-	 *
-	 * objcopy.cs holds the sixth route, the direct call, and it reads both
-	 * fields. So neither the native return nor reflection's handling of a
-	 * returned struct is what drops the word. The two failing routes are the
-	 * ones that enter the P/Invoke method itself through the runtime invoke
-	 * path.
+	 * The last two enter the P/Invoke method through a runtime-invoke wrapper,
+	 * which reaches its target with a calli over the signature the wrapper was
+	 * built from. A P/Invoke signature carries pinvoke = 1, so that calli once
+	 * used the C convention against a callee that is managed - the method's
+	 * managed-to-native wrapper - and the packed return came apart.
+	 * mono_marshal_get_runtime_invoke_sig () clears the bit.
 	 */
 
 	public static int test_4_delegate_over_pinvoke_struct_return ()
@@ -144,8 +140,6 @@ public class EntryTail {
 		return d.Quotient + d.Remainder;
 	}
 
-	// The remainder half of the struct is lost on the way back. Calling the same
-	// P/Invoke directly gives 4.
 	public static int test_4_reflection_invoke_of_pinvoke_struct_return ()
 	{
 		MethodInfo mi = typeof (EntryTail).GetMethod ("NativeDiv");
@@ -154,7 +148,7 @@ public class EntryTail {
 	}
 
 	// DynamicInvoke reaches the target method rather than Invoke, so it lands on
-	// the same path as the test above and loses the same half.
+	// the same path as the test above.
 	public static int test_4_dynamic_invoke_over_pinvoke_struct_return ()
 	{
 		EntryTailDivFunc f = NativeDiv;
