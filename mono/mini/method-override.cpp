@@ -16,6 +16,7 @@
 #include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/debug-helpers.h>
+#include <mono/metadata/icall-internals.h>
 #include <mono/metadata/metadata-internals.h>
 #include <mono/metadata/object-internals.h>
 #include <mono/metadata/reflection.h>
@@ -297,6 +298,35 @@ void collect_overrides (MonoImage *image, MonoClass *attribute)
 	}
 }
 
+/// Mono.Overrides.MonoOverride::Install, which an override assembly calls to
+/// replace a method it could not name in an attribute.
+///
+/// The two handles are MonoMethod pointers, which is what
+/// RuntimeMethodHandle.Value holds. Nothing checks them: the only caller is the
+/// assembly the runtime read out of its own directory.
+void
+ves_icall_install_override (MonoMethod *target, MonoMethod *replacement)
+{
+	if (target == nullptr || replacement == nullptr)
+		return;
+
+	mono_install_method_override (target, mono_domain_get (), replacement);
+}
+
+/// Whether the icall is registered. Reading a second override assembly must not
+/// register it twice.
+bool g_icall_registered;
+
+void register_icall ()
+{
+	if (g_icall_registered)
+		return;
+
+	g_icall_registered = true;
+	mono_add_internal_call_internal ("Mono.Overrides.MonoOverride::Install",
+	                                 (const void *) ves_icall_install_override);
+}
+
 } // namespace
 
 bool
@@ -368,6 +398,8 @@ method_overrides_load (const char *path)
 	/* No override assembly is the ordinary case and is not worth a word. */
 	if (!g_file_test (path, G_FILE_TEST_IS_REGULAR))
 		return false;
+
+	register_icall ();
 
 	MonoAssemblyOpenRequest req;
 	mono_assembly_request_prepare_open (&req, MONO_ASMCTX_DEFAULT,

@@ -5,6 +5,8 @@
  */
 
 using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace Mono.Test {
 
@@ -40,10 +42,43 @@ public class Target {
 		return Wide (x, 0, 0, 0, 0, 0, 0, 0);
 	}
 
+	/* Installed through the icall rather than through an attribute. */
+	public static int Handled (int x)
+	{
+		return x + 3;
+	}
+
+	public static int HandledReplacement (int x)
+	{
+		return x + 400;
+	}
+
+	public static void InstallHandled ()
+	{
+		Mono.Overrides.MonoOverride.Install (
+			typeof (Target).GetMethod ("Handled").MethodHandle.Value,
+			typeof (Target).GetMethod ("HandledReplacement").MethodHandle.Value);
+	}
+
+	public static int CallHandled (int x)
+	{
+		return Handled (x);
+	}
+
 	public static int Main ()
 	{
 		return 0;
 	}
+}
+
+}
+
+namespace Mono.Overrides {
+
+/* The runtime registers this whenever it reads an override assembly. */
+public static class MonoOverride {
+	[MethodImpl (MethodImplOptions.InternalCall)]
+	public static extern void Install (IntPtr target, IntPtr replacement);
 }
 
 }

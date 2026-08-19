@@ -103,6 +103,14 @@ protected:
 		return found;
 	}
 
+	static void invoke (MonoMethod *method)
+	{
+		ERROR_DECL (error);
+
+		mono_runtime_invoke_checked (method, nullptr, nullptr, error);
+		mono_error_assert_ok (error);
+	}
+
 	/* What a managed caller answers, run through an ordinary invoke. */
 	static int invoke (MonoMethod *method, int argument)
 	{
@@ -169,4 +177,23 @@ TEST_F (MethodOverrideRegistry, ReachesAWideSignature)
 
 	ASSERT_NE (nullptr, caller);
 	EXPECT_EQ (301, invoke (caller, 1));
+}
+
+/*
+ * Mono.Overrides.MonoOverride::Install, which is how an override assembly
+ * replaces a method it could not name in an attribute - Harmony hands the
+ * runtime a MethodBase it was given at run time. The caller is transformed
+ * after the install, so the marking done there is what keeps the small target
+ * out of it.
+ */
+TEST_F (MethodOverrideRegistry, IsReachableThroughTheIcall)
+{
+	MonoMethod *install = method_named (g_a, "InstallHandled", 0);
+	MonoMethod *caller = method_named (g_a, "CallHandled", 1);
+
+	ASSERT_NE (nullptr, install);
+	ASSERT_NE (nullptr, caller);
+
+	invoke (install);
+	EXPECT_EQ (401, invoke (caller, 1));
 }
