@@ -247,6 +247,18 @@ mono_interp_get_imethod (MonoDomain *domain, MonoMethod *method, MonoError *erro
 
 	error_init (error);
 
+	/*
+	 * An overridden method runs the replacement's bytecode rather than its own,
+	 * and the substitution happens here so that every way of naming the method -
+	 * a call site, a delegate, a runtime invoke - lands on the same record.
+	 *
+	 * The alternative, letting resolve_code_type () send the call out to the
+	 * entry, only works where mono_interp_jit_call_marshallable () agrees, which
+	 * rules out generics and more than six parameters.
+	 */
+	if (MonoMethod *replacement = mono::method_override_for (domain, method))
+		method = replacement;
+
 	if (InterpMethod *known = lookup_imethod (domain, method))
 		return known;
 

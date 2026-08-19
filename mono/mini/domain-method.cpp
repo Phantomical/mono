@@ -9,7 +9,11 @@
 #include "mini-runtime.h"
 
 #include <mono/llvm/runtime.h>
+#include <mono/metadata/class-internals.h>
 #include <mono/metadata/domain-internals.h>
+#include <mono/metadata/object.h>
+#include <mono/metadata/tabledefs.h>
+#include <mono/utils/mono-error-internals.h>
 
 #include <llvm/ADT/DenseMap.h>
 
@@ -204,6 +208,42 @@ MonoDomainMethod::install_detour (void *target)
 		mini_get_interp_callbacks ()->method_compiled (domain, method);
 }
 
+/*
+ * Nothing here is ever taken back, so this only rises. It is what keeps the
+ * question off the interpreter's call path in a process with no overrides.
+ */
+std::atomic<uint32_t> overrides_installed { 0 };
+
+bool
+any_method_overridden ()
+{
+	return overrides_installed.load (std::memory_order_relaxed) != 0;
+}
+
+MonoMethod *
+method_override_for (MonoDomain *domain, MonoMethod *method)
+{
+	if (!any_method_overridden ())
+		return nullptr;
+
+	MonoDomainMethod *dm = domain_method_find (domain, method);
+
+	return dm != nullptr ? dm->override_method () : nullptr;
+}
+
+void
+MonoDomainMethod::install_override (MonoMethod *replacement, void *target)
+{
+	/*
+	 * Before the entry moves. A caller that reaches the new entry and then asks
+	 * the record who is behind it has to be told the replacement, not nothing.
+	 */
+	override_.store (replacement, std::memory_order_release);
+	overrides_installed.fetch_add (1, std::memory_order_relaxed);
+
+	install_detour (target);
+}
+
 MonoDomainMethod *
 domain_method_find (MonoDomain *domain, MonoMethod *method)
 {
@@ -314,6 +354,39 @@ mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *target
 	}
 
 	(*dm)->install_detour (target);
+}
+
+void
+mono_install_method_override (MonoMethod *method, MonoDomain *domain, MonoMethod *replacement)
+{
+	ERROR_DECL (error);
+	void *target = mono_compile_method_checked (replacement, error);
+
+	if (!is_ok (error)) {
+		/* The replacement has no entry, so there is nothing to point at. */
+		mono_error_cleanup (error);
+		return;
+	}
+
+	llvm::Expected<mono::MonoDomainMethod *> dm = mono::domain_method_get (domain, method);
+
+	if (!dm) {
+		/* No record means no published entry, so nothing holds one to override. */
+		llvm::consumeError (dm.takeError ());
+		return;
+	}
+
+	/*
+	 * The interpreter reads iflags live while it transforms each caller, so this
+	 * keeps every caller transformed from here on out of the inlined case. An
+	 * instantiation carries its own copy of the bit, so the definition is marked
+	 * as well - otherwise the sibling instantiations stay inlinable.
+	 */
+	method->iflags |= METHOD_IMPL_ATTRIBUTE_NOINLINING;
+	if (method->is_inflated)
+		((MonoMethodInflated *) method)->declaring->iflags |= METHOD_IMPL_ATTRIBUTE_NOINLINING;
+
+	(*dm)->install_override (replacement, target);
 }
 
 mono_bool

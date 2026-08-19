@@ -28,13 +28,31 @@ mono_bool mono_promote_method (MonoMethod *method, MonoDomain *domain);
 
 /// Hands the address a method is entered at to native code at \p target.
 ///
-/// Every caller that goes through the entry reaches \p target from here on, and
-/// nothing takes that back: the method never promotes again, and a compile
-/// already running for it does not take the entry when it lands.
+/// Every caller that goes through the entry reaches \p target from here on. The
+/// method never promotes again, and a compile already running for it does not
+/// take the entry when it lands. A later detour on the same method is allowed
+/// and replaces this one; what nothing takes back is the entry returning to a
+/// tier the runtime owns.
 ///
 /// There is no failure to report. A patcher that is told no has nothing to fall
 /// back on, and a method with no record has no entry for one to hold.
 void mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *target);
+
+/// Makes \p replacement run wherever \p method was called.
+///
+/// Both engines are covered, which is what tells this apart from a detour. A
+/// compiled caller reaches \p replacement through the entry, and an interpreted
+/// one runs \p replacement's bytecode instead of \p method's. A detour only
+/// covers the second where the signature can be marshalled into a call, which
+/// rules out generics and more than six parameters.
+///
+/// \p method is marked as not to be inlined, so that a caller transformed after
+/// this call does not copy the body being replaced. A caller transformed before
+/// it keeps whatever it copied.
+///
+/// A later override replaces this one. There is no failure to report.
+void mono_install_method_override (MonoMethod *method, MonoDomain *domain,
+                                   MonoMethod *replacement);
 
 /// Builds the table of records a domain keeps.
 ///

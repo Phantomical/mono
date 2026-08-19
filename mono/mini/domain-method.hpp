@@ -131,6 +131,22 @@ public:
 	/// on. A detour that is installed works for every compiled caller.
 	void install_detour (void *target);
 
+	/// Makes \p replacement the body of this method, entered at \p target.
+	///
+	/// Every caller reaches \p replacement afterwards, whichever engine it runs
+	/// in. This always succeeds, and a later override replaces it.
+	void install_override (MonoMethod *replacement, void *target);
+
+	/// The method standing in for this one, or null while none does.
+	///
+	/// The interpreter reads this to decide whose bytecode a call runs. A
+	/// detour to plain native code leaves it null: there is no managed method
+	/// behind that entry to name.
+	MonoMethod *override_method () const
+	{
+		return override_.load (std::memory_order_acquire);
+	}
+
 	/* -- The thunks -------------------------------------------------------- */
 
 	/// The entry a call off a value type's vtable or IMT arrives at.
@@ -228,6 +244,8 @@ private:
 
 	llvm::SmallVector<MonoMethodBody, 2> bodies_;
 
+	std::atomic<MonoMethod *> override_ { nullptr };
+
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	/* Promotion::idle / queued / settled; an integer because it is CAS'd. */
 	std::atomic<int32_t> promotion_ { (int32_t) Promotion::idle };
@@ -254,6 +272,18 @@ llvm::Error attach_interop_entry (MonoDomainMethod &dm);
 /// The record for \p method in \p domain, or null when nothing has asked for it
 /// yet.
 MonoDomainMethod *domain_method_find (MonoDomain *domain, MonoMethod *method);
+
+/// Whether any method anywhere has been overridden.
+///
+/// Every interpreted method asks whether it is overridden, so the answer has to
+/// be cheap in the ordinary case where nothing is.
+bool any_method_overridden ();
+
+/// The method standing in for \p method in \p domain, or null when none does.
+///
+/// One hop: where the replacement is itself overridden, this still answers the
+/// replacement.
+MonoMethod *method_override_for (MonoDomain *domain, MonoMethod *method);
 
 /// The record for \p method in \p domain, built and published on first ask.
 ///
