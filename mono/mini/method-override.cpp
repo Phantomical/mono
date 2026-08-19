@@ -39,13 +39,18 @@ namespace mono {
 
 namespace {
 
-/// What the runtime looks for beside itself.
+/// The one assembly the runtime loads on its own, out of its own directory.
 const char OVERRIDE_ASSEMBLY[] = "mono-overrides.dll";
 
-/// The attribute an override carries. Matched by name in the assembly being
-/// read, which declares it rather than referencing one.
+/*
+ * The two attributes, both matched by name. They are in corlib, but an assembly
+ * that cannot reference this runtime's corlib declares its own - the way
+ * IgnoresAccessChecksToAttribute is handled - and those are different classes
+ * carrying the same meaning.
+ */
 const char OVERRIDE_NAMESPACE[] = "Mono.Overrides";
 const char OVERRIDE_ATTRIBUTE[] = "MonoOverrideAttribute";
+const char OVERRIDE_ASSEMBLY_ATTRIBUTE[] = "MonoOverrideAssemblyAttribute";
 
 /// One line of the override assembly: a target named in text, and the method
 /// that replaces it.
@@ -72,10 +77,6 @@ std::mutex g_lock;
  */
 std::atomic<bool> g_registered { false };
 
-/// Whether the assembly load hook is in place. Reading a second override
-/// assembly must not add a second one.
-bool g_hooked;
-
 /// The directory the runtime shared library was loaded from, or empty.
 std::string runtime_directory ()
 {
@@ -92,6 +93,18 @@ std::string runtime_directory ()
 	}
 #endif
 	return std::string ();
+}
+
+/// Whether \p entry is the named attribute out of Mono.Overrides.
+bool attribute_is (const MonoCustomAttrEntry &entry, const char *name)
+{
+	if (entry.ctor == nullptr)
+		return false;
+
+	MonoClass *klass = entry.ctor->klass;
+
+	return strcmp (m_class_get_name (klass), name) == 0
+	       && strcmp (m_class_get_name_space (klass), OVERRIDE_NAMESPACE) == 0;
 }
 
 /// The one string an override attribute is constructed with, or empty.
@@ -231,17 +244,12 @@ void match_image (MonoImage *image)
 	}
 }
 
-void
-assembly_loaded (MonoAssemblyLoadContext *alc, MonoAssembly *assembly, void *user_data,
-                 MonoError *error)
-{
-	match_image (mono_assembly_get_image_internal (assembly));
-}
-
-/// Records every method in the override assembly that carries the attribute.
-void collect_overrides (MonoImage *image, MonoClass *attribute)
+/// Records every method in \p image that carries the override attribute, and
+/// answers whether it recorded any.
+bool collect_overrides (MonoImage *image)
 {
 	int rows = mono_image_get_table_rows (image, MONO_TABLE_TYPEDEF);
+	bool added = false;
 
 	for (int row = 1; row <= rows; ++row) {
 		ERROR_DECL (error);
@@ -266,8 +274,7 @@ void collect_overrides (MonoImage *image, MonoClass *attribute)
 				continue;
 
 			for (int i = 0; i < attrs->num_attrs; ++i) {
-				if (attrs->attrs[i].ctor == nullptr
-				    || attrs->attrs[i].ctor->klass != attribute)
+				if (!attribute_is (attrs->attrs[i], OVERRIDE_ATTRIBUTE))
 					continue;
 
 				std::string target = attribute_target (attrs->attrs[i]);
@@ -275,25 +282,87 @@ void collect_overrides (MonoImage *image, MonoClass *attribute)
 				if (target.empty ())
 					continue;
 
-				if (MonoMethodDesc *desc =
-				            mono_method_desc_new (target.c_str (), TRUE))
-					g_pending->push_back ({ desc, method });
-				else
+				MonoMethodDesc *desc =
+					mono_method_desc_new (target.c_str (), TRUE);
+
+				if (desc == nullptr) {
 					g_printerr ("mono-overrides: cannot parse target \"%s\"\n",
 					            target.c_str ());
+					continue;
+				}
+
+				std::lock_guard<std::mutex> held (g_lock);
+
+				g_pending->push_back ({ desc, method });
+				added = true;
 			}
 
 			mono_custom_attrs_free (attrs);
 		}
 	}
+
+	return added;
+}
+
+/// Whether \p assembly says it holds overrides.
+///
+/// Reading its methods is what costs, so this is the gate in front of that and
+/// it is all most assemblies pay.
+bool declares_overrides (MonoAssembly *assembly)
+{
+	ERROR_DECL (error);
+	MonoCustomAttrInfo *attrs =
+		mono_custom_attrs_from_assembly_checked (assembly, TRUE, error);
+
+	if (!is_ok (error))
+		mono_error_cleanup (error);
+
+	if (attrs == nullptr)
+		return false;
+
+	bool declares = false;
+
+	for (int i = 0; i < attrs->num_attrs && !declares; ++i)
+		declares = attribute_is (attrs->attrs[i], OVERRIDE_ASSEMBLY_ATTRIBUTE);
+
+	mono_custom_attrs_free (attrs);
+	return declares;
+}
+
+/// Reads \p assembly's own overrides, then looks for every target in it.
+void scan_assembly (MonoAssembly *assembly)
+{
+	MonoImage *image = mono_assembly_get_image_internal (assembly);
+
+	if (image == nullptr)
+		return;
+
+	/*
+	 * Its own first, so that an assembly naming a target inside itself is
+	 * matched in one pass. A description this adds has to be tried against
+	 * everything already loaded, not only against the assembly that carried
+	 * it.
+	 */
+	if (declares_overrides (assembly) && collect_overrides (image))
+		mono_assembly_foreach ([] (void *loaded, void *) {
+			match_image (mono_assembly_get_image_internal ((MonoAssembly *) loaded));
+		}, nullptr);
+
+	match_image (image);
+}
+
+void
+assembly_loaded (MonoAssemblyLoadContext *alc, MonoAssembly *assembly, void *user_data,
+                 MonoError *error)
+{
+	scan_assembly (assembly);
 }
 
 /// Mono.Overrides.MonoOverride::Install, which an override assembly calls to
 /// replace a method it cannot name in an attribute.
 ///
 /// The two handles are MonoMethod pointers, which is what
-/// RuntimeMethodHandle.Value holds. Nothing checks them: the only caller is the
-/// assembly the runtime read out of its own directory.
+/// RuntimeMethodHandle.Value holds. Nothing checks them.
 void
 ves_icall_install_override (MonoMethod *target, MonoMethod *replacement)
 {
@@ -301,20 +370,6 @@ ves_icall_install_override (MonoMethod *target, MonoMethod *replacement)
 		return;
 
 	mono_install_method_override (target, mono_domain_get (), replacement);
-}
-
-/// Whether the icall is registered. Reading a second override assembly must not
-/// register it twice.
-bool g_icall_registered;
-
-void register_icall ()
-{
-	if (g_icall_registered)
-		return;
-
-	g_icall_registered = true;
-	mono_add_internal_call_internal ("Mono.Overrides.MonoOverride::Install",
-	                                 (const void *) ves_icall_install_override);
 }
 
 } // namespace
@@ -383,13 +438,11 @@ registered_override_for (MonoMethod *method)
 }
 
 bool
-method_overrides_load (const char *path)
+method_overrides_preload (const char *path)
 {
-	/* No override assembly is the ordinary case and is not worth a word. */
+	/* Nothing to preload is the ordinary case and is not worth a word. */
 	if (!g_file_test (path, G_FILE_TEST_IS_REGULAR))
 		return false;
-
-	register_icall ();
 
 	MonoAssemblyOpenRequest req;
 	mono_assembly_request_prepare_open (&req, MONO_ASMCTX_DEFAULT,
@@ -403,54 +456,33 @@ method_overrides_load (const char *path)
 		return false;
 	}
 
-	MonoImage *image = mono_assembly_get_image_internal (assembly);
-	ERROR_DECL (error);
-	MonoClass *attribute = mono_class_from_name_checked (image, OVERRIDE_NAMESPACE,
-	                                                     OVERRIDE_ATTRIBUTE, error);
-
-	if (!is_ok (error) || attribute == nullptr) {
-		mono_error_cleanup (error);
-		g_printerr ("mono-overrides: %s declares no %s.%s\n", path, OVERRIDE_NAMESPACE,
-		            OVERRIDE_ATTRIBUTE);
-		return false;
-	}
-
-	if (g_pending == nullptr) {
-		g_pending = new llvm::SmallVector<PendingOverride, 8> ();
-		g_matched = new llvm::DenseMap<MonoMethod *, MonoMethod *> ();
-	}
-
-	collect_overrides (image, attribute);
-
-	if (g_pending->empty ())
-		return true;
-
-	/*
-	 * The hook covers what loads from here on. Whatever is already loaded -
-	 * corlib, and the override assembly itself - is walked now, since an
-	 * override may well name one of them.
-	 */
-	if (!g_hooked) {
-		g_hooked = true;
-		mono_install_assembly_load_hook_v2 (assembly_loaded, nullptr, FALSE);
-	}
-
-	mono_assembly_foreach ([] (void *loaded, void *) {
-		match_image (mono_assembly_get_image_internal ((MonoAssembly *) loaded));
-	}, nullptr);
-
 	return true;
 }
 
 void
 method_overrides_init ()
 {
+	g_pending = new llvm::SmallVector<PendingOverride, 8> ();
+	g_matched = new llvm::DenseMap<MonoMethod *, MonoMethod *> ();
+
+	mono_add_internal_call_internal ("Mono.Overrides.MonoOverride::Install",
+	                                 (const void *) ves_icall_install_override);
+
+	/*
+	 * Any assembly can hold overrides, so every one that loads is read. What
+	 * is already loaded - corlib, and whatever brought the runtime up - is
+	 * walked here, since an override can name one of them.
+	 */
+	mono_install_assembly_load_hook_v2 (assembly_loaded, nullptr, FALSE);
+	mono_assembly_foreach ([] (void *loaded, void *) {
+		scan_assembly ((MonoAssembly *) loaded);
+	}, nullptr);
+
 	std::string directory = runtime_directory ();
 
-	if (directory.empty ())
-		return;
-
-	method_overrides_load ((directory + G_DIR_SEPARATOR_S + OVERRIDE_ASSEMBLY).c_str ());
+	if (!directory.empty ())
+		method_overrides_preload (
+			(directory + G_DIR_SEPARATOR_S + OVERRIDE_ASSEMBLY).c_str ());
 }
 
 } // namespace mono

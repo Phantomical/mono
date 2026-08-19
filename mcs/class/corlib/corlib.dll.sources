@@ -27,6 +27,8 @@ Mono.Globalization.Unicode/SortKey.cs
 Mono.Globalization.Unicode/SortKeyBuffer.cs
 Mono.Globalization.Unicode/Normalization.cs
 Mono.Globalization.Unicode/NormalizationTableUtil.cs
+Mono.Overrides/MonoOverrideAssemblyAttribute.cs
+Mono.Overrides/MonoOverrideAttribute.cs
 Mono/CertificateImportFlags.cs
 Mono/DependencyInjector.cs
 Mono/ISystemCertificateProvider.cs

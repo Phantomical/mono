@@ -1,11 +1,11 @@
 /**
  * \file
- * \brief The table of methods an override assembly replaces.
+ * \brief The table of methods an override replaces.
  *
- * An override assembly holds ordinary managed methods carrying
- * [MonoOverride ("namespace.class:method")]. The runtime reads it once at
- * startup and replaces each named method the first time anything asks for it,
- * whichever assembly the target turns out to live in.
+ * An assembly marked [assembly: MonoOverrideAssembly] holds ordinary managed
+ * methods carrying [MonoOverride ("namespace.class:method")]. The runtime reads
+ * such an assembly as it loads, and replaces each named method the first time
+ * anything asks for it, whichever assembly the target turns out to live in.
  */
 
 #ifndef MONO_MINI_METHOD_OVERRIDE_HPP
@@ -15,24 +15,24 @@ typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
-/// Reads the override assembly beside the runtime, where there is one.
+/// Starts reading overrides out of the assemblies this process loads.
 ///
-/// Absent, unreadable or empty are all silently nothing to do. Call this once
-/// the root domain can load an assembly, and before any assembly the overrides
-/// name could be loaded.
+/// Call this once the root domain can load an assembly, and before anything an
+/// override can name has run: a caller the interpreter has already transformed
+/// keeps the body it copied.
 void method_overrides_init ();
 
-/// Reads \p path as an override assembly, and answers whether it was read.
+/// Loads \p path now rather than waiting for something to reference it, and
+/// answers whether it loaded.
 ///
-/// What it names is matched against every image already loaded and against each
-/// one that loads later. Call it before the targets load where you can: a caller
-/// the interpreter has already transformed keeps the body it copied.
-bool method_overrides_load (const char *path);
+/// This is how an assembly that nothing references gets its overrides read. A
+/// missing file is not an error.
+bool method_overrides_preload (const char *path);
 
-/// Whether the override assembly named anything.
+/// Whether any override has been registered.
 ///
 /// Every method both engines ask for goes past this, so the answer has to be
-/// free in a process with no override assembly.
+/// free in a process where nothing declares one.
 bool method_overrides_registered ();
 
 /// The method registered to replace \p method, or null when none is.

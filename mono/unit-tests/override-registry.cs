@@ -1,23 +1,13 @@
 /*
- * An override assembly, in the shape the runtime reads beside itself as
- * mono-overrides.dll.  It declares the attribute rather than referencing one,
- * because the runtime matches the attribute by name in the assembly it is
- * reading.
+ * An override assembly that takes its attributes from corlib, which is the
+ * ordinary case. override-target.cs is the other one, declaring its own.
  */
 
 using System;
 
+[assembly: Mono.Overrides.MonoOverrideAssembly]
+
 namespace Mono.Overrides {
-
-[AttributeUsage (AttributeTargets.Method)]
-public class MonoOverrideAttribute : Attribute {
-	public MonoOverrideAttribute (string target)
-	{
-		Target = target;
-	}
-
-	public string Target { get; private set; }
-}
 
 public class TargetOverrides {
 	[MonoOverride ("Mono.Test.Target:Value")]

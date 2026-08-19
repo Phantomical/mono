@@ -280,6 +280,11 @@ if(MONO_ENABLE_MCS_BUILD)
     OUTPUT "${_overrides}"
     COMMAND ${_overrides_host} "${MONO_CSC}" -debug:portable -noconfig -nologo
             -target:library "-out:${_overrides}"
+            # Against this tree's corlib, which is where the two attributes it
+            # carries live.  Without -nostdlib the compile binds to whatever
+            # mscorlib the compiler host offers, which is the machine's mono
+            # when MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS is on.
+            -nostdlib "-r:${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/mscorlib.dll"
             "${CMAKE_CURRENT_SOURCE_DIR}/mono-overrides.cs"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/mono-overrides.cs" mcs
     COMMENT "CSC mono-overrides.dll"

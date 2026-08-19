@@ -161,7 +161,16 @@ if(MONO_ENABLE_MCS_BUILD)
   _mono_test_assembly(callspec.exe "${CMAKE_CURRENT_SOURCE_DIR}/callspec.cs")
   _mono_test_assembly(detour.exe "${CMAKE_CURRENT_SOURCE_DIR}/detour.cs")
   _mono_test_assembly(method-override.exe "${CMAKE_CURRENT_SOURCE_DIR}/method-override.cs")
-  _mono_test_assembly(override-registry.exe "${CMAKE_CURRENT_SOURCE_DIR}/override-registry.cs")
+  # -nostdlib because this one takes MonoOverrideAssemblyAttribute out of this
+  # tree's corlib.  override-target.cs deliberately does not, declaring its own.
+  add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/override-registry.exe"
+    COMMAND ${_mcs} "-out:${CMAKE_CURRENT_BINARY_DIR}/override-registry.exe"
+            -nostdlib "-r:${_class_dir}/mscorlib.dll"
+            "${CMAKE_CURRENT_SOURCE_DIR}/override-registry.cs"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/override-registry.cs" mcs
+    COMMENT "CSC override-registry.exe"
+    VERBATIM)
   # Twice, under two assembly names: the registry has to replace every loaded
   # copy of a target, not the first one it finds.
   _mono_test_assembly(override-target-a.exe "${CMAKE_CURRENT_SOURCE_DIR}/override-target.cs")

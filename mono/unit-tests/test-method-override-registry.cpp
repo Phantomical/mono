@@ -1,12 +1,14 @@
 /*
  * test-method-override-registry.cpp: Unit test for the override assembly.
  *
- * The registry reads a fixed assembly beside the runtime and replaces the
- * methods its attributes name, in whatever image they turn out to live in. The
- * cases below cover the two things a plain table lookup gets wrong: a
+ * Every assembly marked [assembly: MonoOverrideAssembly] is read as it loads,
+ * and the methods its attributes name are replaced in whatever image they turn
+ * out to live in. The cases below cover what a plain table lookup gets wrong: a
  * target loaded twice under two assembly names, which is what a process full of
- * Harmony repacks looks like, and a generic target, whose instantiations do not
- * exist when the assembly is read.
+ * Harmony repacks looks like; a generic target, whose instantiations do not
+ * exist when the assembly is read; and an assembly that declares its own copies
+ * of the attributes, which is what one built against another mscorlib has to
+ * do.
  */
 
 #include "config.h"
@@ -48,10 +50,11 @@ public:
 			return;
 
 		/*
-		 * Before the targets, the way the runtime reads it - at the end of
-		 * mini_init (), when nothing an override can name has run.
+		 * Before the targets, the way the runtime preloads
+		 * mono-overrides.dll - at the end of mini_init (), when nothing
+		 * an override can name has run.
 		 */
-		ASSERT_TRUE (mono::method_overrides_load (REGISTRY))
+		ASSERT_TRUE (mono::method_overrides_preload (REGISTRY))
 			<< "failed reading " REGISTRY;
 
 		g_a = load (TARGET_A);
@@ -195,4 +198,18 @@ TEST_F (MethodOverrideRegistry, IsReachableThroughTheIcall)
 
 	invoke (install);
 	EXPECT_EQ (401, invoke (caller, 1));
+}
+
+/*
+ * An assembly that carries the assembly attribute is read as it loads, however
+ * late that is, and it can name a target inside itself. Both attributes are its
+ * own rather than corlib's, which is the case for an assembly built against a
+ * different mscorlib.
+ */
+TEST_F (MethodOverrideRegistry, ReadsAnAssemblyThatDeclaresItsOwn)
+{
+	MonoMethod *caller = method_named (g_a, "CallSelfDeclared", 1);
+
+	ASSERT_NE (nullptr, caller);
+	EXPECT_EQ (501, invoke (caller, 1));
 }

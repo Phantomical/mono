@@ -2,11 +2,18 @@
  * The assembly a registered override names.  Built twice under two names, so
  * that the registry is checked against two loaded copies of one target - which
  * is what a Harmony-using process looks like, each mod shipping its own repack.
+ *
+ * It also declares its own copies of the two attributes and carries overrides
+ * of its own, so it covers the assembly that cannot reference this runtime's
+ * corlib and the assembly that loads long after startup.  override-registry.cs
+ * is the other half, taking its attributes from corlib.
  */
 
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+
+[assembly: Mono.Overrides.MonoOverrideAssembly]
 
 namespace Mono.Test {
 
@@ -65,6 +72,17 @@ public class Target {
 		return Handled (x);
 	}
 
+	/* Replaced by this assembly's own override, below. */
+	public static int SelfDeclared (int x)
+	{
+		return x + 5;
+	}
+
+	public static int CallSelfDeclared (int x)
+	{
+		return SelfDeclared (x);
+	}
+
 	public static int Main ()
 	{
 		return 0;
@@ -75,10 +93,37 @@ public class Target {
 
 namespace Mono.Overrides {
 
-/* The runtime registers this whenever it reads an override assembly. */
+/*
+ * Declared here rather than taken from corlib, which is what an assembly built
+ * against a different mscorlib has to do.  The runtime matches both attributes
+ * by name, so these stand in for corlib's.
+ */
+[AttributeUsage (AttributeTargets.Assembly)]
+public sealed class MonoOverrideAssemblyAttribute : Attribute {
+}
+
+[AttributeUsage (AttributeTargets.Method)]
+public sealed class MonoOverrideAttribute : Attribute {
+	public MonoOverrideAttribute (string target)
+	{
+		Target = target;
+	}
+
+	public string Target { get; private set; }
+}
+
+/* The runtime registers this as it starts. */
 public static class MonoOverride {
 	[MethodImpl (MethodImplOptions.InternalCall)]
 	public static extern void Install (IntPtr target, IntPtr replacement);
+}
+
+public class SelfOverrides {
+	[MonoOverride ("Mono.Test.Target:SelfDeclared")]
+	static int SelfDeclared (int x)
+	{
+		return x + 500;
+	}
 }
 
 }

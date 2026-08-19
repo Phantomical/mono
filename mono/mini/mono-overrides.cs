@@ -1,10 +1,11 @@
 /*
- * mono-overrides.cs: the assembly the runtime reads out of its own directory.
+ * mono-overrides.cs: the one assembly the runtime loads on its own, out of its
+ * own directory.
  *
- * A method carrying [MonoOverride ("namespace.class:method")] replaces the
- * method it names, in whichever assembly that turns out to be and in every
- * loaded copy of it.  An override is always static; where the method it
- * replaces is an instance method, the first parameter receives the receiver.
+ * It is an override assembly like any other - marked
+ * [assembly: MonoOverrideAssembly], with methods carrying
+ * [MonoOverride ("namespace.class:method")].  What is special about it is only
+ * that nothing has to reference it for its overrides to be read.
  *
  * What lives here are compatibility shims for code that patches methods by
  * writing machine code over their entry.  That works for a compiled caller and
@@ -18,24 +19,9 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 
+[assembly: Mono.Overrides.MonoOverrideAssembly]
+
 namespace Mono.Overrides {
-
-/// Names the method that the method carrying this attribute replaces.
-///
-/// The syntax is mono's own method description: "[namespace.]class:method",
-/// with '/' between a nested class and the one holding it, '`n' on a generic
-/// class or method, and an optional "(argument, types)" where one name is not
-/// enough.  A generic method is named by its definition, and the override is
-/// instantiated with each of the target's own type arguments.
-[AttributeUsage (AttributeTargets.Method)]
-public sealed class MonoOverrideAttribute : Attribute {
-	public MonoOverrideAttribute (string target)
-	{
-		Target = target;
-	}
-
-	public string Target { get; private set; }
-}
 
 public static class MonoOverride {
 	/// Makes replacement run wherever target was called, in both engines.

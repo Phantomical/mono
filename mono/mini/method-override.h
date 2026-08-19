@@ -12,10 +12,10 @@
 
 MONO_BEGIN_DECLS
 
-/// Reads the override assembly beside the runtime, where there is one.
+/// Starts reading overrides out of the assemblies this process loads.
 ///
 /// Call this once the root domain can load an assembly, and before anything an
-/// override can name has run. A missing assembly is not an error.
+/// override can name has run.
 void mono_method_overrides_init (void);
 
 MONO_END_DECLS
