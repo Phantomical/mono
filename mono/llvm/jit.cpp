@@ -34,6 +34,7 @@
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/StackMapParser.h>
+#include <llvm/ADT/Any.h>
 #include <llvm/ADT/ScopeExit.h>
 #include <llvm/Analysis/ProfileSummaryInfo.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -136,6 +137,19 @@ verify_or_die (const Module &m, StringRef when)
 
 	if (verifyModule (m, &os))
 		report_broken_ir (m, when, diagnostics);
+}
+
+/// Checks one function, which is as far as a function pass can have broken
+/// anything.
+void
+verify_or_die (const Function &f, StringRef when)
+{
+	std::string diagnostics;
+	raw_string_ostream os (diagnostics);
+
+	if (verifyFunction (f, &os))
+		report_broken_ir (*f.getParent (), (when + " of " + f.getName ()).str (),
+		                  diagnostics);
 }
 
 /// The passes this backend writes, by the name the pass instrumentation reports
@@ -781,11 +795,21 @@ struct Tier0Pipeline {
 
 Tier0Pipeline::Tier0Pipeline ()
 {
-	pic.registerAfterPassCallback ([] (StringRef pass, Any, const PreservedAnalyses &) {
+	pic.registerAfterPassCallback ([] (StringRef pass, Any ir, const PreservedAnalyses &) {
 		if (g_verify_module == nullptr)
 			return;
-		if (g_verify_level == VerifyLevel::each || is_mono_pass (pass))
-			verify_or_die (*g_verify_module, ("after pass \"" + pass + "\"").str ());
+		if (g_verify_level != VerifyLevel::each && !is_mono_pass (pass))
+			return;
+
+		std::string when = ("after pass \"" + pass + "\"").str ();
+
+		// A function pass fires once for each function, so checking the whole
+		// module every time costs a square in what the module holds. A batched
+		// compile holds one function per method in it.
+		if (const Function *const *f = any_cast<const Function *> (&ir))
+			verify_or_die (**f, when);
+		else
+			verify_or_die (*g_verify_module, when);
 	});
 
 	// A TargetMachine, so the cost-model-driven parts of the pipeline have a
