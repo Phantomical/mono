@@ -23,6 +23,7 @@
 #include "mini-runtime.h"
 #include "stub-jinfo.hpp"
 #include "thrower.hpp"
+#include "timing.hpp"
 #include "verification.hpp"
 #include "translate.hpp"
 #include "arch/arch.hpp"
@@ -596,8 +597,11 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 	TranslationTarget target { domain.jit.get (), domain.domain, publish_callee,
 		                   note, recover_failure };
 
-	llvm::Expected<Compiled> code =
-		translate_and_compile (target, method, &published);
+	llvm::Expected<Compiled> code = [&] {
+		timing::Scope timed (timing::Phase::compile);
+
+		return translate_and_compile (target, method, &published);
+	}();
 
 	if (!code)
 		return code.takeError ();

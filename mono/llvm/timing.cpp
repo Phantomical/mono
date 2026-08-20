@@ -264,7 +264,21 @@ span_end (Phase phase, uint64_t start)
 	if (start == 0)
 		return;
 
-	uint64_t elapsed = now_ns () - start;
+	uint64_t end = now_ns ();
+
+	/*
+	 * A span can begin on one thread and end on another - JITLink runs the
+	 * passes jlink brackets wherever the linker puts them. The thread CPU
+	 * clock is per thread, so the two readings are then from different
+	 * clocks and their difference is meaningless. It usually comes out
+	 * negative, and an unsigned subtraction turns that into a reading of
+	 * several hours. Drop it: a phase that is short of a few readings is
+	 * better than one whose total is a wrap.
+	 */
+	if (end < start)
+		return;
+
+	uint64_t elapsed = end - start;
 
 	account (phase, elapsed, 0);
 
