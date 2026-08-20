@@ -138,6 +138,8 @@ enum MonoUnwindWireOp : uint8_t {
 	MONO_UNWIND_OP_RESTORE_STATE = 6,
 	MONO_UNWIND_OP_RESTORE = 7,        /* reg reverts to its entry rule */
 	MONO_UNWIND_OP_SAME_VALUE = 8,     /* reg is not saved after all */
+	MONO_UNWIND_OP_ADJUST_CFA_OFFSET = 9, /* cfa offset += value */
+	MONO_UNWIND_OP_ARGS_SIZE = 10,     /* argument bytes a call pushed */
 };
 
 /// One `.mono_unwind` record in the form its readers work in.

@@ -142,11 +142,18 @@ parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
 /// be expressed.
 ///
 /// Almost everything maps one to one - mono's unwinder executes def_cfa,
-/// offset, same_value and one level of remember/restore state natively. The one
-/// normalization is RESTORE, which mono cannot execute: it reverts a register
-/// to its rule at function entry, so it is replayed here as that entry rule -
-/// the entry state is the leading run of offset-zero records - which is an
-/// offset where the entry saved the register and same_value where it did not.
+/// offset, same_value and one level of remember/restore state natively. Two
+/// records are normalized instead, because mono cannot execute either.
+///
+/// RESTORE reverts a register to its rule at function entry, so it is replayed
+/// here as that entry rule - the entry state is the leading run of offset-zero
+/// records - which is an offset where the entry saved the register and
+/// same_value where it did not.
+///
+/// ADJUST_CFA_OFFSET moves the CFA offset by a relative amount, so it is
+/// replayed as a def_cfa_offset carrying the offset it arrives at.
+///
+/// ARGS_SIZE is dropped, because it states no rule mono's unwinder holds.
 Expected<GSList *>
 transcode_unwind (const std::vector<UnwindRecord> &records)
 {
@@ -178,6 +185,14 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 	std::vector<std::pair<int32_t, int64_t>> entry_offsets;
 	bool in_entry_state = true;
 
+	/*
+	 * The CFA offset in effect, shadowed so that a relative adjustment can be
+	 * turned into the absolute one mono needs. The entry records open with a
+	 * def_cfa, so this is set before any adjustment can read it.
+	 */
+	int64_t cfa_offset = 0;
+	int64_t remembered_cfa_offset = 0;
+
 	for (const UnwindRecord &r : records) {
 		if (r.offset != 0)
 			in_entry_state = false;
@@ -190,12 +205,28 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 				return fail (createStringError (
 					inconvertibleErrorCode (),
 					"cfa register %d has no mono mapping", r.reg));
+			cfa_offset = r.value;
 			emit (r.offset, DW_CFA_def_cfa, (uint16_t) reg,
 			      (int32_t) r.value);
 			break;
 		}
 		case MONO_UNWIND_OP_DEF_CFA_OFFSET:
+			cfa_offset = r.value;
 			emit (r.offset, DW_CFA_def_cfa_offset, 0, (int32_t) r.value);
+			break;
+		case MONO_UNWIND_OP_ADJUST_CFA_OFFSET:
+			cfa_offset += r.value;
+			emit (r.offset, DW_CFA_def_cfa_offset, 0, (int32_t) cfa_offset);
+			break;
+		/*
+		 * DWARF carries the argument bytes for a personality routine that
+		 * adjusts the stack as it unwinds. Mono's unwinder has no opcode
+		 * for it and never calls the personality routine. It sets no CFA
+		 * and no register rule, and the CFA movement around the call
+		 * arrives as its own record, so the description stays complete
+		 * without it.
+		 */
+		case MONO_UNWIND_OP_ARGS_SIZE:
 			break;
 		case MONO_UNWIND_OP_DEF_CFA_REGISTER: {
 			int reg = hw_reg (r.reg);
@@ -229,6 +260,7 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 				return fail (createStringError (
 					inconvertibleErrorCode (),
 					"remember_state nested deeper than mono supports"));
+			remembered_cfa_offset = cfa_offset;
 			emit (r.offset, DW_CFA_remember_state, 0, 0);
 			break;
 		case MONO_UNWIND_OP_RESTORE_STATE:
@@ -236,6 +268,7 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 				return fail (createStringError (
 					inconvertibleErrorCode (),
 					"restore_state without a remembered state"));
+			cfa_offset = remembered_cfa_offset;
 			emit (r.offset, DW_CFA_restore_state, 0, 0);
 			break;
 		case MONO_UNWIND_OP_RESTORE:

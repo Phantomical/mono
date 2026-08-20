@@ -279,6 +279,14 @@ transcribe_cfi (const MCCFIInstruction &i)
 		r.op = MONO_UNWIND_OP_DEF_CFA_OFFSET;
 		r.value = i.getOffset ();
 		break;
+	case MCCFIInstruction::OpAdjustCfaOffset:
+		r.op = MONO_UNWIND_OP_ADJUST_CFA_OFFSET;
+		r.value = i.getOffset ();
+		break;
+	case MCCFIInstruction::OpGnuArgsSize:
+		r.op = MONO_UNWIND_OP_ARGS_SIZE;
+		r.value = i.getOffset ();
+		break;
 	case MCCFIInstruction::OpDefCfaRegister:
 		r.op = MONO_UNWIND_OP_DEF_CFA_REGISTER;
 		r.reg = static_cast<int32_t> (i.getRegister ());
