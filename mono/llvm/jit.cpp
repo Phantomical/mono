@@ -922,6 +922,7 @@ apply_profile (Module &m, ArrayRef<uint8_t> profile)
 
 	ModulePassManager mpm;
 
+	mpm.addPass (ProfileSelectPass ());
 	mpm.addPass (profile_use_pass (profile));
 	mpm.run (m, mam);
 
@@ -960,8 +961,6 @@ MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile)
 	mpm.addPass (ArrayAddressPass ());
 	mpm.addPass (LowerBuiltinsPass ());
 
-	// The set the instrumentation covered, so the reader leaves the rest alone
-	// rather than reporting a missing record for each.
 	mpm.addPass (ProfileSelectPass ());
 
 	if (!profile.empty ()) {
