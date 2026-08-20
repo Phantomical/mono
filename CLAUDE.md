@@ -309,6 +309,11 @@ Backend debugging env vars:
   Two methods that want one name get `.1`, `.2` and so on before the extension, which
   is what a generic instantiation and `MONO_LLVM_JIT_RECOMPILE` both produce. Loading
   KSP to its main menu writes ~9300 files and 194M.
+- `MONO_LLVM_JIT_ASM_TIER=<1|2>` (`compiler.cpp`) — keep only the dumps of one tier,
+  which is what separates the body a method promoted with from the one tier 2 wrote
+  for it. It narrows `MONO_LLVM_JIT_ASM` and `MONO_LLVM_JIT_ASM_DIR` alike, and any
+  other value means every tier. The thrower, the dispatcher and the entry thunks are
+  compiled as tier 1, so `=1` keeps those as well.
 - `MONO_LLVM_JIT_VERIFY=<0|off|each|all>` (`jit.cpp`) — how much of the IR the verifier
   sees. On by default when LLVM was built with assertions (the configuration this
   project uses), and then it checks the translator's output, the module after each pass

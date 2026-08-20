@@ -39,7 +39,13 @@ constexpr const char *asm_filter = "mono.asm.dump.fixture";
 
 class SelectAsmDumps : public ::testing::Environment {
 public:
-	void SetUp () override { ::setenv ("MONO_LLVM_JIT_ASM", asm_filter, 1); }
+	void SetUp () override
+	{
+		::setenv ("MONO_LLVM_JIT_ASM", asm_filter, 1);
+		// The tier gate is read once as well, so the tier a case wants is
+		// fixed here: tier 1 is kept and tier 2 is refused.
+		::setenv ("MONO_LLVM_JIT_ASM_TIER", "1", 1);
+	}
 };
 
 const ::testing::Environment *asm_dumps_selected =
@@ -109,11 +115,11 @@ public:
 	}
 
 protected:
-	/// Translate and compile IMAGE's METHOD, having renamed its module so the
-	/// filter does or does not name it. Hands back the compiled function's
-	/// symbol, which is what the assembly labels it.
+	/// Translate and compile IMAGE's METHOD at the given tier, having renamed
+	/// its module so the filter does or does not name it. Hands back the
+	/// compiled function's symbol, which is what the assembly labels it.
 	std::string compile (const std::string &image, const std::string &method,
-	                     bool dumped)
+	                     bool dumped, JitTier tier = JitTier::tier1)
 	{
 		std::unique_ptr<Translation> t = translate_method (image, method);
 
@@ -140,7 +146,7 @@ protected:
 
 		// As the runtime compiles: translator output still names the symbolic
 		// calls the mono passes rewrite, so it cannot be linked as it stands.
-		MonoJit::optimize (*t->module, JitTier::tier1);
+		MonoJit::optimize (*t->module, tier);
 
 		auto addr = (*jit)->compile (
 			ThreadSafeModule (std::move (t->module),
@@ -178,6 +184,21 @@ TEST_F (AsmDump, LeavesAMethodTheFilterDoesNotNameAlone)
 {
 	CapturedStderr captured;
 	std::string entry = compile ("arith", "Arith:Add", /*dumped=*/false);
+	std::string dump = captured.text ();
+
+	ASSERT_FALSE (entry.empty ());
+	EXPECT_EQ (dump.find ("*** assembly for"), std::string::npos) << dump;
+}
+
+/*
+ * The same method the case above dumps, compiled at the other tier: the filter
+ * still names it, so what refuses the dump is the tier and nothing else.
+ */
+TEST_F (AsmDump, LeavesAMethodOfAnotherTierAlone)
+{
+	CapturedStderr captured;
+	std::string entry
+		= compile ("eh", "Eh:TryCatch", /*dumped=*/true, JitTier::tier2);
 	std::string dump = captured.text ();
 
 	ASSERT_FALSE (entry.empty ());

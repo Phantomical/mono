@@ -913,14 +913,35 @@ asm_dump_directory ()
 	return dir != nullptr ? StringRef (dir) : StringRef ();
 }
 
+/// The tier a dump is narrowed to, or zero for every tier.
+/// MONO_LLVM_JIT_ASM_TIER names it as 1 or 2, and anything else means zero.
+unsigned
+asm_dump_tier ()
+{
+	static const unsigned tier = [] {
+		const char *setting = std::getenv ("MONO_LLVM_JIT_ASM_TIER");
+		unsigned value = 0;
+
+		if (setting != nullptr && !StringRef (setting).getAsInteger (10, value)
+		    && (value == 1 || value == 2))
+			return value;
+		return 0u;
+	}();
+
+	return tier;
+}
+
 /// Whether to dump this module, whose identifier is the full name of the one
-/// method it holds. MONO_LLVM_JIT_ASM keeps the methods whose name contains it.
+/// method it holds, compiled at the given tier. MONO_LLVM_JIT_ASM keeps the
+/// methods whose name contains it, and MONO_LLVM_JIT_ASM_TIER keeps one tier.
 /// A directory with no filter beside it takes every method that reaches codegen.
 bool
-dumping_asm (StringRef module_name)
+dumping_asm (StringRef module_name, unsigned tier)
 {
 	static const char *filter = std::getenv ("MONO_LLVM_JIT_ASM");
 
+	if (asm_dump_tier () != 0 && asm_dump_tier () != tier)
+		return false;
 	if (filter == nullptr)
 		return !asm_dump_directory ().empty ();
 
@@ -1107,11 +1128,11 @@ MethodObjectCompiler::operator() (Module &m)
 
 	// The tier-2 pipeline stamps this, and the level it wants is fixed when the
 	// machine is built rather than settable here.
-	TargetMachine &tm = m.getModuleFlag ("mono.tier2") != nullptr
-	                            ? tier2_target_machine ()
-	                            : host_target_machine ();
+	const bool tier2 = m.getModuleFlag ("mono.tier2") != nullptr;
+	TargetMachine &tm
+		= tier2 ? tier2_target_machine () : host_target_machine ();
 
-	if (dumping_asm (m.getName ()))
+	if (dumping_asm (m.getName (), tier2 ? 2 : 1))
 		if (Error err = dump_assembly (tm, m))
 			return std::move (err);
 
