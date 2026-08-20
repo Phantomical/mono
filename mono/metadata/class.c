@@ -428,7 +428,10 @@ mono_type_get_name_recurse (MonoType *type, GString *str, gboolean is_recursed,
 	}
 	case MONO_TYPE_VAR:
 	case MONO_TYPE_MVAR:
-		if (!mono_generic_param_name (type->data.generic_param))
+		if (mono_type_is_shared_reference_param (type))
+			g_string_append (str, format == MONO_TYPE_NAME_FORMAT_IL ? "object"
+			                                                         : "System.Object");
+		else if (!mono_generic_param_name (type->data.generic_param))
 			g_string_append_printf (str, "%s%d", type->type == MONO_TYPE_VAR ? "!" : "!!", type->data.generic_param->num);
 		else
 			g_string_append (str, mono_generic_param_name (type->data.generic_param));

@@ -216,7 +216,9 @@ mono_type_get_desc (GString *res, MonoType *type, gboolean include_namespace)
 	}
 	case MONO_TYPE_VAR:
 	case MONO_TYPE_MVAR:
-		if (type->data.generic_param) {
+		if (mono_type_is_shared_reference_param (type)) {
+			g_string_append (res, "object");
+		} else if (type->data.generic_param) {
 			const char *name = mono_generic_param_name (type->data.generic_param);
 			if (name)
 				g_string_append (res, name);

@@ -1256,6 +1256,28 @@ mono_generic_class_is_generic_type_definition (MonoGenericClass *gklass);
 MonoType*
 mono_type_get_basic_type_from_generic (MonoType *type);
 
+/**
+ * Whether \p type is a type parameter that generic sharing has constrained to
+ * stand for any reference type.
+ *
+ * One such parameter is every reference instantiation at once, so a name
+ * printed for it says object rather than the parameter's own name. Two names
+ * then read alike - a shared body's and a real List<object>'s - which they
+ * already can: a printed name is not what identifies a method or a class.
+ */
+static inline gboolean
+mono_type_is_shared_reference_param (MonoType *type)
+{
+	if (type->type != MONO_TYPE_VAR && type->type != MONO_TYPE_MVAR)
+		return FALSE;
+	if (type->data.generic_param == NULL)
+		return FALSE;
+
+	MonoType *constraint = type->data.generic_param->gshared_constraint;
+
+	return constraint != NULL && constraint->type == MONO_TYPE_OBJECT;
+}
+
 gboolean
 mono_method_can_access_method_full (MonoMethod *method, MonoMethod *called, MonoClass *context_klass);
 
