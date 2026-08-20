@@ -12,6 +12,7 @@
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/domain-internals.h>
 #include <mono/metadata/loader.h>
+#include <mono/metadata/mono-config.h>
 #include <mono/mini/jit.h>
 
 /* mono-tls.h puts PIC back in scope, and it breaks some LLVM headers. */
@@ -76,6 +77,12 @@ init_runtime ()
 	started = true;
 
 	mono_set_assemblies_path (MONO_LLVM_TESTS_ASSEMBLIES);
+
+	// Without it a case that touches the filesystem dies on System.Native. The
+	// binary carries the path rather than taking MONO_CFG_DIR from the
+	// environment, so a case run by hand gets the same runtime ctest gives it.
+	mono_set_config_dir (MONO_LLVM_TESTS_CFG_DIR);
+
 	mono_jit_init_version_for_test_only ("mono-llvm-tests", "v4.0.30319");
 }
 

@@ -40,11 +40,26 @@ mono_gtest_binary(test-llvm
     "${CMAKE_BINARY_DIR}/mono/mini"
   DEFINITIONS
     MONO_LLVM_TESTS_DIR="${CMAKE_CURRENT_BINARY_DIR}"
-    MONO_LLVM_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}")
+    MONO_LLVM_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}"
+    MONO_LLVM_TESTS_CFG_DIR="${CMAKE_BINARY_DIR}/runtime/etc")
 
 mono_gtest_tests(test-llvm
   PREFIX test-llvm
+  FILTER "-JitProfile.*"
+  SKIP_REGEX "\\[  SKIPPED \\]"
+  PROPERTIES
+    LABELS llvm)
+
+# The JitProfile cases want the tier-0 pipeline instrumented, which jit.cpp
+# decides from MONO_LLVM_JIT_TIER2_THRESHOLD once per process.  So they run
+# apart from the rest, which keeps every other case on the pipeline the runtime
+# uses by default.  The variable being set is what turns the instrumentation on;
+# the value only says how many calls a body takes before it promotes, and a
+# count this high means the runtime the cases start promotes nothing.
+mono_gtest_tests(test-llvm
+  PREFIX test-llvm-profile
+  FILTER "JitProfile.*"
   SKIP_REGEX "\\[  SKIPPED \\]"
   PROPERTIES
     LABELS llvm
-    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc")
+    ENVIRONMENT "MONO_LLVM_JIT_TIER2_THRESHOLD=1000000000")

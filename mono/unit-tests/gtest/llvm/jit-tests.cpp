@@ -12,6 +12,7 @@
 
 #include "jit.hpp"
 #include "passes/lower-builtins.hpp"
+#include "passes/tier-counter.hpp"
 
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
@@ -415,6 +416,129 @@ TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 	munmap (far, page);
 }
 
+/*
+ * The counter cases, which need the instrumentation the tier-0 pipeline only
+ * adds when the runtime's tier-2 threshold is set. jit.cpp reads that once and
+ * keeps the answer, and the pipeline is built once per thread, so a case cannot
+ * turn it on for itself. The build registers this suite as a run of its own with
+ * the variable set, and the check below is what keeps a run without it honest.
+ */
+class JitProfile : public ::testing::Test {
+public:
+	static void SetUpTestSuite ()
+	{
+		MONO_SKIP_WITHOUT_CORPUS ();
+
+		if (::getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD") == nullptr)
+			GTEST_SKIP () << "MONO_LLVM_JIT_TIER2_THRESHOLD is unset, so "
+			                 "the pipeline instruments nothing";
+
+		init_runtime ();
+	}
+};
+
+/// A branchy i32 -> i32 function, marked as one the instrumentation should
+/// count. \p arms decides how many branches it has, and so how many counters.
+static Function *
+build_counted_function (Module &m, LLVMContext &ctx, StringRef name, unsigned arms)
+{
+	Type *i32 = Type::getInt32Ty (ctx);
+	Function *fn = Function::Create (FunctionType::get (i32, { i32 }, false),
+	                                 Function::ExternalLinkage, name, &m);
+
+	// ProfileSelectPass instruments whatever carries this. TierCounterPass wants
+	// a handle as well and leaves the body alone without one, which keeps this
+	// module free of symbols only the runtime could resolve.
+	fn->addFnAttr (tier_counter_attribute, "10");
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *exit = BasicBlock::Create (ctx, "exit", fn);
+	IRBuilder<> b (entry);
+	Value *acc = fn->getArg (0);
+
+	for (unsigned i = 0; i < arms; i++) {
+		BasicBlock *taken = BasicBlock::Create (ctx, "taken" + Twine (i), fn);
+		BasicBlock *next = BasicBlock::Create (ctx, "next" + Twine (i), fn);
+
+		b.CreateCondBr (b.CreateICmpSGT (acc, b.getInt32 (int32_t (i))), taken,
+		                next);
+		b.SetInsertPoint (taken);
+		b.CreateBr (next);
+		b.SetInsertPoint (next);
+	}
+
+	b.CreateBr (exit);
+	b.SetInsertPoint (exit);
+	b.CreateRet (acc);
+
+	EXPECT_FALSE (verifyFunction (*fn, &errs ()));
+	return fn;
+}
+
+/*
+ * Two instrumented functions in one module, which is the shape a batched
+ * compile has. Each has to come back with its own counter array: they share one
+ * `__llvm_prf_cnts`, so anything that reads the section as a single function's
+ * array either answers with another function's numbers or refuses to answer.
+ */
+TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
+{
+	auto jit = test::make_jit ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	OwnedModule m;
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = std::make_unique<Module> ("jit.two-counted", *m.context);
+
+	build_counted_function (*m.module, *m.context, "counted_a", 1);
+	build_counted_function (*m.module, *m.context, "counted_b", 3);
+
+	std::vector<ProfileCounters> layout =
+		MonoJit::optimize (*m.module, JitTier::tier1);
+	ASSERT_EQ (layout.size (), 2u);
+
+	auto compiled = (*jit)->compile (m.take (), "counted_a", {}, layout);
+	ASSERT_TRUE (bool (compiled)) << toString (compiled.takeError ());
+
+	// The entry's own, and the other function's under other_profiles.
+	ASSERT_TRUE (compiled->profile.has_value ());
+	EXPECT_EQ (compiled->profile->function, "counted_a");
+	ASSERT_EQ (compiled->other_profiles.size (), 1u);
+	EXPECT_EQ (compiled->other_profiles.front ().function, "counted_b");
+
+	const ProfileCounters &a = *compiled->profile;
+	const ProfileCounters &b = compiled->other_profiles.front ();
+
+	ASSERT_NE (a.counters, nullptr);
+	ASSERT_NE (b.counters, nullptr);
+	ASSERT_GT (a.count, 0u);
+	ASSERT_GT (b.count, 0u);
+
+	// Different CFGs, so the arrays cannot be the same size, and they must not
+	// overlap - one array covering both is exactly the bug this guards.
+	EXPECT_NE (a.count, b.count);
+	EXPECT_TRUE (a.counters + a.count <= b.counters
+	             || b.counters + b.count <= a.counters);
+
+	// The counts themselves: run each a different number of times and read the
+	// entry counter back out of live code memory.
+	auto fn_a = reinterpret_cast<int32_t (*) (int32_t)> (compiled->entry);
+
+	void *entry_b = nullptr;
+	for (const auto &fn : compiled->functions)
+		if (fn.first == "counted_b")
+			entry_b = const_cast<uint8_t *> (fn.second.first);
+	ASSERT_NE (entry_b, nullptr);
+	auto fn_b = reinterpret_cast<int32_t (*) (int32_t)> (entry_b);
+
+	for (int i = 0; i < 7; i++)
+		fn_a (i);
+	for (int i = 0; i < 3; i++)
+		fn_b (i);
+
+	EXPECT_EQ (a.counters[0], 7u);
+	EXPECT_EQ (b.counters[0], 3u);
+}
 } // namespace
 } // namespace test
 } // namespace mono
