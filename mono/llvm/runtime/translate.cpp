@@ -345,10 +345,9 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 
 	const TranslationTarget &shared = *targets.front ();
 
-	// A tier-2 body is laid out by its own method's counts, and a method with
-	// no IL of its own is compiled by mini rather than translated. Neither can
-	// share a module, and both are rare enough here to be worth no more than
-	// this.
+	// A tier-2 body is laid out by its own method's counts, so it has no module
+	// to share. Which methods arrive here together is the caller's choice, so
+	// the refusal is checked here rather than assumed of the caller.
 	if (methods.size () < 2 || shared.tier != JitTier::tier1)
 		return one_by_one ();
 

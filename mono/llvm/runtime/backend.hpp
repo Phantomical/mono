@@ -188,9 +188,10 @@ private:
 
 	/// The same for several methods at once, sharing one compile between them.
 	///
-	/// The results line up with dms. Neither the interpreter nor a shared body
-	/// is offered any of them - compile_body () decides both before it gets
-	/// here, and promotion has already settled them.
+	/// Every method in dms is compiled at the one tier given. The results line
+	/// up with dms. Neither the interpreter nor a shared body is offered any of
+	/// them - compile_body () decides both before it gets here, and promotion
+	/// has already settled them.
 	std::vector<llvm::Expected<Compiled>>
 	compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMethod *> dms,
 	                MonoTier tier, bool for_sharing = false);

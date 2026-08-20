@@ -351,8 +351,10 @@ Backend debugging env vars:
   one compile, default 8. They are translated into one module and go through the IR
   pipeline, codegen and the linker together, so LLVM's per-compile floor is paid once
   for the batch. One turns it off and compiles every method on its own, which is what
-  tells a batching bug from a backend one. Only promotions batch: a compile the runtime
-  asks for by name, and a dynamic method, still go one at a time.
+  tells a batching bug from a backend one. Only tier-1 promotions batch. A tier-2
+  promotion is laid out by its own method's counts and is asked for by a method that is
+  already hot, so it goes on its own; so do a dynamic method and any compile the runtime
+  asks for by name.
 - `MONO_LLVM_JIT_TIER0=<substr|0>` (`runtime/options.cpp`) — narrow tier 0, which is
   otherwise every method the interpreter accepts. A false value (`0`, `false`, empty)
   compiles everything, which is how to tell a tier-0 bug from a backend one; anything

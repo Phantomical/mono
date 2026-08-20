@@ -11,6 +11,7 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Module.h>
 #include <memory>
+#include <algorithm>
 #include <map>
 #include <mutex>
 #include <unistd.h>
@@ -146,33 +147,21 @@ struct MonoBackend::DomainState {
 
 	CompileQueue::Channel queue;
 
-	/// The promotions asked for and not yet taken, with the tier each was
-	/// asked for. The worker takes a run of them at a time, so promotions
-	/// asked for close together share one compile.
+	/// The tier-1 promotions asked for and not yet taken. The worker takes a
+	/// run of them at a time, so promotions asked for close together share one
+	/// compile.
 	std::mutex pending_mutex;
-	std::vector<std::pair<MonoMethod *, MonoTier>> pending;
+	std::vector<MonoMethod *> pending;
 
-	/// Up to \p limit pending promotions that all want the same tier, taken off
-	/// the list. Empty when nothing is waiting, and tier is then left alone.
-	std::vector<MonoMethod *> take_pending (uint32_t limit, MonoTier *tier)
+	/// Up to \p limit pending promotions, taken off the list. Empty when
+	/// nothing is waiting.
+	std::vector<MonoMethod *> take_pending (uint32_t limit)
 	{
 		std::lock_guard<std::mutex> lock (pending_mutex);
-		std::vector<MonoMethod *> taken;
-		std::vector<std::pair<MonoMethod *, MonoTier>> left;
+		size_t count = std::min ((size_t) limit, pending.size ());
+		std::vector<MonoMethod *> taken (pending.begin (), pending.begin () + count);
 
-		for (const auto &[method, wanted] : pending) {
-			// The tier decides the pipeline and, at tier 2, the counts the
-			// code is laid out by. So one batch is one tier.
-			if (taken.empty ())
-				*tier = wanted;
-
-			if (wanted == *tier && taken.size () < limit)
-				taken.push_back (method);
-			else
-				left.emplace_back (method, wanted);
-		}
-
-		pending = std::move (left);
+		pending.erase (pending.begin (), pending.begin () + count);
 		return taken;
 	}
 
@@ -1022,12 +1011,18 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 	DomainState *owner = *state;
 
 	/*
-	 * A dynamic method is the one thing that gets freed, and drop () has to take
-	 * its queued work with it. Work that batches compiles methods the tag says
-	 * nothing about, so a dynamic method is queued on its own and keeps the
-	 * one-tag-one-compile shape drop () needs.
+	 * Two shapes are queued one to a piece of work rather than batched.
+	 *
+	 * A tier-2 compile is laid out by its own method's counts, so it has no
+	 * module to share; and it is asked for by a method that is already hot,
+	 * which is the worst thing to make wait behind a batch of others.
+	 *
+	 * A dynamic method is the one thing that gets freed, and drop () has to
+	 * take its queued work with it. Batched work compiles methods its tag says
+	 * nothing about, so a dynamic method keeps the one-tag-one-compile shape
+	 * drop () needs.
 	 */
-	if (method->dynamic)
+	if (tier != MonoTier::tier1 || method->dynamic)
 		return owner->queue.enqueue (method, [self, owner, method, tier] () {
 			llvm::Expected<MonoDomainMethod *> published =
 				publish (*owner, method);
@@ -1055,7 +1050,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 	 * leaves the method waiting until the next one drains it, or until the
 	 * domain goes - which is what a refused promotion already means.
 	 */
-	MONO_LOCK (owner->pending_mutex) { owner->pending.emplace_back (method, tier); }
+	MONO_LOCK (owner->pending_mutex) { owner->pending.push_back (method); }
 
 	/*
 	 * One piece of work per request, and each takes as many pending promotions
@@ -1063,9 +1058,8 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 	 * retire immediately.
 	 */
 	return owner->queue.enqueue (method, [self, owner] () {
-		MonoTier tier = MonoTier::tier1;
 		std::vector<MonoMethod *> methods =
-			owner->take_pending (promotion_batch_size (), &tier);
+			owner->take_pending (promotion_batch_size ());
 		std::vector<MonoDomainMethod *> records;
 
 		for (MonoMethod *method : methods) {
@@ -1088,7 +1082,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 			return;
 
 		for (llvm::Expected<Compiled> &body :
-		     self->compile_bodies (*owner, records, tier))
+		     self->compile_bodies (*owner, records, MonoTier::tier1))
 			if (!body)
 				llvm::logAllUnhandledErrors (
 					body.takeError (), llvm::errs (),

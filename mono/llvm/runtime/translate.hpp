@@ -120,9 +120,10 @@ struct BatchResult {
 /// and a tier.
 ///
 /// Anything the shared module cannot hold is compiled one method at a time
-/// instead, and so is the whole batch when one member fails to translate. So a
-/// caller gets the same answers it would have got asking for each method on its
-/// own.
+/// instead - a tier-2 compile among them, since its code is laid out by its own
+/// method's counts - and so is the whole batch when one member fails to
+/// translate. So a caller gets the same answers it would have got asking for
+/// each method on its own.
 std::vector<BatchResult>
 translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
                              llvm::ArrayRef<MonoMethod *> methods);

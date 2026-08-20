@@ -52,11 +52,12 @@ bool recompiling (MonoMethod *method);
 /// entry path from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
 
-/// How many methods a promotion compile may take at once.
+/// How many methods a tier-1 promotion compile may take at once.
 ///
 /// Methods promoted close together are translated into one module and compiled
 /// together, which pays LLVM's per-compile cost once instead of once each.
 /// MONO_LLVM_JIT_BATCH moves it, and one there compiles every method on its own.
+/// Tier 2 is never batched: its code is laid out by its own method's counts.
 uint32_t promotion_batch_size ();
 
 /// Whether tier 2 exists at all, which is what decides whether a tier-1 body
