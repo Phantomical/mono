@@ -29,6 +29,7 @@
 
 #include <glib.h>
 
+#include <mono/llvm/runtime.h>
 #include <mono/metadata/appdomain.h>
 #include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/class-internals.h>
@@ -503,14 +504,31 @@ main (int argc, char *argv[])
 	mono_jit_init_version_for_test_only ("mono-interp-tests", "v4.0.30319");
 
 	MonoImage *image = open_assembly (assembly);
+	int result;
 
 	if (image == nullptr)
-		return 2;
+		result = 2;
+	else if (listing)
+		result = list_tests (image);
+	else if (all)
+		result = run_all (image, only, arm, xfail, skip);
+	else
+		result = run_test (image, test);
 
-	if (listing)
-		return list_tests (image);
-	if (all)
-		return run_all (image, only, arm, xfail, skip);
+	/*
+	 * On every path, and before main returns. This waits for the compile in
+	 * hand and queues nothing more. A process that exits with a tier-2
+	 * promotion still on the compile worker destroys LLVM's static tables under
+	 * it - the MVT list behind SDNode::getValueTypeList (), and the file system
+	 * every PassBuilder holds. The run then ends in an assertion inside
+	 * instruction selection, far from anything the test did.
+	 *
+	 * `mono` gets this from mini_cleanup (), which this harness cannot call:
+	 * mono_cleanup () destroys the assemblies lock and then closes images
+	 * through mono_debug_cleanup (), which takes it. Calling mono_jit_cleanup ()
+	 * from here aborts every run.
+	 */
+	mono_llvm_jit_stop_compiling ();
 
-	return run_test (image, test);
+	return result;
 }
