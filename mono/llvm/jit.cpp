@@ -250,18 +250,69 @@ parse_line_table (const uint8_t *table, size_t size,
 }
 
 /*
- * Where the translator's debug-variable marker says this method's arguments and
- * locals ended up, in the order it named them - arguments then locals.
+ * The `.llvm_stackmaps` v3 header is 16 bytes, and the function list follows it
+ * as 24-byte records: the function's address, its frame size, and how many of
+ * the section's stackmap records belong to it. StackMapParser does not give
+ * these two offsets out, and the address field is where the relocation that
+ * names the function sits.
+ */
+constexpr uint64_t stackmap_function_list_offset = 16;
+constexpr uint64_t stackmap_function_size = 24;
+
+/// What each relocation on a section points at, by the offset it applies at.
+static std::map<uint64_t, std::string>
+relocation_targets (const object::ObjectFile &obj, const object::SectionRef &section)
+{
+	std::map<uint64_t, std::string> targets;
+
+	// An ELF object keeps a section's relocations in a section of their own, so
+	// asking the section itself for them answers nothing. Find the one that
+	// applies to it instead.
+	for (const object::SectionRef &relocs : obj.sections ()) {
+		Expected<object::section_iterator> applies_to = relocs.getRelocatedSection ();
+
+		if (!applies_to) {
+			consumeError (applies_to.takeError ());
+			continue;
+		}
+		if (*applies_to == obj.section_end () || **applies_to != section)
+			continue;
+
+		for (const object::RelocationRef &reloc : relocs.relocations ()) {
+			object::symbol_iterator symbol = reloc.getSymbol ();
+
+			if (symbol == obj.symbol_end ())
+				continue;
+
+			Expected<StringRef> name = symbol->getName ();
+
+			if (!name) {
+				consumeError (name.takeError ());
+				continue;
+			}
+			targets[reloc.getOffset ()] = name->str ();
+		}
+	}
+
+	return targets;
+}
+
+/*
+ * Where the translator's markers say each function's frame slots ended up: its
+ * arguments and locals in the order it named them - arguments then locals - and
+ * a shared body's receiver, which goes to rgctx.
  *
  * The read is off the object rather than the linked graph because nothing here
  * needs relocating. A slot is a register number and a displacement, both settled
- * at codegen. The section holds a record per stackmap in the module, so the id
- * picks the marker out. A module carries at most one, since only a method's own
- * body has one.
+ * at codegen. The id picks the marker out of the finally markers that share the
+ * section, and the function list says whose marker it is: the records are
+ * grouped by function, and each group names its function through the relocation
+ * on its address field.
  */
 static void
-parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out,
-                       VarSlot &rgctx)
+parse_debug_var_slots (object::ObjectFile &obj,
+                       std::map<std::string, std::vector<VarSlot>> &out,
+                       std::map<std::string, VarSlot> &rgctx)
 {
 	for (const object::SectionRef &section : obj.sections ()) {
 		Expected<StringRef> name = section.getName ();
@@ -281,37 +332,67 @@ parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out,
 		}
 
 		ArrayRef<uint8_t> bytes ((const uint8_t *) contents->data (), contents->size ());
+
+		// The parser asserts on anything it cannot read, and an assertions-on
+		// LLVM is the configuration this backend is built against.
+		if (Error bad = StackMapParser<llvm::endianness::little>::validateHeader (bytes)) {
+			consumeError (std::move (bad));
+			return;
+		}
+
+		std::map<uint64_t, std::string> functions = relocation_targets (obj, section);
+
 		StackMapParser<llvm::endianness::little> parser (bytes);
+		unsigned record = 0;
 
-		for (const auto &record : parser.records ()) {
-			bool wanted_vars = record.getID () == vars_stackmap_id;
+		for (unsigned f = 0, n = parser.getNumFunctions (); f < n; ++f) {
+			unsigned count = (unsigned) parser.getFunction (f).getRecordCount ();
+			unsigned first = record;
 
-			if (!wanted_vars && record.getID () != rgctx_stackmap_id)
+			record += count;
+
+			auto owner = functions.find (stackmap_function_list_offset
+			                             + f * stackmap_function_size);
+
+			if (owner == functions.end ())
 				continue;
 
-			for (const auto &location : record.locations ()) {
-				// An alloca operand lowers to Direct - register plus
-				// displacement is the slot's address. Anything else
-				// means the operand was not the slot we named. A
-				// partial list misattributes every variable after
-				// it, so drop the method's variables entirely.
-				if (location.getKind ()
-				    != StackMapParser<
-					    llvm::endianness::little>::LocationKind::Direct) {
-					if (wanted_vars)
-						out.clear ();
-					else
-						rgctx = { -1, 0 };
-					break;
+			for (unsigned i = first; i < first + count; ++i) {
+				auto marker = parser.getRecord (i);
+				bool wanted_vars = marker.getID () == vars_stackmap_id;
+
+				if (!wanted_vars && marker.getID () != rgctx_stackmap_id)
+					continue;
+
+				std::vector<VarSlot> slots;
+				bool complete = true;
+
+				for (const auto &location : marker.locations ()) {
+					// An alloca operand lowers to Direct - register
+					// plus displacement is the slot's address.
+					// Anything else means the operand was not the
+					// slot we named. A partial list misattributes
+					// every variable after it, so drop this
+					// function's variables entirely.
+					if (location.getKind ()
+					    != StackMapParser<llvm::endianness::little>::
+						    LocationKind::Direct) {
+						complete = false;
+						break;
+					}
+
+					slots.push_back (
+						{ (int32_t) location.getDwarfRegNum (),
+					          (int32_t) location.getOffset () });
 				}
 
-				VarSlot slot { (int32_t) location.getDwarfRegNum (),
-					       (int32_t) location.getOffset () };
+				if (!complete || slots.empty ())
+					continue;
 
 				if (wanted_vars)
-					out.push_back (slot);
+					out[owner->second] = std::move (slots);
 				else
-					rgctx = slot;
+					rgctx[owner->second] = slots.front ();
 			}
 		}
 		return;
@@ -368,10 +449,13 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> il_lines;
 		/// Each defined function's sequence point markers, by name.
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
-		/// Where the body's arguments and locals live in its frame.
-		std::vector<VarSlot> var_slots;
-		/// Where a shared body's receiver lives in its frame.
-		VarSlot rgctx_slot { -1, 0 };
+		/// Where a function's arguments and locals live in its frame, by
+		/// name. Only a method body pins them, so a filter or a thunk has
+		/// no entry here.
+		std::map<std::string, std::vector<VarSlot>> var_slots;
+		/// Where a shared body's receiver lives in its frame, by name. A
+		/// body that is not a shared one has no entry here.
+		std::map<std::string, VarSlot> rgctx_slots;
 		/// The `__llvm_prf_cnts` section: every instrumented function's
 		/// counters, and how many fit. Null when the module was not
 		/// instrumented. Only the bound is read from here - which function
@@ -408,8 +492,8 @@ public:
 			objects_[mr.getTargetJITDylib ().getName ()] = std::move (bytes);
 		}
 
-		std::vector<VarSlot> var_slots;
-		VarSlot rgctx_slot { -1, 0 };
+		std::map<std::string, std::vector<VarSlot>> var_slots;
+		std::map<std::string, VarSlot> rgctx_slots;
 		timing::Scope timed (timing::Phase::vslots);
 
 		Expected<std::unique_ptr<object::ObjectFile>> obj =
@@ -420,13 +504,13 @@ public:
 			return;
 		}
 
-		parse_debug_var_slots (**obj, var_slots, rgctx_slot);
-		if (var_slots.empty () && rgctx_slot.dwarf_reg < 0)
+		parse_debug_var_slots (**obj, var_slots, rgctx_slots);
+		if (var_slots.empty () && rgctx_slots.empty ())
 			return;
 
 		std::lock_guard<std::mutex> lock (mutex_);
 		var_slots_[mr.getTargetJITDylib ().getName ()] = { std::move (var_slots),
-			                                           rgctx_slot };
+			                                           std::move (rgctx_slots) };
 	}
 
 	void modifyPassConfig (MaterializationResponsibility &mr, jitlink::LinkGraph &g,
@@ -554,7 +638,7 @@ public:
 		if (auto slots = var_slots_.find (std::string (dylib));
 		    slots != var_slots_.end ()) {
 			extents.var_slots = std::move (slots->second.first);
-			extents.rgctx_slot = slots->second.second;
+			extents.rgctx_slots = std::move (slots->second.second);
 			var_slots_.erase (slots);
 		}
 
@@ -597,9 +681,11 @@ private:
 
 	std::mutex mutex_;
 	std::map<std::string, Extents> captured_;
-	/// The frame slots read off each object before it was linked: the
-	/// arguments and locals, and a shared body's receiver.
-	std::map<std::string, std::pair<std::vector<VarSlot>, VarSlot>> var_slots_;
+	/// The frame slots read off each object before it was linked, by dylib:
+	/// each function's arguments and locals, and each shared body's receiver.
+	std::map<std::string, std::pair<std::map<std::string, std::vector<VarSlot>>,
+	                                std::map<std::string, VarSlot>>>
+		var_slots_;
 	/// Each in-flight compile's object bytes, taken before the link and given
 	/// back once it has settled. Only populated when gdbjit::enabled ().
 	std::map<std::string, std::vector<char>> objects_;
@@ -1252,11 +1338,42 @@ MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile)
 	return layout;
 }
 
+/*
+ * Whether the object's function belongs to the method entry names. The
+ * translator gives a method's side bodies the method's own name and a `$`
+ * suffix, so the name is what says which method of a batch a filter body came
+ * in with.
+ */
+static bool
+belongs_to (StringRef entry, StringRef function)
+{
+	return function == entry
+	       || (function.starts_with (entry) && function.drop_front (entry.size ())
+	                                                   .starts_with ("$"));
+}
+
 Expected<CompiledMethod>
 MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
                   ArrayRef<std::pair<StringRef, void *>> module_symbols,
                   ArrayRef<ProfileCounters> layout)
 {
+	Expected<std::vector<CompiledMethod>> compiled =
+		compile_batch (std::move (tsm), entry, module_symbols, layout);
+
+	if (!compiled)
+		return compiled.takeError ();
+	return std::move (compiled->front ());
+}
+
+Expected<std::vector<CompiledMethod>>
+MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
+                        ArrayRef<std::pair<StringRef, void *>> module_symbols,
+                        ArrayRef<ProfileCounters> layout)
+{
+	if (entries.empty ())
+		return createStringError (inconvertibleErrorCode (),
+		                          "a compile was asked for with no entry points");
+
 	// An assertions-on LLVM refuses to codegen a module whose layout disagrees
 	// with the target. A fresh module has no layout at all.
 	tsm.withModuleDo ([&] (Module &m) {
@@ -1266,7 +1383,8 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
 
 	// A dylib per module, linked against mono.helpers. It is bare because
 	// these modules carry no initializers for the platform to manage.
-	std::string jd_name = ("jd." + Twine (module_counter_.fetch_add (1)) + "." + entry).str ();
+	std::string jd_name =
+		("jd." + Twine (module_counter_.fetch_add (1)) + "." + entries.front ()).str ();
 
 	JITDylib &jd = [&] () -> JITDylib & {
 		timing::Scope timed (timing::Phase::dylib);
@@ -1301,63 +1419,90 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
 			return std::move (err);
 	}
 
-	Expected<ExecutorAddr> sym = jit_->lookup (jd, entry);
-	if (!sym)
-		return sym.takeError ();
+	// One lookup for the whole batch: each one takes the session lock, and the
+	// first is what materializes the module anyway.
+	SymbolLookupSet wanted;
+
+	for (StringRef entry : entries)
+		wanted.add (jit_->mangleAndIntern (entry));
+
+	Expected<SymbolMap> found = jit_->getExecutionSession ().lookup (
+		makeJITDylibSearchOrder (&jd), std::move (wanted));
+
+	if (!found)
+		return found.takeError ();
 
 	std::optional<ObjectCapturePlugin::Extents> extents = capture_->take (jd_name);
 	if (!extents)
 		return createStringError (inconvertibleErrorCode (),
 		                          "no object was captured while compiling %s",
-		                          entry.str ().c_str ());
+		                          entries.front ().str ().c_str ());
 
-	CompiledMethod compiled;
-	compiled.entry = sym->toPtr<void *> ();
-	compiled.dylib = &jd;
-	compiled.clause_table = extents->clause_table;
-	compiled.clause_table_size = extents->clause_table_size;
-	compiled.guard_table = extents->guard_table;
-	compiled.guard_table_size = extents->guard_table_size;
-	compiled.unwind_table = extents->unwind_table;
-	compiled.unwind_table_size = extents->unwind_table_size;
-	compiled.linker_stubs = std::move (extents->linker_stubs);
+	std::vector<ProfileCounters> profiles =
+		locate_counters (layout, extents->counters, extents->counter_slots,
+		                 extents->profile_data, extents->profile_data_size);
+	std::vector<CompiledMethod> results;
 
-	for (auto &[name, extent] : extents->functions) {
-		if (name == entry) {
-			compiled.code = extent.first;
-			compiled.code_size = extent.second;
+	for (StringRef entry : entries) {
+		CompiledMethod compiled;
+
+		compiled.entry = (*found)[jit_->mangleAndIntern (entry)].getAddress ().toPtr<void *> ();
+		compiled.dylib = &jd;
+		compiled.clause_table = extents->clause_table;
+		compiled.clause_table_size = extents->clause_table_size;
+		compiled.guard_table = extents->guard_table;
+		compiled.guard_table_size = extents->guard_table_size;
+		compiled.unwind_table = extents->unwind_table;
+		compiled.unwind_table_size = extents->unwind_table_size;
+
+		for (const auto &[name, extent] : extents->functions) {
+			if (!belongs_to (entry, name))
+				continue;
+			if (name == entry) {
+				compiled.code = extent.first;
+				compiled.code_size = extent.second;
+			}
+			compiled.functions.emplace_back (name, extent);
 		}
+
+		if (compiled.code == nullptr)
+			return createStringError (inconvertibleErrorCode (),
+			                          "the linked object for %s does not define it",
+			                          entry.str ().c_str ());
+
+		for (auto &[name, rows] : extents->il_lines) {
+			if (name == entry)
+				compiled.il_lines = std::move (rows);
+			else if (belongs_to (entry, name))
+				compiled.other_il_lines.emplace_back (name, std::move (rows));
+		}
+
+		if (auto points = extents->seq_points.find (entry.str ());
+		    points != extents->seq_points.end ())
+			compiled.seq_points = std::move (points->second);
+
+		if (auto slots = extents->var_slots.find (entry.str ());
+		    slots != extents->var_slots.end ())
+			compiled.var_slots = std::move (slots->second);
+
+		if (auto rgctx = extents->rgctx_slots.find (entry.str ());
+		    rgctx != extents->rgctx_slots.end ())
+			compiled.rgctx_slot = rgctx->second;
+
+		for (ProfileCounters &counters : profiles) {
+			if (counters.function == entry)
+				compiled.profile = std::move (counters);
+			else if (belongs_to (entry, counters.function))
+				compiled.other_profiles.push_back (std::move (counters));
+		}
+
+		results.push_back (std::move (compiled));
 	}
-	compiled.functions = std::move (extents->functions);
 
-	if (auto lines = extents->il_lines.find (entry.str ()); lines != extents->il_lines.end ()) {
-		compiled.il_lines = std::move (lines->second);
-		extents->il_lines.erase (lines);
-	}
-
-	for (auto &lines : extents->il_lines)
-		compiled.other_il_lines.emplace_back (lines.first, std::move (lines.second));
-
-	if (auto points = extents->seq_points.find (entry.str ());
-	    points != extents->seq_points.end ())
-		compiled.seq_points = std::move (points->second);
-
-	compiled.var_slots = std::move (extents->var_slots);
-	compiled.rgctx_slot = extents->rgctx_slot;
-
-	for (ProfileCounters &found :
-	     locate_counters (layout, extents->counters, extents->counter_slots,
-	                      extents->profile_data, extents->profile_data_size)) {
-		if (found.function == entry)
-			compiled.profile = std::move (found);
-		else
-			compiled.other_profiles.push_back (std::move (found));
-	}
-
-	if (compiled.code == nullptr)
-		return createStringError (inconvertibleErrorCode (),
-		                          "the linked object for %s does not define it",
-		                          entry.str ().c_str ());
+	// The stubs belong to the object rather than to any one method in it, and
+	// a perf map that names a range twice cannot symbolize it. So the first
+	// method carries them.
+	results.front ().linker_stubs = std::move (extents->linker_stubs);
 
 	if (!extents->debug_object.empty ()) {
 		gdbjit::Registration *reg = gdbjit::publish (std::move (extents->debug_object));
@@ -1369,7 +1514,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
 		}
 	}
 
-	return compiled;
+	return results;
 }
 
 void

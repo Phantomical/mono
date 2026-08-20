@@ -150,22 +150,24 @@ struct CompiledMethod {
 	const uint8_t *unwind_table = nullptr;
 	size_t unwind_table_size = 0;
 
-	/// Every function the linked object defines, name to [code, size): the
-	/// entry, and any filter bodies compiled alongside it.
+	/// Every function of this method the linked object defines, name to
+	/// [code, size): the entry, and any filter bodies compiled alongside it.
 	std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
 
 	/// The executable sections the linker synthesized for this object, as
 	/// [code, size). They are nameless, and they sit on the path of the calls
 	/// that needed them. So the runtime has to resolve an address in one.
+	/// Where several methods share an object, the first of them carries all
+	/// of these and the rest carry none.
 	std::vector<std::pair<const uint8_t *, size_t>> linker_stubs;
 
 	/// The entry function's native_offset -> il_offset rows, ascending by
 	/// native offset. Empty when the module carried no line table.
 	std::vector<IlLineRow> il_lines;
 
-	/// The same rows for every other function the object defines, by name.
-	/// Each filter body is a frame of its own. So each needs a map of its own
-	/// to say where in the method's IL it is.
+	/// The same rows for every other function of this method, by name. Each
+	/// filter body is a frame of its own. So each needs a map of its own to
+	/// say where in the method's IL it is.
 	std::vector<std::pair<std::string, std::vector<IlLineRow>>> other_il_lines;
 
 	/// The entry function's sequence points, ascending by native offset: where
@@ -188,8 +190,7 @@ struct CompiledMethod {
 	/// module was compiled with the instrumentation off.
 	std::optional<ProfileCounters> profile;
 
-	/// The same for every other instrumented function the object defines. A
-	/// module holding one method leaves this empty.
+	/// The same for every other instrumented function of this method.
 	std::vector<ProfileCounters> other_profiles;
 
 	/// The dylib this compile's object was linked into - what remove_dylibs ()
@@ -239,6 +240,19 @@ public:
 	compile (llvm::orc::ThreadSafeModule tsm, llvm::StringRef entry,
 	        llvm::ArrayRef<std::pair<llvm::StringRef, void *>> module_symbols = {},
 	        llvm::ArrayRef<ProfileCounters> layout = {});
+
+	/// Compile one module holding several methods, on the terms compile ()
+	/// states, and answer one result per name in entries and in that order.
+	///
+	/// The methods share an object, so they share its side tables: the clause,
+	/// guard and frame tables are the whole section in every result, and a
+	/// reader picks its own function's block out of it. Everything else is
+	/// split by name, which is why a method's side bodies have to carry the
+	/// method's own name and a `$` suffix.
+	llvm::Expected<std::vector<CompiledMethod>>
+	compile_batch (llvm::orc::ThreadSafeModule tsm, llvm::ArrayRef<llvm::StringRef> entries,
+	              llvm::ArrayRef<std::pair<llvm::StringRef, void *>> module_symbols = {},
+	              llvm::ArrayRef<ProfileCounters> layout = {});
 
 	/// Release the dylibs: their code, their side tables, and the memory both
 	/// were linked into. Later compiles can reuse that memory.

@@ -476,10 +476,10 @@ build_counted_function (Module &m, LLVMContext &ctx, StringRef name, unsigned ar
 }
 
 /*
- * Two instrumented functions in one module, which is the shape a batched
- * compile has. Each has to come back with its own counter array: they share one
- * `__llvm_prf_cnts`, so anything that reads the section as a single function's
- * array either answers with another function's numbers or refuses to answer.
+ * Two instrumented methods in one batched compile. Each has to come back with
+ * its own counter array: they share one `__llvm_prf_cnts`, so anything that
+ * reads the section as a single method's array either answers with the other
+ * method's numbers or refuses to answer.
  */
 TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 {
@@ -497,17 +497,28 @@ TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 		MonoJit::optimize (*m.module, JitTier::tier1);
 	ASSERT_EQ (layout.size (), 2u);
 
-	auto compiled = (*jit)->compile (m.take (), "counted_a", {}, layout);
+	StringRef names[] = { "counted_a", "counted_b" };
+	auto compiled = (*jit)->compile_batch (m.take (), names, {}, layout);
 	ASSERT_TRUE (bool (compiled)) << toString (compiled.takeError ());
+	ASSERT_EQ (compiled->size (), 2u);
 
-	// The entry's own, and the other function's under other_profiles.
-	ASSERT_TRUE (compiled->profile.has_value ());
-	EXPECT_EQ (compiled->profile->function, "counted_a");
-	ASSERT_EQ (compiled->other_profiles.size (), 1u);
-	EXPECT_EQ (compiled->other_profiles.front ().function, "counted_b");
+	const CompiledMethod &first = compiled->front ();
+	const CompiledMethod &second = compiled->back ();
 
-	const ProfileCounters &a = *compiled->profile;
-	const ProfileCounters &b = compiled->other_profiles.front ();
+	// Each result is its own method's, so what the other one counts is not in it.
+	ASSERT_TRUE (first.profile.has_value ());
+	ASSERT_TRUE (second.profile.has_value ());
+	EXPECT_EQ (first.profile->function, "counted_a");
+	EXPECT_EQ (second.profile->function, "counted_b");
+	EXPECT_TRUE (first.other_profiles.empty ());
+	EXPECT_TRUE (second.other_profiles.empty ());
+	ASSERT_EQ (first.functions.size (), 1u);
+	EXPECT_EQ (first.functions.front ().first, "counted_a");
+	ASSERT_EQ (second.functions.size (), 1u);
+	EXPECT_EQ (second.functions.front ().first, "counted_b");
+
+	const ProfileCounters &a = *first.profile;
+	const ProfileCounters &b = *second.profile;
 
 	ASSERT_NE (a.counters, nullptr);
 	ASSERT_NE (b.counters, nullptr);
@@ -522,14 +533,8 @@ TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 
 	// The counts themselves: run each a different number of times and read the
 	// entry counter back out of live code memory.
-	auto fn_a = reinterpret_cast<int32_t (*) (int32_t)> (compiled->entry);
-
-	void *entry_b = nullptr;
-	for (const auto &fn : compiled->functions)
-		if (fn.first == "counted_b")
-			entry_b = const_cast<uint8_t *> (fn.second.first);
-	ASSERT_NE (entry_b, nullptr);
-	auto fn_b = reinterpret_cast<int32_t (*) (int32_t)> (entry_b);
+	auto fn_a = reinterpret_cast<int32_t (*) (int32_t)> (first.entry);
+	auto fn_b = reinterpret_cast<int32_t (*) (int32_t)> (second.entry);
 
 	for (int i = 0; i < 7; i++)
 		fn_a (i);
