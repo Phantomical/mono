@@ -271,6 +271,22 @@ MethodLLVMEmitter::pass_context_to (llvm::Function *callee, std::vector<llvm::Va
 }
 
 llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::code_operand (MonoIrBuilder &builder, MonoMethod *target)
+{
+	if (!calls_through_context (target))
+		return code_address_symbol (target);
+
+	/*
+	 * The instantiation's own entry, which is the thunk in front of whatever
+	 * tier is running it - and, for a method entered with its context in a
+	 * register, the context stub in front of that. So an address taken here
+	 * carries the instantiation without anything having to key it, and it stays
+	 * right when a later compile replaces the body.
+	 */
+	return rgctx_fetch (builder, MONO_RGCTX_INFO_GENERIC_METHOD_CODE, target);
+}
+
+llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::class_operand (MonoIrBuilder &builder, MonoClass *klass,
                                   const char *prefix)
 {

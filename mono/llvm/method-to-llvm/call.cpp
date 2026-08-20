@@ -449,15 +449,6 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 	if (implemented_outside_il (target))
 		return create_method_decl (target);
 
-	/*
-	 * An open callee has one entry per instantiation, so there is no single
-	 * address to hand out here. A call site reads one from the context instead;
-	 * an address that escapes - a delegate, a function pointer - has nowhere to
-	 * carry the instantiation, so the method is compiled concrete.
-	 */
-	if (target != method && depends_on_context (target))
-		cannot_share ("an escaping address of an open method");
-
 	char *printed = mono_method_full_name (target, FALSE);
 	// This needs a placeholder name of its own, not the one create_method_decl ()
 	// uses. bind_symbols () renames both to the method's stub symbol, but it

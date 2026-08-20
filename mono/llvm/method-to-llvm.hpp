@@ -839,6 +839,10 @@ private:
 	llvm::Expected<llvm::Value *> method_operand (MonoIrBuilder &builder,
 	                                              MonoMethod *target);
 
+	/// The entry \p target is called at, as a value to push or to store.
+	llvm::Expected<llvm::Value *> code_operand (MonoIrBuilder &builder,
+	                                            MonoMethod *target);
+
 	llvm::Error emit_mono_icall (MonoIrBuilder &builder, uint32_t id);
 	llvm::Error emit_mono_objaddr (MonoIrBuilder &builder);
 	llvm::Error emit_mono_vtaddr (MonoIrBuilder &builder);

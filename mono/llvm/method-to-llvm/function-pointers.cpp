@@ -65,8 +65,8 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 
 	// A synchronized method hands out the locking wrapper's entry. Whoever
 	// calls through this pointer has no other chance to take the lock.
-	llvm::Expected<llvm::Constant *> address =
-		code_address_symbol (synchronized_target (*target));
+	llvm::Expected<llvm::Value *> address =
+		code_operand (builder, synchronized_target (*target));
 	if (!address)
 		return address.takeError ();
 
