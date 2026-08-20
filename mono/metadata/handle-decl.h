@@ -36,9 +36,21 @@ Handle macros/functions
 #define TYPED_OUT_HANDLE_NAME(TYPE) TYPE ## HandleOut
 #define TYPED_IN_OUT_HANDLE_NAME(TYPE) TYPE ## HandleInOut
 
+// The tag the handle struct carries. In C++ the struct has member functions, so an
+// anonymous struct that a typedef gives a name to has no C-compatible linkage name,
+// and clang says so (-Wnon-c-typedef-for-linkage). A tag gives it one.
+// The tag is the handle name and not the type name, because _MonoObject and friends
+// are already the tags of the object structs these are handles to.
+#define TYPED_HANDLE_TAG_NAME(TYPE) _ ## TYPE ## Handle
+
 // internal helpers:
 #define MONO_HANDLE_CAST_FOR(type) mono_handle_cast_##type
 #define MONO_HANDLE_TYPECHECK_FOR(type) mono_handle_typecheck_##type
+
+// How the cast and typecheck helpers below are declared. A file that declares handles
+// of its own uses only some of them, and a static function that no one calls is a
+// warning where the decl is not in a header, so say they can be unused.
+#define MONO_HANDLE_HELPER static inline G_GNUC_UNUSED MONO_ALWAYS_INLINE
 
 /*
  * TYPED_HANDLE_DECL(SomeType):
@@ -46,7 +58,7 @@ Handle macros/functions
  *
  * For example, TYPED_HANDLE_DECL(MonoObject) (see below) expands to:
  *
- * typedef struct {
+ * typedef struct _MonoObjectHandle {
  *   MonoObject **__raw;
  * } MonoObjectHandle,
  *   MonoObjectHandleOut,
@@ -63,7 +75,7 @@ Handle macros/functions
 #endif
 
 #define TYPED_HANDLE_DECL(TYPE)							\
-	typedef struct {							\
+	typedef struct TYPED_HANDLE_TAG_NAME (TYPE) {				\
 		MONO_IF_CPLUSPLUS (						\
 			MONO_ALWAYS_INLINE					\
 			TYPE * GetRaw () const { return __raw ? *__raw : NULL; } \
@@ -75,34 +87,34 @@ Handle macros/functions
 	  TYPED_IN_OUT_HANDLE_NAME (TYPE);					\
 /* Do not call these functions directly. Use MONO_HANDLE_NEW and MONO_HANDLE_CAST. */ \
 /* Another way to do this involved casting mono_handle_new function to a different type. */ \
-static inline MONO_ALWAYS_INLINE TYPED_HANDLE_NAME (TYPE) 	\
+MONO_HANDLE_HELPER TYPED_HANDLE_NAME (TYPE)			\
 MONO_HANDLE_CAST_FOR (TYPE) (MonoRawHandle a)			\
 {								\
 	TYPED_HANDLE_NAME (TYPE) b = { (TYPE**)a };		\
 	return b;						\
 }								\
-static inline MONO_ALWAYS_INLINE MonoObject* 			\
+MONO_HANDLE_HELPER MonoObject*					\
 MONO_HANDLE_TYPECHECK_FOR (TYPE) (TYPE *a)			\
 {								\
 	return (MonoObject*)a;					\
 }								\
 /* Out/InOut synonyms for icall-def.h HANDLES () */		\
-static inline MONO_ALWAYS_INLINE TYPED_HANDLE_NAME (TYPE) 	\
+MONO_HANDLE_HELPER TYPED_HANDLE_NAME (TYPE)			\
 MONO_HANDLE_CAST_FOR (TYPE##Out) (gpointer a)			\
 {								\
 	return MONO_HANDLE_CAST_FOR (TYPE) (a);			\
 }								\
-static inline MONO_ALWAYS_INLINE MonoObject* 			\
+MONO_HANDLE_HELPER MonoObject*					\
 MONO_HANDLE_TYPECHECK_FOR (TYPE##Out) (TYPE *a)			\
 {								\
 	return MONO_HANDLE_TYPECHECK_FOR (TYPE) (a);		\
 }								\
-static inline MONO_ALWAYS_INLINE TYPED_HANDLE_NAME (TYPE) 	\
+MONO_HANDLE_HELPER TYPED_HANDLE_NAME (TYPE)			\
 MONO_HANDLE_CAST_FOR (TYPE##InOut) (gpointer a)			\
 {								\
 	return MONO_HANDLE_CAST_FOR (TYPE) (a);			\
 }								\
-static inline MONO_ALWAYS_INLINE MonoObject* 			\
+MONO_HANDLE_HELPER MonoObject*					\
 MONO_HANDLE_TYPECHECK_FOR (TYPE##InOut) (TYPE *a)		\
 {								\
 	return MONO_HANDLE_TYPECHECK_FOR (TYPE) (a);		\
