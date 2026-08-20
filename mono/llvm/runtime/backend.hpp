@@ -153,14 +153,27 @@ private:
 	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm,
 	                                    bool allow_tier0 = true);
 
+	/// Point \p dm's entry at the body \p shared compiles to, compiling that
+	/// body if this domain has not yet.
+	///
+	/// Fails with a SharingRefusal when the translator will not share the
+	/// method, which leaves \p dm untouched and is the caller's signal to
+	/// compile it against its own instantiation.
+	llvm::Expected<Compiled> enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
+	                                            MonoMethod *shared, MonoTier tier);
+
 	/// Give METHOD a body at TIER and point its stub at it, whether or not it
 	/// already has one.
 	///
 	/// With allow_tier0 the interpreter is offered the method first; promotion
 	/// passes false, which is what makes it a compile rather than a second trip
 	/// through the tier the method is already running at.
+	///
+	/// With for_sharing, \p dm is the record of a shared method and a failure
+	/// comes back as a SharingRefusal rather than as a body that raises it.
 	llvm::Expected<Compiled> compile_body (DomainState &domain, MonoDomainMethod &dm,
-	                                       bool allow_tier0, MonoTier tier);
+	                                       bool allow_tier0, MonoTier tier,
+	                                       bool for_sharing = false);
 
 	/// This engine's own state for \p dm, which it attached when the record was
 	/// built.

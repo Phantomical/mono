@@ -41,7 +41,11 @@ MethodLLVMEmitter::object_new_decl ()
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
-	llvm::Constant *vtable = class_symbol (klass, "mono_vtable_");
+	llvm::Expected<llvm::Value *> vtable = class_operand (builder, klass, "mono_vtable_");
+
+	if (!vtable)
+		return vtable.takeError ();
+
 	int32_t size = mono_class_instance_size (klass);
 	MonoMethod *allocator = nullptr;
 
@@ -69,7 +73,7 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 			builder, *fast,
 			adapt_to_callee (
 				builder, *fast,
-				{vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, size)}));
+				{*vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, size)}));
 	}
 
 	llvm::Expected<llvm::Function *> slow = object_new_decl ();
@@ -77,7 +81,8 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	if (!slow)
 		return slow.takeError ();
 
-	return emit_protected_call (builder, *slow, adapt_to_callee (builder, *slow, {vtable}));
+	return emit_protected_call (builder, *slow,
+	                            adapt_to_callee (builder, *slow, {*vtable}));
 }
 
 /// Returns the address of the value held inside obj. Throws

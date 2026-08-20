@@ -38,6 +38,27 @@
 
 namespace mono {
 
+/// A method the translator will not share between reference instantiations.
+///
+/// This is not a compile failure. The method is translated again against the
+/// instantiation that was asked for, which is what every method got before
+/// sharing existed, so a caller that gets one has a body to fall back on.
+class SharingRefusal : public llvm::ErrorInfo<SharingRefusal> {
+public:
+	static char ID;
+
+	explicit SharingRefusal (std::string what) : what_ (std::move (what)) {}
+
+	void log (llvm::raw_ostream &os) const override { os << what_; }
+	std::error_code convertToErrorCode () const override
+	{
+		return llvm::inconvertibleErrorCode ();
+	}
+
+private:
+	std::string what_;
+};
+
 /// For each sequence point a body emitted, the sequence points control can
 /// reach from it without passing another one - all as IL offsets. The soft
 /// debugger single-steps by breakpointing a point's successors, so this is the
@@ -285,6 +306,26 @@ private:
 	llvm::Value *lmf_slot = nullptr;
 	llvm::Value *lmf_addr = nullptr;
 
+	/// Which of the method's type parameters its body depends on, as
+	/// MONO_GENERIC_CONTEXT_USED_*. Zero for a body compiled against one
+	/// instantiation, which is every body that is not a shared one.
+	int context_used = 0;
+
+	/// The runtime generic context this shared body was entered with, read in
+	/// the prologue. Null in a body that is not a shared one.
+	llvm::Value *rgctx = nullptr;
+
+	/// Whether the receiver was pinned to a frame slot a stack walk can read
+	/// it out of, which is what a shared body's frame needs.
+	bool pinned_receiver = false;
+
+	/// What stopped this body from being shared, empty while nothing has.
+	///
+	/// A refusal is recorded rather than raised so that a translation that
+	/// cannot be shared still names the first thing that stopped it. The
+	/// engine compiles the concrete method instead.
+	std::string sharing_refusal;
+
 	/// The prefixes seen since the last real instruction.
 	///
 	/// They apply only to the next instruction. The translator clears them
@@ -437,7 +478,8 @@ private:
 		return module->getContext ();
 	}
 
-	llvm::Expected<llvm::Function *> create_method_decl (MonoMethod *method);
+	llvm::Expected<llvm::Function *> create_method_decl (MonoMethod *method,
+	                                                     bool by_context = false);
 	llvm::Expected<llvm::Function *> icall_wrapper_decl (MonoJitICallId id);
 	std::vector<llvm::Value *> adapt_to_callee (MonoIrBuilder &builder,
 	                                            llvm::Function *callee,
@@ -734,6 +776,53 @@ private:
 	llvm::Constant *field_symbol (MonoClassField *field);
 	llvm::Constant *address_symbol (const std::string &name, void *address);
 
+	/* -- Generic sharing -------------------------------------------------- */
+
+	/// Whether this body stands for every reference instantiation of its method
+	/// rather than for one of them.
+	bool sharing () const { return context_used != 0; }
+
+	/// Works out whether this body is a shared one, and reads the context it
+	/// runs as. Call it from the prologue, once the arguments have their slots.
+	void open_sharing (MonoIrBuilder &builder);
+
+	/// Records that this body cannot be shared, because of \p what.
+	///
+	/// Translation carries on. The first refusal is the one reported, and the
+	/// body it produces is thrown away.
+	void cannot_share (const llvm::Twine &what);
+
+	/// Whether \p klass, \p field or \p target names a type parameter, and so
+	/// stands for a different runtime object in each instantiation.
+	bool depends_on_context (MonoClass *klass);
+	bool depends_on_context (MonoClassField *field);
+	bool depends_on_context (MonoMethod *target);
+
+	/// Whether a call to \p target has to read the entry to call out of the
+	/// context, because the callee is compiled once per instantiation.
+	///
+	/// Records a refusal for a callee that depends on the context and cannot be
+	/// reached that way at all, so the answer is also what says a direct call
+	/// is safe.
+	bool calls_through_context (MonoMethod *target);
+
+	/// The runtime object an rgctx entry of \p info_type over \p data resolves
+	/// to in the instantiation this body is running as.
+	///
+	/// \p data is a MonoClass, a MonoMethod or a MonoClassField, whichever
+	/// \p info_type is about.
+	llvm::Expected<llvm::Value *> rgctx_fetch (MonoIrBuilder &builder,
+	                                           MonoRgctxInfoType info_type, void *data);
+
+	/// The per-class run-time structure \p prefix names, fetched from the
+	/// context when \p klass names a type parameter and burned in otherwise.
+	llvm::Expected<llvm::Value *> class_operand (MonoIrBuilder &builder, MonoClass *klass,
+	                                             const char *prefix);
+	llvm::Expected<llvm::Value *> field_operand (MonoIrBuilder &builder,
+	                                             MonoClassField *field);
+	llvm::Expected<llvm::Value *> method_operand (MonoIrBuilder &builder,
+	                                              MonoMethod *target);
+
 	llvm::Error emit_mono_icall (MonoIrBuilder &builder, uint32_t id);
 	llvm::Error emit_mono_objaddr (MonoIrBuilder &builder);
 	llvm::Error emit_mono_vtaddr (MonoIrBuilder &builder);
@@ -768,8 +857,8 @@ private:
 	llvm::Error emit_ldelema (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldelem (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
-	void emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
-	                            MonoClass *array_class);
+	llvm::Error emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
+	                                   MonoClass *array_class);
 	void consume_save_last_error (MonoIrBuilder &builder);
 	llvm::Expected<llvm::Value *> array_accessor_address (MonoIrBuilder &builder,
 	                                                      MonoClass *klass,

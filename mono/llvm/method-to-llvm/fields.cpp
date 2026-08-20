@@ -140,6 +140,14 @@ MethodLLVMEmitter::identity_symbol (const std::string &name, const void *object)
 llvm::Constant *
 MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 {
+	// A shared body serves every reference instantiation, and each of them has
+	// its own class, vtable and statics. class_operand () is the form that
+	// fetches one from the context; a site that still burns the symbol in
+	// refuses here, and the method is compiled against the instantiation the
+	// caller asked for instead.
+	if (depends_on_context (klass))
+		cannot_share (llvm::Twine (prefix) + "an open class");
+
 	char *name = mono_type_full_name (m_class_get_byval_arg (klass));
 	std::string symbol = identity_symbol (std::string (prefix) + name, klass);
 	ExternalSymbol::Kind kind = ExternalSymbol::Kind::Class;
@@ -158,6 +166,9 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 llvm::Constant *
 MethodLLVMEmitter::field_symbol (MonoClassField *field)
 {
+	if (depends_on_context (field))
+		cannot_share ("a field of an open class");
+
 	char *name = mono_field_full_name (field);
 	std::string symbol = identity_symbol (std::string ("mono_field_") + name, field);
 
@@ -184,10 +195,14 @@ MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 	if (!init)
 		return init.takeError ();
 
+	llvm::Expected<llvm::Value *> vtable = class_operand (builder, klass, "mono_vtable_");
+
+	if (!vtable)
+		return vtable.takeError ();
+
 	(*init)->addFnAttr (class_init_attribute);
 	emit_protected_call (builder, *init,
-	                     adapt_to_callee (builder, *init,
-	                                      {class_symbol (klass, "mono_vtable_")}));
+	                     adapt_to_callee (builder, *init, {*vtable}));
 	return llvm::Error::success ();
 }
 
@@ -277,7 +292,11 @@ MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField 
 		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 		llvm::Value *domain = builder.CreateCall (
 			module->getOrInsertFunction ("mono_domain_get", ptr));
-		llvm::Constant *symbol = field_symbol (field);
+		llvm::Expected<llvm::Value *> symbol = field_operand (builder, field);
+
+		if (!symbol)
+			return symbol.takeError ();
+
 		llvm::Expected<llvm::Function *> lookup =
 			icall_wrapper_decl (MONO_JIT_ICALL_mono_class_static_field_address);
 
@@ -286,7 +305,7 @@ MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField 
 
 		llvm::Value *address = emit_protected_call (
 			builder, *lookup,
-			adapt_to_callee (builder, *lookup, {domain, symbol}));
+			adapt_to_callee (builder, *lookup, {domain, *symbol}));
 
 		// The signature says native int. Every caller here wants a pointer.
 		if (!address->getType ()->isPointerTy ())
@@ -294,9 +313,14 @@ MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField 
 		return address;
 	}
 
+	llvm::Expected<llvm::Value *> block =
+		class_operand (builder, field->parent, "mono_statics_");
+
+	if (!block)
+		return block.takeError ();
+
 	// A static's offset is into the block itself, so there is no header to discount.
-	return builder.CreateGEP (builder.getInt8Ty (),
-	                          class_symbol (field->parent, "mono_statics_"),
+	return builder.CreateGEP (builder.getInt8Ty (), *block,
 	                          builder.getInt32 (m_field_get_offset (field)));
 }
 

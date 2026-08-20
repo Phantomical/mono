@@ -363,13 +363,29 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 		size_t offset = type->byref ? m_class_offsetof_this_arg ()
 		                            : m_class_offsetof_byval_arg ();
 
-		address = builder.CreateGEP (builder.getInt8Ty (),
-		                             class_symbol (klass, "mono_class_"),
+		llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
+
+		if (!cls)
+			return cls.takeError ();
+
+		address = builder.CreateGEP (builder.getInt8Ty (), *cls,
 		                             builder.getInt32 (static_cast<int32_t> (offset)));
 	} else if (handle_class == mono_defaults.methodhandle_class) {
-		address = method_symbol (static_cast<MonoMethod *> (handle));
+		llvm::Expected<llvm::Value *> named =
+			method_operand (builder, static_cast<MonoMethod *> (handle));
+
+		if (!named)
+			return named.takeError ();
+
+		address = *named;
 	} else if (handle_class == mono_defaults.fieldhandle_class) {
-		address = field_symbol (static_cast<MonoClassField *> (handle));
+		llvm::Expected<llvm::Value *> named =
+			field_operand (builder, static_cast<MonoClassField *> (handle));
+
+		if (!named)
+			return named.takeError ();
+
+		address = *named;
 	} else {
 		// mono_ldtoken_checked () only ever returns one of the three handle
 		// kinds above. It reports anything else as a bad image before this

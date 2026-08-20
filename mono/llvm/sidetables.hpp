@@ -116,6 +116,16 @@ constexpr std::size_t lines_record_size = 8;
  */
 constexpr uint64_t vars_stackmap_id = 0xF19A13ULL << 32;
 
+/*
+ * The id of the stackmap naming the receiver slot of a body shared between
+ * reference instantiations, in the same section and picked out the same way.
+ *
+ * A shared body's jit info names the shared method, so a stack walk that wants
+ * the instantiation a frame is running as has to read the receiver out of the
+ * frame - which is what MonoGenericJitInfo describes and this marker pins.
+ */
+constexpr uint64_t rgctx_stackmap_id = 0xF19A14ULL << 32;
+
 enum MonoUnwindWireOp : uint8_t {
 	MONO_UNWIND_OP_UNSUPPORTED = 0,
 	MONO_UNWIND_OP_DEF_CFA = 1,        /* cfa = reg + value */

@@ -177,6 +177,11 @@ struct CompiledMethod {
 	/// method was translated with its variables pinned to the frame.
 	std::vector<VarSlot> var_slots;
 
+	/// Where a shared body's receiver sits in its frame, so a stack walk can
+	/// recover the instantiation the frame is running as. The register is -1
+	/// for a body that is not a shared one.
+	VarSlot rgctx_slot { -1, 0 };
+
 	/// Where this method's profile counters landed. Absent when the module was
 	/// compiled with the instrumentation off.
 	std::optional<ProfileCounters> profile;

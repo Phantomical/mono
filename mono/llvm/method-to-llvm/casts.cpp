@@ -120,15 +120,31 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 		                   + describe (obj.type, obj_type));
 
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-	llvm::GlobalVariable *cache = new llvm::GlobalVariable (
-		*module, ptr, false, llvm::GlobalValue::InternalLinkage,
-		llvm::ConstantPointerNull::get (llvm::cast<llvm::PointerType> (ptr)), "cast_cache");
+	llvm::Value *cache = nullptr;
 
 	// Both cast forms call through a wrapper around the runtime's test.
 	// Each call site owns a cache slot that holds the last vtable that
 	// answered, so a monomorphic site settles into one comparison.
 	// Castclass reports a failed cast as a pending InvalidCastException.
 	// Only the wrapper's check after the call turns that into a throw.
+	if (depends_on_context (klass)) {
+		// A cached vtable only answers for the class the site tests against,
+		// so one instantiation must not read another's cache. The context
+		// holds a slot for each of them.
+		llvm::Expected<llvm::Value *> own =
+			rgctx_fetch (builder, MONO_RGCTX_INFO_CAST_CACHE, klass);
+
+		if (!own)
+			return own.takeError ();
+
+		cache = *own;
+	} else {
+		cache = new llvm::GlobalVariable (
+			*module, ptr, false, llvm::GlobalValue::InternalLinkage,
+			llvm::ConstantPointerNull::get (llvm::cast<llvm::PointerType> (ptr)),
+			"cast_cache");
+	}
+
 	llvm::Expected<llvm::Function *> test = icall_wrapper_decl (
 		throw_on_fail ? MONO_JIT_ICALL_mono_object_castclass_with_cache
 	                      : MONO_JIT_ICALL_mono_object_isinst_with_cache);
@@ -136,10 +152,14 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	if (!test)
 		return test.takeError ();
 
+	llvm::Expected<llvm::Value *> tested = class_operand (builder, klass, "mono_class_");
+
+	if (!tested)
+		return tested.takeError ();
+
 	llvm::Value *result = emit_protected_call (
 		builder, *test,
-		adapt_to_callee (builder, *test,
-	                         {obj.value, class_symbol (klass, "mono_class_"), cache}));
+		adapt_to_callee (builder, *test, {obj.value, *tested, cache}));
 
 	// A value-type token means the boxed form. What comes back is still an
 	// object reference, not the token's own type.

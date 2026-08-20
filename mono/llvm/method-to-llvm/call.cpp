@@ -375,6 +375,15 @@ keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 llvm::Constant *
 MethodLLVMEmitter::method_symbol (MonoMethod *target)
 {
+	/*
+	 * A shared body's own MonoMethod is the shared one, and naming that is
+	 * right: it is the method that is running. Any other open method stands for
+	 * a different MonoMethod in each instantiation, so a site that has not been
+	 * given method_operand () refuses here.
+	 */
+	if (target != method && depends_on_context (target))
+		cannot_share ("a reference to an open method");
+
 	char *name = mono_method_full_name (target, TRUE);
 	std::string symbol = identity_symbol (std::string ("mono_method_") + name, target);
 
@@ -439,6 +448,15 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
 	if (implemented_outside_il (target))
 		return create_method_decl (target);
+
+	/*
+	 * An open callee has one entry per instantiation, so there is no single
+	 * address to hand out here. A call site reads one from the context instead;
+	 * an address that escapes - a delegate, a function pointer - has nowhere to
+	 * carry the instantiation, so the method is compiled concrete.
+	 */
+	if (target != method && depends_on_context (target))
+		cannot_share ("an escaping address of an open method");
 
 	char *printed = mono_method_full_name (target, FALSE);
 	// This needs a placeholder name of its own, not the one create_method_decl ()
@@ -1269,7 +1287,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		}
 	}
 
-	llvm::Expected<llvm::Function *> declaration = create_method_decl (callee_method);
+	bool callee_by_context = calls_through_context (callee_method);
+	llvm::Expected<llvm::Function *> declaration =
+		create_method_decl (callee_method, callee_by_context);
 	if (!declaration)
 		return declaration.takeError ();
 
@@ -1357,7 +1377,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				llvm::FunctionType::get (slot_type->getReturnType (), params,
 			                                 slot_type->isVarArg ()),
 				code);
-			args->push_back (method_symbol (callee_method));
+			llvm::Expected<llvm::Value *> key =
+				method_operand (builder, callee_method);
+
+			if (!key)
+				return key.takeError ();
+
+			args->push_back (*key);
 			through_slot = true;
 		} else if (overridable && mono_method_get_vtable_index (callee_method) >= 0) {
 			callee = llvm::FunctionCallee (
@@ -1365,6 +1391,24 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				virtual_callee (builder, (*args)[0], callee_method));
 			through_slot = true;
 		}
+	}
+
+	/*
+	 * A dispatched site has already found the instantiation's own code, through
+	 * the receiver. A direct one has not: the callee this body named is open,
+	 * and each instantiation compiles it for itself, so the entry to call comes
+	 * out of the context like any other piece of metadata.
+	 */
+	bool fetched = !through_slot && callee_by_context;
+
+	if (fetched) {
+		llvm::Expected<llvm::Value *> code = rgctx_fetch (
+			builder, MONO_RGCTX_INFO_GENERIC_METHOD_CODE, callee_method);
+
+		if (!code)
+			return code.takeError ();
+
+		callee = llvm::FunctionCallee (callee.getFunctionType (), *code);
 	}
 
 	// What the site says about its callee, whether or not it becomes a jump.
@@ -1385,7 +1429,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	// but this code downgrades it the same way. Widening that needs its own
 	// evidence, since a musttail the backend cannot form aborts the process
 	// instead of declining.
-	if (through_slot && tail_kind == llvm::CallInst::TCK_MustTail)
+	//
+	// A callee read out of the context is downgraded for a second reason: the
+	// read is a call of its own, so the site no longer sits where a guaranteed
+	// jump could be formed.
+	if ((through_slot || fetched) && tail_kind == llvm::CallInst::TCK_MustTail)
 		tail_kind = llvm::CallInst::TCK_Tail;
 
 	// An instrumented method must report its exit in front of a site the

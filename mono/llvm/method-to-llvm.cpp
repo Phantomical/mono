@@ -756,6 +756,8 @@ MethodLLVMEmitter::emit ()
 	if (auto error = emit_local_allocas (builder))
 		return std::move (error);
 
+	open_sharing (builder);
+
 	// A filter body runs as a function of its own against this frame. llvm.localrecover
 	// is how it reaches the arguments and locals. Escaping them here is what pins each
 	// to a frame offset the filter can recompute from the frame pointer. The order is
@@ -783,7 +785,7 @@ MethodLLVMEmitter::emit ()
 	// realigns these frames is a vector spill slot the register allocator invented.
 	// Declining the realignment clamps that slot instead, at the cost of an unaligned
 	// move.
-	if (has_filters || has_finally || pinned_vars)
+	if (has_filters || has_finally || pinned_vars || pinned_receiver)
 		function->addFnAttr ("no-realign-stack");
 
 	if (has_filters) {
@@ -895,6 +897,12 @@ MethodLLVMEmitter::emit ()
 	resolve_finally_switches ();
 	finish_function ();
 	build_seq_point_graph ();
+
+	// Reported here rather than where it was found, so that one refusal ends the
+	// translation instead of every later site raising its own.
+	if (!sharing_refusal.empty ())
+		return llvm::make_error<SharingRefusal> (sharing_refusal);
+
 	return function;
 }
 
@@ -1080,6 +1088,8 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	for (size_t i = 0; i < cfg->header->num_locals; ++i)
 		locals.push_back ({ recover (index++), cfg->header->locals[i] });
 
+	open_sharing (builder);
+
 	if (auto error = find_block_leaders ())
 		return std::move (error);
 
@@ -1101,6 +1111,10 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 		return std::move (error);
 
 	finish_function ();
+
+	if (!sharing_refusal.empty ())
+		return llvm::make_error<SharingRefusal> (sharing_refusal);
+
 	return function;
 }
 

@@ -548,9 +548,86 @@ MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm, bool allow_
 	return code->body;
 }
 
+/*
+ * Reference sharing only. Every number a body burns - a field offset, an array
+ * element size, a vtable slot index - is the same for every reference
+ * instantiation, because a reference is one pointer whatever it points at. A
+ * value type changes all of them, so an instantiation naming one gets a body of
+ * its own.
+ */
+static MonoMethod *
+shared_form (MonoMethod *method)
+{
+	if (!mono_class_generic_sharing_enabled (method->klass))
+		return nullptr;
+
+	// The shared method is itself open, and asking it for its own shared form
+	// again is how this would recurse.
+	if (mono_method_check_context_used (method) != 0)
+		return nullptr;
+
+	if (!mono_method_is_generic_sharable_full (method, FALSE, FALSE, FALSE))
+		return nullptr;
+
+	ERROR_DECL (share_error);
+	MonoMethod *shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, share_error);
+
+	mono_error_cleanup (share_error);
+
+	if (shared == nullptr || shared == method)
+		return nullptr;
+
+	/*
+	 * A shared body reads its context out of its receiver, so this landing
+	 * shares only the methods that have one. A static method, a value type's,
+	 * or one with type parameters of its own needs the context handed to it,
+	 * and gets a body per instantiation until it does.
+	 */
+	if (mono_method_needs_static_rgctx_invoke (shared, TRUE))
+		return nullptr;
+
+	return shared;
+}
+
+/*
+ * The shared method gets a record of its own, so its body is compiled once and
+ * carries the jit info a stack walk reads. This method's entry then names that
+ * body and it keeps no body record for it: the frame belongs to the shared
+ * method, not to this instantiation of it.
+ */
+llvm::Expected<MonoBackend::Compiled>
+MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
+                                MonoMethod *shared, MonoTier tier)
+{
+	llvm::Expected<MonoDomainMethod *> owner = publish (domain, shared);
+
+	if (!owner)
+		return owner.takeError ();
+
+	std::optional<MonoMethodBody> ready = (*owner)->body ();
+
+	if (!ready || ready->tier < tier) {
+		llvm::Expected<Compiled> built =
+			compile_body (domain, **owner, /*allow_tier0=*/false, tier,
+		                      /*for_sharing=*/true);
+
+		if (!built)
+			return built.takeError ();
+
+		ready = (*owner)->body ();
+
+		if (!ready)
+			return llvm::make_error<SharingRefusal> ("the shared body was not published");
+	}
+
+	dm.publish (tier, ready->code);
+	dm.attach_body (tier, ready->code, nullptr);
+	return Compiled { ready->code, nullptr };
+}
+
 llvm::Expected<MonoBackend::Compiled>
 MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow_tier0,
-                           MonoTier tier)
+                           MonoTier tier, bool for_sharing)
 {
 	MonoMethod *method = dm.method;
 	MethodState &engine = engine_state (dm);
@@ -601,6 +678,27 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 		}
 	}
 
+	/*
+	 * After the tier-0 branch: the interpreter resolves every token against the
+	 * instantiation it was given, so a method it accepts runs concrete however
+	 * many others share a compiled body with it.
+	 */
+	if (MonoMethod *shared = shared_form (method)) {
+		llvm::Expected<Compiled> body = enter_shared_body (domain, dm, shared, tier);
+
+		if (body)
+			return *body;
+
+		if (!body.errorIsA<SharingRefusal> ())
+			return body.takeError ();
+
+		if (is_jit_trace_enabled ())
+			llvm::errs () << "[llvm-jit] not sharing " << dm.name << ": "
+				      << llvm::toString (body.takeError ()) << "\n";
+		else
+			llvm::consumeError (body.takeError ());
+	}
+
 	MonoJitInfo *published = nullptr;
 
 	/* Named: function_ref does not own what it points at. */
@@ -627,6 +725,17 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 		}
 	};
 	auto recover_failure = [&] (llvm::Error failure) -> llvm::Expected<Compiled> {
+		/*
+		 * A stand-in that raises is the answer for a method the program has to
+		 * be told about. A shared body is not that method: every instantiation
+		 * behind it would raise, and the failure may well be the shared form's
+		 * own. So the refusal goes back to the caller, which compiles the
+		 * instantiation that was asked for and finds out for itself.
+		 */
+		if (for_sharing)
+			return llvm::make_error<SharingRefusal> (
+				llvm::toString (std::move (failure)));
+
 		return recover (*domain.jit, domain.domain, method, std::move (failure), note);
 	};
 

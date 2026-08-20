@@ -557,7 +557,20 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	}
 
 	int num_clauses = (int) clauses.size ();
-	size_t jinfo_size = mono_jit_info_size (JIT_INFO_NONE, num_clauses, 0);
+	/*
+	 * A shared body's record names the shared method, so a stack walk asking
+	 * which instantiation a frame is running as has to read the receiver out of
+	 * that frame. The generic jit info is where the runtime looks for it. Only
+	 * the method's own body carries one: a filter body or an entry thunk is a
+	 * frame of its own, and neither holds the receiver at a recorded slot.
+	 */
+	bool has_generic = header != nullptr && method->is_inflated
+	                   && mono_dwarf_reg_is_valid (compiled.rgctx_slot.dwarf_reg)
+	                   && arch::reg_is_recoverable (
+		                   mono_dwarf_reg_to_hw_reg (compiled.rgctx_slot.dwarf_reg));
+	MonoJitInfoFlags flags =
+		has_generic ? JIT_INFO_HAS_GENERIC_JIT_INFO : JIT_INFO_NONE;
+	size_t jinfo_size = mono_jit_info_size (flags, num_clauses, 0);
 
 	/*
 	 * The IL-offset map rides in the same allocation, past everything
@@ -580,9 +593,28 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 			? (MonoJitInfo *) g_malloc0 (total_size)
 			: (MonoJitInfo *) mono_domain_alloc0 (domain, total_size);
 
-	mono_jit_info_init (jinfo, method, code, code_size, JIT_INFO_NONE,
-	                    num_clauses, 0);
+	mono_jit_info_init (jinfo, method, code, code_size, flags, num_clauses, 0);
 	jinfo->from_llvm = true;
+
+	if (has_generic) {
+		MonoGenericJitInfo *gi = mono_jit_info_get_generic_jit_info (jinfo);
+
+		/*
+		 * Shared over reference instantiations only, so never gsharedvt. The
+		 * runtime dereferences this without a null check
+		 * (mini_add_method_trampoline), and it holds nothing per compile, so
+		 * one const record serves every body.
+		 */
+		static MonoGenericSharingContext shared_context = { FALSE };
+
+		gi->generic_sharing_context = &shared_context;
+		gi->has_this = 1;
+		gi->this_in_reg = 0;
+		gi->this_reg =
+			(guint8) mono_dwarf_reg_to_hw_reg (compiled.rgctx_slot.dwarf_reg);
+		gi->this_offset = compiled.rgctx_slot.offset;
+	}
+
 	/* A null HEADER is how the caller says this is not the method's main body. */
 	jinfo->llvm_side_body = header == nullptr;
 	jinfo->llvm_abi_thunk = kind == CodeKind::AbiThunk;

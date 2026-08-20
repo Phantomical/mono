@@ -162,7 +162,9 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	 */
 	ctor = icall_wrapper_target (ctor);
 
-	llvm::Expected<llvm::Function *> declaration = create_method_decl (ctor);
+	bool ctor_by_context = calls_through_context (ctor);
+	llvm::Expected<llvm::Function *> declaration =
+		create_method_decl (ctor, ctor_by_context);
 	if (!declaration)
 		return declaration.takeError ();
 
@@ -261,7 +263,21 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		args[0] = created;
 	}
 
-	emit_protected_call (builder, *declaration, args);
+	llvm::FunctionCallee run = *declaration;
+
+	// The instantiation compiles its own constructor, so the entry to call
+	// comes out of the context like any other piece of metadata.
+	if (ctor_by_context) {
+		llvm::Expected<llvm::Value *> code =
+			rgctx_fetch (builder, MONO_RGCTX_INFO_GENERIC_METHOD_CODE, ctor);
+
+		if (!code)
+			return code.takeError ();
+
+		run = llvm::FunctionCallee ((*declaration)->getFunctionType (), *code);
+	}
+
+	emit_protected_call (builder, run, args);
 	pop_stack (count);
 
 	if (temp == nullptr)

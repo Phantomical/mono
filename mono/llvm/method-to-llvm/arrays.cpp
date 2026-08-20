@@ -211,7 +211,7 @@ MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, St
 /// Covariance lets a string[] arrive where an object[] is expected. An
 /// address into it, typed at the wrong element, must be refused before
 /// anything writes through it.
-void
+llvm::Error
 MethodLLVMEmitter::emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
                                           MonoClass *array_class)
 {
@@ -223,11 +223,15 @@ MethodLLVMEmitter::emit_array_type_check (MonoIrBuilder &builder, llvm::Value *a
 	llvm::Value *vtable = builder.CreateAlignedLoad (
 		llvm::PointerType::get (context (), 0), slot,
 		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Expected<llvm::Value *> wanted =
+		class_operand (builder, array_class, "mono_vtable_");
 
-	emit_cond_exception (
-		builder,
-		builder.CreateICmpNE (vtable, class_symbol (array_class, "mono_vtable_")),
-		"ArrayTypeMismatchException");
+	if (!wanted)
+		return wanted.takeError ();
+
+	emit_cond_exception (builder, builder.CreateICmpNE (vtable, *wanted),
+	                     "ArrayTypeMismatchException");
+	return llvm::Error::success ();
 }
 
 /*
@@ -317,8 +321,9 @@ MethodLLVMEmitter::emit_ldelema (MonoIrBuilder &builder, uint32_t token)
 	 */
 	if (!m_class_is_valuetype (klass) && method->wrapper_type == MONO_WRAPPER_NONE
 	    && !prefixes.readonly_)
-		emit_array_type_check (builder, get_stack (1).value,
-		                       mono_class_create_array (klass, 1));
+		if (llvm::Error refused = emit_array_type_check (
+			    builder, get_stack (1).value, mono_class_create_array (klass, 1)))
+			return refused;
 
 	llvm::Expected<llvm::Value *> address =
 		element_address (builder, get_stack (1), get_stack (0), *element);
@@ -601,7 +606,9 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 	}
 
 	if (what == "Address" && !m_class_is_valuetype (eclass) && !prefixes.readonly_)
-		emit_array_type_check (builder, array.value, accessor->klass);
+		if (llvm::Error refused =
+			    emit_array_type_check (builder, array.value, accessor->klass))
+			return refused;
 
 	emit_null_check (builder, array.value);
 
@@ -815,10 +822,15 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 
 	(*allocate)->addRetAttr (llvm::Attribute::NoAlias);
 
+	llvm::Expected<llvm::Value *> vtable = class_operand (builder, array, "mono_vtable_");
+
+	if (!vtable)
+		return vtable.takeError ();
+
 	llvm::Value *created = emit_protected_call (
 		builder, *allocate,
 		adapt_to_callee (builder, *allocate,
-	                         {class_symbol (array, "mono_vtable_"),
+	                         {*vtable,
 	                          builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
 
 	pop_stack (1);

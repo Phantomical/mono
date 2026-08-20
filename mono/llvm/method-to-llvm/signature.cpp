@@ -839,8 +839,19 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 /// hidden-return.hpp. A C declaration stays in the signature's own terms,
 /// and MonoAbiPass lowers it.
 llvm::Expected<llvm::Function *>
-MethodLLVMEmitter::create_method_decl (MonoMethod *method)
+MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 {
+	/*
+	 * An open callee has one entry per instantiation, and this declaration
+	 * resolves to the shared method's own, which no caller can enter: it would
+	 * arrive with the receiver of some other instantiation, or none. A call
+	 * site reads the entry it wants out of the context and says so with
+	 * by_context. Every other site refuses, and the method is compiled against
+	 * the instantiation that was asked for.
+	 */
+	if (!by_context && method != this->method && depends_on_context (method))
+		cannot_share ("a direct reference to an open method's entry");
+
 	auto it = declarations.find (method);
 	if (it != declarations.end ())
 		return it->second;

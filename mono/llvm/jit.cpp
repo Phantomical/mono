@@ -246,7 +246,8 @@ parse_line_table (const uint8_t *table, size_t size,
  * body has one.
  */
 static void
-parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out)
+parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out,
+                       VarSlot &rgctx)
 {
 	for (const object::SectionRef &section : obj.sections ()) {
 		Expected<StringRef> name = section.getName ();
@@ -269,7 +270,9 @@ parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out)
 		StackMapParser<llvm::endianness::little> parser (bytes);
 
 		for (const auto &record : parser.records ()) {
-			if (record.getID () != vars_stackmap_id)
+			bool wanted_vars = record.getID () == vars_stackmap_id;
+
+			if (!wanted_vars && record.getID () != rgctx_stackmap_id)
 				continue;
 
 			for (const auto &location : record.locations ()) {
@@ -281,14 +284,21 @@ parse_debug_var_slots (object::ObjectFile &obj, std::vector<VarSlot> &out)
 				if (location.getKind ()
 				    != StackMapParser<
 					    llvm::endianness::little>::LocationKind::Direct) {
-					out.clear ();
-					return;
+					if (wanted_vars)
+						out.clear ();
+					else
+						rgctx = { -1, 0 };
+					break;
 				}
 
-				out.push_back ({(int32_t) location.getDwarfRegNum (),
-				                (int32_t) location.getOffset ()});
+				VarSlot slot { (int32_t) location.getDwarfRegNum (),
+					       (int32_t) location.getOffset () };
+
+				if (wanted_vars)
+					out.push_back (slot);
+				else
+					rgctx = slot;
 			}
-			return;
 		}
 		return;
 	}
@@ -346,6 +356,8 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
 		/// Where the body's arguments and locals live in its frame.
 		std::vector<VarSlot> var_slots;
+		/// Where a shared body's receiver lives in its frame.
+		VarSlot rgctx_slot { -1, 0 };
 		/// The `__llvm_prf_cnts` counter array, and how many counters fit in
 		/// it. Null when the module was not instrumented.
 		const uint64_t *counters = nullptr;
@@ -378,6 +390,7 @@ public:
 		}
 
 		std::vector<VarSlot> var_slots;
+		VarSlot rgctx_slot { -1, 0 };
 		timing::Scope timed (timing::Phase::vslots);
 
 		Expected<std::unique_ptr<object::ObjectFile>> obj =
@@ -388,12 +401,13 @@ public:
 			return;
 		}
 
-		parse_debug_var_slots (**obj, var_slots);
-		if (var_slots.empty ())
+		parse_debug_var_slots (**obj, var_slots, rgctx_slot);
+		if (var_slots.empty () && rgctx_slot.dwarf_reg < 0)
 			return;
 
 		std::lock_guard<std::mutex> lock (mutex_);
-		var_slots_[mr.getTargetJITDylib ().getName ()] = std::move (var_slots);
+		var_slots_[mr.getTargetJITDylib ().getName ()] = { std::move (var_slots),
+			                                           rgctx_slot };
 	}
 
 	void modifyPassConfig (MaterializationResponsibility &mr, jitlink::LinkGraph &g,
@@ -512,7 +526,8 @@ public:
 		// in here rather than writing them into the same slot.
 		if (auto slots = var_slots_.find (std::string (dylib));
 		    slots != var_slots_.end ()) {
-			extents.var_slots = std::move (slots->second);
+			extents.var_slots = std::move (slots->second.first);
+			extents.rgctx_slot = slots->second.second;
 			var_slots_.erase (slots);
 		}
 
@@ -555,7 +570,9 @@ private:
 
 	std::mutex mutex_;
 	std::map<std::string, Extents> captured_;
-	std::map<std::string, std::vector<VarSlot>> var_slots_;
+	/// The frame slots read off each object before it was linked: the
+	/// arguments and locals, and a shared body's receiver.
+	std::map<std::string, std::pair<std::vector<VarSlot>, VarSlot>> var_slots_;
 	/// Each in-flight compile's object bytes, taken before the link and given
 	/// back once it has settled. Only populated when gdbjit::enabled ().
 	std::map<std::string, std::vector<char>> objects_;
@@ -1249,6 +1266,7 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
 		compiled.seq_points = std::move (points->second);
 
 	compiled.var_slots = std::move (extents->var_slots);
+	compiled.rgctx_slot = extents->rgctx_slot;
 
 	/*
 	 * The section holds this module's counters and nothing else, so its start
