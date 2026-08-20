@@ -21,7 +21,7 @@ constexpr StringRef method_attribute = "mono-method";
 
 /// The marker on VALUE, or nothing if it carries none.
 std::optional<MonoMethod *>
-marker_of (GlobalValue &value)
+marker_of (const GlobalValue &value)
 {
 	StringRef pointer;
 
@@ -57,6 +57,12 @@ mark_method_reference (GlobalValue &value, MonoMethod *method)
 		fn->addFnAttr (method_attribute, printed);
 	else if (auto *global = dyn_cast<GlobalVariable> (&value))
 		global->addAttribute (method_attribute, printed);
+}
+
+MonoMethod *
+marked_method (const GlobalValue &value)
+{
+	return marker_of (value).value_or (nullptr);
 }
 
 /*

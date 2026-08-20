@@ -31,6 +31,9 @@ namespace mono {
 /// Mark VALUE as standing for METHOD.
 void mark_method_reference (llvm::GlobalValue &value, MonoMethod *method);
 
+/// The method VALUE stands for, or null when it carries no marker.
+MonoMethod *marked_method (const llvm::GlobalValue &value);
+
 /// Rename every marked declaration in M to what NAME_OF calls that method,
 /// leaving the module referring only to symbols the engine publishes.
 ///
