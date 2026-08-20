@@ -352,6 +352,16 @@ Backend debugging env vars:
   entered at tier 0 takes before it is asked for as tier 1, default 10. Zero never
   promotes, which is what tells a tier-0 entry bug apart from a promotion bug; one
   promotes on the first call, which is how to put the switch in the middle of a loop.
+- `MONO_LLVM_JIT_TIER2_THRESHOLD=<n>` (`runtime/options.cpp`) — how many calls a tier-1
+  body takes before it asks to be compiled again at tier 2, default 5000. The counter
+  counts entries, so a method that spends its time inside one call never reaches it at
+  any setting. Zero leaves a body instrumented and counting while it never promotes on
+  its own, which is what a test driving the tiers through
+  `Mono.Tiering.MonoTier::PromoteNow` wants.
+- `MONO_LLVM_JIT_TIER2=<0|false|empty>` (`runtime/options.cpp`, and its own copy in
+  `jit.cpp`) — turn tier 2 off. Tier 2 is on by default, which is what puts profiling
+  instrumentation in every tier-1 body, so this is the switch that tells a tier-2 bug
+  from a tier-1 one.
 - `MONO_LLVM_JIT_BATCH=<n>` (`runtime/options.cpp`) — how many promoted methods share
   one compile, default 8. They are translated into one module and go through the IR
   pipeline, codegen and the linker together, so LLVM's per-compile floor is paid once
@@ -535,7 +545,7 @@ entry thunk back, neither of which is a jump — and nothing bounds that. The co
 cycle calling only in tail position stays interpreted even once its methods are promoted;
 there is no OSR to move it.
 
-**There is one optimization pipeline.** `run_tier0_pipeline ()` is the stock O1
+**Tier 1 is where nearly all code stays.** `run_tier0_pipeline ()` is the stock O1
 *function* simplification pipeline with this backend's own IR passes around it —
 `array-address` and `lower-builtins` before, `restore-tail-position` and the arch's
 legacy-ABI lowering after — and codegen then runs at `CodeGenOptLevel::None`, which selects FastISel. The
@@ -544,6 +554,12 @@ every call leaves it by symbol, so there is no callee body to inline and nothing
 specialize, and running them anyway cost a large fraction of compile time. So the JIT
 does not inline across methods, and beyond taking a site the IL already settled —
 non-virtual, `final`, or resolved by `constrained.` — it does not devirtualize either.
+
+`run_tier2_pipeline ()` is the other one, and it is on by default: every tier-1 body
+carries profiling instrumentation, and a body entered 5000 times is compiled again
+against the counts it gathered, at O3 with an optimizing selector.
+`MONO_LLVM_JIT_TIER2=0` turns the whole thing off, instrumentation included, which is
+what tells a tier-2 defect from a tier-1 one.
 
 What that costs is worth knowing before optimizing anything here: **87% of a compile is
 LLVM and 5.5% is the CIL→IR front end**, and 70% of the total is a per-method floor that

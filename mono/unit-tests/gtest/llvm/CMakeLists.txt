@@ -43,19 +43,25 @@ mono_gtest_binary(test-llvm
     MONO_LLVM_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}"
     MONO_LLVM_TESTS_CFG_DIR="${CMAKE_BINARY_DIR}/runtime/etc")
 
+# Tier 2 off, which is not the runtime's default: these cases read the shape of a
+# tier-1 body and link one against a jit of their own.  The instrumentation puts
+# a counter block in front of every body and a call to a symbol only the runtime
+# defines, so a case that counts blocks or materializes a module would be reading
+# tier 2 rather than what it is about.  JitProfile below is the suite that wants
+# it on.
 mono_gtest_tests(test-llvm
   PREFIX test-llvm
   FILTER "-JitProfile.*"
   SKIP_REGEX "\\[  SKIPPED \\]"
   PROPERTIES
-    LABELS llvm)
+    LABELS llvm
+    ENVIRONMENT "MONO_LLVM_JIT_TIER2=0")
 
-# The JitProfile cases want the tier-0 pipeline instrumented, which jit.cpp
-# decides from MONO_LLVM_JIT_TIER2_THRESHOLD once per process.  So they run
-# apart from the rest, which keeps every other case on the pipeline the runtime
-# uses by default.  The variable being set is what turns the instrumentation on;
-# the value only says how many calls a body takes before it promotes, and a
-# count this high means the runtime the cases start promotes nothing.
+# The JitProfile cases read the counters a tier-1 body carries, and a body that
+# promoted while a case was reading it would answer for code that no longer
+# counts.  So they run apart from the rest under a count no case can reach, which
+# holds every method at tier 1 for the whole process.  jit.cpp reads the value
+# once, so it cannot be set per case.
 mono_gtest_tests(test-llvm
   PREFIX test-llvm-profile
   FILTER "JitProfile.*"

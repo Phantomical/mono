@@ -417,11 +417,10 @@ TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 }
 
 /*
- * The counter cases, which need the instrumentation the tier-0 pipeline only
- * adds when the runtime's tier-2 threshold is set. jit.cpp reads that once and
- * keeps the answer, and the pipeline is built once per thread, so a case cannot
- * turn it on for itself. The build registers this suite as a run of its own with
- * the variable set, and the check below is what keeps a run without it honest.
+ * The counter cases, which read a body that must stay at tier 1 while they do.
+ * jit.cpp reads the threshold once and keeps the answer, so a case cannot pin it
+ * for itself. The build registers this suite as a run of its own under a count
+ * nothing reaches, and the check below is what keeps a run without it honest.
  */
 class JitProfile : public ::testing::Test {
 public:
@@ -430,8 +429,15 @@ public:
 		MONO_SKIP_WITHOUT_CORPUS ();
 
 		if (::getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD") == nullptr)
-			GTEST_SKIP () << "MONO_LLVM_JIT_TIER2_THRESHOLD is unset, so "
-			                 "the pipeline instruments nothing";
+			GTEST_SKIP () << "MONO_LLVM_JIT_TIER2_THRESHOLD is unset, so a "
+			                 "body under test can promote out from under it";
+
+		const char *tier2 = ::getenv ("MONO_LLVM_JIT_TIER2");
+
+		if (tier2 != nullptr && (*tier2 == '\0' || StringRef (tier2) == "0"
+		                         || StringRef (tier2).equals_insensitive ("false")))
+			GTEST_SKIP () << "MONO_LLVM_JIT_TIER2 turns tier 2 off, so the "
+			                 "pipeline instruments nothing";
 
 		init_runtime ();
 	}

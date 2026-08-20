@@ -63,14 +63,14 @@ uint32_t promotion_batch_size ();
 /// Whether tier 2 exists at all, which is what decides whether a tier-1 body
 /// carries profiling instrumentation.
 ///
-/// Setting MONO_LLVM_JIT_TIER2_THRESHOLD to anything turns it on.
+/// On unless MONO_LLVM_JIT_TIER2 turns it off.
 bool tier2_enabled ();
 
 /// How many calls a tier-1 body takes before it asks to be compiled again.
 ///
 /// Zero for a body that never asks, which leaves it instrumented and counting
 /// while something else decides when it promotes.
-/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it.
+/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is five thousand.
 uint32_t tier2_threshold ();
 
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.

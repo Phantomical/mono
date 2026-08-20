@@ -740,11 +740,22 @@ apply_options ()
 }
 
 // Read here rather than through runtime/options.hpp, which would put mono's
-// headers in this file.
+// headers in this file. It has to answer as that copy does: a tier-1 body the
+// translator marked for a counter, in a pipeline that instruments nothing, keeps
+// a mark no pass ever reads.
 static bool
 tier2_enabled ()
 {
-	static const bool on = ::getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD") != nullptr;
+	static const bool on = [] {
+		const char *value = ::getenv ("MONO_LLVM_JIT_TIER2");
+
+		if (value == nullptr)
+			return true;
+
+		StringRef set (value);
+
+		return !set.empty () && set != "0" && !set.equals_insensitive ("false");
+	}();
 
 	return on;
 }

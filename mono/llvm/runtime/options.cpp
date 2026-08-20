@@ -143,20 +143,29 @@ promotion_batch_size ()
 	return methods;
 }
 
-/*
- * Setting the variable at all is what turns tier 2 on, rather than setting it to
- * something. That leaves zero free to mean an instrumented tier-1 body that
- * never promotes on its own, which is what a test driving the tiers through
- * Mono.Tiering.MonoTier::PromoteNow wants.
- */
 bool
 tier2_enabled ()
 {
-	static bool on = g_getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD") != nullptr;
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
 
 	return on;
 }
 
+/*
+ * Five thousand calls of the tier-1 body, on top of the ten at tier 0 that body
+ * cost. It is not a tuned number: a tier-2 compile is the O3 pipeline and an
+ * optimizing selector against a tier-1 one that is O1 and FastISel, so it has to
+ * be high enough that a method which runs a few hundred times keeps the body it
+ * has. What the trade is worth past that wants an execution-count distribution
+ * off a real workload.
+ *
+ * The counter counts entries and nothing else, so a loop that runs for a minute
+ * inside one call never reaches it. Lowering this does not reach that method.
+ */
 uint32_t
 tier2_threshold ()
 {
@@ -164,10 +173,13 @@ tier2_threshold ()
 		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD");
 
 		if (value == nullptr)
-			return 0;
+			return 5000;
 
 		int set = atoi (value);
 
+		// Zero is an instrumented body that never promotes on its own, which
+		// is what a test driving the tiers through
+		// Mono.Tiering.MonoTier::PromoteNow wants.
 		return set > 0 ? (uint32_t) set : 0;
 	}();
 
