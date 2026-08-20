@@ -314,10 +314,13 @@ Backend debugging env vars:
   project uses), and then it checks the translator's output, the module after each pass
   written here, and the module codegen is handed; `each` (or `all`) extends that to
   every stock pass in the pipeline, `0`/`off` turns it off, and anything else means the
-  default. The default setting costs about **9%** of compile CPU — measured with
-  `MONO_LLVM_JIT_TIMING`, paired alternating runs over `test-async-20`; the 29%
-  figure for `each` is inherited and has not been re-measured. A failure names the
-  method, the pass and prints the module, then aborts.
+  default. The default setting costs **11-15%** of compile CPU — measured with
+  `MONO_LLVM_JIT_TIMING=cpu`, paired alternating runs over `test-async-20` and over a
+  corpus of 22-IL-byte methods. It reads higher than the 9% measured before the
+  codegen pipeline was cached per thread, because that removed fixed cost from the
+  denominator rather than because the verifier got slower. The 29% figure for `each`
+  is inherited and has not been re-measured. A failure names the method, the pass and
+  prints the module, then aborts.
 - `MONO_LLVM_JIT_TIMING=1` (`timing.cpp`) — at exit, print how long each phase of a
   compile took, summed over every method: metadata, translation, resolution, the IR
   pipeline, codegen setup and codegen proper, JITLink, and the pieces around them.
