@@ -188,7 +188,7 @@ A run whose output you intend to read afterwards has to capture that output
 itself:
 
 ```bash
-ctest --test-dir build -j6 --output-on-failure > my-run.log 2>&1
+ctest --test-dir build -j"$(nproc)" --output-on-failure > my-run.log 2>&1
 ```
 
 `Testing/Temporary/LastTest.log` will not do. CTest keeps one of them per build
