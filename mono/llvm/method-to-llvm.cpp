@@ -263,12 +263,8 @@ MethodLLVMEmitter::describe (MonoType *t, StackType type)
 	return text;
 }
 
-namespace {
-
-/// How many bytes of operand `opcode` carries, or none for a switch, whose length is
-/// in its own operand.
 std::optional<size_t>
-operand_size (MonoOpcodeEnum opcode)
+il_operand_size (MonoOpcodeEnum opcode)
 {
 	switch (mono_opcodes[opcode].argument) {
 	case MonoInlineNone:
@@ -297,8 +293,6 @@ operand_size (MonoOpcodeEnum opcode)
 	}
 }
 
-} // namespace
-
 /// Decode the instruction at `at` far enough to say where control goes from it.
 llvm::Expected<MethodLLVMEmitter::Flow>
 MethodLLVMEmitter::decode_flow (size_t at)
@@ -314,7 +308,7 @@ MethodLLVMEmitter::decode_flow (size_t at)
 	}
 
 	size_t operand = static_cast<size_t> (cursor - code) + 1;
-	std::optional<size_t> size = operand_size (flow.opcode);
+	std::optional<size_t> size = il_operand_size (flow.opcode);
 
 	if (size) {
 		flow.next = operand + *size;

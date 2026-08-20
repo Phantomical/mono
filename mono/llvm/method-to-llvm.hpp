@@ -1064,6 +1064,13 @@ private:
 /// to fill its register, or None for everything else.
 llvm::Attribute::AttrKind integer_extension (MonoType *t);
 
+/// How many bytes of operand an opcode carries, or nothing for a switch, whose
+/// length is in its own operand.
+///
+/// Anything walking IL needs this, and a second copy of the table disagrees
+/// with this one the first time an operand kind is added.
+std::optional<size_t> il_operand_size (MonoOpcodeEnum opcode);
+
 /// Whether method's code comes from somewhere other than IL - an icall, a
 /// pinvoke, or a method the runtime implements itself. What stands behind
 /// its symbol is then whatever mini compiles for it, never this backend's
