@@ -139,6 +139,12 @@ struct InterpEntryPoint {
 	void *imethod = nullptr; ///< InterpMethod *, which nothing here looks into
 };
 
+/// How much code a context stub takes, and what it wants to be aligned to.
+///
+/// It is a `movabs` into the key register and a `jmp rel32`: 10 bytes and 5.
+constexpr size_t context_stub_size = 15;
+constexpr size_t context_stub_align = 16;
+
 /// ORC's re-entry ABI, resolving through a mono lazy-entry frame.
 struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
 	static constexpr unsigned ResolverCodeSize = 0xc2;

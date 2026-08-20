@@ -315,8 +315,8 @@ private:
 	/// the prologue. Null in a body that is not a shared one.
 	llvm::Value *rgctx = nullptr;
 
-	/// Whether the receiver was pinned to a frame slot a stack walk can read
-	/// it out of, which is what a shared body's frame needs.
+	/// Whether this body pinned to a frame slot what it was entered with, so a
+	/// stack walk can say which instantiation the frame is running as.
 	bool pinned_receiver = false;
 
 	/// What stopped this body from being shared, empty while nothing has.
@@ -782,6 +782,18 @@ private:
 	/// rather than for one of them.
 	bool sharing () const { return context_used != 0; }
 
+	/// Whether this body is entered with its runtime generic context in a
+	/// register, because it has no receiver to read one out of.
+	///
+	/// This is upstream's own split, and it decides both the body's prototype
+	/// and how the instantiation's entry is published, so the two have to ask
+	/// the same question of the same method.
+	bool takes_context_argument () const;
+
+	/// Keeps in the frame, at an offset the jit info records, what this shared
+	/// body was entered with - a receiver, or the context itself.
+	void pin_context_slot (MonoIrBuilder &builder, llvm::Value *slot);
+
 	/// Works out whether this body is a shared one, and reads the context it
 	/// runs as. Call it from the prologue, once the arguments have their slots.
 	void open_sharing (MonoIrBuilder &builder);
@@ -805,6 +817,10 @@ private:
 	/// reached that way at all, so the answer is also what says a direct call
 	/// is safe.
 	bool calls_through_context (MonoMethod *target);
+
+	/// Appends the context \p callee declared it is entered with, and answers
+	/// whether it declared one. The site then has to mark that argument nest.
+	bool pass_context_to (llvm::Function *callee, std::vector<llvm::Value *> &args);
 
 	/// The runtime object an rgctx entry of \p info_type over \p data resolves
 	/// to in the instantiation this body is running as.

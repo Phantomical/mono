@@ -327,7 +327,7 @@ plan_interp_entry (Function *shape, MonoMethodSignature *sig)
 	FunctionType *type = shape->getFunctionType ();
 	Type *hidden = hidden_return_type (shape);
 	unsigned params = type->getNumParams ();
-	unsigned hidden_at = hidden != nullptr ? hidden_return_index (shape->arg_size ())
+	unsigned hidden_at = hidden != nullptr ? hidden_return_index (placed_parameter_count (shape))
 	                                       : params;
 	unsigned natural = hidden != nullptr ? params - 1 : params;
 

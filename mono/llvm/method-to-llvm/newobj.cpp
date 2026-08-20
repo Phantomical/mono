@@ -264,6 +264,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	}
 
 	llvm::FunctionCallee run = *declaration;
+	bool keyed = pass_context_to (*declaration, args);
 
 	// The instantiation compiles its own constructor, so the entry to call
 	// comes out of the context like any other piece of metadata.
@@ -277,7 +278,10 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		run = llvm::FunctionCallee ((*declaration)->getFunctionType (), *code);
 	}
 
-	emit_protected_call (builder, run, args);
+	emit_protected_call (builder, run, args, [&] (llvm::CallBase *site) {
+		if (keyed)
+			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
+	});
 	pop_stack (count);
 
 	if (temp == nullptr)

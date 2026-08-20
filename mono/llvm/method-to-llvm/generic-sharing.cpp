@@ -86,48 +86,84 @@ MethodLLVMEmitter::calls_through_context (MonoMethod *target)
 	return true;
 }
 
+bool
+MethodLLVMEmitter::takes_context_argument () const
+{
+	return sharing () && mono_method_needs_static_rgctx_invoke (method, TRUE);
+}
+
+/*
+ * Two sources, split by whether the method has a receiver - upstream's own
+ * split, and what keeps virtual and interface dispatch out of this entirely.
+ *
+ * An object's vtable is its instantiation's, so an instance method of a shared
+ * class reads its context out of `this` and needs nothing from its caller. A
+ * static method, a value type's, a default interface method and any method with
+ * type parameters of its own have no such receiver; each of those is entered
+ * with the context in a register instead, which the instantiation's own context
+ * stub writes.
+ */
 void
 MethodLLVMEmitter::open_sharing (MonoIrBuilder &builder)
 {
-	context_used = mono_method_check_context_used (method);
-
 	if (!sharing ())
 		return;
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Align align (TARGET_SIZEOF_VOID_P);
+
+	if (takes_context_argument ()) {
+		rgctx = function->getArg (function->arg_size () - 1);
+
+		/*
+		 * A copy in the frame, for the stack walk described below. The value
+		 * itself stays the argument: a register is what every fetch reads, and
+		 * the slot is only there to be found from outside.
+		 */
+		llvm::AllocaInst *home = builder.CreateAlloca (ptr, nullptr, "rgctx.home");
+
+		home->setAlignment (align);
+		builder.CreateAlignedStore (rgctx, home, align);
+		pin_context_slot (builder, home);
+		return;
+	}
 
 	if (args.empty () || !mono_method_signature_internal (method)->hasthis)
 		return;
 
 	/*
-	 * The context comes out of the receiver: an object's vtable is its
-	 * instantiation's, so a shared body that has one needs nothing from its
-	 * caller. shared_form () refuses the methods with no receiver to read, so
-	 * this is the only source a shared body has here.
-	 *
-	 * It is read once, in the prologue, so that one value dominates every fetch
-	 * below it. A null receiver faults here rather than at whatever the body
-	 * would have touched first. The two differ only for a body that reads the
-	 * context without ever touching `this`, and a reference type's instance
-	 * method is reached through callvirt, which has already checked.
+	 * Read once, in the prologue, so that one value dominates every fetch below
+	 * it. A null receiver faults here rather than at whatever the body would
+	 * have touched first. The two differ only for a body that reads the context
+	 * without ever touching `this`, and a reference type's instance method is
+	 * reached through callvirt, which has already checked.
 	 */
-	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-	llvm::Align align (TARGET_SIZEOF_VOID_P);
 	llvm::Value *self = builder.CreateAlignedLoad (ptr, args[0].alloca, align);
 	llvm::Value *slot = builder.CreateGEP (
 		builder.getInt8Ty (), self,
 		builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable)));
 
 	rgctx = builder.CreateAlignedLoad (ptr, slot, align);
+	pin_context_slot (builder, args[0].alloca);
+}
 
-	/*
-	 * A stack walk that wants the instantiation this frame is running as reads
-	 * the receiver out of the frame, because the jit info names the shared
-	 * method. The marker both pins the slot - the intrinsic is neither a load
-	 * nor a store, so mem2reg leaves it in memory - and gets codegen to resolve
-	 * it against the laid-out frame, which is what jinfo.cpp reads back.
-	 */
+/*
+ * A shared body's jit info names the shared method, so a stack walk that wants
+ * the instantiation a frame is running as reads what the frame was entered
+ * with - the receiver, or the context itself where there is no receiver. That
+ * is what MonoGenericJitInfo describes and this pins.
+ *
+ * The marker does both halves. The intrinsic is neither a load nor a store, so
+ * mem2reg leaves the slot in memory; and codegen resolves its operand against
+ * the laid-out frame, which is the register and displacement jinfo.cpp reads
+ * back out of the stackmap section.
+ */
+void
+MethodLLVMEmitter::pin_context_slot (MonoIrBuilder &builder, llvm::Value *slot)
+{
 	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {},
 	                         { builder.getInt64 (rgctx_stackmap_id),
-	                           builder.getInt32 (0), args[0].alloca });
+	                           builder.getInt32 (0), slot });
 	pinned_receiver = true;
 }
 
@@ -179,8 +215,19 @@ MethodLLVMEmitter::rgctx_fetch (MonoIrBuilder &builder, MonoRgctxInfoType info_t
 	patch.type = patch_kind_for (info_type);
 	patch.data.target = data;
 
-	lookup.d.klass = method->klass;
-	lookup.in_mrgctx = FALSE;
+	/*
+	 * A method with type parameters of its own owns its entries, because the
+	 * class rgctx behind a vtable cannot resolve them. Everything else puts
+	 * them in the class's, which is what an instantiation's vtable carries.
+	 */
+	if (mini_method_needs_mrgctx (method)) {
+		lookup.d.method = method;
+		lookup.in_mrgctx = TRUE;
+	} else {
+		lookup.d.klass = method->klass;
+		lookup.in_mrgctx = FALSE;
+	}
+
 	lookup.data = &patch;
 	lookup.info_type = info_type;
 
@@ -204,6 +251,23 @@ MethodLLVMEmitter::rgctx_fetch (MonoIrBuilder &builder, MonoRgctxInfoType info_t
 		info = builder.CreateIntToPtr (info, llvm::PointerType::get (context (), 0));
 
 	return info;
+}
+
+bool
+MethodLLVMEmitter::pass_context_to (llvm::Function *callee, std::vector<llvm::Value *> &args)
+{
+	unsigned count = callee->arg_size ();
+
+	if (count == 0 || !callee->hasParamAttribute (count - 1, llvm::Attribute::Nest))
+		return false;
+
+	/*
+	 * Only this body's own declaration ever carries the parameter, so this is a
+	 * shared method calling itself and the context to hand on is the one it was
+	 * entered with.
+	 */
+	args.push_back (rgctx);
+	return true;
 }
 
 llvm::Expected<llvm::Value *>

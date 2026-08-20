@@ -674,6 +674,14 @@ MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::emit ()
 {
+	/*
+	 * Before the declaration: a method whose signature still names its own type
+	 * parameters is a shared one, asked for on behalf of every reference
+	 * instantiation at once, and one with no receiver takes a parameter the
+	 * others do not.
+	 */
+	context_used = mono_method_check_context_used (method);
+
 	auto declr = create_method_decl (method);
 	if (!declr)
 		return declr.takeError ();
@@ -1088,6 +1096,7 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	for (size_t i = 0; i < cfg->header->num_locals; ++i)
 		locals.push_back ({ recover (index++), cfg->header->locals[i] });
 
+	context_used = mono_method_check_context_used (method);
 	open_sharing (builder);
 
 	if (auto error = find_block_leaders ())

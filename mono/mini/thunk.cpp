@@ -91,22 +91,21 @@ Thunk::quarantine ()
 }
 
 MonoJitInfo *
-Thunk::register_jinfo (std::string_view name, MonoDomain *domain, MonoMethod *method)
+register_code_stub (void *code, size_t size, std::string_view name, MonoDomain *domain,
+                    MonoMethod *method)
 {
 	auto unwind = stub_unwind_info ();
 	guint8 *uw_info = const_cast<guint8 *> (unwind.data ());
 	guint32 uw_info_len = (guint32) unwind.size ();
-
 	std::string display = display_name (method, name);
-	void* stub = unbox ();
-	size_t size = arch::thunk_size - arch::thunk_unbox_offset;
 
 	if (method->dynamic)
-		return mono_tramp_info_register_reclaimable (domain, method, unbox (), size,
-		                                             display.c_str (), uw_info, uw_info_len);
+		return mono_tramp_info_register_reclaimable (domain, method, code, size,
+		                                             display.c_str (), uw_info,
+		                                             uw_info_len);
 
 	MonoTrampInfo *tramp = g_new0 (MonoTrampInfo, 1);
-	tramp->code = (guint8 *)stub;
+	tramp->code = (guint8 *) code;
 	tramp->code_size = (guint32) size;
 	tramp->name = g_strdup (display.c_str ());
 	tramp->method = method;
@@ -114,6 +113,13 @@ Thunk::register_jinfo (std::string_view name, MonoDomain *domain, MonoMethod *me
 	tramp->uw_info_len = uw_info_len;
 	mono_tramp_info_register (tramp, domain);
 	return nullptr;
+}
+
+MonoJitInfo *
+Thunk::register_jinfo (std::string_view name, MonoDomain *domain, MonoMethod *method)
+{
+	return register_code_stub (unbox (), arch::thunk_size - arch::thunk_unbox_offset,
+	                           name, domain, method);
 }
 
 llvm::Expected<Thunk>

@@ -136,6 +136,22 @@ hidden_return_index (unsigned count)
 	return count > 1 ? 1 : 0;
 }
 
+/// How many of F's parameters the convention places in the argument sequence.
+///
+/// A trailing `nest` parameter is not one of them: it is pinned to a register
+/// of its own, so it takes no place in the sequence the hidden return pointer
+/// is positioned within. Pass this wherever hidden_return_index () wants a
+/// count taken off a Function.
+inline unsigned
+placed_parameter_count (const llvm::Function *f)
+{
+	unsigned count = f->arg_size ();
+
+	if (count > 0 && f->hasParamAttribute (count - 1, llvm::Attribute::Nest))
+		return count - 1;
+	return count;
+}
+
 /// What F's hidden return pointer points at, or null when F returns its value
 /// the ordinary way.
 ///
@@ -145,7 +161,7 @@ hidden_return_index (unsigned count)
 inline llvm::Type *
 hidden_return_type (const llvm::Function *f)
 {
-	return f->getParamStructRetType (hidden_return_index (f->arg_size ()));
+	return f->getParamStructRetType (hidden_return_index (placed_parameter_count (f)));
 }
 
 /// The hidden return pointer F is entered with, or null.
@@ -153,7 +169,7 @@ inline llvm::Argument *
 hidden_return_pointer (llvm::Function *f)
 {
 	return hidden_return_type (f) != nullptr
-	               ? f->getArg (hidden_return_index (f->arg_size ()))
+	               ? f->getArg (hidden_return_index (placed_parameter_count (f)))
 	               : nullptr;
 }
 
@@ -174,7 +190,7 @@ natural_parameter_index (unsigned i, const llvm::Function *f)
 {
 	if (hidden_return_type (f) == nullptr)
 		return i;
-	return natural_parameter_index (i, hidden_return_index (f->arg_size ()));
+	return natural_parameter_index (i, hidden_return_index (placed_parameter_count (f)));
 }
 
 /// TYPE with its hidden return pointer folded back into the return, which is the

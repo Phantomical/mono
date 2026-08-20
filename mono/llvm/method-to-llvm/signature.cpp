@@ -887,6 +887,23 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	}
 
 	/*
+	 * A shared body with no receiver is entered with its context in a register,
+	 * which `nest` is how unmodified LLVM asks for. It trails, and after the
+	 * hidden return pointer has been placed: `nest` takes no argument register,
+	 * so it must not shift the sequence the pointer's position is counted in.
+	 */
+	bool keyed = method == this->method && takes_context_argument ();
+
+	if (keyed) {
+		std::vector<llvm::Type *> params ((*type)->param_begin (),
+		                                  (*type)->param_end ());
+
+		params.push_back (llvm::PointerType::get (context (), 0));
+		*type = llvm::FunctionType::get ((*type)->getReturnType (), params,
+		                                 (*type)->isVarArg ());
+	}
+
+	/*
 	 * A placeholder name. The engine reads the marker below and renames the
 	 * declaration to whatever it publishes the entry under. Nothing needs
 	 * to agree with it in advance. It only needs to be unique, which
@@ -916,6 +933,18 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	llvm::Function *function = llvm::Function::Create (
 		*type, llvm::GlobalValue::ExternalLinkage, full_name, module);
 
+	/*
+	 * Before anything below counts parameters: placed_parameter_count () leaves
+	 * out a trailing `nest`, and the hidden return pointer's position is
+	 * counted with it left out.
+	 */
+	if (keyed) {
+		unsigned at = function->arg_size () - 1;
+
+		function->addParamAttr (at, llvm::Attribute::Nest);
+		function->getArg (at)->setName ("rgctx");
+	}
+
 	record_external (full_name, ExternalSymbol::Kind::Code, method);
 	mark_method_reference (*function, method);
 
@@ -938,7 +967,7 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	 * sits behind the first argument, so argument 0 still comes before it.
 	 */
 	if (hidden != nullptr) {
-		unsigned at = hidden_return_index (function->arg_size ());
+		unsigned at = hidden_return_index (placed_parameter_count (function));
 
 		function->addParamAttrs (at, llvm::AttrBuilder (
 						     context (),

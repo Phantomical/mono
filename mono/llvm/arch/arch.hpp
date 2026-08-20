@@ -129,6 +129,17 @@ llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
                                          llvm::Function *target,
                                          llvm::Value *through = nullptr);
 
+/* -- The context stub ----------------------------------------------------- */
+
+/// Writes at \p at the stub that enters \p target carrying \p context in the
+/// register a shared body reads its runtime generic context out of.
+///
+/// \p at needs context_stub_size bytes. It has to be able to reach \p target
+/// with the arch's smallest jump, which every address in a domain's code arena
+/// can reach every other; a target out of range is a fatal error rather than a
+/// wrong jump.
+void write_context_stub (char *at, void *context, void *target);
+
 /* -- Entering the interpreter --------------------------------------------- */
 
 /// How a call to a method is taken apart into the arguments the interpreter

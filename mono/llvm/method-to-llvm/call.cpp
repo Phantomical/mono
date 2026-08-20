@@ -739,7 +739,7 @@ MethodLLVMEmitter::emit_tail_call (MonoIrBuilder &builder, llvm::FunctionCallee 
 	// into an ancestor frame, so it is still there once this one is gone. A
 	// local dies the moment the jump happens, and X86 refuses one.
 	// should_tail_call () has already confirmed the two ends agree on its type.
-	unsigned at = hidden != nullptr ? hidden_return_index (target->arg_size ()) : 0;
+	unsigned at = hidden != nullptr ? hidden_return_index (placed_parameter_count (target)) : 0;
 
 	if (hidden != nullptr)
 		operands.insert (operands.begin () + at, hidden_return_pointer (function));
@@ -1399,6 +1399,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	 * and each instantiation compiles it for itself, so the entry to call comes
 	 * out of the context like any other piece of metadata.
 	 */
+	if (!through_slot && pass_context_to (*declaration, *args))
+		keyed = true;
+
 	bool fetched = !through_slot && callee_by_context;
 
 	if (fetched) {
@@ -1455,7 +1458,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 	llvm::Value *result = emit_protected_call (
 		builder, callee, *args, describe_site, hidden,
-		hidden_return_index ((*declaration)->arg_size ()));
+		hidden_return_index (placed_parameter_count ((*declaration))));
 
 	// invoke_impl usually holds an arch stub that puts delegate->target in the
 	// receiver's place on its way through, so this activation stops rooting

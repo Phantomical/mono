@@ -162,6 +162,15 @@ private:
 	llvm::Expected<Compiled> enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	                                            MonoMethod *shared, MonoTier tier);
 
+	/// The stub \p dm's entry is published as when its shared body has no
+	/// receiver to read a context out of: it writes this instantiation's
+	/// context and enters \p target.
+	///
+	/// Carved once per record and kept, so \p target has to be an address that
+	/// stays right - the shared method's thunk, not the body behind it.
+	llvm::Expected<void *> context_stub (DomainState &domain, MonoDomainMethod &dm,
+	                                     void *target);
+
 	/// Give METHOD a body at TIER and point its stub at it, whether or not it
 	/// already has one.
 	///

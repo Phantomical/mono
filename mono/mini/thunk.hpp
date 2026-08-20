@@ -63,6 +63,17 @@ public:
 	explicit operator bool () const { return data_ != nullptr; }
 };
 
+/// Registers a bare jump stub with the runtime, so a stack walk can cross it.
+///
+/// A stub pushes nothing, so at any instruction in one the frame is still the
+/// caller's - which is what the arch's CIE describes and what lets a walk that
+/// catches a thread mid-jump step off into the code that called it.
+///
+/// Answers the record for a dynamic method's stub, which has to be taken back
+/// out again when the method is freed, and null for every other method.
+MonoJitInfo *register_code_stub (void *code, size_t size, std::string_view name,
+                                 MonoDomain *domain, MonoMethod *method);
+
 } // namespace mono
 
 #endif

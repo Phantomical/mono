@@ -485,7 +485,7 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 {
 	if (auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
 		hidden = hidden_return_type (target);
-		at = hidden_return_index (target->arg_size ());
+		at = hidden_return_index (placed_parameter_count (target));
 	}
 
 	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());

@@ -14,6 +14,7 @@
 #include <mutex>
 #include <unistd.h>
 #include <mono/mini/thunk.hpp>
+#include <llvm/Support/Memory.h>
 #include "util/lock.hpp"
 #include "builtins.hpp"
 #include "dispatcher.hpp"
@@ -116,6 +117,11 @@ struct MonoBackend::MethodState {
 	/// The per-call dispatcher this method's thunk got instead of a direct
 	/// binding, when its first caller arrived from another domain.
 	void *dispatch = nullptr;
+
+	/// The stub that enters this instantiation's shared body carrying its
+	/// context. Null for a method that is not answered by a shared body, and
+	/// for one whose shared body reads the context out of its receiver.
+	void *context = nullptr;
 
 	/// Where the tier-1 body's profile counters live. Absent until a compile
 	/// puts an instrumented body behind this method.
@@ -577,15 +583,6 @@ shared_form (MonoMethod *method)
 	if (shared == nullptr || shared == method)
 		return nullptr;
 
-	/*
-	 * A shared body reads its context out of its receiver, so this landing
-	 * shares only the methods that have one. A static method, a value type's,
-	 * or one with type parameters of its own needs the context handed to it,
-	 * and gets a body per instantiation until it does.
-	 */
-	if (mono_method_needs_static_rgctx_invoke (shared, TRUE))
-		return nullptr;
-
 	return shared;
 }
 
@@ -620,9 +617,68 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 			return llvm::make_error<SharingRefusal> ("the shared body was not published");
 	}
 
-	dm.publish (tier, ready->code);
-	dm.attach_body (tier, ready->code, nullptr);
-	return Compiled { ready->code, nullptr };
+	void *entry = ready->code;
+
+	/*
+	 * A shared body with no receiver is entered with the context in a register,
+	 * and this instantiation's own entry is the only place that can be written.
+	 * The stub runs into the shared method's thunk rather than into the body
+	 * behind it, so a later compile of the shared method reaches this
+	 * instantiation through the redirect every other caller goes through.
+	 */
+	if (mono_method_needs_static_rgctx_invoke (shared, TRUE)) {
+		llvm::Expected<void *> keyed =
+			context_stub (domain, dm, (*owner)->thunk_address ());
+
+		if (!keyed)
+			return keyed.takeError ();
+
+		entry = *keyed;
+	}
+
+	dm.publish (tier, entry);
+	dm.attach_body (tier, entry, nullptr);
+	return Compiled { entry, nullptr };
+}
+
+llvm::Expected<void *>
+MonoBackend::context_stub (DomainState &domain, MonoDomainMethod &dm, void *target)
+{
+	MethodState &engine = engine_state (dm);
+
+	MONO_LOCK (mutex_)
+	{
+		if (engine.context != nullptr)
+			return engine.context;
+	}
+
+	/*
+	 * The context of this one instantiation: its class vtable, or the MRGCTX
+	 * that also carries the method's own type arguments. Reading it lays the
+	 * class out and creates the vtable, which is metadata work the compile has
+	 * already done - it never runs a class initializer.
+	 */
+	void *context = mini_method_get_rgctx (dm.method);
+	llvm::Expected<char *> at =
+		domain.code.reserve (arch::context_stub_size, arch::context_stub_align);
+
+	if (!at)
+		return at.takeError ();
+
+	arch::write_context_stub (*at, context, target);
+	llvm::sys::Memory::InvalidateInstructionCache (*at, arch::context_stub_size);
+
+	MonoJitInfo *jinfo = register_code_stub (*at, arch::context_stub_size,
+	                                         "context stub", domain.domain, dm.method);
+
+	MONO_LOCK (mutex_)
+	{
+		if (jinfo != nullptr)
+			engine.owned.jinfos.push_back (jinfo);
+		engine.context = *at;
+	}
+
+	return (void *) *at;
 }
 
 llvm::Expected<MonoBackend::Compiled>
