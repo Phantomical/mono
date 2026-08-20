@@ -43,6 +43,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/Pass.h>
 #include <llvm/CodeGen/MachineModuleInfo.h>
+#include <llvm/CodeGen/Passes.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
@@ -193,6 +194,14 @@ public:
 	explicit IlLineHandler (MCStreamer *streamer) : streamer_ (streamer) {}
 
 	const std::vector<Function> &functions () const { return functions_; }
+
+	// A reused printer keeps its user handlers across runs, so the rows of the
+	// last module are still here when the next one opens.
+	void beginModule (Module *) override
+	{
+		functions_.clear ();
+		line_ = 0;
+	}
 
 	void beginFunction (const MachineFunction *mf) override
 	{
@@ -643,17 +652,44 @@ make_streamer (TargetMachine &tm, MCContext &ctx, raw_pwrite_stream &out,
 }
 
 /*
- * A faithful restatement of TargetMachine::addPassesToEmitMC followed by
- * PassManager::run - the recipe SimpleCompiler drives - kept open so the gather
- * runs after addMachinePasses () and the side-table writer against the object
- * streamer. Any drift from the stock method between LLVM versions is a silent
- * codegen difference, so change this only against the current implementation.
+ * A codegen pipeline, built and ready to run over a module.
+ *
+ * Members die in reverse order of declaration. The pass manager owns the MMI
+ * whose MCContext the streamer writes into, and the AsmPrinter that owns the
+ * streamer, so it has to go before the buffer those writes land in.
+ */
+struct ObjectPipeline {
+	/// Where an object run puts its bytes. An assembly run writes to the
+	/// caller's stream and leaves this empty.
+	SmallVector<char, 0> object;
+	std::optional<raw_svector_ostream> object_stream;
+
+	/// What the EH passes fill in for the run in progress.
+	MonoEHSideChannel side_channel;
+
+	MCStreamer *streamer = nullptr;
+	std::optional<legacy::PassManager> pm;
+};
+
+/*
+ * A faithful restatement of TargetMachine::addPassesToEmitMC - the recipe
+ * SimpleCompiler drives - kept open so the gather runs after addMachinePasses ()
+ * and the side-table writer against the object streamer. Any drift from the
+ * stock method between LLVM versions is a silent codegen difference, so change
+ * this only against the current implementation.
+ *
+ * The passes hold pointers into p and write to out, so the pipeline is good for
+ * as long as both live and for no other destination.
  */
 Error
-emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
-             MonoEHSideChannel &side_channel, OutputKind kind)
+build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &out,
+                       OutputKind kind)
 {
-	std::optional<legacy::PassManager> pm (std::in_place);
+	std::optional<legacy::PassManager> &pm = p.pm;
+	MonoEHSideChannel &side_channel = p.side_channel;
+
+	pm.emplace ();
+
 	std::optional<timing::Scope> timed_setup (std::in_place,
 	                                          timing::Phase::cgsetup);
 	std::optional<timing::Scope> timed_part (std::in_place, timing::Phase::mmi);
@@ -750,20 +786,125 @@ emit_object (TargetMachine &tm, Module &m, raw_pwrite_stream &out,
 	 */
 	pm->add (new SideTableEmitPass (streamer_ptr, &side_channel, lines_ptr));
 
-	timed_part.reset ();
-	timed_setup.reset ();
-	{
-		timing::Scope timed_run (timing::Phase::cgrun);
+	/*
+	 * Last, as the stock recipe has it. It hands each MachineFunction back to
+	 * the MMI, and a pipeline that runs a second time needs that: the MMI keys
+	 * them by Function, and the Functions of the module that has just been
+	 * compiled are about to go.
+	 */
+	pm->add (createFreeMachineFunctionPass ());
 
-		g_object_started = 0;
-		pm->run (m);
-		timing::span_end (timing::Phase::objout, g_object_started);
-	}
+	p.streamer = streamer_ptr;
+	return Error::success ();
+}
+
+/// Runs the pipeline over m, which codegen consumes.
+void
+run_object_pipeline (ObjectPipeline &p, Module &m)
+{
+	timing::Scope timed_run (timing::Phase::cgrun);
+
+	g_object_started = 0;
+	p.pm->run (m);
+	timing::span_end (timing::Phase::objout, g_object_started);
+}
+
+/*
+ * The pipeline this thread reuses for the objects it compiles, one for each
+ * target machine it is asked for. A thread that compiles once keeps its
+ * pipeline, and the ~55 passes in it, for the rest of its life.
+ *
+ * LLVM supports the reuse and this leans on three parts of it.
+ * legacy::PassManager::run () calls doInitialization () and doFinalization ()
+ * on the passes for each module. MachineModuleInfo::finalize () resets the
+ * MCContext. The AsmPrinter keeps the handlers we added and drops the ones it
+ * made for itself.
+ */
+Expected<ObjectPipeline *>
+thread_object_pipeline (TargetMachine &tm)
+{
+	/*
+	 * The machine is thread_local as well and the pipeline points at it, so the
+	 * pipeline has to be registered after it and therefore dies before it. The
+	 * caller got tm from that call, so the order already holds.
+	 */
+	static thread_local std::vector<
+		std::pair<TargetMachine *, std::unique_ptr<ObjectPipeline>>> built;
+
+	for (auto &[machine, pipeline] : built)
+		if (machine == &tm)
+			return pipeline.get ();
+
+	auto fresh = std::make_unique<ObjectPipeline> ();
+
+	fresh->object_stream.emplace (fresh->object);
+	if (Error err = build_object_pipeline (tm, *fresh, *fresh->object_stream,
+	                                       OutputKind::object))
+		return std::move (err);
+
+	built.emplace_back (&tm, std::move (fresh));
+	return built.back ().second.get ();
+}
+
+/// Compiles m into an object with the pipeline this thread reuses.
+Error
+emit_object_reused (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
+                    MonoEHSideChannel &side_channel)
+{
+	Expected<ObjectPipeline *> pipeline = thread_object_pipeline (tm);
+
+	if (!pipeline)
+		return pipeline.takeError ();
+
+	ObjectPipeline &p = **pipeline;
+
+	run_object_pipeline (p, m);
+
+	/*
+	 * The run ended in MachineModuleInfo::finalize (), which reset the MCContext
+	 * and freed the sections and symbols the streamer still lists. The reset
+	 * here puts the streamer back to its start state. It clears containers of
+	 * its own and reads none of what the context freed.
+	 */
+	p.streamer->reset ();
+
+	object = std::move (p.object);
+	side_channel = std::move (p.side_channel);
+	p.side_channel = MonoEHSideChannel ();
+	return Error::success ();
+}
+
+/// Compiles m into an object with a pipeline of its own, and then destroys it.
+Error
+emit_object_fresh (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
+                   MonoEHSideChannel &side_channel)
+{
+	raw_svector_ostream out (object);
+	ObjectPipeline p;
+
+	if (Error err = build_object_pipeline (tm, p, out, OutputKind::object))
+		return err;
+
+	run_object_pipeline (p, m);
+	side_channel = std::move (p.side_channel);
 	{
 		timing::Scope timed_free (timing::Phase::pmfree);
 
-		pm.reset ();
+		p.pm.reset ();
 	}
+	return Error::success ();
+}
+
+/// Writes the assembly m compiles to out.
+Error
+emit_assembly_text (TargetMachine &tm, Module &m, raw_pwrite_stream &out)
+{
+	ObjectPipeline p;
+
+	if (Error err = build_object_pipeline (tm, p, out, OutputKind::assembly))
+		return err;
+
+	run_object_pipeline (p, m);
 	return Error::success ();
 }
 
@@ -876,7 +1017,6 @@ Error
 dump_assembly (TargetMachine &tm, const Module &m)
 {
 	std::unique_ptr<Module> copy = CloneModule (m);
-	MonoEHSideChannel side_channel;
 	std::unique_ptr<raw_fd_ostream> file;
 	raw_pwrite_stream *out = &errs ();
 
@@ -890,7 +1030,70 @@ dump_assembly (TargetMachine &tm, const Module &m)
 	}
 
 	*out << "*** assembly for " << m.getModuleIdentifier () << " ***\n";
-	return emit_object (tm, *copy, *out, side_channel, OutputKind::assembly);
+	return emit_assembly_text (tm, *copy, *out);
+}
+
+/// How a compile gets its codegen pipeline. MONO_LLVM_JIT_CODEGEN picks.
+enum class PipelineUse { reuse, fresh, compare };
+
+/*
+ * `fresh` builds a pipeline for each method, which is what an A/B against the
+ * reuse measures. `compare` runs both over one method and stops the process
+ * when the two objects differ.
+ */
+PipelineUse
+pipeline_use ()
+{
+	static const PipelineUse use = [] {
+		const char *setting = std::getenv ("MONO_LLVM_JIT_CODEGEN");
+
+		if (setting == nullptr)
+			return PipelineUse::reuse;
+		if (StringRef (setting) == "fresh")
+			return PipelineUse::fresh;
+		if (StringRef (setting) == "compare")
+			return PipelineUse::compare;
+		return PipelineUse::reuse;
+	}();
+
+	return use;
+}
+
+/// Compiles m into the object the linker is handed.
+Error
+emit_method_object (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
+                    MonoEHSideChannel &side_channel)
+{
+	switch (pipeline_use ()) {
+	case PipelineUse::fresh:
+		return emit_object_fresh (tm, m, object, side_channel);
+
+	case PipelineUse::compare: {
+		// Codegen consumes the module it is given, so the control run takes a
+		// copy of it.
+		std::unique_ptr<Module> copy = CloneModule (m);
+		SmallVector<char, 0> control;
+		MonoEHSideChannel control_channel;
+
+		if (Error err = emit_object_fresh (tm, *copy, control, control_channel))
+			return err;
+		if (Error err = emit_object_reused (tm, m, object, side_channel))
+			return err;
+		if (StringRef (control.data (), control.size ())
+		    != StringRef (object.data (), object.size ()))
+			report_fatal_error (
+				Twine ("mono: the reused codegen pipeline wrote a "
+			               "different object for ")
+					+ m.getModuleIdentifier (),
+				/*GenCrashDiag=*/false);
+		return Error::success ();
+	}
+
+	case PipelineUse::reuse:
+		break;
+	}
+
+	return emit_object_reused (tm, m, object, side_channel);
 }
 
 } // namespace
@@ -917,11 +1120,8 @@ MethodObjectCompiler::operator() (Module &m)
 		if (Error err = dump_assembly (tm, m))
 			return std::move (err);
 
-	{
-		raw_svector_ostream stream (buffer);
-		if (Error err = emit_object (tm, m, stream, side_channel, OutputKind::object))
-			return std::move (err);
-	}
+	if (Error err = emit_method_object (tm, m, buffer, side_channel))
+		return std::move (err);
 
 	return std::make_unique<SmallVectorMemoryBuffer> (
 		std::move (buffer), m.getModuleIdentifier () + "-jitted-objectbuffer",
