@@ -10,6 +10,7 @@
 #include "mini-runtime.h"
 
 #include <mono/llvm/runtime.h>
+#include <mono/metadata/icall-internals.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/domain-internals.h>
 
@@ -75,28 +76,34 @@ MonoDomainMethod::publish (MonoTier tier, void *code)
 bool
 MonoDomainMethod::promote ()
 {
-	/* Native code owns the entry for good, so there is no tier to move to. */
-	if (tier_.load (std::memory_order_acquire) == MonoTier::detoured)
+	MonoTier at = tier_.load (std::memory_order_acquire);
+
+	/* Native code owns the entry for good, and tier 2 is the top. */
+	if (at == MonoTier::detoured || next_tier (at) == at)
 		return true;
 
-	int32_t idle = (int32_t) Promotion::idle;
+	MonoTier want = next_tier (at);
+	MonoTier asked = requested_.load (std::memory_order_acquire);
 
 	/*
-	 * Whoever wins this is the one that asks. Several counters can run out at
-	 * once - one per engine, and more than one thread inside an engine - and an
-	 * engine asked twice compiles the method twice.
+	 * Whoever raises the bar is the one that asks. Several counters can run out
+	 * at once - one per engine, and more than one thread inside an engine - and
+	 * an engine asked twice compiles the method twice.
 	 */
-	if (!promotion_.compare_exchange_strong (idle, (int32_t) Promotion::queued,
-	                                         std::memory_order_acq_rel,
-	                                         std::memory_order_acquire))
-		return true;
+	while (asked < want) {
+		if (!requested_.compare_exchange_weak (asked, want, std::memory_order_acq_rel,
+		                                       std::memory_order_acquire))
+			continue;
 
-	if (!mono_llvm_jit_request_promotion (method, domain)) {
-		promotion_.store ((int32_t) Promotion::idle, std::memory_order_release);
+		if (mono_llvm_jit_request_promotion (method, domain, (uint8_t) want))
+			return true;
+
+		/* Put the bar back, so the next threshold of calls asks again. */
+		requested_.compare_exchange_strong (want, asked, std::memory_order_acq_rel,
+		                                    std::memory_order_acquire);
 		return false;
 	}
 
-	promotion_.store ((int32_t) Promotion::settled, std::memory_order_release);
 	return true;
 }
 
@@ -417,6 +424,35 @@ mono_promote_method (MonoMethod *method, MonoDomain *domain)
 	mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method);
 
 	return dm != nullptr && dm->promote ();
+}
+
+namespace {
+
+/// Mono.Tiering.MonoTier::PromoteNow, which puts a method at a tier without
+/// waiting for a call count to run out.
+///
+/// The handle is a MonoMethod pointer, which is what RuntimeMethodHandle.Value
+/// holds, and the tier is a MonoTier. Nothing checks either.
+///
+/// Ordinary promotion is queued, so a test that waits for a tier by calling a
+/// method in a loop races the compile worker and only wins if the loop runs long
+/// enough. This one has landed by the time it answers.
+mono_bool
+ves_icall_promote_now (MonoMethod *method, int32_t tier)
+{
+	if (method == nullptr || tier < 0 || tier > (int32_t) UINT8_MAX)
+		return FALSE;
+
+	return mono_llvm_jit_promote_now (method, mono_domain_get (), (uint8_t) tier);
+}
+
+} // namespace
+
+void
+mono_domain_method_register_icalls (void)
+{
+	mono_add_internal_call_internal ("Mono.Tiering.MonoTier::PromoteNow",
+	                                 (const void *) ves_icall_promote_now);
 }
 
 void

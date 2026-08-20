@@ -907,14 +907,19 @@ MethodObjectCompiler::operator() (Module &m)
 	MonoEHSideChannel side_channel;
 	SmallVector<char, 0> buffer;
 
+	// The tier-2 pipeline stamps this, and the level it wants is fixed when the
+	// machine is built rather than settable here.
+	TargetMachine &tm = m.getModuleFlag ("mono.tier2") != nullptr
+	                            ? tier2_target_machine ()
+	                            : host_target_machine ();
+
 	if (dumping_asm (m.getName ()))
-		if (Error err = dump_assembly (host_target_machine (), m))
+		if (Error err = dump_assembly (tm, m))
 			return std::move (err);
 
 	{
 		raw_svector_ostream stream (buffer);
-		if (Error err = emit_object (host_target_machine (), m, stream,
-		                             side_channel, OutputKind::object))
+		if (Error err = emit_object (tm, m, stream, side_channel, OutputKind::object))
 			return std::move (err);
 	}
 

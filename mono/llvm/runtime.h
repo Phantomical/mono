@@ -123,7 +123,8 @@ mono_bool mono_llvm_jit_tier0_enabled (void);
 /// tier 1, or zero if it never promotes.
 int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 
-/// Asks for a method to be compiled, replacing whatever tier runs it now.
+/// Asks for a method to be compiled at the given tier, replacing whatever tier
+/// runs it now. The tier is a MonoTier.
 ///
 /// Returns immediately. There is no way to wait for the compile or to ask what
 /// became of it.
@@ -132,7 +133,19 @@ int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 /// and a runtime in shutdown both do. Nothing retries a refused request, so a
 /// caller that spent a call count on it has to start counting again or the
 /// method stays where it is for good.
-mono_bool mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain);
+mono_bool mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain,
+                                           uint8_t tier);
+
+/// Compiles a method at a tier and points its entry at the result, on the
+/// calling thread. The tier is a MonoTier.
+///
+/// This is what a test uses to reach a tier without waiting: the request above
+/// is queued, so a test that spins on a call count races the compile worker.
+/// This one has landed by the time it returns.
+///
+/// Returns FALSE when the compile was refused or failed, and the method then
+/// stays at the tier already running it.
+mono_bool mono_llvm_jit_promote_now (MonoMethod *method, MonoDomain *domain, uint8_t tier);
 
 /// Puts a method's IL through the verifier.
 ///

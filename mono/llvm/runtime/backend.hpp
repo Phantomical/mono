@@ -11,6 +11,7 @@
 #include <llvm/Support/Error.h>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace llvm {
 class Module;
@@ -62,13 +63,33 @@ public:
 	/// compiled it there.
 	static void *body_of (MonoDomain *domain, MonoMethod *method);
 
-	/// Ask for METHOD to be compiled in DOMAIN, replacing the tier running it.
+	/// Ask for METHOD to be compiled in DOMAIN at TIER, replacing the tier
+	/// running it.
 	///
 	/// Returns as soon as the work is queued, never once it is done. Answering
 	/// false means the work was refused and nothing retries it: a domain on its
 	/// way out takes nothing new, and neither does an engine that does not exist
 	/// yet. A caller that counts calls towards a promotion has to count again.
-	static bool request_promotion (MonoMethod *method, MonoDomain *domain);
+	static bool request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier tier);
+
+	/// Compile METHOD at TIER in DOMAIN on the calling thread, and point its
+	/// entry at the result before returning.
+	///
+	/// Answers false when the compile was refused or failed, and the method is
+	/// then left at whatever tier already ran it.
+	static bool promote_now (MonoMethod *method, MonoDomain *domain, MonoTier tier);
+
+	/// The profile counters \p dm's tier-1 body counts into.
+	///
+	/// Absent covers a method the backend never compiled and one compiled with
+	/// the instrumentation off. A method that was instrumented and has not run
+	/// yet answers its counters, which read zero - so a caller that has to tell
+	/// "no profile" from "never executed" gets the two apart.
+	///
+	/// Answers a copy, because a recompile can replace what the record holds.
+	/// The counter array the copy points at stays readable for as long as the
+	/// domain does.
+	static std::optional<ProfileCounters> profile_of (MonoDomainMethod &dm);
 
 	/// Call VISIT with the jit info of each live body this engine compiled
 	/// METHOD into in DOMAIN, oldest first.
@@ -126,14 +147,14 @@ private:
 	/// the first call through it.
 	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Give METHOD a body and point its stub at it, whether or not it already
-	/// has one.
+	/// Give METHOD a body at TIER and point its stub at it, whether or not it
+	/// already has one.
 	///
 	/// With allow_tier0 the interpreter is offered the method first; promotion
 	/// passes false, which is what makes it a compile rather than a second trip
 	/// through the tier the method is already running at.
 	llvm::Expected<Compiled> compile_body (DomainState &domain, MonoDomainMethod &dm,
-	                                       bool allow_tier0);
+	                                       bool allow_tier0, MonoTier tier);
 
 	/// This engine's own state for \p dm, which it attached when the record was
 	/// built.

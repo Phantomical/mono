@@ -42,16 +42,32 @@ struct InterpEntryLayout;
 /// Which engine owns the address a method is entered at.
 ///
 /// The order is the ranking publish () compares, so a tier added later goes
-/// between tier1 and detoured rather than at the end.
+/// between tier2 and detoured rather than at the end.
 enum class MonoTier : uint8_t {
 	/// Published, with no code yet: the thunk points at the lazy resolver.
 	none = 0,
 	interp = 1,
 	tier1 = 2,
+	tier2 = 3,
 	/// Native code owns the entry. Nothing outranks this, and nothing takes it
 	/// back.
 	detoured = 0xFF,
 };
+
+/// The tier a method at \p tier promotes to, or \p tier itself at the top.
+constexpr MonoTier
+next_tier (MonoTier tier)
+{
+	switch (tier) {
+	case MonoTier::none:
+	case MonoTier::interp:
+		return MonoTier::tier1;
+	case MonoTier::tier1:
+		return MonoTier::tier2;
+	default:
+		return tier;
+	}
+}
 
 /// How far a body has got from being the one the entry names.
 enum class BodyState : uint8_t {
@@ -72,13 +88,6 @@ struct MonoMethodBody {
 	BodyState state = BodyState::current;
 	void *code = nullptr;
 	MonoJitInfo *jinfo = nullptr;
-};
-
-/// How far a promotion request for this method has got.
-enum class Promotion : int32_t {
-	idle = 0,
-	queued = 1,
-	settled = 2,
 };
 
 /// Everything the runtime knows about one method in one domain.
@@ -119,10 +128,13 @@ public:
 
 	/// Asks for the method to be run by the next tier up.
 	///
+	/// Which tier that is comes from the one running the method now, so the
+	/// counter a tier arms decides nothing beyond when to call this.
+	///
 	/// Answers false only when the request was refused and nothing will retry
 	/// it, which is the caller's signal to count another threshold of calls. A
-	/// method already on its way, and one that native code owns, both answer
-	/// true: there is nothing left for the caller to do either way.
+	/// method already on its way, one at the top tier, and one that native code
+	/// owns all answer true: there is nothing left for the caller to do.
 	bool promote ();
 
 	/// Hands the entry to native code at \p target, for good.
@@ -257,8 +269,9 @@ private:
 	std::atomic<bool> override_checked_ { false };
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
-	/* Promotion::idle / queued / settled; an integer because it is CAS'd. */
-	std::atomic<int32_t> promotion_ { (int32_t) Promotion::idle };
+	/* The highest tier anything has asked for, which is what keeps two counters
+	 * running out at once from queueing the same compile twice. */
+	std::atomic<MonoTier> requested_ { MonoTier::none };
 
 	std::atomic<InterpMethod *> interp_method_ { nullptr };
 

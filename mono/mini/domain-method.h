@@ -67,6 +67,12 @@ void mono_domain_method_table_init (MonoDomain *domain);
 /// that state.
 void mono_domain_method_table_free (MonoDomain *domain);
 
+/// Surfaces Mono.Tiering.MonoTier to managed code.
+///
+/// Call this with the runtime's other icall registrations, which is late enough
+/// for the icall table to take one.
+void mono_domain_method_register_icalls (void);
+
 MONO_END_DECLS
 
 #endif /* MONO_MINI_DOMAIN_METHOD_H */

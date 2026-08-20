@@ -138,6 +138,10 @@ protected:
 		EXPECT_FALSE (bool ((*jit)->register_symbol (
 			"mono_personality", (void *) &test_personality)));
 
+		// As the runtime compiles: translator output still names the symbolic
+		// calls the mono passes rewrite, so it cannot be linked as it stands.
+		MonoJit::optimize (*t->module, JitTier::tier1);
+
 		auto addr = (*jit)->compile (
 			ThreadSafeModule (std::move (t->module),
 		                      ThreadSafeContext (std::move (t->context))),

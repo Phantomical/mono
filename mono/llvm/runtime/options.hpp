@@ -52,10 +52,16 @@ bool recompiling (MonoMethod *method);
 /// entry path from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
 
+/// Whether tier 2 exists at all, which is what decides whether a tier-1 body
+/// carries profiling instrumentation.
+///
+/// Setting MONO_LLVM_JIT_TIER2_THRESHOLD to anything turns it on.
+bool tier2_enabled ();
+
 /// How many calls a tier-1 body takes before it asks to be compiled again.
 ///
-/// Zero, which turns the whole tier-2 path off: no counter is emitted and the
-/// tier-1 output carries no profiling instrumentation.
+/// Zero for a body that never asks, which leaves it instrumented and counting
+/// while something else decides when it promotes.
 /// MONO_LLVM_JIT_TIER2_THRESHOLD moves it.
 uint32_t tier2_threshold ();
 

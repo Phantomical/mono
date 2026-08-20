@@ -18,6 +18,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -25,6 +26,7 @@
 
 namespace llvm {
 class Function;
+class Module;
 class TargetMachine;
 } // namespace llvm
 
@@ -42,6 +44,12 @@ struct Registration;
 /// compiles. A TargetMachine cannot be shared across threads, and building one
 /// costs more than compiling a typical method.
 llvm::TargetMachine &host_target_machine ();
+
+/// The same configuration with an optimizing codegen level, which is what tier
+/// 2 emits through.
+///
+/// One instance per calling thread, on the same terms as host_target_machine ().
+llvm::TargetMachine &tier2_target_machine ();
 
 /// The widest access, in bits, this target performs atomically with a single
 /// instruction when compiling a function.
@@ -67,6 +75,51 @@ struct IlLineRow {
 	/// other.
 	uint8_t flags = 0;
 };
+
+/// Where one instrumented function counts, and what the profile reader needs to
+/// recognise the counts as its own.
+///
+/// The array is live code memory. Reading it hands back whatever the running
+/// code has counted so far, and it stays readable until the domain goes.
+/// optimize () fills in everything but the address, which only the link knows.
+struct ProfileCounters {
+	/// The name the profile reader keys the function on.
+	std::string name;
+	/// The hash of the CFG the counter indices were assigned over.
+	uint64_t hash = 0;
+	const uint64_t *counters = nullptr;
+	uint32_t count = 0;
+};
+
+/// Which of the two IR pipelines a module is compiled through.
+///
+/// This is the JIT's own choice of pipeline, and it is not the runtime's ranking
+/// of tiers - nothing here knows about the interpreter or a detour.
+enum class JitTier {
+	/// The O1 function pipeline with FastISel behind it, instrumented so that
+	/// a later compile has counts to read.
+	tier1,
+	/// The O3 function pipeline with an optimizing selector, reading the
+	/// counts a tier-1 body gathered.
+	tier2,
+};
+
+/// Writes an indexed profile holding what the given counters have counted so
+/// far.
+///
+/// Reads live code memory, so the result is a snapshot: counters a running
+/// thread is still bumping are read at whatever value they hold. That only
+/// skews the weights, since the reader never checks the counts against each
+/// other.
+std::vector<uint8_t> build_profile (llvm::ArrayRef<ProfileCounters> counters);
+
+/// Annotates a module's functions with the branch weights and entry counts a
+/// profile holds.
+///
+/// A function the profile has no record for is left alone, and so is one whose
+/// CFG does not hash to what the record was built over. Either way the result
+/// is a module with no weights on it rather than wrong weights.
+void apply_profile (llvm::Module &m, llvm::ArrayRef<uint8_t> profile);
 
 /// One frame slot, as a register number and a displacement whose sum is the
 /// slot's address - the shape MonoDebugVarInfo names a variable's home in.
@@ -124,6 +177,10 @@ struct CompiledMethod {
 	/// method was translated with its variables pinned to the frame.
 	std::vector<VarSlot> var_slots;
 
+	/// Where this method's profile counters landed. Absent when the module was
+	/// compiled with the instrumentation off.
+	std::optional<ProfileCounters> profile;
+
 	/// The dylib this compile's object was linked into - what remove_dylibs ()
 	/// takes to release all of the above again.
 	llvm::orc::JITDylib *dylib = nullptr;
@@ -163,9 +220,14 @@ public:
 	/// the dylib resolves external symbols through register_symbol () and
 	/// nothing else. A lookup never falls back to the process, so an
 	/// unregistered helper fails the compile loudly.
+	///
+	/// The module must already have been through optimize (), which is where
+	/// the tier is decided. Hand back what optimize () answered as layout, and
+	/// the result carries it with the address the link gave the counters.
 	llvm::Expected<CompiledMethod>
 	compile (llvm::orc::ThreadSafeModule tsm, llvm::StringRef entry,
-	        llvm::ArrayRef<std::pair<llvm::StringRef, void *>> module_symbols = {});
+	        llvm::ArrayRef<std::pair<llvm::StringRef, void *>> module_symbols = {},
+	        const ProfileCounters *layout = nullptr);
 
 	/// Release the dylibs: their code, their side tables, and the memory both
 	/// were linked into. Later compiles can reuse that memory.
@@ -174,10 +236,28 @@ public:
 	/// to call into it. Any stub still pointing at it must already be undefined.
 	llvm::Error remove_dylibs (const std::vector<llvm::orc::JITDylib *> &dylibs);
 
+	/// Run a tier's IR pipeline over a module in place, and answer where it put
+	/// the profile counters.
+	///
+	/// Every module goes through this before compile (): it is what lowers the
+	/// translator's symbolic calls and puts the body into this backend's
+	/// calling convention. The profile is a tier-2 input and build_profile ()
+	/// writes it; an empty one still compiles at tier 2, only with nothing to
+	/// lay the code out by.
+	///
+	/// Answers nothing when the module was not instrumented, which is every
+	/// tier-2 module and every tier-1 module compiled with tier 2 turned off.
+	static std::optional<ProfileCounters> optimize (llvm::Module &m, JitTier tier,
+	                                                llvm::ArrayRef<uint8_t> profile = {});
+
 	/// Run the tier-0 IR pipeline over a module in place.
 	///
 	/// Static and public so tests can assert what it does to translator output.
 	static void run_tier0_pipeline (llvm::Module &m);
+
+	/// Run the tier-2 IR pipeline over a module in place, against a profile
+	/// build_profile () wrote.
+	static void run_tier2_pipeline (llvm::Module &m, llvm::ArrayRef<uint8_t> profile);
 
 	/// The DataLayout modules compiled here must carry. compile () stamps it
 	/// on modules that do not have one yet.

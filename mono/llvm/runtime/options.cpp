@@ -118,6 +118,20 @@ tier1_threshold ()
 	return calls;
 }
 
+/*
+ * Setting the variable at all is what turns tier 2 on, rather than setting it to
+ * something. That leaves zero free to mean an instrumented tier-1 body that
+ * never promotes on its own, which is what a test driving the tiers through
+ * Mono.Tiering.MonoTier::PromoteNow wants.
+ */
+bool
+tier2_enabled ()
+{
+	static bool on = g_getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD") != nullptr;
+
+	return on;
+}
+
 uint32_t
 tier2_threshold ()
 {

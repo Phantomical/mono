@@ -1,5 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
+#include "domain-method.hpp"
 #include "passes/tier-counter.hpp"
 #include "runtime/options.hpp"
 #include "runtime-error.hpp"
@@ -815,14 +816,28 @@ MethodLLVMEmitter::emit ()
 	}
 
 	// Only marked here: TierCounterPass writes the counter, behind the profile
-	// instrumentation - see passes/tier-counter.hpp.
-	if (uint32_t threshold = tier2_threshold ()) {
-		std::string handle =
-			"mono_tier_method_" + std::to_string ((uintptr_t) method);
+	// instrumentation - see passes/tier-counter.hpp. The mark is what selects a
+	// function for instrumentation, so it goes on whether or not the threshold
+	// behind it ever fires.
+	if (tier2_enabled ()) {
+		// The domain is this thread's for the whole translation, so the record
+		// this finds is the one the code being written is for.
+		llvm::Expected<MonoDomainMethod *> record =
+			domain_method_get (mono_domain_get (), method);
 
-		address_symbol (handle, method);
-		function->addFnAttr (tier_counter_attribute, std::to_string (threshold));
-		function->addFnAttr (tier_handle_attribute, handle);
+		if (!record) {
+			// A method that cannot be published cannot be promoted either, so
+			// it runs on without a counter.
+			llvm::consumeError (record.takeError ());
+		} else {
+			std::string handle =
+				"mono_tier_method_" + std::to_string ((uintptr_t) *record);
+
+			address_symbol (handle, *record);
+			function->addFnAttr (tier_counter_attribute,
+			                     std::to_string (tier2_threshold ()));
+			function->addFnAttr (tier_handle_attribute, handle);
+		}
 	}
 
 	// A handler is entered by the runtime rather than by anything in the IL. So what

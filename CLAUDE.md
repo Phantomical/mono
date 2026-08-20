@@ -607,6 +607,9 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Do not open a summary line with "The one X" or similar. Say what the thing is.
 - Write in the active voice, and name the actor. "A merged test drops SKIP_REGEX" says who
   does it; "SKIP_REGEX is dropped" leaves the reader to work that out.
+- Do not write "nothing here", "nothing else" or a similar empty subject. Say "we", or name
+  the thing that acts. "Value profiling needs compiler-rt, which we do not link" beats
+  "which nothing here links" - the reader has no way to tell how wide "here" is.
 - Do not call anything "load-bearing". It asserts that something matters without saying what
   breaks without it. Say what breaks.
 - Start a function's summary with a verb - "Builds the buffer a vararg call passes its
@@ -624,6 +627,12 @@ failures through `llvm::Error` and the unwinder needs the tables.
 - Do not repeat a fact that is documented where it lives. Two copies disagree eventually,
   and the copy a reader finds first is the one they believe. Point at the home, or say
   nothing.
+- "Every", "each" and "all" claim a scope. Write one only when the thing you are describing
+  holds all of them, and say what "all" is counted over. A field on one compile's record
+  holds that compile's data, so "where every instrumented function's counters landed" reads
+  as the whole program and is false - it is this method's counters. Describe what this
+  instance has. The same check catches a doc that promises a container holds many when the
+  code only ever puts one in it: fix the type, not the sentence.
 - One convention that several functions obey gets one home, and that home is a block above
   the code that builds it rather than a piece in each doc comment. The mono vararg cookie
   was spelled out in five places, each carrying the part its own function needed, and no

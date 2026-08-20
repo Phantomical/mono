@@ -1,5 +1,5 @@
 #include "builtins.hpp"
-#include "domain-method.h"
+#include "domain-method.hpp"
 #include "mini.h"
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/marshal.h"
@@ -35,13 +35,17 @@ jit_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Ex
 	return _URC_CONTINUE_UNWIND;
 }
 
-// What a body's entry counter calls when it runs out. The domain is the
-// thread's rather than the code's, which is wrong once InvokeInDomain has
-// switched it.
+/*
+ * What a body's entry counter calls when it runs out.
+ *
+ * It takes the record rather than the method because the record is the (method,
+ * domain) pair the code was compiled for. Resolving the domain here instead
+ * would read the calling thread's, which AppDomain:InvokeInDomain moves.
+ */
 void
-mono_llvm_jit_tier2_promote (MonoMethod *method)
+mono_llvm_jit_tier2_promote (MonoDomainMethod *dm)
 {
-	mono_promote_method (method, mono_domain_get ());
+	dm->promote ();
 }
 
 MonoObject *

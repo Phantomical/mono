@@ -76,6 +76,13 @@ struct TranslationTarget {
 	/// compile, and becomes a stand-in body that raises it; anything else is
 	/// handed back unchanged.
 	llvm::function_ref<llvm::Expected<Compiled> (llvm::Error)> recover;
+
+	/// Which pipeline the body is compiled through.
+	JitTier tier = JitTier::tier1;
+
+	/// The counts a tier-2 body is laid out by. Empty for a method promoted
+	/// before it ran, and unread at tier 1.
+	llvm::ArrayRef<uint8_t> profile;
 };
 
 /// Compile a method, whatever it takes: the marshal wrapper for an array

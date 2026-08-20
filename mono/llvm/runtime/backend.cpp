@@ -116,6 +116,10 @@ struct MonoBackend::MethodState {
 	/// The per-call dispatcher this method's thunk got instead of a direct
 	/// binding, when its first caller arrived from another domain.
 	void *dispatch = nullptr;
+
+	/// Where the tier-1 body's profile counters live. Absent until a compile
+	/// puts an instrumented body behind this method.
+	std::optional<ProfileCounters> profile;
 };
 
 struct MonoBackend::DomainState {
@@ -238,6 +242,20 @@ MonoBackend::MethodState &
 MonoBackend::engine_state (MonoDomainMethod &dm)
 {
 	return *static_cast<MethodState *> (dm.engine_data.get ());
+}
+
+std::optional<ProfileCounters>
+MonoBackend::profile_of (MonoDomainMethod &dm)
+{
+	// Both are null between publishing a record and compiling anything into it.
+	if (instance == nullptr || dm.engine_data.get () == nullptr)
+		return std::nullopt;
+
+	MethodState &engine = engine_state (dm);
+
+	MONO_LOCK (instance->mutex_) { return engine.profile; }
+
+	return std::nullopt;
 }
 
 llvm::Expected<MonoDomainMethod *>
@@ -508,7 +526,8 @@ MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm)
 	if (std::optional<MonoMethodBody> ready = dm.body (); ready && !recompiling (dm.method))
 		return ready->code;
 
-	llvm::Expected<Compiled> code = compile_body (domain, dm, /*allow_tier0=*/true);
+	llvm::Expected<Compiled> code =
+		compile_body (domain, dm, /*allow_tier0=*/true, MonoTier::tier1);
 
 	if (!code)
 		return code.takeError ();
@@ -517,7 +536,8 @@ MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm)
 }
 
 llvm::Expected<MonoBackend::Compiled>
-MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow_tier0)
+MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow_tier0,
+                           MonoTier tier)
 {
 	MonoMethod *method = dm.method;
 	MethodState &engine = engine_state (dm);
@@ -579,6 +599,9 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 	 * taken back out again - everything else dies with the domain.
 	 */
 	auto note = [&] (const CompiledMethod &compiled, MonoJitInfo *jinfo) {
+		if (compiled.profile)
+			MONO_LOCK (mutex_) { engine.profile = compiled.profile; }
+
 		if (!method->dynamic)
 			return;
 
@@ -594,8 +617,23 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 		return recover (*domain.jit, domain.domain, method, std::move (failure), note);
 	};
 
+	JitTier pipeline = tier == MonoTier::tier2 ? JitTier::tier2 : JitTier::tier1;
+	std::vector<uint8_t> profile;
+
+	if (pipeline == JitTier::tier2) {
+		MONO_LOCK (mutex_)
+		{
+			if (engine.profile)
+				profile = build_profile (*engine.profile);
+		}
+
+		if (profile.empty () && is_jit_trace_enabled ())
+			llvm::errs () << "[llvm-jit] no profile for a tier-2 compile of "
+				      << dm.name << "\n";
+	}
+
 	TranslationTarget target { domain.jit.get (), domain.domain, publish_callee,
-		                   note, recover_failure };
+		                   note, recover_failure, pipeline, profile };
 
 	llvm::Expected<Compiled> code = [&] {
 		timing::Scope timed (timing::Phase::compile);
@@ -616,8 +654,8 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 		mini_install_pending_breakpoints (domain.domain,
 		                                  jinfo_get_method (published), published);
 
-	dm.publish (MonoTier::tier1, code->body);
-	dm.attach_body (MonoTier::tier1, code->body, code->jinfo);
+	dm.publish (tier, code->body);
+	dm.attach_body (tier, code->body, code->jinfo);
 
 	/*
 	 * Only now, and outside the lock: the debugger agent's handler for this
@@ -644,7 +682,7 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
  * once it is running leaves the method at the tier it is at.
  */
 bool
-MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
+MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier tier)
 {
 	llvm::Expected<MonoBackend *> backend = get ();
 
@@ -670,7 +708,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 
 	DomainState *owner = *state;
 
-	return owner->queue.enqueue (method, [self, owner, method] () {
+	return owner->queue.enqueue (method, [self, owner, method, tier] () {
 		/* The interpreter reaches a callee without the backend being asked
 		 * for it, so there may be no state for this method yet. */
 		llvm::Expected<MonoDomainMethod *> published = publish (*owner, method);
@@ -682,12 +720,60 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain)
 		}
 
 		llvm::Expected<Compiled> body =
-			self->compile_body (*owner, **published, /*allow_tier0=*/false);
+			self->compile_body (*owner, **published, /*allow_tier0=*/false, tier);
 
 		if (!body)
 			llvm::logAllUnhandledErrors (body.takeError (), llvm::errs (),
 			                             "mono: could not promote a method: ");
 	});
+}
+
+/*
+ * On the calling thread rather than the worker, which is what makes it
+ * synchronous. That is also why it is safe: a mutator compiling a method is what
+ * every ordinary compile does, and the rule the worker exists to keep - that no
+ * thread waits on a background compile - is kept by not using the worker at all.
+ */
+bool
+MonoBackend::promote_now (MonoMethod *method, MonoDomain *domain, MonoTier tier)
+{
+	llvm::Expected<MonoBackend *> backend = get ();
+
+	if (!backend) {
+		llvm::consumeError (backend.takeError ());
+		return false;
+	}
+
+	MonoBackend *self = *backend;
+
+	if (self == nullptr)
+		return false;
+
+	llvm::Expected<DomainState *> state = self->state (domain);
+
+	if (!state) {
+		llvm::consumeError (state.takeError ());
+		return false;
+	}
+
+	llvm::Expected<MonoDomainMethod *> published = publish (**state, method);
+
+	if (!published) {
+		llvm::logAllUnhandledErrors (published.takeError (), llvm::errs (),
+		                             "mono: could not publish a promoted method: ");
+		return false;
+	}
+
+	llvm::Expected<Compiled> body =
+		self->compile_body (**state, **published, /*allow_tier0=*/false, tier);
+
+	if (!body) {
+		llvm::logAllUnhandledErrors (body.takeError (), llvm::errs (),
+		                             "mono: could not promote a method: ");
+		return false;
+	}
+
+	return true;
 }
 
 llvm::Expected<MonoBackend::DomainState *>

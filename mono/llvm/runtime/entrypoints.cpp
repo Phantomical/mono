@@ -156,10 +156,17 @@ mono_llvm_jit_tier0_calls (MonoMethod *method)
 }
 
 mono_bool
-mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain)
+mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain, uint8_t tier)
 {
-	return mono::MonoBackend::request_promotion (method, domain);
+	return mono::MonoBackend::request_promotion (method, domain, (mono::MonoTier) tier);
 }
+
+mono_bool
+mono_llvm_jit_promote_now (MonoMethod *method, MonoDomain *domain, uint8_t tier)
+{
+	return mono::MonoBackend::promote_now (method, domain, (mono::MonoTier) tier);
+}
+
 
 mono_bool
 mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error)

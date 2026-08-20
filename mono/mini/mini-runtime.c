@@ -4325,6 +4325,7 @@ register_icalls (void)
 				mono_runtime_install_handlers);
 	mono_add_internal_call_internal ("Mono.Runtime::mono_runtime_cleanup_handlers",
 				mono_runtime_cleanup_handlers);
+	mono_domain_method_register_icalls ();
 
 #if defined(HOST_ANDROID) || defined(TARGET_ANDROID)
 	mono_add_internal_call_internal ("System.Diagnostics.Debugger::Mono_UnhandledException_internal",

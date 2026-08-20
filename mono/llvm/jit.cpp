@@ -17,6 +17,7 @@
 #include "passes/array-address.hpp"
 #include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
+#include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/tier-counter.hpp"
 #include "timing.hpp"
@@ -33,8 +34,13 @@
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/StackMapParser.h>
+#include <llvm/ADT/ScopeExit.h>
+#include <llvm/Analysis/ProfileSummaryInfo.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/ProfileData/InstrProf.h>
+#include <llvm/ProfileData/InstrProfWriter.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/Transforms/Instrumentation/InstrProfiling.h>
 #include <llvm/Transforms/Instrumentation/PGOInstrumentation.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
@@ -340,6 +346,10 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
 		/// Where the body's arguments and locals live in its frame.
 		std::vector<VarSlot> var_slots;
+		/// The `__llvm_prf_cnts` counter array, and how many counters fit in
+		/// it. Null when the module was not instrumented.
+		const uint64_t *counters = nullptr;
+		size_t counter_slots = 0;
 		/// The object as a debugger sees it, section addresses filled in.
 		/// Empty unless gdbjit::enabled ().
 		std::vector<char> debug_object;
@@ -444,6 +454,11 @@ public:
 				} else if (section.getName () == ".mono_lines") {
 					line_table = range.getStart ().toPtr<const uint8_t *> ();
 					line_table_size = range.getSize ();
+				} else if (section.getName () == "__llvm_prf_cnts") {
+					extents.counters =
+						range.getStart ().toPtr<const uint64_t *> ();
+					extents.counter_slots =
+						range.getSize () / sizeof (uint64_t);
 				} else if (is_linker_stub_section (section)) {
 					extents.linker_stubs.emplace_back (
 						range.getStart ().toPtr<const uint8_t *> (),
@@ -454,7 +469,10 @@ public:
 			std::map<const uint8_t *, std::string> by_address;
 
 			for (jitlink::Symbol *sym : graph.defined_symbols ()) {
-				if (!sym->hasName () || !sym->isCallable ())
+				if (!sym->hasName ())
+					continue;
+
+				if (!sym->isCallable ())
 					continue;
 
 				const uint8_t *code = sym->getAddress ().toPtr<const uint8_t *> ();
@@ -596,11 +614,7 @@ apply_options ()
 static bool
 tier2_enabled ()
 {
-	static const bool on = [] {
-		const char *value = ::getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD");
-
-		return value != nullptr && ::atoi (value) > 0;
-	}();
+	static const bool on = ::getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD") != nullptr;
 
 	return on;
 }
@@ -680,6 +694,36 @@ namespace {
 thread_local Module *g_verify_module = nullptr;
 thread_local VerifyLevel g_verify_level = VerifyLevel::off;
 
+/// The name the in-memory profile is mounted under. PGOInstrumentationUse takes
+/// a file name and a file system, so the profile has to be a file to it.
+constexpr const char *profile_file = "/mono.profdata";
+
+/// Puts counters in each body that can promote, and the entry counter that
+/// decides when it does.
+void
+add_instrumentation (ModulePassManager &mpm)
+{
+	InstrProfOptions counters;
+
+	// Value profiling needs compiler-rt, which we do not link.
+	if (cl::Option *vp = cl::getRegisteredOptions ().lookup ("disable-vp"))
+		static_cast<cl::opt<bool> *> (vp)->setValue (true);
+
+	// Threads share a body's counters, and the reader rejects edge counts that
+	// disagree with each other as a corrupt profile.
+	counters.Atomic = true;
+	counters.DoCounterPromotion = true;
+
+	mpm.addPass (ProfileSelectPass ());
+	mpm.addPass (PGOInstrumentationGen (PGOInstrumentationType::FDO));
+	mpm.addPass (ProfileGatherPass ());
+	mpm.addPass (InstrProfilingLoweringPass (counters));
+	mpm.addPass (ProfileLocalizePass ());
+
+	// Behind the instrumentation, never in front - see passes/tier-counter.hpp.
+	mpm.addPass (TierCounterPass ());
+}
+
 /// The tier-0 IR pipeline and everything it is built out of, kept per thread.
 ///
 /// None of it depends on the module it runs over, and standing it up costs a
@@ -729,26 +773,8 @@ Tier0Pipeline::Tier0Pipeline ()
 	mpm.addPass (ArrayAddressPass ());
 	mpm.addPass (LowerBuiltinsPass ());
 
-	// TierCounterPass runs behind the instrumentation, never in front - see
-	// passes/tier-counter.hpp.
-	if (tier2_enabled ()) {
-		InstrProfOptions counters;
-
-		// Value profiling is the one piece that calls into compiler-rt, which
-		// nothing here links. It feeds indirect-call promotion, and that is a
-		// guarded devirtualization this backend does not do.
-		if (cl::Option *vp = cl::getRegisteredOptions ().lookup ("disable-vp"))
-			static_cast<cl::opt<bool> *> (vp)->setValue (true);
-
-		// Threads share a body's counters, and the reader rejects edge counts
-		// that disagree with each other as a corrupt profile.
-		counters.Atomic = true;
-		counters.DoCounterPromotion = true;
-
-		mpm.addPass (PGOInstrumentationGen (PGOInstrumentationType::FDO));
-		mpm.addPass (InstrProfilingLoweringPass (counters));
-		mpm.addPass (TierCounterPass ());
-	}
+	if (tier2_enabled ())
+		add_instrumentation (mpm);
 
 	// Here, so that a check for a class an earlier check already covers costs
 	// the rest of the pipeline nothing. It runs again after the pipeline,
@@ -814,7 +840,161 @@ tier0_pipeline ()
 	return *pipeline;
 }
 
+/// Mounts a profile as a file and hands back the pass that reads it.
+///
+/// The pass holds the file system, so it stays alive as long as the pass does.
+PGOInstrumentationUse
+profile_use_pass (ArrayRef<uint8_t> profile)
+{
+	IntrusiveRefCntPtr<vfs::InMemoryFileSystem> fs (new vfs::InMemoryFileSystem ());
+
+	fs->addFile (profile_file, 0,
+	             MemoryBuffer::getMemBufferCopy (
+			     StringRef ((const char *) profile.data (), profile.size ()),
+			     profile_file));
+
+	return PGOInstrumentationUse (profile_file, "", /*IsCS=*/false, fs);
+}
+
 } // namespace
+
+/*
+ * The optimizing half of the host configuration, which is the only thing tier 2
+ * changes about codegen. It is a second TargetMachine per compile thread rather
+ * than a setting on the first, because the level is fixed when the machine is
+ * built and the subtarget tables behind it cost more than a small method's
+ * whole compile.
+ */
+TargetMachine &
+tier2_target_machine ()
+{
+	static thread_local std::unique_ptr<TargetMachine> tm = [] {
+		JITTargetMachineBuilder builder = host_target_machine_builder ();
+
+		builder.setCodeGenOptLevel (CodeGenOptLevel::Aggressive);
+		return cantFail (builder.createTargetMachine ());
+	}();
+
+	return *tm;
+}
+
+std::vector<uint8_t>
+build_profile (ArrayRef<ProfileCounters> counters)
+{
+	InstrProfWriter writer;
+
+	// What the reader checks before it looks at a single record. A profile that
+	// does not say IR-level is one it refuses whole.
+	if (Error err = writer.mergeProfileKind (InstrProfKind::IRInstrumentation)) {
+		consumeError (std::move (err));
+		return {};
+	}
+
+	for (const ProfileCounters &fn : counters) {
+		std::vector<uint64_t> counts (fn.counters, fn.counters + fn.count);
+
+		writer.addRecord (NamedInstrProfRecord (fn.name, fn.hash, std::move (counts)),
+		                  [] (Error err) { consumeError (std::move (err)); });
+	}
+
+	std::unique_ptr<MemoryBuffer> written = writer.writeBuffer ();
+
+	if (!written)
+		return {};
+
+	return std::vector<uint8_t> (written->getBufferStart (), written->getBufferEnd ());
+}
+
+void
+apply_profile (Module &m, ArrayRef<uint8_t> profile)
+{
+	LoopAnalysisManager lam;
+	FunctionAnalysisManager fam;
+	CGSCCAnalysisManager cgam;
+	ModuleAnalysisManager mam;
+	PassBuilder pb;
+
+	pb.registerModuleAnalyses (mam);
+	pb.registerCGSCCAnalyses (cgam);
+	pb.registerFunctionAnalyses (fam);
+	pb.registerLoopAnalyses (lam);
+	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	ModulePassManager mpm;
+
+	mpm.addPass (profile_use_pass (profile));
+	mpm.run (m, mam);
+
+	mam.clear ();
+	cgam.clear ();
+	fam.clear ();
+	lam.clear ();
+}
+
+void
+MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile)
+{
+	timing::Scope timed (timing::Phase::pipeline);
+	VerifyLevel verify = verify_level ();
+
+	if (verify != VerifyLevel::off)
+		verify_or_die (m, "as translated");
+
+	// Codegen reads this to pick the optimizing target machine.
+	m.addModuleFlag (Module::Error, "mono.tier2", 1);
+
+	LoopAnalysisManager lam;
+	FunctionAnalysisManager fam;
+	CGSCCAnalysisManager cgam;
+	ModuleAnalysisManager mam;
+	PassBuilder pb (&tier2_target_machine ());
+
+	pb.registerModuleAnalyses (mam);
+	pb.registerCGSCCAnalyses (cgam);
+	pb.registerFunctionAnalyses (fam);
+	pb.registerLoopAnalyses (lam);
+	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	ModulePassManager mpm;
+
+	mpm.addPass (ArrayAddressPass ());
+	mpm.addPass (LowerBuiltinsPass ());
+
+	// The set the instrumentation covered, so the reader leaves the rest alone
+	// rather than reporting a missing record for each.
+	mpm.addPass (ProfileSelectPass ());
+
+	if (!profile.empty ()) {
+		mpm.addPass (profile_use_pass (profile));
+
+		// The summary the weights are read against. Nothing downstream builds
+		// it, and without it every hot/cold question answers the same way.
+		mpm.addPass (RequireAnalysisPass<ProfileSummaryAnalysis, Module> ());
+	}
+
+	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
+
+	FunctionPassManager fpm =
+		pb.buildFunctionSimplificationPipeline (OptimizationLevel::O3,
+	                                                ThinOrFullLTOPhase::None);
+
+	fpm.addPass (ClassInitPass ());
+	fpm.addPass (TailCallElimPass ());
+	fpm.addPass (RestoreTailPositionPass ());
+	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
+
+	mpm.addPass (arch::MonoAbiPass ());
+
+	mpm.run (m, mam);
+
+	mam.clear ();
+	cgam.clear ();
+	fam.clear ();
+	lam.clear ();
+
+	if (verify != VerifyLevel::off)
+		verify_or_die (m, "after the tier-2 pipeline");
+}
 
 void
 MonoJit::run_tier0_pipeline (Module &m)
@@ -897,15 +1077,6 @@ MonoJit::create (CodeArena *arena)
 	static_cast<ObjectLinkingLayer &> (self->jit_->getObjLinkingLayer ())
 		.addPlugin (self->capture_);
 
-	// The transform layer sits under LLJIT's init-helper layer, so the pipeline
-	// runs after any platform rewriting and immediately before codegen.
-	self->jit_->getIRTransformLayer ().setTransform (
-		[] (ThreadSafeModule tsm,
-	            MaterializationResponsibility &) -> Expected<ThreadSafeModule> {
-			tsm.withModuleDo ([] (Module &m) { run_tier0_pipeline (m); });
-			return std::move (tsm);
-		});
-
 	ExecutionSession &es = self->jit_->getExecutionSession ();
 	self->helpers_ = &es.createBareJITDylib ("mono.helpers");
 
@@ -964,9 +1135,34 @@ MonoJit::register_symbol (StringRef name, void *addr)
 	return Error::success ();
 }
 
+std::optional<ProfileCounters>
+MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile)
+{
+	if (tier == JitTier::tier2) {
+		run_tier2_pipeline (m, profile);
+		return std::nullopt;
+	}
+
+	// Emptied first: the passes append, and this thread's last compile left its
+	// own sites behind.
+	profile_sites ().clear ();
+	run_tier0_pipeline (m);
+
+	// ProfileSelectPass leaves one function instrumented, the method's own
+	// body, so there is one site or none.
+	const std::vector<ProfileSite> &sites = profile_sites ();
+
+	if (sites.empty ())
+		return std::nullopt;
+
+	return ProfileCounters { sites.front ().name, sites.front ().hash, nullptr,
+		                 sites.front ().counters };
+}
+
 Expected<CompiledMethod>
 MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
-                  ArrayRef<std::pair<StringRef, void *>> module_symbols)
+                  ArrayRef<std::pair<StringRef, void *>> module_symbols,
+                  const ProfileCounters *layout)
 {
 	// An assertions-on LLVM refuses to codegen a module whose layout disagrees
 	// with the target. A fresh module has no layout at all.
@@ -1054,6 +1250,18 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
 		compiled.seq_points = std::move (points->second);
 
 	compiled.var_slots = std::move (extents->var_slots);
+
+	/*
+	 * The section holds this module's counters and nothing else, so its start
+	 * is the array optimize () described. The size check is what says so: one
+	 * function is instrumented per module, and a second one would grow the
+	 * section past the count optimize () recorded.
+	 */
+	if (layout != nullptr && extents->counters != nullptr
+	    && extents->counter_slots == layout->count) {
+		compiled.profile = *layout;
+		compiled.profile->counters = extents->counters;
+	}
 
 	if (compiled.code == nullptr)
 		return createStringError (inconvertibleErrorCode (),

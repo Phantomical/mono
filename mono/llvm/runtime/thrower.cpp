@@ -76,6 +76,8 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 	if (dumping (name.c_str ()))
 		module->print (llvm::errs (), nullptr);
 
+	MonoJit::optimize (*module, JitTier::tier1);
+
 	Expected<CompiledMethod> compiled =
 		jit.compile (ThreadSafeModule (std::move (module),
 	                                       ThreadSafeContext (std::move (context))),

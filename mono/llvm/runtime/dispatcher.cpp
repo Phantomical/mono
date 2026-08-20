@@ -109,6 +109,8 @@ build_dispatcher (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 	if (Error err = bind_symbols (*module))
 		return std::move (err);
 
+	MonoJit::optimize (*module, JitTier::tier1);
+
 	Expected<CompiledMethod> compiled = jit.compile (
 		ThreadSafeModule (std::move (module),
 		                  ThreadSafeContext (std::move (context))),

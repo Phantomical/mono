@@ -189,13 +189,16 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (dumping (entry.c_str ()))
 		module->print (llvm::errs (), nullptr);
 
+	std::optional<ProfileCounters> layout =
+		MonoJit::optimize (*module, target.tier, target.profile);
+
 	Expected<CompiledMethod> compiled = [&] {
 		timing::Scope timed (timing::Phase::orc);
 
 		return target.jit->compile (
 			ThreadSafeModule (std::move (module),
 		                      ThreadSafeContext (std::move (context))),
-			entry, module_symbols);
+			entry, module_symbols, layout ? &*layout : nullptr);
 	}();
 	if (!compiled)
 		return compiled.takeError ();
@@ -319,6 +322,8 @@ compile_interop_entry (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 
 	if (dumping (name.c_str ()))
 		module->print (llvm::errs (), nullptr);
+
+	MonoJit::optimize (*module, JitTier::tier1);
 
 	Expected<CompiledMethod> compiled =
 		jit.compile (ThreadSafeModule (std::move (module),
