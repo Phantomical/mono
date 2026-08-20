@@ -15,12 +15,14 @@
  * more `.mono_lsda` entries because the partitions differ - one record per
  * surviving copy of a body against one clause entry per invoke range - and
  * because the clause table's format is shared with a backend that recovers the
- * same facts elsewhere.
+ * same facts elsewhere. Same block-per-function shape as `.mono_unwind` below,
+ * and `code` in a record means the function the block names.
  *
- *   Header (8 bytes, little-endian):
+ *   Header (16 bytes, little-endian):
  *     u32 magic   = 0x4d475244 ('MGRD')
- *     u16 version = 1
+ *     u16 version = 2
  *     u16 count
+ *     u64 function    where the function this describes was linked
  *   Record[count] (20 bytes each, little-endian):
  *     u32 clause_index     the IL clause the body belongs to
  *     u32 body_start       body covers [code+body_start, code+body_end)
@@ -94,8 +96,8 @@
 namespace mono {
 
 constexpr uint32_t guards_section_magic = 0x4d475244; /* 'MGRD' */
-constexpr uint16_t guards_section_version = 1;
-constexpr std::size_t guards_header_size = 8;
+constexpr uint16_t guards_section_version = 2;
+constexpr std::size_t guards_header_size = 16;
 constexpr std::size_t guards_record_size = 20;
 
 constexpr uint32_t unwind_section_magic = 0x4d555744; /* 'MUWD' */

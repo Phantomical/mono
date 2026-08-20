@@ -57,20 +57,33 @@ put_u32 (std::vector<std::uint8_t> &b, std::uint32_t v)
 	b.push_back ((std::uint8_t) ((v >> 24) & 0xff));
 }
 
+void
+put_u64 (std::vector<std::uint8_t> &b, std::uint64_t v)
+{
+	put_u32 (b, (std::uint32_t) (v & 0xffffffffu));
+	put_u32 (b, (std::uint32_t) (v >> 32));
+}
+
+/// The function the golden vector and the helpers below name. Never
+/// dereferenced - the decoder only compares it.
+const void *const GOLDEN_CODE = (const void *) (std::uintptr_t) 0x40201000u;
+
 /*
- * Assemble a .mono_lsda section: header (magic, version, count) then the given
- * entries. MAGIC/VERSION/COUNT are parameters so negative cases can corrupt them
- * independently of the entry payload.
+ * Assemble one .mono_lsda block: header (magic, version, count, function) then
+ * the given entries. Every header field is a parameter so a negative case can
+ * corrupt one of them without touching the entry payload.
  */
 std::vector<std::uint8_t>
 make_lsda (std::uint32_t magic, std::uint16_t version, std::uint16_t count,
-           const std::vector<MonoLsdaEntry> &entries)
+           const std::vector<MonoLsdaEntry> &entries,
+           const void *function = GOLDEN_CODE)
 {
 	std::vector<std::uint8_t> b;
 
 	put_u32 (b, magic);
 	put_u16 (b, version);
 	put_u16 (b, count);
+	put_u64 (b, (std::uint64_t) (std::uintptr_t) function);
 	for (const MonoLsdaEntry &e : entries) {
 		put_u32 (b, e.try_start_off);
 		put_u32 (b, e.try_len);
@@ -82,15 +95,17 @@ make_lsda (std::uint32_t magic, std::uint16_t version, std::uint16_t count,
 }
 
 /*
- * The exact bytes a writer emits for the v2 format (self-describing kind
+ * The exact bytes a writer emits for the v3 format (self-describing kind
  * column), for a two-catch geometry with a trailing per-entry kind == 0:
- *   44534c4d 02000200   magic 'MLSD', version 2, count 2
+ *   44534c4d 03000200   magic 'MLSD', version 3, count 2
+ *   00102040 00000000   function 0x40201000
  *   01000000 05000000 11000000 07000000 00000000  {try=1, len=5, h=0x11, clause=7, kind=0}
  *   06000000 05000000 0f000000 03000000 00000000  {try=6, len=5, h=0x0f, clause=3, kind=0}
- * 48 bytes = 8 + 2*20. Decoded by hand from the format above.
+ * 56 bytes = 16 + 2*20. Decoded by hand from the format above.
  */
 const std::uint8_t GOLDEN_MLSD [] = {
-	0x44, 0x53, 0x4c, 0x4d, 0x02, 0x00, 0x02, 0x00,
+	0x44, 0x53, 0x4c, 0x4d, 0x03, 0x00, 0x02, 0x00,
+	0x00, 0x10, 0x20, 0x40, 0x00, 0x00, 0x00, 0x00,
 	0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
 	0x11, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00,
@@ -170,9 +185,11 @@ protected:
 #endif
 	}
 
-	/// Decode LEN bytes of DATA with the final byte flush against the guard page.
+	/// Decode LEN bytes of DATA with the final byte flush against the guard page,
+	/// asking for the block that names CODE.
 	bool
-	parse (const std::uint8_t *data, std::size_t len, std::vector<MonoLsdaEntry> &out)
+	parse (const std::uint8_t *data, std::size_t len, std::vector<MonoLsdaEntry> &out,
+	       const void *code = GOLDEN_CODE)
 	{
 #ifdef MONO_LSDA_HAVE_GUARD_PAGE
 		std::uint8_t *buf = region + page - len; /* last byte at page-1 */
@@ -180,11 +197,12 @@ protected:
 		EXPECT_LE (len, page);
 		if (len)
 			memcpy (buf, data, len);
-		return mono::parse_mono_lsda (buf, len, out);
+		return mono::parse_mono_lsda (buf, len, code, out);
 #else
 		(void) data;
 		(void) len;
 		(void) out;
+		(void) code;
 		return false;
 #endif
 	}
@@ -192,11 +210,12 @@ protected:
 	/// Decode DATA and require that it is accepted as exactly WANT.
 	void
 	expect_parse (const std::uint8_t *data, std::size_t len,
-	              const std::vector<MonoLsdaEntry> &want)
+	              const std::vector<MonoLsdaEntry> &want,
+	              const void *code = GOLDEN_CODE)
 	{
 		std::vector<MonoLsdaEntry> out;
 
-		ASSERT_TRUE (parse (data, len, out)) << "declined a valid section";
+		ASSERT_TRUE (parse (data, len, out, code)) << "declined a valid section";
 		ASSERT_EQ (out.size (), want.size ());
 		for (std::size_t i = 0; i < want.size (); ++i) {
 			SCOPED_TRACE (::testing::Message () << "entry " << i);
@@ -210,11 +229,13 @@ protected:
 
 	/// Decode DATA and require that it is declined.
 	void
-	expect_decline (const std::uint8_t *data, std::size_t len)
+	expect_decline (const std::uint8_t *data, std::size_t len,
+	                const void *code = GOLDEN_CODE)
 	{
 		std::vector<MonoLsdaEntry> out;
 
-		EXPECT_FALSE (parse (data, len, out)) << "accepted a section that should decline";
+		EXPECT_FALSE (parse (data, len, out, code))
+			<< "accepted a section that should decline";
 	}
 
 private:
@@ -231,33 +252,33 @@ TEST_F (MonoLsdaParse, GoldenTwoEntry)
 	              { { 1, 5, 0x11, 7, 0 }, { 6, 5, 0x0f, 3, 0 } });
 }
 
-/* A header-only section (count 0) is well-formed and decodes to nothing. */
+/* A header-only block (count 0) is well-formed and decodes to nothing. */
 TEST_F (MonoLsdaParse, CountZeroHeaderOnly)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 2, 0, {});
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 0, {});
 
 	expect_parse (b.data (), b.size (), {});
 }
 
-/* One-entry section: exactly 8 + 20 bytes. Non-zero kind round-trips verbatim. */
+/* One-entry block: exactly 16 + 20 bytes. Non-zero kind round-trips verbatim. */
 TEST_F (MonoLsdaParse, OneEntry)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 2, 1, { { 0x20, 0x08, 0x30, 0, 2 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 0x20, 0x08, 0x30, 0, 2 } });
 
 	expect_parse (b.data (), b.size (), { { 0x20, 0x08, 0x30, 0, 2 } });
 }
 
 TEST_F (MonoLsdaParse, BadMagicDeclines)
 {
-	std::vector<std::uint8_t> b = make_lsda (0xdeadbeefu, 2, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (0xdeadbeefu, 3, 1, { { 1, 5, 0x11, 7, 0 } });
 
 	expect_decline (b.data (), b.size ());
 }
 
 /*
- * A v1 buffer declines against this v2-only loader. It is a genuine 16-byte-stride
+ * A v1 buffer declines against this v3-only loader. It is a genuine 16-byte-stride
  * v1 record (magic ok, version 1, one 16-byte entry): the loader recognises only
- * version 2, so the older format is refused rather than misread at the wrong
+ * version 3, so the older format is refused rather than misread at the wrong
  * stride.
  */
 TEST_F (MonoLsdaParse, Version1Declines)
@@ -271,18 +292,18 @@ TEST_F (MonoLsdaParse, Version1Declines)
 	expect_decline (b.data (), b.size ());
 }
 
-/* Any other unrecognised version declines too. */
-TEST_F (MonoLsdaParse, Version3Declines)
+/* The version before this one declines too - its header carries no function. */
+TEST_F (MonoLsdaParse, Version2Declines)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 2, 1, { { 1, 5, 0x11, 7, 0 } });
 
 	expect_decline (b.data (), b.size ());
 }
 
-/* Truncated header: 7 bytes, the count field cut short. */
+/* Truncated header: the function field cut short. */
 TEST_F (MonoLsdaParse, TruncatedHeaderDeclines)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 2, 0, {});
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 0, {});
 
 	b.pop_back ();
 	expect_decline (b.data (), b.size ());
@@ -290,38 +311,59 @@ TEST_F (MonoLsdaParse, TruncatedHeaderDeclines)
 
 /*
  * Truncated entry: the header says 2 entries but only one entry's worth of
- * payload is present, so the exact-size check (28 != 8 + 2*20) declines.
+ * payload is present, so the block runs past the section and declines.
  */
 TEST_F (MonoLsdaParse, TruncatedEntryDeclines)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 2, 2, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 2, { { 1, 5, 0x11, 7, 0 } });
 
 	expect_decline (b.data (), b.size ());
 }
 
 /*
- * THE EXACT-SIZE / TWO-RECORD DECLINE.
- * Two full method records concatenated: the first header declares count 1
- * (expected size 28) but the buffer is 56 bytes. A longer-than-exact section means
- * the one-method-per-module invariant broke; reading only the first record would
- * misattribute clause geometry, so parse declines.
+ * THE ATTRIBUTION CASE. Two blocks, one per function, which is what an object
+ * holding a batch of methods carries. Each has to decode to its own geometry -
+ * taking the first block for both is the misattribution this key exists to stop.
  */
-TEST_F (MonoLsdaParse, TwoRecordOversizeDeclines)
+TEST_F (MonoLsdaParse, TwoBlocksDecodeSeparately)
 {
-	std::vector<std::uint8_t> rec = make_lsda (MLSD_MAGIC, 2, 1, { { 1, 5, 0x11, 7, 0 } });
-	std::vector<std::uint8_t> two = rec;
+	const void *other = (const void *) (std::uintptr_t) 0x40209000u;
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> second =
+		make_lsda (MLSD_MAGIC, 3, 2, { { 2, 6, 0x12, 8, 0 }, { 9, 3, 0x20, 1, 2 } }, other);
 
-	two.insert (two.end (), rec.begin (), rec.end ());
-	expect_decline (two.data (), two.size ());
+	b.insert (b.end (), second.begin (), second.end ());
+
+	expect_parse (b.data (), b.size (), { { 1, 5, 0x11, 7, 0 } });
+	expect_parse (b.data (), b.size (), { { 2, 6, 0x12, 8, 0 }, { 9, 3, 0x20, 1, 2 } },
+	              other);
+}
+
+/* A section that names only other functions declines rather than answering. */
+TEST_F (MonoLsdaParse, UnknownFunctionDeclines)
+{
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+
+	expect_decline (b.data (), b.size (), (const void *) (std::uintptr_t) 0x40209000u);
 }
 
 /*
- * Trailing-byte oversize: exactly one valid record plus a single junk byte.
- * 29 != 28 -> decline (a section MUST be exactly its declared extent).
+ * Trailing junk after the wanted block: one valid record plus a byte that is not
+ * a header. The block asked for decoded, so the rest is never read.
  */
-TEST_F (MonoLsdaParse, OneTrailingByteOversizeDeclines)
+TEST_F (MonoLsdaParse, TrailingByteAfterTheWantedBlockIsIgnored)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 2, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+
+	b.push_back (0xaa);
+	expect_parse (b.data (), b.size (), { { 1, 5, 0x11, 7, 0 } });
+}
+
+/* Junk where the next block's header should be declines. */
+TEST_F (MonoLsdaParse, TrailingJunkBeforeTheWantedBlockDeclines)
+{
+	const void *other = (const void *) (std::uintptr_t) 0x40209000u;
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } }, other);
 
 	b.push_back (0xaa);
 	expect_decline (b.data (), b.size ());
@@ -333,7 +375,7 @@ TEST_F (MonoLsdaParse, NullAndEmptyDecline)
 	std::vector<MonoLsdaEntry> out;
 	const std::uint8_t nothing [1] = { 0 };
 
-	EXPECT_FALSE (mono::parse_mono_lsda (nullptr, 0, out)) << "accepted null";
+	EXPECT_FALSE (mono::parse_mono_lsda (nullptr, 0, GOLDEN_CODE, out)) << "accepted null";
 	expect_decline (nothing, 0);
 }
 

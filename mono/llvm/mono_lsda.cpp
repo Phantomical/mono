@@ -6,10 +6,11 @@
  * The section is little-endian, versioned and target-neutral. Every offset in
  * it is relative to the start of the method's code.
  *
- *   Header (8 bytes):
+ *   Header (16 bytes):
  *     u32 magic   = 0x4d4c5344 ('MLSD')
- *     u16 version = 2
+ *     u16 version = 3
  *     u16 count            number of entries
+ *     u64 function         where the function this describes was linked
  *   Entry[count] (20 bytes each):
  *     u32 try_start_off    one invoke range, [code+try_start_off, +try_len)
  *     u32 try_len
@@ -21,6 +22,10 @@
  *
  * One protected region contributes one entry per clause in its chain. A marker
  * entry describes something other than a protected region.
+ *
+ * The section holds one such block for each clause-bearing function in the
+ * object, concatenated, and the function address is what says which block is
+ * whose. A batched compile puts several methods in one object.
  *
  * Nothing here depends on LLVM, and native_code is only ever used for address
  * arithmetic. That is what lets the unit tests drive this against a made-up
@@ -42,8 +47,8 @@ namespace mono {
 namespace {
 
 constexpr std::uint32_t MONO_LSDA_MAGIC = 0x4d4c5344u; /* 'MLSD' */
-constexpr std::uint16_t MONO_LSDA_VERSION = 2;
-constexpr std::size_t   MONO_LSDA_HEADER_SIZE = 8;
+constexpr std::uint16_t MONO_LSDA_VERSION = 3;
+constexpr std::size_t   MONO_LSDA_HEADER_SIZE = 16;
 constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 20;
 
 // A bounds-checked little-endian cursor over [start, end). A failed read
@@ -94,6 +99,20 @@ public:
 		return v;
 	}
 
+	std::uint64_t u64 ()
+	{
+		std::uint64_t low = u32 ();
+
+		return low | (static_cast<std::uint64_t> (u32 ()) << 32);
+	}
+
+	/// Step over n bytes. Fails the reader when there are fewer left.
+	void skip (std::size_t n)
+	{
+		if (has (n))
+			p_ += n;
+	}
+
 private:
 	const std::uint8_t *p_;
 	const std::uint8_t *end_;
@@ -111,7 +130,7 @@ ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
 } // anonymous namespace
 
 bool
-parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
+parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
                  std::vector<MonoLsdaEntry> &out)
 {
 	out.clear ();
@@ -121,37 +140,46 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
 
 	Reader r (sec, sec + size);
 
-	// --- header ---
-	std::uint32_t magic = r.u32 ();
-	std::uint16_t version = r.u16 ();
-	std::uint16_t count = r.u16 ();
-	if (!r.ok ())
-		return false; // truncated header
-	if (magic != MONO_LSDA_MAGIC)
-		return false;
-	if (version != MONO_LSDA_VERSION)
-		return false; // decline rather than misread an unknown version
+	for (;;) {
+		// --- header ---
+		std::uint32_t magic = r.u32 ();
+		std::uint16_t version = r.u16 ();
+		std::uint16_t count = r.u16 ();
+		std::uint64_t function = r.u64 ();
 
-	// The section must be exactly one header plus its declared entries, not
-	// merely long enough. It names no function, so a wrong length is the only
-	// sign that these bytes are not this method's record. count is a u16, so
-	// count * 20 cannot overflow.
-	if (size != MONO_LSDA_HEADER_SIZE +
-	            static_cast<std::size_t> (count) * MONO_LSDA_ENTRY_SIZE)
-		return false;
-
-	// --- entries ---
-	out.reserve (count);
-	for (unsigned i = 0; i < count; ++i) {
-		MonoLsdaEntry e;
-		e.try_start_off = r.u32 ();
-		e.try_len = r.u32 ();
-		e.handler_off = r.u32 ();
-		e.clause_index = r.u32 ();
-		e.kind = r.u32 ();
 		if (!r.ok ())
-			return false; // unreachable once the size check above passed
-		out.push_back (e);
+			return false; // truncated header
+		if (magic != MONO_LSDA_MAGIC)
+			return false;
+		if (version != MONO_LSDA_VERSION)
+			return false; // decline rather than misread an unknown version
+
+		// count is a u16, so count * 20 cannot overflow.
+		std::size_t entries = static_cast<std::size_t> (count) * MONO_LSDA_ENTRY_SIZE;
+
+		if (function != (std::uint64_t) (std::uintptr_t) code) {
+			r.skip (entries);
+			if (!r.ok ())
+				return false; // a block that runs past the section
+			if (r.remaining () == 0)
+				return false; // no block describes this function
+			continue;
+		}
+
+		// --- entries ---
+		out.reserve (count);
+		for (unsigned i = 0; i < count; ++i) {
+			MonoLsdaEntry e;
+			e.try_start_off = r.u32 ();
+			e.try_len = r.u32 ();
+			e.handler_off = r.u32 ();
+			e.clause_index = r.u32 ();
+			e.kind = r.u32 ();
+			if (!r.ok ())
+				return false; // the block runs past the section
+			out.push_back (e);
+		}
+		break;
 	}
 
 	return true;

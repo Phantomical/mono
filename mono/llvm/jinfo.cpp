@@ -50,29 +50,48 @@ namespace {
 /// slot a stack walk could not reach.
 ///
 /// A null section is not a failure: a method with no finally, or one whose bodies
-/// all optimized away, has nothing for a thread to be stopped inside.
+/// all optimized away, has nothing for a thread to be stopped inside. Neither is
+/// a section that holds only other functions' blocks.
 Expected<std::vector<MonoFinallyGuard>>
-parse_guards (const uint8_t *section, size_t size, uint32_t code_size)
+parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
+              uint32_t code_size)
 {
 	std::vector<MonoFinallyGuard> guards;
 
 	if (section == nullptr || size == 0)
 		return guards;
 
-	if (size < guards_header_size || read_le<uint32_t> (section) != guards_section_magic
-	    || read_le<uint16_t> (section + 4) != guards_section_version)
-		return createStringError (inconvertibleErrorCode (),
-		                          "the compiled object's finally-guard table is "
-		                          "not one of ours");
+	const uint8_t *end = section + size;
+	const uint8_t *block = section;
+	uint32_t count = 0;
 
-	uint32_t count = read_le<uint16_t> (section + 6);
+	for (;;) {
+		if ((size_t) (end - block) < guards_header_size
+		    || read_le<uint32_t> (block) != guards_section_magic
+		    || read_le<uint16_t> (block + 4) != guards_section_version)
+			return createStringError (inconvertibleErrorCode (),
+			                          "the compiled object's finally-guard table "
+			                          "is not one of ours");
 
-	if (size != guards_header_size + (size_t) count * guards_record_size)
-		return createStringError (inconvertibleErrorCode (),
-		                          "the finally-guard table's length does not match "
-		                          "its %u records", count);
+		count = read_le<uint16_t> (block + 6);
 
-	const uint8_t *p = section + guards_header_size;
+		const uint8_t *records = block + guards_header_size;
+		size_t bytes = (size_t) count * guards_record_size;
+
+		if ((size_t) (end - records) < bytes)
+			return createStringError (inconvertibleErrorCode (),
+			                          "the finally-guard table's length does not "
+			                          "match its %u records", count);
+
+		if ((const uint8_t *) (uintptr_t) read_le<uint64_t> (block + 8) == code)
+			break;
+
+		block = records + bytes;
+		if (block == end)
+			return guards;
+	}
+
+	const uint8_t *p = block + guards_header_size;
 
 	for (uint32_t i = 0; i < count; ++i, p += guards_record_size) {
 		MonoFinallyGuard g;
@@ -509,7 +528,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 		std::vector<MonoLsdaEntry> entries;
 
 		if (!parse_mono_lsda (compiled.clause_table, compiled.clause_table_size,
-		                      entries)) {
+		                      compiled.code, entries)) {
 			g_free (encoded);
 			return createStringError (inconvertibleErrorCode (),
 			                          "the compiled object carries no usable "
@@ -517,7 +536,8 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 		}
 
 		Expected<std::vector<MonoFinallyGuard>> guards = parse_guards (
-			compiled.guard_table, compiled.guard_table_size, code_size);
+			compiled.guard_table, compiled.guard_table_size, compiled.code,
+			code_size);
 
 		if (!guards) {
 			g_free (encoded);

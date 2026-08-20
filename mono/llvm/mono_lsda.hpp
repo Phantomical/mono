@@ -59,15 +59,17 @@ struct MonoFinallyGuard {
 };
 
 /**
- * Decodes a `.mono_lsda` section body into header-checked entries.
+ * Decodes the `.mono_lsda` block that describes the function linked at \p code.
  *
- * \param sec   the section body.
+ * \param sec   the section body, which holds one block per clause-bearing
+ *              function in the object.
  * \param size  length of \p sec in bytes.
- * \param out   one entry per section row. Cleared first.
+ * \param code  where the function was linked, the key a block carries.
+ * \param out   one entry per row of that block. Cleared first.
  *
- * \returns whether the section parsed.
+ * \returns whether a block for \p code parsed.
  */
-bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size,
+bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
                       std::vector<MonoLsdaEntry> &out);
 
 /**

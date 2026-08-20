@@ -373,21 +373,19 @@ public:
 
 private:
 	/*
-	 * `.mono_lsda`, in the tiered backend's v2 format (mono_lsda.hpp), whose
-	 * reader parses it back at load. The section carries no function identity -
-	 * records are attributed to the one method the module holds - so a second
-	 * clause-bearing function would silently misattribute geometry; abort
-	 * instead.
+	 * `.mono_lsda`, in the tiered backend's v3 format (mono_lsda.hpp), whose
+	 * reader parses it back at load. One block per clause-bearing function,
+	 * each naming where that function was linked, so an object holding a batch
+	 * of methods keeps each method's geometry apart.
 	 */
 	void emit_clause_table ()
 	{
 		MCStreamer &streamer = *streamer_;
 		MCContext &ctx = streamer.getContext ();
-		unsigned records = 0;
 
 		for (const MonoEHFunctionClauses &fn : sc_->functions) {
 			/*
-			 * Declined by the gather. The reader treats an absent section as
+			 * Declined by the gather. The reader treats an absent block as
 			 * a refusal, never a publishable empty table.
 			 */
 			if (fn.declined)
@@ -395,15 +393,10 @@ private:
 
 			/*
 			 * A filter body compiled alongside its method carries no clauses
-			 * of its own; the section describes the method alone.
+			 * of its own; a block describes a method.
 			 */
 			if (fn.function.find ("$filter") != std::string::npos)
 				continue;
-
-			if (++records > 1)
-				report_fatal_error ("mono: multiple EH functions in one "
-				                    "JIT module - .mono_lsda attribution "
-				                    "is ambiguous");
 
 			MCSymbol *begin = ctx.getOrCreateSymbol (fn.function);
 
@@ -417,8 +410,9 @@ private:
 			};
 
 			streamer.emitIntValue (0x4d4c5344u, 4); /* 'MLSD' */
-			streamer.emitIntValue (2, 2);
+			streamer.emitIntValue (3, 2);
 			streamer.emitIntValue (fn.clauses.size (), 2);
+			streamer.emitValue (MCSymbolRefExpr::create (begin, ctx), 8);
 
 			for (const MonoEHClause &c : fn.clauses) {
 				streamer.emitValue (from_begin (c.try_begin), 4);
@@ -474,6 +468,7 @@ private:
 			streamer.emitIntValue (guards_section_magic, 4);
 			streamer.emitIntValue (guards_section_version, 2);
 			streamer.emitIntValue (bodies.size (), 2);
+			streamer.emitValue (MCSymbolRefExpr::create (begin, ctx), 8);
 
 			for (const MonoEHFinallyBody *body : bodies) {
 				streamer.emitIntValue ((uint32_t) body->clause_index, 4);
