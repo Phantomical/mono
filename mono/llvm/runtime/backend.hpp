@@ -145,7 +145,13 @@ private:
 	/// Where \p dm's body has ended up, compiling the method if it has not been
 	/// compiled yet. This is what the stub in front of it is redirected to on
 	/// the first call through it.
-	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm);
+	///
+	/// With allow_tier0 false the answer is a compiled body: the interpreter is
+	/// not offered the method, and an interpreter entry the method already has
+	/// is compiled over. A caller that cannot set the register the interpreter's
+	/// entry reads its method out of must pass false.
+	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm,
+	                                    bool allow_tier0 = true);
 
 	/// Give METHOD a body at TIER and point its stub at it, whether or not it
 	/// already has one.

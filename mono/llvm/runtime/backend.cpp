@@ -510,7 +510,18 @@ MonoBackend::body_for_current_domain (MonoMethod *method)
 		                                  + llvm::toString (published.takeError ()),
 		                          false);
 
-	llvm::Expected<void *> body = instance->entry_point (**domain, **published);
+	/*
+	 * The interpreter's entry reads its MonoMethod * out of the register the
+	 * method's own thunk writes. A dispatcher does not go through that thunk: it
+	 * gets here through a C call, which destroys the register, and it leaves
+	 * with a musttail jump. LLVM holds a value in %r10 across both, because the
+	 * nest attribute pins one there, but it has nothing that pins %r11 - the
+	 * register allocator takes %r11 for stack-argument copies and for the tail
+	 * jump itself. So a method a dispatcher answers for is compiled, whatever
+	 * tier it runs at elsewhere.
+	 */
+	llvm::Expected<void *> body =
+		instance->entry_point (**domain, **published, /*allow_tier0=*/false);
 
 	if (!body)
 		llvm::report_fatal_error (llvm::Twine ("a dispatched method failed to compile: ")
@@ -521,13 +532,15 @@ MonoBackend::body_for_current_domain (MonoMethod *method)
 }
 
 llvm::Expected<void *>
-MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm)
+MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm, bool allow_tier0)
 {
-	if (std::optional<MonoMethodBody> ready = dm.body (); ready && !recompiling (dm.method))
+	std::optional<MonoMethodBody> ready = dm.body ();
+
+	if (ready && !recompiling (dm.method)
+	    && (allow_tier0 || ready->code != arch::interp_entry_thunk ()))
 		return ready->code;
 
-	llvm::Expected<Compiled> code =
-		compile_body (domain, dm, /*allow_tier0=*/true, MonoTier::tier1);
+	llvm::Expected<Compiled> code = compile_body (domain, dm, allow_tier0, MonoTier::tier1);
 
 	if (!code)
 		return code.takeError ();
