@@ -238,6 +238,10 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
 
 set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
+# Tier 2 compiles the same IL the tier-1 arm does, so it starts from that arm's
+# list and adds whatever the optimizing pipeline answers differently.
+set(MONO_INTERP_TESTS_TIER2_XFAIL ${MONO_INTERP_TESTS_JIT_XFAIL})
+
 # Tests that end the process instead of answering. One process per test survives
 # that and reports the failure; a merged run loses every test behind it, so a
 # merged run skips these and says so.
@@ -276,6 +280,19 @@ foreach(_assembly IN LISTS _assemblies)
     XFAIL ${MONO_INTERP_TESTS_MIXED_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
                 "MONO_LLVM_JIT_TIER1_THRESHOLD=2")
+
+  # The tier1 arm above, compiled again at tier 2 on its first call. Tier 1 runs
+  # on the calling thread here and the tier-2 promotion runs on the compile
+  # worker, so this arm is what separates the two compile paths.
+  mono_add_test_methods(
+    ASSEMBLY "${_assembly}"
+    NAME_PREFIX "tier2/"
+    PROPERTIES LABELS interp-tier2
+    XFAIL ${MONO_INTERP_TESTS_TIER2_XFAIL}
+    UNMERGEABLE ${MONO_INTERP_TESTS_JIT_UNMERGEABLE}
+    ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
+                "MONO_LLVM_JIT_TIER0=0"
+                "MONO_LLVM_JIT_TIER2_THRESHOLD=1")
 endforeach()
 
 foreach(_assembly IN LISTS _assemblies)

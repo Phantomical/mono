@@ -173,6 +173,9 @@ endif()
 #                Either one disagreeing with check-interp is a tier seam
 #                divergence. The mixed arm is nine minutes and is red on a
 #                backend defect it exists to report.
+#   check-interp-tier2 the same programs again through the optimizing pipeline.
+#                A disagreement with check-interp-jit is what tier 2 did to that
+#                test.
 #
 # The heavy labels (runtime, gshared, sgen, interp, slow, stress, acceptance)
 # are opt-in:
@@ -220,6 +223,17 @@ if(BUILD_TESTING)
   add_custom_target(check-interp-jit
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
             -L interp-jit
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    USES_TERMINAL
+    VERBATIM)
+
+  # The same programs again at tier 2, which is the optimizing pipeline against
+  # the counts the tier-1 body gathered. A test that answers differently here
+  # than under `check-interp-jit` is what tier 2 did to it. Every promotion here
+  # goes through the compile worker, so this arm is also what covers that path.
+  add_custom_target(check-interp-tier2
+    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
+            -L interp-tier2
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
