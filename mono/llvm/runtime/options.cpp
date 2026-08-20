@@ -186,6 +186,48 @@ tier2_threshold ()
 	return calls;
 }
 
+uint32_t
+trivial_inline_il_limit ()
+{
+	static uint32_t bytes = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_IL_LIMIT");
+
+		/*
+		 * Thirty-two bytes covers the shapes with room to spare - a forwarder
+		 * with eight arguments is 22, a field chain four deep is 22, a throw
+		 * helper with three is around 18 - so the limit is a backstop on IL
+		 * the shape test read as one of them rather than a policy of its own.
+		 */
+		if (value == nullptr)
+			return 32;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 0;
+	}();
+
+	return bytes;
+}
+
+uint32_t
+trivial_inline_budget ()
+{
+	static uint32_t bodies = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_BUDGET");
+
+		// A translation each, against a compile that already costs LLVM's own
+		// per-method floor several times over.
+		if (value == nullptr)
+			return 16;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 0;
+	}();
+
+	return bodies;
+}
+
 int32_t
 tier0_calls (MonoMethod *method)
 {

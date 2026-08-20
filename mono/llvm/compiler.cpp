@@ -224,10 +224,19 @@ public:
 		if (mi->isMetaInstruction ())
 			return;
 
-		const DebugLoc &loc = mi->getDebugLoc ();
+		const DILocation *loc = mi->getDebugLoc ();
 
-		if (loc)
-			record (loc.getLine ());
+		if (loc == nullptr)
+			return;
+
+		// One code offset maps to one IL offset, and the method it is an offset
+		// into is the one the frame belongs to. An instruction that came in with
+		// an inlined callee carries that callee's offset, so walk out to the
+		// call site this function does have an offset for.
+		while (const DILocation *outer = loc->getInlinedAt ())
+			loc = outer;
+
+		record (loc->getLine ());
 	}
 
 	void endFunction (const MachineFunction *) override {}

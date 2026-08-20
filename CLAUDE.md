@@ -376,6 +376,16 @@ Backend debugging env vars:
   else is a substring of the printed name, which is how to get a compiled caller and an
   interpreted callee into one process — no threshold produces that, since a callee is
   called at least as often as its caller.
+- `MONO_LLVM_JIT_INLINE_IL_LIMIT=<n>` (`runtime/options.cpp`) — the largest callee, in
+  IL bytes, a tier-2 compile folds into its caller, default 32. Zero turns the
+  pre-pass off and compiles the method with every call standing, which is what tells
+  a bug in a folded body from a bug in the method that folded it. The limit is a
+  backstop rather than a policy: the shape test in front of it already refuses
+  everything but a straight line ending in one call.
+- `MONO_LLVM_JIT_INLINE_BUDGET=<n>` (`runtime/options.cpp`) — how many bodies one
+  tier-2 compile may fold in, default 16. It bounds the translation the pre-pass
+  adds, and a chain of forwarders is what spends it. `MONO_LLVM_JIT_TRACE=1` prints
+  a line for each fold, which is the only place a fold is visible from outside.
 - `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to a debugger
   through gdb's JIT interface, so `info functions` names JIT'd methods and a `bt`
   taken from runtime C code unwinds managed frames with names instead of `??`. What
@@ -551,15 +561,36 @@ there is no OSR to move it.
 legacy-ABI lowering after — and codegen then runs at `CodeGenOptLevel::None`, which selects FastISel. The
 module and CGSCC layers are skipped deliberately: a module holds a single method and
 every call leaves it by symbol, so there is no callee body to inline and nothing to
-specialize, and running them anyway cost a large fraction of compile time. So the JIT
-does not inline across methods, and beyond taking a site the IL already settled —
-non-virtual, `final`, or resolved by `constrained.` — it does not devirtualize either.
+specialize, and running them anyway cost a large fraction of compile time. Beyond
+taking a site the IL already settled — non-virtual, `final`, or resolved by
+`constrained.` — the JIT does not devirtualize.
 
 `run_tier2_pipeline ()` is the other one, and it is on by default: every tier-1 body
 carries profiling instrumentation, and a body entered 5000 times is compiled again
 against the counts it gathered, at O3 with an optimizing selector.
 `MONO_LLVM_JIT_TIER2=0` turns the whole thing off, instrumentation included, which is
 what tells a tier-2 defect from a tier-1 one.
+
+**Tier 2 also inlines, and only where the IL settles it.** `AlwaysInlinerPass` sits in
+front of that simplification. What it finds are bodies `materialize_trivial_callees ()`
+(`runtime/trivial-inlines.cpp`) translated in beside the method, right after the
+method itself and before naming and resolution, each marked always-inline and given
+local linkage. A candidate is a straight line of value opcodes, then at most one
+call, then `ret` or `throw` — a constant, a chain of field accesses, a forward to
+one other method, a throw, an object made and returned — inside
+`MONO_LLVM_JIT_INLINE_IL_LIMIT` bytes of IL and past gates that are about
+correctness rather than cost: no wrapper, no dynamic method, no clauses, no
+`NoInlining` on the callee or on what it forwards to, no shared body, no call
+instrumentation, and nothing at all while `gen-seq-points` is on. A body the
+inliner leaves standing fails the compile rather than being published, because it
+would be entered by a direct call with no jit info of its own; at tier 2 that
+failure leaves the method on the tier it already runs at. A folded frame is gone
+from a stack trace, and its code answers with the IL offset of the call site.
+
+There is no cost model. Weighing a callee that is not one of these shapes is the
+next piece of work, and `.claude/plans/tier2-inlining.md` is the design for it —
+along with what an inlined callee's own EH clauses need, and what a detour or an
+override has to do to a body that folded the method in.
 
 What that costs is worth knowing before optimizing anything here: **87% of a compile is
 LLVM and 5.5% is the CIL→IR front end**, and 70% of the total is a per-method floor that

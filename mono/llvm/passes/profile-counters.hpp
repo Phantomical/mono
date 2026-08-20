@@ -60,8 +60,13 @@ uint64_t profile_name_key (llvm::StringRef name);
 
 /// Marks every function that will not promote as one to leave uninstrumented.
 ///
-/// Must also run in front of the reader, which skips the same functions and
-/// would otherwise warn about each one it has no record for.
+/// The mark is `NoProfile`, which `PGOInstrumentationGen` obeys and
+/// `PGOInstrumentationUse` does not - `skipPGOUse ()` tests only for a
+/// declaration and for too many critical edges. So a function this pass marked
+/// still reaches the reader, which finds no record for it, counts it in
+/// `NumOfPGOMissing` and leaves it without weights. That is silent because
+/// `-pgo-warn-missing-function` is off by default, and it is the right answer
+/// for such a function either way.
 class ProfileSelectPass : public llvm::PassInfoMixin<ProfileSelectPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);

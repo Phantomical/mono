@@ -42,6 +42,7 @@
 #include <llvm/ProfileData/InstrProfWriter.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/VirtualFileSystem.h>
+#include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/Instrumentation/InstrProfiling.h>
 #include <llvm/Transforms/Instrumentation/PGOInstrumentation.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
@@ -1164,6 +1165,12 @@ MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile)
 	}
 
 	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
+
+	// The front end translated a few callees in beside the body and marked each
+	// one always-inline. This folds them in, and simplification below then sees
+	// one body: the arguments are constants where the caller had them, and the
+	// class-init check on a folded entry is dominated by the caller's.
+	mpm.addPass (AlwaysInlinerPass ());
 
 	FunctionPassManager fpm =
 		pb.buildFunctionSimplificationPipeline (OptimizationLevel::O3,

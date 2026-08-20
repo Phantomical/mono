@@ -73,6 +73,21 @@ bool tier2_enabled ();
 /// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is five thousand.
 uint32_t tier2_threshold ();
 
+/// The largest callee, in IL bytes, tier 2 folds into its caller before any
+/// cost model has looked at it.
+///
+/// Thirty-two, which holds every shape the pre-pass recognizes and rejects
+/// nothing it would have taken. MONO_LLVM_JIT_INLINE_IL_LIMIT moves it, and
+/// zero there turns the pre-pass off - which is what separates a bug in a
+/// folded body from one in the method that folded it.
+uint32_t trivial_inline_il_limit ();
+
+/// How many bodies one tier-2 compile may fold in.
+///
+/// MONO_LLVM_JIT_INLINE_BUDGET moves it. It bounds the translation the pre-pass
+/// adds to a compile; a chain of forwarders is what spends it.
+uint32_t trivial_inline_budget ();
+
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.
 ///
 /// Zero for a method that does not run at tier 0 at all, which is also how a

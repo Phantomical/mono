@@ -11,6 +11,7 @@
 #include "naming.hpp"
 #include "options.hpp"
 #include "timing.hpp"
+#include "trivial-inlines.hpp"
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/LLVMContext.h>
@@ -162,14 +163,22 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	std::vector<ExternalSymbol> externals;
 	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
 	SeqPointGraph seq_points;
+	ModuleTypes types;
 	Expected<Function *> function = [&] {
 		timing::Scope timed (timing::Phase::translate);
 
 		return method_to_llvm (module.get (), cfg->get (), method, &externals,
-		                       &bp_switch, &seq_points);
+		                       &bp_switch, &seq_points, {}, &types);
 	}();
 	if (!function)
 		return target.recover (function.takeError ());
+
+	// Tier 2 folds in the callees whose IL already says the inline pays. It runs
+	// here so that the bodies it adds still reach the naming and the resolution
+	// below.
+	if (target.tier == JitTier::tier2)
+		materialize_trivial_callees (*module, target.domain, method, **function,
+		                             externals, types);
 
 	/* Before the entry name is read: the body's own declaration is one of these. */
 	if (Error err = bind_symbols (*module))
@@ -202,6 +211,10 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	std::vector<ProfileCounters> layout =
 		MonoJit::optimize (*module, target.tier, target.profile);
+
+	if (target.tier == JitTier::tier2)
+		if (Error err = trivial_inlines_landed (*module))
+			return std::move (err);
 
 	Expected<CompiledMethod> compiled = [&] {
 		timing::Scope timed (timing::Phase::orc);
