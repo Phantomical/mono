@@ -8,9 +8,13 @@
 
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
+#include "sidetables.hpp"
 
 #include <llvm/Support/Error.h>
 
+#include <vector>
+
+typedef struct _GSList GSList;
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoMethodHeader MonoMethodHeader;
@@ -30,6 +34,18 @@ enum class CodeKind {
 	/// none of the method's IL.
 	AbiThunk,
 };
+
+/// Turns the `.mono_unwind` records describing one function into the unwind
+/// ops mono's unwinder executes, or answers an error naming the record it
+/// cannot express.
+///
+/// Two records carry a rule mono has no opcode for and are replayed as one it
+/// does; a third carries no rule and is dropped. The implementation says which
+/// and why. An error means the frame description is incomplete, so the caller
+/// must decline the method rather than unwind it from what came back.
+///
+/// The caller owns the list and frees it with mono_free_unwind_info ().
+llvm::Expected<GSList *> transcode_unwind (const std::vector<UnwindRecord> &records);
 
 /// Builds the MonoJitInfo for a piece of compiled code and registers it, so
 /// the runtime's unwinder and stack walks can see the frame.

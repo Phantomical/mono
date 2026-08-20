@@ -138,6 +138,8 @@ parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
 	return guards;
 }
 
+} // namespace
+
 /// The frame description as mono unwind ops, or an error naming what could not
 /// be expressed.
 ///
@@ -308,8 +310,6 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 
 	return ops;
 }
-
-} // namespace
 
 /*
  * Publish METHOD's sequence points: the table the soft debugger looks an IL
