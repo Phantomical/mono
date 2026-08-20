@@ -77,25 +77,6 @@ MonoBackend::get ()
 	std::call_once (once, [] {
 		instance = new MonoBackend ();
 		owner_pid = getpid ();
-
-		atexit ([] {
-			/*
-			 * Tearing the backend down closes every domain's compile channel,
-			 * and closing one waits for the compiles already running on the
-			 * worker thread to retire. fork () keeps only the thread that
-			 * called it, so in a child that worker does not exist and a
-			 * ticket left in flight at the fork never retires - the wait
-			 * never ends. The crash handler forks exactly like this, so a
-			 * runtime that faults while a background compile is running would
-			 * otherwise leave a child parked here for good.
-			 */
-			if (getpid () != owner_pid)
-				return;
-
-			auto backend = instance;
-			instance = nullptr;
-			delete backend;
-		});
 	});
 
 	return instance;
@@ -209,6 +190,53 @@ struct MonoBackend::DomainState {
 	/// trampolines back.
 	void retire (MonoDomainMethod &dm);
 };
+
+/*
+ * Registered from a thread that has just compiled, rather than when the backend
+ * is built. LLVM builds its process-wide tables lazily inside a compile - the
+ * MVT list behind SDNode::getValueTypeList (), and the file system every
+ * PassBuilder holds. Exit runs handlers in reverse order of registration. A
+ * handler registered before those tables exist therefore runs after they are
+ * destroyed, and the wait below comes too late: by then the worker already
+ * reads freed memory.
+ *
+ * This orders the teardown against the tables a compile builds, which is less
+ * than every static LLVM owns. mini_cleanup () calls
+ * mono_llvm_jit_stop_compiling (), which stops the worker on a path that ends
+ * properly. This handler is the net under a process that exits without one.
+ *
+ * A process that asks for the backend and never compiles - one that only frees
+ * a method, or tears a domain down - therefore registers no handler. That is
+ * correct, because it has no worker to wait for and no LLVM table to be ordered
+ * against. Moving this back into MonoBackend::get () to cover it puts the
+ * ordering back the wrong way round.
+ */
+void
+MonoBackend::register_exit_teardown ()
+{
+	static std::once_flag once;
+
+	std::call_once (once, [] {
+		atexit ([] {
+			/*
+			 * Tearing the backend down closes every domain's compile channel,
+			 * and closing one waits for the compiles already running on the
+			 * worker thread to retire. fork () keeps only the thread that
+			 * called it, so in a child that worker does not exist and a
+			 * ticket left in flight at the fork never retires - the wait
+			 * never ends. The crash handler forks exactly like this, so a
+			 * runtime that faults while a background compile is running would
+			 * otherwise leave a child parked here for good.
+			 */
+			if (getpid () != owner_pid)
+				return;
+
+			auto backend = instance;
+			instance = nullptr;
+			delete backend;
+		});
+	});
+}
 
 MonoBackend::~MonoBackend ()
 {
@@ -927,6 +955,10 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 
 		return translate_and_compile_batch (handles, methods);
 	}();
+
+	// A compile has now run, so the tables LLVM builds inside one exist and the
+	// exit teardown can be ordered ahead of them.
+	register_exit_teardown ();
 
 	std::vector<llvm::Expected<Compiled>> compiled;
 

@@ -28,6 +28,12 @@ class MonoBackend {
 private:
 	static MonoBackend *instance;
 
+	/// Registers the teardown that runs at exit, once, and does nothing on
+	/// every call after the first.
+	///
+	/// Call this only from a thread that has just compiled a method.
+	static void register_exit_teardown ();
+
 	using Compiled = mono::Compiled;
 	struct DomainState;
 	struct MethodState;
