@@ -2,7 +2,7 @@
  * Enters the interpreter for a method that has no compiled body.
  *
  * A call arrives here exactly as it would have arrived at the method - the
- * backend's own convention, arguments wherever LLVM put them - with %r10
+ * backend's own convention, arguments wherever LLVM put them - with %r11
  * carrying the MonoMethod *, loaded by the method's own stub.
  *
  * Nothing here knows the prototype, so it spills rather than reads, and the
@@ -76,7 +76,7 @@ mono_llvm_interp_entry_thunk_framed:
 	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x18], r14
 	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x20], r15
 
-	mov	rdi, r10
+	mov	rdi, r11
 	mov	rsi, rsp
 	call	mono_llvm_interp_entry_from_context
 

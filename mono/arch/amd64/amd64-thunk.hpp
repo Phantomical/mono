@@ -33,8 +33,13 @@ static constexpr std::uint8_t thunk_keyed_code[32] = {
 	// +12 unbox: add rdi, sizeof(MonoObject)
 	0x48, 0x83, 0xc7, 0x10,
 
-	// +16 entry: movabs r10, <key>  (MONO_ARCH_IMT_REG, the `nest` register)
-	0x49, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	// +16 entry: movabs r11, <key>
+	//
+	// The key goes in r11 so that the thunk leaves r10 as the caller set it.
+	// r10 is MONO_ARCH_IMT_REG, which a dispatched call site loads with the
+	// method it named and which LLVM pins a `nest` argument to, so a key put
+	// there reaches the body through any number of thunk hops.
+	0x49, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
 	// +26 jmp qword ptr [rip-0x20]  (-> +0, the slot)
 	0xFF, 0x25, 0xE0, 0xFF, 0xFF, 0xFF,
