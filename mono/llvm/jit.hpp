@@ -83,6 +83,8 @@ struct IlLineRow {
 /// code has counted so far, and it stays readable until the domain goes.
 /// optimize () fills in everything but the address, which only the link knows.
 struct ProfileCounters {
+	/// The function these count, by the name it carries in the IR.
+	std::string function;
 	/// The name the profile reader keys the function on.
 	std::string name;
 	/// The hash of the CFG the counter indices were assigned over.
@@ -182,9 +184,13 @@ struct CompiledMethod {
 	/// for a body that is not a shared one.
 	VarSlot rgctx_slot { -1, 0 };
 
-	/// Where this method's profile counters landed. Absent when the module was
-	/// compiled with the instrumentation off.
+	/// Where the entry function's profile counters landed. Absent when the
+	/// module was compiled with the instrumentation off.
 	std::optional<ProfileCounters> profile;
+
+	/// The same for every other instrumented function the object defines. A
+	/// module holding one method leaves this empty.
+	std::vector<ProfileCounters> other_profiles;
 
 	/// The dylib this compile's object was linked into - what remove_dylibs ()
 	/// takes to release all of the above again.
@@ -232,7 +238,7 @@ public:
 	llvm::Expected<CompiledMethod>
 	compile (llvm::orc::ThreadSafeModule tsm, llvm::StringRef entry,
 	        llvm::ArrayRef<std::pair<llvm::StringRef, void *>> module_symbols = {},
-	        const ProfileCounters *layout = nullptr);
+	        llvm::ArrayRef<ProfileCounters> layout = {});
 
 	/// Release the dylibs: their code, their side tables, and the memory both
 	/// were linked into. Later compiles can reuse that memory.
@@ -252,8 +258,8 @@ public:
 	///
 	/// Answers nothing when the module was not instrumented, which is every
 	/// tier-2 module and every tier-1 module compiled with tier 2 turned off.
-	static std::optional<ProfileCounters> optimize (llvm::Module &m, JitTier tier,
-	                                                llvm::ArrayRef<uint8_t> profile = {});
+	static std::vector<ProfileCounters> optimize (llvm::Module &m, JitTier tier,
+	                                              llvm::ArrayRef<uint8_t> profile = {});
 
 	/// Run the tier-0 IR pipeline over a module in place.
 	///

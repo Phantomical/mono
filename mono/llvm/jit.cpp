@@ -358,10 +358,15 @@ public:
 		std::vector<VarSlot> var_slots;
 		/// Where a shared body's receiver lives in its frame.
 		VarSlot rgctx_slot { -1, 0 };
-		/// The `__llvm_prf_cnts` counter array, and how many counters fit in
-		/// it. Null when the module was not instrumented.
+		/// The `__llvm_prf_cnts` section: every instrumented function's
+		/// counters, and how many fit. Null when the module was not
+		/// instrumented. Only the bound is read from here - which function
+		/// owns which part of it is what `__llvm_prf_data` says.
 		const uint64_t *counters = nullptr;
 		size_t counter_slots = 0;
+		/// The `__llvm_prf_data` records, one per instrumented function.
+		const uint8_t *profile_data = nullptr;
+		size_t profile_data_size = 0;
 		/// The object as a debugger sees it, section addresses filled in.
 		/// Empty unless gdbjit::enabled ().
 		std::vector<char> debug_object;
@@ -431,10 +436,14 @@ public:
 
 		config.PrePrunePasses.push_back ([] (jitlink::LinkGraph &graph) -> Error {
 			for (jitlink::Section &section : graph.sections ()) {
-				if (section.getName () != ".mono_lsda"
-				    && section.getName () != ".mono_guards"
-				    && section.getName () != ".mono_unwind"
-				    && section.getName () != ".mono_lines")
+				StringRef name = section.getName ();
+
+				// The profile records go with our own side tables: the code
+				// refers to its counters, but to nothing that says whose
+				// counters they are, so the pruner drops the records.
+				if (name != ".mono_lsda" && name != ".mono_guards"
+				    && name != ".mono_unwind" && name != ".mono_lines"
+				    && name != "__llvm_prf_data")
 					continue;
 				for (jitlink::Block *block : section.blocks ())
 					graph.addAnonymousSymbol (*block, 0, block->getSize (),
@@ -473,6 +482,10 @@ public:
 						range.getStart ().toPtr<const uint64_t *> ();
 					extents.counter_slots =
 						range.getSize () / sizeof (uint64_t);
+				} else if (section.getName () == "__llvm_prf_data") {
+					extents.profile_data =
+						range.getStart ().toPtr<const uint8_t *> ();
+					extents.profile_data_size = range.getSize ();
 				} else if (is_linker_stub_section (section)) {
 					extents.linker_stubs.emplace_back (
 						range.getStart ().toPtr<const uint8_t *> (),
@@ -895,6 +908,47 @@ tier2_target_machine ()
 	return *tm;
 }
 
+/*
+ * Says where each instrumented function put its counters, from what the link
+ * resolved in `__llvm_prf_data`.
+ *
+ * Records are matched to sites by the name the reader keys on, so neither side
+ * depends on the order the other lists them in. A site is dropped rather than
+ * guessed at when its record is missing, disagrees about how many counters the
+ * function has, or points outside the counter section: a wrong array reads as
+ * real weights at the next tier, while no array only costs that tier its input.
+ */
+std::vector<ProfileCounters>
+locate_counters (ArrayRef<ProfileCounters> layout, const uint64_t *counters,
+                 size_t counter_slots, const uint8_t *data, size_t data_size)
+{
+	std::vector<ProfileCounters> found;
+
+	if (layout.empty () || counters == nullptr)
+		return found;
+
+	std::vector<ProfileArray> arrays = read_profile_arrays (data, data_size);
+	const uint64_t *end = counters + counter_slots;
+
+	for (const ProfileCounters &site : layout) {
+		uint64_t key = profile_name_key (site.name);
+
+		for (const ProfileArray &array : arrays) {
+			if (array.name_key != key || array.hash != site.hash
+			    || array.count != site.count)
+				continue;
+			if (array.counters < counters || array.counters + site.count > end)
+				continue;
+
+			found.push_back (site);
+			found.back ().counters = array.counters;
+			break;
+		}
+	}
+
+	return found;
+}
+
 std::vector<uint8_t>
 build_profile (ArrayRef<ProfileCounters> counters)
 {
@@ -1151,12 +1205,12 @@ MonoJit::register_symbol (StringRef name, void *addr)
 	return Error::success ();
 }
 
-std::optional<ProfileCounters>
+std::vector<ProfileCounters>
 MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile)
 {
 	if (tier == JitTier::tier2) {
 		run_tier2_pipeline (m, profile);
-		return std::nullopt;
+		return {};
 	}
 
 	// Emptied first: the passes append, and this thread's last compile left its
@@ -1164,21 +1218,20 @@ MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile)
 	profile_sites ().clear ();
 	run_tier0_pipeline (m);
 
-	// ProfileSelectPass leaves one function instrumented, the method's own
-	// body, so there is one site or none.
-	const std::vector<ProfileSite> &sites = profile_sites ();
+	std::vector<ProfileCounters> layout;
 
-	if (sites.empty ())
-		return std::nullopt;
+	// One per body that can promote, which is one per method the module holds.
+	for (const ProfileSite &site : profile_sites ())
+		layout.push_back (ProfileCounters { site.function, site.name, site.hash,
+		                                    nullptr, site.counters });
 
-	return ProfileCounters { sites.front ().name, sites.front ().hash, nullptr,
-		                 sites.front ().counters };
+	return layout;
 }
 
 Expected<CompiledMethod>
 MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
                   ArrayRef<std::pair<StringRef, void *>> module_symbols,
-                  const ProfileCounters *layout)
+                  ArrayRef<ProfileCounters> layout)
 {
 	// An assertions-on LLVM refuses to codegen a module whose layout disagrees
 	// with the target. A fresh module has no layout at all.
@@ -1268,16 +1321,13 @@ MonoJit::compile (ThreadSafeModule tsm, StringRef entry,
 	compiled.var_slots = std::move (extents->var_slots);
 	compiled.rgctx_slot = extents->rgctx_slot;
 
-	/*
-	 * The section holds this module's counters and nothing else, so its start
-	 * is the array optimize () described. The size check is what says so: one
-	 * function is instrumented per module, and a second one would grow the
-	 * section past the count optimize () recorded.
-	 */
-	if (layout != nullptr && extents->counters != nullptr
-	    && extents->counter_slots == layout->count) {
-		compiled.profile = *layout;
-		compiled.profile->counters = extents->counters;
+	for (ProfileCounters &found :
+	     locate_counters (layout, extents->counters, extents->counter_slots,
+	                      extents->profile_data, extents->profile_data_size)) {
+		if (found.function == entry)
+			compiled.profile = std::move (found);
+		else
+			compiled.other_profiles.push_back (std::move (found));
 	}
 
 	if (compiled.code == nullptr)

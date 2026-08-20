@@ -76,6 +76,7 @@ ProfileGatherPass::run (Module &m, ModuleAnalysisManager &)
 
 			ProfileSite site;
 
+			site.function = f.getName ().str ();
 			site.name = recorded_name (*inc, f);
 			site.hash = inc->getHash ()->getZExtValue ();
 			site.counters = inc->getNumCounters ()->getZExtValue ();
@@ -105,6 +106,60 @@ ProfileLocalizePass::run (Module &m, ModuleAnalysisManager &)
 	}
 
 	return PreservedAnalyses::all ();
+}
+
+namespace {
+
+using llvm::IPVK_Last;
+
+/*
+ * The per-function record the instrumentation lowering writes into
+ * `__llvm_prf_data`, built from LLVM's own field template so that the layout
+ * follows the LLVM this links against rather than a copy of it made here.
+ * llvm/ProfileData/InstrProfData.inc documents the pattern; IntPtrT is ours to
+ * name, and it holds a signed distance.
+ */
+typedef intptr_t IntPtrT;
+
+struct alignas (INSTR_PROF_DATA_ALIGNMENT) ProfileDataRecord {
+#define INSTR_PROF_DATA(Type, LLVMType, Name, Initializer) Type Name;
+#include <llvm/ProfileData/InstrProfData.inc>
+};
+
+} // namespace
+
+std::vector<ProfileArray>
+read_profile_arrays (const uint8_t *data, size_t size)
+{
+	std::vector<ProfileArray> arrays;
+
+	if (data == nullptr || size == 0 || size % sizeof (ProfileDataRecord) != 0)
+		return arrays;
+
+	const auto *records = reinterpret_cast<const ProfileDataRecord *> (data);
+
+	for (size_t i = 0; i < size / sizeof (ProfileDataRecord); i++) {
+		const ProfileDataRecord &record = records[i];
+		ProfileArray array;
+
+		array.name_key = record.NameRef;
+		array.hash = record.FuncHash;
+		array.count = record.NumCounters;
+		// CounterPtr is the distance from the record to its own counters - a
+		// label difference, so the link is what filled it in.
+		array.counters = reinterpret_cast<const uint64_t *> (
+			reinterpret_cast<const char *> (&record) + record.CounterPtr);
+
+		arrays.push_back (array);
+	}
+
+	return arrays;
+}
+
+uint64_t
+profile_name_key (StringRef name)
+{
+	return IndexedInstrProf::ComputeHash (name);
 }
 
 } // namespace mono

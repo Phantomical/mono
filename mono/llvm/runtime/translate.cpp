@@ -189,7 +189,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (dumping (entry.c_str ()))
 		module->print (llvm::errs (), nullptr);
 
-	std::optional<ProfileCounters> layout =
+	std::vector<ProfileCounters> layout =
 		MonoJit::optimize (*module, target.tier, target.profile);
 
 	Expected<CompiledMethod> compiled = [&] {
@@ -198,7 +198,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return target.jit->compile (
 			ThreadSafeModule (std::move (module),
 		                      ThreadSafeContext (std::move (context))),
-			entry, module_symbols, layout ? &*layout : nullptr);
+			entry, module_symbols, layout);
 	}();
 	if (!compiled)
 		return compiled.takeError ();

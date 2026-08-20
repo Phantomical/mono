@@ -11,6 +11,7 @@
 #ifndef MONO_LLVM_PASSES_PROFILE_COUNTERS_HPP
 #define MONO_LLVM_PASSES_PROFILE_COUNTERS_HPP
 
+#include <llvm/ADT/StringRef.h>
 #include <llvm/IR/PassManager.h>
 
 #include <cstdint>
@@ -21,7 +22,10 @@ namespace mono {
 
 /// One instrumented function's counter array.
 struct ProfileSite {
-	/// The name the profile reader keys on.
+	/// The function this counts, by the name it carries in the IR.
+	std::string function;
+	/// The name the profile reader keys on. It is not the one above for a
+	/// function with local linkage, which the reader qualifies.
 	std::string name;
 	/// The hash of the CFG the counter indices were assigned over. The reader
 	/// drops a record whose hash disagrees with the function it is applied to.
@@ -32,6 +36,27 @@ struct ProfileSite {
 /// What the passes below recorded for the module this thread last ran the
 /// pipeline over. The caller empties it before each run.
 std::vector<ProfileSite> &profile_sites ();
+
+/// Where one instrumented function's counters landed, as the linked object says.
+struct ProfileArray {
+	/// What `__llvm_prf_data` keys the function's name under, which is what
+	/// profile_name_key () answers for a ProfileSite's name.
+	uint64_t name_key = 0;
+	uint64_t hash = 0;
+	const uint64_t *counters = nullptr;
+	uint32_t count = 0;
+};
+
+/// Reads a linked object's `__llvm_prf_data` records.
+///
+/// Each record says where its own function's counters landed, so a module
+/// holding several instrumented functions gives one entry each. Answers nothing
+/// when the section is not a whole number of records - what a disagreement with
+/// LLVM about the record layout looks like from here.
+std::vector<ProfileArray> read_profile_arrays (const uint8_t *data, size_t size);
+
+/// The value `__llvm_prf_data` records a function's name under.
+uint64_t profile_name_key (llvm::StringRef name);
 
 /// Marks every function that will not promote as one to leave uninstrumented.
 ///
