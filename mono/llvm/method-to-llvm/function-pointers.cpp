@@ -131,15 +131,28 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 	// uses its helper instead of a slot load written out here.
 	emit_null_check (builder, obj.value);
 
+	/*
+	 * The key says which method was asked for, so it has to be this
+	 * instantiation's. A shared body reads it out of the context, and takes the
+	 * helper that re-inflates what the receiver's vtable answered with: for a
+	 * generic virtual method that answer is the definition on the receiver's
+	 * class, and only the caller knows the type arguments it asked for.
+	 */
+	bool shared_key = depends_on_context (*target);
 	llvm::Expected<llvm::Function *> lookup =
-		icall_wrapper_decl (MONO_JIT_ICALL_mono_ldvirtfn);
+		icall_wrapper_decl (shared_key ? MONO_JIT_ICALL_mono_ldvirtfn_gshared
+	                                       : MONO_JIT_ICALL_mono_ldvirtfn);
 
 	if (!lookup)
 		return lookup.takeError ();
 
+	llvm::Expected<llvm::Value *> key = method_operand (builder, *target);
+
+	if (!key)
+		return key.takeError ();
+
 	llvm::Value *ftn = emit_protected_call (
-		builder, *lookup,
-		adapt_to_callee (builder, *lookup, {obj.value, method_symbol (*target)}));
+		builder, *lookup, adapt_to_callee (builder, *lookup, {obj.value, *key}));
 
 	pop_stack (1);
 	push_stack (ftn, mono_get_int_type ());
