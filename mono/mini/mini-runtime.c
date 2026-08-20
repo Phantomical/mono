@@ -4164,7 +4164,7 @@ mini_init (const char *filename, const char *runtime_version)
 #endif
 
 #ifdef MONO_ARCH_GSHARED_SUPPORTED
-	mono_set_generic_sharing_supported (TRUE);
+	mono_set_generic_sharing_supported ((default_opt & MONO_OPT_GSHARED) != 0);
 #endif
 
 	mono_thread_info_signals_init ();
@@ -4690,6 +4690,9 @@ mono_set_optimizations (guint32 opts)
 
 	default_opt = opts;
 	default_opt_set = TRUE;
+#ifdef MONO_ARCH_GSHARED_SUPPORTED
+	mono_set_generic_sharing_supported ((default_opt & MONO_OPT_GSHARED) != 0);
+#endif
 #ifdef MONO_ARCH_GSHAREDVT_SUPPORTED
 	mono_set_generic_sharing_vt_supported (mono_aot_only || ((default_opt & MONO_OPT_GSHAREDVT) != 0));
 #else
