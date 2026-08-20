@@ -279,7 +279,7 @@ MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, l
 ///
 /// The value is what coerce_to_location () produced. For a value class it is
 /// therefore the address of the bytes to copy rather than the bytes themselves.
-void
+llvm::Error
 MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
                                       llvm::Value *address, MonoType *location)
 {
@@ -305,7 +305,7 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 	 */
 	if (mini_type_is_reference (location)) {
 		builder.CreateCall (wbarrier_decl (), {address, value});
-		return;
+		return llvm::Error::success ();
 	}
 
 	if (held_in_memory (location)) {
@@ -317,16 +317,22 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 		 * must mark the cards its reference fields land on, and only its own
 		 * copy routine knows how to do that.
 		 */
-		if (m_class_has_references (klass))
+		if (m_class_has_references (klass)) {
+			llvm::Expected<llvm::Value *> cls =
+				class_operand (builder, klass, "mono_class_");
+
+			if (!cls)
+				return cls.takeError ();
+
 			builder.CreateCall (value_copy_decl (),
-			                    {address, value, builder.getInt32 (1),
-			                     class_symbol (klass, "mono_class_")});
-		else
+			                    {address, value, builder.getInt32 (1), *cls});
+		} else {
 			builder.CreateMemCpy (address, align, value,
 			                      type_alignment (location),
 			                      vtype_size (location, /*native=*/false),
 			                      prefixes.volatile_);
-		return;
+		}
+		return llvm::Error::success ();
 	}
 
 	llvm::StoreInst *store = builder.CreateAlignedStore (value, address, align);
@@ -336,6 +342,8 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 		if (atomic)
 			store->setAtomic (llvm::AtomicOrdering::Release);
 	}
+
+	return llvm::Error::success ();
 }
 
 llvm::Expected<llvm::Value *>

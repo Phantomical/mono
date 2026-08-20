@@ -335,13 +335,19 @@ MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType
 
 	// This matches the copy stobj makes: through the collector when klass has
 	// reference fields, and a plain copy otherwise.
-	if (!held_in_memory (type))
+	if (!held_in_memory (type)) {
 		builder.CreateAlignedStore (value, payload, type_alignment (type));
-	else if (m_class_has_references (klass))
-		builder.CreateCall (value_copy_decl (), {payload, value, builder.getInt32 (1),
-		                                         class_symbol (klass, "mono_class_")});
-	else
+	} else if (m_class_has_references (klass)) {
+		llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
+
+		if (!cls)
+			return cls.takeError ();
+
+		builder.CreateCall (value_copy_decl (),
+		                    {payload, value, builder.getInt32 (1), *cls});
+	} else {
 		copy_vtype (builder, payload, value, type, /*native=*/false);
+	}
 
 	return obj;
 }

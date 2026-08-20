@@ -596,7 +596,7 @@ private:
 	bool can_access_atomically (llvm::Type *type, llvm::Align align);
 	llvm::Value *emit_memory_load (MonoIrBuilder &builder, llvm::Type *type,
 	                               llvm::Value *address, MonoType *location);
-	void emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
+	llvm::Error emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
 	                        llvm::Value *address, MonoType *location);
 
 	llvm::Expected<Flow> decode_flow (size_t at);

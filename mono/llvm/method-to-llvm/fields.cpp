@@ -661,7 +661,8 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	pop_stack (2);
-	emit_memory_store (builder, *value, *address, ftype);
+	if (llvm::Error stored = emit_memory_store (builder, *value, *address, ftype))
+		return stored;
 	return llvm::Error::success ();
 }
 
@@ -844,7 +845,8 @@ MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	pop_stack (1);
-	emit_memory_store (builder, *value, *address, ftype);
+	if (llvm::Error stored = emit_memory_store (builder, *value, *address, ftype))
+		return stored;
 	return llvm::Error::success ();
 }
 

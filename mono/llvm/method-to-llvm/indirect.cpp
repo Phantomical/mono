@@ -200,7 +200,8 @@ MethodLLVMEmitter::emit_stind (MonoIrBuilder &builder, MonoType *element)
 		return address.takeError ();
 
 	pop_stack (2);
-	emit_memory_store (builder, *value, *address, element);
+	if (llvm::Error stored = emit_memory_store (builder, *value, *address, element))
+		return stored;
 	return llvm::Error::success ();
 }
 
@@ -409,8 +410,13 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 
 		builder.CreateCall (wbarrier_decl (), {*dest, value});
 	} else if (m_class_has_references (klass)) {
-		builder.CreateCall (value_copy_decl (), {*dest, *src, builder.getInt32 (1),
-		                                         class_symbol (klass, "mono_class_")});
+		llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
+
+		if (!cls)
+			return cls.takeError ();
+
+		builder.CreateCall (value_copy_decl (),
+		                    {*dest, *src, builder.getInt32 (1), *cls});
 	} else {
 		guint32 align = 0;
 		guint32 size = mono_class_value_size (klass, &align);

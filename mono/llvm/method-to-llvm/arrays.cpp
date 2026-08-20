@@ -488,7 +488,8 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 		return address.takeError ();
 
 	pop_stack (3);
-	emit_memory_store (builder, *value, *address, element);
+	if (llvm::Error stored = emit_memory_store (builder, *value, *address, element))
+		return stored;
 	return llvm::Error::success ();
 }
 
@@ -640,7 +641,8 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 	pop_stack (depth);
 
 	if (is_set) {
-		emit_memory_store (builder, value, *address, element);
+		if (llvm::Error stored = emit_memory_store (builder, value, *address, element))
+			return stored;
 	} else if (what == "Get") {
 		return push_from_location (builder, *address, element);
 	} else {
