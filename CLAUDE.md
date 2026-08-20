@@ -347,6 +347,12 @@ Backend debugging env vars:
   entered at tier 0 takes before it is asked for as tier 1, default 10. Zero never
   promotes, which is what tells a tier-0 entry bug apart from a promotion bug; one
   promotes on the first call, which is how to put the switch in the middle of a loop.
+- `MONO_LLVM_JIT_BATCH=<n>` (`runtime/options.cpp`) — how many promoted methods share
+  one compile, default 8. They are translated into one module and go through the IR
+  pipeline, codegen and the linker together, so LLVM's per-compile floor is paid once
+  for the batch. One turns it off and compiles every method on its own, which is what
+  tells a batching bug from a backend one. Only promotions batch: a compile the runtime
+  asks for by name, and a dynamic method, still go one at a time.
 - `MONO_LLVM_JIT_TIER0=<substr|0>` (`runtime/options.cpp`) — narrow tier 0, which is
   otherwise every method the interpreter accepts. A false value (`0`, `false`, empty)
   compiles everything, which is how to tell a tier-0 bug from a backend one; anything

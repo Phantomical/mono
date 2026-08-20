@@ -33,6 +33,17 @@ using namespace llvm::orc;
 
 namespace mono {
 
+/// Registers the jit info for a compiled body and for every side function that
+/// came with it, and answers where the method's code is.
+///
+/// published receives the body's record. header is the method's, and null is
+/// not allowed: a body needs its clauses.
+static Expected<Compiled> publish_body (const TranslationTarget &target, MonoMethod *method,
+                                        MonoMethodHeader *header, CompiledMethod &compiled,
+                                        MonoLLVMBreakpointSwitch *bp_switch,
+                                        const SeqPointGraph &seq_points,
+                                        MonoJitInfo **published);
+
 DomainScope::DomainScope (MonoDomain *domain)
     : entered_ (mono_domain_get ()), wanted_ (domain)
 {
@@ -203,7 +214,16 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (!compiled)
 		return compiled.takeError ();
 
-	perf::dump_method (method, *compiled);
+	return publish_body (target, method, cfg->get ()->header, *compiled, bp_switch,
+	                     seq_points, published);
+}
+
+static Expected<Compiled>
+publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHeader *header,
+              CompiledMethod &compiled, MonoLLVMBreakpointSwitch *bp_switch,
+              const SeqPointGraph &seq_points, MonoJitInfo **published)
+{
+	perf::dump_method (method, compiled);
 
 	/*
 	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`;
@@ -211,7 +231,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	 */
 	std::vector<std::pair<uint32_t, void *>> filters;
 
-	for (const auto &[name, extent] : compiled->functions) {
+	for (const auto &[name, extent] : compiled.functions) {
 		size_t at = name.rfind ("$filter");
 
 		if (at == std::string::npos)
@@ -224,14 +244,13 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	Expected<MonoJitInfo *> jinfo = [&] {
 		timing::Scope timed (timing::Phase::jinfo);
 
-		return register_jit_info (target.domain, method, cfg->get ()->header,
-		                          *compiled, CodeKind::Body, filters, bp_switch,
-		                          seq_points);
+		return register_jit_info (target.domain, method, header, compiled,
+		                          CodeKind::Body, filters, bp_switch, seq_points);
 	}();
 
 	if (!jinfo)
 		return jinfo.takeError ();
-	target.remember (*compiled, *jinfo);
+	target.remember (compiled, *jinfo);
 	*published = *jinfo;
 
 	/*
@@ -249,8 +268,8 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		side.entry = const_cast<uint8_t *> (code);
 		side.code = code;
 		side.code_size = size;
-		side.unwind_table = compiled->unwind_table;
-		side.unwind_table_size = compiled->unwind_table_size;
+		side.unwind_table = compiled.unwind_table;
+		side.unwind_table_size = compiled.unwind_table_size;
 		side.il_lines = std::move (lines);
 
 		Expected<MonoJitInfo *> jinfo =
@@ -262,13 +281,13 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return Error::success ();
 	};
 
-	for (const auto &[name, extent] : compiled->functions) {
+	for (const auto &[name, extent] : compiled.functions) {
 		if (name.find ("$filter") == std::string::npos)
 			continue;
 
 		std::vector<IlLineRow> lines;
 
-		for (auto &rows : compiled->other_il_lines)
+		for (auto &rows : compiled.other_il_lines)
 			if (rows.first == name) {
 				lines = std::move (rows.second);
 				break;
@@ -279,11 +298,223 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 			return std::move (err);
 	}
 
-	if (is_jit_trace_enabled ())
-		fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", entry.c_str (),
-		         compiled->entry, target.domain->friendly_name);
+	if (is_jit_trace_enabled ()) {
+		char *name = mono_method_full_name (method, TRUE);
 
-	return Compiled { compiled->entry, *jinfo };
+		fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", name, compiled.entry,
+		         target.domain->friendly_name);
+		g_free (name);
+	}
+
+	return Compiled { compiled.entry, *jinfo };
+}
+
+namespace {
+
+/// What one method of a batch keeps for as long as the module it shares.
+struct BatchMember {
+	const TranslationTarget *target = nullptr;
+	MonoMethod *method = nullptr;
+	std::unique_ptr<MinimalCompile> cfg;
+	llvm::Function *body = nullptr;
+	std::string entry;
+	std::vector<ExternalSymbol> externals;
+	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
+	SeqPointGraph seq_points;
+};
+
+} // namespace
+
+std::vector<BatchResult>
+translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
+                             llvm::ArrayRef<MonoMethod *> methods)
+{
+	auto one_by_one = [&] {
+		std::vector<BatchResult> alone;
+
+		alone.reserve (methods.size ());
+		for (size_t i = 0; i < methods.size (); ++i) {
+			MonoJitInfo *published = nullptr;
+			Expected<Compiled> code =
+				translate_and_compile (*targets[i], methods[i], &published);
+
+			alone.push_back (BatchResult { std::move (code), published });
+		}
+		return alone;
+	};
+
+	const TranslationTarget &shared = *targets.front ();
+
+	// A tier-2 body is laid out by its own method's counts, and a method with
+	// no IL of its own is compiled by mini rather than translated. Neither can
+	// share a module, and both are rare enough here to be worth no more than
+	// this.
+	if (methods.size () < 2 || shared.tier != JitTier::tier1)
+		return one_by_one ();
+
+	for (MonoMethod *method : methods) {
+		if (implemented_outside_il (method) || method->dynamic)
+			return one_by_one ();
+
+		// An array accessor is compiled as its marshal wrapper, which is a
+		// method of its own.
+		if (m_class_get_rank (method->klass) > 0
+		    && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+		    && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+			return one_by_one ();
+	}
+
+	g_assert (mono_domain_get () == shared.domain);
+
+	std::unique_ptr<LLVMContext> context;
+	std::unique_ptr<Module> module;
+
+	{
+		timing::Scope timed (timing::Phase::ctxnew);
+
+		context = std::make_unique<LLVMContext> ();
+		module = std::make_unique<Module> (stub_symbol (methods.front ()), *context);
+	}
+
+	std::vector<std::unique_ptr<BatchMember>> members;
+	ModuleTypes types;
+
+	for (MonoMethod *method : methods)
+		MONO_PROFILER_RAISE (jit_begin, (method));
+
+	/*
+	 * Give up on the shared module and compile the methods one at a time. Each
+	 * one begins again there, so this attempt owes every member of it an end.
+	 * A failure is rare and the retry is what keeps a single bad method from
+	 * costing the others their compile.
+	 */
+	auto give_up = [&] {
+		for (MonoMethod *method : methods)
+			MONO_PROFILER_RAISE (jit_failed, (method));
+		return one_by_one ();
+	};
+
+	for (size_t i = 0; i < methods.size (); ++i) {
+		auto member = std::make_unique<BatchMember> ();
+
+		member->target = targets[i];
+		member->method = methods[i];
+
+		ERROR_DECL (metadata_error);
+
+		{
+			timing::Scope timed (timing::Phase::metadata);
+
+			member->cfg = std::make_unique<MinimalCompile> (methods[i], shared.domain,
+			                                                metadata_error);
+		}
+
+		if (member->cfg->get ()->header == nullptr) {
+			mono_error_cleanup (metadata_error);
+			return give_up ();
+		}
+
+		Expected<llvm::Function *> body = [&] {
+			timing::Scope timed (timing::Phase::translate);
+
+			return method_to_llvm (module.get (), member->cfg->get (), methods[i],
+			                       &member->externals, &member->bp_switch,
+			                       &member->seq_points, methods, &types);
+		}();
+
+		if (!body) {
+			consumeError (body.takeError ());
+			return give_up ();
+		}
+
+		member->body = *body;
+		members.push_back (std::move (member));
+	}
+
+	if (Error err = bind_symbols (*module)) {
+		consumeError (std::move (err));
+		return give_up ();
+	}
+
+	std::vector<std::pair<StringRef, void *>> module_symbols;
+
+	for (auto &member : members) {
+		member->entry = member->body->getName ().str ();
+
+		if (dumping (member->entry.c_str ()))
+			dump_il (member->method, member->cfg->get ()->header);
+
+		Error resolved = [&] {
+			timing::Scope timed (timing::Phase::resolve);
+
+			return resolve_externals (*shared.jit, shared.domain, member->externals,
+			                          member->target->publish_callee, module_symbols);
+		}();
+
+		if (resolved) {
+			consumeError (std::move (resolved));
+			return give_up ();
+		}
+	}
+
+	std::vector<ProfileCounters> layout =
+		MonoJit::optimize (*module, shared.tier, shared.profile);
+	std::vector<StringRef> entries;
+	bool dump = false;
+
+	for (auto &member : members) {
+		dump = dump || dumping (member->entry.c_str ());
+		entries.push_back (member->entry);
+	}
+
+	// One print for the module, however many of its methods were asked for.
+	if (dump)
+		module->print (llvm::errs (), nullptr);
+
+	Expected<std::vector<CompiledMethod>> compiled = [&] {
+		timing::Scope timed (timing::Phase::orc);
+
+		return shared.jit->compile_batch (
+			ThreadSafeModule (std::move (module),
+		                      ThreadSafeContext (std::move (context))),
+			entries, module_symbols, layout);
+	}();
+
+	std::vector<BatchResult> out;
+
+	out.reserve (members.size ());
+
+	// The object is one thing, so a failure to link it is every member's.
+	if (!compiled) {
+		std::string failure = toString (compiled.takeError ());
+
+		for (auto &member : members) {
+			MONO_PROFILER_RAISE (jit_failed, (member->method));
+			out.push_back (BatchResult {
+				createStringError (inconvertibleErrorCode (), "%s",
+			                           failure.c_str ()),
+				nullptr });
+		}
+		return out;
+	}
+
+	for (size_t i = 0; i < members.size (); ++i) {
+		MonoJitInfo *published = nullptr;
+		Expected<Compiled> code =
+			publish_body (*members[i]->target, members[i]->method,
+		                      members[i]->cfg->get ()->header, (*compiled)[i],
+		                      members[i]->bp_switch, members[i]->seq_points,
+		                      &published);
+
+		if (!code || published == nullptr) {
+			published = nullptr;
+			MONO_PROFILER_RAISE (jit_failed, (members[i]->method));
+		}
+
+		out.push_back (BatchResult { std::move (code), published });
+	}
+
+	return out;
 }
 
 Expected<void *>

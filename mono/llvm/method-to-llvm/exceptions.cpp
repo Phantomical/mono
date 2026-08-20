@@ -164,7 +164,11 @@ MethodLLVMEmitter::covering_chain (uint32_t clause) const
 llvm::Constant *
 MethodLLVMEmitter::clause_marker (uint32_t clause)
 {
-	std::string name = "mono_eh_clause_" + std::to_string (clause);
+	// Named for the method as well as the clause. The globals are shared with
+	// the filter emitters, which see the same clauses; a module holding a batch
+	// of methods holds several clause 0s, and they do not agree on the kind.
+	std::string name =
+		identity_symbol ("mono_eh_clause_" + std::to_string (clause), method);
 
 	if (llvm::GlobalVariable *existing = module->getNamedGlobal (name))
 		return existing;
@@ -188,7 +192,8 @@ MethodLLVMEmitter::clause_marker (uint32_t clause)
 llvm::Constant *
 MethodLLVMEmitter::resume_marker (uint32_t clause)
 {
-	std::string name = "mono_eh_resume_" + std::to_string (clause);
+	std::string name =
+		identity_symbol ("mono_eh_resume_" + std::to_string (clause), method);
 
 	if (llvm::GlobalVariable *existing = module->getNamedGlobal (name))
 		return existing;

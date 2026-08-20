@@ -521,8 +521,8 @@ MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 	if (native && !marshals_unchanged (klass))
 		return convert_native_vtype (klass);
 
-	auto it = vtypes.find (klass);
-	if (it != vtypes.end ())
+	auto it = types.vtypes.find (klass);
+	if (it != types.vtypes.end ())
 		return it->second;
 
 	char *printed = mono_type_full_name (m_class_get_byval_arg (klass));
@@ -554,7 +554,7 @@ MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 	}
 
 	set_packed_body (context (), type, size, fields);
-	vtypes[klass] = type;
+	types.vtypes[klass] = type;
 	return type;
 }
 
@@ -602,8 +602,8 @@ MethodLLVMEmitter::native_field_type (MonoType *t, MonoMarshalSpec *mspec, int s
 llvm::Expected<llvm::Type *>
 MethodLLVMEmitter::convert_native_vtype (MonoClass *klass)
 {
-	auto it = native_vtypes.find (klass);
-	if (it != native_vtypes.end ())
+	auto it = types.native_vtypes.find (klass);
+	if (it != types.native_vtypes.end ())
 		return it->second;
 
 	MonoMarshalType *info = mono_marshal_load_type_info (klass);
@@ -641,7 +641,7 @@ MethodLLVMEmitter::convert_native_vtype (MonoClass *klass)
 	}
 
 	set_packed_body (context (), type, size, fields);
-	native_vtypes[klass] = type;
+	types.native_vtypes[klass] = type;
 	return type;
 }
 
@@ -919,6 +919,14 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	std::string full_name = identity_symbol (printed, method);
 
 	g_free (printed);
+
+	// A batched module defines several methods, and a call to one of the others
+	// must reach its published entry rather than the body next door: a direct
+	// call is off the thunk, so a later detour or promotion of that method never
+	// reaches it. A name of its own is what keeps the declaration from finding
+	// the definition, the way code_address_symbol () keeps ldftn off it.
+	if (method != this->method && llvm::is_contained (siblings, method))
+		full_name += "$thunk";
 
 	/*
 	 * The emitter's own cache is per instance, but filter bodies share their

@@ -104,6 +104,29 @@ llvm::Expected<Compiled> translate_and_compile (const TranslationTarget &target,
 llvm::Expected<Compiled> translate_body (const TranslationTarget &target,
                                          MonoMethod *method, MonoJitInfo **published);
 
+/// One method's share of a batched compile.
+struct BatchResult {
+	llvm::Expected<Compiled> code;
+	/// The body's record, on the terms translate_body () states.
+	MonoJitInfo *published = nullptr;
+};
+
+/// Translate several methods into one module and compile them together, on the
+/// terms translate_and_compile () states for each of them.
+///
+/// The results line up with methods. Sharing a module is what makes this worth
+/// asking for: the per-compile cost LLVM charges is paid once for the batch
+/// rather than once for each method. The methods must share a domain, a linker
+/// and a tier.
+///
+/// Anything the shared module cannot hold is compiled one method at a time
+/// instead, and so is the whole batch when one member fails to translate. So a
+/// caller gets the same answers it would have got asking for each method on its
+/// own.
+std::vector<BatchResult>
+translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
+                             llvm::ArrayRef<MonoMethod *> methods);
+
 /// Compile the C-convention entry native code enters \p method through.
 ///
 /// The entry is a module of its own rather than a rider on the body's, so that

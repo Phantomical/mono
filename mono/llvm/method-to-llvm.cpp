@@ -77,14 +77,24 @@ throw_corlib_exception_decl (llvm::Module *module)
 llvm::Expected<llvm::Function *>
 method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
                 std::vector<ExternalSymbol> *externals,
-                MonoLLVMBreakpointSwitch **bp_switch, SeqPointGraph *seq_points)
+                MonoLLVMBreakpointSwitch **bp_switch, SeqPointGraph *seq_points,
+                llvm::ArrayRef<MonoMethod *> siblings, ModuleTypes *types)
 {
 	// Shared by the method and its filter bodies. They are separate functions
 	// but one module, and debug info belongs to the module.
 	IlDebugModule il_debug (module);
 	llvm::scope_exit finish_debug ([&] { il_debug.finish (); });
 
-	auto emitter = MethodLLVMEmitter (module, cfg, method, externals, &il_debug);
+	// The same holds for the struct types, and there it is not a nicety: a
+	// filter that builds its own copy of a value type calls the method's
+	// declarations with arguments they are not typed for.
+	ModuleTypes own_types;
+
+	if (types == nullptr)
+		types = &own_types;
+
+	auto emitter = MethodLLVMEmitter (module, cfg, method, externals, &il_debug, siblings,
+	                                  types);
 	llvm::Expected<llvm::Function *> function = emitter.emit ();
 
 	if (!function)
@@ -100,7 +110,8 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 		if (cfg->header->clauses[i].flags != MONO_EXCEPTION_CLAUSE_FILTER)
 			continue;
 
-		MethodLLVMEmitter filter (module, cfg, method, externals, &il_debug);
+		MethodLLVMEmitter filter (module, cfg, method, externals, &il_debug, siblings,
+		                          types);
 		llvm::Expected<llvm::Function *> body = filter.emit_filter (*function, i);
 
 		if (!body)

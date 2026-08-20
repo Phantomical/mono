@@ -118,6 +118,31 @@ tier1_threshold ()
 	return calls;
 }
 
+uint32_t
+promotion_batch_size ()
+{
+	static uint32_t methods = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_BATCH");
+
+		/*
+		 * Eight, measured: against one method per compile it takes 46% off
+		 * a corpus of three-instruction methods and 24% off a corpus of
+		 * medium ones. Sixteen takes another 12% and 2%, and the whole
+		 * batch has to compile before any of its methods is published - so
+		 * the larger batch buys almost nothing on the workload that has the
+		 * most to wait for.
+		 */
+		if (value == nullptr)
+			return 8;
+
+		int set = atoi (value);
+
+		return set > 1 ? (uint32_t) set : 1;
+	}();
+
+	return methods;
+}
+
 /*
  * Setting the variable at all is what turns tier 2 on, rather than setting it to
  * something. That leaves zero free to mean an instrumented tier-1 body that

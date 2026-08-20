@@ -160,6 +160,20 @@ struct ExternalSymbol {
 	void *object;
 };
 
+/// The named struct types a module already holds, by class.
+///
+/// Every emitter writing into one module has to share this. LLVM uniques a
+/// struct name within a module, so a second emitter that builds its own
+/// `System.RuntimeTypeHandle` gets `System.RuntimeTypeHandle.0` instead - a type
+/// of its own. A call it then makes to a declaration the first emitter typed
+/// passes an argument of the wrong type.
+struct ModuleTypes {
+	llvm::DenseMap<MonoClass *, llvm::Type *> vtypes;
+	/// The same classes in the layout marshalling gives them, which is a
+	/// different struct whenever it moves a field or changes its width.
+	llvm::DenseMap<MonoClass *, llvm::Type *> native_vtypes;
+};
+
 class MethodLLVMEmitter {
 private:
 	struct Entry {
@@ -244,10 +258,11 @@ private:
 	std::vector<ExternalSymbol> *externals = nullptr;
 
 	llvm::DenseMap<MonoMethod *, llvm::Function *> declarations;
-	llvm::DenseMap<MonoClass *, llvm::Type *> vtypes;
-	/// The same classes in the layout marshalling gives them, which is a
-	/// different struct whenever it moves a field or changes its width.
-	llvm::DenseMap<MonoClass *, llvm::Type *> native_vtypes;
+
+	/// Where the emitters writing into one module keep the struct types they
+	/// have built, so that all of them name a value type the same way.
+	ModuleTypes own_types;
+	ModuleTypes &types;
 	/*
 	 * What an exception clause needs on the LLVM side.
 	 *
@@ -419,6 +434,12 @@ private:
 	IlDebugModule *il_debug = nullptr;
 	IlDebugScope *il_scope = nullptr;
 
+	/// The other methods this module defines, when several are translated into
+	/// one. A call to one of them has to reach its published entry rather than
+	/// the body beside it, so create_method_decl () declares it under a name of
+	/// its own.
+	llvm::ArrayRef<MonoMethod *> siblings;
+
 	/// Attribute everything emitted from here on to the IL instruction at
 	/// offset.
 	void set_il_location (llvm::IRBuilder<> &builder, size_t offset)
@@ -439,16 +460,23 @@ private:
 	}
 
 public:
+	/// shared_types is the struct-type cache of the module. Emitters that write
+	/// into one module must be given one and the same cache; the emitter keeps
+	/// its own only when it has the module to itself.
 	MethodLLVMEmitter (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 	                   std::vector<ExternalSymbol> *externals = nullptr,
-	                   IlDebugModule *il_debug = nullptr)
+	                   IlDebugModule *il_debug = nullptr,
+	                   llvm::ArrayRef<MonoMethod *> siblings = {},
+	                   ModuleTypes *shared_types = nullptr)
 	    : module (module),
 	      function (nullptr),
 	      builder (module->getContext ()),
 	      cfg (cfg),
 	      method (method),
 	      externals (externals),
-	      il_debug (il_debug)
+	      types (shared_types != nullptr ? *shared_types : own_types),
+	      il_debug (il_debug),
+	      siblings (siblings)
 	{
 	}
 
@@ -1093,13 +1121,23 @@ bool entered_in_c (MonoMethod *method);
 /// soft-debugger breakpoint switch, which is null unless the body emitted
 /// sequence points. seq_points, when given, receives the body's
 /// sequence-point graph, empty for the same reason.
+///
+/// siblings names the other methods translated into this module. Give it the
+/// whole batch: a call to a method named there leaves through that method's
+/// published entry rather than reaching its body in this module.
+///
+/// types is the module's struct-type cache, and every translation into one
+/// module has to be handed the same one. Null makes a cache for this
+/// translation alone, which is right only when the module holds nothing else.
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
                                                  MonoMethod *method,
                                                  std::vector<ExternalSymbol> *externals
                                                  = nullptr,
                                                  MonoLLVMBreakpointSwitch **bp_switch
                                                  = nullptr,
-                                                 SeqPointGraph *seq_points = nullptr);
+                                                 SeqPointGraph *seq_points = nullptr,
+                                                 llvm::ArrayRef<MonoMethod *> siblings = {},
+                                                 ModuleTypes *types = nullptr);
 
 } // namespace mono
 

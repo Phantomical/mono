@@ -602,7 +602,7 @@ TEST_F (TranslatorTest, APadNamesItsClausesAndRoutesBySelector)
 	const Translation &t = translate ("eh", "Eh:TryCatch");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_GE (t.count ("catch ptr @mono_eh_clause_0"), 1u);
+	EXPECT_GE (t.count ("catch ptr @\"mono_eh_clause_0@"), 1u);
 	EXPECT_GE (t.count ("switch i32"), 1u);
 }
 
@@ -613,8 +613,8 @@ TEST_F (TranslatorTest, ANestedPadCarriesTheEnclosingClause)
 	const Translation &t = translate ("eh", "Eh:CallUnderCatchAndFinally");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_GE (t.count ("catch ptr @mono_eh_clause_0"), 1u);
-	EXPECT_GE (t.count ("catch ptr @mono_eh_clause_1"), 1u);
+	EXPECT_GE (t.count ("catch ptr @\"mono_eh_clause_0@"), 1u);
+	EXPECT_GE (t.count ("catch ptr @\"mono_eh_clause_1@"), 1u);
 }
 
 // A finally entered by unwinding ends by handing control back to the unwinder,

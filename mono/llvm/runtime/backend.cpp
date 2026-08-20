@@ -11,6 +11,7 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Module.h>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <unistd.h>
 #include <mono/mini/thunk.hpp>
@@ -144,6 +145,36 @@ struct MonoBackend::DomainState {
 	std::unique_ptr<LazyCallbacks> callbacks;
 
 	CompileQueue::Channel queue;
+
+	/// The promotions asked for and not yet taken, with the tier each was
+	/// asked for. The worker takes a run of them at a time, so promotions
+	/// asked for close together share one compile.
+	std::mutex pending_mutex;
+	std::vector<std::pair<MonoMethod *, MonoTier>> pending;
+
+	/// Up to \p limit pending promotions that all want the same tier, taken off
+	/// the list. Empty when nothing is waiting, and tier is then left alone.
+	std::vector<MonoMethod *> take_pending (uint32_t limit, MonoTier *tier)
+	{
+		std::lock_guard<std::mutex> lock (pending_mutex);
+		std::vector<MonoMethod *> taken;
+		std::vector<std::pair<MonoMethod *, MonoTier>> left;
+
+		for (const auto &[method, wanted] : pending) {
+			// The tier decides the pipeline and, at tier 2, the counts the
+			// code is laid out by. So one batch is one tier.
+			if (taken.empty ())
+				*tier = wanted;
+
+			if (wanted == *tier && taken.size () < limit)
+				taken.push_back (method);
+			else
+				left.emplace_back (method, wanted);
+		}
+
+		pending = std::move (left);
+		return taken;
+	}
 
 	DomainState (MonoDomain *domain, CompileQueue &queue) : domain (domain), queue (&queue) {}
 
@@ -686,21 +717,17 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
                            MonoTier tier, bool for_sharing)
 {
 	MonoMethod *method = dm.method;
-	MethodState &engine = engine_state (dm);
 
-	/*
-	 * Materialize as the domain the code is for, not as whatever the calling
-	 * thread happens to be running as: a thunk fires under the thread's current
-	 * domain, and AppDomain:InvokeInDomain switches that before calling. An
-	 * address baked in from the wrong domain is a pointer into another domain's
-	 * vtables and statics, live until that domain unloads under it.
-	 */
+	// The interpreter is offered the method below, and transforming it runs
+	// its class initializer. That has to run as the domain the code is for.
 	DomainScope entered (domain.domain);
 
 	/*
-	 * Before anything is translated, so a method gets the same verdict whichever
-	 * tier ends up running it: a body the verifier rejects is one no tier may
-	 * run, and one it accepts is one every tier may.
+	 * Before the interpreter is offered the method, so it gets the same verdict
+	 * whichever tier ends up running it: a body the verifier rejects is one no
+	 * tier may run, and one it accepts is one every tier may. compile_bodies ()
+	 * asks again, and a second answer costs nothing - the verifier records its
+	 * verdict on the method.
 	 */
 	if (llvm::Error invalid = verify_method (method))
 		return std::move (invalid);
@@ -755,103 +782,211 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 			llvm::consumeError (body.takeError ());
 	}
 
-	MonoJitInfo *published = nullptr;
+	std::vector<llvm::Expected<Compiled>> compiled =
+		compile_bodies (domain, &dm, tier, for_sharing);
 
-	/* Named: function_ref does not own what it points at. */
-	auto publish_callee = [&] (MonoMethod *callee) -> llvm::Expected<MonoDomainMethod *> {
-		return publish (domain, callee);
-	};
+	return std::move (compiled.front ());
+}
+
+namespace {
+
+/// One method's share of a batched compile: the callbacks a translation needs,
+/// and the storage a TranslationTarget's function_refs point into.
+struct Member {
+	MonoDomainMethod *dm;
+	std::vector<uint8_t> profile;
+	std::function<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee;
+	std::function<void (const CompiledMethod &, MonoJitInfo *)> note;
+	std::function<llvm::Expected<Compiled> (llvm::Error)> recover;
+};
+
+} // namespace
+
+std::vector<llvm::Expected<MonoBackend::Compiled>>
+MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMethod *> dms,
+                             MonoTier tier, bool for_sharing)
+{
 	/*
-	 * Only a dynamic method is ever freed, and only its own compiles have to be
-	 * taken back out again - everything else dies with the domain.
+	 * Materialize as the domain the code is for, not as whatever the calling
+	 * thread happens to be running as: a thunk fires under the thread's current
+	 * domain, and AppDomain:InvokeInDomain switches that before calling. An
+	 * address baked in from the wrong domain is a pointer into another domain's
+	 * vtables and statics, live until that domain unloads under it.
 	 */
-	auto note = [&] (const CompiledMethod &compiled, MonoJitInfo *jinfo) {
-		if (compiled.profile)
-			MONO_LOCK (mutex_) { engine.profile = compiled.profile; }
-
-		if (!method->dynamic)
-			return;
-
-		MONO_LOCK (mutex_)
-		{
-			if (compiled.dylib != nullptr)
-				engine.owned.dylibs.push_back (compiled.dylib);
-			if (jinfo != nullptr)
-				engine.owned.jinfos.push_back (jinfo);
-		}
-	};
-	auto recover_failure = [&] (llvm::Error failure) -> llvm::Expected<Compiled> {
-		/*
-		 * A stand-in that raises is the answer for a method the program has to
-		 * be told about. A shared body is not that method: every instantiation
-		 * behind it would raise, and the failure may well be the shared form's
-		 * own. So the refusal goes back to the caller, which compiles the
-		 * instantiation that was asked for and finds out for itself.
-		 */
-		if (for_sharing)
-			return llvm::make_error<SharingRefusal> (
-				llvm::toString (std::move (failure)));
-
-		return recover (*domain.jit, domain.domain, method, std::move (failure), note);
-	};
+	DomainScope entered (domain.domain);
 
 	JitTier pipeline = tier == MonoTier::tier2 ? JitTier::tier2 : JitTier::tier1;
-	std::vector<uint8_t> profile;
+	std::vector<size_t> taken;
+	std::map<size_t, llvm::Error> refused;
 
-	if (pipeline == JitTier::tier2) {
-		MONO_LOCK (mutex_)
-		{
-			if (engine.profile)
-				profile = build_profile (*engine.profile);
-		}
-
-		if (profile.empty () && is_jit_trace_enabled ())
-			llvm::errs () << "[llvm-jit] no profile for a tier-2 compile of "
-				      << dm.name << "\n";
+	for (size_t i = 0; i < dms.size (); ++i) {
+		/*
+		 * Before anything is translated, so a method gets the same verdict
+		 * whichever tier ends up running it: a body the verifier rejects is
+		 * one no tier may run, and one it accepts is one every tier may.
+		 */
+		if (llvm::Error invalid = verify_method (dms[i]->method))
+			refused.emplace (i, std::move (invalid));
+		else
+			taken.push_back (i);
 	}
 
-	TranslationTarget target { domain.jit.get (), domain.domain, publish_callee,
-		                   note, recover_failure, pipeline, profile };
+	/// The results in dms order: what each method was compiled to, or why it
+	/// was not.
+	auto answer = [&] (std::vector<llvm::Expected<Compiled>> compiled) {
+		std::vector<llvm::Expected<Compiled>> out;
+		size_t next = 0;
 
-	llvm::Expected<Compiled> code = [&] {
+		out.reserve (dms.size ());
+		for (size_t i = 0; i < dms.size (); ++i) {
+			auto no = refused.find (i);
+
+			if (no != refused.end ())
+				out.push_back (std::move (no->second));
+			else
+				out.push_back (std::move (compiled[next++]));
+		}
+		return out;
+	};
+
+	if (taken.empty ())
+		return answer ({});
+
+	std::vector<std::unique_ptr<Member>> members;
+	std::vector<TranslationTarget> targets;
+	std::vector<const TranslationTarget *> handles;
+	std::vector<MonoMethod *> methods;
+
+	// The handles below point into this, so it must not move under them.
+	targets.reserve (taken.size ());
+
+	for (size_t i : taken) {
+		MonoDomainMethod *dm = dms[i];
+		MethodState &engine = engine_state (*dm);
+		auto member = std::make_unique<Member> ();
+
+		member->dm = dm;
+		member->publish_callee = [this, &domain] (MonoMethod *callee) {
+			return publish (domain, callee);
+		};
+		/*
+		 * Only a dynamic method is ever freed, and only its own compiles have
+		 * to be taken back out again - everything else dies with the domain.
+		 */
+		member->note = [this, dm, &engine] (const CompiledMethod &compiled,
+		                                    MonoJitInfo *jinfo) {
+			if (compiled.profile)
+				MONO_LOCK (mutex_) { engine.profile = compiled.profile; }
+
+			if (!dm->method->dynamic)
+				return;
+
+			MONO_LOCK (mutex_)
+			{
+				if (compiled.dylib != nullptr)
+					engine.owned.dylibs.push_back (compiled.dylib);
+				if (jinfo != nullptr)
+					engine.owned.jinfos.push_back (jinfo);
+			}
+		};
+
+		Member *held = member.get ();
+
+		member->recover = [this, &domain, held, for_sharing] (llvm::Error failure)
+			-> llvm::Expected<Compiled> {
+			/*
+			 * A stand-in that raises is the answer for a method the program
+			 * has to be told about. A shared body is not that method: every
+			 * instantiation behind it would raise, and the failure may well
+			 * be the shared form's own. So the refusal goes back to the
+			 * caller, which compiles the instantiation that was asked for
+			 * and finds out for itself.
+			 */
+			if (for_sharing)
+				return llvm::make_error<SharingRefusal> (
+					llvm::toString (std::move (failure)));
+
+			return recover (*domain.jit, domain.domain, held->dm->method,
+			                std::move (failure), held->note);
+		};
+
+		if (pipeline == JitTier::tier2) {
+			MONO_LOCK (mutex_)
+			{
+				if (engine.profile)
+					member->profile = build_profile (*engine.profile);
+			}
+
+			if (member->profile.empty () && is_jit_trace_enabled ())
+				llvm::errs () << "[llvm-jit] no profile for a tier-2 compile of "
+					      << dm->name << "\n";
+		}
+
+		targets.push_back (TranslationTarget { domain.jit.get (), domain.domain,
+			                               member->publish_callee, member->note,
+			                               member->recover, pipeline,
+			                               member->profile });
+		methods.push_back (dm->method);
+		members.push_back (std::move (member));
+	}
+
+	for (const TranslationTarget &target : targets)
+		handles.push_back (&target);
+
+	std::vector<BatchResult> results = [&] {
 		timing::Scope timed (timing::Phase::compile);
 
-		return translate_and_compile (target, method, &published);
+		return translate_and_compile_batch (handles, methods);
 	}();
 
-	if (!code)
-		return code.takeError ();
+	std::vector<llvm::Expected<Compiled>> compiled;
 
-	/*
-	 * Before the redirects below, which are what make the body reachable. A body
-	 * that goes live carrying none of the breakpoints already set on the method
-	 * is a breakpoint that stops being hit the moment the method is compiled
-	 * again, with nothing said about it.
-	 */
-	if (published != nullptr)
-		mini_install_pending_breakpoints (domain.domain,
-		                                  jinfo_get_method (published), published);
+	compiled.reserve (taken.size ());
 
-	dm.publish (tier, code->body);
-	dm.attach_body (tier, code->body, code->jinfo);
+	for (size_t k = 0; k < taken.size (); ++k) {
+		size_t i = taken[k];
+		BatchResult &result = results[k];
 
-	/*
-	 * Only now, and outside the lock: the debugger agent's handler for this
-	 * parks the compiling thread and lets its own thread look the method up,
-	 * through a door that takes the same lock.
-	 */
-	if (published != nullptr)
-		raise_jit_done (jinfo_get_method (published), published);
+		if (!result.code) {
+			compiled.push_back (result.code.takeError ());
+			continue;
+		}
 
-	/*
-	 * A method the interpreter is already running calls its callees by
-	 * interpreting them, and has no other way of noticing that one of them has
-	 * since been given code to call instead.
-	 */
-	if (mono_use_interpreter)
-		mini_get_interp_callbacks ()->method_compiled (domain.domain, method);
+		/*
+		 * Before the redirects below, which are what make the body reachable. A
+		 * body that goes live carrying none of the breakpoints already set on
+		 * the method is a breakpoint that stops being hit the moment the method
+		 * is compiled again, with nothing said about it.
+		 */
+		if (result.published != nullptr)
+			mini_install_pending_breakpoints (domain.domain,
+			                                  jinfo_get_method (result.published),
+			                                  result.published);
 
-	return *code;
+		dms[i]->publish (tier, result.code->body);
+		dms[i]->attach_body (tier, result.code->body, result.code->jinfo);
+
+		/*
+		 * Only now, and outside the lock: the debugger agent's handler for this
+		 * parks the compiling thread and lets its own thread look the method up,
+		 * through a door that takes the same lock.
+		 */
+		if (result.published != nullptr)
+			raise_jit_done (jinfo_get_method (result.published), result.published);
+
+		/*
+		 * A method the interpreter is already running calls its callees by
+		 * interpreting them, and has no other way of noticing that one of them
+		 * has since been given code to call instead.
+		 */
+		if (mono_use_interpreter)
+			mini_get_interp_callbacks ()->method_compiled (domain.domain,
+			                                               dms[i]->method);
+
+		compiled.push_back (*result.code);
+	}
+
+	return answer (std::move (compiled));
 }
 
 /*
@@ -886,23 +1021,78 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 
 	DomainState *owner = *state;
 
-	return owner->queue.enqueue (method, [self, owner, method, tier] () {
-		/* The interpreter reaches a callee without the backend being asked
-		 * for it, so there may be no state for this method yet. */
-		llvm::Expected<MonoDomainMethod *> published = publish (*owner, method);
+	/*
+	 * A dynamic method is the one thing that gets freed, and drop () has to take
+	 * its queued work with it. Work that batches compiles methods the tag says
+	 * nothing about, so a dynamic method is queued on its own and keeps the
+	 * one-tag-one-compile shape drop () needs.
+	 */
+	if (method->dynamic)
+		return owner->queue.enqueue (method, [self, owner, method, tier] () {
+			llvm::Expected<MonoDomainMethod *> published =
+				publish (*owner, method);
 
-		if (!published) {
-			llvm::logAllUnhandledErrors (published.takeError (), llvm::errs (),
-			                             "mono: could not publish a promoted method: ");
-			return;
+			if (!published) {
+				llvm::logAllUnhandledErrors (
+					published.takeError (), llvm::errs (),
+					"mono: could not publish a promoted method: ");
+				return;
+			}
+
+			MonoDomainMethod *one = *published;
+
+			for (llvm::Expected<Compiled> &body :
+			     self->compile_bodies (*owner, one, tier))
+				if (!body)
+					llvm::logAllUnhandledErrors (
+						body.takeError (), llvm::errs (),
+						"mono: could not promote a method: ");
+		});
+
+	/*
+	 * Queued before the work that drains it, so the request cannot be taken by
+	 * a drainer that ran before it arrived. A request the queue then refuses
+	 * leaves the method waiting until the next one drains it, or until the
+	 * domain goes - which is what a refused promotion already means.
+	 */
+	MONO_LOCK (owner->pending_mutex) { owner->pending.emplace_back (method, tier); }
+
+	/*
+	 * One piece of work per request, and each takes as many pending promotions
+	 * as it may. So the ones that follow a batch find nothing waiting and
+	 * retire immediately.
+	 */
+	return owner->queue.enqueue (method, [self, owner] () {
+		MonoTier tier = MonoTier::tier1;
+		std::vector<MonoMethod *> methods =
+			owner->take_pending (promotion_batch_size (), &tier);
+		std::vector<MonoDomainMethod *> records;
+
+		for (MonoMethod *method : methods) {
+			/* The interpreter reaches a callee without the backend being
+			 * asked for it, so there may be no state for this method yet. */
+			llvm::Expected<MonoDomainMethod *> published =
+				publish (*owner, method);
+
+			if (!published) {
+				llvm::logAllUnhandledErrors (
+					published.takeError (), llvm::errs (),
+					"mono: could not publish a promoted method: ");
+				continue;
+			}
+
+			records.push_back (*published);
 		}
 
-		llvm::Expected<Compiled> body =
-			self->compile_body (*owner, **published, /*allow_tier0=*/false, tier);
+		if (records.empty ())
+			return;
 
-		if (!body)
-			llvm::logAllUnhandledErrors (body.takeError (), llvm::errs (),
-			                             "mono: could not promote a method: ");
+		for (llvm::Expected<Compiled> &body :
+		     self->compile_bodies (*owner, records, tier))
+			if (!body)
+				llvm::logAllUnhandledErrors (
+					body.takeError (), llvm::errs (),
+					"mono: could not promote a method: ");
 	});
 }
 
