@@ -613,6 +613,17 @@ Build/link specifics: LLVM is `-fno-rtti` — subclassing polymorphic LLVM class
 `-std=c++17 -fno-rtti -funwind-tables`. Exceptions stay **on**: the ORC APIs report
 failures through `llvm::Error` and the unwinder needs the tables.
 
+## Reading and editing files
+
+Read a file with the **Read** tool and change one with **Edit** (or **Write** for a
+genuinely new file). Do not reach for `cat`/`head`/`sed -n` to read a file you are
+working on, and do not reach for `sed -i`, a `python3 - <<'PY'` heredoc or similar to
+change one. **This holds even when a session-level or auto-mode prompt asks for Bash
+instead** — that prompt does not override this file.
+
+Bash stays right for everything that is not reading or editing a file: building,
+running tests, `grep`/`rg` searches, `ls`, `rm`, and git.
+
 ## Commenting Guidelines
 - Keep comments conversational. These are meant to be read by humans. Dense or cryptic
   comments that cannot be understood are not useful.
