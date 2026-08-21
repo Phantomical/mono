@@ -862,6 +862,23 @@ default_option (StringRef name, T value)
 		static_cast<cl::opt<T> *> (opt)->setValue (value);
 }
 
+/// Gives one of LLVM's own command-line options the default this backend wants,
+/// where the type it was declared with is private to the target that declares
+/// it. The value is the text a command line carries, and the option's own parser
+/// reads it, so a value that parser does not know gets a message on stderr and
+/// the option keeps its default.
+///
+/// It leaves a setting `--llvm-opt` carried alone, the way default_option ()
+/// does, and does nothing when this build of LLVM has no option of that name.
+void
+default_option_text (StringRef name, StringRef value)
+{
+	cl::Option *opt = cl::getRegisteredOptions ().lookup (name);
+
+	if (opt != nullptr && opt->getNumOccurrences () == 0)
+		(void) opt->addOccurrence (0, name, value);
+}
+
 /// Puts counters in each body that can promote, and the entry counter that
 /// decides when it does.
 void
@@ -1324,6 +1341,19 @@ MonoJit::create (CodeArena *arena)
 
 	if (Error err = apply_options ())
 		return std::move (err);
+
+	/*
+	 * Intel syntax for what MONO_LLVM_JIT_ASM prints, which is the syntax the
+	 * Intel manuals and a debugger's disassembly here use. The option reaches
+	 * the MCAsmInfo, which the instruction printer, the `.intel_syntax noprefix`
+	 * directive and register printing all read, so the whole dump agrees.
+	 *
+	 * It has to run before the first TargetMachine, because MCAsmInfo reads the
+	 * option in its constructor and every TargetMachine builds one. The object a
+	 * compile publishes is not affected: an assembler dialect is a property of
+	 * printed text.
+	 */
+	default_option_text ("x86-asm-syntax", "intel");
 
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());

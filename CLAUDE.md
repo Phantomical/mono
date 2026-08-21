@@ -231,7 +231,8 @@ Tracing and dumping:
 - `MONO_LLVM_JIT_ASM=<substr>` (`compiler.cpp`) — print the assembly those methods
   compile to, side-table sections included, which is the half no offline `llc` run
   reproduces. Costs a second codegen over a clone of the module, so the published code
-  is untouched.
+  is untouched. The dump is Intel syntax, which `jit.cpp` asks for as a default.
+  `--llvm-opt=-x86-asm-syntax=att` gets AT&T back.
 - `MONO_LLVM_JIT_ASM_DIR=<dir>` (`compiler.cpp`) — send each dump to `<dir>/<method>.s`
   instead of to stderr. On its own it takes every method that reaches codegen, which is
   what to reach for under a player whose stderr is a shared log. Loading KSP to its main

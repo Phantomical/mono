@@ -169,7 +169,13 @@ TEST_F (AsmDump, PrintsTheCodeAndTheClauseTableOfASelectedMethod)
 	EXPECT_NE (dump.find (asm_filter), std::string::npos) << dump;
 	/* The label the code starts at, quoted because the name has spaces in it. */
 	EXPECT_NE (dump.find ("\"" + entry + "\":"), std::string::npos) << dump;
-	EXPECT_NE (dump.find ("\tretq"), std::string::npos) << dump;
+	/*
+	 * Intel syntax, which the dump asks for through the `x86-asm-syntax` option
+	 * and therefore gets from the MCAsmInfo. The return below is the same claim
+	 * in the instructions: AT&T spells it `retq`.
+	 */
+	EXPECT_NE (dump.find ("\t.intel_syntax noprefix"), std::string::npos) << dump;
+	EXPECT_NE (dump.find ("\tret\n"), std::string::npos) << dump;
 
 	/*
 	 * The point of dumping from inside the pipeline: the clause table, written
