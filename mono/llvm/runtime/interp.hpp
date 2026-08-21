@@ -15,12 +15,25 @@
 
 #include <mono/mini/domain-method.hpp>
 
+#include <llvm/IR/Function.h>
 #include <llvm/Support/Error.h>
+
+#include <string>
 
 namespace mono {
 
 /// Returns the entry \p dm is interpreted through, computed on first request.
 llvm::Expected<arch::InterpEntryPoint> interp_entry (MonoDomainMethod &dm);
+
+/// Names the part of a call's layout the LLVM prototype settles: the shapes of
+/// the types, the calling convention, and the attributes that move a value.
+///
+/// A layout cannot be shared on this alone. Whether a parameter is byref, and
+/// where the receiver stops, come from the signature and must be added to it.
+///
+/// A struct counts by its shape and not by its name, because one managed type
+/// name can stand for two layouts in a process.
+std::string prototype_key (llvm::Function *f);
 
 } // namespace mono
 

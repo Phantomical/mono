@@ -9,6 +9,7 @@
 
 #include <mono/mini/domain-method.hpp>
 
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/raw_ostream.h>
@@ -39,26 +40,71 @@ namespace {
 std::shared_mutex g_interp_mutex;
 std::unordered_map<std::string, std::unique_ptr<arch::InterpEntryLayout>> g_layouts;
 
-/// Names the part of a call's layout the LLVM prototype settles: the types, the
-/// calling convention, and the attributes that move a value.
-///
-/// A layout cannot be shared on this alone. Whether a parameter is byref, and
-/// where the receiver stops, come from the signature and must be added to it.
+/// Prints a type as its whole shape, member by member.
+void
+print_shape (Type *t, raw_ostream &os)
+{
+	if (auto *st = dyn_cast<StructType> (t)) {
+		/*
+		 * Type::print () writes a named struct as its name, and that name is the
+		 * managed type's. Two assemblies can each define a type with one name and
+		 * lay it out differently: mscorlib and System.Memory both define
+		 * System.ReadOnlySpan`1, one with two fields and one with three. So the
+		 * name does not say how many registers a value of it arrives in.
+		 */
+		if (st->isOpaque ()) {
+			os << "opaque " << st->getName ();
+			return;
+		}
+
+		os << (st->isPacked () ? "<{" : "{");
+		for (unsigned i = 0; i < st->getNumElements (); ++i) {
+			if (i != 0)
+				os << ',';
+			print_shape (st->getElementType (i), os);
+		}
+		os << (st->isPacked () ? "}>" : "}");
+		return;
+	}
+
+	if (auto *at = dyn_cast<ArrayType> (t)) {
+		os << '[' << at->getNumElements () << " x ";
+		print_shape (at->getElementType (), os);
+		os << ']';
+		return;
+	}
+
+	t->print (os);
+}
+
+} // namespace
+
 std::string
 prototype_key (Function *f)
 {
 	std::string key;
 	raw_string_ostream os (key);
+	FunctionType *type = f->getFunctionType ();
 	AttributeList attrs = f->getAttributes ();
 
-	f->getFunctionType ()->print (os);
+	print_shape (type->getReturnType (), os);
+	os << " (";
+	for (unsigned i = 0; i < type->getNumParams (); ++i) {
+		if (i != 0)
+			os << ", ";
+		print_shape (type->getParamType (i), os);
+	}
+	os << (type->isVarArg () ? ", ...)" : ")");
+
 	os << "|cc" << f->getCallingConv () << "|ret "
 	   << attrs.getRetAttrs ().getAsString ();
-	for (unsigned i = 0; i < f->getFunctionType ()->getNumParams (); ++i)
+	for (unsigned i = 0; i < type->getNumParams (); ++i)
 		os << "|p" << i << " " << attrs.getParamAttrs (i).getAsString ();
 	os.flush ();
 	return key;
 }
+
+namespace {
 
 Expected<const arch::InterpEntryLayout *>
 layout_for (MonoDomain *domain, MonoMethod *method)

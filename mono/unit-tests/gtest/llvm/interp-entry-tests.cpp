@@ -1,5 +1,6 @@
 /*
- * Tests for mono::arch::plan_interp_entry ().
+ * Tests for mono::arch::plan_interp_entry () and for the key one plan is
+ * cached under.
  *
  * The convention being restated is LLVM's own, so what these assert is where
  * LLVM would have put each argument - which register file, which register,
@@ -25,6 +26,8 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+
+#include "runtime/interp.hpp"
 
 #include <vector>
 
@@ -340,6 +343,69 @@ TEST (InterpEntry, VarargSignaturesAreRefused)
 
 	sig.get ()->call_convention = MONO_CALL_VARARG;
 	EXPECT_TRUE (refused (shape, sig));
+}
+
+/// A ReadOnlySpan as mscorlib lays it out: a reference and a length.
+StructType *
+span_of_two (LLVMContext &ctx)
+{
+	StructType *type = StructType::create (ctx, "System.ReadOnlySpan`1<char>");
+
+	type->setBody ({ PointerType::get (ctx, 0), Type::getInt32Ty (ctx),
+	                 Type::getInt32Ty (ctx) },
+	               /*isPacked=*/true);
+	return type;
+}
+
+/// A ReadOnlySpan as System.Memory lays it out: an object, a byte offset and a
+/// length.
+StructType *
+span_of_three (LLVMContext &ctx)
+{
+	StructType *type = StructType::create (ctx, "System.ReadOnlySpan`1<char>");
+
+	type->setBody ({ PointerType::get (ctx, 0), PointerType::get (ctx, 0),
+	                 Type::getInt32Ty (ctx), Type::getInt32Ty (ctx) },
+	               /*isPacked=*/true);
+	return type;
+}
+
+TEST (InterpEntryKey, OneStructNameCanStandForTwoLayouts)
+{
+	/*
+	 * Two contexts, because a name is unique inside one: what the runtime has is
+	 * two assemblies each defining System.ReadOnlySpan`1, and a layout planned in
+	 * a context of its own for each method that arrives.
+	 */
+	LLVMContext two, three;
+	Prototype narrow (PointerType::get (two, 0), { span_of_two (two) });
+	Prototype wide (PointerType::get (three, 0), { span_of_three (three) });
+
+	/*
+	 * The two arrive in a different number of registers, so sharing a layout
+	 * reads the wide one's byte offset four bytes short and picks up its length
+	 * in the top half of the pointer.
+	 */
+	EXPECT_NE (mono::prototype_key (narrow.get ()),
+	           mono::prototype_key (wide.get ()));
+}
+
+TEST (InterpEntryKey, TwoNamesForOneLayoutShareAKey)
+{
+	LLVMContext here, there;
+	StructType *mine = StructType::create (here, "Some.Pair");
+	StructType *yours = StructType::create (there, "Other.Pair");
+
+	mine->setBody ({ PointerType::get (here, 0), Type::getInt32Ty (here) },
+	               /*isPacked=*/true);
+	yours->setBody ({ PointerType::get (there, 0), Type::getInt32Ty (there) },
+	                /*isPacked=*/true);
+
+	Prototype one (Type::getVoidTy (here), { mine });
+	Prototype other (Type::getVoidTy (there), { yours });
+
+	EXPECT_EQ (mono::prototype_key (one.get ()),
+	           mono::prototype_key (other.get ()));
 }
 
 } // namespace
