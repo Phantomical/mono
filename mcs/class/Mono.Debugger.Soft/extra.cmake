@@ -1,6 +1,6 @@
-# The two programs the suite debugs.  dtest.cs is a debugger: it launches one of
-# these under the runtime, sets breakpoints in it and single-steps it, so they
-# are the subject of every test rather than a helper for a few.
+# The two programs the suite debugs.  dtest.cs is the debugger: it launches
+# one of these under the runtime, sets breakpoints in it and single-steps it.
+# They are the subject of every test, not a helper for a few.
 #
 # They are compiled unoptimized and with a sourcelink map, because the tests
 # assert on line numbers, local variables and the source paths for both.
@@ -44,15 +44,16 @@ mono_add_il_module(
 
 add_custom_target(mcs-dtest-app DEPENDS "${_tests}/dtest-app.exe")
 # ilasm writes straight to its -out: path, so something has to have made the
-# directory first; the rule above is the one that does.
+# directory first. The rule above is the one that does.
 add_dependencies(mcs-dtest-excfilter mcs-dtest-app)
 
 mono_test_environment(PROFILE net_4_x ASSEMBLY Mono.Debugger.Soft.dll
                       DEPENDS mcs-dtest-app mcs-dtest-excfilter)
 
 # Every case launches a debuggee suspended, waiting for the debugger to attach.
-# A case that ends without resuming it to exit leaves it waiting forever - a dozen
-# survive a run that otherwise passes - so the suite is followed by a sweep.
+# A case that ends without resuming the debuggee to exit leaves it waiting
+# forever. About a dozen do, in a run that otherwise passes, so the suite is
+# followed by a sweep.
 #
 # Matched on the full path of the exe this build tree produced, which no other
 # process on the machine can be running.

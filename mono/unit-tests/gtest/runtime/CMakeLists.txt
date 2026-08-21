@@ -11,8 +11,8 @@ endif()
 function(mono_add_unit_test name)
   cmake_parse_arguments(ARG "RUNTIME" "" "SOURCES" ${ARGN})
 
-  # Naming the members rather than the archive leaves the rest of the runtime
-  # out, which archive semantics let the linker work out on its own.
+  # Naming the object libraries links only the ones listed here, so mini, the
+  # interpreter, the debugger agent and mono-llvm are left out.
   if(ARG_RUNTIME)
     set(_libs monosgen-static)
   else()
@@ -35,9 +35,9 @@ endfunction()
 
 # Registers the cases of target that match filter as ctest tests under prefix.
 #
-# A binary carrying several files' worth of cases gets one call per file, so the
-# ctest names stay tied to the source the case lives in rather than to whichever
-# binary it was linked into.
+# A binary carrying several files' worth of cases gets one call per file.
+# That way ctest names stay tied to the source the case lives in, not to
+# whichever binary it was linked into.
 function(mono_unit_test_cases target prefix filter)
   mono_gtest_tests(${target}
     PREFIX ${prefix}
@@ -62,10 +62,11 @@ mono_unit_test_cases(test-mono-utils test-conc-hashtable "ConcHashTable.*")
 mono_add_unit_test(test-mono-linked-list-set SOURCES test-mono-linked-list-set.cpp)
 mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
 
-# The tests that run against a live runtime, which harness.cpp brings up once for
-# the binary.  test-path is here without needing one: it reaches mono-path.c's
-# statics by including the file, and only the archive semantics of the RUNTIME
-# link let the linker leave the library's own copy of those symbols out.
+# The tests that run against a live runtime, which harness.cpp brings up once
+# for the binary. test-path is here without needing one. It reaches
+# mono-path.c's statics by including the file. Only the archive semantics of
+# the RUNTIME link let the linker leave the library's own copy of those
+# symbols out.
 mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp
   test-function-pointer.cpp test-detour.cpp)
@@ -75,10 +76,11 @@ mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
 mono_unit_test_cases(test-mono-runtime test-function-pointer "FunctionPointer.*")
 mono_unit_test_cases(test-mono-runtime test-detour        "MethodDetour.*")
 
-# One case each, and there could not be a second: the samples they are built out
-# of run a domain to completion and call mono_jit_cleanup, and nothing in the
-# process gets a runtime after that.  They take harness.cpp for its class-library
-# check alone -- the runtime they use is the one the sample starts itself.
+# One case each, and there cannot be a second. The samples they are built out
+# of run a domain to completion and call mono_jit_cleanup. Nothing in the
+# process gets a runtime after that. They take harness.cpp for its
+# class-library check alone -- the runtime they use is the one the sample
+# starts itself.
 mono_add_unit_test(test-mono-embed   SOURCES harness.cpp test-mono-embed.cpp   RUNTIME)
 mono_unit_test_cases(test-mono-embed test-mono-embed "*")
 mono_add_unit_test(test-embed-invoke SOURCES harness.cpp test-embed-invoke.cpp RUNTIME)

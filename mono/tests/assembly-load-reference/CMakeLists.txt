@@ -1,6 +1,6 @@
 # Assembly.LoadFrom / Assembly.LoadFile resolution, checked in three layouts:
 # the dependency next to the caller, in a directory of its own, and split
-# between the two. The same two programs are compiled into each layout; what
+# between the two. The same two programs are compiled into each layout. What
 # differs is where their dependencies sit on disk.
 
 set(_alr_src "${CMAKE_CURRENT_SOURCE_DIR}")

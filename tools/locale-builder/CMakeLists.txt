@@ -17,9 +17,8 @@ set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 
-# -noconfig drops csc.rsp, so the references the tool needs have to be named.
-# The old rule ran a bare `mcs`, which supplied these from its default response
-# file; here they come out of the profile the tool will run against.
+# -noconfig drops csc.rsp, so the references the tool needs have to be named
+# explicitly, out of the profile the tool will run against.
 set(_refs
   "-r:${_class}/System.dll"
   "-r:${_class}/System.Xml.dll"

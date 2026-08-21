@@ -40,10 +40,10 @@ target_compile_definitions(mono_llvm INTERFACE
   LLVM_API_VERSION=${MONO_LLVM_API_VERSION})
 
 # An LLVM with assertions on is the configuration that is being checked rather
-# than shipped, and the IR verifier belongs to the same class of check - it
-# costs a few percent of every compile and buys a diagnostic where a malformed
-# module would otherwise miscompile silently.  So the backend's default for it
-# follows this, and MONO_LLVM_JIT_VERIFY overrides either way.
+# than shipped.  The IR verifier belongs to the same class of check, and it
+# costs 11-15% of compile CPU.  In exchange the verifier catches a malformed
+# module, which otherwise miscompiles silently.  The backend's default follows
+# LLVM's own assertion setting, and MONO_LLVM_JIT_VERIFY overrides either way.
 if(LLVM_ENABLE_ASSERTIONS)
   target_compile_definitions(mono_llvm INTERFACE MONO_LLVM_ASSERTIONS=1)
 endif()
@@ -55,8 +55,8 @@ if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(mono_llvm INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
 endif()
 
-# Exceptions stay on whatever LLVM chose: the ORC APIs report failures through
-# llvm::Error, and the unwinder needs the tables.
+# Exceptions stay on regardless of how LLVM itself was built: the ORC APIs
+# report failures through llvm::Error, and the unwinder needs the tables.
 target_compile_options(mono_llvm INTERFACE
   $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>
   $<$<COMPILE_LANGUAGE:CXX>:-funwind-tables>)

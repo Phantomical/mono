@@ -8,7 +8,7 @@
 # did. Each also runs on every collector that was built, `...@sgen` and
 # `...@boehm`. The corresponding cost is that `ctest -N` lists ~3400 tests.
 #
-# Labels. `ctest` with no arguments runs the fast set; everything heavy is
+# Labels. `ctest` with no arguments runs the fast set. Everything heavy is
 # behind a label so the inner loop stays short. See the `check` target.
 #   runtime   the ~700-program corpus and the one-off suites
 #   gshared   generic sharing, over four optimization sets
@@ -64,7 +64,6 @@ set(_mono_parallel_hungry
   bug-18026.exe
 )
 
-# ---------------------------------------------------------------------------
 # mono_runtime_suite(<name> TESTS ... [LABEL x] [RUNTIME_ARGS s] [ENV ...]
 #                    [OPT_SETS s] [TIMEOUT n] [EXPECT n] [WORKDIR d]
 #                    [PROCESSORS n] [GC ...] [SKIP_BOEHM ...]
@@ -79,10 +78,8 @@ set(_mono_parallel_hungry
 # `--rerun-failed` re-runs the six that broke rather than all seven hundred.
 # What test-runner did per child is small enough to reproduce inline: set
 # MONO_PATH/MONO_CONFIG, hand the runtime `-O=<opt-set>` and the suite's
-# runtime arguments, and compare the exit code. The per-test timeout it passed
-# down in TEST_DRIVER_TIMEOUT_SEC is still passed down -- tests that pace
-# themselves read it through TestTimeout.
-# ---------------------------------------------------------------------------
+# runtime arguments, and compare the exit code. TEST_DRIVER_TIMEOUT_SEC still
+# carries the per-test timeout, as it did on each child test-runner spawned.
 function(mono_runtime_suite name)
   cmake_parse_arguments(ARG "" "LABEL;RUNTIME_ARGS;OPT_SETS;TIMEOUT;EXPECT;WORKDIR;PROCESSORS;LONG_TIMEOUT"
                             "TESTS;ENV;GC;SKIP_BOEHM;LONG" ${ARGN})
@@ -92,8 +89,8 @@ function(mono_runtime_suite name)
   if(NOT ARG_GC)
     set(ARG_GC ${_mono_gcs})
   else()
-    # A suite may ask for a collector this build did not produce; drop it rather
-    # than emitting a test that cannot run.
+    # A suite can ask for a collector this build did not produce. Drop it
+    # rather than emitting a test that cannot run.
     set(_want "")
     foreach(_g IN LISTS ARG_GC)
       if(_g IN_LIST _mono_gcs)
@@ -230,9 +227,8 @@ set(_tailcall ${_tailcall_all})
 list(REMOVE_ITEM _tailcall
      ${MONO_TESTS_TAILCALL_DISABLED_COMPILE} ${MONO_TESTS_TAILCALL_DISABLED_RUN})
 
-# ---------------------------------------------------------------------------
 # The suites
-# ---------------------------------------------------------------------------
+#
 # The corpus default is 300s, which the three below have been measured getting
 # uncomfortably close to on a machine with its cores busy. Each is slow for a
 # reason its neighbours are not, so each gets the long budget rather than the
@@ -241,7 +237,7 @@ list(REMOVE_ITEM _tailcall
 #   dynamic-method-churn  asks the JIT for 40000 compiles -- 20000 dynamic
 #     methods, each with a runtime-invoke wrapper of its own, since a dynamic
 #     method cannot share the cached one. That is minutes of LLVM at any
-#     per-method cost this backend could plausibly reach; measured at 412s.
+#     per-method cost this backend could plausibly reach. Measured at 412s.
 #   appdomain-threadpool-unload  unloads 100 domains from a PLINQ query sized
 #     to ProcessorCount, each with a thread-pool item spinning in it. It wants
 #     the whole machine and gets a share of it, so its cost is set by what else
@@ -274,7 +270,7 @@ mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 
 # Continuations, whose two outcomes want naming rather than accepting either.
 # With everything compiled and a collector that keeps the saved stack out of the
-# heap they work; Boehm is the collector that does not, and the tier-0 arm
+# heap, they work. Boehm is the collector that does not, and the tier-0 arm
 # further down is the engine that does not.
 mono_runtime_suite(runtime-tasklets TESTS tasklets.exe GC sgen
                    ENV "MONO_LLVM_JIT_TIER0=0" "MONO_TEST_TASKLETS=run")
@@ -303,7 +299,7 @@ if(MONO_ENABLE_INTERPRETER)
   #
   # Built from the full corpus rather than from the interpreter's set, because a
   # program the pure interpreter cannot run may be perfectly fine once its hot
-  # methods compile -- and this is the tier real users get, so it is the one that
+  # methods compile. This is the tier real users get, so it is the one that
   # can least afford to inherit somebody else's refusals. Anything that genuinely
   # cannot run here belongs in MONO_TESTS_TIER0_DISABLED, with the reason.
   set(_tier0 ${_regular})
@@ -332,7 +328,7 @@ if(MONO_ENABLE_INTERPRETER)
 
   # The other direction: Interpreted's methods run in the interpreter while
   # their callees compile, so every call in Run () leaves the interpreter for
-  # native code. Nothing else covers that crossing -- the suites above either
+  # native code. No other suite covers that crossing -- the suites above either
   # compile everything or interpret everything, and by default every callee is
   # interpreted too.
   mono_runtime_suite(runtime-interp-calls-compiled LABEL interp
@@ -363,13 +359,12 @@ mono_runtime_suite(runtime-stress LABEL stress TESTS ${_stress} TIMEOUT 900
                    LONG domain-stress.exe LONG_TIMEOUT 1800)
 mono_runtime_suite(runtime-process-stress LABEL stress TESTS ${_stress_process} TIMEOUT 900)
 
-# --- the SGen matrix ---------------------------------------------------------
-# Each collector configuration is its own test, so a failure names the mode
-# rather than just "sgen". The argument strings are verbatim from the automake
-# recipes: the collector is selected on the command line, not through
-# MONO_GC_PARAMS, and the toggleref and bridge suites need their test hooks
-# (`toggleref-test`, `--gc-debug=bridge=...`) switched on or the behaviour they
-# check never happens.
+# The SGen matrix. Each collector configuration is its own test, so a failure
+# names the mode rather than just "sgen". The argument strings are verbatim
+# from the automake recipes: the collector is selected on the command line and
+# not through MONO_GC_PARAMS, and the toggleref and bridge suites need their
+# test hooks (`toggleref-test`, `--gc-debug=bridge=...`) switched on or the
+# behaviour they check never happens.
 #
 # PROCESSORS: these are GC stress programs, and most of the configurations run a
 # concurrent or parallel collector, so one of them is worth several ordinary
@@ -467,9 +462,8 @@ _mono_sgen_suite(sgen-bridge3-ms-conc-par-simple-par-512k-tarjan-bridge _sgen_br
 _mono_sgen_suite(sgen-bridge3-ms-conc-par-simple-par-32m-tarjan-bridge _sgen_bridge3
                  "--gc=sgen --gc-debug=bridge=3Bridge --gc-params=major=marksweep-conc-par,minor=simple-par,nursery-size=32m,bridge-implementation=tarjan")
 
-# --- one-off suites ----------------------------------------------------------
-# These are not test-runner corpora: each is a single program whose exit code
-# or output is the result.
+# One-off suites. These are not test-runner corpora: each is a single program
+# whose exit code or output is the result.
 # NATIVE is for the ones that do not run managed code on the runtime being
 # built -- there is no collector to vary, so they get no @<gc> suffix.
 function(mono_runtime_check name)
@@ -514,7 +508,7 @@ mono_runtime_check(runtime-reflection-load-with-context
 mono_runtime_check(runtime-iomap-regression
   COMMAND "${_wrapper}" exists.exe ENV "MONO_IOMAP=all")
 # The four unhandled-exception suites `check-local` ran: the exit code the
-# runtime should produce for an unhandled exception, with and without a managed
+# runtime produces for an unhandled exception, with and without a managed
 # AppDomain.UnhandledException handler installed.
 #
 # (There is also an `unhandled-exception-test-runner.2.exe` driver in the tree.
@@ -526,7 +520,7 @@ _mono_exe_list(_unhandled_255 ${MONO_TESTS_UNHANDLED_EXCEPTION_255_SRC})
 
 # TEST_UNHANDLED_EXCEPTION_HANDLER makes the test subscribe to
 # AppDomain.UnhandledException, so setting it is the *with*-handler case.
-# automake had these two target names the other way round; the names here
+# automake had these two target names the other way round. The names here
 # follow the source.
 function(_mono_unhandled_suite code handler)
   if(handler)

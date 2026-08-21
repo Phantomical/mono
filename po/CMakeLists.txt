@@ -5,7 +5,7 @@
 # Mono.Unix reference anywhere in mcs/mcs -- so the translated strings never
 # reach a user. The automake build compiled and installed them anyway, and this
 # does the same rather than quietly dropping four languages' worth of
-# translation work; wiring the compiler up to them is a separate job.
+# translation work.  Wiring the compiler up to them is a separate job.
 
 if(NOT MONO_ENABLE_NLS)
   return()

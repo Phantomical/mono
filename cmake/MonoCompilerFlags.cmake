@@ -1,9 +1,8 @@
 # The flag sets configure.ac assembled into CPPFLAGS/CFLAGS/CXXFLAGS/LDFLAGS.
 #
-# They are exposed as INTERFACE targets rather than appended to
-# CMAKE_C_FLAGS so that a directory can opt out of one of them: eglib and
-# mono/native both replace the warning set wholesale, exactly as they did
-# under automake.
+# They are INTERFACE targets rather than additions to CMAKE_C_FLAGS, so that
+# a target takes only the sets that apply to it.  mono::hidden stays out of
+# mono::common because eglib is built without it.
 
 include(CheckCCompilerFlag)
 
@@ -53,7 +52,7 @@ target_compile_options(mono_common INTERFACE
   $<$<COMPILE_LANGUAGE:C>:-fno-strict-aliasing>
   $<$<COMPILE_LANGUAGE:C>:-fwrapv>
   # The runtime takes the address of TLS variables across shared-library
-  # boundaries; the segment-relative shortcut breaks that under Xen.
+  # boundaries. The segment-relative shortcut breaks that under Xen.
   $<$<COMPILE_LANGUAGE:C>:-mno-tls-direct-seg-refs>)
 
 # MONO_DLL_EXPORT turns the MONO_API attributes into "export" rather than
@@ -72,7 +71,7 @@ if(MONO_ENABLE_VISIBILITY_HIDDEN)
 endif()
 
 # --- mono::eglib ------------------------------------------------------------
-# $(GLIB_CFLAGS) for the embedded eglib: just the include paths, so that
+# $(GLIB_CFLAGS) for the embedded eglib: the include paths, so that
 # consumers can pick it up without linking the library.
 add_library(mono_eglib_headers INTERFACE)
 add_library(mono::eglib_headers ALIAS mono_eglib_headers)
@@ -89,7 +88,7 @@ target_include_directories(mono_eglib_headers INTERFACE
 # into paths relative to the build directory -- both for the hash and for the
 # command it eventually runs -- so they read the same from any worktree.  It
 # only reaches ccache through the environment, hence wrapping the launcher
-# rather than just setting a variable here.
+# rather than setting a variable here.
 set(_mono_ccache FALSE)
 foreach(_lang C CXX ASM)
   if(CMAKE_${_lang}_COMPILER_LAUNCHER MATCHES "ccache")
@@ -108,7 +107,7 @@ endforeach()
 #
 # What that costs is that the debug info no longer names the tree it was built
 # in.  gdb started from the build directory still finds the sources, since the
-# file names stay relative and $cwd is on its source path; from anywhere else
+# file names stay relative and $cwd is on its source path. From anywhere else
 # it wants
 #     set substitute-path /mono ${CMAKE_SOURCE_DIR}
 if(_mono_ccache)
@@ -140,6 +139,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # --export-dynamic so managed code can P/Invoke back into the runtime's own
-# symbols; -Bsymbolic and -z now so the runtime binds its internal references
+# symbols. -Bsymbolic and -z now so the runtime binds its internal references
 # to itself instead of to whatever came earlier in the search order.
 add_link_options(-Wl,--export-dynamic -Wl,-Bsymbolic -Wl,-z,now)

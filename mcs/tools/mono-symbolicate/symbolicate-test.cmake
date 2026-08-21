@@ -1,6 +1,6 @@
 # Runs one mono-symbolicate round trip.
 #
-# StackTraceDumper prints a set of stack traces with no line information; the
+# StackTraceDumper prints a set of stack traces with no line information. The
 # symbolicator is then asked to put the line numbers back from the .msym store,
 # and the result is diffed against Test/symbolicate.expected.
 #
@@ -40,8 +40,8 @@ get_filename_component(_exe "${TEST_EXE}" NAME)
 string(REGEX REPLACE "\\.exe$" ".pdb" _pdb "${_exe}")
 file(COPY "${TEST_EXE}" "${_exedir}/${_pdb}" DESTINATION "${OUT_DIR}")
 
-# The store has to cover both the test program and the class libraries: half the
-# expected frames are inside corlib.
+# The store has to cover both the test program and the class libraries: several
+# of the expected frames come from inside them, not the test program.
 _run(COMMAND ${_mono} "${PROGRAM}" store-symbols "${_msym}" "${OUT_DIR}")
 _run(COMMAND ${_mono} "${PROGRAM}" store-symbols "${_msym}" "${LIB_PATH}")
 

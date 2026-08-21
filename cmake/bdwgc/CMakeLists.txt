@@ -1,7 +1,7 @@
 # Build external/bdwgc from here rather than from the submodule's own
-# CMakeLists.txt: that one predates the options mono needs and would have to be
-# patched in-tree.  The submodule stays pristine and this file supplies the
-# same configuration mono's configure handed to bdwgc's configure.
+# CMakeLists.txt: that one predates the options mono needs, and using it means
+# patching it in-tree.  The submodule stays pristine and this file supplies
+# the same configuration mono's configure handed to bdwgc's configure.
 
 set(BDWGC_DIR "${CMAKE_SOURCE_DIR}/external/bdwgc")
 

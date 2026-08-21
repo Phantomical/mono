@@ -1,24 +1,27 @@
 # Read-only view of the git submodules a directory depends on.
 #
-# .gitmodules and the index are the registry: the URL comes from the former and
-# the pinned revision is the gitlink in the latter, so there is nothing to parse
-# but git's own metadata.
+# .gitmodules and the index are the registry.  The URL comes from .gitmodules
+# and the pinned revision is the gitlink the index records, so there is
+# nothing to parse but git's own metadata.
 #
-# Nothing here fetches.  Getting sources is the user's job; this only detects
-# and reports, and a missing checkout skips the tests that need it.
+# Getting sources is the user's job.  These functions never fetch: they only
+# detect and report what is present.  A missing checkout skips the tests that
+# need it.
 
-# ---------------------------------------------------------------------------
 # mono_submodule_status(<path> <slug>)
 #
-# <path> is repository-relative, as it appears in .gitmodules.  Defines in the
-# caller's scope:
+# Reads one submodule's status from .gitmodules and the index.
+#
+# <path> is repository-relative, as it appears in .gitmodules.  <slug> is a
+# caller-chosen identifier used to build the variable names below.  Defines in
+# the caller's scope:
 #   MONO_SUBMODULE_<slug>_PATH      absolute path to the checkout
 #   MONO_SUBMODULE_<slug>_URL       from .gitmodules
 #   MONO_SUBMODULE_<slug>_REV       the gitlink the superproject records
 #   MONO_SUBMODULE_<slug>_HEAD      what is checked out, or "" when absent
 #   MONO_SUBMODULE_<slug>_PRESENT   the checkout exists
 #   MONO_SUBMODULE_<slug>_AT_REV    HEAD matches the recorded gitlink
-# ---------------------------------------------------------------------------
+#   MONO_SUBMODULE_<slug>_GITPATH   <path>, unchanged
 function(mono_submodule_status path slug)
   set(_abs "${CMAKE_SOURCE_DIR}/${path}")
 
@@ -58,13 +61,11 @@ function(mono_submodule_status path slug)
   set(MONO_SUBMODULE_${slug}_GITPATH "${path}"     PARENT_SCOPE)
 endfunction()
 
-# ---------------------------------------------------------------------------
 # mono_submodule_init_hint(<slug> <out-var>)
 #
-# The command that fetches this one checkout.  Named per-submodule rather than
-# as a bare `git submodule update --init`, because the acceptance-test corpora
-# are large and most builds want none of them.
-# ---------------------------------------------------------------------------
+# Returns, in <out-var>, the command that fetches this one checkout.  Named
+# per-submodule rather than as a bare `git submodule update --init`, because
+# the acceptance-test corpora are large and most builds want none of them.
 function(mono_submodule_init_hint slug out)
   set(_extra "")
   execute_process(

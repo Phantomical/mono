@@ -5,7 +5,7 @@
 
 set(MONO_TESTS_SPECIAL "")
 
-# Helper: build the assembly and record it as handled.
+# Builds the assembly and records it as handled.
 macro(_mono_special out)
   mono_test_assembly("${out}" ${ARGN})
   if("${out}" MATCHES "\\.exe$")

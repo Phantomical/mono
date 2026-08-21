@@ -1,8 +1,8 @@
 # The profiler modules.  These are dlopen'ed into a running runtime, so they
-# deliberately do NOT link against libmono: pulling a second copy of the
-# runtime's static data into the process runs library constructors twice, which
-# breaks LLVM in particular.  The undefined mono_* symbols are resolved from the
-# executable, which is linked --export-dynamic for exactly this reason.
+# deliberately do not link against libmono. Pulling a second copy of the
+# runtime's static data into the process runs library constructors twice,
+# which breaks LLVM in particular.  Their undefined mono_* symbols resolve
+# instead from the executable, which is linked --export-dynamic.
 
 set(_prof_modules aot log coverage)
 set(_prof_aot_sources      aot.c helper.c)

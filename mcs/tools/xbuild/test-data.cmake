@@ -1,10 +1,10 @@
 # The tree the xbuild suites run against.
 #
-# xbuild finds its targets, tasks and framework lists through three environment
-# variables, which the suites set to this directory.  Everything here is a copy
-# of what gets installed, staged where an uninstalled xbuild can reach it.
-#
-# Included by every directory whose suite exercises xbuild.
+# MSBuildExtensionsPath and XBUILD_FRAMEWORK_FOLDERS_PATH point xbuild at this
+# directory.  TESTING_MONO makes ToolLocationHelper look for frameworks and
+# build tools in this build's profile directories rather than in an installed
+# framework.  Everything here is a copy of what gets installed, staged where an
+# uninstalled xbuild can reach it.
 mono_profile_dir(_net4x net_4_x)
 set(_data "${MONO_MCS_TOPDIR}/tools/xbuild/data")
 set(_testing "${_net4x}/tests/xbuild")

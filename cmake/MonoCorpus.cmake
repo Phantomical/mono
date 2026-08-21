@@ -2,9 +2,9 @@
 #
 # A corpus is a C#/IL program compiled by the class-library toolchain and run
 # under the runtime this build produces.  Both mono/mini (the regression and
-# tiering suites) and the per-pass checks under mono/unit-tests build them, so
-# the compiler invocation, the fixture they hang off and the shape of a tiered
-# test all live here rather than being spelled twice.
+# tiering suites) and the per-pass checks under mono/unit-tests build them.
+# The compiler invocation, the fixture they hang off and the shape of a
+# tiered test all live here rather than being spelled twice.
 #
 # Corpora are part of `all`, ordered after `mcs`: a finished build has every
 # test input on disk, so running ctest never builds anything.
@@ -27,8 +27,8 @@ set(MONO_CORPUS_CSFLAGS   -unsafe -nowarn:0219,0169,0414,0649,0618)
 set(MONO_CORPUS_MINI_DIR "${CMAKE_BINARY_DIR}/mono/mini")
 set(MONO_CORPUS_MONO_PATH "${MONO_CORPUS_CLASS_DIR}:${MONO_CORPUS_MINI_DIR}")
 
-# csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected;
-# the corpora themselves are always compiled -nostdlib against this tree's
+# csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected.
+# The corpora themselves are always compiled -nostdlib against this tree's
 # mscorlib, so the host makes no difference to what comes out.
 mono_tools_runtime(_host MONO_PATH "${MONO_CORPUS_BUILD_DIR}")
 set(MONO_CORPUS_CSC ${_host}
@@ -36,8 +36,8 @@ set(MONO_CORPUS_CSC ${_host}
     "-r:${MONO_CORPUS_CLASS_DIR}/mscorlib.dll"
     "-r:${MONO_CORPUS_CLASS_DIR}/System.dll"
     "-r:${MONO_CORPUS_CLASS_DIR}/System.Core.dll")
-# -quiet drops the per-file banner and the success line; warnings and errors are
-# printed either way.
+# -quiet drops the per-file banner and the success line.  Warnings and errors
+# are printed either way.
 set(MONO_CORPUS_ILASM ${_host} "${MONO_CORPUS_BUILD_DIR}/ilasm.exe" -quiet)
 
 # Compile one C# corpus into the calling directory's binary dir, appending it to
@@ -77,9 +77,9 @@ function(mono_corpus_cs out)
   endforeach()
   # A reference built in this same directory has to be a dependency too, or a
   # parallel build compiles against a file that does not exist yet.  References
-  # into the class libraries are covered by the mcs dependency below; references
-  # built in another directory are covered by a target-level dependency, which
-  # is the only kind that crosses directories reliably.
+  # into the class libraries are covered by the mcs dependency below.
+  # References built in another directory are covered by a target-level
+  # dependency, which is the only kind that crosses directories reliably.
   set(_refs "")
   set(_ref_deps "")
   foreach(_r IN LISTS ARG_REFS)
@@ -103,9 +103,9 @@ endfunction()
 #
 #   mono_corpus_il(<out> <source.il> [LIBRARY|MODULE] [DEBUG])
 #
-# DEBUG writes an .mdb beside the assembly, which is what lets the runtime turn
-# an IL offset back into a line and therefore what the transform needs before it
-# will emit a sequence point.
+# DEBUG writes an .mdb beside the assembly, which lets the runtime turn an IL
+# offset back into a line.  The transform needs that before it emits a
+# sequence point.
 #
 # ilasm has no switch for a netmodule: what it writes is decided by the source,
 # which gets an Assembly row only where it carries a `.assembly` directive.

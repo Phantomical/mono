@@ -2,11 +2,11 @@
 # produce IL of the expected size.
 #
 # compiler-tester runs its cases sequentially in one process, globbed out of
-# the working directory, so the corpus is dealt into shard directories by
-# cmake/shard-corpus.py and each shard is its own CTest test: run-00/ gets one
-# compiler-tester, run-01/ the next, and ctest runs them concurrently.  Cases
-# that share a library or a source file are kept in one shard; the script's
-# docstring has the details.
+# the working directory.  cmake/shard-corpus.py therefore deals the corpus
+# into shard directories, and each shard is its own CTest test.  run-00/ gets
+# one compiler-tester, run-01/ the next, and ctest runs them concurrently.
+# Cases that share a library or a source file are kept in one shard.  The
+# script's docstring has the details.
 set(_bin "${CMAKE_CURRENT_BINARY_DIR}")
 set(_sup "${_bin}/support")
 set(_src "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -17,8 +17,9 @@ mono_profile_dir(_pdir net_4_x)
 # to exist before the first of them runs.
 file(MAKE_DIRECTORY "${_sup}/dlls")
 
-# Re-globbed so a corpus change re-runs the shard assignment's dependency list;
-# the assignment itself is a build step and re-runs when file contents change.
+# Re-globbed so a corpus change re-runs the shard assignment's dependency
+# list.  The assignment itself is a build step, and it re-runs when file
+# contents change.
 file(GLOB _corpus CONFIGURE_DEPENDS "${_src}/*.cs" "${_src}/*.il")
 file(GLOB_RECURSE _dlls "${_src}/dlls/*")
 
@@ -48,9 +49,9 @@ foreach(_f IN LISTS _il)
   list(APPEND _support "${_sup}/${_out}")
 endforeach()
 
-# The C# ones form a small chain -- 939-2 references 939-common, 679-1
-# references 679-2 -- and four are signed, because the tests that use them
-# check strong-name behaviour.
+# The C# ones reference each other in three places: 679-1 references 679-2,
+# 939-2 references 939-common, and 939-1's ref references 939-1's lib.  Four
+# are signed, because the tests that use them check strong-name behaviour.
 _mono_csc_command(_csc net_4_x)
 _mono_csc_env(_cscenv net_4_x)
 _mono_tool_depends(_rt net_4_x)

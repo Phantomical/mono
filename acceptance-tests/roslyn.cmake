@@ -6,9 +6,9 @@
 #     # Disabled because it doesn't build anymore due to removed myget feeds
 #
 # -- so the suite has not run since those feeds went away, and the roslyn
-# checkout it names is only kept alive by validate-roslyn.  Reviving it means
-# fixing the restore inside the roslyn checkout, not anything on this side, so
-# there is no disabled-by-default CMake target here either; there would be
-# nothing behind it.
+# checkout is now just another pinned submodule alongside the others in this
+# directory.  Reviving it means fixing the restore inside the roslyn
+# checkout, not anything on this side, so this file adds no disabled-by-default
+# CMake target either: there would be nothing behind it.
 #
 # `print-versions` still reports the pinned roslyn revision.

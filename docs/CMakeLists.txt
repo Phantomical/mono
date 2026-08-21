@@ -3,9 +3,9 @@
 # monodoc reads to find them.
 #
 # Off by default. It needs mdoc.exe out of the class libraries and perl for
-# exdoc, and it is the one part of the tree whose output nothing else consumes,
-# so paying for it on every build would be wrong. Turn it on with
-# -DMONO_ENABLE_DOCS=ON.
+# exdoc, and it is the one part of the tree whose output no other part of the
+# build consumes, so paying for it on every build would be wrong. Turn it on
+# with -DMONO_ENABLE_DOCS=ON.
 
 if(NOT MONO_ENABLE_DOCS)
   return()
@@ -32,14 +32,12 @@ set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 set(_csc ${_host} "${MONO_CSC}" -debug:portable -noconfig -nologo)
 
-# mdoc runs on the built runtime against the built class libraries -- it is one
-# of them, so nothing else can load it.
+# mdoc runs on the built runtime against the built class libraries: it is one
+# of them, so only that runtime can load it.
 set(_mdoc ${CMAKE_COMMAND} -E env "MONO_PATH=${_class}"
           "${_wrapper}" "${_class}/mdoc.exe")
 
-# ---------------------------------------------------------------------------
 # The HTML converter used to turn the in-source API comments into monodoc XML
-# ---------------------------------------------------------------------------
 file(GLOB _agility_sources CONFIGURE_DEPENDS "${_src}/HtmlAgilityPack/*.cs")
 
 add_custom_command(
@@ -64,9 +62,8 @@ add_custom_command(
   COMMENT "CSC convert.exe"
   VERBATIM)
 
-# ---------------------------------------------------------------------------
 # exdoc: extracts the API documentation out of the runtime's C sources
-# ---------------------------------------------------------------------------
+#
 # The comment blocks live in mono/*/*.c, so the stamp has to be rebuilt when any
 # of them changes. Globbing that at configure time would be a lie the moment a
 # file is added, but it is the same bargain the old build made and the target is
@@ -92,9 +89,8 @@ add_custom_command(
   VERBATIM)
 add_custom_target(docs-extract DEPENDS "${_bin}/deploy/.stamp")
 
-# ---------------------------------------------------------------------------
 # The assembled trees
-# ---------------------------------------------------------------------------
+#
 # `mdoc assemble` writes both the .tree and the .zip, so they are one command
 # with two outputs rather than the two rules with a recovery test that the make
 # version needed.
@@ -103,9 +99,9 @@ add_custom_target(docs-extract DEPENDS "${_bin}/deploy/.stamp")
 # input holds paths relative to the directory mdoc runs in: mono-tools.config
 # and mono-file-formats.config point at `../man/*.1` in the source tree, while
 # toc.xml points at `deploy/*.html`, which exdoc wrote into the build tree.
-# Building in-tree gave the old rules both at once; out of tree they have to be
-# told apart. The output path is absolute either way, so nothing lands in the
-# source directory.
+# Building in-tree gave the old rules both at once. Out of tree, they have to
+# be told apart. The output path is absolute either way, so nothing lands in
+# the source directory.
 function(_mono_assemble_doc name format workdir input)
   add_custom_command(
     OUTPUT "${_bin}/${name}.tree" "${_bin}/${name}.zip"
@@ -116,7 +112,7 @@ function(_mono_assemble_doc name format workdir input)
     VERBATIM)
 endfunction()
 
-# monoapi is the extracted embedding API, so it waits on exdoc; the other two
+# monoapi is the extracted embedding API, so it waits on exdoc. The other two
 # are assembled straight from checked-in config files.
 _mono_assemble_doc(monoapi           hb  "${_bin}" "${_src}/toc.xml"
                    "${_bin}/deploy/.stamp")
@@ -137,8 +133,8 @@ install(FILES
     "${_bin}/monoapi.tree"           "${_bin}/monoapi.zip"
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/monodoc/sources")
 
-# doxygen over the runtime sources; unrelated to monodoc, and only useful if
-# you have doxygen. Never part of `all`.
+# Doxygen runs over the runtime sources. It is unrelated to monodoc, and
+# useful only if you have doxygen. It is never part of `all`.
 if(MONO_DOXYGEN)
   add_custom_target(doxygen
     COMMAND "${MONO_DOXYGEN}" "${_src}/doxyfile"

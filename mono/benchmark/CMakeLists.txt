@@ -21,11 +21,10 @@ set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 set(_csc   ${_host} "${MONO_CSC}" -debug:portable -noconfig -nologo
            -nowarn:0162 -nowarn:0168 -nowarn:0219 -nowarn:0414 -nowarn:0649)
-# /quiet drops the per-file banner and the success line; warnings and errors are
-# printed either way.
+# /quiet drops the per-file "Assembling ..." banner and the "Operation completed
+# successfully" line.  Warnings and errors print in both conditions.
 set(_ilasm ${_host} "${_buildcls}/ilasm.exe" /quiet)
 
-# C# benchmarks.
 set(_cs_benchmarks
   fib life castclass
   cmov1 cmov2 cmov3 cmov4 cmov5

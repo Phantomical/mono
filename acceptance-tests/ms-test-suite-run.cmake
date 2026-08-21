@@ -1,8 +1,8 @@
 # Build and run one ms-test-suite suite.
 #
-# Each suite ships a Makefile with `build` and `run` targets that take MCS and
-# NUNIT-CONSOLE from the environment, so this is the two sub-makes
-# ms-test-suite.mk ran, in order, with the failure of either reported.
+# Each suite ships a Makefile with `build` and `run` targets that take MCS
+# and NUNIT-CONSOLE as make variables. This runs the two sub-makes
+# ms-test-suite.mk ran, in order, and fails on whichever step fails.
 
 foreach(_v MS_DIR MAKE MCS NUNIT_CONSOLE RESULT)
   if(NOT DEFINED ${_v})

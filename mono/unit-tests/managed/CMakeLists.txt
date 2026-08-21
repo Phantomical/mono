@@ -5,9 +5,9 @@
 # once per engine arm.  MONO_MERGED_TESTS makes an arm one ctest test instead,
 # and runner.cpp runs that arm's methods in one process.
 #
-# discover.cmake lists those methods when ctest starts rather than at configure
-# time, so writing a new test means editing a source and building, with no cmake
-# step in between.
+# discover.cmake lists those methods when ctest starts rather than at
+# configure time. Writing a new test means editing a source and building,
+# with no cmake step in between.
 
 if(NOT MONO_CORPUS_ENABLED)
   # No class-library toolchain, so nothing to compile the suites with.
@@ -18,9 +18,7 @@ if(NOT MONO_ENABLE_INTERPRETER OR NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRAR
   return()
 endif()
 
-# ---------------------------------------------------------------------------
 # The runner
-# ---------------------------------------------------------------------------
 # Native methods for the P/Invoke tests.
 add_executable(interp-test-runner runner.cpp native.cpp)
 set_target_properties(interp-test-runner PROPERTIES ENABLE_EXPORTS TRUE)
@@ -43,9 +41,7 @@ if(ZLIB_FOUND)
 endif()
 set_target_properties(interp-test-runner PROPERTIES LINKER_LANGUAGE CXX)
 
-# ---------------------------------------------------------------------------
 # Registration
-# ---------------------------------------------------------------------------
 # Registers the test methods of an assembly as ctest tests, one per method --
 # or one per call under MONO_MERGED_TESTS.  Use the name prefix and the
 # environment to tell apart different runs of the same tests.
@@ -80,7 +76,7 @@ function(mono_add_test_methods)
   cmake_path(GET ARG_ASSEMBLY STEM _stem)
 
   # Under MONO_MERGED_TESTS the runner takes over what discover.cmake does with
-  # the listing: it applies ONLY and ARM itself, and XFAIL becomes --xfail
+  # the listing. It applies ONLY and ARM itself, and XFAIL becomes --xfail
   # rather than WILL_FAIL, because one ctest test now covers every method.
   # UNMERGEABLE only means anything here, where the process is shared.
   if(MONO_MERGED_TESTS)
@@ -162,9 +158,7 @@ endif()
   set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${_include}")
 endfunction()
 
-# ---------------------------------------------------------------------------
 # The suites
-# ---------------------------------------------------------------------------
 set(MONO_CORPUS_OUTPUTS "")
 set(_modules "")
 
@@ -242,9 +236,9 @@ set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 # list and adds whatever the optimizing pipeline answers differently.
 set(MONO_INTERP_TESTS_TIER2_XFAIL ${MONO_INTERP_TESTS_JIT_XFAIL})
 
-# Tests that end the process instead of answering. One process per test survives
-# that and reports the failure; a merged run loses every test behind it, so a
-# merged run skips these and says so.
+# Tests that end the process instead of answering. One process per test
+# survives that and reports the failure. A merged run loses every test behind
+# it, so a merged run skips these and says so.
 set(MONO_INTERP_TESTS_JIT_UNMERGEABLE
   # The exception the filter raises reaches no managed catch at all, so it goes
   # out of the runner as a fatal unhandled exception.

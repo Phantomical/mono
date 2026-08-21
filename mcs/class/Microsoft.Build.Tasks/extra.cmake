@@ -1,5 +1,6 @@
-# One of the resources the suite embeds is an assembly rather than a checked-in
-# file: the tests that read metadata out of a reference need something to read.
+# One of the resources the suite embeds is a compiled assembly, not a
+# checked-in file. The tests that read metadata off a reference need
+# something to read.
 mono_test_fixture_assembly(
   PROFILE  net_4_x
   ASSEMBLY Microsoft.Build.Tasks.v4.0.dll

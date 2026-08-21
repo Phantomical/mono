@@ -2,8 +2,8 @@
 # recorded revision follows the checkout rather than the last configure.
 #
 # Expects SRC_DIR, OUT and GIT_EXECUTABLE on the command line.  git is searched
-# for at configure time, with everything else the build needs from outside the
-# tree; an empty GIT_EXECUTABLE means it was not found.
+# for at configure time, along with everything else the build needs from
+# outside the tree.  An empty GIT_EXECUTABLE means it was not found.
 
 set(_full "tarball")
 

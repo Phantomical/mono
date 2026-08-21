@@ -28,16 +28,15 @@ add_executable(test-eglib
 target_link_libraries(test-eglib PRIVATE
   mono::common eglib GTest::gtest GTest::gtest_main)
 # The UTF-* fixtures and the machine.config the markup parser is pointed at are
-# read at runtime; naming both here keeps them off the working directory.
+# read at runtime.  Naming both here keeps them off the working directory.
 target_compile_definitions(test-eglib PRIVATE
   EGLIB_TESTS=1 _FORTIFY_SOURCE=2
   EGLIB_TEST_DATA_SRCDIR="${CMAKE_CURRENT_SOURCE_DIR}"
   EGLIB_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 target_compile_options(test-eglib PRIVATE -Wall)
 
-# path/find_program_in_path_cwd blanks $PATH and then looks for the test binary
-# itself in ".", so the tests have to run from the directory they were linked
-# into.
+# path/find_program_in_path_cwd needs to run from here.  See the test itself
+# for why.
 mono_gtest_tests(test-eglib
   PREFIX eglib
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"

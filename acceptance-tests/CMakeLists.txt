@@ -4,7 +4,7 @@
 # ms-test-suite.mk).
 #
 # These are nothing like `check`.  The CoreCLR corpus alone is ~4700 assemblies
-# to compile and two suites to run; the microbenchmarks are BenchmarkDotNet
+# to compile and two suites to run. The microbenchmarks are BenchmarkDotNet
 # harnesses that take minutes each.  So the whole directory is behind
 # MONO_ENABLE_ACCEPTANCE_TESTS, off by default, and every test it registers
 # carries the `acceptance` label so it stays out of `check` and `check-all`:
@@ -79,9 +79,7 @@ if(NOT MONO_ENABLE_MCS_BUILD OR NOT MONO_ENABLE_EXECUTABLES)
   return()
 endif()
 
-# ---------------------------------------------------------------------------
 # The toolchain, spelled as in Makefile.am
-# ---------------------------------------------------------------------------
 set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
@@ -90,8 +88,8 @@ set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 
 # RUNTIME / TOOLS_RUNTIME.  RUNTIME is what the suites are *testing*, so it is
 # always the one this build produced.  TOOLS_RUNTIME only hosts the compiler and
-# follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS -- see MonoToolsRuntime.cmake, and
-# note that these compiles do not pass -nostdlib.
+# follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS -- see MonoToolsRuntime.cmake.
+# These compiles do not pass -nostdlib.
 set(_runtime "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}" "${_wrapper}" --debug)
 mono_tools_runtime(_tools_runtime MONO_PATH "${_buildcls}" ARGS --debug)
 
@@ -99,8 +97,8 @@ mono_tools_runtime(_tools_runtime MONO_PATH "${_buildcls}" ARGS --debug)
 # its references off -lib, where mono/tests passes absolute paths.
 set(_mcs ${_tools_runtime} "${MONO_CSC}" -nologo -noconfig "-lib:${_class}"
          -r:System.dll -r:System.Core.dll -r:System.Xml.dll -r:Microsoft.CSharp.dll)
-# -quiet drops the per-file banner and the success line; warnings and errors are
-# printed either way.
+# -quiet drops the per-file banner and the success line. Warnings and errors
+# are printed either way.
 set(_ilasm ${_tools_runtime} "${_buildcls}/ilasm.exe" -quiet)
 
 if(NOT MONO_GNU_MAKE)
@@ -117,7 +115,7 @@ add_dependencies(acceptance-toolchain mcs)
 mono_tools_runtime_depends(acceptance-toolchain)
 
 # test-runner.exe, shared by the CoreCLR suites.  mono/tests builds its own
-# copy in its own binary dir; this is the acceptance-tests one, exactly as
+# copy in its own binary dir. This is the acceptance-tests one, exactly as
 # coreclr.mk built it here.
 add_custom_command(
   OUTPUT "${_bin}/test-runner.exe"

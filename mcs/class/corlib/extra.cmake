@@ -17,9 +17,8 @@ endif()
 
 set(_corlib_test_deps "")
 
-# ---------------------------------------------------------------------------
 # Satellite assemblies
-# ---------------------------------------------------------------------------
+#
 # ResourceManager finds these by walking <culture>/ next to the assembly that
 # asked, so they have to sit beside the test assembly under its own culture
 # directory -- the layout is the assertion.
@@ -58,11 +57,12 @@ foreach(_culture es-ES nn-NO)
   list(APPEND _corlib_test_deps mcs-corlib-satellite-${_culture})
 endforeach()
 
-# ---------------------------------------------------------------------------
 # The xunit suite's helper assemblies
-# ---------------------------------------------------------------------------
-# Both are loaded from beside the test assembly by name rather than referenced,
-# which is the point of the tests that use them.
+#
+# TestLoadAssembly.dll is loaded from beside the test assembly by name rather
+# than referenced, which is the point of the tests that use it.
+# System.Reflection.TestModule.dll is both referenced at compile time and
+# loaded from beside the assembly by name at runtime.
 set(_corefx "${CMAKE_SOURCE_DIR}/external/corefx/src/System.Runtime/tests")
 
 mono_test_fixture_assembly(
@@ -85,9 +85,8 @@ add_custom_target(mcs-corlib-test-module DEPENDS "${_module}")
 mono_test_environment(PROFILE net_4_x ASSEMBLY mscorlib.dll
                       DEPENDS ${_corlib_test_deps} mcs-corlib-test-module)
 
-# ---------------------------------------------------------------------------
 # Version-tolerant serialization
-# ---------------------------------------------------------------------------
+#
 # Six versions of the same type, each in its own assembly: the suite serializes
 # with one and deserializes with another, so the assemblies are the fixture and
 # the whole thing is a separate test rather than part of the corlib suite.

@@ -28,8 +28,8 @@ foreach(_f IN LISTS _for_mono)
 endforeach()
 
 # msbuild wants the compiler under its own tree.  The task assembly and the
-# .targets files are real copies; the compiler itself is symlinked back to the
-# one above rather than duplicated.
+# .targets files are real copies.  The compiler itself is symlinked back to
+# the one above rather than duplicated.
 install(PROGRAMS
         "${_roslyn}/Microsoft.Build.Tasks.CodeAnalysis.dll"
         "${_roslyn}/Microsoft.CSharp.Core.targets"

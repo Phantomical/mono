@@ -1,9 +1,9 @@
 # mscorlib.
 #
-# The one assembly that is not just a compile.  csc emits it, then
+# csc alone does not build this assembly. It compiles the DLL, then
 # cil-stringreplacer splices in two things: the resource string table from
 # referencesource, and an IL module ilasm built from Unsafe.il for the
-# construct csc cannot express.  What ships is therefore rewritten IL.
+# construct csc cannot express. What ships is therefore rewritten IL.
 #
 # Everything else in the tree waits on this, in every profile.
 
@@ -21,7 +21,7 @@ foreach(_p build net_4_x unityjit)
 endforeach()
 
 # The reference-source feature matrix.  In the makefiles this was a dozen
-# nested ifdefs over knobs the mobile profiles set; none of those profiles
+# nested ifdefs over knobs the mobile profiles set.  None of those profiles
 # survive, so every branch is taken and the result is a constant.
 set(_refsrc -d:FEATURE_PAL,GENERICS_WORK,FEATURE_LIST_PREDICATES,FEATURE_SERIALIZATION,FEATURE_ENCODINGNLS,FEATURE_ASCII,FEATURE_LATIN1,FEATURE_UTF7,FEATURE_UTF32,MONO_HYBRID_ENCODING_SUPPORT,FEATURE_ASYNC_IO,NEW_EXPERIMENTAL_ASYNC_IO,FEATURE_UTF32,FEATURE_EXCEPTIONDISPATCHINFO,FEATURE_CORRUPTING_EXCEPTIONS,FEATURE_EXCEPTION_NOTIFICATIONS,FEATURE_STRONGNAME_MIGRATION,FEATURE_USE_LCID,FEATURE_FUSION,FEATURE_CRYPTO,FEATURE_X509_SECURESTRINGS,FEATURE_SYNCHRONIZATIONCONTEXT,FEATURE_SYNCHRONIZATIONCONTEXT_WAIT,FEATURE_DEFAULT_INTERFACES,HAS_CORLIB_CONTRACTS
             -d:FEATURE_MACL
@@ -69,9 +69,8 @@ set(_test_resources
 foreach(_p build net_4_x unityjit)
   mono_profile_dir(_dir ${_p})
   set(_flags ${_common_flags})
-  # Only net_4_x runs tests, and the fields have to stay off the bootstrap
-  # profile in particular: compiling a .resx needs resgen, which that profile
-  # is what produces.
+  # Only net_4_x runs tests, and these fields have to stay off the bootstrap
+  # profile: compiling a .resx needs resgen, which that profile itself builds.
   set(_test "")
   if(_p STREQUAL "net_4_x")
     list(APPEND _flags -d:FEATURE_CRYPTO_CONFIGURABLE)
@@ -91,8 +90,9 @@ foreach(_p build net_4_x unityjit)
       XTEST_REMOTE_EXECUTOR
       XTEST_FLAGS -d:netcoreapp -publicsign -keyfile:../mono.snk
                   "-resource:${CMAKE_SOURCE_DIR}/external/corefx/src/System.Reflection/tests/Resources/ResourceTextFile.txt,ResourceTextFile.txt"
-                  # A netmodule the reflection tests load from beside the test
-                  # assembly; extra.cmake puts it there.
+                  # The reflection tests inspect this assembly's module -- its
+                  # global fields and its types.  extra.cmake copies it in
+                  # beside the test assembly, where the loader finds it.
                   "-r:${_dir}/tests/System.Reflection.TestModule.dll")
   endif()
   mono_declare_managed(

@@ -1,7 +1,7 @@
 # The runtime regression corpus: ~700 small managed programs plus the native
 # library they P/Invoke into.
 #
-# The corpus itself lives in tests.cmake; this file is the rules.
+# The corpus itself lives in tests.cmake. This file is the rules.
 #
 # Only the JIT modes are here. The AOT ones (fullaot-mixed, llvmonly-mixed, and
 # the `%.exe.so` AOT-image rules that shadowed every test) are out of this
@@ -21,7 +21,7 @@ set(_buildcls "${MONO_MCS_LIBDIR}/build")
 set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
 
 # csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected,
-# against the build profile of the class libraries; see MonoToolsRuntime.cmake.
+# against the build profile of the class libraries. See MonoToolsRuntime.cmake.
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 set(_csc ${_host} "${MONO_CSC}"
          -debug:portable -noconfig -nologo
@@ -29,12 +29,11 @@ set(_csc ${_host} "${MONO_CSC}"
          -nowarn:0169 -nowarn:1690 -nowarn:0649 -nowarn:0612 -nowarn:3021
          -nowarn:0197 -langversion:latest)
 set(_csc_unsafe ${_csc} -unsafe)
-# /quiet drops the per-file banner and the success line; warnings and errors are
-# printed either way.
+# /quiet drops the per-file banner and the success line. Warnings and errors
+# are printed either way.
 set(_ilasm ${_host} "${_buildcls}/ilasm.exe" /quiet)
 
-# The reference set an ordinary test gets. Mono.Posix is what TestDriver uses
-# to hard-kill a test that hangs past its timeout.
+# The reference set an ordinary test gets.
 #
 # -nostdlib names this tree's mscorlib rather than the compiler host's. The rest
 # of this set is already this tree's, so without it a test compiles against a
@@ -53,7 +52,6 @@ set(_default_refs
 
 set(_all_assemblies "")
 
-# ---------------------------------------------------------------------------
 # mono_test_assembly(<output> SOURCES ... [IL] [LIBRARY] [MODULE]
 #                    [NO_DEFAULT_REFS] [REFS ...] [DEFINES ...]
 #                    [FLAGS ...] [DEPENDS ...])
@@ -61,7 +59,6 @@ set(_all_assemblies "")
 # One managed assembly. Everything below is either a call to this or, for the
 # handful of tests automake built with a multi-command recipe, a custom command
 # of its own.
-# ---------------------------------------------------------------------------
 function(mono_test_assembly out)
   cmake_parse_arguments(ARG "IL;LIBRARY;MODULE;NO_DEFAULT_REFS" ""
                             "SOURCES;REFS;DEFINES;FLAGS;DEPENDS" ${ARGN})
@@ -134,10 +131,8 @@ function(mono_test_assembly out)
   set(_all_assemblies "${_all_assemblies};${_bin}/${out}" PARENT_SCOPE)
 endfunction()
 
-# ---------------------------------------------------------------------------
 # The toolchain the corpus is compiled with: TestDriver.dll, test-runner.exe
 # and libtest.
-# ---------------------------------------------------------------------------
 add_custom_command(
   OUTPUT "${_bin}/TestDriver.dll"
   COMMAND ${_csc_unsafe} -target:library "-out:${_bin}/TestDriver.dll"
@@ -171,8 +166,8 @@ set_target_properties(libtest PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${_bin}")
 target_link_libraries(libtest PRIVATE mono::common mono::eglib_headers eglib)
 target_include_directories(libtest PRIVATE "${CMAKE_SOURCE_DIR}")
-# mono_test_marshal_delegate () makes indirect calls to stdcall functions;
-# turning them into tail calls miscompiles on some gcc versions.
+# mono_test_marshal_delegate () makes indirect calls to stdcall functions.
+# Turning them into tail calls miscompiles on some gcc versions.
 target_compile_options(libtest PRIVATE -fno-optimize-sibling-calls)
 
 add_custom_target(mono-test-toolchain
@@ -182,10 +177,8 @@ add_custom_target(mono-test-toolchain
 add_dependencies(mono-test-toolchain mcs)
 mono_tools_runtime_depends(mono-test-toolchain)
 
-# ---------------------------------------------------------------------------
 # Generated sources: three array tests are the same body instantiated over a
 # big struct, a small struct and an int.
-# ---------------------------------------------------------------------------
 foreach(_variant bigvt smallvt int)
   # add_custom_command has no output redirection, and the generators write to
   # stdout, so these go through a shell.
@@ -253,9 +246,7 @@ _mono_split_il(tailcall-split-fsharp
 _mono_split_il(split-tailcall-interface-conservestack
                tailcall-interface-conservestack.il tailcall/interface-conservestack)
 
-# ---------------------------------------------------------------------------
 # Data the tests read at run time.
-# ---------------------------------------------------------------------------
 set(LIBC "libc.so.6")
 set(MONO_NATIVE_LIBRARY_NAME "libmono-native")
 set(libsuffix ".so")
@@ -268,20 +259,16 @@ endforeach()
 configure_file("${_src}/internalsvisibleto-2048.snk" "${_bin}/internalsvisibleto-2048.snk" COPYONLY)
 configure_file("${_src}/testing_gac/testkey.snk" "${_bin}/testing_gac/testkey.snk" COPYONLY)
 
-# ---------------------------------------------------------------------------
 # Tests automake gave a recipe of their own. Everything named here is skipped
 # by the bulk loop below.
-# ---------------------------------------------------------------------------
 include(special-tests.cmake)
 
-# ---------------------------------------------------------------------------
 # The bulk of the corpus: one assembly per source, default references.
-# ---------------------------------------------------------------------------
 set(_generated_cs array-coop-bigvt.cs array-coop-smallvt.cs array-coop-int.cs
                   runtime-invoke.gen.cs imt_big_iface_test.cs)
 
 # A few sources appear in more than one list (gc-graystack-stress is both a
-# stress test and an SGen test, for instance); build each assembly once.
+# stress test and an SGen test, for instance). Build each assembly once.
 #
 # Disabled tests are not built at all, which is what automake did too: it
 # filtered them out of the lists before those lists became build targets. Some
@@ -339,9 +326,7 @@ mono_test_assembly(override-copy-b.dll LIBRARY SOURCES override-copy.cs)
 add_custom_target(runtime-corpora ALL DEPENDS ${_all_assemblies})
 add_dependencies(runtime-corpora mono-test-toolchain)
 
-# ---------------------------------------------------------------------------
 # CTest wiring
-# ---------------------------------------------------------------------------
 include(runtime-suites.cmake)
 
 add_subdirectory(gc-descriptors)

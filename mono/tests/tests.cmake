@@ -772,8 +772,8 @@ set(MONO_TESTS_IL_SRC
   calli_native.il
 )
 
-# Microbenchmarks. They are run as correctness tests here; Test project /home/swlynch/projects/mono/.claude/worktrees/cmake-build
-# times them.
+# Microbenchmarks. They go into the `runtime` suite with the other corpora, so
+# a pass says the program is correct, not that it is fast.
 set(MONO_TESTS_BENCH_SRC
   fib.cs
   random.cs
@@ -858,7 +858,7 @@ set(MONO_TESTS_STRESS_SRC
   spinlock-stress.cs
 )
 
-# Process-creation stress; slow enough to need its own timeout.
+# Process-creation stress. Slow enough to need its own timeout.
 set(MONO_TESTS_STRESS_PROCESS_SRC
   process-stress-1.cs
   process-stress-2.cs
@@ -1073,8 +1073,8 @@ set(MONO_TESTS_DISABLED
   merp-json-valid.exe
   merp-crash-test.exe
   finally_guard.exe
-  # scrapes "converting method ..." out of a --compile-all run; neither the
-  # option nor that trace exists any more
+  # Scrapes "converting method ..." out of a --compile-all run. Neither the
+  # option nor that trace exists any more.
   verbose.exe
 )
 
@@ -1206,7 +1206,7 @@ set(MONO_TESTS_TAILCALL_DISABLED_RUN
 
 # Tests kept off the boehm half, so only `<test>@sgen` runs.
 set(MONO_TESTS_BOEHM_DISABLED
-  # boehm does not support weak fields
+  # Boehm does not support weak fields
   weak-fields.exe
   # currently hangs
   thread-suspend-suspended.exe

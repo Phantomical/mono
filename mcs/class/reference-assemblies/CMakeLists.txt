@@ -22,8 +22,8 @@ foreach(_v IN LISTS _facade_versions)
 endforeach()
 
 file(GLOB _mono_dlls "${_src}/mono/*.dll")
-# From 4.7.1 on the framework itself carries SharpZipLib, so mono's copy would
-# shadow it.
+# From 4.7.1 on the framework itself carries SharpZipLib, so mono's copy is
+# left out there to avoid shadowing it.
 list(FILTER _mono_dlls EXCLUDE REGEX "/ICSharpCode\\.SharpZipLib\\.dll$")
 file(GLOB _sharpzip "${_src}/mono/ICSharpCode.SharpZipLib.dll")
 foreach(_v IN LISTS _mono_versions)
@@ -34,8 +34,8 @@ foreach(_v IN LISTS _mono_versions)
 endforeach()
 
 # NUnit and FSharp have hardcoded checks for <prefix>/lib/mono/4.0/mscorlib.dll
-# and Mono.Posix.dll.  Nothing else puts anything in 4.0, so those two are
-# symlinked to the reference assembly to keep those tools working.
+# and Mono.Posix.dll.  No other install() rule writes into 4.0, so these two
+# are symlinked to the reference assembly to keep those tools working.
 # See https://bugzilla.xamarin.com/show_bug.cgi?id=38331 and .../41052
 install(CODE "
 set(_dir \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${_dest}/4.0\")

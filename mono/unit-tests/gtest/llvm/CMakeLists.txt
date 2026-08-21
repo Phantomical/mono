@@ -6,11 +6,11 @@ if(NOT MONO_ENABLE_LLVM OR NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRARIES)
   return()
 endif()
 
-# Most of the cases drive method_to_llvm () over real metadata, so each one is a
-# method in a `.il` file under il/ that ilasm assembles into an assembly the test
-# loads.  Their sources are compiled either way and the fixtures skip themselves
-# when there is no corpus to load: a case that disappears from `ctest -N` reads
-# exactly like a case that passed.
+# Most of the cases drive method_to_llvm () over real metadata. Each one is a
+# method in a `.il` file under il/ that ilasm assembles into an assembly the
+# test loads. The sources compile either way. A fixture with no corpus to load
+# skips itself instead of vanishing from `ctest -N`. A missing case there
+# reads the same as a passed one.
 set(MONO_LLVM_TEST_SOURCES
     thunk-tests.cpp jitlink-memory-tests.cpp mono-lsda-tests.cpp gdb-jit-tests.cpp
     harness.cpp translator-tests.cpp jit-tests.cpp compiler-tests.cpp
@@ -43,12 +43,12 @@ mono_gtest_binary(test-llvm
     MONO_LLVM_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}"
     MONO_LLVM_TESTS_CFG_DIR="${CMAKE_BINARY_DIR}/runtime/etc")
 
-# Tier 2 off, which is not the runtime's default: these cases read the shape of a
-# tier-1 body and link one against a jit of their own.  The instrumentation puts
-# a counter block in front of every body and a call to a symbol only the runtime
-# defines, so a case that counts blocks or materializes a module would be reading
-# tier 2 rather than what it is about.  JitProfile below is the suite that wants
-# it on.
+# Tier 2 off, which is not the runtime's default. These cases read the shape
+# of a tier-1 body and link one against a jit of their own. With tier 2 on,
+# the instrumentation puts a counter block in front of every body and a call
+# to a symbol only the runtime defines. Then a case that counts blocks or
+# materializes a module reads tier 2's shape and not the shape it is about.
+# JitProfile below is the suite that wants it on.
 mono_gtest_tests(test-llvm
   PREFIX test-llvm
   FILTER "-JitProfile.*"
@@ -57,11 +57,11 @@ mono_gtest_tests(test-llvm
     LABELS llvm
     ENVIRONMENT "MONO_LLVM_JIT_TIER2=0")
 
-# The JitProfile cases read the counters a tier-1 body carries, and a body that
-# promoted while a case was reading it would answer for code that no longer
-# counts.  So they run apart from the rest under a count no case can reach, which
-# holds every method at tier 1 for the whole process.  jit.cpp reads the value
-# once, so it cannot be set per case.
+# The JitProfile cases read the counters a tier-1 body carries. A body
+# promoted while a case reads it answers for code that no longer counts. So
+# they run apart from the rest, under a threshold no case can reach, that
+# holds every method at tier 1 for the process. options.cpp reads the
+# threshold once and caches it, so it cannot be set per case.
 mono_gtest_tests(test-llvm
   PREFIX test-llvm-profile
   FILTER "JitProfile.*"

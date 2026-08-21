@@ -3,13 +3,13 @@
 # Three NUnit-Lite suites -- conformance, systemruntimebringup and
 # System.Linq.Expressions -- each with its own Makefile inside the checkout
 # that takes MCS and NUNIT-CONSOLE from the caller.  Those Makefiles are part
-# of the external repository, so they are still driven with make; this only
+# of the external repository, so they are still driven with make. This only
 # supplies the toolchain and the CTest wiring.
 #
 # The checkout lives at git@github.com:xamarin/ms-test-suite.git, which is
-# Xamarin-internal and not readable from outside.  ms-test-suite.mk handled
-# that by swallowing the clone failure and printing a notice; here the suites
-# simply are not registered when the checkout is absent.
+# Xamarin-internal and not readable from outside.  ms-test-suite.mk printed a
+# notice and carried on when the checkout was missing. Here the suites are
+# not registered instead.
 
 if(NOT MONO_SUBMODULE_MS_TEST_SUITE_PRESENT)
   return()

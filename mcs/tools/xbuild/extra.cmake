@@ -3,8 +3,8 @@
 set(_libdir "${CMAKE_INSTALL_LIBDIR}")
 
 # -- per xbuild version ------------------------------------------------------
-# net_4_x builds xbuild 4.0 and lands it in lib/mono/4.5 beside the compiler;
-# the xbuild_1x profiles get their own bin directory.
+# net_4_x builds xbuild 4.0 and lands it in lib/mono/4.5 beside the compiler.
+# The xbuild_1x profiles get their own bin directory.
 function(_xbuild_bin_data version dest)
   install(FILES data/xbuild.rsp
                 data/Microsoft.Build.xsd

@@ -1,8 +1,10 @@
 # Links one test program against the class libraries and runs the result.
 #
-# The point of each case is that the program still behaves correctly after the
-# linker has removed everything it believes unreachable, so the run is the
-# assertion: the programs throw on failure.
+# The point of each case is that the program still behaves correctly once the
+# linker has removed everything it believes unreachable. The run itself is the
+# assertion: a case fails when the linked program exits nonzero, which a
+# `return 1` and an unhandled exception both do. Most of the programs check
+# nothing and only have to run.
 #
 #   RUNTIME     mono-wrapper
 #   TOOLS_PATH  the bootstrap profile, which is where monolinker runs

@@ -31,7 +31,7 @@ set(MONO_TEST_NUNIT_EXCLUDES NotWorking CAS)
 # box without them these do not report a runtime defect - they report the
 # network - and a permanently red suite is one nobody reads.
 #
-# Turning it on runs them; there is nothing here that deletes them.
+# Turning it on runs them.  The option excludes them; it does not delete them.
 option(MONO_ENABLE_NETWORK_TESTS "Run tests that need an external network or message broker" OFF)
 if(NOT MONO_ENABLE_NETWORK_TESTS)
   list(APPEND MONO_TEST_NUNIT_EXCLUDES InetAccess)
@@ -64,7 +64,7 @@ set(MONO_BCL_TESTS_LONG
   # MonoTests.System.Web.UI.WebControls takes 1854s with the machine to itself.
   # It spends that forking a C# compiler per page, so the console itself sits
   # near idle while the run as a whole holds about one core throughout -- more
-  # cores would not shorten it, it just needs the wall time.
+  # cores would not shorten it, it needs the wall time.
   bcl-System.Web
   # Its `rest` group is nearly the whole assembly in one console: 733s at four
   # threads on a quiet machine, against 1631s for the Expressions namespace
@@ -74,9 +74,8 @@ set(MONO_BCL_TESTS_LONG
   bcl-xunit-System.Core
 )
 
-# ---------------------------------------------------------------------------
 # Splitting a suite up
-# ---------------------------------------------------------------------------
+#
 # A whole assembly under one console is opaque while it runs: nothing is printed
 # between the banner and the summary, so a suite that wedges reports a timeout
 # and nothing else -- the same output whether it died on its first fixture or
@@ -137,7 +136,7 @@ set(MONO_BCL_SPLIT_MAX_GROUPS_xunit 8)
 # That is the shape a suite wants once it has an entry in
 # MONO_BCL_TESTS_XUNIT_THREADS.  Splitting exists to buy parallelism the console
 # would not otherwise have, and in-process parallelism is the cheaper way to buy
-# it: one console at four threads runs the same cases as four consoles at one,
+# it.  One console at four threads runs the same cases as four consoles at one,
 # without paying ~45s of runner JIT four times, and it fills those threads from
 # every class in the assembly rather than from one namespace at a time.
 #
@@ -155,7 +154,7 @@ set(MONO_BCL_TESTS_XUNIT_SERIAL
   # PLINQ starts a query's worth of thread-pool work per case, so it is both the
   # namespace most likely to be disturbed by neighbours and the one most likely
   # to disturb them.  This is what upstream's assembly-wide CollectionBehavior
-  # was protecting before System.Core_xtest.dll.sources dropped it; giving the
+  # was protecting before System.Core_xtest.dll.sources dropped it.  Giving the
   # namespace a process keeps the protection without pinning the other 300
   # classes in the assembly to one thread.
   bcl-xunit-System.Core/System.Linq.Parallel.Tests
@@ -226,7 +225,7 @@ set(MONO_BCL_TESTS_SLOW
 # every test one slot of `-j` unless told otherwise, so a suite that really
 # runs several threads oversubscribes the machine for as long as it runs.
 #
-# Almost nothing here needs an entry, including the expensive suites: a slow
+# Almost no suite needs an entry here, including the expensive ones: a slow
 # BCL test is normally slow because it forks a C# compiler and waits, so it
 # holds about one core no matter how many threads it has open.
 # MonoTests.System.Web.UI.WebControls opens dozens and still measured 1912s of
@@ -241,10 +240,10 @@ set(MONO_BCL_TESTS_SLOW
 #
 # The numbers below are CPU-seconds over wall-seconds for the whole process
 # tree, each read twice under different machine load.  Reading twice is the
-# point: contention can only push a ratio down, so a single number is just a
-# lower bound, but one that does not move when the load around it does is the
-# test's own appetite.  Rounded to nearest -- over-reserving wastes a slot as
-# surely as under-reserving oversubscribes one.
+# point: contention can only push a ratio down, so a single number is a lower
+# bound.  One that does not move when the load around it does is the test's
+# own appetite.  Rounded to nearest -- over-reserving wastes a slot as surely
+# as under-reserving oversubscribes one.
 set(MONO_BCL_TESTS_PROCESSORS
   # 1.62 and 1.63.  PLINQ partitions across the pool, so this is the one suite
   # here that clearly wants a second core.
@@ -261,7 +260,7 @@ set(MONO_BCL_TESTS_PROCESSORS
 # A name here does two things: the console gets
 # `-parallel collections -maxthreads <threads>`, and the test reserves that many
 # slots of CTest's `-j` pool.  They are deliberately the same number and
-# deliberately not a second entry in MONO_BCL_TESTS_PROCESSORS -- a suite handed
+# deliberately not a second entry in MONO_BCL_TESTS_PROCESSORS.  A suite handed
 # threads but not slots oversubscribes the machine for its whole run, and two
 # lists would let the next person to add a suite update one and not the other
 # without anything failing to tell them.
@@ -269,7 +268,7 @@ set(MONO_BCL_TESTS_PROCESSORS
 # Whether a suite can take this at all is a property of the assembly, not of the
 # machine.  xunit's default is a collection per class, so an assembly with no
 # [Collection] and no [assembly: CollectionBehavior] presents one schedulable
-# unit per test class; nineteen corefx test directories carry one of those
+# unit per test class.  Nineteen corefx test directories carry one of those
 # attributes and would run serially however many threads they were given.  Check
 # before adding, because an inert entry here reads as "parallelism was tried and
 # did not help".  Beyond that the cases have to tolerate sharing a process:
@@ -481,9 +480,8 @@ function(_mono_test_config_fragment out profile dir name)
   set(${out} "${_gen}" PARENT_SCOPE)
 endfunction()
 
-# ---------------------------------------------------------------------------
 # The per-test runner directory
-# ---------------------------------------------------------------------------
+#
 # nunit-lite-console reads its own app.config, and several libraries need to
 # add to it -- System wants trace switches, the xbuild ones want binding
 # redirects.  Each test therefore gets its own copy of the runner so the
@@ -495,7 +493,7 @@ function(_mono_test_runner out target profile dir global runtime files)
   set(_tmpl
       "${MONO_MCS_TOPDIR}/tools/nunit-lite/nunit-lite-console/nunit-lite-console.exe.config.tmpl")
 
-  # The template carries two comment markers; each fragment is spliced in
+  # The template carries two comment markers.  Each fragment is spliced in
   # after the one it names.
   set(_global_text "")
   set(_runtime_text "")
@@ -570,7 +568,7 @@ function(_mono_xunit_runtime out profile)
 endfunction()
 
 # Lists the test classes in an xunit assembly.  One per profile, built on first
-# use; the console in external/xunit-binaries has no listing mode of its own.
+# use.  The console in external/xunit-binaries has no listing mode of its own.
 function(_mono_xunit_lister out profile)
   mono_profile_dir(_pdir ${profile})
   set(_exe "${_pdir}/tests/xunit-lister.exe")
@@ -628,12 +626,11 @@ function(_mono_remote_executor out profile)
   add_custom_target(mcs-${profile}-remote-executor DEPENDS "${_exe}")
 endfunction()
 
-# ---------------------------------------------------------------------------
 # One test assembly
-# ---------------------------------------------------------------------------
+#
 # Called from _mono_materialize_profile() once the library it tests exists, so
 # every A_* field of the declaration is still in scope.  `kind` is nunit or
-# xunit; the two differ in the source list, the references and the runner, but
+# xunit.  The two differ in the source list, the references and the runner, but
 # not in shape.
 # `stem` is what the suite is named after, which is not always the assembly's
 # own name: corlib builds mscorlib.dll and Cscompmgd builds cscompmgd.dll, and
@@ -763,7 +760,7 @@ function(_mono_add_managed_test kind profile dir target assembly stem sources_fi
   endif()
 
   # gensources resolves the nunit lists against Test/, which is where the
-  # per-library suites live; the xunit lists spell their paths in full.
+  # per-library suites live.  The xunit lists spell their paths in full.
   set(_basedir "")
   if(kind STREQUAL nunit)
     set(_basedir "--basedir:${dir}/Test")
@@ -922,7 +919,7 @@ endfunction()
 # The registration itself lives in a generated file named in TEST_INCLUDE_FILES,
 # because what a suite becomes is not known until the assembly has been listed,
 # and that cannot happen while CMake is still configuring.  The build writes the
-# group list beside it; the generated file runs the assembly whole whenever that
+# group list beside it.  The generated file runs the assembly whole when that
 # list is missing.
 #
 # A macro rather than a function: it reads and writes the variables its caller

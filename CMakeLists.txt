@@ -40,9 +40,6 @@ include(CTest)
 include(MonoOptions)
 include(MonoCompilerFlags)
 
-# ---------------------------------------------------------------------------
-# What the build looks for outside the tree
-# ---------------------------------------------------------------------------
 # Everything the build does not produce itself is searched for here, so a
 # machine that is missing one of them hears about it at configure time.  What a
 # directory does with a result stays with the directory: the error that stops a
@@ -121,9 +118,6 @@ set(libmono_cflags  "")
 configure_file(mono-uninstalled.pc.in
                "${CMAKE_CURRENT_BINARY_DIR}/mono-uninstalled.pc" @ONLY)
 
-# ---------------------------------------------------------------------------
-# Subdirectories
-# ---------------------------------------------------------------------------
 if(MONO_ENABLE_BOEHM)
   # Boehm doesn't have a cmake build so we define our own.  Before mono/, which
   # links the collector.
@@ -155,18 +149,17 @@ if(BUILD_TESTING)
   add_subdirectory(acceptance-tests)
 endif()
 
-# ---------------------------------------------------------------------------
 # Test entry points
-# ---------------------------------------------------------------------------
+#
 # `ctest` is serial unless told otherwise, and every suite here is either
 # internally parallel or tiny, so a bare `ctest` is much slower than the work
 # requires. These targets run it with the machine's core count.
 #
 #   check        the fast set -- unit tests, mini regression, the LLVM tier, and
 #                the runtime one-offs. Seconds, not minutes.
-#   check-all    everything except the stress suites, the minutes-long ones and
-#                check-interp-mixed.
-#   check-interp the interpreter's own tests under mono/interp, on three
+#   check-all    everything except the stress suites, the minutes-long ones, the
+#                acceptance suite and check-interp-mixed.
+#   check-interp the interpreter's own tests under mono/unit-tests, on three
 #                configurations of the interpreter. Twenty seconds.
 #   check-interp-jit the same managed programs with the interpreter turned off,
 #                and check-interp-mixed with promotion in the middle of the run.
@@ -182,7 +175,7 @@ endif()
 #   ctest --test-dir build -L runtime -j <n>
 #
 # `acceptance` additionally needs -D MONO_ENABLE_ACCEPTANCE_TESTS=ON and the
-# corpus submodules under acceptance-tests/external; run the `print-versions`
+# corpus submodules under acceptance-tests/external. Run the `print-versions`
 # target to see which of those are checked out.
 include(ProcessorCount)
 ProcessorCount(MONO_NPROC)
@@ -199,8 +192,8 @@ if(BUILD_TESTING)
     VERBATIM)
 
   # interp-mixed is out for the same reason the slow suites are: it takes nine
-  # minutes, and it is red on a backend defect it exists to report rather than
-  # on anything a change here would have broken.
+  # minutes, and it is red on a backend defect it exists to report, not on a
+  # change here.
   add_custom_target(check-all
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
             -LE "slow|stress|acceptance|interp-mixed"
@@ -248,14 +241,14 @@ if(BUILD_TESTING)
     VERBATIM)
 
   # The test inputs.  Every one of these is an ALL target, so an ordinary build
-  # already leaves them on disk; naming them here is what makes `--target check`
+  # already leaves them on disk. Naming them here is what makes `--target check`
   # work on its own.
   #
-  # Each exists only under the option that builds it, and add_dependencies on a
-  # target that was never created is a generate-time error -- so the conditions
-  # the defining directories return on are restated here rather than probed with
-  # if(TARGET), which stays just as quiet for a target that has been renamed as
-  # for one that was legitimately not built.
+  # Each target exists only under the option that builds it, and
+  # add_dependencies on a target that was never created is a generate-time
+  # error. The conditions the defining directories return on are therefore
+  # restated here. Probing with if(TARGET) stays just as quiet for a target that
+  # has been renamed as for one that was legitimately not built.
   if(MONO_CORPUS_ENABLED)
     add_dependencies(check     mini-corpora)
     add_dependencies(check-all mini-corpora runtime-corpora)
@@ -269,8 +262,8 @@ if(BUILD_TESTING)
   endif()
 
   # check-interp names the binary as well as its inputs, which the two above
-  # leave to ALL: it is the target to reach for after editing the interpreter, so
-  # it has to rebuild what it is about to test.
+  # leave to ALL. It is the target to reach for after editing the interpreter,
+  # so it has to rebuild what it is about to test.
   if(MONO_ENABLE_INTERPRETER AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
     add_dependencies(check-interp test-interp)
     if(MONO_CORPUS_ENABLED)
@@ -304,8 +297,8 @@ if(BUILD_TESTING)
   endif()
 endif()
 
-# The microbenchmarks. They carry `slow`, so `check` and `check-all` skip them;
-# this is the way to ask for them. Serial on purpose -- they are timing
+# The microbenchmarks. They carry `slow`, so `check` and `check-all` skip
+# them. This is the way to ask for them. Serial on purpose -- they are timing
 # programs, and running sixteen at once makes the numbers meaningless.
 if(MONO_ENABLE_BENCHMARKS AND BUILD_TESTING AND MONO_CORPUS_ENABLED)
   add_custom_target(check-benchmarks
@@ -316,9 +309,7 @@ if(MONO_ENABLE_BENCHMARKS AND BUILD_TESTING AND MONO_CORPUS_ENABLED)
   add_dependencies(check-benchmarks benchmarks)
 endif()
 
-# ---------------------------------------------------------------------------
 # Convenience targets
-# ---------------------------------------------------------------------------
 if(MONO_ENABLE_MCS_BUILD)
   # Refresh the bootstrap compiler used when no mono is available to build the
   # class libraries with.
@@ -333,9 +324,6 @@ if(MONO_ENABLE_MCS_BUILD)
     VERBATIM)
 endif()
 
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
 message(STATUS "")
 message(STATUS "  mono ${PROJECT_VERSION}")
 message(STATUS "    host/target:   ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}")

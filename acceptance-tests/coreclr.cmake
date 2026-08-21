@@ -39,9 +39,7 @@ set(_cc_nowarn
   -nowarn:0169 -nowarn:1690 -nowarn:0649 -nowarn:0612 -nowarn:3021
   -nowarn:0197)
 
-# ---------------------------------------------------------------------------
 # coreclr-testlibrary.dll -- referenced by every C# test
-# ---------------------------------------------------------------------------
 set(_testlib_srcs "")
 foreach(_s IN LISTS MONO_CORECLR_TESTLIBRARY_CS_SRC)
   list(APPEND _testlib_srcs "${_cc_src}/${_s}")
@@ -55,13 +53,11 @@ add_custom_command(
   COMMENT "CSC coreclr-testlibrary.dll"
   VERBATIM)
 
-# ---------------------------------------------------------------------------
 # _coreclr_corpus(<out-list-var> <target> SOURCES ... [IL])
 #
 # One rule per test.  Expensive to configure -- this is where the bulk of the
 # ~4700 build edges come from -- which is the other reason the directory is
 # opt-in.
-# ---------------------------------------------------------------------------
 function(_coreclr_corpus out_var stamp_target)
   cmake_parse_arguments(ARG "IL" "" "SOURCES" ${ARGN})
 
@@ -123,9 +119,7 @@ add_dependencies(coreclr-compile-tests
   coreclr-corpus-basic-cs coreclr-corpus-basic-il coreclr-corpus-coremanglib
   acceptance-test-runner)
 
-# ---------------------------------------------------------------------------
 # GCStressTests.exe
-# ---------------------------------------------------------------------------
 set(_gcstress_runner_srcs "")
 foreach(_s IN LISTS MONO_CORECLR_STRESSTEST_RUNNER_CS_SRC)
   list(APPEND _gcstress_runner_srcs "${_cc_src}/${_s}")
@@ -144,21 +138,21 @@ add_custom_command(
 add_custom_target(coreclr-gcstress-runner ALL
   DEPENDS "${_bin}/GCStressTests.exe" coreclr-corpus-stress)
 
-# ---------------------------------------------------------------------------
 # CTest wiring
-# ---------------------------------------------------------------------------
 include(ProcessorCount)
 ProcessorCount(_cc_nproc)
 if(_cc_nproc EQUAL 0)
   set(_cc_nproc 1)
 endif()
 
-# coreclr.mk wrote the test list to a file because the paths blow past the
-# shell's argument limit.  Same here, only the file is generated once at
-# configure time instead of being appended to in 100-name chunks.
+# Registers the CTest test name, which runs the tests in TESTS through
+# test-runner.exe.  The runner reads them from list_file, one per line.
 function(_coreclr_suite name list_file)
   cmake_parse_arguments(ARG "" "" "TESTS" ${ARGN})
   string(REPLACE ";" "\n" _body "${ARG_TESTS}")
+  # coreclr.mk wrote this list to a file because the paths blow past the
+  # shell's argument limit. Here it is generated once at configure time
+  # instead of being appended to in 100-name chunks.
   file(WRITE "${list_file}" "${_body}\n")
 
   add_test(NAME ${name}
@@ -200,10 +194,8 @@ set_tests_properties(coreclr-gcstress PROPERTIES
   TIMEOUT 21600
   ENVIRONMENT "MONO_PATH=${_class}:${_bin};BVT_ROOT=${_cc_src}/tests/src/GC/Stress/Tests")
 
-# ---------------------------------------------------------------------------
 # coreclr-list-missing-tests: upstream .cs/.il files this port has never heard
 # of.  Useful after bumping the coreclr revision.
-# ---------------------------------------------------------------------------
 set(_known "")
 foreach(_l IN ITEMS MONO_CORECLR_TEST_CS_SRC MONO_CORECLR_COREMANGLIB_TEST_CS_SRC
                     MONO_CORECLR_TESTLIBRARY_CS_SRC MONO_CORECLR_STRESSTEST_CS_SRC

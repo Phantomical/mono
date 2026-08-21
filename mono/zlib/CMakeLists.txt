@@ -21,7 +21,7 @@ add_library(monoz OBJECT
 
 target_include_directories(monoz PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(monoz PRIVATE HAVE_UNISTD_H HAVE_HIDDEN)
-# zlib is third-party; mono's warning set is not its problem.
+# zlib is third-party.  Mono's warning set is not its problem.
 target_compile_options(monoz PRIVATE -w)
 
 # Stand in for ZLIB::ZLIB so consumers need no conditional of their own.

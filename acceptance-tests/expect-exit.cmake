@@ -2,8 +2,8 @@
 #
 #   cmake -D EXPECT=100 -D "COMMAND=prog;arg1;arg2" -P expect-exit.cmake
 #
-# The CoreCLR harnesses report success as 100, which CTest reads as failure;
-# this is the `if [ $? -ne 100 ]; then exit 1; fi` the makefiles used.
+# The CoreCLR harnesses report success as 100, which CTest reads as failure.
+# This is the `if [ $? -ne 100 ]; then exit 1; fi` idiom coreclr.mk used.
 
 if(NOT DEFINED EXPECT OR NOT DEFINED COMMAND)
   message(FATAL_ERROR "expect-exit.cmake needs -D EXPECT= and -D COMMAND=")

@@ -33,13 +33,12 @@ if(MONO_ENABLE_EXECUTABLES)
                         "${CMAKE_CURRENT_BINARY_DIR}/bin/mono-hang-watchdog")
 endif()
 
-# ---------------------------------------------------------------------------
 # etc/mono in the build tree
-# ---------------------------------------------------------------------------
+#
 # Same layout as the installed $sysconfdir/mono, but the dllmap entries point
 # at the helper libraries in the build tree so an uninstalled runtime does not
 # pick up a system-wide mono's copies.
-# 1.0 is build-tree only and comes from net_1_1; there is no installed 1.0
+# 1.0 is build-tree only and comes from net_1_1.  There is no installed 1.0
 # directory.
 configure_file("${CMAKE_SOURCE_DIR}/data/net_1_1/machine.config"
                "${MONO_BUILD_CFG_DIR}/mono/1.0/machine.config" COPYONLY)
@@ -69,9 +68,7 @@ add_custom_command(
 add_custom_target(mono-build-config ALL
   DEPENDS "${MONO_BUILD_CFG_DIR}/mono/config")
 
-# ---------------------------------------------------------------------------
 # _tmpinst/bin -- the tiny PATH shims the class-library build shells out to.
-# ---------------------------------------------------------------------------
 set(_tmpinst "${CMAKE_CURRENT_BINARY_DIR}/_tmpinst/bin")
 file(MAKE_DIRECTORY "${_tmpinst}")
 
@@ -98,11 +95,10 @@ _mono_tmpinst_shim(mcs   "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/mcs.exe")
 _mono_tmpinst_shim(ilasm "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/ilasm.exe")
 _mono_tmpinst_shim(al    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/al.exe")
 
-# ---------------------------------------------------------------------------
 # The class libraries
-# ---------------------------------------------------------------------------
+#
 # mcs/ used to be driven by its own recursive make system from here.  It is
-# CMake now and lives in mcs/CMakeLists.txt; all that is left is the sanity
+# CMake now and lives in mcs/CMakeLists.txt.  All that is left is the sanity
 # check, because the shims above are what that build shells out to.
 if(MONO_ENABLE_MCS_BUILD AND NOT MONO_ENABLE_EXECUTABLES)
   message(FATAL_ERROR

@@ -42,7 +42,7 @@ execute_process(COMMAND ${_cmd}
 set(_all "${_out}${_err}")
 
 # Report a bad exit before a missing method: a run that died early is why the
-# method would be missing, and naming the trace instead would misdirect.
+# method is missing, and naming the trace instead misdirects.
 function(_fail_with_tail _why)
   string(REPLACE "\n" ";" _lines "${_all}")
   list(LENGTH _lines _n)

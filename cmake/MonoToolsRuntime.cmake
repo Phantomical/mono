@@ -5,7 +5,7 @@
 # is compiled by Roslyn (and assembled by ilasm), both of which are themselves
 # managed programs and so need a mono to run on.  By default that is the mono
 # this build produces, which is what the autotools build did and what a release
-# build should keep doing: the compiler that builds the tests is then the same
+# build must keep doing: the compiler that builds the tests is then the same
 # code the tests exercise.
 #
 # It is also the slow choice.  The in-tree runtime is an unoptimised build with
@@ -36,7 +36,7 @@
 # one, so with this on they see the system mono's BCL surface rather than this
 # tree's.  For the mini corpora and the class libraries it makes no difference --
 # those compile -nostdlib against an explicit -r:.../mscorlib.dll.  Treat the
-# option as an iteration aid; validate on a default configuration.
+# option as an iteration aid.  Validate on a default configuration.
 
 if(MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS)
   if(MONO_SYSTEM_RUNTIME)
@@ -72,7 +72,7 @@ if(MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS)
   # that directory holds this tree's mscorlib.dll -- which a foreign runtime
   # refuses outright ("Corlib not in sync with this runtime ... Expected
   # interface version <its own> but found <ours>").  None of the tools need
-  # MONO_PATH on a system mono; each resolves its dependencies out of its own
+  # MONO_PATH on a system mono.  Each resolves its dependencies out of its own
   # directory, or out of that runtime's own BCL.  So drop the variable on the
   # way through, wherever it came from.
   set(MONO_TOOLS_RUNTIME_HOST "${CMAKE_BINARY_DIR}/runtime/tools-mono")
@@ -98,8 +98,8 @@ else()
   # compiled.
   set(MONO_TOOLS_RUNTIME_DEPENDS mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
   set(MONO_TOOLS_RUNTIME_HOST "")
-  # Turning the option back off in an existing tree would otherwise leave the
-  # shim on disk, pointing at a runtime nothing runs on any more.
+  # Turning the option back off in an existing tree otherwise leaves the shim
+  # on disk, pointing at a runtime nothing runs on any more.
   file(REMOVE "${CMAKE_BINARY_DIR}/runtime/tools-mono")
 endif()
 
@@ -107,9 +107,9 @@ endif()
 #
 #   mono_tools_runtime(<out> [MONO_PATH <dir>] [ARGS <arg>...])
 #
-# The result is a command prefix; the caller appends the assembly to run and
-# its arguments.  MONO_PATH describes what the *in-tree* runtime needs and is
-# dropped for a system one, where it would put this tree's mscorlib.dll in
+# The result is a command prefix.  The caller appends the assembly to run and
+# its arguments.  MONO_PATH describes what the *in-tree* runtime needs, and is
+# dropped for a system one: keeping it there puts this tree's mscorlib.dll in
 # front of the one that runtime was built against.
 function(mono_tools_runtime out)
   cmake_parse_arguments(ARG "" "MONO_PATH" "ARGS" ${ARGN})

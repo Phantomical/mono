@@ -23,7 +23,7 @@ set(_allowed "g_s?list_(pre|ap)pend_(image|mempool)|g_concat_dir_and_file|g_Ctoc
 # (ghashtable.c and goutput.c, declared in glib.h) that are missing from
 # eglib-remap.h, so the runtime exports them under their bare names. They
 # predate this check -- the automake version only looked at *local* text
-# symbols, so it could never see an exported one. Add them to eglib-remap.h
+# symbols, so it never saw an exported one. Add them to eglib-remap.h
 # and delete these two lines.
 set(_known_gaps "g_hash_table_lookup_oop|g_log_disabled")
 

@@ -33,8 +33,9 @@ endif()
 
 set(_support "${_bin}/shards.txt")
 
-# name is the source, relative to this directory.  SIGNED and MODULE follow the
-# makefile's per-case overrides; everything else takes the pattern rule.
+# Compiles one support assembly the negative corpus references, from name (the
+# source path relative to this directory).  SIGNED and MODULE follow the
+# makefile's per-case overrides.  Everything else takes the pattern rule.
 function(_mcs_errors_lib name)
   cmake_parse_arguments(L "SIGNED;MODULE;WARN" "" "REFS" ${ARGN})
   string(REGEX REPLACE "\\.cs$" ".dll" _out "${name}")
@@ -100,8 +101,9 @@ endforeach()
 # compiler complain when a test binds to the wrong one.
 #
 # CS1704 is the odd one out and has to stay unsigned: its diagnostic is the one
-# the compiler reports for a duplicate that could have been told apart by a
-# strong name -- "consider removing one of the references or sign the assembly".
+# the compiler reports when a duplicate reference has no strong name to tell
+# it apart by -- "consider removing one of the references or sign the
+# assembly".
 foreach(_f IN LISTS _first)
   if(_f MATCHES "CS1704")
     _mcs_errors_lib("${_f}")
@@ -129,7 +131,7 @@ foreach(_f IN LISTS _libs_il)
   list(APPEND _support "${_sup}/${_out}")
 endforeach()
 
-# CS1703 checks what happens when two assemblies claim the same identity; the
+# CS1703 checks what happens when two assemblies claim the same identity.  The
 # second one is the framework's own System.dll.
 add_custom_command(
   OUTPUT "${_sup}/dlls/cs1703-2/System.dll"

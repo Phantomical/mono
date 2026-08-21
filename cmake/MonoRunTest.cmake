@@ -22,8 +22,8 @@ foreach(_i RANGE ${CMAKE_ARGC})
     continue()
   endif()
   if(_seen_sep)
-    # Escape first: appending a value that contains a semicolon would otherwise
-    # split it into several arguments.
+    # A value that contains a semicolon splits into several list entries
+    # unless it is escaped first, so this escapes it before appending.
     string(REPLACE ";" "\\;" _arg "${CMAKE_ARGV${_i}}")
     list(APPEND _cmd "${_arg}")
     string(APPEND _pretty " ${CMAKE_ARGV${_i}}")

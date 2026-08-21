@@ -1,7 +1,7 @@
 # mdoc's documentation round-trip suite: fifteen checks, each driven by
 # mdoc-test.cmake.  The compiler command is written to a settings file rather
-# than passed on the command line, because it is a list and add_test() has no
-# way to carry one through as a single argument.
+# than the command line: it is a list, and add_test() cannot carry one through
+# as a single argument.
 mono_profile_dir(_pdir net_4_x)
 set(_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_settings "${CMAKE_CURRENT_BINARY_DIR}/mdoc-test-settings.cmake")

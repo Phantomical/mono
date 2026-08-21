@@ -1,9 +1,9 @@
 # Compiles one .resx into a .resources.  Run as `cmake -D ... -P`.
 #
-# A script rather than a plain COMMAND because of the fallback, which
-# add_custom_command cannot express: resgen.exe is a managed tool, so in the
-# bootstrap profile -- and in any tree where the runtime cannot yet run it --
-# it fails, and the checked-in .prebuilt beside the .resx is used instead.
+# A script rather than a plain COMMAND, because of the fallback that
+# add_custom_command cannot express: resgen.exe is a managed tool, so it fails
+# in the bootstrap profile, and in any tree where the runtime cannot yet run
+# it. The checked-in .prebuilt beside the .resx is used instead.
 #
 # Inputs, all -D:
 #   RESGEN      the argv, ;-separated

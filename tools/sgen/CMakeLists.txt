@@ -1,8 +1,9 @@
 # sgen-grep-binprot: filters SGen's binary protocol dumps.
 #
-# The reader is compiled three times because a dump can come from a runtime
-# with a different pointer width than the tool: once for the native layout, and
-# once each for the explicit 32- and 64-bit-pointer forms that carry a header.
+# A dump can come from a runtime with a different pointer width than the
+# tool. The reader is compiled three times to cover that. One build uses
+# the native layout, and one each uses the explicit 32- and 64-bit-pointer
+# forms, which carry a header.
 
 if(NOT MONO_ENABLE_EXECUTABLES)
   return()

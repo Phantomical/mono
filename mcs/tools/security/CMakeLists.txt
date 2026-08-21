@@ -1,8 +1,8 @@
 # The security command-line tools.
 #
-# Hand-written because this directory builds fourteen executables from explicit
-# source lists rather than one PROGRAM with a .sources file, and because the
-# bootstrap profile wants only one of them: sn.exe signs every assembly in
+# Hand-written for two reasons. The directory builds fourteen executables from
+# explicit source lists rather than one PROGRAM with a .sources file. The
+# bootstrap profile also wants only one of them. sn.exe signs every assembly in
 # every later profile, so it is a prerequisite of most of the build.
 
 set(_helper AssemblyInfo.cs "${MONO_MCS_TOPDIR}/build/common/Consts.cs")

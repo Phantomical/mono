@@ -2,10 +2,10 @@
 
 # The runtime is assembled out of OBJECT libraries rather than static archives.
 # automake's noinst_LTLIBRARIES were "convenience libraries": every object in
-# them ends up in the shared library whether or not anything references it,
-# which is what libmono needs -- most of its exported surface is reached only
-# through icalls and P/Invoke, so a static archive would drop it at link time.
-# OBJECT libraries give exactly that, without --whole-archive.
+# them ends up in the shared library whether or not anything references it.
+# libmono needs that: most of its exported surface is reached only through
+# icalls and P/Invoke, and a static archive drops anything unreferenced at
+# link time.  OBJECT libraries give exactly that, without --whole-archive.
 #
 # Object libraries do not propagate their objects through an intermediate
 # link, so every final target lists the full set it needs.
@@ -83,8 +83,9 @@ function(mono_gtest_tests target)
 
   add_test(NAME "${ARG_PREFIX}" COMMAND "$<TARGET_FILE:${target}>" ${_filter})
 
-  # A merged test drops SKIP_REGEX.  Over a whole suite's output the regex would
-  # call the suite skipped when one case skipped itself and another failed.
+  # A merged test drops SKIP_REGEX.  Against a whole suite's output the regex
+  # makes ctest call the suite skipped when one case skipped itself and
+  # another case failed.
   set_tests_properties("${ARG_PREFIX}" PROPERTIES ${_workdir} ${ARG_PROPERTIES})
 endfunction()
 
@@ -98,7 +99,6 @@ function(mono_configure_script input output)
        WORLD_READ WORLD_EXECUTE)
 endfunction()
 
-# Install directories the autotools build spelled out by hand.
 set(MONO_ASSEMBLIES_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
 set(MONO_CFG_DIR        "${CMAKE_INSTALL_FULL_SYSCONFDIR}")
 set(MONO_INCLUDE_SUBDIR "${CMAKE_INSTALL_INCLUDEDIR}/mono-${MONO_API_VERSION}")
@@ -110,8 +110,8 @@ file(RELATIVE_PATH MONO_RELOC_LIBDIR "${CMAKE_INSTALL_PREFIX}" "${CMAKE_INSTALL_
 
 # Where the class libraries live.  MONO_MCS_TOPDIR is the source directory --
 # .sources files, keys, grammars -- and MONO_MCS_LIBDIR is where the build puts
-# what it compiles.  They used to be the same place; everything that consumes a
-# built assembly wants the second.
+# what it compiles.  They used to be the same place.  Everything that consumes
+# a built assembly wants the second.
 set(MONO_MCS_TOPDIR "${CMAKE_SOURCE_DIR}/mcs")
 set(MONO_MCS_LIBDIR "${CMAKE_BINARY_DIR}/mcs/class/lib")
 set(MONO_DEFAULT_PROFILE "net_4_x")

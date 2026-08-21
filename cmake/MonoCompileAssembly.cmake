@@ -2,7 +2,7 @@
 #
 # This is a script, not a module: it is the body of the single custom command
 # behind every .dll and .exe under mcs/.  Everything it needs is written into
-# SETTINGS at configure time by mono_add_managed_target(), so the command line
+# SETTINGS at configure time by _mono_materialize_one(), so the command line
 # stays short and lists survive without quoting games.
 #
 # The reason a compile is a script rather than a plain COMMAND is the depfile.
@@ -32,15 +32,14 @@ function(_mono_run what)
   endif()
   execute_process(COMMAND ${_cmd} WORKING_DIRECTORY "${_wd}" RESULT_VARIABLE _rc)
   if(NOT _rc EQUAL 0)
-    # The command has already written its own diagnostics to stderr; repeating
+    # The command has already written its own diagnostics to stderr. Repeating
     # the argv here is what tells you *which* assembly out of ~900 failed.
     message(FATAL_ERROR "${what} failed (${_rc}) for ${MCS_OUTPUT}")
   endif()
 endfunction()
 
-# ---------------------------------------------------------------------------
 # 1. The source list
-# ---------------------------------------------------------------------------
+#
 # Libraries go through gensources, which resolves the `#include` directives and
 # the platform/profile fallback chain across the directory's *.sources files.
 # Programs do not: on Linux their .sources file is already a flat list and the
@@ -57,7 +56,8 @@ if(MCS_GENSOURCES)
   # Spelled out rather than routed through _mono_run because the platform
   # argument is empty for the xbuild profiles and gensources reads its four
   # trailing arguments positionally.  An empty element inside an unquoted list
-  # expansion disappears, and the profile would silently land in its slot.
+  # expansion disappears, so through _mono_run the empty platform would go away
+  # and the profile would land in its slot, with no error.
   execute_process(
     COMMAND ${_gs} --strict
             "--platforms:${_gs_platforms}" "--profiles:${_gs_profiles}"
@@ -74,9 +74,7 @@ if(MCS_GENSOURCES)
   endif()
 endif()
 
-# ---------------------------------------------------------------------------
 # 2. The depfile
-# ---------------------------------------------------------------------------
 file(STRINGS "${MCS_RESPONSE}" _srcs ENCODING UTF-8)
 
 set(_deps "")
@@ -89,9 +87,9 @@ foreach(_s IN LISTS _srcs)
     set(_s "${_wd}/${_s}")
   endif()
   # A program's .sources file is handed to csc verbatim and csc expands
-  # wildcards itself, so an entry may be `.../reflect/*.cs`.  A depfile cannot
-  # carry a pattern -- ninja would treat it as a file that never appears -- so
-  # it is expanded here into what it currently matches.
+  # wildcards itself, so an entry can be `.../reflect/*.cs`.  A depfile cannot
+  # carry a pattern -- ninja would treat it as a filename that never appears --
+  # so it is expanded here into what it currently matches.
   if(_s MATCHES "[*?]")
     file(GLOB _matches "${_s}")
     list(APPEND _deps ${_matches})
@@ -120,9 +118,7 @@ endforeach()
 string(REPLACE " " "\\ " _target "${MCS_OUTPUT}")
 file(WRITE "${MCS_DEPFILE}" "${_target}:${_lines}\n")
 
-# ---------------------------------------------------------------------------
 # 3. Compile
-# ---------------------------------------------------------------------------
 get_filename_component(_outdir "${MCS_OUTPUT}" DIRECTORY)
 get_filename_component(_builddir "${MCS_BUILD_OUTPUT}" DIRECTORY)
 file(MAKE_DIRECTORY "${_outdir}" "${_builddir}")
@@ -132,9 +128,8 @@ _mono_run("csc"
           ${MCS_BUILT_SOURCES} "@${MCS_RESPONSE}"
   ENVIRONMENT ${MCS_CSC_ENV})
 
-# ---------------------------------------------------------------------------
 # 4. Post-processing
-# ---------------------------------------------------------------------------
+#
 # corlib is the only assembly that gets here with real work to do: its string
 # table and the ilasm'd Unsafe.il module are spliced into the freshly built
 # mscorlib.dll, so what ships is rewritten IL rather than what csc emitted.
@@ -151,8 +146,8 @@ if(MCS_SN)
 endif()
 
 # A handful of bootstrap assemblies compile into an isolated `tmp/` directory
-# and are copied up afterwards.  See the LIBRARY_USE_INTERMEDIATE_FILE note in
-# MonoManaged.cmake for why that directory exists at all.
+# and are copied up afterwards.  See the INTERMEDIATE note in MonoManaged.cmake
+# for why that directory exists at all.
 if(NOT MCS_BUILD_OUTPUT STREQUAL MCS_OUTPUT)
   file(COPY_FILE "${MCS_BUILD_OUTPUT}" "${MCS_OUTPUT}")
   # .mdb hangs off the full name, .pdb replaces the extension.

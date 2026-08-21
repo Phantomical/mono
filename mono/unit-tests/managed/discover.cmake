@@ -7,16 +7,17 @@
 # with no cmake step in between.
 #
 # The list is written once per assembly and read by every arm.  Enumerating an
-# assembly means starting a runtime, and there are five arms over eighteen
-# assemblies; doing it per arm is most of what a cold `ctest` costs.
+# assembly means starting a runtime, and there are six arms over three
+# assemblies, so doing it per arm rather than per assembly is most of what a
+# cold `ctest` costs.
 #
 # It is a file of its own because ctest reads it long after the configure that
 # wrote the caller.
 #
 # Listing needs a working runtime, which here is the thing under test.  A run
-# that fails leaves an error in the list file rather than stopping ctest: a
+# that fails leaves an error in the list file rather than stopping ctest.  A
 # suite that cannot enumerate itself has to stay visible, and it must not take
-# the suites that would have passed down with it.
+# other suites down with it.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -78,7 +79,7 @@ endfunction()
 # ARM keeps the methods whose class carries the attribute for that arm, which is
 # how an arm that asks the same question of every program in it takes only the
 # programs that can answer it differently.  An arm the runner does not know
-# registers a failing test: the arm would otherwise hold nothing and read as a
+# registers a failing test: otherwise the arm holds nothing and reads as a
 # suite that passes.
 function(mono_discover_test_methods_impl)
   cmake_parse_arguments(ARG ""

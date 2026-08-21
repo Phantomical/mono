@@ -19,9 +19,9 @@ set(MONO_CORLIB_VERSION "\"${MONO_CORLIB_VERSION_GUID}\"")
 set(STDC_HEADERS 1)
 
 # --- host / target ----------------------------------------------------------
-# This port is amd64-only; the other architectures configure.ac knew about are
-# not reachable here, so fail loudly rather than produce a config.h that claims
-# a target we do not generate code for.
+# This port is amd64-only.  The other architectures configure.ac knew about
+# are not reachable here, so we fail loudly rather than produce a config.h
+# that claims a target we do not generate code for.
 if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
   message(FATAL_ERROR "Unsupported target ${CMAKE_SYSTEM_PROCESSOR}; this build supports amd64 only")
 endif()
@@ -35,12 +35,14 @@ set(MONO_ARCHITECTURE "\"amd64\"")
 
 # NOTE: configure.ac guarded the HOST_LINUX define with
 #   if test echo x$target_os | grep -q linux; then
-# which is a `test' invocation with three operands, not a pipeline, so it is
-# always false and HOST_LINUX was never defined in a released build.  The
-# automake conditional of the same name *was* true.  Keeping the C macro
-# undefined preserves the code paths the runtime has actually been built and
-# tested with; MONO_HOST_LINUX below carries the honest answer for the build
-# system's own use.
+# which is broken shell.  `test` takes `echo` and `x$target_os` as its own two
+# operands instead of running echo, so grep always sees empty input and the
+# guard is always false.  HOST_LINUX was never defined in a released build,
+# even though the automake conditional of the same name was true.  Keeping
+# the C macro undefined preserves the code paths the runtime has actually
+# been built and tested with.  MONO_HOST_LINUX below carries the correct
+# value for the build system's own use: it is a CMake variable, and config.h
+# gets nothing from it.
 set(MONO_HOST_LINUX ON)
 
 # Classic (non-UWP) Windows API surface: defined on every target.
@@ -144,8 +146,11 @@ elseif(MONO_THREAD_SUSPEND STREQUAL "hybrid")
   set(ENABLE_HYBRID_SUSPEND 1)
 endif()
 
-# The AOT compiler is out of this port's scope, but the runtime still needs to
-# read AOT images, so only the compiler side is switched off.
+# configure.ac filled this string from --enable-minimal=LIST, and this build
+# has no equivalent option, so the string never varies.  --version reports it
+# as "Disabled: none".  The AOT compiler is out of this port's scope, but the
+# runtime still reads AOT images.  DISABLE_AOT therefore stays undefined, and
+# aot is not one of the features this string names.
 set(DISABLED_FEATURES "\"none\"")
 
 # zlib: the runtime prefers the system copy and falls back to the bundled one.

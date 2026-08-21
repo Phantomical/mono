@@ -1,7 +1,7 @@
 # libmono-native: the System.Native PAL, built from the corefx submodule plus
 # a small mono-specific shim.  It is a stand-alone shared library rather than
 # part of libmono because mobile targets need two differently-versioned copies
-# of it; on Linux there is only ever one.
+# of it.  On Linux there is only ever one.
 
 set(_corefx      "${CMAKE_SOURCE_DIR}/external/corefx/src/Native")
 set(_corefx_fix  "${CMAKE_SOURCE_DIR}/external/corefx-bugfix/src/Native")
@@ -58,7 +58,7 @@ set(_native_sources
   "${_corefx_fix}/AnyOS/brotli/common/platform.c"
   "${_corefx_fix}/AnyOS/brotli/common/transform.c")
 
-# mono_native_get_platform_type () reports which build this is; the managed
+# mono_native_get_platform_type () reports which build this is.  The managed
 # tests use it to confirm the right library got loaded.
 set(MONO_NATIVE_PLATFORM_TYPE "MONO_NATIVE_PLATFORM_TYPE_LINUX")
 configure_file(platform-type.c.in "${CMAKE_CURRENT_BINARY_DIR}/platform-type.c" @ONLY)
@@ -84,8 +84,8 @@ target_compile_definitions(mono-native PRIVATE
   # want to depend on.
   BROTLI_BUILD_NO_RBIT)
 
-# corefx and mono both typedef a few of the same names; the duplicate is
-# harmless and clang is the only compiler that complains.
+# corefx and mono both typedef a few of the same names.  The duplicate is
+# harmless, and clang is the only compiler that complains.
 check_c_compiler_flag(-Wno-typedef-redefinition MONO_HAS_WNO_TYPEDEF_REDEFINITION)
 if(MONO_HAS_WNO_TYPEDEF_REDEFINITION)
   target_compile_options(mono-native PRIVATE -Wno-typedef-redefinition)

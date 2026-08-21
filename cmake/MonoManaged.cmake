@@ -5,7 +5,7 @@
 # Two things about the shape of this file are worth knowing up front.
 #
 # Declarations are collected, not built.  A directory's CMakeLists.txt calls
-# mono_declare_managed() and nothing happens; mcs/CMakeLists.txt calls
+# mono_declare_managed() and nothing happens.  mcs/CMakeLists.txt calls
 # mono_managed_materialize() at the end and every target appears at once.  The
 # reason is that references are written as bare assembly names -- `REFS System
 # System.XML` -- and a name cannot be resolved to the target that produces it
@@ -20,9 +20,8 @@ include_guard(GLOBAL)
 
 include("${CMAKE_CURRENT_LIST_DIR}/MonoManagedTests.cmake")
 
-# ---------------------------------------------------------------------------
 # Where things go
-# ---------------------------------------------------------------------------
+
 # Output lands in the build tree, so two build directories over one checkout
 # stay independent and a build leaves the source tree clean.
 set(MONO_MANAGED_ROOT "${CMAKE_BINARY_DIR}/mcs")
@@ -31,22 +30,22 @@ set(MONO_MANAGED_DEPSDIR "${MONO_MANAGED_ROOT}/deps")
 
 # The host-platform prefixes a .sources file name may carry.  This and
 # MONO_MANAGED_PROFILES below are the two name sets gensources works from, and
-# it takes them on its command line; they are the build's to define.
+# it takes them on its command line.  They are the build's to define.
 set(MONO_MANAGED_PLATFORM_NAMES linux macos unix win32)
 
 file(MAKE_DIRECTORY "${MONO_MANAGED_LIBDIR}" "${MONO_MANAGED_DEPSDIR}")
 
 # Ninja's depfile parser splits a path at a backtick and no escaping recovers
 # it, so the generic-arity file names this tree uses -- `Nullable`1.cs` and its
-# 36 siblings -- cannot ride the depfile: ninja would invent two phony inputs
-# that never exist and rebuild the assembly on every run.  The driver leaves
-# them out of the depfile; they become configure-time dependencies instead,
-# which costs a rebuild only when one of them is added or removed.
+# 36 siblings -- cannot ride the depfile.  If they did, ninja would invent two
+# phony inputs that never exist and rebuild the assembly on every run.  The
+# driver leaves them out of the depfile.  They become configure-time
+# dependencies instead, which costs a rebuild only when one of them is added
+# or removed.
 file(GLOB_RECURSE MONO_MANAGED_ODD_SOURCES "${MONO_MCS_TOPDIR}/class/*`*.cs")
 
-# ---------------------------------------------------------------------------
 # The runtime that bootstraps the compiler
-# ---------------------------------------------------------------------------
+
 # The `build` profile compiles on a mono that already works, spelled `mono` and
 # resolved through PATH -- it is what produces the first mscorlib, so it cannot
 # be the runtime being built.  This is independent of
@@ -68,9 +67,8 @@ if(NOT MONO_BOOTSTRAP_RUNTIME_CHECKED STREQUAL "${MONO_BOOTSTRAP_RUNTIME}")
   set(MONO_BOOTSTRAP_RUNTIME_CHECKED "${MONO_BOOTSTRAP_RUNTIME}" CACHE INTERNAL "")
 endif()
 
-# ---------------------------------------------------------------------------
 # Profiles
-# ---------------------------------------------------------------------------
+
 # The Linux profile set.
 #
 # DIRECTORY is the on-disk name; ALIAS is the unsuffixed name everything else
@@ -94,9 +92,9 @@ macro(_mono_profile name)
   endforeach()
 endmacro()
 
-# The bootstrap profile.  Compiles on system mono against the checked-in
-# reference assemblies; signs nothing and installs nothing.  Its whole purpose
-# is to produce a toolchain good enough to build net_4_x.
+# The bootstrap profile compiles on system mono against the checked-in
+# reference assemblies.  It signs nothing and installs nothing.  Its whole
+# purpose is to produce a toolchain good enough to build net_4_x.
 _mono_profile(build
   DIRECTORY build-linux
   ALIAS     build
@@ -178,8 +176,8 @@ foreach(_p IN LISTS MONO_MANAGED_PROFILES)
   endif()
 endforeach()
 
-# ---------------------------------------------------------------------------
 # Declaring an assembly
+
 # Resolves a path a declaration named.  Relative is against the declaring
 # directory, as in the makefiles.  <topdir>/ stands for the mcs root: a few
 # defaults library.make anchors there (LIBRARY_SNK) reach directories at
@@ -219,8 +217,7 @@ function(_mono_rewrite_resource_flags out flags resx resdir)
   set(${out} "${_result}" PARENT_SCOPE)
 endfunction()
 
-# ---------------------------------------------------------------------------
-# One call per assembly per directory; PROFILES says which profiles build it.
+# One call per assembly per directory.  PROFILES says which profiles build it.
 # The argument names follow the makefile variables they replace closely enough
 # to diff against them: NAME is LIBRARY/PROGRAM, OUTPUT_NAME is LIBRARY_NAME,
 # REFS is LIB_REFS, FLAGS is LIB_MCS_FLAGS.
@@ -253,7 +250,7 @@ function(mono_declare_managed)
     message(FATAL_ERROR "mono_declare_managed(${A_NAME}): PROFILES is required")
   endif()
 
-  # Everything is stashed as one flat property per declaration; the fields are
+  # Everything is stashed as one flat property per declaration.  The fields are
   # read back in mono_managed_materialize().  A list of lists would need
   # escaping that CMake makes more painful than it is worth.
   get_property(_n GLOBAL PROPERTY MONO_MANAGED_COUNT)
@@ -271,9 +268,8 @@ function(mono_declare_managed)
   set_property(GLOBAL PROPERTY MONO_MANAGED_COUNT ${_n})
 endfunction()
 
-# ---------------------------------------------------------------------------
 # The compiler, and the tools that surround it
-# ---------------------------------------------------------------------------
+
 # Roslyn's compiler server is worth a lot across ~900 compiles.  The pipe name
 # is derived from the build directory so that two build trees do not share a
 # server: it holds the tree's class/lib/build assemblies open through
@@ -306,9 +302,9 @@ endfunction()
 # the tool itself comes out of the bootstrap one.
 #
 # The bootstrap profile reaches for a `tmp/` copy holding nothing but the tools
-# themselves: mono resolves an assembly's dependencies from its own directory,
-# and at that point the normal location is simultaneously being filled with this
-# tree's mscorlib.dll, which system mono cannot load.  Once the bootstrap
+# themselves.  mono resolves an assembly's dependencies from its own directory,
+# and at that point the normal location is simultaneously being filled with
+# this tree's mscorlib.dll, which system mono cannot load.  Once the bootstrap
 # profile is finished that directory is safe to run out of, on either host.
 function(_mono_tool_command out profile tool)
   mono_profile_dir(_builddir build)
@@ -322,7 +318,7 @@ endfunction()
 
 # The tools are bootstrap-profile programs, so that profile has to be finished
 # before any of them start.  On the runtime this build produces they need the
-# runtime as well, and everything it needs to get off the ground; on a system
+# runtime as well, and everything it needs to get off the ground.  On a system
 # mono they need none of that.
 # What anything the build runs on the freshly built runtime has to wait for.
 #
@@ -386,9 +382,8 @@ function(_mono_csc_env out profile)
   set(${out} "${_env}" PARENT_SCOPE)
 endfunction()
 
-# ---------------------------------------------------------------------------
 # Materializing
-# ---------------------------------------------------------------------------
+
 # Turns every declaration into targets.  Called once, from mcs/CMakeLists.txt,
 # after all the subdirectories have been added.
 
@@ -521,7 +516,7 @@ function(_mono_materialize_one id)
   endforeach()
 endfunction()
 
-# Split out only so the variables above stay in scope; not meant to be called
+# Split out only so the variables above stay in scope.  Not meant to be called
 # directly.
 macro(_mono_materialize_profile _profile)
   # A macro argument is textual substitution, not a variable, so it cannot be
@@ -541,7 +536,7 @@ macro(_mono_materialize_profile _profile)
   set(_out "${_outdir}/${_outname}")
 
   # A few bootstrap assemblies compile into tmp/ and are copied up.  That
-  # directory is the clean app base the bootstrap tools run out of; see
+  # directory is the clean app base the bootstrap tools run out of.  See
   # _mono_tool_command().
   if(A_INTERMEDIATE)
     set(_build_out "${_outdir}/tmp/${_outname}")
@@ -578,7 +573,7 @@ macro(_mono_materialize_profile _profile)
   endforeach()
 
   foreach(_r IN LISTS _refs)
-    # `alias=Assembly` is an extern alias; the alias survives into the flag.
+    # `alias=Assembly` is an extern alias.  The alias survives into the flag.
     set(_alias "")
     if(_r MATCHES "^([^=]+)=(.+)$")
       set(_alias "${CMAKE_MATCH_1}=")
@@ -776,7 +771,7 @@ macro(_mono_materialize_profile _profile)
     file(CONFIGURE OUTPUT "${_response}" CONTENT "${_body}\n")
     set(_sources_inputs ${_abs})
   elseif(A_PROGRAM)
-    # Programs are handed their .sources verbatim; no expansion step.
+    # Programs are handed their .sources verbatim, with no expansion step.
     set(_sourcefile "${A_SOURCES_FILE}")
     if(NOT _sourcefile)
       set(_sourcefile "${A_NAME}.sources")
@@ -810,7 +805,8 @@ macro(_mono_materialize_profile _profile)
   list(APPEND _refdeps ${_tool_deps})
   list(APPEND _csc_env ${A_ENV})
 
-  # Libraries are re-signed by default; programs only when they name a key.
+  # Libraries are re-signed by default.  Programs are re-signed only when they
+  # name a key.
   # executable.make guards the sn call on PROGRAM_SNK, and nearly nothing sets
   # it -- signing every .exe fails outright on assemblies delay-signed with a
   # public key that is not mono.snk's.
@@ -989,9 +985,8 @@ set(MCS_STRING_REPLACER_FLAGS [==[@A_STRING_REPLACER_FLAGS@]==])
   endif()
 endmacro()
 
-# ---------------------------------------------------------------------------
 # Sources generated by a managed tool
-# ---------------------------------------------------------------------------
+
 # A handful of directories run something this build produced to write a .cs --
 # System.Web's culevel, RabbitMQ's Apigen.
 #
@@ -1032,9 +1027,8 @@ function(mono_generated_source)
   add_custom_target(${G_TARGET} DEPENDS "${G_OUTPUT}")
 endfunction()
 
-# ---------------------------------------------------------------------------
 # Generated parsers
-# ---------------------------------------------------------------------------
+
 # jay takes the grammar as an argument but the output skeleton on stdin, and a
 # custom command cannot redirect, so the invocation goes through a shell.
 #
@@ -1043,8 +1037,8 @@ endfunction()
 #
 # TARGET is not decoration.  An OUTPUT custom command only produces a build
 # rule for targets in its own directory, and the compile that consumes this
-# file is created later, in mcs/'s scope -- so the generated source needs a
-# target here to own it, which the assembly then names in DEPENDS.
+# file is created later, in mcs/'s scope.  The generated source therefore
+# needs a target here to own it, which the assembly then names in DEPENDS.
 function(mono_jay_parser)
   cmake_parse_arguments(J "" "TARGET;OUTPUT;GRAMMAR;SKELETON" "FLAGS" ${ARGN})
   if(NOT J_SKELETON)
@@ -1064,9 +1058,8 @@ function(mono_jay_parser)
   add_custom_target(${J_TARGET} DEPENDS "${J_OUTPUT}")
 endfunction()
 
-# ---------------------------------------------------------------------------
 # IL modules
-# ---------------------------------------------------------------------------
+
 # Assembles a .il file with ilasm.  corlib uses this for the one construct csc
 # cannot express, and cil-stringreplacer then splices the result into the
 # freshly compiled mscorlib.dll.
@@ -1096,8 +1089,8 @@ function(mono_add_il_module)
   _mono_tool_depends(_rt ${I_PROFILE})
   add_custom_command(
     OUTPUT "${I_OUTPUT}"
-    # /quiet drops the per-file banner and the success line; warnings and errors
-    # are printed either way.
+    # /quiet drops the per-file banner and the success line.  Warnings and
+    # errors are printed either way.
     COMMAND ${_cmd} /quiet ${_srcs} ${I_FLAGS} "/out:${I_OUTPUT}"
     DEPENDS ${_srcs} ${_ilasm_target} ${_rt}
     COMMENT "ILASM   [${I_PROFILE}] ${_name}"

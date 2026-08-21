@@ -90,9 +90,6 @@ set(monoutils_sources
   parse.c
   checked-build.c
   options.c
-  # Under --enable-cxx the rest of this directory is compiled as C++ and only
-  # this file stays C, which is why automake gave it a library of its own.
-  # There is no C++ build here, so it is just another source.
   mono-math-c.c
   # amd64-specific
   mach-support-amd64.c
@@ -103,13 +100,13 @@ mono_add_object_library(monoutils
   INCLUDES "${CMAKE_SOURCE_DIR}/mono"
   DEPENDS mono::hidden mono::eglib_headers)
 
-# mono/utils/mono-compiler.h and friends key off LLVM_API_VERSION even in TUs
-# that never touch LLVM.  The autotools build passed 0 here because it asked
+# mono-state.c keys off LLVM_API_VERSION even though this library never
+# touches LLVM itself.  The autotools build passed 0 here because it asked
 # llvm-config for --mono-api-version, which unmodified LLVM does not implement.
 target_compile_definitions(monoutils PRIVATE LLVM_API_VERSION=0)
 
-# dlmalloc is Doug Lea's, kept close to upstream; mono's warning set is not its
-# problem.
+# dlmalloc is Doug Lea's, kept close to upstream.  Mono's warning set is not
+# its problem.
 set_source_files_properties(dlmalloc.c PROPERTIES
   COMPILE_OPTIONS "-Wno-gnu-null-pointer-arithmetic")
 

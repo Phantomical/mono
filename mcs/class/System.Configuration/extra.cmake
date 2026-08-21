@@ -58,7 +58,7 @@ foreach(_t IN LISTS _cases)
     set(_libdeps "${_run}/${_t}-lib.dll")
   endif()
 
-  # Assert.cs is the whole test framework these use; t36 is the one case that
+  # Assert.cs is the whole test framework these use.  t36 is the one case that
   # does its printing itself.
   set(_srcs "${_src}/${_t}.cs")
   if(NOT _t STREQUAL "t36")
@@ -98,7 +98,7 @@ foreach(_t IN LISTS _cases)
     ENVIRONMENT "MONO_PATH=${_pdir}")
 
   # t12 gives a ConfigurationProperty a DefaultValue of the wrong type and
-  # expects the plain System.Exception .NET reports; this System.Configuration
+  # expects the plain System.Exception .NET reports.  This System.Configuration
   # lets the ArgumentException from the conversion out instead.  Nothing was
   # comparing this output before, so the divergence is as old as the case.
   if(_t STREQUAL "t12")

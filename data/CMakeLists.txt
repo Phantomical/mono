@@ -25,10 +25,9 @@ endforeach()
 install(FILES ${_pc_generated} xbuild12.pc
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 
-# ---------------------------------------------------------------------------
 # data/config -- the dllmap table that turns the Windows library names the
 # class libraries P/Invoke into the sonames present on this system.
-# ---------------------------------------------------------------------------
+
 set(libsuffix ".so")
 set(LIBC      "libc.so.6")
 set(INTL      "libc.so.6")

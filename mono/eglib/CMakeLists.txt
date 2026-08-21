@@ -1,5 +1,5 @@
 # The embedded glib replacement.  Everything the runtime uses from glib lives
-# here; there is no --with-glib=system path any more.
+# here.  There is no --with-glib=system path any more.
 
 set(GNUC_PRETTY    "")
 set(GNUC_UNUSED    "__attribute__((__unused__))")
@@ -63,8 +63,8 @@ mono_add_object_library(eglib
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}"
   # eglib is the one place that keeps its symbols visible: it is linked into
-  # both libmono and the standalone helper libraries, and -fvisibility=hidden
-  # here would hide the g_* the helpers call.  _FORTIFY_SOURCE is likewise
+  # both libmono and the standalone helper libraries.  -fvisibility=hidden here
+  # would hide the g_* the helpers call.  _FORTIFY_SOURCE is likewise
   # eglib-only, matching the automake build.
   OPTIONS -g -Wall
   DEFINITIONS _GNU_SOURCE _FORTIFY_SOURCE=2)

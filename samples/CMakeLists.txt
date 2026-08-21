@@ -1,4 +1,4 @@
-# The samples. The autotools build only ever distributed these; nothing
+# The samples. The autotools build only ever distributed these.  Nothing
 # compiled them, so they were free to rot. They are built here because they are
 # the only in-tree users of the embedding API and of the profiler module ABI,
 # and both break silently otherwise.
@@ -36,8 +36,8 @@ function(_mono_sample_embed name)
     "${_pubinc}" "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
   target_link_libraries(${name} PRIVATE
     ${_runtime_lib} mono::eglib_headers eglib m)
-  # Not part of `all`: an embedder that fails to link should not stop a runtime
-  # build, and these are only interesting when you are working on the API.
+  # Not part of `all`: an embedder that fails to link must not stop a runtime
+  # build.  These are only interesting when you work on the API.
   set_target_properties(${name} PROPERTIES
     EXCLUDE_FROM_ALL TRUE
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
@@ -84,7 +84,8 @@ if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
     COMMENT "CSC test-embed.exe"
     VERBATIM)
 
-  # test-invoke.c loads this one by name from the working directory.
+  # test-invoke.c hardcodes test-embed-invoke-cs.exe as the file it opens from
+  # the working directory, not this command's own output name.
   add_custom_command(
     OUTPUT "${_bin}/invoke.exe"
     COMMAND ${_csc} "-out:${_bin}/invoke.exe"

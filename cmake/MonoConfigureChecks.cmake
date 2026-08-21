@@ -23,9 +23,8 @@ if(CMAKE_USE_PTHREADS_INIT)
   list(APPEND CMAKE_REQUIRED_LIBRARIES Threads::Threads)
 endif()
 
-# ---------------------------------------------------------------------------
 # Headers
-# ---------------------------------------------------------------------------
+#
 # name -> config.h macro, in the autoconf spelling (HAVE_<upper>_<H>).
 set(_mono_headers
   alloca.h android/api-level.h android/legacy_signal_inlines.h
@@ -60,9 +59,7 @@ check_c_source_compiles("#include <sys/socket.h>\n#include <linux/in.h>\nint mai
 check_c_source_compiles("#include <malloc.h>\nint main(void){return 0;}"
                         HAVE_USR_INCLUDE_MALLOC_H)
 
-# ---------------------------------------------------------------------------
 # Functions
-# ---------------------------------------------------------------------------
 set(_mono_functions
   accept4 arc4random arc4random_buf atexit backtrace_symbols chmod
   clock_nanosleep closelog confstr dl_iterate_phdr dladdr endgrent endpwent
@@ -94,7 +91,7 @@ foreach(_f IN LISTS _mono_functions)
   check_function_exists("${_f}" ${_var})
 endforeach()
 
-# clock_gettime lives in librt on old glibc; CMAKE_REQUIRED_LIBRARIES already
+# clock_gettime lives in librt on old glibc. CMAKE_REQUIRED_LIBRARIES already
 # has what Threads pulled in, so a plain check is enough on anything current.
 check_function_exists(clock_gettime HAVE_CLOCK_GETTIME)
 
@@ -128,9 +125,7 @@ if(HAVE_POSIX_FADVISE)
   set(HAVE_POSIX_ADVISE 1)
 endif()
 
-# ---------------------------------------------------------------------------
 # strerror_r: which of the two incompatible flavours do we have?
-# ---------------------------------------------------------------------------
 check_symbol_exists(strerror_r "string.h" HAVE_DECL_STRERROR_R)
 if(HAVE_DECL_STRERROR_R)
   set(HAVE_STRERROR_R 1)
@@ -143,9 +138,7 @@ if(HAVE_DECL_STRERROR_R)
   endif()
 endif()
 
-# ---------------------------------------------------------------------------
 # Constants, macros and enum members
-# ---------------------------------------------------------------------------
 check_symbol_exists(CLOCK_MONOTONIC        "time.h"    HAVE_CLOCK_MONOTONIC)
 check_symbol_exists(CLOCK_MONOTONIC_COARSE "time.h"    HAVE_CLOCK_MONOTONIC_COARSE)
 check_symbol_exists(CLOCK_REALTIME         "time.h"    HAVE_CLOCK_REALTIME)
@@ -190,9 +183,7 @@ check_c_source_compiles("
   int main(void) { return open (\"/dev/null\", O_RDONLY | O_LARGEFILE); }"
   HAVE_LARGE_FILE_SUPPORT)
 
-# ---------------------------------------------------------------------------
 # Types
-# ---------------------------------------------------------------------------
 set(CMAKE_EXTRA_INCLUDE_FILES sys/types.h sys/socket.h netinet/in.h sys/un.h
                               sys/stat.h sys/time.h time.h poll.h fcntl.h
                               utime.h dirent.h signal.h)
@@ -256,9 +247,7 @@ check_c_source_compiles("
   int main(void) { struct rt_msghdr; return 0; }"
   HAVE_RT_MSGHDR)
 
-# ---------------------------------------------------------------------------
 # Struct members
-# ---------------------------------------------------------------------------
 check_struct_has_member("struct dirent" d_off    dirent.h  HAVE_STRUCT_DIRENT_D_OFF)
 check_struct_has_member("struct dirent" d_reclen dirent.h  HAVE_STRUCT_DIRENT_D_RECLEN)
 check_struct_has_member("struct dirent" d_type   dirent.h  HAVE_STRUCT_DIRENT_D_TYPE)
@@ -288,11 +277,10 @@ endif()
 
 check_symbol_exists(sys_siglist "signal.h" HAVE_SYSSIGNAME)
 
-# ---------------------------------------------------------------------------
 # Signedness / arity differences between libcs
-# ---------------------------------------------------------------------------
+#
 # autoconf compiled a call with the candidate signature and looked for a
-# warning; -Werror on the probe gives the same answer without parsing output.
+# warning. -Werror on the probe gives the same answer without parsing output.
 set(_saved_flags "${CMAKE_REQUIRED_FLAGS}")
 set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror")
 
@@ -333,7 +321,7 @@ check_c_source_compiles("
   HAVE_GETDOMAINNAME_SIZET)
 
 # A conflicting redeclaration is an error, so this asks about the declared
-# parameter type rather than about a warning the compiler may not emit.
+# parameter type instead of a warning the compiler does not always emit.
 check_c_source_compiles("
   #include <sys/inotify.h>
   extern int inotify_rm_watch (int, unsigned int);
@@ -363,9 +351,7 @@ check_c_source_compiles("
   HAVE_SUPPORT_FOR_DUAL_MODE_IPV4_PACKET_INFO)
 check_symbol_exists(IP_PKTINFO "netinet/in.h" HAVE_IP_PKTINFO)
 
-# ---------------------------------------------------------------------------
 # Compiler and runtime behaviour
-# ---------------------------------------------------------------------------
 check_c_source_compiles("
   void __attribute__ ((visibility (\"hidden\"))) f (void) {}
   int main(void) { f (); return 0; }"
@@ -420,9 +406,7 @@ check_c_source_runs("
   }"
   HAVE_SHM_OPEN_THAT_WORKS_WELL_ENOUGH_WITH_MMAP)
 
-# ---------------------------------------------------------------------------
 # Sizes
-# ---------------------------------------------------------------------------
 check_type_size("void *"    SIZEOF_VOID_P      BUILTIN_TYPES_ONLY LANGUAGE C)
 check_type_size("int"       SIZEOF_INT         BUILTIN_TYPES_ONLY LANGUAGE C)
 check_type_size("long"      SIZEOF_LONG        BUILTIN_TYPES_ONLY LANGUAGE C)

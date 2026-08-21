@@ -3,8 +3,8 @@
 # Every case has the same shape: build one or more small assemblies, run mdoc
 # over them into a directory, and diff that against a checked-in tree.  The
 # Makefile ran them all through a single Test/en.actual in the source
-# directory; here each case gets a private working copy of Test/ in the build
-# tree, so the source stays clean and the cases run in parallel.
+# directory. Here each case gets a private working copy of Test/ in the build
+# tree instead, so the source stays clean and the cases run in parallel.
 #
 #   SETTINGS  generated file naming the runtime, mdoc.exe and the compiler
 #   SRCDIR    this directory
@@ -13,11 +13,9 @@
 
 include("${SETTINGS}")
 
-# ---------------------------------------------------------------------------
 # The staging copy
-# ---------------------------------------------------------------------------
 # Copies, not symlinks: several of the compiles write an XML doc file back over
-# an input name, which through a symlink would land in the source tree.  The
+# an input name, and a symlink there puts that write in the source tree.  The
 # expected trees are only ever read, so those are linked.
 file(REMOVE_RECURSE "${WORKDIR}")
 file(MAKE_DIRECTORY "${WORKDIR}/Test")
@@ -34,9 +32,7 @@ foreach(_e IN LISTS _expected)
   file(CREATE_LINK "${_e}" "${WORKDIR}/Test/${_n}" SYMBOLIC)
 endforeach()
 
-# ---------------------------------------------------------------------------
 # Steps
-# ---------------------------------------------------------------------------
 function(run)
   execute_process(COMMAND ${ARGN} WORKING_DIRECTORY "${WORKDIR}"
                   RESULT_VARIABLE _rc)
@@ -74,7 +70,7 @@ function(mdoc)
       "${RUNTIME}" "${MDOC}" ${ARGN})
 endfunction()
 
-# Same as `diff -rup`: the trees have to match exactly, in both directions.
+# The trees have to match exactly, in both directions.
 function(diff_tree expected actual)
   execute_process(COMMAND diff -rup "${expected}" "${actual}"
                   WORKING_DIRECTORY "${WORKDIR}"
@@ -108,9 +104,7 @@ endfunction()
 set(_langs -lang docid -lang vb.net -lang fsharp -lang javascript
            -lang c++/cli -lang c++/cx -lang c++/winrt)
 
-# ---------------------------------------------------------------------------
 # The cases
-# ---------------------------------------------------------------------------
 if(CASE STREQUAL "monodocer")
   doctest(v1)
   # Run twice: the second pass over an existing tree has to be a no-op, which

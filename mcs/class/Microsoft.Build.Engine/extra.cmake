@@ -1,5 +1,5 @@
-# The suite embeds a tiny task assembly as a resource and then loads it back
-# out at run time, to check that xbuild can bind a task from a file.
+# The suite embeds a tiny task assembly as a resource, then loads it back at
+# run time. This checks that xbuild can bind a task from a file.
 mono_test_fixture_assembly(
   PROFILE  net_4_x
   ASSEMBLY Microsoft.Build.Engine.dll

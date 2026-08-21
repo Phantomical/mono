@@ -1,5 +1,5 @@
-# The interpreter's tests.  They reach the transform's internals rather than
-# running managed code through it, which is why they link the runtime archive
+# The interpreter's tests. They reach the transform's internals rather than
+# running managed code through it. That is why they link the runtime archive
 # instead of going through the mono binary.
 
 if(NOT MONO_ENABLE_INTERPRETER OR NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRARIES)
@@ -8,9 +8,9 @@ if(NOT MONO_ENABLE_INTERPRETER OR NOT MONO_ENABLE_SGEN OR NOT MONO_ENABLE_LIBRAR
 endif()
 
 # Each case transforms a method out of a `.il` file under il/ that ilasm
-# assembles into an assembly the test loads.  The sources compile either way and
-# the fixtures skip themselves when there is no corpus: a case that disappears
-# from `ctest -N` reads exactly like a case that passed.
+# assembles into an assembly the test loads. The sources compile either way. A
+# fixture with no corpus to load skips itself instead of vanishing from
+# `ctest -N`. A missing case there reads the same as a passed one.
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current
   # source directory itself.

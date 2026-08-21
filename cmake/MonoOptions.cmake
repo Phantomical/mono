@@ -1,5 +1,5 @@
 # Build options.  These are the CMake spelling of the ./configure switches the
-# tree actually uses; everything the old configure.ac supported for platforms
+# tree actually uses.  Everything the old configure.ac supported for platforms
 # outside this port's scope (Windows, Darwin, mobile, wasm, cross builds, the
 # netcore profile, AOT-only runtimes) is gone rather than carried along as dead
 # conditionals.
@@ -58,8 +58,8 @@ option(MONO_UNITY_DEFINE     "Define UNITY in config.h"                 ON)
 
 # --- the peripheral directories ---------------------------------------------
 # None of these are part of the runtime.  They are on by default when they cost
-# almost nothing to build and catch something when they break; off when they
-# need a tool or a download that a plain checkout does not have.
+# almost nothing to build and catch something when they break, and off when
+# they need a tool or a download that a plain checkout does not have.
 option(MONO_ENABLE_SAMPLES    "Build the embedding and profiler samples"      ON)
 option(MONO_ENABLE_BENCHMARKS "Build the mono/benchmark microbenchmarks"      ON)
 option(MONO_ENABLE_NLS        "Compile and install the gettext catalogues"    ON)
@@ -71,8 +71,9 @@ option(MONO_ENABLE_LOCALE_BUILDER "Build tools/locale-builder"                OF
 option(MONO_ENABLE_DOCS       "Build the monodoc API documentation"           OFF)
 
 # --- build-time managed tools -----------------------------------------------
-# Which mono hosts csc and ilasm while building; see MonoToolsRuntime.cmake for
-# what moves, what does not, and why this is off by default.
+# This option picks which mono hosts csc and ilasm while building.  See
+# MonoToolsRuntime.cmake for what moves, what does not, and why this is off by
+# default.
 option(MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS
        "Compile C# on a mono already installed on this machine instead of the one being built" OFF)
 set(MONO_SYSTEM_RUNTIME "" CACHE FILEPATH
@@ -103,8 +104,9 @@ if(NOT MONO_ENABLE_SGEN AND NOT MONO_ENABLE_BOEHM)
   message(FATAL_ERROR "At least one of MONO_ENABLE_SGEN / MONO_ENABLE_BOEHM must be on")
 endif()
 
-# mono-sgen is the preferred binary when both collectors are built; the `mono`
-# symlink and the un-suffixed libmono*.so aliases point at whichever wins.
+# mono-sgen is the preferred binary when both collectors are built.  The
+# `mono` symlink and the un-suffixed libmono*.so aliases point at whichever
+# wins.
 if(MONO_ENABLE_SGEN)
   set(MONO_DEFAULT_GC_SUFFIX "sgen")
 else()

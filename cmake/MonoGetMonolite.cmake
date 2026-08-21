@@ -1,8 +1,8 @@
 # Fetches the prebuilt bootstrap compiler.
 #
 # The class libraries need a working mono to compile the first mscorlib with.
-# Normally that is one already installed; monolite is the fallback for machines
-# that have none.  Run as `cmake --build <dir> --target get-monolite-latest`,
+# Normally that is one already installed.  Monolite is the fallback for
+# machines that have none.  Run as `cmake --build <dir> --target get-monolite-latest`,
 # then point MONO_BOOTSTRAP_RUNTIME at it.
 #
 #   MONO_MONOLITE_URL   where to fetch from

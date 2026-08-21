@@ -1,11 +1,11 @@
 # Installs one assembly into the GAC, at install time.  Included from an
 # install(CODE) block, which sets the MONO_GAC_* variables below.
 #
-# gacutil rather than a set of install(FILES) rules because it is the thing
-# that knows the layout: lib/mono/gac/<Name>/<version>_<culture>_<token>/ needs
-# the assembly's version and public key token, and the package directory gets a
-# *relative* symlink back into it.  Reimplementing that here would mean parsing
-# assembly metadata in CMake for no gain.
+# This uses gacutil rather than a set of install(FILES) rules, because gacutil
+# is the thing that knows the layout: lib/mono/gac/<Name>/<version>_<culture>_<token>/
+# needs the assembly's version and public key token, and the package directory
+# gets a *relative* symlink back into it.  Reimplementing that here means
+# parsing assembly metadata in CMake for no gain.
 #
 #   MONO_GAC_RUNTIME    the mono to run it on
 #   MONO_GAC_TOOL       gacutil.exe

@@ -9,7 +9,7 @@
 #     DEFINITIONS <def>...    on the compile line as given, so a path a test
 #                             needs is spelled FOO="..." here
 #
-# The suite still has to register its cases; this only produces the binary.
+# The suite still has to register its cases. This only produces the binary.
 function(mono_gtest_binary name)
   cmake_parse_arguments(ARG "" "" "SOURCES;INCLUDES;DEFINITIONS;LIBRARIES" ${ARGN})
 
@@ -31,7 +31,7 @@ function(mono_gtest_binary name)
     target_link_libraries(${name} PRIVATE ZLIB::ZLIB)
   endif()
 
-  # The runtime contains C++, which the C driver would not link.
+  # The runtime contains C++, which the C driver cannot link.
   set_target_properties(${name} PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
 

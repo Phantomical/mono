@@ -1,7 +1,7 @@
 # Script mode: fetch and unpack a CLDR core.zip.  Run by
 # tools/locale-builder, which needs the data at build time rather than at
-# configure time -- nobody configuring the runtime should pay for a download
-# they will not use.
+# configure time, so configuring the runtime never pays for a download it
+# will not use.
 #
 # Expects URL, DEST and EXTRACT_TO on the command line.
 

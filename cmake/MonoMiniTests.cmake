@@ -42,14 +42,10 @@ mono_corpus_cs(xdomain.exe   SOURCES xdomain.cs)
 
 add_custom_target(mini-corpora ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
 
-# The corpora under mono/unit-tests reference this and are built in their own
-# directories, so they need it finished first.  A target-level dependency is the
-# only kind that crosses directories reliably.
+# Builds TestDriver.dll on its own, without the rest of mini-corpora.
 add_custom_target(mini-test-driver DEPENDS "${_driver}")
 
-# ---------------------------------------------------------------------------
 # CTest wiring
-# ---------------------------------------------------------------------------
 set(_regtests
   aot-tests.exe basic.exe basic-float.exe basic-long.exe basic-calls.exe
   builtin-types.exe gshared.exe objects.exe arrays.exe basic-math.exe
@@ -59,9 +55,9 @@ set(_regtests
 # One test per corpus, so a failure names the corpus and --rerun-failed re-runs
 # only what broke.
 #
-# Tier 0 is off here. --regression calls each test method once, so nothing ever
-# spends its call counter and the whole corpus would run interpreted -- which is
-# what the suite below is for.
+# Tier 0 is off here. --regression calls each test method once, so a method's
+# call counter never runs out on its own, and left at the default the whole
+# corpus runs interpreted -- which is what the suite below is for.
 foreach(_t IN LISTS _regtests)
   string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
   add_test(NAME "mini-regression/${_stem}"
@@ -75,9 +71,9 @@ endforeach()
 # The same corpora at the default tier: every method the interpreter accepts
 # runs interpreted, and everything else compiles and calls into it. That
 # crossing is where a method's entries have to agree with the convention its
-# callers were compiled against, and nothing else covers it at this scale - the
-# suite above compiles everything, and the interpreter's own harness interprets
-# everything.
+# callers were compiled against, and only this suite covers it at this scale --
+# the suite above compiles everything, and the interpreter's own harness
+# interprets everything.
 if(MONO_ENABLE_INTERPRETER)
   foreach(_t IN LISTS _regtests)
     string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
@@ -93,12 +89,13 @@ endif()
 # The interpreted-caller/compiled-callee crossing, which neither suite above
 # reaches: `mini-regression` compiles everything, and `mini-regression-interp`
 # runs at the default tier but carries the `interp` label, which `check` drops.
-# This one keeps `regression` so the crossing is covered by the fast set -- it
-# is where a callee's prototype has to agree with what its caller was compiled
-# against, and getting that wrong is a wrong register rather than a diagnostic.
+# This one keeps `regression` so the crossing is covered by the fast set. It is
+# where a callee's prototype has to agree with what its caller was compiled
+# against, and getting that wrong produces a wrong register rather than a
+# diagnostic.
 #
 # The corpus loops until its callees are compiled underneath it, so the run has
-# to prove it got that far; MonoRunTracedTest fails it if any callee was never
+# to prove it got that far. MonoRunTracedTest fails it if any callee was never
 # compiled, which is what a loop that finished too early looks like.
 if(MONO_ENABLE_INTERPRETER)
   add_test(NAME "mini-regression/tier-seam"
@@ -112,7 +109,7 @@ if(MONO_ENABLE_INTERPRETER)
 endif()
 
 # The same corpus with the interpreter out of the way, so a failure above says
-# whether the crossing broke it or the code generated for it is simply wrong.
+# whether the crossing broke it or the code generated for it is wrong.
 add_test(NAME "mini-regression/tier-seam-compiled"
          COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                  "MONO_LLVM_JIT_TIER0=0"

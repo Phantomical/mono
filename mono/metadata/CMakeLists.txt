@@ -3,8 +3,8 @@
 # Everything here is compiled twice when both collectors are enabled, because
 # a handful of translation units (gc.c, monitor.c, object.c, ...) inline the
 # collector's allocation and write-barrier paths.  The two object libraries
-# differ only in -DHAVE_BOEHM_GC vs -DHAVE_SGEN_GC and in which GC glue file
-# they pull in.
+# differ in their GC defines (-DHAVE_BOEHM_GC plus -DGC_THREADS, against
+# -DHAVE_SGEN_GC) and in which GC glue file they pull in.
 
 set(metadata_common_sources
   # platform (unix)
@@ -132,8 +132,8 @@ set(metadata_boehm_sources
   null-gc.c
   null-gc-handles.c
   boehm-gc.c
-  # Unity's object-graph walk is Boehm-only; under SGen the equivalent lives in
-  # sgen-mono.c.
+  # Unity's object-graph walk.  The source has an SGen arm as well, but only
+  # the Boehm variant compiles it.
   unity-liveness.c)
 
 set(metadata_sgen_sources
@@ -145,10 +145,8 @@ set(metadata_sgen_sources
   sgen-stw.c
   sgen-mono.c)
 
-# ---------------------------------------------------------------------------
 # mono-config-dirs.c is a library of its own so that changing --prefix only
 # recompiles this one file instead of invalidating ccache for the whole tree.
-# ---------------------------------------------------------------------------
 mono_add_object_library(monoruntime_config
   SOURCES mono-config-dirs.c
   DEFINITIONS
@@ -159,19 +157,16 @@ mono_add_object_library(monoruntime_config
   INCLUDES "${CMAKE_SOURCE_DIR}/mono"
   DEPENDS mono::hidden mono::eglib_headers)
 
-# ---------------------------------------------------------------------------
-# support.c is separate because it is not valid C++, and the --enable-cxx
-# build compiles the rest of this directory with a C++ compiler.
-# ---------------------------------------------------------------------------
+# support.c is an empty translation unit except under ENABLE_MONOTOUCH or
+# ENABLE_MONODROID, where it pulls in the zlib helper.  HAVE_UNISTD_H and
+# HAVE_HIDDEN are the defines the zlib headers read.
 mono_add_object_library(monoruntime_support
   SOURCES support.c
   DEFINITIONS HAVE_UNISTD_H HAVE_HIDDEN
   INCLUDES "${CMAKE_SOURCE_DIR}/mono"
   DEPENDS mono::hidden mono::eglib_headers)
 
-# ---------------------------------------------------------------------------
 # The two collector flavours
-# ---------------------------------------------------------------------------
 function(_mono_add_metadata_variant name)
   cmake_parse_arguments(ARG "" "" "SOURCES;DEFINITIONS" ${ARGN})
   mono_add_object_library(${name}
