@@ -21,6 +21,7 @@
 #include "metadata/object-internals.h"
 #include "mini/domain-method.h"
 #include "mini/jit.h"
+#include "mini/mini.h"
 
 #include "llvm/runtime.h"
 
@@ -43,6 +44,15 @@ namespace {
 extern "C" int
 detoured_body (int x)
 {
+	return x + 1000;
+}
+
+/* The same for an instance method, whose entry is handed the receiver first.
+ * A detour target carries the method's own convention: nothing adapts one. */
+extern "C" int
+detoured_instance_body (void *self, int x)
+{
+	(void) self;
 	return x + 1000;
 }
 
@@ -120,6 +130,84 @@ protected:
 		return inflated;
 	}
 
+	/* A method of one reference instantiation of a generic class. */
+	static MonoMethod *class_method_over (const char *type, const char *name, int argc,
+	                                      MonoClass *argument)
+	{
+		ERROR_DECL (error);
+		MonoClass *definition = mono_class_from_name_checked (g_image, "", type, error);
+
+		mono_error_assert_ok (error);
+		if (definition == nullptr)
+			return nullptr;
+
+		MonoType *arguments[1] = { m_class_get_byval_arg (argument) };
+		MonoGenericContext context;
+
+		memset (&context, 0, sizeof (context));
+		context.class_inst = mono_metadata_get_generic_inst (1, arguments);
+
+		MonoClass *inflated =
+			mono_class_inflate_generic_class_checked (definition, &context, error);
+
+		mono_error_assert_ok (error);
+		if (inflated == nullptr)
+			return nullptr;
+
+		MonoMethod *found =
+			mono_class_get_method_from_name_checked (inflated, name, argc, 0, error);
+
+		mono_error_assert_ok (error);
+		return found;
+	}
+
+	/*
+	 * Where \p method is entered once a promotion has given it a body, or null
+	 * when none landed.
+	 *
+	 * Through the queue rather than through PromoteNow. The queue is how a
+	 * method that is merely called gets compiled, so it is the route these
+	 * cases have to be taken on; PromoteNow reaches the backend by another
+	 * door and would answer for that one instead.
+	 */
+	static void *promoted_body (MonoMethod *method)
+	{
+		ERROR_DECL (error);
+		MonoDomain *domain = mono_domain_get ();
+
+		/* The record a promotion is decided on, which nothing has built while
+		 * the method has not been asked for. */
+		mono_compile_method_checked (method, error);
+		mono_error_assert_ok (error);
+
+		if (!mono_promote_method (method, domain))
+			return nullptr;
+
+		return await_body (domain, method);
+	}
+
+	/*
+	 * Whether the body serving \p method is the shared form's rather than one
+	 * compiled against this instantiation.
+	 *
+	 * The addresses do not answer this on their own. An instantiation whose
+	 * shared body reads its context out of a register is entered at a stub of
+	 * its own, so two that share are entered at different addresses; and the
+	 * printed names cannot be compared either, since the shared form and the
+	 * genuine <object> instantiation print the same.
+	 */
+	static bool is_served_by_a_shared_body (MonoMethod *method)
+	{
+		ERROR_DECL (error);
+		MonoMethod *shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, error);
+
+		mono_error_cleanup (error);
+		if (shared == nullptr || shared == method)
+			return false;
+
+		return mono_llvm_jit_find_body (mono_domain_get (), shared) != nullptr;
+	}
+
 	/* What a managed caller answers, run through an ordinary invoke. */
 	static int invoke (MonoMethod *method, int argument)
 	{
@@ -130,6 +218,27 @@ protected:
 		mono_error_assert_ok (error);
 		EXPECT_NE (nullptr, result);
 		return result != nullptr ? *(int *) mono_object_unbox_internal (result) : 0;
+	}
+
+	/* The string a no-argument managed method answers. */
+	static std::string invoke_string (MonoMethod *method)
+	{
+		ERROR_DECL (error);
+		MonoObject *result = mono_runtime_invoke_checked (method, nullptr, nullptr, error);
+
+		mono_error_assert_ok (error);
+		EXPECT_NE (nullptr, result);
+		if (result == nullptr)
+			return {};
+
+		char *text = mono_string_to_utf8_checked_internal ((MonoString *) result, error);
+
+		mono_error_assert_ok (error);
+
+		std::string answer (text != nullptr ? text : "");
+
+		g_free (text);
+		return answer;
 	}
 
 	/*
@@ -252,6 +361,138 @@ TEST_F (MethodDetour, IsSeenByAnInterpretedCallerOfAnInstantiation)
 	mono_install_method_detour (target, mono_domain_get (), (void *) detoured_body);
 
 	EXPECT_EQ (1001, invoke (caller, 1));
+}
+
+/*
+ * Two reference instantiations of one method end up entering the same code.
+ *
+ * Every case below rests on this. A detour that is per instantiation is only
+ * worth asserting where one body serves several of them, and a run where
+ * sharing never happened would pass those cases while checking nothing.
+ */
+TEST_F (MethodDetour, TwoInstantiationsShareOneBody)
+{
+	MonoMethod *over_string =
+		class_method_over ("Shared`1", "Read", 1, mono_get_string_class ());
+	MonoMethod *over_object =
+		class_method_over ("Shared`1", "Read", 1, mono_get_object_class ());
+
+	ASSERT_NE (nullptr, over_string);
+	ASSERT_NE (nullptr, over_object);
+	ASSERT_NE (over_string, over_object) << "these are the same method";
+
+	void *body = promoted_body (over_string);
+	void *also = promoted_body (over_object);
+
+	ASSERT_NE (nullptr, body);
+	ASSERT_NE (nullptr, also);
+	EXPECT_EQ (body, also) << "each instantiation was compiled against itself";
+}
+
+/*
+ * An instantiation whose shared body has no receiver still answers about its
+ * own type argument. The context comes out of a register that the stub in
+ * front of this instantiation writes, so a stub that wrote another one's
+ * context is a wrong answer here rather than a crash.
+ */
+TEST_F (MethodDetour, AStaticInstantiationKeepsItsOwnContext)
+{
+	MonoMethod *over_string =
+		class_method_over ("SharedStatic`1", "Name", 0, mono_get_string_class ());
+	MonoMethod *over_object =
+		class_method_over ("SharedStatic`1", "Name", 0, mono_get_object_class ());
+
+	ASSERT_NE (nullptr, over_string);
+	ASSERT_NE (nullptr, over_object);
+
+	ASSERT_NE (nullptr, promoted_body (over_string));
+	ASSERT_NE (nullptr, promoted_body (over_object));
+	ASSERT_TRUE (is_served_by_a_shared_body (over_string))
+		<< "this instantiation was compiled against itself, so no stub was written";
+	ASSERT_TRUE (is_served_by_a_shared_body (over_object))
+		<< "this instantiation was compiled against itself, so no stub was written";
+
+	EXPECT_EQ ("String", invoke_string (over_string));
+	EXPECT_EQ ("Object", invoke_string (over_object));
+}
+
+/*
+ * A detour is per instantiation however thoroughly the instantiations share.
+ * Sharing binds a thunk's target and never the thunk, so each instantiation
+ * keeps an entry of its own for a patcher to take.
+ */
+TEST_F (MethodDetour, ADetourOnOneInstantiationLeavesTheOthers)
+{
+	ERROR_DECL (error);
+	MonoDomain *domain = mono_domain_get ();
+	MonoMethod *detoured =
+		class_method_over ("Shared`1", "Read", 1, mono_get_exception_class ());
+	MonoMethod *untouched =
+		class_method_over ("Shared`1", "Read", 1, mono_get_string_class ());
+
+	ASSERT_NE (nullptr, detoured);
+	ASSERT_NE (nullptr, untouched);
+
+	void *body = promoted_body (detoured);
+
+	ASSERT_NE (nullptr, body);
+	ASSERT_EQ (body, promoted_body (untouched)) << "the two do not share a body";
+
+	mono_install_method_detour (detoured, domain, (void *) detoured_instance_body);
+
+	/* The receiver is not read, so the entries take one that is never
+	 * dereferenced. */
+	int (*moved) (void *, int) =
+		(int (*) (void *, int)) mono_compile_method_checked (detoured, error);
+	mono_error_assert_ok (error);
+	int (*stayed) (void *, int) =
+		(int (*) (void *, int)) mono_compile_method_checked (untouched, error);
+	mono_error_assert_ok (error);
+
+	ASSERT_NE (nullptr, moved);
+	ASSERT_NE (nullptr, stayed);
+	ASSERT_NE ((void *) moved, (void *) stayed) << "one thunk serves both";
+
+	EXPECT_EQ (1001, moved (nullptr, 1));
+	EXPECT_EQ (2, stayed (nullptr, 1)) << "the detour followed the shared body";
+}
+
+/*
+ * And an interpreted caller sees the same split. This is the arm the
+ * notification in enter_shared_body () governs: an instantiation bound to a
+ * shared body has an entry, and nothing else tells the interpreter so.
+ */
+TEST_F (MethodDetour, ADetourOnOneInstantiationLeavesTheOthersForAnInterpretedCaller)
+{
+	MonoDomain *domain = mono_domain_get ();
+	MonoMethod *detoured =
+		class_method_over ("Shared`1", "Read", 1, mono_get_exception_class ());
+	MonoMethod *untouched =
+		class_method_over ("Shared`1", "Read", 1, mono_get_object_class ());
+	MonoMethod *calls_detoured = method_named ("CallSharedOverException", 1);
+	MonoMethod *calls_untouched = method_named ("CallSharedOverObject", 1);
+
+	ASSERT_NE (nullptr, detoured);
+	ASSERT_NE (nullptr, untouched);
+	ASSERT_NE (nullptr, calls_detoured);
+	ASSERT_NE (nullptr, calls_untouched);
+	ASSERT_GT (mono_llvm_jit_tier0_calls (calls_detoured), 0)
+		<< "the caller no longer starts at tier 0, so it is not interpreted";
+	ASSERT_GT (mono_llvm_jit_tier0_calls (calls_untouched), 0)
+		<< "the caller no longer starts at tier 0, so it is not interpreted";
+
+	void *body = promoted_body (detoured);
+
+	ASSERT_NE (nullptr, body);
+	ASSERT_EQ (body, promoted_body (untouched)) << "the two do not share a body";
+
+	mono_install_method_detour (detoured, domain, (void *) detoured_instance_body);
+
+	/* The first of these needs the interpreter to jit-call an instantiation at
+	 * all, which interp_jit_call_refusal () decides. The second is the split
+	 * itself, and holds whichever way the caller reaches its callee. */
+	EXPECT_EQ (1001, invoke (calls_detoured, 1));
+	EXPECT_EQ (2, invoke (calls_untouched, 1)) << "the detour followed the shared body";
 }
 
 /*

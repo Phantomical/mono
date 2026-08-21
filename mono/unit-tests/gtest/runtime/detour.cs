@@ -49,8 +49,50 @@ public class Detour
 		return GenericTarget<string> (x);
 	}
 
+	/* Interpreted callers of two instantiations that one body serves. Each
+	 * builds its own receiver, so the entry they reach takes one. */
+	public static int CallSharedOverObject (int x)
+	{
+		return new Shared<object> ().Read (x);
+	}
+
+	public static int CallSharedOverException (int x)
+	{
+		return new Shared<System.Exception> ().Read (x);
+	}
+
 	public static int Main ()
 	{
 		return 0;
+	}
+}
+
+/*
+ * An instance method on a generic class. Every reference instantiation of
+ * Read () is served by one body, and that body reads the context it needs out
+ * of the receiver - so an instantiation's entry is the shared body itself,
+ * with no stub in front of it.
+ */
+public class Shared<T> where T : class
+{
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public int Read (int x)
+	{
+		return x + 1;
+	}
+}
+
+/*
+ * The other half of the crossing: a static method has no receiver, so a shared
+ * body reads its context out of a register that the instantiation's own stub
+ * writes. Name () answers what that context resolved to, which is what tells a
+ * stub that wrote the wrong one from a stub that worked.
+ */
+public class SharedStatic<T> where T : class
+{
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static string Name ()
+	{
+		return typeof (T).Name;
 	}
 }
