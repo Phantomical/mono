@@ -7,10 +7,22 @@ It is the runtime's only JIT. Every compile routes through it, the classic mini 
 end never engages, and no command-line switch selects a backend.
 
 It builds against **unmodified upstream LLVM 22** — a local RelWithDebInfo build of
-`llvmorg-22.1.8` with assertions on, installed at `~/projects/llvm-project/install`.
-Assertions are on deliberately, because they catch the API misuse the distro LLVM
-tolerated in silence. If the backend fails to build against an LLVM that looks
-correct, make sure that `llvm-config --version` in that prefix says 22.x.
+`llvmorg-22.1.8`, installed at `~/projects/llvm-project/install`. That prefix is the
+production configuration and it has **assertions off**. If the backend fails to build
+against an LLVM that looks correct, make sure that `llvm-config --version` in that
+prefix says 22.x.
+
+`llvm-config --assertion-mode` is worth reading before you measure anything, because
+the two builds are not interchangeable. A runtime built against an assertions LLVM and
+then run against this one dies at startup with `undefined symbol:
+_ZN4llvm23EnableABIBreakingChecksE`, which names the library rather than the change
+that caused it. `MONO_LLVM_JIT_VERIFY` also keys its default off assertions, so the
+same command costs 11-15% more compile CPU under an assertions build. Numbers from
+either side of a switch are not comparable, and a worktree needs a rebuild after one.
+
+An assertions build stays useful for finding a fault, because it catches the API
+misuse the distro LLVM tolerated in silence. Reach for it to explain a crash, not to
+measure.
 
 Scope: amd64 and Linux first, JIT only, unmodified LLVM. AOT and llvmonly are out of
 scope and deleted. The design doc is `.claude/plans/orc-direct-multitier.md`.
@@ -234,12 +246,14 @@ Tracing and dumping:
   copy of every object alive for as long as the method.
 
 Measurement:
-- `MONO_LLVM_JIT_VERIFY=<0|off|each|all>` (`jit.cpp`) — how much IR the verifier sees.
-  On by default when LLVM has assertions, which is this project's configuration, and it
-  then checks the translator's output, the module after each pass written here, and the
-  module codegen is handed. `each` extends that to every stock pass. The default costs
-  **11-15%** of compile CPU. A failure names the method and the pass, prints the module,
-  then aborts.
+- `MONO_LLVM_JIT_VERIFY=<0|off|each|all|other>` (`jit.cpp`) — how much IR the verifier
+  sees. It follows LLVM's assertions when unset, so it is **off** in the production
+  configuration above and has to be asked for. `0` and `off` turn it off. `each` and
+  `all` are the same setting, the widest: every stock pass as well. **Any other value**,
+  `1` among them, gets the middle level, which checks the translator's output, the
+  module after each pass written here, and the module codegen is handed. That middle
+  level is what an assertions build turns on by itself, and it costs **11-15%** of
+  compile CPU. A failure names the method and the pass, prints the module, then aborts.
 - `MONO_LLVM_JIT_TIMING=<words>` (`timing.cpp`) — at exit, print how long each phase of
   a compile took, summed over every method. Phases nest and the self column is a share
   of the whole, so it sums to 100. Reach for this before theorising about compile
