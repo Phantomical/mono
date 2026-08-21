@@ -306,11 +306,11 @@ fold is visible from outside:
 
 Everything here is **C++**, and a header only C++ includes is a `.hpp`. A `.h` is
 reachable from something that is not C++, so it holds only what that other language
-reads. Three exist. `runtime.h` is the interface the C runtime compiles methods through:
-its declarations sit inside `MONO_BEGIN_DECLS`, name only types C sees, and number
-sixteen. Keep that surface small. `arch/amd64/interp-entry-offsets.h` is read by
-`interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing but `#define`s.
-`debugging/perf/perf.h` is the third.
+reads. `runtime.h` is the interface the C runtime compiles methods through: its
+declarations sit inside `MONO_BEGIN_DECLS` and name only types C sees. Keep that
+surface small. `arch/amd64/interp-entry-offsets.h` is read by `interp-entry-thunk.S`
+as well as by `amd64.hpp`, so it holds nothing but `#define`s.
+`debugging/perf/perf.h` declares what the C runtime owes the perf jit dump.
 
 - **`runtime.h` + `runtime/`** — the engine. `runtime/entrypoints.cpp` is the boundary.
   `runtime/backend.cpp` holds the state, one `MethodState` per method with its thunk,
@@ -645,6 +645,15 @@ that compile's data, so "where every instrumented function's counters landed" re
 the whole program and is false — it is this method's counters. The same check catches a
 doc that promises a container holds many when the code only ever puts one in it. Fix the
 type, not the sentence.
+
+**Do not write a count the reader cannot check from the sentence.** "Its whole surface is
+sixteen functions" is wrong the next time someone adds one, and a reader who doubts it has
+to leave the document to find out. Say what bounds the set instead — "keep that surface
+small" is the actual rule, and the count only ever stood in for it. A count is fine when
+the same sentence enumerates what it counts, as in "the three places a call arrives:" and
+then the three. A fourth site then contradicts the list in the place someone adding one is
+already typing. This is the one claim grepping a name does not catch, because the number
+greps clean while the set moves under it.
 
 **Quoted standards are never rewritten.** Several files carry the ECMA-335 Partition III
 passage for the opcode they emit, verbatim, and that is deliberate. It is the normative
