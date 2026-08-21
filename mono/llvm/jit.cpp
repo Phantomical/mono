@@ -843,14 +843,16 @@ thread_local VerifyLevel g_verify_level = VerifyLevel::off;
 /// a file name and a file system, so the profile has to be a file to it.
 constexpr const char *profile_file = "/mono.profdata";
 
-/// Sets one of LLVM's own boolean command-line options.
+/// Sets one of LLVM's own command-line options.
 ///
-/// Does nothing when this build of LLVM has no option of that name.
+/// Does nothing when this build of LLVM has no option of that name. The type
+/// has to be the one the option was declared with, which is not checked.
+template <typename T>
 void
-force_option (StringRef name, bool value)
+force_option (StringRef name, T value)
 {
 	if (cl::Option *opt = cl::getRegisteredOptions ().lookup (name))
-		static_cast<cl::opt<bool> *> (opt)->setValue (value);
+		static_cast<cl::opt<T> *> (opt)->setValue (value);
 }
 
 /// Puts counters in each body that can promote, and the entry counter that
@@ -891,6 +893,14 @@ add_instrumentation (ModulePassManager &mpm)
 	// Every entry that already left the loop is in the count, and entry count
 	// is what takes a body to tier 2.
 	force_option ("skip-ret-exit-block", false);
+
+	// LLVM gives a loop with more exiting blocks than this nothing at all, at
+	// three by default. A `for` with three early returns already has four, and
+	// then the whole loop keeps its per-turn atomics. Eight admits the loops a
+	// method is written with by hand. Each exit takes a write-back for each
+	// counter promoted, so the code at the exits grows with the product of the
+	// two, and that is what holds this down rather than the gain running out.
+	force_option<unsigned> ("speculative-counter-promotion-max-exiting", 8);
 
 	mpm.addPass (ProfileSelectPass ());
 	mpm.addPass (PGOInstrumentationGen (PGOInstrumentationType::FDO));
