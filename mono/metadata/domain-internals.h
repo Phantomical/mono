@@ -268,10 +268,9 @@ typedef struct {
  * it is what MonoLLVMSeqPoint records, because a stack frame reported for the
  * compiled method has to name its own call site.
  *
- * Nothing reads these yet: mono's stack walk produces one frame per MonoJitInfo,
- * so surfacing an inlined frame needs the walker to synthesize one, which is its
- * own piece of work. Recovering and keeping the data is the half that belongs
- * with the translation.
+ * A row's native_offset is the offset of the MonoLLVMSeqPoint row it belongs to
+ * rather than any address of its own, which is what lets a lookup join the two
+ * tables. mono_jinfo_inline_frame () is how a stack walk reads them.
  */
 typedef struct {
 	guint32 native_offset;

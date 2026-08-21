@@ -7,13 +7,46 @@
 
 #include <vector>
 
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/DIBuilder.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instruction.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 
 namespace mono {
+
+namespace {
+
+/*
+ * The subprogram ids ride in module metadata, as one `!{DISubprogram, i64 id}`
+ * tuple each under the name below.
+ *
+ * The compiler reads them at the machine layer, and by then
+ * StripInlineCopiesPass has taken every inlined copy's body back off.
+ * Function::deleteBody () clears the function's metadata, the subprogram
+ * attachment with it, so an id kept on the function is gone exactly where it is
+ * wanted. The module owns this metadata instead, and the inlined locations keep
+ * the subprogram itself alive.
+ */
+constexpr llvm::StringRef subprogram_ids_name = "mono.il.subprogram.ids";
+
+void
+note_subprogram_id (llvm::Module &m, llvm::DISubprogram *sp, uint64_t id)
+{
+	llvm::LLVMContext &ctx = m.getContext ();
+	llvm::Metadata *entry[] = {
+		sp,
+		llvm::ConstantAsMetadata::get (llvm::ConstantInt::get (
+			llvm::Type::getInt64Ty (ctx), id)),
+	};
+
+	m.getOrInsertNamedMetadata (subprogram_ids_name)
+		->addOperand (llvm::MDNode::get (ctx, entry));
+}
+
+} // namespace
 
 struct IlDebugScope {
 	llvm::DISubprogram *subprogram = nullptr;
@@ -57,7 +90,7 @@ IlDebugModule::IlDebugModule (llvm::Module *module)
 IlDebugModule::~IlDebugModule () = default;
 
 IlDebugScope *
-IlDebugModule::add_function (llvm::Function *fn, const char *name)
+IlDebugModule::add_function (llvm::Function *fn, const char *name, uint64_t id)
 {
 	llvm::DISubroutineType *type =
 		impl_->di.createSubroutineType (impl_->di.getOrCreateTypeArray ({}));
@@ -68,6 +101,7 @@ IlDebugModule::add_function (llvm::Function *fn, const char *name)
 		llvm::DISubprogram::SPFlagDefinition | llvm::DISubprogram::SPFlagOptimized);
 
 	fn->setSubprogram (sp);
+	note_subprogram_id (*fn->getParent (), sp, id);
 
 	impl_->scopes.push_back (std::make_unique<IlDebugScope> ());
 	IlDebugScope *scope = impl_->scopes.back ().get ();
@@ -86,6 +120,31 @@ void
 IlDebugModule::finish ()
 {
 	impl_->di.finalize ();
+}
+
+llvm::DenseMap<const llvm::DISubprogram *, uint64_t>
+il_debug_subprogram_ids (const llvm::Module &m)
+{
+	llvm::DenseMap<const llvm::DISubprogram *, uint64_t> ids;
+	const llvm::NamedMDNode *named = m.getNamedMetadata (subprogram_ids_name);
+
+	if (named == nullptr)
+		return ids;
+
+	for (const llvm::MDNode *entry : named->operands ()) {
+		if (entry->getNumOperands () != 2)
+			continue;
+
+		auto *sp = llvm::dyn_cast_or_null<llvm::DISubprogram> (entry->getOperand (0));
+		auto *id = llvm::dyn_cast_or_null<llvm::ConstantAsMetadata> (
+			entry->getOperand (1));
+
+		if (sp != nullptr && id != nullptr)
+			ids[sp] = llvm::cast<llvm::ConstantInt> (id->getValue ())
+					  ->getZExtValue ();
+	}
+
+	return ids;
 }
 
 void

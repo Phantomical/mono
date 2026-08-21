@@ -26,6 +26,7 @@
 
 #include "compiler.hpp"
 
+#include "il-line-table.hpp"
 #include "jit.hpp"
 #include "sidetables.hpp"
 #include "timing.hpp"
@@ -68,6 +69,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <memory>
@@ -169,8 +171,8 @@ public:
 char PrinterMarkPass::ID;
 
 /*
- * Collects the rows `.mono_lines` is written from, as the printer walks each
- * function's instructions.
+ * Collects the rows `.mono_lines` and `.mono_inlines` are written from, as the
+ * printer walks each function's instructions.
  *
  * The translator gives every instruction a debug location whose line is the IL
  * offset in effect at it (il-line-table.hpp); all a row needs on top of that is
@@ -178,12 +180,26 @@ char PrinterMarkPass::ID;
  * changes. That is the same thing a `.loc` directive does, which is why the
  * module's compile unit can say NoDebug. This pipeline has no use for a DWARF
  * line table, and without one no `.debug_*` section is produced at all.
+ *
+ * An instruction the inliner brought in carries the callee's location, with the
+ * call site behind it in the `inlinedAt` chain. Only the outermost of those is
+ * an offset into this function, so that one is the row's line. The rest become
+ * the row's inlined chain, each naming the body its code came from.
  */
 class IlLineHandler : public AsmPrinterHandler {
 public:
+	/// One body the code at a row came from, and where in that body it was.
+	struct Inlined {
+		uint64_t callee;
+		uint32_t line;
+	};
+
 	struct Row {
 		const MCSymbol *at;
 		uint32_t line;
+		/// The bodies folded in here, innermost first. Empty for code the
+		/// compiled method wrote itself.
+		SmallVector<Inlined, 2> inlined;
 	};
 
 	struct Function {
@@ -197,10 +213,12 @@ public:
 
 	// A reused printer keeps its user handlers across runs, so the rows of the
 	// last module are still here when the next one opens.
-	void beginModule (Module *) override
+	void beginModule (Module *m) override
 	{
 		functions_.clear ();
 		line_ = 0;
+		inlined_.clear ();
+		ids_ = il_debug_subprogram_ids (*m);
 	}
 
 	void beginFunction (const MachineFunction *mf) override
@@ -209,6 +227,7 @@ public:
 
 		functions_.push_back ({ mf->getName ().str (), {} });
 		line_ = 0;
+		inlined_.clear ();
 
 		/*
 		 * The prologue carries no location of its own, and a frame stopped
@@ -216,7 +235,7 @@ public:
 		 * subprogram's own line - the method's first IL byte.
 		 */
 		if (sp != nullptr)
-			record (sp->getScopeLine ());
+			record (sp->getScopeLine (), {});
 	}
 
 	void beginInstruction (const MachineInstr *mi) override
@@ -229,14 +248,24 @@ public:
 		if (loc == nullptr)
 			return;
 
-		// One code offset maps to one IL offset, and the method it is an offset
-		// into is the one the frame belongs to. An instruction that came in with
-		// an inlined callee carries that callee's offset, so walk out to the
-		// call site this function does have an offset for.
-		while (const DILocation *outer = loc->getInlinedAt ())
-			loc = outer;
+		SmallVector<Inlined, 2> inlined;
 
-		record (loc->getLine ());
+		for (; loc->getInlinedAt () != nullptr; loc = loc->getInlinedAt ()) {
+			auto id = ids_.find (loc->getScope ()->getSubprogram ());
+
+			// A scope this compile did not create names no method. The
+			// chain is read as one run from the innermost body out, so a
+			// hole in it makes every frame past the hole the caller of the
+			// wrong body. Take the whole row's chain off instead.
+			if (id == ids_.end ()) {
+				inlined.clear ();
+				break;
+			}
+
+			inlined.push_back ({ id->second, loc->getLine () });
+		}
+
+		record (loc->getLine (), inlined);
 	}
 
 	void endFunction (const MachineFunction *) override {}
@@ -247,22 +276,41 @@ private:
 	 * An instruction with no location leaves the line in effect alone rather
 	 * than clearing it: the translator attributes what it emits, so a gap is
 	 * codegen's own bookkeeping and belongs to whatever surrounds it.
+	 *
+	 * A row opens wherever the chain changes as well as wherever the line does.
+	 * The engine keys a chain on the exact offset of the row that governs it
+	 * (mono_jit_info_llvm_inline_frames ()). So code that comes back out of a
+	 * folded body, at the call site it was folded through, needs a row of its
+	 * own to say the chain has ended. The line there is the one already in
+	 * effect, and on its own it would open no row.
 	 */
-	void record (unsigned line)
+	void record (unsigned line, ArrayRef<Inlined> inlined)
 	{
-		if (line == 0 || line == line_)
+		bool same_chain =
+			inlined.size () == inlined_.size ()
+			&& std::equal (inlined.begin (), inlined.end (), inlined_.begin (),
+			               [] (const Inlined &a, const Inlined &b) {
+				               return a.callee == b.callee && a.line == b.line;
+			               });
+
+		if (line == 0 || (line == line_ && same_chain))
 			return;
 
 		MCSymbol *at = streamer_->getContext ().createTempSymbol ();
 
 		streamer_->emitLabel (at);
-		functions_.back ().rows.push_back ({ at, (uint32_t) line });
+		functions_.back ().rows.push_back (
+			{ at, (uint32_t) line, SmallVector<Inlined, 2> (inlined) });
 		line_ = line;
+		inlined_.assign (inlined.begin (), inlined.end ());
 	}
 
 	MCStreamer *streamer_;
 	std::vector<Function> functions_;
+	DenseMap<const DISubprogram *, uint64_t> ids_;
 	unsigned line_ = 0;
+	/// The chain the last row recorded, which is what the next one is against.
+	SmallVector<Inlined, 2> inlined_;
 };
 
 /// One `.mono_unwind` record: the wire form of one MCCFIInstruction.
@@ -377,6 +425,7 @@ public:
 			emit_guard_table ();
 			emit_unwind_table ();
 			emit_line_table ();
+			emit_inline_table ();
 		}
 
 		/*
@@ -594,6 +643,54 @@ private:
 						MCSymbolRefExpr::create (begin, ctx), ctx),
 					4);
 				streamer.emitIntValue (row.line, 4);
+			}
+		}
+	}
+
+	/**
+	 * `.mono_inlines`, the chain of bodies folded into each row of the line
+	 * table. Only a function that had something folded into it gets a block, so
+	 * a method the inliners left alone pays nothing.
+	 */
+	void emit_inline_table ()
+	{
+		MCStreamer &streamer = *streamer_;
+		MCContext &ctx = streamer.getContext ();
+
+		for (const IlLineHandler::Function &fn : lines_->functions ()) {
+			size_t count = 0;
+
+			for (const IlLineHandler::Row &row : fn.rows)
+				count += row.inlined.size ();
+
+			if (count == 0)
+				continue;
+
+			MCSymbol *begin = ctx.getOrCreateSymbol (fn.name);
+
+			streamer.switchSection (ctx.getELFSection (
+				".mono_inlines", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+
+			streamer.emitIntValue (inlines_section_magic, 4);
+			streamer.emitIntValue (inlines_section_version, 2);
+			streamer.emitIntValue (0, 2);
+			streamer.emitIntValue (count, 4);
+			streamer.emitValue (MCSymbolRefExpr::create (begin, ctx), 8);
+
+			for (const IlLineHandler::Row &row : fn.rows) {
+				uint32_t depth = 0;
+
+				for (const IlLineHandler::Inlined &frame : row.inlined) {
+					streamer.emitValue (
+						MCBinaryExpr::createSub (
+							MCSymbolRefExpr::create (row.at, ctx),
+							MCSymbolRefExpr::create (begin, ctx),
+							ctx),
+						4);
+					streamer.emitIntValue (frame.line, 4);
+					streamer.emitIntValue (depth++, 4);
+					streamer.emitIntValue (frame.callee, 8);
+				}
 			}
 		}
 	}

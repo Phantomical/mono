@@ -254,6 +254,83 @@ parse_line_table (const uint8_t *table, size_t size,
 }
 
 /*
+ * Turns the linked `.mono_inlines` into per-function rows: which bodies were
+ * folded into the code each line-table row covers. The functions map names each
+ * function by where it was linked, the same way the line table identifies a
+ * block.
+ */
+static void
+parse_inline_table (const uint8_t *table, size_t size,
+                    const std::map<const uint8_t *, std::string> &functions,
+                    std::map<std::string, std::vector<IlInlineRow>> &out)
+{
+	const uint8_t *p = table;
+	const uint8_t *end = table + size;
+
+	while (p + inlines_header_size <= end) {
+		if (read_le<uint32_t> (p) != inlines_section_magic
+		    || read_le<uint16_t> (p + 4) != inlines_section_version) {
+			errs () << "mono: .mono_inlines is not in a format this runtime "
+				   "knows\n";
+			return;
+		}
+
+		uint32_t count = read_le<uint32_t> (p + 8);
+		const uint8_t *code = (const uint8_t *) read_le<uint64_t> (p + 12);
+		const uint8_t *records = p + inlines_header_size;
+
+		p = records + (size_t) count * inlines_record_size;
+		if (p > end)
+			return;
+
+		auto owner = functions.find (code);
+		if (owner == functions.end ())
+			continue;
+
+		std::vector<IlInlineRow> *rows = &out[owner->second];
+
+		for (uint32_t i = 0; i < count; ++i) {
+			const uint8_t *r = records + (size_t) i * inlines_record_size;
+			IlInlineRow row;
+
+			row.native_offset = read_le<uint32_t> (r);
+			row.il_offset = read_le<uint32_t> (r + 4);
+			row.depth = read_le<uint32_t> (r + 8);
+			row.callee = read_le<uint64_t> (r + 12);
+
+			/*
+			 * Two rows of the line table can land on one offset, and the
+			 * reader there keeps the last. Both tables are written from the
+			 * same rows, so this one has to collapse the same way: a chain
+			 * whose row was dropped would outlive the offset it describes.
+			 * A second chain on an offset opens with depth 0, which is what
+			 * says the one already here belongs to a row that lost.
+			 */
+			if (row.depth == 0)
+				while (!rows->empty ()
+				       && rows->back ().native_offset == row.native_offset)
+					rows->pop_back ();
+
+			rows->push_back (row);
+		}
+
+		if (rows->empty ())
+			out.erase (owner->second);
+	}
+
+	// The runtime binary-searches these by offset, and reads a chain off as the
+	// run that follows. So depth has to ascend inside one offset.
+	auto by_address = [] (const IlInlineRow &a, const IlInlineRow &b) {
+		if (a.native_offset != b.native_offset)
+			return a.native_offset < b.native_offset;
+		return a.depth < b.depth;
+	};
+
+	for (auto &kv : out)
+		std::stable_sort (kv.second.begin (), kv.second.end (), by_address);
+}
+
+/*
  * The `.llvm_stackmaps` v3 header is 16 bytes, and the function list follows it
  * as 24-byte records: the function's address, its frame size, and how many of
  * the section's stackmap records belong to it. StackMapParser does not give
@@ -453,6 +530,8 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> il_lines;
 		/// Each defined function's sequence point markers, by name.
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
+		/// The bodies folded into each defined function, by name.
+		std::map<std::string, std::vector<IlInlineRow>> inline_frames;
 		/// Where a function's arguments and locals live in its frame, by
 		/// name. Only a method body pins them, so a filter or a thunk has
 		/// no entry here.
@@ -545,7 +624,7 @@ public:
 				// counters they are, so the pruner drops the records.
 				if (name != ".mono_lsda" && name != ".mono_guards"
 				    && name != ".mono_unwind" && name != ".mono_lines"
-				    && name != "__llvm_prf_data")
+				    && name != ".mono_inlines" && name != "__llvm_prf_data")
 					continue;
 				for (jitlink::Block *block : section.blocks ())
 					graph.addAnonymousSymbol (*block, 0, block->getSize (),
@@ -560,6 +639,8 @@ public:
 			Extents extents;
 			const uint8_t *line_table = nullptr;
 			size_t line_table_size = 0;
+			const uint8_t *inline_table = nullptr;
+			size_t inline_table_size = 0;
 
 			for (jitlink::Section &section : graph.sections ()) {
 				jitlink::SectionRange range (section);
@@ -579,6 +660,10 @@ public:
 				} else if (section.getName () == ".mono_lines") {
 					line_table = range.getStart ().toPtr<const uint8_t *> ();
 					line_table_size = range.getSize ();
+				} else if (section.getName () == ".mono_inlines") {
+					inline_table =
+						range.getStart ().toPtr<const uint8_t *> ();
+					inline_table_size = range.getSize ();
 				} else if (section.getName () == "__llvm_prf_cnts") {
 					extents.counters =
 						range.getStart ().toPtr<const uint64_t *> ();
@@ -615,6 +700,10 @@ public:
 			if (line_table != nullptr)
 				parse_line_table (line_table, line_table_size, by_address,
 				                  extents.il_lines, extents.seq_points);
+
+			if (inline_table != nullptr)
+				parse_inline_table (inline_table, inline_table_size, by_address,
+				                    extents.inline_frames);
 
 			if (gdbjit::enabled ())
 				extents.debug_object = stamp_debug_object (dylib, graph);
@@ -1621,6 +1710,14 @@ MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
 				compiled.il_lines = std::move (rows);
 			else if (belongs_to (entry, name))
 				compiled.other_il_lines.emplace_back (name, std::move (rows));
+		}
+
+		for (auto &[name, rows] : extents->inline_frames) {
+			if (name == entry)
+				compiled.inline_frames = std::move (rows);
+			else if (belongs_to (entry, name))
+				compiled.other_inline_frames.emplace_back (name,
+				                                           std::move (rows));
 		}
 
 		if (auto points = extents->seq_points.find (entry.str ());

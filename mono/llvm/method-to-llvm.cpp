@@ -709,7 +709,8 @@ MethodLLVMEmitter::emit ()
 	if (il_debug) {
 		std::string name = function->getName ().str ();
 
-		il_scope = il_debug->add_function (function, name.c_str ());
+		il_scope = il_debug->add_function (function, name.c_str (),
+		                                   (uint64_t) (uintptr_t) method);
 	}
 
 	// An invoke is only well formed on a function with a personality, and mono's is
@@ -1072,7 +1073,8 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	if (il_debug) {
 		std::string name = function->getName ().str ();
 
-		il_scope = il_debug->add_function (function, name.c_str ());
+		il_scope = il_debug->add_function (function, name.c_str (),
+		                                   (uint64_t) (uintptr_t) method);
 	}
 
 	MonoIrBuilder builder (context ());

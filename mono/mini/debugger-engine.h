@@ -235,6 +235,14 @@ typedef struct
 	 * the frame can become invalid.
 	 */
 	gboolean has_ctx;
+	/*
+	 * This frame is a body an inliner folded into the one below it, so it owns no
+	 * code: de.ji and de.native_offset name that other body, and the sequence
+	 * points, variable homes and resume addresses read off them describe it and
+	 * not this method. Stepping and any command that reads the frame's state must
+	 * work on the frame below instead.
+	 */
+	gboolean is_inlined;
 } StackFrame;
 
 void mono_debugger_free_objref (gpointer value);

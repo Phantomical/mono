@@ -3358,7 +3358,7 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 	int flags = 0;
 
 	mono_loader_lock ();
-	if (info->type != FRAME_TYPE_MANAGED && info->type != FRAME_TYPE_INTERP && info->type != FRAME_TYPE_MANAGED_TO_NATIVE) {
+	if (info->type != FRAME_TYPE_MANAGED && info->type != FRAME_TYPE_INTERP && info->type != FRAME_TYPE_MANAGED_TO_NATIVE && info->type != FRAME_TYPE_INLINED) {
 		if (info->type == FRAME_TYPE_DEBUGGER_INVOKE) {
 			/* Mark the last frame as an invoke frame */
 			if (ud->frames)
@@ -3370,7 +3370,9 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 		return FALSE;
 	}
 
-	if (info->ji)
+	/* An inlined frame borrows the jit info of the body it was folded into, so
+	 * that record names the wrong method for it. The walk names the right one. */
+	if (info->ji && info->type != FRAME_TYPE_INLINED)
 		method = jinfo_get_method (info->ji);
 	else
 		method = info->method;
@@ -3392,7 +3394,7 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 		return FALSE;
 	}
 
-	if (info->il_offset == -1) {
+	if (info->il_offset == -1 && info->type != FRAME_TYPE_INLINED) {
 		info->il_offset = calc_il_offset (info->domain, info->ji, method, info->native_offset, ud->frames == NULL,
 						  info->interp_frame);
 	}
@@ -3432,9 +3434,16 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 	frame->flags = flags;
 	frame->interp_frame = info->interp_frame;
 	frame->frame_addr = info->frame_addr;
+	frame->is_inlined = info->type == FRAME_TYPE_INLINED;
 	if (info->reg_locations)
 		memcpy (frame->reg_locations, info->reg_locations, MONO_MAX_IREGS * sizeof (host_mgreg_t*));
-	if (ctx) {
+	/*
+	 * A folded body has no context of its own: the registers and the frame belong
+	 * to the body it was folded into, and every home read off them describes that
+	 * body's layout. Leaving has_ctx clear is what makes frame_commands () answer
+	 * ERR_ABSENT_INFORMATION rather than hand back another method's locals.
+	 */
+	if (ctx && !frame->is_inlined) {
 		frame->ctx = *ctx;
 		frame->has_ctx = TRUE;
 	}
@@ -3488,6 +3497,24 @@ leave:
 	return ret;
 }
 
+/*
+ * The innermost of FRAMES that owns code, or NULL if there is none.
+ *
+ * A folded body's frame carries its method and its IL offset and nothing more:
+ * the sequence points, the variable homes and the address a thread resumes at
+ * all belong to the body it was folded into. So anything that reads a frame's
+ * state, rather than only reporting it, works on this one.
+ */
+static StackFrame *
+innermost_frame_with_code (StackFrame **frames, int nframes)
+{
+	for (int i = 0; i < nframes; ++i)
+		if (!frames [i]->is_inlined)
+			return frames [i];
+
+	return NULL;
+}
+
 static gboolean
 process_filter_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 {
@@ -3513,7 +3540,7 @@ static StackFrame**
 compute_frame_info_from (MonoInternalThread *thread, DebuggerTlsData *tls, MonoThreadUnwindState *state, int *out_nframes)
 {
 	ComputeFramesUserData user_data = { 0 };
-	MonoUnwindOptions opts = (MonoUnwindOptions)(MONO_UNWIND_DEFAULT | MONO_UNWIND_REG_LOCATIONS);
+	MonoUnwindOptions opts = (MonoUnwindOptions)(MONO_UNWIND_DEFAULT | MONO_UNWIND_REG_LOCATIONS | MONO_UNWIND_INLINED_FRAMES);
 	StackFrame **res;
 	int i, nframes;
 	GSList *l;
@@ -3540,9 +3567,9 @@ compute_frame_info (MonoInternalThread *thread, DebuggerTlsData *tls, gboolean f
 {
 	ComputeFramesUserData user_data = { 0 };
 	GSList *tmp;
-	int i, findex, new_frame_count;
+	int i, findex, matched, new_frame_count;
 	StackFrame **new_frames, *f;
-	MonoUnwindOptions opts = (MonoUnwindOptions)(MONO_UNWIND_DEFAULT | MONO_UNWIND_REG_LOCATIONS);
+	MonoUnwindOptions opts = (MonoUnwindOptions)(MONO_UNWIND_DEFAULT | MONO_UNWIND_REG_LOCATIONS | MONO_UNWIND_INLINED_FRAMES);
 
 	// FIXME: Locking on tls
 	if (tls->frames && tls->frames_up_to_date && !force_update)
@@ -3603,16 +3630,24 @@ compute_frame_info (MonoInternalThread *thread, DebuggerTlsData *tls, gboolean f
 	new_frame_count = g_slist_length (user_data.frames);
 	new_frames = g_new0 (StackFrame*, new_frame_count);
 	findex = 0;
+	matched = 0;
 	for (tmp = user_data.frames; tmp; tmp = tmp->next) {
 		f = (StackFrame *)tmp->data;
 
-		/* 
+		/*
 		 * Reuse the id for already existing stack frames, so invokes don't invalidate
 		 * the still valid stack frames.
+		 *
+		 * The bodies folded into a frame share its address, so the address alone
+		 * would hand one id to several frames and every command naming it would
+		 * reach the first. Both lists describe the same stack in the same order,
+		 * so the search carries on from the last match and takes the method into
+		 * account, which keeps the pairing one to one.
 		 */
-		for (i = 0; i < tls->frame_count; ++i) {
-			if (tls->frames [i]->frame_addr == f->frame_addr) {
+		for (i = matched; i < tls->frame_count; ++i) {
+			if (tls->frames [i]->frame_addr == f->frame_addr && tls->frames [i]->de.method == f->de.method) {
 				f->id = tls->frames [i]->id;
+				matched = i + 1;
 				break;
 			}
 		}
@@ -4724,6 +4759,16 @@ static gboolean
 ensure_jit (DbgEngineStackFrame* the_frame)
 {
 	StackFrame *frame = (StackFrame*)the_frame;
+
+	/*
+	 * What this hands back describes a body: where its code sits and where it
+	 * keeps its variables. A folded body runs inside another one's code and out
+	 * of another one's frame, so the record found under its method belongs to
+	 * some other compile of it and every offset in it is wrong here.
+	 */
+	if (frame->is_inlined)
+		return FALSE;
+
 	if (!frame->jit) {
 		frame->jit = mono_debug_find_method (frame->api_method, frame->de.domain);
 		if (!frame->jit && frame->api_method->is_inflated)
@@ -5182,13 +5227,11 @@ ss_create_init_args (SingleStepReq *ss_req, SingleStepArgs *args)
 		StackFrame *frame = NULL;
 
 		if (set_ip) {
-			if (frames && nframes)
-				frame = frames [0];
+			frame = innermost_frame_with_code (frames, nframes);
 		} else {
 			compute_frame_info (ss_req->thread, tls, FALSE);
 
-			if (tls->frame_count)
-				frame = tls->frames [0];
+			frame = innermost_frame_with_code (tls->frames, tls->frame_count);
 		}
 
 		if (ss_req->size == STEP_SIZE_LINE) {
@@ -9481,7 +9524,12 @@ thread_commands (int command, guint8 *p, guint8 *end, Buffer *buf)
 		g_assert (tls);
 
 		compute_frame_info (thread, tls, FALSE);
-		if (tls->frame_count == 0 || tls->frames [0]->actual_method != method)
+		/*
+		 * A folded body has no code to resume in. Its frame names the method the
+		 * client asked for, and the address behind it belongs to the body it was
+		 * folded into, so a jump computed from it would land in another method.
+		 */
+		if (tls->frame_count == 0 || tls->frames [0]->is_inlined || tls->frames [0]->actual_method != method)
 			return ERR_INVALID_ARGUMENT;
 
 		found_sp = mono_find_seq_point (domain, tls->frames [0]->de.ji, il_offset, &seq_points, &sp);

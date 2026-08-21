@@ -210,6 +210,40 @@ translate_method (const std::string &image, const std::string &name)
 	return owned;
 }
 
+llvm::Function *
+fold_method_into (Translation &into, const std::string &image, const std::string &name)
+{
+	MonoMethodDesc *desc = mono_method_desc_new (name.c_str (), TRUE);
+	MonoMethod *method = mono_method_desc_search_in_image (desc, load_image (image));
+
+	mono_method_desc_free (desc);
+
+	if (method == nullptr) {
+		fprintf (stderr, "no method %s in %s.dll\n", name.c_str (), image.c_str ());
+		abort ();
+	}
+
+	ERROR_DECL (metadata_error);
+	MinimalCompile cfg (method, metadata_error);
+
+	if (cfg.get ()->header == nullptr) {
+		mono_error_cleanup (metadata_error);
+		return nullptr;
+	}
+
+	llvm::Expected<llvm::Function *> translated =
+		method_to_llvm (into.module.get (), cfg.get (), method);
+
+	if (!translated) {
+		llvm::consumeError (translated.takeError ());
+		return nullptr;
+	}
+
+	(*translated)->addFnAttr (llvm::Attribute::AlwaysInline);
+	(*translated)->setLinkage (llvm::GlobalValue::InternalLinkage);
+	return *translated;
+}
+
 const Translation &
 TranslatorTest::translate (const std::string &image, const std::string &name)
 {

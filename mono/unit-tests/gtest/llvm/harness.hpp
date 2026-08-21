@@ -95,6 +95,17 @@ struct Translation {
 std::unique_ptr<Translation> translate_method (const std::string &image,
                                                const std::string &method);
 
+/// Translate METHOD into a module that already holds one, and mark it
+/// always-inline, which is what the engine's pre-pass does to a callee whose IL
+/// says the fold pays (runtime/trivial-inlines.cpp). The translator declares a
+/// callee under a name of its own and finds it again by that name, so a method
+/// the module already calls comes back as the body behind that call.
+///
+/// Returns null when the translator refuses, leaving into unchanged. None of the
+/// engine's gates run here: a test says which body it wants folded.
+llvm::Function *fold_method_into (Translation &into, const std::string &image,
+                                  const std::string &method);
+
 /*
  * A test that translates methods and is failed if any of them produced IR the
  * verifier rejects.

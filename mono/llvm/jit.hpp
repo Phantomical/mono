@@ -77,6 +77,22 @@ struct IlLineRow {
 	uint8_t flags = 0;
 };
 
+/// One body an inliner folded into a compiled function, and where the code it
+/// stands for sits.
+///
+/// native_offset is the line-table row this belongs to, so the two tables are
+/// read together: the row says where the compiled method thinks it is, and these
+/// say which bodies the same code really came from. depth 0 is the innermost.
+/// The compiler writes them into `.mono_inlines` (sidetables.hpp).
+struct IlInlineRow {
+	uint32_t native_offset;
+	uint32_t il_offset;
+	uint32_t depth;
+	/// What the compile called the folded body. Opaque to the JIT: the engine
+	/// puts it in through il-line-table.hpp and reads it back here.
+	uint64_t callee;
+};
+
 /// Where one instrumented function counts, and what the profile reader needs to
 /// recognise the counts as its own.
 ///
@@ -170,6 +186,13 @@ struct CompiledMethod {
 	/// filter body is a frame of its own. So each needs a map of its own to
 	/// say where in the method's IL it is.
 	std::vector<std::pair<std::string, std::vector<IlLineRow>>> other_il_lines;
+
+	/// The bodies folded into the entry function, ascending by native offset
+	/// and then by depth. Empty when the inliners left it alone.
+	std::vector<IlInlineRow> inline_frames;
+
+	/// The same rows for every other function of this method, by name.
+	std::vector<std::pair<std::string, std::vector<IlInlineRow>>> other_inline_frames;
 
 	/// The entry function's sequence points, ascending by native offset: where
 	/// each soft-debugger check landed, and the IL offset it stands for in the

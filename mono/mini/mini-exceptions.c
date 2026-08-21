@@ -1217,19 +1217,51 @@ mono_jit_info_llvm_inline_frames (MonoJitInfo *ji, guint32 native_offset, MonoLL
 	return n;
 }
 
-/*
- * How many stack frames JI reports for IP: its own, plus one for each body
- * inlined into it there.
+/**
+ * mono_jinfo_frame_count:
+ *
+ * How many stack frames JI reports at NATIVE_OFFSET: its own, plus one for each
+ * body inlined into it there. Never less than one.
  */
-static int
-jinfo_frame_count (MonoJitInfo *ji, gpointer ip)
+int
+mono_jinfo_frame_count (MonoJitInfo *ji, guint32 native_offset)
 {
 	MonoLLVMInlineFrame *inlined;
 
 	if (!ji->from_llvm || ji->no_il_offsets)
 		return 1;
 
-	return 1 + (int) mono_jit_info_llvm_inline_frames (ji, (guint32) ((char *) ip - (char *) ji->code_start), &inlined);
+	return 1 + (int) mono_jit_info_llvm_inline_frames (ji, native_offset, &inlined);
+}
+
+/**
+ * mono_jinfo_inline_frame:
+ *
+ * The INDEX'th of the frames JI reports at NATIVE_OFFSET, innermost first, as
+ * mono_jinfo_frame_count () counts them.
+ *
+ * Returns TRUE for a body inlined into JI, and fills METHOD and IL_OFFSET with
+ * where in that body the code came from. Returns FALSE for JI's own frame - the
+ * last one - and touches neither: which method that frame names is the caller's
+ * to decide, since a shared body's instantiation is recovered from the frame
+ * rather than from the record.
+ */
+gboolean
+mono_jinfo_inline_frame (MonoJitInfo *ji, guint32 native_offset, int index, MonoMethod **method, int *il_offset)
+{
+	MonoLLVMInlineFrame *inlined;
+	guint32 n_inlined;
+
+	if (!ji->from_llvm || ji->no_il_offsets)
+		return FALSE;
+
+	n_inlined = mono_jit_info_llvm_inline_frames (ji, native_offset, &inlined);
+	if (index < 0 || (guint32) index >= n_inlined)
+		return FALSE;
+
+	*method = inlined [index].method;
+	*il_offset = (int) inlined [index].il_offset;
+	return TRUE;
 }
 
 MonoArray *
@@ -1267,7 +1299,7 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 
 		memcpy (&trace_ip, mono_array_addr_fast (ta, ExceptionTraceIp, i), sizeof (ExceptionTraceIp));
 		ji = trace_ip.ji ? trace_ip.ji : mono_jit_info_table_find (domain, trace_ip.ip);
-		total += ji ? jinfo_frame_count (ji, trace_ip.ip) : 1;
+		total += ji ? mono_jinfo_frame_count (ji, (guint32) ((char *) trace_ip.ip - (char *) ji->code_start)) : 1;
 	}
 
 	res_len = total > skip ? total - skip : 0;
@@ -1285,8 +1317,7 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 
 	for (i = 0; i < len; i++) {
 		MonoJitInfo *ji;
-		MonoLLVMInlineFrame *inlined;
-		guint32 n_inlined, j;
+		int n_frames, j;
 		MonoStackFrame *sf;
 
 		ExceptionTraceIp trace_ip;
@@ -1317,19 +1348,16 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 
 		int native_offset = (char *)ip - (char *)ji->code_start;
 
-		n_inlined = 0;
-		inlined = NULL;
-		if (ji->from_llvm && !ji->no_il_offsets)
-			n_inlined = mono_jit_info_llvm_inline_frames (ji, native_offset, &inlined);
+		n_frames = mono_jinfo_frame_count (ji, native_offset);
 
 		/*
 		 * Innermost first: the bodies inlined here, deepest one leading, and then
 		 * the method that was actually compiled. The compiled method keeps its own
 		 * IL offset, which is the call site it inlined through.
 		 */
-		for (j = 0; j <= n_inlined; j++) {
-			gboolean is_inlined = j < n_inlined;
+		for (j = 0; j < n_frames; j++) {
 			int il_offset;
+			gboolean is_inlined = mono_jinfo_inline_frame (ji, native_offset, j, &method, &il_offset);
 
 			if (seen++ < skip)
 				continue;
@@ -1339,13 +1367,13 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 				goto fail;
 			MONO_HANDLE_ASSIGN_RAW (sf_h, sf);
 
-			if (is_inlined)
-				method = inlined [j].method;
-			else if (mono_llvm_only || !generic_info)
-				/* Can't resolve actual method */
-				method = jinfo_get_method (ji);
-			else
-				method = get_method_from_stack_frame (ji, generic_info);
+			if (!is_inlined) {
+				if (mono_llvm_only || !generic_info)
+					/* Can't resolve actual method */
+					method = jinfo_get_method (ji);
+				else
+					method = get_method_from_stack_frame (ji, generic_info);
+			}
 
 			if (method->wrapper_type) {
 				char *s;
@@ -1384,9 +1412,7 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 			 * then prints it in the '<code_start + native_offset>' form, which is at
 			 * least true.
 			 */
-			if (is_inlined)
-				il_offset = inlined [j].il_offset;
-			else
+			if (!is_inlined)
 				il_offset = mono_jinfo_get_il_offset (domain, ji, native_offset);
 
 			location = il_offset == -1 ? NULL : mono_debug_lookup_source_location_by_il (method, il_offset, domain);
@@ -1673,6 +1699,28 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 
 		if (get_reg_locations)
 			frame.reg_locations = reg_locations;
+
+		/*
+		 * The bodies folded into this frame, innermost first and ahead of the
+		 * frame itself, which is the order they were called in. Each borrows
+		 * the frame it runs in, so only the method, the IL offset and the type
+		 * change.
+		 */
+		if (unwind_options & MONO_UNWIND_INLINED_FRAMES) {
+			int n_frames = frame.ji ? mono_jinfo_frame_count (frame.ji, frame.native_offset) : 1;
+
+			for (int i = 0; i < n_frames - 1; ++i) {
+				StackFrameInfo inlined = frame;
+
+				inlined.type = FRAME_TYPE_INLINED;
+				inlined.reg_locations = NULL;
+				mono_jinfo_inline_frame (frame.ji, frame.native_offset, i, &inlined.method, &inlined.il_offset);
+				inlined.actual_method = inlined.method;
+
+				if (func (&inlined, &ctx, user_data))
+					return;
+			}
+		}
 
 		if (func (&frame, &ctx, user_data))
 			return;
@@ -2133,7 +2181,6 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 	gboolean res;
 	Unwinder unwinder;
 	int il_offset = -1;
-	MonoLLVMInlineFrame *inlined = NULL;
 	int n_inlined = 0, inline_index = 0;
 
 	MONO_ARCH_CONTEXT_DEF;
@@ -2201,10 +2248,7 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 				 * A tier-1 body stands for itself and for every body inlined into
 				 * it, so it consumes that many of the caller's skip count.
 				 */
-				inlined = NULL;
-				n_inlined = 0;
-				if (ji->from_llvm && !ji->no_il_offsets)
-					n_inlined = (int) mono_jit_info_llvm_inline_frames (ji, frame.native_offset, &inlined);
+				n_inlined = mono_jinfo_frame_count (ji, frame.native_offset) - 1;
 				skip -= 1 + n_inlined;
 				break;
 			default:
@@ -2222,9 +2266,8 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 		if (frame.type == FRAME_TYPE_INTERP) {
 			jmethod = frame.method;
 			actual_method = frame.actual_method;
-		} else if (inline_index < n_inlined) {
-			jmethod = actual_method = inlined [inline_index].method;
-			il_offset = (int) inlined [inline_index].il_offset;
+		} else if (mono_jinfo_inline_frame (ji, frame.native_offset, inline_index, &jmethod, &il_offset)) {
+			actual_method = jmethod;
 		} else {
 			actual_method = get_method_from_stack_frame (ji, get_generic_info_from_stack_frame (ji, &ctx));
 			if (ji->from_llvm && !ji->no_il_offsets)

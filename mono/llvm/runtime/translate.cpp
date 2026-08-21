@@ -292,7 +292,8 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 	 * owns the one they share.
 	 */
 	auto register_side_body = [&] (const uint8_t *code, size_t size, CodeKind kind,
-	                               std::vector<IlLineRow> lines) -> Error {
+	                               std::vector<IlLineRow> lines,
+	                               std::vector<IlInlineRow> inlined) -> Error {
 		CompiledMethod side;
 
 		side.entry = const_cast<uint8_t *> (code);
@@ -301,6 +302,7 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 		side.unwind_table = compiled.unwind_table;
 		side.unwind_table_size = compiled.unwind_table_size;
 		side.il_lines = std::move (lines);
+		side.inline_frames = std::move (inlined);
 
 		Expected<MonoJitInfo *> jinfo =
 			register_jit_info (target.domain, method, nullptr, side, kind);
@@ -316,6 +318,7 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 			continue;
 
 		std::vector<IlLineRow> lines;
+		std::vector<IlInlineRow> inlined;
 
 		for (auto &rows : compiled.other_il_lines)
 			if (rows.first == name) {
@@ -323,8 +326,15 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 				break;
 			}
 
+		for (auto &rows : compiled.other_inline_frames)
+			if (rows.first == name) {
+				inlined = std::move (rows.second);
+				break;
+			}
+
 		if (Error err = register_side_body (extent.first, extent.second,
-		                                    CodeKind::Body, std::move (lines)))
+		                                    CodeKind::Body, std::move (lines),
+		                                    std::move (inlined)))
 			return std::move (err);
 	}
 

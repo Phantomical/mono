@@ -26,9 +26,11 @@
 #include <cstdint>
 #include <memory>
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/IRBuilder.h>
 
 namespace llvm {
+class DISubprogram;
 class Function;
 class Instruction;
 class Module;
@@ -52,12 +54,13 @@ public:
 	IlDebugModule (const IlDebugModule &) = delete;
 	IlDebugModule &operator= (const IlDebugModule &) = delete;
 
-	/// Attaches a subprogram named name to fn.
+	/// Attaches a subprogram named name to fn, standing for the body id names.
 	///
-	/// name is what comes back out of the emitted DWARF, so it has to be the key
-	/// the caller can resolve a MonoMethod from - mono_method_full_name (), which
-	/// is what the translator names functions with anyway.
-	IlDebugScope *add_function (llvm::Function *fn, const char *name);
+	/// id is opaque here, and the engine decides what it means.
+	/// il_debug_subprogram_ids () reads it back, and still answers for a copy the
+	/// pipeline has since taken back off - which is what every folded body is by
+	/// the time codegen runs.
+	IlDebugScope *add_function (llvm::Function *fn, const char *name, uint64_t id);
 
 	/// Closes the metadata off. Without this it is malformed, and the verifier
 	/// says so.
@@ -67,6 +70,12 @@ private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;
 };
+
+/// The id every subprogram of m was added under.
+///
+/// A subprogram some other producer created has no entry.
+llvm::DenseMap<const llvm::DISubprogram *, uint64_t>
+il_debug_subprogram_ids (const llvm::Module &m);
 
 /// Attributes everything builder emits from here on to il_offset within scope.
 void il_debug_set_location (IlDebugScope *scope, llvm::IRBuilder<> *builder, uint32_t il_offset);

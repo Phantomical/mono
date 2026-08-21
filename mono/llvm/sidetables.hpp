@@ -3,7 +3,7 @@
  * \brief The wire format of the side tables the compiler writes into a method's
  * object, and the reader that takes one back apart.
  *
- * Three sections, all target-neutral and code-relative:
+ * Four sections, all target-neutral and code-relative:
  *
  * `.mono_lsda` is the clause table - the tiered backend's format, verbatim, so
  * its reader (mono_lsda.cpp) parses ours too. See mono_lsda.hpp
@@ -76,6 +76,27 @@
  * reader keeps the last, so the map stays single-valued and says the most recent
  * point execution passed.
  *
+ * `.mono_inlines` says which bodies an inliner folded into the code a row of the
+ * line table covers, so a stack walk can report a frame for each of them. A
+ * record belongs to the line-table row at the same code offset, which is how the
+ * engine finds it, and a function with nothing folded in has no block at all.
+ * Same block-per-function shape as `.mono_lines`.
+ *
+ *   Header (20 bytes, little-endian):
+ *     u32 magic   = 0x4d494e4c ('MINL')
+ *     u16 version = 1
+ *     u16 reserved
+ *     u32 count
+ *     u64 function    where the function this describes was linked
+ *   Record[count] (20 bytes each, little-endian):
+ *     u32 offset      code offset of the row this belongs to
+ *     u32 line        the IL offset inside the folded body
+ *     u32 depth       0 is the innermost body, and each step out is one more
+ *     u64 callee      what the compile called that body, opaque here
+ *
+ * The engine decides what a callee id means. The writer takes it from the
+ * translator (il-line-table.hpp) and hands it back unread.
+ *
  * The function address is the one field that is not code-relative, so it is the
  * one thing in these sections the linker has to relocate.
  *
@@ -110,6 +131,11 @@ constexpr uint32_t lines_section_magic = 0x4d4c4e45; /* 'MLNE' */
 constexpr uint16_t lines_section_version = 1;
 constexpr std::size_t lines_header_size = 20;
 constexpr std::size_t lines_record_size = 8;
+
+constexpr uint32_t inlines_section_magic = 0x4d494e4c; /* 'MINL' */
+constexpr uint16_t inlines_section_version = 1;
+constexpr std::size_t inlines_header_size = 20;
+constexpr std::size_t inlines_record_size = 20;
 
 /*
  * The id of the stackmap naming this frame's argument and local slots, in

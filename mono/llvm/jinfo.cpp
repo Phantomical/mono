@@ -39,6 +39,7 @@ extern "C" {
 
 #include <llvm/Support/Error.h>
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <vector>
@@ -639,7 +640,39 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	 */
 	size_t n_seq_points = compiled.il_lines.size ();
 	size_t map_offset = (size_t) ALIGN_TO (jinfo_size, sizeof (guint32));
-	size_t total_size = map_offset + n_seq_points * sizeof (MonoLLVMSeqPoint);
+	size_t map_size = n_seq_points * sizeof (MonoLLVMSeqPoint);
+	/*
+	 * The folded bodies ride along behind the map, for the same reason and with
+	 * the same lifetime. A row whose offset names no row of the map is left out:
+	 * the runtime looks a chain up by that offset, and finds this one at no
+	 * address at all.
+	 */
+	std::vector<MonoLLVMInlineFrame> inlined;
+
+	inlined.reserve (compiled.inline_frames.size ());
+	for (const IlInlineRow &row : compiled.inline_frames) {
+		auto anchored = std::lower_bound (
+			compiled.il_lines.begin (), compiled.il_lines.end (),
+			row.native_offset, [] (const IlLineRow &line, uint32_t offset) {
+				return line.native_offset < offset;
+			});
+
+		if (anchored == compiled.il_lines.end ()
+		    || anchored->native_offset != row.native_offset)
+			continue;
+
+		MonoLLVMInlineFrame frame;
+
+		frame.native_offset = row.native_offset;
+		frame.il_offset = row.il_offset;
+		frame.depth = row.depth;
+		frame.method = (MonoMethod *) (uintptr_t) row.callee;
+		inlined.push_back (frame);
+	}
+
+	size_t inline_offset =
+		(size_t) ALIGN_TO (map_offset + map_size, sizeof (gpointer));
+	size_t total_size = inline_offset + inlined.size () * sizeof (MonoLLVMInlineFrame);
 
 	/*
 	 * A dynamic method's record is unregistered again when the method is freed,
@@ -697,6 +730,16 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 
 		jinfo->llvm_seq_points = map;
 		jinfo->n_llvm_seq_points = (guint32) n_seq_points;
+	}
+
+	if (!inlined.empty ()) {
+		MonoLLVMInlineFrame *frames =
+			(MonoLLVMInlineFrame *) ((char *) jinfo + inline_offset);
+
+		memcpy (frames, inlined.data (),
+		        inlined.size () * sizeof (MonoLLVMInlineFrame));
+		jinfo->llvm_inline_frames = frames;
+		jinfo->n_llvm_inline_frames = (guint32) inlined.size ();
 	}
 
 	if (num_clauses > 0)

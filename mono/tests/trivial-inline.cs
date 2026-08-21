@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
@@ -10,9 +11,10 @@ using System.Runtime.CompilerServices;
  * environment and races no compile worker.
  *
  * Every shape is checked at each tier, and the answers all have to agree with
- * the first one. What says the fold really happened is the stack trace: a folded
- * body has no frame of its own, so the helper that threw is missing from the
- * trace, and the helpers the gates refuse are still in it.
+ * the first one. What says the fold really happened is the stack trace. Every
+ * helper that threw has a frame in it either way, but a folded body owns no
+ * code: its frame reports the offset into the caller it was folded at, and a
+ * helper the gates refuse reports an offset into itself.
  * MONO_LLVM_JIT_INLINE_IL_LIMIT=0 turns the pre-pass off, and this test then
  * fails on those checks alone.
  *
@@ -107,6 +109,37 @@ static class Program {
 	/* Which of the three helpers the trace taken inside Root () named. */
 	static bool saw_fail, saw_no_inline, saw_branch;
 
+	/* Which of them ran inside Root ()'s code rather than in a body of its own. */
+	static bool folded_fail, folded_no_inline, folded_branch;
+
+	/*
+	 * Whether the helper's frame covers the same code as Root ()'s.
+	 *
+	 * A folded body has no code of its own, so the frame reported for it names
+	 * the call site in Root () that it was folded at - the same native offset
+	 * Root ()'s own frame reports. A helper that was really called runs in its
+	 * own body and answers with an offset into that.
+	 */
+	static bool RunsInsideRoot (Exception e, string helper)
+	{
+		StackTrace st = new StackTrace (e, false);
+		int in_helper = -1, in_root = -2;
+
+		for (int i = 0; i < st.FrameCount; i++) {
+			StackFrame f = st.GetFrame (i);
+			MethodBase m = f.GetMethod ();
+
+			if (m == null)
+				continue;
+			if (m.DeclaringType.Name == "Trivial" && m.Name == helper)
+				in_helper = f.GetNativeOffset ();
+			if (m.DeclaringType.Name == "Program" && m.Name == "Root")
+				in_root = f.GetNativeOffset ();
+		}
+
+		return in_helper >= 0 && in_helper == in_root;
+	}
+
 	static void Record (Exception e)
 	{
 		string trace = e.StackTrace ?? "";
@@ -114,6 +147,10 @@ static class Program {
 		saw_fail |= trace.Contains ("Trivial.Fail (");
 		saw_no_inline |= trace.Contains ("Trivial.FailNoInline");
 		saw_branch |= trace.Contains ("Trivial.FailBranch");
+
+		folded_fail |= RunsInsideRoot (e, "Fail");
+		folded_no_inline |= RunsInsideRoot (e, "FailNoInline");
+		folded_branch |= RunsInsideRoot (e, "FailBranch");
 
 		if (!trace.Contains ("Program.Root"))
 			throw new Exception ("the frame that caught it is missing: " + trace);
@@ -189,19 +226,22 @@ static class Program {
 		}
 
 		saw_fail = saw_no_inline = saw_branch = false;
+		folded_fail = folded_no_inline = folded_branch = false;
 
 		int got = Root (3);
 
 		Check (want == got, "the answer at " + name);
 
 		/*
-		 * A folded body's code belongs to the frame it was folded into, so the
-		 * trace names that frame and not the helper. Extending the side tables
-		 * to carry inlined frames is what would put Trivial.Fail back, and this
-		 * is where to say so.
+		 * A folded body keeps a frame in the trace, built from the side table
+		 * the compile wrote rather than from a frame on the stack. What says
+		 * the fold happened is where that frame's code is.
 		 */
-		Check (!saw_fail, "the folded helper has no frame of its own at " + name);
+		Check (saw_fail, "the folded helper has a frame of its own at " + name);
+		Check (folded_fail, "and it runs inside Root () at " + name);
 		Check (saw_no_inline, "NoInlining keeps the helper's frame at " + name);
+		Check (!folded_no_inline,
+		       "and a refused helper runs in a body of its own at " + name);
 
 		/*
 		 * FailBranch () is the one shape the two tiers answer differently. The
@@ -209,9 +249,10 @@ static class Program {
 		 * model behind it that then takes the body anyway.
 		 */
 		if (tier == tier2)
-			Check (!saw_branch, "the cost model takes what the shape test declined");
+			Check (folded_branch, "the cost model takes what the shape test declined");
 		else
-			Check (saw_branch, "a helper with a branch keeps its frame at " + name);
+			Check (saw_branch && !folded_branch,
+			       "a helper with a branch keeps a body of its own at " + name);
 
 		return true;
 	}

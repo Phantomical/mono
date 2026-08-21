@@ -118,14 +118,21 @@ protected:
 	/// Translate and compile IMAGE's METHOD at the given tier, having renamed
 	/// its module so the filter does or does not name it. Hands back the
 	/// compiled function's symbol, which is what the assembly labels it.
+	///
+	/// folded names a second method of the same image to translate in beside it
+	/// and mark always-inline, the way the engine's pre-pass folds a callee.
 	std::string compile (const std::string &image, const std::string &method,
-	                     bool dumped, JitTier tier = JitTier::tier1)
+	                     bool dumped, JitTier tier = JitTier::tier1,
+	                     const std::string &folded = std::string ())
 	{
 		std::unique_ptr<Translation> t = translate_method (image, method);
 
 		EXPECT_NE (t->function, nullptr) << t->error;
 		if (t->function == nullptr)
 			return std::string ();
+
+		if (!folded.empty ())
+			EXPECT_NE (fold_method_into (*t, image, folded), nullptr);
 
 		t->module->setModuleIdentifier (dumped ? asm_filter : image);
 
@@ -184,6 +191,42 @@ TEST_F (AsmDump, PrintsTheCodeAndTheClauseTableOfASelectedMethod)
 	EXPECT_NE (dump.find (".section\t.mono_lsda"), std::string::npos) << dump;
 	/* The frame description, which textual assembly carries as directives. */
 	EXPECT_NE (dump.find (".cfi_startproc"), std::string::npos) << dump;
+}
+
+/*
+ * The chain of bodies folded into a method, which rides beside the line table
+ * and is what lets a stack walk report a frame for each of them.
+ */
+TEST_F (AsmDump, WritesTheInlineTableOfAFoldedBody)
+{
+	CapturedStderr captured;
+	std::string entry = compile ("calls", "Calls:CallStatic", /*dumped=*/true,
+	                             JitTier::tier1, "Calls:Helper");
+	std::string dump = captured.text ();
+
+	ASSERT_FALSE (entry.empty ());
+
+	EXPECT_NE (dump.find (".section\t.mono_inlines"), std::string::npos) << dump;
+	/* 'MINL', the section's magic, which the header opens with. */
+	EXPECT_NE (dump.find ("\t.long\t1296649804"), std::string::npos) << dump;
+	/* Each record names the function it describes an offset into. */
+	EXPECT_NE (dump.find ("\t.quad\t\"" + entry + "\""), std::string::npos) << dump;
+}
+
+/*
+ * A method with nothing folded into it gets a line table and no inline table.
+ * The two sections are written from one set of rows, so this is what says the
+ * case above is about the fold rather than about compiling anything at all.
+ */
+TEST_F (AsmDump, WritesNoInlineTableWithoutAFold)
+{
+	CapturedStderr captured;
+	std::string entry = compile ("arith", "Arith:Add", /*dumped=*/true);
+	std::string dump = captured.text ();
+
+	ASSERT_FALSE (entry.empty ());
+	EXPECT_NE (dump.find (".section\t.mono_lines"), std::string::npos) << dump;
+	EXPECT_EQ (dump.find (".section\t.mono_inlines"), std::string::npos) << dump;
 }
 
 TEST_F (AsmDump, LeavesAMethodTheFilterDoesNotNameAlone)
