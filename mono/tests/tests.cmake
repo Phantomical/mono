@@ -231,7 +231,7 @@ set(MONO_TESTS_CS_SRC
   interp-calls-compiled.cs
   interp-tier1-promotion.cs
   interp-native-detour.cs
-  tier2-inline.cs
+  trivial-inline.cs
   tier2-inline-override.cs
   override-basic.cs
   override-generic.cs

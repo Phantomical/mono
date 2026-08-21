@@ -386,9 +386,10 @@ Backend debugging env vars:
   interpreted callee into one process — no threshold produces that, since a callee is
   called at least as often as its caller.
 - `MONO_LLVM_JIT_INLINE_IL_LIMIT=<n>` (`runtime/options.cpp`) — the largest callee, in
-  IL bytes, the tier-2 shape-test pre-pass folds into its caller, default 32. Zero turns
-  that pre-pass off, which is what tells a bug in a body it folded from a bug in the
-  method that folded it. The limit is a backstop rather than a policy: the shape test in
+  IL bytes, the shape-test pre-pass folds into its caller, default 32. Both compiled
+  tiers run that pre-pass. Zero turns it off and compiles the method with every call
+  standing, which is what tells a bug in a body it folded from a bug in the method
+  that folded it. The limit is a backstop rather than a policy: the shape test in
   front of it already refuses everything but a straight line ending in one call.
 - `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=<n>` (`runtime/options.cpp`) — the largest callee,
   in IL bytes, the tier-2 cost model translates in order to weigh it, default 128. It
@@ -399,10 +400,11 @@ Backend debugging env vars:
   method the cost model may go, default 4. A call graph with a cycle in it never runs out
   of sites, so the loop needs this whatever the budget says.
 - `MONO_LLVM_JIT_INLINE_BUDGET=<n>` (`runtime/options.cpp`) — how many bodies one
-  tier-2 compile may fold in, default 16. It bounds the translation both inliners add,
-  and they spend the one count between them; a chain of forwarders is what spends it.
-  `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a fold is
-  visible from outside.
+  method's compile may fold in, default 16. It bounds the translation both inliners
+  add, and they spend the one count between them; a chain of forwarders is what spends
+  it. A batch gives each member its own count, so `MONO_LLVM_JIT_BATCH` changes the
+  compile count and nothing else. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold,
+  which is the only place a fold is visible from outside.
 - `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to a debugger
   through gdb's JIT interface, so `info functions` names JIT'd methods and a `bt`
   taken from runtime C code unwinds managed frames with names instead of `??`. What
@@ -582,11 +584,11 @@ there is no OSR to move it.
 *function* simplification pipeline with this backend's own IR passes around it —
 `array-address` and `lower-builtins` before, `restore-tail-position` and the arch's
 legacy-ABI lowering after — and codegen then runs at `CodeGenOptLevel::None`, which selects FastISel. The
-module and CGSCC layers are skipped deliberately: a module holds a single method and
-every call leaves it by symbol, so there is no callee body to inline and nothing to
-specialize, and running them anyway cost a large fraction of compile time. Beyond
-taking a site the IL already settled — non-virtual, `final`, or resolved by
-`constrained.` — the JIT does not devirtualize.
+module and CGSCC layers are skipped deliberately: the only interprocedural work a
+module here has is the fold below, which `AlwaysInlinerPass` does on its own, and
+every call still standing leaves the module by symbol. Running the two layers anyway
+costs a large fraction of compile time. Beyond taking a site the IL already settled —
+non-virtual, `final`, or resolved by `constrained.` — the JIT does not devirtualize.
 
 `run_tier2_pipeline ()` is the other one, and it is on by default: every tier-1 body
 carries profiling instrumentation, and a body entered 5000 times is compiled again
@@ -594,8 +596,11 @@ against the counts it gathered, at O3 with an optimizing selector.
 `MONO_LLVM_JIT_TIER2=0` turns the whole thing off, instrumentation included, which is
 what tells a tier-2 defect from a tier-1 one.
 
-**Tier 2 also inlines, and only where the IL settles it.** `AlwaysInlinerPass` sits in
-front of that simplification. What it finds are bodies `materialize_trivial_callees ()`
+**Both compiled tiers inline, and only where the IL settles it.** `AlwaysInlinerPass`
+sits in front of the simplification in each pipeline, behind the tier-1
+instrumentation: the counters and the CFG hash beside them describe the body with its
+calls still standing, which is the shape tier 2 matches the profile against. What the
+pass finds are bodies `materialize_trivial_callees ()`
 (`runtime/trivial-inlines.cpp`) translated in beside the method, right after the
 method itself and before naming and resolution, each marked always-inline and given
 local linkage. A candidate is a straight line of value opcodes, then at most one
@@ -603,10 +608,18 @@ call, then `ret` or `throw` — a constant, a chain of field accesses, a forward
 one other method, a throw, an object made and returned — inside
 `MONO_LLVM_JIT_INLINE_IL_LIMIT` bytes of IL and past gates that are about
 correctness rather than cost (`may_fold ()`, `runtime/inline-scope.cpp`): no
-wrapper, no dynamic method, no clauses, no `NoInlining` on the callee or on what
-it forwards to, no shared body, no call instrumentation, and nothing at all while
-`gen-seq-points` is on. A folded frame is gone from a stack trace, and its code
-answers with the IL offset of the call site.
+wrapper, no dynamic method, no clauses, no `NoInlining` on the callee, no shared
+body, no call instrumentation, and nothing at all while `gen-seq-points` is on. A
+forwarder is refused as well when what it forwards to can read the frame it was
+called from — `may_read_the_callers_frame ()` follows the chain, and a body with no
+IL counts, because every stack walk the runtime offers is an icall. A folded frame is
+gone from a stack trace, and its code answers with the IL offset of the call site.
+Managed code that has to see its own caller must therefore carry `NoInlining`, the
+way the `StackFrame` constructors do.
+
+In a batch every member is translated first, and the pre-pass then runs over each of
+them: a member is declared to the others under a name of its own, so a member folded
+in as a callee is a second copy of a body the module already holds.
 
 **Behind it is a cost model, and it goes top-down.** `TopDownInlinerPass`
 (`passes/top-down-inline.cpp`) runs after the first simplification and ranks the

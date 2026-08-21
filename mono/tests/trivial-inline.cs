@@ -3,17 +3,21 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * The callees tier 2 folds into their caller before any cost model looks at
- * them. Mono.Tiering.MonoTier::PromoteNow compiles Root () at tier 2 on this
- * thread, whatever tier it was running at and whether or not MONO_LLVM_JIT_TIER2
- * left self-promotion on, so the test needs no environment and races no compile
- * worker.
+ * The callees a compile folds into their caller before any cost model looks at
+ * them. Both compiled tiers do it, so both are checked.
+ * Mono.Tiering.MonoTier::PromoteNow compiles Root () at the tier it is given, on
+ * this thread and whatever tier the method was running at, so the test needs no
+ * environment and races no compile worker.
  *
- * Each shape is checked twice, once before Root () reaches tier 2 and once
- * after, and the two answers have to agree. What says the fold really happened
- * is the stack trace: a folded body has no frame of its own, so the helper that
- * threw is missing from the trace taken at tier 2, and the helper the gates
- * refuse is still in it.
+ * Every shape is checked at each tier, and the answers all have to agree with
+ * the first one. What says the fold really happened is the stack trace: a folded
+ * body has no frame of its own, so the helper that threw is missing from the
+ * trace, and the helpers the gates refuse are still in it.
+ * MONO_LLVM_JIT_INLINE_IL_LIMIT=0 turns the pre-pass off, and this test then
+ * fails on those checks alone.
+ *
+ * The first call claims nothing about frames. Which engine it runs in is the
+ * arm's choice: interpreted where tier 0 is on, compiled where it is off.
  *
  * Tier 2 has a second inliner behind this one, which weighs what the shape test
  * declines - tier2-inline-cost.cs is that one's test. Here it only matters for
@@ -173,27 +177,22 @@ static class Program {
 		++fails;
 	}
 
-	public static int Main ()
+	/* MonoTier::tier1 and MonoTier::tier2, as PromoteNow takes them. */
+	const int tier1 = 2;
+	const int tier2 = 3;
+
+	static bool AtTier (MethodInfo root, int tier, string name, int want)
 	{
-		int want = Root (3);
-
-		Check (want == 7 + 41 + 41 + 44 + 3 + 3 + 40 + 4 + 4 + 5,
-			"the answer before tier 2");
-		Check (saw_fail && saw_no_inline && saw_branch, "every helper has a frame at tier 1");
-
-		MethodInfo root = typeof (Program).GetMethod ("Root",
-			BindingFlags.Static | BindingFlags.NonPublic);
-
-		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 3)) {
-			Console.WriteLine ("FAIL: Root () would not compile at tier 2");
-			return 1;
+		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, tier)) {
+			Console.WriteLine ("FAIL: Root () would not compile at {0}", name);
+			return false;
 		}
 
 		saw_fail = saw_no_inline = saw_branch = false;
 
 		int got = Root (3);
 
-		Check (want == got, "the answer at tier 2 is the answer before it");
+		Check (want == got, "the answer at " + name);
 
 		/*
 		 * A folded body's code belongs to the frame it was folded into, so the
@@ -201,9 +200,35 @@ static class Program {
 		 * to carry inlined frames is what would put Trivial.Fail back, and this
 		 * is where to say so.
 		 */
-		Check (!saw_fail, "the folded helper has no frame of its own");
-		Check (saw_no_inline, "NoInlining keeps the helper's frame");
-		Check (!saw_branch, "the cost model takes what the shape test declined");
+		Check (!saw_fail, "the folded helper has no frame of its own at " + name);
+		Check (saw_no_inline, "NoInlining keeps the helper's frame at " + name);
+
+		/*
+		 * FailBranch () is the one shape the two tiers answer differently. The
+		 * shape test declines a branch at either tier. Only tier 2 has the cost
+		 * model behind it that then takes the body anyway.
+		 */
+		if (tier == tier2)
+			Check (!saw_branch, "the cost model takes what the shape test declined");
+		else
+			Check (saw_branch, "a helper with a branch keeps its frame at " + name);
+
+		return true;
+	}
+
+	public static int Main ()
+	{
+		int want = Root (3);
+
+		Check (want == 7 + 41 + 41 + 44 + 3 + 3 + 40 + 4 + 4 + 5,
+			"the answer before any promotion");
+
+		MethodInfo root = typeof (Program).GetMethod ("Root",
+			BindingFlags.Static | BindingFlags.NonPublic);
+
+		if (!AtTier (root, tier1, "tier 1", want)
+		    || !AtTier (root, tier2, "tier 2", want))
+			return 1;
 
 		if (fails != 0)
 			return 1;

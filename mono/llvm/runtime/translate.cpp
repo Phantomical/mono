@@ -176,16 +176,15 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	InlineScope inlining;
 
-	// Tier 2 folds in the callees whose IL already says the inline pays. It runs
-	// here so that the bodies it adds still reach the naming and the resolution
-	// below.
-	if (target.tier == JitTier::tier2) {
-		inlining.root = method;
-		inlining.defined.push_back (method);
-		inlining.budget = trivial_inline_budget ();
-		materialize_trivial_callees (*module, target.domain, method, **function,
-		                             externals, types, inlining);
-	}
+	inlining.root = method;
+	inlining.defined.push_back (method);
+	inlining.budget = trivial_inline_budget ();
+
+	// Both compiled tiers fold in the callees whose IL already says the inline
+	// pays. It runs here so that the bodies it adds still reach the naming and
+	// the resolution below.
+	materialize_trivial_callees (*module, target.domain, method, **function,
+	                             externals, types, inlining);
 
 	/* Before the entry name is read: the body's own declaration is one of these. */
 	if (Error err = bind_symbols (*module))
@@ -231,9 +230,8 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		*module, target.tier, target.profile,
 		inliner ? &*inliner : nullptr);
 
-	if (target.tier == JitTier::tier2)
-		if (Error err = inline_copies_stripped (*module))
-			return std::move (err);
+	if (Error err = inline_copies_stripped (*module))
+		return std::move (err);
 
 	Expected<CompiledMethod> compiled = [&] {
 		timing::Scope timed (timing::Phase::orc);
@@ -462,6 +460,30 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		members.push_back (std::move (member));
 	}
 
+	/*
+	 * After every member is translated: a member is declared to the others
+	 * under a name of its own, so one folded in here would be a second copy of
+	 * a body the module already holds. A copy one member takes in is folded
+	 * into any other member that calls it as well, since they share the
+	 * declaration it was built into.
+	 */
+	InlineScope inlining;
+
+	inlining.defined.assign (methods.begin (), methods.end ());
+
+	for (auto &member : members) {
+		// The budget is counted for each member rather than for the module, so
+		// what a method folds in does not depend on how many others happened to
+		// promote beside it. MONO_LLVM_JIT_BATCH then changes the compile count
+		// and nothing else.
+		inlining.root = member->method;
+		inlining.budget = trivial_inline_budget ();
+
+		materialize_trivial_callees (*module, shared.domain, member->method,
+		                             *member->body, member->externals, types,
+		                             inlining);
+	}
+
 	if (Error err = bind_symbols (*module)) {
 		consumeError (std::move (err));
 		return give_up ();
@@ -490,6 +512,12 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 
 	std::vector<ProfileCounters> layout =
 		MonoJit::optimize (*module, shared.tier, shared.profile);
+
+	if (Error err = inline_copies_stripped (*module)) {
+		consumeError (std::move (err));
+		return give_up ();
+	}
+
 	std::vector<StringRef> entries;
 	bool dump = false;
 

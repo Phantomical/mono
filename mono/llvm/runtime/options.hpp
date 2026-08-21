@@ -83,7 +83,7 @@ bool tier2_enabled ();
 /// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is five thousand.
 uint32_t tier2_threshold ();
 
-/// The largest callee, in IL bytes, tier 2 folds into its caller before any
+/// The largest callee, in IL bytes, a compile folds into its caller before any
 /// cost model has looked at it.
 ///
 /// Thirty-two, which leaves room to spare on the shapes the pre-pass
@@ -92,11 +92,13 @@ uint32_t tier2_threshold ();
 /// the method that folded it.
 uint32_t trivial_inline_il_limit ();
 
-/// How many bodies one tier-2 compile can fold in.
+/// How many bodies one method's compile can fold in.
 ///
 /// MONO_LLVM_JIT_INLINE_BUDGET moves it. It bounds the translation both
 /// inliners add to a compile, and they spend the one count between them. A
-/// chain of forwarders is what spends it.
+/// chain of forwarders is what spends it. A batch gives each member its own
+/// count, so a method folds in the same bodies however many others promoted
+/// beside it.
 uint32_t trivial_inline_budget ();
 
 /// The largest callee, in IL bytes, the tier-2 cost model will translate in

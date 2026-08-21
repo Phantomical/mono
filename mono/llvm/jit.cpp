@@ -937,12 +937,28 @@ Tier0Pipeline::Tier0Pipeline ()
 	// second run drops all but the first.
 	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
 
+	// The front end translated a few callees in beside the body and marked each
+	// one always-inline. This folds them in, and simplification below then sees
+	// one body: the arguments are constants where the caller had them, and the
+	// class-init check on a folded entry is dominated by the caller's.
+	//
+	// Behind the instrumentation, so the counters and the CFG hash beside them
+	// describe the body with its calls still standing. Tier 2 reads the profile
+	// back at the same point in its own pipeline. A hash taken over the folded
+	// shape matches nothing there, and the tier-2 body is then laid out with no
+	// weights at all.
+	mpm.addPass (AlwaysInlinerPass ());
+
+	// A copy the fold above did not take goes back to being a call through the
+	// callee's thunk. Such a copy is entered by a direct call and has no jit
+	// info of its own, so a stack walk over its frame finds nothing.
+	mpm.addPass (StripInlineCopiesPass ());
+
 	// The function simplification pipeline rather than the whole O1 module
-	// pipeline. A module here is a single method, so the module and CGSCC
-	// layers have nothing to work on. There is no internal function to
-	// specialize, and every call the translator emits leaves the module by
-	// symbol. Running them anyway costs a large fraction of tier-0 compile
-	// time.
+	// pipeline. The only interprocedural work a module here has is the fold
+	// above: what is left is the methods it came in with, and every call still
+	// standing leaves the module by symbol. Running the module and CGSCC layers
+	// anyway costs a large fraction of tier-1 compile time.
 	FunctionPassManager fpm = pb->buildFunctionSimplificationPipeline (
 		OptimizationLevel::O1, ThinOrFullLTOPhase::None);
 

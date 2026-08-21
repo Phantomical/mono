@@ -132,7 +132,11 @@ loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header)
 		if (op == MONO_CEE_CALL || op == MONO_CEE_CALLVIRT || op == MONO_CEE_NEWOBJ) {
 			MonoMethod *target = il_call_target (method, il_read_u32 (code + operand));
 
-			if (target == nullptr
+			// A body with no IL can be any of the runtime's stack walks, which
+			// are all icalls. In this corlib GetCurrentMethod,
+			// GetExecutingAssembly and GetCallingAssembly carry no NoInlining to
+			// be read, so the mark alone does not find them.
+			if (target == nullptr || implemented_outside_il (target)
 			    || (target->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
 				return false;
 		}

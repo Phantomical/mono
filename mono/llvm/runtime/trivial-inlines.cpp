@@ -240,6 +240,65 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 	return std::nullopt;
 }
 
+/*
+ * Whether target, or something it hands the call straight on to, can read the
+ * frame it was called from.
+ *
+ * Such a method has to see the frame of the body that called it, and folding
+ * that body in hands it the caller's frame instead. GetCurrentMethod then
+ * returns the wrong method, GetCallingAssembly and the StackFrame constructor
+ * the wrong assembly and the wrong frame. Two marks say a method does this:
+ * NoInlining, which is what a managed one carries, and having no IL at all,
+ * because every stack walk the runtime offers is an icall and a body with no IL
+ * can be any of them. The second mark takes in far more than it has to, and a
+ * fold declined costs the caller nothing.
+ *
+ * A forwarder stands in for what it forwards to, so the walk follows the chain
+ * until it reaches a body that keeps a frame of its own.
+ */
+bool
+may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
+{
+	// Longer than any forwarder chain worth following, and each link costs a
+	// header. A chain that outruns it is refused rather than read further.
+	constexpr int max_links = 8;
+
+	for (int link = 0; link < max_links; ++link) {
+		if (target == nullptr)
+			return false;
+
+		if (implemented_outside_il (target)
+		    || (target->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
+			return true;
+
+		ERROR_DECL (metadata_error);
+		MinimalCompile cfg (target, domain, metadata_error);
+		MonoMethodHeader *header = cfg.get ()->header;
+
+		if (header == nullptr) {
+			mono_error_cleanup (metadata_error);
+			return false;
+		}
+
+		// A body with clauses is not a forwarder, and neither is one the shape
+		// test declines. Either way it keeps a frame of its own, which is where
+		// the chain stops. No size limit here: what matters is the shape, and a
+		// straight line to one call can be longer than anything the pre-pass
+		// folds.
+		if (header->num_clauses != 0)
+			return false;
+
+		std::optional<Shape> shape = shape_of (target, header);
+
+		if (!shape)
+			return false;
+
+		target = shape->forwards_to;
+	}
+
+	return true;
+}
+
 void
 trace_inline (MonoMethod *callee, MonoMethod *caller)
 {
@@ -318,15 +377,12 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (!shape)
 				continue;
 
-			// A helper that reads the frame it was called from carries
-			// NoInlining - GetCurrentMethod and the rest do. Folding a
-			// forwarder into its caller hands such a helper the caller's
-			// frame instead of the forwarder's. The same test catches a body
-			// that calls itself, which the inliner cannot fold away.
+			// A body that calls itself is one the inliner cannot fold away.
+			if (shape->forwards_to == callee)
+				continue;
+
 			if (shape->forwards_to != nullptr
-			    && (shape->forwards_to == callee
-			        || (shape->forwards_to->iflags
-			            & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0))
+			    && may_read_the_callers_frame (shape->forwards_to, domain))
 				continue;
 
 			if (is_jit_trace_enabled ())

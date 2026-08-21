@@ -65,6 +65,7 @@ namespace System.Diagnostics {
 						   out int iloffset, out int native_offset,
 						   out string file, out int line, out int column);
 
+		[MethodImplAttribute (MethodImplOptions.NoInlining)]
                 public StackFrame ()
 		{
 			get_frame_info (2, false, out methodBase, out ilOffset,
