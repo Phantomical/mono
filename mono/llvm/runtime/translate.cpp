@@ -144,8 +144,8 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
-		fprintf (stderr, "[llvm-jit] translating %s (for %s)\n", name,
-		         target.domain->friendly_name);
+		fprintf (stderr, "[llvm-jit] translating %s at tier %d (for %s)\n", name,
+		         target.tier == JitTier::tier2 ? 2 : 1, target.domain->friendly_name);
 		g_free (name);
 	}
 
