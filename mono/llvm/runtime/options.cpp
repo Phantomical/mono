@@ -127,15 +127,25 @@ promotion_batch_size ()
 		const char *value = g_getenv ("MONO_LLVM_JIT_BATCH");
 
 		/*
-		 * Eight, measured: against one method per compile it takes 46% off
-		 * a corpus of three-instruction methods and 24% off a corpus of
-		 * medium ones. Sixteen takes another 12% and 2%. The whole batch has
-		 * to compile before any of its methods is published. That is why
-		 * the larger batch buys almost nothing on the workload that has the
-		 * most to wait for.
+		 * A batch pays LLVM's per-compile floor once for every method in
+		 * it, so a bigger batch spreads that floor further. The queue has
+		 * the depth to use this: on Roslyn compiling corlib the average
+		 * method arrives in a batch of 27 of a possible 32, and a third of
+		 * the batches leave the queue completely full.
+		 *
+		 * Measure it method-weighted rather than batch-weighted. The
+		 * distribution is bimodal - a spike at one and a bigger spike at
+		 * the cap - so the average batch holds 14 while the average method
+		 * arrives in one of 27, and the second is what the amortising acts
+		 * on.
+		 *
+		 * The whole batch compiles before any of its methods is published,
+		 * so a big batch makes each method wait for the slowest in it. That
+		 * is what bounds the setting, rather than the amortising running
+		 * out.
 		 */
 		if (value == nullptr)
-			return 8;
+			return 32;
 
 		int set = atoi (value);
 
@@ -158,18 +168,30 @@ compile_worker_count ()
 		}
 
 		/*
-		 * Two processors are left to the program, and four threads is the cap
-		 * however many it has. Compiles stop scaling well before that anyway:
-		 * ORC takes its session lock once per compile to make a JITDylib and
-		 * again to look the entry up, which measured 2.86x out of 18 threads
-		 * on a compile-bound workload.
+		 * Two processors are left to the program, and eight threads is the
+		 * cap however many it has.
+		 *
+		 * Compiles scale badly - ORC takes its session lock once per compile
+		 * to make a JITDylib and again to look the entry up, which measured
+		 * 2.86x out of 18 threads. The cap is not set from that number,
+		 * because it describes throughput and what a method waits for is
+		 * latency: on a queue thousands deep, sublinear speedup is still
+		 * speedup. Roslyn compiling corlib waits 2.5 s for a worker at four
+		 * threads and 0.25 s at eight.
+		 *
+		 * What the process gets back is not cheaper compiling. Eight threads
+		 * spend 75% more CPU compiling than four do, for 17% more bodies.
+		 * They win because a method waiting for a body runs interpreted, and
+		 * the interpretation the shorter wait displaces is worth more than
+		 * the extra compiling costs - on that workload 34 s more compile CPU
+		 * against 39 s less of everything else.
 		 *
 		 * mono_cpu_count () reads the affinity mask and the cgroup quota, so a
 		 * container gets what it may use rather than what the machine has.
 		 */
 		int cpus = mono_cpu_count ();
 
-		return (uint32_t) std::max (std::min (cpus - 2, 4), 1);
+		return (uint32_t) std::max (std::min (cpus - 2, 8), 1);
 	}();
 
 	return threads;

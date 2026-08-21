@@ -267,18 +267,27 @@ and the note says which split:
 - `MONO_LLVM_JIT_TIER2=<0|false|empty>` (and its own copy in `jit.cpp`) — turn tier 2
   off. It is on by default, which is what puts profiling instrumentation in every tier-1
   body, so this switch separates a tier-2 bug from a tier-1 one.
-- `MONO_LLVM_JIT_BATCH=<n>` — promoted methods per compile, default 8. A batch shares
+- `MONO_LLVM_JIT_BATCH=<n>` — promoted methods per compile, default 32. A batch shares
   one module, one IR pipeline, one codegen and one link, so LLVM's per-compile floor is
-  paid once. One compiles every method on its own, which separates a batching bug from a
-  backend one. Only tier-1 promotions batch. A tier-2 promotion, a dynamic method and
-  any compile the runtime asks for by name each go alone.
+  paid once. The whole batch compiles before any of its methods is published, so a
+  bigger batch makes each method wait for the slowest in it, and that is what bounds the
+  setting rather than the amortising running out. Measure occupancy by methods rather
+  than by batches: the distribution is bimodal, so the average batch and the batch the
+  average method arrives in are different numbers, and only the second says what the
+  amortising acts on. One compiles every method on its own, which separates a batching
+  bug from a backend one. Only tier-1 promotions batch. A tier-2 promotion, a dynamic
+  method and any compile the runtime asks for by name each go alone.
 - `MONO_LLVM_JIT_WORKERS=<n>` — the most threads the compile queue runs promotions on at
-  once, default `mono_cpu_count () - 2` capped at four. The queue starts a thread only
+  once, default `mono_cpu_count () - 2` capped at eight. The queue starts a thread only
   when work outruns the ones it has. One puts every background compile back on a single
   thread, which separates a bug in a compile from a bug in two overlapping. Do not
   expect throughput to follow the setting. ORC's session lock is taken twice per
-  compile, and that measured 2.86x out of 18 threads on a compile-bound workload. That
-  is why the cap is four rather than the core count.
+  compile, and that measured 2.86x out of 18 threads on a compile-bound workload. The
+  cap does not come off that measurement: it describes throughput, and what a promoted
+  method waits for is latency, which keeps falling after throughput stops scaling. The
+  process pays for the shorter wait in compile CPU and wins anyway, because a method
+  waiting for a body runs interpreted.
+  `.claude/plans/tier1-promotion-latency.md` has the sweeps and what is still open.
 - `MONO_LLVM_JIT_RECOMPILE=<substr>` — translate matching methods afresh on every
   request instead of answering from the cache, so they end up with several live bodies.
   No other setting produces one, and the code that has to cope has no other exerciser.
