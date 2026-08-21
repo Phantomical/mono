@@ -319,8 +319,23 @@ and promote its owner.
 **G20. A synonym for `return`.** "Answers the record …" → "Returns the record …". A
 function does not answer, and a reader deciding whether *answers* means something
 different from *returns* has been given work for nothing. **Grep a suspected tic before
-filing it as a one-line fix**: this one runs 63 times against 157 uses of `returns`, which
-makes it a sweep and a style-guide entry rather than a review comment.
+filing it as a one-line fix**: this one ran 63 times against 157 uses of `returns`, which
+made it a sweep and a style-guide entry rather than a review comment.
+
+**The sweep has been done.** What is left is not the tic, and re-flagging it is the
+mistake to avoid now. `answer` carries four other senses here, all of them correct:
+
+| form | means | example |
+| --- | --- | --- |
+| *answers to* | is known by that name | "the stub already answers to the symbol" |
+| *answers for* | is responsible for, covers | "a proxy answers for the class it stands in for" |
+| *answers X with Y* | handles X by doing Y | "library methods the transform answers with an opcode" |
+| *the answer* | the noun | "a rule at the wrong offset unwinds to a wrong answer" |
+
+Only a **function's return value** takes the fix. The test: name the function and the
+value. *"section_address answers with the address"* passes, and *"the jit-info table
+answers for a compiled entry"* does not — the table is not returning the entry to anyone,
+it is the thing that covers that case.
 
 **G21. Documenting something other than this function.**
 

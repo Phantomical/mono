@@ -500,7 +500,7 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 /// than through a pointer the caller passes in.
 ///
 /// A prototype that spells the hidden pointer out (hidden-return.hpp) returns
-/// void, so this answers yes. That is the point of spelling it out: the
+/// void, so this returns true. That is the point of spelling it out: the
 /// forwarded pointer is the caller's own, and the jump is one the backend can
 /// always make.
 ///

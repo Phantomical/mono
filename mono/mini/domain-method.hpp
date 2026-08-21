@@ -118,7 +118,7 @@ public:
 	std::atomic<int32_t> tier_calls{0};
 
 	/// Redirects the method's entry at \p code, but only when \p tier outranks
-	/// the tier already published. Answers whether it did.
+	/// the tier already published. Returns whether it did.
 	///
 	/// This one comparison is what makes promotion monotone and idempotent. It
 	/// is also what keeps a compile that finishes late from taking an entry a
@@ -131,10 +131,10 @@ public:
 	/// Which tier that is comes from the one running the method now, so the
 	/// counter a tier arms decides nothing beyond when to call this.
 	///
-	/// Answers false only when the request was refused and nothing will retry
+	/// Returns false only when the request was refused and nothing will retry
 	/// it, which is the caller's signal to count another threshold of calls. A
 	/// method already on its way, one at the top tier, and one that native code
-	/// owns all answer true: there is nothing left for the caller to do.
+	/// owns all return true: there is nothing left for the caller to do.
 	bool promote ();
 
 	/// Hands the entry to native code at \p target, for good.
@@ -161,7 +161,7 @@ public:
 
 	/// Takes the right to ask the override table about this method.
 	///
-	/// Answers true to the first caller and false to every other, so the table
+	/// Returns true to the first caller and false to every other, so the table
 	/// is read once per record however many threads arrive at it.
 	bool claim_override_check ()
 	{
@@ -249,7 +249,7 @@ public:
 		return interp_method_.load (std::memory_order_acquire);
 	}
 
-	/// Gives the record \p imethod and answers what the record holds.
+	/// Gives the record \p imethod and returns what the record holds.
 	///
 	/// The first caller wins. A later one gets that first record back and must
 	/// drop its own, so that every thread names the same one.
@@ -306,7 +306,7 @@ bool any_method_overridden ();
 ///
 /// Carves no thunk and builds no record, so it is cheap enough to ask at every
 /// call site. One hop: where the replacement is itself overridden, this still
-/// answers the replacement.
+/// returns the replacement.
 MonoMethod *method_override_for (MonoDomain *domain, MonoMethod *method);
 
 /// The record for \p method in \p domain, built and published on first ask.
@@ -327,7 +327,7 @@ void domain_method_foreach (MonoDomain *domain,
 /// Takes \p method's record out of \p domain and hands it over.
 ///
 /// The caller has to retire what the record holds - thunks, symbols, jit infos -
-/// before dropping it. Answers null when the domain has no record for it.
+/// before dropping it. Returns null when the domain has no record for it.
 std::unique_ptr<MonoDomainMethod> domain_method_take (MonoDomain *domain,
                                                       MonoMethod *method);
 

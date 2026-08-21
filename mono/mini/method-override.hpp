@@ -23,7 +23,7 @@ namespace mono {
 void method_overrides_init ();
 
 /// Loads \p path now rather than waiting for something to reference it, and
-/// answers whether it loaded.
+/// returns whether it loaded.
 ///
 /// This is how an assembly that nothing references gets its overrides read. A
 /// missing file is not an error.
@@ -37,7 +37,7 @@ bool method_overrides_registered ();
 
 /// The method registered to replace \p method, or null when none is.
 ///
-/// Answers an instantiation for an instantiation: the override is written
+/// Returns an instantiation for an instantiation: the override is written
 /// against the target's generic definition, and is inflated here with the
 /// target's own type arguments.
 MonoMethod *registered_override_for (MonoMethod *method);

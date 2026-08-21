@@ -245,7 +245,7 @@ void match_image (MonoImage *image)
 }
 
 /// Records every method in \p image that carries the override attribute, and
-/// answers whether it recorded any.
+/// returns whether it recorded any.
 bool collect_overrides (MonoImage *image)
 {
 	int rows = mono_image_get_table_rows (image, MONO_TABLE_TYPEDEF);

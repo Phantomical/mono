@@ -400,7 +400,7 @@ publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
 
 	/*
 	 * Appended rather than prepended: the list head is what the per-method
-	 * lookup answers with, and that has always been the method's first body.
+	 * lookup returns, and that has always been the method's first body.
 	 * Appending in place leaves the head where it is, so the hash entry - and
 	 * with it the domain's ownership of every table on the list - does not
 	 * have to be replaced.

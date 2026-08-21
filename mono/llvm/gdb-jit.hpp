@@ -41,7 +41,7 @@ struct Registration;
 /// linker put that section at, which is how a debugger reading it finds the
 /// code.
 ///
-/// section_address answers with the address a section was laid out at, or zero
+/// section_address returns the address a section was laid out at, or zero
 /// for one that was not laid out at all. Empty when object is not one this can
 /// stamp.
 std::vector<char>

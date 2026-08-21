@@ -436,7 +436,7 @@ namespace {
 ///
 /// Ordinary promotion is queued, so a test that waits for a tier by calling a
 /// method in a loop races the compile worker and only wins if the loop runs long
-/// enough. This one has landed by the time it answers.
+/// enough. This one has landed by the time it returns.
 mono_bool
 ves_icall_promote_now (MonoMethod *method, int32_t tier)
 {

@@ -84,7 +84,7 @@ public:
 	/// Compiles \p method at \p tier in \p domain on the calling thread, and
 	/// points its entry at the result before returning.
 	///
-	/// Answers false when the compile was refused or failed, and the method
+	/// Returns false when the compile was refused or failed, and the method
 	/// is then left at whatever tier already ran it.
 	static bool promote_now (MonoMethod *method, MonoDomain *domain, MonoTier tier);
 
@@ -92,10 +92,10 @@ public:
 	///
 	/// std::nullopt covers a method the backend never compiled and one
 	/// compiled with the instrumentation off. A method that was instrumented
-	/// but has not run yet answers its counters, and they read zero - that
+	/// but has not run yet returns its counters, and they read zero - that
 	/// lets a caller tell "no profile" from "never executed".
 	///
-	/// Answers a copy, because a recompile can replace what the record holds.
+	/// Returns a copy, because a recompile can replace what the record holds.
 	/// The counter array the copy points at stays readable for as long as the
 	/// domain does.
 	static std::optional<ProfileCounters> profile_of (MonoDomainMethod &dm);

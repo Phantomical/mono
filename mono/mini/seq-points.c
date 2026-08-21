@@ -18,8 +18,8 @@
  *
  *   Return the sequence points registered for METHOD in DOMAIN.
  *
- * The registration is per method and first writer wins, so this answers for
- * whichever of the method's bodies was compiled first. Anything holding the
+ * The registration is per method and first writer wins, so this returns the
+ * points for whichever of the method's bodies was compiled first. Anything holding the
  * body it is asking about wants mono_get_seq_points_by_ji () instead.
  *
  * LOCKING: Acquires the domain lock

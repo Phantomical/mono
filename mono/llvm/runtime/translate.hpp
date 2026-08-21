@@ -63,7 +63,7 @@ struct TranslationTarget {
 	/// thread's current one.
 	MonoDomain *domain;
 
-	/// Publish a callee and answer the record its stub was carved on.
+	/// Publish a callee and return the record its stub was carved on.
 	llvm::function_ref<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee;
 
 	/// Records that a piece of code, and the record registered for it, belong

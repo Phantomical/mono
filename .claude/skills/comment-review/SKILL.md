@@ -350,9 +350,16 @@ success.
 
 ## A tic is a sweep, not a review comment
 
-Grep a suspected house tic before filing it. `answers` for `returns` runs 63 times
-against 157 uses of `returns` in `mono/llvm/`, so it reads as deliberate. Sixty
-instances is a sweep and a style-guide entry; one review comment on one site is noise.
+Grep a suspected house tic before filing it. `answers` for `returns` ran 63 times
+against 157 uses of `returns` in `mono/llvm/`, which read as deliberate. Sixty instances
+is a sweep and a style-guide entry; one review comment on one site is noise. That one has
+since been swept — `reference/catalogue.md` G20 has the four senses of *answer* that are
+not the tic and must not be re-flagged.
+
+**Counting the word is not counting the tic.** The grep found 309 uses and 30 of them
+were the defect. *Answers to*, *answers for*, *answers X with Y* and the plain noun are
+all correct, and a sweep run off the raw count would have rewritten ten right sentences
+for every wrong one. Narrow the pattern until it selects the defect, then count that.
 
 This holds for a **convention** as much as for a word — comment markers, summary mood,
 `\brief` against a bare first line. Where a file is uniformly on the older side of a

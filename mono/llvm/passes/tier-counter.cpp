@@ -56,7 +56,7 @@ emit_counter (Function &f, uint32_t threshold, Constant *method)
 	                       count, body);
 
 	IRBuilder<> at_count (count);
-	// atomicrmw answers with the value from before it, so the decrement that
+	// atomicrmw returns the value from before it, so the decrement that
 	// lands on zero is the one that saw a one.
 	Value *before = at_count.CreateAtomicRMW (AtomicRMWInst::Sub, counter,
 	                                          ConstantInt::get (i32, 1), MaybeAlign (),

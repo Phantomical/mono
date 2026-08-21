@@ -41,7 +41,7 @@ void materialize_trivial_callees (llvm::Module &module, MonoDomain *domain,
                                   std::vector<ExternalSymbol> &externals,
                                   ModuleTypes &types);
 
-/// Answers an error naming a materialized body the pipeline did not fold in.
+/// Returns an error naming a materialized body the pipeline did not fold in.
 ///
 /// Such a body is entered by a direct call, so it sits off its method's thunk
 /// and has no jit info of its own. A stack walk over its frame finds nothing,

@@ -26,7 +26,7 @@ namespace Mono.Overrides {
 public static class MonoOverride {
 	/// Makes replacement run wherever target was called, in both engines.
 	///
-	/// Each argument is a MonoMethod pointer, which is what HandleOf answers.
+	/// Each argument is a MonoMethod pointer, which is what HandleOf returns.
 	/// A later call on the same target replaces this one. Nothing undoes it.
 	[MethodImpl (MethodImplOptions.InternalCall)]
 	public static extern void Install (IntPtr target, IntPtr replacement);

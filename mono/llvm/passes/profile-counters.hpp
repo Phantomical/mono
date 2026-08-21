@@ -42,7 +42,7 @@ std::vector<ProfileSite> &profile_sites ();
 /// Where one instrumented function's counters landed, as the linked object says.
 struct ProfileArray {
 	/// What `__llvm_prf_data` keys the function's name under, which is what
-	/// profile_name_key () answers for a ProfileSite's name.
+	/// profile_name_key () returns for a ProfileSite's name.
 	uint64_t name_key = 0;
 	uint64_t hash = 0;
 	const uint64_t *counters = nullptr;
@@ -52,7 +52,7 @@ struct ProfileArray {
 /// Reads a linked object's `__llvm_prf_data` records.
 ///
 /// Each record says where its own function's counters landed, so a module
-/// holding several instrumented functions gives one entry each. Answers nothing
+/// holding several instrumented functions gives one entry each. Returns nothing
 /// when the section is not a whole number of records - what a disagreement with
 /// LLVM about the record layout looks like from here.
 std::vector<ProfileArray> read_profile_arrays (const uint8_t *data, size_t size);

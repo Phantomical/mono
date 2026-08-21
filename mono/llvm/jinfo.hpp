@@ -37,7 +37,7 @@ enum class CodeKind {
 };
 
 /// Turns the `.mono_unwind` records describing one function into the unwind
-/// ops mono's unwinder executes, or answers an error naming the record it
+/// ops mono's unwinder executes, or returns an error naming the record it
 /// cannot express.
 ///
 /// Two records carry a rule mono has no opcode for and are replayed as one it

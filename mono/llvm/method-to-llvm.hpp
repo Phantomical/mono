@@ -846,7 +846,7 @@ private:
 	/// is safe.
 	bool calls_through_context (MonoMethod *target);
 
-	/// Appends the context \p callee declared it is entered with, and answers
+	/// Appends the context \p callee declared it is entered with, and returns
 	/// whether it declared one. The site then has to mark that argument nest.
 	bool pass_context_to (llvm::Function *callee, std::vector<llvm::Value *> &args);
 

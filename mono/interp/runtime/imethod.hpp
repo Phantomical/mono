@@ -10,8 +10,8 @@
 
 namespace mono::interp {
 
-/// Answers only for a method the engine already knows. mono_interp_get_imethod ()
-/// is what makes the record.
+/// Returns a record only for a method the engine already knows.
+/// mono_interp_get_imethod () is what makes the record.
 InterpMethod *lookup_imethod (MonoDomain *domain, MonoMethod *method);
 
 } // namespace mono::interp

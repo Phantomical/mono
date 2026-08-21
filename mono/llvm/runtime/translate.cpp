@@ -35,7 +35,7 @@ using namespace llvm::orc;
 namespace mono {
 
 /// Registers the jit info for a compiled body and for every side function that
-/// came with it, and answers where the method's code is.
+/// came with it, and returns where the method's code is.
 ///
 /// published receives the body's record. header is the method's, and null is
 /// not allowed: a body needs its clauses.

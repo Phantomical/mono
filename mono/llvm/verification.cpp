@@ -4,7 +4,7 @@
  *
  * This file's checks run only when `--security=validil`, `--security=verifiable`
  * or `--verify-all` set a verifier mode. `mono_verifier_is_enabled_for_method ()`
- * answers false otherwise. A compile still pays a field read and one
+ * returns false otherwise. A compile still pays a field read and one
  * image-property lookup, which takes the image lock.
  */
 

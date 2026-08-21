@@ -37,7 +37,7 @@ private:
 /// Returns the address that stands for imethod outside this engine.
 ///
 /// A patcher writes a jump over the address it is given, so a method needs
-/// one address rather than one per engine. This answers with the backend's
+/// one address rather than one per engine. This returns the backend's
 /// stub, the same address a compiled ldftn names, and mints it without
 /// compiling the method. A call that arrives at the stub lands on whichever
 /// tier owns the method.
@@ -63,7 +63,7 @@ gpointer native_entry_for_method (MonoMethod *method, MonoDomain *domain, MonoEr
 inline gboolean
 imethod_published_at (InterpMethod *imethod, gpointer addr)
 {
-	/* A null addr answers no whatever is unset. That way a calli through a null
+	/* A null addr returns false whatever is unset. That way a calli through a null
 	 * function pointer is resolved again - and refused - rather than taken for
 	 * the address an engine has not handed out yet. */
 	return addr != nullptr

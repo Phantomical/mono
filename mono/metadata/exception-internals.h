@@ -43,7 +43,7 @@ mono_install_get_seq_point (MonoGetSeqPointFunc func);
  * produced the offset. Returns -1 when that body has no IL-offset map.
  *
  * Pass the live interpreter frame when there is one. An interpreted body reached
- * through its frame answers without the domain's jit code hash lock, which a
+ * through its frame returns without the domain's jit code hash lock, which a
  * thread dump, a crash context and a domain teardown cannot take. Pass NULL for a
  * captured trace, whose frames are gone by the time it is read.
  */

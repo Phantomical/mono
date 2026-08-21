@@ -242,7 +242,7 @@ public:
 	        llvm::ArrayRef<ProfileCounters> layout = {});
 
 	/// Compile one module holding several methods, on the terms compile ()
-	/// states, and answer one result per name in entries and in that order.
+	/// states, and return one result per name in entries and in that order.
 	///
 	/// The methods share an object, so they share its side tables: the clause,
 	/// guard and frame tables are the whole section in every result, and a
@@ -261,7 +261,7 @@ public:
 	/// to call into it. Any stub still pointing at it must already be undefined.
 	llvm::Error remove_dylibs (const std::vector<llvm::orc::JITDylib *> &dylibs);
 
-	/// Run a tier's IR pipeline over a module in place, and answer where it put
+	/// Run a tier's IR pipeline over a module in place, and return where it put
 	/// the profile counters.
 	///
 	/// Every module goes through this before compile (): it is what lowers the
@@ -270,7 +270,7 @@ public:
 	/// writes it; an empty one still compiles at tier 2, only with nothing to
 	/// lay the code out by.
 	///
-	/// Answers nothing when the module was not instrumented, which is every
+	/// Returns nothing when the module was not instrumented, which is every
 	/// tier-2 module and every tier-1 module compiled with tier 2 turned off.
 	static std::vector<ProfileCounters> optimize (llvm::Module &m, JitTier tier,
 	                                              llvm::ArrayRef<uint8_t> profile = {});

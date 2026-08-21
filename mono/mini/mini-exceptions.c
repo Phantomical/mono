@@ -244,7 +244,7 @@ mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_of
 /*
  * Places a live frame's native offset in the IL.
  *
- * An interpreted frame holds its own method, so it answers without the domain's
+ * An interpreted frame holds its own method, so it returns without the domain's
  * jit code hash lock that mono_jinfo_get_il_offset () reaches through. A thread
  * dump, a crash context and a domain teardown all run where that lock cannot be
  * taken and where the domain's jit info may already be gone, so any of them must
