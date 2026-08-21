@@ -340,20 +340,45 @@ TEST_F (TranslatorTest, DivisionIsGuarded)
 	EXPECT_EQ (t.count ("sdiv i32"), 1u);
 }
 
+// A plain fptosi is poison out of range, and LLVM folds poison to zero wherever it can
+// see the operand. The constrained intrinsic is what keeps every conversion on the
+// target's own instruction instead.
+TEST_F (TranslatorTest, FloatConversionUsesTheConstrainedIntrinsic)
+{
+	const Translation &s = translate ("arith", "Arith:ConvLongFromDouble");
+
+	ASSERT_NE (s.function, nullptr) << s.error;
+	EXPECT_EQ (s.count ("llvm.experimental.constrained.fptosi.i64.f64"), 1u) << s.text ();
+	EXPECT_EQ (s.count ("fptosi double"), 0u) << s.text ();
+
+}
+
+// amd64 converts to an unsigned int64 by halves, and mono_fconv_u8 () settles which half
+// a NaN goes down. The signed intrinsic under a test on "below 2^63" is that shape.
+TEST_F (TranslatorTest, UnsignedLongFromFloatConvertsByHalves)
+{
+	const Translation &t = translate ("arith", "Arith:ConvULongFromDouble");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("llvm.experimental.constrained.fptosi.i64.f64"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("fcmp olt double"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("fsub double"), 1u) << t.text ();
+}
+
 // The width matters, not just the intrinsic: anything wider than the target legalizes
 // to i128, and codegen lowers a 128-bit conversion to a compiler-rt call that nothing
 // in the JIT's link order defines.
-TEST_F (TranslatorTest, CheckedFloatConversionSaturatesAtTheTargetWidth)
+TEST_F (TranslatorTest, CheckedFloatConversionConvertsAtTheTargetWidth)
 {
 	const Translation &s = translate ("arith", "Arith:ConvOvfLongFromDouble");
 
 	ASSERT_NE (s.function, nullptr) << s.error;
-	EXPECT_EQ (s.count ("llvm.fptosi.sat.i64.f64"), 1u) << s.text ();
+	EXPECT_EQ (s.count ("llvm.experimental.constrained.fptosi.i64.f64"), 1u) << s.text ();
 
 	const Translation &u = translate ("arith", "Arith:ConvOvfULongFromDouble");
 
 	ASSERT_NE (u.function, nullptr) << u.error;
-	EXPECT_EQ (u.count ("llvm.fptoui.sat.i64.f64"), 1u) << u.text ();
+	EXPECT_EQ (u.count ("llvm.experimental.constrained.fptoui.i64.f64"), 1u) << u.text ();
 }
 
 TEST_F (TranslatorTest, IntToFloatConversionSignExtends)

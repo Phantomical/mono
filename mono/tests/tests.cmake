@@ -1089,10 +1089,9 @@ set(MONO_TESTS_DISABLED
 
 # Additionally excluded when running under the interpreter.
 set(MONO_TESTS_INTERP_DISABLED
-  # The three below are the same interpreter defects MONO_TESTS_TIER0_DISABLED
+  # The two below are the same interpreter defects MONO_TESTS_TIER0_DISABLED
   # names, and the reasons are written there. They fail here for the same
   # reason: the engine is the interpreter either way.
-  interp-float-to-int.exe
   interp-threadstatic-cctor.exe
   interp-array-set-typecheck.exe
   # With the interpreter as the whole engine there is no compiled tier, so the
@@ -1139,12 +1138,6 @@ set(MONO_TESTS_TIER0_DISABLED
   # A default-interface diamond resolves to one of the implementations where
   # the ambiguity is meant to raise.
   dim-diamondshape.exe
-  # An unchecked float-to-integer conversion that does not fit. float_to_int ()
-  # settles the answer for this runtime -- ECMA-335 leaves it unspecified, so
-  # every path has to reach the same one, and the compiled tier saturates. The
-  # interpreter casts in C, so a method answers one way before it is promoted
-  # and another after.
-  interp-float-to-int.exe
   # Reading a thread-static does not run the class initializer. The
   # special-static path carries the field's offset and no vtable, so nothing on
   # it can run one. ECMA-335 II.10.5.3.

@@ -4,6 +4,7 @@
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/FPEnv.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/Support/ErrorHandling.h>
 
@@ -247,25 +248,71 @@ int_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 	return adjust (builder, narrowed, stack_bits (target), target.is_signed);
 }
 
-/// value truncated toward zero into target, saturating if it does not fit.
+/// value truncated toward zero into to, through one of the constrained intrinsics.
 ///
 /// The spec leaves the out-of-range result unspecified. Any answer is legal, but every
-/// path to that answer must reach the same one. Plain fptosi and fptoui are poison out of
-/// range. Poison is not a value. LLVM folds a poison result to zero wherever it can see
-/// the operand. A value only known at run time keeps whatever the hardware conversion
-/// leaves behind. One call path can convert -1.0f to ushort as 65535. Another path,
-/// differing only in that the constant reached the conversion, converts it as 0.
+/// path must reach the same one, and plain fptosi and fptoui cannot do that. They are
+/// poison out of range, and poison is not a value. LLVM folds it to zero wherever it can
+/// see the operand. A value known only at run time instead keeps what the hardware
+/// conversion left behind. So one call path converts -1.0f to ushort as 65535 and
+/// another converts it as 0, with only the constant between them.
 ///
-/// Saturating gives a defined answer at the lowest cost. It is the same answer the
-/// checked conversions already give.
+/// The constrained intrinsics carry no poison clause, and LLVM constant folds none of
+/// them, so each one reaches the target's own conversion instruction. On amd64 that is
+/// cvttsd2si, which answers with the integer indefinite value. The interpreter's C cast
+/// compiles to the same instruction, so the two engines agree with no range test in
+/// front of either of them.
+///
+/// fpexcept.ignore asks for the value and no more than the value. The strictfp attribute
+/// is what a constrained intrinsic requires of the function that holds it.
+llvm::Value *
+constrained_float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *to,
+                          bool is_signed)
+{
+	builder.GetInsertBlock ()->getParent ()->addFnAttr (llvm::Attribute::StrictFP);
+
+	llvm::Intrinsic::ID convert = is_signed
+	                                      ? llvm::Intrinsic::experimental_constrained_fptosi
+	                                      : llvm::Intrinsic::experimental_constrained_fptoui;
+
+	return builder.CreateConstrainedFPCast (convert, value, to, {}, "", nullptr,
+	                                        std::nullopt, llvm::fp::ebIgnore);
+}
+
+/// value truncated toward zero into an unsigned int64.
+///
+/// This is the one conversion amd64 has no instruction for. cvttsd2si is signed, so a
+/// value from 2^63 up has to come back through the low half: subtract 2^63, convert, and
+/// put the bit back.
+///
+/// The direction of the test decides what a NaN gives, and the two directions disagree.
+/// The test here is "below 2^63", which a NaN fails. A NaN therefore takes the
+/// subtraction and comes out as zero. mono_fconv_u8 () (mono/mini/jit-icalls.c) tests the
+/// same way, and the interpreter reaches that helper for MINT_CONV_U8_R8. So this shape is
+/// what the two engines agree on, not the one LLVM picks for itself.
+llvm::Value *
+float_to_uint64 (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *to)
+{
+	llvm::Value *two63 = llvm::ConstantFP::get (value->getType (), 9223372036854775808.0);
+	llvm::Value *below = builder.CreateFCmpOLT (value, two63);
+	llvm::Value *operand =
+		builder.CreateSelect (below, value, builder.CreateFSub (value, two63));
+	llvm::Value *converted = constrained_float_to_int (builder, operand, to, true);
+	llvm::Value *put_back =
+		builder.CreateAdd (converted, llvm::ConstantInt::get (to, 1ull << 63));
+
+	return builder.CreateSelect (below, converted, put_back);
+}
+
+/// value truncated toward zero into target.
 llvm::Value *
 float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 {
 	llvm::Type *to = builder.getIntNTy (stack_bits (target));
-	llvm::Intrinsic::ID convert =
-		target.is_signed ? llvm::Intrinsic::fptosi_sat : llvm::Intrinsic::fptoui_sat;
 	llvm::Value *converted =
-		builder.CreateIntrinsic (convert, {to, value->getType ()}, {value});
+		!target.is_signed && target.bits == 64
+			? float_to_uint64 (builder, value, to)
+			: constrained_float_to_int (builder, value, to, target.is_signed);
 
 	// int_to_int () applies the same truncation conv already uses for oversized integers.
 	return int_to_int (builder, converted, target);
@@ -461,8 +508,8 @@ MethodLLVMEmitter::emit_checked_int_conv (MonoIrBuilder &builder, llvm::Value *v
 /// source type can carry.
 ///
 /// The comparisons are ordered, so a NaN lands on neither side and overflows. The
-/// conversion still saturates, so the value is defined even on the path that goes on to
-/// throw.
+/// conversion goes in the block the test falls through to, so it runs only on a value it
+/// has a result for.
 llvm::Value *
 MethodLLVMEmitter::emit_checked_float_conv (MonoIrBuilder &builder, llvm::Value *value,
                                             ConvType type)
@@ -486,9 +533,7 @@ MethodLLVMEmitter::emit_checked_float_conv (MonoIrBuilder &builder, llvm::Value 
 	emit_cond_exception (builder, builder.CreateNot (in_range), "OverflowException");
 
 	llvm::Type *to = builder.getIntNTy (target.bits);
-	llvm::Intrinsic::ID convert =
-		target.is_signed ? llvm::Intrinsic::fptosi_sat : llvm::Intrinsic::fptoui_sat;
-	llvm::Value *converted = builder.CreateIntrinsic (convert, {to, fp}, {value});
+	llvm::Value *converted = constrained_float_to_int (builder, value, to, target.is_signed);
 
 	return adjust (builder, converted, stack_bits (target), target.is_signed);
 }

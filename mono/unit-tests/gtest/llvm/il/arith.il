@@ -164,6 +164,22 @@
 		ret
 	}
 
+	.method public static int64 ConvLongFromDouble (float64 a) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		conv.i8
+		ret
+	}
+
+	.method public static uint64 ConvULongFromDouble (float64 a) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		conv.u8
+		ret
+	}
+
 	.method public static int64 ConvOvfLongFromDouble (float64 a) cil managed
 	{
 		.maxstack 1
