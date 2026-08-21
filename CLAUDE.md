@@ -386,15 +386,23 @@ Backend debugging env vars:
   interpreted callee into one process — no threshold produces that, since a callee is
   called at least as often as its caller.
 - `MONO_LLVM_JIT_INLINE_IL_LIMIT=<n>` (`runtime/options.cpp`) — the largest callee, in
-  IL bytes, a tier-2 compile folds into its caller, default 32. Zero turns the
-  pre-pass off and compiles the method with every call standing, which is what tells
-  a bug in a folded body from a bug in the method that folded it. The limit is a
-  backstop rather than a policy: the shape test in front of it already refuses
-  everything but a straight line ending in one call.
+  IL bytes, the tier-2 shape-test pre-pass folds into its caller, default 32. Zero turns
+  that pre-pass off, which is what tells a bug in a body it folded from a bug in the
+  method that folded it. The limit is a backstop rather than a policy: the shape test in
+  front of it already refuses everything but a straight line ending in one call.
+- `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=<n>` (`runtime/options.cpp`) — the largest callee,
+  in IL bytes, the tier-2 cost model translates in order to weigh it, default 128. It
+  bounds translation rather than code size, since LLVM's own threshold decides what is
+  worth folding. Zero leaves tier 2 with the shape-test pre-pass alone, which is what
+  separates a cost-model defect from one in the pre-pass.
+- `MONO_LLVM_JIT_INLINE_DEPTH=<n>` (`runtime/options.cpp`) — how many folds deep past a
+  method the cost model may go, default 4. A call graph with a cycle in it never runs out
+  of sites, so the loop needs this whatever the budget says.
 - `MONO_LLVM_JIT_INLINE_BUDGET=<n>` (`runtime/options.cpp`) — how many bodies one
-  tier-2 compile may fold in, default 16. It bounds the translation the pre-pass
-  adds, and a chain of forwarders is what spends it. `MONO_LLVM_JIT_TRACE=1` prints
-  a line for each fold, which is the only place a fold is visible from outside.
+  tier-2 compile may fold in, default 16. It bounds the translation both inliners add,
+  and they spend the one count between them; a chain of forwarders is what spends it.
+  `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a fold is
+  visible from outside.
 - `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to a debugger
   through gdb's JIT interface, so `info functions` names JIT'd methods and a `bt`
   taken from runtime C code unwinds managed frames with names instead of `??`. What
@@ -460,7 +468,8 @@ read by `interp-entry-thunk.S` as well as by `amd64.hpp`, so it holds nothing bu
   `arch/amd64/`, not a hunt through the backend for the amd64 in it.
 - **`passes/`** — `array-address` and `lower-builtins` rewrite the symbolic calls the
   front end leaves standing; `restore-tail-position` puts back the tail position
-  SimplifyCFG merged away; `eh-gather` and `finally-range` are `MachineFunctionPass`es
+  SimplifyCFG merged away; `top-down-inline` is tier 2's cost model and `inline-copies`
+  the sweep behind it; `eh-gather` and `finally-range` are `MachineFunctionPass`es
   that emit nothing and instead fill in the side channel the EH sections are written from.
 
 No pass includes a mono header — not one of them, and that is the rule for new ones.
@@ -469,6 +478,11 @@ declaration whose *name* says what the site means (`mono.array.address.*`,
 `mono.builtin.*`) and whose attributes carry the numbers, and the pass rewrites it into
 real IR before the optimizer runs. Encode the fact in the declaration rather than
 reverse-engineering it from the emitted arithmetic.
+
+A pass that has to *ask* rather than read takes an interface the engine implements —
+`InlineCandidates` (`passes/top-down-inline.hpp`) is the one, since a cost model cannot
+decide in advance which bodies it will want translated. Keep such an interface to
+LLVM types, and keep the metadata on the engine's side of it.
 
 **Code memory is a `MonoCodeManager`.** A domain's `CodeArena` (`jitlink-memory.hpp`) is
 mono's own code manager plus a mutex. Everything the backend allocates comes out of it —
@@ -588,18 +602,43 @@ local linkage. A candidate is a straight line of value opcodes, then at most one
 call, then `ret` or `throw` — a constant, a chain of field accesses, a forward to
 one other method, a throw, an object made and returned — inside
 `MONO_LLVM_JIT_INLINE_IL_LIMIT` bytes of IL and past gates that are about
-correctness rather than cost: no wrapper, no dynamic method, no clauses, no
-`NoInlining` on the callee or on what it forwards to, no shared body, no call
-instrumentation, and nothing at all while `gen-seq-points` is on. A body the
-inliner leaves standing fails the compile rather than being published, because it
-would be entered by a direct call with no jit info of its own; at tier 2 that
-failure leaves the method on the tier it already runs at. A folded frame is gone
-from a stack trace, and its code answers with the IL offset of the call site.
+correctness rather than cost (`may_fold ()`, `runtime/inline-scope.cpp`): no
+wrapper, no dynamic method, no clauses, no `NoInlining` on the callee or on what
+it forwards to, no shared body, no call instrumentation, and nothing at all while
+`gen-seq-points` is on. A folded frame is gone from a stack trace, and its code
+answers with the IL offset of the call site.
 
-There is no cost model. Weighing a callee that is not one of these shapes is the
-next piece of work, and `.claude/plans/tier2-inlining.md` is the design for it —
-along with what an inlined callee's own EH clauses need, and what a detour or an
-override has to do to a body that folded the method in.
+**Behind it is a cost model, and it goes top-down.** `TopDownInlinerPass`
+(`passes/top-down-inline.cpp`) runs after the first simplification and ranks the
+method's call sites by the block counts the profile gave them, hottest first. Each
+candidate is translated on demand — `ProfileInliner` (`runtime/profile-inlines.cpp`)
+is what the pass asks, since the pass itself names no metadata — so a site the
+gates or `getInlineCost` refuse costs nothing but the questions. A candidate
+arrives with its own trivial callees already folded in, both inliners spend the
+one `MONO_LLVM_JIT_INLINE_BUDGET`, and everything past `may_fold ()` is a
+correctness gate of its own: no clauses, inside
+`MONO_LLVM_JIT_INLINE_COST_IL_LIMIT` bytes of IL, no `calli` and no direct call to
+a `NoInlining` method (`loses_its_frame_safely ()`, which is the frame-reading gate
+widened to a body with several calls). A caller with no profile still inlines, off
+the static frequencies BFI falls back to.
+
+**A body neither inliner folded in is taken back off.**
+`StripInlineCopiesPass` (`passes/inline-copies.cpp`) deletes every copy still
+standing and puts the call back on the callee's thunk — which is what lets a cost
+model translate, weigh and refuse without owing a cleanup. Without it such a body
+would be entered by a direct call with no jit info of its own, so a stack walk
+over its frame would find nothing.
+
+**A detour or an override reaches a folded copy through the record.** A copy sits
+under no thunk, so redirecting the method's entry misses it. Each method's record
+names the methods that folded it in (`note_folded_into ()`), and
+`install_detour ()` takes each of those back to the tier it ran at before and bars
+it from tier 2 for good — `mono/tests/tier2-inline-override.cs` is both arms. A
+thread already inside such a body still is: there is no on-stack replacement here.
+
+What is left of `.claude/plans/tier2-inlining.md` is the EH work: `may_fold ()`
+refuses a clause-bearing callee outright, and lifting that needs the clause
+indices rebased into a combined array and each landing pad's dispatch rebuilt.
 
 What that costs is worth knowing before optimizing anything here: **87% of a compile is
 LLVM and 5.5% is the CIL→IR front end**, and 70% of the total is a per-method floor that
