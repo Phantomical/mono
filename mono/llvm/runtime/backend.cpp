@@ -686,6 +686,17 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 
 	dm.publish (tier, entry);
 	dm.attach_body (tier, entry, nullptr);
+
+	/*
+	 * The instantiation has an entry now, and this is the only place that says
+	 * so: the notification the compile path sends names the method a body was
+	 * built for, which here is the shared form. The interpreter keeps nothing
+	 * for that one - it runs the instantiation - so without this an interpreted
+	 * caller goes on interpreting a method it could call.
+	 */
+	if (mono_use_interpreter)
+		mini_get_interp_callbacks ()->method_compiled (domain.domain, dm.method);
+
 	return Compiled { entry, nullptr };
 }
 

@@ -23,6 +23,7 @@
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/reflection-internals.h>
 #include <mono/utils/unlocked.h>
+#include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-memory-model.h>
 
 #include <mono/mini/mini.h>
@@ -3698,35 +3699,69 @@ static mono_mutex_t calc_section;
 using namespace mono::interp;
 
 /*
- * Whether do_jit_call () can marshal a call to METHOD at all. These are limits
- * of that marshalling - what the gsharedvt_out wrapper can be built for and what
- * the interpreter's stack can be handed across - rather than a policy about when
- * calling natively is worth it. A method that fails here stays interpreted
- * however thoroughly it has been compiled.
+ * Why do_jit_call () cannot marshal a call to method, or NULL when it can.
+ *
+ * These are limits of that marshalling - what the gsharedvt_out wrapper can be
+ * built for and what the interpreter's stack can be handed across - rather than
+ * a policy about when calling natively is worth it. A method that is refused
+ * here stays interpreted however thoroughly it has been compiled.
  */
-gboolean
-mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig)
+static const char *
+interp_jit_call_refusal (MonoMethod *method, MonoMethodSignature *sig)
 {
+	/* jit_call_cb () spells out the call for each argument count and stops at
+	 * eight. The receiver and the return address take two of those places. */
 	if (sig->param_count > 6)
-		return FALSE;
+		return "the callee takes too many arguments";
 	/* The callee's own signature says nothing about the arguments a vararg
 	 * call site actually pushed, so the wrapper cannot be built for one. */
 	if (sig->call_convention == MONO_CALL_VARARG)
-		return FALSE;
+		return "the callee is vararg";
 	if (sig->pinvoke)
-		return FALSE;
+		return "the signature is a p/invoke one";
 	if (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL)
-		return FALSE;
+		return "the callee is a p/invoke";
 	if (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
-		return FALSE;
-	if (method->is_inflated)
-		return FALSE;
+		return "the callee is an internal call";
+	/*
+	 * An instantiation is called like any other method: its entry supplies
+	 * whatever context the body behind it reads, because the backend puts a
+	 * context stub in front of a shared body rather than asking the caller
+	 * for one. A method that still names a type parameter has no entry of
+	 * its own to call, and its signature names the parameter too, so the
+	 * wrapper would have to be built for a type with no layout yet.
+	 */
+	if (mono_method_check_context_used (method) != 0)
+		return "the callee still depends on type parameters";
 	if (method->string_ctor)
-		return FALSE;
+		return "the callee is a string constructor";
 	if (method->wrapper_type != MONO_WRAPPER_NONE)
-		return FALSE;
+		return "the callee is a wrapper";
 
-	return TRUE;
+	return NULL;
+}
+
+gboolean
+mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig)
+{
+	const char *refusal = interp_jit_call_refusal (method, sig);
+
+	/*
+	 * A refused method is interpreted, which is what it was doing anyway, so
+	 * nothing about the program says the answer was taken. The tiered mask
+	 * rather than the transform's own verbose level: --interp=verbose= also
+	 * makes the interpreter the whole engine, and the answer here is only
+	 * interesting while there is a compiled tier to refuse.
+	 */
+	if (refusal != NULL && MONO_TRACE_IS_TRACED (G_LOG_LEVEL_DEBUG, MONO_TRACE_TIERED)) {
+		char *name = mono_method_full_name (method, TRUE);
+
+		mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_TIERED, "Decline jit call to %s: %s",
+		            name, refusal);
+		g_free (name);
+	}
+
+	return refusal == NULL;
 }
 
 gboolean

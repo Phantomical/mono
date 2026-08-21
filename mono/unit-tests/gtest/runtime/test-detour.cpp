@@ -17,6 +17,7 @@
 #include "config.h"
 
 #include "metadata/class-internals.h"
+#include "metadata/metadata-internals.h"
 #include "metadata/object-internals.h"
 #include "mini/domain-method.h"
 #include "mini/jit.h"
@@ -98,6 +99,25 @@ protected:
 
 		mono_error_assert_ok (error);
 		return found;
+	}
+
+	/* The one instantiation over string of a one-type-parameter method. It is
+	 * the same MonoMethod the caller's own token resolves to, since inflating
+	 * is cached. */
+	static MonoMethod *instantiated_over_string (MonoMethod *definition)
+	{
+		ERROR_DECL (error);
+		MonoType *arguments[1] = { m_class_get_byval_arg (mono_get_string_class ()) };
+		MonoGenericContext context;
+
+		memset (&context, 0, sizeof (context));
+		context.method_inst = mono_metadata_get_generic_inst (1, arguments);
+
+		MonoMethod *inflated =
+			mono_class_inflate_generic_method_checked (definition, &context, error);
+
+		mono_error_assert_ok (error);
+		return inflated;
 	}
 
 	/* What a managed caller answers, run through an ordinary invoke. */
@@ -193,6 +213,37 @@ TEST_F (MethodDetour, IsSeenByAnInterpretedCaller)
 
 	ASSERT_NE (nullptr, target);
 	ASSERT_NE (nullptr, caller);
+	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+		<< "the caller no longer starts at tier 0, so it is not interpreted";
+	ASSERT_GT (mono_llvm_jit_tier0_calls (target), 0)
+		<< "the callee already has code, so this checks a compiled call";
+
+	mono_install_method_detour (target, mono_domain_get (), (void *) detoured_body);
+
+	EXPECT_EQ (1001, invoke (caller, 1));
+}
+
+/*
+ * So does an interpreted caller of a generic method. An instantiation is
+ * entered exactly like any other method - its entry supplies whatever context
+ * the body behind it reads - so the interpreter has the same two choices for it
+ * and takes the same one.
+ *
+ * The detour is the instrument rather than the subject here. It is what makes
+ * the answer say which choice was taken, and it needs no promotion to land
+ * first, so this arm is not racing a background compile.
+ */
+TEST_F (MethodDetour, IsSeenByAnInterpretedCallerOfAnInstantiation)
+{
+	MonoMethod *definition = method_named ("GenericTarget", 1);
+	MonoMethod *caller = method_named ("CallGenericTarget", 1);
+
+	ASSERT_NE (nullptr, definition);
+	ASSERT_NE (nullptr, caller);
+
+	MonoMethod *target = instantiated_over_string (definition);
+
+	ASSERT_NE (nullptr, target);
 	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
 	ASSERT_GT (mono_llvm_jit_tier0_calls (target), 0)

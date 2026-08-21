@@ -37,6 +37,24 @@ struct Quad {
 	public float a, b, c, d;
 }
 
+/* One field, so the shared signature a wrapper is cached under is decided
+ * entirely by what T maps to. */
+struct Cell<T> {
+	public T v;
+}
+
+/* An instance method reads its context out of the receiver, which is the arm of
+ * the crossing that needs no context stub, and the control for the one that
+ * does. */
+class Holder<T> where T : class {
+	T held;
+
+	public Holder (T v) { held = v; }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public T Get () { return held; }
+}
+
 class Tests
 {
 	public static int Main (string[] args) {
@@ -155,6 +173,139 @@ class Tests
 			Quad r = quad_roundtrip (q);
 			if (r.a != 1.0f || r.b != 2.0f || r.c != 3.0f || r.d != 4.0f)
 				return 1;
+		}
+		return 0;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static T generic_echo<T> (T v) {
+		return v;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Wide generic_wide<T> (T seed, long bias) {
+		Wide w;
+		w.a = bias; w.b = bias + 1; w.c = bias + 2; w.d = bias + 3;
+		return w;
+	}
+
+	/* An instantiation is called like any other method, so the return of a
+	 * generic one has the same hidden-pointer axis as the tests above. What
+	 * this adds is that the callee is an instantiation at all: those were
+	 * refused the crossing outright, and every one of them was interpreted
+	 * however thoroughly it had been compiled. */
+	public static int test_0_generic_echo_reference () {
+		for (int i = 0; i < iterations; i++) {
+			string s = generic_echo<string> ("seam");
+			if (s != "seam")
+				return 1;
+		}
+		return 0;
+	}
+
+	public static int test_0_generic_echo_long () {
+		for (int i = 0; i < iterations; i++) {
+			long v = generic_echo<long> (i);
+			if (v != i)
+				return 1;
+		}
+		return 0;
+	}
+
+	public static int test_0_generic_wide_return () {
+		for (int i = 0; i < iterations; i++) {
+			Wide w = generic_wide<string> ("x", i);
+			if (w.a != i || w.b != i + 1 || w.c != i + 2 || w.d != i + 3)
+				return 1;
+		}
+		return 0;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Cell<Vector4> cell_simd_roundtrip (Cell<Vector4> c) {
+		return c;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Cell<Quad> cell_quad_roundtrip (Cell<Quad> c) {
+		return c;
+	}
+
+	/*
+	 * The wrappers the crossing is marshalled through are cached by a shared
+	 * signature, and a value type is mapped into that signature field by
+	 * field. So the SIMD refusal has to be taken at the leaf: a container
+	 * whose field is swapped for a plain struct of the same floats is shared
+	 * with the container holding the plain struct, and one of the two is then
+	 * called under the other's convention.
+	 *
+	 * Instantiations reach this mapping in far greater numbers than anything
+	 * else does, which is why the pair below is generic where the Vector4 and
+	 * Quad pair above is not.
+	 */
+	public static int test_0_cell_simd_roundtrip () {
+		Cell<Vector4> c = new Cell<Vector4> ();
+		c.v = new Vector4 (1.0f, 2.0f, 3.0f, 4.0f);
+
+		for (int i = 0; i < iterations; i++) {
+			Cell<Vector4> r = cell_simd_roundtrip (c);
+			if (r.v.X != 1.0f || r.v.Y != 2.0f || r.v.Z != 3.0f || r.v.W != 4.0f)
+				return 1;
+		}
+		return 0;
+	}
+
+	public static int test_0_cell_quad_roundtrip () {
+		Cell<Quad> c = new Cell<Quad> ();
+		c.v.a = 1.0f; c.v.b = 2.0f; c.v.c = 3.0f; c.v.d = 4.0f;
+
+		for (int i = 0; i < iterations; i++) {
+			Cell<Quad> r = cell_quad_roundtrip (c);
+			if (r.v.a != 1.0f || r.v.b != 2.0f || r.v.c != 3.0f || r.v.d != 4.0f)
+				return 1;
+		}
+		return 0;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static T ref_pick<T> (T a, T b, bool first) where T : class {
+		return first ? a : b;
+	}
+
+	/*
+	 * Two reference instantiations of one static generic method, each crossing
+	 * with its own type argument. This is the shape that reads its type
+	 * arguments out of an MRGCTX when one body serves both, so an
+	 * instantiation answering with the other one's argument is what a wrong
+	 * context looks like. Which body serves it depends on the tier the run
+	 * reaches it at, and the answers must agree either way.
+	 */
+	public static int test_0_ref_pick () {
+		string s = "seam";
+		object o = new object ();
+
+		for (int i = 0; i < iterations; i++) {
+			if ((object) ref_pick<string> (s, "other", true) != (object) s)
+				return 1;
+			if (ref_pick<object> (o, o, false) != o)
+				return 2;
+		}
+		return 0;
+	}
+
+	/* The receiver arm of the same question: an instance method on a generic
+	 * class takes its context from the object rather than from a register. */
+	public static int test_0_ref_holder () {
+		string s = "seam";
+		Holder<string> hs = new Holder<string> (s);
+		object o = new object ();
+		Holder<object> ho = new Holder<object> (o);
+
+		for (int i = 0; i < iterations; i++) {
+			if ((object) hs.Get () != (object) s)
+				return 1;
+			if (ho.Get () != o)
+				return 2;
 		}
 		return 0;
 	}

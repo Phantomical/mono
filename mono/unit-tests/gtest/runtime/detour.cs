@@ -32,6 +32,23 @@ public class Detour
 		return Inlined (x);
 	}
 
+	/*
+	 * An instantiation, for the arm that asks whether an interpreted caller
+	 * reaches a generic callee's entry at all. T is in the method's context
+	 * and not in its signature, so the same native body detours this one and
+	 * Target ().
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static int GenericTarget<T> (int x)
+	{
+		return x + 1;
+	}
+
+	public static int CallGenericTarget (int x)
+	{
+		return GenericTarget<string> (x);
+	}
+
 	public static int Main ()
 	{
 		return 0;

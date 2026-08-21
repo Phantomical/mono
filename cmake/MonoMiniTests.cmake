@@ -104,7 +104,7 @@ if(MONO_ENABLE_INTERPRETER)
   add_test(NAME "mini-regression/tier-seam"
            COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                    "${CMAKE_COMMAND}"
-                   "-DMONO_TRACE_REQUIRE=Tests:wide_static_noargs;Tests:wide_static_onearg;Tests:wide_instance_noargs;Tests:narrow_static_noargs;Tests:simd_roundtrip;Tests:quad_roundtrip"
+                   "-DMONO_TRACE_REQUIRE=Tests:wide_static_noargs;Tests:wide_static_onearg;Tests:wide_instance_noargs;Tests:narrow_static_noargs;Tests:simd_roundtrip;Tests:quad_roundtrip;Tests:generic_echo;Tests:generic_wide;Tests:cell_simd_roundtrip;Tests:cell_quad_roundtrip"
                    -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunTracedTest.cmake"
                    -- "${_wrapper}" --regression tier-seam.exe
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
