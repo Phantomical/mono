@@ -22,9 +22,10 @@ namespace mono::interp {
 		MONO_INTERP_DISPATCH ();                                 \
 	}
 
-// Loading from a local may need a sign or zero extension to 4 bytes, which is the
-// smallest thing the interpreter holds a value in. Only a local whose address is
-// taken needs one, since nothing can propagate that local away.
+// Loading from a local can need a sign or zero extension to 4 bytes, the narrowest
+// value the interpreter tracks. The extension matters for a local whose address is
+// taken. A narrow store through the pointer writes those bytes alone, and the rest
+// of the slot keeps an older value.
 IMPL_MOV (MINT_MOV_I1, guint32, gint8);
 IMPL_MOV (MINT_MOV_U1, guint32, guint8);
 IMPL_MOV (MINT_MOV_I2, guint32, gint16);

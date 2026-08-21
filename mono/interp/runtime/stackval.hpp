@@ -16,12 +16,12 @@
 namespace mono::interp {
 
 /*
- * Moving a value between the interpreter stack and memory laid out the way the
- * runtime lays out a field, an array element or a pinvoke argument. pinvoke
- * picks the native layout of a value type over the managed one.
+ * Moves a value between the interpreter stack and memory laid out as a field,
+ * an array element, or a pinvoke argument. pinvoke picks the native layout of
+ * a value type over the managed one.
  *
- * Both return the size the value takes on the interpreter stack, which is a
- * whole number of slots and so is not the size in memory.
+ * Both return the size the value takes on the interpreter stack: a whole
+ * number of slots, not a size in memory.
  */
 
 inline int
@@ -83,7 +83,7 @@ stackval_from_data (MonoType *type, stackval *result, const void *data, gboolean
 		return MINT_STACK_SLOT_SIZE;
 	case MONO_TYPE_TYPEDBYREF:
 		/*
-		 * The transform pushes a TypedReference as a value of this size, so a plain
+		 * The transform pushes a TypedReference as a value of this size. A plain
 		 * copy is what the interpreter stack expects on either side of the boundary.
 		 */
 		std::memcpy (result, data, sizeof (MonoTypedRef));
@@ -151,10 +151,10 @@ stackval_to_data (MonoType *type, stackval *val, void *data, gboolean pinvoke)
 	}
 	case MONO_TYPE_I: {
 		mono_i *p = static_cast<mono_i *> (data);
-		/* In theory the value used by stloc should match the local var type
-	 	   but in practice it sometimes doesn't (a int32 gets dup'd and stloc'd into
-		   a native int - both by csc and mcs). Not sure what to do about sign extension
-		   as it is outside the spec... doing the obvious */
+		/* The value stloc stores does not always agree with the local's type.
+		   csc and mcs both dup an int32 and stloc it into a native int local.
+		   The spec does not say what to do about sign extension there. We copy
+		   the slot as a native int and extend nothing. */
 		*p = (mono_i) val->data.nati;
 		return MINT_STACK_SLOT_SIZE;
 	}

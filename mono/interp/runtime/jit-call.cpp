@@ -177,9 +177,9 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 		if (mt == MintType::VT) {
 			MonoClass *klass = mono_class_from_mono_type_internal (sig->ret);
 			/*
-			 * We cache this size here, instead of the instruction stream of the
-			 * calling instruction, to save space for common callvirt instructions
-			 * that could end up doing a jit call.
+			 * We keep this size here, and not in the calling instruction. callvirt
+			 * instructions are common, and any of them can end in a jit call. The
+			 * size in the instruction stream makes all of them larger.
 			 */
 			gint32 size = mono_class_value_size (klass, NULL);
 			cinfo->res_size = ALIGN_TO (size, MINT_VT_ALIGNMENT);
@@ -202,7 +202,7 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 			} else if (mt == MintType::O) {
 				cinfo->arginfo[i] = JIT_ARG_BYREF;
 			} else {
-				/* stackval->data is an union */
+				/* stackval->data is a union */
 				cinfo->arginfo[i] = JIT_ARG_BYREF;
 			}
 		}
@@ -221,8 +221,9 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 	//printf ("jit_call: %s\n", mono_method_full_name (rmethod->method, 1));
 
 	/*
-	 * Call JITted code through a gsharedvt_out wrapper. These wrappers receive every argument
-	 * by ref and return a return value using an explicit return value argument.
+	 * Call JITted code through a gsharedvt_out wrapper: it takes every argument
+	 * by reference and writes its result through an explicit return-value
+	 * argument.
 	 */
 	if (G_UNLIKELY (!rmethod->jit_call_info)) {
 		init_jit_call_info (rmethod, error);
@@ -231,7 +232,8 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 	cinfo = static_cast<JitCallInfo *> (rmethod->jit_call_info);
 
 	/*
-	 * Convert the arguments on the interpeter stack to the format expected by the gsharedvt_out wrapper.
+	 * Convert the arguments on the interpreter stack to the format the
+	 * gsharedvt_out wrapper expects.
 	 */
 	gpointer args[32];
 	int pindex = 0;
@@ -248,13 +250,13 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 		if (cinfo->arginfo[i] == JIT_ARG_BYVAL)
 			args[pindex++] = sval->data.p;
 		else
-			/* data is an union, so can use 'p' for all types */
+			/* data is a union, so can use 'p' for all types */
 			args[pindex++] = sval;
 	}
 
-	/* Every field is written below and nothing reads the padding, so the
-	 * struct is not zeroed first: gcc turns a 40-byte memset into a rep stos
-	 * whose startup alone is a tenth of the call. */
+	/* Every field here is written below, and the padding is never read, so we
+	 * do not zero the struct first. gcc turns a 40-byte memset into a rep
+	 * stos, and its startup alone costs a tenth of the call. */
 	JitCallCbData cb_data;
 	cb_data.jit_wrapper = cinfo->wrapper;
 	cb_data.pindex = pindex;

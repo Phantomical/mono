@@ -145,7 +145,7 @@ initialize_arg_offsets (InterpMethod *imethod)
 	mono_memory_write_barrier ();
 	/* Two threads can reach this for the same method. The winner hands its table
 	 * to the method, which holds it for as long as the domain lives and never
-	 * gives it back; the loser still owns the one it built, and drops it here. */
+	 * gives it back. The loser still owns the one it built and drops it here. */
 	if (mono_atomic_cas_ptr (reinterpret_cast<gpointer *> (&imethod->arg_offsets),
 	                         arg_offsets.get (), NULL)
 	    == NULL)
@@ -169,12 +169,11 @@ inline guint32
 get_arg_offset (InterpMethod *imethod, MonoMethodSignature *sig, int index)
 {
 	/*
-	 * A managed-to-native wrapper is entered with one signature and calls out with
-	 * another, and at the native call the frame holds the marshalled values, laid
-	 * out under the second. The cached offsets describe the first only, so they
-	 * answer for the signature they were built from and nothing else. HandleRef is
-	 * where the difference shows: two words as the managed type, one word once the
-	 * wrapper has extracted the handle.
+	 * A managed-to-native wrapper is entered with one signature and calls out
+	 * with another. At the native call, the frame holds the marshalled values,
+	 * laid out under the second signature. The cached offsets describe the
+	 * first signature only. HandleRef shows the difference: two words as the
+	 * managed type, one word once the wrapper extracts the handle.
 	 */
 	if (imethod && sig == mono_method_signature_internal (imethod->method))
 		return get_arg_offset_fast (imethod, index);

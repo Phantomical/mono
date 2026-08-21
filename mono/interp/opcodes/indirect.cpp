@@ -73,9 +73,8 @@ IMPL_STIND (MINT_STIND_I, mono_i);
 
 /*
  * The value-type forms below check their pointers the same way IMPL_STIND does.
- * A fault inside memcpy is not at a managed address, so the signal handler
- * cannot turn it back into a NullReferenceException and the process dies
- * instead.
+ * A fault inside memcpy is not at a managed address. The signal handler cannot
+ * turn it into a NullReferenceException, and the process dies instead.
  */
 
 MONO_INTERP_OP_IMPL (MINT_LDOBJ_VT)

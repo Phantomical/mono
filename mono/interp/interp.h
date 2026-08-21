@@ -13,7 +13,7 @@
 MONO_BEGIN_DECLS
 
 /* How many arguments a method can have and still be entered through one of the
- * pre-built entry functions rather than a generated one. */
+ * pre-built entry functions rather than a generic one. */
 #define MAX_INTERP_ENTRY_ARGS 8
 
 enum {
@@ -24,10 +24,7 @@ enum {
 	INTERP_OPT_DEFAULT = INTERP_OPT_INLINE | INTERP_OPT_CPROP | INTERP_OPT_BBLOCKS
 };
 
-/* must be called either
- *  - by mini_init ()
- *  - xor, before mini_init () is called (embedding scenario).
- */
+/* Call this from mini_init (), or before it in an embedding scenario, never both. */
 MONO_API void mono_ee_interp_init (const char *);
 
 MONO_END_DECLS

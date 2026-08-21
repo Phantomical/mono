@@ -56,12 +56,13 @@ interp_get_native_func_wrapper (InterpMethod *imethod, MonoMethodSignature *csig
 
 /*
  * Settle how calls to imethod are made and record the answer on it. A call goes
- * natively, through do_jit_call (), when the method already has code or when its
- * entry address is in native hands. The method is interpreted otherwise.
+ * natively, through do_jit_call (), when the method already has code or its entry
+ * address is in native hands. It also has to be a call do_jit_call () can marshal.
+ * Anything else is interpreted.
  *
- * IMETHOD_CODE_COMPILED is a permanent answer - a body is never taken back and
- * the address it is entered at is fixed - while IMETHOD_CODE_INTERP is only true
- * until something compiles the method, which interp_method_compiled () reports.
+ * IMETHOD_CODE_COMPILED is a permanent answer: a body is never taken back, and
+ * the address it is entered at is fixed. IMETHOD_CODE_INTERP is only true until
+ * something compiles the method, and interp_method_compiled () reports that.
  */
 static MONO_NEVER_INLINE InterpMethodCodeType
 resolve_code_type (InterpMethod *imethod)
@@ -88,11 +89,12 @@ resolve_code_type (InterpMethod *imethod)
 }
 
 /*
- * Transform CMETHOD, which FRAME is about to be handed to by a tail call.
+ * Transform cmethod, which frame is about to be handed to by a tail call.
  *
- * Unlike the frame do_transform_method () runs under, this one is complete and still
- * executing the method it is being taken away from, so the walk a class load or a throw
- * inside the transform can trigger has to find it rather than its parent.
+ * Unlike the frame do_transform_method () runs under, this one is already complete:
+ * it is still executing the method it is being taken away from. A class load or a
+ * throw inside the transform can start a stack walk, and that walk has to find this
+ * frame, not its parent.
  */
 static MonoException *
 do_transform_tail_callee (InterpFrame *frame, InterpMethod *cmethod, ThreadContext *context,
@@ -213,22 +215,19 @@ InterpState::calli ()
 MONO_ALWAYS_INLINE InterpState::OpFunc
 InterpState::tailcall ()
 {
-	// Tailcalls always stay in the interpreter. If we didn't, then something that
-	// is expected to use constant stack space can easily turn into a stack overflow
-	// if one method in a mutual recursion chain is promoted to tier1+ and the other
-	// is not.
+	// Tailcalls stay in the interpreter. Otherwise something that is expected to use
+	// constant stack space can turn into a stack overflow. That happens when one
+	// method in a mutual recursion chain is promoted to tier1+ and the other is not.
 
 	auto code_type = cmethod->code_type;
 	if (G_UNLIKELY (code_type == IMETHOD_CODE_UNKNOWN))
 		code_type = resolve_code_type (cmethod);
 
-	// Should the called method be promoted?
 	if (G_UNLIKELY (mono_atomic_load_i32_relaxed (&cmethod->tier_counter) > 0))
 		interp_check_call_promotion (cmethod);
 
-	// The one exception to sticking in the interpreter is self-calls. If we are
-	// compiled then we can turn that into a regular call and the compiled method
-	// will (usually) be able to tailcall internally.
+	// One exception: a self-call. If the callee is compiled we turn this into a
+	// regular call, and the compiled method will (usually) tailcall internally.
 	if (code_type == IMETHOD_CODE_COMPILED && cmethod == frame->imethod
 	    && cmethod->domain == mono_domain_get ())
 		return &exec_call;
@@ -239,7 +238,7 @@ InterpState::tailcall ()
 		EXCEPTION_CHECKPOINT;
 	}
 
-	// if the tailcall would overflow the stack then switch to a regular call
+	// switch to a regular call if the tailcall overflows the stack
 	if (G_UNLIKELY (reinterpret_cast<guchar *> (frame->stack) + cmethod->alloca_size
 	                > context->stack_start + INTERP_STACK_SIZE))
 		return &exec_call;
@@ -339,7 +338,7 @@ MONO_INTERP_OP_IMPL (MINT_CALL_DELEGATE)
 			}
 		} else {
 			// skip the delegate pointer for static calls
-			// FIXME we could avoid memmove
+			// FIXME: avoid this memmove
 			std::memmove (locals + call_args_offset,
 			              locals + call_args_offset + MINT_STACK_SLOT_SIZE, ip[2]);
 		}
@@ -451,7 +450,7 @@ typedef struct {
 	InterpMethod *target_imethod;
 } InterpVTableEntry;
 
-/* memory manager lock must be held */
+/// The caller must hold memory_manager's lock.
 static GSList *
 append_imethod (MonoMemoryManager *memory_manager, GSList *list, InterpMethod *imethod,
                 InterpMethod *target_imethod)
@@ -507,13 +506,13 @@ alloc_method_table (MonoVTable *vtable, int offset)
 }
 
 /*
- * Says whether the receiver's vtable has a slot for this offset.
+ * Reports whether the receiver's vtable has a slot for this offset.
  *
- * Both tables are indexed without a bound of their own, and the interface one
- * is indexed below the vtable pointer, so a receiver of the wrong class does
- * not read a wrong method - it reads, and then writes, outside the allocation.
- * One such receiver therefore becomes a corruptor of whatever the domain
- * allocated before the vtable, and the fault appears later somewhere else.
+ * Both tables are indexed without a bound of their own, and the interface one is
+ * indexed below the vtable pointer. A receiver of the wrong class therefore does
+ * not read a wrong method: it reads, and then writes, outside the allocation. One
+ * such receiver becomes a corruptor of whatever the domain allocated before the
+ * vtable, and the fault appears later somewhere else.
  *
  * A class with no interfaces gets imt_table_bytes = 0 in mono_class_create_runtime_vtable (),
  * so for it there is no region below the vtable at all.
@@ -632,8 +631,9 @@ MONO_INTERP_OP_IMPL (MINT_TAILCALLVIRT_FAST)
 
 MONO_INTERP_OP_IMPL (MINT_CALL_VARARG)
 {
-	// Same as MINT_CALL, except at ip [3] we have the index for the csignature,
-	// which is required by the called method to set up the arglist.
+	// Same as MINT_CALL, but with two extra operands: the vararg signature at
+	// ip [3] and the pushed arguments' stack size at ip [4]. MINT_INIT_ARGLIST
+	// reads both from the call site to build the arglist.
 	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 
@@ -643,7 +643,7 @@ MONO_INTERP_OP_IMPL (MINT_CALL_VARARG)
 
 MONO_INTERP_OP_IMPL (MINT_CALLVIRT)
 {
-	// FIXME CALLVIRT opcodes are not used on netcore. We should kill them.
+	// FIXME: CALLVIRT opcodes are not used on netcore. Remove them.
 	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
 	call_args_offset = ip[1];
 
@@ -680,9 +680,6 @@ MONO_INTERP_OP_IMPL (MINT_CALL)
 	return &exec_call;
 }
 
-// The transform picks this for a method the runtime implements itself rather than
-// in IL.
-
 MONO_INTERP_OP_IMPL (MINT_LDFTN)
 {
 	error_init_reuse (error);
@@ -700,10 +697,10 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 
 	/*
 	 * The method named, not the one that runs. This is what answers
-	 * RuntimeMethodHandle.GetFunctionPointer (), and a method that has been
-	 * overridden still has to answer its own entry there - the icall does, and
-	 * a patcher handed the replacement's address would write over the wrong
-	 * method.
+	 * RuntimeMethodHandle.GetFunctionPointer (). A method that has been
+	 * overridden still has to answer its own entry there, the way the icall
+	 * does. Get this wrong and a patcher handed the replacement's address
+	 * patches the wrong method.
 	 */
 	LOCAL_VAR (ip[1], gpointer) = native_entry_for_method (
 		LOCAL_VAR (ip[2], MonoMethod *), mono_domain_get (), error);

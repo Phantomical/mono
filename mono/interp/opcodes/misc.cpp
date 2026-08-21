@@ -130,7 +130,7 @@ MONO_INTERP_OP_IMPL (MINT_SAFEPOINT)
 
 MONO_INTERP_OP_IMPL (MINT_LDTOKEN)
 {
-	// FIXME same as MINT_MONO_LDPTR
+	// FIXME: same as MINT_MONO_LDPTR
 	LOCAL_VAR (ip[1], gpointer) = frame->imethod->data_items[ip[2]];
 
 	MONO_INTERP_OP_ADVANCE ();

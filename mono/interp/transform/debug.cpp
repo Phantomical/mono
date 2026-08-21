@@ -24,12 +24,18 @@
 
 namespace mono::interp {
 
-/*
- * ins_offset is the associated offset of this instruction
- * if ins is null, it means the data belongs to an instruction that was
- * emitted in the final code
- * ip is the address where the arguments of the instruction are located
- */
+/// Formats a decoded instruction's operand bytes for printing.
+///
+/// \param ins        the instruction being dumped, or null when \p data
+///                    points into the final compacted code instead. A branch
+///                    target prints as a block number in the first case and
+///                    as a raw offset in the second.
+/// \param ins_offset  this instruction's own offset, added to a branch's
+///                    operand to print its target when \p ins is null.
+/// \param data        the address holding the instruction's operand bytes.
+/// \param opcode      the opcode that decides how \p data is read.
+///
+/// Returns a newly allocated string the caller must free.
 char *
 dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, guint16 opcode)
 {
@@ -76,7 +82,7 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 	}
 	case MintOpShortBranch:
 		if (ins) {
-			/* the target IL is already embedded in the instruction */
+			/* the target block is already resolved */
 			g_string_append_printf (str, " BB%d", ins->info.target_bb->index);
 		} else {
 			target = ins_offset + *(gint16 *) data;
@@ -148,7 +154,7 @@ dump_interp_inst_no_newline (InterpInst *ins)
 	}
 
 	if (opcode == MINT_LDLOCA_S) {
-		// LDLOCA has special semantics, it has data in sregs [0], but it doesn't have any sregs
+		// MINT_LDLOCA_S is special: it has data in sregs [0] but reports no sregs.
 		g_print (" %d", ins->sregs[0]);
 	} else {
 		char *descr = dump_interp_ins_data (ins, ins->il_offset, &ins->data[0], ins->opcode);
@@ -187,12 +193,8 @@ encode_uleb128 (guint32 value, guint8 *p)
 	return p;
 }
 
-/*
- * interp_save_line_numbers:
- *
- *   Keep the bytecode offset -> IL offset map the transform built, so a stack
- * trace can report an IL offset for a frame of this method.
- */
+/// Keeps the bytecode-offset to IL-offset map the transform built, so a stack
+/// trace can report an IL offset for a frame of this method.
 void
 TransformData::interp_save_line_numbers (InterpMethod *rtm,
                                          const std::vector<MonoDebugLineNumberEntry> &line_numbers)
@@ -267,7 +269,6 @@ TransformData::interp_save_debug_info (InterpMethod *rtm, MonoMethodHeader *head
 	mono_debug_free_method_jit_info (dinfo);
 }
 
-/* Same as the code in seq-points.c */
 static void
 insert_pred_seq_point (SeqPoint *last_sp, SeqPoint *sp, GSList **next)
 {
@@ -275,7 +276,7 @@ insert_pred_seq_point (SeqPoint *last_sp, SeqPoint *sp, GSList **next)
 	int src_index = last_sp->next_offset;
 	int dst_index = sp->next_offset;
 
-	/* bb->in_bb might contain duplicates */
+	/* bb->in_bb can contain duplicates */
 	for (l = next[src_index]; l; l = l->next)
 		if (GPOINTER_TO_UINT (l->data) == dst_index)
 			break;
@@ -308,11 +309,10 @@ TransformData::recursively_make_pred_seq_points (InterpBasicBlock *bb)
 		if (in_bb->pred_seq_points == MONO_SEQ_SEEN_LOOP)
 			continue;
 
-		// Take sequence points from incoming basic blocks
-
 		if (in_bb == entry_bb)
 			continue;
 
+		// Take sequence points from incoming basic blocks
 		if (in_bb->pred_seq_points == NULL)
 			recursively_make_pred_seq_points (in_bb);
 
@@ -324,7 +324,6 @@ TransformData::recursively_make_pred_seq_points (InterpBasicBlock *bb)
 				                     (gpointer) &MONO_SEQ_SEEN_LOOP);
 			}
 		}
-		// predecessors = g_array_append_vals (predecessors, in_bb->pred_seq_points, in_bb->num_pred_seq_points);
 	}
 
 	g_hash_table_destroy (seen);
@@ -344,7 +343,7 @@ TransformData::recursively_make_pred_seq_points (InterpBasicBlock *bb)
 void
 TransformData::collect_pred_seq_points (InterpBasicBlock *bb, SeqPoint *seqp, GSList **next)
 {
-	// Doesn't have a last sequence point, must find from incoming basic blocks
+	// If bb has no memoized predecessor set, compute one before linking seqp.
 	if (bb->pred_seq_points == NULL && bb != entry_bb)
 		recursively_make_pred_seq_points (bb);
 
@@ -367,7 +366,7 @@ TransformData::save_seq_points (MonoJitInfo *jinfo)
 
 	/*
 	 * For each sequence point, compute the list of sequence points immediately
-	 * following it, this is needed to implement 'step over' in the debugger agent.
+	 * following it. The debugger agent needs this list to implement 'step over'.
 	 */
 	for (size_t i = 0; i < seq_points.size (); ++i)
 		/* Store the seq point index here temporarily */
@@ -389,7 +388,7 @@ TransformData::save_seq_points (MonoJitInfo *jinfo)
 				next[last->next_offset] = g_slist_append_mempool (
 					arena.pool (), next[last->next_offset], GINT_TO_POINTER (sp->next_offset));
 			} else {
-				/* Link with the last bb in the previous bblocks */
+				/* Link with the predecessor blocks' seq points */
 				collect_pred_seq_points (bb, sp, next);
 			}
 			last = sp;

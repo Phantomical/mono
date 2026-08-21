@@ -38,15 +38,11 @@
 #define INTERP_PUSH_LMF_WITH_CTX_BODY(ext, exit_label) g_error ("requires working mono-context");
 #endif
 
-/* INTERP_PUSH_LMF_WITH_CTX:
- *
- * same as interp_push_lmf, but retrieving and attaching MonoContext to it.
- * This is needed to resume into the interp when the exception is thrown from
- * native code (see ./mono/tests/install_eh_callback.exe).
- *
- * This must be a macro in order to retrieve the right register values for
- * MonoContext.
- */
+/// Same as interp_push_lmf, but also retrieves and attaches a MonoContext, so
+/// native code that throws can resume into the interp (see
+/// ./mono/tests/install_eh_callback.exe).
+///
+/// This must be a macro, to retrieve the right register values for MonoContext.
 #define INTERP_PUSH_LMF_WITH_CTX(frame, ext, exit_label) \
 	memset (&(ext), 0, sizeof (MonoLMFExt));             \
 	(ext).interp_exit_data = (frame);                    \
@@ -55,20 +51,15 @@
 
 namespace mono::interp {
 
-/*
- * interp_push_lmf:
- *
- * Push an LMF frame on the LMF stack
- * to mark the transition to native code.
- * This is needed for the native code to
- * be able to do stack walks.
- */
+/// Pushes ext onto the thread's LMF chain, with frame recorded in it, to mark
+/// the transition into native code. A stack walk that finds this LMF continues
+/// from frame through the interpreted frames.
 inline void
 interp_push_lmf (MonoLMFExt *ext, InterpFrame *frame)
 {
 	/*
 	 * Only these two fields and lmf.previous_lmf, which mono_push_lmf ()
-	 * writes, are ever read back: the rest of the MonoLMF is documented as
+	 * writes, are ever read back. The rest of the MonoLMF is documented as
 	 * invalid once its second lowest bit marks the entry as an ext, and ctx
 	 * belongs to the WITH_CTX kind. Zeroing the whole thing instead would
 	 * clear a MonoContext, which is most of the ~450 bytes here and costs

@@ -19,8 +19,9 @@ namespace mono::interp {
  * newobj produces is read from once the constructor returns.
  *
  * Arguments the transform already staged sit where the two copies go, so they move
- * up first. An INLINED_METHOD_FLAG in the method slot means the transform emitted the
- * constructor body inline, so this dispatches on rather than calling it.
+ * up first. MINT_NEWOBJ_FAST and MINT_NEWOBJ_VT_FAST carry an INLINED_METHOD_FLAG in the
+ * method slot when the transform inlined the constructor body. They then dispatch on the
+ * inlined code instead of calling it.
  */
 
 MONO_INTERP_OP_IMPL (MINT_NEWOBJ)
@@ -94,9 +95,9 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_FAST)
 		THROW_EX (mono_error_convert_to_exception (error), ip);
 	}
 
-	// This is return value
+	// This is the return value
 	LOCAL_VAR (call_args_offset, MonoObject *) = o;
-	// Set `this` arg for ctor call
+	// Set the `this` argument for the constructor call
 	call_args_offset += MINT_STACK_SLOT_SIZE;
 	LOCAL_VAR (call_args_offset, MonoObject *) = o;
 
@@ -147,8 +148,8 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_STRING)
 		std::memmove (locals + call_args_offset + MINT_STACK_SLOT_SIZE, locals + call_args_offset,
 		              param_size);
 
-	// `this` is implicit null. The created string will be returned
-	// by the call, even though the call has void return (?!).
+	// `this` is implicit null. The created string is returned by the call, even
+	// though the call has a void return type.
 	LOCAL_VAR (call_args_offset, gpointer) = nullptr;
 
 	MONO_INTERP_OP_ADVANCE ();

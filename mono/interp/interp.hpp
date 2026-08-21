@@ -34,17 +34,14 @@ public:
 	/*
 	 * GC SAFETY:
 	 *
-	 *  The interpreter executes in gc unsafe (non-preempt) mode. On wasm, we cannot rely on
-	 * scanning the stack or any registers. In order to make the code GC safe, every objref
-	 * handled by the code needs to be kept alive and pinned in any of the following ways:
-	 * - the object needs to be stored on the interpreter stack. In order to make sure the
-	 * object actually gets stored on the interp stack and the store is not optimized out,
-	 * the store/variable should be volatile.
-	 * - if the execution of an opcode requires an object not coming from interp stack to be
-	 * kept alive, the tmp_handle below can be used. This handle will keep only one object
-	 * pinned by the GC. Ideally, once this object is no longer needed, the handle should be
-	 * cleared. If we will need to have more objects pinned simultaneously, additional handles
-	 * can be reserved here.
+	 * The interpreter runs in gc unsafe (non-preempt) mode. On wasm we cannot rely on
+	 * scanning the stack or any registers. Every objref the code touches must stay alive
+	 * and pinned, one of two ways:
+	 * - store it on the interpreter stack, in a volatile variable so the compiler cannot
+	 *   optimize the store away.
+	 * - for an object that does not come from the interp stack, use tmp_handle below. It
+	 *   pins one object. Clear it once the object is no longer needed. Reserve additional
+	 *   handles here if more than one object must stay pinned at once.
 	 */
 	MonoObjectHandle tmp_handle;
 
@@ -56,9 +53,10 @@ public:
 	InterpFrame *outer_current_frame;
 
 	/*
-	 * Where this invocation's frames start. exit () gives them back, and a resume
-	 * that jumps over this invocation gives them back through the record
-	 * interp_push_handle_mark () keeps, because nothing here runs again.
+	 * Where this invocation's frames start. exit () gives them back. A resume
+	 * that jumps over this invocation gives them back too, through the record
+	 * mono_interp_push_handle_mark () keeps, because this invocation never runs
+	 * again.
 	 */
 	guchar *frame_watermark;
 
@@ -66,17 +64,20 @@ public:
 	int handle_mark_depth;
 
 	/*
-	 * Sets up one invocation, the way interp_exec_method () sets up its locals.
+	 * Sets up one invocation, the way mono_interp_exec_method () sets up its
+	 * locals.
 	 *
-	 * The caller owns three things this cannot, because each has to outlive every
-	 * handler and no handler frame does: the handle frame (HANDLE_FUNCTION_ENTER,
-	 * whose mono_thread_info_current_var is the parameter of that name, and
-	 * HANDLE_FUNCTION_RETURN after exit () has run), the MonoError, and the record
-	 * interp_push_handle_mark () takes of both.
+	 * The caller owns three things this constructor cannot: the handle frame,
+	 * the MonoError, and the record mono_interp_push_handle_mark () takes of
+	 * both. Each must outlive every handler, and no handler frame does.
 	 *
-	 * Everything the first opcode needs beyond this is what interp_exec_method ()
-	 * does between method_entry () and main_loop, and that can throw, so it does not
-	 * belong in a constructor.
+	 * The handle frame is HANDLE_FUNCTION_ENTER's, whose mono_thread_info_current_var
+	 * is the parameter of that name. It closes with HANDLE_FUNCTION_RETURN after
+	 * exit () has run.
+	 *
+	 * Everything the first opcode needs beyond this is what start () does between
+	 * method_entry () and its dispatch. That can throw, so it does not belong in a
+	 * constructor.
 	 */
 	InterpState (InterpFrame *frame, ThreadContext *context, FrameClauseArgs *clause_args,
 	             MonoError *error, MonoThreadInfo *mono_thread_info_current_var,
@@ -88,8 +89,8 @@ public:
 		  clause_args (clause_args),
 		  ip (nullptr),
 		  locals (nullptr),
-		  // interp.c leaves these three to whichever call site sets them. Zeroing costs
-		  // nothing and makes a site that forgets deterministic rather than random.
+		  // We leave these three for whichever opcode handler sets them. Zeroing costs
+		  // nothing, and it makes a site that forgets deterministic rather than random.
 		  call_args_offset (0),
 		  tail_args_size (0),
 		  calli_signature (nullptr),
@@ -168,7 +169,7 @@ private:
 
 #define OPDEF(name, b, c, d, e, f)                                                 \
 	MONO_INTERP_EXEC_DEF (entry_##name);                                           \
-	/* this should only be called by entry_, otherwise you'll get linker errors */ \
+	/* Call this only through its own entry_ function. Any other caller fails to link. */ \
 	inline OpFunc exec_##name (MintOpcode opcode);
 #include "mintops.def"
 #undef OPDEF
@@ -185,7 +186,7 @@ private:
 	// Throw an exception from the interpreter
 	void interp_throw (MonoException *ex, const guint16 *ip, bool rethrow);
 
-	// Don't call these directly, return an exec_* function pointer from your op impl instead.
+	// Do not call these directly. Return an exec_* function pointer from your op impl instead.
 	inline OpFunc exit_frame ();
 	inline OpFunc call ();
 	inline OpFunc calli ();
@@ -209,7 +210,7 @@ private:
 
 // Define an entry point that calls an inner function.
 //
-// The inner function must return a OpFunc which is the next state to jump to.
+// The inner function must return an OpFunc which is the next state to jump to.
 #define MONO_INTERP_ENTRY(entry, inner)          \
 	void InterpState::entry (InterpState *state) \
 	{                                            \
@@ -252,9 +253,8 @@ private:
 
 #define LOCAL_VAR(offset, type) (*reinterpret_cast<type *> ((locals + (offset))))
 
-// We conservatively pin exception object here to avoid tweaking the
-// numerous call sites of this macro, even though, in a few cases,
-// this is not needed.
+// We conservatively pin the exception object here to avoid tweaking every
+// call site of this macro. A few of them do not actually need it.
 #define THROW_EX_GENERAL(exception, ex_ip, rethrow)                                       \
 	do {                                                                                  \
 		MonoException *__ex = (exception);                                                \
@@ -273,10 +273,10 @@ private:
 	} while (0)
 
 /*
- * Deciding whether to raise an abort here means walking this thread's stack, and
- * the frames it has to see are ours - the LMF chain says nothing about them once
- * the icall that got us here has popped its own. Publish the frame for the length
- * of the call, the same way a safepoint does.
+ * Deciding whether to raise an abort here walks this thread's stack, and the
+ * frames it must see are ours. Once the icall that reached this macro has
+ * popped its own LMF, the LMF chain says nothing about them. Publish the
+ * frame for the length of the call, the way a safepoint does.
  */
 #define EXCEPTION_CHECKPOINT_CALL(exc)                              \
 	do {                                                            \
@@ -297,7 +297,7 @@ private:
 		}                                                                                \
 	} while (0)
 
-/* Don't throw exception if thread is in GC Safe mode. Should only happen in managed-to-native wrapper. */
+/* Do not throw while the thread is in GC-safe mode. That happens only inside a managed-to-native wrapper. */
 #define EXCEPTION_CHECKPOINT_GC_UNSAFE                                               \
 	do {                                                                             \
 		if (G_UNLIKELY (mono_thread_interruption_request_flag                        \
@@ -310,13 +310,13 @@ private:
 		}                                                                            \
 	} while (0)
 
-/* Save the state of the interpeter main loop into FRAME */
+/* Save the interpreter's execution state into frame. */
 #define SAVE_INTERP_STATE(frame) \
 	do {                         \
 		frame->state.ip = ip;    \
 	} while (0)
 
-/* Load and clear state from FRAME */
+/* Load and clear the interpreter's execution state from frame. */
 #define LOAD_INTERP_STATE(frame)                 \
 	do {                                         \
 		ip = frame->state.ip;                    \
@@ -324,7 +324,7 @@ private:
 		frame->state.ip = NULL;                  \
 	} while (0)
 
-/* Initialize interpreter state for executing FRAME */
+/* Initialize the interpreter's execution state for frame. */
 #define INIT_INTERP_STATE(frame, _clause_args)                                             \
 	do {                                                                                   \
 		ip = _clause_args ? (static_cast<FrameClauseArgs *> (_clause_args))->start_with_ip \
@@ -333,10 +333,10 @@ private:
 	} while (0)
 
 /*
- * If this bit is set, it means the call has thrown the exception, and we
- * reached this point because the EH code in mono_handle_exception ()
- * unwound all the JITted frames below us. mono_interp_set_resume_state ()
- * has set the fields in context to indicate where we have to resume execution.
+ * If this bit is set, the call threw an exception. We reached this point
+ * because mono_handle_exception ()'s EH code unwound every JIT frame below
+ * us. interp_set_resume_state () has already set the fields in context that
+ * say where to resume.
  */
 #define CHECK_RESUME_STATE(context)                   \
 	do {                                              \

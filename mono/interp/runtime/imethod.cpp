@@ -27,11 +27,12 @@ namespace {
 
 /// Sets how many calls imethod takes before it is asked for as tier 1.
 ///
-/// A count of zero or less means the method never promotes. The call sites test
-/// tier_counter for a positive value, which is what enforces that.
+/// A count of zero or less means the method never promotes.
 void
 arm_tier_counter (InterpMethod *imethod, gint32 calls)
 {
+	// The call sites only reach interp_check_call_promotion () while tier_counter
+	// tests positive. That test is what makes a count of zero or less permanent.
 	mono_atomic_store_i32 (&imethod->tier_counter, calls > 0 ? calls : -1);
 }
 
@@ -70,19 +71,16 @@ interp_get_remoting_invoke (MonoMethod *method, gpointer addr, MonoError *error)
 #endif
 }
 
-/*
- * interp_transform_method:
- *
- * Transform METHOD now rather than on the first call into it, so that whether
- * the interpreter can run it at all is known before anything can. Returns FALSE
- * with ERROR set when it cannot.
- *
- * This is what create_method_pointer () does for itself when asked to compile,
- * and is separate so that a caller which has to publish the entry first can
- * still find out. Transforming runs the class initializer, so a caller holding
- * a lock that managed code could reach has to get the entry reachable before it
- * asks.
- */
+/// Transforms method now rather than on the first call into it. That way,
+/// whether the interpreter can run it at all is known before anything can.
+///
+/// Returns FALSE with error set when it cannot.
+///
+/// This is what create_method_pointer () does for itself when asked to
+/// compile. It is separate so that a caller which has to publish the entry
+/// first can still find out. Transforming runs the class initializer, so a
+/// caller holding a lock that managed code can reach has to get the entry
+/// reachable before it asks.
 gboolean
 interp_transform_method (MonoMethod *method, MonoError *error)
 {
@@ -98,14 +96,12 @@ interp_transform_method (MonoMethod *method, MonoError *error)
 	return is_ok (error);
 }
 
-/*
- * Counts one call against imethod's way to tier 1, and asks for the method once
- * the count has run out.
- *
- * The test is for a count that has run out rather than for the call that ended
- * it: several threads can be inside here at once, and the one that lands exactly
- * on zero is not necessarily the last to arrive.
- */
+/// Counts one call against imethod's way to tier 1, and asks for the method
+/// once the count has run out.
+///
+/// This tests for a count that has run out, not for the call that ended it.
+/// Several threads can decrement at once, so the one landing on zero is not
+/// necessarily the last to arrive.
 void
 interp_check_call_promotion (InterpMethod *imethod)
 {
@@ -116,20 +112,20 @@ interp_check_call_promotion (InterpMethod *imethod)
 		return;
 
 	/*
-	 * A refused request is the count spent for nothing, and nothing else arms
-	 * it again. Arming it here is what makes the loss cost this method another
-	 * threshold of calls rather than the rest of the process.
+	 * A refused promotion spends the count for nothing, so this re-arms it. The
+	 * loss then costs this method another threshold of calls, not the rest of
+	 * the process.
 	 */
 	if (MonoDomainMethod *dm = domain_method_find (imethod->domain, imethod->method))
 		arm_tier_counter (imethod, dm->tier_calls.load (std::memory_order_relaxed));
 }
 
-/*
- * METHOD now has native code in DOMAIN, so calls to it from interpreted code go
- * there instead of interpreting it. Nothing is created here: a method the
- * interpreter has never seen settles this for itself the first time it is
- * called, and it can only be settled the other way while there is no code.
- */
+/// method now has native code in domain, so calls to it from interpreted code
+/// go there instead of interpreting it.
+///
+/// This does not create the interpreter's record for method. One it has never
+/// seen settles this for itself the first time it is called. It can only be
+/// settled the other way while there is no code.
 void
 interp_method_compiled (MonoDomain *domain, MonoMethod *method)
 {
@@ -149,8 +145,9 @@ copy_imethod_for_frame (MonoDomain *domain, InterpFrame *frame)
 		static_cast<InterpMethod *> (mono_domain_alloc0 (domain, sizeof (InterpMethod)));
 	memcpy (copy, frame->imethod, sizeof (InterpMethod));
 	frame->imethod = copy;
-	/* Note: The copy will be around until the domain is unloading. Ideally we
-	 * would reclaim its memory when the corresponding InterpFrame is popped.
+	/* The copy stays alive until the domain unloads: mono_domain_alloc0 () has
+	 * no free. It is never reclaimed, even after the InterpFrame that made it
+	 * pops.
 	 */
 }
 
@@ -234,7 +231,7 @@ interp_invalidate_transformed (MonoDomain *domain)
 
 } // namespace mono::interp
 
-/* Outside the namespace, because interp-internals.hpp declares them there. */
+/* Outside the namespace, because internals.hpp declares them there. */
 
 using namespace mono::interp;
 

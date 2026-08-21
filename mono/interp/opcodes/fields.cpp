@@ -314,9 +314,8 @@ thread_static_address (guint32 offset)
 /*
  * A special static carries the declaring class's vtable in its last operand, the
  * same way an ordinary static does. The offset alone says nothing about which
- * class the field belongs to, so without it the first touch of one from outside
- * its own class would read the field before the class initializer had written
- * it.
+ * class the field belongs to. The vtable operand lets INIT_VTABLE run the class
+ * initializer before the first load or store from outside its own class.
  */
 #define VTABLE_AT(index) (static_cast<MonoVTable *> (frame->imethod->data_items[(index)]))
 

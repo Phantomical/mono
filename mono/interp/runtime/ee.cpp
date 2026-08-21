@@ -19,7 +19,7 @@
 #include <string_view>
 #include <vector>
 
-/* Declared at global scope in internals.hpp, so defined there too. */
+/* internals.hpp declares this at global scope, so it is defined at that same scope here. */
 std::vector<std::string> mono_interp_jit_classes;
 /* Optimizations enabled with interpreter */
 int mono_interp_opt = INTERP_OPT_DEFAULT;

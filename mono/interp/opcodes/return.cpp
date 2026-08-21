@@ -102,8 +102,7 @@ MONO_INTERP_OP_IMPL (MINT_JMP)
 		EXCEPTION_CHECKPOINT;
 	}
 
-	// It's possible for the caller stack frame to be smaller than the callee stack frame
-	// (at the interp level).
+	// The caller's interpreter-level stack frame can be smaller than the callee's.
 	context->stack_pointer = reinterpret_cast<guchar *> (frame->stack) + new_method->alloca_size;
 	frame->imethod = new_method;
 	frame_root_code_owner (frame);

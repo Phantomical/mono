@@ -11,8 +11,8 @@
 
 namespace mono::interp {
 
-/* Generated from the same list that builds the callback table, so a definition
- * whose signature has drifted is a compile error rather than a wrong entry. */
+/* Generated from the same list that builds the callback table. A definition
+ * whose signature drifts is a compile error, not a wrong entry. */
 #undef MONO_EE_CALLBACK
 #define MONO_EE_CALLBACK(ret, name, sig) ret interp_##name sig;
 MONO_EE_CALLBACKS

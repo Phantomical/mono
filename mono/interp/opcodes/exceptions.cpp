@@ -47,9 +47,10 @@ MONO_INTERP_OP_IMPL (MINT_MONO_RETHROW)
  * of them ahead of this instruction, so by the time control arrives all that is left
  * is the branch.
  *
- * The _CHECK forms are the ones a thread abort can interrupt. They ask before the
+ * The _CHECK forms are the ones a thread abort can interrupt, except inside a
+ * runtime-invoke wrapper, which never takes the check. They ask before the
  * branch, since a pending abort has to be raised while the handlers are still in
- * scope; the plain forms ask afterwards.
+ * scope. The plain forms ask afterwards.
  */
 #define IMPL_LEAVE(opcode, check, short_offset)                                             \
 	MONO_INTERP_OP_IMPL (opcode)                                                            \

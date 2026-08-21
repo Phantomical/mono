@@ -20,12 +20,12 @@ namespace mono::interp {
 /// once the count has run out.
 void interp_check_call_promotion (InterpMethod *imethod);
 
-/*
- * Transforms the method frame is about to run, and returns what that threw or null.
- *
- * A frame whose imethod is not transformed yet is incomplete, so the transform runs
- * under the parent instead. A root frame has no parent and no walk to satisfy.
- */
+/// Transforms the method that frame is about to run, and returns what that
+/// threw or null.
+///
+/// A frame whose imethod is not transformed yet is incomplete, so the
+/// transform runs under the parent instead. A root frame has no parent and no
+/// walk to satisfy.
 inline MonoException *
 do_transform_method (InterpFrame *frame, ThreadContext *context)
 {
@@ -44,13 +44,12 @@ do_transform_method (InterpFrame *frame, ThreadContext *context)
 	return mono_error_convert_to_exception (error);
 }
 
-/*
- * Makes frame ready to run, and returns whether it took the slow path. out_ex holds
- * what the transform threw, and is null when nothing did.
- *
- * A caller that took the slow path has to check out_ex and run an interruption
- * checkpoint. Both are rare, which is what keeps them out of the fast path.
- */
+/// Makes frame ready to run, and returns whether it took the slow path. out_ex
+/// holds what the transform threw, and is null when nothing did.
+///
+/// A caller that took the slow path has to check out_ex and run an
+/// interruption checkpoint. Both are rare, which is what keeps them out of the
+/// fast path.
 inline MONO_ALWAYS_INLINE gboolean
 method_entry (ThreadContext *context, InterpFrame *frame, MonoException **out_ex)
 {
@@ -64,10 +63,8 @@ method_entry (ThreadContext *context, InterpFrame *frame, MonoException **out_ex
 		MonoException *ex = do_transform_method (frame, context);
 		if (ex) {
 			*out_ex = ex;
-			/*
-			 * Initialize the stack base pointer here, in the uncommon branch, so we don't
-			 * need to check for it everytime when exitting a frame.
-			 */
+			// Initialize the stack base pointer here, in the uncommon branch, so we
+			// don't need to check for it every time a frame exits.
 			frame->stack = reinterpret_cast<stackval *> (context->stack_pointer);
 			return slow;
 		}

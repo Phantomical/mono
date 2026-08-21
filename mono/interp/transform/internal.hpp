@@ -125,8 +125,8 @@
 #endif
 
 /*
- * An instruction's registers, written through a macro so a site that sets one
- * cannot quietly set the wrong number of them.
+ * An instruction's registers, set through macros sized to how many an opcode
+ * takes, so a site cannot leave one unset.
  */
 #define interp_ins_set_dreg(ins, dr) \
 	do {                             \
@@ -173,8 +173,9 @@ stack_type_of (MintType mt)
 	return types[(int) mt];
 }
 
-/// The method an InternalCall or a JIT-intrinsic attribute redirects a call to,
-/// or the target unchanged.
+/// Returns the wrapper the interpreter has to call target_method through, or
+/// target_method unchanged. A PInvoke and an internal call get a native
+/// wrapper, a synchronized method a synchronized wrapper.
 MonoMethod *interp_transform_internal_calls (MonoMethod *method, MonoMethod *target_method,
                                              MonoMethodSignature *csignature, gboolean is_virtual);
 
@@ -195,7 +196,7 @@ MonoMethod *interp_get_method (MonoMethod *method, guint32 token, MonoImage *ima
 MonoClassField *interp_field_from_token (MonoMethod *method, guint32 token, MonoClass **klass,
                                          MonoGenericContext *generic_context, MonoError *error);
 
-/// The header of a method the transform may inline, or null when it has none.
+/// The header of a method the transform can inline, or null when it has none.
 MonoMethodHeader *interp_method_get_header (MonoMethod *method, MonoError *error);
 
 /// R4 or R8 for a floating-point type. Empty for anything else, which
@@ -230,7 +231,7 @@ void dump_interp_inst (InterpInst *ins);
 /// Prints a run of emitted bytecode.
 void dump_interp_code (const guint16 *start, const guint16 *end);
 
-/// The operands of one instruction, as a string the caller frees. `ins` may be
+/// The operands of one instruction, as a string the caller frees. `ins` can be
 /// null, which means the data belongs to an instruction already emitted.
 char *dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data,
                             guint16 opcode);

@@ -86,7 +86,7 @@ TransformData::interp_method_check_inlining (MonoMethod *method, MonoMethodSigna
 		return FALSE;
 
 	/* Our usage of `emit_store_value_as_local ()` for nint, nuint and nfloat
-	 * is kinda hacky, and doesn't work with the inliner */
+	 * is fragile, and does not work with the inliner */
 	if (mono_class_get_magic_index (method->klass) >= 0)
 		return FALSE;
 
@@ -253,17 +253,18 @@ interp_get_method (MonoMethod *method, guint32 token, MonoImage *image,
 		return (MonoMethod *) mono_method_get_wrapper_data (method, token);
 }
 
-/*
- * Whether an argument may travel through a call that hands the caller's frame away.
+/**
+ * Whether an argument can travel through a call that hands the caller's frame away.
  *
- * Both ends of a tail call promise the callee touches nothing of the frame it replaces,
- * so anything that could point into it has to stay behind. The signature covers the
- * declared cases; the stack type covers a managed pointer travelling under a signature
- * that no longer says so, which is unverifiable but cheap to spot here.
+ * Both ends of a tail call promise the callee touches nothing of the frame it
+ * replaces. Anything that can point into it has to stay behind. The signature
+ * covers the declared cases. The stack type covers a managed pointer travelling
+ * under a signature that no longer says so, which is unverifiable but cheap to
+ * spot here.
  *
- * A native int is not refused. It is how the frame-address checks in the tailcall
- * corpus travel, the value is compared rather than dereferenced, and the compiled
- * engine passes them through as well.
+ * A native int is not refused: it is how the frame-address checks in the
+ * tailcall corpus travel. The value is compared rather than dereferenced, and
+ * the compiled engine passes it through as well.
  */
 static gboolean
 interp_tail_call_arg_is_safe (MonoType *param, StackType stack_type)
@@ -277,10 +278,10 @@ interp_tail_call_arg_is_safe (MonoType *param, StackType stack_type)
 	return stack_type != StackType::MP;
 }
 
-/*
- * Whether the two returns can be folded into one: the tail callee writes its result
- * where the method being replaced would have written its own, which is a slot the
- * caller's caller sized from the signature it called.
+/**
+ * Whether the two returns can be folded into one: the tail callee writes its
+ * result where the method being replaced would have written its own. That slot
+ * is one the caller's caller sized from the signature it called.
  */
 static gboolean
 interp_tail_call_returns_match (MonoType *caller_ret, MonoType *callee_ret)
@@ -309,19 +310,21 @@ interp_tail_call_returns_match (MonoType *caller_ret, MonoType *callee_ret)
 	return TRUE;
 }
 
-/*
- * Whether the tail. prefix at the current call site can be honoured by handing this
- * frame to the callee rather than making an ordinary call.
+/**
+ * Returns the reason the tail. prefix at this call site cannot be honoured, or
+ * NULL to hand this frame to the callee instead of making an ordinary call.
  *
- * Every shape the LLVM back end honours in should_tail_call () has to be honoured here
- * too, since a method runs in whichever engine happens to own it and under tier 0 in
- * both at different times - a guarantee only one of them keeps is not a guarantee. The
- * reverse does not hold: the compiler declines several shapes for reasons about
- * prototypes and argument registers that mean nothing to an engine whose calling
- * convention is a byte image laid out from the call site's signature, and this refuses
- * them only where the interpreter has a reason of its own.
+ * Every shape the LLVM back end honours in should_tail_call () must be honoured
+ * here too. A method can run in either engine, and under tier 0 in both, so a
+ * guarantee only one keeps is not a guarantee.
  *
- * td->sp still holds the arguments, so this has to run before they are popped.
+ * The reverse does not hold. The compiler declines several shapes for reasons
+ * about prototypes and argument registers. Those reasons mean nothing to an
+ * engine whose calling convention is a byte image laid out from the call
+ * site's signature. The interpreter declines a shape only where it has a
+ * reason of its own.
+ *
+ * td->sp still holds the arguments, so this must run before they are popped.
  */
 static const char *
 interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *target_method,
@@ -338,10 +341,12 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 		return "the call is intrinsified";
 
 	/*
-	 * A dispatched call is fine: the target is resolved to an InterpMethod at the site,
-	 * before the frame changes hands, and every override reads its arguments from the
-	 * layout the site's signature already produced. An indirect one is not done here -
-	 * nothing needs it yet, and its target may turn out to be a p/invoke.
+	 * A dispatched call is fine. The target is resolved to an InterpMethod at
+	 * the site, before the frame changes hands. Every override reads its
+	 * arguments from the layout the site's signature already produced.
+	 *
+	 * An indirect one is not done here: we have not needed it yet, and its
+	 * target can turn out to be a p/invoke.
 	 */
 	if (calli)
 		return "the target is indirect";
@@ -351,8 +356,8 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 	if (is_virtual && mono_class_is_marshalbyref (target_method->klass))
 		return "the target may be remote";
 
-	/* A frame that is gone has nowhere to stop at, and the method-exit sequence point
-	 * that a step-out lands on is one the folded return never reaches. */
+	/* A frame that is gone has nowhere to stop at. The method-exit sequence
+	 * point that a step-out lands on is one the folded return never reaches. */
 	if (td->gen_sdb_seq_points)
 		return "the debugger is watching";
 
@@ -363,9 +368,9 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 	if (mono_jit_trace_calls != NULL && mono_trace_eval (method))
 		return "the method is traced";
 
-	/* A vararg caller's cookie buffer is allocated in the frame being handed away and
-	 * read for the whole of the callee's execution; a vararg callee's own signature is
-	 * not the one the site pushed. */
+	/* A vararg caller's cookie buffer is allocated in the frame being handed
+	 * away, and read for the whole of the callee's execution. A vararg
+	 * callee's own signature is not the one the site pushed. */
 	if (td->rtm->vararg)
 		return "the caller is vararg";
 	if (csignature->call_convention == MONO_CALL_VARARG)
@@ -379,10 +384,10 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 		return "the callee is an internal call";
 
 	/*
-	 * III.2.4 forbids the prefix inside a protected block, and a reused frame would
-	 * leave the clause ranges describing a method that is no longer running.
-	 * td->clause_indexes only covers handler bodies, so the try and filter ranges have
-	 * to be looked up here.
+	 * III.2.4 forbids the prefix inside a protected block, and a reused frame
+	 * would leave the clause ranges describing a method that is no longer
+	 * running. td->clause_indexes only covers handler bodies, so the try and
+	 * filter ranges have to be looked up here.
 	 */
 	for (i = 0; i < header->num_clauses; i++) {
 		MonoExceptionClause *c = header->clauses + i;
@@ -394,8 +399,9 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 			return "the site is inside a filter";
 	}
 
-	/* The prefix promises a ret follows at once, which is what lets the two returns
-	 * fold into one, and the arguments must be all the evaluation stack holds. */
+	/* The prefix promises a ret follows at once, which is what lets the two
+	 * returns fold into one. The arguments must be all the evaluation stack
+	 * holds. */
 	if (in_offset + 5 >= td->code_size || *(td->ip + 5) != CEE_RET)
 		return "no ret follows the call";
 	if (td->sp - td->stack != nargs)
@@ -540,7 +546,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		         target_method->name, mono_signature_full_name (target_method->signature),
 		         target_method);
 #endif
-		/* Intrinsics: Try again, it could be that `mono_get_method_constrained_with_method` resolves to a method that we can substitute */
+		/* Intrinsics: try again. mono_get_method_constrained_with_method () can resolve to a method we can substitute. */
 		if (target_method
 		    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly,
 		                                 &op))
@@ -587,7 +593,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	        || (MONO_METHOD_IS_FINAL (target_method)
 	            && target_method->wrapper_type != MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK))
 	    && !(mono_class_is_marshalbyref (target_method->klass))) {
-		/* Not really virtual, just needs a null check */
+		/* Not really virtual: it needs a null check */
 		is_virtual = FALSE;
 		need_null_check = TRUE;
 	}
@@ -613,9 +619,9 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		/*
 		 * A method calling itself needs no call at all: write the arguments back over
 		 * the incoming ones and branch to the top. That skips the argument move and
-		 * the frame bookkeeping a general tail call pays for. It has to be the method
-		 * itself and not merely the one named at the site, so a dispatched call - which
-		 * may land on an override - keeps its resolution.
+		 * the frame bookkeeping a general tail call pays for. The target must be the
+		 * method itself, not merely the one named at the site. A dispatched call can
+		 * land on an override, so it must keep its own resolution.
 		 */
 		if (method == target_method && !is_virtual) {
 			if (inlined_method)
@@ -632,7 +638,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			 * The next invocation owns none of this one's localloc memory, and the
 			 * branch never reaches a ret to release it. Whether the method locallocs
 			 * at all is not settled until the whole body has been read, so this is
-			 * emitted unconditionally; it costs a load and a predictable branch.
+			 * emitted unconditionally. It costs a load and a predictable branch.
 			 */
 			interp_add_ins (MINT_LOCALLOC_UNWIND);
 
@@ -867,7 +873,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			} else if (calli_extra_arg) {
 				/*
 				 * Only a delegate-invoke wrapper emits this, and only over what
-				 * MINT_LD_DELEGATE_METHOD_PTR just pushed - the delegate's target
+				 * MINT_LD_DELEGATE_METHOD_PTR pushed - the delegate's target
 				 * as an InterpMethod, which needs no resolving.
 				 */
 				interp_add_ins (MINT_CALLI_IMETHOD);

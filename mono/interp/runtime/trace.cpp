@@ -25,7 +25,7 @@ namespace mono::interp {
 namespace {
 
 /// Appends a printf-formatted piece. Every caller formats one stack slot, so a
-/// fixed buffer covers it; the one unbounded piece is appended directly.
+/// fixed 128-byte buffer covers it. Longer output is truncated.
 void
 append_format (std::string &out, const char *fmt, ...)
 {
@@ -39,7 +39,8 @@ append_format (std::string &out, const char *fmt, ...)
 	out += buf;
 }
 
-/// The name mono_method_full_name () builds, as a string that frees itself.
+/// Copies mono_method_full_name ()'s result into an owned string and frees
+/// the buffer it returned.
 std::string
 full_name (MonoMethod *method, gboolean with_signature)
 {

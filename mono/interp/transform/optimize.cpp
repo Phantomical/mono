@@ -142,7 +142,7 @@ TransformData::interp_local_deadce (int *local_ref_count)
 InterpInst *
 TransformData::interp_fold_unop (LocalValue *local_defs, int *local_ref_count, InterpInst *ins)
 {
-	// ins should be an unop, therefore it should have a single dreg and a single sreg
+	// ins must be a unop, so it has a single dreg and a single sreg.
 	int dreg = ins->dreg;
 	int sreg = ins->sregs[0];
 	LocalValue *val = &local_defs[sreg];
@@ -163,7 +163,7 @@ TransformData::interp_fold_unop (LocalValue *local_defs, int *local_ref_count, I
 		INTERP_FOLD_UNOP (MINT_NOT_I8, LOCAL_VALUE_I8, l, ~);
 		INTERP_FOLD_UNOP (MINT_CEQ0_I4, LOCAL_VALUE_I4, i, 0 ==);
 
-		// MOV's are just a copy, if the contents of sreg are known
+		// A MOV is a copy: it folds if sreg holds a known constant.
 		INTERP_FOLD_CONV (MINT_MOV_I1, LOCAL_VALUE_I4, i, LOCAL_VALUE_I4, i, gint32);
 		INTERP_FOLD_CONV (MINT_MOV_U1, LOCAL_VALUE_I4, i, LOCAL_VALUE_I4, i, gint32);
 		INTERP_FOLD_CONV (MINT_MOV_I2, LOCAL_VALUE_I4, i, LOCAL_VALUE_I4, i, gint32);
@@ -280,7 +280,7 @@ InterpInst *
 TransformData::interp_fold_unop_cond_br (InterpBasicBlock *cbb, LocalValue *local_defs,
                                          int *local_ref_count, InterpInst *ins)
 {
-	// ins should be an unop conditional branch, therefore it should have a single sreg
+	// ins must be a unop conditional branch, so it has a single sreg.
 	int sreg = ins->sregs[0];
 	LocalValue *val = &local_defs[sreg];
 
@@ -345,7 +345,7 @@ TransformData::interp_fold_unop_cond_br (InterpBasicBlock *cbb, LocalValue *loca
 InterpInst *
 TransformData::interp_fold_binop (LocalValue *local_defs, int *local_ref_count, InterpInst *ins)
 {
-	// ins should be a binop, therefore it should have a single dreg and two sregs
+	// ins must be a binop, so it has a single dreg and two sregs.
 	int dreg = ins->dreg;
 	int sreg1 = ins->sregs[0];
 	int sreg2 = ins->sregs[1];
@@ -447,10 +447,11 @@ TransformData::interp_fold_binop (LocalValue *local_defs, int *local_ref_count, 
 	return ins;
 }
 
-// Due to poor current design, the branch op might not be the last instruction in the bblock
-// (in case we fallthrough and need to have the stack locals match the ones from next_bb, done
-// in fixup_newbb_stack_locals). If that's the case, clear all these mov's. This helps bblock
-// merging quickly find the MINT_BR_S opcode.
+// A conditional branch is not always the block's last instruction:
+// fixup_newbb_stack_locals () can append movs after it, to match the
+// fallthrough target's stack locals. Once folded to an unconditional
+// MINT_BR_S, clear those movs so bblock merging can find it as the block's
+// last instruction.
 #define INTERP_FOLD_BINOP_BR(_opcode, _local_type, _cond)           \
 	case _opcode:                                                   \
 		if (val1->type != _local_type || val2->type != _local_type) \
@@ -471,7 +472,7 @@ InterpInst *
 TransformData::interp_fold_binop_cond_br (InterpBasicBlock *cbb, LocalValue *local_defs,
                                           int *local_ref_count, InterpInst *ins)
 {
-	// ins should be a conditional binop, therefore it should have only two sregs
+	// ins must be a conditional binop, so it has only two sregs.
 	int sreg1 = ins->sregs[0];
 	int sreg2 = ins->sregs[1];
 	LocalValue *val1 = &local_defs[sreg1];

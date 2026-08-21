@@ -21,7 +21,7 @@ isinst (MonoObject *object, MonoClass *klass, MonoError *error)
 {
 	MonoClass *obj_class = mono_object_class (object);
 
-	// mono_class_is_assignable_from_checked can't handle remoting casts
+	// mono_class_is_assignable_from_checked cannot handle remoting casts
 	if (G_UNLIKELY (mono_class_is_transparent_proxy (obj_class)))
 		return mono_object_isinst_checked (object, klass, error);
 

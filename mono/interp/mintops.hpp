@@ -72,8 +72,8 @@ enum MintOpcode : std::uint16_t {
 
 namespace mono::interp {
 
-// Every opcode name in one object. A table entry then costs an offset into it
-// rather than a pointer and a relocation.
+/// A table of every opcode's name, packed into one object so a lookup costs an
+/// offset rather than a pointer and a relocation.
 struct OpNames {
 #define OPDEF(a, b, c, d, e, f) char a[sizeof (b)];
 #include "mintops.def"
@@ -86,8 +86,8 @@ inline constexpr OpNames opnames = {
 #undef OPDEF
 };
 
-/// What one opcode is made of: its name, how long it is, and the registers it
-/// names.
+/// The static shape of one opcode: its name, encoded length, operand type, and
+/// register counts.
 struct OpInfo {
 	std::uint16_t name_offset;
 	/// In guint16 units. Zero at MINT_SWITCH, whose length is its operand.
@@ -124,8 +124,8 @@ oplen (int op)
 	return opinfos[op].oplength;
 }
 
-/// How many destination registers, with a call reported as MINT_CALL_ARGS the
-/// way the instruction stream encodes one.
+/// Returns the destination register count, or MINT_CALL_ARGS for an opcode that
+/// writes the call argument area.
 inline int
 num_dregs (int op)
 {

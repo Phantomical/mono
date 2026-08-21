@@ -26,9 +26,9 @@ namespace mono::interp {
 struct InterpInst;
 struct InterpBasicBlock;
 
-/// What the evaluation stack holds a value as. Wider than MintType, which says
-/// how a value is stored: everything shorter than four bytes is on the stack as
-/// I4.
+/// The type of a value on the evaluation stack. Wider than MintType, which
+/// says how a value is stored: everything shorter than four bytes is on the
+/// stack as I4.
 enum class StackType : std::uint8_t {
 	I4 = 0,
 	I8 = 1,
@@ -47,23 +47,25 @@ enum class StackType : std::uint8_t {
 #endif
 };
 
-/// The member of an opcode family whose entries run I4, I8, R4, R8 in the order
-/// StackType names them. base is the I4 member.
+/// Returns the member of an opcode family whose entries run I4, I8, R4, R8 in
+/// the order StackType names them. base is the I4 member.
 constexpr int
 op_for_stack_type (int base, StackType type)
 {
 	return base + (int) type - (int) StackType::I4;
 }
 
-/// The member of an opcode family whose entries run I1, U1, I2, U2, I4, I8, R4,
-/// R8, O, VT in the order MintType names them. base is the I1 member.
+/// Returns the member of an opcode family whose entries run I1, U1, I2, U2,
+/// I4, I8, R4, R8, O, VT in the order MintType names them. base is the I1
+/// member.
 constexpr int
 op_for_mint_type (int base, MintType type)
 {
 	return base + (int) type;
 }
 
-/// Which member of such a family op is. base is the I1 member.
+/// Returns which member of the op_for_mint_type () family op is, given base,
+/// its I1 member.
 constexpr MintType
 mint_type_of_op (int base, int op)
 {
@@ -74,14 +76,12 @@ struct StackInfo {
 	MonoClass *klass;
 	StackType type;
 	unsigned char flags;
-	/*
-	 * The local associated with the value of this stack entry. Every time we push on
-	 * the stack a new local is created.
-	 */
+	// The interp local backing this stack entry's value. Each push creates a
+	// new one.
 	int local;
-	/* The offset from the execution stack start where this is stored */
+	// The offset from the execution stack start where this is stored.
 	int offset;
-	/* Saves how much stack this is using. It is a multiple of MINT_VT_ALIGNMENT */
+	// How much stack this is using, a multiple of MINT_VT_ALIGNMENT.
 	int size;
 };
 
@@ -108,9 +108,9 @@ struct LocalValue {
 
 /// A range over an intrusive list, linked through the `Next` member.
 ///
-/// The iterator reads that member when it advances, so a walk may retire the
+/// The iterator reads that member when it advances, so a walk can retire the
 /// node it is on - an instruction turned into a MINT_NOP stays linked - but
-/// may not unlink or relink one.
+/// must not unlink or relink one.
 template<class T, T *T::*Next>
 class IntrusiveList {
 public:
@@ -180,7 +180,7 @@ struct InterpBasicBlock {
 	SeqPoint *last_seq_point;
 
 	InterpInst *first_ins, *last_ins;
-	/* Next bb in IL order */
+	// Next bb in IL order.
 	InterpBasicBlock *next_bb;
 
 	gint16 in_count;
@@ -190,10 +190,9 @@ struct InterpBasicBlock {
 
 	int native_offset;
 
-	/*
-	 * The state of the stack when entering this basic block. By default, the stack height is
-	 * -1, which means it inherits the stack state from the previous instruction, in IL order
-	 */
+	// The state of the stack when entering this basic block. By default, the
+	// stack height is -1, which means it inherits the stack state from the
+	// previous instruction, in IL order.
 	int stack_height;
 	StackInfo *stack_state;
 
@@ -241,9 +240,12 @@ enum RelocType {
 
 struct Reloc {
 	RelocType type;
-	/* For branch relocation, how many sreg slots to skip */
+	// For branch relocation, how many sreg slots to skip.
 	int skip;
-	/* In the interpreter IR */
+	// Offset into the compacted code (new_code) that the displacement is
+	// measured from. A branch reloc points at the instruction's first word,
+	// and the displacement is written skip + 1 words later. A switch reloc
+	// points at the label slot itself.
 	int offset;
 	InterpBasicBlock *target_bb;
 };
@@ -263,8 +265,8 @@ struct InterpLocal {
 
 /// One method's trip through the transform, and everything that trip allocates.
 ///
-/// Nothing here outlives the transform except what it copies into the
-/// InterpMethod, so construction and destruction are the whole memory
+/// No member of this struct outlives the transform except what it copies into
+/// the InterpMethod, so construction and destruction are the whole memory
 /// discipline: the arena and the members below go together.
 struct TransformData {
 	TransformData (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm);

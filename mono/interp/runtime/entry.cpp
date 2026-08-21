@@ -29,9 +29,9 @@ static MonoFuncV mono_native_to_interp_trampoline = NULL;
  * They are called by the interp_in wrappers. They have the following signature:
  * void (<optional this_arg>, <optional retval pointer>, <arg1>, ..., <argn>, <method ptr>)
  * They pack up their arguments into an InterpEntryData structure and call mono_interp_entry ().
- * It would be possible for the wrappers to pack up the arguments etc, but that would make them bigger, and there are
- * more wrappers then these functions.
- * this/static * ret/void * 16 arguments -> 64 functions.
+ * this/static * ret/void * 9 argument counts (0 through MAX_INTERP_ENTRY_ARGS) -> 36 functions.
+ * The wrappers can pack the arguments themselves, but that makes each wrapper bigger, and
+ * there are more wrappers than there are of these functions.
  */
 
 #define INTERP_ENTRY_BASE(_method, _this_arg, _res) \
@@ -256,11 +256,12 @@ static gpointer const entry_funcs_instance[MAX_INTERP_ENTRY_ARGS + 1] = {
 static gpointer const entry_funcs_instance_ret[MAX_INTERP_ENTRY_ARGS + 1] = {
 	INTERP_ENTRY_FUNCLIST (instance_ret)};
 
-/*
- * interp_init_delegate:
- *
- *   Initialize del->interp_method.
- */
+/// Fills in del->interp_method and del->method from whichever of them, or of
+/// del->method_ptr, the delegate already carries.
+///
+/// del->interp_method can come back naming another method than del->method: a
+/// delegate Invoke gets its invoke wrapper, and an abstract virtual gets the
+/// target's implementation.
 void
 interp_init_delegate (MonoDelegate *del, MonoError *error)
 {
@@ -275,7 +276,7 @@ interp_init_delegate (MonoDelegate *del, MonoError *error)
 		return_if_nok (error);
 	} else if (del->method_ptr) {
 		/*
-		 * An entry point and nothing else - ldftn's product, or
+		 * del->method_ptr is only an entry point - ldftn's product, or
 		 * MethodHandle.GetFunctionPointer's. Whichever engine published it knows
 		 * which method it stands for.
 		 */
@@ -298,11 +299,11 @@ interp_init_delegate (MonoDelegate *del, MonoError *error)
 		const char *name = method->name;
 		if (*name == 'I' && (strcmp (name, "Invoke") == 0)) {
 			/*
-			 * When invoking the delegate interp_method is executed directly. If it's an
-			 * invoke make sure we replace it with the appropriate delegate invoke wrapper.
+			 * When invoking the delegate, interp_method runs directly. If it is an
+			 * invoke, replace it with the matching delegate invoke wrapper.
 			 *
-			 * FIXME We should do this later, when we also know the delegate on which the
-			 * target method is called.
+			 * FIXME: move this later, once we also know which delegate the target
+			 * method is called on.
 			 */
 			del->interp_method = mono_interp_get_imethod (
 				domain, mono_marshal_get_delegate_invoke (method, NULL), error);
@@ -325,7 +326,7 @@ interp_get_imethod (MonoMethod *method, MonoError *error)
 	return mono_interp_get_imethod (mono_domain_get (), method, error);
 }
 
-/* The interpreter's own entry for imethod, minted if this is the first ask. */
+/// Returns the interpreter's own entry for imethod, minting one on first use.
 static gpointer
 entry_for_imethod (InterpMethod *imethod, MonoError *error)
 {
@@ -335,18 +336,6 @@ entry_for_imethod (InterpMethod *imethod, MonoError *error)
 	return interp_create_method_pointer (imethod->method, FALSE, error);
 }
 
-/*
- * Returns the address that stands for imethod outside this engine.
- *
- * A patcher writes a jump over the address it is given, so a method must have one
- * address and not one per engine. A compiled ldftn names the backend's stub, and
- * this gives an interpreted one the same stub. No compile happens here: the stub
- * is minted on its own, which is what a compiled caller's ldftn does as well, and
- * a call arriving at it lands on whichever tier owns the method.
- *
- * With the interpreter as the whole engine there is no backend to ask, and its own
- * entry is the only address there is.
- */
 gpointer
 native_entry_for_imethod (InterpMethod *imethod, MonoError *error)
 {
@@ -368,14 +357,6 @@ native_entry_for_imethod (InterpMethod *imethod, MonoError *error)
 	return addr;
 }
 
-/*
- * Returns the address that stands for method outside this engine.
- *
- * Named rather than resolved: an overridden method answers its own entry, which
- * is the address its callers already hold and which the override redirected.
- * Going through the InterpMethod would answer the replacement's, and the two
- * engines would then hand out different addresses for one method.
- */
 gpointer
 native_entry_for_method (MonoMethod *method, MonoDomain *domain, MonoError *error)
 {
@@ -388,14 +369,13 @@ native_entry_for_method (MonoMethod *method, MonoDomain *domain, MonoError *erro
 	return entry_for_imethod (imethod, error);
 }
 
-/*
- * The method an entry point stands for, or NULL if this domain published no such
- * entry.
- *
- * ldftn's product is an entry point in both engines, so a delegate constructor - or
- * anything else handed one - recovers the method by asking the engine that published
- * it: the jit-info table for a compiled entry, this for an interpreted one.
- */
+/// Returns the method an entry point stands for, or NULL if this domain
+/// published no such entry.
+///
+/// ldftn's product is an entry point in both engines. A delegate constructor
+/// - or anything else handed one - recovers the method by asking the engine
+/// that published it. The jit-info table answers for a compiled entry, this
+/// function for an interpreted one.
 MonoMethod *
 interp_method_from_entry (MonoDomain *domain, gpointer addr)
 {
@@ -418,11 +398,10 @@ no_llvmonly_interp_method_pointer (void)
 	g_assert_not_reached ();
 }
 
-/*
- * interp_create_method_pointer_llvmonly:
- *
- *   Return an ftndesc for entering the interpreter and executing METHOD.
- */
+/// Returns an ftndesc for entering the interpreter to run method.
+///
+/// \param unbox  when true, the entry steps the receiver past the object
+///     header before it runs the method.
 MonoFtnDesc *
 interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoError *error)
 {
@@ -446,13 +425,14 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 	sig = mono_method_signature_internal (method);
 
 	/*
-	 * The entry functions need access to the method to call, so we have
-	 * to use a ftndesc. The caller uses a normal signature, while the
-	 * entry functions use a gsharedvt_in signature, so wrap the entry function in
-	 * a gsharedvt_in_sig wrapper.
-	 * We use a gsharedvt_in_sig wrapper instead of an interp_in wrapper, because they
-	 * are mostly the same, and they are already generated. The exception is the
-	 * wrappers for methods with more than 8 arguments, those are different.
+	 * The entry functions need the method to call, so this passes an ftndesc.
+	 *
+	 * The caller uses method's normal signature, while the entry functions take a
+	 * gsharedvt_in signature. So this wraps the entry function in a
+	 * gsharedvt_in_sig wrapper rather than an interp_in wrapper. The two wrapper
+	 * kinds are mostly the same, and the gsharedvt_in_sig ones already exist. The
+	 * exception is a method with more than MAX_INTERP_ENTRY_ARGS arguments, whose
+	 * wrapper differs.
 	 */
 	if (sig->param_count > MAX_INTERP_ENTRY_ARGS)
 		wrapper = mini_get_interp_in_wrapper (sig);
@@ -500,12 +480,14 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 	return static_cast<MonoFtnDesc *> (addr);
 }
 
-/*
- * interp_create_method_pointer:
- *
- * Return a function pointer which can be used to call METHOD using the
- * interpreter. Return NULL for methods which are not supported.
- */
+/// Returns a function pointer that calls method through the interpreter.
+///
+/// \param compile  transform method now if it has not been already, so a
+///     translation failure is caught here rather than on first call.
+///
+/// Returns NULL with the error set for a method it cannot support: one that
+/// fails to transform when compile is set, and a native-to-managed wrapper on
+/// a platform that has no such transition.
 gpointer
 interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *error)
 {
@@ -567,9 +549,9 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 
 #ifdef ENABLE_NETCORE
 		/*
-		 * The runtime expects a function pointer unique to method and
-		 * the native caller expects a function pointer with the
-		 * right signature, so fail right away.
+		 * The runtime expects a function pointer unique to method, and the
+		 * native caller expects a function pointer with the right signature.
+		 * This case fails right away instead of trying to satisfy both.
 		 */
 		mono_error_set_platform_not_supported (
 			error, "No native to managed transitions on this platform.");
@@ -581,8 +563,7 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 #endif
 
 	if (mono_llvm_only) {
-		/* The caller should call interp_create_method_pointer_llvmonly */
-		//g_assert_not_reached ();
+		/* The caller must call interp_create_method_pointer_llvmonly */
 		return (gpointer) no_llvmonly_interp_method_pointer;
 	}
 
@@ -591,11 +572,11 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 
 #ifndef MONO_ARCH_HAVE_FTNPTR_ARG_TRAMPOLINE
 	/*
-	 * Interp in wrappers get the argument in the rgctx register. If
-	 * MONO_ARCH_HAVE_FTNPTR_ARG_TRAMPOLINE is defined it means that
-	 * on that arch the rgctx register is not scratch, so we use a
-	 * separate temp register. We should update the wrappers for this
-	 * if we really care about those architectures (arm).
+	 * Interp in wrappers get the argument in the rgctx register.
+	 * MONO_ARCH_HAVE_FTNPTR_ARG_TRAMPOLINE is defined on architectures where
+	 * rgctx is not scratch, so those use a separate temp register instead. The
+	 * interp-in wrapper generator has not been updated for those architectures
+	 * (arm).
 	 */
 	MonoMethod *wrapper = mini_get_interp_in_wrapper (sig);
 
@@ -646,8 +627,8 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 	mono_error_assert_ok (error);
 
 	/*
-	 * The wrapper is called by compiled code, which doesn't pass the extra argument, so we pass it in the
-	 * rgctx register using a trampoline.
+	 * The wrapper is called by compiled code, which does not pass the extra
+	 * argument, so we pass it in the rgctx register using a trampoline.
 	 */
 
 	addr = mono_create_ftnptr_arg_trampoline (ftndesc, entry_wrapper);

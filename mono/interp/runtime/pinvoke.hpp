@@ -22,8 +22,8 @@ G_EXTERN_C gpointer mono_wasm_get_interp_to_native_trampoline (MonoMethodSignatu
 
 namespace mono::interp {
 
-// What a native call is handed: the integer arguments, the float arguments and
-// where the result goes. INTERP_ICALL_TRAMP_*ARGS bound the two counts.
+/// The integer and float arguments handed to a native call, and where its
+/// result goes. INTERP_ICALL_TRAMP_*ARGS bound the two counts.
 struct InterpMethodArguments {
 	size_t ilen;
 	gpointer *iargs;
@@ -36,17 +36,15 @@ struct InterpMethodArguments {
 #endif
 };
 
-/*
- * Calls the native function addr with the arguments in sp, marshalled the way sig
- * describes, and writes the result back over sp. imethod is the pinvoke method the
- * wrapper making this call stands for, and NULL at a calli that is not inside a
- * managed-to-native wrapper. cache must be stable per-call-site storage, because
- * the wasm build caches the entry trampoline in it.
- *
- * An exception from native code returns through here rather than unwinding past
- * it. A caller whose target can throw therefore sets parent_frame->state.ip before
- * the call and checks the resume state after.
- */
+/// Calls the native function addr with the arguments in sp, marshalled the way sig
+/// describes, and writes the result back over sp. imethod is the pinvoke method the
+/// wrapper making this call stands for, and NULL at a calli that is not inside a
+/// managed-to-native wrapper. cache must be stable per-call-site storage, because
+/// the wasm build caches the entry trampoline in it.
+///
+/// An exception from native code returns through here rather than unwinding past
+/// it. A caller whose target can throw therefore sets parent_frame->state.ip before
+/// the call and checks the resume state after.
 gpointer ves_pinvoke_method (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV addr,
                              ThreadContext *context, InterpFrame *parent_frame, stackval *sp,
                              gboolean save_last_error, gpointer *cache);

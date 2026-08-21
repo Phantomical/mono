@@ -24,7 +24,6 @@ namespace mono::interp {
 void
 TransformData::handle_relocations ()
 {
-	// Handle relocations
 	for (Reloc *reloc : relocs) {
 		int offset = reloc->target_bb->native_offset - reloc->offset;
 
@@ -71,8 +70,9 @@ TransformData::emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *
 	guint16 opcode = ins->opcode;
 	guint16 *ip = start_ip;
 
-	// We know what IL offset this instruction was created for. We can now map the IL offset
-	// to the IR offset. We use this array to resolve the relocations, which reference the IL.
+	// The first instruction reached for an IL offset records the native offset
+	// it landed at. The +1 keeps zero free as the not-yet-seen sentinel, and
+	// the same instruction gets a line-number entry below.
 	if (ins->il_offset != -1 && !in_offsets[ins->il_offset]) {
 		g_assert (ins->il_offset >= 0 && ins->il_offset < header->code_size);
 		in_offsets[ins->il_offset] = start_ip - new_code + 1;
@@ -114,7 +114,7 @@ TransformData::emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *
 			// Backwards branch. We can already patch it.
 			*ip++ = ins->info.target_bb->native_offset - br_offset;
 		} else {
-			// We don't know the in_offset of the target, add a reloc
+			// The target's native offset is not known yet, so add a relocation
 			Reloc *reloc = arena.create<Reloc> ();
 			reloc->type = RELOC_SHORT_BRANCH;
 			reloc->skip = num_sregs (opcode);
@@ -181,7 +181,8 @@ TransformData::emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *
 			for (int i = 0; i < num_sregs (opcode); i++)
 				*ip++ = get_interp_local_offset (ins->sregs[i], TRUE);
 		} else if (opcode == MINT_LDLOCA_S) {
-			// This opcode receives a local but it is not viewed as a sreg since we don't load the value
+			// MINT_LDLOCA_S takes a local operand but is not counted as an sreg,
+			// because it does not load the local's value.
 			*ip++ = get_interp_local_offset (ins->sregs[0], TRUE);
 		}
 
@@ -202,7 +203,6 @@ TransformData::alloc_ins_locals (InterpInst *ins)
 		for (int i = 0; i < num_sregs (opcode); i++)
 			get_interp_local_offset (ins->sregs[i], FALSE);
 	} else if (opcode == MINT_LDLOCA_S) {
-		// This opcode receives a local but it is not viewed as a sreg since we don't load the value
 		get_interp_local_offset (ins->sregs[0], FALSE);
 	}
 
@@ -210,7 +210,7 @@ TransformData::alloc_ins_locals (InterpInst *ins)
 		get_interp_local_offset (ins->dreg, FALSE);
 }
 
-// Generates the final code, after we are done with all the passes
+/// Generates the final code, once every pass is done.
 void
 TransformData::generate_compacted_code ()
 {
@@ -236,8 +236,6 @@ TransformData::generate_compacted_code ()
 	new_code_end = ip;
 	in_offsets[header->code_size] = new_code_end - new_code;
 
-	// Patch all branches. This might be useless since we iterate once anyway to compute the size
-	// of the generated code. We could compute the native offset of each basic block then.
 	handle_relocations ();
 }
 

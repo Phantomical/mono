@@ -117,8 +117,9 @@ MONO_INTERP_OP_IMPL (MINT_PROF_ENTER)
 	MONO_INTERP_DISPATCH ();
 }
 
-// This is the method's return as well: the listener wants the value, so the return
-// happens here rather than at a MINT_RET the transform would have to keep reachable.
+// This is the method's return as well. The listener wants the value, so this
+// replaces the MINT_RET, MINT_RET_VOID or MINT_RET_VT the transform emits when
+// profiling is off.
 MONO_INTERP_OP_IMPL (MINT_PROF_EXIT)
 {
 	guint16 flag = ip[2];

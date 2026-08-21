@@ -16,11 +16,12 @@ G_EXTERN_C gpointer mono_wasm_get_native_to_interp_trampoline (MonoMethod *metho
 
 namespace mono::interp {
 
-/// Holds a domain's lock for a scope.
+/// A scoped guard on a domain's lock.
 ///
-/// Only for a scope the thread runs out of. An exception resume unwinds
-/// interpreted frames by restoring the stack pointer over them, so a guard
-/// below the resumed frame never runs its destructor and the lock stays held.
+/// Do not hold this across a scope an exception resume can unwind. Resume
+/// restores the stack pointer directly instead of running interpreted
+/// frames' destructors, so a guard below the resumed frame leaves the lock
+/// held for good.
 class DomainLock {
 public:
 	explicit DomainLock (MonoDomain *domain) : domain_ (domain) { mono_domain_lock (domain_); }
@@ -33,29 +34,36 @@ private:
 	MonoDomain *domain_;
 };
 
-/*
- * The address that stands for imethod outside this engine. A patcher writes a jump
- * over what it is given, so both engines have to name the same address for a
- * method.
- */
+/// Returns the address that stands for imethod outside this engine.
+///
+/// A patcher writes a jump over the address it is given, so a method needs
+/// one address rather than one per engine. This answers with the backend's
+/// stub, the same address a compiled ldftn names, and mints it without
+/// compiling the method. A call that arrives at the stub lands on whichever
+/// tier owns the method.
+///
+/// With the interpreter as the whole engine there is no backend to ask, and
+/// its own entry is the only address there is.
 gpointer native_entry_for_imethod (InterpMethod *imethod, MonoError *error);
 
-/*
- * The address that stands for method outside this engine, named rather than
- * resolved: an overridden method answers its own entry rather than the
- * replacement's.
- */
+/// Returns the address that stands for method outside this engine.
+///
+/// Named rather than resolved: an overridden method answers its own entry,
+/// the address its callers already hold and which the override redirected.
+/// Going through the InterpMethod would answer the replacement's, and the two
+/// engines would then hand out different addresses for one method.
 gpointer native_entry_for_method (MonoMethod *method, MonoDomain *domain, MonoError *error);
 
 /// Whether addr is an address imethod is published at.
 ///
 /// A method has one such address per engine that has handed one out: the
-/// backend's stub, and - where the interpreter is the whole engine, or the
-/// method is entered from native code - an entry of the interpreter's own.
+/// backend's stub, and the interpreter's own entry. The interpreter hands
+/// out an entry of its own where it is the whole engine, or where the
+/// method is entered from native code.
 inline gboolean
 imethod_published_at (InterpMethod *imethod, gpointer addr)
 {
-	/* A null addr answers no whatever is unset, so that a calli through a null
+	/* A null addr answers no whatever is unset. That way a calli through a null
 	 * function pointer is resolved again - and refused - rather than taken for
 	 * the address an engine has not handed out yet. */
 	return addr != nullptr
@@ -89,9 +97,9 @@ register_method_pointer (MonoDomain *domain, gpointer addr, InterpMethod *imetho
 	g_hash_table_insert (info->interp_method_pointer_hash, addr, imethod);
 }
 
-/// Get the InterpMethod* that corresponds to entry point address addr.
-///
-/// \returns the method, if known, and null otherwise.
+/// Returns the InterpMethod for addr, or null if no method is published
+/// there. Also returns null, with the error set, when the method is known
+/// but its InterpMethod cannot be built.
 inline InterpMethod *
 imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
 {
@@ -99,9 +107,9 @@ imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
 		return imethod;
 
 	/*
-	 * A compiled entry: the method is the one whose code that address falls in.
-	 * Executing it here rather than jumping to the code keeps a single engine in
-	 * charge of the frame.
+	 * A compiled entry: the method is whichever one's code contains that
+	 * address. Resolving it here, rather than jumping straight to the code,
+	 * keeps one engine in charge of the frame.
 	 */
 	MonoJitInfo *ji = mono_jit_info_table_find_internal (
 		domain, mono_get_addr_from_ftnptr (MINI_FTNPTR_TO_ADDR (addr)), TRUE, TRUE);
@@ -124,9 +132,9 @@ imethod_for_entry (MonoDomain *domain, gpointer addr, MonoError *error)
 	InterpMethod *imethod = mono_interp_get_imethod (domain, method, error);
 
 	/*
-	 * A trampoline record covers the stub and nothing else, so addr is where the
+	 * A trampoline record covers only the stub, so addr is where the
 	 * method is published rather than somewhere inside a body. Remembering it
-	 * here is what lets a calli site recognise the pointer next time: the
+	 * here is what lets a calli site recognise the pointer next time. The
 	 * address can arrive from a frame that never asked this engine for it.
 	 */
 	if (imethod != nullptr && ji->is_trampoline)

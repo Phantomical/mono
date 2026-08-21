@@ -252,8 +252,8 @@ ves_pinvoke_method (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV a
 	frame.stack = sp;
 	frame_stamp_ordinal (context, &frame);
 	/* A pinvoke reached by calli from outside a managed-to-native wrapper has
-	 * no method behind it -- the xdomain-invoke wrappers do this -- and the
-	 * frame then has nothing whose code it could root. */
+	 * no method behind it -- the xdomain-invoke wrappers do this. The frame
+	 * then has no code to root. */
 	if (imethod)
 		frame_root_code_owner (&frame);
 
@@ -261,8 +261,8 @@ ves_pinvoke_method (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV a
 	gpointer args;
 
 	/*
-	 * When there's a calli in a pinvoke wrapper, we're in GC Safe mode.
-	 * When we're called for some other calli, we may be in GC Unsafe mode.
+	 * When there is a calli in a pinvoke wrapper, we are in GC Safe mode.
+	 * When we are called for some other calli, we can be in GC Unsafe mode.
 	 *
 	 * On any code path where we call anything other than the entry_func,
 	 * we need to switch back to GC Unsafe before calling the runtime.
@@ -332,7 +332,7 @@ ves_pinvoke_method (InterpMethod *imethod, MonoMethodSignature *sig, MonoFuncV a
 
 	g_free (ccontext.stack);
 #else
-	// Only the vt address has been returned, we need to copy the entire content on interp stack
+	// Only the vt address comes back, so we copy the whole value onto the interp stack.
 	if (!context->has_resume_state && MONO_TYPE_ISSTRUCT (sig->ret))
 		stackval_from_data (sig->ret, frame.stack, static_cast<char *> (frame.stack->data.p),
 		                    sig->pinvoke);

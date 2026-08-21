@@ -19,8 +19,8 @@ namespace mono::interp {
 
 /// A bump allocator over a MonoMemPool.
 ///
-/// The arena doesn't run destructors so contained values must be trivially
-/// destructible. The arena will take care of freeing the associated memory.
+/// Values it stores must be trivially destructible, because the arena runs
+/// no destructors. Destroying it frees the pool.
 class Arena {
 public:
 	Arena () : pool_ (mono_mempool_new ()) {}
@@ -44,7 +44,7 @@ public:
 			mono_mempool_destroy (pool_);
 	}
 
-	/// Raw storage, with whatever the pool last left in it.
+	/// Returns storage that still holds whatever the pool last left there.
 	void *alloc (std::size_t size, std::size_t align)
 	{
 		if (align <= pool_alignment)
@@ -54,7 +54,7 @@ public:
 		return align_up (mem, align);
 	}
 
-	/// Raw storage, filled with zero.
+	/// Returns storage filled with zero.
 	void *alloc0 (std::size_t size, std::size_t align)
 	{
 		if (align <= pool_alignment)
@@ -64,8 +64,8 @@ public:
 		return align_up (mem, align);
 	}
 
-	/// One object. With no arguments the object is value initialized, which
-	/// zero fills an aggregate.
+	/// Constructs one T from args, or value-initializes it with no arguments,
+	/// which zero fills an aggregate.
 	template<class T, class... Args>
 	T *create (Args &&...args)
 	{
@@ -74,7 +74,7 @@ public:
 		return new (alloc (sizeof (T), alignof (T))) T (std::forward<Args> (args)...);
 	}
 
-	/// An array of count objects, filled with zero.
+	/// Creates an array of count objects, zero filled.
 	template<class T>
 	T *create_array (std::size_t count)
 	{
@@ -85,8 +85,8 @@ public:
 		return (T *) alloc0 (count * sizeof (T), alignof (T));
 	}
 
-	/// One object whose last member is a variable length array, with room for
-	/// extra bytes past the end of the struct. Filled with zero.
+	/// Creates one T with extra bytes of room after it, for a trailing
+	/// flexible-array member. The memory is zero filled.
 	template<class T>
 	T *create_flexible (std::size_t extra)
 	{
@@ -97,7 +97,8 @@ public:
 		return (T *) alloc0 (sizeof (T) + extra, alignof (T));
 	}
 
-	/// The pool itself, for the runtime's own mempool-taking helpers.
+	/// Returns the underlying MonoMemPool, for the runtime's own
+	/// mempool-taking helpers.
 	MonoMemPool *pool () { return pool_; }
 
 private:

@@ -34,10 +34,10 @@ MONO_INTERP_OP_IMPL (MINT_CALLRUN)
 }
 
 /*
- * The variable arguments were pushed by the caller, so their layout is described by
- * the signature at its call site rather than by this method's own. The caller is
- * suspended at the instruction after the call, which is what the walk back to
- * MINT_CALL_VARARG counts from.
+ * The caller pushed the variable arguments, so their layout comes from the call
+ * site's signature, not from this method's own. The caller is suspended at the
+ * instruction after the call, which is what the walk back to MINT_CALL_VARARG
+ * counts from.
  */
 MONO_INTERP_OP_IMPL (MINT_INIT_ARGLIST)
 {
@@ -53,7 +53,7 @@ MONO_INTERP_OP_IMPL (MINT_INIT_ARGLIST)
 
 	init_arglist (frame, sig, STACK_ADD_BYTES (frame->stack, ip[2]), static_cast<char *> (arglist));
 
-	// save the arglist for future access with MINT_ARGLIST
+	// the CIL arglist opcode reads this back as an ordinary local
 	LOCAL_VAR (ip[1], gpointer) = arglist;
 
 	MONO_INTERP_OP_ADVANCE ();

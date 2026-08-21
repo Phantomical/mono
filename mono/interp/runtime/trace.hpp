@@ -13,10 +13,10 @@ namespace mono::interp {
 
 #ifdef ENABLE_INTERP_TRACE
 
-/*
- * Whether MONO_INTERP_TRACE names this method. Asked once per InterpMethod, so a
- * frame reads the answer off the method rather than matching a name again.
- */
+/// Whether this method's full name contains MONO_INTERP_TRACE's pattern.
+///
+/// Asked once per InterpMethod, so a frame reads the answer off the method
+/// rather than matching a name again.
 gboolean trace_wants_method (MonoMethod *method);
 
 void trace_enter (ThreadContext *context, InterpFrame *frame);

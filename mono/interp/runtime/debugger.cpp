@@ -25,7 +25,7 @@ interp_frame_arg_to_data (MonoInterpFrameHandle frame, MonoMethodSignature *sig,
 	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 	InterpMethod *imethod = iframe->imethod;
 
-	// If index == -1, we finished executing an InterpFrame and the result is at the bottom of the stack.
+	// Index -1 means the frame has returned, and its result sits at the bottom of the stack.
 	if (index == -1)
 		stackval_to_data (sig->ret, iframe->stack, data, TRUE);
 	else if (sig->hasthis && index == 0)
@@ -43,7 +43,7 @@ interp_data_to_frame_arg (MonoInterpFrameHandle frame, MonoMethodSignature *sig,
 	InterpFrame *iframe = static_cast<InterpFrame *> (frame);
 	InterpMethod *imethod = iframe->imethod;
 
-	// Get result from pinvoke call, put it directly on top of execution stack in the caller frame
+	// The pinvoke call's result goes directly onto the execution stack of the calling frame.
 	if (index == -1)
 		stackval_from_data (sig->ret, iframe->stack, data, TRUE);
 	else if (sig->hasthis && index == 0)

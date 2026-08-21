@@ -11,11 +11,11 @@
 
 namespace mono::interp {
 
-/*
- * Calls the compiled body of rmethod with the arguments at sp, and writes its
- * result back over sp. What it threw comes back in error, because the exception
- * has to be raised from the interpreted frame rather than from here.
- */
+/// Calls the compiled body of rmethod with the arguments at sp, and writes its
+/// result back over sp.
+///
+/// What it threw comes back in error, because the exception has to be raised
+/// from the interpreted frame rather than from here.
 void do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError *error);
 
 } // namespace mono::interp

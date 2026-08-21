@@ -29,7 +29,7 @@ interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
 
 	/*
 	 * Resuming restores the stack pointer over every frame below the one it
-	 * resumes into, so those interp_exec_method () invocations never reach
+	 * resumes into, so those mono_interp_exec_method () invocations never reach
 	 * their own HANDLE_FUNCTION_RETURN. Entries are in stack order, so the
 	 * ones being skipped are a suffix, and restoring the outermost of them
 	 * hands back every handle above it at once.
@@ -53,9 +53,10 @@ interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
 
 	/*
 	 * The skipped invocations do not restore anything else either. Their frames go
-	 * back here, because nothing on a frame the resume jumps over runs again, and the
-	 * marker goes with them: nothing here knows which frame of the invocation below is
-	 * current, so say nothing rather than name a dead one.
+	 * back to the watermark, because nothing on a frame the resume jumps over runs
+	 * again. The marker goes with them: this function has no record of which frame
+	 * in the invocation below is current. So it clears a marker that names one of
+	 * the skipped frames, rather than leave a stack walk pointed at dead memory.
 	 */
 	if (dropped) {
 		context->frame_stack_pointer = watermark;
@@ -68,7 +69,7 @@ interp_release_abandoned_handles (MonoJitTlsData *jit_tls, gpointer resume_sp)
 /*
  * interp_set_resume_state:
  *
- *   Set the state the interpeter will continue to execute from after execution returns to the interpreter.
+ *   Set the state the interpreter resumes from when execution returns to it.
  */
 void
 interp_set_resume_state (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExceptionInfo *ei,
@@ -86,7 +87,7 @@ interp_set_resume_state (MonoJitTlsData *jit_tls, MonoObject *ex, MonoJitExcepti
 	if (context->exc_gchandle)
 		mono_gchandle_free_internal (context->exc_gchandle);
 	context->exc_gchandle = mono_gchandle_new_internal (static_cast<MonoObject *> (ex), FALSE);
-	/* Ditto */
+	/* On the interpreter's own stack, so this needs no write barrier. */
 	if (ei)
 		*reinterpret_cast<MonoObject **> (
 			(frame_locals (context->handler_frame) + ei->exvar_offset)) = ex;

@@ -59,7 +59,7 @@ static const char *stack_type_string[] = {"I4", "I8", "R4", "R8", "O ", "VT", "M
 
 /*
  * op_for_stack_type () indexes an opcode family by the numeric value of a
- * StackType, so every family it is used on has to be laid out in mintops.def in
+ * StackType. Every family it is used on has to be laid out in mintops.def in
  * the order StackType names: I4, I8, R4, R8.
  */
 #define ASSERT_STACK_TYPE_FAMILY(base, suffix)                                            \
@@ -121,7 +121,7 @@ static_assert (MINT_MOV_U1 == op_for_mint_type (MINT_MOV_I1, MintType::U1)
 /*
  * A token naming a type that will not load resolves to no class at all, and a
  * class that is merely broken resolves to one carrying the reason. Only the
- * second has a failure to report; asking the first for one dereferences null.
+ * second has a failure to report. Asking the first for one dereferences null.
  */
 #define CHECK_TYPELOAD(klass)                                                               \
 	do {                                                                                    \
@@ -1521,7 +1521,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				/* public ByReference(ref T value) */
 				g_assert (csignature->hasthis && csignature->param_count == 1);
 				sp--;
-				/* We already have the vt on top of the stack. Just do a dummy mov that should be optimized out */
+				/* We already have the vt on top of the stack. Do a dummy mov that should be optimized out. */
 				interp_add_ins (MINT_MOV_P);
 				interp_ins_set_sreg (last_ins, sp[0].local);
 				push_type_vt (klass, mono_class_value_size (klass, NULL));
@@ -3078,7 +3078,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 		/*
 		 * Note: Exceptions thrown when executing a prefixed opcode need
 		 * to take into account the number of prefix bytes (usually the
-		 * throw point is just (ip - n_prefix_bytes).
+		 * throw point is (ip - n_prefix_bytes).
 		 */
 		case CEE_PREFIX1:
 			++ip;
@@ -3165,7 +3165,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				/*
 				 * Only ldftn takes the wrapper here. ldvirtftn resolves the
 				 * override at run time and get_virtual_method () wraps what it
-				 * found; handing it the wrapper instead gives it a method that is
+				 * found. Handing it the wrapper instead gives it a method that is
 				 * not virtual and not in any vtable, so the receiver selects
 				 * nothing and the base body is what comes back.
 				 */
@@ -4017,7 +4017,7 @@ mono_interp_transform_method (InterpMethod *imethod, ThreadContext *context, Mon
 	 * the installer looks for the method's table, which takes the domain lock -
 	 * and the domain lock is outer to calc_section, so asking for it here
 	 * inverts the order. That table also describes some other body than this
-	 * one, so there is nothing here to install from.
+	 * one, so the installer has nothing to install from.
 	 */
 	mono_loader_lock ();
 	mono_os_mutex_lock (&calc_section);

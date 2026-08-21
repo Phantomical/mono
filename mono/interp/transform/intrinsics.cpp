@@ -123,8 +123,6 @@ struct MagicIntrinsic {
 	guint16 insn[3];
 };
 
-// static const MagicIntrinsic int_binop[] = {
-
 static const MagicIntrinsic int_unnop[] = {
 	{"op_UnaryPlus", {MINT_MOV_P, MINT_MOV_P, MINT_MOV_4}},
 	{"op_UnaryNegation", {MINT_NEG_P, MINT_NEG_P, MINT_NEG_FP}},
@@ -162,7 +160,8 @@ TransformData::interp_handle_magic_type_intrinsics (MonoMethod *target_method,
 	const MintType mt = mint_type (m_class_get_byval_arg (magic_class));
 	if (!strcmp (".ctor", tm)) {
 		MonoType *arg = csignature->params[0];
-		/* depending on SIZEOF_VOID_P and the type of the value passed to the .ctor we either have to CONV it, or do nothing */
+		/* Converts the argument to match SIZEOF_VOID_P's width, when its own width
+		 * differs. */
 		int arg_size = mini_magic_type_size (arg);
 
 		if (arg_size > SIZEOF_VOID_P) { // 8 -> 4
@@ -312,8 +311,8 @@ TransformData::interp_handle_magic_type_intrinsics (MonoMethod *target_method,
 		MonoType *arg = csignature->params[0];
 		MintType mt = mint_type (arg);
 
-		/* on 'System.n*::{CompareTo,Equals} (System.n*)' variant we need to push managed
-		 * pointer instead of value */
+		/* For the System.n*::{CompareTo,Equals} (System.n*) overload we push a
+		 * managed pointer to the argument instead of the value. */
 		if (mt != MintType::O)
 			emit_store_value_as_local (arg);
 
@@ -373,7 +372,9 @@ TransformData::interp_handle_magic_type_intrinsics (MonoMethod *target_method,
 	g_error ("TODO: interp_transform_call %s:%s", m_class_get_name (target_method->klass), tm);
 }
 
-/* Return TRUE if call transformation is finished */
+/// Whether target_method's call was fully replaced by emitted bytecode.
+/// Otherwise *op can carry a MINT opcode to emit in place of the call, or be
+/// left unchanged for an ordinary call.
 gboolean
 TransformData::interp_handle_intrinsics (MonoMethod *target_method, MonoClass *constrained_class,
                                          MonoMethodSignature *csignature, gboolean readonly,
@@ -486,10 +487,11 @@ TransformData::interp_handle_intrinsics (MonoMethod *target_method, MonoClass *c
 				mono_interp_error_cleanup (error);
 				return FALSE;
 			}
-			/* Don't use intrinsic if cctor not yet run */
+			/* Use the intrinsic only after the class constructor has run. */
 			if (!vtable->initialized)
 				return FALSE;
-			/* The cache is the first static field. Update this if bcl code changes */
+			/* The cache is the first static field. Update this if the BCL's layout
+			 * changes. */
 			MonoClassField *field = m_class_get_fields (target_method->klass);
 			g_assert (!strcmp (field->name, "s_singleDigitStringCache"));
 			interp_add_ins (MINT_INTRINS_U32_TO_DECSTR);

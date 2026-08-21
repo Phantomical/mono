@@ -59,7 +59,8 @@ get_mov_for_type (MintType mt, gboolean needs_sext)
 	g_assert_not_reached ();
 }
 
-// Should be called when td->cbb branches to newbb and newbb can have a stack state
+/// Call this when the current block branches to newbb, and newbb can carry a
+/// stack state.
 void
 TransformData::fixup_newbb_stack_locals (InterpBasicBlock *newbb)
 {
@@ -95,12 +96,12 @@ TransformData::fixup_newbb_stack_locals (InterpBasicBlock *newbb)
 	}
 }
 
-// Initializes stack state at entry to bb, based on the current stack state
+/// Copies the transform's current stack into bb's entry stack state. The first
+/// call sets that state, and a later call leaves it alone.
 void
 TransformData::init_bb_stack_state (InterpBasicBlock *bb)
 {
 	// FIXME If already initialized, then we need to generate mov to the registers in the state.
-	// Check if already initialized
 	if (bb->stack_height >= 0)
 		return;
 
@@ -182,46 +183,41 @@ TransformData::interp_add_conv (StackInfo *sp, InterpInst *prev_ins, StackType t
 	interp_ins_set_dreg (new_inst, sp->local);
 }
 
-/*
- * Gives an int32 on the stack the width an eight-byte destination reads it at.
- *
- * The int32 wrote four bytes of the stack slot and the store takes all eight, so
- * the value needs an extension first. ECMA-335 Table III.9 names it for a call
- * argument, and the other assignments follow: a native unsigned int is filled
- * with zeroes and everything else with the sign. A C# compiler converts first,
- * so only hand-written IL gets here.
- */
+/// Gives an int32 on the stack the width an eight-byte destination reads it at.
+///
+/// A C# compiler always converts first, so this only fires on hand-written IL.
 void
 TransformData::widen_i4_to_i8 (StackInfo *sp, MonoType *type)
 {
 	if (sp->type != StackType::I4 || mint_type (type) != MintType::I8)
 		return;
 
+	// The int32 wrote four bytes of the stack slot and the destination takes all
+	// eight, so the value needs an extension first. ECMA-335 Table III.9 gives
+	// the rule for a call argument, and the other assignments follow. A native
+	// unsigned int is filled with zeroes, and everything else with the sign.
 	int op =
 		mini_get_underlying_type (type)->type == MONO_TYPE_U ? MINT_CONV_I8_U4 : MINT_CONV_I8_I4;
 	interp_add_conv (sp, NULL, StackType::I8, op);
 }
 
-/*
- * Gives a native int index the int32 form the indexing opcodes read.
- *
- * ECMA-335 III.4.8 lets an array index be an int32 or a native int, and switch
- * compares its operand as an unsigned integer. Both opcodes read four bytes, so
- * a wider index truncated there would select an element rather than fail the
- * bound test.
- */
+/// Gives a native int index the int32 form the indexing opcodes read.
 void
 TransformData::narrow_index (StackInfo *sp)
 {
 	if (sp->type == StackType::I8)
+		// ECMA-335 III.4.8 lets an array index be an int32 or a native int, and
+		// switch compares its operand as an unsigned integer. Both opcodes read
+		// four bytes, so an index left wide loses its high bytes there and
+		// selects an element instead of failing the bound test.
 		interp_add_conv (sp, NULL, StackType::I4, MINT_CONV_INDEX_I8);
 }
 
 /*
  * Give the value at sp the precision a destination of type dtype holds it at.
  *
- * CIL has a single floating point stack type, so a value produced as r4 may
- * legally be stored where an r8 is kept and the other way round. The
+ * CIL has a single floating point stack type, so a value produced as r4 can
+ * legally be stored where an r8 is kept, and the other way round. The
  * interpreter keeps the two apart - an r4 stack slot holds four bytes and an r8
  * slot eight - so anything moving one into the other has to convert first.
  * Every other pairing is either already right or a type error, and neither is
@@ -236,10 +232,9 @@ TransformData::coerce_fp (StackInfo *sp, std::optional<StackType> dtype)
 		interp_add_conv (sp, NULL, StackType::R4, MINT_CONV_R4_R8);
 }
 
-/*
- * The stack type a value of this type is held at, for the floating point types
- * only. Anything else answers nothing, which coerce_fp leaves alone.
- */
+/// The stack type a value of this type is held at, for the floating point
+/// types only. Returns nothing for anything else, which coerce_fp leaves
+/// alone.
 std::optional<StackType>
 fp_stack_type (MonoType *type)
 {
@@ -432,13 +427,14 @@ TransformData::interp_generate_ipe_throw_with_msg (MonoError *error_msg)
 	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
 }
 
+/// Returns method's header, or null if it has none.
+///
+/// mono_method_get_header_internal () sets an error for a method with no
+/// body - an abstract method or an icall - and this returns null instead,
+/// without setting one.
 MonoMethodHeader *
 interp_method_get_header (MonoMethod *method, MonoError *error)
 {
-	/* An explanation: mono_method_get_header_internal returns an error if
-	 * called on a method with no body (e.g. an abstract method, or an
-	 * icall).  We don't want that.
-	 */
 	if (mono_method_has_no_body (method))
 		return NULL;
 	else
@@ -783,7 +779,6 @@ get_unaligned_opcode (int opcode)
 void
 TransformData::interp_handle_isinst (MonoClass *klass, gboolean isinst_instr)
 {
-	/* Follow the logic from jit's handle_isinst */
 	if (!mono_class_has_variant_generic_params (klass)) {
 		if (mono_class_is_interface (klass))
 			interp_add_ins (isinst_instr ? MINT_ISINST_INTERFACE : MINT_CASTCLASS_INTERFACE);
@@ -926,11 +921,11 @@ TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_
 		g_assert (offset);
 
 		/*
-		 * The vtable rides along in the last operand. The offset says where the
-		 * storage is and nothing about which class owns it, so the handler has
-		 * nothing else to run the class initializer from -- and the first touch
-		 * of one of these from outside its own class is exactly when it has to
-		 * run.
+		 * The vtable rides along in the last operand because the offset alone
+		 * does not say which class owns the storage, and the vtable is the only
+		 * source the handler has for running the class initializer. The first
+		 * access to a special static field from outside its own class is
+		 * exactly when that initializer has to run.
 		 */
 		int vtable_index = get_data_item_index (vtable);
 

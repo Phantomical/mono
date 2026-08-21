@@ -26,14 +26,16 @@ InterpInst *
 TransformData::interp_new_ins (guint16 opcode, int len)
 {
 	InterpInst *new_inst;
-	// Size of data region of instruction is length of instruction minus 1 (the opcode slot)
+	// The data region is length minus one guint16: the opcode itself takes the
+	// first slot.
 	new_inst = arena.create_flexible<InterpInst> (sizeof (guint16) * ((len > 0) ? (len - 1) : 0));
 	new_inst->opcode = opcode;
 	new_inst->il_offset = current_il_offset;
 	return new_inst;
 }
 
-// This version need to be used with switch opcode, which doesn't have constant length
+/// Adds an instruction with an explicit length, for an opcode like MINT_SWITCH
+/// whose length is not fixed by the opcode alone.
 InterpInst *
 TransformData::interp_add_ins_explicit (guint16 opcode, int len)
 {
@@ -44,7 +46,8 @@ TransformData::interp_add_ins_explicit (guint16 opcode, int len)
 	else
 		cbb->first_ins = new_inst;
 	cbb->last_ins = new_inst;
-	// We should delete this, but is currently used widely to set the args of an instruction
+	// This is due for removal, but callers still use it widely to set an
+	// instruction's args.
 	last_ins = new_inst;
 	return new_inst;
 }
@@ -78,7 +81,7 @@ TransformData::interp_insert_ins_bb (InterpBasicBlock *bb, InterpInst *prev_ins,
 	return new_inst;
 }
 
-/* Inserts a new instruction after prev_ins. prev_ins must be in cbb */
+/// Inserts a new instruction after prev_ins. prev_ins must be in cbb.
 InterpInst *
 TransformData::interp_insert_ins (InterpInst *prev_ins, guint16 opcode)
 {
@@ -88,10 +91,8 @@ TransformData::interp_insert_ins (InterpInst *prev_ins, guint16 opcode)
 void
 interp_clear_ins (InterpInst *ins)
 {
-	// Clearing instead of removing from the list makes everything easier.
-	// We don't change structure of the instruction list, we don't need
-	// to worry about updating the il_offset, or whether this instruction
-	// was at the start of a basic block etc.
+	// Clearing in place avoids fixing up il_offset or a block's first_ins when
+	// the cleared instruction owned either.
 	ins->opcode = MINT_NOP;
 }
 
@@ -104,16 +105,18 @@ interp_prev_ins (InterpInst *ins)
 	return ins;
 }
 
+/// Retires bb: redirects offset_to_bb entries that named it to bb->next_bb, and
+/// marks it dead. bb must not be used again after this.
 void
 TransformData::mark_bb_as_dead (InterpBasicBlock *bb)
 {
-	// Update IL offset to bb mapping so that offset_to_bb doesn't point to dead
-	// bblocks. This mapping can still be needed when computing clause ranges. Since
-	// multiple IL offsets can end up pointing to same bblock after optimizations,
-	// make sure we update mapping for all of them
+	// offset_to_bb still matters after this for clause ranges, which is why we
+	// redirect it rather than leaving it pointing at a dead bblock. Optimizations
+	// can leave several IL offsets pointing at the same bblock, so we redirect
+	// every one of them.
 	if (bb->ip >= header->code && bb->ip < il_code + header->code_size) {
-		// To avoid scanning the entire offset_to_bb array, we scan only in the vicinity
-		// of the IL offset of bb. We can stop search when we encounter a different bblock.
+		// We scan outward from bb's own IL offset instead of over the whole
+		// array. The scan stops at the first entry that names a different bblock.
 		for (int il_offset = bb->ip - il_code; il_offset >= 0; il_offset--) {
 			if (offset_to_bb[il_offset] == bb)
 				offset_to_bb[il_offset] = bb->next_bb;
@@ -129,10 +132,9 @@ TransformData::mark_bb_as_dead (InterpBasicBlock *bb)
 	}
 
 	bb->dead = TRUE;
-	// bb should never be used/referenced after this
 }
 
-/* Merges two consecutive bbs (in code order) into a single one */
+/// Merges two consecutive bbs (in code order) into a single one.
 void
 TransformData::interp_merge_bblocks (InterpBasicBlock *bb, InterpBasicBlock *bbadd)
 {
@@ -180,7 +182,8 @@ TransformData::interp_merge_bblocks (InterpBasicBlock *bb, InterpBasicBlock *bba
 	mark_bb_as_dead (bbadd);
 }
 
-// array must contain ref
+/// ref must be in array. The search has no bound check, so an absent ref runs
+/// past the end.
 static void
 remove_bblock_ref (InterpBasicBlock **array, InterpBasicBlock *ref, int len)
 {
@@ -272,11 +275,8 @@ TransformData::get_bb (unsigned char *ip, gboolean make_list)
 	return bb;
 }
 
-/*
- * get_basic_blocks:
- *
- *   Compute the set of IL level basic blocks.
- */
+/// Walks header's IL and records where each basic block starts, in
+/// offset_to_bb and, when make_list is set, in basic_blocks.
 void
 TransformData::get_basic_blocks (MonoMethodHeader *header, gboolean make_list)
 {

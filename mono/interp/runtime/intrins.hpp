@@ -5,8 +5,8 @@
  * \file
  * \brief Bodies for library methods the interpreter answers with one opcode.
  *
- * Each stands in for a BCL method that shows up in interpreter-heavy work and
- * would otherwise run a bytecode at a time.
+ * Each replaces a BCL method that shows up in interpreter-heavy work and
+ * otherwise runs one bytecode at a time.
  */
 
 #include <mono/metadata/gc-internals.h>

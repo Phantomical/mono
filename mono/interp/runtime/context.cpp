@@ -42,7 +42,6 @@ interp_free_context (gpointer ctx)
 		static_cast<ThreadContext *> (mono_native_tls_get_value (thread_context_id));
 	/* at thread exit, we can be called from the JIT TLS key destructor with current_context == NULL */
 	if (current_context != NULL) {
-		/* check that the context we're freeing is the current one before overwriting TLS */
 		g_assert (context == current_context);
 		set_context (NULL);
 	}
@@ -60,15 +59,6 @@ interp_free_context (gpointer ctx)
 	g_free (context);
 }
 
-/*
- * Record the frame that the interpreter loop runs, so that a walk of this thread's stack
- * can find its interpreted frames.
- *
- * A call publishes the callee only after the callee is ready to run. A return publishes
- * the caller before anything retires the callee. Both orders name a frame that is live.
- * A walk that arrives in one of those windows reports one frame less than the truth, and
- * that is the safe direction to be wrong in.
- */
 void
 context_set_current_frame (ThreadContext *context, InterpFrame *frame)
 {
@@ -192,5 +182,5 @@ void
 mono_interp_error_cleanup (MonoError *error)
 {
 	mono_error_cleanup (error); /* FIXME: don't swallow the error */
-	error_init_reuse (error);   // one instruction, so this function is good inline candidate
+	error_init_reuse (error);
 }

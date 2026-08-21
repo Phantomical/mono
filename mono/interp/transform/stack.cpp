@@ -67,11 +67,8 @@ get_type_from_stack (StackType type, MonoClass *klass)
 	}
 }
 
-/*
- * These are additional locals that can be allocated as we transform the code.
- * They are allocated past the method locals so they are accessed in the same
- * way, with an offset relative to the frame->locals.
- */
+/// Creates an additional local, allocated past the method's own locals, so it
+/// is addressed the same way: at an offset from the frame's locals area.
 int
 TransformData::create_interp_local_explicit (MonoType *type, int size)
 {

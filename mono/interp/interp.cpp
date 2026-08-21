@@ -49,7 +49,7 @@ InterpState::start ()
 	context->current_frame = frame;
 
 	if (clause_args && clause_args->filter_exception) {
-		// Write the exception on to the first slot on the excecution stack
+		// Write the exception onto the first slot of the execution stack
 		LOCAL_VAR (frame->imethod->total_locals_size, MonoException *) =
 			clause_args->filter_exception;
 	}
@@ -107,8 +107,8 @@ InterpState::interp_throw (MonoException *ex, const guint16 *ip, bool rethrow)
 		 */
 		MONO_CONTEXT_SET_SP (&ctx, mono_interp_invocation_anchor (context));
 
-		// Call the JIT EH code. The EH code will call back to us using
-		// mono_interp_set_resume_state/run_finally/run_filter.
+		// Call the JIT EH code. It calls back through interp_set_resume_state (),
+		// mono_interp_run_finally (), or mono_interp_run_filter ().
 		// Since ctx.ip is 0, this will start unwinding from the LMF frame pushed above,
 		// which points to our frames.
 		mono_handle_exception (&ctx, reinterpret_cast<MonoObject *> (ex));
@@ -143,9 +143,9 @@ InterpState::resume ()
 
 	if (frame == context->handler_frame) {
 		/*
-		 * When running finally blocks, we can have the same frame twice on the stack. If we have
-		 * clause_args information, we need to check whether resuming should happen inside this
-		 * finally block, or in some other part of the method, in which case we need to exit.
+		 * Running a finally block can put the same frame on the stack twice. If
+		 * clause_args is set, check whether the resume belongs inside this finally
+		 * block or elsewhere in the method. If elsewhere, exit.
 		 */
 		if (clause_args && frame == clause_args->exec_frame
 		    && context->handler_ip >= clause_args->end_at_ip)
@@ -153,10 +153,10 @@ InterpState::resume ()
 
 		/* Set the current execution state to the resume state in context */
 		ip = context->handler_ip;
-		/* spec says stack should be empty at endfinally so it should be at the start too */
+		/* ECMA-335 requires the stack to be empty at endfinally, and it must be empty here at the start too */
 		locals = reinterpret_cast<guchar *> (frame->stack);
 		g_assert (context->exc_gchandle);
-		// Write the exception on to the first slot on the excecution stack
+		// Write the exception onto the first slot of the execution stack
 		LOCAL_VAR (frame->imethod->total_locals_size, MonoObject *) =
 			mono_gchandle_get_target_internal (context->exc_gchandle);
 
@@ -167,15 +167,15 @@ InterpState::resume ()
 		MONO_INTERP_DISPATCH ();
 	} else if (clause_args && frame == clause_args->exec_frame) {
 		/*
-		 * This frame doesn't handle the resume state and it is the first frame invoked from EH.
-		 * We can't just return to parent. We must first exit the EH mechanism and start resuming
-		 * again from the original frame.
+		 * This frame does not handle the resume state, and it is the first frame
+		 * invoked from EH. We cannot return directly to the parent. We must exit
+		 * the EH mechanism first, and then resume again from the original frame.
 		 */
 		return &exec_exit;
 	}
 
 	// Because we are resuming in another frame, bypassing a normal ret opcode,
-	// we need to make sure to reset the localloc stack
+	// we need to make sure to roll back what this frame localloc'd
 	frame_data_allocator_pop (&context->data_stack, frame);
 
 	return &exec_exit_frame;
@@ -203,9 +203,9 @@ InterpState::exit ()
 	context->frame_stack_pointer = frame_watermark;
 
 	/*
-	 * Truncating rather than decrementing is what makes this self-healing: an entry
-	 * above ours belongs to an invocation that is already gone, and this is where it
-	 * stops being remembered.
+	 * Truncating rather than decrementing is what makes this self-healing. An
+	 * entry above ours belongs to an invocation that is already gone, and this
+	 * is where it stops being remembered.
 	 */
 	context->handle_mark_count = handle_mark_depth;
 
@@ -220,9 +220,9 @@ InterpState::exit ()
 
 /*
  * The entry points below take a caller that is not the interpreter into it. Each
- * builds the first frame of one invocation, and that frame is a local here: a root
- * frame has no parent to hold it, and the conservative scan of this stack is what
- * roots the code it names.
+ * builds the first frame of one invocation, and that frame is a local here.
+ * A root frame has no parent to hold it, and the conservative scan of this
+ * stack is what roots the code it names.
  */
 
 using namespace mono::interp;
@@ -233,8 +233,8 @@ mono_interp_exec_method (InterpFrame *frame, ThreadContext *context, FrameClause
 	HANDLE_FUNCTION_ENTER ();
 
 	/*
-	 * The error is not used to report anything back. It lives here so that an opcode
-	 * that needs one does not have to declare it, and so that it outlives every frame
+	 * The error is not used to report anything back. It lives here so an opcode
+	 * that needs one does not have to declare it. It also outlives every frame
 	 * the dispatch chain runs through.
 	 */
 	ERROR_DECL (error);
@@ -268,7 +268,8 @@ mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoOb
 		target_method = mono_marshal_get_native_wrapper (target_method, FALSE, FALSE);
 	MonoMethod *invoke_wrapper = mono_marshal_get_runtime_invoke_full (target_method, FALSE, TRUE);
 
-	//* <code>MonoObject *runtime_invoke (MonoObject *this_obj, void **params, MonoObject **exc, void* method)</code>
+	// sp[0..3] match invoke_wrapper's signature:
+	// MonoObject *runtime_invoke (MonoObject *this_obj, void **params, MonoObject **exc, void *method)
 
 	if (sig->hasthis)
 		sp[0].data.p = obj;
@@ -287,11 +288,11 @@ mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoOb
 	frame_stamp_ordinal (context, &frame);
 	frame_root_code_owner (&frame);
 
-	// The method to execute might not be transformed yet, so we don't know how much stack
-	// it uses. We bump the stack_pointer here so any code triggered by method compilation
-	// will not attempt to use the space that we used to push the args for this method.
-	// The real top of stack for this method will be set in mono_interp_exec_method once the
-	// method is transformed.
+	// The method to execute can still be untransformed here, so its stack use is not
+	// known yet. We bump stack_pointer now so anything triggered by compiling the
+	// method cannot reuse the space we used to push this call's arguments.
+	// mono_interp_exec_method () sets the real top of stack once the method is
+	// transformed.
 	context->stack_pointer = reinterpret_cast<guchar *> ((sp + 4));
 
 	mono_interp_exec_method (&frame, context, NULL);
@@ -309,10 +310,10 @@ mono_interp_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoOb
 	MonoObject *result = frame.stack->data.o;
 
 	/*
-	 * A C local is covered by the conservative thread stack scan, so reading the value
-	 * out first hands it to a scanner that keeps it before the interpreter one stops
-	 * covering it. The barrier is what keeps the compiler from doing these two in the
-	 * other order.
+	 * A C local is covered by the conservative scan of this thread's stack. Reading
+	 * the value out to one first keeps it visible there before stack_pointer resets
+	 * and the interpreter's stack stops covering it. The barrier stops the compiler
+	 * from reordering those two steps.
 	 */
 	mono_compiler_barrier ();
 	context->stack_pointer = reinterpret_cast<guchar *> (sp);
@@ -387,8 +388,9 @@ mono_interp_entry (InterpEntryData *data)
 	context->safepoint_frame = outer_stopped_frame;
 
 	/*
-	 * The detach below is a GC transition and can wait out a whole collection, so the
-	 * return value has to stay inside the scanned range until it has been copied out.
+	 * The detach below is a GC transition, and it can wait out a whole
+	 * collection. Until it has been copied out, the return value must stay
+	 * inside the scanned range.
 	 */
 	if (rmethod->needs_thread_attach)
 		mono_threads_detach_coop (orig_domain, &attach_cookie);
@@ -466,7 +468,7 @@ mono_interp_entry_from_ccontext (gpointer ccontext_untyped, gpointer rmethod_unt
 
 	/* Allocate storage for value types */
 	stackval *newsp = sp;
-	/* FIXME we should reuse computation on imethod for this */
+	/* FIXME: reuse the computation on imethod for this */
 	if (sig->hasthis)
 		newsp++;
 	for (int i = 0; i < sig->param_count; i++) {
@@ -492,8 +494,8 @@ mono_interp_entry_from_ccontext (gpointer ccontext_untyped, gpointer rmethod_unt
 	g_assert (!context->has_resume_state);
 
 	/*
-	 * The detach below is a GC transition and can wait out a whole collection, so the
-	 * return value has to stay inside the scanned range until it has been copied out.
+	 * Same GC-transition hazard as mono_interp_entry (). The return value must
+	 * stay inside the scanned range until it has been copied out.
 	 */
 	if (rmethod->needs_thread_attach)
 		mono_threads_detach_coop (orig_domain, &attach_cookie);
@@ -577,8 +579,8 @@ mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_ind
 		;
 
 	/*
-	 * Have to run the clause in a new frame which is a copy of IFRAME, since
-	 * during debugging, there are two copies of the frame on the stack.
+	 * We run the clause in a new frame, a copy of iframe, because debugging can
+	 * leave two copies of the frame on the stack.
 	 */
 	InterpFrame child_frame = {};
 	child_frame.parent = f ? innermost : iframe;
@@ -605,6 +607,6 @@ mono_interp_run_filter (StackFrameInfo *frame, MonoException *ex, int clause_ind
 
 	context->stack_pointer = reinterpret_cast<guchar *> (child_frame.stack);
 
-	/* ENDFILTER stores the result into child_frame->retval */
+	/* MINT_ENDFILTER stores the result into child_frame->retval */
 	return retval.data.i ? TRUE : FALSE;
 }

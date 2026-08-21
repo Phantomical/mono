@@ -172,7 +172,7 @@ do_icall (MonoMethodSignature *sig, int op, stackval *sp, gpointer ptr, gboolean
 		                    sig->pinvoke);
 }
 
-// Do not inline in case order of frame addresses matters, and maybe other reasons.
+// Do not inline in case order of frame addresses matters.
 MONO_NO_OPTIMIZATION MONO_NEVER_INLINE gpointer
 do_icall_wrapper (InterpFrame *frame, MonoMethodSignature *sig, int op, stackval *sp, gpointer ptr,
                   gboolean save_last_error)
@@ -190,15 +190,6 @@ exit_icall:
 	return NULL;
 }
 
-/*
- * Fill the buffer ArgIterator walks: the call-site signature in the first word,
- * then the variable arguments behind it.
- *
- * ves_icall_System_ArgIterator_IntGetNextArg () advances by mono_type_stack_size
- * and realigns only on arm and mips, so everywhere else the offsets are that
- * running sum and nothing more. A float is four bytes rather than a whole slot,
- * so padding one out to its slot would leave every argument behind it misread.
- */
 void
 init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *arglist)
 {
@@ -224,7 +215,7 @@ init_arglist (InterpFrame *frame, MonoMethodSignature *sig, stackval *sp, char *
 
 } // namespace mono::interp
 
-/* Outside the namespace, because interp-internals.hpp declares them there. */
+/* Outside the namespace, because internals.hpp declares them there. */
 
 using namespace mono::interp;
 

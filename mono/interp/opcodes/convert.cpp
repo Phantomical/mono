@@ -35,9 +35,9 @@ namespace mono::interp {
  * The four widths that narrow to less than int32, over the four source types
  * the transform emits for them.
  *
- * A floating point source goes through via first. Without that cast the C
+ * A floating point source goes through via first. Without that cast the C++
  * compiler is allowed to use undefined behaviour when the value is bigger than
- * the narrow type. See the conv.fpint section in the C standard:
+ * the narrow type. See the conv.fpint section in the C++ standard:
  * > The conversion truncates; that is, the fractional  part
  * > is discarded.  The behavior is undefined if the truncated
  * > value cannot be represented in the destination type.

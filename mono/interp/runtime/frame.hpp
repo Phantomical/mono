@@ -1,13 +1,17 @@
 #ifndef __MONO_INTERP_FRAME_DATA_HPP__
 #define __MONO_INTERP_FRAME_DATA_HPP__
 
+/**
+ * \file
+ * \brief A frame's scratch-memory allocator, and how an interpreted frame is
+ * set up to run.
+ */
+
 #include "internals.hpp"
 
 namespace mono::interp {
 
-/*
- * This code synchronizes with interp_mark_stack () using compiler memory barriers.
- */
+/* This synchronizes with interp_mark_stack () using compiler memory barriers. */
 
 inline FrameDataFragment *
 frame_data_frag_new (int size)
@@ -76,7 +80,7 @@ frame_data_allocator_alloc (FrameDataAllocator *stack, InterpFrame *frame, int s
 	int infos_len = stack->infos_len;
 
 	if (!infos_len || (infos_len > 0 && stack->infos[infos_len - 1].frame != frame)) {
-		/* First allocation by this frame. Save the markers for restore */
+		/* First allocation by this frame. Save the markers for restore. */
 		if (infos_len == stack->infos_capacity) {
 			stack->infos_capacity = infos_len * 2;
 			stack->infos = static_cast<FrameDataInfo *> (
@@ -97,7 +101,10 @@ frame_data_allocator_alloc (FrameDataAllocator *stack, InterpFrame *frame, int s
 			current->pos = reinterpret_cast<guint8 *> (&current->data);
 		} else {
 			FrameDataFragment *tmp = current->next;
-			/* avoid linking to be freed fragments, so the GC can't trip over it */
+			/*
+			 * Null the link before freeing the fragment chain, so a GC scan
+			 * cannot follow it into freed memory.
+			 */
 			current->next = NULL;
 			mono_compiler_barrier ();
 			frame_data_frag_free (tmp);
@@ -125,14 +132,11 @@ frame_data_allocator_pop (FrameDataAllocator *stack, InterpFrame *frame)
 	}
 }
 
-/*
- * frame_root_code_owner:
- *
- *   Have FRAME hold whatever keeps the code it is about to execute alive.
- *
- * Almost no method has an owner, so this is a load and a predictable branch; the
- * resolve is paid only by the ones that do.
- */
+/// Sets frame's code owner to whatever keeps the method's code alive, or
+/// null if nothing does.
+///
+/// Almost no method has an owner, so this is a load and a predictable
+/// branch. The resolve runs only for the methods that do.
 inline void
 frame_root_code_owner (InterpFrame *frame)
 {
@@ -141,23 +145,17 @@ frame_root_code_owner (InterpFrame *frame)
 	frame->code_owner = G_UNLIKELY (owner != NULL) ? mono_method_get_code_owner (owner) : NULL;
 }
 
-/*
- * Record when this frame was entered. Ordering interpreter frames is what the
- * unwinder, a stack walk and the resume path all ask for, and an address cannot
- * answer it: a frame lives on the native stack or in the thread's frame stack
- * depending on which of them made it, and the two grow in opposite directions.
- */
+/// Records when this frame was entered, into frame->ordinal.
 inline void
 frame_stamp_ordinal (ThreadContext *context, InterpFrame *frame)
 {
 	frame->ordinal = ++context->next_frame_ordinal;
 }
 
-/*
- * reinit_frame:
- *
- *   Reinitialize a frame.
- */
+/// Points frame at another method.
+///
+/// Takes the parent, imethod and stack from the arguments, clears the saved
+/// instruction pointer, and stamps a new ordinal and code owner.
 inline void
 reinit_frame (InterpFrame *frame, ThreadContext *context, InterpFrame *parent,
               InterpMethod *imethod, gpointer stack)

@@ -12,8 +12,8 @@ namespace mono::interp {
 
 /*
  * Arithmetic and comparison. The opcode names are pasted from a base name and a
- * type suffix - IMPL_INT_BINOPS (MINT_ADD, ...) writes MINT_ADD_I4 and
- * MINT_ADD_I8 - so grepping for the full name of one finds nothing.
+ * type suffix, so grepping for the full name of one finds nothing. IMPL_BINOPS
+ * (MINT_ADD, ...) writes MINT_ADD_I4, MINT_ADD_I8, MINT_ADD_R4 and MINT_ADD_R8.
  */
 
 #define IMPL_TRIOP(opcode, type, expr)                                         \
