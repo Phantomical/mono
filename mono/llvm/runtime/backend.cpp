@@ -717,6 +717,16 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	dm.attach_body (tier, entry, nullptr);
 
 	/*
+	 * The symbols rather than the printed names. mono_type_get_desc () writes a
+	 * shared reference parameter as object, so the shared form and the genuine
+	 * <object> instantiation have the same full name and the line could not say
+	 * which of them it is about. A symbol ends in the MonoMethod address.
+	 */
+	if (is_jit_trace_enabled ())
+		llvm::errs () << "[llvm-jit] " << dm.name << " shares the body of "
+			      << (*owner)->name << "\n";
+
+	/*
 	 * The instantiation has an entry now, and this is the only place that says
 	 * so: the notification the compile path sends names the method a body was
 	 * built for, which here is the shared form. The interpreter keeps nothing
@@ -818,27 +828,8 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 		}
 	}
 
-	/*
-	 * After the tier-0 branch: the interpreter resolves every token against the
-	 * instantiation it was given, so a method it accepts runs concrete however
-	 * many others share a compiled body with it.
-	 */
-	if (MonoMethod *shared = shared_form (method)) {
-		llvm::Expected<Compiled> body = enter_shared_body (domain, dm, shared, tier);
-
-		if (body)
-			return *body;
-
-		if (!body.errorIsA<SharingRefusal> ())
-			return body.takeError ();
-
-		if (is_jit_trace_enabled ())
-			llvm::errs () << "[llvm-jit] not sharing " << dm.name << ": "
-				      << llvm::toString (body.takeError ()) << "\n";
-		else
-			llvm::consumeError (body.takeError ());
-	}
-
+	// Sharing is decided below, per member, so this route and promotion get the
+	// same answer for the same method.
 	std::vector<llvm::Expected<Compiled>> compiled =
 		compile_bodies (domain, &dm, tier, for_sharing);
 
@@ -874,18 +865,53 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 
 	JitTier pipeline = tier == MonoTier::tier2 ? JitTier::tier2 : JitTier::tier1;
 	std::vector<size_t> taken;
-	std::map<size_t, llvm::Error> refused;
+	std::map<size_t, llvm::Expected<Compiled>> settled;
 
 	for (size_t i = 0; i < dms.size (); ++i) {
+		MonoDomainMethod *dm = dms[i];
+
 		/*
 		 * Before anything is translated, so a method gets the same verdict
 		 * whichever tier ends up running it: a body the verifier rejects is
 		 * one no tier may run, and one it accepts is one every tier may.
 		 */
-		if (llvm::Error invalid = verify_method (dms[i]->method))
-			refused.emplace (i, std::move (invalid));
-		else
+		if (llvm::Error invalid = verify_method (dm->method)) {
+			settled.emplace (i, std::move (invalid));
+			continue;
+		}
+
+		/*
+		 * At every tier. Which instantiations one body serves is observable -
+		 * a detour on the shared form moves all of them - so it must not
+		 * depend on how far a method happens to have promoted.
+		 *
+		 * The shared method is open, and shared_form () refuses an open
+		 * method, so the compile enter_shared_body () asks for arrives here
+		 * and stops.
+		 */
+		MonoMethod *shared = shared_form (dm->method);
+
+		if (shared == nullptr) {
 			taken.push_back (i);
+			continue;
+		}
+
+		llvm::Expected<Compiled> body = enter_shared_body (domain, *dm, shared, tier);
+
+		if (body || !body.errorIsA<SharingRefusal> ()) {
+			settled.emplace (i, std::move (body));
+			continue;
+		}
+
+		// A refusal is an answer about the shared form rather than about this
+		// method, so the method is compiled against its own instantiation.
+		if (is_jit_trace_enabled ())
+			llvm::errs () << "[llvm-jit] not sharing " << dm->name << ": "
+				      << llvm::toString (body.takeError ()) << "\n";
+		else
+			llvm::consumeError (body.takeError ());
+
+		taken.push_back (i);
 	}
 
 	/// The results in dms order: what each method was compiled to, or why it
@@ -896,10 +922,10 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 
 		out.reserve (dms.size ());
 		for (size_t i = 0; i < dms.size (); ++i) {
-			auto no = refused.find (i);
+			auto left = settled.find (i);
 
-			if (no != refused.end ())
-				out.push_back (std::move (no->second));
+			if (left != settled.end ())
+				out.push_back (std::move (left->second));
 			else
 				out.push_back (std::move (compiled[next++]));
 		}
