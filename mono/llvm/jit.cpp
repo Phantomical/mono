@@ -305,9 +305,9 @@ relocation_targets (const object::ObjectFile &obj, const object::SectionRef &sec
  * arguments and locals in the order it named them - arguments then locals - and
  * a shared body's receiver, which goes to rgctx.
  *
- * The read is off the object rather than the linked graph because nothing here
- * needs relocating. A slot is a register number and a displacement, both settled
- * at codegen. The id picks the marker out of the finally markers that share the
+ * The read is off the object rather than the linked graph because no slot needs
+ * relocating. A slot is a register number and a displacement, both settled at
+ * codegen. The id picks the marker out of the finally markers that share the
  * section, and the function list says whose marker it is: the records are
  * grouped by function, and each group names its function through the relocation
  * on its address field.
@@ -964,11 +964,10 @@ Tier0Pipeline::Tier0Pipeline ()
 
 	fpm.addPass (ClassInitPass ());
 
-	// At O1 the stock function simplification pipeline does not run this pass,
-	// and it is load-bearing. It marks the entry thunk's call to the method
-	// body as a tail call, which lets the thunk leave no frame behind. Without
-	// it, every method entered through its thunk shows up twice in a stack
-	// trace.
+	// At O1 the stock function simplification pipeline does not run this pass.
+	// It marks the entry thunk's call to the method body as a tail call, which
+	// lets the thunk leave no frame behind. Without it, every method entered
+	// through its thunk shows up twice in a stack trace.
 	fpm.addPass (TailCallElimPass ());
 
 	// Last, because what it repairs is the pipeline's own doing.

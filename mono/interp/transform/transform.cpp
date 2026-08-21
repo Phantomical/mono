@@ -3748,10 +3748,10 @@ mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig)
 
 	/*
 	 * A refused method is interpreted, which is what it was doing anyway, so
-	 * nothing about the program says the answer was taken. The tiered mask
-	 * rather than the transform's own verbose level: --interp=verbose= also
-	 * makes the interpreter the whole engine, and the answer here is only
-	 * interesting while there is a compiled tier to refuse.
+	 * this trace is the only record that the decision was taken. The tiered
+	 * mask rather than the transform's own verbose level: --interp=verbose=
+	 * also makes the interpreter the whole engine, and a refusal only matters
+	 * while there is a compiled tier to refuse.
 	 */
 	if (refusal != NULL && MONO_TRACE_IS_TRACED (G_LOG_LEVEL_DEBUG, MONO_TRACE_TIERED)) {
 		char *name = mono_method_full_name (method, TRUE);

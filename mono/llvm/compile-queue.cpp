@@ -118,7 +118,7 @@ CompileQueue::stop ()
 		std::thread::id self = std::this_thread::get_id ();
 
 		/*
-		 * Only the std::thread comes out; the entries stay. A detached worker
+		 * Only the std::thread comes out. The entries stay: a detached worker
 		 * still names its own by index once it is out of Worker::start (), and
 		 * stopping_ keeps any more from being added behind it.
 		 */
@@ -176,7 +176,7 @@ CompileQueue::ensure_worker ()
 	/*
 	 * Everything parked is going to take an item, so a thread is worth adding
 	 * only for what is queued behind them. That grows the pool one thread per
-	 * enqueue and only under work the pool is not keeping up with; a program
+	 * enqueue, and only under work the pool is not keeping up with. A program
 	 * compiling a method at a time never gets past the first.
 	 */
 	if (pending_.size () <= idle_)

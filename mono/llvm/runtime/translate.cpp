@@ -474,8 +474,8 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 	for (auto &member : members) {
 		// The budget is counted for each member rather than for the module, so
 		// what a method folds in does not depend on how many others happened to
-		// promote beside it. MONO_LLVM_JIT_BATCH then changes the compile count
-		// and nothing else.
+		// promote beside it. MONO_LLVM_JIT_BATCH then changes how many compiles
+		// run, not what any of them folds in.
 		inlining.root = member->method;
 		inlining.budget = trivial_inline_budget ();
 

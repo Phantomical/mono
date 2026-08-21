@@ -56,8 +56,8 @@ llvm::TargetMachine &tier2_target_machine ();
 /// instruction when compiling a function.
 ///
 /// An atomic load or store wider than this is legal IR, but it lowers to a call
-/// into the atomic runtime library. Nothing here defines that library, so a
-/// wider access has to be built some other way.
+/// into the atomic runtime library. We register no symbol for that library, so
+/// a wider access has to be built some other way.
 unsigned host_max_atomic_bits (const llvm::Function &f);
 
 /// Whether the IR verifier runs over what this backend produces.
@@ -97,7 +97,7 @@ struct ProfileCounters {
 /// Which of the two IR pipelines a module is compiled through.
 ///
 /// This is the JIT's own choice of pipeline, and it is not the runtime's ranking
-/// of tiers - nothing here knows about the interpreter or a detour.
+/// of tiers - MonoJit knows nothing about the interpreter or a detour.
 enum class JitTier {
 	/// The O1 function pipeline with FastISel behind it, instrumented so that
 	/// a later compile has counts to read.
@@ -230,9 +230,9 @@ public:
 	/// The module lands in a JITDylib of its own. module_symbols is defined
 	/// there directly, ahead of the module itself - the caller's own resolved
 	/// callee addresses, private to this compile and never shared. Beyond that,
-	/// the dylib resolves external symbols through register_symbol () and
-	/// nothing else. A lookup never falls back to the process, so an
-	/// unregistered helper fails the compile loudly.
+	/// the dylib resolves external symbols through register_symbol (). A lookup
+	/// never falls back to the process, so an unregistered helper fails the
+	/// compile loudly.
 	///
 	/// The module must already have been through optimize (), which is where
 	/// the tier is decided. Hand back what optimize () answered as layout, and

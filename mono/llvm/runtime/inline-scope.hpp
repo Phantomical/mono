@@ -64,10 +64,10 @@ MonoMethod *il_call_target (MonoMethod *method, uint32_t token);
 ///
 /// Fold the body in and a helper it calls sees the caller's frame instead. Two
 /// marks say a helper reads that frame: NoInlining, which is what a managed one
-/// carries, and having no IL at all, because every stack walk the runtime offers
-/// is an icall and this corlib's GetCurrentMethod, GetExecutingAssembly and
-/// GetCallingAssembly carry no mark. A call through a pointer names no method, so
-/// a body holding one is refused outright.
+/// carries, and having no IL at all. Every stack walk the runtime offers is an
+/// icall, and this corlib's GetCurrentMethod, GetExecutingAssembly and
+/// GetCallingAssembly carry no mark. A call through a pointer names no method,
+/// so a body holding one is refused outright.
 bool loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header);
 
 /// Translates callee into the module its caller is being built in, marks the

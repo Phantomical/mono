@@ -186,7 +186,8 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	}();
 
 	// Spent either way. A translation that failed cost as much as one that did
-	// not, and nothing else stops a second site from asking for the same body.
+	// not, and the budget is all that stops a second site from asking for the
+	// same body.
 	--scope.budget;
 
 	if (!materialized) {

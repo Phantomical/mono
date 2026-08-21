@@ -280,8 +280,9 @@ MonoDomainMethod::drop_folded_bodies ()
 }
 
 /*
- * Nothing here is ever taken back, so this only rises. It is what keeps the
- * question off the interpreter's call path in a process with no overrides.
+ * No override is ever uninstalled, so this count only rises. That is what
+ * keeps the question off the interpreter's call path in a process with no
+ * overrides.
  */
 std::atomic<uint32_t> overrides_installed { 0 };
 

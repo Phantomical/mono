@@ -107,14 +107,14 @@ public:
 	MonoDomain *const domain;
 
 	/// The symbol the method's thunk is published under. Empty until the engine
-	/// has attached, since the mangling is the engine's and nothing else has one.
+	/// has attached, since only the engine has a mangling.
 	std::string name;
 
 	/// The tier that owns the entry now.
 	MonoTier tier () const { return tier_.load (std::memory_order_acquire); }
 
-	/// How many calls this method takes at its entry tier before it should be
-	/// asked for as the next one. Zero means it never promotes.
+	/// How many calls this method takes at its entry tier before it is asked
+	/// for as the next one. Zero means it never promotes.
 	std::atomic<int32_t> tier_calls{0};
 
 	/// Redirects the method's entry at \p code, but only when \p tier outranks
