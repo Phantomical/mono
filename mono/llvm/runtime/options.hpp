@@ -94,9 +94,24 @@ uint32_t trivial_inline_il_limit ();
 
 /// How many bodies one tier-2 compile can fold in.
 ///
-/// MONO_LLVM_JIT_INLINE_BUDGET moves it. It bounds the translation the pre-pass
-/// adds to a compile. A chain of forwarders is what spends it.
+/// MONO_LLVM_JIT_INLINE_BUDGET moves it. It bounds the translation both
+/// inliners add to a compile, and they spend the one count between them. A
+/// chain of forwarders is what spends it.
 uint32_t trivial_inline_budget ();
+
+/// The largest callee, in IL bytes, the tier-2 cost model will translate in
+/// order to weigh it.
+///
+/// MONO_LLVM_JIT_INLINE_COST_IL_LIMIT moves it, and zero there leaves tier 2
+/// with the shape-test pre-pass alone - which is what separates a bug in the
+/// cost model from one in what it folded.
+uint32_t costed_inline_il_limit ();
+
+/// How many folds deep past a method the tier-2 inliner may go.
+///
+/// MONO_LLVM_JIT_INLINE_DEPTH moves it. A call graph with a cycle in it never
+/// runs out of sites, so the loop needs a floor whatever the budget says.
+uint32_t inline_depth_limit ();
 
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.
 ///

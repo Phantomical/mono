@@ -261,6 +261,46 @@ trivial_inline_budget ()
 	return bodies;
 }
 
+uint32_t
+costed_inline_il_limit ()
+{
+	static uint32_t bytes = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_COST_IL_LIMIT");
+
+		/*
+		 * A hundred and twenty-eight bytes, and it is a bound on translation
+		 * rather than on code size: LLVM's own threshold decides what is worth
+		 * folding, and this only decides how large a body the compile will
+		 * translate in order to ask. A number with no sweep behind it.
+		 */
+		if (value == nullptr)
+			return 128;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 0;
+	}();
+
+	return bytes;
+}
+
+uint32_t
+inline_depth_limit ()
+{
+	static uint32_t levels = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_DEPTH");
+
+		if (value == nullptr)
+			return 4;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 0;
+	}();
+
+	return levels;
+}
+
 int32_t
 tier0_calls (MonoMethod *method)
 {

@@ -10,6 +10,8 @@
 #include "minimal-compile.hpp"
 #include "naming.hpp"
 #include "options.hpp"
+#include "passes/inline-copies.hpp"
+#include "profile-inlines.hpp"
 #include "timing.hpp"
 #include "trivial-inlines.hpp"
 
@@ -172,12 +174,18 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (!function)
 		return target.recover (function.takeError ());
 
+	InlineScope inlining;
+
 	// Tier 2 folds in the callees whose IL already says the inline pays. It runs
 	// here so that the bodies it adds still reach the naming and the resolution
 	// below.
-	if (target.tier == JitTier::tier2)
+	if (target.tier == JitTier::tier2) {
+		inlining.root = method;
+		inlining.defined.push_back (method);
+		inlining.budget = trivial_inline_budget ();
 		materialize_trivial_callees (*module, target.domain, method, **function,
-		                             externals, types);
+		                             externals, types, inlining);
+	}
 
 	/* Before the entry name is read: the body's own declaration is one of these. */
 	if (Error err = bind_symbols (*module))
@@ -208,11 +216,23 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (dumping (entry.c_str ()))
 		module->print (llvm::errs (), nullptr);
 
-	std::vector<ProfileCounters> layout =
-		MonoJit::optimize (*module, target.tier, target.profile);
+	/*
+	 * The cost model materializes on demand, from inside the pipeline and so
+	 * past the resolution above. It appends to the same two vectors, and the
+	 * link is given module_symbols after this rather than before it.
+	 */
+	std::optional<ProfileInliner> inliner;
 
 	if (target.tier == JitTier::tier2)
-		if (Error err = trivial_inlines_landed (*module))
+		inliner.emplace (*module, target, externals, types, inlining,
+		                 module_symbols);
+
+	std::vector<ProfileCounters> layout = MonoJit::optimize (
+		*module, target.tier, target.profile,
+		inliner ? &*inliner : nullptr);
+
+	if (target.tier == JitTier::tier2)
+		if (Error err = inline_copies_stripped (*module))
 			return std::move (err);
 
 	Expected<CompiledMethod> compiled = [&] {

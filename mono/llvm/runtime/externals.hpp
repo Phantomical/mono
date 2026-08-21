@@ -9,6 +9,7 @@
 
 #include "method-to-llvm.hpp"
 
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
@@ -46,7 +47,7 @@ class MonoDomainMethod;
 /// is the last place metadata gets loaded. A callee whose class will not
 /// load therefore fails here, not during translation.
 llvm::Error resolve_externals (MonoJit &jit, MonoDomain *domain,
-                               const std::vector<ExternalSymbol> &externals,
+                               llvm::ArrayRef<ExternalSymbol> externals,
                                llvm::function_ref<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee,
                                std::vector<std::pair<llvm::StringRef, void *>> &module_symbols);
 

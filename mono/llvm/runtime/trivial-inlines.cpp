@@ -2,12 +2,11 @@
 
 #include "trivial-inlines.hpp"
 
+#include "inline-scope.hpp"
 #include "method-symbols.hpp"
 #include "method-to-llvm.hpp"
 #include "minimal-compile.hpp"
 #include "options.hpp"
-#include "passes/tier-counter.hpp"
-#include "timing.hpp"
 
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
@@ -24,7 +23,6 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/opcodes.h"
-#include "mono/metadata/profiler-private.h"
 #include "mono/metadata/tabledefs.h"
 
 using namespace llvm;
@@ -32,10 +30,6 @@ using namespace llvm;
 namespace mono {
 
 namespace {
-
-/// Marks a body this pre-pass materialized, so one the inliner did not fold in
-/// can be found again.
-constexpr StringRef inline_copy_attribute = "mono-inline-copy";
 
 /// The reduced shape of a candidate's IL.
 struct Shape {
@@ -147,13 +141,6 @@ enters_a_method (MonoOpcodeEnum op)
 	return op == MONO_CEE_CALL || op == MONO_CEE_CALLVIRT || op == MONO_CEE_NEWOBJ;
 }
 
-/// Reads a four-byte little-endian operand: a metadata token or a displacement.
-uint32_t
-read_u32 (const unsigned char *at)
-{
-	return at[0] | (at[1] << 8) | (at[2] << 16) | ((uint32_t) at[3] << 24);
-}
-
 /// Whether a branch goes to the instruction behind it, which is a fallthrough
 /// written out.
 ///
@@ -169,25 +156,9 @@ branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t opera
 	if (op == MONO_CEE_BR_S)
 		return (int8_t) code[operand] == 0;
 	if (op == MONO_CEE_BR)
-		return (int32_t) read_u32 (code + operand) == 0;
+		return (int32_t) il_read_u32 (code + operand) == 0;
 
 	return false;
-}
-
-/// Returns the method a call site's token names, or null when the metadata
-/// does not resolve it.
-MonoMethod *
-call_target (MonoMethod *method, uint32_t token)
-{
-	ERROR_DECL (metadata_error);
-	MonoMethod *target =
-		mono_get_method_checked (m_class_get_image (method->klass), token, nullptr,
-	                                 mono_method_get_context (method), metadata_error);
-
-	if (target == nullptr)
-		mono_error_cleanup (metadata_error);
-
-	return target;
 }
 
 /// Returns the method's shape when its IL is a straight line of value
@@ -254,7 +225,7 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 			if (shape.forwards_to != nullptr)
 				return std::nullopt;
 
-			shape.forwards_to = call_target (method, read_u32 (code + operand));
+			shape.forwards_to = il_call_target (method, il_read_u32 (code + operand));
 			if (shape.forwards_to == nullptr)
 				return std::nullopt;
 		} else if (!computes_a_value (op)
@@ -267,42 +238,6 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 
 	// The IL ran off its own end without reaching a terminator.
 	return std::nullopt;
-}
-
-/// Whether a callee can be folded into its caller without changing what the
-/// program does.
-bool
-may_fold (MonoMethod *callee)
-{
-	// A wrapper is a frame the runtime's own walks look for. The stack trace
-	// hides it, and an icall reads its caller from it. Several kinds are also
-	// entered on terms this caller does not share.
-	if (callee->wrapper_type != MONO_WRAPPER_NONE)
-		return false;
-
-	// A dynamic method is freed on its own. A copy of its body folded into a
-	// caller will outlive the data its constants point at.
-	if (callee->dynamic)
-		return false;
-
-	// No IL of its own to translate.
-	if (implemented_outside_il (callee))
-		return false;
-
-	if ((callee->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
-		return false;
-
-	// A shared body is entered with a context this caller has no reason to
-	// hold. What is worth folding is the instantiation, and a site naming one
-	// is already a direct call.
-	if (mono_method_check_context_used (callee) != 0)
-		return false;
-
-	// The enter and leave events describe a frame, and a folded body has none.
-	if (mono_profiler_get_call_instrumentation_flags (callee) != 0)
-		return false;
-
-	return true;
 }
 
 void
@@ -321,7 +256,7 @@ trace_inline (MonoMethod *callee, MonoMethod *caller)
 void
 materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *root,
                              Function &body, std::vector<ExternalSymbol> &externals,
-                             ModuleTypes &types)
+                             ModuleTypes &types, InlineScope &scope)
 {
 	uint32_t limit = trivial_inline_il_limit ();
 
@@ -330,14 +265,12 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 	if (limit == 0 || mini_get_debug_options ()->gen_sdb_seq_points)
 		return;
 
-	uint32_t budget = trivial_inline_budget ();
-	SmallVector<MonoMethod *, 8> defined { root };
 	// A body the module now holds, and the method it belongs to. A body reached
 	// through another one is folded into that one first, so the pair is what a
 	// trace has to name.
 	SmallVector<std::pair<MonoMethod *, Function *>, 8> pending { { root, &body } };
 
-	while (!pending.empty () && budget > 0) {
+	while (!pending.empty () && scope.budget > 0) {
 		auto [into, caller] = pending.pop_back_val ();
 		SmallVector<Function *, 8> called;
 
@@ -352,7 +285,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 		}
 
 		for (Function *decl : called) {
-			if (budget == 0)
+			if (scope.budget == 0)
 				break;
 
 			// Another of this caller's callees forwards here and got there
@@ -362,8 +295,8 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 			MonoMethod *callee = marked_method (*decl);
 
-			if (callee == nullptr || is_contained (defined, callee)
-			    || !may_fold (callee))
+			if (callee == nullptr || is_contained (scope.defined, callee)
+			    || !may_fold (domain, callee))
 				continue;
 
 			ERROR_DECL (metadata_error);
@@ -399,61 +332,19 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (is_jit_trace_enabled ())
 				trace_inline (callee, into);
 
-			// The translator builds the body into the declaration this caller
-			// already has, so the call sites need no rewriting.
-			Expected<Function *> materialized = [&] {
-				timing::Scope timed (timing::Phase::translate);
+			Function *copy =
+				materialize_inline_copy (module, domain, callee, cfg.get (),
+			                                 *decl, externals, types, scope);
 
-				return method_to_llvm (&module, cfg.get (), callee, &externals,
-				                       nullptr, nullptr, defined, &types);
-			}();
-
-			if (!materialized) {
-				consumeError (materialized.takeError ());
-
-				// A translation that fails partway can leave a partial body in
-				// decl. Delete it, or the caller ends up calling a body with
-				// no ret.
-				if (!decl->isDeclaration ())
-					decl->deleteBody ();
+			if (copy == nullptr)
 				continue;
-			}
 
-			g_assert (*materialized == decl);
-
-			// These attributes tell the tier-counter pass which body to
-			// instrument. They belong to the method's own body, not to this
-			// copy of it.
-			decl->removeFnAttr (tier_counter_attribute);
-			decl->removeFnAttr (tier_handle_attribute);
-
-			// Local linkage is what lets the inliner delete the copy once it
-			// has folded every call to it.
-			decl->setLinkage (GlobalValue::InternalLinkage);
-			decl->addFnAttr (Attribute::AlwaysInline);
-			decl->addFnAttr (inline_copy_attribute);
-
-			defined.push_back (callee);
-			pending.push_back ({ callee, decl });
-			--budget;
+			// These shapes have nothing to weigh, so the pipeline folds them
+			// rather than a cost model.
+			copy->addFnAttr (Attribute::AlwaysInline);
+			pending.push_back ({ callee, copy });
 		}
 	}
-}
-
-Error
-trivial_inlines_landed (const Module &module)
-{
-	for (const Function &fn : module) {
-		if (fn.isDeclaration () || !fn.hasFnAttribute (inline_copy_attribute))
-			continue;
-
-		return createStringError (inconvertibleErrorCode (),
-		                          "%s was materialized to be folded into its "
-		                          "caller and the inliner did not fold it",
-		                          fn.getName ().str ().c_str ());
-	}
-
-	return Error::success ();
 }
 
 } // namespace mono

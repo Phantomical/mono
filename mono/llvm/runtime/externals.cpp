@@ -12,7 +12,7 @@ namespace mono {
 
 llvm::Error
 resolve_externals (MonoJit &jit, MonoDomain *domain,
-                   const std::vector<ExternalSymbol> &externals,
+                   llvm::ArrayRef<ExternalSymbol> externals,
                    llvm::function_ref<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee,
                    std::vector<std::pair<llvm::StringRef, void *>> &module_symbols)
 {

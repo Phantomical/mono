@@ -33,6 +33,7 @@ class TargetMachine;
 namespace mono {
 
 class CodeArena;
+class InlineCandidates;
 
 namespace gdbjit {
 struct Registration;
@@ -272,8 +273,13 @@ public:
 	///
 	/// Returns nothing when the module was not instrumented, which is every
 	/// tier-2 module and every tier-1 module compiled with tier 2 turned off.
+	///
+	/// inliner, when given, is what tier 2 asks for the callee bodies it folds
+	/// in. Without one the module is compiled with every call it arrived with
+	/// still standing.
 	static std::vector<ProfileCounters> optimize (llvm::Module &m, JitTier tier,
-	                                              llvm::ArrayRef<uint8_t> profile = {});
+	                                              llvm::ArrayRef<uint8_t> profile = {},
+	                                              InlineCandidates *inliner = nullptr);
 
 	/// Run the tier-0 IR pipeline over a module in place.
 	///
@@ -282,7 +288,8 @@ public:
 
 	/// Run the tier-2 IR pipeline over a module in place, against a profile
 	/// build_profile () wrote.
-	static void run_tier2_pipeline (llvm::Module &m, llvm::ArrayRef<uint8_t> profile);
+	static void run_tier2_pipeline (llvm::Module &m, llvm::ArrayRef<uint8_t> profile,
+	                                InlineCandidates *inliner = nullptr);
 
 	/// The DataLayout modules compiled here must carry. compile () stamps it
 	/// on modules that do not have one yet.

@@ -16,10 +16,12 @@
 #include "sidetables.hpp"
 #include "passes/array-address.hpp"
 #include "passes/class-init.hpp"
+#include "passes/inline-copies.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/tier-counter.hpp"
+#include "passes/top-down-inline.hpp"
 #include "timing.hpp"
 
 #include <llvm/CodeGen/TargetLowering.h>
@@ -1126,7 +1128,8 @@ apply_profile (Module &m, ArrayRef<uint8_t> profile)
 }
 
 void
-MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile)
+MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile,
+                             InlineCandidates *inliner)
 {
 	timing::Scope timed (timing::Phase::pipeline);
 	VerifyLevel verify = verify_level ();
@@ -1172,9 +1175,24 @@ MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile)
 	// class-init check on a folded entry is dominated by the caller's.
 	mpm.addPass (AlwaysInlinerPass ());
 
-	FunctionPassManager fpm =
+	mpm.addPass (createModuleToFunctionPassAdaptor (
 		pb.buildFunctionSimplificationPipeline (OptimizationLevel::O3,
-	                                                ThinOrFullLTOPhase::None);
+	                                                ThinOrFullLTOPhase::None)));
+
+	/*
+	 * Behind simplification, and that is what a cost model needs: freshly
+	 * translated managed IR is a null check on every dereference and a bounds
+	 * check on every element, and a threshold read against it is spent before
+	 * any of the real work is costed.
+	 */
+	if (inliner != nullptr)
+		mpm.addPass (TopDownInlinerPass (*inliner, tier2_target_machine ()));
+
+	// A copy neither inliner folded in goes back to being a call through the
+	// callee's thunk, which is where it was before the body was asked for.
+	mpm.addPass (StripInlineCopiesPass ());
+
+	FunctionPassManager fpm;
 
 	fpm.addPass (ClassInitPass ());
 	fpm.addPass (TailCallElimPass ());
@@ -1334,10 +1352,11 @@ MonoJit::register_symbol (StringRef name, void *addr)
 }
 
 std::vector<ProfileCounters>
-MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile)
+MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile,
+                   InlineCandidates *inliner)
 {
 	if (tier == JitTier::tier2) {
-		run_tier2_pipeline (m, profile);
+		run_tier2_pipeline (m, profile, inliner);
 		return {};
 	}
 
