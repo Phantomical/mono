@@ -116,8 +116,8 @@ lazy_frame_leave (void *frame)
 	 * An abort aimed at a thread inside the compiler is left as a flag rather
 	 * than delivered by hijack, because the thread is not running managed code
 	 * at the point it was suspended. This is where it gets picked up - the
-	 * forced variant, since the method being compiled may well have been
-	 * called from a protected wrapper.
+	 * forced variant, since the method being compiled can have a protected
+	 * wrapper for a caller. The ordinary checkpoint declines while one is there.
 	 */
 	return mono_thread_force_interruption_checkpoint_noraise ();
 }
@@ -134,9 +134,9 @@ interp_frame_enter (void *frame, const InterpArgContext *args)
 		return;
 
 	/*
-	 * The caller as it stood at the call: its return address sits just below
-	 * the arguments it pushed, and the callee-saved registers are the ones the
-	 * thunk spilled before anything here could touch them.
+	 * The caller as it stood at the call: its return address sits directly
+	 * below the arguments it pushed, and the callee-saved registers are the
+	 * ones the thunk spilled, untouched since.
 	 */
 	memset (&entry->ctx, 0, sizeof (entry->ctx));
 	entry->ctx.gregs[AMD64_RIP] = *(uint64_t *) (caller_sp - sizeof (uint64_t));
@@ -190,7 +190,7 @@ emit_callee_saved_clobber (llvm::IRBuilderBase &b)
  *
  * mono_tls_offsets holds what the linker resolved for the thread-local, which is
  * only a displacement from the thread pointer under the initial-exec and
- * local-exec models; under the dynamic ones the block moves per thread and the
+ * local-exec models. Under the dynamic ones the block moves per thread and the
  * number means nothing. Rather than reason about which model a given build got,
  * check the answer: walk the displacement from this thread's own thread pointer
  * and see whether it arrives at the variable.

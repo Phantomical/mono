@@ -5,7 +5,7 @@
  * A value type that will not fit in the return registers has to come back
  * through a pointer the caller supplies. Left to itself LLVM invents that
  * pointer while lowering the call, and the slot it points at is a fresh stack
- * object in the caller's own frame - which is why such a call can never become
+ * object in the caller's own frame. That is why such a call can never become
  * a jump: handing the frame away would leave the callee writing into dead
  * stack, so the backend quietly drops the tail call.
  *
@@ -20,14 +20,14 @@
  * leaves the receiver in the first argument register, where the runtime's
  * trampolines insist on finding it - mono_arch_get_this_arg_from_call and the
  * unbox trampoline both read it straight out of ARG_REG1. Arity is only the
- * mechanism; the invariant behind it is that every signature something recovers
- * a receiver from has that receiver as its first argument, and a receiver is
- * always integer-class.
+ * mechanism. The invariant behind it is that every signature something
+ * recovers a receiver from has that receiver as its first argument, and a
+ * receiver is always integer-class.
  *
  * Deciding it by arity rather than by whether the signature has a `this` is
  * what keeps one LLVM prototype from meaning two different things. A static
  * method taking one pointer and an instance method taking none are both
- * `void (ptr, ptr)`; if the index came from the signature they would disagree
+ * `void (ptr, ptr)`. If the index came from the signature they would disagree
  * about which pointer is the return slot, and a tail call between them - which
  * matching_call_abi () would wave through, since it compares the prototype -
  * would put it in the wrong register. It also keeps a declaration and the
@@ -70,7 +70,7 @@ struct ReturnRegisters {
 	}
 };
 
-/// Count the return registers T's leaves claim into USE.
+/// Adds the return registers t's leaves claim to use.
 ///
 /// LLVM flattens an aggregate return into its scalar leaves and gives each leaf
 /// a register of its own, so what decides the demotion is how many leaves there
@@ -113,12 +113,12 @@ count_return_registers (llvm::Type *t, ReturnRegisters &use)
 
 } // namespace detail
 
-/// Whether a return of TYPE is handed back through a hidden pointer rather than
+/// Whether a return of type is handed back through a hidden pointer rather than
 /// in the return registers.
 inline bool
 returns_by_hidden_pointer (llvm::Type *type)
 {
-	/* Only an aggregate is ever flattened; everything else has its own register. */
+	/* Only an aggregate is ever flattened. Everything else has its own register. */
 	if (!type->isStructTy () && !type->isArrayTy ())
 		return false;
 
@@ -128,7 +128,7 @@ returns_by_hidden_pointer (llvm::Type *type)
 	return use.exhausted ();
 }
 
-/// Which parameter of a prototype of COUNT parameters is the hidden return
+/// Which parameter of a prototype of count parameters is the hidden return
 /// pointer, given that it has one. The one place the position is decided.
 inline unsigned
 hidden_return_index (unsigned count)
@@ -136,7 +136,7 @@ hidden_return_index (unsigned count)
 	return count > 1 ? 1 : 0;
 }
 
-/// How many of F's parameters the convention places in the argument sequence.
+/// How many of f's parameters the convention places in the argument sequence.
 ///
 /// A trailing `nest` parameter is not one of them: it is pinned to a register
 /// of its own, so it takes no place in the sequence the hidden return pointer
@@ -152,7 +152,7 @@ placed_parameter_count (const llvm::Function *f)
 	return count;
 }
 
-/// What F's hidden return pointer points at, or null when F returns its value
+/// What f's hidden return pointer points at, or null when f returns its value
 /// the ordinary way.
 ///
 /// Only parameters 0 and 1 are asked: `sret` anywhere else is IR the verifier
@@ -164,7 +164,7 @@ hidden_return_type (const llvm::Function *f)
 	return f->getParamStructRetType (hidden_return_index (placed_parameter_count (f)));
 }
 
-/// The hidden return pointer F is entered with, or null.
+/// The hidden return pointer f is entered with, or null.
 inline llvm::Argument *
 hidden_return_pointer (llvm::Function *f)
 {
@@ -173,8 +173,8 @@ hidden_return_pointer (llvm::Function *f)
 	               : nullptr;
 }
 
-/// Where natural argument I lands in a prototype whose hidden return pointer is
-/// at HIDDEN, which is past the end when there is none.
+/// Where natural argument i lands in a prototype whose hidden return pointer is
+/// at hidden, which is past the end when there is none.
 ///
 /// Not an offset: with the pointer at parameter 1, argument 0 sits in front of
 /// it and everything after it is shifted by one.
@@ -184,7 +184,7 @@ natural_parameter_index (unsigned i, unsigned hidden)
 	return i + (i >= hidden ? 1 : 0);
 }
 
-/// Where natural argument I lands in F.
+/// Where natural argument i lands in f.
 inline unsigned
 natural_parameter_index (unsigned i, const llvm::Function *f)
 {
@@ -193,8 +193,9 @@ natural_parameter_index (unsigned i, const llvm::Function *f)
 	return natural_parameter_index (i, hidden_return_index (placed_parameter_count (f)));
 }
 
-/// TYPE with its hidden return pointer folded back into the return, which is the
-/// shape the signature described before this convention took it apart.
+/// Returns type with its hidden return pointer folded back into the return,
+/// which is the shape the signature described before this convention took it
+/// apart.
 inline llvm::FunctionType *
 natural_prototype (llvm::FunctionType *type, llvm::Type *hidden)
 {
@@ -204,8 +205,8 @@ natural_prototype (llvm::FunctionType *type, llvm::Type *hidden)
 	return llvm::FunctionType::get (hidden, params, type->isVarArg ());
 }
 
-/// TYPE with the hidden pointer a return of HIDDEN travels through spelled out
-/// as a parameter, behind the first argument.
+/// Returns type with the hidden pointer a return of hidden travels through
+/// spelled out as a parameter, behind the first argument.
 inline llvm::FunctionType *
 hidden_return_prototype (llvm::FunctionType *type, llvm::Type *hidden)
 {

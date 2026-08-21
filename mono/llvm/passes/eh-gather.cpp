@@ -1,13 +1,12 @@
 /**
  * \file
- * eh-gather.cpp - MonoEHGatherPass, the machine-level recovery of mono's EH
- * clauses from the final landing-pad set.
+ * \brief The machine-level recovery of mono's EH clauses from the final
+ * landing-pad set.
  */
 
 /*
- * Same reason engine.cpp drops mono's PIC macro: libtool compiles this TU with
- * -DPIC, and LLVM uses `PIC` as an identifier (PassInstrumentationCallbacks), so
- * the macro would rewrite it and break a header.
+ * LLVM uses `PIC` as an identifier (PassInstrumentationCallbacks). Mono's
+ * build defines it as a macro.
  */
 #ifdef PIC
 #undef PIC
@@ -44,20 +43,21 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 	if (pads.empty ()) {
 		/*
 		 * No landing pads survived to codegen. For an ordinary non-EH
-		 * function this is simply nothing to do - stay inert so the emitted
-		 * object is byte-identical to a module the EH machinery never
-		 * touched (mono-has-eh-clauses is unset; translator.cpp never marks
-		 * a method whose IL declared no clauses).
+		 * function there is nothing to do here. Staying inert keeps the
+		 * emitted object byte-identical to a module the EH machinery never
+		 * touched. (mono-has-eh-clauses is unset: method-to-llvm.cpp never
+		 * marks a method whose IL declared no clauses.)
 		 *
-		 * For a method translator.cpp DID mark mono-has-eh-clauses, zero
-		 * landing pads means every protected call under its try region got
-		 * optimized to a nounwind call before isel - there is nothing left
-		 * that can unwind through it. That is not uncertain, it is
-		 * confirmed safe, so record a clean (not declined, no clauses)
-		 * entry rather than leaving this function out of the side channel
-		 * entirely: C3 turns a present-but-empty entry into a genuinely
-		 * empty (but valid) `.mono_lsda` record, which C4 (translator.cpp)
-		 * can tell apart from "absent because declined".
+		 * For a method method-to-llvm.cpp did mark, zero landing pads
+		 * means every protected call under its try region got optimized
+		 * to a nounwind call before isel. Nothing is left that can unwind
+		 * through it. That is a confirmed-safe case, not an uncertain
+		 * one. This records a clean entry - no clauses, not declined -
+		 * rather than leaving the function out of the side channel. The
+		 * side-table writer (compiler.cpp) turns a present-but-empty
+		 * entry into a genuinely empty, valid `.mono_lsda` record, which
+		 * the reader (mono_lsda.cpp) tells apart from "absent because
+		 * declined".
 		 */
 		if (mf.getFunction ().hasFnAttribute ("mono-has-eh-clauses")) {
 			MonoEHFunctionClauses fn;
@@ -75,25 +75,28 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 	for (const LandingPadInfo &lp : pads) {
 		const MCSymbol *handler = lp.LandingPadLabel;
 		/*
-		 * Every entry in mf.getLandingPads () was created by isel lowering a
-		 * real `invoke`, which always assigns the pad's label at the same
-		 * time; there is no legitimate input shape that leaves it null by the
-		 * time this pass runs (after addMachinePasses (), before the
-		 * AsmPrinter). If it ever is, either LLVM's own invariant broke or we
-		 * are misreading LandingPadInfo - either way, keep going would publish
-		 * (or wrongly decline) against a handler we cannot name.
+		 * Every entry in mf.getLandingPads () comes from isel lowering a
+		 * real `invoke`, and isel always assigns the pad's label at the
+		 * same time. No legitimate input leaves it null here, after
+		 * addMachinePasses () and before the AsmPrinter runs. A null
+		 * label means LLVM's own invariant broke, or we read
+		 * LandingPadInfo wrong. Either way, there is no handler to
+		 * publish or decline against, so we abort.
 		 */
 		if (!handler)
 			report_fatal_error ("mono: landing pad has no label - LLVM invariant broken");
 
 		/*
-		 * mono's own finally/fault emission (emit_handler_start,
-		 * translator-call.cpp) never calls LLVMSetCleanup - a finally/fault
-		 * clause is published through the same smuggled type_info_N clause a
-		 * catch uses, not LLVM's native cleanup bit. So a landing pad this
-		 * pass sees should never be cleanup-flagged; if one is, some code path
-		 * (ours or LLVM's) set it without our knowledge, and treating that as
-		 * an ordinary decline would hide a case we don't understand yet.
+		 * mono never marks a landing pad cleanup: landing_pad () and
+		 * emit_resume_exit () (method-to-llvm/exceptions.cpp) build
+		 * every pad's LandingPadInst and never call setCleanup ().
+		 * A finally or fault clause publishes through the same
+		 * smuggled type_info_N global a catch uses, not through
+		 * LLVM's cleanup bit. So a pad this pass sees must never be
+		 * cleanup-flagged. One that is means some code, ours or
+		 * LLVM's, set the bit without our knowledge. Treating that
+		 * as an ordinary decline hides a case we do not understand,
+		 * so we abort instead.
 		 */
 		if (const BasicBlock *bb =
 		        lp.LandingPadBlock ? lp.LandingPadBlock->getBasicBlock () : nullptr) {
@@ -104,47 +107,55 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 		}
 
 		/*
-		 * BeginLabels/EndLabels carry ONE (begin,end) pair PER INVOKE that
-		 * unwinds to this landing pad (SmallVector<MCSymbol*,1>): mono's
-		 * emit_call (translator-emit.cpp) issues one LLVMBuildInvoke2 per
-		 * protected call in the try - including the implicit null/bounds/div
-		 * checks that lower to throw-call invokes - all converging on the
-		 * clause's single handler landing pad. So a try with N protected calls
-		 * yields ONE landing pad with N invoke ranges. We MUST emit one clause
-		 * per invoke range: keeping only the first would publish a
-		 * [try_start,try_end) covering only the first call, so a throw from the
-		 * 2nd+ call is not is_address_protected and the handler silently never
-		 * runs. mono's model supports this directly - is_address_protected
-		 * scans all clauses and takes the first PC match, so multiple ei with
-		 * the same clause_index/handler over disjoint ranges is expected.
-		 * .mono_lsda is therefore "one entry per invoke range"; C3/C4 honor it.
+		 * BeginLabels/EndLabels carry one (begin, end) pair per invoke
+		 * that unwinds to this landing pad (SmallVector<MCSymbol*, 1>).
+		 * Every protected call in the try becomes its own invoke - the
+		 * emitted null, bounds and div-by-zero checks included -
+		 * converging on the clause's one handler pad. Both come from
+		 * emit_protected_call and emit_unwinding_call
+		 * (method-to-llvm/exceptions.cpp). So a try with N protected
+		 * calls yields one landing pad with N invoke ranges.
 		 *
-		 * The two vectors are paired by index - an LLVM invariant, not
-		 * something an input program can violate - so a length mismatch means
-		 * LandingPadInfo is broken or we are reading it wrong.
+		 * We emit one clause per invoke range. Keeping only the first
+		 * publishes a [try_start, try_end) that covers only the first
+		 * call. A throw from the second call on is then not
+		 * is_address_protected, so the handler silently never runs.
+		 * mono's model supports this directly. is_address_protected
+		 * scans all clauses and takes the first PC match, so several
+		 * entries can share one clause_index and handler over
+		 * disjoint ranges. `.mono_lsda` is therefore one entry per
+		 * invoke range, and this pass and the side-table writer
+		 * (compiler.cpp) both honor it.
+		 *
+		 * The two vectors are paired by index. That is an LLVM
+		 * invariant, not something an input program can violate, so a
+		 * length mismatch means LandingPadInfo is broken, or we
+		 * misread it.
 		 */
 		if (lp.BeginLabels.size () != lp.EndLabels.size ())
 			report_fatal_error ("mono: landing pad Begin/EndLabels length mismatch - LLVM invariant broken");
 		size_t nranges = std::min (lp.BeginLabels.size (), lp.EndLabels.size ());
 		/*
-		 * A landing pad with zero invoke ranges CAN legitimately happen: if
-		 * every call this specific clause protected got optimized to a
-		 * nounwind call before isel, its invokes (and so its Begin/EndLabels)
-		 * never existed. This clause contributes no protected range - not an
-		 * error, just nothing to publish for it - so it is skipped rather than
-		 * declining the whole method.
+		 * A landing pad with zero invoke ranges can legitimately happen.
+		 * If every call this clause protected got optimized to a
+		 * nounwind call before isel, its invokes - and so its
+		 * Begin/EndLabels - never existed. This clause contributes no
+		 * protected range. That is not an error, so it is skipped
+		 * rather than declining the whole method.
 		 */
 		if (nranges == 0)
 			continue;
 
 		for (size_t i = 0; i < nranges; ++i) {
 			/*
-			 * The invoke range and handler entry are the same MCSymbol*s the
-			 * AsmPrinter emits into .text; C3 turns them into
-			 * func_begin-relative offsets. Both are populated by the same
-			 * addInvoke () call that grew Begin/EndLabels, so a null one here
-			 * is the same class of broken invariant as the length mismatch
-			 * above, not something unsupported input can produce.
+			 * The invoke range and the handler entry are all
+			 * MCSymbol*s the AsmPrinter emits into .text. The
+			 * side-table writer (compiler.cpp) turns them into
+			 * func_begin-relative offsets. The begin and end labels
+			 * come from the same addInvoke () call that grew
+			 * Begin/EndLabels. A null one here is the same class of
+			 * broken invariant as the length mismatch above, not
+			 * something unsupported input can produce.
 			 */
 			const MCSymbol *begin = lp.BeginLabels[i];
 			const MCSymbol *end = lp.EndLabels[i];
@@ -152,24 +163,26 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 				report_fatal_error ("mono: landing pad invoke range has a null label - LLVM invariant broken");
 
 			/*
-			 * Back to front: MachineFunction::addLandingPad () walks the
-			 * landingpad's clauses in reverse when it builds TypeIds, so
-			 * reversing here restores the order the translator emitted them in -
-			 * innermost clause first, then outwards through the enclosers
-			 * (add_covering_clauses, translator-call.cpp). That order is the
-			 * nesting chain, and .mono_lsda carries it by position, so it has to
-			 * survive this hop.
+			 * MachineFunction::addLandingPad () walks the
+			 * landingpad's clauses in reverse when it builds
+			 * TypeIds. Reversing here restores the order
+			 * covering_chain () (method-to-llvm/exceptions.cpp)
+			 * emitted them in: innermost clause first, then
+			 * outwards through the enclosers. That order is the
+			 * nesting chain, and `.mono_lsda` carries it by
+			 * position, so it has to survive this hop.
 			 */
 			for (auto it = lp.TypeIds.rbegin (); it != lp.TypeIds.rend (); ++it) {
 				int type_id = *it;
 
 				/*
-				 * type_id < 0 is a filter (exception-specification) - a real,
-				 * valid `catch (T) when (cond)` clause we simply don't support
-				 * yet (Option F1, out of scope by design). This is the one
-				 * legitimate decline left in this pass: flag it explicitly so
-				 * translator.cpp can report the specific reason instead of a
-				 * generic parse failure, and skip just this TypeId.
+				 * type_id < 0 is a filter, an exception-specification.
+				 * It is a real, valid `catch (T) when (cond)` clause
+				 * this backend does not support yet, out of scope by
+				 * design. This is the one legitimate decline left in
+				 * this pass. It is recorded in has_filter, separately
+				 * from the report_fatal_error aborts above, and only
+				 * this TypeId is skipped.
 				 */
 				if (type_id < 0) {
 					fn.has_filter = true;
@@ -192,19 +205,23 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 				clause.handler = handler;
 
 				/*
-				 * mono's clause smuggling: TypeIds are 1-based indices into
-				 * getTypeInfos(); the referenced type_info_N global's
-				 * initializer carries the IL clause index AND the clause's
-				 * flags (kind). Recover both in-process - no ttype-table deref,
-				 * no relocation dependency.
+				 * mono's clause smuggling: TypeIds are 1-based indices
+				 * into getTypeInfos (). The referenced type_info_N
+				 * global's initializer carries the IL clause index and
+				 * the clause's flags (kind). We recover both
+				 * in-process, with no ttype-table deref and no
+				 * relocation dependency.
 				 *
-				 * v2 form: a 2-word {i32 clause_index, i32 kind} struct
-				 * (emit_handler_start, translator-call.cpp). A bare i32
-				 * ConstantInt is the legacy 1-word form (clause_index only,
-				 * kind stays NONE=0) and is still accepted. An all-zero struct
-				 * lowers to ConstantAggregateZero, so the two words are read
-				 * with Constant::getAggregateElement (not dyn_cast<ConstantStruct>,
-				 * which a zero aggregate is not).
+				 * v2 form: a 2-word {i32 clause_index, i32 kind}
+				 * struct (clause_marker (),
+				 * method-to-llvm/exceptions.cpp). A bare i32
+				 * ConstantInt is the legacy 1-word form (clause_index
+				 * only, kind stays 0) and is still accepted. An
+				 * all-zero struct lowers to ConstantAggregateZero, so
+				 * the two words are read with
+				 * Constant::getAggregateElement, not
+				 * dyn_cast<ConstantStruct>, which a zero aggregate is
+				 * not.
 				 */
 				if ((size_t) type_id <= type_infos.size ()) {
 					const GlobalValue *gv = type_infos[type_id - 1];
@@ -233,10 +250,11 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 					}
 				}
 				/*
-				 * type_info_N is a global WE emit (emit_handler_start,
-				 * translator-call.cpp) with a fixed, known shape. Failing to
-				 * read it back means our own emission or our own reader is
-				 * wrong, not that the input did something we don't support.
+				 * type_info_N is a global we emit (clause_marker (),
+				 * method-to-llvm/exceptions.cpp) with a fixed, known
+				 * shape. Failing to read it back means our own emission
+				 * or our own reader is wrong, not that the input did
+				 * something we do not support.
 				 */
 				if (!clause.clause_resolved)
 					report_fatal_error ("mono: type_info_N clause global did not decode - our own emission or reader is wrong");

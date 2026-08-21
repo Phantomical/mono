@@ -1,13 +1,13 @@
 /**
  * \file
- * \brief Redirectable call thunks - the only address the JIT ever publishes.
+ * \brief Redirectable call thunks - the indirection every method is
+ * published through.
  *
- * Every method is published as a thunk that jumps through a writable slot, so
- * a later tier can be swapped in by writing the slot: callers keep their
- * direct call to the thunk and pick up the new code on their next call. That
- * is the mechanism promotion is built on, and it is also what makes runtime
- * detours (Harmony/MonoMod) work, which is where the unusual thunk geometry
- * comes from.
+ * Every method is published as a thunk that jumps through a writable slot. A
+ * later tier is swapped in with one store to that slot. Callers keep their
+ * direct call to the thunk, and pick up the new code on their next call.
+ * Promotion is built on this redirect, and so is a runtime detour (Harmony,
+ * MonoMod) - which is why the thunk carries its unusual geometry.
  */
 
 #ifndef MONO_MINI_THUNK_HPP
@@ -25,7 +25,7 @@
 
 namespace mono {
 
-/// An individual redirectable thunk.
+/// A redirectable thunk.
 class Thunk {
 private:
 	void *data_ = nullptr;
@@ -37,27 +37,36 @@ private:
 public:
 	Thunk () = default;
 
-	/// Allocate a new thunk pointing to a fatal error function.
+	/// Allocates a new thunk with no target set.
 	///
-	/// Returns an error if allocation could not be performed.
+	/// The slot starts null, so calling through it before the first
+	/// redirect () faults.
+	///
+	/// Returns an error if allocation fails.
 	static llvm::Expected<Thunk> allocate (CodeArena *arena, void *key = nullptr);
 
-	/// Get the function pointer for this thunk.
+	/// Returns the function pointer for this thunk.
 	void *code () const;
 
-	/// Get a pointer to the unbox shim for this thunk.
+	/// Returns a pointer to this thunk's unbox shim.
 	///
-	/// This gets automatically added to all thunks, but is only valid to use
-	/// for value types.
+	/// Every thunk carries one, but only a value type's instance methods
+	/// can enter through it.
 	void *unbox () const;
 
-	/// Redirect this thunk to point to a new target.
+	/// Redirects this thunk to a new target.
 	void redirect (void *target);
 
-	/// Redirect this thunk to point to a fatal trap.
+	/// Redirects this thunk to a fatal trap.
+	///
+	/// A no-op on a default-constructed thunk.
 	void quarantine ();
 
-	/// Create and register the appropriate MonoJitInfo for this thunk.
+	/// Registers this thunk's MonoJitInfo record.
+	///
+	/// Returns the record for a dynamic method's stub, and null otherwise. A
+	/// returned record goes to mono_jit_info_table_remove () before the code
+	/// is freed.
 	MonoJitInfo *register_jinfo (std::string_view name, MonoDomain *domain, MonoMethod *method);
 
 	explicit operator bool () const { return data_ != nullptr; }
@@ -65,12 +74,9 @@ public:
 
 /// Registers a bare jump stub with the runtime, so a stack walk can cross it.
 ///
-/// A stub pushes nothing, so at any instruction in one the frame is still the
-/// caller's - which is what the arch's CIE describes and what lets a walk that
-/// catches a thread mid-jump step off into the code that called it.
-///
-/// Answers the record for a dynamic method's stub, which has to be taken back
-/// out again when the method is freed, and null for every other method.
+/// Returns the record for a dynamic method's stub, and null otherwise. A
+/// returned record goes to mono_jit_info_table_remove () before the code is
+/// freed, or a walk can still resolve against a stub that has gone.
 MonoJitInfo *register_code_stub (void *code, size_t size, std::string_view name,
                                  MonoDomain *domain, MonoMethod *method);
 

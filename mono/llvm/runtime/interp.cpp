@@ -33,16 +33,17 @@ namespace {
 
 /*
  * One layout per prototype, shared by every method with that prototype. Behind a
- * lock of its own rather than an engine's: an interpreted call reads this on
- * every invocation and must never queue behind a compile.
+ * lock of its own rather than an engine's: an interpreted call reads the layout
+ * on every invocation and must never queue behind a compile.
  */
 std::shared_mutex g_interp_mutex;
 std::unordered_map<std::string, std::unique_ptr<arch::InterpEntryLayout>> g_layouts;
 
-/// A key naming everything about a prototype that decides how a call to it is
-/// laid out - the types and the attributes that move a value. Two methods that
-/// agree on this can share one thunk between them, and nothing narrower is safe
-/// to share on.
+/// Names the part of a call's layout the LLVM prototype settles: the types, the
+/// calling convention, and the attributes that move a value.
+///
+/// A layout cannot be shared on this alone. Whether a parameter is byref, and
+/// where the receiver stops, come from the signature and must be added to it.
 std::string
 prototype_key (Function *f)
 {
@@ -63,9 +64,9 @@ Expected<const arch::InterpEntryLayout *>
 layout_for (MonoDomain *domain, MonoMethod *method)
 {
 	/*
-	 * The layout is worked out from the prototype rather than from the method,
-	 * so it is built out of a declaration of one - nothing here compiles
-	 * anything, and the module exists only to hold the types.
+	 * The layout comes from the prototype rather than the method. We declare
+	 * one instead of compiling it, and the module exists only to hold its
+	 * types.
 	 */
 	ERROR_DECL (metadata_error);
 	MinimalCompile cfg (method, domain, metadata_error);
@@ -89,10 +90,10 @@ layout_for (MonoDomain *domain, MonoMethod *method)
 		sig = mono_marshal_get_string_ctor_signature (method);
 
 	/*
-	 * The prototype alone does not settle the layout: a byref parameter hands
-	 * the interpreter the pointer itself where an ordinary reference hands it
-	 * the slot holding one, and the two are the same bare ptr here. Nor does it
-	 * settle where the receiver stops and the arguments start.
+	 * The prototype alone does not settle the layout. A byref parameter and an
+	 * ordinary reference both lower to the same bare pointer, so the key must
+	 * mark which one it is. Nor does the prototype say where the receiver stops
+	 * and the arguments start.
 	 */
 	std::string key = prototype_key (*shape);
 
@@ -153,14 +154,15 @@ interp_entry (MonoDomainMethod &dm)
 	return arch::InterpEntryPoint { layout, imethod };
 }
 
-/*
- * The thread's own domain, not the one that published the stub: a call that
- * arrived here having switched domains has to run the method as the domain it
- * switched to, which is the one holding that method's interpreter state.
- */
 arch::InterpEntryPoint
 interp_entry_for (MonoMethod *method)
 {
+	/*
+	 * This runs the method in the calling thread's domain, not the one that
+	 * published the stub. A call that arrived here after a domain switch must
+	 * run in the domain it switched to, since that domain owns the method's
+	 * interpreter state.
+	 */
 	MonoDomainMethod *dm = domain_method_find (mono_domain_get (), method);
 
 	if (dm == nullptr)

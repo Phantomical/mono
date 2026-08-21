@@ -202,8 +202,8 @@ struct Encoded {
 };
 
 /// The rules the target's ABI leaves in force at a function's first
-/// instruction: the call pushed the return address, so the CFA is one slot above
-/// the stack pointer and the address sits in that slot.
+/// instruction. The call pushed the return address, so the CFA is one slot
+/// above the stack pointer, and the address sits in that slot.
 ///
 /// This is the CIE's whole program, and it is what makes DW_CFA_restore mean
 /// "back to the state the function was entered in". A function whose own

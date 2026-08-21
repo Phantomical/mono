@@ -19,8 +19,8 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 	/*
 	 * A whole object goes in as one record. perf claims the bytes behind a record
 	 * for the frame description it carries, and the functions of an object sit
-	 * against each other, so a record each would leave every one but the last
-	 * with its description in the next one's bytes.
+	 * against each other, so a record per function claims the next function's
+	 * bytes for every one but the last.
 	 *
 	 * The description covers them all instead: one FDE per function, and one for
 	 * each of the linker's stubs with no rules at all, which says the stub still
@@ -48,8 +48,9 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 		return;
 
 	/* The record takes the name of the function the object starts with, and
-	 * everything else in it prints under that name. What else is in it is the
-	 * thunks and stubs of the same method. */
+	 * everything else in it prints under that name. That is this method's own
+	 * filter bodies, and the object's linker stubs, which several methods can
+	 * share. */
 	std::string display;
 	std::vector<FrameFunction> functions;
 
@@ -64,9 +65,9 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 		FrameFunction fn{(size_t) (code - start), size, {}};
 
 		/* A function whose block cannot be read is left out. An FDE with no
-		 * rules would say it kept the frame it was called with, and a body with
-		 * a prologue has not: that unwinds to a wrong answer, where leaving it
-		 * out only stops the walk. */
+		 * rules says the function still has the frame it was called with. A body
+		 * with a prologue does not, so publishing one there unwinds to a wrong
+		 * answer. Leaving the function out only stops the walk instead. */
 		if (parse_unwind_records (compiled.unwind_table, compiled.unwind_table_size,
 		                          code, fn.records))
 			functions.push_back (std::move (fn));

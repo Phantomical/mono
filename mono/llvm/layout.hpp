@@ -4,10 +4,10 @@
  *
  * A value type converts to a packed struct spelling out its real layout, with
  * every byte no field claims filled in by padding_type (). The translator
- * writes that shape (set_packed_body (), method-to-llvm/signature.cpp) and the
- * C calling convention reads it back when it classifies (collect_leaves (),
- * arch/<target>/mono-abi.cpp), so the two agree on which bytes carry data
- * without the second one ever seeing the metadata the first one read.
+ * writes that shape (set_packed_body (), method-to-llvm/signature.cpp), and
+ * the C calling convention reads it back when it classifies (collect_leaves (),
+ * arch/<target>/mono-abi.cpp). The two agree on which bytes carry data without
+ * the calling convention ever seeing the metadata the translator read.
  */
 
 #ifndef MONO_LLVM_LAYOUT_HPP
@@ -18,20 +18,14 @@
 
 namespace mono {
 
-/// The BYTES of a value type that no field claims.
+/// Returns a type spanning \p bytes of layout no field claims.
 ///
-/// Byte-wide storage, because padding is not always dead: an explicit layout
-/// can overlap fields, and the arms the packed struct cannot spell out are
-/// padding to the classification while still being live data to the program.
-/// A first-class copy of the value has to carry them through, which rules out
-/// the [n x i1] this used to be - a load of an i1 keeps one bit of the byte
-/// and the matching store writes the other seven back as zero.
-///
-/// The literal struct wrapper is what keeps padding recognizable. Every type a
-/// field converts to is a primitive, a pointer, a vector, an array of bytes or
-/// a *named* struct, so a literal struct wrapping an array of bytes is a shape
-/// no field ever takes - and unlike a name, which LLVM uniques per context and
-/// would quietly hand back as `mono.pad.1`, it cannot be taken by accident.
+/// Storage is byte-wide, not bit-wide, because padding is not always dead.
+/// An explicit layout can overlap fields. A byte the classifier treats as
+/// padding can still be live data the program reads through a different
+/// field. A first-class copy of the value has to carry that byte through
+/// unchanged. A bit-packed layout cannot: a load reads only the
+/// low bit, and the matching store zero-fills the rest.
 inline llvm::Type *
 padding_type (llvm::LLVMContext &ctx, unsigned bytes)
 {
@@ -40,12 +34,17 @@ padding_type (llvm::LLVMContext &ctx, unsigned bytes)
 	return llvm::StructType::get (ctx, llvm::ArrayRef<llvm::Type *> (filler));
 }
 
-/// Whether T is what padding_type () builds, which classification skips over.
+/// Whether t is what padding_type () builds, which classification skips over.
 inline bool
 is_padding_type (llvm::Type *t)
 {
 	auto *st = llvm::dyn_cast<llvm::StructType> (t);
 
+	// A literal struct, not a named one. Every type a field converts to is
+	// a primitive, a pointer, a vector, an array of bytes or a *named*
+	// struct. No field produces this exact shape. A name cannot give that
+	// promise: LLVM uniques colliding struct names per context instead of
+	// refusing them.
 	if (st == nullptr || !st->isLiteral () || st->getNumElements () != 1)
 		return false;
 

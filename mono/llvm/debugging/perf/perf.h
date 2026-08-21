@@ -16,7 +16,7 @@
 MONO_BEGIN_DECLS
 
 /**
- * Name [code, code + code_size) in the jit dump, together with the frame
+ * Names [code, code + code_size) in the jit dump, together with the frame
  * description that lets a profile unwind out of it.
  *
  * cfi is the DWARF call frame program mono keeps for the stub

@@ -11,7 +11,7 @@
  *     struct { int a; float b; }     travels in one integer and one SSE register
  *     struct { byte a, b, c, d; }    travels in four integer registers
  *
- * where the C ABI would pack each into a single eightbyte. Padding a managed
+ * where the C ABI packs each into a single eightbyte. Padding a managed
  * layout spells out is a struct member like any other to that lowering, and
  * takes a register too.
  *
@@ -111,7 +111,8 @@ flatten (Type *t, uint64_t offset, const DataLayout &dl, SmallVectorImpl<Leaf> &
 		/*
 		 * Wider than a machine word is CC_X86_64_I128's consecutive-register
 		 * rule, which is the one place the convention refuses to split a value
-		 * between registers and the stack, and nothing here models it.
+		 * between registers and the stack, and the interpreter entry does not
+		 * model it.
 		 */
 		if (t->getIntegerBitWidth () > 64)
 			return unsupported ("an integer wider than a machine word");
@@ -137,7 +138,8 @@ rides_sse (Type *t)
 	return t->isFloatingPointTy () || t->isVectorTy ();
 }
 
-/// Hands out the places the convention would, in the order it visits arguments.
+/// Hands out the places the convention gives each leaf, in the order it visits
+/// arguments.
 class Assigner {
 public:
 	ArgPiece place (const Leaf &leaf, const DataLayout &dl)
@@ -194,7 +196,7 @@ place_parameter (Type *param, bool byref, Assigner &assign, const DataLayout &dl
 
 	/*
 	 * A value that arrived in one piece is already storage the interpreter can
-	 * read through, so it is worth telling apart: it is every scalar argument,
+	 * read through, so it is worth telling apart. It is every scalar argument,
 	 * which is nearly all of them, and it saves the copy below.
 	 */
 	if (placed.size () == 1 && placed[0].offset == 0 && placed[0].width == plan.size) {
@@ -245,8 +247,8 @@ place_return (Type *ret, const DataLayout &dl)
 		if (rides_sse (leaf.type)) {
 			/*
 			 * A scalar float comes back in XMM0 or XMM1 and nowhere else, two
-			 * fewer registers than a vector may use, so the two run out at
-			 * different points even though they share the file.
+			 * fewer than the four a vector return can draw on, so the two run
+			 * out at different points even though they share the file.
 			 */
 			unsigned available = leaf.type->isVectorTy () ? 4 : 2;
 
@@ -436,7 +438,7 @@ interp_entry_thunk ()
 using namespace mono;
 using namespace mono::arch;
 
-/*
+/**
  * What interp-entry-thunk.S calls once it has spilled the call. Reads the
  * arguments back out of the context, runs the method interpreted, and leaves
  * the return value in the context for the thunk's epilogue to load.

@@ -3,7 +3,7 @@
  * \brief The InterpArgContext layout, in a form the assembler can read.
  *
  * interp-entry-thunk.S and the struct in amd64.hpp are two spellings of the
- * same thing, so the offsets are written down once here and the C++ side
+ * same thing. The offsets are written down once here, and the C++ side
  * static_asserts its own against them.
  */
 

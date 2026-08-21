@@ -15,19 +15,16 @@ typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
-/// Register the jit-info record that resolves the given bytes of stub code back
-/// to the method they were published for, under the symbol it was published as.
+/// Registers the jit-info record that resolves this stub's code back to the
+/// method it was published for, under the symbol it was published as.
 ///
-/// Without one, nothing recovers a method from a stub address: an escaped
-/// function pointer does not become a delegate, and a stack walk that lands in
-/// the sixteen bytes in front of a body finds no frame.
+/// Without one, a stack walk cannot cross the stub, and a function pointer
+/// into it cannot become a delegate.
 ///
-/// Returns the record when the caller has to take it out again, and null when
-/// it dies with its domain. A freed dynamic method returns its MonoMethod to
-/// the allocator. If the record stayed, it would still name the old
-/// MonoMethod, and a lookup could misattribute whatever lands at that address
-/// next - so the record has to come out first. Every other method lives
-/// exactly as long as its domain, and so does its record.
+/// Returns the record for a dynamic method's stub, and null otherwise. A
+/// returned record has to reach mono_jit_info_table_remove () before the
+/// code is freed. A freed dynamic method's MonoMethod is recycled, and a
+/// leftover record can misattribute whatever reuses its address next.
 MonoJitInfo *register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub,
                                   size_t size, const std::string &name);
 

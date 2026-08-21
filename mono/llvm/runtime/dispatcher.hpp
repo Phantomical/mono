@@ -18,11 +18,11 @@ namespace mono {
 
 class MonoJit;
 
-/// Whether a method's body may be bound straight into a stub, rather than
+/// Whether a method's body can be bound straight into a stub, rather than
 /// reached through a dispatcher.
 ///
 /// A stub is only reachable from its own domain's code, but the thread that
-/// fires one need not be running as that domain: AppDomain:InvokeInDomain
+/// fires one need not be running as that domain. AppDomain:InvokeInDomain
 /// switches the domain and then calls, so the first caller through a stub can
 /// arrive from the far side of that switch. Binding then welds one domain's copy
 /// into another domain's code - wrong statics and vtables while it runs, and a
@@ -31,9 +31,10 @@ class MonoJit;
 /// process.
 bool bindable (MonoDomain *owner, MonoMethod *method);
 
-/// Build the per-call dispatcher for a method: a function of the body's exact
-/// prototype that asks for the current domain's body on every call and tails
-/// into it, instead of baking one domain's copy into another's code.
+/// Builds the per-call dispatcher for a method. The dispatcher is a function
+/// of the body's exact prototype. It asks for the current domain's body on
+/// every call and tails into it, instead of baking one domain's copy into
+/// another's code.
 llvm::Expected<void *> build_dispatcher (MonoJit &jit, MonoDomain *domain,
                                          MonoMethod *method, RememberFn remember);
 

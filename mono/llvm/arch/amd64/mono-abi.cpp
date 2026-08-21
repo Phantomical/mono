@@ -71,9 +71,10 @@ struct Leaf {
 	bool sse;
 };
 
-/// Every leaf field of T with its flattened offset - mini's
-/// collect_field_info_nested, walked over the IR layout. What the translator
-/// spelled as padding (layout.hpp) is no field of mini's walk either.
+/// Collects every leaf field of \p t into \p out, each with its flattened
+/// offset - mini's collect_field_info_nested, walked over the IR layout. The
+/// walk steps over what the translator spelled as padding (layout.hpp), where
+/// mini's walk finds no field either.
 void
 collect_leaves (Type *t, uint64_t offset, const DataLayout &dl,
                 SmallVectorImpl<Leaf> &out)
@@ -101,7 +102,8 @@ collect_leaves (Type *t, uint64_t offset, const DataLayout &dl,
 	out.push_back ({ offset, dl.getTypeStoreSize (t), t->isFloatingPointTy () });
 }
 
-/// Register loads come in power-of-two widths.
+/// Rounds \p n up to the next power of two, the width a register load moves
+/// at.
 unsigned
 pow2_width (uint64_t n)
 {
@@ -171,8 +173,8 @@ classify_aggregate (Type *t, const DataLayout &dl)
 	return shape;
 }
 
-/// The IR type SHAPE's register words travel as. LLVM's own lowering of a
-/// first-class struct argument passes each element separately, which is
+/// Returns the IR type \p shape's register words travel as. LLVM's own lowering
+/// of a first-class struct argument passes each element separately, which is
 /// exactly what puts one word per register.
 Type *
 travel_type (LLVMContext &ctx, const AggShape &shape)
@@ -244,11 +246,11 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 		} else {
 			/*
 			 * The hidden pointer is spelled out, in front of everything,
-			 * rather than left to LLVM. Left alone LLVM does not demote a
-			 * memory-class aggregate at all: three doubles come back in
-			 * XMM0, XMM1 and ST0, which no C callee writes, and the
-			 * argument that should have followed the pointer takes the
-			 * register the pointer was owed.
+			 * rather than left to LLVM. Left alone, LLVM does not demote a
+			 * memory-class aggregate at all. Three doubles come back in
+			 * XMM0, XMM1 and ST0, which no C callee writes. The first
+			 * argument then takes the register the hidden pointer was
+			 * owed.
 			 */
 			low.ret_by_address = true;
 			if (gr < param_gregs)
@@ -278,9 +280,9 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 			}
 
 			/*
-			 * A value type that no longer fits leaves the registers it
-			 * would have taken free for later arguments, exactly as mini
-			 * rewinds its counters.
+			 * A value type that does not fit skips counting its
+			 * registers, so they stay free for later arguments, matching
+			 * the rewind mini's own classifier performs.
 			 */
 			if (shape.memory || gr + need_gr > param_gregs
 			    || fr + need_fr > param_fregs) {
@@ -305,22 +307,25 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 	return low;
 }
 
-/// The tail-call kind the lowered site may carry over from CALL, which crossed the
-/// boundary as LOW describes.
+/// Returns the tail-call kind the lowered site can carry over from \p call,
+/// which crossed the boundary as \p low describes.
 ///
-/// A refusal to be a jump carries as it is; it constrains nothing. A permission to
-/// be one survives only where the lowering left this frame out of the call:
+/// A refusal to be a jump carries as it is. It constrains nothing. A
+/// permission to be one survives only where the lowering left this frame out
+/// of the call:
 ///
 ///   - a Memory argument is a pointer into an alloca of this frame, which is the one
 ///     thing a tail call promises the callee never sees;
 ///   - a return that travels - through a hidden pointer or as register words - is
 ///     read back after the call, so there is no longer a call the ret follows.
 ///
-/// A Coerced argument is none of that: its spill is loaded before the call and what
-/// crosses is the loaded word, so the alloca is dead by the time the frame goes.
+/// A Coerced argument is none of that. Its spill is loaded before the call,
+/// and what crosses is the loaded word, so the alloca is dead by the time the
+/// frame goes.
 ///
-/// And only ever as the permission - the lowering rebuilds the argument list, so the
-/// site no longer has the caller's own prototype, and musttail demands exactly that.
+/// And only ever as the permission. The lowering rebuilds the argument list,
+/// so the site no longer has the caller's own prototype, and musttail
+/// demands exactly that.
 CallInst::TailCallKind
 carried_tail_kind (const CallInst *call, const CallLowering &low)
 {
@@ -339,13 +344,14 @@ carried_tail_kind (const CallInst *call, const CallLowering &low)
 	return CallInst::TCK_Tail;
 }
 
-/// A block of INVOKE's own on its normal edge, so a value read back after the
-/// call has somewhere to sit ahead of every use of it.
+/// Creates a block of \p invoke's own on its normal edge, so a value read
+/// back after the call has somewhere to sit ahead of every use of it.
 ///
-/// The normal destination is no good on its own: a PHI there comes before
-/// anything else the block can hold, and a PHI taking the call's result is
-/// exactly what the optimizer leaves behind when the value flows into a loop.
-/// Inserting the read-back after it would name it before it is defined.
+/// The normal destination is no good on its own. A PHI there comes before
+/// anything else the block can hold. A PHI taking the call's result is
+/// exactly what the optimizer leaves behind when the value flows into a
+/// loop. A read-back placed directly in the destination comes after that
+/// PHI, not before it, so the PHI cannot use it.
 BasicBlock *
 split_normal_edge (InvokeInst *invoke)
 {
@@ -411,11 +417,11 @@ rewrite_call (CallBase *call)
 			}
 
 			/*
-			 * The register words load from a spill of the value: the words
-			 * can be wider than the value itself (a 12-byte type travels
-			 * as two full ones), so the spill is sized for the travel
-			 * type, and the bytes past the value are as undefined as the
-			 * register bits mini leaves unwritten.
+			 * The register words load from a spill of the value. A
+			 * 12-byte type, for instance, travels as two full words -
+			 * wider than the value itself - so the spill is sized to the
+			 * travel type. The bytes past the value are as undefined as
+			 * the register bits mini leaves unwritten.
 			 */
 			AllocaInst *slot = entry.CreateAlloca (p.travel);
 
@@ -428,9 +434,9 @@ rewrite_call (CallBase *call)
 		}
 		case ParamLowering::Memory: {
 			/*
-			 * byval is what makes LLVM place the pointee itself in the
-			 * outgoing argument area; without it the pointer would ride a
-			 * register and the callee would read the wrong memory.
+			 * byval makes LLVM place the pointee itself in the outgoing
+			 * argument area. Without it the pointer rides a register, and
+			 * the callee reads the argument area, which holds other data.
 			 * Alignment 8 matches mini's argument slots.
 			 */
 			AllocaInst *slot = entry.CreateAlloca (v->getType ());
@@ -501,9 +507,9 @@ rewrite_call (CallBase *call)
 
 	if (low.ret_by_address || low.ret_travel != nullptr) {
 		/*
-		 * The natural value reads back after the call - for an invoke, in a
-		 * block of the normal edge's own, which is the only edge the result
-		 * was ever usable on.
+		 * The natural value reads back after the call. For an invoke, that
+		 * happens in a block of the normal edge's own - the only edge the
+		 * result was ever usable on.
 		 */
 		IRBuilder<> after (ctx);
 
@@ -571,10 +577,11 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 	AttributeList target_attrs = target->getAttributes ();
 
 	/*
-	 * The two conventions spell a return too wide for the registers differently:
-	 * the target names the pointer as an explicit parameter, C leaves it to the
-	 * `sret` lowering. So the lowering is computed from the signature both ends
-	 * were derived from, and the bridging happens at the call.
+	 * The two conventions spell a return too wide for the registers
+	 * differently. The target names the pointer as an explicit parameter,
+	 * and C leaves it to the `sret` lowering. So the lowering is computed
+	 * from the signature both ends were derived from, and the bridging
+	 * happens at the call.
 	 */
 	Type *hidden = hidden_return_type (target);
 	FunctionType *natural = hidden != nullptr
@@ -635,7 +642,7 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 		                                      : AttributeSet (),
 		attrs));
 	/*
-	 * Every frame needs a description mono's unwinder can walk through: an
+	 * Every frame needs a description mono's unwinder can walk through. An
 	 * exception thrown below the call unwinds through this frame on its way
 	 * back to whoever entered here.
 	 */
@@ -678,9 +685,10 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 	}
 
 	/*
-	 * A slot of the thunk's own rather than whatever pointer this convention was
-	 * handed: the value type's own alignment is what the target will store at, and
-	 * the only thing known about the caller's slot is where it is.
+	 * A slot of the thunk's own, rather than whatever pointer this
+	 * convention was handed. The value type's own alignment is what the
+	 * target will store at, and the only thing known about the caller's
+	 * slot is where it is.
 	 */
 	AllocaInst *returned = nullptr;
 	unsigned target_vret = hidden_return_index (args.size () + 1);
@@ -715,7 +723,7 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 	if (low.ret_by_address) {
 		/*
 		 * The caller's slot is only as aligned as the value type itself
-		 * asks; claim nothing stronger.
+		 * asks. Claim nothing stronger.
 		 */
 		b.CreateAlignedStore (result, thunk->getArg (0), Align (1));
 		b.CreateRetVoid ();

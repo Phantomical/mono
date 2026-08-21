@@ -18,8 +18,8 @@ namespace mono {
 /// a class out allocates its statics - so the thread has to be one the collector
 /// knows about. It stays in GC Unsafe mode while it compiles, exactly as a
 /// managed thread compiling synchronously does, and drops to GC Safe while it
-/// waits: a thread parked in a condition variable reaches no safepoint, and a
-/// collection that had to suspend it there would never start.
+/// waits: a thread parked in a condition variable reaches no safepoint, so a
+/// collection that tries to suspend it there can never start.
 ///
 /// It is attached to the root domain and never to the domain it compiles for,
 /// which is what keeps it off mono_threads_abort_appdomain_threads ()'s list

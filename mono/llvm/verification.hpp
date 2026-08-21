@@ -14,18 +14,18 @@
 
 namespace mono {
 
-/// Whether METHOD's body still has to go through the IL verifier.
+/// Whether method's body still has to go through the IL verifier.
 ///
-/// False whenever verification was not asked for, which is the default, and
-/// false once a method has been verified successfully: the answer is cached on
-/// the metadata, so a method compiled twice is only ever verified once.
+/// False whenever verification was not asked for, which is the default. It is
+/// also false once a method has passed. The verdict is cached on the metadata,
+/// so a method compiled twice is verified at most once.
 bool needs_verification (MonoMethod *method);
 
-/// Put METHOD's body through the IL verifier, if verification was asked for and
-/// this method has not already passed.
+/// Puts method's body through the IL verifier, if verification was asked for
+/// and this method has not already passed.
 ///
-/// A verdict the verifier calls fatal comes back as the managed exception it
-/// names - VerificationException, MethodAccessException and so on - carried as a
+/// A fatal verdict comes back as the managed exception it names -
+/// VerificationException, MethodAccessException and so on - carried as a
 /// RuntimeError.
 llvm::Error verify_method (MonoMethod *method);
 

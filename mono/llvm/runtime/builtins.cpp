@@ -38,9 +38,10 @@ jit_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Ex
 /*
  * What a body's entry counter calls when it runs out.
  *
- * It takes the record rather than the method because the record is the (method,
- * domain) pair the code was compiled for. Resolving the domain here instead
- * would read the calling thread's, which AppDomain:InvokeInDomain moves.
+ * It takes the record rather than the method because the record pairs the
+ * method with the domain the code was compiled for. The calling thread's
+ * domain is not reliable: AppDomain:InvokeInDomain moves it before the call
+ * arrives.
  */
 void
 mono_llvm_jit_tier2_promote (MonoDomainMethod *dm)
@@ -69,12 +70,14 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 	         (void *) &mono_gc_wbarrier_value_copy_internal},
 
 		/*
-		 * The throw path. These are mono's own throw trampolines: they
-		 * capture the register state and enter mono_handle_exception, whose
-		 * two-pass search over the MonoJitInfo published per method is how a
-		 * handler is found - the native unwinder is never involved. The
-		 * corlib variant takes the exception's type-def index and reads the
-		 * throw site out of the return address; resume_unwind is what a
+		 * The throw path. These are mono's own throw trampolines. Each
+		 * captures the register state and enters mono_handle_exception (),
+		 * which finds a handler with a two-pass search over the MonoJitInfo
+		 * published per method - the native unwinder is never involved.
+		 *
+		 * The corlib variant takes the exception's type-def index as an
+		 * argument and reads the throw site out of the return address.
+		 * resume_unwind is what a
 		 * finally or fault calls when it was entered by unwinding and has
 		 * run out.
 		 */
@@ -90,21 +93,23 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 	                 ->func},
 
 		/*
-		 * What a stand-in body for a method whose metadata would not load
-		 * calls to build the exception it then throws.
+		 * What a stand-in body calls to build the exception it throws in
+		 * place of a method that failed to compile. A metadata load that
+		 * failed is one such failure. At a thunk, where a miss cannot go
+		 * back to the caller, any other failure becomes one as well.
 		 */
 		{"mono_llvm_load_error_exception", (void *) &mono_llvm_load_error_exception},
 
 		/*
 		 * The personality routine a landing pad names. Generated code never
-		 * calls it; the unwinder does, on the way through a frame that has a
+		 * calls it. The unwinder does, on the way through a frame that has a
 		 * handler.
 		 */
 		{"mono_personality", (void *) &jit_personality},
 
 		/*
 		 * Not a runtime libcall as far as RuntimeLibcallsInfo is concerned -
-		 * amd64 has no MEMCMP libcall - so resolvable_libcalls () does not
+		 * amd64 has no MEMCMP libcall - so get_libcall_builtins () does not
 		 * cover it, but MergeICmps builds calls to it at the IR level.
 		 */
 		{"memcmp", (void *) &memcmp},

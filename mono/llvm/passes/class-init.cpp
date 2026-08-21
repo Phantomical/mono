@@ -2,11 +2,11 @@
  * \file
  * \brief Dropping class-init checks a dominating check already made.
  *
- * If a call to initialize class C returns normally then C is initialized for
- * this thread from that point on, so a second call for C that the first
- * dominates can only find the work already done. A cctor that throws does not
- * weaken that: the throw leaves the first call along its unwind edge, and the
- * dominated site is by definition not reachable that way.
+ * If a call to initialize class C returns normally, C is initialized for this
+ * thread from that point on. A second call for C that the first dominates can
+ * only find the work already done. A cctor that throws does not weaken that
+ * claim. The throw leaves the first call along its unwind edge, so the
+ * dominated site is not reachable that way.
  *
  * That the argument is about dominance rather than "an earlier call in program
  * order" is the whole of the exception-handling case. A check inside a try does
@@ -16,9 +16,9 @@
  *     C.y = 2;                          ; call class_init(@C) - kept
  *
  * The catch reaches the second site without the first having returned, so the
- * class may still be uninitialized there. LLVM's dominance already says this -
- * an invoke's effect is established only along its normal edge - which is why
- * the test below is a plain DominatorTree query and not a scan back through
+ * class can still be uninitialized there. LLVM's dominance already says this:
+ * an invoke's effect is established only along its normal edge. That is why
+ * the test below is a plain DominatorTree query, not a scan back through
  * predecessors.
  */
 
@@ -38,8 +38,8 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// V with any address-preserving cast peeled off, so that two spellings of one
-/// runtime address compare equal.
+/// Returns v with any address-preserving cast peeled off, so two spellings of
+/// one runtime address compare equal.
 const Value *
 strip_casts (const Value *v)
 {
@@ -55,12 +55,13 @@ strip_casts (const Value *v)
 	return v;
 }
 
-/// Whether A and B are checks for the same class.
+/// Whether a and b are checks for the same class.
 ///
-/// The class is whatever the call names: a symbol for the vtable when the class
-/// is known while compiling, a value read out of the runtime generic context
-/// when it is not. Equal operands are the same class either way; unequal ones
-/// are left alone, which at worst keeps a check that was not needed.
+/// The class is whatever the call names. It is a symbol for the vtable when
+/// the class is known while compiling, and a value read from the runtime
+/// generic context otherwise. Equal operands are the same class either way.
+/// Unequal ones are left alone, which at worst keeps a check that was not
+/// needed.
 bool
 same_class (const CallBase *a, const CallBase *b)
 {
@@ -75,19 +76,20 @@ same_class (const CallBase *a, const CallBase *b)
 	return true;
 }
 
-/// The checks among SITES - all of them for one class - that another of them
+/// Appends to dead the checks in sites that another check for the same class
 /// dominates.
 ///
 /// Dominance is a strict partial order, so the sites left standing are its
-/// minimal elements: everything dropped here still has a dominating check that
-/// survives, by transitivity, even when the one that justified dropping it goes
-/// too.
+/// minimal elements. Everything dropped here still has a dominating check
+/// that survives, by transitivity, even when the check that justified
+/// dropping it goes too.
 void
 collect_redundant (const DominatorTree &dt, ArrayRef<CallBase *> sites,
                    SmallVectorImpl<CallBase *> &dead)
 {
 	for (CallBase *site : sites) {
-		/* Dominance calls every unreachable site dominated; skip those. */
+		/* Dominance calls every unreachable site dominated, so this skips
+		 * those. */
 		if (!dt.isReachableFromEntry (site->getParent ()))
 			continue;
 
@@ -100,7 +102,8 @@ collect_redundant (const DominatorTree &dt, ArrayRef<CallBase *> sites,
 	}
 }
 
-/// Remove SITE, leaving an invoke's normal edge behind as a branch.
+/// Removes site. If site is an invoke, its normal edge becomes an
+/// unconditional branch.
 void
 erase_check (CallBase *site)
 {
@@ -117,7 +120,7 @@ erase_check (CallBase *site)
 PreservedAnalyses
 ClassInitPass::run (Function &f, FunctionAnalysisManager &fam)
 {
-	/* Keyed by the class each check names, so only checks that could make
+	/* Keyed by the class each check names, so only checks that can make
 	 * each other redundant are ever compared. */
 	SmallMapVector<const Value *, SmallVector<CallBase *, 4>, 4> by_class;
 	unsigned total = 0;
@@ -131,7 +134,7 @@ ClassInitPass::run (Function &f, FunctionAnalysisManager &fam)
 
 			/*
 			 * A check names a class and returns nothing, so removing
-			 * one costs no replacement value; anything shaped
+			 * one costs no replacement value. Anything shaped
 			 * otherwise is not a check this pass understands.
 			 */
 			if (site == nullptr || site->getFunction () != &f

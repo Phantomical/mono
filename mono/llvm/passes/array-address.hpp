@@ -3,10 +3,10 @@
  * \brief Lowering array element addressing the translator left symbolic.
  *
  * Get/Set/Address on an array class have no IL body: mini expanded them at
- * every call site, and the marshal wrapper the runtime offers instead just
- * calls the accessor again. The translator emits the bounds-checked address
+ * every call site, and the marshal wrapper the runtime offers instead calls
+ * the accessor again. The translator emits the bounds-checked address
  * computation as a call to a `mono.array.address.*` declaration and does the
- * load or store itself; this pass rewrites each such call into the inline
+ * load or store itself. This pass rewrites each such call into the inline
  * arithmetic, so the optimizer sees it and nothing symbolic survives to the
  * linker.
  */
@@ -21,8 +21,8 @@ namespace mono {
 
 /// The name prefix of the address declarations, and the attribute on each
 /// carrying the numbers the lowering needs (element size, array layout
-/// offsets, the bounds-failure exception token) as `key=value` pairs. The
-/// translator writes both; nothing else does.
+/// offsets, the bounds-failure exception token) as `key=value` pairs. Only
+/// the translator writes either.
 constexpr llvm::StringRef array_address_prefix = "mono.array.address.";
 constexpr llvm::StringRef array_address_attribute = "mono-array-address";
 

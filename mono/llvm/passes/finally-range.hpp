@@ -1,16 +1,16 @@
 /**
  * \file
- * finally-range.hpp - MonoFinallyRangePass, the machine-level recovery of the PC
- * ranges each finally handler body occupies.
+ * \brief MonoFinallyRangePass, the machine-level recovery of finally-body PC
+ * ranges.
  */
 
 #ifndef MONO_LLVM_PASSES_FINALLY_RANGE_HPP
 #define MONO_LLVM_PASSES_FINALLY_RANGE_HPP
 
 /*
- * Same reason engine.cpp drops mono's PIC macro: libtool compiles these TUs with
- * -DPIC and LLVM uses `PIC` as an identifier (PassInstrumentationCallbacks), so
- * the macro would rewrite it and break a header.
+ * mono/utils/mono-tls.h defines PIC as an empty macro under -fPIC, and LLVM
+ * uses `PIC` as an identifier (PassInstrumentationCallbacks), so a stray
+ * expansion breaks a header below.
  */
 #ifdef PIC
 #undef PIC
@@ -23,17 +23,15 @@ namespace mono {
 struct MonoEHSideChannel;
 
 /**
- * This pass figures out the code ranges that belong to finally blocks in the
- * function. C# requires that when a thread is aborted while it is executing a
- * finally block that the exception must be delayed until the finally block
- * completes, this pass figures out what regions of optimized code are the finally
- * blocks.
+ * Recovers, at the machine level, the PC ranges each finally body occupies
+ * in the compiled function. The thread-abort guard in MonoEHFinallyBody
+ * needs these to be exact.
  */
 class MonoFinallyRangePass : public llvm::MachineFunctionPass {
 public:
 	static char ID;
 
-	/* SC must outlive the pipeline this pass is added to. */
+	/* sc must outlive the pipeline this pass is added to. */
 	explicit MonoFinallyRangePass (MonoEHSideChannel *sc)
 	    : llvm::MachineFunctionPass (ID), sc_ (sc)
 	{

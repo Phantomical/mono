@@ -34,11 +34,11 @@ size_t code_slack ();
 /// One range of JIT'd code as a dump record sees it.
 struct CodeRange {
 	const uint8_t *code = nullptr;
-	/// What the record names. A whole object goes in as one record: a record of
-	/// its own for each function would claim the bytes the one before it keeps
-	/// its frame description in, and lose the description.
+	/// What the record names. A whole object goes in as one record: splitting it
+	/// per function claims the bytes the one before it keeps its frame
+	/// description in, and loses the description.
 	size_t extent = 0;
-	/// How far the record may reach, which is where the next one starts.
+	/// How far the record can reach, which is where the next one starts.
 	size_t room = 0;
 };
 

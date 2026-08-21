@@ -1,7 +1,7 @@
 /**
  * \file
- * mono_lsda_format.hpp - the `.mono_lsda` kind values that are not ECMA clause
- * flags, and the stackmap IDs finally markers are planted under.
+ * \brief The `.mono_lsda` kind values that are not ECMA clause flags, and the
+ * stackmap IDs finally markers are planted under.
  *
  * These constants have no dependencies, so both sides of the section can
  * include them. compiler.cpp and passes/ write the section and must not include

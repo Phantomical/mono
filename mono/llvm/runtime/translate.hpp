@@ -28,16 +28,16 @@ struct Compiled {
 	MonoJitInfo *jinfo = nullptr;
 };
 
-/// Note that a piece of code, and the record registered for it, belong to a
-/// method - see TranslationTarget::remember.
+/// Records that a piece of code, and the record registered for it, belong to
+/// a method - see TranslationTarget::remember.
 using RememberFn = llvm::function_ref<void (const CompiledMethod &, MonoJitInfo *)>;
 
 /// Run as a given domain for as long as this is alive.
 ///
 /// Translation resolves everything per-domain against the domain the code will
-/// run as, so the thread has to be that domain while it happens - and the
-/// restore has to survive every way out of the scope, which is why it is a
-/// guard rather than a call on each return path.
+/// run as, so the thread has to be that domain while it happens. The restore
+/// has to survive every way out of the scope, which is why it is a guard
+/// rather than a call on each return path.
 class DomainScope {
 public:
 	explicit DomainScope (MonoDomain *domain);
@@ -66,14 +66,14 @@ struct TranslationTarget {
 	/// Publish a callee and answer the record its stub was carved on.
 	llvm::function_ref<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee;
 
-	/// Note that a piece of code, and the record registered for it, belong to
-	/// this method. Every compile passes through here, or freeing the method
-	/// leaves that compile's code and record behind for good.
+	/// Records that a piece of code, and the record registered for it, belong
+	/// to this method. Every compile passes through here, or freeing the
+	/// method leaves that compile's code and record behind for good.
 	RememberFn remember;
 
 	/// Decide what a failed translation means. A metadata failure is something
-	/// the program is owed as an exception rather than a method that would not
-	/// compile, and becomes a stand-in body that raises it; anything else is
+	/// the program is owed as an exception rather than a method that fails to
+	/// compile, and becomes a stand-in body that raises it. Anything else is
 	/// handed back unchanged.
 	llvm::function_ref<llvm::Expected<Compiled> (llvm::Error)> recover;
 
@@ -89,9 +89,9 @@ struct TranslationTarget {
 /// accessor, mini's own code for a method not implemented in IL, and otherwise a
 /// translation of its IL.
 ///
-/// This is where the profiler's compilation of a method begins, so every path
-/// out of it raises exactly one end - a consumer pairing the two would otherwise
-/// carry an open span for the rest of the process.
+/// This is where the profiler's compilation of a method begins. Every path
+/// out of it raises exactly one end, so a consumer pairing the two never
+/// carries an open span for the rest of the process.
 llvm::Expected<Compiled> translate_and_compile (const TranslationTarget &target,
                                                 MonoMethod *method,
                                                 MonoJitInfo **published);
@@ -120,18 +120,18 @@ struct BatchResult {
 /// and a tier.
 ///
 /// Anything the shared module cannot hold is compiled one method at a time
-/// instead - a tier-2 compile among them, since its code is laid out by its own
-/// method's counts - and so is the whole batch when one member fails to
-/// translate. So a caller gets the same answers it would have got asking for
-/// each method on its own.
+/// instead. A tier-2 compile among them goes on its own, since its code is
+/// laid out by its own method's counts. So does the whole batch, when one
+/// member fails to translate. A caller gets the same answers whether it asks
+/// for the batch or for each method on its own.
 std::vector<BatchResult>
 translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
                              llvm::ArrayRef<MonoMethod *> methods);
 
 /// Compile the C-convention entry native code enters \p method through.
 ///
-/// The entry is a module of its own rather than a rider on the body's, so that
-/// its address is the method's for good: it calls \p body, the method's stub, so
+/// The entry is a module of its own rather than a rider on the body's, so its
+/// address is the method's for good. It calls \p body, the method's stub, so
 /// every later compile is reached through the redirect the stub already gets.
 llvm::Expected<void *> compile_interop_entry (MonoJit &jit, MonoDomain *domain,
                                               MonoMethod *method, void *body,

@@ -23,12 +23,13 @@ typedef struct _MonoLLVMBreakpointSwitch MonoLLVMBreakpointSwitch;
 
 namespace mono {
 
-/// What a registered code range is to the method it was compiled for, which is
-/// what decides whether a stack walk reaching it has found a frame of the
-/// method's.
+/// The role a registered code range plays for the method it was compiled for.
+///
+/// The kind decides whether a stack walk that reaches the range reports a frame
+/// of the method's.
 enum class CodeKind {
 	/// A translation of the method's IL: its body, one of its filter bodies,
-	/// or the stand-in that raises what the metadata would not load.
+	/// or the stand-in that raises the error from a failed metadata load.
 	Body,
 	/// A calling-convention adapter around the body - an entry thunk - holding
 	/// none of the method's IL.
@@ -40,7 +41,7 @@ enum class CodeKind {
 /// cannot express.
 ///
 /// Two records carry a rule mono has no opcode for and are replayed as one it
-/// does; a third carries no rule and is dropped. The implementation says which
+/// does. A third carries no rule and is dropped. The implementation says which
 /// and why. An error means the frame description is incomplete, so the caller
 /// must decline the method rather than unwind it from what came back.
 ///
@@ -50,10 +51,8 @@ llvm::Expected<GSList *> transcode_unwind (const std::vector<UnwindRecord> &reco
 /// Builds the MonoJitInfo for a piece of compiled code and registers it, so
 /// the runtime's unwinder and stack walks can see the frame.
 ///
-/// With debug info on, this also publishes the code's line table through
-/// mono_debug_add_method (). The table carries the IL offset in effect at each
-/// code offset, and where each argument and local lives. It is the only way a
-/// stack frame below the top one gets an IL offset.
+/// With debug info on, this also publishes the code's line table and each
+/// argument and local's home through mono_debug_add_method ().
 ///
 /// \param domain the domain whose linker holds the code. The record lives and
 ///        dies with that domain. It is therefore never the thread's current

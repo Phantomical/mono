@@ -3,12 +3,14 @@
  * \brief The stub that hands a shared body the context of one instantiation.
  *
  * A body shared between reference instantiations that has no receiver to read
- * its context out of is entered with the context in a register instead. Every
- * caller reaches a method through its own thunk, so the instantiation's thunk
- * is pointed at one of these rather than at the shared body: the stub writes
- * the context that instantiation was published with and runs into the body.
- * That covers a compiled caller, an interpreted one, reflection and a delegate
- * alike, because all four go through the thunk.
+ * its context out of is entered with the context in a register instead.
+ *
+ * Every caller reaches a method through its own thunk, so the instantiation's
+ * thunk is pointed at a context stub rather than at the shared body. The stub
+ * writes the context that instantiation was published with, then jumps into
+ * the shared method's own thunk. That covers a compiled caller, an
+ * interpreted one, reflection and a delegate alike, because all four go
+ * through the thunk.
  */
 
 #include "arch/arch.hpp"
@@ -25,7 +27,7 @@ write_context_stub (char *at, void *context, void *target)
 {
 	/*
 	 * %r10 is MONO_ARCH_RGCTX_REG, and it is what LLVM pins a `nest` parameter
-	 * to - which is how the shared body declares the context it is entered
+	 * to. That is how the shared body declares the context it is entered
 	 * with. A thunk in front of this one leaves the register alone.
 	 */
 	static const uint8_t movabs_r10[] = { 0x49, 0xBA };

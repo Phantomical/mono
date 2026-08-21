@@ -13,8 +13,8 @@ namespace mono {
 
 namespace {
 
-/// Whether CALL is asking to become a jump. TCK_NoTail is the opposite request
-/// and TCK_None is no request at all; both are left alone.
+/// Whether call is asking to become a jump. TCK_NoTail is the opposite
+/// request and TCK_None is no request at all. Both are left alone.
 bool
 wants_to_be_a_jump (const llvm::CallInst *call)
 {
@@ -23,16 +23,19 @@ wants_to_be_a_jump (const llvm::CallInst *call)
 	return kind == llvm::CallInst::TCK_Tail || kind == llvm::CallInst::TCK_MustTail;
 }
 
-/// What a ret in MERGED returns when it is reached from BLOCK: nothing for a void
-/// return, the value otherwise. Empty when that cannot be established here.
+/// Returns what a ret in merged returns when it is reached from block: null
+/// for a void return, the value otherwise. Empty when we cannot establish
+/// that here.
 ///
-/// A merged return block returns either nothing or a phi over its predecessors,
-/// that phi being what the merge itself creates. The other two cases are what the
-/// phi decays to once predecessors start leaving: withdrawing the second-to-last
-/// one collapses it to the single value that remains, which is either a constant
-/// or something the last predecessor computes. Anything else is defined somewhere
-/// that need not be available in BLOCK, so it is left alone rather than reasoned
-/// about.
+/// The value in a merged block's ret is either nothing, or the phi the merge
+/// itself created over its predecessors. When it is that phi, the answer is
+/// its incoming value for block.
+///
+/// The other two cases are what the phi decays into as its predecessors are
+/// removed one at a time. Taking away all but the last collapses it to that
+/// predecessor's own value: a constant, an argument, or an instruction the
+/// predecessor computed itself. Anything else is left alone: we do not reason
+/// about whether block can see it.
 std::optional<llvm::Value *>
 returned_value_from (llvm::ReturnInst *ret, llvm::BasicBlock *merged, llvm::BasicBlock *block)
 {
@@ -63,10 +66,9 @@ RestoreTailPositionPass::run (llvm::Function &f, llvm::FunctionAnalysisManager &
 	for (llvm::BasicBlock &block : f) {
 		/*
 		 * The shape the merge leaves behind: the call, then an unconditional
-		 * branch that took the ret's place. Only that exact shape is repaired -
-		 * anything between the call and the terminator is something the backend
-		 * would have had to look through anyway, and it is not this pass's job
-		 * to decide whether it could.
+		 * branch that took the ret's place. Only that exact shape is repaired.
+		 * Codegen must then look through whatever sits between the call and
+		 * the terminator, and deciding whether it can is not this pass's job.
 		 */
 		auto *branch = llvm::dyn_cast<llvm::BranchInst> (block.getTerminator ());
 
@@ -91,8 +93,8 @@ RestoreTailPositionPass::run (llvm::Function &f, llvm::FunctionAnalysisManager &
 			continue;
 
 		/*
-		 * While the branch is still standing, so this block still reads as the
-		 * predecessor whose incoming values are being withdrawn.
+		 * While the branch is still standing, so removePredecessor () still
+		 * finds this block among merged's predecessors.
 		 */
 		merged->removePredecessor (&block);
 
@@ -111,9 +113,9 @@ RestoreTailPositionPass::run (llvm::Function &f, llvm::FunctionAnalysisManager &
 		return llvm::PreservedAnalyses::all ();
 
 	/*
-	 * A merge whose every predecessor was a tail call leaves the merged block
-	 * with none at all. Nothing branches there any more, and its phis would have
-	 * no incoming values to speak of, so it goes.
+	 * A merge whose predecessors were all tail calls keeps none of them. Each
+	 * branch is a ret again, so no block branches there any more and the
+	 * merged block goes.
 	 */
 	for (llvm::BasicBlock *merged : merged_blocks) {
 		if (llvm::pred_empty (merged) && merged != &f.getEntryBlock ())

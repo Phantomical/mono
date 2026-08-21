@@ -127,8 +127,8 @@ promotion_batch_size ()
 		/*
 		 * Eight, measured: against one method per compile it takes 46% off
 		 * a corpus of three-instruction methods and 24% off a corpus of
-		 * medium ones. Sixteen takes another 12% and 2%, and the whole
-		 * batch has to compile before any of its methods is published - so
+		 * medium ones. Sixteen takes another 12% and 2%. The whole batch has
+		 * to compile before any of its methods is published. That is why
 		 * the larger batch buys almost nothing on the workload that has the
 		 * most to wait for.
 		 */
@@ -157,14 +157,14 @@ tier2_enabled ()
 
 /*
  * Five thousand calls of the tier-1 body, on top of the ten at tier 0 that body
- * cost. It is not a tuned number: a tier-2 compile is the O3 pipeline and an
- * optimizing selector against a tier-1 one that is O1 and FastISel, so it has to
- * be high enough that a method which runs a few hundred times keeps the body it
- * has. What the trade is worth past that wants an execution-count distribution
- * off a real workload.
+ * cost. It is not a tuned number. A tier-2 compile runs the O3 pipeline with an
+ * optimizing selector, against a tier-1 body that is O1 and FastISel. The
+ * threshold has to be high enough that a method running a few hundred times
+ * keeps the body it has. What the trade is worth past that wants an
+ * execution-count distribution off a real workload.
  *
- * The counter counts entries and nothing else, so a loop that runs for a minute
- * inside one call never reaches it. Lowering this does not reach that method.
+ * The counter counts only entries, so a loop that runs for a minute inside one
+ * call never reaches it. Lowering the threshold does not reach that method.
  */
 uint32_t
 tier2_threshold ()
@@ -193,10 +193,11 @@ trivial_inline_il_limit ()
 		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_IL_LIMIT");
 
 		/*
-		 * Thirty-two bytes covers the shapes with room to spare - a forwarder
-		 * with eight arguments is 22, a field chain four deep is 22, a throw
-		 * helper with three is around 18 - so the limit is a backstop on IL
-		 * the shape test read as one of them rather than a policy of its own.
+		 * Thirty-two bytes covers the shapes with room to spare. A forwarder
+		 * with eight arguments is 22 bytes, a field chain four deep is 22, and
+		 * a throw helper with three arguments is around 18. The limit is a
+		 * backstop on IL the shape test already read as one of these shapes,
+		 * not a policy of its own.
 		 */
 		if (value == nullptr)
 			return 32;
@@ -244,23 +245,23 @@ tier0_enabled ()
 }
 
 /*
- * The refusals below are the ones that would be wrong rather than merely slow:
+ * The refusals below matter for correctness, not merely for speed:
  *
- *  - a method not implemented in IL has no bytecode of its own, and reaching one
- *    goes back through mono_jit_compile_method;
+ *  - a method not implemented in IL has no bytecode of its own, and reaching
+ *    one goes back through mono_jit_compile_method;
  *  - the allocator and write-barrier wrappers are handed out as raw entries
- *    rather than as stubs, because SGen identifies a thread suspended in one by
- *    resolving the address through the jit-info table. Nothing stands between
- *    them and their callers that a later tier could redirect, so an interpreted
- *    one would stay interpreted for good;
- *  - a wrapper is generated for the runtime to enter natively, and several kinds
- *    of them the interpreter answers for with something that is not a callable
- *    address at all;
- *  - a method this backend writes the body of has IL that only throws, so any
- *    tier that runs the IL runs the throw.
+ *    rather than as stubs, because SGen identifies a thread suspended in one
+ *    by resolving the address through the jit-info table. No redirectable stub
+ *    stands between them and their callers, so tier 0 has no way out for
+ *    them;
+ *  - a wrapper is generated for the runtime to enter natively. The
+ *    interpreter answers for several kinds of them with something that is
+ *    not a callable address at all;
+ *  - a method this backend writes the body of has IL that only throws, so
+ *    any tier that runs the IL runs the throw.
  *
- * force_use_interpreter is the interpreter as the whole engine, where there is
- * no tier to leave for and nothing should be counting calls towards one.
+ * force_use_interpreter is the interpreter as the whole engine, where there
+ * is no tier to leave for and no counter tracks calls towards one.
  */
 bool
 runs_at_tier0 (MonoMethod *method)

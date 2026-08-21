@@ -1,11 +1,11 @@
 /*
  * Enters the interpreter for a method that has no compiled body.
  *
- * A call arrives here exactly as it would have arrived at the method - the
- * backend's own convention, arguments wherever LLVM put them - with %r11
- * carrying the MonoMethod *, loaded by the method's own stub.
+ * A caller makes this call the same way it calls a compiled body: this
+ * backend's own convention, with the arguments wherever LLVM put them. %r11
+ * carries the MonoMethod *, loaded by the method's own stub.
  *
- * Nothing here knows the prototype, so it spills rather than reads, and the
+ * This thunk does not know the prototype, so it spills rather than reads. The
  * helper takes the arguments out of the context once it has looked the method
  * up.
  *
@@ -32,8 +32,8 @@ mono_llvm_interp_entry_thunk_pushed:
 	.cfi_def_cfa_register rbp
 mono_llvm_interp_entry_thunk_framed:
 	/*
-	 * A multiple of 16, so the call below is made on an aligned stack: entry
-	 * is 8 mod 16 and the push above takes it to 0.
+	 * A multiple of 16, so the call below is made on an aligned stack. Entry
+	 * is 8 mod 16, and the push above takes it to 0.
 	 */
 	sub	rsp, MONO_INTERP_CTX_SIZE
 
@@ -56,7 +56,7 @@ mono_llvm_interp_entry_thunk_framed:
 
 	/*
 	 * %rbp+16 is the caller's %rsp from before its call, which is both where
-	 * the stack arguments start and what the LMF stands on; (%rbp) is the
+	 * the stack arguments start and what the LMF stands on. (%rbp) is the
 	 * caller's frame pointer, untouched since the call.
 	 */
 	lea	rax, [rbp + 16]
@@ -67,8 +67,8 @@ mono_llvm_interp_entry_thunk_framed:
 	/*
 	 * Still the caller's, since nothing above has written them. An exception
 	 * leaving the interpreted method unwinds straight past this frame into the
-	 * caller, so these are the only copy of them that survives: the context
-	 * interp_frame_enter () hands the LMF is built out of them.
+	 * caller, so this is the only surviving copy of them. interp_frame_enter ()
+	 * reads them to build the context the LMF carries.
 	 */
 	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x00], rbx
 	mov	[rsp + MONO_INTERP_CTX_SAVED + 0x08], r12
@@ -99,9 +99,9 @@ mono_llvm_interp_entry_thunk_popped:
 mono_llvm_interp_entry_thunk_end:
 
 	/*
-	 * mono reads its own unwind programs rather than the .cfi_* above, and
-	 * interp-entry.cpp builds one from these: where the frame goes up, where it
-	 * is settled, and where it has come back down again.
+	 * mono reads its own unwind programs rather than the .cfi_* above.
+	 * interp-entry.cpp builds one from these labels: where the frame goes up,
+	 * where it is settled, and where it has come back down again.
 	 */
 	.globl	mono_llvm_interp_entry_thunk_pushed
 	.globl	mono_llvm_interp_entry_thunk_framed

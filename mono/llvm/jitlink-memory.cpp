@@ -54,6 +54,10 @@ constexpr uintptr_t code_reach_limit = uintptr_t (2) * 1024 * 1024 * 1024;
 
 } // namespace
 
+// A private code manager and mutex, not mono_mem_manager_code_reserve ():
+// that call takes mono_domain_lock (), and reserve () runs with JITLink's
+// locks held. A mutator can arrive at those locks while it holds the domain
+// lock already, so taking the two in that order deadlocks.
 CodeArena::CodeArena () : code_ (mono_code_manager_new ()) {}
 
 CodeArena::~CodeArena ()
@@ -210,7 +214,7 @@ CodeMemoryManager::allocate (const jitlink::JITLinkDylib *, jitlink::LinkGraph &
 		seg->Addr = orc::ExecutorAddr::fromPtr (*base + offset);
 		seg->WorkingMem = seg->Addr.toPtr<char *> ();
 
-		/* The stock in-process manager zeroes its whole slab up front; an
+		/* The stock in-process manager zeroes its whole slab up front. An
 		 * arena everything shares has to be zeroed a segment at a time. */
 		memset (seg->WorkingMem + seg->ContentSize, 0, seg->ZeroFillSize);
 	}

@@ -2,13 +2,14 @@
  * \file
  * \brief Lowering `mono.array.address.*` calls into element address arithmetic.
  *
- * The computation restated here is the runtime's ElementAddr wrapper
+ * The bounded case restates the runtime's ElementAddr wrapper
  * (emit_array_address_ilgen): walk the dimensions accumulating a linear index,
  * checking each partial index unsigned-below its dimension's length, then
  * scale by the element size into the array's vector. A one-dimensional
- * zero-based array has no bounds vector and compares against max_length
- * directly. A failed check throws the corlib exception whose type token the
- * declaration carries.
+ * zero-based array has no bounds vector at all, so that case compares the
+ * index against max_length directly. That is the same check element_address ()
+ * inlines for ldelem and stelem. A failed check throws the corlib exception
+ * whose type token the declaration carries.
  *
  * Every number the arithmetic needs - field offsets and widths, the element
  * size, the exception token - arrives in the declaration's attribute, written
@@ -111,7 +112,8 @@ load_field (IRBuilder<> &b, Value *base, uint64_t offset, uint64_t bytes)
 	                            Align (bytes));
 }
 
-/// The unlikely-throw weighting the translator puts on its own guards.
+/// Weights a branch's throw edge as unlikely, matching what the translator
+/// puts on its own guards.
 void
 mark_unlikely (BranchInst *branch)
 {
@@ -154,7 +156,7 @@ lower_call (CallBase *site, const AddressSpec &spec)
 		if (spec.bounded) {
 			/*
 			 * The runtime allocates a one-dimensional array whose lower
-			 * bound is zero without a bounds vector at all; absent bounds
+			 * bound is zero without a bounds vector at all. Absent bounds
 			 * mean a lower bound of zero.
 			 */
 			Value *bounds = b.CreateAlignedLoad (
@@ -235,7 +237,7 @@ lower_call (CallBase *site, const AddressSpec &spec)
 	}
 
 	/*
-	 * The throw unwinds; an invoke site hands its landing pad on to it so the
+	 * The throw unwinds. An invoke site hands its landing pad on to it, so the
 	 * exception stays catchable exactly where the accessor call was.
 	 */
 	IRBuilder<> rb (raise);
@@ -287,7 +289,7 @@ ArrayAddressPass::run (Module &m, ModuleAnalysisManager &)
 		for (CallBase *site : sites)
 			lower_call (site, spec);
 
-		/* Anything left is a use no lowering understands; fail loudly. */
+		/* Anything left is a use no lowering understands, so fail loudly. */
 		if (!decl->use_empty ())
 			report_fatal_error (Twine ("unlowered use of ") + decl->getName ());
 		decl->eraseFromParent ();

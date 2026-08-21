@@ -1,14 +1,12 @@
 /**
  * \file
- * finally-range.cpp - MonoFinallyRangePass, the machine-level recovery of the PC
- * ranges each finally handler body occupies.
+ * \brief Recovering, at the machine level, the PC ranges each finally handler
+ * body occupies.
  */
 
-/*
- * Same reason engine.cpp drops mono's PIC macro: libtool compiles this TU with
- * -DPIC, and LLVM uses `PIC` as an identifier (PassInstrumentationCallbacks), so
- * the macro would rewrite it and break a header.
- */
+// mono/utils/mono-tls.h defines PIC as an empty macro under -fPIC, and LLVM
+// uses `PIC` as an identifier (PassInstrumentationCallbacks), so a stray
+// expansion breaks the header.
 #ifdef PIC
 #undef PIC
 #endif
@@ -39,10 +37,8 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/*
- * True if MI is one of our finally markers, with the clause it names and whether
- * it opens or closes the body.
- */
+/// Whether mi is one of our finally markers, and if so, the clause it names
+/// and whether it opens or closes the body.
 bool
 finally_marker (const MachineInstr &mi, int *clause, bool *is_start)
 {
@@ -62,20 +58,12 @@ finally_marker (const MachineInstr &mi, int *clause, bool *is_start)
 	return true;
 }
 
-/*
- * Where the opening marker's operand ended up in the frame, as a DWARF register and a
- * displacement from it, or reg -1 if it named no slot.
- *
- * By the time this pass runs the frame is laid out and PEI has already resolved the
- * marker's frame index against it, leaving the triple a stackmap's direct location is
- * written as: the kind, the register the slot is addressed off, and the offset. Which
- * register that is is the target's choice - the frame pointer normally, a base pointer
- * where the frame also has variable-sized objects - so it is carried, not assumed.
- */
+/// Returns the opening marker's frame slot, as a DWARF register and a
+/// displacement from it, or reg -1 if it named no slot.
 std::pair<int, std::int64_t>
 marker_slot (const MachineInstr &mi, const TargetRegisterInfo *tri)
 {
-	/* id, shadow bytes, then the live values. */
+	// id, shadow bytes, then the live values.
 	if (mi.getNumOperands () < 5)
 		return { -1, 0 };
 
@@ -88,9 +76,15 @@ marker_slot (const MachineInstr &mi, const TargetRegisterInfo *tri)
 	if (!base.isReg () || !offset.isImm ())
 		return { -1, 0 };
 
+	// By the time this pass runs, PEI has resolved the marker's frame index
+	// into a register and offset. The register itself is the target's
+	// choice: normally the frame pointer, or a base pointer when the frame
+	// also has variable-sized objects. It is read here rather than assumed.
 	return { tri->getDwarfRegNum (base.getReg (), false), offset.getImm () };
 }
 
+/// Plants a label at \p at that emits no code, so it can sit anywhere in a
+/// block.
 MCSymbol *
 plant_label (MachineBasicBlock &mbb, MachineBasicBlock::iterator at, MCContext &ctx,
              const TargetInstrInfo *tii, const char *name)
@@ -116,7 +110,7 @@ close_range (MonoEHFinallyFunction &fn, MachineBasicBlock &mbb,
 	fn.bodies.push_back (body);
 }
 
-/* Whether MBB, entered inside CLAUSE's body or not, leaves inside it. */
+/// Whether mbb, entered inside clause's body or not, leaves inside it.
 bool
 transfer (MachineBasicBlock &mbb, int clause, bool in)
 {
@@ -134,17 +128,7 @@ transfer (MachineBasicBlock &mbb, int clause, bool in)
 	return state;
 }
 
-/*
- * Whether each block starts inside CLAUSE's handler body. A marker is the whole
- * transfer function; the meet is agreement, since a block reached both from
- * inside the body and from outside it is not reliably either.
- *
- * BranchFolding can produce exactly that by merging a body's tail with an
- * identical tail elsewhere, so it is a real shape and not a broken invariant.
- * Such a block is treated as NOT body: the cost is an abort delivered a little
- * early inside a finally, where claiming it WOULD defer an abort for a frame
- * that is not in the finally at all - and nothing would ever rethrow it.
- */
+/// Fills in_body with whether each block starts inside clause's handler body.
 void
 solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool> &in_body)
 {
@@ -167,6 +151,19 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 			if (&mbb == &mf.front ()) {
 				have = true;
 			} else {
+				/*
+				 * The meet across predecessors is agreement: a block reached
+				 * from both inside clause's body and from outside it is not
+				 * reliably either.
+				 *
+				 * Predecessors can disagree here, which BranchFolding causes
+				 * by merging a body's tail with an identical tail elsewhere -
+				 * a real shape, not a broken invariant. A disputed block is
+				 * treated as outside the body: worst case, an abort inside
+				 * the finally arrives a little early. The alternative can
+				 * defer an abort for a frame that was never in the finally at
+				 * all, with nothing left to rethrow it.
+				 */
 				for (MachineBasicBlock *pred : mbb.predecessors ()) {
 					if (!known[pred])
 						continue;
@@ -179,6 +176,7 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 				}
 			}
 
+			// A marker is the whole transfer function.
 			bool out = transfer (mbb, clause, in);
 
 			if (known[&mbb] != have || in_body[&mbb] != in || out_body[&mbb] != out) {
@@ -191,12 +189,8 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 	}
 }
 
-/*
- * Bracket each maximal run of CLAUSE's body instructions with a pair of labels
- * and record it. An EH_LABEL emits nothing but its symbol, so it can sit
- * anywhere in a block - which is what lets a range be recorded where the body
- * actually lies instead of having to move the code somewhere it can be named.
- */
+/// Brackets each maximal run of clause's body instructions with a pair of
+/// labels, and records it.
 void
 record_ranges (MachineFunction &mf, int clause,
                const DenseMap<const MachineBasicBlock *, bool> &in_body,
@@ -230,17 +224,17 @@ record_ranges (MachineFunction &mf, int clause,
 		}
 
 		/*
-		 * A run reaching the end of a block ends at the first byte of the next
-		 * one, so the block's branch is covered too - a thread can be stopped on
-		 * a branch, and `while (!foo);` inside a finally spends most of its time
-		 * on exactly that.
+		 * A run reaching the end of a block ends at the first byte of the
+		 * next one, so the block's branch is covered too. A thread can be
+		 * stopped on a branch, and `while (!foo);` inside a finally spends
+		 * most of its time on exactly that.
 		 *
-		 * Hence the label at the head of the next block rather than after this
-		 * block's branch: an instruction after the branch makes
-		 * getFirstTerminator () walk off the end, and the printer then reads the
-		 * block as falling through and leaves the successor's label unemitted.
-		 * The last block in layout has no successor whose label could be lost,
-		 * so there the end does go at the very end - the end of the function.
+		 * Hence the label goes at the head of the next block, rather than
+		 * after this block's branch. An instruction after the branch makes
+		 * getFirstTerminator () walk off the end. The printer then reads the
+		 * block as falling through, and leaves the successor's label
+		 * unemitted. The last block in layout has no successor to lose a
+		 * label, so its end label goes at the very end of the function.
 		 */
 		if (state) {
 			MachineBasicBlock *next = mbb.getNextNode ();
@@ -278,10 +272,12 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 
 			/*
 			 * A clause's body can end up in the frame more than once - the
-			 * optimizer duplicates it along its entry paths - and a clone
-			 * reuses the one slot. Two markers naming different slots would
-			 * mean the copies do not share one, which no guard entry can
-			 * describe, so the clause goes unguarded rather than wrongly.
+			 * optimizer duplicates it along its entry paths. A clone reuses
+			 * the one slot.
+			 *
+			 * Two markers naming different slots mean the copies do not
+			 * share one, which no guard entry can describe. So the clause
+			 * goes unguarded rather than wrongly.
 			 */
 			std::pair<int, std::int64_t> slot = marker_slot (mi, tri);
 			auto [known, fresh] = slots.emplace (clause, slot);
@@ -291,10 +287,8 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 		}
 	}
 
-	/*
-	 * No marker: the method has no finally, or every body was optimized away.
-	 * Stay completely inert so a non-finally module's object is untouched.
-	 */
+	// No marker: the method has no finally, or every body was optimized away.
+	// Stay inert so a non-finally module's object is untouched.
 	if (clauses.empty ())
 		return false;
 
@@ -303,11 +297,13 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 
 	/*
 	 * One clause at a time, each blind to the others' markers. IL nests
-	 * finallys - a finally body can hold a whole try/finally of its own - and
-	 * then the inner body's PCs are inside the outer body too. Tracking one
-	 * state for the whole function would have to choose between them; per
-	 * clause they simply both cover, which is what the classic JIT's nested
-	 * handler ranges do and what find_last_handler_block () expects.
+	 * finallys: a finally body can hold a whole try/finally of its own. The
+	 * inner body's PCs land inside the outer body's range too.
+	 *
+	 * One combined state cannot represent both. Each clause tracks its own,
+	 * so the ranges overlap where bodies nest. That is what the
+	 * classic JIT's nested handler ranges do, and what
+	 * find_last_handler_block () expects.
 	 */
 	for (int clause : clauses) {
 		DenseMap<const MachineBasicBlock *, bool> in_body;
@@ -318,7 +314,7 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 
 	sc_->finally_functions.push_back (std::move (fn));
 
-	/* Only labels were added, and a label emits no code. */
+	// Only labels were added, and a label emits no code.
 	return true;
 }
 

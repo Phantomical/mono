@@ -99,19 +99,13 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 }
 
 /*
- * The metadata failures ECMA-335 raises where the thing is used rather than
- * where it is named: a method calling one that is missing gets to run until the
- * call, and its caller gets to catch what the call throws. Deferring one costs
- * nothing, because the name it could not resolve is only ever consulted by a
- * call.
+ * Deferring a failure in this set costs nothing: the name that failed to
+ * resolve is only ever consulted by a call.
  *
- * Invalid IL is not in the set. A body's validity is the answer to the question
- * "can this method be compiled", so whoever asked for the compile is entitled to
- * hear it: mini reports it through the MonoError, which is why creating a
- * delegate over a malformed DynamicMethod throws from Delegate.CreateDelegate
- * rather than from the first call through it. A call that arrives at a stub
- * without anyone having asked still gets the deferral it needs - raise_on_call ()
- * defers everything, that being the only answer available there.
+ * Invalid IL is not in the set. Whether a body can be compiled is the answer
+ * the requester asked for, and translation reports it through that request's
+ * MonoError. That is why a delegate over a malformed DynamicMethod throws from
+ * Delegate.CreateDelegate and not from the first call through it.
  */
 bool
 raised_where_used (uint16_t code)
@@ -148,15 +142,14 @@ recover (MonoJit &jit, MonoDomain *domain, MonoMethod *method, Error failure,
 }
 
 /*
- * A stub is the end of the line for a failure. The trampoline behind it has
- * already put the call's arguments back and there is no caller expecting a
- * miss, so a failure that gets this far either becomes an exception the program
- * can see or ends the process. Which means the choice recover () makes - defer
- * this one, report that one - is not available here: everything is deferred,
- * and a failure that never went through a MonoError becomes the
+ * A thunk is the end of the line for a failure. The choice recover ()
+ * makes - defer this one, report that one - is not available here:
+ * everything is deferred.
+ *
+ * A failure that never went through a MonoError becomes the
  * ExecutionEngineException managed code sees for an engine that gave up. A
- * symbol that failed to resolve then costs the one method that named it rather
- * than every method in the process.
+ * symbol that failed to resolve then costs the one method that named it
+ * rather than every method in the process.
  */
 Expected<Compiled>
 raise_on_call (MonoJit &jit, MonoDomain *domain, MonoMethod *method, Error failure,

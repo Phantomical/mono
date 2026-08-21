@@ -20,15 +20,15 @@ namespace mono {
 
 /// A failure the runtime reported through a MonoError, carried as an llvm::Error.
 ///
-/// Constructing one adopts the failure: the MonoError it came from is left clean,
-/// and the strings it owns are released when the llvm::Error is finally consumed.
-/// Runtime code further up can take the failure back with move_to () and raise it
-/// as whatever exception it describes.
+/// Constructing one adopts the failure. The MonoError it came from is left
+/// clean, and the strings it owns are released when the llvm::Error is
+/// finally consumed. Runtime code further up can take the failure back with
+/// move_to () and raise it as whatever exception it describes.
 class RuntimeError : public llvm::ErrorInfo<RuntimeError> {
 public:
 	static char ID;
 
-	/// Adopt the failure in ERROR, leaving it clean.
+	/// Adopt the failure in error, leaving it clean.
 	explicit RuntimeError (MonoError *error);
 	~RuntimeError ();
 
@@ -49,8 +49,9 @@ private:
 	mutable MonoError error;
 };
 
-/// ERROR as an llvm::Error, adopting it. A MonoError holding no failure becomes
-/// success, so a call that reports only through one needs no test of its own:
+/// Returns error as an llvm::Error, adopting it. A MonoError holding no
+/// failure becomes success, so a call that reports only through one needs no
+/// test of its own:
 ///
 ///     if (llvm::Error error = runtime_error (metadata_error))
 ///             return error;

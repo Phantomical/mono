@@ -25,10 +25,10 @@ namespace mono {
 
 /// The chunk of a symbol that makes it one method's rather than another's.
 ///
-/// The printed name is for reading; the pointer is the identity. No name scheme
-/// is unique on its own - conversion operators overload on their return type,
-/// which no printed signature carries, and the runtime mints wrappers whose
-/// names are only as distinct as what they were generated from.
+/// The printed name is for reading. The pointer is the identity. No name
+/// scheme is unique on its own. A conversion operator overloads on its return
+/// type, which no printed signature carries. A generated wrapper's name is only
+/// as distinct as what it was generated from.
 std::string identity_of (MonoMethod *method);
 
 /// The symbol a method's stub is published under.
@@ -37,8 +37,8 @@ std::string stub_symbol (MonoMethod *method);
 /// The symbol the C-convention entry is compiled under.
 ///
 /// A suffix on the stub's symbol, because the stub already answers to the
-/// method's own. Still a name of the method's rather than an anonymous one, so
-/// that a dump, a profile and a stack trace all say which method it belongs to.
+/// method's own. It keeps the method's name rather than an anonymous one, so a
+/// dump, a profile and a stack trace can say which method it is.
 std::string interop_symbol (MonoMethod *method);
 
 /// Give every declaration in a module that names another method's code the
@@ -48,12 +48,11 @@ std::string interop_symbol (MonoMethod *method);
 /// the naming alone, so this is the only place the two sides meet.
 llvm::Error bind_symbols (llvm::Module &m);
 
-/// A symbol as a profile or a debugger should print it: the method's readable
-/// name, keeping whatever suffix said which piece of the method this is.
+/// A symbol as a profile or a debugger prints it: the method's readable
+/// name, keeping whatever suffix names which piece this is.
 ///
-/// The identity chunk is noise to a reader, and it moves between runs - which
-/// is what stops two profiles of the same program from being compared, or
-/// aggregated.
+/// The identity chunk is noise to a reader. It also moves between runs, so
+/// two profiles of the same program cannot otherwise be compared or merged.
 std::string display_name (MonoMethod *method, llvm::StringRef symbol);
 
 /// Whether a call can ever reach a method with a boxed receiver, so that it
@@ -67,15 +66,16 @@ bool wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig);
 /// entry in front of its body.
 ///
 /// That is exactly the wrappers generated for the other side of the boundary to
-/// call - runtime-invoke, native-to-managed, the vtfixup and thunk-invoke
-/// entries - each of which sets the pinvoke flag on its own signature. A
-/// [DllImport] method sets it too, but it is not a wrapper: what stands behind
-/// it is the marshaling wrapper, which is entered like any other method.
+/// call: runtime-invoke, native-to-managed, the vtfixup and thunk-invoke
+/// entries. Each sets the pinvoke flag on its own signature. A [DllImport]
+/// method sets it too, but it is not a wrapper. What stands behind it is the
+/// marshaling wrapper, which is entered like any other method.
 bool publishes_interop_entry (MonoMethod *method);
 
 /// Whether this engine gives a method an unboxing entry of its own, and so a
 /// stub to publish it through. A method not implemented in IL is entered
-/// through code this engine did not generate; the runtime wraps those itself.
+/// through code this engine did not generate. The runtime wraps such methods
+/// itself.
 bool publishes_unbox_entry (MonoMethod *method);
 
 } // namespace mono

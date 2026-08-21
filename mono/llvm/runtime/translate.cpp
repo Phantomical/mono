@@ -66,9 +66,9 @@ translate_and_compile (const TranslationTarget &target, MonoMethod *method,
 
 	/*
 	 * Array Get/Set/Address have no body and no icall - every call site
-	 * lowers them inline. The compilable form, for the runtime paths that
-	 * need the method itself, is the marshal wrapper, whose inner call to
-	 * the accessor lowers the same way.
+	 * lowers them inline. The marshal wrapper is the compilable form for
+	 * runtime paths that need the method itself. Its inner call to the
+	 * accessor lowers the same way.
 	 */
 	if (m_class_get_rank (method->klass) > 0
 	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
@@ -89,21 +89,20 @@ translate_and_compile (const TranslationTarget &target, MonoMethod *method,
 		 *
 		 * The profiler hears about this one from
 		 * mono_jit_compile_method_with_opt (), which reports the declaration
-		 * against the wrapper it built - and that wrapper came back through
-		 * here and bracketed itself.
+		 * against the wrapper it built. That wrapper comes back through here
+		 * and brackets itself.
 		 */
 		return Compiled { code };
 	}
 
 	/*
-	 * This is the one place a method is translated, so it is where the
-	 * profiler's compilation of it begins. Exactly one end follows every
-	 * begin: a consumer pairing the two would otherwise carry an open span for
-	 * the rest of the process. A method whose metadata would not load gets a
-	 * stand-in body that raises instead of a translation, and that is a failed
-	 * compile however it is served. The successful end is raised by the caller,
-	 * once the method can be looked up - a non-null published record is what says
-	 * one is owed.
+	 * The profiler's compilation of the method begins here. Exactly one end
+	 * follows every begin, so a consumer pairing the two never carries an open
+	 * span for the rest of the process. A method whose metadata fails to load
+	 * gets a stand-in body that raises instead of a translation, and that is a
+	 * failed compile however it is served. The successful end is raised by the
+	 * caller, once the method can be looked up - a non-null published record is
+	 * what says one is owed.
 	 */
 	MONO_PROFILER_RAISE (jit_begin, (method));
 
@@ -133,10 +132,10 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	/*
 	 * Translation itself resolves everything per-domain against target.domain
-	 * (resolve (), ldstr through cfg->domain) - never against the thread's
-	 * current domain, and any new translate-time mono_domain_get () is a
-	 * cross-domain bug of the kind the dispatcher exists to prevent. The
-	 * stub lambdas keep the two equal.
+	 * (resolve_externals (), ldstr through cfg->domain), never against the
+	 * thread's current domain. Any new translate-time mono_domain_get () is a
+	 * cross-domain bug of the kind the dispatcher exists to prevent. The stub
+	 * lambdas keep the two equal.
 	 */
 	g_assert (mono_domain_get () == target.domain);
 
@@ -191,7 +190,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	/*
 	 * Laying out a class to create its vtable is the other place metadata gets
-	 * loaded, and the last one: a method whose callee's class will not load
+	 * loaded, and the last one. A method whose callee's class will not load
 	 * fails here rather than in the translation above. It is the same failure
 	 * and it is raised the same way - at the call, not at the declaration.
 	 */
@@ -239,8 +238,8 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 	perf::dump_method (method, compiled);
 
 	/*
-	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`;
-	 * their entries go into the published clauses.
+	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`.
+	 * Their entries go into the published clauses.
 	 */
 	std::vector<std::pair<uint32_t, void *>> filters;
 
@@ -267,12 +266,12 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 	*published = *jinfo;
 
 	/*
-	 * A record of its own for each filter body the module holds: a suspended
-	 * thread can be stopped in one, and it is a frame something walking the
-	 * stack has to be able to name. A filter carries no clauses, so its frame
-	 * description and the IL-offset map that says where in the method's IL its
-	 * frame is are all it takes from the module's side tables. No dylib either:
-	 * the body's record already owns the one they both share.
+	 * Each filter body gets a record of its own. A suspended thread can stop
+	 * inside one, and a stack walk has to be able to name that frame. A filter
+	 * carries no clauses. It takes two things from the module's side tables:
+	 * the frame description, and the IL-offset map that locates its frame in
+	 * the method's IL. It needs no dylib either - the body's record already
+	 * owns the one they share.
 	 */
 	auto register_side_body = [&] (const uint8_t *code, size_t size, CodeKind kind,
 	                               std::vector<IlLineRow> lines) -> Error {
@@ -560,7 +559,7 @@ compile_interop_entry (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 
 	arch::create_mono_entry_thunk (*module, name, *shape, address);
 
-	/* Nothing names it now, and leaving it would ask the linker for a symbol. */
+	/* Nothing names it now. If it stays, the linker asks for a symbol. */
 	(*shape)->eraseFromParent ();
 
 	if (dumping (name.c_str ()))

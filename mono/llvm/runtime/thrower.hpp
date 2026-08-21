@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief What a method whose metadata would not load is compiled into.
+ * \brief What a method whose metadata failed to load is compiled into.
  */
 
 #ifndef MONO_LLVM_RUNTIME_THROWER_HPP
@@ -28,10 +28,10 @@ class MonoJit;
 ///
 /// A method calling one that is missing gets to run until the call, and its
 /// caller gets to catch what the call throws. Refusing to compile it instead
-/// would raise at the wrong place, and to the wrong catch.
+/// raises at the wrong place, and to the wrong catch.
 bool raised_where_used (uint16_t code);
 
-/// Compile a body for a method that raises the given failure and nothing else.
+/// Compile a body for a method that raises only the given failure.
 /// Consumes the failure.
 llvm::Expected<Compiled> compile_thrower (MonoJit &jit, MonoDomain *domain,
                                           MonoMethod *method, MonoError *failure,
@@ -40,13 +40,13 @@ llvm::Expected<Compiled> compile_thrower (MonoJit &jit, MonoDomain *domain,
 /// Decide what a failed translation of a method means.
 ///
 /// A metadata failure the program is owed as an exception becomes a stand-in
-/// body that raises it; anything else is handed straight back, unchanged.
+/// body that raises it. Anything else is handed straight back, unchanged.
 llvm::Expected<Compiled> recover (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
                                   llvm::Error failure, RememberFn remember);
 
 /// Turn a failure into a body for the method that raises it, whatever the
-/// failure was: what a call already under way gets instead of an answer.
-/// Consumes the failure.
+/// failure was. That is what a call already under way gets instead of an
+/// answer. Consumes the failure.
 llvm::Expected<Compiled> raise_on_call (MonoJit &jit, MonoDomain *domain,
                                         MonoMethod *method, llvm::Error failure,
                                         RememberFn remember);

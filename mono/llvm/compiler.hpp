@@ -15,16 +15,16 @@ namespace mono {
 
 /// The stock codegen pipeline, opened up so the exception machinery can ride
 /// along: the clause gather runs over the final machine function, and the side
-/// tables the runtime reads back - the clause table and the frame description -
-/// are written into the object next to the code they describe.
+/// tables the runtime reads back are written into the object next to the code
+/// they describe.
 ///
 /// Codegen runs against the calling thread's host_target_machine (), so the
 /// compiler carries no mutable cross-call state and stays safe under concurrent
 /// compiles.
 class MethodObjectCompiler : public llvm::orc::IRCompileLayer::IRCompiler {
 public:
-	/// JTMB supplies only the mangling options; the target itself is the host
-	/// one every compile in this backend shares.
+	/// Takes only the mangling options from jtmb. The target itself is the
+	/// host one every compile in this backend shares.
 	explicit MethodObjectCompiler (llvm::orc::JITTargetMachineBuilder jtmb);
 
 	llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>

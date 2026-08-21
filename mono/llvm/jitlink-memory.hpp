@@ -19,23 +19,17 @@ typedef struct _MonoCodeManager MonoCodeManager;
 
 namespace mono {
 
-/// The code memory a domain's compiled methods and stubs come out of.
+/// The code memory a domain's compiled methods and their thunks come out of.
 ///
 /// A reservation is readable, writable and executable, and stays that way.
 /// There is no free. A retired method keeps its bytes until the whole arena
 /// goes, which is when its domain does.
-///
-/// The arena holds a code manager of its own rather than the domain memory
-/// manager's. mono_mem_manager_code_reserve () takes the domain lock - it is
-/// mono_domain_lock (), see memory-manager.c - and code is reserved with linker
-/// locks held. A mutator can arrive at those locks while it holds the domain
-/// lock already, so taking the two in that order deadlocks.
 class CodeArena {
 public:
 	CodeArena ();
 
-	/// Frees every reservation at once. The caller proves the code dead -
-	/// nothing executing in it, nothing about to call into it.
+	/// Frees every reservation at once. Callers must guarantee the code is
+	/// dead - nothing executing in it, nothing about to call into it.
 	~CodeArena ();
 
 	CodeArena (const CodeArena &) = delete;
@@ -52,8 +46,8 @@ public:
 	///
 	/// Best effort, and silent when it does nothing. The bytes come back only
 	/// while they are still the last thing reserved out of their chunk. Any
-	/// other reservation in between leaves them where they are, as does the
-	/// padding an over-aligned request added.
+	/// other reservation in between, or padding an over-aligned request
+	/// added, leaves them where they are.
 	void unreserve (char *base, size_t size);
 
 private:
@@ -65,7 +59,7 @@ private:
 ///
 /// Stock JITLink memory managers round every segment of every object up to a
 /// page (BasicLayout::getContiguousPageBasedLayoutSizes). For an object the size
-/// of one method that wastes most of what it maps. This one packs an object's
+/// of one method, that wastes most of what it maps. This one packs an object's
 /// segments back to back into a single reservation, so a method costs its
 /// content rather than a page per segment.
 ///
@@ -89,7 +83,7 @@ public:
 private:
 	class InFlight;
 
-	/// What a FinalizedAlloc's address actually points at.
+	/// The record kept behind a FinalizedAlloc's address.
 	struct FinalizedInfo {
 		char *base;
 		size_t size;

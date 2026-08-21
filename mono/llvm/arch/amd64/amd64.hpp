@@ -76,9 +76,9 @@ static_assert (sizeof (InterpArgContext) == MONO_INTERP_CTX_SIZE);
 /// One move between an InterpArgContext slot and a value's own storage.
 struct ArgPiece {
 	enum class File : uint8_t {
-		Greg,  ///< an integer register, indexed by AT
-		Freg,  ///< an SSE register, indexed by AT
-		Stack, ///< the caller's arguments, at byte offset AT
+		Greg,  ///< an integer register, indexed by `at`
+		Freg,  ///< an SSE register, indexed by `at`
+		Stack, ///< the caller's arguments, at the byte offset `at`
 	};
 
 	File file = File::Greg;
@@ -89,10 +89,10 @@ struct ArgPiece {
 
 /// Where one of the interpreter's arguments arrived.
 ///
-/// The interpreter reads an argument through a pointer, so a value that came in
-/// one piece needs no copy: the context slot it landed in is already storage to
-/// point at. Only a value LLVM spread across several registers has to be
-/// gathered somewhere contiguous first.
+/// The interpreter reads an argument through a pointer. A value that arrived
+/// in one piece needs no copy: the context slot it landed in is already
+/// storage to point at. Only a value LLVM spread across several registers has
+/// to be gathered somewhere contiguous first.
 struct ArgPlan {
 	enum class Where : uint8_t { Greg, Freg, Stack, Pieces };
 
@@ -136,7 +136,7 @@ struct InterpEntryLayout {
 /// What the thunk resolves a MonoMethod * to.
 struct InterpEntryPoint {
 	const InterpEntryLayout *layout = nullptr;
-	void *imethod = nullptr; ///< InterpMethod *, which nothing here looks into
+	void *imethod = nullptr; ///< InterpMethod *, opaque to this backend
 };
 
 /// How much code a context stub takes, and what it wants to be aligned to.
@@ -155,12 +155,12 @@ struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
 	                               llvm::orc::ExecutorAddr reentry_ctx);
 };
 
-/// The frame the re-entry resolver runs on, as a CFI program.
+/// Builds the frame the re-entry resolver runs on, as a CFI program.
 ///
 /// The frame it declares is the managed caller's rather than the resolver's
-/// own, so a walk that arrives during a compile goes on to the code that made
-/// the call. The rules are tied to the instruction offsets in the resolver, so
-/// the two only stay true together.
+/// own. A walk that arrives during a compile therefore goes on to the code
+/// that made the call. The rules are tied to the instruction offsets in the
+/// resolver, so the two only stay true together.
 std::vector<UnwindRecord> lazy_resolver_frame ();
 
 } // namespace mono::arch

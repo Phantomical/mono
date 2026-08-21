@@ -16,7 +16,7 @@ namespace {
  *                 promote (method);
  *
  * The plain load in front keeps the atomic off the path a body takes once it
- * has been counted, which is every call but the first few.
+ * has been counted. That is every call but the first few.
  */
 void
 emit_counter (Function &f, uint32_t threshold, Constant *method)
@@ -25,8 +25,8 @@ emit_counter (Function &f, uint32_t threshold, Constant *method)
 	LLVMContext &ctx = m.getContext ();
 	Type *i32 = Type::getInt32Ty (ctx);
 
-	// Private, so the body reaches it PC-relative. An external symbol would put
-	// a GOT load in front of every call.
+	// Private, so the body reaches it PC-relative. An external symbol puts a
+	// GOT load in front of every call instead.
 	auto *counter = new GlobalVariable (m, i32, /*isConstant=*/false,
 	                                    GlobalValue::PrivateLinkage,
 	                                    ConstantInt::get (i32, threshold),
@@ -41,7 +41,7 @@ emit_counter (Function &f, uint32_t threshold, Constant *method)
 	BasicBlock &entry = f.getEntryBlock ();
 
 	// Everything the entry block already holds belongs to the frame, so the
-	// check goes after all of it and the body carries on in the block split off
+	// check goes after all of it. The body carries on in the block split off
 	// here.
 	BasicBlock *body = entry.splitBasicBlock (entry.getTerminator (), "tier_body");
 	BasicBlock *count = BasicBlock::Create (ctx, "tier_count", &f, body);
@@ -89,8 +89,9 @@ TierCounterPass::run (Module &m, ModuleAnalysisManager &)
 		    || threshold == 0)
 			continue;
 
-		// The translator recorded it, so the linker has an address for it. A
-		// name with nothing behind it would link to zero.
+		// The translator recorded it, so the linker has an address for it. We
+		// look the name up instead of inventing one: an invented name has
+		// nothing behind it and links to zero.
 		Constant *method = m.getNamedValue (
 			f.getFnAttribute (tier_handle_attribute).getValueAsString ());
 

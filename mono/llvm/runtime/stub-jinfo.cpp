@@ -16,15 +16,13 @@ namespace mono {
 namespace {
 
 /// The encoded unwind program every stub runs under.
-///
-/// A stub is a bare jump: it has pushed nothing, so at any instruction in it the
-/// frame is still exactly the one the call left behind - which is what the arch's
-/// CIE describes and nothing more. Without this a walk that catches a thread
-/// mid-jump cannot step off the stub into its caller at all.
 llvm::ArrayRef<uint8_t>
 stub_unwind_info ()
 {
 	static const std::vector<uint8_t> encoded = [] {
+		// A stub is a bare jump and pushes nothing, so the frame at any
+		// point inside it is still the caller's. That is exactly what
+		// the arch CIE describes on its own.
 		GSList *ops = mono_arch_get_cie_program ();
 		guint32 len = 0;
 		guint8 *bytes = mono_unwind_ops_encode (ops, &len);
@@ -49,14 +47,14 @@ register_stub_jinfo (MonoDomain *domain, MonoMethod *method, void *stub, size_t 
 	guint32 uw_info_len = (guint32) unwind.size ();
 
 	/*
-	 * Everything that reads this record's name only ever prints it - a profile, a
-	 * stack dump, the jit map - and each of them already has the address to tell
-	 * two records apart with, so the name is carried in the form a reader wants
-	 * rather than as the symbol.
+	 * Everything that reads this record's name only ever prints it: a profile,
+	 * a stack dump, the jit map. Each of them already has the address to tell
+	 * two records apart with. The name is carried in the form a reader wants,
+	 * not as the symbol.
 	 *
-	 * The stub over the plain body symbol needs a suffix of its own or it prints
-	 * exactly as the body it jumps to, and the two are worth telling apart: one is
-	 * the method, the other is the sixteen bytes in front of it.
+	 * The stub over the plain body symbol needs a suffix of its own, or it
+	 * prints exactly as the body it jumps to. The two are worth telling apart:
+	 * one is the method, the other is the sixteen bytes in front of it.
 	 */
 	std::string display = display_name (method, name);
 

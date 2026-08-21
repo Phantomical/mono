@@ -2,10 +2,11 @@
  * \file
  * \brief Getting the IRPGO counters in a tier-1 body back out again.
  *
- * LLVM's own instrumentation writes the counters and its own profile reader
- * consumes them, but the two normally meet through a file a process writes at
- * exit. Nothing here exits, so these passes record what the reader will ask for
- * and make the counter array reachable while the code is still running.
+ * LLVM's own instrumentation writes the counters and its profile reader
+ * consumes them. The two normally meet through a file a process writes at
+ * exit. A tier-2 compile wants the counts long before the process exits.
+ * These passes record what the reader will ask for, and make the counter
+ * array reachable while the code is still running.
  */
 
 #ifndef MONO_LLVM_PASSES_PROFILE_COUNTERS_HPP
@@ -30,6 +31,7 @@ struct ProfileSite {
 	/// The hash of the CFG the counter indices were assigned over. The reader
 	/// drops a record whose hash disagrees with the function it is applied to.
 	uint64_t hash = 0;
+	/// How many counters the function has.
 	uint32_t counters = 0;
 };
 
@@ -72,11 +74,12 @@ public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
 };
 
-/// Records the name and hash each instrumented function was given.
+/// Records the name, hash, and counter count each instrumented function was
+/// given.
 ///
-/// Run between the instrumentation and its lowering. Both values are arguments
-/// of the increment intrinsics, and the lowering replaces those with arithmetic
-/// on the counter array.
+/// Run between the instrumentation and its lowering. All three come from the
+/// increment intrinsics, and the lowering replaces those calls with
+/// arithmetic on the counter array.
 class ProfileGatherPass : public llvm::PassInfoMixin<ProfileGatherPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
@@ -84,11 +87,12 @@ public:
 
 /// Makes every global the lowering wrote local to the module.
 ///
-/// Run behind the lowering. It marks some of them external and comdat, for a
-/// static linker to merge across objects and a profile runtime to find at
-/// process exit. Here the counters are read straight out of the running code,
-/// so nothing looks for them by name, and left visible they are symbols the JIT
-/// promises from the IR and then links with flags that do not match.
+/// Run behind the lowering. That earlier pass marks some of them external and
+/// comdat, for a static linker to merge and a profile runtime to find at
+/// process exit. Here the counters are read straight out of the running
+/// code, so the JIT never looks them up by name. Left visible, they are
+/// symbols the JIT promises from the IR and then links with flags that do
+/// not match.
 class ProfileLocalizePass : public llvm::PassInfoMixin<ProfileLocalizePass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);

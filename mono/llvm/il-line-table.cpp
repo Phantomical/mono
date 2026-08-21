@@ -1,6 +1,6 @@
 /**
  * \file
- * il-line-table.cpp - IL offsets as LLVM debug info.
+ * \brief IL offsets as LLVM debug info.
  */
 
 #include "il-line-table.hpp"
@@ -38,17 +38,16 @@ IlDebugModule::IlDebugModule (llvm::Module *module)
 		                       llvm::DEBUG_METADATA_VERSION);
 
 	/*
-	 * One file for the whole module, named after nothing in particular: the names
-	 * that matter are the per-function ones, and nothing here is meant to be
-	 * opened.
+	 * One file for the whole module, named after nothing in particular: what
+	 * matters is the per-function names, and no tool opens the file this names.
 	 */
 	impl_->file = impl_->di.createFile ("mono-tier1", ".");
 
 	/*
 	 * NoDebug: this metadata is here to carry IL offsets down to the machine
 	 * layer, where the compiler reads them off the instructions and writes
-	 * `.mono_lines`. Nothing reads DWARF back, so asking for none of it emitted
-	 * is a straight saving.
+	 * `.mono_lines`. We never read DWARF back, so asking for none of it to be
+	 * emitted is a straight saving.
 	 */
 	impl_->cu = impl_->di.createCompileUnit (
 		llvm::dwarf::DW_LANG_C99, impl_->file, "mono tier-1", /*isOptimized=*/ true, "", 0,
@@ -74,8 +73,9 @@ IlDebugModule::add_function (llvm::Function *fn, const char *name)
 	IlDebugScope *scope = impl_->scopes.back ().get ();
 	scope->subprogram = sp;
 	/*
-	 * Everything emitted before the first OP_IL_SEQ_POINT - the prologue, the
-	 * entry block's allocas - belongs to the method's first IL byte.
+	 * Everything emitted before the first call to il_debug_set_location () -
+	 * the prologue, the entry block's allocas - belongs to the method's first
+	 * IL byte.
 	 */
 	scope->cur = llvm::DILocation::get (fn->getContext (), IL_OFFSET_LINE_BIAS,
 	                                    /*Column=*/ 1, sp);

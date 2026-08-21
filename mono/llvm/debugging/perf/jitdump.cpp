@@ -118,8 +118,8 @@ publish (const char *name, const CodeRange &range, std::vector<FrameFunction> fu
 	EhFrame frame = build_eh_frame (std::move (functions), range.extent);
 
 	/* The image reaches align8(extent) + the description past the code. A
-	 * description that runs out of the room this record owns would take the next
-	 * record's bytes and lose them both, so the code is named and left
+	 * description that runs out of the room this record owns reaches into the
+	 * next record's bytes and loses both, so the code is named and left
 	 * undescribed instead. */
 	if (((range.extent + 7) & ~(size_t) 7) + frame.bytes.size () > room)
 		frame = {};

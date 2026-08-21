@@ -41,8 +41,9 @@ MethodLLVMEmitter::depends_on_context (MonoClass *klass)
 	 * A generic type definition carries its own type parameters, which are not
 	 * this method's: typeof (List<>) is one object however the body it appears
 	 * in was instantiated. mono_class_check_context_used () counts them all the
-	 * same, and inflating one against this method's context would turn
-	 * List<> into List<T>.
+	 * same, so this returns false for a GTD instead of inflating its own
+	 * parameters against this method's context and turning List<> into
+	 * List<T>.
 	 */
 	if (mono_class_is_gtd (klass))
 		return false;
@@ -75,7 +76,7 @@ MethodLLVMEmitter::calls_through_context (MonoMethod *target)
 
 	/*
 	 * A wrapper is generated around one instantiation and carries no token the
-	 * context could resolve, so mono's own entry for a method's code refuses
+	 * context can resolve, so mono's own entry for a method's code refuses
 	 * one. The caller compiles concrete instead, and gets the wrapper it named.
 	 */
 	if (target->wrapper_type != MONO_WRAPPER_NONE) {
@@ -99,7 +100,7 @@ MethodLLVMEmitter::takes_context_argument () const
  * An object's vtable is its instantiation's, so an instance method of a shared
  * class reads its context out of `this` and needs nothing from its caller. A
  * static method, a value type's, a default interface method and any method with
- * type parameters of its own have no such receiver; each of those is entered
+ * type parameters of its own have no such receiver. Each of those is entered
  * with the context in a register instead, which the instantiation's own context
  * stub writes.
  */
@@ -133,10 +134,11 @@ MethodLLVMEmitter::open_sharing (MonoIrBuilder &builder)
 
 	/*
 	 * Read once, in the prologue, so that one value dominates every fetch below
-	 * it. A null receiver faults here rather than at whatever the body would
-	 * have touched first. The two differ only for a body that reads the context
-	 * without ever touching `this`, and a reference type's instance method is
-	 * reached through callvirt, which has already checked.
+	 * it. A null receiver faults on this load instead of on whatever
+	 * instruction in the body first uses it. The two differ only for a body
+	 * that reads the context without ever touching `this`, and a reference
+	 * type's instance method is reached through callvirt, which has already
+	 * checked.
 	 */
 	llvm::Value *self = builder.CreateAlignedLoad (ptr, args[0].alloca, align);
 	llvm::Value *slot = builder.CreateGEP (
@@ -154,7 +156,7 @@ MethodLLVMEmitter::open_sharing (MonoIrBuilder &builder)
  * is what MonoGenericJitInfo describes and this pins.
  *
  * The marker does both halves. The intrinsic is neither a load nor a store, so
- * mem2reg leaves the slot in memory; and codegen resolves its operand against
+ * mem2reg leaves the slot in memory. Codegen then resolves its operand against
  * the laid-out frame, which is the register and displacement jinfo.cpp reads
  * back out of the stackmap section.
  */
@@ -167,11 +169,10 @@ MethodLLVMEmitter::pin_context_slot (MonoIrBuilder &builder, llvm::Value *slot)
 	pinned_receiver = true;
 }
 
-/// Which fill icall answers for a slot, and what the context it reads has to be.
-///
-/// A slot the class owns is filled from the class vtable, and one the method
-/// owns from the MRGCTX its caller passed. MONO_RGCTX_SLOT_MAKE_MRGCTX marks
-/// which of the two a slot index is.
+/// Returns the icall that fills a slot. A slot the class owns is filled from
+/// the class vtable, and one the method owns from the MRGCTX its caller passed.
+/// mini_get_rgctx_entry_slot () marks a slot it put in the MRGCTX with
+/// MONO_RGCTX_SLOT_MAKE_MRGCTX, which is what tells the two apart.
 static MonoJitICallId
 fill_icall_for (uint32_t slot)
 {
@@ -179,8 +180,8 @@ fill_icall_for (uint32_t slot)
 	                                        : MONO_JIT_ICALL_mono_fill_class_rgctx;
 }
 
-/// The patch mini_get_rgctx_entry_slot () reads \p data through, which is what
-/// says whether the entry is about a class, a method or a field.
+/// Returns the patch kind that tells mini_get_rgctx_entry_slot () whether the
+/// data behind it is a class, a method or a field.
 static MonoJumpInfoType
 patch_kind_for (MonoRgctxInfoType info_type)
 {

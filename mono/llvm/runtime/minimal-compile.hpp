@@ -23,9 +23,9 @@ public:
 		memset (&cfg, 0, sizeof (cfg));
 		cfg.method = method;
 		/*
-		 * The domain the code is being compiled for - the owning linker's, not
-		 * the compiling thread's current one. The translator reads it wherever
-		 * it resolves per-domain state at translate time (ldstr).
+		 * domain is the owning linker's, never the compiling thread's current
+		 * one. The translator reads it wherever it resolves per-domain state
+		 * at translate time (ldstr).
 		 */
 		cfg.domain = domain;
 		cfg.opt = MONO_OPT_SIMD;

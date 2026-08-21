@@ -4,7 +4,7 @@
  *
  * ORC's SimpleCompiler is TargetMachine::addPassesToEmitMC plus PassManager::run
  * and nothing else. What mono needs from codegen that the stock recipe cannot
- * give it is a seat between the machine passes and the AsmPrinter: the clause
+ * give it is a seat between the machine passes and the AsmPrinter. The clause
  * gather has to see the final landing-pad set, and the side tables have to be
  * written into the object while the streamer is still open, with the code
  * offsets as label differences the writer folds at layout. So the recipe is
@@ -91,7 +91,7 @@ thread_local uint64_t g_isel_done = 0;
 thread_local uint64_t g_function_started = 0;
 
 /// Marks where the pass manager starts on a function, ahead of the IR passes
-/// codegen runs and of ISel; the mark after ISel closes it.
+/// codegen runs and of ISel. The mark after ISel closes it.
 class FunctionMarkPass : public FunctionPass {
 public:
 	static char ID;
@@ -115,7 +115,7 @@ public:
 char FunctionMarkPass::ID;
 
 /// Marks the point ISel is finished with a function and the machine passes are
-/// about to start on it; the mark ahead of the printer closes it.
+/// about to start on it. The mark ahead of the printer closes it.
 class MachinePassMarkPass : public MachineFunctionPass {
 public:
 	static char ID;
@@ -141,7 +141,7 @@ public:
 
 char MachinePassMarkPass::ID;
 
-/// Marks the start of the AsmPrinter over one function; the side-table pass,
+/// Marks the start of the AsmPrinter over one function. The side-table pass,
 /// which the legacy pass manager runs immediately after the printer, closes it.
 class PrinterMarkPass : public MachineFunctionPass {
 public:
@@ -175,9 +175,9 @@ char PrinterMarkPass::ID;
  * The translator gives every instruction a debug location whose line is the IL
  * offset in effect at it (il-line-table.hpp); all a row needs on top of that is
  * a label to take a difference against, so one is planted wherever the line
- * changes. That is the same thing a `.loc` directive would do, which is why the
- * module's compile unit can say NoDebug: nothing here wants a line table, and
- * without one no `.debug_*` section is produced at all.
+ * changes. That is the same thing a `.loc` directive does, which is why the
+ * module's compile unit can say NoDebug. This pipeline has no use for a DWARF
+ * line table, and without one no `.debug_*` section is produced at all.
  */
 class IlLineHandler : public AsmPrinterHandler {
 public:
@@ -243,7 +243,7 @@ public:
 	void endModule () override {}
 
 private:
-	/*
+	/**
 	 * An instruction with no location leaves the line in effect alone rather
 	 * than clearing it: the translator attributes what it emits, so a gap is
 	 * codegen's own bookkeeping and belongs to whatever surrounds it.
@@ -332,9 +332,9 @@ transcribe_cfi (const MCCFIInstruction &i)
 	return r;
 }
 
-/*
+/**
  * Writes both side tables at doFinalization, which the legacy pass manager runs
- * in reverse pass order: added after the AsmPrinter, this runs once every
+ * in reverse pass order. Added after the AsmPrinter, this runs once every
  * function has been emitted but before the printer's own finalization closes
  * the streamer and writes the object.
  */
@@ -351,7 +351,7 @@ public:
 
 	StringRef getPassName () const override { return "Mono side-table emission"; }
 
-	/*
+	/**
 	 * This runs immediately after the AsmPrinter's own, so the interval since
 	 * the marker pass ahead of the printer is the printer over one function.
 	 */
@@ -389,7 +389,7 @@ public:
 	}
 
 private:
-	/*
+	/**
 	 * `.mono_lsda`, in the tiered backend's v3 format (mono_lsda.hpp), whose
 	 * reader parses it back at load. One block per clause-bearing function,
 	 * each naming where that function was linked, so an object holding a batch
@@ -410,7 +410,7 @@ private:
 
 			/*
 			 * A filter body compiled alongside its method carries no clauses
-			 * of its own; a block describes a method.
+			 * of its own: a block describes a method.
 			 */
 			if (fn.function.find ("$filter") != std::string::npos)
 				continue;
@@ -497,11 +497,11 @@ private:
 		}
 	}
 
-	/*
+	/**
 	 * `.mono_unwind`: one block per function, each its CFI program with the
 	 * initial frame state first. The rule offsets are label differences
 	 * against the frame's begin label, which sits at the function's entry, so
-	 * the writer folds them to constants; the begin label itself is emitted
+	 * the writer folds them to constants. The begin label itself is emitted
 	 * whole, as the address the reader matches a block to a function by.
 	 */
 	void emit_unwind_table ()
@@ -514,7 +514,7 @@ private:
 			return;
 
 		/*
-		 * Only an object streamer plants the frame and rule labels; textual
+		 * Only an object streamer plants the frame and rule labels. Textual
 		 * assembly stands the `.cfi_*` directives in for them and fills the
 		 * label fields with a dummy pointer. There is nothing to take a
 		 * difference against, and the directives say the same thing.
@@ -561,7 +561,7 @@ private:
 		}
 	}
 
-	/*
+	/**
 	 * `.mono_lines`: one block per function, each row an IL offset and the code
 	 * offset it takes effect at, as a label difference the writer folds at
 	 * layout. The rows are the ones the printer's handler planted labels for
@@ -605,11 +605,11 @@ private:
 
 char SideTableEmitPass::ID;
 
-/// What codegen writes to OUT: the ELF object the linker loads, or the assembly
-/// text a human reads.
+/// The two things codegen can write: the ELF object the linker loads, or
+/// the assembly text a human reads.
 enum class OutputKind { object, assembly };
 
-/*
+/**
  * The streamer for one codegen run: either the ELF one createMCObjectStreamer
  * builds, or the assembly printer addPassesToEmitFile's AssemblyFile arm does.
  */
@@ -801,8 +801,8 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 	/*
 	 * Last, as the stock recipe has it. It hands each MachineFunction back to
 	 * the MMI, and a pipeline that runs a second time needs that: the MMI keys
-	 * them by Function, and the Functions of the module that has just been
-	 * compiled are about to go.
+	 * them by Function, and the Functions of the compiled module are about to
+	 * go.
 	 */
 	pm->add (createFreeMachineFunctionPass ());
 
@@ -965,7 +965,7 @@ dumping_asm (StringRef module_name, unsigned tier)
 	return module_name.contains (filter);
 }
 
-/*
+/**
  * A method name holds characters a path cannot carry - `/` in a generic
  * argument, and the spaces of a signature - so each run of them becomes one
  * underscore. Long names are cut to leave room for the extension and for the
@@ -1042,8 +1042,8 @@ open_asm_file (StringRef module_name)
  * Codegen consumes the module it is given, and the MCContext, the MMI and the
  * streamer are entangled with the single run they were built for, so this
  * compiles a clone and leaves the caller's module for the object run. Being a
- * separate run also means nothing here can change the code that gets published:
- * a bug in the printout stays a bug in the printout. The side channel it fills
+ * separate run also means it cannot change the code that gets published: a
+ * bug in the printout stays a bug in the printout. The side channel it fills
  * is discarded for the same reason.
  */
 Error
@@ -1069,7 +1069,7 @@ dump_assembly (TargetMachine &tm, const Module &m)
 /// How a compile gets its codegen pipeline. MONO_LLVM_JIT_CODEGEN picks.
 enum class PipelineUse { reuse, fresh, compare };
 
-/*
+/**
  * `fresh` builds a pipeline for each method, which is what an A/B against the
  * reuse measures. `compare` runs both over one method and stops the process
  * when the two objects differ.

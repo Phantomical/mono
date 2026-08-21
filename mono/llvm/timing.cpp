@@ -10,7 +10,7 @@
  *
  * The value is a comma-separated set of words. `cpu` charges each phase the
  * thread CPU time it used rather than wall clock, which is what makes a run on
- * a loaded machine comparable to a quiet one; it costs about ten times as much
+ * a loaded machine comparable to a quiet one. It costs about ten times as much
  * per reading, so it is not the default. `fine` turns on the sub-phases, which
  * split the four expensive phases into the pieces a per-compile floor is
  * actually made of.
@@ -40,7 +40,7 @@ struct Bucket {
 Bucket g_buckets[(size_t) Phase::count];
 thread_local Scope *g_current = nullptr;
 
-/// The first sub-phase; everything from here on is gated on `fine`.
+/// The first sub-phase. Phases from here on are gated on `fine`.
 constexpr Phase first_fine = Phase::ctxnew;
 
 bool g_cpu_clock = false;
@@ -249,9 +249,10 @@ span_begin (Phase phase)
 		return 0;
 
 	/*
-	 * A reading of exactly zero would read as "nothing recorded"; the clocks
-	 * here are nanoseconds since boot or since the thread started, so this is
-	 * only reachable in the first nanosecond of a thread's life.
+	 * A reading of exactly zero reads as "nothing recorded" downstream, so it
+	 * is bumped to 1 here. The clocks are nanoseconds since boot or since the
+	 * thread started, so a zero reading only happens in the first nanosecond
+	 * of a thread's life.
 	 */
 	uint64_t start = now_ns ();
 

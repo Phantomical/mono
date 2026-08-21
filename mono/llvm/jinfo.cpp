@@ -2,13 +2,15 @@
  * \file
  * \brief Publishing a compiled method's MonoJitInfo from its side tables.
  *
- * The compiler wrote two sections next to the code: the clause table, read back
- * with the tiered backend's own reader (parse_mono_lsda / build_ex_info), and
- * the frame description, transcoded here into the unwind ops mono's unwinder
- * executes. What comes out is the MonoJitInfo mono_handle_exception and the
- * stack walks search for: from_llvm, so dispatch re-enters frames through the
- * landing pads with the exception and clause index in the registers a pad
- * reads.
+ * This file reads back three of the sections the compiler wrote next to the
+ * code. The clause table comes back through the tiered backend's own reader
+ * (parse_mono_lsda / build_ex_info) and the finally-guard table through
+ * parse_guards (). transcode_unwind () turns the frame description into the
+ * unwind ops mono's unwinder executes.
+ *
+ * What comes out is the MonoJitInfo mono_handle_exception and the stack walks
+ * search for: from_llvm, so dispatch re-enters frames through the landing pads
+ * with the exception and clause index in the registers a pad reads.
  */
 
 #include "jinfo.hpp"
@@ -47,7 +49,7 @@ namespace mono {
 namespace {
 
 /// The finally guard records, or an error if the section is malformed or names a
-/// slot a stack walk could not reach.
+/// slot a stack walk cannot reach.
 ///
 /// A null section is not a failure: a method with no finally, or one whose bodies
 /// all optimized away, has nothing for a thread to be stopped inside. Neither is
@@ -140,22 +142,12 @@ parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
 
 } // namespace
 
-/// The frame description as mono unwind ops, or an error naming what could not
-/// be expressed.
-///
-/// Almost everything maps one to one - mono's unwinder executes def_cfa,
-/// offset, same_value and one level of remember/restore state natively. Two
-/// records are normalized instead, because mono cannot execute either.
-///
-/// RESTORE reverts a register to its rule at function entry, so it is replayed
-/// here as that entry rule - the entry state is the leading run of offset-zero
-/// records - which is an offset where the entry saved the register and
-/// same_value where it did not.
-///
-/// ADJUST_CFA_OFFSET moves the CFA offset by a relative amount, so it is
-/// replayed as a def_cfa_offset carrying the offset it arrives at.
-///
-/// ARGS_SIZE is dropped, because it states no rule mono's unwinder holds.
+/*
+ * Most op kinds map onto mono's unwinder one to one: it executes def_cfa,
+ * def_cfa_register, offset, same_value and one level of remember/restore
+ * state natively. RESTORE and ADJUST_CFA_OFFSET do not, and are normalized at
+ * their cases below.
+ */
 Expected<GSList *>
 transcode_unwind (const std::vector<UnwindRecord> &records)
 {
@@ -183,7 +175,7 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 		return mono_dwarf_reg_to_hw_reg (dwarf_reg);
 	};
 
-	/* DWARF reg -> its rule at entry; absent means not saved. */
+	/* DWARF reg -> its rule at entry. Absent means not saved. */
 	std::vector<std::pair<int32_t, int64_t>> entry_offsets;
 	bool in_entry_state = true;
 
@@ -217,6 +209,11 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 			emit (r.offset, DW_CFA_def_cfa_offset, 0, (int32_t) r.value);
 			break;
 		case MONO_UNWIND_OP_ADJUST_CFA_OFFSET:
+			/*
+			 * ADJUST_CFA_OFFSET moves the CFA offset by a relative amount.
+			 * Mono only takes an absolute one, so this replays it as the
+			 * offset it arrives at.
+			 */
 			cfa_offset += r.value;
 			emit (r.offset, DW_CFA_def_cfa_offset, 0, (int32_t) cfa_offset);
 			break;
@@ -255,8 +252,9 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 		}
 		case MONO_UNWIND_OP_REMEMBER_STATE:
 			/*
-			 * mono's unwinder holds exactly one remembered state; a deeper
-			 * nest would mis-unwind, so it is refused here instead.
+			 * mono's unwinder holds exactly one remembered state and
+			 * fails the frame when a second arrives. We refuse a deeper
+			 * nest here and decline the method instead.
 			 */
 			if (++remember_depth > 1)
 				return fail (createStringError (
@@ -273,6 +271,13 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 			cfa_offset = remembered_cfa_offset;
 			emit (r.offset, DW_CFA_restore_state, 0, 0);
 			break;
+		/*
+		 * RESTORE reverts a register to its rule at function entry, which
+		 * mono has no opcode for. It is replayed here as that entry rule
+		 * instead: an offset where the entry saved the register, and
+		 * same_value where it did not. The entry state is the leading run of
+		 * offset-zero records.
+		 */
 		case MONO_UNWIND_OP_RESTORE:
 		case MONO_UNWIND_OP_SAME_VALUE: {
 			int reg = hw_reg (r.reg);
@@ -312,20 +317,21 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 }
 
 /*
- * Publish METHOD's sequence points: the table the soft debugger looks an IL
+ * Publish method's sequence points: the table the soft debugger looks an IL
  * offset up in to place a breakpoint, and looks a native offset up in to say
  * where a stopped thread is.
  *
  * The rows come out of the line table in the encoding seq-point-marker.hpp
  * describes and are already ascending by native offset, which is what
  * mono_seq_point_find_prev_by_native_offset () walks. Native offsets are a
- * property of the body, so every body gets a table of its own; the domain keeps
- * them in a list under the method, which is both who frees them and where the
- * per-method lookup - which can only ever answer for one body - reads from.
+ * property of the body, so every body gets a table of its own. The domain
+ * keeps them in a list under the method, which is both who frees them and
+ * where the per-method lookup - which can only ever answer for one body -
+ * reads from.
  *
- * GRAPH says which sequence points can follow which, as IL offsets; what goes
- * into the table are indices into the table itself, so it is joined against the
- * rows on the way past.
+ * graph says which sequence points can follow which, as IL offsets. What goes
+ * into the table are indices into the table itself, so it is joined against
+ * the rows on the way past.
  */
 static void
 publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
@@ -415,12 +421,12 @@ publish_seq_points (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo,
 }
 
 /*
- * Fill in VAR from SLOT, or say the slot is not one a stack walk can address.
+ * Fill in var from slot, or say the slot is not one a stack walk can address.
  *
- * The translator pinned the variable to a frame slot for exactly this, so there
- * is one home for the whole method and REGOFFSET can say where it is. Which
- * register the slot is addressed off is LLVM's choice, and a caller-saved one
- * would be long gone by the time a walk reached this frame.
+ * The translator pinned the variable to a frame slot for exactly this, so
+ * there is one home for the whole method and REGOFFSET can say where it is.
+ * Which register the slot is addressed off is LLVM's choice, and a
+ * caller-saved one is already gone by the time a walk reaches this frame.
  */
 static bool
 fill_var_info (MonoDebugVarInfo &var, const VarSlot &slot, MonoType *type)
@@ -441,13 +447,13 @@ fill_var_info (MonoDebugVarInfo &var, const VarSlot &slot, MonoType *type)
 }
 
 /*
- * Publish METHOD's code extent, line table and variable homes where the
+ * Publish method's code extent, line table and variable homes where the
  * mono_debug_* API can find them.
  *
  * The line table is how an address is turned into an IL offset for anything that
  * is not the frame a debugger stopped in: the soft debugger reads the sequence
  * point table for its top frame and this for every frame below it, so without it
- * a caller's line number is simply unknown.
+ * a caller's line number is unknown.
  *
  * The variable half is only filled in when the translator pinned this method's
  * arguments and locals to frame slots, which it does when a debugger is
@@ -551,9 +557,9 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 
 	/*
 	 * The clause table, joined against the IL clauses. An absent section for a
-	 * clause-bearing method means the gather declined it - nothing may be
-	 * published, since a partial table dispatches wrongly rather than failing.
-	 * A null HEADER registers clauseless code (an interop thunk).
+	 * clause-bearing method means the gather declined it, so nothing is
+	 * published: a partial table dispatches wrongly rather than failing. A
+	 * null header registers clauseless code (an interop thunk).
 	 */
 	std::vector<MonoJitExceptionInfo> clauses;
 
@@ -628,8 +634,8 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	/*
 	 * The IL-offset map rides in the same allocation, past everything
 	 * mono_jit_info_size () accounts for, so it is reclaimed exactly when the
-	 * record is. A dynamic method's record is g_free ()d wholesale and there is
-	 * nowhere to hang a second pointer that anyone would know to free.
+	 * record is. A dynamic method's record is g_free ()d wholesale, with no
+	 * separate free for a second pointer hung off it.
 	 */
 	size_t n_seq_points = compiled.il_lines.size ();
 	size_t map_offset = (size_t) ALIGN_TO (jinfo_size, sizeof (guint32));
@@ -668,15 +674,15 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 		gi->this_offset = compiled.rgctx_slot.offset;
 	}
 
-	/* A null HEADER is how the caller says this is not the method's main body. */
+	/* A null header is how the caller says this is not the method's main body. */
 	jinfo->llvm_side_body = header == nullptr;
 	jinfo->llvm_abi_thunk = kind == CodeKind::AbiThunk;
 	/*
 	 * Reading the classic JIT's mapping instead is not an option: it is keyed by
-	 * MonoMethod, so it would attribute this body's offsets to another body's
-	 * table. This one is recovered from this body's own line table, so it says
-	 * "unknown" only when there was nothing to recover - a method compiled
-	 * without debug info, e.g. an interop thunk.
+	 * MonoMethod, not by body, so it cannot tell this body's offsets from
+	 * another body's. This one is recovered from this body's own line table, so
+	 * it says "unknown" only when there was nothing to recover - a method
+	 * compiled without debug info, e.g. an interop thunk.
 	 */
 	jinfo->no_il_offsets = n_seq_points == 0;
 
@@ -711,9 +717,9 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 		                    seq_points);
 	/*
 	 * Only the method's own body. An entry thunk is registered against the
-	 * same MonoMethod and the table is keyed by method, so publishing a line
-	 * table for it would replace the body's - and it has no IL of its own to
-	 * put there anyway.
+	 * same MonoMethod, and mono_debug_add_method () keys by method, so a
+	 * second call for it replaces the body's table - and it has no IL of its
+	 * own to put there anyway.
 	 */
 	if (header != nullptr)
 		publish_debug_info (domain, method, header, compiled);

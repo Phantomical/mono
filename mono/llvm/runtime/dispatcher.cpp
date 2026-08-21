@@ -37,12 +37,15 @@ build_dispatcher (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
                   RememberFn remember)
 {
 	/*
-	 * The dispatcher borrows the fastcc body's exact type - signature,
-	 * convention, attributes - from a declaration; the accessor substitution
-	 * mirrors translate_and_compile (), whose compiled body is what the helper
-	 * will return. The declaration itself goes back out of the module: the
-	 * forward is through the helper's answer, never through the stub, or the
-	 * dispatcher would bounce off its own binding forever.
+	 * The dispatcher borrows the body's exact type - signature, convention,
+	 * attributes - from a declaration. The accessor substitution mirrors
+	 * translate_and_compile (), whose compiled body is what the helper will
+	 * return.
+	 *
+	 * The declaration itself goes back out of the module. The forward is
+	 * through the helper's answer, never through the stub. The stub is bound
+	 * to the dispatcher itself, so a call through it from here recurses
+	 * forever.
 	 */
 	MonoMethod *declared = method;
 

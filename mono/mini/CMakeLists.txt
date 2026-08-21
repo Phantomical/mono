@@ -1,13 +1,12 @@
 # The runtime half of the JIT: everything the LLVM backend under mono/llvm/
 # links against.
 
-# ---------------------------------------------------------------------------
 # Generated sources
-# ---------------------------------------------------------------------------
 
-# FULL_VERSION is "<branch>/<sha>" for a git checkout.  Regenerated on every
-# build, but written through copy_if_different so an unchanged HEAD does not
-# relink the world.
+# FULL_VERSION is "<branch>/<sha>" for a git checkout, captured the first time
+# the build writes version.h.  The custom command has no inputs, so a later
+# commit in the same build directory does not rerun it.  Delete version.h to
+# record a newer one.
 add_custom_command(
   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/version.h"
   COMMAND ${CMAKE_COMMAND}
@@ -19,10 +18,8 @@ add_custom_command(
   VERBATIM)
 add_custom_target(mono-version DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
-# ---------------------------------------------------------------------------
-# libmini -- shared between mono-sgen and mono-boehm; nothing in here has a
+# libmini is shared between mono-sgen and mono-boehm.  Nothing in it has a
 # compile-time dependency on either collector.
-# ---------------------------------------------------------------------------
 set(mini_sources
   mini.c
   mini-runtime.c
@@ -74,11 +71,9 @@ mono_add_object_library(mini
   DEPENDS mono::hidden mono::eglib_headers mono::llvm)
 add_dependencies(mini mono-version)
 
-# ---------------------------------------------------------------------------
 # The debugger agent: its own object library because it can be built as a
 # loadable module in configurations that disable it from the runtime proper.
 # The interpreter is the same shape and lives in mono/interp.
-# ---------------------------------------------------------------------------
 if(MONO_ENABLE_DEBUGGER_AGENT)
   mono_add_object_library(mono_dbg
     SOURCES
@@ -94,9 +89,7 @@ if(MONO_ENABLE_DEBUGGER_AGENT)
   add_dependencies(mono_dbg mono-version)
 endif()
 
-# ---------------------------------------------------------------------------
 # The object sets that make up a complete runtime, per collector.
-# ---------------------------------------------------------------------------
 set(_mini_extra "")
 if(MONO_ENABLE_INTERPRETER)
   list(APPEND _mini_extra mono_ee_interp)
@@ -107,7 +100,6 @@ endif()
 
 # Object libraries do not travel through an intermediate link, so each final
 # target names the whole set.
-# Cached so mono/unit-tests can link the same set without re-deriving it.
 set(MONO_SGEN_OBJECTS
     mini ${_mini_extra}
     monoruntime_sgen monoruntime_config monoruntime_support monoculture
@@ -127,9 +119,7 @@ else()
   set(_mono_zlib "")
 endif()
 
-# ---------------------------------------------------------------------------
 # The shared runtimes
-# ---------------------------------------------------------------------------
 # libmono has no sources of its own -- it is exactly the union of the object
 # libraries, which is how the automake build had it too (an empty _SOURCES and
 # a long _LIBADD).  CMake still wants a source file to hang the target off.
@@ -190,11 +180,10 @@ if(MONO_ENABLE_BOEHM AND MONO_ENABLE_LIBRARIES)
                             OBJECTS ${MONO_BOEHM_OBJECTS} EXTRA monogc)
 endif()
 
-# ---------------------------------------------------------------------------
 # The executables
-# ---------------------------------------------------------------------------
-# build_date is stamped into the binary; it is regenerated whenever the runtime
-# objects are, so it tracks the last real build rather than the last configure.
+# build_date is stamped into the binary.  It is regenerated whenever the
+# runtime objects are, so it tracks the last real build rather than the last
+# configure.
 function(_mono_buildver suffix depends)
   add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/buildver-${suffix}.h"
@@ -270,9 +259,9 @@ endif()
 install(FILES jit.h mono-private-unstable.h
         DESTINATION "${MONO_INCLUDE_SUBDIR}/mono/jit")
 
-# The override assembly, which the runtime reads out of the directory it was
-# loaded from - so it is built here, beside the runtime libraries, rather than
-# under mcs/ with the class libraries.
+# The runtime loads the override assembly out of its own directory.  So the
+# build puts it beside the runtime libraries rather than under mcs/ with the
+# class libraries.
 if(MONO_ENABLE_MCS_BUILD)
   set(_overrides "${CMAKE_CURRENT_BINARY_DIR}/mono-overrides.dll")
   mono_tools_runtime(_overrides_host MONO_PATH "${MONO_MCS_LIBDIR}/build")

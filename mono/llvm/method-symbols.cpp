@@ -16,10 +16,10 @@ namespace mono {
 
 namespace {
 
-/// The MonoMethod a marked declaration stands for, as `%p`.
+/// The attribute holding a marked declaration's MonoMethod, printed as `%p`.
 constexpr StringRef method_attribute = "mono-method";
 
-/// The marker on VALUE, or nothing if it carries none.
+/// Returns the marker on \p value, or nothing if it carries none.
 std::optional<MonoMethod *>
 marker_of (const GlobalValue &value)
 {
@@ -65,13 +65,13 @@ marked_method (const GlobalValue &value)
 	return marker_of (value).value_or (nullptr);
 }
 
-/*
- * Carry RENAMES through the attributes that hold a symbol name rather than a
- * reference to it - `mono-builtin-target` is one, and it is how a builtin
- * declaration says which method it stands for. An IR use moves with a rename on
- * its own; a name written into a string does not, and the pass that reads it
- * back would go looking for a function that no longer answers to it.
- */
+/// Carries a rename through the attributes that hold a symbol name rather
+/// than a reference to it. `mono-builtin-target` is one, and it is how a
+/// builtin declaration says which method it stands for.
+///
+/// An IR use moves with a rename on its own. A name written into a string does
+/// not, and without this the pass that reads it back would look for a function
+/// that no longer answers to that name.
 void
 follow_renames (Module &m, const StringMap<std::string> &renames)
 {
@@ -113,12 +113,12 @@ bind_method_symbols (Module &m,
 
 	for (GlobalValue *value : marked) {
 		/*
-		 * Only a declaration stands for something the engine publishes; a
+		 * Only a declaration stands for something the engine publishes. A
 		 * definition is the thing itself and keeps whatever it was called.
 		 * That matters here rather than being a nicety: a thunk built to a
-		 * declaration's shape is given its attributes, marker and all, so
-		 * without this the dispatcher would be renamed to the method it
-		 * dispatches for and the name it was compiled under would not exist.
+		 * declaration's shape is given its attributes, marker and all.
+		 * Without this, the dispatcher would be renamed to the method it
+		 * dispatches for, and the name it was compiled under would not exist.
 		 */
 		if (!value->isDeclaration ())
 			continue;

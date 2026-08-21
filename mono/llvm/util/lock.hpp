@@ -30,13 +30,9 @@ make_lock_state (M &mutex)
 #define MONO_LOCK_IMPL(mtx, var) \
 	for (auto var = ::mono::make_lock_state (mtx); var.cont (); var.tick ())
 
-/// An easy wrapper for creating a lock scope block.
+/// Runs the block that follows with mtx locked.
 ///
-/// Use it by doing
-///
-/// MONO_LOCK(mutex) { .. }
-///
-/// and the lock will be held for the duration of the scope.
+/// MONO_LOCK (mtx) { ... }
 #define MONO_LOCK(mtx) MONO_LOCK_IMPL(mtx, MONO_LOCK_CONCAT(_lock_state_, __LINE__))
 
 } // namespace mono

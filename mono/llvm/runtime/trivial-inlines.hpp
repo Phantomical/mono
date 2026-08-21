@@ -44,9 +44,9 @@ void materialize_trivial_callees (llvm::Module &module, MonoDomain *domain,
 /// Answers an error naming a materialized body the pipeline did not fold in.
 ///
 /// Such a body is entered by a direct call, so it sits off its method's thunk
-/// and has no jit info of its own. A stack walk over its frame would find
-/// nothing, and a later detour would miss it. So the compile that produced it
-/// must fail, which at tier 2 leaves the method on the tier it already runs at.
+/// and has no jit info of its own. A stack walk over its frame finds nothing,
+/// and a later detour misses it. So the compile that produced it must fail,
+/// which at tier 2 leaves the method on the tier it already runs at.
 llvm::Error trivial_inlines_landed (const llvm::Module &module);
 
 } // namespace mono

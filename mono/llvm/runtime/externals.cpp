@@ -49,8 +49,8 @@ resolve_externals (MonoJit &jit, MonoDomain *domain,
 
 			/*
 			 * A method that is both called and has its address taken (ldftn)
-			 * records two Code externals for the same callee, so this can push
-			 * the same (name, address) pair twice - harmless, compile ()'s
+			 * records two Code externals for the same callee. This can push the
+			 * same (name, address) pair twice, which is harmless: compile ()'s
 			 * SymbolMap collapses duplicate identical definitions.
 			 */
 			module_symbols.emplace_back ((*callee)->name, (*callee)->thunk_address ());

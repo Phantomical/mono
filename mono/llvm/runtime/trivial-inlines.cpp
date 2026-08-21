@@ -37,7 +37,7 @@ namespace {
 /// can be found again.
 constexpr StringRef inline_copy_attribute = "mono-inline-copy";
 
-/// What a candidate's IL amounts to.
+/// The reduced shape of a candidate's IL.
 struct Shape {
 	/// The method the single call site names, null when the body calls nothing.
 	MonoMethod *forwards_to = nullptr;
@@ -147,22 +147,20 @@ enters_a_method (MonoOpcodeEnum op)
 	return op == MONO_CEE_CALL || op == MONO_CEE_CALLVIRT || op == MONO_CEE_NEWOBJ;
 }
 
-/// A four-byte little-endian operand: a metadata token, or a displacement.
+/// Reads a four-byte little-endian operand: a metadata token or a displacement.
 uint32_t
 read_u32 (const unsigned char *at)
 {
 	return at[0] | (at[1] << 8) | (at[2] << 16) | ((uint32_t) at[3] << 24);
 }
 
-/*
- * Whether a branch goes to the instruction behind it, which is a fallthrough
- * written out.
- *
- * A C# compiler ends a method that returns a value with `stloc.0`, a branch to
- * the next instruction, then `ldloc.0` and `ret`. It is the shape almost every
- * getter and forwarder in a real assembly arrives in, so reading it as one
- * straight line is what makes the test below find any of them.
- */
+/// Whether a branch goes to the instruction behind it, which is a fallthrough
+/// written out.
+///
+/// A C# compiler ends a method that returns a value with `stloc.0`, a branch
+/// to the next instruction, then `ldloc.0` and `ret`. Reading that pattern as
+/// a straight line is what lets shape_of recognize an ordinary getter or
+/// forwarder.
 bool
 branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t operand)
 {
@@ -176,8 +174,8 @@ branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t opera
 	return false;
 }
 
-/// The method a call site's token names, or null when the metadata does not
-/// resolve it.
+/// Returns the method a call site's token names, or null when the metadata
+/// does not resolve it.
 MonoMethod *
 call_target (MonoMethod *method, uint32_t token)
 {
@@ -192,35 +190,36 @@ call_target (MonoMethod *method, uint32_t token)
 	return target;
 }
 
-/*
- * The shapes worth folding in without weighing them, as IL:
- *
- *   ldc.i4.1                       ret a constant
- *   ret
- *
- *   ldarg.0  ldfld y  ldfld z      ret a chain of fields
- *   ret
- *
- *   ldarg.0  ldarg.1  stfld x      write one
- *   ret
- *
- *   ldarg.0  ldfld y  ldarg.1      forward to one other method
- *   call  F
- *   ret
- *
- *   ldarg.1  newobj X::.ctor       throw
- *   throw
- *
- *   ldarg.1  newobj Y::.ctor       make an object and return it
- *   ret
- *
- * One rule covers them all: a straight line of value opcodes holding at most one
- * call, and the terminator as the last IL byte. Every opcode on the value list
- * is a load, a store or a conversion, so a line of them is nothing a cost model
- * would have to weigh however they are arranged. Refusing a real branch is what
- * keeps the body to that one line, and it also leaves the method with exactly
- * one terminator.
- */
+/// Returns the method's shape when its IL is a straight line of value
+/// opcodes. The line holds at most one call, and its terminator is the last
+/// IL byte. Returns nullopt otherwise.
+///
+/// These are the shapes worth folding in without weighing them:
+///
+///   ldc.i4.1                       ret a constant
+///   ret
+///
+///   ldarg.0  ldfld y  ldfld z      ret a chain of fields
+///   ret
+///
+///   ldarg.0  ldarg.1  stfld x      write one
+///   ret
+///
+///   ldarg.0  ldfld y  ldarg.1      forward to one other method
+///   call  F
+///   ret
+///
+///   ldarg.1  newobj X::.ctor       throw
+///   throw
+///
+///   ldarg.1  newobj Y::.ctor       make an object and return it
+///   ret
+///
+/// Every opcode on the value list is a load, a store or a conversion, so a
+/// cost model has nothing to weigh in a line of them, however they are
+/// arranged. Refusing a real branch
+/// is what keeps the body to that one line, and it also leaves the method
+/// with exactly one terminator.
 std::optional<Shape>
 shape_of (MonoMethod *method, MonoMethodHeader *header)
 {
@@ -275,16 +274,14 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 bool
 may_fold (MonoMethod *callee)
 {
-	/*
-	 * A wrapper is a frame the runtime's own walks look for - the stack trace
-	 * that hides it, the icall that reports its caller - and several kinds are
-	 * entered on terms the caller does not share.
-	 */
+	// A wrapper is a frame the runtime's own walks look for. The stack trace
+	// hides it, and an icall reads its caller from it. Several kinds are also
+	// entered on terms this caller does not share.
 	if (callee->wrapper_type != MONO_WRAPPER_NONE)
 		return false;
 
-	// A dynamic method is freed on its own, and a copy of its body would outlive
-	// the data its constants point at.
+	// A dynamic method is freed on its own. A copy of its body folded into a
+	// caller will outlive the data its constants point at.
 	if (callee->dynamic)
 		return false;
 
@@ -388,13 +385,11 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (!shape)
 				continue;
 
-			/*
-			 * A helper that reads the frame it was called from carries
-			 * NoInlining - GetCurrentMethod and the rest do. Folding a
-			 * forwarder into its caller hands such a helper the caller's
-			 * frame instead of the forwarder's. The same test catches a body
-			 * that calls itself, which the inliner cannot fold away.
-			 */
+			// A helper that reads the frame it was called from carries
+			// NoInlining - GetCurrentMethod and the rest do. Folding a
+			// forwarder into its caller hands such a helper the caller's
+			// frame instead of the forwarder's. The same test catches a body
+			// that calls itself, which the inliner cannot fold away.
 			if (shape->forwards_to != nullptr
 			    && (shape->forwards_to == callee
 			        || (shape->forwards_to->iflags
@@ -416,8 +411,9 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (!materialized) {
 				consumeError (materialized.takeError ());
 
-				// A failed translation leaves whatever it got as far as behind.
-				// Take that back off, or the caller calls a body with no ret.
+				// A translation that fails partway can leave a partial body in
+				// decl. Delete it, or the caller ends up calling a body with
+				// no ret.
 				if (!decl->isDeclaration ())
 					decl->deleteBody ();
 				continue;
@@ -425,8 +421,8 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 			g_assert (*materialized == decl);
 
-			// The two marks select a body for the counters that ask for the
-			// next tier. Those belong to the method's own body, and this is a
+			// These attributes tell the tier-counter pass which body to
+			// instrument. They belong to the method's own body, not to this
 			// copy of it.
 			decl->removeFnAttr (tier_counter_attribute);
 			decl->removeFnAttr (tier_handle_attribute);

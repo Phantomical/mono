@@ -15,8 +15,8 @@ namespace {
 
 /// The name the reader keys the function on.
 ///
-/// The instrumentation put it in a global of its own, which is the copy the
-/// reader would have got had this gone through a file.
+/// The instrumentation put it in a global of its own: the text an on-disk
+/// profile's names section holds for this function.
 std::string
 recorded_name (const InstrProfCntrInstBase &inc, const Function &f)
 {
@@ -31,7 +31,7 @@ recorded_name (const InstrProfCntrInstBase &inc, const Function &f)
 bool
 is_profile_global (const GlobalVariable &global)
 {
-	// The version marker and the section anchors are "__llvm_prof..."; the
+	// The version marker and the section anchors are "__llvm_prof...". The
 	// per-function arrays carry the prefixes below.
 	StringRef name = global.getName ();
 
@@ -95,9 +95,8 @@ PreservedAnalyses
 ProfileLocalizePass::run (Module &m, ModuleAnalysisManager &)
 {
 	for (GlobalVariable &global : m.globals ()) {
-		// A declaration has to keep external linkage to stay valid IR. The only
-		// one here is the profile runtime's hook, which nothing refers to
-		// outside llvm.compiler.used, so no relocation ever asks for it.
+		// Private linkage on a declaration is invalid IR, so a profile global
+		// with no definition keeps the linkage the lowering gave it.
 		if (!is_profile_global (global) || global.isDeclaration ())
 			continue;
 
@@ -114,10 +113,10 @@ using llvm::IPVK_Last;
 
 /*
  * The per-function record the instrumentation lowering writes into
- * `__llvm_prf_data`, built from LLVM's own field template so that the layout
- * follows the LLVM this links against rather than a copy of it made here.
- * llvm/ProfileData/InstrProfData.inc documents the pattern; IntPtrT is ours to
- * name, and it holds a signed distance.
+ * `__llvm_prf_data`. It is built from LLVM's own field-list macro, so its
+ * layout matches the LLVM version this links against, not a copy made here.
+ * llvm/ProfileData/InstrProfData.inc documents the pattern. IntPtrT is ours
+ * to name, and it holds a signed distance.
  */
 typedef intptr_t IntPtrT;
 

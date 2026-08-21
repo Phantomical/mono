@@ -27,17 +27,18 @@
  *     u32 clause_index     the IL clause the body belongs to
  *     u32 body_start       body covers [code+body_start, code+body_end)
  *     u32 body_end
- *     i32 exvar_offset     guard byte at exvar_base_reg + exvar_offset
+ *     i32 exvar_offset     guard byte at exvar_dwarf_reg + exvar_offset
  *     i32 exvar_dwarf_reg  DWARF number of the register that offset is from
  *
  * The register is carried as DWARF rather than as a mono hardware register so
- * the writer needs nothing from mono's target headers; the reader converts.
+ * the writer needs nothing from mono's target headers. The reader converts it
+ * back.
  *
  * `.mono_unwind` is the frame description: the CFI program LLVM tracked for the
  * function, recorded at the MC layer before any target encoding exists. One
  * block per function the object defines, concatenated - a module holds the
  * method's body, its filter bodies and its entry thunks, and each of those is a
- * frame something may be suspended in - so the block names the function it
+ * frame something can be suspended in - so the block names the function it
  * describes rather than leaving attribution to position.
  *
  *   Header (20 bytes, little-endian):
@@ -70,8 +71,8 @@
  *     u32 line        the translator's line number: an IL offset, or a
  *                     sequence-point marker (seq-point-marker.hpp)
  *
- * Rows arrive in code order and several may land on one offset, which is what a
- * run of IL instructions collapses to once the optimizer is done with it; the
+ * Rows arrive in code order and several can land on one offset, which is what a
+ * run of IL instructions collapses to once the optimizer is done with it. The
  * reader keeps the last, so the map stays single-valued and says the most recent
  * point execution passed.
  *
@@ -80,10 +81,10 @@
  *
  * The operation codes are this format's own, not LLVM's OpType enumerators -
  * those are not a stable ABI across LLVM versions - and not DW_CFA opcodes,
- * which would suggest a byte-for-byte DWARF program when the records carry the
- * MC layer's semantic form. An operation the writer cannot express is recorded
- * as UNSUPPORTED rather than dropped, so the reader declines the method instead
- * of unwinding it wrongly.
+ * which name a byte-for-byte DWARF program while the records carry the MC
+ * layer's semantic form instead. An operation the writer cannot express is
+ * recorded as UNSUPPORTED rather than dropped, so the reader declines the
+ * method instead of unwinding it wrongly.
  */
 
 #ifndef MONO_LLVM_SIDETABLES_HPP
@@ -113,8 +114,8 @@ constexpr std::size_t lines_record_size = 8;
 /*
  * The id of the stackmap naming this frame's argument and local slots, in
  * `.llvm_stackmaps` - LLVM's own section, not one of ours. The finally markers
- * share that section, so the id is what tells the two apart; it is picked out of
- * the same high-half tag space (mono_lsda_format.hpp).
+ * share that section, so the id is what tells the two apart. It is picked out
+ * of the same high-half tag space (mono_lsda_format.hpp).
  */
 constexpr uint64_t vars_stackmap_id = 0xF19A13ULL << 32;
 
@@ -142,7 +143,7 @@ enum MonoUnwindWireOp : uint8_t {
 	MONO_UNWIND_OP_ARGS_SIZE = 10,     /* argument bytes a call pushed */
 };
 
-/// One `.mono_unwind` record in the form its readers work in.
+/// One decoded `.mono_unwind` record.
 struct UnwindRecord {
 	uint32_t offset;
 	uint8_t op;
@@ -150,8 +151,8 @@ struct UnwindRecord {
 	int64_t value;
 };
 
-/// One field of a side table. The tables are packed and little-endian whatever
-/// the host is, so an aligned load of a field is not available.
+/// Reads one field out of a packed, little-endian side table. The field is not
+/// necessarily aligned for T.
 template <typename T>
 T
 read_le (const uint8_t *p)
@@ -162,8 +163,8 @@ read_le (const uint8_t *p)
 	return value;
 }
 
-/// The records of the `.mono_unwind` block that describes the function linked
-/// at code, or false when the section holds no such block.
+/// Decodes the `.mono_unwind` block that describes the function linked at
+/// code into out. Returns whether one was found.
 inline bool
 parse_unwind_records (const uint8_t *section, size_t size, const uint8_t *code,
                       std::vector<UnwindRecord> &out)

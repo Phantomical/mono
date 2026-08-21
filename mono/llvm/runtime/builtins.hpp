@@ -8,10 +8,13 @@
 namespace mono
 {
 
-/// A builtin function that we provide to the runtime.
+/// A name and address pair the JIT registers as a symbol compiled code can
+/// call.
 ///
-/// This includes things like compiler-rt, but also some mono functions and
-/// intrinsics like memset.
+/// get_platform_builtins () gathers two kinds: mono's own runtime helpers,
+/// and compiler support routines - memset, integer-division helpers, and so
+/// on. The second kind is whatever LLVM's runtime-libcalls table names that
+/// this process already has loaded.
 struct MonoBuiltin
 {
     llvm::StringRef name;

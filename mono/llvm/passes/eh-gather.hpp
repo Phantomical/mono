@@ -1,16 +1,15 @@
 /**
  * \file
- * eh-gather.hpp - MonoEHGatherPass, the machine-level recovery of mono's EH
- * clauses from the final landing-pad set.
+ * \brief The machine-level recovery of mono's EH clauses from the final
+ * landing-pad set.
  */
 
 #ifndef MONO_LLVM_PASSES_EH_GATHER_HPP
 #define MONO_LLVM_PASSES_EH_GATHER_HPP
 
 /*
- * Same reason engine.cpp drops mono's PIC macro: libtool compiles these TUs with
- * -DPIC and LLVM uses `PIC` as an identifier (PassInstrumentationCallbacks), so
- * the macro would rewrite it and break a header.
+ * LLVM uses `PIC` as an identifier (PassInstrumentationCallbacks). Mono's
+ * build defines it as a macro.
  */
 #ifdef PIC
 #undef PIC
@@ -23,14 +22,14 @@ namespace mono {
 struct MonoEHSideChannel;
 
 /**
- * A pass that gathers the info needed to build mono's exception handling
- * tables for the function being compiled.
+ * Gathers the info needed to build mono's exception handling tables for the
+ * function being compiled.
  */
 class MonoEHGatherPass : public llvm::MachineFunctionPass {
 public:
 	static char ID;
 
-	/* SC must outlive the pipeline this pass is added to. */
+	/* sc must outlive the pipeline this pass is added to. */
 	explicit MonoEHGatherPass (MonoEHSideChannel *sc)
 	    : llvm::MachineFunctionPass (ID), sc_ (sc)
 	{

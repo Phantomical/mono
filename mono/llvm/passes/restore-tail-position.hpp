@@ -2,24 +2,21 @@
  * \file
  * \brief Putting a tail call's ret back where the optimizer moved it from.
  *
- * A call only becomes a jump if a `ret` follows it in the same block. The
- * marker on the call says the jump is wanted; tail position is what makes it
- * possible, and the backend checks for it rather than taking the marker's word.
+ * LLVM turns a call into a jump only when a `ret` follows it in the same
+ * block. The marker on the call asks for the jump, and codegen then looks
+ * for that `ret` itself instead of taking the marker's word.
  *
- * SimplifyCFG breaks that. A function with more than one `ret` - which is every
- * recursion with a base case, so every shape `tail.` exists for - has its
- * returning blocks tail-merged into one `common.ret` block reached by a branch.
- * The transform explicitly steps around a block ending in a musttail call,
- * because musttail's adjacency is a verifier rule it cannot break, but a plain
- * `tail` call carries no such protection: its block is merged like any other,
- * its `ret` becomes a `br`, and the marker quietly stops meaning anything. No
- * diagnostic is emitted, and the frame the prefix promised to hand away stays
+ * A function with more than one `ret` - which is every recursion with a base
+ * case - is what SimplifyCFG tail-merges. The returning blocks become one
+ * `common.ret` block that each of them branches to. SimplifyCFG steps around
+ * a block that ends in a `musttail` call, because the adjacency there is a
+ * verifier rule. A plain `tail` call has no such protection: its `ret`
+ * becomes a `br` and the marker stops meaning anything. LLVM prints no
+ * diagnostic, and the frame the `tail.` prefix promised to hand away stays
  * on the stack.
  *
- * So this undoes that merge, for those blocks only. It is the inverse of
- * SimplifyCFG's performBlockTailMerging, run late and applied narrowly: a
- * branch to a merged return block is turned back into the `ret` it was, in
- * exactly the blocks whose last instruction is a call asking to be a jump.
+ * So this pass undoes that merge, in the blocks whose last instruction is a
+ * call that asks to be a jump.
  */
 
 #ifndef MONO_LLVM_PASSES_RESTORE_TAIL_POSITION_HPP
@@ -29,9 +26,11 @@
 
 namespace mono {
 
-/// Restores tail position for calls marked as tail calls, undoing the return
-/// merging that would otherwise leave the marker inert. Runs after the
-/// simplification pipeline, since what it repairs is that pipeline's doing.
+/// Puts back the `ret` a merge replaced with a branch, in a block that ends
+/// in a call marked to become a jump.
+///
+/// Run this after the simplification pipeline. That pipeline is what merges
+/// the returns.
 class RestoreTailPositionPass : public llvm::PassInfoMixin<RestoreTailPositionPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);

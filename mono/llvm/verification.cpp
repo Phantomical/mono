@@ -2,15 +2,12 @@
  * \file
  * \brief Putting a method's IL through the verifier before it is compiled.
  *
- * Nothing here runs unless `--security=validil`, `--security=verifiable` or
- * `--verify-all` set a verifier mode; `mono_verifier_is_enabled_for_method ()`
- * answers false otherwise and every call below is a couple of predicate tests.
+ * This file's checks run only when `--security=validil`, `--security=verifiable`
+ * or `--verify-all` set a verifier mode. `mono_verifier_is_enabled_for_method ()`
+ * answers false otherwise. A compile still pays a field read and one
+ * image-property lookup, which takes the image lock.
  */
 
-/*
- * Before anything else, so that MonoError is the internal struct the rest of
- * the runtime passes around rather than the opaque public one.
- */
 #include "runtime-error.hpp"
 
 #include "verification.hpp"
@@ -21,7 +18,6 @@
 #include "mono/metadata/verify.h"
 #include "mono/utils/mono-error-internals.h"
 
-/* This one has no linkage guard of its own. */
 extern "C" {
 #include "mono/metadata/verify-internals.h"
 }
@@ -30,11 +26,11 @@ namespace mono {
 
 namespace {
 
-/// The method whose body the verifier reads for METHOD.
+/// The definition whose body the verifier checks, in place of a generic
+/// instance.
 ///
 /// A generic instance shares its IL with the definition it was inflated from,
-/// so it is the definition that gets verified - once, however many instances
-/// are compiled, and with no way for two instances to reach opposite verdicts.
+/// so verifying the definition once covers every instance.
 MonoMethod *
 verification_subject (MonoMethod *method)
 {
@@ -43,11 +39,11 @@ verification_subject (MonoMethod *method)
 	return method;
 }
 
-/// Whether the SkipVerification attribute on METHOD's assembly counts.
+/// Whether the SkipVerification attribute on method's assembly counts.
 ///
-/// It is only honoured for code that is neither in the GAC nor corlib, which
-/// are trusted already: letting those claim it would make the attribute a way
-/// for anything dropped into the GAC to opt out of being checked.
+/// The attribute counts only outside the GAC and outside corlib. The exclusion
+/// stops an assembly put into the GAC from claiming the attribute and getting
+/// its unverifiable IL accepted.
 bool
 assembly_can_skip_verification (MonoMethod *method)
 {
@@ -62,9 +58,6 @@ assembly_can_skip_verification (MonoMethod *method)
 }
 
 /// The managed exception a verdict names, as a MonoError.
-///
-/// Anything the verifier can raise that is not one of the accesses or an
-/// unverifiable body is a malformed one, and that is an invalid program.
 void
 set_verification_error (MonoError *error, int exception_type, const char *message)
 {
@@ -96,8 +89,7 @@ set_verification_error (MonoError *error, int exception_type, const char *messag
 	}
 }
 
-/// Whether METHOD is a body the verifier has anything to say about, and has not
-/// already passed.
+/// Whether method is eligible for verification and has not already passed.
 bool
 wants_verifying (MonoMethod *method)
 {

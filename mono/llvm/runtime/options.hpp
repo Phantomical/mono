@@ -4,10 +4,10 @@
  * command line sets.
  *
  * Every value here is read once and cached, so setting one of these variables
- * after the first method has compiled does nothing. That is deliberate - a knob
- * that changed halfway through a run would split a method's state across two
- * policies - but it means a test that wants one has to set it before starting
- * the runtime rather than around the call it is interested in.
+ * after the first method has compiled does nothing. That is deliberate:
+ * caching keeps a variable changed partway through a run from splitting a
+ * method's state across two policies. This means a test that wants one has to
+ * set it before starting the runtime, not around the call it is interested in.
  */
 
 #ifndef MONO_LLVM_RUNTIME_OPTIONS_HPP
@@ -22,8 +22,8 @@ namespace mono {
 
 /// Whether MONO_LLVM_JIT_TRACE asked to see every method the engine translates.
 ///
-/// Worth having because a method reached as a callee is compiled without the
-/// runtime ever being asked for it, so nothing else says it happened.
+/// This matters because a method reached as a callee is compiled without the
+/// runtime asking for it. Only this flag reports that it happened.
 bool is_jit_trace_enabled ();
 
 /// Whether MONO_LLVM_JIT_DUMP names this method: a substring of its full name
@@ -34,25 +34,25 @@ bool dumping (const char *name);
 void dump_il (MonoMethod *method, MonoMethodHeader *header);
 
 /// Whether MONO_LLVM_JIT_RECOMPILE names this method: a substring of its full
-/// name selects it for being translated afresh on every compile request rather
-/// than answered from the cache, which is what gives a method more than one live
-/// body. It is a way to exercise the paths that have to cope with that - the
-/// debugger arming a breakpoint everywhere a method is executing - rather than a
-/// tiering policy.
+/// name selects it. A selected method is translated afresh on every compile
+/// request rather than answered from the cache, which gives it more than one
+/// live body. It is a way to exercise the paths that have to cope with that,
+/// rather than a tiering policy. One such path is the debugger, which arms a
+/// breakpoint everywhere a method is executing.
 bool recompiling (MonoMethod *method);
 
 /// How many calls an interpreted method is given before it is compiled.
 ///
-/// Ten, and it is not a tuned number: all a threshold really has to do is keep
-/// methods that are called once or twice out of the compiler, and what the trade
-/// is worth past that needs an execution-count distribution measured off a real
-/// workload rather than an argument. MONO_LLVM_JIT_TIER1_THRESHOLD moves it,
-/// which is the point of it being a variable at all; zero there leaves the
-/// selected methods interpreted for good, which is what separates the tier-0
-/// entry path from promotion when one of them misbehaves.
+/// Ten, and it is not a tuned number. All a threshold has to do is keep
+/// methods called once or twice out of the compiler. What the trade is worth
+/// past that needs an execution-count distribution measured off a real
+/// workload, not an argument. MONO_LLVM_JIT_TIER1_THRESHOLD moves it, which is
+/// the point of it being a variable at all. Zero there leaves the selected
+/// methods interpreted for good. That is what separates the tier-0 entry path
+/// from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
 
-/// How many methods a tier-1 promotion compile may take at once.
+/// How many methods a tier-1 promotion compile can take at once.
 ///
 /// Methods promoted close together are translated into one module and compiled
 /// together, which pays LLVM's per-compile cost once instead of once each.
@@ -76,22 +76,22 @@ uint32_t tier2_threshold ();
 /// The largest callee, in IL bytes, tier 2 folds into its caller before any
 /// cost model has looked at it.
 ///
-/// Thirty-two, which holds every shape the pre-pass recognizes and rejects
-/// nothing it would have taken. MONO_LLVM_JIT_INLINE_IL_LIMIT moves it, and
-/// zero there turns the pre-pass off - which is what separates a bug in a
-/// folded body from one in the method that folded it.
+/// Thirty-two, which leaves room to spare on the shapes the pre-pass
+/// recognizes. MONO_LLVM_JIT_INLINE_IL_LIMIT moves it. Zero there turns the
+/// pre-pass off, which is what separates a bug in a folded body from one in
+/// the method that folded it.
 uint32_t trivial_inline_il_limit ();
 
-/// How many bodies one tier-2 compile may fold in.
+/// How many bodies one tier-2 compile can fold in.
 ///
 /// MONO_LLVM_JIT_INLINE_BUDGET moves it. It bounds the translation the pre-pass
-/// adds to a compile; a chain of forwarders is what spends it.
+/// adds to a compile. A chain of forwarders is what spends it.
 uint32_t trivial_inline_budget ();
 
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.
 ///
-/// Zero for a method that does not run at tier 0 at all, which is also how a
-/// caller is told that counting its calls would settle nothing.
+/// Zero for a method that does not run at tier 0 at all. That also tells a
+/// caller that counting its calls settles nothing.
 int32_t tier0_calls (MonoMethod *method);
 
 /// Whether any method at all is entered by interpreting it.
@@ -104,8 +104,8 @@ bool tier0_enabled ();
 /// compiling it.
 ///
 /// Every method the interpreter can run starts there. MONO_LLVM_JIT_TIER0
-/// narrows that for debugging: a false value keeps every method out of tier 0,
-/// and anything else is matched as a substring of the printed name.
+/// narrows that for debugging. A false value keeps every method out of tier 0.
+/// Anything else is matched as a substring of the printed name.
 bool runs_at_tier0 (MonoMethod *method);
 
 } // namespace mono
