@@ -15,6 +15,7 @@
 #include <mono/metadata/domain-internals.h>
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/STLExtras.h>
 
 #include <mutex>
 #include <shared_mutex>
@@ -66,6 +67,11 @@ MonoDomainMethod::publish (MonoTier tier, void *code)
 	std::lock_guard<std::mutex> held (lock_);
 
 	if (tier < tier_.load (std::memory_order_relaxed))
+		return false;
+
+	// A tier-2 compile that started before a method it folded in was replaced
+	// carries a copy of the body that is gone.
+	if (tier == MonoTier::tier2 && folds_stale_.load (std::memory_order_relaxed))
 		return false;
 
 	thunk.redirect (code);
@@ -204,6 +210,14 @@ MonoDomainMethod::install_detour (void *target)
 	publish (MonoTier::detoured, target);
 
 	/*
+	 * A tier-2 body that folded this method in holds a copy of it that sits
+	 * under no thunk, so the redirect above misses it. Outside publish () for
+	 * the same reason the interpreter's callback is: this reaches other records
+	 * through the domain's table, whose lock is outside a record's.
+	 */
+	drop_folded_bodies ();
+
+	/*
 	 * The interpreter settles once whether it calls a method or interprets it,
 	 * and an answer taken before this did not know the entry is native. Outside
 	 * publish (), which holds the record lock: this reads the domain's table,
@@ -211,6 +225,58 @@ MonoDomainMethod::install_detour (void *target)
 	 */
 	if (mono_use_interpreter)
 		mini_get_interp_callbacks ()->method_compiled (domain, method);
+}
+
+void
+MonoDomainMethod::note_folded_into (MonoMethod *root)
+{
+	std::lock_guard<std::mutex> held (lock_);
+
+	if (!llvm::is_contained (folded_into_, root))
+		folded_into_.push_back (root);
+}
+
+bool
+MonoDomainMethod::unwind_to_earlier_tier ()
+{
+	std::lock_guard<std::mutex> held (lock_);
+
+	folds_stale_.store (true, std::memory_order_release);
+
+	if (tier_.load (std::memory_order_relaxed) != MonoTier::tier2)
+		return false;
+
+	const MonoMethodBody *earlier = nullptr;
+
+	// The last of the highest tier below this one. Superseded code is never
+	// reclaimed, so a body the entry moved off is still there to move back to.
+	for (const MonoMethodBody &body : bodies_)
+		if (body.tier < MonoTier::tier2
+		    && (earlier == nullptr || body.tier >= earlier->tier))
+			earlier = &body;
+
+	if (earlier == nullptr)
+		return false;
+
+	thunk.redirect (earlier->code);
+	tier_.store (earlier->tier, std::memory_order_release);
+	return true;
+}
+
+void
+MonoDomainMethod::drop_folded_bodies ()
+{
+	llvm::SmallVector<MonoMethod *, 2> roots;
+
+	{
+		std::lock_guard<std::mutex> held (lock_);
+
+		roots = folded_into_;
+	}
+
+	for (MonoMethod *root : roots)
+		if (MonoDomainMethod *dm = domain_method_find (domain, root))
+			dm->unwind_to_earlier_tier ();
 }
 
 /*

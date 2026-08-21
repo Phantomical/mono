@@ -124,6 +124,9 @@ public:
 	/// is also what keeps a compile that finishes late from taking an entry a
 	/// higher tier - or a detour - already owns. A refused publication leaves
 	/// the entry as it was, so a caller must not redirect anything itself.
+	///
+	/// Tier 2 is refused outright once drop_folded_bodies () has run, which is
+	/// what stops a compile already in flight from putting a stale copy back.
 	bool publish (MonoTier tier, void *code);
 
 	/// Asks for the method to be run by the next tier up.
@@ -148,6 +151,21 @@ public:
 	/// Every caller reaches \p replacement afterwards, whichever engine it runs
 	/// in. This always succeeds, and a later override replaces it.
 	void install_override (MonoMethod *replacement, void *target);
+
+	/// Records that \p root's compiled body holds a copy of this method's.
+	///
+	/// A copy sits under no thunk, so redirecting this method's entry does not
+	/// reach it. This is how a detour finds the bodies it has to take down.
+	void note_folded_into (MonoMethod *root);
+
+	/// Takes the entry of every method that folded a copy of this one in back to
+	/// the newest body below tier 2, and bars them from tier 2 for good.
+	///
+	/// A thread already inside such a body stays there, since there is no
+	/// on-stack replacement here. So this decides what later calls enter rather
+	/// than what is executing. The bar is what keeps which body runs from
+	/// depending on how a patcher and a compile worker interleaved.
+	void drop_folded_bodies ();
 
 	/// The method standing in for this one, or null while none does.
 	///
@@ -267,6 +285,16 @@ private:
 
 	std::atomic<MonoMethod *> override_ { nullptr };
 	std::atomic<bool> override_checked_ { false };
+
+	/// The methods whose compiled bodies hold a copy of this one's.
+	llvm::SmallVector<MonoMethod *, 2> folded_into_;
+	/// Whether a body of this method folded in a method that has since been
+	/// replaced, which is what bars tier 2.
+	std::atomic<bool> folds_stale_ { false };
+
+	/// Puts the entry back on the newest body below tier 2, and returns whether
+	/// there was one to go back to.
+	bool unwind_to_earlier_tier ();
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	/* The highest tier anything has asked for, which is what keeps two counters
