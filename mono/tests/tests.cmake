@@ -232,6 +232,7 @@ set(MONO_TESTS_CS_SRC
   interp-tier1-promotion.cs
   interp-native-detour.cs
   tier2-inline.cs
+  tier2-inline-override.cs
   override-basic.cs
   override-generic.cs
   override-declared.cs
@@ -945,6 +946,14 @@ set(MONO_TESTS_TIER_PINNED_SRC
 # The same pinning, for a test whose calli has to be written by hand.
 set(MONO_TESTS_TIER_PINNED_IL_SRC
   bug-unity-2.il
+)
+
+# The tier-2 cost model, which needs its root to gather counts at tier 1 and
+# then be compiled at tier 2 exactly once. A threshold of zero leaves the body
+# instrumented and counting while it never promotes on its own, so the compile
+# the test asks for is the only one there is.
+set(MONO_TESTS_TIER2_COSTED_SRC
+  tier2-inline-cost.cs
 )
 
 # The tailcall suite, including the corpus imported from coreclr.

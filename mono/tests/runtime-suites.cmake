@@ -557,6 +557,13 @@ if(MONO_ENABLE_INTERPRETER)
                      ENV "MONO_LLVM_JIT_TIER0=InterpMe")
 endif()
 
+# The tier-2 cost model. Its root has to gather counts at tier 1 and then be
+# compiled at tier 2 once, on the thread that asks - so self-promotion is turned
+# off and the test drives the compile itself.
+_mono_exe_list(_tier2_costed ${MONO_TESTS_TIER2_COSTED_SRC})
+mono_runtime_suite(runtime-tier2-costed TESTS ${_tier2_costed}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
+
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
   _mono_gc_env(_gc_env "${_gc}")

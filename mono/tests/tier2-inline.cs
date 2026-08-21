@@ -12,9 +12,12 @@ using System.Runtime.CompilerServices;
  * Each shape is checked twice, once before Root () reaches tier 2 and once
  * after, and the two answers have to agree. What says the fold really happened
  * is the stack trace: a folded body has no frame of its own, so the helper that
- * threw is missing from the trace taken at tier 2, and the helpers the gates
- * refuse are still in it. MONO_LLVM_JIT_INLINE_IL_LIMIT=0 turns the pre-pass
- * off, and this test then fails on that check alone.
+ * threw is missing from the trace taken at tier 2, and the helper the gates
+ * refuse is still in it.
+ *
+ * Tier 2 has a second inliner behind this one, which weighs what the shape test
+ * declines - tier2-inline-cost.cs is that one's test. Here it only matters for
+ * FailBranch (), which the shape test declines and the cost model then takes.
  */
 
 namespace Mono.Tiering {
@@ -85,7 +88,8 @@ static class Trivial {
 		throw new InvalidOperationException (what);
 	}
 
-	// A branch, so the shape test declines it however small it is.
+	// A branch, so the shape test declines it however small it is - and the cost
+	// model behind it then weighs it and takes it.
 	public static void FailBranch (string what, bool yes)
 	{
 		if (yes)
@@ -199,7 +203,7 @@ static class Program {
 		 */
 		Check (!saw_fail, "the folded helper has no frame of its own");
 		Check (saw_no_inline, "NoInlining keeps the helper's frame");
-		Check (saw_branch, "a helper with a branch keeps its frame");
+		Check (!saw_branch, "the cost model takes what the shape test declined");
 
 		if (fails != 0)
 			return 1;
