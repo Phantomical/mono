@@ -48,6 +48,7 @@
 #include <llvm/Transforms/Instrumentation/InstrProfiling.h>
 #include <llvm/Transforms/Instrumentation/PGOInstrumentation.h>
 #include <llvm/Transforms/Scalar/TailRecursionElimination.h>
+#include <llvm/Transforms/Utils/LoopSimplify.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
@@ -842,6 +843,16 @@ thread_local VerifyLevel g_verify_level = VerifyLevel::off;
 /// a file name and a file system, so the profile has to be a file to it.
 constexpr const char *profile_file = "/mono.profdata";
 
+/// Sets one of LLVM's own boolean command-line options.
+///
+/// Does nothing when this build of LLVM has no option of that name.
+void
+force_option (StringRef name, bool value)
+{
+	if (cl::Option *opt = cl::getRegisteredOptions ().lookup (name))
+		static_cast<cl::opt<bool> *> (opt)->setValue (value);
+}
+
 /// Puts counters in each body that can promote, and the entry counter that
 /// decides when it does.
 void
@@ -850,18 +861,50 @@ add_instrumentation (ModulePassManager &mpm)
 	InstrProfOptions counters;
 
 	// Value profiling needs compiler-rt, which we do not link.
-	if (cl::Option *vp = cl::getRegisteredOptions ().lookup ("disable-vp"))
-		static_cast<cl::opt<bool> *> (vp)->setValue (true);
+	force_option ("disable-vp", true);
 
-	// Threads share a body's counters, and the reader rejects edge counts that
-	// disagree with each other as a corrupt profile.
-	counters.Atomic = true;
+	// Promotion keeps a counter inside a loop in a register, and adds it back
+	// to the array at each exit from the loop. A hot loop then pays one atomic
+	// add for the whole loop, not one for each turn of it.
+	//
+	// Atomic has to stay off for any of that to happen. With it set, the
+	// lowering writes every increment as an atomicrmw. It records a promotion
+	// candidate only for an increment it wrote as a load, an add and a store,
+	// so promotion becomes dead code. ProfileAtomicPass below makes each
+	// counter promotion did not take atomic again, so this setting is not what
+	// keeps them safe.
 	counters.DoCounterPromotion = true;
+	counters.Atomic = false;
+
+	// Makes the add at a loop exit an atomicrmw. Without it, the exit reads and
+	// writes the counter in two steps. The promoter then offers that pair to
+	// the loop outside, which hoists the write out of the whole nest. Tier 2
+	// reads these counters while the code still runs, so a count written at
+	// each turn of the outer loop is worth more than one held to the end.
+	force_option ("atomic-counter-update-promoted", true);
+
+	// LLVM otherwise refuses a loop that any exit leaves through a return. That
+	// refusal keeps a profile read in the middle of a long loop from
+	// under-reporting it. Almost every loop a C# method ends with has that
+	// shape, so the refusal costs most of what promotion is worth here. A read
+	// that comes early loses only the turns the threads now in the loop took.
+	// Every entry that already left the loop is in the count, and entry count
+	// is what takes a body to tier 2.
+	force_option ("skip-ret-exit-block", false);
 
 	mpm.addPass (ProfileSelectPass ());
 	mpm.addPass (PGOInstrumentationGen (PGOInstrumentationType::FDO));
 	mpm.addPass (ProfileGatherPass ());
+
+	// Promotion wants each loop to have a preheader and exits that only it
+	// branches to, and the translator gives it neither. LLVM's own pipeline
+	// canonicalizes at this same point, behind the hash. Tier 2 reads the
+	// profile back against the CFG the hash was taken over, so it still
+	// matches.
+	mpm.addPass (createModuleToFunctionPassAdaptor (LoopSimplifyPass ()));
+
 	mpm.addPass (InstrProfilingLoweringPass (counters));
+	mpm.addPass (ProfileAtomicPass ());
 	mpm.addPass (ProfileLocalizePass ());
 
 	// Behind the instrumentation, never in front - see passes/tier-counter.hpp.

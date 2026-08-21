@@ -85,6 +85,18 @@ public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
 };
 
+/// Makes each counter update the lowering left non-atomic one atomicrmw again.
+///
+/// Run behind the lowering. Threads share a body's counters, so a counter
+/// written as a load and a store loses a count when two threads reach the same
+/// block together. The lowering writes a counter that way only where promotion
+/// can take it. What is left over is a counter on a straight line, or one in a
+/// loop that promotion refused.
+class ProfileAtomicPass : public llvm::PassInfoMixin<ProfileAtomicPass> {
+public:
+	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
+};
+
 /// Makes every global the lowering wrote local to the module.
 ///
 /// Run behind the lowering. That earlier pass marks some of them external and

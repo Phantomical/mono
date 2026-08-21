@@ -1,9 +1,12 @@
 #include "profile-counters.hpp"
 #include "tier-counter.hpp"
 
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/ProfileData/InstrProf.h>
@@ -42,7 +45,81 @@ is_profile_global (const GlobalVariable &global)
 	       || name.starts_with (getInstrProfBitmapVarPrefix ());
 }
 
+/// Whether \p address points into an array of counters the lowering wrote.
+bool
+is_counter_address (const Value *address)
+{
+	const auto *global = dyn_cast<GlobalVariable> (getUnderlyingObject (address));
+
+	return global != nullptr
+	       && global->getName ().starts_with (getInstrProfCountersVarPrefix ());
+}
+
+/// The load \p store reads its counter back through, or null when \p store is
+/// not the last step of a read-add-write on a counter.
+///
+/// The lowering writes each unpromoted increment as that group of three, and no
+/// pass between it and this one breaks a group up.
+LoadInst *
+counter_update_load (StoreInst &store)
+{
+	if (!store.isSimple () || !is_counter_address (store.getPointerOperand ()))
+		return nullptr;
+
+	auto *add = dyn_cast<BinaryOperator> (store.getValueOperand ());
+
+	if (add == nullptr || add->getOpcode () != Instruction::Add || !add->hasOneUse ())
+		return nullptr;
+
+	for (Value *operand : {add->getOperand (0), add->getOperand (1)}) {
+		auto *load = dyn_cast<LoadInst> (operand);
+
+		if (load != nullptr && load->isSimple () && load->hasOneUse ()
+		    && load->getPointerOperand () == store.getPointerOperand ())
+			return load;
+	}
+
+	return nullptr;
+}
+
 } // namespace
+
+PreservedAnalyses
+ProfileAtomicPass::run (Module &m, ModuleAnalysisManager &)
+{
+	bool changed = false;
+
+	for (Function &f : m) {
+		SmallVector<StoreInst *, 16> updates;
+
+		for (Instruction &i : instructions (f))
+			if (auto *store = dyn_cast<StoreInst> (&i))
+				if (counter_update_load (*store) != nullptr)
+					updates.push_back (store);
+
+		for (StoreInst *store : updates) {
+			LoadInst *load = counter_update_load (*store);
+			auto *add = cast<BinaryOperator> (store->getValueOperand ());
+			Value *step = add->getOperand (0) == load ? add->getOperand (1)
+			                                         : add->getOperand (0);
+			IRBuilder<> builder (store);
+
+			// Monotonic, which is what LLVM gives an increment it
+			// wrote as an atomicrmw itself. A count needs no order
+			// against any other count.
+			builder.CreateAtomicRMW (AtomicRMWInst::Add,
+			                         store->getPointerOperand (), step,
+			                         MaybeAlign (), AtomicOrdering::Monotonic);
+
+			store->eraseFromParent ();
+			add->eraseFromParent ();
+			load->eraseFromParent ();
+			changed = true;
+		}
+	}
+
+	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
+}
 
 std::vector<ProfileSite> &
 profile_sites ()
