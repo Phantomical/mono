@@ -6,6 +6,7 @@
 #include "method-to-llvm.hpp"
 #include "naming.hpp"
 #include "options.hpp"
+#include <llvm/ADT/ScopeExit.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -197,12 +198,12 @@ struct MonoBackend::DomainState {
  * MVT list behind SDNode::getValueTypeList (), and the file system every
  * PassBuilder holds. Exit runs handlers in reverse order of registration. A
  * handler registered before those tables exist therefore runs after they are
- * destroyed, and the wait below comes too late: by then the worker already
- * reads freed memory.
+ * destroyed, and the wait below comes too late: by then the workers already
+ * read freed memory.
  *
  * This orders the teardown against the tables a compile builds, which is less
  * than every static LLVM owns. mini_cleanup () calls
- * mono_llvm_jit_stop_compiling (), which stops the worker on a path that ends
+ * mono_llvm_jit_stop_compiling (), which stops the workers on a path that ends
  * properly. This handler is the net under a process that exits without one.
  *
  * A process that asks for the backend and never compiles - one that only frees
@@ -221,8 +222,8 @@ MonoBackend::register_exit_teardown ()
 			/*
 			 * Tearing the backend down closes every domain's compile channel,
 			 * and closing one waits for the compiles already running on the
-			 * worker thread to retire. fork () keeps only the thread that
-			 * called it, so in a child that worker does not exist and a
+			 * worker threads to retire. fork () keeps only the thread that
+			 * called it, so in a child those workers do not exist and a
 			 * ticket left in flight at the fork never retires - the wait
 			 * never ends. The crash handler forks exactly like this, so a
 			 * runtime that faults while a background compile is running would
@@ -652,17 +653,45 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	std::optional<MonoMethodBody> ready = (*owner)->body ();
 
 	if (!ready || ready->tier < tier) {
-		llvm::Expected<Compiled> built =
-			compile_body (domain, **owner, /*allow_tier0=*/false, tier,
-		                      /*for_sharing=*/true);
+		/*
+		 * One thread at a time per shared form. Two instantiations of one
+		 * generic reach the same record, and two threads that both find it
+		 * unbuilt would both build it - publishing two bodies for it and
+		 * defining one method's symbols twice in the one domain's linker.
+		 * The loser refuses rather than waits: a refusal already means
+		 * "compile the instantiation instead", and waiting here would be a
+		 * compile thread waiting on another compile.
+		 */
+		bool claimed;
 
-		if (!built)
-			return built.takeError ();
+		MONO_LOCK (mutex_) { claimed = sharing_.insert (*owner).second; }
 
+		if (!claimed)
+			return llvm::make_error<SharingRefusal> (
+				"another thread is compiling the shared body");
+
+		auto unclaim = llvm::make_scope_exit ([&] {
+			MONO_LOCK (mutex_) { sharing_.erase (*owner); }
+		});
+
+		/* Again, now that we hold the claim: the thread that had it may have
+		 * published the body between our first read and the claim. */
 		ready = (*owner)->body ();
 
-		if (!ready)
-			return llvm::make_error<SharingRefusal> ("the shared body was not published");
+		if (!ready || ready->tier < tier) {
+			llvm::Expected<Compiled> built =
+				compile_body (domain, **owner, /*allow_tier0=*/false, tier,
+			                      /*for_sharing=*/true);
+
+			if (!built)
+				return built.takeError ();
+
+			ready = (*owner)->body ();
+
+			if (!ready)
+				return llvm::make_error<SharingRefusal> (
+					"the shared body was not published");
+		}
 	}
 
 	void *entry = ready->code;
@@ -1023,8 +1052,8 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 
 /*
  * Runs on a mutator thread inside the interpreter, so it hands everything it
- * can to the worker. Nothing waits for the result, and a compile that fails
- * once it is running leaves the method at the tier it is at.
+ * can to the compile queue. Nothing waits for the result, and a compile that
+ * fails once it is running leaves the method at the tier it is at.
  */
 bool
 MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier tier)
@@ -1036,7 +1065,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 		return false;
 	}
 
-	/* Held rather than read again on the worker: at exit the engine is
+	/* Held rather than read again on the worker thread: at exit the engine is
 	 * unhooked from instance before the destructor drains the queue. */
 	MonoBackend *self = *backend;
 
@@ -1134,10 +1163,10 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 }
 
 /*
- * On the calling thread rather than the worker, which is what makes it
+ * On the calling thread rather than a worker, which is what makes it
  * synchronous. That is also why it is safe: a mutator compiling a method is what
- * every ordinary compile does, and the rule the worker exists to keep - that no
- * thread waits on a background compile - is kept by not using the worker at all.
+ * every ordinary compile does, and the rule the queue exists to keep - that no
+ * thread waits on a background compile - is kept by not using the queue at all.
  */
 bool
 MonoBackend::promote_now (MonoMethod *method, MonoDomain *domain, MonoTier tier)

@@ -15,8 +15,14 @@ CompileQueue::self_wait (const char *what)
 	                          + " from the compile worker waits for itself");
 }
 
+CompileQueue::CompileQueue (WorkerFactory factory, unsigned workers)
+	: factory_ (std::move (factory)), limit_ (std::max (workers, 1u))
+{
+}
+
 CompileQueue::CompileQueue (std::unique_ptr<Worker> worker)
-	: worker_ (std::move (worker))
+	: CompileQueue ([held = std::move (worker)] () mutable { return std::move (held); },
+	                1)
 {
 }
 
@@ -33,8 +39,8 @@ CompileQueue::enqueue (Channel &channel, void *tag, Work work)
 	if (!channel.open_ || stopping_)
 		return false;
 
-	ensure_worker ();
 	pending_.push_back (Item { &channel, tag, next_id_++, std::move (work) });
+	ensure_worker ();
 	ready_.notify_one ();
 	return true;
 }
@@ -100,7 +106,7 @@ CompileQueue::drain ()
 void
 CompileQueue::stop ()
 {
-	std::thread worker;
+	std::vector<std::thread> joining;
 
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
@@ -109,22 +115,40 @@ CompileQueue::stop ()
 		pending_.clear ();
 		ready_.notify_all ();
 
+		std::thread::id self = std::this_thread::get_id ();
+
 		/*
-		 * A worker without started_ set is still inside Worker::start (): it has
-		 * taken no work and can take none, so there is nothing to wait for even
-		 * when it is the caller. One that reached the loop and calls this is a
-		 * compile tearing down the runtime under itself.
+		 * Only the std::thread comes out; the entries stay. A detached worker
+		 * still names its own by index once it is out of Worker::start (), and
+		 * stopping_ keeps any more from being added behind it.
 		 */
-		if (started_) {
-			not_from_the_worker ("stopping the queue");
-			worker = std::move (thread_);
-		} else if (thread_.joinable ()) {
-			thread_.detach ();
+		for (Thread &worker : threads_) {
+			/* Already joined or detached by an earlier stop (). Both this and
+			 * the destructor call one, so the second finds these. */
+			if (!worker.thread.joinable ())
+				continue;
+
+			/*
+			 * A worker without started set is still inside Worker::start ():
+			 * it has taken no work and can take none, so there is nothing to
+			 * wait for even when it is the caller. One that reached the loop
+			 * and calls this is a compile tearing down the runtime under
+			 * itself.
+			 */
+			if (!worker.started) {
+				worker.thread.detach ();
+				continue;
+			}
+
+			if (worker.thread.get_id () == self)
+				self_wait ("stopping the queue");
+
+			joining.push_back (std::move (worker.thread));
 		}
 	}
 
-	if (worker.joinable ())
-		worker.join ();
+	for (std::thread &thread : joining)
+		thread.join ();
 }
 
 uint64_t
@@ -135,43 +159,69 @@ CompileQueue::completed () const
 	return completed_;
 }
 
-void
-CompileQueue::ensure_worker ()
+unsigned
+CompileQueue::workers () const
 {
-	if (thread_.joinable ())
-		return;
+	std::lock_guard<std::mutex> lock (mutex_);
 
-	thread_ = std::thread ([this] { run (); });
+	return (unsigned) threads_.size ();
 }
 
 void
-CompileQueue::run ()
+CompileQueue::ensure_worker ()
 {
+	if (threads_.size () >= limit_)
+		return;
+
+	/*
+	 * Everything parked is going to take an item, so a thread is worth adding
+	 * only for what is queued behind them. That grows the pool one thread per
+	 * enqueue and only under work the pool is not keeping up with; a program
+	 * compiling a method at a time never gets past the first.
+	 */
+	if (pending_.size () <= idle_)
+		return;
+
+	size_t index = threads_.size ();
+
+	threads_.push_back (Thread {});
+	threads_[index].worker = factory_ ? factory_ () : nullptr;
+	threads_[index].thread = std::thread ([this, index] { run (index); });
+}
+
+void
+CompileQueue::run (size_t index)
+{
+	Worker *worker;
+
 	{
 		std::unique_lock<std::mutex> lock (mutex_);
 
 		/* Nothing to attach for, and stop () is no longer waiting for us. */
 		if (stopping_)
 			return;
+
+		worker = threads_[index].worker.get ();
 	}
 
-	if (worker_ != nullptr && !worker_->start ())
+	if (worker != nullptr && !worker->start ())
 		return;
 
 	std::unique_lock<std::mutex> lock (mutex_);
 
-	started_ = true;
+	threads_[index].started = true;
+
+	auto wait = [&] {
+		ready_.wait (lock, [this] { return stopping_ || !pending_.empty (); });
+	};
 
 	for (;;) {
-		if (worker_ != nullptr)
-			worker_->idle ([&] {
-				ready_.wait (lock, [this] {
-					return stopping_ || !pending_.empty ();
-				});
-			});
+		idle_++;
+		if (worker != nullptr)
+			worker->idle (wait);
 		else
-			ready_.wait (lock,
-			             [this] { return stopping_ || !pending_.empty (); });
+			wait ();
+		idle_--;
 
 		/*
 		 * Stopping wins over what is left queued. Whoever asked for the stop
@@ -208,8 +258,8 @@ CompileQueue::run ()
 
 	lock.unlock ();
 
-	if (worker_ != nullptr)
-		worker_->stop ();
+	if (worker != nullptr)
+		worker->stop ();
 }
 
 } // namespace mono

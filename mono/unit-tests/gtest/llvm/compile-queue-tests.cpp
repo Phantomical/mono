@@ -212,6 +212,210 @@ TEST (CompileQueue, ClosingOneChannelIgnoresAnother)
 	busy.close ();
 }
 
+/// Builds workers with no hooks on them, which is what a pool test that only
+/// counts threads needs.
+static CompileQueue::WorkerFactory
+no_hooks ()
+{
+	return [] { return std::unique_ptr<CompileQueue::Worker> (); };
+}
+
+/// Wait until COUNT reaches WANTED, or give up after five seconds and fail.
+///
+/// A pool test parks its work until every thread it expects has arrived, so a
+/// pool that never grows deadlocks rather than reporting a wrong number. The
+/// deadline is what turns that back into a failure, and it is generous because
+/// what it is timing is thread creation on a box running other tests.
+static void
+wait_for_count (std::mutex &mutex, std::condition_variable &cv, int &count,
+                int wanted, const char *what)
+{
+	std::unique_lock<std::mutex> lock (mutex);
+
+	EXPECT_TRUE (cv.wait_for (lock, 5s, [&] { return count >= wanted; }))
+		<< what << ": " << count << " of " << wanted;
+}
+
+/*
+ * The point of a pool. Every item parks until all of them have started, so this
+ * can only finish if that many ran at the same time.
+ */
+TEST (CompileQueue, SeveralWorkersRunWorkAtOnce)
+{
+	const int wanted = 4;
+
+	CompileQueue queue (no_hooks (), wanted);
+	CompileQueue::Channel channel (&queue);
+
+	std::mutex mutex;
+	std::condition_variable arrived;
+	int inside = 0;
+	std::atomic<int> finished {0};
+	Gate release;
+
+	for (int i = 0; i < wanted; i++)
+		ASSERT_TRUE (channel.enqueue (nullptr, [&] {
+			{
+				std::lock_guard<std::mutex> lock (mutex);
+
+				inside++;
+			}
+			arrived.notify_all ();
+
+			release.wait ();
+			finished++;
+		}));
+
+	wait_for_count (mutex, arrived, inside, wanted, "work ran at once");
+	release.open ();
+
+	/* And close () holds until the last of them is out, not the first. */
+	channel.close ();
+	EXPECT_EQ (finished.load (), wanted);
+}
+
+/*
+ * The other half of that: a queue of one still runs its work one piece at a
+ * time, which is what MONO_LLVM_JIT_WORKERS=1 is for.
+ */
+TEST (CompileQueue, OneWorkerRunsWorkOneAtATime)
+{
+	CompileQueue queue (no_hooks (), 1);
+	CompileQueue::Channel channel (&queue);
+
+	std::atomic<int> inside {0};
+	std::atomic<int> overlapped {0};
+
+	for (int i = 0; i < 8; i++)
+		ASSERT_TRUE (channel.enqueue (nullptr, [&] {
+			if (inside.fetch_add (1) != 0)
+				overlapped++;
+			std::this_thread::sleep_for (1ms);
+			inside--;
+		}));
+
+	queue.drain ();
+	EXPECT_EQ (overlapped.load (), 0);
+	EXPECT_EQ (queue.workers (), 1u);
+}
+
+/*
+ * Threads are a ceiling rather than a count. Far more work than the limit
+ * allows still runs on the limit's worth of threads.
+ */
+TEST (CompileQueue, TheQueueStopsAtItsWorkerLimit)
+{
+	const int limit = 3;
+
+	CompileQueue queue (no_hooks (), limit);
+	CompileQueue::Channel channel (&queue);
+
+	std::mutex mutex;
+	std::condition_variable arrived;
+	int inside = 0;
+	Gate release;
+
+	for (int i = 0; i < 32; i++)
+		ASSERT_TRUE (channel.enqueue (nullptr, [&] {
+			{
+				std::lock_guard<std::mutex> lock (mutex);
+
+				inside++;
+			}
+			arrived.notify_all ();
+
+			release.wait ();
+		}));
+
+	wait_for_count (mutex, arrived, inside, limit, "work ran at once");
+	EXPECT_EQ (queue.workers (), (unsigned) limit);
+
+	release.open ();
+	channel.close ();
+}
+
+/*
+ * And a queue nothing outruns keeps the one thread it started with, so a
+ * program compiling a method at a time pays for no more.
+ */
+TEST (CompileQueue, WorkTakenAsFastAsItArrivesNeedsOneThread)
+{
+	CompileQueue queue (no_hooks (), 8);
+	CompileQueue::Channel channel (&queue);
+
+	for (int i = 0; i < 16; i++) {
+		std::atomic<bool> ran {false};
+
+		ASSERT_TRUE (channel.enqueue (nullptr, [&] { ran.store (true); }));
+		queue.drain ();
+		ASSERT_TRUE (ran.load ());
+	}
+
+	EXPECT_EQ (queue.workers (), 1u);
+}
+
+/// A worker that reports its own hooks into counters it shares with its peers.
+class PooledWorker : public CompileQueue::Worker {
+public:
+	struct Counts {
+		std::atomic<int> built {0};
+		std::atomic<int> started {0};
+	};
+
+	explicit PooledWorker (Counts &counts) : counts_ (&counts) { counts.built++; }
+
+	bool start () override
+	{
+		counts_->started++;
+		return true;
+	}
+
+private:
+	Counts *counts_;
+};
+
+/*
+ * Each thread gets a Worker of its own, so an implementation can keep its
+ * thread's state in one - CompileWorker keeps whether it attached this thread
+ * to the GC, and one object shared by the pool would answer for the wrong one.
+ */
+TEST (CompileQueue, EachWorkerThreadGetsItsOwnHooks)
+{
+	const int wanted = 4;
+	PooledWorker::Counts counts;
+
+	CompileQueue queue ([&counts] {
+		return std::unique_ptr<CompileQueue::Worker> (new PooledWorker (counts));
+	}, wanted);
+	CompileQueue::Channel channel (&queue);
+
+	std::mutex mutex;
+	std::condition_variable arrived;
+	int inside = 0;
+	Gate release;
+
+	for (int i = 0; i < wanted; i++)
+		ASSERT_TRUE (channel.enqueue (nullptr, [&] {
+			{
+				std::lock_guard<std::mutex> lock (mutex);
+
+				inside++;
+			}
+			arrived.notify_all ();
+
+			release.wait ();
+		}));
+
+	wait_for_count (mutex, arrived, inside, wanted, "work ran at once");
+
+	EXPECT_EQ (counts.built.load (), wanted);
+	EXPECT_EQ (counts.started.load (), wanted);
+	EXPECT_EQ (queue.workers (), (unsigned) wanted);
+
+	release.open ();
+	channel.close ();
+}
+
 /*
  * What free_method () needs. A dynamic method's MonoMethod goes straight back
  * to the allocator, so a compile still holding one has to be finished with -

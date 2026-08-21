@@ -4,10 +4,12 @@
 #include "compile-queue.hpp"
 #include "compile-worker.hpp"
 #include "domain-method.hpp"
+#include "options.hpp"
 #include "method-symbols.hpp"
 #include "translate.hpp"
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
 #include <memory>
@@ -222,12 +224,22 @@ private:
 	 * Ahead of domains_, because each domain holds a channel into this and
 	 * closing one - which is what destroying it does - reaches back in here.
 	 *
-	 * With a CompileWorker, which is what attaches the worker thread to the GC.
-	 * A thread that allocates or reads metadata without being attached is a
+	 * With a CompileWorker each, which is what attaches a worker thread to the
+	 * GC. A thread that allocates or reads metadata without being attached is a
 	 * thread the collector does not know to suspend.
 	 */
-	CompileQueue queue_ { std::make_unique<CompileWorker> () };
+	CompileQueue queue_ { [] { return std::make_unique<CompileWorker> (); },
+		              compile_worker_count () };
 	llvm::DenseMap<MonoDomain *, std::unique_ptr<DomainState>> domains_;
+
+	/*
+	 * The shared bodies a thread is compiling right now. Several instantiations
+	 * share one form, so two threads compiling two of them reach the same
+	 * record - and the second must not compile it again while the first is
+	 * still publishing it. Guarded by mutex_, and held only around the set
+	 * itself rather than across the compile.
+	 */
+	llvm::DenseSet<MonoDomainMethod *> sharing_;
 };
 
 } // namespace mono

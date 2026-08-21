@@ -60,6 +60,16 @@ uint32_t tier1_threshold ();
 /// Tier 2 is never batched: its code is laid out by its own method's counts.
 uint32_t promotion_batch_size ();
 
+/// The most threads the compile queue may run promotions on at once.
+///
+/// Two fewer than the processor count, capped at four, and never below one.
+/// MONO_LLVM_JIT_WORKERS moves it, and one there puts every background compile
+/// back on a single thread, which is what separates a bug in a compile from a
+/// bug in two compiles overlapping. The queue starts threads only as work
+/// outruns the ones it has, so this is a ceiling and not a count of threads a
+/// process will have.
+uint32_t compile_worker_count ();
+
 /// Whether tier 2 exists at all, which is what decides whether a tier-1 body
 /// carries profiling instrumentation.
 ///

@@ -370,6 +370,19 @@ Backend debugging env vars:
   promotion is laid out by its own method's counts and is asked for by a method that is
   already hot, so it goes on its own; so do a dynamic method and any compile the runtime
   asks for by name.
+- `MONO_LLVM_JIT_WORKERS=<n>` (`runtime/options.cpp`) — the most threads the compile
+  queue may run promotions on at once, default `mono_cpu_count () - 2` capped at four.
+  The queue starts a thread only when work outruns the ones it has, so a run's actual
+  count is at or under this and `MONO_LLVM_JIT_TRACE=1` prints a line for each start.
+  One puts every background compile back on a single thread, which is what tells a
+  bug in a compile from a bug in two of them overlapping. Do not expect throughput to
+  follow the setting: ORC's session lock is taken once per compile to make a JITDylib
+  and again to look the entry up, and that measured 2.86x out of 18 threads on a
+  compile-bound workload — which is why the cap is four rather than the core count.
+  **More than one worker still crashes**: a Roslyn run dies in roughly 2% of runs at
+  two workers and 10% at seventeen, with a garbage managed byref reaching a
+  gsharedvt argument marshalling boundary. `MONO_LLVM_JIT_WORKERS=1` is the arm that
+  does not.
 - `MONO_LLVM_JIT_TIER0=<substr|0>` (`runtime/options.cpp`) — narrow tier 0, which is
   otherwise every method the interpreter accepts. A false value (`0`, `false`, empty)
   compiles everything, which is how to tell a tier-0 bug from a backend one; anything

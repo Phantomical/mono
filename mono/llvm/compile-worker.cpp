@@ -1,8 +1,12 @@
 #include "compile-worker.hpp"
 
+#include "runtime/options.hpp"
+
 #include "config.h"
 
 #include <glib.h>
+
+#include <llvm/Support/raw_ostream.h>
 
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/object-internals.h"
@@ -48,6 +52,11 @@ CompileWorker::start ()
 	 */
 	internal->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
 	mono_thread_set_state (internal, ThreadState_Background);
+
+	/* The queue adds threads under load, so how many a run ends up with is not
+	 * the setting and is otherwise invisible. */
+	if (is_jit_trace_enabled ())
+		llvm::errs () << "[llvm-jit] compile worker attached\n";
 
 	return true;
 }

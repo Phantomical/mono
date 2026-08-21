@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Compiles that run on a thread of their own.
+ * \brief Compiles that run on threads of their own.
  *
  * Deliberately knows nothing about mono - no metadata, no MonoMethod, no
  * runtime headers - so the ordering it has to get right can be driven straight
@@ -23,15 +23,15 @@
 
 namespace mono {
 
-/// A queue of compiles nobody waits for, and the thread that runs them.
+/// A queue of compiles nobody waits for, and the threads that run them.
 ///
 /// The rule this whole machine exists to keep is that **no thread may ever wait
 /// on a background compile**. A compile reaches mono_class_vtable_checked (),
 /// which takes mono's loader lock. That lock is recursive per thread, so a
 /// compile running on the thread that already holds it is recursion rather than
 /// deadlock. Move the compile to a worker and thread identity changes: a
-/// managed thread holding the loader lock and waiting for the worker deadlocks
-/// against the worker waiting for the lock. The cycle needs a waiter, so the
+/// managed thread holding the loader lock and waiting for a worker deadlocks
+/// against that worker waiting for the lock. The cycle needs a waiter, so the
 /// queue has none - enqueue () hands the work over and returns, and the queue
 /// offers no way to ask what became of it. The natural "compile this one
 /// synchronously, it is urgent" optimisation would put the waiter back.
@@ -40,6 +40,11 @@ namespace mono {
 /// way round. They are how a thread tearing something down proves the work
 /// using it has finished, before the thing it was using is destroyed. Call both
 /// with no lock the work can want, the loader lock included.
+///
+/// Several workers take from the one queue, so work is unordered: two items run
+/// at the same time whether or not they came from the same channel, and an item
+/// queued later can finish first. A caller may rely on what the waits above give
+/// it - that a closed channel and a dropped tag have nothing left running.
 class CompileQueue {
 public:
 	using Work = llvm::unique_function<void ()>;
@@ -49,6 +54,10 @@ public:
 	/// The queue knows nothing about mono, so this is where the runtime
 	/// attaches the thread to the GC and lets go of it again while it is idle.
 	/// The default does neither, which is all the queue's own tests need.
+	///
+	/// Each worker thread gets one of these to itself, so an implementation
+	/// keeps its thread's state in it and needs no locking of its own. What it
+	/// shares with the other workers it has to guard.
 	class Worker {
 	public:
 		virtual ~Worker () = default;
@@ -87,7 +96,7 @@ public:
 		Channel (const Channel &) = delete;
 		Channel &operator= (const Channel &) = delete;
 
-		/// Run work on the worker thread, tagged with tag so drop () can find
+		/// Run work on a worker thread, tagged with tag so drop () can find
 		/// it again. The tag is only compared, never dereferenced.
 		///
 		/// Returns false when the channel is closed or the queue has been
@@ -111,9 +120,20 @@ public:
 		bool open_ = true;
 	};
 
-	/// Builds a queue whose thread runs worker's hooks around every compile.
-	/// That thread is not started until something is enqueued, so a process
-	/// that never compiles in the background never has one.
+	/// Builds the Worker a new thread runs its compiles under. Called with the
+	/// queue's lock held, on whichever thread asked for the work that wants
+	/// another thread, and may return null for a thread with no hooks.
+	using WorkerFactory = llvm::unique_function<std::unique_ptr<Worker> ()>;
+
+	/// Builds a queue of at most workers threads, each running the hooks of a
+	/// Worker that factory built for it.
+	///
+	/// Threads start one at a time and only while work is waiting that no parked
+	/// thread is going to take, so a process that never compiles in the
+	/// background has none and one that compiles a method at a time keeps one.
+	CompileQueue (WorkerFactory factory, unsigned workers);
+
+	/// Builds a queue of a single thread, running worker's hooks.
 	explicit CompileQueue (std::unique_ptr<Worker> worker = nullptr);
 	~CompileQueue ();
 
@@ -129,11 +149,11 @@ public:
 	/// different piece of work and has to be taken.
 	void drop (void *tag);
 
-	/// Wait for the queue to empty and for the worker to be idle. For tests
+	/// Wait for the queue to empty and for every worker to be idle. For tests
 	/// and for shutdown; ordinary teardown drains through a channel.
 	void drain ();
 
-	/// Stop the worker. Anything queued is dropped, anything running finishes,
+	/// Stop the workers. Anything queued is dropped, anything running finishes,
 	/// and nothing is taken afterwards.
 	///
 	/// A worker that has not got through Worker::start () yet is left where it
@@ -144,6 +164,10 @@ public:
 	/// How many pieces of work have run to completion.
 	uint64_t completed () const;
 
+	/// How many worker threads have been started. For tests and for reporting;
+	/// it counts the threads that exist rather than the ones doing anything.
+	unsigned workers () const;
+
 private:
 	/// One queued compile.
 	struct Item {
@@ -153,7 +177,7 @@ private:
 		Work work;
 	};
 
-	/// A piece of work the worker has taken and not yet finished. What close ()
+	/// A piece of work a worker has taken and not yet finished. What close ()
 	/// and drop () wait on.
 	struct Ticket {
 		Channel *channel;
@@ -161,12 +185,25 @@ private:
 		uint64_t id;
 	};
 
+	/// One worker thread and the hooks it runs under.
+	///
+	/// An entry lives until the queue does, so a thread can name its own by an
+	/// index that stays good however many others start after it. stop () takes
+	/// the std::thread out to join it and leaves the rest where it is.
+	struct Thread {
+		std::unique_ptr<Worker> worker;
+		std::thread thread;
+		/// Whether this one got through Worker::start () and reached the loop.
+		/// Until it has, it is not a thread stop () may wait for.
+		bool started = false;
+	};
+
 	bool enqueue (Channel &channel, void *tag, Work work);
 	void close (Channel &channel);
 
-	/// Die if this is the worker thread, naming what it was asked to wait for.
+	/// Die if this is a worker thread, naming what it was asked to wait for.
 	///
-	/// Every wait below is a wait for the worker, so the worker reaching one
+	/// Every wait below is a wait for the workers, so a worker reaching one
 	/// waits for itself. It is a hang rather than a crash, on a thread nothing
 	/// is watching, and the caller that eventually notices is somewhere else
 	/// entirely - so this is worth a loud death even in a release build.
@@ -174,16 +211,20 @@ private:
 	[[noreturn]] static void self_wait (const char *what);
 	void not_from_the_worker (const char *what) const
 	{
-		if (std::this_thread::get_id () == thread_.get_id ())
-			self_wait (what);
+		std::thread::id self = std::this_thread::get_id ();
+
+		for (const Thread &worker : threads_)
+			if (worker.thread.get_id () == self)
+				self_wait (what);
 	}
 
-	/// The worker thread's whole life.
-	void run ();
+	/// A worker thread's whole life. index names its own entry in threads_.
+	void run (size_t index);
 
-	/// Start the worker if it is not running yet. Called with the queue's
-	/// mutex held. The new thread's first act is to take that same lock, so
-	/// it waits for the caller to let go.
+	/// Start one more worker if there is work no parked one will take and the
+	/// limit allows it. Called with the queue's mutex held. The new thread's
+	/// first act is to take that same lock, so it waits for the caller to let
+	/// go.
 	void ensure_worker ();
 
 	/// Whether no running ticket satisfies predicate. Called with the
@@ -207,12 +248,14 @@ private:
 	std::deque<Item> pending_;
 	std::vector<Ticket> running_;
 
-	std::unique_ptr<Worker> worker_;
-	std::thread thread_;
+	WorkerFactory factory_;
+	unsigned limit_;
+	std::vector<Thread> threads_;
+	/// How many workers are parked waiting for something to do. Compared
+	/// against what is queued to decide whether another thread would have
+	/// anything to run.
+	size_t idle_ = 0;
 	bool stopping_ = false;
-	/// Whether the worker got through Worker::start () and reached the loop.
-	/// Until it has, it is not a thread stop () can wait for.
-	bool started_ = false;
 
 	uint64_t next_id_ = 0;
 	uint64_t completed_ = 0;

@@ -4,6 +4,7 @@
 
 #include <llvm/ADT/StringRef.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +13,7 @@
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
+#include "mono/utils/mono-proclib.h"
 
 namespace mono {
 
@@ -141,6 +143,36 @@ promotion_batch_size ()
 	}();
 
 	return methods;
+}
+
+uint32_t
+compile_worker_count ()
+{
+	static uint32_t threads = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_WORKERS");
+
+		if (value != nullptr) {
+			int set = atoi (value);
+
+			return set > 1 ? (uint32_t) set : 1;
+		}
+
+		/*
+		 * Two processors are left to the program, and four threads is the cap
+		 * however many it has. Compiles stop scaling well before that anyway:
+		 * ORC takes its session lock once per compile to make a JITDylib and
+		 * again to look the entry up, which measured 2.86x out of 18 threads
+		 * on a compile-bound workload.
+		 *
+		 * mono_cpu_count () reads the affinity mask and the cgroup quota, so a
+		 * container gets what it may use rather than what the machine has.
+		 */
+		int cpus = mono_cpu_count ();
+
+		return (uint32_t) std::max (std::min (cpus - 2, 4), 1);
+	}();
+
+	return threads;
 }
 
 bool
