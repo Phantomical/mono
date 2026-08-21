@@ -44,7 +44,8 @@ void mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *t
 /// compiled caller reaches \p replacement through the entry, and an interpreted
 /// one runs \p replacement's bytecode instead of \p method's. A detour only
 /// covers the second where the signature can be marshalled into a call, which
-/// rules out generics and more than six parameters.
+/// rules out a callee taking more than six parameters, a vararg or p/invoke
+/// signature, an internal call, a string constructor and a wrapper.
 ///
 /// A caller the interpreter transformed before this call keeps whatever it
 /// copied of \p method's body. One transformed after it names \p replacement,
