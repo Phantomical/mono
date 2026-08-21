@@ -843,15 +843,22 @@ thread_local VerifyLevel g_verify_level = VerifyLevel::off;
 /// a file name and a file system, so the profile has to be a file to it.
 constexpr const char *profile_file = "/mono.profdata";
 
-/// Sets one of LLVM's own command-line options.
+/// Gives one of LLVM's own command-line options the default this backend wants.
+///
+/// A setting `--llvm-opt` carried is left alone, so each of these stays
+/// something a sweep can move. apply_options () parses that command line while
+/// the first MonoJit is built, which is before any pipeline is built, so the
+/// count below already covers it.
 ///
 /// Does nothing when this build of LLVM has no option of that name. The type
 /// has to be the one the option was declared with, which is not checked.
 template <typename T>
 void
-force_option (StringRef name, T value)
+default_option (StringRef name, T value)
 {
-	if (cl::Option *opt = cl::getRegisteredOptions ().lookup (name))
+	cl::Option *opt = cl::getRegisteredOptions ().lookup (name);
+
+	if (opt != nullptr && opt->getNumOccurrences () == 0)
 		static_cast<cl::opt<T> *> (opt)->setValue (value);
 }
 
@@ -863,7 +870,7 @@ add_instrumentation (ModulePassManager &mpm)
 	InstrProfOptions counters;
 
 	// Value profiling needs compiler-rt, which we do not link.
-	force_option ("disable-vp", true);
+	default_option ("disable-vp", true);
 
 	// Promotion keeps a counter inside a loop in a register, and adds it back
 	// to the array at each exit from the loop. A hot loop then pays one atomic
@@ -883,7 +890,7 @@ add_instrumentation (ModulePassManager &mpm)
 	// the loop outside, which hoists the write out of the whole nest. Tier 2
 	// reads these counters while the code still runs, so a count written at
 	// each turn of the outer loop is worth more than one held to the end.
-	force_option ("atomic-counter-update-promoted", true);
+	default_option ("atomic-counter-update-promoted", true);
 
 	// LLVM otherwise refuses a loop that any exit leaves through a return. That
 	// refusal keeps a profile read in the middle of a long loop from
@@ -892,15 +899,19 @@ add_instrumentation (ModulePassManager &mpm)
 	// that comes early loses only the turns the threads now in the loop took.
 	// Every entry that already left the loop is in the count, and entry count
 	// is what takes a body to tier 2.
-	force_option ("skip-ret-exit-block", false);
+	default_option ("skip-ret-exit-block", false);
 
 	// LLVM gives a loop with more exiting blocks than this nothing at all, at
 	// three by default. A `for` with three early returns already has four, and
 	// then the whole loop keeps its per-turn atomics. Eight admits the loops a
-	// method is written with by hand. Each exit takes a write-back for each
-	// counter promoted, so the code at the exits grows with the product of the
-	// two, and that is what holds this down rather than the gain running out.
-	force_option<unsigned> ("speculative-counter-promotion-max-exiting", 8);
+	// method is written with by hand.
+	//
+	// What a higher setting admits is a write-back on each further exit, and
+	// those are exits that mostly do not run: one exit is taken per pass through
+	// the loop whatever the count. So the code at the exits is what holds this
+	// down, not the time in it, and a measurement of that code is what a move to
+	// sixteen wants.
+	default_option<unsigned> ("speculative-counter-promotion-max-exiting", 8);
 
 	mpm.addPass (ProfileSelectPass ());
 	mpm.addPass (PGOInstrumentationGen (PGOInstrumentationType::FDO));
