@@ -177,16 +177,42 @@ MethodLLVMEmitter::field_symbol (MonoClassField *field)
 	return extern_symbol (symbol);
 }
 
-/// Runs klass's static constructor if it has not run yet.
+/// Whether klass's type initializer has already run in the domain this method
+/// compiles for.
 ///
-/// This emits a call rather than deciding it while compiling: a cctor is arbitrary
-/// managed code, and it must never run on a compilation thread. The call cannot be
-/// guarded by a flag read off the vtable either. A vtable is not observably initialized,
-/// even to the thread that just initialized it. Every site the CIL asks for a check
-/// emits one, and ClassInitPass deletes the ones a dominating check already covers.
+/// A true answer is permanent: mono_runtime_class_init_full () raises the flag only
+/// after the initializer returns, and no path lowers it again. A false answer means
+/// "not known", not "not initialized" - the flag is still 0 on the thread that is
+/// inside the initializer right now. So a caller can drop a check on true, and must
+/// keep one on false.
+bool
+MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
+{
+	// An open class has no vtable of its own. Which vtable the code gets is settled
+	// by the context a shared body is entered with, so the check has to stand.
+	if (depends_on_context (klass))
+		return false;
+
+	MonoVTable *vtable = mono_class_try_get_vtable (cfg->domain, klass);
+
+	// Without a vtable the initializer cannot have run.
+	return vtable != nullptr && vtable->initialized != 0;
+}
+
+/// Emits the check that runs klass's static constructor, unless it has already run.
+///
+/// The constructor itself never runs here. It is arbitrary managed code, and a
+/// compilation thread must not execute it. So a site that still needs the check gets
+/// a call. Every site the CIL asks for a check emits one, and ClassInitPass deletes
+/// the ones a dominating check already covers.
 llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
+	// The call would find the work done and return at once, and a class stays
+	// initialized for as long as the domain the code is compiled into lives.
+	if (cctor_already_ran (klass))
+		return llvm::Error::success ();
+
 	// Goes through the wrapper because a cctor can throw. The failure stays pending
 	// until the wrapper's check turns it into a real exception.
 	llvm::Expected<llvm::Function *> init =
