@@ -845,6 +845,30 @@ tier2_enabled ()
 	return on;
 }
 
+/// Whether a tier-1 body gathers counts for tier 2 to read.
+///
+/// Off, a body still counts its entries and still asks for tier 2, and the
+/// tier-2 compile then reads a profile with no records in it and lays the
+/// method out on static frequencies. That prices the counters on their own,
+/// which MONO_LLVM_JIT_TIER2 cannot: it takes the counters and the tier away
+/// together.
+static bool
+tier1_profiling_enabled ()
+{
+	static const bool on = [] {
+		const char *value = ::getenv ("MONO_LLVM_JIT_TIER1_PGO");
+
+		if (value == nullptr)
+			return true;
+
+		StringRef set (value);
+
+		return !set.empty () && set != "0" && !set.equals_insensitive ("false");
+	}();
+
+	return on;
+}
+
 /*
  * The host target configuration every compile uses, detected once.
  *
@@ -1055,7 +1079,7 @@ ThreadPipelines::tier1 ()
 	 * no pass looks at.
 	 */
 	options.EnablePromotion = tier2_enabled ();
-	options.EnablePGO = tier2_enabled ();
+	options.EnablePGO = tier1_profiling_enabled ();
 
 	MonoPassBuilder pb (&host_target_machine (), profile_fs.get (), &pic, options);
 
