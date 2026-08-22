@@ -264,13 +264,34 @@ namespace MonoTests.Mono.Profiler.Log {
 			if (!RuntimeInformation.IsOSPlatform (OSPlatform.Linux))
 				return;
 
-			new ProfilerTestRun ("idle-sleep", "sample").Run (events => {
-				AssertExtensions.LessThan (events.OfType<SampleHitEvent> ().Count (), 100);
-			});
+			// The count of process-time samples on a sleeping program is not the
+			// test's to set. The runtime compiles that program while it sleeps.
+			// Process-time sampling reports the CPU that costs, so the count
+			// follows the JIT and not the program.
+			//
+			// This test compares the two clocks on the same program instead. That
+			// also catches how the feature breaks. clock_init_for_profiler ()
+			// (mono/mini/mini-posix.c) falls back to CLOCK_MONOTONIC where
+			// CLOCK_PROCESS_CPUTIME_ID is declared and does not work. Process time
+			// is then real time, and only a comparison of the two shows it.
+			var process = CountSampleHits ("idle-sleep", "sample");
+			var real = CountSampleHits ("idle-sleep", "sample-real");
 
-			new ProfilerTestRun ("busy-work", "sample").Run (events => {
-				AssertExtensions.GreaterThanOrEqualTo (events.OfType<SampleHitEvent> ().Count (), 2500);
-			});
+			AssertExtensions.LessThan (process * 4, real,
+				$"a sleeping program got {process} samples on the CPU clock and {real} on the wall clock");
+
+			// Process time must still advance while the process does work.
+			AssertExtensions.GreaterThanOrEqualTo (CountSampleHits ("busy-work", "sample"), 2500);
+		}
+
+		static int CountSampleHits (string name, string options)
+		{
+			var count = 0;
+
+			new ProfilerTestRun (name, options).Run (events =>
+				count = events.OfType<SampleHitEvent> ().Count ());
+
+			return count;
 		}
 
 		[Fact]
