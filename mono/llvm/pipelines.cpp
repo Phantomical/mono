@@ -342,9 +342,6 @@ MonoPassBuilder::buildTier1Pipeline ()
 	// Clean up dominated class initialization checks
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 
-	MPM.addPass (buildModuleOptimizationPipeline (llvm::OptimizationLevel::O1,
-	                                              llvm::ThinOrFullLTOPhase::None));
-
 	// Ensure that tail calls don't get tail-merged into a block.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
 	MPM.addPass (arch::MonoAbiPass ());
