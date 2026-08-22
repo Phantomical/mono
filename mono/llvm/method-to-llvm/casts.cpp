@@ -134,6 +134,36 @@ subtype_test_applies (MonoClass *klass)
 }
 
 /**
+ * Whether the interface bitmap is the whole answer for a cast to klass.
+ *
+ * `mono_object_handle_isinst_mbyref_raw ()` (`mono/metadata/object.c`) reads
+ * the same bitmap off the same vtable first, and the two branches below that
+ * read only add a yes: an array special interface, and a variant generic
+ * interface. A transparent proxy takes the bitmap first as well, and
+ * `mono_upgrade_remote_class ()` is what puts the bit there.
+ *
+ * The caller refuses a context-dependent class as well, because the test
+ * compares against the interface id as a constant, and a shared body knows
+ * none while it is translated.
+ */
+static bool
+interface_test_applies (MonoClass *klass)
+{
+#ifdef COMPRESSED_INTERFACE_BITMAP
+	// A compressed bitmap holds runs of empty bytes rather than the bytes
+	// themselves, so the constant index emit_interface_test () computes
+	// reaches the wrong byte. mono_class_interface_match () walks it instead.
+	return false;
+#else
+	// The id indexes the bitmap, and the runtime assigns one on demand.
+	// Zero is never assigned, so an id of zero says the class has none yet.
+	mono_class_setup_interface_id (klass);
+
+	return m_class_get_interface_id (klass) != 0;
+#endif
+}
+
+/**
  * Emits the inline half of a cast: branches to yes when the object's class has
  * klass among its supertypes, and to otherwise when this cannot tell.
  *
@@ -190,6 +220,63 @@ MethodLLVMEmitter::emit_subtype_test (MonoIrBuilder &builder, MonoClass *klass,
 		llvm::Align (TARGET_SIZEOF_VOID_P), "supertype");
 
 	builder.CreateCondBr (builder.CreateICmpEQ (at_depth, target), yes, otherwise);
+}
+
+/**
+ * Emits the inline half of a cast to an interface: branches to yes when the
+ * object's vtable has the interface among the ones it implements, and to
+ * otherwise when this cannot tell.
+ *
+ * Goes on emitting into no block. The caller owns both successors.
+ *
+ * This is `MONO_VTABLE_IMPLEMENTS_INTERFACE ()` (`class-internals.h`) as IR.
+ * The vtable carries the bitmap and the bound both, so the object's vtable is
+ * the only load in front of the test, and the target needs no operand.
+ */
+void
+MethodLLVMEmitter::emit_interface_test (MonoIrBuilder &builder, MonoClass *klass,
+                                        llvm::Value *obj, llvm::BasicBlock *yes,
+                                        llvm::BasicBlock *otherwise)
+{
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	uint32_t iid = m_class_get_interface_id (klass);
+
+	llvm::Value *vtable = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), obj,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "obj_vtable");
+
+	/*
+	 * The bitmap holds one bit for each id up to the bound, so a bound below
+	 * the target's id means the byte the test wants is past the end.
+	 */
+	llvm::Value *bound = builder.CreateAlignedLoad (
+		builder.getInt32Ty (),
+		builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, max_interface_id))),
+		llvm::Align (4), "max_interface_id");
+
+	llvm::BasicBlock *in_range =
+		llvm::BasicBlock::Create (context (), "cast_iface_in_range", function);
+
+	builder.CreateCondBr (builder.CreateICmpUGE (bound, builder.getInt32 (iid)),
+	                      in_range, otherwise);
+
+	builder.SetInsertPoint (in_range);
+
+	llvm::Value *bitmap = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, interface_bitmap))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "interface_bitmap");
+	llvm::Value *byte = builder.CreateAlignedLoad (
+		builder.getInt8Ty (),
+		builder.CreateGEP (builder.getInt8Ty (), bitmap, builder.getInt32 (iid >> 3)),
+		llvm::Align (1), "interface_byte");
+	llvm::Value *bit = builder.CreateAnd (byte, builder.getInt8 (1 << (iid & 7)));
+
+	builder.CreateCondBr (builder.CreateIsNotNull (bit), yes, otherwise);
 }
 
 llvm::Error
@@ -249,32 +336,41 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	 * In front of the cache, the test the runtime itself ends at. For a target
 	 * class that is not an interface and not marshal-by-ref,
 	 * mono_class_is_assignable_from_general () answers
-	 * `mono_class_has_parent (object's class, target)`, which is one bounds
-	 * check and one comparison against a constant. It answers for every class
-	 * rather than for the last one, so it needs no slot and it never misses.
+	 * `mono_class_has_parent (object's class, target)`. For an interface,
+	 * mono_object_handle_isinst_mbyref_raw () answers the bitmap on the
+	 * object's vtable. Either one is a bounds check and one comparison, and
+	 * either answers for every class rather than for the last one, so neither
+	 * needs a slot and neither misses.
 	 *
-	 * It is one-sided. Where it says yes the runtime says yes, and where it
-	 * says no the answer can still be yes through a path this does not model,
-	 * so a no falls through to the cache and then to the wrapper.
+	 * Both are one-sided. Where one says yes the runtime says yes, and where
+	 * one says no the answer can still be yes through a path they do not
+	 * model, so a no falls through to the cache and then to the wrapper.
 	 */
-	llvm::BasicBlock *exact = nullptr;
+	bool to_interface = mono_class_is_interface (klass);
+	llvm::BasicBlock *told_yes = nullptr;
 	llvm::BasicBlock *first = probe;
 
-	if (!depends_on_context (klass) && subtype_test_applies (klass)) {
-		exact = llvm::BasicBlock::Create (context (), "cast_exact", function);
-		first = llvm::BasicBlock::Create (context (), "cast_subtype", function);
+	if (!depends_on_context (klass)
+	    && (to_interface ? interface_test_applies (klass) : subtype_test_applies (klass))) {
+		told_yes = llvm::BasicBlock::Create (context (), "cast_inline_yes", function);
+		first = llvm::BasicBlock::Create (
+			context (), to_interface ? "cast_interface" : "cast_subtype", function);
 
 		builder.SetInsertPoint (first);
 
-		llvm::Expected<llvm::Value *> target =
-			class_operand (builder, klass, "mono_class_");
+		if (to_interface) {
+			emit_interface_test (builder, klass, obj.value, told_yes, probe);
+		} else {
+			llvm::Expected<llvm::Value *> target =
+				class_operand (builder, klass, "mono_class_");
 
-		if (!target)
-			return target.takeError ();
+			if (!target)
+				return target.takeError ();
 
-		emit_subtype_test (builder, klass, obj.value, *target, exact, probe);
+			emit_subtype_test (builder, klass, obj.value, *target, told_yes, probe);
+		}
 
-		builder.SetInsertPoint (exact);
+		builder.SetInsertPoint (told_yes);
 		builder.CreateBr (done);
 	}
 
@@ -360,9 +456,10 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	result->addIncoming (answer, hit);
 	result->addIncoming (slow, from_miss);
 
-	// The subtype test answers with the reference itself, for both forms.
-	if (exact != nullptr)
-		result->addIncoming (obj.value, exact);
+	// An inline test that said yes answers with the reference itself, for
+	// both forms.
+	if (told_yes != nullptr)
+		result->addIncoming (obj.value, told_yes);
 
 	// A value-type token means the boxed form. What comes back is still an
 	// object reference, not the token's own type.

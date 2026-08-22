@@ -1,17 +1,21 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 /*
- * The answers a cast gives, over the shapes the inline supertype test in
- * generated code either answers or declines.
+ * The answers a cast gives, over the shapes the inline tests in generated code
+ * either answer or decline.
  *
- * That test is one-sided. Where the object's class holds the target among its
- * supertypes it answers yes, and everything else falls through to the runtime.
- * So the cases that matter are the ones where the two disagree about which of
- * them answers: a target too deep for the object, an interface, a
- * marshal-by-ref class, an array, a delegate, a boxed value and a shared
- * generic body. Each must give the answer the runtime gives, whichever path
- * carries it.
+ * There are two such tests. A cast to a class reads the object's supertypes,
+ * and a cast to an interface reads the interface bitmap on the object's
+ * vtable. Both are one-sided: where the object's class holds the target they
+ * answer yes, and everything else falls through to the runtime. So the cases
+ * that matter are the ones where a test and the runtime disagree about which
+ * of them answers: a target too deep for the object, a marshal-by-ref class,
+ * an array, a delegate, a boxed value, a shared generic body, and the
+ * interfaces the bitmap alone cannot settle, which are generic variance and
+ * the interfaces an array gets on its element type. Each must give the answer
+ * the runtime gives, whichever path carries it.
  *
  * Every probe is entered enough times to reach both compiled tiers, because
  * the interpreter answers a cast through the runtime and never reaches the
@@ -20,6 +24,8 @@ using System.Runtime.CompilerServices;
 
 interface IAlpha { }
 interface IBeta { }
+interface IGen<T> { }
+interface ICovariant<out T> { }
 
 class L1 { }
 class L2 : L1 { }
@@ -30,12 +36,16 @@ sealed class Sealed : L2 { }
 
 class Sibling : L1 { }
 
-class Remote : MarshalByRefObject { }
+class Remote : MarshalByRefObject, IBeta { }
 class RemoteSub : Remote { }
+
+class GenImpl : IGen<L1> { }
+class Covariant : ICovariant<L3> { }
 
 delegate int Op (int n);
 
 struct Val { public int n; }
+struct Tagged : IAlpha { public int n; }
 
 class Holder<T> where T : class {
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -43,6 +53,15 @@ class Holder<T> where T : class {
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	public static object Cast (object o) { return (T) o; }
+}
+
+/* A generic interface a shared body reaches through its context. */
+class GenHolder<T> where T : class {
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static object As (object o) { return o as IGen<T>; }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static object Cast (object o) { return (IGen<T>) o; }
 }
 
 static class Program {
@@ -76,9 +95,21 @@ static class Program {
 	[MethodImpl (MethodImplOptions.NoInlining)] static L4 AsL4 (object o) { return o as L4; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static object CastL2 (object o) { return (L2) o; }
 
-	/* The shapes the inline test declines. */
+	/* Interfaces, which the bitmap test answers. */
 	[MethodImpl (MethodImplOptions.NoInlining)] static IAlpha AsAlpha (object o) { return o as IAlpha; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static IBeta AsBeta (object o) { return o as IBeta; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static IGen<L1> AsGenL1 (object o) { return o as IGen<L1>; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static IGen<L2> AsGenL2 (object o) { return o as IGen<L2>; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static object CastAlpha (object o) { return (IAlpha) o; }
+
+	/* Interfaces whose answer the bitmap alone cannot give. */
+	[MethodImpl (MethodImplOptions.NoInlining)] static ICovariant<L1> AsCovariantL1 (object o) { return o as ICovariant<L1>; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static ICovariant<L4> AsCovariantL4 (object o) { return o as ICovariant<L4>; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static IList<string> AsStrList (object o) { return o as IList<string>; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static IList<object> AsObjList (object o) { return o as IList<object>; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static IEnumerable<L1> AsL1Seq (object o) { return o as IEnumerable<L1>; }
+
+	/* The shapes the inline test declines. */
 	[MethodImpl (MethodImplOptions.NoInlining)] static Remote AsRemote (object o) { return o as Remote; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static object[] AsObjArray (object o) { return o as object[]; }
 	[MethodImpl (MethodImplOptions.NoInlining)] static string[] AsStrArray (object o) { return o as string[]; }
@@ -94,9 +125,12 @@ static class Program {
 		object remote = new RemoteSub ();
 		object strings = new string [2];
 		object objects = new object [2];
+		object l3s = new L3 [2];
 		object op = (Op) (n => n + 1);
 		object boxed = (object) new Val { n = i };
 		object boxed_int = (object) i;
+		object tagged = (object) new Tagged { n = i };
+		object gen = new GenImpl (), covariant = new Covariant ();
 
 		/* A class holds every class above it, and the deepest answers all. */
 		Check (AsL1 (l4) != null, "L4 as L1");
@@ -127,6 +161,26 @@ static class Program {
 		Check (AsAlpha (l4) != null, "L4 as IAlpha, inherited");
 		Check (AsAlpha (l2) == null, "L2 as IAlpha");
 		Check (AsBeta (l4) == null, "L4 as IBeta");
+		Check (AsAlpha (tagged) != null, "a boxed struct as the interface it implements");
+		Check (AsBeta (tagged) == null, "a boxed struct as an interface it does not");
+		Check (AsBeta (remote) != null, "a marshal-by-ref instance as its interface");
+		Check (CastAlpha (l3) != null, "cast L3 to IAlpha");
+
+		/* A generic interface, whose instance has an id of its own. */
+		Check (AsGenL1 (gen) != null, "GenImpl as IGen<L1>");
+		Check (AsGenL2 (gen) == null, "GenImpl as IGen<L2>");
+
+		/*
+		 * Variance, and the interfaces an array gets on its element type.
+		 * The bitmap holds neither, so the runtime answers both.
+		 */
+		Check (AsCovariantL1 (covariant) != null, "ICovariant<L3> as ICovariant<L1>");
+		Check (AsCovariantL4 (covariant) == null, "ICovariant<L3> as ICovariant<L4>");
+		Check (AsStrList (strings) != null, "string[] as IList<string>");
+		Check (AsObjList (strings) != null, "string[] as IList<object>");
+		Check (AsStrList (objects) == null, "object[] as IList<string>");
+		Check (AsL1Seq (l3s) != null, "L3[] as IEnumerable<L1>");
+		Check (AsL1Seq (strings) == null, "string[] as IEnumerable<L1>");
 
 		/* Marshal-by-ref, which the runtime answers through remoting. */
 		Check (AsRemote (remote) != null, "RemoteSub as Remote");
@@ -157,6 +211,9 @@ static class Program {
 		Check (Holder<L2>.As (l4) != null, "shared: L4 as L2");
 		Check (Holder<L4>.As (l2) == null, "shared: L2 as L4");
 		Check (Holder<L1>.Cast (l3) != null, "shared: cast L3 to L1");
+		Check (GenHolder<L1>.As (gen) != null, "shared: GenImpl as IGen<L1>");
+		Check (GenHolder<L2>.As (gen) == null, "shared: GenImpl as IGen<L2>");
+		Check (GenHolder<L1>.Cast (gen) != null, "shared: cast GenImpl to IGen<L1>");
 
 		/* The throwing form, on both sides of the answer. */
 		Check (CastL2 (l4) != null, "cast L4 to L2");
@@ -180,8 +237,11 @@ static class Program {
 
 		CheckThrows (() => (L2) l1, "cast L1 to L2");
 		CheckThrows (() => (IBeta) l1, "cast L1 to IBeta");
+		CheckThrows (() => (IGen<L2>) (object) new GenImpl (), "cast GenImpl to IGen<L2>");
+		CheckThrows (() => (ICovariant<L4>) (object) new Covariant (), "cast Covariant to ICovariant<L4>");
 		CheckThrows (() => (string[]) (object) new object [1], "cast object[] to string[]");
 		CheckThrows (() => Holder<L4>.Cast (new L2 ()), "shared cast L2 to L4");
+		CheckThrows (() => GenHolder<L2>.Cast (new GenImpl ()), "shared cast GenImpl to IGen<L2>");
 
 		if (fails != 0)
 			return 1;

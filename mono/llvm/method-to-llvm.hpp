@@ -956,6 +956,8 @@ private:
 	void emit_subtype_test (MonoIrBuilder &builder, MonoClass *klass, llvm::Value *obj,
 	                        llvm::Value *target, llvm::BasicBlock *yes,
 	                        llvm::BasicBlock *otherwise);
+	void emit_interface_test (MonoIrBuilder &builder, MonoClass *klass, llvm::Value *obj,
+	                          llvm::BasicBlock *yes, llvm::BasicBlock *otherwise);
 	llvm::Error emit_castclass (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_isinst (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<llvm::Value *> block_size (MonoIrBuilder &builder, StackValue size);
