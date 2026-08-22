@@ -18,6 +18,8 @@ extern "C" {
 #include <llvm/IR/Type.h>
 #include <llvm/Support/ErrorHandling.h>
 
+#include <optional>
+
 namespace mono {
 
 /// Declares the runtime's allocator for a plain instance of a known class,
@@ -69,6 +71,21 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 			return fast.takeError ();
 
 		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
+		// allockind lets LLVM erase an allocation that nothing uses, which is
+		// what SROA leaves behind once it scalarizes a temporary object.
+		// mono_gc_get_managed_allocator () keeps the classes an erased
+		// allocation is observable on out of this branch: a finalizer,
+		// MarshalByRefObject, weak fields and collect-before-allocs all send it
+		// to object_new_decl () below.
+		(*fast)->addFnAttr (
+			llvm::Attribute::getWithAllocKind (context (), llvm::AllocFnKind::Alloc));
+		// Argument 0 is the vtable. An allocator that takes a second argument
+		// takes the instance size there.
+		if ((*fast)->arg_size () == 2)
+			(*fast)->addFnAttr (llvm::Attribute::getWithAllocSizeArgs (
+				context (), 1, std::nullopt));
+		// The allocator raises OutOfMemoryException instead of answering null.
+		(*fast)->addRetAttr (llvm::Attribute::NonNull);
 		return emit_protected_call (
 			builder, *fast,
 			adapt_to_callee (

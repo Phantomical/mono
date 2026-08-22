@@ -10,6 +10,7 @@
 set(MONO_TESTS_CS_SRC
   cast-cache.cs
   cast-subtype.cs
+  alloc-elide.cs
   generic-unloading-sub.2.cs
   create-instance.cs
   bug-2907.cs
