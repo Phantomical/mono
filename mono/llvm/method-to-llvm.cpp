@@ -1017,9 +1017,9 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 		// instead records each instruction's own offset, because a frame's IL
 		// offset is read from it: a frame below the top names the call or the
 		// throw that gave up control, not the statement that contains it.
-		// mono_debug_symfile_lookup_location () keeps the last statement at or
-		// before an offset, so a source line is still correct for an offset
-		// that starts no statement.
+		// mono_debug_symfile_lookup_location () and mono_ppdb_lookup_location ()
+		// both keep the last statement at or before an offset, so a source line
+		// is still correct for an offset that starts no statement.
 		if (wants_seq_point_at (offset))
 			statement_offset = offset;
 

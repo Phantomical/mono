@@ -104,23 +104,35 @@ namespace Mono
 					return false;
 				}
 
-				SequencePoint prev = null;
-				foreach (var sp in method.DebugInformation.SequencePoints.OrderBy (l => l.Offset)) {
-					if (sp.Offset >= ilOffset) {
-						location = new Location (sp.Document.Url, sp.StartLine);
-						return true;
-					}
+				// A hidden point marks compiler-generated code and names no line.
+				var points = method.DebugInformation.SequencePoints
+					.Where (sp => !sp.IsHidden).OrderBy (sp => sp.Offset).ToArray ();
 
-					prev = sp;
+				// A frame reports the offset of the call or the throw that gave up
+				// control, and that offset starts no statement. The statement it
+				// belongs to is the last sequence point at or before it, which is how
+				// mono_ppdb_lookup_location () resolves one inside the runtime. The
+				// next point instead names the line after the statement.
+				SequencePoint found = null;
+				foreach (var sp in points) {
+					if (sp.Offset > ilOffset)
+						break;
+
+					found = sp;
 				}
 
-				if (prev != null) {
-					location = new Location (prev.Document.Url, prev.StartLine);
-					return true;
+				// An offset before every point is in the prologue. The first point is
+				// then the closest line the symbol file has for it.
+				if (found == null && points.Length > 0)
+					found = points [0];
+
+				if (found == null) {
+					location = default;
+					return false;
 				}
 
-				location = default;
-				return false;
+				location = new Location (found.Document.Url, found.StartLine);
+				return true;
 			}
 		}
 

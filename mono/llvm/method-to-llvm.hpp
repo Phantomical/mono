@@ -394,8 +394,8 @@ private:
 	SeqPointGraph seq_point_graph;
 
 	/// The offset of the statement being translated - the most recent one
-	/// wants_seq_point_at () accepted. This is what the line table records, so
-	/// that an offset read back out of it is a sequence point.
+	/// wants_seq_point_at () accepted. A sequence point marker carries an offset
+	/// of its own, so the code after one goes back to this.
 	size_t statement_offset = 0;
 
 	/// The marker of the sequence point emitted after the most recent call, and
