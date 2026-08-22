@@ -1418,19 +1418,79 @@ TEST_F (TranslatorTest, CastclassAndIsinstUseTheirOwnHelpers)
 	EXPECT_EQ (test.count ("mono_object_isinst_with_cache"), 1u);
 }
 
-// The helpers memoize the last vtable that answered, so every cast site needs a
+// The cache memoizes the last vtable that answered, so every cast site needs a
 // cache slot of its very own - two sites sharing one would fight over it.
 TEST_F (TranslatorTest, EachCastSiteGetsItsOwnCacheSlot)
 {
 	const Translation &t = translate ("casts", "Casts:TwoCasts");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("@cast_cache"), 2u) << t.text ();
 
-	const llvm::GlobalVariable *first = t.module->getGlobalVariable ("cast_cache", true);
+	// Count the slots rather than the mentions of one. Each site reads its
+	// slot and then hands the same slot to the helper, so the number of
+	// mentions says nothing about how many slots there are.
+	unsigned slots = 0;
 
-	ASSERT_NE (first, nullptr);
-	EXPECT_TRUE (first->hasInternalLinkage ());
+	for (const llvm::GlobalVariable &global : t.module->globals ()) {
+		if (!global.getName ().starts_with ("cast_cache"))
+			continue;
+
+		EXPECT_TRUE (global.hasInternalLinkage ()) << global.getName ().str ();
+		++slots;
+	}
+
+	EXPECT_EQ (slots, 2u) << t.text ();
+}
+
+/*
+ * The generated code reads the cache itself, and calls the helper only when the
+ * answer is not in it. mono_object_castclass_with_cache () keeps the bare
+ * vtable of an object that passed, so the test here is one comparison.
+ */
+TEST_F (TranslatorTest, CastclassReadsItsCacheBeforeItCalls)
+{
+	const Translation &t = translate ("casts", "Casts:CastString");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	EXPECT_EQ (t.count ("load ptr, ptr @cast_cache"), 1u) << t.text ();
+	// The cached vtable against the object's, which is the whole fast path.
+	EXPECT_EQ (t.count ("icmp eq i64"), 1u) << t.text ();
+	// The helper stays, on the path the cache did not answer.
+	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
+	// A castclass reads the slot as it stands, with nothing masked off.
+	EXPECT_EQ (t.count ("and i64"), 0u) << t.text ();
+}
+
+/*
+ * isinst caches a refusal as well as a pass, in bit 0 of the same slot, so its
+ * fast path masks that bit off before it compares and then reads it to choose
+ * between the object and null.
+ */
+TEST_F (TranslatorTest, IsinstReadsTheRefusalBitFromItsCache)
+{
+	const Translation &t = translate ("casts", "Casts:IsString");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	EXPECT_EQ (t.count ("load ptr, ptr @cast_cache"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("and i64"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("-2"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("trunc i64"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("select i1"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("mono_object_isinst_with_cache"), 1u) << t.text ();
+}
+
+// Neither form reads the cache for a null reference, because the fast path
+// loads the object's vtable and both helpers answer null without one.
+TEST_F (TranslatorTest, ACastTestsForNullBeforeItReadsAVtable)
+{
+	const Translation &t = translate ("casts", "Casts:CastString");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("icmp eq ptr %0, null"), 1u) << t.text ();
+	// Null, the object itself, and whatever the helper answered.
+	EXPECT_EQ (t.count ("phi ptr [ null,"), 1u) << t.text ();
 }
 
 TEST_F (TranslatorTest, UnboxAnyOnAReferenceTypeIsACast)
