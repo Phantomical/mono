@@ -6,11 +6,16 @@
 #include "mono/metadata/domain-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
+#include "mono/metadata/opcodes.h"
+#include "mono/metadata/reflection-internals.h"
 #include "mono/metadata/tokentype.h"
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+
+#include <string>
+#include <string_view>
 
 namespace mono {
 
@@ -255,6 +260,123 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/// Folds `ldtoken` and the `Type::GetTypeFromHandle` call behind it into the
+/// System.Type the pair produces, and says whether it did.
+///
+/// A fold consumes the call, so `ip` moves past it. A refusal leaves `ip` where
+/// it was, and the caller emits the handle the ordinary way.
+///
+/// `type` is what the token named, byref spelling included.
+llvm::Expected<bool>
+MethodLLVMEmitter::fold_type_from_handle (MonoIrBuilder &builder, MonoType *type)
+{
+	// One byte of opcode and four of token.
+	if (code_size - ip < 5)
+		return false;
+
+	const unsigned char *cursor = code + ip;
+	MonoOpcodeEnum next = mono_opcode_value (&cursor, code + code_size);
+
+	if (next != MONO_CEE_CALL && next != MONO_CEE_CALLVIRT)
+		return false;
+
+	// Control reaches a leader from elsewhere as well, where the ldtoken above
+	// did not run.
+	if (blocks.count (ip) != 0)
+		return false;
+
+	/*
+	 * The debugger stops at a statement start, and a fold takes the call's
+	 * offset away. Only a symbol file can put a stop there. The other half of
+	 * wants_seq_point_at () wants an empty evaluation stack, and the handle
+	 * this instruction pushes sits on it.
+	 *
+	 * That helper cannot answer for the call, because it reads the stack as it
+	 * stands now, one entry short of what the call sees.
+	 */
+	if (sym_seq_points && sym_seq_point_offsets.contains (static_cast<uint32_t> (ip)))
+		return false;
+
+	// mono_opcode_value () leaves the cursor on the opcode's last byte, not
+	// past it. The token follows.
+	size_t at = static_cast<size_t> (cursor - code) + 1;
+
+	if (code_size - at < 4)
+		return false;
+
+	uint32_t token = static_cast<uint32_t> (code[at])
+	                 | (static_cast<uint32_t> (code[at + 1]) << 8)
+	                 | (static_cast<uint32_t> (code[at + 2]) << 16)
+	                 | (static_cast<uint32_t> (code[at + 3]) << 24);
+	llvm::Expected<MonoMethod *> target = resolve_method (token);
+
+	// emit_call () reports a token that names no method, against its own
+	// offset.
+	if (!target) {
+		llvm::consumeError (target.takeError ());
+		return false;
+	}
+
+	if ((*target)->klass != mono_defaults.systemtype_class
+	    || std::string_view ((*target)->name) != "GetTypeFromHandle")
+		return false;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (type);
+	llvm::Value *value = nullptr;
+
+	if (depends_on_context (klass)) {
+		// mini_get_rgctx_entry_slot () takes the class's byval_arg for a slot
+		// that names a class. A byref type has no such spelling, so the site
+		// keeps its call.
+		if (type->byref)
+			return false;
+
+		llvm::Expected<llvm::Value *> fetched =
+			rgctx_fetch (builder, MONO_RGCTX_INFO_REFLECTION_TYPE, klass);
+
+		if (!fetched)
+			return fetched.takeError ();
+
+		value = *fetched;
+	} else {
+		/*
+		 * mono_type_get_object_checked () allocates the object with
+		 * mono_object_new_pinned (), because the runtime already stores it in
+		 * vtables and in compiled code. So the address does not move and the
+		 * constant stays correct.
+		 *
+		 * The object belongs to the domain the code compiles for, and the
+		 * domain holds it for as long as it holds the code.
+		 */
+		ERROR_DECL (reflection_error);
+		MonoReflectionType *object =
+			mono_type_get_object_checked (cfg->domain, type, reflection_error);
+
+		if (object == nullptr)
+			return runtime_error (reflection_error);
+
+		/*
+		 * A type built through Reflection.Emit answers with the builder's own
+		 * object, which is not pinned. mono_class_create_runtime_vtable ()
+		 * registers a moving root for the vtable slot that holds one. A
+		 * constant in code has no such root, so the site keeps its call.
+		 */
+		if (mono_object_class (object) != mono_defaults.runtimetype_class)
+			return false;
+
+		char *name = mono_type_full_name (type);
+		std::string symbol =
+			identity_symbol (std::string ("mono_typeof_") + name, object);
+
+		g_free (name);
+		value = address_symbol (symbol, object);
+	}
+
+	ip = at + 4;
+	push_stack (value, m_class_get_byval_arg (mono_defaults.systemtype_class));
+	return true;
+}
+
 /*
  * III.4.17  ldtoken - load the runtime representation of a metadata token
  *
@@ -341,6 +463,19 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 
 		if (handle == nullptr)
 			return runtime_error (metadata_error);
+	}
+
+	// A C# compiler writes typeof (T) as this instruction and a call to
+	// Type::GetTypeFromHandle. The pair has one answer, and it is known here.
+	if (handle_class == mono_defaults.typehandle_class) {
+		llvm::Expected<bool> folded =
+			fold_type_from_handle (builder, static_cast<MonoType *> (handle));
+
+		if (!folded)
+			return folded.takeError ();
+
+		if (*folded)
+			return llvm::Error::success ();
 	}
 
 	// The handle is a runtime address: a MonoType, a MonoMethod or a

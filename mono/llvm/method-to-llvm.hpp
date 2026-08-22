@@ -898,6 +898,7 @@ private:
 	llvm::Error emit_mono_calli_extra_arg (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
+	llvm::Expected<bool> fold_type_from_handle (MonoIrBuilder &builder, MonoType *type);
 	bool cctor_already_ran (MonoClass *klass);
 	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
 	llvm::Expected<llvm::Value *> static_field_address (MonoIrBuilder &builder,
@@ -924,6 +925,7 @@ private:
 	                                      MonoMethodSignature *sig);
 	llvm::Error emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Error emit_string_length (MonoIrBuilder &builder);
+	llvm::Error emit_get_type (MonoIrBuilder &builder, bool receiver_by_reference);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);

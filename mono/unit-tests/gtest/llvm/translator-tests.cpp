@@ -1391,7 +1391,7 @@ TEST_F (TranslatorTest, LdstrBecomesOneSymbolPerLiteral)
 // a type is the class symbol plus an offset, wrapped into a RuntimeTypeHandle.
 TEST_F (TranslatorTest, LdtokenWrapsTheMatchingSymbolFamily)
 {
-	const Translation &type = translate ("tokens", "Tokens:TypeOf");
+	const Translation &type = translate ("tokens", "Tokens:TypeToken");
 	const Translation &method = translate ("tokens", "Tokens:MethodToken");
 	const Translation &field = translate ("tokens", "Tokens:FieldToken");
 
@@ -1403,6 +1403,43 @@ TEST_F (TranslatorTest, LdtokenWrapsTheMatchingSymbolFamily)
 
 	ASSERT_NE (field.function, nullptr) << field.error;
 	EXPECT_EQ (field.count ("@\"mono_field_"), 1u) << field.text ();
+}
+
+// typeof (T) is an ldtoken and the call behind it, and the pair has one answer.
+// The System.Type rides on a symbol of its own, and neither the class symbol nor
+// the call is left.
+TEST_F (TranslatorTest, TypeOfBecomesTheTypeObject)
+{
+	const Translation &t = translate ("tokens", "Tokens:TypeOf");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("@\"mono_typeof_Holder"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("GetTypeFromHandle"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("@\"mono_class_Holder"), 0u) << t.text ();
+}
+
+// The fold needs the call on every path the ldtoken is on. A call that starts a
+// block is entered from elsewhere as well, so the handle and the call both stand.
+TEST_F (TranslatorTest, TypeOfDoesNotFoldAcrossABranch)
+{
+	const Translation &t = translate ("tokens", "Tokens:TypeOfAcrossABranch");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("@\"mono_typeof_Holder"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("@\"mono_class_Holder"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("GetTypeFromHandle"), 1u) << t.text ();
+}
+
+// object.GetType () is the System.Type on the receiver's vtable, so the site is a
+// null check and two loads rather than a call into an icall wrapper.
+TEST_F (TranslatorTest, GetTypeReadsTheVtable)
+{
+	const Translation &t = translate ("tokens", "Tokens:TypeOfObject");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("object:GetType"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("%obj_type = load ptr"), 1u) << t.text ();
+	EXPECT_GT (t.count ("NullReferenceException"), 0u) << t.text ();
 }
 
 /* ------------------------------------------------------------------ casts */

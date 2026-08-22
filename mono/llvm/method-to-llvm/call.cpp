@@ -953,6 +953,59 @@ MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/// Reads the System.Type an object's vtable carries, which is what
+/// object.GetType () answers.
+///
+/// `receiver_by_reference` says the receiver on the stack is a managed pointer
+/// to the reference rather than the reference, which is the shape a
+/// `constrained.` prefix on a reference type leaves.
+llvm::Error
+MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_reference)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Align align (TARGET_SIZEOF_VOID_P);
+	StackValue receiver = get_stack (0);
+	llvm::Value *object = receiver.value;
+
+	if (receiver_by_reference)
+		object = builder.CreateAlignedLoad (ptr, object, align);
+	else if (stack_type (receiver.type) != ObjectRef)
+		return invalid_il (llvm::Twine ("an object was expected, not operand type ")
+		                   + describe (receiver.type, stack_type (receiver.type)));
+
+	emit_null_check (builder, object);
+
+	llvm::Value *vtable = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), object,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		align);
+	/*
+	 * mono_class_create_runtime_vtable () fills in `type` before it publishes
+	 * the vtable, so an object that exists has one. RuntimeType is the
+	 * exception: its own vtable takes `type` after the memory barrier, which
+	 * leaves a window where the field is null. The interpreter reads the field
+	 * unguarded and this follows it. A guard costs every site, and the window
+	 * it covers is one managed code cannot run in.
+	 *
+	 * A transparent proxy answers with the type it stands for. Its vtable is a
+	 * copy of the real class's, and mono_class_proxy_vtable () overwrites
+	 * `type` with the interface for an interface proxy.
+	 */
+	llvm::Value *type = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, type))),
+		align, "obj_type");
+
+	pop_stack (1);
+	push_stack (type, m_class_get_byval_arg (mono_defaults.systemtype_class));
+	return llvm::Error::success ();
+}
+
 /*
  * III.3.19  call - call a method
  *
@@ -1196,6 +1249,28 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		receiver.value = *boxed;
 		receiver.type = mono_get_object_type ();
 	}
+
+	/*
+	 * object.GetType () is an internal call, so it is published as a
+	 * managed-to-native wrapper and reached through a remoting with-check
+	 * wrapper. The receiver's vtable carries the answer, so the site becomes
+	 * one load.
+	 *
+	 * Asked after the constrained. prefix settles the receiver, so the value
+	 * under it is an object whichever spelling the site used.
+	 *
+	 * Reflection on a proxy gives GetType () a meaning of its own, and the
+	 * runtime-invoke wrapper is how it gets there. The interpreter refuses the
+	 * same site (mono/interp/transform/intrinsics.cpp).
+	 */
+	if (callee_method->klass == mono_defaults.object_class
+	    && std::string_view (callee_method->name) == "GetType"
+	    && sig->hasthis && sig->param_count == 0
+#ifndef DISABLE_REMOTING
+	    && method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE
+#endif
+	)
+		return emit_get_type (builder, constrained != nullptr && !box_receiver);
 
 	// Whether the callee is settled here rather than looked up off the
 	// receiver. Everything below that names a different method than the IL did

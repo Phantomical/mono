@@ -44,6 +44,36 @@
 		ret
 	}
 
+	// The handle on its own, which no call follows.
+	.method public static valuetype [mscorlib]System.RuntimeTypeHandle TypeToken () cil managed
+	{
+		.maxstack 1
+		ldtoken Holder
+		ret
+	}
+
+	// The call is a branch target, so control reaches it on a path the ldtoken
+	// above did not run on.
+	.method public static class [mscorlib]System.Type TypeOfAcrossABranch (bool b) cil managed
+	{
+		.maxstack 2
+		ldtoken Holder
+		ldarg.0
+		brtrue take
+
+	take:
+		call class [mscorlib]System.Type [mscorlib]System.Type::GetTypeFromHandle (valuetype [mscorlib]System.RuntimeTypeHandle)
+		ret
+	}
+
+	.method public static class [mscorlib]System.Type TypeOfObject (object o) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		callvirt instance class [mscorlib]System.Type [mscorlib]System.Object::GetType ()
+		ret
+	}
+
 	.method public static valuetype [mscorlib]System.RuntimeMethodHandle MethodToken () cil managed
 	{
 		.maxstack 1
