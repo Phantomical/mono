@@ -307,14 +307,10 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 	return low;
 }
 
-/// Returns the tail-call kind the lowered site can carry over from \p call,
-/// which crossed the boundary as \p low describes.
+/// Whether \p low leaves this frame out of the call it describes, which is what
+/// lets the call hand the frame away:
 ///
-/// A refusal to be a jump carries as it is. It constrains nothing. A
-/// permission to be one survives only where the lowering left this frame out
-/// of the call:
-///
-///   - a Memory argument is a pointer into an alloca of this frame, which is the one
+///   - a Memory argument travels through memory of this frame, which is the one
 ///     thing a tail call promises the callee never sees;
 ///   - a return that travels - through a hidden pointer or as register words - is
 ///     read back after the call, so there is no longer a call the ret follows.
@@ -322,6 +318,25 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 /// A Coerced argument is none of that. Its spill is loaded before the call,
 /// and what crosses is the loaded word, so the alloca is dead by the time the
 /// frame goes.
+bool
+frame_stays_out_of_the_call (const CallLowering &low)
+{
+	if (low.ret_by_address || low.ret_travel != nullptr)
+		return false;
+
+	for (const ParamLowering &p : low.params)
+		if (p.kind == ParamLowering::Memory)
+			return false;
+
+	return true;
+}
+
+/// Returns the tail-call kind the lowered site can carry over from \p call,
+/// which crossed the boundary as \p low describes.
+///
+/// A refusal to be a jump carries as it is. It constrains nothing. A
+/// permission to be one survives only where the lowering left this frame out
+/// of the call.
 ///
 /// And only ever as the permission. The lowering rebuilds the argument list,
 /// so the site no longer has the caller's own prototype, and musttail
@@ -334,14 +349,7 @@ carried_tail_kind (const CallInst *call, const CallLowering &low)
 	if (kind != CallInst::TCK_Tail && kind != CallInst::TCK_MustTail)
 		return kind;
 
-	if (low.ret_by_address || low.ret_travel != nullptr)
-		return CallInst::TCK_None;
-
-	for (const ParamLowering &p : low.params)
-		if (p.kind == ParamLowering::Memory)
-			return CallInst::TCK_None;
-
-	return CallInst::TCK_Tail;
+	return frame_stays_out_of_the_call (low) ? CallInst::TCK_Tail : CallInst::TCK_None;
 }
 
 /// Creates a block of \p invoke's own on its normal edge, so a value read
@@ -714,6 +722,18 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 	call->setAttributes (AttributeList::get (ctx, AttributeSet (),
 	                                         target_attrs.getRetAttrs (),
 	                                         call_attrs));
+
+	/*
+	 * The thunk adapts a convention and does nothing else, so it hands its
+	 * frame to the body. A frame of its own is observable: it stands
+	 * between the caller and the method in the stack trace of a method the
+	 * runtime entered through it.
+	 *
+	 * A hidden return is read back out of a slot of this frame after the
+	 * call, so that shape keeps its frame.
+	 */
+	if (returned == nullptr && frame_stays_out_of_the_call (low))
+		call->setTailCallKind (CallInst::TCK_Tail);
 
 	Value *result = returned != nullptr
 	                        ? b.CreateAlignedLoad (natural->getReturnType (), returned,
