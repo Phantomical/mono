@@ -727,9 +727,20 @@ mono_find_jit_info_ext (MonoDomain *domain, MonoJitTlsData *jit_tls,
 	if (frame->type == FRAME_TYPE_MANAGED && frame->ji && frame->ji->llvm_abi_thunk)
 		frame->type = FRAME_TYPE_TRAMPOLINE;
 
-	gboolean not_i2m = frame->type != FRAME_TYPE_INTERP_TO_MANAGED && frame->type != FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX;
+	/*
+	 * A frame an LMF marker produced unwinds nothing: its stack pointer either
+	 * did not move, or comes from a context saved elsewhere on the stack. The
+	 * removal below reads a chain entry as spent once it sits at or below the
+	 * new stack pointer. After such a frame that test catches live entries as
+	 * well. A debugger invoke hands back the context the invoke started from,
+	 * and the interp exit the debugger trampoline pushed there sits at exactly
+	 * that stack pointer.
+	 */
+	gboolean lmf_marker = frame->type == FRAME_TYPE_INTERP_TO_MANAGED
+	                      || frame->type == FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX
+	                      || frame->type == FRAME_TYPE_DEBUGGER_INVOKE;
 
-	if (not_i2m && *lmf && ((*lmf) != jit_tls->first_lmf) && ((gpointer)MONO_CONTEXT_GET_SP (new_ctx) >= (gpointer)(*lmf))) {
+	if (!lmf_marker && *lmf && ((*lmf) != jit_tls->first_lmf) && ((gpointer)MONO_CONTEXT_GET_SP (new_ctx) >= (gpointer)(*lmf))) {
 		/*
 		 * Remove any unused lmf.
 		 * Mask out the lower bits which might be used to hold additional information.
@@ -1633,10 +1644,18 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 	}
 
 	while (MONO_CONTEXT_GET_SP (&ctx) < jit_tls->end_of_stack) {
-		frame.lmf = lmf;
+		MonoLMF *frame_lmf = lmf;
+
 		res = unwinder_unwind_frame (&unwinder, domain, jit_tls, NULL, &ctx, &new_ctx, NULL, &lmf, get_reg_locations ? new_reg_locations : NULL, &frame);
 		if (!res)
 			return;
+
+		/*
+		 * The chain head this frame's own context goes with, which a caller
+		 * that saves the two together reads. Each unwinder clears the frame
+		 * before it fills one in, so this has to come after the call.
+		 */
+		frame.lmf = frame_lmf;
 
 		if (frame.type == FRAME_TYPE_TRAMPOLINE)
 			goto next;
