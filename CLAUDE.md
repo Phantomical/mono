@@ -140,7 +140,7 @@ for you.
 
 ```bash
 cmake --build build --target check       # fast: unit tests, mini regression, one-offs
-cmake --build build --target check-all   # everything except slow/stress/acceptance
+cmake --build build --target check-all   # everything but slow/stress/acceptance; ask first
 
 ctest --test-dir build -L regression -j"$(nproc)"   # the mini corpora, one test each
 ctest --test-dir build -R test-llvm  -j"$(nproc)"   # the LLVM backend unit tests
@@ -150,9 +150,17 @@ ctest --test-dir build -N                           # list without running
 Labels: `regression`, `llvm`, `runtime`, `gshared`, `sgen`, `interp`, `bcl`,
 `bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`, `acceptance`.
 `ctest --print-labels` is authoritative for the configuration you built. `check` is a
-few hundred tests and seconds. `check-all` is a few thousand and minutes, so it is not
-the target to reach for while iterating. Corpora are built by the regular build, not by
-ctest, so build before you run `ctest` directly.
+few hundred tests and seconds. Corpora are built by the regular build, not by ctest, so
+build before you run `ctest` directly.
+
+**Never run `check-all`, or a whole-tree `ctest` that stands in for it, unless the user
+asks for it in so many words.** It is thousands of tests over both collectors and it
+takes the machine for as long as it runs. Other worktrees on this box run their own
+suites, and two `-j18` runs at once put the load average past 60, which makes both sets
+of results worthless and gives the class-library suites timeouts that read as
+regressions. Reach for `check`, or for the one label that covers what you changed, and
+say what you ran. When a change really does need the wide gate, ask first and let the
+user pick the moment.
 
 The mini regression harness (`--regression`) runs `.exe` corpora built from the in-tree
 `*.cs`, one pass per corpus, with every test body compiled through the LLVM backend like
