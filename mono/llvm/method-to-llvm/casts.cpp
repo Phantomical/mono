@@ -100,6 +100,98 @@ namespace mono {
  *
  *   Verification tracks the type of result as typeTok.
  */
+/**
+ * Whether `mono_class_has_parent ()` is the whole answer for a cast to klass.
+ *
+ * `mono_class_is_assignable_from_general ()` (`mono/metadata/class.c`) ends at
+ * that call, and each branch above it either agrees or governs a shape refused
+ * here. An interface reads the interface bitmap, an array and a delegate have
+ * variance, a marshal-by-ref target goes to
+ * `mono_object_handle_isinst_mbyref ()`, and a pointer, a nullable and a
+ * generic argument each have a rule of their own.
+ *
+ * The caller refuses a context-dependent class as well, because the test
+ * compares against the class and against its depth as constants, and a shared
+ * body knows neither while it is translated.
+ */
+static bool
+subtype_test_applies (MonoClass *klass)
+{
+	MonoType *self = m_class_get_byval_arg (klass);
+
+	if (mono_class_is_interface (klass) || m_class_get_marshalbyref (klass)
+	    || m_class_get_rank (klass) != 0 || m_class_is_valuetype (klass)
+	    || mono_class_is_nullable (klass) || m_class_is_delegate (klass)
+	    || m_class_get_class_kind (klass) == MONO_CLASS_POINTER
+	    || self->type == MONO_TYPE_VAR || self->type == MONO_TYPE_MVAR)
+		return false;
+
+	// The depth reached below indexes the object's supertypes, and the
+	// runtime writes this one once and never changes it.
+	mono_class_setup_supertypes (klass);
+
+	return m_class_get_idepth (klass) > 0;
+}
+
+/**
+ * Emits the inline half of a cast: branches to yes when the object's class has
+ * klass among its supertypes, and to otherwise when this cannot tell.
+ *
+ * Goes on emitting into no block. The caller owns both successors.
+ */
+void
+MethodLLVMEmitter::emit_subtype_test (MonoIrBuilder &builder, MonoClass *klass,
+                                      llvm::Value *obj, llvm::Value *target,
+                                      llvm::BasicBlock *yes,
+                                      llvm::BasicBlock *otherwise)
+{
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	uint16_t depth = m_class_get_idepth (klass);
+
+	llvm::Value *vtable = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), obj,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *its_class = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "obj_class");
+
+	/*
+	 * The supertypes array holds one entry for each level down to the class
+	 * itself, so a class shallower than klass cannot hold it and indexing at
+	 * klass's depth would read past the end.
+	 */
+	llvm::Value *its_depth = builder.CreateAlignedLoad (
+		builder.getInt16Ty (),
+		builder.CreateGEP (builder.getInt8Ty (), its_class,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
+		llvm::Align (2), "obj_idepth");
+
+	llvm::BasicBlock *deep_enough =
+		llvm::BasicBlock::Create (context (), "cast_deep_enough", function);
+
+	builder.CreateCondBr (
+		builder.CreateICmpUGE (its_depth, builder.getInt16 (depth)),
+		deep_enough, otherwise);
+
+	builder.SetInsertPoint (deep_enough);
+
+	llvm::Value *supertypes = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), its_class,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, supertypes))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "supertypes");
+	llvm::Value *at_depth = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (ptr, supertypes, builder.getInt32 (depth - 1)),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "supertype");
+
+	builder.CreateCondBr (builder.CreateICmpEQ (at_depth, target), yes, otherwise);
+}
+
 llvm::Error
 MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw_on_fail)
 {
@@ -153,9 +245,43 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	llvm::BasicBlock *miss = llvm::BasicBlock::Create (context (), "cast_miss", function);
 	llvm::BasicBlock *done = llvm::BasicBlock::Create (context (), "cast_done", function);
 
-	// Both forms answer null for a null reference and neither one reads the
-	// cache for it. The probe loads the vtable, so this test comes first.
-	builder.CreateCondBr (builder.CreateIsNull (obj.value), done, probe);
+	/*
+	 * In front of the cache, the test the runtime itself ends at. For a target
+	 * class that is not an interface and not marshal-by-ref,
+	 * mono_class_is_assignable_from_general () answers
+	 * `mono_class_has_parent (object's class, target)`, which is one bounds
+	 * check and one comparison against a constant. It answers for every class
+	 * rather than for the last one, so it needs no slot and it never misses.
+	 *
+	 * It is one-sided. Where it says yes the runtime says yes, and where it
+	 * says no the answer can still be yes through a path this does not model,
+	 * so a no falls through to the cache and then to the wrapper.
+	 */
+	llvm::BasicBlock *exact = nullptr;
+	llvm::BasicBlock *first = probe;
+
+	if (!depends_on_context (klass) && subtype_test_applies (klass)) {
+		exact = llvm::BasicBlock::Create (context (), "cast_exact", function);
+		first = llvm::BasicBlock::Create (context (), "cast_subtype", function);
+
+		builder.SetInsertPoint (first);
+
+		llvm::Expected<llvm::Value *> target =
+			class_operand (builder, klass, "mono_class_");
+
+		if (!target)
+			return target.takeError ();
+
+		emit_subtype_test (builder, klass, obj.value, *target, exact, probe);
+
+		builder.SetInsertPoint (exact);
+		builder.CreateBr (done);
+	}
+
+	// Both forms answer null for a null reference, and neither one reads the
+	// vtable for it. The tests below do, so this one comes first.
+	builder.SetInsertPoint (from_null);
+	builder.CreateCondBr (builder.CreateIsNull (obj.value), done, first);
 
 	builder.SetInsertPoint (probe);
 
@@ -228,11 +354,15 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	builder.CreateBr (done);
 	builder.SetInsertPoint (done);
 
-	llvm::PHINode *result = builder.CreatePHI (ptr, 3, "cast_result");
+	llvm::PHINode *result = builder.CreatePHI (ptr, 4, "cast_result");
 
 	result->addIncoming (null, from_null);
 	result->addIncoming (answer, hit);
 	result->addIncoming (slow, from_miss);
+
+	// The subtype test answers with the reference itself, for both forms.
+	if (exact != nullptr)
+		result->addIncoming (obj.value, exact);
 
 	// A value-type token means the boxed form. What comes back is still an
 	// object reference, not the token's own type.

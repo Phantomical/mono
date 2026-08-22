@@ -1481,6 +1481,39 @@ TEST_F (TranslatorTest, IsinstReadsTheRefusalBitFromItsCache)
 	EXPECT_EQ (t.count ("mono_object_isinst_with_cache"), 1u) << t.text ();
 }
 
+/*
+ * A cast to a class ends at mono_class_has_parent () in the runtime, so the
+ * generated code makes that test itself. The object's class must reach at
+ * least as deep as the target, and the supertype it holds at the target's
+ * depth must be the target. Where that holds the answer needs neither the
+ * cache nor the wrapper.
+ */
+TEST_F (TranslatorTest, ACastToAClassReadsTheSupertypesInline)
+{
+	const Translation &t = translate ("casts", "Casts:CastString");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("%obj_idepth = load"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("icmp uge i16"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("%supertype = load"), 1u) << t.text ();
+	// The wrapper stays, for the answers this test does not give.
+	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
+}
+
+/*
+ * An interface is not in the supertypes array. The runtime reads the interface
+ * bitmap for one, which is a test of its own, so the cast keeps the cache and
+ * the wrapper and gains nothing in front of them.
+ */
+TEST_F (TranslatorTest, ACastToAnInterfaceKeepsTheHelper)
+{
+	const Translation &t = translate ("casts", "Casts:CastIface");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("obj_idepth"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
+}
+
 // Neither form reads the cache for a null reference, because the fast path
 // loads the object's vtable and both helpers answer null without one.
 TEST_F (TranslatorTest, ACastTestsForNullBeforeItReadsAVtable)
