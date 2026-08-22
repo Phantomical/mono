@@ -333,6 +333,13 @@ private:
 	std::vector<Entry> locals;
 	std::vector<StackValue> stack;
 
+	/// The objects newobj allocated in this body, so their class is exactly
+	/// the one their stack type names.
+	///
+	/// A value that reached its use through a spill is not in here, which
+	/// costs a devirtualization and never correctness.
+	llvm::DenseSet<llvm::Value *> allocated_here;
+
 	/// This frame's LMF and where the thread's chain head lives.
 	///
 	/// The method keeps these only when it is a save_lmf wrapper. Both are
@@ -792,6 +799,8 @@ private:
 	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Expected<llvm::Constant *> code_address_symbol (MonoMethod *target);
 	MonoMethod *synchronized_target (MonoMethod *target);
+	MonoClass *exact_receiver_class (const StackValue &receiver);
+	MonoMethod *exact_virtual_target (const StackValue &receiver, MonoMethod *callee);
 	bool is_own_this (llvm::Value *value);
 	llvm::CallInst::TailCallKind should_tail_call (MonoMethodSignature *callee_sig,
 	                                               MonoMethod *callee_method,

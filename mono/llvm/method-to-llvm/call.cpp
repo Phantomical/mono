@@ -419,6 +419,124 @@ MethodLLVMEmitter::synchronized_target (MonoMethod *target)
 	return mono_marshal_get_synchronized_wrapper (target);
 }
 
+/// The class the receiver has at run time, or null where the IL leaves it open.
+///
+/// Two shapes settle it, and both are exact. A sealed class has no subclass for
+/// the receiver to be, and a newobj in this body names the class it allocated.
+/// No later assembly load adds a case to either, so a caller needs no guard
+/// around what this answers.
+MonoClass *
+MethodLLVMEmitter::exact_receiver_class (const StackValue &receiver)
+{
+	// A type parameter names a class the instantiation supplies, and a shared
+	// body reads its own classes out of the context. Neither is a class this
+	// compile can resolve a method against.
+	if (stack_type (receiver.type) != ObjectRef
+	    || receiver.type->type == MONO_TYPE_VAR || receiver.type->type == MONO_TYPE_MVAR)
+		return nullptr;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (receiver.type);
+
+	if (klass == nullptr || depends_on_context (klass))
+		return nullptr;
+
+	// Array covariance puts a class here that the static type does not name: a
+	// variable of type object[] can hold a string[], and neither array class
+	// derives from the other. The runtime marks both sealed, so the test below
+	// says yes to a proof that does not hold.
+	if (m_class_get_rank (klass) != 0)
+		return nullptr;
+
+	// A transparent proxy stands in for a class of its own, so neither shape
+	// below settles a remotable receiver. A sealed class still has a proxy to
+	// be, and mono_object_new_specific_checked () answers a newobj with one
+	// whenever the vtable is marked remotely activated. Activation writes that
+	// mark while the program runs, so the class does not carry it.
+	if (m_class_get_marshalbyref (klass) || mono_class_is_com_object (klass))
+		return nullptr;
+
+	if (!mono_class_is_sealed (klass) && allocated_here.count (receiver.value) == 0)
+		return nullptr;
+
+	return klass;
+}
+
+/// The implementation a virtual site enters, or null where the site must keep
+/// dispatching.
+///
+/// The answer is what the runtime finds in the receiver's vtable, so a caller
+/// can name it directly. Everything that cannot be settled at translate time
+/// comes back null, which leaves the site as it was.
+MonoMethod *
+MethodLLVMEmitter::exact_virtual_target (const StackValue &receiver, MonoMethod *callee)
+{
+	MonoClass *klass = exact_receiver_class (receiver);
+
+	if (klass == nullptr)
+		return nullptr;
+
+	// mono_class_get_virtual_method () indexes the vtable without asking
+	// whether it was built, so a class that cannot lay one out reaches
+	// vtable[slot] with vtable null. Leaving the dispatch standing puts the
+	// type load back where the runtime raises it.
+	mono_class_setup_vtable (klass);
+	if (mono_class_has_failure (klass) || m_class_get_vtable (klass) == nullptr)
+		return nullptr;
+
+	// The slot indexes that vtable, and laying out the declaring class is what
+	// fills it in. A method still holding -1 is one the resolver asserts on.
+	mono_class_setup_vtable (callee->klass);
+	if (callee->slot == -1 && !callee->is_inflated)
+		return nullptr;
+
+	// An interface method indexes the vtable from the receiver's offset for
+	// that interface, and the resolver asserts that the offset is there. A
+	// class method indexes it by the slot alone, which is inside the receiver's
+	// vtable only while the receiver derives from the class that declares the
+	// method. Verifiable IL gives both, so a site that gives neither keeps its
+	// dispatch rather than reading past the array.
+	if (mono_class_is_interface (callee->klass)) {
+		gboolean variance_used = FALSE;
+
+		if (mono_class_interface_offset_with_variance (klass, callee->klass,
+		                                               &variance_used) <= 0)
+			return nullptr;
+	} else if (!mono_class_is_subclass_of_internal (klass, callee->klass, FALSE)) {
+		return nullptr;
+	}
+
+	ERROR_DECL (error);
+	MonoMethod *impl = mono_class_get_virtual_method (klass, callee, FALSE, error);
+
+	if (!is_ok (error)) {
+		mono_error_cleanup (error);
+		return nullptr;
+	}
+
+	if (impl == nullptr)
+		return nullptr;
+
+	// An abstract implementation has no body to enter. A sealed class that
+	// leaves one unimplemented has no instances either, so the dispatch this
+	// leaves standing is what raises.
+	if (impl->flags & METHOD_ATTRIBUTE_ABSTRACT)
+		return nullptr;
+
+	// The arguments on the stack were pushed against the callee the IL named,
+	// and the site calls the implementation through its own prototype. An
+	// override that disagrees about the argument list is one the two cannot
+	// both describe.
+	MonoMethodSignature *impl_sig = mono_method_signature_internal (impl);
+	MonoMethodSignature *sig = mono_method_signature_internal (callee);
+
+	if (impl_sig == nullptr || sig == nullptr
+	    || impl_sig->param_count != sig->param_count
+	    || impl_sig->hasthis != sig->hasthis)
+		return nullptr;
+
+	return impl;
+}
+
 /// Whether value is this method's own `this`, read straight out of its slot.
 ///
 /// A caller uses this to skip a transparent-proxy check. A body only ever runs
@@ -1277,12 +1395,36 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	)
 		return emit_get_type (builder, constrained != nullptr && !box_receiver);
 
+	// A receiver whose class the IL settles takes the implementation of that
+	// class, which puts the site in front of both inliners.
+	//
+	// A vararg site is left out because sig is the call site's signature there,
+	// and the implementation's own says nothing about the variable part. A
+	// delegate's Invoke is left out because the runtime fills in invoke_impl
+	// rather than a body, so the site reads the entry off the receiver whatever
+	// the class settles.
+	bool exact_receiver = false;
+
+	if (is_virtual && !direct_this && !box_receiver && !vararg
+	    && !dispatches_through_invoke_impl (callee_method)
+	    && stack.size () > sig->param_count) {
+		MonoMethod *impl = exact_virtual_target (
+			stack[stack.size () - 1 - sig->param_count], callee_method);
+
+		if (impl != nullptr) {
+			callee_method = impl;
+			sig = mono_method_signature_internal (callee_method);
+			exact_receiver = true;
+		}
+	}
+
 	// Whether the callee is settled here rather than looked up off the
 	// receiver. Everything below that names a different method than the IL did
 	// depends on it: a site that still dispatches gets whatever the runtime
 	// put in the slot.
 	bool devirtualized = !is_virtual
 	                     || direct_this
+	                     || exact_receiver
 	                     || !(callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 	                     || (callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 
@@ -1405,8 +1547,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		// Only a method that can still be overridden needs a lookup. A final
 		// or non-virtual one is already the answer, and a callvirt on it is a
 		// null check with a direct call behind it, as is one a constrained.
-		// prefix already resolved to the value type's own implementation.
-		bool overridable = !direct_this && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
+		// prefix already resolved to the value type's own implementation, and
+		// one whose receiver has a class the IL settled.
+		bool overridable = !direct_this && !exact_receiver
+		                   && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 		                   && !(callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 
 		bool is_interface = mono_class_is_interface (callee_method->klass);

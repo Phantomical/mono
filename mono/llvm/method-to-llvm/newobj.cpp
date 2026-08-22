@@ -284,12 +284,16 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	});
 	pop_stack (count);
 
-	if (temp == nullptr)
+	if (temp == nullptr) {
+		// The object has the class this opcode named, so a virtual call on it
+		// while it is still this value needs no dispatch.
+		allocated_here.insert (created);
 		push_stack (created, pushed);
-	else if (held_in_memory (pushed))
+	} else if (held_in_memory (pushed)) {
 		push_stack (temp, pushed);
-	else
+	} else {
 		push_stack (builder.CreateAlignedLoad (slot, temp, align), pushed);
+	}
 
 	return llvm::Error::success ();
 }
