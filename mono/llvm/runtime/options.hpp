@@ -26,13 +26,6 @@ namespace mono {
 /// runtime asking for it. Only this flag reports that it happened.
 bool is_jit_trace_enabled ();
 
-/// Whether MONO_LLVM_JIT_DUMP names this method: a substring of its full name
-/// selects it for having its IL and translated IR printed to stderr.
-bool dumping (const char *name);
-
-/// Print a method's IL to stderr.
-void dump_il (MonoMethod *method, MonoMethodHeader *header);
-
 /// Whether MONO_LLVM_JIT_RECOMPILE names this method: a substring of its full
 /// name selects it. A selected method is translated afresh on every compile
 /// request rather than answered from the cache, which gives it more than one

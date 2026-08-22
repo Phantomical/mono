@@ -26,6 +26,7 @@
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-memory-model.h>
 
+#include <mono/mini/jit-dump.hpp>
 #include <mono/mini/mini.h>
 #include <mono/mini/mini-runtime.h>
 
@@ -3612,7 +3613,30 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 		g_print ("Locals size %d, stack size: %d\n", td->total_locals_size, td->max_stack_size);
 		g_print ("Calculated stack height: %d, stated height: %d\n", td->max_stack_height,
 		         header->max_stack);
-		dump_interp_code (td->new_code, td->new_code_end);
+		dump_interp_code (stdout, td->new_code, td->new_code_end);
+	}
+
+	if (any_dump_point_enabled ()) {
+		std::string dumped = dump_name (method);
+
+		if (dumping (DumpPoint::il, dumped.c_str ())) {
+			DumpDestination destination (DumpPoint::il, dumped.c_str ());
+
+			if (destination.stream () != nullptr)
+				dump_il (destination.stream (), method, header);
+		}
+
+		if (dumping (DumpPoint::mint, dumped.c_str ())) {
+			DumpDestination destination (DumpPoint::mint, dumped.c_str ());
+
+			if (destination.stream () != nullptr) {
+				fprintf (destination.stream (),
+				         "// %s\n// locals %d, stack %d\n", dumped.c_str (),
+				         td->total_locals_size, td->max_stack_size);
+				dump_interp_code (destination.stream (), td->new_code,
+				                  td->new_code_end);
+			}
+		}
 	}
 
 	/* Check if we use excessive stack space */
@@ -3789,30 +3813,30 @@ mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig)
 }
 
 void
-mono_interp_dis_mintop (const guint16 *ip, const guint16 *start)
+mono_interp_dis_mintop (FILE *out, const guint16 *ip, const guint16 *start)
 {
 	int opcode = *ip;
 	int ins_offset = ip - start;
 
-	g_print ("IR_%04x: %-14s", ins_offset, opname (opcode));
+	fprintf (out, "IR_%04x: %-14s", ins_offset, opname (opcode));
 	ip++;
 
 	if (num_dregs (opcode) == MINT_CALL_ARGS)
-		g_print (" [call_args %d <-", *ip++);
+		fprintf (out, " [call_args %d <-", *ip++);
 	else if (num_dregs (opcode) > 0)
-		g_print (" [%d <-", *ip++);
+		fprintf (out, " [%d <-", *ip++);
 	else
-		g_print (" [nil <-");
+		fprintf (out, " [nil <-");
 
 	if (num_sregs (opcode) > 0) {
 		for (int i = 0; i < num_sregs (opcode); i++)
-			g_print (" %d", *ip++);
-		g_print ("],");
+			fprintf (out, " %d", *ip++);
+		fprintf (out, "],");
 	} else {
-		g_print (" nil],");
+		fprintf (out, " nil],");
 	}
 	char *ins = dump_interp_ins_data (NULL, ins_offset, ip, opcode);
-	g_print ("%s\n", ins);
+	fprintf (out, "%s\n", ins);
 	g_free (ins);
 }
 
@@ -3831,7 +3855,8 @@ mono_interp_print_code (InterpMethod *imethod)
 	g_free (name);
 
 	start = (guint8 *) jinfo->code_start;
-	dump_interp_code ((const guint16 *) start, (const guint16 *) (start + jinfo->code_size));
+	dump_interp_code (stdout, (const guint16 *) start,
+	                  (const guint16 *) (start + jinfo->code_size));
 }
 
 /* For debug use */

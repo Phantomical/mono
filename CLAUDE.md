@@ -221,30 +221,56 @@ it to pass more than one. The AOT compiler refuses immediately.
 Each variable below is declared in `runtime/options.cpp` unless named otherwise, and
 each is documented at its declaration.
 
-Tracing and dumping:
+Tracing:
 - `MONO_LLVM_JIT_TRACE=1` — print every method the backend translates, every worker
   thread it starts and every body an inliner folds in. A method reached as a callee is
   compiled without the runtime ever being asked for it, so no other output says it
   happened.
-- `MONO_LLVM_JIT_DUMP=<substr>` — dump the IL and the translated IR of methods whose
-  full name contains the substring.
-- `MONO_LLVM_JIT_ASM=<substr>` (`compiler.cpp`) — print the assembly those methods
-  compile to, side-table sections included, which is the half no offline `llc` run
-  reproduces. Costs a second codegen over a clone of the module, so the published code
-  is untouched. The dump is Intel syntax, which `jit.cpp` asks for as a default.
-  `--llvm-opt=-x86-asm-syntax=att` gets AT&T back.
-- `MONO_LLVM_JIT_ASM_DIR=<dir>` (`compiler.cpp`) — send each dump to `<dir>/<method>.s`
-  instead of to stderr. On its own it takes every method that reaches codegen, which is
-  what to reach for under a player whose stderr is a shared log. Loading KSP to its main
-  menu writes ~9300 files and 194M.
-- `MONO_LLVM_JIT_ASM_TIER=<1|2>` (`compiler.cpp`) — keep only one tier's dumps, which
-  separates the body a method promoted with from the one tier 2 wrote for it. The
-  thrower, the dispatcher and the entry thunks count as tier 1.
 - `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to gdb through its
   JIT interface, so `info functions` names JIT'd methods and a `bt` from runtime C code
   unwinds managed frames with names instead of `??`. The module carries no `.debug_*`
   sections, so there is no source-level stepping. Off by default, because it keeps a
   copy of every object alive for as long as the method.
+
+Dumping. Both engines print through `mono/mini/jit-dump.hpp`, so one variable selects
+the stages and one filter selects the methods:
+- `MONO_JIT_DUMP=<points>` — the stages to print, separated by `;` or `,`. `all` names
+  every one. A name nothing matches is reported on stderr with the list of names. The
+  points are `il`, `mint`, `unopt-ir`, `tier1-ir`, `tier2-ir`, `tier1-asm` and
+  `tier2-asm`.
+- `MONO_JIT_DUMP_FILTER=<substr>` — dump only the methods whose name contains this. Every
+  point matches it against the same string, `Class:Method (argtypes)@0xADDR`, so a filter
+  that selects a method at one point selects it at all of them. Unset takes every method.
+- `MONO_JIT_DUMP_DIR=<dir>` — write each dump to `<dir>/<point>/<method>.<ext>` instead
+  of to stdout, which is what to reach for under a player whose stdout is a shared log.
+  A name already taken gets a counted suffix, so a method compiled more than once keeps
+  each dump.
+
+What each point prints:
+- `il` — the method's CIL, inside the class and signature it is declared with. It prints
+  once for each method, from whichever engine reached it first.
+- `mint` — the bytecode the interpreter runs, after the transform has compacted it.
+  `MONO_VERBOSE_METHOD` still prints the same dump and the transform's tracing with it.
+- `unopt-ir` — the IR the translator wrote, before any pipeline. A body the pre-pass
+  folded in is still a function of its own here, so it prints after the caller.
+- `tier1-ir` / `tier2-ir` — that IR after its tier's pipeline.
+- `tier1-asm` / `tier2-asm` — the code the tier emits, side-table sections included,
+  which is the half no offline `llc` run reproduces. Intel syntax, which `jit.cpp` asks
+  for as a default; `--llvm-opt=-x86-asm-syntax=att` gets AT&T back. It costs a second
+  codegen over a clone, so the published code is untouched.
+
+A tier-1 promotion compiles up to `MONO_LLVM_JIT_BATCH` methods in one module, and the
+IR and assembly points still print one method for each dump: the IR point prints that
+method's function, and the assembly point drops the other bodies from the clone it
+codegens. So a method that promoted in the middle of a batch has a dump of its own, and
+naming it in the filter finds it. Reading a whole batch therefore costs one codegen for
+each method in it, which is what bounds an unfiltered `tier1-asm` sweep.
+
+`--llvm-opt=-print-after=<pass>` and `-print-after-all` are **inert**, and print nothing
+rather than failing. They need `StandardInstrumentations::registerCallbacks ()`, and
+`ThreadPipelines` (`jit.cpp`) builds the `PassInstrumentationCallbacks` both tiers share
+without it. `-debug-only=` is unavailable as well, because the installed LLVM defines
+`NDEBUG`.
 
 Measurement:
 - `MONO_LLVM_JIT_VERIFY=<0|off|each|all|other>` (`jit.cpp`) — how much IR the verifier

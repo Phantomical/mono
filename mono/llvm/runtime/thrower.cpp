@@ -3,6 +3,7 @@
 #include "thrower.hpp"
 
 #include "debugging/perf/dump-method.hpp"
+#include "dump.hpp"
 #include "jinfo.hpp"
 #include "jit.hpp"
 #include "naming.hpp"
@@ -73,10 +74,27 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 	if (Error err = bind_symbols (*module))
 		return std::move (err);
 
-	if (dumping (name.c_str ()))
-		module->print (llvm::errs (), nullptr);
+	std::string dumped = any_dump_point_enabled () ? dump_name (method)
+	                                               : std::string ();
+
+	if (!dumped.empty ())
+		set_dump_name (*function, dumped);
+
+	auto dump_thrower = [&] (DumpPoint point) {
+		if (!dumping (point, dumped.c_str ()))
+			return;
+
+		cantFail (with_dump_stream (point, dumped, [&] (raw_ostream &out) {
+			function->print (out);
+			return Error::success ();
+		}));
+	};
+
+	dump_thrower (DumpPoint::unopt_ir);
 
 	MonoJit::optimize (*module, JitTier::tier1);
+
+	dump_thrower (DumpPoint::tier1_ir);
 
 	Expected<CompiledMethod> compiled =
 		jit.compile (ThreadSafeModule (std::move (module),

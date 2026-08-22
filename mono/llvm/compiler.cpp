@@ -26,6 +26,7 @@
 
 #include "compiler.hpp"
 
+#include "dump.hpp"
 #include "il-line-table.hpp"
 #include "jit.hpp"
 #include "sidetables.hpp"
@@ -1017,124 +1018,9 @@ emit_assembly_text (TargetMachine &tm, Module &m, raw_pwrite_stream &out)
 	return Error::success ();
 }
 
-/// The directory MONO_LLVM_JIT_ASM_DIR names, or an empty string if it names
-/// none. A dump goes to one file for each method there instead of to stderr.
-StringRef
-asm_dump_directory ()
-{
-	static const char *dir = std::getenv ("MONO_LLVM_JIT_ASM_DIR");
-
-	return dir != nullptr ? StringRef (dir) : StringRef ();
-}
-
-/// The tier a dump is narrowed to, or zero for every tier.
-/// MONO_LLVM_JIT_ASM_TIER names it as 1 or 2, and anything else means zero.
-unsigned
-asm_dump_tier ()
-{
-	static const unsigned tier = [] {
-		const char *setting = std::getenv ("MONO_LLVM_JIT_ASM_TIER");
-		unsigned value = 0;
-
-		if (setting != nullptr && !StringRef (setting).getAsInteger (10, value)
-		    && (value == 1 || value == 2))
-			return value;
-		return 0u;
-	}();
-
-	return tier;
-}
-
-/// Whether to dump this module, whose identifier is the full name of the one
-/// method it holds, compiled at the given tier. MONO_LLVM_JIT_ASM keeps the
-/// methods whose name contains it, and MONO_LLVM_JIT_ASM_TIER keeps one tier.
-/// A directory with no filter beside it takes every method that reaches codegen.
-bool
-dumping_asm (StringRef module_name, unsigned tier)
-{
-	static const char *filter = std::getenv ("MONO_LLVM_JIT_ASM");
-
-	if (asm_dump_tier () != 0 && asm_dump_tier () != tier)
-		return false;
-	if (filter == nullptr)
-		return !asm_dump_directory ().empty ();
-
-	return module_name.contains (filter);
-}
-
 /**
- * A method name holds characters a path cannot carry - `/` in a generic
- * argument, and the spaces of a signature - so each run of them becomes one
- * underscore. Long names are cut to leave room for the extension and for the
- * uniquing suffix, since a file name has 255 bytes on the file systems this
- * runs on.
- */
-std::string
-asm_file_stem (StringRef module_name)
-{
-	constexpr size_t max_stem = 200;
-	std::string stem;
-	bool last_was_separator = false;
-
-	for (char c : module_name.take_front (max_stem)) {
-		if (isalnum (static_cast<unsigned char> (c)) || c == '.' || c == '-') {
-			stem.push_back (c);
-			last_was_separator = false;
-		} else if (!last_was_separator) {
-			stem.push_back ('_');
-			last_was_separator = true;
-		}
-	}
-
-	return stem.empty () ? std::string ("method") : stem;
-}
-
-/*
- * Open the file a method's assembly goes to, under the directory
- * MONO_LLVM_JIT_ASM_DIR names.
- *
- * Two methods can want one name: a generic instantiation differs from another
- * only in characters the stem drops, and MONO_LLVM_JIT_RECOMPILE gives one
- * method several compiles. So this counts up a suffix until a name is free.
- * CD_CreateNew is what makes that safe while several compile threads run - the
- * loser of a race gets EEXIST and takes the next number, rather than the two
- * writing over one file.
- */
-Expected<std::unique_ptr<raw_fd_ostream>>
-open_asm_file (StringRef module_name)
-{
-	StringRef dir = asm_dump_directory ();
-	std::string stem = asm_file_stem (module_name);
-
-	if (std::error_code ec = sys::fs::create_directories (dir))
-		return createStringError (ec, "cannot create %s", dir.str ().c_str ());
-
-	for (unsigned attempt = 0; attempt < 10000; attempt++) {
-		SmallString<256> path (dir);
-		std::string name = attempt == 0
-		                 ? stem + ".s"
-		                 : stem + "." + std::to_string (attempt) + ".s";
-		int fd = -1;
-
-		sys::path::append (path, name);
-
-		std::error_code ec = sys::fs::openFileForWrite (
-			path, fd, sys::fs::CD_CreateNew, sys::fs::OF_Text);
-		if (!ec)
-			return std::make_unique<raw_fd_ostream> (fd, /*shouldClose=*/true);
-		if (ec != std::errc::file_exists)
-			return createStringError (ec, "cannot write %s", path.c_str ());
-	}
-
-	return createStringError (std::make_error_code (std::errc::file_exists),
-	                          "%s already holds 10000 files named for %s",
-	                          dir.str ().c_str (), stem.c_str ());
-}
-
-/*
- * Write the assembly M compiles to - side-table sections included, which is the
- * half no offline llc run can reproduce. It goes to a file of its own under
- * MONO_LLVM_JIT_ASM_DIR, or to stderr when that variable names no directory.
+ * Writes the assembly one method in m compiles to - side-table sections
+ * included, which is the half no offline llc run can reproduce.
  *
  * Codegen consumes the module it is given, and the MCContext, the MMI and the
  * streamer are entangled with the single run they were built for, so this
@@ -1142,25 +1028,27 @@ open_asm_file (StringRef module_name)
  * separate run also means it cannot change the code that gets published: a
  * bug in the printout stays a bug in the printout. The side channel it fills
  * is discarded for the same reason.
+ *
+ * A batch shares one module between its members, so the clone keeps the wanted
+ * method's body and drops the others. A body dropped that way becomes a
+ * declaration, which is what a call leaving the module compiles to in any case,
+ * and the dump then holds one method's code and one method's side tables.
  */
 Error
-dump_assembly (TargetMachine &tm, const Module &m)
+dump_method_assembly (TargetMachine &tm, const Module &m, DumpPoint point,
+                      StringRef entry, StringRef name)
 {
 	std::unique_ptr<Module> copy = CloneModule (m);
-	std::unique_ptr<raw_fd_ostream> file;
-	raw_pwrite_stream *out = &errs ();
 
-	if (!asm_dump_directory ().empty ()) {
-		Expected<std::unique_ptr<raw_fd_ostream>> opened
-			= open_asm_file (m.getModuleIdentifier ());
-		if (!opened)
-			return opened.takeError ();
-		file = std::move (*opened);
-		out = file.get ();
-	}
+	for (Function &f : *copy)
+		if (!f.isDeclaration () && f.getName () != entry)
+			f.deleteBody ();
 
-	*out << "*** assembly for " << m.getModuleIdentifier () << " ***\n";
-	return emit_assembly_text (tm, *copy, *out);
+	return with_dump_stream (point, name, [&] (raw_pwrite_stream &out) -> Error {
+		out << "*** assembly for " << name << " ***\n";
+
+		return emit_assembly_text (tm, *copy, out);
+	});
 }
 
 /// How a compile gets its codegen pipeline. MONO_LLVM_JIT_CODEGEN picks.
@@ -1245,10 +1133,20 @@ MethodObjectCompiler::operator() (Module &m)
 	const bool tier2 = m.getModuleFlag ("mono.tier2") != nullptr;
 	TargetMachine &tm
 		= tier2 ? tier2_target_machine () : host_target_machine ();
+	const DumpPoint point = tier2 ? DumpPoint::tier2_asm : DumpPoint::tier1_asm;
 
-	if (dumping_asm (m.getName (), tier2 ? 2 : 1))
-		if (Error err = dump_assembly (tm, m))
-			return std::move (err);
+	if (dump_point_enabled (point))
+		for (const Function &f : m) {
+			if (!is_published_body (f))
+				continue;
+
+			std::string name = dump_name_of (f);
+
+			if (dumping (point, name.c_str ()))
+				if (Error err = dump_method_assembly (tm, m, point,
+				                                      f.getName (), name))
+					return std::move (err);
+		}
 
 	if (Error err = emit_method_object (tm, m, buffer, side_channel))
 		return std::move (err);

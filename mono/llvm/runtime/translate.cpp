@@ -4,6 +4,7 @@
 
 #include "arch/arch.hpp"
 #include "debugging/perf/dump-method.hpp"
+#include "dump.hpp"
 #include "externals.hpp"
 #include "jinfo.hpp"
 #include "method-to-llvm.hpp"
@@ -15,7 +16,10 @@
 #include "timing.hpp"
 #include "trivial-inlines.hpp"
 
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/InstIterator.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -46,6 +50,56 @@ static Expected<Compiled> publish_body (const TranslationTarget &target, MonoMet
                                         MonoLLVMBreakpointSwitch *bp_switch,
                                         const SeqPointGraph &seq_points,
                                         MonoJitInfo **published);
+
+/// Which of the IR points a compile at this tier prints its optimized module at.
+static DumpPoint
+optimized_ir_point (JitTier tier)
+{
+	return tier == JitTier::tier2 ? DumpPoint::tier2_ir : DumpPoint::tier1_ir;
+}
+
+/**
+ * Prints one method's IR, when this point asked for this method.
+ *
+ * A batch shares one module between its members, so the dump is the method's
+ * own function and a file named for a method holds that method. Before the
+ * pipeline runs, the bodies the pre-pass folded in are still functions of their
+ * own, so a direct call to one prints after the caller rather than being lost.
+ */
+static void
+dump_ir (DumpPoint point, const Module &module, StringRef entry, StringRef name)
+{
+	if (!dumping (point, name.str ().c_str ()))
+		return;
+
+	const Function *body = module.getFunction (entry);
+
+	// A pipeline can replace a function, so this looks the entry up again
+	// rather than holding the pointer translation returned.
+	if (body == nullptr)
+		return;
+
+	cantFail (with_dump_stream (point, name, [&] (raw_ostream &out) {
+		body->print (out);
+
+		SmallPtrSet<const Function *, 8> printed;
+
+		for (const Instruction &instruction : instructions (body)) {
+			const auto *call = dyn_cast<CallBase> (&instruction);
+			const Function *callee = call != nullptr ? call->getCalledFunction ()
+			                                         : nullptr;
+
+			if (callee == nullptr || callee->isDeclaration ()
+			    || !callee->hasLocalLinkage () || !printed.insert (callee).second)
+				continue;
+
+			out << '\n';
+			callee->print (out);
+		}
+
+		return Error::success ();
+	}));
+}
 
 DomainScope::DomainScope (MonoDomain *domain)
     : entered_ (mono_domain_get ()), wanted_ (domain)
@@ -191,9 +245,21 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return target.recover (std::move (err));
 
 	std::string entry = (*function)->getName ().str ();
+	std::string dumped = any_dump_point_enabled () ? dump_name (method)
+	                                               : std::string ();
 
-	if (dumping (entry.c_str ()))
-		dump_il (method, cfg->get ()->header);
+	if (!dumped.empty ())
+		set_dump_name (**function, dumped);
+
+	// A method that starts interpreted had its IL printed there, and printing it
+	// again here says nothing new. This leaves one dump for each method, from
+	// whichever engine reached it first.
+	if (!runs_at_tier0 (method) && dumping (DumpPoint::il, dumped.c_str ())) {
+		DumpDestination destination (DumpPoint::il, dumped.c_str ());
+
+		if (destination.stream () != nullptr)
+			dump_il (destination.stream (), method, cfg->get ()->header);
+	}
 
 	/*
 	 * Laying out a class to create its vtable is the other place metadata gets
@@ -212,8 +278,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (resolved)
 		return target.recover (std::move (resolved));
 
-	if (dumping (entry.c_str ()))
-		module->print (llvm::errs (), nullptr);
+	dump_ir (DumpPoint::unopt_ir, *module, entry, dumped);
 
 	/*
 	 * The cost model materializes on demand, from inside the pipeline and so
@@ -231,6 +296,8 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	if (Error err = inline_copies_stripped (*module))
 		return std::move (err);
+
+	dump_ir (optimized_ir_point (target.tier), *module, entry, dumped);
 
 	Expected<CompiledMethod> compiled = [&] {
 		timing::Scope timed (timing::Phase::orc);
@@ -357,6 +424,8 @@ struct BatchMember {
 	std::unique_ptr<MinimalCompile> cfg;
 	llvm::Function *body = nullptr;
 	std::string entry;
+	/// What a dump of this member is filed under, empty when none is asked for.
+	std::string dumped;
 	std::vector<ExternalSymbol> externals;
 	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
 	SeqPointGraph seq_points;
@@ -502,9 +571,24 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 
 	for (auto &member : members) {
 		member->entry = member->body->getName ().str ();
+		member->dumped = any_dump_point_enabled ()
+		               ? dump_name (member->method)
+		               : std::string ();
 
-		if (dumping (member->entry.c_str ()))
-			dump_il (member->method, member->cfg->get ()->header);
+		if (!member->dumped.empty ())
+			set_dump_name (*member->body, member->dumped);
+
+		/* One dump for each method: see the single-method path. */
+		if (!runs_at_tier0 (member->method)
+		    && dumping (DumpPoint::il, member->dumped.c_str ())) {
+			DumpDestination destination (DumpPoint::il, member->dumped.c_str ());
+
+			if (destination.stream () != nullptr)
+				dump_il (destination.stream (), member->method,
+				         member->cfg->get ()->header);
+		}
+
+		dump_ir (DumpPoint::unopt_ir, *module, member->entry, member->dumped);
 
 		Error resolved = [&] {
 			timing::Scope timed (timing::Phase::resolve);
@@ -528,16 +612,12 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 	}
 
 	std::vector<StringRef> entries;
-	bool dump = false;
 
 	for (auto &member : members) {
-		dump = dump || dumping (member->entry.c_str ());
+		dump_ir (optimized_ir_point (shared.tier), *module, member->entry,
+		         member->dumped);
 		entries.push_back (member->entry);
 	}
-
-	// One print for the module, however many of its methods were asked for.
-	if (dump)
-		module->print (llvm::errs (), nullptr);
 
 	Expected<std::vector<CompiledMethod>> compiled = [&] {
 		timing::Scope timed (timing::Phase::orc);
@@ -619,10 +699,18 @@ compile_interop_entry (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 	/* Nothing names it now. If it stays, the linker asks for a symbol. */
 	(*shape)->eraseFromParent ();
 
-	if (dumping (name.c_str ()))
-		module->print (llvm::errs (), nullptr);
+	std::string dumped = any_dump_point_enabled () ? dump_name (method)
+	                                               : std::string ();
+
+	if (Function *thunk = module->getFunction (name); thunk != nullptr
+	    && !dumped.empty ())
+		set_dump_name (*thunk, dumped);
+
+	dump_ir (DumpPoint::unopt_ir, *module, name, dumped);
 
 	MonoJit::optimize (*module, JitTier::tier1);
+
+	dump_ir (DumpPoint::tier1_ir, *module, name, dumped);
 
 	Expected<CompiledMethod> compiled =
 		jit.compile (ThreadSafeModule (std::move (module),

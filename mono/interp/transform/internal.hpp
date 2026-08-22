@@ -228,8 +228,8 @@ gint32 interp_get_const_from_ldc_i4 (InterpInst *ins);
 /// Prints one instruction, for the transform's own tracing.
 void dump_interp_inst (InterpInst *ins);
 
-/// Prints a run of emitted bytecode.
-void dump_interp_code (const guint16 *start, const guint16 *end);
+/// Prints a run of emitted bytecode to out.
+void dump_interp_code (FILE *out, const guint16 *start, const guint16 *end);
 
 /// The operands of one instruction, as a string the caller frees. `ins` can be
 /// null, which means the data belongs to an instruction already emitted.

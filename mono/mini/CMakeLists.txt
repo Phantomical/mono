@@ -45,6 +45,8 @@ set(mini_sources
   llvmonly-runtime.c
   monovm.c
   mini-unity.c
+  # what both engines dump through
+  jit-dump.cpp
   # amd64
   arch-amd64.c
   interp-amd64.c

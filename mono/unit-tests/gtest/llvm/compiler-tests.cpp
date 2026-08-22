@@ -1,6 +1,6 @@
 /*
- * Tests for mono/llvm/compiler.cpp, specifically the assembly MONO_LLVM_JIT_ASM
- * prints out of the codegen pipeline.
+ * Tests for mono/llvm/compiler.cpp, specifically the assembly the `tier1-asm`
+ * dump point prints out of the codegen pipeline.
  *
  * What makes this worth a test rather than an eyeball is the side tables: they
  * are written by a pass that only exists inside this backend's own pipeline, so
@@ -10,6 +10,7 @@
 
 #include "harness.hpp"
 
+#include "dump.hpp"
 #include "jit.hpp"
 
 #include <llvm/IR/Module.h>
@@ -28,12 +29,11 @@ namespace test {
 namespace {
 
 /*
- * What the dumps in this file are selected by. compiler.cpp reads
- * MONO_LLVM_JIT_ASM once, on the first compile of the process, and booting the
- * runtime already compiles a dozen methods - so the variable has to be in place
- * before any test runs, whether this binary was started for one case or for all
- * of them. Nothing but a module a test renamed contains this, so no other
- * compile is dumped.
+ * What the dumps in this file are selected by. The dump variables are read once,
+ * on the first compile of the process, and booting the runtime already compiles
+ * a dozen methods - so they have to be in place before any test runs, whether
+ * this binary was started for one case or for all of them. Nothing but a method
+ * a test named this way contains it, so no other compile is dumped.
  */
 constexpr const char *asm_filter = "mono.asm.dump.fixture";
 
@@ -41,34 +41,35 @@ class SelectAsmDumps : public ::testing::Environment {
 public:
 	void SetUp () override
 	{
-		::setenv ("MONO_LLVM_JIT_ASM", asm_filter, 1);
-		// The tier gate is read once as well, so the tier a case wants is
-		// fixed here: tier 1 is kept and tier 2 is refused.
-		::setenv ("MONO_LLVM_JIT_ASM_TIER", "1", 1);
+		// One point, so what refuses a tier-2 compile below is the point the
+		// variable names and nothing else.
+		::setenv ("MONO_JIT_DUMP", "tier1-asm", 1);
+		::setenv ("MONO_JIT_DUMP_FILTER", asm_filter, 1);
 	}
 };
 
 const ::testing::Environment *asm_dumps_selected =
 	::testing::AddGlobalTestEnvironment (new SelectAsmDumps);
 
-/// Everything written to fd 2 - where llvm::errs () goes - while this is alive.
-class CapturedStderr {
+/// Everything written to fd 1 - where a dump goes with no directory set - while
+/// this is alive.
+class CapturedStdout {
 public:
-	CapturedStderr ()
+	CapturedStdout ()
 	{
 		sink_ = ::tmpfile ();
-		saved_ = ::dup (STDERR_FILENO);
-		::fflush (stderr);
-		::dup2 (::fileno (sink_), STDERR_FILENO);
+		saved_ = ::dup (STDOUT_FILENO);
+		::fflush (stdout);
+		::dup2 (::fileno (sink_), STDOUT_FILENO);
 	}
 
-	~CapturedStderr ()
+	~CapturedStdout ()
 	{
 		restore ();
 		::fclose (sink_);
 	}
 
-	/// What has been written so far, with stderr handed back to the process.
+	/// What has been written so far, with stdout handed back to the process.
 	std::string text ()
 	{
 		restore ();
@@ -90,8 +91,8 @@ private:
 		if (saved_ < 0)
 			return;
 
-		::fflush (stderr);
-		::dup2 (saved_, STDERR_FILENO);
+		::fflush (stdout);
+		::dup2 (saved_, STDOUT_FILENO);
 		::close (saved_);
 		saved_ = -1;
 	}
@@ -115,8 +116,8 @@ public:
 	}
 
 protected:
-	/// Translate and compile IMAGE's METHOD at the given tier, having renamed
-	/// its module so the filter does or does not name it. Hands back the
+	/// Translate and compile IMAGE's METHOD at the given tier, having given the
+	/// body a dump name the filter does or does not name. Hands back the
 	/// compiled function's symbol, which is what the assembly labels it.
 	///
 	/// folded names a second method of the same image to translate in beside it
@@ -134,7 +135,8 @@ protected:
 		if (!folded.empty ())
 			EXPECT_NE (fold_method_into (*t, image, folded), nullptr);
 
-		t->module->setModuleIdentifier (dumped ? asm_filter : image);
+		/* As the engine does, so the dump is filed and filtered by method. */
+		set_dump_name (*t->function, dumped ? asm_filter : image);
 
 		std::string entry = t->function->getName ().str ();
 		auto jit = test::make_jit ();
@@ -167,7 +169,7 @@ protected:
 
 TEST_F (AsmDump, PrintsTheCodeAndTheClauseTableOfASelectedMethod)
 {
-	CapturedStderr captured;
+	CapturedStdout captured;
 	std::string entry = compile ("eh", "Eh:TryCatch", /*dumped=*/true);
 	std::string dump = captured.text ();
 
@@ -199,7 +201,7 @@ TEST_F (AsmDump, PrintsTheCodeAndTheClauseTableOfASelectedMethod)
  */
 TEST_F (AsmDump, WritesTheInlineTableOfAFoldedBody)
 {
-	CapturedStderr captured;
+	CapturedStdout captured;
 	std::string entry = compile ("calls", "Calls:CallStatic", /*dumped=*/true,
 	                             JitTier::tier1, "Calls:Helper");
 	std::string dump = captured.text ();
@@ -220,7 +222,7 @@ TEST_F (AsmDump, WritesTheInlineTableOfAFoldedBody)
  */
 TEST_F (AsmDump, WritesNoInlineTableWithoutAFold)
 {
-	CapturedStderr captured;
+	CapturedStdout captured;
 	std::string entry = compile ("arith", "Arith:Add", /*dumped=*/true);
 	std::string dump = captured.text ();
 
@@ -231,7 +233,7 @@ TEST_F (AsmDump, WritesNoInlineTableWithoutAFold)
 
 TEST_F (AsmDump, LeavesAMethodTheFilterDoesNotNameAlone)
 {
-	CapturedStderr captured;
+	CapturedStdout captured;
 	std::string entry = compile ("arith", "Arith:Add", /*dumped=*/false);
 	std::string dump = captured.text ();
 
@@ -245,7 +247,7 @@ TEST_F (AsmDump, LeavesAMethodTheFilterDoesNotNameAlone)
  */
 TEST_F (AsmDump, LeavesAMethodOfAnotherTierAlone)
 {
-	CapturedStderr captured;
+	CapturedStdout captured;
 	std::string entry
 		= compile ("eh", "Eh:TryCatch", /*dumped=*/true, JitTier::tier2);
 	std::string dump = captured.text ();

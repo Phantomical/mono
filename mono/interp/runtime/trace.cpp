@@ -191,7 +191,7 @@ MONO_NEVER_INLINE void
 InterpState::trace_op ()
 {
 	print_indent (context);
-	mono_interp_dis_mintop (ip, frame->imethod->code);
+	mono_interp_dis_mintop (stdout, ip, frame->imethod->code);
 }
 
 } // namespace mono::interp

@@ -371,9 +371,9 @@ InterpMethod *mono_interp_imethod_named (MonoDomain *domain, MonoMethod *method,
 
 void mono_interp_print_code (InterpMethod *imethod);
 
-/// Prints one instruction of a transformed method, at ip, whose code starts
-/// at start. The offset it prints is relative to start.
-void mono_interp_dis_mintop (const guint16 *ip, const guint16 *start);
+/// Prints one instruction of a transformed method to out, at ip, whose code
+/// starts at start. The offset it prints is relative to start.
+void mono_interp_dis_mintop (FILE *out, const guint16 *ip, const guint16 *start);
 
 gboolean mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig);
 

@@ -68,27 +68,6 @@ is_jit_trace_enabled ()
 }
 
 bool
-dumping (const char *name)
-{
-	static const char *filter = g_getenv ("MONO_LLVM_JIT_DUMP");
-
-	return filter != nullptr && strstr (name, filter) != nullptr;
-}
-
-void
-dump_il (MonoMethod *method, MonoMethodHeader *header)
-{
-	const uint8_t *code = mono_method_header_get_code (header, nullptr, nullptr);
-	uint32_t size;
-
-	mono_method_header_get_code (header, &size, nullptr);
-
-	char *il = mono_disasm_code (nullptr, method, code, code + size);
-	fprintf (stderr, "%s\n", il);
-	g_free (il);
-}
-
-bool
 recompiling (MonoMethod *method)
 {
 	static const char *filter = g_getenv ("MONO_LLVM_JIT_RECOMPILE");

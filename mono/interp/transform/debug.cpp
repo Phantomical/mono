@@ -123,11 +123,11 @@ dump_interp_ins_data (InterpInst *ins, gint32 ins_offset, const guint16 *data, g
 }
 
 void
-dump_interp_code (const guint16 *start, const guint16 *end)
+dump_interp_code (FILE *out, const guint16 *start, const guint16 *end)
 {
 	const guint16 *p = start;
 	while (p < end) {
-		mono_interp_dis_mintop (p, start);
+		mono_interp_dis_mintop (out, p, start);
 		p = dis_mintop_len (p);
 	}
 }
