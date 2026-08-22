@@ -168,6 +168,9 @@ static class Program {
 			got.Add (MathF.Exp (F (f)));
 			got.Add (MathF.Log (F (f)));
 			got.Add (MathF.Cbrt (F (f)));
+			got.Add (MathF.Asinh (F (f)));
+			got.Add (MathF.Acosh (F (f)));
+			got.Add (MathF.Atanh (F (f)));
 		}
 
 		foreach (double y in exponents) {
@@ -256,11 +259,19 @@ static class Program {
 		Same ("Math.Tanh (0)", Math.Tanh (D (0.0)), 0.0);
 		Same ("Math.Tanh (Infinity)", Math.Tanh (D (double.PositiveInfinity)), 1.0);
 
-		// The three with no intrinsic and no libcall, which keep their wrapper.
+		// The inverse hyperbolic functions, whose libm symbols
+		// runtime/builtins.cpp registers by hand.
 		Same ("Math.Asinh (0)", Math.Asinh (D (0.0)), 0.0);
+		Same ("Math.Asinh (-0)", Math.Asinh (D (-0.0)), -0.0);
 		Same ("Math.Acosh (1)", Math.Acosh (D (1.0)), 0.0);
+		NaN ("Math.Acosh (0)", Math.Acosh (D (0.0)));
 		Same ("Math.Atanh (0)", Math.Atanh (D (0.0)), 0.0);
 		Same ("Math.Atanh (1)", Math.Atanh (D (1.0)), double.PositiveInfinity);
+		Same ("Math.Atanh (-1)", Math.Atanh (D (-1.0)), double.NegativeInfinity);
+		NaN ("Math.Atanh (2)", Math.Atanh (D (2.0)));
+		Same ("MathF.Asinh (0)", MathF.Asinh (F (0.0f)), 0.0f);
+		Same ("MathF.Acosh (1)", MathF.Acosh (F (1.0f)), 0.0f);
+		Same ("MathF.Atanh (1)", MathF.Atanh (F (1.0f)), float.PositiveInfinity);
 
 		Same ("Math.Cbrt (8)", Math.Cbrt (D (8.0)), 2.0);
 		Same ("Math.Cbrt (-8)", Math.Cbrt (D (-8.0)), -2.0);

@@ -15,6 +15,7 @@
 
 #include <unwind.h>
 #include <initializer_list>
+#include <cmath>
 
 namespace mono {
 namespace {
@@ -113,6 +114,23 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 		 * cover it, but MergeICmps builds calls to it at the IR level.
 		 */
 		{"memcmp", (void *) &memcmp},
+
+		/*
+		 * The inverse hyperbolic functions, for the same reason. LLVM has no
+		 * intrinsic for any of them. RuntimeLibcalls.td declares ASINH, ACOSH
+		 * and ATANH for vector types alone, so get_libcall_builtins () finds
+		 * no scalar impl to register. math.cpp emits a direct call to each of
+		 * these names in place of the icall's wrapper.
+		 *
+		 * The cast picks the C function out of the overload set that <cmath>
+		 * adds around it.
+		 */
+		{"asinh", (void *) static_cast<double (*) (double)> (&asinh)},
+		{"acosh", (void *) static_cast<double (*) (double)> (&acosh)},
+		{"atanh", (void *) static_cast<double (*) (double)> (&atanh)},
+		{"asinhf", (void *) static_cast<float (*) (float)> (&asinhf)},
+		{"acoshf", (void *) static_cast<float (*) (float)> (&acoshf)},
+		{"atanhf", (void *) static_cast<float (*) (float)> (&atanhf)},
 	};
 
 	append (builtins, array);

@@ -88,13 +88,14 @@ const MathTableEntry math_table[] = {
 	// frem is fmod, which is what the icall calls.
 	{ "FMod", 2, MathIntrinsic::Emit::Remainder, no_intrinsic, nullptr, nullptr },
 
-	// LLVM has no intrinsic for a cube root. RuntimeLibcallsInfo names cbrt and
-	// cbrtf on this triple, so get_libcall_builtins () (runtime/builtins.cpp)
-	// registers both addresses already. Asinh, Acosh and Atanh, which the
-	// interpreter also recognizes, have no such libcall: RuntimeLibcalls.td
-	// declares ASINH, ACOSH and ATANH for vector types alone. Those three keep
-	// their wrapper until the scalar symbols are registered.
+	// LLVM has no intrinsic for these four. cbrt and cbrtf are runtime
+	// libcalls, so get_libcall_builtins () registers them on its own. The six
+	// inverse hyperbolic names are not, and runtime/builtins.cpp registers
+	// those by hand.
 	{ "Cbrt", 1, MathIntrinsic::Emit::Libm, no_intrinsic, "cbrt", "cbrtf" },
+	{ "Asinh", 1, MathIntrinsic::Emit::Libm, no_intrinsic, "asinh", "asinhf" },
+	{ "Acosh", 1, MathIntrinsic::Emit::Libm, no_intrinsic, "acosh", "acoshf" },
+	{ "Atanh", 1, MathIntrinsic::Emit::Libm, no_intrinsic, "atanh", "atanhf" },
 };
 
 /// Whether t is `float` or `double` itself, rather than a reference or a
@@ -164,8 +165,10 @@ math_intrinsic_for (MonoMethod *method, MonoMethodSignature *sig)
 ///
 /// The declaration promises a leaf computation on its arguments. That is what
 /// lets the optimizer move the call, hold two of them as one, or drop one whose
-/// result is unused. So give this only a function that reads and writes no
-/// memory, errno included.
+/// result is unused. A domain error that libm reports through errno is
+/// therefore not modelled. LLVM's own math intrinsics, which the rest of the
+/// table emits, make the same choice. So give this only a function whose whole
+/// result is its return value.
 llvm::FunctionCallee
 MethodLLVMEmitter::libm_decl (const char *name, llvm::Type *type, size_t arity)
 {
