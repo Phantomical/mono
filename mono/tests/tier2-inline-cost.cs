@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
@@ -12,11 +13,12 @@ using System.Runtime.CompilerServices;
  * body stays instrumented and counting and never promotes on its own - which is
  * what keeps the compile this test is about the only one there is.
  *
- * What says a fold really happened is the stack trace: a folded body has no
- * frame of its own, so the helper that threw is missing from the trace taken at
- * tier 2, and the helpers the gates refuse are still in it. The warm-up calls
- * ask the helpers not to throw, because the trace is the expensive part and the
- * calls are what the counts are wanted for.
+ * What says a fold really happened is the stack trace. Every helper that threw
+ * has a frame in it either way, but a folded body owns no code: its frame
+ * reports the offset into Root () that it was folded at, and a helper the gates
+ * refuse reports an offset into itself. The warm-up calls ask the helpers not to
+ * throw, because the trace is the expensive part and the calls are what the
+ * counts are wanted for.
  */
 
 namespace Mono.Tiering {
@@ -125,6 +127,37 @@ static class Program {
 	/* Which of the helpers the trace taken inside Root () named. */
 	static bool saw_branch, saw_no_inline, saw_through, saw_long;
 
+	/* Which of them ran inside Root ()'s code rather than in a body of its own. */
+	static bool folded_branch, folded_no_inline, folded_through, folded_long;
+
+	/*
+	 * Whether the helper's frame covers the same code as Root ()'s.
+	 *
+	 * A folded body has no code of its own, so the frame reported for it names
+	 * the call site in Root () that it was folded at - the same native offset
+	 * Root ()'s own frame reports. A helper that was really called runs in its
+	 * own body and answers with an offset into that.
+	 */
+	static bool RunsInsideRoot (Exception e, string helper)
+	{
+		StackTrace st = new StackTrace (e, false);
+		int in_helper = -1, in_root = -2;
+
+		for (int i = 0; i < st.FrameCount; i++) {
+			StackFrame f = st.GetFrame (i);
+			MethodBase m = f.GetMethod ();
+
+			if (m == null)
+				continue;
+			if (m.DeclaringType.Name == "Costed" && m.Name == helper)
+				in_helper = f.GetNativeOffset ();
+			if (m.DeclaringType.Name == "Program" && m.Name == "Root")
+				in_root = f.GetNativeOffset ();
+		}
+
+		return in_helper >= 0 && in_helper == in_root;
+	}
+
 	static void Record (Exception e)
 	{
 		string trace = e.StackTrace ?? "";
@@ -133,6 +166,11 @@ static class Program {
 		saw_no_inline |= trace.Contains ("Costed.FailNoInline");
 		saw_through |= trace.Contains ("Costed.FailThroughNoInline");
 		saw_long |= trace.Contains ("Costed.FailLong");
+
+		folded_branch |= RunsInsideRoot (e, "FailBranch");
+		folded_no_inline |= RunsInsideRoot (e, "FailNoInline");
+		folded_through |= RunsInsideRoot (e, "FailThroughNoInline");
+		folded_long |= RunsInsideRoot (e, "FailLong");
 
 		if (!trace.Contains ("Program.Root"))
 			throw new Exception ("the frame that caught it is missing: " + trace);
@@ -207,6 +245,8 @@ static class Program {
 
 		Check (saw_branch && saw_no_inline && saw_through && saw_long,
 			"every helper has a frame before tier 2");
+		Check (!folded_branch && !folded_no_inline && !folded_through && !folded_long,
+			"and every one of them runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body, and every one of them
 		// through the same branch, so the site Rare () sits behind reads cold.
@@ -219,13 +259,20 @@ static class Program {
 		}
 
 		saw_branch = saw_no_inline = saw_through = saw_long = false;
+		folded_branch = folded_no_inline = folded_through = folded_long = false;
 
 		Check (want == Root (4, true), "the answer at tier 2 is the answer before it");
 
-		Check (!saw_branch, "the cost model folds a helper with a branch");
-		Check (saw_no_inline, "NoInlining keeps the helper's frame");
-		Check (saw_through, "a helper that calls a NoInlining helper keeps its frame");
-		Check (saw_long, "a helper past the IL limit keeps its frame");
+		/*
+		 * A folded body keeps a frame in the trace, built from the side table
+		 * the compile wrote rather than from a frame on the stack. What says the
+		 * fold happened is where that frame's code is.
+		 */
+		Check (folded_branch, "the cost model folds a helper with a branch");
+		Check (saw_no_inline && !folded_no_inline, "NoInlining keeps the helper's body");
+		Check (saw_through && !folded_through,
+			"a helper that calls a NoInlining helper keeps its body");
+		Check (saw_long && !folded_long, "a helper past the IL limit keeps its body");
 
 		/*
 		 * The path the profile never covered. Whatever the cost model decided
