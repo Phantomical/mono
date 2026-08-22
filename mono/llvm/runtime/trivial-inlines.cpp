@@ -251,7 +251,8 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
  * NoInlining, which is what a managed one carries, and having no IL at all,
  * because every stack walk the runtime offers is an icall and a body with no IL
  * can be any of them. The second mark takes in far more than it has to, and a
- * fold declined costs the caller nothing.
+ * fold declined costs the caller nothing. The exception is a math icall: the
+ * front end answers it with arithmetic, so the site makes no call at all.
  *
  * A forwarder stands in for what it forwards to, so the walk follows the chain
  * until it reaches a body that keeps a frame of its own.
@@ -267,9 +268,14 @@ may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 		if (target == nullptr)
 			return false;
 
-		if (implemented_outside_il (target)
-		    || (target->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
+		if ((target->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
 			return true;
+
+		// A math icall is where the chain stops without a frame: the front end
+		// answers it with arithmetic, so it makes no call.
+		if (implemented_outside_il (target))
+			return !math_intrinsic_for (target,
+			                            mono_method_signature_internal (target));
 
 		ERROR_DECL (metadata_error);
 		MinimalCompile cfg (target, domain, metadata_error);
