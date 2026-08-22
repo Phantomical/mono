@@ -210,12 +210,19 @@ tier2_enabled ()
 }
 
 /*
- * Five thousand calls of the tier-1 body, on top of the ten at tier 0 that body
- * cost. It is not a tuned number. A tier-2 compile runs the O3 pipeline with an
- * optimizing selector, against a tier-1 body that is O1 and FastISel. The
- * threshold has to be high enough that a method running a few hundred times
- * keeps the body it has. What the trade is worth past that wants an
- * execution-count distribution off a real workload.
+ * Twenty thousand entries of the tier-1 body, on top of the ten calls at tier 0
+ * that body cost. A tier-2 compile runs the O3 pipeline with an optimizing
+ * selector against a tier-1 body that is O1 and FastISel, so the threshold buys
+ * a better body with a compile, and the method has to run enough afterwards to
+ * pay for it.
+ *
+ * Five thousand was too eager on both workloads it has been measured against.
+ * Roslyn compiling this tree's corlib reads -13% of process CPU at twenty
+ * thousand over 8 paired reps, almost all of it compile time it no longer
+ * spends, because that workload is full of methods entered a few thousand times
+ * and then never again. SharpChess reads -2.5% over 8 reps, and it is the arm
+ * that says how far this may go: at two hundred thousand it turns and costs
+ * +8.5%, because its hot methods stay at tier 1 for the whole search.
  *
  * The counter counts only entries, so a loop that runs for a minute inside one
  * call never reaches it. Lowering the threshold does not reach that method.
@@ -227,7 +234,7 @@ tier2_threshold ()
 		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD");
 
 		if (value == nullptr)
-			return 5000;
+			return 20000;
 
 		int set = atoi (value);
 

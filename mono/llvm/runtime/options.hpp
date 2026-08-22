@@ -80,7 +80,7 @@ bool tier2_enabled ();
 ///
 /// Zero for a body that never asks, which leaves it instrumented and counting
 /// while something else decides when it promotes.
-/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is five thousand.
+/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is twenty thousand.
 uint32_t tier2_threshold ();
 
 /// The largest callee, in IL bytes, a compile folds into its caller before any

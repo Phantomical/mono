@@ -275,7 +275,7 @@ and the note says which split:
   tier 1, default 10. Zero never promotes, which separates a tier-0 entry bug from a
   promotion bug. One promotes on the first call, which puts the switch inside a loop.
 - `MONO_LLVM_JIT_TIER2_THRESHOLD=<n>` — entries of a tier-1 body before it asks for tier
-  2, default 5000. The counter counts entries, so a method that spends its time inside
+  2, default 20000. The counter counts entries, so a method that spends its time inside
   one call never reaches it at any setting. Zero leaves a body instrumented and counting
   while it never promotes on its own, which is what a test driving the tiers through
   `Mono.Tiering.MonoTier::PromoteNow` wants.
@@ -485,7 +485,7 @@ every call still standing leaves the module by symbol. Running the two layers an
 costs a large fraction of compile time.
 
 `run_tier2_pipeline ()` is the other one, and it is on by default. Every tier-1 body
-carries profiling instrumentation, and a body entered 5000 times is compiled again
+carries profiling instrumentation, and a body entered 20000 times is compiled again
 against the counts it gathered, at O3 with an optimizing selector.
 
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by
