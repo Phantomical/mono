@@ -7,7 +7,6 @@
 #include "method-to-llvm.hpp"
 #include "minimal-compile.hpp"
 #include "options.hpp"
-#include "passes/inline-copies.hpp"
 
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
@@ -300,12 +299,11 @@ may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 	return true;
 }
 
-/// Moves the calls caller makes to from onto to, and leaves every other body's
-/// alone.
+/// Moves onto to the calls caller makes to from.
 ///
-/// A copy belongs to the one method whose compile asked for it. A body beside it
-/// that calls the same method keeps the declaration, so it reaches the published
-/// entry unless its own compile folds a copy of its own.
+/// A copy belongs to the one compile that asked for it. Another body in the
+/// module keeps the declaration and reaches the published entry, until its own
+/// compile folds a copy of its own.
 void
 redirect_calls (Function &caller, Function &from, Function &to)
 {
@@ -356,10 +354,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			Function *decl =
 				site != nullptr ? site->getCalledFunction () : nullptr;
 
-			// A copy is one of these already, and the body beside it is
-			// what a call to a method the module publishes leaves through.
 			if (decl != nullptr && decl->isDeclaration ()
-			    && !decl->hasFnAttribute (inline_copy_attribute)
 			    && !is_contained (called, decl))
 				called.push_back (decl);
 		}
@@ -411,9 +406,10 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (copy == nullptr)
 				continue;
 
-			// The copy is built from the same signature the site was
-			// declared against, and a mismatch would call it with the wrong
-			// arguments rather than fail to link.
+			// A shared body is entered with its context in a register and a
+			// call to it is not, which is the one shape these two disagree
+			// on. may_fold () refuses that callee, and a mismatch that got
+			// through here calls the copy with the wrong arguments.
 			g_assert (copy->getFunctionType () == decl->getFunctionType ());
 
 			redirect_calls (*caller, *decl, *copy);

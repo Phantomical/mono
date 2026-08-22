@@ -928,8 +928,8 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	if (method != this->method && llvm::is_contained (siblings, method))
 		full_name += "$thunk";
 
-	// A copy folded into a caller is a second body for the method, and the
-	// module can already hold the method's own under the plain name.
+	// Only the function being emitted. A copy is a second body for the method,
+	// and the module can already hold the method's own under the plain name.
 	if (method == this->method)
 		full_name += body_suffix;
 

@@ -548,11 +548,11 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 
 	for (auto &member : members) {
 		/*
-		 * The budget and what has been folded are counted for each member
-		 * rather than for the module, so a method folds in what it would have
-		 * folded compiled on its own. A member that folded a different set than
-		 * its tier-2 compile does costs that compile the counts it gathered:
-		 * both tiers hash the CFG the fold leaves behind.
+		 * Both the budget and the folded set belong to the member rather than
+		 * to the module, so what a method folds in does not depend on which
+		 * others promoted beside it. Both tiers hash the CFG a fold leaves
+		 * behind, and a member that folds a different set than its own tier-2
+		 * compile costs that compile the counts it gathered.
 		 */
 		inlining.root = member->method;
 		inlining.folded.assign ({ member->method });

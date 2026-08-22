@@ -547,9 +547,20 @@ frame owns no code: it reports the native offset of the call site it was folded 
 Managed code that has to see its own caller must therefore carry `NoInlining`, the way the
 `StackFrame` constructors do.
 
-In a batch every member is translated first, and the pre-pass then runs over each of
-them. A member is declared to the others under a name of its own, so a member folded in
-as a callee is a second copy of a body the module already holds.
+**What a method folds in is decided by that method alone.** A copy is built under a name
+of its own, `<callee>$copy@<root>`, and only the caller that asked for it has its call
+sites moved over. So the module holds the callee's own body beside the copy, and a batch
+member is as foldable as any other callee. Both pipelines take the PGO CFG hash after
+`AlwaysInlinerPass`, so a tier-1 body that folded a different set than its own tier-2
+compile costs that compile the counts it gathered — LLVM prints `hash mismatch ... count
+discarded` and lays the body out on static frequencies. Keep any new gate off what else
+the module holds.
+
+`InlineScope` (`runtime/inline-scope.hpp`) is where the two are kept apart. `defined`
+names what the module publishes a body for, which is what the translator declares a call
+through a thunk from. `folded` names what this root has taken in, which is what both
+inliners read. In a batch every member is translated first, the pre-pass then runs over
+each of them, and each member gets its own `folded` and its own budget.
 
 **Behind it is a cost model, and it goes top-down.** `TopDownInlinerPass`
 (`passes/top-down-inline.cpp`) runs after the first simplification and ranks the method's

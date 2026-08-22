@@ -152,11 +152,9 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
                          MonoCompile *cfg, std::vector<ExternalSymbol> &externals,
                          ModuleTypes &types, InlineScope &scope)
 {
-	/*
-	 * One copy for each method the root folds in, which is what the suffix
-	 * counts: the module can hold the method's own body as well, and another
-	 * root's copy of the same method beside it.
-	 */
+	// The root and the callee together name the copy. A module holds the
+	// callee's own body as well, and one copy of it for each root that folds it
+	// in.
 	std::string suffix = "$copy" + identity_of (scope.root);
 
 	/*
@@ -173,8 +171,9 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 		return nullptr;
 	}
 
-	// The name is the root's and the callee's together, so a body already
-	// standing under it says the two inliners asked for the same copy twice.
+	// A body already standing under that name says one of the two inliners
+	// asked for this copy a second time, and the translation below appends to
+	// the body that is there.
 	g_assert ((*target)->isDeclaration ());
 
 	// Before the translation rather than after it. A body it gives up halfway

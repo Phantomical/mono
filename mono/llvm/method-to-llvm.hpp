@@ -440,9 +440,9 @@ private:
 	/// its own.
 	llvm::ArrayRef<MonoMethod *> siblings;
 
-	/// What the name of the function being emitted ends with, empty when it
-	/// takes the plain one. A module holds one body under a method's own name,
-	/// and a copy folded into a caller beside it needs a name of its own.
+	/// The suffix on the name of the function being emitted, empty when it takes
+	/// the plain one. A module holds one body under a method's own name, so a
+	/// copy folded into a caller beside it needs a name of its own.
 	std::string body_suffix;
 
 	/// Attribute everything emitted from here on to the IL instruction at
@@ -1148,8 +1148,8 @@ bool entered_in_c (MonoMethod *method);
 /// module has to be handed the same one. Null makes a cache for this
 /// translation alone, which is right only when the module holds nothing else.
 ///
-/// body_suffix names the function this call builds. Give it a value when the
-/// module already holds a body for method and this one is a second copy of it.
+/// body_suffix goes on the end of the emitted function's name. Give it a value
+/// when the module already holds a body for method and this one is a copy.
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
                                                  MonoMethod *method,
                                                  std::vector<ExternalSymbol> *externals

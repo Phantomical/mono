@@ -25,7 +25,11 @@ class Module;
 
 namespace mono {
 
-/// One method's inlining state, shared by the two inliners that build its body.
+/// What the two inliners share while they build one method's body.
+///
+/// A batch reuses one of these and resets root, folded and budget for each
+/// member, because defined describes the module and the rest describe the
+/// method.
 ///
 /// The budget counts bodies rather than instructions, and the two inliners spend
 /// one counter between them. A budget of its own for each would make a compile's
@@ -40,17 +44,17 @@ struct InlineScope {
 	/// member of a batch. A call to one of them has to leave through that
 	/// method's entry, so the translator declares it under a name of its own.
 	///
-	/// A copy is not one of these. It stands under a name of its own, and a
-	/// caller reaches it only by having its own sites moved over.
+	/// A copy is not one of these. Only the caller that asked for a copy has its
+	/// sites moved onto it.
 	llvm::SmallVector<MonoMethod *, 8> defined;
 
-	/// The methods already folded into root, root itself included. A second
-	/// copy of one would be dead weight, and a candidate that calls back into a
-	/// method above it would copy that method into its own callee.
+	/// The methods already folded into root, root itself included. A second copy
+	/// of one is dead weight, and without root a candidate that calls back into
+	/// it copies root into its own callee.
 	///
-	/// This is what decides the set root ends up with, so it names root's own
-	/// chain and nothing else. A batch member folds what it would have folded
-	/// compiled on its own, and the two tiers then hash the same CFG.
+	/// This decides the set root ends up with, so it names root's own chain and
+	/// nothing else. A batch member then folds what it folds compiled alone, and
+	/// the two tiers hash the same CFG.
 	llvm::SmallVector<MonoMethod *, 8> folded;
 
 	uint32_t budget = 0;
