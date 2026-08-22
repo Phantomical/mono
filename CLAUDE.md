@@ -515,10 +515,11 @@ all while `gen-seq-points` is on.
 
 A forwarder is refused as well when what it forwards to reads the frame it was called
 from. `may_read_the_callers_frame ()` follows the chain, and a body with no IL counts,
-because every stack walk the runtime offers is an icall. A folded frame is gone from a
-stack trace, and its code answers with the IL offset of the call site. Managed code that
-has to see its own caller must therefore carry `NoInlining`, the way the `StackFrame`
-constructors do.
+because every stack walk the runtime offers is an icall. A folded body keeps a frame in a
+stack trace, built from `.mono_inlines` rather than from a frame on the stack, and that
+frame owns no code: it reports the native offset of the call site it was folded at.
+Managed code that has to see its own caller must therefore carry `NoInlining`, the way the
+`StackFrame` constructors do.
 
 In a batch every member is translated first, and the pre-pass then runs over each of
 them. A member is declared to the others under a name of its own, so a member folded in
