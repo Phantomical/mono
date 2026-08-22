@@ -342,7 +342,8 @@ public class Conversions {
 	 * value that the destination cannot hold. The interpreter keeps what the
 	 * x86 truncate instruction gives for the signed widths, and what
 	 * mono_fconv_u4_2 () and mono_fconv_u8_2 () give for the unsigned ones. The
-	 * tests below record that answer. The compiled engine saturates instead.
+	 * tests below record that answer. The compiled engine gives the same one,
+	 * through constrained_float_to_int () (mono/llvm/method-to-llvm/convert.cpp).
 	 */
 
 	public static int test_1_i4_from_nan_r8_is_int_min ()

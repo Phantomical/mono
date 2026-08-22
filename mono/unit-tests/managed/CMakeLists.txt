@@ -207,14 +207,6 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
   "Refusals:test_7_unaligned_three"
   "Merge:test_1_merge_i4_into_i8"
   "Merge:test_1_branch_type_mismatch"
-  # An unchecked float to integer conversion whose source is out of range.
-  # ECMA-335 III.3.27 leaves the result unspecified: the interpreter reproduces
-  # cvttsd2si and the backend saturates.
-  "Conversions:test_1_i4_from_nan_r8_is_int_min"
-  "Conversions:test_1_i4_from_positive_infinity_is_int_min"
-  "Conversions:test_1_u4_from_out_of_range_r8_keeps_the_low_word"
-  "Conversions:test_1_u4_from_negative_r8_wraps"
-  "Conversions:test_1_i8_from_out_of_range_r8_is_long_min"
   # The backend loses an exception raised inside a filter.
   "Exceptions:test_2_an_exception_in_a_filter_continues_the_search"
   # Compiled code polls for nothing, so a thread running it takes an abort only
