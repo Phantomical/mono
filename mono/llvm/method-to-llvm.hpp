@@ -174,6 +174,25 @@ struct ModuleTypes {
 	llvm::DenseMap<MonoClass *, llvm::Type *> native_vtypes;
 };
 
+/// What a call to a System.Math or System.MathF icall compiles to in place of
+/// a call to that icall's wrapper.
+struct MathIntrinsic {
+	enum class Emit {
+		/// A call to the intrinsic in `intrinsic`.
+		Intrinsic,
+		/// The frem instruction.
+		Remainder,
+		/// A call to the libm function named in `libm`.
+		Libm,
+	};
+
+	Emit emit;
+	/// The intrinsic to call. Meaningful only for Emit::Intrinsic.
+	llvm::Intrinsic::ID intrinsic;
+	/// The libm function to call. Meaningful only for Emit::Libm.
+	const char *libm;
+};
+
 class MethodLLVMEmitter {
 private:
 	struct Entry {
@@ -926,6 +945,9 @@ private:
 	llvm::Error emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Error emit_string_length (MonoIrBuilder &builder);
 	llvm::Error emit_get_type (MonoIrBuilder &builder, bool receiver_by_reference);
+	llvm::FunctionCallee libm_decl (const char *name, llvm::Type *type, size_t arity);
+	llvm::Error emit_math_call (MonoIrBuilder &builder, const MathIntrinsic &math,
+	                            MonoMethodSignature *sig);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
@@ -1112,6 +1134,10 @@ bool is_intrinsic (MonoMethod *method);
 /// published address really is the C function. The other is an array
 /// accessor, which every call site lowers inline instead.
 MonoMethod *icall_wrapper_target (MonoMethod *method);
+
+/// What to emit for a call to method, or nothing when the backend has no
+/// arithmetic for it. sig is the signature the call site was written against.
+std::optional<MathIntrinsic> math_intrinsic_for (MonoMethod *method, MonoMethodSignature *sig);
 
 /// The number of sig's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.

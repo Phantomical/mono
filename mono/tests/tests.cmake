@@ -237,6 +237,7 @@ set(MONO_TESTS_CS_SRC
   interp-native-detour.cs
   trivial-inline.cs
   tier2-inline-override.cs
+  math-intrinsics.cs
   override-basic.cs
   override-generic.cs
   override-declared.cs

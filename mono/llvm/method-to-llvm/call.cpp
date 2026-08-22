@@ -1203,6 +1203,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	    && sig->hasthis && sig->param_count == 0)
 		return emit_string_length (builder);
 
+	// Asked of the method the IL named, ahead of the wrapper swap below. That
+	// wrapper is the cost the arithmetic replaces.
+	if (std::optional<MathIntrinsic> math = math_intrinsic_for (callee_method, sig))
+		return emit_math_call (builder, *math, sig);
+
 	// Debugger.Break () has an empty body and a comment where the code goes: the
 	// JIT gives the call its meaning, and that meaning is the one the break
 	// instruction has. An embedder can say no through mono_set_break_policy.
