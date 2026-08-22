@@ -29,15 +29,16 @@ namespace mono {
 /// callee outside them keeps its call, and so does one that will not translate.
 /// A candidate declined costs the caller nothing.
 ///
-/// The methods scope already names stay reachable through their thunks, so a
-/// materialized body that calls one of them reaches its published entry. This
-/// walks the chain under body, so a forwarder that forwards to a forwarder
-/// collapses in one call.
+/// Each copy is body's own, and only body's calls are moved onto it. What one
+/// method folds in therefore does not depend on what else the module holds,
+/// which is what lets a batched tier-1 body and the tier-2 body behind it hash
+/// the same CFG. This walks the chain under body, so a forwarder that forwards
+/// to a forwarder collapses in one call.
 ///
-/// scope.defined must already name every method the module holds a body for.
-/// A module built for a batch holds several, and each is declared to the others
-/// under a name of its own that no body can be built into. A member left out of
-/// scope.defined is folded in a second time, as a copy nothing calls.
+/// scope.folded must already name root, or the compile folds root into its own
+/// callee. scope.defined must name every method the module publishes a body
+/// for, so that a copy calling one of them reaches its entry rather than the
+/// body beside it.
 ///
 /// externals collects what the new bodies name, so resolve them after this
 /// rather than before it. types is the module's struct-type cache, which every

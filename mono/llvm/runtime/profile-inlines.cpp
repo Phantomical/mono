@@ -79,7 +79,7 @@ ProfileInliner::materialize (Function &decl, Module &into)
 
 	MonoMethod *callee = marked_method (decl);
 
-	if (callee == nullptr || is_contained (scope_.defined, callee)
+	if (callee == nullptr || is_contained (scope_.folded, callee)
 	    || !may_fold (target_.domain, callee))
 		return nullptr;
 
@@ -102,20 +102,9 @@ ProfileInliner::materialize (Function &decl, Module &into)
 	if (!loses_its_frame_safely (callee, header))
 		return nullptr;
 
-	/*
-	 * The body is defined onto a declaration, so `into` needs one of its own.
-	 * It carries decl's name, which is what the link matches on, and decl's
-	 * attributes, which say how the site calls it.
-	 */
-	Function *shape = Function::Create (decl.getFunctionType (),
-	                                    GlobalValue::ExternalLinkage, decl.getName (),
-	                                    into);
-
-	shape->copyAttributesFrom (&decl);
-
 	size_t resolved = externals_.size ();
 	Function *copy = materialize_inline_copy (into, target_.domain, callee, cfg.get (),
-	                                          *shape, externals_, types_, scope_);
+	                                          externals_, types_, scope_);
 
 	if (copy == nullptr)
 		return nullptr;

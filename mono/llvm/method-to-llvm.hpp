@@ -440,6 +440,11 @@ private:
 	/// its own.
 	llvm::ArrayRef<MonoMethod *> siblings;
 
+	/// What the name of the function being emitted ends with, empty when it
+	/// takes the plain one. A module holds one body under a method's own name,
+	/// and a copy folded into a caller beside it needs a name of its own.
+	std::string body_suffix;
+
 	/// Attribute everything emitted from here on to the IL instruction at
 	/// offset.
 	void set_il_location (llvm::IRBuilder<> &builder, size_t offset)
@@ -467,7 +472,8 @@ public:
 	                   std::vector<ExternalSymbol> *externals = nullptr,
 	                   IlDebugModule *il_debug = nullptr,
 	                   llvm::ArrayRef<MonoMethod *> siblings = {},
-	                   ModuleTypes *shared_types = nullptr)
+	                   ModuleTypes *shared_types = nullptr,
+	                   llvm::StringRef body_suffix = {})
 	    : module (module),
 	      function (nullptr),
 	      builder (module->getContext ()),
@@ -476,7 +482,8 @@ public:
 	      externals (externals),
 	      types (shared_types != nullptr ? *shared_types : own_types),
 	      il_debug (il_debug),
-	      siblings (siblings)
+	      siblings (siblings),
+	      body_suffix (body_suffix)
 	{
 	}
 
@@ -1140,6 +1147,9 @@ bool entered_in_c (MonoMethod *method);
 /// types is the module's struct-type cache, and every translation into one
 /// module has to be handed the same one. Null makes a cache for this
 /// translation alone, which is right only when the module holds nothing else.
+///
+/// body_suffix names the function this call builds. Give it a value when the
+/// module already holds a body for method and this one is a second copy of it.
 llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
                                                  MonoMethod *method,
                                                  std::vector<ExternalSymbol> *externals
@@ -1148,7 +1158,8 @@ llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompi
                                                  = nullptr,
                                                  SeqPointGraph *seq_points = nullptr,
                                                  llvm::ArrayRef<MonoMethod *> siblings = {},
-                                                 ModuleTypes *types = nullptr);
+                                                 ModuleTypes *types = nullptr,
+                                                 llvm::StringRef body_suffix = {});
 
 } // namespace mono
 

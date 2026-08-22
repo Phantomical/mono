@@ -232,6 +232,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	inlining.root = method;
 	inlining.defined.push_back (method);
+	inlining.folded.push_back (method);
 	inlining.budget = trivial_inline_budget ();
 
 	// Both compiled tiers fold in the callees whose IL already says the inline
@@ -538,23 +539,23 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		members.push_back (std::move (member));
 	}
 
-	/*
-	 * After every member is translated: a member is declared to the others
-	 * under a name of its own, so one folded in here would be a second copy of
-	 * a body the module already holds. A copy one member takes in is folded
-	 * into any other member that calls it as well, since they share the
-	 * declaration it was built into.
-	 */
+	// After every member is translated: a member is declared to the others under
+	// a name of its own, and the pre-pass moves a call onto a copy of its own
+	// rather than onto the body next door.
 	InlineScope inlining;
 
 	inlining.defined.assign (methods.begin (), methods.end ());
 
 	for (auto &member : members) {
-		// The budget is counted for each member rather than for the module, so
-		// what a method folds in does not depend on how many others happened to
-		// promote beside it. MONO_LLVM_JIT_BATCH then changes how many compiles
-		// run, not what any of them folds in.
+		/*
+		 * The budget and what has been folded are counted for each member
+		 * rather than for the module, so a method folds in what it would have
+		 * folded compiled on its own. A member that folded a different set than
+		 * its tier-2 compile does costs that compile the counts it gathered:
+		 * both tiers hash the CFG the fold leaves behind.
+		 */
 		inlining.root = member->method;
+		inlining.folded.assign ({ member->method });
 		inlining.budget = trivial_inline_budget ();
 
 		materialize_trivial_callees (*module, shared.domain, member->method,

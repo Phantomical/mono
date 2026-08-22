@@ -78,7 +78,8 @@ llvm::Expected<llvm::Function *>
 method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
                 std::vector<ExternalSymbol> *externals,
                 MonoLLVMBreakpointSwitch **bp_switch, SeqPointGraph *seq_points,
-                llvm::ArrayRef<MonoMethod *> siblings, ModuleTypes *types)
+                llvm::ArrayRef<MonoMethod *> siblings, ModuleTypes *types,
+                llvm::StringRef body_suffix)
 {
 	// Shared by the method and its filter bodies. They are separate functions
 	// but one module, and debug info belongs to the module.
@@ -94,7 +95,7 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 		types = &own_types;
 
 	auto emitter = MethodLLVMEmitter (module, cfg, method, externals, &il_debug, siblings,
-	                                  types);
+	                                  types, body_suffix);
 	llvm::Expected<llvm::Function *> function = emitter.emit ();
 
 	if (!function)
@@ -111,7 +112,7 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 			continue;
 
 		MethodLLVMEmitter filter (module, cfg, method, externals, &il_debug, siblings,
-		                          types);
+		                          types, body_suffix);
 		llvm::Expected<llvm::Function *> body = filter.emit_filter (*function, i);
 
 		if (!body)

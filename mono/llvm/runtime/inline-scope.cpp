@@ -149,18 +149,23 @@ loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header)
 
 Function *
 materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
-                         MonoCompile *cfg, Function &decl,
-                         std::vector<ExternalSymbol> &externals, ModuleTypes &types,
-                         InlineScope &scope)
+                         MonoCompile *cfg, std::vector<ExternalSymbol> &externals,
+                         ModuleTypes &types, InlineScope &scope)
 {
 	/*
+	 * One copy for each method the root folds in, which is what the suffix
+	 * counts: the module can hold the method's own body as well, and another
+	 * root's copy of the same method beside it.
+	 */
+	std::string suffix = "$copy" + identity_of (scope.root);
+
+	/*
 	 * The translator declares the method it is asked for under a placeholder of
-	 * its own and finds it again by that name. A declaration the engine has
-	 * already renamed does not answer to it. So ask the translator for the
-	 * function it will build into, and move the caller's sites onto that one.
+	 * its own and finds it again by that name. So ask it for the function it
+	 * will build into, mark that one, and let the caller move its sites over.
 	 */
 	MethodLLVMEmitter declarer (&module, cfg, callee, &externals, nullptr,
-	                            scope.defined, &types);
+	                            scope.defined, &types, suffix);
 	Expected<Function *> target = declarer.declare (callee);
 
 	if (!target) {
@@ -168,10 +173,9 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 		return nullptr;
 	}
 
-	if (*target != &decl) {
-		decl.replaceAllUsesWith (*target);
-		decl.eraseFromParent ();
-	}
+	// The name is the root's and the callee's together, so a body already
+	// standing under it says the two inliners asked for the same copy twice.
+	g_assert ((*target)->isDeclaration ());
 
 	// Before the translation rather than after it. A body it gives up halfway
 	// through has to read as a copy too, or the sweep leaves a half-written
@@ -182,7 +186,7 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 		timing::Scope timed (timing::Phase::translate);
 
 		return method_to_llvm (&module, cfg, callee, &externals, nullptr, nullptr,
-		                       scope.defined, &types);
+		                       scope.defined, &types, suffix);
 	}();
 
 	// Spent either way. A translation that failed cost as much as one that did
@@ -212,7 +216,7 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	else
 		consumeError (record.takeError ());
 
-	scope.defined.push_back (callee);
+	scope.folded.push_back (callee);
 	return *target;
 }
 

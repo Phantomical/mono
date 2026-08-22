@@ -7,6 +7,7 @@
 #include "method-to-llvm.hpp"
 #include "minimal-compile.hpp"
 #include "options.hpp"
+#include "passes/inline-copies.hpp"
 
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
@@ -299,6 +300,23 @@ may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 	return true;
 }
 
+/// Moves the calls caller makes to from onto to, and leaves every other body's
+/// alone.
+///
+/// A copy belongs to the one method whose compile asked for it. A body beside it
+/// that calls the same method keeps the declaration, so it reaches the published
+/// entry unless its own compile folds a copy of its own.
+void
+redirect_calls (Function &caller, Function &from, Function &to)
+{
+	for (Instruction &i : instructions (caller)) {
+		auto *site = dyn_cast<CallBase> (&i);
+
+		if (site != nullptr && site->getCalledFunction () == &from)
+			site->setCalledFunction (&to);
+	}
+}
+
 void
 trace_inline (MonoMethod *callee, MonoMethod *caller)
 {
@@ -338,7 +356,10 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			Function *decl =
 				site != nullptr ? site->getCalledFunction () : nullptr;
 
+			// A copy is one of these already, and the body beside it is
+			// what a call to a method the module publishes leaves through.
 			if (decl != nullptr && decl->isDeclaration ()
+			    && !decl->hasFnAttribute (inline_copy_attribute)
 			    && !is_contained (called, decl))
 				called.push_back (decl);
 		}
@@ -347,14 +368,9 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (scope.budget == 0)
 				break;
 
-			// Another of this caller's callees forwards here and got there
-			// first.
-			if (!decl->isDeclaration ())
-				continue;
-
 			MonoMethod *callee = marked_method (*decl);
 
-			if (callee == nullptr || is_contained (scope.defined, callee)
+			if (callee == nullptr || is_contained (scope.folded, callee)
 			    || !may_fold (domain, callee))
 				continue;
 
@@ -390,10 +406,17 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 			Function *copy =
 				materialize_inline_copy (module, domain, callee, cfg.get (),
-			                                 *decl, externals, types, scope);
+			                                 externals, types, scope);
 
 			if (copy == nullptr)
 				continue;
+
+			// The copy is built from the same signature the site was
+			// declared against, and a mismatch would call it with the wrong
+			// arguments rather than fail to link.
+			g_assert (copy->getFunctionType () == decl->getFunctionType ());
+
+			redirect_calls (*caller, *decl, *copy);
 
 			// These shapes have nothing to weigh, so the pipeline folds them
 			// rather than a cost model.
