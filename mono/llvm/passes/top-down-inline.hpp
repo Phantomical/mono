@@ -8,6 +8,8 @@
 
 #include <llvm/IR/PassManager.h>
 
+#include <utility>
+
 namespace llvm {
 class Function;
 class TargetMachine;
@@ -44,6 +46,39 @@ public:
 	virtual unsigned depth_limit () const = 0;
 };
 
+/// Says which engine the inliner is to ask about the module it is running over.
+///
+/// The pipeline holding the pass is built once per compile thread and run for
+/// many compiles, while the candidates belong to one of them. So the binding
+/// arrives as an analysis over a slot: a compile writes its own engine into the
+/// slot before it runs, and the pass reads back whatever is there.
+class InlineCandidatesAnalysis : public llvm::AnalysisInfoMixin<InlineCandidatesAnalysis> {
+	friend llvm::AnalysisInfoMixin<InlineCandidatesAnalysis>;
+	static llvm::AnalysisKey Key;
+
+	InlineCandidates **slot_;
+
+public:
+	/// slot is read at each run, so it has to outlive the analysis manager this
+	/// is registered in. Null in it is ordinary and means no engine is
+	/// listening: the pass then leaves every site alone.
+	explicit InlineCandidatesAnalysis (InlineCandidates *&slot) : slot_ (&slot) {}
+
+	struct Result {
+		InlineCandidates *candidates;
+
+		/// Never kept. The engine belongs to one compile, and a result cached
+		/// over the last one names an engine that has gone.
+		bool invalidate (llvm::Module &, const llvm::PreservedAnalyses &,
+		                 llvm::ModuleAnalysisManager::Invalidator &)
+		{
+			return true;
+		}
+	};
+
+	Result run (llvm::Module &, llvm::ModuleAnalysisManager &) { return Result { *slot_ }; }
+};
+
 /// Folds a method's hottest call sites into it.
 ///
 /// Sites are ranked by the caller's own block counts, so a caller the profile
@@ -62,26 +97,27 @@ class TopDownInlinerPass : public llvm::PassInfoMixin<TopDownInlinerPass> {
 public:
 	/// materialize is run over the module each candidate is translated into,
 	/// and settles what shape the cost model weighs. simplify is run over a
-	/// root the loop folded anything into. Both have to outlive the pass.
+	/// root the loop folded anything into.
 	///
 	/// The two are the caller's rather than the pass's own so that a candidate
 	/// reaches the cost model in the same shape a tier-1 body has. The profile
 	/// is keyed on that shape, and a mismatch loses the weights in silence.
-	TopDownInlinerPass (InlineCandidates &candidates, llvm::TargetMachine &target,
-	                    llvm::ModulePassManager &materialize,
-	                    llvm::FunctionPassManager &simplify)
-	    : candidates_ (&candidates), target_ (&target), materialize_ (&materialize),
-	      simplify_ (&simplify)
+	///
+	/// Which engine to ask comes from InlineCandidatesAnalysis instead, which
+	/// the analysis manager the pass runs under has to have registered.
+	TopDownInlinerPass (llvm::TargetMachine &target, llvm::ModulePassManager materialize,
+	                    llvm::FunctionPassManager simplify)
+	    : target_ (&target), materialize_ (std::move (materialize)),
+	      simplify_ (std::move (simplify))
 	{
 	}
 
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
 
 private:
-	InlineCandidates *candidates_;
 	llvm::TargetMachine *target_;
-	llvm::ModulePassManager *materialize_;
-	llvm::FunctionPassManager *simplify_;
+	llvm::ModulePassManager materialize_;
+	llvm::FunctionPassManager simplify_;
 };
 
 } // namespace mono

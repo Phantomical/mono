@@ -132,14 +132,6 @@ enum class JitTier {
 /// other.
 std::vector<uint8_t> build_profile (llvm::ArrayRef<ProfileCounters> counters);
 
-/// Annotates a module's functions with the branch weights and entry counts a
-/// profile holds.
-///
-/// A function the profile has no record for is left alone, and so is one whose
-/// CFG does not hash to what the record was built over. Either way the result
-/// is a module with no weights on it rather than wrong weights.
-void apply_profile (llvm::Module &m, llvm::ArrayRef<uint8_t> profile);
-
 /// One frame slot, as a register number and a displacement whose sum is the
 /// slot's address - the shape MonoDebugVarInfo names a variable's home in.
 struct VarSlot {
@@ -304,10 +296,10 @@ public:
 	                                              llvm::ArrayRef<uint8_t> profile = {},
 	                                              InlineCandidates *inliner = nullptr);
 
-	/// Run the tier-0 IR pipeline over a module in place.
+	/// Run the tier-1 IR pipeline over a module in place.
 	///
 	/// Static and public so tests can assert what it does to translator output.
-	static void run_tier0_pipeline (llvm::Module &m);
+	static void run_tier1_pipeline (llvm::Module &m);
 
 	/// Run the tier-2 IR pipeline over a module in place, against a profile
 	/// build_profile () wrote.

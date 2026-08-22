@@ -30,6 +30,8 @@ namespace mono {
 
 InlineCandidates::~InlineCandidates () = default;
 
+AnalysisKey InlineCandidatesAnalysis::Key;
+
 namespace {
 
 /// A call the loop has still to weigh, with the count it was ranked by and how
@@ -123,6 +125,20 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 
 	made->setLinkage (GlobalValue::ExternalLinkage);
 
+	/*
+	 * The mark comes off for the run below and goes back on once the body is
+	 * across. The preparation ends in StripInlineCopiesPass, which takes the
+	 * body off everything wearing the mark, and here the copy is what the
+	 * module is about rather than a spare beside a caller.
+	 *
+	 * It has to go back on, because that is what the root's own strip finds a
+	 * candidate the cost model refused by, and what a later site calling the
+	 * same method recognizes the body it already has by.
+	 */
+	Attribute mark = made->getFnAttribute (inline_copy_attribute);
+
+	made->removeFnAttr (inline_copy_attribute);
+
 	prepare.run (*into, scratch.mam);
 	scratch.clear ();
 
@@ -137,6 +153,9 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 		return nullptr;
 
 	body->setLinkage (GlobalValue::InternalLinkage);
+
+	if (mark.isValid ())
+		body->addFnAttr (mark);
 
 	/*
 	 * The translator names a copy for itself rather than after the declaration
@@ -159,6 +178,11 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 PreservedAnalyses
 TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 {
+	InlineCandidates *candidates = mam.getResult<InlineCandidatesAnalysis> (m).candidates;
+
+	if (candidates == nullptr)
+		return PreservedAnalyses::all ();
+
 	SmallVector<Function *, 4> roots;
 
 	// The bodies a method promotes through, which is what the profile is about
@@ -222,7 +246,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			auto *call = dyn_cast_or_null<CallBase> (site.call);
 
-			if (call == nullptr || site.depth >= candidates_->depth_limit ()
+			if (call == nullptr || site.depth >= candidates->depth_limit ()
 			    || !foldable_site (*call))
 				continue;
 
@@ -234,8 +258,8 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			 * a published entry, which is what the engine translates from.
 			 */
 			if (callee->isDeclaration ()) {
-				callee = materialize_candidate (m, *callee, *candidates_,
-				                                *materialize_, scratch);
+				callee = materialize_candidate (m, *callee, *candidates,
+				                                materialize_, scratch);
 
 				if (callee == nullptr)
 					continue;
@@ -281,7 +305,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			 */
 			fam.invalidate (*root, PreservedAnalyses::none ());
 
-			candidates_->folded (*root, *callee);
+			candidates->folded (*root, *callee);
 			took_one = true;
 
 			for (CallBase *exposed : ifi.InlinedCallSites)
@@ -295,7 +319,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		 * behind the pass, so a compile that folded nothing pays nothing.
 		 */
 		if (took_one) {
-			PreservedAnalyses kept = simplify_->run (*root, fam);
+			PreservedAnalyses kept = simplify_.run (*root, fam);
 
 			fam.invalidate (*root, kept);
 			changed = true;

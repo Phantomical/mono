@@ -10,17 +10,16 @@
 #include "compiler.hpp"
 #include "jitlink-memory.hpp"
 #include "gdb-jit.hpp"
+#include "pipelines.hpp"
 
 #include "il-line-table.hpp"
 #include "seq-point-marker.hpp"
 #include "sidetables.hpp"
 #include "passes/array-address.hpp"
 #include "passes/class-init.hpp"
-#include "passes/inline-copies.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
-#include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
 #include "timing.hpp"
 
@@ -38,17 +37,10 @@
 #include <llvm/Object/StackMapParser.h>
 #include <llvm/ADT/Any.h>
 #include <llvm/ADT/ScopeExit.h>
-#include <llvm/Analysis/ProfileSummaryInfo.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/ProfileData/InstrProf.h>
 #include <llvm/ProfileData/InstrProfWriter.h>
 #include <llvm/Support/CommandLine.h>
-#include <llvm/Support/VirtualFileSystem.h>
-#include <llvm/Transforms/IPO/AlwaysInliner.h>
-#include <llvm/Transforms/Instrumentation/InstrProfiling.h>
-#include <llvm/Transforms/Instrumentation/PGOInstrumentation.h>
-#include <llvm/Transforms/Scalar/TailRecursionElimination.h>
-#include <llvm/Transforms/Utils/LoopSimplify.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
@@ -928,10 +920,6 @@ namespace {
 thread_local Module *g_verify_module = nullptr;
 thread_local VerifyLevel g_verify_level = VerifyLevel::off;
 
-/// The name the in-memory profile is mounted under. PGOInstrumentationUse takes
-/// a file name and a file system, so the profile has to be a file to it.
-constexpr const char *profile_file = "/mono.profdata";
-
 /// Gives one of LLVM's own command-line options the default this backend wants.
 ///
 /// A setting `--llvm-opt` carried is left alone, so each of these stays
@@ -968,102 +956,63 @@ default_option_text (StringRef name, StringRef value)
 		(void) opt->addOccurrence (0, name, value);
 }
 
-/// Puts counters in each body that can promote, and the entry counter that
-/// decides when it does.
-void
-add_instrumentation (ModulePassManager &mpm)
-{
-	InstrProfOptions counters;
-
-	// Value profiling needs compiler-rt, which we do not link.
-	default_option ("disable-vp", true);
-
-	// Promotion keeps a counter inside a loop in a register, and adds it back
-	// to the array at each exit from the loop. A hot loop then pays one atomic
-	// add for the whole loop, not one for each turn of it.
-	//
-	// Atomic has to stay off for any of that to happen. With it set, the
-	// lowering writes every increment as an atomicrmw. It records a promotion
-	// candidate only for an increment it wrote as a load, an add and a store,
-	// so promotion becomes dead code. ProfileAtomicPass below makes each
-	// counter promotion did not take atomic again, so this setting is not what
-	// keeps them safe.
-	counters.DoCounterPromotion = true;
-	counters.Atomic = false;
-
-	// Makes the add at a loop exit an atomicrmw. Without it, the exit reads and
-	// writes the counter in two steps. The promoter then offers that pair to
-	// the loop outside, which hoists the write out of the whole nest. Tier 2
-	// reads these counters while the code still runs, so a count written at
-	// each turn of the outer loop is worth more than one held to the end.
-	default_option ("atomic-counter-update-promoted", true);
-
-	// LLVM otherwise refuses a loop that any exit leaves through a return. That
-	// refusal keeps a profile read in the middle of a long loop from
-	// under-reporting it. Almost every loop a C# method ends with has that
-	// shape, so the refusal costs most of what promotion is worth here. A read
-	// that comes early loses only the turns the threads now in the loop took.
-	// Every entry that already left the loop is in the count, and entry count
-	// is what takes a body to tier 2.
-	default_option ("skip-ret-exit-block", false);
-
-	// LLVM gives a loop with more exiting blocks than this nothing at all, at
-	// three by default. A `for` with three early returns already has four, and
-	// then the whole loop keeps its per-turn atomics. Eight admits the loops a
-	// method is written with by hand.
-	//
-	// What a higher setting admits is a write-back on each further exit, and
-	// those are exits that mostly do not run: one exit is taken per pass through
-	// the loop whatever the count. So the code at the exits is what holds this
-	// down, not the time in it, and a measurement of that code is what a move to
-	// sixteen wants.
-	default_option<unsigned> ("speculative-counter-promotion-max-exiting", 8);
-
-	mpm.addPass (ProfileSelectPass ());
-	mpm.addPass (PGOInstrumentationGen (PGOInstrumentationType::FDO));
-	mpm.addPass (ProfileGatherPass ());
-
-	// Promotion wants each loop to have a preheader and exits that only it
-	// branches to, and the translator gives it neither. LLVM's own pipeline
-	// canonicalizes at this same point, behind the hash. Tier 2 reads the
-	// profile back against the CFG the hash was taken over, so it still
-	// matches.
-	mpm.addPass (createModuleToFunctionPassAdaptor (LoopSimplifyPass ()));
-
-	mpm.addPass (InstrProfilingLoweringPass (counters));
-	mpm.addPass (ProfileAtomicPass ());
-	mpm.addPass (ProfileLocalizePass ());
-
-	// Behind the instrumentation, never in front - see passes/tier-counter.hpp.
-	mpm.addPass (TierCounterPass ());
-}
-
-/// The tier-0 IR pipeline and everything it is built out of, kept per thread.
+/// Both tiers' IR pipelines and everything they are built out of, kept per
+/// thread.
 ///
-/// None of it depends on the module it runs over, and standing it up costs a
-/// couple of percent of a small method's compile. A compile thread builds it
-/// once and reuses it. The caller must empty the analysis managers after each
-/// run, because their results are keyed by IR the module takes with it.
-struct Tier0Pipeline {
+/// None of it depends on the module a pipeline runs over, and standing one up
+/// costs a couple of percent of a small method's compile. A compile thread
+/// builds both once and reuses them. What one compile hands a pipeline goes in
+/// the two slots below, and comes back out when the compile is done.
+struct ThreadPipelines {
 	PassInstrumentationCallbacks pic;
-	LoopAnalysisManager lam;
-	FunctionAnalysisManager fam;
-	CGSCCAnalysisManager cgam;
-	ModuleAnalysisManager mam;
-	std::unique_ptr<PassBuilder> pb;
-	ModulePassManager mpm;
 
-	Tier0Pipeline ();
+	/// The counts a tier-2 run reads, which the compile pushes and pops. See
+	/// pushProfile ().
+	IntrusiveRefCntPtr<OneFileFS> profile_fs = makeProfileFileSystem ();
 
-	/// Drop every cached analysis.
+	/// The engine the tier-2 inliner asks about the compile now running, read
+	/// through InlineCandidatesAnalysis. Null outside a tier-2 run, which the
+	/// inliner takes as leaving every site alone.
+	InlineCandidates *inliner = nullptr;
+
+	/// One tier's pipeline and the analyses it runs against.
+	struct Tier {
+		LoopAnalysisManager lam;
+		FunctionAnalysisManager fam;
+		CGSCCAnalysisManager cgam;
+		ModuleAnalysisManager mam;
+		ModulePassManager mpm;
+
+		/// Drop every cached analysis.
+		///
+		/// Must run while the module the results were computed over still
+		/// stands. A cached MemorySSA holds references into that IR, and its
+		/// destructor walks them.
+		void forget_analyses ()
+		{
+			mam.clear ();
+			cgam.clear ();
+			fam.clear ();
+			lam.clear ();
+		}
+	};
+
+	/// The pipeline for a tier, built when the thread first compiles for it.
 	///
-	/// Must run while the module the results were computed over still stands.
-	/// A cached MemorySSA holds references into that IR, and its destructor
-	/// walks them.
-	void forget_analyses ();
+	/// Lazily, because a tier costs a TargetMachine of its own to stand up and
+	/// most threads never compile for both. A thread doing tier-1 work with
+	/// tier 2 switched off would otherwise pay for a pipeline nothing runs.
+	Tier &tier1 ();
+	Tier &tier2 ();
+
+	ThreadPipelines ();
+
+private:
+	std::optional<Tier> tier1_;
+	std::optional<Tier> tier2_;
 };
 
-Tier0Pipeline::Tier0Pipeline ()
+ThreadPipelines::ThreadPipelines ()
 {
 	pic.registerAfterPassCallback ([] (StringRef pass, Any ir, const PreservedAnalyses &) {
 		if (g_verify_module == nullptr)
@@ -1082,117 +1031,108 @@ Tier0Pipeline::Tier0Pipeline ()
 			verify_or_die (*g_verify_module, when);
 	});
 
-	// A TargetMachine, so the cost-model-driven parts of the pipeline have a
-	// real TargetTransformInfo to ask.
-	pb = std::make_unique<PassBuilder> (&host_target_machine (), PipelineTuningOptions (),
-	                                    std::nullopt, &pic);
-	pb->registerModuleAnalyses (mam);
-	pb->registerCGSCCAnalyses (cgam);
-	pb->registerFunctionAnalyses (fam);
-	pb->registerLoopAnalyses (lam);
-	pb->crossRegisterProxies (lam, fam, cgam, mam);
-
-	// Before the pipeline, so the optimizer sees the element arithmetic and
-	// never sees a builtin.
-	mpm.addPass (ArrayAddressPass ());
-	mpm.addPass (LowerBuiltinsPass ());
-
-	if (tier2_enabled ())
-		add_instrumentation (mpm);
-
-	// Here, so that a check for a class an earlier check already covers costs
-	// the rest of the pipeline nothing. It runs again after the pipeline,
-	// because unrolling and jump threading copy whatever survived. A loop the
-	// unroller straightens out ends up with one check per copied body, and the
-	// second run drops all but the first.
-	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
-
-	// The front end translated a few callees in beside the body and marked each
-	// one always-inline. This folds them in, and simplification below then sees
-	// one body: the arguments are constants where the caller had them, and the
-	// class-init check on a folded entry is dominated by the caller's.
-	//
-	// Behind the instrumentation, so the counters and the CFG hash beside them
-	// describe the body with its calls still standing. Tier 2 reads the profile
-	// back at the same point in its own pipeline. A hash taken over the folded
-	// shape matches nothing there, and the tier-2 body is then laid out with no
-	// weights at all.
-	mpm.addPass (AlwaysInlinerPass ());
-
-	// A copy the fold above did not take goes back to being a call through the
-	// callee's thunk. Such a copy is entered by a direct call and has no jit
-	// info of its own, so a stack walk over its frame finds nothing.
-	mpm.addPass (StripInlineCopiesPass ());
-
-	// The function simplification pipeline rather than the whole O1 module
-	// pipeline. The only interprocedural work a module here has is the fold
-	// above: what is left is the methods it came in with, and every call still
-	// standing leaves the module by symbol. Running the module and CGSCC layers
-	// anyway costs a large fraction of tier-1 compile time.
-	FunctionPassManager fpm = pb->buildFunctionSimplificationPipeline (
-		OptimizationLevel::O1, ThinOrFullLTOPhase::None);
-
-	fpm.addPass (ClassInitPass ());
-
-	// At O1 the stock function simplification pipeline does not run this pass.
-	// It marks the entry thunk's call to the method body as a tail call, which
-	// lets the thunk leave no frame behind. Without it, every method entered
-	// through its thunk shows up twice in a stack trace.
-	fpm.addPass (TailCallElimPass ());
-
-	// Last, because what it repairs is the pipeline's own doing.
-	fpm.addPass (RestoreTailPositionPass ());
-	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
-
-	// After the pipeline, so the lowering works over natural-typed calls and
-	// only what survives reaches the C convention.
-	mpm.addPass (arch::MonoAbiPass ());
 }
 
-void
-Tier0Pipeline::forget_analyses ()
+/*
+ * A builder is a builder and nothing else: what it returns owns what it needs,
+ * and registering an analysis runs the lambda that builds it on the spot. So
+ * neither builder below has to be kept. The target machine, the callbacks and
+ * the file system do, and all three outlive this object.
+ */
+ThreadPipelines::Tier &
+ThreadPipelines::tier1 ()
 {
-	mam.clear ();
-	cgam.clear ();
-	fam.clear ();
-	lam.clear ();
+	if (tier1_)
+		return *tier1_;
+
+	Tier &tier = tier1_.emplace ();
+	MonoPipelineTuningOptions options = MonoPipelineTuningOptions::forTier1 ();
+
+	/*
+	 * With tier 2 off, a body neither counts its entries nor gathers a profile:
+	 * nothing would ask for the next tier, and nothing would read the counts if
+	 * it did. The mark the translator put on a body for its counter is then one
+	 * no pass looks at.
+	 */
+	options.EnablePromotion = tier2_enabled ();
+	options.EnablePGO = tier2_enabled ();
+
+	MonoPassBuilder pb (&host_target_machine (), profile_fs.get (), &pic, options);
+
+	pb.registerModuleAnalyses (tier.mam);
+	pb.registerCGSCCAnalyses (tier.cgam);
+	pb.registerFunctionAnalyses (tier.fam);
+	pb.registerLoopAnalyses (tier.lam);
+	pb.crossRegisterProxies (tier.lam, tier.fam, tier.cgam, tier.mam);
+
+	tier.mpm = pb.buildTier1Pipeline ();
+	return tier;
 }
 
-Tier0Pipeline &
-tier0_pipeline ()
+ThreadPipelines::Tier &
+ThreadPipelines::tier2 ()
 {
-	// The machine first. Both are thread_local and are therefore destroyed in
-	// reverse order of registration, and the pipeline's PassBuilder points at
-	// the machine.
-	host_target_machine ();
+	if (tier2_)
+		return *tier2_;
 
-	// On the heap, because the object is ~1.9K. A thread_local that large puts
-	// the runtime's TLS block over the surplus glibc keeps for dlopen'd
-	// modules, and the mono_tls_* variables are initial-exec, so the whole
-	// module has to fit in that surplus. An embedder that dlopens the runtime
-	// gets "cannot allocate memory in static TLS block" and no runtime at all.
-	static thread_local std::unique_ptr<Tier0Pipeline> pipeline;
+	Tier &tier = tier2_.emplace ();
+	MonoPassBuilder pb (&tier2_target_machine (), profile_fs.get (), &pic,
+	                    MonoPipelineTuningOptions::forTier2 ());
 
-	if (!pipeline)
-		pipeline = std::make_unique<Tier0Pipeline> ();
+	pb.registerModuleAnalyses (tier.mam);
+	pb.registerCGSCCAnalyses (tier.cgam);
+	pb.registerFunctionAnalyses (tier.fam);
+	pb.registerLoopAnalyses (tier.lam);
+	pb.crossRegisterProxies (tier.lam, tier.fam, tier.cgam, tier.mam);
 
-	return *pipeline;
+	// Over the slot rather than over an engine, because the pipeline is built
+	// once and the engine belongs to one compile.
+	tier.mam.registerPass ([this] { return InlineCandidatesAnalysis (inliner); });
+
+	tier.mpm = pb.buildTier2Pipeline ();
+	return tier;
 }
 
-/// Mounts a profile as a file and hands back the pass that reads it.
+/// Hands a compile's inlining engine to the tier-2 pipeline, and takes it back.
 ///
-/// The pass holds the file system, so it stays alive as long as the pass does.
-PGOInstrumentationUse
-profile_use_pass (ArrayRef<uint8_t> profile)
+/// The pipeline outlives the compile, so a pointer left behind is one the next
+/// tier-2 run would ask questions of.
+struct InlinerScope {
+	ThreadPipelines &pipelines;
+
+	InlinerScope (ThreadPipelines &pipelines, InlineCandidates *inliner)
+	    : pipelines (pipelines)
+	{
+		pipelines.inliner = inliner;
+	}
+
+	~InlinerScope () { pipelines.inliner = nullptr; }
+};
+
+ThreadPipelines &
+thread_pipelines ()
 {
-	IntrusiveRefCntPtr<vfs::InMemoryFileSystem> fs (new vfs::InMemoryFileSystem ());
+	// The machines first, both of them, even though a thread that compiles for
+	// one tier only ever runs one pipeline. All of these are thread_local and
+	// are therefore destroyed in reverse order of construction, so a machine
+	// built on demand later than this would go while a pipeline still points at
+	// it. Standing one up costs about what one small method's compile does,
+	// once per thread.
+	host_target_machine ();
+	tier2_target_machine ();
 
-	fs->addFile (profile_file, 0,
-	             MemoryBuffer::getMemBufferCopy (
-			     StringRef ((const char *) profile.data (), profile.size ()),
-			     profile_file));
+	// On the heap, because the object runs to several kilobytes. A thread_local
+	// that large puts the runtime's TLS block over the surplus glibc keeps for
+	// dlopen'd modules, and the mono_tls_* variables are initial-exec, so the
+	// whole module has to fit in that surplus. An embedder that dlopens the
+	// runtime gets "cannot allocate memory in static TLS block" and no runtime
+	// at all.
+	static thread_local std::unique_ptr<ThreadPipelines> pipelines;
 
-	return PGOInstrumentationUse (profile_file, "", /*IsCS=*/false, fs);
+	if (!pipelines)
+		pipelines = std::make_unique<ThreadPipelines> ();
+
+	return *pipelines;
 }
 
 } // namespace
@@ -1286,33 +1226,6 @@ build_profile (ArrayRef<ProfileCounters> counters)
 }
 
 void
-apply_profile (Module &m, ArrayRef<uint8_t> profile)
-{
-	LoopAnalysisManager lam;
-	FunctionAnalysisManager fam;
-	CGSCCAnalysisManager cgam;
-	ModuleAnalysisManager mam;
-	PassBuilder pb;
-
-	pb.registerModuleAnalyses (mam);
-	pb.registerCGSCCAnalyses (cgam);
-	pb.registerFunctionAnalyses (fam);
-	pb.registerLoopAnalyses (lam);
-	pb.crossRegisterProxies (lam, fam, cgam, mam);
-
-	ModulePassManager mpm;
-
-	mpm.addPass (ProfileSelectPass ());
-	mpm.addPass (profile_use_pass (profile));
-	mpm.run (m, mam);
-
-	mam.clear ();
-	cgam.clear ();
-	fam.clear ();
-	lam.clear ();
-}
-
-void
 MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile,
                              InlineCandidates *inliner)
 {
@@ -1325,103 +1238,36 @@ MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile,
 	// Codegen reads this to pick the optimizing target machine.
 	m.addModuleFlag (Module::Error, "mono.tier2", 1);
 
-	LoopAnalysisManager lam;
-	FunctionAnalysisManager fam;
-	CGSCCAnalysisManager cgam;
-	ModuleAnalysisManager mam;
-	PassBuilder pb (&tier2_target_machine ());
+	std::optional<timing::Scope> timed_setup (std::in_place, timing::Phase::pbsetup);
+	ThreadPipelines &pipelines = thread_pipelines ();
 
-	pb.registerModuleAnalyses (mam);
-	pb.registerCGSCCAnalyses (cgam);
-	pb.registerFunctionAnalyses (fam);
-	pb.registerLoopAnalyses (lam);
-	pb.crossRegisterProxies (lam, fam, cgam, mam);
+	// The after-pass verifier is registered once with the pipeline, so which
+	// module it looks at is handed over here rather than captured.
+	g_verify_module = verify != VerifyLevel::off ? &m : nullptr;
+	g_verify_level = verify;
 
-	ModulePassManager mpm;
+	// What this compile hands the pipeline. The counts are not copied, so the
+	// guard has to stand until the run is over.
+	OneFileFS::CurrentFileGuard counts = pushProfile (*pipelines.profile_fs, profile);
+	InlinerScope engine (pipelines, inliner);
 
-	mpm.addPass (ArrayAddressPass ());
-	mpm.addPass (LowerBuiltinsPass ());
+	timed_setup.reset ();
+	{
+		timing::Scope timed_run (timing::Phase::prun);
 
-	mpm.addPass (ProfileSelectPass ());
+		ThreadPipelines::Tier &tier = pipelines.tier2 ();
 
-	if (!profile.empty ()) {
-		mpm.addPass (profile_use_pass (profile));
-
-		// The summary the weights are read against. Nothing downstream builds
-		// it, and without it every hot/cold question answers the same way.
-		mpm.addPass (RequireAnalysisPass<ProfileSummaryAnalysis, Module> ());
+		tier.mpm.run (m, tier.mam);
+		tier.forget_analyses ();
 	}
-
-	mpm.addPass (createModuleToFunctionPassAdaptor (ClassInitPass ()));
-
-	// The front end translated a few callees in beside the body and marked each
-	// one always-inline. This folds them in, and simplification below then sees
-	// one body: the arguments are constants where the caller had them, and the
-	// class-init check on a folded entry is dominated by the caller's.
-	mpm.addPass (AlwaysInlinerPass ());
-
-	mpm.addPass (createModuleToFunctionPassAdaptor (
-		pb.buildFunctionSimplificationPipeline (OptimizationLevel::O3,
-	                                                ThinOrFullLTOPhase::None)));
-
-	/*
-	 * Behind simplification, and that is what a cost model needs: freshly
-	 * translated managed IR is a null check on every dereference and a bounds
-	 * check on every element, and a threshold read against it is spent before
-	 * any of the real work is costed.
-	 */
-	/*
-	 * What a candidate is put through before the cost model reads it, and what
-	 * a root the loop folded into is put through after. Both are built here so
-	 * the pass runs the pipeline this tier settled on rather than one of its
-	 * own, and both have to outlive mpm.run () below.
-	 *
-	 * The candidate pipeline is a module one because it runs over a module of
-	 * the inliner's own, holding the candidate and the trivial callees it
-	 * brought with it.
-	 */
-	ModulePassManager materialize;
-
-	materialize.addPass (ArrayAddressPass ());
-	materialize.addPass (LowerBuiltinsPass ());
-	materialize.addPass (AlwaysInlinerPass ());
-	materialize.addPass (createModuleToFunctionPassAdaptor (
-		pb.buildFunctionSimplificationPipeline (OptimizationLevel::O3,
-	                                                ThinOrFullLTOPhase::None)));
-
-	FunctionPassManager simplify = pb.buildFunctionSimplificationPipeline (
-		OptimizationLevel::O3, ThinOrFullLTOPhase::None);
-
-	if (inliner != nullptr)
-		mpm.addPass (TopDownInlinerPass (*inliner, tier2_target_machine (),
-		                                 materialize, simplify));
-
-	// A copy neither inliner folded in goes back to being a call through the
-	// callee's thunk, which is where it was before the body was asked for.
-	mpm.addPass (StripInlineCopiesPass ());
-
-	FunctionPassManager fpm;
-
-	fpm.addPass (ClassInitPass ());
-	fpm.addPass (TailCallElimPass ());
-	fpm.addPass (RestoreTailPositionPass ());
-	mpm.addPass (createModuleToFunctionPassAdaptor (std::move (fpm)));
-
-	mpm.addPass (arch::MonoAbiPass ());
-
-	mpm.run (m, mam);
-
-	mam.clear ();
-	cgam.clear ();
-	fam.clear ();
-	lam.clear ();
+	g_verify_module = nullptr;
 
 	if (verify != VerifyLevel::off)
 		verify_or_die (m, "after the tier-2 pipeline");
 }
 
 void
-MonoJit::run_tier0_pipeline (Module &m)
+MonoJit::run_tier1_pipeline (Module &m)
 {
 	timing::Scope timed (timing::Phase::pipeline);
 	VerifyLevel verify = verify_level ();
@@ -1430,7 +1276,7 @@ MonoJit::run_tier0_pipeline (Module &m)
 		verify_or_die (m, "as translated");
 
 	std::optional<timing::Scope> timed_setup (std::in_place, timing::Phase::pbsetup);
-	Tier0Pipeline &pipeline = tier0_pipeline ();
+	ThreadPipelines &pipelines = thread_pipelines ();
 
 	// The after-pass verifier is registered once with the pipeline, so which
 	// module it looks at is handed over here rather than captured.
@@ -1440,8 +1286,10 @@ MonoJit::run_tier0_pipeline (Module &m)
 	{
 		timing::Scope timed_run (timing::Phase::prun);
 
-		pipeline.mpm.run (m, pipeline.mam);
-		pipeline.forget_analyses ();
+		ThreadPipelines::Tier &tier = pipelines.tier1 ();
+
+		tier.mpm.run (m, tier.mam);
+		tier.forget_analyses ();
 	}
 	g_verify_module = nullptr;
 }
@@ -1466,6 +1314,9 @@ MonoJit::create (CodeArena *arena)
 	 * printed text.
 	 */
 	default_option_text ("x86-asm-syntax", "intel");
+
+	// Value profiling needs compiler-rt, which we do not link.
+	default_option ("disable-vp", true);
 
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());
@@ -1584,7 +1435,7 @@ MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile,
 	// Emptied first: the passes append, and this thread's last compile left its
 	// own sites behind.
 	profile_sites ().clear ();
-	run_tier0_pipeline (m);
+	run_tier1_pipeline (m);
 
 	std::vector<ProfileCounters> layout;
 

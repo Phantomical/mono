@@ -3,7 +3,10 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+
+#include <iterator>
 
 using namespace llvm;
 
@@ -40,10 +43,25 @@ emit_counter (Function &f, uint32_t threshold, Constant *method)
 
 	BasicBlock &entry = f.getEntryBlock ();
 
-	// Everything the entry block already holds belongs to the frame, so the
-	// check goes after all of it. The body carries on in the block split off
-	// here.
-	BasicBlock *body = entry.splitBasicBlock (entry.getTerminator (), "tier_body");
+	/*
+	 * After the frame and in front of the work. A static alloca has to stay in
+	 * the entry block to be a stack slot, so the check goes behind the last of
+	 * them, and everything else carries on in the block split off here.
+	 *
+	 * The rest has to move even though it costs a block. Simplification runs
+	 * ahead of this pass, so by now the entry block can hold the whole body.
+	 * Leaving that in place puts the check between a musttail call and the ret
+	 * it has to keep, which codegen refuses with "failed to perform tail call
+	 * elimination on a call site marked musttail".
+	 */
+	BasicBlock::iterator split = entry.getFirstNonPHIIt ();
+
+	for (Instruction &i : entry) {
+		if (isa<AllocaInst> (&i))
+			split = std::next (i.getIterator ());
+	}
+
+	BasicBlock *body = entry.splitBasicBlock (split, "tier_body");
 	BasicBlock *count = BasicBlock::Create (ctx, "tier_count", &f, body);
 	BasicBlock *ask = BasicBlock::Create (ctx, "tier_promote", &f, body);
 
@@ -66,7 +84,14 @@ emit_counter (Function &f, uint32_t threshold, Constant *method)
 	                       ask, body);
 
 	IRBuilder<> at_ask (ask);
-	at_ask.CreateCall (promote, { method });
+	CallInst *ask_call = at_ask.CreateCall (promote, { method });
+
+	// The body runs after the request, so this call has to come back. LLVM
+	// marks a call that reads none of the caller's frame as one that can become
+	// a jump, and a reader of that mark cannot tell it from a tail call the
+	// method really made.
+	ask_call->setTailCallKind (CallInst::TCK_NoTail);
+
 	at_ask.CreateBr (body);
 }
 
