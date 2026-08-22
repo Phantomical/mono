@@ -27,23 +27,6 @@ using namespace llvm;
 
 namespace mono {
 
-namespace {
-
-/// Every body in the module an inliner put there.
-SmallPtrSet<Function *, 8>
-inline_copies (Module &module)
-{
-	SmallPtrSet<Function *, 8> copies;
-
-	for (Function &fn : module)
-		if (!fn.isDeclaration () && fn.hasFnAttribute (inline_copy_attribute))
-			copies.insert (&fn);
-
-	return copies;
-}
-
-} // namespace
-
 unsigned
 ProfileInliner::depth_limit () const
 {
@@ -71,9 +54,9 @@ ProfileInliner::folded (Function &caller, Function &callee)
 }
 
 Error
-ProfileInliner::bind_and_resolve (size_t from)
+ProfileInliner::bind_and_resolve (Module &module, size_t from)
 {
-	if (Error err = bind_symbols (module_))
+	if (Error err = bind_symbols (module))
 		return err;
 
 	timing::Scope timed (timing::Phase::resolve);
@@ -84,7 +67,7 @@ ProfileInliner::bind_and_resolve (size_t from)
 }
 
 Function *
-ProfileInliner::materialize (Function &decl)
+ProfileInliner::materialize (Function &decl, Module &into)
 {
 	uint32_t limit = costed_inline_il_limit ();
 
@@ -119,11 +102,20 @@ ProfileInliner::materialize (Function &decl)
 	if (!loses_its_frame_safely (callee, header))
 		return nullptr;
 
-	SmallPtrSet<Function *, 8> before = inline_copies (module_);
+	/*
+	 * The body is defined onto a declaration, so `into` needs one of its own.
+	 * It carries decl's name, which is what the link matches on, and decl's
+	 * attributes, which say how the site calls it.
+	 */
+	Function *shape = Function::Create (decl.getFunctionType (),
+	                                    GlobalValue::ExternalLinkage, decl.getName (),
+	                                    into);
+
+	shape->copyAttributesFrom (&decl);
+
 	size_t resolved = externals_.size ();
-	Function *copy = materialize_inline_copy (module_, target_.domain, callee,
-	                                          cfg.get (), decl, externals_, types_,
-	                                          scope_);
+	Function *copy = materialize_inline_copy (into, target_.domain, callee, cfg.get (),
+	                                          *shape, externals_, types_, scope_);
 
 	if (copy == nullptr)
 		return nullptr;
@@ -131,22 +123,17 @@ ProfileInliner::materialize (Function &decl)
 	// The candidate brings its own getters and forwarders with it, so the cost
 	// model never has to weigh one and the shape test stays the only thing that
 	// decides them.
-	materialize_trivial_callees (module_, target_.domain, callee, *copy, externals_,
+	materialize_trivial_callees (into, target_.domain, callee, *copy, externals_,
 	                             types_, scope_);
 
-	if (Error err = bind_and_resolve (resolved)) {
+	/*
+	 * A candidate on a path the root never runs must not decide what the root
+	 * compiles to, so a body whose own callees will not resolve is dropped
+	 * whole. The module it was built in goes with it, which is what leaves the
+	 * root naming only what the compile had already resolved.
+	 */
+	if (Error err = bind_and_resolve (into, resolved)) {
 		consumeError (std::move (err));
-
-		/*
-		 * Take back every body this step added, before the inliner has folded
-		 * any of it. What is left names only what the compile had already
-		 * resolved, and each site goes through the callee's thunk as it did.
-		 */
-		for (Function &fn : module_)
-			if (!fn.isDeclaration () && fn.hasFnAttribute (inline_copy_attribute)
-			    && !before.contains (&fn))
-				fn.deleteBody ();
-
 		return nullptr;
 	}
 

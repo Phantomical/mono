@@ -1,8 +1,6 @@
 #include "top-down-inline.hpp"
 
-#include "array-address.hpp"
 #include "inline-copies.hpp"
-#include "lower-builtins.hpp"
 #include "tier-counter.hpp"
 
 #include <llvm/ADT/SmallVector.h>
@@ -17,11 +15,13 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/ValueHandle.h>
+#include <llvm/Linker/Linker.h>
 #include <llvm/Passes/PassBuilder.h>
-#include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 
 #include <algorithm>
+#include <memory>
+#include <string>
 #include <vector>
 
 using namespace llvm;
@@ -57,30 +57,101 @@ foldable_site (const CallBase &call)
 	return callee != nullptr && !callee->isIntrinsic () && !call.isMustTailCall ();
 }
 
-/// Puts a freshly translated body into the shape the cost model reads.
+/// The analysis managers a module of the inliner's own is prepared under.
 ///
-/// It arrives as raw translator output. That is behind the passes that lower
-/// what the front end left symbolic, and behind the simplification the rest of
-/// the module has had. Managed IR is at its most inflated there: a null check on
-/// every dereference, a bounds check on every element. A threshold read against
-/// that is spent before any of the real work is costed.
-void
-canonicalize (Module &m, Function &body, FunctionPassManager &simplify,
-              FunctionAnalysisManager &fam, ModuleAnalysisManager &mam)
+/// One set is built for the pass and emptied between candidates. The root's
+/// managers describe a different module, and an analysis cached against one
+/// module answers nothing about another.
+struct ScratchAnalyses {
+	LoopAnalysisManager lam;
+	FunctionAnalysisManager fam;
+	CGSCCAnalysisManager cgam;
+	ModuleAnalysisManager mam;
+
+	explicit ScratchAnalyses (PassBuilder &pb)
+	{
+		pb.registerModuleAnalyses (mam);
+		pb.registerCGSCCAnalyses (cgam);
+		pb.registerFunctionAnalyses (fam);
+		pb.registerLoopAnalyses (lam);
+		pb.crossRegisterProxies (lam, fam, cgam, mam);
+	}
+
+	void clear ()
+	{
+		mam.clear ();
+		cgam.clear ();
+		fam.clear ();
+		lam.clear ();
+	}
+};
+
+/// Brings the body behind \p decl into \p m, in the shape the cost model reads.
+///
+/// It is translated into a module of its own and prepared there, then linked
+/// over the declaration the site already calls. Preparing it away from the root
+/// is what keeps the preparation from reaching the root: it runs module passes,
+/// and one of them is an always-inliner, which would otherwise fold bodies into
+/// the root behind the walk that is working on it.
+///
+/// Returns null when the engine refused the method or the link declined, and
+/// the site then keeps its call.
+Function *
+materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
+                       ModulePassManager &prepare, ScratchAnalyses &scratch)
 {
-	ArrayAddressPass ().run (m, mam);
-	LowerBuiltinsPass ().run (m, mam);
+	std::string name = decl.getName ().str ();
+	auto into = std::make_unique<Module> (name, m.getContext ());
 
-	// The body brought its own getters and forwarders with it, each marked
-	// always-inline. Folding them here keeps the cost model from weighing a
-	// chain of forwarders as though it were work.
-	AlwaysInlinerPass ().run (m, mam);
+	// The preparation reads both, and the link refuses a module that disagrees
+	// with the one it goes into.
+	into->setDataLayout (m.getDataLayout ());
+	into->setTargetTriple (m.getTargetTriple ());
 
-	PreservedAnalyses kept = simplify.run (body, fam);
+	Function *made = candidates.materialize (decl, *into);
 
-	// The pipeline caches analyses as it goes, and the cost model reads this
-	// function's straight afterwards.
-	fam.invalidate (body, kept);
+	if (made == nullptr)
+		return nullptr;
+
+	/*
+	 * A copy is internal, which is what lets an inliner delete it once every
+	 * call to it is folded. Internal is also what stops it from satisfying the
+	 * declaration the site calls, so it crosses as external and is put back
+	 * once it is across.
+	 */
+	std::string copy = made->getName ().str ();
+
+	made->setLinkage (GlobalValue::ExternalLinkage);
+
+	prepare.run (*into, scratch.mam);
+	scratch.clear ();
+
+	// Read before the link. Satisfying a declaration is what the link does to
+	// it, and the pointer does not survive that.
+	if (Linker::linkModules (m, std::move (into)))
+		return nullptr;
+
+	Function *body = m.getFunction (copy);
+
+	if (body == nullptr || body->isDeclaration ())
+		return nullptr;
+
+	body->setLinkage (GlobalValue::InternalLinkage);
+
+	/*
+	 * The translator names a copy for itself rather than after the declaration
+	 * it stands in for, so the site can still be calling the one it always
+	 * did. Moving the uses across is what a materialization straight into the
+	 * caller's module did on the spot.
+	 */
+	Function *site = m.getFunction (name);
+
+	if (site != nullptr && site != body) {
+		site->replaceAllUsesWith (body);
+		site->eraseFromParent ();
+	}
+
+	return body;
 }
 
 } // namespace
@@ -104,9 +175,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		mam.getResult<FunctionAnalysisManagerModuleProxy> (m).getManager ();
 	ProfileSummaryInfo &psi = mam.getResult<ProfileSummaryAnalysis> (m);
 	PassBuilder pb (target_);
-	FunctionPassManager simplify =
-		pb.buildFunctionSimplificationPipeline (OptimizationLevel::O3,
-	                                                ThinOrFullLTOPhase::None);
+	ScratchAnalyses scratch (pb);
 
 	auto get_ac = [&] (Function &f) -> AssumptionCache & {
 		return fam.getResult<AssumptionAnalysis> (f);
@@ -165,15 +234,18 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			 * a published entry, which is what the engine translates from.
 			 */
 			if (callee->isDeclaration ()) {
-				callee = candidates_->materialize (*callee);
+				callee = materialize_candidate (m, *callee, *candidates_,
+				                                *materialize_, scratch);
 
 				if (callee == nullptr)
 					continue;
 
-				canonicalize (m, *callee, simplify, fam, mam);
-
-				// Canonicalizing runs passes over the whole module, so read
-				// the site back rather than trusting what it was.
+				/*
+				 * The link defines a function the module already held a
+				 * declaration of, so the site still calls what it did. Read
+				 * it back all the same: a link that had to rename would leave
+				 * the site pointing at a declaration nothing defines.
+				 */
 				call = dyn_cast_or_null<CallBase> (site.call);
 
 				if (call == nullptr || call->getCalledFunction () != callee)
@@ -223,7 +295,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		 * behind the pass, so a compile that folded nothing pays nothing.
 		 */
 		if (took_one) {
-			PreservedAnalyses kept = simplify.run (*root, fam);
+			PreservedAnalyses kept = simplify_->run (*root, fam);
 
 			fam.invalidate (*root, kept);
 			changed = true;

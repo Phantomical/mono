@@ -1370,8 +1370,31 @@ MonoJit::run_tier2_pipeline (Module &m, ArrayRef<uint8_t> profile,
 	 * check on every element, and a threshold read against it is spent before
 	 * any of the real work is costed.
 	 */
+	/*
+	 * What a candidate is put through before the cost model reads it, and what
+	 * a root the loop folded into is put through after. Both are built here so
+	 * the pass runs the pipeline this tier settled on rather than one of its
+	 * own, and both have to outlive mpm.run () below.
+	 *
+	 * The candidate pipeline is a module one because it runs over a module of
+	 * the inliner's own, holding the candidate and the trivial callees it
+	 * brought with it.
+	 */
+	ModulePassManager materialize;
+
+	materialize.addPass (ArrayAddressPass ());
+	materialize.addPass (LowerBuiltinsPass ());
+	materialize.addPass (AlwaysInlinerPass ());
+	materialize.addPass (createModuleToFunctionPassAdaptor (
+		pb.buildFunctionSimplificationPipeline (OptimizationLevel::O3,
+	                                                ThinOrFullLTOPhase::None)));
+
+	FunctionPassManager simplify = pb.buildFunctionSimplificationPipeline (
+		OptimizationLevel::O3, ThinOrFullLTOPhase::None);
+
 	if (inliner != nullptr)
-		mpm.addPass (TopDownInlinerPass (*inliner, tier2_target_machine ()));
+		mpm.addPass (TopDownInlinerPass (*inliner, tier2_target_machine (),
+		                                 materialize, simplify));
 
 	// A copy neither inliner folded in goes back to being a call through the
 	// callee's thunk, which is where it was before the body was asked for.

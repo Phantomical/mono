@@ -36,32 +36,36 @@ namespace mono {
 /// decide what the root compiles to.
 class ProfileInliner final : public InlineCandidates {
 public:
-	/// module is the one the root was translated into, and scope must already
-	/// name the root. externals, types and module_symbols are the compile's own,
-	/// and all four have to outlive this.
-	ProfileInliner (llvm::Module &module, const TranslationTarget &target,
+	/// scope must already name the root. externals, types and module_symbols are
+	/// the compile's own, and all three have to outlive this.
+	///
+	/// types is shared with the module the root was translated into, and has to
+	/// be: a named struct type belongs to the LLVMContext rather than to one
+	/// module, so a candidate built against a cache of its own would name a
+	/// second type of the same shape and the link would keep both.
+	ProfileInliner (const TranslationTarget &target,
 	                std::vector<ExternalSymbol> &externals, ModuleTypes &types,
 	                InlineScope &scope,
 	                std::vector<std::pair<llvm::StringRef, void *>> &module_symbols)
-	    : module_ (module), target_ (target), externals_ (externals), types_ (types),
-	      scope_ (scope), module_symbols_ (module_symbols)
+	    : target_ (target), externals_ (externals), types_ (types), scope_ (scope),
+	      module_symbols_ (module_symbols)
 	{
 	}
 
-	llvm::Function *materialize (llvm::Function &decl) override;
+	llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) override;
 	void folded (llvm::Function &caller, llvm::Function &callee) override;
 	unsigned depth_limit () const override;
 
 private:
-	llvm::Module &module_;
 	const TranslationTarget &target_;
 	std::vector<ExternalSymbol> &externals_;
 	ModuleTypes &types_;
 	InlineScope &scope_;
 	std::vector<std::pair<llvm::StringRef, void *>> &module_symbols_;
 
-	/// Names and resolves what the externals recorded since \p from refer to.
-	llvm::Error bind_and_resolve (size_t from);
+	/// Names and resolves what the externals recorded since \p from refer to,
+	/// for the bodies \p module holds.
+	llvm::Error bind_and_resolve (llvm::Module &module, size_t from);
 };
 
 } // namespace mono

@@ -223,8 +223,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	std::optional<ProfileInliner> inliner;
 
 	if (target.tier == JitTier::tier2)
-		inliner.emplace (*module, target, externals, types, inlining,
-		                 module_symbols);
+		inliner.emplace (target, externals, types, inlining, module_symbols);
 
 	std::vector<ProfileCounters> layout = MonoJit::optimize (
 		*module, target.tier, target.profile,

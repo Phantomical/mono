@@ -24,15 +24,17 @@ class InlineCandidates {
 public:
 	virtual ~InlineCandidates ();
 
-	/// The body to weigh at a site calling \p decl, translated into decl's own
-	/// module and marked as a copy.
+	/// The body to weigh at a site calling \p decl, translated into \p into and
+	/// marked as a copy.
+	///
+	/// into holds nothing else, and the returned function is named as decl is.
+	/// The caller links it over decl once it is in the shape the cost model
+	/// reads, so the site still needs no rewriting.
 	///
 	/// Null means the site keeps its call. The engine refuses the method, its
 	/// metadata will not load, or the compile has spent the translation it is
-	/// allowed. The body takes decl's place, so the site needs no rewriting. It
-	/// is fresh translator output, which the pass canonicalizes before it weighs
-	/// it.
-	virtual llvm::Function *materialize (llvm::Function &decl) = 0;
+	/// allowed. What comes back is fresh translator output.
+	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) = 0;
 
 	/// Report a site the inliner took.
 	virtual void folded (llvm::Function &caller, llvm::Function &callee) = 0;
@@ -58,8 +60,18 @@ public:
 /// win is. A root it took nothing in costs the compile nothing.
 class TopDownInlinerPass : public llvm::PassInfoMixin<TopDownInlinerPass> {
 public:
-	TopDownInlinerPass (InlineCandidates &candidates, llvm::TargetMachine &target)
-	    : candidates_ (&candidates), target_ (&target)
+	/// materialize is run over the module each candidate is translated into,
+	/// and settles what shape the cost model weighs. simplify is run over a
+	/// root the loop folded anything into. Both have to outlive the pass.
+	///
+	/// The two are the caller's rather than the pass's own so that a candidate
+	/// reaches the cost model in the same shape a tier-1 body has. The profile
+	/// is keyed on that shape, and a mismatch loses the weights in silence.
+	TopDownInlinerPass (InlineCandidates &candidates, llvm::TargetMachine &target,
+	                    llvm::ModulePassManager &materialize,
+	                    llvm::FunctionPassManager &simplify)
+	    : candidates_ (&candidates), target_ (&target), materialize_ (&materialize),
+	      simplify_ (&simplify)
 	{
 	}
 
@@ -68,6 +80,8 @@ public:
 private:
 	InlineCandidates *candidates_;
 	llvm::TargetMachine *target_;
+	llvm::ModulePassManager *materialize_;
+	llvm::FunctionPassManager *simplify_;
 };
 
 } // namespace mono

@@ -31,7 +31,7 @@ if(TARGET LLVM)
   set(_llvm_libs LLVM)
 else()
   llvm_map_components_to_libnames(_llvm_libs
-    analysis core bitwriter passes orcjit x86codegen)
+    analysis core bitwriter linker passes orcjit x86codegen)
 endif()
 
 target_include_directories(mono_llvm SYSTEM INTERFACE ${LLVM_INCLUDE_DIRS})
