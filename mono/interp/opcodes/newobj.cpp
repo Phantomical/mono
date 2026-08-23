@@ -72,6 +72,60 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ)
 	return &exec_call;
 }
 
+/*
+ * The constructor arrives in a local rather than a data item, because a body
+ * shared between reference instantiations reads it out of its generic context.
+ * The class, its vtable and its initializer all come off that constructor, so
+ * this is the whole of what the context has to answer.
+ */
+MONO_INTERP_OP_IMPL (MINT_NEWOBJ_DYN)
+{
+	guint16 param_size = ip[3];
+	call_args_offset = ip[1];
+
+	cmethod = LOCAL_VAR (ip[2], InterpMethod *);
+
+	if (param_size)
+		std::memmove (locals + call_args_offset + 2 * MINT_STACK_SLOT_SIZE,
+		              locals + call_args_offset, param_size);
+
+	MonoClass *newobj_class = cmethod->method->klass;
+
+	g_assert (!m_class_is_valuetype (newobj_class));
+
+	MonoDomain *domain = frame->imethod->domain;
+
+	error_init_reuse (error);
+	MonoVTable *vtable = mono_class_vtable_checked (domain, newobj_class, error);
+	if (!is_ok (error) || !mono_runtime_class_init_full (vtable, error)) {
+		MonoException *exc = mono_error_convert_to_exception (error);
+		g_assert (exc);
+		THROW_EX (exc, ip);
+	}
+
+	error_init_reuse (error);
+	MonoObject *o = mono_object_new_checked (domain, newobj_class, error);
+	LOCAL_VAR (call_args_offset, MonoObject *) = o; // return value
+	call_args_offset += MINT_STACK_SLOT_SIZE;
+	LOCAL_VAR (call_args_offset, MonoObject *) = o; // first parameter
+
+	mono_interp_error_cleanup (error); // FIXME: do not swallow the error
+	EXCEPTION_CHECKPOINT;
+
+#ifndef DISABLE_REMOTING
+	if (mono_object_is_transparent_proxy (o)) {
+		MonoMethod *remoting_invoke_method =
+			mono_marshal_get_remoting_invoke_with_check (cmethod->method, error);
+		mono_error_assert_ok (error);
+		cmethod = mono_interp_get_imethod (domain, remoting_invoke_method, error);
+		mono_error_assert_ok (error);
+	}
+#endif
+
+	MONO_INTERP_OP_ADVANCE ();
+	return &exec_call;
+}
+
 MONO_INTERP_OP_IMPL (MINT_NEWOBJ_FAST)
 {
 	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[3]]);

@@ -1492,15 +1492,45 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 
 			m = interp_get_method (method, token, image, generic_context, error);
 			return_val_if_nok (error, FALSE);
+
+			/*
+			 * MINT_NEWOBJ_DYN takes the class, its vtable and its initializer
+			 * off the constructor, so the constructor is the whole of what the
+			 * context has to answer. Every arm before that one names the class
+			 * itself, so each of them refuses instead.
+			 */
+			bool ctor_from_context = false;
+
 			if (sharing && depends_on_context (m)) {
-				cannot_share ("a method the generic context names");
-				return TRUE;
+				if (inlining) {
+					cannot_share ("a newobj inside an inlined callee");
+					return TRUE;
+				}
+
+				if (m_class_is_valuetype (m->klass)) {
+					cannot_share ("a newobj of a value type the generic context names");
+					return TRUE;
+				}
+
+				if (m_class_get_parent (m->klass) == mono_defaults.array_class) {
+					cannot_share ("a newobj of an array the generic context names");
+					return TRUE;
+				}
+
+				if (m->wrapper_type != MONO_WRAPPER_NONE) {
+					cannot_share ("a newobj a wrapper stands in for");
+					return TRUE;
+				}
+
+				ctor_from_context = true;
 			}
 
 			csignature = mono_method_signature_internal (m);
 			klass = m->klass;
 
-			if (!mono_class_init_internal (klass)) {
+			// A shared class is left alone. MINT_NEWOBJ_DYN initializes the
+			// instantiation's own where the object is made.
+			if (!ctor_from_context && !mono_class_init_internal (klass)) {
 				mono_error_set_for_class_failure (error, klass);
 				return_val_if_nok (error, FALSE);
 			}
@@ -1616,8 +1646,18 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				// Push back the params to top of stack
 				push_types (sp_params, csignature->param_count);
 
-				if (!mono_class_is_marshalbyref (klass) && !mono_class_has_finalizer (klass)
-				    && !m_class_has_weak_fields (klass)) {
+				if (ctor_from_context) {
+					int callee = emit_rgctx_fetch (MONO_RGCTX_INFO_INTERP_METHOD, m);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+
+					interp_add_ins (MINT_NEWOBJ_DYN);
+					interp_ins_set_dreg (last_ins, dreg);
+					interp_ins_set_sreg (last_ins, callee);
+					last_ins->data[0] = params_stack_size;
+				} else if (!mono_class_is_marshalbyref (klass) && !mono_class_has_finalizer (klass)
+				           && !m_class_has_weak_fields (klass)) {
 					InterpInst *newobj_fast;
 
 					if (is_vt) {

@@ -840,12 +840,14 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			is_delegate_invoke = TRUE;
 	}
 
-	// The delegate's own field carries the target, so the entry a fetch answers
-	// with is not what this site calls.
-	if (callee_from_context && is_delegate_invoke) {
-		cannot_share ("a delegate invoke the generic context names");
-		return TRUE;
-	}
+	/*
+	 * MINT_CALL_DELEGATE settles its callee off the delegate object, which is
+	 * the instantiation's own, and reads the signature for its parameter count
+	 * alone. Reference sharing keeps that count common, so the site needs
+	 * nothing fetched.
+	 */
+	if (is_delegate_invoke)
+		callee_from_context = false;
 
 	/* Pop the function pointer */
 	if (calli) {
