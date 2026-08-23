@@ -328,12 +328,11 @@ trivial_inline_depth_limit ()
 		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_PREPASS_DEPTH");
 
 		/*
-		 * Generous rather than tuned. The budget bounds what the pre-pass
-		 * translates, and it drains least deep first, so a deeper bound only
-		 * spends what the shallower folds left. Reach stops paying before
-		 * this on what we measure — folds on sharpchess go 858, 863, 863, 863
-		 * for depth 2, 3, 4 and 8, and raytracer3 is at 42 from depth 2 up —
-		 * so the room is for a chain longer than either of them has.
+		 * Generous rather than tuned. Reach stops paying well before this on
+		 * both corpora we have, and the room past that is deliberate: we
+		 * would rather the pre-pass folds a little too much than too little,
+		 * and this is not tuned to the benchmarks in the tree. What bounds
+		 * the translation is the budget, in materialize_trivial_callees ().
 		 */
 		if (value == nullptr)
 			return 8;

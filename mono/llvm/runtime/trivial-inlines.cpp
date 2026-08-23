@@ -346,7 +346,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 	// this root holds already.
 	/*
 	 * Least deep first. The worklist is drained from the front, so every body
-	 * one remove from root is folded before any body behind it, and a budget
+	 * one remove from root is translated before any body behind it, and a budget
 	 * that runs out drops the deepest candidates rather than whichever chain
 	 * the walk happened to go down.
 	 */
