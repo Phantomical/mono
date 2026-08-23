@@ -1524,11 +1524,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					return TRUE;
 				}
 
-				if (m_class_get_parent (m->klass) == mono_defaults.array_class) {
-					cannot_share ("a newobj of an array the generic context names");
-					return TRUE;
-				}
-
 				if (m->wrapper_type != MONO_WRAPPER_NONE) {
 					cannot_share ("a newobj a wrapper stands in for");
 					return TRUE;
@@ -1573,13 +1568,28 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					interp_add_conv (sp - 1, NULL, stack_type_of (ret_mt), MINT_CONV_OVF_I4_I8);
 #endif
 			} else if (m_class_get_parent (klass) == mono_defaults.array_class) {
+				int klass_local = -1;
+
+				if (ctor_from_context) {
+					klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, m->klass);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+				}
+
 				sp -= csignature->param_count;
 				for (int i = 0; i < csignature->param_count; i++)
 					locals[sp[i].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 
-				interp_add_ins (MINT_NEWOBJ_ARRAY);
-				last_ins->data[0] = get_data_item_index (m->klass);
-				last_ins->data[1] = csignature->param_count;
+				if (klass_local >= 0) {
+					interp_add_ins (MINT_NEWOBJ_ARRAY_DYN);
+					interp_ins_set_sreg (last_ins, klass_local);
+					last_ins->data[0] = csignature->param_count;
+				} else {
+					interp_add_ins (MINT_NEWOBJ_ARRAY);
+					last_ins->data[0] = get_data_item_index (m->klass);
+					last_ins->data[1] = csignature->param_count;
+				}
 				push_type (stack_type_of (ret_mt), klass);
 				interp_ins_set_dreg (last_ins, sp[-1].local);
 				locals[sp[-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
@@ -2871,39 +2881,68 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			++ip;
 			break;
 		}
-		case CEE_MKREFANY:
+		case CEE_MKREFANY: {
+			bool from_context = false;
 			CHECK_STACK (1);
 
 			token = read32 (ip + 1);
-			klass = resolve_class (method, token, generic_context);
+			klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
-			interp_add_ins (MINT_MKREFANY);
+			int klass_local = -1;
+
+			if (from_context) {
+				klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
+
+				if (sharing_refusal != nullptr)
+					return TRUE;
+			}
+
+			interp_add_ins (from_context ? MINT_MKREFANY_DYN : MINT_MKREFANY);
 			sp--;
-			interp_ins_set_sreg (last_ins, sp[0].local);
+			if (from_context)
+				interp_ins_set_sregs2 (last_ins, sp[0].local, klass_local);
+			else
+				interp_ins_set_sreg (last_ins, sp[0].local);
 			push_type_vt (mono_defaults.typed_reference_class, sizeof (MonoTypedRef));
 			interp_ins_set_dreg (last_ins, sp[-1].local);
-			last_ins->data[0] = get_data_item_index (klass);
+			if (!from_context)
+				last_ins->data[0] = get_data_item_index (klass);
 
 			ip += 5;
 			break;
+		}
 		case CEE_REFANYVAL: {
+			bool from_context = false;
 			CHECK_STACK (1);
 
 			token = read32 (ip + 1);
-			klass = resolve_class (method, token, generic_context);
+			klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
-			interp_add_ins (MINT_REFANYVAL);
+			int klass_local = -1;
+
+			if (from_context) {
+				klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
+
+				if (sharing_refusal != nullptr)
+					return TRUE;
+			}
+
+			interp_add_ins (from_context ? MINT_REFANYVAL_DYN : MINT_REFANYVAL);
 			sp--;
-			interp_ins_set_sreg (last_ins, sp[0].local);
+			if (from_context)
+				interp_ins_set_sregs2 (last_ins, sp[0].local, klass_local);
+			else
+				interp_ins_set_sreg (last_ins, sp[0].local);
 			push_simple_type (StackType::MP);
 			interp_ins_set_dreg (last_ins, sp[-1].local);
-			last_ins->data[0] = get_data_item_index (klass);
+			if (!from_context)
+				last_ins->data[0] = get_data_item_index (klass);
 
 			ip += 5;
 			break;

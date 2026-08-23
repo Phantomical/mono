@@ -281,6 +281,25 @@ MONO_INTERP_OP_IMPL (MINT_MKREFANY)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The class arrives in a local, because a body shared between reference
+ * instantiations reads it out of its generic context. A typed reference
+ * carries the class, so it has to be the instantiation's own.
+ */
+MONO_INTERP_OP_IMPL (MINT_MKREFANY_DYN)
+{
+	auto c = LOCAL_VAR (ip[3], MonoClass *);
+	gpointer addr = LOCAL_VAR (ip[2], gpointer);
+
+	auto tref = reinterpret_cast<MonoTypedRef *> ((locals + ip[1]));
+	tref->klass = c;
+	tref->type = m_class_get_byval_arg (c);
+	tref->value = addr;
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_REFANYTYPE)
 {
 	auto tref = reinterpret_cast<MonoTypedRef *> ((locals + ip[2]));
@@ -295,6 +314,25 @@ MONO_INTERP_OP_IMPL (MINT_REFANYVAL)
 {
 	auto tref = reinterpret_cast<MonoTypedRef *> ((locals + ip[2]));
 	auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);
+
+	if (c != tref->klass)
+		THROW_EX (mono_get_exception_invalid_cast (), ip);
+
+	LOCAL_VAR (ip[1], gpointer) = tref->value;
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+/*
+ * The class arrives in a local, for the reason MINT_MKREFANY_DYN gives. The
+ * test below is for exact identity, so the shared form matches no typed
+ * reference.
+ */
+MONO_INTERP_OP_IMPL (MINT_REFANYVAL_DYN)
+{
+	auto tref = reinterpret_cast<MonoTypedRef *> ((locals + ip[2]));
+	auto c = LOCAL_VAR (ip[3], MonoClass *);
 
 	if (c != tref->klass)
 		THROW_EX (mono_get_exception_invalid_cast (), ip);

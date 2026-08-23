@@ -303,6 +303,27 @@ MONO_INTERP_OP_IMPL (MINT_NEWARR_DYN)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The array class arrives in a local, because a body shared between reference
+ * instantiations reads it out of its generic context. The array carries its
+ * element type, so the class has to be the instantiation's own.
+ */
+MONO_INTERP_OP_IMPL (MINT_NEWOBJ_ARRAY_DYN)
+{
+	guint16 param_count = ip[3];
+	stackval *params = &LOCAL_VAR (ip[1], stackval);
+	auto klass = LOCAL_VAR (ip[2], MonoClass *);
+
+	ERROR_DECL (error);
+	LOCAL_VAR (ip[1], MonoObject *) =
+		ves_array_create (frame->imethod->domain, klass, param_count, params, error);
+	if (G_UNLIKELY (!is_ok (error)))
+		THROW_EX (mono_error_convert_to_exception (error), ip);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_NEWOBJ_ARRAY)
 {
 	guint16 token = ip[2];
