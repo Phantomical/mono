@@ -422,6 +422,22 @@ MONO_INTERP_OP_IMPL (MINT_LDSSFLDA)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The vtable and the placement both arrive in locals, because a body shared
+ * between reference instantiations reads them out of its generic context.
+ * instantiate_info () (mono/mini/mini-generic-sharing.c) raises the placement
+ * by one, which is how a field offset is packed into an rgctx slot.
+ */
+MONO_INTERP_OP_IMPL (MINT_LDSSFLDA_DYN)
+{
+	INIT_VTABLE (LOCAL_VAR (ip[2], MonoVTable *));
+	auto offset = static_cast<guint32> ((gsize) LOCAL_VAR (ip[3], gpointer) - 1);
+	LOCAL_VAR (ip[1], gpointer) = mono_get_special_static_data (offset);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_LDSSFLD)
 {
 	INIT_VTABLE (VTABLE_AT (ip[5]));

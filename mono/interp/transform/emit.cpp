@@ -774,6 +774,7 @@ patch_kind_for (MonoRgctxInfoType info_type)
 	case MONO_RGCTX_INFO_GENERIC_METHOD_CODE:
 		return MONO_PATCH_INFO_METHODCONST;
 	case MONO_RGCTX_INFO_CLASS_FIELD:
+	case MONO_RGCTX_INFO_FIELD_OFFSET:
 		return MONO_PATCH_INFO_FIELD;
 	default:
 		g_assert_not_reached ();
@@ -890,17 +891,29 @@ TransformData::interp_handle_isinst (MonoClass *klass, gboolean isinst_instr)
 bool
 TransformData::emit_static_field_address (MonoClassField *field, int dreg)
 {
-	// A special static is allocated an offset of its own, per domain and per
-	// thread or context, which no rgctx entry holds.
-	if (mono_class_field_is_special_static (field)) {
-		cannot_share ("a special static field of a class the generic context names");
-		return false;
-	}
-
 	int vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, field->parent);
 
 	if (sharing_refusal != nullptr)
 		return false;
+
+	/*
+	 * A special static gets no fixed offset into the statics block. The runtime
+	 * places it per domain and per thread or context, and
+	 * MONO_RGCTX_INFO_FIELD_OFFSET is where the instantiation's placement is
+	 * recorded. It arrives raised by one, the way instantiate_info () packs it.
+	 */
+	if (mono_class_field_is_special_static (field)) {
+		int offset_local = emit_rgctx_fetch (MONO_RGCTX_INFO_FIELD_OFFSET, field);
+
+		if (sharing_refusal != nullptr)
+			return false;
+
+		interp_add_ins (MINT_LDSSFLDA_DYN);
+		interp_ins_set_dreg (last_ins, dreg);
+		interp_ins_set_sregs2 (last_ins, vtable_local, offset_local);
+
+		return true;
+	}
 
 	guint32 offset = field->offset;
 

@@ -140,6 +140,7 @@ OPDEF(MINT_STSFLD_VT, "stsfld.vt", 5, 0, 1, MintOpTwoShorts)
 OPDEF(MINT_LDSFLDA, "ldsflda", 4, 1, 0, MintOpTwoShorts)
 OPDEF(MINT_LDSFLDA_DYN, "ldsflda.dyn", 5, 1, 1, MintOpInt)
 OPDEF(MINT_LDSSFLDA, "ldssflda", 5, 1, 0, MintOpInt)
+OPDEF(MINT_LDSSFLDA_DYN, "ldssflda.dyn", 4, 1, 2, MintOpNoArgs)
 
 OPDEF(MINT_MOV_I1, "mov.i1", 3, 1, 1, MintOpNoArgs)
 OPDEF(MINT_MOV_U1, "mov.u1", 3, 1, 1, MintOpNoArgs)
