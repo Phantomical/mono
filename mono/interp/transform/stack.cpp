@@ -288,9 +288,14 @@ TransformData::load_local (int local)
 		MonoClass *klass = mono_class_from_mono_type_internal (type);
 		push_type_vt (klass, size);
 	} else {
+		/* A local of a magic type holds the value, so its entry carries the mark.
+		 * An inlined body reads its arguments as locals of the inlining method,
+		 * which load_arg () never sees. */
 		MonoClass *klass = NULL;
 		if (mt == MintType::O)
 			klass = mono_class_from_mono_type_internal (type);
+		else
+			klass = magic_class_of (type);
 		push_type (stack_type_of (mt), klass);
 	}
 	interp_add_ins (get_mov_for_type (mt, TRUE));
