@@ -141,6 +141,12 @@ Lower severity individually. Corrected in bulk.
 | imperative summary among indicative neighbours | match the file |
 | hypotheticals ("what assigning the bit *would* do") | state the ordering fact directly |
 | filler: simply, just, note that, essentially | delete |
+| an em dash | cut the aside it carries, not the dash |
+
+The em dash earns its own line because replacing it with " - " fixes the character and keeps
+the defect. An author reaches for one when a sentence carries an aside, which is the sentence
+the house style wants split. The same author put one back in the same file an hour after the
+first was removed, and the second time cutting the aside made both dashes unnecessary.
 
 ## F. The reverse pushback — cutting the wrong thing
 
@@ -421,3 +427,28 @@ this function and still be describing how it works.
 **And a paragraph that ends as one clause was never a paragraph.** The blank line invites a
 paragraph, and a paragraph invites sentences to fill it. Put the clause in the summary and
 delete the blank line rather than finding two more sentences to keep it company.
+
+**G10. Written as a defence, so it leads with the evidence and omits the decision.** A
+constant's comment gave the measurement behind it — fold counts on two corpora at four
+depths — and the measurement picks 4 where the code says 8. The reason for 8 was a judgment
+call to err toward inlining, and it was in a chat message and a handoff document rather than
+in the file. So the comment cited as authority the very evidence the decision overrode, and
+the next reader who trusts it "fixes" the constant back.
+
+The cause generalises past this shape, which is why it is worth a name: **the author wrote
+the comment to defend the number against a reviewer rather than to inform a reader.** A
+defence leads with evidence, because that is what answers a challenge. A reader needs the
+decision, because that is the part no amount of reading the code recovers. The tell is a
+comment whose stated evidence and whose subject disagree — and it is worse than saying
+nothing, since it hands the next reader an argument for the wrong value.
+
+The two questions that separate them: what does this comment lose if nobody ever challenges
+the code, and can a reader derive it by reading? Evidence survives the first and fails the
+second; a decision fails the first and survives it. Keep what a reader cannot derive. This is
+the constructive half of the advice rule in SKILL.md — a comment that needs defending is
+usually failing the governing test, and a comment that is genuinely needed is still written
+wrong when it is written as a defence.
+
+Numbers belong to this too. A measurement pinned in a source file goes stale the first time
+anything upstream moves and nothing catches it. Put the counts in the plan document, where a
+stale number costs nothing, and leave the file the sentence that stays true.
