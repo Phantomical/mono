@@ -142,6 +142,15 @@ bool tier0_enabled ();
 /// Anything else is matched as a substring of the printed name.
 bool runs_at_tier0 (MonoMethod *method);
 
+/// Whether the interpreter runs one body for every reference instantiation of
+/// a generic rather than one for each.
+///
+/// MONO_INTERP_GSHARED turns it on. Off keeps a body for each instantiation,
+/// which is what separates a sharing bug from a transform bug: the same
+/// program run both ways executes the same bytecode against different
+/// metadata.
+bool interp_sharing_enabled ();
+
 } // namespace mono
 
 #endif

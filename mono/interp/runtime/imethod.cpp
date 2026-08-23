@@ -12,6 +12,7 @@
 #include "trace.hpp"
 #include "entry.hpp"
 #include "imethod.hpp"
+#include "sharing.hpp"
 
 #include <mono/metadata/marshal.h>
 #include <mono/metadata/metadata-update.h>
@@ -255,6 +256,32 @@ mono_interp_imethod_named (MonoDomain *domain, MonoMethod *method, MonoError *er
 
 	if (InterpMethod *known = lookup_imethod (domain, method))
 		return known;
+
+	/*
+	 * One body for every reference instantiation, and every instantiation's
+	 * record names it. So the tier counter and the promotion request below
+	 * belong to the shared form, which is the method a compile is asked for.
+	 *
+	 * The recursion ends at the shared form itself: it is open, and
+	 * shared_form () answers NULL for an open method.
+	 */
+	if (MonoMethod *shared = shared_form (method)) {
+		InterpMethod *body = mono_interp_imethod_named (domain, shared, error);
+
+		if (!is_ok (error))
+			return NULL;
+
+		llvm::Expected<mono::MonoDomainMethod *> instantiation =
+			mono::domain_method_get (domain, method);
+
+		if (!instantiation) {
+			mono_error_set_execution_engine (
+				error, "%s", llvm::toString (instantiation.takeError ()).c_str ());
+			return NULL;
+		}
+
+		return (*instantiation)->set_interp_method (body);
+	}
 
 	llvm::Expected<mono::MonoDomainMethod *> dm = mono::domain_method_get (domain, method);
 
