@@ -239,6 +239,7 @@ set(MONO_TESTS_CS_SRC
   trivial-inline.cs
   tier2-inline-override.cs
   math-intrinsics.cs
+  array-shape-intrinsics.cs
   override-basic.cs
   override-generic.cs
   override-declared.cs

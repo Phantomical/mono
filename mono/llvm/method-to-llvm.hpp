@@ -928,6 +928,9 @@ private:
 	llvm::Error emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod *accessor,
 	                                      MonoMethodSignature *sig);
 	llvm::Error emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	llvm::Error emit_array_rank (MonoIrBuilder &builder);
+	llvm::Error emit_array_total_length (MonoIrBuilder &builder);
+	llvm::Error emit_array_dimension (MonoIrBuilder &builder, bool lower_bound);
 	llvm::Error emit_string_length (MonoIrBuilder &builder);
 	llvm::Error emit_get_type (MonoIrBuilder &builder, bool receiver_by_reference);
 	llvm::FunctionCallee libm_decl (const char *name, llvm::Type *type, size_t arity);

@@ -38,6 +38,26 @@ is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 	       && std::string_view (m_class_get_name_space (klass)) == "System.Diagnostics";
 }
 
+/*
+ * Array.Length, GetLength () and GetLowerBound () answer with an int32, and the
+ * fields they read are as wide as mono_array_size_t. Where that type is wider,
+ * ves_icall_System_Array_GetLength () raises OverflowException on a length past
+ * int32, and a load raises nothing. So the shape emitters stand down and the
+ * site keeps its call. MONO_BIG_ARRAYS is what widens the type, and this tree
+ * defines it nowhere.
+ */
+static constexpr bool array_length_fits_int32 =
+	sizeof (mono_array_size_t) <= sizeof (int32_t);
+
+/// Whether the operand naming a dimension is the constant zero.
+static bool
+names_dimension_zero (llvm::Value *dimension)
+{
+	llvm::ConstantInt *literal = llvm::dyn_cast<llvm::ConstantInt> (dimension);
+
+	return literal != nullptr && literal->isZero ();
+}
+
 llvm::Expected<MonoMethod *>
 MethodLLVMEmitter::resolve_method (uint32_t token)
 {
@@ -1283,6 +1303,30 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	    && std::string_view (callee_method->name) == "get_Length"
 	    && sig->hasthis && sig->param_count == 0)
 		return emit_string_length (builder);
+
+	if (callee_method->klass == mono_defaults.array_class && sig->hasthis) {
+		std::string_view what = callee_method->name;
+
+		if (sig->param_count == 0) {
+			if (what == "get_Rank" || what == "GetRank")
+				return emit_array_rank (builder);
+
+			if (what == "get_Length" && array_length_fits_int32)
+				return emit_array_total_length (builder);
+		}
+
+		// Only dimension zero, which is the dimension Array.Copy asks for,
+		// and where mini stops as well. Any other dimension needs the rank
+		// test the icall makes, so those sites keep their call.
+		if (sig->param_count == 1 && array_length_fits_int32 && stack.size () >= 2
+		    && names_dimension_zero (get_stack (0).value)) {
+			if (what == "GetLength")
+				return emit_array_dimension (builder, false);
+
+			if (what == "GetLowerBound")
+				return emit_array_dimension (builder, true);
+		}
+	}
 
 	// Asked of the method the IL named, ahead of the wrapper swap below. That
 	// wrapper is the cost the arithmetic replaces.

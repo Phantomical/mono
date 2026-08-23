@@ -825,4 +825,153 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/*
+ * The three emitters below answer System.Array's shape accessors from the
+ * object instead of from an icall. Array.Copy reads the rank, the lower bound
+ * and the length of both arrays before it moves one element, which is six of
+ * these sites in one method.
+ *
+ * A szarray carries no bounds vector. Its length is MonoArray.max_length and
+ * its lower bound is zero. An array with a shape carries one MonoArrayBounds
+ * for each dimension, so the dimension emitter branches on that pointer. This
+ * is the split ves_icall_System_Array_GetLength () and
+ * ves_icall_System_Array_GetLowerBound () make.
+ *
+ * Each emitter reads a field of the receiver, so each one raises
+ * NullReferenceException on a null receiver.
+ */
+
+/// Reads the rank out of the array's vtable, which is what Array.Rank answers.
+llvm::Error
+MethodLLVMEmitter::emit_array_rank (MonoIrBuilder &builder)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	StackValue array = get_stack (0);
+
+	if (stack_type (array.type) != ObjectRef)
+		return invalid_il (llvm::Twine ("an array was expected, not operand type ")
+		                   + describe (array.type, stack_type (array.type)));
+
+	emit_null_check (builder, array.value);
+
+	llvm::Value *vtable = builder.CreateAlignedLoad (
+		llvm::PointerType::get (context (), 0),
+		builder.CreateGEP (builder.getInt8Ty (), array.value,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *rank = builder.CreateLoad (
+		builder.getInt8Ty (),
+		builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, rank))));
+
+	pop_stack (1);
+	push_stack (builder.CreateZExt (rank, builder.getInt32Ty ()), mono_get_int32_type ());
+	return llvm::Error::success ();
+}
+
+/// Reads MonoArray.max_length, which is what Array.Length answers.
+///
+/// That field holds the element count over every dimension, so one load
+/// answers for an array of any shape.
+llvm::Error
+MethodLLVMEmitter::emit_array_total_length (MonoIrBuilder &builder)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	llvm::Expected<llvm::Value *> length = array_length (builder, get_stack (0));
+
+	if (!length)
+		return length.takeError ();
+
+	pop_stack (1);
+	push_stack (builder.CreateZExtOrTrunc (*length, builder.getInt32Ty ()),
+	            mono_get_int32_type ());
+	return llvm::Error::success ();
+}
+
+/// Reads the length or the lower bound of dimension zero, which is what
+/// Array.GetLength (0) and Array.GetLowerBound (0) answer.
+///
+/// The caller decides which sites qualify, and this pops the receiver and the
+/// dimension both. Dimension zero is inside every array, so this emits no test
+/// against the rank.
+llvm::Error
+MethodLLVMEmitter::emit_array_dimension (MonoIrBuilder &builder, bool lower_bound)
+{
+	if (stack.size () < 2)
+		return unbalanced_stack (2);
+
+	StackValue array = get_stack (1);
+	llvm::Value *without_bounds = builder.getInt32 (0);
+
+	/*
+	 * The answer a szarray gives is settled before the branch below.
+	 * array_length () raises the null reference this emitter owes, so it ends
+	 * in a block of its own. A phi that took the branch's arm for a
+	 * predecessor would then name the wrong block.
+	 */
+	if (lower_bound) {
+		if (stack_type (array.type) != ObjectRef)
+			return invalid_il (llvm::Twine ("an array was expected, not operand type ")
+			                   + describe (array.type, stack_type (array.type)));
+
+		emit_null_check (builder, array.value);
+	} else {
+		llvm::Expected<llvm::Value *> whole = array_length (builder, array);
+
+		if (!whole)
+			return whole.takeError ();
+		without_bounds = builder.CreateZExtOrTrunc (*whole, builder.getInt32Ty ());
+	}
+
+	llvm::Value *bounds = builder.CreateAlignedLoad (
+		llvm::PointerType::get (context (), 0),
+		builder.CreateGEP (builder.getInt8Ty (), array.value,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, bounds))),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	llvm::BasicBlock *flat = llvm::BasicBlock::Create (context (), "dim_szarray", function);
+	llvm::BasicBlock *shaped = llvm::BasicBlock::Create (context (), "dim_shaped", function);
+	llvm::BasicBlock *done = llvm::BasicBlock::Create (context (), "dim_done", function);
+
+	builder.CreateCondBr (builder.CreateIsNull (bounds), flat, shaped);
+
+	builder.SetInsertPoint (flat);
+	builder.CreateBr (done);
+
+	builder.SetInsertPoint (shaped);
+
+	/* Both fields are scalar typedefs, so the size alone is the layout. */
+	constexpr unsigned length_bytes = sizeof (mono_array_size_t);
+	constexpr unsigned bound_bytes = sizeof (mono_array_lower_bound_t);
+	unsigned bytes = lower_bound ? bound_bytes : length_bytes;
+	int32_t at = lower_bound ? MONO_STRUCT_OFFSET (MonoArrayBounds, lower_bound)
+	                         : MONO_STRUCT_OFFSET (MonoArrayBounds, length);
+	llvm::Value *held = builder.CreateAlignedLoad (
+		builder.getIntNTy (bytes * 8),
+		builder.CreateGEP (builder.getInt8Ty (), bounds, builder.getInt32 (at)),
+		llvm::Align (bytes));
+
+	// A lower bound is signed and a length is not.
+	llvm::Value *first = lower_bound
+		? builder.CreateSExtOrTrunc (held, builder.getInt32Ty ())
+		: builder.CreateZExtOrTrunc (held, builder.getInt32Ty ());
+
+	builder.CreateBr (done);
+
+	builder.SetInsertPoint (done);
+
+	llvm::PHINode *result = builder.CreatePHI (builder.getInt32Ty (), 2, "dim_result");
+
+	result->addIncoming (without_bounds, flat);
+	result->addIncoming (first, shaped);
+
+	pop_stack (2);
+	push_stack (result, mono_get_int32_type ());
+	return llvm::Error::success ();
+}
+
 } // namespace mono
