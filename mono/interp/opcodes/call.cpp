@@ -608,6 +608,32 @@ MONO_INTERP_OP_IMPL (MINT_CALLVIRT_FAST)
 	return &exec_call;
 }
 
+/*
+ * The method the site named arrives in a local, for the reason MINT_CALL_DYN
+ * gives. The slot beside it stays a constant: an interface slot is hashed from
+ * the method's definition rather than from its instantiation, so every
+ * reference instantiation of the site lands on the same one.
+ */
+MONO_INTERP_OP_IMPL (MINT_CALLVIRT_DYN)
+{
+	cmethod = LOCAL_VAR (ip[2], InterpMethod *);
+	call_args_offset = ip[1];
+	auto this_arg = LOCAL_VAR (call_args_offset, MonoObject *);
+	auto slot = (gint16) ip[3];
+
+	MONO_INTERP_OP_ADVANCE ();
+
+	cmethod = get_virtual_method_fast (cmethod, this_arg->vtable, slot);
+	if (m_class_is_valuetype (this_arg->vtable->klass)
+	    && m_class_is_valuetype (cmethod->method->klass)) {
+		/* unbox */
+		gpointer unboxed = mono_object_unbox_internal (this_arg);
+		LOCAL_VAR (call_args_offset, gpointer) = unboxed;
+	}
+
+	return &exec_call;
+}
+
 MONO_INTERP_OP_IMPL (MINT_TAILCALLVIRT_FAST)
 {
 	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
@@ -748,6 +774,25 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 MONO_INTERP_OP_IMPL (MINT_LDVIRTFTN)
 {
 	auto m = static_cast<InterpMethod *> (frame->imethod->data_items[ip[3]]);
+	auto o = LOCAL_VAR (ip[2], MonoObject *);
+	NULL_CHECK (o);
+
+	error_init_reuse (error);
+	LOCAL_VAR (ip[1], gpointer) =
+		native_entry_for_imethod (get_virtual_method (m, o->vtable), error);
+	mono_error_assert_ok (error);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+/*
+ * The method the site named arrives in a local, for the reason MINT_CALL_DYN
+ * gives.
+ */
+MONO_INTERP_OP_IMPL (MINT_LDVIRTFTN_DYN)
+{
+	auto m = LOCAL_VAR (ip[3], InterpMethod *);
 	auto o = LOCAL_VAR (ip[2], MonoObject *);
 	NULL_CHECK (o);
 

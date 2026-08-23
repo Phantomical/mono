@@ -3501,18 +3501,19 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				return_val_if_nok (error, FALSE);
 				if (sharing && depends_on_context (m)) {
 					/*
-					 * ldvirtftn settles the method off the receiver, exactly as
-					 * a dispatched call does, so it needs nothing fetched. ldftn
-					 * names the method itself and does.
+					 * ldvirtftn settles the method off the receiver, exactly as a
+					 * dispatched call does, so it fetches only what
+					 * get_virtual_method () cannot answer for the shared form.
+					 * ldftn names the method itself and always fetches.
 					 */
-					if (*ip == CEE_LDVIRTFTN) {
-						if (!may_dispatch_through_receiver (m))
-							return TRUE;
-					} else if (inlining) {
+					from_context = *ip != CEE_LDVIRTFTN || dispatch_reads_the_context (m);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+
+					if (from_context && inlining) {
 						cannot_share ("a method pointer inside an inlined callee");
 						return TRUE;
-					} else {
-						from_context = true;
 					}
 				}
 
@@ -3613,8 +3614,15 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					if (sharing_refusal != nullptr)
 						return TRUE;
 
-					interp_add_ins (MINT_LDFTN_DYN);
-					interp_ins_set_sreg (last_ins, callee);
+					if (*ip == CEE_LDVIRTFTN) {
+						CHECK_STACK (1);
+						--sp;
+						interp_add_ins (MINT_LDVIRTFTN_DYN);
+						interp_ins_set_sregs2 (last_ins, sp[0].local, callee);
+					} else {
+						interp_add_ins (MINT_LDFTN_DYN);
+						interp_ins_set_sreg (last_ins, callee);
+					}
 					push_simple_type (StackType::F);
 					interp_ins_set_dreg (last_ins, sp[-1].local);
 

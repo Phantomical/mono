@@ -398,23 +398,21 @@ struct TransformData {
 	/// Whether a call to a method the generic context names has to fetch the
 	/// callee's InterpMethod out of the context.
 	///
-	/// A dispatched site answers false and records no refusal: it settles its
-	/// callee off the receiver, so the ordinary arm already serves every
-	/// instantiation. A shape neither route carries answers false as well, with
-	/// the refusal recorded, so a caller tests sharing_refusal to tell the two
-	/// apart.
+	/// A shape neither route carries answers false as well, with the refusal
+	/// recorded, so a caller tests sharing_refusal to tell that apart from a
+	/// site the shared form already names.
 	///
 	/// Call this only once is_virtual has settled. body is the method whose IL
 	/// is being read, which is this->method except while a callee is inlined.
 	bool may_call_through_context (MonoMethod *body, MonoMethod *target,
 	                               MonoMethodSignature *csignature, gboolean is_virtual,
 	                               gboolean tailcall);
-	/// Whether a site that settles target off the receiver serves every
-	/// reference instantiation, recording the refusal when it does not.
+	/// The same question for a site that settles target off the receiver, which
+	/// fetches the method it named and dispatches on that.
 	///
 	/// get_virtual_method () is what such a site resolves through, and this is
 	/// where the shapes it cannot answer for a shared form are named.
-	bool may_dispatch_through_receiver (MonoMethod *target);
+	bool dispatch_reads_the_context (MonoMethod *target);
 	void narrow_index (StackInfo *sp);
 	void one_arg_branch (int mint_op, int offset, int inst_size);
 	void push_simple_type (StackType type);

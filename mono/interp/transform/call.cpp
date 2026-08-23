@@ -445,33 +445,28 @@ TransformData::may_call_through_context (MonoMethod *body, MonoMethod *target,
 		return false;
 	}
 
-	/*
-	 * A dispatched site settles its callee off the receiver's vtable, which is
-	 * the instantiation's own, so it needs nothing from the context and takes
-	 * the ordinary arm. get_virtual_method () reads the shared form only for
-	 * the slot index, and reference sharing keeps that common.
-	 */
-	if (is_virtual) {
-		may_dispatch_through_receiver (target);
-		return false;
-	}
+	if (is_virtual)
+		return dispatch_reads_the_context (target);
 
 	return true;
 }
 
 bool
-TransformData::may_dispatch_through_receiver (MonoMethod *target)
+TransformData::dispatch_reads_the_context (MonoMethod *target)
 {
 	/*
 	 * The slot off an interface is an offset into the receiver's interface
 	 * table. get_virtual_method () looks that up under the interface the callee
 	 * is declared on, and the receiver implements the instantiation's rather
-	 * than the shared form's.
+	 * than the shared form's, so the site fetches the method the instantiation
+	 * declares.
+	 *
+	 * The slot the site carries stays a constant, because
+	 * mono_method_get_imt_slot () hashes an inflated method's definition rather
+	 * than the method itself.
 	 */
-	if (mono_class_is_interface (target->klass)) {
-		cannot_share ("an interface method the generic context names");
-		return false;
-	}
+	if (mono_class_is_interface (target->klass))
+		return true;
 
 	/*
 	 * A remoted class keeps the site dispatched even for a method that is not
@@ -495,7 +490,12 @@ TransformData::may_dispatch_through_receiver (MonoMethod *target)
 		return false;
 	}
 
-	return true;
+	/*
+	 * A class slot is an index into the receiver's vtable, and reference
+	 * sharing keeps that common, so the shared form names the site as well as
+	 * the instantiation would.
+	 */
+	return false;
 }
 
 /* Return FALSE if error, including inline failure */
@@ -1032,9 +1032,21 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
-			interp_add_ins (MINT_CALL_DYN);
+			interp_add_ins (is_virtual ? MINT_CALLVIRT_DYN : MINT_CALL_DYN);
 			interp_ins_set_dreg (last_ins, dreg);
 			interp_ins_set_sreg (last_ins, callee);
+
+			// The slot comes off the shared form, which the two lookups below
+			// answer for as well as the instantiation would. An interface slot
+			// is hashed from the method's definition, and a class slot is an
+			// index reference sharing keeps common.
+			if (is_virtual) {
+				if (mono_class_is_interface (target_method->klass))
+					last_ins->data[0] =
+						-2 * MONO_IMT_SIZE + mono_method_get_imt_slot (target_method);
+				else
+					last_ins->data[0] = mono_method_get_vtable_slot (target_method);
+			}
 		} else {
 			InterpMethod *imethod = mono_interp_get_imethod (domain, target_method, error);
 			return_val_if_nok (error, FALSE);
