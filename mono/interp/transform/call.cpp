@@ -572,11 +572,23 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	 */
 	bool context_named = false;
 	bool callee_from_context = false;
+	bool shared_constraint = false;
 
 	if (sharing) {
-		if (constrained_class != nullptr && depends_on_context (constrained_class))
-			cannot_share ("a constrained call on a class the generic context names");
-		else if (target_method != nullptr && depends_on_context (target_method))
+		if (constrained_class != nullptr && depends_on_context (constrained_class)) {
+			/*
+			 * Reference sharing keeps a class value type in every instantiation
+			 * or none, so this splits the same way for all of them. Which
+			 * method a value type answers the call with is metadata of the
+			 * instantiation's own class.
+			 */
+			if (m_class_is_valuetype (constrained_class))
+				cannot_share ("a constrained call on a value type the generic context names");
+			else
+				shared_constraint = true;
+		}
+
+		if (target_method != nullptr && depends_on_context (target_method))
 			context_named = true;
 
 		/*
@@ -641,21 +653,31 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		         target_method->name, mono_signature_full_name (target_method->signature),
 		         target_method);
 #endif
-		target_method = mono_get_method_constrained_with_method (
-			image, target_method, constrained_class, generic_context, error);
+		/*
+		 * The refinement asks whether the constrained class is assignable to
+		 * the method's, and a shared body hands it the shared form rather than
+		 * what the constraint promised. ECMA-335 III.2.1 asks for no
+		 * refinement anyway where thisType is a reference type: ptr is
+		 * dereferenced and the call is an ordinary callvirt on the method the
+		 * token named. The arm below is that dereference.
+		 */
+		if (!shared_constraint) {
+			target_method = mono_get_method_constrained_with_method (
+				image, target_method, constrained_class, generic_context, error);
 #if DEBUG_INTERP
-		g_print ("                    : %s::%s.  %s (%p)\n", target_method->klass->name,
-		         target_method->name, mono_signature_full_name (target_method->signature),
-		         target_method);
+			g_print ("                    : %s::%s.  %s (%p)\n", target_method->klass->name,
+			         target_method->name, mono_signature_full_name (target_method->signature),
+			         target_method);
 #endif
-		/* Intrinsics: try again. mono_get_method_constrained_with_method () can resolve to a method we can substitute. */
-		if (target_method && !context_named
-		    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly,
-		                                 &op))
-			return TRUE;
+			/* Intrinsics: try again. mono_get_method_constrained_with_method () can resolve to a method we can substitute. */
+			if (target_method && !context_named
+			    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly,
+			                                 &op))
+				return TRUE;
 
-		return_val_if_nok (error, FALSE);
-		mono_class_setup_vtable (target_method->klass);
+			return_val_if_nok (error, FALSE);
+			mono_class_setup_vtable (target_method->klass);
+		}
 
 		// Follow the rules for constrained calls from ECMA spec
 		if (!m_class_is_valuetype (constrained_class)) {
