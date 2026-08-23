@@ -60,10 +60,9 @@ struct InlineScope {
 		/// The copy that stands for the method, null when none does. Root is
 		/// null, because it has a body rather than a copy.
 		///
-		/// A handle rather than a raw pointer, because a copy goes away with
-		/// no other sign — folded_copy_in () names the two ways. A raw
-		/// pointer here reads freed memory rather than failing to compile,
-		/// which is also why the reader tests the module.
+		/// A handle rather than a raw pointer. The pipeline erases a copy once
+		/// it has folded every call to it, and a raw pointer then reads freed
+		/// memory rather than failing to compile.
 		llvm::WeakVH copy;
 	};
 
