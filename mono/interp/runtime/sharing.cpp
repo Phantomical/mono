@@ -22,8 +22,9 @@ namespace mono::interp {
  * value type changes all of them, so an instantiation naming one gets a body of
  * its own.
  *
- * SHARE_MODE_NONE is what the compiled tier asks for as well, which is what
- * makes a method share at both tiers or at neither.
+ * SHARE_MODE_NONE is what the compiled tier asks for as well, so a method that
+ * shares here shares there. The gates below are the wider set, so the other
+ * direction does not hold.
  */
 MonoMethod *
 shared_form (MonoMethod *method)
@@ -32,6 +33,14 @@ shared_form (MonoMethod *method)
 		return nullptr;
 
 	if (!mono_class_generic_sharing_enabled (method->klass))
+		return nullptr;
+
+	/*
+	 * A shared body carries the sequence points and the jit info of the shared
+	 * form, so a breakpoint asked for on one instantiation has nothing of that
+	 * instantiation's to bind to.
+	 */
+	if (mini_get_debug_options ()->gen_sdb_seq_points)
 		return nullptr;
 
 	// The shared method is itself open, and asking it for its own shared form
@@ -47,10 +56,6 @@ shared_form (MonoMethod *method)
 	 * every instantiation of an ordinary instance method of a reference
 	 * generic class. The rest are entered with the context passed in, and no
 	 * interpreter entry carries one yet.
-	 *
-	 * This also keeps the type variables of a generic method out of the
-	 * interpreter. Its shared form still names them, and mint_type () has no
-	 * MintType for a MONO_TYPE_MVAR.
 	 */
 	if (takes_rgctx_argument (method))
 		return nullptr;
@@ -107,11 +112,10 @@ depends_on_context (MonoMethod *target)
 }
 
 /*
- * mini_get_basic_type_from_generic () answers the same question for the
- * compiled tier and is static to mini-generic-sharing.c. gsharedvt is out of
- * scope here, so the case it carries for a variable that stands for a value
- * type has no counterpart below: shared_form () asks for SHARE_MODE_NONE, and
- * every variable a body meets under it stands for a reference.
+ * This restates mini_get_basic_type_from_generic (), which answers the same
+ * question for the compiled tier and is static to mini-generic-sharing.c. It is
+ * shorter because shared_form () asks for SHARE_MODE_NONE, so every variable a
+ * body meets under it stands for a reference.
  */
 MonoType *
 shared_type (MonoType *type)

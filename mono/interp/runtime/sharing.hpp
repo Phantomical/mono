@@ -8,8 +8,8 @@
  *
  * The compiled tier answers the same questions in
  * mono/llvm/method-to-llvm/generic-sharing.cpp, and both engines read them out
- * of mini. Keeping the two on one set of predicates is what makes a method share
- * at both tiers or at neither.
+ * of mini. Keep the two on one set of predicates, so that the tiers cannot
+ * disagree about what a shared form is.
  */
 
 #include "internals.hpp"

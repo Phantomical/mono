@@ -370,12 +370,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 	}
 
 	while (ip < end) {
-		/*
-		 * As soon as the body is refused rather than at the end of the walk. A
-		 * shared form still names its type variables, and the instruction
-		 * behind a refused site is the one that asks mint_type () for a
-		 * MintType they have none of.
-		 */
+		// Each site that records a refusal returns as well. This catches one
+		// that forgets, before the next instruction reaches a shared class.
 		if (sharing_refusal != nullptr)
 			return TRUE;
 
@@ -1402,8 +1398,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			klass =
 				mono_class_get_and_inflate_typespec_checked (image, token, generic_context, error);
 			return_val_if_nok (error, FALSE);
-			if (sharing && depends_on_context (klass))
+			if (sharing && depends_on_context (klass)) {
 				cannot_share ("a class the generic context names");
+				return TRUE;
+			}
 
 			if (m_class_is_valuetype (klass)) {
 				MintType mt = mint_type (m_class_get_byval_arg (klass));
@@ -1437,8 +1435,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				                                                     error);
 				return_val_if_nok (error, FALSE);
 			}
-			if (sharing && depends_on_context (klass))
+			if (sharing && depends_on_context (klass)) {
 				cannot_share ("a class the generic context names");
+				return TRUE;
+			}
 
 			interp_emit_ldobj (klass);
 
@@ -1695,8 +1695,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				                                                     error);
 				return_val_if_nok (error, FALSE);
 			}
-			if (sharing && depends_on_context (klass))
+			if (sharing && depends_on_context (klass)) {
 				cannot_share ("a class the generic context names");
+				return TRUE;
+			}
 
 			if (mono_class_is_nullable (klass)) {
 				MonoMethod *target_method;
@@ -2771,13 +2773,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			gpointer handle;
 			token = read32 (ip + 1);
 			/*
-			 * The token names a type, a field or a method, and the handle is
-			 * built from the shared form rather than resolved through a site
-			 * the walk classifies. typeof (T) in a body shared between string
-			 * and object has one answer and needs two.
+			 * Every token, rather than only the ones the context names. The
+			 * handle below is burned into a data item, and typeof (T) in a
+			 * body shared between string and object needs two of them.
+			 * Classifying the token instead means resolving it first, which is
+			 * what the code below does for each shape it accepts.
 			 */
 			if (sharing) {
-				cannot_share ("a token the generic context names");
+				cannot_share ("ldtoken in a shared body");
 				return TRUE;
 			}
 			if (method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD
@@ -3645,9 +3648,9 @@ TransformData::~TransformData ()
 /// Records that the body under transform names its generic context, so it
 /// cannot serve every reference instantiation.
 ///
-/// The reason is kept for the trace and is otherwise inert: what a caller acts
-/// on is that a reason exists. Callers test sharing first, so what is safe to
-/// pass here is any string that outlives the transform.
+/// The reason is only printed, and what the transform acts on is that a reason
+/// exists. It is kept rather than copied, so it must outlive the transform.
+/// Every caller passes a literal.
 void
 TransformData::cannot_share (const char *what)
 {
@@ -3750,11 +3753,6 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 		return_if_nok (error);
 	}
 
-	/*
-	 * The walk runs to the end before the refusal is read, because a site that
-	 * names the context resolves correctly against the shared form and only
-	 * the code it writes is unusable. What follows would publish that code.
-	 */
 	if (td->sharing_refusal != nullptr) {
 		rtm->sharing_refused = 1;
 
@@ -3895,9 +3893,10 @@ static mono_mutex_t calc_section;
 
 /*
  * A shared body and its instantiations differ only in metadata. Every reference
- * argument is one pointer, so the argument offsets, the local offsets and the
- * stack size the transform computed hold for each of them, and
- * mini_get_underlying_type () has already erased each type variable to object.
+ * argument is one pointer, and shared_type () and mint_type () answer a type
+ * variable with the constraint the shared form recorded, so the argument
+ * offsets, the local offsets and the stack size the transform computed hold for
+ * each instantiation.
  *
  * So an instantiation takes the code rather than writing its own. It keeps the
  * fields that name it - its method, its domain, its counter and its own jit
@@ -3935,9 +3934,9 @@ adopt_body (InterpMethod *imethod, const InterpMethod *body)
 /// Returns the transformed body every reference instantiation of method runs,
 /// or NULL when this method has to write its own.
 ///
-/// The first instantiation to ask transforms the shared form. A refusal is
-/// recorded on the shared form's own record, so however many instantiations
-/// follow, the IL is read once.
+/// The first instantiation to ask transforms the shared form. The verdict,
+/// refusal included, is recorded on the shared form's own record, so the shared
+/// IL is read once however many instantiations follow.
 static InterpMethod *
 shared_body (MonoMethod *method, MonoDomain *domain, MonoError *error)
 {

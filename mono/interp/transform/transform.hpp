@@ -390,13 +390,12 @@ struct TransformData {
 
 	/// Why this body cannot serve every reference instantiation, or NULL while
 	/// it still can. Only a transform of a shared form fills it in, and the
-	/// first reason wins: the ones behind it describe the same refusal.
+	/// first reason is the one kept.
 	const char *sharing_refusal = nullptr;
 
-	/// Whether this transform is of a shared form, which is what makes a site
-	/// that names the generic context a refusal rather than an ordinary
-	/// resolution. A concrete instantiation names no context, so the test
-	/// below is skipped rather than answered.
+	/// Whether this transform is of a shared form. It is what makes a site that
+	/// names the generic context a refusal rather than an ordinary resolution,
+	/// so a transform of a concrete instantiation asks no such question.
 	bool sharing = false;
 
 	MonoMethod *method = nullptr;

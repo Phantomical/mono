@@ -518,9 +518,9 @@ enum_type:
 		 * constraint the shared form recorded says which, so the variable is
 		 * as wide as what it is constrained to.
 		 *
-		 * A constraint that names a value type is gsharedvt, which this
-		 * interpreter does not produce. It is asserted rather than read as a
-		 * reference, because one slot cannot hold it.
+		 * A constraint that names a value type is gsharedvt, which
+		 * shared_form () refuses. The assert stops such a type reaching a
+		 * caller that would then hold a wide value in one pointer.
 		 */
 		MonoType *constraint = type->data.generic_param->gshared_constraint;
 
