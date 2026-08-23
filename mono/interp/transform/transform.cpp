@@ -2378,20 +2378,20 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
-			if (from_context) {
-				// The arms below allocate against the vtable of the class the
-				// token resolved to, and each instantiation has its own.
-				if (!mini_type_is_reference (m_class_get_byval_arg (klass))) {
-					cannot_share ("box of a value type the generic context names");
-					return TRUE;
-				}
-
-				// Already an object, whatever the context stands for.
+			// Already an object, whatever the context stands for.
+			if (from_context && mini_type_is_reference (m_class_get_byval_arg (klass))) {
 				ip += 5;
 				break;
 			}
 
 			if (mono_class_is_nullable (klass)) {
+				// Box is resolved off the class, and a class the context names
+				// is open.
+				if (from_context) {
+					cannot_share ("box of a nullable the generic context names");
+					return TRUE;
+				}
+
 				MonoMethod *target_method =
 					mono_class_get_method_from_name_checked (klass, "Box", 1, 0, error);
 				return_val_if_nok (error, FALSE);
@@ -2414,13 +2414,36 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				const gboolean vt = boxed_mt == MintType::VT;
 
 				coerce_fp (sp - 1, stack_type_of (boxed_mt));
-				MonoVTable *vtable = mono_class_vtable_checked (domain, klass, error);
-				return_val_if_nok (error, FALSE);
+
+				MonoVTable *vtable = nullptr;
+				int vtable_local = -1;
+
+				if (from_context) {
+					// mint_type () answers VT for a generic instance of a value
+					// type, unless the definition is an enum.
+					if (!vt) {
+						cannot_share ("box of a generic enum the generic context names");
+						return TRUE;
+					}
+
+					vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, klass);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+				} else {
+					vtable = mono_class_vtable_checked (domain, klass, error);
+					return_val_if_nok (error, FALSE);
+				}
 
 				sp--;
-				interp_add_ins (vt ? MINT_BOX_VT : MINT_BOX);
-				interp_ins_set_sreg (last_ins, sp[0].local);
-				last_ins->data[0] = get_data_item_index (vtable);
+				if (from_context) {
+					interp_add_ins (MINT_BOX_VT_DYN);
+					interp_ins_set_sregs2 (last_ins, sp[0].local, vtable_local);
+				} else {
+					interp_add_ins (vt ? MINT_BOX_VT : MINT_BOX);
+					interp_ins_set_sreg (last_ins, sp[0].local);
+					last_ins->data[0] = get_data_item_index (vtable);
+				}
 				push_type (StackType::O, klass);
 				interp_ins_set_dreg (last_ins, sp[-1].local);
 				ip += 5;

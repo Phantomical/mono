@@ -223,10 +223,28 @@ TransformData::interp_constrained_box (MonoDomain *domain, MonoClass *constraine
 {
 	MintType mt = mint_type (m_class_get_byval_arg (constrained_class));
 	StackInfo *sp = this->sp - 1 - csignature->param_count;
+	bool from_context = sharing && depends_on_context (constrained_class);
+	int vtable_local = -1;
+
 	if (mono_class_is_nullable (constrained_class)) {
 		g_assert (mt == MintType::VT);
+
+		// The box reads the class the token named, and a class the context
+		// names is open.
+		if (from_context) {
+			cannot_share ("a constrained call on a nullable the generic context names");
+			return;
+		}
+
 		interp_add_ins (MINT_BOX_NULLABLE_PTR);
 		last_ins->data[0] = get_data_item_index (constrained_class);
+	} else if (from_context) {
+		vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, constrained_class);
+
+		if (sharing_refusal != nullptr)
+			return;
+
+		interp_add_ins (MINT_BOX_PTR_DYN);
 	} else {
 		MonoVTable *vtable = mono_class_vtable_checked (domain, constrained_class, error);
 		return_if_nok (error);
@@ -234,7 +252,11 @@ TransformData::interp_constrained_box (MonoDomain *domain, MonoClass *constraine
 		interp_add_ins (MINT_BOX_PTR);
 		last_ins->data[0] = get_data_item_index (vtable);
 	}
-	interp_ins_set_sreg (last_ins, sp->local);
+
+	if (vtable_local >= 0)
+		interp_ins_set_sregs2 (last_ins, sp->local, vtable_local);
+	else
+		interp_ins_set_sreg (last_ins, sp->local);
 	set_simple_type_and_local (sp, StackType::O);
 	interp_ins_set_dreg (last_ins, sp->local);
 }
@@ -575,18 +597,16 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	bool shared_constraint = false;
 
 	if (sharing) {
-		if (constrained_class != nullptr && depends_on_context (constrained_class)) {
-			/*
-			 * Reference sharing keeps a class value type in every instantiation
-			 * or none, so this splits the same way for all of them. Which
-			 * method a value type answers the call with is metadata of the
-			 * instantiation's own class.
-			 */
-			if (m_class_is_valuetype (constrained_class))
-				cannot_share ("a constrained call on a value type the generic context names");
-			else
-				shared_constraint = true;
-		}
+		/*
+		 * Reference sharing keeps a class a value type in every instantiation
+		 * or none, so this splits the same way for all of them. Only the
+		 * reference arm skips the refinement further down, which ECMA does not
+		 * ask for there and which cannot answer for an open class anyway. A
+		 * value type keeps it, because reference sharing gives every
+		 * instantiation the same vtable layout and so the same answer.
+		 */
+		if (constrained_class != nullptr && depends_on_context (constrained_class))
+			shared_constraint = !m_class_is_valuetype (constrained_class);
 
 		if (target_method != nullptr && depends_on_context (target_method))
 			context_named = true;
@@ -677,6 +697,11 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 
 			return_val_if_nok (error, FALSE);
 			mono_class_setup_vtable (target_method->klass);
+
+			// The refinement can land on a class the context names where the
+			// method the token named was common.
+			if (sharing && !context_named && depends_on_context (target_method))
+				context_named = true;
 		}
 
 		// Follow the rules for constrained calls from ECMA spec
@@ -696,6 +721,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			StackType this_type = (this->sp - csignature->param_count - 1)->type;
 			g_assert (this_type == StackType::I || this_type == StackType::MP);
 			interp_constrained_box (domain, constrained_class, csignature, error);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			return_val_if_nok (error, FALSE);
 		} else {
 			is_virtual = FALSE;

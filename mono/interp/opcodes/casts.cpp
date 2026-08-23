@@ -51,9 +51,46 @@ MONO_INTERP_OP_IMPL (MINT_BOX_VT)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The vtable arrives in a local, because a body shared between reference
+ * instantiations reads it out of its generic context. The box holds a class
+ * the context names, so each instantiation allocates against its own vtable.
+ */
+MONO_INTERP_OP_IMPL (MINT_BOX_VT_DYN)
+{
+	auto vtable = LOCAL_VAR (ip[3], MonoVTable *);
+	MonoClass *c = vtable->klass;
+
+	MonoObject *o = mono_gc_alloc_obj (vtable, m_class_get_instance_size (c));
+	MONO_HANDLE_ASSIGN_RAW (tmp_handle, o);
+	mono_value_copy_internal (mono_object_get_data (o), locals + ip[2], c);
+	MONO_HANDLE_ASSIGN_RAW (tmp_handle, NULL);
+
+	LOCAL_VAR (ip[1], MonoObject *) = o;
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_BOX_PTR)
 {
 	auto vtable = static_cast<MonoVTable *> (frame->imethod->data_items[ip[3]]);
+	MonoClass *c = vtable->klass;
+
+	MonoObject *o = mono_gc_alloc_obj (vtable, m_class_get_instance_size (c));
+	MONO_HANDLE_ASSIGN_RAW (tmp_handle, o);
+	mono_value_copy_internal (mono_object_get_data (o), LOCAL_VAR (ip[2], gpointer), c);
+	MONO_HANDLE_ASSIGN_RAW (tmp_handle, NULL);
+
+	LOCAL_VAR (ip[1], MonoObject *) = o;
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+MONO_INTERP_OP_IMPL (MINT_BOX_PTR_DYN)
+{
+	auto vtable = LOCAL_VAR (ip[3], MonoVTable *);
 	MonoClass *c = vtable->klass;
 
 	MonoObject *o = mono_gc_alloc_obj (vtable, m_class_get_instance_size (c));
