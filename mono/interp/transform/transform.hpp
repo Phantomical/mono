@@ -410,8 +410,7 @@ struct TransformData {
 	/// Call this only once is_virtual has settled. body is the method whose IL
 	/// is being read, which is this->method except while a callee is inlined.
 	bool may_call_through_context (MonoMethod *body, MonoMethod *target,
-	                               MonoMethodSignature *csignature, gboolean is_virtual,
-	                               gboolean tailcall);
+	                               MonoMethodSignature *csignature, gboolean is_virtual);
 	/// The same question for a site that settles target off the receiver, which
 	/// fetches the method it named and dispatches on that.
 	///

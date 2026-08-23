@@ -449,20 +449,12 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 
 bool
 TransformData::may_call_through_context (MonoMethod *body, MonoMethod *target,
-                                         MonoMethodSignature *csignature, gboolean is_virtual,
-                                         gboolean tailcall)
+                                         MonoMethodSignature *csignature, gboolean is_virtual)
 {
 	// A fetch reads the receiver of the body being written, which is the
 	// caller's rather than the callee's.
 	if (body != this->method) {
 		cannot_share ("a call inside an inlined callee");
-		return false;
-	}
-
-	// The tail-call arm asks the shared class for a runtime vtable, which is
-	// what interp_transform_call () refuses to let a shared body reach.
-	if (tailcall) {
-		cannot_share ("a tail call to a method the generic context names");
 		return false;
 	}
 
@@ -757,7 +749,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	// stopped moving.
 	if (context_named) {
 		callee_from_context =
-			may_call_through_context (method, target_method, csignature, is_virtual, tailcall);
+			may_call_through_context (method, target_method, csignature, is_virtual);
 
 		if (sharing_refusal != nullptr)
 			return TRUE;
@@ -778,6 +770,16 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	}
 
 	if (emit_tailcall) {
+		/*
+		 * The ask below reaches a shared class, which is open and has no
+		 * runtime vtable. A declined tail call is an ordinary call and never
+		 * gets here, so the refusal costs only the sites that take the jump.
+		 */
+		if (context_named) {
+			cannot_share ("a tail call to a method the generic context names");
+			return TRUE;
+		}
+
 		(void) mono_class_vtable_checked (domain, target_method->klass, error);
 		return_val_if_nok (error, FALSE);
 
