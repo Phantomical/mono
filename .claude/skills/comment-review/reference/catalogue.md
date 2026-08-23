@@ -112,6 +112,14 @@ side reads exactly like a comment that carries it. **Grep the comment for the fa
 think it states before you argue from it.** The check is one command, and the author is the
 one reader who cannot run it by eye.
 
+The repair found the worse half. The field said "the two ways" over a list of three, and
+the three are not the same kind of thing: one path frees the copy, one is the null-for-root
+case the paragraph above already states, and one leaves the copy **live in another module**.
+So the sentence reached for a list to justify a claim about `WeakVH` when most of that list
+is about a different test. **A count that disagrees with a heterogeneous list is a mechanism
+error, not a numbering one.** Where the count is wrong, read what the members are before
+correcting the number.
+
 ## E. Register and shape
 
 Lower severity individually. Corrected in bulk.
