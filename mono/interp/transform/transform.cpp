@@ -1861,7 +1861,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
-			if (from_context && !may_share_field_access (klass, is_static))
+			if (from_context && !may_share_field_access (klass, is_static, inlining))
 				return TRUE;
 #ifndef DISABLE_REMOTING
 			if (m_class_get_marshalbyref (klass) || mono_class_is_contextbound (klass)
@@ -1899,8 +1899,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			{
 				if (is_static) {
 					sp--;
-					interp_emit_ldsflda (field, error);
-					return_val_if_nok (error, FALSE);
+					if (from_context) {
+						interp_emit_ldsflda_dyn (field);
+						if (sharing_refusal != nullptr)
+							return TRUE;
+					} else {
+						interp_emit_ldsflda (field, error);
+						return_val_if_nok (error, FALSE);
+					}
 				} else {
 					sp--;
 					if (sp->type == StackType::O) {
@@ -1932,7 +1938,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
-			if (from_context && !may_share_field_access (klass, is_static))
+			if (from_context && !may_share_field_access (klass, is_static, inlining))
 				return TRUE;
 
 			MonoClass *field_klass = mono_class_from_mono_type_internal (ftype);
@@ -1975,8 +1981,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			{
 				if (is_static) {
 					sp--;
-					interp_emit_sfld_access (field, field_klass, mt, TRUE, error);
-					return_val_if_nok (error, FALSE);
+					if (from_context) {
+						interp_emit_sfld_access_dyn (field, field_klass, mt, TRUE);
+						if (sharing_refusal != nullptr)
+							return TRUE;
+					} else {
+						interp_emit_sfld_access (field, field_klass, mt, TRUE, error);
+						return_val_if_nok (error, FALSE);
+					}
 				} else if (sp[-1].type == StackType::VT) {
 					/* First we pop the vt object from the stack. Then we push the field */
 					int opcode = op_for_mint_type (MINT_LDFLD_VT_I1, mt);
@@ -2041,7 +2053,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			MonoClass *field_klass = mono_class_from_mono_type_internal (ftype);
 			mono_class_init_internal (klass);
-			if (from_context && !may_share_field_access (klass, is_static))
+			if (from_context && !may_share_field_access (klass, is_static, inlining))
 				return TRUE;
 			mt = mint_type (ftype);
 
@@ -2060,8 +2072,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 #endif
 			{
 				if (is_static) {
-					interp_emit_sfld_access (field, field_klass, mt, FALSE, error);
-					return_val_if_nok (error, FALSE);
+					if (from_context) {
+						interp_emit_sfld_access_dyn (field, field_klass, mt, FALSE);
+						if (sharing_refusal != nullptr)
+							return TRUE;
+					} else {
+						interp_emit_sfld_access (field, field_klass, mt, FALSE, error);
+						return_val_if_nok (error, FALSE);
+					}
 
 					/* pop the unused object reference */
 					sp--;
@@ -2099,19 +2117,30 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		}
 		case CEE_LDSFLDA: {
+			bool from_context = false;
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error);
+			field = resolve_field (method, token, &klass, generic_context, error,
+			                       inlining ? nullptr : &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
+			if (from_context) {
+				interp_emit_ldsflda_dyn (field);
+				if (sharing_refusal != nullptr)
+					return TRUE;
+				ip += 5;
+				break;
+			}
 			interp_emit_ldsflda (field, error);
 			return_val_if_nok (error, FALSE);
 			ip += 5;
 			break;
 		}
 		case CEE_LDSFLD: {
+			bool from_context = false;
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error);
+			field = resolve_field (method, token, &klass, generic_context, error,
+			                       inlining ? nullptr : &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2131,6 +2160,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				break;
 			}
 
+			if (from_context) {
+				interp_emit_sfld_access_dyn (field, klass, mt, TRUE);
+				if (sharing_refusal != nullptr)
+					return TRUE;
+				ip += 5;
+				break;
+			}
+
 			interp_emit_sfld_access (field, klass, mt, TRUE, error);
 			return_val_if_nok (error, FALSE);
 
@@ -2138,9 +2175,11 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		}
 		case CEE_STSFLD: {
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error);
+			field = resolve_field (method, token, &klass, generic_context, error,
+			                       inlining ? nullptr : &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2153,6 +2192,14 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			MonoClass *fld_klass = mono_class_from_mono_type_internal (ftype);
 			mono_class_vtable_checked (domain, fld_klass, error);
 			return_val_if_nok (error, FALSE);
+
+			if (from_context) {
+				interp_emit_sfld_access_dyn (field, fld_klass, mt, FALSE);
+				if (sharing_refusal != nullptr)
+					return TRUE;
+				ip += 5;
+				break;
+			}
 
 			interp_emit_sfld_access (field, fld_klass, mt, FALSE, error);
 			return_val_if_nok (error, FALSE);
@@ -3812,11 +3859,17 @@ TransformData::resolve_field (MonoMethod *method, guint32 token, MonoClass **kla
 }
 
 bool
-TransformData::may_share_field_access (MonoClass *klass, gboolean is_static)
+TransformData::may_share_field_access (MonoClass *klass, gboolean is_static, bool inlining)
 {
 	if (is_static) {
-		cannot_share ("a static field of a class the generic context names");
-		return false;
+		// The storage is reached through a fetch, and a fetch inside an inlined
+		// callee reads the caller's receiver rather than the callee's own.
+		if (inlining) {
+			cannot_share ("a static field inside an inlined callee");
+			return false;
+		}
+
+		return true;
 	}
 
 #ifndef DISABLE_REMOTING

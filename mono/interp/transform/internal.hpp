@@ -185,6 +185,7 @@ MonoClass *magic_class_of (MonoType *type);
 
 /// The MINT_LDIND that loads a value of this storage type.
 int interp_get_ldind_for_mt (MintType mt);
+int interp_get_stind_for_mt (MintType mt);
 
 /// The MINT_ICALL that matches this signature's shape, or MINT_NIY.
 int interp_icall_op_for_sig (MonoMethodSignature *sig);

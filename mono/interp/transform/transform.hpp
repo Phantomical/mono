@@ -286,6 +286,12 @@ struct TransformData {
 	int create_interp_stack_local (StackType type, MonoClass *k, int type_size, int offset);
 	guint16 *emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *bb, InterpInst *ins);
 	void emit_convert (MonoType *ftype);
+	/// Emits the address of a static field of a class the generic context
+	/// names, into dreg, and returns whether it did.
+	///
+	/// Records a refusal and returns false for a special static, which is
+	/// allocated an offset no rgctx entry holds.
+	bool emit_static_field_address (MonoClassField *field, int dreg);
 	/// Emits the fetch of one runtime generic context entry, and returns the
 	/// local it lands in.
 	///
@@ -321,10 +327,18 @@ struct TransformData {
 	void interp_emit_ldelema (MonoClass *array_class, MonoClass *check_class);
 	void interp_emit_ldobj (MonoClass *klass);
 	void interp_emit_ldsflda (MonoClassField *field, MonoError *error);
+	void interp_emit_ldsflda_dyn (MonoClassField *field);
 	gboolean interp_emit_load_const (gpointer field_addr, MintType mt);
 	void interp_emit_memory_barrier (int kind);
 	void interp_emit_sfld_access (MonoClassField *field, MonoClass *field_class, MintType mt,
 	                              gboolean is_load, MonoError *error);
+	/// Writes a static field access of a class the generic context names,
+	/// through the vtable the context answers with.
+	///
+	/// Records a refusal for the shapes that name more than that vtable: a
+	/// special static, and a store of a value type the context names.
+	void interp_emit_sfld_access_dyn (MonoClassField *field, MonoClass *field_class, MintType mt,
+	                                  gboolean is_load);
 	void interp_emit_stobj (MonoClass *klass);
 	void interp_fix_localloc_ret ();
 	InterpInst *interp_fold_binop (LocalValue *local_defs, int *local_ref_count, InterpInst *ins);
@@ -376,9 +390,11 @@ struct TransformData {
 	/// written once for every reference instantiation, recording the refusal
 	/// when it cannot.
 	///
-	/// Only the plain instance arms can. They name the field's offset and its
-	/// size, and reference sharing keeps both common.
-	bool may_share_field_access (MonoClass *klass, gboolean is_static);
+	/// A plain instance arm can. It names the field's offset and its size, and
+	/// reference sharing keeps both common. So can a static access outside an
+	/// inlined callee, which the caller then writes through
+	/// interp_emit_sfld_access_dyn ().
+	bool may_share_field_access (MonoClass *klass, gboolean is_static, bool inlining);
 	void narrow_index (StackInfo *sp);
 	void one_arg_branch (int mint_op, int offset, int inst_size);
 	void push_simple_type (StackType type);
@@ -436,6 +452,15 @@ struct TransformData {
 	/// The local holding the receiver a fetch reads the generic context out of,
 	/// or -1 in a body with no such receiver.
 	int rgctx_receiver_local = -1;
+
+	/// The rgctx entries already fetched in rgctx_fetched_bb, as slot index and
+	/// the local the fetch landed in.
+	///
+	/// The block is part of the key because a local written in one block is not
+	/// written in another. A block reached from two directions would read a
+	/// local only one of them defined.
+	InterpBasicBlock *rgctx_fetched_bb = nullptr;
+	std::vector<std::pair<int, int>> rgctx_fetched;
 
 	MonoMethod *method = nullptr;
 	MonoMethod *inlined_method = nullptr;

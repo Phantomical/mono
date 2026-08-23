@@ -299,6 +299,24 @@ MONO_INTERP_OP_IMPL (MINT_LDSFLDA)
 }
 
 /*
+ * The vtable arrives in a local rather than a data item, because a body shared
+ * between reference instantiations reads it out of its generic context. Each
+ * instantiation owns a statics block, so the address is computed here instead of
+ * being baked in. The offset into that block is common, which is what lets one
+ * body serve them all.
+ */
+MONO_INTERP_OP_IMPL (MINT_LDSFLDA_DYN)
+{
+	auto vtable = LOCAL_VAR (ip[2], MonoVTable *);
+	INIT_VTABLE (vtable);
+	LOCAL_VAR (ip[1], gpointer) =
+		(char *) mono_vtable_get_static_field_data (vtable) + READ32 (ip + 3);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+/*
  * The thread statics. Instead of one address the transform can bake in, the
  * field has a packed offset: the low 6 bits pick a block out of the thread's
  * static_data and the rest is the offset into that block.

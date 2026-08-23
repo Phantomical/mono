@@ -23,6 +23,7 @@
 
 #include "mintops.hpp"
 #include "runtime/internals.hpp"
+#include "runtime/sharing.hpp"
 #include "interp.h"
 #include "transform.hpp"
 #include "internal.hpp"
@@ -601,6 +602,32 @@ interp_get_ldind_for_mt (MintType mt)
 	return -1;
 }
 
+int
+interp_get_stind_for_mt (MintType mt)
+{
+	switch (mt) {
+	case MintType::I1:
+	case MintType::U1:
+		return MINT_STIND_I1;
+	case MintType::I2:
+	case MintType::U2:
+		return MINT_STIND_I2;
+	case MintType::I4:
+		return MINT_STIND_I4;
+	case MintType::I8:
+		return MINT_STIND_I8;
+	case MintType::R4:
+		return MINT_STIND_R4;
+	case MintType::R8:
+		return MINT_STIND_R8;
+	case MintType::O:
+		return MINT_STIND_REF;
+	default:
+		g_assert_not_reached ();
+	}
+	return -1;
+}
+
 void
 TransformData::interp_emit_ldobj (MonoClass *klass)
 {
@@ -636,36 +663,7 @@ TransformData::interp_emit_stobj (MonoClass *klass)
 		interp_add_ins (MINT_STOBJ_VT);
 		last_ins->data[0] = get_data_item_index (klass);
 	} else {
-		int opcode;
-		switch (mt) {
-		case MintType::I1:
-		case MintType::U1:
-			opcode = MINT_STIND_I1;
-			break;
-		case MintType::I2:
-		case MintType::U2:
-			opcode = MINT_STIND_I2;
-			break;
-		case MintType::I4:
-			opcode = MINT_STIND_I4;
-			break;
-		case MintType::I8:
-			opcode = MINT_STIND_I8;
-			break;
-		case MintType::R4:
-			opcode = MINT_STIND_R4;
-			break;
-		case MintType::R8:
-			opcode = MINT_STIND_R8;
-			break;
-		case MintType::O:
-			opcode = MINT_STIND_REF;
-			break;
-		default:
-			g_assert_not_reached ();
-			break;
-		}
-		interp_add_ins (opcode);
+		interp_add_ins (interp_get_stind_for_mt (mt));
 	}
 	sp -= 2;
 	interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
@@ -815,12 +813,25 @@ TransformData::emit_rgctx_fetch (MonoRgctxInfoType info_type, gpointer data)
 	g_assert (!MONO_RGCTX_SLOT_IS_MRGCTX (slot));
 
 	int index = MONO_RGCTX_SLOT_INDEX (slot);
+
+	if (rgctx_fetched_bb != cbb) {
+		rgctx_fetched_bb = cbb;
+		rgctx_fetched.clear ();
+	}
+
+	for (const auto &fetched : rgctx_fetched) {
+		if (fetched.first == index)
+			return fetched.second;
+	}
+
 	int dreg = create_interp_local (mono_get_int_type ());
 
 	interp_add_ins (MINT_RGCTX_FETCH);
 	interp_ins_set_dreg (last_ins, dreg);
 	interp_ins_set_sreg (last_ins, rgctx_receiver_local);
 	WRITE32_INS (last_ins, 0, &index);
+
+	rgctx_fetched.emplace_back (index, dreg);
 
 	return dreg;
 }
@@ -864,6 +875,93 @@ TransformData::interp_handle_isinst (MonoClass *klass, gboolean isinst_instr)
 	last_ins->data[0] = get_data_item_index (klass);
 
 	ip += 5;
+}
+
+/*
+ * A static field of a class the generic context names lives in a statics block
+ * each instantiation owns, and reference sharing keeps the offset into that
+ * block common. So the vtable is the whole of what the context has to answer,
+ * and the address is worked out where the field is read.
+ *
+ * The vtable rather than the block itself, because the class initializer runs
+ * at the access and MINT_LDSFLDA_DYN needs the vtable to run it.
+ */
+bool
+TransformData::emit_static_field_address (MonoClassField *field, int dreg)
+{
+	// A special static is allocated an offset of its own, per domain and per
+	// thread or context, which no rgctx entry holds.
+	if (mono_class_field_is_special_static (field)) {
+		cannot_share ("a special static field of a class the generic context names");
+		return false;
+	}
+
+	int vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, field->parent);
+
+	if (sharing_refusal != nullptr)
+		return false;
+
+	guint32 offset = field->offset;
+
+	interp_add_ins (MINT_LDSFLDA_DYN);
+	interp_ins_set_dreg (last_ins, dreg);
+	interp_ins_set_sreg (last_ins, vtable_local);
+	WRITE32_INS (last_ins, 0, &offset);
+
+	return true;
+}
+
+void
+TransformData::interp_emit_ldsflda_dyn (MonoClassField *field)
+{
+	push_simple_type (StackType::MP);
+
+	if (!emit_static_field_address (field, sp[-1].local))
+		sp--;
+}
+
+void
+TransformData::interp_emit_sfld_access_dyn (MonoClassField *field, MonoClass *field_class,
+                                            MintType mt, gboolean is_load)
+{
+	// MINT_STOBJ_VT copies against the class it is given, and that is the
+	// shared form's rather than the instantiation's.
+	if (!is_load && mt == MintType::VT && depends_on_context (field_class)) {
+		cannot_share ("a static value-type field the generic context names");
+		return;
+	}
+
+	int address = create_interp_local (mono_get_int_type ());
+
+	if (!emit_static_field_address (field, address))
+		return;
+
+	if (is_load) {
+		if (mt == MintType::VT) {
+			int size = mono_class_value_size (field_class, NULL);
+
+			g_assert (size < G_MAXUINT16);
+			interp_add_ins (MINT_LDOBJ_VT);
+			push_type_vt (field_class, size);
+			last_ins->data[0] = size;
+		} else {
+			interp_add_ins (interp_get_ldind_for_mt (mt));
+			push_type (stack_type_of (mt), field_class);
+		}
+		interp_ins_set_sreg (last_ins, address);
+		interp_ins_set_dreg (last_ins, sp[-1].local);
+		return;
+	}
+
+	coerce_fp (sp - 1, stack_type_of (mt));
+	sp--;
+	if (mt == MintType::VT) {
+		interp_add_ins (MINT_STOBJ_VT);
+		last_ins->data[0] = get_data_item_index (field_class);
+	} else {
+		interp_add_ins (interp_get_stind_for_mt (mt));
+	}
+	interp_ins_set_sregs2 (last_ins, address, sp[0].local);
 }
 
 void
