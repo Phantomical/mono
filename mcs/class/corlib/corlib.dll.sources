@@ -1705,7 +1705,7 @@ corert/RuntimeAugments.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/HashCode.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/HResults.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Index.cs
-../../../external/corefx/src/Common/src/CoreLib/System/MathF.cs
+../../../external/corefx-bugfix/src/Common/src/CoreLib/System/MathF.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Marvin.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Memory.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/MemoryDebugView.cs

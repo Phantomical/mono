@@ -82,7 +82,7 @@ static class Program {
 	static readonly double[] arguments = {
 		double.NaN, double.PositiveInfinity, double.NegativeInfinity,
 		0.0, -0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.5, 2.5, 4.0, 8.0, -8.0,
-		100.0, 2.7, -2.7, 0.49999999999999994,
+		100.0, 2.7, -2.7, 0.49999999999999994, -0.49999999999999994,
 	};
 
 	static readonly double[] exponents = {
@@ -128,6 +128,11 @@ static class Program {
 		got.Add (Math.Truncate (-0.5));
 		got.Add (Math.Truncate (-2.7));
 		got.Add (MathF.Truncate (-0.5f));
+		got.Add (Math.Round (-0.5));
+		got.Add (Math.Round (2.5));
+		got.Add (Math.Round (0.49999999999999994));
+		got.Add (MathF.Round (-0.5f));
+		got.Add (MathF.Round (0.49999997f));
 	}
 
 	static double[] Sample ()
@@ -176,9 +181,9 @@ static class Program {
 			got.Add (MathF.Asinh (F (f)));
 			got.Add (MathF.Acosh (F (f)));
 			got.Add (MathF.Atanh (F (f)));
-			// Managed IL rather than icalls. Math.Truncate is answered with an
-			// intrinsic and the other three are not, so the tiers have to agree
-			// on all of them either way.
+			// Managed IL rather than icalls. Truncate is answered with an
+			// intrinsic and the rest are not, so the tiers have to agree on
+			// all of them either way.
 			got.Add (Math.Truncate (D (x)));
 			got.Add (MathF.Truncate (F (f)));
 			got.Add (MathF.Round (F (f)));
@@ -238,21 +243,30 @@ static class Program {
 		Same ("Math.Ceiling (0)", Math.Ceiling (D (0.0)), 0.0);
 
 		/*
-		 * Round is the icall, in both engines. mono_round_to_even () rounds a
-		 * half to even the way llvm.roundeven does, and llvm.round does not, so
-		 * the three halves below would catch that substitution. The last case
-		 * is where the icall and the intrinsic part company: the icall computes
-		 * floor (x + 0.5), and the addition carries the largest double under a
-		 * half up to one. Answering it with the intrinsic would make Math.Round
-		 * depend on which tier the caller runs at.
+		 * Round is the mono_round_to_even () icall, and it computes IEEE 754
+		 * roundToIntegralTiesToEven. It rounds a half to the even neighbour
+		 * the way llvm.roundeven does and llvm.round does not, so the halves
+		 * below catch that substitution. The last pair is the one that says
+		 * the icall does not compute floor (x + 0.5): that addition carries
+		 * the largest value under a half up to one.
 		 */
 		Same ("Math.Round (0.5)", Math.Round (D (0.5)), 0.0);
 		Same ("Math.Round (1.5)", Math.Round (D (1.5)), 2.0);
 		Same ("Math.Round (2.5)", Math.Round (D (2.5)), 2.0);
 		Same ("Math.Round (-0.5)", Math.Round (D (-0.5)), -0.0);
 		Same ("Math.Round (-1.5)", Math.Round (D (-1.5)), -2.0);
+		Same ("Math.Round (-2.5)", Math.Round (D (-2.5)), -2.0);
+		Same ("Math.Round (-0.4)", Math.Round (D (-0.4)), -0.0);
+		Same ("Math.Round (-0)", Math.Round (D (-0.0)), -0.0);
+		Same ("Math.Round (2.7)", Math.Round (D (2.7)), 3.0);
+		Same ("Math.Round (-2.7)", Math.Round (D (-2.7)), -3.0);
+		Same ("Math.Round (Infinity)", Math.Round (D (double.PositiveInfinity)),
+			double.PositiveInfinity);
+		NaN ("Math.Round (NaN)", Math.Round (D (double.NaN)));
 		Same ("Math.Round (0.49999999999999994)",
-			Math.Round (D (0.49999999999999994)), 1.0);
+			Math.Round (D (0.49999999999999994)), 0.0);
+		Same ("Math.Round (-0.49999999999999994)",
+			Math.Round (D (-0.49999999999999994)), -0.0);
 
 		Same ("Math.Exp (0)", Math.Exp (D (0.0)), 1.0);
 		Same ("Math.Exp (-Infinity)", Math.Exp (D (double.NegativeInfinity)), 0.0);
@@ -313,14 +327,21 @@ static class Program {
 		NaN ("Math.Max (1, NaN)", Math.Max (D (1.0), E (double.NaN)));
 
 		/*
-		 * MathF.Round is managed IL that computes floor (x + 0.5f) the way the
-		 * Math.Round icall computes floor (x + 0.5). It carries the same
-		 * precision-loss case, so it is left alone for the same reason.
+		 * MathF.Round is managed IL rather than an icall. It computes the same
+		 * roundToIntegralTiesToEven the double form does, over floats.
 		 */
 		Same ("MathF.Round (0.5)", MathF.Round (F (0.5f)), 0.0f);
 		Same ("MathF.Round (1.5)", MathF.Round (F (1.5f)), 2.0f);
 		Same ("MathF.Round (2.5)", MathF.Round (F (2.5f)), 2.0f);
-		Same ("MathF.Round (0.49999997)", MathF.Round (F (0.49999997f)), 1.0f);
+		Same ("MathF.Round (-0.5)", MathF.Round (F (-0.5f)), -0.0f);
+		Same ("MathF.Round (-1.5)", MathF.Round (F (-1.5f)), -2.0f);
+		Same ("MathF.Round (-0.4)", MathF.Round (F (-0.4f)), -0.0f);
+		Same ("MathF.Round (-0)", MathF.Round (F (-0.0f)), -0.0f);
+		Same ("MathF.Round (Infinity)", MathF.Round (F (float.PositiveInfinity)),
+			float.PositiveInfinity);
+		NaN ("MathF.Round (NaN)", MathF.Round (F (float.NaN)));
+		Same ("MathF.Round (0.49999997)", MathF.Round (F (0.49999997f)), 0.0f);
+		Same ("MathF.Round (-0.49999997)", MathF.Round (F (-0.49999997f)), -0.0f);
 
 		// The digit-count overloads, which are what still calls ModF.
 		Same ("Math.Round (2.345, 2, AwayFromZero)",

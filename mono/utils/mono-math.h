@@ -81,23 +81,31 @@ inline double mono_trunc (double a)                 { return mono_trunc_double (
 
 #endif
 
+/**
+ * Rounds x to the nearest integer. A value halfway between two integers goes to
+ * the even one of them. This is IEEE 754 roundToIntegralTiesToEven, which is
+ * what System.Math.Round (double) is specified to do.
+ *
+ * The sign of a zero result is the sign of x, so -0.4 gives -0.0.
+ */
 static inline double
 mono_round_to_even (double x)
 {
-	double floor_tmp;
+	double truncated = mono_trunc (x);
+	double fraction = x - truncated;
 
-	/* If the number has no fractional part do nothing This shortcut is necessary
-	 * to workaround precision loss in borderline cases on some platforms */
-	if (x == (double)(int64_t) x)
-		return x;
+	/* A double of 2^52 or more is already an integer, so its fraction is zero
+	 * and neither test fires. Under that magnitude truncated fits an int64_t,
+	 * which is what makes the parity test valid. An infinity and a NaN each
+	 * give a NaN fraction and fall through the same way.
+	 *
+	 * x - trunc (x) is exact, so the largest value under a half stays under a
+	 * half here. Adding 0.5 to it instead rounds up to 1.0 and loses the case. */
+	if (fabs (fraction) > 0.5 ||
+	    (fabs (fraction) == 0.5 && (((int64_t) truncated) & 1) != 0))
+		truncated += copysign (1.0, x);
 
-	floor_tmp = floor (x + 0.5);
-
-	if ((x == (floor (x) + 0.5)) && (fmod (floor_tmp, 2.0) != 0)) {
-		floor_tmp -= 1.0;
-	}
-
-	return copysign (floor_tmp, x);
+	return truncated;
 }
 
 static inline gboolean
