@@ -1747,8 +1747,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
-			klass = resolve_class (method, token, generic_context,
-			                       inlining ? nullptr : &from_context);
+			klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (from_context) {
 				int klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
@@ -1847,8 +1846,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 
-			klass = resolve_class (method, token, generic_context,
-			                       inlining ? nullptr : &from_context);
+			klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2259,8 +2257,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 		case CEE_LDSFLDA: {
 			bool from_context = false;
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error,
-			                       inlining ? nullptr : &from_context);
+			field = resolve_field (method, token, &klass, generic_context, error, &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2279,8 +2276,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 		case CEE_LDSFLD: {
 			bool from_context = false;
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error,
-			                       inlining ? nullptr : &from_context);
+			field = resolve_field (method, token, &klass, generic_context, error, &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2318,8 +2314,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error,
-			                       inlining ? nullptr : &from_context);
+			field = resolve_field (method, token, &klass, generic_context, error, &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2458,8 +2453,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
 				klass = (MonoClass *) mono_method_get_wrapper_data (method, token);
 			else
-				klass = resolve_class (method, token, generic_context,
-				                       inlining ? nullptr : &from_context);
+				klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2538,8 +2532,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
 				klass = (MonoClass *) mono_method_get_wrapper_data (method, token);
 			else
-				klass = resolve_class (method, token, generic_context,
-				                       inlining ? nullptr : &from_context);
+				klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -3931,8 +3924,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				// Both arms below are right for every reference instantiation.
 				// One writes a null and names no class, and the other zeroes a
 				// value type whose size reference sharing keeps common.
-				klass = resolve_class (method, token, generic_context,
-				                       inlining ? nullptr : &from_context);
+				klass = resolve_class (method, token, generic_context, &from_context);
 				CHECK_TYPELOAD (klass);
 				if (sharing_refusal != nullptr)
 					return TRUE;
