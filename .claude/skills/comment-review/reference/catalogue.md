@@ -104,6 +104,14 @@ optimizing level.
 no object if gdb registration was turned on after this JIT started"; `gdbjit::enabled ()`
 is a function-local static and latches on its first call.
 
+**D7. The fact the author believes is in the comment.** A `WeakVH` field was defended
+against a future sweep on the grounds that its doc said why a raw pointer would dangle and
+named the two ways the value goes stale. The doc said when the value goes null, and named
+one of them. The reason had been worked out and never written down, which from the author's
+side reads exactly like a comment that carries it. **Grep the comment for the fact you
+think it states before you argue from it.** The check is one command, and the author is the
+one reader who cannot run it by eye.
+
 ## E. Register and shape
 
 Lower severity individually. Corrected in bulk.

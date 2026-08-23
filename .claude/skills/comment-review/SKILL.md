@@ -26,6 +26,23 @@ characteristic failure mode in this tree, not the goal.
 **Most functions here want a one-line doc.** One line is the normal size, not the
 degenerate case.
 
+**When the call is close, cut.** The two errors are not symmetric and must not be weighed
+as if they were. A comment cut wrongly costs one reader one trip to the code, which is
+what they came to read anyway. A comment kept wrongly costs every reader after it, and it
+is the kept ones that go stale, get restated in the next file, and have to be re-checked
+by every sweep that follows. So a block you cannot argue for goes, and "I could not decide"
+resolves to a cut.
+
+**The default answer to "should this say more?" is no.** Before adding a sentence, ask
+whether the code can carry the fact instead — a name, a type, an assert, a static
+assertion. A comment is the last place to put a fact, not the first. Adding text is a
+finding that has to clear a higher bar than a cut, not a safe middle course between
+keeping and cutting.
+
+This bias does **not** reach the four keeps: a quotation, a live hazard, a specification,
+and rationale that still has code to justify. Those are decided by their own rules below,
+and F1 and F2 are what happens when a bias runs over them.
+
 ## Procedure
 
 ### 0. Scope
@@ -90,6 +107,10 @@ the name** — a compound false claim is not licence to delete the true clause w
 happen, and Y can erase it" is a way of being unfalsifiable rather than correct. If you
 could not establish what actually happens, say so in the report and leave the comment
 alone. Hedging is a worse outcome than either keeping or cutting.
+
+That leave-it-alone covers a fact you could not check. It is not the answer to a block you
+could not argue for, which the governing test cuts. Uncertain about the **fact**: write
+nothing new. Uncertain about the **worth**: cut.
 - Read the claim against **every path**, the early returns included. A sentence true on
   the main path and false on an early return is a false sentence, and worse than a
   missing one, because it reads as a guarantee.
@@ -146,6 +167,13 @@ still be describing how it works. Mechanism goes down to the line it explains.
   where the fix is absent. A **live** hazard is different and stays
 - argues for a rule the type already enforces — if only a change to the class could
   break it, the argument is not the caller's business
+
+**Then ask the second question.** Every fix here — a subject corrected, a stale clause
+repaired, a mechanism moved down — leaves a survivor that has never been read cold. Read
+it cold and ask whether it was wanted at all. C1 went twice: the first round corrected the
+subject, the second deleted what the first round wrote. A block you have just rewritten
+reads as valuable because you spent the effort, and that is where the governing test is
+hardest to apply and most often skipped.
 
 **Rationale moves, it does not vanish.** A doc comment arguing why the code takes one
 approach is holding text the body wants. Move it to the line. The exception is a
@@ -285,13 +313,33 @@ Stop reporting register nits on a block whose substance is wrong — fix the sub
 the nit usually goes with it.
 
 For each finding give the file and line, the quoted text, which check fired, and the
-replacement text. A finding with no replacement is not finished.
+replacement text. A finding with no replacement is not finished. **A cut is a complete
+finding** — an empty replacement is the commonest one here, and a shorter rewrite offered
+where the block does not survive the governing test is an unfinished cut.
 
 Say what you left alone and why when a block looks wrong and is not — a quotation, a
 live hazard, a specification that reads long because a second implementer needs it.
 
 **Do not edit unless the user asked for the fix.** Where they did, apply the edits and
 then run the preprocess identity check above.
+
+## Advice about one comment
+
+The procedure above is written for a diff. The rules hold when someone instead asks about a
+single block, but the deletion bias is what gets dropped there, because the question
+arrives shaped as "how should I word this" and answering it as asked has already conceded
+that the text stays. Answer the cut first, then the wording.
+
+- **"How do I stop a sweep cutting this?"** A comment that needs defending is failing the
+  governing test already. A live hazard needs no defence: it names what breaks, and every
+  carve-out here keeps it. So the first answer is that the fact belongs where the code
+  enforces it — a type, an assert, a name — and the second is that the comment goes.
+  Growing it to survive the next reader is the last resort, not the first.
+- **"Is this doc missing something?"** Missing is one of two findings: a claim that is
+  false by omission (Pair 5), or a specification a second implementer cannot work from.
+  Anything else that reads as missing is the block asking to be shorter.
+- **An addition has to say what it buys.** Name the reader and the mistake they make
+  without it. "They read the code" is not a mistake.
 
 ## CMake files
 
