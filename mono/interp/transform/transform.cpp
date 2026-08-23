@@ -2446,6 +2446,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		case CEE_LDELEMA: {
 			gint32 size;
+			bool from_context = false;
 			CHECK_STACK (2);
 			narrow_index (sp - 1);
 			token = read32 (ip + 1);
@@ -2453,7 +2454,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
 				klass = (MonoClass *) mono_method_get_wrapper_data (method, token);
 			else
-				klass = resolve_class (method, token, generic_context);
+				klass = resolve_class (method, token, generic_context, &from_context);
 
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
@@ -2461,14 +2462,20 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 
 			if (!m_class_is_valuetype (klass) && method->wrapper_type == MONO_WRAPPER_NONE
 			    && !readonly) {
+				// MINT_LDELEMA_TC tests the element against the class it is
+				// given, and that is the shared form's rather than the
+				// instantiation's.
+				if (from_context) {
+					cannot_share ("a checked ldelema of a class the generic context names");
+					return TRUE;
+				}
+
 				/*
 				 * Check the class for failures before the type check, which can
 				 * throw other exceptions.
 				 */
 				mono_class_setup_vtable (klass);
 				CHECK_TYPELOAD (klass);
-			if (sharing_refusal != nullptr)
-				return TRUE;
 				interp_add_ins (MINT_LDELEMA_TC);
 				sp -= 2;
 				locals[sp[0].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
@@ -2526,9 +2533,12 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 		case CEE_LDELEM_REF:
 			handle_ldelem (MINT_LDELEM_REF, StackType::O);
 			break;
-		case CEE_LDELEM:
+		case CEE_LDELEM: {
+			bool from_context = false;
 			token = read32 (ip + 1);
-			klass = resolve_class (method, token, generic_context);
+			// Every arm below names the kind of the element and its size, which
+			// reference sharing keeps common.
+			klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2587,6 +2597,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			}
 			ip += 4;
 			break;
+		}
 		case CEE_STELEM_I:
 			handle_stelem (MINT_STELEM_I);
 			break;
@@ -2611,12 +2622,20 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 		case CEE_STELEM_REF:
 			handle_stelem (MINT_STELEM_REF);
 			break;
-		case CEE_STELEM:
+		case CEE_STELEM: {
+			bool from_context = false;
 			token = read32 (ip + 1);
-			klass = resolve_class (method, token, generic_context);
+			klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
+			// MINT_STELEM_VT copies against the class it is given, and that is
+			// the shared form's rather than the instantiation's. Every other
+			// arm names the kind of the element alone.
+			if (from_context && mint_type (m_class_get_byval_arg (klass)) == MintType::VT) {
+				cannot_share ("stelem of a value type the generic context names");
+				return TRUE;
+			}
 			switch (mint_type (m_class_get_byval_arg (klass))) {
 			case MintType::I1:
 				handle_stelem (MINT_STELEM_I1);
@@ -2666,6 +2685,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			}
 			ip += 4;
 			break;
+		}
 		case CEE_CKFINITE: {
 			CHECK_STACK (1);
 			// ckfinite hands its operand back, so the value keeps the width it
