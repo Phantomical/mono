@@ -301,6 +301,23 @@ inline_depth_limit ()
 	return levels;
 }
 
+uint32_t
+trivial_inline_depth_limit ()
+{
+	static uint32_t levels = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_PREPASS_DEPTH");
+
+		if (value == nullptr)
+			return 2;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 0;
+	}();
+
+	return levels;
+}
+
 int32_t
 tier0_calls (MonoMethod *method)
 {

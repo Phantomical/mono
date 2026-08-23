@@ -69,18 +69,42 @@ ProfileInliner::bind_and_resolve (Module &module, size_t from)
 Function *
 ProfileInliner::materialize (Function &decl, Module &into)
 {
+	MonoMethod *callee = marked_method (decl);
+
+	if (callee == nullptr)
+		return nullptr;
+
+	/*
+	 * The root folded this method already, so hand back the body standing
+	 * beside it. Ahead of the tests below because none of them governs a body
+	 * that is already translated.
+	 *
+	 * No cycle to rule out here, unlike the pre-pass. What this returns is a
+	 * body the root's own module holds, and the pass folds it at one site under
+	 * a depth limit rather than marking it always-inline.
+	 */
+	bool rebuild = already_folded (scope_, callee);
+
+	if (rebuild) {
+		if (callee == scope_.root)
+			return nullptr;
+
+		// A copy standing beside the root is what the site should reach.
+		// Without one, fall through and build one into the candidate's module.
+		if (Function *standing = folded_copy_in (scope_, callee, *decl.getParent ()))
+			return standing;
+	}
+
 	uint32_t limit = costed_inline_il_limit ();
 
 	// A folded copy carries no sequence points of its own; see
-	// materialize_trivial_callees ().
-	if (limit == 0 || scope_.budget == 0
+	// materialize_trivial_callees (). A rebuild is free, so only a method new
+	// to this root meets the budget.
+	if (limit == 0 || (!rebuild && scope_.budget == 0)
 	    || mini_get_debug_options ()->gen_sdb_seq_points)
 		return nullptr;
 
-	MonoMethod *callee = marked_method (decl);
-
-	if (callee == nullptr || is_contained (scope_.folded, callee)
-	    || !may_fold (target_.domain, callee))
+	if (!may_fold (target_.domain, callee))
 		return nullptr;
 
 	ERROR_DECL (metadata_error);

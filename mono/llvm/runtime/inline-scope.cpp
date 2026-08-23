@@ -7,7 +7,11 @@
 #include "passes/inline-copies.hpp"
 #include "timing.hpp"
 
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InstIterator.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 
 #include <optional>
@@ -92,6 +96,71 @@ bool
 is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit)
 {
 	return header->num_clauses == 0 && header->code_size <= il_limit;
+}
+
+bool
+already_folded (const InlineScope &scope, MonoMethod *callee)
+{
+	return any_of (scope.folded, [&] (const InlineScope::Folded &entry) {
+		return entry.method == callee;
+	});
+}
+
+// A copy is the only thing worth following. Every other call leaves the module
+// through a published entry, so it cannot come back to a body that has none.
+bool
+copy_reaches (const Function &from, const Function &to)
+{
+	SmallPtrSet<const Function *, 8> seen;
+	SmallVector<const Function *, 8> pending { &from };
+
+	while (!pending.empty ()) {
+		const Function *at = pending.pop_back_val ();
+
+		if (at == &to)
+			return true;
+
+		if (!seen.insert (at).second)
+			continue;
+
+		for (const Instruction &i : instructions (*at)) {
+			const auto *site = dyn_cast<CallBase> (&i);
+			const Function *called =
+				site != nullptr ? site->getCalledFunction () : nullptr;
+
+			if (called != nullptr && !called->isDeclaration ()
+			    && called->hasFnAttribute (inline_copy_attribute))
+				pending.push_back (called);
+		}
+	}
+
+	return false;
+}
+
+Function *
+folded_copy_in (const InlineScope &scope, MonoMethod *callee, const Module &module)
+{
+	for (const InlineScope::Folded &entry : scope.folded) {
+		if (entry.method != callee)
+			continue;
+
+		auto *copy = dyn_cast_or_null<Function> (entry.copy);
+
+		return copy != nullptr && copy->getParent () == &module ? copy : nullptr;
+	}
+
+	return nullptr;
+}
+
+/// Returns this root's entry for callee, or null when it has not folded it.
+static InlineScope::Folded *
+find_folded (InlineScope &scope, MonoMethod *callee)
+{
+	for (InlineScope::Folded &entry : scope.folded)
+		if (entry.method == callee)
+			return &entry;
+
+	return nullptr;
 }
 
 bool
@@ -211,6 +280,11 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	// in.
 	std::string suffix = "$copy" + identity_of (scope.root);
 
+	// Read before the translation below records the new body against it. Null
+	// says this root has not folded callee before, which is what the budget
+	// counts.
+	InlineScope::Folded *entry = find_folded (scope, callee);
+
 	/*
 	 * The translator declares the method it is asked for under a placeholder of
 	 * its own and finds it again by that name. So ask it for the function it
@@ -242,10 +316,19 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 		                       scope.defined, &types, suffix);
 	}();
 
-	// Spent either way. A translation that failed cost as much as one that did
-	// not, and the budget is all that stops a second site from asking for the
-	// same body.
-	--scope.budget;
+	/*
+	 * The budget counts the methods this root takes in, so the second body for
+	 * one of them is free. A rebuild is the same method again, asked for
+	 * because the copy went with a candidate's module or the pipeline erased
+	 * it, and charging for it would let a chain of tiny callees spend what the
+	 * cost model needs for the candidates the profile ranked.
+	 *
+	 * Spent either way for a method that is new here. A translation that failed
+	 * cost as much as one that did not, and the budget is all that stops a
+	 * second site from asking for the same body.
+	 */
+	if (entry == nullptr)
+		--scope.budget;
 
 	if (!materialized) {
 		consumeError (materialized.takeError ());
@@ -269,7 +352,15 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	else
 		consumeError (record.takeError ());
 
-	scope.folded.push_back (callee);
+	/*
+	 * A method this root folded before is here again because the copy it made
+	 * then has gone: the pipeline erased it, or it belongs to a candidate's own
+	 * module. The entry keeps the method and takes the body that stands now.
+	 */
+	if (entry != nullptr)
+		entry->copy = *target;
+	else
+		scope.folded.push_back ({ callee, *target });
 	return *target;
 }
 

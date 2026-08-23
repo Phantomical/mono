@@ -11,6 +11,7 @@
 #include "method-to-llvm.hpp"
 
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/IR/ValueHandle.h>
 
 #include <cstdint>
 #include <vector>
@@ -31,9 +32,13 @@ namespace mono {
 /// member, because defined describes the module and the rest describe the
 /// method.
 ///
-/// The budget counts bodies rather than instructions, and the two inliners spend
+/// The budget counts methods rather than instructions, and the two inliners spend
 /// one counter between them. A budget of its own for each would make a compile's
 /// translation count the product rather than the sum.
+///
+/// A method is charged once. The second body for one of them is free, so a chain
+/// of tiny callees rebuilt into a candidate's module cannot spend what the cost
+/// model needs for the candidates the profile ranked.
 struct InlineScope {
 	/// The method the body is being built for. A folded body's code belongs to
 	/// this method's frame, and a detour on the folded method has to be able to
@@ -44,18 +49,36 @@ struct InlineScope {
 	/// member of a batch. A call to one of them has to leave through that
 	/// method's entry, so the translator declares it under a name of its own.
 	///
-	/// A copy is not one of these. Only the caller that asked for a copy has its
-	/// sites moved onto it.
+	/// A copy is not one of these. A copy belongs to the root, and only the
+	/// sites under that root are moved onto it.
 	llvm::SmallVector<MonoMethod *, 8> defined;
+
+	/// One method this root has taken in, and the body it was taken into.
+	struct Folded {
+		MonoMethod *method;
+
+		/// The copy that stands for the method, null when none does. Root is
+		/// null, because it has a body rather than a copy.
+		///
+		/// A handle rather than a raw pointer, because a copy goes away with
+		/// no other sign — folded_copy_in () names the two ways. A raw
+		/// pointer here reads freed memory rather than failing to compile,
+		/// which is also why the reader tests the module.
+		llvm::WeakVH copy;
+	};
 
 	/// The methods already folded into root, root itself included. A second copy
 	/// of one is dead weight, and without root a candidate that calls back into
 	/// it copies root into its own callee.
 	///
+	/// A later caller under this root is moved onto the copy that stands rather
+	/// than left on the published entry, which is what makes the first copy
+	/// enough. folded_copy_for () is what finds it.
+	///
 	/// This decides the set root ends up with, so it names root's own chain and
 	/// nothing else. A batch member then folds what it folds compiled alone, and
 	/// the two tiers hash the same CFG.
-	llvm::SmallVector<MonoMethod *, 8> folded;
+	llvm::SmallVector<Folded, 8> folded;
 
 	uint32_t budget = 0;
 };
@@ -75,6 +98,36 @@ bool may_fold (MonoDomain *domain, MonoMethod *callee);
 /// size half is cost, and each inliner passes its own limit, so that half of the
 /// answer is about the caller that asked rather than about the callee alone.
 bool is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit);
+
+/// Whether this root has taken callee in already. It answers yes for root
+/// itself, which the list holds so that a candidate calling back into root does
+/// not copy root into its own callee.
+bool already_folded (const InlineScope &scope, MonoMethod *callee);
+
+/// Returns the copy of callee standing in module, or null when this root holds
+/// none there.
+///
+/// Ask this for a callee already_folded () named, to move a site onto the body
+/// that stands rather than leave it on the published entry. A method in
+/// scope.folded does not always have such a body:
+///
+/// - root has a body rather than a copy, and nothing may call it.
+/// - The pipeline erases a copy once it has folded every call to it.
+/// - A copy built for a cost-model candidate stands in that candidate's own
+///   module until the link puts it beside root.
+///
+/// The last two are ordinary rather than rare, so a caller that finds no copy
+/// builds one of its own instead of leaving the site on the published entry.
+llvm::Function *folded_copy_in (const InlineScope &scope, MonoMethod *callee,
+                                const llvm::Module &module);
+
+/// Whether from reaches to by calls that stay inside this root's copies.
+///
+/// Ask before moving a site in to onto from. A copy that already reaches the
+/// caller must keep its call: the two would otherwise fold into each other, and
+/// the pipeline folds a cycle of always-inline bodies for as long as it can
+/// allocate.
+bool copy_reaches (const llvm::Function &from, const llvm::Function &to);
 
 uint32_t il_read_u32 (const unsigned char *at);
 

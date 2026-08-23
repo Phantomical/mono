@@ -107,6 +107,18 @@ uint32_t costed_inline_il_limit ();
 /// runs out of sites, so the loop needs a floor whatever the budget says.
 uint32_t inline_depth_limit ();
 
+/// How many folds deep past root the shape-test pre-pass can go.
+///
+/// MONO_LLVM_JIT_INLINE_PREPASS_DEPTH moves it. A bound of its own rather than
+/// the cost model's, because the two take different candidates: this one takes
+/// a forwarder, and a chain of them reaches much further for the same budget.
+///
+/// Both inliners spend one budget, so what the pre-pass folds deep is what the
+/// cost model cannot fold at all. Raising this to 3 costs
+/// mono/tests/trivial-inline.cs its tier-2 case, where the pre-pass then takes
+/// the last of the budget and the cost model folds nothing.
+uint32_t trivial_inline_depth_limit ();
+
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.
 ///
 /// Zero for a method that does not run at tier 0 at all. That also tells a

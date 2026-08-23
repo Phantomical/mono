@@ -331,10 +331,27 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 	// A body the module now holds, and the method it belongs to. A body reached
 	// through another one is folded into that one first, so the pair is what a
 	// trace has to name.
-	SmallVector<std::pair<MonoMethod *, Function *>, 8> pending { { root, &body } };
+	struct Candidate {
+		MonoMethod *method;
+		llvm::Function *body;
 
-	while (!pending.empty () && scope.budget > 0) {
-		auto [into, caller] = pending.pop_back_val ();
+		/// Folds between this body and root. Zero is root itself.
+		unsigned depth;
+	};
+
+	SmallVector<Candidate, 8> pending { { root, &body, 0 } };
+
+	// The budget bounds what the loop translates rather than how far it walks.
+	// A body it can no longer fold into still has sites to move onto the copies
+	// this root holds already.
+	/*
+	 * Least deep first. The worklist is drained from the front, so every body
+	 * one remove from root is folded before any body behind it, and a budget
+	 * that runs out drops the deepest candidates rather than whichever chain
+	 * the walk happened to go down.
+	 */
+	for (size_t next = 0; next < pending.size (); ++next) {
+		auto [into, caller, depth] = pending[next];
 		SmallVector<Function *, 8> called;
 
 		for (Instruction &i : instructions (*caller)) {
@@ -348,13 +365,57 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 		}
 
 		for (Function *decl : called) {
-			if (scope.budget == 0)
-				break;
-
 			MonoMethod *callee = marked_method (*decl);
 
-			if (callee == nullptr || is_contained (scope.folded, callee)
-			    || !may_fold (domain, callee))
+			if (callee == nullptr)
+				continue;
+
+			/*
+			 * A copy belongs to the root rather than to the caller that
+			 * asked for it, so these sites reach the one that stands. This
+			 * is ahead of the budget because a redirect translates nothing:
+			 * a root that has spent its budget still moves its sites over.
+			 */
+			bool rebuild = already_folded (scope, callee);
+
+			if (rebuild) {
+				// root has a body rather than a copy, and a copy of root
+				// folded back into root has no end.
+				if (callee == scope.root)
+					continue;
+
+				Function *standing = folded_copy_in (scope, callee, module);
+
+				/*
+				 * A copy stands, so these sites reach it instead of the
+				 * published entry. One that already reaches caller keeps
+				 * its call: the two would fold into each other otherwise.
+				 */
+				if (standing != nullptr) {
+					if (!copy_reaches (*standing, *caller)) {
+						g_assert (standing->getFunctionType ()
+						          == decl->getFunctionType ());
+						redirect_calls (*caller, *decl, *standing);
+					}
+
+					continue;
+				}
+
+				/*
+				 * No copy stands here, so fall through and build one. The
+				 * pipeline erases a copy once it has folded every call to
+				 * it, and a copy made for a candidate belongs to that
+				 * candidate's module, so a root meets this on the ordinary
+				 * path rather than a rare one.
+				 */
+			}
+
+			// A rebuild is free, so a spent budget stops the new methods
+			// below it rather than the whole scan.
+			if (!rebuild && scope.budget == 0)
+				continue;
+
+			if (!may_fold (domain, callee))
 				continue;
 
 			ERROR_DECL (metadata_error);
@@ -403,7 +464,19 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			// These shapes have nothing to weigh, so the pipeline folds them
 			// rather than a cost model.
 			copy->addFnAttr (Attribute::AlwaysInline);
-			pending.push_back ({ callee, copy });
+
+			/*
+			 * A rebuild is a body this root has already walked, so its own
+			 * callees were weighed the first time. Walking it again reaches
+			 * past what the first fold decided and spends the budget on
+			 * methods that fold deeper rather than on the sites in hand.
+			 *
+			 * The depth bound is what stops a chain of forwarders from
+			 * spending the whole budget. Without it the budget is the only
+			 * limit, and it is a total rather than a reach.
+			 */
+			if (!rebuild && depth + 1 < trivial_inline_depth_limit ())
+				pending.push_back ({ callee, copy, depth + 1 });
 		}
 	}
 }

@@ -34,9 +34,14 @@ public:
 	/// decl's name either: the caller reconciles any leftover declaration once
 	/// the body is linked in, so the site still needs no rewriting of its own.
 	///
+	/// What comes back is fresh translator output, unless the engine folded the
+	/// method into this root already. It then answers with the body standing in
+	/// decl's own module, which the caller links nothing for. Read getParent ()
+	/// to tell the two apart.
+	///
 	/// Null means the site keeps its call. The engine refuses the method, its
 	/// metadata will not load, or the compile has spent the translation it is
-	/// allowed. What comes back is fresh translator output.
+	/// allowed.
 	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) = 0;
 
 	virtual void folded (llvm::Function &caller, llvm::Function &callee) = 0;
