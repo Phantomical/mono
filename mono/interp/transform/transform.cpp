@@ -2978,17 +2978,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			int size;
 			gpointer handle;
 			token = read32 (ip + 1);
-			/*
-			 * Every token, rather than only the ones the context names. The
-			 * handle below is burned into a data item, and typeof (T) in a
-			 * body shared between string and object needs two of them.
-			 * Classifying the token instead means resolving it first, which is
-			 * what the code below does for each shape it accepts.
-			 */
-			if (sharing) {
-				cannot_share ("ldtoken in a shared body");
-				return TRUE;
-			}
 			if (method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD
 			    || method->wrapper_type == MONO_WRAPPER_SYNCHRONIZED) {
 				handle = mono_method_get_wrapper_data (method, token);
@@ -3011,6 +3000,33 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			size = mono_class_value_size (klass, NULL);
 			g_assert (size == sizeof (gpointer));
 
+			/*
+			 * The handle is burned into a data item, and typeof (T) in a body
+			 * shared between string and object needs two of them. Only a type
+			 * handle is classified, because only the arms below that answer one
+			 * have a fetch to take instead.
+			 */
+			bool token_from_context = false;
+
+			if (sharing) {
+				if (klass != mono_defaults.typehandle_class) {
+					cannot_share ("a field or method token in a shared body");
+					return TRUE;
+				}
+
+				if (depends_on_context (
+						mono_class_from_mono_type_internal ((MonoType *) handle))) {
+					// A fetch reads the receiver of the body being written,
+					// which is the caller's rather than the callee's.
+					if (inlining) {
+						cannot_share ("ldtoken inside an inlined callee");
+						return TRUE;
+					}
+
+					token_from_context = true;
+				}
+			}
+
 			const unsigned char *next_ip = ip + 5;
 			MonoMethod *cmethod;
 			if (next_ip < end && interp_ip_in_cbb (next_ip - il_code)
@@ -3029,8 +3045,15 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				                                          generic_context, error))
 				    && (next_cmethod->klass == mono_defaults.systemtype_class)
 				    && !strcmp (next_cmethod->name, "get_IsValueType")) {
-					g_assert (
-						!mono_class_is_open_constructed_type (m_class_get_byval_arg (tclass)));
+					/*
+					 * A type variable stands for a reference under reference
+					 * sharing, and a value type the context names is one in
+					 * every instantiation. So the fold below is right without
+					 * the class being closed.
+					 */
+					if (!token_from_context)
+						g_assert (!mono_class_is_open_constructed_type (
+							m_class_get_byval_arg (tclass)));
 					if (m_class_is_valuetype (tclass))
 						interp_add_ins (MINT_LDC_I4_1);
 					else
@@ -3038,6 +3061,20 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					push_simple_type (StackType::I4);
 					interp_ins_set_dreg (last_ins, sp[-1].local);
 					ip = next_next_ip + 5;
+					break;
+				}
+
+				if (token_from_context) {
+					int systype = emit_rgctx_fetch (MONO_RGCTX_INFO_REFLECTION_TYPE, tclass);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+
+					interp_add_ins (MINT_MOV_P);
+					interp_ins_set_sreg (last_ins, systype);
+					push_simple_type (StackType::MP);
+					interp_ins_set_dreg (last_ins, sp[-1].local);
+					ip = next_ip + 5;
 					break;
 				}
 
@@ -3050,6 +3087,13 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				last_ins->data[0] = get_data_item_index (systype);
 				ip = next_ip + 5;
 			} else {
+				// MINT_LDTOKEN pushes the handle it is given, and that is the
+				// shared form's rather than the instantiation's.
+				if (token_from_context) {
+					cannot_share ("a bare ldtoken the generic context names");
+					return TRUE;
+				}
+
 				interp_add_ins (MINT_LDTOKEN);
 				push_type_vt (klass, sizeof (gpointer));
 				interp_ins_set_dreg (last_ins, sp[-1].local);
