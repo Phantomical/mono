@@ -88,6 +88,13 @@ static class Trivial {
 
 	public static void Fail (string what) { throw new InvalidOperationException (what); }
 
+	/*
+	 * A forwarder onto a method that forwards to an icall. Array:Clone () calls
+	 * object:MemberwiseClone (), which reads no frame, so the chain walk lets
+	 * this one through. A null array raises where the call stands.
+	 */
+	public static object CloneOf (Array a) { return a.Clone (); }
+
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	public static void FailNoInline (string what)
 	{
@@ -106,21 +113,21 @@ static class Trivial {
 static class Program {
 	static Outer o = new Outer ();
 
-	/* Which of the three helpers the trace taken inside Root () named. */
-	static bool saw_fail, saw_no_inline, saw_branch;
+	/* Which helpers the traces taken inside the roots below named. */
+	static bool saw_fail, saw_no_inline, saw_branch, saw_clone;
 
-	/* Which of them ran inside Root ()'s code rather than in a body of its own. */
-	static bool folded_fail, folded_no_inline, folded_branch;
+	/* Which of them ran inside their root's code rather than in a body of its own. */
+	static bool folded_fail, folded_no_inline, folded_branch, folded_clone;
 
 	/*
-	 * Whether the helper's frame covers the same code as Root ()'s.
+	 * Whether the helper's frame covers the same code as root's.
 	 *
 	 * A folded body has no code of its own, so the frame reported for it names
-	 * the call site in Root () that it was folded at - the same native offset
-	 * Root ()'s own frame reports. A helper that was really called runs in its
+	 * the call site in root that it was folded at - the same native offset
+	 * root's own frame reports. A helper that was really called runs in its
 	 * own body and answers with an offset into that.
 	 */
-	static bool RunsInsideRoot (Exception e, string helper)
+	static bool RunsInside (Exception e, string helper, string root)
 	{
 		StackTrace st = new StackTrace (e, false);
 		int in_helper = -1, in_root = -2;
@@ -133,11 +140,26 @@ static class Program {
 				continue;
 			if (m.DeclaringType.Name == "Trivial" && m.Name == helper)
 				in_helper = f.GetNativeOffset ();
-			if (m.DeclaringType.Name == "Program" && m.Name == "Root")
+			if (m.DeclaringType.Name == "Program" && m.Name == root)
 				in_root = f.GetNativeOffset ();
 		}
 
 		return in_helper >= 0 && in_helper == in_root;
+	}
+
+	/*
+	 * A root of its own, because the cost model weighs a site against the size
+	 * of the method it stands in. Put this call in Root () and tier 2 stops
+	 * folding FailBranch ().
+	 */
+	static void CloneRoot ()
+	{
+		try {
+			Trivial.CloneOf (null);
+		} catch (NullReferenceException e) {
+			saw_clone |= (e.StackTrace ?? "").Contains ("Trivial.CloneOf");
+			folded_clone |= RunsInside (e, "CloneOf", "CloneRoot");
+		}
 	}
 
 	static void Record (Exception e)
@@ -148,9 +170,9 @@ static class Program {
 		saw_no_inline |= trace.Contains ("Trivial.FailNoInline");
 		saw_branch |= trace.Contains ("Trivial.FailBranch");
 
-		folded_fail |= RunsInsideRoot (e, "Fail");
-		folded_no_inline |= RunsInsideRoot (e, "FailNoInline");
-		folded_branch |= RunsInsideRoot (e, "FailBranch");
+		folded_fail |= RunsInside (e, "Fail", "Root");
+		folded_no_inline |= RunsInside (e, "FailNoInline", "Root");
+		folded_branch |= RunsInside (e, "FailBranch", "Root");
 
 		if (!trace.Contains ("Program.Root"))
 			throw new Exception ("the frame that caught it is missing: " + trace);
@@ -218,17 +240,25 @@ static class Program {
 	const int tier1 = 2;
 	const int tier2 = 3;
 
-	static bool AtTier (MethodInfo root, int tier, string name, int want)
+	static bool AtTier (MethodInfo root, MethodInfo clone_root, int tier, string name,
+	                    int want)
 	{
 		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, tier)) {
 			Console.WriteLine ("FAIL: Root () would not compile at {0}", name);
 			return false;
 		}
 
-		saw_fail = saw_no_inline = saw_branch = false;
-		folded_fail = folded_no_inline = folded_branch = false;
+		if (!Mono.Tiering.MonoTier.PromoteNow (clone_root.MethodHandle.Value, tier)) {
+			Console.WriteLine ("FAIL: CloneRoot () would not compile at {0}", name);
+			return false;
+		}
+
+		saw_fail = saw_no_inline = saw_branch = saw_clone = false;
+		folded_fail = folded_no_inline = folded_branch = folded_clone = false;
 
 		int got = Root (3);
+
+		CloneRoot ();
 
 		Check (want == got, "the answer at " + name);
 
@@ -242,6 +272,14 @@ static class Program {
 		Check (saw_no_inline, "NoInlining keeps the helper's frame at " + name);
 		Check (!folded_no_inline,
 		       "and a refused helper runs in a body of its own at " + name);
+
+		/*
+		 * The icall behind Array:Clone () reads no frame, so the chain walk lets
+		 * the forwarder through. A gate that refuses every body with no IL keeps
+		 * CloneOf () in a body of its own and fails this.
+		 */
+		Check (saw_clone, "a forwarder onto an icall has a frame at " + name);
+		Check (folded_clone, "and it runs inside CloneRoot () at " + name);
 
 		/*
 		 * FailBranch () is the one shape the two tiers answer differently. The
@@ -266,9 +304,11 @@ static class Program {
 
 		MethodInfo root = typeof (Program).GetMethod ("Root",
 			BindingFlags.Static | BindingFlags.NonPublic);
+		MethodInfo clone_root = typeof (Program).GetMethod ("CloneRoot",
+			BindingFlags.Static | BindingFlags.NonPublic);
 
-		if (!AtTier (root, tier1, "tier 1", want)
-		    || !AtTier (root, tier2, "tier 2", want))
+		if (!AtTier (root, clone_root, tier1, "tier 1", want)
+		    || !AtTier (root, clone_root, tier2, "tier 2", want))
 			return 1;
 
 		if (fails != 0)

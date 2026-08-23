@@ -11,6 +11,7 @@
 #include <llvm/IR/Module.h>
 
 #include <optional>
+#include <string_view>
 
 #include "mini.h"
 
@@ -88,6 +89,50 @@ il_call_target (MonoMethod *method, uint32_t token)
 }
 
 bool
+reads_the_callers_frame (MonoMethod *target)
+{
+	MonoClass *klass = target->klass;
+
+	/*
+	 * An embedder registers the internal calls it wants, and mono_stack_walk ()
+	 * is part of the API it can reach. Corlib is the one image whose set we
+	 * have read.
+	 */
+	if (m_class_get_image (klass) != mono_get_corlib ())
+		return true;
+
+	std::string_view name_space (m_class_get_name_space (klass));
+	std::string_view class_name (m_class_get_name (klass));
+	std::string_view name (target->name);
+
+	/*
+	 * Reflection answers questions about the caller. The core-clr security
+	 * checks in front of field access, method invoke and delegate creation read
+	 * the caller too, and each of those sits on a reflection type.
+	 */
+	if (name_space == "System.Reflection")
+		return true;
+
+	if (name_space == "System.Diagnostics")
+		return class_name == "StackTrace" || class_name == "StackFrame";
+	if (name_space == "System.Runtime.Loader")
+		return class_name == "AssemblyLoadContext" && name == "InternalLoadFile";
+	if (name_space == "System.Threading")
+		return class_name == "Thread" && name == "GetStackTraces";
+
+	if (name_space == "System") {
+		if (class_name == "AppDomain")
+			return name == "LoadAssembly";
+		if (class_name == "Delegate")
+			return name == "CreateDelegate_internal";
+		if (class_name == "RuntimeTypeHandle")
+			return name == "internal_from_name";
+	}
+
+	return false;
+}
+
+bool
 loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header)
 {
 	const unsigned char *code = header->code;
@@ -136,14 +181,11 @@ loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header)
 			    || (target->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
 				return false;
 
-			// A body with no IL can be any of the runtime's stack walks, which
-			// are all icalls. In this corlib GetCurrentMethod,
+			// A body with no IL keeps no frame of its own, so what it reports
+			// comes from this one. In this corlib GetCurrentMethod,
 			// GetExecutingAssembly and GetCallingAssembly carry no NoInlining to
-			// be read, so the mark alone does not find them. The exception is a
-			// math icall: the front end answers it with arithmetic, so the site
-			// makes no call at all.
-			if (implemented_outside_il (target)
-			    && !math_intrinsic_for (target, mono_method_signature_internal (target)))
+			// be read, so the mark alone does not find them.
+			if (implemented_outside_il (target) && reads_the_callers_frame (target))
 				return false;
 		}
 

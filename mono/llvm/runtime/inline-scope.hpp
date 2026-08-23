@@ -73,15 +73,28 @@ uint32_t il_read_u32 (const unsigned char *at);
 /// does not resolve it.
 MonoMethod *il_call_target (MonoMethod *method, uint32_t token);
 
+/// Whether an internal call reports something it reads off the frame that
+/// called it.
+///
+/// The caller has already found that target has no IL. Such a body keeps no
+/// frame of its own, so a fold moves the frame it reads. This names the corlib
+/// calls that walk the managed stack. Each one reaches mono_stack_walk_no_il (),
+/// mono_method_get_last_managed () or mono_runtime_get_caller_from_stack_mark ().
+///
+/// A method outside corlib answers yes. An embedder registers the internal calls
+/// it wants, and this backend has read no set but corlib's.
+///
+/// Add an entry for a new internal call that reads its caller. Without one the
+/// fold changes what that call reports, and no failure names this gate.
+bool reads_the_callers_frame (MonoMethod *target);
+
 /// Whether the body can lose its own frame without changing what a method it
 /// calls reports.
 ///
 /// Fold the body in and a helper it calls sees the caller's frame instead. Two
 /// marks say a helper reads that frame: NoInlining, which is what a managed one
-/// carries, and having no IL at all. Every stack walk the runtime offers is an
-/// icall, and this corlib's GetCurrentMethod, GetExecutingAssembly and
-/// GetCallingAssembly carry no mark. A call through a pointer names no method,
-/// so a body holding one is refused outright.
+/// carries, and an internal call reads_the_callers_frame () names. A call
+/// through a pointer names no method, so a body holding one is refused outright.
 bool loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header);
 
 /// Translates callee into the module its caller is being built in, marks the

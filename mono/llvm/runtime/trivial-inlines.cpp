@@ -240,10 +240,8 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 /// was called from.
 ///
 /// Checks the same two marks loses_its_frame_safely () gates on
-/// (inline-scope.hpp): NoInlining, and having no IL at all. Refusing on the
-/// second mark takes in far more than it has to, and a fold declined costs
-/// the caller nothing. A math icall is the one body with no IL that answers
-/// no, because the front end leaves no call at the site.
+/// (inline-scope.hpp): NoInlining, and an internal call
+/// reads_the_callers_frame () names.
 bool
 may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 {
@@ -258,11 +256,10 @@ may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 		if ((target->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
 			return true;
 
-		// A math icall is where the chain stops without a frame: the front end
-		// answers it with arithmetic, so it makes no call.
+		// A body with no IL is where the chain stops. It keeps no frame of its
+		// own, so what it reports comes from the frame that called it.
 		if (implemented_outside_il (target))
-			return !math_intrinsic_for (target,
-			                            mono_method_signature_internal (target));
+			return reads_the_callers_frame (target);
 
 		ERROR_DECL (metadata_error);
 		MinimalCompile cfg (target, domain, metadata_error);
