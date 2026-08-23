@@ -1416,18 +1416,34 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			return_val_if_nok (error, FALSE);
 
 			if (m_class_is_valuetype (klass)) {
-				// MINT_CPOBJ copies against the class it is given, and that is
-				// the shared form's rather than the instantiation's.
+				MintType mt = mint_type (m_class_get_byval_arg (klass));
+				int vtable_local = -1;
+
 				if (sharing && depends_on_context (klass)) {
-					cannot_share ("cpobj of a value type the generic context names");
-					return TRUE;
+					// mint_type () answers VT for a generic instance of a value
+					// type, unless the definition is an enum.
+					if (mt != MintType::VT) {
+						cannot_share ("cpobj of a generic enum the generic context names");
+						return TRUE;
+					}
+
+					// The copy reads the class's GC descriptor, which only the
+					// instantiation's vtable carries.
+					vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, klass);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
 				}
 
-				MintType mt = mint_type (m_class_get_byval_arg (klass));
 				sp -= 2;
-				interp_add_ins ((mt == MintType::VT) ? MINT_CPOBJ_VT : MINT_CPOBJ);
-				interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
-				last_ins->data[0] = get_data_item_index (klass);
+				if (vtable_local >= 0) {
+					interp_add_ins (MINT_CPOBJ_VT_DYN);
+					interp_ins_set_sregs3 (last_ins, sp[0].local, sp[1].local, vtable_local);
+				} else {
+					interp_add_ins ((mt == MintType::VT) ? MINT_CPOBJ_VT : MINT_CPOBJ);
+					interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
+					last_ins->data[0] = get_data_item_index (klass);
+				}
 			} else {
 				sp--;
 				interp_add_ins (MINT_LDIND_REF);
@@ -1753,7 +1769,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			}
 			++ip;
 			break;
-		case CEE_UNBOX:
+		case CEE_UNBOX: {
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 
@@ -1763,9 +1780,13 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				klass = mono_class_get_and_inflate_typespec_checked (image, token, generic_context,
 				                                                     error);
 				return_val_if_nok (error, FALSE);
+				from_context = sharing && depends_on_context (klass);
 			}
-			if (sharing && depends_on_context (klass)) {
-				cannot_share ("a class the generic context names");
+
+			// Unbox is resolved off the class, and a class the context names is
+			// open.
+			if (from_context && mono_class_is_nullable (klass)) {
+				cannot_share ("unbox of a nullable the generic context names");
 				return TRUE;
 			}
 
@@ -1795,15 +1816,29 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				interp_ins_set_sreg (last_ins, local);
 				locals[local].indirects++;
 			} else {
-				interp_add_ins (MINT_UNBOX);
+				int klass_local = -1;
+
+				if (from_context) {
+					klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+				}
+
+				interp_add_ins (from_context ? MINT_UNBOX_DYN : MINT_UNBOX);
 				sp--;
-				interp_ins_set_sreg (last_ins, sp[0].local);
+				if (from_context)
+					interp_ins_set_sregs2 (last_ins, sp[0].local, klass_local);
+				else
+					interp_ins_set_sreg (last_ins, sp[0].local);
 				push_simple_type (StackType::MP);
 				interp_ins_set_dreg (last_ins, sp[-1].local);
-				last_ins->data[0] = get_data_item_index (klass);
+				if (!from_context)
+					last_ins->data[0] = get_data_item_index (klass);
 				ip += 5;
 			}
 			break;
+		}
 		case CEE_UNBOX_ANY: {
 			bool from_context = false;
 			CHECK_STACK (1);
@@ -1816,11 +1851,11 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				return TRUE;
 
 			if (from_context) {
-				// The unbox arm below burns the class in as a data item, and
-				// MINT_UNBOX compares the boxed object against it. That is the
-				// shared form's class, which matches no instantiation.
-				if (!mini_type_is_reference (m_class_get_byval_arg (klass))) {
-					cannot_share ("unbox.any of a value type the generic context names");
+				// Unbox is resolved off the class, and a class the context
+				// names is open.
+				if (!mini_type_is_reference (m_class_get_byval_arg (klass))
+				    && mono_class_is_nullable (klass)) {
+					cannot_share ("unbox.any of a nullable the generic context names");
 					return TRUE;
 				}
 
@@ -1829,7 +1864,20 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				if (sharing_refusal != nullptr)
 					return TRUE;
 
-				interp_handle_isinst_dyn (klass_local, klass, FALSE);
+				if (mini_type_is_reference (m_class_get_byval_arg (klass))) {
+					interp_handle_isinst_dyn (klass_local, klass, FALSE);
+					break;
+				}
+
+				interp_add_ins (MINT_UNBOX_DYN);
+				sp--;
+				interp_ins_set_sregs2 (last_ins, sp[0].local, klass_local);
+				push_simple_type (StackType::MP);
+				interp_ins_set_dreg (last_ins, sp[-1].local);
+
+				interp_emit_ldobj (klass);
+
+				ip += 5;
 				break;
 			}
 
@@ -2316,17 +2364,11 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
-			// MINT_STOBJ_VT copies against the class it is given, and that is
-			// the shared form's rather than the instantiation's. Every other
-			// arm names the kind of the value alone.
-			if (from_context && mint_type (m_class_get_byval_arg (klass)) == MintType::VT) {
-				cannot_share ("stobj of a value type the generic context names");
-				return TRUE;
-			}
-
 			BARRIER_IF_VOLATILE (MONO_MEMORY_BARRIER_REL);
 
 			interp_emit_stobj (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			ip += 5;
 			break;
@@ -2759,13 +2801,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
-			// MINT_STELEM_VT copies against the class it is given, and that is
-			// the shared form's rather than the instantiation's. Every other
-			// arm names the kind of the element alone.
-			if (from_context && mint_type (m_class_get_byval_arg (klass)) == MintType::VT) {
-				cannot_share ("stelem of a value type the generic context names");
-				return TRUE;
-			}
 			switch (mint_type (m_class_get_byval_arg (klass))) {
 			case MintType::I1:
 				handle_stelem (MINT_STELEM_I1);
@@ -2797,6 +2832,34 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			case MintType::VT: {
 				int size = mono_class_value_size (klass, NULL);
 				g_assert (size < G_MAXUINT16);
+
+				/*
+				 * MINT_STELEM_VT reads the array, the index and the value, which
+				 * is every source operand an instruction has. So a store that
+				 * needs the instantiation's vtable as well becomes the element
+				 * address and a copy through it.
+				 */
+				if (from_context) {
+					CHECK_STACK (3);
+					narrow_index (sp - 2);
+
+					int address = create_interp_local (mono_get_int_type ());
+
+					interp_add_ins (MINT_LDELEMA1);
+					interp_ins_set_sregs2 (last_ins, sp[-3].local, sp[-2].local);
+					interp_ins_set_dreg (last_ins, address);
+					last_ins->data[0] = size;
+
+					int vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, klass);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+
+					interp_add_ins (MINT_STOBJ_VT_DYN);
+					interp_ins_set_sregs3 (last_ins, address, sp[-1].local, vtable_local);
+					sp -= 3;
+					break;
+				}
 
 				handle_stelem (MINT_STELEM_VT);
 				last_ins->data[0] = get_data_item_index (klass);

@@ -656,17 +656,30 @@ void
 TransformData::interp_emit_stobj (MonoClass *klass)
 {
 	MintType mt = mint_type (m_class_get_byval_arg (klass));
+	int vtable_local = -1;
 
 	coerce_fp (sp - 1, stack_type_of (mt));
 
-	if (mt == MintType::VT) {
+	if (mt != MintType::VT) {
+		interp_add_ins (interp_get_stind_for_mt (mt));
+	} else if (sharing && depends_on_context (klass)) {
+		// The copy reads the class's GC descriptor, which only the
+		// instantiation's vtable carries.
+		vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, klass);
+
+		if (sharing_refusal != nullptr)
+			return;
+
+		interp_add_ins (MINT_STOBJ_VT_DYN);
+	} else {
 		interp_add_ins (MINT_STOBJ_VT);
 		last_ins->data[0] = get_data_item_index (klass);
-	} else {
-		interp_add_ins (interp_get_stind_for_mt (mt));
 	}
 	sp -= 2;
-	interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
+	if (vtable_local >= 0)
+		interp_ins_set_sregs3 (last_ins, sp[0].local, sp[1].local, vtable_local);
+	else
+		interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
 }
 
 void
@@ -794,6 +807,15 @@ TransformData::emit_rgctx_fetch (MonoRgctxInfoType info_type, gpointer data)
 	// an argument no interpreter entry carries.
 	if (rgctx_receiver_local < 0 || mini_method_needs_mrgctx (method)) {
 		cannot_share ("a generic context with no receiver to read it from");
+		return -1;
+	}
+
+	// The receiver is the one the body being written was entered with, and a
+	// callee folded into it was read against a context of its own. Callers that
+	// can name the site refuse ahead of this, which is why they say what the
+	// site was.
+	if (inlined_method != nullptr) {
+		cannot_share ("a generic context read inside an inlined callee");
 		return -1;
 	}
 
@@ -938,13 +960,6 @@ void
 TransformData::interp_emit_sfld_access_dyn (MonoClassField *field, MonoClass *field_class,
                                             MintType mt, gboolean is_load)
 {
-	// MINT_STOBJ_VT copies against the class it is given, and that is the
-	// shared form's rather than the instantiation's.
-	if (!is_load && mt == MintType::VT && depends_on_context (field_class)) {
-		cannot_share ("a static value-type field the generic context names");
-		return;
-	}
-
 	int address = create_interp_local (mono_get_int_type ());
 
 	if (!emit_static_field_address (field, address))
@@ -968,14 +983,29 @@ TransformData::interp_emit_sfld_access_dyn (MonoClassField *field, MonoClass *fi
 	}
 
 	coerce_fp (sp - 1, stack_type_of (mt));
-	sp--;
-	if (mt == MintType::VT) {
+
+	int vtable_local = -1;
+
+	if (mt != MintType::VT) {
+		interp_add_ins (interp_get_stind_for_mt (mt));
+	} else if (depends_on_context (field_class)) {
+		// The copy reads the class's GC descriptor, which only the
+		// instantiation's vtable carries.
+		vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, field_class);
+
+		if (sharing_refusal != nullptr)
+			return;
+
+		interp_add_ins (MINT_STOBJ_VT_DYN);
+	} else {
 		interp_add_ins (MINT_STOBJ_VT);
 		last_ins->data[0] = get_data_item_index (field_class);
-	} else {
-		interp_add_ins (interp_get_stind_for_mt (mt));
 	}
-	interp_ins_set_sregs2 (last_ins, address, sp[0].local);
+	sp--;
+	if (vtable_local >= 0)
+		interp_ins_set_sregs3 (last_ins, address, sp[0].local, vtable_local);
+	else
+		interp_ins_set_sregs2 (last_ins, address, sp[0].local);
 }
 
 void

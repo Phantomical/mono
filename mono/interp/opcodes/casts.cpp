@@ -133,6 +133,27 @@ MONO_INTERP_OP_IMPL (MINT_UNBOX)
 }
 
 /*
+ * The class arrives in a local, because a body shared between reference
+ * instantiations reads it out of its generic context. The test below is for
+ * exact identity, so the shared form matches no boxed value.
+ */
+MONO_INTERP_OP_IMPL (MINT_UNBOX_DYN)
+{
+	auto o = LOCAL_VAR (ip[2], MonoObject *);
+	NULL_CHECK (o);
+	auto c = LOCAL_VAR (ip[3], MonoClass *);
+
+	if (!(m_class_get_rank (o->vtable->klass) == 0
+	      && m_class_get_element_class (o->vtable->klass) == m_class_get_element_class (c)))
+		THROW_EX (mono_get_exception_invalid_cast (), ip);
+
+	LOCAL_VAR (ip[1], gpointer) = mono_object_unbox_internal (o);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+/*
  * castclass and isinst ask the same question and differ only in what a no means:
  * castclass throws where isinst writes null. The three pairs below differ in how
  * the question is answered, which is what the transform picked the opcode for.
