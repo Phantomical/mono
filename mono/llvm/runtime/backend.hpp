@@ -82,6 +82,13 @@ public:
 
 	static void *unbox_entry_of (MonoMethod *method);
 
+	/// Returns the body \p method runs in the calling thread's domain,
+	/// compiling it if the domain has none.
+	///
+	/// A dispatcher stub calls this, so its address is registered as a JIT
+	/// symbol and as the mono_llvm_jit_body_for_current_domain icall.
+	static void *body_for_current_domain (MonoMethod *method);
+
 public:
 	llvm::Expected<void *> compile (MonoMethod *method, MonoDomain *domain);
 
@@ -107,8 +114,6 @@ private:
 	llvm::Expected<Compiled> interp_entries (DomainState &domain, MonoDomainMethod &dm);
 
 	llvm::Expected<void *> dispatcher (DomainState &domain, MonoDomainMethod &dm);
-
-	static void *body_for_current_domain (MonoMethod *method);
 
 	/// Returns where \p dm's body has ended up, compiling the method if it
 	/// has not been compiled yet. This is what the stub in front of it is

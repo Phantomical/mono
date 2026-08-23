@@ -25,6 +25,10 @@ typedef struct _MonoJitInfo MonoJitInfo;
 /// consume the options queued by mono_llvm_jit_add_option ().
 void mono_llvm_jit_init (void);
 
+/// Fills in the jit icall table entries for the helpers this backend and its
+/// interpreter entry provide. Call it from register_icalls ().
+void mono_llvm_jit_register_icalls (void);
+
 /// The code goes into the given domain's linker. The address is a stub, and
 /// it stays the same for the life of the process however often the method is
 /// recompiled. Callers can cache it.

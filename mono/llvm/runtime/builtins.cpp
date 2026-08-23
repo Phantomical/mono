@@ -1,4 +1,7 @@
 #include "builtins.hpp"
+#include "arch/arch.hpp"
+#include "backend.hpp"
+#include "runtime.h"
 #include "domain-method.hpp"
 #include "mini.h"
 #include "mono/metadata/appdomain.h"
@@ -17,21 +20,17 @@
 #include <initializer_list>
 #include <cmath>
 
-namespace mono {
-namespace {
-
-template<typename T, typename C>
-void
-append (std::vector<T> &vec, const C &collection)
-{
-	vec.insert (vec.end (), collection.begin (), collection.end ());
-}
+/*
+ * Generated code names these functions, so each carries C linkage at global
+ * scope and the name a call site is emitted with is the symbol.
+ */
+extern "C" {
 
 /// The personality function for the landing pads we generate. Mono uses its own
 /// custom unwinder, so this is never called by us.
 _Unwind_Reason_Code
-jit_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Exception *,
-                 struct _Unwind_Context *)
+mono_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Exception *,
+                  struct _Unwind_Context *)
 {
 	return _URC_CONTINUE_UNWIND;
 }
@@ -45,7 +44,7 @@ jit_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Ex
  * arrives.
  */
 void
-mono_llvm_jit_tier2_promote (MonoDomainMethod *dm)
+mono_llvm_jit_tier2_promote (mono::MonoDomainMethod *dm)
 {
 	dm->promote ();
 }
@@ -56,6 +55,23 @@ mono_llvm_load_error_exception (MonoErrorBoxed *failure)
 	ERROR_DECL (error);
 	mono_error_set_from_boxed (error, failure);
 	return (MonoObject *) mono_error_convert_to_exception (error);
+}
+
+/* Defined beside the code that emits the call to it. */
+void mono_llvm_seq_point_nop (void);
+void mono_llvm_interp_entry_from_context (MonoMethod *method,
+                                          mono::arch::InterpArgContext *ctx);
+
+} // extern "C"
+
+namespace mono {
+namespace {
+
+template<typename T, typename C>
+void
+append (std::vector<T> &vec, const C &collection)
+{
+	vec.insert (vec.end (), collection.begin (), collection.end ());
 }
 
 void
@@ -102,10 +118,10 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 		{"mono_llvm_load_error_exception", (void *) &mono_llvm_load_error_exception},
 
 		/*
-		 * The personality routine a landing pad names. See jit_personality ()
+		 * The personality routine a landing pad names. See mono_personality ()
 		 * above.
 		 */
-		{"mono_personality", (void *) &jit_personality},
+		{"mono_personality", (void *) &mono_personality},
 
 		/*
 		 * Not a runtime libcall as far as RuntimeLibcallsInfo is concerned -
@@ -171,3 +187,30 @@ MonoBuiltin::get_platform_builtins (const llvm::Triple &triple)
 }
 
 } // namespace mono
+
+/*
+ * An entry here names the same symbol get_runtime_builtins () registers an
+ * address for. The table gives it a signature and an id; the JIT still
+ * resolves the call through the symbol.
+ */
+#define register_icall(func, sig) \
+	(mono_register_jit_icall_info (&mono_get_jit_icall_info ()->func, func, #func, (sig), TRUE, #func))
+
+void
+mono_llvm_jit_register_icalls (void)
+{
+	register_icall (mono_llvm_jit_tier2_promote, mono_icall_sig_void_ptr);
+	register_icall (mono_llvm_load_error_exception, mono_icall_sig_object_ptr);
+	register_icall (mono_llvm_seq_point_nop, mono_icall_sig_void);
+	register_icall (mono_personality, mono_icall_sig_int_int_int_ptr_ptr_ptr);
+	register_icall (mono_llvm_interp_entry_from_context, mono_icall_sig_void_ptr_ptr);
+
+	/*
+	 * The dispatcher's target is a static member, so it carries a mangled
+	 * symbol and the id's name is the only name it has.
+	 */
+	mono_register_jit_icall_info (
+		&mono_get_jit_icall_info ()->mono_llvm_jit_body_for_current_domain,
+		(gconstpointer) &mono::MonoBackend::body_for_current_domain,
+		"mono_llvm_jit_body_for_current_domain", mono_icall_sig_ptr_ptr, TRUE, NULL);
+}

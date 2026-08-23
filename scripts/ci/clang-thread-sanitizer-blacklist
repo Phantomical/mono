@@ -317,7 +317,7 @@ fun:mono_decompose_vtype_opts
 fun:compute_dominators
 fun:mono_compute_natural_loops
 
-# jit-icalls.c #
+# icalls/ldvirtfn.c #
 
 fun:ldvirtfn_internal
 

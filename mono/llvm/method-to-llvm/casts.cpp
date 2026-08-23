@@ -320,7 +320,7 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	 * test. mono_object_castclass_with_cache () keeps the bare vtable of an
 	 * object that passed. mono_object_isinst_with_cache () keeps the vtable
 	 * with bit 0 set when the answer was no, which is how it caches a
-	 * refusal. Both are in mono/mini/jit-icalls.c.
+	 * refusal. Both are in mono/mini/icalls/castclass.c.
 	 *
 	 * A read that races with the wrapper's write costs a miss and no more.
 	 * The wrapper writes a vtable only after the test answered for this

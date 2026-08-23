@@ -24,7 +24,6 @@ set(mini_sources
   mini.c
   mini-runtime.c
   seq-points.c
-  jit-icalls.c
   trace.c
   driver.c
   debug-mini.c
@@ -58,6 +57,11 @@ set(mini_sources
   mini-posix.c
   # generated
   "${CMAKE_CURRENT_BINARY_DIR}/version.h")
+
+# The JIT icalls, one file per icall or per family that shares a helper.  Globbed
+# so that adding an icall is adding a file; jit-icalls.h declares the lot.
+file(GLOB icall_sources CONFIGURE_DEPENDS icalls/*.c)
+list(APPEND mini_sources ${icall_sources})
 
 if(MONO_ENABLE_LLVM)
   list(APPEND mini_sources llvm-runtime.cpp domain-method.cpp method-override.cpp thunk.cpp)

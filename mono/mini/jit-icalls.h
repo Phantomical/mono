@@ -1,5 +1,11 @@
 /**
  * \file
+ * Declares the icalls generated code calls into.  Each one is defined under
+ * `icalls/`, in a file named after it or after the family it shares a helper
+ * with.
+ *
+ * `mono/metadata/jit-icall-reg.h` is the table that gives each an id, and
+ * `register_icalls ()` in `mini-runtime.c` is where they are registered.
  */
 
 #ifndef __MONO_JIT_ICALLS_H__

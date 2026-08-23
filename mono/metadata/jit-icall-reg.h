@@ -197,7 +197,9 @@ MONO_JIT_ICALL (mono_gc_alloc_obj) \
 MONO_JIT_ICALL (mono_gc_alloc_string) \
 MONO_JIT_ICALL (mono_gc_alloc_vector) \
 MONO_JIT_ICALL (mono_gc_wbarrier_generic_nostore_internal) \
+MONO_JIT_ICALL (mono_gc_wbarrier_generic_store_internal) \
 MONO_JIT_ICALL (mono_gc_wbarrier_range_copy) \
+MONO_JIT_ICALL (mono_gc_wbarrier_value_copy_internal) \
 MONO_JIT_ICALL (mono_gchandle_get_target_internal) \
 MONO_JIT_ICALL (mono_generic_class_init) \
 MONO_JIT_ICALL (mono_get_assembly_object) \
@@ -222,12 +224,17 @@ MONO_JIT_ICALL (mono_ldtoken_wrapper_generic_shared) \
 MONO_JIT_ICALL (mono_ldvirtfn) \
 MONO_JIT_ICALL (mono_ldvirtfn_gshared) \
 MONO_JIT_ICALL (mono_llvm_clear_exception) \
+MONO_JIT_ICALL (mono_llvm_interp_entry_from_context) \
+MONO_JIT_ICALL (mono_llvm_jit_body_for_current_domain) \
+MONO_JIT_ICALL (mono_llvm_jit_tier2_promote) \
+MONO_JIT_ICALL (mono_llvm_load_error_exception) \
 MONO_JIT_ICALL (mono_llvm_load_exception) \
 MONO_JIT_ICALL (mono_llvm_match_exception) \
 MONO_JIT_ICALL (mono_llvm_resume_exception) \
 MONO_JIT_ICALL (mono_llvm_resume_unwind_trampoline) \
 MONO_JIT_ICALL (mono_llvm_rethrow_exception) \
 MONO_JIT_ICALL (mono_llvm_rethrow_exception_trampoline) \
+MONO_JIT_ICALL (mono_llvm_seq_point_nop) \
 MONO_JIT_ICALL (mono_llvm_throw_corlib_exception) \
 MONO_JIT_ICALL (mono_llvm_throw_corlib_exception_abs_trampoline) \
 MONO_JIT_ICALL (mono_llvm_throw_corlib_exception_trampoline) \
@@ -264,6 +271,7 @@ MONO_JIT_ICALL (mono_object_castclass_unbox) \
 MONO_JIT_ICALL (mono_object_castclass_with_cache) \
 MONO_JIT_ICALL (mono_object_isinst_icall) \
 MONO_JIT_ICALL (mono_object_isinst_with_cache) \
+MONO_JIT_ICALL (mono_personality) \
 MONO_JIT_ICALL (mono_ppc_throw_exception)	\
 MONO_JIT_ICALL (mono_profiler_raise_exception_clause) \
 MONO_JIT_ICALL (mono_profiler_raise_gc_allocation) \

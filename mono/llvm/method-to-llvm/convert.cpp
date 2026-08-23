@@ -273,7 +273,7 @@ constrained_float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::
 ///
 /// The direction of the test decides what a NaN gives, and the two directions disagree.
 /// The test here is "below 2^63", which a NaN fails. A NaN therefore takes the
-/// subtraction and comes out as zero. mono_fconv_u8 () (mono/mini/jit-icalls.c) tests the
+/// subtraction and comes out as zero. mono_fconv_u8 () (mono/mini/icalls/fconv.c) tests the
 /// same way, and the interpreter reaches that helper for MINT_CONV_U8_R8. So this shape is
 /// what the two engines agree on, not the one LLVM picks for itself.
 llvm::Value *

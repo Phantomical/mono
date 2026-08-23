@@ -94,7 +94,6 @@
 #include "jit-icalls.h"
 
 #include "mini-gc.h"
-#include "mini-llvm.h"
 #include "debugger-agent.h"
 #include "debugger-engine.h"
 #include "lldb.h"
@@ -973,22 +972,6 @@ mono_jit_thread_attach (MonoDomain *domain)
 	}
 
 	return orig != domain ? orig : NULL;
-}
-
-/*
- * mono_jit_set_domain:
- *
- * Set domain to @domain if @domain is not null
- */
-void
-mono_jit_set_domain (MonoDomain *domain)
-{
-	g_assert (!mono_threads_is_blocking_transition_enabled ());
-
-	if (domain) {
-		mono_domain_set_fast (domain, TRUE);
-		mono_thread_pop_appdomain_ref ();
-	}
 }
 
 /**
@@ -3979,18 +3962,6 @@ mono_ee_api_version (void)
 	return MONO_EE_API_VERSION;
 }
 
-void
-mono_interp_entry_from_trampoline (gpointer ccontext, gpointer imethod)
-{
-	mini_get_interp_callbacks ()->entry_from_trampoline (ccontext, imethod);
-}
-
-void
-mono_interp_to_native_trampoline (gpointer addr, gpointer ccontext)
-{
-	mini_get_interp_callbacks ()->to_native_trampoline (addr, ccontext);
-}
-
 static gboolean
 mini_is_interpreter_enabled (void)
 {
@@ -4326,6 +4297,7 @@ register_icalls (void)
 	mono_add_internal_call_internal ("Mono.Runtime::mono_runtime_cleanup_handlers",
 				mono_runtime_cleanup_handlers);
 	mono_domain_method_register_icalls ();
+	mono_llvm_jit_register_icalls ();
 
 #if defined(HOST_ANDROID) || defined(TARGET_ANDROID)
 	mono_add_internal_call_internal ("System.Diagnostics.Debugger::Mono_UnhandledException_internal",
@@ -4432,6 +4404,10 @@ register_icalls (void)
 	//WARNING We do runtime selection here but the string *MUST* be to a fallback function that has same signature and behavior
 	MonoRangeCopyFunction const mono_gc_wbarrier_range_copy = mono_gc_get_range_copy_func ();
 	register_icall_no_wrapper (mono_gc_wbarrier_range_copy, mono_icall_sig_void_ptr_ptr_int);
+
+	/* The stores the LLVM backend emits a direct call to. */
+	register_icall_no_wrapper (mono_gc_wbarrier_generic_store_internal, mono_icall_sig_void_ptr_object);
+	register_icall_no_wrapper (mono_gc_wbarrier_value_copy_internal, mono_icall_sig_void_ptr_ptr_int_ptr);
 
 	register_icall (mono_object_castclass_with_cache, mono_icall_sig_object_object_ptr_ptr, FALSE);
 	register_icall (mono_object_isinst_with_cache, mono_icall_sig_object_object_ptr_ptr, FALSE);
@@ -4798,17 +4774,6 @@ void mono_precompile_assemblies ()
 	mono_assembly_foreach ((GFunc)mono_precompile_assembly, assemblies);
 
 	g_hash_table_destroy (assemblies);
-}
-
-/*
- * Used by LLVM.
- * Have to export this for AOT.
- */
-void
-mono_personality (void)
-{
-	/* Not used */
-	g_assert_not_reached ();
 }
 
 static MonoBreakPolicy
