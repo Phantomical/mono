@@ -3711,6 +3711,12 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 	/*
 	 * Before the walk, because the clauses are copied from the header rather
 	 * than resolved, so no site the walk visits classifies a catch type.
+	 * adopt_body () then gives each instantiation that same copy, so a catch
+	 * type the context names stays the type variable and matches no exception.
+	 *
+	 * A catch is the only clause shape that names a type. A filter, a finally
+	 * and a fault carry code offsets, and every instantiation runs the same
+	 * code. The walk visits the IL of their bodies with the rest of the method.
 	 */
 	if (td->sharing) {
 		for (i = 0; i < header->num_clauses; i++) {
