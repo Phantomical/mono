@@ -3411,12 +3411,25 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			case CEE_LDVIRTFTN: /* fallthrough */
 			case CEE_LDFTN: {
 				MonoMethod *m;
+				bool from_context = false;
 				token = read32 (ip + 1);
 				m = interp_get_method (method, token, image, generic_context, error);
 				return_val_if_nok (error, FALSE);
 				if (sharing && depends_on_context (m)) {
-					cannot_share ("a method the generic context names");
-					return TRUE;
+					/*
+					 * ldvirtftn settles the method off the receiver, exactly as
+					 * a dispatched call does, so it needs nothing fetched. ldftn
+					 * names the method itself and does.
+					 */
+					if (*ip == CEE_LDVIRTFTN) {
+						if (!may_dispatch_through_receiver (m))
+							return TRUE;
+					} else if (inlining) {
+						cannot_share ("a method pointer inside an inlined callee");
+						return TRUE;
+					} else {
+						from_context = true;
+					}
 				}
 
 				if (!mono_method_can_access_method (method, m))
@@ -3503,6 +3516,28 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				 * entry is a trampoline, and creating one for every ldftn site the
 				 * program never reaches would be worse than the load.
 				 */
+				if (from_context) {
+					// An rgctx entry holds no wrapper, and the arm above hands
+					// a synchronized method one.
+					if (m->wrapper_type != MONO_WRAPPER_NONE) {
+						cannot_share ("a method pointer a wrapper stands in for");
+						return TRUE;
+					}
+
+					int callee = emit_rgctx_fetch (MONO_RGCTX_INFO_INTERP_METHOD, m);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+
+					interp_add_ins (MINT_LDFTN_DYN);
+					interp_ins_set_sreg (last_ins, callee);
+					push_simple_type (StackType::F);
+					interp_ins_set_dreg (last_ins, sp[-1].local);
+
+					ip += 5;
+					break;
+				}
+
 				int index = get_data_item_index (mono_interp_get_imethod (domain, m, error));
 				return_val_if_nok (error, FALSE);
 				if (*ip == CEE_LDVIRTFTN) {

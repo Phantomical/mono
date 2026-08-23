@@ -706,6 +706,26 @@ MONO_INTERP_OP_IMPL (MINT_LDFTN)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The method arrives in a local rather than a data item, because a body shared
+ * between reference instantiations reads it out of its generic context.
+ *
+ * MINT_LDFTN_DYNAMIC also takes a local and is a different thing: it is handed a
+ * MonoMethod and answers the entry that method names. This one is handed the
+ * InterpMethod the context holds, which an override has already been resolved
+ * through.
+ */
+MONO_INTERP_OP_IMPL (MINT_LDFTN_DYN)
+{
+	error_init_reuse (error);
+	LOCAL_VAR (ip[1], gpointer) =
+		native_entry_for_imethod (LOCAL_VAR (ip[2], InterpMethod *), error);
+	mono_error_assert_ok (error);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_LDFTN_DYNAMIC)
 {
 	error_init_reuse (error);

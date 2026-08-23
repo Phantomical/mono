@@ -409,6 +409,12 @@ struct TransformData {
 	bool may_call_through_context (MonoMethod *body, MonoMethod *target,
 	                               MonoMethodSignature *csignature, gboolean is_virtual,
 	                               gboolean tailcall);
+	/// Whether a site that settles target off the receiver serves every
+	/// reference instantiation, recording the refusal when it does not.
+	///
+	/// get_virtual_method () is what such a site resolves through, and this is
+	/// where the shapes it cannot answer for a shared form are named.
+	bool may_dispatch_through_receiver (MonoMethod *target);
 	void narrow_index (StackInfo *sp);
 	void one_arg_branch (int mint_op, int offset, int inst_size);
 	void push_simple_type (StackType type);

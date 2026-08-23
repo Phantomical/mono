@@ -452,39 +452,46 @@ TransformData::may_call_through_context (MonoMethod *body, MonoMethod *target,
 	 * the slot index, and reference sharing keeps that common.
 	 */
 	if (is_virtual) {
-		/*
-		 * Except off an interface, where the slot is an offset into the
-		 * receiver's interface table. get_virtual_method () looks that up under
-		 * the interface the callee is declared on, and the receiver implements
-		 * the instantiation's rather than the shared form's.
-		 */
-		if (mono_class_is_interface (target->klass)) {
-			cannot_share ("an interface call the generic context names");
-			return false;
-		}
+		may_dispatch_through_receiver (target);
+		return false;
+	}
 
-		/*
-		 * A remoted class keeps the site dispatched even for a method that is
-		 * not virtual, and get_virtual_method () hands such a one straight back
-		 * as the callee. That is the shared form, which no thread can enter.
-		 */
-		if (mono_class_is_marshalbyref (target->klass)) {
-			cannot_share ("a remoted call the generic context names");
-			return false;
-		}
+	return true;
+}
 
-		/*
-		 * A method with type arguments of its own is re-inflated against the
-		 * receiver's class, and the arguments it is re-inflated with are this
-		 * body's shared ones.
-		 */
-		MonoGenericContext *own = mini_method_get_context (target);
+bool
+TransformData::may_dispatch_through_receiver (MonoMethod *target)
+{
+	/*
+	 * The slot off an interface is an offset into the receiver's interface
+	 * table. get_virtual_method () looks that up under the interface the callee
+	 * is declared on, and the receiver implements the instantiation's rather
+	 * than the shared form's.
+	 */
+	if (mono_class_is_interface (target->klass)) {
+		cannot_share ("an interface method the generic context names");
+		return false;
+	}
 
-		if (own != nullptr && own->method_inst != nullptr) {
-			cannot_share ("a generic virtual call the generic context names");
-			return false;
-		}
+	/*
+	 * A remoted class keeps the site dispatched even for a method that is not
+	 * virtual, and get_virtual_method () hands such a one straight back as the
+	 * callee. That is the shared form, which no thread can enter.
+	 */
+	if (mono_class_is_marshalbyref (target->klass)) {
+		cannot_share ("a remoted method the generic context names");
+		return false;
+	}
 
+	/*
+	 * A method with type arguments of its own is re-inflated against the
+	 * receiver's class, and the arguments it is re-inflated with are this
+	 * body's shared ones.
+	 */
+	MonoGenericContext *own = mini_method_get_context (target);
+
+	if (own != nullptr && own->method_inst != nullptr) {
+		cannot_share ("a generic virtual method the generic context names");
 		return false;
 	}
 
