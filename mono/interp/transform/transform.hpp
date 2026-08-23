@@ -372,6 +372,13 @@ struct TransformData {
 	void load_arg (int n);
 	void load_local (int local);
 	void mark_bb_as_dead (InterpBasicBlock *bb);
+	/// Whether a field access of a class the generic context names can be
+	/// written once for every reference instantiation, recording the refusal
+	/// when it cannot.
+	///
+	/// Only the plain instance arms can. They name the field's offset and its
+	/// size, and reference sharing keeps both common.
+	bool may_share_field_access (MonoClass *klass, gboolean is_static);
 	void narrow_index (StackInfo *sp);
 	void one_arg_branch (int mint_op, int offset, int inst_size);
 	void push_simple_type (StackType type);
@@ -389,14 +396,23 @@ struct TransformData {
 	/// The class returned is then the shared form's, so it describes the site
 	/// and never the instantiation.
 	///
-	/// A site inside an inlined callee passes NULL. A fetch reads the receiver
-	/// of the body being written, which is the caller's rather than the
-	/// callee's, so it would answer for the wrong generic context.
+	/// A site that answers with a fetch passes NULL while inlining. A fetch
+	/// reads the receiver of the body being written, which is the caller's
+	/// rather than the callee's, so it would answer for the wrong generic
+	/// context. A site that only needs a size or a kind is free of this,
+	/// because reference sharing keeps those common.
 	MonoClass *resolve_class (MonoMethod *method, guint32 token,
 	                          MonoGenericContext *generic_context,
 	                          bool *from_context = nullptr);
+	/// Resolves a field token, and records a refusal to share when the field's
+	/// class depends on the generic context.
+	///
+	/// A caller that can write the access once for every instantiation passes
+	/// from_context, which is set rather than the refusal being taken. It then
+	/// asks may_share_field_access () once it knows which arm it takes.
 	MonoClassField *resolve_field (MonoMethod *method, guint32 token, MonoClass **klass,
-	                               MonoGenericContext *generic_context, MonoError *error);
+	                               MonoGenericContext *generic_context, MonoError *error,
+	                               bool *from_context = nullptr);
 	void save_seq_points (MonoJitInfo *jinfo);
 	void set_simple_type_and_local (StackInfo *sp, StackType type);
 	void set_type_and_local (StackInfo *sp, MonoClass *klass, StackType type);

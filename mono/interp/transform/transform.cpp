@@ -1414,12 +1414,15 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			klass =
 				mono_class_get_and_inflate_typespec_checked (image, token, generic_context, error);
 			return_val_if_nok (error, FALSE);
-			if (sharing && depends_on_context (klass)) {
-				cannot_share ("a class the generic context names");
-				return TRUE;
-			}
 
 			if (m_class_is_valuetype (klass)) {
+				// MINT_CPOBJ copies against the class it is given, and that is
+				// the shared form's rather than the instantiation's.
+				if (sharing && depends_on_context (klass)) {
+					cannot_share ("cpobj of a value type the generic context names");
+					return TRUE;
+				}
+
 				MintType mt = mint_type (m_class_get_byval_arg (klass));
 				sp -= 2;
 				interp_add_ins ((mt == MintType::VT) ? MINT_CPOBJ_VT : MINT_CPOBJ);
@@ -1451,11 +1454,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				                                                     error);
 				return_val_if_nok (error, FALSE);
 			}
-			if (sharing && depends_on_context (klass)) {
-				cannot_share ("a class the generic context names");
-				return TRUE;
-			}
-
+			// interp_emit_ldobj () names the size of the class and the kind of
+			// its value, and reference sharing keeps both common.
 			interp_emit_ldobj (klass);
 
 			ip += 5;
@@ -1851,15 +1851,18 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			++ip;
 			break;
 		case CEE_LDFLDA: {
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error);
+			field = resolve_field (method, token, &klass, generic_context, error, &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
+			if (from_context && !may_share_field_access (klass, is_static))
+				return TRUE;
 #ifndef DISABLE_REMOTING
 			if (m_class_get_marshalbyref (klass) || mono_class_is_contextbound (klass)
 			    || klass == mono_defaults.marshalbyrefobject_class) {
@@ -1919,15 +1922,18 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		}
 		case CEE_LDFLD: {
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error);
+			field = resolve_field (method, token, &klass, generic_context, error, &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
+			if (from_context && !may_share_field_access (klass, is_static))
+				return TRUE;
 
 			MonoClass *field_klass = mono_class_from_mono_type_internal (ftype);
 			mt = mint_type (m_class_get_byval_arg (field_klass));
@@ -2024,9 +2030,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		}
 		case CEE_STFLD: {
+			bool from_context = false;
 			CHECK_STACK (2);
 			token = read32 (ip + 1);
-			field = resolve_field (method, token, &klass, generic_context, error);
+			field = resolve_field (method, token, &klass, generic_context, error, &from_context);
 			return_val_if_nok (error, FALSE);
 			if (sharing_refusal != nullptr)
 				return TRUE;
@@ -2034,6 +2041,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			MonoClass *field_klass = mono_class_from_mono_type_internal (ftype);
 			mono_class_init_internal (klass);
+			if (from_context && !may_share_field_access (klass, is_static))
+				return TRUE;
 			mt = mint_type (ftype);
 
 			emit_convert (ftype);
@@ -2152,15 +2161,24 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		}
 		case CEE_STOBJ: {
+			bool from_context = false;
 			token = read32 (ip + 1);
 
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
 				klass = (MonoClass *) mono_method_get_wrapper_data (method, token);
 			else
-				klass = resolve_class (method, token, generic_context);
+				klass = resolve_class (method, token, generic_context, &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
+
+			// MINT_STOBJ_VT copies against the class it is given, and that is
+			// the shared form's rather than the instantiation's. Every other
+			// arm names the kind of the value alone.
+			if (from_context && mint_type (m_class_get_byval_arg (klass)) == MintType::VT) {
+				cannot_share ("stobj of a value type the generic context names");
+				return TRUE;
+			}
 
 			BARRIER_IF_VOLATILE (MONO_MEMORY_BARRIER_REL);
 
@@ -3777,14 +3795,39 @@ TransformData::resolve_class (MonoMethod *method, guint32 token,
 
 MonoClassField *
 TransformData::resolve_field (MonoMethod *method, guint32 token, MonoClass **klass,
-                              MonoGenericContext *generic_context, MonoError *error)
+                              MonoGenericContext *generic_context, MonoError *error,
+                              bool *from_context)
 {
 	MonoClassField *field = interp_field_from_token (method, token, klass, generic_context, error);
 
-	if (sharing && field != nullptr && depends_on_context (field))
+	if (!sharing || field == nullptr || !depends_on_context (field))
+		return field;
+
+	if (from_context != nullptr)
+		*from_context = true;
+	else
 		cannot_share ("a field of a class the generic context names");
 
 	return field;
+}
+
+bool
+TransformData::may_share_field_access (MonoClass *klass, gboolean is_static)
+{
+	if (is_static) {
+		cannot_share ("a static field of a class the generic context names");
+		return false;
+	}
+
+#ifndef DISABLE_REMOTING
+	if (m_class_get_marshalbyref (klass) || mono_class_is_contextbound (klass)
+	    || klass == mono_defaults.marshalbyrefobject_class) {
+		cannot_share ("a remoted field of a class the generic context names");
+		return false;
+	}
+#endif
+
+	return true;
 }
 
 static void
