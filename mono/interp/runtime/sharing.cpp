@@ -29,9 +29,6 @@ namespace mono::interp {
 MonoMethod *
 shared_form (MonoMethod *method)
 {
-	if (!mono::interp_sharing_enabled ())
-		return nullptr;
-
 	if (!mono_class_generic_sharing_enabled (method->klass))
 		return nullptr;
 

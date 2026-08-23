@@ -402,17 +402,4 @@ runs_at_tier0 (MonoMethod *method)
 	return selected;
 }
 
-/*
- * Off while the transform learns one kind of context-dependent site at a time.
- * A method the transform cannot share yet falls back to its own instantiation,
- * so the two settings differ in how much is shared rather than in what runs.
- */
-bool
-interp_sharing_enabled ()
-{
-	static bool on = is_truthy_env_var (g_getenv ("MONO_INTERP_GSHARED"));
-
-	return on;
-}
-
 } // namespace mono
