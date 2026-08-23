@@ -132,8 +132,13 @@ struct MonoJitTlsData {
 	 * We will rethrow the exception upon exiting a catch clause that's
 	 * in a function stack frame above the water mark(isn't being called by
 	 * the catch block that caught the ThreadAbortException).
+	 *
+	 * The two fields are one mark. The first is the native frame the mark
+	 * is in. The second is the order the marked frame was entered in, for a
+	 * mark inside an interpreter invocation.
 	 */
 	gpointer abort_exc_stack_threshold;
+	gsize abort_exc_interp_ordinal;
 
 	/*
 	 * List of methods being JIT'd in the current thread.

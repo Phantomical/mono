@@ -128,52 +128,116 @@ static void mono_summarize_exception (MonoException *exc, MonoThreadSummary *out
 static void mono_crash_reporting_register_native_library (const char *module_path, const char *module_name);
 static void mono_crash_reporting_allow_all_native_libraries (void);
 
+/*
+ * Where a frame sits on the thread's stack, in terms that compare across the
+ * two engines.
+ *
+ * A compiled frame is its own address on the native stack, and that address
+ * falls as calls go deeper. A frame an interpreted call made lives on the
+ * interpreter's own stack, which rises instead. Its address therefore says
+ * nothing about depth beside a compiled frame. Two things place an interpreted
+ * frame: the native frame the interpreter runs it under, and the order it was
+ * entered in inside that frame. Frames alive at the same time are entered
+ * outermost first, so the larger ordinal is the deeper frame.
+ *
+ * native_frame is NULL for a frame the walk could not place.
+ */
+typedef struct {
+	gpointer native_frame;
+	gsize interp_ordinal;
+} FramePlace;
+
+/* Answers whether a is b or a frame outside it. */
+static gboolean
+frame_at_or_outside (FramePlace a, FramePlace b)
+{
+	if (a.native_frame != b.native_frame)
+		return (gsize) a.native_frame > (gsize) b.native_frame;
+
+	return a.interp_ordinal <= b.interp_ordinal;
+}
+
+static FramePlace
+frame_place (StackFrameInfo *frame)
+{
+	FramePlace place;
+
+	if (frame->type == FRAME_TYPE_INTERP) {
+		place.native_frame = mini_get_interp_callbacks ()->frame_native_anchor (frame->interp_frame);
+		place.interp_ordinal = mini_get_interp_callbacks ()->frame_ordinal (frame->interp_frame);
+	} else {
+		place.native_frame = frame->frame_addr;
+		place.interp_ordinal = 0;
+	}
+
+	return place;
+}
+
 static gboolean
 first_managed (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer addr)
 {
-	gpointer *data = (gpointer *)addr;
+	FramePlace *place = (FramePlace *)addr;
 
 	if (!frame->managed)
 		return FALSE;
 
 	if (!ctx) {
 		// FIXME: Happens with llvm_only
-		*data = NULL;
+		place->native_frame = NULL;
 		return TRUE;
 	}
 
-	*data = frame->frame_addr;
-	g_assert (*data);
+	g_assert (frame->frame_addr);
+	*place = frame_place (frame);
 	return TRUE;
 }
 
-static gpointer
-mono_thread_get_managed_sp (void)
+static FramePlace
+mono_thread_get_managed_place (void)
 {
-	gpointer addr = NULL;
-	mono_walk_stack (first_managed, MONO_UNWIND_SIGNAL_SAFE, &addr);
-	return addr;
+	FramePlace place = { NULL, 0 };
+	mono_walk_stack (first_managed, MONO_UNWIND_SIGNAL_SAFE, &place);
+	return place;
+}
+
+static FramePlace
+abort_threshold (MonoJitTlsData *jit_tls)
+{
+	FramePlace place = { jit_tls->abort_exc_stack_threshold, jit_tls->abort_exc_interp_ordinal };
+
+	return place;
+}
+
+static void
+set_abort_threshold (MonoJitTlsData *jit_tls, FramePlace place)
+{
+	jit_tls->abort_exc_stack_threshold = place.native_frame;
+	jit_tls->abort_exc_interp_ordinal = place.interp_ordinal;
 }
 
 static void
 mini_clear_abort_threshold (void)
 {
-	MonoJitTlsData *jit_tls = mono_get_jit_tls ();
-	jit_tls->abort_exc_stack_threshold = NULL;
+	FramePlace nowhere = { NULL, 0 };
+
+	set_abort_threshold (mono_get_jit_tls (), nowhere);
 }
 
 static void
 mini_set_abort_threshold (StackFrameInfo *frame)
 {
-	gpointer sp = frame->frame_addr;
 	MonoJitTlsData *jit_tls = mono_get_jit_tls ();
+	FramePlace place = frame_place (frame);
+
+	/* An unhandled exception reports a catch frame it never filled in. */
+	if (!place.native_frame)
+		return;
+
 	// Only move it up, to avoid thrown/caught
 	// exceptions lower in the stack from triggering
 	// a rethrow
-	gboolean above_threshold = (gsize) sp >= (gsize) jit_tls->abort_exc_stack_threshold;
-	if (!jit_tls->abort_exc_stack_threshold || above_threshold) {
-		jit_tls->abort_exc_stack_threshold = sp;
-	}
+	if (frame_at_or_outside (place, abort_threshold (jit_tls)))
+		set_abort_threshold (jit_tls, place);
 }
 
 // Note: In the case that the frame is above where the thread abort
@@ -182,16 +246,16 @@ mini_set_abort_threshold (StackFrameInfo *frame)
 static gboolean
 mini_above_abort_threshold (void)
 {
-	gpointer sp = mono_thread_get_managed_sp ();
+	FramePlace place = mono_thread_get_managed_place ();
 	MonoJitTlsData *jit_tls = mono_tls_get_jit_tls ();
 
-	if (!sp)
+	if (!place.native_frame)
 		return TRUE;
 
-	gboolean above_threshold = (gsize) sp >= (gsize) jit_tls->abort_exc_stack_threshold;
+	gboolean above_threshold = frame_at_or_outside (place, abort_threshold (jit_tls));
 
 	if (above_threshold)
-		jit_tls->abort_exc_stack_threshold = sp;
+		set_abort_threshold (jit_tls, place);
 
 	return above_threshold;
 }
@@ -3257,7 +3321,8 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 		mono_first_chance_exception_internal (obj);
 #endif
 
-		StackFrameInfo catch_frame;
+		/* The first pass fills this in only where it finds a handler. */
+		StackFrameInfo catch_frame = { FRAME_TYPE_MANAGED };
 		MonoFirstPassResult res;
 		res = handle_exception_first_pass (&ctx_cp, obj, &first_filter_idx, &ji, &prev_ji, non_exception, &catch_frame, &last_mono_wrapper_runtime_invoke);
 

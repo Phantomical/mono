@@ -107,6 +107,27 @@ interp_frame_ordinal (gpointer interp_frame)
 	return (static_cast<InterpFrame *> (interp_frame))->ordinal;
 }
 
+/// Returns the native frame the interpreter runs this frame under. The frame
+/// must belong to the calling thread.
+///
+/// Each invocation of the interpreter takes a handle mark in a native frame of
+/// its own. The mark records the ordinal the invocation starts at, and every
+/// frame the invocation then makes gets a larger one. So the frame belongs to
+/// the innermost mark whose ordinal is not larger than this frame's ordinal.
+/// Returns NULL for a frame no live mark covers.
+gpointer
+interp_frame_native_anchor (gpointer interp_frame)
+{
+	gsize ordinal = (static_cast<InterpFrame *> (interp_frame))->ordinal;
+	ThreadContext *context = mono_interp_get_context ();
+
+	for (int depth = context->handle_mark_count - 1; depth >= 0; --depth)
+		if (context->handle_marks[depth].first_ordinal <= ordinal)
+			return context->handle_marks[depth].frame;
+
+	return NULL;
+}
+
 /// Starts iter walking interpreted frames from interp_exit_data.
 void
 interp_frame_iter_init (MonoInterpStackIter *iter, gpointer interp_exit_data)

@@ -49,6 +49,7 @@ typedef gpointer MonoInterpFrameHandle;
 	MONO_EE_CALLBACK (int, frame_il_offset, (MonoInterpFrameHandle frame, int native_offset)) \
 	MONO_EE_CALLBACK (void, frame_iter_init, (MonoInterpStackIter *iter, gpointer interp_exit_data)) \
 	MONO_EE_CALLBACK (gsize, frame_ordinal, (gpointer interp_frame)) \
+	MONO_EE_CALLBACK (gpointer, frame_native_anchor, (gpointer interp_frame)) \
 	MONO_EE_CALLBACK (gboolean, frame_iter_next, (MonoInterpStackIter *iter, StackFrameInfo *frame)) \
 	MONO_EE_CALLBACK (MonoJitInfo*, find_jit_info, (MonoDomain *domain, MonoMethod *method)) \
 	MONO_EE_CALLBACK (void, set_breakpoint, (MonoJitInfo *jinfo, gpointer ip)) \

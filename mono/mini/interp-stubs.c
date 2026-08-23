@@ -152,6 +152,13 @@ stub_frame_ordinal (gpointer interp_frame)
 	return 0;
 }
 
+static gpointer
+stub_frame_native_anchor (gpointer interp_frame)
+{
+	g_assert_not_reached ();
+	return NULL;
+}
+
 static void
 stub_frame_iter_init (MonoInterpStackIter *iter, gpointer interp_exit_data)
 {
