@@ -2,6 +2,9 @@ using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
+#pragma warning disable CS0168
+#pragma warning disable CS0251
+
 /*
  * Regression tests for the mono JIT.
  *
