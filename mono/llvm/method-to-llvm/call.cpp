@@ -1333,6 +1333,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (std::optional<MathIntrinsic> math = math_intrinsic_for (callee_method, sig))
 		return emit_math_call (builder, *math, sig);
 
+	// The copy ladder this replaces is managed code, so the site names it
+	// directly and no wrapper stands between the two.
+	if (std::optional<BufferCopy> copy = buffer_copy_for (callee_method, sig))
+		return emit_buffer_copy (builder, *copy, sig);
+
 	// Asked here for the same reason, and the call it puts on the contended
 	// edge is the one the rest of this function would have emitted.
 	if (std::optional<MonoJitICallId> fast = monitor_enter_fast_icall (callee_method, sig))

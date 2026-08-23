@@ -59,7 +59,9 @@ bool have_corpus ();
 			GTEST_SKIP () << "no managed corpus in this build"; \
 	} while (0)
 
-/// The image of `<name>.dll`, built from `<name>.il` in this directory.
+/// The image of `<name>.dll`, built from `<name>.il` in this directory. The one
+/// name that is not a fixture is "mscorlib", which is the class library the
+/// runtime booted on.
 ///
 /// Aborts rather than returning null: a missing corpus is a build failure, not a
 /// property of the translator, and every test in the file would report it.

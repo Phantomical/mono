@@ -240,6 +240,7 @@ set(MONO_TESTS_CS_SRC
   trivial-inline.cs
   tier2-inline-override.cs
   math-intrinsics.cs
+  buffer-copy-intrinsics.cs
   monitor-fast-path.cs
   array-shape-intrinsics.cs
   override-basic.cs

@@ -114,6 +114,13 @@ make_jit ()
 MonoImage *
 load_image (const std::string &name)
 {
+	// A case that reads what the translator makes of a call site inside the
+	// class library has to name the method that holds it, and no il/ fixture
+	// reaches one: the translator refuses a call to a method the caller's
+	// assembly cannot access, which is every internal method in here.
+	if (name == "mscorlib")
+		return mono_get_corlib ();
+
 	std::string path = std::string (MONO_LLVM_TESTS_DIR) + "/" + name + ".dll";
 	MonoImageOpenStatus status = MONO_IMAGE_OK;
 	MonoAssemblyOpenRequest request;

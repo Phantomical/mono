@@ -194,11 +194,9 @@ namespace System
 				((byte*)dest) [0] = ((byte*)src) [0];
 		}
 
-		// The LLVM tier replaces calls to this outright with llvm.memcpy, so
-		// folding the body into a caller would only lose that - and the copy is
-		// usually a handful of bytes, where the intrinsic becomes a load and a
-		// store and this is a call plus a branch chain. Nothing was inlining it
-		// anyway: the body is far past the IL inliner's size limit.
+		// The compiled tiers rewrite a call to this into llvm.memcpy
+		// (mono/llvm/method-to-llvm/buffer.cpp), so a site there runs one copy
+		// in place of the ladder below. The interpreter runs the ladder.
 		[MethodImplAttribute(MethodImplOptions.NoInlining)]
 		internal static unsafe void Memcpy (byte *dest, byte *src, int len) {
 			// For bigger lengths, we use the heavily optimized native code

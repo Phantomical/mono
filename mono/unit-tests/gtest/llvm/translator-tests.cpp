@@ -1609,6 +1609,90 @@ TEST_F (TranslatorTest, UnboxAnyOnAReferenceTypeIsACast)
 	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 }
 
+/* ---------------------------------------------------------- buffer copies */
+
+/*
+ * A behavioural test cannot see this rewrite, because the managed body it
+ * replaces answers with the same bytes. So the cases below read the IR.
+ *
+ * They translate the class library's own methods rather than an il/ fixture,
+ * because both copies are internal to corlib and the translator refuses a call
+ * a fixture's assembly cannot make. That ties each case to the body corlib has
+ * today, which is the body the rewrite is written against.
+ */
+
+// String:memcpy forwards to Buffer:Memcpy and does nothing else, so what is
+// left of it is the intrinsic and the clamp in front.
+TEST_F (TranslatorTest, ABufferCopyBecomesAMemoryIntrinsic)
+{
+	const Translation &t = translate ("mscorlib", "System.String:memcpy(byte*,byte*,int)");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("llvm.memcpy"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("Memcpy"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("ptr align 1"), 2u) << t.text ();
+}
+
+// MemoryCopy calls Memmove twice: once for each pass of the loop that cuts a
+// copy longer than a uint into pieces, and once for what is left.
+TEST_F (TranslatorTest, AnOverlappingCopyBecomesMemmove)
+{
+	const Translation &t =
+		translate ("mscorlib", "System.Buffer:MemoryCopy(void*,void*,long,long)");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("llvm.memmove"), 2u) << t.text ();
+	EXPECT_EQ (t.count ("Memmove"), 0u) << t.text ();
+}
+
+/*
+ * Buffer:Memmove holds one call of each kind. It hands the copy to Memcpy when
+ * the two ranges do not overlap, which the rewrite takes, and to the
+ * RuntimeImports icall of the same name when they do, which it leaves. So the
+ * match reads the class as well as the name.
+ */
+TEST_F (TranslatorTest, TheIcallOfTheSameNameKeepsItsCall)
+{
+	const Translation &t =
+		translate ("mscorlib", "System.Buffer:Memmove(byte*,byte*,uint)");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("llvm.memcpy"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("llvm.memmove"), 0u) << t.text ();
+	EXPECT_GE (t.count ("RuntimeImports:Memmove"), 1u) << t.text ();
+}
+
+// The intrinsic reads its count as unsigned. Memcpy takes a signed one, which
+// a caller can make negative, and Memmove an unsigned one that needs no test.
+TEST_F (TranslatorTest, ASignedCountIsClampedAndAnUnsignedOneIsNot)
+{
+	const Translation &copy =
+		translate ("mscorlib", "System.String:memcpy(byte*,byte*,int)");
+	const Translation &move =
+		translate ("mscorlib", "System.Buffer:MemoryCopy(void*,void*,long,long)");
+
+	ASSERT_NE (copy.function, nullptr) << copy.error;
+	EXPECT_EQ (copy.count ("icmp sgt"), 1u) << copy.text ();
+	EXPECT_EQ (copy.count ("select"), 1u) << copy.text ();
+
+	ASSERT_NE (move.function, nullptr) << move.error;
+	EXPECT_EQ (move.count ("select"), 0u) << move.text ();
+}
+
+// Marshal reads and writes a value the caller did not align through a copy of
+// its own width. The count is a literal there, so the clamp folds away and the
+// copy is left naming the width.
+TEST_F (TranslatorTest, AConstantCountFoldsTheClampAway)
+{
+	const Translation &t =
+		translate ("mscorlib", "System.Runtime.InteropServices.Marshal:ReadInt32(intptr)");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("llvm.memcpy"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("i32 4, i1 false"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("select"), 0u) << t.text ();
+}
+
 /* --------------------------------------------------------------- refusals */
 
 struct RefusalRef {

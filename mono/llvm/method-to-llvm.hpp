@@ -197,6 +197,15 @@ struct MathIntrinsic {
 	const char *libm;
 };
 
+/// What a call to a System.Buffer copy method compiles to in place of the call.
+struct BufferCopy {
+	/// Whether the two ranges can overlap, which is what decides between
+	/// llvm.memmove and llvm.memcpy.
+	bool may_overlap;
+	/// Whether the byte count is a signed type, which a negative value reaches.
+	bool signed_count;
+};
+
 class MethodLLVMEmitter {
 private:
 	struct Entry {
@@ -963,6 +972,8 @@ private:
 	llvm::FunctionCallee libm_decl (const char *name, llvm::Type *type, size_t arity);
 	llvm::Error emit_math_call (MonoIrBuilder &builder, const MathIntrinsic &math,
 	                            MonoMethodSignature *sig);
+	llvm::Error emit_buffer_copy (MonoIrBuilder &builder, const BufferCopy &copy,
+	                              MonoMethodSignature *sig);
 	llvm::Error emit_monitor_enter (MonoIrBuilder &builder, MonoMethod *callee_method,
 	                                MonoMethodSignature *sig, MonoJitICallId helper);
 
@@ -1151,6 +1162,10 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 /// What to emit for a call to method, or nothing when the backend has no
 /// arithmetic for it. sig is the signature the call site was written against.
 std::optional<MathIntrinsic> math_intrinsic_for (MonoMethod *method, MonoMethodSignature *sig);
+
+/// The copy a call to method compiles to, or nothing when method is not a
+/// System.Buffer copy. sig is the signature the call site was written against.
+std::optional<BufferCopy> buffer_copy_for (MonoMethod *method, MonoMethodSignature *sig);
 
 /// The fast helper that answers a call to method, or nothing when method is not
 /// a Monitor.Enter overload. sig is the signature the call site was written
