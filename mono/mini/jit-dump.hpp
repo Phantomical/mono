@@ -106,9 +106,10 @@ private:
  * declared with.
  *
  * The shape is ilasm's, so that a reader can tell an argument from a local
- * without going to the metadata. It is a dump rather than a source file: the
- * body is the disassembly mono prints, which names tokens and does not resolve
- * them.
+ * without going to the metadata. An operand that is a metadata token prints as
+ * what it names, with the token itself in a comment behind it. A wrapper and a
+ * dynamic method carry no metadata tokens, so every operand of one prints as
+ * the raw value. So does a token that fails to load.
  */
 void dump_il (FILE *out, MonoMethod *method, MonoMethodHeader *header);
 

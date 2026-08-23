@@ -24,6 +24,9 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata-internals.h"
+#include "mono/metadata/row-indexes.h"
+#include "mono/metadata/tokentype.h"
+#include "mono/utils/mono-error-internals.h"
 
 namespace mono {
 
@@ -236,6 +239,161 @@ open_dump_file (DumpPoint point, const char *name)
 	return nullptr;
 }
 
+/*
+ * What a token in a method's body names.
+ *
+ * The disassembler gives a tokener the token and the method that holds it, and
+ * no opcode. The table tag is therefore all there is to dispatch on. It is
+ * enough, because a type, a field, a method and a stand-alone signature each
+ * live in a table of their own. A MemberRef is the one tag that covers two
+ * kinds, and its signature blob separates them.
+ *
+ * Each of these returns null when it cannot say what the token names, and
+ * resolve_token () then prints the raw value.
+ */
+
+/// Names a field under the class the token reached it through, which for a
+/// MemberRef off a TypeSpec is an instantiation.
+char *
+describe_field (MonoClassField *field, MonoClass *parent)
+{
+	// mono_field_full_name () names the generic definition here, so two
+	// instantiations of one field would read alike.
+	char *class_name = mono_type_full_name (m_class_get_byval_arg (parent));
+	char *text = g_strdup_printf ("%s:%s", class_name, mono_field_get_name (field));
+
+	g_free (class_name);
+	return text;
+}
+
+char *
+describe_member_ref (MonoImage *image, uint32_t token, MonoGenericContext *context,
+                     MonoError *error)
+{
+	const MonoTableInfo *table = &image->tables[MONO_TABLE_MEMBERREF];
+	uint32_t row = mono_metadata_token_index (token);
+
+	if (row == 0 || row > (uint32_t) mono_table_info_get_rows (table))
+		return nullptr;
+
+	uint32_t cols[MONO_MEMBERREF_SIZE];
+
+	mono_metadata_decode_row (table, row - 1, cols, MONO_MEMBERREF_SIZE);
+
+	const char *signature = mono_metadata_blob_heap (image, cols[MONO_MEMBERREF_SIGNATURE]);
+	uint32_t length = mono_metadata_decode_blob_size (signature, &signature);
+
+	if (length == 0)
+		return nullptr;
+
+	// A FieldSig opens with FIELD and a MethodRefSig with a calling convention,
+	// and the two sets do not overlap (ECMA-335 II.23.2.4 and II.23.2.2).
+	if (*signature == 0x6) {
+		MonoClass *parent = nullptr;
+		MonoClassField *field = mono_field_from_token_checked (image, token, &parent,
+		                                                       context, error);
+
+		return field != nullptr ? describe_field (field, parent) : nullptr;
+	}
+
+	MonoMethod *target = mono_get_method_checked (image, token, nullptr, context, error);
+
+	return target != nullptr ? mono_method_full_name (target, TRUE) : nullptr;
+}
+
+char *
+describe_token (MonoMethod *method, uint32_t token)
+{
+	MonoImage *image = m_class_get_image (method->klass);
+
+	// A wrapper carries an index into its own data where a token would be, and
+	// a dynamic method is a wrapper. A dynamic image does hold real tokens.
+	// Resolving one goes through mono_reflection_lookup_dynamic_token (), which
+	// calls g_error () for a token that image does not hold.
+	if (method->wrapper_type != MONO_WRAPPER_NONE || method_is_dynamic (method)
+	    || image_is_dynamic (image))
+		return nullptr;
+
+	MonoGenericContext *context = mono_method_get_context (method);
+	ERROR_DECL (error);
+	char *described = nullptr;
+
+	switch (token & 0xff000000) {
+	case MONO_TOKEN_TYPE_DEF:
+	case MONO_TOKEN_TYPE_REF:
+	case MONO_TOKEN_TYPE_SPEC: {
+		MonoType *type = mono_type_get_checked (image, token, context, error);
+
+		if (type != nullptr)
+			described = mono_type_full_name (type);
+		break;
+	}
+	case MONO_TOKEN_FIELD_DEF: {
+		MonoClass *parent = nullptr;
+		MonoClassField *field = mono_field_from_token_checked (image, token, &parent,
+		                                                       context, error);
+
+		if (field != nullptr)
+			described = describe_field (field, parent);
+		break;
+	}
+	case MONO_TOKEN_METHOD_DEF:
+	case MONO_TOKEN_METHOD_SPEC: {
+		MonoMethod *target = mono_get_method_checked (image, token, nullptr, context, error);
+
+		if (target != nullptr)
+			described = mono_method_full_name (target, TRUE);
+		break;
+	}
+	case MONO_TOKEN_MEMBER_REF:
+		described = describe_member_ref (image, token, context, error);
+		break;
+	case MONO_TOKEN_SIGNATURE: {
+		// calli, the one operand whose token names a signature.
+		MonoMethodSignature *sig = mono_metadata_parse_signature_checked (image, token, error);
+
+		if (sig != nullptr) {
+			char *return_type = mono_type_full_name (sig->ret);
+			char *arguments = mono_signature_get_desc (sig, TRUE);
+
+			described = g_strdup_printf ("%s (%s)", return_type, arguments);
+			g_free (arguments);
+			g_free (return_type);
+		}
+		break;
+	}
+	}
+
+	mono_error_cleanup (error);
+	return described;
+}
+
+char *
+resolve_token (MonoDisHelper *, MonoMethod *method, uint32_t token)
+{
+	char *described = describe_token (method, token);
+
+	if (described == nullptr)
+		return g_strdup_printf ("0x%08x", token);
+
+	// The raw token stays in a comment behind the name, the way ildasm keeps
+	// it, so it still leads back to the metadata row.
+	char *text = g_strdup_printf ("%s /* 0x%08x */", described, token);
+
+	g_free (described);
+	return text;
+}
+
+/// mono's own labelling, with resolve_token () for the metadata tokens.
+MonoDisHelper resolving_helper = {
+	"\n",        // newline
+	"IL_%04x: ", // label_format
+	"IL_%04x",   // label_target
+	nullptr,     // indenter
+	resolve_token,
+	nullptr, // user_data
+};
+
 } // namespace
 
 bool
@@ -336,7 +494,7 @@ dump_il (FILE *out, MonoMethod *method, MonoMethodHeader *header)
 		fprintf (out, "    )\n");
 	}
 
-	char *il = mono_disasm_code (nullptr, method, code, code + size);
+	char *il = mono_disasm_code (&resolving_helper, method, code, code + size);
 
 	/* The disassembly comes back as one string of unindented lines. */
 	for (const char *line = il; *line != '\0';) {
