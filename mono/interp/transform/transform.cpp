@@ -2128,8 +2128,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 
 					/* the vtable of the field might not be initialized at this point */
 					value_copy_vtable (field_klass, error);
-					if (sharing_refusal != nullptr)
-						return TRUE;
 					return_val_if_nok (error, FALSE);
 				} else {
 					int opcode = op_for_mint_type (MINT_STFLD_I1, mt);
@@ -2138,25 +2136,46 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					    && field->offset % SIZEOF_VOID_P != 0)
 						opcode = get_unaligned_opcode (opcode);
 #endif
-					interp_add_ins (opcode);
-					sp -= 2;
-					interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
-					last_ins->data[0] = m_class_is_valuetype (klass)
-					                        ? field->offset - MONO_ABI_SIZEOF (MonoObject)
-					                        : field->offset;
+					int vtable_local = -1;
+
 					if (mt == MintType::VT) {
 						/* the vtable of the field might not be initialized at this point */
 						value_copy_vtable (field_klass, error);
-						if (sharing_refusal != nullptr)
-							return TRUE;
 						return_val_if_nok (error, FALSE);
-						if (m_class_has_references (field_klass)) {
-							last_ins->data[1] = get_data_item_index (field_klass);
-						} else {
-							last_ins->opcode = MINT_STFLD_VT_NOREF;
-							last_ins->data[1] = mono_class_value_size (field_klass, NULL);
+
+						if (!m_class_has_references (field_klass)) {
+							opcode = MINT_STFLD_VT_NOREF;
+						} else if (sharing && depends_on_context (field_klass)) {
+							// A fetch reads the receiver of the body being
+							// written, which is the caller's rather than the
+							// callee's.
+							if (inlining) {
+								cannot_share ("a value-type field inside an inlined callee");
+								return TRUE;
+							}
+
+							vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, field_klass);
+
+							if (sharing_refusal != nullptr)
+								return TRUE;
+
+							opcode = MINT_STFLD_VT_DYN;
 						}
 					}
+
+					interp_add_ins (opcode);
+					sp -= 2;
+					if (vtable_local >= 0)
+						interp_ins_set_sregs3 (last_ins, sp[0].local, sp[1].local, vtable_local);
+					else
+						interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
+					last_ins->data[0] = m_class_is_valuetype (klass)
+					                        ? field->offset - MONO_ABI_SIZEOF (MonoObject)
+					                        : field->offset;
+					if (opcode == MINT_STFLD_VT)
+						last_ins->data[1] = get_data_item_index (field_klass);
+					else if (opcode == MINT_STFLD_VT_NOREF)
+						last_ins->data[1] = mono_class_value_size (field_klass, NULL);
 				}
 			}
 			ip += 5;
@@ -2237,8 +2256,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			/* the vtable of the field might not be initialized at this point */
 			MonoClass *fld_klass = mono_class_from_mono_type_internal (ftype);
 			value_copy_vtable (fld_klass, error);
-			if (sharing_refusal != nullptr)
-				return TRUE;
 			return_val_if_nok (error, FALSE);
 
 			if (from_context) {
@@ -4079,12 +4096,11 @@ TransformData::value_copy_vtable (MonoClass *klass, MonoError *error)
 	 * (mono/mini/mini-generic-sharing.c) gives a reference argument a
 	 * constrained type variable rather than object itself, so a value type of
 	 * one holds a field the collector has no bitmap for and
-	 * compute_class_bitmap () aborts on it.
+	 * compute_class_bitmap () aborts on it. Where a store needs the descriptor
+	 * it fetches the instantiation's vtable, which carries a real one.
 	 */
-	if (sharing && m_class_is_valuetype (klass) && depends_on_context (klass)) {
-		cannot_share ("a value-type field the generic context names");
+	if (sharing && depends_on_context (klass))
 		return;
-	}
 
 	mono_class_vtable_checked (rtm->domain, klass, error);
 }

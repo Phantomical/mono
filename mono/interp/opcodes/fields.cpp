@@ -186,6 +186,23 @@ MONO_INTERP_OP_IMPL (MINT_STFLD_VT)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The vtable of the field's own class arrives in a local, because a body
+ * shared between reference instantiations reads it out of its generic context.
+ * The copy reads the GC descriptor the vtable was built with, and a shared
+ * class has none.
+ */
+MONO_INTERP_OP_IMPL (MINT_STFLD_VT_DYN)
+{
+	auto o = LOCAL_VAR (ip[1], MonoObject *);
+	NULL_CHECK (o);
+	auto vtable = LOCAL_VAR (ip[3], MonoVTable *);
+	mono_value_copy_internal (reinterpret_cast<char *> (o) + ip[4], locals + ip[2], vtable->klass);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 #define IMPL_LDSFLD(opcode, datatype, fieldtype)                                     \
 	MONO_INTERP_OP_IMPL (opcode)                                                     \
 	{                                                                                \
