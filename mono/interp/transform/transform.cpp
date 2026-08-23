@@ -3165,28 +3165,36 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 
 			/*
 			 * The handle is burned into a data item, and typeof (T) in a body
-			 * shared between string and object needs two of them. Only a type
-			 * handle is classified, because only the arms below that answer one
-			 * have a fetch to take instead.
+			 * shared between string and object needs two of them. Each kind of
+			 * handle has an rgctx entry that answers with the same pointer the
+			 * data item would have held.
 			 */
 			bool token_from_context = false;
+			MonoRgctxInfoType handle_info = MONO_RGCTX_INFO_TYPE;
+			gpointer handle_data = handle;
 
 			if (sharing) {
-				if (klass != mono_defaults.typehandle_class) {
-					cannot_share ("a field or method token in a shared body");
+				if (klass == mono_defaults.typehandle_class) {
+					handle_data = mono_class_from_mono_type_internal ((MonoType *) handle);
+					token_from_context =
+						depends_on_context (static_cast<MonoClass *> (handle_data));
+				} else if (klass == mono_defaults.fieldhandle_class) {
+					handle_info = MONO_RGCTX_INFO_CLASS_FIELD;
+					token_from_context =
+						depends_on_context (static_cast<MonoClassField *> (handle));
+				} else if (klass == mono_defaults.methodhandle_class) {
+					handle_info = MONO_RGCTX_INFO_METHOD;
+					token_from_context = depends_on_context (static_cast<MonoMethod *> (handle));
+				} else {
+					cannot_share ("a token of a kind with no arm in a shared body");
 					return TRUE;
 				}
 
-				if (depends_on_context (
-						mono_class_from_mono_type_internal ((MonoType *) handle))) {
-					// A fetch reads the receiver of the body being written,
-					// which is the caller's rather than the callee's.
-					if (inlining) {
-						cannot_share ("ldtoken inside an inlined callee");
-						return TRUE;
-					}
-
-					token_from_context = true;
+				// A fetch reads the receiver of the body being written, which is
+				// the caller's rather than the callee's.
+				if (token_from_context && inlining) {
+					cannot_share ("ldtoken inside an inlined callee");
+					return TRUE;
 				}
 			}
 
@@ -3249,14 +3257,20 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				interp_ins_set_dreg (last_ins, sp[-1].local);
 				last_ins->data[0] = get_data_item_index (systype);
 				ip = next_ip + 5;
-			} else {
-				// MINT_LDTOKEN pushes the handle it is given, and that is the
-				// shared form's rather than the instantiation's.
-				if (token_from_context) {
-					cannot_share ("a bare ldtoken the generic context names");
-					return TRUE;
-				}
+			} else if (token_from_context) {
+				// The handle is one pointer, so the fetch lands in the stack
+				// slot a data item would have been copied into.
+				int fetched = emit_rgctx_fetch (handle_info, handle_data);
 
+				if (sharing_refusal != nullptr)
+					return TRUE;
+
+				interp_add_ins (MINT_MOV_P);
+				interp_ins_set_sreg (last_ins, fetched);
+				push_type_vt (klass, sizeof (gpointer));
+				interp_ins_set_dreg (last_ins, sp[-1].local);
+				ip += 5;
+			} else {
 				interp_add_ins (MINT_LDTOKEN);
 				push_type_vt (klass, sizeof (gpointer));
 				interp_ins_set_dreg (last_ins, sp[-1].local);
