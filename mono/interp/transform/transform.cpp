@@ -1783,13 +1783,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				from_context = sharing && depends_on_context (klass);
 			}
 
-			// Unbox is resolved off the class, and a class the context names is
-			// open.
-			if (from_context && mono_class_is_nullable (klass)) {
-				cannot_share ("unbox of a nullable the generic context names");
-				return TRUE;
-			}
-
 			if (mono_class_is_nullable (klass)) {
 				MonoMethod *target_method;
 				if (m_class_is_enumtype (mono_class_get_nullable_param_internal (klass)))
@@ -1850,15 +1843,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
-			if (from_context) {
-				// Unbox is resolved off the class, and a class the context
-				// names is open.
-				if (!mini_type_is_reference (m_class_get_byval_arg (klass))
-				    && mono_class_is_nullable (klass)) {
-					cannot_share ("unbox.any of a nullable the generic context names");
-					return TRUE;
-				}
-
+			if (from_context && !mono_class_is_nullable (klass)) {
 				int klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
 
 				if (sharing_refusal != nullptr)
@@ -2476,13 +2461,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			}
 
 			if (mono_class_is_nullable (klass)) {
-				// Box is resolved off the class, and a class the context names
-				// is open.
-				if (from_context) {
-					cannot_share ("box of a nullable the generic context names");
-					return TRUE;
-				}
-
 				MonoMethod *target_method =
 					mono_class_get_method_from_name_checked (klass, "Box", 1, 0, error);
 				return_val_if_nok (error, FALSE);

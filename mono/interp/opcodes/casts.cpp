@@ -116,6 +116,22 @@ MONO_INTERP_OP_IMPL (MINT_BOX_NULLABLE_PTR)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The class arrives in a local, because a body shared between reference
+ * instantiations reads it out of its generic context.
+ */
+MONO_INTERP_OP_IMPL (MINT_BOX_NULLABLE_PTR_DYN)
+{
+	auto c = LOCAL_VAR (ip[3], MonoClass *);
+
+	error_init_reuse (error);
+	LOCAL_VAR (ip[1], MonoObject *) = mono_nullable_box (LOCAL_VAR (ip[2], gpointer), c, error);
+	mono_interp_error_cleanup (error); // FIXME: don't swallow the error
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_UNBOX)
 {
 	auto o = LOCAL_VAR (ip[2], MonoObject *);

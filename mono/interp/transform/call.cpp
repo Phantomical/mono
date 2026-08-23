@@ -224,22 +224,26 @@ TransformData::interp_constrained_box (MonoDomain *domain, MonoClass *constraine
 	MintType mt = mint_type (m_class_get_byval_arg (constrained_class));
 	StackInfo *sp = this->sp - 1 - csignature->param_count;
 	bool from_context = sharing && depends_on_context (constrained_class);
-	int vtable_local = -1;
+	// What a shared body fetches, which each arm below names for itself: the
+	// class where a nullable box reads one, the vtable where a plain box does.
+	int fetched = -1;
 
 	if (mono_class_is_nullable (constrained_class)) {
 		g_assert (mt == MintType::VT);
 
-		// The box reads the class the token named, and a class the context
-		// names is open.
 		if (from_context) {
-			cannot_share ("a constrained call on a nullable the generic context names");
-			return;
-		}
+			fetched = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, constrained_class);
 
-		interp_add_ins (MINT_BOX_NULLABLE_PTR);
-		last_ins->data[0] = get_data_item_index (constrained_class);
+			if (sharing_refusal != nullptr)
+				return;
+
+			interp_add_ins (MINT_BOX_NULLABLE_PTR_DYN);
+		} else {
+			interp_add_ins (MINT_BOX_NULLABLE_PTR);
+			last_ins->data[0] = get_data_item_index (constrained_class);
+		}
 	} else if (from_context) {
-		vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, constrained_class);
+		fetched = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, constrained_class);
 
 		if (sharing_refusal != nullptr)
 			return;
@@ -253,8 +257,8 @@ TransformData::interp_constrained_box (MonoDomain *domain, MonoClass *constraine
 		last_ins->data[0] = get_data_item_index (vtable);
 	}
 
-	if (vtable_local >= 0)
-		interp_ins_set_sregs2 (last_ins, sp->local, vtable_local);
+	if (fetched >= 0)
+		interp_ins_set_sregs2 (last_ins, sp->local, fetched);
 	else
 		interp_ins_set_sreg (last_ins, sp->local);
 	set_simple_type_and_local (sp, StackType::O);
@@ -500,16 +504,14 @@ TransformData::dispatch_reads_the_context (MonoMethod *target)
 		return true;
 
 	/*
-	 * A method with type arguments of its own is re-inflated against the
-	 * receiver's class, and the arguments it is re-inflated with are this
-	 * body's shared ones.
+	 * get_virtual_method () re-inflates the override it finds with the type
+	 * arguments of the method it was handed, so a method with arguments of its
+	 * own has to arrive as the instantiation's.
 	 */
 	MonoGenericContext *own = mini_method_get_context (target);
 
-	if (own != nullptr && own->method_inst != nullptr) {
-		cannot_share ("a generic virtual method the generic context names");
-		return false;
-	}
+	if (own != nullptr && own->method_inst != nullptr)
+		return true;
 
 	/*
 	 * A class slot is an index into the receiver's vtable, and reference
