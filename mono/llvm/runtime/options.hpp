@@ -68,6 +68,14 @@ uint32_t compile_worker_count ();
 /// On unless MONO_LLVM_JIT_TIER2 turns it off.
 bool tier2_enabled ();
 
+/// Whether MONO_LLVM_JIT_INLINE_WBARRIER left the inline write barrier on.
+///
+/// A false value sends every reference store through
+/// mono_gc_wbarrier_generic_store_internal () instead, which separates a card the
+/// compiler marked wrong from a fault the collector has on its own. A collector
+/// that marks no cards takes that path whatever this answers.
+bool inline_write_barrier ();
+
 /// How many calls a tier-1 body takes before it asks to be compiled again.
 ///
 /// Zero for a body that never asks, which leaves it instrumented and counting

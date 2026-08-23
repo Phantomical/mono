@@ -1,20 +1,81 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
 #include "../passes/class-init.hpp"
+#include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
+#include "mono/metadata/gc-internals.h"
 #include "mono/metadata/loader.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/remoting.h"
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
+#include <cstdint>
 #include <cstdio>
 
 namespace mono {
+
+namespace {
+
+/// The addresses and shifts a reference store needs to mark a card itself.
+///
+/// card_table is null when the collector marks no cards, and the other fields
+/// then say nothing. That is the one field to test before reading the rest.
+struct WriteBarrierLayout {
+	uint8_t *card_table = nullptr;
+	uintptr_t card_mask = 0;
+	int card_bits = 0;
+	char *nursery_start = nullptr;
+	int nursery_bits = 0;
+	bool value_decides = false;
+};
+
+/// Reads the collector's card table and nursery bounds, once for the process.
+///
+/// The collector fixes all of these while it starts, before any method compiles,
+/// so a compile can write them into the code as constants.
+const WriteBarrierLayout &
+write_barrier_layout ()
+{
+	static const WriteBarrierLayout layout = [] {
+		WriteBarrierLayout read;
+		gpointer mask = nullptr;
+		size_t nursery_size = 0;
+
+		if (!inline_write_barrier ())
+			return read;
+
+		read.card_table = mono_gc_get_card_table (&read.card_bits, &mask);
+
+		/*
+		 * mono_gc_card_table_nursery_check () aborts under Boehm, so a null
+		 * table has to send us back before that call runs. Sgen sets the nursery
+		 * bounds earlier in sgen_gc_init () than the card table, so a table this
+		 * call reports means the bounds are already set.
+		 */
+		if (read.card_table == nullptr)
+			return read;
+
+		read.card_mask = reinterpret_cast<uintptr_t> (mask);
+		read.nursery_start = static_cast<char *> (
+			mono_gc_get_nursery (&read.nursery_bits, &nursery_size));
+
+		// A concurrent major collector marks the card whatever the value is.
+		// This is the split mono_gc_get_specific_write_barrier () keeps two
+		// wrappers for.
+		read.value_decides = mono_gc_card_table_nursery_check ();
+		return read;
+	}();
+
+	return layout;
+}
+
+} // namespace
 
 llvm::FunctionCallee
 MethodLLVMEmitter::wbarrier_decl ()
@@ -24,6 +85,76 @@ MethodLLVMEmitter::wbarrier_decl ()
 
 	return module->getOrInsertFunction ("mono_gc_wbarrier_generic_store_internal",
 	                                    llvm::Type::getVoidTy (ctx), ptr, ptr);
+}
+
+/// Stores a reference and marks the card the collector reads for it.
+///
+/// address can name any location a reference lives in: an object field, a static, an
+/// array element, or a local the method took the address of. value must be a pointer.
+///
+/// The caller owns the volatile. prefix. The store this writes carries no ordering.
+///
+/// The builder can end on a different block than it started on, so a caller holding a
+/// block pointer has to take it again.
+void
+MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
+                                         llvm::Value *value, llvm::Align align)
+{
+	const WriteBarrierLayout &gc = write_barrier_layout ();
+
+	if (gc.card_table == nullptr) {
+		builder.CreateCall (wbarrier_decl (), {address, value});
+		return;
+	}
+
+	llvm::Type *word = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+	llvm::Value *nursery = llvm::ConstantInt::get (
+		word, reinterpret_cast<uintptr_t> (gc.nursery_start) >> gc.nursery_bits);
+
+	builder.CreateAlignedStore (value, address, align);
+
+	llvm::Value *target = builder.CreatePtrToInt (address, word);
+	llvm::Value *mark = builder.CreateICmpNE (
+		builder.CreateLShr (target, gc.nursery_bits), nursery, "wb_target_is_old");
+
+	/*
+	 * The wrapper reads the destination back here, because its caller made the
+	 * store. We test the value we stored instead. A thread that puts a different
+	 * reference there marks the card with its own barrier, so the card is marked
+	 * either way.
+	 *
+	 * Both tests are shifts and compares on values already in registers, so one
+	 * branch carries them both.
+	 */
+	if (gc.value_decides) {
+		llvm::Value *stored =
+			builder.CreateLShr (builder.CreatePtrToInt (value, word), gc.nursery_bits);
+
+		mark = builder.CreateAnd (
+			mark, builder.CreateICmpEQ (stored, nursery, "wb_value_is_young"));
+	}
+
+	llvm::BasicBlock *card = llvm::BasicBlock::Create (context (), "wb_mark", function);
+	llvm::BasicBlock *done = llvm::BasicBlock::Create (context (), "wb_done", function);
+
+	builder.CreateCondBr (mark, card, done);
+	builder.SetInsertPoint (card);
+
+	llvm::Value *index = builder.CreateLShr (target, gc.card_bits);
+
+	// A zero mask is a table that covers the address space, so the index needs none.
+	if (gc.card_mask != 0)
+		index = builder.CreateAnd (index, llvm::ConstantInt::get (word, gc.card_mask));
+
+	llvm::Value *table = builder.CreateIntToPtr (
+		llvm::ConstantInt::get (word, reinterpret_cast<uintptr_t> (gc.card_table)),
+		llvm::PointerType::get (context (), 0));
+
+	builder.CreateAlignedStore (builder.getInt8 (1),
+	                            builder.CreateGEP (builder.getInt8Ty (), table, index),
+	                            llvm::Align (1));
+	builder.CreateBr (done);
+	builder.SetInsertPoint (done);
 }
 
 /// Resolves the field that token names and lays out its declaring class, so callers can

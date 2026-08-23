@@ -278,9 +278,9 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 {
 	llvm::Align align = access_alignment (location);
 	/*
-	 * A reference goes through the write barrier, which does the store inside the
-	 * call, and a value class is a copy rather than one instruction. Neither is a
-	 * single access that can hold an ordering, so both order with a fence.
+	 * A reference carries the write barrier with it, and a value class is a copy
+	 * rather than one instruction. Neither is a single access that can hold an
+	 * ordering, so both order with a fence.
 	 */
 	bool store_carries_ordering = prefixes.volatile_ && !mini_type_is_reference (location)
 	                              && !held_in_memory (location)
@@ -290,13 +290,9 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 	if (prefixes.volatile_ && !store_carries_ordering)
 		builder.CreateFence (llvm::AtomicOrdering::Release);
 
-	/*
-	 * A reference entering memory the collector can be tracking goes through the
-	 * barrier. The address here can point anywhere, and the generic barrier is
-	 * the one that tolerates that.
-	 */
+	// A reference entering memory the collector tracks marks a card.
 	if (mini_type_is_reference (location)) {
-		builder.CreateCall (wbarrier_decl (), {address, value});
+		emit_reference_store (builder, address, value, align);
 		return llvm::Error::success ();
 	}
 

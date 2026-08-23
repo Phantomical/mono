@@ -402,7 +402,8 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0), *src,
 		                                   llvm::Align (TARGET_SIZEOF_VOID_P));
 
-		builder.CreateCall (wbarrier_decl (), {*dest, value});
+		emit_reference_store (builder, *dest, value,
+		                      llvm::Align (TARGET_SIZEOF_VOID_P));
 	} else if (m_class_has_references (klass)) {
 		llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
 

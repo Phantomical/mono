@@ -479,14 +479,24 @@ TEST_F (TranslatorTest, InstanceFieldAccessNullChecks)
 	EXPECT_GE (t.count ("make.implicit"), 1u);
 }
 
-TEST_F (TranslatorTest, StoringAReferenceGoesThroughTheWriteBarrier)
+// The store is the method's own and the card mark sits behind a test of the
+// destination, so the collector's call is gone. The harness links sgen, whose
+// major collector marks cards; a collector that marks none keeps the call, and
+// so does MONO_LLVM_JIT_INLINE_WBARRIER=0.
+TEST_F (TranslatorTest, StoringAReferenceMarksItsOwnCard)
 {
-	EXPECT_GE (translate ("fields", "Fields:SetRef")
-	                   .count ("mono_gc_wbarrier_generic_store_internal"),
-	           1u);
-	EXPECT_GE (translate ("fields", "Fields:SetStaticRef")
-	                   .count ("mono_gc_wbarrier_generic_store_internal"),
-	           1u);
+	const Translation &field = translate ("fields", "Fields:SetRef");
+	const Translation &statics = translate ("fields", "Fields:SetStaticRef");
+
+	ASSERT_NE (field.function, nullptr) << field.error;
+	EXPECT_EQ (field.count ("wbarrier_generic_store"), 0u) << field.text ();
+	EXPECT_EQ (field.count ("store i8 1"), 1u);
+	EXPECT_GE (field.count ("wb_mark"), 1u);
+
+	ASSERT_NE (statics.function, nullptr) << statics.error;
+	EXPECT_EQ (statics.count ("wbarrier_generic_store"), 0u) << statics.text ();
+	EXPECT_EQ (statics.count ("store i8 1"), 1u);
+	EXPECT_GE (statics.count ("wb_mark"), 1u);
 }
 
 // A struct with a reference inside cannot be stored as bytes: the copy has to go
@@ -1154,9 +1164,9 @@ TEST_F (TranslatorTest, VolatileScalarAccessesCarryTheirOrdering)
 }
 
 // An access no single atomic instruction covers keeps the older shape: a plain
-// volatile access with a fence beside it. A reference is stored inside the write
-// barrier's call, a value class is a copy, and an access the unaligned. prefix
-// gave up the alignment of cannot be atomic at all.
+// volatile access with a fence beside it. A reference carries a card mark, a value
+// class is a copy, and an access the unaligned. prefix gave up the alignment of
+// cannot be atomic at all.
 TEST_F (TranslatorTest, VolatileFallsBackToAFence)
 {
 	const Translation &ref = translate ("prefixed", "Prefixed:VolatileWriteRef");
@@ -1165,7 +1175,7 @@ TEST_F (TranslatorTest, VolatileFallsBackToAFence)
 
 	ASSERT_NE (ref.function, nullptr) << ref.error;
 	EXPECT_EQ (ref.count ("fence release"), 1u) << ref.text ();
-	EXPECT_EQ (ref.count ("wbarrier_generic_store"), 1u);
+	EXPECT_EQ (ref.count ("store i8 1"), 1u);
 
 	ASSERT_NE (vtype.function, nullptr) << vtype.error;
 	EXPECT_EQ (vtype.count ("fence acquire"), 1u) << vtype.text ();

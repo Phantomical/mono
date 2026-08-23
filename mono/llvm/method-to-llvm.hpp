@@ -829,6 +829,8 @@ private:
 	llvm::Error emit_refanytype (MonoIrBuilder &builder);
 
 	llvm::FunctionCallee wbarrier_decl ();
+	void emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
+	                           llvm::Value *value, llvm::Align align);
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static,
 	                                                bool *out_is_static = nullptr);
 	llvm::Constant *extern_symbol (const std::string &name);

@@ -184,6 +184,18 @@ tier2_enabled ()
 	return on;
 }
 
+bool
+inline_write_barrier ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_WBARRIER");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
 /*
  * Twenty thousand entries of the tier-1 body, on top of the ten calls at tier 0
  * that body cost. A tier-2 compile runs the O3 pipeline with an optimizing
