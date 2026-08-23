@@ -34,10 +34,12 @@ namespace Mono.Tiering {
 }
 
 static class Program {
-	static double dv;
+	static double dv, dv2;
 	static float fv;
 
 	static double D (double x) { dv = x; return dv; }
+	/// A second field, so that a two-argument call keeps both operands opaque.
+	static double E (double x) { dv2 = x; return dv2; }
 	static float F (float x) { fv = x; return fv; }
 
 	static int fails;
@@ -123,6 +125,9 @@ static class Program {
 		got.Add (MathF.Cbrt (-8.0f));
 		got.Add (MathF.Pow (2.0f, 10.0f));
 		got.Add (MathF.Pow (float.NaN, 0.0f));
+		got.Add (Math.Truncate (-0.5));
+		got.Add (Math.Truncate (-2.7));
+		got.Add (MathF.Truncate (-0.5f));
 	}
 
 	static double[] Sample ()
@@ -171,6 +176,25 @@ static class Program {
 			got.Add (MathF.Asinh (F (f)));
 			got.Add (MathF.Acosh (F (f)));
 			got.Add (MathF.Atanh (F (f)));
+			// Managed IL rather than icalls. Math.Truncate is answered with an
+			// intrinsic and the other three are not, so the tiers have to agree
+			// on all of them either way.
+			got.Add (Math.Truncate (D (x)));
+			got.Add (MathF.Truncate (F (f)));
+			got.Add (MathF.Round (F (f)));
+			got.Add (Math.Max (D (x), E (1.5)));
+			got.Add (Math.Max (D (1.5), E (x)));
+			got.Add (Math.Min (D (x), E (1.5)));
+			got.Add (Math.Min (D (1.5), E (x)));
+			/*
+			 * ModF is private, and the Round overloads that take a digit count
+			 * are what still reach it. They are also what says the two halves
+			 * of llvm.modf are the right way round: swapping them turns every
+			 * answer here into nonsense.
+			 */
+			got.Add (Math.Round (D (x), 2, MidpointRounding.AwayFromZero));
+			got.Add (Math.Round (D (x), 3, MidpointRounding.ToEven));
+			got.Add (MathF.Round (F (f), 2, MidpointRounding.AwayFromZero));
 		}
 
 		foreach (double y in exponents) {
@@ -258,6 +282,53 @@ static class Program {
 			double.PositiveInfinity);
 		Same ("Math.Tanh (0)", Math.Tanh (D (0.0)), 0.0);
 		Same ("Math.Tanh (Infinity)", Math.Tanh (D (double.PositiveInfinity)), 1.0);
+
+		/*
+		 * Truncate is managed IL, and the intrinsic has to answer as that IL
+		 * answers: ModF writes the integral part through the pointer, so a
+		 * value between minus one and zero comes back as minus zero.
+		 */
+		Same ("Math.Truncate (2.7)", Math.Truncate (D (2.7)), 2.0);
+		Same ("Math.Truncate (-2.7)", Math.Truncate (D (-2.7)), -2.0);
+		Same ("Math.Truncate (-0.5)", Math.Truncate (D (-0.5)), -0.0);
+		Same ("Math.Truncate (-0)", Math.Truncate (D (-0.0)), -0.0);
+		Same ("Math.Truncate (Infinity)", Math.Truncate (D (double.PositiveInfinity)),
+			double.PositiveInfinity);
+		NaN ("Math.Truncate (NaN)", Math.Truncate (D (double.NaN)));
+		Same ("MathF.Truncate (2.7)", MathF.Truncate (F (2.7f)), 2.0f);
+		Same ("MathF.Truncate (-0.5)", MathF.Truncate (F (-0.5f)), -0.0f);
+		NaN ("MathF.Truncate (NaN)", MathF.Truncate (F (float.NaN)));
+
+		/*
+		 * Max and Min are not answered with an intrinsic, and these are the
+		 * cases that say why. The managed body returns the second operand when
+		 * the two compare equal, so the answer depends on the order the signed
+		 * zeros arrive in. llvm.maximum answers +0 to both of the first pair.
+		 */
+		Same ("Math.Max (0, -0)", Math.Max (D (0.0), E (-0.0)), -0.0);
+		Same ("Math.Max (-0, 0)", Math.Max (D (-0.0), E (0.0)), 0.0);
+		Same ("Math.Min (0, -0)", Math.Min (D (0.0), E (-0.0)), -0.0);
+		Same ("Math.Min (-0, 0)", Math.Min (D (-0.0), E (0.0)), 0.0);
+		NaN ("Math.Max (NaN, 1)", Math.Max (D (double.NaN), E (1.0)));
+		NaN ("Math.Max (1, NaN)", Math.Max (D (1.0), E (double.NaN)));
+
+		/*
+		 * MathF.Round is managed IL that computes floor (x + 0.5f) the way the
+		 * Math.Round icall computes floor (x + 0.5). It carries the same
+		 * precision-loss case, so it is left alone for the same reason.
+		 */
+		Same ("MathF.Round (0.5)", MathF.Round (F (0.5f)), 0.0f);
+		Same ("MathF.Round (1.5)", MathF.Round (F (1.5f)), 2.0f);
+		Same ("MathF.Round (2.5)", MathF.Round (F (2.5f)), 2.0f);
+		Same ("MathF.Round (0.49999997)", MathF.Round (F (0.49999997f)), 1.0f);
+
+		// The digit-count overloads, which are what still calls ModF.
+		Same ("Math.Round (2.345, 2, AwayFromZero)",
+			Math.Round (D (2.345), 2, MidpointRounding.AwayFromZero), 2.35);
+		Same ("Math.Round (-2.345, 2, AwayFromZero)",
+			Math.Round (D (-2.345), 2, MidpointRounding.AwayFromZero), -2.35);
+		Same ("Math.Round (1.5, 0, ToEven)",
+			Math.Round (D (1.5), 0, MidpointRounding.ToEven), 2.0);
 
 		// The inverse hyperbolic functions, whose libm symbols
 		// runtime/builtins.cpp registers by hand.

@@ -174,8 +174,8 @@ struct ModuleTypes {
 	llvm::DenseMap<MonoClass *, llvm::Type *> native_vtypes;
 };
 
-/// What a call to a System.Math or System.MathF icall compiles to in place of
-/// a call to that icall's wrapper.
+/// What a call to a System.Math or System.MathF method compiles to in place of
+/// the call.
 struct MathIntrinsic {
 	enum class Emit {
 		/// A call to the intrinsic in `intrinsic`.
@@ -184,6 +184,9 @@ struct MathIntrinsic {
 		Remainder,
 		/// A call to the libm function named in `libm`.
 		Libm,
+		/// llvm.modf, whose integral half is stored through the call's last
+		/// argument and whose fractional half is the result.
+		Modf,
 	};
 
 	Emit emit;
