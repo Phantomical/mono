@@ -442,7 +442,10 @@ trace_stelem_check (MonoMethod *method, const char *form)
 
 	char *name = mono_method_full_name (method, TRUE);
 
-	fprintf (stderr, "[llvm-jit] stelem.ref %s in %s\n", form, name);
+	MONO_LOCK (jit_trace_mutex ())
+	{
+		fprintf (stderr, "[llvm-jit] stelem.ref %s in %s\n", form, name);
+	}
 	g_free (name);
 }
 

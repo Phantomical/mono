@@ -63,6 +63,16 @@ is_jit_trace_enabled ()
 	return on;
 }
 
+std::mutex &
+jit_trace_mutex ()
+{
+	/* Leaked on purpose. A compile worker can still print while the process
+	 * exits, and a mutex that ran its destructor first is undefined to lock. */
+	static std::mutex *lock = new std::mutex ();
+
+	return *lock;
+}
+
 bool
 recompiling (MonoMethod *method)
 {

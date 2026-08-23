@@ -56,7 +56,10 @@ CompileWorker::start ()
 	/* The queue adds threads under load, so how many a run ends up with is not
 	 * the setting and is otherwise invisible. */
 	if (is_jit_trace_enabled ())
-		llvm::errs () << "[llvm-jit] compile worker attached\n";
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			llvm::errs () << "[llvm-jit] compile worker attached\n";
+		}
 
 	return true;
 }

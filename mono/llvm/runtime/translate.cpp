@@ -187,8 +187,12 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
-		fprintf (stderr, "[llvm-jit] translating %s at tier %d (for %s)\n", name,
-		         target.tier == JitTier::tier2 ? 2 : 1, target.domain->friendly_name);
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			fprintf (stderr, "[llvm-jit] translating %s at tier %d (for %s)\n",
+			         name, target.tier == JitTier::tier2 ? 2 : 1,
+			         target.domain->friendly_name);
+		}
 		g_free (name);
 	}
 
@@ -393,8 +397,11 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
-		fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", name, compiled.entry,
-		         target.domain->friendly_name);
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			fprintf (stderr, "[llvm-jit] %s is at %p (for %s)\n", name,
+			         compiled.entry, target.domain->friendly_name);
+		}
 		g_free (name);
 	}
 

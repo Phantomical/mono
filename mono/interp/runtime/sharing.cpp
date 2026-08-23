@@ -74,7 +74,10 @@ shared_form (MonoMethod *method)
 		char *from = mono_method_full_name (method, TRUE);
 		char *to = mono_method_full_name (shared, TRUE);
 
-		fprintf (stderr, "[interp] %s shares the body of %s\n", from, to);
+		MONO_LOCK (mono::jit_trace_mutex ())
+		{
+			fprintf (stderr, "[interp] %s shares the body of %s\n", from, to);
+		}
 		g_free (from);
 		g_free (to);
 	}

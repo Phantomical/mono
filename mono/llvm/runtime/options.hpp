@@ -1,7 +1,7 @@
 /**
  * \file
- * \brief The environment knobs the engine reads, and the tier-0 filter the
- * command line sets.
+ * \brief The environment knobs the engine reads, the tier-0 filter the command
+ * line sets, and the lock the trace prints under.
  *
  * Every value here is read once and cached, so setting one of these variables
  * after the first method has compiled does nothing. That is deliberate:
@@ -13,7 +13,10 @@
 #ifndef MONO_LLVM_RUNTIME_OPTIONS_HPP
 #define MONO_LLVM_RUNTIME_OPTIONS_HPP
 
+#include "../util/lock.hpp"
+
 #include <cstdint>
+#include <mutex>
 
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoMethodHeader MonoMethodHeader;
@@ -25,6 +28,26 @@ namespace mono {
 /// This matters because a method reached as a callee is compiled without the
 /// runtime asking for it. Only this flag reports that it happened.
 bool is_jit_trace_enabled ();
+
+/// The mutex that keeps one thread's trace line whole.
+///
+/// Both engines trace, and compiles run on several worker threads at once.
+/// Two writers reach file descriptor 2: stdio and llvm::errs (). They share no
+/// buffer, and each one writes a line in more than one call. So two lines
+/// splice together, and the cut lands inside a method name.
+///
+/// Take this around the print itself:
+///
+///     MONO_LOCK (jit_trace_mutex ())
+///     {
+///             fprintf (stderr, "[llvm-jit] ...");
+///     }
+///
+/// Build the line's arguments before you take this lock.
+/// mono_method_full_name () takes metadata locks of its own. Format a name
+/// under this one, and the trace lock goes above those in the lock order.
+/// A thread that traces while it holds a metadata lock then deadlocks.
+std::mutex &jit_trace_mutex ();
 
 /// Whether MONO_LLVM_JIT_RECOMPILE names this method: a substring of its full
 /// name selects it. A selected method is translated afresh on every compile

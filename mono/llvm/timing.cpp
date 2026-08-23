@@ -18,6 +18,8 @@
 
 #include "timing.hpp"
 
+#include "runtime/options.hpp"
+
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
@@ -155,22 +157,28 @@ report ()
 	if (whole == 0)
 		return;
 
-	fprintf (stderr, "[llvm-jit] clock %s\n",
-	         g_cpu_clock ? "thread-cpu" : "monotonic");
-	fprintf (stderr, "[llvm-jit] %-10s %8s %13s %12s %7s %10s\n", "phase",
-	         "calls", "total ms", "self ms", "self %", "self us/c");
-	for (size_t i = 0; i < (size_t) Phase::count; i++) {
-		const Bucket &b = g_buckets[i];
-		uint64_t count = b.count.load ();
+	/* The whole table under one lock, rather than a row at a time: a compile
+	 * worker can still be tracing while the process exits, and a trace line
+	 * between two rows is as unreadable as one inside a row. */
+	MONO_LOCK (jit_trace_mutex ())
+	{
+		fprintf (stderr, "[llvm-jit] clock %s\n",
+		         g_cpu_clock ? "thread-cpu" : "monotonic");
+		fprintf (stderr, "[llvm-jit] %-10s %8s %13s %12s %7s %10s\n", "phase",
+		         "calls", "total ms", "self ms", "self %", "self us/c");
+		for (size_t i = 0; i < (size_t) Phase::count; i++) {
+			const Bucket &b = g_buckets[i];
+			uint64_t count = b.count.load ();
 
-		if (count == 0)
-			continue;
-		fprintf (stderr,
-		         "[llvm-jit] %-10s %8" PRIu64 " %13.1f %12.1f %7.1f %10.1f\n",
-		         name_of ((Phase) i), count, b.total.load () / 1e6,
-		         b.self.load () / 1e6, 100.0 * b.self.load () / whole,
-		         b.self.load () / 1e3
-		                 / g_buckets[(size_t) Phase::compile].count.load ());
+			if (count == 0)
+				continue;
+			fprintf (stderr,
+			         "[llvm-jit] %-10s %8" PRIu64 " %13.1f %12.1f %7.1f %10.1f\n",
+			         name_of ((Phase) i), count, b.total.load () / 1e6,
+			         b.self.load () / 1e6, 100.0 * b.self.load () / whole,
+			         b.self.load () / 1e3
+			                 / g_buckets[(size_t) Phase::compile].count.load ());
+		}
 	}
 }
 

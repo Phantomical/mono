@@ -168,10 +168,13 @@ struct MonoBackend::DomainState {
 			    (void *) &MonoBackend::body_for_current_domain))
 			return std::move (err);
 
-		if (is_jit_trace_enabled ()) {
-			llvm::errs () << llvm::format (
-				"[llvm-jit] %zu runtime builtins registered\n", builtins.size ());
-		}
+		if (is_jit_trace_enabled ())
+			MONO_LOCK (jit_trace_mutex ())
+			{
+				llvm::errs () << llvm::format (
+					"[llvm-jit] %zu runtime builtins registered\n",
+					builtins.size ());
+			}
 
 		return state;
 	}
@@ -485,8 +488,11 @@ MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
-		fprintf (stderr, "[llvm-jit] interpreting %s (for %s)\n", name,
-		         domain.domain->friendly_name);
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			fprintf (stderr, "[llvm-jit] interpreting %s (for %s)\n", name,
+			         domain.domain->friendly_name);
+		}
 		g_free (name);
 	}
 
@@ -710,8 +716,11 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	 * which of them it is about. A symbol ends in the MonoMethod address.
 	 */
 	if (is_jit_trace_enabled ())
-		llvm::errs () << "[llvm-jit] " << dm.name << " shares the body of "
-			      << (*owner)->name << "\n";
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			llvm::errs () << "[llvm-jit] " << dm.name << " shares the body of "
+				      << (*owner)->name << "\n";
+		}
 
 	/*
 	 * The instantiation has an entry now, and this is the only place that says
@@ -897,11 +906,17 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		}
 
 		// Refused, so the method is compiled against its own instantiation.
-		if (is_jit_trace_enabled ())
-			llvm::errs () << "[llvm-jit] not sharing " << dm->name << ": "
-				      << llvm::toString (body.takeError ()) << "\n";
-		else
+		if (is_jit_trace_enabled ()) {
+			std::string why = llvm::toString (body.takeError ());
+
+			MONO_LOCK (jit_trace_mutex ())
+			{
+				llvm::errs () << "[llvm-jit] not sharing " << dm->name << ": "
+					      << why << "\n";
+			}
+		} else {
 			llvm::consumeError (body.takeError ());
+		}
 
 		taken.push_back (i);
 	}
@@ -991,8 +1006,12 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 			}
 
 			if (member->profile.empty () && is_jit_trace_enabled ())
-				llvm::errs () << "[llvm-jit] no profile for a tier-2 compile of "
-					      << dm->name << "\n";
+				MONO_LOCK (jit_trace_mutex ())
+				{
+					llvm::errs ()
+						<< "[llvm-jit] no profile for a tier-2 compile of "
+						<< dm->name << "\n";
+				}
 		}
 
 		targets.push_back (TranslationTarget { domain.jit.get (), domain.domain,

@@ -125,11 +125,14 @@ build_dispatcher (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 	remember (*compiled, nullptr);
 
 	if (is_jit_trace_enabled ())
-		fprintf (stderr,
-		         "[llvm-jit] %s dispatches per call (owner %s, first reached "
-		         "from %s)\n",
-		         name.c_str (), domain->friendly_name,
-		         mono_domain_get ()->friendly_name);
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			fprintf (stderr,
+			         "[llvm-jit] %s dispatches per call (owner %s, first "
+			         "reached from %s)\n",
+			         name.c_str (), domain->friendly_name,
+			         mono_domain_get ()->friendly_name);
+		}
 
 	return compiled->entry;
 }

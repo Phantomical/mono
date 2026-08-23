@@ -37,9 +37,12 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 
 	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
+		const char *why = mono_error_get_message (failure);
 
-		fprintf (stderr, "[llvm-jit] %s throws on call: %s\n", name,
-		         mono_error_get_message (failure));
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			fprintf (stderr, "[llvm-jit] %s throws on call: %s\n", name, why);
+		}
 		g_free (name);
 	}
 

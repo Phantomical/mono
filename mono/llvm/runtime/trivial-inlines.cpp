@@ -309,7 +309,10 @@ trace_inline (MonoMethod *callee, MonoMethod *caller)
 	char *host = mono_method_full_name (caller, TRUE);
 	char *what = mono_method_full_name (callee, TRUE);
 
-	fprintf (stderr, "[llvm-jit] folding %s into %s\n", what, host);
+	MONO_LOCK (jit_trace_mutex ())
+	{
+		fprintf (stderr, "[llvm-jit] folding %s into %s\n", what, host);
+	}
 	g_free (what);
 	g_free (host);
 }

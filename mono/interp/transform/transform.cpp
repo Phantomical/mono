@@ -4277,7 +4277,11 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 		if (mono::is_jit_trace_enabled ()) {
 			char *name = mono_method_full_name (method, TRUE);
 
-			fprintf (stderr, "[interp] not sharing %s: %s\n", name, td->sharing_refusal);
+			MONO_LOCK (mono::jit_trace_mutex ())
+			{
+				fprintf (stderr, "[interp] not sharing %s: %s\n", name,
+				         td->sharing_refusal);
+			}
 			g_free (name);
 		}
 

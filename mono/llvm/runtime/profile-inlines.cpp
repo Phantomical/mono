@@ -48,7 +48,10 @@ ProfileInliner::folded (Function &caller, Function &callee)
 	char *host = mono_method_full_name (into, TRUE);
 	char *folded = mono_method_full_name (what, TRUE);
 
-	fprintf (stderr, "[llvm-jit] folding %s into %s\n", folded, host);
+	MONO_LOCK (jit_trace_mutex ())
+	{
+		fprintf (stderr, "[llvm-jit] folding %s into %s\n", folded, host);
+	}
 	g_free (folded);
 	g_free (host);
 }
