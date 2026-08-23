@@ -618,6 +618,7 @@ OPDEF(MINT_ARRAY_IS_PRIMITIVE, "array_is_primitive", 3, 1, 1, MintOpNoArgs)
 
 /* Calls */
 OPDEF(MINT_CALL, "call", 3, CallArgs, 0, MintOpMethodToken)
+OPDEF(MINT_CALL_DYN, "call.dyn", 3, CallArgs, 1, MintOpNoArgs)
 OPDEF(MINT_TAILCALL, "tailcall", 4, CallArgs, 0, MintOpMethodToken)
 OPDEF(MINT_CALLVIRT, "callvirt", 3, CallArgs, 0, MintOpMethodToken)
 OPDEF(MINT_CALLVIRT_FAST, "callvirt.fast", 4, CallArgs, 0, MintOpMethodToken)

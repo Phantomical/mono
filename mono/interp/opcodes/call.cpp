@@ -680,6 +680,21 @@ MONO_INTERP_OP_IMPL (MINT_CALL)
 	return &exec_call;
 }
 
+/*
+ * The callee arrives in a local rather than a data item, because a body shared
+ * between reference instantiations reads it out of its generic context. Each
+ * instantiation calls a callee of its own, and the data items are one array all
+ * of them read.
+ */
+MONO_INTERP_OP_IMPL (MINT_CALL_DYN)
+{
+	cmethod = LOCAL_VAR (ip[2], InterpMethod *);
+	call_args_offset = ip[1];
+
+	MONO_INTERP_OP_ADVANCE ();
+	return &exec_call;
+}
+
 MONO_INTERP_OP_IMPL (MINT_LDFTN)
 {
 	error_init_reuse (error);

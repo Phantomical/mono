@@ -421,6 +421,50 @@ interp_tail_call_refusal (TransformData *td, MonoMethod *method, MonoMethod *tar
 	return NULL;
 }
 
+bool
+TransformData::may_call_through_context (MonoMethod *body, MonoMethod *target,
+                                         MonoMethodSignature *csignature, gboolean is_virtual,
+                                         gboolean tailcall)
+{
+	// A fetch reads the receiver of the body being written, which is the
+	// caller's rather than the callee's.
+	if (body != this->method) {
+		cannot_share ("a call inside an inlined callee");
+		return false;
+	}
+
+	/*
+	 * Every callvirt, because the arm that degrades one on a final method to a
+	 * direct call has not run yet. A site that stays dispatched settles its
+	 * callee off the receiver's vtable, so what it wants is the slot index
+	 * rather than an entry.
+	 */
+	if (is_virtual) {
+		cannot_share ("a callvirt to a method the generic context names");
+		return false;
+	}
+
+	// The tail-call arm asks the shared class for a runtime vtable, which is
+	// what interp_transform_call () refuses to let a shared body reach.
+	if (tailcall) {
+		cannot_share ("a tail call to a method the generic context names");
+		return false;
+	}
+
+	if (csignature->call_convention == MONO_CALL_VARARG) {
+		cannot_share ("a vararg call to a method the generic context names");
+		return false;
+	}
+
+	// The abstract arm below turns the site into a dispatched one.
+	if (target->flags & METHOD_ATTRIBUTE_ABSTRACT) {
+		cannot_share ("a call to an abstract method the generic context names");
+		return false;
+	}
+
+	return true;
+}
+
 /* Return FALSE if error, including inline failure */
 gboolean
 TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_method,
@@ -487,13 +531,19 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	/*
 	 * Every path above has settled the target by now, whichever token shape it
 	 * came from, so one test covers the lot.
+	 *
+	 * A callee the context names is called through an InterpMethod fetched out
+	 * of the context. callee_from_context is what routes the rest of this
+	 * function onto that, and every arm it cannot reach tests it.
 	 */
-	if (sharing) {
-		if (target_method != nullptr && depends_on_context (target_method))
-			cannot_share ("a call to a method the generic context names");
+	bool callee_from_context = false;
 
+	if (sharing) {
 		if (constrained_class != nullptr && depends_on_context (constrained_class))
 			cannot_share ("a constrained call on a class the generic context names");
+		else if (target_method != nullptr && depends_on_context (target_method))
+			callee_from_context =
+				may_call_through_context (method, target_method, csignature, is_virtual, tailcall);
 
 		/*
 		 * Before the class initializer below, which would otherwise run on a
@@ -526,7 +576,9 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	}
 
 	/* Intrinsics */
-	if (target_method
+	// An intrinsic answers for the method it matched, and a shared form matches
+	// as the type variable rather than as the instantiation.
+	if (target_method && !callee_from_context
 	    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly, &op))
 		return TRUE;
 
@@ -563,7 +615,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		         target_method);
 #endif
 		/* Intrinsics: try again. mono_get_method_constrained_with_method () can resolve to a method we can substitute. */
-		if (target_method
+		if (target_method && !callee_from_context
 		    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly,
 		                                 &op))
 			return TRUE;
@@ -594,7 +646,9 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		}
 	}
 
-	if (target_method)
+	// A shared class is left alone. Its own instantiation is initialized where
+	// the call lands, and this one has no storage of its own to prepare.
+	if (target_method && !callee_from_context)
 		mono_class_init_internal (target_method->klass);
 
 	if (!is_virtual && target_method && (target_method->flags & METHOD_ATTRIBUTE_ABSTRACT)) {
@@ -688,6 +742,16 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			target_method = replacement;
 	}
 
+	/*
+	 * A wrapper stands in for the method the site named, and an rgctx entry
+	 * holds no wrapper. Tested on the target rather than on what produces one,
+	 * because both substitutions above can and the conditions are theirs.
+	 */
+	if (callee_from_context && target_method->wrapper_type != MONO_WRAPPER_NONE) {
+		cannot_share ("a call a wrapper stands in for");
+		return TRUE;
+	}
+
 	if (csignature->call_convention == MONO_CALL_VARARG)
 		csignature =
 			mono_method_get_signature_checked (target_method, image, token, generic_context, error);
@@ -705,7 +769,10 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	}
 
 	g_assert (csignature->call_convention != MONO_CALL_FASTCALL);
-	if ((mono_interp_opt & INTERP_OPT_INLINE) && op == -1 && !is_virtual && target_method
+	// A shared callee is not inlined: its body reads a generic context of its
+	// own, which the receiver of this one does not carry.
+	if ((mono_interp_opt & INTERP_OPT_INLINE) && op == -1 && !is_virtual && !callee_from_context
+	    && target_method
 	    && interp_method_check_inlining (target_method, csignature)) {
 		MonoMethodHeader *mheader = interp_method_get_header (target_method, error);
 		return_val_if_nok (error, FALSE);
@@ -726,6 +793,13 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		const char *name = target_method->name;
 		if (*name == 'I' && (strcmp (name, "Invoke") == 0))
 			is_delegate_invoke = TRUE;
+	}
+
+	// The delegate's own field carries the target, so the entry a fetch answers
+	// with is not what this site calls.
+	if (callee_from_context && is_delegate_invoke) {
+		cannot_share ("a delegate invoke the generic context names");
+		return TRUE;
 	}
 
 	/* Pop the function pointer */
@@ -823,6 +897,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		}
 #endif
 	} else if (!calli && !is_delegate_invoke && !is_virtual && !emit_tailcall
+	           && !callee_from_context
 	           && mono_interp_jit_call_supported (target_method, csignature)) {
 		interp_add_ins (MINT_JIT_CALL);
 		interp_ins_set_dreg (last_ins, dreg);
@@ -904,6 +979,15 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 				/* Cache slot for the entry point this site last resolved */
 				last_ins->data[1] = get_data_item_index_nonshared (NULL);
 			}
+		} else if (callee_from_context) {
+			int callee = emit_rgctx_fetch (MONO_RGCTX_INFO_INTERP_METHOD, target_method);
+
+			if (sharing_refusal != nullptr)
+				return TRUE;
+
+			interp_add_ins (MINT_CALL_DYN);
+			interp_ins_set_dreg (last_ins, dreg);
+			interp_ins_set_sreg (last_ins, callee);
 		} else {
 			InterpMethod *imethod = mono_interp_get_imethod (domain, target_method, error);
 			return_val_if_nok (error, FALSE);

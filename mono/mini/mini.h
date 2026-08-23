@@ -247,7 +247,9 @@ typedef enum {
 	/* Same as MONO_PATCH_INFO_METHOD_FTNDESC */
 	MONO_RGCTX_INFO_METHOD_FTNDESC                = 33,
 	/* mono_type_size () for a class */
-	MONO_RGCTX_INFO_CLASS_SIZEOF                  = 34
+	MONO_RGCTX_INFO_CLASS_SIZEOF                  = 34,
+	/* The InterpMethod a shared body calls the method through */
+	MONO_RGCTX_INFO_INTERP_METHOD                 = 35
 } MonoRgctxInfoType;
 
 typedef struct _MonoRuntimeGenericContextInfoTemplate {

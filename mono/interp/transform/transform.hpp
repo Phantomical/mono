@@ -395,6 +395,15 @@ struct TransformData {
 	/// inlined callee, which the caller then writes through
 	/// interp_emit_sfld_access_dyn ().
 	bool may_share_field_access (MonoClass *klass, gboolean is_static, bool inlining);
+	/// Whether a call to a method the generic context names can be written as a
+	/// fetch of the callee's InterpMethod and a call through it, recording the
+	/// refusal when it cannot.
+	///
+	/// body is the method whose IL is being read, which is this->method except
+	/// while a callee is inlined.
+	bool may_call_through_context (MonoMethod *body, MonoMethod *target,
+	                               MonoMethodSignature *csignature, gboolean is_virtual,
+	                               gboolean tailcall);
 	void narrow_index (StackInfo *sp);
 	void one_arg_branch (int mint_op, int offset, int inst_size);
 	void push_simple_type (StackType type);
