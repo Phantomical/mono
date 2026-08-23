@@ -4124,29 +4124,6 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 
 	td->sharing = mono_method_check_context_used (method) != 0;
 
-	/*
-	 * Before the walk, because the clauses are copied from the header rather
-	 * than resolved, so no site the walk visits classifies a catch type.
-	 * adopt_body () then gives each instantiation that same copy, so a catch
-	 * type the context names stays the type variable and matches no exception.
-	 *
-	 * A catch is the only clause shape that names a type. A filter, a finally
-	 * and a fault carry code offsets, and every instantiation runs the same
-	 * code. The walk visits the IL of their bodies with the rest of the method.
-	 */
-	if (td->sharing) {
-		for (i = 0; i < header->num_clauses; i++) {
-			MonoExceptionClause *clause = &header->clauses[i];
-
-			if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
-			    && clause->data.catch_class != nullptr
-			    && depends_on_context (clause->data.catch_class)) {
-				td->cannot_share ("a catch of a class the generic context names");
-				break;
-			}
-		}
-	}
-
 	if (td->sharing_refusal == nullptr) {
 		td->interp_method_compute_offsets (rtm, mono_method_signature_internal (method),
 		                                   header, error);
@@ -4314,6 +4291,41 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 static mono_mutex_t calc_section;
 
 /*
+ * Rewrites a copied clause table so each catch names the instantiation's class
+ * rather than the shared form's type variable.
+ *
+ * A catch is the only clause shape that names a type. A filter, a finally and a
+ * fault carry code offsets, and every instantiation runs the same code.
+ */
+static void
+inflate_catch_types (MonoJitInfo *jinfo, MonoMethod *method)
+{
+	MonoGenericContext *context = mono_method_get_context (method);
+
+	if (context == nullptr)
+		return;
+
+	for (int i = 0; i < jinfo->num_clauses; i++) {
+		MonoJitExceptionInfo *ei = &jinfo->clauses[i];
+
+		if (ei->flags != MONO_EXCEPTION_CLAUSE_NONE || ei->data.catch_class == nullptr)
+			continue;
+
+		MonoType *type = m_class_get_byval_arg (ei->data.catch_class);
+
+		if (!mono_class_is_open_constructed_type (type))
+			continue;
+
+		ERROR_DECL (error);
+		MonoType *inflated = mono_class_inflate_generic_type_checked (type, context, error);
+
+		mono_error_assert_ok (error);
+		ei->data.catch_class = mono_class_from_mono_type_internal (inflated);
+		mono_metadata_free_type (inflated);
+	}
+}
+
+/*
  * A shared body and its instantiations differ only in metadata. Every reference
  * argument is one pointer, and shared_type () and mint_type () answer a type
  * variable with the constraint the shared form recorded, so the argument
@@ -4335,6 +4347,7 @@ adopt_body (InterpMethod *imethod, const InterpMethod *body)
 
 	memcpy (jinfo, shared_jinfo, jinfo_len);
 	jinfo->d.method = imethod->method;
+	inflate_catch_types (jinfo, imethod->method);
 
 	imethod->code = body->code;
 	imethod->clauses = body->clauses;
