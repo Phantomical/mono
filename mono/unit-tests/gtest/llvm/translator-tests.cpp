@@ -11,6 +11,14 @@
 
 #include "harness.hpp"
 
+#include "config.h"
+#include <glib.h>
+
+#include "mono/metadata/class-init.h"
+#include "mono/metadata/class-internals.h"
+#include "mono/metadata/debug-helpers.h"
+#include "mono/metadata/gc-internals.h"
+
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -19,6 +27,8 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <ostream>
 #include <set>
 #include <string>
@@ -549,12 +559,29 @@ TEST_F (TranslatorTest, RvaStaticsLiveInTheOrdinaryStaticsBlock)
 
 /* ----------------------------------------------------------------- arrays */
 
-TEST_F (TranslatorTest, NewarrCallsTheAllocatorWithTheArrayVtable)
+/*
+ * What a newarr allocates through is the collector's answer: emit_vector_alloc ()
+ * calls the collector's array allocator where there is one, and the runtime's
+ * array-new icall where there is none. `mono/tests/newarr-refusal.cs` covers what
+ * the two arms do, on both collectors.
+ *
+ * The case below covers what behavior cannot see. A fall back to the icall costs
+ * a call and a TLAB bump on every allocation and breaks nothing, so a lost fast
+ * path is silent. The case asserts the absence of the icall rather than the
+ * presence of the allocator: the property is that this collector's fast path is
+ * taken, not how it is written.
+ */
+TEST_F (TranslatorTest, NewarrDoesNotFallBackWhereTheCollectorAllocates)
 {
+	MonoClass *array = mono_class_create_array (mono_defaults.int32_class, 1);
+
+	if (mono_gc_get_managed_array_allocator (array) == nullptr)
+		GTEST_SKIP () << "this collector has no array allocator";
+
 	const Translation &t = translate ("arrays", "Arrays:Make");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_GE (t.count ("ves_icall_array_new_specific"), 1u);
+	EXPECT_EQ (t.count ("ves_icall_array_new_specific"), 0u) << t.text ();
 	EXPECT_GE (t.count ("mono_vtable_"), 1u);
 }
 

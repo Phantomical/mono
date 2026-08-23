@@ -21,6 +21,7 @@ set(MONO_TESTS_CS_SRC
   array-coop-smallvt.cs
   array-12193.cs
   array-init.cs
+  newarr-refusal.cs
   arraylist.cs
   assembly-load-remap.cs
   assembly-load-bytes.cs
