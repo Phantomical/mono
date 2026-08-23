@@ -89,6 +89,12 @@ il_call_target (MonoMethod *method, uint32_t token)
 }
 
 bool
+is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit)
+{
+	return header->num_clauses == 0 && header->code_size <= il_limit;
+}
+
+bool
 reads_the_callers_frame (MonoMethod *target)
 {
 	MonoClass *klass = target->klass;

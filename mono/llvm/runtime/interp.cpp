@@ -76,6 +76,22 @@ print_shape (Type *t, raw_ostream &os)
 	t->print (os);
 }
 
+/// What a signature adds to prototype_key () to settle the entry layout.
+///
+/// The prototype alone does not. A byref parameter and an ordinary reference
+/// both lower to the same bare pointer, so the key has to mark which one it is.
+/// Nor does the prototype say where the receiver stops and the arguments start.
+std::string
+signature_key_suffix (MonoMethodSignature *sig)
+{
+	std::string suffix = sig->hasthis ? "|this" : "|static";
+
+	for (int i = 0; i < sig->param_count; ++i)
+		suffix += sig->params[i]->byref ? '&' : '.';
+
+	return suffix;
+}
+
 } // namespace
 
 std::string
@@ -134,17 +150,7 @@ layout_for (MonoDomain *domain, MonoMethod *method)
 	if (method->string_ctor)
 		sig = mono_marshal_get_string_ctor_signature (method);
 
-	/*
-	 * The prototype alone does not settle the layout. A byref parameter and an
-	 * ordinary reference both lower to the same bare pointer, so the key must
-	 * mark which one it is. Nor does the prototype say where the receiver stops
-	 * and the arguments start.
-	 */
-	std::string key = prototype_key (*shape);
-
-	key += sig->hasthis ? "|this" : "|static";
-	for (int i = 0; i < sig->param_count; ++i)
-		key += sig->params[i]->byref ? '&' : '.';
+	std::string key = prototype_key (*shape) + signature_key_suffix (sig);
 
 	{
 		std::shared_lock<std::shared_mutex> lock (g_interp_mutex);

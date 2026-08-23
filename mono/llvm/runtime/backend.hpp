@@ -134,6 +134,15 @@ private:
 	llvm::Expected<Compiled> enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	                                            MonoMethod *shared, MonoTier tier);
 
+	/// Whether what enter_shared_body () returned is that method's own answer.
+	///
+	/// A SharingRefusal is an answer about the shared form rather than about the
+	/// method, so it is the one outcome a caller has to take somewhere else.
+	/// Every other outcome, a failure included, stands for the method itself.
+	///
+	/// Marks \p result checked either way, so a caller may take its error.
+	static bool answered_by_sharing (llvm::Expected<Compiled> &result);
+
 	/// Returns the stub \p dm's entry is published as when its shared body
 	/// has no receiver to read a context out of. It writes this
 	/// instantiation's context and enters \p target.

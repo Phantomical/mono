@@ -1,7 +1,7 @@
 /**
  * \file
- * \brief How a declaration says which method it names, and how the engine
- * renames it to the symbol it publishes.
+ * \brief How a module's symbols say which method and which piece of one they
+ * stand for, and how the engine renames them to what it publishes.
  *
  * The translator cannot know what a method's stub is called: that is the
  * engine's to decide, and only the engine can publish one. So the translator
@@ -17,6 +17,7 @@
 #include <llvm/Support/Error.h>
 
 #include <string>
+#include <string_view>
 
 namespace llvm {
 class GlobalValue;
@@ -26,6 +27,14 @@ class Module;
 typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
+
+/// What a filter body's symbol adds to the symbol of the method it belongs to.
+/// The clause index follows it, so the whole name is `<entry>$filter<index>`.
+///
+/// A filter runs as a function of its own and is compiled beside its method, so
+/// this is what tells the two apart to anything walking a compiled object's
+/// functions.
+constexpr std::string_view filter_body_suffix = "$filter";
 
 void mark_method_reference (llvm::GlobalValue &value, MonoMethod *method);
 

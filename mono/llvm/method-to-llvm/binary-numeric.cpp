@@ -414,12 +414,7 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 	llvm::Value *sum;
 
 	if (result->byref) {
-		// A managed pointer plus an integer stays a managed pointer, so this indexes
-		// the pointer instead of doing the arithmetic on it. That keeps the result
-		// something the GC can still recognize as pointing into its object.
-		bool value1_is_pointer = value1.type->byref;
-		llvm::Value *base = value1_is_pointer ? value1.value : value2.value;
-		llvm::Value *index = value1_is_pointer ? value2.value : value1.value;
+		auto [base, index] = pointer_and_index (*operands);
 
 		sum = builder.CreateGEP (builder.getInt8Ty (), base,
 		                         coerce (builder, index, native_int_type (builder)));
@@ -437,6 +432,15 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 
 	push_stack (sum, result);
 	return llvm::Error::success ();
+}
+
+std::pair<llvm::Value *, llvm::Value *>
+MethodLLVMEmitter::pointer_and_index (const BinaryOperands &operands)
+{
+	bool value1_is_pointer = operands.value1.type->byref;
+
+	return { value1_is_pointer ? operands.value1.value : operands.value2.value,
+		 value1_is_pointer ? operands.value2.value : operands.value1.value };
 }
 
 /*
@@ -931,9 +935,7 @@ MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	llvm::Value *sum;
 
 	if (result->byref) {
-		bool value1_is_pointer = value1.type->byref;
-		llvm::Value *base = value1_is_pointer ? value1.value : value2.value;
-		llvm::Value *index = value1_is_pointer ? value2.value : value1.value;
+		auto [base, index] = pointer_and_index (*operands);
 
 		sum = emit_checked_pointer_offset (
 			builder, base, coerce (builder, index, native_int_type (builder)), false);

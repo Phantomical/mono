@@ -671,6 +671,62 @@ MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
 		            slot.type, slot.native);
 }
 
+/// Put the attributes on this function that ask for a tier-2 promotion counter:
+/// the threshold to count down from, and a symbol naming the record to promote.
+///
+/// No counter is emitted here. TierCounterPass writes it behind the profile
+/// instrumentation (passes/tier-counter.hpp), and these attributes are what
+/// select a function for that instrumentation, so they go on whether or not the
+/// threshold behind them ever fires.
+void
+MethodLLVMEmitter::mark_for_tier2_instrumentation ()
+{
+	if (!tier2_enabled ())
+		return;
+
+	// The domain is this thread's for the whole translation, so the record this
+	// finds is the one the code being written is for.
+	llvm::Expected<MonoDomainMethod *> record =
+		domain_method_get (mono_domain_get (), method);
+
+	if (!record) {
+		// A method that cannot be published cannot be promoted either, so it
+		// runs on without a counter.
+		llvm::consumeError (record.takeError ());
+		return;
+	}
+
+	std::string handle = "mono_tier_method_" + std::to_string ((uintptr_t) *record);
+
+	address_symbol (handle, *record);
+	function->addFnAttr (tier_counter_attribute, std::to_string (tier2_threshold ()));
+	function->addFnAttr (tier_handle_attribute, handle);
+}
+
+/// Give each clause's handler block the evaluation stack it begins with.
+///
+/// A handler is entered by the runtime rather than by anything in the IL, so
+/// what it starts holding is settled here and not by a predecessor. A catch or
+/// a filter is handed the exception. A finally or a fault gets nothing at all.
+llvm::Error
+MethodLLVMEmitter::seed_handler_entry_stacks (MonoIrBuilder &builder)
+{
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		MonoExceptionClause *clause = &clauses[i];
+		std::vector<Slot> entry;
+
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
+		    || clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
+			entry.push_back ({ spill_slot (0, llvm::PointerType::get (context (), 0)),
+			                   mono_get_object_type () });
+
+		if (auto error = enter_block (builder, clause->handler_offset, entry))
+			return error;
+	}
+
+	return llvm::Error::success ();
+}
+
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::emit ()
 {
@@ -779,11 +835,13 @@ MethodLLVMEmitter::emit ()
 
 	bool pinned_vars = emit_debug_var_marker (builder);
 
-	// This frame is described to something outside it in two ways: the localescape
-	// below, and the stackmap a finally marker carries. Both name a stack object as
-	// a single frame-pointer-relative offset, with no way to say which register
-	// that offset is relative to.
-	//
+	// Each of these hands a stack object to something outside the frame - the
+	// localescape below, or the stackmap a finally marker carries - as a single
+	// frame-pointer-relative offset, with no way to say which register that offset
+	// is relative to.
+	bool frame_offsets_escape =
+		has_filters || has_finally || pinned_vars || pinned_receiver;
+
 	// A realigned frame addresses its non-fixed objects off RSP instead. X86 then
 	// asserts on the stackmap ("Expected the FP as base register") and quietly
 	// emits the wrong offset for LOCAL_ESCAPE.
@@ -792,7 +850,7 @@ MethodLLVMEmitter::emit ()
 	// that ever realigns these frames is a vector spill slot the register
 	// allocator invented. Declining the realignment clamps that slot instead,
 	// at the cost of an unaligned move.
-	if (has_filters || has_finally || pinned_vars || pinned_receiver)
+	if (frame_offsets_escape)
 		function->addFnAttr ("no-realign-stack");
 
 	if (has_filters) {
@@ -821,46 +879,10 @@ MethodLLVMEmitter::emit ()
 			                      llvm::Twine ("abort_guard") + llvm::Twine (i));
 	}
 
-	// Only marked here: TierCounterPass writes the counter, behind the profile
-	// instrumentation - see passes/tier-counter.hpp. The mark is what selects a
-	// function for instrumentation, so it goes on whether or not the threshold
-	// behind it ever fires.
-	if (tier2_enabled ()) {
-		// The domain is this thread's for the whole translation, so the record
-		// this finds is the one the code being written is for.
-		llvm::Expected<MonoDomainMethod *> record =
-			domain_method_get (mono_domain_get (), method);
+	mark_for_tier2_instrumentation ();
 
-		if (!record) {
-			// A method that cannot be published cannot be promoted either, so
-			// it runs on without a counter.
-			llvm::consumeError (record.takeError ());
-		} else {
-			std::string handle =
-				"mono_tier_method_" + std::to_string ((uintptr_t) *record);
-
-			address_symbol (handle, *record);
-			function->addFnAttr (tier_counter_attribute,
-			                     std::to_string (tier2_threshold ()));
-			function->addFnAttr (tier_handle_attribute, handle);
-		}
-	}
-
-	// A handler is entered by the runtime rather than by anything in the IL. So what
-	// it starts holding is settled here, not by a predecessor. A catch or a filter
-	// is handed the exception. A finally or a fault gets nothing at all.
-	for (uint32_t i = 0; i < num_clauses; ++i) {
-		MonoExceptionClause *clause = &clauses[i];
-		std::vector<Slot> entry;
-
-		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
-		    || clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
-			entry.push_back ({ spill_slot (0, llvm::PointerType::get (context (), 0)),
-			                   mono_get_object_type () });
-
-		if (auto error = enter_block (builder, clause->handler_offset, entry))
-			return std::move (error);
-	}
+	if (auto error = seed_handler_entry_stacks (builder))
+		return std::move (error);
 
 	emit_profiler_enter (builder);
 
@@ -910,6 +932,32 @@ MethodLLVMEmitter::emit ()
 	return function;
 }
 
+/// Decode instructions from ip on until it lands on a block something reaches,
+/// or runs off the end of [begin, `end`), and leave ip there. The instructions
+/// walked over are not translated.
+///
+/// Dropping them loses no edge. mark_reachable_blocks () flags any block with a
+/// live predecessor, so a block that is not flagged has none, and an instruction
+/// under one is reached only by falling through from the block itself.
+llvm::Error
+MethodLLVMEmitter::skip_to_next_reachable_block (size_t end)
+{
+	while (ip < end) {
+		llvm::Expected<Flow> flow = decode_flow (ip);
+
+		if (!flow)
+			return flow.takeError ();
+
+		ip = flow->next;
+
+		if (auto live = blocks.find (ip);
+		    live != blocks.end () && live->second.reachable)
+			break;
+	}
+
+	return llvm::Error::success ();
+}
+
 /// Translate the IL in [`begin`, `end`), leaving the builder wherever the last
 /// instruction did.
 llvm::Error
@@ -940,24 +988,10 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			Block &next = found->second;
 
 			// Nothing reaches this block, so it has no entry stack to translate
-			// the body against. This skips ahead to the next block something
-			// does reach, and lets finish_function () mark this one
-			// `unreachable`. mark_reachable_blocks () flags anything with a
-			// live predecessor. An unreached block never had a fallthrough edge
-			// into it, so this skip drops nothing.
+			// the body against. finish_function () marks it `unreachable`.
 			if (!next.reachable) {
-				while (ip < end) {
-					llvm::Expected<Flow> flow = decode_flow (ip);
-
-					if (!flow)
-						return flow.takeError ();
-
-					ip = flow->next;
-
-					if (auto live = blocks.find (ip);
-					    live != blocks.end () && live->second.reachable)
-						break;
-				}
+				if (auto error = skip_to_next_reachable_block (end))
+					return error;
 
 				continue;
 			}
@@ -1049,7 +1083,9 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	function = llvm::Function::Create (
 		llvm::FunctionType::get (llvm::Type::getInt32Ty (context ()), false),
 		llvm::GlobalValue::ExternalLinkage,
-		parent->getName () + "$filter" + llvm::Twine (clause_index), module);
+		parent->getName () + llvm::StringRef (filter_body_suffix)
+			+ llvm::Twine (clause_index),
+		module);
 	// The chained frame pointer is how the parent frame is found.
 	function->addFnAttr ("frame-pointer", "all");
 	// call_filter enters with the stack 16-aligned, the opposite parity from a SysV

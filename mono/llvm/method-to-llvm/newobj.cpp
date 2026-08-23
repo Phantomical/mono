@@ -16,6 +16,35 @@
 
 namespace mono {
 
+/// Fails with a TypeLoadException when the delegate class has no Invoke method,
+/// or when Invoke's signature will not resolve, which is what a missing type in
+/// that signature looks like.
+///
+/// The runtime builds a delegate's invoke trampoline from Invoke's signature and
+/// crashes rather than reporting an error on either of those, so the check has
+/// to happen before the call runs. klass must be a delegate class; nothing here
+/// tests that.
+llvm::Error
+MethodLLVMEmitter::check_delegate_invoke (MonoClass *klass)
+{
+	ERROR_DECL (invoke_error);
+	MonoMethod *invoke = mono_get_delegate_invoke_internal (klass);
+
+	if (invoke == nullptr) {
+		char *name = mono_type_get_full_name (klass);
+
+		mono_error_set_type_load_class (invoke_error, klass,
+		                                "Delegate %s has no Invoke method", name);
+		g_free (name);
+		return runtime_error (invoke_error);
+	}
+
+	if (mono_method_signature_checked (invoke, invoke_error) == nullptr)
+		return runtime_error (invoke_error);
+
+	return llvm::Error::success ();
+}
+
 /*
  * III.4.21  newobj - create a new object
  *
@@ -97,30 +126,9 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 	MonoClass *klass = (*target)->klass;
 
-	/*
-	 * The runtime builds a delegate's invoke trampoline from Invoke's
-	 * signature, and crashes instead of reporting an error when Invoke is
-	 * missing or its signature will not resolve - which happens when Invoke
-	 * names a missing type. Checking here turns that crash into a
-	 * TypeLoadException before the call runs.
-	 */
-	if (m_class_get_parent (klass) == mono_defaults.multicastdelegate_class) {
-		ERROR_DECL (invoke_error);
-		MonoMethod *invoke = mono_get_delegate_invoke_internal (klass);
-
-		if (invoke == nullptr) {
-			char *name = mono_type_get_full_name (klass);
-
-			mono_error_set_type_load_class (invoke_error, klass,
-			                                "Delegate %s has no Invoke method",
-			                                name);
-			g_free (name);
-			return runtime_error (invoke_error);
-		}
-
-		if (mono_method_signature_checked (invoke, invoke_error) == nullptr)
-			return runtime_error (invoke_error);
-	}
+	if (m_class_get_parent (klass) == mono_defaults.multicastdelegate_class)
+		if (llvm::Error error = check_delegate_invoke (klass))
+			return error;
 
 	if (m_class_get_rank (klass) != 0)
 		return emit_array_newobj (builder, *target, sig);
@@ -305,6 +313,24 @@ mark_gc_allocator (llvm::FunctionCallee callee)
 	return callee;
 }
 
+/// Where operand i of an array constructor goes in mono_array_new_n_icall's
+/// buffer, and whether that operand is a lower bound.
+///
+/// The icall wants every lower bound first and every length after them. A
+/// constructor that takes both interleaves them instead, as a (bound, length)
+/// pair for each dimension, and that is the shape count == 2 * rank names. A
+/// constructor that takes lengths alone passes them straight through.
+std::pair<size_t, bool>
+bound_or_length_slot (size_t i, size_t count, size_t rank)
+{
+	if (count != 2 * rank)
+		return { i, false };
+
+	bool is_bound = i % 2 == 0;
+
+	return { is_bound ? i / 2 : rank + i / 2, is_bound };
+}
+
 } // namespace
 
 /// Handles the array shapes that construct through newobj instead of newarr:
@@ -364,12 +390,6 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 		result = emit_protected_call (builder, *allocate,
 		                              adapt_to_callee (builder, *allocate, args));
 	} else {
-		/*
-		 * mono_array_new_n_icall wants the lower bounds first and the lengths
-		 * after it. The constructor interleaves them per dimension instead, as
-		 * a (bound, length) pair. This loop deinterleaves that list on its way
-		 * into the buffer.
-		 */
 		MonoIrBuilder entry (entry_block, entry_block->begin ());
 		llvm::Type *buffer_type = llvm::ArrayType::get (word, count);
 		llvm::AllocaInst *buffer = entry.CreateAlloca (buffer_type);
@@ -377,9 +397,7 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 		buffer->setAlignment (llvm::Align (TARGET_SIZEOF_VOID_P));
 
 		for (size_t i = 0; i < count; ++i) {
-			bool is_bound = count == 2 * rank && i % 2 == 0;
-			size_t slot = count == 2 * rank ? (is_bound ? i / 2 : rank + i / 2)
-			                                : i;
+			auto [slot, is_bound] = bound_or_length_slot (i, count, rank);
 
 			// Bounds are signed. Lengths are not.
 			builder.CreateAlignedStore (

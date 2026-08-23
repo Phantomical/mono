@@ -94,9 +94,7 @@ ProfileInliner::materialize (Function &decl, Module &into)
 		return nullptr;
 	}
 
-	// A clause-bearing body needs its clauses merged into the caller's table;
-	// see materialize_trivial_callees ().
-	if (header->num_clauses != 0 || header->code_size > limit)
+	if (!is_small_and_clause_free (header, limit))
 		return nullptr;
 
 	if (!loses_its_frame_safely (callee, header))

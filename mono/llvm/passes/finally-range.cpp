@@ -17,6 +17,7 @@
 #include "../mono_lsda_format.hpp"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -128,6 +129,42 @@ transfer (MachineBasicBlock &mbb, int clause, bool in)
 	return state;
 }
 
+/// Whether mbb is entered inside clause's body, read off where its predecessors
+/// leave. Nothing at all when no predecessor has been solved yet, which leaves
+/// mbb itself unsolved for this round.
+///
+/// out_body says where each block leaves, and known which blocks have an answer
+/// yet. Only a solved predecessor is read, and the answer is agreement between
+/// the ones that are: a block reached both from inside the body and from outside
+/// it is not reliably either, and counts as outside.
+///
+/// Predecessors do disagree, which BranchFolding causes by merging a body's tail
+/// with an identical tail elsewhere - a real shape, not a broken invariant.
+/// Calling such a block outside the body makes an abort inside the finally
+/// arrive a little early. Calling it inside can defer an abort for a frame that
+/// was never in the finally at all, leaving nothing to rethrow it.
+std::optional<bool>
+starts_inside_body (const MachineBasicBlock &mbb,
+                    const DenseMap<const MachineBasicBlock *, bool> &known,
+                    const DenseMap<const MachineBasicBlock *, bool> &out_body)
+{
+	std::optional<bool> inside;
+
+	for (const MachineBasicBlock *pred : mbb.predecessors ()) {
+		if (!known.lookup (pred))
+			continue;
+
+		bool pred_leaves_inside = out_body.lookup (pred);
+
+		if (!inside)
+			inside = pred_leaves_inside;
+		else if (*inside != pred_leaves_inside)
+			inside = false;
+	}
+
+	return inside;
+}
+
 /// Fills in_body with whether each block starts inside clause's handler body.
 void
 solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool> &in_body)
@@ -150,30 +187,10 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 
 			if (&mbb == &mf.front ()) {
 				have = true;
-			} else {
-				/*
-				 * The meet across predecessors is agreement: a block reached
-				 * from both inside clause's body and from outside it is not
-				 * reliably either.
-				 *
-				 * Predecessors can disagree here, which BranchFolding causes
-				 * by merging a body's tail with an identical tail elsewhere -
-				 * a real shape, not a broken invariant. A disputed block is
-				 * treated as outside the body: worst case, an abort inside
-				 * the finally arrives a little early. The alternative can
-				 * defer an abort for a frame that was never in the finally at
-				 * all, with nothing left to rethrow it.
-				 */
-				for (MachineBasicBlock *pred : mbb.predecessors ()) {
-					if (!known[pred])
-						continue;
-					if (!have) {
-						in = out_body[pred];
-						have = true;
-					} else if (in != out_body[pred]) {
-						in = false;
-					}
-				}
+			} else if (std::optional<bool> inside =
+			                   starts_inside_body (mbb, known, out_body)) {
+				in = *inside;
+				have = true;
 			}
 
 			bool out = transfer (mbb, clause, in);

@@ -14,6 +14,11 @@ namespace mono {
 
 namespace {
 
+/// The continuation a finally handler is entered with when it was reached by
+/// unwinding. Its endfinally then resumes that unwind rather than branching
+/// anywhere in this method.
+constexpr uint32_t entered_by_unwinding = 0;
+
 llvm::FunctionCallee
 throw_decl (llvm::Module *module, const char *name)
 {
@@ -215,7 +220,7 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 	MonoIrBuilder prep (enter);
 
 	if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
-		enter_finally (prep, clause, 0);
+		enter_finally (prep, clause, entered_by_unwinding);
 	} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT
 	           && !handler.entry.empty ()) {
 		prep.CreateStore (exc, handler.entry[0].alloca);
@@ -336,9 +341,8 @@ MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 
 /// Record how the clause's handler is entered, before jumping to it.
 ///
-/// \param continuation  what the handler's endfinally switches on. Zero means the
-///                      handler was entered by unwinding, which resumes that unwind
-///                      when it ends.
+/// \param continuation  what the handler's endfinally switches on. See
+///                      entered_by_unwinding for the one reserved value.
 void
 MethodLLVMEmitter::enter_finally (MonoIrBuilder &builder, uint32_t clause,
                                   uint32_t continuation)
@@ -633,6 +637,96 @@ MethodLLVMEmitter::emit_rethrow (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/// Emits the guard a leave carries on its way out of a catch handler: ask the
+/// runtime for a pending undeniable exception, and rethrow it when there is one.
+/// Control carries on in a new block either way.
+///
+/// Emits nothing at all when the leave being translated does not exit a catch
+/// handler, and nothing in a runtime-invoke wrapper, whose native callers expect
+/// the wrapper to catch everything.
+///
+/// A thread abort raised for an appdomain unload survives ResetAbort. Rethrowing
+/// at every catch exit stops a handler from swallowing it and keeping the thread
+/// in the dying domain.
+llvm::Error
+MethodLLVMEmitter::emit_undeniable_exception_rethrow (MonoIrBuilder &builder)
+{
+	if (method->wrapper_type == MONO_WRAPPER_RUNTIME_INVOKE)
+		return llvm::Error::success ();
+
+	bool leaving_catch = false;
+
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		MonoExceptionClause *clause = &clauses[i];
+
+		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
+		    && MONO_OFFSET_IN_HANDLER (clause, offset)
+		    && ip <= (size_t) clause->handler_offset + clause->handler_len) {
+			leaving_catch = true;
+			break;
+		}
+	}
+
+	if (!leaving_catch)
+		return llvm::Error::success ();
+
+	/*
+	 * This goes through the icall wrapper rather than a bare call. The runtime
+	 * answers by walking the stack from the last LMF. The wrapper's own LMF is
+	 * what starts that walk here, instead of at whichever frame saved one last.
+	 */
+	llvm::Expected<llvm::Function *> undeniable =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_thread_get_undeniable_exception);
+
+	if (!undeniable)
+		return undeniable.takeError ();
+
+	llvm::Value *pending = emit_protected_call (
+		builder, *undeniable, adapt_to_callee (builder, *undeniable, {}));
+
+	llvm::BasicBlock *rethrow = create_cold_block ("rethrow_undeniable");
+	llvm::BasicBlock *carry_on =
+		llvm::BasicBlock::Create (context (), "no_undeniable", function);
+
+	builder.CreateCondBr (builder.CreateIsNotNull (pending), rethrow, carry_on);
+
+	MonoIrBuilder thrower (rethrow);
+	emit_unwinding_call (thrower, throw_decl (module, "mono_llvm_throw_exception"),
+	                     {pending});
+	builder.SetInsertPoint (carry_on);
+	return llvm::Error::success ();
+}
+
+/// The finally clauses a leave from the current offset to target has to run,
+/// innermost first: every one whose try region the leave is inside and target is
+/// not.
+///
+/// A fault does not belong in the chain. It runs only when something went wrong,
+/// and a leave is an ordinary exit.
+std::vector<uint32_t>
+MethodLLVMEmitter::finally_chain_to (size_t target) const
+{
+	std::vector<uint32_t> chain;
+
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		MonoExceptionClause *clause = &clauses[i];
+
+		if (clause->flags != MONO_EXCEPTION_CLAUSE_FINALLY)
+			continue;
+		if (!MONO_OFFSET_IN_CLAUSE (clause, offset)
+		    || MONO_OFFSET_IN_CLAUSE (clause, target))
+			continue;
+
+		chain.push_back (i);
+	}
+
+	std::sort (chain.begin (), chain.end (), [&] (uint32_t a, uint32_t b) {
+		return clauses[a].try_len < clauses[b].try_len;
+	});
+
+	return chain;
+}
+
 /*
  * III.3.46  leave.<length> - exit a protected region of code
  *
@@ -664,79 +758,10 @@ MethodLLVMEmitter::emit_leave (MonoIrBuilder &builder, int32_t displacement)
 	if (!target)
 		return target.takeError ();
 
-	/*
-	 * When a leave exits a catch handler, it asks the runtime whether an
-	 * undeniable exception is pending, and rethrows it if so. A thread abort
-	 * raised for an appdomain unload survives ResetAbort. A rethrow at every
-	 * catch exit stops a handler from swallowing it and keeping the thread in
-	 * the dying domain.
-	 *
-	 * This does not happen in runtime-invoke wrappers, whose native callers
-	 * expect the wrapper to catch everything.
-	 */
-	bool leaving_catch = false;
+	if (llvm::Error error = emit_undeniable_exception_rethrow (builder))
+		return error;
 
-	for (uint32_t i = 0; i < num_clauses; ++i) {
-		MonoExceptionClause *clause = &clauses[i];
-
-		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
-		    && MONO_OFFSET_IN_HANDLER (clause, offset)
-		    && ip <= (size_t) clause->handler_offset + clause->handler_len) {
-			leaving_catch = true;
-			break;
-		}
-	}
-
-	if (leaving_catch && method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE) {
-		/*
-		 * This goes through the icall wrapper rather than a bare call. The
-		 * runtime answers by walking the stack from the last LMF. The
-		 * wrapper's own LMF is what starts that walk here, instead of at
-		 * whichever frame saved one last.
-		 */
-		llvm::Expected<llvm::Function *> undeniable = icall_wrapper_decl (
-			MONO_JIT_ICALL_mono_thread_get_undeniable_exception);
-
-		if (!undeniable)
-			return undeniable.takeError ();
-
-		llvm::Value *pending = emit_protected_call (
-			builder, *undeniable, adapt_to_callee (builder, *undeniable, {}));
-
-		llvm::BasicBlock *rethrow = create_cold_block ("rethrow_undeniable");
-		llvm::BasicBlock *carry_on = llvm::BasicBlock::Create (
-			context (), "no_undeniable", function);
-
-		builder.CreateCondBr (builder.CreateIsNotNull (pending), rethrow, carry_on);
-
-		MonoIrBuilder thrower (rethrow);
-		emit_unwinding_call (thrower, throw_decl (module, "mono_llvm_throw_exception"),
-		                     {pending});
-		builder.SetInsertPoint (carry_on);
-	}
-
-	/*
-	 * The chain collects every finally whose try region we are inside but the
-	 * target is not, innermost first. A fault does not belong in the chain: it
-	 * runs only when something went wrong, and a leave is an ordinary exit.
-	 */
-	std::vector<uint32_t> chain;
-
-	for (uint32_t i = 0; i < num_clauses; ++i) {
-		MonoExceptionClause *clause = &clauses[i];
-
-		if (clause->flags != MONO_EXCEPTION_CLAUSE_FINALLY)
-			continue;
-		if (!MONO_OFFSET_IN_CLAUSE (clause, offset)
-		    || MONO_OFFSET_IN_CLAUSE (clause, *target))
-			continue;
-
-		chain.push_back (i);
-	}
-
-	std::sort (chain.begin (), chain.end (), [&] (uint32_t a, uint32_t b) {
-		return clauses[a].try_len < clauses[b].try_len;
-	});
+	std::vector<uint32_t> chain = finally_chain_to (*target);
 
 	/* leave empties the stack, so nothing must reach either the finally or the target. */
 	pop_stack (stack.size ());

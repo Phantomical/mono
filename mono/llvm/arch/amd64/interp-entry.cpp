@@ -215,6 +215,12 @@ place_parameter (Type *param, bool byref, Assigner &assign, const DataLayout &dl
 	return plan;
 }
 
+/// How many registers of each file a return value's leaves can be spread over.
+///
+/// A scalar float comes back in XMM0 or XMM1 and nowhere else, so the two SSE
+/// counts run out at different points even though they share the register file.
+constexpr unsigned ret_gregs = 3, ret_scalar_fregs = 2, ret_vector_fregs = 4;
+
 /// Where each leaf of a return value comes back.
 Expected<ReturnPlan>
 place_return (Type *ret, const DataLayout &dl)
@@ -238,12 +244,8 @@ place_return (Type *ret, const DataLayout &dl)
 		piece.width = (uint8_t) dl.getTypeStoreSize (leaf.type).getFixedValue ();
 
 		if (rides_sse (leaf.type)) {
-			/*
-			 * A scalar float comes back in XMM0 or XMM1 and nowhere else, two
-			 * fewer than the four a vector return can draw on, so the two run
-			 * out at different points even though they share the file.
-			 */
-			unsigned available = leaf.type->isVectorTy () ? 4 : 2;
+			unsigned available =
+				leaf.type->isVectorTy () ? ret_vector_fregs : ret_scalar_fregs;
 
 			if (fregs >= available)
 				return unsupported ("a return with more SSE parts than there "
@@ -251,7 +253,7 @@ place_return (Type *ret, const DataLayout &dl)
 			piece.file = ArgPiece::File::Freg;
 			piece.at = fregs++;
 		} else {
-			if (gregs >= 3)
+			if (gregs >= ret_gregs)
 				return unsupported ("a return with more integer parts than "
 				                    "there are registers for them");
 			piece.file = ArgPiece::File::Greg;
@@ -266,6 +268,10 @@ place_return (Type *ret, const DataLayout &dl)
 	return plan;
 }
 
+/// What every gathered value is aligned to. A value type with a vector field
+/// wants this much.
+constexpr uint64_t scratch_alignment = 16;
+
 /// Give every value that has to be gathered somewhere to be gathered, and say
 /// how much room that takes altogether.
 uint32_t
@@ -275,8 +281,7 @@ lay_out_scratch (InterpEntryLayout &layout)
 	auto reserve = [&at] (uint32_t size) {
 		uint32_t here = at;
 
-		// 16, because a value type with a vector field wants that much.
-		at = (uint32_t) alignTo (at + std::max (size, 1u), 16);
+		at = (uint32_t) alignTo (at + std::max (size, 1u), scratch_alignment);
 		return here;
 	};
 

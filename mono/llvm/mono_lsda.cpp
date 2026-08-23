@@ -227,6 +227,62 @@ append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
 	}
 }
 
+/// One published entry's [start, end) invoke range.
+struct RangeOff {
+	std::uint64_t start;
+	std::uint64_t end;
+};
+
+/// Whether every pair of ranges is either exactly equal or fully disjoint, which
+/// is the only shape a published array may have.
+///
+///   - Sibling catches share one pad over one invoke range, so they publish
+///     several entries with identical try_start_off and try_len. The runtime
+///     matches the shared PC range for each, then picks by catch_class.
+///   - A try with N protected calls yields N disjoint ranges, one per call.
+///   - An enclosing entry copies its chain's exact range. Nesting is encoded by
+///     same-range entries plus array order, never by a nested extent.
+///
+/// So a partial overlap, or strict nesting like [0x10,0x40) containing
+/// [0x20,0x30), means a genuine crossing from malformed IL or a producer bug. It
+/// leaves the runtime's first match ambiguous. Such ranges are never exactly
+/// equal, so this declines them. The cost is O(n^2) over the handful of ranges a
+/// method has.
+static bool
+ranges_equal_or_disjoint (const std::vector<RangeOff> &ranges)
+{
+	for (std::size_t i = 0; i < ranges.size (); ++i)
+		for (std::size_t j = 0; j < i; ++j)
+			if (ranges_overlap (ranges[i].start, ranges[i].end,
+			                    ranges[j].start, ranges[j].end)
+			    && !(ranges[i].start == ranges[j].start
+			         && ranges[i].end == ranges[j].end))
+				return false;
+
+	return true;
+}
+
+/// Writes into resume_pad, at the entry's clause index, where that clause's
+/// resume trampoline unwinds to once the cleanup has run. The chaining in
+/// build_ex_info_entries () routes the rest of a chain through that pad.
+///
+/// The caller publishes no MonoJitExceptionInfo for such an entry. Its range
+/// only covers the resume trampoline's call site, which cannot throw back into
+/// this frame.
+static void
+record_resume_pad (const MonoLsdaEntry &e, const MonoExceptionClause *clauses,
+                   const std::uint8_t *native_code, std::vector<gpointer> &resume_pad)
+{
+	// Only a cleanup resumes. emit_endfinally () is the only caller of
+	// emit_resume_exit () (method-to-llvm/exceptions.cpp), so the flags can only
+	// be FINALLY or FAULT.
+	g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+	          clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FAULT);
+
+	resume_pad[e.clause_index] =
+		(gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
+}
+
 static bool
 build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
                        const MonoExceptionClause *clauses, int num_clauses,
@@ -283,19 +339,8 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		// broke, not that the IL is bad.
 		g_assert (num_clauses > 0 && e.clause_index < static_cast<std::uint32_t> (num_clauses));
 
-		// A cleanup's resume pad. Record it for the chaining below and publish
-		// nothing: its range only covers the resume trampoline's call site,
-		// which cannot throw back into this frame.
 		if (e.kind == MONO_LSDA_KIND_RESUME_PAD) {
-			const MonoExceptionClause &rc = clauses[e.clause_index];
-
-			// Only a cleanup resumes. emit_endfinally () is the only caller of
-			// emit_resume_exit () (method-to-llvm/exceptions.cpp), so rc.flags
-			// can only be FINALLY or FAULT.
-			g_assert (rc.flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
-			         rc.flags == MONO_EXCEPTION_CLAUSE_FAULT);
-
-			resume_pad[e.clause_index] = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
+			record_resume_pad (e, clauses, native_code, resume_pad);
 			continue;
 		}
 
@@ -328,9 +373,6 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 	if (dispatch.empty ())
 		return true;
 
-	// Each published entry's [start, end) invoke range, so the equal-or-disjoint
-	// check below can run over the final array.
-	struct RangeOff { std::uint64_t start; std::uint64_t end; };
 	std::vector<RangeOff> ranges;
 
 	out.reserve (dispatch.size ());
@@ -403,34 +445,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		i = end;
 	}
 
-	/*
-	 * Equal-or-disjoint invariant over the published array. Ranges can repeat
-	 * exactly, and they can be disjoint. Anything in between is illegal.
-	 *
-	 *   - Sibling catches share one pad over one invoke range, so they publish
-	 *     several entries with identical try_start_off and try_len. The runtime
-	 *     matches the shared PC range for each, then picks by catch_class.
-	 *   - A try with N protected calls yields N disjoint ranges, one per call.
-	 *   - An enclosing entry copies its chain's exact range. Nesting is encoded
-	 *     by same-range entries plus array order, never by a nested extent.
-	 *
-	 * So a partial overlap, or strict nesting like [0x10,0x40) containing
-	 * [0x20,0x30), means a genuine crossing from malformed IL or a producer bug.
-	 * It leaves the runtime's first match ambiguous. Such ranges are never
-	 * exactly equal, so this check declines them. The cost is O(n^2) over the
-	 * handful of ranges a method has.
-	 */
-	for (std::size_t i = 0; i < ranges.size (); ++i) {
-		for (std::size_t j = 0; j < i; ++j) {
-			if (ranges_overlap (ranges[i].start, ranges[i].end,
-			                    ranges[j].start, ranges[j].end) &&
-			    !(ranges[i].start == ranges[j].start &&
-			      ranges[i].end == ranges[j].end)) /* equal ranges are fine: siblings or enclosers */
-				return false;
-		}
-	}
-
-	return true;
+	return ranges_equal_or_disjoint (ranges);
 }
 
 bool

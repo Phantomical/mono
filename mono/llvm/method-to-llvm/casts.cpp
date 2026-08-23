@@ -409,24 +409,29 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
 		llvm::Align (TARGET_SIZEOF_VOID_P), "obj_vtable");
 
+	// The word holds the vtable that last answered here, with bit 0 set when that
+	// answer was no. Only isinst caches a no; castclass throws instead, so its
+	// word is the pointer on its own.
 	llvm::Value *cached_word = builder.CreatePtrToInt (cached, word);
-	llvm::Value *key = throw_on_fail
-		? cached_word
-		: builder.CreateAnd (cached_word,
-	                             llvm::ConstantInt::get (word, ~(uint64_t) 1));
+	llvm::Value *cached_vtable =
+		throw_on_fail ? cached_word
+		              : builder.CreateAnd (cached_word,
+		                                   llvm::ConstantInt::get (word, ~(uint64_t) 1));
 
 	builder.CreateCondBr (
-		builder.CreateICmpEQ (key, builder.CreatePtrToInt (vtable, word)), hit, miss);
+		builder.CreateICmpEQ (cached_vtable, builder.CreatePtrToInt (vtable, word)),
+		hit, miss);
 
 	builder.SetInsertPoint (hit);
 
 	llvm::Value *answer = obj.value;
 
-	if (!throw_on_fail)
-		// Bit 0 records that this vtable failed the test here before.
-		answer = builder.CreateSelect (
-			builder.CreateTrunc (cached_word, builder.getInt1Ty ()), null,
-			obj.value);
+	if (!throw_on_fail) {
+		llvm::Value *answered_no =
+			builder.CreateTrunc (cached_word, builder.getInt1Ty (), "answered_no");
+
+		answer = builder.CreateSelect (answered_no, null, obj.value);
+	}
 
 	builder.CreateBr (done);
 

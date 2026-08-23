@@ -121,6 +121,45 @@ mark_unlikely (BranchInst *branch)
 	branch->setMetadata (LLVMContext::MD_prof, md.createBranchWeights (1, 1000));
 }
 
+/// Takes a one-dimensional array's lower bound off index and returns the result.
+///
+/// This branches, so it leaves the builder in a new block rather than the one it
+/// was given. The blocks it makes are inserted in front of continuation, which is
+/// where the rest of the lowering goes.
+///
+/// The runtime allocates a one-dimensional array whose lower bound is zero with
+/// no bounds vector at all, so an absent vector means a lower bound of zero.
+Value *
+subtract_lower_bound (IRBuilder<> &b, Value *array, Value *index,
+                      const AddressSpec &spec, BasicBlock *continuation)
+{
+	LLVMContext &ctx = b.getContext ();
+	Function *fn = b.GetInsertBlock ()->getParent ();
+	Type *i32 = b.getInt32Ty ();
+	Value *bounds = b.CreateAlignedLoad (
+		PointerType::get (ctx, 0),
+		b.CreateInBoundsGEP (b.getInt8Ty (), array, b.getInt64 (spec.bounds_offset)),
+		Align (sizeof (void *)));
+	BasicBlock *from = b.GetInsertBlock ();
+	BasicBlock *have = BasicBlock::Create (ctx, "array_addr_lb", fn, continuation);
+	BasicBlock *merge = BasicBlock::Create (ctx, "array_addr_idx", fn, continuation);
+
+	b.CreateCondBr (b.CreateIsNull (bounds), merge, have);
+
+	IRBuilder<> hb (have);
+	Value *lower = hb.CreateZExtOrTrunc (
+		load_field (hb, bounds, spec.lower_bound_offset, spec.lower_bound_bytes), i32);
+
+	hb.CreateBr (merge);
+	b.SetInsertPoint (merge);
+
+	PHINode *bound = b.CreatePHI (i32, 2);
+
+	bound->addIncoming (b.getInt32 (0), from);
+	bound->addIncoming (lower, have);
+	return b.CreateSub (index, bound);
+}
+
 void
 lower_call (CallBase *site, const AddressSpec &spec)
 {
@@ -152,40 +191,8 @@ lower_call (CallBase *site, const AddressSpec &spec)
 	if (!spec.bounded || spec.rank == 1) {
 		linear = b.CreateZExtOrTrunc (site->getArgOperand (1), i32);
 
-		if (spec.bounded) {
-			/*
-			 * The runtime allocates a one-dimensional array whose lower
-			 * bound is zero without a bounds vector at all. Absent bounds
-			 * mean a lower bound of zero.
-			 */
-			Value *bounds = b.CreateAlignedLoad (
-				PointerType::get (ctx, 0),
-				b.CreateInBoundsGEP (b.getInt8Ty (), array,
-			                             b.getInt64 (spec.bounds_offset)),
-				Align (sizeof (void *)));
-			BasicBlock *from = b.GetInsertBlock ();
-			BasicBlock *have =
-				BasicBlock::Create (ctx, "array_addr_lb", fn, cont);
-			BasicBlock *merge =
-				BasicBlock::Create (ctx, "array_addr_idx", fn, cont);
-
-			b.CreateCondBr (b.CreateIsNull (bounds), merge, have);
-
-			IRBuilder<> hb (have);
-			Value *lower = hb.CreateZExtOrTrunc (
-				load_field (hb, bounds, spec.lower_bound_offset,
-			                    spec.lower_bound_bytes),
-				i32);
-
-			hb.CreateBr (merge);
-			b.SetInsertPoint (merge);
-
-			PHINode *bound = b.CreatePHI (i32, 2);
-
-			bound->addIncoming (b.getInt32 (0), from);
-			bound->addIncoming (lower, have);
-			linear = b.CreateSub (linear, bound);
-		}
+		if (spec.bounded)
+			linear = subtract_lower_bound (b, array, linear, spec, cont);
 
 		Value *length =
 			load_field (b, array, spec.max_length_offset, spec.max_length_bytes);

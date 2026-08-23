@@ -278,17 +278,16 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 {
 	llvm::Align align = access_alignment (location);
 	/*
-	 * Only a plain scalar store can carry the release itself. A reference goes
-	 * through the write barrier, which does the store inside the call, and a
-	 * value class is a copy rather than one instruction. Neither is a single
-	 * access that can hold an ordering, so both order with a fence.
+	 * A reference goes through the write barrier, which does the store inside the
+	 * call, and a value class is a copy rather than one instruction. Neither is a
+	 * single access that can hold an ordering, so both order with a fence.
 	 */
-	bool atomic = prefixes.volatile_ && !mini_type_is_reference (location)
-	              && !held_in_memory (location)
-	              && can_access_atomically (value->getType (), align);
+	bool store_carries_ordering = prefixes.volatile_ && !mini_type_is_reference (location)
+	                              && !held_in_memory (location)
+	                              && can_access_atomically (value->getType (), align);
 
 	/* A volatile write has release semantics (I.12.6.7). */
-	if (prefixes.volatile_ && !atomic)
+	if (prefixes.volatile_ && !store_carries_ordering)
 		builder.CreateFence (llvm::AtomicOrdering::Release);
 
 	/*
@@ -332,7 +331,7 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 
 	if (prefixes.volatile_) {
 		store->setVolatile (true);
-		if (atomic)
+		if (store_carries_ordering)
 			store->setAtomic (llvm::AtomicOrdering::Release);
 	}
 

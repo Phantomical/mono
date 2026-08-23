@@ -51,6 +51,18 @@ static Expected<Compiled> publish_body (const TranslationTarget &target, MonoMet
                                         const SeqPointGraph &seq_points,
                                         MonoJitInfo **published);
 
+/// Whether method is one of an array type's Get, Set or Address accessors.
+///
+/// These have no body and no icall - every call site lowers them inline - so
+/// compiling the method itself means compiling its marshal wrapper instead.
+static bool
+is_array_accessor (MonoMethod *method)
+{
+	return m_class_get_rank (method->klass) > 0
+	       && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
+	       && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE);
+}
+
 static DumpPoint
 optimized_ir_point (JitTier tier)
 {
@@ -111,15 +123,8 @@ translate_and_compile (const TranslationTarget &target, MonoMethod *method,
 {
 	*published = nullptr;
 
-	/*
-	 * Array Get/Set/Address have no body and no icall - every call site
-	 * lowers them inline. The marshal wrapper is the compilable form for
-	 * runtime paths that need the method itself. Its inner call to the
-	 * accessor lowers the same way.
-	 */
-	if (m_class_get_rank (method->klass) > 0
-	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
-	    && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+	/* The wrapper's own inner call to the accessor lowers inline as any other. */
+	if (is_array_accessor (method))
 		method = mono_marshal_get_array_accessor_wrapper (method);
 
 	if (implemented_outside_il (method)) {
@@ -305,19 +310,16 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 {
 	perf::dump_method (method, compiled);
 
-	/*
-	 * Filter bodies were compiled alongside the method as `<entry>$filter<i>`.
-	 * Their entries go into the published clauses.
-	 */
+	/* A filter body's entry goes into the published clauses. */
 	std::vector<std::pair<uint32_t, void *>> filters;
 
 	for (const auto &[name, extent] : compiled.functions) {
-		size_t at = name.rfind ("$filter");
+		size_t at = name.rfind (filter_body_suffix);
 
 		if (at == std::string::npos)
 			continue;
 		filters.emplace_back (
-			(uint32_t) std::stoul (name.substr (at + 7)),
+			(uint32_t) std::stoul (name.substr (at + filter_body_suffix.size ())),
 			const_cast<uint8_t *> (extent.first));
 	}
 
@@ -364,7 +366,7 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 	};
 
 	for (const auto &[name, extent] : compiled.functions) {
-		if (name.find ("$filter") == std::string::npos)
+		if (name.find (filter_body_suffix) == std::string::npos)
 			continue;
 
 		std::vector<IlLineRow> lines;
@@ -446,11 +448,8 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		if (implemented_outside_il (method) || method->dynamic)
 			return one_by_one ();
 
-		// An array accessor is compiled as its marshal wrapper, which is a
-		// method of its own.
-		if (m_class_get_rank (method->klass) > 0
-		    && (method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL)
-		    && (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
+		// The wrapper it compiles as is a method of its own.
+		if (is_array_accessor (method))
 			return one_by_one ();
 	}
 

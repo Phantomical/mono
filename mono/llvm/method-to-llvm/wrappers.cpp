@@ -125,6 +125,16 @@ MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
 	builder.CreateAlignedStore (previous, lmf_addr, align);
 }
 
+/// Whether the icall was registered with no wrapper in front of it.
+///
+/// Registration marks one by setting `wrapper` to `func`, so both fields name
+/// the same raw C entry point.
+static bool
+icall_has_no_wrapper (const MonoJitICallInfo *info)
+{
+	return info->wrapper != nullptr && info->wrapper == info->func;
+}
+
 /*
  * III.F0.00  mono_icall - call one of the runtime's own entry points
  *
@@ -137,10 +147,9 @@ MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
  * A raw call leaves the exception pending until some later, unrelated
  * checkpoint. By then, the frames able to catch it no longer exist.
  *
- * Registration decides which icalls are the exception. An icall registered
- * to avoid a wrapper has `wrapper` set to `func`, so there is no wrapper to
- * call. Those icalls must be called raw: mono_threads_attach_coop, for
- * example, runs on a thread that cannot execute managed code yet.
+ * Registration decides which icalls are the exception. Those must be called
+ * raw: mono_threads_attach_coop, for example, runs on a thread that cannot
+ * execute managed code yet.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
@@ -158,7 +167,7 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 
 	llvm::Value *result;
 
-	if (info->wrapper != nullptr && info->wrapper == info->func) {
+	if (icall_has_no_wrapper (info)) {
 		llvm::Expected<llvm::FunctionType *> type =
 			convert_method_signature (info->sig, info->sig->pinvoke);
 		if (!type)

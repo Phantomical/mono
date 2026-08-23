@@ -35,6 +35,51 @@ using namespace llvm;
 
 namespace mono {
 
+/// Read the IL clause index and the clause kind back out of the type_info_N
+/// global a landing pad's TypeId names. Returns false when it does not decode.
+///
+/// mono smuggles both through the clause's ttype entry, so they are recovered
+/// in-process, with no ttype-table deref and no relocation dependency.
+///
+/// The v2 form is a 2-word {i32 clause_index, i32 kind} struct (clause_marker (),
+/// method-to-llvm/exceptions.cpp). A bare i32 ConstantInt is the legacy 1-word
+/// form, clause_index alone with kind 0, and is still accepted. An all-zero
+/// struct lowers to ConstantAggregateZero, which is not a ConstantStruct, so the
+/// two words are read with Constant::getAggregateElement.
+static bool
+decode_clause_marker (const GlobalValue *gv, int &clause_index, int &kind)
+{
+	const auto *var = dyn_cast_or_null<GlobalVariable> (gv);
+
+	if (var == nullptr || !var->hasInitializer ())
+		return false;
+
+	const Constant *init = var->getInitializer ();
+
+	if (const auto *ci = dyn_cast<ConstantInt> (init)) {
+		clause_index = (int) ci->getSExtValue ();
+		kind = 0;
+		return true;
+	}
+
+	auto *st = dyn_cast<StructType> (init->getType ());
+
+	if (st == nullptr || st->getNumElements () != 2)
+		return false;
+
+	const auto *ci0 =
+		dyn_cast_or_null<ConstantInt> (init->getAggregateElement ((unsigned) 0));
+	const auto *ci1 =
+		dyn_cast_or_null<ConstantInt> (init->getAggregateElement ((unsigned) 1));
+
+	if (ci0 == nullptr || ci1 == nullptr)
+		return false;
+
+	clause_index = (int) ci0->getSExtValue ();
+	kind = (int) ci1->getZExtValue ();
+	return true;
+}
+
 bool
 MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 {
@@ -204,51 +249,11 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 				clause.try_end = end;
 				clause.handler = handler;
 
-				/*
-				 * mono's clause smuggling: TypeIds are 1-based indices
-				 * into getTypeInfos (). The referenced type_info_N
-				 * global's initializer carries the IL clause index and
-				 * the clause's flags (kind). We recover both
-				 * in-process, with no ttype-table deref and no
-				 * relocation dependency.
-				 *
-				 * v2 form: a 2-word {i32 clause_index, i32 kind}
-				 * struct (clause_marker (),
-				 * method-to-llvm/exceptions.cpp). A bare i32
-				 * ConstantInt is the legacy 1-word form (clause_index
-				 * only, kind stays 0) and is still accepted. An
-				 * all-zero struct lowers to ConstantAggregateZero, so
-				 * the two words are read with
-				 * Constant::getAggregateElement, not
-				 * dyn_cast<ConstantStruct>, which a zero aggregate is
-				 * not.
-				 */
-				if ((size_t) type_id <= type_infos.size ()) {
-					const GlobalValue *gv = type_infos[type_id - 1];
-					if (const auto *var = dyn_cast_or_null<GlobalVariable> (gv)) {
-						if (var->hasInitializer ()) {
-							const Constant *init = var->getInitializer ();
-							if (const auto *ci = dyn_cast<ConstantInt> (init)) {
-								clause.clause_index = (int) ci->getSExtValue ();
-								clause.kind = 0;
-								clause.clause_resolved = true;
-							} else if (auto *st =
-							               dyn_cast<StructType> (init->getType ())) {
-								if (st->getNumElements () == 2) {
-									const auto *ci0 = dyn_cast_or_null<ConstantInt> (
-									        init->getAggregateElement ((unsigned) 0));
-									const auto *ci1 = dyn_cast_or_null<ConstantInt> (
-									        init->getAggregateElement ((unsigned) 1));
-									if (ci0 && ci1) {
-										clause.clause_index = (int) ci0->getSExtValue ();
-										clause.kind = (int) ci1->getZExtValue ();
-										clause.clause_resolved = true;
-									}
-								}
-							}
-						}
-					}
-				}
+				// TypeIds are 1-based indices into getTypeInfos ().
+				if ((size_t) type_id <= type_infos.size ())
+					clause.clause_resolved = decode_clause_marker (
+						type_infos[type_id - 1], clause.clause_index,
+						clause.kind);
 				/*
 				 * type_info_N is a global we emit (clause_marker (),
 				 * method-to-llvm/exceptions.cpp) with a fixed, known

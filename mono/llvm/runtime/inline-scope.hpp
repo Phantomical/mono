@@ -67,6 +67,15 @@ struct InlineScope {
 /// does not answer.
 bool may_fold (MonoDomain *domain, MonoMethod *callee);
 
+/// Whether a body of this shape can be translated in as an inline copy: no
+/// clauses at all, and at most il_limit bytes of IL.
+///
+/// The clause half is correctness. Folding a clause-bearing body in would need
+/// its clauses merged into the caller's table, which neither inliner does. The
+/// size half is cost, and each inliner passes its own limit, so that half of the
+/// answer is about the caller that asked rather than about the callee alone.
+bool is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit);
+
 uint32_t il_read_u32 (const unsigned char *at);
 
 /// Returns the method a call site's token names, or null when the metadata

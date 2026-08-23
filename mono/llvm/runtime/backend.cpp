@@ -837,6 +837,12 @@ struct Member {
 
 } // namespace
 
+bool
+MonoBackend::answered_by_sharing (llvm::Expected<Compiled> &result)
+{
+	return (bool) result || !result.errorIsA<SharingRefusal> ();
+}
+
 std::vector<llvm::Expected<MonoBackend::Compiled>>
 MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMethod *> dms,
                              MonoTier tier, bool for_sharing)
@@ -885,13 +891,12 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 
 		llvm::Expected<Compiled> body = enter_shared_body (domain, *dm, shared, tier);
 
-		if (body || !body.errorIsA<SharingRefusal> ()) {
+		if (answered_by_sharing (body)) {
 			settled.emplace (i, std::move (body));
 			continue;
 		}
 
-		// A refusal is an answer about the shared form rather than about this
-		// method, so the method is compiled against its own instantiation.
+		// Refused, so the method is compiled against its own instantiation.
 		if (is_jit_trace_enabled ())
 			llvm::errs () << "[llvm-jit] not sharing " << dm->name << ": "
 				      << llvm::toString (body.takeError ()) << "\n";
@@ -1061,6 +1066,23 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 	return answer (std::move (compiled));
 }
 
+/// Whether a promotion of method at tier can share a compile with other methods.
+static bool
+allow_batched_compile (MonoMethod *method, MonoTier tier)
+{
+	/*
+	 * A tier-2 compile is laid out by its own method's counts, so it has no
+	 * module to share. It is also asked for by a method that is already hot,
+	 * which is the worst thing to make wait behind a batch of others.
+	 *
+	 * A dynamic method is the one thing that gets freed, and drop () has to
+	 * take its queued work with it. Batched work compiles methods its tag says
+	 * nothing about, so a dynamic method keeps the one-tag-one-compile shape
+	 * drop () needs.
+	 */
+	return tier == MonoTier::tier1 && !method->dynamic;
+}
+
 /*
  * Runs on a mutator thread that just used up a promotion counter - the
  * interpreter's for tier 0, a tier-1 body's own instrumentation for tier 2 -
@@ -1095,19 +1117,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 
 	DomainState *owner = *state;
 
-	/*
-	 * Two shapes are queued one to a piece of work rather than batched.
-	 *
-	 * A tier-2 compile is laid out by its own method's counts, so it has no
-	 * module to share. It is also asked for by a method that is already hot,
-	 * which is the worst thing to make wait behind a batch of others.
-	 *
-	 * A dynamic method is the one thing that gets freed, and drop () has to
-	 * take its queued work with it. Batched work compiles methods its tag says
-	 * nothing about, so a dynamic method keeps the one-tag-one-compile shape
-	 * drop () needs.
-	 */
-	if (tier != MonoTier::tier1 || method->dynamic)
+	if (!allow_batched_compile (method, tier))
 		return owner->queue.enqueue (method, [self, owner, method, tier] () {
 			llvm::Expected<MonoDomainMethod *> published =
 				publish (*owner, method);

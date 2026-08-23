@@ -25,6 +25,8 @@
 
 #include "compiler.hpp"
 
+#include "method-symbols.hpp"
+
 #include "dump.hpp"
 #include "il-line-table.hpp"
 #include "jit.hpp"
@@ -443,7 +445,7 @@ private:
 			 * A filter body compiled alongside its method carries no clauses
 			 * of its own: a block describes a method.
 			 */
-			if (fn.function.find ("$filter") != std::string::npos)
+			if (fn.function.find (filter_body_suffix) != std::string::npos)
 				continue;
 
 			MCSymbol *begin = ctx.getOrCreateSymbol (fn.function);

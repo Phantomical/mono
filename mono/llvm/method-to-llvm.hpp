@@ -34,6 +34,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mono {
@@ -609,6 +610,16 @@ private:
 	llvm::Expected<MonoType *> binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs);
 	llvm::Expected<BinaryOperands> pop_binary_operands (BinaryOp op);
 
+	/// Splits an add's operands into the managed pointer and the integer to
+	/// index it by. Either side of the add can be the pointer.
+	///
+	/// A managed pointer plus an integer stays a managed pointer, so an add
+	/// indexes the pointer rather than doing the arithmetic on it. That keeps
+	/// the result something the collector still recognizes as pointing into its
+	/// object.
+	static std::pair<llvm::Value *, llvm::Value *>
+	pointer_and_index (const BinaryOperands &operands);
+
 	llvm::Error emit_arg_allocas (MonoIrBuilder &builder);
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
 	llvm::Error emit_push_lmf (MonoIrBuilder &builder);
@@ -645,8 +656,11 @@ private:
 	llvm::Error find_block_leaders ();
 	void mark_reachable_blocks ();
 	llvm::Expected<size_t> branch_target (int32_t displacement);
+	llvm::Error skip_to_next_reachable_block (size_t end);
 	llvm::Error translate_range (MonoIrBuilder &builder, size_t begin, size_t end);
 	void finish_function ();
+	void mark_for_tier2_instrumentation ();
+	llvm::Error seed_handler_entry_stacks (MonoIrBuilder &builder);
 	llvm::BasicBlock *create_cold_block (const llvm::Twine &name);
 	llvm::AllocaInst *entry_alloca (llvm::Type *type, const llvm::Twine &name);
 	llvm::AllocaInst *spill_slot (size_t depth, llvm::Type *type);
@@ -658,6 +672,9 @@ private:
 	int innermost_try (size_t at) const;
 	int innermost_handler (size_t at) const;
 	std::vector<uint32_t> covering_chain (uint32_t clause) const;
+	std::vector<uint32_t> finally_chain_to (size_t target) const;
+	llvm::Error emit_undeniable_exception_rethrow (MonoIrBuilder &builder);
+	llvm::Error check_delegate_invoke (MonoClass *klass);
 	llvm::Constant *clause_marker (uint32_t clause);
 	llvm::Constant *resume_marker (uint32_t clause);
 	llvm::BasicBlock *handler_entry (uint32_t clause, llvm::Value *exc);

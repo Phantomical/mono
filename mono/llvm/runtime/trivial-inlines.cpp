@@ -366,9 +366,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				continue;
 			}
 
-			// A clause-bearing body folded into a caller needs its clauses
-			// merged into the caller's table, which is work of its own.
-			if (header->num_clauses != 0 || header->code_size > limit)
+			if (!is_small_and_clause_free (header, limit))
 				continue;
 
 			std::optional<Shape> shape = shape_of (callee, header);
